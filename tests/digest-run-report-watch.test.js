@@ -780,3 +780,37 @@ describe('digest-run-report --watch 参数与循环', () => {
         }
     });
 });
+
+it('发布收尾观察要求实际新设置和与本次审查文件绑定的不生图记录', () => {
+    const formats = require('../scripts/lib/protocol-codec');
+    const { visualGateComplete } = require('../scripts/lib/digest-live-status');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-no-generation-observation-'));
+    try {
+        // These files exercise status observation only, not publication eligibility.
+        const generation = { postPublicationPolicy: formats.record('daily-publication-policy', {
+            generatedImages: false, sourceFigures: 'retained-and-source-verified'
+        }), visualSummaryRequired: false, digestCoverRequired: false };
+        const review = { publicationCommit: 'a'.repeat(40), remoteVerifiedOid: 'a'.repeat(40), postPublishVisuals: 'not_requested' };
+        const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+        const generationPath = path.join(directory, 'generation.json');
+        const reviewPath = path.join(directory, 'review.json');
+        fs.writeFileSync(generationPath, JSON.stringify(generation));
+        fs.writeFileSync(reviewPath, JSON.stringify(review));
+        const context = { manifestSha: sha(fs.readFileSync(generationPath)), receiptSha: sha(fs.readFileSync(reviewPath)) };
+        const record = formats.record('post-publish-visual-waiver', {
+            batchDate: DATE, status: 'waived', requestedBy: 'user', reason: '用户持续要求日更不再生成图片',
+            waivedAt: `${DATE}T12:00:00+08:00`, publicationCommit: review.publicationCommit,
+            remoteVerifiedOid: review.remoteVerifiedOid, generationManifestSha256: context.manifestSha,
+            reviewReceiptSha256: context.receiptSha, generatedImages: false, sourceFigures: 'retained-and-source-verified'
+        });
+        const observed = (r = record, receipt = review, body = generation, refs = context) =>
+            visualGateComplete(DATE, body, null, null, receipt, r, refs);
+        assert.equal(observed(), true);
+        assert.equal(observed(null), false);
+        assert.equal(observed(record, { ...review, postPublishVisuals: 'required' }), false);
+        assert.equal(observed(record, review, {}), false);
+        assert.equal(observed({ ...record, schemaFingerprint: '0'.repeat(64) }), false);
+        fs.appendFileSync(reviewPath, '\n');
+        assert.equal(observed(record, review, generation, { ...context, receiptSha: sha(fs.readFileSync(reviewPath)) }), false);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

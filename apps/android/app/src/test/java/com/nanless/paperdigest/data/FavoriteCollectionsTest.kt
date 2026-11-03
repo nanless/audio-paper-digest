@@ -23,6 +23,31 @@ class FavoriteCollectionsTest {
     private fun validateBoth(personal:JSONObject){PersonalStore.validate(personal);BackupCodec.validatePersonal(personal)}
     private fun invalidBoth(personal:JSONObject){assertThrows(Exception::class.java){PersonalStore.validate(personal)};assertThrows(Exception::class.java){BackupCodec.validatePersonal(personal)}}
 
+    @Test fun existingSharedRootKeepsReleasedFormatAndNewRootUsesStableFormat() {
+        val store=store()
+        val protocols=com.nanless.paperdigest.protocols.ClientProtocols
+        val family="paperdigest-personal-library"
+        val collections="paperdigest-favorite-collections"
+        val fresh=store.snapshot()
+        assertTrue(protocols.isCurrentHeader(fresh,family))
+        assertFalse(fresh.has("schema"))
+        FavoriteCollections.replaceList(fresh,"favorites",listOf("stable"))
+        assertTrue(protocols.isCurrentHeader(fresh.getJSONObject(FavoriteCollections.KEY),collections))
+        BackupCodec.validatePersonal(fresh)
+        val old=PersonalStore.initial().apply{remove("contract");remove("schemaFingerprint");put("schema",1)}
+        invalidBoth(JSONObject(old.toString()).put(FavoriteCollections.KEY,fresh.getJSONObject(FavoriteCollections.KEY)))
+        store.replaceValidated(old)
+        val edited=store.snapshot()
+        FavoriteCollections.replaceList(edited,"favorites",listOf("existing"))
+        store.replaceValidated(edited)
+        val cold=PersonalStore(store.directory).snapshot()
+        assertEquals(1,cold.getInt("schema"))
+        assertFalse(cold.has("contract"))
+        assertEquals(1,cold.getJSONObject(FavoriteCollections.KEY).getInt("version"))
+        assertFalse(cold.getJSONObject(FavoriteCollections.KEY).has("schemaFingerprint"))
+        BackupCodec.validatePersonal(cold)
+        invalidBoth(cold.put("contract",family).put("schemaFingerprint",protocols.schemaFingerprint(family)))
+    }
     @Test fun oldFavoritesAreUnknownWithoutRewritingTheirFileOnRead(){
         val store=store();val original=store.snapshot().put("favorites",JSONArray(listOf("old")));store.replaceValidated(original)
         val bytes=File(store.directory,"personal.json").readBytes();val restored=PersonalStore(store.directory)

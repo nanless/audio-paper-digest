@@ -741,7 +741,9 @@ def derive(request):
     root=Path(request['sourceDirectory'])
     manifest_bytes=read_stable(root/'source-manifest.json',expected['sourceManifestSha256'])
     manifest=json.loads(manifest_bytes)
-    need(manifest.get('contract')=='fresh-arxiv-rewrite-source-v1' and manifest.get('generation')==1
+    from protocol_codec import record_header
+    manifest_header=record_header(manifest.get('contract'),'fresh-arxiv-source-manifest',manifest.get('schemaFingerprint'))
+    need(all(type(manifest.get(k)) is type(v) and manifest.get(k)==v for k,v in manifest_header.items()) and manifest.get('generation')==1
          and manifest.get('arxivId')==request['paperId'],'封存manifest的论文或代际不同')
     files={'source.txt':manifest['text']['responseSha256'],'source.pdf':manifest['pdf']['responseSha256'],
            'source-runtime.json':manifest['runtimeMetadata']['responseSha256'],'source-manifest.json':expected['sourceManifestSha256']}

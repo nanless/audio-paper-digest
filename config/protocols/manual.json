@@ -1,0 +1,330 @@
+{
+  "protocols": [
+    {
+      "name": "manual-tutorial-payload",
+      "currentVariant": "evidence-packet",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "article",
+          "quality-packet",
+          "artifact-plan",
+          "source-bound-receipts"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "manual-v5-tutorial-payload-v1",
+          "variant": "evidence-packet"
+        }
+      ]
+    },
+    {
+      "name": "manual-tutorial-quality",
+      "currentVariant": "evidence-and-pedagogy",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "teaching-sections",
+          "source-coverage",
+          "reader-path",
+          "rubric",
+          "fresh-authoring"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "graduate-researcher-tutorial-quality-v2",
+          "variant": "evidence-and-pedagogy"
+        }
+      ]
+    },
+    {
+      "name": "manual-fresh-authoring",
+      "currentVariant": "source-only",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "original-input-paths",
+          "original-input-sha256",
+          "article-sha256",
+          "no-prior-prose"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "fresh-authoring-v1",
+          "variant": "source-only"
+        }
+      ]
+    },
+    {
+      "name": "manual-tutorial-orchestrator",
+      "currentVariant": "ordered-checks",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "tutorial-quality",
+          "artifact-plan",
+          "reader-format",
+          "longform",
+          "score-presentation"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "manual-tutorial-validation-orchestrator-v1",
+          "variant": "ordered-checks"
+        }
+      ]
+    },
+    {
+      "name": "manual-table-transcription",
+      "currentVariant": "source-attestation",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "original-table",
+          "controlled-review-file",
+          "source-and-article-sha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "manual-table-transcription-attestation-v1",
+          "variant": "source-attestation"
+        }
+      ]
+    },
+    {
+      "name": "manual-reader-path-order",
+      "currentVariant": "teaching-dependencies",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "section-order-edges"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "reader-tutorial-partial-order-v2",
+          "variant": "teaching-dependencies"
+        }
+      ]
+    },
+    {
+      "name": "manual-reader-path",
+      "currentVariant": "source-bound-sections",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "teaching-stages",
+          "evidence-ids",
+          "section-positions"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "reader-tutorial-path-v1",
+          "variant": "source-bound-sections"
+        }
+      ]
+    },
+    {
+      "name": "manual-paper-source-identity",
+      "currentVariant": "per-paper-inputs",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "source-sha256",
+          "artifact-identity",
+          "paper-metadata",
+          "source-files"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "manual-paper-source-identity-v1",
+          "variant": "per-paper-inputs"
+        }
+      ]
+    },
+    {
+      "name": "manual-artifact-parser",
+      "currentVariant": "structured-source",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "source-spans",
+          "tables",
+          "formulas",
+          "figures",
+          "references",
+          "inventory-health"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "manual-artifact-parser-v2-structured",
+          "variant": "structured-source"
+        }
+      ]
+    },
+    {
+      "name": "manual-reader-longform",
+      "currentVariant": "signed-blocks",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "source-bound-blocks",
+          "article",
+          "receipts",
+          "source-manifest"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "reader-longform-v2",
+          "variant": "signed-blocks"
+        }
+      ]
+    },
+    {
+      "name": "manual-research-brief",
+      "currentVariant": "audio-evidence",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "task-boundary",
+          "audio-path",
+          "architecture",
+          "training",
+          "evaluation",
+          "reproduction",
+          "limitations"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "audio-researcher-v1",
+          "variant": "audio-evidence"
+        }
+      ]
+    },
+    {
+      "name": "manual-reader-tutorial",
+      "currentVariant": "domain-teaching",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "problem-tension",
+          "related-routes",
+          "end-to-end-flow",
+          "complete-results"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "graduate-researcher-tutorial-v1",
+          "variant": "domain-teaching"
+        }
+      ]
+    },
+    {
+      "name": "manual-signature",
+      "currentVariant": "exact-decimal-nfkc",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "ascii-object-keys",
+          "exact-finite-ieee754-decimal",
+          "safe-integers",
+          "explicit-nfkc-prose",
+          "no-negative-zero"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "stable-json-ascii-keys-exact-ieee754-nfkc-text-v2",
+          "variant": "exact-decimal-nfkc"
+        }
+      ]
+    },
+    {
+      "name": "manual-sealed-preview",
+      "currentVariant": "sealed-files-only",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "post-sha256",
+          "original-static-inputs",
+          "controlled-root",
+          "no-new-publication"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "sealed-tutorial-preview-publication-v1",
+          "variant": "sealed-files-only"
+        }
+      ]
+    },
+    {
+      "name": "manual-stage-attestation",
+      "currentVariant": "source-bound-review",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "stage",
+          "prompt-source",
+          "prompt-sha256",
+          "context-sha256",
+          "source-sha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "manual-offline-review-v1",
+          "variant": "source-bound-review"
+        }
+      ]
+    },
+    {
+      "name": "manual-analysis-depth",
+      "currentVariant": "signed-longform",
+      "currentSchema": {
+        "operation": "historical-read-only",
+        "checks": [
+          "original-format-specific-depth",
+          "original-signatures-and-source"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "full-text-evidence-v1",
+          "variant": "baseline-source"
+        },
+        {
+          "tag": "full-text-evidence-v2",
+          "variant": "source-coverage"
+        },
+        {
+          "tag": "full-text-evidence-v3",
+          "variant": "beginner-explanation"
+        },
+        {
+          "tag": "full-text-evidence-v4",
+          "variant": "reader-quality"
+        },
+        {
+          "tag": "full-text-evidence-v5",
+          "variant": "fact-coverage"
+        },
+        {
+          "tag": "full-text-evidence-v6",
+          "variant": "signed-longform"
+        }
+      ]
+    }
+  ]
+}

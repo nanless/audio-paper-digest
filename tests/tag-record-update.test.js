@@ -59,9 +59,9 @@ test('明确确认允许的破坏性变更后，工具按当前词表更新标�
     assert.equal(plan.item.registry.to, runtime().registrySha256);
 
     const nextStage = plan.analysis.papers[0].analysisManifest.stages.tagSelection;
-    assert.equal(nextStage.selectionContract, 'paper-tag-selection-v2');
-    assert.equal(nextStage.registryUpgradeFrom.contract, 'paper-tag-catalog-upgrade-v2');
-    assert.equal(nextStage.registryUpgradeFrom.version, 2);
+    assert.equal(nextStage.selectionContract, 'paper-tag-selection');
+    assert.equal(nextStage.registryUpgradeFrom.contract, 'paper-tag-catalog-upgrade');
+    assert.equal(nextStage.registryUpgradeFrom.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('paper-tag-catalog-upgrade'));
     assert.equal(nextStage.registrySha256, runtime().registrySha256);
     assert.equal(nextStage.projectionSha256, runtime().projectionSha256);
     assert.equal(nextStage.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
@@ -516,7 +516,7 @@ test('显式重新生成采用新标签阶段格式，只读和注记保留旧�
     const paper = rebuilt.analysis.papers[0];
     const record = records.readTagStageRecord(paper.analysisManifest, paper.analysisStageCheckpoints);
     assert.equal(record.format, 'current');
-    assert.equal(paper.analysisManifest.contracts.tagSelectionRecord, records.TAG_STAGE_RECORD_CONTRACT);
+    assert.deepEqual(paper.analysisManifest.contracts.tagSelectionRecord, records.tagStageRecordDeclaration());
     assert.equal(Object.hasOwn(paper.analysisManifest.stages, 'taxonomySeal'), false);
     assert.equal(Object.hasOwn(paper.analysisManifest.contracts, 'taxonomy'), false);
     assert.equal(Object.hasOwn(paper.analysisStageCheckpoints, 'taxonomySeal'), false);

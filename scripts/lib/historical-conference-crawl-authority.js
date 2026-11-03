@@ -1,18 +1,22 @@
 'use strict';
 
-// 只负责保留的本地会议爬取快照的身份。它不读历史博客正文，不做网络 I/O，
-// 也不把保留的分析或全文字段交给后续写作阶段。
+// 只读重放旧会议爬虫身份凭据，不再扫描或签发。已保存的标题绑定仍须核对原网页，
+// 但不会把网页正文、保留的分析或全文交给写作阶段，也不联网。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const identityApi = require('./paper-identity.js');
-const { writeImmutableFile } = require('./immutable-file.js');
 
-const CONTRACT = 'historical-conference-crawl-identity-authority-v1';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('historical-conference-crawl-identity-authority');
+function authorityHeader(value) {
+    if (!codec.hasValidHeader(value, 'historical-conference-crawl-identity-authority')
+        || Object.hasOwn(value, 'schemaFingerprint')) fail('会议爬虫身份凭据只接受已登记的原历史格式');
+    return recordHeaderFor(value, 'historical-conference-crawl-identity-authority');
+}
 const EVIDENCE_KIND = 'retained-conference-crawler-metadata-pdf-identity';
-const AUTHORITY_PREFIX = 'conference-crawl-';
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
@@ -51,9 +55,9 @@ const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 function exact(value, fields, label) { if (!plain(value)) fail(`${label} 必须是普通对象`); const actual = Object.keys(value).sort(); const expected = [...fields].sort(); if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) fail(`${label} 含有未知字段或缺少必需字段`); }
 function sha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} 必须是 SHA-256`); return value; }
-function safeDirectory(directory, label, { create = false } = {}) {
+function safeDirectory(directory, label) {
     if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对目录`);
-    const resolved = path.resolve(directory); if (!fs.existsSync(resolved)) { if (!create) fail(`${label} 不存在`); fs.mkdirSync(resolved, { recursive: true, mode: 0o700 }); }
+    const resolved = path.resolve(directory); if (!fs.existsSync(resolved)) fail(`${label} 不存在`);
     let cursor = path.parse(resolved).root;
     for (const part of resolved.slice(cursor.length).split(path.sep).filter(Boolean)) { cursor = path.join(cursor, part); const info = fs.lstatSync(cursor); if (!info.isDirectory() || info.isSymbolicLink()) fail(`${label} is unsafe`); }
     if (fs.realpathSync(resolved) !== resolved) fail(`${label} is unsafe`); return resolved;
@@ -158,70 +162,11 @@ function pdfPathFor(dataRoot, relativePath, spec, record, externalId, { sourceKi
     return path.resolve(safeDirectory(dataRoot, 'dataRoot'), 'pdfs', 'icml2026', `${externalId.value}.pdf`);
 }
 function recordIdentityDigest(externalId, pdfAbsolutePath) { return stableHash({ externalId, pdfAbsolutePath }); }
-function recordPointer(spec, record, externalId, pdfAbsolutePath) { return { conference: spec.conference, externalId, pdfAbsolutePath, recordIdentitySha256: recordIdentityDigest(externalId, pdfAbsolutePath) }; }
-function scanRetainedConferenceCrawlers({ dataRoot } = {}) {
-    const matches = new Map(); const files = [];
-    for (const relativePath of Object.keys(SNAPSHOTS).sort()) {
-        const spec = snapshotSpec(relativePath); const filename = snapshotFile(dataRoot, relativePath);
-        if (!fs.existsSync(filename)) continue;
-        const snapshot = readSnapshot(dataRoot, relativePath); files.push({ relativePath, metadataSnapshotSha256: snapshot.fileSha256 });
-        snapshot.records.forEach((record, recordIndex) => { const externalId = recordIdentity(spec, record); if (!externalId || typeof record.title !== 'string') return; const pdfAbsolutePath = pdfPathFor(dataRoot, relativePath, spec, record, externalId); if (!pdfAbsolutePath) return; let pdf; try { pdf = safeRegularFile(pdfAbsolutePath, 'retained conference PDF', MAX_PDF_BYTES); } catch { return; } if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') return;
-            const pointer = recordPointer(spec, record, externalId, pdf.absolute); const match = { conference: clone(spec.conference), externalId, metadataSourceKind: DATA_SOURCE, metadataRelativePath: relativePath, metadataSnapshotSha256: snapshot.fileSha256, recordIndex, recordIdentitySha256: pointer.recordIdentitySha256, pdfAbsolutePath: pdf.absolute, pdfSha256: pdf.sha256, metadataTitleFingerprintSha256: titleFingerprint(record.title, 'retained metadata title') };
-            const key = `${externalId.scheme}:${externalId.value}`; const values = matches.get(key) || []; values.push(match); matches.set(key, values);
-        });
-    }
-    for (const values of matches.values()) values.sort((a, b) => a.metadataRelativePath.localeCompare(b.metadataRelativePath) || a.recordIndex - b.recordIndex);
-    return { files, matches };
+function identityFor(match, savedIdentity) {
+    const header = identityApi.readHeader(savedIdentity);
+    if (Object.hasOwn(header, 'schemaFingerprint')) fail('退役会议爬虫凭据不能换用当前论文身份格式');
+    const externalId = identityApi.validateExternalId(match.externalId); return identityApi.normalizeIdentity({ ...header, kind: 'conference', canonicalId: identityApi.canonicalConferenceId(match.conference, externalId), arxivId: null, conference: match.conference, externalId, source: { status: 'unavailable', url: null }, citation: null });
 }
-function scanIclrAcceptedMatches({ iclrAcceptedRoot, titleFingerprintSha256s } = {}) {
-    if (!(titleFingerprintSha256s instanceof Set) || ![...titleFingerprintSha256s].every(value => SHA_RE.test(String(value)))) fail('ICLR 接收元数据的 title 指纹集合格式不正确');
-    const snapshot = readIclrAcceptedSnapshot(iclrAcceptedRoot); const matches = new Map();
-    snapshot.records.forEach((record, recordIndex) => {
-        const externalId = recordIdentity(ICLR_ACCEPTED_SPEC, record); if (!externalId || typeof record.title !== 'string') return;
-        const metadataTitleFingerprintSha256 = titleFingerprint(record.title, 'ICLR accepted metadata title'); if (!titleFingerprintSha256s.has(metadataTitleFingerprintSha256)) return;
-        const pdfAbsolutePath = pdfPathFor(null, ICLR_ACCEPTED_RELATIVE_PATH, ICLR_ACCEPTED_SPEC, record, externalId, { sourceKind: ICLR_ACCEPTED_SOURCE, iclrAcceptedRoot }); if (!pdfAbsolutePath) return;
-        let pdf; try { pdf = safeRegularFile(pdfAbsolutePath, 'retained ICLR accepted PDF', MAX_PDF_BYTES); } catch { return; } if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') return;
-        const pointer = recordPointer(ICLR_ACCEPTED_SPEC, record, externalId, pdf.absolute); const match = { conference: clone(ICLR_ACCEPTED_SPEC.conference), externalId, metadataSourceKind: ICLR_ACCEPTED_SOURCE, metadataRelativePath: ICLR_ACCEPTED_RELATIVE_PATH, metadataSnapshotSha256: snapshot.fileSha256, recordIndex, recordIdentitySha256: pointer.recordIdentitySha256, pdfAbsolutePath: pdf.absolute, pdfSha256: pdf.sha256, metadataTitleFingerprintSha256 };
-        const key = `${externalId.scheme}:${externalId.value}`; const values = matches.get(key) || []; values.push(match); matches.set(key, values);
-    });
-    for (const values of matches.values()) values.sort((a, b) => a.recordIndex - b.recordIndex);
-    return { files: [{ sourceKind: ICLR_ACCEPTED_SOURCE, relativePath: snapshot.relativePath, metadataSnapshotSha256: snapshot.fileSha256 }], matches };
-}
-function titleRecoveryGroups({ state, blogRoot, matches } = {}) {
-    if (!plain(state) || !plain(state.source) || !Array.isArray(state.source.papers) || !plain(state.assignments)
-        || !(matches instanceof Map)) fail('恢复 title 需要 crosswalk 状态且保留元数据匹配');
-    const byFingerprint = new Map();
-    for (const values of matches.values()) for (const match of values) {
-        const normalized = normalizeMatch(match); const existing = byFingerprint.get(normalized.metadataTitleFingerprintSha256) || [];
-        existing.push(normalized); byFingerprint.set(normalized.metadataTitleFingerprintSha256, existing);
-    }
-    const groups = new Map();
-    for (const page of state.source.papers) {
-        const assignment = state.assignments[page.pageKey];
-        if (!assignment || assignment.status !== 'pending' || !['none', 'conflict'].includes(page.identityHints?.status)) continue;
-        const binding = pageTitleBinding({ blogRoot, pageKey: page.pageKey, pagePath: page.pagePath,
-            pageContentSha256: page.pageContentSha256 });
-        const candidates = byFingerprint.get(binding.titleFingerprintSha256) || [];
-        const exactIds = new Map();
-        for (const candidate of candidates) {
-            const key = `${candidate.externalId.scheme}:${candidate.externalId.value}`;
-            const prior = exactIds.get(key); if (!prior || candidate.metadataRelativePath.localeCompare(prior.metadataRelativePath) < 0) exactIds.set(key, candidate);
-        }
-        if (exactIds.size !== 1) continue;
-        const match = [...exactIds.values()][0];
-        if (!['icassp', 'iclr'].includes(match.conference.slug)) continue;
-        if (page.scope?.type !== 'conference' || page.scope.key !== `${match.conference.slug}-${match.conference.year}`) continue;
-        const key = `${match.externalId.scheme}:${match.externalId.value}`; const group = groups.get(key) || { externalId: clone(match.externalId), match, pageKeys: [], titleBindings: [] };
-        group.pageKeys.push(page.pageKey); group.titleBindings.push(binding); groups.set(key, group);
-    }
-    return [...groups.values()].map(group => ({ ...group, pageKeys: group.pageKeys.sort(),
-        titleBindings: normalizeTitleBindings(group.titleBindings) })).sort((left, right) => (
-        `${left.externalId.scheme}:${left.externalId.value}`).localeCompare(`${right.externalId.scheme}:${right.externalId.value}`));
-}
-function identityFor(match) {
-    const externalId = identityApi.validateExternalId(match.externalId); return identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference', canonicalId: identityApi.canonicalConferenceId(match.conference, externalId), arxivId: null, conference: match.conference, externalId, source: { status: 'unavailable', url: null }, citation: null });
-}
-function authorityNameFor(match, titleBindings = []) { const pointerSha256 = stableHash({ metadataSourceKind: match.metadataSourceKind, metadataRelativePath: match.metadataRelativePath, metadataSnapshotSha256: match.metadataSnapshotSha256, recordIndex: match.recordIndex, recordIdentitySha256: match.recordIdentitySha256, pdfAbsolutePath: match.pdfAbsolutePath, pdfSha256: match.pdfSha256, metadataTitleFingerprintSha256: match.metadataTitleFingerprintSha256, titleBindings: normalizeTitleBindings(titleBindings) }); return `${AUTHORITY_PREFIX}${pointerSha256}.json`; }
 function normalizeMatch(match) {
     exact(match, ['conference', 'externalId', 'metadataSourceKind', 'metadataRelativePath', 'metadataSnapshotSha256', 'recordIndex', 'recordIdentitySha256', 'pdfAbsolutePath', 'pdfSha256', 'metadataTitleFingerprintSha256'], 'conference crawler match'); const spec = sourceSpec(match.metadataSourceKind, match.metadataRelativePath); const externalId = identityApi.validateExternalId(match.externalId); if (externalId.scheme !== spec.scheme || stableHash(match.conference) !== stableHash(spec.conference) || !Number.isSafeInteger(match.recordIndex) || match.recordIndex < 0 || !path.isAbsolute(match.pdfAbsolutePath)) fail('会议爬虫匹配记录的 identity 指针无效');
     for (const field of ['metadataSnapshotSha256', 'recordIdentitySha256', 'pdfSha256', 'metadataTitleFingerprintSha256']) sha(match[field], field); return { conference: clone(spec.conference), externalId, metadataSourceKind: match.metadataSourceKind, metadataRelativePath: match.metadataRelativePath, metadataSnapshotSha256: match.metadataSnapshotSha256, recordIndex: match.recordIndex, recordIdentitySha256: match.recordIdentitySha256, pdfAbsolutePath: path.resolve(match.pdfAbsolutePath), pdfSha256: match.pdfSha256, metadataTitleFingerprintSha256: match.metadataTitleFingerprintSha256 };
@@ -230,13 +175,9 @@ function verifyMatchAgainstRetained({ dataRoot, iclrAcceptedRoot = null, match }
     const normalized = normalizeMatch(match); const spec = sourceSpec(normalized.metadataSourceKind, normalized.metadataRelativePath); const snapshot = normalized.metadataSourceKind === DATA_SOURCE ? readSnapshot(dataRoot, normalized.metadataRelativePath) : readIclrAcceptedSnapshot(iclrAcceptedRoot); const record = snapshot.records[normalized.recordIndex]; const externalId = recordIdentity(spec, record); if (!externalId || typeof record.title !== 'string' || stableHash(externalId) !== stableHash(normalized.externalId) || snapshot.fileSha256 !== normalized.metadataSnapshotSha256 || titleFingerprint(record.title, 'retained metadata title') !== normalized.metadataTitleFingerprintSha256) fail('保留的会议元数据与所选稳定 ID 不再匹配'); const pdfPath = pdfPathFor(dataRoot, normalized.metadataRelativePath, spec, record, externalId, { sourceKind: normalized.metadataSourceKind, iclrAcceptedRoot }); if (!pdfPath || path.resolve(pdfPath) !== normalized.pdfAbsolutePath || recordIdentityDigest(externalId, normalized.pdfAbsolutePath) !== normalized.recordIdentitySha256) fail('保留的会议元数据 PDF 指针与稳定 ID 不再匹配'); const pdf = safeRegularFile(normalized.pdfAbsolutePath, 'retained conference PDF', MAX_PDF_BYTES); if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.sha256 !== normalized.pdfSha256) fail('retained conference PDF bytes no longer match the selected stable ID'); return normalized;
 }
 function normalizeAuthority(value) {
-    exact(value, ['contract', 'version', 'paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'evidenceKind', 'conference', 'externalId', 'metadataSourceKind', 'metadataRelativePath', 'metadataSnapshotSha256', 'recordIndex', 'recordIdentitySha256', 'pdfAbsolutePath', 'pdfSha256', 'metadataTitleFingerprintSha256', 'titleBindings', 'titleBindingsSha256', 'authoritySha256'], 'conference crawler identity authority');
-    if (value.contract !== CONTRACT || value.version !== VERSION || value.evidenceKind !== EVIDENCE_KIND) fail('会议爬虫授权凭据的 contract 无效'); const match = normalizeMatch({ conference: value.conference, externalId: value.externalId, metadataSourceKind: value.metadataSourceKind, metadataRelativePath: value.metadataRelativePath, metadataSnapshotSha256: value.metadataSnapshotSha256, recordIndex: value.recordIndex, recordIdentitySha256: value.recordIdentitySha256, pdfAbsolutePath: value.pdfAbsolutePath, pdfSha256: value.pdfSha256, metadataTitleFingerprintSha256: value.metadataTitleFingerprintSha256 }); const titleBindings = normalizeTitleBindings(value.titleBindings); if (sha(value.titleBindingsSha256, 'titleBindingsSha256') !== stableHash(titleBindings)) fail('conference crawler authority title bindings drifted'); if (titleBindings.some(binding => binding.titleFingerprintSha256 !== match.metadataTitleFingerprintSha256)) fail('会议爬虫的 title 绑定与保留元数据的 title 不完全一致'); const identity = identityFor(match); if (value.paperId !== identity.canonicalId || sha(value.identitySha256, 'identitySha256') !== identityApi.identitySha256(identity) || sha(value.identityRecordSha256, 'identityRecordSha256') !== identityApi.recordSha256(identity)) fail('会议爬虫的 identity 绑定无效'); const body = clone(value); delete body.authoritySha256; body.identity = identity; body.conference = match.conference; body.externalId = match.externalId; body.titleBindings = titleBindings; if (sha(value.authoritySha256, 'authoritySha256') !== stableHash(body)) fail('conference crawler authority self-SHA drifted'); return { ...body, authoritySha256: value.authoritySha256 };
-}
-function authorityFor(match, titleBindings = []) { const identity = identityFor(match); const normalizedBindings = normalizeTitleBindings(titleBindings); const body = { contract: CONTRACT, version: VERSION, paperId: identity.canonicalId, identity, identitySha256: identityApi.identitySha256(identity), identityRecordSha256: identityApi.recordSha256(identity), evidenceKind: EVIDENCE_KIND, ...match, titleBindings: normalizedBindings, titleBindingsSha256: stableHash(normalizedBindings) }; return { ...body, authoritySha256: stableHash(body) }; }
-function writeExact(root, name, bytes) {
-    const directory = safeDirectory(root, 'conferenceIdentityRoot', { create: true });
-    writeImmutableFile(path.join(directory, name), bytes, fail);
+    const header = authorityHeader(value);
+    exact(value, [...Object.keys(header), 'paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'evidenceKind', 'conference', 'externalId', 'metadataSourceKind', 'metadataRelativePath', 'metadataSnapshotSha256', 'recordIndex', 'recordIdentitySha256', 'pdfAbsolutePath', 'pdfSha256', 'metadataTitleFingerprintSha256', 'titleBindings', 'titleBindingsSha256', 'authoritySha256'], 'conference crawler identity authority');
+    if (value.evidenceKind !== EVIDENCE_KIND) fail('会议爬虫授权凭据的 contract 无效'); const match = normalizeMatch({ conference: value.conference, externalId: value.externalId, metadataSourceKind: value.metadataSourceKind, metadataRelativePath: value.metadataRelativePath, metadataSnapshotSha256: value.metadataSnapshotSha256, recordIndex: value.recordIndex, recordIdentitySha256: value.recordIdentitySha256, pdfAbsolutePath: value.pdfAbsolutePath, pdfSha256: value.pdfSha256, metadataTitleFingerprintSha256: value.metadataTitleFingerprintSha256 }); const titleBindings = normalizeTitleBindings(value.titleBindings); if (sha(value.titleBindingsSha256, 'titleBindingsSha256') !== stableHash(titleBindings)) fail('conference crawler authority title bindings drifted'); if (titleBindings.some(binding => binding.titleFingerprintSha256 !== match.metadataTitleFingerprintSha256)) fail('会议爬虫的 title 绑定与保留元数据的 title 不完全一致'); const identity = identityFor(match, value.identity); if (stableHash(identity) !== stableHash(value.identity) || value.paperId !== identity.canonicalId || sha(value.identitySha256, 'identitySha256') !== identityApi.identitySha256(identity) || sha(value.identityRecordSha256, 'identityRecordSha256') !== identityApi.recordSha256(identity)) fail('会议爬虫的 identity 绑定无效'); const body = clone(value); delete body.authoritySha256; body.identity = identity; body.conference = match.conference; body.externalId = match.externalId; body.titleBindings = titleBindings; if (sha(value.authoritySha256, 'authoritySha256') !== stableHash(body)) fail('conference crawler authority self-SHA drifted'); return { ...body, authoritySha256: value.authoritySha256 };
 }
 function readAuthority(identityRoot, authorityName) { const root = safeDirectory(identityRoot, 'conferenceIdentityRoot'); if (!SAFE_JSON_NAME.test(String(authorityName || ''))) fail('authorityName is unsafe'); const filename = path.resolve(root, authorityName); if (path.dirname(filename) !== root) fail('authorityName 超出 conferenceIdentityRoot 范围'); const loaded = safeRegularFile(filename, 'conference identity authority', MAX_METADATA_BYTES); let value; try { const text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes); rejectDuplicateJsonKeys(text); value = JSON.parse(text); } catch (error) { if (error instanceof HistoricalConferenceCrawlAuthorityError) throw error; fail('会议身份授权凭据不是严格的 UTF-8 JSON'); } const authority = normalizeAuthority(value); if (!loaded.bytes.equals(prettyBytes(authority))) fail('会议身份授权凭据的字节不是规范形式'); return { filename: loaded.absolute, sha256: loaded.sha256, authority, dev: loaded.dev, ino: loaded.ino }; }
 function authorityHandleSnapshot(handle) { if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('需要已认证的会议爬虫身份句柄'); return clone(HANDLE_DATA.get(handle).public); }
@@ -244,6 +185,4 @@ function matchFromAuthority(authority) { return normalizeMatch({ conference: aut
 function verifyTitleBindings({ blogRoot, titleBindings }) { const normalized = normalizeTitleBindings(titleBindings); if (!normalized.length) return normalized; if (typeof blogRoot !== 'string' || !path.isAbsolute(blogRoot)) fail('重放绑定 title 的会议授权凭据需要 blogRoot'); return normalized.map(binding => { const current = pageTitleBinding({ blogRoot, ...binding }); if (stableHash(current) !== stableHash(binding)) fail('历史页面 title 绑定发生变化'); return current; }); }
 function loadConferenceCrawlAuthorityHandle({ identityRoot, dataRoot, blogRoot = null, iclrAcceptedRoot = null, authorityName } = {}) { const loaded = readAuthority(identityRoot, authorityName); const match = matchFromAuthority(loaded.authority); verifyMatchAgainstRetained({ dataRoot, iclrAcceptedRoot, match }); verifyTitleBindings({ blogRoot, titleBindings: loaded.authority.titleBindings }); const handle = Object.freeze(Object.create(null)); HANDLES.add(handle); HANDLE_DATA.set(handle, Object.freeze({ public: Object.freeze({ authority: clone(loaded.authority), authorityName, authorityFile: loaded.filename, authorityFileSha256: loaded.sha256, productionAuthorized: true }), identityRoot: safeDirectory(identityRoot, 'conferenceIdentityRoot'), dataRoot: safeDirectory(dataRoot, 'dataRoot'), blogRoot: loaded.authority.titleBindings.length ? safeDirectory(blogRoot, 'blogRoot') : null, iclrAcceptedRoot: loaded.authority.metadataSourceKind === ICLR_ACCEPTED_SOURCE ? safeDirectory(iclrAcceptedRoot, 'iclrAcceptedRoot') : null, authorityFileDev: loaded.dev, authorityFileIno: loaded.ino })); return handle; }
 function replayAuthorityHandle(handle, { requireProduction = false } = {}) { if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('需要已认证的会议爬虫身份句柄'); const original = HANDLE_DATA.get(handle); if (requireProduction && original.public.productionAuthorized !== true) fail('需要已获生产授权的会议爬虫身份句柄'); const loaded = readAuthority(original.identityRoot, original.public.authorityName); verifyMatchAgainstRetained({ dataRoot: original.dataRoot, iclrAcceptedRoot: original.iclrAcceptedRoot, match: matchFromAuthority(loaded.authority) }); verifyTitleBindings({ blogRoot: original.blogRoot, titleBindings: loaded.authority.titleBindings }); const current = { authority: loaded.authority, authorityName: original.public.authorityName, authorityFile: loaded.filename, authorityFileSha256: loaded.sha256, productionAuthorized: true }; if (loaded.dev !== original.authorityFileDev || loaded.ino !== original.authorityFileIno || stableHash(current) !== stableHash(original.public)) fail('句柄创建后，会议爬虫授权凭据或保留证据发生变化'); return handle; }
-function prepareConferenceCrawlAuthority({ identityRoot, dataRoot, blogRoot = null, iclrAcceptedRoot = null, match, titleBindings = [], apply = false } = {}) { const normalized = normalizeMatch(match); const bindings = verifyTitleBindings({ blogRoot, titleBindings }); const authorityName = authorityNameFor(normalized, bindings); if (!apply) return { status: 'dry-run', paperId: identityFor(normalized).canonicalId, authorityName }; const retained = verifyMatchAgainstRetained({ dataRoot, iclrAcceptedRoot, match: normalized }); const authority = authorityFor(retained, bindings); const bytes = prettyBytes(authority); const filename = path.join(path.resolve(identityRoot), authorityName); const existed = fs.existsSync(filename); writeExact(identityRoot, authorityName, bytes); const handle = loadConferenceCrawlAuthorityHandle({ identityRoot, dataRoot, blogRoot, iclrAcceptedRoot, authorityName }); return { status: existed ? 'recovered' : 'created', paperId: authority.paperId, authorityName, authorityHandle: handle, retained }; }
-
-module.exports = { CONTRACT, VERSION, EVIDENCE_KIND, AUTHORITY_PREFIX, SAFE_JSON_NAME, DATA_SOURCE, ICLR_ACCEPTED_SOURCE, ICLR_ACCEPTED_RELATIVE_PATH, HistoricalConferenceCrawlAuthorityError, stableHash, prettyBytes, safeDirectory, titleFingerprint, pageTitleBinding, normalizeTitleBindings, readSnapshot, readIclrAcceptedSnapshot, recordIdentity, scanRetainedConferenceCrawlers, scanIclrAcceptedMatches, titleRecoveryGroups, authorityNameFor, normalizeMatch, normalizeAuthority, verifyMatchAgainstRetained, prepareConferenceCrawlAuthority, loadConferenceCrawlAuthorityHandle, authorityHandleSnapshot, replayAuthorityHandle };
+module.exports = { CONTRACT, EVIDENCE_KIND, SAFE_JSON_NAME, DATA_SOURCE, ICLR_ACCEPTED_SOURCE, ICLR_ACCEPTED_RELATIVE_PATH, HistoricalConferenceCrawlAuthorityError, stableHash, prettyBytes, safeDirectory, titleFingerprint, pageTitleBinding, normalizeTitleBindings, readSnapshot, readIclrAcceptedSnapshot, recordIdentity, normalizeMatch, normalizeAuthority, verifyMatchAgainstRetained, loadConferenceCrawlAuthorityHandle, authorityHandleSnapshot, replayAuthorityHandle };

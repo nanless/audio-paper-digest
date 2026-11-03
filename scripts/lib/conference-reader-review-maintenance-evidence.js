@@ -1,4 +1,14 @@
 'use strict';
+
+const codec = require('./protocol-codec');
+function classificationHeader(value, name) {
+    if (!codec.hasValidHeader(value, name)) return null;
+    return codec.recordHeader(value.contract, name, value.schemaFingerprint);
+}
+function deferredFieldsMatch(value, header) {
+    return Boolean(header && isDeepStrictEqual(Object.keys(value).sort(), [...Object.keys(header), 'path',
+        'pageSha256', 'failureSha256', 'kind', 'status', 'nextAction', 'classificationSha256'].sort()));
+}
 // Pure evidence validation. Authority, source replay, and canonical writes
 // remain with the normal conference maintenance engine.
 const crypto = require('node:crypto');
@@ -36,7 +46,7 @@ function existingNode(draft, pointer) {
 }
 function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: review, state,
     actualPhysicalShas, failures, parents, surfaces, imageClassifications = {},markdownClassifications = {},aggregateClassifications = {},nativeReviewClassifications = {},aggregateMarkdown = null,passCaches = {} }) {
-    check(m?.contract === 'conference-reader-review-maintenance-batch-v1' && m.version === 1, 'maintenance contract');
+    check(codec.hasValidHeader(m, 'conference-reader-review-maintenance-batch'), 'maintenance contract');
     selfHash(m, 'manifestSha256'); selfHash(g, 'generationSha256');
     selfHash(review, 'batchSha256'); selfHash(state, 'stateSha256');
     check(state.processId === m.processId && state.processId === g.processId
@@ -46,7 +56,7 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
     for (const key of ['generation', 'state', 'reviewBatch']) {
         check(SHA.test(actualPhysicalShas[key] || '') && m[key + 'FileSha256'] === actualPhysicalShas[key], 'physical baseline mismatch: ' + key);
     }
-    check(review.contract === 'conference-page-content-review-batch-failure-v1' && review.status === 'blocked'
+    check(codec.hasValidHeader(review, 'conference-page-content-review-batch-failure') && review.status === 'blocked'
         && SHA.test(review.protocol || '') && m.protocol === review.protocol, 'finished review protocol');
     const pages = g.files.filter(row => ['paper', 'aggregate'].includes(row.kind));
     uniqueIds(pages.map(row => row.path), 'duplicate generation page');
@@ -61,7 +71,7 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
             const saved=passCaches[stable({path:row.path,sha256:row.sha256})];
             check(saved&&SHA.test(saved.fileSha256||'')&&isDeepStrictEqual(saved.value,row),'real canonical page pass cache required');
             selfHash(saved.value,'resultSha256');
-            check(row.contract==='conference-page-content-review-v1'&&SHA.test(row.protocol||'')
+            check(require('./protocol-codec').hasValidHeader(row,'conference-page-content-review')&&SHA.test(row.protocol||'')
                 &&row.passed===true,'canonical page pass identity');
             continue;
         }
@@ -85,9 +95,7 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
             check(classified&&classified.fileSha256===declared.classificationFileSha256
                 &&saved.fileSha256===declared.failureFileSha256,'transient review lacks exact original deferred evidence');
             const classification=classified.value;selfHash(classification,'classificationSha256');
-            check(isDeepStrictEqual(Object.keys(classification).sort(),['contract','path','pageSha256','failureSha256',
-                'kind','status','nextAction','classificationSha256'].sort())
-                &&classification.contract==='conference-reader-native-review-classification-v1'
+            check(deferredFieldsMatch(classification, classificationHeader(classification, 'conference-reader-native-review-classification'))
                 &&classification.path===row.path&&classification.pageSha256===row.sha256
                 &&classification.failureSha256===row.failureSha256
                 &&classification.kind==='deferred-native-review'&&classification.status==='pending-new-page-review'
@@ -104,9 +112,7 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
                 &&classified.fileSha256===declared.classificationFileSha256
                 &&saved.fileSha256===declared.failureFileSha256,'aggregate rejection requires ordinary aggregate maintenance and exact deferred evidence');
             const classification=classified.value;selfHash(classification,'classificationSha256');
-            check(isDeepStrictEqual(Object.keys(classification).sort(),['contract','path','pageSha256','failureSha256',
-                'kind','status','nextAction','classificationSha256'].sort())
-                &&classification.contract==='conference-reader-aggregate-review-classification-v1'
+            check(deferredFieldsMatch(classification, classificationHeader(classification, 'conference-reader-aggregate-review-classification'))
                 &&classification.path===row.path&&classification.pageSha256===row.sha256
                 &&classification.failureSha256===row.failureSha256
                 &&classification.kind==='deferred-aggregate-generation'
@@ -123,13 +129,13 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
             check(classified&&classified.fileSha256===declared.classificationFileSha256
                 &&saved.fileSha256===declared.failureFileSha256,'markdown failure lacks exact classification/rejection bytes');
             const classification=classified.value;selfHash(classification,'classificationSha256');
-            check(classification.contract==='conference-reader-markdown-review-classification-v1'
+            const header=classificationHeader(classification,'conference-reader-markdown-review-classification');
+            check(header
                 &&classification.failureSha256===row.failureSha256&&classification.path===row.path
                 &&classification.pageSha256===row.sha256
                 &&['normal-reader','deferred-publication-format'].includes(classification.kind),'markdown classification identity');
             if(classification.kind==='deferred-publication-format') {
-                check(isDeepStrictEqual(Object.keys(classification).sort(),['contract','path','pageSha256','failureSha256',
-                    'kind','status','nextAction','classificationSha256'].sort())
+                check(deferredFieldsMatch(classification, header)
                     &&classification.status==='pending-new-page-review'
                     &&classification.nextAction==='publication-format-then-normal-review',
                     'deferred markdown review cannot claim repaired or passed');
@@ -143,13 +149,13 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
             check(classified&&classified.fileSha256===declared.classificationFileSha256
                 &&saved.fileSha256===declared.failureFileSha256,'image failure lacks exact classification/rejection bytes');
             const classification=classified.value;selfHash(classification,'classificationSha256');
-            check(classification.contract==='conference-reader-review-classification-v1'
+            const header=classificationHeader(classification,'conference-reader-review-classification');
+            check(header
                 &&classification.failureSha256===row.failureSha256&&classification.path===row.path
                 &&classification.pageSha256===row.sha256
                 &&['asset-only','reader-semantic','mixed','deferred-review'].includes(classification.kind),'image classification identity');
             if(classification.kind==='deferred-review') {
-                check(isDeepStrictEqual(Object.keys(classification).sort(),['contract','path','pageSha256','failureSha256',
-                    'kind','status','nextAction','classificationSha256'].sort())
+                check(deferredFieldsMatch(classification, header)
                     &&classification.status==='pending-new-page-review'
                     &&classification.nextAction==='source-bound-pdf-page-view-then-normal-review',
                     'deferred image review cannot claim repaired or passed');

@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONObject
 import java.io.File
 
@@ -15,7 +16,7 @@ object StoragePaths {
         val aliases = File(current, BackupCodec.ROOTS_FILE)
         if (aliases.exists()) {
             val o = JSONObject(JsonFiles.read(aliases, 8 * 1024 * 1024L).toString(Charsets.UTF_8))
-            require(o.keys().asSequence().toSet() == setOf("contract", "roots") && o.getString("contract") == "paperdigest-storage-aliases-v1")
+            require(ClientProtocols.hasValidHeader(o, "paperdigest-storage-aliases") && o.keys().asSequence().toSet() == ClientProtocols.recordKeys(o.optString("contract"), "paperdigest-storage-aliases", setOf("roots"), o.opt("schemaFingerprint") as? String))
             roots += o.getJSONArray("roots").strings().onEach(BackupCodec::checkedRoot)
         }
         val relative = roots.distinct().mapNotNull { old -> if (path.startsWith("$old/")) path.removePrefix("$old/") else null }.distinct()

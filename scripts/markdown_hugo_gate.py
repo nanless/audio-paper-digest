@@ -14,7 +14,7 @@ if str(MANUAL_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(MANUAL_SCRIPTS_DIR))
 
 from publish_common import (
-    MANUAL_DEPTH_CONTRACT_VERSION_V5,
+    MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
     PublishDataValidationError,
     publish_table_currency_spans,
     is_publish_currency_literal,
@@ -27,7 +27,7 @@ from publish_common import (
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
-    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+    MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
     TUTORIAL_FORMAT_CONTRACT,
 )
 
@@ -109,11 +109,21 @@ def format_gate_is_current_tutorial(frontmatter):
 
 
 def format_gate_is_current_api_reader(frontmatter):
-    return (
-        isinstance(frontmatter, dict)
-        and frontmatter.get('paper_digest_api_reader_contract')
-        == 'beginner-researcher-v3'
-    )
+    import protocol_codec
+    if not isinstance(frontmatter, dict):
+        return False
+    value = _reader_projected_header(frontmatter, 'paper_digest_api_reader')
+    if not protocol_codec.has_valid_header(value, 'beginner-researcher'):
+        if 'schemaFingerprint' in value or value['contract'] == protocol_codec.contract('beginner-researcher'):
+            raise PublishDataValidationError('页面 Reader 格式缺少正确的结构指纹。')
+        return False
+    return protocol_codec.format(value['contract'], 'beginner-researcher', value.get('schemaFingerprint')) == 'integrated-article'
+
+
+def _reader_projected_header(frontmatter, prefix):
+    marker = prefix + '_schema_fingerprint'
+    return {'contract': frontmatter.get(prefix + '_contract'),
+            **({'schemaFingerprint': frontmatter[marker]} if marker in frontmatter else {})}
 
 
 def markdown_table_count(text):
@@ -629,8 +639,10 @@ def mask_source_bound_title_dollars(rendered, artifact):
 
 def mask_source_bound_author_dollars(rendered, artifact):
     """Only complete escaped source author lists can project literal dollar glyphs."""
+    from protocol_codec import has_valid_header
     frontmatter = artifact.get('frontmatter') or {}
-    single = (frontmatter.get('paper_digest_api_reader_author_identity_contract') == 'api-reader-author-identity-v1'
+    single = (has_valid_header(_reader_projected_header(frontmatter, 'paper_digest_api_reader_author_identity'),
+                               'api-reader-author-identity')
               and re.fullmatch(r'[a-f0-9]{64}', str(frontmatter.get('paper_digest_api_reader_author_identity_sha256') or ''))
               and type(frontmatter.get('paper_digest_api_reader_author_count')) is int
               and frontmatter['paper_digest_api_reader_author_count'] > 0)
@@ -925,7 +937,7 @@ def validate_markdown_format_gate(path, frontmatter, body):
     is_manual_v5 = (
         isinstance(frontmatter, dict)
         and frontmatter.get('paper_digest_manual_depth')
-        == MANUAL_DEPTH_CONTRACT_VERSION_V5
+        == MANUAL_DEPTH_FACT_COVERAGE_CONTRACT
     )
     if not (format_gate_is_current_tutorial(frontmatter) or is_manual_v5):
         return issues
@@ -941,9 +953,9 @@ def validate_markdown_format_gate(path, frontmatter, body):
             '旧 analysis/readerArticle/blog post 不得通过重排升级为新教程'
         )
     if frontmatter.get('paper_digest_tutorial_payload_contract') \
-            != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT:
+            != MANUAL_TUTORIAL_PAYLOAD_CONTRACT:
         issues.append(
-            f'{label} 当前教程缺少 {MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT} sealed payload'
+            f'{label} 当前教程缺少 {MANUAL_TUTORIAL_PAYLOAD_CONTRACT} sealed payload'
         )
     for field in (
             'paper_digest_fresh_authoring_sha256',

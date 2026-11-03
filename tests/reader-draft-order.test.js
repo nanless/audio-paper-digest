@@ -94,7 +94,7 @@ test('规范章节归一化完整的选择标记排列，且不改动正文字�
     const frozen = JSON.stringify(input);
     const { draft, mapping } = normalizeReaderDraftOrder(input);
     assert.equal(JSON.stringify(input), frozen);
-    assert.equal(mapping.contract, 'reader-draft-order-v4');
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(mapping, 'reader-draft-order'), true);
     assert.deepEqual(mapping.tables.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [0, 1]]);
     assert.deepEqual(draft.tableBindings.map(item => [item.tableIndex, item.selection.sourceTableOrdinal]),
         [[1, 2], [2, 1]]);
@@ -329,7 +329,7 @@ test('完整的桥接标记排列只归一化数组，并记录节点 SHA 与下
     const before = JSON.stringify(input);
     const { draft, mapping } = normalizeReaderDraftOrder(input);
     assert.equal(JSON.stringify(input), before);
-    assert.equal(mapping.contract, 'reader-draft-order-v4');
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(mapping, 'reader-draft-order'), true);
     assert.deepEqual(draft.sections, input.sections);
     assert.deepEqual(draft.conceptBridges, [input.conceptBridges[1], input.conceptBridges[2], input.conceptBridges[0]]);
     assert.deepEqual(mapping.conceptBridges.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [2, 1], [0, 2]]);
@@ -383,7 +383,7 @@ test('唯一的概念标记移入或插入某个规范声明章节，不重写�
     assert.equal(draft.sections[2].body, `${before.sections[2].body}\n\n[[CONCEPT_BRIDGE_2]]`);
     assert.deepEqual(mapping.conceptMarkerLocations.map(item => [item.operation,
         item.fromSectionIndex, item.toSectionIndex]), [['move', 1, 0], ['insert', null, 2]]);
-    assert.equal(mapping.contract, 'reader-draft-order-v4');
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(mapping, 'reader-draft-order'), true);
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 

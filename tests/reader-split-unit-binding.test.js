@@ -46,7 +46,7 @@ test('旧 Reader 的完整自洽 SHA 不能保留错误单位关联，原有效�
     const engine = require('../scripts/analysis-engine');
     const { validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture');
     const paper = validLegacyApiAnalysisPaper('2601.12345');
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     const table = '| 方法 | THD ↓ |\n|---|---|\n| 本文 | -38.1 dB |';
     paper.apiReaderArticle += '\n\n' + table;
     function seal(quote) {
@@ -60,9 +60,9 @@ test('旧 Reader 的完整自洽 SHA 不能保留错误单位关联，原有效�
             sourceBindingsSha256: plan.sourceBindingsSha256, tableBindingCount: 1 });
     }
     seal('The total THD is -38.1 with intervening column text dB.');
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     seal('The scalar is -38.1. Another measure is 138.1 dB.');
-    assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false);
 });
 
 

@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // Reuse a byte-proven paid input when the same two saved fact packets acquired
 // a combined display. This authorizes neither a new input nor another response.
 const fs = require('node:fs'), path = require('node:path');
@@ -64,12 +66,12 @@ async function prepareSavedReaderInputContinuity(options) {
     if (typeof options.replayIdentity !== 'function') throw new Error('Saved feedback continuity requires production input replay');
     const replay = await options.replayIdentity(authority.resources, authority.modelFeedback);
     const compatible = require('./reader-compatible-candidate-replay');
-    if (replay.identity.contentMode !== 'reader-source-only-v1'
+    if (!require('./reader-content-mode').is(replay.identity, 'source-only')
         || !isDeepStrictEqual(replay.identity.freshAnalysis, require('./fresh-analysis-context').freshAnalysisIdentity(options.paper.arxivId)))
         throw new Error('Saved feedback continuity changed the sealed input scope');
     const usage = compatible.latestReaderRequest(require('../config').FILES.llmUsageDir,
         replay.identity.paperId, replay.identity.freshAnalysis.runId), event = usage?.value;
-    if (!event || event.version !== 'llm-usage-v1' || event.stage !== 'apiReaderRepair' || event.outcome !== 'completed'
+    if (!event || !isUsageEventFormat(event) || event.stage !== 'apiReaderRepair' || event.outcome !== 'completed'
         || event.statusCode !== 200 || event.model !== replay.identity.model.model || event.protocol !== replay.identity.model.protocol
         || event.usage?.status !== 'reported' || !Number.isSafeInteger(event.usage.totalTokens) || event.usage.totalTokens <= 0) return null;
     const candidates = fs.readdirSync(options.directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).flatMap(name => {
@@ -89,7 +91,7 @@ async function prepareSavedReaderInputContinuity(options) {
     const directory = path.join(options.directory, 'request-diagnostics'), matches = [];
     for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name))) {
         const requestFile = path.join(directory, name), request = read(requestFile), req = request.value;
-        if (req.contract !== 'reader-repair-request-diagnostics-v1' || name !== req.id + '.request.json'
+        if (!require('./reader-diagnostic-format').hasDiagnosticFormat(req) || name !== req.id + '.request.json'
             || req.contentAttempt !== event.contentAttempt || !compatible.sameInput(req.identity, replay.identity)) continue;
         if (paidResolution.proof.requestFileName !== name || paidResolution.proof.requestSha256 !== request.sha256) continue;
         const selected = paidResolution.selected, candidateFile = path.join(options.directory, selected.name);
@@ -99,7 +101,7 @@ async function prepareSavedReaderInputContinuity(options) {
         try { response = read(responseFile); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
         const res = response.value, payload = candidate.envelope.payload;
         if (res.outputTextSha256 !== event.outputTextSha256 || req.promptSha256 !== sha(req.prompt)
-            || req.draftSha256 !== hash(req.draft) || res.contract !== req.contract || res.id !== req.id
+            || req.draftSha256 !== hash(req.draft) || !require('./reader-diagnostic-format').sameDiagnosticFormat(req, res) || res.id !== req.id
             || res.requestSha256 !== request.sha256 || res.outputTextSha256 !== sha(res.rawResponse)
             || ![req.at, res.at, event.at].every(at => Number.isFinite(Date.parse(at)))
             || Date.parse(req.at) > Date.parse(res.at) || usage.at < Date.parse(req.at)

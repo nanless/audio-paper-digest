@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const deep = require('../scripts/deep-analyzer');
 const repair = require('../scripts/lib/reader-repair');
-const versions = require('../scripts/lib/prompt-text-versions');
+const versions = require('../scripts/lib/prompt-contracts');
 const history = require('../scripts/lib/prompt-history');
 const evidence = require('../scripts/lib/prompt-evidence');
 const rendering = require('../scripts/lib/prompt-rendering-contract');
@@ -40,11 +40,8 @@ function originalExpression(paper, sourceEvidence, options) {
 test('source-only fingerprint extraction preserves all original conditional fields', () => {
     const paper = { id: '2610.00001', title: 'literal {{previousDraft}}' };
     const originalPaper = { id: paper.id, title: 'original' };
-    const record = {
-        contract: 'selected-muse-full-stage-reanalysis-v1', model: 'muse-spark-1.3-contributor',
-        runId: 'synthetic-pure-hash-test',
-        originalPaperSha256: crypto.createHash('sha256').update(JSON.stringify(originalPaper)).digest('hex')
-    };
+    const record = require('./helpers/selected-full-stage-record.cjs')({ originalPaper,
+        runId: 'synthetic-pure-hash-test', sourceRunId: '00000000-0000-4000-8000-000000000000', historical: true });
     const selected = { ...paper, fullStageReanalysis: record,
         fullStageReanalysisHistory: [{ ...record, originalPaper }] };
     const variants = [

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-    REPAIR_VERSION, hashDraft, parseRepairableDraft, collectDraftIssues, buildRepairTargets,
+    REPAIR_CONTRACT, hashDraft, parseRepairableDraft, collectDraftIssues, buildRepairTargets,
     applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate, retireFailedCandidate,
     validationFailureSignature, validationFailureHasNoProgress,
     TABLE_COUNT_ISSUE_CODE, readTableCountIssue, hashRecoveryIssues,
@@ -363,7 +363,7 @@ test('小节形态的修复目标包含其正文，但不重复提示上下文',
 
 test('候选存储是原子的、私有的、按输入区分的，本身不是成功凭证', t => {
     const directory = temporary(t);
-    const identity = { version: REPAIR_VERSION, input: 'a', source: 'b', model: 'c', prompt: 'd' };
+    const identity = { contract: REPAIR_CONTRACT, input: 'a', source: 'b', model: 'c', prompt: 'd' };
     assert.equal(loadFailedCandidate(directory, identity), null);
     const filename = saveFailedCandidate(directory, identity, failed());
     assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
@@ -496,7 +496,8 @@ test('正式 Reader 恢复保存整理后的小节与表格对应关系，并记
     assert.deepEqual(stored.payload.draftOrderMappings, [normalized.mapping]);
     assert.equal(stored.payload.attempts, 1);
     assert.equal(stored.payload.fullAttempts, 1);
-    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v4');
+    assert.deepEqual({ contract: stored.identity.draftOrderContract, schemaFingerprint: stored.identity.draftOrderSchemaFingerprint },
+        require('../scripts/lib/reader-draft-order').draftOrderHeader());
     assert.deepEqual(stored.payload.draftOrderMappings[0].conceptBridges.map(item => item.rawIndex), [3, 2, 1, 0]);
     await assert.rejects(generateApiReaderArticleDetailed(paper, '', '', { ...base, readerCallModel: async messages => {
         assert.match(messages[0].content[0].text, new RegExp(hashDraft(normalized.draft)));
@@ -1007,7 +1008,7 @@ test('生产的计数反馈和补丁拒绝保留都不读带码诊断的措辞',
 
 test('旧版恢复字节先核验再谈计数兼容，绝不改写', t => {
     const directory = temporary(t);
-    const identity = { version: REPAIR_VERSION, paperId: '2609.99970' };
+    const identity = { contract: REPAIR_CONTRACT, paperId: '2609.99970' };
     const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
     const payload = { ...failed(countRepairFixture()), issues: [legacy],
         failureSignature: hashDraft([legacy]), validationFailureSignature: validationFailureSignature([legacy]) };
@@ -1898,7 +1899,8 @@ test('原剩余一次内16000 token补丁传输失败可重试，收到内容后
     assert.equal(envelope.payload.attempts, 3);
     assert.equal(envelope.payload.lastContentError.maxOutputTokens, 16000);
     // 旧表层标记只记录已发生的容量升级，不是新付费许可；内容次数仍止于原3次。
-    assert.equal(envelope.payload.implementationRepairAllowanceLineage,'reader-implementation-repair-lineage-v1');
+    assert.deepEqual(envelope.payload.implementationRepairAllowanceLineage,
+        require('../scripts/lib/protocol-codec').record('reader-implementation-repair-lineage'));
     assert.equal(envelope.payload.implementationRepairAllowanceProof,null);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);

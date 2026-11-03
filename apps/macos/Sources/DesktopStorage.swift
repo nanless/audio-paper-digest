@@ -9,9 +9,10 @@ actor DesktopStorage {
         case invalid(String)
         var errorDescription: String? {if case .invalid(let message)=self{return message};return "本机资料检查失败"}
     }
-    private struct Entry: Codable {var path:String;var bytes:Int;var sha256:String;var role:String;var sourceURL:String?}
-    private struct Manifest: Codable {
-        var contract="paperdigest-offline-package-v2"
+    fileprivate struct Entry: Codable {var path:String;var bytes:Int;var sha256:String;var role:String;var sourceURL:String?}
+    fileprivate struct Manifest: Codable {
+        var contract=ClientProtocols.contract("paperdigest-offline-package")
+        var schemaFingerprint:String?=ClientProtocols.schemaFingerprint("paperdigest-offline-package")
         var id:String;var paperID:String;var title:String;var createdAt:String
         var blogURL:String;var sourceURL:String;var sourceVersion:String?;var articleRevisionSHA256:String;var articleContentSHA256:String
         var pdfURL:String?;var pdfSHA256:String?;var paperContentSHA256:String?;var files:[Entry]
@@ -261,7 +262,7 @@ actor DesktopStorage {
     private func verifyDirectory(_ folder:URL,expectedID:String)throws->Manifest {
         _=try PrivateStoragePaths.checkedDirectory(folder)
         let manifestFile=try PrivateStoragePaths.checkedFile(relative:"manifest.json",directory:folder),bytes=try PrivateStoragePaths.boundedData(manifestFile,limit:2*1024*1024),manifest=try JSONDecoder().decode(Manifest.self,from:bytes)
-        guard ["paperdigest-offline-package-v1","paperdigest-offline-package-v2"].contains(manifest.contract),manifest.id==expectedID,!manifest.paperID.isEmpty,Self.https(manifest.blogURL),Self.https(manifest.sourceURL),PrivateStoragePaths.validSHA(manifest.articleRevisionSHA256),manifest.files.count>=2,manifest.files.count<=35 else{throw StorageError.invalid("离线包清单合同无效")}
+        guard ClientProtocols.hasValidHeader(manifest.contract,fingerprint:manifest.schemaFingerprint,"paperdigest-offline-package"),manifest.id==expectedID,!manifest.paperID.isEmpty,Self.https(manifest.blogURL),Self.https(manifest.sourceURL),PrivateStoragePaths.validSHA(manifest.articleRevisionSHA256),manifest.files.count>=2,manifest.files.count<=35 else{throw StorageError.invalid("离线包清单合同无效")}
         var names=Set<String>()
         for entry in manifest.files {
             guard names.insert(entry.path).inserted,PrivateStoragePaths.validSHA(entry.sha256),entry.bytes>=0 else{throw StorageError.invalid("离线包清单有重复或无效文件")}
@@ -290,7 +291,7 @@ actor DesktopStorage {
         let images=manifest.files.filter{$0.role=="image"}.map(\.sha256).sorted()
         guard try Self.articleContentHash(article)==manifest.articleContentSHA256 else{throw StorageError.invalid("离线导读元数据指纹不符")}
         var identity:[String:Any]=["articleSHA256":manifest.articleContentSHA256,"paperID":manifest.paperID,"revision":manifest.articleRevisionSHA256,"sourceURL":manifest.sourceURL,"sourceVersion":manifest.sourceVersion ?? NSNull(),"pdfSHA256":manifest.pdfSHA256 ?? "","images":images]
-        if manifest.contract=="paperdigest-offline-package-v2" {
+        if ClientProtocols.isContract(manifest.contract,"paperdigest-offline-package",variant:"paper-and-article-bound-files",fingerprints:manifest.schemaFingerprint) {
             let paperHash=Self.sha(try Self.json(paper.filter{!["offlineMode","offlinePackageID"].contains($0.key)}))
             guard paperHash==manifest.paperContentSHA256 else{throw StorageError.invalid("离线目录元数据指纹不符")};identity["paperSHA256"]=paperHash
         }else{guard manifest.paperContentSHA256==nil else{throw StorageError.invalid("旧离线合同含不支持的新身份字段")}}
@@ -346,5 +347,27 @@ actor DesktopStorage {
     private static func category(_ path:String)->String {
         if path.hasPrefix("PublishedLibrary/articles/"){return "articles"};if path.hasPrefix("PublishedLibrary/pdf/"){return "pdf"};if path.hasPrefix("PublishedLibrary/assets/"){return "images"};if path.hasPrefix("PublishedLibrary/article-revisions/"){return "revisions"};if path.hasPrefix("PublishedLibrary/"){return "catalog"}
         if path.hasPrefix("Offline/"){return "offline"};if path.hasPrefix("Imports/"){return "imports"};if path.hasPrefix("Exports/"){return "exports"};if path.hasPrefix("ModelUsage/"){return "modelUsage"};if path.hasPrefix("zotero-archives/"){return "zotero"};if path=="personal.json"{return "personal"};return "other"
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension DesktopStorage.Manifest {
+    init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-offline-package")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        id=try values.decode(String.self,forKey:.id)
+        paperID=try values.decode(String.self,forKey:.paperID)
+        title=try values.decode(String.self,forKey:.title)
+        createdAt=try values.decode(String.self,forKey:.createdAt)
+        blogURL=try values.decode(String.self,forKey:.blogURL)
+        sourceURL=try values.decode(String.self,forKey:.sourceURL)
+        sourceVersion=try values.decodeIfPresent(String.self,forKey:.sourceVersion)
+        articleRevisionSHA256=try values.decode(String.self,forKey:.articleRevisionSHA256)
+        articleContentSHA256=try values.decode(String.self,forKey:.articleContentSHA256)
+        pdfURL=try values.decodeIfPresent(String.self,forKey:.pdfURL)
+        pdfSHA256=try values.decodeIfPresent(String.self,forKey:.pdfSHA256)
+        paperContentSHA256=try values.decodeIfPresent(String.self,forKey:.paperContentSHA256)
+        files=try values.decode([DesktopStorage.Entry].self,forKey:.files)
     }
 }

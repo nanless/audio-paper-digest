@@ -240,7 +240,7 @@ function validateSavedCompletion(paper) {
         || stage.imageEvidenceSha256 !== daily.stableHash(payload.imageEvidence)
         || stage.modelImagePreflightEvidenceSha256 !== repair.hashDraft(payload.ephemeralImageEvidence)) fail('paid request/image ledger differs');
     const records = payload.ordinalPatchCompilations || [], history = stage.ordinalPatchHistory;
-    if (records.length && (history?.contract !== 'reader-target-ordinal-patch-v1'
+    if (records.length && (!require('./protocol-codec').hasValidHeader(history, 'reader-ordinal-history')
         || history.reason !== 'operator-correction-supersedes-ordinal-completion'
         || !isDeepStrictEqual(history.compilations, records))) fail('original ordinal compilation history differs');
     const draft = replay(record, original);
@@ -254,7 +254,8 @@ function validateSavedCompletion(paper) {
             if (records.length && (!lastPaid || !isDeepStrictEqual(lastPaid.after, payload.draft)
                 || repair.hashDraft(lastPaid.after) !== record.baselineDraftSha256)) fail('last paid compilation differs from the original candidate');
             const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
-                arxivId: paper.arxivId, requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+                arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
+                requireIntegratedTables: true, minimumIntegratedTables: 2,
                 requireSourceBindings: true, allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true,
                 enforceResourceAvailabilityClaims: true, verifiedResourceIdentity: paper.apiReaderResources,
                 sourceText: source.text, structuredArtifacts: source.structuredArtifacts,

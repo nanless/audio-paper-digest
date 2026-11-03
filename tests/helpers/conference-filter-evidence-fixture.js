@@ -41,7 +41,7 @@ function createFilterSpec({ discoveryHandle, evidenceHandle, overrides = {} }) {
     const catalog = filter.catalogFromDiscoveryHandle(discoveryHandle);
     const snapshot = discovery.discoveryHandleSnapshot(discoveryHandle);
     return {
-        contract: filter.SPEC_CONTRACT, version: filter.SPEC_VERSION,
+        ...require('../../scripts/lib/protocol-codec').recordHeader(filter.SPEC_CONTRACT, 'conference-filter-spec'),
         filterPolicySha256: sha256('policy'), promptSha256: sha256('prompt'),
         model: 'fixture', endpointProtocol: 'openai-responses',
         endpointIdentitySha256: sha256('endpoint identity'), tagCatalogSha256: sha256('tag catalog'),
@@ -56,20 +56,81 @@ function createFilterSpec({ discoveryHandle, evidenceHandle, overrides = {} }) {
 
 // 旧源码由本批前提交直接捕获；只在临时离线样本中运行，不代替当前生产模块。
 const LEGACY_FILTER_SOURCE_SHA256 = '862980b2599471e4ff0a67290da69594e02c0d66771e9f37501123447033c0c2';
-function loadLegacyFilter(requestLlmJson = async () => { throw new Error('旧样本禁止联网'); }) {
+function loadHistoricalEvidenceApi() {
+    const Module = require('node:module'), root = path.resolve(__dirname, '../..');
+    const records = JSON.parse(fs.readFileSync(path.join(root, 'config/workflow-historical-records.json')));
+    const pin = records.filterPolicies.sourcePins['scripts/lib/conference-filter-evidence.js'];
+    const filename = path.join(root, 'scripts/lib/conference-filter-evidence.js');
+    const loaded = new Module(filename, module); loaded.filename = filename;
+    loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+    loaded._compile(require('../../scripts/lib/git-file-bytes').readGitBlob(root, pin.oid, pin.sha256).toString('utf8'), filename);
+    return loaded.exports;
+}
+function loadLegacyFilter(requestLlmJson = async () => { throw new Error('旧样本禁止联网'); }, originalCurrent = false) {
     const Module = require('node:module');
     const filename = path.resolve(__dirname, '../../scripts/lib/conference-filter.js');
-    const raw = fs.readFileSync(path.join(__dirname, '../fixtures/conference-filter-v5-source.txt'));
-    if (sha256(raw) !== LEGACY_FILTER_SOURCE_SHA256) throw new Error('旧筛选源码归档的内容哈希不匹配');
+    const records = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../config/workflow-historical-records.json')));
+    const originalBytes = relative => {
+        const pin = records.filterPolicies.sourcePins[relative];
+        return require('../../scripts/lib/git-file-bytes').readGitBlob(path.resolve(__dirname, '../..'), pin.oid, pin.sha256);
+    };
+    const raw = originalCurrent ? originalBytes('scripts/lib/conference-filter.js')
+        : fs.readFileSync(path.join(__dirname, '../fixtures/conference-filter-original-source.txt'));
+    if (!originalCurrent && sha256(raw) !== LEGACY_FILTER_SOURCE_SHA256) throw new Error('旧筛选源码归档的内容哈希不匹配');
     const utils = require('../../scripts/utils.js');
     const originalRequest = utils.requestLlmJson;
     try {
         utils.requestLlmJson = requestLlmJson;
         const loaded = new Module(filename, module);
         loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+        const originalRequire = loaded.require.bind(loaded);
+        loaded.require = name => {
+            if (name === '../config.js') {
+                const current = originalRequire(name);
+                const old = require('../../scripts/lib/workflow-legacy-codec').filterPolicyDeclaration(
+                    require('../../scripts/lib/workflow-legacy-codec').originalKeywordMetadata().policySha256);
+                return { ...current, FILTER_CONFIG: { ...current.FILTER_CONFIG,
+                    decisionContractVersion: old.decisionContractVersion, batchSize: old.batchSize } };
+            }
+            if (name === './filter-decision.js' || name === './prompt-text-versions.js') {
+                const relative = `scripts/lib/${name.slice(2)}`;
+                const originalFile = path.resolve(__dirname, '../..', relative);
+                const archived = new Module(originalFile, module); archived.filename = originalFile;
+                archived.paths = Module._nodeModulePaths(path.dirname(originalFile));
+                archived._compile(originalBytes(relative).toString('utf8'), originalFile);
+                return archived.exports;
+            }
+            if (name === './conference-discovery.js') {
+                const current = originalRequire(name);
+                const originalHeader = require('../../scripts/lib/protocol-codec')
+                    .historicalHeader('conference-discovery', 'metadata-pdf-catalog');
+                return { ...current, CONTRACT: originalHeader.contract, VERSION: originalHeader.version };
+            }
+            if (name === './conference-filter-evidence.js') {
+                const current = originalRequire(name), codec = require('../../scripts/lib/protocol-codec');
+                const locator = require('../../scripts/lib/workflow-legacy-codec').originalAbstractLocator();
+                return { ...current,
+                    CATALOG_CONTRACT: codec.historicalContract('conference-filter-evidence-catalog', 'complete-member-evidence'),
+                    LOCATOR_CONTRACT: codec.historicalContract('conference-abstract-locator', 'bounded-heading-span'),
+                    DEFAULT_LOCATOR_PROFILE: locator.defaultProfile, AAAI_LOCATOR_PROFILE: locator.aaaiProfile,
+                    LOCATOR_PROFILES: locator.profiles,
+                    LOCATOR_IMPLEMENTATION_SHA256: locator.profiles[locator.defaultProfile].implementationSha256,
+                    locatorBindingForConference: conference => current.locatorBindingForConference(conference,
+                        codec.historicalHeader('conference-abstract-locator', 'bounded-heading-span')) };
+            }
+            if (name !== './keyword-prefilter.js') return originalRequire(name);
+            const records = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../config/workflow-historical-records.json')));
+            const pin = records.filterPolicies.sourcePins['scripts/lib/keyword-prefilter.js'];
+            const bytes = require('../../scripts/lib/git-file-bytes').readGitBlob(path.resolve(__dirname, '../..'), pin.oid, pin.sha256);
+            const keywordFile = path.resolve(__dirname, '../../scripts/lib/keyword-prefilter.js');
+            const keyword = new Module(keywordFile, module); keyword.filename = keywordFile;
+            keyword.paths = Module._nodeModulePaths(path.dirname(keywordFile));
+            keyword._compile(bytes.toString('utf8'), keywordFile);
+            return keyword.exports;
+        };
         loaded._compile(raw.toString('utf8'), filename);
         return loaded.exports;
     } finally { utils.requestLlmJson = originalRequest; }
 }
 
-module.exports = { RUN_ID, createEvidenceHandle, createFilterSpec, loadLegacyFilter, LEGACY_FILTER_SOURCE_SHA256 };
+module.exports = { RUN_ID, createEvidenceHandle, createFilterSpec, loadLegacyFilter, loadHistoricalEvidenceApi, LEGACY_FILTER_SOURCE_SHA256 };

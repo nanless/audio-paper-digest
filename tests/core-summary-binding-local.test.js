@@ -3,10 +3,11 @@ process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const test = require('node:test'), assert = require('node:assert/strict');
 const deep = require('../scripts/deep-analyzer');
 const contract = require('../scripts/analysis-contract');
+const formats = require('../scripts/lib/core-summary-format');
 const golden = require('./fixtures/core-summary-binding-golden.json');
 const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
 for (const [index, row] of golden.cases.entries()) test(`核心内容绑定保持原实现七字段和字节顺序 ${index + 1}`, () => {
-    const actual = deep.buildCoreSummaryBindingBody(row.input, row.output);
+    const actual = deep.buildCoreSummaryBindingBody(row.input, row.output, { contract: formats.originalTag });
     assert.deepStrictEqual(actual, row.expected);
     assert.equal(JSON.stringify(actual), JSON.stringify(row.expected));
     assert.deepStrictEqual(Object.keys(actual), Object.keys(row.expected));
@@ -24,8 +25,20 @@ test('纯绑定保留原字节并诊断外章节变化，不授予本地阶段�
     assert.equal(body.inputAnalysisSha256, sha(row.input));
     assert.equal(body.outputAnalysisSha256, sha(changed));
     assert.notEqual(body.inputStructureProjectionSha256, body.outputStructureProjectionSha256);
-    const paper = {analysis: row.output, analysisManifest:{contracts:{coreSummary:contract.CORE_SUMMARY_CONTRACT_VERSION},
+    const paper = {analysis: row.output, analysisManifest:{contracts:{coreSummary:formats.currentHeader()},
         stages:{coreSummaryRepair:{status:'complete',...deep.buildCoreSummaryBindingBody(row.input,row.output),
             fingerprint:'a'.repeat(64),executionKind:'operator',model:'operator-local',sourceCoreCorrection:{contract:'forged'}}}}};
     assert.match(contract.validateCoreSummaryStageBinding(paper,{skipSemantic:true}), /本地修正/);
+});
+
+test('摘要的新阶段声明绑定实际结构指纹；拒绝不完整或混合的历史声明', () => {
+    const row = golden.cases[0], current = formats.currentHeader();
+    const stage = deep.buildCoreSummaryBindingBody(row.input, row.output);
+    assert.deepEqual(formats.readStage(current, stage), current);
+    assert.equal(formats.readStage(formats.originalTag, stage), null);
+    assert.equal(formats.readStage(current, { ...stage, contractSchemaFingerprint: 'a'.repeat(64) }), null);
+    assert.equal(formats.readStage(current.contract, stage), null);
+    const { contractVersion, contractSchemaFingerprint, ...content } = stage;
+    const { contractVersion: oldContract, ...oldContent } = row.expected;
+    assert.deepEqual(content, oldContent);
 });

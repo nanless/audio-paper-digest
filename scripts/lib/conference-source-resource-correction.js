@@ -12,23 +12,25 @@ const inheritedReaderScience = new AsyncLocalStorage();
 const scientificParentReplay = new AsyncLocalStorage();
 const sourceLineageRecords = new WeakMap();
 const verified = new WeakMap();
-const CONTRACT = 'conference-source-resource-correction-v1';
+const codec = require('./protocol-codec');
+const correctionFormat = require('./conference-source-correction-format');
+const CONTRACT = codec.contract('conference-source-resource-correction');
 const SCORE_KIND = 'deterministic_source_resource_audit';
-const CORE_CONTRACT = 'conference-source-core-correction-v1';
+const CORE_CONTRACT = codec.contract('conference-source-core-correction');
 const CORE_SCORE_KIND = 'deterministic_source_core_audit';
-const CORE_BATCH = 'conference-source-core-correction-batch-v1';
-const CORE_RECEIPT = 'conference-source-core-correction-receipt-v1';
+const CORE_BATCH = codec.contract('conference-source-core-correction-batch');
+const CORE_RECEIPT = codec.contract('conference-source-core-correction-receipt');
 const POLICIES = Object.freeze([
     Object.freeze({ kind: 'source_resource_correction', contract: CONTRACT,
-        batch: 'conference-source-resource-correction-batch-v1',
-        receipt: 'conference-source-resource-correction-receipt-v1',
+        batch: 'conference-source-resource-correction-batch',
+        receipt: 'conference-source-resource-correction-receipt',
         scoreKind: SCORE_KIND, directory: 'source-resource-corrections' }),
     Object.freeze({ kind: 'source_core_correction', contract: CORE_CONTRACT,
         batch: CORE_BATCH, receipt: CORE_RECEIPT,
         scoreKind: CORE_SCORE_KIND, directory: 'source-core-corrections' })
 ]);
-function policyForContract(contract) {
-    const policy = POLICIES.find(value => value.contract === contract);
+function policyForLocator(locator) {
+    const policy = POLICIES.find(value => value.contract === correctionFormat.locatorFamily(locator));
     if (!policy) fail('没有当前来源纠正合同对应的独立真实scope');
     return policy;
 }
@@ -81,7 +83,7 @@ function approvedReasonAudit(original, evidence, ids) {
 function deriveLocalAudit(parentPaper, sourceDetails) {
     const deep = require('../deep-analyzer');
     const original = parentPaper.analysisManifest?.stages?.scoringAudit;
-    if (original?.status !== 'complete' || original.scoringContract !== 'api-scoring-audit-v2'
+    if (original?.status !== 'complete' || !require('./scoring-record-format').hasScoringAuditFormat(original)
         || original.auditSha256 !== stable(original.audit)
         || sha(sourceDetails.text) !== parentPaper.sourceSha256
         || parentPaper.analysisManifest.sourceAcquisition?.sourceSha256 !== parentPaper.sourceSha256
@@ -172,8 +174,8 @@ const fs = require('node:fs'), path = require('node:path');
 const batches = new WeakMap();
 const publicationProjection = new AsyncLocalStorage();
 const PROJECTION_ONLY = Object.freeze({});
-const BATCH = 'conference-source-resource-correction-batch-v1';
-const RECEIPT = 'conference-source-resource-correction-receipt-v1';
+const BATCH = codec.contract('conference-source-resource-correction-batch');
+const RECEIPT = codec.contract('conference-source-resource-correction-receipt');
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const clone = value => structuredClone(value);
@@ -245,7 +247,7 @@ function load(executionId, analysisRoot) {
     const revision = path.join(basic.directory, 'reader-revision.json');
     if (!fs.existsSync(revision)) return basic;
     const r = read(revision).value;
-    return r.contract === 'conference-reader-recovery-window-v1'
+    return require('./protocol-codec').hasValidHeader(r, 'conference-reader-recovery-window')
         ? adapter.loadGrantedConferenceRecovery({ analysisRoot, executionId })
         : adapter.loadConferenceReaderRevision({ analysisRoot, executionId });
 }
@@ -294,9 +296,10 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
     if (!base) fail('清单不在任一明确source scope的私有根目录');
     inside(manifestPath, base.correctionRoot);
     const manifest = read(manifestPath), m = manifest.value;
+    const formats = correctionFormat.sourceFormatsForBatch(m, base.policy.contract);
     const state = savedState || read(path.join(base.processDirectory, 'state.json'));
     const processApi = require('./conference-process'); processApi.assertState(state.value);
-    if (m.contract !== base.policy.batch || m.version !== 1 || m.processId !== processId || !UUID.test(m.batchId || '')
+    if (m.processId !== processId || !UUID.test(m.batchId || '')
         || state.value.processId !== processId || state.sha256 !== m.stateFileSha256
         || state.value.stateSha256 !== m.stateSha256
         || Object.values(state.value.items).some(item => item.status === 'analyzing')
@@ -315,7 +318,9 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
         const file = read(entry.file), r = file.value;
         const item = state.value.items[r.paperId];
         if (entry.paperId !== r.paperId || file.sha256 !== entry.sha256 || rows.has(r.paperId)
-            || r.contract !== base.policy.contract || r.notLlmResponse !== true || r.newApiRequests !== 0
+            || !codec.hasValidHeader(r, base.policy.contract)
+            || !isDeepStrictEqual(codec.recordHeader(r.contract, base.policy.contract, r.schemaFingerprint), formats.recordsFormat)
+            || r.notLlmResponse !== true || r.newApiRequests !== 0
             || !UUID.test(r.childExecutionId || '') || children.has(r.childExecutionId)
             || Object.values(roleRefs(r)).some(ref => ref.executionId === r.childExecutionId)
             || !item || item.analysisRunId !== r.observedStateExecutionId || stable(item) !== r.observedItemSha256
@@ -347,7 +352,7 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
             pinLoaded(latest, r.latestFailedCAS, '最新实际失败');
             const originalFailed = latest.recoveryWindow?.failed;
             if (item.status === 'complete' || r.selectedMainExecutionId !== r.latestFailedExecutionId
-                || latest.revision?.contract !== 'conference-reader-recovery-window-v1'
+                || !require('./protocol-codec').hasValidHeader(latest.revision, 'conference-reader-recovery-window')
                 || !UUID.test(r.originalFailedExecutionId || '') || !originalFailed
                 || r.originalFailedExecutionId !== originalFailed.run.executionId
                 || latest.revision.failedExecutionId !== r.originalFailedExecutionId
@@ -404,7 +409,7 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
             [role, tree(path.join(base.analysisRoot, ref.executionId))]));
         rows.set(r.paperId, { file, record: r, trees, fees });
     }
-    return { ...base, manifest, state, rows };
+    return { ...base, manifest, state, rows, formats };
 }
 function openBatch(options) {
     const handle = Object.freeze({}); batches.set(handle, loadBatch(options)); return handle;
@@ -429,7 +434,9 @@ function prepareChild(batchHandle, paperId, { planHandle, sourceRoot }) {
     if (loaded.run.createdAt !== new Date(row.record.appliedAt).toISOString()) fail('本地child不是本次固定prepare时间身份');
     if (loaded.analysis.status === 'complete') {
         const locator = loaded.analysis.papers[0]?.conferenceSourceCorrection;
-        if (locator?.contract !== batch.policy.contract || locator.executionId !== row.record.childExecutionId
+        if (correctionFormat.locatorFamily(locator) !== batch.policy.contract
+            || !isDeepStrictEqual(codec.recordHeader(locator.contract, batch.policy.contract, locator.schemaFingerprint), batch.formats.recordsFormat)
+            || locator.executionId !== row.record.childExecutionId
             || locator.manifestSha256 !== batch.manifest.sha256
             || !fs.existsSync(path.join(receiptBase(batch, row), 'receipt.json'))) fail('不能复用其它已有完整子稿');
     } else if (loaded.analysis.status !== 'pending' || loaded.run.status !== 'source_ready'
@@ -529,7 +536,7 @@ function projectSelectedMain(loaded, record) {
     }
     const stages = raw.analysisManifest?.stages, checkpoint = raw.analysisStageCheckpoints?.scoringAudit;
     const images = raw.imageManifest, download = stages?.imageDownload;
-    if (record.contract !== CONTRACT || record.selectedMainExecutionId !== record.latestFailedExecutionId
+    if (!correctionFormat.isLocator(record, 'resource') || record.selectedMainExecutionId !== record.latestFailedExecutionId
         || typeof checkpoint !== 'string' || !checkpoint.trim()
         || raw.analysisCheckpoint !== checkpoint || stages?.scoringAudit?.status !== 'complete'
         || sha(checkpoint) !== stages.scoringAudit.outputAnalysisSha256
@@ -579,9 +586,9 @@ function prepareFinalizerInput(paper) {
         active.approvedReasonReplacements = readReasonApproval(active, evidence);
         audit = deriveLocalAudit(parent, active.loaded.source.sourceDetails);
     }
-    if (readerParent.analysisManifest.stages.apiReaderArticle.contentMode !== 'reader-source-only-v1') fail('旧Reader不是可独立当前source重验的source-only稿');
+    if (!require('./reader-content-mode').is(readerParent.analysisManifest.stages.apiReaderArticle, 'source-only')) fail('旧Reader不是可独立当前source重验的source-only稿');
     const reader = replayReaderPatch(readerParent, r);
-    const provenance = { contract: active.batch.policy.contract, scopeKind: active.batch.policy.kind, version: 1, executionKind: 'operator', newApiRequests: 0,
+    const provenance = { ...active.batch.formats.provenanceFormat, scopeKind: active.batch.policy.kind, executionKind: 'operator', newApiRequests: 0,
         processId: active.batch.manifest.value.processId, batchId: active.batch.manifest.value.batchId,
         manifestFile: active.batch.manifest.file, manifestSha256: active.batch.manifest.sha256,
         correctionFile: active.row.file.file, correctionSha256: active.row.file.sha256,
@@ -609,6 +616,7 @@ function prepareFinalizerInput(paper) {
                 readerRevisionProgress: clone(original.analysis.readerRevisionProgress ?? null) }];
         })),
         resources: clone(audit.correction.identity), provenance: clone(provenance),
+        locatorFormat: clone(active.batch.formats.recordsFormat),
         sourceDetails: clone(active.loaded.source.sourceDetails) });
     return active.finalizerInput;
 }
@@ -683,8 +691,8 @@ function deriveCoreAudit(parent, active) {
     if (semanticIssue) fail('新核心仍未通过当前真实source语义：' + semanticIssue);
     // This pure helper must be the same seven-field implementation extracted
     // from the normal deep stage, not a second parser or signing authority.
-    const body = deep.buildCoreSummaryBindingBody(upstream, coreCheckpoint);
-    const provenance = { contract: CORE_CONTRACT, scopeKind: 'source_core_correction',
+    const body = deep.buildCoreSummaryBindingBody(upstream, coreCheckpoint, active.batch.formats.coreSummaryFormat);
+    const provenance = { ...active.batch.formats.coreStageProvenanceFormat, scopeKind: 'source_core_correction',
         processId: active.batch.manifest.value.processId, executionId: r.childExecutionId,
         manifestSha256: active.batch.manifest.sha256, correctionSha256: active.row.file.sha256,
         originalRoleCAS: clone(roleRefs(r)), sourceSha256: r.sourceSha256,
@@ -814,7 +822,13 @@ function scoringStage(input) {
     const active = current(); if (input !== active.finalizerInput) fail('本地评分输入未认证');
     const parent = input.parent, old = parent.analysisManifest.stages.scoringAudit;
     const core = input.coreStage || parent.analysisManifest.stages.coreSummaryRepair;
-    return { status: 'complete', scoringContract: 'api-scoring-audit-v2', executionKind: active.batch.policy.scoreKind,
+    const savedStage = active.loaded.analysis.status === 'complete'
+        ? active.loaded.analysis.papers[0]?.analysisManifest?.stages?.scoringAudit : null;
+    const auditHeader = savedStage ? require('./scoring-record-format').readHeader(savedStage, 'audit')
+        : require('./protocol-codec').recordHeader('api-scoring-audit', 'api-scoring-audit');
+    return { status: 'complete', scoringContract: auditHeader.contract,
+        ...(auditHeader.schemaFingerprint ? { scoringSchemaFingerprint: auditHeader.schemaFingerprint } : {}),
+        executionKind: active.batch.policy.scoreKind,
         model: 'local-deterministic', protocol: 'local_source_audit', newApiRequests: 0,
         sourceCorrection: clone(input.provenance), originApiStage: clone(old),
         audit: clone(input.audit.audit), auditSha256: input.audit.auditSha256,
@@ -856,7 +870,7 @@ function assertFailureProjection(parent, paper) {
 function clearVerifiedReaderFailure(paper) {
     const active = current(); const input = assertOutput(paper);
     const engine = require('../analysis-engine');
-    if (!engine.hasValidApiReaderV3Records(paper)) fail('新Reader尚未通过全部正常记录校验');
+    if (!engine.hasValidIntegratedApiReaderRecords(paper)) fail('新Reader尚未通过全部正常记录校验');
     const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
     const upstream = engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules: rules });
     if (upstream) fail('最新上游仍不合格，不能清除当前child失败：' + upstream);
@@ -899,7 +913,7 @@ function protectedPaper(paper) {
     for (const key of ['scoringAudit', 'apiReaderArticle']) delete stages[key];
     if (scope.getStore()?.mainCheckpointRecovery) delete stages.imageSupplement;
     if (scope.getStore()?.batch.policy.kind === 'source_core_correction') delete stages.coreSummaryRepair;
-    if (stages.openSourceScan) for (const key of ['resourceEvidenceContract', 'resourceEvidenceSha256']) delete stages.openSourceScan[key];
+    if (stages.openSourceScan) for (const key of ['resourceEvidenceContract', 'resourceEvidenceProtocol', 'resourceEvidenceSha256']) delete stages.openSourceScan[key];
     const checkpoints = value.analysisStageCheckpoints || {};
     for (const key of ['scoringAudit', 'apiReaderArticle']) delete checkpoints[key];
     if (scope.getStore()?.batch.policy.kind === 'source_core_correction') delete checkpoints.coreSummaryRepair;
@@ -937,7 +951,7 @@ function assertOutput(paper) {
     // This shared helper is read-only here, including during a hot finalizer.
     equal(verifiedSignedFigureAssets(input, paper.apiReaderFigures, false), paper.apiReaderFigures,
         '当前child原图路径、像素或原签元数据不同');
-    const locator = { contract: active.batch.policy.contract, processId: active.batch.manifest.value.processId,
+    const locator = { ...active.batch.formats.recordsFormat, processId: active.batch.manifest.value.processId,
         executionId: active.row.record.childExecutionId, manifestSha256: active.batch.manifest.sha256 };
     equal(paper.conferenceSourceCorrection, locator, '本地子运行定位器错误');
     equal(paper.conferenceSourceCorrectionObligation, { ...locator, status: 'complete',
@@ -1025,7 +1039,7 @@ function isSourceCorrectionRecord(paper) {
     return Object.hasOwn(paper || {}, 'conferenceSourceCorrection')
         || Object.hasOwn(paper || {}, 'conferenceSourceCorrectionObligation')
         || [SCORE_KIND, CORE_SCORE_KIND].includes(stages.scoringAudit?.executionKind)
-        || [CONTRACT, CORE_CONTRACT].includes(stages.apiReaderArticle?.operatorProvenance?.contract)
+        || ['resource', 'core'].some(kind => correctionFormat.hasProvenance(stages.apiReaderArticle?.operatorProvenance, kind))
         || stages.coreSummaryRepair?.sourceCoreCorrection !== undefined;
 }
 function receiptBase(batch, row) {
@@ -1063,7 +1077,7 @@ function seal(paper) {
     const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
     if (!require('../analysis-engine').isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) fail('来源纠正未通过正常整篇资格');
     const archived = archiveOriginals(active);
-    const body = { contract: active.batch.policy.receipt, version: 1, provenance: clone(input.provenance),
+    const body = { ...active.batch.formats.receiptFormat, provenance: clone(input.provenance),
         stateFileSha256: active.batch.state.sha256, afterPaperSha256: stable(paper),
         originalTrees: clone(active.row.trees),
         feePins: clone(active.row.fees), beforeFiles: archived,
@@ -1109,7 +1123,7 @@ function sourceProjectionCanonical(item) {
             &&loaded.analysis.papers[0].conferenceSourceCorrection?.executionId===loaded.run.executionId) return { current, loaded, descendants };
         const declaration=adapter.readJsonRecord(path.join(loaded.directory,'reader-revision.json')).value;
         const sourceOnly=declaration.readerReviewMaintenance?.window===null
-            &&declaration.readerReviewMaintenance?.contract==='conference-reader-review-maintenance-member-v1';
+            &&require('./protocol-codec').hasValidHeader(declaration.readerReviewMaintenance,'conference-reader-review-maintenance-member');
         const sourceRecord=sourceOnly?require('./conference-reader-review-maintenance')
             .readReaderMaintenanceSourceLineage({executionId:loaded.run.executionId}):null;
         const revision=sourceRecord?.loaded||adapter.loadConferenceReaderRevision({analysisRoot,executionId:loaded.run.executionId});
@@ -1155,12 +1169,13 @@ function assertMaintenanceChildProgress(child,item) {
 }
 function assertSourceMaintenanceHistory(item, previous, projection) {
     const adapter = require('./conference-analysis-adapter');
-    const childId = adapter.readerRevisionExecutionId(item.analysisRunId, item.analysisProof.analysisSha256);
-    const childFile = path.join(require('../config').FILES.conferenceAnalysisDir, childId, 'analysis.json');
-    const childExists = require('node:fs').existsSync(childFile);
+    const analysisRoot = require('../config').FILES.conferenceAnalysisDir;
+    const candidates = adapter.registeredReaderRevisionExecutionIds(item.analysisRunId, item.analysisProof.analysisSha256)
+        .filter(id => require('node:fs').existsSync(path.join(analysisRoot, id)));
+    if (candidates.length > 1) fail('同一父稿存在多个登记格式的 Reader 子运行，不能合并历史或另开次数');
+    const childId = candidates[0];
     const history = [...projection.descendants];
-    if (childExists) {
-        const analysisRoot = require('../config').FILES.conferenceAnalysisDir;
+    if (childId) {
         const revisionFile = path.join(analysisRoot, childId, 'reader-revision.json');
         if (require('node:fs').existsSync(revisionFile)) history.push(adapter.loadConferenceReaderRevision({ analysisRoot, executionId: childId }));
         else {
@@ -1227,9 +1242,9 @@ function inheritedScientificParentProjection(paper,item) {
 }
 function readRegisteredTransaction(paper, projectionToken = null) {
     const locator = paper.conferenceSourceCorrection;
-    if (![CONTRACT, CORE_CONTRACT].includes(locator?.contract) || !UUID.test(locator.processId || '')
+    if (!correctionFormat.locatorFamily(locator) || !UUID.test(locator.processId || '')
         || !UUID.test(locator.executionId || '') || !SHA.test(locator.manifestSha256 || '')) fail('本地标记缺少规范定位器');
-    const policy = policyForContract(locator.contract), base = roots(locator.processId, policy);
+    const policy = policyForLocator(locator), base = roots(locator.processId, policy);
     const loaded = require('./conference-analysis-adapter').loadConferenceAnalysis({
         analysisRoot: base.analysisRoot, executionId: locator.executionId });
     if (loaded.analysis.status !== 'complete' || loaded.run.paperId !== paper.id
@@ -1237,7 +1252,7 @@ function readRegisteredTransaction(paper, projectionToken = null) {
     const directory = path.join(base.correctionRoot, 'registered', locator.manifestSha256, locator.executionId);
     const saved = read(path.join(directory, 'receipt.json'));
     const { receiptSha256, ...body } = saved.value;
-    if (body.contract !== policy.receipt || body.version !== 1 || body.newApiRequests !== 0
+    if (!codec.hasValidHeader(body, policy.receipt) || body.newApiRequests !== 0
         || receiptSha256 !== stable(body) || body.afterPaperSha256 !== stable(paper)
         || body.provenance?.executionId !== locator.executionId
         || body.provenance.manifestSha256 !== locator.manifestSha256) fail('冷回执与实际整包不一致');
@@ -1246,7 +1261,9 @@ function readRegisteredTransaction(paper, projectionToken = null) {
     if (originalState.sha256 !== body.stateFileSha256 || manifestBefore.sha256 !== locator.manifestSha256) fail('完整原状态/清单字节不同');
     const batch = loadBatch({ processId: locator.processId, manifestPath: body.provenance.manifestFile }, originalState);
     const row = batch.rows.get(paper.id);
-    if (batch.policy !== policy) fail('冷清单合同与当前scope不同');
+    if (batch.policy !== policy
+        || !isDeepStrictEqual(codec.recordHeader(body.contract, policy.receipt, body.schemaFingerprint), batch.formats.receiptFormat)
+        || !isDeepStrictEqual(codec.recordHeader(locator.contract, policy.contract, locator.schemaFingerprint), batch.formats.recordsFormat)) fail('冷清单合同与当前scope不同');
     if (!row || row.record.childExecutionId !== locator.executionId
         || row.file.sha256 !== body.provenance.correctionSha256
         || read(path.join(directory, 'correction-before.json')).sha256 !== row.file.sha256) fail('冷回执不属于同一原source条目');
@@ -1335,7 +1352,7 @@ function withSavedPublicationPaper(presented, callback) {
     if (typeof callback !== 'function') fail('出版冷重放缺少回调');
     if (!isSourceCorrectionRecord(presented)) return callback(presented);
     const locator = presented.conferenceSourceCorrection;
-    if (![CONTRACT, CORE_CONTRACT].includes(locator?.contract) || !UUID.test(locator.executionId || '')) fail('出版视图缺实际定位器');
+    if (!correctionFormat.locatorFamily(locator) || !UUID.test(locator.executionId || '')) fail('出版视图缺实际定位器');
     const adapter=require('./conference-analysis-adapter'),analysisRoot=require('../config').FILES.conferenceAnalysisDir;
     const original=adapter.loadConferenceAnalysis({analysisRoot,executionId:locator.executionId});
     let loaded=original;
@@ -1344,7 +1361,10 @@ function withSavedPublicationPaper(presented, callback) {
     // and a copied locator cannot select another canonical package.
     for(let depth=0;!publicationPaperMatches(presented,loaded.analysis.papers[0]);depth++) {
         if(depth>=16)fail('出版视图超出固定paper_id/arxivId身份适配');
-        const executionId=adapter.readerRevisionExecutionId(loaded.run.executionId,loaded.analysisFileSha256);
+        const matches=adapter.registeredReaderRevisionExecutionIds(loaded.run.executionId,loaded.analysisFileSha256)
+            .filter(id=>require('node:fs').existsSync(require('node:path').join(analysisRoot,id)));
+        if(matches.length!==1)fail('出版视图没有唯一实际登记格式的后继子运行');
+        const executionId=matches[0];
         if(!require('node:fs').existsSync(require('node:path').join(analysisRoot,executionId,'reader-revision.json')))
             fail('出版视图超出固定paper_id/arxivId身份适配');
         const child=adapter.loadConferenceReaderRevision({analysisRoot,executionId});
@@ -1411,8 +1431,11 @@ function exportPublicationVerification(presented, canonical) {
     }
     const active = current(); assertOutput(canonical);
     if (!active.cold || !active.receipt) fail('出版证明必须实际冷重放原封存回执');
-    return { contract: 'conference-source-correction-verification-v1', verified: true,
-        scopeKind: active.batch.policy.kind, sourceCorrectionContract: active.batch.policy.contract,
+    const verification = 'conference-source-correction-verification';
+    return { ...codec.recordHeader(verification, verification), verified: true,
+        scopeKind: active.batch.policy.kind, sourceCorrectionContract: active.batch.formats.recordsFormat.contract,
+        ...(active.batch.formats.recordsFormat.schemaFingerprint
+            ? { sourceCorrectionSchemaFingerprint: active.batch.formats.recordsFormat.schemaFingerprint } : {}),
         executionId: active.row.record.childExecutionId, canonicalPaperSha256: stable(canonical),
         presentedPaperSha256: stable(presented), scoringStageSha256: stable(canonical.analysisManifest.stages.scoringAudit),
         sourceSha256: canonical.sourceSha256, receiptSha256: stable(active.receipt), newApiRequests: 0 };

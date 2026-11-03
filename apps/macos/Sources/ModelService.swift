@@ -38,6 +38,55 @@ import Darwin
     }
     func credentialDidChange(present:Bool) { credentialState=present ? "present":"missing" }
     func cancel(_ id:String) { if let process=processes[id],process.isRunning{process.terminate()} }
+    private static let identityFamily="paperdigest-mac-study-identity"
+    private static let inputFamily="paperdigest-mac-study-input"
+    private static let responseFamily="paperdigest-mac-model-response-recovery"
+    private static let extractorFamily="paperdigest-mac-pdf-extractor"
+
+    private static func identityHeader(_ legacyVariant:String?=nil)throws->[String:Any] {
+        if let legacyVariant { return try ClientProtocols.historicalHeader(identityFamily,variant:legacyVariant,fingerprints:nil) }
+        return try ClientProtocols.record(identityFamily)
+    }
+    private static func identityFingerprint(_ fields:[String:Any],header:[String:Any],legacyVariant:String?=nil)throws->String {
+        var actual=header.merging(fields){original,_ in original}
+        if let legacyVariant {
+            actual["extractor"]=try ClientProtocols.historicalContract(extractorFamily,variant:"physical-pdf-page-text")
+            if legacyVariant=="core-input" { actual.removeValue(forKey:"responsesStream");actual.removeValue(forKey:"reasoningEffort") }
+        } else {
+            let schema=try ClientProtocols.declaredSchema(header["contract"],identityFamily,header["schemaFingerprint"] as? String)
+            guard let extractor=schema["extractor"] as? String,
+                  let extractorHeader=schema["extractorFormat"] as? [String:Any],
+                  ClientProtocols.hasValidHeader(extractorHeader,extractorFamily),
+                  extractorHeader["contract"] as? String==extractor else{throw ClientProtocols.FormatError.invalidHeader}
+            actual["extractor"]=extractor
+        }
+        return sha256(try JSONSerialization.data(withJSONObject:actual,options:.sortedKeys))
+    }
+    private static func exactJSON(_ a:[String:Any],_ b:[String:Any])throws->Bool {
+        try JSONSerialization.data(withJSONObject:a,options:.sortedKeys)==JSONSerialization.data(withJSONObject:b,options:.sortedKeys)
+    }
+    /// Header-less historical inputs have only their original four fields.
+    /// Current inputs bind the independently sealed session and the actual
+    /// fingerprint schema used to identify this request.
+    private static func verifiedInputIdentityHeader(_ input:[String:Any],session:[String:Any])throws->[String:Any]? {
+        let fields:Set<String>=["config","messages","source","fingerprint"]
+        if input["contract"]==nil {
+            guard Set(input.keys)==fields,session["studyInputFormat"]==nil else{throw ClientProtocols.FormatError.invalidHeader}
+            return nil
+        }
+        guard ClientProtocols.hasValidHeader(input,inputFamily),
+              Set(input.keys)==(try ClientProtocols.recordKeys(input["contract"],inputFamily,fields:fields.union(["identityFormat"]),fingerprints:input["schemaFingerprint"] as? String)),
+              let observedSessionHeader=session["studyInputFormat"] as? [String:Any],
+              let observedIdentityHeader=input["identityFormat"] as? [String:Any],
+              ClientProtocols.hasValidHeader(observedIdentityHeader,identityFamily),
+              try exactJSON(observedSessionHeader,ClientProtocols.recordHeader(input["contract"],inputFamily,input["schemaFingerprint"] as? String)) else {
+            throw ClientProtocols.FormatError.invalidHeader
+        }
+        let schema=try ClientProtocols.declaredSchema(input["contract"],inputFamily,input["schemaFingerprint"] as? String)
+        guard let expectedIdentity=schema["identityFormat"] as? [String:Any],
+              try exactJSON(observedIdentityHeader,expectedIdentity) else { throw ClientProtocols.FormatError.invalidHeader }
+        return observedIdentityHeader
+    }
     /// Export only the exact evidence sealed for this paper's saved study.
     /// Configuration and transport/credential material never leave this method.
     func exportEvidence(sessionID:String,paperID:String) throws -> [String:Any] {
@@ -57,7 +106,6 @@ import Darwin
         let bytes=try PrivateStoragePaths.boundedData(file,limit:8*1024*1024)
         guard sha256(bytes)==inputSHA,
               let input=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],
-              Set(input.keys)==Set(["config","messages","source","fingerprint"]),
               input["fingerprint"] as? String==fingerprint,
               let config=input["config"] as? [String:Any],config["key"]==nil,
               let source=input["source"] as? [String:Any],
@@ -77,11 +125,16 @@ import Darwin
         let userBytes=Data(user.utf8)
         guard userBytes.starts(with:prefix),userBytes.count-prefix.count<=1024*1024,
               let evidence=String(data:userBytes.dropFirst(prefix.count),encoding:.utf8) else{throw DesktopError.message("封存研究材料的边界无效，未猜测或扩大范围")}
-        var identity:[String:Any]=["contract":"desktop-study-v3","extractor":"pdfkit-physical-pages-v1","kind":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","question":question,"evidence":evidence,"source":source,"maxTokens":budget]
-        let oldFingerprint=sha256(try JSONSerialization.data(withJSONObject:identity,options:.sortedKeys))
-        identity["contract"]="desktop-study-v4";identity["responsesStream"]=config["responsesStream"] ?? false;identity["reasoningEffort"]=config["reasoningEffort"] ?? "default"
-        let currentFingerprint=sha256(try JSONSerialization.data(withJSONObject:identity,options:.sortedKeys))
-        guard fingerprint==oldFingerprint || fingerprint==currentFingerprint else{throw DesktopError.message("原研究完整输入指纹不匹配，未导出材料")}
+        let identity:[String:Any]=["kind":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","question":question,"evidence":evidence,"source":source,"maxTokens":budget,"responsesStream":config["responsesStream"] ?? false,"reasoningEffort":config["reasoningEffort"] ?? "default"]
+        let fingerprints:[String]
+        if let actualHeader=try Self.verifiedInputIdentityHeader(input,session:session) {
+            fingerprints=[try Self.identityFingerprint(identity,header:actualHeader)]
+        } else {
+            fingerprints=try ["core-input","transport-bound-input"].map{variant in
+                try Self.identityFingerprint(identity,header:Self.identityHeader(variant),legacyVariant:variant)
+            }
+        }
+        guard fingerprints.contains(fingerprint) else{throw DesktopError.message("原研究完整输入指纹不匹配，未导出材料")}
         let strings:Set<String>=["kind","paperID","sourceVersion","pdfSHA","sourceURL","revision","currentness","cacheStatus","validatedAt","fetchedAt"]
         let booleans:Set<String>=["truncated","isStale","offlineMode","completeTextCoverage"]
         let numbers:Set<String>=["characters","page"]
@@ -117,11 +170,19 @@ import Darwin
         let effort=config["reasoningEffort"] as? String ?? "default"
         guard ["default","low","medium","high"].contains(effort),config["reasoningEffort"] == nil || config["reasoningEffort"] is String else{throw DesktopError.message("推理强度设置无效")}
         config["reasoningEffort"]=effort
-        let fingerprintObject:[String:Any]=["contract":"desktop-study-v4","extractor":"pdfkit-physical-pages-v1","kind":check ? "connection-check":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","responsesStream":config["responsesStream"]!,"reasoningEffort":effort,"question":question,"evidence":evidence,"source":source,"maxTokens":config["maxTokens"] ?? 8192]
-        let fingerprint=sha256(try JSONSerialization.data(withJSONObject:fingerprintObject,options:[.sortedKeys]))
+        let fingerprintObject:[String:Any]=["kind":check ? "connection-check":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","responsesStream":config["responsesStream"]!,"reasoningEffort":effort,"question":question,"evidence":evidence,"source":source,"maxTokens":config["maxTokens"] ?? 8192]
+        let identityHeader=try Self.identityHeader()
+        let fingerprint=try Self.identityFingerprint(fingerprintObject,header:identityHeader)
+        let oldFingerprint=try Self.identityFingerprint(fingerprintObject,header:Self.identityHeader("transport-bound-input"),legacyVariant:"transport-bound-input")
         let sessions=store.value["sessions"] as? [[String:Any]] ?? []
         guard !sessions.contains(where:{$0["id"] as? String==id}) else{throw DesktopError.message("任务身份已经存在，请创建新的研究任务")}
-        if !force && !check, let previous=sessions.last(where:{$0["fingerprint"] as? String==fingerprint && $0["status"] as? String=="complete"}) {
+        func sameStoredInput(_ candidate:[String:Any])->Bool {
+            if candidate["fingerprint"] as? String==fingerprint{return true}
+            guard !check,candidate["fingerprint"] as? String==oldFingerprint,candidate["studyInputFormat"]==nil,
+                  let id=candidate["id"] as? String else{return false}
+            return (try? exportEvidence(sessionID:id,paperID:paperID)["available"] as? Bool)==true
+        }
+        if !force && !check, let previous=sessions.last(where:{$0["status"] as? String=="complete"&&sameStoredInput($0)}) {
             var copy=previous; copy["reused"]=true; return copy
         }
         let today=String(ISO8601DateFormatter().string(from:Date()).prefix(10))
@@ -142,9 +203,10 @@ import Darwin
         let input:[String:Any]=["config":config,"messages":messages,"usageDirectory":usage.path,"runID":id,"paperID":paperID]
         let integrityKey=try responseIntegrityKey(create:true)
         var pending:[String:Any]=["id":id,"kind":check ? "connection-check":"study","paperID":paperID,"question":question,"source":source,"fingerprint":fingerprint,"model":model,"startedAt":ISO8601DateFormatter().string(from:Date()),"status":"pending","requestIssued":true,"charge":"unknown"]
-        if force,let previous=sessions.last(where:{$0["fingerprint"] as? String==fingerprint}),let parentID=previous["id"] as? String {pending["parentSessionID"]=parentID}
+        if force,let previous=sessions.last(where:sameStoredInput),let parentID=previous["id"] as? String {pending["parentSessionID"]=parentID}
         let inputFile=usage.appendingPathComponent(id+"-input.json")
-        let sealed:[String:Any]=["messages":messages,"source":source,"fingerprint":fingerprint,"config":config.filter{$0.key != "key"}]
+        let sealed=try ClientProtocols.record(Self.inputFamily,fields:["messages":messages,"source":source,"fingerprint":fingerprint,"config":config.filter{$0.key != "key"},"identityFormat":identityHeader])
+        pending["studyInputFormat"]=try ClientProtocols.record(Self.inputFamily)
         let sealedBytes=try JSONSerialization.data(withJSONObject:sealed,options:[.sortedKeys]);try sealedBytes.write(to:inputFile,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:inputFile.path);pending["inputSHA256"]=sha256(sealedBytes)
         // A durable pending entry is required before launching the request worker.
         try store.appendSession(pending)
@@ -182,7 +244,7 @@ import Darwin
         pending["responsesStream"]=config["responsesStream"];pending["reasoningEffort"]=effort;pending["maxTokens"]=config["maxTokens"]
         pending["error"]=result["error"] ?? NSNull(); pending["reused"]=false
         let recovery=usage.appendingPathComponent(id+"-response.json")
-        var envelope:[String:Any]=["contract":"desktop-model-response-recovery-v1","session":pending]
+        var envelope=try ClientProtocols.record(Self.responseFamily,fields:["session":pending])
         let authenticated=try JSONSerialization.data(withJSONObject:envelope,options:.sortedKeys)
         envelope["mac"]=Data(HMAC<SHA256>.authenticationCode(for:authenticated,using:integrityKey)).base64EncodedString()
         try JSONSerialization.data(withJSONObject:envelope,options:[.sortedKeys]).write(to:recovery,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:recovery.path)
@@ -219,10 +281,11 @@ import Darwin
                 let attributes=try file.resourceValues(forKeys:[.isRegularFileKey,.isSymbolicLinkKey,.fileSizeKey])
                 guard UUID(uuidString:id) != nil,attributes.isRegularFile==true,attributes.isSymbolicLink != true,(attributes.fileSize ?? Int.max)<=64*1024*1024,
                       let envelope=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any],
-                      Set(envelope.keys)==Set(["contract","session","mac"]),envelope["contract"] as? String=="desktop-model-response-recovery-v1",
+                      ClientProtocols.hasValidHeader(envelope,Self.responseFamily),
+                      Set(envelope.keys)==(try ClientProtocols.recordKeys(envelope["contract"],Self.responseFamily,fields:["session","mac"],fingerprints:envelope["schemaFingerprint"] as? String)),
                       let saved=envelope["session"] as? [String:Any],saved["id"] as? String==id,
                       let macString=envelope["mac"] as? String,let mac=Data(base64Encoded:macString),mac.count==32 else{throw DesktopError.message("恢复材料合同无效")}
-                let payload=try JSONSerialization.data(withJSONObject:["contract":"desktop-model-response-recovery-v1","session":saved],options:.sortedKeys)
+                let payload=try JSONSerialization.data(withJSONObject:envelope.filter{$0.key != "mac"},options:.sortedKeys)
                 let key=try responseIntegrityKey(create:false)
                 guard HMAC<SHA256>.isValidAuthenticationCode(mac,authenticating:payload,using:key),
                       let original=store.session(id),let fingerprint=original["fingerprint"] as? String,
@@ -238,7 +301,9 @@ import Darwin
                       (input["config"] as? [String:Any])?["key"]==nil,
                       let text=saved["text"] as? String,saved["response"] as? String==text,
                       saved["status"] as? String != "complete" || !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw DesktopError.message("原输入或保存响应不完整")}
-                for field in ["id","paperID","question","source","fingerprint","model","inputSHA256","startedAt","parentSessionID"] {
+                let identityHeader=try Self.verifiedInputIdentityHeader(input,session:original)
+                guard (identityHeader==nil)==(envelope["schemaFingerprint"]==nil) else{throw ClientProtocols.FormatError.invalidHeader}
+                for field in ["id","paperID","question","source","fingerprint","model","inputSHA256","startedAt","parentSessionID","studyInputFormat"] {
                     let old=try JSONSerialization.data(withJSONObject:[field:original[field] ?? NSNull()],options:.sortedKeys)
                     let new=try JSONSerialization.data(withJSONObject:[field:saved[field] ?? NSNull()],options:.sortedKeys)
                     guard old==new else{throw DesktopError.message("原会话身份已变化")}

@@ -4,22 +4,24 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const registry = require('../scripts/lib/prompt-text-versions');
+const registry = require('../scripts/lib/prompt-contracts');
 const { readPromptEvidenceBytes } = require('../scripts/lib/prompt-evidence');
 
 const root = path.resolve(__dirname, '..');
 
-test('工作树只保留十八份当前Prompt与中英文索引，退休全文不回流', () => {
+test('工作树只保留十六份当前提示词与中英文索引，退休全文不回流', () => {
     const current = registry.CURRENT_PROMPT_FILES;
     assert.ok(Object.isFrozen(current));
-    assert.equal(current.length, 18);
-    assert.equal(new Set(current).size, 18);
+    assert.equal(current.length, 16);
+    assert.equal(new Set(current).size, 16);
     const expected = [...Object.values(registry.PROMPT_FILE_VERSIONS).map(entry => entry.path),
-        registry.LLM_FILTER_PROMPT_PATH, 'prompts/primary-fact-local-repair-v1.md',
-        'prompts/api-reader-fact-local-v3.md', 'prompts/api-reader-concept-terms-v1.md'];
+        registry.LLM_FILTER_PROMPT_PATH, 'prompts/current/primary-fact-local-repair.md',
+        'prompts/current/api-reader-fact-local.md', 'prompts/current/api-reader-concept-terms.md'];
     assert.deepEqual([...current].sort(), expected.sort());
     assert.deepEqual(fs.readdirSync(path.join(root, 'prompts')).sort(),
-        [...current.map(file => path.basename(file)), 'README.md', 'README.en.md'].sort());
+        ['current', 'README.md', 'README.en.md'].sort());
+    assert.deepEqual(fs.readdirSync(path.join(root, 'prompts/current')).sort(),
+        current.map(file => path.basename(file)).sort());
     const retiredManual = path.join(root, 'manual/prompts');
     if (fs.existsSync(retiredManual)) {
         assert.deepEqual(fs.readdirSync(retiredManual).filter(file => /\.(?:md|txt)$/i.test(file)), []);

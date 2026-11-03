@@ -26,7 +26,7 @@ function paperFor(contract, local = true) {
     return { analysis: row.output, analysisManifest: {
         contracts: { coreSummary: contract.CORE_SUMMARY_CONTRACT_VERSION },
         stages: { coreSummaryRepair: {
-            status: 'complete', ...deep.buildCoreSummaryBindingBody(row.input, row.output),
+            status: 'complete', ...deep.buildCoreSummaryBindingBody(row.input, row.output, { contract: contract.CORE_SUMMARY_CONTRACT_VERSION }),
             fingerprint: 'a'.repeat(64),
             ...(local ? { executionKind: 'operator', model: 'operator-local',
                 sourceCoreCorrection: { contract: 'dispatch-only-not-a-source-proof' } } : {})

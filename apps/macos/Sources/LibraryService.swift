@@ -6,10 +6,11 @@ import PDFKit
 /// Published-site data and disposable caches. Personal notes and credentials never enter this store.
 actor LibraryService {
     enum ServiceError: LocalizedError {
-        case invalid(String), unavailable(String), network(String), cancelled
+        case invalid(String), unavailable(String), network(String), httpStatus(Int), cancelled
         var errorDescription: String? {
             switch self {
             case .invalid(let s), .unavailable(let s), .network(let s): return s
+            case .httpStatus: return "网站资料暂不可用，未覆盖已保存版本。"
             case .cancelled: return "操作已取消，上一份完整资料库仍然可用。"
             }
         }
@@ -62,6 +63,7 @@ actor LibraryService {
         var citationSidecar: JSONValue? = nil
         var researchContext: JSONValue? = nil
         var citationFiles: [String: String]? = nil
+        var citationFileSHA256: [String: String]? = nil
         var blogURL: String? = nil
         var catalogEpoch: String? = nil
         var isStale: Bool? = nil
@@ -131,13 +133,39 @@ actor LibraryService {
         }
     }
     private struct StoredSnapshot: Codable {
-        var format = "mac-published-library-v1"
+        static let family="paperdigest-published-library"
+        var format: String?
+        var contract: String?
+        var schemaFingerprint: String?
         var summary: Summary
         var papers: [Paper]
-        var retiredPapers: [Paper]? = nil
-        var validationEpoch: String? = nil
-        var websiteTaxonomy: JSONValue? = nil
-        var websiteTaxonomyNotice: String? = nil
+        var retiredPapers: [Paper]?
+        var validationEpoch: String?
+        var websiteTaxonomy: JSONValue?
+        var websiteTaxonomyNotice: String?
+
+        init(summary:Summary,papers:[Paper]) {
+            contract=ClientProtocols.contract(Self.family)
+            schemaFingerprint=ClientProtocols.schemaFingerprint(Self.family)
+            self.summary=summary
+            self.papers=papers
+        }
+        private enum CodingKeys:String,CodingKey {
+            case format,contract,schemaFingerprint,summary,papers,retiredPapers,validationEpoch,websiteTaxonomy,websiteTaxonomyNotice
+        }
+        init(from decoder:Decoder)throws {
+            let fields=try decoder.container(keyedBy:CodingKeys.self)
+            let legacy=fields.contains(.format)
+            let header=try ClientProtocols.decodeHeader(decoder,Self.family,field:legacy ? "format" : "contract")
+            if legacy { format=header.raw } else { contract=header.raw }
+            schemaFingerprint=header.fingerprint
+            summary=try fields.decode(Summary.self,forKey:.summary)
+            papers=try fields.decode([Paper].self,forKey:.papers)
+            retiredPapers=try fields.decodeIfPresent([Paper].self,forKey:.retiredPapers)
+            validationEpoch=try fields.decodeIfPresent(String.self,forKey:.validationEpoch)
+            websiteTaxonomy=try fields.decodeIfPresent(JSONValue.self,forKey:.websiteTaxonomy)
+            websiteTaxonomyNotice=try fields.decodeIfPresent(String.self,forKey:.websiteTaxonomyNotice)
+        }
     }
     private struct Shard: Decodable, Sendable {
         var url: String
@@ -217,9 +245,7 @@ actor LibraryService {
         if FileManager.default.fileExists(atPath: current.path) {
             let bytes = try Data(contentsOf: current)
             guard bytes.count <= Self.maxTotal else { throw ServiceError.invalid("本地目录超过大小限制，请保留原文件后恢复备份。") }
-            let decoded = try JSONDecoder().decode(StoredSnapshot.self, from: bytes)
-            guard decoded.format == "mac-published-library-v1" else { throw ServiceError.invalid("本地资料库版本尚不支持。") }
-            snapshot = decoded
+            snapshot = try JSONDecoder().decode(StoredSnapshot.self, from: bytes)
         } else {
             snapshot = StoredSnapshot(summary: Summary(paperCount: 0, recordCount: 0, shardCount: 0, snapshotID: "", syncedAt: nil, source: "尚未同步", syncing: false, missingFromLatest: []), papers: [])
         }
@@ -233,7 +259,7 @@ actor LibraryService {
                 let authors = (row["authors"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 let source = row["absUrl"] as? String, pdf = row["pdfUrl"] as? String
                 let version = source.flatMap(URL.init(string:))?.lastPathComponent
-                let citation: [String: Any] = ["contract": "paper-citation-source-v1", "paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]
+                guard let citation = try? ClientProtocols.record("paper-citation-source", fields: ["paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]) else {return nil}
                 return Paper(id: "arxiv:" + identifier, title: title, titleZh: row["titleZh"] as? String ?? title, authors: authors, date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]), task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [], sourceKind: "arxiv", identityStatus: "verified", pageType: "paper", blogURL: blog, sourceURL: source, pdfURL: pdf, sourceVersion: version, appearances: [blog], citation: (try? JSONValue.from(citation)) ?? .null)
             }
             snapshot = StoredSnapshot(summary: Summary(paperCount: papers.count, recordCount: rows.count, shardCount: 0, snapshotID: Self.sha256(bytes), syncedAt: nil, source: "应用内已发布样稿（尚未全站同步）", syncing: false, missingFromLatest: []), papers: papers)
@@ -293,16 +319,28 @@ actor LibraryService {
 
     private func performSync(identifier: UUID, progress: @escaping @Sendable (Progress) -> Void) async throws -> Summary {
         progress(Progress(phase: "manifest", message: "正在读取网站目录清单", completed: 0, total: 0))
-        let index = try await read(siteBaseURL.appendingPathComponent("index.json"), limit: Self.maxTotal)
+        var indexURL = siteBaseURL.appendingPathComponent("client/index.json")
+        let index: Data
+        do { index = try await read(indexURL, limit: Self.maxTotal) }
+        catch ServiceError.httpStatus(let status) where [404,410].contains(status) {
+            indexURL = siteBaseURL.appendingPathComponent("index.json")
+            index = try await read(indexURL, limit: Self.maxTotal)
+        }
         try Task.checkCancellation()
         let raw = try JSONSerialization.jsonObject(with: index)
         var records: [[String: Any]] = []
         var shardCount = 0
         if let legacy = raw as? [[String: Any]] {
+            guard indexURL.path == siteBaseURL.appendingPathComponent("index.json").path else { throw ServiceError.invalid("新网站目录缺少完整格式声明。") }
             records = legacy
         } else {
             let manifest = try JSONDecoder().decode(Manifest.self, from: index)
-            guard manifest.contract == "paper-search-index-manifest-v1", !manifest.shards.isEmpty,
+            let family="paper-search-index-manifest"
+            let expectedContract=indexURL.path==siteBaseURL.appendingPathComponent("client/index.json").path
+                ? ClientProtocols.contract(family)
+                : try ClientProtocols.historicalContract(family,variant:"sha-bound-ordered-shards")
+            guard let header = raw as? [String:Any], ClientProtocols.hasValidHeader(header,family),
+                  manifest.contract==expectedContract, !manifest.shards.isEmpty,
                   manifest.shards.count <= 128, manifest.recordCount > 0,
                   manifest.totalBytes > 0, manifest.totalBytes <= Self.maxTotal else { throw ServiceError.invalid("网站目录协议或大小不受支持。") }
             var urls = Set<String>()
@@ -321,7 +359,7 @@ actor LibraryService {
                 let file = cacheURL("index", key: shard.sha256, extension: "json")
                 var data = try? Data(contentsOf: file)
                 if data?.count != shard.bytes || data.map(Self.sha256) != shard.sha256 {
-                    data = try await read(try sameSite(shard.url), limit: 1024 * 1024)
+                    data = try await read(try sameSite(URL(string:shard.url,relativeTo:indexURL)!.absoluteURL.absoluteString), limit: 1024 * 1024)
                     guard data!.count == shard.bytes, Self.sha256(data!) == shard.sha256 else { throw ServiceError.invalid("网站分片内容与清单不符，保留上一份资料库。") }
                     try atomicWrite(data!, to: file)
                 }
@@ -438,9 +476,32 @@ actor LibraryService {
         return row.filter{keys.contains($0.key)||$0.key.hasPrefix("tag")||$0.key.hasPrefix("taxonomy")}
     }
     private func readWebsiteTaxonomy()async throws->JSONValue {
-        let snapshotURL=try sameSite("data/tag-catalog-snapshot.json"),versionsURL=try sameSite("data/tag-catalog-versions.json")
-        let snapshotBytes=try await read(snapshotURL,limit:2*1024*1024),versionsBytes=try await read(versionsURL,limit:8*1024*1024)
-        guard let current=try JSONSerialization.jsonObject(with:snapshotBytes) as? [String:Any],let versions=try JSONSerialization.jsonObject(with:versionsBytes) as? [String:Any],current["contract"] as? String=="paper-tag-catalog-snapshot-v2",versions["contract"] as? String=="paper-tag-catalog-versions-v2",let hash=current["registrySha256"] as? String,hash.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,versions["currentSha256"] as? String==hash,current["concepts"] is [[String:Any]],versions["snapshots"] is [[String:Any]] else{throw ServiceError.invalid("网页分类显示资源缺失或当前词表不一致。")}
+        var snapshotURL=try sameSite("client/data/tag-catalog-snapshot.json"),versionsURL=try sameSite("client/data/tag-catalog-versions.json")
+        func optional404(_ url:URL,_ limit:Int)async throws->Data? {
+            do { return try await read(url,limit:limit) }
+            catch ServiceError.httpStatus(404) { return nil }
+        }
+        let firstSnapshot=try await optional404(snapshotURL,2*1024*1024),firstVersions=try await optional404(versionsURL,8*1024*1024)
+        let snapshotBytes:Data,versionsBytes:Data
+        if firstSnapshot == nil && firstVersions == nil {
+            snapshotURL=try sameSite("data/tag-catalog-snapshot.json");versionsURL=try sameSite("data/tag-catalog-versions.json")
+            snapshotBytes=try await read(snapshotURL,limit:2*1024*1024);versionsBytes=try await read(versionsURL,limit:8*1024*1024)
+        } else {
+            guard let firstSnapshot,let firstVersions else { throw ServiceError.invalid("新网页分类资源不成对，未改用另一份来源。") }
+            snapshotBytes=firstSnapshot;versionsBytes=firstVersions
+        }
+        let snapshotFamily="paper-tag-catalog-snapshot",versionsFamily="paper-tag-catalog-versions"
+        let legacy=firstSnapshot==nil
+        let snapshotContract=legacy ? try ClientProtocols.historicalContract(snapshotFamily,variant:"public-concept-hierarchy") : ClientProtocols.contract(snapshotFamily)
+        let versionsContract=legacy ? try ClientProtocols.historicalContract(versionsFamily,variant:"sha-keyed-snapshot-set") : ClientProtocols.contract(versionsFamily)
+        guard let current=try JSONSerialization.jsonObject(with:snapshotBytes) as? [String:Any],
+              let versions=try JSONSerialization.jsonObject(with:versionsBytes) as? [String:Any],
+              ClientProtocols.hasValidHeader(current,snapshotFamily),ClientProtocols.hasValidHeader(versions,versionsFamily),
+              current["contract"] as? String==snapshotContract,versions["contract"] as? String==versionsContract,
+              let hash=current["registrySha256"] as? String,hash.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,
+              versions["currentSha256"] as? String==hash,current["concepts"] is [[String:Any]],versions["snapshots"] is [[String:Any]] else {
+            throw ServiceError.invalid("网页分类显示资源缺失或当前词表不一致。")
+        }
         let snapshotHash=Self.sha256(snapshotBytes),versionsHash=Self.sha256(versionsBytes)
         try atomicWrite(snapshotBytes,to:cacheURL("taxonomy",key:snapshotHash,extension:"json"));try atomicWrite(versionsBytes,to:cacheURL("taxonomy",key:versionsHash,extension:"json"))
         return try JSONValue.from(["snapshot":current,"versions":versions,"snapshotSourceURL":snapshotURL.absoluteString,"versionsSourceURL":versionsURL.absoluteString,"snapshotContentSHA256":snapshotHash,"versionsContentSHA256":versionsHash])
@@ -499,20 +560,24 @@ actor LibraryService {
         var article = try Self.extractArticle(html, paper: paper, pageURL: URL(string: paper.blogURL)!)
         var notices = article.notices
         let metadataDocument = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
-        let citationLinks = try metadataDocument.nodes(forXPath: "//a[@href]").compactMap { ($0 as? XMLElement)?.attribute(forName: "href")?.stringValue }
-        if let path = citationLinks.first(where: { $0.hasSuffix("/citation.json") }), let citationURL = try? sameSite(path) {
-            let root = citationURL.deletingLastPathComponent()
-            article.citationFiles = Dictionary(uniqueKeysWithValues: ["citation.json", "citation.bib", "citation.ris", "rethink-context.json"].map { ($0, root.appendingPathComponent($0).absoluteString) })
+        let citationFiles = try publishedSidecarLinks(metadataDocument,paper:paper,allowLegacySiblings:true)
+        if let address=citationFiles.urls["citation.json"] {
+            article.citationFiles=citationFiles.urls
+            article.citationFileSHA256=citationFiles.hashes.isEmpty ? nil:citationFiles.hashes
             do {
-                let data = try await read(citationURL, limit: 1024 * 1024)
+                let data = try await read(try sameSite(address), limit: 1024 * 1024)
+                if let expected=citationFiles.hashes["citation.json"],Self.sha256(data) != expected {throw ServiceError.invalid("引用文件与已读取页面中的SHA不符。 ")}
                 article.citationSidecar = try Self.validatedSidecar(data, paper: paper, context: false)
             } catch is CancellationError { throw CancellationError() }
             catch { notices.append("引用附加文件尚未读取，保留页面已核验字段。") }
-            do {
-                let data = try await read(root.appendingPathComponent("rethink-context.json"), limit: 1024 * 1024)
-                article.researchContext = try Self.validatedSidecar(data, paper: paper, context: true)
-            } catch is CancellationError { throw CancellationError() }
-            catch { notices.append("研究上下文附加文件缺失或尚不可读。") }
+            if let contextAddress=citationFiles.urls["rethink-context.json"] {
+                do {
+                    let data = try await read(try sameSite(contextAddress), limit: 1024 * 1024)
+                    if let expected=citationFiles.hashes["rethink-context.json"],Self.sha256(data) != expected {throw ServiceError.invalid("上下文文件与已读取页面中的SHA不符。 ")}
+                    article.researchContext = try Self.validatedSidecar(data, paper: paper, context: true)
+                } catch is CancellationError { throw CancellationError() }
+                catch { notices.append("研究上下文附加文件缺失或尚不可读。") }
+            }
         }
         var imageBytes = 0
         var replacements: [String: String] = [:]
@@ -559,7 +624,7 @@ actor LibraryService {
     static func presentSourceWarning(_ article:Article, blogURL:String?=nil)->Article {
         guard case .object(let fields)=article.citation else{return article}
         var citation:[String:Any]=[:]
-        for key in ["contract","verified","identityStatus","paperKey","paperId","pageUrl","sourceUrl","url","pdfUrl","sourceKind","arxivId","sourceVersionWarning"] {
+        for key in ["contract","schemaFingerprint","version","schemaVersion","policyVersion","verified","identityStatus","paperKey","paperId","pageUrl","sourceUrl","url","pdfUrl","sourceKind","arxivId","sourceVersionWarning"] {
             guard let field=fields[key] else{continue}
             switch field {case .string(let value):citation[key]=value;case .bool(let value):citation[key]=value;default:citation[key]=NSNull()}
         }
@@ -785,7 +850,7 @@ actor LibraryService {
         return copy.stringValue ?? ""
     }
     /// Website aggregates have their own descriptor/body contract and never pass through Paper extraction.
-    static func extractAggregateHTML(_ bytes:Data,descriptor:PublishedAggregate,responseURL:URL,fetchedAt:String,siteBaseURL:URL=PublishedAggregateReader.site)throws->AggregateDocument {
+    static func extractAggregateHTML(_ bytes:Data,descriptor:PublishedAggregate,responseURL:URL,fetchedAt:String,siteBaseURL:URL=PublishedAggregateReader.site,format:AggregateDocumentFormat?=nil)throws->AggregateDocument {
         guard bytes.count>0,bytes.count<=16*1024*1024,let raw=String(data:bytes,encoding:.utf8),(ISO8601DateFormatter().date(from:fetchedAt) != nil || {let format=ISO8601DateFormatter();format.formatOptions=[.withInternetDateTime,.withFractionalSeconds];return format.date(from:fetchedAt) != nil}()) else{throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效")}
         let expected=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
         try PublishedAggregateReader.require(responseURL.absoluteString==expected.absoluteString,"汇总实际响应地址不一致")
@@ -822,7 +887,8 @@ actor LibraryService {
         let plain=try articlePlainText(body)
         try PublishedAggregateReader.require(!plain.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,"汇总没有连续可读正文")
         let html=(body.children ?? []).map{$0.xmlString(options:[.nodePreserveWhitespace])}.joined()
-        return AggregateDocument(contract:"published-aggregate-document-v1",descriptor:descriptor,responseURL:responseURL.absoluteString,fetchedAt:fetchedAt,rawHTMLSHA256:PublishedAggregateReader.sha(bytes),rawHTMLBytes:bytes.count,sanitizedBodySHA256:PublishedAggregateReader.sha(Data(html.utf8)),bodyHTML:html,plainText:plain,parserContract:"published-aggregate-html-v1",resources:resources,completeOffline:false,notices:["网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。"]+(resources.isEmpty ? []:["部分图片尚未保存，不能称为完整离线页面。"]))
+        let selected=try format ?? AggregateDocumentFormat.current(.macos)
+        return AggregateDocument(contract:selected.contract,schemaFingerprint:selected.schemaFingerprint,descriptor:descriptor,responseURL:responseURL.absoluteString,fetchedAt:fetchedAt,rawHTMLSHA256:PublishedAggregateReader.sha(bytes),rawHTMLBytes:bytes.count,sanitizedBodySHA256:PublishedAggregateReader.sha(Data(html.utf8)),bodyHTML:html,plainText:plain,parserContract:selected.parser,resources:resources,completeOffline:false,notices:["网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。"]+(resources.isEmpty ? []:["部分图片尚未保存，不能称为完整离线页面。"]))
     }
 
     static func aggregateImagePlan(_ source:AggregateDocument,rawHTML:Data,siteBaseURL:URL=PublishedAggregateReader.site)throws->AggregateImagePlan {
@@ -895,7 +961,7 @@ actor LibraryService {
             try PublishedAggregateReader.require(current==source,"图片必须绑定已核验的原网页修订")
             let plan=try scoped.imagePlan(source)
             let cached=try scoped.latestResourceRendering(source:source) ?? scoped.importAndroidResourceRendering(source)
-            if let cached{try PublishedAggregateReader.require(cached.manifest.plan==plan,"已存图片与当前网页位置不符")}
+            if let cached{try PublishedAggregateReader.require(cached.manifest.plan==plan.replayHeader(of:cached.manifest.plan),"已存图片与当前网页位置不符")}
             return (plan,cached)
         }
         let retained=Dictionary(uniqueKeysWithValues:(cached?.manifest.images ?? []).filter{$0.sha256 != nil}.map{($0.slot.index,$0)})
@@ -909,7 +975,7 @@ actor LibraryService {
             try Task.checkCancellation()
             if let record=retained[slot.index]{
                 try PublishedAggregateReader.require(record.slot==slot,"已存图片位置不符")
-                let asset=try store.retainedResourceBytes(record);assets[slot.index]=asset
+                let asset=try store.retainedResourceBytes(record,legacy:cached?.manifest.schemaFingerprint==nil);assets[slot.index]=asset
                 if let address=slot.sourceURL{downloaded[address]=asset}
                 continue
             }
@@ -918,7 +984,7 @@ actor LibraryService {
                 let asset:AggregateImageBytes
                 if let address=slot.sourceURL,let cached=downloaded[address]{asset=cached}
                 else if let address=slot.sourceURL,let record=retainedByURL[address]{
-                    asset=try store.retainedResourceBytes(record);downloaded[address]=asset
+                    asset=try store.retainedResourceBytes(record,legacy:cached?.manifest.schemaFingerprint==nil);downloaded[address]=asset
                 }
                 else{
                     guard total<AggregateResources.maxTotalBytes else{throw AggregateFailure.invalid("页面图片累计或保守传输预算已耗尽")}
@@ -1109,22 +1175,21 @@ actor LibraryService {
     func citationFile(for paperID: String, format: String) async throws -> [String: Any] {
         let names = ["bib": "citation.bib", "ris": "citation.ris", "json": "citation.json"]
         guard let name = names[format], let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) else { throw ServiceError.invalid("未选择可导出引用的论文或格式。") }
-        var addresses: [String: String] = [:]
+        var addresses: [String: String] = [:],hashes:[String:String]=[:]
         let cache = cacheURL("articles", key: Self.sha256(Data(paper.blogURL.utf8)), extension: "json")
-        if let data = try? Data(contentsOf: cache), let article = try? JSONDecoder().decode(Article.self, from: data), article.paperID == paperID { addresses = article.citationFiles ?? [:] }
+        if let data = try? Data(contentsOf: cache), let article = try? JSONDecoder().decode(Article.self, from: data), article.paperID == paperID { addresses = article.citationFiles ?? [:]; hashes = article.citationFileSHA256 ?? [:] }
         if addresses[name] == nil {
             // Discover the actual published download link; never synthesize BibTeX/RIS from metadata.
             let data = try await read(try sameSite(paper.blogURL), limit: 8 * 1024 * 1024)
             guard let html = String(data: data, encoding: .utf8) else { throw ServiceError.invalid("引用来源页面不是UTF-8。") }
             _ = try Self.extractArticle(html, paper: paper, pageURL: URL(string: paper.blogURL)!)
             let doc = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
-            let links = try doc.nodes(forXPath: "//a[@href]").compactMap { ($0 as? XMLElement)?.attribute(forName: "href")?.stringValue }
-            for candidate in names.values {
-                if let path = links.first(where: { $0.hasSuffix("/" + candidate) }), let url = try? sameSite(path) { addresses[candidate] = url.absoluteString }
-            }
+            let declared = try publishedSidecarLinks(doc,paper:paper)
+            addresses=declared.urls;hashes=declared.hashes
         }
         guard let address = addresses[name] else { throw ServiceError.unavailable("该已发布页面没有此格式的真实引用文件，未现场生成替代引用。") }
         let data = try await read(try sameSite(address), limit: 1024 * 1024)
+        if let expected=hashes[name],Self.sha256(data) != expected {throw ServiceError.invalid("引用原件与该阅读版本保存的页面声明SHA不符。 ")}
         guard let text = String(data: data, encoding: .utf8), !text.isEmpty, !text.localizedCaseInsensitiveContains("<html") else { throw ServiceError.invalid("引用文件为空或返回了错误页面。") }
         if format == "bib" { guard text.range(of: #"(?m)^\s*@[A-Za-z]+\s*\{"#, options: .regularExpression) != nil else { throw ServiceError.invalid("已发布BibTeX文件格式无效。") } }
         if format == "ris" { guard text.hasPrefix("TY  - "), text.contains("ER  -") else { throw ServiceError.invalid("已发布RIS文件格式无效。") } }
@@ -1132,10 +1197,46 @@ actor LibraryService {
         return ["filename": name, "text": text, "sha256": Self.sha256(data), "sourceURL": address]
     }
 
+    private func publishedSidecarLinks(_ document:XMLDocument,paper:Paper,allowLegacySiblings:Bool=false)throws->(urls:[String:String],hashes:[String:String]) {
+        let declarations=try document.nodes(forXPath:"//script[contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__client-sidecars ')]")
+        let names:Set<String>=["citation.json","citation.bib","citation.ris","rethink-context.json"]
+        if !declarations.isEmpty {
+            guard declarations.count==1,let text=declarations[0].stringValue,
+                  let bytes=text.data(using:.utf8),bytes.count<=8192,
+                  let descriptors=try JSONSerialization.jsonObject(with:bytes) as? [String:[String:Any]],Set(descriptors.keys)==names else { throw ServiceError.invalid("当前引用文件声明不完整，未改读另一份材料。") }
+            guard paper.identityStatus=="verified",String(paper.date.prefix(10)).range(of:"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",options:.regularExpression) != nil else {throw ServiceError.invalid("当前引用声明没有明确的已发布论文身份或日期。")}
+            let identifier = paper.sourceKind=="arxiv" ? String(paper.id.dropFirst("arxiv:".count)).replacingOccurrences(of:".",with:"-").replacingOccurrences(of:"/",with:"-") : "conference-"+String(Self.sha256(Data(paper.id.utf8)).prefix(24))
+            let ownerRoot=siteBaseURL.appendingPathComponent("client/papers/"+String(paper.date.prefix(10))+"/"+identifier+"/")
+            var result:[String:String]=[:],hashes:[String:String]=[:]
+            for (name,record) in descriptors {
+                guard let address=record["url"] as? String,let hash=record["sha256"] as? String,
+                      hash.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil else { throw ServiceError.invalid("当前引用文件缺少真实地址或SHA。") }
+                let url=try sameSite(address)
+                guard url.deletingLastPathComponent().path==(ownerRoot.path.hasSuffix("/") ? String(ownerRoot.path.dropLast()):ownerRoot.path),url.lastPathComponent==name else { throw ServiceError.invalid("当前引用文件超出已发布资料目录。") }
+                if name=="rethink-context.json" {
+                    guard ClientProtocols.hasValidHeader(record,"paper-research-context"),record["contract"] as? String==ClientProtocols.contract("paper-research-context") else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                }
+                result[name]=url.absoluteString;hashes[name]=hash
+            }
+            guard Set(result.values.compactMap{URL(string:$0)?.deletingLastPathComponent().absoluteString}).count==1 else { throw ServiceError.invalid("当前引用文件混用了不同目录。") }
+            return (result,hashes)
+        }
+        let links=try document.nodes(forXPath:"//a[@href]").compactMap{($0 as? XMLElement)?.attribute(forName:"href")?.stringValue}
+        var result:[String:String]=[:]
+        for name in names {
+            if let address=links.first(where:{$0.hasSuffix("/"+name)}),let url=try? sameSite(address) { result[name]=url.absoluteString }
+        }
+        if allowLegacySiblings,let address=result["citation.json"],let url=URL(string:address) {
+            // Keep the old article-reader behavior; explicit export still needs its actual link.
+            let root=url.deletingLastPathComponent()
+            for name in names where result[name]==nil {result[name]=root.appendingPathComponent(name).absoluteString}
+        }
+        return (result,[:])
+    }
+
     private static func validatedSidecar(_ data: Data, paper: Paper, context: Bool) throws -> JSONValue {
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contract = value["contract"] as? String,
-              (context ? ["researcher-sidecars-v1", "paper-research-context-v2"].contains(contract) : contract == "researcher-sidecars-v1") else { throw ServiceError.invalid("引用附加文件合同不受支持。") }
+              ClientProtocols.hasValidHeader(value,context ? "paper-research-context" : "researcher-sidecars") else { throw ServiceError.invalid("引用附加文件合同不受支持。") }
         if paper.identityStatus == "verified" {
             if paper.sourceKind == "arxiv" {
                 let id = (value["arxivId"] as? String ?? value["id"] as? String ?? "").replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
@@ -1222,7 +1323,8 @@ actor LibraryService {
                 cancellation.install(bytes.task)
                 defer { bytes.task.cancel() }
                 try Task.checkCancellation()
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200, http.url == url else { throw ServiceError.network("网站资料暂不可用，未覆盖已保存版本。") }
+                guard let http = response as? HTTPURLResponse, http.url == url else { throw ServiceError.network("网站响应地址不一致，未覆盖已保存版本。") }
+                guard http.statusCode == 200 else { throw ServiceError.httpStatus(http.statusCode) }
                 guard response.expectedContentLength <= Int64(limit) else { throw ServiceError.invalid("资料响应超过大小上限。") }
                 var data = Data()
                 for try await byte in bytes {

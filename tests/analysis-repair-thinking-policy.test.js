@@ -126,6 +126,7 @@ test('推理模式默认关闭，项目环境覆写只接受两个明确值', t 
     const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-thinking-config-'));
     t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
     fs.cpSync(path.resolve(__dirname, '../scripts'), path.join(folder, 'scripts'), { recursive: true });
+    fs.cpSync(path.resolve(__dirname, '../config'), path.join(folder, 'config'), { recursive: true });
     const childProcess = require('node:child_process');
     const configPath = path.join(folder, 'scripts/config.js');
     for (const mode of ['', 'enabled', 'disabled', 'invalid']) {

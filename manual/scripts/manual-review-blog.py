@@ -22,9 +22,11 @@ if str(SHARED_SCRIPTS) not in sys.path:
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 from publish_common import is_canonical_publish_arxiv_id
+from blog_record_format import source_bound_generation
 
 from manual_agent_policy import (
     review_model_policy, require_current_review_policy, review_subagent_identity_error,
+    requires_page_identity, supports_assets_and_cache, valid_asset_header, valid_cache_evidence_header, review_profile,
 )
 
 
@@ -75,7 +77,7 @@ def _load_review_statement(path, *, local_image_validator=None):
     if payload.get('mode') != 'manual_complete':
         raise ValueError('人工审查声明必须标明人工审查方式。')
     expected_policy = review_model_policy(payload)
-    requires_subagent_review = payload['version'] in (3, 4)
+    requires_subagent_review = requires_page_identity(payload)
     if not isinstance(payload.get('agent'), str) or not payload['agent'].strip():
         raise ValueError('人工审查声明必须填写非空的审查者名称。')
     if payload.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -94,9 +96,7 @@ def _load_review_statement(path, *, local_image_validator=None):
         raise ValueError('人工审查声明中的八项检查结果必须全部为 true。')
     if 'machineAssets' in payload:
         machine = payload['machineAssets']
-        if (payload.get('version') != 4 or not isinstance(machine, dict)
-                or set(machine) != {'contract', 'files'}
-                or machine.get('contract') != 'manual-review-controlled-assets-v1'
+        if (not valid_asset_header(machine, payload)
                 or not isinstance(machine.get('files'), list) or not machine['files']):
             raise ValueError('人工机器资产证明的版本或结构无效。')
         seen_assets = set()
@@ -127,7 +127,7 @@ def _load_review_statement(path, *, local_image_validator=None):
         deleted = item.get('deleted') is True
         allowed = {'path', 'sha256', 'checks', 'notes', 'deleted'}
         required_fields = {'path', 'sha256', 'checks', 'notes'}
-        cached_review = payload.get('version') == 4 and 'cacheReuse' in item
+        cached_review = supports_assets_and_cache(payload) and 'cacheReuse' in item
         if cached_review:
             allowed.add('cacheReuse')
             required_fields.add('cacheReuse')
@@ -164,9 +164,7 @@ def _load_review_statement(path, *, local_image_validator=None):
             raise ValueError(f'文件审查记录 files[{index}] 中的审查说明必须是至少 20 个字符的非空文字。')
         if cached_review:
             reuse = item['cacheReuse']
-            if (deleted or not isinstance(reuse, dict)
-                    or set(reuse) != {'version', 'record', 'recordSha256'}
-                    or type(reuse.get('version')) is not int or reuse['version'] != 1
+            if (deleted or not valid_cache_evidence_header(reuse, original=review_profile(payload) == 'sol-page-identity')
                     or not isinstance(reuse.get('record'), dict)
                     or not re.fullmatch(r'[a-f0-9]{64}', str(reuse.get('recordSha256') or ''))):
                 raise ValueError('逐页复用记录的结构无效。')
@@ -399,7 +397,7 @@ def _run(module, date_str, review_statement_path):
         raise module.PublishDataValidationError('生成清单无法解析。') from exc
     _require_current_review_statement_version(module, generation_payload, review_statement)
     authoritative_by_id = {}
-    if generation_payload.get('schemaVersion') == 3:
+    if source_bound_generation(generation_payload):
         _validate_review_statement_scope(module, generation_payload, review_statement)
         for paper in generation_payload.get('publishedPapers') or []:
             if not isinstance(paper, dict):
@@ -459,7 +457,7 @@ def _run(module, date_str, review_statement_path):
             raise module.PublishDataValidationError(f'文件内容 SHA 与人工审查声明不一致：{relative}')
     _validate_file_specific_notes(
         module, expected_attested, actual_pages, deletion_expectations, date_str,
-        require_subagent_images=review_statement.get('version') in (3, 4),
+        require_subagent_images=requires_page_identity(review_statement),
     )
 
     # 人工审查只核对已审文件，不改写页面。预演检查若发现页面需要自动修正，
@@ -479,7 +477,7 @@ def _run(module, date_str, review_statement_path):
         if paper_match:
             paper_id = module.normalize_publish_arxiv_id(paper_match.group(1))
             paper = authoritative_by_id.get(paper_id)
-            if generation_payload.get('schemaVersion') == 3 and paper is None:
+            if source_bound_generation(generation_payload) and paper is None:
                 raise module.PublishDataValidationError(
                     f'论文页对应的论文不在本次生成清单的论文记录中：{paper_id}'
                 )

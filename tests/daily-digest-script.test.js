@@ -12,8 +12,7 @@ test('日更按 API、博客三阶段和发布后不生图登记的顺序执行'
         'node scripts/full-fetch.js --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"',
-        'bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan',
-        'bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"',
+        'bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-production-receipt',
         'node scripts/waive-post-publish-visuals.js --date "$target_date"'
     ];
     let previous = -1;
@@ -25,7 +24,7 @@ test('日更按 API、博客三阶段和发布后不生图登记的顺序执行'
 });
 
 test('日更默认不准备或生成长图封面，仍要求部署和逐页验收', () => {
-    assert.doesNotMatch(source, /OPENAI_API_KEY|images\/generations|images\/edits|image_gen\.py/);
+    assert.doesNotMatch(source, /OPENAI_API_KEY|images\/generations|images\/edits|image_gen\.py|plan-post-publish-visuals|visual-summary-integration/);
     assert.doesNotMatch(source, /visual-summary-state\.js prepare|必须继续生成/);
     assert.match(source, /以后日更不再生图/);
     assert.match(source, /GitHub Pages 构建和部署成功/);
@@ -97,7 +96,7 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     });
     assert.equal(result.status, 0, result.stderr);
     let commands = fs.readFileSync(logPath, 'utf8');
-    assert.match(commands, /python3\.11 scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
+    assert.match(commands, /python3\.11 scripts\/push-blog\.py --date 2026-07-13 --require-production-receipt/);
     assert.doesNotMatch(commands, /plan-post-publish-visuals\.py/);
     assert.match(commands, /waive-post-publish-visuals\.js/);
     assert.doesNotMatch(commands, /visual-summary-state\.js prepare/);
@@ -108,7 +107,7 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     });
     assert.equal(result.status, 0, result.stderr);
     commands = fs.readFileSync(logPath, 'utf8');
-    assert.match(commands, /python3\.11 scripts\/plan-post-publish-visuals\.py --date 2026-07-13/);
+    assert.doesNotMatch(commands, /plan-post-publish-visuals/);
     assert.doesNotMatch(commands, /push-blog\.py/);
     assert.match(commands, /waive-post-publish-visuals\.js/);
     assert.doesNotMatch(commands, /visual-summary-state\.js prepare/);
@@ -141,7 +140,7 @@ test('默认日更和兼容 no-visuals 参数均按发布版本登记不生图�
                 cwd:path.dirname(scriptPath),env,encoding:'utf8'});
             assert.equal(result.status,0,result.stderr);
             const commands=fs.readFileSync(log,'utf8');
-            assert.match(commands,/scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
+            assert.match(commands,/scripts\/push-blog\.py --date 2026-07-13 --require-production-receipt/);
             assert.match(commands,/scripts\/waive-post-publish-visuals\.js --date 2026-07-13 --reason 用户已明确要求以后日更不再生图/);
             assert.doesNotMatch(commands,/visual-summary-state\.js prepare/);
             assert.match(result.stdout,/当前发布版本的视觉豁免/);
@@ -167,13 +166,13 @@ test('阶段计时记录成功和失败，保留真实退出码且失败后不�
     const success = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'push', '--no-visuals'], { env, encoding: 'utf8' });
     assert.equal(success.status, 0, success.stderr);
     assert.match(success.stdout, /日期=2026-07-13 开始=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
-    assert.match(success.stdout, /阶段完成: 发布博客并规划视觉任务 \[耗时=\d+秒 结束=/);
+    assert.match(success.stdout, /阶段完成: 发布博客并核对正式凭证 \[耗时=\d+秒 结束=/);
     fs.writeFileSync(log, '');
     const failed = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'push', '--no-visuals'], {
         env: { ...env, TEST_PUSH_EXIT: '23' }, encoding: 'utf8'
     });
     assert.equal(failed.status, 23, failed.stderr);
-    assert.match(failed.stderr, /阶段失败: 发布博客并规划视觉任务（退出码 23，耗时 \d+ 秒）/);
+    assert.match(failed.stderr, /阶段失败: 发布博客并核对正式凭证（退出码 23，耗时 \d+ 秒）/);
     assert.doesNotMatch(failed.stdout, /阶段完成: 发布博客|登记当前发布版本/);
     assert.doesNotMatch(fs.readFileSync(log, 'utf8'), /waive-post-publish-visuals|visual-summary-state/);
 });

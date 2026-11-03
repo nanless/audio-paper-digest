@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // No model, network, stage grant, signature replacement, or arbitrary snapshot installation.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const CONTRACT = 'primary-local-validation-replay-v1';
@@ -43,7 +45,8 @@ function primaryPatchProof(input, output, feedback, receipt) {
     const local = require('./primary-fact-local-repair');
     local.fingerprintFields(receipt);
     if (sha(input) !== receipt.inputSha256 || sha(output) !== receipt.outputSha256) fail('原局部修正的输入或输出SHA不同');
-    const plan = local.buildPlan(input, feedback);
+    const header = local.readHeader(receipt);
+    const plan = local.buildPlan(input, feedback, header);
     if (plan.targetsSha256 !== receipt.targetsSha256) fail('原有界段落不匹配');
     let inCursor = 0, outCursor = 0;
     const replacements = [];
@@ -65,7 +68,7 @@ function primaryPatchProof(input, output, feedback, receipt) {
         inCursor = target.end; outCursor = end;
     }
     // This validates the actual saved before/after relation only. It does NOT reconstruct or claim original raw JSON bytes.
-    const relational = local.applyPatch(input, plan, { contract: local.CONTRACT, inputSha256: receipt.inputSha256, replacements });
+    const relational = local.applyPatch(input, plan, { ...header, inputSha256: receipt.inputSha256, replacements });
     if (relational.analysis !== output) fail('原付费输出不是同一有界段落替换');
     for (const key of ['inputSha256', 'outputSha256', 'targetsSha256'])
         if (relational.receipt[key] !== receipt[key]) fail('原有界修正凭证不同');
@@ -100,7 +103,7 @@ function paidProof(paper, receipt, pinned, expectedRequest) {
         || started[0].value.outcome !== 'result_unknown' || started[0].value.chargeState !== 'unknown' || started[0].value.at > value.at) fail('原请求与完成用量没有唯一成对记录');
     const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i, digest = /^[a-f0-9]{64}$/;
     for (const event of [started[0].value, value]) {
-        if (event.version !== 'llm-usage-v1' || event.runtime !== 'node' || !uuid.test(event.eventId)
+        if (!isUsageEventFormat(event) || event.runtime !== 'node' || !uuid.test(event.eventId)
             || !digest.test(event.inputSha256) || !Number.isFinite(Date.parse(event.at))) fail('原付费用量schema不完整');
     }
     if (!digest.test(value.outputTextSha256) || !Number.isSafeInteger(value.usage.totalTokens) || value.usage.totalTokens <= 0
@@ -113,7 +116,7 @@ function verifyChain(paper, payload, authenticated, deep, pinnedPaid) {
         || typeof cp[name] !== 'string' || !cp[name])) fail('原完整科学上游或逐阶段检查点缺失');
     if (stages.revision.status !== 'complete' || stages.coreSummaryRepair?.status !== 'contract_rejected') fail('不是原局部验证完成且核心摘要拒绝的链');
     const primary = stages.primaryAnalysis, receipt = primary.primaryLocalFactRepair, validation = stages.revision.localFactValidation;
-    if (!receipt || !validation || validation.contract !== 'primary-local-fact-validation-v1') fail('缺少原局部修正或验证凭证');
+    if (!receipt || !validation || validation.contract !== require('./primary-fact-local-repair').VALIDATION_CONTRACT) fail('缺少原局部修正或验证凭证');
     const review = authenticated.review;
     const inputs = (paper.analysisStaleSnapshots || []).map(item => deep.validateStaleAnalysisSnapshot(item))
         .filter(item => item && sha(item.analysisCheckpoint) === receipt.inputSha256);
@@ -121,9 +124,12 @@ function verifyChain(paper, payload, authenticated, deep, pinnedPaid) {
     if (receipt.inputSha256 !== review.proof.coreAnalysisSha256) fail('原付费父稿与反馈正文身份不同');
     const patch = primaryPatchProof(inputs[0].analysisCheckpoint, cp.primaryAnalysis, review.feedback, receipt);
     const utils = require('../utils'), config = require('../config').ANALYSIS_CONFIG;
-    const plan = require('./primary-fact-local-repair').buildPlan(inputs[0].analysisCheckpoint, review.feedback);
+    const local = require('./primary-fact-local-repair');
+    const header = local.readHeader(receipt);
+    if (header.contract !== local.ORIGINAL_HEADER.contract) fail('旧局部验证不能授权现行修正记录');
+    const plan = local.buildPlan(inputs[0].analysisCheckpoint, review.feedback, header);
     const renderedFeedback = review.feedback.primaryFeedback.trim() + '\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n' + review.feedback.sourceQuotes.join('\n');
-    const prompt = utils.loadPrompt('prompts/primary-fact-local-repair-v1.md', {
+    const prompt = utils.loadPrompt(local.originalPromptPath, {
         inputSha256: plan.inputSha256, targets: JSON.stringify(plan.targets), analysis: inputs[0].analysisCheckpoint, feedback: renderedFeedback });
     const fingerprintModel = deep.modelFingerprint({ model: process.env.PAPER_ANALYZER_MODEL, endpoint: process.env.PAPER_ANALYZER_ENDPOINT });
     const body = utils.buildRequestBody(fingerprintModel.protocol, fingerprintModel.model,
@@ -169,7 +175,7 @@ function verifyChain(paper, payload, authenticated, deep, pinnedPaid) {
     const tagRecord = require('./tag-stage-record').readTagStageRecord(view.analysisManifest, cp);
     const tag = tagRecord.stage, rulesApi = require('./tag-rules'), rules = rulesApi.getDefaultTagRules();
     const selection = require('../utils').readTagValidation(parsed);
-    if (tagRecord.format !== 'current' || payload.contracts[tagRecord.contractKey] !== require('./tag-stage-record').TAG_STAGE_RECORD_CONTRACT
+    if (tagRecord.format !== 'current' || !require('./tag-stage-record').isTagStageRecordDeclaration(payload.contracts[tagRecord.contractKey])
         || tag.registryVersion !== rules.registryVersion || tag.registrySha256 !== rules.registrySha256
         || tag.projectionSha256 !== sha(rulesApi.buildTagPromptText(rules.tagCatalog, tag.projectionContract))
         || !rulesApi.isSupportedTagSelectionContract(tag.selectionContract)
@@ -230,11 +236,11 @@ function validateOperation(paper, authenticated, deep) {
     const pruned = complete && Object.keys(currentCheckpoints).sort().join(',') === retained.sort().join(',');
     for (const name of PROTECTED) {
         const current = structuredClone(paper.analysisManifest.stages[name]);
-        if (name === 'openSourceScan' && (current?.resourceEvidenceContract !== undefined || current?.resourceEvidenceSha256 !== undefined)) {
+        if (name === 'openSourceScan' && (current?.resourceEvidenceContract !== undefined || current?.resourceEvidenceProtocol !== undefined || current?.resourceEvidenceSha256 !== undefined)) {
             const identity = deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources, authenticated.source.text);
-            if (current.resourceEvidenceContract !== identity.contract || current.resourceEvidenceSha256 !== identity.identitySha256)
+            if (!require('./reader-identity-format').openSourceBinding(current, identity) || current.resourceEvidenceSha256 !== identity.identitySha256)
                 fail('正常资源同步派生字段没有真实来源证明');
-            delete current.resourceEvidenceContract; delete current.resourceEvidenceSha256;
+            delete current.resourceEvidenceContract; delete current.resourceEvidenceProtocol; delete current.resourceEvidenceSha256;
         }
         requireSame(current, body.snapshot.payload.stages[name], '兼容保护的原阶段字节变化：' + name);
         if ((!pruned || retained.includes(name)) && currentCheckpoints[name] !== body.snapshot.payload.analysisStageCheckpoints[name])
@@ -254,7 +260,7 @@ function validateOperation(paper, authenticated, deep) {
 function validateColdOperation(paper) {
     const found = records(paper), marker = requiredMarker(paper);
     const legacy = paper?.analysisManifest?.stages?.primaryAnalysis?.primaryLocalFactRepair
-        && paper.analysisManifest?.stages?.revision?.localFactValidation?.contract === 'primary-local-fact-validation-v1';
+        && paper.analysisManifest?.stages?.revision?.localFactValidation?.contract === require('./primary-fact-local-repair').VALIDATION_CONTRACT;
     if (!found.length && !marker && !legacy) return null;
     try {
         requireOperationBinding(paper);

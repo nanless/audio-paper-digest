@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-/** 记录用户明确放弃发布后生图的声明。 */
+/** 按用户持续要求，登记本次发布不生成图片。 */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
 const { getBeijingISOString, writeFileAtomic } = require('./utils.js');
-const { assertPublishedBlogReceipt } = require('./visual-summary-state.js');
+const { assertPublishedBlogReceipt } = require('./lib/published-blog-receipt');
+const formats = require('./lib/protocol-codec');
 
 function parseArgs(argv) {
     const result = {};
@@ -29,27 +30,22 @@ function sha256File(filePath) {
 function run(argv = process.argv.slice(2)) {
     const { date, reason } = parseArgs(argv);
     const publication = assertPublishedBlogReceipt(date);
+    if (!require('./lib/post-publication-policy').validPublicationPolicy(publication.postPublicationPolicy)
+        || publication.postPublishVisuals !== 'not_requested') {
+        throw new Error('原发布未声明新的不生图设置，不能用新记录替代原图片清单凭证；须保留原记录或通过正常生成和审查更新发布设置');
+    }
     const receiptPath = path.join(Config.CURRENT_DIR, `blog-review-receipt-${date}.json`);
-    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
-    if (receipt.publicationCommit !== publication.publicationCommit
+    const receiptRaw = fs.readFileSync(receiptPath);
+    const receipt = JSON.parse(receiptRaw.toString('utf8'));
+    if (crypto.createHash('sha256').update(receiptRaw).digest('hex') !== publication.reviewReceiptSha256
+        || receipt.publicationCommit !== publication.publicationCommit
         || receipt.generationManifestSha256 !== publication.generationManifestSha256
         || receipt.remoteVerifiedOid !== receipt.publicationCommit
         || !receipt.remoteVerifiedAt) {
         throw new Error('博客发布 receipt 未保留可核验的远端 OID 绑定');
     }
-    const visualPath = path.join(Config.FILES.visualSummaryManifestDir, `${date}.json`);
-    const coverPath = path.join(Config.FILES.digestCoverManifestDir, `${date}.json`);
-    const visual = JSON.parse(fs.readFileSync(visualPath, 'utf8'));
-    const cover = JSON.parse(fs.readFileSync(coverPath, 'utf8'));
-    for (const [label, manifest] of [['论文长图', visual], ['汇总封面', cover]]) {
-        if (manifest?.batchDate !== date
-            || manifest?.publication?.publicationCommit !== publication.publicationCommit
-            || manifest?.publication?.generationManifestSha256 !== publication.generationManifestSha256) {
-            throw new Error(`${label} manifest 未绑定当前远端发布版本`);
-        }
-    }
     const payload = {
-        version: 1,
+        ...formats.recordHeader('post-publish-visual-waiver', 'post-publish-visual-waiver'),
         batchDate: date,
         status: 'waived',
         requestedBy: 'user',
@@ -58,19 +54,20 @@ function run(argv = process.argv.slice(2)) {
         publicationCommit: publication.publicationCommit,
         remoteVerifiedOid: receipt.remoteVerifiedOid,
         generationManifestSha256: publication.generationManifestSha256,
-        visualManifestSha256: sha256File(visualPath),
-        coverManifestSha256: sha256File(coverPath)
+        reviewReceiptSha256: publication.reviewReceiptSha256,
+        generatedImages: false,
+        sourceFigures: 'retained-and-source-verified'
     };
     const output = path.join(Config.FILES.postPublishVisualWaiverDir, `${date}.json`);
     fs.mkdirSync(path.dirname(output), { recursive: true });
     writeFileAtomic(output, JSON.stringify(payload, null, 2));
-    console.log(`已记录发布后视觉豁免: ${output}`);
+    console.log(`已记录本次发布不生图: ${output}`);
     return payload;
 }
 
 if (require.main === module) {
     require('./env-loader.js').requireExternalRuntime('waive-post-publish-visuals.js');
-    try { run(); } catch (error) { console.error(`视觉豁免失败: ${error.message}`); process.exitCode = 1; }
+    try { run(); } catch (error) { console.error(`不生图登记失败: ${error.message}`); process.exitCode = 1; }
 }
 
 module.exports = { parseArgs, sha256File, run };

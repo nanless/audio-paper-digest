@@ -1,4 +1,6 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 /**
  * 新写作的 Manual 教程统一走这一个公开校验入口。
@@ -24,18 +26,18 @@ const {
     validateTutorialArtifactPlan
 } = require('./manual-tutorial-artifacts.js');
 const {
-    MANUAL_RESEARCH_CONTRACT_VERSION,
+    MANUAL_RESEARCH_CONTRACT,
     READER_FORMAT_CONTRACT_VERSION,
     validateReaderArticle
 } = require('./manual-research-contract.js');
 const {
-    MANUAL_LONGFORM_CONTRACT_VERSION,
+    MANUAL_LONGFORM_CONTRACT,
     MANUAL_LONGFORM_BUNDLE_VERSION,
     validateManualLongformBundle
 } = require('./manual-longform-contract.js');
 
-const MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT = 'manual-tutorial-validation-orchestrator-v1';
-const TABLE_TRANSCRIPTION_REVIEW_CONTRACT = 'manual-table-transcription-attestation-v1';
+const MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT = historicalManualContract('manual-tutorial-orchestrator', 'ordered-checks');
+const TABLE_TRANSCRIPTION_REVIEW_CONTRACT = historicalManualContract('manual-table-transcription', 'source-attestation');
 const DEFAULT_TABLE_REVIEW_ROOT = path.resolve(
     __dirname, '..', '..', 'data', 'current', 'manual-tutorial-previews'
 );
@@ -56,10 +58,10 @@ const PROTOCOL_DESCRIPTOR = Object.freeze({
     tutorialQuality: MANUAL_TUTORIAL_QUALITY_CONTRACT,
     artifactPlanVersion: TUTORIAL_ARTIFACT_PLAN_VERSION,
     tableTranscriptionAttestation: TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
-    readerPathOrdering: 'reader-tutorial-partial-order-v2',
-    researcherFocus: MANUAL_RESEARCH_CONTRACT_VERSION,
+    readerPathOrdering: historicalManualContract('manual-reader-path-order', 'teaching-dependencies'),
+    researcherFocus: MANUAL_RESEARCH_CONTRACT,
     readerFormat: READER_FORMAT_CONTRACT_VERSION,
-    readerLongform: MANUAL_LONGFORM_CONTRACT_VERSION,
+    readerLongform: MANUAL_LONGFORM_CONTRACT,
     readerLongformBundleVersion: MANUAL_LONGFORM_BUNDLE_VERSION,
     scoringDimensions: SCORE_DIMENSIONS.map(([field, maximum]) => `${field}:${maximum}`)
 });

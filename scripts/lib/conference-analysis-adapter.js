@@ -7,11 +7,42 @@ const contextApi = require('./conference-source-context.js');
 const analysisContext = require('./conference-analysis-context.js');
 const identityApi = require('./paper-identity.js');
 
-const RUN_CONTRACT = 'conference-analysis-execution-v1';
-const ANALYSIS_CONTRACT = 'conference-analysis-canonical-v1';
-const SOURCE_CONTRACT = 'conference-analysis-source-v1';
-const PREPARE_INTENT_CONTRACT = 'conference-analysis-prepare-intent-v1';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const RUN_CONTRACT = codec.contract('conference-analysis-execution');
+const ANALYSIS_CONTRACT = codec.contract('conference-analysis-canonical');
+const SOURCE_CONTRACT = codec.contract('conference-analysis-source');
+const PREPARE_INTENT_CONTRACT = codec.contract('conference-analysis-prepare-intent');
+const currentHeader = name => codec.recordHeader(codec.contract(name), name);
+function storedHeader(value, name, field = 'contract') {
+    if (!codec.hasValidHeader(value, name, field)) throw new Error(`${name} 的格式声明无效`);
+    return recordHeaderFor(value, name, field);
+}
+function sourceFormatsForIntent(intent = null) {
+    const families = ['conference-analysis-execution', 'conference-analysis-source', 'conference-analysis-canonical',
+        'conference-reader-pdf-artifacts', 'conference-reader-weak-artifacts', 'conference-official-publication'];
+    if (intent === null) return Object.fromEntries(families.map(name => [name, currentHeader(name)]));
+    const header = storedHeader(intent, 'conference-analysis-prepare-intent');
+    if (!Object.hasOwn(header, 'schemaFingerprint')) return Object.fromEntries(families.map(name => [name,
+        codec.historicalHeader(name, codec.format(codec.contract(name), name), null)]));
+    const formats = codec.declaredSchema(header.contract, 'conference-analysis-prepare-intent', header.schemaFingerprint).sourceFormats;
+    if (!formats || Object.keys(formats).sort().join() !== families.sort().join()) throw new Error('会议准备记录缺少完整来源格式绑定');
+    return Object.fromEntries(families.map(name => {
+        if (stableHash(formats[name]) !== stableHash(storedHeader(formats[name], name))) throw new Error('会议准备记录的来源格式绑定含额外字段');
+        return [name, clone(formats[name])];
+    }));
+}
+function completionHeaderForRun(run) {
+    const header = storedHeader(run, 'conference-analysis-execution');
+    const expected = Object.hasOwn(header, 'schemaFingerprint')
+        ? codec.declaredSchema(run.contract, 'conference-analysis-execution', run.schemaFingerprint).completionFormat
+        : codec.historicalHeader('conference-analysis-completion-receipt', 'canonical-file-completion', null);
+    if (!codec.hasValidHeader(expected, 'conference-analysis-completion-receipt')
+        || stableHash(expected) !== stableHash(recordHeaderFor(expected, 'conference-analysis-completion-receipt'))) {
+        throw new Error('原执行缺少完整的完成记录格式绑定');
+    }
+    return clone(expected);
+}
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -154,8 +185,8 @@ function replaceJson(filename, value, expectedSha256 = null) {
         }
     }
 }
-function normalizedPaper(source) {
-    const identity = identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference',
+function normalizedPaper(source, publicationHeader = currentHeader('conference-official-publication')) {
+    const identity = identityApi.normalizeIdentity({ ...identityApi.currentHeader(), kind: 'conference',
         canonicalId: source.paperId, arxivId: null,
         conference: { slug: source.conference.id.replace(/-\d{4}$/, ''), year: source.conference.year },
         externalId: { scheme: source.identity.type, value: source.identity.value },
@@ -189,7 +220,7 @@ function normalizedPaper(source) {
         throw new Error('conference source metadata track is malformed');
     }
     const conferencePublication = officialRecordUrl && officialPdfUrl ? {
-        contract: 'conference-official-publication-v1', recordUrl: officialRecordUrl, pdfUrl: officialPdfUrl
+        ...publicationHeader, recordUrl: officialRecordUrl, pdfUrl: officialPdfUrl
     } : null;
     return { id: source.paperId, conferencePaperId: source.paperId, title, authors,
         categories: [`conference:${source.conference.id}`], abstract: String(metadata.abstract || '').trim(),
@@ -197,7 +228,7 @@ function normalizedPaper(source) {
         officialRecordUrl, officialPdfUrl, conferencePublication, doi, conferenceTrack: track };
 }
 
-function buildReplayableReaderArtifacts(source) {
+function buildReplayableReaderArtifacts(source, header) {
     const raw = source.structuredArtifacts;
     const sourceDom = value => stableHash(value);
     // 旧版已保存并核验的 PDF 结构化提取记录里的 `tex` 可能含启发式矩阵和纯文本。
@@ -218,7 +249,7 @@ function buildReplayableReaderArtifacts(source) {
                 caption: figure.caption, assetSha256: figure.asset?.sha256 || null }),
             recoveryStatus: figure.recoveryStatus };
     });
-    const body = { version: 1, parserVersion: 'conference-pdf-structure-v2-visual-only-math-tables',
+    const body = { ...header,
         sourceKind: 'conference_pdf', sourceId: source.paperId, paperId: source.paperId,
         sourceHtmlSha256: source.sourceBinding.pdfSha256,
         tables, formulas, figures, references: [],
@@ -230,24 +261,27 @@ function buildReplayableReaderArtifacts(source) {
     return { ...body, payloadSha256: stableHash(body) };
 }
 
-function sourceDetails(source) {
-    if (source.structuredArtifacts.profile === contextApi.REPLAYABLE_PROFILE) {
-        const structuredArtifacts = buildReplayableReaderArtifacts(source);
+function sourceDetails(source, formats = sourceFormatsForIntent()) {
+    if (codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-replayable-layout')) {
+        const structuredArtifacts = buildReplayableReaderArtifacts(source, formats['conference-reader-pdf-artifacts']);
         return { text: source.text, source: 'conference_pdf_text', sourceId: source.paperId,
             imageInfos: [], htmlAvailability: 'not_applicable', htmlAttempts: 0,
             warnings: ['PDF 表格仅可引用原文或复核原页；文字层公式不是原始 TeX，不提供可发布结构化表格或公式。'], structuredArtifacts,
             conferenceCapabilities: { fullText: 'full', tables: 'unavailable',
                 formulas: 'unavailable', figures: 'available' } };
     }
-    if (source.structuredArtifacts.profile !== contextApi.WEAK_PROFILE
+    if (!codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-weak-layout')
         || source.tableAvailability.available !== false || source.formulaAvailability.available !== false
         || source.figureAvailability.available !== false
         || source.structuredArtifacts.tables.length || source.structuredArtifacts.formulas.length
         || source.structuredArtifacts.figures.length) {
         throw new Error('pilot accepts weak PDF text only with table/formula/figure unavailable');
     }
-    const artifactsBody = { version: 1, source: 'conference_pdf_weak_text', tables: [], formulas: [], figures: [],
-        flattenedTextSha256: sha256(source.text), capabilityProfile: 'weak-text-only-v1' };
+    const artifactHeader = formats['conference-reader-weak-artifacts'];
+    const artifactsBody = { ...artifactHeader, source: 'conference_pdf_weak_text', tables: [], formulas: [], figures: [],
+        flattenedTextSha256: sha256(source.text), ...(Object.hasOwn(artifactHeader, 'schemaFingerprint')
+            ? { capabilityFormat: codec.declaredSchema(artifactHeader.contract, 'conference-reader-weak-artifacts', artifactHeader.schemaFingerprint).capabilityFormat }
+            : { capabilityProfile: codec.historicalContract('conference-reader-weak-capability', 'text-without-structure') }) };
     return { text: source.text, source: 'conference_pdf_text', sourceId: source.paperId,
         imageInfos: [], htmlAvailability: 'not_applicable', htmlAttempts: 0,
         warnings: ['会议 PDF 仅提供弱结构纯文本；表格、公式与 Figure 均不可用，不得据此重建。'],
@@ -266,11 +300,12 @@ function validatePersistedSourceDetails(details, paperId) {
             throw new Error('conference structured source details are invalid');
         }
         const artifacts = details.structuredArtifacts;
-        const required = ['version', 'parserVersion', 'sourceKind', 'sourceId', 'paperId',
+        const artifactHeader = storedHeader(artifacts, 'conference-reader-pdf-artifacts',
+            Object.hasOwn(artifacts || {}, 'contract') ? 'contract' : 'parserVersion');
+        const required = [...Object.keys(artifactHeader), 'sourceKind', 'sourceId', 'paperId',
             'sourceHtmlSha256', 'tables', 'formulas', 'figures', 'references', 'health',
             'flattenedTextSha256', 'payloadSha256'];
         if (!artifacts || Object.keys(artifacts).sort().join('\0') !== required.sort().join('\0')
-            || artifacts.version !== 1 || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables'
             || artifacts.sourceKind !== 'conference_pdf' || artifacts.sourceId !== paperId
             || artifacts.paperId !== paperId || !/^[a-f0-9]{64}$/.test(artifacts.sourceHtmlSha256)
             || artifacts.flattenedTextSha256 !== sha256(details.text)
@@ -293,8 +328,19 @@ function validatePersistedSourceDetails(details, paperId) {
         || stableHash(details.conferenceCapabilities) !== stableHash({ fullText: 'weak', tables: 'unavailable',
             formulas: 'unavailable', figures: 'unavailable' })) throw new Error('conference weak-text source details are invalid');
     const artifacts = details.structuredArtifacts;
+    const artifactHeader = storedHeader(artifacts, 'conference-reader-weak-artifacts',
+        Object.hasOwn(artifacts || {}, 'contract') ? 'contract' : 'version');
+    const capabilityValid = Object.hasOwn(artifactHeader, 'schemaFingerprint')
+        ? !Object.hasOwn(artifacts, 'capabilityProfile') && codec.hasValidHeader(artifacts.capabilityFormat, 'conference-reader-weak-capability')
+            && stableHash(artifacts.capabilityFormat) === stableHash(codec.declaredSchema(artifacts.contract,
+                'conference-reader-weak-artifacts', artifacts.schemaFingerprint).capabilityFormat)
+        : !Object.hasOwn(artifacts, 'capabilityFormat')
+            && artifacts.capabilityProfile === codec.historicalContract('conference-reader-weak-capability', 'text-without-structure');
+    if (Object.hasOwn(artifactHeader, 'schemaFingerprint')) exactKeys(artifacts,
+        [...Object.keys(artifactHeader), 'source', 'tables', 'formulas', 'figures', 'flattenedTextSha256',
+            'capabilityFormat', 'payloadSha256'], 'conference weak-text artifacts');
     if (!artifacts || artifacts.source !== 'conference_pdf_weak_text'
-        || artifacts.capabilityProfile !== 'weak-text-only-v1' || artifacts.flattenedTextSha256 !== sha256(details.text)
+        || !capabilityValid || artifacts.flattenedTextSha256 !== sha256(details.text)
         || !Array.isArray(artifacts.tables) || artifacts.tables.length
         || !Array.isArray(artifacts.formulas) || artifacts.formulas.length
         || !Array.isArray(artifacts.figures) || artifacts.figures.length) throw new Error('conference unavailable artifacts are invalid');
@@ -302,25 +348,40 @@ function validatePersistedSourceDetails(details, paperId) {
     if (artifacts.payloadSha256 !== sha256(JSON.stringify(body))) throw new Error('conference unavailable artifact SHA drifted');
     return details;
 }
+function replayPersistedSourceDetails(source, savedDetails) {
+    validatePersistedSourceDetails(savedDetails, source.paperId);
+    const formats = sourceFormatsForIntent();
+    const family = savedDetails.conferenceCapabilities.fullText === 'full'
+        ? 'conference-reader-pdf-artifacts' : 'conference-reader-weak-artifacts';
+    const artifacts = savedDetails.structuredArtifacts;
+    const field = Object.hasOwn(artifacts, 'contract') ? 'contract'
+        : family === 'conference-reader-pdf-artifacts' ? 'parserVersion' : 'version';
+    formats[family] = storedHeader(artifacts, family, field);
+    const replayed = sourceDetails(source, formats);
+    if (stableHash(replayed) !== stableHash(savedDetails)) throw new Error('会议保存的来源细节与实际封存 PDF 重放结果不一致');
+    return replayed;
+}
 function executionDirectory(root, executionId) {
     if (!UUID_RE.test(String(executionId || ''))) throw new Error('analysis executionId must be UUID v4');
     return path.join(safeRoot(root), executionId);
 }
-function prepareArtifacts(source, details, paper, executionId, now) {
+function prepareArtifacts(source, details, paper, executionId, now, referenceIntent = null) {
+    const formats = sourceFormatsForIntent(referenceIntent);
     const planAuthorityBinding = clone(source.productionAuthorization.binding);
-    const sourceBody = { contract: SOURCE_CONTRACT, version: VERSION, paperId: source.paperId,
+    const sourceBody = { ...formats['conference-analysis-source'], paperId: source.paperId,
         sourceSnapshotSha256: source.sourceSnapshotSha256, observationBindingSha256: source.observationBindingSha256,
         planAuthorityBinding, sourceSnapshotBinding: clone(source.sourceSnapshotBinding),
         observationBinding: clone(source.observationBinding), sourceDetails: details };
     const sourceRecord = { ...sourceBody, recordSha256: stableHash(sourceBody) }; const sourceBytes = jsonBytes(sourceRecord);
-    const analysis = { contract: ANALYSIS_CONTRACT, version: VERSION, executionId, paperId: source.paperId,
+    const analysis = { ...formats['conference-analysis-canonical'], executionId, paperId: source.paperId,
         status: 'pending', generation: 0, papers: [paper] }; const analysisBytes = jsonBytes(analysis);
-    const intentBody = { contract: PREPARE_INTENT_CONTRACT, version: VERSION, executionId, paperId: source.paperId,
+    const intentBody = { ...(referenceIntent === null ? currentHeader('conference-analysis-prepare-intent')
+        : storedHeader(referenceIntent, 'conference-analysis-prepare-intent')), executionId, paperId: source.paperId,
         sourceSnapshotSha256: source.sourceSnapshotSha256, observationBindingSha256: source.observationBindingSha256,
         planAuthorityBindingSha256: stableHash(planAuthorityBinding), sourceRecordSha256: sourceRecord.recordSha256,
         sourceFileSha256: sha256(sourceBytes), initialAnalysisFileSha256: sha256(analysisBytes) };
     const intent = { ...intentBody, intentSha256: stableHash(intentBody) }; const intentBytes = jsonBytes(intent);
-    const runBody = { contract: RUN_CONTRACT, version: VERSION, executionId, paperId: source.paperId,
+    const runBody = { ...formats['conference-analysis-execution'], executionId, paperId: source.paperId,
         conference: clone(source.conference), createdAt: new Date(now).toISOString(), status: 'source_ready',
         sourceSnapshotSha256: source.sourceSnapshotSha256, observationBindingSha256: source.observationBindingSha256,
         planAuthorityBindingSha256: stableHash(planAuthorityBinding), prepareIntentSha256: intent.intentSha256,
@@ -338,8 +399,6 @@ function prepareConferenceAnalysis({ planHandle, paperId, sourceRoot, analysisRo
     executionId = crypto.randomUUID(), now = new Date().toISOString() } = {}, dependencies = {}) {
     if (!UUID_RE.test(String(executionId || ''))) throw new Error('analysis executionId must be UUID v4');
     const source = contextApi.buildConferenceSourceContext({ planHandle, paperId, sourceRoot });
-    const details = sourceDetails(source); const paper = normalizedPaper(source);
-    const prepared = prepareArtifacts(source, details, paper, executionId, now);
     const root = safeRoot(analysisRoot, true); const directory = path.join(root, executionId); let recovering = false;
     try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) {
         if (error.code !== 'EEXIST') throw error;
@@ -358,6 +417,11 @@ function prepareConferenceAnalysis({ planHandle, paperId, sourceRoot, analysisRo
         }
     }
     const intentFile = path.join(directory, 'intent.json');
+    const originalIntent = fs.existsSync(intentFile) ? readJsonRecord(intentFile).value : null;
+    const formats = sourceFormatsForIntent(originalIntent);
+    const details = sourceDetails(source, formats);
+    const paper = normalizedPaper(source, formats['conference-official-publication']);
+    const prepared = prepareArtifacts(source, details, paper, executionId, now, originalIntent);
     if (fs.existsSync(intentFile)) exactExisting(intentFile, prepared.intentBytes, 'intent');
     else { writeBytesAtomic(intentFile, prepared.intentBytes, dependencies); dependencies.afterPersist?.('intent.json'); }
     const sourceFile = path.join(directory, 'source.json'), analysisFile = path.join(directory, 'analysis.json');
@@ -383,18 +447,22 @@ function loadConferenceAnalysis({ analysisRoot, executionId } = {}) {
     const sourceBody = clone(source); delete sourceBody.recordSha256;
     const analysisFileSha256 = analysisRecord.sha256;
     const intentBody = clone(intent); delete intentBody.intentSha256;
-    exactKeys(intent, ['contract', 'version', 'executionId', 'paperId', 'sourceSnapshotSha256',
+    const intentHeader = storedHeader(intent, 'conference-analysis-prepare-intent');
+    const formats = sourceFormatsForIntent(intent);
+    exactKeys(intent, [...Object.keys(intentHeader), 'executionId', 'paperId', 'sourceSnapshotSha256',
         'observationBindingSha256', 'planAuthorityBindingSha256', 'sourceRecordSha256', 'sourceFileSha256',
         'initialAnalysisFileSha256', 'intentSha256'], 'conference analysis prepare intent');
-    if (intent.contract !== PREPARE_INTENT_CONTRACT || intent.version !== VERSION || intent.executionId !== executionId
+    if (intent.executionId !== executionId
         || intent.intentSha256 !== stableHash(intentBody) || intentRecord.sha256 !== run.prepareIntentFileSha256
         || intent.intentSha256 !== run.prepareIntentSha256 || intent.paperId !== run.paperId
         || intent.sourceRecordSha256 !== source.recordSha256 || intent.sourceFileSha256 !== sourceRecord.sha256
         || intent.sourceSnapshotSha256 !== run.sourceSnapshotSha256
         || intent.observationBindingSha256 !== run.observationBindingSha256
         || intent.planAuthorityBindingSha256 !== run.planAuthorityBindingSha256
-        || run.contract !== RUN_CONTRACT || run.version !== VERSION || run.executionId !== executionId
-        || run.runSha256 !== stableHash(runBody) || source.contract !== SOURCE_CONTRACT
+        || stableHash(storedHeader(run, 'conference-analysis-execution')) !== stableHash(formats['conference-analysis-execution'])
+        || run.executionId !== executionId
+        || run.runSha256 !== stableHash(runBody)
+        || stableHash(storedHeader(source, 'conference-analysis-source')) !== stableHash(formats['conference-analysis-source'])
         || source.recordSha256 !== stableHash(sourceBody) || source.paperId !== run.paperId
         || run.sourceRecordSha256 !== source.recordSha256 || run.sourceFileSha256 !== sourceRecord.sha256
         || source.sourceSnapshotSha256 !== run.sourceSnapshotSha256
@@ -406,7 +474,8 @@ function loadConferenceAnalysis({ analysisRoot, executionId } = {}) {
         || source.sourceSnapshotBinding?.paperId !== run.paperId
         || source.observationBinding?.sourceSnapshotSha256 !== run.sourceSnapshotSha256
         || (run.status === 'source_ready' && analysis.status === 'pending' && analysisFileSha256 !== intent.initialAnalysisFileSha256)
-        || analysis.contract !== ANALYSIS_CONTRACT || analysis.executionId !== executionId
+        || stableHash(storedHeader(analysis, 'conference-analysis-canonical')) !== stableHash(formats['conference-analysis-canonical'])
+        || analysis.executionId !== executionId
         || analysis.paperId !== run.paperId || !Array.isArray(analysis.papers) || analysis.papers.length !== 1
         || analysis.papers[0].id !== run.paperId || analysis.papers[0].arxivId || analysis.papers[0].paper_id) {
         throw new Error('conference analysis execution evidence drifted');
@@ -420,6 +489,8 @@ function loadConferenceAnalysis({ analysisRoot, executionId } = {}) {
     if (run.status === 'complete') {
         const receipt = run.completionReceipt; const receiptBody = receipt && clone(receipt); if (receiptBody) delete receiptBody.receiptSha256;
         if (analysis.status !== 'complete' || run.analysisSha256 !== analysisFileSha256
+            || !codec.hasValidHeader(receipt, 'conference-analysis-completion-receipt')
+            || stableHash(storedHeader(receipt, 'conference-analysis-completion-receipt')) !== stableHash(completionHeaderForRun(run))
             || !receipt || receipt.analysisSha256 !== analysisFileSha256 || receipt.executionId !== executionId
             || receipt.paperId !== run.paperId || receipt.sourceSnapshotSha256 !== run.sourceSnapshotSha256
             || receipt.receiptSha256 !== stableHash(receiptBody)) throw new Error('conference complete run does not bind canonical analysis bytes');
@@ -432,7 +503,8 @@ function loadConferenceAnalysis({ analysisRoot, executionId } = {}) {
 function verifyPlanAuthority(loaded, planHandle, sourceRoot) {
     if (!planHandle || typeof sourceRoot !== 'string') throw new Error('live plan authority and sourceRoot are required');
     const replayed = contextApi.buildConferenceSourceContext({ planHandle, paperId: loaded.run.paperId, sourceRoot });
-    const details = sourceDetails(replayed);
+    const intent = readJsonRecord(path.join(loaded.directory, 'intent.json')).value;
+    const details = sourceDetails(replayed, sourceFormatsForIntent(intent));
     if (replayed.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256
         || replayed.observationBindingSha256 !== loaded.run.observationBindingSha256
         || stableHash(replayed.productionAuthorization.binding) !== stableHash(loaded.source.planAuthorityBinding)
@@ -441,6 +513,8 @@ function verifyPlanAuthority(loaded, planHandle, sourceRoot) {
         || stableHash(details) !== stableHash(loaded.source.sourceDetails)) {
         throw new Error('live conference plan authority differs from analysis source evidence');
     }
+    contextApi.bindReaderPdfSourceExecution(replayed, { analysisRoot: path.dirname(loaded.directory),
+        executionId: loaded.run.executionId, expectedSourceFileSha256: loaded.sourceFileSha256 });
     return replayed;
 }
 function sealCompletedRun(loaded) {
@@ -452,7 +526,7 @@ function sealCompletedRun(loaded) {
         || Number.isNaN(Date.parse(analysis.completedAt)) || new Date(analysis.completedAt).toISOString() !== analysis.completedAt) {
         throw new Error('cannot seal incomplete conference canonical analysis');
     }
-    const receiptBody = { contract: 'conference-analysis-completion-receipt-v1', version: VERSION,
+    const receiptBody = { ...completionHeaderForRun(loaded.run),
         executionId: loaded.run.executionId, paperId: loaded.run.paperId,
         sourceSnapshotSha256: loaded.run.sourceSnapshotSha256, analysisSha256, completedAt: analysis.completedAt };
     const completionReceipt = { ...receiptBody, receiptSha256: stableHash(receiptBody) };
@@ -561,8 +635,8 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
         ...(status === 'complete' ? { analysisSha256: run.analysisSha256, productionAuthorized: true } : {}) };
 }
 
-const READER_REVISION_CONTRACT = 'conference-reader-source-revision-v1';
-const RECOVERY_WINDOW_CONTRACT = 'conference-reader-recovery-window-v1';
+const READER_REVISION_CONTRACT = codec.contract('conference-reader-source-revision');
+const RECOVERY_WINDOW_CONTRACT = codec.contract('conference-reader-recovery-window');
 let fullRevisionActive = 0;
 const fullRevisionWaiters = [];
 async function withNormalAnalysisSlot(callback) {
@@ -581,9 +655,57 @@ async function withNormalAnalysisSlot(callback) {
     }
     finally { fullRevisionActive -= 1; fullRevisionWaiters.shift()?.(); }
 }
-function readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256) {
-    const value = sha256(`${READER_REVISION_CONTRACT}\0${parentExecutionId}\0${parentAnalysisFileSha256}`);
+function readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256, revision = null) {
+    const header = revision === null ? currentHeader('conference-reader-source-revision')
+        : storedHeader(revision, 'conference-reader-source-revision');
+    const domain = Object.hasOwn(header, 'schemaFingerprint') ? stableHash(header) : header.contract;
+    const value = sha256(`${domain}\0${parentExecutionId}\0${parentAnalysisFileSha256}`);
     return `${value.slice(0,8)}-${value.slice(8,12)}-4${value.slice(13,16)}-a${value.slice(17,20)}-${value.slice(20,32)}`;
+}
+function isRegisteredReaderRevisionExecutionId(executionId, parentExecutionId, parentAnalysisFileSha256) {
+    return registeredReaderRevisionExecutionIds(parentExecutionId, parentAnalysisFileSha256).includes(executionId);
+}
+function registeredReaderRevisionExecutionIds(parentExecutionId, parentAnalysisFileSha256) {
+    return codec.registeredHeaders('conference-reader-source-revision').map(header =>
+        readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256, header));
+}
+function resolveReaderRevisionExecutionId({ analysisRoot, parentExecutionId, parentAnalysisFileSha256,
+    planHandle, sourceRoot } = {}) {
+    const parent = loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId });
+    if (parent.run.status !== 'complete' || parent.analysis.status !== 'complete'
+        || parent.analysisFileSha256 !== parentAnalysisFileSha256) throw new Error('会议 Reader 子运行选择的原父稿 CAS 不一致');
+    verifyPlanAuthority(parent, planHandle, sourceRoot);
+    const matches = [];
+    for (const header of codec.registeredHeaders('conference-reader-source-revision')) {
+        const id = readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256, header);
+        const directory = path.join(safeRoot(analysisRoot), id);
+        try { fs.lstatSync(directory); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        safeRoot(directory);
+        if (!fs.existsSync(path.join(directory, 'reader-revision.json'))) {
+            // Normal current initialization may have durably prepared its
+            // source before the immutable revision was issued. Reuse only
+            // that very same current identity; never open a replacement.
+            const prepared = loadConferenceAnalysis({ analysisRoot, executionId: id });
+            if (!codec.isCurrentHeader(header, 'conference-reader-source-revision')
+                || prepared.run.status !== 'source_ready' || prepared.analysis.status !== 'pending'
+                || prepared.analysis.readerRevisionProgress !== undefined
+                || fs.existsSync(path.join(directory, 'reader-attempts'))) {
+                throw new Error('已有会议 Reader 准备态缺少原不可变修订记录，拒绝另建恢复身份');
+            }
+            verifyPlanAuthority(prepared, planHandle, sourceRoot);
+            matches.push(id); continue;
+        }
+        const child = loadConferenceReaderRevision({ analysisRoot, executionId: id });
+        if (stableHash(storedHeader(child.revision, 'conference-reader-source-revision')) !== stableHash(header)
+            || child.revision.parentExecutionId !== parentExecutionId
+            || child.revision.parentAnalysisFileSha256 !== parentAnalysisFileSha256
+            || child.parent.analysisFileSha256 !== parent.analysisFileSha256
+            || child.parent.runFileSha256 !== parent.runFileSha256) throw new Error('实际会议 Reader 子运行与原父稿或登记格式不一致');
+        verifyPlanAuthority(child, planHandle, sourceRoot);
+        matches.push(id);
+    }
+    if (matches.length > 1) throw new Error('同一实际父稿存在多个登记格式的会议 Reader 子运行，拒绝选择或新开预算');
+    return matches[0] || readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256);
 }
 function readerResourceRevisionMode(paper, identity) {
     const deep = require('../deep-analyzer'), { parseAnalysis } = require('../utils');
@@ -658,8 +780,8 @@ function readReaderResourcePreflight(loaded, expectedFileSha256, expectedMode) {
     });
 }
 function revisionQualificationError(paper, rules, engine, label) {
-    const diagnostics = typeof engine.getApiReaderV3RecordDiagnostics === 'function'
-        ? engine.getApiReaderV3RecordDiagnostics(paper, {
+    const diagnostics = typeof engine.getIntegratedApiReaderRecordDiagnostics === 'function'
+        ? engine.getIntegratedApiReaderRecordDiagnostics(paper, {
             legacyConferenceResourceBindings: true, conferencePublicationEvidence: true }) : [];
     const upstream = typeof engine.getConferenceReaderRefreshUpstreamReason === 'function'
         ? engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules: rules }) : null;
@@ -781,12 +903,12 @@ function loadConferenceReaderRevisionIdentity({ analysisRoot, executionId } = {}
     const record = readJsonRecord(path.join(loaded.directory, 'reader-revision.json'));
     const { revisionSha256, ...body } = record.value;
     // Source identity only: recovery windows retain their full grant/seed loader.
-    if (body.contract === RECOVERY_WINDOW_CONTRACT) throw new Error('Recovery windows require the complete conference revision loader');
-    if (body.contract !== READER_REVISION_CONTRACT || body.version !== 1
+    if (codec.hasValidHeader(body, 'conference-reader-recovery-window')) throw new Error('Recovery windows require the complete conference revision loader');
+    if (!codec.hasValidHeader(body, 'conference-reader-source-revision')
         || !['reader-only', 'scoring-and-reader', 'normal-analysis'].includes(body.mode)
         || !Number.isSafeInteger(body.maxAttempts) || body.maxAttempts < 1 || body.maxAttempts > 3
         || revisionSha256 !== stableHash(body) || body.executionId !== executionId
-        || readerRevisionExecutionId(body.parentExecutionId, body.parentAnalysisFileSha256) !== executionId
+        || readerRevisionExecutionId(body.parentExecutionId, body.parentAnalysisFileSha256, body) !== executionId
         || body.paperId !== loaded.run.paperId || body.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) {
         throw new Error('会议 Reader revision 身份或 SHA 不一致');
     }
@@ -808,7 +930,7 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
 function loadConferenceReaderRevisionWithOriginalChecks({ analysisRoot, executionId } = {}) {
     const initial = loadConferenceAnalysis({ analysisRoot, executionId });
     const record = readJsonRecord(path.join(initial.directory, 'reader-revision.json'));
-    if (record.value.contract === RECOVERY_WINDOW_CONTRACT) {
+    if (codec.hasValidHeader(record.value, 'conference-reader-recovery-window')) {
         return loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, initial, record);
     }
     const loaded = loadConferenceReaderRevisionIdentity({ analysisRoot, executionId });
@@ -843,7 +965,8 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
     const readerReview = reviewMaintenanceHandle
         ? require('./conference-reader-review-maintenance').bindCompletedParent(reviewMaintenanceHandle, parent) : null;
     if (readerReview && fullAnalysis) throw new Error('Reader-only text maintenance cannot refresh scientific upstream');
-    const executionId = readerRevisionExecutionId(parentExecutionId, parent.analysisFileSha256);
+    const executionId = resolveReaderRevisionExecutionId({ analysisRoot, parentExecutionId,
+        parentAnalysisFileSha256: parent.analysisFileSha256, planHandle, sourceRoot });
     return engine.withPaperAnalysisLock({ id: parent.run.paperId }, async () => {
         const lockedParent = loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId });
         if (lockedParent.analysisFileSha256 !== parent.analysisFileSha256
@@ -896,7 +1019,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                     .readVerifiedUnissuedScoringRecovery(readerReview.unissuedScoringRecoveryHandle,
                         { loaded, parent, mode, resourcePreflightFileSha256 });
             }
-            const body = { contract: READER_REVISION_CONTRACT, version: 1, executionId,
+            const body = { ...currentHeader('conference-reader-source-revision'), executionId,
                 ...(readerReviewUnissuedResourceScoring ? { readerReviewUnissuedResourceScoring } : {}),
                 ...(readerReview ? { readerReviewMaintenance: readerReview.locator,
                     readerReviewSeedFileSha256: readerReviewParentSeedFile(loaded, parent, reviewMaintenanceHandle) } : {}),
@@ -935,8 +1058,8 @@ function recoveryWindowError(message) {
     return Object.assign(new Error(message), { code: 'CONFERENCE_RECOVERY_GRANT_INTEGRITY', scope: 'run', retryable: false });
 }
 
-function grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256) {
-    return require('./conference-recovery-grant').grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256);
+function grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256, windowRecord = null) {
+    return require('./conference-recovery-grant').grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256, windowRecord);
 }
 function assertGrantedMember(authority, failed) {
     const member = authority.member;
@@ -994,7 +1117,7 @@ function missingOldCoreDiagnostic(error, failed) {
 
 function validateGrantedRecoverySeed(record, failed, authority) {
     const seed = record.value, paper = seed.paper;
-    if (seed.contract !== 'conference-recovery-seed-v1' || seed.grantId !== authority.grantId
+    if (!codec.hasValidHeader(seed, 'conference-recovery-seed') || seed.grantId !== authority.grantId
         || seed.failedAnalysisFileSha256 !== failed.analysisFileSha256 || paper?.id !== failed.run.paperId) {
         throw recoveryWindowError('新增会议恢复初始检查点未绑定原失败稿');
     }
@@ -1030,7 +1153,7 @@ function validateGrantedRecoverySeed(record, failed, authority) {
 }
 async function prepareGrantedRecoverySeed(failed, authority, withFailedSource, deep) {
     const original = clone(failed.analysis.papers[0]);
-    const result = { contract: 'conference-recovery-seed-v1', grantId: authority.grantId,
+    const result = { ...currentHeader('conference-recovery-seed'), grantId: authority.grantId,
         failedAnalysisFileSha256: failed.analysisFileSha256, paper: original, paidCoreReplay: null };
     if (original.analysisManifest?.stages?.coreSummaryRepair?.status !== 'contract_rejected'
         || !String(original.analysisCheckpoint || '').trim()) return result;
@@ -1072,13 +1195,13 @@ function loadGrantedConferenceRecovery({ analysisRoot, executionId } = {}) {
 }
 function loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, loaded, record) {
     const { revisionSha256, ...body } = record.value;
-    if (body.contract !== RECOVERY_WINDOW_CONTRACT || body.version !== 1 || body.executionId !== executionId
+    if (!codec.hasValidHeader(body, 'conference-reader-recovery-window') || body.executionId !== executionId
         || revisionSha256 !== stableHash(body) || body.paperId !== loaded.run.paperId
         || body.originalMemberPaperId !== body.paperId || body.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256
         || !['normal-analysis', 'reader-only', 'scoring-and-reader'].includes(body.mode) || body.maxAttempts !== 3
         || !['failedAnalysisFileSha256', 'failedRunFileSha256', 'failedSourceFileSha256', 'failedRevisionFileSha256',
             'parentAnalysisFileSha256', 'parentRunFileSha256', 'seededAnalysisSha256', 'grantSha256', 'recoverySeedFileSha256'].every(key => /^[a-f0-9]{64}$/.test(body[key] || ''))
-        || grantedRecoveryExecutionId(body.grantId, body.failedExecutionId, body.failedAnalysisFileSha256) !== executionId) {
+        || grantedRecoveryExecutionId(body.grantId, body.failedExecutionId, body.failedAnalysisFileSha256, body) !== executionId) {
         throw recoveryWindowError('新增会议恢复窗口身份或 SHA 不一致');
     }
     const grants = require('./conference-recovery-grant');
@@ -1121,7 +1244,7 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
     }
     const grants = require('./conference-recovery-grant'), authority = grants.readRecoveryGrantMember(grantHandle, failed.run.paperId);
     assertGrantedMember(authority, failed);
-    const executionId = grantedRecoveryExecutionId(authority.grantId, failedExecutionId, failed.analysisFileSha256);
+    const executionId = grantedRecoveryExecutionId(authority.grantId, failedExecutionId, failed.analysisFileSha256, authority.windowFormat);
     if (authority.expectedExecutionId !== executionId || path.resolve(authority.analysisRoot) !== path.resolve(analysisRoot)
         || authority.limits.maxRounds !== 3 || authority.limits.readerContentResponses !== 6 || authority.limits.readerFullResponses !== 2) {
         throw recoveryWindowError('新增会议恢复的执行身份或获准限次不一致');
@@ -1172,7 +1295,7 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
                 const previous = readJsonRecord(path.join(failed.directory, 'reader-resource-preflight.json'));
                 resourcePreflightFileSha256 = writeBytesAtomic(path.join(loaded.directory, 'reader-resource-preflight.json'), previous.bytes);
             }
-            const body = { contract: RECOVERY_WINDOW_CONTRACT, version: 1, executionId, paperId: failed.run.paperId,
+            const body = { ...authority.windowFormat, executionId, paperId: failed.run.paperId,
                 ...(readerReview ? { readerReviewMaintenance: readerReview.locator,
                     readerReviewSeedFileSha256: readerReviewParentSeedFile(loaded, failed.parent, reviewMaintenanceHandle) } : {}),
                 sourceSnapshotSha256: failed.run.sourceSnapshotSha256, parentExecutionId,
@@ -1516,10 +1639,11 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
 
 }
 
-module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INTENT_CONTRACT, VERSION, UUID_RE,
-    stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails,
+module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INTENT_CONTRACT, UUID_RE,
+    stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails, replayPersistedSourceDetails,
     readJsonRecord, writeBytesAtomic, replaceJson, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
     sealCompletedRun, sealCompletedRunLocked, analyzeConference,
-    READER_REVISION_CONTRACT, RECOVERY_WINDOW_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevisionIdentity, loadConferenceReaderRevision,
+    READER_REVISION_CONTRACT, RECOVERY_WINDOW_CONTRACT, readerRevisionExecutionId, isRegisteredReaderRevisionExecutionId,
+    registeredReaderRevisionExecutionIds, resolveReaderRevisionExecutionId, loadConferenceReaderRevisionIdentity, loadConferenceReaderRevision,
     grantedRecoveryExecutionId, loadGrantedConferenceRecovery, refreshConferenceGrantedRecovery,
     inspectConferenceReaderRevisionCompletion, replaySavedConferenceReaderRevision, refreshConferenceReader };

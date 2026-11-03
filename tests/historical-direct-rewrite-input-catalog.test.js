@@ -118,12 +118,13 @@ function fixture(t) {
 
 function inputArgs(f, mode = '--dry-run') {
     return [mode, '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile,
-        '--blog-root', f.blog, '--name', 'scoped-historical-local-data-v5.json'];
+        '--blog-root', f.blog, '--name', 'scoped-historical-local-data.json'];
 }
 
 test('限定范围的 v5 构建器从冻结证据推导全新 arXiv 身份，只保留精确匹配的本地会议记录', t => {
     const f = fixture(t); const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest, inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    assert.equal(value.contract, 'merged-good-historical-local-data-v5');
+    assert.equal(value.contract, catalog.CONTRACT);
+    assert.equal(value.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('historical-direct-local-input-catalog'));
     assert.deepEqual(value.summary, { arxivPapers: 1, arxivPages: 2, singleArxivPages: 2,
         dailyPrimaryArxivBindings: 0, dailyIcmlPosterBindings: 0, dailyIcmlPosterRoutableBindings: 0,
         conferencePapers: 4, canonicalRecords: 5, sourceRecords: 4,
@@ -141,13 +142,13 @@ test('限定范围的 v5 构建器从冻结证据推导全新 arXiv 身份，只
 
 test('命令行生成限定范围的 v5 目录后，页面对应记录与计划预演通过', t => {
     const f = fixture(t); const parsed = inputsCli.parseArgs(inputArgs(f));
-    assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v5.json');
+    assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data.json');
     const written = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
-    assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'scoped-historical-local-data-v5.json'));
+    assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'scoped-historical-local-data.json'));
     const pointer = JSON.parse(fs.readFileSync(path.join(f.catalogRoot, 'current.json'), 'utf8'));
-    assert.deepEqual(pointer, { contract: 'direct-local-input-catalog-pointer-v1', version: 1,
-        activeCatalog: 'scoped-historical-local-data-v5.json', sha256: sha(fs.readFileSync(written.filename)),
-        scope: 'historical-direct-local-first-v5' });
+    assert.deepEqual(pointer, { ...require('../scripts/lib/protocol-codec').recordHeader('direct-local-input-catalog-pointer', 'direct-local-input-catalog-pointer'),
+        activeCatalog: 'scoped-historical-local-data.json', sha256: sha(fs.readFileSync(written.filename)),
+        scope: 'historical-direct-local-first' });
     if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(f.catalogRoot, 'current.json')).mode & 0o777, 0o600);
     const second = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
     assert.equal(second.status, 'recovered');
@@ -216,7 +217,7 @@ test('目录保存并核验合格的多线索 arXiv 主绑定，并在没有本�
     fs.writeFileSync(f.inventoryFile, JSON.stringify(f.inventory), { mode: 0o600 });
     const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    assert.equal(value.contract, 'merged-good-historical-local-data-v5');
+    assert.equal(value.contract, catalog.CONTRACT);
     assert.equal(value.dailyPrimaryArxivBindings.length, 1);
     assert.equal(value.summary.dailyPrimaryArxivBindings, 1);
     assert.equal(value.scopeBinding.dailyPrimaryArxivBindingCount, 1);

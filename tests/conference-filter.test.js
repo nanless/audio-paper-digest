@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const filter = require('../scripts/lib/conference-filter.js');
+const codec = require('../scripts/lib/protocol-codec');
 const evidenceApi = require('../scripts/lib/conference-filter-evidence.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
 const discovery = require('../scripts/lib/conference-discovery.js');
@@ -22,7 +23,7 @@ function spec(f, overrides = {}) {
     const catalog = filter.catalogFromDiscoveryHandle(f.discoveryHandle);
     const discoverySnapshot = discovery.discoveryHandleSnapshot(f.discoveryHandle);
     const evidence = filter.evidenceBindingFromHandle(f.evidenceHandle, catalog);
-    return { contract: filter.SPEC_CONTRACT, version: filter.SPEC_VERSION, filterPolicySha256: h('policy'), promptSha256: h('prompt'),
+    return { ...codec.recordHeader(filter.SPEC_CONTRACT, 'conference-filter-spec'), filterPolicySha256: h('policy'), promptSha256: h('prompt'),
     model: 'muse-spark-1.2-contributor', endpointProtocol: 'openai-responses', endpointIdentitySha256: h('endpoint'),
     tagCatalogSha256: h('tag catalog'), evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
     discovery: { contract: catalog.contract, conferenceId: catalog.conferenceId,
@@ -67,7 +68,7 @@ function fixture(metadataRecords = null) {
         return { path: filename, sha256: h(bytes), size: bytes.length };
     }).sort((left, right) => left.path.localeCompare(right.path));
     const pdfByArnumber = new Map(pdfCatalog.map(item => [path.dirname(item.path).slice('pdf-'.length), item]));
-    const manifest = { contract: discovery.CONTRACT, version: discovery.VERSION, adapter: 'icassp', conference: { id: 'icassp-2026', year: 2026 },
+    const manifest = { ...codec.recordHeader(discovery.CONTRACT, 'conference-discovery'), adapter: 'icassp', conference: { id: 'icassp-2026', year: 2026 },
         metadataSnapshot: { file: path.join(root, 'metadata.json'), sha256: h(metadataBytes), size: metadataBytes.length }, pdfRoot: root,
         pdfCatalogSha256: ledger.stableHash(pdfCatalog), pdfCatalog, members: metadataRecords.map((record, index) => ({
             identity: { type: 'icassp-arnumber', value: String(record.arnumber) }, metadataIndex: index, title: record.title,
@@ -150,13 +151,13 @@ test('准备阶段保存关键词筛选的排除决定；摘要太短时交给�
     assert.equal(state.completion.excluded, 1);
     const artifact = JSON.parse(fs.readFileSync(path.join(f.filters, ids[0], 'decisions', state.attempts[0].decisionArtifactName)));
     assert.equal(artifact.actor.type, 'keyword');
-    assert.equal(artifact.actor.id, 'speech-audio-music-v6');
+    assert.equal(artifact.actor.id, require('../scripts/lib/keyword-prefilter').KEYWORD_PREFILTER_PROFILE.contract);
     assert.deepEqual(artifact.result.usage, { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 });
     const evaluation = JSON.parse(Buffer.from(artifact.response.data, 'base64').toString());
     const keywordInput = JSON.parse(Buffer.from(artifact.request.data, 'base64').toString());
     assert.equal(evaluation.failOpen, false);
     assert.equal(evaluation.conferenceCategoryFallback, false);
-    assert.equal(evaluation.conferenceFallbackVersion, filter.CORE_CONFERENCE_FALLBACK_VERSION);
+    assert.deepEqual(evaluation.conferenceFallbackProfile, codec.recordHeader(filter.CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026'));
     assert.equal(keywordInput.evidence.status, 'ready');
     assert.equal(keywordInput.requestEnvelopeSha256.length, 64);
 });
@@ -210,7 +211,7 @@ test('核心音频会议的论文交给模型判断；其他会议仍可由关�
         const result = filter.evaluateConferenceKeywordPrefilter({ title: example.title, abstract }, example.conferenceId);
         assert.equal(result.pass, true, example.conferenceId);
         assert.equal(result.conferenceCategoryFallback, true, example.conferenceId);
-        assert.equal(result.conferenceFallbackVersion, 'core-audio-conferences-2026-v1');
+        assert.deepEqual(result.conferenceFallbackProfile, codec.recordHeader(filter.CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026'));
     }
     const broad = filter.evaluateConferenceKeywordPrefilter({ title: 'Generic Convex Optimization', abstract }, 'eusipco-2026');
     assert.equal(broad.pass, false);
@@ -218,13 +219,13 @@ test('核心音频会议的论文交给模型判断；其他会议仍可由关�
     assert.deepEqual(filter.CORE_AUDIO_CONFERENCE_IDS,
         ['chime-2026', 'dafx-2026', 'icmc-2026', 'interspeech-2026', 'iwslt-2026', 'jep-2026', 'nime-2026',
             'odyssey-2026', 'speechprosody-2026']);
-    assert.equal(filter.FILTER_CONFIG_BINDING.coreConferenceFallbackVersion,
-        filter.CORE_CONFERENCE_FALLBACK_VERSION);
+    assert.equal(filter.FILTER_CONFIG_BINDING.coreConferenceFallbackContract,
+        filter.CORE_CONFERENCE_FALLBACK_CONTRACT);
 });
 
 test('会议筛选使用日更提示块和日更结构化决定解析器', () => {
     assert.match(filter.LLM_FILTER_PROMPT, /语音、音频或音乐处理/);
-    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v5.md', {
+    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/current/filter.md', {
         title: '{title}', abstract: '{abstract}', categories: '{categories}'
     }));
     // v1 提示正文保持不变，旧筛选配置的 promptSha256 必须在允许的历史 SHA 列表中。
@@ -240,7 +241,7 @@ test('会议筛选使用日更提示块和日更结构化决定解析器', () =>
 test('生产筛选接受已核验的官方论文集，并保留稳定的来源身份', t => {
     const f = officialFixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const boundSpec = filter.normalizeSpec(spec(f));
-    assert.equal(boundSpec.version, 6);
+    assert.equal(codec.isCurrentHeader(boundSpec, 'conference-filter-spec'), true);
     assert.deepEqual(boundSpec.evidence.locator,
         evidenceApi.locatorBindingForConference({ id: 'aaai-2026', year: 2026 }));
     assert.equal(boundSpec.evidence.locator.profile, evidenceApi.AAAI_LOCATOR_PROFILE);
@@ -374,7 +375,7 @@ test('最终决定要求证据已保留，凭证里只写入选的身份', t => 
         decisionArtifactSha256: state.attempts[0].decisionArtifactSha256 }]);
     assert.throws(() => filter.selectionHandleSnapshot(structuredClone(selectionHandle)), /authenticated filter selection handle/);
     assert.throws(() => filter.writeDecisionArtifact({ filterRoot: f.filters, filterId: ids[0],
-        decisionName: `${ids[1]}.json`, artifact: {} }), /artifact|exclusively/);
+        decisionName: `${ids[1]}.json`, artifact: {} }), /artifact|exclusively|format header/);
 });
 
 test('所有决定已完成但写入选凭证中断时，重试最后一条决定可以补齐凭证', t => {
@@ -491,8 +492,8 @@ test('命令行要求论文清单、发现报告、筛选配置和决定文件�
 test('当前筛选配置和任务使用新词表字段，混用旧字段或版本不符时拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const boundSpec = spec(f), state = prepare(f);
-    assert.equal(boundSpec.contract, 'conference-filter-spec-v6'); assert.equal(boundSpec.version, 6);
-    assert.equal(state.contract, 'conference-filter-v6'); assert.equal(state.version, 6);
+    assert.equal(codec.isCurrentHeader(boundSpec, 'conference-filter-spec'), true);
+    assert.equal(codec.isCurrentHeader(state, 'conference-filter'), true);
     assert.equal(state.input.tagCatalogSha256, boundSpec.tagCatalogSha256);
     assert.equal(Object.hasOwn(state.input, 'taxonomyRegistrySha256'), false);
     for (const value of [boundSpec.tagCatalogSha256, null]) {
@@ -509,11 +510,11 @@ test('当前筛选配置和任务使用新词表字段，混用旧字段或版�
     }
     for (const changed of [{ contract: 'conference-filter-spec-v5' }, { version: 5 }, { version: '6' },
         { contract: 'conference-filter-spec-v7' }]) {
-        assert.throws(() => filter.normalizeSpec({ ...boundSpec, ...changed }), /contract\/version mismatch/);
+        assert.throws(() => filter.normalizeSpec({ ...boundSpec, ...changed }), /contract\/version mismatch|format header|unknown or missing/);
     }
     for (const changed of [{ contract: 'conference-filter-v5' }, { version: 5 }, { version: '6' },
         { contract: 'conference-filter-v7' }]) {
-        assert.throws(() => filter.assertFilterState({ ...state, ...changed }), /contract\/version mismatch/);
+        assert.throws(() => filter.assertFilterState({ ...state, ...changed }), /contract\/version mismatch|format header|unknown or missing/);
     }
     const wrongField = { ...boundSpec, taxonomyRegistrySha256: boundSpec.tagCatalogSha256 };
     delete wrongField.tagCatalogSha256;

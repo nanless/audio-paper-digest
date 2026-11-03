@@ -27,14 +27,30 @@ function createBodyGroupSample() {
         draft,
         context,
         plan: {
-            contract: repair.SECTION_BODY_GROUP_PLAN_CONTRACT,
-            version: 2,
+            ...require('../scripts/lib/reader-section-format').currentHeader(true),
             draftSha256: context.draftSha256,
             sectionsSha256: context.targets[0].oldSha256,
             groups,
         },
     };
 }
+test('原续段字段计划只按原两字段头重放，当前schema不能接旧头或多余version', () => {
+    const sample = createBodyGroupSample(), codec = require('../scripts/lib/protocol-codec');
+    const header = codec.historicalHeader('reader-section-body-index-groups', 'adjacent-section-field-order');
+    const { contract, schemaFingerprint, ...body } = sample.plan;
+    const plan = { ...header, ...body };
+    const context = { ...sample.context, sectionGroupPlanContract: header.contract };
+    delete context.sectionGroupPlanSchemaFingerprint;
+    const before = JSON.stringify({ plan, context, draft: sample.draft });
+    const old = repair.compileSectionIndexGroupPlan(sample.draft, plan, context);
+    const current = repair.compileSectionIndexGroupPlan(sample.draft, sample.plan, sample.context);
+    assert.deepEqual(old.patch, { version: 1, draftSha256: current.patch.draftSha256, replacements: current.patch.replacements });
+    assert.equal(old.proof.contract, header.contract);
+    assert.equal(old.proof.schemaFingerprint, undefined);
+    assert.equal(JSON.stringify({ plan, context, draft: sample.draft }), before);
+    assert.throws(() => repair.compileSectionIndexGroupPlan(sample.draft, plan, sample.context));
+    assert.throws(() => repair.compileSectionIndexGroupPlan(sample.draft, { ...sample.plan, version: 2 }, sample.context));
+});
 test('真实06478十九节九续段显式引用合十三节，全部字段字节、marker、标题和来源数组保留', () => {
     const x = createBodyGroupSample(),
         before = repair.hashDraft(x.draft);
@@ -234,8 +250,7 @@ test('公开生成器把续段计划绑定实际请求SHA和v2协议，不增加
                 );
             });
             return JSON.stringify({
-                contract: repair.SECTION_BODY_GROUP_PLAN_CONTRACT,
-                version: 2,
+                ...require('../scripts/lib/reader-section-format').currentHeader(true),
                 draftSha256: requestRecord.draftSha256,
                 sectionsSha256: requestRecord.repairTargets[0].oldSha256,
                 groups,
@@ -265,9 +280,14 @@ test('公开生成器把续段计划绑定实际请求SHA和v2协议，不增加
             [
                 '../scripts/lib/reader-repair.js',
                 '../scripts/lib/reader-target-ordinal-patch.js',
-                '../prompts/api-reader-concept-terms-v1.md',
+                '../prompts/current/api-reader-concept-terms.md',
                 '../prompts/api-reader-repair-v11.md',
                 '../scripts/lib/reader-request-diagnostics.js',
+                ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
+            'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',
+            'reader-resource-claims-format.js', 'reader-proof-format.js', 'reader-content-mode.js',
+                    'protocol-codec.js', 'reader-legacy-records.json'].map(file => '../scripts/lib/' + file),
+                '../config/protocols/reader.json', '../config/protocols/reader-retry.json',
             ].map(file => file.startsWith('../prompts/')
                 ? require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(file.slice(3)).toString('utf8')
                 : fs.readFileSync(require.resolve(file), 'utf8')).join('\0'),

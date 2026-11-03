@@ -72,6 +72,7 @@ test('实际作者刷新按原HTML重建，无原HTML保留元数据姓名并明
         if (!originalAvailable) delete details.readerAuthors.sourceHtml;
         const paper = {
             authors: ['Alice Brown'], sourceSha256: sha256(details.text),
+            apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' },
             apiReaderAuthors: { authors: [{ name: 'Alice Brown', affiliations: ['Wrong University'] }] },
             analysisManifest: {
                 contracts: { apiReaderArticle: 'beginner-researcher-v3' },
@@ -215,7 +216,8 @@ test('来源运行记录保留合格的完整 HTML，拒绝超限内容或实体
 test('会议 PDF 无法还原作者上标对应关系时，使用论文信息中的姓名并明确机构不可得，允许继续处理', () => {
     const text = 'Original conference PDF text';
     const details = { source: 'conference_pdf_text', text, structuredArtifacts: { payloadSha256: 'a'.repeat(64) } };
-    const paper = { authors: ['Alice Brown'], sourceSha256: sha256(text), analysisManifest: {
+    const paper = { authors: ['Alice Brown'], sourceSha256: sha256(text),
+        apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' }, analysisManifest: {
         sourceAcquisition: { sourceSha256: sha256(text), structuredArtifactsSha256: 'a'.repeat(64) },
         contracts: { apiReaderArticle: 'beginner-researcher-v3' },
         stages: { apiReaderArticle: { status: 'complete', structuredArtifactsSha256: 'a'.repeat(64) } }

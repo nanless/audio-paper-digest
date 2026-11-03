@@ -2,7 +2,7 @@
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS='1';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto'),zlib=require('node:zlib');
 const ROOT=path.resolve(__dirname,'..'),sha=x=>crypto.createHash('sha256').update(x).digest('hex'),clone=x=>structuredClone(x);
-const fixture=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,'fixtures/reader-ordinal-cold-source-20261028-real.r3.json.gz'))));
+const fixture=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,'fixtures/reader-ordinal-cold-source-20261028-real.json.gz'))));
 assert.equal(fixture.contract,'ordinal-cold-saved-source-real-fixture-v1');
 const workspace=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'ordinal-cold-portable-')));
 const python=require('node:child_process').execFileSync('bash',[path.join(ROOT,'scripts/python-runtime.sh'),'-c','import sys; print(sys.executable)'],{cwd:ROOT,encoding:'utf8',env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}}).trim();
@@ -11,7 +11,7 @@ fs.mkdirSync(path.join(workspace,'.venv/bin'),{recursive:true});fs.writeFileSync
 process.env.NODE_PATH=process.env.TEST_ORDINAL_NODE_MODULES||path.join(ROOT,'node_modules');require('node:module').Module._initPaths();
 const originalRefs=fixture.cases.flatMap(c=>[c.completion,...Object.values(c.sourceFiles),...c.files]).filter(r=>fs.existsSync(r.originalPath)).map(r=>({file:r.originalPath,sha256:r.sha256}));
 for(const r of originalRefs)assert.equal(sha(fs.readFileSync(r.file)),r.sha256);
-const py=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
+const py=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
 require(path.join(ROOT,'tests/helpers/isolated-tmp-write-guard.cjs')).installTmpOnlyWriteGuard(workspace,{readOnlyPythonScripts:py.map(n=>path.join(workspace,'scripts',n))});
 Object.assign(process.env,{TMPDIR:workspace,TMP:workspace,TEMP:workspace,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(workspace,'pycache')});
 const env=require(path.join(workspace,'scripts/env-loader')),model=fixture.cases[0].paper.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations[0].identity.model;
@@ -52,7 +52,7 @@ test('real fixture has no credential/auth/account fingerprint fields or model im
  assert.deepEqual(findings,[]);
 });
 for(const f of cases)test('actual paid '+f.c.paperId+' completion and engine Reader diagnostics work without fresh ALS',()=>stop.withModelRequestsForbidden(()=>{
- assert.equal(fresh.getFreshAnalysisContext(),null);const before=JSON.stringify(f.paper);assert.equal(ordinal.validateCompletion(f.paper),true);assert.deepEqual(engine.getApiReaderV3RecordDiagnostics(f.paper),[]);assert.equal(fresh.getFreshAnalysisContext(),null);assert.equal(JSON.stringify(f.paper),before);
+ assert.equal(fresh.getFreshAnalysisContext(),null);const before=JSON.stringify(f.paper);assert.equal(ordinal.validateCompletion(f.paper),true);assert.deepEqual(engine.getIntegratedApiReaderRecordDiagnostics(f.paper),[]);assert.equal(fresh.getFreshAnalysisContext(),null);assert.equal(JSON.stringify(f.paper),before);
 }));
 test('actual 35497 inside/outside fresh ALS retains identical article, plan and complete-analysis qualification',()=>stop.withModelRequestsForbidden(async()=>{
  const p=cases[0].paper,before=JSON.stringify(p);
@@ -64,11 +64,14 @@ test('actual 35497 inside/outside fresh ALS retains identical article, plan and 
  assert.equal(fresh.getFreshAnalysisContext(),null);
  {
   const filename=path.join(workspace,'scripts/lib/reader-target-ordinal-patch.js'),Module=require('node:module'),old=new Module(filename,module);old.filename=filename;old.paths=Module._nodeModulePaths(path.dirname(filename));
+  const originalRequire=old.require.bind(old);
+  old.require=function(name){const value=originalRequire(name);return name==='./reader-repair'
+   ?{...value,REPAIR_VERSION:require(path.join(workspace,'scripts/lib/reader-legacy-records.json')).originalIdentityFields.repairVersion}:value;};
   const bytes=Buffer.from(fixture.previousPublicImplementation.rawBase64,'base64');assert.equal(sha(bytes),fixture.previousPublicImplementation.sha256);assert.equal(sha(bytes),'3b5d4ee3228a146e1634c712f340c39e0fdaf94c5b1d69e98371c696a3691d66');old._compile(bytes.toString('utf8'),filename);
   assert.throws(()=>old.exports.validateCompletion(p),/cold compiler\/parser\/final display differs/);
  }
  const reason=engine.getIncompleteAnalysisContentReason(p);assert.equal(reason,null,reason);assert.equal(engine.isSuccessfulAnalysisRecord(p),true);
- daily.withDailyFreshAnalysisContext(plan,()=>fresh.withFreshPaperContext(p,()=>{assert.equal(ordinal.validateCompletion(p),true);assert.deepEqual(engine.getApiReaderV3RecordDiagnostics(p),[]);}));
+ daily.withDailyFreshAnalysisContext(plan,()=>fresh.withFreshPaperContext(p,()=>{assert.equal(ordinal.validateCompletion(p),true);assert.deepEqual(engine.getIntegratedApiReaderRecordDiagnostics(p),[]);}));
  assert.equal(JSON.stringify(p),before);assert.equal(fresh.getFreshAnalysisContext(),null);
  });
 }));

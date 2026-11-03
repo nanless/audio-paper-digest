@@ -5,7 +5,7 @@ const {chromium}=require(path.join(mac,'node_modules/playwright'));
 const {server,installFixture}=require(path.join(mac,'Tests/DesktopUI.test.cjs'));
 const runtime=process.env.PD_AGG_FOCUS_NATIVE||path.join(mac,'Resources/native.js');
 const moduleFile=process.env.PD_AGG_FOCUS_MODULE||path.join(mac,'Resources/aggregate-ui.js');
-const fixture=path.join(mac,'Tests/Fixtures/aggregate-math-daily24.json');
+const fixture=path.resolve(mac,'../../tests/fixtures/workbench/aggregate-math-daily24.json');
 fs.mkdirSync(path.join(mac,'.qa'),{recursive:true});const output=process.env.PD_AGG_FOCUS_OUTPUT||fs.mkdtempSync(path.join(mac,'.qa/aggregate-focus-ui-'));fs.mkdirSync(output,{recursive:true});
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const source=fs.readFileSync(runtime,'utf8'),moduleSource=fs.readFileSync(moduleFile,'utf8'),saved=JSON.parse(fs.readFileSync(fixture));

@@ -13,6 +13,37 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
+test('来源保存视图只绑定实际PDF句柄和原执行，重复同视图可读而跨执行或原文件漂移拒绝', t => {
+    const f = productionPlanFixture(t), sources = require('../scripts/lib/conference-source-context');
+    const analysisRoot = path.join(f.root, 'source-view-owner');
+    const options = { analysisRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, paperId: f.paperId };
+    adapter.prepareConferenceAnalysis({ ...options, executionId: EXECUTION });
+    const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    const handle = adapter.verifyPlanAuthority(loaded, f.planHandle, f.sourceRoot);
+    const owner = { analysisRoot, executionId: EXECUTION, expectedSourceFileSha256: loaded.sourceFileSha256 };
+    const provider = sources.readerPdfSourceForContext(handle);
+    assert.equal(provider.sourceIdentity.executionId, EXECUTION);
+    const pdfIdentity = require('../scripts/lib/conference-reader-pdf-identity');
+    const codec = require('../scripts/lib/protocol-codec');
+    assert.deepEqual(provider.sourceIdentity, pdfIdentity.projectSavedExecution(loaded));
+    assert.ok(codec.isCurrentHeader(provider.sourceIdentity, pdfIdentity.CONTRACT));
+    assert.equal(provider.structuredArtifactsSha256, loaded.source.sourceDetails.structuredArtifacts.payloadSha256);
+    sources.bindReaderPdfSourceExecution(handle, owner); provider.assertUnchanged();
+    assert.throws(() => sources.bindReaderPdfSourceExecution(JSON.parse(JSON.stringify(handle)), owner), /实际已核验 PDF 来源句柄/);
+    const nextId = '88888888-8888-4888-8888-888888888888';
+    adapter.prepareConferenceAnalysis({ ...options, executionId: nextId });
+    const next = adapter.loadConferenceAnalysis({ analysisRoot, executionId: nextId });
+    assert.throws(() => sources.bindReaderPdfSourceExecution(handle, { ...owner, executionId: nextId,
+        expectedSourceFileSha256: next.sourceFileSha256 }), /其他不可变执行视图/);
+    assert.throws(() => context.withConferenceAnalysisSource({ executionId: nextId, executionDir: next.directory,
+        paperId: next.run.paperId, sourceDetails: next.source.sourceDetails, readerPdfSourceHandle: handle }, () => {}), /differs/);
+    const filename = path.join(loaded.directory, 'source.json'), bytes = fs.readFileSync(filename);
+    fs.appendFileSync(filename, '\n');
+    assert.throws(() => provider.assertUnchanged(), /原执行文件已经变化/);
+    fs.writeFileSync(filename, bytes); provider.assertUnchanged();
+    assert.deepEqual(fs.readFileSync(filename), bytes);
+});
+
 test('CAS临时名独占创建失败不得清理另一操作原有临时文件', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-cas-owned-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -319,7 +350,7 @@ function seedFixedReaderRevision(fixture, analysisRoot, { kind, mode = 'reader-o
     const bytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
     const preflight = bytes(emptyReaderResourceIdentity(child.source.sourceDetails.text));
     fs.writeFileSync(path.join(child.directory, 'reader-resource-preflight.json'), preflight, { mode: 0o600 });
-    const body = { contract: adapter.READER_REVISION_CONTRACT, version: 1, executionId: childId,
+    const body = { ...require('../scripts/lib/protocol-codec').recordHeader('conference-reader-source-revision', 'conference-reader-source-revision'), executionId: childId,
         parentExecutionId: parentId, parentAnalysisFileSha256: parent.analysisFileSha256,
         parentRunFileSha256: parent.runFileSha256, paperId: fixture.paperId,
         sourceSnapshotSha256: parent.run.sourceSnapshotSha256, mode,
@@ -675,7 +706,7 @@ test('官方论文集元数据会带进会议的正式发布身份', () => {
     };
     const paper = adapter.normalizedPaper(source);
     assert.deepEqual(paper.conferencePublication, {
-        contract: 'conference-official-publication-v1',
+        ...require('../scripts/lib/protocol-codec').recordHeader('conference-official-publication', 'conference-official-publication'),
         recordUrl: source.metadata.recordUrl, pdfUrl: source.metadata.pdfUrl
     });
     assert.equal(paper.doi, source.metadata.doi);

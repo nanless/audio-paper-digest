@@ -49,7 +49,7 @@ function describe(state, atMs) {
 
 function historyRecords(state, atMs) {
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-    if (!object(state) || state.schemaVersion !== 1 || state.policyVersion !== pool.POLICY_VERSION
+    if (!pool.hasAccountPoolHeader(state)
         || !object(state.services)) return null;
     const records = [];
     const timestamp = value => typeof value === 'number' && Number.isFinite(value)
@@ -140,7 +140,7 @@ function describeConfigured(env, state, atMs, options = {}) {
         configured = { status: 'invalid', countBasis: 'distinct_configured_credentials', accountCount: null,
             routes: [], observedCount: null, unobservedCount: null, cooling: null, earliest: null, rows: [] };
     }
-    return { version: 2, configured, observedHistory, quotaObservation: 'stored_cooldown_only' };
+    return { ...require('./lib/protocol-codec').recordHeader('llm-accounts-report', 'llm-accounts-report'), configured, observedHistory, quotaObservation: 'stored_cooldown_only' };
 }
 
 function main(argv = process.argv.slice(2)) {

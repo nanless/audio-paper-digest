@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from path_config import LLM_USAGE_DIR, LLM_RESPONSE_RECOVERY_DIR
 
-VERSION = 'llm-usage-v1'
+from llm_usage_format import usage_event_header, is_usage_event_format
 _SCOPE = contextvars.ContextVar('paper_digest_llm_usage', default={})
 
 class LlmUsagePersistenceError(RuntimeError):
@@ -145,7 +145,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         outcome = 'completed'
     paper_id = context.get('paperId')
     return {
-        'version': VERSION, 'kind': 'request', 'eventId': event_id or str(uuid.uuid4()),
+        **usage_event_header(), 'kind': 'request', 'eventId': event_id or str(uuid.uuid4()),
         'at': at or _now(), 'runtime': 'python',
         'runId': context.get('runId') if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', str(context.get('runId') or '')) else None,
         'paperId': normalize_usage_paper_id(paper_id),
@@ -251,7 +251,7 @@ def begin_pending_llm_request(*, directory=None, **kwargs):
     shape = build_llm_usage_event(**kwargs)
     labels = ('runId', 'paperId', 'stage', 'unitId', 'contentAttempt', 'transportAttempt',
               'protocol', 'model', 'inputSha256', 'estimates')
-    event = {'version': VERSION, 'kind': 'request_started', 'eventId': shape['eventId'],
+    event = {**usage_event_header(), 'kind': 'request_started', 'eventId': shape['eventId'],
              'at': shape['at'], 'runtime': 'python', **{key: shape[key] for key in labels},
              'phase': 'authorized_before_transport', 'outcome': 'result_unknown', 'chargeState': 'unknown'}
     try:

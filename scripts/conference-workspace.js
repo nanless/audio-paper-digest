@@ -14,6 +14,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { requireExternalRuntime } = require('./env-loader.js');
 const { treeStats } = require('./runtime-storage.js');
+const protocols = require('./lib/protocol-codec');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const MAX_STATE_BYTES = 16 * 1024 * 1024;
@@ -21,10 +22,6 @@ const MAX_ENV_BYTES = 4 * 1024 * 1024;
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
 const PROCESS_STATES = new Set(['pending', 'running', 'partial', 'complete']);
 const ITEM_STATES = new Set(['pending', 'source_sealed', 'analyzing', 'analysis_partial', 'complete']);
-const PROCESS_CONTRACT = 'conference-process-v2';
-const PROCESS_VERSION = 2;
-const LEGACY_PROCESS_CONTRACT = 'conference-process-v1';
-const LEGACY_PROCESS_VERSION = 1;
 const UUID_RE = /^[a-f0-9-]{36}$/i;
 const SHA256_RE = /^[a-f0-9]{64}$/i;
 
@@ -294,15 +291,15 @@ function validateItems(items, processId) {
 }
 
 function knownProcessFormat(state) {
-    return state?.contract === PROCESS_CONTRACT && state.version === PROCESS_VERSION
-        || state?.contract === LEGACY_PROCESS_CONTRACT && state.version === LEGACY_PROCESS_VERSION;
+    return protocols.hasValidHeader(state, 'conference-process')
+        && ['tag-catalog', 'taxonomy'].includes(protocols.format(state.contract, 'conference-process', state.schemaFingerprint));
 }
-function validTagCatalogFields(authority, version) {
+function validTagCatalogFields(authority, format) {
     if (!authority || typeof authority !== 'object' || Array.isArray(authority)) return false;
     const current = ['tagCatalogVersion', 'tagCatalogSha256'].some(key => Object.hasOwn(authority, key));
     const legacy = ['taxonomyVersion', 'taxonomyRegistrySha256'].some(key => Object.hasOwn(authority, key));
-    if (current && legacy || version === PROCESS_VERSION && legacy || version === LEGACY_PROCESS_VERSION && current) return false;
-    return version === LEGACY_PROCESS_VERSION || typeof authority.tagCatalogVersion === 'string'
+    if (current && legacy || format === 'tag-catalog' && legacy || format === 'taxonomy' && current) return false;
+    return format === 'taxonomy' || typeof authority.tagCatalogVersion === 'string'
         && Boolean(authority.tagCatalogVersion.trim()) && typeof authority.tagCatalogSha256 === 'string'
         && SHA256_RE.test(authority.tagCatalogSha256);
 }
@@ -314,7 +311,7 @@ function validateProcessStateShape(state, processId) {
         || !PROCESS_STATES.has(state.status)
         || !state.authority || typeof state.authority !== 'object' || Array.isArray(state.authority)
         || !SHA256_RE.test(state.authority.implementationSha256 || '')
-        || !validTagCatalogFields(state.authority, state.version)
+        || !validTagCatalogFields(state.authority, protocols.format(state.contract, 'conference-process', state.schemaFingerprint))
         || !validateItems(state.items, state.processId)) return false;
     if (state.sourceImplementationSha256 !== undefined
         && !SHA256_RE.test(state.sourceImplementationSha256 || '')) return false;
@@ -342,10 +339,11 @@ function validateCompletionReceipt(state, processDir) {
         .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
             sourceProof: item.sourceProof, analysisProof: item.analysisProof, pageProof: item.pageProof }));
     const valid = receipt.receiptSha256 === stableHash(body)
-        && receipt.contract === (state.version === PROCESS_VERSION
-            ? 'conference-process-completion-receipt-v2' : 'conference-process-completion-receipt-v1')
-        && receipt.version === state.version
-        && validTagCatalogFields(receipt.authority, receipt.version)
+        && protocols.hasValidHeader(receipt, 'conference-process-completion-receipt')
+        && protocols.format(receipt.contract, 'conference-process-completion-receipt', receipt.schemaFingerprint)
+            === protocols.format(state.contract, 'conference-process', state.schemaFingerprint)
+        && protocols.isCurrentHeader(receipt, 'conference-process-completion-receipt') === protocols.isCurrentHeader(state, 'conference-process')
+        && validTagCatalogFields(receipt.authority, protocols.format(state.contract, 'conference-process', state.schemaFingerprint))
         && receipt.processId === state.processId
         && SHA256_RE.test(receipt.planReceiptSha256 || '')
         && receipt.receiptSha256 === state.completionReceiptSha256
@@ -482,7 +480,7 @@ function diagnose(options = {}) {
     const projectRoot = path.resolve(options.projectRoot || PROJECT_ROOT);
     const paths = options.paths || defaultWorkspacePaths(projectRoot);
     return {
-        contract: 'conference-workspace-diagnostic-v1',
+        ...protocols.recordHeader(protocols.contract('conference-workspace-diagnostic'), 'conference-workspace-diagnostic'),
         generatedAt: new Date(options.nowMs ?? Date.now()).toISOString(),
         readOnly: true,
         projectRoot,

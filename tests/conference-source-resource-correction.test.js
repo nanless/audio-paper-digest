@@ -14,6 +14,8 @@ const engine = require('../scripts/analysis-engine');
 const processApi = require('../scripts/lib/conference-process');
 const context = require('../scripts/lib/conference-analysis-context');
 const stop = require('../scripts/lib/analysis-stop-control');
+const codec = require('../scripts/lib/protocol-codec');
+const correctionFormat = require('../scripts/lib/conference-source-correction-format');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture');
 const { recoveryFixtureIdentity } = require('./helpers/conference-recovery-grant-fixture');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -57,7 +59,7 @@ function admissionFixture(t) {
     const processDirectory = path.join(config.FILES.conferenceProcessDir, ids.processId);
     const recordRoot = path.join(processDirectory, 'source-resource-corrections');
     fs.mkdirSync(recordRoot, { recursive: true, mode: 0o700 });
-    const state = { contract: processApi.CONTRACT, version: processApi.PROCESS_VERSION, generation: 1,
+    const state = { ...codec.recordHeader(processApi.CONTRACT, processApi.CONTRACT), generation: 1,
         processId: ids.processId, authority: ids.authority, status: 'running', aggregate: null,
         completionReceiptSha256: null, createdAt: '2026-10-17T12:00:00.000Z', updatedAt: '2026-10-17T12:00:00.000Z',
         items: { [f.paperId]: { paperId: f.paperId, sourceIdentity: {}, analysisRunId: ids.parentExecutionId,
@@ -71,7 +73,7 @@ function admissionFixture(t) {
     const stateFile = path.join(processDirectory, 'state.json'); write(stateFile, state);
     const CAS = { analysisFileSha256: loaded.analysisFileSha256,
         runFileSha256: loaded.runFileSha256, sourceFileSha256: loaded.sourceFileSha256 };
-    const record = { contract: api.CONTRACT, notLlmResponse: true, newApiRequests: 0,
+    const record = { ...codec.recordHeader(api.CONTRACT, api.CONTRACT), notLlmResponse: true, newApiRequests: 0,
         paperId: f.paperId, childExecutionId: crypto.randomUUID(), readerParentExecutionId: ids.parentExecutionId,
         observedStateExecutionId: ids.parentExecutionId, selectedMainExecutionId: ids.parentExecutionId,
         latestFailedExecutionId: null, readerParentCAS: CAS, observedStateCAS: CAS, selectedMainCAS: CAS,
@@ -81,7 +83,7 @@ function admissionFixture(t) {
         appliedAt: '2026-10-17T12:00:00.000Z', reader: { noEdit: true } };
     const correctionFile = path.join(recordRoot, 'correction.json');
     const manifestPath = path.join(recordRoot, 'manifest.json');
-    const manifest = { contract: api.BATCH, version: 1, processId: ids.processId, batchId: crypto.randomUUID(),
+    const manifest = { ...codec.recordHeader(api.BATCH, api.BATCH), processId: ids.processId, batchId: crypto.randomUUID(),
         stateFileSha256: sha(fs.readFileSync(stateFile)), stateSha256: state.stateSha256,
         authorization: { kind: 'source_resource_correction', newApiRequests: 0,
             instruction: 'Synthetic zero-request fixture, no publication authorization.', paperIds: [f.paperId] },
@@ -120,12 +122,30 @@ test('来源scope互不提升：资源11不能登记core编辑，core合同不�
     f.record.coreCorrection = {}; f.save();
     assert.throws(() => api.openBatch(f.options), /资源scope不能新增核心/);
     delete f.record.coreCorrection;
-    f.manifest.contract = api.CORE_BATCH;
+    Object.assign(f.manifest, codec.recordHeader(api.CORE_BATCH, api.CORE_BATCH));
     f.manifest.authorization.kind = 'source_core_correction'; f.save();
-    assert.throws(() => api.openBatch(f.options), /完整有界/);
+    assert.throws(() => api.openBatch(f.options), /清单格式不符/);
     assert.equal(engine.scoringStabilityIsResolved({ executionKind: 'deterministic_source_core_audit' }), false);
     const fake = { ...f.paper, conferenceSourceCorrection: { contract: api.CORE_CONTRACT } };
-    assert.equal(engine.hasValidApiReaderV3Records(fake), false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(fake), false);
+});
+
+test('原清单只能配对原来源条目；新核心清单声明独立的准确核心格式', t => {
+    const f = admissionFixture(t);
+    const oldBatch = codec.historicalHeader(api.BATCH, 'complete-stopped-original-source-members');
+    const oldRecord = codec.historicalHeader(api.CONTRACT, 'exact-original-source-member');
+    delete f.manifest.schemaFingerprint;
+    Object.assign(f.manifest, oldBatch); f.save();
+    assert.throws(() => api.openBatch(f.options), /来源纠正条目/);
+    delete f.record.schemaFingerprint;
+    Object.assign(f.record, oldRecord); f.save();
+    const manifestBytes = fs.readFileSync(f.options.manifestPath), recordBytes = fs.readFileSync(f.manifest.records[0].file);
+    api.openBatch(f.options);
+    assert.deepEqual(fs.readFileSync(f.options.manifestPath), manifestBytes);
+    assert.deepEqual(fs.readFileSync(f.manifest.records[0].file), recordBytes);
+    const coreFormats = correctionFormat.sourceFormatsForBatch(codec.recordHeader(api.CORE_BATCH, api.CORE_BATCH), api.CORE_CONTRACT);
+    assert.deepEqual(coreFormats.coreSummaryFormat, require('../scripts/lib/core-summary-format').currentHeader());
+    assert.notEqual(coreFormats.coreStageProvenanceFormat.contract, coreFormats.provenanceFormat.contract);
 });
 
 test('原CAS/完整集合/当前状态变化先阻断，不能覆盖另一个paid partial', async t => {
@@ -361,7 +381,7 @@ function privateCalculations() {
         + body('assertRecoveredImageSupplement', 'assertOutput')
         + '\n({projectSelectedMain, assertPairedCoreAudits, assertRecoveredImageSupplement, FAILURE_FIELDS})', {
             require: require('node:module').createRequire(sourceFile), sha, stable: hash,
-            clone: structuredClone, CONTRACT: api.CONTRACT, current: () => state,
+            clone: structuredClone, correctionFormat, CONTRACT: api.CONTRACT, current: () => state,
             fail: message => { throw Error(message); },
             equal: (actual, expected, message) => assert.deepStrictEqual(
                 structuredClone(actual), structuredClone(expected), message)
@@ -383,7 +403,7 @@ test('仅原null主文可恢复三SHA相同评分检查点，原失败/次数/�
             imageDownload: { status: 'no_candidates', attempted: 0, downloaded: 0, outcomes: [] }
         } } };
     const loaded = { analysis: { papers: [raw], readerRevisionProgress: { attempts: 3, failures: ['original'] } } };
-    const record = { contract: api.CONTRACT, selectedMainExecutionId: 'latest', latestFailedExecutionId: 'latest',
+    const record = { ...codec.recordHeader(api.CONTRACT, api.CONTRACT), selectedMainExecutionId: 'latest', latestFailedExecutionId: 'latest',
         mainCheckpointRecovery: { contract: 'conference-source-main-checkpoint-recovery-v1', rawAnalysisValue: null,
             rawPaperSha256: hash(raw), analysisCheckpointSha256: sha(checkpoint), scoringCheckpointSha256: sha(checkpoint),
             scoringOutputAnalysisSha256: sha(checkpoint), scoringStageSha256: hash(raw.analysisManifest.stages.scoringAudit),
@@ -606,7 +626,7 @@ function previousProjectionHarness() {
         require: name => {
             if (name === '../config') return { FILES: { conferenceAnalysisDir: '/synthetic-analysis' } };
             if (name === './conference-analysis-adapter') return { loadConferenceAnalysis: () => loaded,
-                readerRevisionExecutionId: () => 'next-child',readJsonRecord:()=>({value:controls.child?.revision||{}}), loadConferenceReaderRevision: () => controls.child };
+                registeredReaderRevisionExecutionIds: () => ['next-child'],readJsonRecord:()=>({value:controls.child?.revision||{}}), loadConferenceReaderRevision: () => controls.child };
             if (name === 'node:fs') return { existsSync: filename => controls.childExists
                 && (filename.endsWith('analysis.json') || controls.childRevision !== false) };
             if (name === './conference-process-recovery') return { MAX_ATTEMPTS: 3 };
@@ -787,11 +807,11 @@ function publicationBridgeHarness() {
         analysisFileSha256:id,runFileSha256:id+'run',sourceFileSha256:'same-source',directory:'/analysis/'+id,source:{sourceDetails:{text:'source'}},readerReview:{scientificReplayHandle:Object.freeze({})}});
     const original=mk(parentId,parent),loaded=mk(childId,child);loaded.parent=original;
     const active={cold:true,receipt:{provenance:{sourceIdentity:{executionId:parentId}},real:'original receipt'},
-        batch:{policy:{kind:'source_core_correction',contract:parent.conferenceSourceCorrection.contract}},row:{record:{childExecutionId:parentId}}};
+        batch:{policy:{kind:'source_core_correction'},formats:{recordsFormat:codec.historicalHeader(api.CORE_CONTRACT,'exact-original-source-member')}},row:{record:{childExecutionId:parentId}}};
     const controls={registered:true,whole:true,pins:true,canonical:true},pdf={actualChild:childId};
     const presented=()=>({...structuredClone(child),paper_id:child.id});
     const env={clone:structuredClone,sha,stable:hash,isDeepStrictEqual:require('node:util').isDeepStrictEqual,
-        inheritedReaderScience,CONTRACT:'conference-source-resource-correction-v1',CORE_CONTRACT:'conference-source-core-correction-v1',UUID:/^[a-f0-9-]{36}$/,
+        inheritedReaderScience,correctionFormat,codec,UUID:/^[a-f0-9-]{36}$/,
         fail:message=>{throw Error(message);},withVerifiedMaintenanceScientificParent:(handle,callback)=>callback(),current:()=>active,isSourceCorrectionRecord:paper=>!!paper.conferenceSourceCorrection,
         independentReaderMaintenanceChild:()=>controls.registered,
         assertOutput:paper=>assert.equal(paper,parent,'old receipt cannot authenticate the new child'),
@@ -799,7 +819,7 @@ function publicationBridgeHarness() {
         require:name=>{
             if(name==='node:fs')return{existsSync:()=>true};if(name==='node:path')return path;
             if(name==='../config')return{FILES:{conferenceAnalysisDir:'/analysis'}};
-            if(name==='./conference-analysis-adapter')return{readerRevisionExecutionId:()=>childId,
+            if(name==='./conference-analysis-adapter')return{registeredReaderRevisionExecutionIds:()=>[childId],
                 loadConferenceReaderRevision:()=>loaded,loadConferenceAnalysis:({executionId})=>executionId===parentId?original:
                     controls.canonical?loaded:{...loaded,analysisFileSha256:'tampered'}};
             if(name==='./conference-reader-publication-evidence')return{replayCanonicalReaderPdfSource:(paper,identity)=>{

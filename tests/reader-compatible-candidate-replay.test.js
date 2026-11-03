@@ -1,6 +1,7 @@
 'use strict';
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const test = require('node:test'), assert = require('node:assert/strict');
+const { recordHeader } = require('../scripts/lib/protocol-codec');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 const Config = require('../scripts/config'), daily = require('../scripts/lib/daily-fresh-source-plan');
 const fresh = require('../scripts/lib/fresh-analysis-context'), engine = require('../scripts/analysis-engine');
@@ -20,7 +21,7 @@ function syntheticHistoricalClearedAllowance(f) {
     delete proof.allowanceSha256;payload.implementationRepairAllowanceProof={...proof,allowanceSha256:repair.hashDraft(proof)};
     // Write historical-format fixture bytes directly in the helper-verified tmp
     // directory; the live saver correctly forbids replacing an unused proof.
-    write(path.join(f.directory,repair.hashDraft(f.identity)+'.json'),{version:repair.REPAIR_VERSION,
+    write(path.join(f.directory,repair.hashDraft(f.identity)+'.json'),{...repair.candidateEnvelopeHeader(),
         identity:f.identity,payload,payloadSha256:repair.hashDraft(payload)});
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.directory,audit.archivedName))).payload.noProgress,f.selectedPayload.noProgress);
     return payload;
@@ -196,7 +197,7 @@ test('更晚费用没有唯一真实请求响应归属时不能跳过它选择�
 test('核验过的迁移祖先可被唯一后代支配，不依赖文件时间', async t => {
     const f = await fixture(t);
     const parentEnvelope = JSON.parse(fs.readFileSync(f.olderFile));
-    const audit = { contract: revision.CONTRACT, scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
+    const audit = { ...recordHeader(revision.CONTRACT, revision.CONTRACT), scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
         fromIdentitySha256: repair.hashDraft(f.olderIdentity), toIdentitySha256: repair.hashDraft(f.base),
         oldEnvelopeSha256: sha(fs.readFileSync(f.olderFile)), oldPayloadSha256: parentEnvelope.payloadSha256,
         archivedName: repair.hashDraft(f.olderIdentity) + '.migrated-' + crypto.randomUUID() + '.json',
@@ -209,7 +210,7 @@ test('核验过的迁移祖先可被唯一后代支配，不依赖文件时间',
 });
 test('迁移to身份、实际改变字段或原计数错配不能制造祖先支配', async t => {
     const f = await fixture(t), parentEnvelope = JSON.parse(fs.readFileSync(f.olderFile));
-    const valid = { contract: revision.CONTRACT, scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
+    const valid = { ...recordHeader(revision.CONTRACT, revision.CONTRACT), scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
         fromIdentitySha256: repair.hashDraft(f.olderIdentity), toIdentitySha256: repair.hashDraft(f.base),
         oldEnvelopeSha256: sha(fs.readFileSync(f.olderFile)), oldPayloadSha256: parentEnvelope.payloadSha256,
         archivedName: repair.hashDraft(f.olderIdentity) + '.migrated-' + crypto.randomUUID() + '.json',
@@ -227,7 +228,7 @@ test('两个合法迁移叶分支没有唯一后代，不按较新文件挑选',
     const f = await fixture(t), parentEnvelope = JSON.parse(fs.readFileSync(f.olderFile));
     const thirdIdentity = { ...f.base, repairImplementationSha256: 'e'.repeat(64) };
     for (const child of [f.base, thirdIdentity]) {
-        const audit = { contract: revision.CONTRACT, scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
+        const audit = { ...recordHeader(revision.CONTRACT, revision.CONTRACT), scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
             fromIdentitySha256: repair.hashDraft(f.olderIdentity), toIdentitySha256: repair.hashDraft(child),
             oldEnvelopeSha256: sha(fs.readFileSync(f.olderFile)), oldPayloadSha256: parentEnvelope.payloadSha256,
             archivedName: repair.hashDraft(f.olderIdentity) + '.migrated-' + crypto.randomUUID() + '.json',
@@ -334,7 +335,7 @@ test('误清零后只有同稿同费用的中间迁移，正常入口仍沿唯�
     Object.assign(wrong,{noProgress:0,failureSignature:'',validationFailureStreak:0,validationFailureSignature:''});
     const file=repair.saveFailedCandidate(f.directory,f.identity,wrong),bytes=fs.readFileSync(file),envelope=JSON.parse(bytes);
     const next={...f.identity,repairImplementationSha256:'d'.repeat(64)},archivedName=repair.hashDraft(f.identity)+'.migrated-'+crypto.randomUUID()+'.json';
-    const audit={contract:revision.CONTRACT,scope:'fresh-run',runId:f.plan.runId,paperId:f.paper.arxivId,revisedAt:new Date().toISOString(),
+    const audit={...recordHeader(revision.CONTRACT, revision.CONTRACT),scope:'fresh-run',runId:f.plan.runId,paperId:f.paper.arxivId,revisedAt:new Date().toISOString(),
         fromIdentitySha256:repair.hashDraft(f.identity),toIdentitySha256:repair.hashDraft(next),archivedName,
         oldEnvelopeSha256:sha(bytes),oldPayloadSha256:envelope.payloadSha256,changedFields:['repairImplementationSha256'],
         oldNoProgress:0,oldFailureSignature:'',clearedNoProgress:false,attempts:wrong.attempts,fullAttempts:wrong.fullAttempts,transportFailures:wrong.transportFailures,
@@ -410,7 +411,7 @@ test('迁移后真实付费请求消耗原输出，可证明当前新state而不
     const parentFile = repair.saveFailedCandidate(f.directory, parentIdentity, parentPayload), bytes = fs.readFileSync(parentFile);
     const name = repair.hashDraft(parentIdentity) + '.migrated-' + crypto.randomUUID() + '.json';
     fs.renameSync(parentFile, path.join(f.directory, name));
-    const audit = { contract: revision.CONTRACT, scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
+    const audit = { ...recordHeader(revision.CONTRACT, revision.CONTRACT), scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
         revisedAt: '2026-10-14T01:59:00.000Z', fromIdentitySha256: repair.hashDraft(parentIdentity),
         toIdentitySha256: repair.hashDraft(f.base), archivedName: name, oldEnvelopeSha256: sha(bytes),
         oldPayloadSha256: repair.hashDraft(parentPayload), changedFields: ['repairImplementationSha256'],
@@ -438,7 +439,7 @@ test('paid frontier必须真实迁移先于请求且原archive、输入稿、字
     const parentPayload = { ...f.selectedPayload, draft: req.draft, rawDraft: JSON.stringify(req.draft), attempts: 3, noProgress: 1 };
     const file = repair.saveFailedCandidate(f.directory, parentIdentity, parentPayload), bytes = fs.readFileSync(file);
     const name = repair.hashDraft(parentIdentity) + '.migrated-' + crypto.randomUUID() + '.json'; fs.renameSync(file, path.join(f.directory, name));
-    const audit = { contract: revision.CONTRACT, scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
+    const audit = { ...recordHeader(revision.CONTRACT, revision.CONTRACT), scope: 'fresh-run', runId: f.plan.runId, paperId: f.paper.arxivId,
         revisedAt: '2026-10-14T01:59:00.000Z', fromIdentitySha256: repair.hashDraft(parentIdentity), toIdentitySha256: repair.hashDraft(f.base),
         archivedName: name, oldEnvelopeSha256: sha(bytes), oldPayloadSha256: repair.hashDraft(parentPayload), changedFields: ['repairImplementationSha256'],
         attempts: 3, fullAttempts: 1, transportFailures: 2, oldNoProgress: 1, oldFailureSignature: parentPayload.failureSignature,

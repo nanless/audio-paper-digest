@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import org.json.JSONObject
+import com.nanless.paperdigest.protocols.ClientProtocols
 import java.net.URI
 
 /** Presentation from the actual Article only; never a current-catalog lookup or source qualification. */
@@ -10,7 +11,7 @@ object PublishedSourceWarning {
     private fun address(value: String?): String? = nonempty(value)?.takeIf { runCatching { URI(it).let { u -> u.scheme == "https" && u.host != null && u.userInfo == null && u.port in listOf(-1, 443) } }.getOrDefault(false) }
     internal fun warning(article: Article): String? {
         val c=article.citation
-        if(c.opt("contract") != "paper-citation-source-v1" || c.opt("verified") !is Boolean || c.opt("verified") != true || c.opt("identityStatus") != "verified" || nonempty(article.paperID)==null || c.opt("paperKey") != article.paperID)return null
+        if(!ClientProtocols.hasValidHeader(c,"paper-citation-source") || c.opt("verified") !is Boolean || c.opt("verified") != true || c.opt("identityStatus") != "verified" || nonempty(article.paperID)==null || c.opt("paperKey") != article.paperID)return null
         val warning=text(c.opt("sourceVersionWarning"))?.takeIf { it.isNotBlank() } ?: return null
         val blog=address(article.blogURL) ?: return null;val source=address(article.sourceURL) ?: return null
         if(c.opt("pageUrl") != blog || c.opt("sourceUrl") != source)return null

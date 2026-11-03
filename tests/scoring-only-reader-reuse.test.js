@@ -12,7 +12,7 @@ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 const run=new AsyncFunction('require','crypto','paper','sourceDetails','options','scoringFactReview','getPaperArxivId','prepareApiReaderRevisionSeed','buildApiReaderResourceIdentity','manifest','analysis','sourceText',source.slice(reuseStart,reuseEnd)+source.slice(seedStart,seedEnd)+'return {existingReaderReusable,readerRevisionSeed};');
 async function createSample({scoringOnly=true,readerValid=true,authorsValid=true,feedback='verified feedback\n',signedFeedback=feedback,resourceChanged=false,seedInvalid=false}={}){
  let seeds=0,resources=0;const paper={arxivId:'2601.00001',analysisManifest:{stages:{apiReaderArticle:{reviewFeedbackSha256:crypto.createHash('sha256').update(signedFeedback).digest('hex')}}},apiReaderResources:{identitySha256:'a'.repeat(64)}};
- const requireStub=name=>name.includes('analysis-engine')?{hasValidApiReaderV3Records:()=>readerValid}:{canReuseReaderAuthorInputs:()=>authorsValid};
+ const requireStub=name=>name.includes('analysis-engine')?{hasValidIntegratedApiReaderRecords:()=>readerValid}:{canReuseReaderAuthorInputs:()=>authorsValid};
  const result=()=>run(requireStub,crypto,paper,{}, {reviewFeedback:feedback},{current:()=>({scoringOnly})},p=>p.arxivId,()=>{seeds++;if(seedInvalid)throw new Error('invalid signed revision');return {signed:true};},async()=>{resources++;return {identitySha256:(resourceChanged?'b':'a').repeat(64)};},paper.analysisManifest,'analysis','source');
  return {result,counts:()=>({seeds,resources})};
 }

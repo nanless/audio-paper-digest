@@ -2,10 +2,11 @@
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const protocols = require('./protocol-codec.js');
 
 const FACET_IDS = Object.freeze(['task', 'method', 'setting', 'signal', 'application', 'research_focus', 'artifact', 'scientific_topic', 'model_family']);
-const TAG_CATALOG_VERSION = 'paper-tag-catalog-v2';
-const LEGACY_TAG_CATALOG_VERSION = 'paper-taxonomy-v1';
+const TAG_CATALOG_VERSION = protocols.contract('paper-tag-catalog');
+const LEGACY_TAG_CATALOG_VERSION = protocols.historicalContract('paper-tag-catalog','legacy-taxonomy-registry');
 const CONCEPT_KEYS = ['id', 'facet', 'preferredLabel', 'aliases', 'broaderId', 'definition', 'scopeNote', 'status', 'replacedBy'];
 
 // 有意与 Python 保持一致：NFKC、strip、一个 #、仅 ASCII 小写。
@@ -28,9 +29,36 @@ function string(value, name) {
         || /[\u0000-\u001f\u007f]/u.test(value)) throw new Error(`${name} 必须是非空字符串，且不能包含首尾空白或控制字符。`);
 }
 
+function tagCatalogIdentity(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('标签词表必须是对象。');
+    const raw = Object.hasOwn(data, 'contract') ? data.contract : data.version;
+    if (!protocols.isContract(raw, 'paper-tag-catalog')) throw new Error('标签词表的版本不受支持。');
+    const expected = protocols.recordHeader(raw, 'paper-tag-catalog', data.schemaFingerprint);
+    for (const key of ['contract','version','schemaVersion','schemaFingerprint']) {
+        if (Object.hasOwn(expected,key) ? data[key] !== expected[key] : Object.hasOwn(data,key)) throw new Error('标签词表协议头或结构指纹无效。');
+    }
+    return protocols.identityDomain(raw,'paper-tag-catalog',data.schemaFingerprint);
+}
+
+function isCatalogIdentityUpgrade(from, to) {
+    if (!protocols.isContract(from,'paper-tag-catalog') || !protocols.isContract(to,'paper-tag-catalog')) return false;
+    const before=protocols.format(from,'paper-tag-catalog');
+    const after=protocols.format(to,'paper-tag-catalog');
+    return before === after || (before === 'legacy-taxonomy-registry' && after === 'nine-facet-concept-registry');
+}
+function isCatalogUpgrade(from, to) {
+    const before=protocols.format(tagCatalogIdentity(from),'paper-tag-catalog',from.schemaFingerprint);
+    const after=protocols.format(tagCatalogIdentity(to),'paper-tag-catalog',to.schemaFingerprint);
+    return before===after || (before==='legacy-taxonomy-registry' && after==='nine-facet-concept-registry');
+}
+
+function catalogHeader(data) {
+    return protocols.recordHeader(tagCatalogIdentity(data),'paper-tag-catalog',data.schemaFingerprint);
+}
+
 function validateTagCatalog(data) {
-    object(data, ['version', 'facets', 'concepts'], '标签词表');
-    if (![TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION].includes(data.version)) throw new Error('标签词表的版本不受支持。');
+    const header = catalogHeader(data);
+    object(data, [...Object.keys(header),'facets','concepts'], '标签词表');
     if (!Array.isArray(data.facets) || data.facets.length !== FACET_IDS.length) throw new Error('标签词表必须包含全部九个分类维度。');
     const facets = new Set();
     for (const facet of data.facets) {
@@ -96,16 +124,14 @@ function validateTagCatalog(data) {
 
 function registryData(tagCatalog) {
     if (!tagCatalog || typeof tagCatalog !== 'object') throw new Error('标签词表必须是对象。');
-    if (Object.prototype.hasOwnProperty.call(tagCatalog, 'registrySha256')) {
-        object(tagCatalog, ['version', 'facets', 'concepts', 'registrySha256'], '已加载的标签词表');
+    const header = catalogHeader(tagCatalog);
+    const keys = [...Object.keys(header),'facets','concepts'];
+    if (Object.hasOwn(tagCatalog,'registrySha256')) {
+        keys.push('registrySha256');
         if (typeof tagCatalog.registrySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(tagCatalog.registrySha256)) throw new Error('词表记录中的 registrySha256 格式无效。');
-    } else {
-        object(tagCatalog, ['version', 'facets', 'concepts'], '标签词表');
     }
-    // 加载时取得的 SHA 是文件元数据；这里校验词表内容，不以这个字段判断标签是否有效。
-    const data = { version: tagCatalog.version, facets: tagCatalog.facets, concepts: tagCatalog.concepts };
-    validateTagCatalog(data);
-    return data;
+    object(tagCatalog,keys,'标签词表');
+    return validateTagCatalog({...header,facets:tagCatalog.facets,concepts:tagCatalog.concepts});
 }
 
 function loadTagCatalog(filePath) {
@@ -132,8 +158,8 @@ function loadTagCatalog(filePath) {
         }
     }
     const data = validateTagCatalog(parsed);
-    if (filePath === undefined && data.version !== TAG_CATALOG_VERSION) {
-        throw new Error('当前标签词表必须使用 paper-tag-catalog-v2。');
+    if (filePath === undefined && !protocols.isCurrentHeader(data,'paper-tag-catalog')) {
+        throw new Error('当前标签词表必须使用现行稳定协议和结构指纹。');
     }
     return { ...data, registrySha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
@@ -175,5 +201,5 @@ function pruneAncestors(tagCatalog, ids) {
     return ids.filter(id => !covered.has(id));
 }
 
-module.exports = { TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION, loadTagCatalog, validateTagCatalog, normalizeLabel, resolveLabelCandidates,
+module.exports = { isCatalogIdentityUpgrade, isCatalogUpgrade, tagCatalogIdentity, catalogHeader, registryData, TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION, loadTagCatalog, validateTagCatalog, normalizeLabel, resolveLabelCandidates,
     resolveLabel, ancestors, pruneAncestors };

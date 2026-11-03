@@ -20,7 +20,7 @@ from llm_account_pool import (  # noqa: E402
     LlmAccountPoolExhaustedError,
     LlmAccountPoolStateError,
     MAX_SAFE_INTEGER,
-    POLICY_VERSION,
+    ACCOUNT_POOL_CONTRACT,
     _lock_reclaimable,
     _state_lock,
     classify_opencode_go_quota_response,
@@ -33,6 +33,9 @@ from llm_account_pool import (  # noqa: E402
     resolve_primary_api_key_pool,
     select_api_key,
 )
+
+from protocol_codec import historical_contract, record_header
+LEGACY_POOL_POLICY = historical_contract(ACCOUNT_POOL_CONTRACT, 'equal-rotation')
 
 ENDPOINT = 'https://opencode.ai/zen/go/v1'
 STALE_GROUP_MS = 7 * 24 * 60 * 60 * 1000
@@ -61,7 +64,7 @@ def write_legacy_state(state_file, keys, active_account_id):
     identity = get_pool_identity(keys, ENDPOINT)
     state_file.write_text(json.dumps({
         'schemaVersion': 1,
-        'policyVersion': POLICY_VERSION,
+        'policyVersion': LEGACY_POOL_POLICY,
         'generation': 3,
         'services': {
             identity['service_id']: {
@@ -83,7 +86,7 @@ def write_stale_group_state(state_file, keys):
     identity = get_pool_identity(keys, ENDPOINT)
     state_file.write_text(json.dumps({
         'schemaVersion': 1,
-        'policyVersion': POLICY_VERSION,
+        'policyVersion': LEGACY_POOL_POLICY,
         'generation': 1,
         'services': {
             identity['service_id']: {
@@ -117,7 +120,7 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertEqual(group['activeAccountId'], get_account_id(expected[0]))
             self.assertEqual(group['rotationCursor'], 1)
             self.assertEqual(group['lastSelectedAtMs'], 1006)
-            self.assertEqual(read_state_strict(state_file)['policyVersion'], POLICY_VERSION)
+            self.assertEqual(read_state_strict(state_file)['contract'], ACCOUNT_POOL_CONTRACT)
             # activeAccountId 只是可观测字段：下一次仍按游标继续。
             self.assertEqual(
                 select_api_key(keys, ENDPOINT, state_file, now_ms=2000)['api_key'],
@@ -246,7 +249,7 @@ class LlmAccountPoolTest(unittest.TestCase):
             ordered = ordered_account_ids(keys)
             write_legacy_state(state_file, keys, ordered[1])
             legacy = read_state_strict(state_file)
-            self.assertEqual(legacy['policyVersion'], POLICY_VERSION)
+            self.assertEqual(legacy['policyVersion'], LEGACY_POOL_POLICY)
             self.assertEqual(legacy['generation'], 3)
             # 升级后首次选择与旧 active 连续，随后进入等权轮转。
             self.assertEqual(select_api_key(keys, ENDPOINT, state_file, now_ms=2000)['api_key'], expected[1])
@@ -386,7 +389,7 @@ class LlmAccountPoolTest(unittest.TestCase):
         def build_state(group):
             return json.dumps({
                 'schemaVersion': 1,
-                'policyVersion': POLICY_VERSION,
+                'policyVersion': LEGACY_POOL_POLICY,
                 'generation': 1,
                 'services': {
                     identity['service_id']: {
@@ -646,7 +649,7 @@ class LlmAccountPoolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / 'state.json'
             state_file.write_text(
-                '{"schemaVersion":1,"policyVersion":"opencode-go-sticky-quota-failover-v1",'
+                '{"schemaVersion":1,"policyVersion":' + json.dumps(LEGACY_POOL_POLICY) + ','
                 '"generation":1,"services":{"x":{"endpoint":"https://opencode.ai/zen/go",'
                 '"accounts":{"a":{"blockedUntilMs":NaN}},"groups":{}}}}',
                 encoding='utf-8',
@@ -659,7 +662,7 @@ class LlmAccountPoolTest(unittest.TestCase):
             state_file = Path(tmp) / 'state.json'
             state_file.write_text(json.dumps({
                 'schemaVersion': 1,
-                'policyVersion': POLICY_VERSION,
+                'policyVersion': LEGACY_POOL_POLICY,
                 'generation': 1,
                 'services': {
                     'service': {
@@ -677,7 +680,7 @@ class LlmAccountPoolTest(unittest.TestCase):
     def test_schema_version_and_generation_require_safe_non_boolean_integers(self):
         base = {
             'schemaVersion': 1,
-            'policyVersion': POLICY_VERSION,
+            'policyVersion': LEGACY_POOL_POLICY,
             'generation': 0,
             'services': {},
         }
@@ -836,7 +839,7 @@ class LlmAccountPoolTest(unittest.TestCase):
                 select_api_key(keys, ENDPOINT, state_file, now_ms=2000)['api_key'],
                 expected[1],
             )
-            self.assertEqual(read_state_strict(state_file)['policyVersion'], POLICY_VERSION)
+            self.assertEqual(read_state_strict(state_file)['contract'], ACCOUNT_POOL_CONTRACT)
 
 
 if __name__ == '__main__':

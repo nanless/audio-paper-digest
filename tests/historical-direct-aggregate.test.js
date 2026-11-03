@@ -89,7 +89,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
         readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256, resourceIdentitySha256: paper.apiReaderResources.identitySha256,
         sourceBindingsSourceTextSha256: provenance.sourceSha256, structuredArtifactsSha256: provenance.structuredArtifactsSha256 });
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return paper;
 }
@@ -159,7 +159,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
             metadataPath: icmlMetadata, metadataSha256: icmlMetadataSha, pdfPath: icmlPdf,
             pdfSha256: icmlPdfSha, pdfBytes: fs.statSync(icmlPdf).size, posterBinding });
     }
-    const catalog = catalogApi.normalizeCatalog({ contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
+    const catalog = catalogApi.normalizeCatalog({ ...require('../scripts/lib/protocol-codec').recordHeader(catalogApi.CONTRACT, 'historical-direct-local-input-catalog'), scope: catalogApi.SCOPE,
         scopeBinding: { inventoryPath: path.join(root, 'inventory.json'), inventorySha256: sha('inventory file'),
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
             arxivPageCount: 2, singleArxivPageCount: 2, dailyPrimaryArxivBindingCount: 0,
@@ -289,15 +289,16 @@ function inputs(f, registryFile = f.firstRegistry) {
 }
 function writeRegistry(filename, registry) { writeJson(filename, registry); }
 function rebasedRegistry(registry, entries) {
-    const body = { contract: registry.contract, version: registry.version, planSha256: registry.planSha256,
+    const body = { ...require('../scripts/lib/protocol-codec').recordHeader(registry.contract, 'historical-direct-rewrite-execution-registry'), planSha256: registry.planSha256,
         createdAt: registry.createdAt, entries };
     return { ...body, registrySha256: runner.stableHash(body) };
 }
 
 test('汇总结果结清每个冻结页面的任务渲染与保持原样覆盖', async t => {
     const f = await fixture(t); const projection = f.projection;
-    assert.equal(projection.contract, 'historical-direct-aggregate-projection-v3');
-    assert.equal(projection.version, 3);
+    const codec = require('../scripts/lib/protocol-codec');
+    assert.equal(projection.contract, direct.PROJECTION_CONTRACT);
+    assert.equal(projection.schemaFingerprint, codec.schemaFingerprint('historical-direct-aggregate-projection'));
     assert.equal(projection.conferenceTaskPages.length, 1);
     assert.deepEqual(projection.conferenceTaskPages[0], {
         pageKey: pageKey('content/posts/icassp2026-task-001.md'),
@@ -309,7 +310,7 @@ test('汇总结果结清每个冻结页面的任务渲染与保持原样覆盖',
         displayLabel: '语音识别',
         requiredPaperIds: ['conference:icassp:2026:icassp-arnumber:100'],
         requiredPageKeys: [pageKey('content/posts/conference-paper.md')],
-        membershipEvidence: { contract: 'frozen-conference-task-link-topology-v1',
+        membershipEvidence: { ...codec.recordHeader(codec.contract('frozen-conference-task-link-topology'), 'frozen-conference-task-link-topology'),
             inventoryPageSha256: f.inventory.pages.find(page => page.kind === 'conference-task').contentSha256,
             links: [{ ordinal: 1, targetPageKey: pageKey('content/posts/conference-paper.md'),
                 targetRecordSha256: sha('conference-record'), targetRawSha256: sha('conference-raw') }],
@@ -317,13 +318,13 @@ test('汇总结果结清每个冻结页面的任务渲染与保持原样覆盖',
                 targetPageKey: pageKey('content/posts/conference-paper.md'),
                 targetRecordSha256: sha('conference-record'), targetRawSha256: sha('conference-raw') }]) },
         status: 'planned',
-        rendererSupport: 'historical-conference-task-reader-facing-v1',
+        rendererSupport: codec.contract('historical-conference-task-reader-facing'),
         publicationDisposition: 'rewrite',
         reason: null
     });
     assert.equal(projection.conferenceTaskPageSetSha256, direct.stableHash(projection.conferenceTaskPages));
     assert.equal(projection.conferenceTaskCoverage.status, 'complete');
-    assert.equal(projection.conferenceTaskCoverage.rendererSupport, 'historical-conference-task-reader-facing-v1');
+    assert.equal(projection.conferenceTaskCoverage.rendererSupport, codec.contract('historical-conference-task-reader-facing'));
     assert.equal(projection.conferenceTaskCoverage.publicationReady, true);
     assert.equal(projection.conferenceTaskCoverage.total, 1);
     assert.equal(projection.conferenceTaskCoverage.pending, 0);
@@ -381,7 +382,7 @@ test('直接汇总接受完整的当日分组，并生成绑定来源代次的 M
     assert.equal(Object.hasOwn(aggregate.source.sourceGeneration, 'historicalVersions'), false);
     assert.ok(aggregate.members.every(member => !Object.hasOwn(member, 'sourceVersion')));
     assert.doesNotMatch(aggregate.markdown, /当前稿不可用|分析官方历史版本/);
-    assert.match(aggregate.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags-v2"/);
+    assert.match(aggregate.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags"/);
     assert.doesNotMatch(aggregate.markdown, /^paper_digest_taxonomy_/m);
     assert.match(aggregate.markdown, /paper_digest_tags_registry_sha256: "[a-f0-9]{64}"/);
     assert.match(aggregate.markdown, /站点标签页同时显示历史标签与新标签/);
@@ -441,7 +442,7 @@ test('直接汇总展示已核验的历史 arXiv 版本，拒绝版本警告被�
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     const versioned = aggregate.members.find(member => member.paperId === 'arxiv:2608.00001');
     const ordinary = aggregate.members.find(member => member.paperId === 'arxiv:2608.00002');
-    assert.equal(versioned.sourceVersion.contract, 'arxiv-historical-version-source-v1');
+    assert.equal(versioned.sourceVersion.contract, require('../scripts/lib/protocol-codec').contract('arxiv-historical-version-source'));
     assert.equal(versioned.sourceVersion.selectedSourceId, '2608.00001v2');
     assert.equal(versioned.sourceVersion.selectedPdfUrl, 'https://arxiv.org/pdf/2608.00001v2.pdf');
     assert.equal(Object.hasOwn(ordinary, 'sourceVersion'), false);
@@ -482,13 +483,13 @@ test('直接汇总为当日 arXiv 与 ICML 混合分组签署显式来源绑定'
         'conference:icml:2026:openreview-forum-id:Icml_123'
     ]);
     const binding = aggregate.source.sourceGeneration;
-    assert.equal(binding.contract, 'historical-direct-mixed-source-v1');
-    assert.equal(binding.version, 1);
-    assert.equal(binding.arxiv.contract, 'fresh-arxiv-generation-v1');
+    assert.equal(binding.contract, require('../scripts/lib/protocol-codec').contract('historical-direct-mixed-source'));
+    assert.equal(binding.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('historical-direct-mixed-source'));
+    assert.equal(binding.arxiv.contract, require('../scripts/lib/protocol-codec').contract('fresh-arxiv-generation'));
     assert.equal(binding.arxiv.generation, 1);
     assert.equal(binding.arxiv.sources.length, 2);
     assert.equal(binding.arxiv.sourceSetSha256, direct.stableHash(binding.arxiv.sources));
-    assert.equal(binding.conference.contract, 'retained-local-conference-pdf-v1');
+    assert.equal(binding.conference.contract, require('../scripts/lib/protocol-codec').contract('retained-local-conference-pdf'));
     assert.equal(binding.conference.generation, null);
     assert.deepEqual(binding.conference.sources.map(item => item.paperId),
         ['conference:icml:2026:openreview-forum-id:Icml_123']);
@@ -501,7 +502,7 @@ test('混合当日来源凭证保留带条件的历史版本身份', async t => 
     const f = await fixture(t, { mixedDailyConference: true, historicalVersion: true });
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     const binding = aggregate.source.sourceGeneration;
-    assert.equal(binding.contract, 'historical-direct-mixed-source-v1');
+    assert.equal(binding.contract, require('../scripts/lib/protocol-codec').contract('historical-direct-mixed-source'));
     assert.equal(binding.arxiv.historicalVersions.length, 1);
     assert.equal(binding.arxiv.historicalVersions[0].selectedSourceId, '2608.00001v2');
     const source = binding.arxiv.sources.find(item => item.paperId === 'arxiv:2608.00001');
@@ -562,7 +563,7 @@ test('直接汇总生成完整的本地留存会议汇总', async t => {
     assert.equal(aggregate.outputPage.path, 'content/posts/icassp-2026.md');
     assert.equal(aggregate.members.length, 1);
     assert.equal(aggregate.members[0].paperId, 'conference:icassp:2026:icassp-arnumber:100');
-    assert.equal(aggregate.source.sourceGeneration.contract, 'retained-local-conference-pdf-v1');
+    assert.equal(aggregate.source.sourceGeneration.contract, require('../scripts/lib/protocol-codec').contract('retained-local-conference-pdf'));
     assert.equal(aggregate.source.sourceGeneration.generation, null);
     assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);
     assert.equal(aggregate.source.conferenceTaskPublicationReady, true);

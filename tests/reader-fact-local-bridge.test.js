@@ -62,7 +62,7 @@ test('两份真实签名稿经公共刷新入口派生六目标和新提示词�
         const deep = require('../scripts/deep-analyzer');
         const daily = require('../scripts/lib/daily-fresh-source-plan');
         const facts = require('../scripts/lib/daily-fact-review');
-        const prompts = require('../scripts/lib/prompt-text-versions');
+        const prompts = require('../scripts/lib/prompt-contracts');
         const utils = require('../scripts/utils');
         const publicRefresh = require('../scripts/refresh-api-reader').refreshApiReader;
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-real-bridge-public-'));

@@ -68,6 +68,8 @@
 
 这个入口为已核对的失败稿登记明确的新一轮付费尝试。登记依据已有任务授权，不是每轮重新索取用户批准；仍不改旧费用、不抹去旧次数，也不因为改了代码或提示词就隐式新增窗口。
 
+恢复已有窗口时，程序按回执和候选实际保存的格式核验，并要求两份记录的格式一致。旧回执、原稿、已发请求及费用仍按其原字节和原额度核对。当前格式的结构指纹只用于识别记录，不能据此更换原输入或领取额外次数。
+
 首个显式窗口前，两次正常全文响应均已保存但最终只留下完整 JSON 的结构初验失败、没有可解析正文或可局部恢复的元数据时，全文额度已经技术耗尽。
 
 程序核对原候选的 2 次内容与 2 次全文、结构问题签名和实际 `READER_FULL_ATTEMPTS_EXHAUSTED` 停止字段后，允许使用已有任务授权登记首窗；仍须逐项核验同源、论文锁、输入与原稿 CAS、显式清单及新窗 3 次内容／1 次全文／6 次实际请求／80000 输出 token 上限。
@@ -116,7 +118,7 @@ npm run batch -- --refresh-reader-diagnostics
 
 已经完成并保存完整来源与事实证明的核心摘要，后续由普通保存反馈恢复入口继续。原付费摘要 UUID 用于明确重验该原响应，不应在摘要完成后逐轮强制重放；缺失原反馈或摘要再次不合格时仍须停止核查，不能删掉约束。
 
-清单顶层写实际 `batchDate`、`runId` 和 `rounds`。每项包含 `contract: reader-explicit-paid-retry-round-v1`、规范 `paperId`、唯一 UUID `roundId`、同一批次和运行、四个 `sourceFiles` SHA、当前 `wholeSha256`、实际最终 `identitySha256`，以及旧记录的 `originalIdentitySha256`、`envelopeSha256`、`payloadSha256`。
+清单顶层写实际 `batchDate`、`runId` 和 `rounds`。每项以 `reader-explicit-paid-retry-round` 合同和对应的 `schemaFingerprint` 开头。用 `protocol-codec.recordHeader` 生成这两个字段。每项还包含规范 `paperId`、唯一 UUID `roundId`、同一批次和运行、四个 `sourceFiles` SHA、当前 `wholeSha256`、实际最终 `identitySha256`，以及旧记录的 `originalIdentitySha256`、`envelopeSha256`、`payloadSha256`。
 
 这几项表示不同对象，不能互换。预算固定为 `maxResponses: 3`、`maxFullResponses: 1`、`maxPhysicalRequests: 6`、`maxReservedOutputTokens: 80000`。
 
@@ -182,13 +184,13 @@ npm run batch -- --refresh-reader-diagnostics
 
 ### 原窗口用尽后，局部窗口与追加窗口怎样区分
 
-原付费轮确实耗尽后，若仍保有完整失败稿，可以核验并登记一次仅修改局部内容的后续轮。其清单使用 `reader-explicit-parent-local-repair-v1`，额外绑定原轮的 `parentRoundId` 和 `parentReceiptSha256`；其余来源、正文和原稿证明仍须完整核验。
+原付费轮确实耗尽后，若仍保有完整失败稿，可以核验并登记一次仅修改局部内容的后续轮。其清单使用 `reader-explicit-parent-local-repair` 合同及对应的结构指纹，额外绑定原轮的 `parentRoundId` 和 `parentReceiptSha256`；其余来源、正文和原稿证明仍须完整核验。
 
 这个旧协议仍只允许同一原轮有一个直接后续轮，不能再用同一旧协议从后续轮派生新轮；需要继续修复时必须使用下面的有界追加协议并重新核验清单，普通续跑不会自动创建新窗口。已有持续付费授权无需逐轮重新确认。
 
 后续轮固定最多保存 1 次修改、发出 2 次实际请求，累计预留 32000 输出 token，完整重写次数为 0。它保留原稿，只允许正常的 `apiReaderRepair` 请求；请求发送前登记费用，保存前中断也不退还额度。原轮的请求记录、次数和原始文件保持不变；新增费用单独记录，不能说总花费没有增加。原轮尚有正常余额、只有半篇稿、原凭证变化或来源不一致时不允许开启。
 
-已付费轮或上述旧局部轮用完额度后，`lib/reader-parent-recovery.js` 提供 `reader-explicit-parent-recovery-v1`。
+已付费轮或上述旧局部轮用完额度后，`lib/reader-parent-recovery.js` 生成 `reader-explicit-parent-recovery` 合同及对应的结构指纹。
 
 `mode: local` 必须保有完整可修正文，最多保存 3 次局部修改、发出 6 次实际请求、预留 96000 输出 token，不允许完整重写。
 

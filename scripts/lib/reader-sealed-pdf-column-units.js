@@ -71,7 +71,7 @@ function deriveBundle(expectation, view, quotes) {
 function coverage(table, quotes) {
     const quoteApi = require('./reader-sealed-pdf-quote-evidence'), context = quoteApi.verifiedSourceContext();
     if (!context) return [];
-    const pdf = quotes.filter(item => item && typeof item === 'object' && item.contract === quoteApi.CONTRACT);
+    const pdf = quotes.filter(quoteApi.isQuote);
     if (!pdf.length) return [];
     // Every bound quote is replayed; a model string/boolean cannot claim this capability.
     pdf.forEach(proof => quoteApi.assertQuoteEvidence(proof));

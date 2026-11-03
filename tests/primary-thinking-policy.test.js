@@ -51,7 +51,7 @@ test('旧完整检查点按原配方保留，新声明与指纹不符及缺检�
     const program = `
 const assert = require('node:assert/strict');
 const deep = require('./scripts/deep-analyzer.js');
-const registry = require('./scripts/lib/prompt-text-versions.js');
+const registry = require('./scripts/lib/prompt-contracts.js');
 const contract = registry.currentPromptTextContract('primaryAnalysis');
 const paper = { arxivId: '2610.90091', title: '语音方法', authors: ['A'], categories: ['cs.SD'], analysisCheckpoint: '真实已保存正文', analysisStageCheckpoints: { primaryAnalysis: '真实已保存正文' } };
 const oldFingerprint = deep.buildPrimaryAnalysisBaseFingerprint(contract, paper, '原来源', paper.arxivId);

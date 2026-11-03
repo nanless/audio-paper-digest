@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import unittest
 
 from test_publish_to_blog import publish_to_blog as publish
@@ -25,11 +26,26 @@ class PdfSelectionPublicationTests(unittest.TestCase):
         candidate_file = Path(data['candidateFile'])
         before = candidate_file.read_bytes()
         self.assertEqual(hashlib.sha256(before).hexdigest(), data['candidateSha256'])
-        paper = copy.deepcopy(data['paperInput'])
-        paper['apiReaderPlan'] = data['result']['plan']
-        paper['apiReaderArticle'] = data['result']['article']
+        # Actual normal parser + actual sealed author source, with models/network
+        # forbidden in the child. These views retain invalid_output stage status:
+        # they exercise source components, not manufacture complete paid papers.
+        views = json.loads(subprocess.check_output(['node', str(Path(__file__).resolve().parents[1]
+            / 'helpers/reader-pdf-selection-source-views.cjs')], cwd=Path(__file__).resolve().parents[2],
+            timeout=90))
+        self.assertEqual(views[0]['apiReaderArticle'], data['result']['article'])
+        self.assertEqual(views[0]['apiReaderPlan'], data['result']['plan'])
+        self.assertEqual(views[1]['apiReaderArticle'], views[0]['apiReaderArticle'])
+        for view in views:
+            self._check_source_view(view)
+        self.assertEqual(candidate_file.read_bytes(), before)
+
+    def _check_source_view(self, paper):
+        def replay_source(view):
+            marked, source_dir, _, _ = publish._read_reader_sealed_pdf_grid_source(view)
+            return publish._replay_reader_sealed_pdf_grid(view, marked, source_dir)
+
         original = copy.deepcopy(paper)
-        values = publish._verify_reader_sealed_pdf_grid_bindings(paper)
+        values = replay_source(paper)
         self.assertEqual(len(values), 4)
         self.assertEqual(values[2][(1, 1)], '5.87')
         self.assertEqual(values[4][(1, 3)], '4.74')
@@ -39,24 +55,18 @@ class PdfSelectionPublicationTests(unittest.TestCase):
                        lambda b: b['sealedPdfTableEvidence'].update(pdfSha256='a'*64),
                        lambda b: b['cellBindings'].pop(),
                        lambda b: b['sealedPdfTableSelection'].update(sourceRows=[0, 1]),
-                       lambda b: b.pop('sealedPdfTableSelection')]:
+                       lambda b: b.pop('sealedPdfTableSelection'),
+                       lambda b: b['sealedPdfTableEvidence'].update(schemaFingerprint='f'*64),
+                       lambda b: b['sealedPdfTableSelection'].update(schemaFingerprint='f'*64)]:
             changed = copy.deepcopy(paper)
             mutate(changed['apiReaderPlan']['tableBindings'][0])
             with self.assertRaises(publish.PublishDataValidationError):
-                publish._verify_reader_sealed_pdf_grid_bindings(changed)
-        # Source-binding validation also checks actual rendered values and its
-        # normal whole-plan hash; this local test view never changes production.
-        source = paper['analysisManifest']['sourceAcquisition']
-        bindings_sha = publish._stable_json_sha256({'tableBindings': paper['apiReaderPlan']['tableBindings'],
-                                                  'formulaBindings': paper['apiReaderPlan']['formulaBindings']})
-        paper['apiReaderPlan']['sourceBindingsSha256'] = bindings_sha
-        paper['analysisManifest']['contracts']['apiReaderSourceBindings'] = 'api-reader-source-bindings-v4'
-        stage = paper['analysisManifest']['stages']['apiReaderArticle']
-        stage.update(sourceBindingsSha256=bindings_sha, sourceBindingsContractVersion='api-reader-source-bindings-v4',
-                     sourceBindingsSourceTextSha256=source['sourceSha256'],
-                     structuredArtifactsSha256=source['structuredArtifactsSha256'],
-                     tableBindingCount=4, formulaBindingCount=len(paper['apiReaderPlan']['formulaBindings']))
-        publish._validate_api_reader_source_bindings(paper)
+                replay_source(changed)
+        # A historical draft is not today's completed article. In particular,
+        # the live source run has a later real completion index; the full
+        # publisher must refuse this earlier component view in both formats.
+        with self.assertRaisesRegex(publish.PublishDataValidationError, '资源可用性宣称未通过封存来源核验'):
+            publish._verify_reader_sealed_pdf_grid_bindings(paper)
         changed = copy.deepcopy(paper)
         changed['apiReaderArticle'] = changed['apiReaderArticle'].replace('| Long Context | 5.87 |', '| Long Context | 9.99 |')
         table = publish._api_reader_markdown_tables(changed['apiReaderArticle'])[1]
@@ -65,9 +75,11 @@ class PdfSelectionPublicationTests(unittest.TestCase):
         changed['apiReaderPlan']['sourceBindingsSha256'] = publish._stable_json_sha256({
             'tableBindings': changed['apiReaderPlan']['tableBindings'], 'formulaBindings': changed['apiReaderPlan']['formulaBindings']})
         changed['analysisManifest']['stages']['apiReaderArticle']['sourceBindingsSha256'] = changed['apiReaderPlan']['sourceBindingsSha256']
+        # This component produces the authoritative source value, never the
+        # supplied rendered text. The whole publisher still refuses the view.
+        self.assertEqual(replay_source(changed)[2][(1, 1)], '5.87')
         with self.assertRaises(publish.PublishDataValidationError):
             publish._validate_api_reader_source_bindings(changed)
-        self.assertEqual(candidate_file.read_bytes(), before)
 
 
 if __name__ == '__main__':

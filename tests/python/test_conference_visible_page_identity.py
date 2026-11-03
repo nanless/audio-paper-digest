@@ -47,11 +47,16 @@ class VisibleIdentityTests(unittest.TestCase):
             'paper_digest_tags_contract: paper-tag-flat-tags-v2\n'
             'paper_digest_tags_concepts: [{id: task, facet: task, label: 语音任务}]\n---\n同一正文。\n')
         good = self.page().replace('<a href=', '<li data-classification-concept="task" data-direct-classification="true"><a href=').replace('</a></div>', '</a></li></div>')
-        self.assertIn('pageIdentitySha256', gate.inspect_html(markdown, good, [], 'https://example.invalid/images'))
-        for html in (self.page(), good.replace('data-direct-classification="true"', ''),
-                     good.replace('facet="task"','facet="method"'), good.replace('语音任务','错误标签')):
-            with self.subTest(html=html), self.assertRaisesRegex(ValueError, '分类'):
-                gate.inspect_html(markdown, html, [], 'https://example.invalid/images')
+        header=gate.protocols.record_header('paper-tag-flat-tags','paper-tag-flat-tags')
+        current=markdown.replace('paper-tag-flat-tags-v2',header['contract']+'\npaper_digest_tags_schema_fingerprint: '+header['schemaFingerprint'])
+        for source in (markdown,current,current.replace('paper_digest_tags_','paper_digest_taxonomy_')):
+            self.assertIn('pageIdentitySha256', gate.inspect_html(source, good, [], 'https://example.invalid/images'))
+            for html in (self.page(), good.replace('data-direct-classification="true"', ''),
+                         good.replace('facet="task"','facet="method"'), good.replace('语音任务','错误标签')):
+                with self.subTest(source=source,html=html), self.assertRaisesRegex(ValueError, '分类'):
+                    gate.inspect_html(source, html, [], 'https://example.invalid/images')
+        with self.assertRaisesRegex(ValueError,'结构指纹'):
+            gate.inspect_html(current.replace(header['schemaFingerprint'],'0'*64),good,[],'https://example.invalid/images')
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+const { matchesRunProvenance } = require('./lib/daily-source-format');
+const qualityFormats = require('./lib/analysis-quality-format');
 const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 
@@ -7,7 +9,9 @@ const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
 const { validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
-const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
+const { KEYWORD_PREFILTER_PROFILE } = require('./lib/keyword-prefilter.js');
+const { originalKeywordMetadata } = require('./lib/workflow-legacy-codec');
+const { isDeepStrictEqual } = require('node:util');
 const {
     readJsonSafe,
     normalizedId,
@@ -21,8 +25,6 @@ const {
 } = require('./utils.js');
 const {
     getInvalidAnalysisReason,
-    EXPERIMENT_TABLE_CONTRACT_VERSIONS,
-    METHOD_DETAIL_CONTRACT_VERSION,
     analysisManifestRequiresExperimentTableContract,
     analysisManifestRequiresMethodDetailContract,
     REQUIRED_RECOVERY_STAGES,
@@ -30,9 +32,9 @@ const {
     validateCoreSummaryStageBinding,
     validateTagStageProof,
     MANUAL_COMPLETE_STATUS,
-    MANUAL_DEPTH_CONTRACT_VERSION_V4,
-    MANUAL_DEPTH_CONTRACT_VERSION_V5,
-    MANUAL_DEPTH_CONTRACT_VERSIONS,
+    MANUAL_DEPTH_READER_QUALITY_CONTRACT,
+    MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
+    MANUAL_DEPTH_CONTRACTS,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 const {
@@ -40,7 +42,7 @@ const {
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
     scoringStabilityIsResolved,
-    hasValidApiReaderV3Records
+    hasValidIntegratedApiReaderRecords
 } = require('./analysis-engine.js');
 const {
     MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
@@ -426,7 +428,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         addIssue(issues, filePath, `${prefix} 必须是对象`);
         return;
     }
-    if (manifest.version !== 1) addIssue(issues, filePath, `${prefix}.version 必须为 1`);
+    if (!qualityFormats.manifestHeader(manifest)) addIssue(issues, filePath, `${prefix} 声明格式或结构指纹无效`);
     if (!isPlainObject(manifest.stages)) {
         addIssue(issues, filePath, `${prefix}.stages 必须是对象`);
         return;
@@ -446,7 +448,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
             addIssue(issues, filePath, `${prefix}.contracts 必须是对象`);
         } else {
             if (manifest.contracts.experimentTables !== undefined
-                    && !EXPERIMENT_TABLE_CONTRACT_VERSIONS.includes(manifest.contracts.experimentTables)) {
+                    && !qualityFormats.profile('experiment-tables', manifest.contracts.experimentTables)) {
                 addIssue(
                     issues,
                     filePath,
@@ -454,7 +456,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
                 );
             }
             if (manifest.contracts.methodDetail !== undefined
-                    && manifest.contracts.methodDetail !== METHOD_DETAIL_CONTRACT_VERSION) {
+                    && !qualityFormats.profile('method-detail', manifest.contracts.methodDetail)) {
                 addIssue(
                     issues,
                     filePath,
@@ -510,7 +512,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         }
     }
     const scoring = manifest.stages.scoringAudit;
-    if (scoring?.scoringContract === 'api-scoring-audit-v2') {
+    if (require('./lib/scoring-record-format').hasScoringAuditFormat(scoring)) {
         if (!scoringStabilityIsResolved(scoring)) {
             addIssue(
                 issues,
@@ -518,7 +520,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
                 `${prefix}.stages.scoringAudit 评分稳定性告警尚未形成有效二次审计 resolution`
             );
         }
-        if (options.requireComplete && !hasValidApiReaderV3Records(options.paper)) {
+        if (options.requireComplete && !hasValidIntegratedApiReaderRecords(options.paper)) {
             addIssue(
                 issues,
                 filePath,
@@ -599,7 +601,7 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
             const descriptor = details.freshSourceDescriptor;
             const proof = paper.freshRewriteProvenance;
             const manifestProof = paper.analysisManifest?.freshRewriteProvenance;
-            if (!proof || proof.contract !== 'fresh-source-analysis-v1' || proof.runId !== plan.runId
+            if (!matchesRunProvenance(plan, proof) || proof.runId !== plan.runId
                 || proof.sourceGeneration !== dailyFreshSources.SOURCE_GENERATION
                 || proof.sourceManifestSha256 !== descriptor.sourceManifestSha256
                 || proof.sourceSha256 !== descriptor.sourceSha256
@@ -618,9 +620,9 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
     return issues.length === initialIssueCount ? sourceTexts : new Map();
 }
 
-function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
+function loadBoundStructuredManualSourceText(filePath, batchDate, paper, paperIndex) {
     const manifest = paper?.analysisManifest;
-    if (![MANUAL_DEPTH_CONTRACT_VERSION_V4, MANUAL_DEPTH_CONTRACT_VERSION_V5]
+    if (![MANUAL_DEPTH_READER_QUALITY_CONTRACT, MANUAL_DEPTH_FACT_COVERAGE_CONTRACT]
         .includes(manifest?.contracts?.manualDepth)) {
         return { required: false, sourceText: '' };
     }
@@ -1000,7 +1002,7 @@ function validatePaperListFile(filePath, options = {}) {
                 && isLegacyApiAnalysisSuccessForReadOnlyValidation(paper);
             // A declared daily bundle must pass its own complete source checks;
             // a broken bundle cannot fall back to an older manual text.
-            const manualSource = declaresDailySource ? { sourceText: '' } : loadBoundManualV4SourceText(
+            const manualSource = declaresDailySource ? { sourceText: '' } : loadBoundStructuredManualSourceText(
                 filePath,
                 Array.isArray(data) ? undefined : data.batchDate,
                 paper,
@@ -1020,7 +1022,7 @@ function validatePaperListFile(filePath, options = {}) {
                     enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                         paper.analysisManifest
                     ),
-                    enforceManualDepthContract: MANUAL_DEPTH_CONTRACT_VERSIONS.includes(
+                    enforceManualDepthContract: MANUAL_DEPTH_CONTRACTS.includes(
                         manualDepthContractVersion
                     ),
                     manualDepthContractVersion,
@@ -1251,8 +1253,12 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
             if (decision.related !== false) {
                 addIssue(issues, filePath, `decisions.${key} 的 keyword_prefilter 决定只能是 related=false`);
             }
-            if (decision.keywordPrefilterVersion !== KEYWORD_PREFILTER_VERSION) {
-                addIssue(issues, filePath, `decisions.${key}.keywordPrefilterVersion 必须为当前版本 ${KEYWORD_PREFILTER_VERSION}`);
+            const currentProfile = !Object.hasOwn(decision, 'keywordPrefilterVersion')
+                && isDeepStrictEqual(decision.keywordPrefilterProfile, KEYWORD_PREFILTER_PROFILE);
+            const historicalProfile = !Object.hasOwn(decision, 'keywordPrefilterProfile')
+                && decision.keywordPrefilterVersion === originalKeywordMetadata().keywordPrefilterVersion;
+            if (!currentProfile && !historicalProfile) {
+                addIssue(issues, filePath, `decisions.${key} 的关键词身份必须是当前完整实现身份或已登记的原历史身份`);
             }
             for (const field of ['keywordMatchedGroups', 'keywordMatchedKeywords']) {
                 if (!Array.isArray(decision[field]) || decision[field].some(item => typeof item !== 'string')) {
@@ -1904,7 +1910,7 @@ module.exports = {
     validateFilteredDeepPapersConsistency,
     validateSourceHealth,
     validateDailyFreshSourceRun,
-    loadBoundManualV4SourceText,
+    loadBoundStructuredManualSourceText,
     resolveManualPaperIdentityMode,
     hasAnyCurrentDataFiles
 };

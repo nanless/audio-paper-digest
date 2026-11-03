@@ -12,9 +12,10 @@ const engine = require('../analysis-engine.js');
 const processApi = require('./conference-process.js');
 const processCli = require('../conference-process.js');
 
-const CONTRACT = 'conference-queue-v1';
-const PLAN_CONTRACT = 'conference-queue-plan-v1';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('conference-queue');
+const PLAN_CONTRACT = codec.contract('conference-queue-plan');
 const MAX_CONCURRENCY = 3;
 const STAGES = Object.freeze(['process', 'generate', 'review', 'push', 'verify']);
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -22,7 +23,8 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}\.json$/;
 const CONFERENCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
 const HEX40_RE = /^[a-f0-9]{40}$/;
-const GATE_CONTRACT = 'conference-publication-mechanical-gate-v1';
+const GATE_CONTRACT = 'conference-publication-mechanical-gate';
+const currentQueueHeader = () => codec.recordHeader(CONTRACT, CONTRACT);
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const hash = value => processApi.stableHash(value);
@@ -93,10 +95,10 @@ function normalizePlan(input) {
     const body = clone(input);
     const declared = body.planSha256;
     delete body.planSha256;
-    if (body.contract !== PLAN_CONTRACT || body.version !== VERSION || !Array.isArray(body.conferences)) {
+    if (!codec.hasValidHeader(body, PLAN_CONTRACT) || !Array.isArray(body.conferences)) {
         fail('会议队列计划的 contract/version/conferences 无效');
     }
-    const allowedPlanKeys = new Set(['contract', 'version', 'conferences']);
+    const allowedPlanKeys = new Set([...Object.keys(recordHeaderFor(body, PLAN_CONTRACT)), 'conferences']);
     if (Object.keys(body).some(key => !allowedPlanKeys.has(key))) fail('会议队列计划含有未知字段');
     const conferences = body.conferences.map((raw, index) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`会议计划条目 ${index} 无效`);
@@ -136,9 +138,14 @@ function loadPlan(filename) {
     return normalizePlan(readSafeJson(filename, 'conference queue plan'));
 }
 
-function queueIdForPlan(planSha256) {
-    assertSha(planSha256, 'planSha256');
-    return processApi.deterministicUuid(CONTRACT, planSha256);
+function queueIdForPlan(plan) {
+    const header = recordHeaderFor(plan, PLAN_CONTRACT);
+    assertSha(plan.planSha256, 'planSha256');
+    // Saved queue folders keep the original domain of their exact plan.
+    const domain = header.schemaFingerprint
+        ? hash({ queuePlanFormat: header })
+        : codec.historicalHeader(CONTRACT, 'bounded-process-and-publication-sequence').contract;
+    return processApi.deterministicUuid(domain, plan.planSha256);
 }
 
 function queueDirectory(files, queueId, create) {
@@ -172,7 +179,7 @@ function stateEntryInput(entry) {
 
 function initialState(plan, queueId, now) {
     return {
-        contract: CONTRACT, version: VERSION, queueId, planSha256: plan.planSha256,
+        ...currentQueueHeader(), queueId, planSha256: plan.planSha256,
         status: 'pending', generation: 0, createdAt: now, updatedAt: now,
         entries: plan.conferences.map(entry => ({ ...stateEntryInput(entry), status: 'pending', stage: 'process',
             processId: null, receipts: {}, legacyPublished: false, failure: null, blocked: null })), stateSha256: null
@@ -180,7 +187,7 @@ function initialState(plan, queueId, now) {
 }
 
 function assertState(value, plan, queueId) {
-    if (!value || value.contract !== CONTRACT || value.version !== VERSION || value.queueId !== queueId
+    if (!codec.hasValidHeader(value, CONTRACT) || value.queueId !== queueId
         || value.planSha256 !== plan.planSha256 || !Array.isArray(value.entries)
         || !['pending', 'running', 'paused', 'complete'].includes(value.status)
         || !Number.isInteger(value.generation) || typeof value.createdAt !== 'string'
@@ -271,6 +278,25 @@ function digestKeyFor(action, receipt, context = {}) {
     return candidates.find(key => Object.hasOwn(receipt, key)) || null;
 }
 
+function publicationFormat(receipt, name, variant = null) {
+    // These four historical receipt families explicitly used the numeric
+    // header field as selector; the stable envelope has its own fingerprint.
+    const selector = Object.hasOwn(receipt || {}, 'schemaFingerprint') ? 'contract' : 'version';
+    if (!codec.hasValidHeader(receipt, name, selector)) return false;
+    return variant === null || codec.format(receipt[selector], name, receipt.schemaFingerprint) === variant;
+}
+
+function validMechanicalGate(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const header = { ...value };
+    // Original HTML proof names the actual Hugo software release "version".
+    // It is body data; a current mechanical record may only use hugoVersion.
+    if (!Object.hasOwn(header, 'schemaFingerprint') && typeof header.version === 'string') {
+        delete header.version;
+    }
+    return codec.hasValidHeader(header, GATE_CONTRACT);
+}
+
 function validateReceipt(action, receipt, entry, processId) {
     if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) fail(`缺少 ${action} receipt`);
     if (receipt.conferenceId !== entry.conferenceId || receipt.processId !== processId) {
@@ -281,20 +307,20 @@ function validateReceipt(action, receipt, entry, processId) {
     const body = clone(receipt); delete body[digestKey];
     if (hash(body) !== receipt[digestKey]) fail(`${action} receipt self-SHA mismatch`);
     if (action === 'generate') {
-        if (receipt.contract !== 'conference-blog-generation-v1' || receipt.version !== 2
+        if (!publicationFormat(receipt, 'conference-blog-generation', 'external-images')
             || !SHA_RE.test(String(receipt.completionReceiptSha256 || ''))) fail('generation 凭证的 contract 无效');
     } else if (action === 'review') {
-        if (receipt.contract !== 'conference-blog-review-v1' || receipt.version !== 2
+        if (!publicationFormat(receipt, 'conference-blog-review')
             || !SHA_RE.test(String(receipt.generationSha256 || ''))
-            || receipt.hugo?.status !== 'passed' || receipt.hugo?.contract !== GATE_CONTRACT) fail('review 凭证的 contract 无效');
+            || receipt.hugo?.status !== 'passed' || !validMechanicalGate(receipt.hugo)) fail('review 凭证的 contract 无效');
     } else if (action === 'push') {
-        if (receipt.contract !== 'conference-blog-publish-v1' || receipt.version !== 2
+        if (!publicationFormat(receipt, 'conference-blog-publish')
             || !SHA_RE.test(String(receipt.generationSha256 || '')) || !SHA_RE.test(String(receipt.reviewSha256 || ''))
             || !HEX40_RE.test(String(receipt.publicationCommit || ''))
             || !HEX40_RE.test(String(receipt.remoteVerifiedOid || ''))
             || !HEX40_RE.test(String(receipt.imagePublicationCommit || ''))
             || receipt.urlAcceptance?.status !== 'passed'
-            || receipt.urlAcceptance?.contract !== GATE_CONTRACT
+            || !validMechanicalGate(receipt.urlAcceptance)
             || !Array.isArray(receipt.urlAcceptance?.checks)) fail('publish 凭证的 v2/urlAcceptance contract 无效');
     } else {
         // Kuhn 的公开 verify 动作返回 publication_state；持久的凭证仍是 publish.json v2。
@@ -304,29 +330,32 @@ function validateReceipt(action, receipt, entry, processId) {
     return receipt;
 }
 
-function validatePublicationVerificationResult(result, entry, processId, legacy = false) {
+function validatePublicationVerificationResult(result, entry, processId, legacy = false, receipt = null) {
     const layers = result?.layers || {};
     const passed = ['htmlMechanical', 'remoteOid', 'onlineUrls'].every(key => layers[key] === 'passed');
-    const untouched = ['semanticReview', 'visualInspection', 'mathBrowserExecution']
+    const untouched = ['visualInspection', 'mathBrowserExecution']
         .every(key => layers[key] === 'not_performed');
-    if (!result || typeof result !== 'object' || result.contract !== 'conference-publication-status-v1'
+    const content = legacy ? layers.semanticReview === 'not_performed'
+        : receipt?.schemaFingerprint ? layers.semanticReview === 'passed'
+            : ['passed', 'not_performed'].includes(layers.semanticReview);
+    if (!result || typeof result !== 'object' || !codec.hasValidHeader(result, 'conference-publication-status')
         || result.conferenceId !== entry.conferenceId || result.processId !== processId
         || result.status !== 'complete' || result.complete !== true
         || result.processingRequired !== false || result.nextAction !== null
         || result.completionScope !== 'mechanical-html+remote-oid+online-urls'
-        || !passed || !untouched || (legacy ? result.legacyReverified !== true : result.legacyReverified === true)) {
+        || !passed || !untouched || !content || (legacy ? result.legacyReverified !== true : result.legacyReverified === true)) {
         fail(`发布方 verify 未返回 ${entry.conferenceId} 完整的 publication_state`);
     }
     return result;
 }
 
 function validateLegacyVerification(receipt, entry, processId, publishSha256) {
-    if (!receipt || receipt.contract !== 'conference-legacy-publication-verification-v2'
+    if (!receipt || !codec.hasValidHeader(receipt, 'conference-legacy-publication-verification')
         || receipt.publishSha256 !== publishSha256) fail('旧版核验凭证的 contract 无效');
     const digest = receipt.verificationSha256; const body = clone(receipt); delete body.verificationSha256;
     if (!SHA_RE.test(String(digest || '')) || hash(body) !== digest) fail('legacy verification receipt self-SHA mismatch');
-    if (receipt.hugo?.status !== 'passed' || receipt.hugo?.contract !== GATE_CONTRACT
-        || receipt.urlAcceptance?.status !== 'passed' || receipt.urlAcceptance?.contract !== GATE_CONTRACT) {
+    if (receipt.hugo?.status !== 'passed' || !validMechanicalGate(receipt.hugo)
+        || receipt.urlAcceptance?.status !== 'passed' || !validMechanicalGate(receipt.urlAcceptance)) {
         fail('旧版核验凭证缺少机械化的 HTML/URL 验收结果');
     }
     // 旧凭证有意不带可变的流程身份字段；它的 publish SHA 就是调用方核对的不可变 v1 身份。
@@ -351,9 +380,14 @@ function loadPublicationReceipt(files, entry, processId, action) {
 }
 
 function loadLegacyVerification(files, entry, processId) {
-    const filename = path.join(publicationDirectory(files, entry, processId), 'verification-v2.json');
-    if (!fs.existsSync(filename)) return null;
-    return readSafeJson(filename, 'legacy verification receipt');
+    const directory = publicationDirectory(files, entry, processId);
+    const candidates = ['verification.json', 'verification-v2.json'].map(name => path.join(directory, name))
+        .filter(filename => {
+            try { fs.lstatSync(filename); return true; }
+            catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+        });
+    if (candidates.length > 1) fail('有两份旧发布再验收凭证，不能选择其中一份跳过另一份');
+    return candidates.length ? readSafeJson(candidates[0], 'legacy verification receipt') : null;
 }
 
 function publisherReceipt(action, result, deps, entry, processId, context = {}) {
@@ -363,7 +397,9 @@ function publisherReceipt(action, result, deps, entry, processId, context = {}) 
             return validateLegacyVerification(
                 loadLegacyVerification(deps.files, entry, processId), entry, processId, context.publishSha256);
         }
-        return validateReceipt('push', loadPublicationReceipt(deps.files, entry, processId, 'push'), entry, processId);
+        const published = validateReceipt('push', loadPublicationReceipt(deps.files, entry, processId, 'push'), entry, processId);
+        if (published.publishSha256 !== context.publishSha256) fail('verify 的发布凭证与本队列实际推送记录不一致');
+        return published;
     }
     const keys = action === 'generate' ? ['generationReceipt']
         : action === 'review' ? ['reviewReceipt'] : ['publishReceipt'];
@@ -458,11 +494,11 @@ function publishedCandidates(files, entry, readProcessState = defaultProcessStat
         if (generation.completionReceiptSha256 !== processState.completionReceiptSha256) {
             fail(`published process completion authority drifted for ${entry.conferenceId}`);
         }
-        if (publishReceipt.version === 2 && publishReceipt.generationSha256 !== generation.generationSha256) {
+        if (publicationFormat(publishReceipt, 'conference-blog-publish') && publishReceipt.generationSha256 !== generation.generationSha256) {
             fail(`published generation authority drifted for ${entry.conferenceId}`);
         }
         candidates.push({ publishReceipt, processId: name,
-            ...(publishReceipt.version === 1
+            ...(publicationFormat(publishReceipt, 'conference-blog-commit')
                 ? { verificationReceipt: loadLegacyVerification(files, entry, name) } : {}) });
     }
     return { candidates, unresolved };
@@ -526,7 +562,7 @@ async function callPublisher(deps, action, entry, processId) {
 }
 
 function validateLegacyPublished(receipt, entry, processId) {
-    if (!receipt || receipt.contract !== 'conference-blog-publish-v1' || receipt.version !== 1
+    if (!receipt || !publicationFormat(receipt, 'conference-blog-commit')
         || receipt.conferenceId !== entry.conferenceId || receipt.processId !== processId
         || !HEX40_RE.test(String(receipt.publicationCommit || ''))
         || !HEX40_RE.test(String(receipt.remoteVerifiedOid || ''))) fail('旧版 v1 发布凭证无效');
@@ -542,7 +578,7 @@ async function discoverPublished(deps, entry, processId) {
     const receipt = candidate.publishReceipt || candidate;
     const resolvedProcessId = candidate.processId || receipt.processId || processId;
     assertUuid(resolvedProcessId, 'published processId');
-    const legacy = receipt.version === 1;
+    const legacy = publicationFormat(receipt, 'conference-blog-commit');
     return { processId: resolvedProcessId,
         receipt: legacy ? validateLegacyPublished(receipt, entry, resolvedProcessId)
             : validateReceipt('push', receipt, entry, resolvedProcessId), legacy };
@@ -649,12 +685,12 @@ async function runEntry(state, index, plan, deps, stateFile, options) {
         if (entryState.stage !== action) continue;
         if (!entryState.processId) fail(`${action} 缺少 processId，无法运行`);
         const result = await callPublisher(deps, action, entry, entryState.processId);
-        if (action === 'verify') validatePublicationVerificationResult(
-            result, entry, entryState.processId, state.entries[index].legacyPublished);
         const receipt = publisherReceipt(action, result, deps, entry, entryState.processId, {
             legacy: action === 'verify' && state.entries[index].legacyPublished,
             publishSha256: state.entries[index].receipts.push?.receiptSha256
         });
+        if (action === 'verify') validatePublicationVerificationResult(
+            result, entry, entryState.processId, state.entries[index].legacyPublished, receipt);
         const proof = publisherProof(action, result, receipt, {
             legacy: action === 'verify' && state.entries[index].legacyPublished
         });
@@ -681,7 +717,7 @@ function inspectQueue(options, plan, deps, directory, queueId, stateFile) {
     const operationLock = typeof deps.engine?.inspectFileLockState === 'function'
         ? deps.engine.inspectFileLockState(lockTarget) : null;
     const projected = state || initialState(plan, queueId, (deps.now || nowIso)());
-    return { contract: CONTRACT, version: VERSION, readOnly: true, mode: options.statusOnly ? 'status' : 'dry-run',
+    return { ...currentQueueHeader(), readOnly: true, mode: options.statusOnly ? 'status' : 'dry-run',
         queueId, planSha256: plan.planSha256, status: projected.status, generation: state?.generation ?? null,
         entries: summary(projected), stateSha256: state?.stateSha256 || null,
         stateFile, operationLockTarget: lockTarget, operationLock };
@@ -693,7 +729,7 @@ async function runConferenceQueue(options, overrides = {}) {
     const normalizedOptions = { ...options, mode, apply: mode === 'apply', statusOnly: mode === 'status' };
     const deps = defaultDependencies(overrides);
     const plan = options.plan ? normalizePlan(options.plan) : loadPlan(options.planFile);
-    const queueId = queueIdForPlan(plan.planSha256);
+    const queueId = queueIdForPlan(plan);
     const directory = queueDirectory(deps.files, queueId, normalizedOptions.apply);
     const stateFile = path.join(directory, 'state.json');
     if (!normalizedOptions.apply) return inspectQueue(normalizedOptions, plan, deps, directory, queueId, stateFile);
@@ -708,11 +744,11 @@ async function runConferenceQueue(options, overrides = {}) {
         }
         if (state.status === 'complete') {
             await validateCompletedQueue(state, plan, deps);
-            return { contract: CONTRACT, version: VERSION, mode, queueId,
+            return { ...currentQueueHeader(), mode, queueId,
                 status: 'complete', planSha256: plan.planSha256, entries: summary(state), stateFile };
         }
         if (state.status === 'paused' && !normalizedOptions.retryFailed) {
-            return { contract: CONTRACT, version: VERSION, mode, queueId, status: 'paused',
+            return { ...currentQueueHeader(), mode, queueId, status: 'paused',
                 planSha256: plan.planSha256, entries: summary(state), stateFile, retryRequired: true };
         }
         state.status = 'running'; state = saveState(stateFile, state, deps);
@@ -720,7 +756,7 @@ async function runConferenceQueue(options, overrides = {}) {
             try {
                 const result = await runEntry(state, index, plan, deps, stateFile, normalizedOptions);
                 state = readState(stateFile, plan, queueId);
-                if (result.kind === 'paused') return { contract: CONTRACT, version: VERSION, mode, queueId,
+                if (result.kind === 'paused') return { ...currentQueueHeader(), mode, queueId,
                     status: 'paused', planSha256: plan.planSha256, entries: summary(state), stateFile };
             } catch (error) {
                 // runEntry 会保存执行进度。这里重读最新状态，
@@ -729,18 +765,18 @@ async function runConferenceQueue(options, overrides = {}) {
                 const entry = { ...latest.entries[index], status: 'paused',
                     failure: errorRecord(error, latest.entries[index].stage), blocked: null };
                 latest.entries[index] = entry; latest.status = 'paused'; state = saveState(stateFile, latest, deps);
-                return { contract: CONTRACT, version: VERSION, mode, queueId, status: 'paused',
+                return { ...currentQueueHeader(), mode, queueId, status: 'paused',
                     planSha256: plan.planSha256, entries: summary(state), stateFile };
             }
         }
         state.status = state.entries.length === 0 || state.entries.every(entry => entry.status === 'published')
             ? 'complete' : 'paused';
         state = saveState(stateFile, state, deps);
-        return { contract: CONTRACT, version: VERSION, mode, queueId, status: state.status,
+        return { ...currentQueueHeader(), mode, queueId, status: state.status,
             planSha256: plan.planSha256, entries: summary(state), stateFile };
     }, { recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, PLAN_CONTRACT, VERSION, STAGES, normalizePlan, loadPlan,
+module.exports = { CONTRACT, PLAN_CONTRACT, STAGES, normalizePlan, loadPlan,
     queueIdForPlan, queueDirectory, stateDigest, initialState, assertState, readState, classifyProcessLiveness,
     validateReceipt, validatePublicationVerificationResult, findPublishedReceipt, defaultDependencies, runConferenceQueue };

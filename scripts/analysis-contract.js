@@ -1,6 +1,7 @@
+const { historicalContract: historicalManualContract } = require('./lib/protocol-codec');
 const { CURRENT_MODEL_POLICY, boundModelPolicy, assertAgentIdentity } = require('../manual/scripts/manual-agent-policy.js');
 const crypto = require('crypto');
-const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
+const { TAG_STAGE_RECORD_CONTRACT, tagStageRecordDeclaration, isTagStageRecordDeclaration, readTagStageRecord } = require('./lib/tag-stage-record.js');
 const { sourceBackedSettingAxes, sourceBackedSampleSizeBoundary } = require('./lib/experiment-source-setting-axes.js');
 const {
     PAPER_EVALUATION_TITLE,
@@ -15,13 +16,13 @@ const {
     validateReadabilityRubric
 } = require('./editorial-quality.js');
 const {
-    MANUAL_RESEARCH_CONTRACT_VERSION,
+    MANUAL_RESEARCH_CONTRACT,
     validateResearchBrief,
     validateStageReviews,
     validateFigureReview,
     validateScoringCalibration,
     validateExactFactCoverage,
-    validateResultClaimCoverageV5,
+    validateAttributedResultClaimCoverage,
     validateEditorialReview
 } = require('../manual/scripts/manual-research-contract.js');
 const {
@@ -32,8 +33,8 @@ const {
     FRESH_AUTHORING_MODE
 } = require('../manual/scripts/manual-fresh-authoring-contract.js');
 const {
-    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
-} = require('../manual/scripts/manual-v5-tutorial-payload.js');
+    MANUAL_TUTORIAL_PAYLOAD_CONTRACT
+} = require('../manual/scripts/manual-tutorial-payload.js');
 
 const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '评分',
@@ -84,50 +85,51 @@ const MACHINE_SCORE_MAXIMA = Object.freeze({
 const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1, 1.2, 1.5]);
 const DOCUMENT_TYPES = new Set(['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究']);
 const NON_EMPIRICAL_DOCUMENT_TYPES = new Set(['综述', '理论研究']);
-const EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION = 'bounded-v1';
-const EXPERIMENT_TABLE_CONTRACT_VERSION = 'evidence-rich-v2';
+const qualityFormats = require('./lib/analysis-quality-format');
+const EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION = qualityFormats.original('experiment-tables', 'size-limits-only');
+const EXPERIMENT_TABLE_CONTRACT_VERSION = qualityFormats.original('experiment-tables', 'evidence-rich');
 const EXPERIMENT_TABLE_CONTRACT_VERSIONS = Object.freeze([
     EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
     EXPERIMENT_TABLE_CONTRACT_VERSION
 ]);
-const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
-const EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1';
+const METHOD_DETAIL_CONTRACT_VERSION = qualityFormats.original('method-detail', 'detailed-method');
+const EDITORIAL_QUALITY_CONTRACT_VERSION = qualityFormats.original('manual-editorial-quality', 'original-reader-facing');
 // Manual/离线分析除了要满足 API 分析用的结构约定，还必须带真实全文证据。
 // 这里特意做成单独的可选约定：旧的合法 API 记录继续兼容，
 // 新的 manual 记录则不能缩水成摘要加几句泛泛的过程评述。
-const MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1';
+const MANUAL_DEPTH_SOURCE_CONTRACT = historicalManualContract('manual-analysis-depth', 'baseline-source');
 // v2 根据 2026-08-20 批次的问题增加 manual 分析正文检查：跨章节重复、
 // 编辑模板句、遗漏原文开源 URL，以及评分理由没有引用证据编号。
-const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
+const MANUAL_DEPTH_COVERAGE_CONTRACT = historicalManualContract('manual-analysis-depth', 'source-coverage');
 // v3 补的是对比 2026-08-25 manual 批次和 2026-08-14 API 批次时发现的读者
 // 可见差距。只够长不行：成稿要读起来像技术解读——摘要里有真正的论证，
 // 数据流分多步，创新点各自独立，有对比实验和复现信息，评分理由逐维度写，
 // 证据与审查者局限分开标注。
-const MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3';
+const MANUAL_DEPTH_EXPLANATION_CONTRACT = historicalManualContract('manual-analysis-depth', 'beginner-explanation');
 // v4 保留 v3 的全部行文与证据要求，另外绑定更细的实验表格约定和
 // 与上下文绑定的图片讲述约定。这个绑定刻意按版本走：
 // 已发布的 v1–v3 manual 记录沿用当时的表格规则，不套用新版正文检查。
-const MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4';
-const MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5';
-const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
-    MANUAL_DEPTH_CONTRACT_VERSION,
-    MANUAL_DEPTH_CONTRACT_VERSION_V2,
-    MANUAL_DEPTH_CONTRACT_VERSION_V3,
-    MANUAL_DEPTH_CONTRACT_VERSION_V4,
-    MANUAL_DEPTH_CONTRACT_VERSION_V5
+const MANUAL_DEPTH_READER_QUALITY_CONTRACT = historicalManualContract('manual-analysis-depth', 'reader-quality');
+const MANUAL_DEPTH_FACT_COVERAGE_CONTRACT = historicalManualContract('manual-analysis-depth', 'fact-coverage');
+const MANUAL_DEPTH_CONTRACTS = Object.freeze([
+    MANUAL_DEPTH_SOURCE_CONTRACT,
+    MANUAL_DEPTH_COVERAGE_CONTRACT,
+    MANUAL_DEPTH_EXPLANATION_CONTRACT,
+    MANUAL_DEPTH_READER_QUALITY_CONTRACT,
+    MANUAL_DEPTH_FACT_COVERAGE_CONTRACT
 ]);
-const MANUAL_READER_QUALITY_VERSIONS = Object.freeze([
-    MANUAL_DEPTH_CONTRACT_VERSION_V4,
-    MANUAL_DEPTH_CONTRACT_VERSION_V5
+const MANUAL_READER_QUALITY_CONTRACTS = Object.freeze([
+    MANUAL_DEPTH_READER_QUALITY_CONTRACT,
+    MANUAL_DEPTH_FACT_COVERAGE_CONTRACT
 ]);
-const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = 'high-confidence-v1';
+const ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION = qualityFormats.original('analysis-editorial-leakage', 'editorial-text-excluded');
 const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
-const MANUAL_PROVENANCE_PROTOCOL = 'manual-offline-review-v1';
+const MANUAL_PROVENANCE_PROTOCOL = historicalManualContract('manual-stage-attestation', 'source-bound-review');
 const MANUAL_STAGE_EXECUTION_KIND = 'manual_attestation';
 // 2026-08-21 之前完成的记录还没有逐阶段提示词/上下文绑定。这批已发布的
 // 记录继续可读，但不许新记录删掉加固字段退回旧档案。
-const MANUAL_V2_HARDENED_CUTOFF_DATE = '2026-08-22';
+const MANUAL_BOUND_STAGE_CUTOFF_DATE = '2026-08-22';
 const MANUAL_AUDIT_CHECKS = Object.freeze([
     'sourceCoverage',
     'promptConformance',
@@ -177,7 +179,8 @@ const REQUIRED_RECOVERY_STAGES = Object.freeze([
     'tableRepair', 'methodRepair', 'structureRepair', 'coreSummaryRepair',
     'scoringAudit', 'imageSupplement'
 ]);
-const CORE_SUMMARY_CONTRACT_VERSION = 'core-summary-detailed-v3';
+const coreSummaryFormat = require('./lib/core-summary-format');
+const CORE_SUMMARY_CONTRACT_VERSION = coreSummaryFormat.originalTag;
 const CORE_SUMMARY_MIN_CHINESE_CHARS = 320;
 const CORE_SUMMARY_MAX_CHINESE_CHARS = 600;
 const CORE_SUMMARY_MIN_SENTENCES = 6;
@@ -2100,17 +2103,18 @@ function validateExperimentTableContract(analysis, options = {}) {
         }
     }
     const contractVersion = options.contractVersion || EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION;
-    if (contractVersion === EXPERIMENT_TABLE_CONTRACT_VERSION) {
+    const tableProfile = qualityFormats.profile('experiment-tables', contractVersion);
+    if (tableProfile === 'evidence-rich') {
         return validateExperimentTableEvidenceDepth(analysis, options);
     }
-    if (contractVersion !== EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION) {
+    if (tableProfile !== 'size-limits-only') {
         return `未知实验表格契约版本: ${contractVersion}`;
     }
     return null;
 }
 
 function analysisManifestRequiresExperimentTableContract(manifest) {
-    return EXPERIMENT_TABLE_CONTRACT_VERSIONS.includes(manifest?.contracts?.experimentTables);
+    return !!qualityFormats.profile('experiment-tables', manifest?.contracts?.experimentTables);
 }
 
 function validateMethodDetailContract(analysis) {
@@ -2159,18 +2163,18 @@ function validateManualDepthContract(analysis, options = {}) {
     const numericHits = (results.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     const sourceNumericHits = (sourceText.match(/(?<![A-Za-z])\d+(?:\.\d+)?(?:%|ms|s|Hz|kHz|M|B|GB|×)?/g) || []).length;
     if (sourceNumericHits >= 8 && numericHits < 3) return `manual 实验结果缺少可核对数字: ${numericHits}/3`;
-    if ([MANUAL_DEPTH_CONTRACT_VERSION_V2, MANUAL_DEPTH_CONTRACT_VERSION_V3,
-        ...MANUAL_READER_QUALITY_VERSIONS]
+    if ([MANUAL_DEPTH_COVERAGE_CONTRACT, MANUAL_DEPTH_EXPLANATION_CONTRACT,
+        ...MANUAL_READER_QUALITY_CONTRACTS]
         .includes(options.manualDepthContractVersion)) {
-        const v2Issue = validateManualDepthContractV2(analysis, { sourceText });
-        if (v2Issue) return v2Issue;
+        const sourceCoverageIssue = validateManualSourceCoverage(analysis, { sourceText });
+        if (sourceCoverageIssue) return sourceCoverageIssue;
     }
-    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
+    if ([MANUAL_DEPTH_EXPLANATION_CONTRACT, ...MANUAL_READER_QUALITY_CONTRACTS]
         .includes(options.manualDepthContractVersion)) {
-        const v3Issue = validateManualDepthContractV3(analysis, { sourceText });
-        if (v3Issue) return v3Issue;
+        const explanationIssue = validateManualBeginnerExplanation(analysis, { sourceText });
+        if (explanationIssue) return explanationIssue;
     }
-    if (MANUAL_READER_QUALITY_VERSIONS.includes(options.manualDepthContractVersion)) {
+    if (MANUAL_READER_QUALITY_CONTRACTS.includes(options.manualDepthContractVersion)) {
         const quality = validateEditorialQuality(analysis);
         if (!quality.valid) {
             const details = quality.issues.slice(0, 6)
@@ -2179,7 +2183,7 @@ function validateManualDepthContract(analysis, options = {}) {
             return `manual v4 读者文本质量未通过: ${details}`;
         }
     }
-    if (options.manualDepthContractVersion === MANUAL_DEPTH_CONTRACT_VERSION_V5) {
+    if (options.manualDepthContractVersion === MANUAL_DEPTH_FACT_COVERAGE_CONTRACT) {
         try {
             validateExactFactCoverage(analysis, sourceText, {
                 label: 'manual v5 analysis',
@@ -2256,7 +2260,7 @@ function findManualOpensourceRepoUrls(sourceText) {
     ) || [];
 }
 
-function validateManualDepthContractV2(analysis, options = {}) {
+function validateManualSourceCoverage(analysis, options = {}) {
     const sourceText = String(options.sourceText || '');
     const duplicates = findCrossSectionDuplicateSentences(analysis);
     const worstSectionSpread = duplicates.reduce((max, item) => Math.max(max, item.sections.length), 0);
@@ -2292,7 +2296,7 @@ function proseParagraphs(value) {
     ));
 }
 
-function validateManualDepthContractV3(analysis, options = {}) {
+function validateManualBeginnerExplanation(analysis, options = {}) {
     const summary = extractSection(analysis, '核心摘要');
     const method = extractSection(analysis, '方法概述和架构');
     const innovations = extractSection(analysis, '核心创新点');
@@ -2363,7 +2367,7 @@ function validateManualDepthContractV3(analysis, options = {}) {
 }
 
 function analysisManifestRequiresMethodDetailContract(manifest) {
-    return manifest?.contracts?.methodDetail === METHOD_DETAIL_CONTRACT_VERSION;
+    return !!qualityFormats.profile('method-detail', manifest?.contracts?.methodDetail);
 }
 
 function isRecoveryStageTerminal(stage, status) {
@@ -4615,7 +4619,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         || /(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)/.test(summary)
         || scopedResourceDisclosure;
     if (!cost) issues.push(`缺少训练、推理或部署成本；未披露时必须写“${CORE_SUMMARY_COST_UNAVAILABLE}”`);
-    return issues.length ? `核心摘要未达到 ${CORE_SUMMARY_CONTRACT_VERSION}: ${issues.join('；')}` : null;
+    return issues.length ? `核心摘要未达到 详细摘要规则：${issues.join('；')}` : null;
 }
 
 function hashAnalysisWithMaskedCoreSummary(analysis) {
@@ -4686,14 +4690,12 @@ function validateTagStageProof(paper, options = {}) {
     if (!isRecoveryStageTerminal(tagRecord.stageKey, stage?.status)) return '标签阶段记录缺失，或状态不是 complete 或 not_needed。';
     const tagRulesApi = require('./lib/tag-rules.js');
     const runtime = options.tagRules || tagRulesApi.getDefaultTagRules();
-    if (manifest?.contracts?.[tagRecord.contractKey] !== (tagRecord.format === 'current'
-        ? TAG_STAGE_RECORD_CONTRACT : stage.selectionContract)
+    if ((tagRecord.format === 'current' ? !isTagStageRecordDeclaration(manifest?.contracts?.[tagRecord.contractKey])
+        : manifest?.contracts?.[tagRecord.contractKey] !== stage.selectionContract)
         || (stage.registryVersion !== runtime.registryVersion
             && !(stage.registrySha256 !== runtime.registrySha256
-                && stage.registryVersion === 'paper-taxonomy-v1'
-                && runtime.registryVersion === 'paper-tag-catalog-v2'))
-        || (stage.projectionContract !== tagRulesApi.TAG_PROMPT_TEXT_CONTRACT
-            && stage.projectionContract !== tagRulesApi.LEGACY_TAG_PROMPT_TEXT_CONTRACT)
+                && require('./lib/tag-catalog.js').isCatalogIdentityUpgrade(stage.registryVersion,runtime.registryVersion)))
+        || !require('./lib/protocol-codec.js').isContract(stage.projectionContract,'paper-tag-prompt-text')
         || !tagRulesApi.isSupportedTagSelectionContract(stage.selectionContract)) {
         return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
     }
@@ -4704,7 +4706,7 @@ function validateTagStageProof(paper, options = {}) {
         let snapshotOptions = options.registrySnapshotOptions;
         const catalogChange = require('./lib/tag-catalog-change.js');
         const appendOnlyCatalog = !Object.hasOwn(stage, 'registryUpgradeFrom')
-            ? catalogChange.resolveAppendOnlyProofCatalog(stage.registrySha256,
+            ? catalogChange.resolveCompatibleProofCatalog(stage.registrySha256,
                 runtime.tagCatalog, snapshotOptions) : null;
         if (appendOnlyCatalog) {
             // 保存稿仍使用原词表、原提示和原签名；下方的正文/选择/检查点
@@ -4722,7 +4724,7 @@ function validateTagStageProof(paper, options = {}) {
                     return '原标签阶段的正文或检查点不能按其保存的旧词表重放相同选择。';
                 }
             }
-        } else if (stage.projectionContract === tagRulesApi.TAG_PROMPT_TEXT_CONTRACT) {
+        } else if (tagRulesApi.isCurrentTagPromptTextContract(stage.projectionContract)) {
             let snapshot;
             try {
                 snapshot = require('./lib/tag-catalog-change.js').resolveRegistrySnapshot(
@@ -4860,8 +4862,8 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     const summary = extractSection(String(paper?.analysis || ''), '核心摘要');
     const summarySha256 = crypto.createHash('sha256').update(String(summary || '')).digest('hex');
     if (!isRecoveryStageTerminal('coreSummaryRepair', stage?.status)) return '核心摘要阶段记录缺失，或状态不是 complete 或 not_needed。';
-    if (manifest?.contracts?.coreSummary !== CORE_SUMMARY_CONTRACT_VERSION
-        || stage.contractVersion !== CORE_SUMMARY_CONTRACT_VERSION) return '核心摘要阶段记录未采用当前 v3 规则。';
+    const summaryHeader = coreSummaryFormat.readStage(manifest?.contracts?.coreSummary, stage);
+    if (!summaryHeader) return '核心摘要声明、阶段格式或结构指纹不一致。';
     if (!/^[a-f0-9]{64}$/.test(String(stage.fingerprint || ''))) return '核心摘要阶段的输入指纹缺失，或格式无效。';
     if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段的输出正文哈希缺失，或格式无效。';
     if (options.skipSemantic !== true) {
@@ -4961,7 +4963,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         return '核心摘要阶段的输出正文、摘要或受保护正文哈希与本阶段的正文检查点不一致。';
     }
     const bindingBody = {
-        contractVersion: stage.contractVersion,
+        ...coreSummaryFormat.stageFields(summaryHeader),
         inputAnalysisSha256: stage.inputAnalysisSha256,
         outputAnalysisSha256: stage.outputAnalysisSha256,
         inputSummarySha256: stage.inputSummarySha256,
@@ -5145,11 +5147,11 @@ function validateTutorialPayloadRecordConsistency(manifest, takeover) {
     const marker = manifest?.contracts?.tutorialPayload;
     // 没带标记的历史 v5 记录只能读。发布器另外会拒绝把它们打包成新的教程页。
     if (marker === undefined) return null;
-    if (marker !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
+    if (marker !== MANUAL_TUTORIAL_PAYLOAD_CONTRACT) {
         return `Manual v5 的 tutorialPayload 格式标识不符合要求：${String(marker)}`;
     }
     const payload = takeover?.tutorialPayload;
-    if (!payload || payload.contract !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
+    if (!payload || payload.contract !== MANUAL_TUTORIAL_PAYLOAD_CONTRACT
         || payload.paperId !== manifest?.sourceAcquisition?.sourceId
         || payload.articleSha256 !== takeover?.freshAuthoring?.articleSha256
         || payload.freshAuthoringReceiptSha256 !== takeover?.freshAuthoring?.receiptSha256
@@ -5160,7 +5162,7 @@ function validateTutorialPayloadRecordConsistency(manifest, takeover) {
     return null;
 }
 
-function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options = {}) {
+function validateManualTakeoverBindings(manifest, takeover, sourceSha256 = '', options = {}) {
     let modelPolicy;
     try {
         modelPolicy = boundModelPolicy(manifest, options.expectedModelPolicy, '分析清单');
@@ -5186,7 +5188,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
     if (!/^[a-f0-9]{64}$/.test(String(takeover.promptSha256 || ''))) {
         return 'manualTakeover.promptSha256 必须是 SHA-256';
     }
-    if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
+    if ([MANUAL_DEPTH_EXPLANATION_CONTRACT, ...MANUAL_READER_QUALITY_CONTRACTS]
         .includes(manifest?.contracts?.manualDepth)
         && !/^[a-f0-9]{64}$/.test(String(takeover.manualAuthoringPromptSha256 || ''))) {
         return 'manual v3/v4 必须绑定 manualAuthoringPromptSha256';
@@ -5210,7 +5212,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         || review.scoringVerified !== true || review.stageEvidenceVerified !== true) {
         return 'manualTakeover.review 必须确认来源、正文、评分和阶段证据';
     }
-    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
+    if (MANUAL_READER_QUALITY_CONTRACTS.includes(manifest?.contracts?.manualDepth)
         && review.readerQualityVerified !== true) {
         return 'manual v4 manualTakeover.review 必须确认 readerQualityVerified';
     }
@@ -5246,7 +5248,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         || takeover.evidenceLedgerSha256 !== manualSha256(takeover.evidenceLedger)) {
         return 'manualTakeover.evidenceLedgerSha256 不匹配';
     }
-    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)) {
+    if (MANUAL_READER_QUALITY_CONTRACTS.includes(manifest?.contracts?.manualDepth)) {
         const resultClaims = validateResultClaims(takeover.resultClaims, options.sourceText || '', {
             documentType: takeover.documentType,
             exception: takeover.resultClaimsException,
@@ -5280,9 +5282,9 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             return '可读性检查的 readabilityRubricSha256 格式无效，或与检查记录重算的 SHA 不一致。';
         }
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5) {
-        if (manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT_VERSION) {
-            return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT_VERSION}`;
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_FACT_COVERAGE_CONTRACT) {
+        if (manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT) {
+            return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT}`;
         }
         const freshAuthoringIssue = validateFreshAuthoringRecordConsistency(manifest, takeover);
         if (freshAuthoringIssue) return freshAuthoringIssue;
@@ -5310,7 +5312,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                 paperSubagentTask: takeover.researchBrief?.paperSubagent?.taskName,
                 label: 'manualTakeover.scoringCalibration'
             });
-            validateResultClaimCoverageV5(takeover.resultClaims, {
+            validateAttributedResultClaimCoverage(takeover.resultClaims, {
                 documentType: takeover.documentType,
                 evidenceProfile: takeover.researchBrief?.evidenceProfile || {},
                 label: 'manualTakeover.resultClaims'
@@ -5410,8 +5412,8 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             || Object.prototype.hasOwnProperty.call(state, key));
     });
     const completedDate = String(takeover.completedAt || '').slice(0, 10);
-    if (!hasHardenedBindings && completedDate >= MANUAL_V2_HARDENED_CUTOFF_DATE) {
-        return `manualTakeover.stageEvidence 缺少 ${MANUAL_V2_HARDENED_CUTOFF_DATE} 起必需的逐阶段 prompt/context 绑定`;
+    if (!hasHardenedBindings && completedDate >= MANUAL_BOUND_STAGE_CUTOFF_DATE) {
+        return `manualTakeover.stageEvidence 缺少 ${MANUAL_BOUND_STAGE_CUTOFF_DATE} 起必需的逐阶段 prompt/context 绑定`;
     }
     const imageManifest = options.imageManifest || manifest?.imageManifest;
     const imageContextFields = {
@@ -5428,7 +5430,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             mime: info?.mime,
             sha256: info?.sha256,
             bytes: info?.bytes,
-            ...(manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5 ? {
+            ...(manifest?.contracts?.manualDepth === MANUAL_DEPTH_FACT_COVERAGE_CONTRACT ? {
                 reviewDecision: info?.reviewDecision || null,
                 reviewReason: info?.reviewReason || null,
                 figureNumber: info?.figureNumber || null,
@@ -5465,7 +5467,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (!item || typeof item !== 'object' || !state || item.status !== state.status) {
             return `manualTakeover.stageEvidence.${stage} 与阶段状态不一致`;
         }
-        if ([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
+        if ([MANUAL_DEPTH_EXPLANATION_CONTRACT, ...MANUAL_READER_QUALITY_CONTRACTS]
             .includes(manifest?.contracts?.manualDepth)
             && (item.executionKind !== MANUAL_STAGE_EXECUTION_KIND
                 || state.executionKind !== MANUAL_STAGE_EXECUTION_KIND)) {
@@ -5486,7 +5488,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 不能为空`;
         }
         const hint = MANUAL_STAGE_CLAIM_HINTS[stage];
-        if (manifest?.contracts?.manualDepth !== MANUAL_DEPTH_CONTRACT_VERSION_V5
+        if (manifest?.contracts?.manualDepth !== MANUAL_DEPTH_FACT_COVERAGE_CONTRACT
             && hint && !item.reviewedClaims.some(claim => hint.test(String(claim)))) {
             return `manualTakeover.stageEvidence.${stage}.reviewedClaims 缺少该阶段专属事实范围`;
         }
@@ -5521,7 +5523,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             }
             expectedInputSha256 = manualSha256({
                 stage,
-                ...([MANUAL_DEPTH_CONTRACT_VERSION_V3, ...MANUAL_READER_QUALITY_VERSIONS]
+                ...([MANUAL_DEPTH_EXPLANATION_CONTRACT, ...MANUAL_READER_QUALITY_CONTRACTS]
                     .includes(manifest?.contracts?.manualDepth)
                     ? { executionKind: item.executionKind || null }
                     : {}),
@@ -5557,7 +5559,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
 
 function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {}) {
     // v6 正文沿用 v5 的离线阶段输入和质量规则，只调整本次核验视图，不改保存的记录。
-    if (manifest?.contracts?.manualDepth === 'full-text-evidence-v6') {
+    if (manifest?.contracts?.manualDepth === historicalManualContract('manual-analysis-depth', 'signed-longform')) {
         if (!manifest.manualTakeover || typeof manifest.manualTakeover !== 'object'
             || Array.isArray(manifest.manualTakeover)) {
             return 'v6 人工分析结果缺少有效的 manualTakeover 记录';
@@ -5568,7 +5570,7 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
         } catch (error) { return error.message; }
         return validateManualTakeoverManifest({
             ...manifest,
-            contracts: { ...manifest.contracts, manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 }
+            contracts: { ...manifest.contracts, manualDepth: MANUAL_DEPTH_FACT_COVERAGE_CONTRACT }
         }, sourceSha256, options);
     }
     const manualStatuses = Object.values(manifest?.stages || {})
@@ -5576,21 +5578,21 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
     if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
     const evaluationIssue = getPaperEvaluationHeadingIssue(options.analysis || manifest?.manualTakeover?.analysis || '');
     if (evaluationIssue) return evaluationIssue;
-    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
+    if (MANUAL_READER_QUALITY_CONTRACTS.includes(manifest?.contracts?.manualDepth)
         && manifest?.contracts?.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
         return `manual v4 必须绑定 experimentTables=${EXPERIMENT_TABLE_CONTRACT_VERSION}`;
     }
-    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
-        && manifest?.contracts?.imageNarrative !== 'context-bound-v1') {
-        return 'manual v4 必须绑定 imageNarrative=context-bound-v1';
+    if (MANUAL_READER_QUALITY_CONTRACTS.includes(manifest?.contracts?.manualDepth)
+        && manifest?.contracts?.imageNarrative !== qualityFormats.original('image-narrative', 'context-bound-figures')) {
+        return '历史人工稿缺少原图片上下文声明。';
     }
-    if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
+    if (MANUAL_READER_QUALITY_CONTRACTS.includes(manifest?.contracts?.manualDepth)
         && manifest?.contracts?.editorialQuality !== EDITORIAL_QUALITY_CONTRACT_VERSION) {
         return `manual v4 必须绑定 editorialQuality=${EDITORIAL_QUALITY_CONTRACT_VERSION}`;
     }
-    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5
-        && manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT_VERSION) {
-        return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT_VERSION}`;
+    if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_FACT_COVERAGE_CONTRACT
+        && manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT) {
+        return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT}`;
     }
     const takeover = manifest?.manualTakeover;
     if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
@@ -5604,7 +5606,7 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
         }
     } catch (error) { return error.message; }
     if (takeover.version === MANUAL_COMPLETE_PROVENANCE_VERSION) {
-        return validateManualV2Takeover(manifest, takeover, sourceSha256, options);
+        return validateManualTakeoverBindings(manifest, takeover, sourceSha256, options);
     }
     if (takeover.version !== 1 || takeover.mode !== MANUAL_COMPLETE_STATUS) return 'manualTakeover.version/mode 非法';
     if (typeof takeover.agent !== 'string' || !takeover.agent.trim()) {
@@ -5884,16 +5886,16 @@ module.exports = {
     analysisManifestRequiresExperimentTableContract,
     validateMethodDetailContract,
     validateManualDepthContract,
-    MANUAL_DEPTH_CONTRACT_VERSION,
-    MANUAL_DEPTH_CONTRACT_VERSION_V2,
-    MANUAL_DEPTH_CONTRACT_VERSION_V3,
-    MANUAL_DEPTH_CONTRACT_VERSION_V4,
-    MANUAL_DEPTH_CONTRACT_VERSION_V5,
-    MANUAL_DEPTH_CONTRACT_VERSIONS,
-    MANUAL_READER_QUALITY_VERSIONS,
+    MANUAL_DEPTH_SOURCE_CONTRACT,
+    MANUAL_DEPTH_COVERAGE_CONTRACT,
+    MANUAL_DEPTH_EXPLANATION_CONTRACT,
+    MANUAL_DEPTH_READER_QUALITY_CONTRACT,
+    MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
+    MANUAL_DEPTH_CONTRACTS,
+    MANUAL_READER_QUALITY_CONTRACTS,
     findCrossSectionDuplicateSentences,
-    validateManualDepthContractV2,
-    validateManualDepthContractV3,
+    validateManualSourceCoverage,
+    validateManualBeginnerExplanation,
     analysisManifestRequiresMethodDetailContract,
     isRecoveryStageTerminal,
     CORE_SUMMARY_CONTRACT_VERSION,

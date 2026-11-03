@@ -1,0 +1,111 @@
+{
+  "planVersions": {
+    "beginner-researcher-v1": [
+      1
+    ],
+    "beginner-researcher-v2": [
+      1,
+      2
+    ],
+    "beginner-researcher-v3": [
+      3
+    ]
+  },
+  "pipelineRoles": {
+    "article": "beginner-researcher",
+    "parser": "api-reader-parser",
+    "assembler": "api-reader-assembler",
+    "tables": "api-reader-tables",
+    "figures": "api-reader-figures",
+    "qualityMetrics": "api-reader-quality-metrics",
+    "sourceBindings": "api-reader-source-bindings",
+    "sourceRepair": "api-reader-source-repair",
+    "surfaceRepair": "api-reader-surface-repair",
+    "mechanical": "reader-mechanical-contract",
+    "sectionQuality": "reader-section-quality"
+  },
+  "flatStageFields": {
+    "parserVersion": "parser",
+    "assemblerVersion": "assembler",
+    "tableContractVersion": "tables",
+    "figureContractVersion": "figures",
+    "qualityMetricsContractVersion": "qualityMetrics",
+    "sourceBindingsContractVersion": "sourceBindings",
+    "sourceBindingRepairVersion": "sourceRepair"
+  },
+  "originalHeaders": {
+    "article": {
+      "version": 3,
+      "contract": "beginner-researcher-v3"
+    },
+    "parser": {
+      "contract": "api-reader-parser-v3"
+    },
+    "assembler": {
+      "contract": "api-reader-assembler-v3"
+    },
+    "tables": {
+      "contract": "api-reader-tables-v3"
+    },
+    "figures": {
+      "contract": "api-reader-figures-v3"
+    },
+    "qualityMetrics": {
+      "contract": "api-reader-quality-metrics-v2"
+    },
+    "sourceBindings": {
+      "contract": "api-reader-source-bindings-v4"
+    },
+    "sourceRepair": {
+      "contract": "api-reader-source-repair-v4"
+    },
+    "surfaceRepair": {
+      "contract": "api-reader-surface-repair-v2"
+    },
+    "mechanical": {
+      "contract": "reader-mechanical-contract-v1"
+    },
+    "sectionQuality": {
+      "contract": "reader-section-quality-v1"
+    }
+  },
+  "originalIdentityFields": {
+    "readerContract": "beginner-researcher-v3",
+    "sourceBindingContract": "api-reader-source-bindings-v4",
+    "repairVersion": "reader-node-repair-v1"
+  },
+  "originalFingerprintFields": {
+    "contract": "beginner-researcher-v3",
+    "planVersion": 3,
+    "parserVersion": "api-reader-parser-v3",
+    "assemblerVersion": "api-reader-assembler-v3",
+    "tableContractVersion": "api-reader-tables-v3",
+    "figureContractVersion": "api-reader-figures-v3",
+    "qualityMetricsContractVersion": "api-reader-quality-metrics-v2",
+    "sourceBindingsContractVersion": "api-reader-source-bindings-v4",
+    "sourceBindingRepairVersion": "api-reader-source-repair-v4",
+    "surfaceRepairVersion": "api-reader-surface-repair-v2",
+    "mechanicalContractVersion": "reader-mechanical-contract-v1",
+    "sectionQualityContractVersion": "reader-section-quality-v1",
+    "contentMode": "reader-source-only-v1"
+  },
+  "originalIntegratedConfiguration": {
+    "promptTemplateSha256": "4c686f8fd83f5a68b528c930b8393d7f8dc8ba27549ce4faf9ac885d84eec35d",
+    "repairPromptSha256": "26c091a711a706fa69dfdd3ad31bb72c766faea111fd6322d4c2202d96eeb8e8",
+    "mechanicalContractImplementationSha256": "246f7c730e902c7f4334fd92ea2c2b5d47fb8f3dec5a1d2cdd6df253b91ca7de",
+    "tableSelectionImplementationSha256": "bddec71ce9a6e08780b483c74bafb877bbfab8738739c8c23b89c8350fa55b6e",
+    "repairImplementationSha256": "a0b84c2be19351e3cdd2cebae28110f00e7e965cd290820f45b5f98bedf06b58",
+    "draftOrderContract": "reader-draft-order-v4",
+    "draftOrderImplementationSha256": "2d7bfffab4db31ba88bfea0c991082d4b509ee96016a00004935eb9c658873e9",
+    "sourceDiagnosticsImplementationSha256": "f108d112d42495f5f562b796d1cc16d550b1050c66b1438bf2f15ebfa1621283"
+  },
+  "ordinal": {
+    "template": "只修当前已存在且明确列出的普通节点。只输出完整、严格的单个JSON对象：\n{\"contract\":\"reader-target-ordinal-patch-v1\",\"version\":1,\"requestToken\":\"{{requestToken}}\",\"replacements\":[{\"targetOrdinal\":1,\"value\":\"完整替换值\"}]}\nrequestToken必须逐字使用本次值。targetOrdinal只能是清单中1到N的整数，最多8个，不能重复。不要返回path、SHA、解释、Markdown围栏或其他字段。value必须与原节点同类型；对象节点须给完整对象。保留一切不需修改的正确事实、数字、单位、图表、公式及引用。修改后仍要通过正常完整Reader检查。\n本次请求：{{requestToken}}\n当前授权目标：\n{{targets}}\n核验反馈：\n{{feedback}}\n来源证据：\n{{evidence}}\n整篇机械约束（不扩大本次目标）：\n{{mechanicalContract}}",
+    "templateSha256": "b8eaceefa73682f94c351e348f390ad4e89e04363de760473f10a892bc78f122",
+    "templateHeaderPrefix": "{\"contract\":\"reader-target-ordinal-patch-v1\",\"version\":1,",
+    "wireFamily": "reader-target-ordinal-patch",
+    "recordFamily": "reader-target-ordinal-record",
+    "compilationFamily": "reader-target-ordinal-compilation",
+    "patchFamily": "reader-node-patch"
+  }
+}

@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const history = require('../scripts/lib/prompt-history');
 const deep = require('../scripts/deep-analyzer');
-const versions = require('../scripts/lib/prompt-text-versions');
+const versions = require('../scripts/lib/prompt-contracts');
 function fixture(t) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-history-cache-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -53,11 +53,11 @@ test('真实 Reader 恢复指纹不复用已删除的历史提示词，归档恢
     t.after(() => { history.historicalPromptTemplateBytesForSha256 = original; });
     const manifest = declared => ({ stages: {
         apiReaderArticle: { status: 'complete', fingerprint: 'f'.repeat(64),
-            promptTextContract: versions.currentPromptTextContract('apiReaderArticle'),
-            repairPromptTextContract: versions.currentPromptTextContract('apiReaderRepair'),
+            promptTextContract: 'analysis-prompt-text-v11',
+            repairPromptTextContract: 'analysis-prompt-text-v13',
             promptTemplateSha256: declared,
             repairPromptTemplateSha256: deep.runtimePromptTemplateSha256(versions.promptFilePathForContract(
-                'apiReaderRepair', versions.currentPromptTextContract('apiReaderRepair'))) },
+                'apiReaderRepair', 'analysis-prompt-text-v13')) },
         coreSummaryRepair: { status: 'complete', outputAnalysisSha256: 'a'.repeat(64) }
     } });
     const fingerprint = declared => deep.buildRecoveryFingerprints({ arxivId: '2601.00001',

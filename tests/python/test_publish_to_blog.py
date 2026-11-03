@@ -23,16 +23,17 @@ sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 sys.path.insert(0, os.path.join(ROOT, 'manual', 'scripts'))
 from publish_common import (  # noqa: E402
     PublishDataValidationError,
-    _manual_v6_hash,
+    _manual_signature_hash,
     _validate_publish_image_exclusion_view,
-    _manual_v6_text,
-    _manual_v6_text_sha,
-    validate_manual_v6_payload,
+    _normalize_signed_manual_text,
+    _signed_manual_text_sha,
+    validate_signed_manual_payload,
     validate_image_narrative_contract,
 )
 import markdown_hugo_gate  # noqa: E402
 import tutorial_payload_verifier  # noqa: E402
 from prompt_evidence import read_prompt_evidence_bytes  # noqa: E402
+from original_file_evidence import read_original_file_bytes  # noqa: E402
 # 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
 # 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -149,7 +150,9 @@ def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False,
                 'sha256': hashlib.sha256(
                     read_prompt_evidence_bytes(
                         'manual/prompts/manual-tutorial-article.md', project_root=project_root)
-                    if kind == 'authoring_prompt' else target.read_bytes()).hexdigest(),
+                    if kind == 'authoring_prompt' else read_original_file_bytes(
+                        target.relative_to(project_root).as_posix(), project_root=project_root)
+                    if kind in {'editorial_contract', 'blank_schema'} else target.read_bytes()).hexdigest(),
             } for kind, target in paths.items()],
         }
         receipt['receiptSha256'] = publish_to_blog._stable_json_sha256(receipt)
@@ -246,7 +249,7 @@ def resign_manual_v5_fresh_files(paper):
     takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
 
 
-def manual_v6_publication_fixture():
+def signed_manual_publication_fixture():
     """一份小但完整的正式 v6 记录，用的是真实的跨语言哈希。"""
     paper_id = '2608.30001'
     matrix = [['系统', 'WER↓'], ['强基线', '8.4%'], ['完整方法', '7.1%']]
@@ -430,7 +433,7 @@ def manual_v6_publication_fixture():
     # 后面改动固定数据时，就不会留下过期的文章、
     # 凭证、接管副本或打包文件语义哈希。
     final_article = '\n\n'.join(
-        f'### {_manual_v6_text(block["heading"])}\n\n{_manual_v6_text(block["markdown"])}'
+        f'### {_normalize_signed_manual_text(block["heading"])}\n\n{_normalize_signed_manual_text(block["markdown"])}'
         for block in paper['manualReaderLongform']['blocks']
     )
     final_article_sha = hashlib.sha256(final_article.encode('utf-8')).hexdigest()
@@ -1200,7 +1203,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
         self.assertIn(
             'paper_digest_api_reader_decision_projection: '
-            '"api-reader-decision-projection-v2"', page,
+            '"api-reader-decision-projection"', page,
         )
         match = re.search(
             r'^## 📌 核心摘要\n\n([\s\S]*?)(?=^## )',
@@ -1260,8 +1263,31 @@ class PublishToBlogReviewTest(unittest.TestCase):
         scoring['coreSummaryInputAnalysisSha256'] = analysis_sha
         scoring['inputCoreSummarySha256'] = summary_sha
         scoring['outputCoreSummarySha256'] = summary_sha
-        with self.assertRaisesRegex(PublishDataValidationError, '未达到 core-summary-detailed-v3'):
+        with self.assertRaisesRegex(PublishDataValidationError, '未达到详细摘要规则'):
             publish_to_blog.llm_api_production_proof([shallow])
+
+    def test_stable_core_summary_header_replays_same_body_and_rejects_mixed_proof(self):
+        paper = llm_api_publication_fixture()
+        manifest = paper['analysisManifest']
+        stage = manifest['stages']['coreSummaryRepair']
+        header = publish_to_blog.public_protocols.record_header('core-summary', 'core-summary')
+        manifest['contracts']['coreSummary'] = header
+        fields = publish_to_blog.core_summary_formats.stage_fields(header)
+        stage.update(fields)
+        fields.update({key: stage[key] for key in (
+            'inputAnalysisSha256', 'outputAnalysisSha256', 'inputSummarySha256',
+            'summarySha256', 'inputStructureProjectionSha256',
+            'outputStructureProjectionSha256',
+        )})
+        stage['bindingSha256'] = publish_to_blog._stable_json_sha256(fields)
+        self.assertEqual(publish_to_blog._validated_detailed_core_summary(
+            paper, paper['parsed']), paper['parsed']['summary'])
+        binding, = publish_to_blog.llm_api_publication_bindings([paper])
+        self.assertEqual(binding['coreSummaryContract'], header['contract'])
+        self.assertEqual(binding['coreSummarySchemaFingerprint'], header['schemaFingerprint'])
+        stage['contractSchemaFingerprint'] = 'a' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, '声明与阶段格式不一致'):
+            publish_to_blog._validated_detailed_core_summary(paper, paper['parsed'])
 
     def test_current_core_summary_replays_tag_stage_upstream(self):
         paper = llm_api_publication_fixture()
@@ -2633,6 +2659,20 @@ class PublishToBlogReviewTest(unittest.TestCase):
         text = f'公开评测脚本为 {url}；正文未说明完整复现文档，按固定锚点计 1.2 分。'
         self.assertEqual(publish_to_blog.extract_repo_urls(text), [url])
 
+    def test_no_generation_policy_keeps_original_receipt_semantics_and_rejects_malformed_fields(self):
+        # Format selection only; this constructed object does not prove publication eligibility.
+        base = {'schemaVersion': 3, 'publicationMode': publish_to_blog.LLM_API_PRODUCTION_MODE}
+        self.assertEqual(publish_to_blog._expected_post_publish_visuals(base), 'required')
+        policy = publish_to_blog.public_protocols.record('daily-publication-policy', {
+            'generatedImages': False, 'sourceFigures': 'retained-and-source-verified',
+        })
+        self.assertEqual(publish_to_blog._expected_post_publish_visuals({**base, 'postPublicationPolicy': policy}), 'not_requested')
+        for malformed in [None, {**policy, 'generatedImages': 0}, {**policy, 'generatedImages': True},
+                          {**policy, 'sourceFigures': 'skip'}, {**policy, 'version': 1},
+                          {**policy, 'schemaFingerprint': '0' * 64}]:
+            with self.subTest(policy=malformed), self.assertRaises(publish_to_blog.PublishDataValidationError):
+                publish_to_blog._expected_post_publish_visuals({**base, 'postPublicationPolicy': malformed})
+
     def test_visual_capability_preflight_rejects_legacy_before_daily_push(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp)):
@@ -2647,14 +2687,14 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 'digestCoverRequired': False,
             }), encoding='utf-8')
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertFalse(publish_to_blog.preflight_post_publish_visual_capability(
-                    '2026-07-10', require_visual_plan=False,
+                self.assertFalse(publish_to_blog.preflight_production_publication(
+                    '2026-07-10', require_production_receipt=False,
                 ))
             with self.assertRaisesRegex(
-                publish_to_blog.PublishDataValidationError, '仅支持历史维护发布'
+                publish_to_blog.PublishDataValidationError, '标准日更需要完整正式快照'
             ):
-                publish_to_blog.preflight_post_publish_visual_capability(
-                    '2026-07-10', require_visual_plan=True,
+                publish_to_blog.preflight_production_publication(
+                    '2026-07-10', require_production_receipt=True,
                 )
 
     def test_schema_v3_visual_capability_preflight_accepts_bound_snapshot(self):
@@ -2662,7 +2702,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'current'
             page = posts / '2026-07-10-paper.md'
-            paper = manual_v6_publication_fixture()
+            paper = signed_manual_publication_fixture()
             page.write_text(
                 '---\npaper_digest_page_type: paper\n'
                 f'paper_digest_arxiv_id: "{paper["arxivId"]}"\n---\nbody\n',
@@ -2681,8 +2721,8 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     base_head='c' * 40,
                     published_papers=published_papers,
                 )
-                self.assertTrue(publish_to_blog.preflight_post_publish_visual_capability(
-                    '2026-07-10', require_visual_plan=True,
+                self.assertTrue(publish_to_blog.preflight_production_publication(
+                    '2026-07-10', require_production_receipt=True,
                 ))
 
     def test_receipt_reports_actual_per_file_image_review_coverage(self):
@@ -3066,7 +3106,8 @@ title: "Score rows"
             )
         compact = publish_to_blog.compact_title_for_ranking(title)
         self.assertIn('✅ 筛选入选 1 篇 → 🔬 深度分析完成', markdown)
-        self.assertIn('paper_digest_reader_quality: "reader-facing-v3"', markdown)
+        self.assertIn('paper_digest_reader_quality: "reader-facing-page"', markdown)
+        self.assertIn(f'paper_digest_reader_quality_schema_fingerprint: "{publish_to_blog.DIGEST_INDEX_READER_QUALITY_FINGERPRINT}"', markdown)
         self.assertNotIn('📥 抓取 1 篇', markdown)
         self.assertLessEqual(len(compact), 55)
         self.assertTrue(compact.endswith('…'))
@@ -3248,7 +3289,7 @@ title: "Score rows"
         metadata = publish_to_blog._current_batch_tag_metadata([current])
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'])
-        self.assertEqual(metadata['selectionContract'], 'paper-tag-selection-v2')
+        self.assertEqual(metadata['selectionContract'], publish_to_blog.TAG_SELECTION_CONTRACT)
         self.assertEqual(publish_to_blog._current_batch_tag_metadata([legacy]), metadata)
         self.assertEqual((current, legacy), saved)
 
@@ -3348,7 +3389,7 @@ title: "Score rows"
             'tagValidation': {
                 'valid': True,
                 'errors': [],
-                'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
+                'registryVersion': publish_to_blog.tag_catalog_identity(publish_to_blog._PAGE_TAG_CATALOG),
                 'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 'primaryTaskId': 'task.asr',
                 'primaryMethodId': 'method.transformer',
@@ -3373,6 +3414,8 @@ title: "Score rows"
         legacy_bundle = publish_to_blog.build_researcher_workbench_bundle(
             paper, '2026-08-31', flat_tag_contract=publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT)
         legacy_frontmatter['paper_digest_taxonomy_contract'] = publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT
+        legacy_frontmatter.pop('paper_digest_taxonomy_schema_fingerprint')
+        legacy_frontmatter['paper_digest_taxonomy_selection_contract']=legacy_bundle['tagMetadata']['selectionContract']
         legacy_frontmatter['paper_digest_sidecars'] = legacy_bundle['sidecarRecords']
         original_legacy = copy.deepcopy(legacy_frontmatter)
         self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
@@ -3424,7 +3467,7 @@ title: "Score rows"
             'primaryTaskTag': '#语音识别', 'primaryMethodTag': '#Transformer',
             'tagValidation': {
                 'valid': True, 'errors': [],
-                'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
+                'registryVersion': publish_to_blog.tag_catalog_identity(publish_to_blog._PAGE_TAG_CATALOG),
                 'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 'primaryTaskId': 'task.asr', 'primaryMethodId': 'method.transformer',
                 'conceptIds': ['task.asr', 'method.transformer', 'setting.low-resource'],
@@ -3434,17 +3477,19 @@ title: "Score rows"
         current = publish_to_blog.build_researcher_workbench_bundle(paper, '2026-08-31')
         legacy = publish_to_blog.build_researcher_workbench_bundle(
             paper, '2026-08-31', flat_tag_contract=publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT)
-        self.assertEqual(current['tagMetadata']['contract'], 'paper-tag-flat-tags-v2')
+        self.assertEqual(current['tagMetadata']['contract'], publish_to_blog.FLAT_TAG_COMPAT_CONTRACT)
+        self.assertTrue(publish_to_blog.public_protocols.has_valid_header(current['tagMetadata'],'paper-tag-flat-tags'))
         self.assertEqual(legacy['tagMetadata']['contract'], 'paper-taxonomy-flat-tags-compat-v1')
         for path, raw in legacy['sidecars'].items():
             if path.name == 'rethink-context.json':
                 expected = json.loads(current['sidecars'][path])
-                expected['assessment']['tagMetadata']['contract'] = publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT
+                expected['assessment']['tagMetadata'] = copy.deepcopy(legacy['tagMetadata'])
                 self.assertEqual(raw, publish_to_blog._json_sidecar_bytes(expected))
             else:
                 self.assertEqual(raw, current['sidecars'][path])
         old_context_bundles = []
-        for flat_contract in (publish_to_blog.FLAT_TAG_COMPAT_CONTRACT,
+        old_flat_header=publish_to_blog.public_protocols.historical_header('paper-tag-flat-tags','selected-preferred-labels',None)
+        for flat_contract in (old_flat_header['contract'],
                               publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT):
             old_context = publish_to_blog.build_researcher_workbench_bundle(
                 paper, '2026-08-31', flat_tag_contract=flat_contract,
@@ -3453,28 +3498,31 @@ title: "Score rows"
             self.assertNotIn('contract', old_context['sidecarRecords']['rethink-context.json'])
             for path, raw in old_context['sidecars'].items():
                 if path.name == 'rethink-context.json':
-                    expected = json.loads(current['sidecars'][path])
-                    expected['contract'] = 'researcher-sidecars-v1'
-                    expected['schemaVersion'] = 1
+                    expected = json.loads(next(raw for target,raw in current['sidecars'].items() if target.name==path.name))
+                    expected.pop('schemaFingerprint')
+                    expected.update(publish_to_blog.public_protocols.historical_header('paper-research-context','legacy-inline-abstract',None))
                     expected['assessment']['taxonomy'] = expected['assessment'].pop('tagMetadata')
-                    expected['assessment']['taxonomy']['contract'] = flat_contract
+                    expected['assessment']['taxonomy'] = copy.deepcopy(old_context['tagMetadata'])
                     self.assertEqual(raw, publish_to_blog._json_sidecar_bytes(expected))
+                elif path.name=='citation.json':
+                    expected=json.loads(next(raw for target,raw in current['sidecars'].items() if target.name==path.name))
+                    expected.pop('schemaFingerprint')
+                    expected.update(publish_to_blog.public_protocols.historical_header('researcher-sidecars','source-bound-citation',None))
+                    self.assertEqual(raw,publish_to_blog._json_sidecar_bytes(expected))
                 else:
-                    self.assertEqual(raw, current['sidecars'][path])
+                    self.assertEqual(raw,next(raw for target,raw in current['sidecars'].items() if target.name==path.name))
         self.assertEqual(current['sidecarRecords']['rethink-context.json']['contract'],
-                         'paper-research-context-v2')
+                         publish_to_blog.RESEARCH_CONTEXT_CONTRACT)
         current_context = json.loads(next(raw for path, raw in current['sidecars'].items()
                                           if path.name == 'rethink-context.json'))
-        self.assertEqual((current_context['contract'], current_context['schemaVersion']),
-                         ('paper-research-context-v2', 2))
+        self.assertTrue(publish_to_blog.public_protocols.is_current_header(current_context,'paper-research-context'))
+        self.assertNotIn('schemaVersion',current_context)
         self.assertIn('tagMetadata', current_context['assessment'])
         self.assertNotIn('taxonomy', current_context['assessment'])
         current_page, slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
         legacy_page = current_page.replace(
-            'paper_digest_tags_contract: "paper-tag-flat-tags-v2"',
-            'paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"').replace(
-                current['sidecarRecords']['rethink-context.json']['sha256'],
-                legacy['sidecarRecords']['rethink-context.json']['sha256'])
+            publish_to_blog._researcher_workbench_frontmatter(current),
+            publish_to_blog._researcher_workbench_frontmatter(legacy))
         page_bundles = [(current_page, current), (legacy_page, legacy)]
         for old_context in old_context_bundles:
             old_page = current_page.replace(
@@ -3524,12 +3572,12 @@ title: "Score rows"
                     for mixed in (False, True):
                         invalid_context = json.loads(original_bytes[context_path])
                         if mixed:
-                            tag_key = 'tagMetadata' if invalid_context['schemaVersion'] == 2 else 'taxonomy'
+                            tag_key = 'taxonomy' if invalid_context.get('schemaVersion') == 1 else 'tagMetadata'
                             other_key = 'taxonomy' if tag_key == 'tagMetadata' else 'tagMetadata'
                             invalid_context['assessment'][other_key] = copy.deepcopy(
                                 invalid_context['assessment'][tag_key])
                         else:
-                            invalid_context['schemaVersion'] = 1 if invalid_context['schemaVersion'] == 2 else 2
+                            invalid_context['schemaVersion'] = 1 if invalid_context.get('schemaVersion') != 1 else 2
                         invalid_raw = publish_to_blog._json_sidecar_bytes(invalid_context)
                         context_path.write_bytes(invalid_raw)
                         invalid_manifest = copy.deepcopy(manifest)
@@ -3579,7 +3627,7 @@ title: "Score rows"
                     paper, '2026-08-31', flat_tag_contract=invalid)
             frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
             frontmatter['paper_digest_tags_contract'] = invalid
-            with self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
+            with self.assertRaisesRegex(PublishDataValidationError, '格式头或结构指纹无效'):
                 publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
         for invalid in (None, '', 'unknown', [], {}):
             with self.subTest(context_contract=invalid), self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
@@ -3595,7 +3643,7 @@ title: "Score rows"
             publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
         frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
         frontmatter['paper_digest_sidecars']['rethink-context.json'].pop('contract')
-        with self.assertRaisesRegex(PublishDataValidationError, 'paper_digest_sidecars'):
+        with self.assertRaisesRegex(PublishDataValidationError, '原格式头或结构指纹不受支持'):
             publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
         frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
         old_field_family = {key.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
@@ -3603,7 +3651,7 @@ title: "Score rows"
                         for key, value in frontmatter.items()}
         self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
             old_field_family, paper, '2026-08-31'))
-        self.assertEqual(old_field_family['paper_digest_taxonomy_contract'], 'paper-tag-flat-tags-v2')
+        self.assertEqual(old_field_family['paper_digest_taxonomy_contract'], publish_to_blog.FLAT_TAG_COMPAT_CONTRACT)
 
     def test_current_tag_selection_index_counts_only_primary_tasks_as_directions(self):
         first = llm_api_publication_fixture()
@@ -3620,7 +3668,7 @@ title: "Score rows"
                 'primaryMethodTag': '#Transformer',
                 'tagValidation': {
                     'valid': True, 'errors': [],
-                    'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
+                    'registryVersion': publish_to_blog.tag_catalog_identity(publish_to_blog._PAGE_TAG_CATALOG),
                     'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                     'primaryTaskId': task_id,
                     'primaryMethodId': 'method.transformer',
@@ -3643,7 +3691,8 @@ title: "Score rows"
         self.assertNotIn('task.tts', ranking)
         self.assertIn('[文本到语音](/audio-paper-digest-blog/papers/?concept=task.tts)', markdown.split('## 📋 论文列表', 1)[1])
         self.assertIn('最上级方向统计', markdown)
-        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', markdown)
+        self.assertIn(f'paper_digest_tags_contract: "{publish_to_blog.FLAT_TAG_COMPAT_CONTRACT}"', markdown)
+        self.assertIn(f'paper_digest_tags_schema_fingerprint: "{publish_to_blog.public_protocols.schema_fingerprint("paper-tag-flat-tags")}"',markdown)
 
     def test_root_task_statistics_merge_children_without_changing_direct_classification(self):
         from utils import _validate_tag_selection
@@ -5014,7 +5063,7 @@ title: "Bad table"
             markdown.index('<summary>📎 论文与评分元数据</summary>'),
         )
 
-    def test_manual_v5_page_checks_current_editorial_bytes_and_fixed_path(self):
+    def test_manual_page_preserves_original_editorial_bytes_and_fixed_path(self):
         date_str = '2026-08-26'
         for boundary in ('current_bytes', 'old_copy_path'):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
@@ -5024,7 +5073,8 @@ title: "Bad table"
                         'manual/scripts/manual-tutorial-quality-contract.js'):
                     target = project_root / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes((Path(ROOT) / relative).read_bytes())
+                    target.write_bytes(read_original_file_bytes(relative) if relative.startswith('manual/docs/')
+                                       else (Path(ROOT) / relative).read_bytes())
                 from prompt_evidence_fixtures import install_git_prompt_evidence_fixture
                 install_git_prompt_evidence_fixture(project_root)
                 contract_path = project_root / 'manual/docs/editorial-reference-contract.md'
@@ -5047,25 +5097,26 @@ title: "Bad table"
                     if boundary == 'old_copy_path':
                         editorial_input['path'] = str(old_copy.resolve())
                         resign_manual_v5_fresh_files(paper)
-                        expected_error = '路径与当前指定文件不一致。'
+                        expected_error = f'{paper["arxivId"]} 新写作所需的 editorial_contract 材料路径与当前指定文件不一致。'
                     else:
-                        expected_error = '文件 SHA 与输入记录不一致。'
+                        unchanged, _slug = publish_to_blog.generate_paper_page(paper, date_str)
+                        self.assertEqual(unchanged, original_markdown)
+                        editorial_input['sha256'] = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+                        resign_manual_v5_fresh_files(paper)
+                        expected_error = f'{paper["arxivId"]} 所需的 editorial_contract 原文件证据缺失或 SHA 不一致。'
                     receipt_body = {key: value for key, value in fresh.items() if key != 'receiptSha256'}
                     self.assertEqual(fresh['receiptSha256'], publish_to_blog._stable_json_sha256(receipt_body))
                     self.assertEqual(takeover['freshAuthoringSha256'], publish_to_blog._stable_json_sha256(fresh))
-                    publish_to_blog._validate_manual_v5_tutorial_payload(paper, article, date_str)
+                    publish_to_blog._validate_manual_tutorial_payload(paper, article, date_str)
                     with self.assertRaises(PublishDataValidationError) as failure:
                         publish_to_blog.generate_paper_page(paper, date_str)
                     self.assertEqual(
                         str(failure.exception),
-                        f'{paper["arxivId"]} 新写作所需的 editorial_contract 材料{expected_error}',
+                        expected_error,
                     )
-                    if boundary == 'current_bytes':
-                        contract_path.write_bytes(old_bytes)
-                    else:
-                        editorial_input['path'] = str(contract_path.resolve())
-                        editorial_input['sha256'] = hashlib.sha256(contract_path.read_bytes()).hexdigest()
-                        resign_manual_v5_fresh_files(paper)
+                    editorial_input['path'] = str(contract_path.resolve())
+                    editorial_input['sha256'] = hashlib.sha256(old_bytes).hexdigest()
+                    resign_manual_v5_fresh_files(paper)
                     restored_markdown, _slug = publish_to_blog.generate_paper_page(paper, date_str)
                     self.assertEqual(
                         restored_markdown.split('\n---\n', 1)[1],
@@ -5103,8 +5154,8 @@ title: "Bad table"
             publish_to_blog.generate_paper_page(paper, '2026-08-27')
 
     def test_manual_v6_entry_render_uses_only_canonical_blocks_and_explicit_bindings(self):
-        paper = manual_v6_publication_fixture()
-        payload = validate_manual_v6_payload(paper)
+        paper = signed_manual_publication_fixture()
+        payload = validate_signed_manual_payload(paper)
         markdown, _slug = publish_to_blog.generate_paper_page(
             paper, '2026-08-28', '论文速递',
         )
@@ -5122,7 +5173,7 @@ title: "Bad table"
         # 另外传入的 Markdown 文章当成渲染依据。
         self.assertNotRegex(markdown, r'(?m)^### 逐行读取完整结果表$')
 
-        bindings = publish_to_blog.manual_v6_publication_bindings([paper])
+        bindings = publish_to_blog.signed_manual_publication_bindings([paper])
         self.assertEqual(bindings[0]['manualDepth'], 'full-text-evidence-v6')
         self.assertEqual(bindings[0]['runtimeMode'], 'production')
         self.assertEqual(bindings[0]['recordSemanticSha256'], 'c' * 64)
@@ -5132,7 +5183,7 @@ title: "Bad table"
         # manual-longform-contract.js 直接对 String(value) 的字节求哈希；
         # 这条用来防止不小心改成按 workflow 的稳定 JSON 求哈希。
         self.assertEqual(
-            _manual_v6_text_sha('中|A\n'),
+            _signed_manual_text_sha('中|A\n'),
             '84996bd499282e0fed65f8ddee3bf3aae24edbe1cb31bea3496c723960d96dbf',
         )
 
@@ -5164,32 +5215,32 @@ title: "Bad table"
         )
 
     def test_manual_v6_declared_payload_never_falls_back_on_missing_or_tampered_data(self):
-        missing = manual_v6_publication_fixture()
+        missing = signed_manual_publication_fixture()
         del missing['manualReaderLongform']['formulas']
         with self.assertRaisesRegex(PublishDataValidationError, 'semantic SHA|formulas'):
             publish_to_blog.generate_paper_page(missing, '2026-08-28')
 
-        tampered = manual_v6_publication_fixture()
+        tampered = signed_manual_publication_fixture()
         tampered['manualReaderLongform']['tables'][0]['renderedMarkdown'] = '| 篡改 | 0 |'
         with self.assertRaisesRegex(PublishDataValidationError, 'semantic SHA|确定性渲染'):
             publish_to_blog.generate_paper_page(tampered, '2026-08-28')
 
-        provenance_drift = manual_v6_publication_fixture()
+        provenance_drift = signed_manual_publication_fixture()
         provenance_drift['analysisManifest']['manualTakeover']['v6Provenance'][
             'recordFileSha256'
         ] = '0' * 64
         with self.assertRaisesRegex(PublishDataValidationError, 'provenance'):
             publish_to_blog.generate_paper_page(provenance_drift, '2026-08-28')
 
-        shadow = manual_v6_publication_fixture()
+        shadow = signed_manual_publication_fixture()
         shadow['manualV6Provenance']['runtimeMode'] = 'shadow'
         shadow['analysisManifest']['manualTakeover']['v6Provenance']['runtimeMode'] = 'shadow'
         with self.assertRaisesRegex(PublishDataValidationError, 'Manual v6 论文记录的运行模式必须为 production；shadow 模式的运行结果不能用于发布。'):
             publish_to_blog.generate_paper_page(shadow, '2026-08-28')
 
-        missing_revision = manual_v6_publication_fixture()
+        missing_revision = signed_manual_publication_fixture()
         del missing_revision['manualReaderLongform']['finalRevisionAuthorReceipt']
-        longform_sha = _manual_v6_hash(missing_revision['manualReaderLongform'])
+        longform_sha = _manual_signature_hash(missing_revision['manualReaderLongform'])
         missing_revision['manualV6Provenance']['readerLongformSha256'] = longform_sha
         missing_revision['analysisManifest']['manualTakeover']['v6Provenance'][
             'readerLongformSha256'
@@ -5200,11 +5251,11 @@ title: "Bad table"
         with self.assertRaisesRegex(PublishDataValidationError, 'finalRevisionAuthorReceipt'):
             publish_to_blog.generate_paper_page(missing_revision, '2026-08-28')
 
-        colliding_tasks = manual_v6_publication_fixture()
+        colliding_tasks = signed_manual_publication_fixture()
         colliding_tasks['manualReaderLongform']['finalRevisionAuthorReceipt'][
             'taskName'
         ] = colliding_tasks['manualReaderLongform']['authorReceipt']['taskName']
-        longform_sha = _manual_v6_hash(colliding_tasks['manualReaderLongform'])
+        longform_sha = _manual_signature_hash(colliding_tasks['manualReaderLongform'])
         colliding_tasks['manualV6Provenance']['readerLongformSha256'] = longform_sha
         colliding_tasks['analysisManifest']['manualTakeover']['v6Provenance'][
             'readerLongformSha256'
@@ -5216,24 +5267,24 @@ title: "Bad table"
             publish_to_blog.generate_paper_page(colliding_tasks, '2026-08-28')
 
     def test_manual_v6_final_page_gate_binds_exact_rendered_block_bytes(self):
-        paper = manual_v6_publication_fixture()
+        paper = signed_manual_publication_fixture()
         markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-28')
         sanitized = publish_to_blog.sanitize_markdown_for_publish(markdown)
         # 这份发布器测试样例数据没有提供 v5 的 resultClaims 结果主张记录，
         # 因而页面即使满足 v6 要求，也可能未通过单独的 v5 检查。
         # 这里仅核对 v6 正文块与最终页面的内容是否一致。
-        pristine_issue = publish_to_blog.validate_final_manual_v4_markdown(
+        pristine_issue = publish_to_blog.validate_final_structured_manual_markdown(
             sanitized, paper,
         ) or ''
         self.assertNotIn('最终 Manual v6 页面的深度解读与正式正文块的渲染结果不一致。', pristine_issue)
         altered = sanitized.replace('完整方法由 8.4% 降到 7.1%', '完整方法由 8.4% 降到 7.2%')
         self.assertIn(
             '最终 Manual v6 页面的深度解读与正式正文块的渲染结果不一致。',
-            publish_to_blog.validate_final_manual_v4_markdown(altered, paper),
+            publish_to_blog.validate_final_structured_manual_markdown(altered, paper),
         )
 
     def test_generation_manifest_recomputes_v6_explicit_bindings(self):
-        paper = manual_v6_publication_fixture()
+        paper = signed_manual_publication_fixture()
         date_str = '2026-08-28'
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -5272,6 +5323,31 @@ title: "Bad table"
                 manifest['manualV6Bindings'][0]['readerArticleSha256'] = '0' * 64
                 with self.assertRaisesRegex(PublishDataValidationError, 'v6'):
                     publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+
+    def test_current_scoring_publication_binds_actual_header_without_relabeling_reader(self):
+        paper = llm_api_publication_fixture()
+        stage = paper['analysisManifest']['stages']['scoringAudit']
+        header = publish_to_blog.public_protocols.record_header('api-scoring-audit', 'api-scoring-audit')
+        stage['scoringContract'] = header['contract']
+        stage['scoringSchemaFingerprint'] = header['schemaFingerprint']
+        bindings = publish_to_blog.llm_api_publication_bindings([paper])
+        self.assertEqual(bindings[0]['scoringContract'], header['contract'])
+        self.assertEqual(bindings[0]['scoringSchemaFingerprint'], header['schemaFingerprint'])
+        self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v3')
+        self.assertNotIn('readerSchemaFingerprint', bindings[0])
+        proof = publish_to_blog.llm_api_production_proof([paper])
+        self.assertEqual(proof['scoringFormats'], [header])
+        self.assertEqual(proof['readerFormats'], [{'contract': 'beginner-researcher-v3'}])
+        # A saved legacy aggregate cannot be used as a request to relabel these
+        # independently checked newer members as the original uniform layout.
+        old = publish_to_blog.public_protocols.historical_header(
+            'llm-api-production-publication', 'uniform-original-declarations')
+        with self.assertRaisesRegex(PublishDataValidationError, '不能覆盖新的或混合的成员格式'):
+            publish_to_blog._llm_api_production_proof_from_checked_bindings(
+                [paper], bindings, original_proof=old)
+        stage['scoringSchemaFingerprint'] = '0' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, '评分审计'):
+            publish_to_blog.llm_api_production_proof([paper])
 
     def test_generation_manifest_recomputes_llm_api_production_bindings(self):
         paper = llm_api_publication_fixture()
@@ -5337,9 +5413,70 @@ title: "Bad table"
                 self.assertEqual(len(manifest['llmApiBindings']), 1)
                 self.assertEqual(
                     manifest['llmApiProduction']['contract'],
-                    'llm-api-production-publication-v1',
+                    'llm-api-production-publication',
                 )
+                self.assertTrue(publish_to_blog.public_protocols.has_valid_header(
+                    manifest['llmApiProduction'], 'llm-api-production-publication'))
+                self.assertEqual(manifest['llmApiProduction']['readerFormats'], [{'contract': 'beginner-researcher-v3'}])
+                self.assertEqual(manifest['llmApiProduction']['scoringFormats'], [{'contract': 'api-scoring-audit-v2'}])
                 publish_to_blog._validate_generation_input_integrity(manifest, date_str)
+                # Cross-runtime metadata replay uses the bytes emitted by the
+                # normal generation writer. This test receipt is local only.
+                replay_dir = Path(tmp) / 'node-replay'
+                replay_dir.mkdir()
+                raw = manifest_path.read_bytes()
+                (replay_dir / f'blog-generation-manifest-{date_str}.json').write_bytes(raw)
+                receipt = {
+                    **publish_to_blog.blog_formats.current_header(publish_to_blog.blog_formats.RECEIPT),
+                    'date': date_str, 'strictReview': True, 'hugoGate': 'hugo',
+                    'reviewProtocolFingerprint': '3' * 64,
+                    'generationManifestSha256': hashlib.sha256(raw).hexdigest(),
+                    **publish_to_blog.blog_formats.receipt_snapshot_fields(manifest),
+                    'generationInputFingerprint': manifest['inputFingerprint'],
+                    'publishedPapersFingerprint': manifest['publishedPapersFingerprint'],
+                    'publicationMode': publish_to_blog.LLM_API_PRODUCTION_MODE,
+                    'llmApiProductionFingerprint': manifest['llmApiProductionFingerprint'],
+                    'publicationCommit': '4' * 40, 'remoteVerifiedOid': '4' * 40,
+                    'remoteVerifiedAt': '2026-09-01T00:00:00+08:00', 'postPublishVisuals': 'not_requested',
+                }
+                (replay_dir / f'blog-review-receipt-{date_str}.json').write_text(json.dumps(receipt), encoding='utf-8')
+                script = (
+                    'const Config=require("./scripts/config");'
+                    'Config.CURRENT_DIR=process.argv[1];'
+                    'const proof=require("./scripts/lib/published-blog-receipt");'
+                    'const result=proof.assertPublishedBlogReceipt(process.argv[2]);'
+                    'if(result.publicationCommit!=="4".repeat(40))throw new Error("wrong receipt binding");'
+                )
+                completed = subprocess.run(['node', '-e', script, str(replay_dir), date_str],
+                                           cwd=publish_to_blog.PROJECT_ROOT, text=True, capture_output=True, timeout=30)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+                unknown = copy.deepcopy(manifest)
+                unknown['llmApiProduction']['schemaFingerprint'] = '0' * 64
+                with self.assertRaisesRegex(PublishDataValidationError, '证明格式未知或指纹不匹配'):
+                    publish_to_blog._validate_generation_input_integrity(unknown, date_str)
+                wrong_set = copy.deepcopy(manifest)
+                wrong_set['llmApiProduction']['scoringFormats'] = []
+                with self.assertRaisesRegex(PublishDataValidationError, 'API 发布证明与实际核验结果不一致'):
+                    publish_to_blog._validate_generation_input_integrity(wrong_set, date_str)
+                # Construct the original aggregate layout only; its members still
+                # undergo the same complete source/Reader/scoring verification.
+                original = copy.deepcopy(manifest)
+                old_proof = {
+                    'contract': 'llm-api-production-publication-v1',
+                    'readerContract': 'beginner-researcher-v3',
+                    'readerSourceBindingsContract': 'api-reader-source-bindings-v4',
+                    'readerAuthorIdentityContract': 'api-reader-author-identity-v1',
+                    'readerResourceIdentityContract': 'api-reader-resource-identity-v1',
+                    'scoringContract': 'api-scoring-audit-v2',
+                    'paperCount': len(bindings), 'paperIds': [item['paperId'] for item in bindings],
+                    'bindingsFingerprint': publish_to_blog._stable_json_sha256(bindings),
+                }
+                original['llmApiProduction'] = old_proof
+                original['llmApiProductionFingerprint'] = publish_to_blog._stable_json_sha256(old_proof)
+                before = json.dumps(original, sort_keys=True)
+                publish_to_blog._validate_generation_input_integrity(original, date_str)
+                self.assertEqual(json.dumps(original, sort_keys=True), before)
                 manifest['llmApiBindings'][0]['readerArticleSha256'] = '0' * 64
                 with self.assertRaisesRegex(PublishDataValidationError, '正式生成清单中的 API 发布核验记录与论文记录不一致'):
                     publish_to_blog._validate_generation_input_integrity(manifest, date_str)
@@ -5352,7 +5489,7 @@ title: "Bad table"
             publish_to_blog.llm_api_production_proof([tampered])
         missing_summary = llm_api_publication_fixture()
         del missing_summary['analysisManifest']['contracts']['coreSummary']
-        with self.assertRaisesRegex(PublishDataValidationError, 'core-summary-detailed-v3'):
+        with self.assertRaisesRegex(PublishDataValidationError, '可核验的详细核心摘要声明'):
             publish_to_blog.llm_api_production_proof([missing_summary])
 
     def test_manual_v5_renders_selected_figure_only_from_reader_article(self):
@@ -6188,7 +6325,7 @@ body
                 )
             self.assertEqual(read_bytes.call_count, 1)
             artifact = artifacts[str(page.resolve())]
-            self.assertEqual(artifact['version'], 1)
+            self.assertNotIn('version', artifact)
             self.assertEqual(
                 artifact['sha256'], hashlib.sha256(page.read_bytes()).hexdigest(),
             )
@@ -7488,7 +7625,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertEqual(plan['paths'], [])
             self.assertEqual(plan['reusedPassed'], 1)
             cache = json.loads(cache_path.read_text(encoding='utf-8'))
-            self.assertEqual(cache['schemaVersion'], 1)
+            self.assertTrue(publish_to_blog.public_protocols.is_current_header(
+                cache, publish_to_blog.blog_formats.PASS_CACHE))
             self.assertEqual(cache['files'][0]['sha256'], publish_to_blog._sha256_file(page))
 
     def test_incremental_review_retries_unchanged_transient_but_blocks_unchanged_content_failure(self):
@@ -8674,43 +8812,6 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertEqual([item['rank'] for item in context['ranking']], list(range(1, 11)))
         self.assertEqual(context['ranking'][-1]['title'], 'Paper 10')
 
-    def test_post_publish_planner_start_failure_does_not_undo_blog_success(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            current = Path(tmp)
-            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
-                manifest = publish_to_blog.generation_manifest_path('2026-07-10')
-                manifest.parent.mkdir(parents=True, exist_ok=True)
-                manifest.write_text(json.dumps({'category': '论文速递'}), encoding='utf-8')
-                with mock.patch.object(
-                    publish_to_blog, '_run_bounded_subprocess', side_effect=OSError('node missing'),
-                ):
-                    self.assertFalse(
-                        publish_to_blog.plan_post_publish_visual_assets('2026-07-10')
-                    )
-
-    @mock.patch.dict(os.environ, {'PD_VISUAL_PLANNER_TIMEOUT_SECONDS': ''})
-    def test_post_publish_planner_timeout_is_bounded_and_retryable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            current = Path(tmp)
-            completed = SimpleNamespace(
-                returncode=-15, stdout='', stderr='planner timeout',
-                timed_out=True, output_truncated=False,
-            )
-            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
-                manifest = publish_to_blog.generation_manifest_path('2026-07-10')
-                manifest.parent.mkdir(parents=True, exist_ok=True)
-                manifest.write_text(json.dumps({'category': '论文速递'}), encoding='utf-8')
-                with mock.patch.object(
-                    publish_to_blog, '_run_bounded_subprocess', return_value=completed,
-                ) as run, contextlib.redirect_stdout(io.StringIO()) as output:
-                    self.assertFalse(
-                        publish_to_blog.plan_post_publish_visual_assets('2026-07-10')
-                    )
-            self.assertEqual(run.call_args.kwargs['timeout_seconds'], 120)
-            self.assertTrue(run.call_args.kwargs['combine_output'])
-            self.assertIn('超时且完整进程组已终止', output.getvalue())
-            self.assertIn('诊断: planner timeout', output.getvalue())
-
     def test_digest_cover_local_bytes_are_allowed_for_required_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'
@@ -9342,7 +9443,7 @@ body
         self.assertEqual(
             snapshot['contract'], publish_to_blog.TAG_CATALOG_SNAPSHOT_CONTRACT,
         )
-        self.assertEqual(snapshot['registryVersion'], 'paper-tag-catalog-v2')
+        self.assertEqual(snapshot['registryVersion'], publish_to_blog.tag_catalog_identity(publish_to_blog._PAGE_TAG_CATALOG))
         self.assertEqual(
             snapshot['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )

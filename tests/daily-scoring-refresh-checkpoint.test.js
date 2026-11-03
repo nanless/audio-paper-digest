@@ -39,7 +39,7 @@ const fixtureSource = fs.readFileSync(fixtureFile, 'utf8').split("for (const cod
 const fixtures = compile(fixtureSource + '\nmodule.exports = { fixture };', fixtureFile);
 const response = {
     documentType: '方法研究', confidence: '高',
-    evidenceProfile: { version: 1, multiComponentClaimed: false, ablationStatus: 'not_applicable',
+    evidenceProfile: { ...require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader(), multiComponentClaimed: false, ablationStatus: 'not_applicable',
         targetEvaluation: 'public', sampleScaleReported: true, deploymentMeasured: false,
         publicGeneralizationEvaluated: false, engineeringEvidence: 'claim_only',
         evidenceBoundary: '[A_RESULTS] 公开结果没有实测部署效率。', evidenceIds: ['A_METHOD', 'A_RESULTS'] },
@@ -319,7 +319,7 @@ test('completed Reader pending only completion archive storage resumes without s
     await assert.rejects(entry.refreshApiReaders([f.id], f.options), { scope: 'run' });
     const pending = f.read().papers[0];
     assert(checkpoint.hasCheckpoint(pending));
-    assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(pending), true);
+    assert.equal(require('../scripts/analysis-engine').hasValidIntegratedApiReaderRecords(pending), true);
     fs.unlinkSync(completedDirectory);
     const result = await entry.refreshApiReader(f.id, f.options);
     assert.equal(require('../scripts/analysis-engine').isSuccessfulAnalysisRecord(result), true);
@@ -393,7 +393,7 @@ test('actual scoring-only feedback cold-adopts its private score while keeping t
         entry.refreshApiReader(f.id, f.options), error => !!error.scoringRefreshRecovery));
     assert.deepEqual(f.calls, { score: 1, reader: 0 });
     assert.equal(checkpoint.hasPreservedCheckpoint(f.read().papers[0]), true);
-    assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(f.read().papers[0]), true);
+    assert.equal(require('../scripts/analysis-engine').hasValidIntegratedApiReaderRecords(f.read().papers[0]), true);
     assert(entry.resolveBatchRefreshIds({ all: true, date: '2026-09-07', concurrency: 1 }).includes(f.id),
         '--all must select a private orphan even when the old signed Reader is complete');
     f.options.operations.scoringAndReader = normal;

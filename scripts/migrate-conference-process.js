@@ -58,8 +58,8 @@ function parseArgs(argv) {
         ...(values['--source-corrections'] ? { sourceCorrections: values['--source-corrections'] } : {}) };
 }
 
-function withoutImplementation(authority, version = processApi.PROCESS_VERSION) {
-    const value = processApi.authorityWithoutTagCatalog(authority, version);
+function withoutImplementation(authority, format = 'tag-catalog') {
+    const value = processApi.authorityWithoutTagCatalog(authority, format);
     delete value.implementationSha256;
     return value;
 }
@@ -136,8 +136,12 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
         // A portable orchestration fixture may not create an analysis store;
         // there is then no actual saved ordinary child that can be adopted.
         if (!authority && !deps.files.conferenceAnalysisDir) continue;
-        const executionId = authority?.expectedExecutionId || require('./lib/conference-analysis-adapter').readerRevisionExecutionId(
-            originalItem.analysisRunId, originalItem.analysisProof.analysisSha256);
+        const originalSource = shared.retainedSources?.get(originalItem.analysisRunId);
+        const executionId = authority?.expectedExecutionId || deps.adapter.resolveReaderRevisionExecutionId({
+            analysisRoot: deps.files.conferenceAnalysisDir, parentExecutionId: originalItem.analysisRunId,
+            parentAnalysisFileSha256: originalItem.analysisProof.analysisSha256,
+            planHandle: originalSource?.planHandle || shared.planHandle,
+            sourceRoot: originalSource?.sourceRoot || shared.sourceCacheRoot });
         const loadChild = () => authority
             ? deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir, executionId })
             : deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir, executionId });
@@ -206,7 +210,7 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
                     sourceSnapshotSha256: manifest.sourceSnapshotSha256 },
                 pageProof: { manifestSha256: manifest.manifestSha256,
                     contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
-            const body = { contract: 'conference-saved-complete-child-adoption-v1', version: 1,
+            const body = { ...require('./lib/protocol-codec').recordHeader('conference-saved-complete-child-adoption', 'conference-saved-complete-child-adoption'),
                 processId: state.processId, previousStateSha256: state.stateSha256,
                 paperId: item.paperId, previousItem: structuredClone(item), proof };
             const receipt = { ...body, receiptSha256: processApi.stableHash(body) };
@@ -281,7 +285,7 @@ function migrateAndRun(options, runtime = {}) {
             || Object.values(state.items).some(item => item.status !== 'complete' && !grant.paperIds.includes(item.paperId)))) {
             throw new Error('追加许可只允许原完整失败集合，不能用于清单外未完成论文');
         }
-        if (processApi.stableHash(withoutImplementation(state.authority, state.version))
+        if (processApi.stableHash(withoutImplementation(state.authority, processApi.processFormat(state)))
             !== processApi.stableHash(withoutImplementation(context.authority))) {
             throw new Error('来源、筛选或其余配置与原进程不一致，不能迁移实现。');
         }
@@ -447,7 +451,7 @@ function migrateAndRun(options, runtime = {}) {
             if (state.authority.implementationSha256 !== currentImplementation || lifecycleNeedsRefresh) {
                 state = deps.engine.updateJsonFileLocked(stateFile, current => {
                     const checked = processApi.assertState(current);
-                    if (processApi.stableHash(withoutImplementation(checked.authority, checked.version))
+                    if (processApi.stableHash(withoutImplementation(checked.authority, processApi.processFormat(checked)))
                         !== processApi.stableHash(withoutImplementation(context.authority))) {
                         throw new Error('实现迁移期间检查点的授权信息被改过');
                     }
@@ -486,7 +490,7 @@ function migrateAndRun(options, runtime = {}) {
                 ? path.join(directory, `implementation-migration-${currentImplementation.slice(0, 12)}.json`)
                 : migrationFile;
             const receiptBody = {
-                contract: 'conference-process-implementation-migration-v1', version: 1,
+                ...require('./lib/protocol-codec').recordHeader('conference-process-implementation-migration', 'conference-process-implementation-migration'),
                 processId: options.fromProcessId, conferenceId: context.authority.conferenceId,
                 fromImplementationSha256: oldImplementation,
                 toImplementationSha256: currentImplementation,
@@ -516,8 +520,9 @@ function migrateAndRun(options, runtime = {}) {
             const planHandle = original?.planHandle || currentShared.planHandle;
             const sourceRoot = original?.sourceRoot || currentShared.sourceCacheRoot;
             const itemGrantHandle = grantHandle || migrationDeps.resolveExistingRecoveryGrant(item);
-            const childId = require('./lib/conference-analysis-adapter').readerRevisionExecutionId(
-                item.analysisRunId, item.analysisProof.analysisSha256);
+            const childId = deps.adapter.resolveReaderRevisionExecutionId({ analysisRoot: deps.files.conferenceAnalysisDir,
+                parentExecutionId: item.analysisRunId, parentAnalysisFileSha256: item.analysisProof.analysisSha256,
+                planHandle, sourceRoot });
             const childDirectory = path.join(deps.files.conferenceAnalysisDir, childId);
             let childAbsent = false;
             try { fs.lstatSync(childDirectory); }

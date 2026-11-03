@@ -12,7 +12,7 @@ enum PublishedSourceWarning {
         guard let value=nonempty(value),let u=URL(string:value),u.scheme=="https",u.host != nil,u.user==nil,u.password==nil,u.port==nil || u.port==443 else{return nil};return value
     }
     static func warning(citation: [String: Any], material: Material) -> String? {
-        guard citation["contract"] as? String=="paper-citation-source-v1",
+        guard ClientProtocols.hasValidHeader(citation,"paper-citation-source"),
               let verified=citation["verified"] as? NSNumber,CFGetTypeID(verified)==CFBooleanGetTypeID(),verified.boolValue,
               citation["identityStatus"] as? String=="verified",nonempty(material.paperID) != nil,
               citation["paperKey"] as? String==material.paperID,

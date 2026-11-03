@@ -43,7 +43,7 @@ function fixture() {
             if (name === './conference-postprocess') return { readOriginalTagProof: () => ({ rules: { fixtureOnly: true } }) };
             assert.equal(name, '../analysis-engine');
             return { paperAnalysisLockHeld: () => lock,
-                hasValidApiReaderV3Records(value) {
+                hasValidIntegratedApiReaderRecords(value) {
                     events.push('reader'); assert.equal(value, paper); return reader;
                 },
                 isSuccessfulAnalysisRecordForReadOnlyConferencePublication(value) {

@@ -12,6 +12,43 @@ const primaryArxiv = require('../scripts/lib/historical-daily-primary-arxiv-bind
 const icmlPosterApi = require('../scripts/lib/historical-icml-poster-authority.js');
 const conferencePageMappingsApi = require('../scripts/lib/historical-conference-page-projections.js');
 const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
+
+test('原Git规划器生成的历史登记与暂存绑定按原格式只读重放', t => {
+    const Module = require('node:module');
+    const bytes = require('node:child_process').execFileSync('git', ['cat-file', 'blob',
+        '4dba699325a4b05943b8bb77317634491105ae82'], { cwd: path.resolve(__dirname, '..'), maxBuffer: 1024 * 1024 });
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),
+        '3985b893c4a0b4ec8bedd035f30b773ad343c75788556b0f042c7ff25d37ee0c');
+    const filename = require.resolve('../scripts/lib/historical-direct-rewrite-plan');
+    const loaded = new Module(filename, module); loaded.filename = filename;
+    loaded.paths = Module._nodeModulePaths(path.dirname(filename)); loaded._compile(bytes.toString('utf8'), filename);
+    const original = loaded.exports;
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    const mappings = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = original.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, conferencePageProjections: mappings });
+    const before = JSON.stringify(plan);
+    assert.deepEqual(planner.normalizePlan(plan), plan);
+    const registry = original.buildRegistry(plan);
+    assert.deepEqual(planner.normalizeRegistry(registry, plan), registry);
+    const item = plan.queue.find(item => item.route.kind === 'conference-local-pdf');
+    const artifact = { paperId: item.paperId, runId: item.runId, route: item.route.kind,
+        analysisFileSha256: 'a'.repeat(64), analysisRecordSha256: 'b'.repeat(64), sourceSnapshotSha256: 'c'.repeat(64) };
+    const saved = original.directStagingBinding({ plan, registry, paperId: item.paperId, analysisArtifact: artifact });
+    const replay = () => planner.replayDirectStagingBinding({ plan, paperId: item.paperId,
+        analysisArtifact: artifact, sourceBinding: null, storedBinding: saved });
+    assert.deepEqual(replay(), saved);
+    assert.equal(JSON.stringify(plan), before);
+    const wrongHeader = { ...saved, version: saved.version + 1 };
+    assert.throws(() => planner.replayDirectStagingBinding({ plan, paperId: item.paperId,
+        analysisArtifact: artifact, sourceBinding: null, storedBinding: wrongHeader }), /格式声明/);
+    const changed = structuredClone(saved); changed.adapter.version += 1;
+    assert.throws(() => planner.replayDirectStagingBinding({ plan, paperId: item.paperId,
+        analysisArtifact: artifact, sourceBinding: null, storedBinding: changed }), /原直接暂存绑定/);
+    // This proves original format/hash reconstruction only. Actual sources,
+    // analysis files and whole-paper qualification are checked by loadStagedMember.
+});
 const directControl = require('../scripts/lib/historical-direct-control.js');
 const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 const schedulerCli = require('../scripts/historical-direct-rewrite-scheduler.js');
@@ -92,7 +129,7 @@ function currentCatalog({ root, inventory, inventoryPath, inventoryFileSha256, e
         && page.identityHints.candidates[0].scheme === 'arxiv').length;
     const arxivPages = singleArxivPages + dailyPrimaryArxivBindings.length;
     const conferencePageCount = inventory.pages.filter(page => page.scope.type === 'conference').length;
-    return catalogApi.normalizeCatalog({ contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
+    return catalogApi.normalizeCatalog({ ...require('../scripts/lib/protocol-codec').recordHeader(catalogApi.CONTRACT, 'historical-direct-local-input-catalog'), scope: catalogApi.SCOPE,
         scopeBinding: { inventoryPath, inventorySha256: inventoryFileSha256,
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
             arxivPageCount: arxivPages, singleArxivPageCount: singleArxivPages,
@@ -343,8 +380,9 @@ test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交�
     assert.equal(conferenceRuns.length, 2, 'arXiv 来源获取失败不能阻止两篇使用本地会议来源的论文继续处理');
     const names = fs.readdirSync(handoffRoot); assert.equal(names.length, 1);
     const stored = planner.readArxivFreshFailureHandoff({ root: handoffRoot, handoffName: names[0] }).handoff;
-    assert.equal(stored.version, 1);
-    assert.equal(stored.contract, 'historical-arxiv-fresh-failure-crosswalk-handoff-v1');
+    assert.equal(stored.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('historical-arxiv-fresh-failure-crosswalk-handoff'));
+    assert.equal(stored.contract, planner.ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT);
+    assert.equal(Object.hasOwn(stored, 'version'), false);
     assert.equal(Object.hasOwn(stored, 'dailyPrimaryArxivBindings'), false);
     assert.equal(stored.paperId, 'arxiv:2601.00001'); assert.equal(stored.route, 'arxiv-fresh-fetch');
     assert.equal(stored.failure.errorCode, 'ARXIV_TRANSPORT'); assert.equal(stored.pageBindings.length, 1);

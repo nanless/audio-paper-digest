@@ -862,7 +862,7 @@ test('合成旧许可的索引分组及后续历史失败不污染迁移审计',
         else groups.push({ sectionIndexes: [index], heading: section.heading });
     });
     assert.equal(groups.length, 12);
-    const plan = { contract: repair.SECTION_GROUP_PLAN_CONTRACT, version: 1,
+    const plan = { ...require('../scripts/lib/reader-section-format').currentHeader(),
         draftSha256: context.draftSha256, sectionsSha256: context.targets[0].oldSha256, groups };
     const compiled = repair.compileSectionIndexGroupPlan(migrated.draft, plan, context);
     const draft = repair.applyReaderPatch(migrated.draft, compiled.patch, ['/sections'], { atomicOperation: context.atomicOperation });
@@ -875,7 +875,7 @@ test('合成旧许可的索引分组及后续历史失败不污染迁移审计',
     const loaded = loadFailedCandidate(f.directory, f.identity);
     assert.equal(loaded.draft.sections.length, 12);
     assert.deepEqual(loaded.readerRecoveryRevisions, migrated.readerRecoveryRevisions);
-    assert.ok(loaded.readerRecoveryRevisions.every(audit => audit.contract === 'reader-recovery-diagnostics-revision-v1'));
+    assert.equal(loaded.readerRecoveryRevisions[0].contract, 'reader-recovery-diagnostics-revision-v1');
     const again = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels));
     assert.deepEqual(again, loaded);
     const nextIdentity = { ...f.identity, parserImplementationSha256: '9'.repeat(64) };
@@ -886,7 +886,8 @@ test('合成旧许可的索引分组及后续历史失败不污染迁移审计',
     assert.equal(next.implementationRepairAllowanceProof, null);
     assert.ok(next.consumedImplementationAllowanceSha256.includes(allowance.allowanceSha256));
     assert.deepEqual(next.draft, draft);
-    assert.ok(next.readerRecoveryRevisions.every(audit => audit.contract === 'reader-recovery-diagnostics-revision-v1'));
+    assert.deepEqual(next.readerRecoveryRevisions.slice(0, -1), loaded.readerRecoveryRevisions);
+    assert.ok(require('../scripts/lib/protocol-codec').isCurrentHeader(next.readerRecoveryRevisions.at(-1), 'reader-recovery-diagnostics-revision'));
 });
 
 
@@ -998,3 +999,72 @@ for (const field of ['sourceSha256','inputFingerprint','readerRecoveryEpochSha25
         assert.deepEqual(fs.readFileSync(file), bytes);
     });
 }
+
+test('格式换名由真实旧候选完整归档延续，正文次数、费用字段和停止状态不重置', t => {
+    const f = fixture(t), format = require('../scripts/lib/reader-candidate-format');
+    f.oldIdentity = { ...f.oldIdentity, ...require('../scripts/lib/reader-legacy-records.json').originalIdentityFields };
+    f.identity = Object.fromEntries(Object.entries(f.oldIdentity).filter(([key]) => !format.identityFormatFields.includes(key)));
+    Object.assign(f.identity, format.identityFields());
+    f.payload.actualFeeHistory = [{ eventId: 'original-test-fee', cost: 'unchanged' }];
+    fs.mkdirSync(f.directory, { mode: 0o700 });
+    const file = path.join(f.directory, hashDraft(f.oldIdentity) + '.json');
+    const original = Buffer.from(JSON.stringify({
+        ...require('../scripts/lib/protocol-codec').historicalHeader('reader-candidate', 'failed-candidate'),
+        identity: f.oldIdentity, payload: f.payload, payloadSha256: hashDraft(f.payload)
+    }));
+    fs.writeFileSync(file, original, { mode: 0o600 });
+    const recovered = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    for (const key of retainedDiagnosticKeys) assert.deepEqual(recovered[key], f.payload[key], key);
+    assert.deepEqual(recovered.actualFeeHistory, f.payload.actualFeeHistory);
+    const audit = recovered.readerRecoveryRevisions.at(-1);
+    assert.deepEqual(fs.readFileSync(path.join(f.directory, audit.archivedName)), original);
+    const current = require('../scripts/lib/reader-repair').readFailedCandidateEnvelope(f.directory, f.identity);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(current.envelope, 'reader-candidate'), true);
+    assert.equal(current.envelope.version, undefined);
+    assert.deepEqual(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), recovered);
+});
+
+test('未启用恢复诊断或提示词变化时，格式换名不能制造空次数；未知格式也不准降级', t => {
+    const f = fixture(t), format = require('../scripts/lib/reader-candidate-format');
+    f.oldIdentity = { ...f.oldIdentity, ...require('../scripts/lib/reader-legacy-records.json').originalIdentityFields };
+    const current = Object.fromEntries(Object.entries(f.oldIdentity).filter(([key]) => !format.identityFormatFields.includes(key)));
+    Object.assign(current, format.identityFields());
+    const file = saveFailedCandidate(f.directory, f.oldIdentity, f.payload), before = fs.readFileSync(file);
+    for (const identity of [current, { ...current, promptSha256: 'different-template' }]) {
+        assert.throws(() => withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: false },
+            () => loadReaderRecoveryRevision(f.directory, identity)), { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
+        assert.deepEqual(fs.readFileSync(file), before);
+        assert.equal(fs.existsSync(path.join(f.directory, hashDraft(identity) + '.json')), false);
+    }
+    const broken = structuredClone(current); broken.readerIdentity.article.schemaFingerprint = 'f'.repeat(64);
+    assert.equal(require('../scripts/lib/reader-compatible-candidate-replay').sameInput(f.oldIdentity, broken), false);
+    assert.throws(() => saveFailedCandidate(f.directory, broken, f.payload), /identity format/);
+    assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('纯格式迁移只延续实际原未用许可，不消耗、不增发；原许可和计数改动仍拒绝', t => {
+    const f = fixture(t), format = require('../scripts/lib/reader-candidate-format');
+    const originalFields = require('../scripts/lib/reader-legacy-records.json').originalIdentityFields;
+    Object.assign(f.oldIdentity, originalFields); Object.assign(f.identity, originalFields);
+    const installed = syntheticLegacy(f);
+    f.oldIdentity = structuredClone(f.identity);
+    f.payload = installed;
+    f.identity = Object.fromEntries(Object.entries(f.oldIdentity).filter(([key]) => !format.identityFormatFields.includes(key)));
+    Object.assign(f.identity, format.identityFields());
+    const originalProof = installed.implementationRepairAllowanceProof.allowanceSha256;
+    const previous = fs.readFileSync(path.join(f.directory, hashDraft(f.oldIdentity) + '.json'));
+    const recovered = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    const repair = require('../scripts/lib/reader-repair');
+    assert.equal(repair.hasUnusedImplementationAllowance(recovered), true);
+    assert.equal(recovered.implementationRepairAllowanceProof.originalAllowanceSha256, originalProof);
+    assert.deepEqual(recovered.consumedImplementationAllowanceSha256 || [], installed.consumedImplementationAllowanceSha256 || []);
+    for (const key of retainedDiagnosticKeys) assert.deepEqual(recovered[key], installed[key], key);
+    assert.deepEqual(fs.readFileSync(path.join(f.directory, recovered.readerRecoveryRevisions.at(-1).archivedName)), previous);
+    assert.equal(f.enabled(() => repair.validateImplementationAllowance(recovered, f.identity, f.directory)), true);
+    for (const mutate of [p => { p.attempts -= 1; },
+        p => { p.implementationRepairAllowanceProof.originalAllowanceSha256 = 'f'.repeat(64); },
+        p => { p.readerRecoveryRevisions.at(-1).changedFields.pop(); }]) {
+        const changed = structuredClone(recovered); mutate(changed);
+        assert.throws(() => f.enabled(() => repair.validateImplementationAllowance(changed, f.identity, f.directory)));
+    }
+});

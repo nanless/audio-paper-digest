@@ -23,6 +23,7 @@ actor StorageDetailPublishedFixture {
             entered=true;await withCheckedContinuation{continuation=$0}
             return Data("<html><body><div id='article-body' class='post-content'><h1>Isolated late old guide</h1><p>Actual transport fixture held until native sheet exists.</p></div></body></html>".utf8)
         }
+        if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
         throw URLError(.fileDoesNotExist)
     }
     func release(){continuation?.resume();continuation=nil}

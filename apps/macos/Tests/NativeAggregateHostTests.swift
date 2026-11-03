@@ -14,6 +14,7 @@ private actor FixtureTransport {
     func read(_ url: URL, limit: Int) throws -> Data {
         requests+=1
         if url.absoluteString.hasSuffix("/ci-summary/") { bodyRequests += 1; if failBody { throw URLError(.notConnectedToInternet) } }
+        if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
         guard let data = files[url.absoluteString], data.count <= limit else { throw URLError(.fileDoesNotExist) }
         return data
     }

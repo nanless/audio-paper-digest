@@ -30,9 +30,9 @@
 | 日更来源的文本与 PDF | `scripts/lib/daily-fresh-source-plan.js`、`scripts/lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
-| 分析结构或评分 | `analysis-contract.js`、当前 `deep-analysis-v8.md` 及评分提示词 | Node/Python 解析器和发布器 |
+| 分析结构或评分 | `analysis-contract.js`、当前 `prompts/current/deep-analysis.md` 及评分提示词 | Node/Python 解析器和发布器 |
 | 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`tag_catalog.py`、`tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
-| Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v11.md`、`api-reader-repair-v13.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| Reader 写作、图表或修复 | 当前登记的 `prompts/current/api-reader-article.md`、`prompts/current/api-reader-repair.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
@@ -61,13 +61,13 @@
 5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
 6. 读者正文没有模板句、证据 ID 或流程说明。
 
-工作树只保留当前登记的 18 份正文；实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 为准，不能只从文件名推断协议。例如，当前结构修复文件名为 v4，登记的正文协议却是 `analysis-prompt-text-v5`；正文审校也采用该协议。
+工作树只保留现用模板，路径统一位于 `prompts/current/`。阶段与文件的对应关系以 `scripts/lib/prompt-current-records.json` 为准，`scripts/lib/prompt-contracts.js` 提供读取接口。现用协议使用稳定名称和格式指纹；修改正文时还会核对完整文件及实际模板的 SHA-256，不按文件名推断兼容性。
 
-当前模板包括主分析文件 `deep-analysis-v8.md`、正文审校文件 `gap-fill-v5.md`、评分 v5、核心摘要 v7、Reader 文章文件 `api-reader-article-v11.md`、局部修复 v13、结构修复文件 `structure-repair-v4.md`，以及 3 份事实/术语专项修复模板，见 [Prompt 索引](../prompts/README.md)。新建分析默认使用当前模板；已有付费候选的恢复先核验其原阶段和请求身份，不能因模板升级直接换版或重新计数。
+模板覆盖主分析、正文审校、评分、核心摘要、读者文章、局部修复、结构修复及事实和术语纠正，详见[提示词索引](../prompts/README.md)。新分析使用现用模板；恢复已有付费候选时，先核验其原阶段、请求输入及来源，不因模板变化重新计数或换成新请求。
 
-筛选使用 `filter-v5.md`，明确实际音频输入与评测、音乐生成输入、口语轮次控制和说话人分段错误的相关范围，并区分实际声音方法或系统的贡献与固定现成基准验证；推理采样、解码等贡献不要求新增训练模块。通用理论、表示、算法或采样与音频线索交界的候选，按当前关键词规则先核验官方方法和实验材料再筛选。旧会议筛选仍核验原声明版本、原模板 SHA 和原正文，通过 Git 证据读取器取回旧字节，不能与新版正文混用。提示词正文版本不代替 Reader 文章等内容协议。
+筛选模板为 `prompts/current/filter.md`，说明实际音频输入与评测、音乐生成、口语轮次控制和说话人分段错误的相关范围，并区分声音方法或系统的贡献与固定基准验证。通用理论、表示、算法或采样与音频线索交界的候选，先核验官方方法和实验材料。旧会议筛选仍核验原声明、原模板 SHA-256 和原正文，不能将现用正文代入历史请求。提示词格式也不能代替读者文章的内容核验。
 
-旧提示词正文不再保存在工作树；`scripts/lib/git-prompt-evidence-index.json` 只登记原路径、Git blob OID 和整文件 SHA。旧记录通过受控读取器从 Git 取回原字节，复核整文件及首围栏模板 SHA，并保留原声明、来源、检查点和付费记录；缺失或不符就停止，不能用当前正文补签旧结果。原允许的付费恢复须保留已绑定的 Prompt 身份；会议旧付费稿的只读重验硬禁模型请求，也不借用当前模板重新签名。字段缺失按原 v1 身份处理，未知版本直接报错；原允许的旧核心摘要修正仍须通过原模板 SHA 和真实 v2 主分析指纹检查，不能把旧输出改标为新版。
+旧提示词不保存在工作树。`scripts/lib/git-prompt-evidence-index.json` 登记原路径、Git 对象及整文件 SHA-256；受控读取器取回原字节，核对整文件和首个围栏代码块，同时保留原来源、检查点和付费记录。缺失或不符就停止，不能用现用正文补签。原请求允许的恢复保留已绑定的提示词身份；旧稿的只读重验不请求模型，也不增加请求额度。原本缺失的字段只按明确登记的历史规则解释，未知声明或指纹直接拒绝。
 
 Git 证据索引不保存旧全文，也不授权新建旧任务。读取失败、Git blob 缺失或整文件/模板 SHA 不符须保留错误并停止，不因文件名或 SHA 形式合法而放行。测试使用严格读取器核验真实历史字节，不要求退休 Markdown 文件仍在工作树。
 
@@ -110,7 +110,7 @@ Reader-only 完成判据必须重放真实父子反馈组合，不能把已通�
 
 ### 旧输入清洗是否损坏字符
 
-请求清洗使用 `model-text-unicode-scalars-v1`，保留数学字母、生僻姓名等合法非 BMP 字符，仍替换孤立 UTF-16 代理字符。受影响输入的阶段指纹包含清洗版本；旧结果在生产恢复、提升、暂存及日更发布前，须从已核验来源证明输入没有受旧清洗影响，或按原来源完整重分析。新版标记不能代替 TXT、PDF、runtime、manifest 与来源 SHA 核验。重分析前保留带 SHA 的旧正文和阶段快照，不改封存来源字节。
+模型请求保留数学字母和姓名中的合法 Unicode 字符，替换孤立的 UTF-16 代理字符。来源记录注明 `model-text-sanitization` 和实际结构指纹；重算已经付费的请求指纹时，仍使用当时的算法身份。旧结果在生产恢复、提升、暂存及日更发布前，须从已核验来源证明输入没有受旧清洗影响，或按原来源完整重分析。新版标记不能代替 TXT、PDF、runtime、manifest 与来源 SHA 核验。重分析前保留带 SHA 的旧正文和阶段快照，不改封存来源字节。
 
 无法重新核对完整输入时，不得推定旧清洗没有影响输入：没有新版标记的旧 direct 会议暂存即使元数据是普通中文，也可能因缺少完整原文而拒绝复用；缺少可重新读取并核验的封存来源引用的明确 API Reader v2/v3 文件不得直接重新生成或续推。Manual、已发布页面只读和旧成功结构保持原规则。本次代码升级不自动调用模型或改写旧博客；有完整已核验来源且不含受影响输入的旧记录保留复用资格。
 
@@ -225,7 +225,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ### 检查推送后的收尾步骤
 
-- `npm run publish:finish -- --date DATE`：打印推送后收尾清单，包括正式状态、网页核验及当前发布的不生图登记。登记缺失时只提示重建发布后任务清单，再执行豁免；不提示图片准备，也不自行登记或调用图像 API。
+- `npm run publish:finish -- --date DATE`：打印推送后收尾清单，包括正式状态、网页核验及当前发布的不生图登记。登记缺失时提示核对正式发布凭证后直接登记不生图；不提示图片准备，也不自行登记或调用图像 API。
 
 `verify:web` 的完整部署结果还要求明确的 `jobVerified: true`。缺 runId、jobs 查询失败或超时、无法解析响应等均保留为未核验，不以 run 的成功结论替代 job 证据。此时结果仍为 `partial:true`；同时显式使用 `--allow-degraded --allow-partial` 只允许诊断命令退出成功，不会把证据升级为完整验收。实际 job 失败、取消或跳过继续返回失败。
 

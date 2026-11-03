@@ -1,0 +1,38 @@
+{
+  "protocols": [
+    {
+      "name": "reader-recovery-diagnostics-revision",
+      "currentVariant": "bound-candidate-transition",
+      "currentSchema": {"identity": "candidate-source-scope-and-archived-parent", "preservesCounts": true},
+      "historical": [{"tag": "reader-recovery-diagnostics-revision-v1", "variant": "bound-candidate-transition"}]
+    },
+    {
+      "name": "reader-implementation-repair-allowance",
+      "currentVariant": "single-bound-repair",
+      "currentSchema": {"identity": "exact-revision-audit-and-original-candidate", "maximumAdditionalRepairs": 1},
+      "historical": [{"tag": "reader-implementation-repair-allowance-v1", "variant": "single-bound-repair"}]
+    },
+    {
+      "name": "reader-explicit-transport-continuation",
+      "currentVariant": "single-physical-continuation",
+      "currentSchema": {"identity": "original-round-grant-and-candidate-bytes", "maximumAdditionalPhysicalRequests": 1},
+      "historical": [{"tag": "reader-explicit-transport-continuation-v1", "variant": "single-physical-continuation"}]
+    },
+    {
+      "name": "reader-consumed-transport-paid-anchor",
+      "currentVariant": "original-consumed-response",
+      "currentSchema": {"identity": "exact-consumed-sidecar-and-actual-paid-response", "newBudget": 0},
+      "historical": [{"tag": "reader-consumed-transport-paid-anchor-v1", "variant": "original-consumed-response"}]
+    },
+    {
+      "name": "reader-implementation-repair-lineage",
+      "currentVariant": "previously-issued-lineage",
+      "currentSchema": {"purpose": "reject-additional-implementation-grants", "authority": "none"},
+      "historical": [{"tag": "reader-implementation-repair-lineage-v1", "variant": "previously-issued-lineage"}]
+    },
+    {"name": "reader-explicit-paid-retry-round", "currentVariant": "bound-paid-window", "currentSchema": {"purpose": "exact original candidate, source, request ledger and fixed allowance"}, "historical": [{"tag": "reader-explicit-paid-retry-round-v1", "variant": "bound-paid-window"}]},
+    {"name": "reader-explicit-parent-local-repair", "currentVariant": "single-local-child", "currentSchema": {"purpose": "exact exhausted parent receipt and one local repair"}, "historical": [{"tag": "reader-explicit-parent-local-repair-v1", "variant": "single-local-child"}]},
+    {"name": "reader-explicit-parent-recovery", "currentVariant": "bounded-parent-chain", "currentSchema": {"purpose": "exact parent ancestry and cumulative allowance"}, "historical": [{"tag": "reader-explicit-parent-recovery-v1", "variant": "bounded-parent-chain"}]},
+    {"name": "reader-parent-recovery-plan", "currentVariant": "planning-only", "currentSchema": {"purpose": "candidate-bound plan with no requests or installs"}, "historical": [{"tag": "reader-parent-recovery-plan-v1", "variant": "planning-only"}]}
+  ]
+}

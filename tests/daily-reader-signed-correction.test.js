@@ -51,7 +51,7 @@ test('真实当前完整签名稿：原付费重放、正常finalizer及资格�
     await daily.withDailyFreshAnalysisContext(plan, () => engine.withPaperAnalysisLock(p, () =>
         daily.withDailyFreshPaperSource(plan, p, source => fresh.withFreshPaperContext(p, async () => {
             updated = await signed.preview(handle, p);
-            assert.equal(engine.hasValidApiReaderV3Records(updated), true);
+            assert.equal(engine.hasValidIntegratedApiReaderRecords(updated), true);
             assert.equal(updated.apiReaderArticle.includes('等氼'), false);
             assert.equal(updated.apiReaderArticle, p.apiReaderArticle.replaceAll('等氼', '等渗'));
             assert.deepEqual(updated.analysisManifest.stages.apiReaderArticle.factReview, facts.proofFor(feedback));

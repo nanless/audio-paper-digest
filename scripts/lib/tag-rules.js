@@ -1,20 +1,25 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const protocols = require('./protocol-codec.js');
 const path = require('node:path');
 const tagCatalogApi = require('./tag-catalog.js');
 
-const TAG_PROMPT_TEXT_CONTRACT = 'paper-tag-prompt-text-v2';
-const LEGACY_TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1';
-const TAG_SELECTION_CONTRACT = 'paper-tag-selection-v2';
-const LEGACY_TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1';
-const TAG_FLAT_COMPAT_CONTRACT = 'paper-tag-flat-tags-v2';
-const LEGACY_TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
+const TAG_PROMPT_TEXT_CONTRACT = protocols.contract('paper-tag-prompt-text');
+const LEGACY_TAG_PROMPT_TEXT_CONTRACT = protocols.historicalContract('paper-tag-prompt-text','legacy-active-concepts');
+const TAG_SELECTION_CONTRACT = protocols.contract('paper-tag-selection');
+const LEGACY_TAG_SELECTION_CONTRACT = protocols.historicalContract('paper-tag-selection','legacy-concept-selection');
+const TAG_FLAT_COMPAT_CONTRACT = protocols.contract('paper-tag-flat-tags');
+const LEGACY_TAG_FLAT_COMPAT_CONTRACT = protocols.historicalContract('paper-tag-flat-tags','legacy-preferred-labels');
 const DEFAULT_REGISTRY_PATH = path.resolve(__dirname, '../../config/tag-catalog.json');
 
 // 旧保存记录按其声明核验；当前写入只使用 TAG_SELECTION_CONTRACT。
+function isCurrentTagPromptTextContract(value) {
+    return protocols.isContract(value,'paper-tag-prompt-text','plain-chinese-active-concepts');
+}
+
 function isSupportedTagSelectionContract(value) {
-    return value === TAG_SELECTION_CONTRACT || value === LEGACY_TAG_SELECTION_CONTRACT;
+    return protocols.isContract(value,'paper-tag-selection');
 }
 
 function sha256(value) {
@@ -44,8 +49,7 @@ const codePointCompare = (a, b) => {
 
 // 新请求默认使用 v2；v1 仅用于按旧阶段记录的版本重建核验文本。
 function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CONTRACT) {
-    if (promptTextContract !== TAG_PROMPT_TEXT_CONTRACT
-        && promptTextContract !== LEGACY_TAG_PROMPT_TEXT_CONTRACT) {
+    if (!protocols.isContract(promptTextContract,'paper-tag-prompt-text')) {
         throw new Error('标签提示版本必须为 paper-tag-prompt-text-v2 或 paper-taxonomy-prompt-projection-v1。');
     }
     const facetsById = new Map(tagCatalog.facets.map((facet, index) => [facet.id, { ...facet, index }]));
@@ -54,7 +58,7 @@ function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CON
             || codePointCompare(a.id, b.id));
     const lines = [
         `contract=${promptTextContract}`,
-        `registry_version=${tagCatalog.version}`,
+        `registry_version=${tagCatalogApi.tagCatalogIdentity(tagCatalog)}`,
         `registry_sha256=${tagCatalog.registrySha256}`,
         promptTextContract === LEGACY_TAG_PROMPT_TEXT_CONTRACT
             ? '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
@@ -80,11 +84,7 @@ function createTagRules(options = {}) {
     const tagCatalog = options.tagCatalog || (options.registryPath
         ? tagCatalogApi.loadTagCatalog(options.registryPath)
         : tagCatalogApi.loadTagCatalog());
-    tagCatalogApi.validateTagCatalog({
-        version: tagCatalog.version,
-        facets: tagCatalog.facets,
-        concepts: tagCatalog.concepts
-    });
+    tagCatalogApi.registryData(tagCatalog);
     if (!/^[a-f0-9]{64}$/.test(String(tagCatalog.registrySha256 || ''))) {
         throw new Error('标签规则需要提供格式有效的词表文件 SHA。');
     }
@@ -162,7 +162,7 @@ function createTagRules(options = {}) {
         return {
             valid: errors.length === 0,
             errors: [...new Set(errors)],
-            registryVersion: tagCatalog.version,
+            registryVersion: tagCatalogApi.tagCatalogIdentity(tagCatalog),
             registrySha256: tagCatalog.registrySha256,
             primaryTaskId: primaryTaskConcept?.id || null,
             primaryMethodId: primaryMethodConcept?.id || null,
@@ -173,7 +173,7 @@ function createTagRules(options = {}) {
 
     return Object.freeze({
         tagCatalog: tagCatalog,
-        registryVersion: tagCatalog.version,
+        registryVersion: tagCatalogApi.tagCatalogIdentity(tagCatalog),
         registrySha256: tagCatalog.registrySha256,
         projection: tagPromptText,
         projectionSha256: sha256(tagPromptText),
@@ -196,6 +196,7 @@ function getDefaultTagRules() {
 }
 
 module.exports = {
+    isCurrentTagPromptTextContract,
     TAG_PROMPT_TEXT_CONTRACT,
     LEGACY_TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,

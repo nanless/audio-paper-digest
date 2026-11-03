@@ -87,7 +87,7 @@ function extraction(sourceRoot, discoveryHandle, values = ['100', '200']) {
     const members = values.map(value => extractionMember(sourceRoot, value, discoveryHandle))
         .map(({ paperId, sourceIdentity, receiptName }) => ({ paperId, sourceIdentity, receiptName }))
         .sort((a, b) => a.paperId.localeCompare(b.paperId));
-    return { contract: staging.EXTRACTION_CONTRACT, version: staging.VERSION,
+    return { ...require('../scripts/lib/protocol-codec').recordHeader(staging.EXTRACTION_CONTRACT, 'conference-reviewed-extraction'),
         conference: { id: 'icassp-2026', year: 2026 }, review: { actor: 'reviewer.1', reviewedAt: stamp },
         members, membersSha256: staging.stableHash(members) };
 }
@@ -151,7 +151,7 @@ test('只有唯一且精确的发现候选才能进暂存，且元数据与 PDF 
     const wrongMembers = [wrong100, right200].map(({ paperId, sourceIdentity, receiptName }) => (
         { paperId, sourceIdentity, receiptName }
     )).sort((a, b) => a.paperId.localeCompare(b.paperId));
-    const wrongManifest = { contract: staging.EXTRACTION_CONTRACT, version: staging.VERSION,
+    const wrongManifest = { ...require('../scripts/lib/protocol-codec').recordHeader(staging.EXTRACTION_CONTRACT, 'conference-reviewed-extraction'),
         conference: { id: 'icassp-2026', year: 2026 }, review: { actor: 'reviewer.1', reviewedAt: stamp },
         members: wrongMembers, membersSha256: staging.stableHash(wrongMembers) };
     assert.throws(() => stage(f, wrongManifest), /exact discovery metadata record/);

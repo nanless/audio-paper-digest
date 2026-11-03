@@ -74,8 +74,9 @@ describe('分析豁免记录的保存与核验', () => {
             const { output, payload } = create(f);
 
             assert.equal(output, path.join(f.files.analysisWaiverDir, `${DATE}.json`));
-            assert.equal(payload.contract, 'daily-analysis-waiver-v1');
-            assert.equal(payload.version, 1);
+            assert.equal(payload.contract, waiver.CONTRACT);
+            assert.equal('version' in payload, false);
+            assert.match(payload.schemaFingerprint, /^[a-f0-9]{64}$/);
             assert.equal(payload.status, 'waived');
             assert.equal(payload.requestedBy, 'user');
             assert.equal(payload.batchDate, DATE);
@@ -192,12 +193,12 @@ describe('分析豁免记录的保存与核验', () => {
             issueOf(unknownField, f, '分析豁免记录含有未知字段或缺少必需字段');
 
             const wrongContract = clone();
-            wrongContract.contract = 'daily-analysis-waiver-v2';
-            issueOf(wrongContract, f, '分析豁免记录的 contract 或 version 不符合要求');
+            wrongContract.contract = 'unregistered-analysis-waiver';
+            issueOf(wrongContract, f, '分析豁免记录的格式声明或结构指纹不符合要求');
 
             const wrongVersion = clone();
             wrongVersion.version = 2;
-            issueOf(wrongVersion, f, '分析豁免记录的 contract 或 version 不符合要求');
+            issueOf(wrongVersion, f, '分析豁免记录含有未知字段或缺少必需字段');
 
             const wrongDate = clone();
             wrongDate.batchDate = '2026-09-05';
@@ -356,7 +357,7 @@ describe('digest:waive-analysis 入口', () => {
         console.log = message => logged.push(message);
         try {
             const payload = cli.main(['--date', DATE, '--paper-id', PAPER, '--reason', REASON]);
-            assert.equal(payload.contract, 'daily-analysis-waiver-v1');
+            assert.equal(payload.contract, waiver.CONTRACT);
             assert.equal(payload.papers[0].paperId, PAPER);
             const output = path.join(f.files.analysisWaiverDir, `${DATE}.json`);
             assert.equal(fs.existsSync(output), true);

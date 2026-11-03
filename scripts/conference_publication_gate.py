@@ -15,7 +15,28 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlparse
 
-GATE_CONTRACT = 'conference-publication-mechanical-gate-v1'
+import protocol_codec as protocols
+
+GATE_CONTRACT = protocols.contract('conference-publication-mechanical-gate')
+
+
+def mechanical_gate_header():
+    return protocols.record_header(GATE_CONTRACT, 'conference-publication-mechanical-gate')
+
+
+def has_mechanical_gate_format(value):
+    if not isinstance(value, dict):
+        return False
+    header = {'contract': value.get('contract')}
+    if 'schemaFingerprint' in value:
+        header['schemaFingerprint'] = value['schemaFingerprint']
+    if not protocols.has_valid_header(header, 'conference-publication-mechanical-gate'):
+        return False
+    # The old record's version is the actual external Hugo version string.
+    # Current records spell this body field hugoVersion, so protocol headers
+    # cannot accidentally reinterpret a software version as a schema selector.
+    return not (protocols.is_current_header(header, 'conference-publication-mechanical-gate')
+                and 'version' in value)
 MAX_BYTES = 16 * 1024 * 1024
 FETCH_TRANSPORT_ATTEMPTS = 6
 
@@ -216,9 +237,21 @@ def inspect_html(markdown, rendered, image_records, image_base):
     if markdown.startswith('---\n'):
         from markdown_hugo_gate import parse_frontmatter_content
         frontmatter, _ = parse_frontmatter_content('conference-page.md', markdown)
-        if frontmatter.get('paper_digest_tags_contract') == 'paper-tag-flat-tags-v2' \
-                and frontmatter.get('paper_digest_page_type') == 'paper':
-            concepts = frontmatter.get('paper_digest_tags_concepts')
+        tag_prefixes = [prefix for prefix in ('paper_digest_tags_', 'paper_digest_taxonomy_')
+                        if any(key.startswith(prefix) for key in frontmatter)]
+        if len(tag_prefixes) > 1:
+            raise ValueError('单篇论文不能混用两套分类字段')
+        tag_prefix = tag_prefixes[0] if tag_prefixes else 'paper_digest_tags_'
+        tag_header = None
+        if frontmatter.get('paper_digest_page_type') == 'paper' and tag_prefix+'contract' in frontmatter:
+            tag_header = {'contract': frontmatter[tag_prefix+'contract']}
+            if tag_prefix+'schema_fingerprint' in frontmatter:
+                tag_header['schemaFingerprint'] = frontmatter[tag_prefix+'schema_fingerprint']
+            if not protocols.has_valid_header(tag_header,'paper-tag-flat-tags'):
+                raise ValueError('单篇论文分类格式或结构指纹不受支持')
+        if tag_header is not None and protocols.format(tag_header['contract'],'paper-tag-flat-tags',
+                                                       tag_header.get('schemaFingerprint')) == 'selected-preferred-labels':
+            concepts = frontmatter.get(tag_prefix+'concepts')
             if not isinstance(concepts, list) or not concepts or len(page.tag_sections) != 1:
                 raise ValueError('单篇论文须呈现且仅呈现一组当前多级分类')
             section = page.tag_sections[0]
@@ -311,7 +344,8 @@ def inspect_html(markdown, rendered, image_records, image_base):
     visible_content = page.visible_content_fields()
     return {'url': url, 'htmlSha256': digest(rendered.encode()),
             'projectionSha256': digest(json.dumps(visible_content, ensure_ascii=False, sort_keys=True).encode()),
-            'pageIdentityContract': 'conference-visible-page-identity-v1',
+            'pageIdentityContract': protocols.contract('conference-visible-page-identity'),
+            'pageIdentitySchemaFingerprint': protocols.schema_fingerprint('conference-visible-page-identity'),
             'pageIdentitySha256': digest(json.dumps(page.page_identity_fields(), ensure_ascii=False, sort_keys=True).encode()),
             'imageUrls': page.images, 'tableCount': len(page.tables), 'formulaCount': len(formulas),
             'layers': {'htmlMechanical': 'passed', 'semanticReview': 'not_performed',
@@ -413,7 +447,10 @@ def verify_publication_urls(pages, image_records, image_base):
             raise ValueError(f'线上正文/图片/表格/公式未匹配已审 HTML：已审摘要 {expected["projectionSha256"]}，线上摘要 {visible_content_sha256}')
         if 'pageIdentityContract' in expected or 'pageIdentitySha256' in expected:
             identity_sha = digest(json.dumps(page.page_identity_fields(), ensure_ascii=False, sort_keys=True).encode())
-            if expected.get('pageIdentityContract') != 'conference-visible-page-identity-v1' \
+            identity_header = {'contract': expected.get('pageIdentityContract')}
+            if 'pageIdentitySchemaFingerprint' in expected:
+                identity_header['schemaFingerprint'] = expected['pageIdentitySchemaFingerprint']
+            if not protocols.has_valid_header(identity_header, 'conference-visible-page-identity') \
                     or not re.fullmatch(r'[a-f0-9]{64}', str(expected.get('pageIdentitySha256', ''))) \
                     or identity_sha != expected['pageIdentitySha256']:
                 raise ValueError('线上标题、H1或多级研究分类与已审HTML不一致')
@@ -434,7 +471,7 @@ def verify_publication_urls(pages, image_records, image_base):
         page_checks = list(pool.map(page_check, pages))
         image_checks = list(pool.map(image_check, image_records))
     checks = page_checks + image_checks
-    return {'status': 'passed', 'contract': GATE_CONTRACT, 'checks': checks,
+    return {'status': 'passed', **mechanical_gate_header(), 'checks': checks,
             'semanticReview': 'not_performed', 'visualInspection': 'not_performed'}
 
 

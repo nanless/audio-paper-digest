@@ -24,7 +24,7 @@ for (const kind of ['exact-fifo', 'migration-fifo', 'regular', 'symlink']) {
         } else {
             const payload = { status: 'failed', attempts: 1, fullAttempts: 1, noProgress: 0,
                 failureSignature: '', issues: [], draft: null, rawDraft: '' };
-            const envelope = { version: repair.REPAIR_VERSION, identity, payload, payloadSha256: repair.hashDraft(payload) };
+            const envelope = { ...repair.candidateEnvelopeHeader(), identity, payload, payloadSha256: repair.hashDraft(payload) };
             const target = kind === 'symlink' ? path.join(executionDir, 'target.json') : filename;
             fs.writeFileSync(target, JSON.stringify(envelope), { mode: 0o600 });
             if (kind === 'symlink') fs.symlinkSync(target, filename);

@@ -96,7 +96,7 @@ function createSourceFixture(root) {
         decisionHandle: filter.loadDecisionHandle(decisionFile), owner: 'filter-reviewer', now: stamp
     });
     const tagCatalogPath = path.join(root, 'taxonomy.json');
-    fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
+    fs.copyFileSync(path.join(__dirname, '../../config/tag-catalog.json'), tagCatalogPath);
     const files = {
         conferenceDiscoveryCatalogDir: path.join(root, 'catalogs'),
         conferenceDiscoveryReportDir: path.join(root, 'reports'), conferenceFiltersDir: path.join(root, 'filters'),

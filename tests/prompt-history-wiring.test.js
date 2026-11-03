@@ -13,7 +13,7 @@ const history = require('../scripts/lib/prompt-history.js');
 const {
     promptFilePathForContract,
     currentPromptTextContract
-} = require('../scripts/lib/prompt-text-versions.js');
+} = require('../scripts/lib/prompt-contracts.js');
 
 // 存量记录里真实出现过、且 Git 历史里确有对应字节的两个模板 SHA。
 const ARCHIVED_SCORING_TEMPLATE =
@@ -26,8 +26,8 @@ function currentTemplateSha(relativePath) {
 }
 
 function readerManifest(declaredPromptTemplateSha256) {
-    const contract = currentPromptTextContract('apiReaderArticle');
-    const repairContract = currentPromptTextContract('apiReaderRepair');
+    const contract = 'analysis-prompt-text-v11';
+    const repairContract = 'analysis-prompt-text-v13';
     return {
         stages: {
             apiReaderArticle: {

@@ -125,7 +125,7 @@ function deriveCorrectedIdentity(originalIdentity, sourceText) {
     const state = checkedState(sourceText);
     if (!state) throw sourceFailure('来源纠正需要真实 PDF 句柄');
     const { identitySha256, ...body } = originalIdentity || {};
-    if (body.contract !== 'api-reader-resource-identity-v1' || identitySha256 !== stable(body)
+    if (!require('./reader-identity-format').hasIdentity(body, 'resources') || identitySha256 !== stable(body)
         || body.sourceTextSha256 !== sha(sourceText) || !Array.isArray(body.resources)) throw sourceFailure('待纠正原资源身份或全文 SHA 无效');
     const candidates = deriveCandidates(sourceText), byUrl = new Map();
     for (const candidate of candidates) {

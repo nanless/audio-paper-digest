@@ -13,7 +13,8 @@ const scope = new AsyncLocalStorage();
 const ARXIV = /^arxiv:\d{4}\.\d{4,5}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-const PROVENANCE_CONTRACT = 'fresh-source-analysis-v1';
+const sourceFormats = require('./daily-source-format');
+const PROVENANCE_CONTRACT = sourceFormats.originalProvenanceHeader.contract;
 // 这个格式标记明确说明「没有保存论文图文件」是有意为之、可供审查的状态。渲染器不能
 // 因为 cachePath 缺失就断定素材不存在：较早的 Reader 记录仍按保存图片缓存的发布规则核验。
 const EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1';
@@ -190,7 +191,13 @@ function getDirectSourceRecord(paper = getDirectRewriteAnalysisContext()?.paperI
     const context = scope.getStore();
     if (!context || !context.runId) return null;
     if (paperId(paper) !== context.paperId) fail('请求的直改凭证属于另一篇论文');
-    return { contract: PROVENANCE_CONTRACT, runId: context.runId,
+    const fresh = require('./fresh-analysis-context');
+    const activeDaily = fresh.isDailyFreshSourceScope() ? fresh.getFreshAnalysisContext() : null;
+    const sameDaily = activeDaily && context.route === 'arxiv-fresh-fetch'
+        && activeDaily.runId === context.runId
+        && activeDaily.sourceExpectations[context.paperId.slice('arxiv:'.length)]
+        && context.readerAttemptsDir === path.join(activeDaily.runDir, 'reader-attempts');
+    return { ...(sameDaily ? activeDaily.sourceProvenanceHeader : sourceFormats.originalProvenanceHeader), runId: context.runId,
         sourceSha256: context.sourceSha256,
         structuredArtifactsSha256: context.structuredArtifactsSha256,
         sourceSnapshotSha256: context.sourceSnapshotSha256,

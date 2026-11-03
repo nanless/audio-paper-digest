@@ -7,6 +7,7 @@ if [[ -n "${CODEX_SANDBOX:-}" ]]; then
 fi
 app_root="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$app_root/../.." && pwd)"
+bash "$repo_root/scripts/python-runtime.sh" "$repo_root/apps/generate-client-protocols.py" --check
 install_requested=0
 channel=release
 while [[ $# -gt 0 ]]; do

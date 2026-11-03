@@ -2,7 +2,10 @@
 
 const crypto = require('node:crypto');
 const { extractMarkdownTables, maskProtectedMarkdownTableRegions, maskInlineMarkdownCodeSpans } = require('../analysis-contract.js');
-const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v4';
+const draftOrderCodec = require('./protocol-codec');
+const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order';
+const draftOrderHeader = () => draftOrderCodec.recordHeader(READER_DRAFT_ORDER_CONTRACT, READER_DRAFT_ORDER_CONTRACT);
+const originalDraftOrderDomain = () => draftOrderCodec.historicalContract(READER_DRAFT_ORDER_CONTRACT, 'bounded-reference-order');
 const TABLE_BINDING_ORDER_ISSUE_CODE = 'reader_table_binding_order_ambiguous';
 const READER_SECTION_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
@@ -680,12 +683,11 @@ function compileCompleteReaderTableDeclarations(draft, artifacts) {
 // 只读取完整正文后唯一明确的续段字符串；原始草稿仍由恢复档案保存。
 // 未知字段、非文字或标记的放置含义不能由程序猜测。
 function normalizeReaderBodyContinuations(draft) {
-    const requiredKeys = ['version', 'readerTitle', 'oneSentenceThesis', 'conceptBridges',
-        'figurePlacements', 'sections', 'tableBindings', 'formulaBindings'];
+    let requiredKeys;
+    try { requiredKeys = require('./reader-record-format').draftFields(draft); } catch { return; }
     if (!draft || typeof draft !== 'object' || Array.isArray(draft)
         || Object.keys(draft).length !== requiredKeys.length
         || requiredKeys.some(key => !Object.hasOwn(draft, key))
-        || ![2, 3].includes(draft.version)
         || typeof draft.readerTitle !== 'string' || typeof draft.oneSentenceThesis !== 'string'
         || ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']
             .some(key => !Array.isArray(draft[key]))) return;
@@ -868,7 +870,7 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
     }
     const conceptMarkerLocations = normalizeConceptBridgeMarkerLocations(draft);
     const outputSha256 = sha(draft);
-    return { draft, mapping: { contract: READER_DRAFT_ORDER_CONTRACT, inputSha256, outputSha256,
+    return { draft, mapping: { ...draftOrderHeader(), inputSha256, outputSha256,
         changed: inputSha256 !== outputSha256, sections: sectionMap, tables: tableMap,
         conceptBridges: bridgeMap, conceptMarkerLocations } };
 }
@@ -912,7 +914,8 @@ function normalizeUniqueRenderedReaderSelections(draft, structuredArtifacts) {
     }
 }
 
-module.exports = { READER_DRAFT_ORDER_CONTRACT, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS, locateReaderDraftTables,
+module.exports = { READER_DRAFT_ORDER_CONTRACT, draftOrderHeader, originalDraftOrderDomain,
+    TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS, locateReaderDraftTables,
     completeSelectionMarkerPermutation, pruneUniquelyUnboundReaderMarkdownTables,
     alignMixedBindingsToCurrentTableNodes, alignSourceQuoteBindingsToCurrentTableNodes,
     pruneTrailingUnboundSourceQuoteBindings,

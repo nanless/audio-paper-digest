@@ -69,10 +69,10 @@ function paper(quote) {
 
 test('旧成功表格的哈希自洽不能替代数据集归属引文，两句不同数据集不能拼成证明', () => {
     for (const quote of negatives) {
-        assert.equal(engine.hasValidApiReaderV3Records(paper(quote)), false, quote);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper(quote)), false, quote);
     }
     for (const quote of positives) {
-        assert.equal(engine.hasValidApiReaderV3Records(paper(quote)), true, quote);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper(quote)), true, quote);
     }
 });
 

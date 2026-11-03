@@ -9,12 +9,66 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const api = require('../scripts/lib/arxiv-source-authority.js');
+const codec = require('../scripts/lib/protocol-codec');
 const authorityApi = require('../scripts/lib/paper-source-authority.js');
 const cli = require('../scripts/arxiv-source-authority.js');
 const deep = require('../scripts/deep-analyzer.js');
 
 const stamp = '2026-09-07T00:00:00.000Z';
 const operationId = '11111111-1111-4111-8111-111111111111';
+
+test('原Git来源写入程序生成的整组旧文件可按原身份域冷重放，零抓取续跑不改字节', async t => {
+    const Module = require('node:module');
+    const child = require('node:child_process');
+    const project = path.resolve(__dirname, '..');
+    const originalCommit = '05ab504df7f84da3b8d961878323cfa161f23eb0';
+    const load = (relative, overrides = {}) => {
+        const bytes = child.execFileSync('git', ['show', `${originalCommit}:${relative}`], { cwd: project });
+        const filename = path.join(project, relative), instance = new Module(filename, module);
+        instance.filename = filename; instance.paths = Module._nodeModulePaths(path.dirname(filename));
+        const normalRequire = instance.require.bind(instance);
+        instance.require = name => Object.hasOwn(overrides, name) ? overrides[name] : normalRequire(name);
+        instance._compile(bytes.toString('utf8'), filename);
+        return instance.exports;
+    };
+    const oldIdentity = load('scripts/lib/paper-identity.js');
+    const oldAuthority = load('scripts/lib/paper-source-authority.js', { './paper-identity.js': oldIdentity });
+    let original;
+    // Keep the original modules' private live-handle delegation together in
+    // this isolated loader; no source check is mocked or replaced.
+    const originalAuthorityBridge = { ...oldAuthority, authorityHandleSnapshot(handle) {
+        return original?.productionAuthorityHandleSnapshot(handle) || oldAuthority.authorityHandleSnapshot(handle);
+    } };
+    original = load('scripts/lib/arxiv-source-authority.js', {
+        './paper-identity.js': oldIdentity, './paper-source-authority.js': originalAuthorityBridge
+    });
+    const root = fixture(t); let calls = 0;
+    mockOfficialFetcher(t, async () => { calls++; return source(); });
+    const options = { authorityRoot: root, arxivId: '2601.00001', authorityName: 'arxiv-2601.00001.json',
+        apply: true, operationId, now: stamp };
+    await original.prepareArxivSourceAuthority(options);
+    assert.equal(calls, 1);
+    const before = new Map(fs.readdirSync(root).map(name => [name, fs.readFileSync(path.join(root, name))]));
+    const originalRequest = JSON.parse(before.get('arxiv-2601.00001-request.json'));
+    assert.equal(Object.hasOwn(originalRequest, 'identityFormat'), false);
+    const originalIdentity = JSON.parse(before.get('arxiv-2601.00001.json')).identity;
+    assert.equal(originalRequest.identitySha256, oldIdentity.identitySha256(originalIdentity));
+    assert.deepEqual(api.validateRequest(originalRequest), originalRequest);
+    const resumed = await api.prepareArxivSourceAuthority(options);
+    assert.equal(resumed.status, 'recovered'); assert.equal(calls, 1);
+    authorityApi.replayAuthorityHandle(resumed.authorityHandle);
+    for (const [name, bytes] of before) assert.deepEqual(fs.readFileSync(path.join(root, name)), bytes, name);
+    const forged = structuredClone(originalRequest);
+    forged.identitySha256 = require('../scripts/lib/paper-identity').identitySha256(api.identityFor('2601.00001'));
+    delete forged.requestSha256; forged.requestSha256 = authorityApi.stableHash(forged);
+    assert.throws(() => api.validateRequest(forged), /请求格式或按记录内容计算的 SHA 不一致/);
+    const current = api.requestFor(options);
+    assert.equal(codec.isCurrentHeader(current, 'arxiv-paper-source-request'), true);
+    assert.deepEqual(current.identityFormat, require('../scripts/lib/paper-identity').currentHeader());
+    assert.notEqual(current.identitySha256, originalRequest.identitySha256);
+    const wrongFingerprint = { ...current, schemaFingerprint: '0'.repeat(64) };
+    assert.throws(() => api.validateRequest(wrongFingerprint), /格式声明无效/);
+});
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'arxiv-source-adapter-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -39,7 +93,7 @@ function writeLock(root, id = '2601.00001', options = {}) {
     if (options.empty !== true) {
         if (options.invalid === true) fs.writeFileSync(path.join(target, 'owner.json'), '{"partial":', { mode: 0o600 });
         else {
-            const body = { contract: api.LOCK_OWNER_CONTRACT, version: 1, arxivId: id,
+            const body = { ...codec.recordHeader(api.LOCK_OWNER_CONTRACT, 'arxiv-source-authority-lock-owner'), arxivId: id,
                 pid: options.pid || 2147483647, hostname: options.hostname || os.hostname(),
                 token: operationId, startedAt: '2020-01-01T00:00:00.000Z', leaseMs: api.LOCK_STALE_MS };
             fs.writeFileSync(path.join(target, 'owner.json'), authorityApi.prettyBytes({ ...body,

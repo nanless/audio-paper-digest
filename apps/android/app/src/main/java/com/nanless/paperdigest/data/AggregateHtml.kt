@@ -1,11 +1,29 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.time.Instant
+
+internal object AggregateDocumentFormat {
+    private const val family="published-aggregate-document"
+    enum class Platform(val role:String) { MACOS("macos"), ANDROID("android") }
+    private fun parser(header:JSONObject,platform:Platform):String {
+        val fingerprint=header.opt("schemaFingerprint") as? String
+        return if(fingerprint==null) ClientProtocols.historicalContract("published-aggregate-parser-profile",platform.role)
+        else ClientProtocols.declaredSchema(header.get("contract"),family,fingerprint).getJSONObject("parserProfiles").getString(platform.role)
+    }
+    fun current(platform:Platform):JSONObject = ClientProtocols.record(family).also { it.put("parserContract",parser(it,platform)) }
+    fun replay(saved:JSONObject,platform:Platform):JSONObject {
+        require(ClientProtocols.hasValidHeader(saved,family)){"汇总正文格式无效"}
+        val parser=parser(saved,platform)
+        require(saved.opt("parserContract")==parser){"汇总正文平台解析声明无效"}
+        return ClientProtocols.recordHeader(saved.get("contract"),family,saved.opt("schemaFingerprint") as? String).put("parserContract",parser)
+    }
+}
 
 /** Independent aggregate-only parse. Actual raw and derived bytes have distinct identities. No resource request occurs. */
 object AggregateHtml {
@@ -19,7 +37,7 @@ object AggregateHtml {
         copy.select("math").toList().forEach{math->val tex=math.selectFirst("annotation[encoding=application/x-tex]")?.wholeText()?.takeIf{it.isNotBlank()};val value=if(tex!=null)"[公式 TeX：$tex]"else"[公式 MathML：${math.outerHtml()}]";math.replaceWith(org.jsoup.nodes.TextNode(value))}
         return copy.wholeText()
     }
-    fun parse(raw:ByteArray,descriptor:PublishedAggregate,responseURL:String,fetchedAt:String):JSONObject {
+    fun parse(raw:ByteArray,descriptor:PublishedAggregate,responseURL:String,fetchedAt:String,savedFormat:JSONObject?=null):JSONObject {
         require(raw.size in 1..16*1024*1024);val source=PublishedAggregateReader.pageURL(descriptor.sourceURL);require(responseURL==source);Instant.parse(fetchedAt)
         val html=PublishedUtf8.decode(raw);require(!html.contains("<!ENTITY",true));val doc=Jsoup.parse(html,source)
         val canonical=doc.select("link").filter{it.attr("rel").equals("canonical",true)};require(canonical.size<=1);canonical.firstOrNull()?.let{require(PublishedAggregateReader.pageURL(it.attr("href"))==source)}
@@ -29,7 +47,8 @@ object AggregateHtml {
         body.select("section,article,main").forEach{it.tagName("div")}
         val resources=body.select("img").map{image->val rawSource=image.attr("src");val valid=safeURL(rawSource,source);JSONObject().put("sourceURL",valid?:rawSource).put("kind","image").put("missingReason",if(valid==null)"原图片地址不受本入口支持，未下载或隐藏缺项"else"尚未保存该图片；没有声称完整离线")};require(resources.size<=128)
         clean(body,source);val plain=plainText(body);require(plain.isNotBlank()){"汇总缺少连续正文"};val derived=body.html()
-        return JSONObject().put("contract","published-aggregate-document-v1").put("descriptor",descriptor.json()).put("responseURL",responseURL).put("fetchedAt",fetchedAt).put("rawHTMLSHA256",PublishedAggregateReader.sha(raw)).put("rawHTMLBytes",raw.size).put("sanitizedBodySHA256",PublishedAggregateReader.sha(derived.toByteArray())).put("bodyHTML",derived).put("plainText",plain).put("parserContract","published-aggregate-jsoup-v1").put("resources",JSONArray(resources)).put("completeOffline",false).put("notices",JSONArray(listOf("网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。")))
+        val format=savedFormat?.let{AggregateDocumentFormat.replay(it,AggregateDocumentFormat.Platform.ANDROID)} ?: AggregateDocumentFormat.current(AggregateDocumentFormat.Platform.ANDROID)
+        return format.put("descriptor",descriptor.json()).put("responseURL",responseURL).put("fetchedAt",fetchedAt).put("rawHTMLSHA256",PublishedAggregateReader.sha(raw)).put("rawHTMLBytes",raw.size).put("sanitizedBodySHA256",PublishedAggregateReader.sha(derived.toByteArray())).put("bodyHTML",derived).put("plainText",plain).put("resources",JSONArray(resources)).put("completeOffline",false).put("notices",JSONArray(listOf("网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。")))
     }
     /** Independent resource derivation; the original parse/document bytes remain unchanged. */
     fun imagePlan(raw:ByteArray,descriptor:PublishedAggregate,responseURL:String,fetchedAt:String):AggregateImagePlan {

@@ -72,11 +72,13 @@ test('各来源的固定数据给出精确的就绪片段，有歧义时按放�
         artifactFor(fixture('aaai-duplicate-introduction.txt')), api.AAAI_LOCATOR_PROFILE).status, 'ambiguous');
 });
 
-test('定位配置保留默认哈希，并把 AAAI 语法限定在范围内', () => {
-    assert.equal(api.LOCATOR_IMPLEMENTATION_SHA256,
+test('定位配置保留原默认声明，新格式独立绑定且 AAAI 语法限定在范围内', () => {
+    const historical = require('../scripts/lib/workflow-legacy-codec').originalAbstractLocator();
+    assert.equal(historical.profiles[historical.defaultProfile].implementationSha256,
         'aea85b736cfbfc8a5758df6451a231b49a5d1e534a0015ea22952ef570c1d08c');
     assert.deepEqual(api.locatorBindingForConference({ id: 'iwslt-2026', year: 2026 }), {
-        contract: api.LOCATOR_CONTRACT, implementationSha256: api.LOCATOR_IMPLEMENTATION_SHA256 });
+        ...require('../scripts/lib/protocol-codec').recordHeader(api.LOCATOR_CONTRACT, 'conference-abstract-locator'),
+        implementationSha256: api.LOCATOR_IMPLEMENTATION_SHA256 });
     const aaai = api.locatorBindingForConference({ id: 'aaai-2026', year: 2026 });
     assert.equal(aaai.profile, api.AAAI_LOCATOR_PROFILE);
     assert.notEqual(aaai.implementationSha256, api.LOCATOR_IMPLEMENTATION_SHA256);

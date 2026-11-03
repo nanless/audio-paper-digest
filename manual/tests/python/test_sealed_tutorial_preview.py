@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(MANUAL_SCRIPTS))
 sys.path.insert(0, str(ROOT / 'tests/python'))
 from prompt_evidence import read_prompt_evidence_bytes
+from original_file_evidence import read_original_file_bytes
 from prompt_evidence_fixtures import install_git_prompt_evidence_fixture
 
 import sealed_tutorial_preview as sealed
@@ -99,7 +100,9 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                 **{
                     key: {'path': str(path), 'sha256': sha(
                         read_prompt_evidence_bytes('manual/prompts/manual-tutorial-article.md', project_root=authority_root)
-                        if key == 'editorialContract' else path.read_bytes())}
+                        if key == 'editorialContract' else read_original_file_bytes(
+                            path.relative_to(authority_root).as_posix(), project_root=authority_root)
+                        if key in {'referenceContract', 'qualitySchema'} else path.read_bytes())}
                     for key, path in controlled.items()
                 },
                 'tutorialPayload': payload,
@@ -143,7 +146,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
         self.assertNotIn('parsed', result['snapshot'])
         self.assertNotIn('readerArticle', json.dumps(result['snapshot']))
 
-    def test_current_reference_contract_bytes_and_fixed_path_are_required(self):
+    def test_original_reference_bytes_survive_current_edits_and_fixed_path_is_required(self):
         for boundary in ('current_bytes', 'old_copy_path'):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary_root:
                 authority_root = Path(temporary_root) / 'project'
@@ -153,7 +156,8 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                         'manual/scripts/sealed_tutorial_preview.py'):
                     target = authority_root / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes((ROOT / relative).read_bytes())
+                    target.write_bytes(read_original_file_bytes(relative) if relative.startswith('manual/docs/')
+                                       else (ROOT / relative).read_bytes())
                 install_git_prompt_evidence_fixture(authority_root)
                 temporary, current, date_str, paper_id, post_path = self.make_fixture(authority_root)
                 self.addCleanup(temporary.cleanup)
@@ -180,7 +184,10 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                         binding['path'] = str(old_copy.resolve())
                         expected_error = '记录的路径与指定文件路径不一致。'
                     else:
-                        expected_error = '的 SHA-256 与记录不一致。'
+                        unchanged = sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
+                        self.assertEqual(unchanged['postText'], original['postText'])
+                        binding['sha256'] = sha(contract_path.read_bytes())
+                        expected_error = '原文件证据缺失或 SHA 不一致。'
                     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
                     self.assertEqual(manifest['output']['postSha256'], sha(post_path.read_bytes()))
                     self.assertEqual(manifest['output']['bytes'], len(post_path.read_bytes()))
@@ -190,11 +197,8 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                         str(failure.exception),
                         f'preview.inputs.referenceContract {expected_error}',
                     )
-                    if boundary == 'current_bytes':
-                        contract_path.write_bytes(old_bytes)
-                    else:
-                        binding.update(path=str(contract_path.resolve()), sha256=sha(contract_path.read_bytes()))
-                        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+                    binding.update(path=str(contract_path.resolve()), sha256=sha(old_bytes))
+                    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
                     restored = sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
                     self.assertEqual(restored['postText'], original['postText'])
 

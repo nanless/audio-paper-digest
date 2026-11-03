@@ -11,7 +11,8 @@ data class AggregateResource(val sourceURL:String,val missingReason:String)
 data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:String,val rawHTMLSHA256:String,val bodySHA256:String,val rawHTMLBytes:Int,val fetchedAt:String,val resources:List<AggregateResource>,val notices:List<String>,val fromCache:Boolean,val images:AggregateImageAccess?=null,val imageError:String?=null,val linkHTML:String?=null,val linkNonce:String?=null,val plainText:String?=null) {
     companion object {
         internal fun verified(value:JSONObject,descriptor:PublishedAggregate,fromCache:Boolean):AggregateDocumentView {
-            require(value.getString("contract")=="published-aggregate-document-v1"&&canonical(value.getJSONObject("descriptor"))==canonical(descriptor.json()))
+            AggregateDocumentFormat.replay(value,AggregateDocumentFormat.Platform.ANDROID)
+            require(canonical(value.getJSONObject("descriptor"))==canonical(descriptor.json()))
             require(value.getString("responseURL")==descriptor.sourceURL&&value.get("completeOffline")==false)
             val raw=value.getString("rawHTMLSHA256");val body=value.getString("bodyHTML");val derived=value.getString("sanitizedBodySHA256")
             require(PublishedAggregateReader.validSHA(raw)&&PublishedAggregateReader.sha(body.toByteArray())==derived&&value.getInt("rawHTMLBytes") in 1..16*1024*1024);Instant.parse(value.getString("fetchedAt"))

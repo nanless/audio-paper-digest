@@ -40,7 +40,7 @@ test('真实三封存来源支持原PDF完整连续引文，冷态重放及篡�
     for (const [id, anchor] of checks) {
         const paper = { arxivId: id + 'v1', analysisManifest: { stages: {} } };
         const source = daily.readDailyFreshSource(plan, paper), artifacts = source.structuredArtifacts;
-        let proof;
+        let proof, originalProof;
         await daily.withDailyFreshAnalysisContext(plan, () => {
             fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source);
             paper.sourceSha256 = source.freshSourceDescriptor.sourceSha256;
@@ -54,6 +54,18 @@ test('真实三封存来源支持原PDF完整连续引文，冷态重放及篡�
                 proof = quotes.quoteEvidence(quote);
                 assert.equal(proof.valueOrigin, 'sealed_pdf');
                 assert.equal(quotes.assertQuoteEvidence(proof), true);
+                const codec = require('../scripts/lib/protocol-codec');
+                assert.equal(codec.isCurrentHeader(proof, 'reader-sealed-pdf-quotes'), true);
+                const original = quotes.deriveBundle(quotes.verifiedSourceContext().expectation, [quote], null,
+                    codec.historicalHeader('reader-sealed-pdf-quotes', 'unique-contiguous-official-pdf-fragment'));
+                originalProof = original.results[0].evidence;
+                assert.equal(original.results[0].eligible, true);
+                assert.equal(JSON.stringify(quotes.originalRequestDocument()), JSON.stringify(original.document));
+                for (const field of ['rawFragment', 'rawFragmentSha256', 'quote', 'quoteSha256',
+                    'rawStartCodePoint', 'rawEndCodePoint', 'normalizedStartCodePoint', 'normalizedEndCodePoint', 'pages']) {
+                    assert.deepEqual(proof[field], originalProof[field]);
+                }
+                assert.notEqual(proof.evidenceSha256, originalProof.evidenceSha256);
                 const fake = structuredClone(proof); fake.rawFragment += ' invented';
                 assert.throws(() => quotes.assertQuoteEvidence(fake), /differs/);
                 const changed = structuredClone(artifacts); changed.tables[0].caption += ' false';
@@ -64,6 +76,12 @@ test('真实三封存来源支持原PDF完整连续引文，冷态重放及篡�
             tableBindings: [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
                 cellBindings: [], sourceQuotes: [], sealedPdfQuoteEvidence: [proof] }] };
         quotes.withSavedPaper(paper, () => assert.equal(quotes.assertQuoteEvidence(proof), true));
+        const old = structuredClone(paper);
+        old.apiReaderPlan.tableBindings[0].sealedPdfQuoteEvidence = [originalProof];
+        quotes.withSavedPaper(old, () => assert.equal(quotes.assertQuoteEvidence(originalProof), true));
+        const unknown = structuredClone(paper);
+        unknown.apiReaderPlan.tableBindings[0].sealedPdfQuoteEvidence[0].schemaFingerprint = 'f'.repeat(64);
+        assert.throws(() => quotes.withSavedPaper(unknown, () => {}), /unknown or mixed/);
         for (const mutation of [p => p.pdfSha256 = 'a'.repeat(64), p => p.quote += ' invented',
             p => p.normalizedStartCodePoint++, p => p.rawFragmentSha256 = 'a'.repeat(64)]) {
             const bad = structuredClone(paper); mutation(bad.apiReaderPlan.tableBindings[0].sealedPdfQuoteEvidence[0]);

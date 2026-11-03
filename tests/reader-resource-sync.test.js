@@ -13,9 +13,9 @@ test('preserve validates the actual signed Reader after neutral resource project
     const original=structuredClone(f.paper),filename=require.resolve('../scripts/lib/reader-resource-sync'),Module=require('node:module');
     const runtime=new Module(filename,module);runtime.filename=filename;runtime.paths=Module._nodeModulePaths(require('node:path').dirname(filename));
     const actualRequire=runtime.require.bind(runtime);let actualChecks=0,hypotheticalChecks=0;
-    runtime.require=name=>name==='../analysis-engine.js'?{...engine,hasValidApiReaderV3Records(paper){
+    runtime.require=name=>name==='../analysis-engine.js'?{...engine,hasValidIntegratedApiReaderRecords(paper){
         if(paper.analysis!==original.analysis){hypotheticalChecks++;return false;}
-        actualChecks++;return engine.hasValidApiReaderV3Records(paper);
+        actualChecks++;return engine.hasValidIntegratedApiReaderRecords(paper);
     }}:actualRequire(name);
     runtime._compile(require('node:fs').readFileSync(filename,'utf8'),filename);
     const synchronize=runtime.exports.synchronizeReaderResourceAvailability;
@@ -88,7 +88,7 @@ function sealReader(paper) {
         sourceBindingsContractVersion:'api-reader-source-bindings-v4',
         sourceBindingsSha256:plan.sourceBindingsSha256,sourceBindingsSourceTextSha256:paper.sourceSha256,
         tableBindingCount:0,formulaBindingCount:0,structuredArtifactsSha256:'b'.repeat(64)};
-    assert(engine.hasValidApiReaderV3Records(paper));
+    assert(engine.hasValidIntegratedApiReaderRecords(paper));
 }
 
 function refreshAvailability(f) {
@@ -181,9 +181,9 @@ test('Reader 资源可用性刷新只重新绑定身份，保留已签名字节�
     const before={article:f.paper.apiReaderArticle,plan:structuredClone(f.paper.apiReaderPlan),
         figures:structuredClone(f.paper.apiReaderFigures),authors:structuredClone(f.paper.apiReaderAuthors),
         audit:structuredClone(f.paper.analysisManifest.stages.scoringAudit.audit)};
-    assert(!engine.hasValidApiReaderV3Records(f.paper));
+    assert(!engine.hasValidIntegratedApiReaderRecords(f.paper));
     const result=sync(f.paper,f.sourceDetails);
-    assert(engine.hasValidApiReaderV3Records(result));
+    assert(engine.hasValidIntegratedApiReaderRecords(result));
     assert.equal(result.apiReaderArticle,before.article);assert.deepEqual(result.apiReaderPlan,before.plan);
     assert.deepEqual(result.apiReaderFigures,before.figures);assert.deepEqual(result.apiReaderAuthors,before.authors);
     assert.deepEqual(result.analysisManifest.stages.scoringAudit.audit,before.audit);
@@ -362,13 +362,13 @@ test('受影响旧资源缓存即使完整重算自身 SHA，也不能继续通�
     delete f.resources.identitySha256;f.resources.identitySha256=hash(f.resources);
     f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.resources.identitySha256;
     sealReader(f.paper);
-    assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),true);
     f.resources.resources[0].sourceQuote=denied;
     f.resources.resources[0].sourceQuoteSha256=sha(denied);
     delete f.resources.identitySha256;f.resources.identitySha256=hash(f.resources);
     f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.resources.identitySha256;
     f.paper.analysisManifest.stages.apiReaderArticle.resourceIdentitySha256=f.resources.identitySha256;
-    assert.equal(engine.hasValidApiReaderV3Records(f.paper),false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),false);
     assert.throws(()=>deep.replayVerifiedReaderResourceIdentity(f.resources,f.sourceDetails.text),/不符合要求/);
     assert.throws(()=>deep.applyApiReaderResourceAvailability(f.paper.analysis,f.resources),/资源核验记录/);
     assert.throws(()=>sync(f.paper,f.sourceDetails),/同步前检查/);
@@ -401,7 +401,7 @@ test('原付费 Reader 保留上游时仍核完整投影，但主文评分和检
     assert.notEqual(projected,f.paper.analysis);
     assert.equal(sync(f.paper,f.sourceDetails,{preserveUpstream:true}),f.paper);
     assert.equal(JSON.stringify(f.paper),before);
-    assert(engine.scoringAuditBindsFinalAnalysis(f.paper));assert(engine.hasValidApiReaderV3Records(f.paper));
+    assert(engine.scoringAuditBindsFinalAnalysis(f.paper));assert(engine.hasValidIntegratedApiReaderRecords(f.paper));
     sync(f.paper,f.sourceDetails);
     assert.equal(f.paper.analysis,projected);
     assert.notEqual(JSON.stringify(f.paper),before);

@@ -150,7 +150,7 @@ function collectSavedRecoveryState(date, options = {}) {
     }
     const blocked = sources.some(source => !['valid', 'missing'].includes(source.state));
     const status = blocked ? 'blocked' : sources.some(source => source.state === 'missing') ? 'partial' : 'collected';
-    return { contract: 'recover-saved-records-v1', date, collectionMode: 'saved_records', semanticCoverage: 'not_checked', status,
+    return { ...require('./lib/protocol-codec').recordHeader('recover-saved-records', 'recover-saved-records'), date, collectionMode: 'saved_records', semanticCoverage: 'not_checked', status,
         coverage: { analysisRecords: analysis ? papers.length : null, reviewFiles: review ? files.length : null,
             reviewBatchIssues: review ? (review.issues || []).length : null, scopeComplete: false,
             sources: sources.map(({ value, ...source }) => source) },

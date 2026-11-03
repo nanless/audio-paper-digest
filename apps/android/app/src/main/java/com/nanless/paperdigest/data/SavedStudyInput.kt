@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import com.nanless.paperdigest.cloud.BackupCodec
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,6 +12,28 @@ import java.util.UUID
 /** Read-only provenance, NOT response/fee authentication or permission to issue a request.
  * Hashes the original bytes before parsing; never rewrites a restored input or requires device HMAC.
  */
+private const val MAC_STUDY_INPUT="paperdigest-mac-study-input"
+private const val MAC_STUDY_IDENTITY="paperdigest-mac-study-identity"
+private const val MAC_STUDY_EXTRACTOR="paperdigest-mac-pdf-extractor"
+private const val MAC_RESPONSE_RECOVERY="paperdigest-mac-model-response-recovery"
+
+private fun macInputIdentityHeader(sealed:JSONObject,session:JSONObject):JSONObject? {
+    val fields=setOf("config","messages","source","fingerprint")
+    if(!sealed.has("contract")){
+        require(sealed.keys().asSequence().toSet()==fields&&!session.has("studyInputFormat"))
+        return null
+    }
+    val fingerprint=sealed.opt("schemaFingerprint") as? String
+    require(ClientProtocols.hasValidHeader(sealed,MAC_STUDY_INPUT)&&
+        sealed.keys().asSequence().toSet()==ClientProtocols.recordKeys(sealed.get("contract"),MAC_STUDY_INPUT,fields+"identityFormat",fingerprint))
+    val header=ClientProtocols.recordHeader(sealed.get("contract"),MAC_STUDY_INPUT,fingerprint)
+    require(canonical(header)==canonical(session.getJSONObject("studyInputFormat")))
+    val identity=sealed.getJSONObject("identityFormat")
+    require(ClientProtocols.hasValidHeader(identity,MAC_STUDY_IDENTITY)&&
+        canonical(identity)==canonical(ClientProtocols.declaredSchema(sealed.get("contract"),MAC_STUDY_INPUT,fingerprint).getJSONObject("identityFormat")))
+    return identity
+}
+
 fun verifiedSavedStudyInput(session: JSONObject, inputBytes: ByteArray): SavedStudySource? = try {
     verifyStudyInput(session, inputBytes)
 } catch (_: Exception) { null }
@@ -26,7 +50,7 @@ fun readSavedStudyInput(session: JSONObject, researchRoot: File): SavedStudySour
 
 /** Read-only original-byte binding, not response authenticity, success, billing or replay authority.
  * Android StudyService saves a raw .bin plus a receipt; Mac ModelService instead saves a
- * desktop-model-response-recovery-v1 envelope containing its normalized response session.
+ * an installation-authenticated envelope containing its normalized response session.
  * There is no Mac UUID-response.bin contract: never invent one or consult current settings.
  */
 private fun readOriginalStudyResponse(session: JSONObject, root: File, input: SavedStudySource, android: Boolean): String? {
@@ -72,8 +96,8 @@ private fun readOriginalStudyResponse(session: JSONObject, root: File, input: Sa
     val receipt = json(receiptBytes)
     val binding = JSONObject().put("record", session).put("inputSHA256", input.inputSHA)
         .put("receiptSHA256", sha256(receiptBytes)).put("captures", captures)
-    when (receipt.get("contract")) {
-        "android-model-response-v1" -> {
+    when {
+        receipt.get("contract")=="android-model-response-v1" -> {
             require(android)
             val body = read(bodyName, 16L * 1024 * 1024)
             val bodySHA = sha256(body)
@@ -84,13 +108,15 @@ private fun readOriginalStudyResponse(session: JSONObject, root: File, input: Sa
             }
             binding.put("bodySHA256", bodySHA)
         }
-        "desktop-model-response-recovery-v1" -> {
+        ClientProtocols.hasValidHeader(receipt,MAC_RESPONSE_RECOVERY) -> {
             // This actual producer embeds the saved text/response in the exact envelope bytes;
             // its MAC is opaque here. Do not touch the installation's integrity key or keychain.
-            require(!android)
+            val fingerprint=receipt.opt("schemaFingerprint") as? String
+            require(!android&&(fingerprint!=null)==session.has("studyInputFormat")&&
+                receipt.keys().asSequence().toSet()==ClientProtocols.recordKeys(receipt.get("contract"),MAC_RESPONSE_RECOVERY,setOf("session","mac"),fingerprint))
             val saved = receipt.getJSONObject("session")
             require(saved.get("id") == id && saved.get("inputSHA256") == input.inputSHA)
-            for (field in listOf("id", "kind", "paperID", "question", "source", "fingerprint", "model", "inputSHA256", "startedAt", "parentSessionID")) {
+            for (field in listOf("id", "kind", "paperID", "question", "source", "fingerprint", "model", "inputSHA256", "startedAt", "parentSessionID", "studyInputFormat")) {
                 require(canonical(saved.opt(field)) == canonical(session.opt(field)))
             }
             require(saved.get("text") is String && saved.get("response") == saved.get("text"))
@@ -160,19 +186,33 @@ private fun verifyStudyInput(session: JSONObject, bytes: ByteArray): SavedStudyS
         require(sha256(canonical(identity).toByteArray(Charsets.UTF_8)) == fingerprint)
         require(source.get("kind") in setOf("pdf-selection", "pdf-range", "pdf-document", "pdf-chapter"))
     } else {
-        // Mac v3/v4 sealed inputs have no identity/contract member. Reconstruct THEIR original
-        // fingerprint schema and Foundation sorted-JSON encoding; never invent an Android identity.
-        require(sealed.keys().asSequence().toSet() == setOf("config", "messages", "source", "fingerprint"))
+        // Rebuild the actual input's fingerprint using Foundation-compatible
+        // sorted JSON, without upgrading an original header-less input.
+        val actualHeader=macInputIdentityHeader(sealed,session)
         require(source.get("kind") in setOf("pdf-selection", "page", "range", "chapter", "full", "pdf-page", "pdf-range", "pdf-chapter", "pdf-full"))
         val budget = positiveStudySourcePage(config.get("maxTokens")) ?: error("Invalid input")
-        val identity = JSONObject().put("contract", "desktop-study-v3").put("extractor", "pdfkit-physical-pages-v1")
-            .put("kind", "study").put("paperID", owner).put("messages", messages).put("model", config.get("model"))
-            .put("endpoint", config.get("endpoint") as String).put("protocol", config.opt("protocol") ?: "auto")
-            .put("question", question).put("evidence", evidence).put("source", source).put("maxTokens", budget)
-        val old = sha256(desktopStudyJSON(identity).toByteArray(Charsets.UTF_8))
-        identity.put("contract", "desktop-study-v4").put("responsesStream", config.opt("responsesStream") ?: false)
-            .put("reasoningEffort", config.opt("reasoningEffort") ?: "default")
-        require(old == fingerprint || sha256(desktopStudyJSON(identity).toByteArray(Charsets.UTF_8)) == fingerprint)
+        val fields=JSONObject().put("kind","study").put("paperID",owner).put("messages",messages).put("model",config.get("model"))
+            .put("endpoint",config.get("endpoint") as String).put("protocol",config.opt("protocol") ?: "auto")
+            .put("question",question).put("evidence",evidence).put("source",source).put("maxTokens",budget)
+        fun calculate(header:JSONObject,extractor:String,transport:Boolean):String {
+            val identity=JSONObject(header.toString()).put("extractor",extractor)
+            fields.keys().forEach{key->identity.put(key,fields.get(key))}
+            if(transport)identity.put("responsesStream",config.opt("responsesStream") ?: false)
+                .put("reasoningEffort",config.opt("reasoningEffort") ?: "default")
+            return sha256(desktopStudyJSON(identity).toByteArray(Charsets.UTF_8))
+        }
+        if(actualHeader==null) {
+            val extractor=ClientProtocols.historicalContract(MAC_STUDY_EXTRACTOR,"physical-pdf-page-text")
+            val beforeTransport=ClientProtocols.historicalHeader(MAC_STUDY_IDENTITY,"core-input",null)
+            val withTransport=ClientProtocols.historicalHeader(MAC_STUDY_IDENTITY,"transport-bound-input",null)
+            require(calculate(beforeTransport,extractor,false)==fingerprint||calculate(withTransport,extractor,true)==fingerprint)
+        }else{
+            val schema=ClientProtocols.declaredSchema(actualHeader.get("contract"),MAC_STUDY_IDENTITY,actualHeader.opt("schemaFingerprint") as? String)
+            val extractor=schema.getString("extractor")
+            val extractorHeader=schema.getJSONObject("extractorFormat")
+            require(ClientProtocols.hasValidHeader(extractorHeader,MAC_STUDY_EXTRACTOR)&&extractorHeader.get("contract")==extractor)
+            require(calculate(actualHeader,extractor,true)==fingerprint)
+        }
     }
     validateStudyPages(source, pages, evidence, android)
     return SavedStudySource(id, owner, pdfSHA, Collections.unmodifiableList(pages), inputSHA, canonical(source))

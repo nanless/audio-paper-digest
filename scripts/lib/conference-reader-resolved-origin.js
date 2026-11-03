@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // Read-only provenance, never a completion/patch/budget capability. Human edit
 // authority remains in the existing complete-final-failure-set transaction.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
@@ -60,7 +62,7 @@ function checkedEnvelope(directory, file, expectedSha) {
         }
     };
     safe(envelope);
-    if (record.sha256 !== expectedSha || envelope.version !== require('./reader-repair').REPAIR_VERSION
+    if (record.sha256 !== expectedSha || !require('./reader-repair').isCandidateEnvelope(envelope)
         || envelope.payloadSha256 !== hash(envelope.payload) || envelope.payload.status !== 'failed'
         || !new RegExp('^' + hash(envelope.identity) + '\\.migrated-[a-f0-9-]{36}\\.json$').test(path.basename(file))
         || !require('./reader-repair').parseRecoveryDraft(envelope.payload.draft)) fail('migration archive CAS or format differs');
@@ -71,7 +73,7 @@ function migrationChain(directory, selected) {
     let identity = latest, draft = hash(selected.payload.draft);
     for (let i = audits.length - 1; i >= 0; i--) {
         const audit = audits[i];
-        if (audit.contract !== 'reader-recovery-diagnostics-revision-v1' || audit.scope !== 'conference-process'
+        if (!require('./protocol-codec').hasValidHeader(audit, 'reader-recovery-diagnostics-revision') || audit.scope !== 'conference-process'
             || audit.paperId !== latest.paperId || audit.runId !== latest.conferenceReaderGrant.executionId
             || audit.toIdentitySha256 !== hash(identity) || audit.clearedNoProgress !== false
             || audit.outputDraftSha256 !== draft || audit.inputDraftSha256 !== draft
@@ -113,7 +115,7 @@ function uniqueUsage(identity, request, response, grantId, pins) {
             || event.runId !== grantId || event.unitId !== sha(identity.conferenceReaderGrant.executionId) || event.contentAttempt !== request.contentAttempt
             || event.outputTextSha256 !== response.outputTextSha256 || event.model !== identity.model.model || event.protocol !== identity.model.protocol) continue;
         const at = Date.parse(event.at), from = Date.parse(request.at), to = Date.parse(response.at);
-        if (event.version !== 'llm-usage-v1' || !/^[a-f0-9-]{36}$/u.test(event.eventId || '') || event.outcome !== 'completed' || event.statusCode !== 200
+        if (!isUsageEventFormat(event) || !/^[a-f0-9-]{36}$/u.test(event.eventId || '') || event.outcome !== 'completed' || event.statusCode !== 200
             || !Number.isFinite(at) || !Number.isFinite(from) || !Number.isFinite(to) || from > at || from > to || Math.abs(to-at) > 30000) fail('fee outcome/time differs');
         result.push({ file: row.file, sha256: row.sha256, eventId: event.eventId });
     }
@@ -171,7 +173,7 @@ function inspectLatestResolvedPaidReader({ analysisRoot, executionId, planHandle
             const grant = require('./conference-reader-recovery-window').getCurrentReaderWindow(paper);
             if (selected.identity.paperId !== paper.id || selected.identity.sourceSha256 !== paper.sourceSha256
                 || !equal(selected.identity.conferenceReaderGrant, grant) || selected.identity.freshAnalysis !== undefined
-                || selected.identity.contentMode !== 'reader-source-only-v1' || payload.status !== 'failed'
+                || !require('./reader-content-mode').is(selected.identity, 'source-only') || payload.status !== 'failed'
                 || !Number.isSafeInteger(payload.attempts) || payload.attempts < 1 || payload.attempts > 6
                 || !Number.isSafeInteger(payload.fullAttempts) || payload.fullAttempts < 1 || payload.fullAttempts > 2
                 || payload.explicitReaderRetryRound || payload.implementationRepairAllowanceProof) fail('retired origin identity/budget differs');
@@ -190,7 +192,7 @@ function inspectLatestResolvedPaidReader({ analysisRoot, executionId, planHandle
             const matching = diagnostics.map(row => read(path.join(directory, row.path))).filter(row => row.value.contentAttempt === payload.attempts && equal(row.value.identity, chain.originalIdentity));
             if (matching.length !== 1) fail('latest diagnostic request is not unique');
             const request = matching[0], response = read(request.file.replace('.request.json','.response.json'));
-            if (request.value.contract !== 'reader-repair-request-diagnostics-v1' || request.value.promptSha256 !== sha(request.value.prompt)
+            if (!require('./reader-diagnostic-format').hasDiagnosticFormat(request.value) || request.value.promptSha256 !== sha(request.value.prompt)
                 || request.value.draftSha256 !== hash(request.value.draft) || response.value.contract !== request.value.contract
                 || response.value.id !== request.value.id || response.value.requestSha256 !== request.sha256
                 || response.value.outputTextSha256 !== sha(response.value.rawResponse)

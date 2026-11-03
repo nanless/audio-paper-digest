@@ -6,27 +6,29 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const pdfApi = require('./conference-pdf-source.js');
 const runApi = require('./conference-run.js');
 const executionApi = require('./conference-execution.js');
 const planApi = require('./conference-plan.js');
 const { validatePdfFormulaRecord } = require('./conference-extraction-receipt.js');
+const codec = require('./protocol-codec');
+const readerPdfIdentity = require('./conference-reader-pdf-identity');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'conference-source-context-v2';
-const VERSION = 2;
-const ARTIFACT_CONTRACT = 'conference-structured-artifacts-v2';
-const ARTIFACT_VERSION = 2;
-const REPLAYABLE_PROFILE = 'replayable-pdf-layout-v1';
-const WEAK_PROFILE = 'weak-pdf-layout-v1';
-const UNAVAILABLE_PROFILE = 'unavailable-pdf-layout-v1';
+const CONTRACT = codec.contract('conference-source-context');
+const ARTIFACT_CONTRACT = codec.contract('conference-structured-artifacts');
+const REPLAYABLE_PROFILE = codec.contract('conference-pdf-replayable-layout');
+const WEAK_PROFILE = codec.contract('conference-pdf-weak-layout');
+const UNAVAILABLE_PROFILE = codec.contract('conference-pdf-unavailable-layout');
 const OFFSET_UNIT = 'utf8-byte';
-const SOURCE_SNAPSHOT_BINDING_CONTRACT = 'conference-source-snapshot-binding-v2';
-const OBSERVATION_BINDING_CONTRACT = 'conference-source-observation-binding-v2';
-const PLAN_AUTHORITY_BINDING_CONTRACT = 'conference-source-plan-authority-binding-v2';
+const SOURCE_SNAPSHOT_BINDING_CONTRACT = codec.contract('conference-source-snapshot-binding');
+const OBSERVATION_BINDING_CONTRACT = codec.contract('conference-source-observation-binding');
+const PLAN_AUTHORITY_BINDING_CONTRACT = codec.contract('conference-source-plan-authority-binding');
 // 此格式为能重新提取并核验结果的 PDF 提取凭证预留；来源清单中的说明文字，
 // 或结构化提取结果自行声明的格式，都不能代替这份凭证。
-const PDF_EXTRACTION_RECEIPT_CONTRACT = 'conference-pdf-extraction-receipt-v2';
+const PDF_EXTRACTION_RECEIPT_CONTRACT = codec.contract('conference-pdf-extraction-receipt');
 const NO_REPLAYABLE_RECEIPT = 'replayable-pdf-extraction-receipt-unavailable';
 const MIN_TEXT_CHARS = 1000;
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
@@ -47,6 +49,18 @@ class ConferenceSourceContextError extends Error {
 
 function integrity(message, reasonCode = 'integrity_failure') {
     throw new ConferenceSourceContextError(`会议来源上下文被拒绝：${message}`, { reasonCode });
+}
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { integrity(`格式头不受支持：${error.message}`, 'invalid_artifact_schema'); }
+}
+const replayable = profile => codec.isContract(profile, 'conference-pdf-replayable-layout');
+const weak = profile => codec.isContract(profile, 'conference-pdf-weak-layout');
+const unavailable = profile => codec.isContract(profile, 'conference-pdf-unavailable-layout');
+function headerForAuthority(authority, family, variant) {
+    recordHeaderFor(authority, 'conference-source-plan-authority-binding');
+    return codec.isCurrentHeader(authority, 'conference-source-plan-authority-binding')
+        ? codec.recordHeader(codec.contract(family), family) : codec.historicalHeader(family, variant);
 }
 
 function blocked(message, reasonCode) {
@@ -240,10 +254,10 @@ function validateReplayableFigureRecord(item, index) {
 }
 
 function validateVisualAudit(value) {
-    exact(value, ['contract', 'version', 'backend', 'renderDpi', 'pages', 'embeddedImages',
+    const header = recordHeaderFor(value, 'conference-pdf-visual-audit');
+    exact(value, [...Object.keys(header), 'backend', 'renderDpi', 'pages', 'embeddedImages',
         'tableCandidates', 'formulaCandidates', 'figureCandidates', 'visualBytes', 'limitations', 'auditSha256'], 'structuredArtifacts.visualAudit');
-    if (value.contract !== 'conference-pdf-visual-audit-v1' || value.version !== 1
-        || !plain(value.backend) || value.backend.name !== 'pymupdf'
+    if (!plain(value.backend) || value.backend.name !== 'pymupdf'
         || value.backend.version !== '1.27.2.3' || value.renderDpi !== 72
         || !Array.isArray(value.pages) || !Array.isArray(value.embeddedImages)
         || !Array.isArray(value.tableCandidates) || !Array.isArray(value.formulaCandidates)
@@ -271,14 +285,14 @@ function validateVisualAudit(value) {
 }
 
 function validateStructuredArtifacts(value, sourceText) {
-    const fields = ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages', 'tables', 'formulas', 'figures', 'payloadSha256'];
+    const header = recordHeaderFor(value, 'conference-structured-artifacts');
+    const fields = [...Object.keys(header), 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages', 'tables', 'formulas', 'figures', 'payloadSha256'];
     const actual = Object.keys(value).sort();
     const expected = [...fields, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         integrity('structuredArtifacts 包含未允许的字段，或缺少必填字段', 'invalid_artifact_schema');
     }
-    if (value.contract !== ARTIFACT_CONTRACT || value.version !== ARTIFACT_VERSION
-        || ![REPLAYABLE_PROFILE, WEAK_PROFILE, UNAVAILABLE_PROFILE].includes(value.profile)) {
+    if (!replayable(value.profile) && !weak(value.profile) && !unavailable(value.profile)) {
         integrity('structuredArtifacts 的 contract、version 或 profile 不受支持', 'unsupported_artifact_profile');
     }
     if (value.offsetUnit !== OFFSET_UNIT) {
@@ -295,13 +309,13 @@ function validateStructuredArtifacts(value, sourceText) {
     for (const field of ['pages', 'tables', 'formulas', 'figures']) {
         if (!Array.isArray(value[field])) integrity(`structuredArtifacts.${field} 必须是数组`, 'invalid_artifact_schema');
     }
-    if (value.profile === UNAVAILABLE_PROFILE) {
+    if (unavailable(value.profile)) {
         if ([value.pages, value.tables, value.formulas, value.figures].some(items => items.length)) {
             integrity('结构化内容标为 unavailable 时，不得保存已提取的页面、表格、公式或图片记录', 'invalid_artifact_schema');
         }
         return value;
     }
-    if (value.profile === REPLAYABLE_PROFILE && !value.pages.length) {
+    if (replayable(value.profile) && !value.pages.length) {
         integrity('可重新核验的结构化记录缺少页面文本区间', 'invalid_artifact_schema');
     }
     if (!value.pages.length) {
@@ -322,7 +336,7 @@ function validateStructuredArtifacts(value, sourceText) {
             if (kind === 'formula') {
                 try { validatePdfFormulaRecord(item, index, value.visualAudit, value.pages.length); }
                 catch (error) { integrity(error.message, 'invalid_formula_source_expression'); }
-            } else if (value.profile === REPLAYABLE_PROFILE && kind === 'figure') {
+            } else if (replayable(value.profile) && kind === 'figure') {
                 validateReplayableFigureRecord(item, index);
             } else validateLocatedRecord(item, index, kind);
         });
@@ -344,9 +358,11 @@ function unavailableCapability(reason) {
 }
 
 function structuredCapabilityReason(profile) {
-    if (profile === WEAK_PROFILE) return 'structured-artifacts-profile-weak';
-    if (profile === UNAVAILABLE_PROFILE) return 'structured-artifacts-profile-unavailable';
-    if (profile === REPLAYABLE_PROFILE) return 'replayable-pdf-extraction-receipt-v2';
+    if (weak(profile)) return 'structured-artifacts-profile-weak';
+    if (unavailable(profile)) return 'structured-artifacts-profile-unavailable';
+    if (replayable(profile)) return profile === REPLAYABLE_PROFILE
+        ? codec.contract('conference-replayable-extraction-capability')
+        : codec.historicalContract('conference-replayable-extraction-capability', 'actual-pdf-replay');
     return NO_REPLAYABLE_RECEIPT;
 }
 
@@ -424,7 +440,7 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
     }
     const structuredArtifacts = validateStructuredArtifacts(strictJson(artifactBytes, '结构化提取记录文件'), text);
     const structuredReason = structuredCapabilityReason(structuredArtifacts.profile);
-    const capability = structuredArtifacts.profile === REPLAYABLE_PROFILE
+    const capability = replayable(structuredArtifacts.profile)
         ? availableCapability(structuredReason) : unavailableCapability(structuredReason);
     const formulaAvailability = { ...unavailableCapability('pdf-has-no-original-tex'),
         layoutEvidenceAvailable: Boolean(structuredArtifacts.visualAudit?.formulaCandidates?.length) };
@@ -441,18 +457,18 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
     const conference = { id: loaded.ledger.conference.id, year: loaded.ledger.conference.year };
     const identity = { ...member.identity, key: runMember.sourceIdentity };
     const sourceSnapshotBinding = {
-        contract: SOURCE_SNAPSHOT_BINDING_CONTRACT, version: VERSION, paperId: input.paperId,
+        ...headerForAuthority(productionBinding, 'conference-source-snapshot-binding', 'immutable-source-and-plan'), paperId: input.paperId,
         conference, identity, runIdentitySha256: resolved.binding.runIdentitySha256,
         sourceBinding, pdfDescriptor: pdfSource.descriptor
     };
     sourceSnapshotBinding.planAuthority = productionBinding;
     const sourceSnapshotSha256 = stableHash(sourceSnapshotBinding);
     const observationBinding = {
-        contract: OBSERVATION_BINDING_CONTRACT, version: VERSION,
+        ...headerForAuthority(productionBinding, 'conference-source-observation-binding', 'run-state-observation'),
         sourceSnapshotSha256, runBinding: resolved.binding
     };
     const body = {
-        contract: CONTRACT, version: VERSION, paperId: input.paperId,
+        ...headerForAuthority(productionBinding, 'conference-source-context', 'authenticated-source-context'), paperId: input.paperId,
         conference, identity,
         runBinding: resolved.binding,
         sourceBinding, sourceSnapshotBinding, sourceSnapshotSha256,
@@ -460,9 +476,10 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
         pdfDescriptor: pdfSource.descriptor,
         metadata, text, structuredArtifacts,
         analysisReady: true, textOffsetUnit: OFFSET_UNIT,
-        extractionReceipt: { contract: PDF_EXTRACTION_RECEIPT_CONTRACT,
-            available: structuredArtifacts.profile === REPLAYABLE_PROFILE,
-            reason: structuredArtifacts.profile === REPLAYABLE_PROFILE ? 'replayable-pdf-extraction-receipt-v2' : NO_REPLAYABLE_RECEIPT },
+        extractionReceipt: { contract: codec.isCurrentHeader(structuredArtifacts, 'conference-structured-artifacts')
+                ? PDF_EXTRACTION_RECEIPT_CONTRACT : codec.historicalContract('conference-pdf-extraction-receipt', 'raw-input-output-bindings'),
+            available: replayable(structuredArtifacts.profile),
+            reason: replayable(structuredArtifacts.profile) ? structuredCapabilityReason(structuredArtifacts.profile) : NO_REPLAYABLE_RECEIPT },
         formulaAvailability, tableAvailability, figureAvailability,
         figurePolicy: 'no_external_fetch', sourceOnly: true,
         productionAuthorization: { authorized: true, binding: productionBinding }
@@ -475,6 +492,30 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
 
 // Only the actual immutable result of the authenticated builder has this
 // capability. A persisted object, JSON clone or caller-supplied boolean has none.
+function bindReaderPdfSourceExecution(handle, { analysisRoot, executionId, expectedSourceFileSha256 } = {}) {
+    const stored = handle && READER_PDF_SOURCE_CONTEXTS.get(handle);
+    if (!stored) integrity('保存来源视图必须持有实际已核验 PDF 来源句柄');
+    const adapter = require('./conference-analysis-adapter');
+    const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId });
+    if (loaded.sourceFileSha256 !== expectedSourceFileSha256 || loaded.run.paperId !== handle.paperId
+        || loaded.run.sourceSnapshotSha256 !== handle.sourceSnapshotSha256
+        || stableHash(loaded.source.sourceSnapshotBinding) !== stableHash(handle.sourceSnapshotBinding)
+        || stableHash(loaded.source.planAuthorityBinding) !== stableHash(stored.productionBinding)) {
+        integrity('保存来源视图不属于该实际执行、论文或封存来源');
+    }
+    const details = adapter.replayPersistedSourceDetails(handle, loaded.source.sourceDetails);
+    const binding = { executionId, paperId: loaded.run.paperId, directory: loaded.directory,
+        sourceFileSha256: loaded.sourceFileSha256, detailsSha256: stableHash(details),
+        effectiveArtifactsSha256: details.structuredArtifacts.payloadSha256,
+        sourceIdentityHeader: readerPdfIdentity.headerForArtifacts(details.structuredArtifacts) };
+    if (stored.executionView && stableHash(stored.executionView) !== stableHash(binding)
+        || stored.effectiveArtifactsSha256 && stored.effectiveArtifactsSha256 !== binding.effectiveArtifactsSha256) {
+        integrity('实际 PDF 来源句柄已经绑定其他不可变执行视图');
+    }
+    stored.executionView = Object.freeze(binding);
+    stored.effectiveArtifactsSha256 = binding.effectiveArtifactsSha256;
+    return handle;
+}
 function readerPdfSourceForContext(handle) {
     const stored = handle && READER_PDF_SOURCE_CONTEXTS.get(handle);
     if (!stored) {
@@ -484,18 +525,30 @@ function readerPdfSourceForContext(handle) {
         const publication = require('./conference-reader-publication-evidence');
         return publication.readVerifiedPublicationReaderPdfSource?.(handle) || null;
     }
-    const effectiveArtifactsSha256 = stored.effectiveArtifactsSha256 ||=
-        require('./conference-analysis-adapter').sourceDetails(handle).structuredArtifacts.payloadSha256;
-    const sourceIdentity = { contract: 'conference-reader-pdf-source-v1', paperId: handle.paperId,
+    const artifacts = stored.executionView ? null
+        : require('./conference-analysis-adapter').sourceDetails(handle).structuredArtifacts;
+    const effectiveArtifactsSha256 = stored.effectiveArtifactsSha256 ||= artifacts.payloadSha256;
+    const identityHeader = stored.executionView?.sourceIdentityHeader || readerPdfIdentity.headerForArtifacts(artifacts);
+    const sourceIdentity = { ...identityHeader, paperId: handle.paperId,
         sourceSnapshotSha256: handle.sourceSnapshotSha256,
         rawStructuredArtifactsSha256: handle.structuredArtifacts.payloadSha256,
         effectiveStructuredArtifactsSha256: effectiveArtifactsSha256,
         sourceSnapshotBinding: clone(handle.sourceSnapshotBinding),
         planAuthorityBinding: clone(stored.productionBinding) };
     const active = require('./conference-analysis-context').getConferenceAnalysisContext();
+    if (stored.executionView && active?.readerPdfSourceHandle === handle
+        && (active.executionId !== stored.executionView.executionId || active.paperId !== stored.executionView.paperId
+            || stableHash(active.sourceDetails) !== stored.executionView.detailsSha256)) {
+        integrity('PDF 来源的保存视图不能跨执行或来源作用域复用');
+    }
+    if (stored.executionView) sourceIdentity.executionId = stored.executionView.executionId;
     if (active?.readerPdfSourceHandle === handle && active.paperId === handle.paperId
         && active.executionId) sourceIdentity.executionId = active.executionId;
     const assertUnchanged = () => {
+        if (stored.executionView) {
+            const sourceFile = require('./conference-analysis-adapter').readJsonRecord(path.join(stored.executionView.directory, 'source.json'));
+            if (sourceFile.sha256 !== stored.executionView.sourceFileSha256) integrity('PDF 来源的原执行文件已经变化');
+        }
         // No stat-only cache: every actual table derivation rechecks the real
         // member files and PDF against the original ledger-bound source SHA.
         const ledger = ledgerApi.ledgerHandleReadOnlyView(stored.ledgerHandle);
@@ -527,8 +580,9 @@ function buildConferenceSourceContext(input = {}) {
     const snapshot = authority.snapshot;
     const receipt = snapshot.receipt;
     const bindingBody = {
-        contract: PLAN_AUTHORITY_BINDING_CONTRACT,
-        version: VERSION,
+        ...(codec.isCurrentHeader(receipt, 'conference-run-plan-secure-receipt')
+            ? codec.recordHeader(PLAN_AUTHORITY_BINDING_CONTRACT, 'conference-source-plan-authority-binding')
+            : codec.historicalHeader('conference-source-plan-authority-binding', 'verified-plan-receipt')),
         planReceiptSha256: receipt.receiptSha256,
         planReceiptFileSha256: snapshot.receiptFileSha256,
         runFileSha256: snapshot.runFileSha256,
@@ -547,7 +601,8 @@ function buildConferenceSourceContext(input = {}) {
 }
 
 module.exports = {
-    CONTRACT, VERSION, ARTIFACT_CONTRACT, ARTIFACT_VERSION, REPLAYABLE_PROFILE, WEAK_PROFILE,
+    bindReaderPdfSourceExecution,
+    CONTRACT, ARTIFACT_CONTRACT, REPLAYABLE_PROFILE, WEAK_PROFILE,
     UNAVAILABLE_PROFILE, OFFSET_UNIT, SOURCE_SNAPSHOT_BINDING_CONTRACT, OBSERVATION_BINDING_CONTRACT,
     PLAN_AUTHORITY_BINDING_CONTRACT, PDF_EXTRACTION_RECEIPT_CONTRACT, MIN_TEXT_CHARS,
     ConferenceSourceContextError, buildConferenceSourceContext, readerPdfSourceForContext,

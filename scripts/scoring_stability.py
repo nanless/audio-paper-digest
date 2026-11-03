@@ -3,7 +3,9 @@
 import math
 import re
 
-SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1'
+import protocol_codec as formats
+
+SCORING_STABILITY_RESOLUTION_CONTRACT = formats.contract('api-scoring-stability-resolution')
 SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3
 
 
@@ -40,7 +42,7 @@ def scoring_stability_is_resolved(stage):
     if not isinstance(resolution, dict):
         return False
     multi_pass = resolution.get('method') == 'multi_pass_consensus'
-    if (resolution.get('contract') != SCORING_STABILITY_RESOLUTION_CONTRACT
+    if (not formats.has_valid_header(resolution, SCORING_STABILITY_RESOLUTION_CONTRACT)
             or resolution.get('status') != 'resolved'
             or not (resolution.get('method') == 'second_pass_consensus' or multi_pass)
             or not all(_finite_number(resolution.get(field))

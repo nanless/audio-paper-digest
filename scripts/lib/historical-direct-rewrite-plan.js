@@ -12,20 +12,19 @@ const localSources = require('./historical-conference-local-sources.js');
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
 const inputCatalogApi = require('./historical-direct-rewrite-input-catalog.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readFormatHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'historical-direct-rewrite-plan-v5';
-const VERSION = 5;
-const CATALOG_CONTRACT = 'merged-good-historical-local-data-v5';
+const CONTRACT = codec.contract('historical-direct-rewrite-plan');
+const CATALOG_CONTRACT = inputCatalogApi.CONTRACT;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
-const ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT = 'historical-arxiv-fresh-failure-crosswalk-handoff-v1';
-const ARXIV_FRESH_FAILURE_HANDOFF_VERSION = 1;
-const PRIMARY_ARXIV_HANDOFF_CONTRACT = 'historical-arxiv-fresh-failure-crosswalk-handoff-v2';
+const ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT = codec.contract('historical-arxiv-fresh-failure-crosswalk-handoff');
+const PRIMARY_ARXIV_HANDOFF_CONTRACT = codec.contract('historical-arxiv-primary-fresh-failure-handoff');
 const ARXIV_FRESH_FAILURE_HANDOFF_PREFIX = 'arxiv-fresh-failure-';
-const UNPROJECTED_REPORT_CONTRACT = 'historical-direct-rewrite-unprojected-catalog-report-v1';
-const UNPROJECTED_REPORT_VERSION = 1;
+const UNPROJECTED_REPORT_CONTRACT = codec.contract('historical-direct-rewrite-unprojected-catalog-report');
 const UNPROJECTED_REPORT_PREFIX = 'direct-rewrite-unprojected-';
 
 class HistoricalDirectRewritePlanError extends Error {
@@ -36,6 +35,10 @@ class HistoricalDirectRewritePlanError extends Error {
     }
 }
 const fail = message => { throw new HistoricalDirectRewritePlanError(message); };
+function recordHeaderFor(value, name) {
+    try { return readFormatHeader(value, name); }
+    catch (error) { fail(`格式声明不符合要求：${error.message}`); }
+}
 const plain = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -66,12 +69,12 @@ function deterministicRunId(catalogFileSha256, paperId) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // 当前 v5 来源目录直接使用生成该目录的模块核验，避免另设一套要求较低的检查。
-    // 旧 v3 采集文件使用了相同主版本号，但允许保留的 arXiv 正文和 PDF 输入。
+    // 来源目录直接使用其生产者核验，不能另设要求较低的兼容检查。
+    // 更早的采集记录曾允许保留本地 arXiv 正文和 PDF，不能冒充当前写作来源。
     try {
         return require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`当前带范围限制的 v5 本地来源目录未通过检查： ${error.message}`);
+        fail(`当前范围受限的本地来源目录未通过检查： ${error.message}`);
     }
 }
 
@@ -190,8 +193,9 @@ function normalizeConferenceSourceDisclosure(value, paperId, sources) {
         return null;
     }
     if (value === undefined || value === null) fail('必须提供会议来源版本说明');
-    if (stableHash(value) !== stableHash(expected)) fail('会议来源版本说明与来源记录不同');
-    return expected;
+    const source = sources.find(source => inputCatalogApi.priorPreprintSourceDisclosure(source, paperId) !== null);
+    try { return inputCatalogApi.replayPriorPreprintSourceDisclosure(source, paperId, value); }
+    catch (error) { fail(`会议来源版本说明与来源记录不同：${error.message}`); }
 }
 
 function normalizeHistoricalArxivLink(value, expectedArxivId) {
@@ -314,7 +318,7 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     const uncoveredFrozenPaperPages = history.pages.filter(page => !allPageKeys.has(page.pageKey))
         .map(uncoveredPageRecord).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const paperPageCoverage = coverageSummary(projectedPages, uncoveredFrozenPaperPages);
-    const body = { contract: CONTRACT, version: VERSION, catalogFileSha256,
+    const body = { ...codec.recordHeader(CONTRACT, 'historical-direct-rewrite-plan'), catalogFileSha256,
         inventory: { ledgerSha256: history.ledgerSha256, pageSetSha256: history.pageSetSha256 },
         conferenceProjectionArtifactSha256: conferenceArtifact.artifactSha256,
         queue, queueSha256: stableHash(queue), projectedPages,
@@ -332,14 +336,15 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
 }
 
 function normalizePlan(value) {
-    exact(value, ['contract', 'version', 'catalogFileSha256', 'inventory', 'conferenceProjectionArtifactSha256',
+    const header = recordHeaderFor(value, 'historical-direct-rewrite-plan');
+    exact(value, [...Object.keys(header), 'catalogFileSha256', 'inventory', 'conferenceProjectionArtifactSha256',
         'queue', 'queueSha256', 'projectedPages', 'unprojectedCatalogEntries', 'unprojectedCatalogEntrySetSha256',
         'dailyPrimaryArxivBindings', 'dailyPrimaryArxivBindingSetSha256',
         'dailyIcmlPosterBindings', 'dailyIcmlPosterBindingSetSha256', 'icmlPosterAuthoritySha256',
         'dailyIcmlPosterRoutableBindings', 'dailyIcmlPosterRoutableBindingSetSha256',
         'projectedPageSetSha256', 'uncoveredFrozenPaperPages', 'uncoveredFrozenPaperPageSetSha256',
         'paperPageCoverage', 'planSha256'], '直接重写计划');
-    if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
+    if (!validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || !validSha(value.conferenceProjectionArtifactSha256) || !Array.isArray(value.queue)
         || !validSha(value.queueSha256) || !Array.isArray(value.projectedPages)
@@ -537,7 +542,7 @@ function normalizePlan(value) {
         || stableHash(value.paperPageCoverage) !== stableHash(expectedCoverage)) {
         fail('直接重写计划的队列、页面对应记录、覆盖统计或其 SHA 已变化');
     }
-    const body = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
+    const body = { ...header, catalogFileSha256: value.catalogFileSha256,
         inventory: clone(value.inventory), conferenceProjectionArtifactSha256: value.conferenceProjectionArtifactSha256,
         queue, queueSha256: value.queueSha256, projectedPages, dailyPrimaryArxivBindings,
         dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256,
@@ -594,14 +599,15 @@ function buildArxivFreshFailureHandoff({ plan, paperId, generation, error, obser
     const primaryPages = new Set(pageBindings.filter(page => page.mapping === dailyPrimaryArxiv.MAPPING)
         .map(page => page.pageKey));
     const primaryBindings = normalized.dailyPrimaryArxivBindings.filter(binding => primaryPages.has(binding.pageKey));
-    const contract = primaryPages.size ? PRIMARY_ARXIV_HANDOFF_CONTRACT : ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT;
-    const version = primaryPages.size ? 2 : ARXIV_FRESH_FAILURE_HANDOFF_VERSION;
+    const family = primaryPages.size ? 'historical-arxiv-primary-fresh-failure-handoff'
+        : 'historical-arxiv-fresh-failure-crosswalk-handoff';
+    const header = codec.recordHeader(codec.contract(family), family);
     const primaryFields = primaryPages.size ? { dailyPrimaryArxivBindings: clone(primaryBindings) } : {};
-    const handoffKey = stableHash({ contract, version, ...primaryFields, planSha256: normalized.planSha256,
+    const handoffKey = stableHash({ ...header, ...primaryFields, planSha256: normalized.planSha256,
         catalogFileSha256: normalized.catalogFileSha256, inventory: normalized.inventory,
         paperId: item.paperId, runId: item.runId, arxivId: item.route.arxivId,
         generation: normalizedGenerationValue, failure, pageBindings, pageBindingSetSha256: stableHash(pageBindings) });
-    const body = { contract, version, ...primaryFields,
+    const body = { ...header, ...primaryFields,
         handoffKey, planSha256: normalized.planSha256, catalogFileSha256: normalized.catalogFileSha256,
         inventory: clone(normalized.inventory), paperId: item.paperId, runId: item.runId,
         route: item.route.kind, arxivId: item.route.arxivId, generation: normalizedGenerationValue,
@@ -610,12 +616,13 @@ function buildArxivFreshFailureHandoff({ plan, paperId, generation, error, obser
 }
 
 function normalizeArxivFreshFailureHandoff(value) {
-    const primaryVersion = value?.contract === PRIMARY_ARXIV_HANDOFF_CONTRACT && value.version === 2;
-    exact(value, ['contract', 'version', 'handoffKey', 'planSha256', 'catalogFileSha256', 'inventory', 'paperId',
+    const primaryVersion = codec.isContract(value?.contract, 'historical-arxiv-primary-fresh-failure-handoff');
+    const header = recordHeaderFor(value, primaryVersion ? 'historical-arxiv-primary-fresh-failure-handoff'
+        : 'historical-arxiv-fresh-failure-crosswalk-handoff');
+    exact(value, [...Object.keys(header), 'handoffKey', 'planSha256', 'catalogFileSha256', 'inventory', 'paperId',
         'runId', 'route', 'arxivId', 'generation', 'failure', 'pageBindings', 'pageBindingSetSha256', 'observedAt',
         'handoffSha256', ...(primaryVersion ? ['dailyPrimaryArxivBindings'] : [])], 'arXiv 新抓取失败记录');
-    if ((!primaryVersion && (value.contract !== ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT || value.version !== ARXIV_FRESH_FAILURE_HANDOFF_VERSION))
-        || !validSha(value.handoffKey) || !validSha(value.planSha256) || !validSha(value.catalogFileSha256)
+    if (!validSha(value.handoffKey) || !validSha(value.planSha256) || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || typeof value.paperId !== 'string' || value.paperId !== `arxiv:${value.arxivId}` || !ARXIV_ID_RE.test(value.arxivId)
         || typeof value.runId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.runId)
@@ -663,12 +670,12 @@ function normalizeArxivFreshFailureHandoff(value) {
         }
         primaryFields = { dailyPrimaryArxivBindings: bindings };
     }
-    const deterministic = { contract: value.contract, version: value.version, ...primaryFields, planSha256: value.planSha256,
+    const deterministic = { ...header, ...primaryFields, planSha256: value.planSha256,
         catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory), paperId: value.paperId,
         runId: value.runId, arxivId: value.arxivId, generation, failure: clone(value.failure), pageBindings,
         pageBindingSetSha256: value.pageBindingSetSha256 };
     if (stableHash(deterministic) !== value.handoffKey) fail('arXiv 新抓取失败记录的 key 与内容计算结果不同');
-    const body = { contract: value.contract, version: value.version, ...primaryFields, handoffKey: value.handoffKey,
+    const body = { ...header, ...primaryFields, handoffKey: value.handoffKey,
         planSha256: value.planSha256, catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory),
         paperId: value.paperId, runId: value.runId, route: value.route, arxivId: value.arxivId, generation,
         failure: clone(value.failure), pageBindings, pageBindingSetSha256: value.pageBindingSetSha256, observedAt };
@@ -738,7 +745,7 @@ function writePlan({ root, outputName, plan } = {}) {
 
 function buildUnprojectedCatalogReport({ plan } = {}) {
     const normalized = normalizePlan(plan); const entries = clone(normalized.unprojectedCatalogEntries);
-    const body = { contract: UNPROJECTED_REPORT_CONTRACT, version: UNPROJECTED_REPORT_VERSION,
+    const body = { ...codec.recordHeader(UNPROJECTED_REPORT_CONTRACT, 'historical-direct-rewrite-unprojected-catalog-report'),
         planSha256: normalized.planSha256, catalogFileSha256: normalized.catalogFileSha256,
         inventory: clone(normalized.inventory), entries, entrySetSha256: stableHash(entries),
         excludedOperations: ['fresh-arxiv-acquisition', 'crosswalk', 'llm-analysis'] };
@@ -746,10 +753,10 @@ function buildUnprojectedCatalogReport({ plan } = {}) {
 }
 
 function normalizeUnprojectedCatalogReport(value) {
-    exact(value, ['contract', 'version', 'planSha256', 'catalogFileSha256', 'inventory', 'entries', 'entrySetSha256',
+    const header = recordHeaderFor(value, 'historical-direct-rewrite-unprojected-catalog-report');
+    exact(value, [...Object.keys(header), 'planSha256', 'catalogFileSha256', 'inventory', 'entries', 'entrySetSha256',
         'excludedOperations', 'reportSha256'], '没有对应历史页面的来源目录报告');
-    if (value.contract !== UNPROJECTED_REPORT_CONTRACT || value.version !== UNPROJECTED_REPORT_VERSION
-        || !validSha(value.planSha256) || !validSha(value.catalogFileSha256) || !plain(value.inventory)
+    if (!validSha(value.planSha256) || !validSha(value.catalogFileSha256) || !plain(value.inventory)
         || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || !Array.isArray(value.entries) || !validSha(value.entrySetSha256) || !validSha(value.reportSha256)
         || !Array.isArray(value.excludedOperations)
@@ -766,7 +773,7 @@ function normalizeUnprojectedCatalogReport(value) {
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (value.entries.some((entry, index) => entry.paperId !== entries[index].paperId)
         || stableHash(entries) !== value.entrySetSha256) fail('没有对应历史页面的来源目录报告的条目已变化');
-    const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
+    const body = { ...header, planSha256: value.planSha256,
         catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory), entries,
         entrySetSha256: value.entrySetSha256, excludedOperations: value.excludedOperations.slice() };
     if (stableHash(body) !== value.reportSha256) fail('没有对应历史页面的来源目录报告的自校验 SHA 已变化');
@@ -833,21 +840,25 @@ function splitQueues(plan) {
         conference: normalized.queue.filter(item => item.route.kind === 'conference-local-pdf') };
 }
 
-const REGISTRY_CONTRACT = 'historical-direct-rewrite-registry-v2';
-const STAGING_ADAPTER_CONTRACT = 'historical-direct-rewrite-staging-adapter-v2';
-const DIRECT_SOURCE_RUN_CONTRACT = 'historical-direct-rewrite-source-run-v1';
-const FRESH_ARXIV_SOURCE_CONTRACT = 'fresh-arxiv-rewrite-source-v1';
+const REGISTRY_CONTRACT = codec.contract('historical-direct-rewrite-registry');
+const STAGING_ADAPTER_CONTRACT = codec.contract('historical-direct-rewrite-staging-adapter');
+const DIRECT_SOURCE_RUN_CONTRACT = codec.contract('historical-direct-rewrite-source-run');
+const FRESH_ARXIV_SOURCE_CONTRACT = codec.contract('fresh-arxiv-rewrite-source');
 
 function directSourceRunIdentity(item, sourceBinding) {
-    return stableHash({ contract: DIRECT_SOURCE_RUN_CONTRACT, planRunId: item.runId,
+    recordHeaderFor(sourceBinding, 'fresh-arxiv-rewrite-source');
+    const tag = sourceBinding.contract === FRESH_ARXIV_SOURCE_CONTRACT ? DIRECT_SOURCE_RUN_CONTRACT
+        : codec.historicalContract('historical-direct-rewrite-source-run', 'source-identity');
+    return stableHash({ ...codec.recordHeader(tag, 'historical-direct-rewrite-source-run'), planRunId: item.runId,
         paperId: item.paperId, route: item.route.kind, sourceBinding });
 }
 
 function normalizeFreshArxivSourceBinding(item, value) {
     if (!item || item.route?.kind !== 'arxiv-fresh-fetch') fail('新 arXiv 来源记录要求采用重新抓取官方来源的处理方式');
-    exact(value, ['contract', 'arxivId', 'generation', 'paperId', 'pdfSha256', 'sourceManifestSha256', 'textSha256'],
+    const header = recordHeaderFor(value, 'fresh-arxiv-rewrite-source');
+    exact(value, [...Object.keys(header), 'arxivId', 'generation', 'paperId', 'pdfSha256', 'sourceManifestSha256', 'textSha256'],
         `${item.paperId} 的新来源对应记录`);
-    if (value.contract !== FRESH_ARXIV_SOURCE_CONTRACT || value.paperId !== item.paperId
+    if (value.paperId !== item.paperId
         || value.arxivId !== item.route.arxivId || !Number.isSafeInteger(value.generation) || value.generation < 1
         || !validSha(value.sourceManifestSha256) || !validSha(value.textSha256) || !validSha(value.pdfSha256)) {
         fail(`${item.paperId} 的新来源对应记录格式或 SHA 字段无效`);
@@ -871,12 +882,14 @@ function sourceBindingMap(plan, bindings = null) {
     return byId;
 }
 
-function stageAdapterFor(item) {
+function stageAdapterFor(item, tag = STAGING_ADAPTER_CONTRACT) {
     const kind = item?.route?.kind;
-    if (kind === 'arxiv-fresh-fetch') return { contract: STAGING_ADAPTER_CONTRACT, version: 1,
+    const header = codec.recordHeader(tag, 'historical-direct-rewrite-staging-adapter');
+    if (kind === 'arxiv-fresh-fetch') return { ...header,
         kind: 'arxiv-fresh-analysis-stage', crosswalkPrerequisite: false, postprocessSchedulerPrerequisite: false,
-        requiredSource: 'fresh-arxiv-rewrite-source-v1' };
-    if (kind === 'conference-local-pdf') return { contract: STAGING_ADAPTER_CONTRACT, version: 1,
+        requiredSource: tag === STAGING_ADAPTER_CONTRACT ? 'fresh-arxiv-source-manifest'
+            : codec.historicalContract('fresh-arxiv-rewrite-source', 'source-binding') };
+    if (kind === 'conference-local-pdf') return { ...header,
         kind: 'conference-local-pdf-analysis-stage', crosswalkPrerequisite: false, postprocessSchedulerPrerequisite: false,
         requiredSource: 'retained-local-conference-pdf' };
     fail('未知的直接暂存来源处理方式');
@@ -901,39 +914,52 @@ function verifyConferenceWriterInputs(item) {
 }
 
 function buildRegistry(plan, options = {}) {
+    return rebuildRegistry(plan, options, codec.recordHeader(REGISTRY_CONTRACT, 'historical-direct-rewrite-registry'));
+}
+function rebuildRegistry(plan, options, header) {
     const normalized = normalizePlan(plan);
+    const adapterTag = header.contract === REGISTRY_CONTRACT ? STAGING_ADAPTER_CONTRACT
+        : codec.historicalContract('historical-direct-rewrite-staging-adapter', 'source-route');
     const sourceBindings = sourceBindingMap(normalized, options.sourceBindings ?? options.sourcePreparation ?? null);
     const entries = normalized.queue.map(item => ({ paperId: item.paperId, runId: item.runId,
         route: item.route.kind, projectionSha256: item.projectionSha256, pageKeys: item.pageKeys.slice(),
-        adapter: stageAdapterFor(item), sourceBinding: item.route.kind === 'arxiv-fresh-fetch'
+        adapter: stageAdapterFor(item, adapterTag), sourceBinding: item.route.kind === 'arxiv-fresh-fetch'
             ? sourceBindings.get(item.paperId) || null : null,
         sourceRunIdentitySha256: item.route.kind === 'arxiv-fresh-fetch' && sourceBindings.has(item.paperId)
             ? directSourceRunIdentity(item, sourceBindings.get(item.paperId)) : null,
         sourceStatus: 'pending', analysisStatus: 'pending', stagingStatus: 'pending' }))
         .sort((left, right) => left.paperId.localeCompare(right.paperId));
-    const body = { contract: REGISTRY_CONTRACT, version: 2, planSha256: normalized.planSha256,
+    const body = { ...header, planSha256: normalized.planSha256,
         entries, entrySetSha256: stableHash(entries) };
     return { ...body, registrySha256: stableHash(body) };
 }
 
 function normalizeRegistry(value, plan) {
     const normalizedPlan = normalizePlan(plan);
-    exact(value, ['contract', 'version', 'planSha256', 'entries', 'entrySetSha256', 'registrySha256'],
+    const header = recordHeaderFor(value, 'historical-direct-rewrite-registry');
+    exact(value, [...Object.keys(header), 'planSha256', 'entries', 'entrySetSha256', 'registrySha256'],
         '直接重写登记记录');
-    if (value.contract !== REGISTRY_CONTRACT || value.version !== 2 || value.planSha256 !== normalizedPlan.planSha256
+    if (value.planSha256 !== normalizedPlan.planSha256
         || !Array.isArray(value.entries) || !validSha(value.entrySetSha256) || !validSha(value.registrySha256)) {
         fail('直接重写登记记录的完整格式或 SHA 字段无效');
     }
-    const expected = buildRegistry(normalizedPlan, { sourceBindings: value.entries
+    if (value.contract !== REGISTRY_CONTRACT && value.entries.some(item => item.sourceBinding?.contract === FRESH_ARXIV_SOURCE_CONTRACT)) {
+        fail('旧登记记录不能混用新来源绑定格式');
+    }
+    const expected = rebuildRegistry(normalizedPlan, { sourceBindings: value.entries
         .filter(item => item.route === 'arxiv-fresh-fetch' && item.sourceBinding !== null)
-        .map(item => item.sourceBinding) });
-    if (stableHash(value.entries) !== value.entrySetSha256 || stableHash({ contract: value.contract, version: value.version,
+        .map(item => item.sourceBinding) }, header);
+    if (stableHash(value.entries) !== value.entrySetSha256 || stableHash({ ...header,
         planSha256: value.planSha256, entries: value.entries, entrySetSha256: value.entrySetSha256 }) !== value.registrySha256
         || stableHash(value) !== stableHash(expected)) fail('直接重写登记记录与计划不一致');
     return clone(expected);
 }
 
 function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}) {
+    return buildDirectStagingBinding({ plan, registry, paperId, analysisArtifact },
+        codec.recordHeader(codec.contract('historical-direct-page-staging-input'), 'historical-direct-page-staging-input'));
+}
+function buildDirectStagingBinding({ plan, registry, paperId, analysisArtifact }, header) {
     const normalized = normalizePlan(plan); const checked = normalizeRegistry(registry, normalized);
     const item = normalized.queue.find(value => value.paperId === paperId);
     const registered = checked.entries.find(value => value.paperId === paperId);
@@ -964,12 +990,28 @@ function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}
             sourceManifestSha256: registered.sourceBinding.sourceManifestSha256,
             sourceRunIdentitySha256: registered.sourceRunIdentitySha256 } : {}) }))
         .sort((left, right) => left.pageKey.localeCompare(right.pageKey));
-    const body = { contract: 'historical-direct-page-staging-input-v2', version: 2,
+    const body = { ...header,
         planSha256: normalized.planSha256, registrySha256: checked.registrySha256, paperId: item.paperId,
         runId: item.runId, adapter: registered.adapter, sourceBinding: clone(registered.sourceBinding),
         sourceRunIdentitySha256: registered.sourceRunIdentitySha256, analysisArtifact: clone(analysisArtifact), pages,
         pageSetSha256: stableHash(pages) };
     return { ...body, stagingInputSha256: stableHash(body) };
+}
+
+// Read-only reconstruction of an existing binding. The saved discriminator
+// selects its original registry/adapter format; no old-format writer is exposed.
+// Artifact files, original sources and whole-paper eligibility remain checked
+// by the staging reader before it calls this pure format replay.
+function replayDirectStagingBinding({ plan, paperId, analysisArtifact, sourceBinding, storedBinding } = {}) {
+    const header = recordHeaderFor(storedBinding, 'historical-direct-page-staging-input');
+    const current = storedBinding.contract === codec.contract('historical-direct-page-staging-input');
+    const registryTag = current ? REGISTRY_CONTRACT
+        : codec.historicalContract('historical-direct-rewrite-registry', 'source-bindings');
+    const registry = rebuildRegistry(plan, sourceBinding ? { sourceBindings: [sourceBinding] } : {},
+        codec.recordHeader(registryTag, 'historical-direct-rewrite-registry'));
+    const expected = buildDirectStagingBinding({ plan, registry, paperId, analysisArtifact }, header);
+    if (stableHash(storedBinding) !== stableHash(expected)) fail('原直接暂存绑定无法按原格式与实际来源重放');
+    return expected;
 }
 
 async function bounded(work, concurrency, shouldPause = () => false, onProgress = null) {
@@ -1080,7 +1122,7 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
                     fail(`${item.paperId} 的新来源适配器返回了不匹配的代次`);
                 }
                 // 调度记录足以证明已保存的来源对，不必把全文或 PDF 字节写进检查点。
-                const sourceBinding = normalizeFreshArxivSourceBinding(item, { contract: FRESH_ARXIV_SOURCE_CONTRACT,
+                const sourceBinding = normalizeFreshArxivSourceBinding(item, { ...codec.recordHeader(FRESH_ARXIV_SOURCE_CONTRACT, 'fresh-arxiv-rewrite-source'),
                     paperId: item.paperId, arxivId: item.route.arxivId, generation: arxivGeneration,
                     sourceManifestSha256: captured.sourceManifestSha256,
                     textSha256: captured.manifest.text.responseSha256, pdfSha256: captured.manifest.pdf.responseSha256 });
@@ -1112,16 +1154,16 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
     conference: conferenceResults.sort((left, right) => left.paperId.localeCompare(right.paperId)) };
 }
 
-module.exports = { CONTRACT, VERSION, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalDirectRewritePlanError,
+module.exports = { CONTRACT, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalDirectRewritePlanError,
     stableHash, deterministicRunId, normalizeCatalog, normalizeInventory, arxivPageProjections, sourceRoute,
     conferenceSourceDisclosure, normalizeConferenceSourceDisclosure,
     normalizeHistoricalArxivLink, buildDirectRewritePlan, normalizePlan, writePlan, verifySelectedHistoricalIdentityLinks,
-    UNPROJECTED_REPORT_CONTRACT, UNPROJECTED_REPORT_VERSION, UNPROJECTED_REPORT_PREFIX,
+    UNPROJECTED_REPORT_CONTRACT, UNPROJECTED_REPORT_PREFIX,
     buildUnprojectedCatalogReport, normalizeUnprojectedCatalogReport, unprojectedCatalogReportName,
     readUnprojectedCatalogReport, writeUnprojectedCatalogReport, buildFromFiles, splitQueues,
-    ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT, ARXIV_FRESH_FAILURE_HANDOFF_VERSION,
+    ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT,
     ARXIV_FRESH_FAILURE_HANDOFF_PREFIX, buildArxivFreshFailureHandoff, normalizeArxivFreshFailureHandoff,
     arxivFreshFailureHandoffName, readArxivFreshFailureHandoff, writeArxivFreshFailureHandoff,
     REGISTRY_CONTRACT, STAGING_ADAPTER_CONTRACT, DIRECT_SOURCE_RUN_CONTRACT, FRESH_ARXIV_SOURCE_CONTRACT,
     stageAdapterFor, normalizeFreshArxivSourceBinding, directSourceRunIdentity, buildRegistry, normalizeRegistry,
-    directStagingBinding, verifyConferenceWriterInputs, prepareDirectSources };
+    directStagingBinding, replayDirectStagingBinding, verifyConferenceWriterInputs, prepareDirectSources };

@@ -1,0 +1,275 @@
+{
+  "protocols": [
+    {
+      "name": "paper-tag-catalog",
+      "currentVariant": "nine-facet-concept-registry",
+      "currentSchema": {
+        "fields": [
+          "facets",
+          "concepts"
+        ],
+        "facets": 9,
+        "integrity": "original-file-sha256",
+        "concepts": "same-id-label-alias-hierarchy-and-status-validation"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-catalog-v2",
+          "variant": "nine-facet-concept-registry",
+          "header": {
+            "version": "paper-tag-catalog-v2"
+          }
+        },
+        {
+          "tag": "paper-taxonomy-v1",
+          "variant": "legacy-taxonomy-registry",
+          "header": {
+            "version": "paper-taxonomy-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-selection",
+      "currentVariant": "task-and-method-concept-selection",
+      "currentSchema": {
+        "taskConcepts": [
+          1,
+          3
+        ],
+        "totalTags": [
+          3,
+          5
+        ],
+        "primary": "one-task-and-one-method",
+        "aliases": "explicit-current-or-legacy-label-mode"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-selection-v2",
+          "variant": "task-and-method-concept-selection"
+        },
+        {
+          "tag": "paper-taxonomy-selection-v1",
+          "variant": "legacy-concept-selection"
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-flat-tags",
+      "currentVariant": "selected-preferred-labels",
+      "currentSchema": {
+        "representation": "selected-concepts-preferred-chinese-labels",
+        "authority": "display-projection-not-source-qualification",
+        "selectionFormat": {
+          "contract": "paper-tag-selection",
+          "schemaFingerprint": "f4175380a0196b4d0ffd9c76cc78edb9326cf648f2b8e90bc1911a5fdd3bf19c"
+        }
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-flat-tags-v2",
+          "variant": "selected-preferred-labels"
+        },
+        {
+          "tag": "paper-taxonomy-flat-tags-compat-v1",
+          "variant": "legacy-preferred-labels"
+        }
+      ]
+    },
+    {
+      "name": "paper-search-index-manifest",
+      "currentVariant": "sha-bound-ordered-shards",
+      "currentSchema": {
+        "fields": [
+          "recordCount",
+          "totalBytes",
+          "shards"
+        ],
+        "shardFields": [
+          "url",
+          "bytes",
+          "sha256",
+          "recordCount"
+        ],
+        "maxShards": 128,
+        "maxShardBytes": 1048576,
+        "maxTotalBytes": 67108864,
+        "ordering": "original-index-record-order-and-ordered-shard-list",
+        "integrity": "sha256-of-actual-utf8-array-bytes",
+        "paths": "same-origin-under-site-base-search-index-part-number-contenthash-json"
+      },
+      "historical": [
+        {
+          "tag": "paper-search-index-manifest-v1",
+          "variant": "sha-bound-ordered-shards"
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-catalog-snapshot",
+      "currentVariant": "public-concept-hierarchy",
+      "currentSchema": {
+        "fields": [
+          "registryVersion",
+          "registrySha256",
+          "concepts"
+        ],
+        "nodes": "id-facet-zh-en-aliases-ancestorIds-status-with-original-definitions",
+        "identity": "source-original-catalog-file-sha256"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-catalog-snapshot-v2",
+          "variant": "public-concept-hierarchy"
+        },
+        {
+          "tag": "paper-taxonomy-registry-snapshot-v1",
+          "variant": "legacy-public-concept-hierarchy"
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-catalog-versions",
+      "currentVariant": "sha-keyed-snapshot-set",
+      "currentSchema": {
+        "fields": [
+          "currentSha256",
+          "snapshots"
+        ],
+        "identity": "one-complete-original-snapshot-per-source-catalog-sha256",
+        "current": "complete-current-display-snapshot-must-be-present"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-catalog-versions-v2",
+          "variant": "sha-keyed-snapshot-set"
+        },
+        {
+          "tag": "paper-taxonomy-version-catalog-v1",
+          "variant": "legacy-sha-keyed-snapshot-set"
+        }
+      ]
+    },
+    {
+      "name": "researcher-workbench",
+      "currentVariant": "source-bound-sidecar-links",
+      "currentSchema": {
+        "fields": [
+          "sidecars"
+        ],
+        "paths": "canonical-paper-root-with-original-content-sha256-and-size",
+        "scope": "read-and-export-only-no-source-or-model-permission"
+      },
+      "historical": [
+        {
+          "tag": "researcher-workbench-v1",
+          "variant": "source-bound-sidecar-links"
+        }
+      ]
+    },
+    {
+      "name": "researcher-sidecars",
+      "currentVariant": "source-bound-citation",
+      "currentSchema": {
+        "fields": [
+          "originalTitle",
+          "authors",
+          "id",
+          "type"
+        ],
+        "identity": "validated-arxiv-or-conference-source-projection",
+        "formats": [
+          "citation.json",
+          "citation.bib",
+          "citation.ris"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "researcher-sidecars-v1",
+          "variant": "source-bound-citation",
+          "header": {
+            "contract": "researcher-sidecars-v1",
+            "schemaVersion": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "paper-research-context",
+      "currentVariant": "explicit-source-abstract",
+      "currentSchema": {
+        "fields": [
+          "readerTitle",
+          "oneSentenceThesis",
+          "abstract",
+          "abstractSha256",
+          "assessment"
+        ],
+        "source": "same-verified-citation-identity",
+        "abstractAvailability": "explicit-available-or-unavailable-for-conference",
+        "authority": "published-reading-context-not-original-source-certification",
+        "citationFormat": {
+          "contract": "researcher-sidecars",
+          "schemaFingerprint": "73d86bb329ba0a94eda0af322907ab1ed5b220f08e8868aa13a5c496be115a0e"
+        },
+        "workbenchFormat": {
+          "contract": "researcher-workbench",
+          "schemaFingerprint": "1f09b594c317cc38e934de27a5b0e8ceb4baa50ef79bd4f8683dd9adea720fe7"
+        }
+      },
+      "historical": [
+        {
+          "tag": "paper-research-context-v2",
+          "variant": "explicit-source-abstract",
+          "header": {
+            "contract": "paper-research-context-v2",
+            "schemaVersion": 2
+          }
+        },
+        {
+          "tag": "researcher-sidecars-v1",
+          "variant": "legacy-inline-abstract",
+          "header": {
+            "contract": "researcher-sidecars-v1",
+            "schemaVersion": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "paper-citation-source",
+      "currentVariant": "public-source-identity",
+      "currentSchema": {
+        "fields": [
+          "paperKey",
+          "paperId",
+          "identityStatus",
+          "verified",
+          "complete",
+          "sourceKind",
+          "title",
+          "authors",
+          "date",
+          "doi",
+          "venue",
+          "arxivId",
+          "url",
+          "sourceUrl",
+          "pdfUrl",
+          "pageUrl",
+          "pageType"
+        ],
+        "authority": "published-view-of-normal-source-proof-never-arbitrary-record-authentication",
+        "warnings": "original-source-version-and-provenance-disclosures-preserved"
+      },
+      "historical": [
+        {
+          "tag": "paper-citation-source-v1",
+          "variant": "public-source-identity"
+        }
+      ]
+    }
+  ]
+}

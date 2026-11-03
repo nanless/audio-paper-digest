@@ -1,5 +1,7 @@
 import json
 import copy
+import hashlib
+from types import ModuleType
 import os
 import stat
 import subprocess
@@ -27,6 +29,19 @@ from historical_page_scan import (  # noqa: E402
     validate_ledger,
     write_inventory_pair,
 )
+
+
+ORIGINAL_SCAN_FORMATS = json.loads((ROOT / "config/historical-page-scan-formats.json").read_bytes())["formats"]
+
+
+def load_prior_tag_route_scanner():
+    raw = subprocess.check_output(["git", "-C", str(ROOT), "cat-file", "blob", "109aa48ffdf07ba169c4e518db1376a7b558963f"])
+    if hashlib.sha256(raw).hexdigest() != "178de7e2e700cdd56aa274405d8b2b62d99d47946d9c0fad89c5a3a53f7fa85b":
+        raise ValueError("original page scanner Git blob bytes changed")
+    module = ModuleType("prior_tag_route_scanner")
+    module.__file__ = str(SCRIPTS / "historical_page_scan.py")
+    exec(compile(raw.decode("utf-8"), module.__file__, "exec"), module.__dict__)
+    return module
 
 
 def load_cli():
@@ -147,7 +162,7 @@ class HistoricalPageScanTest(unittest.TestCase):
 
     def test_inventory_freezes_routes_hints_links_and_hashes_without_body(self):
         ledger = scan_historical_pages(self.repo, require_clean_main=True)
-        self.assertEqual(ledger["contract"], "historical-page-ledger-v1")
+        self.assertEqual(ledger["contract"], page_scan.LEDGER_CONTRACT)
         self.assertEqual(ledger["source"]["branch"], "main")
         self.assertTrue(ledger["source"]["clean"])
         self.assertEqual(ledger["counts"], {"pages": 4, "papers": 2, "dailySummaries": 1,
@@ -167,8 +182,8 @@ class HistoricalPageScanTest(unittest.TestCase):
                             and route["status"] == "unverified"
                             for route in paper["legacyTagRouteCandidates"]))
         self.assertNotIn("legacyTaxonomyCandidates", paper)
-        self.assertEqual(ledger["policy"]["contract"], "historical-page-scan-policy-v6")
-        self.assertEqual(ledger["policy"]["tagRoutes"], "unverified-candidates-v3")
+        self.assertEqual(ledger["policy"]["contract"], page_scan.SCAN_POLICY_CONTRACT)
+        self.assertEqual(ledger["policy"]["tagRoutes"], "unverified-candidates")
         self.assertRegex(paper["pageId"], r"^page:[a-f0-9]{64}$")
         self.assertEqual(paper["publishedDate"], "2026-01-01")
         self.assertEqual(paper["cohortDate"], "2026-01-01")
@@ -222,7 +237,7 @@ class HistoricalPageScanTest(unittest.TestCase):
             self.assertEqual(Path(paths["receipt"]).read_bytes(), receipt_raw)
             self.assertTrue(all("legacyTaxonomyCandidates" in page and "legacyTagRouteCandidates" not in page
                                 for page in loaded["pages"]))
-        for policy in (page_scan.LEGACY_SCAN_POLICY, page_scan.LEGACY_SCAN_POLICY_V4):
+        for policy in (ORIGINAL_SCAN_FORMATS[0]["policy"], ORIGINAL_SCAN_FORMATS[1]["policy"]):
             with mock.patch.object(page_scan, "SCAN_POLICY", policy):
                 with self.assertRaisesRegex(HistoricalPageInventoryError, "新的扫描只能使用当前标签链接候选格式"):
                     scan_historical_pages(self.repo, require_clean_main=True)
@@ -233,7 +248,7 @@ class HistoricalPageScanTest(unittest.TestCase):
         run_git(self.repo, 'commit', '-m', 'current tag frontmatter')
         current = scan_historical_pages(self.repo, require_clean_main=True)
         self.assertEqual(current['policy'], page_scan.SCAN_POLICY)
-        self.assertEqual(current['policy']['contract'], 'historical-page-scan-policy-v6')
+        self.assertEqual(current['policy']['contract'], page_scan.SCAN_POLICY_CONTRACT)
         self.assertIn('tagRoutes', current['policy'])
         self.assertNotIn('taxonomyRoutes', current['policy'])
         paper = next(page for page in current['pages'] if page['path'].endswith('paper-2601-00001.md'))
@@ -243,7 +258,7 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertEqual(validate_ledger(current), current)
         # 只改策略标识不能把新版候选变成原来的页面格式。
         forged = copy.deepcopy(current)
-        forged['policy'] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY)
+        forged['policy'] = copy.deepcopy(ORIGINAL_SCAN_FORMATS[0]["policy"])
         forged['ledgerSha256'] = page_scan.stable_hash({key: value for key, value in forged.items()
                                                        if key != 'ledgerSha256'})
         with self.assertRaisesRegex(HistoricalPageInventoryError, '与扫描策略不一致'):
@@ -287,7 +302,7 @@ class HistoricalPageScanTest(unittest.TestCase):
         with self.assertRaisesRegex(HistoricalPageInventoryError, "候选的路由分组字段与扫描策略不一致"):
             validate_ledger(wrong_group)
         wrong = copy.deepcopy(current)
-        wrong["policy"] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY_V4)
+        wrong["policy"] = copy.deepcopy(ORIGINAL_SCAN_FORMATS[1]["policy"])
         bind_route_test_ledger(wrong)
         with self.assertRaisesRegex(HistoricalPageInventoryError, "与扫描策略不一致"):
             validate_ledger(wrong)
@@ -352,12 +367,13 @@ class HistoricalPageScanTest(unittest.TestCase):
                 self.assertEqual(hints["candidates"][0]["value"], value)
 
     def test_prior_v5_ledger_is_read_only_without_resigning(self):
-        current = scan_historical_pages(self.repo, require_clean_main=True)
-        prior = copy.deepcopy(current)
-        prior["policy"] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY_V5)
-        prior["ledgerSha256"] = page_scan.stable_hash({key: value for key, value in prior.items() if key != "ledgerSha256"})
-        # 这些测试页面的链接均完整，v5/v6 的页面内容与摘要相同；此处按 v5 扫描规则构建清单和凭证。
-        raw, receipt, receipt_raw = page_scan.build_receipt(prior, "v5.json")
+        original = load_prior_tag_route_scanner()
+        # This original scanner emitted v6. These fixture links have the same
+        # page shape and page-ID domain under the original v5 policy.
+        prior = original.scan_historical_pages(self.repo, require_clean_main=True)
+        prior["policy"] = copy.deepcopy(original.LEGACY_SCAN_POLICY_V5)
+        prior["ledgerSha256"] = original.stable_hash({key: value for key, value in prior.items() if key != "ledgerSha256"})
+        raw, receipt, receipt_raw = original.build_receipt(prior, "v5.json")
         output = self.root / "prior-v5"; output.mkdir()
         ledger_path = output / "v5.json"; receipt_path = output / "v5.receipt.json"
         ledger_path.write_bytes(raw); receipt_path.write_bytes(receipt_raw)

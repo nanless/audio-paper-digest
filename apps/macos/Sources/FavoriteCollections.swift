@@ -1,9 +1,17 @@
 import Foundation
 import CoreFoundation
 
-// Optional schema-1 research metadata. Never derive an old favorite's date from
+// Optional personal-library metadata. Never derive an old favorite's date from
 // publication/reading dates, and never let orphan metadata restore membership.
 enum FavoriteCollections {
+    private static let family="paperdigest-favorite-collections"
+    static func knownHeader(_ metadata:[String:Any])->Bool {
+        ClientProtocols.hasValidHeader(metadata,family,field:metadata["version"] == nil ? "contract" : "version")
+    }
+    private static func opaqueHistoricalFuture(_ metadata:[String:Any])->Bool {
+        guard let version=integer(metadata["version"]),version>1 else{return false}
+        return ["contract","schemaFingerprint","schemaVersion","policyVersion","__proto__"].allSatisfy{metadata[$0]==nil}
+    }
     static let maxInteger = 2_147_483_647
     static func integer(_ raw:Any?) -> Int? {
         guard let number=raw as? NSNumber,CFGetTypeID(number) != CFBooleanGetTypeID(),number.doubleValue.isFinite,
@@ -31,8 +39,9 @@ enum FavoriteCollections {
     }
     static func validate(_ raw:Any?)throws {
         guard let raw else{return}
-        guard let object=raw as? [String:Any],let version=integer(object["version"]),version>=1 else{throw corrupt()}
-        if version>1{return} // Preserve an extension written by a newer client.
+        guard let object=raw as? [String:Any] else{throw corrupt()}
+        if opaqueHistoricalFuture(object){return} // Preserve original read-only extension behavior.
+        guard knownHeader(object) else{throw corrupt()}
         guard integer(object["revision"]) != nil,let folders=object["folders"] as? [[String:Any]],folders.count<=200,
               let items=object["items"] as? [String:[String:Any]],items.count<=100000 else{throw corrupt()}
         var folderIDs=Set<String>(),names=Set<String>()
@@ -47,10 +56,13 @@ enum FavoriteCollections {
         }
     }
     static func corrupt()->DesktopError{.message("收藏分类资料损坏，原文件已保留")}
-    static func editable(_ raw:Any?)throws->[String:Any]{
+    static func editable(_ raw:Any?,root:[String:Any])throws->[String:Any]{
         try validate(raw)
-        if let object=raw as? [String:Any]{guard integer(object["version"])==1 else{throw DesktopError.message("收藏分类由更新版本创建，请升级工作台后再编辑收藏")};return object}
-        return ["version":1,"revision":0,"folders":[[String:Any]](),"items":[String:[String:Any]]()]
+        if let object=raw as? [String:Any]{guard knownHeader(object) else{throw DesktopError.message("收藏分类由更新版本创建，请升级工作台后再编辑收藏")};return object}
+        let fields:[String:Any]=["revision":0,"folders":[[String:Any]](),"items":[String:[String:Any]]()]
+        if root["schema"]==nil,DesktopStore.validPersonalHeader(root){return try ClientProtocols.record(family,fields:fields)}
+        // First collection write in an existing shared root remains readable by released clients.
+        return try ClientProtocols.historicalHeader(family,variant:"optional-folders-with-flat-membership",fingerprints:nil).merging(fields){old,_ in old}
     }
     static func changed(_ before:Any,_ after:Any)->Bool{
         (try? JSONSerialization.data(withJSONObject:before,options:.sortedKeys)) != (try? JSONSerialization.data(withJSONObject:after,options:.sortedKeys))
@@ -63,7 +75,7 @@ enum FavoriteCollections {
         guard let ids=raw as? [String],ids.count<=100000,ids.allSatisfy(validID) else{throw DesktopError.message("文献清单无效")};return Array(Set(ids)).sorted()
     }
     static func membership(_ root:[String:Any],ids:[String],now:Date)throws->[String:Any]{
-        var result=root,metadata=try editable(root["favoriteCollections"]),items=metadata["items"] as! [String:[String:Any]]
+        var result=root,metadata=try editable(root["favoriteCollections"],root:root),items=metadata["items"] as! [String:[String:Any]]
         let previous=Set(root["favorites"] as? [String] ?? []),next=Set(ids)
         guard next.count<=100000,next.subtracting(previous).allSatisfy(validID) else{throw DesktopError.message("文献清单无效")}
         guard previous != next else{return root}
@@ -75,7 +87,7 @@ enum FavoriteCollections {
         metadata["items"]=items;try advance(&metadata);result["favorites"]=next.sorted();result["favoriteCollections"]=metadata;return result
     }
     static func edit(_ root:[String:Any],payload:[String:Any],now:Date)throws->[String:Any]{
-        var metadata=try editable(root["favoriteCollections"])
+        var metadata=try editable(root["favoriteCollections"],root:root)
         guard let expected=integer(payload["expectedRevision"]),expected==integer(metadata["revision"]) else{throw DesktopError.message("收藏分类已在其他视图更新，请重新载入；当前选择仍保留")}
         let original=metadata
         var folders=metadata["folders"] as! [[String:Any]],items=metadata["items"] as! [String:[String:Any]],favorites=Set(root["favorites"] as? [String] ?? [])

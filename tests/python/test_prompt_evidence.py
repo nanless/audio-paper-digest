@@ -51,14 +51,14 @@ class PromptEvidenceTest(unittest.TestCase):
             evidence.read_prompt_evidence_bytes(self.relative, project_root=self.root)
 
     def test_corrupt_metadata_current_missing_and_unsafe_files_cannot_fallback(self):
-        current = 'prompts/filter-v5.md'
+        current = 'prompts/current/filter.md'
         self.index['retiredPaths'][current] = self.sha
         self.index['blobs'][self.sha]['paths'].append(current)
         self.save()
         with self.assertRaises(FileNotFoundError):
             evidence.read_prompt_evidence_bytes(current, project_root=self.root)
         target = self.root / current
-        target.parent.mkdir()
+        target.parent.mkdir(parents=True)
         target.symlink_to(self.filename)
         with self.assertRaisesRegex(ValueError, 'symlink'):
             evidence.read_prompt_evidence_bytes(current, project_root=self.root)
@@ -71,7 +71,7 @@ class PromptEvidenceTest(unittest.TestCase):
             evidence.read_prompt_evidence_bytes(self.relative, project_root=self.root)
 
     def test_current_registry_matches_javascript(self):
-        output = subprocess.run(['node', '-e', "process.stdout.write(JSON.stringify(require('./scripts/lib/prompt-text-versions').CURRENT_PROMPT_FILES))"],
+        output = subprocess.run(['node', '-e', "process.stdout.write(JSON.stringify(require('./scripts/lib/prompt-contracts').CURRENT_PROMPT_FILES))"],
                                 cwd=ROOT, capture_output=True, check=True).stdout
         self.assertEqual(set(json.loads(output)), set(evidence.CURRENT_PROMPT_FILES))
 
@@ -79,22 +79,22 @@ class PromptEvidenceTest(unittest.TestCase):
         for retired, whole_sha, current in (
             ('prompts/deep-analysis-v6.md',
              'b36705353d116b99cde778625f21b14334378dff54b83474de29f9a83e04f0ff',
-             'prompts/deep-analysis-v8.md'),
+             'prompts/current/deep-analysis.md'),
             ('prompts/api-reader-article-v9.md',
              'a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8',
-             'prompts/api-reader-article-v11.md'),
+             'prompts/current/api-reader-article.md'),
             ('prompts/deep-analysis-v7.md',
              'b8856b5e510d17f610f98b2292329553f8f8df361be23db66d5140df45639b22',
-             'prompts/deep-analysis-v8.md'),
+             'prompts/current/deep-analysis.md'),
             ('prompts/api-reader-article-v10.md',
              '676bd4cd5cfd6486a9ae1c8737e02cbc2db0695880985dd3119d3869d1811026',
-             'prompts/api-reader-article-v11.md'),
+             'prompts/current/api-reader-article.md'),
             ('prompts/gap-fill-v4.md',
              'b1b3619eeb05e568253c30b67f34fb692aeb6dcace9abc875c9e26276427cc84',
-             'prompts/gap-fill-v5.md'),
+             'prompts/current/gap-fill.md'),
             ('prompts/structure-repair-v3.md',
              'fcb0890e1176bc9dc10a7600b5c553ba901fbaafc18bf97f5cb7f2fd754bbb88',
-             'prompts/structure-repair-v4.md'),
+             'prompts/current/structure-repair.md'),
         ):
             with self.subTest(retired=retired):
                 original = evidence.read_prompt_evidence_bytes(retired, whole_sha)

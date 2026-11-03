@@ -84,7 +84,7 @@ const FILTER_CONFIG = {
     delayBetweenBatchesMs: 2000,
     temperature: 0.3,
     maxTokens: 1000,
-    decisionContractVersion: require('./lib/filter-decision.js').FILTER_DECISION_VERSION,
+    decisionContractProfile: require('./lib/filter-decision.js').FILTER_DECISION_PROFILE,
     keywordPrefilterEnabled: true,
     conferenceTimeoutMs: 60000,
     conferenceMaxTokens: 1200,
@@ -287,8 +287,7 @@ const FILES = {
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
     visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
-    // 发布后生成的图片属于已完成批次，直接写入
-    // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
+    // 退役成图的原归档路径，仅供只读核验已有文件。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
     // 对某次已封存日更分析的显式人工决定。豁免绑定当时 current 中的分析结果及相关文件，
@@ -296,15 +295,7 @@ const FILES = {
     analysisWaiverDir: path.join(CURRENT_DIR, 'analysis-waivers'),
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
-    // 正式 Manual v6 工作流状态、记录/规范和观测指标。
-    // 显式的兼容/审计运行与生产隔离。
-    // 旧 v5 只读队列观测和性能快照。
-    // 每个日期/论文一份默认拒绝的单篇作者包。这些文件只是供只读检查使用的旧作者任务输入资料，
-    // 从不是正式分析状态。
-    // 跨批次报告是可选的、不可更改的纯观测汇总。
     digestCoverAssetDir: ARCHIVE_DIR,
-    // 旧单文件位置，只为迁移旧状态的调用方保留。
-    visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),
     analyzed: path.join(CURRENT_DIR, 'analyzed.json'),
     analyzedLegacy: path.join(DATA_DIR, 'analyzed.json')
 };

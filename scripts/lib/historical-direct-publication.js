@@ -147,8 +147,9 @@ function scanDirectAggregates(aggregateRoot, plan) {
         for (const entry of fs.readdirSync(runRoot, { withFileTypes: true })) {
             if (entry.isSymbolicLink() || !entry.isFile() || !/^(?:daily|conference|conference-task)-[a-z0-9-]+\.json$/.test(entry.name)) continue;
             const loaded = strictJsonFile(path.join(runRoot, entry.name), '直接重写汇总记录'); const value = loaded.value;
-            if (value.contract !== aggregateApi.CONTRACT || value.version !== aggregateApi.VERSION || value.status !== 'complete'
+            if (!require('./protocol-codec').isContract(value.contract, 'historical-direct-aggregate') || value.status !== 'complete'
                 || value.source?.planSha256 !== plan.planSha256) continue;
+            require('./workflow-record-format').recordHeaderFor(value, 'historical-direct-aggregate');
             const body = clone(value); delete body.manifestSha256;
             if (!SHA_RE.test(String(value.manifestSha256 || '')) || stableHash(body) !== value.manifestSha256) fail('直接重写汇总记录的自身 SHA 已变化');
             const key = aggregateKey(value); const current = found.get(key);

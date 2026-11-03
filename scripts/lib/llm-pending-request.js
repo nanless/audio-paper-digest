@@ -7,7 +7,7 @@ function beginPendingLlmRequest(input, options = {}) {
     const at = new Date().toISOString();
     const terminalShape = usage.buildLlmUsageEvent({ ...input, eventId, at, transportStarted: true });
     const event = {
-        version: usage.VERSION, kind: 'request_started', eventId, at, runtime: 'node',
+        ...usage.usageEventHeader(), kind: 'request_started', eventId, at, runtime: 'node',
         runId: terminalShape.runId, paperId: terminalShape.paperId,
         stage: terminalShape.stage, unitId: terminalShape.unitId,
         contentAttempt: terminalShape.contentAttempt, transportAttempt: terminalShape.transportAttempt,
@@ -29,21 +29,21 @@ function beginPendingLlmRequest(input, options = {}) {
 }
 function orphanedPendingLlmRequests(events = [], pairingEvents = events) {
     const finished = new Map();
-    for (const event of pairingEvents) if (event?.version === usage.VERSION && event.kind === 'request') {
+    for (const event of pairingEvents) if (usage.isUsageEventFormat(event) && event.kind === 'request') {
         const list=finished.get(event.eventId)||[]; list.push(event); finished.set(event.eventId,list);
     }
     const seen = new Set();
     const labels = ['runId', 'paperId', 'stage', 'unitId', 'contentAttempt', 'transportAttempt',
         'protocol', 'model', 'inputSha256'];
     return events.filter(event => {
-        if (event?.version !== usage.VERSION || event.kind !== 'request_started'
+        if (!usage.isUsageEventFormat(event) || event.kind !== 'request_started'
             || !/^[a-f0-9-]{36}$/.test(String(event.eventId || '')) || seen.has(event.eventId)) return false;
         seen.add(event.eventId);
         return !(finished.get(event.eventId)||[]).some(end => labels.every(key => (end[key] ?? null) === (event[key] ?? null)));
     }).map(event => {
         const clean = usage.buildLlmUsageEvent({ context: event, protocol: event.protocol,
             model: event.model, request: {}, eventId: event.eventId });
-        return { version: usage.VERSION, kind: 'request_started', eventId: event.eventId,
+        return { ...usage.usageEventHeader(), kind: 'request_started', eventId: event.eventId,
             at: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(String(event.at || '')) ? event.at : null,
             runtime: event.runtime === 'python' ? 'python' : 'node', ...Object.fromEntries(labels.filter(key => key !== 'inputSha256')
                 .map(key => [key, clean[key] ?? null])),

@@ -4,7 +4,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const evidence = require('../scripts/lib/prompt-evidence'), history = require('../scripts/lib/prompt-history');
-const versions = require('../scripts/lib/prompt-text-versions');
+const versions = require('../scripts/lib/prompt-contracts');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'declared-prompt-proof-'));

@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import java.io.File
@@ -42,7 +43,7 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         val source = sourceIdentity.copy(); require(canonical(source).toByteArray(Charsets.UTF_8).size <= 4096)
         val id = UUID.randomUUID().toString(); val document = UUID.randomUUID().toString(); val time = time()
         val dir = operationDirectory(id, create = true)
-        val record = JSONObject().put("contract", CONTRACT).put("operationID", id).put("jobID", jobID)
+        val record = ClientProtocols.record(CONTRACT).put("operationID", id).put("jobID", jobID)
             .put("documentID", document).put("format", format).put("sourceIdentity", source)
             .put("createdAt", time).put("updatedAt", time).put("preparation", "preparing").put("phase", "requested")
             .put("delivery", "none").put("attemptID", JSONObject.NULL)
@@ -270,7 +271,7 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
     private fun record(id: String): JSONObject {
         uuid(id); val file = checked(operationDirectory(id), "operation.json", true)
         val value = JSONObject(PublishedUtf8.decode(JsonFiles.read(file, META_LIMIT)))
-        require(value.getString("contract") == CONTRACT && value.getString("operationID") == id)
+        require(ClientProtocols.hasValidHeader(value,CONTRACT) && value.getString("operationID") == id)
         uuid(value.getString("jobID")); uuid(value.getString("documentID"))
         require(value.getString("preparation") in setOf("preparing", "interrupted", "ready", "unavailable", "cancelled", "retained"))
         require(value.getString("delivery") in setOf("none", "choosing", "cancelled", "writing", "written-unverified", "failed", "verified"))
@@ -291,11 +292,13 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         val id = value.nullableString("attemptID") ?: return; uuid(id)
         val file = checked(operationDirectory(value.getString("operationID")), "attempt-$id.json", true)
         val old = if (file.exists()) JSONObject(PublishedUtf8.decode(JsonFiles.read(file, META_LIMIT))) else null
+        if(old!=null)require(ClientProtocols.hasValidHeader(old,"paperdigest-export-delivery")){"原保存尝试格式或结构指纹未知"}
         if (old != null) {
             require(old.getString("operationID") == value.getString("operationID") && old.getString("documentID") == value.getString("documentID") && old.getString("attemptID") == id)
             if (old.getString("delivery") == "verified") { require(value.getString("delivery") == "verified"); return }
         }
-        val attempt = JSONObject().put("contract", "paperdigest-export-delivery-v1").put("operationID", value.getString("operationID"))
+        val header=if(old==null)ClientProtocols.recordHeader("paperdigest-export-delivery","paperdigest-export-delivery")else ClientProtocols.recordHeader(old.get("contract"),"paperdigest-export-delivery",old.opt("schemaFingerprint") as? String)
+        val attempt = header.put("operationID", value.getString("operationID"))
             .put("documentID", value.getString("documentID")).put("attemptID", id).put("createdAt", old?.getString("createdAt") ?: time())
             .put("updatedAt", time()).put("delivery", value.getString("delivery")).put("manifestSHA256", value.getString("manifestSHA256"))
         if (value.getString("delivery") == "verified") attempt.put("verifiedAt", value.getString("verifiedAt"))
@@ -306,7 +309,7 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         return children(operationDirectory(operationID)).filter { it.name.matches(Regex("attempt-[a-f0-9-]{36}\\.json")) }.sortedBy { it.name }.map { file ->
             checked(file.parentFile, file.name, true)
             JSONObject(PublishedUtf8.decode(JsonFiles.read(file, META_LIMIT))).also { item ->
-                require(item.getString("contract") == "paperdigest-export-delivery-v1" && item.getString("operationID") == operationID)
+                require(ClientProtocols.hasValidHeader(item,"paperdigest-export-delivery") && item.getString("operationID") == operationID)
                 uuid(item.getString("attemptID")); require(file.name == "attempt-${item.getString("attemptID")}.json")
             }
         }
@@ -327,7 +330,7 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         checked(operationDirectory(operationID), "operation.json", true), META_LIMIT))
     private fun time() = timestamp().also { require(com.nanless.paperdigest.cloud.RequestContinuity.validTime(it)) }
     companion object {
-        private const val CONTRACT = "paperdigest-pending-export-v1"
+        private const val CONTRACT = "paperdigest-pending-export"
         private const val META_LIMIT = 1024 * 1024L
         private val UUID_PATTERN = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
         private fun uuid(id: String) { require(UUID_PATTERN.matches(id) && UUID.fromString(id).toString() == id) { "导出操作身份无效" } }

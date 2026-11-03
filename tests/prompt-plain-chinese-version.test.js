@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
-const registry = require('../scripts/lib/prompt-text-versions');
+const registry = require('../scripts/lib/prompt-contracts');
 const evidence = require('../scripts/lib/prompt-evidence');
 const history = require('../scripts/lib/prompt-history');
 const deep = require('../scripts/deep-analyzer');
@@ -13,7 +13,7 @@ const root = path.resolve(__dirname, '..');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const first = text => text.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m)[2];
 const variables = block => [...new Set([...block.matchAll(/\{([A-Za-z][A-Za-z0-9_]+)\}/g)].map(m => m[1]))].sort();
-for (const [stage, old] of Object.entries(registry.FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES)) {
+for (const [stage, old] of Object.entries(require('../scripts/lib/prompt-legacy-codec').compatibilityExports.FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES)) {
     test(`${stage} 中文新版本按原路径身份核验Git旧字节、变量和首围栏`, t => {
         const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-old-bytes-'));
         t.after(() => fs.rmSync(empty, {recursive:true, force:true}));

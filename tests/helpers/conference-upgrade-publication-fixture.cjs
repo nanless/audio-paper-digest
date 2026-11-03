@@ -33,7 +33,8 @@ function bindUpgradePublicationFixture(f) {
       const decisionFile=filter.writeDecisionArtifact({filterRoot:path.join(root,'filters'),filterId,decisionName:'included-'+index+'.json',artifact});
       state=filter.applyDecision({filterRoot:path.join(root,'filters'),filterId,decisionHandle:filter.loadDecisionHandle(decisionFile),owner:'filter-reviewer',now:stamp});
     }
-    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
+    const tagCatalogPath = path.join(root, 'tag-catalog.json');
+    fs.copyFileSync(require('../../scripts/config').FILES.tagCatalogFile,tagCatalogPath);
     const files = { conferenceDiscoveryCatalogDir: path.join(root, 'conference-discovery-catalogs'),
         conferenceDiscoveryReportDir: path.join(root, 'conference-discovery-reports'), conferenceFiltersDir: path.join(root, 'filters'),
         conferenceStagingSpecsDir: path.join(root, 'specs'), conferenceStagingSourceDir: path.join(root, 'conference-staging-sources'),

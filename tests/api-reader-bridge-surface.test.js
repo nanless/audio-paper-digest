@@ -17,7 +17,7 @@ const {
     normalizeReaderBridgeTerm,
     findReaderBridgeParagraph
 } = require('../scripts/deep-analyzer.js');
-const { hasValidApiReaderV3Records } = require('../scripts/analysis-engine.js');
+const { hasValidIntegratedApiReaderRecords } = require('../scripts/analysis-engine.js');
 const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const heading = '**声学先验 × 测试时适应：**';
@@ -247,7 +247,7 @@ function signedFixture() {
                 structuredArtifactsSha256: '2'.repeat(64)
             } }
         } };
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
     return paper;
 }
 
@@ -260,7 +260,7 @@ test('内容修复保留生产绑定，按实际字节和指标重新记录，�
     assert.equal(paper.apiReaderPlan.conceptBridges[0].explanation, heading + explanation);
     assert.equal(paper.apiReaderArticleSha256, sha(paper.apiReaderArticle));
     assert.equal(paper.apiReaderPlanSha256, stableFingerprint(paper.apiReaderPlan));
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
     assert.equal(stage.surfaceRepairVersion, 'api-reader-surface-repair-v2');
     assert.equal(stage.surfaceRepair.executionKind, 'deterministic_surface_repair');
     assert.equal(stage.surfaceRepair.inputArticleSha256, before.apiReaderArticleSha256);

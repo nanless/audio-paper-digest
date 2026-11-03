@@ -1,6 +1,7 @@
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 'use strict';
 const test = require('node:test');
+const { recordHeader } = require('../scripts/lib/protocol-codec');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -212,7 +213,7 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     for (const key of ['papers', 'papersLegacy']) fs.writeFileSync(Config.FILES[key], JSON.stringify({ papers: {} }));
     const audit = {
         documentType: '方法研究', confidence: '高', evidenceProfile: {
-            version: 1, multiComponentClaimed: false, ablationStatus: 'not_applicable',
+            ...require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader(), multiComponentClaimed: false, ablationStatus: 'not_applicable',
             targetEvaluation: 'public', sampleScaleReported: true, deploymentMeasured: false,
             publicGeneralizationEvaluated: false, engineeringEvidence: 'claim_only',
             evidenceBoundary: '[A_RESULTS] 同协议受控比较存在，但未报告实际端侧部署测量。',
@@ -535,9 +536,9 @@ test('历史父与Reader子恢复只为真实新输入合并约束，新子仍�
             require('./helpers/normal-reader-parent-fingerprints').installCurrentParentFingerprints(sample.paper, sample.source);
         })));
     const originalPaper = structuredClone(sample.paper);
-    const record = { contract: policy.CONTRACT, model: policy.MODEL, runId: 'local-reviewed-run',
-        sourceRunId: sample.plan.runId, promptBindings: {}, originalPaperSha256: facts.sha(JSON.stringify(originalPaper)),
-        inheritedFeedbacks: [{ feedback: parent, proof: parentBound.proof }], currentFeedbackProof: parentBound.proof };
+    const record = require('./helpers/selected-full-stage-record.cjs')({ originalPaper,
+        runId: 'local-reviewed-run', sourceRunId: sample.plan.runId,
+        inheritedFeedbacks: [{ feedback: parent, proof: parentBound.proof }], currentFeedbackProof: parentBound.proof });
     sample.paper.fullStageReanalysis = record;
     sample.paper.fullStageReanalysisHistory = [{ ...structuredClone(record), originalPaper }];
     await daily.withDailyFreshAnalysisContext(sample.plan, () => fresh.withFreshPaperContext(sample.paper, () =>
@@ -897,7 +898,7 @@ test('正常失败合并保新paidReader同代bundle，坏Reader保旧bundle并�
  incoming.analysisManifest.stages.apiReaderArticle.articleSha256=incoming.apiReaderArticleSha256;
  incoming.paidResponseHistory=[{id:'new-reader-paid',tokens:77}];
  // 此测试真实补充段落会被正文绑定契约核验；不伪签 table/formula/figures 证明。
- assert.equal(engine.hasValidApiReaderV3Records(incoming),true);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(incoming),true);
  await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(incoming,()=>{
   const [merged]=engine.mergePapersById([existing],[incoming],{preserveSuccessfulAnalysis:true});
   assert.equal(merged.analysis,existing.analysis);assert.equal(merged.analysisCheckpoint,incoming.analysisCheckpoint);
@@ -958,7 +959,7 @@ test('祖先包不倒灌无旧proof上游，Reader恢复不能改评分或带坏
   const child=facts.validateFeedback(childFeedback,sample.plan,paper);facts.withFactReview(child,()=>undefined);
   paper.analysisManifest.stages.apiReaderArticle.factReview=child.proof;
   const originalPaper=structuredClone(paper),policy=require('../scripts/lib/selected-full-stage-reanalysis');
-  const record={contract:policy.CONTRACT,model:policy.MODEL,runId:'old-paid-parent-run',sourceRunId:sample.plan.runId,promptBindings:{},originalPaperSha256:facts.sha(JSON.stringify(originalPaper)),inheritedFeedbacks:[{feedback:parentFeedback,proof:parent.proof}],currentFeedbackProof:parent.proof};
+  const record=require('./helpers/selected-full-stage-record.cjs')({ originalPaper, runId:'old-paid-parent-run',sourceRunId:sample.plan.runId,inheritedFeedbacks:[{feedback:parentFeedback,proof:parent.proof}],currentFeedbackProof:parent.proof });
   paper.fullStageReanalysis=record;paper.fullStageReanalysisHistory=[{...structuredClone(record),originalPaper}];
   await daily.withDailyFreshAnalysisContext(sample.plan,()=>fresh.withFreshPaperContext(paper,()=>require('./helpers/normal-reader-parent-fingerprints').installCurrentParentFingerprints(paper,sample.source)));
   const oldScore=structuredClone(paper.analysisManifest.stages.scoringAudit);
@@ -1108,7 +1109,7 @@ test('batch显式Reader轮覆盖直接Reader刷新分支，真实安装额度并
     repair.saveFailedCandidate(sample.plan.readerAttemptsDir, identity, old);
     const candidateFile = path.join(sample.plan.readerAttemptsDir, repair.hashDraft(identity) + '.json');
     const oldBytes = fs.readFileSync(candidateFile);
-    const grant = { contract: retry.CONTRACT, batchDate: sample.plan.batchDate, runId: sample.plan.runId,
+    const grant = { ...recordHeader(retry.CONTRACT, retry.CONTRACT), batchDate: sample.plan.batchDate, runId: sample.plan.runId,
         sourceFiles: feedback.sourceFiles, originalIdentitySha256: repair.hashDraft(identity), paperId: sample.id,
         roundId: require('node:crypto').randomUUID(), identitySha256: repair.hashDraft(identity), envelopeSha256: facts.sha(oldBytes),
         payloadSha256: repair.hashDraft(old), wholeSha256: facts.sha(paper.analysisCheckpoint || paper.analysis),
@@ -1773,7 +1774,7 @@ test('typed核心父与Reader子只从已核子包派生单句local种子，保�
                     assert.equal(request.usageContext.stage, 'apiReaderRepair');
                     assert.equal(request.usageContext.contentAttempt, 1, '新真实反馈input如实从局部1开始，旧scope计数未重写');
                     assert.ok(tokens <= 16000);
-                    return JSON.stringify({ version: 1, draftSha256: repair.hashDraft(start.signedRecoveryDraft),
+                    return JSON.stringify({ ...require('../scripts/lib/protocol-codec').record('reader-fact-sentence-patch'), draftSha256: repair.hashDraft(start.signedRecoveryDraft),
                         sentenceReplacements: repair.factLocalSentenceTargets({ draftSha256: repair.hashDraft(start.signedRecoveryDraft), targets })
                             .map(({ originalSentence, ...identity }) => ({ ...identity,
                                 value: '原文只报告当前受控协议下的测量结果，未知领域是否成立仍需要另行验证。' })) });

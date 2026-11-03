@@ -1,0 +1,179 @@
+{
+  "protocols": [
+    {
+      "name": "published-aggregate-activation",
+      "currentVariant": "snapshot-epoch-catalog-witness",
+      "currentSchema": {
+        "fields": [
+          "snapshotSHA256",
+          "validationEpoch",
+          "catalogSHA256"
+        ],
+        "binding": "original-manifest-sha-exact-validation-epoch-and-actual-catalog-bytes",
+        "authority": "requires-independent-manifest-and-shard-replay"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-activation-v1",
+          "variant": "snapshot-epoch-catalog-witness"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-index",
+      "currentVariant": "original-shard-row-catalog",
+      "currentSchema": {
+        "fields": [
+          "snapshotSHA256",
+          "sourceRecordCount",
+          "aggregateCount",
+          "records"
+        ],
+        "binding": "independently-replayed-original-manifest-and-shard-bytes",
+        "authority": "display-only-website-aggregate"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-index-v1",
+          "variant": "original-shard-row-catalog"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-document",
+      "currentVariant": "raw-html-and-sanitized-body",
+      "currentSchema": {
+        "fields": [
+          "descriptor",
+          "responseURL",
+          "fetchedAt",
+          "rawHTMLSHA256",
+          "rawHTMLBytes",
+          "sanitizedBodySHA256",
+          "bodyHTML",
+          "plainText",
+          "parserContract",
+          "resources",
+          "completeOffline",
+          "notices"
+        ],
+        "parserProfiles": {
+          "macos": "libxml-html",
+          "android": "jsoup-html"
+        },
+        "authority": "platform-native-raw-html-replay-only"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-document-v1",
+          "variant": "raw-html-and-sanitized-body"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-parser-profile",
+      "currentVariant": "parser-roles-declared-by-document-schema",
+      "currentSchema": {
+        "roles": [
+          "macos",
+          "android"
+        ],
+        "binding": "actual-document-schema-parserProfiles"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-html-v1",
+          "variant": "macos"
+        },
+        {
+          "tag": "published-aggregate-jsoup-v1",
+          "variant": "android"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-personal-library",
+      "currentVariant": "shared-notes-reading-and-research",
+      "currentSchema": {
+        "fields": [
+          "notes",
+          "favorites",
+          "reading",
+          "readingState",
+          "annotations",
+          "sessions",
+          "jobs",
+          "settings"
+        ],
+        "optional": [
+          "personalPapers",
+          "favoriteCollections"
+        ],
+        "writePolicy": "retain-original-header-of-existing-shared-root",
+        "authority": "data-only-no-task-or-payment-dispatch-authority"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "shared-notes-reading-and-research",
+          "header": {
+            "schema": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-favorite-collections",
+      "currentVariant": "optional-folders-with-flat-membership",
+      "currentSchema": {
+        "fields": [
+          "revision",
+          "folders",
+          "items"
+        ],
+        "membership": "flat-favorites-list-remains-authoritative",
+        "writePolicy": "first-write-follows-parent-shared-root-format-and-existing-header-never-relabelled",
+        "limits": {
+          "folders": 200,
+          "items": 100000
+        }
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "optional-folders-with-flat-membership",
+          "header": {
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-published-library",
+      "currentVariant": "native-catalog-snapshot",
+      "currentSchema": {
+        "fields": [
+          "summary",
+          "papers"
+        ],
+        "optional": [
+          "retiredPapers",
+          "validationEpoch",
+          "websiteTaxonomy",
+          "websiteTaxonomyNotice"
+        ],
+        "source": "public-catalog-and-current-validated-manifest-epoch",
+        "storage": "single-atomic-snapshot-not-a-credential"
+      },
+      "historical": [
+        {
+          "tag": "mac-published-library-v1",
+          "variant": "native-catalog-snapshot",
+          "header": {
+            "format": "mac-published-library-v1"
+          }
+        }
+      ]
+    }
+  ]
+}

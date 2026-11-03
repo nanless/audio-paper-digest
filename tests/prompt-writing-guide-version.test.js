@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const registry = require('../scripts/lib/prompt-text-versions');
+const registry = require('../scripts/lib/prompt-contracts');
 const evidence = require('../scripts/lib/prompt-evidence');
 const history = require('../scripts/lib/prompt-history');
 const { loadPrompt } = require('../scripts/utils');
@@ -23,9 +23,9 @@ const predecessors = {
         sha256: '731604e38df21a46b536dfe00280504c7964e94f7a4fb43188945ead85a76971', blobOid: '07a2aee44e349afb81a581d9a10b16e09268ab08' }
 };
 
-test('写作升级仍恰18份当前模板，三份旧原路径及完整Git字节保持可核验', t => {
-    const current = fs.readdirSync(path.join(root, 'prompts')).filter(name => name.endsWith('.md') && !/^README(?:\.en)?\.md$/.test(name)).sort();
-    assert.equal(current.length, 18);
+test('现用十六份模板，三份写作升级旧原路径及完整Git字节保持可核验', t => {
+    const current = fs.readdirSync(path.join(root, 'prompts/current')).filter(name => name.endsWith('.md') && !/^README(?:\.en)?\.md$/.test(name)).sort();
+    assert.equal(current.length, 16);
     assert.deepEqual(current, registry.CURRENT_PROMPT_FILES.map(file => path.basename(file)).sort());
     const empty = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'writing-prompt-history-'));
     t.after(() => fs.rmSync(empty, { recursive: true, force: true }));
@@ -89,12 +89,12 @@ test('两轮升级以外的14份运行Prompt及两份冻结Manual要求字节保
     const changed = new Set(Object.keys(predecessors).map(stage => registry.currentTextStagePromptPath(stage)));
     changed.add(registry.currentTextStagePromptPath('coreSummaryRepair'));
     for (const file of registry.CURRENT_PROMPT_FILES.filter(file => !changed.has(file))) {
-        const historical = Object.entries(registry.FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES)
-            .find(([stage]) => registry.currentTextStagePromptPath(stage) === file)?.[1].path || file;
+        const historical = Object.entries(require('../scripts/lib/prompt-legacy-codec').compatibilityExports.FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES)
+            .find(([stage]) => registry.currentTextStagePromptPath(stage) === file)?.[1].path || require('../scripts/lib/prompt-legacy-codec').currentPathPredecessors[file];
         assert.deepEqual(evidence.readPromptEvidenceBytes(historical), execFileSync('git', ['show', `${base}:${historical}`], { cwd: root }));
     }
     for (const [file, expected] of [
         ['manual/docs/editorial-reference-contract.md', 'dc7d5c7c8bf0ed58b23ba7285d3d9b431e6542911c0717cf7e5472ad1c12edee'],
         ['manual/docs/editorial-reference-contract-v2.md', '0cb9bad4666ff756e573ca6cb762d2c63c2e932787be8b8c1e8c0a6c93b23746']
-    ]) assert.equal(sha(fs.readFileSync(path.join(root, file))), expected);
+    ]) assert.equal(sha(require('../scripts/lib/original-file-evidence').readOriginalFileBytes(file)), expected);
 });

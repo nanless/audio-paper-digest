@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,7 +15,7 @@ data class AggregateImageSlot(val index:Int,val sourceURL:String?,val alternativ
     fun json()=JSONObject().put("index",index).put("alternative",alternative).put("caption",caption).apply{sourceURL?.let{put("sourceURL",it)}}
 }
 data class AggregateImagePlan(val descriptor:PublishedAggregate,val rawHTMLSHA256:String,val originalBodySHA256:String,val slots:List<AggregateImageSlot>,val templateBodyHTML:String) {
-    fun json()=JSONObject().put("contract",AggregateImages.CONTRACT).put("descriptor",descriptor.json()).put("rawHTMLSHA256",rawHTMLSHA256).put("originalBodySHA256",originalBodySHA256).put("slots",JSONArray(slots.map{it.json()})).put("templateBodyHTML",templateBodyHTML).put("templateBodySHA256",PublishedAggregateReader.sha(templateBodyHTML.toByteArray()))
+    fun json()=ClientProtocols.record(AggregateImages.PLAN).put("descriptor",descriptor.json()).put("rawHTMLSHA256",rawHTMLSHA256).put("originalBodySHA256",originalBodySHA256).put("slots",JSONArray(slots.map{it.json()})).put("templateBodyHTML",templateBodyHTML).put("templateBodySHA256",PublishedAggregateReader.sha(templateBodyHTML.toByteArray()))
 }
 data class AggregateImageRecord(val slot:AggregateImageSlot,val sha256:String?=null,val mime:String?=null,val bytes:Int?=null,val missingReason:String?=null) {
     fun json()=JSONObject().put("slot",slot.json()).apply{sha256?.let{put("sha256",it)};mime?.let{put("mime",it)};bytes?.let{put("bytes",it)};missingReason?.let{put("missingReason",it)}}
@@ -26,8 +27,28 @@ data class AggregateImageImport(val platform:String,val manifestSHA256:String) {
     fun json()=JSONObject().put("platform",platform).put("manifestSHA256",manifestSHA256)
 }
 object AggregateImages {
-    const val CONTRACT="published-aggregate-image-render-v1"
-    const val DIRECTORY="aggregate-resource-renders-android-v1"
+    const val CONTRACT="published-aggregate-image-render"
+    const val PLAN="published-aggregate-image-plan"
+    private const val storageFamily="published-aggregate-image-storage"
+    private val storage get()=ClientProtocols.declaredSchema(storageFamily,storageFamily,ClientProtocols.schemaFingerprint(storageFamily))
+    val DIRECTORY get()=directory("android",false)
+    fun directory(platform:String,legacy:Boolean)=if(legacy)ClientProtocols.historicalContract(storageFamily,platform) else storage.getString(platform)
+    fun blobDirectory(legacy:Boolean)=if(legacy)ClientProtocols.historicalContract(storageFamily,"blob") else storage.getString("blob")
+    fun folderContract(legacy:Boolean)=if(legacy)ClientProtocols.historicalHeader(CONTRACT,"source-bound-platform-rendering",null).getString("contract") else CONTRACT
+    private fun currentParser(platform:String)=ClientProtocols.declaredSchema(CONTRACT,CONTRACT,ClientProtocols.schemaFingerprint(CONTRACT)).getJSONObject("parserProfiles").getString(platform)
+    fun verifyManifestHeader(value:JSONObject,platform:String,legacy:Boolean):JSONObject {
+        val plan=value.getJSONObject("plan")
+        require(ClientProtocols.hasValidHeader(value,CONTRACT)&&value.opt("contract")==folderContract(legacy)&&
+            ClientProtocols.hasValidHeader(plan,PLAN)&&(!plan.has("schemaFingerprint"))==legacy){"图片修订格式与实际保存目录不一致"}
+        val parser=if(legacy) {
+            if(platform=="macos")null else ClientProtocols.historicalContract("published-aggregate-image-parser-profile",platform)
+        } else {
+            ClientProtocols.declaredSchema(value.get("contract"),CONTRACT,value.getString("schemaFingerprint"))
+                .getJSONObject("parserProfiles").getString(platform).also{require(it==currentParser(platform)){"图片解析声明不受当前实现支持"}}
+        }
+        require(if(parser==null)!value.has("parserContract") else value.opt("parserContract")==parser){"图片实际平台解析声明不符"}
+        return plan
+    }
     const val MAX_IMAGE_BYTES=16*1024*1024
     const val MAX_TRANSFER_BYTES=64*1024*1024
     const val MAX_REFERENCED_BYTES=64*1024*1024
@@ -69,7 +90,7 @@ object AggregateImages {
     }
     fun manifest(plan:AggregateImagePlan,records:List<AggregateImageRecord>,observedAt:String,origin:AggregateImageImport?=null):JSONObject {
         Instant.parse(observedAt);val body=render(plan,records)
-        return JSONObject().put("contract",CONTRACT).put("parserContract","published-aggregate-jsoup-images-v1").put("plan",plan.json()).put("observedAt",observedAt).put("images",JSONArray(records.map{it.json()})).put("renderedBodySHA256",PublishedAggregateReader.sha(body.toByteArray())).put("completeOffline",false).apply{origin?.let{put("importedFrom",it.json())}}
+        return ClientProtocols.record(CONTRACT).put("parserContract",currentParser("android")).put("plan",plan.json()).put("observedAt",observedAt).put("images",JSONArray(records.map{it.json()})).put("renderedBodySHA256",PublishedAggregateReader.sha(body.toByteArray())).put("completeOffline",false).apply{origin?.let{put("importedFrom",it.json())}}
     }
 }
 

@@ -7,12 +7,13 @@ const crypto = require('node:crypto');
 const processApi = require('../../scripts/lib/conference-process');
 const adapter = require('../../scripts/lib/conference-analysis-adapter');
 const grants = require('../../scripts/lib/conference-recovery-grant');
+const codec = require('../../scripts/lib/protocol-codec');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 function recoveryFixtureIdentity(paperId) {
     const authority = { conferenceId: 'odyssey-2026', implementationSha256: 'b'.repeat(64),
         tagCatalogVersion: 'fixture-current', tagCatalogSha256: 'a'.repeat(64),
         deepExecutionConfig: processApi.currentDeepExecutionConfigIdentity(processApi.defaultDependencies()) };
-    const processId = processApi.deterministicUuid(processApi.stableHash(authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(authority), processApi.processIdentityDomain());
     return { authority, processId, parentExecutionId: processApi.deterministicUuid(processId, paperId, 'analysis') };
 }
 function registerRecoveryFixture({ analysisRoot, parentExecutionId, failedExecutionId, paperId,
@@ -37,8 +38,9 @@ function registerRecoveryFixture({ analysisRoot, parentExecutionId, failedExecut
     }
     const member = { paperId, parentExecutionId, childExecutionId: failedExecutionId,
         sourceTextSha256: sha(failed.source.sourceDetails.text),
-        sourceSnapshotSha256: failed.run.sourceSnapshotSha256, recordCAS };
-    const state = { contract: processApi.CONTRACT, version: processApi.PROCESS_VERSION, generation: 1,
+        sourceSnapshotSha256: failed.run.sourceSnapshotSha256, recordCAS, continuation: null,
+        initialMaterialsSha256: grants.recoveryWindowMaterials(analysisRoot, failedExecutionId).materialsSha256 };
+    const state = { ...codec.recordHeader(processApi.CONTRACT, 'conference-process'), generation: 1,
         processId: identity.processId, createdAt: '2026-10-17T12:00:00.000Z', updatedAt: '2026-10-17T12:00:00.000Z',
         authority: identity.authority, status: 'partial', aggregate: null, completionReceiptSha256: null,
         items: { [paperId]: { paperId, sourceIdentity: {}, analysisRunId: parentExecutionId,
@@ -53,7 +55,7 @@ function registerRecoveryFixture({ analysisRoot, parentExecutionId, failedExecut
     fs.mkdirSync(processDirectory, { recursive: true, mode: 0o700 });
     const baseline = Buffer.from(JSON.stringify(state, null, 2) + '\n');
     fs.writeFileSync(path.join(processDirectory, 'state.json'), baseline, { mode: 0o600 });
-    const body = { contract: grants.CONTRACT, version: 1, grantId, processId: identity.processId,
+    const body = { ...codec.recordHeader(grants.CONTRACT, 'conference-recovery-grant'), grantId, processId: identity.processId,
         baselineStateFileSha256: sha(baseline), baselineGeneration: state.generation,
         inventorySha256: processApi.stableHash([member]),
         approval: { kind: 'explicit-human', reference: 'synthetic-offline-fixture-only', answer: 'fixture approval', approvedAt: '2026-10-17T12:00:00Z' },

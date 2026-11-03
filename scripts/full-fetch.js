@@ -21,7 +21,7 @@ const crypto = require('crypto');
 const { DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix } = require('./lib/daily-arxiv-prefix-source');
 const { isDailyXmlOperationalError } = require('./lib/daily-xml-file-stdin');
-const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
+const { KEYWORD_PREFILTER_PROFILE } = require('./lib/keyword-prefilter.js');
 const { FILTER_SCOPE_EVIDENCE_VERSION, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
     createHostTaskScheduler,
@@ -56,7 +56,7 @@ const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPublishedPaperIds, hasVerifiedFetchContinuity, validateDailyFetchContinuityCheckpoint } = require('./lib/daily-fetch-boundary.js');
 const {
     LLM_FILTER_PROMPT_PATH
-} = require('./lib/prompt-text-versions.js');
+} = require('./lib/prompt-contracts.js');
 
 const Config = require('./config.js');
 
@@ -132,9 +132,9 @@ function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
         temperature: Config.FILTER_CONFIG.temperature,
         maxTokens: Config.FILTER_CONFIG.maxTokens,
         promptHash: filterPromptHash,
-        decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion,
+        decisionContractProfile: Config.FILTER_CONFIG.decisionContractProfile,
         keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
-        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+        keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
         scopeEvidenceVersion: FILTER_SCOPE_EVIDENCE_VERSION
     });
 }
@@ -826,7 +826,7 @@ function writeFilterArtifacts({
         .filter(decision => decision?.parseSource === 'keyword_prefilter').length;
     const keywordStats = {
         keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
-        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+        keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
         keywordRejected,
         llmCandidates: Math.max(0, coverage.totalCandidates - keywordRejected),
         llmDecided: Math.max(0, coverage.decided - keywordRejected)
@@ -987,7 +987,7 @@ async function resumeFilterStage({
         stats: {
             ...baseFilterStats,
             keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
-            keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+            keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
             keywordRejected: Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
             llmCandidates: allPapersFiltered.length - Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
             llmDecided: Object.values(filterDecisions).filter(decision => decision?.parseSource !== 'keyword_prefilter').length,
@@ -2079,7 +2079,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             stats: {
                 ...baseFilterStats,
                 keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
-                keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+                keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
                 keywordRejected: Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
                 llmCandidates: allPapersFiltered.length - Object.values(filterDecisions).filter(decision => decision?.parseSource === 'keyword_prefilter').length,
                 llmDecided: Object.values(filterDecisions).filter(decision => decision?.parseSource !== 'keyword_prefilter').length,

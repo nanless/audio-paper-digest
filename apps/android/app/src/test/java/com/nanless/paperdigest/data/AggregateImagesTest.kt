@@ -93,8 +93,26 @@ class AggregateImagesTest {
     }
     @Test fun understatedFirstBlobRejectedBeforeLaterAbsentBlob()=runBlocking{assertEquals("图片实际长度与清单不一致",wrongLengthFirst{1})}
     @Test fun overstatedFirstBlobRejectedBeforeLaterAbsentBlob()=runBlocking{assertEquals("图片实际长度与清单不一致",wrongLengthFirst{it+1})}
+    @Test fun historicalImageManifestKeepsOriginalNamespaceAndBytes()=runBlocking {
+        val f=fixture();val current=online(f)
+        val original=JSONObject(manifestFile(f,current.manifestSHA256).readText())
+        assertTrue(com.nanless.paperdigest.protocols.ClientProtocols.isCurrentHeader(original,AggregateImages.CONTRACT))
+        original.remove("schemaFingerprint")
+        original.put("contract","published-aggregate-image-render-v1").put("parserContract","published-aggregate-jsoup-images-v1")
+        original.getJSONObject("plan").apply{remove("schemaFingerprint");put("contract","published-aggregate-image-render-v1")}
+        val bytes=OfflineFoundationJSON.encode(original);val oldSHA=PublishedAggregateReader.sha(bytes)
+        val legacy=File(f.root,"aggregate-resource-renders-android-v1/${PublishedAggregateReader.sha(f.descriptor.id.toByteArray())}/${f.descriptor.source.manifestSHA256}/${f.raw}/published-aggregate-image-render-v1/$oldSHA.json")
+        legacy.parentFile!!.mkdirs();legacy.writeBytes(bytes)
+        val imageSHA=requireNotNull(current.records.first().sha256)
+        val oldBlob=File(f.root,"aggregate-image-bytes-v1/$imageSHA")
+        oldBlob.parentFile!!.mkdirs();File(f.root,"${AggregateImages.blobDirectory(false)}/$imageSHA").copyTo(oldBlob)
+        val restored=f.store.cachedImageRendering(f.descriptor,f.raw,oldSHA)
+        assertEquals(current.records,restored.records);assertTrue(legacy.readBytes().contentEquals(bytes))
+        oldBlob.writeText("damaged old namespace")
+        rejects{f.store.latestImageRendering(f.descriptor,f.raw)};Unit
+    }
     @Test fun corruptBlobCannotServeOrColdRestore()=runBlocking {
-        val f=fixture();val view=online(f);val blob=File(f.root,"aggregate-image-bytes-v1/${view.records.first().sha256}");val bytes=blob.readBytes();bytes[bytes.size-1]=(bytes.last().toInt() xor 1).toByte();blob.writeBytes(bytes)
+        val f=fixture();val view=online(f);val blob=File(f.root,"${AggregateImages.blobDirectory(false)}/${view.records.first().sha256}");val bytes=blob.readBytes();bytes[bytes.size-1]=(bytes.last().toInt() xor 1).toByte();blob.writeBytes(bytes)
         rejects{f.store.cachedImageRendering(f.descriptor,f.raw,view.manifestSHA256)};rejects{view.open(view.cspImageSource+view.records.first().sha256,false,"GET")};Unit
     }
     @Test fun corruptNativePeerFailsStrictlyButForeignNamespaceIsNotNativePeer()=runBlocking {
@@ -103,7 +121,7 @@ class AggregateImagesTest {
         val path=manifestFile(f,view.manifestSHA256);path.writeText(path.readText()+" ");rejects{f.store.latestImageRendering(f.descriptor,f.raw)};Unit
     }
     @Test fun symlinkAssetRejectedEvenWithSameCorrectTargetBytes()=runBlocking {
-        val f=fixture();val view=online(f);val blob=File(f.root,"aggregate-image-bytes-v1/${view.records.first().sha256}");val target=File(f.root,"saved-native-image");Files.move(blob.toPath(),target.toPath());Files.createSymbolicLink(blob.toPath(),target.toPath());rejects{f.store.cachedImageRendering(f.descriptor,f.raw,view.manifestSHA256)};Unit
+        val f=fixture();val view=online(f);val blob=File(f.root,"${AggregateImages.blobDirectory(false)}/${view.records.first().sha256}");val target=File(f.root,"saved-native-image");Files.move(blob.toPath(),target.toPath());Files.createSymbolicLink(blob.toPath(),target.toPath());rejects{f.store.cachedImageRendering(f.descriptor,f.raw,view.manifestSHA256)};Unit
     }
     @Test fun unapprovedImageNeverReachesTransport()=runBlocking {
         val f=fixture("<img src='https://127.0.0.1/private.png' alt='No private access'/>");var requests=0
@@ -116,7 +134,7 @@ class AggregateImagesTest {
     @Test fun changedSourceEpochAfterFetchDoesNotPublishBlobOrManifest()=runBlocking {
         val f=fixture();var current=true
         try{AggregateImageLoader.read(f.store,f.descriptor,f.raw,true,{true},{_,_->current=false;png()},{require(current){"Source epoch changed"}});fail("Expected source epoch rejection")}catch(e:IllegalArgumentException){assertEquals("Source epoch changed",e.message)}
-        assertFalse(File(f.root,AggregateImages.DIRECTORY).exists());assertFalse(File(f.root,"aggregate-image-bytes-v1").exists())
+        assertFalse(File(f.root,AggregateImages.DIRECTORY).exists());assertFalse(File(f.root,AggregateImages.blobDirectory(false)).exists())
     }
     @Test fun staleOwnerCannotGetEvenFullyCachedImageAccess()=runBlocking {
         val f=fixture();online(f);var requests=0
@@ -145,7 +163,7 @@ class AggregateImagesTest {
         val other=url.replace("image.png","later.png")
         val f=fixture("<img src='$url'/><img src='$other'/>")
         val first=requireNotNull(AggregateImageLoader.read(f.store,f.descriptor,f.raw,true,{true},{address,_->if(address==url)png() else throw java.io.IOException("Missing")}))
-        File(f.root,"aggregate-image-bytes-v1/${first.records[0].sha256}").writeText("Damaged actual cached bytes")
+        File(f.root,"${AggregateImages.blobDirectory(false)}/${first.records[0].sha256}").writeText("Damaged actual cached bytes")
         var fetched=0;var refused=false
         try{AggregateImageLoader.read(f.store,f.descriptor,f.raw,true,{true},{_,_->fetched++;png()})}catch(e:Exception){refused=true}
         assertTrue(refused);assertEquals(0,fetched)
@@ -239,7 +257,7 @@ class AggregateImagesTest {
     }
     @Test fun imageBytesAreColdCheckedAfterAPlanAndRenderMemoHit()=runBlocking {
         val f=fixture();val access=online(f);val sha=access.records.first().sha256!!
-        val file=java.io.File(f.root,"aggregate-image-bytes-v1/$sha");val original=file.readBytes()
+        val file=java.io.File(f.root,"${AggregateImages.blobDirectory(false)}/$sha");val original=file.readBytes()
         f.store.withSourceReadScope {
             f.store.cachedImageRendering(f.descriptor,f.raw,access.manifestSHA256)
             try{

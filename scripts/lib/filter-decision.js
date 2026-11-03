@@ -1,7 +1,13 @@
 'use strict';
-// Shared decision semantics. Preserve v3 outputs and retryable fallbacks for saved requests.
-const FILTER_DECISION_VERSION = 3;
-const FILTER_DECISION_CONTRACT = `filter-decision-contract-v${FILTER_DECISION_VERSION}`;
+// Shared decision semantics. Preserve actual saved outputs and retryable fallbacks.
+const codec = require('./protocol-codec');
+const crypto = require('node:crypto');
+const { readRegularBytes } = require('./git-file-bytes');
+const FILTER_DECISION_CONTRACT = codec.contract('filter-decision');
+const FILTER_DECISION_PROFILE = Object.freeze({
+    ...codec.recordHeader(FILTER_DECISION_CONTRACT, 'filter-decision'),
+    implementationSha256: crypto.createHash('sha256').update(readRegularBytes(__filename)).digest('hex')
+});
 
 function parseFilterDecision(responseText, paperId = '') {
     return parseFilterDecisionDetails(responseText, paperId).related;
@@ -102,5 +108,5 @@ function getCaseInsensitiveField(obj, names) {
     return undefined;
 }
 
-module.exports = { FILTER_DECISION_VERSION, FILTER_DECISION_CONTRACT,
+module.exports = { FILTER_DECISION_CONTRACT, FILTER_DECISION_PROFILE,
     parseFilterDecision, parseFilterDecisionDetails, extractFilterReason, getCaseInsensitiveField };

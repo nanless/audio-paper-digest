@@ -1,5 +1,6 @@
 """读取并核验标签词表，按指定规则查找标签对应的概念。"""
 
+from protocol_codec import contract, historical_contract, is_contract, record_header, identity_domain, is_current_header, format as protocol_format
 import hashlib
 from functools import lru_cache
 import json
@@ -11,21 +12,33 @@ from pathlib import Path
 
 FACET_IDS = ('task', 'method', 'setting', 'signal', 'application',
              'research_focus', 'artifact', 'scientific_topic', 'model_family')
-TAG_CATALOG_VERSION = 'paper-tag-catalog-v2'
-LEGACY_TAG_CATALOG_VERSION = 'paper-taxonomy-v1'
+TAG_CATALOG_VERSION = contract('paper-tag-catalog')
+LEGACY_TAG_CATALOG_VERSION = historical_contract('paper-tag-catalog', 'legacy-taxonomy-registry')
 LABEL_MODE_CURRENT = 'current'
 LABEL_MODE_LEGACY = 'legacy'
 LABEL_MODES = (LABEL_MODE_CURRENT, LABEL_MODE_LEGACY)
-TAG_PROMPT_TEXT_CONTRACT = 'paper-tag-prompt-text-v2'
-LEGACY_TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1'
-TAG_SELECTION_CONTRACT = 'paper-tag-selection-v2'
-LEGACY_TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
-TAG_FLAT_COMPAT_CONTRACT = 'paper-tag-flat-tags-v2'
-LEGACY_TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
+TAG_PROMPT_TEXT_CONTRACT = contract('paper-tag-prompt-text')
+LEGACY_TAG_PROMPT_TEXT_CONTRACT = historical_contract('paper-tag-prompt-text', 'legacy-active-concepts')
+TAG_SELECTION_CONTRACT = contract('paper-tag-selection')
+LEGACY_TAG_SELECTION_CONTRACT = historical_contract('paper-tag-selection', 'legacy-concept-selection')
+TAG_FLAT_COMPAT_CONTRACT = contract('paper-tag-flat-tags')
+LEGACY_TAG_FLAT_COMPAT_CONTRACT = historical_contract('paper-tag-flat-tags', 'legacy-preferred-labels')
 CONCEPT_KEYS = {'id', 'facet', 'preferredLabel', 'aliases', 'broaderId',
                 'definition', 'scopeNote', 'status', 'replacedBy'}
 # 按 ECMAScript String.trim 的空白字符处理，包括 BOM；Python 默认 strip 的字符范围与它不同。
 _JS_WHITESPACE = '\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
+
+
+def is_current_tag_prompt_text_contract(raw):
+    return is_contract(raw, 'paper-tag-prompt-text', 'plain-chinese-active-concepts')
+
+
+def is_supported_tag_selection_contract(raw):
+    return is_contract(raw, 'paper-tag-selection')
+
+
+def is_supported_flat_tag_contract(raw):
+    return is_contract(raw, 'paper-tag-flat-tags')
 
 
 def normalize_label(value):
@@ -60,10 +73,40 @@ def _validate_catalog_string(value, name):
         raise ValueError(f'{name} 必须是非空字符串，不能含首尾空白或控制字符。')
 
 
-def validate_tag_catalog(data):
-    _require_exact_object_fields(data, {'version', 'facets', 'concepts'}, '标签词表')
-    if data['version'] not in (TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION):
+def tag_catalog_identity(data):
+    if type(data) is not dict:
+        raise ValueError('标签词表必须为对象。')
+    raw = data.get('contract') if 'contract' in data else data.get('version')
+    if not is_contract(raw, 'paper-tag-catalog'):
         raise ValueError('标签词表的版本不受支持。')
+    header = record_header(raw, 'paper-tag-catalog', data.get('schemaFingerprint'))
+    for key in ('contract', 'version', 'schemaVersion', 'schemaFingerprint'):
+        if (key in header and (type(data.get(key)) is not type(header[key]) or data.get(key) != header[key])) or (key not in header and key in data):
+            raise ValueError('标签词表协议头或结构指纹无效。')
+    return identity_domain(raw, 'paper-tag-catalog', data.get('schemaFingerprint'))
+
+
+def is_catalog_identity_upgrade(previous, current):
+    if not is_contract(previous, 'paper-tag-catalog') or not is_contract(current, 'paper-tag-catalog'):
+        return False
+    before = protocol_format(previous, 'paper-tag-catalog')
+    after = protocol_format(current, 'paper-tag-catalog')
+    return before == after or (before == 'legacy-taxonomy-registry' and after == 'nine-facet-concept-registry')
+
+
+def is_catalog_upgrade(previous, current):
+    before = protocol_format(tag_catalog_identity(previous), 'paper-tag-catalog', previous.get('schemaFingerprint'))
+    after = protocol_format(tag_catalog_identity(current), 'paper-tag-catalog', current.get('schemaFingerprint'))
+    return before == after or (before == 'legacy-taxonomy-registry' and after == 'nine-facet-concept-registry')
+
+
+def catalog_header(data):
+    return record_header(tag_catalog_identity(data), 'paper-tag-catalog', data.get('schemaFingerprint'))
+
+
+def validate_tag_catalog(data):
+    header = catalog_header(data)
+    _require_exact_object_fields(data, {*header, 'facets', 'concepts'}, '标签词表')
     if not isinstance(data['facets'], list) or len(data['facets']) != len(FACET_IDS):
         raise ValueError('标签词表的分类维度必须是包含九项的列表。')
     seen_facet_ids = set()
@@ -141,13 +184,14 @@ def _validate_tag_catalog_content(tag_catalog):
     """核验词表及可选 SHA 字段的格式，返回不含 SHA 元数据的词表内容。"""
     if not isinstance(tag_catalog, dict):
         raise ValueError('标签词表必须为对象。')
-    expected = {'version', 'facets', 'concepts'}
+    header = catalog_header(tag_catalog)
+    expected = {*header, 'facets', 'concepts'}
     if 'registrySha256' in tag_catalog:
         expected.add('registrySha256')
         if not isinstance(tag_catalog['registrySha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', tag_catalog['registrySha256']):
             raise ValueError('标签词表记录中的 registrySha256 格式无效。')
     _require_exact_object_fields(tag_catalog, expected, '标签词表')
-    return validate_tag_catalog({key: tag_catalog.get(key) for key in ('version', 'facets', 'concepts')})
+    return validate_tag_catalog({**header, 'facets': tag_catalog.get('facets'), 'concepts': tag_catalog.get('concepts')})
 
 
 def load_tag_catalog(file_path=None):
@@ -172,8 +216,8 @@ def _parse_tag_catalog_bytes(raw, *, uses_default_catalog=False):
     # 解析时移除 UTF-8 BOM，并按 Node TextDecoder 的规则拒绝无效编码；
     # SHA 仍根据完整原始文件字节计算。
     data = validate_tag_catalog(json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique_object))
-    if uses_default_catalog and data['version'] != TAG_CATALOG_VERSION:
-        raise ValueError('当前标签词表必须使用 paper-tag-catalog-v2。')
+    if uses_default_catalog and not is_current_header(data,'paper-tag-catalog'):
+        raise ValueError('当前标签词表必须使用现行稳定协议和结构指纹。')
     return {**data, 'registrySha256': hashlib.sha256(raw).hexdigest()}
 
 
@@ -182,7 +226,7 @@ def is_strict_append_only_catalog(previous, current):
     try:
         old = _validate_tag_catalog_content(previous)
         new = _validate_tag_catalog_content(current)
-        return (old['version'] == new['version'] and old['facets'] == new['facets']
+        return (protocol_format(tag_catalog_identity(old), 'paper-tag-catalog', old.get('schemaFingerprint')) == protocol_format(tag_catalog_identity(new), 'paper-tag-catalog', new.get('schemaFingerprint')) and old['facets'] == new['facets']
                 and len(new['concepts']) > len(old['concepts'])
                 and new['concepts'][:len(old['concepts'])] == old['concepts'])
     except (ValueError, TypeError, KeyError):
@@ -227,6 +271,22 @@ def resolve_append_only_proof_catalog(from_sha256, current, *, history_dir=None)
     return previous if previous is not None and is_strict_append_only_catalog(previous, current) else None
 
 
+def is_header_only_catalog_migration(previous,current):
+    try:
+        old=_validate_tag_catalog_content(previous)
+        new=_validate_tag_catalog_content(current)
+        return (catalog_header(old)!=catalog_header(new)
+                and protocol_format(tag_catalog_identity(old),'paper-tag-catalog',old.get('schemaFingerprint'))==protocol_format(tag_catalog_identity(new),'paper-tag-catalog',new.get('schemaFingerprint'))
+                and old['facets']==new['facets'] and old['concepts']==new['concepts'])
+    except (ValueError,TypeError,KeyError):
+        return False
+
+
+def resolve_compatible_proof_catalog(from_sha256,current,*,history_dir=None):
+    previous=load_archived_tag_catalog(from_sha256,history_dir=history_dir)
+    return previous if previous is not None and (is_strict_append_only_catalog(previous,current) or is_header_only_catalog_migration(previous,current)) else None
+
+
 def active_preferred_labels(tag_catalog, facets=None):
     """返回指定分类维度中已启用概念的中文首选名称。"""
     data = _validate_tag_catalog_content(tag_catalog)
@@ -247,8 +307,7 @@ def active_preferred_labels(tag_catalog, facets=None):
 
 def build_tag_prompt_text(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONTRACT):
     """按指定版本生成标签提示；默认用于新请求，旧版只供明确的旧记录核验。"""
-    if not isinstance(prompt_text_contract, str) or prompt_text_contract not in (
-            LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
+    if not is_contract(prompt_text_contract, 'paper-tag-prompt-text'):
         raise ValueError('标签提示文本的版本不受支持。')
     data = _validate_tag_catalog_content(tag_catalog)
     registry_sha = tag_catalog.get('registrySha256')
@@ -261,7 +320,7 @@ def build_tag_prompt_text(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONT
     )
     lines = [
         f'contract={prompt_text_contract}',
-        f'registry_version={data["version"]}',
+        f'registry_version={tag_catalog_identity(data)}',
         f'registry_sha256={registry_sha}',
         ('只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
          if prompt_text_contract == LEGACY_TAG_PROMPT_TEXT_CONTRACT else

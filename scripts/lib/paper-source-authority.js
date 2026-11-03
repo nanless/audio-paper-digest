@@ -10,15 +10,16 @@ const ledgerApi = require('./conference-source-ledger.js');
 const identityApi = require('./paper-identity.js');
 const conferenceContextApi = require('./conference-source-context.js');
 
-const CONTRACT = 'paper-source-authority-v1';
-const VERSION = 1;
-const ARXIV_SNAPSHOT_CONTRACT = 'arxiv-paper-source-snapshot-v1';
-const ARXIV_RECEIPT_CONTRACT = 'arxiv-paper-source-receipt-v1';
-const ARXIV_PRODUCTION_SNAPSHOT_CONTRACT = 'arxiv-paper-source-production-snapshot-v1';
-const ARXIV_PRODUCTION_RECEIPT_CONTRACT = 'arxiv-paper-source-production-receipt-v1';
-const ARXIV_REQUEST_CONTRACT = 'arxiv-paper-source-request-v1';
-const ARXIV_OBSERVATION_CONTRACT = 'arxiv-paper-source-observation-v1';
-const ARXIV_FETCHER_CONTRACT = 'deep-analyzer-official-arxiv-fulltext-v1';
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('paper-source-authority');
+const ARXIV_SNAPSHOT_CONTRACT = codec.contract('arxiv-paper-source-snapshot');
+const ARXIV_RECEIPT_CONTRACT = codec.contract('arxiv-paper-source-receipt');
+const ARXIV_PRODUCTION_SNAPSHOT_CONTRACT = codec.contract('arxiv-paper-source-production-snapshot');
+const ARXIV_PRODUCTION_RECEIPT_CONTRACT = codec.contract('arxiv-paper-source-production-receipt');
+const ARXIV_REQUEST_CONTRACT = codec.contract('arxiv-paper-source-request');
+const ARXIV_OBSERVATION_CONTRACT = codec.contract('arxiv-paper-source-observation');
+const ARXIV_FETCHER_CONTRACT = codec.contract('official-arxiv-fulltext-extraction');
 const EVIDENCE_KINDS = Object.freeze(['arxiv-official-fulltext', 'conference-plan-source-context']);
 const EVIDENCE_KIND_SET = new Set(EVIDENCE_KINDS);
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -118,18 +119,42 @@ function selfBound(value, field, label) {
     return clone(value);
 }
 
+function sourceHeader(value, name) {
+    if (!codec.hasValidHeader(value, name)) fail(`${name} 的格式声明无效`);
+    return recordHeaderFor(value, name);
+}
+function exactRecord(value, name, fields, label) {
+    const header = sourceHeader(value, name);
+    exact(value, [...Object.keys(header), ...fields], label);
+    return header;
+}
+function fetcherBinding(value, name) {
+    if (Object.hasOwn(sourceHeader(value, name), 'schemaFingerprint')) {
+        if (!codec.hasValidHeader(value.fetcherFormat, 'official-arxiv-fulltext-extraction')) return false;
+        const expected = codec.declaredSchema(value.contract, name, value.schemaFingerprint).fetcherFormat;
+        return stableHash(value.fetcherFormat) === stableHash(expected);
+    }
+    return value.fetcherContract === require('./workflow-legacy-codec').originalArxivRequestFormats().fetcherFormat.contract;
+}
+function requestSourceFormat(request, name) {
+    if (Object.hasOwn(sourceHeader(request, 'arxiv-paper-source-request'), 'schemaFingerprint')) {
+        const value = codec.declaredSchema(request.contract, 'arxiv-paper-source-request', request.schemaFingerprint).sourceFormats?.[name];
+        if (!codec.hasValidHeader(value, name)) fail('原请求缺少完整的来源记录格式绑定');
+        return recordHeaderFor(value, name);
+    }
+    return codec.historicalHeader(name, codec.format(codec.contract(name), name), null);
+}
+
 function normalizeArxivSnapshot(value) {
-    exact(value, ['contract', 'version', 'paperId', 'arxivId', 'officialUrl', 'fulltextSha256', 'snapshotSha256'], 'arXiv snapshot');
-    if (value.contract !== ARXIV_SNAPSHOT_CONTRACT || value.version !== VERSION
-        || value.paperId !== `arxiv:${value.arxivId}`
+    exactRecord(value, 'arxiv-paper-source-snapshot', ['paperId', 'arxivId', 'officialUrl', 'fulltextSha256', 'snapshotSha256'], 'arXiv snapshot');
+    if (value.paperId !== `arxiv:${value.arxivId}`
         || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) fail('arXiv 快照的身份或来源无效');
     sha(value.fulltextSha256, 'arXiv snapshot fulltextSha256');
     return selfBound(value, 'snapshotSha256', 'arXiv snapshot');
 }
 function normalizeArxivReceipt(value) {
-    exact(value, ['contract', 'version', 'snapshotName', 'snapshotFileSha256', 'snapshotSha256',
+    exactRecord(value, 'arxiv-paper-source-receipt', ['snapshotName', 'snapshotFileSha256', 'snapshotSha256',
         'fulltextName', 'fulltextSha256', 'receiptSha256'], 'arXiv receipt');
-    if (value.contract !== ARXIV_RECEIPT_CONTRACT || value.version !== VERSION) fail('arXiv 回执的契约或版本无效');
     safeName(value.snapshotName, SAFE_JSON_NAME, 'arXiv receipt snapshotName');
     safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv receipt fulltextName');
     for (const field of ['snapshotFileSha256', 'snapshotSha256', 'fulltextSha256']) sha(value[field], `arXiv receipt ${field}`);
@@ -160,13 +185,19 @@ function normalizeProof(value, evidenceKind) {
     return clone(value);
 }
 function normalizeProductionArxivRequest(value) {
-    exact(value, ['contract', 'version', 'operationId', 'paperId', 'arxivId', 'identitySha256', 'authorityName',
-        'officialAbsUrl', 'officialHtmlUrl', 'officialPdfUrl', 'fetcherContract', 'requestedAt', 'requestSha256'], 'arXiv production request');
-    if (value.contract !== ARXIV_REQUEST_CONTRACT || value.version !== VERSION
-        || value.paperId !== `arxiv:${value.arxivId}` || value.officialAbsUrl !== `https://arxiv.org/abs/${value.arxivId}`
+    const header = sourceHeader(value, 'arxiv-paper-source-request');
+    const declared = Object.hasOwn(header, 'schemaFingerprint');
+    exactRecord(value, 'arxiv-paper-source-request', ['operationId', 'paperId', 'arxivId', 'identitySha256', 'authorityName',
+        'officialAbsUrl', 'officialHtmlUrl', 'officialPdfUrl', ...(declared ? ['identityFormat', 'fetcherFormat'] : ['fetcherContract']),
+        'requestedAt', 'requestSha256'], 'arXiv production request');
+    if (value.paperId !== `arxiv:${value.arxivId}` || value.officialAbsUrl !== `https://arxiv.org/abs/${value.arxivId}`
         || value.officialHtmlUrl !== `https://arxiv.org/html/${value.arxivId}`
         || value.officialPdfUrl !== `https://arxiv.org/pdf/${value.arxivId}.pdf`
-        || value.fetcherContract !== ARXIV_FETCHER_CONTRACT || !identityApi.ARXIV_ID_RE.test(value.arxivId)) {
+        || !fetcherBinding(value, 'arxiv-paper-source-request')
+        || declared && (!codec.hasValidHeader(value.identityFormat, 'paper-identity')
+            || stableHash(value.identityFormat) !== stableHash(codec.declaredSchema(value.contract,
+                'arxiv-paper-source-request', value.schemaFingerprint).identityFormat))
+        || !identityApi.ARXIV_ID_RE.test(value.arxivId)) {
         fail('arXiv 生产请求的身份、来源或抓取器无效');
     }
     safeName(value.authorityName, SAFE_JSON_NAME, 'arXiv production request authorityName');
@@ -174,10 +205,9 @@ function normalizeProductionArxivRequest(value) {
     return selfBound(value, 'requestSha256', 'arXiv production request');
 }
 function normalizeProductionArxivObservation(value) {
-    exact(value, ['contract', 'version', 'paperId', 'arxivId', 'sourceKind', 'sourceId', 'sourceUrl',
+    exactRecord(value, 'arxiv-paper-source-observation', ['paperId', 'arxivId', 'sourceKind', 'sourceId', 'sourceUrl',
         'htmlAvailability', 'htmlAttempts', 'warnings', 'structuredArtifacts', 'fetchedAt', 'observationSha256'], 'arXiv production observation');
-    if (value.contract !== ARXIV_OBSERVATION_CONTRACT || value.version !== VERSION
-        || value.paperId !== `arxiv:${value.arxivId}` || !identityApi.ARXIV_ID_RE.test(value.arxivId)
+    if (value.paperId !== `arxiv:${value.arxivId}` || !identityApi.ARXIV_ID_RE.test(value.arxivId)
         || !['html', 'pdf'].includes(value.sourceKind) || String(value.sourceId || '').replace(/v\d+$/i, '') !== value.arxivId
         || value.sourceUrl !== (value.sourceKind === 'html' ? `https://arxiv.org/html/${value.sourceId}` : `https://arxiv.org/pdf/${value.sourceId}.pdf`)
         || !Number.isSafeInteger(value.htmlAttempts) || value.htmlAttempts < 0 || !Array.isArray(value.warnings)
@@ -186,11 +216,10 @@ function normalizeProductionArxivObservation(value) {
     return selfBound(value, 'observationSha256', 'arXiv production observation');
 }
 function normalizeProductionArxivSnapshot(value) {
-    exact(value, ['contract', 'version', 'paperId', 'arxivId', 'officialUrl', 'requestName', 'requestFileSha256',
+    exactRecord(value, 'arxiv-paper-source-production-snapshot', ['paperId', 'arxivId', 'officialUrl', 'requestName', 'requestFileSha256',
         'requestSha256', 'observationName', 'observationFileSha256', 'observationSha256', 'fulltextName',
         'fulltextSha256', 'snapshotSha256'], 'arXiv production snapshot');
-    if (value.contract !== ARXIV_PRODUCTION_SNAPSHOT_CONTRACT || value.version !== VERSION
-        || value.paperId !== `arxiv:${value.arxivId}` || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) {
+    if (value.paperId !== `arxiv:${value.arxivId}` || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) {
         fail('arXiv 生产快照的身份或来源无效');
     }
     for (const field of ['requestName', 'observationName']) safeName(value[field], SAFE_JSON_NAME, `arXiv production snapshot ${field}`);
@@ -199,20 +228,21 @@ function normalizeProductionArxivSnapshot(value) {
     return selfBound(value, 'snapshotSha256', 'arXiv production snapshot');
 }
 function normalizeProductionArxivReceipt(value) {
-    exact(value, ['contract', 'version', 'operationId', 'requestName', 'requestFileSha256', 'requestSha256',
+    const header = sourceHeader(value, 'arxiv-paper-source-production-receipt');
+    exactRecord(value, 'arxiv-paper-source-production-receipt', ['operationId', 'requestName', 'requestFileSha256', 'requestSha256',
         'snapshotName', 'snapshotFileSha256', 'snapshotSha256', 'observationName', 'observationFileSha256',
-        'observationSha256', 'fulltextName', 'fulltextSha256', 'fetcherContract', 'receiptSha256'], 'arXiv production receipt');
-    if (value.contract !== ARXIV_PRODUCTION_RECEIPT_CONTRACT || value.version !== VERSION
-        || value.fetcherContract !== ARXIV_FETCHER_CONTRACT) fail('arXiv 生产回执的契约、版本或抓取器无效');
+        'observationSha256', 'fulltextName', 'fulltextSha256',
+        Object.hasOwn(header, 'schemaFingerprint') ? 'fetcherFormat' : 'fetcherContract', 'receiptSha256'], 'arXiv production receipt');
+    if (!fetcherBinding(value, 'arxiv-paper-source-production-receipt')) fail('arXiv 生产回执的格式或抓取器无效');
     for (const field of ['requestName', 'snapshotName', 'observationName']) safeName(value[field], SAFE_JSON_NAME, `arXiv production receipt ${field}`);
     safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv production receipt fulltextName');
     for (const [field, item] of Object.entries(value)) if (field.toLowerCase().includes('sha256')) sha(item, `arXiv production receipt ${field}`);
     return selfBound(value, 'receiptSha256', 'arXiv production receipt');
 }
 function normalizeAuthority(value) {
-    exact(value, ['contract', 'version', 'paperId', 'identity', 'identitySha256', 'identityRecordSha256',
+    const header = exactRecord(value, 'paper-source-authority', ['paperId', 'identity', 'identitySha256', 'identityRecordSha256',
         'evidenceKind', 'proof', 'authoritySha256'], 'authority');
-    if (value.contract !== CONTRACT || value.version !== VERSION || !isEvidenceKind(value.evidenceKind)) {
+    if (!isEvidenceKind(value.evidenceKind)) {
         fail('authority 的契约、版本或 evidenceKind 无效');
     }
     let identity;
@@ -230,7 +260,7 @@ function normalizeAuthority(value) {
         fail('authority 的 evidenceKind 与论文身份类型不匹配');
     }
     const proof = normalizeProof(value.proof, value.evidenceKind);
-    const normalized = { contract: CONTRACT, version: VERSION, paperId: value.paperId, identity,
+    const normalized = { ...header, paperId: value.paperId, identity,
         identitySha256: value.identitySha256, identityRecordSha256: value.identityRecordSha256,
         evidenceKind: value.evidenceKind, proof, authoritySha256: value.authoritySha256 };
     return selfBound(normalized, 'authoritySha256', 'authority');
@@ -240,16 +270,26 @@ function replayArxiv(root, authority, authorityName) {
     const snapshot = readJson(root, proof.snapshotName, 'arXiv source snapshot');
     const receipt = readJson(root, proof.receiptName, 'arXiv source receipt');
     const fulltext = readText(root, proof.fulltextName, 'arXiv full text');
-    if (snapshot.value.contract === ARXIV_PRODUCTION_SNAPSHOT_CONTRACT) {
+    if (codec.hasValidHeader(snapshot.value, 'arxiv-paper-source-production-snapshot')) {
         const request = readJson(root, proof.requestName, 'arXiv source request');
         const observation = readJson(root, proof.observationName, 'arXiv source observation');
         const normalizedRequest = normalizeProductionArxivRequest(request.value);
         const normalizedObservation = normalizeProductionArxivObservation(observation.value);
         const normalizedSnapshot = normalizeProductionArxivSnapshot(snapshot.value);
         const normalizedReceipt = normalizeProductionArxivReceipt(receipt.value);
+        for (const [record, family] of [[normalizedObservation, 'arxiv-paper-source-observation'],
+            [normalizedSnapshot, 'arxiv-paper-source-production-snapshot'],
+            [normalizedReceipt, 'arxiv-paper-source-production-receipt']]) {
+            if (stableHash(sourceHeader(record, family)) !== stableHash(requestSourceFormat(normalizedRequest, family))) {
+                fail('arXiv 来源链混用了不同请求声明的来源格式');
+            }
+        }
         const identity = authority.identity;
         const { payloadSha256, ...artifactBody } = normalizedObservation.structuredArtifacts;
         if (request.sha256 !== proof.requestFileSha256 || normalizedRequest.requestSha256 !== proof.requestSha256
+            || (normalizedRequest.identityFormat && stableHash(identityApi.readHeader(identity)) !== stableHash(normalizedRequest.identityFormat))
+            || stableHash(normalizedRequest.fetcherFormat || normalizedRequest.fetcherContract)
+                !== stableHash(normalizedReceipt.fetcherFormat || normalizedReceipt.fetcherContract)
             || observation.sha256 !== proof.observationFileSha256 || normalizedObservation.observationSha256 !== proof.observationSha256
             || snapshot.sha256 !== proof.snapshotFileSha256 || normalizedSnapshot.snapshotSha256 !== proof.snapshotSha256
             || receipt.sha256 !== proof.receiptFileSha256 || normalizedReceipt.receiptSha256 !== proof.receiptSha256
@@ -362,7 +402,7 @@ function replayAuthorityHandle(handle, { requireProduction = false } = {}) {
     return replayed;
 }
 
-module.exports = { CONTRACT, VERSION, ARXIV_SNAPSHOT_CONTRACT, ARXIV_RECEIPT_CONTRACT, EVIDENCE_KINDS,
+module.exports = { CONTRACT, ARXIV_SNAPSHOT_CONTRACT, ARXIV_RECEIPT_CONTRACT, EVIDENCE_KINDS,
     ARXIV_PRODUCTION_SNAPSHOT_CONTRACT, ARXIV_PRODUCTION_RECEIPT_CONTRACT, ARXIV_REQUEST_CONTRACT,
     ARXIV_OBSERVATION_CONTRACT, ARXIV_FETCHER_CONTRACT,
     SAFE_JSON_NAME, SAFE_TEXT_NAME, MIN_FULLTEXT_CHARACTERS, PaperSourceAuthorityError,

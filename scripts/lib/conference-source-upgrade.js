@@ -7,18 +7,48 @@ const crypto = require('node:crypto');
 const api = require('./conference-process.js');
 const recovery = require('./conference-process-recovery.js');
 const extraction = require('./conference-extraction-receipt.js');
-const CONTRACT = 'conference-source-upgrade-plan-v2';
-const VERSION = 2;
-const LEGACY_CONTRACT = 'conference-source-upgrade-plan-v1';
-const LEGACY_VERSION = 1;
-const promotionProcessId = planSha256 => api.deterministicUuid(planSha256, 'conference-source-upgrade-process-v1');
-const executionIdFor = (planSha256, paperId) => api.deterministicUuid(promotionProcessId(planSha256), paperId, 'analysis');
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('conference-source-upgrade-plan');
+function upgradeFormat(plan) {
+    if (!codec.hasValidHeader(plan, 'conference-source-upgrade-plan')) throw new Error('来源升级计划格式头不受支持。');
+    return codec.format(plan.contract, 'conference-source-upgrade-plan', plan.schemaFingerprint);
+}
+function headerForPlan(plan, family, variant = upgradeFormat(plan)) {
+    upgradeFormat(plan);
+    return codec.isCurrentHeader(plan, 'conference-source-upgrade-plan')
+        ? codec.recordHeader(codec.contract(family), family) : codec.historicalHeader(family, variant);
+}
+const promotionProcessId = (planSha256, plan = null) => api.deterministicUuid(planSha256,
+    !plan || codec.isCurrentHeader(plan, 'conference-source-upgrade-plan') ? codec.contract('conference-source-upgrade-process')
+        : (upgradeFormat(plan), codec.historicalContract('conference-source-upgrade-process', 'plan-derived-process')));
+const executionIdFor = (planSha256, paperId, plan) => api.deterministicUuid(promotionProcessId(planSha256, plan), paperId, 'analysis');
+const currentExtractorTarget = () => ({ ...codec.recordHeader(codec.contract('conference-source-upgrade-extractor-target'),
+    'conference-source-upgrade-extractor-target'), implementationSha256: extraction.EXTRACTOR_IMPLEMENTATION_SHA256,
+    backendVersion: extraction.BACKEND_VERSION });
+function validateExtractorTarget(value) {
+    const current = Object.hasOwn(value || {}, 'contract');
+    const header = recordHeaderFor(value, 'conference-source-upgrade-extractor-target', current ? 'contract' : 'version');
+    if (Object.keys(value).sort().join(',') !== [...Object.keys(header), ...(current ? ['implementationSha256'] : []), 'backendVersion'].sort().join(',')
+        || typeof value.backendVersion !== 'string' || !value.backendVersion
+        || current && !/^[a-f0-9]{64}$/.test(value.implementationSha256 || '')) throw new Error('来源升级提取器目标无效。');
+    return value;
+}
+function extractorMatches(receipt, target) {
+    validateExtractorTarget(target);
+    const current = Object.hasOwn(target, 'contract');
+    return codec.hasValidHeader(receipt, 'conference-pdf-extraction-receipt')
+        && codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt') === current
+        && (current ? receipt.extractor?.implementationSha256 === target.implementationSha256
+            : receipt.extractor?.version === target.version)
+        && receipt.extractor?.backend?.version === target.backendVersion;
+}
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 // 比较来源与筛选记录时，排除实现指纹和词表指纹。实现变化由迁移凭证另行核验；
 // 原词表字段参与进程身份计算，不能在更换词表后直接覆盖。
 // 是否允许沿用标签记录，由后续标签阶段和发布检查决定。
-const withoutImplementation = (authority, version = api.PROCESS_VERSION) => {
-    const copy = api.authorityWithoutTagCatalog(authority, version);
+const withoutImplementation = (authority, format = 'tag-catalog') => {
+    const copy = api.authorityWithoutTagCatalog(authority, format);
     delete copy.implementationSha256;
     return copy;
 };
@@ -27,11 +57,11 @@ function assertSourceUpgradePlan(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('来源升级计划格式无效。');
     const { planSha256, ...body } = value;
     if (planSha256 !== api.stableHash(body)) throw new Error('来源升级计划的原内容摘要不一致。');
-    if (!(value.contract === CONTRACT && value.version === VERSION)
-        && !(value.contract === LEGACY_CONTRACT && value.version === LEGACY_VERSION)) {
-        throw new Error('来源升级计划的格式标识和版本不属于支持的组合。');
+    api.authorityForComparison(value.authority, upgradeFormat(value));
+    validateExtractorTarget(value.targetExtractor);
+    if (codec.isCurrentHeader(value, 'conference-source-upgrade-plan') !== Object.hasOwn(value.targetExtractor, 'contract')) {
+        throw new Error('来源升级计划与提取器目标不能混用新旧格式。');
     }
-    api.authorityForComparison(value.authority, value.version);
     return value;
 }
 
@@ -41,7 +71,7 @@ function load(options, deps) {
     const directory = api.safeProcessDirectory(deps.files.conferenceProcessDir, options.fromProcessId, false);
     const state = api.assertState(recovery.readPrivateJson(path.join(directory, 'state.json')));
     if (state.processId !== options.fromProcessId
-        || api.stableHash(withoutImplementation(state.authority, state.version)) !== api.stableHash(withoutImplementation(context.authority))
+        || api.stableHash(withoutImplementation(state.authority, api.processFormat(state))) !== api.stableHash(withoutImplementation(context.authority))
         || api.stableHash(Object.keys(state.items).sort()) !== api.stableHash(context.members.map(item => item.paperId).sort())) {
         throw new Error('来源升级所用的来源、筛选、其余配置或论文集合与原进程不一致。');
     }
@@ -51,20 +81,29 @@ function load(options, deps) {
 
 function repairPolicy(options) {
     return options.pageRepairMode === 'caption-only' ? {
-        contract: 'conference-caption-only-page-repair-policy-v1', mode: 'caption-only',
+        ...codec.recordHeader(codec.contract('conference-caption-only-page-repair-policy'), 'conference-caption-only-page-repair-policy'), mode: 'caption-only',
         implementationSha256: sha(fs.readFileSync(path.join(__dirname, 'conference-postprocess.js'))) } : null;
 }
 
 function nativeRetainedSource(loaded, member, replay, deps, previous) {
     let names = api.sourceNames(member.paperId, loaded.origin);
+    let target = currentExtractorTarget();
+    if (loaded.state.sourceUpgradePromotion) {
+        const saved = assertSourceUpgradePlan(recovery.readPrivateJson(path.join(loaded.directory, 'source-upgrade-plan.json')));
+        if (saved.planSha256 !== loaded.state.sourceUpgradePromotion.planSha256) throw new Error('Retained source target does not bind the original promotion plan');
+        target = saved.targetExtractor;
+    }
     if (previous.status !== 'ready' || previous.textReplayable !== true
-        || previous.extractor?.version !== extraction.EXTRACTOR_VERSION
-        || previous.extractor?.backend?.version !== extraction.BACKEND_VERSION || previous.version !== extraction.VERSION) {
+        || !extractorMatches(previous, target)) {
         const metadata = { ...replay.metadataRecord, conferenceId: replay.conference.id,
             year: replay.conference.year, identity: structuredClone(replay.identity) };
-        const generation = api.stableHash({ source: loaded.origin, extractor: extraction.EXTRACTOR_VERSION,
-            backend: extraction.BACKEND_VERSION, contract: extraction.RECEIPT_CONTRACT,
-            version: extraction.VERSION, pdfSha256: replay.match.candidates[0].sha256,
+        const current = Object.hasOwn(target, 'contract');
+        const generation = api.stableHash({ source: loaded.origin,
+            ...(current ? { extractorImplementationSha256: target.implementationSha256,
+                ...codec.recordHeader(extraction.RECEIPT_CONTRACT, 'conference-pdf-extraction-receipt') }
+                : { extractor: target.version,
+                    ...codec.historicalHeader('conference-pdf-extraction-receipt', 'raw-input-output-bindings') }),
+            backend: target.backendVersion, pdfSha256: replay.match.candidates[0].sha256,
             metadataSha256: sha(api.canonicalBytes(metadata)), previousReceiptSha256: previous.receiptSha256 });
         names = api.sourceNames(member.paperId, generation);
     }
@@ -80,11 +119,13 @@ function sourceProofOf(snapshot) {
 }
 
 function retainedLegacySnapshot(root, names, receipt, member, deps) {
-    // 这里只核对已保存的 2.3.0 提取文件，不能将其称为 2.3.1 的重新提取结果。
+    // 这里只核对已保存的前一实现提取文件，不能将其称为当前实现的重新提取结果。
     // 原分析和来源凭证仍是核验依据。
-    if (receipt.contract !== extraction.RECEIPT_CONTRACT || receipt.version !== 2
+    if (!codec.hasValidHeader(receipt, 'conference-pdf-extraction-receipt')
+        || codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')
         || receipt.status !== 'ready' || receipt.textReplayable !== true
-        || receipt.extractor?.name !== extraction.EXTRACTOR_NAME || receipt.extractor.version !== '2.3.0'
+        || receipt.extractor?.name !== extraction.EXTRACTOR_NAME
+        || !codec.hasValidHeader(receipt.extractor, 'conference-retained-pdf-extractor', 'version')
         || receipt.extractor.backend?.name !== extraction.BACKEND_NAME
         || receipt.extractor.backend.version !== extraction.BACKEND_VERSION) throw new Error('Unsupported retained legacy source');
     const read = key => deps.discovery.safeAbsoluteFile(path.join(root, names[key]), `retained legacy ${key}`, 256 * 1024 * 1024);
@@ -102,7 +143,7 @@ function retainedLegacySnapshot(root, names, receipt, member, deps) {
         || receipt.text.utf8Bytes !== text.bytes.length || pdf.bytes.subarray(0, 5).toString() !== '%PDF-') {
         throw new Error('Retained legacy source byte/identity binding drifted');
     }
-    const verification = { contract: extraction.VERIFICATION_CONTRACT, version: 2, status: 'verified',
+    const verification = { ...codec.historicalHeader('conference-pdf-extraction-verification', 'pinned-replay'), status: 'verified',
         paperId: member.paperId, sourceIdentity: member.sourceIdentity, requestSha256: sha(requestFile.bytes),
         metadataSha256: sha(metadataFile.bytes), pdfSha256: sha(pdf.bytes), textSha256: sha(text.bytes),
         artifactsSha256: sha(artifacts.bytes), receiptFileSha256: sha(receiptFile.bytes), receiptSha256: receipt.receiptSha256 };
@@ -143,7 +184,10 @@ function retainedItemSource(loaded, member, replay, deps) {
         || authority.selectedMemberSetSha256 !== loaded.context.authority.selectedMemberSetSha256) {
         throw new Error('Retained current source/identity/filter/plan binding drifted');
     }
-    return { names, canonical, proof, retainedSource: { contract: 'conference-retained-item-source-v1',
+    return { names, canonical, proof, retainedSource: {
+        ...(codec.isCurrentHeader(loaded.state.sourceUpgradePromotion, 'conference-source-upgrade-promotion')
+            ? codec.recordHeader(codec.contract('conference-retained-item-source'), 'conference-retained-item-source')
+            : codec.historicalHeader('conference-retained-item-source', 'retained-proof-with-native-parent')),
         receiptName: names.receipt, sourceRecordSha256: canonical.source.recordSha256,
         sourceSnapshotSha256: causal.sourceSnapshotSha256, sourceProof: proof,
         nativeSharedSource: { receiptName: native.names.receipt, sourceProof: sourceProofOf(native.snapshot) } } };
@@ -151,6 +195,7 @@ function retainedItemSource(loaded, member, replay, deps) {
 
 function planWith(options, deps, loaded = load(options, deps), originalPlan = null) {
     const { context, state, origin } = loaded;
+    const targetExtractor = originalPlan ? validateExtractorTarget(originalPlan.targetExtractor) : currentExtractorTarget();
     const papers = context.members.map(member => {
         const item = state.items[member.paperId];
         const root = deps.files.conferenceStagingSourceDir;
@@ -180,8 +225,7 @@ function planWith(options, deps, loaded = load(options, deps), originalPlan = nu
         }
         const analysisFile = path.join(deps.files.conferenceAnalysisDir, item.analysisRunId, 'analysis.json');
         const analysis = fs.existsSync(analysisFile) ? recovery.readPrivateJson(analysisFile) : null;
-        const obsolete = receipt.extractor?.version !== extraction.EXTRACTOR_VERSION
-            || receipt.extractor?.backend?.version !== extraction.BACKEND_VERSION || receipt.version !== extraction.VERSION;
+        const obsolete = !extractorMatches(receipt, targetExtractor);
         return { paperId: member.paperId, previousExecutionId: item.analysisRunId, previousStatus: item.status,
             pdfSha256: expectedPdf, historicalInputs: inputs, historicalReceiptSha256: receiptSha256,
             analysisSha256: analysis ? sha(fs.readFileSync(analysisFile)) : null,
@@ -194,8 +238,8 @@ function planWith(options, deps, loaded = load(options, deps), originalPlan = nu
             action: 'retain_original_unless_explicitly_selected_for_new_analysis',
             ...(retained.retainedSource ? { retainedSource: retained.retainedSource } : {}) };
     }).sort((a, b) => a.paperId.localeCompare(b.paperId));
-    let planAuthority = context.authority;
-    if (originalPlan?.version === LEGACY_VERSION) {
+    let planAuthority = { ...context.authority };
+    if (originalPlan && upgradeFormat(originalPlan) === 'taxonomy') {
         // 只读重放已核原计划，不改变其创建时使用的字段结构。
         planAuthority = { ...context.authority };
         delete planAuthority.tagCatalogVersion;
@@ -203,12 +247,14 @@ function planWith(options, deps, loaded = load(options, deps), originalPlan = nu
         if (Object.hasOwn(originalPlan.authority, 'taxonomyVersion')) planAuthority.taxonomyVersion = context.authority.tagCatalogVersion;
         if (Object.hasOwn(originalPlan.authority, 'taxonomyRegistrySha256')) planAuthority.taxonomyRegistrySha256 = context.authority.tagCatalogSha256;
     }
-    const body = { contract: originalPlan ? originalPlan.contract : CONTRACT, version: originalPlan ? originalPlan.version : VERSION,
+    if (originalPlan) planAuthority.deepExecutionConfig = structuredClone(originalPlan.authority.deepExecutionConfig);
+    const body = { ...(originalPlan ? recordHeaderFor(originalPlan, 'conference-source-upgrade-plan')
+        : codec.recordHeader(CONTRACT, 'conference-source-upgrade-plan')),
         fromProcessId: state.processId, originalStateSha256: state.stateSha256,
         authority: planAuthority, sourceImplementationSha256: origin,
-        targetExtractor: { version: extraction.EXTRACTOR_VERSION, backendVersion: extraction.BACKEND_VERSION },
+        targetExtractor: structuredClone(targetExtractor),
         papers, automaticStageReuse: false, originalResultsPreserved: true,
-        ...(repairPolicy(options) ? { pageRepairPolicy: repairPolicy(options),
+        ...(repairPolicy(options) ? { pageRepairPolicy: originalPlan?.pageRepairPolicy || repairPolicy(options),
             retainedPageProofs: Object.values(state.items).sort((a, b) => a.paperId.localeCompare(b.paperId))
                 .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
                     analysisProof: item.analysisProof, pageProof: item.pageProof })) } : {}) };
@@ -256,11 +302,15 @@ function authorizedPlanFor(options, deps, current) {
             if (originalPlan) break;
         }
         if (!originalPlan) {
-            const directory = path.join(deps.files.conferenceProcessDir, promotionProcessId(options.planSha256));
-            if (fs.existsSync(directory)) {
-                api.safeProcessDirectory(deps.files.conferenceProcessDir, promotionProcessId(options.planSha256), false);
+            const candidates = [...new Set([promotionProcessId(options.planSha256), api.deterministicUuid(options.planSha256,
+                codec.historicalContract('conference-source-upgrade-process', 'plan-derived-process'))])];
+            for (const candidate of candidates) {
+                const directory = path.join(deps.files.conferenceProcessDir, candidate);
+                if (!fs.existsSync(directory)) continue;
+                api.safeProcessDirectory(deps.files.conferenceProcessDir, candidate, false);
                 const state = api.assertState(recovery.readPrivateJson(path.join(directory, 'state.json')));
                 const saved = assertSourceUpgradePlan(recovery.readPrivateJson(path.join(directory, 'source-upgrade-plan.json')));
+                if (promotionProcessId(saved.planSha256, saved) !== candidate) throw new Error('Source upgrade process directory does not bind the exact original plan format');
                 if (state.status === 'complete') api.validateCompletionReceipt(state,
                     recovery.readPrivateJson(path.join(directory, 'completion-receipt.json')));
                 recovery.sourceImplementation(state, directory, api);
@@ -287,7 +337,7 @@ function replayRetainedShared(current, plan, deps) {
         recovery.readPrivateJson(path.join(current.directory, 'completion-receipt.json')));
     const sealed = plan.papers.map(paper => {
         const source = paper.retainedSource;
-        if (!source || source.contract !== 'conference-retained-item-source-v1'
+        if (!source || !codec.hasValidHeader(source, 'conference-retained-item-source')
             || api.stableHash(source.sourceProof) !== api.stableHash(current.state.items[paper.paperId].sourceProof)) {
             throw new Error('Caption repair requires exact retained source descriptors');
         }
@@ -366,18 +416,17 @@ async function promoteCaptionOnly(current, plan, deps) {
         sourceRoot: shared.sourceCacheRoot, preservedStages, apply: true, trustEvidence: true });
     if (aggregate.manifest.markdownSha256 !== current.state.aggregate.markdownSha256) throw new Error('Caption-only repair changed aggregate bytes');
     api.assertRuntimeAuthorityUnchanged(current.context, deps, 'after caption-only repair replay');
-    const processId = promotionProcessId(plan.planSha256);
+    const processId = promotionProcessId(plan.planSha256, plan);
     const directory = api.safeProcessDirectory(deps.files.conferenceProcessDir, processId, true);
     return deps.engine.withFileLock(path.join(directory, '.operation'), async () => {
-        const promotion = { contract: 'conference-source-upgrade-promotion-v1', planSha256: plan.planSha256,
+        const promotion = { ...headerForPlan(plan, 'conference-source-upgrade-promotion', 'retained-original-and-upgraded-members'), planSha256: plan.planSha256,
             originalProcessId: current.state.processId, sourceImplementationSha256: current.origin,
             pageRepairPolicy: plan.pageRepairPolicy,
             preservedOriginalCompletePaperIds: Object.keys(items).sort() };
         const aggregateProof = { manifestSha256: aggregate.manifest.manifestSha256,
             markdownSha256: aggregate.manifest.markdownSha256, aggregateId: aggregate.manifest.aggregateId,
             pagePath: aggregate.manifest.pagePath };
-        const draft = { contract: plan.version === LEGACY_VERSION ? api.LEGACY_CONTRACT : api.CONTRACT,
-            version: plan.version === LEGACY_VERSION ? api.LEGACY_VERSION : api.PROCESS_VERSION, generation: 1, processId,
+        const draft = { ...headerForPlan(plan, 'conference-process'), generation: 1, processId,
             createdAt: current.state.createdAt, updatedAt: deps.now(), authority: plan.authority,
             status: 'running', items, aggregate: null, completionReceiptSha256: null, sourceUpgradePromotion: promotion };
         draft.stateSha256 = api.stateDigest(draft); api.assertState(draft);
@@ -420,11 +469,11 @@ async function applySourceUpgrade(options, overrides = {}) {
         const filename = path.join(root, 'state.json');
         let state = deps.engine.updateJsonFileLocked(filename, existing => {
             if (existing) { validateState(existing, plan, selected, upgradeId); return undefined; }
-            const body = { contract: 'conference-source-upgrade-state-v1', generation: 1, upgradeId, planSha256: plan.planSha256,
+            const body = { ...headerForPlan(plan, 'conference-source-upgrade-state', 'authorized-subset'), generation: 1, upgradeId, planSha256: plan.planSha256,
                 originalProcessId: current.state.processId, selectedPaperIds: selected, status: 'pending',
                 authorization: { newAnalysis: true, selectedPaperIds: selected, planSha256: plan.planSha256 },
                 items: Object.fromEntries(selected.map(paperId => [paperId, { paperId,
-                    analysisRunId: executionIdFor(plan.planSha256, paperId),
+                    analysisRunId: executionIdFor(plan.planSha256, paperId, plan),
                     status: 'pending', attempts: 0, lastFailure: null }])) };
             return { ...body, stateSha256: api.stateDigest(body) };
         }, { allowMissing: true });
@@ -519,7 +568,9 @@ async function applySourceUpgrade(options, overrides = {}) {
 function validateState(state, plan, selected, upgradeId) {
     if (!state || state.stateSha256 !== api.stateDigest(state)) throw new Error('Source upgrade checkpoint integrity failed');
     assertSourceUpgradePlan(plan);
-    if (state?.contract !== 'conference-source-upgrade-state-v1' || state.upgradeId !== upgradeId
+    if (!codec.hasValidHeader(state, 'conference-source-upgrade-state')
+        || codec.isCurrentHeader(state, 'conference-source-upgrade-state') !== codec.isCurrentHeader(plan, 'conference-source-upgrade-plan')
+        || state.upgradeId !== upgradeId
         || !['pending', 'running', 'partial', 'complete'].includes(state.status)
         || !Number.isSafeInteger(state.generation) || state.generation < 1
         || state.planSha256 !== plan.planSha256 || state.originalProcessId !== plan.fromProcessId
@@ -530,7 +581,7 @@ function validateState(state, plan, selected, upgradeId) {
     }
     if (state.status === 'complete' && Object.values(state.items).some(item => item.status !== 'complete')) throw new Error('Incomplete source upgrade cannot claim complete');
     for (const [id, item] of Object.entries(state.items)) {
-        if (item.paperId !== id || item.analysisRunId !== executionIdFor(plan.planSha256, id)
+        if (item.paperId !== id || item.analysisRunId !== executionIdFor(plan.planSha256, id, plan)
             || !['pending', 'analyzing', 'analysis_partial', 'complete'].includes(item.status)
             || !Number.isSafeInteger(item.attempts) || item.attempts < 0
             || item.status === 'complete' && (!item.sourceProof || !item.analysisProof || !item.pageProof)) throw new Error('Source upgrade item integrity failed');
@@ -693,10 +744,10 @@ async function promoteSourceUpgrade(options, overrides = {}) {
             planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot, preservedStages, apply: true,
             trustEvidence: true })))(current.context, shared, executionIds, deps);
         api.assertRuntimeAuthorityUnchanged(current.context, deps, 'after source upgrade promotion replay');
-        const processId = promotionProcessId(plan.planSha256);
+        const processId = promotionProcessId(plan.planSha256, plan);
         const directory = api.safeProcessDirectory(deps.files.conferenceProcessDir, processId, true);
         return deps.engine.withFileLock(path.join(directory, '.operation'), async () => {
-            const promotion = { contract: 'conference-source-upgrade-promotion-v1', planSha256: plan.planSha256,
+            const promotion = { ...headerForPlan(plan, 'conference-source-upgrade-promotion', 'retained-original-and-upgraded-members'), planSha256: plan.planSha256,
                 originalProcessId: current.state.processId, sourceImplementationSha256: current.origin,
                 ...(options.preserveOriginalComplete ? { preservedOriginalCompletePaperIds: [...preserved.keys()].sort(),
                     preservedPriorUpgradePaperIds: [...preservedPrior.keys()].sort() } : {}),
@@ -714,8 +765,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
                     ...(priorUpgradeIds.has(id) && !preserved.has(id)
                         ? { preservedPriorUpgradeComplete: true } : {}) }];
             }));
-            const draft = { contract: plan.version === LEGACY_VERSION ? api.LEGACY_CONTRACT : api.CONTRACT,
-                version: plan.version === LEGACY_VERSION ? api.LEGACY_VERSION : api.PROCESS_VERSION, generation: 1, processId,
+            const draft = { ...headerForPlan(plan, 'conference-process'), generation: 1, processId,
                 createdAt: current.state.createdAt, updatedAt: deps.now(), authority: plan.authority,
                 status: 'running', items, aggregate: null, completionReceiptSha256: null, sourceUpgradePromotion: promotion };
             draft.stateSha256 = api.stateDigest(draft); api.assertState(draft);
@@ -734,5 +784,5 @@ async function promoteSourceUpgrade(options, overrides = {}) {
     }, { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, VERSION, LEGACY_CONTRACT, LEGACY_VERSION, assertSourceUpgradePlan, planSourceUpgrade, applySourceUpgrade, promoteSourceUpgrade, promotionProcessId, validateState,
+module.exports = { CONTRACT, upgradeFormat, assertSourceUpgradePlan, planSourceUpgrade, applySourceUpgrade, promoteSourceUpgrade, promotionProcessId, validateState,
     retainedItemSource, retainedLegacySnapshot, repairPolicy, replayRetainedShared };

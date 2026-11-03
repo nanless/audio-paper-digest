@@ -6,7 +6,7 @@ const {
     buildApiReaderGenerationStart,
     stableFingerprint
 } = require('../scripts/deep-analyzer.js');
-const { hasValidApiReaderV3Records } = require('../scripts/analysis-engine.js');
+const { hasValidIntegratedApiReaderRecords } = require('../scripts/analysis-engine.js');
 
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const sourceText = 'This is the same verified paper source used to produce the Reader.';
@@ -66,7 +66,7 @@ function createReaderPaperSample() {
             }
         }
     };
-    assert.equal(hasValidApiReaderV3Records(paper), true, '测试正文必须通过正式校验器');
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true, '测试正文必须通过正式校验器');
     return paper;
 }
 
@@ -149,7 +149,7 @@ test('已签名正文仍有图片标记时拒绝资格，普通图号引文保�
         candidate.apiReaderArticle += `\n\n${marker}`;
         candidate.apiReaderArticleSha256 = sha(candidate.apiReaderArticle);
         candidate.analysisManifest.stages.apiReaderArticle.articleSha256 = candidate.apiReaderArticleSha256;
-        assert.equal(hasValidApiReaderV3Records(candidate), false, marker);
+        assert.equal(hasValidIntegratedApiReaderRecords(candidate), false, marker);
         assert.equal(candidate.sourceSha256, sourceSha256);
         assert.equal(JSON.stringify(candidate.analysisManifest.sourceAcquisition), sourceManifest);
     }
@@ -157,7 +157,7 @@ test('已签名正文仍有图片标记时拒绝资格，普通图号引文保�
     ordinaryQuote.apiReaderArticle += '\n\n原文引用 FIGURE_2 与 Figure 2 都只是普通图号。';
     ordinaryQuote.apiReaderArticleSha256 = sha(ordinaryQuote.apiReaderArticle);
     ordinaryQuote.analysisManifest.stages.apiReaderArticle.articleSha256 = ordinaryQuote.apiReaderArticleSha256;
-    assert.equal(hasValidApiReaderV3Records(ordinaryQuote), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(ordinaryQuote), true);
 });
 
 
@@ -190,7 +190,7 @@ test('修订参考只逆转精确来源图块，保留导读、解释和旧计�
     const paper = createReaderPaperSample();
     const firstFigure = addBoundFigure(paper, 1);
     const secondFigure = addBoundFigure(paper, 2);
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
     const originalPaper = JSON.stringify(paper);
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '只修事实');
     const reference = JSON.parse(seed.initialDraft);
@@ -212,7 +212,7 @@ test('图注被修改但图片资格仍有效时，修订参考必须精确拒�
     addBoundFigure(paper, 1);
     paper.apiReaderArticle = paper.apiReaderArticle.replace('：“原始图注”。*', '：“另一解释”。*');
     refreshBoundSample(paper);
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
     assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修事实'),
         /无法精确重放 Figure 1 注入块/);
 });
@@ -222,7 +222,7 @@ test('重复完整图块先因图片不一一对应而失去资格，不能进�
     const figureSample = addBoundFigure(paper, 1);
     paper.apiReaderArticle += `\n\n${figureSample.block}`;
     refreshBoundSample(paper);
-    assert.equal(hasValidApiReaderV3Records(paper), false);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), false);
     assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修事实'),
         /^Error: 定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。$/);
 });
@@ -250,7 +250,7 @@ test('原始公式只从修订正文逆回标记，TeX 和来源记录仍保留�
     stage.formulaBindingCount = 1;
     stage.sourceBindingsSha256 = paper.apiReaderPlan.sourceBindingsSha256;
     refreshBoundSample(paper);
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '修正事实');
     const reference = JSON.parse(seed.initialDraft);
     assert.ok(reference.article.includes('[[FORMULA_1]]'));
@@ -270,14 +270,14 @@ test('原始公式只从修订正文逆回标记，TeX 和来源记录仍保留�
 test('旧Reader自洽SHA仍不能给残留术语组合标记授予资格', () => {
     const deep = require('../scripts/deep-analyzer');
     const validSample = createReaderPaperSample();
-    assert.equal(hasValidApiReaderV3Records(validSample), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(validSample), true);
     for (const marker of ['[[CONCEPT_BRIDGE_0]]', '[[CONCEPT_BRIDGE_99]]']) {
         const sample = createReaderPaperSample();
         sample.apiReaderArticle += '\n\n' + marker;
         sample.apiReaderArticleSha256 = sha(sample.apiReaderArticle);
         sample.analysisManifest.stages.apiReaderArticle.articleSha256 = sample.apiReaderArticleSha256;
         const original = JSON.stringify(sample);
-        assert.equal(hasValidApiReaderV3Records(sample), false);
+        assert.equal(hasValidIntegratedApiReaderRecords(sample), false);
         assert.equal(JSON.stringify(sample), original);
         assert.equal(deep.findUnassembledApiReaderConceptMarker(sample.apiReaderArticle), marker);
     }

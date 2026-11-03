@@ -9,6 +9,10 @@ struct AggregateImageSlot: Codable, Sendable, Equatable {
 }
 struct AggregateImagePlan: Codable, Sendable, Equatable {
     let contract: String
+    var schemaFingerprint:String?=ClientProtocols.schemaFingerprint(AggregateResources.planContract)
+    func replayHeader(of original:Self)->Self {
+        .init(contract:original.contract,schemaFingerprint:original.schemaFingerprint,descriptor:descriptor,rawHTMLSHA256:rawHTMLSHA256,originalBodySHA256:originalBodySHA256,slots:slots,templateBodyHTML:templateBodyHTML,templateBodySHA256:templateBodySHA256)
+    }
     let descriptor: PublishedAggregate
     let rawHTMLSHA256: String
     let originalBodySHA256: String
@@ -25,6 +29,8 @@ struct AggregateImageRecord: Codable, Sendable, Equatable {
 }
 struct AggregateResourceManifest: Codable, Sendable, Equatable {
     let contract: String
+    var schemaFingerprint:String?=ClientProtocols.schemaFingerprint(AggregateResources.contract)
+    var parserContract:String?=AggregateResources.currentParser(.macos)
     let plan: AggregateImagePlan
     let observedAt: String
     let images: [AggregateImageRecord]
@@ -39,8 +45,47 @@ struct AggregateResourceRender: Sendable {
 }
 
 enum AggregateResources {
-    static let contract = "published-aggregate-image-render-v1"
-    static let renderDirectory = "aggregate-resource-renders-macos-v1"
+    static let contract = "published-aggregate-image-render"
+    static let planContract = "published-aggregate-image-plan"
+    private static let storageFamily="published-aggregate-image-storage"
+    private static let storage=try! ClientProtocols.declaredSchema(storageFamily,storageFamily,ClientProtocols.schemaFingerprint(storageFamily))
+    static let renderDirectory = storage["macos"] as! String
+    static let blobDirectory = storage["blob"] as! String
+    static let importDirectory = storage["importReceipt"] as! String
+    static func currentParser(_ platform:AggregateDocumentFormat.Platform)->String {
+        let schema=try! ClientProtocols.declaredSchema(contract,contract,ClientProtocols.schemaFingerprint(contract))
+        return (schema["parserProfiles"] as! [String:String])[platform.rawValue]!
+    }
+    static func directory(_ platform:AggregateDocumentFormat.Platform,legacy:Bool)throws->String {
+        if legacy { return try ClientProtocols.historicalContract(storageFamily,variant:platform.rawValue) }
+        return storage[platform.rawValue] as! String
+    }
+    static func legacyBlobDirectory()throws->String {try ClientProtocols.historicalContract(storageFamily,variant:"blob")}
+    static func folderContract(legacy:Bool)throws->String {
+        if legacy {return try ClientProtocols.historicalContract(contract,variant:"source-bound-platform-rendering")}
+        return contract
+    }
+    static func validateManifestHeader(_ data:Data,platform:AggregateDocumentFormat.Platform,legacy:Bool)throws {
+        guard let value=try JSONSerialization.jsonObject(with:data) as? [String:Any],
+              ClientProtocols.hasValidHeader(value,contract),value["contract"] as? String == (try folderContract(legacy:legacy)),
+              let plan=value["plan"] as? [String:Any],ClientProtocols.hasValidHeader(plan,planContract),
+              (plan["schemaFingerprint"]==nil)==legacy else {
+            throw AggregateFailure.invalid("图片修订格式与实际保存目录不一致")
+        }
+        let expected:String?
+        if legacy {
+            expected=platform == .macos ? nil : try ClientProtocols.historicalContract("published-aggregate-image-parser-profile",variant:"android")
+        } else {
+            let schema=try ClientProtocols.declaredSchema(value["contract"],contract,value["schemaFingerprint"] as? String)
+            expected=(schema["parserProfiles"] as? [String:String])?[platform.rawValue]
+            try PublishedAggregateReader.require(expected==currentParser(platform),"图片解析声明不受当前实现支持")
+        }
+        if let expected {
+            try PublishedAggregateReader.require(value["parserContract"] as? String==expected,"图片实际平台解析声明不符")
+        } else {
+            try PublishedAggregateReader.require(value["parserContract"]==nil,"历史 Mac 图片修订没有解析声明")
+        }
+    }
     static let maxImageBytes = 16 * 1024 * 1024
     static let maxTotalBytes = 64 * 1024 * 1024
     // Each embedded reference consumes display bytes even when transport and storage deduplicate it.
@@ -68,7 +113,7 @@ enum AggregateResources {
         }
         // This is explicitly a new source-bound body derivation; the immutable v1 body stays unchanged.
         let template=html(sanitizedBody)
-        return .init(contract:contract,descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256,originalBodySHA256:source.sanitizedBodySHA256,slots:slots,templateBodyHTML:template,templateBodySHA256:PublishedAggregateReader.sha(Data(template.utf8)))
+        return .init(contract:planContract,descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256,originalBodySHA256:source.sanitizedBodySHA256,slots:slots,templateBodyHTML:template,templateBodySHA256:PublishedAggregateReader.sha(Data(template.utf8)))
     }
     static func validateReferenceBudget(_ images:[AggregateImageRecord]) throws {
         try PublishedAggregateReader.require(images.count<=128,"汇总图片超过上限")
@@ -80,7 +125,7 @@ enum AggregateResources {
         }
     }
     static func render(source: AggregateDocument,plan: AggregateImagePlan,images: [AggregateImageRecord],assets: [String:AggregateImageBytes]) throws -> String {
-        try PublishedAggregateReader.require(plan.contract==contract&&plan.descriptor==source.descriptor&&plan.rawHTMLSHA256==source.rawHTMLSHA256&&plan.originalBodySHA256==source.sanitizedBodySHA256&&images.map{$0.slot}==plan.slots,"图片清单与原HTML/目录/位置不一致")
+        try PublishedAggregateReader.require(ClientProtocols.hasValidHeader(plan.contract,fingerprint:plan.schemaFingerprint,planContract)&&plan.descriptor==source.descriptor&&plan.rawHTMLSHA256==source.rawHTMLSHA256&&plan.originalBodySHA256==source.sanitizedBodySHA256&&images.map{$0.slot}==plan.slots,"图片清单与原HTML/目录/位置不一致")
         try validateReferenceBudget(images)
         let (document,root)=try fragment(source,plan:plan);defer{withExtendedLifetime(document){}};let nodes=try root.nodes(forXPath:".//img")
         try PublishedAggregateReader.require(nodes.count==images.count&&plan.slots.enumerated().allSatisfy{$0.offset==$0.element.index},"图片位置清单无效")

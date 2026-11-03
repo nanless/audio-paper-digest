@@ -1,0 +1,98 @@
+{
+  "filterPolicies": {
+    "sourcePins": {
+      "scripts/config.js": {
+        "oid": "95b62ed89764571ef1e6c31ca66e5b4b503b10eb",
+        "sha256": "9231b2d5ce9bd868896024fb3546f6e6069b66e1ea62e569ddb9c55dd2dccea5"
+      },
+      "scripts/lib/conference-filter.js": {
+        "oid": "a9efd4ddaa8c28f059bc8a5ea79c60dd9640c505",
+        "sha256": "7cf4ddad4de33de40b16b594a7019585fe1dab2d5f9d8cef8d243c36ddb92615"
+      },
+      "scripts/lib/keyword-prefilter.js": {
+        "oid": "b0f1d1ddc1834350fe20f11266dde735a3a81d3a",
+        "sha256": "86ba121fa00406749f3fa090f4ba17640a212aa7853df5e88c7a4cf5e4777cbd"
+      },
+      "scripts/lib/conference-filter-evidence.js": {
+        "oid": "c1f2c30f30d2fa320cf436554fd072887339d7dc",
+        "sha256": "d0d36bce0d061ea62365d20e90c9d95dbee52e36901ae14dc02cc1cb1cd28194"
+      },
+      "scripts/lib/prompt-text-versions.js": {
+        "oid": "5392eef7a22cd56c8a3e179e3b0e1e2976396f55",
+        "sha256": "9ae89ff0165f46eb117d06565707daf0b509f68f85220a9c91f9c8f293fc2c8d"
+      },
+      "scripts/lib/filter-decision.js": {
+        "oid": "afb94103b27cc1474020ff4e96183c0a727822d5",
+        "sha256": "f69a72229705bd618d71432ad207a1b7748fee9d933acccf29ecd7c8b3687443"
+      },
+      "scripts/conference_extractor.py": {
+        "oid": "312c0f363f0abe6cc632b6fdda4f6f6040de9a3d",
+        "sha256": "96013a39d9a140a7841201eb3b094a0f4f5f0f5e7dd560729775d71663a53ea6"
+      },
+      "scripts/lib/conference-extraction-receipt.js": {
+        "oid": "08cfb95ab875fd5bec24bcfcb6e159f4b5c7d000",
+        "sha256": "5c2a191d57d840ec601547d2700f89163bb78463b34910ea23c29ba7731e6ac5"
+      },
+      "scripts/lib/official-conference-acquisition.js": {
+        "oid": "aec13fad66c325d0383681c0a757e5b9a3b02343",
+        "sha256": "bdef7d66f934a1f4094b0453d10459e839e56f7e636132de0e213f654f14e7e7"
+      },
+      "scripts/icmc-proceedings.py": {
+        "oid": "57aae2b0f7351e6e3141d73995ce3e65e7fc234e",
+        "sha256": "a4ad5272bd3831f2f74ef4667cb47c706da8a0922dd9cd5668a2635b85d3a1cf"
+      },
+      "scripts/lib/arxiv-source-authority.js": {
+        "oid": "83a87a11a0b7f537e92df9808e0ca37036292c23",
+        "sha256": "7dc3256ca7005c0d8ee53f2b76cdc12b99f146b80ed29617a25464699585cb28"
+      },
+      "scripts/lib/paper-identity.js": {
+        "oid": "4d04553ee413fdd367a5f1a58cefe62d41a39c6b",
+        "sha256": "9b3112b248c0e7f572564e004ef2b994cb44dfafdbf14e58242caa706a1ca080"
+      }
+    },
+    "statements": [
+      {
+        "name": "before-stable-format",
+        "statement": "{\"prompt\":\"prompts/filter.md:first-fenced-block\",\"parser\":\"filter-decision-contract-v3\",\"decisionContractVersion\":3,\"keywordPrefilterVersion\":\"speech-audio-music-v6\",\"coreConferenceFallbackVersion\":\"core-audio-conferences-2026-v1\",\"coreAudioConferenceLabels\":{\"chime-2026\":\"CHiME Speech Separation and Recognition\",\"dafx-2026\":\"Digital Audio Effects\",\"icmc-2026\":\"International Computer Music Conference\",\"interspeech-2026\":\"Interspeech\",\"iwslt-2026\":\"Spoken Language Translation\",\"jep-2026\":\"Speech Studies (Journées d’Études sur la Parole)\",\"nime-2026\":\"New Interfaces for Musical Expression\",\"odyssey-2026\":\"Speaker and Language Recognition\",\"speechprosody-2026\":\"Speech Prosody\"},\"keywordPrefilterEnabled\":true,\"batchSize\":3,\"timeoutMs\":60000,\"maxRetries\":5,\"delayBetweenBatchesMs\":2000,\"temperature\":0.3,\"maxTokens\":1000,\"evidenceCatalogContract\":\"conference-filter-evidence-catalog-v1\",\"evidenceLocatorContract\":\"abstract-locator-v1\"}",
+        "sha256": "f38273283b60e164c0f8a0d992ca1eba59a0a991ac23ba58aadc0ac0f3689489"
+      },
+      {
+        "name": "earlier-keyword-vocabulary",
+        "statement": "{\"prompt\":\"prompts/filter.md:first-fenced-block\",\"parser\":\"filter-decision-contract-v3\",\"decisionContractVersion\":3,\"keywordPrefilterVersion\":\"speech-audio-music-v4\",\"coreConferenceFallbackVersion\":\"core-audio-conferences-2026-v1\",\"coreAudioConferenceLabels\":{\"chime-2026\":\"CHiME Speech Separation and Recognition\",\"dafx-2026\":\"Digital Audio Effects\",\"icmc-2026\":\"International Computer Music Conference\",\"interspeech-2026\":\"Interspeech\",\"iwslt-2026\":\"Spoken Language Translation\",\"jep-2026\":\"Speech Studies (Journées d’Études sur la Parole)\",\"nime-2026\":\"New Interfaces for Musical Expression\",\"odyssey-2026\":\"Speaker and Language Recognition\",\"speechprosody-2026\":\"Speech Prosody\"},\"keywordPrefilterEnabled\":true,\"batchSize\":3,\"timeoutMs\":60000,\"maxRetries\":5,\"delayBetweenBatchesMs\":2000,\"temperature\":0.3,\"maxTokens\":1000,\"evidenceCatalogContract\":\"conference-filter-evidence-catalog-v1\",\"evidenceLocatorContract\":\"abstract-locator-v1\"}",
+        "sha256": "59c0569284e5c9bb272f7f483d18778de428733897d8ceaccfeb2ccfa80a6452"
+      },
+      {
+        "name": "preceding-keyword-vocabulary",
+        "statement": "{\"prompt\":\"prompts/filter.md:first-fenced-block\",\"parser\":\"filter-decision-contract-v3\",\"decisionContractVersion\":3,\"keywordPrefilterVersion\":\"speech-audio-music-v5\",\"coreConferenceFallbackVersion\":\"core-audio-conferences-2026-v1\",\"coreAudioConferenceLabels\":{\"chime-2026\":\"CHiME Speech Separation and Recognition\",\"dafx-2026\":\"Digital Audio Effects\",\"icmc-2026\":\"International Computer Music Conference\",\"interspeech-2026\":\"Interspeech\",\"iwslt-2026\":\"Spoken Language Translation\",\"jep-2026\":\"Speech Studies (Journées d’Études sur la Parole)\",\"nime-2026\":\"New Interfaces for Musical Expression\",\"odyssey-2026\":\"Speaker and Language Recognition\",\"speechprosody-2026\":\"Speech Prosody\"},\"keywordPrefilterEnabled\":true,\"batchSize\":3,\"timeoutMs\":60000,\"maxRetries\":5,\"delayBetweenBatchesMs\":2000,\"temperature\":0.3,\"maxTokens\":1000,\"evidenceCatalogContract\":\"conference-filter-evidence-catalog-v1\",\"evidenceLocatorContract\":\"abstract-locator-v1\"}",
+        "sha256": "2378ac4a8301b20afb4cb477cad073ffecb4080903db15b85eefdd6496432f84"
+      }
+    ],
+    "recordedHashOnly": [
+      "382af4406aaf0f4c8e49f22cdacb9ab215c4ab0563903b49930cb3ed8cf9e096",
+      "11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275"
+    ],
+    "note": "Original policy declarations and accepted historical hash values. No credential, response, failure, counter or cost is rewritten; hash-only entries do not invent missing original statements."
+  },
+  "keywordMetadataReplay": {
+    "policyName": "before-stable-format",
+    "implementationPath": "scripts/lib/keyword-prefilter.js",
+    "implementationSha256": "22029d8c3d50222510a3dee4a8c99f0824e775d06254740425ec5705dab07513",
+    "changes": [
+      "metadata field version replaced by profile",
+      "profile and implementation SHA exported instead of numbered version",
+      "classification expressions, constants, lists and control flow unchanged"
+    ]
+  },
+  "abstractLocatorReplay": {
+    "statement": "{\"defaultProfile\":\"default-v1\",\"aaaiProfile\":\"aaai-2026-bare-introduction-v1\",\"profiles\":{\"default-v1\":{\"rules\":{\"pages\":2,\"start\":\"^\\\\s*(?:abstract|摘要)\\\\s*(?:[:—–-]\\\\s*)?\",\"end\":\"^\\\\s*(?:keywords?|index terms?|ccs concepts?|(?:1|i)[.]?\\\\s+introduction)\\\\s*(?:[:—–-]\\\\s*)?\",\"minimumCharacters\":80,\"maximumCharacters\":12000,\"normalization\":\"exact-utf8-slice-trim-v1\"},\"implementationSha256\":\"aea85b736cfbfc8a5758df6451a231b49a5d1e534a0015ea22952ef570c1d08c\"},\"aaai-2026-bare-introduction-v1\":{\"rules\":{\"pages\":2,\"start\":\"^\\\\s*(?:abstract|摘要)\\\\s*(?:[:—–-]\\\\s*)?\",\"end\":\"(?:^\\\\s*(?:keywords?|index terms?|ccs concepts?)\\\\s*(?:[:—–-]\\\\s*)?)|(?:^\\\\s*(?:(?:1|i)[.]?\\\\s+)?introduction\\\\s*$)\",\"minimumCharacters\":80,\"maximumCharacters\":12000,\"normalization\":\"exact-utf8-slice-trim-v1\",\"bareIntroduction\":\"^\\\\s*introduction\\\\s*$\",\"bareIntroductionMaximumMatches\":1},\"implementationSha256\":\"6304bd95dfb96b9683c6d6b7811a3951e30842ccca549b593a22b4863a69e331\"}}}",
+    "sha256": "aee0ea0d0675b01871bff39c65486892503d527f6564b827da0008c16d812e2d"
+  },
+  "acquisitionParserReplay": {
+    "files": {
+      "scripts/lib/official-conference-acquisition.js": "7e8ddec3e1e1a1e7c9eda1de0883ca3b159d19b03270198abbc98e767ad4401e",
+      "scripts/icmc-proceedings.py": "cf5e41213b0dd54bdf2ee065159d437d2904cdec4da843ca4dd646a4cf463f00",
+      "package-lock.json": "3374129530a66f407987ed4af7d4155dbd57859d52a4f82b47a1a5e110f562c4"
+    },
+    "originalSourceSha256": "bdef7d66f934a1f4094b0453d10459e839e56f7e636132de0e213f654f14e7e7"
+  }
+}

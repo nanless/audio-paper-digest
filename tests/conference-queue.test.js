@@ -7,6 +7,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const queue = require('../scripts/lib/conference-queue.js');
+const codec = require('../scripts/lib/protocol-codec');
+const header = name => codec.recordHeader(name, name);
 const processApi = require('../scripts/lib/conference-process.js');
 const cli = require('../scripts/conference-queue.js');
 
@@ -18,7 +20,7 @@ const UUIDS = [
 ];
 
 function plan(count = 2) {
-    return queue.normalizePlan({ contract: queue.PLAN_CONTRACT, version: 1, conferences: Array.from({ length: count }, (_, index) => ({
+    return queue.normalizePlan({ ...header(queue.PLAN_CONTRACT), conferences: Array.from({ length: count }, (_, index) => ({
         conferenceId: `odyssey-${2026 + index}`,
         catalogName: `catalog-${index}.json`, reportName: `report-${index}.json`, filterId: UUIDS[index], concurrency: 1
     })) });
@@ -32,36 +34,37 @@ function fixture(t, count = 2) {
     return { root, files, plan: plan(count), now: () => `2026-09-12T00:00:${String(tick++).padStart(2, '0')}.000Z` };
 }
 
-function publisherReceipts(entry, processId) {
-    const generationBody = { contract: 'conference-blog-generation-v1', version: 2,
+function publisherReceipts(entry, processId, current = false) {
+    const format = (name, original) => current ? header(name) : original;
+    const generationBody = { ...format('conference-blog-generation', { contract: 'conference-blog-generation-v1', version: 2 }),
         conferenceId: entry.conferenceId, processId, completionReceiptSha256: sha(`completion:${processId}`) };
     const generation = { ...generationBody, generationSha256: sha(generationBody) };
-    const reviewBody = { contract: 'conference-blog-review-v1', version: 2,
+    const reviewBody = { ...format('conference-blog-review', { contract: 'conference-blog-review-v1', version: 2 }),
         conferenceId: entry.conferenceId, processId, generationSha256: generation.generationSha256,
-        hugo: { status: 'passed', contract: 'conference-publication-mechanical-gate-v1' } };
+        hugo: { status: 'passed', ...format('conference-publication-mechanical-gate', { contract: 'conference-publication-mechanical-gate-v1', version: 'hugo v0.152.0' }) } };
     const review = { ...reviewBody, reviewSha256: sha(reviewBody) };
-    const publishBody = { contract: 'conference-blog-publish-v1', version: 2,
+    const publishBody = { ...format('conference-blog-publish', { contract: 'conference-blog-publish-v1', version: 2 }),
         conferenceId: entry.conferenceId, processId, generationSha256: generation.generationSha256,
         reviewSha256: review.reviewSha256, publicationCommit: 'a'.repeat(40), remoteVerifiedOid: 'a'.repeat(40),
         imagePublicationCommit: 'a'.repeat(40), urlAcceptance: {
-            status: 'passed', contract: 'conference-publication-mechanical-gate-v1', checks: [] } };
+            status: 'passed', ...format('conference-publication-mechanical-gate', { contract: 'conference-publication-mechanical-gate-v1' }), checks: [] } };
     const publish = { ...publishBody, publishSha256: sha(publishBody) };
     return { generation, review, publish };
 }
 
 function legacyVerification(publishSha256) {
     const body = { contract: 'conference-legacy-publication-verification-v2', publishSha256,
-        hugo: { status: 'passed', contract: 'conference-publication-mechanical-gate-v1' },
+        hugo: { status: 'passed', contract: 'conference-publication-mechanical-gate-v1', version: 'hugo v0.152.0' },
         urlAcceptance: { status: 'passed', contract: 'conference-publication-mechanical-gate-v1' } };
     return { ...body, verificationSha256: sha(body) };
 }
 
-function publicationState(entry, processId, legacy = false) {
-    return { contract: 'conference-publication-status-v1', conferenceId: entry.conferenceId, processId,
+function publicationState(entry, processId, legacy = false, current = false) {
+    return { ...(current ? header('conference-publication-status') : { contract: 'conference-publication-status-v1' }), conferenceId: entry.conferenceId, processId,
         status: 'complete', complete: true, processingRequired: false, nextAction: null,
         completionScope: 'mechanical-html+remote-oid+online-urls',
         layers: { htmlMechanical: 'passed', remoteOid: 'passed', onlineUrls: 'passed',
-            semanticReview: 'not_performed', visualInspection: 'not_performed', mathBrowserExecution: 'not_performed' },
+            semanticReview: current && !legacy ? 'passed' : 'not_performed', visualInspection: 'not_performed', mathBrowserExecution: 'not_performed' },
         ...(legacy ? { legacyReverified: true } : {}) };
 }
 
@@ -101,10 +104,10 @@ function dependencies(f, events, hooks = {}) {
             events.push(`${action}:${entry.conferenceId}`);
             if (hooks[action]) return hooks[action](entry);
             const processId = processIdFor(entry);
-            const receipts = publisherReceipts(entry, processId);
+            const receipts = publisherReceipts(entry, processId, hooks.current);
             const receiptKey = { generate: 'generation', review: 'review', push: 'publish' }[action];
             if (action === 'push') writePublishReceipt(f, entry, processId, receipts.publish);
-            if (action === 'verify') return publicationState(entry, processId);
+            if (action === 'verify') return publicationState(entry, processId, false, hooks.current);
             return { status: `${action}d`, [`${receiptKey === 'generation' ? 'generation' : receiptKey}Receipt`]: receipts[receiptKey] };
         };
     }
@@ -153,6 +156,18 @@ test('按顺序关闭每个会议，已发布的条目不会重跑', async t => 
     assert.equal(events.includes('generate:odyssey-2026'), false);
     assert.equal(events.includes('process:apply:odyssey-2026'), false);
     assert.deepEqual(second.entries.map(entry => entry.status), ['published', 'published']);
+});
+
+test('当前发布凭证要求实际网页验收和已完成语义审查', async t => {
+    const f = fixture(t, 1);
+    const result = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, dependencies(f, [], { current: true }));
+    assert.equal(result.status, 'complete');
+    const entry = f.plan.conferences[0], processId = processIdFor(entry);
+    const receipt = publisherReceipts(entry, processId, true).publish;
+    const status = publicationState(entry, processId, false, true);
+    assert.throws(() => queue.validatePublicationVerificationResult({ ...status, layers: {
+        ...status.layers, semanticReview: 'not_performed'
+    } }, entry, processId, false, receipt), /完整的 publication_state/);
 });
 
 test('标签审查队列由队列本身上报，不会报成笼统的流程失败', async t => {

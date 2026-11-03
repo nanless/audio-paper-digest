@@ -2,7 +2,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const CONTRACT = 'reader-explicit-parent-recovery-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'reader-explicit-parent-recovery';
+const PLAN = 'reader-parent-recovery-plan';
+const isParentGrant = value => codec.hasValidHeader(value, CONTRACT);
 const CHAIN_BUDGET = Object.freeze({ maxAdditionalRounds: 3, maxAdditionalFullRounds: 1,
     maxAdditionalPhysicalRequests: 18, maxAdditionalReservedOutputTokens: 320000 });
 const BUDGETS = Object.freeze({
@@ -60,7 +63,8 @@ function fullReason(payload) {
         const content = fence ? fence[1] : first >= 0 && last > first ? raw.slice(first, last + 1) : raw;
         extracted = JSON.parse(content);
     } catch (_) {}
-    if (extracted?.version === 3 && Array.isArray(extracted.sections) && extracted.sections.length) return null;
+    if (require('./reader-record-format').isIntegratedDraft(extracted)
+        && Array.isArray(extracted.sections) && extracted.sections.length) return null;
     let value;
     try { value = JSON.parse(raw); } catch (_) {
         if (payload.lastContentError?.code === 'MODEL_OUTPUT_INCOMPLETE' && payload.lastContentError.requestKind === 'full') {
@@ -71,12 +75,13 @@ function fullReason(payload) {
         }
         return null;
     }
-    if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 3
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || !require('./reader-record-format').isIntegratedDraft(value)
         || typeof value.readerTitle !== 'string' || typeof value.oneSentenceThesis !== 'string'
         || Object.hasOwn(value, 'sections')) return null;
     if (!(payload.issues || []).some(issue => /读者文章顶层 缺少字段:/.test(issue.message || '') && /sections/.test(issue.message))) return null;
     return { code: 'missing_sections_full_response', rawDraftSha256: sha(raw), missingFields:
-        ['version', 'readerTitle', 'oneSentenceThesis', 'sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']
+        require('./reader-record-format').draftFields(value)
             .filter(key => !Object.hasOwn(value, key)) };
 }
 function assertShape(grant) {
@@ -90,7 +95,7 @@ function assertShape(grant) {
 function assertLedger(receipt) {
     const retry = useModule('./explicit-reader-retry-round');
     retry.assertGrant(receipt.grant);
-    if (receipt.status !== 'active' || !Array.isArray(receipt.requests)
+    if (!retry.isBaseRound(receipt) || receipt.status !== 'active' || !Array.isArray(receipt.requests)
         || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0
         || receipt.physicalRequests > receipt.grant.maxPhysicalRequests
         || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0
@@ -99,8 +104,8 @@ function assertLedger(receipt) {
         || receipt.requests.some(request => !['apiReaderArticle', 'apiReaderRepair'].includes(request.stage)
             || !Number.isSafeInteger(request.tokens) || request.tokens < 1 || !Number.isFinite(Date.parse(request.at)))
         || receipt.requests.reduce((sum, request) => sum + request.tokens, 0) !== receipt.reservedOutputTokens
-        || ((receipt.grant.contract === retry.LOCAL_REPAIR_CONTRACT
-            || receipt.grant.contract === CONTRACT && receipt.grant.mode === 'local')
+        || ((retry.isLocalGrant(receipt.grant)
+            || isParentGrant(receipt.grant) && receipt.grant.mode === 'local')
             && receipt.requests.some(request => request.stage !== 'apiReaderRepair'))) fail('父恢复实际请求账不完整或越界');
 }
 function ancestry(directory, grant) {
@@ -120,16 +125,16 @@ function ancestry(directory, grant) {
             || parent.grant.paperId !== grant.paperId || parent.grant.runId !== grant.runId
             || parent.grant.batchDate !== grant.batchDate || !equal(parent.grant.sourceFiles, grant.sourceFiles)) fail('父恢复回执链的身份、来源或 SHA 不一致');
         chain.push(parent);
-        if (parent.grant.contract === retry.CONTRACT) break;
-        if (![retry.LOCAL_REPAIR_CONTRACT, CONTRACT].includes(parent.grant.contract)) fail('父恢复祖先协议不合法');
+        if (retry.isBaseRound(parent.grant)) break;
+        if (!retry.isLocalGrant(parent.grant) && !isParentGrant(parent.grant)) fail('父恢复祖先协议不合法');
         child = parent.grant;
         if (chain.length > CHAIN_BUDGET.maxAdditionalRounds) fail('父恢复链超过明确追加上限');
     }
     const base = chain.at(-1);
-    if (!base || base.grant.contract !== retry.CONTRACT || base.grant.roundId !== grant.chainRootRoundId
+    if (!base || !retry.isBaseRound(base.grant) || base.grant.roundId !== grant.chainRootRoundId
         || grant.chainDepth !== chain.length) fail('父恢复必须终止于同一原付费轮并声明真实深度');
     const additions = chain.slice(0, -1);
-    const fullRounds = additions.filter(receipt => receipt.grant.contract === CONTRACT && receipt.grant.mode === 'full').length;
+    const fullRounds = additions.filter(receipt => isParentGrant(receipt.grant) && receipt.grant.mode === 'full').length;
     const allocatedTokens = additions.reduce((sum, receipt) => sum + receipt.grant.maxReservedOutputTokens, 0) + grant.maxReservedOutputTokens;
     const allocatedRequests = additions.reduce((sum, receipt) => sum + receipt.grant.maxPhysicalRequests, 0) + grant.maxPhysicalRequests;
     if (additions.length + 1 > CHAIN_BUDGET.maxAdditionalRounds
@@ -147,7 +152,7 @@ function ancestry(directory, grant) {
     return chain;
 }
 function assertParent(directory, grant, payload, identity) {
-    if (grant.contract !== CONTRACT) return;
+    if (!isParentGrant(grant)) return;
     assertShape(grant);
     const chain = ancestry(directory, grant);
     const parent = chain[0];
@@ -245,8 +250,8 @@ function planParentRecoveryInternal({ directory, identity, paper, plan, mode, ro
     }
     let chainRootRoundId = parent.value.grant.roundId;
     let chainDepth = 1;
-    if (parent.value.grant.contract === retry.LOCAL_REPAIR_CONTRACT) { chainRootRoundId = parent.value.grant.parentRoundId; chainDepth = 2; }
-    if (parent.value.grant.contract === CONTRACT) { chainRootRoundId = parent.value.grant.chainRootRoundId; chainDepth = parent.value.grant.chainDepth + 1; }
+    if (retry.isLocalGrant(parent.value.grant)) { chainRootRoundId = parent.value.grant.parentRoundId; chainDepth = 2; }
+    if (isParentGrant(parent.value.grant)) { chainRootRoundId = parent.value.grant.chainRootRoundId; chainDepth = parent.value.grant.chainDepth + 1; }
     if (!daily.isPaperBoundToPlan(paper, plan)) fail('父恢复论文未绑定原封存来源');
     const details = daily.readDailyFreshSource(plan, paper);
     const canonical = String(paper.arxivId).replace(/v\d+$/, '');
@@ -257,7 +262,7 @@ function planParentRecoveryInternal({ directory, identity, paper, plan, mode, ro
     if (!equal(current.value.payload, payload) || !equal(current.value.identity, identity)) fail('规划期间当前失败记录发生变化');
     const draft = repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft);
     if (mode === 'full' && !fullReason(payload)) fail('有完整可修稿或原因不明，不能规划完整再生');
-    const grant = { contract: CONTRACT, mode, batchDate: plan.batchDate, runId: plan.runId, paperId: canonical,
+    const grant = { ...codec.recordHeader(CONTRACT, CONTRACT), mode, batchDate: plan.batchDate, runId: plan.runId, paperId: canonical,
         roundId, parentRoundId: payload.explicitReaderRetryRound.roundId, parentReceiptSha256: sha(parent.bytes),
         chainRootRoundId, chainDepth, chainBudget: { ...CHAIN_BUDGET },
         originalIdentitySha256: repair.hashDraft(identity), identitySha256: repair.hashDraft(identity),
@@ -288,7 +293,7 @@ function planParentRecoveryManifest(requests) {
             budget.priorReservedOutputTokens += receipt.reservedOutputTokens;
         }
     });
-    return { contract: 'reader-parent-recovery-plan-v1', batchDate: rounds[0].batchDate,
+    return { ...codec.recordHeader(PLAN, PLAN), batchDate: rounds[0].batchDate,
         runId: rounds[0].runId, rounds, budget, chainBudget: { ...CHAIN_BUDGET }, installs: 0, modelRequests: 0 };
 }
 module.exports = { CONTRACT, CHAIN_BUDGET, BUDGETS, fullReason, assertShape, assertParent,

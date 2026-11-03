@@ -4,6 +4,7 @@
 同时输出旧标签的七种处理方式，保留原标签和状态列。
 """
 
+from tag_catalog import tag_catalog_identity, catalog_header
 import argparse
 import collections
 import csv
@@ -501,10 +502,10 @@ def _build_preview_locked(blog_repo, output, tag_catalog_path=None):
         'coverageMeaning': 'literal_registry_mapping_not_semantic_accuracy'
     })
     summary.update(disposition_summary(dispositions))
-    index = {'version': VERSION, 'tagCatalogVersion': tag_catalog['version'], 'registrySha256': tag_catalog['registrySha256'],
+    index = {'version': VERSION, 'tagCatalogVersion': tag_catalog_identity(tag_catalog), 'registrySha256': tag_catalog['registrySha256'],
              'source': blog_input_snapshot, 'summary': summary, 'facets': tag_catalog['facets'],
              'concepts': tag_catalog['concepts'], 'papers': papers}
-    report = {'version': REPORT_VERSION, 'tagCatalogVersion': tag_catalog['version'],
+    report = {'version': REPORT_VERSION, 'tagCatalogVersion': tag_catalog_identity(tag_catalog),
               'registrySha256': tag_catalog['registrySha256'], 'source': blog_input_snapshot, 'summary': summary,
               'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionRule': PENDING_RULE,
               'note': '本报告只统计标签名称与词表的字面对照结果，不代表语义分类正确。未取得论文 ID 的记录也不能证明彼此属于不同论文。',
@@ -533,7 +534,7 @@ def _build_preview_locked(blog_repo, output, tag_catalog_path=None):
                      for row in dispositions)
     report_text = json.dumps(report, ensure_ascii=False, indent=2) + '\n'
     csv_output = csv_text.getvalue()
-    preview_file_manifest = {'version': BUNDLE_VERSION, 'tagCatalogVersion': tag_catalog['version'],
+    preview_file_manifest = {'version': BUNDLE_VERSION, 'tagCatalogVersion': tag_catalog_identity(tag_catalog),
               'registrySha256': tag_catalog['registrySha256'], 'source': blog_input_snapshot,
               'files': {'index.json': sha256(preview_index_json.encode('utf-8')),
                         'migration-report.json': sha256(report_text.encode('utf-8')),

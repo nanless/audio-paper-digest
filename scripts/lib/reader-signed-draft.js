@@ -1,7 +1,8 @@
 'use strict';
 
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const crypto = require('node:crypto');
-const { hasValidApiReaderV3Records } = require('../analysis-engine.js');
+const { hasValidIntegratedApiReaderRecords } = require('../analysis-engine.js');
 const { stableFingerprint } = require('../deep-analyzer.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
 const CONTRACT = 'reader-signed-draft-roundtrip-v1';
@@ -18,13 +19,13 @@ const fail = message => {
 // 只能返回已有签名输出的某种合法精确输入表示。
 function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId }) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runId || '')
-        || paper?.latestAnalysisAttemptError || !hasValidApiReaderV3Records(paper)) fail('invalid signed parent or run');
+        || paper?.latestAnalysisAttemptError || !hasValidIntegratedApiReaderRecords(paper)) fail('invalid signed parent or run');
     const id = paper.arxivId || paper.paper_id;
     const { freshSourceDescriptor: descriptor, ...sourceSnapshot } = sourceDetails || {};
     const artifacts = sourceDetails?.structuredArtifacts;
     const { payloadSha256, ...artifactBody } = artifacts || {};
     const analysisSourceRecord = paper.freshRewriteProvenance;
-    if (!descriptor || descriptor.version !== 1 || descriptor.contract !== 'fresh-source-cache-v1'
+    if (!require('./daily-source-format').isOriginalCacheDescriptor(descriptor)
         || descriptor.runId !== runId || descriptor.paperId !== id
         || !validSha(descriptor.sourceSnapshotSha256)
         || sha(JSON.stringify(sourceSnapshot)) !== descriptor.sourceSnapshotSha256
@@ -33,7 +34,7 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
             && sha(JSON.stringify(artifactBody)) !== payloadSha256)
         || payloadSha256 !== descriptor.structuredArtifactsSha256
         || artifacts.flattenedTextSha256 !== descriptor.sourceSha256
-        || analysisSourceRecord?.contract !== 'fresh-source-analysis-v1' || analysisSourceRecord.runId !== runId
+        || !isFreshSourceProvenance(analysisSourceRecord) || analysisSourceRecord.runId !== runId
         || analysisSourceRecord.sourceOnly !== true || analysisSourceRecord.oldGeneratedTextIncluded !== false
         || analysisSourceRecord.sourceSha256 !== descriptor.sourceSha256
         || analysisSourceRecord.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256

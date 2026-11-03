@@ -11,7 +11,7 @@ const { pageBody } = require('../../scripts/lib/historical-direct-tag-supplement
 const ORIGINAL_SHA = '71810112b2880dc19d05d96a7838cd08ccd61af69993e1d3a6424dad0e56166f';
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const filename = path.resolve(__dirname, '../../scripts/lib/historical-source-identity-supplement.js');
-const originalFile = path.resolve(__dirname, '../fixtures/historical-source-identity-v1-source.txt');
+const originalFile = path.resolve(__dirname, '../fixtures/historical-source-identity-original-source.txt');
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'identity-original-'));

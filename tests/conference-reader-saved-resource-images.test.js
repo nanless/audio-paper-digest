@@ -118,7 +118,7 @@ for(const count of [3,4])test(`${count}-image real saved issuer preserves before
  const originalRequire=c.require,events=[];
  c.require=name=>name==='./analysis-stop-control'?{withModelRequestsForbidden:async fn=>{events.push('forbid-model');return fn()}}:
   name==='../deep-analyzer'?{...originalRequire(name),prepareConferenceReaderSavedRequestInput:async()=>{events.push('native-original-body-proof');return f.native}}:
-  name==='../analysis-engine'?{hasValidApiReaderV3Records:()=>{events.push('full-Reader');return true},isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>{events.push('full-whole');return true}}:
+  name==='../analysis-engine'?{hasValidIntegratedApiReaderRecords:()=>{events.push('full-Reader');return true},isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>{events.push('full-whole');return true}}:
   name==='./conference-postprocess'?{readOriginalTagProof:()=>({rules:{fixture:true}})}:originalRequire(name);
  c.replaySavedNeutralReaderUpstream=()=>({paper:structuredClone(f.paper),projection:null});
  c.readVerifiedReaderScientificParent=paper=>{events.push('scientific-parent');return true};c.assertReaderOutput=()=>events.push('actual-output-protection');

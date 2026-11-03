@@ -1,0 +1,97 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-published-record-archive",
+      "currentVariant": "verified-local-published-originals",
+      "currentSchema": {
+        "fields": [
+          "status"
+        ],
+        "verifiedFields": [
+          "snapshotID",
+          "manifestSHA256",
+          "manifestBytes",
+          "manifestRawBase64",
+          "records"
+        ],
+        "unavailableFields": [
+          "message",
+          "legacyOriginalSHA256",
+          "legacyOriginalBytes"
+        ],
+        "scope": "original-local-site-manifest-and-exact-shards-no-new-source-authority"
+      },
+      "historical": [
+        {
+          "tag": "android-published-record-archive-v1",
+          "variant": "verified-local-published-originals"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-portable-research",
+      "currentVariant": "original-model-and-reading-materials",
+      "currentSchema": {
+        "fields": [
+          "paper",
+          "article",
+          "sessions",
+          "notice"
+        ],
+        "optional": [
+          "note",
+          "annotations",
+          "exportedAt",
+          "historicalReference"
+        ],
+        "scope": "carry-original-bytes-and-original-usage-no-cross-platform-adoption"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-portable-research-v1",
+          "variant": "original-model-and-reading-materials"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-source-archive",
+      "currentVariant": "source-and-citation-projection",
+      "currentSchema": {
+        "fields": [
+          "paper",
+          "citation",
+          "publishedRecords",
+          "pdfReceipt",
+          "publishedMetadata",
+          "articleRevisionSHA256",
+          "notices"
+        ],
+        "scope": "archived-actual-source-records-with-explicit-unavailable-status"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-source-archive-v1",
+          "variant": "source-and-citation-projection"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-notes-archive",
+      "currentVariant": "original-local-notes-and-annotations",
+      "currentSchema": {
+        "fields": [
+          "paperID",
+          "note",
+          "annotations"
+        ],
+        "scope": "explicit-selected-local-materials"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-notes-archive-v1",
+          "variant": "original-local-notes-and-annotations"
+        }
+      ]
+    }
+  ]
+}

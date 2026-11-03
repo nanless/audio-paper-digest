@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const Config = require('../config.js');
+const formats = require('./protocol-codec');
 const { writeFileAtomic } = require('../utils.js');
 
 // Operational diagnostics cannot certify content, release budget or authorize push.
@@ -11,7 +12,7 @@ function writeAnalysisBatchReport(report) {
     }
     const filePath = path.join(Config.FILES.analysisBatchReportsDir, `${report.runId}.json`);
     writeFileAtomic(filePath, JSON.stringify({ ...report,
-        contract: 'analysis-batch-diagnostics-v1', diagnosticOnly: true,
+        ...formats.recordHeader('analysis-batch-diagnostics', 'analysis-batch-diagnostics'), diagnosticOnly: true,
         newApiRequestsAuthorized: false, updatedAt: new Date().toISOString()
     }, null, 2), { mode: 0o600 });
     return filePath;

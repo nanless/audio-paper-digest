@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.Normalizer
@@ -9,8 +10,15 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatterBuilder
 import java.util.UUID
 
-/** Optional schema-1 metadata. Membership always comes from the original favorites array. */
+/** Optional personal-library metadata. Membership always comes from the original favorites array. */
 object FavoriteCollections {
+    private const val family="paperdigest-favorite-collections"
+    private fun knownHeader(value:JSONObject)=ClientProtocols.hasValidHeader(value,family,if(value.has("version")) "version" else "contract")
+    private fun opaqueHistoricalFuture(value:JSONObject):Boolean {
+        if(!value.has("version"))return false
+        return integer(value.opt("version"),"收藏分类版本")>1&&
+            listOf("contract","schemaFingerprint","schemaVersion","policyVersion","__proto__").none(value::has)
+    }
     const val KEY="favoriteCollections"
     const val MAX_FOLDERS=200
     private val uuid=Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -51,9 +59,9 @@ object FavoriteCollections {
     fun validateOptional(personal:JSONObject) {
         if(!personal.has(KEY))return
         val metadata=personal.opt(KEY) as? JSONObject?:throw IllegalArgumentException("收藏分类资料无效")
-        val version=integer(metadata.opt("version"),"收藏分类版本")
-        require(version>=1) { "收藏分类版本无效" }
-        if(version>1)return // A newer client owns this block; unrelated schema-1 edits remain possible.
+        require(!personal.has("schema")||metadata.has("version")){"原格式研究目录不能混入新格式收藏分类"}
+        if(opaqueHistoricalFuture(metadata))return // Existing unknown numeric shapes remain read-only.
+        require(knownHeader(metadata)) { "收藏分类版本无效" }
         integer(metadata.opt("revision"),"收藏分类修订")
         val folders=metadata.opt("folders") as? JSONArray?:throw IllegalArgumentException("收藏分类目录无效")
         val items=metadata.opt("items") as? JSONObject?:throw IllegalArgumentException("收藏分类条目无效")
@@ -78,7 +86,7 @@ object FavoriteCollections {
     fun view(personal:JSONObject):View {
         validateOptional(personal)
         val metadata=personal.optJSONObject(KEY)?:return View(0,emptyList(),emptyMap(),false)
-        if(integer(metadata.opt("version"),"收藏分类版本")>1)return View(0,emptyList(),emptyMap(),true)
+        if(!knownHeader(metadata))return View(0,emptyList(),emptyMap(),true)
         val favorites=personal.optJSONArray("favorites")?.let(::strings)?.toSet().orEmpty()
         val folders=metadata.getJSONArray("folders").objects().map { Folder(it.getString("id"),it.getString("name"),it.getString("createdAt")) }
         val items=metadata.getJSONObject("items")
@@ -89,9 +97,12 @@ object FavoriteCollections {
     private fun editable(personal:JSONObject):JSONObject {
         validateOptional(personal)
         val existing=personal.optJSONObject(KEY)
-        if(existing!=null&&integer(existing.opt("version"),"收藏分类版本")>1)
+        if(existing!=null&&!knownHeader(existing))
             throw AppFailure("upgrade","收藏分类由更新版本创建；请升级应用后编辑，当前收藏仍可阅读。")
-        return existing?:JSONObject().put("version",1).put("revision",0).put("folders",JSONArray()).put("items",JSONObject())
+        if(existing!=null)return existing
+        val header=if(!personal.has("schema")&&PersonalStore.validPersonalHeader(personal))ClientProtocols.record(family)
+        else ClientProtocols.historicalHeader(family,"optional-folders-with-flat-membership",null)
+        return header.put("revision",0).put("folders",JSONArray()).put("items",JSONObject())
     }
     private fun changed(personal:JSONObject,metadata:JSONObject):Int {
         val revision=integer(metadata.opt("revision"),"收藏分类修订")

@@ -137,12 +137,16 @@ function createCodec(catalogs) {
         if (entry(name).tags.get(descriptor.tag).size !== 1 || descriptor.fp !== null) throw new Error('有结构指纹的历史格式必须读取完整原头，不能仅取标签');
         return descriptor.tag;
     };
+    // Metadata enumeration only. A caller must still load and authenticate each
+    // actual saved record before reusing its source, counters, or execution ID.
+    const registeredHeaders = name => [entry(name).current, ...entry(name).history]
+        .map(value => JSON.parse(value.header));
     const record = (name, fields = {}) => {
         if (!fields || Object.getPrototypeOf(fields) !== Object.prototype || Object.keys(fields).some(key => RESERVED.has(key))) throw new Error('新协议字段不能覆盖格式声明或带入旧版本字段');
         return { ...recordHeader(name, name), ...fields };
     };
     return Object.freeze({ contract, isContract, format, identityDomain, declaredSchema, schemaFingerprint, recordHeader,
-        hasValidHeader, isCurrentHeader, historicalHeader, record, historicalContract });
+        hasValidHeader, isCurrentHeader, historicalHeader, registeredHeaders, record, historicalContract });
 }
 
 function readCatalogs(directory = DIRECTORY) {
@@ -159,5 +163,5 @@ function readCatalogs(directory = DIRECTORY) {
 let shared;
 function codec() { if (!shared) shared = createCodec(readCatalogs()); return shared; }
 module.exports = { createCodec, canonical, readCatalogs,
-    ...Object.fromEntries(['contract', 'isContract', 'format', 'identityDomain', 'declaredSchema', 'schemaFingerprint', 'recordHeader', 'hasValidHeader', 'isCurrentHeader', 'historicalHeader', 'record', 'historicalContract']
+    ...Object.fromEntries(['contract', 'isContract', 'format', 'identityDomain', 'declaredSchema', 'schemaFingerprint', 'recordHeader', 'hasValidHeader', 'isCurrentHeader', 'historicalHeader', 'registeredHeaders', 'record', 'historicalContract']
         .map(name => [name, (...args) => codec()[name](...args)])) };

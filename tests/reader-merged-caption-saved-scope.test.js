@@ -22,7 +22,7 @@ async function fixture(t){
 }
 test('merged literal DOM units survive cold qualification and actual Python source replay',async t=>{
  const f=await fixture(t),before=JSON.stringify(f.paper),api=require(ROOT+'/scripts/lib/reader-source-table-column-units');
- assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);assert.equal(JSON.stringify(f.paper),before);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),true);assert.equal(JSON.stringify(f.paper),before);
  const rendered=require(ROOT+'/scripts/analysis-contract').extractMarkdownTables(f.paper.apiReaderArticle)[1],binding=f.paper.apiReaderPlan.tableBindings[1];
  assert.equal(deep.readerTableHeaderUnitEvidenceFailures(rendered,binding.sourceQuotes).length,4);
  api.withSavedPaper(f.paper,()=>assert.equal(deep.readerTableHeaderUnitEvidenceFailures(rendered,binding.sourceQuotes).length,0));
@@ -32,6 +32,6 @@ test('merged literal DOM units survive cold qualification and actual Python sour
  const bad=structuredClone(binding);bad.sourceQuotes[0].quote='Table 1: Invented caption and Pair Acc., %';bad.sourceQuotes[0].sourceQuoteSha256=repair.shaText(bad.sourceQuotes[0].quote);assert.deepEqual(replay(f.paper,rendered,bad),[]);
  const changed=structuredClone(rendered);changed.rows[0][2]='55.9';assert.equal(replay(f.paper,changed).length,3);
  const sourceFile=path.join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001/source-runtime.json'),bytes=fs.readFileSync(sourceFile);fs.appendFileSync(sourceFile,' ');
- assert.equal(engine.hasValidApiReaderV3Records(f.paper),false);assert.throws(()=>replay(f.paper),/SHA|匹配|来源|规范化 JSON/);
- fs.writeFileSync(sourceFile,bytes);assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),false);assert.throws(()=>replay(f.paper),/SHA|匹配|来源|规范化 JSON/);
+ fs.writeFileSync(sourceFile,bytes);assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),true);
 });

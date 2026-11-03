@@ -45,7 +45,7 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 Reader 局部补丁被拒绝后，下一次局部请求仍携带最多3000字符的拒绝诊断；归一化继续重建当前问题和修复目标。传输中断通过候选中的独立 `patchRejectionFeedback` 字段保留诊断，补丁成功应用后清除。旧诊断不授予目标或 SHA，以本次目标清单为准；原请求次数、停滞判断及 `lastContentError` 的预算规则不变。
 
-环境、路径、模型/代理、账号池、标签词表、运行锁、费用、不可变来源文件、论文图临时处理、来源表格/公式/作者核验以及视觉规划/登记/豁免仍是三流程依赖。只有用户另行要求的生图任务才由内置工具完成；本项目没有图像 API 生成器，日更持续不生图。
+环境、路径、模型/代理、账号池、标签词表、运行锁、费用、不可变来源文件、论文图临时处理、来源表格/公式/作者核验以及正式发布后的收尾核验仍是三流程依赖。日更在真实发布后直接登记不生图；旧成图仅保留只读核验，论文原图照常展示和审查。
 
 `manual/scripts` 是共享兼容边界，只保留旧来源/签名/正文与Prompt合同核验、单页独立人工审查。完整作者/任务/spec生产、社交发布、backfill及实验/视觉调试入口已删除。新独立审查实际配置 `gpt-6.1-sol/high`，按 `manual_agent_policy.py` 登记真实 v4 身份，不能用旧模型声明签发新审查。
 
@@ -82,7 +82,7 @@ npm run test:compat
 | `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑。完整条件见本表后的同名说明。 |
 | `lib/daily-arxiv-oai-source.js`、`lib/daily-arxiv-announcement-source.js` | 日更显式 `--official-oai-recovery` 的官方元数据恢复与公告核验。仅同一类别、同一固定窗口内日期查询和类别列表均真实 HTTP 429 时启用；封存两种 OAI 格式的完整 XML 分页及目标日 RSS，按共同身份核对完整集合，版本时间以 Raw 为准，标题、摘要及有序作者以结构化格式为准。恢复、数据校验和下一日边界均重读原字节重建实际候选，保留原批次、已完成来源和原失败，见[补抓边界](../docs/daily-fetch-boundary.md#两条-atom-查询均限流时的官方-oai-恢复)。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
-| `deep-analyzer.js` | Node 核心：按各流程来源适配读取单篇全文，执行多阶段分析、评分审计、API Reader 写作和论文图规划。日更恢复读取本批封存来源，不重新抓取。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
+| `deep-analyzer.js` | Node 核心：按各流程来源适配读取单篇全文，执行多阶段分析、评分审计、API Reader 写作和论文图规划。日更恢复读取本批封存来源，不重新抓取。结构修复后，只用原文证据核验详细核心摘要；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
@@ -115,13 +115,13 @@ npm run test:compat
 | `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复辅助函数冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
-| `prepare-reader-revision.js` | 按篇正文重做准备：写入 readerRevisionHistory、退休旧失败候选并清掉 Reader 阶段，供后续正常续跑；不改来源与费用。带未完成事实反馈义务的稿子会跳过（`pending fact feedback`），已完成义务的稿子也会跳过（`fact feedback proof would be lost`）。 |
-| `reconfirm-analysis-success.js` | 受控成功复核：仅在正文与 Reader 记录都通过当前校验时清除陈旧失败标记，否则拒绝。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。未指定并发时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`（默认5），`--concurrency N` 可覆写为1–60；总轮数使用 `batchMaxRounds`（默认3），`--rounds N` 可覆写为1–10。先全批再仅续明确可重试失败，诊断保存到 `analysis-batch-reports`；只读取封存 PDF/TXT，图片只为本次调用在系统临时目录中准备。 |
 | `waive-analysis-failures.js` | CLI：记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
 
 
+
+已完成主分析、只需更新解读长文时，使用 `npm run api:reader:refresh -- ID`；已有失败稿需继续原批次时，使用 `npm run batch`。两者都核对当前正式结果绑定的封存来源，在论文锁内重读父稿并按当前身份合并保存。事实反馈仍须走对应的显式反馈入口；不能通过手工删除失败标记、完成证明或候选来恢复。只有正常完整资格检查和保存成功后，程序才清理已解决的失败状态，原稿、历史次数和费用继续保留。
 
 **`batch-analyze.js` 的完整操作边界**
 
@@ -254,17 +254,17 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `historical-source-identity-supplement.js` | 在当前工作区核验全部封存来源和没有正式分类记录的旧页，生成独立不可变身份证明，保留会议来源与论文版本披露，不请求模型。参数见 [历史补充维护](../docs/history-rewrite.md#补充旧页面的标签和来源身份)。 |
 | `historical-source-tag-assignment.js` | 在当前工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终分类结果文件。参数见 [历史补充维护](../docs/history-rewrite.md#补充旧页面的标签和来源身份)。 |
 | `historical-tag-checkpoint-export.js` | 从分类检查点或部分运行记录导出页面分类记录和处理报告，保留原分类缓存，不调用模型。恢复、排除集合和新运行参数见 [历史补充维护](../docs/history-rewrite.md#补充旧页面的标签和来源身份)。 |
-| `historical_page_scan.py` | 按 `historical-page-ledger-v1` 扫描历史页面，不收集旧正文；记录稳定 pageId/cohort、逐次链接目标、待核分类、Git tree 与远端 main。扫描前后及 `O_EXCL` 保存前核验 CAS。 |
+| `historical_page_scan.py` | 扫描历史页面，不收集旧正文。新清单记录页面身份、归组日期、逐次链接目标、待核分类、Git 内容树和远端 main；旧清单仍按原规则和原文件核验。扫描前后及独占保存前核对 Git 状态。 |
 | `history-conflict-identity.js` | 在同一进程核验官方 arXiv 来源，再将操作者明确选定的已有冲突提示记录为 verified 决定，并按 CAS 写入；不读取旧正文或标题。 |
 | `history-inventory.py` | 只读扫描配置博客的历史页面、URL 和汇总关系。dry-run 不写文件，apply 在干净 main 上成对保存不可变页面清单与凭证。 |
 | `history-resume.js` | 现行计划暂停恢复和既存旧运行恢复的统一入口。 |
 | `lib/arxiv-source-authority.js` | Node 库：使用默认强制代理抓取器获取官方 arXiv 全文，依次分别保存请求、来源配对、来源响应记录、全文、快照、凭证和授权。每份文件写入后核验其字节，已保存的文件不能覆盖；续跑重核原请求与完整来源字节，拒绝旧博客正文。 |
 | `lib/fresh-rewrite-publication.js` | Node 库：重写前备份当前正式分析结果和博客基线；新结果完整，且来源及基线内容仍与原记录一致后，才替换正式分析结果。 |
 | `lib/fresh-rewrite-run.js` | Node 库：从白名单中的原始元数据创建独立重写运行，准备同源文件，只恢复本运行的分析，并在完整结果验证通过后更新正式数据。 |
-| `lib/historical-archive-crawl-authority.js` | Node 库：用已有归档抓取记录的稳定 arXiv ID 和输入 SHA 提供身份依据，不提供正文、图片或旧分析。 |
+| `lib/historical-archive-crawl-authority.js` | Node 库：只读复验已签存的归档抓取身份凭证，核对原 arXiv ID 和输入 SHA；不签发新凭证，也不提供正文、图片或旧分析。 |
 | `lib/historical-arxiv-batch.js` | Node 库：备用路线只读取命名、不可变的新 arXiv 获取失败交接文件。核验其中的历史清单、页面 SHA 和非标题链接后，仅对其列出的页面，在确认处理状态仍与决定中的原状态一致后保存处理决定；不扫描 pending hint。 |
 | `lib/historical-arxiv-publication-metadata.js` | Node 库：为历史直接重写计划的每篇 arXiv 论文封存仅用于发布的 Atom 附件。读取时核验原始 Atom、元数据、摘要 SHA、精确 `vN` 查询或无版本 ID 的观察时间窗，以及原来源获取序号、清单与快照；不修改四份原来源文件。 |
-| `lib/historical-conference-crawl-authority.js` | Node 库：用已有会议元数据和 PDF 的稳定会议 ID 提供身份依据，支持重新核验 ICASSP、ICLR 本地来源。 |
+| `lib/historical-conference-crawl-authority.js` | Node 库：只读复验已签存的会议身份凭证，核对原会议 ID、元数据及 PDF，包括 ICASSP、ICLR 的本地来源；不签发新凭证。 |
 | `lib/historical-conference-local-sources.js` | Node 库：生成 `historical-conference-local-sources-v2`。除既有会议元数据和 PDF 外，还按认证 ICML poster→OpenReview forum ID 合并 ICML 来源；只读已有目录及运行目录中的新文件，新 PDF 必须对应唯一 OpenReview/替代来源凭证。逐项记录元数据、论文记录、PDF 获取与来源 SHA；缺 PDF 时明确标为 unavailable。 |
 | `lib/historical-conference-page-projections.js` | Node 库：读取历史清单、页面标题和已保留的会议来源，核对文件 SHA 后确定论文对应哪些页面。页面文件参与校验，旧正文不作为重写输入。 |
 | `lib/historical-daily-primary-arxiv-binding.js` | Node 库：核验冻结 Daily 页的 SHA，仅接受唯一合法评分元数据行中的规范 `[arxiv]` 主身份；保存对应字节区间和行哈希，拒绝把正文引用链接当成论文主身份。 |
@@ -278,7 +278,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/historical-direct-tag-supplement.js` | Node 库：只读核验已完成直接重写的来源、分析与私有页面，按原分类版本提取概念及主角色。补充记录对应历史页面整文件与正文 SHA，保留旧正文和标签，单列失败，不把未完成分析当成已核验结果。 |
 | `lib/historical-icml-alternate-pdf-source.js` | Node 库：OpenReview 被挑战页阻断时，只为代码白名单中的 poster/forum 使用固定替代 PDF，并核验快照标题和作者顺序。`n1mAjfRDZ6` 还可导入浏览器下载的 SSRN PDF，重新检查标题、作者、日期和跨页特征文本，对应固定 DOI，并用非网络获取凭证明示来源；不能当成 OpenReview 或 camera-ready 字节。 |
 | `lib/historical-icml-poster-authority.js` | Node 库：认证 ICML 2026 原始 poster→OpenReview forum 快照，核验 Daily 子条目与汇总小节的身份及 forum-ID 本地 PDF；旧页面正文不进入写作。 |
-| `lib/historical-local-crawl-authority.js` | Node 库：汇总归档与当前本地抓取记录中的稳定 arXiv 身份；不联网，不读取正文。 |
+| `lib/historical-local-crawl-authority.js` | Node 库：只读复验已签存的本地抓取身份凭证及原身份快照；不签发新凭证，不联网，不读取正文。 |
 | `lib/historical-openreview-pdf-source.js` | Node 库：根据认证 ICML poster 记录固定 OpenReview forum 身份，经项目 HTTP CONNECT、手动受限重定向和流式字节上限获取缺失 PDF。以不可覆盖的原子写入和 `0600` 权限保存 forum-ID PDF、可自校验凭证；显式续跑先核授权与完整字节，再恢复已退出写者的已知临时硬链接。孤立 PDF 仍须联网重取并逐字比对，旧半文件和未知外链保留报错。 |
 | `lib/historical-source-identity-supplement.js` | Node 库：核对封存的 arXiv 或会议来源是否对应论文，并核验原页面 SHA。新记录使用 v2 和 tagStatus；完整旧输出经原摘要和字节核验后可复用。身份记录不能证明分类或正文已经完成。 |
 | `lib/historical-source-tag-assignment.js` | Node 库：对尚无有效正式分类的历史页，用编号原文片段选择标签，程序填入逐字引文后再独立审核。模型请求使用公共路由；记录明确区分词表未覆盖、待审和账号耗尽后未处理的论文。 |
@@ -426,7 +426,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/prompt-evidence.js` | Node 库：受控读取当前 Prompt 或索引声明的 Git blob，严格核验原路径、OID、整文件 SHA 与可选声明 SHA；不写旧正文。 |
 | `lib/git-prompt-evidence-index.json` | 只读元数据：仅保存历史 Prompt 的原路径、Git blob OID 与整文件 SHA，没有旧正文。 |
 | `lib/prompt-rendering-contract.js` | Node 库：识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
-| `lib/prompt-text-versions.js` | Node 库：登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 18 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
+| `lib/prompt-contracts.js` | Node 库：登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 18 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
 | `prompt_evidence.py` | Python旧凭证严格读取本地Git原始Prompt物件，当前模板必须来自工作树。 |
 | `local_git_object.py` | Python 内部库：用固定 Git、参数和隔离环境有界读取一个本地 commit/tree/blob，核类型、尺寸、原始字节及 Git OID；禁止自动补抓和替换对象，不修改仓库对象、索引或引用。普通结果不证明完整树、删除、提交差异或发布资格。 |
 | `local_git_commit_delta.py` | Python 内部库：核对显式基线与单父提交的完整目录树、必要文件内容、删除及精确路径差异；复用同次固定离线读取，未审文件正文和完整对象图仍未检查，普通结果不授予正常审查、当前工作区或发布资格。 |
@@ -455,18 +455,17 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `publication_activation.py` | Python 入口/共享库：核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
 | `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；独立人工 v4 的文章语义与 `machineAssets` 机器核验分区，最终凭证仍覆盖完整清单。逐页通过记录永久按“相对路径 + 内容 SHA”复用，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |
-| `push-blog.py` | Python 入口：核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |
+| `push-blog.py` | Python 入口：核验 receipt，提交并推送其允许的改动，核对远端提交；不创建图片任务。 |
 | `review-blog.py` | Python 入口：审查本批最终页面，执行程序检查、模型正文审查、图片审查和 Hugo 构建，通过后生成 receipt。 |
 
-### 视觉规划与状态
+### 发布完成与旧成图读取
 
 | 文件 | 类型与职责 |
 |---|---|
-| `digest-cover-state.js` | Node 入口/状态机：规划、校验、登记每日汇总封面任务，处理失败并归档历史记录。 |
-| `plan-post-publish-visuals.py` | Python 入口：博客远端发布核验通过后调用共用视觉规划接口。 |
-| `visual-summary-integration.js` | Node 共享：在同一发布证明下协调论文长图与汇总封面。 |
-| `visual-summary-state.js` | Node 入口/状态机：规划、校验、登记和归档 TOP 10 论文长图。当前 v3 只使用已核验 Reader 的 thesis 与完整章节；日更核对官方论文图身份后返回空引用路径，不取旧缓存。QA 记录对应章节的 SHA，不回退到正式分析摘要。 |
-| `waive-post-publish-visuals.js` | Node 入口：落实用户以后日更不再生图的持续设置，记录与当前发布及两类任务清单绑定的视觉豁免；不取消论文原图审查。 |
+| `lib/published-blog-receipt.js` | 只读核验正式生成快照、逐篇来源与正文绑定、审查凭证和已保存的远端提交记录。线上部署与网页仍须另行核验。 |
+| `lib/post-publication-policy.js` | 共用不生图记录校验：新记录绑定实际审查文件；旧记录仍核对原图片任务清单，不补签历史材料。 |
+| `lib/historical-visual-records.js`、`lib/historical-cover-records.js` | 只读核对退役成图的原提示词、来源、任务身份、实际 PNG 与 SHA；不建立任务、不抓取图片、不写资产。 |
+| `waive-post-publish-visuals.js` | 核对正式发布凭证后，直接登记本次日更不生图；保留论文原图审查。 |
 
 ### 环境、文件、日志与验证
 
@@ -545,4 +544,4 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 
 **`verify-web.js` 的完整操作边界**
 
-Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json；不比较准确论文标题、H1、canonical 或完整正文，具体条件见[收尾说明](../docs/maintenance.md#发布后网页核验与收尾)。`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。
+Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json；不比较准确论文标题、H1、canonical 或完整正文，具体条件见[收尾说明](../docs/maintenance.md#发布后网页核验与收尾)。`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 contract/schemaFingerprint/createdAt/partial/deploy。

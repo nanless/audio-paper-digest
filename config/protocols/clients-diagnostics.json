@@ -1,0 +1,110 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-ui-structure",
+      "currentVariant": "safe-native-dom-layout",
+      "currentSchema": {
+        "fields": [
+          "documentHasFocus",
+          "activeElement",
+          "bodyChildren",
+          "surfaces"
+        ],
+        "scope": "only-allowlisted-structure-no-content-or-values",
+        "limits": {
+          "bodyChildren": 64,
+          "surfaces": 8,
+          "ancestors": 12,
+          "clientRects": 4
+        }
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-ui-structure-v1",
+          "variant": "safe-native-dom-layout"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-own-wk-ax-structure",
+      "currentVariant": "own-webkit-public-accessibility",
+      "currentSchema": {
+        "fields": [
+          "scope",
+          "remoteCoverageGuaranteed",
+          "opaqueBoundaryMeans",
+          "samplingMayInitializeLazyAX",
+          "singleGetterHardTimeout",
+          "limits",
+          "visitedNodes",
+          "supportedNodes",
+          "opaqueNodes",
+          "repeatedReferences",
+          "maximumObservedDepth",
+          "observedChildReferences",
+          "roleCounts",
+          "elementNodes",
+          "rootIsAccessibilityElement",
+          "rootChildrenReturned",
+          "rootChildCount",
+          "truncated",
+          "truncation"
+        ],
+        "optional": [
+          "rootLegacyIsIgnored"
+        ],
+        "scope": "own-webkit-public-getters-only"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-own-wk-ax-structure-v1",
+          "variant": "own-webkit-public-accessibility"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-diagnostics",
+      "currentVariant": "mac-structural-counts-only",
+      "currentSchema": {
+        "fields": [
+          "app",
+          "appVersion",
+          "system",
+          "counts",
+          "jobStates",
+          "credentialsIncluded",
+          "personalTextIncluded",
+          "uiStructure"
+        ],
+        "scope": "mac-device-report-no-user-text-credentials-or-paths"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-diagnostics-v2",
+          "variant": "mac-structural-counts-only"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-android-diagnostics",
+      "currentVariant": "android-structural-counts-only",
+      "currentSchema": {
+        "fields": [
+          "generatedAt",
+          "platform",
+          "sdk",
+          "sessionCount",
+          "jobCount",
+          "noteCount"
+        ],
+        "scope": "android-device-report-no-user-text-credentials-or-paths"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-android-diagnostics-v1",
+          "variant": "android-structural-counts-only"
+        }
+      ]
+    }
+  ]
+}

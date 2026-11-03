@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.cloud.BackupCodec
 import com.nanless.paperdigest.cloud.CloudManifest
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
@@ -133,7 +134,7 @@ class OfflineStore(private val root: File) {
         BackupCodec.checkedDirectory(folder)
         val manifest = OfflineFoundationJSON.parse(JsonFiles.read(BackupCodec.checkedFile(folder, "manifest.json"), 2 * 1024 * 1024L))
         val version = manifest.getString("contract")
-        require(version in setOf("paperdigest-offline-package-v1", "paperdigest-offline-package-v2") && manifest.getString("id") == id && manifest.getString("paperID").isNotEmpty() && https(manifest.getString("blogURL")) && https(manifest.getString("sourceURL")) && BackupCodec.validSHA(manifest.getString("articleRevisionSHA256"))) { "离线包合同或来源无效" }
+        require(ClientProtocols.hasValidHeader(manifest,"paperdigest-offline-package") && manifest.getString("id") == id && manifest.getString("paperID").isNotEmpty() && https(manifest.getString("blogURL")) && https(manifest.getString("sourceURL")) && BackupCodec.validSHA(manifest.getString("articleRevisionSHA256"))) { "离线包合同或来源无效" }
         val entries = manifest.getJSONArray("files").objects(); require(entries.size in 2..35)
         val names = HashSet<String>(); val limits = mapOf("paper" to 8L * 1024 * 1024, "article" to 128L * 1024 * 1024, "pdf" to 100L * 1024 * 1024, "image" to 16L * 1024 * 1024)
         entries.forEach { entry ->
@@ -155,7 +156,7 @@ class OfflineStore(private val root: File) {
         entries.forEach { e -> when (e.getString("role")) { "pdf" -> require(e.getString("sourceURL") == pdfURL); "image" -> require(resources.any { it.optString("sha256") == e.getString("sha256") && it.optString("sourceURL") == e.getString("sourceURL") }); else -> Unit } }
         require(sha(articleContent(article)) == manifest.getString("articleContentSHA256")) { "离线导读元数据身份不符" }
         val identity = JSONObject().put("articleSHA256", manifest.getString("articleContentSHA256")).put("paperID", manifest.getString("paperID")).put("revision", manifest.getString("articleRevisionSHA256")).put("sourceURL", manifest.getString("sourceURL")).put("sourceVersion", nullable(manifest, "sourceVersion") ?: JSONObject.NULL).put("pdfSHA256", pdfHash ?: "").put("images", JSONArray(entries.filter { it.getString("role") == "image" }.map { it.getString("sha256") }.sorted()))
-        if (version == "paperdigest-offline-package-v2") { val paperHash = sha(paperContent(paper)); require(paperHash == manifest.getString("paperContentSHA256")); identity.put("paperSHA256", paperHash) }
+        if (ClientProtocols.isContract(version,"paperdigest-offline-package","paper-and-article-bound-files",manifest.opt("schemaFingerprint") as? String)) { val paperHash = sha(paperContent(paper)); require(paperHash == manifest.getString("paperContentSHA256")); identity.put("paperSHA256", paperHash) }
         else require(nullable(manifest, "paperContentSHA256") == null)
         require(sha(identity) == id) { "离线包整体身份不符" }
         Files.walk(folder.toPath()).use { stream -> stream.forEach { path ->
@@ -231,7 +232,7 @@ class OfflineStore(private val root: File) {
         val stage = File(directory, ".prepare-${UUID.randomUUID()}"); require(stage.mkdir()); BackupCodec.privateDirectory(stage)
         try {
             val entries = JSONArray(); payloads.forEach { (path, item) -> val file = File(stage, path); BackupCodec.atomicBytes(file, item.first); entries.put(JSONObject().put("path", path).put("bytes", item.first.size).put("sha256", BackupCodec.hash(item.first)).put("role", item.second).put("sourceURL", item.third)) }
-            val manifest = JSONObject().put("contract", "paperdigest-offline-package-v2").put("id", id).put("paperID", paper.id).put("title", paper.titleZh).put("createdAt", Instant.now().toString()).put("blogURL", paper.blogURL).put("sourceURL", article.sourceURL).put("sourceVersion", article.sourceVersion ?: JSONObject.NULL).put("articleRevisionSHA256", article.revisionSHA256).put("articleContentSHA256", contentHash).put("paperContentSHA256", paperHash).put("files", entries)
+            val manifest = ClientProtocols.record("paperdigest-offline-package").put("id", id).put("paperID", paper.id).put("title", paper.titleZh).put("createdAt", Instant.now().toString()).put("blogURL", paper.blogURL).put("sourceURL", article.sourceURL).put("sourceVersion", article.sourceVersion ?: JSONObject.NULL).put("articleRevisionSHA256", article.revisionSHA256).put("articleContentSHA256", contentHash).put("paperContentSHA256", paperHash).put("files", entries)
             if (pdfHash != null) manifest.put("pdfURL", paper.pdfURL).put("pdfSHA256", pdfHash)
             BackupCodec.atomicJSON(File(stage, "manifest.json"), manifest)
             verifyAt(stage, id)

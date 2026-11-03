@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -74,7 +75,18 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     /** Metadata/Context discovery is also exact per-file, never citation.json's guessed siblings. */
     suspend fun declaredFiles(paper:Paper,article:Article):Map<String,String> =withContext(Dispatchers.IO){mutex.withLock{
         val raw=boundPage(paper,article);val html=PublishedUtf8.decode(raw)
-        (Format.entries.map{it.filename}+"rethink-context.json").mapNotNull{name->runCatching{selectLink(html,paper.blogURL,name)}.getOrNull()?.let{name to it}}.toMap()
+        (Format.entries.map{it.filename}+"rethink-context.json").mapNotNull{name->runCatching{selectLink(html,paper.blogURL,name,paper)}.getOrNull()?.let{name to it}}.toMap()
+    }}
+
+    /** Read only a filename declared by the same pinned page; new declarations bind its exact response SHA. */
+    suspend fun declaredBytes(paper:Paper,article:Article,name:String):ByteArray=withContext(Dispatchers.IO){mutex.withLock{
+        val page=boundPage(paper,article);val html=PublishedUtf8.decode(page)
+        val address=selectLink(html,paper.blogURL,name,paper)?:throw AppFailure("citationUnavailable","此阅读版本没有所选附加文件的真实链接")
+        val expected=Jsoup.parse(html,paper.blogURL).select("script.paper-tools__client-sidecars").singleOrNull()?.data()?.let{JSONObject(it).getJSONObject(name).getString("sha256")}
+        val raw=read(address,MAX_CITATION);require(raw.size in 1..MAX_CITATION)
+        require(expected==null||sha256(raw)==expected){"附加文件与该阅读页面声明的SHA不符，未读取另一版本"}
+        currentCoroutineContext().ensureActive();boundPage(paper,article)
+        raw.copyOf()
     }}
 
     suspend fun original(paper:Paper,article:Article,format:Format,offline:Boolean=false,verifyRemote:Boolean=false,requireCurrent:()->Unit={}):Original=withContext(Dispatchers.IO) {
@@ -83,17 +95,20 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         mutex.withLock {
             checkRoot();requireCurrent();currentCoroutineContext().ensureActive()
             val page=boundPage(frozen,article)
-            val address=selectLink(PublishedUtf8.decode(page),frozen.blogURL,format.filename)
+            val address=selectLink(PublishedUtf8.decode(page),frozen.blogURL,format.filename,frozen)
                 ?:throw AppFailure("citationUnavailable","这个已发布版本没有此格式的真实引用原件；未现场生成替代引用。")
+            val declared=Jsoup.parse(PublishedUtf8.decode(page),frozen.blogURL).select("script.paper-tools__client-sidecars").singleOrNull()?.data()?.let{JSONObject(it).getJSONObject(format.filename).getString("sha256")}
             val binding=binding(frozen,article,sha256(page))
             val key=sha256(canonical(JSONObject().put("binding",binding).put("format",format.route).put("sourceURL",address)).toByteArray())
             val receipt=checked("receipts",key+".json")
             val old=if(receipt.exists())readOriginal(receipt,binding,address,format)else null
+            require(old==null||declared==null||old.sha256==declared){"保存引用与实际阅读页面声明的SHA不符"}
             if(old!=null&&(!verifyRemote||offline)){requireCurrent();currentCoroutineContext().ensureActive();checkRoot();return@withLock old}
             if(offline)throw AppFailure("citationUnavailable","离线没有这份阅读版本已核验的引用原件，请联网刷新并保存该版本。")
             requireCurrent();currentCoroutineContext().ensureActive()
             val raw=read(address,MAX_CITATION)
             require(raw.size in 1..MAX_CITATION){"引用原件为空或超过读取限制"}
+            require(declared==null||sha256(raw)==declared){"引用原件与该阅读页面声明的SHA不符，未保存另一版本"}
             validateBytes(raw,frozen,format)
             currentCoroutineContext().ensureActive();requireCurrent();checkRoot()
             val hash=sha256(raw)
@@ -192,9 +207,29 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         private fun strictCount(value:JSONObject,key:String):Long {val n=value.get(key);require(n is Number&&n.toDouble().isFinite()&&n.toDouble()==n.toLong().toDouble()&&n.toLong()>0);return n.toLong()}
         private fun normalize(value:String)=value.replace(Regex("\\s+")," ").trim()
         private fun pageURL(value:String):String=CatalogRepository.sameSite(value).also {require(URI(it).path.startsWith("/audio-paper-digest-blog/posts/")){"引用页面超出已发布论文目录"}}
-        private fun selectLink(html:String,base:String,name:String):String? {
+        private fun selectLink(html:String,base:String,name:String,paper:Paper):String? {
             require(name in listOf("citation.json","citation.bib","citation.ris","rethink-context.json"))
-            val matches=Jsoup.parse(html,base).select("a[href]").mapNotNull{element->
+            val document=Jsoup.parse(html,base)
+            val declarations=document.select("script.paper-tools__client-sidecars")
+            if(declarations.isNotEmpty()) {
+                require(declarations.size==1){"当前引用文件存在冲突声明，未改读旧格式"}
+                val text=declarations.single().data();require(text.toByteArray().size<=8192)
+                val descriptors=JSONObject(text)
+                require(descriptors.keys().asSequence().toSet()==setOf("citation.json","citation.bib","citation.ris","rethink-context.json")){"当前引用文件声明不完整"}
+                require(paper.identityStatus=="verified"&&paper.date.take(10).matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))){"当前引用声明没有明确的已发布论文身份或日期"}
+                val owner=if(paper.sourceKind=="arxiv")paper.id.removePrefix("arxiv:").replace('.','-').replace('/','-') else "conference-"+sha256(paper.id.toByteArray()).take(24)
+                val ownerRoot="/audio-paper-digest-blog/client/papers/"+paper.date.take(10)+"/"+owner+"/"
+                val locations=mutableMapOf<String,String>()
+                descriptors.keys().forEach{filename->
+                    val record=descriptors.getJSONObject(filename);val url=CatalogRepository.sameSite(URI(base).resolve(record.getString("url")).toASCIIString())
+                    require(URI(url).path==ownerRoot+filename&&record.getString("sha256").matches(Regex("[a-f0-9]{64}"))){"当前引用文件超出已发布目录或缺少真实SHA"}
+                    if(filename=="rethink-context.json")require(ClientProtocols.hasValidHeader(record,"paper-research-context")&&record.getString("contract")==ClientProtocols.contract("paper-research-context")){"当前上下文格式声明无效"}
+                    locations[filename]=url
+                }
+                require(locations.values.map{it.substringBeforeLast('/')}.toSet().size==1){"当前引用文件混用了不同目录"}
+                return locations[name]
+            }
+            val matches=document.select("a[href]").mapNotNull{element->
                 val raw=element.attr("href");val relative=runCatching{URI(raw)}.getOrNull()?:return@mapNotNull null
                 if(relative.path?.substringAfterLast('/')!=name)return@mapNotNull null
                 require(relative.path.split('/').none{it=="."||it==".."}){"引用下载路径包含不明确的父目录"}
@@ -215,7 +250,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         private fun validateJson(text:String,paper:Paper) {
             val json=StrictJson.parse(text)
             CatalogRepository.validatedSidecar(json,paper,false)
-            val schema=json.get("schemaVersion");require(schema is Number&&schema.toDouble()==1.0){"引用JSON版本不受支持"}
+            require(ClientProtocols.format(json.get("contract"),"researcher-sidecars",json.opt("schemaFingerprint") as? String)=="source-bound-citation"){"引用JSON语义格式不受支持"}
             val titles=listOf("originalTitle","title").mapNotNull{json.nullableString(it)}
             require(titles.isNotEmpty()&&titles.all{normalize(it)==normalize(paper.title)}){"原引用题名与当前论文不符"}
             require(json.getString("type")==if(paper.sourceKind=="arxiv")"preprint"else"conference-paper"){"引用JSON的出版类型与已核来源不符"}

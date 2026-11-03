@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {execFileSync}=require('node:child_process');
-const versions=require('../scripts/lib/prompt-text-versions'),evidence=require('../scripts/lib/prompt-evidence');
+const versions=require('../scripts/lib/prompt-contracts'),evidence=require('../scripts/lib/prompt-evidence');
 const history=require('../scripts/lib/prompt-history'),deep=require('../scripts/deep-analyzer');
 const root=path.resolve(__dirname,'..'),sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 const base="aaaa700db16a9ad318be1a6886d2256ad90db9eb";
@@ -62,8 +62,9 @@ const rows=[
 ];
 
 for(const row of rows)test(row.stage+': new writing instructions preserve exact old Git evidence, schema and request boundaries',()=>{
- assert.equal(versions.currentTextStagePromptPath(row.stage),row.newPath);
- assert.equal(versions.currentPromptTextContract(row.stage),row.newContract);
+ assert.equal(versions.promptFilePathForContract(row.stage,row.newContract),row.newPath);
+ assert.equal(versions.currentTextStagePromptPath(row.stage),'prompts/current/'+path.basename(row.newPath).replace(/-v\d+(?=\.md$)/,''));
+ assert.equal(versions.currentPromptTextContract(row.stage),versions.CURRENT_PROMPT_CONTRACT);
  assert.equal(versions.promptFilePathForContract(row.stage,row.oldContract),row.oldPath);
  const old=evidence.readPromptEvidenceBytes(row.oldPath,{expectedSha256:row.originalWholeSha256});
  assert.equal(fs.existsSync(path.join(root,row.oldPath)),false);
@@ -83,11 +84,12 @@ for(const row of rows)test(row.stage+': new writing instructions preserve exact 
  assert.throws(()=>versions.promptFilePathForContract(row.stage,'analysis-prompt-text-v99'));
 });
 test('18 actual templates and two README files; the other 14 prompt byte sequences remain unchanged',()=>{
- const files=fs.readdirSync(path.join(root,'prompts')).filter(name=>name.endsWith('.md')&&!/^README(?:\.en)?\.md$/.test(name)).sort();
+ const files=fs.readdirSync(path.join(root,'prompts/current')).filter(name=>name.endsWith('.md')).sort();
  assert.equal(files.length,18);assert.deepEqual(files,versions.CURRENT_PROMPT_FILES.map(p=>path.basename(p)).sort());
  assert.ok(fs.existsSync(path.join(root,'prompts/README.en.md')));
- const changed=new Set(rows.map(r=>r.newPath));
- for(const file of versions.CURRENT_PROMPT_FILES.filter(f=>!changed.has(f)))assert.deepEqual(fs.readFileSync(path.join(root,file)),execFileSync('git',['show',base+':'+file],{cwd:root}));
+ const predecessors=require('../scripts/lib/prompt-legacy-codec').currentPathPredecessors;
+ const changed=new Set(rows.map(r=>versions.currentTextStagePromptPath(r.stage)));
+ for(const file of versions.CURRENT_PROMPT_FILES.filter(f=>!changed.has(f)))assert.deepEqual(fs.readFileSync(path.join(root,file)),execFileSync('git',['show',base+':'+predecessors[file]],{cwd:root}));
 });
 test('a private Git fixture restores all four newly retired objects without materializing old paths',t=>{
  const temporary=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'optional-english-prompt-evidence-'));
@@ -109,7 +111,7 @@ test('new revision and structure versions retain their actual full-output reques
  const checked=isolated.exports,analysis=require('./valid-analysis-fixture').validAnalysisText()
   .replace('## 毒舌点评','## 论文评价');
  for(const stage of ['revision','structureRepair']){
-  for(const version of ['analysis-prompt-text-v4','analysis-prompt-text-v5']){
+  for(const version of ['analysis-prompt-text-v4','analysis-prompt-text-v5',versions.CURRENT_PROMPT_CONTRACT]){
    checked._budgetCaptures.length=0;checked.buildTextStageFingerprint(stage,analysis,'same synthetic budget-test evidence',version,{});
    assert.equal(checked._budgetCaptures.length,1);assert.equal(checked._budgetCaptures[0],64000,stage+version);
   }

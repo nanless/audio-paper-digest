@@ -11,15 +11,16 @@ const identityApi = require('./paper-identity.js');
 const authorityApi = require('./paper-source-authority.js');
 const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
-const REQUEST_CONTRACT = 'arxiv-paper-source-request-v1';
-const SNAPSHOT_CONTRACT = 'arxiv-paper-source-production-snapshot-v1';
-const RECEIPT_CONTRACT = 'arxiv-paper-source-production-receipt-v1';
-const OBSERVATION_CONTRACT = 'arxiv-paper-source-observation-v1';
-const FETCHER_CONTRACT = 'deep-analyzer-official-arxiv-fulltext-v1';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const REQUEST_CONTRACT = codec.contract('arxiv-paper-source-request');
+const SNAPSHOT_CONTRACT = codec.contract('arxiv-paper-source-production-snapshot');
+const RECEIPT_CONTRACT = codec.contract('arxiv-paper-source-production-receipt');
+const OBSERVATION_CONTRACT = codec.contract('arxiv-paper-source-observation');
+const FETCHER_CONTRACT = codec.contract('official-arxiv-fulltext-extraction');
 const LOCK_STALE_MS = 15 * 60 * 1000;
 const LOCK_HEARTBEAT_MS = 30 * 1000;
-const LOCK_OWNER_CONTRACT = 'arxiv-source-authority-lock-owner-v1';
+const LOCK_OWNER_CONTRACT = codec.contract('arxiv-source-authority-lock-owner');
 const SAFE_AUTHORITY_NAME = /^arxiv-[0-9]{4}\.[0-9]{4,5}(?:-[a-z0-9][a-z0-9._-]{0,80})?\.json$/;
 const PRODUCTION_HANDLES = new WeakSet();
 const PRODUCTION_HANDLE_DATA = new WeakMap();
@@ -55,9 +56,9 @@ const nowIso = value => {
     return date.toISOString();
 };
 
-function identityFor(arxivId) {
+function identityFor(arxivId, identityHeader = identityApi.currentHeader()) {
     if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('arXiv ID 必须使用不带版本号的规范格式');
-    return identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'arxiv',
+    return identityApi.normalizeIdentity({ ...identityHeader, kind: 'arxiv',
         canonicalId: `arxiv:${arxivId}`, arxivId, conference: null, externalId: null,
         source: { status: 'official', url: `https://arxiv.org/abs/${arxivId}` }, citation: null });
 }
@@ -114,27 +115,53 @@ function readCanonicalJson(filename) {
     if (!bytes.equals(prettyBytes(value))) fail(`${path.basename(filename)} 未按规定的缩进和键顺序保存 JSON`);
     return { value, bytes, sha256: sha256(bytes) };
 }
-function requestFor({ arxivId, authorityName, operationId, now }) {
+function sourceHeader(value, name) {
+    if (!codec.hasValidHeader(value, name)) fail(`${name} 的格式声明无效`);
+    return recordHeaderFor(value, name);
+}
+const currentHeader = name => codec.recordHeader(codec.contract(name), name);
+function derivedHeader(request, name) {
+    sourceHeader(request, 'arxiv-paper-source-request');
+    if (!Object.hasOwn(request, 'schemaFingerprint')) return codec.historicalHeader(name, codec.format(codec.contract(name), name), null);
+    const expected = codec.declaredSchema(request.contract, 'arxiv-paper-source-request', request.schemaFingerprint).sourceFormats?.[name];
+    if (!codec.hasValidHeader(expected, name)
+        || stableHash(expected) !== stableHash(recordHeaderFor(expected, name))) fail('原请求没有绑定完整的来源记录格式');
+    return clone(expected);
+}
+function requestFormats(request) {
+    const header = sourceHeader(request, 'arxiv-paper-source-request');
+    return Object.hasOwn(header, 'schemaFingerprint')
+        ? codec.declaredSchema(request.contract, 'arxiv-paper-source-request', request.schemaFingerprint)
+        : require('./workflow-legacy-codec').originalArxivRequestFormats();
+}
+function buildRequest({ arxivId, authorityName, operationId, now }, header, formats) {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(operationId || ''))) {
         fail('operationId 必须是 UUID v4');
     }
-    const identity = identityFor(arxivId); const names = namesFor(authorityName, arxivId);
-    const body = { contract: REQUEST_CONTRACT, version: VERSION, operationId, paperId: identity.canonicalId,
+    const identity = identityFor(arxivId, formats.identityFormat); const names = namesFor(authorityName, arxivId);
+    const body = { ...header, operationId, paperId: identity.canonicalId,
         arxivId, identitySha256: identityApi.identitySha256(identity), authorityName: names.authorityName,
         officialAbsUrl: identity.source.url, officialHtmlUrl: `https://arxiv.org/html/${arxivId}`,
-        officialPdfUrl: `https://arxiv.org/pdf/${arxivId}.pdf`, fetcherContract: FETCHER_CONTRACT,
+        officialPdfUrl: `https://arxiv.org/pdf/${arxivId}.pdf`,
+        ...(Object.hasOwn(header, 'schemaFingerprint') ? { identityFormat: formats.identityFormat, fetcherFormat: formats.fetcherFormat }
+            : { fetcherContract: formats.fetcherFormat.contract }),
         requestedAt: nowIso(now) };
     return seal(body, 'requestSha256');
 }
+function requestFor(options) {
+    const header = currentHeader('arxiv-paper-source-request');
+    return buildRequest(options, header, codec.declaredSchema(header.contract, 'arxiv-paper-source-request', header.schemaFingerprint));
+}
 function validateRequest(value, expected = {}) {
-    const rebuilt = requestFor({ arxivId: value?.arxivId, authorityName: value?.authorityName,
-        operationId: value?.operationId, now: value?.requestedAt });
+    const header = sourceHeader(value, 'arxiv-paper-source-request');
+    const rebuilt = buildRequest({ arxivId: value?.arxivId, authorityName: value?.authorityName,
+        operationId: value?.operationId, now: value?.requestedAt }, header, requestFormats(value));
     if (stableHash(value) !== stableHash(rebuilt) || value.requestSha256 !== rebuilt.requestSha256) fail('请求格式或按记录内容计算的 SHA 不一致');
     if (expected.arxivId && value.arxivId !== expected.arxivId) fail('来源请求属于另一个 arXiv ID');
     if (expected.authorityName && value.authorityName !== expected.authorityName) fail('来源请求对应另一个授权文件名');
     return rebuilt;
 }
-function normalizeFetchedSource(details, arxivId, fetchedAt) {
+function normalizeFetchedSourceWithHeader(details, arxivId, fetchedAt, header) {
     if (!details || typeof details !== 'object' || Array.isArray(details)) fail('官方抓取未返回来源信息对象');
     if (Object.keys(details).some(key => /^(?:analysis|parsed$|apiReader|freshRewrite|freshSource)/.test(key))) {
         fail('官方抓取结果不能包含分析结果、导读或其他生成记录的字段');
@@ -161,7 +188,7 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
         payloadSha256: sha256(JSON.stringify(durableArtifactBody)) };
     const sourceUrl = details.source === 'html'
         ? `https://arxiv.org/html/${sourceId}` : `https://arxiv.org/pdf/${sourceId}.pdf`;
-    const observationBody = { contract: OBSERVATION_CONTRACT, version: VERSION, paperId: `arxiv:${arxivId}`,
+    const observationBody = { ...header, paperId: `arxiv:${arxivId}`,
         arxivId, sourceKind: details.source, sourceId, sourceUrl,
         htmlAvailability: String(details.htmlAvailability || 'unknown'),
         htmlAttempts: Number.isSafeInteger(details.htmlAttempts) && details.htmlAttempts >= 0 ? details.htmlAttempts : 0,
@@ -197,22 +224,29 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
     };
     return { text: details.text, observation, sourceDetails };
 }
+function normalizeFetchedSource(details, arxivId, fetchedAt) {
+    return normalizeFetchedSourceWithHeader(details, arxivId, fetchedAt, currentHeader('arxiv-paper-source-observation'));
+}
+function normalizeFetchedForRequest(details, request, fetchedAt) {
+    return normalizeFetchedSourceWithHeader(details, request.arxivId, fetchedAt,
+        derivedHeader(request, 'arxiv-paper-source-observation'));
+}
 function lockOwnerRecord(arxivId, token = crypto.randomUUID()) {
     if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('锁的 arxivId 必须已规范化');
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(token)) {
         fail('锁 token 必须是 UUID v4');
     }
     const startedAt = new Date().toISOString();
-    const body = { contract: LOCK_OWNER_CONTRACT, version: VERSION, arxivId, pid: process.pid,
+    const body = { ...currentHeader('arxiv-source-authority-lock-owner'), arxivId, pid: process.pid,
         hostname: os.hostname(), token, startedAt, leaseMs: LOCK_STALE_MS };
     return { ...body, ownerSha256: stableHash(body) };
 }
 function validateLockOwner(value, arxivId) {
-    const keys = ['contract', 'version', 'arxivId', 'pid', 'hostname', 'token', 'startedAt', 'leaseMs', 'ownerSha256'];
+    const header = sourceHeader(value, 'arxiv-source-authority-lock-owner');
+    const keys = [...Object.keys(header), 'arxivId', 'pid', 'hostname', 'token', 'startedAt', 'leaseMs', 'ownerSha256'];
     const body = value && { ...value }; if (body) delete body.ownerSha256;
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== keys.sort().join('\0')
-        || value.contract !== LOCK_OWNER_CONTRACT || value.version !== VERSION
         || value.arxivId !== arxivId || !Number.isSafeInteger(value.pid) || value.pid < 1
         || typeof value.hostname !== 'string' || !value.hostname || value.hostname.length > 255
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value.token || '')
@@ -496,20 +530,22 @@ function sourcePairName(authorityName) {
 }
 function readSourcePair(filename, request) {
     const loaded = readCanonicalJson(filename); const value = loaded.value;
-    const keys = ['contract', 'version', 'requestSha256', 'observation', 'text', 'pairSha256'];
+    const header = sourceHeader(value, 'arxiv-paper-source-pair');
+    const keys = [...Object.keys(header), 'requestSha256', 'observation', 'text', 'pairSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== keys.sort().join('\0')
-        || value.contract !== 'arxiv-paper-source-pair-v1' || value.version !== 1
+        || stableHash(header) !== stableHash(derivedHeader(request, 'arxiv-paper-source-pair'))
         || value.requestSha256 !== request.requestSha256 || typeof value.text !== 'string') {
         fail('来源配对记录不属于当前请求，保留现场');
     }
     const { pairSha256, ...body } = value;
     if (pairSha256 !== stableHash(body)) fail('来源配对记录的自校验 SHA 不一致');
     const observation = value.observation;
-    const fetched = normalizeFetchedSource({ text: value.text, source: observation?.sourceKind,
+    const fetched = normalizeFetchedSourceWithHeader({ text: value.text, source: observation?.sourceKind,
         sourceId: observation?.sourceId, htmlAvailability: observation?.htmlAvailability,
         htmlAttempts: observation?.htmlAttempts, warnings: observation?.warnings,
-        structuredArtifacts: observation?.structuredArtifacts }, request.arxivId, observation?.fetchedAt);
+        structuredArtifacts: observation?.structuredArtifacts }, request.arxivId, observation?.fetchedAt,
+        derivedHeader(request, 'arxiv-paper-source-observation'));
     if (stableHash(fetched.observation) !== stableHash(observation)) {
         fail('来源配对记录的观测、全文或论文身份不一致');
     }
@@ -556,8 +592,8 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             const snapshot = authorityApi.authorityHandleSnapshot(generic);
             if (snapshot.authority.paperId !== planned.paperId) fail('已有来源授权记录属于另一个 arXiv 来源');
             if (!requireLiveAuthorization) return { ...planned, status: 'recovered', authorityHandle: generic, authority: snapshot };
-            const fetched = normalizeFetchedSource(
-                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
+            const fetched = normalizeFetchedForRequest(
+                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), request, now);
             assertLockWritable(lock);
             const persistedText = readBytes(path.join(root, names.fulltextName));
             const persistedObservation = readCanonicalJson(path.join(root, names.observationName)).value;
@@ -581,12 +617,12 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             observation = readCanonicalJson(observationFile).value; text = new TextDecoder('utf-8', { fatal: true }).decode(readBytes(fulltextFile));
             if (observation.paperId !== planned.paperId || observation.observationSha256 !== stableHash((({ observationSha256: _, ...body }) => body)(observation))) fail('缓存的来源观测发生变化');
         } else {
-            const fetched = normalizeFetchedSource(
-                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
+            const fetched = normalizeFetchedForRequest(
+                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), request, now);
             assertLockWritable(lock);
             observation = fetched.observation; text = fetched.text; liveSourceDetails = fetched.sourceDetails;
             // 先保存配对记录。恢复时只读取原请求的完整来源字节，不重新抓取或猜补。
-            const pair = seal({ contract: 'arxiv-paper-source-pair-v1', version: 1,
+            const pair = seal({ ...derivedHeader(request, 'arxiv-paper-source-pair'),
                 requestSha256: request.requestSha256, observation, text }, 'pairSha256');
             writeArtifact(pairFile, prettyBytes(pair));
             sourcePair = readSourcePair(pairFile, request);
@@ -596,23 +632,24 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         const requestRead = readCanonicalJson(requestFile); const observationRead = readCanonicalJson(observationFile);
         const fulltextBytes = readBytes(fulltextFile); const fulltextSha256 = sha256(fulltextBytes);
         if (fulltextBytes.toString('utf8') !== text) fail('全文不是稳定的 UTF-8');
-        const snapshotBody = { contract: SNAPSHOT_CONTRACT, version: VERSION, paperId: planned.paperId, arxivId,
+        const snapshotBody = { ...derivedHeader(request, 'arxiv-paper-source-production-snapshot'), paperId: planned.paperId, arxivId,
             officialUrl: planned.officialUrl, requestName: names.requestName, requestFileSha256: requestRead.sha256,
             requestSha256: request.requestSha256, observationName: names.observationName,
             observationFileSha256: observationRead.sha256, observationSha256: observation.observationSha256,
             fulltextName: names.fulltextName, fulltextSha256 };
         const sourceSnapshot = seal(snapshotBody, 'snapshotSha256');
         const snapshotFileSha256 = writeArtifact(path.join(root, names.snapshotName), prettyBytes(sourceSnapshot));
-        const receiptBody = { contract: RECEIPT_CONTRACT, version: VERSION, operationId: request.operationId,
+        const receiptBody = { ...derivedHeader(request, 'arxiv-paper-source-production-receipt'), operationId: request.operationId,
             requestName: names.requestName, requestFileSha256: requestRead.sha256, requestSha256: request.requestSha256,
             snapshotName: names.snapshotName, snapshotFileSha256, snapshotSha256: sourceSnapshot.snapshotSha256,
             observationName: names.observationName, observationFileSha256: observationRead.sha256,
             observationSha256: observation.observationSha256, fulltextName: names.fulltextName, fulltextSha256,
-            fetcherContract: FETCHER_CONTRACT };
+            ...(Object.hasOwn(request, 'schemaFingerprint') ? { fetcherFormat: requestFormats(request).fetcherFormat }
+                : { fetcherContract: request.fetcherContract }) };
         const receipt = seal(receiptBody, 'receiptSha256');
         const receiptFileSha256 = writeArtifact(path.join(root, names.receiptName), prettyBytes(receipt));
-        const identity = identityFor(arxivId);
-        const authorityBody = { contract: authorityApi.CONTRACT, version: authorityApi.VERSION,
+        const identity = identityFor(arxivId, requestFormats(request).identityFormat);
+        const authorityBody = { ...currentHeader('paper-source-authority'),
             paperId: identity.canonicalId, identity, identitySha256: identityApi.identitySha256(identity),
             identityRecordSha256: identityApi.recordSha256(identity), evidenceKind: 'arxiv-official-fulltext',
             proof: { requestName: names.requestName, requestFileSha256: requestRead.sha256,
@@ -624,8 +661,8 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         const authority = seal(authorityBody, 'authoritySha256'); writeArtifact(authorityFile, prettyBytes(authority));
         const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
         if (!liveSourceDetails && requireLiveAuthorization) {
-            const fetched = normalizeFetchedSource(
-                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
+            const fetched = normalizeFetchedForRequest(
+                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), request, now);
             assertLockWritable(lock);
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
             if (!fulltextBytes.equals(Buffer.from(fetched.text, 'utf8'))
@@ -641,7 +678,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
 }
 
 module.exports = { REQUEST_CONTRACT, SNAPSHOT_CONTRACT, RECEIPT_CONTRACT, OBSERVATION_CONTRACT,
-    FETCHER_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS, VERSION, SAFE_AUTHORITY_NAME,
+    FETCHER_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS, SAFE_AUTHORITY_NAME,
     ArxivSourceAuthorityError, identityFor, namesFor,
     requestFor, validateRequest, normalizeFetchedSource, prepareArxivSourceAuthority,
     lockOwnerRecord, inspectLockDirectory, sameLockSnapshot, lockSnapshotIsStale,

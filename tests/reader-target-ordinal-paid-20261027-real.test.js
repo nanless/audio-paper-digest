@@ -32,7 +32,7 @@ const originalCanonicalParent=path.join(project,'data/runtime/daily-fresh-source
 const canonicalParent=fs.existsSync(originalCanonicalParent)?originalCanonicalParent:path.join(project,'tests/fixtures/reader-transport-continuation-2610-34220.json.gz');
 const canonicalBefore=fs.readFileSync(canonicalParent);
 const canonicalUsage=path.join(project,'data/runtime/llm-usage'),canonicalUsageMtime=fs.existsSync(canonicalUsage)?fs.statSync(canonicalUsage).mtimeMs:null;
-const readOnlyPythonNames=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
+const readOnlyPythonNames=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
 for(const name of readOnlyPythonNames)assert.equal(sha(fs.readFileSync(path.join(workspace,'scripts',name))),sha(fs.readFileSync(path.join(project,'scripts',name))));
 const writeGuard=require(guardPath).installTmpOnlyWriteGuard(workspace,{allowNormalizationImmutableLinks:true,readOnlyPythonScripts:readOnlyPythonNames.map(name=>path.join(workspace,'scripts',name))});
 Object.assign(process.env,{TMPDIR:workspace,TMP:workspace,TEMP:workspace,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(workspace,'pycache')});
@@ -79,7 +79,7 @@ function bind(f,cap,saveResponse=true,writeWitness=true) {
     const body=require(path.join(workspace,'scripts/utils')).buildRequestBody('openai_responses',f.identity.model.model,deep.sanitizeModelMessages(messages),16000,0.1);
     const witness=writeWitness?ordinal.recordRequestWitness(cap,body,{paperId:f.identity.paperId,stage:'apiReaderRepair',unitId:sha(diagnostic.id)}):null;
     const old=JSON.parse(response(f.c).rawResponse),values=new Map(old.replacements.map(t=>[t.path,t.value]));
-    const raw=JSON.stringify({contract:ordinal.CONTRACT,version:1,requestToken:request.requestToken,replacements:f.context.targets.map((t,index)=>({targetOrdinal:index+1,value:values.get(t.path)}))});
+    const raw=JSON.stringify({...ordinal.requestHeader(),requestToken:request.requestToken,replacements:f.context.targets.map((t,index)=>({targetOrdinal:index+1,value:values.get(t.path)}))});
     if(saveResponse)diagnostics.saveReaderRepairResponse(diagnostic,raw);
     return{request,prompt,messages,body,witness,diagnostic,raw};
 }
@@ -93,9 +93,9 @@ function usage(f,b) {
 }
 for(const c of fixture.cases)test('pure compiler real '+c.expectedTargetCount+' targets: synthetic ACK and original wrong-SHA response remains rejected',()=>{
  const q=req(c),old=JSON.parse(response(c).rawResponse),targets=q.repairTargets.map((t,index)=>({targetOrdinal:index+1,path:t.path,oldSha256:t.oldSha256,valueType:Array.isArray(t.value)?'array':t.value===null?'null':typeof t.value}));
- const request={contract:ordinal.CONTRACT,version:1,templateSha256:ordinal.TEMPLATE_SHA,requestSalt:'a'.repeat(32),identitySha256:repair.hashDraft(q.identity),candidateEnvelopeSha256:sha('SYNTHETIC pure compiler parent; no source/dispatch permission'),draftSha256:repair.hashDraft(q.draft),targets};
- request.requestToken=sha(JSON.stringify({domain:ordinal.CONTRACT,requestSalt:request.requestSalt,identitySha256:request.identitySha256,candidateEnvelopeSha256:request.candidateEnvelopeSha256,draftSha256:request.draftSha256,orderedTargetsSha256:repair.hashDraft(targets)})).slice(0,16);
- const values=new Map(old.replacements.map(t=>[t.path,t.value])),raw=JSON.stringify({contract:ordinal.CONTRACT,version:1,requestToken:request.requestToken,replacements:targets.map(t=>({targetOrdinal:t.targetOrdinal,value:values.get(t.path)}))});
+ const request={...ordinal.requestHeader(),templateSha256:ordinal.TEMPLATE_SHA,requestSalt:'a'.repeat(32),identitySha256:repair.hashDraft(q.identity),candidateEnvelopeSha256:sha('SYNTHETIC pure compiler parent; no source/dispatch permission'),draftSha256:repair.hashDraft(q.draft),targets};
+ request.requestToken=sha(JSON.stringify({domain:ordinal.requestHeader(),requestSalt:request.requestSalt,identitySha256:request.identitySha256,candidateEnvelopeSha256:request.candidateEnvelopeSha256,draftSha256:request.draftSha256,orderedTargetsSha256:repair.hashDraft(targets)})).slice(0,16);
+ const values=new Map(old.replacements.map(t=>[t.path,t.value])),raw=JSON.stringify({...ordinal.requestHeader(),requestToken:request.requestToken,replacements:targets.map(t=>({targetOrdinal:t.targetOrdinal,value:values.get(t.path)}))});
  const compiled=ordinal.compileReaderTargetOrdinalPatch(q.draft,request,raw,{});assert.equal(compiled.patch.replacements.length,c.expectedTargetCount);
  assert.throws(()=>repair.applyReaderPatch(q.draft,old,q.repairTargets.map(t=>t.path)));assert.throws(()=>ordinal.compileReaderTargetOrdinalPatch({...q.draft,oneSentenceThesis:'unauthorized parent'},request,raw,{}));
 });
@@ -138,9 +138,9 @@ test('unmarked direct-conference and old non-daily records remain outside ordina
  assert.equal(ordinal.validateCompletion({arxivId:'2610.32310',analysisManifest:{stages:{}}}),true);
 });
 test('strict RAW rejects duplicates, unsafe keys, float/exponent ordinals, truncation and wrappers',()=>{
- const token='0123456789abcdef',good={contract:ordinal.CONTRACT,version:1,requestToken:token,replacements:[{targetOrdinal:1,value:'x'}]},raw=JSON.stringify(good);
+ const token='0123456789abcdef',good={...ordinal.requestHeader(),requestToken:token,replacements:[{targetOrdinal:1,value:'x'}]},raw=JSON.stringify(good);
  assert.equal(ordinal.parseAck(raw).requestToken,token);
- for(const bad of [raw.replace('"version":1','"version":1,"version":1'),raw.replace('"targetOrdinal":1','"targetOrdinal":1,"targetOrdinal":1'),raw.replace('"targetOrdinal":1','"targetOrdinal":1.0'),raw.replace('"targetOrdinal":1','"targetOrdinal":1e0'),raw.replace('"targetOrdinal":1','"\\u0074argetOrdinal":1.0'),raw.replace('"value":"x"','"value":{"__proto__":{}}'),raw.replace('"value":"x"','"value":{"constructor":{}}'),raw.replace('"value":"x"','"value":{"prototype":{}}'),raw.slice(0,-1),'```json\n'+raw+'\n```',raw+raw,JSON.stringify({...good,path:'/sections/0/body'}),JSON.stringify({...good,draftSha256:'0'.repeat(64)})])assert.throws(()=>ordinal.parseAck(bad));
+ for(const bad of [raw.replace('"requestToken":','"requestToken":"0123456789abcdef","requestToken":'),raw.replace('"targetOrdinal":1','"targetOrdinal":1,"targetOrdinal":1'),raw.replace('"targetOrdinal":1','"targetOrdinal":1.0'),raw.replace('"targetOrdinal":1','"targetOrdinal":1e0'),raw.replace('"targetOrdinal":1','"\\u0074argetOrdinal":1.0'),raw.replace('"value":"x"','"value":{"__proto__":{}}'),raw.replace('"value":"x"','"value":{"constructor":{}}'),raw.replace('"value":"x"','"value":{"prototype":{}}'),raw.slice(0,-1),'```json\n'+raw+'\n```',raw+raw,JSON.stringify({...good,path:'/sections/0/body'}),JSON.stringify({...good,draftSha256:'0'.repeat(64)})])assert.throws(()=>ordinal.parseAck(bad));
 });
 test('private capability, request nonce, target set/type, draft/node and special-scope guards',async()=>{
  const f=setup(fixture.cases[1]);assert.throws(()=>ordinal.prepare({...f,repairContext:f.context}),/scope/);
@@ -218,7 +218,7 @@ for(const c of fixture.cases)test('SYNTHETIC actual normal Reader loop/finalizer
     assert.ok(requestOptions.readerTargetOrdinalCapability,'normal prompt branch must mint ordinal capability');
     const request=ordinal.requestContract(requestOptions.readerTargetOrdinalCapability),old=JSON.parse(response(c).rawResponse),values=new Map(old.replacements.map(r=>[r.path,r.value]));
     assert.deepEqual(request.targets.map(t=>t.path),f.context.targets.map(t=>t.path));
-    const raw=JSON.stringify({contract:ordinal.CONTRACT,version:1,requestToken:request.requestToken,replacements:request.targets.map(t=>({targetOrdinal:t.targetOrdinal,value:values.get(t.path)}))});
+    const raw=JSON.stringify({...ordinal.requestHeader(),requestToken:request.requestToken,replacements:request.targets.map(t=>({targetOrdinal:t.targetOrdinal,value:values.get(t.path)}))});
     return deep.callModelWithConfig(messages,tokens,1,{endpoint:f.identity.model.endpoint,model:f.identity.model.model,key:'unused-test-no-network',apiKeys:[],temperature:requestOptions.temperature,
      usageContext:requestOptions.usageContext,readerTargetOrdinalCapability:requestOptions.readerTargetOrdinalCapability,
      requestFn:(url,endpoint,model,body,headers,wireOptions)=>api.requestLlmJson(url,endpoint,model,body,{}, {...wireOptions,usageDirectory:Config.FILES.llmUsageDir,transportRequestFn:async()=>{calls++;return {statusCode:200,body:{status:'completed',usage:{input_tokens:1,output_tokens:1,total_tokens:2},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:raw}]}]}};}})});
@@ -246,12 +246,12 @@ for(const c of fixture.cases)test('SYNTHETIC actual normal Reader loop/finalizer
   await deep.finalizeApiReaderRefresh(f.paper,details,result,{execution:{executionKind:'synthetic_protocol_test',model:f.identity.model.model,protocol:f.identity.model.protocol,attempts:result.attempts,fullAttempts:result.fullAttempts,transportFailures:result.transportFailures},readerResources:f.paper.apiReaderResources,preserveReaderUpstream:true});
   assert.ok(f.paper.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof);assert.equal(ordinal.hasActiveCompletion(f.paper),true,'successful retired candidate still has an active source-bound completion');console.log('ordinary normal '+c.paperId+' finalizer+stable-index complete');
   const changed=structuredClone(f.paper);delete changed.analysisManifest.contracts.readerTargetOrdinalPatch;
-  delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchContract;delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations;delete changed.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof;
+  delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchContract;delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchSchemaFingerprint;delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations;delete changed.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof;
   changed.apiReaderArticle+='\n';changed.apiReaderArticleSha256=sha(changed.apiReaderArticle);changed.analysisManifest.stages.apiReaderArticle.articleSha256=changed.apiReaderArticleSha256;
   assert.throws(()=>ordinal.validateCompletion(changed),/marker removed/);
   const bad=structuredClone(f.paper);bad.apiReaderArticle+=' changed';assert.throws(()=>ordinal.validateCompletion(bad),/differs/);
  });
- const diagnostic=[];assert.equal(engine.hasValidApiReaderV3Records(f.paper,{diagnostics:diagnostic}),true,JSON.stringify(diagnostic));console.log('ordinary normal '+c.paperId+' actual engine cold passed');
+ const diagnostic=[];assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper,{diagnostics:diagnostic}),true,JSON.stringify(diagnostic));console.log('ordinary normal '+c.paperId+' actual engine cold passed');
  const helper=require(path.join(fixtureRoot,'tests/helpers/run-publication-cli-in-process.cjs'));
  const sourceText=daily.readDailyFreshSource(f.plan,f.paper).text;
  const cliOptions={sourceFile:path.join(workspace,'scripts/lib/reader-resource-claims-replay-cli.js'),canonicalFilename:path.join(workspace,'scripts/lib/reader-resource-claims-replay-cli.js'),temporaryDirectory:workspace,
@@ -259,7 +259,7 @@ for(const c of fixture.cases)test('SYNTHETIC actual normal Reader loop/finalizer
  const cli=await helper.runPublicationCliInProcess({...cliOptions,input:{paper:f.paper,sourceText}});
  assert.equal(cli.actualCliSourceExecuted,true);assert.equal(cli.noChildProcess,true);assert.equal(cli.exitCode,0,cli.raw);assert.equal(cli.result.verified,true,cli.raw);
  const stripped=structuredClone(f.paper);delete stripped.analysisManifest.contracts.readerTargetOrdinalPatch;
- for(const key of ['ordinalPatchContract','ordinalPatchCompilations','ordinalCompletionProof'])delete stripped.analysisManifest.stages.apiReaderArticle[key];
+ for(const key of ['ordinalPatchContract','ordinalPatchSchemaFingerprint','ordinalPatchCompilations','ordinalCompletionProof'])delete stripped.analysisManifest.stages.apiReaderArticle[key];
  const rejected=await helper.runPublicationCliInProcess({...cliOptions,input:{paper:stripped,sourceText}});
  assert.equal(rejected.exitCode,1);assert.equal(rejected.result.verified,false);assert.match(rejected.result.message,/marker removed/);
  assert.equal(calls,1);console.log('ordinary normal '+c.paperId+' actual publication CLI cold and marker-strip rejection passed');

@@ -5,12 +5,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from markdown_hugo_gate import (
+    format_gate_is_current_api_reader,
     markdown_table_count,
     mask_rendered_symbolic_table_cells,
     math_and_emphasis_issues,
     validate_hugo_rendered_html_gate,
 )
 from publish_common import (
+    PublishDataValidationError,
     fix_latex_delimiters,
     publish_table_currency_spans,
     sanitize_markdown_for_publish,
@@ -18,6 +20,21 @@ from publish_common import (
 
 
 class MarkdownCurrencyGateTest(unittest.TestCase):
+    def test_current_reader_frontmatter_cannot_skip_hugo_gate_by_removing_its_fingerprint(self):
+        import protocol_codec
+        family = 'beginner-researcher'
+        old = protocol_codec.historical_header(family, 'integrated-article')
+        self.assertTrue(format_gate_is_current_api_reader({'paper_digest_api_reader_contract': old['contract']}))
+        current = protocol_codec.record_header(protocol_codec.contract(family), family)
+        marker = {'paper_digest_api_reader_contract': current['contract'],
+                  'paper_digest_api_reader_schema_fingerprint': current['schemaFingerprint']}
+        self.assertTrue(format_gate_is_current_api_reader(marker))
+        for invalid in ({'paper_digest_api_reader_contract': current['contract']},
+                        {**marker, 'paper_digest_api_reader_schema_fingerprint': 'f' * 64},
+                        {**marker, 'paper_digest_api_reader_contract': old['contract']}):
+            with self.assertRaises(PublishDataValidationError):
+                format_gate_is_current_api_reader(invalid)
+
     def test_real_04173_separate_currency_cells_pass_without_byte_changes(self):
         table = ('| 尝试次数 | 1000 例翻译成本 | 1000 例验证成本 | 单接受例成本 | 平均规则数 |\n'
                  '| --- | --- | --- | --- | --- |\n'

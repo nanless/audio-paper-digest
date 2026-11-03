@@ -5,20 +5,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const vm = require('node:vm');
+const { execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const target = path.join(__dirname, 'fixtures/workbench-website-query-golden.json');
 const seedPath = path.join(__dirname, 'fixtures/workbench-website-taxonomy-golden.json');
-const corePath = path.join(root, 'apps/macos/Resources/website-tags/website-tag-core.js');
+// Original vendored Git blob of the golden fixture's official upstream resolver.
+const coreBlob = 'e1de96d38294995cf742d5b1c2186e8dac3e7fde';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
 
 function loadAuthority() {
   const seedBytes = fs.readFileSync(seedPath), seed = JSON.parse(seedBytes);
-  const bytes = fs.readFileSync(corePath);
+  const bytes = execFileSync('git', ['cat-file', 'blob', coreBlob], { cwd: root });
   assert.equal(sha(bytes), seed.upstream.sha256, 'upstream resolver must remain byte-identical');
   const context = { module: { exports: {} } };
-  vm.runInNewContext(bytes.toString('utf8'), context, { filename: corePath });
+  vm.runInNewContext(bytes.toString('utf8'), context, { filename: `git-blob:${coreBlob}` });
   return { seed, seedBytes, core: context.module.exports };
 }
 

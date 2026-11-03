@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -35,7 +37,7 @@ function readResolvedFile(directory, filename, expectedSha) {
         const envelope = JSON.parse(bytes.toString('utf8'));
         const identitySha = hash(envelope.identity);
         if (!new RegExp(`^${identitySha}\\.[a-f0-9-]{36}\\.resolved\\.json$`).test(path.basename(filename))
-            || envelope.version !== require('./reader-repair').REPAIR_VERSION
+            || !require('./reader-repair').isCandidateEnvelope(envelope)
             || envelope.payloadSha256 !== hash(envelope.payload)) fail('档案名称、版本或内容证明不一致');
         if (!sameStat(before, fs.fstatSync(fd, { bigint: true }))
             || !sameStat(before, fs.lstatSync(filename, { bigint: true }))) fail('读取时档案发生变化');
@@ -57,7 +59,7 @@ function validatePaidResolvedInput(paper, source, checked, expectedPaperSha) {
         || payload.explicitReaderRetryRound || payload.implementationRepairAllowanceProof
         || payload.implementationRepairAllowanceLineage || payload.consumedImplementationAllowanceSha256
         || payload.readerRecoveryRevisions?.length) fail('只支持原始单次完整初稿，不接受附加授权或迁移链');
-    if (identity.contentMode !== 'reader-source-only-v1'
+    if (!require('./reader-content-mode').is(identity, 'source-only')
         || identity.paperId.replace(/v\d+$/, '') !== String(paper.arxivId).replace(/v\d+$/, '')
         || identity.sourceSha256 !== sha(source.text)
         || paper.sourceSha256 !== identity.sourceSha256
@@ -166,7 +168,7 @@ function replayLegacyReader(legacyDirectory, input, repositoryRoot, rendererComm
 
 function parseOptions(paper, source) {
     const availableFigureOrdinals = paper.apiReaderFigures.map(figure => figure.ordinal);
-    return { arxivId: paper.arxivId, requiredVersion: 3, requireSourceBindings: true,
+    return { arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan), requireSourceBindings: true,
         requireIntegratedTables: true, allowDeterministicQuoteRepair: true,
         allowDeterministicUnsupportedClaimPruning: true,
         sourceText: source.text, structuredArtifacts: source.structuredArtifacts, availableFigureOrdinals };
@@ -181,7 +183,7 @@ async function rerenderPaidResolvedReader(paperId, options) {
     const refresh = require('../refresh-api-reader');
     const feedback = options.feedbackFile ? facts.readFeedback(options.feedbackFile) : null;
     return paidRenderScope.run({ assertions: [] }, () => refresh.refreshApiReader(paperId, { operations: { article: async (paper, source) => {
-        if (!engine.hasValidApiReaderV3Records(paper)) fail('当前 Reader 不是完整来源签名记录');
+        if (!engine.hasValidIntegratedApiReaderRecords(paper)) fail('当前 Reader 不是完整来源签名记录');
         const context = require('./fresh-analysis-context').getFreshAnalysisContext();
         if (!context?.runDir) fail('不在正常日更封存来源范围');
         const directory = path.join(context.runDir, 'reader-attempts');
@@ -230,7 +232,7 @@ async function rerenderPaidResolvedReader(paperId, options) {
             if (!isDeepStrictEqual(newManifest, oldManifest)
                 || !isDeepStrictEqual(updated.apiReaderFigures.map(f => ({ ordinal: f.ordinal, url: f.url, sha: f.assetSha256 })),
                     old.apiReaderFigures.map(f => ({ ordinal: f.ordinal, url: f.url, sha: f.assetSha256 })))
-                || !engine.hasValidApiReaderV3Records(updated)) fail('评分或原像素身份改变，或重渲染未通过完整签名验证');
+                || !engine.hasValidIntegratedApiReaderRecords(updated)) fail('评分或原像素身份改变，或重渲染未通过完整签名验证');
             for (const key of ['error', 'latestAnalysisAttemptError', 'latestAnalysisAttemptAt',
                 'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable', 'analysisCheckpoint',
                 'analysisStageCheckpoints', 'analysisStaleSnapshots']) {
@@ -261,7 +263,7 @@ function validateCurrentSignedPaidResolvedInput(paper, source, checked, options)
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
     if (!/^[a-f0-9]{64}$/.test(expectedPaperSha256 || '') || stable(paper) !== expectedPaperSha256
         || !stage || stage.status !== 'complete' || stage.paidCurrentSignedRender
-        || identity.contentMode !== 'reader-source-signed-revision-v1'
+        || !require('./reader-content-mode').is(identity, 'signed-revision')
         || identity.paperId !== paper.arxivId || checked.identitySha !== hash(identity)
         || checked.envelope.payloadSha256 !== hash(payload)
         || payload.status !== 'failed' || payload.attempts !== 1 || payload.fullAttempts !== 1
@@ -280,7 +282,7 @@ function validateCurrentSignedPaidResolvedInput(paper, source, checked, options)
         || sha(feedback.reviewFeedback.trim()) !== stage.reviewFeedbackSha256
         || stage.revisionSeedArticleSha256 !== parent.apiReaderArticleSha256
         || stage.revisionSeedPlanSha256 !== parent.apiReaderPlanSha256
-        || stage.contentMode !== identity.contentMode
+        || !require('./reader-content-mode').sameDeclaration(stage, identity)
         || !/^[a-f0-9]{64}$/.test(stage.fingerprint || '')
         || !/^[a-f0-9]{64}$/.test(identity.inputFingerprint || '')
         || stage.signedRevisionDisplayContract !== identity.signedRevisionDisplayContract
@@ -315,8 +317,8 @@ function validateCurrentSignedPaidResolvedInput(paper, source, checked, options)
         || !Number.isFinite(Date.parse(requestWindow.finishedAt))
         || !(Date.parse(requestWindow.startedAt) <= Date.parse(request.at))
         || !(Date.parse(accepted.at) <= Date.parse(requestWindow.finishedAt))
-        || request.version !== 'llm-usage-v1' || request.kind !== 'request'
-        || accepted.version !== 'llm-usage-v1' || accepted.kind !== 'disposition'
+        || !isUsageEventFormat(request) || request.kind !== 'request'
+        || !isUsageEventFormat(accepted) || accepted.kind !== 'disposition'
         || request.stage !== 'apiReaderArticle' || accepted.stage !== request.stage
         || request.paperId !== paper.arxivId || accepted.paperId !== paper.arxivId
         || request.runId !== identity.freshAnalysis?.runId || accepted.runId !== request.runId
@@ -410,7 +412,7 @@ async function currentSignedPaidResolvedRender(paperId, options, previewOnly) {
     try {
         return await paidRenderScope.run({ assertions: checkedFiles }, () => require('../refresh-api-reader').refreshApiReader(paperId, {
             operations: { article: async (paper, source) => require('./analysis-stop-control').withModelRequestsForbidden(async () => {
-                if (!engine.hasValidApiReaderV3Records(paper)) fail('当前 Reader 完整来源签名无效');
+                if (!engine.hasValidIntegratedApiReaderRecords(paper)) fail('当前 Reader 完整来源签名无效');
                 const context = fresh.getFreshAnalysisContext();
                 if (!context?.runDir) fail('须在正常当前四源作用域和论文锁内');
                 const directory = fresh.freshReaderAttemptsDirectory(path.join(context.runDir, 'reader-attempts'));
@@ -421,7 +423,7 @@ async function currentSignedPaidResolvedRender(paperId, options, previewOnly) {
                     .filter(name => {
                         const value = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
                         return value.identity?.paperId === paperId
-                            && value.identity?.contentMode === stage.contentMode
+                            && require('./reader-content-mode').sameDeclaration(value.identity, stage)
                             && value.identity?.sourceSha256 === stage.sourceBindingsSourceTextSha256
                             && value.identity?.signedRevisionDisplayContract === stage.signedRevisionDisplayContract
                             && value.identity?.signedRevisionDisplaySha256 === stage.signedRevisionDisplaySha256;
@@ -459,7 +461,7 @@ async function currentSignedPaidResolvedRender(paperId, options, previewOnly) {
                             rendererImplementationSha256: sha(fs.readFileSync(require.resolve('../deep-analyzer'))),
                             entryImplementationSha256: sha(fs.readFileSync(__filename)) } } }));
                 assertCurrentSignedTableOnlyChange(old, updated);
-                if (!engine.hasValidApiReaderV3Records(updated)) fail('新正常整篇来源签名无效');
+                if (!engine.hasValidIntegratedApiReaderRecords(updated)) fail('新正常整篇来源签名无效');
                 for (const check of checkedFiles) check();
                 const reread = fresh.readFreshSource(context.runDir, paperId, context);
                 if (sha(reread.text) !== sha(source.text)

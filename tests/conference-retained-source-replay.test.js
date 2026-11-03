@@ -83,9 +83,10 @@ function mixedFixture(t, { reader = false } = {}) {
         const imported = deps.importer.loadImportHandle(path.join(files.conferenceSourceLedgerDir, names.ledger),
             path.join(files.conferenceSourceLedgerDir, names.importReceipt), stagingHandle);
         const identities = deps.importer.importHandleSnapshot(imported).verifiedMembers;
-        const plan = { contract: deps.plan.PLAN_CONTRACT, version: deps.plan.PLAN_VERSION, ledgerName: names.ledger,
+        const protocol = require('../scripts/lib/protocol-codec');
+        const plan = { ...protocol.recordHeader(deps.plan.PLAN_CONTRACT, 'conference-run-plan'), ledgerName: names.ledger,
             tagMetadata: { version: 'paper-tag-catalog-v2', sha256: extractionFixture.sha256(fs.readFileSync(files.tagCatalogFile)) },
-            selectionPolicy: { contract: deps.plan.SELECTION_CONTRACT, identities,
+            selectionPolicy: { ...protocol.recordHeader(deps.plan.SELECTION_CONTRACT, 'conference-selected-members'), identities,
                 selectedMemberSetSha256: api.stableHash(identities.map(item => item.paperId)) },
             shards: [{ shardId: 'all', paperIds: identities.map(item => item.paperId) }] };
         fs.writeFileSync(path.join(files.conferenceSourceLedgerDir, names.plan), api.canonicalBytes(plan));

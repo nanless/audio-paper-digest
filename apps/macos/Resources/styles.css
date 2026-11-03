@@ -195,25 +195,6 @@ kbd {
   padding: 0 19px 0 22px;
   flex-shrink: 0;
 }
-.traffic-lights {
-  display: flex;
-  gap: 8px;
-}
-.traffic-lights span {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px #0001;
-}
-.traffic-lights span:nth-child(1) {
-  background: #ff6058;
-}
-.traffic-lights span:nth-child(2) {
-  background: #febc2e;
-}
-.traffic-lights span:nth-child(3) {
-  background: #29c840;
-}
 .icon-button {
   padding: 6px;
   color: var(--muted);
@@ -1755,13 +1736,6 @@ kbd {
 }
 .document-scroll * {
   overflow-anchor: none;
-}
-.collapsed-lights {
-  display: none;
-  margin-right: 10px;
-}
-.sidebar-hidden .collapsed-lights {
-  display: flex;
 }
 .metadata-details {
   font-size: 12px;

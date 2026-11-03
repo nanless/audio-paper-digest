@@ -14,7 +14,8 @@ const { normalizedId, getBeijingISOString } = require('../utils.js');
 
 const BASELINE_CONTRACT = 'fresh-rewrite-baseline-v1';
 const PROMOTION_CONTRACT = 'fresh-rewrite-promotion-v1';
-const SOURCE_CONTRACT = 'fresh-source-analysis-v1';
+const { originalBundleMode } = require('./daily-source-format');
+const SOURCE_CONTRACT = require('./daily-source-format').originalProvenanceHeader.contract;
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const jsonHash = value => hash(JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
     ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item) ?? 'undefined');
@@ -309,7 +310,7 @@ function prepareBaseline(options) {
                 || idOf({ arxivId: source.sourceId }) !== id)) {
                 throw new Error(`基线原来源 ID 无效，或没有对应当前论文： ${id}`);
             }
-            sourceExpectations[id] = { sourceMode: 'sealed-arxiv-bundle-v1', sourceGeneration: 1 };
+            sourceExpectations[id] = { sourceMode: originalBundleMode, sourceGeneration: 1 };
             oldPaperHashes[id] = { analysisSha256: hash(paper.analysis), readerArticleSha256: hash(paper.apiReaderArticle) };
         }
         const dataFiles = relatedDataFiles(ctx); const blogFiles = new Set();
@@ -386,7 +387,7 @@ function promoteRun(options) {
             || paper.analysisManifest?.sourceAcquisition?.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
             || provenance.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
             || !validSha(provenance.sourceSnapshotSha256) || paperDate(paper, analysis.batchDate) !== ctx.date
-            || (sourcePlan?.sourceMode === 'sealed-arxiv-bundle-v1' && (provenance.sourceGeneration !== expected.sourceGeneration
+            || (sourcePlan?.sourceMode === originalBundleMode && (provenance.sourceGeneration !== expected.sourceGeneration
                 || provenance.sourceManifestSha256 !== expected.sourceManifestSha256
                 || !validSha(provenance.sourceManifestSha256)))
             || !validatePaper(paper)) throw new Error(`重新分析的正式来源凭证不完整：${id}`);
@@ -400,7 +401,7 @@ function promoteRun(options) {
         const descriptor = sourceDetails?.freshSourceDescriptor;
         if (!descriptor || descriptor.runId !== run.runId || descriptor.paperId !== id
             || ['sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256'].some(key => descriptor[key] !== provenance[key])
-            || (sourcePlan?.sourceMode === 'sealed-arxiv-bundle-v1'
+            || (sourcePlan?.sourceMode === originalBundleMode
                 && ['sourceGeneration', 'sourceManifestSha256'].some(key => descriptor[key] !== provenance[key]))) {
             throw new Error(`本次来源记录缺失，或其来源快照字段与分析记录不同： ${id}`);
         }

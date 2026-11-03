@@ -56,9 +56,9 @@ test('真实request_started形状未配terminal拒，同标签strictunsent配对
 });
 test('纯门槛constructed fixture不授opaque许可；父与当前仅允许已知失败和同pending', t => {
     const engine = require('../scripts/analysis-engine');
-    const oldValid = engine.hasValidApiReaderV3Records, oldIncomplete = engine.getIncompleteAnalysisContentReason;
-    engine.hasValidApiReaderV3Records = () => true; engine.getIncompleteAnalysisContentReason = () => null;
-    t.after(() => { engine.hasValidApiReaderV3Records = oldValid; engine.getIncompleteAnalysisContentReason = oldIncomplete; });
+    const oldValid = engine.hasValidIntegratedApiReaderRecords, oldIncomplete = engine.getIncompleteAnalysisContentReason;
+    engine.hasValidIntegratedApiReaderRecords = () => true; engine.getIncompleteAnalysisContentReason = () => null;
+    t.after(() => { engine.hasValidIntegratedApiReaderRecords = oldValid; engine.getIncompleteAnalysisContentReason = oldIncomplete; });
     const original = parent(), current = { ...structuredClone(original), analysisFactReviewObligation: proof,
         latestAnalysisAttemptError: helper.SEED_ERROR, latestAnalysisAttemptAt: '2026-10-17T00:00:05.000Z', latestAnalysisAttemptRetryable: true };
     helper.validateState(original, current, proof);

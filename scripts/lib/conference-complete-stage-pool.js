@@ -221,7 +221,10 @@ function readVerifiedStageResult(result, item, init, files) {
     const manifest = result.manifest; assertManifestItem(manifest, item);
     const { manifestSha256, ...body } = manifest;
     const registry = manifest.tagMetadata?.registrySha256;
-    if (manifest.contract !== 'conference-paper-page-staging-v2' || manifest.version !== 2 || manifest.status !== 'complete'
+    const codec = require('./protocol-codec');
+    if (!codec.hasValidHeader(manifest, 'conference-paper-page-staging')
+        || codec.format(manifest.contract, 'conference-paper-page-staging', manifest.schemaFingerprint) !== 'tag-catalog'
+        || manifest.status !== 'complete'
         || manifestSha256 !== api.stableHash(body) || !/^[a-f0-9]{64}$/.test(registry || '')
         || registry !== init.registrySha256
         || manifest.implementation?.implementationSha256 !== init.projectionSha256) throw integrity('页面清单自校验或实现不一致');

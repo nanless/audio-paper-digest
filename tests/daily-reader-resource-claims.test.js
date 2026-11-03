@@ -392,7 +392,7 @@ test('旧未声明语义版本的记录保持原协议只读，新声明缺少�
     f.paper.apiReaderArticle += '\n\n本文模型权重现已公开并可下载。';
     sign(f.paper);
     const before = JSON.stringify(f.paper);
-    assert.equal(engine.hasValidApiReaderV3Records(f.paper), true, '旧协议结构完整性不是当前出版资源证明');
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper), true, '旧协议结构完整性不是当前出版资源证明');
     assert.throws(() => deep.enforceReaderResourceClaims(
         deep.readerResourceClaimDraftFromArticle(f.paper.apiReaderPlan, f.paper.apiReaderArticle),
         f.paper.apiReaderResources, f.sourceDetails.text),
@@ -407,7 +407,7 @@ test('旧未声明语义版本的记录保持原协议只读，新声明缺少�
         const paper = structuredClone(f.paper);
         if (manifestVersion) paper.analysisManifest.contracts.readerResourceClaims = manifestVersion;
         if (stageVersion) paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = stageVersion;
-        assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false);
     }
 });
 

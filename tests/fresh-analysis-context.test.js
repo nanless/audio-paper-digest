@@ -94,7 +94,7 @@ test('当日来源抓取按原样保存完整原文，并发抓取去重，复�
 
 test('日更封存模式只保存一次 PDF、TXT 和清单，复核只读同一代文件，不读旧文本缓存', async t => {
     const f = fixture(t); const generation = 1;
-    const sourceExpectations = { [f.id]: { sourceMode: fresh.BUNDLE_SOURCE_MODE, sourceGeneration: generation } };
+    const sourceExpectations = { [f.id]: { sourceMode: require('../scripts/lib/daily-source-format').originalBundleMode, sourceGeneration: generation } };
     const manifest = JSON.parse(fs.readFileSync(path.join(f.context.runDir, 'run.json'), 'utf8'));
     manifest.sourceExpectations = sourceExpectations;
     fs.writeFileSync(path.join(f.context.runDir, 'run.json'), JSON.stringify(manifest), { mode: 0o600 });
@@ -120,7 +120,7 @@ test('日更封存模式只保存一次 PDF、TXT 和清单，复核只读同一
         captures++; throw new Error('legacy text-only fetch must not run');
     }));
     assert.equal(captures, 1, '日更来源阶段只抓取并封存一组来源文件');
-    assert.equal(first.freshSourceDescriptor.contract, fresh.BUNDLE_CACHE_CONTRACT);
+    assert.equal(first.freshSourceDescriptor.contract, require('../scripts/lib/daily-source-format').originalBundleDescriptorHeader.contract);
     assert.equal(first.freshSourceDescriptor.sourceGeneration, generation);
     assert.match(first.freshSourceDescriptor.sourceManifestSha256, /^[a-f0-9]{64}$/);
     assert.equal(first.structuredArtifacts.tables[0].caption, 'daily table');

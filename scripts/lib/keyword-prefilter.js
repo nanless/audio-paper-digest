@@ -3,11 +3,17 @@
  *
  * 命中关键词、属于 eess.AS / cs.SD，或摘要不足 80 字符时，都保留给模型筛选。
  * 只有摘要长度达到门槛、类别不属于上述范围且没有关键词的论文才被排除。
- * 关键词版本号参与筛选配置指纹；更新版本号会使旧筛选决定需要重新检查，
+ * 分类规则的格式与实际实现 SHA 参与筛选配置指纹；规则变化会使旧筛选决定需要重新检查，
  * 不会因此重新抓取来源。
  */
 
-const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v6';
+const crypto = require('node:crypto');
+const codec = require('./protocol-codec');
+const { readRegularBytes } = require('./git-file-bytes');
+const KEYWORD_PREFILTER_PROFILE = Object.freeze({
+    ...codec.recordHeader(codec.contract('speech-audio-music-keyword-profile'), 'speech-audio-music-keyword-profile'),
+    implementationSha256: crypto.createHash('sha256').update(readRegularBytes(__filename)).digest('hex')
+});
 const MIN_ABSTRACT_CHARS_FOR_REJECTION = 80;
 const CORE_AUDIO_CATEGORIES = new Set(['eess.AS', 'cs.SD']);
 
@@ -216,7 +222,7 @@ function evaluateKeywordPrefilter(paper) {
         requiresScopeEvidence: generalAudioMethodNeedsScope || (matchedGroups.includes('uncertain_modalities')
             && !categoryFallback && matchedGroups.every(group => ['uncertain_modalities', 'affective_paralinguistics'].includes(group))),
         failOpen,
-        version: KEYWORD_PREFILTER_VERSION
+        profile: { ...KEYWORD_PREFILTER_PROFILE }
     };
 }
 
@@ -225,7 +231,7 @@ function filterPapersByKeywords(papers) {
 }
 
 module.exports = {
-    KEYWORD_PREFILTER_VERSION,
+    KEYWORD_PREFILTER_PROFILE,
     CORE_AUDIO_CATEGORIES,
     PHRASE_GROUPS,
     UPPERCASE_ACRONYMS,

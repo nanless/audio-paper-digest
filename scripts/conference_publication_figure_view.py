@@ -17,8 +17,10 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-CONTRACT = 'conference-publication-figure-view-v1'
-CROP_CONTRACT = 'conference-publication-figure-crops-v1'
+import protocol_codec as protocols
+
+CONTRACT = 'conference-publication-figure-view'
+CROP_CONTRACT = 'conference-publication-figure-crops'
 SHA = re.compile(r'^[a-f0-9]{64}$')
 
 
@@ -112,7 +114,7 @@ def project_image_nodes(content, replacements, parse_images):
     return output
 
 
-def page_metadata(content, raw_page_sha, derivation_sha):
+def page_metadata(content, raw_page_sha, derivation_sha, view_header=None):
     """Preserve original Reader signature; separately hash real publication body."""
     require(content.startswith('---\n'), 'canonical frontmatter required')
     end = content.find('\n---\n', 4)
@@ -121,8 +123,14 @@ def page_metadata(content, raw_page_sha, derivation_sha):
     require('paper_digest_publication_view_' not in front, 'raw page is already a view')
     # Original signed Reader fields are untouched. The publication body is not a
     # new signed Reader, so its SHA uses its own explicit namespace.
+    view_header = protocols.record_header(CONTRACT, CONTRACT) if view_header is None else view_header
+    require(protocols.has_valid_header(view_header, CONTRACT)
+            and view_header == protocols.record_header(view_header["contract"], CONTRACT, view_header.get("schemaFingerprint")),
+            'publication view metadata format differs')
     addition = '\n'.join([
-        f'paper_digest_publication_view_contract: "{CONTRACT}"',
+        f'paper_digest_publication_view_contract: "{view_header["contract"]}"',
+        *([f'paper_digest_publication_view_schema_fingerprint: "{view_header["schemaFingerprint"]}"']
+          if 'schemaFingerprint' in view_header else []),
         f'paper_digest_publication_view_raw_page_sha256: "{raw_page_sha}"',
         f'paper_digest_publication_view_derivation_sha256: "{derivation_sha}"',
         f'paper_digest_publication_view_article_sha256: "{sha(body.encode())}"',
@@ -130,13 +138,13 @@ def page_metadata(content, raw_page_sha, derivation_sha):
     return front + '\n' + addition + '\n---\n' + body
 
 
-def project_page_bytes(raw, raw_page_sha, actions, derivation_sha, parse_images):
+def project_page_bytes(raw, raw_page_sha, actions, derivation_sha, parse_images, view_header=None):
     """Pure shared bytes projection; never grants authority to its input data."""
     require(sha(raw) == raw_page_sha and SHA.fullmatch(str(derivation_sha)), 'page/derivation byte identity missing')
     if not actions:
         return raw
     projected = project_image_nodes(raw.decode('utf-8'), actions, parse_images)
-    return page_metadata(projected, raw_page_sha, derivation_sha).encode('utf-8')
+    return page_metadata(projected, raw_page_sha, derivation_sha, view_header).encode('utf-8')
 
 
 def materialize_view(bundle, node_result, *, root, conference_id, process_id,
@@ -148,7 +156,7 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
     byte-for-byte. `require_ready` is true for review/push; partial crop outputs
     cannot wash unresolved semantic failures by changing a page's image URL.
     """
-    require(isinstance(node_result, dict) and node_result.get('contract') == CROP_CONTRACT
+    require(protocols.has_valid_header(node_result, CROP_CONTRACT)
             and node_result.get('purpose') == 'publication-display-only'
             and node_result.get('conferenceId') == conference_id
             and node_result.get('processId') == process_id, 'Node derivation identity mismatch')
@@ -161,6 +169,11 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
         require(node_result.get('status') == 'complete' and node_result.get('blocked') == []
                 and node_result.get('unresolvedRoutes') == [] and node_result.get('publicationPassed') is False,
                 'image issues remain unresolved; publication is blocked')
+    if replay:
+        require(protocols.has_valid_header(expected_declaration, CONTRACT), 'saved publication view format differs')
+        view_header = protocols.record_header(expected_declaration['contract'], CONTRACT, expected_declaration.get('schemaFingerprint'))
+    else:
+        view_header = protocols.record_header(CONTRACT, CONTRACT)
     root = Path(root)
     view_root = root / 'data/runtime/conference-publications' / conference_id / process_id / 'figure-publication-views' / node_result['derivationSha256']
     cursor = view_root
@@ -207,7 +220,7 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
             actions = [a for a in all_actions if a['originalUrl'] in present]
         if not actions:
             continue
-        data = project_page_bytes(raw, record['sourceSha256'], actions, node_result['derivationSha256'], parse_images)
+        data = project_page_bytes(raw, record['sourceSha256'], actions, node_result['derivationSha256'], parse_images, view_header)
         require(data != raw, 'view did not change actual publication bytes')
         filename = view_root / (sha(data) + '.md')
         if replay:
@@ -218,7 +231,7 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
         changed.append({'path': record['path'], 'paperId': record.get('paperId'),
                         'rawPageSha256': record['sourceSha256'], 'publicationViewSha256': sha(data)})
     require(len(changed) >= len(actions_by_paper), 'not all derivative papers were projected')
-    declaration = {'contract': CONTRACT, 'version': 1, 'conferenceId': conference_id, 'processId': process_id,
+    declaration = {**view_header, 'conferenceId': conference_id, 'processId': process_id,
                    'manifestPath': str(manifest_path), 'manifestFileSha256': node_result['manifestFileSha256'],
                    'baseGenerationSha256': node_result['baseGenerationSha256'],
                    'baseGenerationFileSha256': node_result['baseGenerationFileSha256'],
@@ -245,13 +258,14 @@ def review_contexts_from_generation(generation):
     result = {}
     for item in outcome['derivations']:
         target = item.get('reviewTarget')
-        limited = isinstance(target, dict) and target.get('displayMode') == 'source-pdf-attested-source-page-only-v1'
+        limited = isinstance(target, dict) and protocols.is_contract(target.get('displayMode'), 'source-pdf-attested-source-page-only')
         fields = {'displayMode', 'pdfPage', 'targetPrintedFigureNumber', 'originalPdfSha256', 'completeTargetCaption'}
         if limited:
             fields.add('captionExtractionStatus')
         require(isinstance(target, dict) and set(target) == fields,
                 'Node derivation lacks exact figure review target')
-        require(target['displayMode'] in {'source-pdf-full-page-v1', 'source-pdf-figure-crop-v1', 'source-pdf-attested-source-page-only-v1'}
+        require(any(protocols.is_contract(target['displayMode'], family) for family in (
+                    'source-pdf-full-page', 'source-pdf-figure-crop', 'source-pdf-attested-source-page-only'))
                 and type(target['pdfPage']) is int and target['pdfPage'] > 0
                 and type(target['targetPrintedFigureNumber']) is int and target['targetPrintedFigureNumber'] > 0
                 and SHA.fullmatch(str(target['originalPdfSha256'])), 'invalid typed publication target')

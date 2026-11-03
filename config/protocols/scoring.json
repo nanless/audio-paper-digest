@@ -1,0 +1,125 @@
+{
+  "protocols": [
+    {
+      "name": "api-scoring-stability-resolution",
+      "currentVariant": "bounded-audit-consensus",
+      "currentSchema": {
+        "methods": [
+          "second_pass_consensus",
+          "multi_pass_consensus"
+        ],
+        "consensusTolerance": "0.3",
+        "stabilityThreshold": "0.5",
+        "maxAuditPasses": 3,
+        "bindings": [
+          "original-audit-sha256",
+          "selected-score",
+          "actual-attempts"
+        ],
+        "authority": "proof-only-no-budget-or-source-grant"
+      },
+      "historical": [
+        {
+          "tag": "api-scoring-stability-resolution-v1",
+          "variant": "bounded-audit-consensus"
+        }
+      ]
+    },
+    {
+      "name": "api-scoring-audit",
+      "currentVariant": "evidence-bound-final-analysis",
+      "currentSchema": {
+        "fields": [
+          "auditSha256",
+          "evidenceSha256",
+          "scoringInputSha256",
+          "outputAnalysisSha256",
+          "finalScore"
+        ],
+        "authority": "actual-audit-source-and-stage-checks-required"
+      },
+      "historical": [
+        {
+          "tag": "api-scoring-audit-v2",
+          "variant": "evidence-bound-final-analysis"
+        }
+      ]
+    },
+    {
+      "name": "scoring-request-format",
+      "currentVariant": "bounded-json-audit",
+      "currentSchema": {
+        "fields": [
+          "paperIdentity",
+          "analysis",
+          "sourceEvidence",
+          "resourcePrecheck"
+        ],
+        "output": "type-aware-audit-json",
+        "authority": "authenticated-request-context"
+      },
+      "historical": [
+        {
+          "tag": "scoring-request-format-v1",
+          "variant": "bounded-json-audit"
+        }
+      ]
+    },
+    {
+      "name": "scoring-source-release-declarations",
+      "currentVariant": "verified-resource-normalization",
+      "currentSchema": {
+        "input": "verified-source-release-evidence",
+        "absence": "no-invented-release",
+        "authority": "original-source-scope-required"
+      },
+      "historical": [
+        {
+          "tag": "scoring-source-release-declarations-v1",
+          "variant": "verified-resource-normalization"
+        }
+      ]
+    },
+    {
+      "name": "evidence-caps",
+      "currentVariant": "source-bound-category-caps",
+      "currentSchema": {
+        "policy": "source-evidence-caps",
+        "authority": "normal-scoring-parser-and-original-evidence"
+      },
+      "historical": [
+        {
+          "tag": "evidence-caps-v2",
+          "variant": "source-bound-category-caps"
+        }
+      ]
+    },
+    {
+      "name": "scoring-evidence-profile",
+      "currentVariant": "experimental-and-engineering-evidence",
+      "currentSchema": {
+        "fields": [
+          "multiComponentClaimed",
+          "ablationStatus",
+          "targetEvaluation",
+          "sampleScaleReported",
+          "deploymentMeasured",
+          "publicGeneralizationEvaluated",
+          "engineeringEvidence",
+          "evidenceBoundary",
+          "evidenceIds"
+        ],
+        "authority": "requires-source-bound-evidence-and-deterministic-caps"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "experimental-and-engineering-evidence",
+          "header": {
+            "version": 1
+          }
+        }
+      ]
+    }
+  ]
+}

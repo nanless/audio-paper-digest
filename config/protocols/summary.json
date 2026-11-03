@@ -1,0 +1,17 @@
+{
+  "protocols": [
+    {
+      "name": "core-summary",
+      "currentVariant": "source-bound-detailed-summary",
+      "currentSchema": {
+        "declaration": "analysisManifest.contracts.coreSummary",
+        "stageHeader": ["contractVersion", "contractSchemaFingerprint"],
+        "boundFields": ["inputAnalysisSha256", "outputAnalysisSha256", "inputSummarySha256", "summarySha256", "inputStructureProjectionSha256", "outputStructureProjectionSha256"],
+        "authority": "original-source-semantics-and-unchanged-exterior"
+      },
+      "historical": [
+        {"tag": "core-summary-detailed-v3", "variant": "source-bound-detailed-summary"}
+      ]
+    }
+  ]
+}

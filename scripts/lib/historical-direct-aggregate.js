@@ -5,6 +5,7 @@
 // 也不请求网络或模型。
 
 const crypto = require('node:crypto');
+const {tagCatalogIdentity}=require('./tag-catalog.js');
 const path = require('node:path');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');
@@ -14,18 +15,18 @@ const conferencePageMappingsApi = require('./historical-conference-page-projecti
 const { parseAnalysis } = require('../utils.js');
 const { writeImmutableFile } = require('./immutable-file.js');
 const tagRules = require('./tag-rules.js').getDefaultTagRules();
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'historical-direct-aggregate-v2';
-const VERSION = 2;
-const PROJECTION_CONTRACT = 'historical-direct-aggregate-projection-v3';
-const PROJECTION_VERSION = 3;
+const CONTRACT = codec.contract('historical-direct-aggregate');
+const PROJECTION_CONTRACT = codec.contract('historical-direct-aggregate-projection');
 const SHA_RE = /^[a-f0-9]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const CONFERENCE_KEY_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CONFERENCE_TASK_KEY_RE = /^task-[a-z0-9._-]+$/;
-const TASK_RENDERER = 'historical-conference-task-reader-facing-v1';
+const TASK_RENDERER = codec.contract('historical-conference-task-reader-facing');
 const RETAIN_UNCHANGED_REASON = 'frozen-summary-has-no-direct-paper-members';
 
 class HistoricalDirectAggregateError extends Error {
@@ -36,6 +37,10 @@ class HistoricalDirectAggregateError extends Error {
     }
 }
 const fail = message => { throw new HistoricalDirectAggregateError(message); };
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`format header invalid: ${error.message}`); }
+}
 const validSha = value => SHA_RE.test(String(value || ''));
 const clone = value => structuredClone(value);
 function canonical(value) {
@@ -120,10 +125,11 @@ function projectionConferenceTaskPage(page, label) {
         || new Set(page.requiredPageKeys).size !== page.requiredPageKeys.length
         || page.requiredPageKeys.some(value => !PAGE_KEY_RE.test(String(value || '')))
         || !plain(page.membershipEvidence)
-        || Object.keys(page.membershipEvidence).sort().join('\0') !== ['contract', 'inventoryPageSha256', 'links', 'linkSetSha256'].sort().join('\0')
+        || Object.keys(page.membershipEvidence).sort().join('\0') !== [...Object.keys(recordHeaderFor(page.membershipEvidence,
+            'frozen-conference-task-link-topology')), 'inventoryPageSha256', 'links', 'linkSetSha256'].sort().join('\0')
         || !validSha(page.membershipEvidence.inventoryPageSha256)
         || !validSha(page.membershipEvidence.linkSetSha256)
-        || page.status !== 'planned' || page.rendererSupport !== TASK_RENDERER
+        || page.status !== 'planned' || !codec.isContract(page.rendererSupport, 'historical-conference-task-reader-facing')
         || page.publicationDisposition !== 'rewrite' || page.reason !== null) {
         fail(`${label} support state is invalid`);
     }
@@ -134,7 +140,7 @@ function projectionConferenceTaskPage(page, label) {
     return { ...output, conferenceKey: page.conferenceKey, legacyTaskKey: page.legacyTaskKey,
         displayLabel: page.displayLabel, requiredPaperIds: page.requiredPaperIds.slice().sort(),
         requiredPageKeys: page.requiredPageKeys.slice().sort(), membershipEvidence: clone(page.membershipEvidence),
-        status: 'planned', rendererSupport: TASK_RENDERER, publicationDisposition: 'rewrite', reason: null };
+        status: 'planned', rendererSupport: page.rendererSupport, publicationDisposition: 'rewrite', reason: null };
 }
 function conferenceTaskCoverageFor(taskPages, inventoryPageSetSha256) {
     if (!Array.isArray(taskPages) || !validSha(inventoryPageSetSha256)) fail('conference task coverage inputs are invalid');
@@ -145,7 +151,7 @@ function conferenceTaskCoverageFor(taskPages, inventoryPageSetSha256) {
     });
     return {
         status: 'complete',
-        rendererSupport: taskPages.length ? TASK_RENDERER : 'not-required',
+        rendererSupport: taskPages.length ? taskPages[0].rendererSupport : 'not-required',
         publicationReady: true,
         reason: null,
         total: taskPages.length,
@@ -247,7 +253,7 @@ function buildAggregateProjection({ plan, inventory } = {}) {
         return projectionConferenceTaskPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
             previousContentSha256: page.previousContentSha256, conferenceKey: page.scope.key,
             legacyTaskKey: page.legacyTaskKey, displayLabel: page.displayLabel, requiredPaperIds, requiredPageKeys,
-            membershipEvidence: { contract: 'frozen-conference-task-link-topology-v1',
+            membershipEvidence: { ...codec.recordHeader(codec.contract('frozen-conference-task-link-topology'), 'frozen-conference-task-link-topology'),
                 inventoryPageSha256: page.previousContentSha256, links,
                 linkSetSha256: stableHash(links) }, status: 'planned', rendererSupport: TASK_RENDERER,
             publicationDisposition: 'rewrite', reason: null }, `conference task ${page.pageKey}`);
@@ -271,7 +277,7 @@ function buildAggregateProjection({ plan, inventory } = {}) {
         coveredPageSetSha256: stableHash(coveredPageKeys), publicationReady: false };
     pageCoverage.publicationReady = pageCoverage.uncoveredPageKeys.length === 0
         && pageCoverage.coveredPageCount === pageCoverage.inventoryPageCount;
-    const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, planSha256: normalizedPlan.planSha256,
+    const body = { ...codec.recordHeader(PROJECTION_CONTRACT, 'historical-direct-aggregate-projection'), planSha256: normalizedPlan.planSha256,
         inventory: clone(normalizedPlan.inventory), daily, dailySetSha256: stableHash(daily),
         conference, conferenceSetSha256: stableHash(conference), conferenceTaskPages,
         conferenceTaskPageSetSha256: stableHash(conferenceTaskPages), conferenceTaskCoverage,
@@ -282,11 +288,12 @@ function buildAggregateProjection({ plan, inventory } = {}) {
 }
 function normalizeAggregateProjection(value, plan) {
     const normalizedPlan = planApi.normalizePlan(plan);
-    exact(value, ['contract', 'version', 'planSha256', 'inventory', 'daily', 'dailySetSha256',
+    const header = recordHeaderFor(value, 'historical-direct-aggregate-projection');
+    exact(value, [...Object.keys(header), 'planSha256', 'inventory', 'daily', 'dailySetSha256',
         'conference', 'conferenceSetSha256', 'conferenceTaskPages', 'conferenceTaskPageSetSha256',
         'conferenceTaskCoverage', 'conferenceTaskCoverageSha256', 'retainedPages', 'retainedPageSetSha256',
         'pageCoverage', 'pageCoverageSha256', 'projectionSha256'], 'direct aggregate projection');
-    if (value.contract !== PROJECTION_CONTRACT || value.version !== PROJECTION_VERSION || value.planSha256 !== normalizedPlan.planSha256
+    if (value.planSha256 !== normalizedPlan.planSha256
         || !plain(value.inventory) || Object.keys(value.inventory).sort().join('\0') !== ['ledgerSha256', 'pageSetSha256'].join('\0')
         || value.inventory.ledgerSha256 !== normalizedPlan.inventory.ledgerSha256
         || value.inventory.pageSetSha256 !== normalizedPlan.inventory.pageSetSha256 || !Array.isArray(value.daily)
@@ -337,7 +344,7 @@ function normalizeAggregateProjection(value, plan) {
                 && page.scope.key === task.conferenceKey))?.paperId))].sort();
         if (expectedPageKeys.join('\0') !== task.requiredPageKeys.join('\0')
             || expectedPaperIds.some(value => !value) || expectedPaperIds.join('\0') !== task.requiredPaperIds.join('\0')
-            || task.membershipEvidence.contract !== 'frozen-conference-task-link-topology-v1'
+            || !codec.isContract(task.membershipEvidence.contract, 'frozen-conference-task-link-topology')
             || !Array.isArray(task.membershipEvidence.links)
             || stableHash(task.membershipEvidence.links) !== task.membershipEvidence.linkSetSha256
             || task.membershipEvidence.inventoryPageSha256 !== task.previousContentSha256) {
@@ -370,7 +377,7 @@ function normalizeAggregateProjection(value, plan) {
     if (!plain(value.pageCoverage) || value.pageCoverage.inventoryPageCount !== coveredPageKeys.length
         || stableHash(value.pageCoverage) !== value.pageCoverageSha256
         || stableHash(value.pageCoverage) !== stableHash(expectedCoverage)) fail('aggregate projection full-page coverage drifted');
-    const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
+    const body = { ...header, planSha256: value.planSha256,
         inventory: clone(value.inventory), daily, dailySetSha256: value.dailySetSha256,
         conference, conferenceSetSha256: value.conferenceSetSha256, conferenceTaskPages,
         conferenceTaskPageSetSha256: value.conferenceTaskPageSetSha256,
@@ -580,15 +587,16 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     }
     const loaded = readJson(path.join(directory, 'staging-input.json'), `${item.paperId} staging input`);
     const stage = loaded.value;
-    exact(stage, ['contract', 'version', 'paperId', 'runId', 'analysisArtifact', 'publicationSource',
+    const stageHeader = require('./workflow-record-format').recordHeaderFor(stage, 'historical-direct-rewrite-staging');
+    exact(stage, [...Object.keys(stageHeader), 'paperId', 'runId', 'analysisArtifact', 'publicationSource',
         'stagingBinding', 'stagingBindingSha256'], `${item.paperId} staging input`);
-    if (stage.contract !== runnerApi.STAGING_CONTRACT || stage.version !== 1 || stage.paperId !== item.paperId || stage.runId !== item.runId
+    if (stage.paperId !== item.paperId || stage.runId !== item.runId
         || stableHash(stage.analysisArtifact) !== stableHash(artifact) || !validSha(stage.stagingBindingSha256)
         || stage.stagingBindingSha256 !== stableHash(stage.stagingBinding) || entry.staging.stagingBindingSha256 !== stage.stagingBindingSha256) {
         fail(`${item.paperId} staging input drifted from execution registry`);
     }
-    const stageRegistry = planApi.buildRegistry(plan, item.route.kind === 'arxiv-fresh-fetch' ? { sourceBindings: [source.sourceBinding] } : {});
-    const expectedBinding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
+    const expectedBinding = planApi.replayDirectStagingBinding({ plan, paperId: item.paperId, analysisArtifact: artifact,
+        sourceBinding: item.route.kind === 'arxiv-fresh-fetch' ? source.sourceBinding : null, storedBinding: stage.stagingBinding });
     if (stableHash(stage.stagingBinding) !== stableHash(expectedBinding)) fail(`${item.paperId} staging binding cannot replay direct source contract`);
     const publicationSource = directPages.publicationSourceProof(item, source, stage.publicationSource);
     if (publicationSource?.metadataSidecar) {
@@ -674,7 +682,7 @@ function renderAggregate(scope, key, members, options = {}) {
     }
     const catalog = tagRules.tagCatalog;
     if (classificationMetadata.registrySha256 !== catalog.registrySha256
-        || classificationMetadata.registryVersion !== catalog.version) {
+        || classificationMetadata.registryVersion !== tagCatalogIdentity(catalog)) {
         fail(`汇总 ${scope}:${key} 的标签未绑定当前受控词表。`);
     }
     const byLabel = new Map(catalog.concepts.filter(concept => concept.status === 'active')
@@ -684,7 +692,7 @@ function renderAggregate(scope, key, members, options = {}) {
         if (!concept) fail(`汇总 ${scope}:${key} 包含当前词表外的标签：${label}`);
         return { id: concept.id, facet: concept.facet, label: concept.preferredLabel.zh };
     };
-    const records = members.map(member => ({ registryVersion: catalog.version,
+    const records = members.map(member => ({ registryVersion: tagCatalogIdentity(catalog),
         registrySha256: catalog.registrySha256, concepts: member.canonical.labels.map(selectedConcept) }));
     // 与会议汇总复用已有有界 Python 桥，一次投影整批，避免逐篇启动进程。
     const rendered = require('./conference-postprocess.js').render({ tagPresentationBatch: { catalog, records } });
@@ -711,7 +719,8 @@ function renderAggregate(scope, key, members, options = {}) {
     });
     let output = `---\ntitle: ${JSON.stringify(display)}\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
-    output += 'paper_digest_reader_quality: "reader-facing-v3"\n';
+    output += `paper_digest_reader_quality: "${codec.contract('reader-facing-page')}"\n`;
+    output += `paper_digest_reader_quality_schema_fingerprint: "${codec.schemaFingerprint('reader-facing-page')}"\n`;
     output += `paper_digest_tags_contract: "${tagRules.flatCompatContract}"\n`;
     output += `paper_digest_tags_selection_contract: "${classificationMetadata.selectionContract}"\n`;
     output += `paper_digest_tags_registry_version: "${classificationMetadata.registryVersion}"\n`;
@@ -775,13 +784,13 @@ function sourceGenerationFor(scope, key, staged) {
         selectedPdfUrl: member.source.sourceVersion.selectedPdfUrl
     })).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const arxivBinding = arxiv.length ? {
-        contract: 'fresh-arxiv-generation-v1', generation: [...generations][0],
+        ...codec.recordHeader(codec.contract('fresh-arxiv-generation'), 'fresh-arxiv-generation'), generation: [...generations][0],
         sourceManifestSetSha256: stableHash(arxiv.map(member => member.source.sourceManifestSha256).sort()),
         ...(historicalVersions.length ? { historicalVersions,
             historicalVersionSetSha256: stableHash(historicalVersions) } : {})
     } : null;
     const conferenceBinding = conference.length ? {
-        contract: 'retained-local-conference-pdf-v1', generation: null,
+        ...codec.recordHeader(codec.contract('retained-local-conference-pdf'), 'retained-local-conference-pdf'), generation: null,
         sourcePdfSetSha256: stableHash(conference.map(member => member.source.pdfSha256).sort())
     } : null;
     if (!arxivBinding) return conferenceBinding;
@@ -794,7 +803,7 @@ function sourceGenerationFor(scope, key, staged) {
     })).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const conferenceSources = conference.map(member => ({ paperId: member.item.paperId,
         pdfSha256: member.source.pdfSha256 })).sort((left, right) => left.paperId.localeCompare(right.paperId));
-    const body = { contract: 'historical-direct-mixed-source-v1', version: 1,
+    const body = { ...codec.recordHeader(codec.contract('historical-direct-mixed-source'), 'historical-direct-mixed-source'),
         arxiv: { ...arxivBinding, sources: arxivSources, sourceSetSha256: stableHash(arxivSources) },
         conference: { ...conferenceBinding, sources: conferenceSources, sourceSetSha256: stableHash(conferenceSources) } };
     return { ...body, bindingSha256: stableHash(body) };
@@ -843,7 +852,7 @@ function buildCohort(inputs, cohort) {
         ...(member.source.sourceVersion ? { sourceVersion: clone(member.source.sourceVersion) } : {}) }));
     const outputPage = { ...cohort.outputPage, stagedPath: path.posix.join('pages', cohort.outputPage.path),
         contentSha256: sha256(Buffer.from(markdown, 'utf8')) };
-    const body = { contract: CONTRACT, version: VERSION, status: 'complete', scope: cohort.scope, key: cohort.key,
+    const body = { ...codec.recordHeader(CONTRACT, 'historical-direct-aggregate'), status: 'complete', scope: cohort.scope, key: cohort.key,
         ...(cohort.scope === 'conference-task' ? { conferenceKey: cohort.conferenceKey,
             legacyTaskKey: cohort.legacyTaskKey, displayLabel: cohort.displayLabel,
             membershipEvidence: clone(cohort.membershipEvidence) } : {}),
@@ -894,7 +903,8 @@ function writeDirectAggregates({ outputRoot, aggregateRunId, aggregates } = {}) 
     const outputs = [];
     for (const aggregate of aggregates) {
         const expected = { ...aggregate }; const manifestSha256 = expected.manifestSha256; delete expected.manifestSha256;
-        if (aggregate.contract !== CONTRACT || aggregate.version !== VERSION || aggregate.status !== 'complete'
+        recordHeaderFor(aggregate, 'historical-direct-aggregate');
+        if (aggregate.status !== 'complete'
             || !['daily', 'conference', 'conference-task'].includes(aggregate.scope) || !validSha(manifestSha256) || stableHash(expected) !== manifestSha256) {
             fail('refuses to write an invalid direct aggregate manifest');
         }
@@ -918,6 +928,6 @@ function writeDirectAggregates({ outputRoot, aggregateRunId, aggregates } = {}) 
     return outputs;
 }
 
-module.exports = { CONTRACT, VERSION, PROJECTION_CONTRACT, PROJECTION_VERSION, HistoricalDirectAggregateError,
+module.exports = { CONTRACT, PROJECTION_CONTRACT, HistoricalDirectAggregateError,
     stableHash, buildAggregateProjection, normalizeAggregateProjection, writeAggregateProjection, loadDirectAggregateInputs, loadStagedMember,
     buildDirectAggregates, aggregateRunIdFor, writeDirectAggregates, renderAggregate };

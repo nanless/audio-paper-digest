@@ -79,7 +79,10 @@ private actor IntegrationDAV {
         let today=String(ISO8601DateFormatter().string(from:Date()).prefix(10)),time="2026-10-24T12:00:00Z"
         func issued(_ id:String,_ date:String)->[String:Any]{["id":id,"requestIssued":true,"startedAt":date,"status":"failed","usage":NSNull()]}
         func floor(_ requests:[RequestBudgetContinuity.Issued],_ d:URL)throws{
-            let e=JSONEncoder();e.outputFormatting=[.sortedKeys];try e.encode(RequestBudgetContinuity.Record(contract:"paperdigest-request-continuity-v1",requests:requests)).write(to:d.appendingPathComponent(RequestBudgetContinuity.filename),options:.atomic)
+            // This explicitly seeds the original historical format, not a new producer record.
+            var record=try ClientProtocols.recordHeader(ClientProtocols.historicalContract("paperdigest-request-continuity",variant:"original-dispatch-identities"),"paperdigest-request-continuity")
+            record["requests"]=requests.map{["id":$0.id,"startedAt":$0.startedAt]}
+            try JSONSerialization.data(withJSONObject:record,options:.sortedKeys).write(to:d.appendingPathComponent(RequestBudgetContinuity.filename),options:.atomic)
         }
         func makeApp(_ name:String)throws->PaperDigestApp{
             let d=try folder(name),app=PaperDigestApp();app.directory=d;app.store=try DesktopStore(directory:d)

@@ -13,15 +13,16 @@ const localCrawlIdentityApi = require('./historical-local-crawl-authority.js');
 const conferenceIdentityApi = require('./historical-conference-crawl-authority.js');
 const identityApi = require('./paper-identity.js');
 const primaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
 
-const LEDGER_CONTRACT = 'historical-page-ledger-v1';
-const LEDGER_RECEIPT_CONTRACT = 'historical-page-ledger-receipt-v1';
-const CONTRACT = 'page-source-crosswalk-v1';
-const DECISION_CONTRACT = 'page-source-crosswalk-decision-v1';
-const PRIMARY_ARXIV_DECISION_CONTRACT = 'page-source-crosswalk-decision-v2';
-const LOCK_OWNER_CONTRACT = 'page-source-crosswalk-lock-owner-v1';
-const FINAL_RECEIPT_CONTRACT = 'page-source-crosswalk-final-receipt-v1';
-const VERSION = 1;
+const LEDGER_CONTRACT = codec.contract('historical-page-ledger');
+const LEDGER_RECEIPT_CONTRACT = codec.contract('historical-page-ledger-receipt');
+const CONTRACT = codec.contract('page-source-crosswalk');
+const DECISION_CONTRACT = codec.contract('page-source-crosswalk-decision');
+const PRIMARY_ARXIV_DECISION_CONTRACT = codec.contract('page-source-crosswalk-primary-arxiv-decision');
+const LOCK_OWNER_CONTRACT = codec.contract('page-source-crosswalk-lock-owner');
+const FINAL_RECEIPT_CONTRACT = codec.contract('page-source-crosswalk-final-receipt');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -30,65 +31,36 @@ const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 const GIT_OID_RE = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const LINK_TYPES = new Set(['markdown-inline', 'html-anchor']);
 const LINK_STATUSES = new Set(['resolved', 'unresolved', 'ambiguous']);
-const PUBLICATION_EVIDENCE_FIELDS = new Set([
-    'paper_digest_abstract_sha256', 'paper_digest_api_reader_article_sha256',
-    'paper_digest_api_reader_author_count', 'paper_digest_api_reader_author_identity_contract',
-    'paper_digest_api_reader_author_identity_sha256', 'paper_digest_api_reader_contract',
-    'paper_digest_api_reader_decision_projection', 'paper_digest_api_reader_plan_sha256',
-    'paper_digest_api_reader_resource_count', 'paper_digest_api_reader_resource_identity_contract',
-    'paper_digest_api_reader_resource_identity_sha256', 'paper_digest_api_reader_source_binding_contract',
-    'paper_digest_api_reader_source_bindings_sha256', 'paper_digest_api_reader_source_formula_count',
-    'paper_digest_api_reader_source_table_count', 'paper_digest_api_reader_structured_artifacts_sha256',
-    'paper_digest_arxiv_id', 'paper_digest_arxiv_version', 'paper_digest_arxiv_versioned_id',
-    'paper_digest_document_type', 'paper_digest_fresh_authoring_contract', 'paper_digest_fresh_authoring_sha256',
-    'paper_digest_manual_depth', 'paper_digest_page_type', 'paper_digest_pipeline_owned',
-    'paper_digest_primary_task', 'paper_digest_primary_method', 'paper_digest_rank_bucket',
-    'paper_digest_taxonomy_concepts', 'paper_digest_taxonomy_contract',
-    'paper_digest_taxonomy_registry_sha256', 'paper_digest_taxonomy_registry_version',
-    'paper_digest_taxonomy_scope', 'paper_digest_taxonomy_selection_contract',
-    'paper_digest_reader_article_sha256',
-    'paper_digest_reader_quality', 'paper_digest_score', 'paper_digest_sidecars',
-    'paper_digest_tutorial_artifact_plan_sha256', 'paper_digest_tutorial_contract',
-    'paper_digest_tutorial_payload_contract', 'paper_digest_tutorial_payload_sha256',
-    'paper_digest_tutorial_quality_sha256', 'paper_digest_workbench_contract'
-]);
 const { PAGE_TAG_FIELDS, LEGACY_PAGE_TAG_FIELDS } = require('./page-tag-metadata.js');
-const CURRENT_PUBLICATION_EVIDENCE_FIELDS = new Set([...PUBLICATION_EVIDENCE_FIELDS, ...PAGE_TAG_FIELDS]);
+const SCAN_POLICY_CONTRACT = 'historical-page-scan-policy';
+const PAGE_ID_CONTRACT = 'historical-page-id';
 const PRESERVED_PUBLICATION_STRING_FIELDS = new Set([
     'paper_digest_arxiv_id', 'paper_digest_arxiv_versioned_id', 'paper_digest_page_type'
 ]);
-const LEGACY_SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v3', bodyRetention: 'sha256-only',
-    identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
-    linkOffsetUnit: 'utf8-byte-body-relative',
-    taxonomyRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v3',
-    targetRecordBinding: 'target-page-snapshot-sha256-v1' });
-const PREVIOUS_SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v4', bodyRetention: 'sha256-only',
-    identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
-    linkOffsetUnit: 'utf8-byte-body-relative',
-    tagRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v4',
-    targetRecordBinding: 'target-page-snapshot-sha256-v1' });
-const SCAN_POLICY_V5 = Object.freeze({ ...PREVIOUS_SCAN_POLICY,
-    contract: 'historical-page-scan-policy-v5', tagRoutes: 'unverified-candidates-v3' });
-
-const SCAN_POLICY = Object.freeze({ ...SCAN_POLICY_V5, contract: 'historical-page-scan-policy-v6',
-    identityHints: 'frontmatter-filename-exact-explicit-links-v2' });
 
 function scanFormatFor(policy) {
-    // 策略只选择对应字段；页面和来源仍按原完整对象核验，不转换旧记录。
-    const formats = [
-        { policy: LEGACY_SCAN_POLICY, evidenceFields: PUBLICATION_EVIDENCE_FIELDS,
-            candidateField: 'legacyTaxonomyCandidates', groupField: 'taxonomy' },
-        { policy: PREVIOUS_SCAN_POLICY, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
-            candidateField: 'legacyTaxonomyCandidates', groupField: 'taxonomy' },
-        { policy: SCAN_POLICY_V5, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
-            candidateField: 'legacyTagRouteCandidates', groupField: 'routeGroup' },
-        { policy: SCAN_POLICY, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
-            candidateField: 'legacyTagRouteCandidates', groupField: 'routeGroup' }
-    ];
-    const format = formats.find(item => stableHash(policy) === stableHash(item.policy));
-    if (!format) throw new PageSourceCrosswalkError('历史页面扫描策略不受支持。');
-    exact(policy, Object.keys(format.policy), '历史页面扫描策略');
-    return format;
+    let header;
+    try { header = recordHeaderFor(policy, SCAN_POLICY_CONTRACT); }
+    catch { fail('历史页面扫描策略不受支持。'); }
+    let declaration; let pageIdHeader;
+    if (header.schemaFingerprint) {
+        declaration = codec.declaredSchema(header.contract, SCAN_POLICY_CONTRACT, header.schemaFingerprint);
+        const expected = { ...header, ...declaration.policy };
+        exact(policy, Object.keys(expected), '历史页面扫描策略');
+        if (stableHash(policy) !== stableHash(expected)) fail('历史页面扫描策略不受支持。');
+        pageIdHeader = recordHeaderFor(declaration.pageIdentityFormat, PAGE_ID_CONTRACT);
+        exact(declaration.pageIdentityFormat, Object.keys(pageIdHeader), '历史页面身份格式');
+    } else {
+        const bytes = fs.readFileSync(path.join(__dirname, '../../config/historical-page-scan-formats.json'));
+        if (sha256(bytes) !== '476009a8b42973cd1bf1836774674e49d3cc98d73aec0992f8a0296796cfa9e1') fail('历史页面扫描格式目录的原字节已变化');
+        const catalog = strictJson(bytes, '历史页面扫描格式目录');
+        declaration = catalog.formats.find(item => item.policy.contract === header.contract);
+        if (!declaration || stableHash(declaration.policy) !== declaration.sha256
+            || stableHash(policy) !== declaration.sha256) fail('历史页面扫描策略不受支持。');
+        exact(policy, Object.keys(declaration.policy), '历史页面扫描策略');
+        pageIdHeader = codec.historicalHeader(PAGE_ID_CONTRACT, 'path-and-primary-url');
+    }
+    return { ...declaration, evidenceFields: new Set(declaration.evidenceFields), pageIdHeader };
 }
 const FINAL_REVIEW_STATUSES = new Set(['needs-review', 'blocked', 'conflict']);
 const ALL_STATUSES = new Set(['pending', ...FINAL_REVIEW_STATUSES, 'verified']);
@@ -98,15 +70,6 @@ const MAX_STATE_BYTES = 64 * 1024 * 1024;
 const MAX_DECISION_BYTES = 1024 * 1024;
 const MAX_LOCK_OWNER_BYTES = 64 * 1024;
 const LOCK_STALE_MS = 2 * 60 * 60 * 1000;
-// 不透明、带身份检查的恢复策略。只有两个保留本地爬虫的 CLI 会拿到这些值；
-// 任意字符串或新建的 Symbol 都不能让一次普通 crosswalk 改动获得立即回收的资格。
-// 它们只用于在正常两小时租约到期前，清掉本机中断的本地批次。
-const HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY = Symbol(
-    'historical-local-crawl-batch-local-dead-owner-recovery-v1'
-);
-const HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY = Symbol(
-    'historical-conference-crawl-batch-local-dead-owner-recovery-v1'
-);
 const INVENTORY_HANDLES = new WeakSet();
 const INVENTORY_HANDLE_DATA = new WeakMap();
 const DECISION_HANDLES = new WeakSet();
@@ -327,7 +290,7 @@ function validateHistoricalPage(page, index, scanFormat) {
     if (path.isAbsolute(page.path) || page.path.includes('\\') || page.path.split('/').some(part => ['', '.', '..'].includes(part))
         || !page.path.startsWith('content/posts/') || !page.path.endsWith('.md')) fail('historical page path is unsafe');
     if (!PAGE_KEY_RE.test(page.pageId)
-        || page.pageId !== `page:${stableHash({ contract: 'historical-page-id-v1', path: page.path, primaryUrl: page.primaryUrl })}`) {
+        || page.pageId !== `page:${stableHash({ ...scanFormat.pageIdHeader, path: page.path, primaryUrl: page.primaryUrl })}`) {
         fail('历史页面的 pageId 与路径和主 URL 不匹配');
     }
     if (!GIT_OID_RE.test(String(page.gitBlobOid || ''))) fail('历史页面的 Git blob OID 无效');
@@ -392,7 +355,8 @@ function validateHistoricalPage(page, index, scanFormat) {
     });
     if (!Array.isArray(page.publicationEvidenceRefs)) fail('历史页面的 publicationEvidenceRefs 必须是数组');
     const fieldNames = page.publicationEvidenceRefs.map(evidence => evidence?.field);
-    if (PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))
+    if ((PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))
+        || fieldNames.includes('paper_digest_tags_schema_fingerprint'))
         && LEGACY_PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))) {
         fail('页面不能同时包含新旧标签字段。');
     }
@@ -459,9 +423,9 @@ function validateHistoricalPage(page, index, scanFormat) {
 }
 
 function validateHistoricalLedger(value) {
-    exact(value, ['contract', 'version', 'source', 'policy', 'pages', 'urlCollisions', 'outboundPostLinks',
+    const header = recordHeaderFor(value, LEDGER_CONTRACT);
+    exact(value, [...Object.keys(header), 'source', 'policy', 'pages', 'urlCollisions', 'outboundPostLinks',
         'outboundPostLinksSha256', 'counts', 'pageSetSha256', 'ledgerSha256'], 'historical page ledger');
-    if (value.contract !== LEDGER_CONTRACT || value.version !== VERSION) fail('历史 ledger 的契约或版本不受支持');
     const ledgerBody = clone(value); delete ledgerBody.ledgerSha256;
     if (assertSha(value.ledgerSha256, 'historical ledgerSha256') !== stableHash(ledgerBody)) fail('historical ledger self-SHA drifted');
     exact(value.source, ['branch', 'head', 'clean', 'statusSha256', 'remoteName', 'remoteIdentitySha256',
@@ -573,8 +537,8 @@ function validateHistoricalLedger(value) {
 }
 
 function validateHistoricalReceipt(value, ledger, ledgerBytes, ledgerName) {
-    exact(value, ['contract', 'version', 'ledger', 'repositorySnapshotSha256', 'receiptSha256'], 'historical receipt');
-    if (value.contract !== LEDGER_RECEIPT_CONTRACT || value.version !== VERSION) fail('历史 receipt 的契约或版本不受支持');
+    const header = recordHeaderFor(value, LEDGER_RECEIPT_CONTRACT);
+    exact(value, [...Object.keys(header), 'ledger', 'repositorySnapshotSha256', 'receiptSha256'], 'historical receipt');
     const body = clone(value); delete body.receiptSha256;
     if (assertSha(value.receiptSha256, 'historical receiptSha256') !== stableHash(body)) fail('historical receipt self-SHA drifted');
     exact(value.ledger, ['name', 'fileSha256', 'ledgerSha256', 'pageSetSha256', 'pageCount'], 'historical receipt ledger');
@@ -710,19 +674,23 @@ function replaySourceAuthorityHandle(handle, { requireProduction = false } = {})
         }
     }
 }
+function authorityHeaderFields(authority) {
+    return { authorityContract: authority.contract,
+        ...(Object.hasOwn(authority, 'schemaFingerprint') ? { authoritySchemaFingerprint: authority.schemaFingerprint } : {}) };
+}
 function authorityReference(source) {
     const { kind, snapshot } = source;
     const authority = snapshot.authority;
     if (kind === 'archive-crawl-identity') {
         return { paperId: authority.paperId, identity: clone(authority.identity), identitySha256: authority.identitySha256,
-            identityRecordSha256: authority.identityRecordSha256, authorityContract: authority.contract,
+            identityRecordSha256: authority.identityRecordSha256, ...authorityHeaderFields(authority),
             authorityName: snapshot.authorityName, authorityFileSha256: snapshot.authorityFileSha256,
             authoritySha256: authority.authoritySha256, evidenceKind: authority.evidenceKind,
             archiveFileSha256: authority.archiveFileSha256, recordSha256: authority.recordSha256 };
     }
     if (kind === 'local-crawl-identity') {
         return { paperId: authority.paperId, identity: clone(authority.identity), identitySha256: authority.identitySha256,
-            identityRecordSha256: authority.identityRecordSha256, authorityContract: authority.contract,
+            identityRecordSha256: authority.identityRecordSha256, ...authorityHeaderFields(authority),
             authorityName: snapshot.authorityName, authorityFileSha256: snapshot.authorityFileSha256,
             authoritySha256: authority.authoritySha256, evidenceKind: authority.evidenceKind, sourceKind: authority.sourceKind,
             sourceRelativePath: authority.sourceRelativePath, sourceFileSha256: authority.sourceFileSha256,
@@ -731,7 +699,7 @@ function authorityReference(source) {
     }
     if (kind === 'conference-crawl-identity') {
         return { paperId: authority.paperId, identity: clone(authority.identity), identitySha256: authority.identitySha256,
-            identityRecordSha256: authority.identityRecordSha256, authorityContract: authority.contract,
+            identityRecordSha256: authority.identityRecordSha256, ...authorityHeaderFields(authority),
             authorityName: snapshot.authorityName, authorityFileSha256: snapshot.authorityFileSha256,
             authoritySha256: authority.authoritySha256, evidenceKind: authority.evidenceKind,
             metadataSnapshotSha256: authority.metadataSnapshotSha256,
@@ -740,17 +708,31 @@ function authorityReference(source) {
     }
     return { paperId: authority.paperId, identity: clone(authority.identity), identitySha256: authority.identitySha256,
         identityRecordSha256: authority.identityRecordSha256,
-        authorityContract: authority.contract, authorityName: snapshot.authorityName,
+        ...authorityHeaderFields(authority), authorityName: snapshot.authorityName,
         authorityFileSha256: snapshot.authorityFileSha256, authoritySha256: authority.authoritySha256,
         evidenceKind: authority.evidenceKind, fulltextSha256: snapshot.fulltextSha256,
         sourceSnapshotSha256: snapshot.sourceSnapshotSha256 };
 }
 function validateAuthorityReference(value, label = 'sourceAuthority') {
     if (value === null) return null;
-    const archiveIdentity = value?.authorityContract === archiveIdentityApi.CONTRACT;
-    const localCrawlIdentity = value?.authorityContract === localCrawlIdentityApi.CONTRACT;
-    const conferenceIdentity = value?.authorityContract === conferenceIdentityApi.CONTRACT;
-    exact(value, archiveIdentity
+    const archiveIdentity = value?.evidenceKind === archiveIdentityApi.EVIDENCE_KIND;
+    const localCrawlIdentity = value?.evidenceKind === localCrawlIdentityApi.EVIDENCE_KIND;
+    const conferenceIdentity = value?.evidenceKind === conferenceIdentityApi.EVIDENCE_KIND;
+    const family = archiveIdentity ? 'historical-archive-crawl-identity-authority'
+        : localCrawlIdentity ? 'historical-local-crawl-identity-authority'
+            : conferenceIdentity ? 'historical-conference-crawl-identity-authority' : 'paper-source-authority';
+    const hasFingerprint = Object.hasOwn(value || {}, 'authoritySchemaFingerprint');
+    let header;
+    try { header = codec.recordHeader(value?.authorityContract, family, value?.authoritySchemaFingerprint); }
+    catch { fail(`${label} 的实际来源格式声明无效`); }
+    // Original references retained only the tag, not the numeric body field.
+    // The actual referenced file still has to pass its complete original header
+    // and retained-source replay. The retired families never issue stable records.
+    if (header.contract !== value?.authorityContract || Object.hasOwn(header, 'schemaFingerprint') !== hasFingerprint
+        || (archiveIdentity || localCrawlIdentity || conferenceIdentity) && hasFingerprint) {
+        fail(`${label} 的实际来源格式声明无效或试图新建退役凭据`);
+    }
+    const fields = archiveIdentity
         ? ['paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'authorityContract', 'authorityName', 'authorityFileSha256',
             'authoritySha256', 'evidenceKind', 'archiveFileSha256', 'recordSha256']
         : conferenceIdentity
@@ -761,7 +743,8 @@ function validateAuthorityReference(value, label = 'sourceAuthority') {
                     'authoritySha256', 'evidenceKind', 'sourceKind', 'sourceRelativePath', 'sourceFileSha256', 'recordPointer',
                     'recordIdentity', 'recordIdentitySha256', 'currentIdentitySnapshot']
         : ['paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'authorityContract', 'authorityName', 'authorityFileSha256',
-            'authoritySha256', 'evidenceKind', 'fulltextSha256', 'sourceSnapshotSha256'], label);
+            'authoritySha256', 'evidenceKind', 'fulltextSha256', 'sourceSnapshotSha256'];
+    exact(value, [...fields, ...(Object.hasOwn(value, 'authoritySchemaFingerprint') ? ['authoritySchemaFingerprint'] : [])], label);
     let identity;
     try { identity = identityApi.normalizeIdentity(value.identity); }
     catch (error) { fail(`${label}.identity 无效：${error.message}`); }
@@ -773,7 +756,7 @@ function validateAuthorityReference(value, label = 'sourceAuthority') {
         || value.identityRecordSha256 !== identityApi.recordSha256(identity)) {
         fail(`${label} 的 paperId、identity 或 SHA 绑定无效`);
     }
-    if ((!archiveIdentity && !localCrawlIdentity && !conferenceIdentity && (value.authorityContract !== authorityApi.CONTRACT || !authorityApi.isEvidenceKind(value.evidenceKind)))
+    if ((!archiveIdentity && !localCrawlIdentity && !conferenceIdentity && !authorityApi.isEvidenceKind(value.evidenceKind))
         || (archiveIdentity && (identity.kind !== 'arxiv' || value.evidenceKind !== archiveIdentityApi.EVIDENCE_KIND))
         || (localCrawlIdentity && (identity.kind !== 'arxiv' || value.evidenceKind !== localCrawlIdentityApi.EVIDENCE_KIND
             || !['archive', 'current'].includes(value.sourceKind)
@@ -900,9 +883,10 @@ function validateAttempt(value, index, assignments, priorStateSha256) {
     return clone(value);
 }
 function assertCrosswalkState(value) {
-    exact(value, ['contract', 'version', 'crosswalkId', 'createdAt', 'source', 'assignments', 'attempts',
+    const header = recordHeaderFor(value, CONTRACT);
+    exact(value, [...Object.keys(header), 'crosswalkId', 'createdAt', 'source', 'assignments', 'attempts',
         'completion', 'identityGroups', 'identityGroupsSha256', 'stateSha256'], 'crosswalk state');
-    if (value.contract !== CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)) fail('crosswalk 的契约、版本或 UUID 不一致');
+    if (!UUID_RE.test(value.crosswalkId)) fail('crosswalk 的契约、版本或 UUID 不一致');
     timestamp(value.createdAt, 'createdAt');
     exact(value.source, ['ledgerName', 'ledgerFileSha256', 'ledgerSha256', 'receiptName', 'receiptFileSha256',
         'receiptSha256', 'repositorySnapshotSha256', 'pageSetSha256', 'paperPageSetSha256', 'papers'], 'crosswalk source');
@@ -936,7 +920,7 @@ function assertCrosswalkState(value) {
     if (!Array.isArray(value.identityGroups)) fail('identityGroups 必须是数组');
     if (!Array.isArray(value.attempts)) fail('attempts 必须是数组');
     const replayed = Object.fromEntries(papers.map(paper => [paper.pageKey, initialAssignment(paper)]));
-    const operations = new Set(); let previousTime = value.createdAt; let expectedPrior = stateDigest({ contract: CONTRACT, version: VERSION,
+    const operations = new Set(); let previousTime = value.createdAt; let expectedPrior = stateDigest({ ...header,
         crosswalkId: value.crosswalkId, createdAt: value.createdAt, source: clone(value.source), assignments: clone(replayed),
         attempts: [], completion: completionFor(replayed), identityGroups: [], identityGroupsSha256: stableHash([]) });
     const attempts = [];
@@ -947,7 +931,7 @@ function assertCrosswalkState(value) {
         if (replayed[attempt.pageKey].status !== 'pending') fail('attempt 重复了已终态的页面 assignment');
         replayed[attempt.pageKey] = { ...replayed[attempt.pageKey], status: attempt.toStatus, reason: attempt.reason,
             decisionArtifactSha256: attempt.decisionArtifactSha256, sourceAuthority: clone(attempt.sourceAuthority) };
-        const prefix = { contract: CONTRACT, version: VERSION, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
+        const prefix = { ...header, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
             source: clone(value.source), assignments: clone(replayed), attempts: [...attempts, attempt],
             completion: completionFor(replayed), identityGroups: identityGroupsFor(replayed),
             identityGroupsSha256: stableHash(identityGroupsFor(replayed)) };
@@ -963,7 +947,7 @@ function assertCrosswalkState(value) {
         || assertSha(value.identityGroupsSha256, 'identityGroupsSha256') !== stableHash(identityGroups)) {
         fail('identityGroups 与 verified assignments 不一致');
     }
-    const rebuilt = { contract: CONTRACT, version: VERSION, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
+    const rebuilt = { ...header, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
         source: clone(value.source), assignments, attempts, completion, identityGroups,
         identityGroupsSha256: stableHash(identityGroups) };
     const digest = stateDigest(rebuilt);
@@ -977,7 +961,7 @@ function buildInitialState(inventoryHandle, { crosswalkId = crypto.randomUUID(),
     if (!UUID_RE.test(crosswalkId)) fail('crosswalkId 必须是规范的 UUID v4');
     const source = sourceBinding(inventory);
     const assignments = Object.fromEntries(source.papers.map(paper => [paper.pageKey, initialAssignment(paper)]));
-    const body = { contract: CONTRACT, version: VERSION, crosswalkId, createdAt: nowIso(now), source,
+    const body = { ...codec.recordHeader(CONTRACT, CONTRACT), crosswalkId, createdAt: nowIso(now), source,
         assignments, attempts: [], completion: completionFor(assignments), identityGroups: [], identityGroupsSha256: stableHash([]) };
     return assertCrosswalkState({ ...body, stateSha256: stateDigest(body) });
 }
@@ -1167,11 +1151,12 @@ function readCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
 
 function decisionDigest(value) { const body = clone(value); delete body.artifactSha256; return stableHash(body); }
 function normalizeDecisionArtifact(value) {
-    const primaryVersion = value?.contract === PRIMARY_ARXIV_DECISION_CONTRACT && value.version === 2;
-    exact(value, ['contract', 'version', 'crosswalkId', 'operationId', 'expectedStateSha256', 'pageKey',
+    const primaryVersion = codec.hasValidHeader(value, PRIMARY_ARXIV_DECISION_CONTRACT, 'contract');
+    const header = recordHeaderFor(value, primaryVersion ? PRIMARY_ARXIV_DECISION_CONTRACT : DECISION_CONTRACT);
+    exact(value, [...Object.keys(header), 'crosswalkId', 'operationId', 'expectedStateSha256', 'pageKey',
         'pagePath', 'pageContentSha256', 'actorId', 'result', 'sourceAuthority', 'createdAt', 'artifactSha256',
         ...(primaryVersion ? ['primaryArxivBinding'] : [])], 'decision artifact');
-    if ((!primaryVersion && (value.contract !== DECISION_CONTRACT || value.version !== VERSION)) || !UUID_RE.test(value.crosswalkId)
+    if (!UUID_RE.test(value.crosswalkId)
         || !UUID_RE.test(value.operationId)) fail('decision 的契约、版本或 UUID 无效');
     assertSha(value.expectedStateSha256, 'decision expectedStateSha256');
     if (!PAGE_KEY_RE.test(value.pageKey)) fail('decision 的 page key 格式不正确');
@@ -1198,7 +1183,7 @@ function buildDecisionArtifact({ state, pageKey, operationId = crypto.randomUUID
     const checked = assertCrosswalkState(state);
     if (!Object.hasOwn(checked.assignments, pageKey)) fail('verified decision 的 pageKey 不在 crosswalk 中');
     const assignment = checked.assignments[pageKey];
-    const body = { contract: DECISION_CONTRACT, version: VERSION, crosswalkId: checked.crosswalkId,
+    const body = { ...codec.recordHeader(DECISION_CONTRACT, DECISION_CONTRACT), crosswalkId: checked.crosswalkId,
         operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
         pageContentSha256: assignment.pageContentSha256, actorId, result: { status, reason },
         sourceAuthority: null, createdAt: nowIso(now) };
@@ -1255,8 +1240,8 @@ function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operat
         }
         fail('verified authority 必须匹配一条显式的非标题页面身份提示');
     }
-    const body = { contract: verifiedPrimary ? PRIMARY_ARXIV_DECISION_CONTRACT : DECISION_CONTRACT,
-        version: verifiedPrimary ? 2 : VERSION, ...(verifiedPrimary ? { primaryArxivBinding: verifiedPrimary } : {}),
+    const decisionFormat = verifiedPrimary ? PRIMARY_ARXIV_DECISION_CONTRACT : DECISION_CONTRACT;
+    const body = { ...codec.recordHeader(decisionFormat, decisionFormat), ...(verifiedPrimary ? { primaryArxivBinding: verifiedPrimary } : {}),
         crosswalkId: checked.crosswalkId,
         operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
         pageContentSha256: assignment.pageContentSha256, actorId, result: { status: 'verified', reason },
@@ -1304,14 +1289,14 @@ function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
     if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner 格式不正确');
     if (!UUID_RE.test(token)) fail('lock owner token 必须是规范的 UUID v4');
     const startedAt = nowIso(now);
-    const body = { contract: LOCK_OWNER_CONTRACT, version: VERSION, owner, pid: process.pid,
+    const body = { ...codec.recordHeader(LOCK_OWNER_CONTRACT, LOCK_OWNER_CONTRACT), owner, pid: process.pid,
         hostname: os.hostname(), token, startedAt, heartbeatAt: startedAt, leaseMs: LOCK_STALE_MS };
     return { ...body, ownerSha256: stableHash(body) };
 }
 function validateLockOwner(value) {
-    exact(value, ['contract', 'version', 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
+    const header = recordHeaderFor(value, LOCK_OWNER_CONTRACT);
+    exact(value, [...Object.keys(header), 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
         'leaseMs', 'ownerSha256'], 'crosswalk lock owner');
-    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== VERSION) fail('crosswalk lock owner 的契约或版本不一致');
     if (!OWNER_RE.test(value.owner)) fail('crosswalk lock owner 格式不正确');
     if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('crosswalk lock owner 的 PID 格式不正确');
     text(value.hostname, 'crosswalk lock hostname', 255);
@@ -1350,17 +1335,7 @@ function processLiveness(record) {
         throw error;
     }
 }
-function localCrawlBatchMayImmediatelyReclaim(snapshot, options = {}) {
-    if (![HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY,
-        HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY].includes(options.recoveryPolicy)) return false;
-    // readLockDirectory 会先校验准确的 owner 契约、规范字节、自哈希和锁目录，
-    // 这个能力对象才可能生效。远端、仍存活、权限不明、格式错误或空的锁，有意
-    // 都不允许立即恢复。
-    return snapshot?.record?.hostname === os.hostname()
-        && processLiveness(snapshot.record) === 'dead';
-}
-function reclaimableLock(snapshot, currentTime = Date.now(), options = {}) {
-    if (localCrawlBatchMayImmediatelyReclaim(snapshot, options)) return true;
+function reclaimableLock(snapshot, currentTime = Date.now()) {
     const liveness = processLiveness(snapshot.record);
     if (liveness === 'alive') return false;
     const heartbeat = new Date(snapshot.record.heartbeatAt).getTime();
@@ -1392,13 +1367,13 @@ function createLockDirectory(lockPath, owner, now) {
     }
     return readLockDirectory(lockPath);
 }
-function clearOrRejectReclaimMarker(reclaimPath, options = {}) {
+function clearOrRejectReclaimMarker(reclaimPath) {
     let snapshot;
     try { snapshot = readLockDirectory(reclaimPath, 'crosswalk lock reclaim marker'); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const liveness = processLiveness(snapshot.record);
     if (liveness === 'alive') fail('crosswalk lock 的回收标记属于存活进程');
-    if (!reclaimableLock(snapshot, Date.now(), options)) fail('crosswalk lock 的回收标记尚未过期');
+    if (!reclaimableLock(snapshot, Date.now())) fail('crosswalk lock 的回收标记尚未过期');
     removeVerifiedLockDirectory(snapshot, 'crosswalk lock reclaim marker');
 }
 function uninstallLockSignalHandlers() {
@@ -1423,12 +1398,12 @@ function installLockSignalHandlers() {
     for (const signal of LOCK_SIGNALS) process.on(signal, handleLockSignal);
     lockSignalHandlersInstalled = true;
 }
-function acquireLock(directory, owner, now, options = {}) {
+function acquireLock(directory, owner, now) {
     if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner 格式不正确');
     const lockPath = path.join(directory, 'operation.lock');
     const reclaimPath = path.join(directory, 'operation.lock.reclaim');
     for (let attempt = 0; attempt < 8; attempt += 1) {
-        try { fs.lstatSync(reclaimPath); clearOrRejectReclaimMarker(reclaimPath, options); }
+        try { fs.lstatSync(reclaimPath); clearOrRejectReclaimMarker(reclaimPath); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
         try {
             const snapshot = createLockDirectory(lockPath, owner, now);
@@ -1442,7 +1417,7 @@ function acquireLock(directory, owner, now, options = {}) {
         const stale = readLockDirectory(lockPath);
         const liveness = processLiveness(stale.record);
         if (liveness === 'alive') fail('crosswalk is locked by a live process');
-        if (!reclaimableLock(stale, Date.now(), options)) fail('crosswalk lock belongs to a dead process but is not stale');
+        if (!reclaimableLock(stale, Date.now())) fail('crosswalk lock belongs to a dead process but is not stale');
         let reclaim;
         try { reclaim = createLockDirectory(reclaimPath, owner, now); }
         catch (error) { if (error.code === 'EEXIST') continue; throw error; }
@@ -1451,7 +1426,7 @@ function acquireLock(directory, owner, now, options = {}) {
             try { current = readLockDirectory(lockPath); }
             catch (error) { if (error.code === 'ENOENT') continue; throw error; }
             if (!sameLockSnapshot(stale, current)) fail('crosswalk operation lock 在过期回收期间已变化');
-            if (!reclaimableLock(current, Date.now(), options)) fail('crosswalk operation lock 已不再可安全回收');
+            if (!reclaimableLock(current, Date.now())) fail('crosswalk operation lock 已不再可安全回收');
             removeVerifiedLockDirectory(current, 'crosswalk operation lock');
         } finally {
             removeVerifiedLockDirectory(reclaim, 'crosswalk lock reclaim marker');
@@ -1480,7 +1455,7 @@ function releaseLock(handle) {
         });
     }
 }
-function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now, recoveryPolicy = null } = {}) {
+function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now } = {}) {
     const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);
     if (!decisionHandle || typeof decisionHandle !== 'object' || !DECISION_HANDLES.has(decisionHandle)) {
         fail('需要已认证的 decision 句柄');
@@ -1489,7 +1464,7 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
     const decision = decisionHandleSnapshot(decisionHandle);
     const expectedDirectory = fs.realpathSync(path.join(directory, 'decisions'));
     if (path.dirname(decision.filename) !== expectedDirectory) fail('decision 句柄不在本 crosswalk 的 decision 目录内');
-    const lock = acquireLock(directory, owner, now, { recoveryPolicy });
+    const lock = acquireLock(directory, owner, now);
     try {
         let replayedAuthorityHandle = null;
         if (originalDecision.authorityAuthenticated) {
@@ -1527,7 +1502,7 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
             fail('decision 的页面快照与 crosswalk assignment 不一致');
         }
         if (current.status !== 'pending') fail('只有 pending assignment 可以接收当前 review decision');
-        if (artifact.contract === PRIMARY_ARXIV_DECISION_CONTRACT) {
+        if (codec.hasValidHeader(artifact, PRIMARY_ARXIV_DECISION_CONTRACT, 'contract')) {
             verifyPrimaryArxivDecisionBinding({ state, binding: artifact.primaryArxivBinding,
                 blogRoot: originalDecision.blogRoot, inventoryRoot: originalDecision.inventoryRoot });
         }
@@ -1557,8 +1532,8 @@ function applyDecisionFile({ crosswalkRoot, crosswalkId, decisionName, owner, no
     const filename = safeDirectJson(path.join(directory, 'decisions'), decisionName);
     return applyDecision({ crosswalkRoot, crosswalkId, decisionHandle: loadDecisionHandle(filename), owner, now });
 }
-function finalReceiptFor(state) {
-    const body = { contract: FINAL_RECEIPT_CONTRACT, version: VERSION, crosswalkId: state.crosswalkId,
+function finalReceiptFor(state, header = codec.recordHeader(FINAL_RECEIPT_CONTRACT, FINAL_RECEIPT_CONTRACT)) {
+    const body = { ...header, crosswalkId: state.crosswalkId,
         stateSha256: state.stateSha256, stateFileSha256: sha256(prettyBytes(state)),
         ledgerSha256: state.source.ledgerSha256, ledgerFileSha256: state.source.ledgerFileSha256,
         historicalReceiptSha256: state.source.receiptSha256,
@@ -1568,10 +1543,11 @@ function finalReceiptFor(state) {
     return { ...body, receiptSha256: stableHash(body) };
 }
 function normalizeFinalReceipt(value) {
-    exact(value, ['contract', 'version', 'crosswalkId', 'stateSha256', 'stateFileSha256', 'ledgerSha256',
+    const header = recordHeaderFor(value, FINAL_RECEIPT_CONTRACT);
+    exact(value, [...Object.keys(header), 'crosswalkId', 'stateSha256', 'stateFileSha256', 'ledgerSha256',
         'ledgerFileSha256', 'historicalReceiptSha256', 'verifiedAssignmentSetSha256', 'identityGroups',
         'identityGroupsSha256', 'verified', 'total', 'receiptSha256'], 'crosswalk final receipt');
-    if (value.contract !== FINAL_RECEIPT_CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)) {
+    if (!UUID_RE.test(value.crosswalkId)) {
         fail('crosswalk 最终 receipt 的契约、版本或 UUID 无效');
     }
     for (const field of ['stateSha256', 'stateFileSha256', 'ledgerSha256', 'ledgerFileSha256',
@@ -1600,13 +1576,13 @@ function replaySourceAuthorities(state, authorityRoot, authorityResolver, archiv
         try {
             handle = authorityResolver
                 ? authorityResolver(clone(reference))
-                : reference.authorityContract === archiveIdentityApi.CONTRACT
+                : reference.evidenceKind === archiveIdentityApi.EVIDENCE_KIND
                     ? archiveIdentityApi.loadArchiveCrawlAuthorityHandle({ identityRoot: archiveIdentityRoot,
                         dataRoot: archiveDataRoot, authorityName: reference.authorityName })
-                    : reference.authorityContract === localCrawlIdentityApi.CONTRACT
+                    : reference.evidenceKind === localCrawlIdentityApi.EVIDENCE_KIND
                         ? localCrawlIdentityApi.loadLocalCrawlAuthorityHandle({ identityRoot: localCrawlIdentityRoot,
                             snapshotRoot: localCrawlSnapshotRoot, dataRoot: localCrawlDataRoot, authorityName: reference.authorityName })
-                    : reference.authorityContract === conferenceIdentityApi.CONTRACT
+                    : reference.evidenceKind === conferenceIdentityApi.EVIDENCE_KIND
                         ? conferenceIdentityApi.loadConferenceCrawlAuthorityHandle({ identityRoot: conferenceIdentityRoot,
                             dataRoot: conferenceDataRoot, blogRoot: conferenceBlogRoot, iclrAcceptedRoot: conferenceIclrAcceptedRoot,
                             authorityName: reference.authorityName })
@@ -1630,7 +1606,8 @@ function readFinalReceipt({ crosswalkRoot, crosswalkId, authorityRoot, authority
     const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);
     const receiptFile = safeDirectJson(directory, 'final-receipt.json');
     const loaded = readRegular(receiptFile, MAX_RECEIPT_BYTES, 'crosswalk final receipt');
-    const receipt = normalizeFinalReceipt(loaded.value); const expected = finalReceiptFor(state);
+    const receipt = normalizeFinalReceipt(loaded.value);
+    const expected = finalReceiptFor(state, recordHeaderFor(receipt, FINAL_RECEIPT_CONTRACT));
     if (!loaded.bytes.equals(prettyBytes(receipt)) || stableHash(receipt) !== stableHash(expected)) {
         fail('crosswalk 最终 receipt 与当前完整 state 不匹配');
     }
@@ -1672,8 +1649,7 @@ function finalizeCrosswalk({ crosswalkRoot, crosswalkId, authorityRoot, authorit
 module.exports = {
     LEDGER_CONTRACT, LEDGER_RECEIPT_CONTRACT, CONTRACT, DECISION_CONTRACT, LOCK_OWNER_CONTRACT,
     FINAL_RECEIPT_CONTRACT,
-    VERSION, UUID_RE, SAFE_JSON_NAME, LOCK_STALE_MS,
-    HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY, HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY,
+    UUID_RE, SAFE_JSON_NAME, LOCK_STALE_MS,
     PageSourceCrosswalkError, stableHash, prettyBytes, safeDirectory, safeDirectJson,
     validateHistoricalLedger, validateHistoricalReceipt, loadHistoricalInventoryHandle, inventoryHandleSnapshot,
     assignmentKey, sourceBinding, completionFor, identityGroupsFor, normalizeIdentityGroups,

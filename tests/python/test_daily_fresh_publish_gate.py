@@ -53,11 +53,14 @@ def _source_artifacts(text_sha):
     })
 
 
-def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_prefix='', html_urls=None, source_texts=None):
+def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_prefix='', html_urls=None, source_texts=None, stable=False):
     """按 Node 抓取路径的样式在来源库里造出字节。"""
     date = '2026-09-07'
     run_id = '11111111-1111-4111-8111-111111111111'
     batch_id = 'python-publish-gate'
+    def format_fields(family, original):
+        return publish_to_blog.public_protocols.record_header(family, family) if stable else original
+
     root = Path(root)
     run_dir = root / run_id
     papers = []
@@ -116,7 +119,7 @@ def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_pr
             'htmlAttempts': 1, 'warnings': [],
         }
         proof = {
-            'contract': 'fresh-source-analysis-v1', 'runId': run_id,
+            **format_fields('fresh-source-analysis', {'contract': 'fresh-source-analysis-v1'}), 'runId': run_id,
             'sourceGeneration': 1,
             'sourceManifestSha256': hashlib.sha256(manifest_bytes).hexdigest(),
             'sourceSha256': text_sha,
@@ -140,13 +143,11 @@ def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_pr
         'sourceGeneration': 1,
     }))
     run = {
-        'contract': 'daily-fresh-source-run-v1', 'version': 1,
+        **format_fields('daily-fresh-source-run', {'contract': 'daily-fresh-source-run-v1', 'version': 1}),
         'runId': run_id, 'batchDate': date, 'batchId': batch_id,
         'paperIds': paper_ids, 'sourceSetSha256': source_set_sha,
         'sourceExpectations': {
-            paper_id: {
-                'sourceMode': 'sealed-arxiv-bundle-v1', 'sourceGeneration': 1,
-            }
+            paper_id: publish_to_blog.bundle_expectation(1, original=not stable)
             for paper_id in paper_ids
         },
     }
@@ -155,7 +156,7 @@ def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_pr
     return {
         'batchDate': date,
         'dailyFreshSourceRun': {
-            'contract': 'daily-fresh-source-reference-v1', 'version': 1,
+            **format_fields('daily-fresh-source-reference', {'contract': 'daily-fresh-source-reference-v1', 'version': 1}),
             'runId': run_id, 'batchDate': date, 'batchId': batch_id,
             'sourceGeneration': 1, 'sourceSetSha256': source_set_sha,
             'runManifestSha256': hashlib.sha256(run_bytes).hexdigest(),
@@ -169,6 +170,27 @@ class DailyFreshPublishGateTest(unittest.TestCase):
         data_file = Path(root) / 'deep-analysis-result.json'
         data_file.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         return data_file
+
+    def test_stable_daily_run_reference_and_provenance_require_the_same_actual_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'daily-fresh-source-runs'
+            payload = _daily_payload(root, ['2609.12348'], stable=True)
+            source = self._write_payload(tmp, payload)
+            with mock.patch.object(publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', root):
+                publish_to_blog.validate_daily_fresh_sources_for_publish(source, '2026-09-07')
+                wrong = copy.deepcopy(payload)
+                wrong['dailyFreshSourceRun']['sourceGeneration'] = True
+                self._write_payload(tmp, wrong)
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '引用|格式'):
+                    publish_to_blog.validate_daily_fresh_sources_for_publish(source, '2026-09-07')
+                wrong = copy.deepcopy(payload)
+                proof = wrong['papers'][0]['freshRewriteProvenance']
+                proof['contract'] = 'fresh-source-analysis-v1'
+                proof.pop('schemaFingerprint')
+                wrong['papers'][0]['analysisManifest']['freshRewriteProvenance'] = copy.deepcopy(proof)
+                self._write_payload(tmp, wrong)
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'provenance'):
+                    publish_to_blog.validate_daily_fresh_sources_for_publish(source, '2026-09-07')
 
     def test_old_unicode_inputs_require_reanalysis_after_real_source_validation(self):
         for field, value in (
@@ -392,6 +414,7 @@ class DailyFreshPublishGateTest(unittest.TestCase):
             reference = publish_to_blog.build_generation_input_source_reference(data_file)
             papers = payload['papers']
             manifest = {
+                'schemaVersion': 3,
                 'category': '论文速递',
                 'publishAll': False,
                 'publishedPapers': papers,

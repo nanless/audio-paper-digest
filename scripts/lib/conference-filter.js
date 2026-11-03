@@ -17,23 +17,16 @@ const { renderFilterPrompt } = require('./filter-prompt.js');
 const Config = require('../config.js');
 const utilsApi = require('../utils.js');
 const {
-    LLM_FILTER_PROMPT_PATH,
-    FROZEN_LLM_FILTER_PROMPT_PATH, FROZEN_V2_LLM_FILTER_PROMPT_PATH, FROZEN_V3_LLM_FILTER_PROMPT_PATH, FROZEN_V4_LLM_FILTER_PROMPT_PATH
-} = require('./prompt-text-versions.js');
+    LLM_FILTER_PROMPT_PATH
+} = require('./prompt-contracts.js');
+const legacyFilterPrompts = require('./prompt-legacy-codec.js').filterRecords;
 const fixedRequestLlmJson = utilsApi.requestLlmJson;
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
+const historicalWorkflows = require('./workflow-legacy-codec');
 
-const VERSION = 6;
-const CONTRACT = 'conference-filter-v6';
-const LEGACY_VERSION = 5;
-const LEGACY_CONTRACT = 'conference-filter-v5';
-const SPEC_VERSION = 6;
-const SPEC_CONTRACT = 'conference-filter-spec-v6';
-const LEGACY_SPEC_VERSION = 5;
-const LEGACY_SPEC_CONTRACT = 'conference-filter-spec-v5';
-const DECISION_VERSION = 5;
-const SELECTION_RECEIPT_VERSION = 5;
-const SELECTION_HANDLE_VERSION = 5;
-const LOCK_OWNER_VERSION = 5;
+const CONTRACT = codec.contract('conference-filter');
+const SPEC_CONTRACT = codec.contract('conference-filter-spec');
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -43,9 +36,9 @@ const PROTOCOLS = new Set(['openai-responses', 'openai-chat', 'anthropic-message
 const DECISION_STATUSES = new Set(['pending', 'included', 'excluded', 'failed']);
 const FINAL_STATUSES = new Set(['included', 'excluded']);
 const EVIDENCE_STATUSES = new Set(['ready', 'missing', 'ambiguous', 'too-short', 'extraction-blocked']);
-const DECISION_CONTRACT = 'conference-filter-decision-v5';
-const SELECTION_RECEIPT_CONTRACT = 'conference-filter-selection-receipt-v5';
-const SELECTION_HANDLE_CONTRACT = 'conference-filter-selection-v5';
+const DECISION_CONTRACT = codec.contract('conference-filter-decision');
+const SELECTION_RECEIPT_CONTRACT = codec.contract('conference-filter-selection-receipt');
+const SELECTION_HANDLE_CONTRACT = codec.contract('conference-filter-selection');
 const ACTOR_TYPES = new Set(['llm', 'manual', 'keyword']);
 const MAX_DECISION_PAYLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_LLM_REQUEST_BYTES = 512 * 1024;
@@ -55,13 +48,10 @@ const SELECTION_HANDLES = new WeakSet();
 const SELECTION_HANDLE_DATA = new WeakMap();
 const LLM_ARTIFACT_AUTHORITY = Symbol('conference-filter-llm-runner');
 const KEYWORD_ARTIFACT_AUTHORITY = Symbol('conference-filter-keyword-prefilter');
-const LLM_REQUEST_CONTRACT = 'conference-filter-llm-request-v3';
-const LLM_REQUEST_VERSION = 3;
-const LEGACY_LLM_REQUEST_CONTRACT = 'conference-filter-llm-request-v2';
-const LEGACY_LLM_REQUEST_VERSION = 2;
-const LLM_INTENT_CONTRACT = 'conference-filter-llm-intent-v2';
-const LLM_TRANSPORT_RECEIPT_CONTRACT = 'conference-filter-llm-transport-receipt-v1';
-const LOCK_OWNER_CONTRACT = 'conference-filter-lock-owner-v1';
+const LLM_REQUEST_CONTRACT = codec.contract('conference-filter-llm-request');
+const LLM_INTENT_CONTRACT = codec.contract('conference-filter-llm-intent');
+const LLM_TRANSPORT_RECEIPT_CONTRACT = codec.contract('conference-filter-llm-transport-receipt');
+const LOCK_OWNER_CONTRACT = codec.contract('conference-filter-lock-owner');
 const LOCK_STALE_MS = 2 * 60 * 60 * 1000;
 const KEYWORD_PREFILTER_CHECKPOINT_INTERVAL = 128;
 const MAX_LOCK_OWNER_BYTES = 64 * 1024;
@@ -72,8 +62,8 @@ const LOCK_HANDLE_DATA = new WeakMap();
 const LLM_FILTER_PROMPT = renderFilterPrompt({
     title: '{title}', abstract: '{abstract}', categories: '{categories}'
 }, LLM_FILTER_PROMPT_PATH);
-const DAILY_DECISION_PARSER_VERSION = decisionApi.FILTER_DECISION_CONTRACT;
-const CORE_CONFERENCE_FALLBACK_VERSION = 'core-audio-conferences-2026-v1';
+const DAILY_DECISION_PARSER_CONTRACT = decisionApi.FILTER_DECISION_CONTRACT;
+const CORE_CONFERENCE_FALLBACK_CONTRACT = codec.contract('core-audio-conferences-2026');
 const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'chime-2026': 'CHiME Speech Separation and Recognition',
     'dafx-2026': 'Digital Audio Effects',
@@ -87,9 +77,10 @@ const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
 });
 const CORE_AUDIO_CONFERENCE_IDS = Object.freeze(Object.keys(CORE_AUDIO_CONFERENCE_LABELS).sort());
 const FILTER_CONFIG_BINDING = Object.freeze({
-    decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion,
-    keywordPrefilterVersion: keywordPrefilter.KEYWORD_PREFILTER_VERSION,
-    coreConferenceFallbackVersion: CORE_CONFERENCE_FALLBACK_VERSION,
+    decisionContractProfile: Config.FILTER_CONFIG.decisionContractProfile,
+    keywordPrefilterProfile: keywordPrefilter.KEYWORD_PREFILTER_PROFILE,
+    coreConferenceFallbackContract: CORE_CONFERENCE_FALLBACK_CONTRACT,
+    coreConferenceFallbackSchemaFingerprint: codec.schemaFingerprint('core-audio-conferences-2026'),
     coreAudioConferenceLabels: CORE_AUDIO_CONFERENCE_LABELS,
     keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
     batchSize: Math.min(5, Config.FILTER_CONFIG.batchSize),
@@ -102,12 +93,25 @@ const FILTER_CONFIG_BINDING = Object.freeze({
     evidenceLocatorContract: evidenceApi.LOCATOR_CONTRACT
 });
 const LLM_FILTER_POLICY = JSON.stringify({
-    prompt: 'prompts/filter.md:first-fenced-block',
-    parser: DAILY_DECISION_PARSER_VERSION,
+    prompt: 'filter:first-fenced-block',
+    parser: DAILY_DECISION_PARSER_CONTRACT,
     ...FILTER_CONFIG_BINDING
 });
 
 function fail(message) { throw new Error(`Invalid conference filter: ${message}`); }
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`format header invalid: ${error.message}`); }
+}
+
+// Only a verified existing state/spec/source route may dispatch this view.
+// It preserves the original window's input SHA; new tasks never choose it.
+function headerForState(state, family, historicalVariant) {
+    recordHeaderFor(state, 'conference-filter');
+    return codec.isCurrentHeader(state, 'conference-filter')
+        ? codec.recordHeader(codec.contract(family), family)
+        : codec.historicalHeader(family, historicalVariant);
+}
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -129,27 +133,8 @@ const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
 // 只兼容同一运行预算与会议身份下的固定旧 v4、v5 词表策略，不接受任意外来版本。
-const LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256 = sha256(Buffer.from(JSON.stringify({
-    prompt: 'prompts/filter.md:first-fenced-block',
-    parser: DAILY_DECISION_PARSER_VERSION,
-    ...FILTER_CONFIG_BINDING,
-    keywordPrefilterVersion: 'speech-audio-music-v4'
-}), 'utf8'));
-const LEGACY_KEYWORD_V5_FILTER_POLICY_SHA256 = sha256(Buffer.from(JSON.stringify({
-    prompt: 'prompts/filter.md:first-fenced-block',
-    parser: DAILY_DECISION_PARSER_VERSION,
-    ...FILTER_CONFIG_BINDING,
-    keywordPrefilterVersion: 'speech-audio-music-v5'
-}), 'utf8'));
-const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set([
-    LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256, LEGACY_KEYWORD_V5_FILTER_POLICY_SHA256
-]);
-const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
-    LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256,
-    LEGACY_KEYWORD_V5_FILTER_POLICY_SHA256,
-    '382af4406aaf0f4c8e49f22cdacb9ab215c4ab0563903b49930cb3ed8cf9e096',
-    '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275'
-]);
+const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set(historicalWorkflows.previousKeywordPolicyHashes());
+const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze(historicalWorkflows.filterPolicyHashes());
 const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGACY_FILTER_POLICY_SHA256_LIST]);
 // 筛选提示词的兼容窗口。会议路径按「渲染占位符之后的首块」算 SHA，改一个字就会让
 // 旧 spec 的 promptSha256 对不上，所以提示词换版本时必须先在这里登记旧值。
@@ -198,8 +183,8 @@ function nowIso(now) {
 }
 
 function normalizeCatalog(value) {
-    exact(value, ['contract', 'conferenceId', 'catalogSha256', 'members'], 'catalog');
-    const contract = nonempty(value.contract, 'catalog.contract', /^[a-z0-9]+(?:-[a-z0-9]+)*-v\d+$/);
+    const header = recordHeaderFor(value, 'conference-discovery-catalog');
+    exact(value, [...Object.keys(header), 'conferenceId', 'catalogSha256', 'members'], 'catalog');
     const conferenceId = nonempty(value.conferenceId, 'catalog.conferenceId', /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     const catalogSha256 = assertSha(value.catalogSha256, 'catalog.catalogSha256');
     if (!Array.isArray(value.members) || !value.members.length) fail('catalog.members 必须是非空数组');
@@ -209,7 +194,7 @@ function normalizeCatalog(value) {
             sourceSha256: assertSha(member.sourceSha256, `catalog.members[${index}].sourceSha256`) };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (new Set(members.map(member => member.paperId)).size !== members.length) fail('catalog 含重复的 paperId');
-    return { contract, conferenceId, catalogSha256, members };
+    return { ...header, conferenceId, catalogSha256, members };
 }
 
 function trustedDiscovery(handle) {
@@ -227,15 +212,15 @@ function catalogFromDiscoveryHandle(handle) {
 }
 
 function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
-    const discoveryFields = ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
+    const header = recordHeaderFor(value, 'conference-discovery');
+    const discoveryFields = [...Object.keys(header), 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
         'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'];
     // 新抓到的官方论文集可能带不可变的获取凭证绑定。loadDiscoveryHandle() 已经
     // 重新核对并校验过这个可选字段；筛选目录要保留文档哈希，同时不要拒绝这个
     // 已认证的扩展。
     if (Object.hasOwn(value, 'acquisitionReceipt')) discoveryFields.push('acquisitionReceipt');
     exact(value, discoveryFields, 'discovery document');
-    if (value.contract !== discoveryApi.CONTRACT || value.version !== discoveryApi.VERSION
-        || !discoveryApi.ADAPTERS.has(value.adapter)) fail('discovery 文档的契约或适配器不受支持');
+    if (!discoveryApi.ADAPTERS.has(value.adapter)) fail('discovery 文档的契约或适配器不受支持');
     exact(value.conference, ['id', 'year'], 'discovery conference');
     const conferenceId = nonempty(value.conference.id, 'discovery conference.id', /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     if (!Number.isInteger(value.conference.year) || value.conference.year < 1900 || value.conference.year > 2100) {
@@ -311,24 +296,27 @@ function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
             ...(value.adapter === 'official-proceedings' ? { pdfFile: member.pdfFile } : {}), match: member.match });
         return { paperId, sourceSha256 };
     });
-    return normalizeCatalog({ contract: 'conference-discovery-catalog-v2', conferenceId,
+    const catalogHeader = codec.isCurrentHeader(value, 'conference-discovery')
+        ? codec.recordHeader(codec.contract('conference-discovery-catalog'), 'conference-discovery-catalog')
+        : codec.historicalHeader('conference-discovery-catalog', 'discovered-papers');
+    return normalizeCatalog({ ...catalogHeader, conferenceId,
         catalogSha256: assertSha(documentSha256, 'discovery document SHA'), members });
 }
 
 function isLegacySpec(value) {
-    if (value?.contract === LEGACY_SPEC_CONTRACT && value.version === LEGACY_SPEC_VERSION) return true;
-    if (value?.contract === SPEC_CONTRACT && value.version === SPEC_VERSION) return false;
-    fail('filter spec contract/version mismatch');
+    try { recordHeaderFor(value, 'conference-filter-spec');
+        return codec.format(value.contract, 'conference-filter-spec', value.schemaFingerprint) === 'taxonomy'; }
+    catch { fail('filter spec contract/version mismatch'); }
 }
 function isLegacyState(value) {
-    if (value?.contract === LEGACY_CONTRACT && value.version === LEGACY_VERSION) return true;
-    if (value?.contract === CONTRACT && value.version === VERSION) return false;
-    fail('contract/version mismatch');
+    try { recordHeaderFor(value, 'conference-filter');
+        return codec.format(value.contract, 'conference-filter', value.schemaFingerprint) === 'taxonomy'; }
+    catch { fail('contract/version mismatch'); }
 }
 function isLegacyRequest(value) {
-    if (value?.contract === LEGACY_LLM_REQUEST_CONTRACT && value.version === LEGACY_LLM_REQUEST_VERSION) return true;
-    if (value?.contract === LLM_REQUEST_CONTRACT && value.version === LLM_REQUEST_VERSION) return false;
-    fail('LLM request contract/version mismatch');
+    try { recordHeaderFor(value, 'conference-filter-llm-request');
+        return codec.format(value.contract, 'conference-filter-llm-request', value.schemaFingerprint) === 'taxonomy'; }
+    catch { fail('LLM request contract/version mismatch'); }
 }
 function tagCatalogField(value, legacy, label) {
     if (!isPlainObject(value)) fail(`${label} 必须是普通对象。`);
@@ -342,7 +330,8 @@ function tagCatalogField(value, legacy, label) {
     return field;
 }
 function assertRequestFormatForState(state, envelope) {
-    if (isLegacyState(state) !== isLegacyRequest(envelope)) {
+    if (isLegacyState(state) !== isLegacyRequest(envelope)
+        || codec.isCurrentHeader(state, 'conference-filter') !== codec.isCurrentHeader(envelope, 'conference-filter-llm-request')) {
         fail('请求格式与筛选记录不一致。');
     }
 }
@@ -350,7 +339,8 @@ function assertRequestFormatForState(state, envelope) {
 function normalizeSpec(value) {
     const legacy = isLegacySpec(value);
     const catalogField = tagCatalogField(value, legacy, '筛选配置');
-    exact(value, ['contract', 'version', 'filterPolicySha256', 'promptSha256', 'model', 'endpointProtocol',
+    const header = recordHeaderFor(value, 'conference-filter-spec');
+    exact(value, [...Object.keys(header), 'filterPolicySha256', 'promptSha256', 'model', 'endpointProtocol',
         'endpointIdentitySha256', catalogField, 'evidenceCatalogContract', 'discovery',
         'evidence'], 'filter spec');
     const model = nonempty(value.model, 'filter spec model', /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/);
@@ -367,12 +357,12 @@ function normalizeSpec(value) {
             'filter spec discovery.candidateSetSha256')
     };
     const evidence = normalizeEvidenceBinding(value.evidence);
-    const expectedLocator = evidenceApi.locatorBindingForConference({ id: discovery.conferenceId });
+    const expectedLocator = evidenceApi.locatorBindingForConference({ id: discovery.conferenceId }, evidence.locator);
     if (stableHash(evidence.locator) !== stableHash(expectedLocator)) {
         fail('filter spec evidence locator is not a registered binding for its conference');
     }
     return {
-        contract: value.contract, version: value.version,
+        ...header,
         filterPolicySha256: assertSha(value.filterPolicySha256, 'filter spec filterPolicySha256'),
         promptSha256: assertSha(value.promptSha256, 'filter spec promptSha256'), model,
         endpointProtocol: value.endpointProtocol,
@@ -389,10 +379,11 @@ function tagCatalogSha256ForSpec(value) {
 }
 
 function normalizeLocatorBinding(value, label = 'filter evidence locator') {
+    const header = recordHeaderFor(value, 'conference-abstract-locator');
     const fields = value && Object.hasOwn(value, 'profile')
-        ? ['contract', 'profile', 'implementationSha256'] : ['contract', 'implementationSha256'];
+        ? [...Object.keys(header), 'profile', 'implementationSha256'] : [...Object.keys(header), 'implementationSha256'];
     exact(value, fields, label);
-    const normalized = { contract: nonempty(value.contract, `${label}.contract`) };
+    const normalized = { ...header };
     if (fields.includes('profile')) normalized.profile = nonempty(value.profile, `${label}.profile`);
     normalized.implementationSha256 = assertSha(value.implementationSha256,
         `${label}.implementationSha256`);
@@ -413,14 +404,14 @@ function normalizeEvidenceBinding(value, catalog) {
     return { ...clone(value), locator };
 }
 
-function evidenceBindingFromHandle(evidenceHandle, catalog) {
+function checkedEvidenceBinding(evidenceHandle, catalog) {
     let snapshot;
     try { snapshot = evidenceApi.evidenceHandleSnapshot(evidenceHandle); }
     catch (error) { fail(`需要完整且已认证的 evidence 句柄：${error.message}`); }
     const normalizedCatalog = normalizeCatalog(catalog);
     const { catalog: evidenceCatalog, report } = snapshot;
-    if (evidenceCatalog.contract !== evidenceApi.CATALOG_CONTRACT
-        || evidenceCatalog.binding.conference.id !== normalizedCatalog.conferenceId
+    recordHeaderFor(evidenceCatalog, 'conference-filter-evidence-catalog');
+    if (evidenceCatalog.binding.conference.id !== normalizedCatalog.conferenceId
         || evidenceCatalog.binding.catalogSha256 !== normalizedCatalog.catalogSha256
         || report.catalogSha256 !== evidenceCatalog.catalogSha256) {
         fail('evidence 的 catalog 或 report 与同一个 discovery catalog 不匹配');
@@ -430,11 +421,12 @@ function evidenceBindingFromHandle(evidenceHandle, catalog) {
         || paperIds.some((paperId, index) => paperId !== normalizedCatalog.members[index].paperId)) {
         fail('evidence catalog 未覆盖 discovery 的完整候选集合');
     }
-    return normalizeEvidenceBinding({ runId: evidenceCatalog.binding.runId,
+    return { catalogContract: evidenceCatalog.contract, binding: normalizeEvidenceBinding({ runId: evidenceCatalog.binding.runId,
         catalogSha256: evidenceCatalog.catalogSha256, reportSha256: report.reportSha256,
         stateSha256: evidenceCatalog.stateSha256, memberSetSha256: evidenceCatalog.memberSetSha256,
-        locator: clone(evidenceCatalog.locator) }, normalizedCatalog);
+        locator: clone(evidenceCatalog.locator) }, normalizedCatalog) };
 }
+function evidenceBindingFromHandle(evidenceHandle, catalog) { return checkedEvidenceBinding(evidenceHandle, catalog).binding; }
 
 function inputBinding(catalog, spec, evidenceBinding) {
     const normalizedCatalog = normalizeCatalog(catalog); const normalizedSpec = normalizeSpec(spec);
@@ -531,11 +523,11 @@ function decisionArtifactDigest(value) {
 }
 
 function normalizeDecisionArtifact(value) {
-    exact(value, ['contract', 'version', 'filterId', 'operationId', 'expectedStateSha256', 'paperId',
+    const header = recordHeaderFor(value, 'conference-filter-decision');
+    exact(value, [...Object.keys(header), 'filterId', 'operationId', 'expectedStateSha256', 'paperId',
         'sourceSha256', 'actor', 'model', 'endpointProtocol', 'endpointIdentitySha256',
         'requestEnvelopeSha256', 'transportReceiptSha256', 'request', 'response', 'result', 'createdAt',
         'artifactSha256'], 'decision artifact');
-    if (value.contract !== DECISION_CONTRACT || value.version !== DECISION_VERSION) fail('decision artifact 的契约或版本不一致');
     nonempty(value.filterId, 'decision artifact filterId', UUID_RE);
     nonempty(value.operationId, 'decision artifact operationId', UUID_RE);
     assertSha(value.expectedStateSha256, 'decision artifact expectedStateSha256');
@@ -595,7 +587,7 @@ function buildDecisionArtifactFromCheckedState({ state: checked, paperId, operat
     nonempty(paperId, 'decision artifact paperId', PAPER_ID_RE);
     if (!Object.prototype.hasOwnProperty.call(checked.decisions, paperId)) fail('decision artifact 引用了非候选论文');
     const response = responseBytes === null ? null : byteRecord(responseBytes, 'decision response');
-    const artifact = { contract: DECISION_CONTRACT, version: DECISION_VERSION, filterId: checked.filterId, operationId,
+    const artifact = { ...codec.recordHeader(DECISION_CONTRACT, 'conference-filter-decision'), filterId: checked.filterId, operationId,
         expectedStateSha256: checked.stateSha256, paperId,
         sourceSha256: checked.decisions[paperId].sourceSha256, actor, model, endpointProtocol,
         endpointIdentitySha256, requestEnvelopeSha256, transportReceiptSha256,
@@ -693,7 +685,8 @@ function normalizePatch(value) {
 }
 
 function assertFilterState(value) {
-    exact(value, ['version', 'contract', 'filterId', 'createdAt', 'input', 'decisions', 'completion', 'attempts', 'stateSha256'], 'filter state');
+    const header = recordHeaderFor(value, 'conference-filter');
+    exact(value, [...Object.keys(header), 'filterId', 'createdAt', 'input', 'decisions', 'completion', 'attempts', 'stateSha256'], 'filter state');
     const legacy = isLegacyState(value);
     if (!Array.isArray(value.attempts) || value.attempts.some(attempt => !isPlainObject(attempt))) fail('attempts 必须是普通对象数组');
     if (assertSha(value.stateSha256, 'stateSha256') !== stateDigest(value)) fail('state SHA drifted');
@@ -725,7 +718,7 @@ function assertFilterState(value) {
     if (!Array.isArray(value.attempts)) fail('attempts 必须是数组');
     const initial = Object.fromEntries(paperIds.map(paperId => [paperId, initialDecision(decisions[paperId].sourceSha256)]));
     const replayed = clone(initial); const attempts = []; const operations = new Set();
-    const base = { version: value.version, contract: value.contract, filterId: value.filterId, createdAt: value.createdAt,
+    const base = { ...header, filterId: value.filterId, createdAt: value.createdAt,
         input: clone(value.input), decisions: clone(initial), completion: completionFor(initial), attempts: [] };
     const digestChain = new StateDigestChain(base);
     let previousDigest = digestChain.materialize().stateSha256; let previousTime = value.createdAt;
@@ -766,7 +759,7 @@ function assertFilterState(value) {
     }
     if (stableHash(replayed) !== stableHash(decisions)) fail('decisions 与只追加的 attempt 历史不一致');
     const completion = normalizeCompletion(value.completion, decisions);
-    const rebuilt = { version: value.version, contract: value.contract, filterId: value.filterId, createdAt: value.createdAt,
+    const rebuilt = { ...header, filterId: value.filterId, createdAt: value.createdAt,
         input: clone(value.input), decisions, completion, attempts };
     const digest = stateDigest(rebuilt); assertSha(value.stateSha256, 'stateSha256');
     if (value.stateSha256 !== digest) fail('state SHA drifted');
@@ -776,6 +769,9 @@ function assertFilterState(value) {
 
 function assertBoundInputsFromCheckedState(checked, { catalog, spec, evidenceBinding }) {
     if (isLegacyState(checked) !== isLegacySpec(normalizeSpec(spec))) fail('筛选配置与任务记录的格式不一致。');
+    if (codec.isCurrentHeader(checked, 'conference-filter') !== codec.isCurrentHeader(spec, 'conference-filter-spec')) {
+        fail('筛选配置与任务记录的原格式身份不一致。');
+    }
     const expected = inputBinding(catalog, spec, evidenceBinding);
     if (stableHash(checked.input) !== stableHash(expected)) fail('catalog、source、prompt、model、protocol、policy 或 tag catalog 输入已变化');
     return checked;
@@ -855,14 +851,13 @@ function replaceRegular(filename, bytes) {
 function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
     nonempty(owner, 'owner', OWNER_RE); nonempty(token, 'lock owner token', UUID_RE);
     const startedAt = nowIso(now);
-    const body = { contract: LOCK_OWNER_CONTRACT, version: LOCK_OWNER_VERSION, owner, pid: process.pid,
+    const body = { ...codec.recordHeader(LOCK_OWNER_CONTRACT, 'conference-filter-lock-owner'), owner, pid: process.pid,
         hostname: os.hostname(), token, startedAt, heartbeatAt: startedAt, leaseMs: LOCK_STALE_MS };
     return { ...body, ownerSha256: stableHash(body) };
 }
 function validateLockOwner(value) {
-    exact(value, ['contract', 'version', 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
+    exact(value, [...Object.keys(recordHeaderFor(value, 'conference-filter-lock-owner')), 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
         'leaseMs', 'ownerSha256'], 'filter lock owner');
-    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== LOCK_OWNER_VERSION) fail('filter lock owner 的契约或版本不一致');
     nonempty(value.owner, 'filter lock owner', OWNER_RE);
     if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('filter lock 的 PID 格式不正确');
     nonempty(value.hostname, 'filter lock hostname');
@@ -978,19 +973,20 @@ function releaseLock(handle) {
 
 function prepareFilter({ filterRoot, discoveryHandle, evidenceHandle, spec, filterId = crypto.randomUUID(), now } = {}) {
     const normalizedCatalog = catalogFromDiscoveryHandle(discoveryHandle); const normalizedSpec = normalizeSpec(spec);
-    const evidenceBinding = evidenceBindingFromHandle(evidenceHandle, normalizedCatalog);
+    const checkedEvidence = checkedEvidenceBinding(evidenceHandle, normalizedCatalog);
+    const evidenceBinding = checkedEvidence.binding;
     const discovery = trustedDiscovery(discoveryHandle);
     const expectedDiscovery = { contract: normalizedCatalog.contract, conferenceId: normalizedCatalog.conferenceId,
         catalogSha256: normalizedCatalog.catalogSha256, reportSha256: discovery.reportSha256,
         candidateSetSha256: stableHash(normalizedCatalog.members) };
-    if (normalizedSpec.evidenceCatalogContract !== evidenceApi.CATALOG_CONTRACT
+    if (normalizedSpec.evidenceCatalogContract !== checkedEvidence.catalogContract
         || stableHash(normalizedSpec.discovery) !== stableHash(expectedDiscovery)
         || stableHash(normalizedSpec.evidence) !== stableHash(evidenceBinding)) {
         fail('filter spec does not bind this authenticated discovery and evidence run');
     }
     nonempty(filterId, 'filterId', UUID_RE);
-    if (isLegacySpec(normalizedSpec)
-        || LEGACY_KEYWORD_FILTER_POLICY_SHA256.has(normalizedSpec.filterPolicySha256)) {
+    if (!codec.isCurrentHeader(normalizedSpec, 'conference-filter-spec')
+        || LEGACY_FILTER_POLICY_SHA256_LIST.includes(normalizedSpec.filterPolicySha256)) {
         // 旧任务只有通过完整核验后才能继续，不能借旧配置创建新任务。
         const existing = readFilter({ filterRoot, filterId });
         const bound = assertBoundInputsFromCheckedState(existing,
@@ -999,7 +995,7 @@ function prepareFilter({ filterRoot, discoveryHandle, evidenceHandle, spec, filt
     }
     const root = safeDirectory(filterRoot, true);
     const decisions = Object.fromEntries(normalizedCatalog.members.map(member => [member.paperId, initialDecision(member.sourceSha256)]));
-    const state = { version: VERSION, contract: CONTRACT, filterId, createdAt: nowIso(now),
+    const state = { ...codec.recordHeader(CONTRACT, 'conference-filter'), filterId, createdAt: nowIso(now),
         input: inputBinding(normalizedCatalog, normalizedSpec, evidenceBinding), decisions,
         completion: completionFor(decisions), attempts: [] };
     state.stateSha256 = stateDigest(state);
@@ -1062,18 +1058,18 @@ function applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidence
             if (current.decisions[paperId].status !== 'pending') continue;
             const envelope = requestEnvelopeFromReplay({ state: current, paperId, discovery,
                 replay: replayByPaperId.get(paperId), evidenceSnapshot: evidenceByPaperId.get(paperId) });
-            const evaluation = evaluateConferenceKeywordPrefilter(envelope.metadataRecord,
+            const evaluation = evaluateKeywordForCheckedState(current, envelope.metadataRecord,
                 envelope.discovery.conference.id, envelope.evidence.status);
             if (evaluation.pass) continue;
             const operationId = crypto.randomUUID();
             if (operationIds.has(operationId)) fail('keyword 的 operationId 与现有 attempt 历史冲突');
             operationIds.add(operationId);
-            const evidence = { contract: 'conference-keyword-prefilter-evidence-v2', version: 2,
+            const evidence = { ...headerForState(current, 'conference-keyword-prefilter-evidence', 'actual-keyword-result'),
                 paperId, sourceSha256: current.decisions[paperId].sourceSha256,
                 metadataRecordSha256: envelope.discovery.metadataRecordSha256,
                 requestEnvelopeSha256: envelope.requestSha256, evidence: clone(envelope.evidence), evaluation };
             const artifact = buildDecisionArtifactFromCheckedState({ state: current, paperId, operationId,
-                actor: { type: 'keyword', id: keywordPrefilter.KEYWORD_PREFILTER_VERSION },
+                actor: { type: 'keyword', id: evaluation.version || evaluation.profile.contract },
                 model: null, endpointProtocol: 'keyword-prefilter', requestBytes: JSON.stringify(evidence),
                 responseBytes: JSON.stringify(evaluation), status: 'excluded', reason: evaluation.reason,
                 usage: {}, now, productionAuthority: KEYWORD_ARTIFACT_AUTHORITY });
@@ -1194,7 +1190,7 @@ function selectionReceiptFromCheckedState(checked) {
         .map(([paperId, decision]) => ({ paperId, sourceSha256: decision.sourceSha256,
             decisionArtifactSha256: artifacts.get(paperId) }));
     const selectedMemberSetSha256 = stableHash(included.map(item => item.paperId));
-    const bound = { contract: SELECTION_RECEIPT_CONTRACT, version: SELECTION_RECEIPT_VERSION, filterId: checked.filterId,
+    const bound = { ...headerForState(checked, 'conference-filter-selection-receipt', 'verified-inclusion'), filterId: checked.filterId,
         inputSha256: checked.input.inputSha256, stateSha256: checked.stateSha256,
         filterPolicySha256: checked.input.filterPolicySha256, selectedMemberSetSha256,
         completionSha256: stableHash(checked.completion), included };
@@ -1206,7 +1202,7 @@ function selectionReceiptFor(state) {
 }
 
 function normalizeSelectionReceipt(value, state) {
-    exact(value, ['contract', 'version', 'filterId', 'inputSha256', 'stateSha256', 'filterPolicySha256',
+    exact(value, [...Object.keys(recordHeaderFor(value, 'conference-filter-selection-receipt')), 'filterId', 'inputSha256', 'stateSha256', 'filterPolicySha256',
         'selectedMemberSetSha256', 'completionSha256', 'included', 'selectionReceiptSha256'], 'selection receipt');
     const expected = selectionReceiptFor(state);
     if (stableHash(value) !== stableHash(expected)) fail('selection receipt 已变化或含被排除的身份');
@@ -1273,7 +1269,7 @@ function loadSelectionHandle(filterRoot, filterId, discoveryHandle) {
         return { paperId: item.paperId, sourceIdentity, sourceSha256: item.sourceSha256,
             decisionArtifactSha256: item.decisionArtifactSha256 };
     });
-    const snapshot = { contract: SELECTION_HANDLE_CONTRACT, version: SELECTION_HANDLE_VERSION,
+    const snapshot = { ...headerForState(state, 'conference-filter-selection', 'verified-included-members'),
         filterId: state.filterId, conferenceId: state.input.conferenceId,
         catalogSha256: state.input.catalogSha256, inputSha256: state.input.inputSha256,
         stateSha256: state.stateSha256, filterPolicySha256: receipt.filterPolicySha256,
@@ -1425,7 +1421,7 @@ function renderDailyFilterPrompt(envelope) {
 // 否则原请求会因正文不一致被拒绝。因此检查请求正文时，接受当前版本或 v1 的结果：
 // 两者使用同一份 envelope 填入占位符，区别只在提示词正文。
 function renderFrozenDailyFilterPrompt(envelope) {
-    return utilsApi.loadPrompt(FROZEN_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+    return utilsApi.loadPrompt(legacyFilterPrompts.defaultPath, promptFields(envelope));
 }
 
 // 只恢复明确登记的历史筛选模板，不把其他阶段的归档作为筛选提示。
@@ -1434,12 +1430,7 @@ const HISTORICAL_FILTER_PROMPT_ARCHIVES = Object.freeze({
         'e8678d07c58b38862dafa5b74a715db667d29db2a4e20664423208cff2f3cd8f'
 });
 
-const DECLARED_FROZEN_FILTER_PROMPTS = Object.freeze([
-    { sha256: '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661', path: FROZEN_LLM_FILTER_PROMPT_PATH, checkSha: false },
-    { sha256: '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5', path: FROZEN_V2_LLM_FILTER_PROMPT_PATH, checkSha: true },
-    { sha256: '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f', path: FROZEN_V3_LLM_FILTER_PROMPT_PATH, checkSha: true },
-    { sha256: '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29', path: FROZEN_V4_LLM_FILTER_PROMPT_PATH, checkSha: true }
-]);
+const DECLARED_FROZEN_FILTER_PROMPTS = legacyFilterPrompts.declarations;
 // One resolver for issuance and replay. Archive-only declarations still cannot
 // authorize a new request; their original bytes can only verify a saved request.
 function resolveDeclaredDailyFilterPrompt(envelope) {
@@ -1492,8 +1483,18 @@ function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus
         conferenceCategoryFallback,
         evidenceStatus,
         evidenceFailOpen,
-        conferenceFallbackVersion: CORE_CONFERENCE_FALLBACK_VERSION
+        conferenceFallbackProfile: codec.recordHeader(CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026')
     };
+}
+
+function evaluateKeywordForCheckedState(state, record, conferenceId, evidenceStatus) {
+    recordHeaderFor(state, 'conference-filter');
+    const current = evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus);
+    if (codec.isCurrentHeader(state, 'conference-filter')) return current;
+    const original = historicalWorkflows.originalKeywordMetadata();
+    const { conferenceFallbackProfile, ...base } = current;
+    return { ...historicalWorkflows.keywordResultForHistoricalPolicy(base, state.input.filterPolicySha256),
+        conferenceFallbackVersion: original.conferenceFallbackVersion };
 }
 
 function evidenceFromSnapshot({ state, paperId, snapshot, officialRecord }) {
@@ -1526,8 +1527,7 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
     if (!projected) fail('需要已认证的 evidence 快照');
     const legacy = isLegacyState(state);
     const catalogField = tagCatalogField(state.input, legacy, '筛选输入');
-    const body = { contract: legacy ? LEGACY_LLM_REQUEST_CONTRACT : LLM_REQUEST_CONTRACT,
-        version: legacy ? LEGACY_LLM_REQUEST_VERSION : LLM_REQUEST_VERSION, filterId: state.filterId,
+    const body = { ...headerForState(state, 'conference-filter-llm-request', legacy ? 'taxonomy' : 'tag-catalog'), filterId: state.filterId,
         expectedStateSha256: state.stateSha256, paperId, sourceSha256: decision.sourceSha256,
         discovery: { contract: discovery.candidateManifest.contract, catalogSha256: discovery.catalogSha256,
             conference: replay.conference, adapter: replay.adapter, sourceIdentity, identity: replay.identity,
@@ -1542,7 +1542,9 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
             evidenceCatalogContract: state.input.evidenceCatalogContract,
             specSha256: state.input.specSha256,
             evidenceLocator: clone(state.input.evidence.locator),
-            coreConferenceFallbackVersion: CORE_CONFERENCE_FALLBACK_VERSION,
+            ...(codec.isCurrentHeader(state, 'conference-filter')
+                ? { coreConferenceFallbackProfile: codec.recordHeader(CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026') }
+                : { coreConferenceFallbackVersion: codec.historicalContract('core-audio-conferences-2026', 'official-audio-scope') }),
             conferenceCategoryLabel: CORE_AUDIO_CONFERENCE_LABELS[replay.conference.id] || null },
         metadataRecord: projected.metadataRecord };
     return { ...body, requestSha256: stableHash(body) };
@@ -1583,11 +1585,12 @@ function buildProductionSpec({ endpoint, model, tagCatalogSha256, discoveryHandl
         : apiType === 'anthropic' ? 'anthropic-messages' : 'openai-chat';
     const catalog = catalogFromDiscoveryHandle(discoveryHandle);
     const discovery = trustedDiscovery(discoveryHandle);
-    const evidence = evidenceBindingFromHandle(evidenceHandle, catalog);
-    return normalizeSpec({ contract: SPEC_CONTRACT, version: SPEC_VERSION,
+    const checkedEvidence = checkedEvidenceBinding(evidenceHandle, catalog);
+    const evidence = checkedEvidence.binding;
+    return normalizeSpec({ ...codec.recordHeader(SPEC_CONTRACT, 'conference-filter-spec'),
         filterPolicySha256: LLM_FILTER_POLICY_SHA256, promptSha256: LLM_FILTER_PROMPT_SHA256,
         model, endpointProtocol, endpointIdentitySha256: endpointIdentitySha256(endpoint, model),
-        tagCatalogSha256, evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
+        tagCatalogSha256, evidenceCatalogContract: checkedEvidence.catalogContract,
         discovery: { contract: catalog.contract, conferenceId: catalog.conferenceId,
             catalogSha256: catalog.catalogSha256, reportSha256: discovery.reportSha256,
             candidateSetSha256: stableHash(catalog.members) }, evidence });
@@ -1595,7 +1598,7 @@ function buildProductionSpec({ endpoint, model, tagCatalogSha256, discoveryHandl
 
 function writeFilterSpec({ specRoot, specName, spec } = {}) {
     const normalized = normalizeSpec(spec);
-    if (isLegacySpec(normalized)) fail('新筛选配置必须使用当前记录格式。');
+    if (!codec.isCurrentHeader(normalized, 'conference-filter-spec')) fail('新筛选配置必须使用当前记录格式。');
     const root = safeDirectory(specRoot, true);
     const filename = safeDirectJson(root, specName, { mustExist: false });
     writeExclusive(filename, `${JSON.stringify(normalized, null, 2)}\n`);
@@ -1603,7 +1606,7 @@ function writeFilterSpec({ specRoot, specName, spec } = {}) {
 }
 
 function normalizeRequestEnvelope(value) {
-    exact(value, ['contract', 'version', 'filterId', 'expectedStateSha256', 'paperId', 'sourceSha256',
+    exact(value, [...Object.keys(recordHeaderFor(value, 'conference-filter-llm-request')), 'filterId', 'expectedStateSha256', 'paperId', 'sourceSha256',
         'discovery', 'evidence', 'filter', 'metadataRecord', 'requestSha256'], 'LLM request envelope');
     const legacy = isLegacyRequest(value);
     const body = clone(value); delete body.requestSha256;
@@ -1644,9 +1647,10 @@ function normalizeRequestEnvelope(value) {
     if (value.evidence.effectiveMetadataRecordSha256 !== stableHash(value.metadataRecord)) {
         fail('LLM request effective metadata record SHA drifted');
     }
+    const currentRequest = codec.isCurrentHeader(value, 'conference-filter-llm-request');
     exact(value.filter, ['inputSha256', 'filterPolicySha256', 'promptSha256', 'model', 'endpointProtocol',
         'endpointIdentitySha256', catalogField, 'evidenceCatalogContract',
-        'specSha256', 'evidenceLocator', 'coreConferenceFallbackVersion',
+        'specSha256', 'evidenceLocator', currentRequest ? 'coreConferenceFallbackProfile' : 'coreConferenceFallbackVersion',
         'conferenceCategoryLabel'], 'LLM request filter binding');
     for (const field of ['inputSha256', 'filterPolicySha256', 'promptSha256', 'endpointIdentitySha256',
         catalogField, 'specSha256']) {
@@ -1659,7 +1663,10 @@ function normalizeRequestEnvelope(value) {
     if (stableHash(value.filter.evidenceLocator) !== stableHash(value.evidence.locator)) {
         fail('LLM 请求的 filter 或 evidence locator 绑定已变化');
     }
-    if (value.filter.coreConferenceFallbackVersion !== CORE_CONFERENCE_FALLBACK_VERSION
+    const fallbackMatches = currentRequest
+        ? stableHash(value.filter.coreConferenceFallbackProfile) === stableHash(codec.recordHeader(CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026'))
+        : value.filter.coreConferenceFallbackVersion === codec.historicalContract('core-audio-conferences-2026', 'official-audio-scope');
+    if (!fallbackMatches
         || value.filter.conferenceCategoryLabel !== (CORE_AUDIO_CONFERENCE_LABELS[value.discovery.conference.id] || null)) {
         fail('LLM 请求的会议类别回退映射已变化');
     }
@@ -1744,10 +1751,9 @@ function envelopeFromRecord(record) {
         'LLM intent source envelope'));
 }
 function normalizeLlmIntent(value) {
-    exact(value, ['contract', 'version', 'filterId', 'operationId', 'expectedStateSha256', 'paperId',
+    exact(value, [...Object.keys(recordHeaderFor(value, 'conference-filter-llm-intent')), 'filterId', 'operationId', 'expectedStateSha256', 'paperId',
         'sourceSha256', 'actorId', 'endpointIdentitySha256', 'inputSha256', 'requestEnvelopeSha256',
         'envelope', 'usageContextSha256', 'attemptNumber', 'request', 'createdAt', 'intentSha256'], 'LLM intent');
-    if (value.contract !== LLM_INTENT_CONTRACT || value.version !== 2) fail('LLM intent 的契约或版本不一致');
     if (assertSha(value.intentSha256, 'LLM intent self-SHA') !== intentDigest(value)) fail('LLM intent 的自校验 SHA 已变化');
     nonempty(value.filterId, 'LLM intent filterId', UUID_RE); nonempty(value.operationId, 'LLM intent operationId', UUID_RE);
     assertSha(value.expectedStateSha256, 'LLM intent expected state SHA'); nonempty(value.paperId, 'LLM intent paperId', PAPER_ID_RE);
@@ -1775,10 +1781,9 @@ function normalizeLlmIntent(value) {
 
 function transportReceiptDigest(value) { const copy = clone(value); delete copy.transportReceiptSha256; return stableHash(copy); }
 function normalizeTransportReceipt(value) {
-    exact(value, ['contract', 'version', 'filterId', 'operationId', 'intentSha256', 'endpointIdentitySha256',
+    exact(value, [...Object.keys(recordHeaderFor(value, 'conference-filter-llm-transport-receipt')), 'filterId', 'operationId', 'intentSha256', 'endpointIdentitySha256',
         'usageContextSha256', 'usageLedgerBindings', 'outcome', 'statusCode', 'response', 'usage', 'errorCode', 'createdAt',
         'transportReceiptSha256'], 'LLM transport receipt');
-    if (value.contract !== LLM_TRANSPORT_RECEIPT_CONTRACT || value.version !== 1) fail('LLM transport receipt 的契约或版本不一致');
     nonempty(value.filterId, 'LLM transport filterId', UUID_RE); nonempty(value.operationId, 'LLM transport operationId', UUID_RE);
     for (const field of ['intentSha256', 'endpointIdentitySha256', 'usageContextSha256']) assertSha(value[field], `LLM transport ${field}`);
     if (!Array.isArray(value.usageLedgerBindings)) fail('LLM transport 的 usage ledger bindings 必须是数组');
@@ -1889,7 +1894,7 @@ function buildTransportReceipt({ intent, response = null, error = null, apiType,
         usage = usageFromEvents(usageEvents,
             { requests: 1, inputTokens: null, outputTokens: null, totalTokens: null });
     }
-    const body = { contract: LLM_TRANSPORT_RECEIPT_CONTRACT, version: 1, filterId: checked.filterId,
+    const body = { ...codec.recordHeader(LLM_TRANSPORT_RECEIPT_CONTRACT, 'conference-filter-llm-transport-receipt'), filterId: checked.filterId,
         operationId: checked.operationId, intentSha256: checked.intentSha256,
         endpointIdentitySha256: checked.endpointIdentitySha256, usageContextSha256: checked.usageContextSha256,
         usageLedgerBindings,
@@ -1990,7 +1995,7 @@ function createIntent({ directory, state, paperId, owner, discoveryHandle, evide
     const operationId = crypto.randomUUID(); const usageContext = {
         stage: 'conference-filter', unitId: stableHash({ filterId: state.filterId, paperId,
             sourceSha256: state.decisions[paperId].sourceSha256, operationId }) };
-    const body = { contract: LLM_INTENT_CONTRACT, version: 2, filterId: state.filterId, operationId,
+    const body = { ...codec.recordHeader(LLM_INTENT_CONTRACT, 'conference-filter-llm-intent'), filterId: state.filterId, operationId,
         expectedStateSha256: state.stateSha256, paperId, sourceSha256: state.decisions[paperId].sourceSha256,
         actorId: owner, endpointIdentitySha256: state.input.endpointIdentitySha256,
         inputSha256: state.input.inputSha256, requestEnvelopeSha256: envelope.requestSha256,
@@ -2332,16 +2337,13 @@ function selectNextCandidate(state, { retryFailed = false, maxAttempts = 3, retr
 }
 
 module.exports = {
-    VERSION, CONTRACT, LEGACY_VERSION, LEGACY_CONTRACT, SPEC_VERSION, SPEC_CONTRACT,
-    LEGACY_SPEC_VERSION, LEGACY_SPEC_CONTRACT, DECISION_VERSION, DECISION_CONTRACT,
-    SELECTION_RECEIPT_VERSION, SELECTION_RECEIPT_CONTRACT, SELECTION_HANDLE_VERSION, LOCK_OWNER_VERSION,
-    SELECTION_HANDLE_CONTRACT, LLM_REQUEST_CONTRACT, LLM_REQUEST_VERSION,
-    LEGACY_LLM_REQUEST_CONTRACT, LEGACY_LLM_REQUEST_VERSION, LLM_INTENT_CONTRACT,
+    CONTRACT, SPEC_CONTRACT, DECISION_CONTRACT,
+    SELECTION_RECEIPT_CONTRACT, SELECTION_HANDLE_CONTRACT, LLM_REQUEST_CONTRACT, LLM_INTENT_CONTRACT,
     LLM_TRANSPORT_RECEIPT_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS,
     LLM_FILTER_POLICY, LLM_FILTER_PROMPT,
     LLM_FILTER_POLICY_SHA256, LLM_FILTER_PROMPT_SHA256, FILTER_CONFIG_BINDING, FILTER_CONFIG_SHA256,
     LEGACY_LLM_FILTER_PROMPT_SHA256_LIST, ACCEPTED_LLM_FILTER_PROMPT_SHA256,
-    DAILY_DECISION_PARSER_VERSION, CORE_CONFERENCE_FALLBACK_VERSION, CORE_AUDIO_CONFERENCE_IDS,
+    DAILY_DECISION_PARSER_CONTRACT, CORE_CONFERENCE_FALLBACK_CONTRACT, CORE_AUDIO_CONFERENCE_IDS,
     CORE_AUDIO_CONFERENCE_LABELS,
     MAX_DECISION_PAYLOAD_BYTES, MAX_LLM_REQUEST_BYTES,
     UUID_RE, SAFE_JSON_NAME, PROTOCOLS, stableHash,

@@ -1,6 +1,7 @@
 package com.nanless.paperdigest
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.data.*
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -126,6 +127,22 @@ class RetainedExportAccessTest {
             assertEquals(old.getString("documentID"), next.getString("documentID"))
             assertEquals(f.capture.sha256, next.getString("sha256"))
         } finally { f.close() }
+    }
+
+    @Test fun constructedHistoricalControlJobKeepsItsHeaderAndRejectsUnknownCurrentShape(){
+        val f=Fixture()
+        try{
+            val access=f.access();f.retained(access)
+            val id=UUID.randomUUID().toString();val job=JSONObject().put("id",id).put("kind","export.retained.prepare").put("paperID","").put("status","completed")
+            access.writeJob(f.row.operationID,job)
+            val file=File(f.controls,"${f.row.operationID}/retained-native-job-$id.json")
+            val current=JSONObject(file.readText());assertTrue(ClientProtocols.isCurrentHeader(current,"paperdigest-native-retained-export-job"))
+            current.remove("contract");current.remove("schemaFingerprint");val header=ClientProtocols.historicalHeader("paperdigest-native-retained-export-job","native-retained-control-job",null);header.keys().forEach{current.put(it,header.get(it))}
+            val original=canonical(current).toByteArray();file.writeBytes(original)
+            assertEquals(1,access.readJobs(f.pending.get(f.row.operationID),emptySet()).size);assertArrayEquals(original,file.readBytes())
+            current.put("contract","paperdigest-native-retained-export-job").put("schemaFingerprint","0".repeat(64));val malformed=canonical(current).toByteArray();file.writeBytes(malformed)
+            assertTrue(runCatching{access.readJobs(f.pending.get(f.row.operationID),emptySet())}.isFailure);assertArrayEquals(malformed,file.readBytes())
+        }finally{f.close()}
     }
 
 }

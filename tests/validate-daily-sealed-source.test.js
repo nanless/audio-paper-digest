@@ -11,7 +11,7 @@ const daily = require('../scripts/lib/daily-fresh-source-plan');
 const validator = require('../scripts/validate-data-files');
 const { parseAnalysis } = require('../scripts/utils');
 const { getInvalidAnalysisReason, EXPERIMENT_TABLE_CONTRACT_VERSION,
-    METHOD_DETAIL_CONTRACT_VERSION, MANUAL_DEPTH_CONTRACT_VERSION_V4 } = require('../scripts/analysis-contract');
+    METHOD_DETAIL_CONTRACT_VERSION, MANUAL_DEPTH_READER_QUALITY_CONTRACT } = require('../scripts/analysis-contract');
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const originalSources = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,
     'fixtures/structure-checkpoint-20261023-real.json.gz')))).papers;
@@ -36,7 +36,7 @@ async function fixture(t) {
         })});
     for (const paper of papers) {
         const details=daily.readDailyFreshSource(plan,paper), descriptor=details.freshSourceDescriptor;
-        const proof={contract:'fresh-source-analysis-v1',runId:plan.runId,sourceGeneration:1,
+        const proof={...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'),runId:plan.runId,sourceGeneration:1,
             sourceManifestSha256:descriptor.sourceManifestSha256,sourceSha256:descriptor.sourceSha256,
             sourceSnapshotSha256:descriptor.sourceSnapshotSha256,sourceOnly:true,oldGeneratedTextIncluded:false};
         paper.sourceSha256=descriptor.sourceSha256;
@@ -103,7 +103,7 @@ test('四源任意文件丢失或SHA漂移均拒绝整批，不使用先读成�
 
 test('sealed来源数组缺顶层引用仍明确拒绝，不落回旧manual路径；无来源旧数组保留',async t=>{
     const f=await fixture(t),paper=f.papers[0];
-    paper.analysisManifest.contracts={manualDepth:MANUAL_DEPTH_CONTRACT_VERSION_V4};
+    paper.analysisManifest.contracts={manualDepth:MANUAL_DEPTH_READER_QUALITY_CONTRACT};
     const manualDateError='无法绑定全文：deep analysis 缺少合法 batchDate';
     const legacy=structuredClone(paper);
     delete legacy.freshRewriteProvenance;

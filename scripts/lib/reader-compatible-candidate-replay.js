@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // Read-only resolution of a genuinely ambiguous diagnostic migration. No new budget.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -7,8 +9,11 @@ const CONTRACT = 'reader-compatible-candidate-replay-v1';
 const IMPLEMENTATION_FIELDS = new Set(['parserImplementationSha256', 'editorialImplementationSha256',
     'mechanicalContractSha256', 'tableCompilerSha256', 'repairImplementationSha256',
     'sourceDiagnosticsImplementationSha256', 'draftOrderImplementationSha256', 'draftOrderContract']);
-const semantic = identity => Object.fromEntries(Object.entries(identity).filter(([key]) => !IMPLEMENTATION_FIELDS.has(key)));
-const sameInput = (left, right) => isDeepStrictEqual(semantic(left), semantic(right));
+const semantic = identity => Object.fromEntries(Object.entries(require('./reader-candidate-format').semanticIdentity(identity))
+    .filter(([key]) => !IMPLEMENTATION_FIELDS.has(key)));
+const sameInput = (left, right) => {
+    try { return isDeepStrictEqual(semantic(left), semantic(right)); } catch { return false; }
+};
 function safeDirectory(root) {
     const absolute = path.resolve(root);
     let cursor = path.parse(absolute).root;
@@ -50,13 +55,13 @@ function latestReaderRequestForInput(directory, identity, latest) {
     for (const name of fs.readdirSync(diagnostics).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name))) {
         const requestFile = path.join(diagnostics, name), request = readProof(requestFile), req = request.value;
         if (req.identity?.paperId !== identity.paperId || req.identity?.freshAnalysis?.runId !== identity.freshAnalysis?.runId) continue;
-        if (req.contract !== 'reader-repair-request-diagnostics-v1' || name !== req.id + '.request.json'
+        if (!require('./reader-diagnostic-format').hasDiagnosticFormat(req) || name !== req.id + '.request.json'
             || req.promptSha256 !== repair.shaText(req.prompt) || req.draftSha256 !== repair.hashDraft(req.draft)) continue;
         knownRequests.push({ requestFile, request });
         const responseFile = path.join(diagnostics, req.id + '.response.json'); let response;
         try { response = readProof(responseFile); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
         const res = response.value;
-        if (res.contract !== req.contract || res.id !== req.id || res.requestSha256 !== request.sha256
+        if (!require('./reader-diagnostic-format').sameDiagnosticFormat(req, res) || res.id !== req.id || res.requestSha256 !== request.sha256
             || res.outputTextSha256 !== repair.shaText(res.rawResponse)
             || !Number.isFinite(Date.parse(req.at)) || !Number.isFinite(Date.parse(res.at))
             || Date.parse(req.at) > Date.parse(res.at)) continue;
@@ -109,7 +114,7 @@ function migrationDominance(compatible) {
             if (audit.toIdentitySha256 !== repair.hashDraft(child.identity)) continue;
             const changedFields = [...new Set([...Object.keys(parent.identity), ...Object.keys(child.identity)])]
                 .filter(field => !isDeepStrictEqual(parent.identity[field], child.identity[field])).sort();
-            if (audit.contract !== 'reader-recovery-diagnostics-revision-v1'
+            if (!require('./protocol-codec').hasValidHeader(audit, 'reader-recovery-diagnostics-revision')
                 || audit.oldEnvelopeSha256 !== parent.envelopeSha256
                 || audit.oldPayloadSha256 !== repair.hashDraft(parent.payload)
                 || !Array.isArray(audit.changedFields) || !isDeepStrictEqual([...audit.changedFields].sort(), changedFields)
@@ -155,7 +160,7 @@ function restoredMigrationAncestor(directory, child) {
     for (const [index, link] of record.archiveChain.entries()) {
         const audit = node.payload.readerRecoveryRevisions?.at(-1);
         if (!audit || audit.toIdentitySha256 !== repair.hashDraft(node.identity)
-            || audit.contract !== 'reader-recovery-diagnostics-revision-v1' || audit.scope !== 'fresh-run'
+            || !require('./protocol-codec').hasValidHeader(audit, 'reader-recovery-diagnostics-revision') || audit.scope !== 'fresh-run'
             || audit.paperId !== child.identity.paperId || audit.runId !== child.identity.freshAnalysis?.runId
             || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
             || !new RegExp(`^${audit.fromIdentitySha256}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`).test(audit.archivedName || '')
@@ -167,15 +172,15 @@ function restoredMigrationAncestor(directory, child) {
         const parent = { name: audit.archivedName, identity: env.identity, payload: env.payload, envelopeSha256: checked.sha256 };
         const changed = [...new Set([...Object.keys(parent.identity || {}), ...Object.keys(node.identity)])]
             .filter(key => !isDeepStrictEqual(parent.identity?.[key], node.identity[key])).sort();
-        if (env.version !== repair.REPAIR_VERSION || env.payloadSha256 !== repair.hashDraft(parent.payload)
+        if (!repair.isCandidateEnvelope(env) || env.payloadSha256 !== repair.hashDraft(parent.payload)
             || repair.hashDraft(parent.identity) !== audit.fromIdentitySha256 || repair.hashDraft(parent.payload) !== audit.oldPayloadSha256
             || !sameInput(parent.identity, node.identity) || !isDeepStrictEqual([...audit.changedFields].sort(), changed)
             || changed.some(key => !IMPLEMENTATION_FIELDS.has(key))
             || ['attempts','fullAttempts','transportFailures'].some(key => (node.payload[key] || 0) !== (parent.payload[key] || 0)
                 || audit[key] !== (parent.payload[key] || 0))
             || parent.payload.implementationRepairAllowanceProof || node.payload.implementationRepairAllowanceProof
-            || parent.payload.implementationRepairAllowanceLineage !== repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT
-            || node.payload.implementationRepairAllowanceLineage !== parent.payload.implementationRepairAllowanceLineage
+            || !repair.hasImplementationAllowanceLineage(parent.payload.implementationRepairAllowanceLineage)
+            || !isDeepStrictEqual(node.payload.implementationRepairAllowanceLineage, parent.payload.implementationRepairAllowanceLineage)
             || audit.oldNoProgress !== parent.payload.noProgress || audit.oldFailureSignature !== parent.payload.failureSignature
             || audit.inputDraftSha256 !== repair.hashDraft(parent.payload.draft) || audit.outputDraftSha256 !== repair.hashDraft(node.payload.draft)
             || audit.inputDraftSha256 !== audit.outputDraftSha256 || !Number.isFinite(Date.parse(audit.revisedAt))
@@ -193,7 +198,7 @@ function restoredMigrationAncestor(directory, child) {
     if (!/^[a-f0-9-]{36}\.json$/.test(record.latestUsageFileName || '')) throw new Error('Reader restoration fee filename is invalid');
     const file = path.join(require('../config').FILES.llmUsageDir, record.latestUsageFileName), usage = readProof(file, record.latestUsageSha256), event = usage.value;
     const eventAt = Date.parse(event.at);
-    if (event.version !== 'llm-usage-v1' || event.kind !== 'request' || event.eventId !== record.latestUsageEventId
+    if (!isUsageEventFormat(event) || event.kind !== 'request' || event.eventId !== record.latestUsageEventId
         || event.paperId !== child.identity.paperId || event.runId !== child.identity.freshAnalysis.runId
         || !['apiReaderRepair','apiReaderArticle'].includes(event.stage) || event.contentAttempt !== child.payload.attempts
         || event.model !== child.identity.model.model || event.protocol !== child.identity.model.protocol
@@ -222,9 +227,9 @@ function archivedMigrationGraph(directory, compatible, normalizeReplayDraft, pai
             const archived = readProof(path.join(directory, last.archivedName), last.oldEnvelopeSha256), envelope = archived.value;
             const changed = [...new Set([...Object.keys(envelope.identity || {}), ...Object.keys(child.identity)])]
                 .filter(key => !isDeepStrictEqual(envelope.identity?.[key], child.identity[key])).sort();
-            if (envelope.version !== repair.REPAIR_VERSION || !envelope.payload || !sameInput(envelope.identity, child.identity)
+            if (!repair.isCandidateEnvelope(envelope) || !envelope.payload || !sameInput(envelope.identity, child.identity)
                 || envelope.payloadSha256 !== repair.hashDraft(envelope.payload)
-                || last.contract !== 'reader-recovery-diagnostics-revision-v1' || last.scope !== 'fresh-run'
+                || !require('./protocol-codec').hasValidHeader(last, 'reader-recovery-diagnostics-revision') || last.scope !== 'fresh-run'
                 || last.runId !== child.identity.freshAnalysis?.runId || last.paperId !== child.identity.paperId
                 || last.toIdentitySha256 !== repair.hashDraft(child.identity) || last.fromIdentitySha256 !== repair.hashDraft(envelope.identity)
                 || last.oldPayloadSha256 !== repair.hashDraft(envelope.payload) || !Array.isArray(last.changedFields)
@@ -264,12 +269,12 @@ function archivedMigrationGraph(directory, compatible, normalizeReplayDraft, pai
                 || !audit.archivedName.startsWith(audit.fromIdentitySha256 + '.migrated-')) throw new Error('Invalid Reader archive name');
             const checked = readProof(path.join(directory, audit.archivedName), audit.oldEnvelopeSha256), envelope = checked.value;
             const parent = { name: audit.archivedName, identity: envelope.identity, payload: envelope.payload, envelopeSha256: checked.sha256 };
-            if (envelope.version !== repair.REPAIR_VERSION || !parent.identity || !parent.payload || envelope.payloadSha256 !== repair.hashDraft(parent.payload)
+            if (!repair.isCandidateEnvelope(envelope) || !parent.identity || !parent.payload || envelope.payloadSha256 !== repair.hashDraft(parent.payload)
                 || repair.hashDraft(parent.identity) !== audit.fromIdentitySha256
                 || repair.hashDraft(parent.payload) !== audit.oldPayloadSha256) throw new Error('Reader archived envelope drift');
             const changedFields = [...new Set([...Object.keys(parent.identity), ...Object.keys(child.identity)])]
                 .filter(field => !isDeepStrictEqual(parent.identity[field], child.identity[field])).sort();
-            if (audit.contract !== 'reader-recovery-diagnostics-revision-v1' || audit.scope !== 'fresh-run'
+            if (!require('./protocol-codec').hasValidHeader(audit, 'reader-recovery-diagnostics-revision') || audit.scope !== 'fresh-run'
                 || audit.paperId !== child.identity.paperId || audit.runId !== child.identity.freshAnalysis?.runId
                 || !sameInput(parent.identity, child.identity) || !isDeepStrictEqual([...audit.changedFields].sort(), changedFields)
                 || changedFields.some(field => !IMPLEMENTATION_FIELDS.has(field))
@@ -416,7 +421,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     const usage = inputLatest?.usage;
     const event = usage?.value;
-    if (!event || event.version !== 'llm-usage-v1' || event.stage !== 'apiReaderRepair'
+    if (!event || !isUsageEventFormat(event) || event.stage !== 'apiReaderRepair'
         || event.outcome !== 'completed' || event.statusCode !== 200 || event.protocol !== identity.model?.protocol
         || event.model !== identity.model?.model || event.usage?.status !== 'reported'
         || !Number.isSafeInteger(event.usage.totalTokens) || event.usage.totalTokens <= 0) return null;
@@ -429,7 +434,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
     for (const name of fs.readdirSync(diagnostics).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name))) {
         const requestFile = path.join(diagnostics, name), request = readProof(requestFile);
         const req = request.value;
-        if (req.contract !== 'reader-repair-request-diagnostics-v1' || req.contentAttempt !== event.contentAttempt
+        if (!require('./reader-diagnostic-format').hasDiagnosticFormat(req) || req.contentAttempt !== event.contentAttempt
             || !/^[a-f0-9-]{36}$/.test(req.id || '') || name !== req.id + '.request.json') continue;
         const roots = graph.nodes.filter(candidate => isDeepStrictEqual(req.identity, candidate.identity) && candidate.payload.attempts === req.contentAttempt);
         if (roots.length !== 1) continue;
@@ -442,7 +447,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
         const res = response.value;
         if (res.outputTextSha256 !== event.outputTextSha256) continue;
         if (name !== req.id + '.request.json' || req.promptSha256 !== repair.shaText(req.prompt)
-            || req.draftSha256 !== repair.hashDraft(req.draft) || res.contract !== req.contract || res.id !== req.id
+            || req.draftSha256 !== repair.hashDraft(req.draft) || !require('./reader-diagnostic-format').sameDiagnosticFormat(req, res) || res.id !== req.id
             || res.requestSha256 !== request.sha256 || res.outputTextSha256 !== repair.shaText(res.rawResponse)) return null;
         const requestAt = Date.parse(req.at), responseAt = Date.parse(res.at);
         if (!Number.isFinite(requestAt) || !Number.isFinite(responseAt) || requestAt > responseAt

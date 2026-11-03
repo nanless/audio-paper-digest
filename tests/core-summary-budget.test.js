@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const deep = require('../scripts/deep-analyzer.js');
-const versions = require('../scripts/lib/prompt-text-versions.js');
+const versions = require('../scripts/lib/prompt-contracts.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
 const sampleAnalysis = validAnalysisText();
@@ -87,6 +87,6 @@ test('旧核心摘要第四版正文仍按原路径和原字节读取，新版�
     assert.equal(oldPath, 'prompts/core-summary-repair-v4.md');
     const oldBytes = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(oldPath);
     assert.equal(crypto.createHash('sha256').update(oldBytes).digest('hex'), '65cf4a3656fabab76a8203b35c7b01aa1417350f7eb0fe0e304528262e6f5d7e');
-    assert.equal(versions.currentTextStagePromptPath('coreSummaryRepair'), 'prompts/core-summary-repair-v7.md');
+    assert.equal(versions.currentTextStagePromptPath('coreSummaryRepair'), 'prompts/current/core-summary-repair.md');
     assert.notDeepEqual(require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/core-summary-repair-v5.md'), oldBytes);
 });

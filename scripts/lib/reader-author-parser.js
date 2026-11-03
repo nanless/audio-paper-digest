@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const cheerio = require('cheerio');
-const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
+const identityFormat = require('./reader-identity-format');
 // 解析或逐人关联失败不能推断论文没有披露机构；旧提示语仍按原签名只读兼容。
 const READER_AFFILIATION_UNBOUND = '机构信息未能在本次解析中与作者逐人可靠绑定';
 const recoverySha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
@@ -452,7 +452,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
         return { name: author.name, affiliations: author.affiliations, nameBinding, affiliationBindings };
     });
     const identity = {
-        contract: API_READER_AUTHOR_IDENTITY_CONTRACT,
+        ...identityFormat.header('authors'),
         sourceDomSha256: recoverySha256(sourceDomSha256) ? sourceDomSha256 : '',
         sourceTextSha256,
         metadataSha256,
@@ -660,7 +660,7 @@ function readerAuthorUnavailableIdentityMatches(paper, { sourceSha256, metadataA
         || !Array.isArray(metadataAuthors) || !metadataAuthors.length
         || metadataAuthors.some(name => typeof name !== 'string' || !name.trim() || name !== name.trim())
         || JSON.stringify(paper.authors) !== JSON.stringify(metadataAuthors)
-        || identity?.contract !== API_READER_AUTHOR_IDENTITY_CONTRACT
+        || !identityFormat.hasIdentity(identity, 'authors')
         || identity.sourceTextSha256 !== sourceSha256
         || identity.metadataSha256 !== stableFingerprint(metadataAuthors)
         || saved.identitySha256 !== stableFingerprint(identity)
@@ -687,6 +687,7 @@ function readerAuthorUnavailableIdentityMatches(paper, { sourceSha256, metadataA
 
 function readerAuthorIdentityMatchesSource(paper, details) {
     if (!paper?.apiReaderAuthors) return false;
+    if (!identityFormat.hasIdentity(paper.apiReaderAuthors.identity, 'authors')) return false;
     if (typeof details?.text !== 'string' || sha256(details.text) !== paper.sourceSha256
         || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== paper.sourceSha256) return false;
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
@@ -696,6 +697,8 @@ function readerAuthorIdentityMatchesSource(paper, details) {
             && paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 !== artifacts?.payloadSha256)) return false;
     const expected = resolveVerifiedReaderAuthors(paper, details);
     const saved = paper.apiReaderAuthors;
+    expected.identity = identityFormat.inSavedHeaderDomain(expected.identity, saved.identity, 'authors');
+    expected.identitySha256 = stableFingerprint(expected.identity);
     if (saved.identitySha256 !== stableFingerprint(saved.identity)
         || stage?.readerAuthorIdentitySha256 !== saved.identitySha256
         || stage.readerAuthorsSha256 !== stableFingerprint(saved)) return false;

@@ -1,0 +1,92 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-mac-pdf-extractor",
+      "currentVariant": "physical-pdf-page-text",
+      "currentSchema": {
+        "scope": "PDFKit-physical-page-positions-text-only-no-ocr"
+      },
+      "historical": [
+        {
+          "tag": "pdfkit-physical-pages-v1",
+          "variant": "physical-pdf-page-text"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-mac-study-identity",
+      "currentVariant": "transport-bound-input",
+      "currentSchema": {
+        "fields": [
+          "extractor",
+          "kind",
+          "paperID",
+          "messages",
+          "model",
+          "endpoint",
+          "protocol",
+          "responsesStream",
+          "reasoningEffort",
+          "question",
+          "evidence",
+          "source",
+          "maxTokens"
+        ],
+        "extractor": "paperdigest-mac-pdf-extractor",
+        "extractorFormat": {
+          "contract": "paperdigest-mac-pdf-extractor",
+          "schemaFingerprint": "63b3e736376a239998f12ce53d60bdc36be942d6bdec96ef8bf58b6a8ff81f8c"
+        },
+        "encoding": "foundation-sorted-json-original-text"
+      },
+      "historical": [
+        {
+          "tag": "desktop-study-v3",
+          "variant": "core-input"
+        },
+        {
+          "tag": "desktop-study-v4",
+          "variant": "transport-bound-input"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-mac-study-input",
+      "currentVariant": "sha-bound-transport-input",
+      "currentSchema": {
+        "fields": [
+          "config",
+          "messages",
+          "source",
+          "fingerprint",
+          "identityFormat"
+        ],
+        "identityFormat": {
+          "contract": "paperdigest-mac-study-identity",
+          "schemaFingerprint": "12929d48a6d2cd82e77e62af2c66ff1e707d1369b9b0882bac26ed805304cc33"
+        },
+        "scope": "exact-model-input-without-api-key"
+      },
+      "historical": []
+    },
+    {
+      "name": "paperdigest-mac-model-response-recovery",
+      "currentVariant": "authenticated-installed-response-envelope",
+      "currentSchema": {
+        "fields": [
+          "session",
+          "mac"
+        ],
+        "integrity": "HMAC-SHA256-over-entire-original-envelope-without-mac",
+        "key": "current-device-local-response-integrity-key",
+        "authority": "same-saved-request-only-no-new-dispatch"
+      },
+      "historical": [
+        {
+          "tag": "desktop-model-response-recovery-v1",
+          "variant": "authenticated-installed-response-envelope"
+        }
+      ]
+    }
+  ]
+}

@@ -19,7 +19,7 @@ const id = 'task.inverse-text-normalization';
 
 test('ITN 正式分析输入说明口语识别输出到书面形式，并排除反向 TN', () => {
     const utils = require('../scripts/utils.js');
-    const versions = require('../scripts/lib/prompt-text-versions.js');
+    const versions = require('../scripts/lib/prompt-contracts.js');
     const prompt = utils.loadPrompt(versions.currentTextStagePromptPath('primaryAnalysis'), {
         hasFullText: '本地来源', title: 'Inverse text normalization', authors: 'Local Author',
         categories: 'cs.CL', arxivId: '2610.12345',

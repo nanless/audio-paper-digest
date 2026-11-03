@@ -13,10 +13,10 @@ const PROJECT = path.join(__dirname, '..');
 const history = require('../scripts/lib/prompt-history.js');
 const evidence = require('../scripts/lib/prompt-evidence.js');
 const {
-    FROZEN_V1_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     promptFilePathForContract
-} = require('../scripts/lib/prompt-text-versions.js');
+} = require('../scripts/lib/prompt-contracts.js');
+const { FROZEN_V1_PROMPT_FILES } = require('../scripts/lib/prompt-legacy-codec.js').compatibilityExports;
 const { IMPLEMENTATION_FILES } = require('../scripts/lib/conference-process.js');
 const RENDERER_IMPLEMENTATION_FILES = require('../scripts/lib/paper-page-staging.js').rendererImplementationFiles();
 

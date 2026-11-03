@@ -1,0 +1,119 @@
+{
+  "protocols": [
+    {
+      "name": "published-aggregate-image-plan",
+      "currentVariant": "image-slots-and-source-template",
+      "currentSchema": {
+        "fields": [
+          "descriptor",
+          "rawHTMLSHA256",
+          "originalBodySHA256",
+          "slots",
+          "templateBodyHTML",
+          "templateBodySHA256"
+        ],
+        "source": "actual-native-raw-html-and-order-of-image-positions"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-image-render-v1",
+          "variant": "image-slots-and-source-template"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-image-render",
+      "currentVariant": "source-bound-platform-rendering",
+      "currentSchema": {
+        "fields": [
+          "parserContract",
+          "plan",
+          "observedAt",
+          "images",
+          "renderedBodySHA256",
+          "completeOffline"
+        ],
+        "optional": [
+          "importedFrom"
+        ],
+        "parserProfiles": {
+          "macos": "foundation-image-template",
+          "android": "jsoup-image-template"
+        },
+        "integrity": "original-manifest-and-each-image-byte-sha"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-image-render-v1",
+          "variant": "source-bound-platform-rendering"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-image-parser-profile",
+      "currentVariant": "parser-role-from-actual-render-schema",
+      "currentSchema": {
+        "roles": [
+          "macos",
+          "android"
+        ],
+        "binding": "actual-render-schema-parserProfiles"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-jsoup-images-v1",
+          "variant": "android"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-image-storage",
+      "currentVariant": "scoped-resource-paths",
+      "currentSchema": {
+        "macos": "aggregate-resource-renders-macos",
+        "android": "aggregate-resource-renders-android",
+        "blob": "aggregate-image-bytes",
+        "importReceipt": "aggregate-resource-imports-macos"
+      },
+      "historical": [
+        {
+          "tag": "aggregate-resource-renders-macos-v1",
+          "variant": "macos"
+        },
+        {
+          "tag": "aggregate-resource-renders-android-v1",
+          "variant": "android"
+        },
+        {
+          "tag": "aggregate-image-bytes-v1",
+          "variant": "blob"
+        },
+        {
+          "tag": "aggregate-resource-imports-macos-v1",
+          "variant": "macos-import"
+        }
+      ]
+    },
+    {
+      "name": "published-aggregate-resource-import",
+      "currentVariant": "auxiliary-native-foreign-provenance",
+      "currentSchema": {
+        "fields": [
+          "nativePlatform",
+          "nativeManifestSHA256",
+          "foreignPlatform",
+          "foreignManifestSHA256",
+          "rawHTMLSHA256",
+          "sourceManifestSHA256"
+        ],
+        "authority": "auxiliary-provenance-only-never-render-or-paper-eligibility"
+      },
+      "historical": [
+        {
+          "tag": "published-aggregate-resource-import-v1",
+          "variant": "auxiliary-native-foreign-provenance"
+        }
+      ]
+    }
+  ]
+}

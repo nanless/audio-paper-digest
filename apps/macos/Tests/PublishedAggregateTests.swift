@@ -33,6 +33,31 @@ import Darwin
         let store = PublishedAggregateStore(directory: directory), epoch = "00000000-0000-0000-0000-000000000001", other = "00000000-0000-0000-0000-000000000002"
         _ = try store.stage(manifest: manifest, validationEpoch: epoch)
         try check(try store.load(activeSnapshotSHA256: catalog.snapshotSHA256, validationEpoch: nil) == nil && store.load(activeSnapshotSHA256: catalog.snapshotSHA256, validationEpoch: other) == nil && store.load(activeSnapshotSHA256: catalog.snapshotSHA256, validationEpoch: epoch) == catalog, "same manifest requires its exact current validation epoch")
+        let marker = directory.appendingPathComponent("aggregate-activations/\(catalog.snapshotSHA256)/\(epoch).json")
+        let current = try Data(contentsOf: marker)
+        var markerJSON = try JSONSerialization.jsonObject(with: current) as! [String:Any]
+        let family = "published-aggregate-activation"
+        try check(ClientProtocols.isCurrentHeader(markerJSON,family),"new activation carries the current schema fingerprint")
+        let sidecar=directory.appendingPathComponent("aggregate-index/\(catalog.snapshotSHA256).json")
+        let currentSidecar=try Data(contentsOf:sidecar)
+        var sidecarJSON=try JSONSerialization.jsonObject(with:currentSidecar) as! [String:Any]
+        try check(ClientProtocols.isCurrentHeader(sidecarJSON,"published-aggregate-index"),"new catalog carries the current schema fingerprint")
+        sidecarJSON.removeValue(forKey:"schemaFingerprint")
+        sidecarJSON["contract"]="published-aggregate-index-v1"
+        let historicalSidecar=try JSONSerialization.data(withJSONObject:sidecarJSON,options:[.sortedKeys])
+        try historicalSidecar.write(to:sidecar)
+        markerJSON["catalogSHA256"]=PublishedAggregateReader.sha(historicalSidecar)
+        markerJSON.removeValue(forKey:"schemaFingerprint")
+        markerJSON["contract"] = "published-aggregate-activation-v1"
+        let historical = try JSONSerialization.data(withJSONObject:markerJSON,options:[.sortedKeys])
+        try historical.write(to:marker)
+        let coldStore = PublishedAggregateStore(directory:directory)
+        try check(try coldStore.load(activeSnapshotSHA256:catalog.snapshotSHA256,validationEpoch:epoch)==catalog && coldStore.stage(manifest:manifest,validationEpoch:epoch)==catalog && Data(contentsOf:marker)==historical && Data(contentsOf:sidecar)==historicalSidecar,"cold and repeated staging preserve original activation bytes")
+        markerJSON["schemaFingerprint"] = ClientProtocols.schemaFingerprint(family)
+        try JSONSerialization.data(withJSONObject:markerJSON).write(to:marker)
+        try check(rejects { _ = try coldStore.load(activeSnapshotSHA256:catalog.snapshotSHA256,validationEpoch:epoch) },"mixed historical and current activation header is refused")
+        try currentSidecar.write(to:sidecar)
+        try current.write(to:marker)
         let original = try store.originalRow(for: catalog.records[0])
         let row = try JSONSerialization.jsonObject(with: original) as! [String: Any]
         try check(row["futurePublisherField"] != nil && PublishedAggregateReader.sha(original) == catalog.records[0].source.normalizedRowSHA256, "original publisher fields retain their row witness")
@@ -45,6 +70,22 @@ import Darwin
             allBodiesVerified = allBodiesVerified && document == cold && document.bodyHTML.contains("<table") && document.bodyHTML.contains("<math") && document.bodyHTML.contains("anchor") && !document.bodyHTML.contains("script") && !document.bodyHTML.contains("onclick") && !document.bodyHTML.contains("src=") && document.resources.count == 1 && !document.completeOffline
         }
         try check(allBodiesVerified, "three body selectors preserve content and cold replay without executable or offline claims")
+        let item=catalog.records.first!
+        let prefix=directory.appendingPathComponent("aggregate-documents/\(PublishedAggregateReader.sha(Data(item.id.utf8)))/\(catalog.snapshotSHA256)")
+        let revision=try FileManager.default.contentsOfDirectory(atPath:prefix.path).first!
+        let documentPath=prefix.appendingPathComponent(revision+"/document.json")
+        var originalDocument=try JSONSerialization.jsonObject(with:Data(contentsOf:documentPath)) as! [String:Any]
+        try check(ClientProtocols.isCurrentHeader(originalDocument,"published-aggregate-document"),"new body uses a fingerprinted platform-parser declaration")
+        originalDocument.removeValue(forKey:"schemaFingerprint")
+        originalDocument["contract"]="published-aggregate-document-v1"
+        originalDocument["parserContract"]="published-aggregate-html-v1"
+        let originalDocumentBytes=try JSONSerialization.data(withJSONObject:originalDocument,options:[.sortedKeys])
+        try originalDocumentBytes.write(to:documentPath)
+        let originalRead=try coldStore.cachedDocument(descriptor:item,rawHTMLSHA256:revision)
+        try check(originalRead.parserContract=="published-aggregate-html-v1" && (try Data(contentsOf:documentPath))==originalDocumentBytes,"old native parser observation cold replays without rewriting")
+        originalDocument["parserContract"]="published-aggregate-jsoup-v1"
+        try JSONSerialization.data(withJSONObject:originalDocument).write(to:documentPath)
+        try check(rejects { _ = try coldStore.cachedDocument(descriptor:item,rawHTMLSHA256:revision) },"foreign parser cannot act as a native cold replay")
         // Exact UTF8 source vector is shared byte-for-byte with the Android normal test.
         let legacyVector = #"[{"pageType":"paper","permalink":"/audio-paper-digest-blog/ci-alias-paper/","title":"Existing paper"},{"pageType":"daily-summary","permalink":"/audio-paper-digest-blog/ci-alias-daily/","title":"Legacy summary","identityStatus":"verified","pdfURL":"https://arxiv.org/pdf/2501.00001","paperId":"arxiv:2501.00001","citation":{"pdfUrl":"https://arxiv.org/pdf/2501.00001"},"futurePublisherField":{"preserve":true}}]"#
         func legacyRead(_ value:String)throws->PublishedAggregateCatalog {

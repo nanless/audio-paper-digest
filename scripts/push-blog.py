@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""推送已审查的博客页面，核对远端 OID，再规划相互独立的视觉任务。"""
+"""推送已审查的博客页面，核对远端提交。"""
 
 import argparse
 import json
@@ -26,8 +26,8 @@ def parse_options(module, argv=None):
     )
     parser.add_argument('--date', action='append',
                         help='博客批次日期（YYYY-MM-DD；省略时为北京时间今天）')
-    parser.add_argument('--require-visual-plan', action='store_true',
-                        help='图片任务规划失败时以非零状态退出（默认日更流程使用）')
+    parser.add_argument('--require-production-receipt', action='store_true',
+                        help='要求完整批次的正式发布快照（日更流程使用）')
     parser.add_argument('--include-id', action='append', metavar='ARXIV_ID',
                         help='只推送指定单篇论文；ID 必须与生成和审查时一致')
     parser.add_argument('--dry-run', action='store_true',
@@ -37,11 +37,11 @@ def parse_options(module, argv=None):
         parser.error('--date 只能指定一次')
     if args.include_id and len(args.include_id) > 1:
         parser.error('--include-id 只能指定一次')
-    if args.include_id and args.require_visual_plan:
-        parser.error('单篇发布不建立整批图片任务，--include-id 不能与 --require-visual-plan 同时使用')
+    if args.include_id and args.require_production_receipt:
+        parser.error('单篇发布不是完整日更批次，--include-id 不能与 --require-production-receipt 同时使用')
     return (
         module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None)),
-        args.require_visual_plan,
+        args.require_production_receipt,
         args.include_id[0] if args.include_id else None,
     )
 
@@ -199,18 +199,17 @@ def main():
     module = load_publish_to_blog()
     date_str = None
     started = time.monotonic()
-    reported_exit = False
     write_stage_summary('推送', 'start', '按审查凭证提交并推送博客页面', date=_date_from_argv(sys.argv))
     try:
         module.validate_publish_target()
-        date_str, require_visual_plan, include_id = parse_options(module)
+        date_str, require_production_receipt, include_id = parse_options(module)
         dry_run = _dry_run_requested()
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
         with scope_context(include_id):
             with module.blog_publication_lock(date_str):
                 paths, receipt = module.load_verified_review_receipt(date_str)
-                visual_capable = module.preflight_post_publish_visual_capability(
-                    date_str, require_visual_plan=require_visual_plan,
+                module.preflight_production_publication(
+                    date_str, require_production_receipt=require_production_receipt,
                 )
                 module.validate_git_publish_branch()
                 if include_id:
@@ -228,18 +227,6 @@ def main():
                     return
                 if not module.git_push(date_str, paths):
                     raise module.PublishDataValidationError('Git 提交或推送未完成')
-                if visual_capable:
-                    print('全部博客已推送并核对远端提交，正在建立本次发布的图片任务记录；日更入口随后登记不生图。')
-                    visual_planned = module.plan_post_publish_visual_assets(date_str)
-                    if require_visual_plan and not visual_planned:
-                        print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
-                        print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
-                        write_stage_summary('推送', 'warn', '页面已推送并验证远端 OID，但发布后视觉任务规划失败',
-                                            elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
-                        reported_exit = True
-                        sys.exit(2)
-                else:
-                    visual_planned = None
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')
         write_stage_summary('推送', 'error', f'博客推送失败: {redact_sensitive(exc)}',
@@ -254,9 +241,6 @@ def main():
         sys.exit(1)
     except SystemExit as exc:
         # 参数解析等显式退出：保持原退出码；0 视为正常结束。
-        # 视觉规划失败分支已经写过 warn 摘要，不能再补一条误导性的 error。
-        if reported_exit:
-            raise
         code = exc.code if exc.code is not None else 0
         elapsed = (time.monotonic() - started) * 1000
         if code == 0:
@@ -273,14 +257,7 @@ def main():
         raise
     write_stage_summary('推送', 'ok', f'发布 {len(paths)} 个已审查页面，远端 OID 已核验',
                         elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
-    if visual_planned:
-        print('\n全部博客推送完成，发布记录已建立；日更入口继续登记本次不生图并核验上线。')
-    elif visual_planned is False:
-        print('\n🎉 全部博客推送完成；发布后视觉任务尚待重试。')
-    elif include_id:
-        print('\n🎉 单篇灰度博客推送完成；未修改汇总页，也未建立批次视觉任务。')
-    else:
-        print('\n🎉 历史维护博客推送完成；该 generation schema 不适用发布后视觉任务。')
+    print('\n博客推送完成，远端提交已核验；继续登记日更不生图并核验部署和网页。')
 
 
 if __name__ == '__main__':

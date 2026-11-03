@@ -25,7 +25,7 @@ function main(argv = process.argv.slice(2)) {
     const input = strictJson(readBoundedFd(fd, stat.size, 16 * 1024 * 1024), 'PDF selection replay');
     if (!input || Object.keys(input).sort().join(',') !== 'artifacts,binding,proof') throw new Error('Unexpected selection replay fields');
     require('./reader-table-pdf-evidence').validateSavedSelectionBinding(input.binding, input.artifacts, input.proof);
-    return { contract: 'reader-pdf-selection-replay-result-v1', valid: true };
+    return require('./protocol-codec').record('reader-pdf-selection-replay-result', { valid: true });
 }
 if (require.main === module) {
     try { process.stdout.write(JSON.stringify(main()) + '\n'); }

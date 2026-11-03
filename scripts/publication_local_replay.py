@@ -83,8 +83,8 @@ def requires_source_replay(paper):
     if not isinstance(paper, dict):
         return False
     locator = paper.get('conferenceSourceCorrection')
-    return (isinstance(locator, dict) and locator.get('contract') in {
-        'conference-source-resource-correction-v1', 'conference-source-core-correction-v1'}) \
+    from conference_source_correction_format import locator_family
+    return bool(locator_family(locator)) \
         or any(isinstance(b, dict) and 'authenticatedPdfTableEvidence' in b
                for b in (paper.get('apiReaderPlan') or {}).get('tableBindings', [])) \
         or any(isinstance(r, dict) and 'authenticatedPdfFootnoteEvidence' in r

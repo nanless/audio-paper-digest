@@ -1,5 +1,6 @@
 {
-  "version": "paper-tag-catalog-v2",
+  "contract": "paper-tag-catalog",
+  "schemaFingerprint": "1530ff944e5bc8ca91682e532d810ca15b21a091b127abbd6320b12fa858dc68",
   "facets": [
     {
       "id": "task",

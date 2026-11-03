@@ -1,0 +1,74 @@
+{
+  "protocols": [
+    {
+      "name": "primary-local-fact-repair",
+      "currentVariant": "bounded-source-backed-paragraphs",
+      "currentSchema": {
+        "plan": [
+          "inputSha256",
+          "targets",
+          "targetsSha256"
+        ],
+        "response": [
+          "inputSha256",
+          "replacements"
+        ],
+        "receipt": [
+          "inputSha256",
+          "outputSha256",
+          "targetsSha256",
+          "responseSha256"
+        ],
+        "authority": "approved-source-feedback-only"
+      },
+      "historical": [
+        {
+          "tag": "primary-local-fact-repair-v1",
+          "variant": "bounded-source-backed-paragraphs"
+        }
+      ]
+    },
+    {
+      "name": "primary-local-fact-validation",
+      "currentVariant": "historic-replay-only",
+      "currentSchema": {
+        "operation": "no-new-writer",
+        "authority": "original-paid-request-and-verified-before-after"
+      },
+      "historical": [
+        {
+          "tag": "primary-local-fact-validation-v1",
+          "variant": "historic-replay-only"
+        }
+      ]
+    },
+    {
+      "name": "model-text-sanitization",
+      "currentVariant": "unicode-scalars",
+      "currentSchema": {
+        "operation": "preserve-supplementary-scalars-and-use-valid-text",
+        "digestDomain": "unchanged-original-request-fingerprint"
+      },
+      "historical": [
+        {
+          "tag": "model-text-unicode-scalars-v1",
+          "variant": "unicode-scalars"
+        }
+      ]
+    },
+    {
+      "name": "prompt-rendering",
+      "currentVariant": "single-pass-substitution",
+      "currentSchema": {
+        "operation": "substitute-template-keys-once",
+        "digestDomain": "unchanged-original-request-fingerprint"
+      },
+      "historical": [
+        {
+          "tag": "prompt-single-pass-v1",
+          "variant": "single-pass-substitution"
+        }
+      ]
+    }
+  ]
+}

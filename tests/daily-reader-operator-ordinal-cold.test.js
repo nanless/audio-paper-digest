@@ -21,7 +21,7 @@ test('actual two paid operator drafts replay without ordinary completion files, 
             assert.equal(fs.existsSync(completions) && fs.readdirSync(completions).some(n => n.startsWith(entry.paperId + '-')), false);
             assert.equal(operator.validateSavedCompletion(paper), true);
             assert.equal(ordinal.validateCompletion(paper), true);
-            assert.deepEqual(engine.getApiReaderV3RecordDiagnostics(paper), []);
+            assert.deepEqual(engine.getIntegratedApiReaderRecordDiagnostics(paper), []);
             assert.deepEqual(paper, entry.privateFinalizerProjection);
         }
         const original = evidence.cases[0].privateFinalizerProjection;

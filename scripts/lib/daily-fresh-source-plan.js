@@ -15,11 +15,11 @@ const fresh = require('./fresh-analysis-context.js');
 const arxivSource = require('./fresh-arxiv-rewrite-source.js');
 const direct = require('./direct-rewrite-analysis-context.js');
 
-const CONTRACT = fresh.DAILY_SOURCE_RUN_CONTRACT;
-const VERSION = 1;
+const dailyFormats = require('./daily-source-format');
+const CONTRACT = dailyFormats.RUN;
+const ORIGINAL_RUN_CONTRACT = dailyFormats.originalRunHeader.contract;
 const SOURCE_GENERATION = 1;
-const REFERENCE_CONTRACT = 'daily-fresh-source-reference-v1';
-const REFERENCE_VERSION = 1;
+const REFERENCE_CONTRACT = dailyFormats.REFERENCE;
 const ARXIV_ID = /^\d{4}\.\d{4,5}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -83,13 +83,13 @@ function readPrivateBytes(filename, label, maximum = 4 * 1024 * 1024) {
     } finally { fs.closeSync(fd); }
 }
 
+function parsePrivateJson(bytes, label) {
+    try { return require('./strict-json').strictJson(bytes, label); }
+    catch (error) { fail(`${label} 不是有效的 JSON：${error.message}`); }
+}
+
 function readPrivateJson(filename, label) {
-    try {
-        return JSON.parse(readPrivateBytes(filename, label).toString('utf8'));
-    } catch (error) {
-        if (error instanceof DailyFreshSourcePlanError) throw error;
-        fail(`${label} 不是有效的 JSON：${error.message}`);
-    }
+    return parsePrivateJson(readPrivateBytes(filename, label), label);
 }
 
 function writePrivateAtomic(filename, value) {
@@ -144,14 +144,22 @@ function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Conf
     if (typeof batchId !== 'string' || !batchId.trim() || batchId.length > 200) fail('batchId 无效');
     const paperIds = sourceIds(papers);
     const sourceSetSha256 = stableHash({ batchDate, batchId, paperIds, sourceGeneration: SOURCE_GENERATION });
-    const runId = uuidFromHash(`${CONTRACT}\0${sourceSetSha256}`);
+    // The original hash domain identifies this batch, not its record layout.
+    // A cleanup must never fork the same input set into a second paid run.
+    const runId = uuidFromHash(`${ORIGINAL_RUN_CONTRACT}\0${sourceSetSha256}`);
     const runDir = sourceRunDirectory(rootDir, runId);
-    const sourceExpectations = Object.fromEntries(paperIds.map(id => [id, {
-        sourceMode: fresh.BUNDLE_SOURCE_MODE, sourceGeneration: SOURCE_GENERATION
-    }]));
-    const manifest = { contract: CONTRACT, version: VERSION, runId, batchDate, batchId, paperIds,
-        sourceSetSha256, sourceExpectations };
-    writePrivateAtomic(path.join(runDir, 'run.json'), manifest);
+    const filename = path.join(runDir, 'run.json');
+    let existing = null;
+    try { existing = readPrivateJson(filename, '每日来源运行清单'); }
+    catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    if (existing && !dailyFormats.isDailySourceRun(existing)) fail('现有每日来源运行清单的格式无效');
+    const header = existing ? dailyFormats.header(existing, CONTRACT) : dailyFormats.currentHeader(CONTRACT);
+    const sourceExpectations = Object.fromEntries(paperIds.map(id =>
+        [id, dailyFormats.bundleExpectation(SOURCE_GENERATION, Object.hasOwn(header, 'version'))]));
+    const manifest = { ...header, runId, batchDate, batchId, paperIds, sourceSetSha256, sourceExpectations };
+    writePrivateAtomic(filename, manifest);
     // 用深度分析将要使用的那个严格来源上下文检查器，重新读取已保存的字节。
     // 这样在发出任何来源请求或模型调用之前，就能挡住被改动或不属于本次运行的来源。
     const stored = readPrivateJson(path.join(runDir, 'run.json'), '每日来源运行清单');
@@ -161,30 +169,29 @@ function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Conf
 }
 
 function dailyFreshSourceReference(plan) {
-    if (!plan || plan.contract !== CONTRACT || plan.version !== VERSION || !validDate(plan.batchDate)
+    const header = dailyFormats.header(plan, CONTRACT);
+    if (!header || !validDate(plan.batchDate)
         || typeof plan.batchId !== 'string' || !SHA.test(String(plan.sourceSetSha256 || ''))
         || !Array.isArray(plan.paperIds) || !plan.paperIds.length || typeof plan.runId !== 'string' || !plan.runId) {
         fail('每日来源计划无法生成引用');
     }
     const manifestFile = path.join(plan.runDir, 'run.json');
     const bytes = readPrivateBytes(manifestFile, '每日来源运行清单');
-    const stored = readPrivateJson(manifestFile, '每日来源运行清单');
-    if (stableHash(stored) !== stableHash({ contract: CONTRACT, version: VERSION, runId: plan.runId,
+    const stored = parsePrivateJson(bytes, '每日来源运行清单');
+    if (!dailyFormats.isDailySourceRun(stored) || stableHash(stored) !== stableHash({ ...header, runId: plan.runId,
         batchDate: plan.batchDate, batchId: plan.batchId, paperIds: plan.paperIds,
         sourceSetSha256: plan.sourceSetSha256, sourceExpectations: plan.sourceExpectations })) {
         fail('创建来源引用前，每日来源运行清单的内容已变化');
     }
-    return Object.freeze({ contract: REFERENCE_CONTRACT, version: REFERENCE_VERSION, runId: plan.runId,
+    const referenceHeader = Object.hasOwn(header, 'version') ? dailyFormats.originalReferenceHeader
+        : dailyFormats.currentHeader(REFERENCE_CONTRACT);
+    return Object.freeze({ ...referenceHeader, runId: plan.runId,
         batchDate: plan.batchDate, batchId: plan.batchId, sourceGeneration: SOURCE_GENERATION,
         sourceSetSha256: plan.sourceSetSha256, runManifestSha256: sha256(bytes) });
 }
 
 function readDailyFreshSourcePlan(reference, { rootDir = Config.FILES.dailyFreshSourceRunsDir } = {}) {
-    const keys = ['batchDate', 'batchId', 'contract', 'runId', 'runManifestSha256', 'sourceGeneration',
-        'sourceSetSha256', 'version'];
-    if (!reference || typeof reference !== 'object' || Array.isArray(reference)
-        || Object.keys(reference).sort().join('\0') !== keys.join('\0')
-        || reference.contract !== REFERENCE_CONTRACT || reference.version !== REFERENCE_VERSION
+    if (!dailyFormats.isDailySourceReference(reference)
         || !UUID.test(String(reference.runId || '')) || !validDate(reference.batchDate)
         || typeof reference.batchId !== 'string' || !reference.batchId
         || reference.sourceGeneration !== SOURCE_GENERATION || !SHA.test(String(reference.sourceSetSha256 || ''))
@@ -196,7 +203,7 @@ function readDailyFreshSourcePlan(reference, { rootDir = Config.FILES.dailyFresh
     const manifestFile = path.join(runDir, 'run.json');
     const bytes = readPrivateBytes(manifestFile, '每日来源运行清单');
     if (sha256(bytes) !== reference.runManifestSha256) fail('每日来源运行清单的 SHA 已变化');
-    const manifest = readPrivateJson(manifestFile, '每日来源运行清单');
+    const manifest = parsePrivateJson(bytes, '每日来源运行清单');
     const plan = { ...manifest, runDir, sourcesDir: path.join(runDir, 'sources'),
         readerAttemptsDir: path.join(runDir, 'reader-attempts') };
     const replayed = dailyFreshSourceReference(plan);
@@ -224,7 +231,7 @@ function bounded(items, concurrency, callback) {
 }
 
 async function captureDailyFreshSources(plan, options = {}) {
-    if (!plan || plan.contract !== CONTRACT || plan.version !== VERSION || !Array.isArray(plan.paperIds)) fail('每日来源计划无效');
+    if (!dailyFormats.header(plan, CONTRACT) || !Array.isArray(plan.paperIds)) fail('每日来源计划无效');
     const capture = options.capture || arxivSource.captureFreshArxivRewriteSource;
     if (typeof capture !== 'function') fail('需要来源捕获函数');
     // 来源下载独立保留八路上限，增加模型分析并发不应使新日更在下载前失败。
@@ -299,7 +306,7 @@ function paperProvesBinding(paper, plan, details) {
                 && proof?.sourceVersionIdentitySha256 === details.sourceVersion.identitySha256
             : !Object.hasOwn(paper || {}, 'sourceVersion')
                 && !Object.hasOwn(proof || {}, 'sourceVersionIdentitySha256');
-        return Boolean(proof && proof.contract === fresh.CONTRACT && proof.runId === plan.runId
+        return Boolean(dailyFormats.matchesRunProvenance(plan, proof) && proof.runId === plan.runId
             && versionMatches
             && proof.sourceGeneration === SOURCE_GENERATION
             && proof.sourceManifestSha256 === details.freshSourceDescriptor.sourceManifestSha256
@@ -593,7 +600,7 @@ function withDailyFreshAnalysisContext(plan, callback, options = {}) {
     return fresh.withFreshAnalysisContext(analysisIdentity(plan, options), callback);
 }
 
-module.exports = { factFeedbackDirectory, CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,
+module.exports = { factFeedbackDirectory, SOURCE_GENERATION, DailyFreshSourcePlanError, stableHash,
     createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan, isPaperReusableForAnalysis,
     prepareDailyPaper, createDailyAnalyzeFn, withDailyFreshAnalysisContext,
     dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan, requireLockedDailyFreshSourceRecoveryPlan, requireFinalDailyFreshSourceRecoveryPlan, prepareDailyFreshSourceRecoveryPayload,

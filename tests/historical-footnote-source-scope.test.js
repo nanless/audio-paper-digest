@@ -31,7 +31,7 @@ for (const kind of ['footnote-only', 'table-only', 'ordinary']) {
         const historicalReaderPdfSources = new WeakMap([[handle, { scopeIdentity,
             assertUnchanged: () => { sourceChecks++; assert.ok(sourceStable, 'synthetic source drift'); } }]]);
         const engine = { isSuccessfulAnalysisRecord: () => { checks += 1;
-            assert.equal(scoped, kind !== 'ordinary'); return engineAccepts; }, hasValidApiReaderV3Records: () => true };
+            assert.equal(scoped, kind !== 'ordinary'); return engineAccepts; }, hasValidIntegratedApiReaderRecords: () => true };
         const context = { module: { exports: {} }, Object, Array,
             historicalReaderPdfSources,
             fail: message => { throw new Error(message); },

@@ -14,7 +14,7 @@ const path = require('path');
 const Config = require('./config.js');
 const { normalizedId } = require('./utils.js');
 const {
-    KEYWORD_PREFILTER_VERSION,
+    KEYWORD_PREFILTER_PROFILE,
     evaluateKeywordPrefilter
 } = require('./lib/keyword-prefilter.js');
 const DEFAULT_GOLD_FILE = path.join(Config.PROJECT_ROOT, 'tests', 'fixtures', 'keyword-prefilter-gold.json');
@@ -127,7 +127,7 @@ function evaluateHistoricalRecall(rootDir = Config.ARCHIVE_DIR, goldSet = loadGo
     const historicalSelected = uniquePapers.size;
     const adjudicatedPositives = historicalSelected - adjudicatedHistoricalFalsePositives;
     return {
-        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+        keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
         rootDir,
         files: files.length,
         positives: historicalSelected,
@@ -156,7 +156,7 @@ function main() {
     const gold = evaluateGoldSet();
     const report = evaluateHistoricalRecall(rootDir);
     console.log(`[keyword-recall] 人工标注样例: ${gold.cases.length} | 应保留却被排除: ${gold.positiveMisses.length} | 应排除却被保留: ${gold.negativeLeaks.length}`);
-    console.log(`[keyword-recall] 词表版本: ${report.keywordPrefilterVersion}`);
+    console.log(`[keyword-recall] 词表身份: ${report.keywordPrefilterProfile.contract} (${report.keywordPrefilterProfile.implementationSha256})`);
     console.log(`[keyword-recall] 历史文件: ${report.files}`);
     console.log(`[keyword-recall] 历史模型入选: ${report.historicalSelected} | 人工已确认的误筛: ${report.adjudicatedHistoricalFalsePositives}`);
     console.log(`[keyword-recall] 剔除误筛后的正样本: ${report.adjudicatedPositives} | 通过: ${report.passed} | 被排除: ${report.missed} | 正样本保留比例: ${formatRecall(report.recall)}`);

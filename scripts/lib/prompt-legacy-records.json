@@ -1,0 +1,902 @@
+{
+  "defaultDeclaration": "analysis-prompt-text-v1",
+  "stages": [
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/deep-analysis.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/deep-analysis-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/deep-analysis-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/deep-analysis-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/deep-analysis-v5.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v6",
+      "path": "prompts/deep-analysis-v6.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v7",
+      "path": "prompts/deep-analysis-v7.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "primaryAnalysis",
+      "contract": "analysis-prompt-text-v8",
+      "path": "prompts/deep-analysis-v8.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "openSourceScan",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/opensource-scan.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "openSourceScan",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/opensource-scan-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "openSourceScan",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/opensource-scan-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "revision",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/gap-fill.md",
+      "outputBudget": "localRepair"
+    },
+    {
+      "stage": "revision",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/gap-fill-v2.md",
+      "outputBudget": "localRepair"
+    },
+    {
+      "stage": "revision",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/gap-fill-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "revision",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/gap-fill-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "revision",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/gap-fill-v5.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "tableRepair",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/table-fill.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "tableRepair",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/table-fill-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "methodRepair",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/method-fill.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "methodRepair",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/method-fill-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "methodRepair",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/method-fill-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "tagSelection",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/tag-repair.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "tagSelection",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/tag-repair-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "tagSelection",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/tag-repair-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/core-summary-repair.md",
+      "outputBudget": "legacyCoreSummary"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/core-summary-repair-v2.md",
+      "outputBudget": "legacyCoreSummary"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/core-summary-repair-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/core-summary-repair-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/core-summary-repair-v5.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v6",
+      "path": "prompts/core-summary-repair-v6.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "coreSummaryRepair",
+      "contract": "analysis-prompt-text-v7",
+      "path": "prompts/core-summary-repair-v7.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "structureRepair",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/structure-repair.md",
+      "outputBudget": "localRepair"
+    },
+    {
+      "stage": "structureRepair",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/structure-repair-v2.md",
+      "outputBudget": "localRepair"
+    },
+    {
+      "stage": "structureRepair",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/structure-repair-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "structureRepair",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/structure-repair-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "structureRepair",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/structure-repair-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "scoringAudit",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/scoring-audit.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "scoringAudit",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/scoring-audit-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "scoringAudit",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/scoring-audit-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "scoringAudit",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/scoring-audit-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "scoringAudit",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/scoring-audit-v5.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/api-reader-article.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/api-reader-article-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/api-reader-article-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/api-reader-article-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/api-reader-article-v5.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v6",
+      "path": "prompts/api-reader-article-v6.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v7",
+      "path": "prompts/api-reader-article-v7.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v8",
+      "path": "prompts/api-reader-article-v8.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v9",
+      "path": "prompts/api-reader-article-v9.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v10",
+      "path": "prompts/api-reader-article-v10.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderArticle",
+      "contract": "analysis-prompt-text-v11",
+      "path": "prompts/api-reader-article-v11.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/api-reader-repair.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/api-reader-repair-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/api-reader-repair-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v4",
+      "path": "prompts/api-reader-repair-v4.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/api-reader-repair-v5.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v6",
+      "path": "prompts/api-reader-repair-v6.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v7",
+      "path": "prompts/api-reader-repair-v7.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v8",
+      "path": "prompts/api-reader-repair-v8.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v9",
+      "path": "prompts/api-reader-repair-v9.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v10",
+      "path": "prompts/api-reader-repair-v10.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v11",
+      "path": "prompts/api-reader-repair-v11.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v12",
+      "path": "prompts/api-reader-repair-v12.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "analysis-prompt-text-v13",
+      "path": "prompts/api-reader-repair-v13.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "reader-fact-local-sentence-prompt-v3",
+      "path": "prompts/api-reader-fact-local-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "reader-fact-local-text-prompt-v2",
+      "path": "prompts/api-reader-fact-local-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "apiReaderRepair",
+      "contract": "reader-fact-local-body-prompt-v1",
+      "path": "prompts/api-reader-fact-local-v1.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "imageSupplement",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/image-supplement.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "imageSupplement",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/image-supplement-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "imageSupplement",
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/image-supplement-v3.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "visualSummary",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/visual-summary.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "visualSummary",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/visual-summary-v2.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "digestCover",
+      "contract": "analysis-prompt-text-v1",
+      "path": "prompts/digest-cover.md",
+      "outputBudget": "configured"
+    },
+    {
+      "stage": "digestCover",
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/digest-cover-v2.md",
+      "outputBudget": "configured"
+    }
+  ],
+  "compatibilityExports": {
+    "ANALYSIS_PROMPT_TEXT_V1_CONTRACT": "analysis-prompt-text-v1",
+    "ANALYSIS_PROMPT_TEXT_V2_CONTRACT": "analysis-prompt-text-v2",
+    "ANALYSIS_PROMPT_TEXT_V3_CONTRACT": "analysis-prompt-text-v3",
+    "ANALYSIS_PROMPT_TEXT_V4_CONTRACT": "analysis-prompt-text-v4",
+    "ANALYSIS_PROMPT_TEXT_V5_CONTRACT": "analysis-prompt-text-v5",
+    "ANALYSIS_PROMPT_TEXT_V6_CONTRACT": "analysis-prompt-text-v6",
+    "ANALYSIS_PROMPT_TEXT_V7_CONTRACT": "analysis-prompt-text-v7",
+    "ANALYSIS_PROMPT_TEXT_V8_CONTRACT": "analysis-prompt-text-v8",
+    "ANALYSIS_PROMPT_TEXT_V9_CONTRACT": "analysis-prompt-text-v9",
+    "ANALYSIS_PROMPT_TEXT_V10_CONTRACT": "analysis-prompt-text-v10",
+    "ANALYSIS_PROMPT_TEXT_V11_CONTRACT": "analysis-prompt-text-v11",
+    "ANALYSIS_PROMPT_TEXT_V12_CONTRACT": "analysis-prompt-text-v12",
+    "ANALYSIS_PROMPT_TEXT_V13_CONTRACT": "analysis-prompt-text-v13",
+    "FROZEN_V1_PROMPT_FILES": {
+      "primaryAnalysis": "prompts/deep-analysis.md",
+      "openSourceScan": "prompts/opensource-scan.md",
+      "revision": "prompts/gap-fill.md",
+      "tableRepair": "prompts/table-fill.md",
+      "methodRepair": "prompts/method-fill.md",
+      "tagSelection": "prompts/tag-repair.md",
+      "coreSummaryRepair": "prompts/core-summary-repair.md",
+      "structureRepair": "prompts/structure-repair.md",
+      "scoringAudit": "prompts/scoring-audit.md",
+      "apiReaderArticle": "prompts/api-reader-article.md",
+      "apiReaderRepair": "prompts/api-reader-repair.md",
+      "imageSupplement": "prompts/image-supplement.md",
+      "visualSummary": "prompts/visual-summary.md",
+      "digestCover": "prompts/digest-cover.md"
+    },
+    "FROZEN_V2_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/deep-analysis-v2.md"
+      },
+      "openSourceScan": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/opensource-scan-v2.md"
+      },
+      "revision": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/gap-fill-v2.md"
+      },
+      "tableRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/table-fill-v2.md"
+      },
+      "methodRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/method-fill-v2.md"
+      },
+      "coreSummaryRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/core-summary-repair-v2.md"
+      },
+      "structureRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/structure-repair-v2.md"
+      },
+      "tagSelection": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/tag-repair-v2.md"
+      },
+      "scoringAudit": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/scoring-audit-v2.md"
+      },
+      "imageSupplement": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/image-supplement-v2.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/api-reader-article-v2.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/api-reader-repair-v2.md"
+      },
+      "visualSummary": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/visual-summary-v2.md"
+      },
+      "digestCover": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/digest-cover-v2.md"
+      }
+    },
+    "FROZEN_V3_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/deep-analysis-v3.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/api-reader-article-v3.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/api-reader-repair-v3.md"
+      },
+      "openSourceScan": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/opensource-scan-v3.md"
+      },
+      "revision": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/gap-fill-v3.md"
+      },
+      "scoringAudit": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/scoring-audit-v3.md"
+      },
+      "imageSupplement": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/image-supplement-v3.md"
+      }
+    },
+    "FROZEN_V4_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/deep-analysis-v4.md"
+      },
+      "scoringAudit": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/scoring-audit-v4.md"
+      }
+    },
+    "FROZEN_V4_MIXED_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/deep-analysis-v4.md"
+      },
+      "openSourceScan": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/opensource-scan-v3.md"
+      },
+      "revision": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/gap-fill-v3.md"
+      },
+      "tableRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/table-fill-v2.md"
+      },
+      "methodRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/method-fill-v2.md"
+      },
+      "coreSummaryRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/core-summary-repair-v2.md"
+      },
+      "structureRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/structure-repair-v2.md"
+      },
+      "tagSelection": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/tag-repair-v2.md"
+      },
+      "scoringAudit": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/scoring-audit-v4.md"
+      },
+      "imageSupplement": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/image-supplement-v3.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/api-reader-article-v3.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/api-reader-repair-v3.md"
+      },
+      "visualSummary": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/visual-summary-v2.md"
+      },
+      "digestCover": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/digest-cover-v2.md"
+      }
+    },
+    "FROZEN_READER_V4_PROMPT_FILES": {
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/api-reader-article-v4.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/api-reader-repair-v4.md"
+      }
+    },
+    "FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/deep-analysis-v4.md"
+      },
+      "revision": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/gap-fill-v3.md"
+      },
+      "methodRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/method-fill-v2.md"
+      },
+      "coreSummaryRepair": {
+        "contract": "analysis-prompt-text-v5",
+        "path": "prompts/core-summary-repair-v5.md"
+      },
+      "structureRepair": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/structure-repair-v2.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v6",
+        "path": "prompts/api-reader-article-v6.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v10",
+        "path": "prompts/api-reader-repair-v10.md"
+      }
+    },
+    "FROZEN_PRE_PLAIN_CHINESE_MIXED_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/deep-analysis-v4.md"
+      },
+      "openSourceScan": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/opensource-scan-v3.md"
+      },
+      "revision": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/gap-fill-v3.md"
+      },
+      "tableRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/table-fill-v2.md"
+      },
+      "methodRepair": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/method-fill-v2.md"
+      },
+      "coreSummaryRepair": {
+        "contract": "analysis-prompt-text-v5",
+        "path": "prompts/core-summary-repair-v5.md"
+      },
+      "structureRepair": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/structure-repair-v2.md"
+      },
+      "tagSelection": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/tag-repair-v3.md"
+      },
+      "scoringAudit": {
+        "contract": "analysis-prompt-text-v5",
+        "path": "prompts/scoring-audit-v5.md"
+      },
+      "imageSupplement": {
+        "contract": "analysis-prompt-text-v3",
+        "path": "prompts/image-supplement-v3.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v6",
+        "path": "prompts/api-reader-article-v6.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v10",
+        "path": "prompts/api-reader-repair-v10.md"
+      },
+      "visualSummary": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/visual-summary-v2.md"
+      },
+      "digestCover": {
+        "contract": "analysis-prompt-text-v2",
+        "path": "prompts/digest-cover-v2.md"
+      }
+    },
+    "FROZEN_PRE_WRITING_GUIDE_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v5",
+        "path": "prompts/deep-analysis-v5.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v8",
+        "path": "prompts/api-reader-article-v8.md"
+      },
+      "apiReaderRepair": {
+        "contract": "analysis-prompt-text-v12",
+        "path": "prompts/api-reader-repair-v12.md"
+      }
+    },
+    "FROZEN_PRE_SCOPE_CLARITY_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v6",
+        "path": "prompts/deep-analysis-v6.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v9",
+        "path": "prompts/api-reader-article-v9.md"
+      }
+    },
+    "FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES": {
+      "primaryAnalysis": {
+        "contract": "analysis-prompt-text-v7",
+        "path": "prompts/deep-analysis-v7.md"
+      },
+      "apiReaderArticle": {
+        "contract": "analysis-prompt-text-v10",
+        "path": "prompts/api-reader-article-v10.md"
+      },
+      "revision": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/gap-fill-v4.md"
+      },
+      "structureRepair": {
+        "contract": "analysis-prompt-text-v4",
+        "path": "prompts/structure-repair-v3.md"
+      }
+    },
+    "FROZEN_LLM_FILTER_PROMPT_PATH": "prompts/filter.md",
+    "FROZEN_V2_LLM_FILTER_PROMPT_PATH": "prompts/filter-v2.md",
+    "FROZEN_V3_LLM_FILTER_PROMPT_PATH": "prompts/filter-v3.md",
+    "FROZEN_V4_LLM_FILTER_PROMPT_PATH": "prompts/filter-v4.md"
+  },
+  "originalCurrent": {
+    "primaryAnalysis": {
+      "contract": "analysis-prompt-text-v8",
+      "path": "prompts/deep-analysis-v8.md"
+    },
+    "openSourceScan": {
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/opensource-scan-v3.md"
+    },
+    "revision": {
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/gap-fill-v5.md"
+    },
+    "tableRepair": {
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/table-fill-v2.md"
+    },
+    "methodRepair": {
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/method-fill-v3.md"
+    },
+    "coreSummaryRepair": {
+      "contract": "analysis-prompt-text-v7",
+      "path": "prompts/core-summary-repair-v7.md"
+    },
+    "structureRepair": {
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/structure-repair-v4.md"
+    },
+    "tagSelection": {
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/tag-repair-v3.md"
+    },
+    "scoringAudit": {
+      "contract": "analysis-prompt-text-v5",
+      "path": "prompts/scoring-audit-v5.md"
+    },
+    "imageSupplement": {
+      "contract": "analysis-prompt-text-v3",
+      "path": "prompts/image-supplement-v3.md"
+    },
+    "apiReaderArticle": {
+      "contract": "analysis-prompt-text-v11",
+      "path": "prompts/api-reader-article-v11.md"
+    },
+    "apiReaderRepair": {
+      "contract": "analysis-prompt-text-v13",
+      "path": "prompts/api-reader-repair-v13.md"
+    },
+    "visualSummary": {
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/visual-summary-v2.md"
+    },
+    "digestCover": {
+      "contract": "analysis-prompt-text-v2",
+      "path": "prompts/digest-cover-v2.md"
+    }
+  },
+  "summaryMigrationDeclaration": "analysis-prompt-text-v2",
+  "indexFormats": {
+    "current": "git-prompt-evidence",
+    "historical": "git-prompt-evidence-v1",
+    "historicalVersion": 1
+  },
+  "originalSpecialPrompts": {
+    "readerConceptTerms": {
+      "contract": "reader-concept-terms-prompt-v1",
+      "path": "prompts/api-reader-concept-terms-v1.md",
+      "fileSha256": "563c7cc7e2a4b335294f259307844ed137574bf194cac171dc3d1563d41be8a8"
+    }
+  },
+  "currentPathPredecessors": {
+    "prompts/current/api-reader-article.md": "prompts/api-reader-article-v11.md",
+    "prompts/current/api-reader-concept-terms.md": "prompts/api-reader-concept-terms-v1.md",
+    "prompts/current/api-reader-fact-local.md": "prompts/api-reader-fact-local-v3.md",
+    "prompts/current/api-reader-repair.md": "prompts/api-reader-repair-v13.md",
+    "prompts/current/core-summary-repair.md": "prompts/core-summary-repair-v7.md",
+    "prompts/current/deep-analysis.md": "prompts/deep-analysis-v8.md",
+    "prompts/current/digest-cover.md": "prompts/digest-cover-v2.md",
+    "prompts/current/filter.md": "prompts/filter-v5.md",
+    "prompts/current/gap-fill.md": "prompts/gap-fill-v5.md",
+    "prompts/current/image-supplement.md": "prompts/image-supplement-v3.md",
+    "prompts/current/method-fill.md": "prompts/method-fill-v3.md",
+    "prompts/current/opensource-scan.md": "prompts/opensource-scan-v3.md",
+    "prompts/current/primary-fact-local-repair.md": "prompts/primary-fact-local-repair-v1.md",
+    "prompts/current/scoring-audit.md": "prompts/scoring-audit-v5.md",
+    "prompts/current/structure-repair.md": "prompts/structure-repair-v4.md",
+    "prompts/current/table-fill.md": "prompts/table-fill-v2.md",
+    "prompts/current/tag-repair.md": "prompts/tag-repair-v3.md",
+    "prompts/current/visual-summary.md": "prompts/visual-summary-v2.md"
+  },
+  "filter": {
+    "defaultPath": "prompts/filter.md",
+    "declarations": [
+      {
+        "sha256": "4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661",
+        "path": "prompts/filter.md",
+        "checkSha": false
+      },
+      {
+        "sha256": "62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5",
+        "path": "prompts/filter-v2.md",
+        "checkSha": true
+      },
+      {
+        "sha256": "7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f",
+        "path": "prompts/filter-v3.md",
+        "checkSha": true
+      },
+      {
+        "sha256": "58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29",
+        "path": "prompts/filter-v4.md",
+        "checkSha": true
+      }
+    ]
+  }
+}

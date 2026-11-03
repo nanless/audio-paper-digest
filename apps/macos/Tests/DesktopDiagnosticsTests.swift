@@ -59,6 +59,7 @@ final class DiagnosticOpaqueFixture:NSObject {
   let storeBefore=try Data(contentsOf:root.appendingPathComponent("personal.json")),report=await app.diagnosticsReport()
   let encoded=try JSONSerialization.data(withJSONObject:report,options:[.sortedKeys]),text=String(decoding:encoded,as:UTF8.self)
   for marker in [secret,personal,address,"127.0.0.1:19997",root.path,"fixture-session","fixture-job","arxiv:fixture"]{try expect(!text.contains(marker),"private marker excluded from structural diagnostic")}
+  try expect(ClientProtocols.isCurrentHeader(report,"paperdigest-diagnostics") && report["appVersion"] is String,"diagnostics use current schema while preserving application release identity")
   try expect(report["credentialsIncluded"] as? Bool==false && report["personalTextIncluded"] as? Bool==false,"explicit diagnostic privacy contract")
   let counts=report["counts"] as! [String:Int];try expect(counts["jobs"]==2 && counts["notes"]==1 && counts["sessions"]==1,"only aggregate personal counts retained")
   let jobs=report["jobStates"] as! [[String:String]]
@@ -66,11 +67,11 @@ final class DiagnosticOpaqueFixture:NSObject {
   try expect(jobs.contains(["command":"model.run","status":"complete"]),"known real job command and terminal status preserved")
   let ui=report["uiStructure"] as! [String:Any],main=ui["main"] as! [String:Any],dom=main["dom"] as! [String:Any],native=main["native"] as! [String:Any]
   let ax=main["nativeAccessibility"] as! [String:Any]
-  try expect(ax["contract"] as? String=="paperdigest-own-wk-ax-structure-v1","actual WK public AX structure is included in existing diagnosis")
+  try expect(ClientProtocols.isCurrentHeader(ax,"paperdigest-own-wk-ax-structure"),"actual WK public AX structure is included in existing diagnosis")
   try expect(ax["rootLegacyIsIgnored"] is Bool && ax["rootIsAccessibilityElement"] is Bool,"actual WK exposes separate public ignored and element booleans")
   try expect(ax["remoteCoverageGuaranteed"] as? Bool==false && ax["singleGetterHardTimeout"] as? Bool==false && ax["samplingMayInitializeLazyAX"] as? Bool==true,"AX report states remote coverage, lazy initialization and synchronous getter limitations")
   try expect((ax["visitedNodes"] as? Int ?? 0)<=256 && ax["truncation"] is [String:Bool],"actual WK observation has bounded structure with explicit truncation")
-  try expect(dom["contract"] as? String=="paperdigest-ui-structure-v1","actual WK returns structured DOM contract")
+  try expect(ClientProtocols.isCurrentHeader(dom,"paperdigest-ui-structure"),"actual WK returns structured DOM contract")
   try expect(dom["documentHasFocus"] is Bool,"document focus is a boolean observation only")
   let active=dom["activeElement"] as! [String:Any];try expect(active["tag"] as? String=="BUTTON" && active["id"] as? String=="detail-close","active element only reports safe static identity")
   let children=dom["bodyChildren"] as! [[String:Any]],unknown=children.first{$0["id"] as? String=="other"}!

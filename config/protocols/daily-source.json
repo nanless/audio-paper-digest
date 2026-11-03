@@ -1,0 +1,146 @@
+{
+  "protocols": [
+    {
+      "name": "daily-fresh-source-run",
+      "currentVariant": "sealed-official-source-set",
+      "currentSchema": {
+        "requiredFields": [
+          "runId",
+          "batchDate",
+          "batchId",
+          "paperIds",
+          "sourceSetSha256",
+          "sourceExpectations"
+        ],
+        "identity": "same-source-set-namespace-as-original",
+        "sourceFiles": [
+          "source.txt",
+          "source.pdf",
+          "source-runtime.json",
+          "source-manifest.json"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-fresh-source-run-v1",
+          "variant": "sealed-official-source-set",
+          "header": {
+            "contract": "daily-fresh-source-run-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-fresh-source-reference",
+      "currentVariant": "exact-run-bytes",
+      "currentSchema": {
+        "requiredFields": [
+          "runId",
+          "batchDate",
+          "batchId",
+          "sourceGeneration",
+          "sourceSetSha256",
+          "runManifestSha256"
+        ],
+        "authority": "actual-immutable-run-and-four-source-files"
+      },
+      "historical": [
+        {
+          "tag": "daily-fresh-source-reference-v1",
+          "variant": "exact-run-bytes",
+          "header": {
+            "contract": "daily-fresh-source-reference-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "fresh-source-analysis",
+      "currentVariant": "original-source-identity",
+      "currentSchema": {
+        "requiredFields": [
+          "runId",
+          "sourceSha256",
+          "structuredArtifactsSha256",
+          "sourceSnapshotSha256",
+          "sourceOnly",
+          "oldGeneratedTextIncluded"
+        ],
+        "sealedBundle": [
+          "sourceGeneration",
+          "sourceManifestSha256",
+          "sourceVersionIdentitySha256-if-present"
+        ],
+        "authority": "actual-run-source-and-complete-bundle"
+      },
+      "historical": [
+        {
+          "tag": "fresh-source-analysis-v1",
+          "variant": "original-source-identity"
+        }
+      ]
+    },
+    {
+      "name": "sealed-arxiv-source-bundle",
+      "currentVariant": "four-official-source-files",
+      "currentSchema": {
+        "fields": [
+          "sourceGeneration"
+        ],
+        "authority": "real-verified-bundle-only"
+      },
+      "historical": [
+        {
+          "tag": "sealed-arxiv-bundle-v1",
+          "variant": "four-official-source-files"
+        }
+      ]
+    },
+    {
+      "name": "fresh-source-descriptor",
+      "currentVariant": "sealed-bundle-description",
+      "currentSchema": {
+        "fields": [
+          "runId",
+          "paperId",
+          "sourceManifestSha256",
+          "sourceSnapshotSha256",
+          "sourceSha256",
+          "structuredArtifactsSha256",
+          "sourceGeneration"
+        ],
+        "operation": "derived-in-memory"
+      },
+      "historical": [
+        {
+          "tag": "fresh-source-bundle-v2",
+          "variant": "sealed-bundle-description",
+          "header": {
+            "contract": "fresh-source-bundle-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-fresh-source-cache",
+      "currentVariant": "legacy-text-and-artifacts",
+      "currentSchema": {
+        "operation": "historical-run-only",
+        "authority": "original-text-and-extraction-bytes"
+      },
+      "historical": [
+        {
+          "tag": "fresh-source-cache-v1",
+          "variant": "legacy-text-and-artifacts",
+          "header": {
+            "contract": "fresh-source-cache-v1",
+            "version": 1
+          }
+        }
+      ]
+    }
+  ]
+}

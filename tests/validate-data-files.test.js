@@ -12,7 +12,7 @@ const {
     METHOD_DETAIL_CONTRACT_VERSION,
     MANUAL_AUDIT_CHECKS,
     MANUAL_COMPLETE_STATUS,
-    MANUAL_DEPTH_CONTRACT_VERSION_V4,
+    MANUAL_DEPTH_READER_QUALITY_CONTRACT,
     manualSha256,
     manualTextSha256,
     validateCoreSummarySemanticContract
@@ -204,7 +204,7 @@ function writeManualV4BindingFixture(dir, { invalidClaimQuote = true } = {}) {
             version: 1,
             contracts: {
                 experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION,
-                manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V4,
+                manualDepth: MANUAL_DEPTH_READER_QUALITY_CONTRACT,
                 imageNarrative: 'context-bound-v1',
                 editorialQuality: 'reader-facing-v1'
             },

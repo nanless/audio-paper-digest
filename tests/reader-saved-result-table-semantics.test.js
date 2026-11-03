@@ -33,13 +33,13 @@ function assertOnlySemanticFailure(t, paper) {
     // Independently prove the existing signatures and all other saved-record
     // checks remain valid; a hash mismatch must not masquerade as this fix.
     const mock = t.mock.method(deep, 'readerPlaceholderResultTableIssues', () => []);
-    try { assert.equal(engine.hasValidApiReaderV3Records(paper), true); }
+    try { assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true); }
     finally { mock.mock.restore(); }
     for (const options of [{}, { legacyConferenceResourceBindings: true },
         { conferencePublicationEvidence: true },
         { legacyConferenceResourceBindings: true, conferencePublicationEvidence: true }]) {
-        assert.equal(engine.hasValidApiReaderV3Records(paper, options), false);
-        const diagnostics = engine.getApiReaderV3RecordDiagnostics(paper, options);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper, options), false);
+        const diagnostics = engine.getIntegratedApiReaderRecordDiagnostics(paper, options);
         assert.ok(diagnostics.some(issue => issue.check === 'reader_result_table_semantics'
             && issue.code === 'reader_placeholder_result_table'
             && issue.path === '/apiReaderArticle'));
@@ -50,7 +50,7 @@ function assertOnlySemanticFailure(t, paper) {
 
 test('旧完整签稿同步全部哈希后仍拒绝占位结果表，所有 legacy 出版选项一致', t => {
     const { paper } = fixture({ noFigures: true });
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     replaceFirstTable(paper, '| 来源证据 | 量化值一 |\n|---|---|\n| 来源句一 | 1.0 |');
     assertOnlySemanticFailure(t, paper);
 });
@@ -77,8 +77,8 @@ test('li26f 式来源首列配真实指标以及普通来源说明表仍通过�
         const { paper } = fixture({ noFigures: true });
         replaceFirstTable(paper, markdown);
         const before = JSON.stringify(paper);
-        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
-        assert.deepEqual(engine.getApiReaderV3RecordDiagnostics(paper), []);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
+        assert.deepEqual(engine.getIntegratedApiReaderRecordDiagnostics(paper), []);
         assert.equal(JSON.stringify(paper), before);
     }
 });
@@ -87,5 +87,5 @@ test('正文代码围栏中的占位表示例不被当成实际结果表', () =>
     const { paper } = fixture({ noFigures: true });
     paper.apiReaderArticle += '\n\n```markdown\n| 来源证据 | 量化值一 |\n|---|---|\n| 来源句一 | 2025 |\n```';
     reseal(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
 });

@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // A real resource-fact change may start one normal new-input candidate. Old candidates and fees stay intact.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
@@ -51,7 +53,7 @@ function scope(identity) {
 function assertCurrent({ directory, paper, source, resourceRecoveryHandle, targetIdentity, reviewFeedback, parentUpstreamProof }) {
     const fresh = require('./fresh-analysis-context'), engine = require('../analysis-engine');
     if (!fresh.isDailyFreshSourceScope() || !fresh.getFreshAnalysisContext()?.refreshReaderDiagnostics
-        || !engine.paperAnalysisLockHeld(paper) || targetIdentity.contentMode !== 'reader-source-only-v1'
+        || !engine.paperAnalysisLockHeld(paper) || !require('./reader-content-mode').is(targetIdentity, 'source-only')
         || path.resolve(directory) !== path.join(fresh.getFreshAnalysisContext().runDir, 'reader-attempts')
         || !isDeepStrictEqual(fresh.freshAnalysisIdentity(paper.arxivId), targetIdentity.freshAnalysis)
         || sha(source.text) !== targetIdentity.sourceSha256
@@ -142,11 +144,11 @@ function receiptProof(receipt, source, expectedScope) {
     const req = request.value, res = response.value, event = usage.value;
     if (hash(req.identity) !== proof.oldIdentitySha256 || req.identity.inputFingerprint !== proof.oldInputFingerprint
         || !isDeepStrictEqual(semantic(req.identity), semantic(receipt.identity))
-        || req.contract !== 'reader-repair-request-diagnostics-v1' || !/^[a-f0-9-]{36}$/.test(req.id || '')
+        || !require('./reader-diagnostic-format').hasDiagnosticFormat(req) || !/^[a-f0-9-]{36}$/.test(req.id || '')
         || candidate.value.payloadSha256 !== hash(candidate.value.payload) || hash(candidate.value.identity) !== proof.oldIdentitySha256
         || hash(candidate.value.payload) !== proof.candidatePayloadSha256 || res.requestSha256 !== request.sha256
-        || req.id !== res.id || req.contract !== res.contract || sha(res.rawResponse) !== res.outputTextSha256
-        || event.version !== 'llm-usage-v1' || event.kind !== 'request' || event.eventId !== proof.usageEventId
+        || req.id !== res.id || !require('./reader-diagnostic-format').sameDiagnosticFormat(res, req) || sha(res.rawResponse) !== res.outputTextSha256
+        || !isUsageEventFormat(event) || event.kind !== 'request' || event.eventId !== proof.usageEventId
         || event.outputTextSha256 !== res.outputTextSha256 || event.paperId !== req.identity.paperId
         || event.runId !== req.identity.freshAnalysis.runId || event.stage !== 'apiReaderRepair'
         || event.outcome !== 'completed' || event.statusCode !== 200 || event.model !== req.identity.model.model
@@ -199,7 +201,7 @@ async function prepareResourceInputAdmission(options) {
         return handle;
     }
     const usage = latestUsage(targetIdentity), event = usage?.value;
-    if (!event || event.version !== 'llm-usage-v1' || !/^[a-f0-9-]{36}$/.test(event.eventId || '')
+    if (!event || !isUsageEventFormat(event) || !/^[a-f0-9-]{36}$/.test(event.eventId || '')
         || event.stage !== 'apiReaderRepair' || event.outcome !== 'completed' || event.statusCode !== 200
         || event.model !== targetIdentity.model.model || event.protocol !== targetIdentity.model.protocol
         || event.usage?.status !== 'reported' || !Number.isSafeInteger(event.usage.totalTokens) || event.usage.totalTokens <= 0) return null;
@@ -207,7 +209,7 @@ async function prepareResourceInputAdmission(options) {
     const matches = [], root = path.join(directory, 'request-diagnostics');
     for (const name of fs.readdirSync(root).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name))) {
         const requestFile = path.join(root, name), request = read(requestFile), req = request.value;
-        if (req.contract !== 'reader-repair-request-diagnostics-v1' || name !== req.id + '.request.json'
+        if (!require('./reader-diagnostic-format').hasDiagnosticFormat(req) || name !== req.id + '.request.json'
             || req.contentAttempt !== event.contentAttempt || !isDeepStrictEqual(semantic(req.identity), semantic(targetIdentity))) continue;
         const responseFile = path.join(root, req.id + '.response.json'); let response;
         try { response = read(responseFile); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
@@ -218,7 +220,7 @@ async function prepareResourceInputAdmission(options) {
         catch (error) { if (error.code === 'ENOENT') continue; throw error; }
         if (!candidate || candidate.envelope.payload.attempts !== req.contentAttempt
             || req.promptSha256 !== sha(req.prompt) || req.draftSha256 !== hash(req.draft)
-            || res.contract !== req.contract || res.id !== req.id || res.requestSha256 !== request.sha256
+            || !require('./reader-diagnostic-format').sameDiagnosticFormat(req, res) || res.id !== req.id || res.requestSha256 !== request.sha256
             || res.outputTextSha256 !== sha(res.rawResponse) || !Number.isFinite(Date.parse(req.at)) || !Number.isFinite(Date.parse(res.at))
             || Date.parse(req.at) > Date.parse(res.at) || usage.at < Date.parse(req.at)
             || Math.abs(usage.at - Date.parse(res.at)) > 30000) continue;

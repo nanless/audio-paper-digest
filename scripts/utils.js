@@ -2054,7 +2054,7 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
  * @param {Object} vars - 占位符替换映射，如 { title: '...', abstract: '...' }
  * @returns {string} 处理后的 prompt 文本
  */
-function loadPrompt(mdPath, vars = {}) {
+function loadPrompt(mdPath, vars = {}, { originalFileSha256 = null } = {}) {
     const projectRoot = path.resolve(path.join(__dirname, '..'));
     // 将路径解析到 projectRoot 下，拒绝通过 ../ 等方式指向项目目录之外
     const resolved = path.resolve(path.join(projectRoot, mdPath));
@@ -2069,8 +2069,11 @@ function loadPrompt(mdPath, vars = {}) {
         throw new Error(`Prompt 文件不存在: ${fullPath}`);
     }
 
+    if (originalFileSha256 !== null && !registeredPromptPath) throw new Error('原提示词声明只能读取已登记命名空间');
     const content = registeredPromptPath
-        ? require('./lib/prompt-evidence.js').readPromptEvidenceBytes(relativePath).toString('utf8')
+        ? (originalFileSha256 === null
+            ? require('./lib/prompt-evidence.js').readPromptEvidenceBytes(relativePath)
+            : require('./lib/prompt-evidence.js').readDeclaredPromptEvidenceBytes(relativePath, originalFileSha256)).toString('utf8')
         : fs.readFileSync(fullPath, 'utf8');
 
     // 提取第一个围栏代码块内的内容（兼容 CRLF 换行和更长的围栏标记）

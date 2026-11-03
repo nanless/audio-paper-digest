@@ -4,6 +4,7 @@
 // 计划重放全部上游，不能将统一的新计划当作所有已完成论文的原来源。
 const fs = require('node:fs');
 const path = require('node:path');
+const codec = require('./protocol-codec');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const api = require('./conference-process');
@@ -18,7 +19,11 @@ function withOriginalPlanFile(filename, receipt, deps, callback) {
     // 精确绑定的全部原字节时，才在系统临时目录只读重放；现有计划保持不动。
     deps.plan.normalizeSecureReceipt(receipt);
     const plan = deps.plan.normalizePlan(loaded.value);
-    if (plan.version !== receipt.version) throw new Error('原会议计划的格式版本不同，不能重放。');
+    if (codec.format(plan.contract, 'conference-run-plan', plan.schemaFingerprint)
+        !== codec.format(receipt.contract, 'conference-run-plan-secure-receipt', receipt.schemaFingerprint)
+        || codec.isCurrentHeader(plan, 'conference-run-plan') !== codec.isCurrentHeader(receipt, 'conference-run-plan-secure-receipt')) {
+        throw new Error('原会议计划的格式语义或原头命名空间不同，不能重放。');
+    }
     const field = Object.hasOwn(plan, 'taxonomy') ? 'taxonomy' : 'tagMetadata';
     const original = { ...loaded.value, [field]: deps.plan.tagMetadataForReceipt(receipt) };
     const bytes = api.canonicalBytes(original);
@@ -42,8 +47,9 @@ function readCompletion(state, directory, deps) {
     for (const receipt of candidates) {
         const { receiptSha256, ...body } = receipt;
         if (receiptSha256 !== api.stableHash(body)
-            || receipt.version !== state.version
-            || receipt.contract !== `conference-process-completion-receipt-v${state.version}`) {
+            || !codec.hasValidHeader(receipt, 'conference-process-completion-receipt')
+            || codec.format(receipt.contract, 'conference-process-completion-receipt', receipt.schemaFingerprint) !== api.processFormat(state)
+            || codec.isCurrentHeader(receipt, 'conference-process-completion-receipt') !== codec.isCurrentHeader(state, 'conference-process')) {
             throw new Error('保留的会议完成凭证版本或 SHA 不一致。');
         }
     }
@@ -55,8 +61,8 @@ function readCompletion(state, directory, deps) {
         && new Set(receipt.items.map(item => item.paperId)).size === currentItems.length
         && receipt.items.every(item => projections.get(item.paperId)?.some(expected =>
             api.stableHash(expected) === api.stableHash(completionItem(item))))
-        && api.stableHash(withoutImplementation(receipt.authority, state.version))
-            === api.stableHash(withoutImplementation(state.authority, state.version)));
+        && api.stableHash(withoutImplementation(receipt.authority, api.processFormat(state)))
+            === api.stableHash(withoutImplementation(state.authority, api.processFormat(state))));
     const active = matching.find(receipt => receipt.receiptSha256 === state.completionReceiptSha256);
     if (state.status === 'complete') {
         if (!active) throw new Error('已完成会议缺少与当前状态对应的原完成凭证。');
@@ -91,7 +97,7 @@ function sourceIdentityReaderRevision(executionId, deps) {
     const options = { analysisRoot: deps.files.conferenceAnalysisDir, executionId };
     const initial = deps.adapter.loadConferenceAnalysis(options);
     const record = deps.adapter.readJsonRecord(path.join(initial.directory, 'reader-revision.json'));
-    return record.value.contract === deps.adapter.RECOVERY_WINDOW_CONTRACT
+    return codec.hasValidHeader(record.value, 'conference-reader-recovery-window')
         ? deps.adapter.loadConferenceReaderRevision(options)
         : deps.adapter.loadConferenceReaderRevisionIdentity(options);
 }
@@ -234,7 +240,7 @@ function verifyRetainedExtraction(item, bound, deps) {
         || receiptSha256 !== bound.extractionReceiptSha256 || receipt.paperId !== item.paperId
         || receipt.sourceIdentity !== item.sourceIdentity) throw new Error('原会议抽取凭证身份或 SHA 不一致。');
     let snapshot;
-    if (receipt.extractor?.version === '2.3.0') {
+    if (codec.hasValidHeader(receipt.extractor, 'conference-retained-pdf-extractor', 'version')) {
         const names = { receipt: bound.extractionReceiptName, request: receipt.request?.file,
             metadata: receipt.source?.metadata?.file, pdf: receipt.source?.pdf?.file,
             text: receipt.text?.file, artifacts: receipt.artifacts?.file };

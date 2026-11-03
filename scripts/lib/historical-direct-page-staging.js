@@ -8,15 +8,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const renderer = require('./paper-page-staging.js');
 const publicationFiles = require('./publication-file-primitives.js');
+const protocols = require('./protocol-codec.js');
 
 const CONTRACT = 'historical-direct-paper-page-staging-v1';
 const VERSION = 1;
-const PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1';
-const PUBLICATION_METADATA_CONTRACT = 'historical-arxiv-publication-metadata-v1';
+const PUBLICATION_SOURCE_CONTRACT = protocols.contract('historical-direct-publication-source');
+const PUBLICATION_METADATA_CONTRACT = 'historical-arxiv-publication-metadata';
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
-const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
+const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
-const HISTORICAL_ARXIV_VERSION_CONTRACT = 'arxiv-historical-version-source-v1';
+const HISTORICAL_ARXIV_VERSION_CONTRACT = protocols.contract('arxiv-historical-version-source');
 const SHA = /^[a-f0-9]{64}$/;
 
 class HistoricalDirectPageStagingError extends Error {
@@ -64,6 +65,15 @@ function exact(value, fields, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} 必须是对象。`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) fail(`${label} 包含未知字段或缺少必需字段。`);
+}
+function protocolHeader(value, family) {
+    let header;
+    try { header = protocols.recordHeader(value?.contract,family,value?.schemaFingerprint); }
+    catch { fail(`不支持的格式：${family}`); }
+    for (const [key, expected] of Object.entries(header)) {
+        if (value[key] !== expected) fail(`格式头与原声明不符：${family}`);
+    }
+    return header;
 }
 function safeDirectory(value, label, create = false) {
     if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} 必须是绝对目录路径。`);
@@ -133,10 +143,10 @@ function publicationSourceProof(item, sourceDescriptor, value) {
     }
     const hasMetadataSidecar = Object.hasOwn(value || {}, 'metadataSidecar');
     if (!hasMetadataSidecar) fail(`论文 ${item.paperId} 缺少官方论文元数据对应记录。`);
-    exact(value, ['contract', 'version', 'paperId', 'sourceSnapshotSha256', 'sourceTextSha256',
+    const header = protocolHeader(value,'historical-direct-publication-source');
+    exact(value, [...Object.keys(header), 'paperId', 'sourceSnapshotSha256', 'sourceTextSha256',
         'abstract', 'abstractSha256', ...(hasMetadataSidecar ? ['metadataSidecar'] : [])], `论文 ${item.paperId} 的发布来源记录`);
-    if (value.contract !== PUBLICATION_SOURCE_CONTRACT || value.version !== 1
-        || value.paperId !== item.paperId
+    if (value.paperId !== item.paperId
         || value.sourceSnapshotSha256 !== sourceDescriptor?.sourceSnapshotSha256
         || value.sourceTextSha256 !== sourceDescriptor?.textSha256
         || typeof value.abstract !== 'string' || !value.abstract.trim()
@@ -147,13 +157,13 @@ function publicationSourceProof(item, sourceDescriptor, value) {
     }
     if (hasMetadataSidecar) {
         const proof = value.metadataSidecar;
-        exact(proof, ['contract', 'paperId', 'manifestSha256', 'atomResponseSha256', 'metadataRecordSha256',
+        const metadataHeader = protocolHeader(proof,PUBLICATION_METADATA_CONTRACT);
+        exact(proof, [...Object.keys(metadataHeader), 'paperId', 'manifestSha256', 'atomResponseSha256', 'metadataRecordSha256',
             'abstractSha256', 'sourceName', 'querySourceId', 'sourceManifestSha256', 'sourceSnapshotSha256',
             'sourceTextSha256', 'sourceId', 'entryVersion', 'entryUpdatedAt', 'publishedAt', 'observedAt',
             'sourceCapturedAt', 'sourceEarliestCapturedAt', 'sourceLatestCapturedAt', 'generation'], `论文 ${item.paperId} 的元数据对应记录`);
         const sourceVersion = String(proof.sourceId || '').match(/v([1-9]\d*)$/i);
-        if (proof.contract !== PUBLICATION_METADATA_CONTRACT
-            || proof.paperId !== item.paperId
+        if (proof.paperId !== item.paperId
             || !Number.isSafeInteger(proof.entryVersion) || proof.entryVersion < 1
             || ![proof.entryUpdatedAt, proof.publishedAt, proof.observedAt, proof.sourceCapturedAt,
                 proof.sourceEarliestCapturedAt, proof.sourceLatestCapturedAt]
@@ -225,16 +235,22 @@ function normalizeRendererResult(value, page) {
 }
 
 const CONFERENCE_SIDECAR_NAMES = Object.freeze(['citation.bib', 'citation.json', 'citation.ris', 'rethink-context.json']);
-function conferenceWorkbenchRoot(item, page) {
-    return `static/data/papers/${page.cohortDate}/conference-${sha256(item.paperId).slice(0, 24)}/`;
+function conferenceWorkbenchRoot(item, page, workbenchHeader) {
+    const domain=workbenchHeader.contract === protocols.contract('researcher-workbench') ? 'client' : 'data';
+    return `static/${domain}/papers/${page.cohortDate}/conference-${sha256(item.paperId).slice(0, 24)}/`;
 }
 function validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page, markdown, assets }) {
     if (item.route.kind !== 'conference-local-pdf') return;
-    const prefix = conferenceWorkbenchRoot(item, page);
-    const data = assets.filter(asset => asset.record.path.startsWith('static/data/'));
-    const marked = /^paper_digest_workbench_contract:\s*"?researcher-workbench-v1"?\s*$/m.test(markdown);
+    const data = assets.filter(asset => asset.record.path.startsWith('static/data/') || asset.record.path.startsWith('static/client/'));
+    const marker = markdown.match(/^paper_digest_workbench_contract:\s*"?([a-z0-9.-]+)"?\s*$/m);
+    const marked = !!marker;
     // 已保存的旧渲染结果无工作区声明；兼容核验不把它们冒充新导出。
     if (!marked && data.length === 0) return;
+    const workbenchHeader={contract:marker?.[1]};
+    const fingerprint=markdown.match(/^paper_digest_workbench_schema_fingerprint:\s*"?([a-f0-9]{64})"?\s*$/m);
+    if(fingerprint)workbenchHeader.schemaFingerprint=fingerprint[1];
+    if(!protocols.hasValidHeader(workbenchHeader,'researcher-workbench'))fail('会议研究工作区格式或原结构指纹不一致。');
+    const prefix = conferenceWorkbenchRoot(item, page, workbenchHeader);
     if (!marked || data.length !== 4 || data.map(asset => asset.record.path.slice(prefix.length)).sort().join('\0')
         !== CONFERENCE_SIDECAR_NAMES.join('\0') || data.some(asset => !asset.record.path.startsWith(prefix))) {
         fail(`论文 ${item.paperId} 的研究工作区只允许本篇本日期的四个固定附属文件。`);
@@ -258,7 +274,14 @@ function validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, p
     const common = { ...identity, originalTitle: text(analysis.title), authors };
     const read = name => publicationFiles.strictJson(byName.get(name).bytes, `会议工作区 ${name}`);
     const citation = read('citation.json');
-    const expectedCitation = { ...common, contract: 'researcher-sidecars-v1', schemaVersion: 1,
+    const context=read('rethink-context.json');
+    const contextHeader=protocolHeader(context,'paper-research-context');
+    if(protocols.format(context.contract,'paper-research-context',context.schemaFingerprint)!=='explicit-source-abstract')fail('会议上下文的语义格式不受支持。');
+    const schema=context.schemaFingerprint ? protocols.declaredSchema(context.contract,'paper-research-context',context.schemaFingerprint):null;
+    const citationHeader=schema ? schema.citationFormat : protocols.historicalHeader('researcher-sidecars','source-bound-citation',null);
+    const originalWorkbench=schema ? schema.workbenchFormat : protocols.historicalHeader('researcher-workbench','source-bound-sidecar-links',null);
+    if(!protocols.hasValidHeader(citationHeader,'researcher-sidecars')||!protocols.hasValidHeader(originalWorkbench,'researcher-workbench')||stableHash(workbenchHeader)!==stableHash(originalWorkbench))fail('会议上下文没有绑定原引用和工作区格式。');
+    const expectedCitation = { ...common, ...citationHeader,
         id: item.paperId, type: 'conference-paper' };
     if (stableHash(citation) !== stableHash(expectedCitation)) fail('会议引用 JSON 与真实论文身份、作者或来源 SHA 不一致。');
     const parsed = require('../utils.js').parseAnalysis(analysis.analysis);
@@ -266,14 +289,14 @@ function validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, p
         fail('会议研究工作区缺少有效的正式评分。');
     }
     const abstract = typeof analysis.abstract === 'string' && analysis.abstract.trim() ? analysis.abstract : null;
-    const expectedContext = { ...common, contract: 'paper-research-context-v2', schemaVersion: 2,
+    const expectedContext = { ...common, ...contextHeader,
         readerTitle: text(analysis.apiReaderPlan?.readerTitle), oneSentenceThesis: text(analysis.apiReaderPlan?.oneSentenceThesis),
         abstract, abstractSha256: abstract === null ? null : sha256(abstract),
         abstractStatus: abstract === null ? 'unavailable' : 'available',
         assessment: { primaryTask: String(parsed.primaryTaskTag || '').replace(/^#/, ''),
             primaryMethod: String(parsed.primaryMethodTag || '').replace(/^#/, ''), score: Number(parsed.score),
             rankBucket: text(parsed.rankBucket), documentType: text(parsed.documentType) } };
-    if (stableHash(read('rethink-context.json')) !== stableHash(expectedContext)) {
+    if (stableHash(context) !== stableHash(expectedContext)) {
         fail('会议研究上下文与来源身份、Reader 计划、评分或原摘要可得状态不一致。');
     }
     const ris = ['TY  - CONF', `TI  - ${common.originalTitle}`, ...authors.map(author => `AU  - ${author.name}`),
@@ -293,7 +316,8 @@ function validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, p
     const basePath = require('../config.js').PUBLISH_CONFIG.basePath.replace(/\/$/, '');
     const expectedRecords = Object.fromEntries(CONFERENCE_SIDECAR_NAMES.map(name => [name,
         { url: `${basePath}/${prefix.slice('static/'.length)}${name}`, sha256: byName.get(name).record.sha256,
-            ...(name === 'rethink-context.json' ? { contract: 'paper-research-context-v2' } : {}) }]));
+            ...(name === 'rethink-context.json' ? { contract: context.contract,
+                ...(context.schemaFingerprint ? {schemaFingerprint:context.schemaFingerprint}:{}) } : {}) }]));
     if (stableHash(records) !== stableHash(expectedRecords)) fail('会议页附属文件声明的 URL、SHA 或集合不一致。');
 }
 function markdownInline(value) {
@@ -306,12 +330,12 @@ function priorPreprintDisclosureProof(item) {
         if (Object.hasOwn(item?.route || {}, 'sourceDisclosure')) fail(`论文 ${item.paperId} 未使用指定的早期预印本来源，不能附带该来源版本说明。`);
         return null;
     }
-    exact(disclosure, ['contract', 'version', 'paperId', 'icmlTitle', 'preprintTitle', 'doi', 'versionRelation',
+    const disclosureHeader = protocolHeader(disclosure,PRIOR_PREPRINT_DISCLOSURE_CONTRACT);
+    exact(disclosure, [...Object.keys(disclosureHeader), 'paperId', 'icmlTitle', 'preprintTitle', 'doi', 'versionRelation',
         'sourceKind', 'receiptSelfSha256', 'sourceBindingSha256', 'cameraReady', 'openreviewResponseBytes',
         'statement', 'disclosureSha256'], `论文 ${item.paperId} 的早期预印本说明`);
     const body = clone(disclosure); delete body.disclosureSha256;
-    if (item.paperId !== PRIOR_PREPRINT_PAPER_ID || disclosure.contract !== PRIOR_PREPRINT_DISCLOSURE_CONTRACT
-        || disclosure.version !== 1 || disclosure.paperId !== item.paperId
+    if (item.paperId !== PRIOR_PREPRINT_PAPER_ID || disclosure.paperId !== item.paperId
         || typeof disclosure.icmlTitle !== 'string' || !disclosure.icmlTitle.trim()
         || disclosure.preprintTitle !== acquisition.sourceTitle || disclosure.doi !== acquisition.sourceDoi
         || disclosure.versionRelation !== acquisition.versionRelation || disclosure.sourceKind !== acquisition.sourceKind
@@ -346,7 +370,7 @@ function arxivHistoricalVersionDisclosureProof(item, sourceDescriptor) {
     if (item?.route?.kind !== 'arxiv-fresh-fetch') fail(`论文 ${item?.paperId || 'unknown paper'} 未使用 arXiv 来源，不能附带 arXiv 版本记录。`);
     const normalized = require('./fresh-arxiv-rewrite-source.js')
         .normalizeHistoricalVersionIdentity(value, item.route.arxivId);
-    if (normalized.contract !== HISTORICAL_ARXIV_VERSION_CONTRACT
+    if (!protocols.isContract(normalized.contract,HISTORICAL_ARXIV_VERSION_CONTRACT)
         || sourceDescriptor.sourceId !== normalized.selectedSourceId
         || !SHA.test(String(sourceDescriptor.sourceManifestSha256 || ''))) {
         fail(`论文 ${item.paperId} 的历史 arXiv 版本记录与来源说明不一致，或来源清单 SHA 格式无效。`);

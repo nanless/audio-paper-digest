@@ -8,8 +8,9 @@ public enum PrivateStoragePaths {
     public static let aliasesFilename = "RestoredPathRoots.json"
     public struct RootMap: Codable, Sendable {
         public let contract: String
+        public let schemaFingerprint: String?
         public let roots: [String]
-        public init(roots: [String]) { self.contract="paperdigest-storage-aliases-v1"; self.roots=roots }
+        public init(roots: [String]) { self.contract=ClientProtocols.contract("paperdigest-storage-aliases"); self.schemaFingerprint=ClientProtocols.schemaFingerprint("paperdigest-storage-aliases"); self.roots=roots }
     }
     public enum StorageError: Error, LocalizedError {
         case invalid(String)
@@ -54,8 +55,8 @@ public enum PrivateStoragePaths {
     }
     static func decodeRoots(_ data: Data) throws -> [String] {
         let object=try JSONSerialization.jsonObject(with:data)
-        guard let dictionary=object as? [String:Any], Set(dictionary.keys)==["contract","roots"],
-              dictionary["contract"] as? String == "paperdigest-storage-aliases-v1",
+        guard let dictionary=object as? [String:Any], ClientProtocols.hasValidHeader(dictionary,"paperdigest-storage-aliases"),
+              Set(dictionary.keys)==(try ClientProtocols.recordKeys(dictionary["contract"],"paperdigest-storage-aliases",fields:["roots"],fingerprints:dictionary["schemaFingerprint"] as? String)),
               let roots=dictionary["roots"] as? [String], roots.count <= BackupCodec.maxEntries else { throw StorageError.invalid("私有路径映射合同无效") }
         try validateRoots(roots)
         return roots
@@ -152,9 +153,10 @@ public enum BackupCodec {
     }
     public struct Payload: Codable, Sendable {
         public let contract:String
+        public let schemaFingerprint:String?
         public let sourceDirectory:String
         public let files:[Entry]
-        public init(sourceDirectory:String,files:[Entry]){self.contract="paperdigest-backup-v2";self.sourceDirectory=sourceDirectory;self.files=files}
+        public init(sourceDirectory:String,files:[Entry]){self.contract=ClientProtocols.contract("paperdigest-backup");self.schemaFingerprint=ClientProtocols.schemaFingerprint("paperdigest-backup");self.sourceDirectory=sourceDirectory;self.files=files}
     }
     public struct StagedRestore: Sendable {
         public let stageDirectory:URL
@@ -237,7 +239,9 @@ public enum BackupCodec {
     }
     public static func stage(data:Data,parentDirectory:URL) throws -> StagedRestore {try stage(parse(data),parentDirectory:parentDirectory)}
     public static func validate(_ payload:Payload) throws {
-        guard payload.contract=="paperdigest-backup-v2",payload.files.count<=maxEntries else{throw PrivateStoragePaths.StorageError.invalid("备份合同或条目数量无效")}
+        var header:[String:Any] = ["contract":payload.contract]
+        if let fingerprint=payload.schemaFingerprint { header["schemaFingerprint"]=fingerprint }
+        guard ClientProtocols.hasValidHeader(header,"paperdigest-backup"),payload.files.count<=maxEntries else{throw PrivateStoragePaths.StorageError.invalid("备份合同或条目数量无效")}
         try PrivateStoragePaths.absolute(payload.sourceDirectory)
         var paths=Set<String>(),total=0
         var componentAliases:[String:String]=[:]
@@ -279,5 +283,16 @@ public enum BackupCodec {
     private static func roots(in payload:Payload) throws -> [String] {
         guard let map=payload.files.first(where:{$0.path==PrivateStoragePaths.aliasesFilename}) else{return []}
         return try PrivateStoragePaths.decodeRoots(map.data)
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension BackupCodec.Payload {
+    public init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-backup")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        sourceDirectory=try values.decode(String.self,forKey:.sourceDirectory)
+        files=try values.decode([BackupCodec.Entry].self,forKey:.files)
     }
 }

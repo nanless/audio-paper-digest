@@ -6,10 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const identity = require('../scripts/lib/paper-identity.js');
 
-const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'paper-identity-v1-vectors.json'), 'utf8'));
+const vectors = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'paper-identity-vectors.json'), 'utf8'));
 
-test('paper-identity-v1 的测试向量是正式的，且跨运行时稳定', () => {
-    assert.equal(vectors.contract, identity.CONTRACT);
+test('原论文身份的固定向量保持原字节与跨运行时摘要', () => {
+    assert.equal(require('../scripts/lib/protocol-codec').isContract(vectors.contract, identity.CONTRACT), true);
+    assert.notEqual(vectors.contract, identity.CONTRACT);
     for (const vector of vectors.vectors) {
         const normalized = identity.normalizeIdentity(vector.record);
         assert.deepEqual(normalized, vector.normalized, vector.name);
@@ -139,4 +140,55 @@ test('真实 JSON 年份数字按数值归一化，两端身份与完整记录�
     const record = structuredClone(cases.positive[0].record);
     record.conference.year = NaN;
     assert.throws(() => identity.normalizeIdentity(record));
+});
+
+
+test('新身份写完整实际头，规范编号保持一致而身份摘要绑定所用格式', () => {
+    for (const vector of vectors.vectors) {
+        const fields = structuredClone(vector.record);
+        delete fields.contract;
+        const value = identity.createIdentity(fields);
+        assert.equal(value.contract, 'paper-identity');
+        assert.match(value.schemaFingerprint, /^[a-f0-9]{64}$/);
+        assert.equal(value.canonicalId, vector.normalized.canonicalId);
+        assert.notEqual(identity.identitySha256(value), vector.identitySha256);
+        const display = structuredClone(value);
+        display.citation = null;
+        assert.equal(identity.identitySha256(display), identity.identitySha256(value));
+        for (const malformed of [{ ...value, schemaFingerprint: undefined },
+            { ...value, schemaFingerprint: '0'.repeat(64) }, { ...value, version: 1 }]) {
+            assert.throws(() => identity.normalizeIdentity(malformed));
+        }
+        assert.throws(() => identity.normalizeIdentity({ ...vector.record, schemaFingerprint: value.schemaFingerprint }));
+    }
+});
+
+test('现用身份的实际头、身份摘要与完整记录摘要在两种语言中一致', () => {
+    const { execFileSync } = require('node:child_process');
+    const fields = vectors.vectors.map(vector => {
+        const value = structuredClone(vector.record);
+        delete value.contract;
+        return value;
+    });
+    const expected = fields.map(value => {
+        const record = identity.createIdentity(value);
+        return { record, identitySha256: identity.identitySha256(record), recordSha256: identity.recordSha256(record) };
+    });
+    const text = execFileSync('bash', ['scripts/python-runtime.sh', '-c',
+        'import json,sys;sys.path.insert(0,"scripts");import paper_identity as p;records=[p.create_identity(v) for v in json.load(sys.stdin)];print(json.dumps([{"record":v,"identitySha256":p.identity_sha256(v),"recordSha256":p.record_sha256(v)} for v in records],ensure_ascii=False))'], {
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(fields), encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(text), expected);
+});
+
+test('编号、会议短名和摘要均不接受末尾换行', () => {
+    const arxiv = structuredClone(vectors.vectors[0].record);
+    arxiv.arxivId += '\n';
+    arxiv.canonicalId = 'arxiv:' + arxiv.arxivId;
+    arxiv.source = { status: 'unavailable', url: null };
+    assert.throws(() => identity.normalizeIdentity(arxiv));
+    const conference = structuredClone(vectors.vectors[1].record);
+    conference.conference.slug += '\n';
+    conference.canonicalId = identity.canonicalConferenceId(conference.conference, conference.externalId);
+    assert.throws(() => identity.normalizeIdentity(conference));
+    assert.equal(identity.isSha256('a'.repeat(64) + '\n'), false);
 });

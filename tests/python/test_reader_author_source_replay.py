@@ -34,6 +34,7 @@ def attach_source_bound_resource_claim_fixture(paper, source_text):
     identity['identitySha256'] = publisher._reader_record_sha256(identity, 'test resource identity')
     paper['apiReaderResources'] = identity
     paper['apiReaderPlan'] = {
+        'version': 3, 'contract': 'beginner-researcher-v3',
         'readerTitle': '作者身份与原文证据核验',
         'oneSentenceThesis': '本文核验作者来源，资源发布状态尚未确认。',
         'conceptBridges': [],
@@ -43,6 +44,7 @@ def attach_source_bound_resource_claim_fixture(paper, source_text):
                                  '本次尚未确认作者代码、模型权重或数据的可用状态，不能声称已经开源。')
     stage = paper['analysisManifest']['stages']['apiReaderArticle']
     stage['resourceIdentitySha256'] = identity['identitySha256']
+    stage['resourceIdentityContractVersion'] = identity['contract']
     stage['resourceCount'] = 0
     stage['planSha256'] = publisher._reader_record_sha256(paper['apiReaderPlan'], 'test reader plan')
     stage['articleSha256'] = hashlib.sha256(paper['apiReaderArticle'].encode()).hexdigest()
@@ -126,6 +128,10 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
             result = subprocess.run(['node', '-e', code, json.dumps({'paper': paper, 'details': details})], cwd=ROOT,
                                     capture_output=True, text=True, check=True, timeout=30)
             paper['apiReaderAuthors'] = json.loads(result.stdout)
+            paper['analysisManifest']['contracts']['apiReaderAuthorIdentity'] = paper['apiReaderAuthors']['identity']['contract']
+            stage.pop('readerAuthorIdentityContractVersion')
+            from reader_record_format import identity_header
+            stage['readerAuthorIdentityProtocol'] = identity_header(paper['apiReaderAuthors']['identity'], 'authors')
             stage['readerAuthorIdentitySha256'] = paper['apiReaderAuthors']['identitySha256']
             stage['readerAuthorsSha256'] = gate._reader_record_sha256(paper['apiReaderAuthors'], 'test')
             attach_source_bound_resource_claim_fixture(paper, details['text'])

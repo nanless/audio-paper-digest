@@ -4,9 +4,11 @@
 // source repair, analysis permission, budget release, or model input re-signing.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { isDeepStrictEqual: equal } = require('node:util');
+const codec = require('./protocol-codec');
 const root = path.resolve(__dirname, '../..');
-const CONTRACT = 'conference-publication-figure-crops-v1';
-const MANIFEST = 'conference-publication-figure-crop-manifest-v1';
+const CONTRACT = codec.contract('conference-publication-figure-crops');
+const PROOF_CONTRACT = codec.contract('conference-publication-figure-crop-proof');
+const MANIFEST = codec.contract('conference-publication-figure-crop-manifest');
 const SHA = /^[a-f0-9]{64}$/, UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const canonical = value => Array.isArray(value) ? value.map(canonical)
@@ -14,6 +16,40 @@ const canonical = value => Array.isArray(value) ? value.map(canonical)
 const stable = value => hash(JSON.stringify(canonical(value)));
 const need = (value, message) => { if (!value) throw new Error('会议出版图片派生被拒：' + message); };
 const jsonBytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
+
+function cropHeader(value = null) {
+    if (value === null) return codec.recordHeader(CONTRACT, CONTRACT);
+    need(codec.hasValidHeader(value, CONTRACT), '保存的图片派生格式不合法');
+    return codec.recordHeader(value.contract, CONTRACT, value.schemaFingerprint);
+}
+function proofHeaderForOutcome(header) {
+    const proof = Object.hasOwn(header, 'schemaFingerprint')
+        ? codec.declaredSchema(header.contract, CONTRACT, header.schemaFingerprint).proofFormat
+        : codec.historicalHeader(PROOF_CONTRACT, 'source-bound-display-image');
+    need(codec.hasValidHeader(proof, PROOF_CONTRACT)
+        && equal(proof, codec.recordHeader(proof.contract, PROOF_CONTRACT, proof.schemaFingerprint)), '图片派生未绑定准确的单图证明格式');
+    return proof;
+}
+
+const DISPLAY_MODES = Object.freeze({
+    'source-pdf-attested-source-page-only': 'limited-original-page',
+    'source-pdf-full-page': 'complete-original-page',
+    'source-pdf-figure-crop': 'bounded-original-figure-crop'
+});
+function displayModeFamily(raw) {
+    const matches = Object.keys(DISPLAY_MODES).filter(name => codec.isContract(raw, name));
+    need(matches.length === 1, '图片展示模式不受支持');
+    return matches[0];
+}
+function displayModeForGeometry(geometry, outcomeHeader) {
+    const name = geometry.limitedSourcePageOnly ? 'source-pdf-attested-source-page-only'
+        : geometry.fullPage ? 'source-pdf-full-page' : 'source-pdf-figure-crop';
+    return outcomeHeader.schemaFingerprint ? codec.contract(name) : codec.historicalContract(name, DISPLAY_MODES[name]);
+}
+function blockedHeaderForOutcome(header) {
+    const name = 'conference-publication-figure-crop-blocked';
+    return header.schemaFingerprint ? codec.recordHeader(name, name) : codec.historicalHeader(name, 'blocked-display-only');
+}
 
 function beneath(parent, child) {
     const relative = path.relative(parent, child);
@@ -111,7 +147,7 @@ function validateFailure(runtimeRoot, member) {
     need(SHA.test(member.reviewFailureSha256 || ''), '缺少真实审查失败SHA');
     const result = readJson(path.join(runtimeRoot, 'conference-publications', 'page-review-failures', member.reviewFailureSha256 + '.json'));
     const failure = result.value; selfHash(failure, 'failureSha256');
-    need(failure.failureSha256 === member.reviewFailureSha256 && failure.contract === 'conference-page-content-review-failure-v1'
+    need(failure.failureSha256 === member.reviewFailureSha256 && codec.hasValidHeader(failure, 'conference-page-content-review-failure')
         && failure.passed === false && failure.completed === true && failure.failureKind === 'content'
         && failure.stage === 'image' && failure.path === member.pagePath && failure.sha256 === member.pageSha256
         && failure.paperId === member.paperId, '不是原确切页面的完整真实图片拒稿');
@@ -213,7 +249,7 @@ function maintenancePublicationHistory(input, handle) {
         items: Object.entries(scope.baselineState.items).sort(([a], [b]) => a.localeCompare(b)) };
 }
 
-const SOURCE_REVALIDATION = 'conference-publication-current-source-revalidation-v1';
+const SOURCE_REVALIDATION = codec.contract('conference-publication-current-source-revalidation');
 const LEGACY_SOURCE_COMMIT = 'd1a9e292d5b91b83dfc3f3ac036027a9a82fa397';
 const LEGACY_SOURCE_IMPLEMENTATION = Object.freeze({
     moduleSha256: '561b6f6539ca3c5e0b56098cfb90439e88c0174f176caf6888aa1250e4a88673',
@@ -246,18 +282,21 @@ function projectHistoricalOutcome(current, original) {
         // These are the only changed fields: current proof locator/identity.
         // All pixels, URLs, source notes, target captions/pages and source owner
         // fields still participate in the complete outcome comparison below.
-        return { ...item, proofPath: previous.proofPath, proofSha256: previous.proofSha256 };
+        need(displayModeFamily(item.reviewTarget.displayMode) === displayModeFamily(previous.reviewTarget.displayMode),
+            '当前来源重验改变原展示模式');
+        return { ...item, reviewTarget: { ...item.reviewTarget, displayMode: previous.reviewTarget.displayMode },
+            proofPath: previous.proofPath, proofSha256: previous.proofSha256 };
     });
-    const body = { ...current, implementation: original.implementation, derivations };
-    delete body.derivationSha256;
+    const {contract: currentContract, schemaFingerprint: currentFingerprint, derivationSha256, ...rest} = current;
+    const body = { ...cropHeader(original), ...rest, implementation: original.implementation, derivations };
     const projected = { ...body, derivationSha256: stable(body) };
     need(equal(projected, original), '当前来源重验改变原像素、几何显示目标、URL或完整原派生集合');
     return projected;
 }
 function currentSourceReceipt({ original, current, issuanceStateFileSha256, baselineStateFileSha256,
-    generationFileSha256, originalProofs }) {
+    generationFileSha256, originalProofs, header = codec.recordHeader(SOURCE_REVALIDATION, SOURCE_REVALIDATION) }) {
     projectHistoricalOutcome(current, original);
-    const body = { contract: SOURCE_REVALIDATION, version: 1, purpose: 'read-only-source-revalidation',
+    const body = { ...header, purpose: 'read-only-source-revalidation',
         publicationPassed: false, modelRequests: 0, originalOutcomeSha256: original.derivationSha256,
         originalOutcomeCanonicalBytesSha256: hash(jsonBytes(original)), legacyImplementationCommit: LEGACY_SOURCE_COMMIT,
         originalImplementation: original.implementation, currentImplementation: current.implementation,
@@ -276,10 +315,12 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         && UUID.test(processId || ''), '运行根或会议/流程身份不合法');
     const publication = path.join(runtimeRoot, 'conference-publications', conferenceId, processId);
     const manifest = readJson(manifestPath, 8 * 1024 * 1024), selection = manifest.value;
-    need(equal(Object.keys(selection).sort(), ['contract', 'version', 'conferenceId', 'processId',
+    need(codec.hasValidHeader(selection, MANIFEST), '出版派生清单格式不合法');
+    const selectionHeader = codec.recordHeader(selection.contract, MANIFEST, selection.schemaFingerprint);
+    need(equal(Object.keys(selection).sort(), [...Object.keys(selectionHeader), 'conferenceId', 'processId',
         'baseGenerationSha256', 'baseGenerationFileSha256', 'reviewProtocolSha256', 'imageFailureUniverse', 'members'].sort()),
         'manifest含未知字段或自由几何参数');
-    need(selection.contract === MANIFEST && selection.version === 1 && selection.conferenceId === conferenceId
+    need(selection.conferenceId === conferenceId
         && selection.processId === processId && selection.baseGenerationSha256 === expectedGenerationSha256
         && Array.isArray(selection.members) && selection.members.length >= 0 && selection.members.length <= 10000,
         '出版派生完整清单不合法');
@@ -287,7 +328,9 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         'pageSha256', 'analysisSha256', 'sourceSnapshotSha256', 'reviewFailureSha256', 'figureUrl',
         'sourceDomSha256', 'readerArticleSha256', 'readerPlanSha256'];
     const base = findBaseGeneration(publication, selection.baseGenerationSha256, selection.baseGenerationFileSha256);
-    need(base.value.contract === 'conference-blog-generation-v1' && base.value.version === 2
+    const generationSelector = Object.hasOwn(base.value, 'schemaFingerprint') ? 'contract' : 'version';
+    need(codec.hasValidHeader(base.value, 'conference-blog-generation', generationSelector)
+        && codec.format(base.value[generationSelector], 'conference-blog-generation', base.value.schemaFingerprint) === 'external-images'
         && base.value.conferenceId === conferenceId && base.value.processId === processId, '旧生成不属于本会议流程');
     need(maintenanceHandle === undefined || replay === true, '历史来源能力只能只读重放');
     const history = maintenanceHandle === undefined ? null : maintenancePublicationHistory(input, maintenanceHandle);
@@ -305,7 +348,8 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
             if (!page || page.sourceSha256 !== record.sha256 || record.protocol !== selection.reviewProtocolSha256
                 || record.stage !== 'image' || record.failureKind !== 'content' || record.completed !== true) continue;
             selfHash(record, 'failureSha256');
-            need(record.passed === false && record.paperId === page.paperId && name === record.failureSha256 + '.json',
+            need(codec.hasValidHeader(record, 'conference-page-content-review-failure')
+                && record.passed === false && record.paperId === page.paperId && name === record.failureSha256 + '.json',
                 '原全批图片拒稿身份不合法');
             result.push(record.failureSha256);
         }
@@ -383,9 +427,13 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
     ];
     const implementation = Object.fromEntries(implementationFiles.map(([key, filename]) => [key, regular(filename).sha256]));
     const revalidation = history && !equal(implementation, input.expectedDerivation.implementation);
+    const originalOutcomeHeader = replay ? cropHeader(input.expectedDerivation) : null;
+    if (replay) selfHash(input.expectedDerivation, 'derivationSha256');
+    const outcomeHeader = replay && !revalidation ? originalOutcomeHeader : cropHeader();
+    const figureProofHeader = proofHeaderForOutcome(outcomeHeader);
     need(!registerSourceRevalidation || revalidation, '显式来源重验只用于真实历史实现升级');
     const oldProofPins = [];
-    let receiptFile, receiptState, issuanceStateSnapshotPath;
+    let receiptFile, receiptState, issuanceStateSnapshotPath, revalidationHeader;
     let currentStatePin;
     if (revalidation) {
         verifyLegacySourceImplementation(input.expectedDerivation, implementationFiles);
@@ -404,6 +452,9 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         receiptFile = path.join(verificationDirectory, 'receipt.json');
         if (fs.existsSync(receiptFile)) {
             const saved = readJson(receiptFile).value;
+            need(codec.hasValidHeader(saved, SOURCE_REVALIDATION), '原来源重验格式不符');
+            selfHash(saved, 'receiptSha256');
+            revalidationHeader = codec.recordHeader(saved.contract, SOURCE_REVALIDATION, saved.schemaFingerprint);
             need(SHA.test(saved.issuanceStateFileSha256 || ''), '原来源重验缺少真实签发状态SHA');
             history.scope.assertIssuanceState(saved.issuanceStateFileSha256);
             issuanceStateSnapshotPath = path.join(verificationDirectory,
@@ -496,12 +547,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
                     && candidate.caption === figure.caption && candidate.url === figure.url && candidate.sourceDomSha256 === figure.sourceDomSha256)
             && originalSource[0].sourceDomSha256 === figure.sourceDomSha256
             && originalSource[0].images.some(image => image.url === figure.url), '原来源图号/完整或截断caption身份不一致');
-        const sourceIdentity = { contract: 'conference-reader-pdf-source-v1', paperId: loaded.run.paperId,
-            sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
-            rawStructuredArtifactsSha256: loaded.source.sourceSnapshotBinding.sourceBinding.artifactsPayloadSha256,
-            effectiveStructuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
-            sourceSnapshotBinding: loaded.source.sourceSnapshotBinding, planAuthorityBinding: loaded.source.planAuthorityBinding,
-            executionId: loaded.run.executionId };
+        const sourceIdentity = require('./conference-reader-pdf-identity').projectSavedExecution(loaded);
         const sourceKey = loaded.run.executionId + ':' + loaded.analysisFileSha256 + ':' + loaded.sourceFileSha256;
         let source = sourceCache.get(sourceKey);
         if (!source) {
@@ -524,7 +570,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         catch (error) {
             if (error.code !== 'CROP_UNSUPPORTED_GEOMETRY') throw error;
             source.assertUnchanged();
-            const failed = { contract: 'conference-publication-figure-crop-blocked-v1', purpose: 'publication-display-only',
+            const failed = { ...blockedHeaderForOutcome(outcomeHeader), purpose: 'publication-display-only',
                 manifestFileSha256: manifest.sha256, baseGenerationSha256: selection.baseGenerationSha256, implementation,
                 ...member, reasonCode: error.code, reason: error.message,
                 geometryImplementationSha256: regular(path.join(root, 'scripts/conference_publication_figure_crop.py')).sha256 };
@@ -549,7 +595,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         const urls = [...stagePage.bytes.toString('utf8').matchAll(/https:\/\/[^\s<>\)\]]+/g)].map(match => match[0]).filter(url => url.endsWith(oldUrlSuffix));
         need(new Set(urls).size === 1, '原页面图片URL不唯一'); const originalUrl = urls[0];
         const newUrl = originalUrl.slice(0, -member.imagePath.length) + newImagePath;
-        const proofBody = { contract: CONTRACT, purpose: 'publication-display-only', baseGenerationSha256: selection.baseGenerationSha256,
+        const proofBody = { ...figureProofHeader, purpose: 'publication-display-only', baseGenerationSha256: selection.baseGenerationSha256,
             baseGenerationFileSha256: selection.baseGenerationFileSha256, originalCompletionReceiptSha256: base.value.completionReceiptSha256,
             manifestFileSha256: manifest.sha256, conferenceId, processId, implementation, ...member,
             originalStageManifestSha256: oldPage[0].manifestSha256, originalReaderPixelSha256: member.imageSha256,
@@ -571,7 +617,9 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
             const old = input.expectedDerivation.derivations.filter(item => item.paperId === member.paperId
                 && item.figureOrdinal === member.figureOrdinal);
             need(old.length === 1, '原派生没有唯一同论文同图证明');
-            const originalBody = { ...proofBody, implementation: input.expectedDerivation.implementation };
+            const {contract: proofContract, schemaFingerprint: proofFingerprint, ...originalFields} = proofBody;
+            const originalBody = { ...proofHeaderForOutcome(originalOutcomeHeader), ...originalFields,
+                implementation: input.expectedDerivation.implementation };
             const originalProof = { ...originalBody, proofSha256: stable(originalBody) };
             const expectedPath = path.join(outRoot, originalProof.proofSha256 + '.json');
             need(old[0].proofPath === expectedPath && old[0].proofSha256 === originalProof.proofSha256,
@@ -593,8 +641,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         results.push({ paperId: member.paperId, figureOrdinal: figure.ordinal, figureNumber: derived.figureNumber,
             originalImagePath: member.imagePath, originalUrl, newImagePath, newUrl, derivedSourcePath,
             sha256: hash(derived.pixels), size: derived.pixels.length, sourceNote: proof.sourceNote,
-            reviewTarget: { displayMode: derived.proof.geometry.limitedSourcePageOnly ? 'source-pdf-attested-source-page-only-v1'
-                : derived.proof.geometry.fullPage ? 'source-pdf-full-page-v1' : 'source-pdf-figure-crop-v1',
+            reviewTarget: { displayMode: displayModeForGeometry(derived.proof.geometry, outcomeHeader),
                 pdfPage: derived.proof.geometry.page, targetPrintedFigureNumber: derived.figureNumber,
                 originalPdfSha256: derived.proof.originalPdfSha256, completeTargetCaption: derived.proof.geometry.limitedSourcePageOnly ? null : derived.proof.geometry.caption.rawText,
                 ...(derived.proof.geometry.limitedSourcePageOnly ? {captionExtractionStatus: derived.proof.geometry.captionExtractionStatus} : {}) },
@@ -614,7 +661,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         }
     };
     assertUnchanged();
-    const body = { contract: CONTRACT, purpose: 'publication-display-only', conferenceId, processId,
+    const body = { ...outcomeHeader, purpose: 'publication-display-only', conferenceId, processId,
         baseGenerationSha256: selection.baseGenerationSha256, baseGenerationFileSha256: selection.baseGenerationFileSha256,
         manifestFileSha256: manifest.sha256, implementation, status: blocked.length || unresolvedRoutes.length ? 'partial' : 'complete',
         publicationPassed: false, derivations: results, blocked, deferredRoutes, unresolvedRoutes, nonblockingObservations };
@@ -622,7 +669,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
     if (revalidation) {
         const receipt = currentSourceReceipt({ original: input.expectedDerivation, current: outcome,
             issuanceStateFileSha256: receiptState.sha256, baselineStateFileSha256: history.scope.baselineStateFileSha256,
-            generationFileSha256: history.scope.generationFileSha256, originalProofs: oldProofPins });
+            generationFileSha256: history.scope.generationFileSha256, originalProofs: oldProofPins, header: revalidationHeader });
         history.scope.assertUnchanged();
         need(regular(path.join(history.scope.processDirectory, 'state.json')).sha256 === currentStatePin.sha256,
             '当前来源重验期间真实state变化');

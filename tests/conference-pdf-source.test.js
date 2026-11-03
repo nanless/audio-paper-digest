@@ -97,7 +97,7 @@ function ledgerFixture() {
 test('本地 PDF 来源描述记录对应身份与文件内容，未提取的文本、结构化记录及公式均标为不可用', () => {
     const f = fixture();
     const result = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record });
-    assert.equal(result.descriptor.contract, 'conference-pdf-source-v1');
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(result.descriptor, 'conference-pdf-source'), true);
     assert.equal(result.descriptor.kind, 'local_pdf');
     assert.equal(result.descriptor.pdfSha256, f.record.pdfSha256);
     assert.equal(result.descriptor.pdfBytes, f.bytes.length);

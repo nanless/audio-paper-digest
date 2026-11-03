@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import android.content.Context
 import android.util.JsonReader
 import android.util.JsonToken
@@ -67,14 +69,14 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 override fun read(bytes: ByteArray, offset: Int, length: Int): Int { val count = input.read(bytes, offset, length); if (count > 0) { consumed += count; require(consumed <= MAX_TOTAL) }; return count }
             }
             JsonReader(PublishedUtf8.reader(bounded)).use { reader ->
-                var format: String? = null; var epoch = ""; var summary: JSONObject? = null
+                val header=JSONObject(); var epoch = ""; var summary: JSONObject? = null
                 var published: List<Paper>? = null; var retired = emptyList<Paper>(); var taxonomy: WebsiteTaxonomy? = null
                 val seen = mutableSetOf<String>()
                 reader.beginObject()
                 while (reader.hasNext()) {
                     val key = reader.nextName(); require(seen.add(key)) { "目录字段重复" }
                     when (key) {
-                        "format" -> format = reader.nextString()
+                        "format", "contract", "schemaFingerprint", "version", "schemaVersion", "policyVersion", "__proto__" -> header.put(key,readValue(reader,0))
                         "validationEpoch" -> epoch = reader.nextString()
                         "summary" -> summary = readValue(reader, 0) as? JSONObject ?: error("目录摘要无效")
                         "websiteTaxonomy" -> { val value = readValue(reader, 0); taxonomy = if(value is JSONObject)runCatching { WebsiteTaxonomy.parse(value) }.getOrNull() else null }
@@ -89,7 +91,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                     }
                 }
                 reader.endObject(); require(reader.peek() == JsonToken.END_DOCUMENT) { "目录含额外内容" }
-                require(format == "mac-published-library-v1" && published != null && summary != null) { "目录协议或字段尚不支持" }
+                require(ClientProtocols.hasValidHeader(header,"paperdigest-published-library",if(header.has("format")) "format" else "contract") && published != null && summary != null) { "目录协议或字段尚不支持" }
                 CatalogState(published!!, retired, summary!!.also {if(taxonomy==null)it.put("websiteTaxonomyStatus","unavailable")}, epoch, taxonomy)
             }
         }
@@ -222,17 +224,35 @@ class CatalogRepository(private val context: Context, private val personal: Pers
 
     suspend fun sync(progress: (Int, Int, String) -> Unit = { _, _, _ -> }): JSONObject = syncMutex.withLock { withContext(Dispatchers.IO) {
         require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式，请先在设置中允许联网" }
-        val index = read(SITE + "index.json", MAX_TOTAL)
+        var indexURL=SITE+"client/index.json"
+        val index=try { read(indexURL,MAX_TOTAL) } catch(error:PublishedHttpStatus) {
+            if(error.status !in listOf(404,410))throw error
+            indexURL=SITE+"index.json";read(indexURL,MAX_TOTAL)
+        }
         val snapshotID = sha256(index)
         val first = index.firstOrNull { it.toInt().toChar() !in " \t\r\n" }
         val legacyIndex = first == '['.code.toByte()
+        require(!legacyIndex || indexURL==SITE+"index.json"){"新网站目录缺少完整格式声明"}
         val operationContext = coroutineContext
         val previous = snapshot
         val previousByID = previous.all.associateBy { it.id }
         // One paired website display catalog per sync; unavailable taxonomy never discards papers.
         val refreshedTaxonomy = try {
-            val display = JSONObject().put("snapshot", JSONObject(PublishedUtf8.decode(read(SITE + "data/tag-catalog-snapshot.json", 2 * 1024 * 1024))))
-                .put("versions", JSONObject(PublishedUtf8.decode(read(SITE + "data/tag-catalog-versions.json", 8 * 1024 * 1024))))
+            suspend fun optional404(url:String,limit:Int):ByteArray?=try {read(url,limit)}catch(error:PublishedHttpStatus){if(error.status==404)null else throw error}
+            val currentSnapshot=optional404(SITE+"client/data/tag-catalog-snapshot.json",2*1024*1024)
+            val currentVersions=optional404(SITE+"client/data/tag-catalog-versions.json",8*1024*1024)
+            val (snapshotBytes,versionsBytes)=if(currentSnapshot==null&&currentVersions==null) {
+                read(SITE+"data/tag-catalog-snapshot.json",2*1024*1024) to read(SITE+"data/tag-catalog-versions.json",8*1024*1024)
+            } else {require(currentSnapshot!=null&&currentVersions!=null){"新网页分类资源不成对"};currentSnapshot to currentVersions}
+            val display=JSONObject().put("snapshot",JSONObject(PublishedUtf8.decode(snapshotBytes)))
+                .put("versions",JSONObject(PublishedUtf8.decode(versionsBytes)))
+            val snapshotFamily="paper-tag-catalog-snapshot";val versionsFamily="paper-tag-catalog-versions"
+            val snapshotContract=if(currentSnapshot!=null)ClientProtocols.contract(snapshotFamily)
+                else ClientProtocols.historicalContract(snapshotFamily,"public-concept-hierarchy")
+            val versionsContract=if(currentVersions!=null)ClientProtocols.contract(versionsFamily)
+                else ClientProtocols.historicalContract(versionsFamily,"sha-keyed-snapshot-set")
+            require(display.getJSONObject("snapshot").opt("contract")==snapshotContract&&
+                display.getJSONObject("versions").opt("contract")==versionsContract){"分类端点返回了不匹配的格式"}
             WebsiteTaxonomy.parse(display)
         } catch(cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
           catch(_:Exception) { null }
@@ -268,7 +288,10 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             }
         } else {
             val manifest = JSONObject(PublishedUtf8.decode(index))
-            require(manifest.getString("contract") == "paper-search-index-manifest-v1") { "网站目录协议尚不支持" }
+            val family="paper-search-index-manifest"
+            val expectedContract=if(indexURL==SITE+"client/index.json")ClientProtocols.contract(family)
+                else ClientProtocols.historicalContract(family,"sha-bound-ordered-shards")
+            require(ClientProtocols.hasValidHeader(manifest,family)&&manifest.opt("contract")==expectedContract) { "网站目录协议尚不支持" }
             val descriptors = manifest.getJSONArray("shards").objects()
             require(descriptors.size in 1..128 && manifest.getInt("recordCount") > 0 && manifest.getLong("totalBytes") in 1..MAX_TOTAL.toLong())
             val urls = mutableSetOf<String>()
@@ -283,7 +306,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 val file = File(directory, "index/${s.getString("sha256")}.json")
                 var bytes = if (file.isFile) JsonFiles.read(file, 1024 * 1024L) else byteArrayOf()
                 if (bytes.size != s.getInt("bytes") || sha256(bytes) != s.getString("sha256")) {
-                    bytes = read(sameSite(s.getString("url")), 1024 * 1024)
+                    bytes = read(sameSite(URI(indexURL).resolve(s.getString("url")).toASCIIString()), 1024 * 1024)
                     require(bytes.size == s.getInt("bytes") && sha256(bytes) == s.getString("sha256")) { "网站分片与清单不符，原资料库保留" }
                     JsonFiles.write(file, bytes)
                 }
@@ -313,7 +336,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         operationContext.ensureActive()
         JsonFiles.writeStream(current, MAX_TOTAL.toLong()) { output ->
             val writer = OutputStreamWriter(output, Charsets.UTF_8)
-            writer.write("{\"format\":\"mac-published-library-v1\",\"validationEpoch\":" + JSONObject.quote(epoch) + ",\"summary\":" + summary.toString() + ",\"papers\":[")
+            writer.write(ClientProtocols.record("paperdigest-published-library").toString().dropLast(1) + ",\"validationEpoch\":" + JSONObject.quote(epoch) + ",\"summary\":" + summary.toString() + ",\"papers\":[")
             published.forEachIndexed { index, paper -> operationContext.ensureActive(); if (index > 0) writer.write(","); writer.write(paper.json().toString()) }
             writer.write("],\"retiredPapers\":[")
             retired.forEachIndexed { index, paper -> operationContext.ensureActive(); if (index > 0) writer.write(","); writer.write(paper.json().toString()) }
@@ -382,11 +405,11 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             var context: JSONObject? = null
             var sidecar: JSONObject? = null
             citationFiles["citation.json"]?.let { address ->
-                try { sidecar = validatedSidecar(JSONObject(PublishedUtf8.decode(read(address, 1024 * 1024))), paper, false) }
+                try { sidecar = validatedSidecar(JSONObject(PublishedUtf8.decode(citationRepository.declaredBytes(paper,result,"citation.json"))), paper, false) }
                 catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; coroutineContext.ensureActive(); notices += "引用附加文件尚未核验，保留页面已核验字段" }
             }
             citationFiles["rethink-context.json"]?.let { address ->
-                try { context = validatedSidecar(JSONObject(PublishedUtf8.decode(read(address, 1024 * 1024))), paper, true) }
+                try { context = validatedSidecar(JSONObject(PublishedUtf8.decode(citationRepository.declaredBytes(paper,result,"rethink-context.json"))), paper, true) }
                 catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; coroutineContext.ensureActive(); notices += "研究上下文附加文件尚未读取" }
             }
             val original = result.json().put("citationSidecar", sidecar ?: JSONObject.NULL).put("citationFiles", JSONObject(citationFiles))
@@ -568,7 +591,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         fetchOverride?.let { return it(url, limit).also { b -> require(b.size <= limit) } }
         val safe = sameSite(url)
         val response = SafeHttp().execute(Request.Builder().url(safe).build(), limit)
-        require(response.code == 200) { "网站资料暂不可用，原资料保留" }
+        if(response.code!=200)throw PublishedHttpStatus(response.code)
         return response.bytes
     }
     private suspend fun readExternal(initial: String, limit: Int): ByteArray {
@@ -593,7 +616,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     }
     private fun seedCatalog(): JSONObject {
         val seed = runCatching { JSONObject(context.assets.open("published/sample.json").use { it.readBytes().toString(Charsets.UTF_8) }) }.getOrNull()
-        if (seed == null) return JSONObject().put("format", "mac-published-library-v1").put("validationEpoch", "unsynced")
+        if (seed == null) return ClientProtocols.record("paperdigest-published-library").put("validationEpoch", "unsynced")
             .put("summary", JSONObject().put("paperCount", 0).put("recordCount", 0).put("shardCount", 0).put("source", "尚未同步网站论文").put("snapshotID", "unsynced").put("syncedAt", JSONObject.NULL))
             .put("papers", JSONArray())
         val rows = seed.optJSONArray("librarySample")?.objects() ?: emptyList()
@@ -601,9 +624,9 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             val id = row.getString("id"); val source = row.getString("absUrl"); val version = URI(source).path.substringAfterLast('/')
             Paper("arxiv:$id", row.getString("title"), row.optString("titleZh", row.getString("title")), row.optJSONArray("authors")?.objects()?.map { it.getString("name") } ?: emptyList(),
                 row.optString("date"), Paper.score(row.opt("score")), row.optString("task"), row.optString("method"), row.optJSONArray("tags")?.strings() ?: emptyList(), "arxiv", "verified", row.getString("blogUrl"), source,
-                row.getString("pdfUrl"), version, JSONObject().put("contract", "paper-citation-source-v1").put("paperKey", "arxiv:$id").put("identityStatus", "verified").put("verified", true).put("complete", false).put("title", row.getString("title")).put("authors", JSONArray(row.optJSONArray("authors")?.objects()?.map { it.getString("name") } ?: emptyList<String>())).put("arxivId", version).put("sourceUrl", source).put("pdfUrl", row.getString("pdfUrl")).put("sourceKind", "arxiv"))
+                row.getString("pdfUrl"), version, ClientProtocols.record("paper-citation-source").put("paperKey", "arxiv:$id").put("identityStatus", "verified").put("verified", true).put("complete", false).put("title", row.getString("title")).put("authors", JSONArray(row.optJSONArray("authors")?.objects()?.map { it.getString("name") } ?: emptyList<String>())).put("arxivId", version).put("sourceUrl", source).put("pdfUrl", row.getString("pdfUrl")).put("sourceKind", "arxiv"))
         }
-        return JSONObject().put("format", "mac-published-library-v1").put("validationEpoch", "bundled-sample")
+        return ClientProtocols.record("paperdigest-published-library").put("validationEpoch", "bundled-sample")
             .put("summary", JSONObject().put("paperCount", papers.size).put("recordCount", papers.size).put("shardCount", 0).put("source", "应用内已发布样稿，尚未全站同步").put("snapshotID", "bundled-sample").put("syncedAt", JSONObject.NULL))
             .put("papers", JSONArray(papers.map { it.json() }))
     }
@@ -635,7 +658,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 cleanHTTPS(citation.nullableString("sourceUrl") ?: citation.nullableString("url")), if (status == "verified") cleanHTTPS(citation.nullableString("pdfUrl")) else null, citation.nullableString("arxivId"), citation, pdfSHA, listOf(blog), original = JSONObject().put("websiteTagRecords", JSONArray().put(WebsiteTaxonomy.record(row))))
         }
         fun validatedSidecar(value: JSONObject, paper: Paper, context: Boolean): JSONObject {
-            require(value.optString("contract") in if (context) setOf("researcher-sidecars-v1", "paper-research-context-v2") else setOf("researcher-sidecars-v1")) { "引用或上下文附加文件合同不受支持" }
+            require(ClientProtocols.hasValidHeader(value,if(context)"paper-research-context" else "researcher-sidecars")) { "引用或上下文附加文件合同不受支持" }
             if (paper.identityStatus == "verified") {
                 if (paper.sourceKind == "arxiv") {
                     val base = value.optString("arxivId", value.optString("id")).replace(Regex("v[1-9][0-9]*$"), "")
@@ -714,3 +737,6 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         private fun age(date: String): Long = runCatching { (Instant.now().toEpochMilli() - Instant.parse(date).toEpochMilli()).coerceAtLeast(0) / 1000 }.getOrDefault(Long.MAX_VALUE)
     }
 }
+
+/** Actual HTTP status only; parse, integrity and transport failures never trigger endpoint fallback. */
+internal class PublishedHttpStatus(val status:Int):java.io.IOException("网站资料暂不可用，原资料保留（HTTP $status）")

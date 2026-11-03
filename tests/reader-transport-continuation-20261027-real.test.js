@@ -7,20 +7,24 @@ const fixture = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,
     'fixtures/reader-transport-continuation-2610-34220.json.gz'))));
 const fixtureIdentity = JSON.parse(Buffer.from(fixture.candidate.rawBase64, 'base64')).identity;
 const fixtureModel = fixtureIdentity.model;
-const versions = require('../scripts/lib/prompt-text-versions');
+const versions = require('../scripts/lib/prompt-contracts');
 const originalArticlePath = 'prompts/api-reader-article-v9.md';
 const originalArticleBytes = require('../scripts/lib/prompt-evidence').readPromptEvidenceBytes(originalArticlePath,
     { expectedSha256: 'a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8' });
 assert.equal(require('../scripts/lib/prompt-history').promptTemplateSha256(originalArticleBytes.toString()), fixtureIdentity.promptSha256);
+const originalRepairPath = 'prompts/api-reader-repair-v13.md';
+const originalRepairBytes = require('../scripts/lib/prompt-evidence').readPromptEvidenceBytes(originalRepairPath,
+    { expectedSha256: 'e8bfdff8a12a27d3960cfe11187d87c4e3a4df2f3518bcb8bbd93c0cd86a6ab4' });
+assert.equal(require('../scripts/lib/prompt-history').promptTemplateSha256(originalRepairBytes.toString()), fixtureIdentity.repairPromptSha256);
 const normalPromptPath = versions.currentTextStagePromptPath, normalPromptContract = versions.currentPromptTextContract;
 const currentArticlePath = normalPromptPath('apiReaderArticle');
 let historicalArticleContext = true;
 // Only this isolated test process reconstructs the real v9 writing context;
 // production still refuses the current prompt transition without recovery.
 test.mock.method(versions, 'currentTextStagePromptPath', stage => historicalArticleContext && stage === 'apiReaderArticle'
-    ? originalArticlePath : normalPromptPath(stage));
+    ? originalArticlePath : historicalArticleContext && stage === 'apiReaderRepair' ? originalRepairPath : normalPromptPath(stage));
 test.mock.method(versions, 'currentPromptTextContract', stage => historicalArticleContext && stage === 'apiReaderArticle'
-    ? 'analysis-prompt-text-v9' : normalPromptContract(stage));
+    ? 'analysis-prompt-text-v9' : historicalArticleContext && stage === 'apiReaderRepair' ? 'analysis-prompt-text-v13' : normalPromptContract(stage));
 // The real candidate's route is semantic identity, not an implementation
 // field. Pin this isolated test before any project module captures its config.
 test.mock.method(require('../scripts/env-loader'), 'loadProjectEnv', () => {

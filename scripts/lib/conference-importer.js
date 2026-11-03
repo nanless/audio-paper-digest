@@ -8,16 +8,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'conference-import-manifest-v2';
-const VERSION = 2;
+const CONTRACT = codec.contract('conference-import-manifest');
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_DERIVED_BYTES = 64 * 1024 * 1024;
 const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-proceedings', 'openreview', 'local-confirmed-copy']);
 const EVIDENCE_KINDS = ['metadata', 'pdf', 'text', 'artifacts'];
 const SHA_RE = /^[a-f0-9]{64}$/;
-const IMPORT_RECEIPT_CONTRACT = 'conference-import-receipt-v2';
+const IMPORT_RECEIPT_CONTRACT = codec.contract('conference-import-receipt');
 const IMPORT_HANDLES = new WeakSet();
 const IMPORT_HANDLE_DATA = new WeakMap();
 
@@ -39,6 +40,11 @@ function exact(value, fields, name) {
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         throw fail(`${name} has unknown or missing fields`);
     }
+}
+
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { throw fail(`format header invalid: ${error.message}`); }
 }
 
 function text(value, name) {
@@ -72,9 +78,11 @@ function sourceProvenance(value, kind) {
 }
 
 function derivedProvenance(value, kind) {
-    exact(value, ['extractor', 'version'], `${kind}.provenance`);
+    const field = Object.hasOwn(value || {}, 'implementationSha256') ? 'implementationSha256' : 'version';
+    exact(value, ['extractor', field], `${kind}.provenance`);
     return { extractor: text(value.extractor, `${kind}.provenance.extractor`),
-        version: text(value.version, `${kind}.provenance.version`) };
+        [field]: field === 'implementationSha256' ? expectedSha256(value[field], `${kind}.provenance.${field}`)
+            : text(value[field], `${kind}.provenance.${field}`) };
 }
 
 function expectedSha256(value, name) {
@@ -144,8 +152,8 @@ function manifestMemberSetSha256(members) {
 }
 
 function validateManifest(manifest) {
-    exact(manifest, ['contract', 'version', 'conference', 'members', 'memberSetSha256'], 'conference import manifest');
-    if (manifest.contract !== CONTRACT || manifest.version !== VERSION) throw fail('unsupported conference import manifest contract');
+    const header = recordHeaderFor(manifest, 'conference-import-manifest');
+    exact(manifest, [...Object.keys(header), 'conference', 'members', 'memberSetSha256'], 'conference import manifest');
     exact(manifest.conference, ['id', 'year'], 'manifest conference');
     // 借用来源清单的校验检查会议名称；导入清单仍只接受上方列出的字段。
     const conference = { id: manifest.conference.id, year: manifest.conference.year };
@@ -163,7 +171,7 @@ function validateManifest(manifest) {
     if (keys.some((key, index) => key !== ordered[index])) throw fail('manifest members must be sorted by canonical identity');
     if (!/^[a-f0-9]{64}$/.test(String(manifest.memberSetSha256 || ''))
         || manifest.memberSetSha256 !== manifestMemberSetSha256(members)) throw fail('manifest memberSetSha256 mismatch');
-    return { contract: CONTRACT, version: VERSION, conference, members, memberSetSha256: manifest.memberSetSha256 };
+    return { ...header, conference, members, memberSetSha256: manifest.memberSetSha256 };
 }
 
 // 使用固定有效的占位记录调用来源清单校验，让本次检查只判断会议输入是否有效。
@@ -423,7 +431,7 @@ function createImportReceipt({ result, ledgerName } = {}) {
     for (const [field, value] of Object.entries(result.stagingBinding)) expectedSha256(value, `stagingBinding.${field}`);
     const ledgerBytes = Buffer.from(`${JSON.stringify(result.ledger, null, 2)}\n`, 'utf8');
     const body = {
-        contract: IMPORT_RECEIPT_CONTRACT, version: VERSION,
+        ...codec.recordHeader(IMPORT_RECEIPT_CONTRACT, 'conference-import-receipt'),
         filterPolicySha256: result.stagingBinding.filterPolicySha256,
         selectedMemberSetSha256: result.stagingBinding.selectedMemberSetSha256,
         selectionReceiptSha256: result.stagingBinding.selectionReceiptSha256,
@@ -438,10 +446,10 @@ function createImportReceipt({ result, ledgerName } = {}) {
 }
 
 function normalizeImportReceipt(value) {
-    exact(value, ['contract', 'version', 'filterPolicySha256', 'selectedMemberSetSha256',
+    const header = recordHeaderFor(value, 'conference-import-receipt');
+    exact(value, [...Object.keys(header), 'filterPolicySha256', 'selectedMemberSetSha256',
         'selectionReceiptSha256', 'stagingReceiptSha256', 'stagingReceiptFileSha256',
         'importManifestFileSha256', 'importManifestSha256', 'ledger', 'counts', 'receiptSha256'], 'import receipt');
-    if (value.contract !== IMPORT_RECEIPT_CONTRACT || value.version !== VERSION) throw fail('import receipt contract/version is unsupported');
     for (const field of ['filterPolicySha256', 'selectedMemberSetSha256', 'selectionReceiptSha256',
         'stagingReceiptSha256', 'stagingReceiptFileSha256',
         'importManifestFileSha256', 'importManifestSha256']) expectedSha256(value[field], `import receipt ${field}`);
@@ -555,7 +563,7 @@ function validateLedgerForReceipt(value) {
 }
 
 module.exports = {
-    CONTRACT, VERSION, IMPORT_RECEIPT_CONTRACT, MAX_METADATA_BYTES, MAX_PDF_BYTES, MAX_DERIVED_BYTES,
+    CONTRACT, IMPORT_RECEIPT_CONTRACT, MAX_METADATA_BYTES, MAX_PDF_BYTES, MAX_DERIVED_BYTES,
     validateManifest, importConferenceSources, importConferenceSourcesFromStaging, createImportReceipt,
     normalizeImportReceipt, loadImportHandle, importHandleSnapshot, importHandleAuthority,
     safeDirectory, readSource, cacheStem

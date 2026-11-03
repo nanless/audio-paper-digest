@@ -2,12 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { fixture: createReaderSample } = require('./reader-signed-draft-fixture');
-const { hasValidApiReaderV3Records } = require('../scripts/analysis-engine');
+const { hasValidIntegratedApiReaderRecords } = require('../scripts/analysis-engine');
 
 for (const kind of ['concept', 'formula', 'figure']) {
     test(`旧完整签名记录中的隐藏 ${kind} 内容不能取得公开资格`, () => {
         const { paper } = createReaderSample();
-        assert.equal(hasValidApiReaderV3Records(paper), true);
+        assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
         let block;
         if (kind === 'concept') block = paper.apiReaderPlan.conceptBridges[0].explanation;
         if (kind === 'formula') block = `\\[${paper.apiReaderPlan.formulaBindings[0].latex.trim()}\\]`;
@@ -17,7 +17,7 @@ for (const kind of ['concept', 'formula', 'figure']) {
         const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
         paper.apiReaderArticleSha256 = sha;
         paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-        assert.equal(hasValidApiReaderV3Records(paper), false);
+        assert.equal(hasValidIntegratedApiReaderRecords(paper), false);
     });
 }
 
@@ -51,7 +51,7 @@ test('括号URL对应真实结构化原图的受控资格记录仍通过', () =>
     Object.assign(paper.analysisManifest.stages.apiReaderArticle, {
         articleSha256: paper.apiReaderArticleSha256, planSha256: paper.apiReaderPlanSha256,
         figuresSha256: hash(paper.apiReaderFigures) });
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
 });
 test('同行反引号包住原图只是代码示例，不能取得原图展示资格', () => {
     const { paper } = createReaderSample();
@@ -60,7 +60,7 @@ test('同行反引号包住原图只是代码示例，不能取得原图展示�
     const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
     paper.apiReaderArticleSha256 = sha;
     paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-    assert.equal(hasValidApiReaderV3Records(paper), false);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), false);
 });
 
 test('实际公开解析和装图支持平衡括号URL，并继续拒绝未知图片和重复URL', () => {
@@ -73,7 +73,7 @@ test('实际公开解析和装图支持平衡括号URL，并继续拒绝未知�
     const source = fs.readFileSync(file, 'utf8');
     sampleModule._compile(source.replace('/figure.png', '/figure(1).png'), file);
     const sample = sampleModule.exports.fixture();
-    assert.equal(hasValidApiReaderV3Records(sample.paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(sample.paper), true);
     const deep = require('../scripts/deep-analyzer');
     const options = { requiredVersion: 3, requireIntegratedTables: true,
         minimumIntegratedTables: 2, availableFigureOrdinals: [1], requireSourceBindings: true,
@@ -108,7 +108,7 @@ test('整段术语解释的行内代码示例不能算展示，局部代码和�
         paper.apiReaderPlanSha256 = deep.stableFingerprint(paper.apiReaderPlan);
         Object.assign(paper.analysisManifest.stages.apiReaderArticle, {
             articleSha256: paper.apiReaderArticleSha256, planSha256: paper.apiReaderPlanSha256 });
-        assert.equal(hasValidApiReaderV3Records(paper), kind !== 'whole-code');
+        assert.equal(hasValidIntegratedApiReaderRecords(paper), kind !== 'whole-code');
     }
 });
 test('多行原始TeX中的合法缩进保持原字节和公开资格，隐藏副本仍拒绝', () => {
@@ -124,12 +124,12 @@ test('多行原始TeX中的合法缩进保持原字节和公开资格，隐藏�
     const { paper } = sampleModule.exports.fixture();
     const block = `\\[${paper.apiReaderPlan.formulaBindings[0].latex.trim()}\\]`;
     assert.match(block, /\n    x/);
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
     paper.apiReaderArticle = paper.apiReaderArticle.replace(block, '<!--\n\n' + block + '\n\n-->');
     const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
     paper.apiReaderArticleSha256 = sha;
     paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-    assert.equal(hasValidApiReaderV3Records(paper), false);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), false);
 });
 
 test('跨行代码中的图和解释不计展示，空段落后的原图仍可见', () => {
@@ -143,7 +143,7 @@ test('跨行代码中的图和解释不计展示，空段落后的原图仍可�
             paper.apiReaderArticle = paper.apiReaderArticle.replace(value, '`' + gap + value + gap + '`');
             paper.apiReaderArticleSha256 = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
             paper.analysisManifest.stages.apiReaderArticle.articleSha256 = paper.apiReaderArticleSha256;
-            assert.equal(hasValidApiReaderV3Records(paper), blank);
+            assert.equal(hasValidIntegratedApiReaderRecords(paper), blank);
             if (kind === 'image' && !blank) {
                 assert.throws(() => deep.injectApiReaderFigures({ article: paper.apiReaderArticle, plan: paper.apiReaderPlan },
                     createReaderSample().sourceDetails.structuredArtifacts, '2609.12345'));
@@ -160,7 +160,7 @@ test('反斜杠转义的叹号不是原图，偶数反斜杠保留实际图片',
         const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
         paper.apiReaderArticleSha256 = sha;
         paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-        assert.equal(hasValidApiReaderV3Records(paper), count === 2);
+        assert.equal(hasValidIntegratedApiReaderRecords(paper), count === 2);
     }
 });
 
@@ -171,7 +171,7 @@ test('转义后的反引号不形成代码段，可见图片仍对应原来源',
     const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
     paper.apiReaderArticleSha256 = sha;
     paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.equal(hasValidIntegratedApiReaderRecords(paper), true);
 });
 test('可见引用里的围栏和原样HTML仍不能展示原图，普通引用图保持可见', () => {
     for (const wrap of [value => '> ```text\n> ' + value + '\n> ```',
@@ -183,7 +183,7 @@ test('可见引用里的围栏和原样HTML仍不能展示原图，普通引用�
         const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
         paper.apiReaderArticleSha256 = sha;
         paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-        assert.equal(hasValidApiReaderV3Records(paper), replacement === '> ' + image);
+        assert.equal(hasValidIntegratedApiReaderRecords(paper), replacement === '> ' + image);
     }
 });
 
@@ -197,6 +197,6 @@ test('引用中的普通HTML块和缩进代码不展示图，普通引用图仍�
         const sha = crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex');
         paper.apiReaderArticleSha256 = sha;
         paper.analysisManifest.stages.apiReaderArticle.articleSha256 = sha;
-        assert.equal(hasValidApiReaderV3Records(paper), replacement === '> ' + image);
+        assert.equal(hasValidIntegratedApiReaderRecords(paper), replacement === '> ' + image);
     }
 });

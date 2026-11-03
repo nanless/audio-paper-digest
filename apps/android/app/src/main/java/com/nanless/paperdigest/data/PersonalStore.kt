@@ -1,11 +1,12 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-/** Mac schema 1 stays lossless: modifications replace only the requested field. */
+/** Existing shared roots keep their original format; edits replace only the requested field. */
 class PersonalStore(val directory: File) {
     private val file = File(directory, "personal.json")
     private var value: JSONObject
@@ -159,11 +160,13 @@ class PersonalStore(val directory: File) {
 
     companion object {
         const val MAX_BYTES: Long = 32L * 1024 * 1024
-        fun initial() = JSONObject().put("schema", 1).put("notes", JSONObject()).put("favorites", JSONArray()).put("reading", JSONArray())
+        private const val family="paperdigest-personal-library"
+        fun validPersonalHeader(value:JSONObject)=ClientProtocols.hasValidHeader(value,family,if(value.has("schema")) "schema" else "contract")
+        fun initial() = ClientProtocols.record(family).put("notes", JSONObject()).put("favorites", JSONArray()).put("reading", JSONArray())
             .put("readingState", JSONObject()).put("annotations", JSONObject()).put("sessions", JSONArray()).put("jobs", JSONArray())
             .put("settings", JSONObject().put("appearance", "system").put("font", 18).put("syncHours", 12).put("dailyRequests", 20).put("maxTokens", 8000).put("timeoutMs", 180000))
         fun validate(o: JSONObject) {
-            require(o.get("schema") is Number && o.getInt("schema") == 1) { "个人资料版本尚不支持" }
+            require(validPersonalHeader(o)) { "个人资料版本尚不支持" }
             listOf("notes", "settings", "readingState", "annotations").forEach { o.getJSONObject(it) }
             listOf("favorites", "reading").forEach { require(o.getJSONArray(it).length() <= 100000); o.getJSONArray(it).strings() }
             FavoriteCollections.validateOptional(o)

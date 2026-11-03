@@ -60,7 +60,7 @@ describe('Reader 资源标签不是作者机构', () => {
         const source = { text: 'Immutable full source', readerAuthors: structuredClone(oldParsed) };
         const sourceSha256 = crypto.createHash('sha256').update(source.text).digest('hex');
         const paper = { authors: expected.map(a => a.name), sourceSha256,
-            apiReaderArticle: 'signed Reader bytes', apiReaderPlan: { signed: true }, score: 8,
+            apiReaderArticle: 'signed Reader bytes', apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3', signed: true }, score: 8,
             analysisManifest: { contracts: { apiReaderArticle: 'beginner-researcher-v3' },
                 sourceAcquisition: { sourceSha256 }, stages: { apiReaderArticle: { status: 'complete' } } } };
         const sourceBefore = JSON.stringify(source);
@@ -68,7 +68,7 @@ describe('Reader 资源标签不是作者机构', () => {
         assert.deepEqual(paper.apiReaderAuthors.authors, expected.map(author => ({ name: author.name, affiliations: [unavailable] })));
         assert.equal(JSON.stringify(source), sourceBefore);
         assert.equal(paper.apiReaderArticle, 'signed Reader bytes');
-        assert.deepEqual(paper.apiReaderPlan, { signed: true });
+        assert.deepEqual(paper.apiReaderPlan, { version: 3, contract: 'beginner-researcher-v3', signed: true });
         assert.equal(paper.score, 8);
         assert.equal(paper.sourceSha256, sourceSha256);
         assert.equal(paper.analysisManifest.stages.apiReaderArticle.readerAuthorIdentitySha256,

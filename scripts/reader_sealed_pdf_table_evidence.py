@@ -5,7 +5,8 @@ if __name__ == '__main__':
 import json,re,unicodedata,fitz
 from pathlib import Path
 import hashlib,base64,sys,os,stat
-CONTRACT='reader-sealed-pdf-table-grid-v1'
+from reader_proof_format import grid_header, grid_profile
+CONTRACT=grid_header()['contract']
 def need(condition,reason):
  if not condition:raise ValueError(reason)
 def stable(value):
@@ -96,7 +97,8 @@ def prove_table(doc,table):
  if len(matches)!=1:raise ValueError('full_grid_not_unique:'+str(len(matches)))
  return matches[0]
 
-def prove_pdf_bytes(pdf_bytes,tables):
+def prove_pdf_bytes(pdf_bytes,tables,proof_header=None):
+ proof_header=grid_header(proof_header)
  need(isinstance(pdf_bytes,bytes) and len(pdf_bytes)<=64*1024*1024 and pdf_bytes.startswith(b'%PDF-'),'pdf_bytes_invalid');need(isinstance(tables,list) and len(tables)<=256,'tables_input_invalid')
  try:doc=fitz.open(stream=pdf_bytes,filetype='pdf')
  except fitz.FileDataError:
@@ -110,7 +112,8 @@ def prove_pdf_bytes(pdf_bytes,tables):
    cell_by_coord={(cell['row'],cell['column']):cell for cell in table['cells']}
    for cell in result['cells']:
     original=cell_by_coord[(cell['row'],cell['column'])];cell.update(sourceDomSha256=original['sourceDomSha256'],sourceHtmlText=original['text'],pdfText=matrix[cell['row']][cell['column']],valueOrigin='sealed_pdf')
-   result.update(contract=CONTRACT,valueOrigin='sealed_pdf',pdfSha256=hashlib.sha256(pdf_bytes).hexdigest(),sourceTableSha256=stable(table),sourceTableDomSha256=table['sourceDomSha256'],sourceTableOrdinal=table['ordinal'],backend={'name':'pymupdf','version':fitz.version[0]},normalizationProfile='whitespace-typographic-hyphen-and-explicit-symbols-v1')
+   result.update(proof_header)
+   result.update(valueOrigin='sealed_pdf',pdfSha256=hashlib.sha256(pdf_bytes).hexdigest(),sourceTableSha256=stable(table),sourceTableDomSha256=table['sourceDomSha256'],sourceTableOrdinal=table['ordinal'],backend={'name':'pymupdf','version':fitz.version[0]},normalizationProfile=grid_profile(proof_header))
    result['differences']=[{'row':r,'column':c,'sourceHtmlText':table['matrix'][r][c],'pdfText':value,'originDifference':True}for r,row in enumerate(matrix)for c,value in enumerate(row)if value!=table['matrix'][r][c]]
    result['evidenceSha256']=stable(result);entry.update(eligible=True,evidence=result)
   except (ValueError,TypeError,KeyError,IndexError)as error:entry.update(eligible=False,reason=str(error))
@@ -122,6 +125,7 @@ def main():
  require_external_runtime('reader_sealed_pdf_table_evidence.py');require_workspace_role('daily')
  need(len(sys.argv)==2 and sys.argv[1].isdigit() and int(sys.argv[1])>=3,'private_descriptor_required');fd=int(sys.argv[1]);st=os.fstat(fd)
  need(stat.S_ISREG(st.st_mode) and st.st_mode&0o077==0 and 2<=st.st_size<=96*1024*1024,'private_bounded_descriptor_required')
- data=json.loads(os.read(fd,st.st_size));need(set(data)=={'pdfBase64','pdfSha256','tables'},'descriptor_fields_invalid');raw=base64.b64decode(data['pdfBase64'],validate=True);need(hashlib.sha256(raw).hexdigest()==data['pdfSha256'],'pdf_sha_changed')
- print(json.dumps({'contract':CONTRACT,'results':prove_pdf_bytes(raw,data['tables'])},ensure_ascii=False,separators=(',',':')))
+ data=json.loads(os.read(fd,st.st_size));need(set(data) in ({'pdfBase64','pdfSha256','tables'},{'pdfBase64','pdfSha256','tables','proofHeader'}),'descriptor_fields_invalid');raw=base64.b64decode(data['pdfBase64'],validate=True);need(hashlib.sha256(raw).hexdigest()==data['pdfSha256'],'pdf_sha_changed')
+ requested=grid_header(data.get('proofHeader'))
+ print(json.dumps({**requested,'results':prove_pdf_bytes(raw,data['tables'],requested)},ensure_ascii=False,separators=(',',':')))
 if __name__=='__main__':main()

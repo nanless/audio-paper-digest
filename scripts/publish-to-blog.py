@@ -20,6 +20,15 @@ load_project_env()
     python3 publish-to-blog.py                 # 兼容生成入口
     python3 publish-to-blog.py --date YYYY-MM-DD
 """
+from tag_catalog import tag_catalog_identity, catalog_header, is_supported_flat_tag_contract, is_supported_tag_selection_contract
+import protocol_codec as public_protocols
+import reader_record_format as reader_formats
+import scoring_record_format as scoring_formats
+import core_summary_format as core_summary_formats
+import blog_record_format as blog_formats
+from daily_source_format import (is_daily_source_run, is_daily_source_reference,
+                                 is_fresh_source_provenance, matches_run_provenance, bundle_expectation)
+import analysis_quality_format as quality_formats
 import argparse
 import copy
 import weakref
@@ -56,10 +65,10 @@ from publish_common import (
     interpret_readonly_text_unit,
     normalize_publish_arxiv_id, parse_publish_arxiv_identity, is_canonical_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload, resolve_publish_parsed,
-    validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
-    MANUAL_DEPTH_CONTRACT_VERSION_V5, MANUAL_DEPTH_CONTRACT_VERSION_V6,
-    MANUAL_LONGFORM_CONTRACT_VERSION_V2, validate_manual_v6_payload,
-    validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
+    validate_final_structured_manual_markdown, MANUAL_DEPTH_READER_QUALITY_CONTRACT,
+    MANUAL_DEPTH_FACT_COVERAGE_CONTRACT, MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT,
+    MANUAL_SIGNED_LONGFORM_CONTRACT, validate_signed_manual_payload,
+    validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_CONTRACT, DIGEST_INDEX_READER_QUALITY_FINGERPRINT,
     split_markdown_table_row,
     is_publish_currency_literal,
     is_publish_currency_unit_literal, decode_publish_currency_unit_display,
@@ -67,7 +76,7 @@ from publish_common import (
     is_publication_technical_asterisk_cell_view,
     _assert_hash_key_premises, _assert_ecmascript_number_premises, _manual_canonical_json,
     _verified_daily_publication_table_scope,
-    validate_experiment_table_contract, EXPERIMENT_TABLE_CONTRACT_VERSIONS,
+    validate_experiment_table_contract,
 )
 from path_config import (
     PROJECT_ROOT,
@@ -92,12 +101,13 @@ from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_require
 from runtime_guard import require_external_runtime
 import daily_hugo_capture
 from manual_agent_policy import (
-    CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY,
     review_model_policy, require_current_review_policy, review_subagent_identity_error,
+    review_profile, requires_page_identity, supports_assets_and_cache, asset_header, valid_asset_header,
+    cache_subagent_policy, cache_evidence_header, valid_cache_evidence_header,
 )
 from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis, read_tag_validation
-from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
+from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, is_tag_stage_record_declaration, read_tag_stage_record
 from analysis_sections import (
     evaluation_heading_issue, extract_evaluation_section, find_evaluation_headings,
 )
@@ -107,18 +117,18 @@ from tag_catalog import (
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
-    resolve_append_only_proof_catalog,
+    resolve_compatible_proof_catalog,
 )
 from tag_presentation import render_tag_hierarchy_markdown
 from tutorial_payload_verifier import (
     TUTORIAL_FORMAT_CONTRACT,
     FRESH_AUTHORING_CONTRACT,
-    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+    MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
     MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT,
     MANUAL_TUTORIAL_ORCHESTRATOR_FINGERPRINT,
     normalize_fresh_article as _normalize_fresh_article_impl,
-    validate_manual_v5_fresh_authoring as _verify_manual_v5_fresh_authoring,
-    validate_manual_v5_tutorial_payload as _verify_manual_v5_tutorial_payload,
+    validate_manual_fresh_authoring as _verify_manual_v5_fresh_authoring,
+    validate_manual_tutorial_payload as _verify_manual_v5_tutorial_payload,
 )
 from markdown_hugo_gate import (
     parse_frontmatter_content as _parse_frontmatter_content_impl,
@@ -170,32 +180,23 @@ DIGEST_COVER_RENDERING_CONTRACT = {
 }
 _REVIEW_PROTOCOL_CACHE = {}
 _REVIEW_UNIT_CONTEXT = contextvars.ContextVar('blog_review_unit_context', default=None)
-PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION = 1
 PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusions.json'
 PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
 PUBLISH_IMAGE_VIEW_FIELD = 'publishImageExclusionView'
-PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = 'typed-json-f64-utf16-v1'
-MANUAL_V6_PRODUCTION_MODE = 'manual_v6_production'
-MANUAL_V6_PRODUCTION_CONTRACT = 'manual-v6-production-publication-v1'
+PUBLISHED_PAPERS_FINGERPRINT_CONTRACT = blog_formats.ORIGINAL_SNAPSHOT
+SIGNED_MANUAL_PRODUCTION_MODE = 'manual_v6_production'
+SIGNED_MANUAL_PUBLICATION_CONTRACT = 'manual-v6-production-publication-v1'
 LLM_API_PRODUCTION_MODE = 'llm_api_production'
-LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1'
-LLM_API_READER_CONTRACT = 'beginner-researcher-v3'
-LLM_API_READER_LEGACY_CONTRACTS = {
-    'beginner-researcher-v1',
-    'beginner-researcher-v2',
-}
-LLM_API_READER_STRUCTURED_CONTRACTS = {
-    'beginner-researcher-v2',
-    LLM_API_READER_CONTRACT,
-}
-LLM_API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4'
-LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1'
-LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1'
+LLM_API_PRODUCTION_CONTRACT = public_protocols.contract('llm-api-production-publication')
+LLM_API_READER_CONTRACT = public_protocols.contract('beginner-researcher')
+LLM_API_READER_SOURCE_BINDING_CONTRACT = public_protocols.contract('api-reader-source-bindings')
+LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = public_protocols.contract('api-reader-author-identity')
+LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = public_protocols.contract('api-reader-resource-identity')
 # 这个格式标记一旦出现，就表示未保存配图文件是预期行为、
 # 可以复核的。这个字段缺席时，旧的 Reader 记录仍然由缓存提供。
 EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1'
-LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
-CORE_SUMMARY_DETAILED_CONTRACT = 'core-summary-detailed-v3'
+LLM_API_SCORING_CONTRACT = public_protocols.contract('api-scoring-audit')
+CORE_SUMMARY_DETAILED_CONTRACT = core_summary_formats.ORIGINAL_TAG
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
 RETIRED_TUTORIAL_PREVIEW_MESSAGE = (
@@ -203,11 +204,11 @@ RETIRED_TUTORIAL_PREVIEW_MESSAGE = (
     '旧预览不具备完整来源与质量证明，请通过正式 Manual 流程重新生成。'
 )
 MANUAL_REVIEW_MODE = 'manual_complete'
-FINAL_PAGE_ARTIFACT_VERSION = 1
-RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
-RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
-RESEARCH_CONTEXT_CONTRACT = 'paper-research-context-v2'
-LEGACY_RESEARCH_CONTEXT_CONTRACT = RESEARCHER_SIDECAR_CONTRACT
+RESEARCHER_WORKBENCH_CONTRACT = public_protocols.contract('researcher-workbench')
+RESEARCHER_SIDECAR_CONTRACT = public_protocols.contract('researcher-sidecars')
+RESEARCH_CONTEXT_CONTRACT = public_protocols.contract('paper-research-context')
+LEGACY_RESEARCH_CONTEXT_CONTRACT = public_protocols.historical_contract('paper-research-context','legacy-inline-abstract')
+_CURRENT_CONTEXT_SCHEMA = object()
 FLAT_TAG_COMPAT_CONTRACT = TAG_FLAT_COMPAT_CONTRACT
 _PAGE_TAG_CATALOG = load_tag_catalog()
 _PAGE_ACTIVE_TAGS_BY_ID = {
@@ -217,12 +218,12 @@ _PAGE_ACTIVE_TAGS_BY_ID = {
 # 只读 registry 快照：博客端（Hugo 模板 + 浏览器搜索）需要 id/facet/zh/en/
 # aliases/ancestorIds，而页面 frontmatter 只带 {id, facet, label}。快照字节
 # 只由 registry 决定，因此与 ``paper_digest_tags_registry_sha256`` 同源。
-TAG_CATALOG_SNAPSHOT_CONTRACT = 'paper-tag-catalog-snapshot-v2'
-LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT = 'paper-taxonomy-registry-snapshot-v1'
-TAG_CATALOG_VERSIONS_CONTRACT = 'paper-tag-catalog-versions-v2'
-LEGACY_TAG_CATALOG_VERSIONS_CONTRACT = 'paper-taxonomy-version-catalog-v1'
-TAG_PRESENTATION_POLICY_CONTRACT = 'paper-tag-presentation-policy-v2'
-LEGACY_TAG_PRESENTATION_POLICY_CONTRACT = 'paper-taxonomy-presentation-selection-v1'
+TAG_CATALOG_SNAPSHOT_CONTRACT = public_protocols.contract('paper-tag-catalog-snapshot')
+LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT = public_protocols.historical_contract('paper-tag-catalog-snapshot','legacy-public-concept-hierarchy')
+TAG_CATALOG_VERSIONS_CONTRACT = public_protocols.contract('paper-tag-catalog-versions')
+LEGACY_TAG_CATALOG_VERSIONS_CONTRACT = public_protocols.historical_contract('paper-tag-catalog-versions','legacy-sha-keyed-snapshot-set')
+TAG_PRESENTATION_POLICY_CONTRACT = public_protocols.contract('paper-tag-presentation-policy')
+LEGACY_TAG_PRESENTATION_POLICY_CONTRACT = public_protocols.historical_contract('paper-tag-presentation-policy','legacy-display-catalog')
 TAG_DISPLAY_POLICY_PATH = PROJECT_ROOT / 'config' / 'tag-display-policy.json'
 # Hugo 只把 ``data/`` 当模板输入，不会发布到 ``public/``；浏览器端搜索因此
 # 还需要一份字节完全相同的静态副本。
@@ -305,7 +306,7 @@ def manual_review_manifest_partition(manifest, date_str):
         if Path(relative).parts[:2] == ('content', 'posts') and Path(relative).suffix == '.md':
             pages.append(record)
         elif (_is_tag_catalog_file_path(relative) or is_api_reader_asset_path(lexical)):
-            if manifest.get('schemaVersion') != 3 or record['deleted']:
+            if not blog_formats.source_bound_generation(manifest) or record['deleted']:
                 raise PublishDataValidationError('机器资产证明只支持 v3 清单中的现存受控资产。')
             assets.append(record)
         else:
@@ -322,7 +323,7 @@ def is_manual_local_image_url(url, manifest_path, date_str):
     if not isinstance(url, str) or not url.startswith(f'{base}/images/papers/'):
         return False
     manifest = _load_json_object(manifest_path, '生成清单')
-    if manifest.get('date') != date_str or manifest.get('schemaVersion') != 3:
+    if manifest.get('date') != date_str or not blog_formats.source_bound_generation(manifest):
         return False
     _pages, assets = manual_review_manifest_partition(manifest, date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
@@ -336,12 +337,12 @@ def is_manual_local_image_url(url, manifest_path, date_str):
     return False
 
 
-def manual_review_machine_assets(manifest, date_str):
+def manual_review_machine_assets(manifest, date_str, *, original=False):
     """结构化保存实际机器核验资产集合；不冒充语义或模型图片审查。"""
     _pages, assets = manual_review_manifest_partition(manifest, date_str)
     if not assets:
         return None
-    return {'contract': 'manual-review-controlled-assets-v1', 'files': assets}
+    return {**asset_header(original=original), 'files': assets}
 
 
 def _validate_manual_machine_assets(record, receipt_files, date_str):
@@ -357,7 +358,8 @@ def _validate_manual_machine_assets(record, receipt_files, date_str):
     # 签发通过缓存前仍核对正式同源分析、封存来源和资格；不相信声明中的 true。
     _validate_generation_input_integrity(manifest, date_str)
     pages, assets = manual_review_manifest_partition(manifest, date_str)
-    if machine != manual_review_machine_assets(manifest, date_str):
+    if machine != manual_review_machine_assets(
+            manifest, date_str, original=review_profile(record) == 'sol-page-identity'):
         raise PublishDataValidationError('人工机器资产集合与当前生成清单不一致。')
     expected = {item['path']: item for item in pages + assets}
     actual = {}
@@ -410,8 +412,8 @@ def _manual_review_record_error(receipt, *, date_str=None,
         expected_policy = review_model_policy(manual_review_record, legacy_versions=(1, 2, 3))
     except ValueError as exc:
         return str(exc)
-    legacy_v1 = manual_review_record.get('version') == 1
-    requires_subagent_review = manual_review_record.get('version') in (3, 4)
+    published_path_set_only = review_profile(manual_review_record) == 'published-path-set'
+    requires_subagent_review = requires_page_identity(manual_review_record)
     if not isinstance(manual_review_record.get('agent'), str) or not manual_review_record['agent'].strip():
         return '人工审查记录必须填写非空的审查者名称。'
     if manual_review_record.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -448,7 +450,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
         return '人工审查记录中的文件数量必须是正整数。'
     review_file_details = manual_review_record.get('files')
     receipt_files = receipt.get('files')
-    if legacy_v1:
+    if published_path_set_only:
         # v1 从不携带逐页证明。它只能作为
         # 不可变的历史发布证据被接受，不能当作新的或待处理的
         # 凭证，去授权在当前协议下再推送一次。
@@ -465,10 +467,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
         return None
     machine = manual_review_record.get('machineAssets')
     if 'machineAssets' in manual_review_record:
-        if (manual_review_record.get('version') != 4
-                or not isinstance(machine, dict)
-                or set(machine) != {'contract', 'files'}
-                or machine.get('contract') != 'manual-review-controlled-assets-v1'
+        if (not valid_asset_header(machine, manual_review_record)
                 or not isinstance(machine.get('files'), list) or not machine['files']):
             return '人工机器资产证明的版本或结构无效。'
     machine_count = len(machine['files']) if machine is not None else 0
@@ -517,7 +516,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
             return '人工审查记录中的每条文件明细必须是对象。'
         allowed_fields = {'path', 'sha256', 'checks', 'notes', 'deleted'}
         required_fields = {'path', 'sha256', 'checks', 'notes'}
-        cached_review = manual_review_record.get('version') == 4 and 'cacheReuse' in item
+        cached_review = supports_assets_and_cache(manual_review_record) and 'cacheReuse' in item
         if cached_review:
             allowed_fields.add('cacheReuse')
             required_fields.add('cacheReuse')
@@ -554,6 +553,8 @@ def _manual_review_record_error(receipt, *, date_str=None,
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             return f'文件审查说明必须是至少 20 个字符的非空文字：{path}'
         if cached_review:
+            if not valid_cache_evidence_header(item['cacheReuse'], original=review_profile(manual_review_record) == 'sol-page-identity'):
+                return '逐页复用记录的格式与外层声明不一致。'
             try:
                 validate_manual_cache_reuse(item, date_str)
             except (ValueError, TypeError) as exc:
@@ -827,40 +828,42 @@ def review_cached_unit(kind, inputs, run):
     context = _REVIEW_UNIT_CONTEXT.get()
     if context is None:
         return run()
-    identity = {
-        'schemaVersion': 1, 'kind': kind,
-        'reviewProtocolFingerprint': context['protocol'],
-        'inputSha256': _stable_json_sha256(inputs),
-    }
+    family = 'blog-review-request-checkpoint'
+    shared = {'kind': kind, 'reviewProtocolFingerprint': context['protocol'],
+              'inputSha256': _stable_json_sha256(inputs)}
+    identity = {**blog_formats.current_header(family), **shared}
     key = _stable_json_sha256(identity)
     directory = context['directory']
     checkpoint = directory / f'{key}.json'
-    # 绝不跟随缓存里的符号链接；格式损坏的检查点本来就不能作为
-    # 请求成功的证明。不保存提示词、页面正文或图片字节。
+    original_identity = {**public_protocols.historical_header(family, 'exact-request-result'), **shared}
+    # Inspect both exact paths, never following a symbolic link or replacing an
+    # original result with a newly encoded wrapper.
     current_root = Path(CURRENT_DIR)
-    for component in (checkpoint, directory, *directory.parents):
-        if component.is_symlink():
-            raise PublishDataValidationError('review unit checkpoint 禁止符号链接')
-        if component == current_root:
-            break
-    raw_checkpoint = _read_review_unit_checkpoint(checkpoint)
-    try:
+    for candidate_identity in (identity, original_identity):
+        candidate_path = directory / f'{_stable_json_sha256(candidate_identity)}.json'
+        for component in (candidate_path, directory, *directory.parents):
+            if component.is_symlink():
+                raise PublishDataValidationError('审查请求检查点禁止符号链接')
+            if component == current_root:
+                break
+        raw_checkpoint = _read_review_unit_checkpoint(candidate_path)
         if raw_checkpoint is None:
-            raise ValueError('审查请求检查点无可用缓存')
-        record = json.loads(raw_checkpoint.decode('utf-8'))
-        if (
-            isinstance(record, dict)
-            and all(record.get(name) == value for name, value in identity.items())
-            and record.get('passed') is True
-            and record.get('resultSha256') == _stable_json_sha256({
-                'passed': record.get('passed'), 'issues': record.get('issues'),
-            })
-        ):
-            passed, issues = validate_review_payload(record, required=True, context='cached review unit')
-            if passed is True and count_blocking_review_issues(issues) == 0:
-                return passed, issues
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-        pass
+            continue
+        try:
+            record = json.loads(raw_checkpoint.decode('utf-8'))
+            if (
+                blog_formats.record_profile(record, family) == 'exact-request-result'
+                and all(record.get(name) == value for name, value in candidate_identity.items())
+                and record.get('passed') is True
+                and record.get('resultSha256') == _stable_json_sha256({
+                    'passed': record.get('passed'), 'issues': record.get('issues'),
+                })
+            ):
+                passed, issues = validate_review_payload(record, required=True, context='cached review unit')
+                if passed is True and count_blocking_review_issues(issues) == 0:
+                    return passed, issues
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            continue
     try:
         with with_llm_usage_context({
             'runId': context.get('runId'),
@@ -1263,7 +1266,7 @@ def _review_source_figure_semantics_note(paper):
     if not isinstance(paper, dict):
         return ''
     manifest = paper.get('analysisManifest') or {}
-    if (manifest.get('contracts') or {}).get('apiReaderArticle') != LLM_API_READER_CONTRACT:
+    if not reader_formats.is_integrated_contract((manifest.get('contracts') or {}).get('apiReaderArticle')):
         return ''
     figures = paper.get('apiReaderFigures')
     proof = paper.get('freshRewriteProvenance')
@@ -1577,7 +1580,6 @@ SUBPROCESS_SEMANTIC_OUTPUT_MAX_BYTES = 32 * 1024 * 1024
 GIT_LOCAL_TIMEOUT_SECONDS = 30
 GIT_COMMIT_TIMEOUT_SECONDS = 180
 GIT_NETWORK_TIMEOUT_SECONDS = 180
-VISUAL_PLANNER_TIMEOUT_SECONDS = 120
 
 
 def _validate_public_image_url(url):
@@ -2330,12 +2332,14 @@ def _publication_figure_review_context_note(url, contexts):
             or not re.fullmatch(r'[a-f0-9]{64}', str(item['imageSha256']))):
         raise PublishDataValidationError('出版图审上下文与真实资产身份不符')
     target = item['reviewTarget']
-    limited = isinstance(target, dict) and target.get('displayMode') == 'source-pdf-attested-source-page-only-v1'
+    from protocol_codec import is_contract as is_display_format
+    limited = isinstance(target, dict) and is_display_format(target.get('displayMode'), 'source-pdf-attested-source-page-only')
     fields = {'displayMode', 'pdfPage', 'targetPrintedFigureNumber', 'originalPdfSha256', 'completeTargetCaption'}
     if limited:
         fields.add('captionExtractionStatus')
     if (not isinstance(target, dict) or set(target) != fields
-            or target['displayMode'] not in {'source-pdf-full-page-v1', 'source-pdf-figure-crop-v1', 'source-pdf-attested-source-page-only-v1'}
+            or not any(is_display_format(target['displayMode'], family) for family in (
+                'source-pdf-full-page', 'source-pdf-figure-crop', 'source-pdf-attested-source-page-only'))
             or type(target['pdfPage']) is not int or target['pdfPage'] < 1
             or type(target['targetPrintedFigureNumber']) is not int or target['targetPrintedFigureNumber'] < 1
             or not re.fullmatch(r'[a-f0-9]{64}', str(target['originalPdfSha256']))
@@ -2345,7 +2349,7 @@ def _publication_figure_review_context_note(url, contexts):
                 or not target['completeTargetCaption'].strip() or len(target['completeTargetCaption']) > 16000))):
         raise PublishDataValidationError('出版图审缺少唯一真实 PDF 页与印刷 Figure 上下文')
     page, number = target['pdfPage'], target['targetPrintedFigureNumber']
-    full = target['displayMode'] in {'source-pdf-full-page-v1', 'source-pdf-attested-source-page-only-v1'}
+    full = limited or is_display_format(target['displayMode'], 'source-pdf-full-page')
     expected_note = (f'原论文 PDF 第 {page} 页，本文讨论 Figure {number}（完整原页；图注未完整抽取，以原页为准）' if limited else
                      f'原论文 PDF 第 {page} 页，本文讨论 Figure {number}（完整原页）' if full else
                      f'原论文 PDF 第 {page} 页 Figure {number}（出版显示裁切）')
@@ -2688,12 +2692,10 @@ def load_publish_image_exclusions(config_path=None):
     """加载仓库内那份范围很窄的发布图片覆盖契约。"""
     path = Path(config_path or PUBLISH_IMAGE_EXCLUSIONS_PATH)
     payload = _load_json_object(path, '发布图片排除配置')
-    if set(payload) != {'schemaVersion', 'exclusions'}:
-        raise PublishDataValidationError(
-            '发布图片排除配置必须且只能包含 schemaVersion/exclusions'
-        )
-    if payload.get('schemaVersion') != PUBLISH_IMAGE_EXCLUSIONS_SCHEMA_VERSION:
-        raise PublishDataValidationError('发布图片排除配置 schemaVersion 非法')
+    family = 'publication-image-exclusions'
+    if (set(payload) not in ({'schemaVersion', 'exclusions'}, {'contract', 'schemaFingerprint', 'exclusions'})
+            or blog_formats.record_profile(payload, family) != 'exact-paper-and-url'):
+        raise PublishDataValidationError('发布图片排除配置的格式、结构指纹或字段无效')
     raw_entries = payload.get('exclusions')
     if not isinstance(raw_entries, list):
         raise PublishDataValidationError('发布图片排除配置 exclusions 必须是数组')
@@ -2866,9 +2868,7 @@ def apply_publish_image_exclusions(papers, exclusions=None):
         next_paper = copy.deepcopy(paper)
         active = [dict(item) for item in by_id.get(normalized_id, [])]
         contracts = next_paper.get('analysisManifest', {}).get('contracts', {})
-        api_reader_structured = contracts.get(
-            'apiReaderArticle'
-        ) in LLM_API_READER_STRUCTURED_CONTRACTS
+        api_reader_structured = reader_formats.is_structured_contract(contracts.get('apiReaderArticle'))
         if active and api_reader_structured:
             analysis = next_paper.get('analysis')
             article = next_paper.get('apiReaderArticle')
@@ -3081,10 +3081,10 @@ def _api_reader_author_display(paper, api_reader):
     """Project verified authors for display without replacing the raw proof."""
     raw = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
     if not isinstance(raw, dict) or not isinstance(raw.get('authors'), list):
-        if isinstance(api_reader, dict) and api_reader.get('contract') == LLM_API_READER_CONTRACT:
+        if isinstance(api_reader, dict) and reader_formats.is_integrated_contract(api_reader.get('contract')):
             raise PublishDataValidationError('作者展示缺少已验证的原作者记录。')
         return {'authors': [], 'sourceNote': ''}
-    if api_reader.get('contract') != LLM_API_READER_CONTRACT:
+    if not reader_formats.is_integrated_contract(api_reader.get('contract')):
         return {'authors': copy.deepcopy(raw['authors']), 'sourceNote': ''}
     if raw != paper.get('apiReaderAuthors'):
         raise PublishDataValidationError('作者展示输入与本篇原作者记录不一致。')
@@ -3148,7 +3148,7 @@ def _workbench_authors(paper, api_reader_payload=None):
     # A current Reader citation must use the same verified raw author record;
     # missing input cannot silently fall back to paper metadata.
     if isinstance(api_reader_payload, dict) \
-            and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT:
+            and reader_formats.is_integrated_contract(api_reader_payload.get('contract')):
         source = _api_reader_author_display(paper, api_reader_payload)['authors']
     else:
         source = reader_authors.get('authors') \
@@ -3196,12 +3196,12 @@ def _workbench_authors(paper, api_reader_payload=None):
     return authors
 
 
-def _researcher_workbench_eligible(v6_payload, api_reader_payload):
+def _researcher_workbench_eligible(signed_manual_payload, api_reader_payload):
     return bool(
-        isinstance(v6_payload, dict)
+        isinstance(signed_manual_payload, dict)
         or (
             isinstance(api_reader_payload, dict)
-            and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT
+            and reader_formats.is_integrated_contract(api_reader_payload.get('contract'))
         )
     )
 
@@ -3227,12 +3227,43 @@ def _json_sidecar_bytes(value):
     return raw
 
 
-def _researcher_sidecar_relative_root(date_str, base_id):
+def _sidecar_root_for_context(context_contract):
+    if not public_protocols.is_contract(context_contract,'paper-research-context'):
+        raise PublishDataValidationError('Unsupported research context format')
+    return Path('static/client/papers') if context_contract == RESEARCH_CONTEXT_CONTRACT else RESEARCHER_SIDECAR_RELATIVE_ROOT
+
+
+def _context_header(context_contract, fingerprint=_CURRENT_CONTEXT_SCHEMA):
+    try:
+        return (public_protocols.record_header(context_contract,'paper-research-context')
+                if fingerprint is _CURRENT_CONTEXT_SCHEMA else
+                public_protocols.record_header(context_contract,'paper-research-context',fingerprint))
+    except ValueError as error:
+        raise PublishDataValidationError('论文上下文文件的原格式头或结构指纹不受支持。') from error
+
+
+def _context_dependent_header(context_header, field, family, legacy_variant):
+    if not public_protocols.has_valid_header(context_header,'paper-research-context'):
+        raise PublishDataValidationError('上下文格式声明无效，不能派生附属文件格式。')
+    if 'schemaFingerprint' not in context_header:
+        return public_protocols.historical_header(family,legacy_variant,None)
+    schema = public_protocols.declared_schema(context_header['contract'],'paper-research-context',context_header['schemaFingerprint'])
+    header = schema.get(field)
+    if not public_protocols.has_valid_header(header,family):
+        raise PublishDataValidationError('上下文的原结构声明没有绑定有效的附属格式。')
+    return header
+
+
+def _workbench_header_for_context(context_contract, fingerprint=_CURRENT_CONTEXT_SCHEMA):
+    return _context_dependent_header(_context_header(context_contract,fingerprint),'workbenchFormat','researcher-workbench','source-bound-sidecar-links')
+
+
+def _researcher_sidecar_relative_root(date_str, base_id, *, context_contract=RESEARCH_CONTEXT_CONTRACT):
     validated_date = validate_publish_date(date_str)
     safe_id = base_id.replace('/', '-').replace('.', '-')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]*[a-z0-9]', safe_id):
         raise PublishDataValidationError(f'arXiv ID 无法形成安全 sidecar 路径: {base_id}')
-    return RESEARCHER_SIDECAR_RELATIVE_ROOT / validated_date / safe_id
+    return _sidecar_root_for_context(context_contract) / validated_date / safe_id
 
 
 def _researcher_public_url(relative):
@@ -3252,7 +3283,7 @@ def build_tag_catalog_snapshot(tag_catalog=None, *, snapshot_contract=TAG_CATALO
     每个概念保留 id、facet、中英文名称和别名，ancestorIds 按从最高层到直接上级的顺序记录。
     博客可据此按上级概念查询论文，或用别名匹配标签，无需在浏览器中重新推导标签含义和层级。
     """
-    if snapshot_contract not in (TAG_CATALOG_SNAPSHOT_CONTRACT, LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT):
+    if not public_protocols.is_contract(snapshot_contract,'paper-tag-catalog-snapshot'):
         raise PublishDataValidationError('标签词表快照的格式版本不受支持。')
     registry = _PAGE_TAG_CATALOG if tag_catalog is None else tag_catalog
     if not isinstance(registry, dict):
@@ -3260,7 +3291,7 @@ def build_tag_catalog_snapshot(tag_catalog=None, *, snapshot_contract=TAG_CATALO
     registry_sha256 = registry.get('registrySha256')
     if not isinstance(registry_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', registry_sha256):
         raise PublishDataValidationError('标签词表快照缺少有效的 registrySha256。')
-    registry_version = registry.get('version')
+    registry_version = tag_catalog_identity(registry)
     if not isinstance(registry_version, str) or not registry_version:
         raise PublishDataValidationError('标签词表快照缺少有效的版本名称。')
     concepts = registry.get('concepts')
@@ -3315,7 +3346,7 @@ def build_tag_catalog_snapshot(tag_catalog=None, *, snapshot_contract=TAG_CATALO
             parent_id = parent[1].get('broaderId')
         record['ancestorIds'] = list(reversed(chain))
     return {
-        'contract': snapshot_contract,
+        **public_protocols.record_header(snapshot_contract,'paper-tag-catalog-snapshot'),
         'registryVersion': registry_version,
         'registrySha256': registry_sha256,
         'concepts': ordered,
@@ -3335,7 +3366,7 @@ def tag_catalog_snapshot_bytes(snapshot):
 def _validate_tag_catalog_snapshot(snapshot):
     """核验已保存词表快照的格式和上级关系，不补造缺失的上级概念。"""
     if (not isinstance(snapshot, dict)
-            or snapshot.get('contract') not in (TAG_CATALOG_SNAPSHOT_CONTRACT, LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT)
+            or not public_protocols.has_valid_header(snapshot,'paper-tag-catalog-snapshot')
             or not re.fullmatch(r'[0-9a-f]{64}', str(snapshot.get('registrySha256') or ''))
             or not isinstance(snapshot.get('registryVersion'), str)
             or not snapshot['registryVersion']
@@ -3380,7 +3411,7 @@ def _validate_tag_catalog_snapshot(snapshot):
 
 def _validate_tag_version_catalog(catalog):
     if (not isinstance(catalog, dict)
-            or catalog.get('contract') not in (TAG_CATALOG_VERSIONS_CONTRACT, LEGACY_TAG_CATALOG_VERSIONS_CONTRACT)
+            or not public_protocols.has_valid_header(catalog,'paper-tag-catalog-versions')
             or not isinstance(catalog.get('snapshots'), list) or not catalog['snapshots']
             or not re.fullmatch(r'[a-f0-9]{64}', str(catalog.get('currentSha256') or ''))):
         raise PublishDataValidationError('标签词表版本目录格式无效，或缺少协议、快照列表或当前版本 SHA。')
@@ -3397,11 +3428,11 @@ def _validate_tag_version_catalog(catalog):
 
 
 def _validate_tag_display_policy(policy):
-    fields = {'contract', 'baseRegistrySha256', 'baseSnapshotSha256',
+    fields = {'baseRegistrySha256', 'baseSnapshotSha256',
               'preferredRegistrySha256', 'preferredSnapshotSha256',
               'preferredProjectionSha256'}
-    if (not isinstance(policy, dict) or set(policy) != fields
-            or policy.get('contract') not in (TAG_PRESENTATION_POLICY_CONTRACT, LEGACY_TAG_PRESENTATION_POLICY_CONTRACT)
+    if (not isinstance(policy, dict) or not public_protocols.has_valid_header(policy,'paper-tag-presentation-policy')
+            or set(policy) != fields | set(public_protocols.record_header(policy['contract'],'paper-tag-presentation-policy',policy.get('schemaFingerprint')))
             or any(not isinstance(policy[key], str)
                    or not re.fullmatch(r'[a-f0-9]{64}', policy[key])
                    for key in fields - {'contract'})
@@ -3473,8 +3504,8 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
             json.loads(raw_mirrors[0].decode('utf-8'), object_pairs_hook=unique_object))
     except (ValueError, UnicodeError) as exc:
         raise PublishDataValidationError('标签展示策略文件无法按 UTF-8 JSON 读取，或其中的策略内容未通过校验。') from exc
-    expected_contract = LEGACY_TAG_PRESENTATION_POLICY_CONTRACT if legacy else TAG_PRESENTATION_POLICY_CONTRACT
-    if policy['contract'] != expected_contract:
+    expected_format = 'legacy-display-catalog' if legacy else 'approved-display-catalog'
+    if public_protocols.format(policy['contract'],'paper-tag-presentation-policy',policy.get('schemaFingerprint')) != expected_format:
         raise PublishDataValidationError('标签展示策略的文件路径与格式版本不一致。')
     base_sha = policy['baseRegistrySha256']
     preferred_sha = policy['preferredRegistrySha256']
@@ -3505,9 +3536,15 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
         # 当前分类目录可与已批准的完整展示目录对应，也可仍对应原签发基础。
         # 两种情况都只允许描述值不同；不能借追加之名改变父链/名称/顺序。
         identity_base = preferred if len(current['concepts']) == len(preferred['concepts']) else issued_base
-        if (set(current) != set(issued_base)
-                or any(current[key] != issued_base[key] for key in current
-                       if key not in {'registrySha256', 'concepts'})
+        current_body = _tag_snapshot_body(current)
+        original_body = _tag_snapshot_body(issued_base)
+        original_version = original_body['registryVersion']
+        version_matches = (current_body['registryVersion'] == original_version or
+            current_body['registryVersion'] == public_protocols.contract('paper-tag-catalog') and
+            public_protocols.is_contract(original_version,'paper-tag-catalog','nine-facet-concept-registry'))
+        if (set(current_body) != set(original_body) or not version_matches
+                or any(current_body[key] != original_body[key] for key in current_body
+                       if key not in {'registrySha256', 'registryVersion', 'concepts'})
                 or len(current['concepts']) != len(identity_base['concepts'])
                 or any(set(actual) != set(original)
                        or any(actual[key] != original[key] for key in actual
@@ -3572,10 +3609,20 @@ def _read_tag_catalog_file(repo, relative):
         raise PublishDataValidationError('标签词表文件不是有效的 UTF-8 JSON。') from exc
 
 
-def _build_tag_catalog_display_snapshot(issued_snapshot):
+def _tag_snapshot_body(snapshot):
+    _validate_tag_catalog_snapshot(snapshot)
+    header = public_protocols.record_header(snapshot['contract'],'paper-tag-catalog-snapshot',snapshot.get('schemaFingerprint'))
+    return {key:value for key,value in snapshot.items() if key not in header}
+
+
+def _build_tag_catalog_display_snapshot(issued_snapshot, *, target_header=None):
     """建立单独的显示副本，不用它替换当时保存的快照。"""
     _validate_tag_catalog_snapshot(issued_snapshot)
-    return dict(issued_snapshot, contract=TAG_CATALOG_SNAPSHOT_CONTRACT)
+    header = (public_protocols.record_header(TAG_CATALOG_SNAPSHOT_CONTRACT,'paper-tag-catalog-snapshot')
+              if target_header is None else target_header)
+    if not public_protocols.has_valid_header(header,'paper-tag-catalog-snapshot'):
+        raise PublishDataValidationError('显示快照的目标格式声明无效。')
+    return {**_tag_snapshot_body(issued_snapshot), **header}
 
 
 def _read_approved_tag_display_policy():
@@ -3598,7 +3645,7 @@ def _read_approved_tag_display_policy():
         policy = _validate_tag_display_policy(json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object))
     except (ValueError, UnicodeError) as exc:
         raise PublishDataValidationError('批准的标签展示策略内容无法读取或未通过校验。') from exc
-    if policy['contract'] != TAG_PRESENTATION_POLICY_CONTRACT:
+    if public_protocols.format(policy['contract'],'paper-tag-presentation-policy',policy.get('schemaFingerprint')) != 'approved-display-catalog':
         raise PublishDataValidationError('批准的标签展示策略的格式版本不受支持。')
     return raw
 
@@ -3632,8 +3679,8 @@ def tag_catalog_file_contents(blog_repo=None):
             catalog = _read_tag_catalog_file(repo, f'{prefix}/{name}')
             if catalog is not None:
                 _validate_tag_version_catalog(catalog)
-                expected = LEGACY_TAG_CATALOG_VERSIONS_CONTRACT if name == 'taxonomy-catalog.json' else TAG_CATALOG_VERSIONS_CONTRACT
-                if catalog.get('contract') != expected:
+                expected = 'legacy-sha-keyed-snapshot-set' if name == 'taxonomy-catalog.json' else 'sha-keyed-snapshot-set'
+                if public_protocols.format(catalog.get('contract'),'paper-tag-catalog-versions',catalog.get('schemaFingerprint')) != expected:
                     raise PublishDataValidationError('标签词表版本目录的路径与格式版本不一致。')
                 catalogs.append(catalog)
                 for snapshot in catalog['snapshots']:
@@ -3677,14 +3724,14 @@ def tag_catalog_file_contents(blog_repo=None):
         for display in displays:
             _validate_tag_catalog_snapshot(display)
             issued = versions.get(display['registrySha256'])
-            if (display['contract'] != TAG_CATALOG_SNAPSHOT_CONTRACT or issued is None
-                    or display != _build_tag_catalog_display_snapshot(issued)
+            if (public_protocols.format(display['contract'],'paper-tag-catalog-snapshot',display.get('schemaFingerprint')) != 'public-concept-hierarchy' or issued is None
+                    or display != _build_tag_catalog_display_snapshot(issued,target_header=public_protocols.record_header(display['contract'],'paper-tag-catalog-snapshot',display.get('schemaFingerprint')))
                     or catalogs_by_name['tag-catalog-versions.json'][0]['currentSha256'] != display['registrySha256']):
                 raise PublishDataValidationError('新版标签显示快照与保存的原快照或版本目录不一致。')
     retain(current)
     display, policy_assets = _select_tag_display_version(
         repo, current, versions, approved_raw=_read_approved_tag_display_policy())
-    catalog = {'contract': TAG_CATALOG_VERSIONS_CONTRACT,
+    catalog = {**public_protocols.record_header(TAG_CATALOG_VERSIONS_CONTRACT,'paper-tag-catalog-versions'),
                'currentSha256': display['registrySha256'],
                'snapshots': [versions[sha] for sha in sorted(versions)]}
     assets = dict(policy_assets)
@@ -3753,11 +3800,13 @@ def _saved_tag_catalog_file_contents(repo, records, *, installation=False):
     display = _validate_tag_catalog_snapshot(json.loads(pair(snapshot_name).decode('utf-8')))
     catalog = json.loads(pair(catalog_name).decode('utf-8'))
     versions = _validate_tag_version_catalog(catalog)
-    expected_contract = TAG_CATALOG_VERSIONS_CONTRACT if current else LEGACY_TAG_CATALOG_VERSIONS_CONTRACT
-    expected_snapshot = TAG_CATALOG_SNAPSHOT_CONTRACT if current else LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT
-    if (display['contract'] != expected_snapshot or catalog['contract'] != expected_contract
+    expected_contract = 'sha-keyed-snapshot-set' if current else 'legacy-sha-keyed-snapshot-set'
+    expected_snapshot = 'public-concept-hierarchy' if current else 'legacy-public-concept-hierarchy'
+    display_header = public_protocols.record_header(display['contract'],'paper-tag-catalog-snapshot',display.get('schemaFingerprint'))
+    if (public_protocols.format(display['contract'],'paper-tag-catalog-snapshot',display.get('schemaFingerprint')) != expected_snapshot
+            or public_protocols.format(catalog['contract'],'paper-tag-catalog-versions',catalog.get('schemaFingerprint')) != expected_contract
             or catalog['currentSha256'] != display['registrySha256']
-            or display != (_build_tag_catalog_display_snapshot(versions[display['registrySha256']]) if current else versions[display['registrySha256']])):
+            or display != (_build_tag_catalog_display_snapshot(versions[display['registrySha256']],target_header=display_header) if current else versions[display['registrySha256']])):
         raise PublishDataValidationError('标签显示快照与原版本目录不一致。')
     policy_raw = pair(policy_name, optional=True)
     if policy_raw is not None:
@@ -3769,10 +3818,10 @@ def _saved_tag_catalog_file_contents(repo, records, *, installation=False):
                 result[key] = value
             return result
         policy = _validate_tag_display_policy(json.loads(policy_raw.decode('utf-8'), object_pairs_hook=unique_object))
-        expected_policy = TAG_PRESENTATION_POLICY_CONTRACT if current else LEGACY_TAG_PRESENTATION_POLICY_CONTRACT
+        expected_policy = 'approved-display-catalog' if current else 'legacy-display-catalog'
         base = versions.get(policy['baseRegistrySha256'])
         preferred = versions.get(policy['preferredRegistrySha256'])
-        if (policy['contract'] != expected_policy or base is None or preferred is None
+        if (public_protocols.format(policy['contract'],'paper-tag-presentation-policy',policy.get('schemaFingerprint')) != expected_policy or base is None or preferred is None
                 or preferred['registrySha256'] != display['registrySha256']
                 or hashlib.sha256(tag_catalog_snapshot_bytes(base)).hexdigest() != policy['baseSnapshotSha256']
                 or hashlib.sha256(tag_catalog_snapshot_bytes(preferred)).hexdigest() != policy['preferredSnapshotSha256']
@@ -3875,14 +3924,25 @@ def export_tag_catalog_files(blog_repo=None):
 
 
 def build_flat_tag_compat_metadata(
-        parsed, *, required=False, flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT):
+        parsed, *, required=False, flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT,
+        flat_tag_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA):
     """保留 Hugo 的 tags 字段，并记录当前词表中标签的含义和层级。
 
     旧记录维护时可以缺少当前标签选择记录；required 为 True 时必须提供有效记录。
     输入声明标签选择有效后，本函数仍按当前词表逐项核对 ID、中文名称、分类维度和主标签角色。
     """
-    if flat_tag_contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
+    if not is_supported_flat_tag_contract(flat_tag_contract):
         raise PublishDataValidationError('页面标签的格式版本不受支持。')
+    flat_header = (public_protocols.record_header(flat_tag_contract,'paper-tag-flat-tags')
+                   if flat_tag_schema_fingerprint is _CURRENT_CONTEXT_SCHEMA else
+                   public_protocols.record_header(flat_tag_contract,'paper-tag-flat-tags',flat_tag_schema_fingerprint))
+    if 'schemaFingerprint' in flat_header:
+        flat_schema = public_protocols.declared_schema(flat_header['contract'],'paper-tag-flat-tags',flat_header['schemaFingerprint'])
+        selection_header = flat_schema.get('selectionFormat')
+        if not public_protocols.has_valid_header(selection_header,'paper-tag-selection'):
+            raise PublishDataValidationError('页面标签的原结构声明没有绑定有效选择格式。')
+    else:
+        selection_header = public_protocols.historical_header('paper-tag-selection','task-and-method-concept-selection',None)
     try:
         validation = read_tag_validation(parsed)
     except ValueError as error:
@@ -3891,11 +3951,11 @@ def build_flat_tag_compat_metadata(
         if required:
             raise PublishDataValidationError('新页面缺少通过当前词表检查的标签选择记录。')
         return None
-    if validation.get('registryVersion') != _PAGE_TAG_CATALOG['version'] \
+    if validation.get('registryVersion') != tag_catalog_identity(_PAGE_TAG_CATALOG) \
             or validation.get('registrySha256') != _PAGE_TAG_CATALOG['registrySha256']:
-        original = resolve_append_only_proof_catalog(
+        original = resolve_compatible_proof_catalog(
             validation.get('registrySha256'), _PAGE_TAG_CATALOG)
-        if original is None or validation.get('registryVersion') != original['version']:
+        if original is None or validation.get('registryVersion') != tag_catalog_identity(original):
             raise PublishDataValidationError('页面的标签选择记录与当前词表版本或 SHA 不一致。')
         from utils import _validate_tag_selection
         original_selection = _validate_tag_selection(original, parsed.get('tags'),
@@ -3935,9 +3995,9 @@ def build_flat_tag_compat_metadata(
             or primary_task_id not in concept_ids or primary_method_id not in concept_ids:
         raise PublishDataValidationError('页面的主任务或主方法不符合对应的分类、中文首选名称或已选概念。')
     return {
-        'contract': flat_tag_contract,
-        'selectionContract': TAG_SELECTION_CONTRACT,
-        'registryVersion': _PAGE_TAG_CATALOG['version'],
+        **flat_header,
+        'selectionContract': selection_header['contract'],
+        'registryVersion': tag_catalog_identity(_PAGE_TAG_CATALOG),
         'registrySha256': _PAGE_TAG_CATALOG['registrySha256'],
         'primaryTaskId': primary_task_id,
         'primaryMethodId': primary_method_id,
@@ -4011,8 +4071,14 @@ def _workbench_sidecar_records(sidecars, *, context_contract):
             raise PublishDataValidationError(f'researcher sidecar 非规范 UTF-8: {relative}') from error
         records[relative.name] = {'url': _researcher_public_url(relative),
                                   'sha256': hashlib.sha256(raw).hexdigest()}
-    if context_contract == RESEARCH_CONTEXT_CONTRACT:
-        records['rethink-context.json']['contract'] = RESEARCH_CONTEXT_CONTRACT
+    context_bytes = next(raw for relative,raw in sidecars.items() if relative.name == 'rethink-context.json')
+    context_header = json.loads(context_bytes.decode('utf-8'))
+    if not public_protocols.has_valid_header(context_header,'paper-research-context'):
+        raise PublishDataValidationError('上下文附属文件的原格式头或结构指纹不符。')
+    if public_protocols.format(context_contract,'paper-research-context',context_header.get('schemaFingerprint')) != 'legacy-inline-abstract':
+        records['rethink-context.json']['contract'] = context_contract
+        if 'schemaFingerprint' in context_header:
+            records['rethink-context.json']['schemaFingerprint'] = context_header['schemaFingerprint']
     return records
 
 
@@ -4020,14 +4086,20 @@ def build_researcher_workbench_bundle(
         paper, date_str, *, parsed=None, reader_plan=None,
         api_reader_payload=None, require_reader=False,
         flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT,
-        context_contract=RESEARCH_CONTEXT_CONTRACT):
+        flat_tag_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA,
+        context_contract=RESEARCH_CONTEXT_CONTRACT,
+        context_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA):
     """生成论文页的基本信息及四份同站点附属文件。
 
     缺少导读计划的旧维护页面保持原标签。正式生成须设置 require_reader，资料不完整时停止生成。
     """
-    if context_contract not in (LEGACY_RESEARCH_CONTEXT_CONTRACT, RESEARCH_CONTEXT_CONTRACT):
+    if not public_protocols.is_contract(context_contract,'paper-research-context'):
         raise PublishDataValidationError('论文上下文文件的格式版本不受支持。')
-    if flat_tag_contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
+    context_header = _context_header(context_contract,context_schema_fingerprint)
+    context_variant = public_protocols.format(context_contract,'paper-research-context',context_header.get('schemaFingerprint'))
+    if context_variant not in {'explicit-source-abstract','legacy-inline-abstract'}:
+        raise PublishDataValidationError('论文上下文的语义格式尚未实现，不能自动换用当前结构。')
+    if not is_supported_flat_tag_contract(flat_tag_contract):
         raise PublishDataValidationError('页面标签的格式版本不受支持。')
     try:
         read_tag_validation(parsed or paper.get('parsed'))
@@ -4035,9 +4107,9 @@ def build_researcher_workbench_bundle(
         raise PublishDataValidationError(str(error)) from error
     if reader_plan is None:
         api_reader_payload = api_reader_payload or _api_reader_payload(paper)
-        v6_payload = _manual_v6_reader_payload(paper)
+        signed_manual_payload = _signed_manual_reader_payload(paper)
         reader_plan = (
-            v6_payload.get('plan') if isinstance(v6_payload, dict)
+            signed_manual_payload.get('plan') if isinstance(signed_manual_payload, dict)
             else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
             else _manual_reader_editorial_plan(paper)
         )
@@ -4077,7 +4149,8 @@ def build_researcher_workbench_bundle(
         'researcher workbench primaryTask', maximum=200,
     )
     tag_metadata = build_flat_tag_compat_metadata(
-        parsed_analysis, flat_tag_contract=flat_tag_contract)
+        parsed_analysis, flat_tag_contract=flat_tag_contract,
+        flat_tag_schema_fingerprint=flat_tag_schema_fingerprint)
     primary_method = tag_metadata['primaryMethod'] if tag_metadata else None
     rank_bucket = _validated_workbench_text(
         parsed_analysis.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
@@ -4089,7 +4162,6 @@ def build_researcher_workbench_bundle(
     abstract_sha = hashlib.sha256(abstract.encode('utf-8')).hexdigest()
     citation_id = identity['versionedId'] or identity['baseId']
     common = {
-        'contract': RESEARCHER_SIDECAR_CONTRACT,
         'arxivId': identity['baseId'],
         'arxivVersion': identity['version'],
         'arxivVersionedId': identity['versionedId'],
@@ -4099,11 +4171,11 @@ def build_researcher_workbench_bundle(
         'authors': authors,
     }
     citation = dict(common)
-    citation.update({'schemaVersion': 1, 'id': citation_id, 'type': 'preprint'})
+    citation_header = _context_dependent_header(context_header,'citationFormat','researcher-sidecars','source-bound-citation')
+    citation.update({**citation_header, 'id': citation_id, 'type': 'preprint'})
     context = dict(common)
     context.update({
-        'contract': context_contract,
-        'schemaVersion': 1 if context_contract == LEGACY_RESEARCH_CONTEXT_CONTRACT else 2,
+        **context_header,
         'readerTitle': reader_title,
         'oneSentenceThesis': one_sentence,
         'abstract': abstract,
@@ -4118,14 +4190,14 @@ def build_researcher_workbench_bundle(
             'documentType': document_type,
         },
     })
-    root = _researcher_sidecar_relative_root(date_str, identity['baseId'])
+    root = _researcher_sidecar_relative_root(date_str, identity['baseId'],context_contract=context_contract)
     sidecars = _serialize_verified_workbench_sidecars(
         original_title=original_title, authors=authors, citation_id=citation_id,
         identity=identity, citation=citation, context=context, root=root,
     )
     sidecar_records = _workbench_sidecar_records(sidecars, context_contract=context_contract)
     return {
-        'contract': RESEARCHER_WORKBENCH_CONTRACT,
+        **_workbench_header_for_context(context_contract,context_schema_fingerprint),
         'readerTitle': reader_title,
         'originalTitle': original_title,
         'oneSentenceThesis': one_sentence,
@@ -4145,7 +4217,9 @@ def build_researcher_workbench_bundle(
 
 def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
                                                 publication=None, reader_plan,
-                                                parsed, authors):
+                                                parsed, authors,
+                                                context_contract=RESEARCH_CONTEXT_CONTRACT,
+                                                context_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA):
     """Project an already source-authenticated conference record into exports.
 
     Source authentication remains the caller's normal analysis/publication guard.
@@ -4227,26 +4301,30 @@ def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
     document_type = _validated_workbench_text(parsed.get('documentType'), '会议工作区 documentType', maximum=100)
     identity = {'sourceKind': 'conference', 'paperId': paper_id, 'sourceSha256': source_sha,
                 **urls, 'publicUrlAvailability': 'available' if publication is not None else 'unavailable'}
-    common = {'contract': RESEARCHER_SIDECAR_CONTRACT, **identity,
+    common = {**identity,
               'originalTitle': original_title, 'authors': clean_authors}
-    citation = {**common, 'schemaVersion': 1, 'id': paper_id, 'type': 'conference-paper'}
+    context_header = _context_header(context_contract,context_schema_fingerprint)
+    if public_protocols.format(context_contract,'paper-research-context',context_header.get('schemaFingerprint')) != 'explicit-source-abstract':
+        raise PublishDataValidationError('会议上下文语义格式不受支持，不能换用当前结构。')
+    citation_header = _context_dependent_header(context_header,'citationFormat','researcher-sidecars','source-bound-citation')
+    citation = {**common, **citation_header, 'id': paper_id, 'type': 'conference-paper'}
     raw_abstract = paper.get('abstract')
     abstract = _validated_workbench_text(raw_abstract, '会议工作区摘要', maximum=200000, preserve_newlines=True) \
         if isinstance(raw_abstract, str) and raw_abstract.strip() else None
     abstract_sha = hashlib.sha256(abstract.encode()).hexdigest() if abstract is not None else None
-    context = {**common, 'contract': RESEARCH_CONTEXT_CONTRACT, 'schemaVersion': 2,
+    context = {**common, **context_header,
                'readerTitle': reader_title, 'oneSentenceThesis': one_sentence,
                'abstract': abstract, 'abstractSha256': abstract_sha,
                'abstractStatus': 'available' if abstract is not None else 'unavailable',
                'assessment': {'primaryTask': primary_task, 'primaryMethod': primary_method,
                               'score': score, 'rankBucket': rank_bucket, 'documentType': document_type}}
-    root = RESEARCHER_SIDECAR_RELATIVE_ROOT / validate_publish_date(date_str) / (
+    root = _sidecar_root_for_context(context_contract) / validate_publish_date(date_str) / (
         'conference-' + hashlib.sha256(paper_id.encode()).hexdigest()[:24])
     sidecars = _serialize_verified_workbench_sidecars(
         original_title=original_title, authors=clean_authors, citation_id=paper_id,
         identity=identity, citation=citation, context=context, root=root, source_kind='conference')
-    sidecar_records = _workbench_sidecar_records(sidecars, context_contract=RESEARCH_CONTEXT_CONTRACT)
-    return {'contract': RESEARCHER_WORKBENCH_CONTRACT, 'readerTitle': reader_title,
+    sidecar_records = _workbench_sidecar_records(sidecars, context_contract=context_contract)
+    return {**_workbench_header_for_context(context_contract,context_schema_fingerprint), 'readerTitle': reader_title,
             'originalTitle': original_title, 'oneSentenceThesis': one_sentence,
             'abstractSha256': abstract_sha, 'identity': identity, 'authors': clean_authors,
             'primaryTask': primary_task, 'primaryMethod': primary_method, 'tagMetadata': None,
@@ -4306,6 +4384,8 @@ def _researcher_workbench_frontmatter(bundle):
     if tag_metadata:
         tag_frontmatter = (
             f'paper_digest_tags_contract: "{tag_metadata["contract"]}"\n'
+            + (f'paper_digest_tags_schema_fingerprint: "{tag_metadata["schemaFingerprint"]}"\n' if 'schemaFingerprint' in tag_metadata else '')
+            +
             f'paper_digest_tags_selection_contract: "{tag_metadata["selectionContract"]}"\n'
             f'paper_digest_tags_registry_version: "{tag_metadata["registryVersion"]}"\n'
             f'paper_digest_tags_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
@@ -4316,7 +4396,9 @@ def _researcher_workbench_frontmatter(bundle):
     abstract_marker = (f'paper_digest_abstract_sha256: {json.dumps(bundle["abstractSha256"])}\n' if conference
                        else f'paper_digest_abstract_sha256: "{bundle["abstractSha256"]}"\n')
     return (
-        f'paper_digest_workbench_contract: "{RESEARCHER_WORKBENCH_CONTRACT}"\n'
+        f'paper_digest_workbench_contract: "{bundle["contract"]}"\n'
+        + (f'paper_digest_workbench_schema_fingerprint: "{bundle["schemaFingerprint"]}"\n' if 'schemaFingerprint' in bundle else '')
+        +
         f'paper_digest_reader_title: {json.dumps(bundle["readerTitle"], ensure_ascii=False)}\n'
         f'paper_digest_original_title: {json.dumps(_workbench_display_original_title(bundle["originalTitle"]), ensure_ascii=False)}\n'
         f'{identity_frontmatter}'
@@ -4334,7 +4416,7 @@ def _researcher_workbench_frontmatter(bundle):
 
 def _page_flat_tag_contract(frontmatter):
     """读取页面声明的标签格式，用于核对原有元数据和附属文件。"""
-    tag_field_names = ('contract', 'selection_contract', 'registry_version',
+    tag_field_names = ('contract', 'schema_fingerprint', 'selection_contract', 'registry_version',
                        'registry_sha256', 'concepts', 'scope')
     has_current_tags = any('paper_digest_tags_' + field in frontmatter for field in tag_field_names)
     has_legacy_tags = any('paper_digest_taxonomy_' + field in frontmatter for field in tag_field_names)
@@ -4344,9 +4426,21 @@ def _page_flat_tag_contract(frontmatter):
         return FLAT_TAG_COMPAT_CONTRACT
     prefix = 'paper_digest_tags_' if has_current_tags else 'paper_digest_taxonomy_'
     contract = frontmatter.get(prefix + 'contract')
-    if contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
-        raise PublishDataValidationError('页面标签的格式版本不受支持。')
+    header={'contract':contract}
+    if prefix+'schema_fingerprint' in frontmatter:
+        header['schemaFingerprint']=frontmatter[prefix+'schema_fingerprint']
+    if not public_protocols.has_valid_header(header,'paper-tag-flat-tags'):
+        raise PublishDataValidationError('页面标签的原格式头或结构指纹无效。')
     return contract
+
+
+def _page_flat_tag_fingerprint(frontmatter):
+    # Validate the exact declaration before selecting its saved fingerprint.
+    _page_flat_tag_contract(frontmatter)
+    prefix = 'paper_digest_tags_' if any(key.startswith('paper_digest_tags_') for key in frontmatter) else 'paper_digest_taxonomy_'
+    # A page with no tag record has no stored tag-format identity to replay.
+    return (frontmatter.get(prefix+'schema_fingerprint') if prefix+'contract' in frontmatter
+            else _CURRENT_CONTEXT_SCHEMA)
 
 
 def _page_context_contract(frontmatter):
@@ -4358,26 +4452,39 @@ def _page_context_contract(frontmatter):
     if 'contract' not in record:
         return LEGACY_RESEARCH_CONTEXT_CONTRACT
     contract = record['contract']
-    if contract not in (LEGACY_RESEARCH_CONTEXT_CONTRACT, RESEARCH_CONTEXT_CONTRACT):
+    if not public_protocols.is_contract(contract,'paper-research-context'):
         raise PublishDataValidationError('论文上下文文件的格式版本不受支持。')
     return contract
+
+
+def _page_context_fingerprint(frontmatter):
+    records = frontmatter.get('paper_digest_sidecars')
+    record = records.get('rethink-context.json') if isinstance(records,dict) else None
+    if not isinstance(record,dict):
+        raise PublishDataValidationError('页面缺少上下文文件的原描述。')
+    if 'schemaFingerprint' in record and not isinstance(record['schemaFingerprint'],str):
+        raise PublishDataValidationError('上下文文件的结构指纹必须为原字符串。')
+    return record.get('schemaFingerprint')
 
 
 def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     flat_tag_contract = _page_flat_tag_contract(frontmatter)
     has_legacy_tags = any('paper_digest_taxonomy_' + field in frontmatter for field in
-                          ('contract', 'selection_contract', 'registry_version',
+                          ('contract', 'schema_fingerprint', 'selection_contract', 'registry_version',
                            'registry_sha256', 'concepts', 'scope'))
     if frontmatter.get('paper_digest_workbench_contract') is None:
         return True
-    if frontmatter.get('paper_digest_workbench_contract') != RESEARCHER_WORKBENCH_CONTRACT:
-        raise PublishDataValidationError('researcher workbench frontmatter 合同版本非法')
+    workbench_header={'contract':frontmatter.get('paper_digest_workbench_contract')}
+    if 'paper_digest_workbench_schema_fingerprint' in frontmatter:
+        workbench_header['schemaFingerprint']=frontmatter['paper_digest_workbench_schema_fingerprint']
+    if not public_protocols.has_valid_header(workbench_header,'researcher-workbench'):
+        raise PublishDataValidationError('researcher workbench frontmatter 合同或结构指纹非法')
     if not isinstance(paper, dict):
         raise PublishDataValidationError('researcher workbench 页面缺少权威论文快照')
     api_reader_payload = _api_reader_payload(paper)
-    v6_payload = _manual_v6_reader_payload(paper)
+    signed_manual_payload = _signed_manual_reader_payload(paper)
     reader_plan = (
-        v6_payload.get('plan') if isinstance(v6_payload, dict)
+        signed_manual_payload.get('plan') if isinstance(signed_manual_payload, dict)
         else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
         else _manual_reader_editorial_plan(paper)
     )
@@ -4385,10 +4492,13 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         paper, date_str, reader_plan=reader_plan,
         api_reader_payload=api_reader_payload, require_reader=True,
         flat_tag_contract=flat_tag_contract,
+        flat_tag_schema_fingerprint=_page_flat_tag_fingerprint(frontmatter),
         context_contract=_page_context_contract(frontmatter),
+        context_schema_fingerprint=_page_context_fingerprint(frontmatter),
     )
     identity = bundle['identity']
     expected = {
+        'paper_digest_workbench_contract': bundle['contract'],
         'paper_digest_reader_title': bundle['readerTitle'],
         'paper_digest_original_title': _workbench_display_original_title(bundle['originalTitle']),
         'paper_digest_arxiv_id': identity['baseId'],
@@ -4406,6 +4516,8 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         'paper_digest_sidecars': bundle['sidecarRecords'],
         'description': bundle['oneSentenceThesis'],
     }
+    if 'schemaFingerprint' in bundle:
+        expected['paper_digest_workbench_schema_fingerprint'] = bundle['schemaFingerprint']
     tag_metadata = bundle.get('tagMetadata')
     if tag_metadata:
         expected.update({
@@ -4416,6 +4528,8 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
             'paper_digest_tags_concepts': tag_metadata['concepts'],
             'paper_digest_primary_method': tag_metadata['primaryMethod'],
         })
+    if tag_metadata and 'schemaFingerprint' in tag_metadata:
+        expected['paper_digest_tags_schema_fingerprint']=tag_metadata['schemaFingerprint']
     if has_legacy_tags:
         expected = {field.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
                     if field.startswith('paper_digest_tags_') else field: value
@@ -4670,7 +4784,8 @@ def normalize_digest_index_reader_surface(text):
     return frontmatter + value
 
 
-API_READER_DECISION_PROJECTION_CONTRACT = 'api-reader-decision-projection-v2'
+API_READER_DECISION_PROJECTION_CONTRACT = public_protocols.contract('api-reader-decision-projection')
+API_READER_DECISION_PROJECTION_SCHEMA_FINGERPRINT = public_protocols.schema_fingerprint('api-reader-decision-projection')
 
 
 def _analysis_sha256_ignoring_core_summary_body(analysis):
@@ -5421,7 +5536,7 @@ def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=Non
     stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('coreSummaryRepair') or {}
     if ('operatorLiteralCorrection' in stage
             or (stage.get('paidDiagnosticReplay') or {}).get('operatorLiteralCorrectionRequired') is not None) \
-            and proof.get('contract') != 'fresh-source-analysis-v1':
+            and not is_fresh_source_provenance(proof):
         raise PublishDataValidationError('已付核心术语修正只接受完整日更封存来源。')
     if source_text is not None:
         # This explicit display route is supplied only after its workflow has
@@ -5437,7 +5552,7 @@ def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=Non
                     and proof['sourceSha256'] != paper.get('sourceSha256')):
             raise PublishDataValidationError('核心摘要展示的全文与原论文来源 SHA 不一致。')
         return _run_core_summary_node_replay(paper, summary, source_text, stage_replay=True)
-    if proof.get('contract') != 'fresh-source-analysis-v1':
+    if not is_fresh_source_provenance(proof):
         return _detailed_core_summary_semantic_issue(summary)
     run_id = proof.get('runId')
     if not isinstance(run_id, str) or not re.fullmatch(
@@ -5486,9 +5601,8 @@ def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
     if not node:
         raise PublishDataValidationError('核心摘要规则重放需要 Node.js。')
     source_correction = paper.get('conferenceSourceCorrection')
-    source_correction_stage = stage_replay and isinstance(source_correction, dict) \
-        and source_correction.get('contract') in {
-            'conference-source-resource-correction-v1', 'conference-source-core-correction-v1'}
+    from conference_source_correction_format import locator_family
+    source_correction_stage = stage_replay and bool(locator_family(source_correction))
     with tempfile.NamedTemporaryFile(mode='w+b') as source_file:
         source_file.write(payload); source_file.flush(); source_file.seek(0)
         result = _run_bounded_subprocess([node, str(cli), str(source_file.fileno())],
@@ -5517,16 +5631,16 @@ def _validated_detailed_core_summary(paper, parsed, *, source_text=None):
     """
     manifest = paper.get('analysisManifest')
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
-    if not isinstance(contracts, dict) \
-            or contracts.get('coreSummary') != CORE_SUMMARY_DETAILED_CONTRACT:
+    if not isinstance(contracts, dict) or 'coreSummary' not in contracts:
         return None
+    declaration = contracts['coreSummary']
     stages = manifest.get('stages')
     stage = stages.get('coreSummaryRepair') if isinstance(stages, dict) else None
     scoring = stages.get('scoringAudit') if isinstance(stages, dict) else None
     if not isinstance(stage, dict) \
             or stage.get('status') not in {'complete', 'not_needed'} \
-            or stage.get('contractVersion') != CORE_SUMMARY_DETAILED_CONTRACT:
-        raise PublishDataValidationError('读者文章的详细核心摘要阶段记录缺失、尚未完成，或不符合 v3 规则。')
+            or not (summary_header := core_summary_formats.read_stage(declaration, stage)):
+        raise PublishDataValidationError('详细核心摘要阶段未完成，或声明与阶段格式不一致。')
     analysis = paper.get('analysis')
     heading_issue = evaluation_heading_issue(analysis)
     if heading_issue:
@@ -5540,7 +5654,7 @@ def _validated_detailed_core_summary(paper, parsed, *, source_text=None):
                       if source_text is not None else _source_bound_core_summary_semantic_issue(paper, summary))
     if semantic_issue:
         raise PublishDataValidationError(
-            f'读者文章的详细核心摘要未达到 {CORE_SUMMARY_DETAILED_CONTRACT}: '
+            '读者文章的核心摘要未达到详细摘要规则：'
             f'{semantic_issue}'
         )
     if isinstance(parsed, dict) and parsed.get('summary') != summary:
@@ -5560,7 +5674,7 @@ def _validated_detailed_core_summary(paper, parsed, *, source_text=None):
             != stage.get('outputStructureProjectionSha256'):
         raise PublishDataValidationError('读者文章的详细核心摘要阶段记录中，输入与输出的其他章节 SHA 不一致。')
     binding_body = {
-        'contractVersion': stage['contractVersion'],
+        **core_summary_formats.stage_fields(summary_header),
         'inputAnalysisSha256': stage['inputAnalysisSha256'],
         'outputAnalysisSha256': stage['outputAnalysisSha256'],
         'inputSummarySha256': stage['inputSummarySha256'],
@@ -5582,12 +5696,12 @@ def _validated_detailed_core_summary(paper, parsed, *, source_text=None):
     tag_contract = contracts.get(tag_record['contractKey'])
     has_tag_stage = isinstance(stages, dict) and tag_record['stageKey'] in stages
     if tag_record['format'] == 'current' or tag_contract is not None or has_tag_stage:
-        expected_contract = (TAG_STAGE_RECORD_CONTRACT if tag_record['format'] == 'current'
+        expected_contract = (tag_contract if tag_record['format'] == 'current'
                              else tag_stage.get('selectionContract') if isinstance(tag_stage, dict) else None)
-        if tag_contract != expected_contract \
+        if (tag_record['format'] == 'current' and not is_tag_stage_record_declaration(tag_contract)) \
+                or tag_contract != expected_contract \
                 or not isinstance(tag_stage, dict) \
-                or tag_stage.get('selectionContract') not in (
-                    LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT) \
+                or not is_supported_tag_selection_contract(tag_stage.get('selectionContract')) \
                 or tag_stage.get('status') not in {'complete', 'not_needed'} \
                 or not re.fullmatch(
                     r'[0-9a-f]{64}', str(tag_stage.get('outputAnalysisSha256') or '')
@@ -5753,7 +5867,7 @@ def render_verified_reader_scoring_notes(paper, parsed=None):
 def _build_api_reader_display_fields(paper, payload=None, *, source_text=None):
     """返回读者文章页面使用的摘要、资源情况和评分说明；未使用对应格式时返回 None。"""
     payload = _api_reader_payload(paper) if payload is None else payload
-    if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
+    if not payload or not reader_formats.is_integrated_contract(payload.get('contract')):
         return None
     from paper_reader_presentation import resolve_reader_decision_display
     parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
@@ -5891,7 +6005,7 @@ def render_paper_tag_hierarchy(parsed):
             if concept is not None and concept['id'] not in {item['id'] for item in selected}:
                 selected.append({'id': concept['id'], 'facet': concept['facet'],
                                  'label': concept['preferredLabel']['zh']})
-        metadata = {'registryVersion': _PAGE_TAG_CATALOG['version'],
+        metadata = {'registryVersion': tag_catalog_identity(_PAGE_TAG_CATALOG),
                     'registrySha256': _PAGE_TAG_CATALOG['registrySha256'], 'concepts': selected}
     return render_tag_hierarchy_markdown(metadata, _PAGE_TAG_CATALOG, base_path=BASE_PATH) if metadata else ''
 
@@ -5929,7 +6043,7 @@ def _current_batch_tag_metadata(papers):
         root_concepts[root['id']] = root
     primary_tasks = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return {
-        'contract': FLAT_TAG_COMPAT_CONTRACT,
+        **public_protocols.record_header(FLAT_TAG_COMPAT_CONTRACT,'paper-tag-flat-tags'),
         'selectionContract': first['selectionContract'],
         'registryVersion': first['registryVersion'],
         'registrySha256': first['registrySha256'],
@@ -6059,7 +6173,8 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
     if tag_metadata:
         tag_frontmatter = (
             f'paper_digest_tags_contract: "{tag_metadata["contract"]}"\n'
-            f'paper_digest_tags_selection_contract: "{tag_metadata["selectionContract"]}"\n'
+            + (f'paper_digest_tags_schema_fingerprint: "{tag_metadata["schemaFingerprint"]}"\n' if 'schemaFingerprint' in tag_metadata else '')
+            + f'paper_digest_tags_selection_contract: "{tag_metadata["selectionContract"]}"\n'
             f'paper_digest_tags_registry_version: "{tag_metadata["registryVersion"]}"\n'
             f'paper_digest_tags_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
             f'paper_digest_tags_concepts: {json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
@@ -6077,7 +6192,8 @@ description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
 paper_digest_pipeline_owned: true
 paper_digest_page_type: index
-paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
+paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_CONTRACT}"
+paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FINGERPRINT}"
 {tag_frontmatter}---
 
 # {conference_title}
@@ -6331,7 +6447,7 @@ def enrich_opensource(parsed_analysis, paper):
 
 
 def _visual_summary_analysis_sha256(paper):
-    """与 visual-summary-state.js 的 analysisSha256 完全一致。"""
+    """与 历史成图只读模块的 analysisSha256 完全一致。"""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     stages = manifest.get('stages') if isinstance(manifest.get('stages'), dict) else {}
     payload = {
@@ -6394,30 +6510,27 @@ def _validate_png_bytes(raw, label):
     return hashlib.sha256(raw).hexdigest()
 
 
-# 发布后视觉提示词的版本登记在 scripts/lib/prompt-text-versions.js 的 visualSummary
-# 与 digestCover 两项里。下面这两个校验器只用于历史 manifest 取证，所以按记录声明的
+# 已退休视觉提示词集中登记在 scripts/lib/prompt-legacy-records.json。
+# 下面这两个校验器只用于历史 manifest 取证，所以按记录声明的
 # promptTextContract 选路径：字段缺失按 v1，没登记的值直接报错，不回退到 v1。
-PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1'
-PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2'
+from prompt_evidence import CURRENT_PROMPT_REGISTRY, LEGACY_PROMPT_RECORDS
+
+PROMPT_TEXT_DEFAULT_CONTRACT = LEGACY_PROMPT_RECORDS['defaultDeclaration']
+_VISUAL_PROMPT_STAGES = {'visual-summary': 'visualSummary', 'digest-cover': 'digestCover'}
 _VISUAL_PROMPT_TEXT_FILES = {
-    'visual-summary': {
-        PROMPT_TEXT_V1_CONTRACT: 'visual-summary.md',
-        PROMPT_TEXT_V2_CONTRACT: 'visual-summary-v2.md',
-    },
-    'digest-cover': {
-        PROMPT_TEXT_V1_CONTRACT: 'digest-cover.md',
-        PROMPT_TEXT_V2_CONTRACT: 'digest-cover-v2.md',
-    },
+    kind: {row['contract']: row['path'].removeprefix('prompts/')
+           for row in LEGACY_PROMPT_RECORDS['stages'] if row['stage'] == stage}
+    for kind, stage in _VISUAL_PROMPT_STAGES.items()
 }
 
 
 def _visual_prompt_path(stage, manifest):
-    contract = manifest.get('promptTextContract') or PROMPT_TEXT_V1_CONTRACT
+    contract = manifest.get('promptTextContract') or PROMPT_TEXT_DEFAULT_CONTRACT
     filename = _VISUAL_PROMPT_TEXT_FILES[stage].get(contract)
     if filename is None:
         raise PublishDataValidationError(
             f'{stage} manifest 声明的提示词版本是 {contract}，'
-            f'但这里只登记了 {PROMPT_TEXT_V1_CONTRACT} 与 {PROMPT_TEXT_V2_CONTRACT}。'
+            '该声明没有登记，不能按当前提示词替代。'
         )
     return PROJECT_ROOT / 'prompts' / filename
 
@@ -6704,11 +6817,11 @@ def _manual_reader_editorial_plan(paper):
     plan = brief.get('editorialPlan') if isinstance(brief.get('editorialPlan'), dict) else {}
     manual_depth = contracts.get('manualDepth')
     if manual_depth not in {
-            MANUAL_DEPTH_CONTRACT_VERSION_V5,
-            MANUAL_DEPTH_CONTRACT_VERSION_V6,
+            MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
+            MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT,
     } or plan.get('version') != 2:
         return None
-    if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5 \
+    if manual_depth == MANUAL_DEPTH_FACT_COVERAGE_CONTRACT \
             and plan.get('readerFormatContract') != TUTORIAL_FORMAT_CONTRACT:
         return None
     if not all(isinstance(plan.get(key), str) and plan[key].strip() for key in ('readerTitle', 'oneSentenceThesis')):
@@ -6716,15 +6829,15 @@ def _manual_reader_editorial_plan(paper):
     return plan
 
 
-def _manual_v6_reader_payload(paper):
+def _signed_manual_reader_payload(paper):
     """返回严格的规范 v6 渲染载荷，绝不回退到别的版本。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     contracts = contracts if isinstance(contracts, dict) else {}
     if not isinstance(contracts, dict) \
-            or contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
+            or contracts.get('manualDepth') != MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT:
         return None
-    payload = validate_manual_v6_payload(paper)
+    payload = validate_signed_manual_payload(paper)
     plan = _manual_reader_editorial_plan(paper)
     if plan is None:
         raise PublishDataValidationError(
@@ -7268,9 +7381,16 @@ def _reader_verified_scientific_pdf_quotes(capability, source_binding, quote_cor
     actual_pdf = _daily_fresh_read_private_file(bound['pdfFile'], '科学计数量来源 PDF', 64 * 1024 * 1024)
     if actual_pdf != bound['pdfBytes']:
         raise PublishDataValidationError('科学计数量来源 PDF 在同次核验中变化。')
-    from reader_sealed_pdf_quote_evidence import extract_pdf_scientific_quantities
-    result = extract_pdf_scientific_quantities(actual_pdf, [proof['quote'] for proof in bound['proofs']])
-    if result.get('contract') != 'reader-sealed-pdf-scientific-quantities-v1' \
+    from reader_pdf_quote_projection import (extract_pdf_scientific_quantities, saved_header, current_header,
+                                             QUOTE, SCIENTIFIC, SCHEDULE)
+    header = saved_header(bound['document'], QUOTE)
+    current = public_protocols.is_current_header(header, QUOTE)
+    result = extract_pdf_scientific_quantities(actual_pdf, [proof['quote'] for proof in bound['proofs']], header)
+    scientific_header = current_header(SCIENTIFIC) if current else public_protocols.historical_header(
+        SCIENTIFIC, 'font-and-position-authenticated-atoms')
+    schedule = current_header(SCHEDULE) if current else public_protocols.historical_contract(
+        SCHEDULE, 'complete-three-stage-learning-rates')
+    if saved_header(result, SCIENTIFIC) != scientific_header \
             or result.get('document') != bound['document'] or len(result.get('results', [])) != len(bound['proofs']):
         raise PublishDataValidationError('科学计数量提取未保留原 PDF 引文来源。')
     atoms = {}
@@ -7280,7 +7400,7 @@ def _reader_verified_scientific_pdf_quotes(capability, source_binding, quote_cor
         if original['quote'] not in quote_corpus:
             raise PublishDataValidationError('科学计数量来源引文不属于本表。')
         quantities = response.get('scientificQuantities', [])
-        if quantities and response.get('family') != 'adamw-three-stage-learning-rates-v1':
+        if quantities and response.get('family') != schedule:
             raise PublishDataValidationError('科学计数量不属于获准的完整 AdamW 三阶段句。')
         for atom in quantities:
             role = atom.get('role')
@@ -7953,7 +8073,7 @@ def _verify_reader_paired_dom_bindings(paper):
                 if isinstance(b, dict) and b.get('sourceType') == 'artifact_table'
                 and not b.get('pdfCellConfirmation') and not b.get('sealedPdfTableEvidence')]
     proof = paper.get('freshRewriteProvenance') or {}
-    if not bindings or proof.get('contract') != 'fresh-source-analysis-v1':
+    if not bindings or not is_fresh_source_provenance(proof):
         return
     run_id = proof.get('runId')
     if proof != (paper.get('analysisManifest') or {}).get('freshRewriteProvenance') or not isinstance(run_id, str) \
@@ -8031,7 +8151,7 @@ def _verify_reader_scientific_dom_bindings(paper):
         return
     proof = paper.get('freshRewriteProvenance') or {}
     run_id = proof.get('runId')
-    if proof.get('contract') != 'fresh-source-analysis-v1' or not isinstance(run_id, str) or not re.fullmatch(
+    if not is_fresh_source_provenance(proof) or not isinstance(run_id, str) or not re.fullmatch(
             r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
         raise PublishDataValidationError('科学计数显示缺少真实封存来源。')
     run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
@@ -8072,7 +8192,17 @@ def _verify_reader_scientific_dom_bindings(paper):
 
 def _verify_reader_sealed_pdf_grid_bindings(paper):
     """Replay the independent PDF protocol against all four official sealed sources."""
-    from reader_sealed_pdf_table_evidence import CONTRACT, prove_pdf_bytes
+    source = _read_reader_sealed_pdf_grid_source(paper)
+    if source is None:
+        return {}
+    marked, source_dir, details, paper_id = source
+    _validate_current_model_text_reuse_for_publish(paper, details, paper_id,
+                                                 sealed_bundle_root=source_dir.parent.parent)
+    return _replay_reader_sealed_pdf_grid(paper, marked, source_dir)
+
+
+def _read_reader_sealed_pdf_grid_source(paper):
+    """Verify all source files, without asserting any analysis completed."""
     bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
     if any(isinstance(binding, dict) and 'sealedPdfTableSelection' in binding
            and ('sealedPdfTableEvidence' not in binding or 'pdfCellConfirmation' in binding)
@@ -8080,7 +8210,7 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
         raise PublishDataValidationError('PDF 选择投影必须保留独立完整原表证明。')
     marked = [binding for binding in bindings if 'sealedPdfTableEvidence' in binding]
     if not marked:
-        return {}
+        return None
     proof = paper.get('freshRewriteProvenance') or {}
     run_id = proof.get('runId')
     if not isinstance(run_id, str) or not re.fullmatch(
@@ -8090,8 +8220,14 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
     run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
     _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, '独立 PDF 来源根目录')
     _daily_fresh_safe_directory(run_dir, '独立 PDF 来源运行目录')
-    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    _, details = _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper)
     source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
+    return marked, source_dir, details, paper_id
+
+
+def _replay_reader_sealed_pdf_grid(paper, marked, source_dir):
+    from reader_sealed_pdf_table_evidence import prove_pdf_bytes
+    from reader_proof_format import grid_header
     _, runtime = _daily_fresh_read_canonical_json(source_dir / 'source-runtime.json',
         '独立 PDF 表格来源元数据', 64 * 1024 * 1024)
     source = paper['analysisManifest']['sourceAcquisition']
@@ -8111,11 +8247,14 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
         saved = binding['sealedPdfTableEvidence']
         tables = [table for table in artifacts['tables']
                   if table.get('ordinal') == binding.get('sourceTableOrdinal')]
-        if (len(tables) != 1 or not isinstance(saved, dict) or saved.get('contract') != CONTRACT
+        if (len(tables) != 1 or not isinstance(saved, dict)
+                or not public_protocols.has_valid_header(saved, 'reader-sealed-pdf-table-grid')
                 or binding.get('sourceTableDomSha256') != tables[0].get('sourceDomSha256')):
             raise PublishDataValidationError('独立 PDF 表格来源、协议或 DOM 身份不唯一。')
         table = tables[0]
-        replayed = prove_pdf_bytes(pdf_bytes, [table])[0]
+        declared_header = grid_header(public_protocols.record_header(saved['contract'],
+            'reader-sealed-pdf-table-grid', saved.get('schemaFingerprint')))
+        replayed = prove_pdf_bytes(pdf_bytes, [table], declared_header)[0]
         if not replayed.get('eligible') or replayed.get('evidence') != saved:
             raise PublishDataValidationError('独立 PDF 表格证明不能由封存原文件完整重放。')
         matrix = table['matrix']
@@ -8142,7 +8281,9 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
             except (ValueError, TypeError):
                 accepted = None
             if (replay.returncode != 0 or replay.timed_out or replay.output_truncated
-                    or accepted != {'contract': 'reader-pdf-selection-replay-result-v1', 'valid': True}):
+                    or not public_protocols.has_valid_header(accepted, 'reader-pdf-selection-replay-result')
+                    or accepted != {**public_protocols.record_header(accepted['contract'],
+                        'reader-pdf-selection-replay-result', accepted.get('schemaFingerprint')), 'valid': True}):
                 raise PublishDataValidationError('PDF 选择投影未通过正常来源编译程序重放。')
         if not selected and len(cells) != sum(map(len, matrix)):
             raise PublishDataValidationError('独立 PDF 表格必须保留完整原表。')
@@ -8169,7 +8310,7 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
 
 def _verify_reader_sealed_pdf_quote_bindings(paper, *, scientific_capabilities=None):
     """Verify separate PDF quotations by re-extracting the official sealed file."""
-    from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document, quote_evidence
+    from reader_pdf_quote_projection import extract_pdf_quote_document, quote_evidence, saved_header, QUOTE
     bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
     marked = [binding for binding in bindings
               if isinstance(binding, dict) and 'sealedPdfQuoteEvidence' in binding]
@@ -8197,7 +8338,7 @@ def _verify_reader_sealed_pdf_quote_bindings(paper, *, scientific_capabilities=N
         raise PublishDataValidationError('独立 PDF 引文输入与封存结构化来源不一致。')
     pdf_file = source_dir / 'source.pdf'
     pdf_bytes = _daily_fresh_read_private_file(pdf_file, '独立 PDF 引文来源文件', 64 * 1024 * 1024)
-    document = extract_pdf_quote_document(pdf_bytes)
+    document = header = None
     if sum(len(binding.get('sealedPdfQuoteEvidence', []))
            for binding in marked if isinstance(binding.get('sealedPdfQuoteEvidence'), list)) > 64:
         raise PublishDataValidationError('独立 PDF 引文总数超过来源核验上限。')
@@ -8220,8 +8361,12 @@ def _verify_reader_sealed_pdf_quote_bindings(paper, *, scientific_capabilities=N
                 != _javascript_string_sha256(item['quote']) for item in html_quotes):
             raise PublishDataValidationError('混合来源的 HTML 引文未逐字对应封存全文。')
         for saved in quotes:
-            if not isinstance(saved, dict) or not isinstance(saved.get('quote'), str) \
-                    or quote_evidence(document, saved['quote']) != saved:
+            if not isinstance(saved, dict) or not isinstance(saved.get('quote'), str):
+                raise PublishDataValidationError('独立 PDF 引文格式不完整。')
+            declared = saved_header(saved, QUOTE)
+            if document is None:
+                header, document = declared, extract_pdf_quote_document(pdf_bytes, declared)
+            if declared != header or quote_evidence(document, saved['quote']) != saved:
                 raise PublishDataValidationError('独立 PDF 引文不能由封存原文件完整重放。')
             actual_quotes.append(saved['quote'])
         result[index] = actual_quotes
@@ -8578,7 +8723,7 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
 
 def _reader_dom_column_unit_coverage(paper, rendered, binding):
     proof = paper.get('freshRewriteProvenance') or {}
-    if proof.get('contract') != 'fresh-source-analysis-v1':
+    if not is_fresh_source_provenance(proof):
         return set()
     run_id = proof.get('runId')
     if not isinstance(run_id, str) or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
@@ -8589,7 +8734,7 @@ def _reader_dom_column_unit_coverage(paper, rendered, binding):
     _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, 'DOM列单位来源根目录')
     _daily_fresh_safe_directory(run_dir, 'DOM列单位运行目录')
     _, run = _daily_fresh_read_canonical_json(run_dir / 'run.json', 'DOM列单位运行清单', 64 * 1024 * 1024)
-    if run.get('contract') != 'daily-fresh-source-run-v1' or run.get('runId') != run_id:
+    if not is_daily_source_run(run) or run.get('runId') != run_id:
         return set()
     paper_id = _daily_fresh_normalized_paper_id(paper)
     _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
@@ -8707,9 +8852,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
         raise PublishDataValidationError('读者文章的编辑计划、阶段记录、来源记录或正文缺失，或格式无效。')
     if re.search(r'\[\[FORMULA_\d+\]\]', article):
         raise PublishDataValidationError('读者文章中仍有未对应原文公式的占位符。')
-    if contracts.get('apiReaderSourceBindings') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
-            or plan.get('sourceBindingsContract') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
-            or stage.get('sourceBindingsContractVersion') != LLM_API_READER_SOURCE_BINDING_CONTRACT:
+    if not reader_formats.validate_bindings(contracts, stage, plan):
         raise PublishDataValidationError('读者文章的表格与公式来源记录未采用 v4 规则。')
 
     table_bindings = plan.get('tableBindings')
@@ -8983,7 +9126,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
     if publication_table_evidence is None or paper.get('source') != 'conference':
         _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, paper.get('sourceSha256'))
     return {
-        'contract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
+        **reader_formats.source_header(plan),
         'sha256': bindings_sha,
         'tableCount': len(table_bindings),
         'formulaCount': len(formula_bindings),
@@ -9002,9 +9145,12 @@ def _validate_api_reader_author_identity(paper):
             'authors', 'sourceDomSha256', 'identity', 'identitySha256'}:
         raise PublishDataValidationError('读者文章的作者记录格式无效、缺少必要字段，或含有不允许的字段。')
     identity = payload.get('identity')
-    if not isinstance(identity, dict) or set(identity) != {
-            'contract', 'sourceDomSha256', 'sourceTextSha256',
-            'metadataSha256', 'authors'}:
+    try:
+        identity_header = reader_formats.identity_header(identity, 'authors')
+    except (ValueError, TypeError) as error:
+        raise PublishDataValidationError('读者文章的作者来源格式头不符合要求。') from error
+    if not isinstance(identity, dict) or set(identity) != set(identity_header) | {
+            'sourceDomSha256', 'sourceTextSha256', 'metadataSha256', 'authors'}:
         raise PublishDataValidationError('读者文章的作者来源记录格式无效、缺少必要字段，或含有不允许的字段。')
     identity_sha = _reader_record_sha256(identity, 'API reader 作者来源记录')
     source_sha = paper.get('sourceSha256')
@@ -9012,11 +9158,7 @@ def _validate_api_reader_author_identity(paper):
         paper.get('authors') if isinstance(paper.get('authors'), list) else [],
         'API reader 作者元数据',
     )
-    if identity.get('contract') != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
-            or contracts.get('apiReaderAuthorIdentity') \
-            != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
-            or stage.get('readerAuthorIdentityContractVersion') \
-            != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
+    if not reader_formats.identity_binding(paper, 'authors') \
             or payload.get('identitySha256') != identity_sha \
             or stage.get('readerAuthorIdentitySha256') != identity_sha \
             or identity.get('sourceTextSha256') != source_sha \
@@ -9089,7 +9231,7 @@ def _validate_api_reader_author_identity(paper):
     if stage.get('readerAuthorsSha256') != _reader_record_sha256(payload, 'API reader 作者记录'):
         raise PublishDataValidationError('读者文章作者记录的 SHA 与阶段记录不一致。')
     return {
-        'contract': LLM_API_READER_AUTHOR_IDENTITY_CONTRACT,
+        **identity_header,
         'sha256': identity_sha,
         'payloadSha256': _reader_record_sha256(payload, 'API reader 作者记录'),
         'count': len(public_authors),
@@ -9118,18 +9260,17 @@ def _validate_api_reader_resource_identity(paper):
     open_stage = open_stage if isinstance(open_stage, dict) else {}
     demo_stage = stages.get('demoLinkScan') if isinstance(stages, dict) else None
     payload = paper.get('apiReaderResources') if isinstance(paper, dict) else None
-    if not isinstance(payload, dict) or set(payload) != {
-            'contract', 'sourceTextSha256', 'resources', 'identitySha256'}:
+    try:
+        resource_header = reader_formats.identity_header(payload, 'resources')
+    except (ValueError, TypeError) as error:
+        raise PublishDataValidationError('读者文章的资源来源格式头不符合要求。') from error
+    if not isinstance(payload, dict) or set(payload) != set(resource_header) | {
+            'sourceTextSha256', 'resources', 'identitySha256'}:
         raise PublishDataValidationError('读者文章的资源记录格式无效、缺少必要字段，或含有不允许的字段。')
     identity = {key: value for key, value in payload.items() if key != 'identitySha256'}
     identity_sha = _stable_json_sha256(identity)
-    if payload.get('contract') != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
-            or contracts.get('apiReaderResourceIdentity') \
-            != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
-            or reader_stage.get('resourceIdentityContractVersion') \
-            != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
-            or open_stage.get('resourceEvidenceContract') \
-            != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
+    if not reader_formats.identity_binding(paper, 'resources') \
+            or not reader_formats.resource_source_binding(open_stage, payload) \
             or payload.get('identitySha256') != identity_sha \
             or reader_stage.get('resourceIdentitySha256') != identity_sha \
             or open_stage.get('resourceEvidenceSha256') != identity_sha \
@@ -9297,7 +9438,7 @@ def _validate_api_reader_resource_identity(paper):
     if availability_summary not in str(parsed_analysis.get('opensource') or ''):
         raise PublishDataValidationError('开源说明中缺少与资源记录一致的可达性摘要。')
     return {
-        'contract': LLM_API_READER_RESOURCE_IDENTITY_CONTRACT,
+        **resource_header,
         'sha256': identity_sha,
         'count': len(resources),
         'availableTypes': sorted(available_types),
@@ -9340,10 +9481,14 @@ def _validate_local_source_scoring_replay(paper):
     proof = response.get('localSourceCorrection')
     locator = paper.get('conferenceSourceCorrection') or {}
     stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('scoringAudit') or {}
-    if not isinstance(proof, dict) or proof.get('contract') != 'conference-source-correction-verification-v1' \
+    from protocol_codec import has_valid_header
+    from conference_source_correction_format import locator_family
+    if not locator_family(locator) or not has_valid_header(proof, 'conference-source-correction-verification') \
             or proof.get('verified') is not True or proof.get('newApiRequests') != 0 \
             or proof.get('executionId') != locator.get('executionId') \
             or proof.get('sourceCorrectionContract') != locator.get('contract') \
+            or ('sourceCorrectionSchemaFingerprint' in proof) != ('schemaFingerprint' in locator) \
+            or proof.get('sourceCorrectionSchemaFingerprint') != locator.get('schemaFingerprint') \
             or proof.get('scopeKind') != {'deterministic_source_resource_audit': 'source_resource_correction', \
                                         'deterministic_source_core_audit': 'source_core_correction'}.get(stage.get('executionKind')) \
             or proof.get('presentedPaperSha256') != _manual_hash(paper) \
@@ -9584,14 +9729,13 @@ def _api_reader_payload(paper):
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     reader_contract = contracts.get('apiReaderArticle')
-    if reader_contract not in LLM_API_READER_LEGACY_CONTRACTS | {
-            LLM_API_READER_CONTRACT}:
+    if not reader_formats.is_known_contract(reader_contract):
         return None
     declared_figure_persistence = contracts.get('apiReaderFigurePersistence')
     if declared_figure_persistence not in (None, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT):
         raise PublishDataValidationError('读者文章中的图片保存方式不符合要求。')
     if declared_figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT \
-            and reader_contract not in LLM_API_READER_STRUCTURED_CONTRACTS:
+            and not reader_formats.is_structured_contract(reader_contract):
         raise PublishDataValidationError('临时使用图片的方式仅适用于采用结构化记录的读者文章。')
     article = paper.get('apiReaderArticle')
     plan = paper.get('apiReaderPlan')
@@ -9609,26 +9753,29 @@ def _api_reader_payload(paper):
             or stage.get('articleSha256') != article_sha
             or stage.get('planSha256') != plan_sha):
         raise PublishDataValidationError('保存的读者正文或编辑计划 SHA 与论文记录、阶段记录不一致，或读者文章阶段尚未完成。')
-    plan_version = plan.get('version')
-    expected_plan_versions = {
-        'beginner-researcher-v1': {1},
-        'beginner-researcher-v2': {1, 2},
-        LLM_API_READER_CONTRACT: {3},
-    }
-    if plan_version not in expected_plan_versions.get(reader_contract, set()) \
-            or plan.get('contract') != reader_contract:
-        raise PublishDataValidationError('读者文章的编辑计划版本或规则与当前文章格式不匹配。')
+    try:
+        layout = reader_formats.publication_layout(plan)
+    except (ValueError, TypeError) as error:
+        raise PublishDataValidationError('读者文章的编辑计划格式未登记或原始头不一致。') from error
+    if plan.get('contract') != reader_contract:
+        raise PublishDataValidationError('编辑计划与文章规则不匹配。')
+    integrated = layout['integrated']
+    if 'readerProtocols' in stage:
+        required_roles = ('parser', 'assembler', 'tables', 'figures', 'qualityMetrics', 'sourceBindings', 'sourceRepair')
+        if not all(reader_formats.stage_matches(stage, role) for role in required_roles) \
+                or (stage.get('qualityMetrics') or {}).get('blockingIssueCount') != 0:
+            raise PublishDataValidationError('读者文章的完整解析、来源或质量格式记录不一致。')
     source_binding_proof = (
         _validate_api_reader_source_bindings(paper)
-        if reader_contract == LLM_API_READER_CONTRACT else None
+        if integrated else None
     )
     author_identity_proof = (
         _validate_api_reader_author_identity(paper)
-        if reader_contract == LLM_API_READER_CONTRACT else None
+        if integrated else None
     )
     resource_identity_proof = (
         _validate_api_reader_resource_identity(paper)
-        if reader_contract == LLM_API_READER_CONTRACT else None
+        if integrated else None
     )
     if not isinstance(plan.get('readerTitle'), str) \
             or not isinstance(plan.get('oneSentenceThesis'), str):
@@ -9642,14 +9789,12 @@ def _api_reader_payload(paper):
     required_kinds = ({
         'background', 'related_work', 'method_overview', 'training',
         'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis',
-    } if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS else {
+    } if reader_formats.is_structured_contract(reader_contract) else {
         'background', 'related_work', 'method_overview', 'experiment_setup',
         'result', 'limitation', 'synthesis',
     })
-    minimum_sections = 12 if plan_version == 3 else 10 if plan_version == 2 else (
-        8 if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS else 6
-    )
-    maximum_sections = 18 if plan_version == 3 else 14 if plan_version == 2 else 12
+    minimum_sections = layout['minimumSections']
+    maximum_sections = layout['maximumSections']
     if not isinstance(plan_sections, list) \
             or not minimum_sections <= len(plan_sections) <= maximum_sections:
         raise PublishDataValidationError(
@@ -9676,17 +9821,17 @@ def _api_reader_payload(paper):
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
         raise PublishDataValidationError('编辑计划与正文的小节标题或排列顺序不一致，或正文存在重复标题。')
-    if plan_version in {2, 3}:
+    if layout['rich']:
         concept_bridges = plan.get('conceptBridges')
         figure_placements = plan.get('figurePlacements')
-        minimum_bridges = 4 if plan_version == 3 else 3
-        maximum_bridges = 10 if plan_version == 3 else 8
+        minimum_bridges = layout['minimumBridges']
+        maximum_bridges = layout['maximumBridges']
         if not isinstance(concept_bridges, list) \
                 or not minimum_bridges <= len(concept_bridges) <= maximum_bridges \
                 or not isinstance(figure_placements, list) \
                 or len(figure_placements) > 4:
             raise PublishDataValidationError(
-                f'v{plan_version} 编辑计划中的术语说明或图片位置记录缺失、格式无效，或数量不符合要求。'
+                '编辑计划中的术语说明或图片位置记录缺失、格式无效，或数量不符合要求。'
             )
         for index, bridge in enumerate(concept_bridges, 1):
             if not isinstance(bridge, dict) or set(bridge) != {
@@ -9703,14 +9848,14 @@ def _api_reader_payload(paper):
                     or not _api_reader_visible_phrase(article, bridge['explanation']) \
                     or bridge['marker'] in article:
                 raise PublishDataValidationError(
-                    f'v{plan_version} 术语说明的字段、适用小节或占位标记不符合要求，或说明内容未完整出现在正文中。'
+                    '术语说明的字段、适用小节或占位标记不符合要求，或说明内容未完整出现在正文中。'
                 )
         seen_placement_ordinals = set()
         for placement in figure_placements:
             expected_placement_fields = {
                     'figureOrdinal', 'targetKind', 'marker',
                     'leadQuote', 'explanationQuote'}
-            if plan_version == 3:
+            if integrated:
                 expected_placement_fields.add('focusPoints')
             if not isinstance(placement, dict) \
                     or set(placement) != expected_placement_fields \
@@ -9723,7 +9868,7 @@ def _api_reader_payload(paper):
                     or not isinstance(placement.get('explanationQuote'), str) \
                     or len(placement['leadQuote'].strip()) < 30 \
                     or len(placement['explanationQuote'].strip()) < 45 \
-                    or (plan_version == 3 and (
+                    or (integrated and (
                         not isinstance(placement.get('focusPoints'), list)
                         or not 2 <= len(placement['focusPoints']) <= 4
                         # 原始观察点最多 120 个字符；排版规范化可能在中文与英文之间补空格。
@@ -9734,14 +9879,14 @@ def _api_reader_payload(paper):
                                    for item in placement['focusPoints'])
                     )):
                 raise PublishDataValidationError(
-                    f'v{plan_version} 图片位置计划的字段、序号、适用小节、占位标记、导读、解释或观察点不符合要求。'
+                    '图片位置计划的字段、序号、适用小节、占位标记、导读、解释或观察点不符合要求。'
                 )
             if not _api_reader_visible_phrase(article, placement['leadQuote']) \
                     or not _api_reader_visible_phrase(article, placement['explanationQuote']):
                 raise PublishDataValidationError('图片导读或解释未完整出现在可见正文中。')
             seen_placement_ordinals.add(placement['figureOrdinal'])
     figures = paper.get('apiReaderFigures')
-    if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS:
+    if reader_formats.is_structured_contract(reader_contract):
         if not isinstance(figures, list):
             raise PublishDataValidationError('读者文章缺少结构化的图片记录列表。')
         figures_sha = _reader_record_sha256(figures, 'API reader 图片记录')
@@ -9775,26 +9920,26 @@ def _api_reader_payload(paper):
                 expected_figure_fields.add('assetSha256')
                 if not ephemeral_figures:
                     raise PublishDataValidationError('内联论文图只能使用当前调用的临时像素记录。')
-            if plan_version in {2, 3}:
+            if layout['rich']:
                 expected_figure_fields.update({
                     'marker', 'leadQuote', 'explanationQuote',
                 })
-            if plan_version == 3:
+            if integrated:
                 expected_figure_fields.add('focusPoints')
             if not isinstance(item, dict) or set(item) != expected_figure_fields:
                 raise PublishDataValidationError('读者文章的图片记录格式无效、缺少必要字段，或含有不允许的字段。')
-            if plan_version in {2, 3}:
+            if layout['rich']:
                 placement = next((entry for entry in plan['figurePlacements']
                                   if entry['figureOrdinal'] == item['ordinal']), None)
                 binding_keys = (
                     'marker', 'leadQuote', 'explanationQuote', 'targetKind',
-                    *(() if plan_version == 2 else ('focusPoints',)),
+                    *(() if not integrated else ('focusPoints',)),
                 )
                 if placement is None or any(
                         item.get(key) != placement.get(key)
                         for key in binding_keys):
                     raise PublishDataValidationError(
-                        f'v{plan_version} 图片记录缺少对应的位置计划，或图片内容字段与计划不一致。'
+                        '图片记录缺少对应的位置计划，或图片内容字段与计划不一致。'
                     )
                 matching_headings = {
                     section['heading'] for section in plan_sections
@@ -9802,9 +9947,9 @@ def _api_reader_payload(paper):
                 }
                 if item.get('targetHeading') not in matching_headings:
                     raise PublishDataValidationError(
-                        f'v{plan_version} 图片的目标标题未对应章节计划中同类型的小节。'
+                        '图片的目标标题未对应章节计划中同类型的小节。'
                     )
-            if plan_version == 3:
+            if integrated:
                 expected_focus = '> **看图路径：** ' + '；'.join(
                     f'{index}. {value}'
                     for index, value in enumerate(item['focusPoints'], 1)
@@ -9936,7 +10081,7 @@ def _api_reader_payload(paper):
         reader_authors = paper.get('apiReaderAuthors')
         expected_author_fields = (
             {'authors', 'sourceDomSha256', 'identity', 'identitySha256'}
-            if reader_contract == LLM_API_READER_CONTRACT else
+            if integrated else
             {'authors', 'sourceDomSha256'}
         )
         if not isinstance(reader_authors, dict) \
@@ -9963,8 +10108,8 @@ def _api_reader_payload(paper):
         figure_persistence = None
     rendered_article = _apply_reader_display_fixes(
         _add_reader_term_heading_spaces(article, plan)
-    ) if reader_contract == LLM_API_READER_CONTRACT else article
-    if reader_contract == LLM_API_READER_CONTRACT:
+    ) if integrated else article
+    if integrated:
         rendered_article = _normalize_api_reader_display_artifacts(rendered_article)
         rendered_article = _project_bound_source_cell_math_display(rendered_article, plan)
     if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
@@ -9985,6 +10130,8 @@ def _api_reader_payload(paper):
                 + asset['derivedAssetProof']['displayLabel'], 1)
     return {
         'contract': reader_contract,
+        **({'schemaFingerprint': plan['schemaFingerprint']}
+           if 'schemaFingerprint' in plan else {}),
         'plan': plan,
         'article': article,
         'renderedArticle': rendered_article,
@@ -10007,7 +10154,7 @@ def _api_reader_page_binding_issue(content, paper):
     manifest = paper.get('analysisManifest')
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     if not isinstance(contracts, dict) \
-            or contracts.get('apiReaderArticle') != LLM_API_READER_CONTRACT:
+            or not reader_formats.is_integrated_contract(contracts.get('apiReaderArticle')):
         return None
     try:
         payload = _api_reader_payload(paper)
@@ -10111,8 +10258,11 @@ def _api_reader_page_binding_issue(content, paper):
         if actual_authors != expected_authors:
             raise PublishDataValidationError('页面中的作者和机构与已绑定来源的作者记录不一致。')
         reader_display_fields = _build_api_reader_display_fields(paper, payload)
-        if frontmatter_value('paper_digest_api_reader_decision_projection', r'"([^"]+)"') \
-                != API_READER_DECISION_PROJECTION_CONTRACT:
+        projection_header = {'contract': frontmatter_value('paper_digest_api_reader_decision_projection', r'"([^"]+)"')}
+        projection_fp = frontmatter_value('paper_digest_api_reader_decision_projection_schema_fingerprint', r'"([^"]+)"')
+        if projection_fp is not None:
+            projection_header['schemaFingerprint'] = projection_fp
+        if not public_protocols.has_valid_header(projection_header, 'api-reader-decision-projection'):
             raise PublishDataValidationError('页面缺少有效的 Reader 展示字段标记 paper_digest_api_reader_decision_projection。')
         if h2_section('📌 核心摘要') != sanitize_markdown_for_publish(reader_display_fields['summary']).strip():
             raise PublishDataValidationError('页面核心摘要与当前 Reader 记录中应展示的摘要不一致。')
@@ -10170,7 +10320,7 @@ def _normalize_fresh_article(value):
     return _normalize_fresh_article_impl(value)
 
 
-def _validate_manual_v5_fresh_authoring(paper, article, date_str):
+def _validate_manual_fresh_authoring(paper, article, date_str):
     """将项目路径传给 Manual 核验模块，检查新写作正文及其输入文件。"""
     return _verify_manual_v5_fresh_authoring(
         paper, article, date_str,
@@ -10178,7 +10328,7 @@ def _validate_manual_v5_fresh_authoring(paper, article, date_str):
     )
 
 
-def _validate_manual_v5_tutorial_payload(paper, article, date_str):
+def _validate_manual_tutorial_payload(paper, article, date_str):
     """将项目路径传给 Manual 核验模块，检查教程质量记录和图表计划。"""
     return _verify_manual_v5_tutorial_payload(
         paper, article, date_str, current_dir=CURRENT_DIR,
@@ -10190,10 +10340,10 @@ def _manual_reader_article(paper, plan, date_str=None):
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     if isinstance(contracts, dict) \
-            and contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V6:
+            and contracts.get('manualDepth') == MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT:
         # v6 必须通过完整材料检查，缺失或不一致时直接拒绝。
         # 本分支不能像历史 v5 一样返回 None 后改用旧版页面布局。
-        return validate_manual_v6_payload(paper)['article']
+        return validate_signed_manual_payload(paper)['article']
     if not plan or plan.get('version') != 2:
         return None
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
@@ -10206,11 +10356,11 @@ def _manual_reader_article(paper, plan, date_str=None):
     if actual_sha != expected_sha:
         return None
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
-    if contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V5:
+    if contracts.get('manualDepth') == MANUAL_DEPTH_FACT_COVERAGE_CONTRACT:
         if not date_str:
             raise PublishDataValidationError('Manual v5 fresh publisher 缺少目标发布日期')
-        _validate_manual_v5_fresh_authoring(paper, article, date_str)
-        _validate_manual_v5_tutorial_payload(paper, article, date_str)
+        _validate_manual_fresh_authoring(paper, article, date_str)
+        _validate_manual_tutorial_payload(paper, article, date_str)
     return article.strip()
 
 
@@ -10302,27 +10452,27 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     manual_depth = contracts.get('manualDepth')
-    v6_payload = _manual_v6_reader_payload(paper)
+    signed_manual_payload = _signed_manual_reader_payload(paper)
     api_reader_payload = _api_reader_payload(paper)
     manual_depth_marker = (
         f'paper_digest_manual_depth: "{manual_depth}"\n'
         if manual_depth in {
-            MANUAL_DEPTH_CONTRACT_VERSION_V4,
-            MANUAL_DEPTH_CONTRACT_VERSION_V5,
-            MANUAL_DEPTH_CONTRACT_VERSION_V6,
+            MANUAL_DEPTH_READER_QUALITY_CONTRACT,
+            MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
+            MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT,
         } else ''
     )
     v6_marker = ''
-    if v6_payload:
-        manual_v6_bindings = v6_payload['provenance']
+    if signed_manual_payload:
+        signed_manual_bindings = signed_manual_payload['provenance']
         v6_marker = (
             'paper_digest_v6_runtime_mode: "production"\n'
-            f'paper_digest_reader_longform: "{MANUAL_LONGFORM_CONTRACT_VERSION_V2}"\n'
-            f'paper_digest_reader_longform_sha256: "{manual_v6_bindings["readerLongformSha256"]}"\n'
-            f'paper_digest_reader_article_sha256: "{v6_payload["articleSha256"]}"\n'
-            f'paper_digest_artifact_index_sha256: "{v6_payload["artifactIndexSha256"]}"\n'
+            f'paper_digest_reader_longform: "{MANUAL_SIGNED_LONGFORM_CONTRACT}"\n'
+            f'paper_digest_reader_longform_sha256: "{signed_manual_bindings["readerLongformSha256"]}"\n'
+            f'paper_digest_reader_article_sha256: "{signed_manual_payload["articleSha256"]}"\n'
+            f'paper_digest_artifact_index_sha256: "{signed_manual_payload["artifactIndexSha256"]}"\n'
             + ''.join(
-                f'paper_digest_v6_{marker}: "{manual_v6_bindings[field]}"\n'
+                f'paper_digest_v6_{marker}: "{signed_manual_bindings[field]}"\n'
                 for marker, field in (
                     ('spec_root_sha256', 'specRootSha256'),
                     ('paper_spec_sha256', 'paperSpecSha256'),
@@ -10336,11 +10486,16 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
         )
     api_reader_marker = ''
     if api_reader_payload:
+        def reader_schema_marker(payload, field):
+            return (f'{field}: "{payload["schemaFingerprint"]}"\n'
+                    if isinstance(payload, dict) and 'schemaFingerprint' in payload else '')
+
         source_binding_proof = api_reader_payload.get('sourceBindingProof')
         author_identity_proof = api_reader_payload.get('authorIdentityProof')
         resource_identity_proof = api_reader_payload.get('resourceIdentityProof')
         source_binding_marker = (
             f'paper_digest_api_reader_source_binding_contract: "{source_binding_proof["contract"]}"\n'
+            f'{reader_schema_marker(source_binding_proof, "paper_digest_api_reader_source_binding_schema_fingerprint")}'
             f'paper_digest_api_reader_source_bindings_sha256: "{source_binding_proof["sha256"]}"\n'
             f'paper_digest_api_reader_source_table_count: {source_binding_proof["tableCount"]}\n'
             f'paper_digest_api_reader_source_formula_count: {source_binding_proof["formulaCount"]}\n'
@@ -10349,9 +10504,11 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
         )
         identity_marker = (
             f'paper_digest_api_reader_author_identity_contract: "{author_identity_proof["contract"]}"\n'
+            f'{reader_schema_marker(author_identity_proof, "paper_digest_api_reader_author_identity_schema_fingerprint")}'
             f'paper_digest_api_reader_author_identity_sha256: "{author_identity_proof["sha256"]}"\n'
             f'paper_digest_api_reader_author_count: {author_identity_proof["count"]}\n'
             f'paper_digest_api_reader_resource_identity_contract: "{resource_identity_proof["contract"]}"\n'
+            f'{reader_schema_marker(resource_identity_proof, "paper_digest_api_reader_resource_identity_schema_fingerprint")}'
             f'paper_digest_api_reader_resource_identity_sha256: "{resource_identity_proof["sha256"]}"\n'
             f'paper_digest_api_reader_resource_count: {resource_identity_proof["count"]}\n'
             if isinstance(author_identity_proof, dict)
@@ -10359,6 +10516,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
         )
         api_reader_marker = (
             f'paper_digest_api_reader_contract: "{api_reader_payload["contract"]}"\n'
+            f'{reader_schema_marker(api_reader_payload, "paper_digest_api_reader_schema_fingerprint")}'
             f'paper_digest_api_reader_article_sha256: "{api_reader_payload["articleSha256"]}"\n'
             f'paper_digest_api_reader_plan_sha256: "{api_reader_payload["planSha256"]}"\n'
             f'{source_binding_marker}'
@@ -10369,26 +10527,27 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
                 'paper_digest_api_reader_figure_persistence: '
                 f'"{EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT}"\n'
             )
-        if api_reader_payload['contract'] == LLM_API_READER_CONTRACT:
+        if reader_formats.is_integrated_contract(api_reader_payload['contract']):
             api_reader_marker += (
                 f'paper_digest_api_reader_decision_projection: "{API_READER_DECISION_PROJECTION_CONTRACT}"\n'
+                f'paper_digest_api_reader_decision_projection_schema_fingerprint: "{API_READER_DECISION_PROJECTION_SCHEMA_FINGERPRINT}"\n'
             )
     reader_plan = (
-        v6_payload['plan'] if v6_payload
+        signed_manual_payload['plan'] if signed_manual_payload
         else api_reader_payload['plan'] if api_reader_payload
         else _manual_reader_editorial_plan(paper)
     )
     reader_article = (
-        v6_payload['article'] if v6_payload
+        signed_manual_payload['article'] if signed_manual_payload
         else api_reader_payload['renderedArticle'] if api_reader_payload
         else _manual_reader_article(paper, reader_plan, date_str)
     )
-    if api_reader_payload and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT:
+    if api_reader_payload and reader_formats.is_integrated_contract(api_reader_payload.get('contract')):
         reader_article = _normalize_api_reader_display_artifacts(reader_article)
     reader_first = reader_plan is not None and reader_article is not None
     api_reader_v2 = bool(
         api_reader_payload
-        and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
+        and reader_formats.is_structured_contract(api_reader_payload.get('contract'))
     )
     reader_display_fields = _build_api_reader_display_fields(paper, api_reader_payload, source_text=source_text)
     # 新版 Manual 页面绝不能从旧的固定
@@ -10396,8 +10555,8 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
     # 都是硬失败：悄悄回退会把一篇旧分析变成
     # 新生成的博客页面，绕过重新撰写。
     if manual_depth in {
-            MANUAL_DEPTH_CONTRACT_VERSION_V5,
-            MANUAL_DEPTH_CONTRACT_VERSION_V6,
+            MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
+            MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT,
     } and not reader_first:
         raise PublishDataValidationError(
             f'{aid or title} 当前 Manual 页面缺少完整且哈希一致的 Reader 正文；'
@@ -10410,7 +10569,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
             require_reader=True,
         )
         if reader_first and _researcher_workbench_eligible(
-            v6_payload, api_reader_payload,
+            signed_manual_payload, api_reader_payload,
         ) else None
     )
     if workbench_bundle:
@@ -10421,7 +10580,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
     )
     reader_first_image_plans = _reader_first_image_plans_by_url(paper) if reader_first else {}
     fresh_marker = ''
-    if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V5 and reader_first:
+    if manual_depth == MANUAL_DEPTH_FACT_COVERAGE_CONTRACT and reader_first:
         fresh = manifest['manualTakeover']['freshAuthoring']
         tutorial_payload = manifest['manualTakeover']['tutorialPayload']
         fresh_marker = (
@@ -10429,7 +10588,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
             f'paper_digest_fresh_authoring_contract: "{FRESH_AUTHORING_CONTRACT}"\n'
             f'paper_digest_fresh_authoring_sha256: "{fresh["receiptSha256"]}"\n'
             f'paper_digest_reader_article_sha256: "{fresh["articleSha256"]}"\n'
-            f'paper_digest_tutorial_payload_contract: "{MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT}"\n'
+            f'paper_digest_tutorial_payload_contract: "{MANUAL_TUTORIAL_PAYLOAD_CONTRACT}"\n'
             f'paper_digest_tutorial_payload_sha256: "{tutorial_payload["receiptSha256"]}"\n'
             f'paper_digest_tutorial_orchestrator_contract: "{MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT}"\n'
             f'paper_digest_tutorial_orchestrator_sha256: "{MANUAL_TUTORIAL_ORCHESTRATOR_FINGERPRINT}"\n'
@@ -10956,9 +11115,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     if fixed and not dry_run:
         atomic_write_text(file_path, content)
 
-    manual_v4_issue = validate_final_manual_v4_markdown(content, paper)
-    if manual_v4_issue:
-        issues.append(f'Manual v4 的最终 Markdown 内容未通过检查：{manual_v4_issue}')
+    manual_reader_issue = validate_final_structured_manual_markdown(content, paper)
+    if manual_reader_issue:
+        issues.append(f'Manual v4 的最终 Markdown 内容未通过检查：{manual_reader_issue}')
     api_reader_issue = _api_reader_page_binding_issue(content, paper)
     if api_reader_issue:
         issues.append(f'读者文章的最终 Markdown 内容未通过来源核验：{api_reader_issue}')
@@ -11055,25 +11214,17 @@ def validate_generation_input_source_reference(manifest, target_date):
     return str(source)
 
 
-_DAILY_FRESH_SOURCE_REFERENCE_KEYS = frozenset({
-    'contract', 'version', 'runId', 'batchDate', 'batchId', 'sourceGeneration',
-    'sourceSetSha256', 'runManifestSha256',
-})
-_DAILY_FRESH_SOURCE_RUN_KEYS = frozenset({
-    'contract', 'version', 'runId', 'batchDate', 'batchId', 'paperIds',
-    'sourceSetSha256', 'sourceExpectations',
-})
 _DAILY_FRESH_SOURCE_MANIFEST_KEYS = frozenset({
-    'contract', 'version', 'arxivId', 'paperId', 'generation', 'capturedAt',
+    'arxivId', 'paperId', 'generation', 'capturedAt',
     'text', 'pdf', 'runtimeMetadata',
 })
 _DAILY_FRESH_SOURCE_RUNTIME_KEYS = frozenset({
-    'contract', 'version', 'paperId', 'title', 'textSha256',
+    'paperId', 'title', 'textSha256',
     'structuredArtifacts', 'imageInfos', 'readerAuthors', 'htmlAvailability',
     'htmlAttempts', 'warnings',
 })
 _ARXIV_HISTORICAL_VERSION_KEYS = frozenset({
-    'contract', 'version', 'canonicalArxivId', 'selectedSourceId', 'textSourceId',
+    'canonicalArxivId', 'selectedSourceId', 'textSourceId',
     'selectedPdfUrl', 'currentPdfAvailable', 'attemptedCurrentPdfStatus',
     'attemptedCurrentPdfUrl', 'warning', 'identitySha256',
 })
@@ -11228,8 +11379,23 @@ def _daily_fresh_official_url(value, kind, paper_id, source_id=None):
     return parsed._replace(scheme='https', netloc='arxiv.org').geturl(), match.group(1)
 
 
+def _daily_fresh_protocol_header(value, family):
+    from protocol_codec import record_header
+    try:
+        if not isinstance(value, dict):
+            raise ValueError('record must be an object')
+        header = record_header(value.get('contract'), family, value.get('schemaFingerprint'))
+        if any(type(value.get(key)) is not type(expected) or value.get(key) != expected
+               for key, expected in header.items()):
+            raise ValueError('original format header differs')
+        return header
+    except ValueError as exc:
+        raise PublishDataValidationError(f'{family} 来源格式声明不符合要求') from exc
+
+
 def _daily_fresh_historical_version(value, paper_id):
-    if not isinstance(value, dict) or set(value) != _ARXIV_HISTORICAL_VERSION_KEYS:
+    header = _daily_fresh_protocol_header(value, 'arxiv-historical-version-source')
+    if set(value) != _ARXIV_HISTORICAL_VERSION_KEYS | set(header):
         raise PublishDataValidationError(f'{paper_id} 历史版本记录的字段不完整或包含未知字段')
     selected_id = value.get('selectedSourceId')
     if (not isinstance(selected_id, str)
@@ -11242,7 +11408,7 @@ def _daily_fresh_historical_version(value, paper_id):
         value.get('attemptedCurrentPdfUrl'), 'pdf', paper_id, paper_id,
     )
     body = {
-        'contract': 'arxiv-historical-version-source-v1', 'version': 1,
+        **header,
         'canonicalArxivId': paper_id, 'selectedSourceId': selected_id,
         'textSourceId': selected_id, 'selectedPdfUrl': selected_url,
         'currentPdfAvailable': False, 'attemptedCurrentPdfStatus': 404,
@@ -11256,8 +11422,7 @@ def _daily_fresh_historical_version(value, paper_id):
     identity_sha = _daily_fresh_sha256(_daily_fresh_compact_json_bytes(
         _daily_fresh_canonical(body)
     ))
-    if (type(value.get('version')) is not int
-            or type(value.get('attemptedCurrentPdfStatus')) is not int
+    if (type(value.get('attemptedCurrentPdfStatus')) is not int
             or value.get('currentPdfAvailable') is not False
             or any(value.get(key) != expected for key, expected in body.items())
             or value.get('identitySha256') != identity_sha):
@@ -11304,13 +11469,12 @@ def _historical_source_notice(paper):
 
 
 def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
-    runtime_keys = _DAILY_FRESH_SOURCE_RUNTIME_KEYS | (
+    header = _daily_fresh_protocol_header(runtime, 'fresh-arxiv-rewrite-runtime-metadata')
+    runtime_keys = _DAILY_FRESH_SOURCE_RUNTIME_KEYS | set(header) | (
         {'sourceVersion'} if isinstance(runtime, dict) and 'sourceVersion' in runtime else set()
     )
     if (
             not isinstance(runtime, dict) or set(runtime) != runtime_keys
-            or runtime.get('contract') != 'fresh-arxiv-rewrite-runtime-metadata-v1'
-            or runtime.get('version') != 1
             or runtime.get('paperId') != f'arxiv:{paper_id}'
             or runtime.get('textSha256') != _daily_fresh_sha256(text)
             or not isinstance(runtime.get('title'), str)
@@ -11389,10 +11553,10 @@ def _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper):
     pdf = _daily_fresh_read_private_file(
         source_dir / 'source.pdf', f'{paper_id} source.pdf', 512 * 1024 * 1024,
     )
+    manifest_header = _daily_fresh_protocol_header(manifest, 'fresh-arxiv-source-manifest')
     if (
-            not isinstance(manifest, dict) or set(manifest) != _DAILY_FRESH_SOURCE_MANIFEST_KEYS
-            or manifest.get('contract') != 'fresh-arxiv-rewrite-source-v1'
-            or manifest.get('version') != 2 or manifest.get('arxivId') != paper_id
+            not isinstance(manifest, dict) or set(manifest) != _DAILY_FRESH_SOURCE_MANIFEST_KEYS | set(manifest_header)
+            or manifest.get('arxivId') != paper_id
             or manifest.get('paperId') != f'arxiv:{paper_id}' or manifest.get('generation') != 1
             or _daily_fresh_sha256(manifest_bytes) != proof.get('sourceManifestSha256')
             or _daily_fresh_sha256(text) != proof.get('sourceSha256')
@@ -11552,7 +11716,7 @@ def _defer_sealed_reader_author_replay(payload, paper_id):
 
 def _validate_reader_author_source_replay(paper, source_details, paper_id, *, sealed_bundle_root=None):
     contracts = paper.get('analysisManifest', {}).get('contracts', {})
-    if contracts.get('apiReaderArticle') not in {'beginner-researcher-v2', 'beginner-researcher-v3'}:
+    if not reader_formats.is_structured_contract(contracts.get('apiReaderArticle')):
         return
     # 已核验封存来源通过私有 FD 交给纯解析器；不加载项目配置或模型请求模块。
     replay_input = {'paper': paper, 'sourceDetails': source_details}
@@ -11597,7 +11761,10 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
                                          sealed_bundle_root=sealed_bundle_root)
     _validate_reader_resource_claim_source_replay(paper, source_details, paper_id)
     acquisition = paper.get('analysisManifest', {}).get('sourceAcquisition', {})
-    if acquisition.get('modelTextSanitizationContract') == 'model-text-unicode-scalars-v1':
+    sanitization_header = {'contract': acquisition.get('modelTextSanitizationContract')}
+    if 'modelTextSanitizationSchemaFingerprint' in acquisition:
+        sanitization_header['schemaFingerprint'] = acquisition['modelTextSanitizationSchemaFingerprint']
+    if public_protocols.has_valid_header(sanitization_header, 'model-text-sanitization'):
         return
     fields = ('title', 'authors', 'categories', 'abstract', 'summary', 'analysis',
               'analysisCheckpoint', 'analysisStageCheckpoints', 'apiReaderArticle', 'apiReaderPlan')
@@ -11621,7 +11788,7 @@ def _has_source_bound_reader_patch_completion(paper):
     if 'apiReaderFactFeedbackCorrection' in paper \
             or 'factReviewClaimLocationCorrection' in stage \
             or any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
-            or any(key in stage for key in ('ordinalPatchContract', 'ordinalPatchCompilations',
+            or any(key in stage for key in ('ordinalPatchContract', 'ordinalPatchSchemaFingerprint', 'ordinalPatchCompilations',
                 'ordinalCompletionProof', 'versionMetadataRecoveryContract', 'versionMetadataRecoveryProof')):
         return True
     provenance = paper.get('freshRewriteProvenance') or {}
@@ -11636,7 +11803,7 @@ def _has_source_bound_reader_patch_completion(paper):
         run = json.loads(run_file.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return True
-    if run.get('contract') != 'daily-fresh-source-run-v1':
+    if not is_daily_source_run(run):
         return False
     paper_id = re.sub(r'v\d+$', '', str(paper.get('arxivId') or ''))
     if not re.fullmatch(r'\d{4}\.\d{4,5}', paper_id):
@@ -11671,8 +11838,8 @@ def _has_source_bound_reader_patch_completion(paper):
 
 def _validate_reader_resource_claim_source_replay(paper, source_details, paper_id):
     """Production publication uses the same source-bound claim guard as writing."""
-    if paper.get('analysisManifest', {}).get('contracts', {}).get('apiReaderArticle') \
-            != 'beginner-researcher-v3':
+    if not reader_formats.is_integrated_contract(
+            paper.get('analysisManifest', {}).get('contracts', {}).get('apiReaderArticle')):
         return
     source_text = source_details.get('text')
     if not isinstance(source_text, str) or _javascript_string_sha256(source_text) != paper.get('sourceSha256'):
@@ -11681,7 +11848,8 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     authenticated_footnotes = any(isinstance(resource, dict) and 'authenticatedPdfFootnoteEvidence' in resource
                                   for resource in (paper.get('apiReaderResources') or {}).get('resources', []))
     key = (_stable_json_sha256({'plan': paper.get('apiReaderPlan'), 'article': paper.get('apiReaderArticle'),
-                              'resources': paper.get('apiReaderResources')}), paper.get('sourceSha256'),
+                              'resources': paper.get('apiReaderResources'), 'manifest': paper.get('analysisManifest'),
+                              'provenance': paper.get('freshRewriteProvenance')}), paper.get('sourceSha256'),
            _sha256_file(cli), _sha256_file(SHARED_SCRIPTS_DIR / 'deep-analyzer.js'),
            _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-binding.js'))
     bound_patch_completion = _has_source_bound_reader_patch_completion(paper)
@@ -11725,7 +11893,7 @@ def _reject_unbound_api_generation_input(papers):
         manifest = paper.get('analysisManifest')
         contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
         reader_contract = contracts.get('apiReaderArticle') if isinstance(contracts, dict) else None
-        if reader_contract in {'beginner-researcher-v2', 'beginner-researcher-v3'}:
+        if reader_formats.is_structured_contract(reader_contract):
             raise PublishDataValidationError(
                 'API Reader 发布输入缺少可重放的封存来源；Unicode 清洗版本不能替代来源 SHA 核验'
             )
@@ -11922,11 +12090,9 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
         raise PublishDataValidationError('dailyFreshSourceRun 要求非空 papers 数组')
     reference = payload.get('dailyFreshSourceRun')
     if (
-            not isinstance(reference, dict) or set(reference) != _DAILY_FRESH_SOURCE_REFERENCE_KEYS
-            or reference.get('contract') != 'daily-fresh-source-reference-v1'
-            or reference.get('version') != 1
+            not is_daily_source_reference(reference)
             or not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', str(reference.get('runId') or ''))
-            or reference.get('sourceGeneration') != 1
+            or type(reference.get('sourceGeneration')) is not int or reference['sourceGeneration'] != 1
             or reference.get('batchDate') != target_date
             or not isinstance(reference.get('batchId'), str) or not reference['batchId'].strip()
             or not all(_daily_fresh_is_sha256(reference.get(key))
@@ -11945,7 +12111,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     if len(expected_ids) != len(set(expected_ids)):
         raise PublishDataValidationError('daily sealed source 发布输入包含重复 arXiv ID')
     source_expectations = {
-        paper_id: {'sourceMode': 'sealed-arxiv-bundle-v1', 'sourceGeneration': 1}
+        paper_id: bundle_expectation(1, original='version' in reference)
         for paper_id in expected_ids
     }
     expected_set_sha = _daily_fresh_sha256(_daily_fresh_compact_json_bytes(
@@ -11955,11 +12121,14 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
         })
     ))
     if (
-            not isinstance(run, dict) or set(run) != _DAILY_FRESH_SOURCE_RUN_KEYS
-            or run.get('contract') != 'daily-fresh-source-run-v1' or run.get('version') != 1
+            not is_daily_source_run(run)
+            or ('version' in reference) != ('version' in run)
             or run.get('runId') != reference['runId']
             or run.get('batchDate') != reference['batchDate'] or run.get('batchId') != reference['batchId']
-            or run.get('paperIds') != expected_ids or run.get('sourceExpectations') != source_expectations
+            or run.get('paperIds') != expected_ids
+            or run.get('sourceExpectations') != source_expectations
+            or any(type(value.get('sourceGeneration')) is not int
+                   for value in run['sourceExpectations'].values())
             or run.get('sourceSetSha256') != reference['sourceSetSha256']
             or run.get('sourceSetSha256') != expected_set_sha
     ):
@@ -11968,8 +12137,9 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     for paper, paper_id in zip(papers, [_daily_fresh_normalized_paper_id(p) for p in papers]):
         proof = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
         if (
-                not isinstance(proof, dict) or proof.get('contract') != 'fresh-source-analysis-v1'
-                or proof.get('runId') != reference['runId'] or proof.get('sourceGeneration') != 1
+                not matches_run_provenance(run, proof)
+                or proof.get('runId') != reference['runId']
+                or type(proof.get('sourceGeneration')) is not int or proof['sourceGeneration'] != 1
                 or proof.get('sourceOnly') is not True or proof.get('oldGeneratedTextIncluded') is not False
                 or not all(_daily_fresh_is_sha256(proof.get(key)) for key in (
                     'sourceManifestSha256', 'sourceSha256', 'sourceSnapshotSha256',
@@ -11990,7 +12160,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
         for paper in papers:
             contracts = (paper.get('analysisManifest') or {}).get('contracts') or {}
             table_contract = contracts.get('experimentTables')
-            if table_contract in EXPERIMENT_TABLE_CONTRACT_VERSIONS:
+            if quality_formats.profile('experiment-tables', table_contract):
                 issue = validate_experiment_table_contract(paper.get('analysis'),
                     contract_version=table_contract,
                     document_type=(paper.get('parsed') or {}).get('documentType', ''),
@@ -12395,8 +12565,9 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
     for artifact in source_artifacts:
         frontmatter = artifact.get('frontmatter') if isinstance(artifact, dict) else None
         if not isinstance(frontmatter, dict) \
-                or frontmatter.get('paper_digest_api_reader_source_binding_contract') \
-                != LLM_API_READER_SOURCE_BINDING_CONTRACT:
+                or not public_protocols.is_contract(
+                    frontmatter.get('paper_digest_api_reader_source_binding_contract'),
+                    'api-reader-source-bindings'):
             continue
         label = Path(artifact.get('path') or 'unknown.md').name
         expected_count = frontmatter.get('paper_digest_api_reader_source_formula_count')
@@ -12455,14 +12626,13 @@ def build_final_page_artifact(path, paper=None):
         raise PublishDataValidationError(f'{path.name} 不是合法 UTF-8') from exc
     frontmatter, body = _parse_frontmatter_content(path, content)
     return {
-        'version': FINAL_PAGE_ARTIFACT_VERSION,
         'path': str(path),
         'sha256': hashlib.sha256(raw).hexdigest(),
         'content': content,
         'frontmatter': frontmatter,
         'body': body,
         'markdownFormatIssues': validate_markdown_format_gate(path, frontmatter, body),
-        'manualIssue': validate_final_manual_v4_markdown(content, paper),
+        'manualIssue': validate_final_structured_manual_markdown(content, paper),
         'apiReaderIssue': _api_reader_page_binding_issue(content, paper),
         'indexQualityIssue': validate_digest_index_reader_quality(content),
     }
@@ -12516,10 +12686,10 @@ def validate_staged_posts(
             raise PublishDataValidationError(
                 f'{path.name} 的 Markdown 或 Hugo 格式不符合要求：' + '; '.join(markdown_format_issues)
             )
-        manual_v4_issue = artifact['manualIssue']
-        if manual_v4_issue:
+        manual_reader_issue = artifact['manualIssue']
+        if manual_reader_issue:
             raise PublishDataValidationError(
-                f'{path.name} 的 Manual v4 最终 Markdown 内容未通过检查：{manual_v4_issue}'
+                f'{path.name} 的 Manual v4 最终 Markdown 内容未通过检查：{manual_reader_issue}'
             )
         api_reader_issue = artifact['apiReaderIssue']
         if path.name == f'{date_str}.md' and authoritative_papers:
@@ -12710,7 +12880,7 @@ def _daily_render_layout_profile(repo, page_artifacts):
 def review_render_observation_scope(date_str, generation, manifest_path, paths,
                                     page_artifacts, base_head, manifest_sha256):
     """仅围绕同次正常日更审查，不为旧凭证重建或补签观察记录。"""
-    if (generation.get('schemaVersion') != 3 or generation.get('publicationMode') not in
+    if (not blog_formats.source_bound_generation(generation) or generation.get('publicationMode') not in
             {'llm_api_production', LEGACY_V5_MAINTENANCE_MODE}):
         yield None
         return
@@ -13070,14 +13240,14 @@ def prepare_researcher_workbench_staged_assets(papers, date_str, stage_root):
     seen = set()
     for paper in papers:
         api_reader_payload = _api_reader_payload(paper)
-        v6_payload = _manual_v6_reader_payload(paper)
+        signed_manual_payload = _signed_manual_reader_payload(paper)
         reader_plan = (
-            v6_payload.get('plan') if isinstance(v6_payload, dict)
+            signed_manual_payload.get('plan') if isinstance(signed_manual_payload, dict)
             else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
             else _manual_reader_editorial_plan(paper)
         )
         reader_article = (
-            v6_payload.get('article') if isinstance(v6_payload, dict)
+            signed_manual_payload.get('article') if isinstance(signed_manual_payload, dict)
             else api_reader_payload.get('renderedArticle')
             if isinstance(api_reader_payload, dict)
             else _manual_reader_article(paper, reader_plan, date_str)
@@ -13085,7 +13255,7 @@ def prepare_researcher_workbench_staged_assets(papers, date_str, stage_root):
         if not isinstance(reader_plan, dict) or not isinstance(reader_article, str) \
                 or not reader_article.strip():
             continue
-        if not _researcher_workbench_eligible(v6_payload, api_reader_payload):
+        if not _researcher_workbench_eligible(signed_manual_payload, api_reader_payload):
             continue
         bundle = build_researcher_workbench_bundle(
             paper, date_str, reader_plan=reader_plan,
@@ -13117,7 +13287,7 @@ def prepare_researcher_workbench_staged_assets(papers, date_str, stage_root):
 
 def _git_tracked_reader_asset_paths():
     result = _run_git(
-        ['ls-files', '-z', '--', 'static/images/papers', 'static/data/papers'],
+        ['ls-files', '-z', '--', 'static/images/papers', 'static/data/papers', 'static/client/papers'],
     )
     if result.returncode != 0:
         return set()
@@ -13144,7 +13314,7 @@ def prior_api_reader_manifest_assets(date_str):
         manifest = _load_json_object(manifest_path, '既有同日 generation manifest')
         files = manifest.get('files')
         if not isinstance(files, list):
-            if manifest.get('schemaVersion') == 3:
+            if blog_formats.source_bound_generation(manifest):
                 raise PublishDataValidationError(
                     f'既有同日 generation manifest.files 非数组: {manifest_path.name}'
                 )
@@ -13154,12 +13324,12 @@ def prior_api_reader_manifest_assets(date_str):
             if isinstance(record, dict)
             and isinstance(record.get('path'), str)
             and record['path'].startswith((
-                'static/images/papers/', 'static/data/papers/',
+                'static/images/papers/', 'static/data/papers/', 'static/client/papers/',
             ))
         ]
         if not reader_records:
             continue
-        if manifest.get('schemaVersion') != 3 or manifest.get('date') != validated_date:
+        if not blog_formats.source_bound_generation(manifest) or manifest.get('date') != validated_date:
             raise PublishDataValidationError(
                 f'拥有 reader asset 的既有 manifest 版本或日期非法: {manifest_path.name}'
             )
@@ -13493,7 +13663,7 @@ def validate_single_publication_worktree(paths):
     pages = {item for item in allowed if item.startswith('content/posts/') and item.endswith('.md')}
     assets = {
         item for item in allowed
-        if item.startswith(('static/images/papers/', 'static/data/papers/'))
+        if item.startswith(('static/images/papers/', 'static/data/papers/', 'static/client/papers/'))
     }
     if len(pages) != 1 or len(pages) + len(assets) != len(allowed):
         raise PublishDataValidationError('单篇灰度发布必须绑定一个论文页及其受控正文图/sidecar')
@@ -13675,7 +13845,7 @@ def _load_push_receipt(date_str):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'无法读取推送审查凭证: {path}') from exc
     base_head = str(receipt.get('baseHead') or '').lower()
-    if receipt.get('schemaVersion') != 3 or not re.fullmatch(r'[0-9a-f]{40,64}', base_head):
+    if not blog_formats.strict_receipt(receipt) or not re.fullmatch(r'[0-9a-f]{40,64}', base_head):
         raise PublishDataValidationError('审查凭证缺少受保护的博客基线提交；请重新 review')
     return receipt, path, base_head
 
@@ -13697,11 +13867,11 @@ def _validate_push_generation_input_integrity(date_str):
         raise PublishDataValidationError(
             f'无法读取推送前 generation manifest: {manifest_path}'
         ) from exc
-    if not isinstance(manifest, dict):
-        raise PublishDataValidationError('推送前 generation manifest 必须是对象')
+    if not blog_formats.generation_profile(manifest):
+        raise PublishDataValidationError('推送前生成清单格式未知')
     if manifest.get('publicationMode') == SEALED_TUTORIAL_PREVIEW_MODE:
         raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
-    if manifest.get('schemaVersion') == 3:
+    if blog_formats.source_bound_generation(manifest):
         _validate_generation_input_integrity(manifest, date_str)
 
 
@@ -14066,7 +14236,7 @@ def published_papers_fingerprint(published_papers):
 def _assert_ecmascript_record_premises(value, label):
     """核对整份记录都按 ECMAScript 写法比对时的跨语言前提。
 
-    Node 的 visual-summary-state.js 用 stableSha256 复算发布绑定记录和发布证明，
+    Node 的 published-blog-receipt.js 用 stableSha256 复算发布绑定记录和发布证明，
     那是纯 JSON.stringify 的写法。整数取值的浮点（7.0 对 7）、小于 1e-4 的浮点
     （2e-05 对 0.00002）、负零、1e16 到 1e21 之间的浮点、超出安全整数范围的整数，
     以及非字符串键或 BMP 以外的键，都会让两端算出不同的哈希而不报错。只有真正跨
@@ -14092,39 +14262,39 @@ def _assert_llm_api_binding_premises(bindings):
     _assert_ecmascript_number_premises(without_scores, 'LLM API 发布绑定记录')
 
 
-def manual_v6_publication_bindings(published_papers):
+def signed_manual_publication_bindings(published_papers):
     """建立显式的 v6 证明绑定，而不是依赖外层快照哈希。"""
     bindings = []
     for paper in published_papers:
         manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
         contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
         if not isinstance(contracts, dict) \
-                or contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
+                or contracts.get('manualDepth') != MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT:
             continue
-        payload = validate_manual_v6_payload(paper)
-        manual_v6_bindings = payload['provenance']
+        payload = validate_signed_manual_payload(paper)
+        signed_manual_bindings = payload['provenance']
         bindings.append({
             'paperId': payload['paperId'],
-            'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
-            'runtimeMode': manual_v6_bindings['runtimeMode'],
-            'specVersion': manual_v6_bindings['specVersion'],
-            'specRootSha256': manual_v6_bindings['specRootSha256'],
-            'paperSpecSha256': manual_v6_bindings['paperSpecSha256'],
-            'recordSemanticSha256': manual_v6_bindings['sealedRecordSha256'],
-            'recordFileSha256': manual_v6_bindings['recordFileSha256'],
+            'manualDepth': MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT,
+            'runtimeMode': signed_manual_bindings['runtimeMode'],
+            'specVersion': signed_manual_bindings['specVersion'],
+            'specRootSha256': signed_manual_bindings['specRootSha256'],
+            'paperSpecSha256': signed_manual_bindings['paperSpecSha256'],
+            'recordSemanticSha256': signed_manual_bindings['sealedRecordSha256'],
+            'recordFileSha256': signed_manual_bindings['recordFileSha256'],
             'artifactIndexSha256': payload['artifactIndexSha256'],
-            'artifactIndexFileSha256': manual_v6_bindings['artifactIndexFileSha256'],
-            'recordsEnvelopeFileSha256': manual_v6_bindings['recordsEnvelopeFileSha256'],
-            'taskEvidenceSha256': manual_v6_bindings['taskEvidenceSha256'],
-            'readerLongformContract': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
-            'readerLongformSha256': manual_v6_bindings['readerLongformSha256'],
+            'artifactIndexFileSha256': signed_manual_bindings['artifactIndexFileSha256'],
+            'recordsEnvelopeFileSha256': signed_manual_bindings['recordsEnvelopeFileSha256'],
+            'taskEvidenceSha256': signed_manual_bindings['taskEvidenceSha256'],
+            'readerLongformContract': MANUAL_SIGNED_LONGFORM_CONTRACT,
+            'readerLongformSha256': signed_manual_bindings['readerLongformSha256'],
             'readerArticleSha256': payload['articleSha256'],
         })
     _assert_ecmascript_record_premises(bindings, 'Manual v6 发布绑定记录')
     return sorted(bindings, key=lambda item: item['paperId'])
 
 
-def manual_v6_production_proof(published_papers):
+def signed_manual_production_proof(published_papers):
     """生成 Manual v6 批次所需的发布核验信息。
 
     specRootSha256 是 v6 配置的 Merkle 根哈希，用于标识整组配置文件。
@@ -14132,7 +14302,7 @@ def manual_v6_production_proof(published_papers):
     """
     if not isinstance(published_papers, list) or not published_papers:
         raise PublishDataValidationError('Manual v6 发布批次必须是非空的论文数组。')
-    bindings = manual_v6_publication_bindings(published_papers)
+    bindings = signed_manual_publication_bindings(published_papers)
     if len(bindings) != len(published_papers):
         raise PublishDataValidationError(
             'Manual v6 发布批次中的所有论文记录都必须通过 v6 核验；维护旧 v5 记录时，请明确使用 --legacy-v5-maintenance。'
@@ -14144,12 +14314,12 @@ def manual_v6_production_proof(published_papers):
     if len(set(paper_ids)) != len(paper_ids):
         raise PublishDataValidationError('Manual v6 发布批次中存在重复的论文 ID。')
     proof = {
-        'contract': MANUAL_V6_PRODUCTION_CONTRACT,
-        'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
+        'contract': SIGNED_MANUAL_PUBLICATION_CONTRACT,
+        'manualDepth': MANUAL_DEPTH_SIGNED_LONGFORM_CONTRACT,
         'runtimeMode': 'production',
         'specVersion': 6,
         'recordsVersion': 4,
-        'readerLongformContract': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
+        'readerLongformContract': MANUAL_SIGNED_LONGFORM_CONTRACT,
         'specMerkleRootSha256': next(iter(roots)),
         'paperCount': len(bindings),
         'paperIds': paper_ids,
@@ -14169,12 +14339,11 @@ def llm_api_publication_bindings(published_papers):
         manifest = paper.get('analysisManifest')
         contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
         if not isinstance(contracts, dict) \
-                or contracts.get('apiReaderArticle') != LLM_API_READER_CONTRACT:
+                or not reader_formats.is_integrated_contract(contracts.get('apiReaderArticle')):
             continue
-        if contracts.get('coreSummary') != CORE_SUMMARY_DETAILED_CONTRACT:
-            raise PublishDataValidationError(
-                'API 正式发布必须使用 core-summary-detailed-v3 详细核心摘要规则。'
-            )
+        summary_header = core_summary_formats.read_declaration(contracts.get('coreSummary'))
+        if not summary_header:
+            raise PublishDataValidationError('API 正式发布必须有可核验的详细核心摘要声明。')
         reader = _api_reader_payload(paper)
         analysis = paper.get('analysis')
         stages = manifest.get('stages') if isinstance(manifest.get('stages'), dict) else {}
@@ -14194,7 +14363,7 @@ def llm_api_publication_bindings(published_papers):
         scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha
         if (
             scoring.get('status') != 'complete'
-            or scoring.get('scoringContract') != LLM_API_SCORING_CONTRACT
+            or not scoring_formats.has_scoring_audit_format(scoring)
             or not scoring_binds_final
             or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('auditSha256') or ''))
             or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('evidenceSha256') or ''))
@@ -14224,8 +14393,12 @@ def llm_api_publication_bindings(published_papers):
         )
         bindings.append({
             'paperId': paper_id,
-            'readerContract': LLM_API_READER_CONTRACT,
+            'readerContract': reader['contract'],
+            **({'readerSchemaFingerprint': reader['schemaFingerprint']}
+               if 'schemaFingerprint' in reader else {}),
             'readerSourceBindingsContract': reader['sourceBindingProof']['contract'],
+            **({'readerSourceBindingsSchemaFingerprint': reader['sourceBindingProof']['schemaFingerprint']}
+               if 'schemaFingerprint' in reader['sourceBindingProof'] else {}),
             'readerSourceBindingsSha256': reader['sourceBindingProof']['sha256'],
             'readerSourceTableBindingCount': reader['sourceBindingProof']['tableCount'],
             'readerSourceFormulaBindingCount': reader['sourceBindingProof']['formulaCount'],
@@ -14233,9 +14406,13 @@ def llm_api_publication_bindings(published_papers):
                 reader['sourceBindingProof']['structuredArtifactsSha256']
             ),
             'readerAuthorIdentityContract': reader['authorIdentityProof']['contract'],
+            **({'readerAuthorIdentitySchemaFingerprint': reader['authorIdentityProof']['schemaFingerprint']}
+               if 'schemaFingerprint' in reader['authorIdentityProof'] else {}),
             'readerAuthorIdentitySha256': reader['authorIdentityProof']['sha256'],
             'readerAuthorCount': reader['authorIdentityProof']['count'],
             'readerResourceIdentityContract': reader['resourceIdentityProof']['contract'],
+            **({'readerResourceIdentitySchemaFingerprint': reader['resourceIdentityProof']['schemaFingerprint']}
+               if 'schemaFingerprint' in reader['resourceIdentityProof'] else {}),
             'readerResourceIdentitySha256': reader['resourceIdentityProof']['sha256'],
             'readerResourceCount': reader['resourceIdentityProof']['count'],
             'readerAvailableResourceTypes': reader['resourceIdentityProof']['availableTypes'],
@@ -14245,11 +14422,15 @@ def llm_api_publication_bindings(published_papers):
             'readerFigurePersistence': reader['figurePersistence'],
             'readerAuthorsSha256': _reader_record_sha256(reader['readerAuthors'], 'API reader 作者记录'),
             'analysisSha256': analysis_sha,
-            'coreSummaryContract': CORE_SUMMARY_DETAILED_CONTRACT,
+            'coreSummaryContract': summary_header['contract'],
+            **({'coreSummarySchemaFingerprint': summary_header['schemaFingerprint']}
+               if 'schemaFingerprint' in summary_header else {}),
             'coreSummarySha256': _javascript_string_sha256(core_summary),
             'coreSummaryBindingSha256': core_summary_stage['bindingSha256'],
             'sourceSha256': source_sha,
-            'scoringContract': LLM_API_SCORING_CONTRACT,
+            'scoringContract': scoring['scoringContract'],
+            **({'scoringSchemaFingerprint': scoring['scoringSchemaFingerprint']}
+               if 'scoringSchemaFingerprint' in scoring else {}),
             'scoringAuditSha256': scoring['auditSha256'],
             'scoringEvidenceSha256': scoring['evidenceSha256'],
             'finalScore': final_score_number,
@@ -14268,37 +14449,77 @@ def llm_api_production_proof(published_papers):
     return _llm_api_production_proof_from_checked_bindings(published_papers, bindings)
 
 
-def _llm_api_production_proof_from_checked_bindings(published_papers, bindings):
+_API_PUBLICATION_FORMAT_SETS = (
+    ('reader', 'readerFormats'), ('readerSourceBindings', 'sourceBindingFormats'),
+    ('readerAuthorIdentity', 'authorIdentityFormats'), ('readerResourceIdentity', 'resourceIdentityFormats'),
+    ('scoring', 'scoringFormats'), ('coreSummary', 'coreSummaryFormats'),
+)
+
+
+def _api_member_format_set(bindings, prefix):
+    values = {}
+    for member in bindings:
+        tag = member.get(prefix + 'Contract')
+        if not isinstance(tag, str) or not tag:
+            raise PublishDataValidationError('API 发布成员缺少完整的格式声明')
+        header = {'contract': tag}
+        fingerprint = prefix + 'SchemaFingerprint'
+        if fingerprint in member:
+            if not isinstance(member[fingerprint], str) or not re.fullmatch(r'[a-f0-9]{64}', member[fingerprint]):
+                raise PublishDataValidationError('API 发布成员的格式指纹不合法')
+            header['schemaFingerprint'] = member[fingerprint]
+        key = json.dumps(header, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        values[key] = header
+    return [values[key] for key in sorted(values)]
+
+
+def _llm_api_production_proof_from_checked_bindings(published_papers, bindings, *, original_proof=None):
     # Internal assembly only: callers must compute bindings in the same validation
     # invocation. The public entry above always performs the full validation.
     if len(bindings) != len(published_papers):
         raise PublishDataValidationError(
             'API 正式发布要求每篇论文的读者文章、评分审计和来源记录都通过核验。'
         )
-    if manual_v6_publication_bindings(published_papers):
+    if signed_manual_publication_bindings(published_papers):
         raise PublishDataValidationError('API 正式发布的批次中不能混入 Manual v6 论文记录。')
     paper_ids = [item['paperId'] for item in bindings]
     if len(set(paper_ids)) != len(paper_ids):
         raise PublishDataValidationError('API 正式发布的批次中存在重复的论文 ID。')
-    proof = {
-        'contract': LLM_API_PRODUCTION_CONTRACT,
-        'readerContract': LLM_API_READER_CONTRACT,
-        'readerSourceBindingsContract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
-        'readerAuthorIdentityContract': LLM_API_READER_AUTHOR_IDENTITY_CONTRACT,
-        'readerResourceIdentityContract': LLM_API_READER_RESOURCE_IDENTITY_CONTRACT,
-        'scoringContract': LLM_API_SCORING_CONTRACT,
-        'paperCount': len(bindings),
-        'paperIds': paper_ids,
-        'bindingsFingerprint': _stable_json_sha256(bindings),
-    }
+    header = public_protocols.record_header(LLM_API_PRODUCTION_CONTRACT, LLM_API_PRODUCTION_CONTRACT)
+    if original_proof is not None:
+        if not public_protocols.has_valid_header(original_proof, LLM_API_PRODUCTION_CONTRACT):
+            raise PublishDataValidationError('原 API 发布证明格式未知或指纹不匹配')
+        header = public_protocols.record_header(original_proof['contract'], LLM_API_PRODUCTION_CONTRACT,
+                                               original_proof.get('schemaFingerprint'))
+    profile = public_protocols.format(header['contract'], LLM_API_PRODUCTION_CONTRACT,
+                                     header.get('schemaFingerprint'))
+    proof = {**header, 'paperCount': len(bindings), 'paperIds': paper_ids,
+             'bindingsFingerprint': _stable_json_sha256(bindings)}
+    if profile == 'uniform-original-declarations':
+        original = {
+            'readerContract': public_protocols.historical_contract('beginner-researcher', reader_formats.INTEGRATED),
+            'readerSourceBindingsContract': public_protocols.historical_contract('api-reader-source-bindings', 'integrated-source-bound'),
+            'readerAuthorIdentityContract': public_protocols.historical_contract('api-reader-author-identity', 'source-bound-identity'),
+            'readerResourceIdentityContract': public_protocols.historical_contract('api-reader-resource-identity', 'source-bound-identity'),
+            'scoringContract': public_protocols.historical_contract('api-scoring-audit', 'evidence-bound-final-analysis'),
+        }
+        if any(any(member.get(field) != value for field, value in original.items())
+               or any(field.endswith('SchemaFingerprint') for field in member) for member in bindings):
+            raise PublishDataValidationError('原单一格式的 API 发布证明不能覆盖新的或混合的成员格式')
+        proof.update(original)
+    elif profile == 'per-member-complete-format-sets':
+        for prefix, field in _API_PUBLICATION_FORMAT_SETS:
+            proof[field] = _api_member_format_set(bindings, prefix)
+    else:
+        raise PublishDataValidationError('API 发布证明的结构没有可用的读取规则')
     _assert_ecmascript_record_premises(proof, 'LLM API 发布证明')
     return proof
 
 
 def infer_generation_publication_mode(papers):
     """按全部论文记录的对应关系选择发布模式；旧 v5 维护模式须明确指定。"""
-    if len(manual_v6_publication_bindings(papers)) == len(papers):
-        return MANUAL_V6_PRODUCTION_MODE
+    if len(signed_manual_publication_bindings(papers)) == len(papers):
+        return SIGNED_MANUAL_PRODUCTION_MODE
     if len(llm_api_publication_bindings(papers)) == len(papers):
         return LLM_API_PRODUCTION_MODE
     raise PublishDataValidationError(
@@ -14308,12 +14529,12 @@ def infer_generation_publication_mode(papers):
 
 def validate_generation_publication_mode(papers, publication_mode):
     """按指定模式核对发布输入，拒绝将 Manual v6 记录按旧 v5 模式处理。"""
-    if publication_mode == MANUAL_V6_PRODUCTION_MODE:
-        return manual_v6_production_proof(papers)
+    if publication_mode == SIGNED_MANUAL_PRODUCTION_MODE:
+        return signed_manual_production_proof(papers)
     if publication_mode == LLM_API_PRODUCTION_MODE:
         return llm_api_production_proof(papers)
     if publication_mode == LEGACY_V5_MAINTENANCE_MODE:
-        if manual_v6_publication_bindings(papers):
+        if signed_manual_publication_bindings(papers):
             raise PublishDataValidationError(
                 '旧 v5 维护模式不能混入 Manual v6 论文记录，也不能将这些记录按旧版本处理。'
             )
@@ -14496,6 +14717,7 @@ def generation_input_fingerprint(
 
 
 def _validate_generation_input_integrity(manifest, date_str):
+    _validate_post_publication_policy(manifest)
     """按论文快照和相关来源记录重新计算生成输入，核对记录、发布证明及其指纹。"""
     published_papers = manifest.get('publishedPapers')
     category = manifest.get('category')
@@ -14543,7 +14765,7 @@ def _validate_generation_input_integrity(manifest, date_str):
         raise PublishDataValidationError(
             '正式生成清单的输入指纹与按论文快照及生成选项重新计算的结果不一致。'
         )
-    if manifest.get('publishedPapersFingerprintContract') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT:
+    if blog_formats.snapshot_header(manifest) is None:
         raise PublishDataValidationError('正式生成清单缺少要求的论文快照指纹规则版本。')
     actual_snapshot = str(manifest.get('publishedPapersFingerprint') or '')
     expected_snapshot = published_papers_fingerprint(published_papers)
@@ -14553,17 +14775,17 @@ def _validate_generation_input_integrity(manifest, date_str):
         _validate_derived_figure_asset_manifest(manifest, _derived_figure_asset_bindings(published_papers))
     else:
         _legacy_reader_pixel_assets(manifest, published_papers)
-    expected_v6 = manual_v6_publication_bindings(published_papers)
-    actual_v6 = manifest.get('manualV6Bindings')
+    expected_signed_manual = signed_manual_publication_bindings(published_papers)
+    actual_signed_manual = manifest.get('manualV6Bindings')
     # 历史上的 v5-only schema-v3 生成早于这个显式字段。
     # 它们仍然可以读取；只要清单里含有一篇 v6 论文，就不适用这个
     # 例外，必须携带完整的显式证明映射。
-    historical_v5_without_bindings = actual_v6 is None and not expected_v6
+    historical_v5_without_bindings = actual_signed_manual is None and not expected_signed_manual
     if not historical_v5_without_bindings:
-        if actual_v6 != expected_v6:
+        if actual_signed_manual != expected_signed_manual:
             raise PublishDataValidationError('正式生成清单中的 Manual v6 文件对应记录与论文记录不一致。')
-        expected_v6_fingerprint = _stable_json_sha256(expected_v6)
-        if manifest.get('manualV6BindingsFingerprint') != expected_v6_fingerprint:
+        expected_signed_manual_fingerprint = _stable_json_sha256(expected_signed_manual)
+        if manifest.get('manualV6BindingsFingerprint') != expected_signed_manual_fingerprint:
             raise PublishDataValidationError('正式生成清单中的 Manual v6 文件对应记录指纹不一致。')
     expected_api = llm_api_publication_bindings(published_papers)
     actual_api = manifest.get('llmApiBindings')
@@ -14575,10 +14797,10 @@ def _validate_generation_input_integrity(manifest, date_str):
     publication_mode = manifest.get('publicationMode')
     production_proof = manifest.get('manualV6Production')
     api_proof = manifest.get('llmApiProduction')
-    if publication_mode == MANUAL_V6_PRODUCTION_MODE:
+    if publication_mode == SIGNED_MANUAL_PRODUCTION_MODE:
         if expected_api or api_proof is not None:
             raise PublishDataValidationError('Manual v6 生成清单中不能包含 API 发布证明。')
-        expected_proof = manual_v6_production_proof(published_papers)
+        expected_proof = signed_manual_production_proof(published_papers)
         if production_proof != expected_proof:
             raise PublishDataValidationError(
                 '正式生成清单中的 Manual v6 发布证明与配置、材料记录及长文核验结果不一致。'
@@ -14587,13 +14809,13 @@ def _validate_generation_input_integrity(manifest, date_str):
         if manifest.get('manualV6ProductionFingerprint') != expected_proof_sha:
             raise PublishDataValidationError('正式生成清单中的 Manual v6 发布证明指纹不一致。')
     elif publication_mode == LLM_API_PRODUCTION_MODE:
-        if expected_v6 or production_proof is not None:
+        if expected_signed_manual or production_proof is not None:
             raise PublishDataValidationError('API 生成清单中不能包含 Manual v6 发布证明。')
         # expected_api was fully computed immediately above, including source,
         # Reader, score, and paid/operator core replay. Do not run it twice in
         # this invocation; the next file/receipt boundary still starts anew.
         expected_proof = _llm_api_production_proof_from_checked_bindings(
-            published_papers, expected_api,
+            published_papers, expected_api, original_proof=api_proof,
         )
         if api_proof != expected_proof:
             raise PublishDataValidationError('正式生成清单中的 API 发布证明与实际核验结果不一致。')
@@ -14601,12 +14823,12 @@ def _validate_generation_input_integrity(manifest, date_str):
         if manifest.get('llmApiProductionFingerprint') != expected_proof_sha:
             raise PublishDataValidationError('正式生成清单中的 API 发布证明指纹不一致。')
     elif publication_mode == LEGACY_V5_MAINTENANCE_MODE:
-        if expected_v6 or expected_api or production_proof is not None or api_proof is not None:
+        if expected_signed_manual or expected_api or production_proof is not None or api_proof is not None:
             raise PublishDataValidationError('旧 v5 维护模式的生成清单中不能包含正式发布证明。')
     elif publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
         if scope is None or production_proof is not None or api_proof is not None:
             raise PublishDataValidationError('教程预览模式缺少单篇发布范围，或包含不允许的正式发布证明。')
-    elif publication_mode is None and not expected_v6 and not expected_api:
+    elif publication_mode is None and not expected_signed_manual and not expected_api:
         # production-mode 字段出现之前的不可变 schema-v3 历史，
         # 只能作为旧格式维护来读取，绝不能进入视觉环节。
         pass
@@ -14615,16 +14837,38 @@ def _validate_generation_input_integrity(manifest, date_str):
     return expected_input, expected_snapshot
 
 
+def _validate_post_publication_policy(manifest):
+    if 'postPublicationPolicy' not in manifest:
+        if public_protocols.is_current_header(manifest, blog_formats.GENERATION):
+            raise PublishDataValidationError('现行生成清单缺少日更不生图设置')
+        return False
+    policy = manifest['postPublicationPolicy']
+    if not isinstance(policy, dict) or not public_protocols.has_valid_header(policy, 'daily-publication-policy'):
+        raise PublishDataValidationError('生成清单的不生图设置不完整或格式未知')
+    schema = public_protocols.declared_schema(
+        policy['contract'], 'daily-publication-policy', policy.get('schemaFingerprint'),
+    )
+    if (set(policy) != {'contract', 'schemaFingerprint', 'generatedImages', 'sourceFigures'}
+            or policy.get('generatedImages') is not False
+            or policy.get('sourceFigures') != 'retained-and-source-verified'
+            or schema.get('generatedImages') is not False
+            or schema.get('sourceFigures') != 'retained-and-source-verified'
+            or schema.get('authority') != 'standing-user-no-generation-instruction'):
+        raise PublishDataValidationError('生成清单的不生图设置不完整或格式未知')
+    return True
+
+
 def _expected_post_publish_visuals(manifest, publication_scope_value=None):
+    no_generation = _validate_post_publication_policy(manifest)
     if publication_scope_value is not None:
         return 'not_applicable_single_paper'
     if (
-        manifest.get('schemaVersion') == 3
+        blog_formats.source_bound_generation(manifest)
         and manifest.get('publicationMode') in {
-            MANUAL_V6_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE,
+            SIGNED_MANUAL_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE,
         }
     ):
-        return 'required'
+        return 'not_requested' if no_generation else 'required'
     return 'not_applicable_legacy_maintenance'
 
 
@@ -14636,6 +14880,36 @@ def generation_template_fingerprint():
     """
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
+        'original_file_evidence.py': script_dir / 'original_file_evidence.py',
+        'git_file_bytes.py': script_dir / 'git_file_bytes.py',
+        'lib/original-file-evidence.js': script_dir / 'lib' / 'original-file-evidence.js',
+        'lib/git-file-bytes.js': script_dir / 'lib' / 'git-file-bytes.js',
+        'config/original-file-evidence.json': script_dir.parent / 'config' / 'original-file-evidence.json',
+        'protocol_codec.py': script_dir / 'protocol_codec.py',
+        'blog_record_format.py': script_dir / 'blog_record_format.py',
+        'daily_source_format.py': script_dir / 'daily_source_format.py',
+        'daily-source-format.js': script_dir / 'lib' / 'daily-source-format.js',
+        'blog-record-format.js': script_dir / 'lib' / 'blog-record-format.js',
+        'scoring_record_format.py': script_dir / 'scoring_record_format.py',
+        'core_summary_format.py': script_dir / 'core_summary_format.py',
+        'analysis_quality_format.py': script_dir / 'analysis_quality_format.py',
+        'analysis-quality-format.js': script_dir / 'lib' / 'analysis-quality-format.js',
+        'core-summary-format.js': script_dir / 'lib' / 'core-summary-format.js',
+        'lib/scoring-record-format.js': script_dir / 'lib' / 'scoring-record-format.js',
+        'lib/protocol-codec.js': script_dir / 'lib' / 'protocol-codec.js',
+        'lib/strict-json.js': script_dir / 'lib' / 'strict-json.js',
+        'prompt_evidence.py': script_dir / 'prompt_evidence.py',
+        'reader_record_format.py': script_dir / 'reader_record_format.py',
+        'reader_proof_format.py': script_dir / 'reader_proof_format.py',
+        'lib/reader-proof-format.js': script_dir / 'lib' / 'reader-proof-format.js',
+        'lib/reader-content-mode.js': script_dir / 'lib' / 'reader-content-mode.js',
+        'lib/reader-resource-claims-format.js': script_dir / 'lib' / 'reader-resource-claims-format.js',
+        'lib/reader-record-format.js': script_dir / 'lib' / 'reader-record-format.js',
+        'lib/reader-stage-protocols.js': script_dir / 'lib' / 'reader-stage-protocols.js',
+        'lib/reader-identity-format.js': script_dir / 'lib' / 'reader-identity-format.js',
+        'lib/reader-legacy-records.json': script_dir / 'lib' / 'reader-legacy-records.json',
+        'lib/prompt-current-records.json': script_dir / 'lib' / 'prompt-current-records.json',
+        'lib/prompt-legacy-records.json': script_dir / 'lib' / 'prompt-legacy-records.json',
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'publish_common.py': script_dir / 'publish_common.py',
         'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
@@ -14663,6 +14937,7 @@ def generation_template_fingerprint():
         'reader_pdf_visual_audit_cache.py': script_dir / 'reader_pdf_visual_audit_cache.py',
         'reader_sealed_pdf_table_evidence.py': script_dir / 'reader_sealed_pdf_table_evidence.py',
         'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
+        'reader_pdf_quote_projection.py': script_dir / 'reader_pdf_quote_projection.py',
         'reader_sealed_pdf_column_units.py': script_dir / 'reader_sealed_pdf_column_units.py',
         'reader_sealed_pdf_literal_column_units.py': script_dir / 'reader_sealed_pdf_literal_column_units.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
@@ -14683,6 +14958,9 @@ def generation_template_fingerprint():
         'manual/sealed_tutorial_preview.py': MANUAL_SCRIPTS_DIR / 'sealed_tutorial_preview.py',
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
     }
+    from protocol_codec import server_catalog_paths
+    for catalog in server_catalog_paths(script_dir.parent / 'config' / 'protocols'):
+        dependency_paths[f'config/protocols/{catalog.name}'] = catalog
     dependencies = {
         name: _sha256_file(path)
         for name, path in dependency_paths.items()
@@ -14701,7 +14979,7 @@ def generation_template_fingerprint():
 
 def validate_current_generation_template(manifest):
     """检查生成清单的格式标记，不改写已生成页面。"""
-    if manifest.get('schemaVersion') != 3:
+    if not blog_formats.source_bound_generation(manifest):
         return True
     actual = str(manifest.get('templateFingerprint') or '')
     if not re.fullmatch(r'[0-9a-f]{64}', actual):
@@ -14799,10 +15077,38 @@ def review_protocol_fingerprint():
     """把可复用的审查证据绑定到代码、提示词与模型以及 Hugo 运行时。"""
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
+        'reader_record_format.py': script_dir / 'reader_record_format.py',
+        'reader_proof_format.py': script_dir / 'reader_proof_format.py',
+        'lib/reader-proof-format.js': script_dir / 'lib' / 'reader-proof-format.js',
+        'lib/reader-content-mode.js': script_dir / 'lib' / 'reader-content-mode.js',
+        'lib/reader-resource-claims-format.js': script_dir / 'lib' / 'reader-resource-claims-format.js',
+        'lib/reader-record-format.js': script_dir / 'lib' / 'reader-record-format.js',
+        'lib/reader-stage-protocols.js': script_dir / 'lib' / 'reader-stage-protocols.js',
+        'lib/reader-identity-format.js': script_dir / 'lib' / 'reader-identity-format.js',
+        'lib/reader-legacy-records.json': script_dir / 'lib' / 'reader-legacy-records.json',
+        'original_file_evidence.py': script_dir / 'original_file_evidence.py',
+        'git_file_bytes.py': script_dir / 'git_file_bytes.py',
+        'lib/original-file-evidence.js': script_dir / 'lib' / 'original-file-evidence.js',
+        'lib/git-file-bytes.js': script_dir / 'lib' / 'git-file-bytes.js',
+        'config/original-file-evidence.json': script_dir.parent / 'config' / 'original-file-evidence.json',
+        'protocol_codec.py': script_dir / 'protocol_codec.py',
+        'blog_record_format.py': script_dir / 'blog_record_format.py',
+        'daily_source_format.py': script_dir / 'daily_source_format.py',
+        'daily-source-format.js': script_dir / 'lib' / 'daily-source-format.js',
+        'blog-record-format.js': script_dir / 'lib' / 'blog-record-format.js',
+        'scoring_record_format.py': script_dir / 'scoring_record_format.py',
+        'core_summary_format.py': script_dir / 'core_summary_format.py',
+        'analysis_quality_format.py': script_dir / 'analysis_quality_format.py',
+        'analysis-quality-format.js': script_dir / 'lib' / 'analysis-quality-format.js',
+        'core-summary-format.js': script_dir / 'lib' / 'core-summary-format.js',
+        'lib/scoring-record-format.js': script_dir / 'lib' / 'scoring-record-format.js',
+        'lib/protocol-codec.js': script_dir / 'lib' / 'protocol-codec.js',
+        'lib/strict-json.js': script_dir / 'lib' / 'strict-json.js',
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'daily_hugo_capture.py': script_dir / 'daily_hugo_capture.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
         'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
+        'reader_pdf_quote_projection.py': script_dir / 'reader_pdf_quote_projection.py',
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'review-blog.py': script_dir / 'review-blog.py',
         'manual/manual-review-blog.py': MANUAL_SCRIPTS_DIR / 'manual-review-blog.py',
@@ -14829,6 +15135,9 @@ def review_protocol_fingerprint():
         'tag_paths.py': script_dir / 'tag_paths.py',
         'path_config.py': script_dir / 'path_config.py',
     }
+    from protocol_codec import server_catalog_paths
+    for catalog in server_catalog_paths(script_dir.parent / 'config' / 'protocols'):
+        dependency_paths[f'config/protocols/{catalog.name}'] = catalog
     dependencies = {
         name: _sha256_file(path)
         for name, path in dependency_paths.items()
@@ -14937,7 +15246,7 @@ def prepare_generation_journal(
             for item in journal.get('papers', []) if isinstance(item, dict)
         ]
         journal_mismatch = (
-            journal.get('schemaVersion') != 1
+            blog_formats.record_profile(journal, blog_formats.JOURNAL) is None
             or journal.get('date') != date_str
             or journal.get('inputFingerprint') != input_fingerprint
             or journal.get('templateFingerprint') != template_fingerprint
@@ -14971,7 +15280,7 @@ def prepare_generation_journal(
         shutil.rmtree(stage.parent)
     stage.mkdir(parents=True, exist_ok=True)
     journal = {
-        'schemaVersion': 1,
+        **blog_formats.current_header(blog_formats.JOURNAL),
         'date': date_str,
         'inputFingerprint': input_fingerprint,
         'templateFingerprint': template_fingerprint,
@@ -15130,7 +15439,7 @@ def _manifest_record(path, repo):
         and re.fullmatch(r'figure-\d+-[0-9a-f]{16}\.(?:png|svg)', relative.name or '')
     )
     is_researcher_sidecar = (
-        relative.parts[:3] == ('static', 'data', 'papers')
+        relative.parts[:3] in {('static', 'data', 'papers'), ('static', 'client', 'papers')}
         and len(relative.parts) == 6
         and re.fullmatch(r'\d{4}-\d{2}-\d{2}', relative.parts[3] or '')
         and re.fullmatch(r'[a-z0-9][a-z0-9-]*[a-z0-9]', relative.parts[4] or '')
@@ -15166,7 +15475,7 @@ def is_api_reader_asset_path(path, paper_id=None):
     parts = Path(relative).parts
     if parts[:3] == ('static', 'images', 'papers') and len(parts) == 5:
         return paper_id is None or parts[3] == normalize_publish_arxiv_id(paper_id)
-    if parts[:3] != ('static', 'data', 'papers') or len(parts) != 6:
+    if parts[:3] not in {('static', 'data', 'papers'), ('static', 'client', 'papers')} or len(parts) != 6 or parts[-1] not in RESEARCHER_SIDECAR_FILENAMES:
         return False
     if paper_id is None:
         return True
@@ -15181,7 +15490,7 @@ def is_researcher_sidecar_path(path, paper_id=None, date_str=None):
     except PublishDataValidationError:
         return False
     parts = Path(relative).parts
-    if parts[:3] != ('static', 'data', 'papers') or len(parts) != 6:
+    if parts[:3] not in {('static', 'data', 'papers'), ('static', 'client', 'papers')} or len(parts) != 6 or parts[-1] not in RESEARCHER_SIDECAR_FILENAMES:
         return False
     if date_str is not None and parts[3] != validate_publish_date(date_str):
         return False
@@ -15215,7 +15524,7 @@ def _validate_manifest_path_date(target, repo, date_str):
         asset_date = Path(relative).parts[3]
         if asset_date != validated_date:
             raise PublishDataValidationError(f'汇总页封面的批次日期与目标日期不一致：{relative}')
-    if relative.startswith('static/data/papers/'):
+    if relative.startswith(('static/data/papers/', 'static/client/papers/')):
         asset_date = Path(relative).parts[3]
         if asset_date != validated_date:
             raise PublishDataValidationError(
@@ -15264,7 +15573,7 @@ def save_generation_manifest(
     validated_date = validate_publish_date(date_str)
     validated_category = str(category or '论文速递')
     manifest = {
-        'schemaVersion': 3 if input_fingerprint else 1,
+        **blog_formats.current_header(blog_formats.GENERATION if input_fingerprint else blog_formats.FILE_LIST),
         'date': validated_date,
         'generatedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
@@ -15293,8 +15602,8 @@ def save_generation_manifest(
         # _validate_generation_input_integrity below remains a fresh boundary.
         api_bindings = llm_api_publication_bindings(published_papers)
         if publication_mode is None:
-            if len(manual_v6_publication_bindings(published_papers)) == len(published_papers):
-                publication_mode = MANUAL_V6_PRODUCTION_MODE
+            if len(signed_manual_publication_bindings(published_papers)) == len(published_papers):
+                publication_mode = SIGNED_MANUAL_PRODUCTION_MODE
             elif len(api_bindings) == len(published_papers):
                 publication_mode = LLM_API_PRODUCTION_MODE
             else:
@@ -15309,15 +15618,18 @@ def save_generation_manifest(
             production_proof = validate_generation_publication_mode(
                 published_papers, publication_mode,
             )
+        manifest['postPublicationPolicy'] = public_protocols.record('daily-publication-policy', {
+            'generatedImages': False, 'sourceFigures': 'retained-and-source-verified',
+        })
         manifest.update({
             'inputFingerprint': input_fingerprint,
             'templateFingerprint': template_fingerprint,
             'baseHead': str(base_head or '').lower(),
             'publishAll': publish_all,
             'publishedPapers': published_papers,
-            'publishedPapersFingerprintContract': PUBLISHED_PAPERS_FINGERPRINT_CONTRACT,
+            **blog_formats.current_snapshot_fields(),
             'publishedPapersFingerprint': published_papers_fingerprint(published_papers),
-            'manualV6Bindings': manual_v6_publication_bindings(published_papers),
+            'manualV6Bindings': signed_manual_publication_bindings(published_papers),
             'llmApiBindings': api_bindings,
             'publicationMode': publication_mode,
         })
@@ -15332,7 +15644,7 @@ def save_generation_manifest(
             asset_records = [
                 record for record in records
                 if record['path'].startswith((
-                    'static/images/papers/', 'static/data/papers/',
+                    'static/images/papers/', 'static/data/papers/', 'static/client/papers/',
                 ))
             ]
             if len(page_records) != 1 or page_records[0]['deleted'] is True \
@@ -15345,13 +15657,14 @@ def save_generation_manifest(
                 f'static/images/papers/{publication_scope_value["includeId"]}/'
             )
             expected_sidecar_id = publication_scope_value['includeId'].replace('.', '-').replace('/', '-')
-            expected_sidecar_prefix = (
-                f'static/data/papers/{validated_date}/{expected_sidecar_id}/'
+            expected_sidecar_prefixes = (
+                f'static/data/papers/{validated_date}/{expected_sidecar_id}/',
+                f'static/client/papers/{validated_date}/{expected_sidecar_id}/',
             )
             if any(
                     record['deleted'] is True
                     or not record['path'].startswith((
-                        expected_image_prefix, expected_sidecar_prefix,
+                        expected_image_prefix, *expected_sidecar_prefixes,
                     ))
                     for record in asset_records):
                 raise PublishDataValidationError(
@@ -15367,7 +15680,7 @@ def save_generation_manifest(
             manifest['rasterRecoveryInput'] = {k: recovery[k] for k in ('file', 'sha256')}
         manifest['derivedFigureAssets'] = _derived_figure_asset_bindings(published_papers)
         manifest['derivedFigureAssetsFingerprint'] = _stable_json_sha256(manifest['derivedFigureAssets'])
-        if publication_mode == MANUAL_V6_PRODUCTION_MODE:
+        if publication_mode == SIGNED_MANUAL_PRODUCTION_MODE:
             manifest['manualV6Production'] = production_proof
             manifest['manualV6ProductionFingerprint'] = _stable_json_sha256(
                 production_proof
@@ -15387,88 +15700,24 @@ def save_generation_manifest(
     return path
 
 
-def plan_post_publish_visual_assets(date_str):
-    """远端发布成功后，创建 TOP 10 信息图和汇总页图片任务。"""
+def preflight_production_publication(date_str, *, require_production_receipt=False):
+    """推送前核验正式快照，历史弱格式仅保留其原维护权限。"""
     date_str = validate_publish_date(date_str)
     manifest = _load_json_object(generation_manifest_path(date_str), '生成清单')
-    category = str(manifest.get('category') or '论文速递')
-    command = [
-        'node', str(PROJECT_ROOT / 'scripts' / 'visual-summary-integration.js'),
-        '--date', date_str,
-        '--category', category,
-    ]
-    try:
-        timeout_seconds = _bounded_positive_seconds(
-            'PD_VISUAL_PLANNER_TIMEOUT_SECONDS',
-            VISUAL_PLANNER_TIMEOUT_SECONDS, 10, 900,
-        )
-        completed = _run_bounded_subprocess(
-            command,
-            cwd=PROJECT_ROOT,
-            text=True,
-            env=build_child_process_env(),
-            timeout_seconds=timeout_seconds,
-            max_output_bytes=HUGO_GATE_OUTPUT_TAIL_BYTES,
-            combine_output=True,
-            tail_output=True,
-        )
-    except OSError as exc:
-        print(f'⚠️ 全部博客已经发布，但无法启动发布后视觉规划器: {exc}')
-        print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
-        return False
-    if completed.returncode != 0:
-        reason = '超时且完整进程组已终止' if completed.timed_out else '子进程返回非零'
-        print(f'⚠️ 全部博客已经发布，但发布后视觉任务建立失败（{reason}）；图片不回滚博客发布')
-        detail = (completed.stderr or completed.stdout or '').strip()
-        if detail:
-            print(f'   诊断: {detail[-2000:]}')
-        print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
-        return False
-    return True
-
-
-def preflight_post_publish_visual_capability(date_str, *, require_visual_plan=False):
-    """判断这次通过审查的生成能否进入现代视觉阶段。
-
-    历史上的 schema v1/v2 清单在显式维护时仍可发布，
-    但它们不含现代发布后视觉契约所需的权威论文快照。
-    每日模式必须在改动 Git 之前就拒掉它们，
-    而不是等远端推送之后才发现不兼容。
-    """
-    date_str = validate_publish_date(date_str)
-    manifest_path = generation_manifest_path(date_str)
-    manifest = _load_json_object(manifest_path, '生成清单')
-    schema_version = manifest.get('schemaVersion')
-    if manifest.get('date') != date_str or schema_version not in {1, 2, 3}:
-        raise PublishDataValidationError('生成清单版本或日期不匹配')
-    if schema_version == 3:
+    profile = blog_formats.generation_profile(manifest)
+    if manifest.get('date') != date_str or profile is None:
+        raise PublishDataValidationError('生成清单格式或日期不匹配')
+    if profile == 'source-bound-snapshot':
         validate_generation_visual_contract(manifest, date_str)
         scope = _validate_active_publication_scope(manifest)
-        if scope is not None:
-            if require_visual_plan:
-                raise PublishDataValidationError(
-                    '单篇灰度发布不建立批次 TOP 10/汇总图任务；不得使用 --require-visual-plan'
-                )
-            print('🎯 单篇灰度发布：发布后批次视觉任务明确标记为不适用')
-            return False
-        if manifest.get('publicationMode') not in {
-                MANUAL_V6_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE}:
-            if require_visual_plan:
-                raise PublishDataValidationError(
-                    '发布后视觉只接受 production generation；legacy v5 maintenance 不适用'
-                )
-            print('🧰 legacy v5 maintenance 发布：发布后视觉任务明确标记为不适用')
-            return False
-        return True
-    if require_visual_plan:
-        raise PublishDataValidationError(
-            f'标准日更要求发布后视觉任务，但 generation manifest schema v{schema_version} '
-            '仅支持历史维护发布；请重新运行 generate-blog.py 生成 schema v3 清单'
-        )
-    print(
-        f'🧰 generation manifest schema v{schema_version} 进入历史维护模式：'
-        '允许博客推送，但发布后视觉任务明确标记为不适用'
-    )
+        formal = manifest.get('publicationMode') in {
+            SIGNED_MANUAL_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE,
+        }
+        if require_production_receipt and (scope is not None or not formal):
+            raise PublishDataValidationError('标准日更必须绑定完整批次的正式发布快照')
+        return scope is None and formal
+    if require_production_receipt:
+        raise PublishDataValidationError('标准日更需要完整正式快照；请重新生成并审查，不能用旧维护清单代替')
     return False
 
 
@@ -15478,13 +15727,15 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
         raise PublishDataValidationError('生成清单仍使用旧版发布前视觉摘要契约，请重新运行 generate-blog.py')
     if manifest.get('digestCoverRequired') is not False:
         raise PublishDataValidationError('生成清单仍使用旧版发布前汇总封面契约，请重新运行 generate-blog.py')
-    if manifest.get('schemaVersion') == 3:
+    if blog_formats.source_bound_generation(manifest):
         _validate_generation_input_integrity(manifest, date_str)
     repo = Path(repo or BLOG_REPO).expanduser().resolve()
     paper_ids = set()
     workbench_paper_ids = set()
     workbench_flat_contracts = {}
+    workbench_flat_fingerprints = {}
     workbench_context_contracts = {}
+    workbench_context_fingerprints = {}
     for record in manifest.get('files') or []:
         if not isinstance(record, dict) or record.get('deleted') is True:
             continue
@@ -15495,11 +15746,11 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
         if parts[:2] == ('content', 'posts') and relative.suffix == '.md':
             target = (repo / relative).resolve()
             if not target.is_file():
-                if manifest.get('schemaVersion') == 3:
+                if blog_formats.source_bound_generation(manifest):
                     raise PublishDataValidationError(f'生成清单中的页面内容或删除状态与原记录不一致：{relative}')
                 continue
             raw = target.read_bytes()
-            if manifest.get('schemaVersion') == 3 and (
+            if blog_formats.source_bound_generation(manifest) and (
                     record.get('deleted') is not False
                     or not re.fullmatch(r'[0-9a-f]{64}', str(record.get('sha256') or ''))
                     or hashlib.sha256(raw).hexdigest() != record['sha256']):
@@ -15521,17 +15772,19 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
             paper_id = normalize_publish_arxiv_id(match.group(1))
             paper_ids.add(paper_id)
             if re.search(
-                    rf'^paper_digest_workbench_contract:\s*"?{re.escape(RESEARCHER_WORKBENCH_CONTRACT)}"?\s*$',
+                    r'^paper_digest_workbench_contract:',
                     content, re.MULTILINE):
                 workbench_paper_ids.add(paper_id)
                 page_frontmatter, _body = _parse_frontmatter_content(relative.as_posix(), content)
                 if paper_id in workbench_flat_contracts:
                     raise PublishDataValidationError('同一篇论文对应多个页面，无法确定附属文件属于哪个页面。')
                 workbench_flat_contracts[paper_id] = _page_flat_tag_contract(page_frontmatter)
+                workbench_flat_fingerprints[paper_id] = _page_flat_tag_fingerprint(page_frontmatter)
                 workbench_context_contracts[paper_id] = _page_context_contract(page_frontmatter)
+                workbench_context_fingerprints[paper_id] = _page_context_fingerprint(page_frontmatter)
     if not paper_ids:
         raise PublishDataValidationError('生成清单中没有可绑定视觉摘要的论文页')
-    if manifest.get('schemaVersion') == 3:
+    if blog_formats.source_bound_generation(manifest):
         published_papers = manifest.get('publishedPapers')
         if (
             not re.fullmatch(r'[0-9a-f]{64}', str(manifest.get('inputFingerprint') or ''))
@@ -15553,7 +15806,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
             for record in manifest.get('files') or []
             if isinstance(record, dict)
             and isinstance(record.get('path'), str)
-            and record['path'].startswith('static/data/papers/')
+            and record['path'].startswith(('static/data/papers/', 'static/client/papers/'))
             and record.get('deleted') is not True
         }
         expected_sidecars = {}
@@ -15562,9 +15815,9 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
             if paper_id not in workbench_paper_ids:
                 continue
             api_reader_payload = _api_reader_payload(paper)
-            v6_payload = _manual_v6_reader_payload(paper)
+            signed_manual_payload = _signed_manual_reader_payload(paper)
             reader_plan = (
-                v6_payload.get('plan') if isinstance(v6_payload, dict)
+                signed_manual_payload.get('plan') if isinstance(signed_manual_payload, dict)
                 else api_reader_payload.get('plan')
                 if isinstance(api_reader_payload, dict)
                 else _manual_reader_editorial_plan(paper)
@@ -15573,7 +15826,9 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                 paper, date_str, reader_plan=reader_plan,
                 api_reader_payload=api_reader_payload, require_reader=True,
                 flat_tag_contract=workbench_flat_contracts[paper_id],
+                flat_tag_schema_fingerprint=workbench_flat_fingerprints[paper_id],
                 context_contract=workbench_context_contracts[paper_id],
+                context_schema_fingerprint=workbench_context_fingerprints[paper_id],
             )
             for relative, raw in bundle['sidecars'].items():
                 relative_text = relative.as_posix()
@@ -15606,7 +15861,7 @@ def load_generation_manifest(date_str):
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'生成清单无法读取或解析：{manifest_path}') from exc
-    if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
+    if not blog_formats.generation_profile(manifest) or manifest.get('date') != date_str:
         raise PublishDataValidationError('生成清单的版本不受支持，或日期与目标日期不一致。')
     _validate_active_publication_scope(manifest)
     validate_current_generation_template(manifest)
@@ -15623,7 +15878,7 @@ def load_generation_manifest(date_str):
             or not isinstance(record.get('deleted'), bool)
         ):
             raise PublishDataValidationError('生成清单中的文件记录格式无效，或路径、删除标记不符合要求。')
-        if manifest.get('schemaVersion') in {2, 3}:
+        if blog_formats.generation_profile(manifest) in {'file-hashes', 'source-bound-snapshot'}:
             expected_sha = record.get('sha256')
             if record['deleted']:
                 if expected_sha is not None:
@@ -15643,7 +15898,7 @@ def load_generation_manifest(date_str):
                 raise PublishDataValidationError(f'生成清单中标记为删除的文件仍然存在：{normalized}')
         elif not target.is_file():
             raise PublishDataValidationError(f'生成清单中应当存在的文件未找到：{normalized}')
-        if manifest.get('schemaVersion') == 3:
+        if blog_formats.source_bound_generation(manifest):
             expected = {
                 'deleted': record['deleted'],
                 'sha256': None if record['deleted'] else record.get('sha256'),
@@ -15654,7 +15909,7 @@ def load_generation_manifest(date_str):
                 )
         paths.append(target)
     validate_generation_visual_contract(manifest, date_str, repo)
-    if manifest.get('schemaVersion') == 3:
+    if blog_formats.source_bound_generation(manifest):
         _validate_generation_input_integrity(manifest, date_str)
     return paths, manifest_path
 
@@ -15662,7 +15917,7 @@ def load_generation_manifest(date_str):
 def generation_manifest_expectations(manifest_path, date_str):
     """读取生成清单，返回各发布路径对应的预期删除状态；不核对文件内容哈希。"""
     manifest = _load_json_object(manifest_path, '生成清单')
-    if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
+    if not blog_formats.generation_profile(manifest) or manifest.get('date') != date_str:
         raise PublishDataValidationError('生成清单的版本不受支持，或日期与目标日期不一致。')
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
@@ -15691,9 +15946,9 @@ def validate_generation_manifest_file_bytes(manifest_path, date_str):
     也不会在这里升级或改写。
     """
     manifest = _load_json_object(manifest_path, '生成清单')
-    if manifest.get('date') != date_str or manifest.get('schemaVersion') not in {1, 2, 3}:
+    if manifest.get('date') != date_str or not blog_formats.generation_profile(manifest):
         raise PublishDataValidationError('生成清单的版本不受支持，或日期与目标日期不一致。')
-    if manifest.get('schemaVersion') != 3:
+    if not blog_formats.source_bound_generation(manifest):
         return True
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = manifest.get('files')
@@ -15865,7 +16120,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
     page_frontmatter = {}
     for page in pages:
         raw = page.read_bytes()
-        if manifest.get('schemaVersion') == 3:
+        if blog_formats.source_bound_generation(manifest):
             relative = page.relative_to(repo).as_posix()
             record = manifest_by_path.get(relative)
             if (not isinstance(record, dict) or record.get('deleted') is not False
@@ -15883,19 +16138,19 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
         if not isinstance(paper, dict):
             continue
         api_reader_payload = _api_reader_payload(paper)
-        v6_payload = _manual_v6_reader_payload(paper)
+        signed_manual_payload = _signed_manual_reader_payload(paper)
         reader_plan = (
-            v6_payload.get('plan') if isinstance(v6_payload, dict)
+            signed_manual_payload.get('plan') if isinstance(signed_manual_payload, dict)
             else api_reader_payload.get('plan') if isinstance(api_reader_payload, dict)
             else _manual_reader_editorial_plan(paper)
         )
-        if not _researcher_workbench_eligible(v6_payload, api_reader_payload):
+        if not _researcher_workbench_eligible(signed_manual_payload, api_reader_payload):
             continue
         if not isinstance(reader_plan, dict):
             continue
         matching_frontmatter = [
             frontmatter for frontmatter in page_frontmatter.values()
-            if frontmatter.get('paper_digest_workbench_contract') == RESEARCHER_WORKBENCH_CONTRACT
+            if public_protocols.is_contract(frontmatter.get('paper_digest_workbench_contract'),'researcher-workbench')
             and frontmatter.get('paper_digest_arxiv_id') == parse_publish_arxiv_identity(paper.get('arxivId'))['baseId']
         ]
         if len(matching_frontmatter) != 1:
@@ -15905,7 +16160,9 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             paper, date_str, reader_plan=reader_plan,
             api_reader_payload=api_reader_payload, require_reader=True,
             flat_tag_contract=_page_flat_tag_contract(matching_frontmatter[0]),
+            flat_tag_schema_fingerprint=_page_flat_tag_fingerprint(matching_frontmatter[0]),
             context_contract=_page_context_contract(matching_frontmatter[0]),
+            context_schema_fingerprint=_page_context_fingerprint(matching_frontmatter[0]),
         )
         for sidecar_relative, sidecar_raw in bundle['sidecars'].items():
             key = sidecar_relative.as_posix()
@@ -15935,8 +16192,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             expected = expected_sidecars.get(relative)
             page_candidates = [
                 page for page, frontmatter in page_frontmatter.items()
-                if frontmatter.get('paper_digest_workbench_contract')
-                == RESEARCHER_WORKBENCH_CONTRACT
+                if public_protocols.is_contract(frontmatter.get('paper_digest_workbench_contract'),'researcher-workbench')
                 and isinstance(expected, tuple)
                 and frontmatter.get('paper_digest_arxiv_id')
                 == expected[1]['identity']['baseId']
@@ -16051,7 +16307,7 @@ def reusable_generation_manifest(
     try:
         manifest = _load_json_object(path, '生成清单')
         if (
-            manifest.get('schemaVersion') != 3
+            not blog_formats.source_bound_generation(manifest)
             or manifest.get('date') != date_str
             or manifest.get('inputFingerprint') != input_fingerprint
             or manifest.get('templateFingerprint') != template_fingerprint
@@ -16117,7 +16373,7 @@ def reusable_verified_publication_generation(
     try:
         manifest = _load_json_object(manifest_path, '生成清单')
         if (
-            manifest.get('schemaVersion') != 3
+            not blog_formats.source_bound_generation(manifest)
             or manifest.get('date') != date_str
             or manifest.get('inputFingerprint') != input_fingerprint
             or manifest.get('templateFingerprint') != template_fingerprint
@@ -16146,7 +16402,7 @@ def reusable_verified_publication_generation(
         except (TypeError, ValueError):
             return None
         if (
-            receipt.get('schemaVersion') != 3
+            not blog_formats.strict_receipt(receipt)
             or receipt.get('date') != date_str
             or receipt.get('strictReview') is not True
             or receipt.get('hugoGate') != 'hugo'
@@ -16163,7 +16419,7 @@ def reusable_verified_publication_generation(
             or remote_name != GITHUB_REMOTE
             or not re.fullmatch(r'[0-9a-f]{64}', remote_identity)
             or receipt.get('generationManifestSha256') != _sha256_file(manifest_path)
-            or receipt.get('generationInputIntegrity') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
+            or not blog_formats.matches_snapshot_receipt(manifest, receipt)
             or receipt.get('generationInputFingerprint') != manifest.get('inputFingerprint')
             or receipt.get('publishedPapersFingerprint')
             != manifest.get('publishedPapersFingerprint')
@@ -16281,7 +16537,7 @@ def has_publication_evidence_for_generation(
         manifest = _load_json_object(manifest_path, '生成清单')
     except (OSError, UnicodeError, PublishDataValidationError):
         return True
-    if manifest.get('schemaVersion') != 3 or manifest.get('date') != date_str:
+    if not blog_formats.source_bound_generation(manifest) or manifest.get('date') != date_str:
         return False
     if input_fingerprint is not None and manifest.get('inputFingerprint') != input_fingerprint:
         return False
@@ -16387,9 +16643,9 @@ def save_review_receipt(
         else ('mixed' if file_image_modes else 'deterministic_only')
     )
     generation_payload = _load_json_object(generation_manifest, '生成清单')
-    generation_schema = generation_payload.get('schemaVersion')
+    generation_source_bound = blog_formats.source_bound_generation(generation_payload)
     publication_scope_value = _validate_active_publication_scope(generation_payload)
-    if generation_schema == 3:
+    if generation_source_bound:
         validate_generation_visual_contract(generation_payload, date_str, repo)
         generation_input_fingerprint_value, published_snapshot_fingerprint = (
             _validate_generation_input_integrity(generation_payload, date_str)
@@ -16402,7 +16658,7 @@ def save_review_receipt(
         generation_payload, publication_scope_value,
     )
     receipt = {
-        'schemaVersion': 3,
+        **blog_formats.current_header(blog_formats.RECEIPT),
         'date': validate_publish_date(date_str),
         'reviewedAt': datetime.datetime.now(
             datetime.timezone(datetime.timedelta(hours=8))
@@ -16418,17 +16674,15 @@ def save_review_receipt(
         'generationManifestSha256': (
             _sha256_file(generation_manifest) if generation_manifest is not None else None
         ),
-        'generationInputIntegrity': (
-            PUBLISHED_PAPERS_FINGERPRINT_CONTRACT if generation_schema == 3 else None
-        ),
+        **blog_formats.receipt_snapshot_fields(generation_payload),
         'generationInputFingerprint': generation_input_fingerprint_value,
         'publishedPapersFingerprint': published_snapshot_fingerprint,
         'generationInputSourceReference': (
             generation_payload.get('inputSourceReference')
-            if generation_schema == 3 else None
+            if generation_source_bound else None
         ),
         # 生成 SHA 用于核对这次通过审查的生成记录。
-        # postPublishVisuals 告知 push 和 status：required 表示必须完成发布后视觉任务；
+        # 新记录的 not_requested 表示日更不生图；required 只保留原历史记录的含义；
         # not_applicable_single_paper 表示单篇发布不适用，
         # not_applicable_legacy_maintenance 表示旧格式维护不适用。
         'postPublishVisuals': post_publish_visuals,
@@ -16471,7 +16725,7 @@ def _validate_original_cache_identity(identity):
     if set(identity) != {'status', 'reviewSubagent'}:
         raise ValueError('原模型身份记录含有未知字段。')
     subagent = identity['reviewSubagent']
-    expected = CURRENT_MODEL_POLICY if isinstance(subagent, dict) and subagent.get('version') == 2 else LEGACY_MODEL_POLICY
+    expected = cache_subagent_policy(subagent)
     error = review_subagent_identity_error(subagent, expected)
     if error:
         raise ValueError(error)
@@ -16481,8 +16735,7 @@ def _original_review_cache_evidence(record):
     """保留实际读到的原逐页通过记录，不把旧身份改成当前模型。"""
     saved = record.get('originalReviewEvidence')
     if saved is not None:
-        if (not isinstance(saved, dict) or set(saved) != {'version', 'record', 'recordSha256'}
-                or type(saved.get('version')) is not int or saved['version'] != 1
+        if (not valid_cache_evidence_header(saved)
                 or not isinstance(saved.get('record'), dict)
                 or _stable_json_sha256(saved['record']) != saved.get('recordSha256')):
             raise ValueError('原逐页通过记录的副本或 SHA 无效。')
@@ -16508,7 +16761,7 @@ def _original_review_cache_evidence(record):
     original = {key: record.get(key) for key in (
         'path', 'sha256', 'reviewedAt', 'reviewProtocolFingerprint', 'imageReviewMode')}
     original['modelIdentity'] = identity
-    return {'version': 1, 'record': original, 'recordSha256': _stable_json_sha256(original)}
+    return {**cache_evidence_header(), 'record': original, 'recordSha256': _stable_json_sha256(original)}
 
 
 def manual_cache_reuse_for_file(date_str, relative_path, body_sha256):
@@ -16535,9 +16788,12 @@ def validate_manual_cache_reuse(item, date_str):
     except (ValueError, TypeError) as exc:
         raise PublishDataValidationError(str(exc)) from exc
     actual = manual_cache_reuse_for_file(date_str, item.get('path'), item.get('sha256'))
-    if actual is None or evidence != actual:
+    # The wrapper carries no authority. Older declarations retain their own
+    # wrapper after replay against the same actual cached record and body SHA.
+    if actual is None or evidence['record'] != actual['record'] \
+            or evidence['recordSha256'] != actual['recordSha256']:
         raise PublishDataValidationError('逐页复用没有对应的真实原通过记录，或原证据不一致。')
-    return actual
+    return evidence
 
 
 def _valid_review_pass_record(record, repo, date_str, default_protocol=None, default_time=None):
@@ -16586,18 +16842,18 @@ def _collect_review_pass_records(date_str):
     repo = Path(BLOG_REPO).expanduser().resolve()
     collected = {}
     sources = (
-        (review_pass_cache_path(date_str), {1}, None),
-        (review_receipt_path(date_str), {3}, 'reviewedAt'),
-        (review_failure_path(date_str), {1, 2, 3}, 'savedAt'),
+        (review_pass_cache_path(date_str), blog_formats.PASS_CACHE, None),
+        (review_receipt_path(date_str), blog_formats.RECEIPT, 'reviewedAt'),
+        (review_failure_path(date_str), blog_formats.FAILURES, 'savedAt'),
     )
-    for source_path, schemas, time_field in sources:
+    for source_path, family, time_field in sources:
         try:
             payload = json.loads(source_path.read_text(encoding='utf-8'))
         except (OSError, UnicodeError, json.JSONDecodeError):
             continue
         if (
             not isinstance(payload, dict)
-            or payload.get('schemaVersion') not in schemas
+            or blog_formats.record_profile(payload, family) is None
             or payload.get('date') != date_str
             or not isinstance(payload.get('files'), list)
         ):
@@ -16680,7 +16936,7 @@ def save_review_page_checkpoint(
     if not re.fullmatch(r'[0-9a-f]{64}', str(manifest_sha256 or '')):
         raise PublishDataValidationError('逐页 review checkpoint 的 generation manifest SHA 非法')
     payload = {
-        'schemaVersion': 1,
+        **blog_formats.current_header(blog_formats.CHECKPOINT),
         'date': date_str,
         'path': relative,
         'sha256': fingerprint['sha256'],
@@ -16711,7 +16967,7 @@ def _collect_review_page_checkpoints(date_str):
             continue
         if (
             not isinstance(payload, dict)
-            or payload.get('schemaVersion') != 1
+            or blog_formats.record_profile(payload, blog_formats.CHECKPOINT) is None
             or payload.get('date') != date_str
             or not isinstance(payload.get('path'), str)
             or not re.fullmatch(r'[0-9a-f]{64}', str(payload.get('sha256') or ''))
@@ -16819,7 +17075,7 @@ def save_review_pass_cache(date_str, publish_paths=(), file_results=None, *,
     if not records:
         return None
     payload = {
-        'schemaVersion': 1,
+        **blog_formats.current_header(blog_formats.PASS_CACHE),
         'date': date_str,
         'updatedAt': now,
         'files': sorted(records.values(), key=lambda value: (value['path'], value['sha256'])),
@@ -16878,7 +17134,7 @@ def save_review_failure_state(
             ),
         })
     state = {
-        'schemaVersion': 3,
+        **blog_formats.current_header(blog_formats.FAILURES),
         'date': validate_publish_date(date_str),
         'baseHead': str(base_head).lower(),
         'generationManifestSha256': _sha256_file(manifest_path),
@@ -16917,7 +17173,8 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
     try:
         if state_path.is_file():
             state = json.loads(state_path.read_text(encoding='utf-8'))
-            if state.get('schemaVersion') not in {1, 2, 3} or state.get('date') != date_str:
+            failure_profile = blog_formats.record_profile(state, blog_formats.FAILURES)
+            if failure_profile is None or state.get('date') != date_str:
                 raise ValueError('失败状态版本或日期不匹配')
             records = state.get('files')
             if not isinstance(records, list):
@@ -16932,7 +17189,7 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                     raise ValueError('失败状态包含非法绝对路径')
                 target = (repo / relative).resolve()
                 normalized = _validate_manifest_path_date(target, repo, date_str)
-                if state.get('schemaVersion') in {2, 3} and (
+                if failure_profile == 'typed-page-outcomes' and (
                     not isinstance(record.get('completed'), bool)
                     or record.get('failureKind') not in {None, 'pending', 'content', 'transient'}
                 ):
@@ -17058,7 +17315,7 @@ def load_verified_review_receipt(date_str):
         receipt = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(f'审查凭证无法解析: {path}') from exc
-    if receipt.get('schemaVersion') != 3 or receipt.get('date') != date_str:
+    if not blog_formats.strict_receipt(receipt) or receipt.get('date') != date_str:
         raise PublishDataValidationError('审查凭证版本或日期不匹配')
     if receipt.get('strictReview') is not True:
         raise PublishDataValidationError('发布凭证未标明已通过严格审查。')
@@ -17092,10 +17349,10 @@ def load_verified_review_receipt(date_str):
     publication_scope_value = _validate_active_publication_scope(generation_manifest)
     validate_generation_visual_contract(generation_manifest, date_str)
     validate_generation_manifest_file_bytes(manifest_path, date_str)
-    if generation_manifest.get('schemaVersion') == 3:
+    if blog_formats.source_bound_generation(generation_manifest):
         _validate_generation_input_integrity(generation_manifest, date_str)
-    if generation_manifest.get('schemaVersion') == 3 and (
-        receipt.get('generationInputIntegrity') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
+    if blog_formats.source_bound_generation(generation_manifest) and (
+        not blog_formats.matches_snapshot_receipt(generation_manifest, receipt)
         or receipt.get('generationInputFingerprint') != generation_manifest.get('inputFingerprint')
         or receipt.get('publishedPapersFingerprint')
         != generation_manifest.get('publishedPapersFingerprint')
@@ -17346,7 +17603,7 @@ def has_verified_publication_receipt(date_str):
     publication_commit = str(receipt.get('publicationCommit') or '').lower()
     remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
     return bool(
-        receipt.get('schemaVersion') == 3
+        blog_formats.strict_receipt(receipt)
         and receipt.get('date') == validate_publish_date(date_str)
         and re.fullmatch(r'[0-9a-f]{40,64}', publication_commit)
         and remote_oid == publication_commit
@@ -17527,11 +17784,11 @@ def generate_main(options=None):
             if record.get('status') != 'generated':
                 paper_md, slug = generate_paper_page(paper, today, category)
                 paper_md = sanitize_markdown_for_publish(paper_md)
-                manual_v4_issue = validate_final_manual_v4_markdown(paper_md, paper)
-                if manual_v4_issue:
+                manual_reader_issue = validate_final_structured_manual_markdown(paper_md, paper)
+                if manual_reader_issue:
                     raise PublishDataValidationError(
                         f'{paper.get("arxivId", "unknown")} sanitize/render 后 '
-                        f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
+                        f'Manual v4 最终 Markdown 无效: {manual_reader_issue}'
                     )
                 paper_file = staged_posts / record['filename']
                 if record['filename'] != f'{today}-{slug}.md':
@@ -17549,13 +17806,13 @@ def generate_main(options=None):
                     raise PublishDataValidationError(
                         f'论文页 generation checkpoint 损坏: {record["filename"]}'
                     )
-                manual_v4_issue = validate_final_manual_v4_markdown(
+                manual_reader_issue = validate_final_structured_manual_markdown(
                     paper_file.read_text(encoding='utf-8'), paper,
                 )
-                if manual_v4_issue:
+                if manual_reader_issue:
                     raise PublishDataValidationError(
                         f'{paper.get("arxivId", "unknown")} 复用 generation checkpoint 前 '
-                        f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
+                        f'Manual v4 最终 Markdown 无效: {manual_reader_issue}'
                     )
                 print(f'♻️ 跳过已生成论文页: {record["filename"]}')
 

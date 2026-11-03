@@ -1,11 +1,13 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 const crypto = require('crypto');
 if (require.main === module) {
     require('../../scripts/env-loader.js').requireExternalRuntime('manual-signature-contract.js');
 }
 
-const MANUAL_SIGNATURE_CONTRACT = 'stable-json-ascii-keys-exact-ieee754-nfkc-text-v2';
+const MANUAL_SIGNATURE_CONTRACT = historicalManualContract('manual-signature', 'exact-decimal-nfkc');
 const SAFE_INTEGER_LIMIT = Number.MAX_SAFE_INTEGER;
 const ASCII_KEY_RE = /^[\x20-\x7e]+$/;
 

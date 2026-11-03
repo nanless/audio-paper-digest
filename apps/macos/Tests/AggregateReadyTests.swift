@@ -24,6 +24,7 @@ private actor FixtureTransport {
             // transport completion can. The production owner must reject it.
             if holdImages { await withCheckedContinuation { imageWaiters.append($0) } }
         }
+        if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
         guard let data = files[url.absoluteString], data.count <= limit else { throw URLError(.fileDoesNotExist) }
         return data
     }

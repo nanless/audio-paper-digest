@@ -11,7 +11,8 @@ import Foundation
         let encodedBytes: Int
     }
     struct Profile: Codable, Sendable {
-        var contract = "paperdigest-cloud-profile-v1"
+        var contract = ClientProtocols.contract("paperdigest-cloud-profile")
+        var schemaFingerprint: String? = ClientProtocols.schemaFingerprint("paperdigest-cloud-profile")
         var destinationID = UUID()
         var account = ""
         var folder = "PaperDigest"
@@ -23,6 +24,7 @@ import Foundation
     }
     struct Pending: Codable, Sendable {
         let contract: String
+        var schemaFingerprint: String? = nil
         let destinationID: UUID
         let createdAt: String
         let fileCount: Int
@@ -52,7 +54,7 @@ import Foundation
         }
     }
     static func validate(_ value: Profile) throws {
-        guard value.contract == "paperdigest-cloud-profile-v1", value.account.utf8.count <= 320,
+        guard ClientProtocols.hasValidHeader(value.contract,fingerprint:value.schemaFingerprint,"paperdigest-cloud-profile"), value.account.utf8.count <= 320,
               !value.account.contains(":"), !value.account.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }),
               value.folder.range(of: "\\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\z", options: .regularExpression) != nil,
               !value.folder.contains(".."), value.folder.lowercased() != "zotero", (6...168).contains(value.intervalHours) else {
@@ -95,7 +97,7 @@ import Foundation
         }
         let checked = try PrivateStoragePaths.checkedFile(relative: relative, directory: root)
         let value = try JSONDecoder().decode(Pending.self, from: PrivateStoragePaths.boundedData(checked, limit: 4 * 1024 * 1024))
-        guard value.contract == "paperdigest-cloud-pending-v1", value.destinationID == profile.destinationID,
+        guard ClientProtocols.hasValidHeader(value.contract,fingerprint:value.schemaFingerprint,"paperdigest-cloud-pending"), value.destinationID == profile.destinationID,
               value.encodedBytes > 0, value.encodedBytes <= BackupCodec.maxEncodedBytes,
               (1...BackupCodec.maxEntries).contains(value.fileCount), PrivateStoragePaths.validSHA(value.sha256) else {
             throw DesktopError.message("云备份续传记录无效；原材料已保留")
@@ -112,7 +114,7 @@ import Foundation
     func prepare(_ payload: BackupCodec.Payload) throws -> Pending {
         guard try !hasPendingMaterials() else { throw DesktopError.message("请先续传或原样保留未完成材料；不会覆盖原快照") }
         let bytes = try BackupCodec.encode(payload)
-        let next = Pending(contract: "paperdigest-cloud-pending-v1", destinationID: profile.destinationID,
+        let next = Pending(contract: ClientProtocols.contract("paperdigest-cloud-pending"), schemaFingerprint: ClientProtocols.schemaFingerprint("paperdigest-cloud-pending"), destinationID: profile.destinationID,
                            createdAt: ISO8601DateFormatter().string(from: Date()), fileCount: payload.files.count,
                            encodedBytes: bytes.count, sha256: PrivateStoragePaths.sha256(bytes), checkpoint: nil)
         let folder = try pendingFolder(profile.destinationID)
@@ -189,5 +191,37 @@ import Foundation
         let data = try encoder.encode(value), file = root.appendingPathComponent(relative)
         try data.write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension CloudLocalStore.Profile {
+    init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-cloud-profile")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        destinationID=try values.decode(UUID.self,forKey:.destinationID)
+        account=try values.decode(String.self,forKey:.account)
+        folder=try values.decode(String.self,forKey:.folder)
+        automatic=try values.decode(Bool.self,forKey:.automatic)
+        intervalHours=try values.decode(Int.self,forKey:.intervalHours)
+        lastAttemptAt=try values.decodeIfPresent(Date.self,forKey:.lastAttemptAt)
+        lastBackup=try values.decodeIfPresent(CloudLocalStore.Completed.self,forKey:.lastBackup)
+        automaticPaused=try values.decodeIfPresent(Bool.self,forKey:.automaticPaused)
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension CloudLocalStore.Pending {
+    init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-cloud-pending")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        destinationID=try values.decode(UUID.self,forKey:.destinationID)
+        createdAt=try values.decode(String.self,forKey:.createdAt)
+        fileCount=try values.decode(Int.self,forKey:.fileCount)
+        encodedBytes=try values.decode(Int.self,forKey:.encodedBytes)
+        sha256=try values.decode(String.self,forKey:.sha256)
+        checkpoint=try values.decodeIfPresent(CloudArchiveService.UploadCheckpoint.self,forKey:.checkpoint)
     }
 }

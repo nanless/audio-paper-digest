@@ -7,15 +7,14 @@ const fetcher = require('../scripts/fetch-papers');
 const conference = require('../scripts/lib/conference-filter');
 const { renderFilterPrompt } = require('../scripts/lib/filter-prompt');
 const utils = require('../scripts/utils');
-const { LLM_FILTER_PROMPT_PATH } = require('../scripts/lib/prompt-text-versions');
+const { LLM_FILTER_PROMPT_PATH } = require('../scripts/lib/prompt-contracts');
 
-test('日更兼容export与会议声明共用同一原v3解析契约', () => {
+test('日更兼容export与会议声明共用稳定解析身份并保留原决定语义', () => {
     assert.equal(fetcher.parseFilterDecision, shared.parseFilterDecision);
     assert.equal(fetcher.parseFilterDecisionDetails, shared.parseFilterDecisionDetails);
-    assert.equal(shared.FILTER_DECISION_VERSION, 3);
-    assert.equal(shared.FILTER_DECISION_CONTRACT, 'filter-decision-contract-v3');
-    assert.equal(require('../scripts/config').FILTER_CONFIG.decisionContractVersion, 3);
-    assert.equal(conference.DAILY_DECISION_PARSER_VERSION, shared.FILTER_DECISION_CONTRACT);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(shared.FILTER_DECISION_PROFILE, 'filter-decision'), true);
+    assert.deepEqual(require('../scripts/config').FILTER_CONFIG.decisionContractProfile, shared.FILTER_DECISION_PROFILE);
+    assert.equal(conference.DAILY_DECISION_PARSER_CONTRACT, shared.FILTER_DECISION_CONTRACT);
     for (const [input, related, reason, parseSource] of [
         ['{"Decision":"not_related","reason":"text only"}', false, 'text only', 'json'],
         ['{"related":false,"reason":"仅文本"}', false, '仅文本', 'json'],

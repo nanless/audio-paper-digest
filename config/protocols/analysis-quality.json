@@ -1,0 +1,106 @@
+{
+  "protocols": [
+    {
+      "name": "experiment-tables",
+      "currentVariant": "evidence-rich",
+      "currentSchema": {
+        "limits": [
+          "table-count",
+          "data-rows",
+          "metric-columns"
+        ],
+        "content": [
+          "compare-under-same-setting",
+          "report-negative-evidence",
+          "explain-result"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "bounded-v1",
+          "variant": "size-limits-only"
+        },
+        {
+          "tag": "evidence-rich-v2",
+          "variant": "evidence-rich"
+        }
+      ]
+    },
+    {
+      "name": "method-detail",
+      "currentVariant": "detailed-method",
+      "currentSchema": {
+        "minimumChineseCharacters": 600,
+        "content": "concrete-input-process-output"
+      },
+      "historical": [
+        {
+          "tag": "detailed-v1",
+          "variant": "detailed-method"
+        }
+      ]
+    },
+    {
+      "name": "analysis-editorial-leakage",
+      "currentVariant": "editorial-text-excluded",
+      "currentSchema": {
+        "content": "exclude-internal-writing-and-implementation-notes"
+      },
+      "historical": [
+        {
+          "tag": "high-confidence-v1",
+          "variant": "editorial-text-excluded"
+        }
+      ]
+    },
+    {
+      "name": "image-narrative",
+      "currentVariant": "context-bound-figures",
+      "currentSchema": {
+        "binding": "same-paper-original-source-and-narrative"
+      },
+      "historical": [
+        {
+          "tag": "context-bound-v1",
+          "variant": "context-bound-figures"
+        }
+      ]
+    },
+    {
+      "name": "manual-editorial-quality",
+      "currentVariant": "original-reader-facing",
+      "currentSchema": {
+        "operation": "historical-read-only"
+      },
+      "historical": [
+        {
+          "tag": "reader-facing-v1",
+          "variant": "original-reader-facing"
+        }
+      ]
+    },
+    {
+      "name": "analysis-stage-manifest",
+      "currentVariant": "api-stage-checkpoints",
+      "currentSchema": {
+        "fields": [
+          "stages",
+          "contracts",
+          "sourceAcquisition",
+          "sourceAcquisitionLatestFailure",
+          "updatedAt"
+        ],
+        "authority": "complete-stage-and-source-proof-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "shared-original-manifest",
+          "header": {
+            "version": 1
+          }
+        }
+      ]
+    }
+  ]
+}

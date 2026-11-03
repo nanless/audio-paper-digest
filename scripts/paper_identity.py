@@ -1,4 +1,4 @@
-"""跨运行时严格一致的论文身份契约（paper-identity-v1）。"""
+"""跨运行时读取论文身份，保留原记录的格式和身份摘要。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,13 @@ import re
 from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-CONTRACT = "paper-identity-v1"
+if __package__:
+    from . import protocol_codec as formats
+else:
+    import protocol_codec as formats
+
+CONTRACT = formats.contract("paper-identity")
+BODY_FIELDS = ("kind", "canonicalId", "arxivId", "conference", "externalId", "source", "citation")
 ARXIV_ID_RE = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SCHEMES = frozenset(("icassp-arnumber", "openreview-forum-id", "conference-paper-id"))
@@ -157,10 +163,26 @@ def assert_canonical_conference_paper_id(value: Any, conference: Any, source_ide
     return expected
 
 
+def current_header():
+    return formats.record_header(CONTRACT, CONTRACT)
+
+
+def read_header(value):
+    if not formats.has_valid_header(value, CONTRACT):
+        _fail('contract or schema fingerprint is unknown or mixed')
+    return formats.record_header(value['contract'], CONTRACT, value.get('schemaFingerprint'))
+
+
+def create_identity(fields):
+    _exact_object(fields, BODY_FIELDS, 'new paper identity')
+    return normalize_identity({**current_header(), **fields})
+
+
 def normalize_identity(value: Any) -> dict[str, Any]:
-    raw = _exact_object(value, ("contract", "kind", "canonicalId", "arxivId", "conference", "externalId", "source", "citation"), "paper identity")
-    if raw["contract"] != CONTRACT:
-        _fail(f"contract must be {CONTRACT}")
+    if not isinstance(value, dict):
+        _fail('paper identity must be a plain object')
+    header = read_header(value)
+    raw = _exact_object(value, (*header, *BODY_FIELDS), 'paper identity')
     if raw["kind"] not in {"arxiv", "conference"}:
         _fail("kind must be arxiv or conference")
     source = validate_source(raw["source"])
@@ -175,7 +197,7 @@ def normalize_identity(value: Any) -> dict[str, Any]:
             _fail("canonicalId does not bind arxivId")
         if source["status"] == "official" and source["url"] != f"https://arxiv.org/abs/{raw['arxivId']}":
             _fail("official arxiv source.url must bind its exact canonical abs URL")
-        return {"contract": CONTRACT, "kind": "arxiv", "canonicalId": canonical_id, "arxivId": raw["arxivId"],
+        return {**header, "kind": "arxiv", "canonicalId": canonical_id, "arxivId": raw["arxivId"],
                 "conference": None, "externalId": None, "source": source, "citation": citation}
     if raw["arxivId"] is not None:
         _fail("conference identity must not contain arxivId")
@@ -187,7 +209,7 @@ def normalize_identity(value: Any) -> dict[str, Any]:
     canonical_id = canonical_conference_id(conference, external_id)
     if raw["canonicalId"] != canonical_id:
         _fail("canonicalId does not bind conference, year, scheme, and value")
-    return {"contract": CONTRACT, "kind": "conference", "canonicalId": canonical_id, "arxivId": None,
+    return {**header, "kind": "conference", "canonicalId": canonical_id, "arxivId": None,
             "conference": conference, "externalId": external_id, "source": source, "citation": citation}
 
 
@@ -205,9 +227,10 @@ def stable_sha256(value: Any) -> str:
 
 def identity_payload(value: Any) -> dict[str, Any]:
     normalized = normalize_identity(value)
+    header = read_header(normalized)
     if normalized["kind"] == "arxiv":
-        return {"contract": CONTRACT, "kind": "arxiv", "canonicalId": normalized["canonicalId"], "arxivId": normalized["arxivId"]}
-    return {"contract": CONTRACT, "kind": "conference", "canonicalId": normalized["canonicalId"],
+        return {**header, "kind": "arxiv", "canonicalId": normalized["canonicalId"], "arxivId": normalized["arxivId"]}
+    return {**header, "kind": "conference", "canonicalId": normalized["canonicalId"],
             "conference": normalized["conference"], "externalId": normalized["externalId"]}
 
 
@@ -223,7 +246,7 @@ def is_sha256(value: Any) -> bool:
     return bool(SHA_RE.fullmatch(str(value or "")))
 
 
-__all__ = ["CONTRACT", "ARXIV_ID_RE", "SCHEMES", "canonical_conference_id", "conference_coordinates",
+__all__ = ["CONTRACT", "current_header", "read_header", "create_identity", "ARXIV_ID_RE", "SCHEMES", "canonical_conference_id", "conference_coordinates",
            "canonical_conference_paper_id", "assert_canonical_conference_paper_id", "validate_external_id",
            "validate_official_url", "validate_source", "validate_citation", "normalize_identity", "identity_payload",
            "stable_json", "sha256", "stable_sha256", "identity_sha256", "record_sha256", "is_sha256"]

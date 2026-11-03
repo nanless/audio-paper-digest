@@ -1,9 +1,10 @@
 'use strict';
 
-const READER_MECHANICAL_CONTRACT = 'reader-mechanical-contract-v1';
-const READER_SECTION_QUALITY_CONTRACT = 'reader-section-quality-v1';
-const READER_SOURCE_CONTENT_MODE = 'reader-source-only-v1';
-const READER_SIGNED_REVISION_CONTENT_MODE = 'reader-source-signed-revision-v1';
+const { header: readerRoleHeader } = require('./reader-stage-protocols');
+// The current notices still share the original request render recipe. New
+// saved mechanical/quality metadata is emitted by reader-stage-protocols.
+const READER_MECHANICAL_CONTRACT = readerRoleHeader('mechanical', false).contract;
+const READER_SECTION_QUALITY_CONTRACT = readerRoleHeader('sectionQuality', false).contract;
 const READER_LIMITS = Object.freeze({
     minimumSections: 12, maximumSections: 18, minimumChineseChars: 5000, maximumChineseChars: 18000,
     minimumConceptBridges: 4, maximumConceptBridges: 10,
@@ -16,8 +17,8 @@ const READER_LIMITS = Object.freeze({
 });
 
 function readerRequirements(options = {}) {
-    const version = options.version ?? 3;
-    if (![2, 3].includes(version)) throw new Error('Reader contract version must be 2 or 3');
+    const format = require('./reader-record-format');
+    const profile = format.profileForOptions(options);
     let minimumTables = options.minimumIntegratedTables;
     if (minimumTables === undefined) {
         minimumTables = options.availableTableCount === undefined ? 2
@@ -28,7 +29,7 @@ function readerRequirements(options = {}) {
     }
     return {
         ...READER_LIMITS,
-        ...(version === 2 ? {
+        ...(profile === format.COMPACT ? {
             minimumSections: 10, maximumSections: 14, minimumChineseChars: 2800, maximumChineseChars: 14000,
             minimumConceptBridges: 3, maximumConceptBridges: 8
         } : {}),
@@ -97,7 +98,6 @@ function findReaderSectionNearDuplicates(article, sections = []) {
     return [...sectionPairs.values()].slice(0, READER_LIMITS.maximumSectionWarnings);
 }
 
-module.exports = { READER_MECHANICAL_CONTRACT, READER_SECTION_QUALITY_CONTRACT,
-    READER_SOURCE_CONTENT_MODE, READER_SIGNED_REVISION_CONTENT_MODE, READER_LIMITS,
+module.exports = { READER_MECHANICAL_CONTRACT, READER_SECTION_QUALITY_CONTRACT, READER_LIMITS,
     readerRequirements, buildReaderContractNotice,
     findReaderSectionNearDuplicates };

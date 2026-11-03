@@ -3,9 +3,10 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const crypto = require('node:crypto');
 const path = require('node:path');
+const codec = require('./protocol-codec');
 
 const scope = new AsyncLocalStorage();
-const WEAK_READER_CAPABILITY_POLICY_CONTRACT = 'conference-reader-weak-unavailable-structure-v1';
+const WEAK_READER_CAPABILITY_POLICY_CONTRACT = codec.contract('conference-reader-weak-unavailable-structure');
 const WEAK_CONFERENCE_CAPABILITIES = Object.freeze({
     fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable'
 });
@@ -17,18 +18,44 @@ function canonical(value) {
     return value;
 }
 const stableHash = value => crypto.createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
-const WEAK_READER_CAPABILITY_POLICY_BODY = Object.freeze({
-    contract: WEAK_READER_CAPABILITY_POLICY_CONTRACT,
-    version: 1,
+const WEAK_READER_CAPABILITY_RULES = Object.freeze({
     capabilities: WEAK_CONFERENCE_CAPABILITIES,
     requiredEmptyBindings: Object.freeze(['figurePlacements', 'formulaBindings', 'tableBindings']),
     forbiddenArticleStructures: Object.freeze(['figure-markers', 'formula-markers', 'display-formulas', 'markdown-tables', 'table-markers']),
     minimumIntegratedTables: 0
 });
-const WEAK_READER_CAPABILITY_POLICY = Object.freeze({
-    ...WEAK_READER_CAPABILITY_POLICY_BODY,
-    policySha256: stableHash(WEAK_READER_CAPABILITY_POLICY_BODY)
-});
+function weakPolicyForHeader(header) {
+    const body = { ...header, ...WEAK_READER_CAPABILITY_RULES };
+    return { ...body, policySha256: stableHash(body) };
+}
+const WEAK_READER_CAPABILITY_POLICY = Object.freeze(weakPolicyForHeader(codec.recordHeader(
+    WEAK_READER_CAPABILITY_POLICY_CONTRACT, 'conference-reader-weak-unavailable-structure')));
+function validateWeakReaderCapabilityPolicy(policy) {
+    const family = 'conference-reader-weak-unavailable-structure';
+    if (!codec.hasValidHeader(policy, family)
+        || codec.format(policy.contract, family, policy.schemaFingerprint) !== 'empty-structure-only') {
+        throw new Error('Reader capability policy is not the authenticated conference weak policy');
+    }
+    const header = codec.recordHeader(policy.contract, family, policy.schemaFingerprint);
+    if (stableHash(policy) !== stableHash(weakPolicyForHeader(header))) {
+        throw new Error('Reader capability policy is not the authenticated conference weak policy');
+    }
+    return clone(policy);
+}
+function artifactBoundFormat(artifacts, artifactFamily, schemaField, family, originalVariant) {
+    const field = Object.hasOwn(artifacts || {}, 'contract') ? 'contract'
+        : artifactFamily === 'conference-reader-pdf-artifacts' ? 'parserVersion' : 'version';
+    if (!codec.hasValidHeader(artifacts, artifactFamily, field)) throw new Error('会议来源记录格式未登记');
+    const header = codec.recordHeader(artifacts[field], artifactFamily, artifacts.schemaFingerprint);
+    const declared = Object.hasOwn(header, 'schemaFingerprint')
+        ? codec.declaredSchema(artifacts.contract, artifactFamily, artifacts.schemaFingerprint)[schemaField]
+        : codec.historicalHeader(family, originalVariant, null);
+    if (!codec.hasValidHeader(declared, family)
+        || stableHash(declared) !== stableHash(codec.recordHeader(declared.contract, family, declared.schemaFingerprint))) {
+        throw new Error('会议来源没有绑定完整的派生记录格式');
+    }
+    return declared;
+}
 
 function paperId(paper) { return typeof paper === 'string' ? paper : paper?.id || paper?.conferencePaperId || ''; }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -55,7 +82,8 @@ function withConferenceAnalysisSource(identity, callback) {
     if (readerPdfSourceHandle) {
         const provider = require('./conference-source-context').readerPdfSourceForContext(readerPdfSourceHandle);
         if (!provider || provider.paperId !== identity.paperId || provider.sourceText !== identity.sourceDetails.text
-            || provider.structuredArtifactsSha256 !== identity.sourceDetails.structuredArtifacts?.payloadSha256) {
+            || provider.structuredArtifactsSha256 !== identity.sourceDetails.structuredArtifacts?.payloadSha256
+            || provider.sourceIdentity.executionId && provider.sourceIdentity.executionId !== identity.executionId) {
             throw new Error('Conference Reader PDF authority differs from the authenticated source');
         }
     }
@@ -100,7 +128,9 @@ function conferenceCoreSummaryRepairContext(paper, sourceText) {
     return { paperId: canonicalId,
         directory: path.join(active.executionDir, 'analysis-repair-attempts',
             'conference-' + crypto.createHash('sha256').update(canonicalId).digest('hex')),
-        sourceIdentity: { contract: 'conference-analysis-source-identity-v1', executionId: active.executionId,
+        sourceIdentity: { ...artifactBoundFormat(source.structuredArtifacts,
+            source.conferenceCapabilities?.fullText === 'full' ? 'conference-reader-pdf-artifacts' : 'conference-reader-weak-artifacts',
+            'coreRepairSourceIdentityFormat', 'conference-analysis-source-identity', 'execution-source-hashes'), executionId: active.executionId,
             paperId: canonicalId, source: 'conference_pdf_text', sourceSha256,
             structuredArtifactsSha256: source.structuredArtifacts?.payloadSha256 || null } };
 }
@@ -116,7 +146,8 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
         && details.conferenceCapabilities?.tables === 'unavailable'
         && details.conferenceCapabilities?.formulas === 'unavailable'
         && details.conferenceCapabilities?.figures === 'available') {
-        if (!artifacts || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables'
+        if (!artifacts || !codec.hasValidHeader(artifacts, 'conference-reader-pdf-artifacts',
+            Object.hasOwn(artifacts, 'contract') ? 'contract' : 'parserVersion')
             || !Array.isArray(artifacts.tables) || artifacts.tables.length
             || !Array.isArray(artifacts.formulas) || artifacts.formulas.length
             || stableHash(provided) !== stableHash(artifacts)) {
@@ -124,8 +155,18 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
         }
         return null;
     }
-    const artifactKeys = ['capabilityProfile', 'figures', 'flattenedTextSha256', 'formulas',
-        'payloadSha256', 'source', 'tables', 'version'];
+    const field = Object.hasOwn(artifacts || {}, 'contract') ? 'contract' : 'version';
+    const knownHeader = codec.hasValidHeader(artifacts, 'conference-reader-weak-artifacts', field);
+    const header = knownHeader ? codec.recordHeader(artifacts[field], 'conference-reader-weak-artifacts', artifacts.schemaFingerprint) : {};
+    const declared = Object.hasOwn(header, 'schemaFingerprint');
+    const artifactKeys = [...Object.keys(header), declared ? 'capabilityFormat' : 'capabilityProfile',
+        'figures', 'flattenedTextSha256', 'formulas', 'payloadSha256', 'source', 'tables'];
+    const capabilityValid = declared
+        ? !Object.hasOwn(artifacts, 'capabilityProfile') && codec.hasValidHeader(artifacts.capabilityFormat, 'conference-reader-weak-capability')
+            && stableHash(artifacts.capabilityFormat) === stableHash(codec.declaredSchema(artifacts.contract,
+                'conference-reader-weak-artifacts', artifacts.schemaFingerprint).capabilityFormat)
+        : !Object.hasOwn(artifacts || {}, 'capabilityFormat') && artifacts?.capabilityProfile
+            === codec.historicalContract('conference-reader-weak-capability', 'text-without-structure');
     const artifactBody = artifacts && clone(artifacts);
     if (artifactBody) delete artifactBody.payloadSha256;
     const textSha256 = crypto.createHash('sha256').update(String(details.text || '')).digest('hex');
@@ -133,8 +174,7 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
         || Array.isArray(details.conferenceCapabilities)
         || stableHash(details.conferenceCapabilities) !== stableHash(WEAK_CONFERENCE_CAPABILITIES)
         || !artifacts || Object.keys(artifacts).sort().join('\0') !== artifactKeys.sort().join('\0')
-        || artifacts.version !== 1 || artifacts.source !== 'conference_pdf_weak_text'
-        || artifacts.capabilityProfile !== 'weak-text-only-v1'
+        || !knownHeader || artifacts.source !== 'conference_pdf_weak_text' || !capabilityValid
         || artifacts.flattenedTextSha256 !== textSha256
         || !Array.isArray(artifacts.tables) || artifacts.tables.length
         || !Array.isArray(artifacts.formulas) || artifacts.formulas.length
@@ -145,7 +185,8 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
         || stableHash(provided) !== stableHash(artifacts)) {
         throw new Error('Authenticated conference weak Reader capability policy cannot be derived');
     }
-    return clone(WEAK_READER_CAPABILITY_POLICY);
+    return weakPolicyForHeader(artifactBoundFormat(artifacts, 'conference-reader-weak-artifacts',
+        'readerPolicyFormat', 'conference-reader-weak-unavailable-structure', 'empty-structure-only'));
 }
 function conferenceReaderAttemptsDirectory(requestedDirectory = null) {
     const active = scope.getStore();
@@ -159,5 +200,6 @@ function conferenceReaderAttemptsDirectory(requestedDirectory = null) {
 
 module.exports = { WEAK_READER_CAPABILITY_POLICY_CONTRACT, WEAK_CONFERENCE_CAPABILITIES,
     WEAK_READER_CAPABILITY_POLICY, withConferenceAnalysisSource, getConferenceAnalysisContext,
+    validateWeakReaderCapabilityPolicy,
     getConferenceAnalysisSource, conferenceCoreSummaryRepairContext,
     conferenceWeakReaderCapabilityPolicy, conferenceReaderAttemptsDirectory };

@@ -1,6 +1,6 @@
 'use strict';
 
-const { SCORING_STABILITY_RESOLUTION_CONTRACT,
+const { scoringResolutionHeader,
     SCORING_STABILITY_CONSENSUS_TOLERANCE, scoringDifferenceWithinTolerance } = require('./scoring-stability');
 
 const SCORING_STABILITY_THRESHOLD = 0.5;
@@ -16,7 +16,7 @@ async function runScoringAuditConsensus({ firstResult, firstScore, requiresConse
         throw new TypeError('评分共识需要已核验分数、原审计器及来源校验器');
     }
     let totalAttempts = firstResult.attempts;
-    let resolution = { contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
+    let resolution = { ...scoringResolutionHeader(),
         status: 'not_required', threshold: SCORING_STABILITY_THRESHOLD };
     if (!requiresConsensus) return { result: firstResult, totalAttempts, resolution };
 
@@ -26,7 +26,7 @@ async function runScoringAuditConsensus({ firstResult, firstScore, requiresConse
     const secondScore = scoreOfResult(secondResult);
     if (!Number.isFinite(secondScore)) throw new Error('评分共识的第二次审计分数无效');
     const difference = Math.abs(secondScore - firstScore);
-    resolution = { contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
+    resolution = { ...scoringResolutionHeader(),
         status: scoringDifferenceWithinTolerance(difference, firstScore, secondScore) ? 'resolved' : 'unresolved',
         method: 'second_pass_consensus', threshold: SCORING_STABILITY_THRESHOLD,
         consensusTolerance: SCORING_STABILITY_CONSENSUS_TOLERANCE,

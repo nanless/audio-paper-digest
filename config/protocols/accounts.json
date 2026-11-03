@@ -1,0 +1,28 @@
+{
+  "protocols": [
+    {
+      "name": "opencode-go-account-pool",
+      "currentVariant": "equal-rotation",
+      "currentSchema": {
+        "fields": {
+          "generation": "nonnegative-safe-integer",
+          "services": "endpoint-accounts-groups-map"
+        },
+        "selection": "account-id-sorted-round-robin",
+        "cooldown": "explicit-usage-limit-or-insufficient-balance-only",
+        "continuity": "retain-generation-accounts-groups-cooldowns-and-cursor",
+        "legacyCursor": "active-account-position-when-cursor-absent"
+      },
+      "historical": [
+        {
+          "tag": "opencode-go-sticky-quota-failover-v1",
+          "variant": "equal-rotation",
+          "header": {
+            "policyVersion": "opencode-go-sticky-quota-failover-v1",
+            "schemaVersion": 1
+          }
+        }
+      ]
+    }
+  ]
+}

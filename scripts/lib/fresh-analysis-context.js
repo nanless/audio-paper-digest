@@ -7,11 +7,9 @@ const crypto = require('node:crypto');
 const scope = new AsyncLocalStorage();
 const verifiedBundleAuthorSources = new WeakMap();
 const verifiedBundleAuthorScope = new AsyncLocalStorage();
-const CONTRACT = 'fresh-source-analysis-v1';
-const CACHE_CONTRACT = 'fresh-source-cache-v1';
-const BUNDLE_CACHE_CONTRACT = 'fresh-source-bundle-v2';
-const BUNDLE_SOURCE_MODE = 'sealed-arxiv-bundle-v1';
-const DAILY_SOURCE_RUN_CONTRACT = 'daily-fresh-source-run-v1';
+const dailyFormats = require('./daily-source-format');
+const CONTRACT = dailyFormats.originalProvenanceHeader.contract;
+const { RUN: DAILY_SOURCE_RUN_CONTRACT, isDailySourceRun, isFreshSourceProvenance } = dailyFormats;
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const stable = value => {
     const normalize = item => Array.isArray(item) ? item.map(normalize)
@@ -20,10 +18,7 @@ const stable = value => {
 };
 const validSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 
-function isBundleExpectation(value) {
-    return Boolean(value) && value.sourceMode === BUNDLE_SOURCE_MODE
-        && Number.isSafeInteger(value.sourceGeneration) && value.sourceGeneration >= 1;
-}
+const { isBundleExpectation, isBundleDescriptor, isOriginalCacheDescriptor } = dailyFormats;
 
 function fail(message) {
     const error = new Error(message);
@@ -78,13 +73,16 @@ function validateRun(runDir, identity) {
     const resolvedRunDir = path.resolve(runDir);
     const roots = [
         { root: rewriteRoot, contract: 'fresh-rewrite-run-v1' },
-        { root: dailyRoot, contract: DAILY_SOURCE_RUN_CONTRACT }
+        { root: dailyRoot, contract: DAILY_SOURCE_RUN_CONTRACT, daily: true }
     ].filter(item => item.root && item.root !== path.resolve('.'));
     const matchedRoot = roots.find(item => resolvedRunDir === path.join(item.root, runId));
     if (!matchedRoot) throw fail('runDir 必须是配置的来源运行根目录下、以 runId 命名的直接子目录');
     safeDirectory(resolvedRunDir);
-    const run = readJson(path.join(resolvedRunDir, 'run.json'));
-    if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('来源运行清单格式无效，或与请求的运行不匹配。');
+    const runFile = path.join(resolvedRunDir, 'run.json');
+    const run = matchedRoot.daily
+        ? require('./strict-json').strictJson(readBytes(runFile), '每日封存来源运行')
+        : readJson(runFile);
+    if (run.runId !== runId || (matchedRoot.daily ? !isDailySourceRun(run) : run.contract !== matchedRoot.contract || run.version !== 1)) throw fail('来源运行清单格式无效，或与请求的运行不匹配。');
     const expectations = identity?.sourceExpectations;
     if (!expectations || typeof expectations !== 'object' || Array.isArray(expectations)
         || stable(expectations) !== stable(run.sourceExpectations)) throw fail('sourceExpectations 缺失、不是对象、是数组，或与运行清单中的预期来源记录不一致');
@@ -102,7 +100,9 @@ function validateRun(runDir, identity) {
             throw fail(`sourceId 指向另一篇论文： ${id}`);
         }
     }
-    return { runId, runDir: resolvedRunDir, runContract: matchedRoot.contract, sourceExpectations: structuredClone(expectations),
+    return { runId, runDir: resolvedRunDir, runContract: matchedRoot.contract,
+        sourceProvenanceHeader: Object.freeze(matchedRoot.daily ? dailyFormats.provenanceHeaderForRun(run) : dailyFormats.originalProvenanceHeader),
+        sourceExpectations: structuredClone(expectations),
         inputSetSha256: stable(ids.slice().sort()) };
 }
 
@@ -177,7 +177,7 @@ function sourceDirectory(context, id) { return path.join(context.runDir, 'source
 
 function bundleRoot(context) { return path.join(context.runDir, 'sources'); }
 
-function buildSourceDetailsFromBundle(stored) {
+function buildSourceDetailsFromBundle(stored, original = false) {
     // 已封存的来源包已按保存的 PDF/TXT 清单核验图片像素以外的运行记录。按包中的
     // 记录重建来源详情时，会保留日更 Reader 所需的表格、公式来源及图片发现结果；它从不包含图片
     // 字节，也不含旧的 data/current 缓存路径。
@@ -194,7 +194,10 @@ function buildSourceDetailsFromBundle(stored) {
         warnings: runtime.warnings.map(String) };
     const sourceSnapshot = { sourceManifestSha256: stored.sourceManifestSha256,
         sourceGeneration: stored.generation, details };
-    const descriptor = { version: 2, contract: BUNDLE_CACHE_CONTRACT, runId: null, paperId: stored.manifest.paperId.slice(6),
+    const originalHeader = dailyFormats.originalBundleDescriptorHeader;
+    const descriptorHeader = original ? { version: originalHeader.version, contract: originalHeader.contract }
+        : dailyFormats.currentHeader(dailyFormats.BUNDLE_DESCRIPTOR);
+    const descriptor = { ...descriptorHeader, runId: null, paperId: stored.manifest.paperId.slice(6),
         sourceGeneration: stored.generation, sourceManifestSha256: stored.sourceManifestSha256,
         sourceSha256: stored.manifest.text.responseSha256,
         structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 || '',
@@ -225,7 +228,7 @@ function readBundleFreshSource(checked, id, expectation) {
     if (sourceGenerationAbsent(sourceApi, root, id, expectation.sourceGeneration)) return null;
     const stored = sourceApi.readFreshArxivRewriteSource({ rootDir: root, arxivId: id,
         generation: expectation.sourceGeneration });
-    const source = buildSourceDetailsFromBundle(stored);
+    const source = buildSourceDetailsFromBundle(stored, expectation.sourceMode === dailyFormats.originalBundleMode);
     source.freshSourceDescriptor.runId = checked.runId;
     if (source.freshSourceDescriptor.paperId !== id
         || source.freshSourceDescriptor.sourceGeneration !== expectation.sourceGeneration
@@ -289,7 +292,7 @@ function readFreshSource(runDir, paper, identity) {
     try { safeDirectory(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     let descriptor;
     try { descriptor = readJson(path.join(directory, 'source.json')); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-    if (descriptor.contract !== CACHE_CONTRACT || descriptor.version !== 1 || descriptor.runId !== checked.runId
+    if (!isOriginalCacheDescriptor(descriptor) || descriptor.runId !== checked.runId
         || descriptor.paperId !== id || descriptor.sourceSha256 !== expectation.sourceSha256
         || descriptor.structuredArtifactsSha256 !== expectation.structuredArtifactsSha256
         || !validSha(descriptor.sourceSnapshotSha256)) throw fail('来源描述符格式无效，或与本次运行、论文及预期来源哈希不匹配。');
@@ -357,7 +360,8 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
         validateSource(details, id, expectation);
         validateRun(context.runDir, context);
         const sourceSnapshot = JSON.stringify(details);
-        const descriptor = { version: 1, contract: CACHE_CONTRACT, runId: context.runId, paperId: id,
+        const originalHeader = dailyFormats.originalCacheHeader;
+        const descriptor = { version: originalHeader.version, contract: originalHeader.contract, runId: context.runId, paperId: id,
             sourceSha256: expectation.sourceSha256, structuredArtifactsSha256: expectation.structuredArtifactsSha256,
             sourceSnapshotSha256: sha(sourceSnapshot) };
         writeExact(directory, 'source.txt', details.text);
@@ -381,7 +385,7 @@ function resolveFreshSource(runDir, paper, identity) {
 function freshAnalysisIdentity(id = getFreshAnalysisContext()?.paperId) {
     const context = getFreshAnalysisContext();
     if (!context) return null;
-    const base = { contract: CONTRACT, runId: context.runId, inputSetSha256: context.inputSetSha256 };
+    const base = { ...context.sourceProvenanceHeader, runId: context.runId, inputSetSha256: context.inputSetSha256 };
     if (!id) return base;
     const source = readFreshSource(context.runDir, id, context);
     if (!source) throw fail('分析阶段开始前，本次运行的来源文件必须完整。');
@@ -392,9 +396,9 @@ function buildFreshSourceRecord(source) {
     const context = getFreshAnalysisContext();
     const descriptor = source?.freshSourceDescriptor;
     if (!context || descriptor?.runId !== context.runId) throw fail('来源记录需要当前运行上下文及其对应的来源描述符。');
-    return { contract: CONTRACT, runId: context.runId, sourceSha256: descriptor.sourceSha256,
+    return { ...context.sourceProvenanceHeader, runId: context.runId, sourceSha256: descriptor.sourceSha256,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
-        ...(descriptor.contract === BUNDLE_CACHE_CONTRACT ? { sourceGeneration: descriptor.sourceGeneration,
+        ...(isBundleDescriptor(descriptor) ? { sourceGeneration: descriptor.sourceGeneration,
             sourceManifestSha256: descriptor.sourceManifestSha256,
             ...(descriptor.sourceVersionIdentitySha256 ? {
                 sourceVersionIdentitySha256: descriptor.sourceVersionIdentitySha256
@@ -442,7 +446,7 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
     return expected;
 }
 
-module.exports = { CONTRACT, CACHE_CONTRACT, BUNDLE_CACHE_CONTRACT, BUNDLE_SOURCE_MODE, DAILY_SOURCE_RUN_CONTRACT, isBundleExpectation,
+module.exports = { CONTRACT, DAILY_SOURCE_RUN_CONTRACT, isBundleDescriptor, isOriginalCacheDescriptor, isDailySourceRun, isFreshSourceProvenance, isBundleExpectation,
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
     getSavedAnalysisRecoveryPermission,
     readFreshSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, withVerifiedBundleReaderAuthorFiles, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,

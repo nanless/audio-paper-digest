@@ -1,6 +1,7 @@
 'use strict';
 
 // 仅接收调用者继承的私有文件描述符，不读取 env/config，不加载网络或模型模块。
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -34,7 +35,7 @@ function verifyInput(input) {
             || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(proof?.runId || ''))
             || path.basename(path.dirname(sourceRoot)) !== proof.runId
             || !/^\d{4}\.\d{4,5}$/.test(arxivId)
-            || proof.contract !== 'fresh-source-analysis-v1' || proof.sourceGeneration !== 1
+            || !isFreshSourceProvenance(proof) || proof.sourceGeneration !== 1
             || proof.sourceOnly !== true || proof.oldGeneratedTextIncluded !== false
             || stable(proof) !== stable(input.paper?.analysisManifest?.freshRewriteProvenance)) {
             throw new Error('作者发布重放的论文、运行目录或来源证明不一致');

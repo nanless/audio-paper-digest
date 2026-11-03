@@ -20,15 +20,16 @@ from markdown_hugo_gate import (
     validate_markdown_format_gate,
 )
 from path_config import CURRENT_DIR, FILTERED_PAPERS_FILE
+from protocol_codec import historical_contract as historical_manual_contract
 from publish_common import PublishDataValidationError, normalize_publish_arxiv_id
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
-    MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+    MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
     TUTORIAL_FORMAT_CONTRACT,
 )
 
 
-SEALED_TUTORIAL_PUBLICATION_CONTRACT = 'sealed-tutorial-preview-publication-v1'
+SEALED_TUTORIAL_PUBLICATION_CONTRACT = historical_manual_contract('manual-sealed-preview', 'sealed-files-only')
 PREVIEW_MODE = 'manual_tutorial_preview'
 PREVIEW_VERSION = 5
 SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
@@ -68,12 +69,18 @@ def _exact_bound_file(binding, expected_path, label):
     project_root = Path(__file__).resolve().parents[2]
     historical_prompt = Path(expected_path).absolute() == (
         project_root / 'manual' / 'prompts' / 'manual-tutorial-article.md')
+    from original_file_evidence import is_original_file_path, read_original_file_bytes
+    try:
+        static_relative = Path(expected_path).absolute().relative_to(project_root).as_posix()
+    except ValueError:
+        static_relative = ''
+    historical_static = is_original_file_path(static_relative, project_root=project_root)
     try:
         candidate = Path(str(binding.get('path') or ''))
         if candidate.is_symlink():
             raise PublishDataValidationError(f'{label} 不得使用符号链接。')
-        actual_path = candidate.resolve(strict=not historical_prompt)
-        expected_path = Path(expected_path).resolve(strict=not historical_prompt)
+        actual_path = candidate.resolve(strict=not (historical_prompt or historical_static))
+        expected_path = Path(expected_path).resolve(strict=not (historical_prompt or historical_static))
     except (OSError, RuntimeError) as exc:
         raise PublishDataValidationError(f'{label} 记录的路径或指定文件路径不存在，或无法解析。') from exc
     if actual_path != expected_path:
@@ -85,6 +92,11 @@ def _exact_bound_file(binding, expected_path, label):
                                             binding.get('sha256'), project_root=project_root)
         except (ValueError, OSError) as exc:
             raise PublishDataValidationError(f'{label} 原提示词证据缺失或 SHA 不一致。') from exc
+    elif historical_static:
+        try:
+            raw = read_original_file_bytes(static_relative, binding.get('sha256'), project_root=project_root)
+        except (ValueError, OSError) as exc:
+            raise PublishDataValidationError(f'{label} 原文件证据缺失或 SHA 不一致。') from exc
     else:
         raw = _read_regular(actual_path, label)
     digest = _sha256_bytes(raw)
@@ -181,7 +193,7 @@ def load_verified_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DI
 
     payload = inputs.get('tutorialPayload')
     if not isinstance(payload, dict) \
-            or payload.get('contract') != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT \
+            or payload.get('contract') != MANUAL_TUTORIAL_PAYLOAD_CONTRACT \
             or payload.get('paperId') != paper_id:
         raise PublishDataValidationError('单篇教程材料记录缺失、格式无效，或论文 ID 与当前论文不一致。')
     for field in (
@@ -227,7 +239,7 @@ def load_verified_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DI
         'paper_digest_arxiv_id': paper_id,
         'paper_digest_tutorial_contract': TUTORIAL_FORMAT_CONTRACT,
         'paper_digest_fresh_authoring_contract': FRESH_AUTHORING_CONTRACT,
-        'paper_digest_tutorial_payload_contract': MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+        'paper_digest_tutorial_payload_contract': MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
         'paper_digest_fresh_authoring_sha256': payload['freshAuthoringReceiptSha256'],
         'paper_digest_reader_article_sha256': payload['articleSha256'],
         'paper_digest_tutorial_payload_sha256': payload['receiptSha256'],

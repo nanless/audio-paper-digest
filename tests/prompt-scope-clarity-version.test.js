@@ -2,7 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const versions = require('../scripts/lib/prompt-text-versions');
+const versions = require('../scripts/lib/prompt-contracts');
 const evidence = require('../scripts/lib/prompt-evidence'), history = require('../scripts/lib/prompt-history');
 const { loadPrompt } = require('../scripts/utils');
 const root = path.resolve(__dirname, '..'), sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -18,13 +18,13 @@ const originals = {
 // later writing changes have their own current-version regression tests.
 const scopePath = stage => versions.promptFilePathForContract(stage,
     stage === 'primaryAnalysis' ? 'analysis-prompt-text-v7' : 'analysis-prompt-text-v10');
-const beforeTerminology = file => Object.entries(versions.FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES)
-    .find(([stage]) => versions.currentTextStagePromptPath(stage) === file)?.[1].path || file;
+const beforeTerminology = file => Object.entries(require('../scripts/lib/prompt-legacy-codec').compatibilityExports.FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES)
+    .find(([stage]) => versions.currentTextStagePromptPath(stage) === file)?.[1].path || require('../scripts/lib/prompt-legacy-codec').currentPathPredecessors[file];
 test('the two scope-clarity versions preserve exact old paths, whole bytes and templates from Git', () => {
     assert.equal(scopePath('primaryAnalysis'), 'prompts/deep-analysis-v7.md');
     assert.equal(scopePath('apiReaderArticle'), 'prompts/api-reader-article-v10.md');
-    assert.equal(versions.CURRENT_PROMPT_FILES.length, 18);
-    assert.deepEqual(fs.readdirSync(path.join(root, 'prompts')).filter(n => n.endsWith('.md') && !/^README(?:\.en)?\.md$/.test(n)).sort(),
+    assert.equal(versions.CURRENT_PROMPT_FILES.length, 16);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'prompts/current')).filter(n => n.endsWith('.md') && !/^README(?:\.en)?\.md$/.test(n)).sort(),
         versions.CURRENT_PROMPT_FILES.map(file => path.basename(file)).sort());
     for (const [stage, old] of Object.entries(originals)) {
         assert.equal(versions.promptFilePathForContract(stage, old.contract), old.path);

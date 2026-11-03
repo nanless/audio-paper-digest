@@ -21,7 +21,10 @@ test('正常主分析入口发送局部JSON并保存新证明，完整审校不�
                 const text = parsed.messages[0].content;
                 const inputSha256 = /本次原稿SHA：([a-f0-9]{64})/.exec(text)?.[1];
                 const targets = JSON.parse(/获准修改的段落：\n([^\n]+)/.exec(text)[1]);
-                content = JSON.stringify({ contract: 'primary-local-fact-repair-v1', inputSha256,
+                const declaredFingerprint = /"schemaFingerprint":"([a-f0-9]{64})"/.exec(text)?.[1];
+                const header = require('../scripts/lib/primary-fact-local-repair').currentHeader();
+                assert.equal(declaredFingerprint, header.schemaFingerprint);
+                content = JSON.stringify({ ...header, inputSha256,
                     replacements: targets.map(target => ({ from: target.text,
                         to: target.text.replace('错误余弦蒸馏损失。', '蒸馏使用冻结文本教师的MSE。') })) });
             }

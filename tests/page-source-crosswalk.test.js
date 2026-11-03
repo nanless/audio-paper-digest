@@ -12,8 +12,9 @@ const api = require('../scripts/lib/page-source-crosswalk.js');
 const cli = require('../scripts/page-source-crosswalk.js');
 const authorityApi = require('../scripts/lib/paper-source-authority.js');
 const archiveCrawlAuthorityApi = require('../scripts/lib/historical-archive-crawl-authority.js');
-const localCrawlAuthorityApi = require('../scripts/lib/historical-local-crawl-authority.js');
+const codec = require('../scripts/lib/protocol-codec.js');
 const conferenceCrawlAuthorityApi = require('../scripts/lib/historical-conference-crawl-authority.js');
+const { originalCrawlApi, savedCrawlFixture } = require('./helpers/original-crawl-authority');
 const identityApi = require('../scripts/lib/paper-identity.js');
 const contextApi = require('../scripts/lib/conference-source-context.js');
 const arxivAdapter = require('../scripts/lib/arxiv-source-authority.js');
@@ -91,20 +92,18 @@ function writeArxivAuthority(root, name = 'authority.json') {
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     const fulltextName = 'paper.txt'; const text = `${'authenticated source text '.repeat(1200)}\n`;
     fs.writeFileSync(path.join(root, fulltextName), text, { mode: 0o600 }); const fulltextSha256 = sha(text);
-    const snapshotName = 'snapshot.json'; const snapshotBody = { contract: authorityApi.ARXIV_SNAPSHOT_CONTRACT,
-        version: authorityApi.VERSION, paperId: 'arxiv:2601.00001', arxivId: '2601.00001',
+    const snapshotName = 'snapshot.json'; const snapshotBody = { ...codec.recordHeader(authorityApi.ARXIV_SNAPSHOT_CONTRACT, authorityApi.ARXIV_SNAPSHOT_CONTRACT), paperId: 'arxiv:2601.00001', arxivId: '2601.00001',
         officialUrl: 'https://arxiv.org/abs/2601.00001', fulltextSha256 };
     const snapshot = { ...snapshotBody, snapshotSha256: authorityApi.stableHash(snapshotBody) };
     const snapshotBytes = authorityApi.prettyBytes(snapshot); fs.writeFileSync(path.join(root, snapshotName), snapshotBytes, { mode: 0o600 });
-    const receiptName = 'source-receipt.json'; const receiptBody = { contract: authorityApi.ARXIV_RECEIPT_CONTRACT,
-        version: authorityApi.VERSION, snapshotName, snapshotFileSha256: sha(snapshotBytes),
+    const receiptName = 'source-receipt.json'; const receiptBody = { ...codec.recordHeader(authorityApi.ARXIV_RECEIPT_CONTRACT, authorityApi.ARXIV_RECEIPT_CONTRACT), snapshotName, snapshotFileSha256: sha(snapshotBytes),
         snapshotSha256: snapshot.snapshotSha256, fulltextName, fulltextSha256 };
     const receipt = { ...receiptBody, receiptSha256: authorityApi.stableHash(receiptBody) };
     const receiptBytes = authorityApi.prettyBytes(receipt); fs.writeFileSync(path.join(root, receiptName), receiptBytes, { mode: 0o600 });
-    const identity = { contract: identityApi.CONTRACT, kind: 'arxiv', canonicalId: 'arxiv:2601.00001',
+    const identity = { ...identityApi.currentHeader(), kind: 'arxiv', canonicalId: 'arxiv:2601.00001',
         arxivId: '2601.00001', conference: null, externalId: null,
         source: { status: 'official', url: 'https://arxiv.org/abs/2601.00001' }, citation: null };
-    const body = { contract: authorityApi.CONTRACT, version: authorityApi.VERSION, paperId: identity.canonicalId,
+    const body = { ...codec.recordHeader(authorityApi.CONTRACT, authorityApi.CONTRACT), paperId: identity.canonicalId,
         identity, identitySha256: identityApi.identitySha256(identity),
         identityRecordSha256: identityApi.recordSha256(identity), evidenceKind: 'arxiv-official-fulltext',
         proof: { snapshotName, snapshotFileSha256: sha(snapshotBytes), snapshotSha256: snapshot.snapshotSha256,
@@ -172,7 +171,7 @@ function writeConferenceAuthority(t, root, value = '100', name = 'conference-aut
     const sourceContextName = 'conference-context.json';
     const contextBytes = authorityApi.prettyBytes(context);
     fs.writeFileSync(path.join(root, sourceContextName), contextBytes, { mode: 0o600 });
-    const identity = { contract: identityApi.CONTRACT, kind: 'conference', canonicalId: fixture.paperId,
+    const identity = { ...identityApi.currentHeader(), kind: 'conference', canonicalId: fixture.paperId,
         arxivId: null, conference: { slug: 'icassp', year: 2026 },
         externalId: { scheme: 'icassp-arnumber', value }, source: { status: 'unavailable', url: null }, citation: null };
     const proof = { sourceContextName, sourceContextFileSha256: sha(contextBytes),
@@ -180,7 +179,7 @@ function writeConferenceAuthority(t, root, value = '100', name = 'conference-aut
         observationBindingSha256: context.observationBindingSha256,
         planAuthorityBindingSha256: context.productionAuthorization.binding.bindingSha256,
         fulltextSha256: sha(Buffer.from(context.text, 'utf8')) };
-    const body = { contract: authorityApi.CONTRACT, version: authorityApi.VERSION, paperId: fixture.paperId,
+    const body = { ...codec.recordHeader(authorityApi.CONTRACT, authorityApi.CONTRACT), paperId: fixture.paperId,
         identity, identitySha256: identityApi.identitySha256(identity), identityRecordSha256: identityApi.recordSha256(identity),
         evidenceKind: 'conference-plan-source-context', proof };
     const authority = { ...body, authoritySha256: authorityApi.stableHash(body) };
@@ -198,7 +197,7 @@ function eio(stage) {
 function writeOperationLock(directory, { pid = 99999999, hostname = os.hostname(), startedAt = '2000-01-01T00:00:00.000Z',
     heartbeatAt = startedAt, token = ids[9], extra = false } = {}) {
     const lock = path.join(directory, 'operation.lock'); fs.mkdirSync(lock, { mode: 0o700 });
-    const body = { contract: api.LOCK_OWNER_CONTRACT, version: 1, owner: 'fixture.owner', pid,
+    const body = { ...codec.recordHeader(api.LOCK_OWNER_CONTRACT, api.LOCK_OWNER_CONTRACT), owner: 'fixture.owner', pid,
         hostname, token, startedAt, heartbeatAt, leaseMs: api.LOCK_STALE_MS };
     const owner = { ...body, ownerSha256: api.stableHash(body) };
     const ownerFile = path.join(lock, 'owner.json'); fs.writeFileSync(ownerFile, api.prettyBytes(owner), { mode: 0o600 });
@@ -288,12 +287,12 @@ function historicalBundle(root) {
     const counts = { pages: 2, papers: 1, dailySummaries: 1, conferenceSummaries: 0, conferenceTasks: 0,
         unknown: 0, urlCollisions: 0, outboundPostLinks: 1, resolvedOutboundPostLinks: 1,
         unresolvedOutboundPostLinks: 0, ambiguousOutboundPostLinks: 0 };
-    const ledgerBody = { contract: api.LEDGER_CONTRACT, version: 1, source, policy, pages, urlCollisions: [],
+    const ledgerBody = { ...codec.historicalHeader(api.LEDGER_CONTRACT, 'repository-page-and-link-inventory'), source, policy, pages, urlCollisions: [],
         outboundPostLinks, outboundPostLinksSha256: api.stableHash(outboundPostLinks), counts,
         pageSetSha256: api.stableHash(pages) };
     const ledger = { ...ledgerBody, ledgerSha256: api.stableHash(ledgerBody) };
     const ledgerBytes = api.prettyBytes(ledger); const ledgerName = 'history.json';
-    const receiptBody = { contract: api.LEDGER_RECEIPT_CONTRACT, version: 1, ledger: { name: ledgerName,
+    const receiptBody = { ...codec.historicalHeader(api.LEDGER_RECEIPT_CONTRACT, 'exact-inventory-file'), ledger: { name: ledgerName,
         fileSha256: sha(ledgerBytes), ledgerSha256: ledger.ledgerSha256, pageSetSha256: ledger.pageSetSha256,
         pageCount: pages.length }, repositorySnapshotSha256: api.stableHash(source) };
     const receipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
@@ -368,7 +367,7 @@ test('不透明清单加载器复核规范账目与凭证，拒绝伪造句柄�
     injected.pages[0].recordSha256 = api.stableHash(pageBody); injected.pageSetSha256 = api.stableHash(injected.pages);
     const { ledgerSha256: _ledger, ...ledgerBody } = injected; injected.ledgerSha256 = api.stableHash(ledgerBody);
     const injectedBytes = api.prettyBytes(injected);
-    const receiptBody = { contract: api.LEDGER_RECEIPT_CONTRACT, version: 1, ledger: { name: 'injected.json',
+    const receiptBody = { ...codec.historicalHeader(api.LEDGER_RECEIPT_CONTRACT, 'exact-inventory-file'), ledger: { name: 'injected.json',
         fileSha256: sha(injectedBytes), ledgerSha256: injected.ledgerSha256, pageSetSha256: injected.pageSetSha256,
         pageCount: injected.pages.length }, repositorySnapshotSha256: api.stableHash(injected.source) };
     fs.writeFileSync(path.join(f.inventory, 'injected.json'), injectedBytes, { mode: 0o600 });
@@ -496,17 +495,14 @@ test('真实 Python 新扫描和原实现两版扫描经配对凭证进入 Node�
         assert.equal(snapshot.ledger.pageSetSha256, api.stableHash(prior.pages));
         assert.deepEqual(fs.readFileSync(ledgerFile), ledgerRaw);
         assert.deepEqual(fs.readFileSync(receiptFile), receiptRaw);
-        if (label === 'current') {
-            const oldV5 = structuredClone(prior);
-            oldV5.policy.contract = 'historical-page-scan-policy-v5';
-            oldV5.policy.identityHints = 'frontmatter-filename-explicit-links-v1';
-            rehashLedger(oldV5);
-            const unchanged = JSON.stringify(oldV5);
-            assert.deepEqual(api.validateHistoricalLedger(oldV5), oldV5);
-            assert.equal(JSON.stringify(oldV5), unchanged);
-        }
         const newFormat = label === 'current';
-        assert.equal(prior.policy.contract, 'historical-page-scan-policy-' + (newFormat ? 'v6' : label));
+        assert.equal(prior.policy.contract, newFormat ? 'historical-page-scan-policy' : `historical-page-scan-policy-${label}`);
+        if (newFormat) {
+            const mismatched = structuredClone(prior);
+            mismatched.policy = JSON.parse(fs.readFileSync(path.join(project, 'config/historical-page-scan-formats.json'))).formats[2].policy;
+            rehashLedger(mismatched);
+            assert.throws(() => api.validateHistoricalLedger(mismatched), /pageId/);
+        }
         for (const page of prior.pages) {
             assert.equal(page.contentSha256, sha(fs.readFileSync(path.join(output, 'fixture-blog', page.path))));
             assert.equal(Object.hasOwn(page, 'legacyTagRouteCandidates'), newFormat);
@@ -647,6 +643,37 @@ test('决定写入绑定 CAS、只追加，并以精确操作证据保证幂等'
     assert.throws(() => api.readCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0] }), /replay drifted/);
 });
 
+test('原 Git 实现保存的已追加状态按原头复验，恢复时不改旧决定字节', t => {
+    const f = fixture(t);
+    const Module = require('node:module');
+    const project = path.join(__dirname, '..');
+    const filename = path.join(project, 'scripts/lib/page-source-crosswalk.js');
+    const { readGitBlob } = require('../scripts/lib/git-file-bytes');
+    const blob = readGitBlob(project, '0c88ff953c0cf6eafebf561c789fec3d988b397b',
+        'f10dc2789fec8ef3ca5a2bab17153c65066d19afb438bc3792ad2b8deaf7293d');
+    const old = new Module(filename, module); old.filename = filename;
+    old.paths = Module._nodeModulePaths(path.dirname(filename));
+    old._compile(new TextDecoder('utf-8', { fatal: true }).decode(blob), filename);
+    const original = old.exports;
+    const options = { crosswalkRoot: f.crosswalk, crosswalkId: ids[0], now: stamp };
+    const inventoryHandle = original.loadHistoricalInventoryHandle({
+        inventoryRoot: f.inventory, ledgerName: f.ledgerName, receiptName: f.receiptName
+    });
+    const state = original.prepareCrosswalk({ ...options, inventoryHandle, apply: true });
+    const artifact = original.buildDecisionArtifact({ state, pageKey: Object.keys(state.assignments)[0],
+        operationId: ids[1], actorId: 'old.actor', status: 'needs-review', reason: 'original decision', now: stamp });
+    const decisionFile = original.writeDecisionArtifact({ ...options, decisionName: 'original.json', artifact });
+    const saved = original.applyDecision({ ...options, decisionHandle: original.loadDecisionHandle(decisionFile), owner: 'old.actor' });
+    const stateFile = path.join(f.crosswalk, ids[0], 'state.json');
+    const originalState = fs.readFileSync(stateFile), originalDecision = fs.readFileSync(decisionFile);
+    assert.deepEqual(api.readCrosswalk(options), saved);
+    assert.deepEqual(api.applyDecision({ ...options, decisionHandle: api.loadDecisionHandle(decisionFile), owner: 'old.actor' }), saved);
+    assert.deepEqual(fs.readFileSync(stateFile), originalState);
+    assert.deepEqual(fs.readFileSync(decisionFile), originalDecision);
+    const invalid = { ...saved, ...codec.recordHeader(api.CONTRACT, api.CONTRACT) }; delete invalid.version;
+    assert.throws(() => api.assertCrosswalkState(invalid), /SHA 历史不连续/);
+});
+
 test('操作锁绝不抢占存活 PID，拒绝刚死、符号链接、多余或被篡改的证据', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
@@ -698,44 +725,9 @@ test('只有本机已死 PID 留下的、经核验的过期锁才会被回收', 
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
 });
 
-test('只有严格的同主机已死持有者才允许本地抓取恢复能力绕过租约', t => {
-    const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
-        crosswalkId: ids[0], now: stamp, apply: true });
-    const directory = path.join(f.crosswalk, ids[0]); const lockPath = path.join(directory, 'operation.lock');
-    const fresh = new Date().toISOString();
-    const policies = [api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY,
-        api.HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY];
-    for (const [index, recoveryPolicy] of policies.entries()) {
-        writeOperationLock(directory, { pid: 99999999, startedAt: fresh, heartbeatAt: fresh });
-        assert.throws(() => api.acquireLock(directory, 'ordinary.worker', stamp), /not stale/);
-        const handle = api.acquireLock(directory, `local.worker.${index}`, stamp, { recoveryPolicy });
-        api.releaseLock(handle); assert.equal(fs.existsSync(lockPath), false);
-    }
-
-    writeOperationLock(directory, { pid: 99999999, startedAt: fresh, heartbeatAt: fresh });
-    assert.throws(() => api.acquireLock(directory, 'forged.worker', stamp,
-        { recoveryPolicy: Symbol('historical-local-crawl-batch-local-dead-owner-recovery-v1') }), /not stale/);
-    fs.rmSync(lockPath, { recursive: true });
-
-    writeOperationLock(directory, { pid: process.pid, startedAt: fresh, heartbeatAt: fresh });
-    assert.throws(() => api.acquireLock(directory, 'live.worker', stamp,
-        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /live process/);
-    fs.rmSync(lockPath, { recursive: true });
-
-    writeOperationLock(directory, { pid: 99999999, hostname: `${os.hostname()}-remote`, startedAt: fresh, heartbeatAt: fresh });
-    assert.throws(() => api.acquireLock(directory, 'remote.worker', stamp,
-        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /not stale/);
-    fs.rmSync(lockPath, { recursive: true });
-
-    fs.mkdirSync(lockPath, { mode: 0o700 });
-    assert.throws(() => api.acquireLock(directory, 'empty.worker', stamp,
-        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /unknown or missing evidence/);
-    fs.rmSync(lockPath, { recursive: true });
-
-    const malformed = writeOperationLock(directory, { pid: 99999999, startedAt: fresh, heartbeatAt: fresh });
-    fs.writeFileSync(malformed.ownerFile, api.prettyBytes({ ...malformed.owner, owner: 'mutated.owner' }), { mode: 0o600 });
-    assert.throws(() => api.acquireLock(directory, 'malformed.worker', stamp,
-        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /self-SHA drifted/);
+test('废弃抓取模式不再暴露锁租约旁路', () => {
+    assert.equal(api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY, undefined);
+    assert.equal(api.HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY, undefined);
 });
 
 test('远端锁只有在租约到期且核验通过后才回收', t => {
@@ -867,11 +859,11 @@ test('自行构造的 arXiv 测试数据，不能让直接函数调用或独立�
     const snapshot = authorityApi.authorityHandleSnapshot(authorityHandle);
     const sourceAuthority = { paperId: snapshot.authority.paperId, identity: snapshot.authority.identity,
         identitySha256: snapshot.authority.identitySha256, identityRecordSha256: snapshot.authority.identityRecordSha256,
-        authorityContract: snapshot.authority.contract, authorityName: snapshot.authorityName,
+        authorityContract: snapshot.authority.contract, authoritySchemaFingerprint: snapshot.authority.schemaFingerprint, authorityName: snapshot.authorityName,
         authorityFileSha256: snapshot.authorityFileSha256, authoritySha256: snapshot.authority.authoritySha256,
         evidenceKind: snapshot.authority.evidenceKind, fulltextSha256: snapshot.fulltextSha256,
         sourceSnapshotSha256: snapshot.sourceSnapshotSha256 };
-    const decisionBody = { contract: api.DECISION_CONTRACT, version: 1, crosswalkId: ids[0], operationId: ids[1],
+    const decisionBody = { ...codec.recordHeader(api.DECISION_CONTRACT, api.DECISION_CONTRACT), crosswalkId: ids[0], operationId: ids[1],
         expectedStateSha256: state.stateSha256, pageKey, pagePath: state.assignments[pageKey].pagePath,
         pageContentSha256: state.assignments[pageKey].pageContentSha256, actorId: 'legacy.writer',
         result: { status: 'verified', reason: 'legacy fixture' }, sourceAuthority, createdAt: stamp };
@@ -996,13 +988,13 @@ test('归档抓取的身份凭证可以核验对应的 arXiv 身份提示，但�
     const record = { arxivId: '2601.00001', paper_id: '2601.00001', title: 'Retained crawl title',
         abstract: 'Retained crawler metadata only.', authors: ['Author'], categories: ['cs.SD'], source: 'arxiv', sources: ['arxiv'] };
     fs.writeFileSync(path.join(archiveDirectory, 'filtered-papers.json'), JSON.stringify({ papers: [record] }), { mode: 0o600 });
-    const index = archiveCrawlAuthorityApi.scanRetainedFilteredPapers({ dataRoot });
-    const prepared = archiveCrawlAuthorityApi.prepareArchiveCrawlAuthority({ identityRoot, dataRoot, arxivId: '2601.00001',
+    const index = originalCrawlApi('archive').scanRetainedFilteredPapers({ dataRoot });
+    const prepared = savedCrawlFixture('archive', { identityRoot, dataRoot, arxivId: '2601.00001',
         match: index.matches.get('2601.00001')[0], apply: true });
     const pageKey = Object.keys(state.assignments)[0];
     const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle: prepared.authorityHandle,
         operationId: ids[1], actorId: 'archive-crawl.test', now: stamp });
-    assert.equal(artifact.sourceAuthority.authorityContract, archiveCrawlAuthorityApi.CONTRACT);
+    assert.equal(artifact.sourceAuthority.authorityContract, originalCrawlApi('archive').CONTRACT);
     assert.equal(artifact.sourceAuthority.evidenceKind, archiveCrawlAuthorityApi.EVIDENCE_KIND);
     assert.equal('fulltextSha256' in artifact.sourceAuthority, false);
     const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
@@ -1022,8 +1014,8 @@ test('当前本地抓取授权的收尾分别走本地、旧版和快照三个�
     fs.mkdirSync(current, { recursive: true, mode: 0o700 }); fs.mkdirSync(authorityRoot, { mode: 0o700 });
     fs.writeFileSync(path.join(current, 'papers.json'), JSON.stringify({ papers: { '2601.00001': {
         arxivId: '2601.00001', title: 'not identity evidence', analysis: { generated: true } } } }), { mode: 0o600 });
-    const match = localCrawlAuthorityApi.scanLocalCrawlPapers({ dataRoot }).matches.get('2601.00001')[0];
-    const prepared = localCrawlAuthorityApi.prepareLocalCrawlAuthority({ identityRoot, snapshotRoot, dataRoot, arxivId: '2601.00001', match, apply: true });
+    const match = originalCrawlApi('local').scanLocalCrawlPapers({ dataRoot }).matches.get('2601.00001')[0];
+    const prepared = savedCrawlFixture('local', { identityRoot, snapshotRoot, dataRoot, arxivId: '2601.00001', match, apply: true });
     const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle: prepared.authorityHandle,
         operationId: ids[1], actorId: 'local-crawl.test', now: stamp });
     const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], decisionName: 'local-crawl.json', artifact });
@@ -1049,13 +1041,13 @@ test('留存的本地会议抓取元数据与 PDF 授权可核验一条精确的
     for (const name of ['icassp_2026_deep_analyzers.json', 'iclr_2026_deep_analyzers.json']) {
         fs.writeFileSync(path.join(current, name), JSON.stringify({ papers: [] }), { mode: 0o600 });
     }
-    const match = conferenceCrawlAuthorityApi.scanRetainedConferenceCrawlers({ dataRoot })
+    const match = originalCrawlApi('conference').scanRetainedConferenceCrawlers({ dataRoot })
         .matches.get(`openreview-forum-id:${id}`)[0];
-    const prepared = conferenceCrawlAuthorityApi.prepareConferenceCrawlAuthority({ identityRoot: path.join(f.root, 'conference-identities'), dataRoot, match, apply: true });
+    const prepared = savedCrawlFixture('conference', { identityRoot: path.join(f.root, 'conference-identities'), dataRoot, match, apply: true });
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f), crosswalkId: ids[0], now: stamp, apply: true });
     const pageKey = Object.keys(state.assignments)[0]; const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey,
         authorityHandle: prepared.authorityHandle, operationId: ids[1], actorId: 'conference.local', now: stamp });
-    assert.equal(artifact.sourceAuthority.authorityContract, conferenceCrawlAuthorityApi.CONTRACT);
+    assert.equal(artifact.sourceAuthority.authorityContract, originalCrawlApi('conference').CONTRACT);
     assert.equal(artifact.sourceAuthority.pdfSha256, match.pdfSha256);
     const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], decisionName: 'conference-local.json', artifact });
     const applied = api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], owner: 'conference.local', now: stamp,
@@ -1324,7 +1316,7 @@ function primaryHandoffFixture(t) {
         crosswalkId: ids[0], now: stamp, apply: true });
     const binding = primary.build({ blogRoot: f.blog, page: state.source.papers[0] });
     const catalog = catalogApi.normalizeCatalog({
-        contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
+        ...codec.recordHeader(catalogApi.CONTRACT, catalogApi.CONTRACT), scope: catalogApi.SCOPE,
         scopeBinding: {
             inventoryPath: path.join(f.inventory, f.ledgerName), inventorySha256: sha(ledgerBytes),
             inventoryLedgerSha256: f.ledger.ledgerSha256, inventoryPageSetSha256: f.ledger.pageSetSha256,
@@ -1376,7 +1368,7 @@ test('主评分行的新失败交接经真实批次与 crosswalk 决策完成', 
     const f = primaryHandoffFixture(t);
     const batch = require('../scripts/lib/historical-arxiv-batch.js');
     const loaded = f.planner.readArxivFreshFailureHandoff({ root: f.options.handoffRoot, handoffName: f.handoffName });
-    assert.equal(loaded.handoff.version, 2);
+    assert.ok(codec.hasValidHeader(loaded.handoff, 'historical-arxiv-primary-fresh-failure-handoff'));
     assert.deepEqual(loaded.handoff.dailyPrimaryArxivBindings, [f.binding]);
     const result = await batch.runSingleHintBatch(f.options);
     assert.equal(result.status, 'complete', JSON.stringify(result));
@@ -1385,7 +1377,7 @@ test('主评分行的新失败交接经真实批次与 crosswalk 决策完成', 
     const state = api.readCrosswalk(f.options);
     assert.equal(state.assignments[f.binding.pageKey].status, 'verified');
     const artifact = JSON.parse(fs.readFileSync(path.join(f.crosswalk, ids[0], 'decisions', state.attempts[0].decisionName)));
-    assert.equal(artifact.version, 2);
+    assert.ok(codec.hasValidHeader(artifact, 'page-source-crosswalk-primary-arxiv-decision'));
     assert.deepEqual(artifact.primaryArxivBinding, f.binding);
     assert.equal(artifact.sourceAuthority.paperId, 'arxiv:2601.00001');
     assert.equal((await batch.runSingleHintBatch(f.options)).status, 'complete');
@@ -1405,7 +1397,7 @@ test('主评分行交接在请求前拒绝原页、评分行证明和完整候�
     const proofBody = structuredClone(proof); delete proofBody.bindingSha256;
     proof.bindingSha256 = api.stableHash(proofBody);
     const deterministic = {
-        contract: handoff.contract, version: handoff.version, dailyPrimaryArxivBindings: handoff.dailyPrimaryArxivBindings,
+        ...codec.recordHeader(handoff.contract, handoff.contract, handoff.schemaFingerprint), dailyPrimaryArxivBindings: handoff.dailyPrimaryArxivBindings,
         planSha256: handoff.planSha256, catalogFileSha256: handoff.catalogFileSha256, inventory: handoff.inventory,
         paperId: handoff.paperId, runId: handoff.runId, arxivId: handoff.arxivId, generation: handoff.generation,
         failure: handoff.failure, pageBindings: handoff.pageBindings, pageBindingSetSha256: handoff.pageBindingSetSha256

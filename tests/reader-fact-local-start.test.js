@@ -301,6 +301,37 @@ test('正常生成器只发一次有界正文补丁，不发全文并记真实�
         const targets = repair.buildRepairTargets(draft, issues, {
             readerFactLocalPaths: start.readerFactLocalPaths,
         });
+        // A separately isolated candidate simulates one prior charged response.
+        // Its input hash uses the actual original Git template and the original
+        // request recipe, rather than rewriting the current request identity.
+        const currentIdentity = (await deep.prepareApiReaderRetryIdentity(sample.paper, sample.paper.analysis,
+            '封存证据', options)).identity;
+        const originalContract = 'reader-fact-local-sentence-prompt-v3';
+        const originalPath = require('../scripts/lib/prompt-contracts').promptFilePathForContract('apiReaderRepair', originalContract);
+        const originalTemplateSha = deep.runtimePromptTemplateSha256(originalPath);
+        const originalIdentity = { ...currentIdentity, repairPromptSha256: originalTemplateSha,
+            contentMode: 'reader-source-signed-revision-v1', inputFingerprint: deep.stableFingerprint({
+                ...require('../scripts/lib/prompt-rendering-contract').promptRenderingFingerprintFields(
+                    sample.paper.title, '封存证据', feedback, start.previousDraft),
+                contentMode: 'reader-source-signed-revision-v1', sourceEvidence: '封存证据',
+                readerFactLocalPromptContract: originalContract, readerFactLocalPromptSha256: originalTemplateSha,
+                ...start.signedRevisionDisplayFields, reviewFeedback: feedback, initialDraft: start.previousDraft,
+                structuredArtifacts: options.structuredArtifacts.payloadSha256, directSupplementaryEvidence: []
+            }) };
+        delete originalIdentity.contentModeSchemaFingerprint;
+        assert.notEqual(currentIdentity.inputFingerprint, originalIdentity.inputFingerprint);
+        assert.notEqual(currentIdentity.repairPromptSha256, originalTemplateSha);
+        const priorDir = path.join(root, 'prior-attempts');
+        repair.saveFailedCandidate(priorDir, originalIdentity, { status: 'failed', draft,
+            rawDraft: JSON.stringify(draft), attempts: 1, fullAttempts: 0, transportFailures: 0,
+            issues, noProgress: 0, failureSignature: 'isolated original input regression' });
+        const priorName = path.join(priorDir, repair.hashDraft(originalIdentity) + '.json');
+        const priorBytes = fs.readFileSync(priorName);
+        await assert.rejects(deep.generateApiReaderArticleDetailed(sample.paper, sample.paper.analysis, '封存证据', {
+            ...options, readerAttemptsDir: priorDir, readerCallModel: async () => assert.fail('must not open a fresh budget')
+        }), { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
+        assert.deepEqual(fs.readFileSync(priorName), priorBytes);
+        assert.equal(fs.existsSync(path.join(priorDir, repair.hashDraft(currentIdentity) + '.json')), false);
         let calls = 0;
         const result = await deep.generateApiReaderArticleDetailed(
             sample.paper,
@@ -313,7 +344,7 @@ test('正常生成器只发一次有界正文补丁，不发全文并记真实�
                     assert.ok(tokens <= 16000);
                     assert.equal(request.usageContext.stage, 'apiReaderRepair');
                     return JSON.stringify({
-                        version: 1,
+                        ...require('../scripts/lib/protocol-codec').record('reader-fact-sentence-patch'),
                         draftSha256: repair.hashDraft(draft),
                         sentenceReplacements: repair.factLocalSentenceTargets({
                             draftSha256: repair.hashDraft(draft), targets,
@@ -589,7 +620,7 @@ test('真实公共刷新进入新解释补丁提示，未覆盖引文中的错�
     fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: [] }));
     fs.writeFileSync(Config.FILES.papersLegacy, JSON.stringify({ papers: [] }));
     const repair = require('../scripts/lib/reader-repair');
-    const prompts = require('../scripts/lib/prompt-text-versions');
+    const prompts = require('../scripts/lib/prompt-contracts');
     const bridgeClaim = '这条术语组合解释的完整原句包含已经核实的错误事实。';
     const paper = structuredClone(sample.paper);
     const bridge = paper.apiReaderPlan.conceptBridges[0];

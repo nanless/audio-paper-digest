@@ -6,6 +6,7 @@
 const crypto = require('node:crypto');
 const authorityApi = require('./paper-source-authority.js');
 const crosswalkApi = require('./page-source-crosswalk.js');
+const codec = require('./protocol-codec');
 
 class HistoryConflictIdentityError extends Error {
     constructor(message) {
@@ -39,7 +40,8 @@ function authorityReference(snapshot) {
     const authority = snapshot.authority;
     return { paperId: authority.paperId, identity: clone(authority.identity),
         identitySha256: authority.identitySha256, identityRecordSha256: authority.identityRecordSha256,
-        authorityContract: authority.contract, authorityName: snapshot.authorityName,
+        authorityContract: authority.contract, ...(authority.schemaFingerprint ? { authoritySchemaFingerprint: authority.schemaFingerprint } : {}),
+        authorityName: snapshot.authorityName,
         authorityFileSha256: snapshot.authorityFileSha256, authoritySha256: authority.authoritySha256,
         evidenceKind: authority.evidenceKind, fulltextSha256: snapshot.fulltextSha256,
         sourceSnapshotSha256: snapshot.sourceSnapshotSha256 };
@@ -78,7 +80,7 @@ function buildConflictVerifiedDecisionArtifact({ state, pageKey, selectedHint, a
     }
     const assignment = selected.state.assignments[pageKey];
     const reason = `Operator selected existing non-title hint ${selectedHint.scheme}:${selectedHint.value}; production authority matched exactly.`;
-    const body = { contract: crosswalkApi.DECISION_CONTRACT, version: crosswalkApi.VERSION,
+    const body = { ...codec.recordHeader(crosswalkApi.DECISION_CONTRACT, crosswalkApi.DECISION_CONTRACT),
         crosswalkId: selected.state.crosswalkId, operationId,
         expectedStateSha256: selected.state.stateSha256, pageKey,
         pagePath: assignment.pagePath, pageContentSha256: assignment.pageContentSha256,

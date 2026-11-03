@@ -86,14 +86,14 @@ test('Node 旧自洽猜补缓存拒绝，且新增原始内容不能用自声明
             sourceBindingsSha256: plan.sourceBindingsSha256, formulaBindingCount: 1 });
     }
     reseal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), false, '旧猜补记录虽输出SHA完全自洽仍拒绝');
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false, '旧猜补记录虽输出SHA完全自洽仍拒绝');
     plan.rawTeXVerified = true; reseal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), false, '布尔自声明不能代替原文');
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false, '布尔自声明不能代替原文');
     delete plan.rawTeXVerified;
     plan.structuredSourcePayload = payload; reseal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     plan.structuredSourcePayload = payload.replace('CTCLoss', 'FakeLoss'); reseal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), false, '改payload后不能只重签plan');
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false, '改payload后不能只重签plan');
     for (const change of [
         data => { data.formulas[0].latex = String.raw`S_{\text{ctc}}(y,X)=-`; },
         data => { data.formulas[0].ordinal = 2; },
@@ -104,6 +104,6 @@ test('Node 旧自洽猜补缓存拒绝，且新增原始内容不能用自声明
         plan.structuredSourcePayload = JSON.stringify(altered);
         paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = sha(plan.structuredSourcePayload);
         stage.structuredArtifactsSha256 = sha(plan.structuredSourcePayload); reseal();
-        assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false);
     }
 });

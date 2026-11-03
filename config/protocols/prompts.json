@@ -1,0 +1,144 @@
+{
+  "protocols": [
+    {
+      "name": "analysis-prompt-text",
+      "currentVariant": "content-bound",
+      "currentSchema": {
+        "scope": "stage",
+        "identity": [
+          "wholeFileSha256",
+          "runtimeTemplateSha256"
+        ],
+        "pathNamespace": "prompts/current"
+      },
+      "historical": [
+        {
+          "tag": "analysis-prompt-text-v1",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v2",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v3",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v4",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v5",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v6",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v7",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v8",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v9",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v10",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v11",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v12",
+          "variant": "original-declaration"
+        },
+        {
+          "tag": "analysis-prompt-text-v13",
+          "variant": "original-declaration"
+        }
+      ]
+    },
+    {
+      "name": "git-prompt-evidence",
+      "currentVariant": "git-objects",
+      "currentSchema": {
+        "fields": [
+          "contract",
+          "provenanceCommit",
+          "retiredPaths",
+          "blobs"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "git-prompt-evidence-v1",
+          "variant": "original-index",
+          "header": {
+            "contract": "git-prompt-evidence-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-fact-local-sentence-prompt",
+      "currentVariant": "source-bound-sentence",
+      "currentSchema": {
+        "scope": "existing-reader-targets"
+      },
+      "historical": [
+        {
+          "tag": "reader-fact-local-sentence-prompt-v3",
+          "variant": "original-sentence"
+        }
+      ]
+    },
+    {
+      "name": "reader-concept-terms-prompt",
+      "currentVariant": "source-bound-terms",
+      "currentSchema": {
+        "scope": "existing-concept-targets"
+      },
+      "historical": [
+        {
+          "tag": "reader-concept-terms-prompt-v1",
+          "variant": "original-terms"
+        }
+      ]
+    },
+    {
+      "name": "selected-muse-full-stage-reanalysis",
+      "currentVariant": "selected-papers",
+      "currentSchema": {
+        "requiredFields": [
+          "runId",
+          "sourceRunId",
+          "model",
+          "promptBindings",
+          "originalPaperSha256",
+          "inheritedFeedbacks",
+          "currentFeedbackProof",
+          "startedAt"
+        ],
+        "promptIdentity": "stage-path-exact-whole-sha"
+      },
+      "historical": [
+        {
+          "tag": "selected-muse-full-stage-reanalysis-v1",
+          "variant": "original-selection",
+          "header": {
+            "contract": "selected-muse-full-stage-reanalysis-v1"
+          }
+        }
+      ]
+    }
+  ]
+}

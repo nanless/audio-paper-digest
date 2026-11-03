@@ -1,10 +1,16 @@
 package com.nanless.paperdigest.data
 
 import org.json.JSONObject
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.junit.Assert.*
 import org.junit.Test
 
 class PublishedSourceWarningTest {
+    @Test fun stableHeaderPreservesExactOriginalWarningAndUnknownFingerprintCannotBorrowIt(){
+        val value=citation();value.remove("contract");val current=ClientProtocols.record("paper-citation-source",value)
+        assertEquals(warning,PublishedSourceWarning.warning(article(current)))
+        assertNull(PublishedSourceWarning.warning(article(current.copy().put("schemaFingerprint","0".repeat(64)))))
+    }
     private val owner="conference:test:2026:paper:synthetic"
     private val blog="https://nanless.github.io/audio-paper-digest-blog/posts/synthetic-warning/"
     private val source="https://openreview.net/forum?id=synthetic"

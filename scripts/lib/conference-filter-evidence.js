@@ -13,30 +13,32 @@ const discoveryApi = require('./conference-discovery.js');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
 const extractionApi = require('./conference-extraction-receipt.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
+const originalLocator = require('./workflow-legacy-codec').originalAbstractLocator();
 
-const VERSION = 1;
-const RUN_CONTRACT = 'conference-filter-evidence-run-v1';
-const PROJECTION_CONTRACT = 'conference-filter-evidence-projection-v1';
-const RECEIPT_CONTRACT = 'conference-filter-evidence-receipt-v1';
-const CATALOG_CONTRACT = 'conference-filter-evidence-catalog-v1';
-const REPORT_CONTRACT = 'conference-filter-evidence-report-v1';
-const LOCATOR_CONTRACT = 'abstract-locator-v1';
-const BLOCKED_VERIFICATION_CONTRACT = 'conference-pdf-extraction-blocked-verification-v1';
+const RUN_CONTRACT = codec.contract('conference-filter-evidence-run');
+const PROJECTION_CONTRACT = codec.contract('conference-filter-evidence-projection');
+const RECEIPT_CONTRACT = codec.contract('conference-filter-evidence-receipt');
+const CATALOG_CONTRACT = codec.contract('conference-filter-evidence-catalog');
+const REPORT_CONTRACT = codec.contract('conference-filter-evidence-report');
+const LOCATOR_CONTRACT = codec.contract('conference-abstract-locator');
+const BLOCKED_VERIFICATION_CONTRACT = codec.contract('conference-pdf-extraction-blocked-verification');
 const SAFE_NAME = /^[a-z0-9][a-z0-9._-]{0,159}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const EVIDENCE_STATUSES = new Set(['ready', 'missing', 'ambiguous', 'too-short', 'extraction-blocked']);
 const ABSTRACT_MIN_CHARS = 80;
 const ABSTRACT_MAX_CHARS = 12000;
-const DEFAULT_LOCATOR_PROFILE = 'default-v1';
-const AAAI_LOCATOR_PROFILE = 'aaai-2026-bare-introduction-v1';
+const DEFAULT_LOCATOR_PROFILE = codec.contract('conference-abstract-default-profile');
+const AAAI_LOCATOR_PROFILE = codec.contract('conference-abstract-bare-introduction-profile');
 const LOCATOR_RULES = Object.freeze({
     pages: 2,
     start: '^\\s*(?:abstract|摘要)\\s*(?:[:—–-]\\s*)?',
     end: '^\\s*(?:keywords?|index terms?|ccs concepts?|(?:1|i)[.]?\\s+introduction)\\s*(?:[:—–-]\\s*)?',
     minimumCharacters: ABSTRACT_MIN_CHARS,
     maximumCharacters: ABSTRACT_MAX_CHARS,
-    normalization: 'exact-utf8-slice-trim-v1'
+    normalization: 'exact-utf8-slice-trim'
 });
 const AAAI_LOCATOR_RULES = Object.freeze({
     ...LOCATOR_RULES,
@@ -58,6 +60,7 @@ function canonical(value) {
 const stableHash = value => sha256(Buffer.from(JSON.stringify(canonical(value)), 'utf8'));
 const LOCATOR_IMPLEMENTATION_SHA256 = stableHash(LOCATOR_RULES);
 const LOCATOR_PROFILES = Object.freeze({
+    ...originalLocator.profiles,
     [DEFAULT_LOCATOR_PROFILE]: Object.freeze({ rules: LOCATOR_RULES,
         implementationSha256: LOCATOR_IMPLEMENTATION_SHA256 }),
     [AAAI_LOCATOR_PROFILE]: Object.freeze({ rules: AAAI_LOCATOR_RULES,
@@ -69,6 +72,17 @@ function fail(message) {
     const error = new Error(`Conference filter evidence rejected: ${message}`);
     error.code = 'CONFERENCE_FILTER_EVIDENCE_INTEGRITY';
     throw error;
+}
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`format header invalid: ${error.message}`); }
+}
+function headerForState(state, family, variant) {
+    if (!state || codec.isCurrentHeader(state, 'conference-filter-evidence-run')) {
+        return codec.recordHeader(codec.contract(family), family);
+    }
+    recordHeaderFor(state, 'conference-filter-evidence-run');
+    return codec.historicalHeader(family, variant);
 }
 function exact(value, fields, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} must be an object`);
@@ -188,17 +202,23 @@ function unavailable(status, reason) {
 function locatorProfileForConference(conference) {
     return conference?.id === 'aaai-2026' ? AAAI_LOCATOR_PROFILE : DEFAULT_LOCATOR_PROFILE;
 }
-function locatorBindingForConference(conference) {
-    const profile = locatorProfileForConference(conference); const selected = LOCATOR_PROFILES[profile];
-    return profile === DEFAULT_LOCATOR_PROFILE
-        ? { contract: LOCATOR_CONTRACT, implementationSha256: selected.implementationSha256 }
-        : { contract: LOCATOR_CONTRACT, profile, implementationSha256: selected.implementationSha256 };
+function locatorBindingForConference(conference, stored = null) {
+    const historical = stored && !codec.isCurrentHeader(stored, 'conference-abstract-locator');
+    if (stored) recordHeaderFor(stored, 'conference-abstract-locator');
+    const profile = historical ? (conference?.id === 'aaai-2026' ? originalLocator.aaaiProfile : originalLocator.defaultProfile)
+        : locatorProfileForConference(conference);
+    const selected = LOCATOR_PROFILES[profile];
+    const header = historical ? codec.historicalHeader('conference-abstract-locator', 'bounded-heading-span')
+        : codec.recordHeader(LOCATOR_CONTRACT, 'conference-abstract-locator');
+    return conference?.id === 'aaai-2026'
+        ? { ...header, profile, implementationSha256: selected.implementationSha256 }
+        : { ...header, implementationSha256: selected.implementationSha256 };
 }
 function validateLocatorBinding(value, conference, label) {
-    const expected = locatorBindingForConference(conference);
+    const expected = locatorBindingForConference(conference, value);
     exact(value, Object.keys(expected), label);
     if (stableHash(value) !== stableHash(expected)) fail(`${label} implementation/profile drifted`);
-    return locatorProfileForConference(conference);
+    return value.profile || (codec.isCurrentHeader(value, 'conference-abstract-locator') ? DEFAULT_LOCATOR_PROFILE : originalLocator.defaultProfile);
 }
 function locateAbstract(textBytes, artifact, profile = DEFAULT_LOCATOR_PROFILE) {
     if (!Buffer.isBuffer(textBytes)) fail('extracted text must be a Buffer');
@@ -215,7 +235,7 @@ function locateAbstract(textBytes, artifact, profile = DEFAULT_LOCATOR_PROFILE) 
     if (starts.length !== 1) return unavailable('ambiguous', 'multiple abstract headings in the first two pages');
     const contentStart = starts[0].index + starts[0][0].length;
     const suffix = prefix.slice(contentStart);
-    if (profile === AAAI_LOCATOR_PROFILE) {
+    if (codec.isContract(profile, 'conference-abstract-bare-introduction-profile')) {
         const bareIntroductions = [...suffix.matchAll(new RegExp(rules.bareIntroduction, 'gimu'))];
         if (bareIntroductions.length > rules.bareIntroductionMaximumMatches) {
             return unavailable('ambiguous', 'multiple bare Introduction headings in the first two pages');
@@ -263,16 +283,19 @@ function initialState(snapshot, runId, now) {
             sourceIdentity, status: 'pending', itemName: sha256(Buffer.from(sourceIdentity, 'utf8')),
             receiptFileSha256: null, receiptSha256: null, evidenceSha256: null };
     }).sort((a, b) => a.paperId.localeCompare(b.paperId));
-    const body = { contract: RUN_CONTRACT, version: VERSION, binding: runBinding(snapshot, runId),
+    const body = { ...codec.recordHeader(RUN_CONTRACT, 'conference-filter-evidence-run'), binding: runBinding(snapshot, runId),
         locator: locatorBindingForConference(snapshot.candidateManifest.conference),
         createdAt: timestamp(now), updatedAt: timestamp(now), members };
     return { ...body, stateSha256: stableHash(body) };
 }
 function normalizeState(value, snapshot, runId) {
-    exact(value, ['contract', 'version', 'binding', 'locator', 'createdAt', 'updatedAt', 'members', 'stateSha256'], 'run state');
-    if (value.contract !== RUN_CONTRACT || value.version !== VERSION) fail('run state contract/version mismatch');
+    const header = recordHeaderFor(value, 'conference-filter-evidence-run');
+    exact(value, [...Object.keys(header), 'binding', 'locator', 'createdAt', 'updatedAt', 'members', 'stateSha256'], 'run state');
     if (stableHash(value.binding) !== stableHash(runBinding(snapshot, runId))) fail('run state discovery binding drifted');
     validateLocatorBinding(value.locator, snapshot.candidateManifest.conference, 'run locator');
+    if (codec.isCurrentHeader(value, 'conference-filter-evidence-run') !== codec.isCurrentHeader(value.locator, 'conference-abstract-locator')) {
+        fail('run and locator format namespaces must match');
+    }
     if (!Array.isArray(value.members) || value.members.length !== snapshot.candidateManifest.members.length) fail('run member set drifted');
     const body = clone(value); delete body.stateSha256;
     if (assertSha(value.stateSha256, 'stateSha256') !== stableHash(body)) fail('run state self-SHA drifted');
@@ -298,15 +321,19 @@ function updateState(state, now) {
     return { ...body, stateSha256: stableHash(body) };
 }
 
-function buildSourceMetadataRecord(replay, snapshot) {
-    return { contract: PROJECTION_CONTRACT, version: VERSION, conference: clone(replay.conference), identity: clone(replay.identity),
+function buildSourceMetadataRecord(replay, snapshot, state = null) {
+    return { ...headerForState(state, 'conference-filter-evidence-projection', 'official-metadata-projection'), conference: clone(replay.conference), identity: clone(replay.identity),
         metadataRecord: clone(replay.metadataRecord), discovery: { catalogSha256: snapshot.catalogSha256,
             reportSha256: snapshot.reportSha256, metadataSnapshotSha256: replay.metadataSnapshotSha256,
             metadataIndex: replay.metadataIndex, metadataRecordSha256: replay.metadataRecordSha256 } };
 }
-function extractionRequestFor({ paperId, replay, snapshot, projectionSha256, pdfSha256, copiedAt }) {
+function extractionRequestFor({ paperId, replay, snapshot, projectionSha256, pdfSha256, copiedAt, state = null }) {
     const locator = replay.metadataRecord.pdfUrl || replay.metadataRecord.recordUrl;
-    return { contract: extractionApi.REQUEST_CONTRACT, version: extractionApi.VERSION, paperId,
+    const historical = state && !codec.isCurrentHeader(state, 'conference-filter-evidence-run');
+    if (state) recordHeaderFor(state, 'conference-filter-evidence-run');
+    const header = historical ? codec.historicalHeader('conference-pdf-extraction-request', 'frozen-source-options')
+        : codec.recordHeader(extractionApi.REQUEST_CONTRACT, 'conference-pdf-extraction-request');
+    return { ...header, paperId,
         sourceIdentity: replay.sourceIdentity, source: {
             metadata: { file: 'metadata.json', sha256: projectionSha256, identityEvidence: {
                 conferenceIdPointer: '/conference/id', conferenceYearPointer: '/conference/year',
@@ -317,7 +344,8 @@ function extractionRequestFor({ paperId, replay, snapshot, projectionSha256, pdf
             pdf: { file: 'paper.pdf', sha256: pdfSha256,
                 provenance: { kind: 'local-confirmed-copy', locator, retrievedAt: copiedAt } } },
         outputs: { textFile: 'text.txt', artifactsFile: 'artifacts.json', receiptFile: 'extraction-receipt.json' },
-        options: clone(extractionApi.OPTIONS) };
+        options: { ...clone(extractionApi.OPTIONS), ...(historical
+            ? { normalization: codec.historicalContract('conference-pdf-text-normalization', 'unicode-nfc-lf-rstrip') } : {}) } };
 }
 function copyPdf(source, target, expectedSha) {
     const before = fs.lstatSync(source);
@@ -332,11 +360,11 @@ function copyPdf(source, target, expectedSha) {
     return copied;
 }
 function normalizeBlockedVerification(value) {
-    exact(value, ['contract', 'version', 'status', 'paperId', 'sourceIdentity', 'blockedReason',
+    const header = recordHeaderFor(value, 'conference-pdf-extraction-blocked-verification');
+    exact(value, [...Object.keys(header), 'status', 'paperId', 'sourceIdentity', 'blockedReason',
         'requestSha256', 'metadataSha256', 'pdfSha256', 'textSha256', 'artifactsSha256',
         'receiptFileSha256', 'receiptSha256', 'verificationSha256'], 'blocked extraction verification');
-    if (value.contract !== BLOCKED_VERIFICATION_CONTRACT || value.version !== 1
-        || value.status !== 'verified-blocked') fail('blocked extraction verification contract/status is invalid');
+    if (value.status !== 'verified-blocked') fail('blocked extraction verification contract/status is invalid');
     exact(value.blockedReason, ['code', 'message'], 'blocked extraction reason');
     if (!['TEXT_TOO_SHORT', 'PDF_EXTRACTION_FAILED'].includes(value.blockedReason.code)) {
         fail('blocked extraction reason is unsupported');
@@ -387,7 +415,7 @@ function loadExistingExtraction(itemRoot) {
     }
 }
 function evidenceReceipt({ state, replay, snapshot, extraction, evidence }) {
-    const body = { contract: RECEIPT_CONTRACT, version: VERSION, runId: state.binding.runId,
+    const body = { ...headerForState(state, 'conference-filter-evidence-receipt', 'exact-abstract-slice'), runId: state.binding.runId,
         paperId: extraction.paperId, sourceIdentity: extraction.sourceIdentity,
         discovery: { catalogSha256: snapshot.catalogSha256, reportSha256: snapshot.reportSha256,
             metadataSnapshotSha256: replay.metadataSnapshotSha256, metadataIndex: replay.metadataIndex,
@@ -400,8 +428,9 @@ function evidenceReceipt({ state, replay, snapshot, extraction, evidence }) {
     return { ...body, receiptSha256: stableHash(body) };
 }
 function validateEvidenceReceipt(value, expected) {
-    exact(value, ['contract', 'version', 'runId', 'paperId', 'sourceIdentity', 'discovery', 'extraction', 'locator', 'evidence', 'receiptSha256'], 'evidence receipt');
-    if (value.contract !== RECEIPT_CONTRACT || value.version !== VERSION || value.runId !== expected.runId
+    const header = recordHeaderFor(value, 'conference-filter-evidence-receipt');
+    exact(value, [...Object.keys(header), 'runId', 'paperId', 'sourceIdentity', 'discovery', 'extraction', 'locator', 'evidence', 'receiptSha256'], 'evidence receipt');
+    if (value.runId !== expected.runId
         || value.paperId !== expected.paperId || value.sourceIdentity !== expected.sourceIdentity) fail('evidence receipt identity mismatch');
     exact(value.discovery, ['catalogSha256', 'reportSha256', 'metadataSnapshotSha256', 'metadataIndex', 'metadataRecordSha256', 'pdfSha256'], 'receipt discovery');
     exact(value.extraction, ['receiptFile', 'receiptFileSha256', 'receiptSha256', 'verificationSha256',
@@ -454,7 +483,7 @@ function itemRootFor(runRoot, itemName, create = false) {
     if (create && !fs.existsSync(root)) fs.mkdirSync(root, { mode: 0o700 });
     return safeDirectory(root);
 }
-function validateStagedInputs({ itemRoot, member, snapshot, replay }) {
+function validateStagedInputs({ itemRoot, state, member, snapshot, replay }) {
     const candidate = replay.match.candidates[0];
     const requestLoaded = readJson(direct(itemRoot, 'request.json'), 'staged extraction request');
     const projectionLoaded = readJson(direct(itemRoot, 'metadata.json'), 'staged metadata projection');
@@ -469,8 +498,10 @@ function validateStagedInputs({ itemRoot, member, snapshot, replay }) {
         || stableHash(request?.source?.metadata?.discoveryBinding) !== stableHash({
             catalogSha256: snapshot.catalogSha256, metadataSnapshotSha256: replay.metadataSnapshotSha256,
             metadataIndex: replay.metadataIndex, metadataRecordSha256: replay.metadataRecordSha256 })
-        || stableHash(request?.options) !== stableHash(extractionApi.OPTIONS)
-        || stableHash(projectionLoaded.value) !== stableHash(buildSourceMetadataRecord(replay, snapshot))
+        || stableHash(request?.options) !== stableHash({ ...extractionApi.OPTIONS,
+            ...(!codec.isCurrentHeader(state, 'conference-filter-evidence-run')
+                ? { normalization: codec.historicalContract('conference-pdf-text-normalization', 'unicode-nfc-lf-rstrip') } : {}) })
+        || stableHash(projectionLoaded.value) !== stableHash(buildSourceMetadataRecord(replay, snapshot, state))
         || pdfLoaded.sha256 !== candidate.sha256) {
         fail('staged extraction request/projection does not bind the discovery member');
     }
@@ -497,7 +528,7 @@ function processMember({ runRoot, state, member, snapshot, discoveryHandle, extr
         const blocked = ['extraction-receipt.json', ...prefix].sort();
         const ready = ['artifacts.json', 'extraction-receipt.json', ...prefix, 'text.txt'].sort();
         if (stableHash(names) === stableHash(prefix)) {
-            const staged = validateStagedInputs({ itemRoot, member, snapshot, replay });
+            const staged = validateStagedInputs({ itemRoot, state, member, snapshot, replay });
             const extraction = extract(itemRoot, { request: staged.requestLoaded.value, replay, snapshot });
             return finishMember({ itemRoot, state, member, snapshot, replay, extraction });
         }
@@ -507,7 +538,7 @@ function processMember({ runRoot, state, member, snapshot, discoveryHandle, extr
         const extraction = loadExistingExtraction(itemRoot);
         return finishMember({ itemRoot, state, member, snapshot, replay, extraction });
     }
-    const projection = buildSourceMetadataRecord(replay, snapshot); const projectionBytes = jsonBytes(projection);
+    const projection = buildSourceMetadataRecord(replay, snapshot, state); const projectionBytes = jsonBytes(projection);
     writeExclusive(direct(itemRoot, 'metadata.json'), projectionBytes);
     const candidate = replay.match.candidates[0];
     const pdfRoot = path.resolve(snapshot.candidateManifest.pdfRoot);
@@ -516,7 +547,7 @@ function processMember({ runRoot, state, member, snapshot, discoveryHandle, extr
     const copied = copyPdf(sourcePdf, direct(itemRoot, 'paper.pdf'), candidate.sha256);
     const copiedAt = timestamp(now);
     const request = extractionRequestFor({ paperId: member.paperId, replay, snapshot,
-        projectionSha256: sha256(projectionBytes), pdfSha256: copied.sha256, copiedAt });
+        projectionSha256: sha256(projectionBytes), pdfSha256: copied.sha256, copiedAt, state });
     writeExclusive(direct(itemRoot, 'request.json'), jsonBytes(request));
     const extraction = extract(itemRoot, { request, replay, snapshot });
     return finishMember({ itemRoot, state, member, snapshot, replay, extraction });
@@ -524,7 +555,7 @@ function processMember({ runRoot, state, member, snapshot, discoveryHandle, extr
 function finishMember({ itemRoot, state, member, snapshot, replay, extraction }) {
     const candidate = replay.match.candidates[0];
     const { requestLoaded, projectionLoaded, pdfLoaded } = validateStagedInputs({
-        itemRoot, member, snapshot, replay });
+        itemRoot, state, member, snapshot, replay });
     if (extraction.paperId !== member.paperId || extraction.sourceIdentity !== member.sourceIdentity
         || extraction.pdf.sha256 !== candidate.sha256 || pdfLoaded.sha256 !== candidate.sha256) {
         fail('extraction snapshot does not bind staged discovery member');
@@ -573,7 +604,7 @@ function verifyCompletedMember({ runRoot, state, member, snapshot, discoveryHand
         || pdfLoaded.sha256 !== requestLoaded.value?.source?.pdf?.sha256
         || pdfLoaded.sha256 !== receipt.discovery.pdfSha256
         || pdfLoaded.sha256 !== replay.match.candidates[0].sha256
-        || stableHash(projectionLoaded.value) !== stableHash(buildSourceMetadataRecord(replay, snapshot))
+        || stableHash(projectionLoaded.value) !== stableHash(buildSourceMetadataRecord(replay, snapshot, state))
         || replay.metadataSnapshotSha256 !== receipt.discovery.metadataSnapshotSha256
         || replay.metadataIndex !== receipt.discovery.metadataIndex
         || replay.metadataRecordSha256 !== receipt.discovery.metadataRecordSha256
@@ -617,12 +648,12 @@ function finalizedFor(state) {
         status: member.status, receiptPath: `items/${member.itemName}/evidence-receipt.json`,
         receiptFileSha256: member.receiptFileSha256, receiptSha256: member.receiptSha256,
         evidenceSha256: member.evidenceSha256 }));
-    const body = { contract: CATALOG_CONTRACT, version: VERSION, binding: clone(state.binding),
+    const body = { ...headerForState(state, 'conference-filter-evidence-catalog', 'complete-member-evidence'), binding: clone(state.binding),
         locator: clone(state.locator), stateSha256: state.stateSha256, members,
         memberSetSha256: stableHash(members.map(member => member.paperId)) };
     const catalog = { ...body, catalogSha256: stableHash(body) };
     const counts = summary(state).counts;
-    const reportBody = { contract: REPORT_CONTRACT, version: VERSION, runId: state.binding.runId,
+    const reportBody = { ...headerForState(state, 'conference-filter-evidence-report', 'complete-evidence-counts'), runId: state.binding.runId,
         conference: clone(state.binding.conference), catalogSha256: catalog.catalogSha256, counts };
     const report = { ...reportBody, reportSha256: stableHash(reportBody) };
     return { catalog, report };
@@ -773,7 +804,7 @@ function evidenceHandleMemberSnapshots(handle) {
     });
 }
 
-module.exports = { VERSION, RUN_CONTRACT, PROJECTION_CONTRACT, RECEIPT_CONTRACT, CATALOG_CONTRACT,
+module.exports = { RUN_CONTRACT, PROJECTION_CONTRACT, RECEIPT_CONTRACT, CATALOG_CONTRACT,
     REPORT_CONTRACT, LOCATOR_CONTRACT, DEFAULT_LOCATOR_PROFILE, AAAI_LOCATOR_PROFILE, LOCATOR_RULES,
     AAAI_LOCATOR_RULES, LOCATOR_PROFILES, LOCATOR_IMPLEMENTATION_SHA256, ABSTRACT_MIN_CHARS,
     ABSTRACT_MAX_CHARS, UUID_RE, stableHash, locateAbstract, initialState, normalizeState, buildSourceMetadataRecord,

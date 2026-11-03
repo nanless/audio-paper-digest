@@ -67,7 +67,7 @@ const bytes=JSON.stringify(old);
 const oldfp=fp(old);
 const fresh=fp({status:'pending'});
 assert.notEqual(fresh,oldfp);
-assert.equal(fp({status:'complete',...contracts,readerRequestPolicy:thinking,readerJsonRequestPolicy:policy}),fresh);
+assert.equal(fp({status:'complete',...contracts,readerProtocols:require('./scripts/lib/reader-stage-protocols').currentPipeline(), readerIdentityProtocols: {},readerRequestPolicy:thinking,readerJsonRequestPolicy:policy}),fresh);
 assert.equal(fp(old),oldfp);
 assert.equal(JSON.stringify(old),bytes);
 for(const bad of [{...policy,contract:'bad'},{...policy,model:'bad'},{...policy,responseFormat:'text'},{...policy,extra:true}]) assert.throws(()=>fp({status:'complete',readerJsonRequestPolicy:bad}),/JSON.*策略不安全/);

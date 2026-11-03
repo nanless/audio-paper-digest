@@ -21,7 +21,7 @@ const envelope = declared => ({ filter: { promptSha256: declared }, discovery: {
     metadataRecord: { title: '标题{abstract}', abstract: '摘要{categories}', categories: ['cs.SD', 'cs.SD'], track: 'Speech' } });
 
 test('当前及四个冻结声明走唯一 resolver，逐字保留原字段填充和错误版本隔离', () => {
-    const current = require('../scripts/lib/prompt-text-versions.js').LLM_FILTER_PROMPT_PATH;
+    const current = require('../scripts/lib/prompt-contracts.js').LLM_FILTER_PROMPT_PATH;
     const cases = [{ sha256: api.LLM_FILTER_PROMPT_SHA256, path: current }, ...api.DECLARED_FROZEN_FILTER_PROMPTS];
     for (const entry of cases) {
         const bound = envelope(entry.sha256);

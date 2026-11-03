@@ -64,7 +64,7 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
     });
     if (!wanted.length || new Set(wanted.map(value => value.metric)).size !== wanted.length) return null;
     const originalQuotes = exactQuotes(quotes, sourceText);
-    if (!originalQuotes.length || document?.contract !== 'reader-sealed-pdf-quotes-v1' || !document.available
+    if (!originalQuotes.length || !require('./reader-sealed-pdf-quote-evidence').isQuote(document) || !document.available
         || typeof document.rawFullText !== 'string') return null;
     const lines = literalLines(document.rawFullText), candidates = [];
     const captions = lines.map((line, index) => TABLE_CAPTION.test(line.value) ? index : -1).filter(index => index >= 0);

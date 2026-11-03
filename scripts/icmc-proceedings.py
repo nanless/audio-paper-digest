@@ -17,6 +17,7 @@ import sys
 import stat
 import uuid
 from pathlib import Path
+import protocol_codec as protocols
 
 import fitz
 from pypdf import PdfReader, PdfWriter
@@ -118,8 +119,7 @@ def extract_metadata(source: Path, index_url: str, combined_pdf_url: str) -> dic
         return {
             "metadata": {"conference": {"id": "icmc-2026", "year": 2026}, "papers": papers},
             "pageMap": {
-                "contract": "icmc-combined-proceedings-page-map-v1",
-                "version": 1,
+                **protocols.record_header(protocols.contract("icmc-combined-proceedings-page-map"), "icmc-combined-proceedings-page-map"),
                 "sourcePages": document.page_count,
                 "papers": page_ranges,
             },
@@ -255,7 +255,7 @@ def split_papers(source: Path, page_map_file: Path, output_dir: Path) -> dict:
             for page in slice_reader.pages:
                 output.add_page(page)
             output.add_metadata({
-                "/Producer": "audio-paper-digest-icmc-split-v1",
+                "/Producer": "audio-paper-digest-icmc-split",
                 "/Creator": "audio-paper-digest",
             })
             stream = io.BytesIO()

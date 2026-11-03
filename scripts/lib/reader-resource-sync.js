@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { parseAnalysis } = require('../utils.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
-const { scoringAuditBindsFinalAnalysis, hasValidApiReaderV3Records } = require('../analysis-engine.js');
+const { scoringAuditBindsFinalAnalysis, hasValidIntegratedApiReaderRecords } = require('../analysis-engine.js');
 const { paperSourceQuoteBindsOriginalUrl } = require('./reader-resource-binding.js');
 const CONTRACT = 'reader-resource-availability-sync-v1';
 const sha = text => crypto.createHash('sha256').update(String(text)).digest('hex');
@@ -13,7 +13,7 @@ const protectedReaderKeys = ['apiReaderArticle','apiReaderPlan','apiReaderFigure
 
 function readerResourceIdentityRebind(paper, manifest, resources) {
     const stage = manifest.stages.apiReaderArticle;
-    if (stage?.status !== 'complete' || hasValidApiReaderV3Records(paper)) return null;
+    if (stage?.status !== 'complete' || hasValidIntegratedApiReaderRecords(paper)) return null;
     if (stage.resourceCount !== resources.resources.length) {
         throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
@@ -23,7 +23,7 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
         ...paper,
         analysisManifest: { ...manifest, stages: reboundStages }
     };
-    if (!hasValidApiReaderV3Records(rebound)) {
+    if (!hasValidIntegratedApiReaderRecords(rebound)) {
         throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
     return {
@@ -48,7 +48,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {
         || !scoringAuditBindsFinalAnalysis(paper)
         || !sourceText || sha(sourceText) !== paper.sourceSha256
         || sha(sourceText) !== manifest.sourceAcquisition?.sourceSha256
-        || resources?.contract !== 'api-reader-resource-identity-v1'
+        || !require('./reader-identity-format').hasIdentity(resources, 'resources')
         || resources.sourceTextSha256 !== paper.sourceSha256
         || resources.identitySha256 !== stableHash(identityBody(resources))
         || !Array.isArray(resources.resources) || resources.resources.some(resource => (
@@ -72,7 +72,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {
     // 如果同步后的正文与原文相同，就返回原对象，不尝试修复读者文章的绑定。
     // 最终是否可以继续使用这份记录，仍由调用方的正式分析校验决定。
     if (updatedAnalysis === paper.analysis) {
-        if (options.preserveUpstream === true && !hasValidApiReaderV3Records(paper)) {
+        if (options.preserveUpstream === true && !hasValidIntegratedApiReaderRecords(paper)) {
             throw new Error('保留 Reader 上游需要原评分与当前 Reader 的完整绑定仍然有效。');
         }
         return paper;
@@ -148,12 +148,12 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {
         // A saved paid Reader was generated from these exact upstream bytes.
         // Validate the usual projection, including unchanged scoring facts,
         // but do not rewrite its source analysis, score receipt or checkpoints.
-        if (!scoringAuditBindsFinalAnalysis(paper) || !hasValidApiReaderV3Records(paper)) {
+        if (!scoringAuditBindsFinalAnalysis(paper) || !hasValidIntegratedApiReaderRecords(paper)) {
             throw new Error('保留 Reader 上游需要原评分与当前 Reader 的完整绑定仍然有效。');
         }
         return paper;
     }
-    if (stages.apiReaderArticle?.status === 'complete' && !hasValidApiReaderV3Records(next)) {
+    if (stages.apiReaderArticle?.status === 'complete' && !hasValidIntegratedApiReaderRecords(next)) {
         throw new Error('同步资源状态后，读者文章内容或阶段绑定未能保持要求。');
     }
     Object.assign(paper, next);

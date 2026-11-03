@@ -1,6 +1,16 @@
 'use strict';
 
-const TAG_STAGE_RECORD_CONTRACT = 'paper-tag-stage-record-v2';
+const protocols = require('./protocol-codec.js');
+const TAG_STAGE_RECORD_CONTRACT = protocols.contract('paper-tag-stage-record');
+function tagStageRecordDeclaration() { return protocols.recordHeader(TAG_STAGE_RECORD_CONTRACT,TAG_STAGE_RECORD_CONTRACT); }
+function isTagStageRecordDeclaration(value) {
+    if (typeof value === 'string') return value !== TAG_STAGE_RECORD_CONTRACT && protocols.isContract(value,TAG_STAGE_RECORD_CONTRACT);
+    if (!value || Object.getPrototypeOf(value) !== Object.prototype || Array.isArray(value)) return false;
+    if (!Object.hasOwn(value,'schemaFingerprint') || !protocols.hasValidHeader(value,TAG_STAGE_RECORD_CONTRACT)) return false;
+    const expected=protocols.recordHeader(value.contract,TAG_STAGE_RECORD_CONTRACT,value.schemaFingerprint);
+    return Object.keys(value).length === Object.keys(expected).length
+        && Object.keys(expected).every(key => value[key] === expected[key]);
+}
 const LEGACY_TAG_STAGE_BINDING_FIELDS = Object.freeze([
     'registryVersion', 'registrySha256', 'projectionContract', 'projectionSha256',
     'selectionContract', 'inputAnalysisSha256', 'outputAnalysisSha256',
@@ -30,7 +40,7 @@ function readTagStageRecord(manifest, checkpoints) {
     }
     if (legacy && current) throw new Error('标签阶段记录不能混用新旧格式。');
     if (own(contracts, 'tagSelectionRecord')
-        && contracts.tagSelectionRecord !== TAG_STAGE_RECORD_CONTRACT) {
+        && !isTagStageRecordDeclaration(contracts.tagSelectionRecord)) {
         throw new Error('标签阶段记录的格式版本无效。');
     }
     const stageKey = current ? 'tagSelection' : 'taxonomySeal';
@@ -46,5 +56,5 @@ function readTagStageRecord(manifest, checkpoints) {
     };
 }
 
-module.exports = { TAG_STAGE_RECORD_CONTRACT, LEGACY_TAG_STAGE_BINDING_FIELDS,
+module.exports = { tagStageRecordDeclaration, isTagStageRecordDeclaration, TAG_STAGE_RECORD_CONTRACT, LEGACY_TAG_STAGE_BINDING_FIELDS,
     TAG_STAGE_BINDING_FIELDS, readTagStageRecord };

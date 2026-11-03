@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
+  "contract": "publication-image-exclusions",
+  "schemaFingerprint": "1aa26d82e717a4e93a2f9ae89b7de8712763788c7463796bd2ec3d8aad2731bc",
   "exclusions": [
     {
       "normalizedArxivId": "2608.13610",

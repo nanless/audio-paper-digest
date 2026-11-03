@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.*
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -29,5 +30,17 @@ class ExportProducerReceiptTest {
  @Test fun cancellationAfterArtifactBinPublishLeavesRecoverableExactOriginal()=temp{p->val dir=File(p,"Exports");val writer=ExportArtifactWriter(dir);val id=UUID.randomUUID().toString();val raw=ByteArray(150000){(it%253).toByte()};val failure=runCatching{writer.bytes(raw,"application/octet-stream","one.bin",id){if(File(dir,"$id.bin").let{it.isFile&&it.length()==raw.size.toLong()&&BackupCodec.hash(it)==BackupCodec.hash(raw)})throw CancellationException()}}.exceptionOrNull();assertTrue(failure is CancellationException);assertArrayEquals(raw,File(dir,"$id.bin").readBytes());assertFalse(File(dir,"$id.json").exists());assertEquals(BackupCodec.hash(raw),writer.bytes(raw,"application/octet-stream","one.bin",id).sha256)}
  @Test fun artifactDirectoryAndSymlinkReplacementDoNotAuthorizeWrite()=temp{p->val dir=File(p,"Exports");val writer=ExportArtifactWriter(dir);val retained=File(p,"retained");Files.move(dir.toPath(),retained.toPath());dir.mkdir();assertTrue(runCatching{writer.bytes("x".toByteArray(),"text/plain","x",UUID.randomUUID().toString())}.isFailure);assertTrue(dir.listFiles()!!.isEmpty());val outside=File(p,"outside").apply{writeText("original")};val id=UUID.randomUUID().toString();Files.createSymbolicLink(File(retained,"$id.bin").toPath(),outside.toPath());assertTrue(runCatching{ExportArtifactWriter(retained).bytes("x".toByteArray(),"text/plain","x",id)}.isFailure);assertEquals("original",outside.readText())}
  @Test fun mutationAfterProducerVerificationCannotPublishDifferentArtifactAsSameCompleteCapture()=temp{p->val f=fixture(p);val c=BackupCodec.capture(f.research,f.file);val complete=f.producer.recordVerifiedCapture(c,"application/octet-stream","synthetic.paperdigest");val proof=File(f.directory,"producer-complete.json").readBytes();val dir=File(p,"Exports");val writer=ExportArtifactWriter(dir);var changed=false;val failure=runCatching{writer.completed(complete.file,complete.mime,complete.name,f.doc,complete.sha256,complete.bytes){if(!changed){changed=true;f.file.appendText("changed after complete verification")}}};assertTrue(failure.isFailure);assertTrue(changed);assertFalse(File(dir,"${f.doc}.bin").exists());assertFalse(File(dir,"${f.doc}.json").exists());assertArrayEquals(proof,File(f.directory,"producer-complete.json").readBytes());assertTrue(f.file.isFile)}
+
+ @Test fun constructedHistoricalReceiptReplaysOriginalBytesAndWrongCurrentFingerprintCannotQualify()=temp{p->
+  val f=fixture(p);val captured=BackupCodec.capture(f.research,f.file);f.producer.recordVerifiedCapture(captured,"application/octet-stream","synthetic.paperdigest")
+  val file=File(f.directory,"producer-complete.json");val current=JSONObject(file.readText())
+  assertTrue(ClientProtocols.isCurrentHeader(current,"paperdigest-export-producer"))
+  val old=current.copy();old.remove("contract");old.remove("schemaFingerprint")
+  val header=ClientProtocols.historicalHeader("paperdigest-export-producer","normal-capture-completion",null);header.keys().forEach{old.put(it,header.get(it))}
+  val original=canonical(old).toByteArray();file.writeBytes(original)
+  assertEquals(captured.sha256,cold(f).verifiedCapture().sha256);assertArrayEquals(original,file.readBytes())
+  current.put("schemaFingerprint","0".repeat(64));val malformed=canonical(current).toByteArray();file.writeBytes(malformed)
+  assertTrue(runCatching{cold(f).verifiedCapture()}.isFailure);assertArrayEquals(malformed,file.readBytes());assertEquals(captured.sha256,BackupCodec.hash(f.file))
+ }
 
 }

@@ -41,7 +41,7 @@ test('real saved repair shares its evidence budget with the full PDF supplement 
     assert.ok(current.evidence.length <= requestedBudget);
     assert.ok(current.evidence.includes(deep.buildApiReaderArtifactEvidence(
         fixture.structuredArtifacts, fixture.paperId)));
-    const prompt = context => loadPrompt('prompts/api-reader-repair-v13.md', {
+    const prompt = context => loadPrompt('prompts/current/api-reader-repair.md', {
         title: fixture.title, arxivId: fixture.paperId,
         validationFeedback: [context.targetGuidance, ...fixture.issues.map(issue => issue.message)].join('\n'),
         repairTargets: JSON.stringify({ draftSha256: context.draftSha256, targets: context.targets }),

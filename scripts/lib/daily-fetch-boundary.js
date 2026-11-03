@@ -1,5 +1,6 @@
 'use strict';
 
+const { sourceBoundGeneration } = require('./blog-record-format');
 const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -146,7 +147,7 @@ function archivedAnalysisFile(dataRoot, directory, date) {
     const manifestPath = path.join(dataRoot, 'current', `blog-generation-manifest-${date}.json`);
     const manifest = JSON.parse(fs.readFileSync(manifestPath));
     const expectedSha = manifest.inputSourceReference?.sha256;
-    if (manifest.date !== date || manifest.schemaVersion !== 3 || !/^[a-f0-9]{64}$/.test(expectedSha || '')) {
+    if (manifest.date !== date || !sourceBoundGeneration(manifest) || !/^[a-f0-9]{64}$/.test(expectedSha || '')) {
         throw new Error('上一已发布生成清单不能证明异日归档的分析结果');
     }
     // Earlier archives used the last refresh timestamp rather than batchDate.
@@ -184,7 +185,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
         const deepBytes = fs.readFileSync(deepPath);
         JSON.parse(deepBytes);
         if (manifest.inputSourceReference?.sha256 !== hash(deepBytes)
-            || manifest.date !== date || manifest.schemaVersion !== 3
+            || manifest.date !== date || !sourceBoundGeneration(manifest)
             || !manifest.files?.some(f => f.path === indexPath && f.sha256 === indexSha256 && !f.deleted)
             || !papers.every(p => manifest.files.some(f => f.path === p.path && f.sha256 === p.sha256 && !f.deleted))) {
             return notPublished('当前批次的分析结果或生成清单未关联上一已发布页面');
@@ -257,7 +258,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
         || JSON.stringify(ids(deep.papers)) !== JSON.stringify(expected)) fail();
     const manifestPath = path.join(dataRoot, 'current', `blog-generation-manifest-${date}.json`);
     const manifestBytes = fs.readFileSync(manifestPath); const manifest = JSON.parse(manifestBytes);
-    if (manifest.date !== date || manifest.schemaVersion !== 3
+    if (manifest.date !== date || !sourceBoundGeneration(manifest)
         || manifest.inputSourceReference?.sha256 !== hash(records[3].bytes)
         || !manifest.files?.some(f => f.path === indexPath && f.sha256 === indexSha256 && !f.deleted)
         || !papers.every(p => manifest.files.some(f => f.path === p.path && f.sha256 === p.sha256 && !f.deleted))) fail();

@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -150,4 +151,27 @@ class PendingExportStoreTest {
             assertNotEquals("verified",f.store.get(p.operationID).delivery)
         }finally{f.close()}
     }
+    @Test fun constructedOldOperationAndAttemptKeepOriginalIdentityWhileANewAttemptUsesCurrentFormat(){
+        val f=Fixture()
+        try{
+            val p=f.begin();f.artifact(p);f.store.markReady(p.operationID)
+            val first=f.store.beginDelivery(p.operationID);f.store.chooserCancelled(p.operationID,first.attemptID!!)
+            val folder=File(f.controls,p.operationID);val operation=File(folder,"operation.json");val attempt=File(folder,"attempt-${first.attemptID}.json")
+            fun legacy(file:File,family:String,variant:String):ByteArray {
+                val value=JSONObject(file.readText());assertTrue(ClientProtocols.isCurrentHeader(value,family));value.remove("contract");value.remove("schemaFingerprint")
+                val header=ClientProtocols.historicalHeader(family,variant,null);header.keys().forEach{value.put(it,header.get(it))}
+                return canonical(value).toByteArray().also{file.writeBytes(it)}
+            }
+            val oldOperation=legacy(operation,"paperdigest-pending-export","reserved-export-operation")
+            val oldAttempt=legacy(attempt,"paperdigest-export-delivery","same-operation-save-attempt")
+            val cold=f.nextStore();assertEquals(p.documentID,cold.get(p.operationID).documentID);assertEquals(1,cold.deliveryHistory(p.operationID).size)
+            assertArrayEquals(oldOperation,operation.readBytes());assertArrayEquals(oldAttempt,attempt.readBytes())
+            val next=cold.beginDelivery(p.operationID);val history=cold.deliveryHistory(p.operationID)
+            assertTrue(history.any{it.getString("attemptID")==next.attemptID&&ClientProtocols.isCurrentHeader(it,"paperdigest-export-delivery")})
+            assertArrayEquals(oldAttempt,attempt.readBytes());assertFalse(JSONObject(operation.readText()).has("schemaFingerprint"))
+            val invalid=JSONObject(operation.readText()).put("contract","paperdigest-pending-export").put("schemaFingerprint","0".repeat(64));operation.writeText(invalid.toString());val before=operation.readBytes()
+            assertTrue(runCatching{cold.get(p.operationID)}.isFailure);assertArrayEquals(before,operation.readBytes())
+        }finally{f.close()}
+    }
+
 }

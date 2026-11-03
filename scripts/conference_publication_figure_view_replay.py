@@ -13,7 +13,8 @@ from pathlib import Path
 import re
 import stat
 import sys
-from conference_publication_figure_view import project_page_bytes, stable, require
+from conference_publication_figure_view import project_page_bytes, stable, require, CROP_CONTRACT, CONTRACT as VIEW_CONTRACT
+import protocol_codec as protocols
 
 
 def native_parser():
@@ -37,10 +38,14 @@ def native_parser():
 
 
 def transform(input_value):
-    require(isinstance(input_value, dict) and set(input_value) == {
-        'contract', 'rawPageBase64', 'rawPageSha256', 'kind', 'paperId', 'nodeDerivation'},
+    family = 'conference-publication-figure-view-transform-input'
+    require(protocols.is_current_header(input_value, family) and set(input_value) == {
+        'contract', 'schemaFingerprint', 'rawPageBase64', 'rawPageSha256', 'kind', 'paperId', 'nodeDerivation', 'viewFormat'},
         'pure view input fields differ')
-    require(input_value['contract'] == 'conference-publication-figure-view-transform-input-v1', 'pure view input contract differs')
+    view_header = input_value['viewFormat']
+    require(protocols.has_valid_header(view_header, VIEW_CONTRACT)
+            and view_header == protocols.record_header(view_header["contract"], VIEW_CONTRACT, view_header.get("schemaFingerprint")),
+            'pure view source format differs')
     require(input_value['kind'] in {'paper', 'aggregate'}, 'not a publication page')
     require((input_value['kind'] == 'paper' and isinstance(input_value['paperId'], str)
              and re.fullmatch(r'conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+', input_value['paperId']))
@@ -49,7 +54,7 @@ def transform(input_value):
     raw = base64.b64decode(input_value['rawPageBase64'], validate=True)
     require(hashlib.sha256(raw).hexdigest() == input_value['rawPageSha256'], 'raw bytes SHA differs')
     node = input_value['nodeDerivation']
-    require(isinstance(node, dict) and node.get('contract') == 'conference-publication-figure-crops-v1'
+    require(protocols.has_valid_header(node, CROP_CONTRACT)
             and node.get('purpose') == 'publication-display-only', 'outcome type differs')
     require(node.get('derivationSha256') == stable({k:v for k,v in node.items() if k != 'derivationSha256'}), 'outcome transport bytes differ')
     require(isinstance(node.get('derivations'), list), 'derivations missing')
@@ -60,8 +65,9 @@ def transform(input_value):
     else:
         present = {item['url'] for item in parse(content)}
         actions = [item for item in node['derivations'] if item['originalUrl'] in present]
-    projected = project_page_bytes(raw, input_value['rawPageSha256'], actions, node['derivationSha256'], parse)
-    return {'contract':'conference-publication-figure-view-transform-output-v1',
+    projected = project_page_bytes(raw, input_value['rawPageSha256'], actions, node['derivationSha256'], parse, view_header)
+    family = 'conference-publication-figure-view-transform-output'
+    return {**protocols.record_header(family, family),
             'purpose':'pure-byte-transform-only', 'doesNotGrantSourceOrReviewOrPublication':True,
             'rawPageSha256':input_value['rawPageSha256'], 'projectedPageSha256':hashlib.sha256(projected).hexdigest(),
             'projectedPageBase64':base64.b64encode(projected).decode('ascii'), 'size':len(projected),

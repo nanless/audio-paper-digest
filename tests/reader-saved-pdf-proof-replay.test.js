@@ -42,7 +42,7 @@ test('真实保存稿仅规则SHA改变时重新核验，不改文章和原执�
             delete item.analysisManifest.stages.apiReaderArticle;
         }
         assert.deepEqual(left, right);
-        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
         assert.equal(deep.repairApiReaderArticleAndPlanBindings(paper, paper.analysisManifest), false);
     }
     assert.deepEqual(fs.readFileSync(inputFile), bytes);

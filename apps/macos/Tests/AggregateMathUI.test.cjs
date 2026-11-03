@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const mac=process.env.PD_MATH57_MAC||path.resolve(__dirname,'..');
 const {chromium}=require(path.join(mac,'node_modules/playwright'));const {server,installFixture}=require(path.join(mac,'Tests/DesktopUI.test.cjs'));
 const runtime=process.env.PD_MATH57_NATIVE||path.join(mac,'Resources/native.js'),moduleFile=process.env.PD_MATH57_MODULE||path.join(mac,'Resources/aggregate-ui.js');
-const fixture=process.env.PD_MATH57_FIXTURE||path.join(mac,'Tests/Fixtures/aggregate-math-daily24.json'),out=process.env.PD_MATH57_OUTPUT||path.join(mac,'.qa/aggregate-math-ui');fs.mkdirSync(out,{recursive:true});
+const fixture=process.env.PD_MATH57_FIXTURE||path.resolve(mac,'../../tests/fixtures/workbench/aggregate-math-daily24.json'),out=process.env.PD_MATH57_OUTPUT||path.join(mac,'.qa/aggregate-math-ui');fs.mkdirSync(out,{recursive:true});
 const source=fs.readFileSync(runtime,'utf8'),moduleSource=fs.readFileSync(moduleFile,'utf8'),original=fs.readFileSync(fixture);
 const real=JSON.parse(original),hash=b=>crypto.createHash('sha256').update(b).digest('hex');const inputs={[runtime]:hash(source),[moduleFile]:hash(moduleSource),[fixture]:hash(original),[__filename]:hash(fs.readFileSync(__filename))};let browser;const results=[];
 const doc=body=>({...real,displayHTML:body??real.bodyHTML,validatedAt:null,isStale:true,readNotice:'已保存原网页；当前受控显示测试',completeOffline:false});

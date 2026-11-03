@@ -13,10 +13,10 @@ const path = require('node:path');
 
 const Config = require('../scripts/config.js');
 const { run, parseArgs, sha256File } = require('../scripts/waive-post-publish-visuals.js');
-const { publishedPapersFingerprint } = require('../scripts/visual-summary-state.js');
+const { publishedPapersFingerprint } = require('../scripts/lib/published-blog-receipt');
 const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const { productionV6GenerationFields, productionV6ReceiptFields } =
-    require('./production-v6-publication-fixture.js');
+    require('./formal-publication-fixture.js');
 
 const DATE = '2026-07-13';
 const REASON = '用户确认本批不再补发布后生图，评审记录已留档';
@@ -46,6 +46,9 @@ function writePublication(directory, papers, commit = 'a'.repeat(40)) {
         visualSummaryRequired: false,
         digestCoverRequired: false,
         publishedPapers: papers,
+        postPublicationPolicy: require('../scripts/lib/protocol-codec').record('daily-publication-policy', {
+            generatedImages: false, sourceFigures: 'retained-and-source-verified'
+        }),
         ...productionV6GenerationFields(papers)
     };
     const raw = Buffer.from(JSON.stringify(generation));
@@ -63,7 +66,8 @@ function writePublication(directory, papers, commit = 'a'.repeat(40)) {
         publicationCommit: commit,
         remoteVerifiedOid: commit,
         remoteVerifiedAt: '2026-07-14T03:00:00+08:00',
-        ...productionV6ReceiptFields(generation)
+        ...productionV6ReceiptFields(generation),
+        postPublishVisuals: 'not_requested'
     };
     fs.writeFileSync(path.join(directory, `blog-review-receipt-${DATE}.json`),
         JSON.stringify(receipt));
@@ -107,12 +111,14 @@ function fixture() {
 }
 
 describe('digest:waive-visuals 写入侧', () => {
-    it('凭证与两张清单都绑定当前发布时写出豁免，并记下清单 SHA', () => {
+    it('凭证绑定当前发布时直接登记不生图，不要求创建图片任务', () => {
         const f = fixture();
         try {
             const payload = run(['--date', DATE, '--reason', REASON]);
 
-            assert.equal(payload.version, 1);
+            assert.equal('version' in payload, false);
+            assert.equal(payload.contract, 'post-publish-visual-waiver');
+            assert.match(payload.schemaFingerprint, /^[a-f0-9]{64}$/);
             assert.equal(payload.batchDate, DATE);
             assert.equal(payload.status, 'waived');
             assert.equal(payload.requestedBy, 'user');
@@ -120,9 +126,11 @@ describe('digest:waive-visuals 写入侧', () => {
             assert.equal(payload.publicationCommit, f.publication.publicationCommit);
             assert.equal(payload.remoteVerifiedOid, f.publication.publicationCommit);
             assert.equal(payload.generationManifestSha256, f.publication.generationManifestSha256);
-            assert.equal(payload.visualManifestSha256, hashFile(f.manifests.visualPath));
-            assert.equal(payload.coverManifestSha256, hashFile(f.manifests.coverPath));
-            assert.equal(sha256File(f.manifests.visualPath), hashFile(f.manifests.visualPath));
+            assert.equal(payload.reviewReceiptSha256, hashFile(path.join(f.directory, `blog-review-receipt-${DATE}.json`)));
+            assert.equal(payload.generatedImages, false);
+            assert.equal(payload.sourceFigures, 'retained-and-source-verified');
+            assert.equal('visualManifestSha256' in payload, false);
+            assert.equal('coverManifestSha256' in payload, false);
             assert.match(payload.waivedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00$/);
 
             const output = path.join(f.files.postPublishVisualWaiverDir, `${DATE}.json`);
@@ -130,6 +138,23 @@ describe('digest:waive-visuals 写入侧', () => {
         } finally {
             f.restore();
         }
+    });
+
+    it('旧发布的 required 状态不能由新记录替代原图片清单', () => {
+        const f = fixture();
+        try {
+            const file = path.join(f.directory, `blog-generation-manifest-${DATE}.json`);
+            const generation = JSON.parse(fs.readFileSync(file));
+            delete generation.postPublicationPolicy;
+            fs.writeFileSync(file, JSON.stringify(generation));
+            const receiptFile = path.join(f.directory, `blog-review-receipt-${DATE}.json`);
+            const receipt = JSON.parse(fs.readFileSync(receiptFile));
+            receipt.generationManifestSha256 = hashFile(file);
+            receipt.postPublishVisuals = 'required';
+            fs.writeFileSync(receiptFile, JSON.stringify(receipt));
+            assert.throws(() => run(['--date', DATE, '--reason', REASON]), /不能用新记录替代原图片清单/);
+            assert.equal(fs.existsSync(path.join(f.files.postPublishVisualWaiverDir, `${DATE}.json`)), false);
+        } finally { f.restore(); }
     });
 
     it('reason 恰好 10 个字符通过，9 个字符被挡下', () => {
@@ -190,48 +215,24 @@ describe('digest:waive-visuals 写入侧', () => {
         }
     });
 
-    it('长图清单没绑定当前发布版本时拒绝', () => {
+    it('没有长图和封面任务也能登记，原有历史任务不参与新记录', () => {
         const f = fixture();
         try {
-            const manifest = JSON.parse(fs.readFileSync(f.manifests.visualPath, 'utf8'));
-            manifest.publication.publicationCommit = 'f'.repeat(40);
-            fs.writeFileSync(f.manifests.visualPath, JSON.stringify(manifest));
-
-            assert.throws(() => run(['--date', DATE, '--reason', REASON]),
-                /论文长图 manifest 未绑定当前远端发布版本/);
-            assert.equal(fs.existsSync(path.join(
-                f.files.postPublishVisualWaiverDir, `${DATE}.json`)), false);
-        } finally {
-            f.restore();
-        }
+            fs.rmSync(f.manifests.visualPath);
+            fs.rmSync(f.manifests.coverPath);
+            const payload = run(['--date', DATE, '--reason', REASON]);
+            assert.equal(payload.generatedImages, false);
+            assert.equal(fs.existsSync(f.manifests.visualPath), false);
+            assert.equal(fs.existsSync(f.manifests.coverPath), false);
+        } finally { f.restore(); }
     });
-
-    it('封面清单批次日期不对时拒绝', () => {
+    it('生成快照发生变化后不能沿用旧发布凭证登记', () => {
         const f = fixture();
         try {
-            const manifest = JSON.parse(fs.readFileSync(f.manifests.coverPath, 'utf8'));
-            manifest.batchDate = '2026-07-12';
-            fs.writeFileSync(f.manifests.coverPath, JSON.stringify(manifest));
-
-            assert.throws(() => run(['--date', DATE, '--reason', REASON]),
-                /汇总封面 manifest 未绑定当前远端发布版本/);
-        } finally {
-            f.restore();
-        }
-    });
-
-    it('清单只把 generationManifestSha256 写错时也拒绝', () => {
-        const f = fixture();
-        try {
-            // 发布提交号照抄，只有 generation 指纹被换掉——只查 commit 的写法挡不住这条。
-            const manifest = JSON.parse(fs.readFileSync(f.manifests.coverPath, 'utf8'));
-            manifest.publication.generationManifestSha256 = 'f'.repeat(64);
-            fs.writeFileSync(f.manifests.coverPath, JSON.stringify(manifest));
-
-            assert.throws(() => run(['--date', DATE, '--reason', REASON]),
-                /汇总封面 manifest 未绑定当前远端发布版本/);
-        } finally {
-            f.restore();
-        }
+            const file = path.join(f.directory, `blog-generation-manifest-${DATE}.json`);
+            fs.appendFileSync(file, '\n');
+            assert.throws(() => run(['--date', DATE, '--reason', REASON]), /凭证与 generation manifest/);
+            assert.equal(fs.existsSync(path.join(f.files.postPublishVisualWaiverDir, `${DATE}.json`)), false);
+        } finally { f.restore(); }
     });
 });

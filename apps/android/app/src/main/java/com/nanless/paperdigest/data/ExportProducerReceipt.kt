@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -31,7 +32,8 @@ class ExportProducerReceipt(operationDirectory:File,private val operationID:Stri
   observedNormalReturn=true
   ExportArtifactWriter.regular(capture);require(capture.length()==result.encodedBytes){"正常采集返回后原暂存已变化"}
   val display=ExportArtifactWriter.suggestedName(name)
-  val expected=JSONObject().put("contract",CONTRACT).put("producer","normal-backup-codec-capture-returned").put("operationID",operationID).put("documentID",documentID).put("sourceIdentity",source.copy()).put("mime",mime).put("suggestedName",display).put("bytes",result.encodedBytes).put("sha256",result.sha256).put("fileCount",result.fileCount)
+  val header=if(Files.exists(receipt.toPath(),NOFOLLOW_LINKS)){val original=read();ClientProtocols.recordHeader(original.get("contract"),CONTRACT,original.opt("schemaFingerprint") as? String)}else ClientProtocols.recordHeader(CONTRACT,CONTRACT)
+  val expected=header.put("producer","normal-backup-codec-capture-returned").put("operationID",operationID).put("documentID",documentID).put("sourceIdentity",source.copy()).put("mime",mime).put("suggestedName",display).put("bytes",result.encodedBytes).put("sha256",result.sha256).put("fileCount",result.fileCount)
   if(Files.exists(receipt.toPath(),NOFOLLOW_LINKS))require(canonical(read())==canonical(expected)){"本次生产回执已存在且不同，未覆盖"}
   else ExportArtifactWriter.createOnly(receipt,expected.toString().toByteArray())
   return verifiedCapture(check)
@@ -48,8 +50,9 @@ class ExportProducerReceipt(operationDirectory:File,private val operationID:Stri
  private fun checkDirectory(){ExportArtifactWriter.existingDirectory(directory);require(Files.readAttributes(directory.toPath(),BasicFileAttributes::class.java,NOFOLLOW_LINKS).fileKey()==directoryKey){"原生产目录已变化，未认领替代材料"}}
  private fun read():JSONObject {
   checkDirectory();ExportArtifactWriter.regular(receipt);val r=JSONObject(PublishedUtf8.decode(JsonFiles.read(receipt,65536)))
-  require(r.keys().asSequence().toSet()==setOf("contract","producer","operationID","documentID","sourceIdentity","mime","suggestedName","bytes","sha256","fileCount"))
-  require(r.getString("contract")==CONTRACT&&r.getString("producer")=="normal-backup-codec-capture-returned"&&r.getString("operationID")==operationID&&r.getString("documentID")==documentID&&canonical(r.getJSONObject("sourceIdentity"))==canonical(source))
+  require(ClientProtocols.hasValidHeader(r,CONTRACT))
+  require(r.keys().asSequence().toSet()==ClientProtocols.recordKeys(r.get("contract"),CONTRACT,setOf("producer","operationID","documentID","sourceIdentity","mime","suggestedName","bytes","sha256","fileCount"),r.opt("schemaFingerprint") as? String))
+  require(ClientProtocols.hasValidHeader(r,CONTRACT)&&r.getString("producer")=="normal-backup-codec-capture-returned"&&r.getString("operationID")==operationID&&r.getString("documentID")==documentID&&canonical(r.getJSONObject("sourceIdentity"))==canonical(source))
   require(r.getString("mime")=="application/octet-stream"&&ExportArtifactWriter.suggestedName(r.getString("suggestedName"))==r.getString("suggestedName"))
   number(r,"bytes",1,BackupCodec.MAX_ENCODED);number(r,"fileCount",1,BackupCodec.MAX_ENTRIES.toLong());return r
  }
@@ -97,7 +100,7 @@ class ExportProducerReceipt(operationDirectory:File,private val operationID:Stri
     var depth=1;var keyExpected=true;var key:String?=null
     while(true){val c=next();if(c<0)return false
      when(c){
-      '"'.code->{val value=string(depth==1);if(depth==1){if(keyExpected){key=value;keyExpected=false}else if(key=="contract"&&value=="paperdigest-backup-v2")return true}}
+      '"'.code->{val value=string(depth==1);if(depth==1){if(keyExpected){key=value;keyExpected=false}else if(key=="contract"&&com.nanless.paperdigest.protocols.ClientProtocols.isContract(value,"paperdigest-backup"))return true}}
       '{'.code,'['.code->depth++
       '}'.code,']'.code->{depth--;if(depth<=0)return false}
       ','.code->if(depth==1){keyExpected=true;key=null}
@@ -112,7 +115,7 @@ class ExportProducerReceipt(operationDirectory:File,private val operationID:Stri
    backup to digest.digest().joinToString(""){"%02x".format(it.toInt()and 255)}
    }
   }
-  private const val CONTRACT="paperdigest-export-producer-v1"
+  private const val CONTRACT="paperdigest-export-producer"
   private fun number(o:JSONObject,k:String,min:Long,max:Long):Long{val n=o.get(k);require(n is Number&&n.toDouble().isFinite()&&n.toDouble()==n.toLong().toDouble()&&n.toLong()in min..max);return n.toLong()}
  }
 }

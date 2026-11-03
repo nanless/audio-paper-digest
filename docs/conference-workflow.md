@@ -608,7 +608,7 @@ Hugo 和正文审查的页面集合只包含单篇及汇总 Markdown。研究工
 
 GET 使用项目 HTTP CONNECT，逐跳核验公网地址并限制响应。全链共享 60 秒期限，响应最多 16 MiB；每一跳的瞬时传输最多尝试 6 次。HTTP 状态、哈希和 HTML 不匹配不作为瞬时故障重试。线上尚未符合时保留远端已经推送的事实，继续运行 `verify`，不要重新分析论文。
 
-`status` 报告已保存的线上检查快照；显式 `verify` 会记录一次新的 intent/result 并重新 GET，最新 pending 或失败不能被旧通过掩盖。已有 publish 的重复 `push` 只读 status，不代替新的线上重验。旧 v1 发布通过单独的 `verification-v2.json` 补充核验，原记录字节保留。
+`status` 报告已保存的线上检查快照；显式 `verify` 会记录一次新的 intent/result 并重新 GET，最新 pending 或失败不能被旧通过掩盖。已有 publish 的重复 `push` 只读 status，不代替新的线上重验。旧的仅提交发布记录仍须单独补充网页核验。新补充核验保存为 `verification.json`；已有补充凭证按原文件核验，原记录字节保留。
 
 读取已发布凭证时，不带 `contentReview` 的 v2 审查记录按旧格式识别：`conference-blog-review-v1` 的 version 2 中途增加过 `contentReview` 要求，早期代码写过不带的 v2 记录，自哈希、文件清单、`generationSha256` 和 HTML 检查的页面集合都对得上，是那段代码的合法输出文件。
 

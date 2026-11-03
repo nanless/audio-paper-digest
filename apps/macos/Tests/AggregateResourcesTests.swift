@@ -20,6 +20,23 @@ import Darwin
   let full=try store.cacheResourceRendering(source:source,plan:plan,images:[0:asset,1:asset],missing:[:],observedAt:"2026-10-27T00:00:00Z")
   try check(full.bodyHTML.components(separatedBy:"data:image/png;base64,").count==3&&full.bodyHTML.contains("caption A")&&full.bodyHTML.contains("caption B") && !full.manifest.completeOffline,"two original slots render typed bytes in place with captions and conservative offline state")
   try check(try store.cachedResourceRendering(source:source,manifestSHA256:full.manifestSHA256).bodyHTML==full.bodyHTML,"resource rendering cold replays source, whole manifest and every image")
+  let currentScope=AggregateResources.renderDirectory+"/"+PublishedAggregateReader.sha(Data(descriptor.id.utf8))+"/"+descriptor.source.manifestSHA256+"/"+source.rawHTMLSHA256+"/"+AggregateResources.contract
+  let newRaw=try Data(contentsOf:root.appendingPathComponent(currentScope+"/"+full.manifestSHA256+".json"))
+  var oldValue=try JSONSerialization.jsonObject(with:newRaw) as! [String:Any]
+  try check(ClientProtocols.isCurrentHeader(oldValue,AggregateResources.contract),"normal image render registers current source format")
+  oldValue["contract"]="published-aggregate-image-render-v1";oldValue.removeValue(forKey:"schemaFingerprint");oldValue.removeValue(forKey:"parserContract")
+  var oldPlan=oldValue["plan"] as! [String:Any]
+  oldPlan["contract"]="published-aggregate-image-render-v1";oldPlan.removeValue(forKey:"schemaFingerprint")
+  oldValue["plan"]=oldPlan
+  let oldRaw=try JSONSerialization.data(withJSONObject:oldValue,options:[.sortedKeys]),oldSHA=PublishedAggregateReader.sha(oldRaw)
+  let oldScope=root.appendingPathComponent("aggregate-resource-renders-macos-v1/"+PublishedAggregateReader.sha(Data(descriptor.id.utf8))+"/"+descriptor.source.manifestSHA256+"/"+source.rawHTMLSHA256+"/published-aggregate-image-render-v1")
+  let oldBlob=root.appendingPathComponent("aggregate-image-bytes-v1/"+hash),oldFile=oldScope.appendingPathComponent(oldSHA+".json")
+  try fm.createDirectory(at:oldScope,withIntermediateDirectories:true);try fm.createDirectory(at:oldBlob.deletingLastPathComponent(),withIntermediateDirectories:true)
+  try oldRaw.write(to:oldFile);try png.write(to:oldBlob)
+  try check(try store.cachedResourceRendering(source:source,manifestSHA256:oldSHA).bodyHTML==full.bodyHTML && Data(contentsOf:oldFile)==oldRaw,"old original image format cold replays without changing bytes")
+  try Data("broken old image".utf8).write(to:oldBlob)
+  try check(rejects{_=try store.latestResourceRendering(source:source)},"a current blob cannot conceal a corrupt original peer")
+  try fm.removeItem(at:oldScope);try fm.removeItem(at:oldBlob)
   let partial=try store.cacheResourceRendering(source:source,plan:plan,images:[0:asset],missing:[1:"Controlled missing image"],observedAt:"2026-10-27T00:00:01Z")
   try check(partial.manifestSHA256 != full.manifestSHA256&&partial.bodyHTML.contains("图片未缓存：Second")&&partial.bodyHTML.contains("caption B"),"partial observation is separate immutable manifest and keeps missing position/caption")
   try check(try ["original.html","body.html","document.json"].enumerated().allSatisfy{try Data(contentsOf:originalFolder.appendingPathComponent($0.element))==before[$0.offset]},"resource observations do not overwrite any original HTML/document/body")
@@ -31,7 +48,7 @@ import Darwin
   try check(rejects{_=try LibraryService.aggregateImagePlan(source,rawHTML:html+Data("changed".utf8))},"changed raw HTML cannot produce a plan under prior SHA")
   func declaredLengthError(_ length:Int)throws->String {
    let absent=String(repeating:"b",count:64)
-   guard !fm.fileExists(atPath:root.appendingPathComponent("aggregate-image-bytes-v1/"+absent).path) else{throw AggregateFailure.invalid("TEST missing asset precondition failed")}
+   guard !fm.fileExists(atPath:root.appendingPathComponent(AggregateResources.blobDirectory+"/"+absent).path) else{throw AggregateFailure.invalid("TEST missing asset precondition failed")}
    let records=[AggregateImageRecord(slot:plan.slots[0],sha256:hash,mime:"image/png",bytes:length,missingReason:nil),AggregateImageRecord(slot:plan.slots[1],sha256:absent,mime:"image/png",bytes:png.count,missingReason:nil)]
    let bad=AggregateResourceManifest(contract:AggregateResources.contract,plan:plan,observedAt:"2026-10-27T00:00:03Z",images:records,renderedBodySHA256:full.manifest.renderedBodySHA256,completeOffline:false)
    let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys,.withoutEscapingSlashes];let bytes=try encoder.encode(bad),sha=PublishedAggregateReader.sha(bytes)
@@ -41,7 +58,7 @@ import Darwin
   }
   try check(try declaredLengthError(1).contains("汇总缓存大小或文件类型无效"),"understated first asset is rejected before allocation or touching later absent asset")
   try check(try declaredLengthError(png.count+1).contains("图片字节长度与清单不一致"),"overstated first asset is immediately length-checked before later absent asset")
-  let imagePath=root.appendingPathComponent("aggregate-image-bytes-v1/"+hash),saved=root.appendingPathComponent("saved-image")
+  let imagePath=root.appendingPathComponent(AggregateResources.blobDirectory+"/"+hash),saved=root.appendingPathComponent("saved-image")
   try fm.moveItem(at:imagePath,to:saved);try fm.createSymbolicLink(at:imagePath,withDestinationURL:saved)
   try check(rejects{_=try store.cachedResourceRendering(source:source,manifestSHA256:full.manifestSHA256)},"asset symlink is rejected even with matching referred bytes")
   try fm.removeItem(at:imagePath);try fm.moveItem(at:saved,to:imagePath);try Data("BROKEN".utf8).write(to:imagePath)
@@ -60,6 +77,7 @@ import Darwin
   try check(try restored.cachedResourceRendering(source:source,manifestSHA256:full.manifestSHA256).bodyHTML==full.bodyHTML,"normal whole-backup encode/stage restores original source and source-bound image bytes")
   try check(rejects{_=try store.cacheResourceRendering(source:source,plan:plan,images:[:],missing:[:],observedAt:"invalid")},"resource observation time is validated")
   try check(try AggregateForeignFixtures.nativeRawImport(),"foreign Android raw is natively rederived without rewriting foreign sidecar or observation")
+  try check(try AggregateForeignFixtures.nativeRawImport(historical:false),"fingerprinted Android source replays using native Mac parser without rewriting foreign bytes")
   try check(try AggregateForeignFixtures.badForeignBody(),"foreign damaged body witness fails before native publication")
   try check(try AggregateForeignFixtures.badForeignDescriptor(),"foreign descriptor cannot borrow another original manifest row")
   try check(try AggregateForeignFixtures.foreignImageSourceMismatch(),"foreign image slot mismatch cannot grant a native image rendering")
@@ -73,7 +91,7 @@ private enum AggregateForeignFixtures {
   let root:URL,store:PublishedAggregateStore,descriptor:PublishedAggregate,raw:String,folder:URL
  }
  static func require(_ value:Bool)throws{if !value{throw AggregateFailure.invalid("TEST foreign fixture assertion")}}
- static func make()throws->Fixture {
+ static func make(historical:Bool=true)throws->Fixture {
   let fm=FileManager.default,root=fm.temporaryDirectory.appendingPathComponent("aggregate-foreign51-"+UUID().uuidString)
   try fm.createDirectory(at:root.appendingPathComponent("index"),withIntermediateDirectories:true)
   let shard=try JSONSerialization.data(withJSONObject:[["pageType":"daily","permalink":"/audio-paper-digest-blog/foreign51/","title":"Controlled foreign source","date":"2026-10-24"]],options:.sortedKeys),sha=PublishedAggregateReader.sha(shard)
@@ -83,17 +101,20 @@ private enum AggregateForeignFixtures {
   let native=try LibraryService.extractAggregateHTML(bytes,descriptor:descriptor,responseURL:URL(string:descriptor.sourceURL)!,fetchedAt:"2026-10-24T00:00:00Z")
   var foreign=try JSONSerialization.jsonObject(with:JSONEncoder().encode(native)) as! [String:Any]
   let body="<p>Before</p><figure><img alt=\"Slot\"><figcaption>Original caption</figcaption></figure><p>After</p>"
-  foreign["parserContract"]="published-aggregate-jsoup-v1";foreign["bodyHTML"]=body;foreign["sanitizedBodySHA256"]=PublishedAggregateReader.sha(Data(body.utf8))
+  if historical {foreign["contract"]="published-aggregate-document-v1";foreign.removeValue(forKey:"schemaFingerprint");foreign["parserContract"]="published-aggregate-jsoup-v1"}
+  else {foreign["parserContract"]=try AggregateDocumentFormat.current(.android).parser}
+  foreign["bodyHTML"]=body;foreign["sanitizedBodySHA256"]=PublishedAggregateReader.sha(Data(body.utf8))
   let folder=root.appendingPathComponent("aggregate-documents-android/"+PublishedAggregateReader.sha(Data(descriptor.id.utf8))+"/"+descriptor.source.manifestSHA256+"/"+native.rawHTMLSHA256)
   try fm.createDirectory(at:folder,withIntermediateDirectories:true);try bytes.write(to:folder.appendingPathComponent("original.html"));try Data(body.utf8).write(to:folder.appendingPathComponent("body.html"));try JSONSerialization.data(withJSONObject:foreign,options:.sortedKeys).write(to:folder.appendingPathComponent("document.json"))
   return .init(root:root,store:store,descriptor:descriptor,raw:native.rawHTMLSHA256,folder:folder)
  }
- static func nativeRawImport()throws->Bool {
-  let f=try make();defer{try?FileManager.default.removeItem(at:f.root)}
+ static func nativeRawImport(historical:Bool=true)throws->Bool {
+  let f=try make(historical:historical);defer{try?FileManager.default.removeItem(at:f.root)}
   let original=try Data(contentsOf:f.folder.appendingPathComponent("document.json"));guard let native=try f.store.latestVerifiedDocument(for:f.descriptor)else{return false}
   let again=try f.store.cachedDocument(descriptor:f.descriptor,rawHTMLSHA256:f.raw)
   let unchanged=try Data(contentsOf:f.folder.appendingPathComponent("document.json"))==original
-  return native==again&&native.parserContract=="published-aggregate-html-v1"&&native.fetchedAt=="2026-10-24T00:00:00Z"&&native.bodyHTML.contains("Original caption")&&native.rawHTMLSHA256==f.raw&&unchanged
+  let expectedParser=try AggregateDocumentFormat.current(.macos).parser
+  return native==again&&native.parserContract==expectedParser&&native.fetchedAt=="2026-10-24T00:00:00Z"&&native.bodyHTML.contains("Original caption")&&native.rawHTMLSHA256==f.raw&&unchanged
  }
  static func badForeignBody()throws->Bool {
   let f=try make();defer{try?FileManager.default.removeItem(at:f.root)};try Data("bad".utf8).write(to:f.folder.appendingPathComponent("body.html"))
@@ -107,11 +128,12 @@ private enum AggregateForeignFixtures {
   let f=try make();defer{try?FileManager.default.removeItem(at:f.root)};let native=try f.store.cachedDocument(descriptor:f.descriptor,rawHTMLSHA256:f.raw),plan=try f.store.imagePlan(native)
   let foreign=try JSONSerialization.jsonObject(with:Data(contentsOf:f.folder.appendingPathComponent("document.json"))) as! [String:Any]
   var foreignPlan=try JSONSerialization.jsonObject(with:JSONEncoder().encode(plan)) as! [String:Any]
+  foreignPlan["contract"]="published-aggregate-image-render-v1";foreignPlan.removeValue(forKey:"schemaFingerprint")
   foreignPlan["originalBodySHA256"]=foreign["sanitizedBodySHA256"];var slots=foreignPlan["slots"] as! [[String:Any]];slots[0]["sourceURL"]="https://arxiv.org/html/2501.00001v1/other.png";foreignPlan["slots"]=slots
   let record:[String:Any]=["slot":slots[0],"missingReason":"controlled missing"]
-  let witness:[String:Any]=["contract":AggregateResources.contract,"parserContract":"published-aggregate-jsoup-images-v1","plan":foreignPlan,"images":[record],"observedAt":"2026-10-24T00:00:00Z","renderedBodySHA256":String(repeating:"a",count:64),"completeOffline":false]
+  let witness:[String:Any]=["contract":"published-aggregate-image-render-v1","parserContract":"published-aggregate-jsoup-images-v1","plan":foreignPlan,"images":[record],"observedAt":"2026-10-24T00:00:00Z","renderedBodySHA256":String(repeating:"a",count:64),"completeOffline":false]
   let bytes=try JSONSerialization.data(withJSONObject:witness,options:.sortedKeys),sha=PublishedAggregateReader.sha(bytes)
-  let folder=f.root.appendingPathComponent("aggregate-resource-renders-android-v1/"+PublishedAggregateReader.sha(Data(f.descriptor.id.utf8))+"/"+f.descriptor.source.manifestSHA256+"/"+f.raw+"/"+AggregateResources.contract)
+  let folder=f.root.appendingPathComponent("aggregate-resource-renders-android-v1/"+PublishedAggregateReader.sha(Data(f.descriptor.id.utf8))+"/"+f.descriptor.source.manifestSHA256+"/"+f.raw+"/published-aggregate-image-render-v1")
   try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true);try bytes.write(to:folder.appendingPathComponent(sha+".json"))
   do{_=try f.store.importAndroidResourceRendering(native);return false}catch{return String(describing:error).contains("两端图片位置或图注不同") && !FileManager.default.fileExists(atPath:f.root.appendingPathComponent(AggregateResources.renderDirectory).path)}
  }

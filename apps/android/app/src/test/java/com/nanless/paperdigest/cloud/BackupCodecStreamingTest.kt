@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.cloud
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,7 +12,7 @@ import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.util.Base64
 
-/** Author regressions: exact v2 wire oracle, bounded streaming, cancellation and original-file protection. */
+/** Author regressions: exact historical/current wire oracles, bounded streaming, cancellation and original-file protection. */
 class BackupCodecStreamingTest {
     private fun personal() = JSONObject().put("schema", 1).put("notes", JSONObject()).put("settings", JSONObject()).put("favorites", JSONArray()).put("reading", JSONArray()).put("readingState", JSONObject()).put("annotations", JSONObject()).put("sessions", JSONArray()).put("jobs", JSONArray())
     private fun fixture(body: (File, File) -> Unit) {
@@ -21,9 +22,9 @@ class BackupCodecStreamingTest {
     }
     private fun bytes(root: File) = root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readBytes() }
     private fun unchanged(root: File, originals: Map<String, ByteArray>) { originals.forEach { (path, raw) -> assertArrayEquals(raw, File(root, path).readBytes()) } }
-    private fun oracle(root: File): ByteArray {
+    private fun oracle(root: File, header: String = "{\"contract\":\"paperdigest-backup-v2\""): ByteArray {
         val entries = bytes(root)
-        return entries.keys.sorted().joinToString(",", "{\"contract\":\"paperdigest-backup-v2\",\"files\":[", "],\"sourceDirectory\":" + JSONObject.quote(root.absolutePath) + "}") { path ->
+        return entries.keys.sorted().joinToString(",", header+",\"files\":[", "],\"sourceDirectory\":" + JSONObject.quote(root.absolutePath) + "}") { path ->
             val raw = entries.getValue(path)
             "{\"data\":\"${Base64.getEncoder().encodeToString(raw)}\",\"path\":${JSONObject.quote(path)},\"sha256\":\"${BackupCodec.hash(raw)}\"}"
         }.toByteArray(Charsets.UTF_8)
@@ -31,7 +32,10 @@ class BackupCodecStreamingTest {
 
     @Test fun encodedWireBytesRemainExactAtEveryBase64BlockBoundary() = fixture { parent, root ->
         for (size in listOf(0, 1, 2, 3, 6143, 6144, 6145, 65535, 65536, 65537)) File(root, "binary-$size").writeBytes(ByteArray(size) { (it % 251).toByte() })
-        val originals = bytes(root); val expected = oracle(root); val file = File(parent, "snapshot.paperdigest")
+        val originals = bytes(root); val oldBytes = oracle(root)
+        val oldRestored = BackupCodec.stage(oldBytes.inputStream(), parent); unchanged(oldRestored.directory, originals)
+        val currentHeader = "{\"contract\":\"paperdigest-backup\",\"schemaFingerprint\":" + JSONObject.quote(ClientProtocols.schemaFingerprint("paperdigest-backup"))
+        val expected = oracle(root,currentHeader); val file = File(parent, "snapshot.paperdigest")
         val captured = BackupCodec.capture(root, file)
         assertArrayEquals(expected, file.readBytes()); assertEquals(BackupCodec.hash(expected), captured.sha256)
         val restored = BackupCodec.stage(file.inputStream(), parent)

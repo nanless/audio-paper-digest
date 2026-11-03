@@ -64,8 +64,8 @@ test('保存后的完整长文资格复核拒绝缺原始内容或自洽的左�
    paper.apiReaderArticleSha256=sha(paper.apiReaderArticle);paper.apiReaderPlanSha256=deep.stableFingerprint(plan);
    Object.assign(stage,{articleSha256:paper.apiReaderArticleSha256,planSha256:paper.apiReaderPlanSha256,sourceBindingsSha256:plan.sourceBindingsSha256,formulaBindingCount:1});
   };
-  reseal();assert.equal(engine.hasValidApiReaderV3Records(paper),false,'没有原始来源不能因所有输出SHA相符通过');
+  reseal();assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false,'没有原始来源不能因所有输出SHA相符通过');
   plan.structuredSourcePayload=payload;reseal();
-  assert.equal(engine.hasValidApiReaderV3Records(paper),valid);
+  assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),valid);
  }
 });

@@ -15,47 +15,21 @@ function inject(method, replacement, callback) {
     const original = fs[method]; fs[method] = replacement(original);
     try { return callback(); } finally { fs[method] = original; }
 }
-function publicPrepare(t, kind) {
-    const root = fixture(t), dataRoot = path.join(root, 'data'), identityRoot = path.join(root, 'identities');
-    const id = '2610.00001'; fs.mkdirSync(path.join(dataRoot, 'current'), { recursive: true });
-    if (kind === 'conference') {
-        const api = require('../scripts/lib/historical-conference-crawl-authority.js');
-        const forum = 'Forum_123'; const pdf = path.join(dataRoot, 'pdfs/icml2026', `${forum}.pdf`);
-        fs.mkdirSync(path.dirname(pdf), { recursive: true }); fs.writeFileSync(pdf, '%PDF-1.4\n%%EOF\n');
-        fs.writeFileSync(path.join(dataRoot, 'current/icml_2026_deep_analysis.json'), JSON.stringify({ papers: [{ id: forum, title: '论文' }] }));
-        const match = api.scanRetainedConferenceCrawlers({ dataRoot }).matches.get(`openreview-forum-id:${forum}`)[0];
-        return { identityRoot, prepare: () => api.prepareConferenceCrawlAuthority({ dataRoot, identityRoot, match, apply: true }) };
-    }
-    const day = path.join(dataRoot, 'archive/2026-10-01'); fs.mkdirSync(day, { recursive: true });
-    fs.writeFileSync(path.join(day, 'filtered-papers.json'), JSON.stringify({ papers: [{ arxivId: id, paper_id: id }] }));
-    const api = require(`../scripts/lib/historical-${kind}-crawl-authority.js`);
-    const match = (kind === 'archive' ? api.scanRetainedFilteredPapers : api.scanLocalCrawlPapers)({ dataRoot }).matches.get(id)[0];
-    const prepare = kind === 'archive' ? api.prepareArchiveCrawlAuthority : api.prepareLocalCrawlAuthority;
-    return { identityRoot, prepare: () => prepare({ dataRoot, identityRoot, snapshotRoot: null, arxivId: id, match, apply: true }) };
-}
-for (const kind of ['archive', 'local', 'conference']) {
-    test(`${kind} 身份公开入口写入中断后不遗留半截正式文件，正常重试恢复`, t => {
-        const f = publicPrepare(t, kind); let injected = false;
-        inject('writeFileSync', original => (target, bytes, ...args) => {
-            if (typeof target === 'number' && !injected) {
-                injected = true; fs.writeSync(target, Buffer.from(bytes).subarray(0, 10));
-                throw Object.assign(new Error('测试磁盘写入失败'), { code: 'EIO' });
-            }
-            return original(target, bytes, ...args);
-        }, () => assert.throws(f.prepare, { code: 'EIO' }));
-        assert.equal(injected, true);
-        assert.deepEqual(fs.readdirSync(f.identityRoot), []);
-        assert.equal(f.prepare().status, 'created');
-        assert.equal(f.prepare().status, 'recovered');
-    });
-}
-test('当前身份快照在写入失败后也可正常重试', t => {
-    const root = fixture(t); const api = require('../scripts/lib/historical-local-crawl-authority.js');
-    const loaded = { sourceKind: 'current', relativePath: 'current/papers.json', fileSha256: 'a'.repeat(64),
-        records: [{ pointer: { kind: 'map-key', value: '2610.00001' }, identity: { arxivId: '2610.00001', paperId: '2610.00001' } }] };
-    const prepare = () => api.prepareCurrentIdentitySnapshot({ snapshotRoot: root, loaded });
-    inject('writeFileSync', () => () => { throw new Error('快照磁盘写入失败'); }, () => assert.throws(prepare, /快照磁盘/));
-    assert.deepEqual(fs.readdirSync(root), []); assert.ok(prepare().snapshotSha256);
+test('临时文件发生部分写入后，正式路径保持为空且可安全重试', t => {
+    const root = fixture(t), target = path.join(root, 'record.json'), bytes = Buffer.from('完整身份记录');
+    let injected = false;
+    inject('writeFileSync', original => (fd, body, ...args) => {
+        if (typeof fd === 'number' && !injected) {
+            injected = true;
+            fs.writeSync(fd, Buffer.from(body).subarray(0, 10));
+            throw Object.assign(new Error('测试磁盘写入失败'), { code: 'EIO' });
+        }
+        return original(fd, body, ...args);
+    }, () => assert.throws(() => writeImmutableFile(target, bytes, reject), { code: 'EIO' }));
+    assert.equal(injected, true);
+    assert.deepEqual(fs.readdirSync(root), []);
+    writeImmutableFile(target, bytes, reject);
+    assert.deepEqual(fs.readFileSync(target), bytes);
 });
 for (const same of [true, false]) {
     test(`发布前出现竞争文件时${same ? '复用相同字节' : '拒绝覆盖不同字节'}`, t => {

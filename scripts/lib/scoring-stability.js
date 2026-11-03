@@ -2,7 +2,9 @@
 
 // A proof check only: this does not grant requests, alter attempts or repair a
 // saved stage. The caller still checks its source, input and stage bindings.
-const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1';
+const formats = require('./protocol-codec');
+const SCORING_STABILITY_RESOLUTION_CONTRACT = formats.contract('api-scoring-stability-resolution');
+const scoringResolutionHeader = () => formats.recordHeader(SCORING_STABILITY_RESOLUTION_CONTRACT, SCORING_STABILITY_RESOLUTION_CONTRACT);
 const SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3;
 const validSha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
@@ -23,7 +25,7 @@ function scoringStabilityIsResolved(stage) {
     const resolution = stage.stabilityResolution;
     if (!resolution || typeof resolution !== 'object' || Array.isArray(resolution)) return false;
     const multiPass = resolution.method === 'multi_pass_consensus';
-    if (resolution.contract !== SCORING_STABILITY_RESOLUTION_CONTRACT
+    if (!formats.hasValidHeader(resolution, SCORING_STABILITY_RESOLUTION_CONTRACT)
         || resolution.status !== 'resolved'
         || !(resolution.method === 'second_pass_consensus' || multiPass)
         || !['firstAuditScore', 'secondAuditScore', 'scoreDifference']
@@ -47,5 +49,5 @@ function scoringStabilityIsResolved(stage) {
 }
 
 module.exports = { scoringStabilityIsResolved, scoringDifferenceWithinTolerance,
-    SCORING_STABILITY_RESOLUTION_CONTRACT,
+    SCORING_STABILITY_RESOLUTION_CONTRACT, scoringResolutionHeader,
     SCORING_STABILITY_CONSENSUS_TOLERANCE };

@@ -29,11 +29,47 @@ struct PublishedAggregate: Codable, Sendable, Equatable, Identifiable {
 }
 
 struct PublishedAggregateCatalog: Codable, Sendable, Equatable {
-    let contract: String
     let snapshotSHA256: String
     let sourceRecordCount: Int
     let aggregateCount: Int
     let records: [PublishedAggregate]
+}
+
+struct AggregateDocumentFormat {
+    static let family="published-aggregate-document"
+    enum Platform:String {case macos,android}
+    let contract:String
+    let schemaFingerprint:String?
+    let parser:String
+    private init(header:[String:Any], platform:Platform)throws {
+        guard ClientProtocols.hasValidHeader(header,Self.family),let raw=header["contract"] as? String else {
+            throw AggregateFailure.invalid("汇总正文格式无效")
+        }
+        contract=raw
+        schemaFingerprint=header["schemaFingerprint"] as? String
+        if let schemaFingerprint {
+            let schema=try ClientProtocols.declaredSchema(raw,Self.family,schemaFingerprint)
+            guard let profiles=schema["parserProfiles"] as? [String:String],let profile=profiles[platform.rawValue] else {
+                throw AggregateFailure.invalid("汇总正文缺少实际平台解析声明")
+            }
+            parser=profile
+        } else {
+            parser=try ClientProtocols.historicalContract("published-aggregate-parser-profile",variant:platform.rawValue)
+        }
+    }
+    static func current(_ platform:Platform)throws->Self {
+        try Self(header:ClientProtocols.record(Self.family),platform:platform)
+    }
+    static func read(_ bytes:Data, platform:Platform)throws->(AggregateDocument,Self) {
+        guard let object=try JSONSerialization.jsonObject(with:bytes) as? [String:Any] else {
+            throw AggregateFailure.invalid("汇总正文格式无效")
+        }
+        let format=try Self(header:object,platform:platform)
+        guard object["parserContract"] as? String == format.parser else {
+            throw AggregateFailure.invalid("汇总正文平台解析声明无效")
+        }
+        return (try JSONDecoder().decode(AggregateDocument.self,from:bytes),format)
+    }
 }
 
 struct AggregateDocument: Codable, Sendable, Equatable {
@@ -43,6 +79,7 @@ struct AggregateDocument: Codable, Sendable, Equatable {
         let missingReason: String
     }
     let contract: String
+    let schemaFingerprint: String?
     let descriptor: PublishedAggregate
     let responseURL: String
     let fetchedAt: String
@@ -85,7 +122,7 @@ enum PublishedAggregateReader {
     static func manifest(_ raw:Data)throws->Manifest {
         try require(raw.count>0 && raw.count<=2*1024*1024 && String(data:raw,encoding:.utf8) != nil,"汇总清单编码或大小无效")
         let value=try JSONDecoder().decode(Manifest.self,from:raw)
-        try require(value.contract=="paper-search-index-manifest-v1" && (1...128).contains(value.shards.count) && value.recordCount>0 && value.totalBytes>0 && value.totalBytes<=64*1024*1024,"汇总清单合同无效")
+        try require((try JSONSerialization.jsonObject(with:raw) as? [String:Any]).map{ClientProtocols.hasValidHeader($0,"paper-search-index-manifest")} == true && (1...128).contains(value.shards.count) && value.recordCount>0 && value.totalBytes>0 && value.totalBytes<=64*1024*1024,"汇总清单合同无效")
         var urls=Set<String>(),totalBytes=0,totalRows=0
         for shard in value.shards {
             try require(shard.url.range(of:#"\Asearch-index/part-[0-9]{4,}-[a-f0-9]{12}\.json\z"#,options:.regularExpression) != nil && validSHA(shard.sha256) && shard.url.hasSuffix("-"+shard.sha256.prefix(12)+".json") && (1...1024*1024).contains(shard.bytes) && shard.recordCount>0 && urls.insert(shard.url).inserted,"汇总分片描述无效")
@@ -122,6 +159,6 @@ enum PublishedAggregateReader {
             }
         }
         try require(rowsSeen==m.recordCount,"汇总原目录集合不完整")
-        return PublishedAggregateCatalog(contract:"published-aggregate-index-v1",snapshotSHA256:snapshot,sourceRecordCount:rowsSeen,aggregateCount:result.count,records:result.sorted{$0.id<$1.id})
+        return PublishedAggregateCatalog(snapshotSHA256:snapshot,sourceRecordCount:rowsSeen,aggregateCount:result.count,records:result.sorted{$0.id<$1.id})
     }
 }

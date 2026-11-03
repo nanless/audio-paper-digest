@@ -54,7 +54,7 @@ function mergeFailedReaderBundle(existing, incoming) {
             const hash = daily.stableHash(record); if (seen.has(hash)) return false; seen.add(hash); return true;
         }).map(clone);
     }
-    if (verifiedSource(existing, incoming) && engine.hasValidApiReaderV3Records(candidate)) {
+    if (verifiedSource(existing, incoming) && engine.hasValidIntegratedApiReaderRecords(candidate)) {
         return { ...Object.fromEntries(Object.keys(readerFields(existing)).map(key => [key, undefined])),
             ...clone(fields), ...fees, ...histories, analysisManifest: manifest };
     }

@@ -7,9 +7,28 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const handles = new WeakMap();
 const registrations = new Map();
-const CONTRACT = 'conference-recovery-grant-v1';
-const RECEIPT = 'conference-recovery-grant-registration-v1';
-const CONTINUATION = 'conference-recovery-window-continuation-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = codec.contract('conference-recovery-grant');
+const RECEIPT = codec.contract('conference-recovery-grant-registration');
+const CONTINUATION = codec.contract('conference-recovery-window-continuation');
+const currentHeader = name => codec.recordHeader(codec.contract(name), name);
+function grantFormat(manifest) {
+    const field = manifest?.contract === CONTRACT ? 'contract' : 'version';
+    if (!codec.hasValidHeader(manifest, 'conference-recovery-grant', field)) fail('追加许可格式声明未知或混用');
+    return codec.format(manifest[field], 'conference-recovery-grant', manifest.schemaFingerprint);
+}
+function windowFormatForRecord(record, family) {
+    if (!codec.hasValidHeader(record, family, family === 'conference-recovery-grant'
+        && record?.contract !== CONTRACT ? 'version' : 'contract')) fail('独立窗口的原登记格式未知');
+    const value = Object.hasOwn(record, 'schemaFingerprint')
+        ? codec.declaredSchema(record.contract, family, record.schemaFingerprint).windowFormat
+        : codec.historicalHeader('conference-reader-recovery-window', 'separate-append-only-window', null);
+    if (!codec.hasValidHeader(value, 'conference-reader-recovery-window')
+        || hash(value) !== hash(codec.recordHeader(value.contract, 'conference-reader-recovery-window', value.schemaFingerprint))) {
+        fail('原许可未绑定完整的窗口格式');
+    }
+    return clone(value);
+}
 const memberChecks = new Set();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
@@ -54,12 +73,16 @@ function grantRoot(analysisRoot, create = false) {
     const root = directory(analysisRoot);
     return directory(path.join(path.dirname(root), 'conference-recovery-grants'), create);
 }
-function grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256) {
+function grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256, windowRecord = null) {
     if (!UUID.test(grantId || '') || !UUID.test(failedExecutionId || '') || !SHA.test(failedAnalysisFileSha256 || '')) {
         fail('恢复窗口身份不合法');
     }
-    return api().deterministicUuid(hash({ grantId, failedExecutionId, failedAnalysisFileSha256 }),
-        'conference-reader-recovery-window-v1');
+    const header = windowRecord === null ? currentHeader('conference-reader-recovery-window')
+        : codec.hasValidHeader(windowRecord, 'conference-reader-recovery-window')
+            ? codec.recordHeader(windowRecord.contract, 'conference-reader-recovery-window', windowRecord.schemaFingerprint)
+            : fail('恢复窗口的原格式声明无效');
+    const domain = Object.hasOwn(header, 'schemaFingerprint') ? hash(header) : header.contract;
+    return api().deterministicUuid(hash({ grantId, failedExecutionId, failedAnalysisFileSha256 }), domain);
 }
 function casPath(repositoryRoot, member, relative) {
     const allowed = [member.parentExecutionId, member.childExecutionId];
@@ -128,9 +151,10 @@ function recoveryWindowMaterials(analysisRoot, executionId) {
 }
 function assertContinuation(state, member) {
     const c = member.continuation;
-    if (state.manifest.version === 3 && c === null) return;
-    if (state.manifest.version === 1) {
-        if (c !== undefined) fail('旧v1许可不能借延续字段扩大权限');
+    const format = grantFormat(state.manifest);
+    if (format === 'mixed-initial-and-continuation' && c === null) return;
+    if (format === 'initial-only') {
+        if (c !== undefined) fail('原初次许可不能借延续字段扩大权限');
         return;
     }
     const key = `${state.manifest.grantId}:${member.paperId}`;
@@ -157,7 +181,7 @@ function assertContinuation(state, member) {
         // mode and source/CAS chain before any child preparation or request.
         if (analysis.status !== 'partial' || analysis.papers?.length !== 1
             || analysis.papers[0].id !== member.paperId
-            || body.contract !== 'conference-reader-recovery-window-v1' || body.version !== 1
+            || !codec.hasValidHeader(body, 'conference-reader-recovery-window')
             || revisionSha256 !== hash(body) || body.executionId !== member.childExecutionId
             || body.paperId !== member.paperId || body.parentExecutionId !== member.parentExecutionId
             || body.grantId !== c.grantId || body.grantSha256 !== c.grantSha256
@@ -178,14 +202,14 @@ function assertMemberFiles(state, member) {
         || sha(source.sourceDetails?.text || '') !== member.sourceTextSha256) {
         fail('原子运行与封存全文身份不一致');
     }
-    if (state.manifest.version === 3 && member.continuation === null) {
+    if (grantFormat(state.manifest) === 'mixed-initial-and-continuation' && member.continuation === null) {
         const failed = adapter().loadConferenceReaderRevision({ analysisRoot: state.analysisRoot,
             executionId: member.childExecutionId });
         if (failed.recoveryWindow || failed.analysis.status !== 'partial' || failed.run.status === 'running'
             || failed.parent.run.executionId !== member.parentExecutionId
             || failed.parent.analysisFileSha256 !== memberPins(member).parentAnalysisFileSha256
             || member.childExecutionId !== adapter().readerRevisionExecutionId(member.parentExecutionId,
-                memberPins(member).parentAnalysisFileSha256)
+                memberPins(member).parentAnalysisFileSha256, failed.revision)
             || !Number.isSafeInteger(failed.analysis.readerRevisionProgress?.attempts)
             || failed.analysis.readerRevisionProgress.attempts < 1
             || failed.analysis.readerRevisionProgress.attempts > failed.revision.maxAttempts
@@ -198,7 +222,8 @@ function assertMemberFiles(state, member) {
 }
 function assertManifest(manifest) {
     const { manifestSha256, ...body } = manifest || {};
-    if (manifest.contract !== CONTRACT || ![1, 2, 3].includes(manifest.version) || !UUID.test(manifest.grantId || '')
+    const format = grantFormat(manifest);
+    if (!['initial-only', 'continuations-only', 'mixed-initial-and-continuation'].includes(format) || !UUID.test(manifest.grantId || '')
         || !UUID.test(manifest.processId || '') || !SHA.test(manifest.baselineStateFileSha256 || '')
         || !SHA.test(manifest.inventorySha256 || '') || manifestSha256 !== hash(body)
         || !manifest.approval || manifest.approval.kind !== 'explicit-human'
@@ -219,23 +244,30 @@ function assertManifest(manifest) {
         }
         memberPins(member);
         const c = member.continuation;
-        if (manifest.version === 3 && !Object.hasOwn(member, 'continuation')) fail('混合许可逐成员必须显式声明初次null或原窗口延续');
-        if (manifest.version === 3 && c === null) {
+        if (format === 'mixed-initial-and-continuation' && !Object.hasOwn(member, 'continuation')) fail('混合许可逐成员必须显式声明初次null或原窗口延续');
+        if (format === 'mixed-initial-and-continuation' && c === null) {
             if (!SHA.test(member.initialMaterialsSha256 || '')) fail('初次成员缺少完整失败材料树 SHA');
             continue;
         }
-        if (manifest.version === 3 && Object.hasOwn(member, 'initialMaterialsSha256')) fail('延续成员不能声明初次材料树');
-        if (manifest.version === 1 ? c !== undefined : !c || c.contract !== CONTINUATION
-            || Object.keys(c).sort().join(',') !== ['contract','grantId','grantSha256','materialsSha256','ledgerFileSha256'].sort().join(',')
+        if (format === 'mixed-initial-and-continuation' && Object.hasOwn(member, 'initialMaterialsSha256')) fail('延续成员不能声明初次材料树');
+        if (format === 'initial-only' ? c !== undefined : !c || !codec.hasValidHeader(c, 'conference-recovery-window-continuation')
+            || Object.keys(c).sort().join(',') !== [...Object.keys(codec.recordHeader(c.contract,
+                'conference-recovery-window-continuation', c.schemaFingerprint)),'grantId','grantSha256','materialsSha256','ledgerFileSha256'].sort().join(',')
             || !UUID.test(c.grantId || '') || c.grantId === manifest.grantId
             || !SHA.test(c.grantSha256 || '') || !SHA.test(c.materialsSha256 || '')
             || !(c.ledgerFileSha256 === null || SHA.test(c.ledgerFileSha256 || ''))) {
-            fail('延续许可必须显式绑定前许可和完整材料树，旧v1不授予延续');
+            fail('延续许可必须显式绑定前许可和完整材料树，原初次许可不授予延续');
+        }
+        if (Object.hasOwn(manifest, 'schemaFingerprint') && c !== undefined
+            && hash(codec.recordHeader(c.contract, 'conference-recovery-window-continuation', c.schemaFingerprint))
+                !== hash(codec.declaredSchema(manifest.contract, 'conference-recovery-grant', manifest.schemaFingerprint).continuationFormat)) {
+            fail('当前许可没有绑定同一完整延续格式');
         }
     }
     return manifest;
 }
 function checkBaseline(manifest, baseline, analysisRoot) {
+    const format = grantFormat(manifest);
     const state = api().assertState(baseline.value);
     if (baseline.sha256 !== manifest.baselineStateFileSha256 || state.processId !== manifest.processId
         || state.generation !== manifest.baselineGeneration || state.status !== 'partial') fail('原批次基线不匹配');
@@ -253,13 +285,13 @@ function checkBaseline(manifest, baseline, analysisRoot) {
             fail('成员不对应原批次的父包和来源证明');
         }
         const releases = (item.retryReleases || []).filter(row => row.recoveryGrantId);
-        if (manifest.version === 1 && releases.length) fail('已有追加历史必须绑定最新失败窗口，不能重选最旧失败');
-        if ((manifest.version === 2 || manifest.version === 3 && member.continuation)
+        if (format === 'initial-only' && releases.length) fail('已有追加历史必须绑定最新失败窗口，不能重选最旧失败');
+        if ((format === 'continuations-only' || format === 'mixed-initial-and-continuation' && member.continuation)
             && (releases.at(-1)?.recoveryGrantId !== member.continuation.grantId
             || releases.at(-1)?.recoveryGrantSha256 !== member.continuation.grantSha256)) {
             fail('延续未绑定原进程最后实际派发的许可');
         }
-        if (manifest.version === 3 && member.continuation === null && releases.length) {
+        if (format === 'mixed-initial-and-continuation' && member.continuation === null && releases.length) {
             const release = releases.at(-1);
             const prior = resolveRegisteredRecoveryGrant(release.recoveryGrantId, release.recoveryGrantSha256,
                 { analysisRoot });
@@ -310,12 +342,13 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
     const receiptFile = path.join(target, 'registration.json');
     if (!fs.existsSync(receiptFile)) {
         if (!install) fail('追加许可尚未显式登记');
+        if (!codec.isCurrentHeader(manifest, 'conference-recovery-grant')) fail('新登记必须使用当前稳定许可格式；原旧清单保留，只能重放已有登记');
         const baseline = read(path.join(processDirectory, 'state.json'));
         checkBaseline(manifest, baseline, analysisRoot);
         const temporaryHandle = makeHandle(manifest, root, analysisRoot, processDirectory);
         const data = handles.get(temporaryHandle);
         for (const member of manifest.members) assertMemberFiles(data, member);
-        if (manifest.version >= 2) for (const id of fs.readdirSync(root)) {
+        if (grantFormat(manifest) !== 'initial-only') for (const id of fs.readdirSync(root)) {
             if (id === manifest.grantId || !UUID.test(id) || !fs.existsSync(path.join(root, id, 'registration.json'))) continue;
             const other = assertManifest(read(path.join(root, id, 'manifest.json')).value);
             if (other.processId === manifest.processId && other.members.some(row => manifest.members.some(member =>
@@ -327,7 +360,7 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
         // Exact writes are no-overwrite and crash-resumable. The receipt is last.
         adapter().writeBytesAtomic(path.join(target, 'manifest.json'), original.bytes);
         adapter().writeBytesAtomic(path.join(target, 'baseline-state.json'), baseline.bytes);
-        const body = { contract: RECEIPT, version: 1, grantId: manifest.grantId,
+        const body = { ...currentHeader('conference-recovery-grant-registration'), grantId: manifest.grantId,
             grantSha256: manifest.manifestSha256, manifestFileSha256: original.sha256,
             baselineStateFileSha256: baseline.sha256, processId: manifest.processId,
             analysisRoot: directory(analysisRoot), processDirectory: directory(processDirectory),
@@ -337,7 +370,7 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
     directory(target);
     const registered = read(path.join(target, 'manifest.json'));
     const receipt = read(receiptFile).value, { receiptSha256, ...receiptBody } = receipt;
-    if (receipt.contract !== RECEIPT || receipt.version !== 1 || receiptSha256 !== hash(receiptBody)
+    if (!codec.hasValidHeader(receipt, 'conference-recovery-grant-registration') || receiptSha256 !== hash(receiptBody)
         || !registered.bytes.equals(original.bytes) || receipt.manifestFileSha256 !== original.sha256
         || receipt.grantId !== manifest.grantId || receipt.grantSha256 !== manifest.manifestSha256
         || receipt.processId !== manifest.processId || receipt.analysisRoot !== directory(analysisRoot)
@@ -366,12 +399,15 @@ function readRecoveryGrantMember(handle, paperId) {
         assertMemberFiles(state, member);
     };
     assertUnchanged();
+    const windowFormat = windowFormatForRecord(state.manifest, 'conference-recovery-grant');
     return Object.freeze({ grantId: state.manifest.grantId, grantSha256: state.manifest.manifestSha256,
         processId: state.manifest.processId, member, limits: state.manifest.limits,
         analysisRoot: state.analysisRoot, parentExecutionId: member.parentExecutionId,
         failedExecutionId: member.childExecutionId, ...pins,
         sourceSha256: member.sourceTextSha256, sourceSnapshotSha256: member.sourceSnapshotSha256,
-        expectedExecutionId: grantedRecoveryExecutionId(state.manifest.grantId, member.childExecutionId, pins.failedAnalysisFileSha256),
+        windowFormat: freeze(windowFormat),
+        expectedExecutionId: grantedRecoveryExecutionId(state.manifest.grantId, member.childExecutionId,
+            pins.failedAnalysisFileSha256, windowFormat),
         ...(member.continuation ? { continuation: freeze(clone(member.continuation)) } : {}),
         files: Object.freeze(Object.entries(member.recordCAS).map(([relative, sha256]) => Object.freeze({
             path: casPath(state.repositoryRoot, member, relative), sha256 }))), assertUnchanged });
@@ -400,7 +436,8 @@ function reopenRecoveryGrantForWindow({ analysisRoot, windowRecord }) {
     const record = windowRecord;
     const handle = resolveRegisteredRecoveryGrant(record?.grantId, record?.grantSha256, { analysisRoot });
     const member = readRecoveryGrantMember(handle, record.paperId);
-    if (record.contract !== 'conference-reader-recovery-window-v1' || record.version !== 1
+    if (!codec.hasValidHeader(record, 'conference-reader-recovery-window')
+        || hash(codec.recordHeader(record.contract, 'conference-reader-recovery-window', record.schemaFingerprint)) !== hash(member.windowFormat)
         || record.executionId !== member.expectedExecutionId
         || record.failedExecutionId !== member.failedExecutionId
         || record.failedAnalysisFileSha256 !== member.failedAnalysisFileSha256
@@ -414,5 +451,5 @@ function recoveryGrantSummary(handle) {
         processId: state.manifest.processId, paperIds: Object.freeze(state.manifest.members.map(x => x.paperId).sort()),
         limits: state.manifest.limits });
 }
-module.exports = { CONTRACT, RECEIPT, CONTINUATION, recoveryWindowMaterials, openRecoveryGrant, readRecoveryGrantMember,
+module.exports = { CONTRACT, RECEIPT, CONTINUATION, windowFormatForRecord, recoveryWindowMaterials, openRecoveryGrant, readRecoveryGrantMember,
     resolveRegisteredRecoveryGrant, reopenRecoveryGrantForWindow, grantedRecoveryExecutionId, recoveryGrantSummary };

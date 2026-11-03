@@ -45,7 +45,7 @@ function pdfResponse(id, suffix = 'one') {
 test('当日 arXiv 来源获取用原子写入保存官方文本、PDF 和不含图片像素的来源元数据', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const result = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
-        now: '2026-09-07T00:00:00.000Z', extractorVersion: 'test-extractor-v9' }, {
+        now: '2026-09-07T00:00:00.000Z', extractorVersion: 'test-extractor' }, {
         fetchText: async requested => { textCalls++; assert.equal(requested, id); return textResponse(id); },
         fetchPdf: async requested => { pdfCalls++; assert.equal(requested, id); return pdfResponse(id); }
     });
@@ -62,10 +62,10 @@ test('当日 arXiv 来源获取用原子写入保存官方文本、PDF 和不含
     assert.equal(result.manifest.text.responseSha256, sha256(Buffer.from(result.text)));
     assert.equal(result.manifest.pdf.responseBytes, result.pdf.length);
     assert.equal(result.manifest.pdf.responseSha256, sha256(result.pdf));
-    assert.equal(result.manifest.text.extractor.version, 'test-extractor-v9');
+    assert.equal(result.manifest.text.extractor.implementation, 'test-extractor');
     assert.equal(result.manifest.runtimeMetadata.filename, 'source-runtime.json');
     assert.deepEqual(Object.keys(result.manifest).sort(), ['arxivId', 'capturedAt', 'contract', 'generation',
-        'paperId', 'pdf', 'runtimeMetadata', 'text', 'version']);
+        'paperId', 'pdf', 'runtimeMetadata', 'schemaFingerprint', 'text']);
     assert.equal(Object.hasOwn(result.runtimeDetails, 'sourceVersion'), false,
         '普通当前版本的来源记录保持原字段结构');
     assert.equal(result.runtimeDetails.title, textResponse(id).text.slice(0, 2000), 'HTML 没有明确标题字段时，从本次来源文本中截取并保存标题');

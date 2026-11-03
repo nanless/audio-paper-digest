@@ -19,12 +19,16 @@ from paper_reader_presentation import (build_reader_presentation, SCORE_DIMENSIO
                                        normalize_repeated_bold_prefixes, reader_score_line,
                                        build_aggregate_reader_presentations)
 from tag_presentation import FACET_DISPLAY_LABELS, render_tag_hierarchy_markdown
-from tag_catalog import load_tag_catalog, load_archived_tag_catalog, resolve_append_only_proof_catalog
-from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
-from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
+from tag_catalog import load_tag_catalog, load_archived_tag_catalog, resolve_compatible_proof_catalog
+from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, is_tag_stage_record_declaration, read_tag_stage_record
+from tag_catalog import (tag_catalog_identity,is_supported_flat_tag_contract, is_supported_tag_selection_contract,TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
 from runtime_guard import require_external_runtime
 from publish_common import _assert_hash_key_premises, _assert_ecmascript_number_premises
+import protocol_codec as protocols
+from scoring_record_format import has_scoring_audit_format
+from reader_record_format import (is_integrated_plan, validate_bindings, stage_matches,
+                                  identity_binding)
 from publication_local_replay import (publication_replay_scope, render_process_guard,
     render_budget_seconds, LocalReplayFailure, RenderDeadlineExceeded, emit_replay_failure)
 
@@ -33,10 +37,6 @@ PAPER_ID = re.compile(r'^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$
 WEAK = {'fullText': 'weak', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'unavailable'}
 FULL = {'fullText': 'full', 'tables': 'available', 'formulas': 'available', 'figures': 'available'}
 PDF_VISUAL = {'fullText': 'full', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'available'}
-READER_CONTRACT = 'beginner-researcher-v3'
-SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4'
-SCORING_CONTRACT = 'api-scoring-audit-v2'
-PUBLICATION_CONTRACT = 'conference-official-publication-v1'
 FLAT_TAG_CONTRACT = TAG_FLAT_COMPAT_CONTRACT
 SOURCE_URL_NORMALIZATION_CONTRACT = 'paper-source-repository-url-normalization-v1'
 CONFERENCE_IMAGE_BASE_URL = os.environ.get(
@@ -174,12 +174,9 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
     authors, resources = paper.get('apiReaderAuthors'), paper.get('apiReaderResources')
     contracts = (manifest or {}).get('contracts') or {}
     if not isinstance(plan, dict) or not isinstance(article, str) or not article.strip() \
-            or contracts.get('apiReaderArticle') != READER_CONTRACT \
-            or contracts.get('apiReaderSourceBindings') != SOURCE_BINDINGS_CONTRACT \
-            or plan.get('version') != 3 or plan.get('contract') != READER_CONTRACT \
-            or plan.get('sourceBindingsContract') != SOURCE_BINDINGS_CONTRACT \
+            or not is_integrated_plan(plan) or not validate_bindings(contracts, stage, plan) \
             or stage.get('status') != 'complete':
-        raise ValueError('conference Reader 合同不是 beginner-researcher-v3/source-bindings-v4')
+        raise ValueError('会议 Reader 文章及来源绑定声明不属于已登记的完整格式')
     article_sha, plan_sha = hashlib.sha256(article.encode()).hexdigest(), \
         reader_record_sha(plan, 'API reader 编辑计划')
     figures = paper.get('apiReaderFigures')
@@ -189,7 +186,7 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
     common_records_match = paper.get('apiReaderArticleSha256') == article_sha and stage.get('articleSha256') == article_sha \
         and paper.get('apiReaderPlanSha256') == plan_sha and stage.get('planSha256') == plan_sha \
         and plan.get('sourceBindingsSha256') == source_bindings_sha \
-        and stage.get('sourceBindingsContractVersion') == SOURCE_BINDINGS_CONTRACT \
+        and stage_matches(stage, 'sourceBindings') \
         and stage.get('sourceBindingsSha256') == source_bindings_sha \
         and re.fullmatch(r'[a-f0-9]{64}', str(stage.get('structuredArtifactsSha256') or '')) \
         and stage.get('structuredArtifactsSha256') == ((manifest or {}).get('sourceAcquisition') or {}).get('structuredArtifactsSha256')
@@ -214,7 +211,7 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
         reader_records_match = False
     if not reader_records_match:
         raise ValueError('conference Reader bytes/plan/structure capability is not sealed; unavailable structure cannot be inferred')
-    if not isinstance(authors, dict) or contracts.get('apiReaderAuthorIdentity') != 'api-reader-author-identity-v1' \
+    if not isinstance(authors, dict) or not identity_binding(paper, 'authors') \
             or reader_record_sha(authors, 'API reader 作者记录') != stage.get('readerAuthorsSha256') \
             or authors.get('identitySha256') \
             != reader_record_sha(authors.get('identity'), 'API reader 作者来源记录') \
@@ -226,7 +223,7 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
                 or not isinstance(author.get('affiliations'), list) or not author['affiliations'] \
                 or any(not isinstance(item, str) or not item.strip() for item in author['affiliations']):
             raise ValueError('会议论文解读的作者记录格式无效，或姓名及机构列表缺少非空文字。')
-    if not isinstance(resources, dict) or contracts.get('apiReaderResourceIdentity') != 'api-reader-resource-identity-v1':
+    if not isinstance(resources, dict) or not identity_binding(paper, 'resources'):
         raise ValueError('会议论文解读的资源记录格式无效，或格式声明不符合要求。')
     resource_identity = dict(resources)
     resource_identity.pop('identitySha256', None)
@@ -271,7 +268,7 @@ def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
     if evidence is None:
         return [], []
     body = {key: value for key, value in evidence.items() if key != 'evidenceSha256'}
-    if evidence.get('contract') != 'conference-pdf-formula-images-v1' \
+    if not protocols.has_valid_header(evidence, 'conference-pdf-formula-images') \
             or evidence.get('evidenceSha256') != reader_record_sha(body, '会议公式证据') \
             or not re.fullmatch(r'[a-f0-9]{64}', str(evidence.get('pdfSha256', ''))) \
             or not re.fullmatch(r'[a-f0-9]{64}', str(evidence.get('sourceSnapshotSha256', ''))) \
@@ -282,7 +279,10 @@ def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
     regions = evidence['regions']
     if not regions and not evidence['candidateCount']:
         return [], []
-    directory = stable_sha({'kind': 'pdf-formula-images-v1', 'paperId': paper_id,
+    directory_domain = protocols.contract('conference-formula-image-directory') \
+        if protocols.is_current_header(evidence, 'conference-pdf-formula-images') \
+        else protocols.historical_contract('conference-formula-image-directory', 'original-pdf-regions')
+    directory = stable_sha({'kind': directory_domain, 'paperId': paper_id,
                             'evidenceSha256': evidence['evidenceSha256']})[:12]
     lines = ['## 📐 原文公式与排版', '',
              '以下展示论文原页中的数学表达区域，保留原始上下标、分式和符号排版。区域序号仅用于本文导航，不是论文公式编号。', '']
@@ -292,7 +292,7 @@ def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
         expression = region.get('sourceExpression') or {}
         crop = expression.get('crop') or {}
         if region.get('ordinal') != index or type(region.get('page')) is not int or region['page'] < 1 \
-                or expression.get('contract') != 'pdf-formula-source-expression-v1' \
+                or not protocols.has_valid_header(expression, 'pdf-formula-source-expression') \
                 or expression.get('kind') != 'recovered-from-pdf-layout' \
                 or expression.get('originalTexAvailable') is not False \
                 or crop.get('dpi') != 144 or crop.get('mediaType') != 'image/png' \
@@ -532,12 +532,12 @@ def render_packet(packet):
     if headings != list(REQUIRED_ANALYSIS_SECTIONS) or acquisition.get('fullTextAvailable') is not True \
             or acquisition.get('analysisSource') == 'abstract' \
             or not isinstance(analysis, str) or not analysis.strip() or scoring_stage.get('status') != 'complete' \
-            or scoring_stage.get('scoringContract') != SCORING_CONTRACT \
+            or not has_scoring_audit_format(scoring_stage) \
             or scoring_stage.get('outputAnalysisSha256') != hashlib.sha256(analysis.encode()).hexdigest() \
             or not (load_publish_to_blog()._validate_local_source_scoring_replay(paper)
                     if scoring_stage.get('executionKind') in {'deterministic_source_resource_audit', 'deterministic_source_core_audit'}
                     else scoring_stability_is_resolved(scoring_stage)):
-        raise ValueError('会议论文的分析正文、全文来源或评分审计记录不符合 api-scoring-audit-v2 要求。')
+        raise ValueError('会议论文的分析正文、全文来源或评分审计记录不符合已登记的评分要求。')
     concepts = {item['id']: item for item in assignment.get('concepts', [])}
     ordered = []
     for concept_id in [assignment.get('primaryTaskId'), assignment.get('primaryMethodId'), *assignment.get('conceptIds', [])]:
@@ -552,7 +552,7 @@ def render_packet(packet):
     same_catalog = assignment.get('registryVersion') == tag_stage.get('registryVersion') \
         and assignment.get('registrySha256') == tag_stage.get('registrySha256')
     if not same_catalog:
-        original = resolve_append_only_proof_catalog(tag_stage.get('registrySha256'), tag_catalog)
+        original = resolve_compatible_proof_catalog(tag_stage.get('registrySha256'), tag_catalog)
         if original is None:
             # Completed official conference records retain their original stage,
             # catalog and upgrade chain. Current page assignment is independent;
@@ -564,7 +564,7 @@ def render_packet(packet):
                     original_registry_sha256=tag_stage.get('registrySha256'))
             else:
                 original = None
-        if original is not None and tag_stage.get('registryVersion') == original['version']:
+        if original is not None and tag_stage.get('registryVersion') == tag_catalog_identity(original):
             # Only genuine archived bytes with an unchanged full prefix qualify.
             # Recompute the old prompt and both selections; never rewrite the
             # original stage/checkpoint or infer an approval from a new SHA.
@@ -580,10 +580,10 @@ def render_packet(packet):
                 and old_selection.get('valid') is True and new_selection.get('valid') is True \
                 and all(old_selection.get(key) == new_selection.get(key)
                         for key in ('primaryTaskId', 'primaryMethodId', 'conceptIds'))
-    if assignment.get('flatCompatContract') not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_CONTRACT) \
-            or (tag_record['format'] == 'current' and tag_contract != TAG_STAGE_RECORD_CONTRACT) \
-            or assignment.get('selectionContract') not in supported_selection_contracts \
-            or selection_contract not in supported_selection_contracts \
+    if not is_supported_flat_tag_contract(assignment.get('flatCompatContract')) \
+            or (tag_record['format'] == 'current' and not is_tag_stage_record_declaration(tag_contract)) \
+            or not is_supported_tag_selection_contract(assignment.get('selectionContract')) \
+            or not is_supported_tag_selection_contract(selection_contract) \
             or (tag_record['format'] != 'current' and 'selectionContract' in tag_stage
                 and tag_stage['selectionContract'] != tag_contract) \
             or not same_catalog \
@@ -612,7 +612,8 @@ def render_packet(packet):
     complete_score = score_line(parsed)
     publication = packet.get('publication')
     if not title or not summary or not reader_title or not one_sentence or not rank_bucket or not document_type or not scoring \
-            or not isinstance(publication, dict) or publication.get('contract') != PUBLICATION_CONTRACT:
+            or not isinstance(publication, dict) \
+            or not protocols.has_valid_header(publication, 'conference-official-publication'):
         raise ValueError('会议论文的标题、摘要、解读标题、核心观点、排名、文档类型或评分说明为空，或发布记录格式及规则不符合要求。')
     record_url = public_https(publication.get('recordUrl'), 'official record URL', conference_only=True)
     pdf_url = public_https(publication.get('pdfUrl'), 'official PDF URL', conference_only=True)
@@ -647,22 +648,33 @@ def render_packet(packet):
              f'paper_digest_conference_id: {json.dumps(conference["id"])}',
              f'paper_digest_conference_record_url: {json.dumps(record_url)}',
              f'paper_digest_conference_pdf_url: {json.dumps(pdf_url)}',
-             f'paper_digest_api_reader_contract: "{READER_CONTRACT}"',
+             f'paper_digest_api_reader_contract: "{plan["contract"]}"',
+             *([f'paper_digest_api_reader_schema_fingerprint: "{plan["schemaFingerprint"]}"']
+               if 'schemaFingerprint' in plan else []),
              f'paper_digest_api_reader_article_sha256: "{paper["apiReaderArticleSha256"]}"',
              f'paper_digest_api_reader_plan_sha256: "{paper["apiReaderPlanSha256"]}"',
-             f'paper_digest_api_reader_source_binding_contract: "{SOURCE_BINDINGS_CONTRACT}"',
+             f'paper_digest_api_reader_source_binding_contract: "{plan["sourceBindingsContract"]}"',
+             *([f'paper_digest_api_reader_source_binding_schema_fingerprint: "{plan["sourceBindingsSchemaFingerprint"]}"']
+               if 'sourceBindingsSchemaFingerprint' in plan else []),
              f'paper_digest_api_reader_source_bindings_sha256: "{plan["sourceBindingsSha256"]}"',
              f'paper_digest_api_reader_source_table_count: {stage["tableBindingCount"]}',
              f'paper_digest_api_reader_source_formula_count: {stage["formulaBindingCount"]}',
              f'paper_digest_api_reader_structured_artifacts_sha256: "{stage["structuredArtifactsSha256"]}"',
-             'paper_digest_api_reader_author_identity_contract: "api-reader-author-identity-v1"',
+             f'paper_digest_api_reader_author_identity_contract: "{paper["apiReaderAuthors"]["identity"]["contract"]}"',
+             *([f'paper_digest_api_reader_author_identity_schema_fingerprint: "{paper["apiReaderAuthors"]["identity"]["schemaFingerprint"]}"']
+               if 'schemaFingerprint' in paper['apiReaderAuthors']['identity'] else []),
              f'paper_digest_api_reader_author_identity_sha256: "{paper["apiReaderAuthors"]["identitySha256"]}"',
              f'paper_digest_api_reader_author_count: {len(authors)}',
-             'paper_digest_api_reader_resource_identity_contract: "api-reader-resource-identity-v1"',
+             f'paper_digest_api_reader_resource_identity_contract: "{paper["apiReaderResources"]["contract"]}"',
+             *([f'paper_digest_api_reader_resource_identity_schema_fingerprint: "{paper["apiReaderResources"]["schemaFingerprint"]}"']
+               if 'schemaFingerprint' in paper['apiReaderResources'] else []),
              f'paper_digest_api_reader_resource_identity_sha256: "{paper["apiReaderResources"]["identitySha256"]}"',
              f'paper_digest_api_reader_resource_count: {len(resources)}',
-             'paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"',
-             f'paper_digest_scoring_contract: "{SCORING_CONTRACT}"',
+             f'paper_digest_api_reader_decision_projection: "{publisher.API_READER_DECISION_PROJECTION_CONTRACT}"',
+             f'paper_digest_api_reader_decision_projection_schema_fingerprint: "{publisher.API_READER_DECISION_PROJECTION_SCHEMA_FINGERPRINT}"',
+             f'paper_digest_scoring_contract: "{paper["analysisManifest"]["stages"]["scoringAudit"]["scoringContract"]}"',
+             *([f'paper_digest_scoring_schema_fingerprint: "{paper["analysisManifest"]["stages"]["scoringAudit"]["scoringSchemaFingerprint"]}"']
+               if 'scoringSchemaFingerprint' in paper['analysisManifest']['stages']['scoringAudit'] else []),
              f'paper_digest_tags_contract: "{FLAT_TAG_CONTRACT}"',
              f'paper_digest_tags_selection_contract: "{assignment["selectionContract"]}"',
              f'paper_digest_tags_registry_version: "{assignment["registryVersion"]}"',

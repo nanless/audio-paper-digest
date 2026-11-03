@@ -1,4 +1,5 @@
 import {mountSetup} from './setup-ui.js';
+import {favoriteCollectionsWritable} from './favorites-ui.js';
 import {mountAggregates} from './aggregate-ui.js';
 import {createNativeNotesUI} from './native-notes-ui.js';
 import {renderNotesIndex} from './notes-index.js';
@@ -17,7 +18,7 @@ const annotationDrafts=new Map();let annotationTimer,pdfRequest=0,pdfPending=nul
 const readingWrites=new Map();
 let fontTarget=null,fontSaving=null,fontRevision=0;
 let favoriteSaving=false;
-function updateFavoriteButton(){const saved=(state.personal.favorites||[]).includes(state.paper?.id),future=state.personal.favoriteCollections&&state.personal.favoriteCollections.version!==1;$('favorite').setAttribute('aria-pressed',String(saved));$('favorite').setAttribute('aria-label',saved?'取消收藏当前论文':'收藏当前论文');$('favorite').disabled=favoriteSaving||!!future||!state.paper;$('favorite').title=future?'请升级工作台后编辑收藏':favoriteSaving?'正在保存收藏…':saved?'取消收藏':'收藏论文';}
+function updateFavoriteButton(){const saved=(state.personal.favorites||[]).includes(state.paper?.id),future=!favoriteCollectionsWritable(state.personal);$('favorite').setAttribute('aria-pressed',String(saved));$('favorite').setAttribute('aria-label',saved?'取消收藏当前论文':'收藏当前论文');$('favorite').disabled=favoriteSaving||!!future||!state.paper;$('favorite').title=future?'请升级工作台后编辑收藏':favoriteSaving?'正在保存收藏…':saved?'取消收藏':'收藏论文';}
 // Keep each native WebKit accessibility subtree bounded without discarding history.
 const taskPageSize=20;let taskPage=0;
 function viewIdentity(){return {id:state.paper?.id,generation:opening};}

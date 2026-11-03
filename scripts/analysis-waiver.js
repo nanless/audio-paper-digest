@@ -7,8 +7,9 @@ const crypto = require('node:crypto');
 const Config = require('./config.js');
 const { normalizedId, writeFileAtomic, getBeijingISOString } = require('./utils.js');
 
-const CONTRACT = 'daily-analysis-waiver-v1';
-const VERSION = 1;
+const formats = require('./lib/protocol-codec');
+const { recordHeaderFor } = require('./lib/workflow-record-format');
+const CONTRACT = formats.contract('daily-analysis-waiver');
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -62,14 +63,16 @@ function validateAnalysisWaiver(waiver, date, files = Config.FILES, snapshots = 
     if (!waiver || typeof waiver !== 'object' || Array.isArray(waiver)) {
         return { valid: false, issues: ['分析豁免记录必须是对象，不能是数组'], paperIds: new Set() };
     }
+    let header = {};
+    try { header = recordHeaderFor(waiver, CONTRACT); }
+    catch { issues.push('分析豁免记录的格式声明或结构指纹不符合要求'); }
     const expectedKeys = [
-        'batchDate', 'contract', 'papers', 'reason', 'requestedBy', 'source',
-        'status', 'version', 'waivedAt', 'waiverSha256'
+        ...Object.keys(header), 'batchDate', 'papers', 'reason', 'requestedBy', 'source',
+        'status', 'waivedAt', 'waiverSha256'
     ].sort();
     if (JSON.stringify(Object.keys(waiver).sort()) !== JSON.stringify(expectedKeys)) {
         issues.push('分析豁免记录含有未知字段或缺少必需字段');
     }
-    if (waiver.contract !== CONTRACT || waiver.version !== VERSION) issues.push('分析豁免记录的 contract 或 version 不符合要求');
     if (waiver.batchDate !== date || !DATE_RE.test(waiver.batchDate || '')) issues.push('分析豁免记录的 batchDate 格式无效或与目标日期不一致');
     if (waiver.status !== 'waived' || waiver.requestedBy !== 'user') issues.push('分析豁免记录的 status 必须为 waived，requestedBy 必须为 user');
     if (typeof waiver.reason !== 'string' || waiver.reason.trim().length < 10) issues.push('分析豁免记录的 reason 必须是去除首尾空白后至少含 10 个字符的字符串');
@@ -161,7 +164,7 @@ function createAnalysisWaiver({ date, paperIds, reason, files = Config.FILES, no
             originalDigestStatus: dbPaper.digestStatus?.status ?? null,
             originalLatestAttemptStatus: dbPaper.digestStatus?.latestAttemptStatus ?? null };
     });
-    const payload = { contract: CONTRACT, version: VERSION, batchDate: date, status: 'waived',
+    const payload = { ...formats.recordHeader(CONTRACT, CONTRACT), batchDate: date, status: 'waived',
         requestedBy: 'user', reason: String(reason).trim(), waivedAt: now(), source: {
             deepAnalysisResultSha256: sha256File(files.deepAnalysisResult),
             filteredPapersSha256: sha256File(files.filteredPapers),
@@ -174,5 +177,5 @@ function createAnalysisWaiver({ date, paperIds, reason, files = Config.FILES, no
     return { output, payload };
 }
 
-module.exports = { CONTRACT, VERSION, stableSha256, sha256File, paperList, waiverPath,
+module.exports = { CONTRACT, stableSha256, sha256File, paperList, waiverPath,
     loadAnalysisWaiver, validateAnalysisWaiver, createAnalysisWaiver };

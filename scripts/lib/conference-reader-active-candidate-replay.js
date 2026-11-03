@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 
 // 已付费失败候选只在私有副本里走正常Reader；这里从不增加一次模型请求或改原候选。
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
@@ -123,10 +125,10 @@ function paidCandidateProof(entries, identity, payload, source, usageDirectory, 
         const request = JSON.parse(entry.bytes), responseEntry = entries.find(item => item.path === entry.path.replace('.request.json', '.response.json'));
         if (request.contentAttempt !== payload.attempts || !isDeepStrictEqual(request.identity, identity) || !responseEntry) continue;
         const response = JSON.parse(responseEntry.bytes);
-        if (request.contract !== 'reader-repair-request-diagnostics-v1'
+        if (!require('./reader-diagnostic-format').hasDiagnosticFormat(request)
             || entry.path !== `request-diagnostics/${request.id}.request.json`
             || request.promptSha256 !== sha(request.prompt) || request.draftSha256 !== repair.hashDraft(request.draft)
-            || response.contract !== request.contract || response.id !== request.id
+            || !require('./reader-diagnostic-format').sameDiagnosticFormat(request, response) || response.id !== request.id
             || response.requestSha256 !== entry.sha256 || response.outputTextSha256 !== sha(response.rawResponse)) integrity('原付费请求响应绑定不一致');
         const replayed = require('./reader-compatible-candidate-replay').replayRepair(request, response, payload,
             source, draft => draft, true);
@@ -157,7 +159,7 @@ function paidCandidateProof(entries, identity, payload, source, usageDirectory, 
             || event.outputTextSha256 !== selected.response.outputTextSha256
             || event.model !== identity.model?.model || event.protocol !== identity.model?.protocol) continue;
         const at = Date.parse(event.at), requestAt = Date.parse(selected.request.at), responseAt = Date.parse(selected.response.at);
-        if (event.version !== 'llm-usage-v1' || !/^[a-f0-9-]{36}$/.test(event.eventId || '')
+        if (!isUsageEventFormat(event) || !/^[a-f0-9-]{36}$/.test(event.eventId || '')
             || event.outcome !== 'completed' || event.statusCode !== 200
             || !Number.isFinite(at) || !Number.isFinite(requestAt) || !Number.isFinite(responseAt)
             || requestAt > at || requestAt > responseAt || Math.abs(responseAt - at) > 30000) integrity('原付费请求时间、结果或来源不一致');
@@ -224,7 +226,7 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
             || !isDeepStrictEqual(identity.conferenceReaderGrant, expected)) integrity('候选费用身份与真实登记会议窗口不一致');
         usageRunId = member.grantId;
     } else if (identity.conferenceReaderGrant !== undefined) integrity('候选裸JSON不能授予会议窗口费用身份');
-    if (identity.contentMode !== 'reader-source-only-v1' || identity.conferenceReaderRetryEpoch !== 1
+    if (!require('./reader-content-mode').is(identity, 'source-only') || identity.conferenceReaderRetryEpoch !== 1
         || !repair.parseRecoveryDraft(payload.draft) || payload.attempts < 1 || payload.fullAttempts < 1) {
         return { eligible: false, reason: '没有可重放的原source-only付费正文。' };
     }
@@ -296,7 +298,7 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
             }
             sameFiles();
             const stage = paper.analysisManifest?.stages?.apiReaderArticle;
-            if (stage?.contentMode !== identity.contentMode || stage.attempts !== payload.attempts
+            if (!require('./reader-content-mode').sameMode(stage, identity) || stage.attempts !== payload.attempts
                 || stage.fullAttempts !== payload.fullAttempts || (stage.transportFailures || 0) !== (payload.transportFailures || 0)) integrity('只读重放改变了原模型尝试或费用身份');
             if (Object.entries(declaration.stageFields).some(([key, value]) => !isDeepStrictEqual(stage[key], value))
                 || ['readerRequestPolicy', 'readerJsonRequestPolicy'].some(key =>

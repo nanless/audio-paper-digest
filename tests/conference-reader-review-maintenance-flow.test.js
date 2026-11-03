@@ -1,4 +1,6 @@
 'use strict';
+const revisionIdentity=require('../scripts/lib/conference-analysis-adapter');
+const codec=require('../scripts/lib/protocol-codec');
 // Control-flow draft with explicitly synthetic source/Reader/stage dependencies.
 // Passing these tests never certifies a real paper, source or model response.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
@@ -15,17 +17,19 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
     const read=p=>{const b=fs.readFileSync(p);return {value:JSON.parse(b),sha256:sha(b)};};
     const input=fixture(),loadedParents=new Map(),surfaces=new Map(),events=[],stageCache=new Map();
     input.state.processId=input.generation.processId=input.manifest.processId=processId;input.manifest.batchId=batchId;
+    Object.assign(input.state,codec.recordHeader('conference-process','conference-process'));
     input.generation.conferenceId='synthetic-conference';
     input.manifest.window={maxRounds:3,maxAttempts:3};
     for(const m of input.manifest.members) {
         const oldId=m.parentExecutionId,parentId=uid(oldId),parent=input.parents[oldId];
-        m.parentExecutionId=parentId;m.executionId=uid(parentId+'child');
+        m.parentExecutionId=parentId;
         input.state.items[m.paperId].analysisRunId=parentId;
         const surface=input.surfaces[oldId];surfaces.set(parentId,surface);
         const paper={id:m.paperId,analysis:'protected scientific body',parsed:{score:8},apiReaderArticle:'rejected phrase '+m.paperId.slice(-1),
             sourceSha256:m.sourceSha256,analysisManifest:{stages:{apiReaderArticle:{status:'complete'},scoringAudit:{status:'complete',score:8}}}};
         const analysis={status:'complete',papers:[paper]},run={...parent.run,executionId:parentId};
-        const source={sourceDetails:{text:parent.sourceText,structuredArtifacts:{payloadSha256:sha('artifacts')}},
+        const source={sourceDetails:{text:parent.sourceText,structuredArtifacts:{
+            ...require('../scripts/lib/protocol-codec').recordHeader('conference-reader-pdf-artifacts','conference-reader-pdf-artifacts'),payloadSha256:sha('artifacts')}},
             sourceSnapshotBinding:{sourceBinding:{pdfSha256:m.pdfSha256,artifactsPayloadSha256:sha('artifacts')}},planAuthorityBinding:{synthetic:true}};
         const directory=path.join(analysisRoot,parentId);
         // Real private temp intent bytes bind the synthetic completed parent.
@@ -36,6 +40,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         for(const [name,value] of Object.entries({analysis,run,source}))write(path.join(directory,name+'.json'),value);
         m.parentCAS={analysisFileSha256:read(path.join(directory,'analysis.json')).sha256,
             runFileSha256:read(path.join(directory,'run.json')).sha256,sourceFileSha256:read(path.join(directory,'source.json')).sha256};
+        m.executionId=revisionIdentity.readerRevisionExecutionId(parentId,m.parentCAS.analysisFileSha256);
         input.state.items[m.paperId].analysisProof.analysisSha256=m.parentCAS.analysisFileSha256;
         m.reviewFeedback+='\n'+m.sourceQuotes.join('\n');m.reviewFeedbackSha256=sha(m.reviewFeedback);
     }
@@ -64,8 +69,9 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
     for(const [id,saved] of Object.entries(input.failures))write(path.join(publicationRoot,'page-review-failures',id+'.json'),saved.value);
     for(const [id,saved] of Object.entries(input.passCaches))write(path.join(publicationRoot,'page-review-passes',id+'.json'),saved.value);
     let module;const bridgeState={sourceChecks:0};
-    const adapter={READER_REVISION_CONTRACT:'conference-reader-source-revision-v1',readJsonRecord:read,
-        readerRevisionExecutionId:parentId=>uid(parentId+'child'),
+    const adapter={READER_REVISION_CONTRACT:revisionIdentity.READER_REVISION_CONTRACT,readJsonRecord:read,
+        readerRevisionExecutionId:revisionIdentity.readerRevisionExecutionId,
+        isRegisteredReaderRevisionExecutionId:revisionIdentity.isRegisteredReaderRevisionExecutionId,
         writeBytesAtomic:(p,b)=>{fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});if(fs.existsSync(p))assert.deepEqual(fs.readFileSync(p),b);else fs.writeFileSync(p,b,{mode:0o600});},
         replaceJson:(p,v,expected)=>{assert.equal(read(p).sha256,expected);write(p,v);},
         loadConferenceAnalysis:({executionId})=>{
@@ -105,7 +111,8 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
             write(path.join(directory,'run.json'),{...parent.run,executionId:m.executionId,
                 prepareIntentFileSha256:read(path.join(directory,'intent.json')).sha256,status:failure?'source_ready':'complete'});
             write(path.join(directory,'review-reader-seed.json'),module.prepareParentRevisionSeed(reviewMaintenanceHandle,parent));
-            const revision=seal({contract:_testWindow?'conference-reader-recovery-window-v1':adapter.READER_REVISION_CONTRACT,executionId:m.executionId,parentExecutionId,
+            const family=_testWindow?'conference-reader-recovery-window':adapter.READER_REVISION_CONTRACT;
+            const revision=seal({...codec.recordHeader(family,family),executionId:m.executionId,parentExecutionId,
                 parentAnalysisFileSha256:parent.analysisFileSha256,parentRunFileSha256:parent.runFileSha256,
                 paperId:m.paperId,sourceSnapshotSha256:m.sourceSnapshotSha256,mode:'reader-only',maxAttempts:3,readerReviewMaintenance:bound.locator,
                 readerReviewSeedFileSha256:read(path.join(directory,'review-reader-seed.json')).sha256,
@@ -118,13 +125,14 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         const authority=module.readMaintenanceRecoveryGrantMember(args.grantHandle,input.manifest.members.find(m=>m.parentExecutionId===args.parentExecutionId).paperId);
         return adapter.refreshConferenceReader({...args,_testExecutionId:authority.expectedExecutionId,_testWindow:{windowId:authority.grantId,manifestSha256:authority.grantSha256}});
     };
-    const recoveryMock={grantedRecoveryExecutionId:(grant,failed,hash)=>uid(grant+failed+hash),
+    const recoveryMock={windowFormatForRecord:require('../scripts/lib/conference-recovery-grant').windowFormatForRecord,grantedRecoveryExecutionId:(grant,failed,hash)=>uid(grant+failed+hash),
         recoveryWindowMaterials:(_root,executionId)=>{
             const dir=path.join(analysisRoot,executionId),files=[];
             for(const name of fs.readdirSync(dir).sort())if(fs.statSync(path.join(dir,name)).isFile())files.push({path:name,sha256:sha(fs.readFileSync(path.join(dir,name)))});
             return {files,materialsSha256:stable(files),ledgerFileSha256:null};
         }};
-    const processApi={assertState:value=>{const body=structuredClone(value);delete body.stateSha256;assert.equal(stable(body),value.stateSha256);return value;},
+    const processApi={processFormat:require('../scripts/lib/conference-process').processFormat,
+        assertState:value=>{const body=structuredClone(value);delete body.stateSha256;assert.equal(stable(body),value.stateSha256);return value;},
         stateDigest:value=>{const body=structuredClone(value);delete body.stateSha256;return stable(body);}};
     const stop={withModelRequestsForbidden:fn=>fn(),assertMayStartRequest:()=>{},requestAnalysisStop:()=>{}};
     // This portable orchestration fixture has synthetic authority. The real
@@ -153,8 +161,10 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         if(id==='node:async_hooks')return require('node:async_hooks');
         if(id==='node:child_process')return {spawnSync:(_binary,argv,options)=>{
             assert.equal(argv[argv.length-1],'3');const bytes=fs.readFileSync(options.stdio[3]),input=JSON.parse(bytes);
+            assert.ok(codec.isCurrentHeader(input,'conference-publication-figure-view-transform-input'));
+            assert.ok(codec.hasValidHeader(input.viewFormat,'conference-publication-figure-view'));
             const projected=Buffer.from(bridgeState.projected),scripts=path.join(temp,'scripts');
-            return {status:0,stdout:JSON.stringify({contract:'conference-publication-figure-view-transform-output-v1',purpose:'pure-byte-transform-only',doesNotGrantSourceOrReviewOrPublication:true,
+            return {status:0,stdout:JSON.stringify({...codec.recordHeader('conference-publication-figure-view-transform-output','conference-publication-figure-view-transform-output'),purpose:'pure-byte-transform-only',doesNotGrantSourceOrReviewOrPublication:true,
                 rawPageSha256:input.rawPageSha256,projectedPageSha256:sha(projected),projectedPageBase64:projected.toString('base64'),size:projected.length,
                 implementation:{viewModuleSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view.py'))),cliSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view_replay.py'))),nativeParserModuleSha256:bridgeState.parserShaOverride||sha(fs.readFileSync(path.join(scripts,'publish_common.py')))}})};}};
         if(id==='./conference-publication-figure-crop')return {replayPublicationFigureCropsForMaintenance:(input,handle)=>{
@@ -168,6 +178,8 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         if(id==='node:util')return {isDeepStrictEqual:(a,b)=>stable(a)===stable(b)};
         if(id==='../config')return {FILES:{conferenceAnalysisDir:analysisRoot,conferenceProcessDir:path.dirname(processDirectory),conferencePublicationDir:publicationRoot,conferencePageStagingDir:deps.files.conferencePageStagingDir,conferenceAggregateDir:path.join(runtimeRoot,'conference-aggregates')}};
         if(id==='./conference-reader-review-maintenance-evidence')return evidence;
+        if(['./protocol-codec','./llm-usage-format','./reader-content-mode','./conference-reader-pdf-identity','./conference-source-correction-format'].includes(id))
+            return require(path.join(root,'scripts/lib',id));
         if(id==='./conference-analysis-adapter')return adapter;if(id==='./conference-process')return processApi;
         // These orchestration fixtures have no scientific source correction;
         // real private parent scopes are tested in their separate suite.
@@ -176,7 +188,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         if(id==='./conference-recovery-grant')return recoveryMock;
         if(id==='./conference-reader-publication-evidence')return {replayCanonicalReaderPdfSource:()=>({syntheticSourceOnly:true})};
         if(id==='./conference-postprocess')return {readOriginalTagProof:()=>({rules:{syntheticOnly:true}})};
-        if(id==='../analysis-engine')return {hasValidApiReaderV3Records:()=>true,isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>true};
+        if(id==='../analysis-engine')return {hasValidIntegratedApiReaderRecords:()=>true,isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>true};
         if(id==='../deep-analyzer')return {prepareApiReaderRevisionSeed:(paper,source,feedback)=>({syntheticOnly:true,
             initialDraft:JSON.stringify({originalSignedArticle:paper.apiReaderArticle}),metadata:{sourceSha256:sha(source),feedbackSha256:sha(feedback)}})};
         if(id==='./conference-analysis-context')return {withConferenceAnalysisSource:(_args,fn)=>fn()};
@@ -265,7 +277,8 @@ test('synthetic independent continuation registers exact real partial-child set 
     const dir=path.join(h.batchRoot,'windows',windowId);fs.mkdirSync(dir,{recursive:true,mode:0o700});
     const progress=h.read(path.join(h.batchRoot,'progress.json'));h.write(path.join(dir,'baseline-progress.json'),progress.value);
     const material=h.recoveryMock.recoveryWindowMaterials(h.analysisRoot,member.executionId);
-    const window=seal({contract:'conference-reader-review-maintenance-window-v1',version:1,processId:h.input.manifest.processId,
+    const windowFamily='conference-reader-review-maintenance-window';
+    const window=seal({...require('../scripts/lib/protocol-codec').recordHeader(windowFamily,windowFamily),processId:h.input.manifest.processId,
         batchId:h.input.manifest.batchId,windowId,baseManifestSha256:h.input.manifest.manifestSha256,previousWindowId:null,previousWindowSha256:null,
         baselineProgressFileSha256:h.read(path.join(dir,'baseline-progress.json')).sha256,
         limits:{maxRounds:3,readerContentResponses:6,readerFullResponses:2,readerTransportAttempts:2},
@@ -276,6 +289,12 @@ test('synthetic independent continuation registers exact real partial-child set 
             expectedExecutionId:h.recoveryMock.grantedRecoveryExecutionId(windowId,member.executionId,failed.analysisFileSha256)}]},'manifestSha256');
     const filename=path.join(dir,'manifest.json');h.write(filename,window);
     const callsBefore=[...h.events],stateBeforeWindow=h.read(path.join(h.processDirectory,'state.json')).sha256;
+    const {contract,schemaFingerprint,manifestSha256,...windowBody}=window;
+    const oldUnregistered=seal({...require('../scripts/lib/protocol-codec').historicalHeader(windowFamily,
+        'registered-independent-reader-window'),...windowBody},'manifestSha256');
+    h.write(filename,oldUnregistered);
+    await assert.rejects(()=>h.module.runReaderReviewMaintenanceBatch({...args,state:h.state(),options:{concurrency:1,readerReviewWindow:filename}},h.deps),/current exact declaration/);
+    assert.equal(fs.existsSync(path.join(dir,'registration.json')),false);assert.deepEqual(h.events,callsBefore);
     const badLimits=structuredClone(window);badLimits.limits.readerContentResponses=7;seal(badLimits,'manifestSha256');h.write(filename,badLimits);
     await assert.rejects(()=>h.module.runReaderReviewMaintenanceBatch({...args,state:h.state(),options:{concurrency:1,readerReviewWindow:filename}},h.deps),/scope\/limits/);
     assert.equal(fs.existsSync(path.join(dir,'registration.json')),false);assert.deepEqual(h.events,callsBefore);
@@ -456,6 +475,7 @@ test('canonical pass cache removal or altered bytes cannot enter paid maintenanc
 });
 function migrationAdmissionHarness(h) {
     const events=[],processApi={defaultDependencies:()=>({}),assertState:v=>v,safeProcessDirectory:()=>h.processDirectory,authorityWithoutTagCatalog:()=>({}),
+        processFormat:require('../scripts/lib/conference-process').processFormat,
         stableHash:()=>{events.push('after-pending-guard');throw Error('after read-only admission marker');}};
     const requireFake=id=>{
         if(id==='node:fs')return fs;if(id==='node:path')return path;

@@ -10,16 +10,12 @@ const ledgerApi = require('./conference-source-ledger.js');
 const runApi = require('./conference-run.js');
 const importerApi = require('./conference-importer.js');
 const paperIdentity = require('./paper-identity.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
 
-const PLAN_CONTRACT = 'conference-run-plan-v3';
-const LEGACY_PLAN_CONTRACT = 'conference-run-plan-v2';
-const SELECTION_CONTRACT = 'conference-selected-members-v2';
-const SECURE_RECEIPT_CONTRACT = 'conference-run-plan-secure-receipt-v3';
-const LEGACY_SECURE_RECEIPT_CONTRACT = 'conference-run-plan-secure-receipt-v2';
-const PLAN_VERSION = 3;
-const SECURE_RECEIPT_VERSION = 3;
-const VERSION = PLAN_VERSION;
-const LEGACY_VERSION = 2;
+const PLAN_CONTRACT = codec.contract('conference-run-plan');
+const SELECTION_CONTRACT = codec.contract('conference-selected-members');
+const SECURE_RECEIPT_CONTRACT = codec.contract('conference-run-plan-secure-receipt');
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,319}$/;
@@ -116,14 +112,14 @@ function normalizeMembers(value) {
 }
 
 function normalizeSelection(value) {
-    exact(value, ['contract', 'identities', 'selectedMemberSetSha256'], 'selectionPolicy');
-    if (value.contract !== SELECTION_CONTRACT) fail('不支持该 selectionPolicy contract');
+    const header = recordHeaderFor(value, 'conference-selected-members');
+    exact(value, [...Object.keys(header), 'identities', 'selectedMemberSetSha256'], 'selectionPolicy');
     const identities = normalizeMembers(value.identities);
     const expected = stableHash(identities.map(member => member.paperId));
     if (sha(value.selectedMemberSetSha256, 'selectionPolicy.selectedMemberSetSha256') !== expected) {
         fail('selectedMemberSetSha256 与显式给出的规范论文 ID 不符');
     }
-    return { contract: value.contract, identities, selectedMemberSetSha256: expected };
+    return { ...header, identities, selectedMemberSetSha256: expected };
 }
 
 function normalizeShards(value, members) {
@@ -149,33 +145,31 @@ function normalizeShards(value, members) {
 
 function planFormat(value, receipt = false) {
     plain(value, receipt ? '计划凭证' : '会议运行计划');
-    const currentContract = receipt ? SECURE_RECEIPT_CONTRACT : PLAN_CONTRACT;
-    const currentVersion = receipt ? SECURE_RECEIPT_VERSION : PLAN_VERSION;
-    const oldContract = receipt ? LEGACY_SECURE_RECEIPT_CONTRACT : LEGACY_PLAN_CONTRACT;
-    if (value.contract === currentContract && value.version === currentVersion) return currentVersion;
-    if (value.contract === oldContract && value.version === LEGACY_VERSION) return LEGACY_VERSION;
-    fail('会议计划记录的格式标识和版本不属于支持的组合。');
+    const name = receipt ? 'conference-run-plan-secure-receipt' : 'conference-run-plan';
+    try { recordHeaderFor(value, name); return codec.format(value.contract, name, value.schemaFingerprint); }
+    catch { fail('会议计划记录的格式标识和版本不属于支持的组合。'); }
 }
 function tagMetadataField(value, format) {
     const current = Object.hasOwn(value, 'tagMetadata');
     const legacy = Object.hasOwn(value, 'taxonomy');
     if (current && legacy) fail('会议计划记录不能混用新旧标签字段。');
-    if ((format === PLAN_VERSION && legacy) || (format === LEGACY_VERSION && current)) {
+    if ((format === 'tag-metadata' && legacy) || (format === 'taxonomy' && current)) {
         fail('会议计划记录的标签字段与格式版本不一致。');
     }
-    return format === LEGACY_VERSION ? 'taxonomy' : 'tagMetadata';
+    return format === 'taxonomy' ? 'taxonomy' : 'tagMetadata';
 }
 function normalizePlan(value) {
     const format = planFormat(value);
     const tagField = tagMetadataField(value, format);
-    exact(value, ['contract', 'version', 'ledgerName', tagField, 'selectionPolicy', 'shards'], '会议运行计划');
+    const header = recordHeaderFor(value, 'conference-run-plan');
+    exact(value, [...Object.keys(header), 'ledgerName', tagField, 'selectionPolicy', 'shards'], '会议运行计划');
     const ledgerName = safeName(value.ledgerName, '计划 ledgerName');
     exact(value[tagField], ['version', 'sha256'], '计划中的标签词表');
     if (typeof value[tagField].version !== 'string' || !value[tagField].version.trim()) fail('计划中的标签词表版本不能为空。');
     const tagCatalogIdentity = { version: value[tagField].version, sha256: sha(value[tagField].sha256, '计划中的词表 SHA') };
     const selectionPolicy = normalizeSelection(value.selectionPolicy);
     const shards = normalizeShards(value.shards, selectionPolicy.identities);
-    return { contract: value.contract, version: value.version, ledgerName, [tagField]: tagCatalogIdentity, selectionPolicy, shards };
+    return { ...header, ledgerName, [tagField]: tagCatalogIdentity, selectionPolicy, shards };
 }
 function tagMetadataForPlan(value) {
     const plan = normalizePlan(value);
@@ -201,7 +195,7 @@ function readTagCatalogFile(filename) {
 function readProofTagCatalogFile(metadata, currentPath) {
     const current = readTagCatalogFile(currentPath);
     if (metadata.sha256 === current.sha256) {
-        if (metadata.version !== current.value.version) fail('计划凭证中的词表版本与原文件不一致。');
+        if (metadata.version !== require('./tag-catalog').tagCatalogIdentity(current.value)) fail('计划凭证中的词表版本与原文件不一致。');
         return current;
     }
     // 这只是原来源计划的只读重放，不授予旧分类的沿用资格。旧 taxonomy-v1
@@ -214,7 +208,7 @@ function readProofTagCatalogFile(metadata, currentPath) {
     const original = readTagCatalogFile(path.join(historyDir, `${metadata.sha256}.json`));
     if (original.sha256 !== metadata.sha256) fail('计划凭证中的词表归档 SHA 与原文件不一致。');
     const prior = tagCatalogApi.loadTagCatalog(path.join(historyDir, `${metadata.sha256}.json`));
-    if (prior.registrySha256 !== original.sha256 || metadata.version !== prior.version) {
+    if (prior.registrySha256 !== original.sha256 || metadata.version !== tagCatalogApi.tagCatalogIdentity(prior)) {
         fail('计划凭证中的词表版本或原文件 SHA 与归档不一致。');
     }
     return original;
@@ -243,7 +237,8 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
     catch (error) { throw fail(error.message); }
     const imported = authority.snapshot;
     const loadedPlan = readRuntimeJson(files.conferenceSourceLedgerDir, planName);
-    if (loadedPlan.value.contract === LEGACY_PLAN_CONTRACT && loadedPlan.value.version === LEGACY_VERSION) {
+    normalizePlan(loadedPlan.value);
+    if (loadedPlan.value.contract !== PLAN_CONTRACT) {
         // 旧裸计划不能创建新运行；只返回已完整核验的原文件对。
         const runFile = safeRuntimeFile(files.conferenceRunsDir, runName);
         const receiptName = receiptNameFor(runName);
@@ -285,7 +280,7 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
     const runBytes = serialize(run); const runSha256 = sha256(runBytes);
     const stagedReceipt = imported.staging.receipt;
     const receiptBody = {
-        contract: SECURE_RECEIPT_CONTRACT, version: SECURE_RECEIPT_VERSION, planName, planSha256: loadedPlan.sha256,
+        ...codec.recordHeader(SECURE_RECEIPT_CONTRACT, 'conference-run-plan-secure-receipt'), planName, planSha256: loadedPlan.sha256,
         ledger: { name: ledgerName, sha256: imported.ledgerSha256, memberSetSha256: imported.ledger.memberSetSha256 },
         tagMetadata: clone(plan.tagMetadata),
         filter: { filterId: stagedReceipt.selection.filterId, catalogSha256: stagedReceipt.selection.catalogSha256,
@@ -315,7 +310,7 @@ function normalizeSecureReceipt(value) {
     if (sha(value.receiptSha256, '计划凭证 receiptSha256') !== receiptDigest(value)) fail('计划凭证的 SHA 与其内容不符');
     const format = planFormat(value, true);
     const tagField = tagMetadataField(value, format);
-    exact(value, ['contract', 'version', 'planName', 'planSha256', 'ledger', tagField, 'filter', 'staging',
+    exact(value, [...Object.keys(recordHeaderFor(value, 'conference-run-plan-secure-receipt')), 'planName', 'planSha256', 'ledger', tagField, 'filter', 'staging',
         'import', 'members', 'shards', 'run', 'receiptSha256'], '计划凭证');
     safeName(value.planName, '计划凭证 planName'); sha(value.planSha256, '计划凭证 planSha256');
     exact(value.ledger, ['name', 'sha256', 'memberSetSha256'], '计划凭证 ledger'); safeName(value.ledger.name, 'ledger.name');
@@ -349,7 +344,9 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
     if (rawReceipt.run?.name !== path.basename(runFile) || rawReceipt.run?.sha256 !== loadedRun.sha256) fail('计划凭证未绑定精确的运行文件');
     if (rawReceipt.planName !== path.basename(planFile) || rawReceipt.planSha256 !== loadedPlan.sha256) fail('计划凭证未绑定已审计划文件的确切文件名和字节');
     const receipt = normalizeSecureReceipt(rawReceipt); const plan = normalizePlan(loadedPlan.value);
-    if (plan.version !== receipt.version) fail('会议计划与凭证的格式版本不一致。');
+    if (planFormat(plan) !== planFormat(receipt, true)
+        || (plan.contract === PLAN_CONTRACT) !== (receipt.contract === SECURE_RECEIPT_CONTRACT)
+        || plan.version !== receipt.version) fail('会议计划与凭证的格式版本不一致。');
     const receiptTags = tagMetadataForReceipt(receipt);
     const planTags = tagMetadataForPlan(plan);
     const imported = authority.snapshot; const tagCatalogFile = readProofTagCatalogFile(receiptTags, tagCatalogPath);
@@ -376,7 +373,9 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
         || stableHash(receipt.import) !== stableHash(expectedImport)) fail('计划凭证的上游来源发生变化');
     const run = runApi.assertConferenceRunFromVerifiedLedger(loadedRun.value, authority.ledgerHandle);
     if (run.version !== plan.version
-        || (run.version === runApi.RUN_VERSION && runApi.tagCatalogVersionForRun(run) !== planTags.version)) {
+        || (run.contract === runApi.CONTRACT) !== (plan.contract === PLAN_CONTRACT)
+        || (runApi.runFormat(run) === 'taxonomy') !== (planFormat(plan) === 'taxonomy')
+        || (runApi.runFormat(run) !== 'taxonomy' && runApi.tagCatalogVersionForRun(run) !== planTags.version)) {
         fail('会议运行记录与已核计划的格式或词表版本不一致。');
     }
     if (run.ledgerSha256 !== imported.ledgerSha256 || run.ledgerSha256 !== receipt.ledger.sha256) {
@@ -429,9 +428,10 @@ function planHandleReadOnlyMember(handle, paperId) {
 }
 
 function applyRunPlan(result, io = fs) {
-    if (result.recovered || result.plan?.contract !== PLAN_CONTRACT || result.plan?.version !== PLAN_VERSION
-        || result.run?.contract !== runApi.CONTRACT || result.run?.version !== runApi.RUN_VERSION
-        || result.receipt?.contract !== SECURE_RECEIPT_CONTRACT || result.receipt?.version !== SECURE_RECEIPT_VERSION) fail('旧计划只能读取或恢复已有文件，不能新建运行文件。');
+    if (result.recovered || result.plan?.contract !== PLAN_CONTRACT
+        || result.run?.contract !== runApi.CONTRACT
+        || result.receipt?.contract !== SECURE_RECEIPT_CONTRACT) fail('旧计划只能读取或恢复已有文件，不能新建运行文件。');
+    normalizePlan(result.plan); runApi.assertConferenceRun(result.run); normalizeSecureReceipt(result.receipt);
     const outputDirectory = path.dirname(result.runFile);
     if (path.dirname(result.receiptFile) !== outputDirectory) fail('运行与计划凭证必须位于同一个运行目录');
     let createdDirectory = false;
@@ -511,8 +511,7 @@ function report(result, { applied = false } = {}) {
         receiptName: result.receiptName, receiptSha256: result.receiptSha256, runIdentitySha256: result.run.identitySha256 };
 }
 
-module.exports = { PLAN_CONTRACT, LEGACY_PLAN_CONTRACT, SELECTION_CONTRACT, SECURE_RECEIPT_CONTRACT,
-    LEGACY_SECURE_RECEIPT_CONTRACT, VERSION, PLAN_VERSION, SECURE_RECEIPT_VERSION, LEGACY_VERSION,
+module.exports = { PLAN_CONTRACT, SELECTION_CONTRACT, SECURE_RECEIPT_CONTRACT, planFormat,
     tagMetadataForPlan, tagMetadataForReceipt, readProofTagCatalogFile, SAFE_JSON_NAME, stableHash,
     safeRuntimeFile, readRuntimeJson, normalizePlan, receiptDigest, receiptNameFor,
     createRunFromImportPlan, normalizeSecureReceipt, loadPlanHandle, planHandleSnapshot, planHandleAuthority,

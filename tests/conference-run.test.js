@@ -8,6 +8,7 @@ const path = require('node:path');
 const conference = require('../scripts/lib/conference-run.js');
 const ledgerApi = require('../scripts/lib/conference-source-ledger.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
+const codec = require('../scripts/lib/protocol-codec');
 const { loadOriginalConferenceApis } = require('./helpers/conference-production-plan-fixture.js');
 
 const sha = value => conference.sha256(value);
@@ -50,7 +51,7 @@ function boundRun(states) {
     return { run, ledger, ledgerSha256, ledgerHandle };
 }
 function projection(paperId) {
-    const value = { contract: conference.PAPER_PROJECTION_CONTRACT, paperId,
+    const value = { ...codec.recordHeader(conference.PAPER_PROJECTION_CONTRACT, 'conference-paper-projection'), paperId,
         sourceSha256: sha(`source:${paperId}`), readerSha256: sha(`reader:${paperId}`),
         tagMetadataSha256: sha(`tag metadata:${paperId}`), scoringSha256: sha(`scoring:${paperId}`),
         publicationSha256: sha(`publication:${paperId}`), summary: { title: `Title ${paperId}`, score: 9.2 } };
@@ -59,7 +60,8 @@ function projection(paperId) {
 test('会议运行冻结有序的成员和来源身份、成员摘要，以及完整且互不重叠的分片', () => {
     const run = conference.createConferenceRun(base());
     assert.equal(run.contract, conference.CONTRACT);
-    assert.equal(run.version, 3);
+    assert.equal(run.schemaFingerprint, codec.schemaFingerprint('conference-run'));
+    assert.equal(Object.hasOwn(run, 'version'), false);
     assert.equal(run.tagCatalogVersion, base().tagCatalogVersion);
     assert.equal(Object.hasOwn(run, 'taxonomyVersion'), false);
     assert.deepEqual(run.members.map(member => member.paperId), [pid('100'), pid('200'), pid('300')]);
@@ -77,9 +79,9 @@ test('运行和论文记录拒绝混用不同版本的标签字段', () => {
         assert.throws(() => conference.createConferenceRun({ ...base(), taxonomyVersion: oldValue }), /不能混用新旧词表版本字段/);
     }
     const run = conference.createConferenceRun(base());
-    for (const [contract, version] of [[conference.CONTRACT, 2], ['conference-run-v9', 3]]) {
-        assert.throws(() => conference.assertConferenceRun({ ...run, contract, version }), /不属于支持的组合/);
-    }
+    assert.throws(() => conference.assertConferenceRun({ ...run, version: 2 }), /unknown or missing fields/);
+    assert.throws(() => conference.assertConferenceRun({ ...run, contract: 'unsupported-conference-run' }), /不属于支持的组合/);
+    assert.throws(() => conference.assertConferenceRun({ ...run, schemaFingerprint: '0'.repeat(64) }), /不属于支持的组合/);
     const record = projection(pid('100'));
     assert.deepEqual(conference.normalizeConferencePaperRecord(record, pid('100')), record);
     assert.equal(Object.hasOwn(record, 'taxonomySha256'), false);
@@ -188,7 +190,8 @@ test('交接给汇总的内容始终只是草稿，每个不完整的成员都�
     const one = conference.buildConferenceAggregateInput(run, context);
     const two = conference.buildConferenceAggregateInput(conference.assertConferenceRun(run), context);
     assert.deepEqual(one, two);
-    assert.equal(one.version, 3);
+    assert.equal(one.schemaFingerprint, codec.schemaFingerprint('conference-summary-input'));
+    assert.equal(Object.hasOwn(one, 'version'), false);
     assert.equal(one.tagCatalogVersion, run.tagCatalogVersion);
     assert.equal(Object.hasOwn(one, 'taxonomyVersion'), false);
     assert.equal(one.status, 'partial'); assert.equal(one.publicationEligible, false);

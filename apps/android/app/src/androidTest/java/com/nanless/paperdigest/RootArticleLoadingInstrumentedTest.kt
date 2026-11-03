@@ -44,6 +44,7 @@ class RootArticleLoadingInstrumentedTest {
         }
         val root=RootController(context,false,secrets){ctx,store->
             CatalogRepository(ctx,store){url,_->when(url){
+                CatalogRepository.SITE+"client/index.json"->throw PublishedHttpStatus(404)
                 CatalogRepository.SITE+"index.json"->{indexRequests.incrementAndGet();indexStarted.complete(Unit);if(holdIndex)releaseIndex.await();if(failIndex)error("Synthetic index unavailable");manifest.toString().toByteArray()}
                 CatalogRepository.SITE+"search-index/part-0001-${shardSHA.take(12)}.json"->shard
                 first->{if(holdFirstPage){firstPageStarted.complete(Unit);try{awaitCancellation()}finally{firstPageStopped.complete(Unit)}}

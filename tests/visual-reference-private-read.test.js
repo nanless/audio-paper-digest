@@ -74,7 +74,7 @@ try {
     let failure;
     let references;
     try {
-        references = require(path.join(root, 'scripts/visual-summary-state'))
+        references = require(path.join(root, 'scripts/lib/historical-visual-records'))
             .selectVisualReferenceImages(paper);
     } catch (error) {
         failure = { message: error.message, code: error.code || null };

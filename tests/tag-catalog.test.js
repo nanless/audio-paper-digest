@@ -5,19 +5,20 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { loadTagCatalog, validateTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/tag-catalog.js');
+const { tagCatalogIdentity, loadTagCatalog, validateTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/tag-catalog.js');
 const registryPath = path.join(__dirname, '../config/tag-catalog.json');
 const raw = () => JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 const concept = (r, id) => r.concepts.find(c => c.id === id);
 
 test('当前词表包含全部九个 facet 和已定义的概念', () => {
     const r = loadTagCatalog(registryPath);
-    assert.equal(r.version, 'paper-tag-catalog-v2');
+    assert.equal(tagCatalogIdentity(r), 'paper-tag-catalog');
+    assert.match(r.schemaFingerprint,/^[a-f0-9]{64}$/);
     assert.equal(r.facets.length, 9);
     // 当前生产选择范围与已批准展示的完整目录一致，包含暂时计数为零的方向。
     assert.equal(r.concepts.length, 386);
     assert.equal(r.registrySha256, crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'));
-    assert.equal(validateTagCatalog(raw()).version, r.version);
+    assert.equal(tagCatalogIdentity(validateTagCatalog(raw())), tagCatalogIdentity(r));
 });
 
 test('归一化只做 NFKC、去掉一个 #、去首尾空白和 ASCII 小写，不做模糊匹配', () => {
@@ -161,7 +162,8 @@ test('默认加载要求当前词表，显式加载旧版词表时保留它的�
     const previousPath = config.FILES.tagCatalogFile;
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-catalog-version-'));
     const target = path.join(directory, 'legacy.json');
-    const legacy = { ...raw(), version: 'paper-taxonomy-v1' };
+    const value=raw();
+    const legacy = {version:'paper-taxonomy-v1',facets:value.facets,concepts:value.concepts};
     const bytes = Buffer.from(JSON.stringify(legacy));
     fs.writeFileSync(target, bytes);
     try {
@@ -169,9 +171,9 @@ test('默认加载要求当前词表，显式加载旧版词表时保留它的�
         assert.equal(loaded.version, 'paper-taxonomy-v1');
         assert.equal(loaded.registrySha256, crypto.createHash('sha256').update(bytes).digest('hex'));
         config.FILES.tagCatalogFile = target;
-        assert.throws(() => loadTagCatalog(), /当前标签词表必须使用 paper-tag-catalog-v2/);
+        assert.throws(() => loadTagCatalog(), /当前标签词表必须使用现行稳定协议和结构指纹/);
         assert.throws(() => require('../scripts/lib/tag-rules.js').createTagRules(),
-            /当前标签词表必须使用 paper-tag-catalog-v2/);
+            /当前标签词表必须使用现行稳定协议和结构指纹/);
         for (const version of [null, '', 'paper-tag-catalog-v3', 2, [], {}]) {
             assert.throws(() => validateTagCatalog({ ...legacy, version }), /版本不受支持/);
         }

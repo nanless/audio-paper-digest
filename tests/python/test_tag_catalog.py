@@ -14,7 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from tag_catalog import (FACET_IDS, LABEL_MODE_LEGACY, TAG_FLAT_COMPAT_CONTRACT,
+from tag_catalog import (tag_catalog_identity, FACET_IDS, LABEL_MODE_LEGACY, TAG_FLAT_COMPAT_CONTRACT,
                             LEGACY_TAG_FLAT_COMPAT_CONTRACT,
                             TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT,
                             build_tag_prompt_text, tag_prompt_text_sha256,
@@ -44,6 +44,29 @@ def registry():
 
 
 class RegistryTest(unittest.TestCase):
+    def test_same_stable_name_keeps_its_original_registered_schema_fingerprint(self):
+        # Synthetic format evolution exercises readers; it cannot mint source evidence.
+        import protocol_codec
+        import tag_catalog
+        declaration=json.loads((ROOT/'config/protocols/clients.json').read_text())
+        family=next(item for item in declaration['protocols'] if item['name']=='paper-tag-catalog')
+        original=tag_catalog._validate_tag_catalog_content(load_tag_catalog())
+        original_header=tag_catalog.catalog_header(original)
+        family['historical'].append({'tag':family['name'],'variant':family['currentVariant'],
+                                     'header':original_header,'schema':copy.deepcopy(family['currentSchema'])})
+        family['currentSchema']['formatReview']='synthetic-header-reader-regression'
+        evolved=protocol_codec.Codec([declaration,json.loads((ROOT/'config/protocols/tags.json').read_text())])
+        current={**original,**evolved.record_header(family['name'],family['name'])}
+        before=copy.deepcopy(original)
+        with mock.patch.object(protocol_codec,'_shared',evolved):
+            self.assertEqual(tag_catalog.catalog_header(original),original_header)
+            self.assertEqual(tag_catalog.catalog_header(current),evolved.record_header(family['name'],family['name']))
+            self.assertTrue(tag_catalog.is_catalog_upgrade(original,current))
+            self.assertTrue(tag_catalog.is_header_only_catalog_migration(original,current))
+            with self.assertRaises(ValueError):
+                tag_catalog.validate_tag_catalog({**original,'schemaFingerprint':'0'*64})
+        self.assertEqual(original,before)
+
     def test_archived_catalog_requires_real_bytes_safe_path_and_retains_strict_append_policy(self):
         from tag_catalog import load_archived_tag_catalog, resolve_append_only_proof_catalog
         with tempfile.TemporaryDirectory() as directory:
@@ -148,6 +171,8 @@ class RegistryTest(unittest.TestCase):
         new_lines[3] = ('只能选择以下已启用概念的中文首选标签。ID 用于区分概念；'
                         '不要创建新标签，也不要改用同义词。\n')
         new_text = ''.join(new_lines)
+        self.assertEqual(build_tag_prompt_text(catalog, 'paper-tag-prompt-text-v2'), new_text)
+        new_text = new_text.replace('contract=paper-tag-prompt-text-v2\n','contract=paper-tag-prompt-text\n',1)
         self.assertEqual(build_tag_prompt_text(catalog), new_text)
         self.assertEqual(build_tag_prompt_text(catalog, TAG_PROMPT_TEXT_CONTRACT), new_text)
         self.assertEqual(tag_prompt_text_sha256(catalog),
@@ -160,7 +185,7 @@ class RegistryTest(unittest.TestCase):
                     tag_prompt_text_sha256(catalog, contract)
 
     def test_catalog_versions_keep_explicit_legacy_bytes_and_require_current_default(self):
-        self.assertEqual(load_tag_catalog()['version'], 'paper-tag-catalog-v2')
+        self.assertEqual(tag_catalog_identity(load_tag_catalog()), 'paper-tag-catalog')
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'legacy.json'
             raw = json.dumps(registry(), ensure_ascii=False).encode('utf-8')
@@ -169,7 +194,7 @@ class RegistryTest(unittest.TestCase):
             self.assertEqual(loaded['version'], 'paper-taxonomy-v1')
             self.assertEqual(loaded['registrySha256'], hashlib.sha256(raw).hexdigest())
             with mock.patch('tag_paths.TAG_CATALOG_FILE', target):
-                with self.assertRaisesRegex(ValueError, '当前标签词表必须使用 paper-tag-catalog-v2'):
+                with self.assertRaisesRegex(ValueError, '当前标签词表必须使用现行稳定协议和结构指纹'):
                     load_tag_catalog()
         for version in (None, '', 'paper-tag-catalog-v3', 2, [], {}):
             data = registry()
@@ -180,7 +205,7 @@ class RegistryTest(unittest.TestCase):
     def test_flat_hugo_compat_contract_is_versioned(self):
         self.assertEqual(
             TAG_FLAT_COMPAT_CONTRACT,
-            'paper-tag-flat-tags-v2',
+            'paper-tag-flat-tags',
         )
 
         self.assertEqual(LEGACY_TAG_FLAT_COMPAT_CONTRACT, 'paper-taxonomy-flat-tags-compat-v1')

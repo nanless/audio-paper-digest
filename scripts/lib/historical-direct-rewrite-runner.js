@@ -16,17 +16,18 @@ const directContext = require('./direct-rewrite-analysis-context.js');
 const directPages = require('./historical-direct-page-staging.js');
 const pdfLayout = require('./pdf-layout.js');
 const { classifyFailure, analysisFailureFromRecord } = require('./workflow-error-policy.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
 const CONFERENCE_VISUAL_PAGE_LIMIT = 6;
-const CONTRACT = 'historical-direct-rewrite-execution-v1';
-const REGISTRY_CONTRACT = 'historical-direct-rewrite-execution-registry-v1';
-const STAGING_CONTRACT = 'historical-direct-rewrite-staging-v1';
-const ANALYSIS_RECOVERY_CONTRACT = 'historical-direct-analysis-recovery-v1';
+const REGISTRY_CONTRACT = codec.contract('historical-direct-rewrite-execution-registry');
+const STAGING_CONTRACT = codec.contract('historical-direct-rewrite-staging');
+const ANALYSIS_RECOVERY_CONTRACT = codec.contract('historical-direct-analysis-recovery');
 const LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT = 'historical-direct-legacy-paper-lock-reclaim-intent-v1';
 const LEGACY_PAPER_LOCK_RECLAIM_COMPLETION_CONTRACT = 'historical-direct-legacy-paper-lock-reclaim-completion-v1';
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
-const PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1';
+const PUBLICATION_SOURCE_CONTRACT = codec.contract('historical-direct-publication-source');
 const SHA = /^[a-f0-9]{64}$/;
 const STATES = new Set(['pending', 'sourcing', 'source_ready', 'analyzing', 'analysis_partial', 'analysis_complete', 'staged', 'failed']);
 const TRANSITIONS = new Map([
@@ -47,6 +48,10 @@ class HistoricalDirectRewriteRunnerError extends Error {
     constructor(message) { super(`Historical direct rewrite execution rejected: ${message}`); this.code = 'HISTORICAL_DIRECT_REWRITE_EXECUTION_INTEGRITY'; }
 }
 const fail = message => { throw new HistoricalDirectRewriteRunnerError(message); };
+function readFormatHeader(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`format header invalid: ${error.message}`); }
+}
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => structuredClone(value);
 const persistenceScope = new AsyncLocalStorage();
@@ -295,18 +300,18 @@ function analysisRecoveryRecord({ item, sourceDescriptor, record, updatedAt }) {
     }
     directContext.assertNoPersistentFigureFields(record);
     const retained = clone(record);
-    const body = { contract: ANALYSIS_RECOVERY_CONTRACT, version: 1, paperId: item.paperId,
+    const body = { ...codec.recordHeader(ANALYSIS_RECOVERY_CONTRACT, 'historical-direct-analysis-recovery'), paperId: item.paperId,
         runId: item.runId, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
         updatedAt, record: retained, recordSha256: stableHash(retained) };
     return { ...body, recoverySha256: stableHash(body) };
 }
 
 function normalizeAnalysisRecovery(value, { item, sourceDescriptor }) {
-    const fields = ['contract', 'version', 'paperId', 'runId', 'sourceSnapshotSha256', 'updatedAt',
+    const header = readFormatHeader(value, 'historical-direct-analysis-recovery');
+    const fields = [...Object.keys(header), 'paperId', 'runId', 'sourceSnapshotSha256', 'updatedAt',
         'record', 'recordSha256', 'recoverySha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')
-        || value.contract !== ANALYSIS_RECOVERY_CONTRACT || value.version !== 1
         || value.paperId !== item.paperId || value.runId !== item.runId
         || value.sourceSnapshotSha256 !== sourceDescriptor.sourceSnapshotSha256
         || Number.isNaN(Date.parse(value.updatedAt || '')) || new Date(value.updatedAt).toISOString() !== value.updatedAt
@@ -599,11 +604,15 @@ function initialRegistry(plan, now) {
     const entries = plan.queue.map(item => ({ paperId: item.paperId, runId: item.runId, route: item.route.kind,
         projectionSha256: item.projectionSha256, status: 'pending', source: null, analysis: null, staging: null,
         attempts: 0, latestError: null, updatedAt: now })).sort((a, b) => a.paperId.localeCompare(b.paperId));
-    const body = { contract: REGISTRY_CONTRACT, version: 1, planSha256: plan.planSha256, createdAt: now, entries };
+    const body = { ...codec.recordHeader(REGISTRY_CONTRACT, 'historical-direct-rewrite-execution-registry'), planSha256: plan.planSha256, createdAt: now, entries };
     return { ...body, registrySha256: stableHash(body) };
 }
 function normalizeRegistry(value, plan) {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || value.contract !== REGISTRY_CONTRACT || value.version !== 1
+    const header = readFormatHeader(value, 'historical-direct-rewrite-execution-registry');
+    if (value.contract === REGISTRY_CONTRACT) {
+        exactObjectKeys(value, [...Object.keys(header), 'planSha256', 'createdAt', 'entries', 'registrySha256'], 'registry');
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)
         || value.planSha256 !== plan.planSha256 || !Array.isArray(value.entries) || !SHA.test(String(value.registrySha256 || ''))) {
         fail('registry envelope is invalid');
     }
@@ -641,7 +650,7 @@ function transition(registry, plan, paperId, status, changes, now) {
     // 部分恢复记录之后，用它把已进入终态的暂存 registry 还原成规范字段集。
     for (const [key, value] of Object.entries(updates)) if (value === undefined) delete next[key];
     const entries = current.entries.slice(); entries[index] = next;
-    const body = { contract: REGISTRY_CONTRACT, version: 1, planSha256: current.planSha256, createdAt: current.createdAt, entries };
+    const body = { ...readFormatHeader(current, 'historical-direct-rewrite-execution-registry'), planSha256: current.planSha256, createdAt: current.createdAt, entries };
     return { ...body, registrySha256: stableHash(body) };
 }
 
@@ -654,7 +663,9 @@ function compactSourceDescriptor(route, source, item = null) {
     if (route === 'arxiv-fresh-fetch') {
         const details = source.runtimeDetails || fallbackArxivDetails(source);
         const sourceManifestSha256 = source.sourceManifestSha256 || sha256(Buffer.from(JSON.stringify(source.manifest)));
-        const sourceBinding = planApi.normalizeFreshArxivSourceBinding(item, { contract: planApi.FRESH_ARXIV_SOURCE_CONTRACT,
+        const bindingTag = source.manifest.contract === freshArxiv.CONTRACT ? planApi.FRESH_ARXIV_SOURCE_CONTRACT
+            : codec.historicalContract('fresh-arxiv-rewrite-source', 'source-binding');
+        const sourceBinding = planApi.normalizeFreshArxivSourceBinding(item, { ...codec.recordHeader(bindingTag, 'fresh-arxiv-rewrite-source'),
             paperId: source.paperId, arxivId: source.arxivId, generation: source.generation,
             textSha256: source.manifest.text.responseSha256, pdfSha256: source.manifest.pdf.responseSha256, sourceManifestSha256 });
         return { kind: route, paperId: source.paperId, generation: source.generation,
@@ -824,8 +835,7 @@ function publicationSourceFor(item, sourceDetails, sourceDescriptor, options = {
     }
     const abstract = sealed.abstract; const metadataSidecar = clone(sealed.proof);
     const result = {
-        contract: PUBLICATION_SOURCE_CONTRACT,
-        version: 1,
+        ...codec.recordHeader(PUBLICATION_SOURCE_CONTRACT, 'historical-direct-publication-source'),
         paperId: item.paperId,
         sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
         sourceTextSha256: sourceDescriptor.textSha256,
@@ -1378,7 +1388,7 @@ function recoverInterruptedRegistryEntry({ registry, plan, item, generation, exe
         }
     }
     const normalizedStatus = recovery ? 'analysis_partial' : 'failed';
-    const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+    const audit = { ...codec.recordHeader(codec.contract('historical-direct-crash-recovery'), 'historical-direct-crash-recovery'),
         paperId: item.paperId, runId: item.runId, generation, fromStatus, normalizedStatus,
         recoveryStatus, sourceSnapshotSha256: SHA.test(String(active.source?.sourceSnapshotSha256 || ''))
             ? active.source.sourceSnapshotSha256 : null,
@@ -1517,8 +1527,7 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
         ...completed,
         analysisReceipt,
         surfaceRepair: {
-            contract: 'historical-direct-completed-analysis-surface-reseal-v1',
-            version: 1,
+            ...codec.recordHeader(codec.contract('historical-direct-completed-analysis-surface-reseal'), 'historical-direct-completed-analysis-surface-reseal'),
             beforeRecordSha256,
             afterRecordSha256: analysisRecordSha256,
             analysisFileSha256,
@@ -1541,7 +1550,7 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis,
     if (!engine.isSuccessfulAnalysisRecord(analysis)) {
         fail(`${item.paperId} analysis is incomplete or failed; refusing staging`);
     }
-    if (!engine.hasValidApiReaderV3Records(analysis)) {
+    if (!engine.hasValidIntegratedApiReaderRecords(analysis)) {
         fail(`${item.paperId} API Reader/provenance is incomplete; refusing staging`);
     }
     const expected = buildDirectSourceRecord(item, sourceDescriptor);
@@ -1600,7 +1609,7 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
         item, sourceDescriptor, rendererImplementationSha256,
         analysisRecordSha256: artifact.analysisRecordSha256 });
     const routeDirectory = directories.rendererDirectory;
-    const body = { contract: STAGING_CONTRACT, version: 1, paperId: item.paperId, runId: item.runId,
+    const body = { ...codec.recordHeader(STAGING_CONTRACT, 'historical-direct-rewrite-staging'), paperId: item.paperId, runId: item.runId,
         analysisArtifact: artifact, publicationSource,
         stagingBinding: binding, stagingBindingSha256: stableHash(binding) };
     let directory = routeDirectory;
@@ -1851,7 +1860,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     latestError: `[crash-recovery] ${detail}`
                 }, clock());
                 persist();
-                const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+                const audit = { ...codec.recordHeader(codec.contract('historical-direct-crash-recovery'), 'historical-direct-crash-recovery'),
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
                     fromStatus: replayFromStatus, normalizedStatus: 'failed',
                     recoveryStatus: 'completed-analysis-invalid',
@@ -1876,7 +1885,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     staging, latestError: null
                 }, clock());
                 persist();
-                const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+                const audit = { ...codec.recordHeader(codec.contract('historical-direct-crash-recovery'), 'historical-direct-crash-recovery'),
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
                     fromStatus: rendererRestaging ? 'staged' : replayFromStatus, normalizedStatus: 'staged',
                     recoveryStatus: rendererRestaging ? 'renderer-restaged'
@@ -1907,7 +1916,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     latestError: `[crash-recovery] ${detail}`
                 }, clock());
                 persist();
-                const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+                const audit = { ...codec.recordHeader(codec.contract('historical-direct-crash-recovery'), 'historical-direct-crash-recovery'),
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
                     fromStatus: replayFromStatus, normalizedStatus: 'failed',
                     recoveryStatus: 'completed-analysis-staging-failed',
@@ -2157,7 +2166,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 const result = await runOne(item); attemptsThisRun += 1;
                 processedPaperIds.add(item.paperId); completedThisRun = processedPaperIds.size;
                 const current = normalizeRegistry(registry, plan); const counts = registryCounts(current);
-                const event = { contract: 'historical-direct-rewrite-progress-v1', version: 1,
+                const event = { ...codec.recordHeader(codec.contract('historical-direct-rewrite-progress'), 'historical-direct-rewrite-progress'),
                     planSha256: plan.planSha256, arxivGeneration, queue: selection.queue,
                     selectedCount: selected.length, completedThisRun, attemptsThisRun,
                     round: roundContext.round,
@@ -2250,7 +2259,7 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
     return result;
 }
 
-module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOVERY_CONTRACT,
+module.exports = { REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOVERY_CONTRACT,
     readVerifiedHistoricalReaderPdfSource,
     replayHistoricalReaderPdfSource,
     PUBLICATION_SOURCE_CONTRACT,

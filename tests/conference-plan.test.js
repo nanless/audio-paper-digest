@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const codec = require('../scripts/lib/protocol-codec');
 const plan = require('../scripts/lib/conference-plan.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
 const fs = require('node:fs');
@@ -13,17 +14,17 @@ const paperId = paperIdentity.canonicalConferencePaperId(
 const identities = [{ paperId, sourceIdentity: 'icassp-arnumber:1001' }];
 const selectedMemberSetSha256 = plan.stableHash([paperId]);
 const valid = () => ({
-    contract: plan.PLAN_CONTRACT,
-    version: plan.VERSION,
+    ...codec.recordHeader(plan.PLAN_CONTRACT, 'conference-run-plan'),
     ledgerName: 'icassp-2026.json',
     tagMetadata: { version: 'paper-tag-catalog-v2', sha256: 'a'.repeat(64) },
-    selectionPolicy: { contract: plan.SELECTION_CONTRACT, identities, selectedMemberSetSha256 },
+    selectionPolicy: { ...codec.recordHeader(plan.SELECTION_CONTRACT, 'conference-selected-members'), identities, selectedMemberSetSha256 },
     shards: [{ shardId: 'all', paperIds: [paperId] }]
 });
 
 test('新版计划逐项核验入选论文，并要求分片完整覆盖', () => {
     assert.deepEqual(plan.normalizePlan(valid()), valid());
-    assert.equal(valid().version, 3);
+    assert.equal(valid().schemaFingerprint, codec.schemaFingerprint('conference-run-plan'));
+    assert.equal(Object.hasOwn(valid(), 'version'), false);
     assert.equal(Object.hasOwn(valid(), 'taxonomy'), false);
     const drift = valid(); drift.selectionPolicy.selectedMemberSetSha256 = 'b'.repeat(64);
     assert.throws(() => plan.normalizePlan(drift), /selectedMemberSetSha256/);
@@ -35,9 +36,9 @@ test('计划拒绝混用标签字段，并核对格式与版本', () => {
     for (const legacyValue of [valid().tagMetadata, null]) {
         assert.throws(() => plan.normalizePlan({ ...valid(), taxonomy: legacyValue }), /不能混用新旧标签字段/);
     }
-    for (const [contract, version] of [[plan.PLAN_CONTRACT, 2], ['conference-run-plan-v9', 3]]) {
-        assert.throws(() => plan.normalizePlan({ ...valid(), contract, version }), /不属于支持的组合/);
-    }
+    assert.throws(() => plan.normalizePlan({ ...valid(), version: 2 }), /包含未允许的字段/);
+    assert.throws(() => plan.normalizePlan({ ...valid(), contract: 'unsupported-conference-run-plan' }), /不属于支持的组合/);
+    assert.throws(() => plan.normalizePlan({ ...valid(), schemaFingerprint: '0'.repeat(64) }), /不属于支持的组合/);
     assert.throws(() => plan.normalizePlan({ ...valid(), contract: 'conference-run-plan-v2', version: 2 }), /标签字段与格式版本不一致/);
 });
 

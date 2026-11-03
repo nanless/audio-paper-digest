@@ -23,10 +23,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const STATE_SCHEMA_VERSION = 1;
-// policyVersion 保持旧字符串只为兼容已落盘状态和跨运行时读取；它不再是
-// “粘滞主账号”语义，当前语义是同一池内所有 key 等权轮转。
-const POLICY_VERSION = 'opencode-go-sticky-quota-failover-v1';
+const formats = require('./lib/protocol-codec');
+const ACCOUNT_POOL_CONTRACT = formats.contract('opencode-go-account-pool');
 const LOCK_TIMEOUT_MS = 3000;
 const LOCK_STALE_MS = 120000;
 const MAX_BLOCK_MS = 370 * 24 * 60 * 60 * 1000;
@@ -434,7 +432,13 @@ function writeDurableJson(filePath, value) {
 }
 
 function newState() {
-    return { schemaVersion: STATE_SCHEMA_VERSION, policyVersion: POLICY_VERSION, generation: 0, services: {} };
+    return formats.record(ACCOUNT_POOL_CONTRACT, { generation: 0, services: {} });
+}
+
+function hasAccountPoolHeader(state) {
+    if (!state || Array.isArray(state) || typeof state !== 'object') return false;
+    const current = Object.hasOwn(state, 'contract');
+    return formats.hasValidHeader(state, ACCOUNT_POOL_CONTRACT, current ? 'contract' : 'policyVersion');
 }
 
 function readStateStrict(stateFile) {
@@ -452,9 +456,7 @@ function readStateStrict(stateFile) {
             `LLM 账号池状态损坏或不可读，已阻止覆盖 ${stateFile}: ${error.message}`
         );
     }
-    if (!state || Array.isArray(state) || typeof state !== 'object'
-            || state.schemaVersion !== STATE_SCHEMA_VERSION
-            || state.policyVersion !== POLICY_VERSION
+    if (!hasAccountPoolHeader(state)
             || !Number.isSafeInteger(state.generation) || state.generation < 0
             || !state.services || typeof state.services !== 'object' || Array.isArray(state.services)) {
         throw new LlmAccountPoolStateError(`LLM 账号池状态 schema 非法，已阻止覆盖 ${stateFile}`);
@@ -501,6 +503,10 @@ function updateState(stateFile, updater) {
             throw new LlmAccountPoolStateError(`LLM 账号池状态 generation 已达安全整数上限，已阻止覆盖 ${stateFile}`);
         }
         next.generation = current.generation + 1;
+        // 只在正常持锁更新时写新格式。只读诊断不改写旧状态，也不重置冷却或游标。
+        delete next.policyVersion;
+        delete next.schemaVersion;
+        Object.assign(next, formats.recordHeader(ACCOUNT_POOL_CONTRACT, ACCOUNT_POOL_CONTRACT));
         writeDurableJson(stateFile, next);
         return next;
     } finally {
@@ -572,7 +578,7 @@ function resolveRotationCursor(group, orderedAccountIds) {
     const size = orderedAccountIds.length;
     const stored = group?.rotationCursor;
     if (Number.isSafeInteger(stored) && stored >= 0) return stored % size;
-    // 兼容旧版 v1 状态：旧实现只保存 activeAccountId（最后使用的账号）。
+    // 旧状态只保存 activeAccountId（最后使用的账号）。
     // 把它的排序位置当作下一个候选，使升级后的首次选择仍与旧状态连续，
     // 随后自然进入等权轮转。
     const activeId = group?.activeAccountId;
@@ -808,8 +814,8 @@ function replaceCredentialHeaders(headers, apiKey) {
 }
 
 module.exports = {
-    STATE_SCHEMA_VERSION,
-    POLICY_VERSION,
+    ACCOUNT_POOL_CONTRACT,
+    hasAccountPoolHeader,
     LlmAccountPoolExhaustedError,
     LlmAccountAuthError,
     LlmAccountPoolStateError,

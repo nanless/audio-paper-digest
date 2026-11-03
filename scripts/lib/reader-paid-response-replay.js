@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -127,7 +129,7 @@ function replayPaidReaderResponse(directory, old, identity, options) {
         || payload.status !== 'failed' || payload.attempts !== 3 || payload.fullAttempts !== 2
         || (payload.transportFailures || 0) !== 0 || payload.explicitReaderRetryRound
         || payload.implementationRepairAllowanceProof || payload.readerRecoveryRevisions?.length
-        || oldIdentity.contentMode !== 'reader-source-signed-revision-v1'
+        || !require('./reader-content-mode').is(oldIdentity, 'signed-revision')
         || oldIdentity.model?.model !== 'muse-spark-1.3-contributor') fail('原候选身份、次数或恢复范围不符');
     const implementationFields = ['parserImplementationSha256', 'editorialImplementationSha256',
         'mechanicalContractSha256', 'repairImplementationSha256', 'sourceDiagnosticsImplementationSha256',
@@ -164,7 +166,7 @@ function replayPaidReaderResponse(directory, old, identity, options) {
     const raw = body.output.flatMap(item => item.content || []).filter(item => item.type === 'output_text')
         .map(item => item.text).join('');
     const event = usage.value;
-    if (event.kind !== 'request' || event.version !== 'llm-usage-v1' || event.eventId !== options.usageEventId
+    if (event.kind !== 'request' || !isUsageEventFormat(event) || event.eventId !== options.usageEventId
         || event.paperId !== oldIdentity.paperId || event.runId !== oldIdentity.freshAnalysis.runId
         || event.stage !== 'apiReaderArticle' || event.contentAttempt !== 2
         || event.protocol !== 'openai_responses' || event.model !== body.model
@@ -177,10 +179,10 @@ function replayPaidReaderResponse(directory, old, identity, options) {
     const request = readPinnedJson(path.join(diagnosticsDir, options.repairDiagnosticId + '.request.json'), options.repairRequestSha256);
     const repairResponse = readPinnedJson(path.join(diagnosticsDir, options.repairDiagnosticId + '.response.json'), options.repairResponseSha256);
     const req = request.value, res = repairResponse.value;
-    if (req.contract !== 'reader-repair-request-diagnostics-v1' || req.id !== options.repairDiagnosticId
+    if (!require('./reader-diagnostic-format').hasDiagnosticFormat(req) || req.id !== options.repairDiagnosticId
         || req.contentAttempt !== 3 || !isDeepStrictEqual(req.identity, oldIdentity)
         || req.draftSha256 !== hash(req.draft) || req.promptSha256 !== sha(req.prompt)
-        || res.contract !== req.contract || res.id !== req.id || res.requestSha256 !== options.repairRequestSha256
+        || !require('./reader-diagnostic-format').sameDiagnosticFormat(req, res) || res.id !== req.id || res.requestSha256 !== options.repairRequestSha256
         || res.outputTextSha256 !== sha(res.rawResponse) || req.atomicOperation !== null
         || !Array.isArray(req.repairTargets) || req.repairTargets.length !== 8
         || req.repairTargets.some((item, index) => item.path !== `/sections/${index}/body`))

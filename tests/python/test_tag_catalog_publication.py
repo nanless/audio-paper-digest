@@ -10,7 +10,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import tag_catalog_publication as guard
-from tag_catalog import load_tag_catalog
+from tag_catalog import load_tag_catalog, tag_catalog_identity
+from protocol_codec import record_header
 from blog_entry_loader import load_publish_to_blog
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,7 +27,7 @@ class TagCatalogPublicationTest(unittest.TestCase):
         source = load_tag_catalog()
         publisher = load_publish_to_blog()
         snapshot = publisher.build_tag_catalog_snapshot(source)
-        versions = {'contract': publisher.TAG_CATALOG_VERSIONS_CONTRACT,
+        versions = {**record_header(publisher.TAG_CATALOG_VERSIONS_CONTRACT,'paper-tag-catalog-versions'),
                     'currentSha256': source['registrySha256'], 'snapshots': [snapshot]}
         values = {'tag-catalog-snapshot.json': snapshot,
                   'tag-catalog-versions.json': versions,
@@ -47,7 +48,7 @@ class TagCatalogPublicationTest(unittest.TestCase):
         before = {p.relative_to(repo).as_posix(): p.read_bytes()
                   for p in repo.rglob('*') if p.is_file()}
         result = guard.validate_published_tag_catalog(
-            repo, source['registrySha256'], source['version'])
+            repo, source['registrySha256'], tag_catalog_identity(source))
         self.assertTrue(result['valid'])
         self.assertEqual(len(result['files']), 6)
         self.assertEqual(result['sourceCatalogSha256'], source['registrySha256'])
@@ -68,7 +69,7 @@ class TagCatalogPublicationTest(unittest.TestCase):
                     original.write_bytes(target.read_bytes())
                     target.unlink()
                     target.symlink_to(original)
-                version = 'wrong-version' if mutation == 'version' else source['version']
+                version = 'wrong-version' if mutation == 'version' else tag_catalog_identity(source)
                 with self.assertRaisesRegex(ValueError, '受控词表发布同步'):
                     guard.validate_published_tag_catalog(repo, source['registrySha256'], version)
 
@@ -93,7 +94,7 @@ class TagCatalogPublicationTest(unittest.TestCase):
                     versions['snapshots'].append(copy.deepcopy(snapshot))
                     self.write_pair(repo, 'tag-catalog-versions.json', versions)
                 with self.assertRaisesRegex(ValueError, '受控词表发布同步'):
-                    guard.validate_published_tag_catalog(repo, source['registrySha256'], source['version'])
+                    guard.validate_published_tag_catalog(repo, source['registrySha256'], tag_catalog_identity(source))
 
     def test_original_config_archive_must_have_real_whole_file_sha(self):
         repo, source, _, _ = self.fixture()
@@ -106,11 +107,11 @@ class TagCatalogPublicationTest(unittest.TestCase):
         publisher = load_publish_to_blog()
         with mock.patch.object(guard.tag_paths, 'TAG_CATALOG_FILE', str(config)), \
                 mock.patch.object(guard, 'load_publish_to_blog', return_value=publisher):
-            result = guard.validate_published_tag_catalog(repo, source['registrySha256'], source['version'])
+            result = guard.validate_published_tag_catalog(repo, source['registrySha256'], tag_catalog_identity(source))
             self.assertTrue(result['valid'])
             archived.write_bytes(archived.read_bytes() + b' ')
             with self.assertRaisesRegex(ValueError, '原词表字节'):
-                guard.validate_published_tag_catalog(repo, source['registrySha256'], source['version'])
+                guard.validate_published_tag_catalog(repo, source['registrySha256'], tag_catalog_identity(source))
 
 
 if __name__ == '__main__':

@@ -12,12 +12,14 @@ Mac 与 Android 的论文速递工作台使用共同的资料包和坚果云版�
 
 | 层 | 合同或入口 | 保存与恢复规则 | 范围 |
 |---|---|---|---|
-| 研究空间 | `BackupCodec`，`paperdigest-backup-v2` | 保留研究原件、逐文件 SHA、整体上限与路径检查；新导出排除两份本机完整性密钥 | 来源真实性、模型请求与远端授权分别核验 |
-| 云端完成版本 | `CloudArchiveService`，`paperdigest-cloud-snapshot-v1` | 同一路径、UTC月份、分块索引/大小/哈希、完成清单和逐块回读 | 全部块、清单与本机回执均核验后完成 |
-| 研究数据 | `personal.json` schema 1、离线包 v1/v2、原始 ModelUsage | 保持原 ID、版本、原文/图/输入/回答/费用字节；未知字段保留 | 恢复不能重签旧模型输入、给旧缓存升级“最新”状态 |
-| 恢复政策 | `RestoreLocalPolicy`、请求连续性 v1、`applyRestorePayload` | 保本机路由与预算、原资料旁存、暂存/确认/回滚 | 下载后经用户确认再恢复；不自动合并两台设备的笔记 |
+| 研究空间 | `BackupCodec`，`paperdigest-backup` | 保留研究原件、逐文件 SHA、整体上限与路径检查；新导出排除两份本机完整性密钥 | 来源真实性、模型请求与远端授权分别核验 |
+| 云端完成版本 | `CloudArchiveService`，`paperdigest-cloud-snapshot` | 同一路径、UTC月份、分块索引/大小/哈希、完成清单和逐块回读 | 全部块、清单与本机回执均核验后完成 |
+| 研究数据 | `personal.json` 原格式或带结构指纹的新格式、离线包、原始 `ModelUsage` | 保持原 ID、版本、原文/图/输入/回答/费用字节；未知字段保留 | 恢复不能重签旧模型输入、给旧缓存升级“最新”状态 |
+| 恢复政策 | `RestoreLocalPolicy`、请求连续性记录、`applyRestorePayload` | 保本机路由与预算、原资料旁存、暂存/确认/回滚 | 下载后经用户确认再恢复；不自动合并两台设备的笔记 |
 | 本机云控制 | `CloudLocalStore` profile/pending/checkpoint | Android 使用独立私有控制目录和独立凭据引用 | 不从快照替换账号、设备目标ID、自动计划或待传快照 |
 | 密码与授权 | Mac Keychain；Android Keystore 适配 | 各设备主动配置自己的 API key、应用密码与授权 | 不迁移系统钥匙串、Keystore 私钥或其他应用的许可 |
+
+现有共享研究目录保留原个人资料与收藏文件格式，更新后的客户端编辑后，已发行客户端仍可直接读取这些文件。新导出的备份和云端清单已使用稳定合同与结构指纹；读取这类新包须使用支持它们的客户端，即使包内个人资料仍是旧格式。独立新建目录的个人资料也使用稳定格式。恢复时逐项核对原文件字节，不为了兼容旧客户端改签资料。详见[收藏资料格式](favorite-collections.md#两端共用的个人资料)。
 
 “同功能”要求相同的结果和错误边界，不要求相同窗口布局或后台保证。Android 的系统调度与 Mac 的“应用运行期间到期检查”不是同一个生命周期；界面须分别说明真实行为。
 
@@ -54,13 +56,14 @@ noBackupFilesDir/
 
 用户从系统文件选择器提供的 `content://` PDF，先有界复制成内部研究目录下的普通文件，验证实际 PDF 与 SHA，再分配 `local:<原PDF SHA>`。不把 URI 假写成绝对文件路径；不在恢复时凭旧设备路径访问外部文件。备份导入/导出用 `ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`，将得到的流复制到内部暂存后完整校验，取消选择不创建成功任务。[Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
 
-## 3. `paperdigest-backup-v2` 的字节合同
+## 3. 研究备份的字节合同
 
-现有实现为 [BackupCodec.swift](<../apps/macos/Sources/BackupCodec.swift>)，不是 ZIP，也没有额外压缩或端到端加密。
+现有实现为 [BackupCodec.swift](<../apps/macos/Sources/BackupCodec.swift>)，不是 ZIP，也没有额外压缩或端到端加密。旧备份仍按原 `paperdigest-backup-v2` 合同和原字节核验。新旧完整结构登记在[两端共用协议目录](../config/protocols/clients-foundation.json)。
 
 | 字段 | 类型与解释 |
 |---|---|
-| `contract` | 精确字符串 `paperdigest-backup-v2` |
+| `contract` | 新包为稳定名称 `paperdigest-backup` |
+| `schemaFingerprint` | 新包所用完整结构声明的内容指纹，必须与登记格式匹配 |
 | `sourceDirectory` | 原研究目录的有效绝对路径；仅作为受控旧路径映射信息，不是恢复写入目的地 |
 | `files` | 文件条目数组，最多100000项；新导出按相对路径排序 |
 | `files[].path` | 非空、无尾斜杠的相对路径，UTF-8最多4096 bytes |
@@ -75,8 +78,8 @@ Base64 把文件字节表示为可放入 JSON 的文字，因此编码后的文�
 
 1. 验合同、条目数量、原根路径；拒绝空段、`.`、`..`、反斜杠、控制字符、绝对条目路径和尾斜杠。
 2. 路径及每一级目录片段，按现有 NFC 归一及大小写折叠检查别名碰撞；不能只依赖 Android 的大小写敏感文件系统。重复文件、`A/x` 与 `a/y`、文件与其子路径并存均拒绝。
-3. 每份 Base64 解码字节计入总额，核原 SHA。`personal.json` 必须存在且可解析为对象；进入应用恢复前还须通过 `DesktopStore` 对 schema/notes/settings/list/sessions/jobs 等结构的校验。
-4. 如有 `RestoredPathRoots.json`，只允许原两个键 `contract` / `roots`，合同为 `paperdigest-storage-aliases-v1`。旧根不能重复、大小写/NFC碰撞或互相包含；保护保留名本身及其目录别名。
+3. 每份 Base64 解码字节计入总额，核原 SHA。`personal.json` 必须存在且可解析为对象；进入应用恢复前还须通过 `DesktopStore` 对实际合同、笔记、设置、清单、会话和任务结构的校验。
+4. 如有 `RestoredPathRoots.json`，旧文件只允许原两个键 `contract` / `roots`，合同为 `paperdigest-storage-aliases-v1`；新文件使用稳定名称 `paperdigest-storage-aliases` 并增加结构指纹。旧根不能重复、大小写/NFC碰撞或互相包含；保护保留名本身及其目录别名。
 5. 全部校验通过后才创建新的暂存目录；文件按私有权限写入，再逐文件回读。拒绝符号链接、特殊文件及经过链接的父目录。
 
 原 SHA 基于文件原字节，不能因为 Kotlin 重新排 JSON 键、转义斜杠、归一 Unicode、重排数组或更改换行而重算旧文件 SHA 后冒充同一材料。保留未知文件和字段；对不能理解的未来合同明确拒绝执行恢复，原包可保留。
@@ -103,7 +106,8 @@ Base64 把文件字节表示为可放入 JSON 的文字，因此编码后的文�
 
 | 字段 | 约束 |
 |---|---|
-| `contract` | `paperdigest-cloud-snapshot-v1` |
+| `contract` | 新清单为 `paperdigest-cloud-snapshot`；旧清单按原格式读取 |
+| `schemaFingerprint` | 新清单所用完整结构声明的内容指纹 |
 | `reference.month` / `reference.id` | 与请求所在UTC月份/UUID完全相符 |
 | `createdAt` | **Unix毫秒数值**；当前实现先规范到UTC整秒，因此必须对应整数秒、与月份一致 |
 | `encodedBytes` | 完整 BackupCodec 编码的实际字节数，范围1–786432000 |
@@ -132,7 +136,7 @@ Android 手动保存和后台保存必须汇合到同一执行路径，顺序与
 
 排队工作携带的原目标也必须绑定到实际上传：在云服务取得操作锁后、读取密码/生成快照/联网之前核对原 `destinationID`。不能只在 worker 开始或申请前台通知之前检查；通知、维护锁或系统调度等待期间保存了新目标时，旧任务须明确拒绝，不能自动采用新账号。
 
-SHA和HMAC核验用于完整性与原材料绑定；当前云包经HTTPS传输但没有额外端到端加密，不能把哈希清单叫作加密或由独立可信方签名。任何新增加密外层都需要新合同与两端实现，不能让旧Mac在同一v1清单下拿到无法解析的密文。
+SHA和HMAC核验用于完整性与原材料绑定；当前云包经HTTPS传输但没有额外端到端加密，不能把哈希清单叫作加密或由独立可信方签名。任何新增加密外层都需要新合同与两端实现，不能在原已登记格式下交付无法解析的密文。
 
 ## 6. 列表、认证和请求预算
 
@@ -186,7 +190,7 @@ maxTokens timeoutMs dailyRequests
 
 恢复目标空间的这些字段由本机当前值覆盖；当前没有的字段也不从旧包偷偷引入。原始 `personal.json` 原字节旁存到 `RestorationReceipts/<随机UUID>-original-personal.json`。原输入、来源、回答、notes与ModelUsage原文件不因此改写。字体/阅读界面等其他设置不属于这份路由保护清单；不能把扩大或缩小字段集合叫作无影响的实现差异。
 
-`RequestBudgetContinuity.json` 合同为 `paperdigest-request-continuity-v1`，内容为 `requests:[{id,startedAt}]`。恢复将当前空间、待恢复空间两份连续性记录与两边 `requestIssued:true` 会话合并：按全局唯一请求ID去重，同ID不同原时间拒绝。每ID非空、UTF-8≤256 bytes，时间必须是真实Gregorian日期的UTC ISO8601字符串，可含1–9位小数；不归一化原时间来掩盖冲突，最多100000项。
+新写入的 `RequestBudgetContinuity.json` 使用稳定合同 `paperdigest-request-continuity` 和结构指纹；旧文件仍按原合同读取。请求记录为 `requests:[{id,startedAt}]`。恢复将当前空间、待恢复空间两份连续性记录与两边 `requestIssued:true` 会话合并：按全局唯一请求ID去重，同ID不同原时间拒绝。每ID非空、UTF-8≤256 bytes，时间必须是真实Gregorian日期的UTC ISO8601字符串，可含1–9位小数；不归一化原时间来掩盖冲突，最多100000项。
 
 每日准入按UTC日计算，保留当前设备的 `dailyRequests`，并把恢复得到的已派发历史纳入计数，防止恢复旧包清零。此做法是保守防回退，既不是重算账单，也不是实时全设备原子配额。两台同时离线发请求时没有统一服务器锁，不能承诺全账号始终只发某个精确总数。
 
@@ -207,13 +211,13 @@ Android新模型请求也必须先封存精确输入并持久化pending/requestI
 | PDF标注 | id/text/page/rect/pdfSHA/createdAt，可含comment/updatedAt；page为从1开始物理页 | `rect`是PDFKit页坐标的NSRect字符串；不可写Android屏幕像素，必须验证页面裁切框（crop box）、旋转与坐标转换的两端一致性 |
 | 本地PDF | `personalPapers`内id/title/sourceKind/localPDFPath/pdfSHA等 | 私有路径通过原SHA受控重定位；找不到文件保留缺失状态，不改PDF SHA补洞 |
 | 网站导读 | Article保留paperID、原html/markdown/plainText、revisionSHA256、resources、sourceVersion、citation/researchContext、notices | 渲染净化在展示副本进行；旧来源或未核版本警告不能因移动平台隐藏 |
-| 离线研究包 | `Offline/<内容ID>/manifest.json`；`paperdigest-offline-package-v1/v2`、paper/article/PDF/images及各SHA | 保留packageID与原文件，重新核全部资源；没有PDF的阅读包不能冒充完整原文材料 |
+| 离线研究包 | `Offline/<内容ID>/manifest.json`；现行 `paperdigest-offline-package`、原格式兼容、论文和正文、PDF、图片及各自内容指纹 | 保留packageID与原文件，重新核全部资源；没有PDF的阅读包不能冒充完整原文材料 |
 | 任务 | 原id/command/status/identity/material/result及时间；最多1000条的Mac显示存储策略 | 崩溃重启把运行态按真实中断处理；不得自动重发模型/Zotero/付费或恢复操作 |
 | Zotero材料 | 应用自己保存的操作记录（journal）、材料与目标绑定 | Android走Web API v3；Mac本地操作记录按原样保留为历史。Android Web API 的操作记录须独立核对目标与权限，不将Mac本地许可变成Web API key或自动续传 |
 
 Mac重新装载标注时只显示与当前PDF SHA一致的标注；定位回答中的 `[p.N]` 也必须属于当次已封存pages且PDF SHA/来源版本一致。不能因为Android重新分页/屏幕适配就把N解释为阅读器屏幕页。
 
-离线包v2绑定原paper内容、article内容、网站修订、来源版本、可选PDF及科学图哈希。阅读快照是阅读材料，不是网站生产分析、出版或付费请求的来源能力。Android对PDF/OCR/图片分析的扩展也必须如实记录实际提取器、缺文字页、截断和是否包含图片；不能承诺保留网站解析就等于重新分析过PDF。
+现行离线包与原有包含这些字段的格式都绑定论文与正文原内容、网站修订、来源版本、可选 PDF 及科学图的内容指纹。阅读快照是阅读材料，不是网站生产分析、出版或付费请求的来源能力。Android对PDF/OCR/图片分析的扩展也必须如实记录实际提取器、缺文字页、截断和是否包含图片；不能承诺保留网站解析就等于重新分析过PDF。
 
 ## 10. Android后台任务的必要差异
 

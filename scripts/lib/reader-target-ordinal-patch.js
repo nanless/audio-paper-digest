@@ -1,13 +1,17 @@
 'use strict';
+const { isFreshSourceProvenance } = require('./daily-source-format');
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // Ordinary existing-node request/response protocol. This module grants no
 // attempts, full responses, source authority, or final Reader qualification.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const repair = require('./reader-repair');
 const { strictJson } = require('./publication-file-primitives');
-const CONTRACT = 'reader-target-ordinal-patch-v1';
-const COMPILATION_CONTRACT = 'reader-target-ordinal-compilation-v1';
-const TEMPLATE = `只修当前已存在且明确列出的普通节点。只输出完整、严格的单个JSON对象：\n{"contract":"reader-target-ordinal-patch-v1","version":1,"requestToken":"{{requestToken}}","replacements":[{"targetOrdinal":1,"value":"完整替换值"}]}\nrequestToken必须逐字使用本次值。targetOrdinal只能是清单中1到N的整数，最多8个，不能重复。不要返回path、SHA、解释、Markdown围栏或其他字段。value必须与原节点同类型；对象节点须给完整对象。保留一切不需修改的正确事实、数字、单位、图表、公式及引用。修改后仍要通过正常完整Reader检查。\n本次请求：{{requestToken}}\n当前授权目标：\n{{targets}}\n核验反馈：\n{{feedback}}\n来源证据：\n{{evidence}}\n整篇机械约束（不扩大本次目标）：\n{{mechanicalContract}}`;
+const format = require('./reader-ordinal-format');
+const CONTRACT = format.wireHeader().contract;
+const COMPILATION_CONTRACT = format.compilationHeader().contract;
+const TEMPLATE = format.template();
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
 const TEMPLATE_SHA = sha(TEMPLATE);
 const stableSha=value=>{const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;return sha(JSON.stringify(sorted(value)));};
@@ -67,8 +71,8 @@ function parseAck(raw) {
         } else if (route.length === 1 && route[0] === 'version' && token !== '1') fail('version must be literal 1');
     }
     walk([]); if (at !== tokens.length) fail('trailing JSON');
-    exact(result, ['contract','version','requestToken','replacements']);
-    if (result.contract !== CONTRACT || result.version !== 1 || !TOKEN.test(result.requestToken)
+    exact(result, [...Object.keys(format.readWireHeader(result)), 'requestToken','replacements']);
+    if (!format.isWire(result) || !TOKEN.test(result.requestToken)
         || !Array.isArray(result.replacements) || result.replacements.length < 1 || result.replacements.length > 8) fail('invalid ACK contract');
     for (const item of result.replacements) exact(item, ['targetOrdinal','value']);
     return result;
@@ -111,7 +115,7 @@ function sourceScope(paper, identity, directory) {
     if (!context || !fresh.isDailyFreshSourceScope() || !engine.paperAnalysisLockHeld(paper)
         || String(paper?.arxivId || '').replace(/v\d+$/,'') !== String(identity?.paperId || '').replace(/v\d+$/,'')
         || !isDeepStrictEqual(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis)
-        || identity.contentMode !== 'reader-source-only-v1' || identity.resourceLocalRevisionContract
+        || !require('./reader-content-mode').is(identity, 'source-only') || identity.resourceLocalRevisionContract
         || identity.readerFactLocalRevisionContract
         || identity.sourceSha256 !== identity.freshAnalysis.sourceSha256
         || path.resolve(fresh.freshReaderAttemptsDirectory(directory)) !== path.resolve(directory)) fail('paper lock/source/identity scope mismatch','run');
@@ -126,12 +130,12 @@ function currentCandidate(state) {
     return checked;
 }
 function committedToken(request){
-    return sha(JSON.stringify({domain:CONTRACT,requestSalt:request.requestSalt,
+    return sha(JSON.stringify({domain:format.tokenDomain(request),requestSalt:request.requestSalt,
         identitySha256:request.identitySha256,candidateEnvelopeSha256:request.candidateEnvelopeSha256,
         draftSha256:request.draftSha256,orderedTargetsSha256:repair.hashDraft(request.targets)})).slice(0,16);
 }
 function requestFor(draft, targets, identity, candidateEnvelopeSha256) {
-    const request={contract:CONTRACT,version:1,templateSha256:TEMPLATE_SHA,
+    const request={...format.wireHeader(),templateSha256:TEMPLATE_SHA,
         requestSalt:crypto.randomBytes(16).toString('hex'),identitySha256:repair.hashDraft(identity),
         candidateEnvelopeSha256,draftSha256:repair.hashDraft(draft),targets};
     request.requestToken=committedToken(request);return request;
@@ -196,7 +200,7 @@ function bindDiagnostic(capability,diagnostic,messages) {
     const s=stateOf(capability);
     if(!ID.test(diagnostic?.id)||path.resolve(diagnostic.directory)!==path.join(s.directory,'request-diagnostics'))fail('diagnostic scope');
     const filename=path.join(diagnostic.directory,diagnostic.id+'.request.json'),r=read(filename,diagnostic.requestSha256),q=r.value;
-    if(q.contract!=='reader-repair-request-diagnostics-v1'||q.id!==diagnostic.id
+    if(!require('./reader-diagnostic-format').hasDiagnosticFormat(q)||q.id!==diagnostic.id
         ||!isDeepStrictEqual(q.identity,s.identity)||!isDeepStrictEqual(q.draft,s.draft)
         ||q.draftSha256!==s.request.draftSha256||q.promptSha256!==sha(q.prompt)||!s.prompts?.has(q.prompt)
         ||!isDeepStrictEqual(q.readerTargetOrdinalRequest,s.request)
@@ -205,7 +209,7 @@ function bindDiagnostic(capability,diagnostic,messages) {
         ||!isDeepStrictEqual(messageImages(messages),q.images.map(i=>({mime:i.mime,base64Sha256:i.base64Sha256})))
         ||q.atomicOperation||q.sectionGroupPlanContract||q.termTargets
         ||!isDeepStrictEqual(targetsFor(q.draft,{targets:q.repairTargets}),s.request.targets))fail('request diagnostic does not bind capability');
-    store(diagnostic.directory,diagnostic.id+'.ordinal-parent.json',{contract:CONTRACT,id:diagnostic.id,
+    store(diagnostic.directory,diagnostic.id+'.ordinal-parent.json',{...format.recordHeader(s.request),id:diagnostic.id,
         identitySha256:repair.hashDraft(s.identity),candidateEnvelopeSha256:s.candidateSha256,candidateRawBase64:s.candidateRawBase64});
     s.diagnostic={...diagnostic,requestFile:filename};s.messages=structuredClone(messages);s.witnessNumber=0;s.witnesses=[];return true;
 }
@@ -221,7 +225,7 @@ function recordRequestWitness(capability,body,usageContext) {
     const expected=require('../utils').buildRequestBody('openai_responses',s.identity.model.model,safeMessages,body.max_output_tokens,s.identity.repairTemperature);
     if(!isDeepStrictEqual(body.input,expected.input))fail('wire input differs from exact diagnostic messages');
     if(!serialized.includes(s.request.requestToken)||!serialized.includes(CONTRACT))fail('wire request missing current contract');
-    const data={contract:CONTRACT,version:1,id:d.id,requestSha256:d.requestSha256,
+    const data={...format.readWireHeader(s.request),id:d.id,requestSha256:d.requestSha256,
         providerInputSha256:sha(serialized),inputMessagesSha256:q.inputMessagesSha256,promptSha256:q.promptSha256,
         requestToken:s.request.requestToken,images:q.images,containsImagePixels:false};
     const number=(s.witnessNumber||0)+1;s.witnessNumber=number;
@@ -229,15 +233,15 @@ function recordRequestWitness(capability,body,usageContext) {
     (s.witnesses||=[]).push(ref);return ref;
 }
 function compileAgainst(draft,request,raw,applyOptions) {
-    exact(request,['contract','version','requestToken','requestSalt','identitySha256','candidateEnvelopeSha256','templateSha256','draftSha256','targets']);
-    if(request.contract!==CONTRACT||request.version!==1||!TOKEN.test(request.requestToken)||!/^([a-f0-9]{32})$/.test(request.requestSalt)
+    exact(request,[...Object.keys(format.readWireHeader(request)),'requestToken','requestSalt','identitySha256','candidateEnvelopeSha256','templateSha256','draftSha256','targets']);
+    if(!format.isWire(request)||!TOKEN.test(request.requestToken)||!/^([a-f0-9]{32})$/.test(request.requestSalt)
         ||!SHA.test(request.identitySha256)||!SHA.test(request.candidateEnvelopeSha256)
-        ||request.requestToken!==committedToken(request)||request.templateSha256!==TEMPLATE_SHA
+        ||request.requestToken!==committedToken(request)||request.templateSha256!==format.templateSha(request)
         ||request.draftSha256!==repair.hashDraft(draft)||!Array.isArray(request.targets)||!request.targets.length||request.targets.length>8)fail('invalid original request');
     const descriptors=targetsFor(draft,{targets:request.targets.map(t=>({path:t.path,oldSha256:t.oldSha256,value:node(draft,t.path)}))});
     if(!isDeepStrictEqual(descriptors,request.targets))fail('original ordered target mapping changed');
     if(applyOptions?.atomicOperation||applyOptions?.readerFactLocalClaims)fail('special apply options excluded');
-    const ack=parseAck(raw);if(ack.requestToken!==request.requestToken)fail('wrong request nonce');
+    const ack=parseAck(raw);if(!isDeepStrictEqual(format.readWireHeader(ack),format.readWireHeader(request))||ack.requestToken!==request.requestToken)fail('wrong request nonce');
     const seen=new Set(),mapping=[];
     const replacements=ack.replacements.map(item=>{
         const n=item.targetOrdinal;if(!Number.isSafeInteger(n)||n<1||n>request.targets.length||seen.has(n))fail('unknown/repeated ordinal');seen.add(n);
@@ -246,10 +250,10 @@ function compileAgainst(draft,request,raw,applyOptions) {
         mapping.push({...target,newSha256:repair.hashDraft(item.value)});
         return {path:target.path,oldSha256:target.oldSha256,value:item.value};
     });
-    const patch={version:1,draftSha256:request.draftSha256,replacements};
+    const patch={...format.standardPatchHeader(request),draftSha256:request.draftSha256,replacements};
     const after=repair.applyReaderPatch(draft,patch,request.targets.map(t=>t.path),applyOptions);
-    return {patch,after,proof:{contract:COMPILATION_CONTRACT,requestContract:CONTRACT,requestToken:request.requestToken,
-        templateSha256:TEMPLATE_SHA,beforeDraftSha256:request.draftSha256,afterDraftSha256:repair.hashDraft(after),
+    return {patch,after,proof:{...format.compilationHeader(request),requestContract:request.contract,requestToken:request.requestToken,
+        templateSha256:format.templateSha(request),beforeDraftSha256:request.draftSha256,afterDraftSha256:repair.hashDraft(after),
         responseSha256:sha(raw),standardPatchSha256:repair.hashDraft(patch),mapping}};
 }
 function compile(capability,raw,applyOptions={}) {
@@ -257,7 +261,7 @@ function compile(capability,raw,applyOptions={}) {
     const responseFile=path.join(d.directory,d.id+'.response.json'),response=read(responseFile);
     if(response.value.requestSha256!==d.requestSha256||response.value.rawResponse!==raw||response.value.outputTextSha256!==sha(raw))fail('response not saved against actual request');
     const result=compileAgainst(s.draft,s.request,raw,applyOptions);currentCandidate(s);
-    const ref=store(d.directory,d.id+'.ordinal-compiled.json',{contract:COMPILATION_CONTRACT,id:d.id,identity:s.identity,
+    const ref=store(d.directory,d.id+'.ordinal-compiled.json',{...format.compilationHeader(s.request),id:d.id,identity:s.identity,
         requestSha256:d.requestSha256,responseSha256:response.sha256,beforeDraft:s.draft,afterDraft:result.after,
         standardPatch:result.patch,proof:result.proof,inputWitnesses:s.witnesses||[],normalParserRequired:true});
     s.compilation={...ref,id:d.id,responseFile,responseSha256:response.sha256};return {...result,compilation:s.compilation};
@@ -272,30 +276,30 @@ function replay({paper,identity,directory,requestId,pins,applyOptions={}}) {
     const dir=path.join(path.resolve(directory),'request-diagnostics');
     const q=read(path.join(dir,requestId+'.request.json'),pins.requestSha256),r=read(path.join(dir,requestId+'.response.json'),pins.responseSha256),
         c=read(path.join(dir,requestId+'.ordinal-compiled.json'),pins.compilationSha256),seal=read(path.join(dir,requestId+'.ordinal-seal.json'),pins.sealSha256);
-    if(q.value.contract!=='reader-repair-request-diagnostics-v1'||q.value.id!==requestId||r.value.id!==requestId
+    if(!require('./reader-diagnostic-format').sameDiagnosticFormat(q.value,r.value)||q.value.id!==requestId||r.value.id!==requestId
         ||q.value.promptSha256!==sha(q.value.prompt)||r.value.requestSha256!==q.sha256||r.value.outputTextSha256!==sha(r.value.rawResponse)
         ||!isDeepStrictEqual(q.value.identity,identity)||q.value.atomicOperation||q.value.termTargets||q.value.sectionGroupPlanContract
-        ||q.value.actualRepairPromptContract!==CONTRACT||q.value.actualRepairPromptTemplateSha256!==TEMPLATE_SHA
+        ||q.value.actualRepairPromptContract!==q.value.readerTargetOrdinalRequest?.contract||q.value.actualRepairPromptTemplateSha256!==format.templateSha(q.value.readerTargetOrdinalRequest)
         ||!isDeepStrictEqual(q.value.draft,c.value.beforeDraft)||!isDeepStrictEqual(c.value.identity,identity)
         ||c.value.requestSha256!==q.sha256||c.value.responseSha256!==r.sha256)fail('cold request/response linkage changed');
     const request=q.value.readerTargetOrdinalRequest;
     const parent=read(path.join(dir,requestId+'.ordinal-parent.json')).value;
     const parentBytes=Buffer.from(parent.candidateRawBase64||'','base64'),envelope=strictJson(parentBytes,'original ordinal parent');
-    if(parent.contract!==CONTRACT||parent.id!==requestId||parent.identitySha256!==repair.hashDraft(identity)
+    if(!format.isRecord(parent,request)||parent.id!==requestId||parent.identitySha256!==repair.hashDraft(identity)
         ||parent.candidateEnvelopeSha256!==request?.candidateEnvelopeSha256||sha(parentBytes)!==request?.candidateEnvelopeSha256
-        ||envelope.version!==repair.REPAIR_VERSION||!isDeepStrictEqual(envelope.identity,identity)
+        ||!repair.isCandidateEnvelope(envelope)||!isDeepStrictEqual(envelope.identity,identity)
         ||envelope.payloadSha256!==repair.hashDraft(envelope.payload)||!isDeepStrictEqual(envelope.payload?.draft,q.value.draft)
         ||envelope.payload.attempts+1!==q.value.contentAttempt)fail('cold original active parent envelope differs');
 
     if(!request||request.identitySha256!==repair.hashDraft(identity)||!isDeepStrictEqual(targetsFor(q.value.draft,{targets:q.value.repairTargets}),request.targets))fail('cold request targets changed');
     const result=compileAgainst(q.value.draft,request,r.value.rawResponse,applyOptions);
-    if(!isDeepStrictEqual(result.patch,c.value.standardPatch)||!isDeepStrictEqual(result.after,c.value.afterDraft)
+    if(!format.isCompilation(c.value,request)||!isDeepStrictEqual(result.patch,c.value.standardPatch)||!isDeepStrictEqual(result.after,c.value.afterDraft)
         ||!isDeepStrictEqual(result.proof,c.value.proof))fail('saved compilation differs from strict replay');
     validateSeal(seal.value,{identity,requestId,requestSha256:q.sha256,responseSha256:r.sha256,compilationSha256:c.sha256,raw:r.value.rawResponse,request:q.value,directory:dir});
     return {...result,verifiedOriginalRequestResponse:true,normalParserRequired:true};
 }
 function validateSealRecords(seal,expected) {
-    if(seal.contract!==CONTRACT||seal.id!==expected.requestId||seal.identitySha256!==repair.hashDraft(expected.identity)
+    if(!format.isRecord(seal,expected.request.readerTargetOrdinalRequest)||seal.id!==expected.requestId||seal.identitySha256!==repair.hashDraft(expected.identity)
         ||seal.requestSha256!==expected.requestSha256||seal.responseSha256!==expected.responseSha256||seal.compilationSha256!==expected.compilationSha256
         ||!Array.isArray(seal.usageRecords)||!Array.isArray(seal.witnesses))fail('seal identity mismatch');
     const usageDir=path.resolve(require('../config').FILES.llmUsageDir),events=[];
@@ -309,7 +313,7 @@ function validateSealRecords(seal,expected) {
     for(const ref of seal.witnesses){
         if(path.dirname(path.resolve(ref.path))!==path.resolve(expected.directory))fail('witness outside diagnostic directory');
         const w=read(ref.path,ref.sha256).value;
-        if(w.id!==expected.requestId||w.requestSha256!==expected.requestSha256||w.requestToken!==expected.request.readerTargetOrdinalRequest.requestToken
+        if(!format.isWire(w)||!isDeepStrictEqual(format.readWireHeader(w),format.readWireHeader(expected.request.readerTargetOrdinalRequest))||w.id!==expected.requestId||w.requestSha256!==expected.requestSha256||w.requestToken!==expected.request.readerTargetOrdinalRequest.requestToken
             ||w.promptSha256!==expected.request.promptSha256||w.inputMessagesSha256!==expected.request.inputMessagesSha256
             ||!isDeepStrictEqual(w.images,expected.request.images)||w.containsImagePixels!==false)fail('input witness changed');
         inputs.push(w.providerInputSha256);
@@ -318,7 +322,7 @@ function validateSealRecords(seal,expected) {
     if(events.length!==starts.length+ends.length+dispositions.length||starts.length<1||starts.length>2
         ||ends.length!==starts.length||dispositions.length!==1
         ||new Set(seal.usageRecords.map(r=>r.file)).size!==events.length
-        ||events.some(e=>e.version!=='llm-usage-v1'||e.runId!==expected.identity.freshAnalysis.runId
+        ||events.some(e=>!isUsageEventFormat(e)||e.runId!==expected.identity.freshAnalysis.runId
             ||e.paperId!==expected.identity.paperId||e.stage!=='apiReaderRepair'||e.unitId!==sha(expected.requestId)
             ||e.contentAttempt!==expected.request.contentAttempt))fail('normal fee run/stage/attempt chain differs');
     const labels=['runId','paperId','stage','unitId','contentAttempt','transportAttempt','protocol','model','inputSha256'];
@@ -340,7 +344,7 @@ const validateSeal=(...args)=>io(()=>validateSealRecords(...args));
 function seal(capability,usageRecords) {
     const s=stateOf(capability),d=s.diagnostic,c=s.compilation;if(!c||!d)fail('no completed strict compilation');
     const q=read(d.requestFile,d.requestSha256).value,r=read(c.responseFile,c.responseSha256).value;
-    const value={contract:CONTRACT,id:d.id,identitySha256:repair.hashDraft(s.identity),requestSha256:d.requestSha256,
+    const value={...format.recordHeader(s.request),id:d.id,identitySha256:repair.hashDraft(s.identity),requestSha256:d.requestSha256,
         responseSha256:c.responseSha256,compilationSha256:c.sha256,requestDirectory:d.directory,
         witnesses:s.witnesses||[],usageRecords:structuredClone(usageRecords).filter(ref=>read(ref.file,ref.sha256).value.unitId===sha(d.id))};
     validateSeal(value,{identity:s.identity,requestId:d.id,requestSha256:d.requestSha256,responseSha256:c.responseSha256,
@@ -350,10 +354,10 @@ function seal(capability,usageRecords) {
 
 function savedSourceScope(paper,identity,directory){
     const fresh=require('./fresh-analysis-context'),prov=paper?.freshRewriteProvenance;
-    if(!prov||prov.contract!=='fresh-source-analysis-v1'||!isDeepStrictEqual(prov,paper.analysisManifest?.freshRewriteProvenance)
+    if(!prov||!isFreshSourceProvenance(prov)||!isDeepStrictEqual(prov,paper.analysisManifest?.freshRewriteProvenance)
         ||String(paper.arxivId||'').replace(/v\d+$/,'')!==String(identity.paperId||'').replace(/v\d+$/,''))fail('saved paper/source identity differs','run');
     const runDir=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId),run=read(path.join(runDir,'run.json')).value;
-    if(run.contract!==fresh.DAILY_SOURCE_RUN_CONTRACT||path.resolve(directory)!==path.join(runDir,'reader-attempts'))fail('saved run scope differs','run');
+    if(!fresh.isDailySourceRun(run)||path.resolve(directory)!==path.join(runDir,'reader-attempts'))fail('saved run scope differs','run');
     const source=fresh.readFreshSource(runDir,paper,{runId:run.runId,sourceExpectations:run.sourceExpectations}),d=source.freshSourceDescriptor;
     if(['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256','sourceGeneration','sourceManifestSha256'].some(k=>prov[k]!==d[k]
         ||identity.freshAnalysis?.[k]!==d[k])||identity.sourceSha256!==d.sourceSha256)fail('saved four-source bytes differ','run');
@@ -407,9 +411,9 @@ function sealCompletion(paper,result){
     const dir=completionDirectory(state.directory,false);if(!fs.existsSync(dir))completionDirectory(state.directory,true);
     const files=completionFiles(dir,paper),sequence=files.length+1;
     if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1))fail('completion history has gaps','run');
-    stage.ordinalPatchContract=CONTRACT;stage.ordinalPatchCompilations=structuredClone(origin.records);
+    stage.ordinalPatchContract=CONTRACT;stage.ordinalPatchSchemaFingerprint=format.wireHeader().schemaFingerprint;stage.ordinalPatchCompilations=structuredClone(origin.records);
     paper.analysisManifest.contracts.readerTargetOrdinalPatch=CONTRACT;
-    const value={contract:COMPILATION_CONTRACT,kind:'normal-final-completion',paperId:canonical(paper),sequence,
+    const value={...format.compilationHeader(),ordinalProtocol:format.wireHeader(),kind:'normal-final-completion',paperId:canonical(paper),sequence,
         freshRewriteProvenance:structuredClone(paper.freshRewriteProvenance),identity:state.identity,
         articleSha256:sha(result.article),planSha256:stableSha(result.plan),stage:stageCore(stage),records:origin.records,normalization:origin.normalization};
     const ref=store(dir,`${canonical(paper)}-${String(sequence).padStart(8,'0')}.json`,value);
@@ -446,14 +450,14 @@ function validateCompletion(paper){
 }
 function readVerifiedCompletion(paper){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
-    const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
+    const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchSchemaFingerprint!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
     if(!prov){if(marked)fail('completion marker lacks daily source','run');return null;}
-    if(prov.contract!=='fresh-source-analysis-v1'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(prov.runId||'')){
+    if(!isFreshSourceProvenance(prov)||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(prov.runId||'')){
         if(marked)fail('ordinary completion cannot leave canonical daily source','run');return null;
     }
     const runFile=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'run.json');
     const actualRun=fs.existsSync(runFile)?read(runFile).value:null;
-    const actualDaily=actualRun?.contract===require('./fresh-analysis-context').DAILY_SOURCE_RUN_CONTRACT;
+    const actualDaily=require('./fresh-analysis-context').isDailySourceRun(actualRun);
     if(!actualDaily){if(marked)fail('ordinary completion cannot leave canonical daily source','run');return null;}
     if(!/^\d{4}\.\d{4,5}$/.test(canonical(paper)))fail('actual daily source lacks canonical paper ID','run');
     const attempts=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'reader-attempts'),dir=completionDirectory(attempts),files=completionFiles(dir,paper);
@@ -485,12 +489,12 @@ function readVerifiedCompletion(paper){
     function verifyRevisionPointer(){
         if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1)))fail('revision completion pointer differs','run');
         const saved=read(revision.completionProof.path,revision.completionProof.sha256).value;
-        if(saved.contract!==COMPILATION_CONTRACT||saved.kind!=='normal-final-completion'
+        if(!format.isCompilation(saved)||saved.kind!=='normal-final-completion'
             ||saved.paperId!==canonical(paper)||saved.sequence!==files.length
             ||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
             ||revision.previousArticleSha256!==saved.articleSha256
             ||revision.previousPlanSha256!==saved.planSha256)fail('revision completion history differs','run');
-        const readerFeedback=stage?.contentMode==='reader-source-signed-revision-v1'
+        const readerFeedback=require('./reader-content-mode').is(stage, 'signed-revision')
             &&stage?.factReview?.contract===require('./daily-fact-review').CONTRACT;
         if(revision.reason==='stage-invalidated'||readerFeedback){
             if(readerFeedback){
@@ -539,9 +543,9 @@ function readVerifiedCompletion(paper){
     const ref=stage.ordinalCompletionProof;if(!ref||path.resolve(ref.path)!==path.join(dir,files.at(-1)))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
     savedSourceScope(paper,saved.identity,attempts);
-    if(saved.contract!==COMPILATION_CONTRACT||saved.kind!=='normal-final-completion'||saved.paperId!==canonical(paper)
+    if(!format.isCompilation(saved)||saved.kind!=='normal-final-completion'||saved.paperId!==canonical(paper)
         ||saved.sequence!==files.length||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
-        ||paper.analysisManifest.contracts.readerTargetOrdinalPatch!==CONTRACT||stage.ordinalPatchContract!==CONTRACT||!isDeepStrictEqual(saved.records,stage.ordinalPatchCompilations)
+        ||!format.matchesStage(stage,paper.analysisManifest,saved)||!isDeepStrictEqual(saved.records,stage.ordinalPatchCompilations)
         ||saved.articleSha256!==sha(paper.apiReaderArticle)||saved.planSha256!==stableSha(paper.apiReaderPlan)
         ||!isDeepStrictEqual(saved.stage,stageCore(stage)))fail('normal final completion/source/stage differs','run');
     let last;
@@ -563,10 +567,11 @@ function replayNormalCompletion(paper,{source,last,saved}){
         pixelFigureOrdinals:saved.normalization.pixelFigureOrdinals,draftOrderMappings:[]},normalized);
     const evidence=deep.buildApiReaderEvidenceContext('',source.text,source.structuredArtifacts,paper.arxivId);
     const parsed=deep.parseApiReaderArticleResult(JSON.stringify(normalized.draft),{arxivId:paper.arxivId,
+        ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
         availableFigureOrdinals:saved.normalization.pixelFigureOrdinals,requireIntegratedTables:true,
         minimumIntegratedTables:require('./reader-contract').readerRequirements({version:3,
             availableTableCount:[...evidence.matchAll(/^TABLE_(\d+):/gm)].length}).minimumTables,
-        requiredVersion:3,requireSourceBindings:true,allowDeterministicQuoteRepair:true,
+        requireSourceBindings:true,allowDeterministicQuoteRepair:true,
         allowDeterministicUnsupportedClaimPruning:true,enforceResourceAvailabilityClaims:true,
         verifiedResourceIdentity:deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources,source.text),
         sourceText:source.text,structuredArtifacts:source.structuredArtifacts});
@@ -575,5 +580,5 @@ function replayNormalCompletion(paper,{source,last,saved}){
     return true;
 }
 
-module.exports={CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
+module.exports={CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>Boolean(readVerifiedCompletion(paper)),compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};

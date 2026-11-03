@@ -7,7 +7,7 @@ const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reader-compil
 const fixture = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,
     'fixtures/reader-compiled-fact-2610.41381-real.json.gz'))));
 require('./helpers/isolated-tmp-write-guard.cjs').installTmpOnlyWriteGuard(tmp, {
-    readOnlyPythonScripts: ['reader_sealed_pdf_quote_evidence.py', 'reader_sealed_pdf_table_evidence.py', 'reader_pdf_cell_evidence.py']
+    readOnlyPythonScripts: ['reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py', 'reader_sealed_pdf_table_evidence.py', 'reader_pdf_cell_evidence.py']
         .map(name => path.join(tmp, 'scripts', name)),
     readOnlyPythonStdinScripts: [path.join(tmp, 'scripts/reader_pdf_cell_evidence.py')],
     readOnlyGitBlobOids: Object.keys(fixture.promptGitBlobs)

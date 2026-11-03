@@ -119,42 +119,12 @@ function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '', di
 function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
-    let promptFilePathForContract = null;
-    let currentPromptTextContract = null;
-    try {
-        ({ promptFilePathForContract, currentPromptTextContract } =
-            require('./prompt-text-versions.js'));
-    } catch (_error) {
-        promptFilePathForContract = null;
-    }
-    const candidates = [];
-    if (promptFilePathForContract) {
-        try {
-            candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, 'analysis-prompt-text-v1')));
-        } catch (_error) { /* 阶段没有 v1 路径 */ }
-        try {
-            candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, 'analysis-prompt-text-v2')));
-        } catch (_error) { /* 阶段没有 v2 路径 */ }
-        try {
-            candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, 'analysis-prompt-text-v3')));
-        } catch (_error) { /* 阶段没有 v3 路径 */ }
-        try {
-            candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, 'analysis-prompt-text-v4')));
-        } catch (_error) { /* 阶段没有 v4 路径 */ }
-        for (const contract of ['analysis-prompt-text-v5', 'analysis-prompt-text-v6',
-            'analysis-prompt-text-v7', 'analysis-prompt-text-v8', 'analysis-prompt-text-v9',
-            'analysis-prompt-text-v10', 'analysis-prompt-text-v11',
-            'analysis-prompt-text-v12', 'analysis-prompt-text-v13']) {
-            try { candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, contract))); }
-            catch (_error) { /* 此阶段未登记该版本 */ }
-        }
-        try {
-            candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, currentPromptTextContract(stage))));
-        } catch (_error) { /* 阶段没有登记版本 */ }
-    }
+    const candidates = require('./prompt-legacy-codec.js').legacyPromptPaths(stage);
+    try { candidates.push(require('./prompt-contracts.js').currentTextStagePromptPath(stage)); }
+    catch (_error) { /* No current text template for this stage. */ }
     for (const candidate of candidates) {
         try {
-            const bytes = readPromptEvidenceBytes(path.relative(PROJECT_ROOT, candidate).split(path.sep).join('/'));
+            const bytes = readPromptEvidenceBytes(candidate);
             if (sha256Buffer(bytes) === value) return bytes;
         } catch (_error) { /* 路径不存在 */ }
     }

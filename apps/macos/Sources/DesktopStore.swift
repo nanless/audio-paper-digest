@@ -48,7 +48,7 @@ enum DesktopKeychain {
             let data=try Data(contentsOf:file)
             guard let object=try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw DesktopError.message("个人资料格式损坏，原文件已保留") }
             try Self.validate(object);value=object
-        } else { value=["schema":1,"notes":[:],"favorites":[],"reading":[],"readingState":[:],"annotations":[:],"sessions":[],"jobs":[],"settings":["appearance":"system","font":18,"syncHours":12]] }
+        } else { value=try ClientProtocols.record(Self.personalFamily,fields:["notes":[:],"favorites":[],"reading":[],"readingState":[:],"annotations":[:],"sessions":[],"jobs":[],"settings":["appearance":"system","font":18,"syncHours":12]]) }
         var jobs=value["jobs"] as? [[String:Any]] ?? []
         for index in jobs.indices where ["running","queued"].contains(jobs[index]["status"] as? String ?? "") {
             jobs[index]["status"]="interrupted"; jobs[index]["message"]="上次运行中断；先核对已保存结果，付费请求不自动重发"
@@ -56,8 +56,16 @@ enum DesktopKeychain {
         value["jobs"]=jobs
         try save()
     }
+    nonisolated private static let personalFamily="paperdigest-personal-library"
+    nonisolated static func validPersonalHeader(_ object:[String:Any])->Bool {
+        if object["schema"] != nil { return ClientProtocols.hasValidHeader(object,personalFamily,field:"schema") }
+        return ClientProtocols.hasValidHeader(object,personalFamily)
+    }
     static func validate(_ object:[String:Any]) throws {
-        guard object["schema"] as? Int==1,object["notes"] is [String:[String:Any]],object["settings"] is [String:Any],object["favorites"] is [String],object["reading"] is [String],object["readingState"] is [String:[String:Any]],object["annotations"] is [String:[[String:Any]]],object["sessions"] is [[String:Any]],object["jobs"] is [[String:Any]] else{throw DesktopError.message("个人资料版本或结构不符，原文件已保留")}
+        guard validPersonalHeader(object),object["notes"] is [String:[String:Any]],object["settings"] is [String:Any],object["favorites"] is [String],object["reading"] is [String],object["readingState"] is [String:[String:Any]],object["annotations"] is [String:[[String:Any]]],object["sessions"] is [[String:Any]],object["jobs"] is [[String:Any]] else{throw DesktopError.message("个人资料版本或结构不符，原文件已保留")}
+        if object["schema"] != nil, let metadata=object["favoriteCollections"] as? [String:Any],metadata["version"]==nil {
+            throw DesktopError.message("原格式研究目录不能混入新格式收藏分类")
+        }
         try FavoriteCollections.validate(object["favoriteCollections"])
         for note in (object["notes"] as? [String:[String:Any]] ?? [:]).values {guard note["text"] is String,let revision=note["revision"] as? Int,revision>=0 else{throw DesktopError.message("笔记结构损坏，原文件已保留")}}
         if let raw=object["personalPapers"] {
@@ -77,6 +85,11 @@ enum DesktopKeychain {
         try data.write(to:file,options:[.atomic]); try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
     }
     func snapshot()->[String:Any] { value }
+    func browserSnapshot()->[String:Any] {
+        var projection=value
+        projection["favoriteCollectionsWritable"]=(value["favoriteCollections"] as? [String:Any]).map(FavoriteCollections.knownHeader) ?? true
+        return projection
+    }
     func setting(_ key:String)->Any? { (value["settings"] as? [String:Any])?[key] }
     func updateSettings(_ changes:[String:Any]) throws {
         let allowed:Set<String>=["appearance","font","reduceMotion","syncHours","httpProxy","endpoint","model","protocol","responsesStream","reasoningEffort","maxTokens","timeoutMs","dailyRequests","lastSettingPane"]
@@ -155,7 +168,7 @@ enum DesktopKeychain {
     }
     func session(_ id:String)->[String:Any]? { (value["sessions"] as? [[String:Any]])?.last{$0["id"] as? String==id} }
     func restorePersonal(_ object:[String:Any]) throws {
-        guard object["schema"] as? Int==1,object["notes"] is [String:Any],object["settings"] is [String:Any] else { throw DesktopError.message("备份个人资料合同不符") }
+        guard Self.validPersonalHeader(object),object["notes"] is [String:Any],object["settings"] is [String:Any] else { throw DesktopError.message("备份个人资料合同不符") }
         try Self.validate(object);let old=value; value=object; do { try save() } catch { value=old; throw error }
     }
 }

@@ -1,0 +1,63 @@
+{
+  "files": {
+    "manual/docs/editorial-reference-contract.md": {
+      "defaultSha256": "dc7d5c7c8bf0ed58b23ba7285d3d9b431e6542911c0717cf7e5472ad1c12edee"
+    },
+    "manual/docs/editorial-reference-contract-v2.md": {
+      "defaultSha256": "0cb9bad4666ff756e573ca6cb762d2c63c2e932787be8b8c1e8c0a6c93b23746"
+    },
+    "manual/scripts/manual-tutorial-quality-contract.js": {
+      "defaultSha256": "645092051faac8c6fb34de62f7247fd543dfc7efb0d6d50be74a171dc55d511f"
+    }
+  },
+  "blobs": {
+    "dc7d5c7c8bf0ed58b23ba7285d3d9b431e6542911c0717cf7e5472ad1c12edee": {
+      "blobOid": "ff3f384ffd80601a516308af1665ebd7dc63c327",
+      "paths": [
+        "manual/docs/editorial-reference-contract.md"
+      ]
+    },
+    "e2c4af283299bd941d26a80eca48698a3b773d39902215ec489357bc9d5a7da9": {
+      "blobOid": "6ae9a032231c19ecf033d05bf60358af101f50d3",
+      "paths": [
+        "manual/docs/editorial-reference-contract.md"
+      ]
+    },
+    "09799a0446f9f33f63bf538e5f974c7fd7cccaccea20a9e986d8506e745a6772": {
+      "blobOid": "e26672c3e3dc67648585f372c067ef657316e901",
+      "paths": [
+        "manual/docs/editorial-reference-contract.md"
+      ]
+    },
+    "386d3c969d4f9108d5d2a0809c1557a858ebc0050a3d7671dbb98ac12c90d6a6": {
+      "blobOid": "1ef92f489e91202e5ce7b94980ae872a3252fd60",
+      "paths": [
+        "manual/docs/editorial-reference-contract.md"
+      ]
+    },
+    "0cb9bad4666ff756e573ca6cb762d2c63c2e932787be8b8c1e8c0a6c93b23746": {
+      "blobOid": "326e5ae5b4caf9ba109daf2851ce593d2526ae43",
+      "paths": [
+        "manual/docs/editorial-reference-contract-v2.md"
+      ]
+    },
+    "645092051faac8c6fb34de62f7247fd543dfc7efb0d6d50be74a171dc55d511f": {
+      "blobOid": "7f49794eba7fb6e4a0aa925081a18b551c83748b",
+      "paths": [
+        "manual/scripts/manual-tutorial-quality-contract.js"
+      ]
+    },
+    "80d61b39a2b92030ab822b984e9881d1d01d2659d01c57d69d90516a16549bec": {
+      "blobOid": "d83dbb626dde68ef9ba3f1e0945b51cc5f1ebebb",
+      "paths": [
+        "manual/scripts/manual-tutorial-quality-contract.js"
+      ]
+    },
+    "7d91fc608e8ecac39c72d09b30f7cbda6638c6d2827ed7ba1208dfc22ef5bac3": {
+      "blobOid": "2e2ae1b467903a2d0111488f5c222a15ea1f3466",
+      "paths": [
+        "manual/scripts/manual-tutorial-quality-contract.js"
+      ]
+    }
+  }
+}

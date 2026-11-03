@@ -75,7 +75,6 @@ const SCHEMA = Object.freeze([
     { name: 'PD_BLOG_REVIEW_CHUNK_CHARS', required: false, type: 'int', min: 1 },
     { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
     { name: 'PD_OPENAI_RESPONSES_REASONING_EFFORT', required: false, type: 'string' },
-    { name: 'PD_VISUAL_PLANNER_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },
     { name: 'PD_STORAGE_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 }
 ]);

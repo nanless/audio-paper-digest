@@ -9,6 +9,7 @@ import unittest
 ACTUAL = os.environ.get('PD_SOURCE_CELL_DISPLAY_ACTUAL') == '1'
 from test_publish_to_blog import publish_to_blog as blog
 from publish_common import strict_source_cell_math_display
+from protocol_codec import record_header
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -20,7 +21,7 @@ class SourceCellMathDisplayTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 proof = strict_source_cell_math_display(raw)
                 self.assertEqual(proof, {
-                    'contract': 'source-cell-math-display-v1', 'kind': 'zero-width-unit-duplicate',
+                    **record_header('source-cell-math-display', 'source-cell-math-display'), 'kind': 'zero-width-unit-duplicate',
                     'sourceText': raw, 'sourceTextSha256': hashlib.sha256(raw.encode()).hexdigest(),
                     'displayText': scalar + ' ms'})
                 self.assertIsNone(strict_source_cell_math_display(proof['displayText']))

@@ -2,6 +2,7 @@ package com.nanless.paperdigest.data
 
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.jsoup.Jsoup
 import org.junit.Assert.*
 import org.junit.Test
@@ -28,6 +29,33 @@ class PublishedCitationRepositoryTest {
   suspend fun bound(repository:PublishedCitationRepository=repo):Article {val page=repository.fetchPage(paper);try{val a=CatalogRepository.extractArticle(page.html,paper,"fixture-actual-catalog");return repository.bindPage(paper,a,page)}finally{repository.releasePage(page)}}
   fun address(format:PublishedCitationRepository.Format)=responses.keys.single{it.endsWith('/'+format.filename)}
   fun artifactFiles()=directory.walkTopDown().filter{it.isFile&&it.parentFile.name in listOf("raw","receipts")}.toList()
+ }
+ @Test fun syntheticCurrentNamespaceUsesExplicitFourFileDeclarationWithoutConfusingOldAnchors()=fixture("arxiv-micla"){f->
+  val descriptors=JSONObject()
+  PublishedCitationRepository.Format.entries.forEach{format->
+   val old=f.address(format);val address=old.replace("/data/papers/","/client/papers/");var raw=f.responses.getValue(old)
+   if(format==PublishedCitationRepository.Format.JSON){val value=JSONObject(PublishedUtf8.decode(raw));value.remove("contract");value.remove("schemaVersion");val header=ClientProtocols.recordHeader("researcher-sidecars","researcher-sidecars");header.keys().forEach{value.put(it,header.get(it))};raw=canonical(value).toByteArray()}
+   f.responses[address]=raw;descriptors.put(format.filename,JSONObject().put("url",address).put("sha256",sha256(raw)))
+  }
+  val root=descriptors.getJSONObject("citation.json").getString("url").substringBeforeLast('/')+"/"
+  descriptors.put("rethink-context.json",ClientProtocols.recordHeader("paper-research-context","paper-research-context").put("url",root+"rethink-context.json").put("sha256","a".repeat(64)))
+  val original=f.responses.getValue(f.paper.blogURL)
+  f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$descriptors</script>").toByteArray()
+  val article=f.bound();val files=f.repo.declaredFiles(f.paper,article)
+  assertEquals(4,files.size);assertTrue(files.values.all{it.contains("/client/papers/")})
+  val result=f.repo.original(f.paper,article,PublishedCitationRepository.Format.JSON)
+  assertEquals(files.getValue("citation.json"),result.sourceURL)
+  assertArrayEquals(f.responses.getValue(result.sourceURL),result.bytes)
+  assertArrayEquals(result.bytes,f.repo.declaredBytes(f.paper,article,"citation.json"))
+  val changed=JSONObject(PublishedUtf8.decode(result.bytes)).put("extra","synthetic response changed after the page was read")
+  f.responses[result.sourceURL]=canonical(changed).toByteArray()
+  assertTrue(runCatching{f.repo.declaredBytes(f.paper,article,"citation.json")}.isFailure)
+  assertTrue(runCatching{f.repo.original(f.paper,article,PublishedCitationRepository.Format.JSON,verifyRemote=true)}.isFailure)
+  descriptors.getJSONObject("rethink-context.json").put("schemaFingerprint","0".repeat(64))
+  f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$descriptors</script>").toByteArray()
+  val corrupt=f.bound();assertTrue(f.repo.declaredFiles(f.paper,corrupt).isEmpty())
+  assertTrue(runCatching{f.repo.original(f.paper,corrupt,PublishedCitationRepository.Format.JSON)}.isFailure)
+  assertFalse(f.calls.any{it.contains("/data/papers/")})
  }
  @Test fun actualMiclaThreeFormatsAreExactPublishedOriginalBytesWithHonestSingleFileScope()=fixture("arxiv-micla"){f->
   val article=f.bound()

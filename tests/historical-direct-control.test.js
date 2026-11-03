@@ -72,7 +72,7 @@ test('近期失败包含半成品分析，并对其保留的错误做脱敏', t 
     const entry = { paperId: item.paperId, runId: item.runId, route: item.route.kind,
         projectionSha256: item.projectionSha256, status: 'analysis_partial',
         attempts: 1, latestError: 'root cause sk-test-secret', updatedAt: '2026-09-12T00:00:00.000Z' };
-    const body = { contract: runner.REGISTRY_CONTRACT, version: 1, planSha256: plan.planSha256,
+    const body = { ...require('../scripts/lib/protocol-codec').recordHeader(runner.REGISTRY_CONTRACT, 'historical-direct-rewrite-execution-registry'), planSha256: plan.planSha256,
         createdAt: '2026-09-08T00:00:00.000Z', entries: [entry] };
     const registryFile = path.join(root, 'registry.json');
     fs.writeFileSync(registryFile, JSON.stringify({ ...body, registrySha256: runner.stableHash(body) }));
@@ -105,7 +105,7 @@ test('状态把旧渲染器暂存的页面算作未完成', t => {
         projectionSha256: item.projectionSha256, status: 'staged', source: {}, analysis: {},
         staging: { pageStaging: { rendererImplementationSha256: 'a'.repeat(64) } },
         attempts: 1, latestError: null, updatedAt: '2026-09-08T00:00:00.000Z' };
-    const body = { contract: runner.REGISTRY_CONTRACT, version: 1, planSha256: plan.planSha256,
+    const body = { ...require('../scripts/lib/protocol-codec').recordHeader(runner.REGISTRY_CONTRACT, 'historical-direct-rewrite-execution-registry'), planSha256: plan.planSha256,
         createdAt: '2026-09-08T00:00:00.000Z', entries: [entry] };
     const registryFile = path.join(root, 'registry.json');
     fs.writeFileSync(registryFile, `${JSON.stringify({ ...body, registrySha256: runner.stableHash(body) })}\n`);
@@ -215,8 +215,8 @@ test('状态区分汇总对应记录尚未生成、无法读取和内容校验�
     assert.equal(unreadable[0].filename, broken); assert.match(unreadable[0].error, /必须是有效的 UTF-8 JSON/);
     fs.rmSync(broken);
     const corrupt = path.join(roots.aggregateProjectionRoot, 'corrupt.json');
-    fs.writeFileSync(corrupt, `${JSON.stringify({ contract: aggregateApi.PROJECTION_CONTRACT,
-        version: aggregateApi.PROJECTION_VERSION, planSha256: plan.planSha256,
+    fs.writeFileSync(corrupt, `${JSON.stringify({ ...require('../scripts/lib/protocol-codec').recordHeader(aggregateApi.PROJECTION_CONTRACT, 'historical-direct-aggregate-projection'),
+        planSha256: plan.planSha256,
         inventory: { ledgerSha256: 'x'.repeat(64), pageSetSha256: 'y'.repeat(64) } })}\n`);
     const damaged = blockersFor();
     assert.equal(damaged.length, 1); assert.equal(damaged[0].code, 'aggregate-projection-corrupt');
@@ -224,7 +224,7 @@ test('状态区分汇总对应记录尚未生成、无法读取和内容校验�
     // 另一计划的汇总对应记录不用于本计划，因此本计划仍记为缺少记录。
     fs.rmSync(corrupt);
     fs.writeFileSync(path.join(roots.aggregateProjectionRoot, 'other-plan.json'),
-        `${JSON.stringify({ contract: aggregateApi.PROJECTION_CONTRACT, version: aggregateApi.PROJECTION_VERSION,
+        `${JSON.stringify({ ...require('../scripts/lib/protocol-codec').recordHeader(aggregateApi.PROJECTION_CONTRACT, 'historical-direct-aggregate-projection'),
             planSha256: 'f'.repeat(64) })}\n`);
     assert.deepEqual(blockersFor().map(item => item.code), ['aggregate-projection-missing']);
 });
@@ -261,7 +261,7 @@ test('汇总状态核对页面内容，并分别报告缺失和多出的会议�
     const runRoot = path.join(aggregateRoot, runId); const stagedPath = 'pages/content/posts/task.md';
     fs.mkdirSync(path.join(runRoot, 'pages', 'content', 'posts'), { recursive: true });
     const bytes = Buffer.from('task page\n'); fs.writeFileSync(path.join(runRoot, stagedPath), bytes);
-    const body = { contract: aggregateApi.CONTRACT, version: aggregateApi.VERSION, status: 'complete',
+    const body = { ...require('../scripts/lib/protocol-codec').recordHeader(aggregateApi.CONTRACT, 'historical-direct-aggregate'), status: 'complete',
         scope: 'conference-task', key: 'icassp-2026-task-unexpected',
         source: { planSha256: minimalPlan().planSha256 },
         outputPage: { stagedPath, contentSha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') } };

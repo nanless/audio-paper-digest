@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const registry = require('../scripts/lib/prompt-text-versions');
+const registry = require('../scripts/lib/prompt-contracts');
 const evidence = require('../scripts/lib/prompt-evidence');
 const history = require('../scripts/lib/prompt-history');
 const deep = require('../scripts/deep-analyzer');
@@ -24,7 +24,7 @@ test('核心v7只纠正表格比较的取证说明，保留原首围栏其余字
     assert.equal(sha(old), oldSha);
     assert.deepEqual(old, execFileSync('git', ['cat-file', 'blob', oldBlob], { cwd: root }));
     assert.equal(fs.existsSync(path.join(root, oldPath)), false);
-    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v7');
+    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text');
     assert.equal(registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v6'), oldPath);
     const currentPath = registry.currentTextStagePromptPath('coreSummaryRepair');
     const before = block(old.toString()), after = block(evidence.readPromptEvidenceBytes(currentPath).toString());
@@ -44,7 +44,7 @@ test('核心v7只纠正表格比较的取证说明，保留原首围栏其余字
     assert.match(after, /不要增删末尾的零、舍入/);
     assert.throws(() => registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v99'), /没有登记/);
     assert.deepEqual(history.promptBytesForSha256('coreSummaryRepair', oldSha), old);
-    const templates = fs.readdirSync(path.join(root, 'prompts')).filter(f => f.endsWith('.md')
+    const templates = fs.readdirSync(path.join(root, 'prompts/current')).filter(f => f.endsWith('.md')
         && !['README.md', 'README.en.md'].includes(f));
     assert.equal(templates.length, 18); assert.equal(registry.CURRENT_PROMPT_FILES.length, 18);
 });
@@ -84,6 +84,6 @@ test('已完成core6按原Prompt冷复算，原阶段与检查点逐字不变，
     assert.equal(recovered.promptTextContract, 'analysis-prompt-text-v6');
     assert.equal(JSON.stringify({ paper, manifest }), original);
     const current = deep.prepareTextRecoveryStage({ analysisCheckpoint: analysis }, { version: 1, stages: {} }, stage, analysis, source);
-    assert.equal(current.promptTextContract, 'analysis-prompt-text-v7');
+    assert.equal(current.promptTextContract, 'analysis-prompt-text');
     assert.notEqual(current.fingerprint, fingerprint);
 });

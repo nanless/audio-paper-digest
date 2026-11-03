@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import kotlinx.coroutines.runBlocking
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -32,7 +33,7 @@ class PublishedRecordArchiveTest {
     @Test fun allAppearancesPreserveUnknownOriginalFieldsAndManifestBytes() = runBlocking {
         val f = Fixture(listOf(row(base + "posts/first/"), row(base + "posts/second/", "2610.12345v2")))
         try {
-            val result = f.read(f.paper(1)); assertEquals("verified-local-originals", result.getString("status"))
+            val result = f.read(f.paper(1)); assertTrue(ClientProtocols.isCurrentHeader(result,"paperdigest-published-record-archive")); assertEquals("verified-local-originals", result.getString("status"))
             assertArrayEquals(f.rawManifest, java.util.Base64.getDecoder().decode(result.getString("manifestRawBase64")))
             val records = result.getJSONArray("records"); assertEquals(2, records.length())
             for (i in 0 until records.length()) { assertEquals(canonical(f.rows[i]), canonical(records.getJSONObject(i).getJSONObject("record"))); assertEquals(0, records.getJSONObject(i).getInt("rowIndex")) }
@@ -67,7 +68,7 @@ class PublishedRecordArchiveTest {
     }
     @Test fun legacyUnboundPaperIsHonestUnavailableWithoutInventingSource() = runBlocking {
         val root = Files.createTempFile("archive-not-directory-", ".txt").toFile()
-        try { val result = PublishedRecordArchive(root).read(Paper("old", "Original")); assertEquals("unavailable", result.getString("status")); assertFalse(result.has("records")) } finally { root.delete() }
+        try { val result = PublishedRecordArchive(root).read(Paper("old", "Original")); assertTrue(ClientProtocols.isCurrentHeader(result,"paperdigest-published-record-archive")); assertEquals("unavailable", result.getString("status")); assertFalse(result.has("records")) } finally { root.delete() }
     }
     @Test fun validLargeLegacyIndexIsRetainedAsLegacyRatherThanMisreadAsShardedManifest() = runBlocking {
         val root = Files.createTempDirectory("legacy-index-archive-").toRealPath().toFile()

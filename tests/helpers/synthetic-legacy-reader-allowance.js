@@ -21,7 +21,7 @@ function saveSyntheticLegacyAllowance({directory,fromIdentity,toIdentity,payload
         oldNoProgress:payload.noProgress,oldFailureSignature:payload.failureSignature,clearedNoProgress:false,
         attempts:payload.attempts,fullAttempts:payload.fullAttempts,transportFailures:payload.transportFailures??0,
         inputDraftSha256:repair.hashDraft(payload.draft),outputDraftSha256:repair.hashDraft(payload.draft)};
-    const body={contract:repair.IMPLEMENTATION_ALLOWANCE_CONTRACT,fromIdentitySha256:audit.fromIdentitySha256,
+    const body={contract:'reader-implementation-repair-allowance-v1',fromIdentitySha256:audit.fromIdentitySha256,
         toIdentitySha256:audit.toIdentitySha256,oldPayloadSha256:audit.oldPayloadSha256,
         revisionAuditSha256:repair.hashDraft(audit),changedFields:changedFields.filter(k=>implementationFields.has(k))};
     if (!body.changedFields.length) throw new Error('Synthetic fixture needs a historical implementation change');

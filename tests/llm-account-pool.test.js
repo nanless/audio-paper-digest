@@ -1,4 +1,4 @@
-const { describe, it } = require('node:test');
+const { describe, it, test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -9,7 +9,7 @@ const {
     LlmAccountPoolExhaustedError,
     LlmAccountPoolLockTimeoutError,
     LlmAccountPoolStateError,
-    POLICY_VERSION,
+    ACCOUNT_POOL_CONTRACT,
     acquireStateLock,
     classifyOpenCodeGoQuotaResponse,
     getAccountId,
@@ -22,6 +22,9 @@ const {
     selectApiKey
 } = require('../scripts/llm-account-pool.js');
 const { requestLlmJson } = require('../scripts/utils.js');
+
+const { historicalContract, recordHeader } = require('../scripts/lib/protocol-codec');
+const LEGACY_POOL_POLICY = historicalContract(ACCOUNT_POOL_CONTRACT, 'equal-rotation');
 
 const ENDPOINT = 'https://opencode.ai/zen/go/v1';
 const PYTHON_BIN = process.env.PD_PYTHON_BIN || 'python3';
@@ -120,7 +123,7 @@ function writeLegacyState(file, keys, activeAccountId) {
     const identity = getPoolIdentity(keys, ENDPOINT);
     fs.writeFileSync(file, JSON.stringify({
         schemaVersion: 1,
-        policyVersion: POLICY_VERSION,
+        policyVersion: LEGACY_POOL_POLICY,
         generation: 3,
         services: {
             [identity.serviceId]: {
@@ -143,7 +146,7 @@ function writeStaleGroupState(file, keys) {
     const identity = getPoolIdentity(keys, ENDPOINT);
     fs.writeFileSync(file, JSON.stringify({
         schemaVersion: 1,
-        policyVersion: POLICY_VERSION,
+        policyVersion: LEGACY_POOL_POLICY,
         generation: 1,
         services: {
             [identity.serviceId]: {
@@ -178,7 +181,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         assert.strictEqual(group.activeAccountId, getAccountId(expected[0]));
         assert.strictEqual(group.rotationCursor, 1);
         assert.strictEqual(group.lastSelectedAtMs, 1006);
-        assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
+        assert.strictEqual(readStateStrict(file).contract, ACCOUNT_POOL_CONTRACT);
         // activeAccountId 只作可观测字段：下一次仍按游标继续，而不是一直用它。
         assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }).apiKey, expected[1]);
     });
@@ -318,7 +321,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         writeLegacyState(file, keys, ordered[1]);
 
         const legacyState = readStateStrict(file);
-        assert.strictEqual(legacyState.policyVersion, POLICY_VERSION);
+        assert.strictEqual(legacyState.policyVersion, LEGACY_POOL_POLICY);
         assert.strictEqual(legacyState.generation, 3);
 
         // 升级后的首次选择与旧 active 连续，随后自然进入等权轮转。
@@ -480,7 +483,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         const identity = getPoolIdentity(keys, ENDPOINT);
         const buildState = group => JSON.stringify({
             schemaVersion: 1,
-            policyVersion: POLICY_VERSION,
+            policyVersion: LEGACY_POOL_POLICY,
             generation: 1,
             services: {
                 [identity.serviceId]: {
@@ -626,7 +629,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         assert.ok(!raw.includes('account-a-secret'));
         assert.ok(!raw.includes('account-b-secret'));
         assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
-        assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
+        assert.strictEqual(readStateStrict(file).contract, ACCOUNT_POOL_CONTRACT);
     });
 
     it('账号冷却期间按稳定顺序在两个可用账号之间轮转', () => {
@@ -818,7 +821,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
             const { file } = tempState();
             const raw = JSON.stringify({
                 schemaVersion: 1,
-                policyVersion: POLICY_VERSION,
+                policyVersion: LEGACY_POOL_POLICY,
                 generation,
                 services: {}
             });
@@ -834,7 +837,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         const { file } = tempState();
         const raw = JSON.stringify({
             schemaVersion: 1,
-            policyVersion: POLICY_VERSION,
+            policyVersion: LEGACY_POOL_POLICY,
             generation: Number.MAX_SAFE_INTEGER,
             services: {}
         });
@@ -851,7 +854,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         const { file } = tempState();
         const raw = JSON.stringify({
             schemaVersion: 1,
-            policyVersion: POLICY_VERSION,
+            policyVersion: LEGACY_POOL_POLICY,
             generation: 1,
             services: {
                 service: {
@@ -961,7 +964,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         assert.strictEqual(result.stdout.trim(), 'b');
         // Python 写回共享状态后，Node 仍能读取并遵守冷却记录。
         assert.strictEqual(selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 3000 }).apiKey, 'b');
-        assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
+        assert.strictEqual(readStateStrict(file).contract, ACCOUNT_POOL_CONTRACT);
     });
 
     it('Node 可读取 Python 写入的等权轮转状态', { skip: !HAS_PYTHON }, () => {
@@ -1426,4 +1429,40 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         assert.strictEqual(seen.filter(value => value === `Bearer ${expected[1]}`).length, 5);
         assert.strictEqual(selectApiKey(keys, ENDPOINT, file).apiKey, expected[1]);
     });
+});
+
+test('旧账号池只读不改字节，正常选择后保留冷却、组身份和代数再写稳定格式', () => {
+    const keys = ['migration-a', 'migration-b'];
+    const { file } = tempState();
+    const expected = expectedKeyOrder(keys);
+    const identity = writeLegacyState(file, keys, getAccountId(expected[0]));
+    const old = JSON.parse(fs.readFileSync(file, 'utf8'));
+    old.services[identity.serviceId].accounts[getAccountId(expected[0])] = {
+        status: 'quota_blocked', blockedUntilMs: 9000, evidence: 'preserve-this-history'
+    };
+    fs.writeFileSync(file, JSON.stringify(old), { mode: 0o600 });
+    const before = fs.readFileSync(file);
+    assert.equal(readStateStrict(file).generation, 3);
+    assert.deepEqual(fs.readFileSync(file), before);
+    assert.equal(selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }).apiKey, expected[1]);
+    const saved = readStateStrict(file);
+    assert.equal(saved.contract, ACCOUNT_POOL_CONTRACT);
+    assert.equal(saved.schemaFingerprint, recordHeader(ACCOUNT_POOL_CONTRACT, ACCOUNT_POOL_CONTRACT).schemaFingerprint);
+    assert.equal('policyVersion' in saved, false);
+    assert.equal('schemaVersion' in saved, false);
+    assert.equal(saved.generation, 4);
+    assert.deepEqual(saved.services[identity.serviceId].accounts, old.services[identity.serviceId].accounts);
+    assert.ok(saved.services[identity.serviceId].groups[identity.groupId]);
+});
+
+test('当前账号池拒绝假结构指纹、未知格式和新旧头混用，保留原状态文件', () => {
+    const header = recordHeader(ACCOUNT_POOL_CONTRACT, ACCOUNT_POOL_CONTRACT);
+    for (const mutation of [{ schemaFingerprint: '0'.repeat(64) }, { contract: `${ACCOUNT_POOL_CONTRACT}-unknown` },
+        { schemaVersion: 1 }, { policyVersion: LEGACY_POOL_POLICY }]) {
+        const { file } = tempState();
+        const raw = JSON.stringify({ ...header, generation: 8, services: {}, ...mutation });
+        fs.writeFileSync(file, raw, { mode: 0o600 });
+        assert.throws(() => selectApiKey(['a', 'b'], ENDPOINT, file), error => error.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+        assert.equal(fs.readFileSync(file, 'utf8'), raw);
+    }
 });

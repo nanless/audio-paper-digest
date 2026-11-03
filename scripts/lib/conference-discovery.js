@@ -9,10 +9,11 @@ const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
 const officialAcquisition = require('./official-conference-acquisition.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'conference-discovery-v2';
-const REPORT_CONTRACT = 'conference-discovery-report-v2';
-const VERSION = 2;
+const CONTRACT = codec.contract('conference-discovery');
+const REPORT_CONTRACT = codec.contract('conference-discovery-report');
 const ADAPTERS = new Set(['icassp', 'iclr', 'icml', 'official-proceedings']);
 const MATCH_KINDS = ['exact', 'normalized', 'ambiguous', 'unmatched'];
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
@@ -44,6 +45,11 @@ function exact(value, fields, name) {
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         throw fail(`${name} 含未允许的字段或缺少必填字段`);
     }
+}
+
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { throw fail(`format header invalid: ${error.message}`); }
 }
 
 function assertSha(value, name) {
@@ -359,8 +365,8 @@ function buildReport(manifest) {
     const counts = Object.fromEntries(MATCH_KINDS.map(kind => [kind, manifest.members.filter(member => member.match.kind === kind).length]));
     const matchedPaths = new Set(manifest.members.flatMap(member => member.match.candidates.map(candidate => candidate.path)));
     const report = {
-        contract: REPORT_CONTRACT,
-        version: VERSION,
+        ...codec.recordHeader(codec.isCurrentHeader(manifest, 'conference-discovery') ? REPORT_CONTRACT
+            : codec.historicalContract('conference-discovery-report', 'replayed-matches'), 'conference-discovery-report'),
         adapter: manifest.adapter,
         conference: manifest.conference,
         candidateManifestSha256: sha256(canonicalBytes(manifest)),
@@ -411,11 +417,12 @@ function matchMember(adapter, member, pdfCatalog, byPath) {
 }
 
 function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, reportRawBytes } = {}) {
-    const expectedManifestFields = ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
+    const header = recordHeaderFor(candidateManifest, 'conference-discovery');
+    const expectedManifestFields = [...Object.keys(header), 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
         'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'];
     if (Object.hasOwn(candidateManifest, 'acquisitionReceipt')) expectedManifestFields.push('acquisitionReceipt');
     exact(candidateManifest, expectedManifestFields, 'candidate manifest');
-    if (candidateManifest.contract !== CONTRACT || candidateManifest.version !== VERSION || !ADAPTERS.has(candidateManifest.adapter)) {
+    if (!ADAPTERS.has(candidateManifest.adapter)) {
         throw fail('候选 manifest 的协议名称、版本或适配器不受支持');
     }
     validateConferenceForAdapter(candidateManifest.adapter, candidateManifest.conference);
@@ -529,9 +536,11 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
     if (assertSha(candidateManifest.memberSetSha256, 'candidate manifest memberSetSha256')
         !== ledgerApi.memberSetSha256(candidateManifest.members)) throw fail('候选 manifest 的成员集合 SHA 与重新计算的结果不同');
 
-    exact(report, ['contract', 'version', 'adapter', 'conference', 'candidateManifestSha256',
+    const reportHeader = recordHeaderFor(report, 'conference-discovery-report');
+    exact(report, [...Object.keys(reportHeader), 'adapter', 'conference', 'candidateManifestSha256',
         'metadataSnapshotSha256', 'pdfCatalogSha256', 'counts'], 'discovery report');
-    if (report.contract !== REPORT_CONTRACT || report.version !== VERSION || report.adapter !== candidateManifest.adapter) {
+    if (codec.isCurrentHeader(report, 'conference-discovery-report') !== codec.isCurrentHeader(candidateManifest, 'conference-discovery')
+        || report.adapter !== candidateManifest.adapter) {
         throw fail('discovery 报告的协议名称、版本或适配器与候选 manifest 不匹配');
     }
     exact(report.conference, ['id', 'year'], 'discovery report conference');
@@ -810,8 +819,7 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
     if (['icassp', 'official-proceedings'].includes(adapter)) markSharedIcasspCandidatesAmbiguous(members);
     members.sort((left, right) => compare(ledgerApi.identityKey(left.identity), ledgerApi.identityKey(right.identity)));
     const manifest = {
-        contract: CONTRACT,
-        version: VERSION,
+        ...codec.recordHeader(CONTRACT, 'conference-discovery'),
         adapter,
         conference,
         metadataSnapshot: metadata.descriptor,
@@ -829,7 +837,7 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
 }
 
 module.exports = {
-    CONTRACT, REPORT_CONTRACT, VERSION, ADAPTERS, MATCH_KINDS, MAX_METADATA_BYTES, MAX_PDF_BYTES,
+    CONTRACT, REPORT_CONTRACT, ADAPTERS, MATCH_KINDS, MAX_METADATA_BYTES, MAX_PDF_BYTES,
     canonicalBytes, readMetadataSnapshot, catalogPdfs, normalizedTitle, discoverConference, buildReport,
     validateDiscoveryBundle, loadDiscoveryHandle, discoveryHandleSnapshot, replayDiscoveryMember,
     replayDiscoveryMembers, SAFE_JSON_NAME,

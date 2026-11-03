@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+const qualityFormats = require('./lib/analysis-quality-format');
+const { hasScoringAuditFormat } = require('./lib/scoring-record-format');
 /**
  * Paper Digest 统一分析引擎
  * 封装：单篇分析(重试+解析)、批量分析、增量保存
@@ -921,7 +923,7 @@ function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOpt
         catch (error) { return `本次来源纠正的原包、来源及完整输出未闭合：${error.message}`; }
     }
     if (!hasValidAnalysisBodyUsingRules(paper, { tagRules })) return '分析正文未通过内容检查。';
-    if (!paper.analysisManifest || paper.analysisManifest.version !== 1) {
+    if (!qualityFormats.manifestHeader(paper.analysisManifest)) {
         return '分析阶段记录 analysisManifest 缺失，或其版本无效。';
     }
     const stages = paper.analysisManifest.stages;
@@ -943,11 +945,11 @@ function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOpt
         { analysis: paper.analysis, imageManifest: paper.imageManifest }
     )) return '人工接续分析的记录未通过核验。';
     const scoring = stages.scoringAudit;
-    if (scoring?.scoringContract === 'api-scoring-audit-v2') {
+    if (hasScoringAuditFormat(scoring)) {
         if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
         if (!scoringStabilityIsResolved(scoring, paper)) return '评分稳定性检查未通过。';
         if (readerOptions.conferenceReaderRefreshUpstream !== true
-            && !hasValidApiReaderV3Records(paper, readerOptions)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
+            && !hasValidIntegratedApiReaderRecords(paper, readerOptions)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
     }
     return null;
 }
@@ -961,7 +963,7 @@ function isCompleteAnalysisContent(paper) {
 function getConferenceReaderRefreshUpstreamReason(paper, { tagRules } = {}) {
     if (paper?.source !== 'conference' || !tagRules
         || paper.analysisManifest?.manualTakeover
-        || paper.analysisManifest?.stages?.scoringAudit?.scoringContract !== 'api-scoring-audit-v2'
+        || !hasScoringAuditFormat(paper.analysisManifest?.stages?.scoringAudit)
         || !require('./lib/pending-fact-feedback').completed(paper)
         || require('./lib/tag-stage-record').readTagStageRecord(paper.analysisManifest,
             paper.analysisStageCheckpoints).stage?.registrySha256 !== tagRules.registrySha256) {
@@ -1000,7 +1002,7 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
     if (paper?.latestAnalysisAttemptError
         || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed'
         || !hasValidAnalysisBody(paper, { legacyTags: true })
-        || !manifest || manifest.version !== 1
+        || !qualityFormats.hasOriginalManifestHeader(manifest)
         || !stages || typeof stages !== 'object' || Array.isArray(stages)
         || manifest.manualTakeover
         || (contracts && (typeof contracts !== 'object' || Array.isArray(contracts)))
@@ -1019,10 +1021,10 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
         return false;
     }
     const scoring = stages.scoringAudit;
-    return scoring?.scoringContract === 'api-scoring-audit-v2'
+    return hasScoringAuditFormat(scoring)
         && scoringAuditBindsFinalAnalysis(paper)
         && scoringStabilityIsResolved(scoring, paper)
-        && hasValidApiReaderV3Records(paper)
+        && hasValidIntegratedApiReaderRecords(paper)
         && !validateManualTakeoverManifest(
             manifest,
             manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
@@ -1038,7 +1040,7 @@ function canRepairCoreSummaryFromSavedAnalysis(paper) {
     if (paper?.latestAnalysisAttemptError
         || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed'
         || !hasValidAnalysisBody(paper)
-        || !manifest || manifest.version !== 1
+        || !qualityFormats.manifestHeader(manifest)
         || !stages || typeof stages !== 'object' || Array.isArray(stages)
         || REQUIRED_RECOVERY_STAGES.some(stage =>
             !isRecoveryStageTerminal(stage, stages[stage]?.status))
@@ -1049,10 +1051,10 @@ function canRepairCoreSummaryFromSavedAnalysis(paper) {
             manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
             { analysis: paper.analysis, imageManifest: paper.imageManifest }
         )) return false;
-    return scoring?.scoringContract === 'api-scoring-audit-v2'
+    return hasScoringAuditFormat(scoring)
         && scoringAuditBindsFinalAnalysis(paper)
         && scoringStabilityIsResolved(scoring, paper)
-        && hasValidApiReaderV3Records(paper);
+        && hasValidIntegratedApiReaderRecords(paper);
 }
 
 function getReadOnlyValidationAnalysisRunSummary(papers) {
@@ -1065,8 +1067,9 @@ function getReadOnlyValidationAnalysisRunSummary(papers) {
     return { success, remaining, status: getAnalysisRunStatus({ success }, remaining) };
 }
 
-const API_READER_V3_CONTRACT = 'beginner-researcher-v3';
-const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
+const readerFormats = require('./lib/reader-record-format');
+const readerProtocols = require('./lib/reader-stage-protocols');
+const API_READER_QUALITY_METRICS_CONTRACT = readerProtocols.header('qualityMetrics').contract;
 const { scoringStabilityIsResolved: apiScoringStabilityIsResolved,
     SCORING_STABILITY_RESOLUTION_CONTRACT } = require('./lib/scoring-stability.js');
 function scoringStabilityIsResolved(stage, paper = null) {
@@ -1079,9 +1082,10 @@ function scoringStabilityIsResolved(stage, paper = null) {
         return local.withSavedPaper(paper, () => local.assertVerifiedScoringStage(paper, stage));
     } catch (_) { return false; }
 }
-const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
-const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
-const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
+const API_READER_SOURCE_BINDING_CONTRACT = readerProtocols.header('sourceBindings').contract;
+const readerIdentityFormat = require('./lib/reader-identity-format');
+const API_READER_AUTHOR_IDENTITY_CONTRACT = readerIdentityFormat.header('authors').contract;
+const API_READER_RESOURCE_IDENTITY_CONTRACT = readerIdentityFormat.header('resources').contract;
 const EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1';
 const EPHEMERAL_FIGURE_FORBIDDEN_FIELDS = new Set([
     'cachePath', 'tempPath', 'path', 'bytes', 'rawBytes', 'buffer',
@@ -1098,7 +1102,7 @@ function stableSha256(value) {
 }
 
 
-function hasValidApiReaderV3Records(paper, options = {}) {
+function hasValidIntegratedApiReaderRecords(paper, options = {}) {
     try {
         const local = require('./lib/conference-source-resource-correction');
         const route = local.isSourceCorrectionRecord(paper)
@@ -1109,20 +1113,20 @@ function hasValidApiReaderV3Records(paper, options = {}) {
                 () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,
                     () => require('./lib/reader-source-table-column-units').withSavedPaper(paper,
                         () => require('./lib/reader-authenticated-pdf-table-evidence').withSavedPaper(paper,
-                            () => hasValidApiReaderV3RecordsUnchecked(paper, options)))))));
+                            () => hasValidIntegratedApiReaderRecordsUnchecked(paper, options)))))));
     } catch (error) {
         if (Array.isArray(options.diagnostics)) options.diagnostics.push({
             check: 'saved_evidence_replay', message: String(error?.message || error).slice(0, 2000) });
         return false;
     }
 }
-function getApiReaderV3RecordDiagnostics(paper, options = {}) {
+function getIntegratedApiReaderRecordDiagnostics(paper, options = {}) {
     const diagnostics = [];
-    if (hasValidApiReaderV3Records(paper, { ...options, diagnostics })) return [];
+    if (hasValidIntegratedApiReaderRecords(paper, { ...options, diagnostics })) return [];
     return diagnostics.length ? diagnostics : [{ check: 'reader_record_bindings',
         message: 'Reader 的协议、正文、计划、作者、资源或阶段哈希不一致。' }];
 }
-function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
+function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.apiReaderArticle;
     const plan = paper?.apiReaderPlan;
@@ -1133,9 +1137,9 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     const resourceBinding = require('./lib/reader-resource-binding');
     const legacyResourceBinding = options.legacyConferenceResourceBindings === true
         && resourceBinding.legacyConferenceResourceIdentity(paper);
-    if (manifest?.contracts?.apiReaderArticle !== API_READER_V3_CONTRACT
-        || plan?.version !== 3 || plan?.contract !== API_READER_V3_CONTRACT
+    if (!readerProtocols.validateBindings(manifest?.contracts, stage, plan)
         || stage?.status !== 'complete'
+        || !require('./lib/reader-content-mode').validForSavedPlan(stage, plan)
         || typeof article !== 'string' || !article.trim()
         || !Array.isArray(figures)
         || !authors || typeof authors !== 'object' || Array.isArray(authors)
@@ -1168,7 +1172,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     const authorsSha256 = stableSha256(authors);
     const authorIdentity = authors.identity;
     const authorIdentitySha256 = stableSha256(authorIdentity);
-    const authorIdentityValid = authorIdentity?.contract === API_READER_AUTHOR_IDENTITY_CONTRACT
+    const authorIdentityValid = readerIdentityFormat.hasIdentity(authorIdentity, 'authors')
         && authors.identitySha256 === authorIdentitySha256
         && authorIdentity.sourceTextSha256 === paper.sourceSha256
         && authorIdentity.metadataSha256 === stableSha256(paper.authors || [])
@@ -1199,7 +1203,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
         });
     const { identitySha256: _resourceIdentitySha256, ...resourceIdentity } = resources;
     const resourceIdentitySha256 = stableSha256(resourceIdentity);
-    const resourceIdentityValid = resources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
+    const resourceIdentityValid = readerIdentityFormat.hasIdentity(resources, 'resources')
         && resources.identitySha256 === resourceIdentitySha256
         && Array.isArray(resources.resources)
         && resources.resources.every(resource => (
@@ -1233,12 +1237,9 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     // 旧低层格式检查没有来源能力时保持只读；新四文件来源必须实际重读，
     // 不接受正文或草稿附带的文本代替 source.txt。
     let resourceClaimsValid = true;
-    const claimsContract = require('./deep-analyzer').API_READER_RESOURCE_CLAIMS_CONTRACT;
-    const declaredResourceClaims = manifest.contracts.readerResourceClaims;
-    const declaredStageResourceClaims = stage.readerResourceClaimsContractVersion;
-    const requiresResourceClaimsReplay = declaredResourceClaims !== undefined || declaredStageResourceClaims !== undefined;
-    if (requiresResourceClaimsReplay && (declaredResourceClaims !== claimsContract
-        || declaredStageResourceClaims !== claimsContract)) {
+    const claimsFormat = require('./lib/reader-resource-claims-format');
+    const requiresResourceClaimsReplay = claimsFormat.requiredForSavedPaper(paper);
+    if (requiresResourceClaimsReplay && !claimsFormat.matches(manifest, stage)) {
         if (Array.isArray(options.diagnostics)) options.diagnostics.push({ check: 'resource_claims_contract',
             message: '资源声明协议在清单与 Reader 阶段中的声明不一致。' });
         return false;
@@ -1253,7 +1254,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
             || stableSha256(resourceSourceProof) !== stableSha256(manifest.freshRewriteProvenance)) return false;
         const runDir = path.join(FILES.dailyFreshSourceRunsDir, resourceSourceProof.runId);
         const run = require('./lib/reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
-        if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT || run.runId !== resourceSourceProof.runId) return false;
+        if (!fresh.isDailySourceRun(run) || run.runId !== resourceSourceProof.runId) return false;
         resourceClaimSource = fresh.readFreshSource(runDir, paper, {
             runId: run.runId, sourceExpectations: run.sourceExpectations
         });
@@ -1410,32 +1411,27 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
         figures: stage.figureCount === figures.length
             && stage.figuresSha256 === figuresSha256,
         authors: stage.readerAuthorsSha256 === authorsSha256
-            && manifest?.contracts?.apiReaderAuthorIdentity === API_READER_AUTHOR_IDENTITY_CONTRACT
-            && stage.readerAuthorIdentityContractVersion === API_READER_AUTHOR_IDENTITY_CONTRACT
+            && readerIdentityFormat.payloadBinding(paper, 'authors')
             && stage.readerAuthorIdentitySha256 === authorIdentitySha256
             && authorIdentityValid,
-        resources: manifest?.contracts?.apiReaderResourceIdentity === API_READER_RESOURCE_IDENTITY_CONTRACT
-            && stage.resourceIdentityContractVersion === API_READER_RESOURCE_IDENTITY_CONTRACT
+        resources: readerIdentityFormat.payloadBinding(paper, 'resources')
             && stage.resourceIdentitySha256 === resourceIdentitySha256
             && stage.resourceCount === resources.resources.length
-            && manifest?.stages?.openSourceScan?.resourceEvidenceContract
-                === API_READER_RESOURCE_IDENTITY_CONTRACT
+            && readerIdentityFormat.openSourceBinding(manifest?.stages?.openSourceScan, resources)
             && manifest?.stages?.openSourceScan?.resourceEvidenceSha256 === resourceIdentitySha256
             && resourceIdentity.sourceTextSha256 === paper.sourceSha256
             && resourceIdentityValid && resourceClaimsValid,
         execution: typeof stage.model === 'string' && stage.model.trim()
             && typeof stage.protocol === 'string' && stage.protocol.trim()
-            && stage.parserVersion === 'api-reader-parser-v3'
-            && stage.assemblerVersion === 'api-reader-assembler-v3'
-            && stage.tableContractVersion === 'api-reader-tables-v3'
-            && stage.figureContractVersion === 'api-reader-figures-v3',
-        quality: stage.qualityMetricsContractVersion === API_READER_QUALITY_METRICS_CONTRACT
-            && stage.qualityMetrics?.contract === API_READER_QUALITY_METRICS_CONTRACT
+            && readerProtocols.stageMatches(stage, 'parser')
+            && readerProtocols.stageMatches(stage, 'assembler')
+            && readerProtocols.stageMatches(stage, 'tables')
+            && readerProtocols.stageMatches(stage, 'figures'),
+        quality: readerProtocols.stageMatches(stage, 'qualityMetrics')
+            && readerProtocols.isHeader(stage.qualityMetrics, 'qualityMetrics')
             && stage.qualityMetrics?.blockingIssueCount === 0,
-        source_bindings: plan.sourceBindingsContract === API_READER_SOURCE_BINDING_CONTRACT
-            && manifest?.contracts?.apiReaderSourceBindings === API_READER_SOURCE_BINDING_CONTRACT
+        source_bindings: readerProtocols.validateBindings(manifest?.contracts, stage, plan)
             && plan.sourceBindingsSha256 === sourceBindingsSha256
-            && stage.sourceBindingsContractVersion === API_READER_SOURCE_BINDING_CONTRACT
             && stage.sourceBindingsSha256 === sourceBindingsSha256
             && stage.sourceBindingsSourceTextSha256 === paper.sourceSha256
             && stage.sourceBindingsSourceTextSha256 === manifest?.sourceAcquisition?.sourceSha256
@@ -1457,7 +1453,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     if (failedDiagnosticChecks.length > 0) {
         if (Array.isArray(options.diagnostics)) options.diagnostics.push(...failedDiagnosticChecks
             .map(check => ({ check, message: `Reader 核验项未通过：${check}` })));
-        console.warn(`[analysis-engine] 读者文章 v3 的以下核验项未通过：${failedDiagnosticChecks.join(', ')}`);
+        console.warn(`[analysis-engine] 完整读者文章的以下核验项未通过：${failedDiagnosticChecks.join(', ')}`);
     }
     return Boolean(
         diagnosticChecks.assembled_content_visible
@@ -1470,33 +1466,28 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
         && stage.figureCount === figures.length
         && stage.figuresSha256 === figuresSha256
         && stage.readerAuthorsSha256 === authorsSha256
-        && manifest?.contracts?.apiReaderAuthorIdentity === API_READER_AUTHOR_IDENTITY_CONTRACT
-        && stage.readerAuthorIdentityContractVersion === API_READER_AUTHOR_IDENTITY_CONTRACT
+        && readerIdentityFormat.payloadBinding(paper, 'authors')
         && stage.readerAuthorIdentitySha256 === authorIdentitySha256
         && authorIdentityValid
-        && manifest?.contracts?.apiReaderResourceIdentity === API_READER_RESOURCE_IDENTITY_CONTRACT
-        && stage.resourceIdentityContractVersion === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && readerIdentityFormat.payloadBinding(paper, 'resources')
         && stage.resourceIdentitySha256 === resourceIdentitySha256
         && stage.resourceCount === resources.resources.length
-        && manifest?.stages?.openSourceScan?.resourceEvidenceContract
-            === API_READER_RESOURCE_IDENTITY_CONTRACT
+        && readerIdentityFormat.openSourceBinding(manifest?.stages?.openSourceScan, resources)
         && manifest?.stages?.openSourceScan?.resourceEvidenceSha256 === resourceIdentitySha256
         && resourceIdentity.sourceTextSha256 === paper.sourceSha256
         && resourceIdentityValid
         && resourceClaimsValid
         && typeof stage.model === 'string' && stage.model.trim()
         && typeof stage.protocol === 'string' && stage.protocol.trim()
-        && stage.parserVersion === 'api-reader-parser-v3'
-        && stage.assemblerVersion === 'api-reader-assembler-v3'
-        && stage.tableContractVersion === 'api-reader-tables-v3'
-        && stage.figureContractVersion === 'api-reader-figures-v3'
-        && stage.qualityMetricsContractVersion === API_READER_QUALITY_METRICS_CONTRACT
-        && stage.qualityMetrics?.contract === API_READER_QUALITY_METRICS_CONTRACT
+        && readerProtocols.stageMatches(stage, 'parser')
+        && readerProtocols.stageMatches(stage, 'assembler')
+        && readerProtocols.stageMatches(stage, 'tables')
+        && readerProtocols.stageMatches(stage, 'figures')
+        && readerProtocols.stageMatches(stage, 'qualityMetrics')
+        && readerProtocols.isHeader(stage.qualityMetrics, 'qualityMetrics')
         && stage.qualityMetrics?.blockingIssueCount === 0
-        && plan.sourceBindingsContract === API_READER_SOURCE_BINDING_CONTRACT
-        && manifest?.contracts?.apiReaderSourceBindings === API_READER_SOURCE_BINDING_CONTRACT
+        && readerProtocols.validateBindings(manifest?.contracts, stage, plan)
         && plan.sourceBindingsSha256 === sourceBindingsSha256
-        && stage.sourceBindingsContractVersion === API_READER_SOURCE_BINDING_CONTRACT
         && figurePersistenceValid
         && ephemeralFiguresValid
         && figureSourceValid
@@ -1545,8 +1536,9 @@ function isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, optio
         || paper.conferencePaperId !== paper.id || paper.sourceId !== paper.id
         || paper.analysisSource !== 'conference_pdf_text'
         || manifest?.manualTakeover
-        || manifest?.contracts?.apiReaderArticle !== API_READER_V3_CONTRACT
-        || manifest?.stages?.scoringAudit?.scoringContract !== 'api-scoring-audit-v2'
+        || !readerFormats.isIntegratedPlan(paper.apiReaderPlan)
+        || manifest?.contracts?.apiReaderArticle !== paper.apiReaderPlan.contract
+        || !hasScoringAuditFormat(manifest?.stages?.scoringAudit)
         || !tagRules || !/^[a-f0-9]{64}$/u.test(String(tagRules.registrySha256 || ''))) return false;
     try {
         const tagRecord = require('./lib/tag-stage-record').readTagStageRecord(
@@ -2466,8 +2458,8 @@ module.exports = {
     getConferenceReaderRefreshUpstreamReason,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
-    hasValidApiReaderV3Records,
-    getApiReaderV3RecordDiagnostics,
+    hasValidIntegratedApiReaderRecords,
+    getIntegratedApiReaderRecordDiagnostics,
     API_READER_QUALITY_METRICS_CONTRACT,
     API_READER_SOURCE_BINDING_CONTRACT,
     SCORING_STABILITY_RESOLUTION_CONTRACT,

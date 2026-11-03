@@ -130,7 +130,7 @@ class ManualReviewCacheReuseTest(unittest.TestCase):
             publisher.save_review_receipt(DATE,pages,gate,expected_base_head=publisher.validate_git_publish_branch(),
                 generation_manifest=manifest,reviewed_results=results,manual_review_record=statement)
             actual=publisher.load_verified_review_receipt(DATE)
-            self.assertEqual(json.loads(actual[1].read_text())['reviewProvenance']['version'],4)
+            self.assertEqual(json.loads(actual[1].read_text())['reviewProvenance']['contract'],'manual-review-statement')
             new_entry=next(i for i in statement['files'] if 'cacheReuse' not in i)
             new_cache=publisher.manual_cache_reuse_for_file(DATE,new_entry['path'],new_entry['sha256'])
             self.assertEqual(new_cache['record']['modelIdentity'],{'status':'recorded','reviewSubagent':new_entry['reviewSubagent']})

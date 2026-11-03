@@ -301,6 +301,27 @@ private actor CloudIndependentPublishGate {
             try require(info.reference==state.reference && newFiles==oldFiles,"no new UUID, overwrite or remote deletion")
             try require(await log.latest()?.manifestVerified==true,"completion persisted after readback")
         }
+        await check("historical checkpoint resumes its exact original remote manifest header without rewriting bytes") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),destination=UUID(),s=try service(dav,log,destination:destination)
+            await dav.add(.init("PUT","manifest.json",lose:true))
+            try await rejects(.transport) { _=try await s.upload(encodedBackup:small) }
+            guard let state=await log.latest(),let original=await dav.getFile(base(state.reference)+"manifest.json") else { throw CloudTestError(message:"missing original material") }
+            var oldManifest=try JSONSerialization.jsonObject(with:original) as! [String:Any]
+            oldManifest["contract"]="paperdigest-cloud-snapshot-v1";oldManifest.removeValue(forKey:"schemaFingerprint")
+            let originalLegacyBytes=try JSONSerialization.data(withJSONObject:oldManifest,options:.sortedKeys)
+            await dav.setFile(base(state.reference)+"manifest.json",originalLegacyBytes)
+            let encoder=JSONEncoder();encoder.dateEncodingStrategy = .millisecondsSince1970
+            var oldState=try JSONSerialization.jsonObject(with:encoder.encode(state)) as! [String:Any]
+            oldState["contract"]="paperdigest-cloud-transfer-v1";oldState.removeValue(forKey:"schemaFingerprint")
+            let decoder=JSONDecoder();decoder.dateDecodingStrategy = .millisecondsSince1970
+            let checkpoint=try decoder.decode(CloudArchiveService.UploadCheckpoint.self,from:JSONSerialization.data(withJSONObject:oldState))
+            let before=await dav.allFiles()
+            _=try await service(dav,log,destination:destination).upload(encodedBackup:small,resuming:checkpoint)
+            try require(await dav.allFiles()==before,"legacy manifest and chunks remain exact original bytes")
+            var forged=oldManifest;forged["contract"]=ClientProtocols.contract("paperdigest-cloud-snapshot");forged["schemaFingerprint"]=String(repeating:"0",count:64)
+            await dav.setFile(base(state.reference)+"manifest.json",try JSONSerialization.data(withJSONObject:forged))
+            try await rejects(.integrity) { _=try await service(dav,log,destination:destination).download(reference:state.reference) }
+        }
         await check("checkpoint persistence failure stops before network and final save cannot claim success") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),destination=UUID()
             await log.fail(at:1);let s=try service(dav,log,destination:destination)

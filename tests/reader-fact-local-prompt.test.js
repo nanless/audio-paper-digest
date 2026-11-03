@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const repair = require('../scripts/lib/reader-repair');
-const prompts = require('../scripts/lib/prompt-text-versions');
+const prompts = require('../scripts/lib/prompt-contracts');
 const utils = require('../scripts/utils');
 function sample() {
     const value = '已有比较条件。错误完整原句。\n\n[[TABLE_1]]\n\n正确的表后解释。';
@@ -39,8 +39,8 @@ test('公共调用未代拼引文也显式携带原文，已有逐字引文不�
 });
 
 test('独立合同登记不改变当前选择与历史原路径身份', () => {
-    assert.equal(prompts.currentTextStagePromptPath('apiReaderRepair'), 'prompts/api-reader-repair-v13.md');
-    assert.equal(prompts.promptFilePathForContract('apiReaderRepair', repair.FACT_LOCAL_PROMPT_CONTRACT), 'prompts/api-reader-fact-local-v3.md');
+    assert.equal(prompts.currentTextStagePromptPath('apiReaderRepair'), 'prompts/current/api-reader-repair.md');
+    assert.equal(prompts.promptFilePathForContract('apiReaderRepair', repair.FACT_LOCAL_PROMPT_CONTRACT), 'prompts/current/api-reader-fact-local.md');
     assert.equal(prompts.promptFilePathForContract('apiReaderRepair', 'reader-fact-local-text-prompt-v2'), 'prompts/api-reader-fact-local-v2.md');
     assert.equal(prompts.promptFilePathForContract('apiReaderRepair', 'reader-fact-local-body-prompt-v1'), 'prompts/api-reader-fact-local-v1.md');
     assert.throws(() => prompts.promptFilePathForContract('primaryAnalysis', repair.FACT_LOCAL_PROMPT_CONTRACT));

@@ -61,8 +61,10 @@ test('新版执行准备须核验计划，并保存独立版本的权限凭证',
     assert.equal(fs.statSync(path.join(directory, 'authority.json')).mode & 0o777, 0o600);
     const authority = JSON.parse(fs.readFileSync(path.join(directory, 'authority.json'), 'utf8'));
     assert.equal(authority.contract, execution.AUTHORITY_CONTRACT);
-    assert.equal(state.version, 3);
-    assert.equal(authority.version, 2);
+    assert.equal(state.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('conference-execution'));
+    assert.equal(authority.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('conference-execution-authority'));
+    assert.equal(Object.hasOwn(state, 'version'), false);
+    assert.equal(Object.hasOwn(authority, 'version'), false);
     assert.equal(Object.hasOwn(state.runTemplate, 'taxonomyVersion'), false);
     assert.equal(state.runTemplate.tagCatalogVersion, 'paper-tag-catalog-v2');
     assert.equal(execution.readExecution({ executionRoot: f.root, executionId, planHandle: f.handle }).stateSha256,
@@ -162,10 +164,13 @@ test('执行模板拒绝混用词表字段，并核对状态的格式版本', t 
         const mixed = structuredClone(state); mixed.runTemplate.taxonomyVersion = oldValue;
         assert.throws(() => execution.assertConferenceExecution(mixed), /不能混用新旧词表版本字段/);
     }
-    for (const [contract, version] of [[execution.CONTRACT, 2], ['conference-execution-v9', 3]]) {
-        assert.throws(() => execution.assertConferenceExecution({ ...state, contract, version }), /不属于支持的组合/);
-    }
-    assert.throws(() => execution.assertConferenceExecution({ ...state, contract: 'conference-execution-v2', version: 2 }), /运行模板的格式版本不一致/);
+    assert.throws(() => execution.assertConferenceExecution({ ...state, version: 2 }), /unknown or missing fields/);
+    assert.throws(() => execution.assertConferenceExecution({ ...state, contract: 'unsupported-conference-execution' }), /无法识别/);
+    assert.throws(() => execution.assertConferenceExecution({ ...state, schemaFingerprint: '0'.repeat(64) }), /format header differs/);
+    const mixed = { ...state, ...require('../scripts/lib/protocol-codec').recordHeader(
+        require('../scripts/lib/protocol-codec').historicalContract('conference-execution', 'taxonomy'), 'conference-execution') };
+    delete mixed.schemaFingerprint;
+    assert.throws(() => execution.assertConferenceExecution(mixed), /运行模板的格式版本不一致/);
 });
 
 test('准备阶段只恢复已核验的已知半成品，暂存写入遇到 EIO 后仍可重试', t => {

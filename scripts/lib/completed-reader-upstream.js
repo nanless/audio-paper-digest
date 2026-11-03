@@ -7,7 +7,7 @@ function completedReaderUpstream(paper, source) {
             && !contract.isRecoveryStageTerminal(stage, stages[stage]?.status))
         || contract.validateTagStageProof(paper, { parsed: require('../utils').parseAnalysis(paper.analysis) })
         || contract.validateCoreSummaryStageBinding(paper)
-        || stages.scoringAudit?.scoringContract !== 'api-scoring-audit-v2'
+        || !require('./scoring-record-format').hasScoringAuditFormat(stages.scoringAudit)
         || !engine.scoringAuditBindsFinalAnalysis(paper) || !engine.scoringStabilityIsResolved(stages.scoringAudit)) return false;
     if (!source || !require('./model-text-sanitization').canReuseModelTextInputs(paper, source)) return false;
     const hash = require('node:crypto').createHash('sha256').update(source.text).digest('hex');

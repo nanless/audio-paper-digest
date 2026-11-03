@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CryptoKit
 
 /// Uses the real ModelService sealing path with a stdin/stdout fixture worker.
 /// No network, credentials, installed app, or user's personal directory is used.
@@ -51,6 +52,7 @@ import Darwin
         try expect(result["inputSHA256"] as? String==sha256(originalBytes),"actual input bytes SHA exported")
         try expect(try JSONSerialization.data(withJSONObject:result["source"]!,options:.sortedKeys)==JSONSerialization.data(withJSONObject:source,options:.sortedKeys),"canonical original source preserved")
         try expect(Set(result.keys)==Set(["available","inputSHA256","source","evidence"]),"portable result has only public evidence contract fields")
+        try expect(ClientProtocols.isCurrentHeader(originalInput,"paperdigest-mac-study-input") && (saved["studyInputFormat"] as? [String:Any]).map{ClientProtocols.isCurrentHeader($0,"paperdigest-mac-study-input")}==true,"actual sealed input and saved session bind current format")
         let serialized=String(decoding:try JSONSerialization.data(withJSONObject:result),as:UTF8.self)
         try expect(!serialized.contains(endpoint) && !serialized.contains(proxy) && !serialized.contains("fixture-only-not-a-real-secret") && result["config"]==nil && result["messages"]==nil,"no transport settings, prompt internals or credentials exported")
         try expect(try Data(contentsOf:personalFile)==before && Data(contentsOf:inputFile)==originalBytes,"successful export changes neither session nor sealed bytes")
@@ -58,7 +60,23 @@ import Darwin
         try expect(secretReads==1,"exports never call key provider after the explicit fixture request")
         let portableBackup=try BackupCodec.collect(sourceDirectory:directory)
         try expect(!portableBackup.files.contains{BackupCodec.isLocalOnlyKey($0.path)},"actual model-produced key excluded from portable backup")
-        let originalResponse=try Data(contentsOf:directory.appendingPathComponent("ModelUsage/"+id+"-response.json"))
+        let responseFile=directory.appendingPathComponent("ModelUsage/"+id+"-response.json")
+        let originalResponse=try Data(contentsOf:responseFile)
+        let responseRecord=try JSONSerialization.jsonObject(with:originalResponse) as! [String:Any]
+        try expect(ClientProtocols.isCurrentHeader(responseRecord,"paperdigest-mac-model-response-recovery"),"actual worker response seals the current envelope")
+        let localKey=SymmetricKey(data:try Data(contentsOf:directory.appendingPathComponent("ModelUsage/response-integrity.key")))
+        func resign(_ fields:[String:Any])throws {
+            var envelope=fields.filter{$0.key != "mac"}
+            let payload=try JSONSerialization.data(withJSONObject:envelope,options:.sortedKeys)
+            envelope["mac"]=Data(HMAC<SHA256>.authenticationCode(for:payload,using:localKey)).base64EncodedString()
+            try JSONSerialization.data(withJSONObject:envelope,options:.sortedKeys).write(to:responseFile)
+        }
+        var interrupted=saved;interrupted["status"]="interrupted";try store.appendSession(interrupted)
+        try expect(try service.recoverSavedResponses()["adopted"] as? Int==1,"actual current response resumes only its saved request")
+        var wrongHeader=responseRecord;wrongHeader["schemaFingerprint"]=String(repeating:"f",count:64)
+        try resign(wrongHeader);try store.appendSession(interrupted)
+        try expect(try (service.recoverSavedResponses()["rejected"] as? [String])?.contains(id)==true && store.session(id)?["status"] as? String=="interrupted","valid local MAC cannot authorize unknown response format")
+        try originalResponse.write(to:responseFile);try reset()
         for hasLocalKey in [false,true] {
             let local=root.appendingPathComponent("restore-local-"+String(hasLocalKey));_=try DesktopStore(directory:local)
             if hasLocalKey {try FileManager.default.createDirectory(at:local.appendingPathComponent("ModelUsage"),withIntermediateDirectories:false);try Data(repeating:0x44,count:32).write(to:local.appendingPathComponent("ModelUsage/response-integrity.key"))}
@@ -116,11 +134,22 @@ import Darwin
         // The preceding fingerprint version also bound the complete message and
         // owner; support it without relaxing current-source validation.
         changed=originalInput
+        for field in ["contract","schemaFingerprint","identityFormat"]{changed.removeValue(forKey:field)}
         let v3Identity:[String:Any]=["contract":"desktop-study-v3","extractor":"pdfkit-physical-pages-v1","kind":"study","paperID":owner,"messages":originalInput["messages"]!,"model":"evidence-fixture","endpoint":endpoint,"protocol":"responses","question":question,"evidence":evidence,"source":source,"maxTokens":4096]
         let v3Fingerprint=sha256(try JSONSerialization.data(withJSONObject:v3Identity,options:.sortedKeys))
-        changed["fingerprint"]=v3Fingerprint;session=saved;session["fingerprint"]=v3Fingerprint;try write(changed,session:session)
+        changed["fingerprint"]=v3Fingerprint;session=saved;session.removeValue(forKey:"studyInputFormat");session["fingerprint"]=v3Fingerprint;try write(changed,session:session)
         try expect(try export()["evidence"] as? String==evidence,"previous owner-bound full-prompt fingerprint exports original evidence")
-        try reset()
+        var v4Identity=v3Identity;v4Identity["contract"]="desktop-study-v4";v4Identity["responsesStream"]=true;v4Identity["reasoningEffort"]="low"
+        let v4Fingerprint=sha256(try JSONSerialization.data(withJSONObject:v4Identity,options:.sortedKeys))
+        changed["fingerprint"]=v4Fingerprint;session["fingerprint"]=v4Fingerprint;try write(changed,session:session)
+        let oldSaved=store.session(id)!
+        let oldResult=try await service.run(id:UUID().uuidString,paperID:owner,question:question,evidence:evidence,source:source)
+        try expect(oldResult["id"] as? String==id && oldResult["reused"] as? Bool==true && secretReads==1,"equal actual historical input reuses original saved result without a provider call")
+        try resign(["contract":"desktop-model-response-recovery-v1","session":oldSaved])
+        var oldInterrupted=oldSaved;oldInterrupted["status"]="interrupted";try store.appendSession(oldInterrupted)
+        let oldResponse=try Data(contentsOf:responseFile)
+        try expect(try service.recoverSavedResponses()["adopted"] as? Int==1 && Data(contentsOf:responseFile)==oldResponse,"old signed response is replayed in its original domain without rewriting bytes")
+        try originalResponse.write(to:responseFile);try reset()
         var wrongSource=source;wrongSource["paperID"]="arxiv:other"
         let wrongID=UUID().uuidString
         _=try await service.run(id:wrongID,paperID:owner,question:"isolated wrong-owner fixture",evidence:"OTHER PAPER MATERIAL",source:wrongSource)

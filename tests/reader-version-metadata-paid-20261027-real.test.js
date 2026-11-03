@@ -13,10 +13,18 @@ const originalArticleBytes=require('node:child_process').execFileSync('git',
  {env:{...Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('GIT_'))),GIT_NO_LAZY_FETCH:'1',GIT_TERMINAL_PROMPT:'0'},
  timeout:10000,maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
 assert.equal(sha(originalArticleBytes),originalArticleSha);
+const originalRepairPath='prompts/api-reader-repair-v13.md';
+const originalRepairSha='e8bfdff8a12a27d3960cfe11187d87c4e3a4df2f3518bcb8bbd93c0cd86a6ab4';
+const originalRepairOid='1e81231bf1fb053d4b4953c966156ccd7efbb694';
+const originalRepairBytes=require('node:child_process').execFileSync('git',
+ ['--no-lazy-fetch','--no-replace-objects','-C',ROOT,'cat-file','blob',originalRepairOid],
+ {env:{...Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('GIT_'))),GIT_NO_LAZY_FETCH:'1',GIT_TERMINAL_PROMPT:'0'},
+ timeout:10000,maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
+assert.equal(sha(originalRepairBytes),originalRepairSha);
 const temp=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'version-metadata-cold-private-'));
 // Install before the first project import or compiled private source.
 const guard=require('./helpers/isolated-tmp-write-guard.cjs').installTmpOnlyWriteGuard(temp,{readOnlyPythonScripts:[
- 'reader_sealed_pdf_quote_evidence.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py',
+ 'reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py',
  'reader_authenticated_pdf_footnote_evidence.py'].map(name=>path.join(ROOT,'scripts',name))});
 Object.assign(process.env,{TMPDIR:temp,TMP:temp,TEMP:temp,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(temp,'pycache')});
 const noNetwork=()=>{throw Object.assign(Error('TEST_NETWORK_FORBIDDEN'),{code:'TEST_NETWORK_FORBIDDEN'});};
@@ -80,18 +88,24 @@ const originalArticleIndex=JSON.parse(fs.readFileSync(path.join(ROOT,'scripts/li
 assert.equal(originalArticleIndex.retiredPaths[originalArticlePath],originalArticleSha);
 assert.equal(originalArticleIndex.blobs[originalArticleSha].blobOid,originalArticleOid);
 historicalPrompts.set(originalArticlePath,{bytes:originalArticleBytes,sha256:originalArticleSha});
+assert.equal(originalArticleIndex.retiredPaths[originalRepairPath],originalRepairSha);
+assert.equal(originalArticleIndex.blobs[originalRepairSha].blobOid,originalRepairOid);
+historicalPrompts.set(originalRepairPath,{bytes:originalRepairBytes,sha256:originalRepairSha});
 const promptEvidence=require(path.join(ROOT,'scripts/lib/prompt-evidence')),normalPromptRead=promptEvidence.readPromptEvidenceBytes;
 promptEvidence.readPromptEvidenceBytes=function(relative,options={}){const original=historicalPrompts.get(relative);if(!original)return normalPromptRead(relative,options);
  if(options.expectedSha256!==undefined&&options.expectedSha256!==null)assert.equal(options.expectedSha256,original.sha256);return Buffer.from(original.bytes);};
-const versions=require(path.join(ROOT,'scripts/lib/prompt-text-versions'));
+const versions=require(path.join(ROOT,'scripts/lib/prompt-contracts'));
 const currentArticlePath=versions.currentTextStagePromptPath('apiReaderArticle');
 const normalPromptPath=versions.currentTextStagePromptPath,normalPromptContract=versions.currentPromptTextContract;
 assert.equal(require(path.join(ROOT,'scripts/lib/prompt-history')).promptTemplateSha256(originalArticleBytes.toString()),current.identity.promptSha256);
+assert.equal(require(path.join(ROOT,'scripts/lib/prompt-history')).promptTemplateSha256(originalRepairBytes.toString()),current.identity.repairPromptSha256);
 let historicalArticleContext=true;
 // Test-process-only historical writing context, not a production migration
 // allowance. The real current registry remains covered by the refusal below.
-test.mock.method(versions,'currentTextStagePromptPath',stage=>historicalArticleContext&&stage==='apiReaderArticle'?originalArticlePath:normalPromptPath(stage));
-test.mock.method(versions,'currentPromptTextContract',stage=>historicalArticleContext&&stage==='apiReaderArticle'?'analysis-prompt-text-v9':normalPromptContract(stage));
+test.mock.method(versions,'currentTextStagePromptPath',stage=>historicalArticleContext&&stage==='apiReaderArticle'?originalArticlePath:
+ historicalArticleContext&&stage==='apiReaderRepair'?originalRepairPath:normalPromptPath(stage));
+test.mock.method(versions,'currentPromptTextContract',stage=>historicalArticleContext&&stage==='apiReaderArticle'?'analysis-prompt-text-v9':
+ historicalArticleContext&&stage==='apiReaderRepair'?'analysis-prompt-text-v13':normalPromptContract(stage));
 function compile(relative){const file=path.join(ROOT,relative);let source=fs.readFileSync(path.join(ROOT,relative),'utf8');
  if(relative==='scripts/analysis-engine.js')source=source.replace("return path.join(__dirname, '..', 'data', 'current', '.analysis-runs', id);",`return path.join(${JSON.stringify(temp)}, '.analysis-runs', id);`);
 if(relative==='scripts/deep-analyzer.js'){
@@ -203,6 +217,12 @@ test('original v9 prompt with current public implementation preserves v4/counter
    activeIdentity=(await deep.prepareApiReaderRetryIdentity(paper,whole,evidence,{sourceText:details.text,structuredArtifacts:details.structuredArtifacts})).identity;
   }finally{fs.readFileSync=oldRead;}
   const changes=[...new Set([...Object.keys(current.identity),...Object.keys(activeIdentity)])].filter(key=>JSON.stringify(current.identity[key])!==JSON.stringify(activeIdentity[key]));
+  const mode=require(path.join(ROOT,'scripts/lib/reader-content-mode'));
+  assert.equal(mode.modeOf(current.identity),'source-only');
+  assert.deepEqual(Object.fromEntries(mode.keys.map(key=>[key,activeIdentity[key]])),mode.fields('source-only'));
+  assert.equal(activeIdentity.inputFingerprint,current.identity.inputFingerprint);
+  assert.equal(activeIdentity.sourceSha256,current.identity.sourceSha256);
+  assert.deepEqual(activeIdentity.model,current.identity.model);
   console.log('PRIVATE_MIGRATION_FIELDS',changes.join(','));
   assert.ok(changes.includes('parserImplementationSha256'));assert.ok(changes.includes('repairImplementationSha256'));
   assert.ok(changes.every(key=>require(path.join(ROOT,'scripts/lib/reader-recovery-revision')).ALLOWED_FIELDS.includes(key)));
@@ -253,7 +273,8 @@ test('actual normal generator/begin/callModel/requestLlmJson mock transport/fees
    finalPaper=await deep.finalizeApiReaderRefresh(working,details,generated,{readerResources:paper.apiReaderResources,preserveReaderUpstream:true,
     execution:{attempts:generated.attempts,fullAttempts:generated.fullAttempts,transportFailures:generated.transportFailures,
      model:activeIdentity.model.model,protocol:activeIdentity.model.protocol,repairMaxTokens:activeIdentity.repairMaxTokens,
-     contentMode:generated.contentMode,executionKind:'synthetic-test-normal-finalizer'}});
+     contentMode:generated.contentMode,contentModeSchemaFingerprint:generated.contentModeSchemaFingerprint,
+     executionKind:'synthetic-test-normal-finalizer'}});
    assert.equal(finalPaper.analysisManifest.stages.apiReaderArticle.status,'complete');
    assert.equal(diagnostics.validateReaderVersionMetadataCompletion(finalPaper),true);
    assert.equal(sha(finalPaper.apiReaderArticle),finalPaper.analysisManifest.stages.apiReaderArticle.articleSha256);
@@ -293,6 +314,11 @@ test('publication CLI outside all fresh/source ALS replays actual sealed source 
   temporaryDirectory:temp,input:{paper,sourceText:decode(sourceFixture.sourceFiles['source.txt']).toString('utf8')},
   moduleOverrides:{'./reader-target-ordinal-patch':ordinary.exports}});
  const positive=await call(finalPaper);assert.equal(positive.exitCode,0,positive.raw);assert.equal(positive.result.verified,true,positive.raw);
+ const wrongMode=structuredClone(finalPaper);wrongMode.analysisManifest.stages.apiReaderArticle.contentModeSchemaFingerprint='f'.repeat(64);
+ const invalidMode=await call(wrongMode);assert.equal(invalidMode.exitCode,1);assert.match(invalidMode.result.message,/content mode/);
+ const noMode=structuredClone(finalPaper);delete noMode.analysisManifest.stages.apiReaderArticle.contentMode;
+ delete noMode.analysisManifest.stages.apiReaderArticle.contentModeSchemaFingerprint;
+ const missingMode=await call(noMode);assert.equal(missingMode.exitCode,1);assert.match(missingMode.result.message,/content mode/);
  console.log('ACTUAL_PUBLICATION_CLI_POSITIVE',JSON.stringify({sourceSha256:positive.sourceSha256,exitCode:positive.exitCode,actualCliSourceExecuted:positive.actualCliSourceExecuted,noChildProcess:positive.noChildProcess}));
  const stripped=structuredClone(finalPaper);delete stripped.analysisManifest.contracts.readerVersionMetadataRecovery;
  delete stripped.analysisManifest.stages.apiReaderArticle.versionMetadataRecoveryContract;

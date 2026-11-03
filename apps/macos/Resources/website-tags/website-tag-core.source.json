@@ -1,7 +1,7 @@
 {
   "sourceRepository": "audio-paper-digest-blog",
   "sourcePath": "assets/js/tag-core.js",
-  "sourceCommit": "3d7aaf2dd1e891ddb454b4619ecde996017ecd5b",
-  "sha256": "08a82901377d26c31595a96d072abd5a1a87bff50732f161c88efed3d90eda5a",
-  "purpose": "Unmodified official website display classification resolver; no model/source eligibility grants"
+  "sourceCommit": "dbfba447cc5b4f697fb77ebbcb3d166f812186f8",
+  "sha256": "6254d324051e159fd85ef5c22a186feffce40c503792dd91cd6d6c2c0646d6da",
+  "purpose": "Unmodified website classification display dependency"
 }

@@ -110,12 +110,12 @@ test('重新签过输出哈希的旧表头单位错误也不能被完成判断�
     }
 
     seal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     const quote = 'The WER error-to-reference-word ratio is 1.2 for A.';
     paper.apiReaderPlan.tableBindings[0].sourceQuotes = [{
         quote,
         sourceQuoteSha256: sha(quote)
     }];
     seal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false);
 });

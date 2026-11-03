@@ -1,13 +1,16 @@
 'use strict';
 // The existing projection keeps priority and its bytes. Independent PDF-origin
 // grids have a distinct binding field and are available only after sealed replay.
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const path = require('node:path');
 const legacy = require('./reader-pdf-cell-evidence');
 const grid = require('./reader-sealed-pdf-table-evidence');
 const saved = new AsyncLocalStorage();
-const SELECTION_CONTRACT = 'reader-compiled-pdf-table-selection-v1';
+const proofFormat = require('./reader-proof-format');
+const SELECTION_FAMILY = 'reader-compiled-pdf-table-selection';
+const SELECTION_CONTRACT = require('./protocol-codec').contract(SELECTION_FAMILY);
 const stable = value => {
     const sort = item => Array.isArray(item) ? item.map(sort) : item && typeof item === 'object'
         ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort(item[key])])) : item;
@@ -52,7 +55,7 @@ function displayCellMatches(table, row, column, text, normalize = value => value
     const proof = sourceMathDisplay(table, row, column);
     return Boolean(proof && normalize(text) === normalize(proof.displayText));
 }
-function selectionProjection(table, binding, artifacts, proof) {
+function selectionProjection(table, binding, artifacts, proof, projectionHeader = proofFormat.header(SELECTION_FAMILY)) {
     const selection = require('./reader-tables').readCompiledReaderTableSelection(binding, artifacts);
     if (!selection || !proof || legacy.supported(table)
         || artifacts.tables.filter(item => item.ordinal === binding.sourceTableOrdinal).length !== 1
@@ -63,7 +66,7 @@ function selectionProjection(table, binding, artifacts, proof) {
         && selection.sourceColumns.length === table.matrix[0].length
         && selection.sourceRows.every((row, index) => row === index)
         && selection.sourceColumns.every((column, index) => column === index)) return null;
-    return { contract: SELECTION_CONTRACT, version: 1, tableIndex: binding.tableIndex,
+    return { ...projectionHeader, tableIndex: binding.tableIndex,
         sourceTableOrdinal: table.ordinal, sourceTableDomSha256: table.sourceDomSha256,
         sourceTableSha256: proof.sourceTableSha256, pdfEvidenceSha256: proof.evidenceSha256,
         ...selection, cellBindingsSha256: stable(binding.cellBindings) };
@@ -74,6 +77,7 @@ function compiledSelectionEvidence(table, binding, artifacts) {
 // Pure replay, not a source capability: both callers first authenticate the full
 // four-source PDF grid. This never enrolls a serialized binding in a live scope.
 function validateSavedSelectionBinding(binding, artifacts, proof) {
+    const projectionHeader = proofFormat.readHeader(binding?.sealedPdfTableSelection, SELECTION_FAMILY);
     const candidates = artifacts?.tables?.filter(table => table.ordinal === binding.sourceTableOrdinal) || [];
     const table = candidates[0], selection = binding.sealedPdfTableSelection;
     if (binding.sourceType !== 'artifact_table' || binding.pdfCellConfirmation !== undefined
@@ -84,7 +88,7 @@ function validateSavedSelectionBinding(binding, artifacts, proof) {
     const compiled = require('./reader-tables').renderReaderTableSelection({ tableIndex: binding.tableIndex,
         selection: { sourceTableOrdinal: binding.sourceTableOrdinal,
             sourceRows: selection?.sourceRows, sourceColumns: selection?.sourceColumns } }, artifacts);
-    const expected = selectionProjection(table, compiled.binding, artifacts, proof);
+    const expected = selectionProjection(table, compiled.binding, artifacts, proof, projectionHeader);
     if (!expected || !isDeepStrictEqual(expected, selection)
         || !Array.isArray(binding.cellBindings) || binding.cellBindings.length !== compiled.binding.cellBindings.length
         || binding.cellBindings.some((cell, index) => {
@@ -131,7 +135,7 @@ function assertSavedPairedDomBindings(paper) {
     const provenance = paper?.freshRewriteProvenance;
     // Old ordinary/PDF views retain their route. Actual daily source identity,
     // rather than a removable cell marker, selects this reject-only replay.
-    if (!bindings.length || provenance?.contract !== 'fresh-source-analysis-v1') return;
+    if (!bindings.length || !isFreshSourceProvenance(provenance)) return;
     const fresh = require('./fresh-analysis-context');
     if (!isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)
         || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) throw new Error('Paired DOM display lacks sealed daily identity');
@@ -143,7 +147,7 @@ function assertSavedPairedDomBindings(paper) {
     try { require('node:fs').lstatSync(runFile); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const run = require('./reader-proof-read-scope').readReaderProofJson(runFile).value;
-    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT) throw new Error('Paired DOM display run contract differs');
+    if (!fresh.isDailySourceRun(run)) throw new Error('Paired DOM display run contract differs');
     const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
     const hasPair = text => /[↑↓]\{\\(?:uparrow|downarrow)\}/.test(text)
         || /^[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[ \t]*±[ \t]*\\pm[ \t]*(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[ \t]+(?:ms|s)[ \t]*$/.test(text);
@@ -195,13 +199,13 @@ function assertSavedScientificDomBindings(paper) {
             || /^[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)×10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+$/.test(cell.renderedText || ''))));
     if (!marked.length) return;
     const provenance = paper.freshRewriteProvenance;
-    if (provenance?.contract !== 'fresh-source-analysis-v1'
+    if (!isFreshSourceProvenance(provenance)
         || !isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)
         || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) throw new Error('Scientific DOM display lacks the actual sealed source');
     const fresh = require('./fresh-analysis-context');
     const runDir = path.join(require('../config').FILES.dailyFreshSourceRunsDir, provenance.runId);
     const run = require('./reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
-    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT) throw new Error('Scientific DOM display run contract differs');
+    if (!fresh.isDailySourceRun(run)) throw new Error('Scientific DOM display run contract differs');
     const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
     const descriptor = source.freshSourceDescriptor, acquisition = paper.analysisManifest?.sourceAcquisition;
     if (paper.sourceSha256 !== descriptor.sourceSha256 || acquisition?.sourceSha256 !== descriptor.sourceSha256
@@ -230,6 +234,11 @@ function assertSavedScientificDomBindings(paper) {
     }
 }
 function withSavedPaper(paper, callback) {
+    return require('./reader-record-format').isIntegratedPlan(paper?.apiReaderPlan)
+        ? proofFormat.withSavedPlanRepresentation(paper.apiReaderPlan, () => withSavedPaperInRepresentation(paper, callback))
+        : withSavedPaperInRepresentation(paper, callback);
+}
+function withSavedPaperInRepresentation(paper, callback) {
     assertSavedScientificDomBindings(paper);
     const bindings = paper?.apiReaderPlan?.tableBindings || [];
     if (bindings.some(binding => binding.sealedPdfTableSelection !== undefined
@@ -239,12 +248,12 @@ function withSavedPaper(paper, callback) {
     if (!bindings.some(binding => binding.sealedPdfTableEvidence !== undefined)) return legacy.withSavedPaper(paper, callback);
     const provenance = paper.freshRewriteProvenance, acquisition = paper.analysisManifest?.sourceAcquisition;
     if (!provenance || !isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)
-        || provenance.contract !== 'fresh-source-analysis-v1'
+        || !isFreshSourceProvenance(provenance)
         || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) throw new Error('Sealed PDF grid lacks the actual daily source provenance');
     const fresh = require('./fresh-analysis-context'), Config = require('../config');
     const runDir = path.join(Config.FILES.dailyFreshSourceRunsDir, provenance.runId);
     const run = require('./reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
-    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT) throw new Error('Sealed PDF grid run contract differs');
+    if (!fresh.isDailySourceRun(run)) throw new Error('Sealed PDF grid run contract differs');
     const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
     const descriptor = source.freshSourceDescriptor;
     if (source.source !== 'html' || paper.sourceSha256 !== descriptor.sourceSha256

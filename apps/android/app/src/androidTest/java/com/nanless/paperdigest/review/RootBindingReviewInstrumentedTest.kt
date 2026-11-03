@@ -145,7 +145,7 @@ class RootBindingReviewInstrumentedTest {
             val pre = Jsoup.parseBodyFragment(html).select("pre"); assertEquals(2, pre.size)
             assertEquals(1, pre.first()!!.wholeText().split("EXCERPT-FIXTURE").size - 1)
             val originals = JSONObject(pre.last()!!.wholeText())
-            assertEquals("paperdigest-notes-archive-v1", originals.getString("contract")); assertEquals(f.a.id, originals.getString("paperID"))
+            assertTrue(com.nanless.paperdigest.protocols.ClientProtocols.isCurrentHeader(originals,"paperdigest-notes-archive")); assertEquals(f.a.id, originals.getString("paperID"))
             assertEquals(canonical(note), canonical(originals.getJSONObject("note"))); assertEquals(canonical(JSONArray(marks)), canonical(originals.getJSONArray("annotations")))
             assertArrayEquals(before, File(f.research, "personal.json").readBytes())
         } finally { f.close() }

@@ -17,8 +17,8 @@ from publish_common import (  # noqa: E402
     PublishDataValidationError,
     resolve_publish_parsed,
     validate_papers_for_publish,
-    _manual_v4_reader_view,
-    validate_manual_editorial_quality_v4,
+    _manual_structured_reader_view,
+    validate_manual_reader_quality,
 )
 from test_publish_common import complete_paper  # noqa: E402
 from utils import parse_analysis  # noqa: E402
@@ -101,9 +101,9 @@ class EvaluationSectionTest(unittest.TestCase):
         old_page = '### 💬 毒舌点评\n\n证据明确，但部署范围有限。\n'
         new_page = old_page.replace('毒舌点评', '论文评价')
         original_bytes = old_page.encode()
-        self.assertEqual(_manual_v4_reader_view(old_page), _manual_v4_reader_view(new_page))
-        self.assertEqual(validate_manual_editorial_quality_v4(_manual_v4_reader_view(old_page)),
-                         validate_manual_editorial_quality_v4(_manual_v4_reader_view(new_page)))
+        self.assertEqual(_manual_structured_reader_view(old_page), _manual_structured_reader_view(new_page))
+        self.assertEqual(validate_manual_reader_quality(_manual_structured_reader_view(old_page)),
+                         validate_manual_reader_quality(_manual_structured_reader_view(new_page)))
         self.assertEqual(old_page.encode(), original_bytes)
 
     def test_rendered_aliases_keep_original_body_and_detect_conflicts(self):

@@ -62,7 +62,7 @@ test('当前长文策略改变指纹，旧完整阶段不补策略，伪声明�
 const assert = require('node:assert/strict');
 const analyzer = require('./scripts/deep-analyzer.js');
 const Config = require('./scripts/config.js');
-const { currentPromptTextContract } = require('./scripts/lib/prompt-text-versions.js');
+const { currentPromptTextContract } = require('./scripts/lib/prompt-contracts.js');
     const paper = { id: '2610.90001', title: '实际策略测试' };
     const fingerprint = stage => analyzer.buildRecoveryFingerprints(paper, '来源', paper.id,
         { stages: { apiReaderArticle: stage } }).apiReaderArticle;
@@ -83,10 +83,10 @@ const { currentPromptTextContract } = require('./scripts/lib/prompt-text-version
         assert.notEqual(oldThinkingFingerprint, current);
         assert.equal(fingerprint(oldThinkingOnly), oldThinkingFingerprint);
         assert.equal(JSON.stringify(oldThinkingOnly), oldThinkingBytes);
-        assert.equal(fingerprint({ status: 'complete', ...currentContracts, readerRequestPolicy: policy, readerJsonRequestPolicy: jsonPolicy }), current);
+        assert.equal(fingerprint({ status: 'complete', ...currentContracts, readerProtocols: require('./scripts/lib/reader-stage-protocols').currentPipeline(), readerIdentityProtocols: {}, readerRequestPolicy: policy, readerJsonRequestPolicy: jsonPolicy }), current);
         Config.ANALYSIS_CONFIG.apiReaderThinkingMode = 'enabled';
         assert.notEqual(fingerprint({ status: 'pending' }), current);
-        assert.notEqual(fingerprint({ status: 'complete', ...currentContracts, readerRequestPolicy: policy, readerJsonRequestPolicy: jsonPolicy }), current);
+        assert.notEqual(fingerprint({ status: 'complete', ...currentContracts, readerProtocols: require('./scripts/lib/reader-stage-protocols').currentPipeline(), readerIdentityProtocols: {}, readerRequestPolicy: policy, readerJsonRequestPolicy: jsonPolicy }), current);
         assert.notEqual(fingerprint(oldThinkingOnly), oldThinkingFingerprint);
         assert.equal(JSON.stringify(oldThinkingOnly), oldThinkingBytes);
         assert.equal(fingerprint(oldStage), oldFingerprint);
@@ -108,6 +108,7 @@ test('推理模式默认关闭，项目环境覆写只接受两个明确值', t 
     const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-thinking-config-'));
     t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
     fs.cpSync(path.resolve(__dirname, '../scripts'), path.join(folder, 'scripts'), { recursive: true });
+    fs.cpSync(path.resolve(__dirname, '../config'), path.join(folder, 'config'), { recursive: true });
     const childProcess = require('node:child_process');
     const configPath = path.join(folder, 'scripts/config.js');
     for (const mode of ['', 'enabled', 'disabled', 'invalid']) {

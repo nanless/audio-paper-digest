@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.cloud.RequestContinuity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -66,7 +67,7 @@ class RetainedExportService(private val pending:PendingExportStore,controlRoot:F
   val previous=readCurrent(lease.snapshot.operationID)
   require(previous?.optString("state") !in setOf("choosing","writing")){"请先结束这份保留快照的当前保存操作"}
   val token=Delivery(lease.snapshot.operationID,UUID.randomUUID().toString())
-  val record=JSONObject().put("contract",ATTEMPT).put("kind",DOMAIN).put("operationID",token.operationID).put("documentID",lease.snapshot.documentID)
+  val record=ClientProtocols.record(ATTEMPT).put("kind",DOMAIN).put("operationID",token.operationID).put("documentID",lease.snapshot.documentID)
    .put("attemptID",token.attemptID).put("sha256",lease.snapshot.sha256).put("bytes",lease.snapshot.bytes).put("state","choosing").put("createdAt",time())
   writeCurrent(record);attempts[token]=Attempt(token,snapshot);token
  }
@@ -96,9 +97,9 @@ class RetainedExportService(private val pending:PendingExportStore,controlRoot:F
    verifier(uri,lease.snapshot.sha256,lease.snapshot.bytes)
    return synchronized(lock){
     context.ensureActive();verifySource(lease){context.ensureActive()};val row=current(attempt);require(row.getString("state")=="written-unverified")
-    val time=time();val history=JSONObject().put("contract",HISTORY).put("kind",DOMAIN).put("operationID",lease.snapshot.operationID).put("documentID",lease.snapshot.documentID)
+    val time=time();val history=ClientProtocols.record(HISTORY).put("kind",DOMAIN).put("operationID",lease.snapshot.operationID).put("documentID",lease.snapshot.documentID)
      .put("attemptID",delivery.attemptID).put("sha256",lease.snapshot.sha256).put("bytes",lease.snapshot.bytes).put("mime",lease.snapshot.mime).put("suggestedName",lease.snapshot.name).put("readbackAt",time)
-    val proof=JSONObject().put("contract",PROOF).put("domain",DOMAIN).put("operationID",lease.snapshot.operationID).put("documentID",lease.snapshot.documentID)
+    val proof=ClientProtocols.record(PROOF).put("domain",DOMAIN).put("operationID",lease.snapshot.operationID).put("documentID",lease.snapshot.documentID)
      .put("attemptID",delivery.attemptID).put("sha256",lease.snapshot.sha256).put("bytes",lease.snapshot.bytes).put("uri",uri).put("readbackAt",time).put("history",history).put("historySHA256",BackupCodec.hash(canonical(history).toByteArray()))
     proof.put("hmacSHA256",authenticate(proof,true));createSame(proofFile(delivery.attemptID),canonical(proof).toByteArray());boundary("retained.proof.persisted");require(current(attempt).getString("state")=="written-unverified")
     // This marker is not cleanup permission. A proof may survive even if this or History cannot be written.
@@ -156,11 +157,11 @@ class RetainedExportService(private val pending:PendingExportStore,controlRoot:F
  private fun safe(row:JSONObject)=JSONObject().put("kind",DOMAIN).put("operationID",row.getString("operationID")).put("attemptID",row.getString("attemptID")).put("state",row.getString("state")).put("sha256",row.getString("sha256")).put("bytes",row.getLong("bytes")).put("message",row.optString("message")).put("cleanupEligible",false).put("readbackProven",row.getString("state") in setOf("verified","readback-proven-history-pending"))
  private fun operation(id:String):File {ExportArtifactWriter.uuid(id);require(attributes(controls).fileKey()==controlKey);return ExportArtifactWriter.existingDirectory(File(controls,id))}
  private fun currentFile(id:String)=File(operation(id),"retained-delivery.json")
- private fun readCurrent(id:String):JSONObject? {val file=currentFile(id);if(!Files.exists(file.toPath(),NOFOLLOW_LINKS))return null;ExportArtifactWriter.regular(file);val row=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)));require(row.getString("contract")==ATTEMPT&&row.getString("kind")==DOMAIN&&row.getString("operationID")==id);ExportArtifactWriter.uuid(row.getString("attemptID"));ExportArtifactWriter.uuid(row.getString("documentID"));require(BackupCodec.validSHA(row.getString("sha256"))&&row.getLong("bytes") in 1..BackupCodec.MAX_ENCODED);require(row.getString("state") in setOf("choosing","writing","written-unverified","cancelled","failed","readback-proven-history-pending","verified"));return row}
+ private fun readCurrent(id:String):JSONObject? {val file=currentFile(id);if(!Files.exists(file.toPath(),NOFOLLOW_LINKS))return null;ExportArtifactWriter.regular(file);val row=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)));require(validLabel(row,ATTEMPT,"kind")&&row.getString("operationID")==id);ExportArtifactWriter.uuid(row.getString("attemptID"));ExportArtifactWriter.uuid(row.getString("documentID"));require(BackupCodec.validSHA(row.getString("sha256"))&&row.getLong("bytes") in 1..BackupCodec.MAX_ENCODED);require(row.getString("state") in setOf("choosing","writing","written-unverified","cancelled","failed","readback-proven-history-pending","verified"));return row}
  private fun writeCurrent(row:JSONObject){writeAttempt(row);JsonFiles.write(currentFile(row.getString("operationID")),canonical(row).toByteArray())}
  private fun attemptFile(operationID:String,attemptID:String):File{ExportArtifactWriter.uuid(attemptID);return File(operation(operationID),"retained-attempt-$attemptID.json")}
  private fun writeAttempt(row:JSONObject){JsonFiles.write(attemptFile(row.getString("operationID"),row.getString("attemptID")),canonical(row).toByteArray())}
- private fun readAttempt(operationID:String,attemptID:String):JSONObject {val file=attemptFile(operationID,attemptID);ExportArtifactWriter.regular(file);val row=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)));require(row.getString("contract")==ATTEMPT&&row.getString("kind")==DOMAIN&&row.getString("operationID")==operationID&&row.getString("attemptID")==attemptID);return row}
+ private fun readAttempt(operationID:String,attemptID:String):JSONObject {val file=attemptFile(operationID,attemptID);ExportArtifactWriter.regular(file);val row=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)));require(validLabel(row,ATTEMPT,"kind")&&row.getString("operationID")==operationID&&row.getString("attemptID")==attemptID);return row}
  fun deliveryHistory(operationID:String):List<JSONObject> = synchronized(lock){require(pending.get(operationID).preparation=="retained");val dir=operation(operationID);(dir.listFiles()?:error("无法读取原保存历史")).filter{it.name.matches(Regex("retained-attempt-[a-f0-9-]{36}\\.json"))}.sortedBy{it.name}.map{file->val id=file.name.removePrefix("retained-attempt-").removeSuffix(".json");val row=readAttempt(operationID,id);project(row)}}
  private fun proofRoot()=ExportArtifactWriter.directory(File(device,"RetainedCaptureExportProofs"))
  private fun proofFile(id:String):File{ExportArtifactWriter.uuid(id);return File(proofRoot(),"$id.json")}
@@ -168,23 +169,34 @@ class RetainedExportService(private val pending:PendingExportStore,controlRoot:F
  private fun verifiedProofOrNull(row:JSONObject):JSONObject? {
   val file=proofFile(row.getString("attemptID"));if(!Files.exists(file.toPath(),NOFOLLOW_LINKS))return null
   ExportArtifactWriter.regular(file);val proof=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)))
-  require(proof.getString("contract")==PROOF&&proof.getString("domain")==DOMAIN)
+  require(validLabel(proof,PROOF,"domain"))
   for(key in listOf("operationID","documentID","attemptID","sha256"))require(proof.getString(key)==row.getString(key));require(proof.getLong("bytes")==row.getLong("bytes"))
   val signature=proof.getString("hmacSHA256");val unsigned=proof.copy().also{it.remove("hmacSHA256")};require(MessageDigest.isEqual(signature.toByteArray(),authenticate(unsigned,false).toByteArray()))
-  contentURI(proof.getString("uri"));val history=proof.getJSONObject("history");require(history.getString("contract")==HISTORY&&history.getString("kind")==DOMAIN)
+  contentURI(proof.getString("uri"));val history=proof.getJSONObject("history");require(validLabel(history,HISTORY,"kind"))
+  val expectedHistory=if(proof.has("schemaFingerprint"))ClientProtocols.declaredSchema(proof.get("contract"),PROOF,proof.opt("schemaFingerprint") as? String).getJSONObject("historyFormat")else ClientProtocols.historicalHeader(HISTORY,"retained-backup-readback-history",null)
+  require(ClientProtocols.hasValidHeader(expectedHistory,HISTORY)&&canonical(ClientProtocols.recordHeader(history.get("contract"),HISTORY,history.opt("schemaFingerprint") as? String))==canonical(expectedHistory)){"原独立历史格式与原回读证明声明不符"}
   for(key in listOf("operationID","documentID","attemptID","sha256"))require(history.getString(key)==proof.getString(key));require(history.getLong("bytes")==proof.getLong("bytes")&&BackupCodec.hash(canonical(history).toByteArray())==proof.getString("historySHA256"));return proof
  }
  private fun completeHistory(proof:JSONObject){createSame(historyFile(proof.getString("attemptID"),true),canonical(proof.getJSONObject("history")).toByteArray())}
  private fun historyMatches(proof:JSONObject):Boolean {val file=historyFile(proof.getString("attemptID"));if(!Files.exists(file.toPath(),NOFOLLOW_LINKS))return false;ExportArtifactWriter.regular(file);return BackupCodec.hash(JsonFiles.read(file,65536))==proof.getString("historySHA256")}
+ private fun validLabel(value:JSONObject,family:String,field:String):Boolean=runCatching {
+  require(ClientProtocols.hasValidHeader(value,family))
+  val header=ClientProtocols.recordHeader(value.get("contract"),family,value.opt("schemaFingerprint") as? String)
+  val expected=if(header.has(field))header.getString(field)else ClientProtocols.declaredSchema(value.get("contract"),family,value.opt("schemaFingerprint") as? String).getString(field)
+  value.getString(field)==expected
+ }.getOrDefault(false)
  private fun authenticate(value:JSONObject,create:Boolean):String {
+  require(validLabel(value,PROOF,"domain")){"回读证明的原格式或签名域不受支持"}
+  val domain=value.getString("domain")
+  if(value.has("schemaFingerprint"))require(ClientProtocols.declaredSchema(value.get("contract"),PROOF,value.opt("schemaFingerprint") as? String).getString("hmacDomain")==domain){"回读证明的原签名域声明不符"}
   val file=File(proofRoot(),"retained-capture-integrity.key")
   if(!Files.exists(file.toPath(),NOFOLLOW_LINKS)&&create)ExportArtifactWriter.createOnly(file,ByteArray(32).also{SecureRandom().nextBytes(it)})
-  ExportArtifactWriter.regular(file);val key=JsonFiles.read(file,32);require(key.size==32);return Mac.getInstance("HmacSHA256").run{init(SecretKeySpec(key,"HmacSHA256"));doFinal((DOMAIN+"\n"+canonical(value)).toByteArray()).let(::hex)}
+  ExportArtifactWriter.regular(file);val key=JsonFiles.read(file,32);require(key.size==32);return Mac.getInstance("HmacSHA256").run{init(SecretKeySpec(key,"HmacSHA256"));doFinal((domain+"\n"+canonical(value)).toByteArray()).let(::hex)}
  }
  private fun createSame(file:File,bytes:ByteArray){if(Files.exists(file.toPath(),NOFOLLOW_LINKS)){ExportArtifactWriter.regular(file);require(JsonFiles.read(file,65536).contentEquals(bytes)){"原独立证明已存在且不同，未覆盖"}}else ExportArtifactWriter.createOnly(file,bytes)}
  private fun time()=clock().also{require(RequestContinuity.validTime(it))}
  private fun contentURI(raw:String){require(raw.length in 1..8192){"系统保存位置长度无效"};val u=try{URI(raw)}catch(_:Exception){throw AppFailure("storage","系统保存位置格式无效")};require(u.scheme=="content"&&!u.authority.isNullOrBlank()&&u.userInfo==null&&u.fragment==null){"保存位置必须为系统返回的外部文档位置"}}
  private fun attributes(file:File):BasicFileAttributes{ExportArtifactWriter.existingDirectory(if(file.isDirectory)file else file.parentFile!!);require(!Files.isSymbolicLink(file.toPath()));return Files.readAttributes(file.toPath(),BasicFileAttributes::class.java,NOFOLLOW_LINKS)}
  private fun hex(bytes:ByteArray)=bytes.joinToString(""){"%02x".format(it.toInt()and 255)}
- companion object { private const val DOMAIN="retained-capture-v1";private const val ATTEMPT="paperdigest-retained-capture-attempt-v1";private const val PROOF="paperdigest-retained-capture-export-proof-v1";private const val HISTORY="paperdigest-retained-capture-export-history-v1" }
+ companion object { private const val DOMAIN="retained-capture";private const val ATTEMPT="paperdigest-retained-capture-attempt";private const val PROOF="paperdigest-retained-capture-export-proof";private const val HISTORY="paperdigest-retained-capture-export-history" }
 }

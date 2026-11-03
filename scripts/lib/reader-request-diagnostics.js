@@ -1,4 +1,7 @@
 'use strict';
+const { isFreshSourceProvenance } = require('./daily-source-format');
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 
 // 只保存真实修复请求与响应，不授予正文或发布资格。
 const fs = require('node:fs');
@@ -61,15 +64,17 @@ function begin(root, context, options = {}) {
     }
     const id = crypto.randomUUID();
     const dir = directory(root);
-    const request = { ...context, contract: 'reader-repair-request-diagnostics-v1', id,
+    const request = { ...context, ...require('./reader-diagnostic-format').diagnosticHeader(), id,
         at: new Date().toISOString(), promptSha256: sha(context.prompt) };
     const receipt = write(dir, `${id}.request.json`, request);
     return { id, directory: dir, requestSha256: receipt.sha256 };
 }
 function response(diagnostic, rawResponse) {
     if (typeof rawResponse !== 'string') throw new Error('长文修复记录只保存真实响应文本');
+    const original = require('./reader-proof-read-scope').readReaderProofJson(
+        path.join(diagnostic.directory, `${diagnostic.id}.request.json`), { expectedSha256: diagnostic.requestSha256 }).value;
     return write(diagnostic.directory, `${diagnostic.id}.response.json`, {
-        contract: 'reader-repair-request-diagnostics-v1', id: diagnostic.id,
+        ...require('./reader-diagnostic-format').diagnosticHeader(original), id: diagnostic.id,
         at: new Date().toISOString(), requestSha256: diagnostic.requestSha256,
         outputTextSha256: sha(rawResponse), rawResponse
     });
@@ -229,11 +234,11 @@ function vmSubdirectory(root, name, create) {
 function vmSource(paper, identity, requireLock = false) {
     const fresh = require('./fresh-analysis-context'), Config = require('../config');
     const provenance = paper?.freshRewriteProvenance;
-    vmNeed(provenance?.contract === 'fresh-source-analysis-v1'
+    vmNeed(isFreshSourceProvenance(provenance)
         && vmHash(provenance) === vmHash(paper.analysisManifest?.freshRewriteProvenance), 'daily source provenance differs');
     const runDir = path.join(Config.FILES.dailyFreshSourceRunsDir, provenance.runId);
     const run = vmRead(path.join(runDir, 'run.json')).value;
-    vmNeed(run.contract === fresh.DAILY_SOURCE_RUN_CONTRACT, 'not an actual daily run');
+    vmNeed(fresh.isDailySourceRun(run), 'not an actual daily run');
     const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
     vmNeed(['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256','sourceGeneration','sourceManifestSha256']
         .every(key => provenance[key] === source.freshSourceDescriptor[key]), 'four-source identity differs');
@@ -270,7 +275,7 @@ function vmPair(records, { identity, stage, contentAttempt, outputSha256, dispos
         vmNeed(matches.length === 1 && labels.every(key => (matches[0].event[key] ?? null) === (row.event[key] ?? null))
             && Date.parse(matches[0].event.at) > Date.parse(row.event.at), 'request-start and terminal do not pair');
     }
-    vmNeed(rows.every(({ event }) => event.version === 'llm-usage-v1' && event.runId === identity.freshAnalysis.runId
+    vmNeed(rows.every(({ event }) => isUsageEventFormat(event) && event.runId === identity.freshAnalysis.runId
         && event.paperId === identity.paperId && event.stage === stage && event.contentAttempt === contentAttempt), 'paid request identity differs');
     vmNeed(starts.every(({ event }) => event.model === identity.model.model && event.protocol === identity.model.protocol
         && /^[a-f0-9]{64}$/.test(event.inputSha256 || '') && (unitId === undefined || event.unitId === unitId)
@@ -342,7 +347,7 @@ function findReaderVersionMetadataOrigin(input) {
     const original = vmRead(origin.file, origin.sha256).value;
     const repair = require('./reader-repair');
     const envelope = vmRead(path.join(input.directory, repair.hashDraft(input.identity) + '.json')).value;
-    vmNeed(envelope.version === repair.REPAIR_VERSION && vmHash(envelope.identity) === vmHash(input.identity)
+    vmNeed(repair.isCandidateEnvelope(envelope) && vmHash(envelope.identity) === vmHash(input.identity)
         && envelope.payloadSha256 === repair.hashDraft(envelope.payload)
         && envelope.payload.rawDraft === input.rawDraft && envelope.payload.fullAttempts === original.originalCounters.fullAttempts,
         'current metadata candidate differs from the fixed original full');
@@ -435,7 +440,7 @@ function sealReaderVersionMetadataCompletion(paper, pending) {
 function validateReaderVersionMetadataCompletion(paper) {
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
     const marker = paper.analysisManifest?.contracts?.readerVersionMetadataRecovery;
-    if (paper.freshRewriteProvenance?.contract !== 'fresh-source-analysis-v1') {
+    if (!isFreshSourceProvenance(paper.freshRewriteProvenance)) {
         vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoveryProof,
             'metadata recovery cannot move outside its daily source');
         return true;
@@ -473,7 +478,7 @@ function validateReaderVersionMetadataCompletion(paper) {
     const envelopeBytes = Buffer.from(origin.value.candidateRawBase64, 'base64'), envelope = JSON.parse(envelopeBytes);
     vmNeed(origin.value.contract === VERSION_METADATA_PROOF && origin.value.kind === 'original_paid_full'
         && sha(envelopeBytes) === origin.value.candidateEnvelopeSha256
-        && envelope.version === require('./reader-repair').REPAIR_VERSION
+        && require('./reader-repair').isCandidateEnvelope(envelope)
         && envelope.payloadSha256 === require('./reader-repair').hashDraft(envelope.payload)
         && origin.value.wholeSha256 === sha(paper.analysisCheckpoint || paper.analysis || '')
         && origin.value.rawSha256 === pending.beforeRawSha256 && sha(envelope.payload.rawDraft) === pending.beforeRawSha256
@@ -487,7 +492,7 @@ function validateReaderVersionMetadataCompletion(paper) {
         && path.dirname(pending.response.file) === path.join(bound.attempts, 'request-diagnostics')
         && path.basename(pending.request.file) === req.value.id + '.request.json'
         && path.basename(pending.response.file) === req.value.id + '.response.json'
-        && req.value.contract === 'reader-repair-request-diagnostics-v1' && res.value.contract === req.value.contract
+        && require('./reader-diagnostic-format').hasDiagnosticFormat(req.value) && require('./reader-diagnostic-format').sameDiagnosticFormat(req.value, res.value)
         && req.value.contentAttempt === envelope.payload.attempts + 1 && pending.contentAttempt === req.value.contentAttempt
         && stage.attempts === pending.contentAttempt && stage.fullAttempts === envelope.payload.fullAttempts
         && stage.transportFailures >= (envelope.payload.transportFailures || 0)
@@ -506,10 +511,11 @@ function validateReaderVersionMetadataCompletion(paper) {
         outputSha256: res.value.outputTextSha256, disposition: 'accepted', unitId: sha(req.value.id), inputSha256: bodySha256 });
     const deep = require('../deep-analyzer'), evidence = deep.buildApiReaderEvidenceContext('', bound.source.text, bound.source.structuredArtifacts, paper.arxivId);
     const parsed = deep.parseApiReaderArticleResult(replayed, { arxivId: paper.arxivId,
+        ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
         availableFigureOrdinals: (envelope.payload.imageEvidence || []).filter(image => image.kind === 'figure').map(image => image.ordinal),
         requireIntegratedTables: true, minimumIntegratedTables: require('./reader-contract').readerRequirements({ version: 3,
             availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length }).minimumTables,
-        requiredVersion: 3, requireSourceBindings: true, allowDeterministicQuoteRepair: true,
+        requireSourceBindings: true, allowDeterministicQuoteRepair: true,
         allowDeterministicUnsupportedClaimPruning: true, enforceResourceAvailabilityClaims: true,
         verifiedResourceIdentity: deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources, bound.source.text),
         sourceText: bound.source.text, structuredArtifacts: bound.source.structuredArtifacts });
@@ -530,14 +536,14 @@ function validateReaderVersionMetadataPublicationCompletion(paper) {
     const runFile = safeRunId
         ? path.join(Config.FILES.dailyFreshSourceRunsDir, provenance.runId, 'run.json') : null;
     const run = runFile && fs.existsSync(runFile) ? vmRead(runFile).value : null;
-    const actualDaily = run?.contract === fresh.DAILY_SOURCE_RUN_CONTRACT;
+    const actualDaily = fresh.isDailySourceRun(run);
     // Conference/historical direct sources may use the same fresh-source
     // provenance contract. A caller's missing arxivId is not the daily test.
     if (!actualDaily) {
         vmNeed(!hasMarker, 'version metadata completion cannot move outside its actual daily run');
         return true;
     }
-    vmNeed(provenance?.contract === 'fresh-source-analysis-v1' && run.runId === provenance.runId
+    vmNeed(isFreshSourceProvenance(provenance) && run.runId === provenance.runId
         && /^\d{4}\.\d{4,5}(?:v\d+)?$/.test(paper.arxivId || '')
         && run.paperIds?.filter(id => vmCanonical(id) === vmCanonical(paper.arxivId)).length === 1,
         'actual daily publication requires its canonical paper identity');

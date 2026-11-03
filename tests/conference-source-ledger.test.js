@@ -62,7 +62,8 @@ function removeArtifact(memberValue, kind, state = 'blocked') {
 function makeLedger(root, members) {
     const ordered = [...members].sort((a, b) => ledger.identityKey(a.identity).localeCompare(ledger.identityKey(b.identity), 'en'));
     return {
-        version: ledger.CONTRACT, conference: { id: 'icassp-2026', year: 2026 }, members: ordered,
+        ...require('../scripts/lib/protocol-codec').recordHeader(ledger.CONTRACT, 'conference-source-ledger'),
+        conference: { id: 'icassp-2026', year: 2026 }, members: ordered,
         memberSetSha256: ledger.memberSetSha256(ordered)
     };
 }
@@ -214,7 +215,8 @@ test('来源清单读取与新文件保存拒绝重复键、符号链接、覆�
     assert.equal(fs.statSync(output).mode & 0o777, 0o600);
     const loaded = ledger.loadLedger(output);
     assert.equal(loaded.ledgerSha256, writtenSha);
-    assert.equal(loaded.ledger.version, ledger.CONTRACT);
+    assert.equal(loaded.ledger.contract, ledger.CONTRACT);
+    assert.equal(loaded.ledger.schemaFingerprint, require('../scripts/lib/protocol-codec').schemaFingerprint('conference-source-ledger'));
     assert.equal(ledger.verifyMemberFiles(loaded.ledger, root), true);
     assert.throws(() => ledger.writeLedger(output, source), /EEXIST/);
 

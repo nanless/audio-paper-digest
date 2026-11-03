@@ -1,0 +1,771 @@
+{
+  "protocols": [
+    {
+      "name": "reader-draft",
+      "currentVariant": "integrated-article",
+      "currentSchema": {
+        "header": [
+          "contract",
+          "schemaFingerprint"
+        ],
+        "requiredFields": [
+          "readerTitle",
+          "oneSentenceThesis",
+          "conceptBridges",
+          "figurePlacements",
+          "sections",
+          "tableBindings",
+          "formulaBindings"
+        ],
+        "sectionFields": [
+          "kind",
+          "heading",
+          "body"
+        ],
+        "sourceAuthority": "normal-authenticated-source-required"
+      },
+      "historical": [
+        {
+          "tag": 2,
+          "variant": "compact-article",
+          "header": {
+            "version": 2
+          }
+        },
+        {
+          "tag": 3,
+          "variant": "integrated-article",
+          "header": {
+            "version": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "beginner-researcher",
+      "currentVariant": "integrated-article",
+      "currentSchema": {
+        "header": [
+          "contract",
+          "schemaFingerprint"
+        ],
+        "fields": [
+          "readerTitle",
+          "oneSentenceThesis",
+          "conceptBridges",
+          "figurePlacements",
+          "sections",
+          "tableBindings",
+          "formulaBindings"
+        ],
+        "sourceAuthority": "normal-authenticated-source-required"
+      },
+      "historical": [
+        {
+          "tag": "beginner-researcher-v1",
+          "variant": "outline-article",
+          "header": {
+            "contract": "beginner-researcher-v1"
+          }
+        },
+        {
+          "tag": "beginner-researcher-v2",
+          "variant": "compact-article",
+          "header": {
+            "contract": "beginner-researcher-v2"
+          }
+        },
+        {
+          "tag": "beginner-researcher-v3",
+          "variant": "integrated-article",
+          "header": {
+            "contract": "beginner-researcher-v3"
+          }
+        }
+      ]
+    },
+    {
+      "name": "api-reader-parser",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "parser",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-parser-v3",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-assembler",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "assembler",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-assembler-v3",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-tables",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "tables",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-tables-v3",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-figures",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "figures",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-figures-v3",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-quality-metrics",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "qualityMetrics",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-quality-metrics-v2",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-source-bindings",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "sourceBindings",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-source-bindings-v4",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-source-repair",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "sourceRepair",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-source-repair-v4",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "api-reader-surface-repair",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "surfaceRepair",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-surface-repair-v2",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "reader-mechanical-contract",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "mechanical",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "reader-mechanical-contract-v1",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "reader-section-quality",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "role": "sectionQuality",
+        "requires": "full-normal-source-validation",
+        "formatIdentity": "registered-header-plus-original-body-sha"
+      },
+      "historical": [
+        {
+          "tag": "reader-section-quality-v1",
+          "variant": "integrated-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "reader-pipeline",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "roles": {
+          "article": "beginner-researcher",
+          "parser": "api-reader-parser",
+          "assembler": "api-reader-assembler",
+          "tables": "api-reader-tables",
+          "figures": "api-reader-figures",
+          "qualityMetrics": "api-reader-quality-metrics",
+          "sourceBindings": "api-reader-source-bindings",
+          "sourceRepair": "api-reader-source-repair",
+          "surfaceRepair": "api-reader-surface-repair",
+          "mechanical": "reader-mechanical-contract",
+          "sectionQuality": "reader-section-quality"
+        },
+        "requires": "full-normal-source-validation"
+      },
+      "historical": []
+    },
+    {
+      "name": "reader-candidate",
+      "currentVariant": "failed-candidate",
+      "currentSchema": {
+        "fields": [
+          "identity",
+          "payload",
+          "payloadSha256"
+        ],
+        "authority": "failed-input-only-no-completion-or-budget-grant"
+      },
+      "historical": [
+        {
+          "tag": "reader-node-repair-v1",
+          "variant": "failed-candidate",
+          "header": {
+            "version": "reader-node-repair-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-candidate-identity",
+      "currentVariant": "integrated-source-bound",
+      "currentSchema": {
+        "fields": [
+          "article",
+          "sourceBindings",
+          "repair"
+        ],
+        "authority": "format-metadata-only"
+      },
+      "historical": []
+    },
+    {
+      "name": "reader-target-ordinal-patch",
+      "currentVariant": "bounded-existing-nodes",
+      "currentSchema": {
+        "fields": [
+          "requestToken",
+          "replacements"
+        ],
+        "limits": {
+          "minimum": 1,
+          "maximum": 8
+        },
+        "authority": "private-normal-source-and-paid-request-required"
+      },
+      "historical": [
+        {
+          "tag": "reader-target-ordinal-patch-v1",
+          "variant": "bounded-existing-nodes",
+          "header": {
+            "contract": "reader-target-ordinal-patch-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-target-ordinal-record",
+      "currentVariant": "bound-request-evidence",
+      "currentSchema": {
+        "fields": [
+          "id",
+          "requestSha256"
+        ],
+        "authority": "actual-request-response-ledger-and-seal-required"
+      },
+      "historical": [
+        {
+          "tag": "reader-target-ordinal-patch-v1",
+          "variant": "bound-request-evidence",
+          "header": {
+            "contract": "reader-target-ordinal-patch-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-target-ordinal-compilation",
+      "currentVariant": "source-bound-compilation",
+      "currentSchema": {
+        "authority": "actual-request-response-source-and-stable-index-required"
+      },
+      "historical": [
+        {
+          "tag": "reader-target-ordinal-compilation-v1",
+          "variant": "source-bound-compilation",
+          "header": {
+            "contract": "reader-target-ordinal-compilation-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-node-patch",
+      "currentVariant": "bounded-existing-nodes",
+      "currentSchema": {
+        "fields": [
+          "draftSha256",
+          "replacements"
+        ],
+        "authority": "exact-existing-node-sha-and-source-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "bounded-existing-nodes",
+          "header": {
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-ordinal-history",
+      "currentVariant": "operator-supersession",
+      "currentSchema": {
+        "fields": [
+          "reason",
+          "compilations",
+          "previousCompletionProof",
+          "previousStage"
+        ],
+        "authority": "actual-operator-proof-and-original-completion-required"
+      },
+      "historical": [
+        {
+          "tag": "reader-target-ordinal-patch-v1",
+          "variant": "operator-supersession",
+          "header": {
+            "contract": "reader-target-ordinal-patch-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-repair-request-diagnostics",
+      "currentVariant": "actual-request-response",
+      "currentSchema": {
+        "authority": "actual-source-candidate-request-response-and-fees-required",
+        "requestFields": [
+          "id",
+          "identity",
+          "contentAttempt",
+          "prompt",
+          "draft",
+          "repairTargets"
+        ],
+        "responseFields": [
+          "id",
+          "requestSha256",
+          "outputTextSha256",
+          "rawResponse"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "reader-repair-request-diagnostics-v1",
+          "variant": "actual-request-response",
+          "header": {
+            "contract": "reader-repair-request-diagnostics-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-unused-allowance-transfer",
+      "currentVariant": "encoding-only",
+      "currentSchema": {
+        "authority": "original-unused-allowance-and-exact-encoding-equivalence-required",
+        "counts": "unchanged",
+        "newAllowance": false
+      },
+      "historical": [
+        {
+          "tag": "reader-repair-prompt-unused-allowance-transfer-v1",
+          "variant": "exact-prompt-pair",
+          "header": {
+            "contract": "reader-repair-prompt-unused-allowance-transfer-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-section-index-groups",
+      "currentVariant": "adjacent-section-indexes",
+      "currentSchema": {
+        "fields": [
+          "draftSha256",
+          "sectionsSha256",
+          "groups"
+        ],
+        "authority": "original-existing-sections-and-explicit-atomic-scope-required",
+        "bodyPolicy": "retain-every-original-string"
+      },
+      "historical": [
+        {
+          "tag": "reader-section-index-groups-v1",
+          "variant": "adjacent-section-indexes",
+          "header": {
+            "contract": "reader-section-index-groups-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-section-body-index-groups",
+      "currentVariant": "adjacent-section-field-order",
+      "currentSchema": {
+        "fields": [
+          "draftSha256",
+          "sectionsSha256",
+          "groups"
+        ],
+        "authority": "original-existing-sections-and-explicit-atomic-scope-required",
+        "bodyPolicy": "retain-every-original-string"
+      },
+      "historical": [
+        {
+          "tag": "reader-section-body-index-groups-v2",
+          "variant": "adjacent-section-field-order",
+          "header": {
+            "contract": "reader-section-body-index-groups-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "api-reader-author-identity",
+      "currentVariant": "source-bound-identity",
+      "currentSchema": {
+        "fields": [
+          "sourceDomSha256",
+          "sourceTextSha256",
+          "metadataSha256",
+          "authors"
+        ],
+        "authority": "actual-original-source-and-full-identity-replay-required"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-author-identity-v1",
+          "variant": "source-bound-identity",
+          "header": {
+            "contract": "api-reader-author-identity-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "api-reader-resource-identity",
+      "currentVariant": "source-bound-identity",
+      "currentSchema": {
+        "fields": [
+          "sourceTextSha256",
+          "resources"
+        ],
+        "authority": "actual-original-source-and-full-identity-replay-required"
+      },
+      "historical": [
+        {
+          "tag": "api-reader-resource-identity-v1",
+          "variant": "source-bound-identity",
+          "header": {
+            "contract": "api-reader-resource-identity-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-identity-bindings",
+      "currentVariant": "actual-author-resource-heads",
+      "currentSchema": {
+        "fields": [
+          "authors",
+          "resources"
+        ],
+        "authority": "format-metadata-only"
+      },
+      "historical": []
+    },
+    {
+      "name": "reader-resource-availability-claims",
+      "currentVariant": "authenticated-source-replay",
+      "currentSchema": {
+        "authority": "actual-source-resources-and-complete-Reader-replay-required",
+        "statusStates": [
+          "available",
+          "unavailable",
+          "temporarily_unreachable"
+        ],
+        "availabilityIsNotReleaseEvidence": true
+      },
+      "historical": [
+        {
+          "tag": "reader-resource-availability-claims-v1",
+          "variant": "authenticated-source-replay",
+          "header": {
+            "contract": "reader-resource-availability-claims-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "api-reader-decision-projection",
+      "currentVariant": "source-bound-display-fields",
+      "currentSchema": {
+        "authority": "actual-complete-reader-and-source-validated-display-only",
+        "fields": [
+          "summary",
+          "decision"
+        ],
+        "noScientificFactGrant": true
+      },
+      "historical": [
+        {
+          "tag": "api-reader-decision-projection-v2",
+          "variant": "source-bound-display-fields",
+          "header": {
+            "contract": "api-reader-decision-projection-v2"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-sealed-pdf-table-grid",
+      "currentVariant": "exact-official-pdf-grid",
+      "currentSchema": {
+        "authority": "actual-four-sealed-source-files-and-complete-PDF-grid-required",
+        "selfHash": "evidenceSha256",
+        "scope": "complete-single-DOM-table"
+      },
+      "historical": [
+        {
+          "tag": "reader-sealed-pdf-table-grid-v1",
+          "variant": "exact-official-pdf-grid",
+          "header": {
+            "contract": "reader-sealed-pdf-table-grid-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-compiled-pdf-table-selection",
+      "currentVariant": "exact-source-grid-projection",
+      "currentSchema": {
+        "authority": "private-normal-selection-compiler-and-full-PDF-grid-required",
+        "scope": "proper-subset-of-one-complete-source-grid"
+      },
+      "historical": [
+        {
+          "tag": "reader-compiled-pdf-table-selection-v1",
+          "variant": "exact-source-grid-projection",
+          "header": {
+            "contract": "reader-compiled-pdf-table-selection-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "pdf-grid-display-normalization",
+      "currentVariant": "fixed-explicit-glyphs",
+      "currentSchema": {
+        "rules": [
+          "whitespace",
+          "typographic-hyphen",
+          "explicit-symbols"
+        ],
+        "noValueOrUnitGuessing": true
+      },
+      "historical": [
+        {
+          "tag": "whitespace-typographic-hyphen-and-explicit-symbols-v1",
+          "variant": "fixed-explicit-glyphs",
+          "header": {
+            "contract": "whitespace-typographic-hyphen-and-explicit-symbols-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-pdf-selection-replay-result",
+      "currentVariant": "pure-projection-result",
+      "currentSchema": {
+        "fields": [
+          "valid"
+        ],
+        "authority": "no-source-or-write-capability"
+      },
+      "historical": [
+        {
+          "tag": "reader-pdf-selection-replay-result-v1",
+          "variant": "pure-projection-result",
+          "header": {
+            "contract": "reader-pdf-selection-replay-result-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reader-sealed-pdf-quotes",
+      "currentVariant": "unique-contiguous-official-pdf-fragment",
+      "currentSchema": {"authority":"actual-sealed-PDF-reextraction","selfHash":"evidenceSha256","offsetUnit":"unicode_code_point"},
+      "historical": [{"tag":"reader-sealed-pdf-quotes-v1","variant":"unique-contiguous-official-pdf-fragment"}]
+    },
+    {
+      "name": "reader-pdf-quote-projection",
+      "currentVariant": "collapse-whitespace-only",
+      "currentSchema": {"normalization":"unicode-whitespace-collapse-and-trim","preservesOriginalCharacters":true},
+      "historical": [{"tag":"unicode-whitespace-collapse-and-trim-v1","variant":"collapse-whitespace-only"}]
+    },
+    {
+      "name": "reader-sealed-pdf-scientific-quantities",
+      "currentVariant": "font-and-position-authenticated-atoms",
+      "currentSchema": {"authority":"same-original-contiguous-PDF-quote-and-raised-glyph","operation":"scientific-glyph-atoms"},
+      "historical": [{"tag":"reader-sealed-pdf-scientific-quantities-v1","variant":"font-and-position-authenticated-atoms"}]
+    },
+    {
+      "name": "reader-pdf-scientific-extraction-operation",
+      "currentVariant": "glyph-atoms",
+      "currentSchema": {"source":"actual-PDF-glyph-positions"},
+      "historical": [{"tag":"scientific_glyph_atoms_v1","variant":"glyph-atoms"}]
+    },
+    {
+      "name": "reader-pdf-adamw-schedule",
+      "currentVariant": "complete-three-stage-learning-rates",
+      "currentSchema": {"roles":["SFT","RL-Stage I","RL-Stage II"],"authority":"actual-original-AdamW-PDF-glyph-proof"},
+      "historical": [{"tag":"adamw-three-stage-learning-rates-v1","variant":"complete-three-stage-learning-rates"}]
+    },
+    {
+      "name":"reader-source-only",
+      "currentVariant":"source-only",
+      "currentSchema":{"input":"authenticated-source","signedParent":false},
+      "historical":[{"tag":"reader-source-only-v1","variant":"source-only"}]
+    },
+    {
+      "name":"reader-source-signed-revision",
+      "currentVariant":"signed-revision",
+      "currentSchema":{"input":"authenticated-source-and-current-signed-parent","signedParent":true},
+      "historical":[{"tag":"reader-source-signed-revision-v1","variant":"signed-revision"}]
+    },
+    {
+      "name":"reader-source-operator-revision",
+      "currentVariant":"operator-revision",
+      "currentSchema":{"input":"source-bound-authorized-local-operator","newModelRequests":false},
+      "historical":[{"tag":"reader-source-operator-revision-v1","variant":"operator-revision"}]
+    },
+    {
+      "name":"conference-reader-source-core-correction",
+      "currentVariant":"conference-core-correction",
+      "currentSchema":{"input":"authenticated-conference-core-local-correction","newModelRequests":false},
+      "historical":[{"tag":"conference-reader-source-core-correction-v1","variant":"conference-core-correction"}]
+    },
+    {
+      "name":"conference-reader-source-resource-correction",
+      "currentVariant":"conference-resource-correction",
+      "currentSchema":{"input":"authenticated-conference-resource-local-correction","newModelRequests":false},
+      "historical":[{"tag":"conference-reader-source-resource-correction-v1","variant":"conference-resource-correction"}]
+    },
+    {
+      "name":"source-cell-math-display",
+      "currentVariant":"whole-cell-exact-duplicate",
+      "currentSchema":{"authority":"none-without-original-source-cell","preservesRawText":true,"rules":["scientific-notation-duplicate","numeric-style-duplicate","nested-power-duplicate","zero-width-unit-duplicate","identifier-script-duplicate"]},
+      "historical":[]
+    },
+    {
+      "name":"reader-table-selection",
+      "currentVariant":"exact-original-subset",
+      "currentSchema":{"authority":"eligible-complete-DOM-and-exact-selected-coordinates","noModelCellValues":true},
+      "historical":[{"tag":"reader-table-selection-v2","variant":"exact-original-subset"}]
+    },
+    {
+      "name":"reader-table-eligibility",
+      "currentVariant":"single-eligible-original-table",
+      "currentSchema":{"authority":"original-complete-structured-source","scope":"selection"},
+      "historical":[{"tag":"reader-table-eligibility-v1","variant":"single-eligible-original-table"}]
+    },
+    {
+      "name":"reader-complete-table-eligibility",
+      "currentVariant":"all-original-rows-and-columns",
+      "currentSchema":{"authority":"complete-structured-source-with-spans","scope":"completeTable"},
+      "historical":[{"tag":"reader-complete-table-eligibility-v1","variant":"all-original-rows-and-columns"}]
+    },
+    {
+      "name":"reader-result-table-coverage",
+      "currentVariant":"measured-results-not-setup",
+      "currentSchema":{"requiresRealResultWhenSourceHasQuantitativeResults":true,"metadataOnlyTablesDoNotCount":true},
+      "historical":[]
+    },
+    {
+      "name":"reader-draft-order",
+      "currentVariant":"bounded-reference-order",
+      "currentSchema":{"boundaries":["sections","tables","conceptBridges","conceptMarkerLocations"],"identity":["inputSha256","outputSha256"],"noNewContent":true},
+      "historical":[{"tag":"reader-draft-order-v4","variant":"bounded-reference-order"}]
+    },
+    {
+      "name":"reader-fact-sentence-patch",
+      "currentVariant":"source-bound-existing-sentences",
+      "currentSchema":{"fields":["draftSha256","sentenceReplacements"],"requiresAllAuthorizedSpans":true,"maxTargets":8,"maxSentences":32},
+      "historical":[{"tag":1,"variant":"source-bound-existing-sentences","header":{"version":1}}]
+    },
+    {
+      "name":"reader-concept-term-patch",
+      "currentVariant":"source-bound-existing-term-leaves",
+      "currentSchema":{"fields":["draftSha256","termReplacements"],"requiresAllAuthorizedLeaves":true,"maxTargets":8,"minChars":2,"maxChars":48},
+      "historical":[{"tag":1,"variant":"source-bound-existing-term-leaves","header":{"version":1}}]
+    }
+  ]
+}

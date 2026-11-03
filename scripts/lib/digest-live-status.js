@@ -14,7 +14,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { buildDailyUsageSummary, createUsageSummaryCache, beijingDateFromMs } = require('./llm-usage-summary.js');
 
-const VERSION = 'digest-live-status-v1';
+const formats = require('./protocol-codec');
+const CONTRACT = formats.contract('digest-live-status');
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_STALL_THRESHOLD_SECONDS = 300;
 const DEFAULT_LOG_FRESH_SECONDS = 300;
@@ -75,6 +76,7 @@ function defaultPaths() {
         reviewReceiptDir: Config.CURRENT_DIR,
         visualManifestDir: Config.FILES.visualSummaryManifestDir,
         coverManifestDir: Config.FILES.digestCoverManifestDir,
+        noGenerationRecordDir: Config.FILES.postPublishVisualWaiverDir,
         logsDir: Config.LOGS_DIR,
         accountPoolState: Config.FILES.llmAccountPoolState,
         llmUsageDir: Config.FILES.llmUsageDir
@@ -82,7 +84,9 @@ function defaultPaths() {
 }
 
 function resolvePaths(overrides = {}) {
-    return { ...defaultPaths(), ...(overrides || {}) };
+    const paths = { ...defaultPaths(), ...(overrides || {}) };
+    if (!overrides.noGenerationRecordDir) paths.noGenerationRecordDir = path.join(paths.currentDir, 'post-publish-visual-waivers');
+    return paths;
 }
 
 function readJsonSafe(filePath, readErrors = null) {
@@ -478,7 +482,15 @@ function applyLogStageHint(stage, hint, latestLog = null) {
     return stage;
 }
 
-function visualGateComplete(date, generation, visualManifest, coverManifest, review) {
+function visualGateComplete(date, generation, visualManifest, coverManifest, review,
+    noGenerationRecord = null, recordContext = {}) {
+    const recorded = require('./post-publication-policy').validNoGenerationRecord(noGenerationRecord, {
+        date, receiptCommit: review?.publicationCommit, remoteVerifiedOid: review?.remoteVerifiedOid,
+        publicationPolicy: generation?.postPublicationPolicy, postPublishVisuals: review?.postPublishVisuals,
+        ...recordContext
+    });
+    if (recorded) return true;
+    if (generation && Object.hasOwn(generation, 'postPublicationPolicy')) return false;
     // 现代 generation 的两项标志均为 false：发布后长图和封面由审查凭证共同决定。
     // 旧凭证没有此字段时沿用原标志；未知值不提供省略视觉的依据。
     let visualRequired = generation?.visualSummaryRequired !== false;
@@ -521,6 +533,8 @@ function inferStage(evidence = {}) {
         review,
         visualManifest,
         coverManifest,
+        noGenerationRecord,
+        recordContext,
         counts,
         latestLog,
         logFreshSeconds
@@ -551,7 +565,7 @@ function inferStage(evidence = {}) {
         else if (!generationMatches) stage = 'pages';
         else if (!reviewMatches || review.strictReview !== true) stage = 'review';
         else if (!pushComplete) stage = 'push';
-        else if (!visualGateComplete(date, generation, visualManifest, coverManifest, review)) stage = 'visual';
+        else if (!visualGateComplete(date, generation, visualManifest, coverManifest, review, noGenerationRecord, recordContext)) stage = 'visual';
         else stage = 'complete';
     }
     const hint = logStageHint(latestLog, { logFreshSeconds });
@@ -653,6 +667,14 @@ function buildLiveStatus(options = {}) {
     const review = readJson(reviewPath);
     const visualManifest = readJson(visualPath);
     const coverManifest = readJson(coverPath);
+    const noGenerationPath = path.join(paths.noGenerationRecordDir || paths.currentDir, `${date}.json`);
+    const noGenerationRecord = readJson(noGenerationPath);
+    const actualSha = filename => {
+        try { return require('node:crypto').createHash('sha256').update(fs.readFileSync(filename)).digest('hex'); }
+        catch (_) { return null; }
+    };
+    const recordContext = { manifestSha: actualSha(generationPath), receiptSha: actualSha(reviewPath),
+        visualSha: actualSha(visualPath), coverSha: actualSha(coverPath) };
 
     const counts = inferAnalysisCounts(deep);
     const latestLog = options.latestLog !== undefined
@@ -668,6 +690,8 @@ function buildLiveStatus(options = {}) {
         review,
         visualManifest,
         coverManifest,
+        noGenerationRecord,
+        recordContext,
         counts,
         latestLog,
         logFreshSeconds: options.logFreshSeconds
@@ -692,6 +716,7 @@ function buildLiveStatus(options = {}) {
     if (documentMatchesDate(review, date, ['date'])) progressFiles.push(reviewPath);
     if (documentMatchesDate(visualManifest, date, ['batchDate'])) progressFiles.push(visualPath);
     if (documentMatchesDate(coverManifest, date, ['batchDate'])) progressFiles.push(coverPath);
+    if (documentMatchesDate(noGenerationRecord, date, ['batchDate'])) progressFiles.push(noGenerationPath);
     const batchStarted = progressFiles.length > 0;
     const progress = computeProgress(progressFiles, nowMs);
     const stallThresholdSeconds = Number.isFinite(options.stallThresholdSeconds)
@@ -702,7 +727,7 @@ function buildLiveStatus(options = {}) {
         && progress.secondsSinceProgress >= stallThresholdSeconds;
 
     return {
-        version: VERSION,
+        ...formats.recordHeader(CONTRACT, CONTRACT),
         date,
         generatedAt: formatBeijingIso(nowMs),
         stage,
@@ -827,7 +852,7 @@ function formatLiveStatus(status) {
 
 module.exports = {
     visualGateComplete,
-    VERSION,
+    CONTRACT,
     STAGES,
     STAGE_LABELS,
     DEFAULT_STALL_THRESHOLD_SECONDS,

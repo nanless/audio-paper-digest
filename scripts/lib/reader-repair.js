@@ -8,9 +8,19 @@ const path = require('node:path');
 const { READER_LIMITS } = require('./reader-contract.js');
 const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS } = require('./reader-draft-order.js');
 
-const REPAIR_VERSION = 'reader-node-repair-v1';
-const SECTION_GROUP_PLAN_CONTRACT = 'reader-section-index-groups-v1';
-const SECTION_BODY_GROUP_PLAN_CONTRACT = 'reader-section-body-index-groups-v2';
+const candidateFormat = require('./reader-candidate-format');
+const patchCodec = require('./protocol-codec');
+const currentNodePatchHeader = () => patchCodec.recordHeader('reader-node-patch', 'reader-node-patch');
+function hasCurrentSpecialPatch(response, family, bodyKeys) {
+    return patchCodec.isCurrentHeader(response, family)
+        && Object.keys(response).sort().join(',') === ['contract', 'schemaFingerprint', ...bodyKeys].sort().join(',');
+}
+const REPAIR_CONTRACT = candidateFormat.header().contract;
+const isCandidateEnvelope = candidateFormat.isEnvelope;
+const candidateEnvelopeHeader = candidateFormat.header;
+const sectionFormat = require('./reader-section-format');
+const SECTION_GROUP_PLAN_CONTRACT = sectionFormat.currentHeader(false).contract;
+const SECTION_BODY_GROUP_PLAN_CONTRACT = sectionFormat.currentHeader(true).contract;
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
 const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIELDS];
 const LANGUAGE_ISSUE_CODES = new Set(['reader_workflow_leakage', 'reader_awkward_translation']);
@@ -18,8 +28,13 @@ const LANGUAGE_ERROR_CODE = 'READER_PROSE_LANGUAGE';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_RECOVERY_SECTIONS = 64;
 const VALIDATION_SIGNATURE_PREFIX = 'reader-validation-v2:';
-const IMPLEMENTATION_ALLOWANCE_CONTRACT = 'reader-implementation-repair-allowance-v1';
-const IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT = 'reader-implementation-repair-lineage-v1';
+const IMPLEMENTATION_ALLOWANCE_CONTRACT = 'reader-implementation-repair-allowance';
+const LINEAGE = 'reader-implementation-repair-lineage';
+const IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT = Object.freeze(patchCodec.recordHeader(LINEAGE, LINEAGE));
+const originalLineage = patchCodec.historicalContract(LINEAGE, 'previously-issued-lineage');
+const sameLineage = require('node:util').isDeepStrictEqual;
+const hasImplementationAllowanceLineage = value => value === originalLineage
+    || sameLineage(value, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT);
 const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', 'tableCompilerSha256',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
@@ -385,20 +400,24 @@ function readAllowanceEnvelope(filename) {
 function validateImplementationAllowance(payload, identity, directory) {
     const proof = payload?.implementationRepairAllowanceProof;
     if (proof === undefined || proof === null) return false;
-    if (proof.contract === 'reader-repair-prompt-unused-allowance-transfer-v1') {
-        const keys = ['contract', 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
+    const codec = require('./protocol-codec');
+    if (codec.hasValidHeader(proof, 'reader-unused-allowance-transfer')) {
+        const encodingOnly = codec.format(proof.contract, 'reader-unused-allowance-transfer', proof.schemaFingerprint) === 'encoding-only';
+        const keys = [...Object.keys(codec.recordHeader(proof.contract, 'reader-unused-allowance-transfer', proof.schemaFingerprint)), 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
             'revisionAuditSha256', 'originalAllowanceSha256', 'allowanceSha256'];
         const audit = payload.readerRecoveryRevisions?.at(-1);
         const body = { ...proof }; delete body.allowanceSha256;
         const from = String(proof.fromIdentitySha256 || '');
         if (Object.keys(proof).sort().join('\0') !== keys.sort().join('\0')
-            || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
+            || !audit || !require('./protocol-codec').hasValidHeader(audit, 'reader-recovery-diagnostics-revision')
             || hashDraft(audit) !== proof.revisionAuditSha256
             || audit.fromIdentitySha256 !== from || audit.toIdentitySha256 !== hashDraft(identity)
             || proof.toIdentitySha256 !== hashDraft(identity)
             || proof.oldPayloadSha256 !== audit.oldPayloadSha256
             || hashDraft(body) !== proof.allowanceSha256
-            || hashDraft(audit.changedFields) !== hashDraft(['repairPromptSha256'])
+            || (!encodingOnly && hashDraft(audit.changedFields) !== hashDraft(['repairPromptSha256']))
+            || (encodingOnly && (!Array.isArray(audit.changedFields) || !audit.changedFields.length
+                || audit.changedFields.some(key => !candidateFormat.identityFormatFields.includes(key))))
             || !new RegExp(`^${from}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`).test(String(audit.archivedName || ''))
             || !/^[a-f0-9]{64}$/.test(from)) throw new Error('修复提示词升级的原未用许可证明无效');
         const absolute = assertSafeDirectory(directory);
@@ -411,19 +430,25 @@ function validateImplementationAllowance(payload, identity, directory) {
         const oldIdentity = envelope?.identity;
         const omitPrompt = value => Object.fromEntries(Object.entries(value || {})
             .filter(([key]) => key !== 'repairPromptSha256'));
+        const permittedTransition = encodingOnly
+            ? !require('node:util').isDeepStrictEqual(oldIdentity, identity)
+                && require('node:util').isDeepStrictEqual(candidateFormat.semanticIdentity(oldIdentity), candidateFormat.semanticIdentity(identity))
+                && require('node:util').isDeepStrictEqual([...new Set([...Object.keys(oldIdentity), ...Object.keys(identity)])]
+                    .filter(key => !require('node:util').isDeepStrictEqual(oldIdentity[key], identity[key])).sort(), [...audit.changedFields].sort())
+            : oldIdentity.repairPromptSha256 === 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
+                && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470'
+                && require('node:util').isDeepStrictEqual(omitPrompt(oldIdentity), omitPrompt(identity));
         if (crypto.createHash('sha256').update(old.bytes).digest('hex') !== audit.oldEnvelopeSha256
             || hashDraft(oldIdentity) !== from || envelope.payloadSha256 !== audit.oldPayloadSha256
             || hashDraft(original) !== audit.oldPayloadSha256
-            || oldIdentity.repairPromptSha256 !== 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
-            || identity.repairPromptSha256 !== '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470'
-            || !require('node:util').isDeepStrictEqual(omitPrompt(oldIdentity), omitPrompt(identity))
+            || !permittedTransition
             || original.implementationRepairAllowanceProof?.allowanceSha256 !== proof.originalAllowanceSha256
-            || original.implementationRepairAllowanceLineage !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT
+            || !hasImplementationAllowanceLineage(original.implementationRepairAllowanceLineage)
             || (original.consumedImplementationAllowanceSha256 || []).includes(proof.originalAllowanceSha256)
             || !require('node:util').isDeepStrictEqual(payload.consumedImplementationAllowanceSha256 || [],
                 original.consumedImplementationAllowanceSha256 || [])
             || (payload.consumedImplementationAllowanceSha256 || []).includes(proof.allowanceSha256)
-            || payload.implementationRepairAllowanceLineage !== original.implementationRepairAllowanceLineage
+            || !sameLineage(payload.implementationRepairAllowanceLineage, original.implementationRepairAllowanceLineage)
             || ['attempts', 'fullAttempts', 'noProgress'].some(key =>
                 !require('node:util').isDeepStrictEqual(payload[key], original[key]))
             || !Number.isSafeInteger(payload.transportFailures ?? 0)
@@ -442,7 +467,7 @@ function validateImplementationAllowance(payload, identity, directory) {
         }
         return true;
     }
-    const keys = ['contract', 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
+    const keys = ['contract', ...(own(proof || {}, 'schemaFingerprint') ? ['schemaFingerprint'] : []), 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
         'revisionAuditSha256', 'changedFields', 'allowanceSha256'];
     const audits = Array.isArray(payload.readerRecoveryRevisions) ? payload.readerRecoveryRevisions : [];
     const audit = audits.at(-1); const body = proof && { ...proof }; if (body) delete body.allowanceSha256;
@@ -472,11 +497,11 @@ function validateImplementationAllowance(payload, identity, directory) {
         && path.resolve(directory) === path.join(path.resolve(conference.executionDir), 'reader-attempts');
     if (!proof || typeof proof !== 'object' || Array.isArray(proof)
         || Object.keys(proof).sort().join('\0') !== keys.sort().join('\0')
-        || proof.contract !== IMPLEMENTATION_ALLOWANCE_CONTRACT
+        || !patchCodec.hasValidHeader(proof, IMPLEMENTATION_ALLOWANCE_CONTRACT)
         || !Array.isArray(proof.changedFields) || !proof.changedFields.length
         || proof.changedFields.some(field => !IMPLEMENTATION_ALLOWANCE_FIELDS.has(field))
         || proof.changedFields.some((field, index) => index && codeUnitCompare(proof.changedFields[index - 1], field) >= 0)
-        || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
+        || !audit || !require('./protocol-codec').hasValidHeader(audit, 'reader-recovery-diagnostics-revision')
         || (identity?.freshAnalysis?.runId ? audit.runId !== identity.freshAnalysis.runId
             : conference?.executionId ? !conferenceScopeValid
                 : !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(audit.runId || ''))
@@ -544,10 +569,12 @@ function parseRecoveryDraft(raw) {
         value = typeof raw === 'string' ? JSON.parse(raw) : structuredClone(raw);
         assertSafeJson(value);
     } catch { return null; }
+    let rootFields;
+    try { rootFields = require('./reader-record-format').draftFields(value); } catch { return null; }
     if (!value || Array.isArray(value) || typeof value !== 'object'
-        || Object.keys(value).some(key => !ROOT_FIELDS.includes(key))
-        || !ROOT_FIELDS.every(key => own(value, key))
-        || value.version !== 3
+        || Object.keys(value).some(key => !rootFields.includes(key))
+        || !rootFields.every(key => own(value, key))
+        || !require('./reader-record-format').isIntegratedDraft(value)
         || typeof value.readerTitle !== 'string' || typeof value.oneSentenceThesis !== 'string'
         || ARRAY_FIELDS.some(field => !Array.isArray(value[field]))
         || value.sections.length < 1 || value.sections.length > MAX_RECOVERY_SECTIONS
@@ -611,12 +638,12 @@ function canUseBodyFieldIndexGroups(draft) {
     return extra && canUseSectionIndexGroups(preview);
 }
 function compileSectionIndexGroupPlan(draft, plan, context) {
-    if (context?.sectionGroupPlanContract !== SECTION_BODY_GROUP_PLAN_CONTRACT) {
+    if (!sectionFormat.isContext(context, true)) {
         return compileStrictSectionIndexGroupPlan(draft, plan, context);
     }
     if (!canUseBodyFieldIndexGroups(draft)
-        || !sectionGroupExactKeys(plan, ['contract', 'version', 'draftSha256', 'sectionsSha256', 'groups'])
-        || plan.contract !== SECTION_BODY_GROUP_PLAN_CONTRACT || plan.version !== 2
+        || !sectionFormat.matches(plan, context, true)
+        || !sectionGroupExactKeys(plan, [...Object.keys(sectionFormat.contextHeader(context, true)), 'draftSha256', 'sectionsSha256', 'groups'])
         || plan.draftSha256 !== hashDraft(draft) || context.draftSha256 !== hashDraft(draft)
         || plan.sectionsSha256 !== hashDraft(draft.sections)
         || context.targets?.length !== 1 || context.targets[0].path !== '/sections'
@@ -648,27 +675,30 @@ function compileSectionIndexGroupPlan(draft, plan, context) {
         return { sectionIndexes: group.sectionIndexes, heading: group.heading };
     });
     if (seen.size !== draft.sections.length) throw new Error('字段分组遗漏原小节');
-    const strictContext = { ...context, sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT,
+    const simpleHeader = sectionFormat.simpleHeader(context);
+    const strictContext = { ...context, sectionGroupPlanContract: simpleHeader.contract,
         draftSha256: hashDraft(preview), targets: [{ ...context.targets[0], oldSha256: hashDraft(preview.sections) }] };
-    const strictPlan = { contract: SECTION_GROUP_PLAN_CONTRACT, version: 1,
+    if (simpleHeader.schemaFingerprint) strictContext.sectionGroupPlanSchemaFingerprint = simpleHeader.schemaFingerprint;
+    else delete strictContext.sectionGroupPlanSchemaFingerprint;
+    const strictPlan = { ...simpleHeader,
         draftSha256: strictContext.draftSha256, sectionsSha256: strictContext.targets[0].oldSha256, groups };
     const compiled = compileStrictSectionIndexGroupPlan(preview, strictPlan, strictContext);
     compiled.patch.draftSha256 = hashDraft(draft);
     compiled.patch.replacements[0].oldSha256 = hashDraft(draft.sections);
-    compiled.proof = { ...compiled.proof, contract: SECTION_BODY_GROUP_PLAN_CONTRACT,
+    compiled.proof = { ...compiled.proof, ...sectionFormat.proofHeader(context, true),
         inputDraftSha256: hashDraft(draft), inputSectionsSha256: hashDraft(draft.sections), planSha256: hashDraft(plan) };
     return compiled;
 }
 
 function compileStrictSectionIndexGroupPlan(draft, plan, context) {
-    if (context?.sectionGroupPlanContract !== SECTION_GROUP_PLAN_CONTRACT
+    if (!sectionFormat.isContext(context)
         || !canUseSectionIndexGroups(draft)
         || context.atomicOperation?.kind !== 'reorganize_existing_sections_v1'
         || context.targets?.length !== 1 || context.targets[0].path !== '/sections'
         || context.draftSha256 !== hashDraft(draft)
         || context.targets[0].oldSha256 !== hashDraft(draft.sections)
-        || !sectionGroupExactKeys(plan, ['contract', 'version', 'draftSha256', 'sectionsSha256', 'groups'])
-        || plan.contract !== SECTION_GROUP_PLAN_CONTRACT || plan.version !== 1
+        || !sectionFormat.matches(plan, context)
+        || !sectionGroupExactKeys(plan, [...Object.keys(sectionFormat.contextHeader(context)), 'draftSha256', 'sectionsSha256', 'groups'])
         || plan.draftSha256 !== context.draftSha256 || plan.sectionsSha256 !== context.targets[0].oldSha256
         || !Array.isArray(plan.groups) || plan.groups.length < READER_LIMITS.minimumSections
         || plan.groups.length > READER_LIMITS.maximumSections) throw new Error('小节索引分组协议、数量或当前SHA不合法');
@@ -696,9 +726,9 @@ function compileStrictSectionIndexGroupPlan(draft, plan, context) {
         return { kind, heading, body };
     });
     if (cursor !== draft.sections.length) throw new Error('小节索引分组遗漏原小节');
-    return { patch: { version: 1, draftSha256: context.draftSha256, replacements: [{
+    return { patch: { ...sectionFormat.patchHeader(context), draftSha256: context.draftSha256, replacements: [{
         path: '/sections', oldSha256: context.targets[0].oldSha256, value: sections }] },
-        proof: { contract: SECTION_GROUP_PLAN_CONTRACT, inputDraftSha256: hashDraft(draft),
+        proof: { ...sectionFormat.proofHeader(context), inputDraftSha256: hashDraft(draft),
             inputSectionsSha256: hashDraft(draft.sections), planSha256: hashDraft(plan),
             outputSectionsSha256: hashDraft(sections), groups: plan.groups.map(group => [...group.sectionIndexes]) } };
 }
@@ -718,7 +748,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
     const readerLanguageGuidance = '标题和获准改写的正文只讲论文的具体内容，不写节数、列数、检查通过或表前表后写作要求。'
         + '新标题用自然中文概括本组问题。技术缩写保留准确原名；不要为了全中文杜撰直译。'
         + '本轮要求原样保留的正文仍逐字保留，已有文风问题交回后续获准的局部修复。';
-    if (context.sectionGroupPlanContract === SECTION_BODY_GROUP_PLAN_CONTRACT) {
+    if (sectionFormat.isContext(context, true)) {
         return [
             '本轮只返回原小节索引和原字段引用的分组计划，不重写正文或来源。',
             readerLanguageGuidance,
@@ -726,13 +756,13 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
             '每组只能含sectionIndexes、heading、fieldOrders。sectionIndexes从0起连续完整覆盖全部原小节，不遗漏、不重复、不重排，只能合并同kind相邻小节；kind从原小节派生。',
             'fieldOrders按本组sectionIndexes顺序，逐小节声明sectionIndex与fields。fields指定该原小节body与唯一body2/body_after字符串的拼接次序；原字段每项恰好一次，包括空串。不能跨小节搬段，不能提交新字段/正文/值，不能省略任何图表公式标记。',
             '程序按所选顺序保留全部原字符串字节、原标题与kind，以及全部root来源绑定。请选择符合原段导读、原图标记和图后解释关系的布局；本次真实图片和最终全部来源、数字、单位、质量校验仍必须通过。其他问题只供下一轮，不能为它们重吐超量小节。',
-            `只输出JSON：{"contract":"${SECTION_BODY_GROUP_PLAN_CONTRACT}","version":2,"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部12–18组；有body2的小节fields须包含body2。`,
+            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context, true)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部12–18组；有body2的小节fields须包含body2。`,
             '唯一授权原小节及SHA：'+JSON.stringify({targets:context.targets,atomicOperation:operation}),
             '其他只读反馈：'+reviewFeedback,mechanicalContract,numericSpellingGuidance,
             '封存证据：'+context.evidence,indexExamples
         ].filter(Boolean).join('\n\n');
     }
-    if (context.sectionGroupPlanContract === SECTION_GROUP_PLAN_CONTRACT) {
+    if (sectionFormat.isContext(context)) {
         return [
             '本轮只重组小节，输出局部补丁 JSON 的索引分组计划，不重写正文或来源记录。',
             readerLanguageGuidance,
@@ -742,7 +772,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
             '程序会保留每段原body全部字节，保留原标题作正文子标题，kind从原小节派生；最终小节仍只含kind、heading、body 三个字段。不要回传body、kind、完整sections或其他根字段。所有图表公式、术语标记与绑定原样保留，不需要模型再抄一遍。',
             `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。原kind不能改变。`,
             requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。已有类型全部保留，缺少的教学阶段属于下一轮修复，本轮不新增类型或正文。` : '',
-            `只输出JSON：{"contract":"${SECTION_GROUP_PLAN_CONTRACT}","version":1,"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部12–18组。`,
+            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部12–18组。`,
             '其他已发现问题仅供后续检查，本轮只解决节数与同类内容组织；事实、表格模式、字数与来源问题留下一轮，不要为了它们重吐原来的超量小节。最终完整质量及来源校验全部保留。',
             mechanicalContract, numericSpellingGuidance,
             '来源绑定的外部反馈（不能授权本轮改正文）：\n' + reviewFeedback,
@@ -761,7 +791,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
         '每个新小节只能有 kind、heading、body 三个字段。不要添加 marker、table_note、figure_note、kind_note 或其他字段；标记须放在 body 中，保留原有顺序及其对应的小节类型。',
         `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。`,
         requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。training说明实际训练、优化或推理过程，不能因没有神经网络训练而遗漏该节；其他必需内容也不能为了合并而删掉。` : '',
-        `只输出局部补丁 JSON：version 为1，draftSha256 为 ${context.draftSha256}；replacements 只含一项，path 为 /sections，oldSha256 为 ${context.targets[0].oldSha256}，value 为完整新数组。其他全部顶层字段及来源记录由程序保留，不提交它们，也不修改它们。`,
+        `只输出局部补丁 JSON：协议头为 ${JSON.stringify(require('./protocol-codec').recordHeader('reader-node-patch', 'reader-node-patch'))}，draftSha256 为 ${context.draftSha256}；replacements 只含一项，path 为 /sections，oldSha256 为 ${context.targets[0].oldSha256}，value 为完整新数组。其他全部顶层字段及来源记录由程序保留，不提交它们，也不修改它们。`,
         '本轮只解决小节数量与已授权小节结构。现有术语组合不足、表格缺少或来源记录错误不会授权修改其他数组，不能为满足它们而原样返回超量小节；这些问题留到下一轮重新定位、授权和核验。整篇最终检查仍全部执行；以下数量、长度及来源要求不是额外的修改授权：',
         mechanicalContract, numericSpellingGuidance,
         '其他已发现问题仅供后续检查，本轮不按它们重写来源记录。重排后程序会重新定位并授权；不能修改 tableBindings、formulaBindings、figurePlacements、conceptBridges 或标题摘要。只读问题位置：' + JSON.stringify(readonlyDiagnostics),
@@ -837,8 +867,12 @@ function nodeAt(draft, pointer) {
 
 function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
     assertSafeJson(patch);
-    if (!patch || Object.keys(patch).sort().join(',') !== 'draftSha256,replacements,version'
-        || patch.version !== 1 || patch.draftSha256 !== hashDraft(draft)
+    const codec = require('./protocol-codec');
+    const tagField = patch && Object.hasOwn(patch, 'contract') ? 'contract' : 'version';
+    if (!patch || !codec.hasValidHeader(patch, 'reader-node-patch', tagField)
+        || Object.keys(patch).sort().join(',') !== [...Object.keys(codec.recordHeader(patch[tagField],
+            'reader-node-patch', patch.schemaFingerprint)), 'draftSha256', 'replacements'].sort().join(',')
+        || patch.draftSha256 !== hashDraft(draft)
         || !Array.isArray(patch.replacements) || patch.replacements.length < 1
         || patch.replacements.length > 8) throw new Error('Reader patch has invalid shape or stale draft SHA');
     const allowed = new Set(allowedPaths);
@@ -1433,7 +1467,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         if (unknown.length) issues.push({ path: null, diagnosticOnly: true,
                             message: `原始输出 ${location} 包含额外字段：${unknown.join('、')}；只能含 ${allowed.join('、')}。解释、表格和标记应写入允许的正文或来源字段，不能另造字段；按论文证据核对后修正，不要直接丢弃内容。` });
                     };
-                    addUnknownFields(value, ROOT_FIELDS, '根对象');
+                    let rootFields = ROOT_FIELDS;
+                    try { rootFields = require('./reader-record-format').draftFields(value); } catch { /* Invalid metadata is reported separately. */ }
+                    addUnknownFields(value, rootFields, '根对象');
                     if (Array.isArray(value.sections)) {
                         if (value.sections.length < READER_LIMITS.minimumSections
                             || value.sections.length > READER_LIMITS.maximumSections) {
@@ -3090,7 +3126,7 @@ function scientificDoubleRenderingGuidance(draft, issues, targets, sourceText) {
 }
 
 
-const FACT_LOCAL_PROMPT_CONTRACT = 'reader-fact-local-sentence-prompt-v3';
+const FACT_LOCAL_PROMPT_CONTRACT = require('./prompt-contracts').specialPromptContracts.readerFactRepair;
 function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuotes) {
     if (!context || context.atomicOperation || !Array.isArray(context.targets)
         || context.targets.length === 0 || context.targets.length > 8
@@ -3153,8 +3189,8 @@ function factLocalSentencePromptVariables(context, reviewFeedback, sourceText, s
 function compileFactLocalSentencePatch(draft, response, context, options = {}) {
     assertSafeJson(response);
     if (options.readerFactLocalRevision !== true || context.draftSha256 !== hashDraft(draft)
-        || !response || Object.keys(response).sort().join(',') !== 'draftSha256,sentenceReplacements,version'
-        || response.version !== 1 || response.draftSha256 !== context.draftSha256
+        || !hasCurrentSpecialPatch(response, 'reader-fact-sentence-patch', ['draftSha256', 'sentenceReplacements'])
+        || response.draftSha256 !== context.draftSha256
         || !Array.isArray(response.sentenceReplacements)) throw new Error('事实原句补丁缺少显式授权或稿件SHA过期');
     const targets = factLocalSentenceTargets(context);
     const allClaims = targets.map(target => target.originalSentence);
@@ -3183,7 +3219,7 @@ function compileFactLocalSentencePatch(draft, response, context, options = {}) {
         return { path: target.path, oldSha256: target.oldSha256, value };
     });
     // 编译后复用原补丁范围约束与完整解析，不创建另一套恢复协议。
-    return { version: 1, draftSha256: context.draftSha256, replacements };
+    return { ...currentNodePatchHeader(), draftSha256: context.draftSha256, replacements };
 }
 
 function readerLengthShortfall(issue) {
@@ -3209,7 +3245,9 @@ function repairOperationProtocol(context) {
     const tableEnd = '\n当前校验问题和有来源的外部修订反馈：';
     if (blocks[1].split(tableStart).length !== 2 || blocks[1].split(tableEnd).length !== 2) throw new Error('局部修复的表格操作协议边界不唯一');
     const tableRules = tableStart.trimStart() + blocks[1].split(tableStart)[1].split(tableEnd)[0];
-    return tableRules + '\n' + marker.trimStart() + blocks[1].split(marker)[1]
+    const operationRules = blocks[1].split(marker)[1].replace(
+        '{"version":1,"draftSha256":', JSON.stringify(currentNodePatchHeader()).slice(0, -1) + ',"draftSha256":');
+    return tableRules.replace('（`reader-complete-table-declaration-v1`）', '') + '\n' + marker.trimStart() + operationRules
         + (context.sealedPdfQuoteDocumentAvailable === true
         ? '\n仅当本次证据提供了独立的封存 PDF 原字符全文时，source_quotes 绑定可额外声明 pdfSourceQuotes:[连续逐字原文字符串]。'
         + 'HTML 引文仍写 sourceQuotes，不得把 PDF 引文冒充 HTML；两数组至少一项非空。PDF 引文只合并空白，每项12–4000字符，必须唯一连续且不能裁数字、符号、精度或单位；'
@@ -3292,7 +3330,7 @@ function repairTableEvidenceGuidance(draft, issues, targets, sourceText, options
             sourceQuoteCoverageAttested: false };
         if (JSON.stringify(packet).length <= 14000 && JSON.stringify(packets).length + JSON.stringify(packet).length <= 18000) packets.push(packet);
     }
-    const pdfDocument = require('./reader-sealed-pdf-quote-evidence').document();
+    const pdfDocument = require('./reader-sealed-pdf-quote-evidence').originalRequestDocument();
     const pdfGuidance = pdfDocument?.available
         ? '\n独立的官方封存 PDF 原字符全文（只合并空白，与 HTML 全文来源分开；不改变当前生成身份、已收费次数或允许修改路径）：'
             + JSON.stringify({contract:pdfDocument.contract,pdfSha256:pdfDocument.pdfSha256,
@@ -3434,9 +3472,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
     const evidence = budgetReaderRepairSourceEvidence(sourceEvidence, supplementalSourceGuidance, options);
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
-            ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT }
+            ? sectionFormat.contextFields()
             : atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseBodyFieldIndexGroups(draft)
-                ? { sectionGroupPlanContract: SECTION_BODY_GROUP_PLAN_CONTRACT } : {}),
+                ? sectionFormat.contextFields(true) : {}),
         ...(require('./reader-sealed-pdf-quote-evidence').document()?.available
             ? { sealedPdfQuoteDocumentAvailable: true } : {}),
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
@@ -3480,7 +3518,7 @@ function readFailedCandidateEnvelope(directory, identity, candidateFilename = nu
         const envelope = JSON.parse(bytes.toString('utf8'));
         assertSafeJson(envelope);
         if (!envelope.identity || typeof envelope.identity !== 'object' || Array.isArray(envelope.identity)
-            || envelope.version !== REPAIR_VERSION || (identity !== null && hashDraft(envelope.identity) !== hashDraft(identity))
+            || !isCandidateEnvelope(envelope) || (identity !== null && hashDraft(envelope.identity) !== hashDraft(identity))
             || path.basename(filename) !== `${hashDraft(envelope.identity)}.json`
             || envelope.payloadSha256 !== hashDraft(envelope.payload)
             || envelope.payload?.status !== 'failed'
@@ -3497,8 +3535,7 @@ function readFailedCandidateEnvelope(directory, identity, candidateFilename = nu
                     || envelope.payload.validationFailureStreak < 0))
             || Object.prototype.hasOwnProperty.call(envelope.payload, 'implementationRepairAllowance')
             || (envelope.payload.implementationRepairAllowanceLineage !== undefined
-                && envelope.payload.implementationRepairAllowanceLineage
-                    !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT)
+                && !hasImplementationAllowanceLineage(envelope.payload.implementationRepairAllowanceLineage))
             || (envelope.payload.consumedImplementationAllowanceSha256 !== undefined
                 && (!Array.isArray(envelope.payload.consumedImplementationAllowanceSha256)
                     || envelope.payload.consumedImplementationAllowanceSha256.some(value => !/^[a-f0-9]{64}$/.test(value))
@@ -3511,6 +3548,7 @@ function readFailedCandidateEnvelope(directory, identity, candidateFilename = nu
             || (envelope.payload.draft && !parseRecoveryDraft(envelope.payload.draft))) {
             throw new Error('Corrupt or drifted Reader candidate');
         }
+        candidateFormat.semanticIdentity(envelope.identity);
         validateImplementationAllowance(envelope.payload, envelope.identity, directory);
         require('./explicit-reader-retry-round').validatePersistedRound(directory, envelope.identity, envelope.payload);
         const after = fs.fstatSync(fd);
@@ -3542,6 +3580,7 @@ function saveFailedCandidate(directory, identity, payload, options = {}) {
     };
     assertExpectedEnvelope();
     assertSafeJson(identity);
+    candidateFormat.semanticIdentity(identity);
     assertSafeJson(payload);
     if (payload.status !== 'failed') throw new Error('Reader candidate cannot certify success');
     if (Object.prototype.hasOwnProperty.call(payload, 'implementationRepairAllowance')) {
@@ -3578,8 +3617,7 @@ function saveFailedCandidate(directory, identity, payload, options = {}) {
     }
     if (previous?.implementationRepairAllowanceLineage) {
         if (storedPayload.implementationRepairAllowanceLineage !== undefined
-            && storedPayload.implementationRepairAllowanceLineage
-                !== previous.implementationRepairAllowanceLineage) {
+            && !sameLineage(storedPayload.implementationRepairAllowanceLineage, previous.implementationRepairAllowanceLineage)) {
             throw new Error('Reader implementation repair allowance lineage cannot change');
         }
         storedPayload.implementationRepairAllowanceLineage
@@ -3604,7 +3642,7 @@ function saveFailedCandidate(directory, identity, payload, options = {}) {
         const stat = fs.lstatSync(filename);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Unsafe Reader candidate destination');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const serialized = JSON.stringify({ version: REPAIR_VERSION, identity, payload: storedPayload, payloadSha256: hashDraft(storedPayload) });
+    const serialized = JSON.stringify({ ...candidateEnvelopeHeader(), identity, payload: storedPayload, payloadSha256: hashDraft(storedPayload) });
     if (Buffer.byteLength(serialized) > MAX_FILE_BYTES) throw new Error('Reader candidate exceeds recovery size budget');
     const temporary = path.join(absolute, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
     let fd;
@@ -3757,7 +3795,7 @@ function buildTopLevelMetadataRepairContext(raw) {
             || !METADATA_REPAIR_REQUIRED_FIELDS.every(name => names.includes(name))
             || !METADATA_FIELDS.every(name => names.includes(name))
             || names.some(name => !METADATA_REPAIR_REQUIRED_FIELDS.includes(name) && !METADATA_FIELDS.includes(name))
-            || value.sourceBindingsContract !== 'api-reader-source-bindings-v4'
+            || value.sourceBindingsContract !== require('./reader-stage-protocols').header('sourceBindings', false).contract
             || !/^[a-f0-9]{64}$/.test(value.sourceBindingsSha256)
             || value.version !== 3 || typeof value.readerTitle !== 'string'
             || typeof value.oneSentenceThesis !== 'string'
@@ -3798,14 +3836,34 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-const CONCEPT_TERMS_PROMPT_CONTRACT = 'reader-concept-terms-prompt-v1';
-const CONCEPT_TERMS_PROMPT_PATH = 'prompts/api-reader-concept-terms-v1.md';
+const CONCEPT_TERMS_PROMPT_CONTRACT = require('./prompt-contracts').specialPromptContracts.readerConceptTerms;
+const CONCEPT_TERMS_PROMPT_PATH = require('./prompt-contracts').currentSpecialPromptPath('readerConceptTerms');
+function conceptTermsRepairPromptBindings(mappings) {
+    const original = require('./prompt-legacy-codec').originalSpecialPrompts.readerConceptTerms;
+    return (mappings || []).filter(item => {
+        const old = item?.contract === original.contract;
+        if (!old && item?.contract !== CONCEPT_TERMS_PROMPT_CONTRACT) return false;
+        if (item.promptPath !== (old ? original.path : CONCEPT_TERMS_PROMPT_PATH)
+            || (old && item.promptTemplateSha256 !== original.fileSha256)
+            || !/^[a-f0-9]{64}$/.test(String(item.promptTemplateSha256 || ''))) {
+            throw new Error('Reader 术语修补提示词原路径或原字节指纹不符');
+        }
+        require('./prompt-evidence').readPromptEvidenceBytes(item.promptPath,
+            { expectedSha256: item.promptTemplateSha256 });
+        return true;
+    });
+}
 function readerRepairImplementationSha256() {
     return shaText([fs.readFileSync(__filename, 'utf8'),
         fs.readFileSync(path.join(__dirname, 'reader-target-ordinal-patch.js'), 'utf8'),
         require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
         require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8'),
-        fs.readFileSync(require.resolve('./reader-request-diagnostics.js'), 'utf8')].join('\0'));
+        fs.readFileSync(require.resolve('./reader-request-diagnostics.js'), 'utf8'),
+        ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
+            'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',
+            'reader-resource-claims-format.js', 'reader-proof-format.js', 'reader-content-mode.js',
+            'protocol-codec.js', 'reader-legacy-records.json'].map(file => fs.readFileSync(path.join(__dirname, file), 'utf8')),
+        ...['reader.json', 'reader-retry.json'].map(file => fs.readFileSync(path.join(__dirname, '../../config/protocols', file), 'utf8'))].join('\0'));
 }
 function buildConceptTermsRepairContext(draft, issues, sourceText) {
     const blocking = issues.filter(issue => issue?.diagnosticOnly !== true);
@@ -3864,7 +3922,7 @@ function conceptTermsPromptVariables(context) {
 function compileConceptTermsPatch(draft, response, context) {
     const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
         && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
-    if (!exactKeys(response, ['version','draftSha256','termReplacements']) || response.version !== 1
+    if (!hasCurrentSpecialPatch(response, 'reader-concept-term-patch', ['draftSha256', 'termReplacements'])
         || response.draftSha256 !== context.draftSha256 || hashDraft(draft) !== context.draftSha256
         || !Array.isArray(response.termReplacements) || response.termReplacements.length !== context.targets.length) {
         throw new Error('术语修订响应字段或原稿SHA不符');
@@ -3885,12 +3943,12 @@ function compileConceptTermsPatch(draft, response, context) {
         changed.get(index).terms[termIndex] = value;
         seen.add(replacement.path);
     }
-    return { version: 1, draftSha256: context.draftSha256, replacements: [...changed].map(([index, value]) => ({
+    return { ...currentNodePatchHeader(), draftSha256: context.draftSha256, replacements: [...changed].map(([index, value]) => ({
         path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
 }
 
-module.exports = { READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, verifiedCompiledReaderTableFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
-    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
+module.exports = { READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, conceptTermsRepairPromptBindings, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, verifiedCompiledReaderTableFactIssues, REPAIR_CONTRACT, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hasImplementationAllowanceLineage, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
     readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
@@ -3899,4 +3957,4 @@ module.exports = { READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepai
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, repairTableEvidenceGuidance, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
-    retireFailedCandidate, hasUnusedImplementationAllowance };
+    retireFailedCandidate, hasUnusedImplementationAllowance, isCandidateEnvelope, candidateEnvelopeHeader };

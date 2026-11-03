@@ -1,0 +1,40 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-model-key-binding",
+      "currentVariant": "device-endpoint-key-binding",
+      "currentSchema": {
+        "fields": [
+          "endpoint"
+        ],
+        "normalization": "trim-whitespace-and-final-slashes-only",
+        "credential": "never-contained-in-this-record",
+        "scope": "device-local-address-must-match-before-using-a-saved-key"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-model-key-binding-v1",
+          "variant": "device-endpoint-key-binding"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-device-dispatch",
+      "currentVariant": "device-local-epoch",
+      "currentSchema": {
+        "fields": [
+          "epoch"
+        ],
+        "epoch": "original-uuid-string-read-without-rewriting",
+        "rotation": "new-explicit-epoch-only-after-atomic-save",
+        "scope": "device-local-not-portable-research-or-paid-attempt-authority"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-device-dispatch-v1",
+          "variant": "device-local-epoch"
+        }
+      ]
+    }
+  ]
+}

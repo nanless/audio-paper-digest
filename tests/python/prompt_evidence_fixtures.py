@@ -21,4 +21,8 @@ def install_git_prompt_evidence_fixture(project_root):
     index.parent.mkdir(parents=True, exist_ok=True)
     index.write_bytes((ROOT / 'scripts/lib/git-prompt-evidence-index.json').read_bytes())
     os.chmod(index, 0o600)
+    original = project_root / 'config/original-file-evidence.json'
+    original.parent.mkdir(parents=True, exist_ok=True)
+    original.write_bytes((ROOT / 'config/original-file-evidence.json').read_bytes())
+    os.chmod(original, 0o600)
     return project_root

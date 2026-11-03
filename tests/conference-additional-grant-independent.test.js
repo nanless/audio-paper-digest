@@ -36,7 +36,7 @@ async function fixture(t) {
         analysisSource: 'conference_pdf_text', fullTextAvailable: true,
         sourceSha256: sha(parent.source.sourceDetails.text), modelTextSanitizationContract: 'model-text-unicode-scalars-v1' };
     paper.sourceSha256 = sha(parent.source.sourceDetails.text);
-    paper.apiReaderPlan = { contract: 'beginner-researcher-v3', sections: [{ kind: 'reproduction', heading: '研究内容' }],
+    paper.apiReaderPlan = { version: 3, contract: 'beginner-researcher-v3', sections: [{ kind: 'reproduction', heading: '研究内容' }],
         tableBindings: [], formulaBindings: [], sourceBindingsContract: 'api-reader-source-bindings-v4' };
     paper.apiReaderArticle = '### 研究内容\n\n这是离线接线夹具的原始读者正文。';
     paper.apiReaderResources = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: paper.sourceSha256,
@@ -46,6 +46,7 @@ async function fixture(t) {
     paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = parent.source.sourceDetails.structuredArtifacts.payloadSha256;
     paper.analysisManifest.stages.apiReaderArticle = {
         status: 'complete',
+        sourceBindingsContractVersion: paper.apiReaderPlan.sourceBindingsContract,
         structuredArtifactsSha256: parent.source.sourceDetails.structuredArtifacts.payloadSha256,
         readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
         readerAuthorsSha256: adapter.stableHash(paper.apiReaderAuthors)
@@ -113,7 +114,7 @@ test('独立冷后处理从真实注册新窗口重建只读source/PDF能力，�
     // Only the semantic Reader checker is a double. Source/registration/normal
     // completion receipts/core/scoring checks below retain production behavior.
     let readerChecks = 0;
-    t.mock.method(engine, 'hasValidApiReaderV3Records', paper => {
+    t.mock.method(engine, 'hasValidIntegratedApiReaderRecords', paper => {
         readerChecks++;
         assert.equal(window.getCurrentReaderWindow(paper).executionId, recovered.executionId);
         const active = context.getConferenceAnalysisContext();

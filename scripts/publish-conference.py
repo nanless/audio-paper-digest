@@ -27,10 +27,12 @@ from publish_common import (run_bounded_llm_tasks, classify_review_failure,
                             interpret_readonly_text_unit)
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
-from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, fetch_public, GATE_CONTRACT
+from conference_publication_gate import (inspect_html, verify_publication_urls, validate_png, fetch_public,
+                                         mechanical_gate_header, has_mechanical_gate_format, GATE_CONTRACT)
 from tag_catalog_publication import validate_published_tag_catalog
 from tag_presentation import (TAG_HIERARCHY_START, TAG_HIERARCHY_END,
                               mask_verified_tag_hierarchy_for_quality)
+import protocol_codec as protocols
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +47,40 @@ SHA_RE = re.compile(r'^[0-9a-f]{64}$')
 
 class ConferencePublicationError(RuntimeError):
     pass
+
+
+def record_header(value, name, tag_field='contract'):
+    if not protocols.has_valid_header(value, name, tag_field):
+        raise ConferencePublicationError(f'{name} 的格式声明无效')
+    return protocols.record_header(value[tag_field], name, value.get('schemaFingerprint'))
+
+
+def record_format(value, name, tag_field='contract'):
+    record_header(value, name, tag_field)
+    return protocols.format(value[tag_field], name, value.get('schemaFingerprint'))
+
+
+def current_header(name):
+    return protocols.record_header(protocols.contract(name), name)
+
+
+def has_transaction_header(value, name):
+    # These specific transaction families originally stored an integer version
+    # beside one shared contract. The selected family supplies its exact header;
+    # this helper does not infer another family or alter the original record.
+    if not isinstance(value, dict):
+        return False
+    field = 'contract' if value.get('contract') == protocols.contract(name) else 'version'
+    return protocols.has_valid_header(value, name, field)
+
+
+def transaction_format(value, name):
+    field = 'contract' if isinstance(value, dict) and value.get('contract') == protocols.contract(name) else 'version'
+    return record_format(value, name, field)
+
+
+def external_image_generation(value):
+    return transaction_format(value, 'conference-blog-generation') == 'external-images'
 
 
 class ConferenceContentReviewFailure(ConferencePublicationError):
@@ -401,16 +437,10 @@ def remote_snapshot(repo):
 
 def _validate_aggregate_tag_format(manifest):
     """在原汇总内容与完成记录核验后，检查版本及标签字段的保存格式。"""
-    formats = {'conference-aggregate-staging-v1': 1,
-               'conference-aggregate-staging-v2': 2}
-    version = manifest.get('version')
-    contract = manifest.get('contract')
-    if (type(version) is not int or not isinstance(contract, str)
-            or formats.get(contract) != version):
-        raise ConferencePublicationError(
-            f'会议汇总的格式版本不受支持。contract={contract!r}, version={version!r}，'
-            f'仅支持 {formats}。')
-    current = version == 2
+    saved_format = record_format(manifest, 'conference-aggregate-staging')
+    current = saved_format == 'tag-catalog'
+    if not current and saved_format != 'taxonomy':
+        raise ConferencePublicationError('会议汇总的保存格式不受支持')
     for old_key, new_key in (('taxonomy', 'tagMetadata'),
                              ('taxonomyHierarchy', 'tagHierarchy')):
         if old_key in manifest and new_key in manifest:
@@ -418,7 +448,7 @@ def _validate_aggregate_tag_format(manifest):
                 f'会议汇总不能混用新旧标签字段。{old_key} 与 {new_key} 同时存在。')
         if (old_key if current else new_key) in manifest:
             raise ConferencePublicationError(
-                f'会议汇总的标签字段与格式版本不一致。version={version} 时只允许 '
+                f'会议汇总的标签字段与保存格式不一致。{saved_format} 时只允许 '
                 f'{old_key if current else new_key}。')
         if current and new_key not in manifest:
             raise ConferencePublicationError(
@@ -430,13 +460,12 @@ def _validate_aggregate_tag_format(manifest):
     hierarchy_key = 'tagHierarchy' if current else 'taxonomyHierarchy'
     if hierarchy_key in manifest:
         hierarchy = manifest[hierarchy_key]
-        expected = ('conference-tag-hierarchy-v2' if current
-                    else 'conference-taxonomy-hierarchy-v1')
-        if not isinstance(hierarchy, dict) or hierarchy.get('contract') != expected:
+        if not isinstance(hierarchy, dict) \
+                or record_format(hierarchy, 'conference-tag-hierarchy') != saved_format:
             actual = (hierarchy.get('contract') if isinstance(hierarchy, dict)
                       else type(hierarchy).__name__)
             raise ConferencePublicationError(
-                f'会议汇总的标签层级格式版本不受支持。contract={actual!r}，期望 {expected!r}。')
+                f'会议汇总的标签层级保存格式不受支持。contract={actual!r}，期望 {saved_format!r}。')
     members = manifest.get('members')
     if current and not isinstance(members, list):
         raise ConferencePublicationError(
@@ -453,7 +482,7 @@ def _validate_aggregate_tag_format(manifest):
                 f'会议汇总成员不能混用新旧标签字段。{old_key} 与 {new_key} 同时存在。')
         if (old_key if current else new_key) in member:
             raise ConferencePublicationError(
-                f'会议汇总成员的标签字段与格式版本不一致。version={version} 时只允许 '
+                f'会议汇总成员的标签字段与保存格式不一致。{saved_format} 时只允许 '
                 f'{old_key if current else new_key}。')
         if current and new_key not in member:
             raise ConferencePublicationError(
@@ -467,15 +496,10 @@ def _validate_aggregate_tag_format(manifest):
 
 def _validate_paper_tag_format(manifest):
     """核对已绑定页面的保存格式，不代替标签分配文件的原字节核验。"""
-    formats = {'conference-paper-page-staging-v1': 1,
-               'conference-paper-page-staging-v2': 2}
-    version, contract = manifest.get('version'), manifest.get('contract')
-    if (type(version) is not int or not isinstance(contract, str)
-            or formats.get(contract) != version):
-        raise ConferencePublicationError(
-            f'会议论文页面的格式版本不受支持。contract={contract!r}, version={version!r}，'
-            f'仅支持 {formats}。')
-    current = version == 2
+    saved_format = record_format(manifest, 'conference-paper-page-staging')
+    current = saved_format == 'tag-catalog'
+    if not current and saved_format != 'taxonomy':
+        raise ConferencePublicationError('会议论文页面的保存格式不受支持')
     for old_key, new_key in (('taxonomy', 'tagMetadata'),
                              ('taxonomyAssignmentFileSha256', 'tagAssignmentFileSha256')):
         if old_key in manifest and new_key in manifest:
@@ -483,29 +507,27 @@ def _validate_paper_tag_format(manifest):
                 f'会议论文页面不能混用新旧标签字段。{old_key} 与 {new_key} 同时存在。')
         if (old_key if current else new_key) in manifest:
             raise ConferencePublicationError(
-                f'会议论文页面的标签字段与格式版本不一致。version={version} 时只允许 '
+                f'会议论文页面的标签字段与保存格式不一致。{saved_format} 时只允许 '
                 f'{old_key if current else new_key}。')
     if not current:
         assignment = manifest.get('taxonomy')
         if isinstance(assignment, dict) and ('contract' in assignment or 'version' in assignment):
-            if (assignment.get('contract') != 'conference-taxonomy-assignment-v1'
-                    or type(assignment.get('version')) is not int or assignment['version'] != 1):
+            if record_format(assignment, 'conference-tag-assignment') != 'taxonomy':
                 raise ConferencePublicationError(
                     f'旧版会议论文页面的标签分配记录格式版本无效。'
                     f'contract={assignment.get("contract")!r}, version={assignment.get("version")!r}，'
-                    f'期望 conference-taxonomy-assignment-v1 v1。')
+                    '期望原 taxonomy 分配记录。')
         return
     assignment = manifest.get('tagMetadata')
     assignment_file_sha = manifest.get('tagAssignmentFileSha256')
     if (not isinstance(assignment, dict)
-            or assignment.get('contract') != 'conference-tag-assignment-v2'
-            or type(assignment.get('version')) is not int or assignment['version'] != 2):
+            or record_format(assignment, 'conference-tag-assignment') != 'tag-catalog'):
         actual_contract = (assignment.get('contract') if isinstance(assignment, dict)
                            else type(assignment).__name__)
         actual_version = assignment.get('version') if isinstance(assignment, dict) else None
         raise ConferencePublicationError(
             f'会议论文页面的标签分配记录格式版本无效。contract={actual_contract!r}, '
-            f'version={actual_version!r}，期望 conference-tag-assignment-v2 v2。')
+            f'version={actual_version!r}，期望 tag-catalog 分配记录。')
     if not isinstance(assignment_file_sha, str) or not SHA_RE.fullmatch(assignment_file_sha):
         raise ConferencePublicationError(
             f'会议论文页面的标签分配文件哈希格式无效。实际 {assignment_file_sha!r}，'
@@ -594,12 +616,15 @@ def validate_conference_workbench_assets(paper_id, manifest, text, asset_records
     """Validate the complete source-bound export set before blog Git admission."""
     from markdown_hugo_gate import parse_frontmatter_content
     frontmatter, _ = parse_frontmatter_content('conference-workbench.md', text)
-    records = [record for record in asset_records if record['path'].startswith('static/data/papers/')]
+    records = [record for record in asset_records if record['path'].startswith(('static/data/papers/', 'static/client/papers/'))]
     if not records and frontmatter.get('paper_digest_workbench_contract') is None:
         return []  # Already sealed pages without exports remain readable.
     paper = analysis['papers'][0]
     date = str(manifest.get('date'))
-    prefix = f'static/data/papers/{date}/conference-{sha_bytes(paper_id.encode())[:24]}/'
+    publisher = load_publish_to_blog()
+    context_contract = publisher._page_context_contract(frontmatter)
+    context_fingerprint = publisher._page_context_fingerprint(frontmatter)
+    prefix = f'{publisher._sidecar_root_for_context(context_contract).as_posix()}/{date}/conference-{sha_bytes(paper_id.encode())[:24]}/'
     if len(records) != 4 or {record['path'][len(prefix):] for record in records
                             if record['path'].startswith(prefix)} != CONFERENCE_WORKBENCH_NAMES:
         raise ConferencePublicationError('会议研究工作区导出路径或四文件集合不完整')
@@ -615,10 +640,11 @@ def validate_conference_workbench_assets(paper_id, manifest, text, asset_records
         parsed = dict(paper['parsed'])
         parsed['primaryTaskTag'] = '#' + concepts[assignment['primaryTaskId']]['preferredLabel']['zh']
         parsed['primaryMethodTag'] = '#' + concepts[assignment['primaryMethodId']]['preferredLabel']['zh']
-        expected_bundle = load_publish_to_blog().build_verified_conference_workbench_bundle(
+        expected_bundle = publisher.build_verified_conference_workbench_bundle(
             paper, date, paper_id=paper_id, publication=manifest['publication'],
             reader_plan=paper['apiReaderPlan'], parsed=parsed,
-            authors=paper['apiReaderAuthors']['authors'])
+            authors=paper['apiReaderAuthors']['authors'],context_contract=context_contract,
+            context_schema_fingerprint=context_fingerprint)
     except (KeyError, ValueError, TypeError) as error:
         raise ConferencePublicationError('会议研究工作区不能从已认证分析重建') from error
     source = paper['sourceSha256']
@@ -741,7 +767,7 @@ def process_bundle(conference_id, process_id):
             asset_bytes = read_bytes(manifest_path.parent / 'assets' / asset_path)
             if asset.get('sha256') != sha_bytes(asset_bytes) or asset.get('size') != len(asset_bytes):
                 raise ConferencePublicationError(f'论文资产与 staging 不一致: {paper_id} {asset_path}')
-            if asset_path.startswith('static/data/papers/'):
+            if asset_path.startswith(('static/data/papers/', 'static/client/papers/')):
                 if asset_path in seen_targets:
                     raise ConferencePublicationError(f'研究工作区目标路径重复: {asset_path}')
                 seen_targets.add(asset_path)
@@ -1249,7 +1275,7 @@ def _publication_figure_view_bundle(bundle, conference_id, process_id, *,
         return bundle
     from conference_publication_figure_view import materialize_view, FigureViewRejected
     if expected is not None:
-        if not isinstance(expected, dict) or expected.get('contract') != 'conference-publication-figure-view-v1':
+        if not protocols.has_valid_header(expected, 'conference-publication-figure-view'):
             raise ConferencePublicationError('出版图片视图声明非法')
         selection = {'manifestPath': expected.get('manifestPath'),
                      'expectedGenerationSha256': expected.get('baseGenerationSha256')}
@@ -1335,10 +1361,10 @@ def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_cro
         previous_source_sha = {}
         previous_images = {}
         previous_generation_sha = None
-        if existing.exists() and read_json(existing).get('version') == 2:
+        if existing.exists() and external_image_generation(read_json(existing)):
             previous_record = read_json(existing)
             check_self_hash(previous_record, 'generationSha256')
-            if previous_record.get('contract') != 'conference-blog-generation-v1' \
+            if not has_transaction_header(previous_record, 'conference-blog-generation') \
                     or previous_record.get('conferenceId') != conference_id \
                     or previous_record.get('processId') != process_id:
                 raise ConferencePublicationError('旧 generation 不属于当前会议和完整流程')
@@ -1432,7 +1458,7 @@ def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_cro
             write_generation_image(images, record, previous_record=previous_images.get(record['path']),
                                    previous_generation_sha=previous_generation_sha,
                                    archive_root=publication_dir(conference_id, process_id))
-        body = {'contract': 'conference-blog-generation-v1', 'version': 2,
+        body = {**current_header('conference-blog-generation'),
                 'conferenceId': conference_id, 'processId': process_id,
                 'completionReceiptSha256': bundle['completion']['receiptSha256'],
                 'implementationSha256': gate_fingerprint(),
@@ -1450,8 +1476,7 @@ def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_cro
             publication_dir(conference_id, process_id) / 'generation.json',
             json_bytes(generation), 'generation receipt',
             lambda previous: (
-                previous.get('contract') == body['contract']
-                and previous.get('version') in {1, 2}
+                has_transaction_header(previous, 'conference-blog-generation')
                 and previous.get('conferenceId') == conference_id
                 and previous.get('processId') == process_id
                 # process_bundle() 已经认证过当前这个完整流程和每一份暂存字节。
@@ -1487,7 +1512,7 @@ def validate_generation(conference_id, process_id, repo, images, *,
     generation = load_generation(conference_id, process_id)
     body = dict(generation)
     declared = body.pop('generationSha256', None)
-    if generation.get('contract') != 'conference-blog-generation-v1' or generation.get('version') not in {1, 2} \
+    if not has_transaction_header(generation, 'conference-blog-generation') \
             or declared != stable(body) or generation.get('conferenceId') != conference_id \
             or generation.get('processId') != process_id:
         raise ConferencePublicationError(
@@ -1501,13 +1526,13 @@ def validate_generation(conference_id, process_id, repo, images, *,
     saved_images = publication_record_identities(generation.get('imageFiles'), images=True)
     # New review/push operations must not silently hide an unknown catalog.
     # Historical committed receipts remain readable under their saved gate.
-    if generation.get('version') == 2 and (not allow_committed
+    if external_image_generation(generation) and (not allow_committed
             or generation.get('implementationSha256') == gate_fingerprint()):
         validate_conference_tag_catalogs(repo, generation['files'])
     if verify_author_sources:
         bundle = process_bundle(conference_id, process_id)
         if generation.get('figurePublicationView') is not None:
-            if generation.get('version') != 2:
+            if not external_image_generation(generation):
                 raise ConferencePublicationError('出版图片视图只支持真实外部图片 v2 generation')
             bundle = _publication_figure_view_bundle(bundle, conference_id, process_id,
                 expected=generation['figurePublicationView'], replay=True)
@@ -1563,7 +1588,7 @@ def validate_generation(conference_id, process_id, repo, images, *,
 
 
 def gate_fingerprint():
-    return stable({name: sha_bytes(read_bytes(ROOT / 'scripts' / name)) for name in
+    dependencies = {name: sha_bytes(read_bytes(ROOT / 'scripts' / name)) for name in
                    ('publish-conference.py', 'conference_publication_gate.py',
                     'markdown_hugo_gate.py', 'conference-page-render.py',
                     'publication_local_replay.py', 'publication_replay_policy.json',
@@ -1579,7 +1604,18 @@ def gate_fingerprint():
                     'lib/conference-reader-publication-evidence.js',
                     'lib/conference-retained-source-replay.js',
                     'lib/conference-reader-review-maintenance.js',
-                    'lib/conference-reader-review-maintenance-evidence.js')})
+                    'lib/conference-reader-review-maintenance-evidence.js',
+                    'protocol_codec.py', 'lib/protocol-codec.js', 'lib/strict-json.js',
+                    'reader_record_format.py', 'lib/reader-record-format.js',
+                    'lib/reader-stage-protocols.js', 'lib/reader-legacy-records.json',
+                    'lib/reader-identity-format.js',
+                    'original_file_evidence.py', 'git_file_bytes.py',
+                    'lib/original-file-evidence.js', 'lib/git-file-bytes.js')}
+    dependencies['config/original-file-evidence.json'] = sha_bytes(read_bytes(ROOT / 'config' / 'original-file-evidence.json'))
+    from protocol_codec import server_catalog_paths
+    for catalog in server_catalog_paths(ROOT / 'config' / 'protocols'):
+        dependencies[f'config/protocols/{catalog.name}'] = sha_bytes(read_bytes(catalog))
+    return stable(dependencies)
 
 
 def publication_page_files(generation):
@@ -1718,9 +1754,9 @@ def run_hugo(repo, generation):
             except ValueError as exc:
                 raise ConferencePublicationError(f'{record["path"]}: {exc}') from exc
             pages.append({'path': record['path'], 'sourceSha256': record['sourceSha256'], **page})
-        return {'status': 'passed', 'contract': GATE_CONTRACT, 'pages': pages,
+        return {'status': 'passed', **mechanical_gate_header(), 'pages': pages,
                 'implementationSha256': gate_fingerprint(),
-                'version': subprocess.run([hugo, 'version'], env=env, capture_output=True,
+                'hugoVersion': subprocess.run([hugo, 'version'], env=env, capture_output=True,
                                           text=True, check=True).stdout.strip()[:300]}
 
 
@@ -1764,7 +1800,7 @@ def raise_content_review_failure(record, digest, protocol, stage, findings, mess
     保留被审页面的身份和具体问题，但不存页面或分块内容、建议替换文本、
     提示词和图片字节。记录按内容寻址，本身不可变；同样的失败重复记录是安全的。
     """
-    body = {'contract': 'conference-page-content-review-failure-v1',
+    body = {**current_header('conference-page-content-review-failure'),
             'path': safe_relative(record['path'], 'review 失败页面'),
             'sha256': digest, 'paperId': record.get('paperId'),
             'passed': False, 'stage': stage, 'protocol': protocol,
@@ -1789,12 +1825,12 @@ def text_review_unit_pass(record, page_sha, index, chunk_sha, *, issues=None, pr
         saved = read_json(target)
         body = dict(saved)
         declared = body.pop('resultSha256', None)
-        if declared != stable(body) or saved.get('contract') != 'conference-page-review-unit-pass-v1' \
+        if declared != stable(body) or not protocols.has_valid_header(saved, 'conference-page-review-unit-pass') \
                 or any(saved.get(key) != value for key, value in identity.items()) \
                 or saved.get('passed') is not True or not isinstance(saved.get('issues'), list):
             raise ConferencePublicationError(f'正文分块 review 缓存损坏: {identity["path"]}')
         return saved
-    body = {'contract': 'conference-page-review-unit-pass-v1', **identity,
+    body = {**current_header('conference-page-review-unit-pass'), **identity,
             'passed': True, 'issues': issues, 'protocol': protocol}
     saved = {**body, 'resultSha256': stable(body)}
     write_exact(target, json_bytes(saved))
@@ -1816,7 +1852,7 @@ def _content_review_failure_index():
         body = dict(saved)
         declared = body.pop('failureSha256', None)
         if declared != stable(body) or filename.stem != declared \
-                or saved.get('contract') != 'conference-page-content-review-failure-v1' \
+                or not protocols.has_valid_header(saved, 'conference-page-content-review-failure') \
                 or saved.get('passed') is not False \
                 or not SHA_RE.fullmatch(str(saved.get('sha256') or '')) \
                 or not isinstance(saved.get('issues'), list) \
@@ -1862,7 +1898,7 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
             declared = signed.pop('resultSha256', None)
             if declared != stable(signed) or result.get('path') != relative \
                     or result.get('sha256') != digest or result.get('passed') is not True \
-                    or result.get('contract') != 'conference-page-content-review-v1':
+                    or not protocols.has_valid_header(result, 'conference-page-content-review'):
                 raise ConferencePublicationError(f'页面 review 缓存损坏: {relative}')
             return result
         if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
@@ -1926,7 +1962,7 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
             raise_content_review_failure(
                 record, digest, protocol, 'blocking-issues', found,
                 f'内容 review 存在阻断问题: {relative}')
-        result = {'contract': 'conference-page-content-review-v1', 'path': relative,
+        result = {**current_header('conference-page-content-review'), 'path': relative,
                   'sha256': digest, 'passed': True, 'issues': found,
                   'imageCount': len(matches), 'protocol': protocol}
         result['resultSha256'] = stable(result)
@@ -1962,7 +1998,7 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
     results = [result for _, result in sorted(zip((index for index, _ in ordered_records), dispatched_results))]
     failures = [result for result in results if result.get('passed') is not True]
     if failures:
-        body = {'contract': 'conference-page-content-review-batch-failure-v1',
+        body = {**current_header('conference-page-content-review-batch-failure'),
                 'status': 'blocked', 'protocol': protocol, 'pages': results}
         digest = stable(body)
         write_exact(PUBLICATION_ROOT / 'page-review-batch-failures' / f'{digest}.json',
@@ -1993,8 +2029,8 @@ def review(conference_id, process_id):
             raise ConferencePublicationError('会议页面语义 review 未通过')
         validate_generation(conference_id, process_id, repo, images, allow_committed=True)
         require_publication_figure_view_ready(generation)
-        legacy_generation = generation.get('version') == 1
-        body = {'contract': 'conference-blog-review-v1', 'version': 1 if legacy_generation else 2,
+        legacy_generation = not external_image_generation(generation)
+        body = {**current_header('conference-blog-mechanical-review' if legacy_generation else 'conference-blog-review'),
                 'conferenceId': conference_id, 'processId': process_id,
                 'generationSha256': generation['generationSha256'],
                 'baseHead': generation['baseHead'], 'remoteMainBefore': generation['remoteMainBefore'],
@@ -2015,15 +2051,14 @@ def validate_review(generation, receipt, *, current=True):
     body = dict(receipt)
     declared = body.pop('reviewSha256', None)
     gate = receipt.get('hugo') or {}
-    legacy = generation.get('version') == 1
-    if receipt.get('contract') != 'conference-blog-review-v1' \
-            or receipt.get('version') != (1 if legacy else 2) \
+    legacy = not external_image_generation(generation)
+    if not has_transaction_header(receipt, 'conference-blog-mechanical-review' if legacy else 'conference-blog-review') \
             or declared != stable(body) \
             or any(receipt.get(key) != generation.get(key) for key in
                    ('conferenceId', 'processId', 'baseHead', 'files', 'imageFiles')) \
             or receipt.get('generationSha256') != generation['generationSha256'] \
             or gate.get('status') != 'passed' \
-            or (not legacy and (gate.get('contract') != GATE_CONTRACT
+            or (not legacy and (not has_mechanical_gate_format(gate)
                                 or (current and gate.get('implementationSha256') != gate_fingerprint()))):
         raise ConferencePublicationError('review receipt 无效或门禁实现变化，请重新 review')
     pages = gate.get('pages')
@@ -2042,7 +2077,7 @@ def validate_review(generation, receipt, *, current=True):
         # 是当时程序按原规则生成的记录——但它们只证明 HTML 检查通过，
         # 没有做过正文与图片审查。所以只对已发布凭证（current=False）按旧格式
         # 识别；待推送的凭证照旧必须带一份通过的 contentReview。
-        if current:
+        if current or 'schemaFingerprint' in receipt:
             raise ConferencePublicationError('会议页面语义 review 凭证缺失，必须重新 review')
         return
     if not isinstance(content, dict) or content.get('status') != 'passed':
@@ -2071,7 +2106,7 @@ def validate_review(generation, receipt, *, current=True):
         cache = PUBLICATION_ROOT / 'page-review-passes' / f'{key}.json'
         if not SHA_RE.fullmatch(str(protocol or '')) \
                 or not SHA_RE.fullmatch(str(page.get('protocol') or '')) \
-                or page.get('contract') != 'conference-page-content-review-v1' \
+                or not protocols.has_valid_header(page, 'conference-page-content-review') \
                 or not SHA_RE.fullmatch(str(declared or '')) or declared != stable(original) \
                 or not cache.exists() or read_json(cache) != page:
             raise ConferencePublicationError('会议页面复用的原通过凭证或独立审查协议字段不闭合')
@@ -2123,7 +2158,7 @@ def accept_publication(conference_id, process_id, generation, receipt, commit, i
         raise ConferencePublicationError('远端已推送，但实际 URL 验收未通过；可重试 verify') from exc
     verify_published_tree(blog_repo(), commit, generation['remoteIdentitySha256'], generation['files'])
     verify_published_tree(image_repo(), image_commit, generation['imageRemoteIdentitySha256'], generation['imageFiles'])
-    body = {'contract': 'conference-blog-publish-v1', 'version': 2,
+    body = {**current_header('conference-blog-publish'),
             'conferenceId': conference_id, 'processId': process_id,
             'generationSha256': generation['generationSha256'],
             'reviewSha256': receipt['reviewSha256'], 'publicationCommit': commit,
@@ -2144,14 +2179,13 @@ def validate_publication(generation, review_receipt, published, commit, image_co
     expected_urls = {p['url'] for p in review_receipt['hugo']['pages']} | {
         f'{IMAGE_BASE_URL}/{r["path"]}' for r in generation['imageFiles']} | {
         url for url, _ in conference_sidecar_urls(review_receipt['hugo']['pages'], generation)}
-    if declared != stable(body) or published.get('contract') != 'conference-blog-publish-v1' \
-            or published.get('version') != 2 or published.get('publicationCommit') != commit \
+    if declared != stable(body) or not has_transaction_header(published, 'conference-blog-publish') or published.get('publicationCommit') != commit \
             or published.get('generationSha256') != generation['generationSha256'] \
             or published.get('reviewSha256') != review_receipt['reviewSha256'] \
             or published.get('imagePublicationCommit') != image_commit \
             or published.get('remoteVerifiedOid') != commit \
             or published.get('remoteIdentitySha256') != generation['remoteIdentitySha256'] \
-            or acceptance.get('status') != 'passed' or acceptance.get('contract') != GATE_CONTRACT \
+            or acceptance.get('status') != 'passed' or not has_mechanical_gate_format(acceptance) \
             or {c.get('url') for c in acceptance.get('checks', [])} != expected_urls:
         raise ConferencePublicationError('发布 receipt 或线上验收集合无效')
 
@@ -2195,7 +2229,7 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
         if number > 99999999:
             raise ConferencePublicationError('线上再验收序号超限')
         intent_path = directory / 'url-acceptances' / f'attempt-{number:08d}.intent.json'
-        body = {'contract': 'conference-online-acceptance-attempt-v1', 'attempt': number,
+        body = {**current_header('conference-online-acceptance-attempt'), 'attempt': number,
                 'publishSha256': published['publishSha256'], 'mechanicalSha256': stable(mechanical),
                 'startedAt': datetime.now(timezone.utc).isoformat(), 'status': 'pending'}
         intent = {**body, 'intentSha256': stable(body)}
@@ -2206,7 +2240,7 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
             expected_urls = {p['url'] for p in mechanical['pages']} | {
                 f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
                 url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
-            if acceptance.get('status') != 'passed' or acceptance.get('contract') != GATE_CONTRACT \
+            if acceptance.get('status') != 'passed' or not has_mechanical_gate_format(acceptance) \
                     or {c.get('url') for c in acceptance.get('checks', [])} != expected_urls:
                 raise ConferencePublicationError('线上再验收集合不闭合')
             verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
@@ -2216,7 +2250,7 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
             failure = exc
             # 不保存本次核验失败的异常文本，因为其中可能含密钥。
             acceptance = {'status': 'failed', 'errorCode': 'online_verification_failed'}
-        result_body = {'contract': 'conference-online-acceptance-result-v1',
+        result_body = {**current_header('conference-online-acceptance-result'),
                        'intentSha256': intent['intentSha256'], 'publishSha256': published['publishSha256'],
                        'checkedAt': datetime.now(timezone.utc).isoformat(), 'urlAcceptance': acceptance}
         write_exact(intent_path.with_name(f'attempt-{number:08d}.result.json'),
@@ -2234,7 +2268,7 @@ def apply_online_snapshot(directory, published, mechanical, result, *, fresh=Fal
         intent_path = attempts[-1]
         intent = read_json(intent_path)
         check_self_hash(intent, 'intentSha256')
-        if intent.get('contract') != 'conference-online-acceptance-attempt-v1' \
+        if not protocols.has_valid_header(intent, 'conference-online-acceptance-attempt') \
                 or intent.get('publishSha256') != published['publishSha256'] \
                 or intent.get('mechanicalSha256') != stable(mechanical):
             raise ConferencePublicationError('最新线上验收 intent 与发布不闭合')
@@ -2243,7 +2277,7 @@ def apply_online_snapshot(directory, published, mechanical, result, *, fresh=Fal
         if result_path.exists():
             latest = read_json(result_path)
             check_self_hash(latest, 'acceptanceSha256')
-            if latest.get('contract') != 'conference-online-acceptance-result-v1' \
+            if not protocols.has_valid_header(latest, 'conference-online-acceptance-result') \
                     or latest.get('publishSha256') != published['publishSha256'] \
                     or latest.get('intentSha256') != intent['intentSha256'] \
                     or latest.get('urlAcceptance', {}).get('status') not in {'passed', 'failed'}:
@@ -2268,9 +2302,9 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
         check_self_hash(value, key)
         if value.get('conferenceId') != conference_id or value.get('processId') != process_id:
             raise ConferencePublicationError('旧发布凭证会议身份不一致')
-    if generation.get('contract') != 'conference-blog-generation-v1' \
-            or receipt.get('contract') != 'conference-blog-review-v1' \
-            or published.get('contract') != 'conference-blog-publish-v1' \
+    if not has_transaction_header(generation, 'conference-blog-generation') \
+            or not has_transaction_header(receipt, 'conference-blog-review' if external_image_generation(generation) else 'conference-blog-mechanical-review') \
+            or not (has_transaction_header(published, 'conference-blog-publish') or has_transaction_header(published, 'conference-blog-commit')) \
             or published.get('generationSha256') != generation['generationSha256'] \
             or receipt.get('generationSha256') != generation['generationSha256'] \
             or published.get('reviewSha256') != receipt['reviewSha256'] \
@@ -2287,9 +2321,9 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
     result.update(publicationCommit=commit, imagePublicationCommit=image_commit,
                   processingRequired=False, nextAction='verify')
     result['layers']['remoteOid'] = 'passed'
-    if published.get('version') == 2:
+    if has_transaction_header(published, 'conference-blog-publish'):
         validate_review(generation, receipt, current=False)
-        if generation.get('version') == 2 and (receipt.get('contentReview') or {}).get('status') == 'passed':
+        if external_image_generation(generation) and (receipt.get('contentReview') or {}).get('status') == 'passed':
             result['layers']['semanticReview'] = 'passed'
         validate_publication(generation, receipt, published, commit, image_commit)
         result['layers'].update(htmlMechanical='passed', onlineUrls='passed')
@@ -2297,13 +2331,18 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
         if verify_urls:
             fresh_online_acceptance(directory, repo, images, generation, published, receipt['hugo'], commit, image_commit)
         return apply_online_snapshot(directory, published, receipt['hugo'], result, fresh=verify_urls)
-    if published.get('version') != 1:
+    if not has_transaction_header(published, 'conference-blog-commit'):
         raise ConferencePublicationError('不支持的 publication receipt 版本')
     # v1 的字节一律不动。重新核验另出一份只追加的证明。
     result['status'] = 'legacy_unverified'
-    proof_path = directory / 'verification-v2.json'
-    had_legacy_proof = proof_path.exists()
-    if not proof_path.exists() and verify_urls:
+    new_proof_path = directory / 'verification.json'
+    original_proof_path = directory / 'verification-v2.json'
+    existing_proofs = [item for item in (new_proof_path, original_proof_path) if os.path.lexists(item)]
+    if len(existing_proofs) > 1:
+        raise ConferencePublicationError('有两份旧发布再验收凭证，不能选择其中一份跳过另一份')
+    had_legacy_proof = bool(existing_proofs)
+    proof_path = existing_proofs[0] if had_legacy_proof else new_proof_path
+    if not had_legacy_proof and verify_urls:
         with shared_blog_repository_lock(repo, owner=f'conference-legacy-verify:{conference_id}'):
             render_generation = {**generation, 'baseHead': commit, 'renderTree': commit,
                                  'renderImageTree': image_commit}
@@ -2315,10 +2354,10 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
             verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
             if has_image_repository_proof(generation):
                 verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
-            body = {'contract': 'conference-legacy-publication-verification-v2',
+            body = {**current_header('conference-legacy-publication-verification'),
                     'publishSha256': published['publishSha256'], 'hugo': mechanical, 'urlAcceptance': acceptance}
             write_exact(proof_path, json_bytes({**body, 'verificationSha256': stable(body)}))
-    if proof_path.exists():
+    if os.path.lexists(proof_path):
         proof = read_json(proof_path)
         check_self_hash(proof, 'verificationSha256')
         acceptance = proof.get('urlAcceptance') or {}
@@ -2326,12 +2365,12 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
         urls = {p['url'] for p in mechanical.get('pages', [])} | {
             f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
                 url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
-        if proof.get('contract') != 'conference-legacy-publication-verification-v2' \
+        if not protocols.has_valid_header(proof, 'conference-legacy-publication-verification') \
                 or proof.get('publishSha256') != published['publishSha256'] \
-                or mechanical.get('contract') != GATE_CONTRACT or mechanical.get('status') != 'passed' \
+                or not has_mechanical_gate_format(mechanical) or mechanical.get('status') != 'passed' \
                 or {(p.get('path'), p.get('sourceSha256')) for p in mechanical.get('pages', [])} != {
                     (r['path'], r['sourceSha256']) for r in page_files} \
-                or acceptance.get('status') != 'passed' or acceptance.get('contract') != GATE_CONTRACT \
+                or acceptance.get('status') != 'passed' or not has_mechanical_gate_format(acceptance) \
                 or {c.get('url') for c in acceptance.get('checks', [])} != urls:
             raise ConferencePublicationError('legacy 再验收凭证不闭合')
         result['layers'].update(htmlMechanical='passed', onlineUrls='passed')
@@ -2350,7 +2389,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     layers = {'htmlMechanical': 'pending', 'remoteOid': 'pending', 'onlineUrls': 'pending',
               'semanticReview': 'not_performed', 'visualInspection': 'not_performed',
               'mathBrowserExecution': 'not_performed'}
-    result = {'contract': 'conference-publication-status-v1', 'conferenceId': conference_id,
+    result = {**current_header('conference-publication-status'), 'conferenceId': conference_id,
               'processId': process_id, 'status': 'pending', 'complete': False,
               'processingRequired': False, 'nextAction': 'generate',
               'onlineUrlEvidence': {'mode': 'fresh_get' if verify_urls else 'historical_snapshot', 'status': 'pending'},
@@ -2365,7 +2404,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
         return result
     receipt = load_review(conference_id, process_id)
     validate_review(generation, receipt)
-    if generation.get('version') == 2 and (receipt.get('contentReview') or {}).get('status') == 'passed':
+    if external_image_generation(generation) and (receipt.get('contentReview') or {}).get('status') == 'passed':
         layers['semanticReview'] = 'passed'
     layers['htmlMechanical'] = 'passed'
     result['nextAction'] = 'push'
@@ -2426,7 +2465,7 @@ def push(conference_id, process_id):
             validate_review(generation, receipt)
             # 对已经暂存的旧 generation，保留历史上的 v1 事务约定。
             # 新的 v2 generation 一律走下面更严格的 URL 验收路径。
-            if generation.get('version') == 1:
+            if not external_image_generation(generation):
                 image_commit = commit_delta(
                     images, generation['imageFiles'], generation['imageBaseHead'],
                     generation['imageRemoteIdentitySha256'], f'发布 {conference_id} 会议图片')
@@ -2437,7 +2476,7 @@ def push(conference_id, process_id):
                 remote = push_delta(repo, generation['files'], generation['baseHead'],
                                     generation['remoteIdentitySha256'], commit)
                 existing = publication_dir(conference_id, process_id) / 'publish.json'
-                body = {'contract': 'conference-blog-publish-v1', 'version': 1,
+                body = {**current_header('conference-blog-commit'),
                         'conferenceId': conference_id, 'processId': process_id,
                         'generationSha256': generation['generationSha256'],
                         'reviewSha256': receipt['reviewSha256'], 'publicationCommit': commit,

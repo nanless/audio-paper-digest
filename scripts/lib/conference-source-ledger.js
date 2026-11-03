@@ -6,8 +6,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
 
-const CONTRACT = 'conference-source-ledger-v1';
+const CONTRACT = codec.contract('conference-source-ledger');
 const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const IDENTITY_TYPES = new Set(['icassp-arnumber', 'openreview-forum-id', 'conference-paper-id']);
@@ -117,9 +119,19 @@ function validateSourceRecord(value, name) {
 }
 
 function validateDerivedRecord(value, name, expectedPdfSha256) {
-    plainObject(value, ['extractor', 'version', 'inputSha256'], name);
+    if (Object.hasOwn(value || {}, 'contract')) {
+        const header = recordHeaderFor(value, 'conference-unrecorded-derived-source');
+        plainObject(value, [...Object.keys(header), 'extractor', 'inputSha256'], name);
+        if (value.extractor !== 'legacy-unrecorded') throw new Error(`${name} must explicitly identify the unrecorded extractor`);
+        assertSha(value.inputSha256, `${name}.inputSha256`);
+        if (value.inputSha256 !== expectedPdfSha256) throw new Error(`${name}.inputSha256 differs from PDF bytes`);
+        return;
+    }
+    const field = Object.hasOwn(value || {}, 'implementationSha256') ? 'implementationSha256' : 'version';
+    plainObject(value, ['extractor', field, 'inputSha256'], name);
     nonemptyString(value.extractor, `${name}.extractor`);
-    nonemptyString(value.version, `${name}.version`);
+    if (field === 'implementationSha256') assertSha(value[field], `${name}.${field}`);
+    else nonemptyString(value.version, `${name}.version`);
     assertSha(value.inputSha256, `${name}.inputSha256`);
     if (value.inputSha256 !== expectedPdfSha256) {
         throw new Error(`${name}.inputSha256 must bind the member PDF SHA-256`);
@@ -228,8 +240,9 @@ function memberSetSha256(members) {
 }
 
 function validateLedger(ledger) {
-    plainObject(ledger, ['version', 'conference', 'members', 'memberSetSha256'], 'conference source ledger');
-    if (ledger.version !== CONTRACT) throw new Error(`Unsupported conference source ledger version: ${ledger.version}`);
+    const header = recordHeaderFor(ledger, 'conference-source-ledger',
+        ledger && Object.hasOwn(ledger, 'contract') ? 'contract' : 'version');
+    plainObject(ledger, [...Object.keys(header), 'conference', 'members', 'memberSetSha256'], 'conference source ledger');
     plainObject(ledger.conference, ['id', 'year'], 'conference');
     if (typeof ledger.conference.id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(ledger.conference.id)) {
         throw new Error('conference.id must be a normalized slug');
@@ -365,8 +378,10 @@ function upgradeLegacyCreateMember(member) {
         provenance: {
             metadata: { kind: 'legacy-unrecorded', locator: `${baseLocator}:metadata`, retrievedAt: updatedAt },
             pdf: { kind: 'legacy-unrecorded', locator: `${baseLocator}:pdf`, retrievedAt: updatedAt },
-            text: { extractor: 'legacy-unrecorded', version: 'v1', inputSha256: member.pdfSha256 },
-            artifacts: { extractor: 'legacy-unrecorded', version: 'v1', inputSha256: member.pdfSha256 }
+            text: { ...codec.recordHeader(codec.contract('conference-unrecorded-derived-source'), 'conference-unrecorded-derived-source'),
+                extractor: 'legacy-unrecorded', inputSha256: member.pdfSha256 },
+            artifacts: { ...codec.recordHeader(codec.contract('conference-unrecorded-derived-source'), 'conference-unrecorded-derived-source'),
+                extractor: 'legacy-unrecorded', inputSha256: member.pdfSha256 }
         }
     };
 }
@@ -378,7 +393,8 @@ function createLedger(conference, members) {
         .sort((left, right) => compareIdentityKeys(identityKey(left.identity), identityKey(right.identity)));
     const keys = ordered.map(member => identityKey(member.identity));
     if (new Set(keys).size !== keys.length) throw new Error('conference source ledger contains duplicate identities');
-    const result = { version: CONTRACT, conference: { ...conference }, members: ordered, memberSetSha256: memberSetSha256(ordered) };
+    const result = codec.record('conference-source-ledger', {
+        conference: { ...conference }, members: ordered, memberSetSha256: memberSetSha256(ordered) });
     validateLedger(result);
     return result;
 }

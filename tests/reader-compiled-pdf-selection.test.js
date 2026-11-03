@@ -101,6 +101,34 @@ test('real 41292 saved paid selection parses and cold-replays without mutation; 
         });
         assert.equal(result.plan.tableBindings.length, 4);
         assert.ok(result.plan.tableBindings.every(b => b.sealedPdfTableSelection));
+        const current = deep.parseApiReaderArticleResult(JSON.stringify(envelope.payload.draft), {
+            arxivId: '2610.41292', availableFigureOrdinals: [1, 2], requireIntegratedTables: true,
+            minimumIntegratedTables: 2, requireSourceBindings: true, compileCurrent: true,
+            allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true,
+            structuredArtifacts: artifacts, sourceText: source.text,
+            verifiedResourceIdentity: paper.apiReaderResources, enforceResourceAvailabilityClaims: true
+        });
+        const codec = require('../scripts/lib/protocol-codec');
+        assert.equal(current.article, result.article);
+        assert.equal(codec.isCurrentHeader(current.plan, 'beginner-researcher'), true);
+        for (const binding of current.plan.tableBindings) {
+            assert.equal(codec.isCurrentHeader(binding.sealedPdfTableEvidence, 'reader-sealed-pdf-table-grid'), true);
+            assert.equal(codec.isCurrentHeader(binding.sealedPdfTableSelection, 'reader-compiled-pdf-table-selection'), true);
+            assert.equal(binding.sealedPdfTableSelection.version, undefined);
+        }
+        pdf.withSavedPaper({ ...paper, apiReaderArticle: current.article, apiReaderPlan: current.plan }, () => {
+            const tables = extract(current.article);
+            current.plan.tableBindings.forEach((binding, index) => binding.cellBindings.forEach(cell => {
+                const value = [tables[index].header, ...tables[index].rows][cell.renderedRow][cell.renderedColumn];
+                assert.equal(pdf.savedCellMatches(binding, cell, value), true);
+                assert.equal(pdf.savedCellMatches(structuredClone(binding), cell, value), false);
+            }));
+        });
+        for (const field of ['sealedPdfTableEvidence', 'sealedPdfTableSelection']) {
+            const changed = { ...paper, apiReaderArticle: current.article, apiReaderPlan: structuredClone(current.plan) };
+            changed.apiReaderPlan.tableBindings[0][field].schemaFingerprint = 'f'.repeat(64);
+            assert.throws(() => pdf.withSavedPaper(changed, () => {}));
+        }
         const table = artifacts.tables.find(t => t.ordinal === 2);
         const identityView = compiler.renderReaderTableSelection({ tableIndex: 1, selection: {
             sourceTableOrdinal: 2, sourceRows: table.matrix.map((_row, index) => index),

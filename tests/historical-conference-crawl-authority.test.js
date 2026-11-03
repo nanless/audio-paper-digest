@@ -6,10 +6,21 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/historical-conference-crawl-authority.js');
+const { originalCrawlApi, savedCrawlFixture } = require('./helpers/original-crawl-authority');
+const original = originalCrawlApi('conference');
 function pdf() { return Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n'); }
 function fixture(t) { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-crawl-authority-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); const dataRoot = path.join(root, 'data'); const current = path.join(dataRoot, 'current'); const pdfRoot = path.join(dataRoot, 'pdfs', 'icml2026'); fs.mkdirSync(current, { recursive: true, mode: 0o700 }); fs.mkdirSync(pdfRoot, { recursive: true, mode: 0o700 }); const id = 'AbCdef_12'; fs.writeFileSync(path.join(current, 'icml_2026_deep_analysis.json'), JSON.stringify({ papers: [{ id, title: 'Metadata title only', fullText: 'must not enter identity authority' }] }), { mode: 0o600 }); fs.writeFileSync(path.join(pdfRoot, `${id}.pdf`), pdf(), { mode: 0o600 }); for (const name of ['icassp_2026_deep_analyzers.json', 'iclr_2026_deep_analyzers.json']) fs.writeFileSync(path.join(current, name), JSON.stringify({ papers: [] }), { mode: 0o600 }); return { root, dataRoot, identityRoot: path.join(root, 'identities'), id, pdf: path.join(pdfRoot, `${id}.pdf`) }; }
-test('保留的当前 ICML 元数据加上以 ID 命名的本地 PDF，生成可复核的纯身份授权', t => { const f = fixture(t); const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const match = index.matches.get(`openreview-forum-id:${f.id}`)[0]; assert.equal(match.metadataRelativePath, 'current/icml_2026_deep_analysis.json'); assert.equal(match.pdfAbsolutePath, f.pdf); const prepared = api.prepareConferenceCrawlAuthority({ identityRoot: f.identityRoot, dataRoot: f.dataRoot, match, apply: true }); const snapshot = api.authorityHandleSnapshot(prepared.authorityHandle); assert.equal(snapshot.productionAuthorized, true); assert.equal(snapshot.authority.identity.kind, 'conference'); assert.equal(snapshot.authority.identity.externalId.value, f.id); assert.equal(snapshot.authority.identity.source.status, 'unavailable'); assert.equal(JSON.stringify(snapshot.authority).includes('must not enter identity authority'), false); assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle); fs.appendFileSync(f.pdf, 'changed'); assert.throws(() => api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), /PDF bytes no longer match/); });
-test('扫描器拒绝只有标题的记录，绝不编造 ID 到 PDF 的匹配', t => { const f = fixture(t); const file = path.join(f.dataRoot, 'current', 'icml_2026_deep_analysis.json'); fs.writeFileSync(file, JSON.stringify({ papers: [{ title: 'Same title', fullText: 'x' }] }), { mode: 0o600 }); const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); assert.equal(index.matches.size, 0); });
+test('保留的当前 ICML 元数据加上以 ID 命名的本地 PDF，生成可复核的纯身份授权', t => { const f = fixture(t); const index = original.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const match = index.matches.get(`openreview-forum-id:${f.id}`)[0]; assert.equal(match.metadataRelativePath, 'current/icml_2026_deep_analysis.json'); assert.equal(match.pdfAbsolutePath, f.pdf); const prepared = savedCrawlFixture('conference', { identityRoot: f.identityRoot, dataRoot: f.dataRoot, match, apply: true }); const snapshot = api.authorityHandleSnapshot(prepared.authorityHandle); assert.equal(snapshot.productionAuthorized, true); assert.equal(snapshot.authority.identity.kind, 'conference'); assert.equal(snapshot.authority.identity.externalId.value, f.id); assert.equal(snapshot.authority.identity.source.status, 'unavailable'); assert.equal(JSON.stringify(snapshot.authority).includes('must not enter identity authority'), false); assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle); fs.appendFileSync(f.pdf, 'changed'); assert.throws(() => api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), /PDF bytes no longer match/); });
+test('退役写入口不可用，旧会议凭证不能凭标题替代实际 ID', t => {
+    const f = fixture(t);
+    const match = original.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }).matches.get(`openreview-forum-id:${f.id}`)[0];
+    const saved = savedCrawlFixture('conference', { ...f, match });
+    assert.equal(api.prepareConferenceCrawlAuthority, undefined);
+    assert.equal(api.titleRecoveryGroups, undefined);
+    const file = path.join(f.dataRoot, 'current', 'icml_2026_deep_analysis.json');
+    fs.writeFileSync(file, JSON.stringify({ papers: [{ title: 'Metadata title only' }] }), { mode: 0o600 });
+    assert.throws(() => api.replayAuthorityHandle(saved.authorityHandle, { requireProduction: true }));
+});
 
 test('精确归一化后的 frontmatter 标题指纹把冻结页面绑定到一个保留的会议身份，且不保留任何一方标题', t => {
     const f = fixture(t); const blogRoot = path.join(f.root, 'blog'); const pagePath = 'content/posts/icassp2026-paper.md'; const pageFile = path.join(blogRoot, pagePath);
@@ -20,11 +31,11 @@ test('精确归一化后的 frontmatter 标题指纹把冻结页面绑定到一�
     fs.writeFileSync(path.join(f.dataRoot, 'current', 'icassp_2026_deep_analyzers.json'), JSON.stringify({ papers: [
         { arnumber: id, paper_id: id, title: 'audio paper', pdfPath, analysis: 'must not enter authority' }
     ] }), { mode: 0o600 });
-    const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const match = index.matches.get(`icassp-arnumber:${id}`)[0];
+    const index = original.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const match = index.matches.get(`icassp-arnumber:${id}`)[0];
     const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'),
         scope: { type: 'conference', key: 'icassp-2026' }, identityHints: { status: 'none', candidates: [] } }] }, assignments: { [pageKey]: { status: 'pending' } } };
-    const groups = api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); assert.deepEqual(groups[0].pageKeys, [pageKey]);
-    const prepared = api.prepareConferenceCrawlAuthority({ identityRoot: f.identityRoot, dataRoot: f.dataRoot, blogRoot,
+    const groups = original.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); assert.deepEqual(groups[0].pageKeys, [pageKey]);
+    const prepared = savedCrawlFixture('conference', { identityRoot: f.identityRoot, dataRoot: f.dataRoot, blogRoot,
         match, titleBindings: groups[0].titleBindings, apply: true }); const stored = api.authorityHandleSnapshot(prepared.authorityHandle).authority;
     assert.equal(stored.titleBindings.length, 1); assert.equal(JSON.stringify(stored).includes('Ａudio  Paper'), false); assert.equal(JSON.stringify(stored).includes('audio paper'), false);
     assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle);
@@ -37,12 +48,27 @@ test('ICASSP 冲突提示只有在其冻结标题绑定与保留元数据和 PDF
     fs.mkdirSync(path.dirname(pageFile), { recursive: true, mode: 0o700 }); const pageBytes = Buffer.from('---\ntitle: Agreement Paper\ndate: 2026-05-01\n---\nNo body input.\n'); fs.writeFileSync(pageFile, pageBytes, { mode: 0o600 });
     const id = '101'; const pdfPath = path.join(f.root, 'agreement.pdf'); fs.writeFileSync(pdfPath, pdf(), { mode: 0o600 }); fs.writeFileSync(path.join(f.dataRoot, 'current', 'icassp_2026_deep_analyzers.json'), JSON.stringify({ papers: [{ arnumber: id, paper_id: id, title: 'agreement paper', pdfPath }] }), { mode: 0o600 });
     const pageKey = `page:${'b'.repeat(64)}`; const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'), scope: { type: 'conference', key: 'icassp-2026' }, identityHints: { status: 'conflict', candidates: [{ scheme: 'arxiv', value: '2601.00001', sources: ['body:arxiv-link'] }, { scheme: 'arxiv', value: '2601.00002', sources: ['body:arxiv-link'] }] } }] }, assignments: { [pageKey]: { status: 'pending' } } };
-    const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const groups = api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); assert.equal(groups[0].externalId.value, id);
-    fs.writeFileSync(pageFile, Buffer.from('---\ntitle: Different Paper\ndate: 2026-05-01\n---\nNo body input.\n'), { mode: 0o600 }); assert.throws(() => api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }), /frozen crosswalk page/);
+    const index = original.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const groups = original.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); assert.equal(groups[0].externalId.value, id);
+    const saved = savedCrawlFixture('conference', { ...f, blogRoot, match: groups[0].match, titleBindings: groups[0].titleBindings });
+    fs.writeFileSync(pageFile, Buffer.from('---\ntitle: Different Paper\ndate: 2026-05-01\n---\nNo body input.\n'), { mode: 0o600 }); assert.throws(() => api.replayAuthorityHandle(saved.authorityHandle, { requireProduction: true }), /frozen crosswalk page/);
 });
 
 test('外部本地 ICLR 已接受元数据加上以 ID 命名的 PDF，生成可复核的标题绑定授权', t => {
     const f = fixture(t); const acceptedRoot = path.join(f.root, 'iclr'); const metadata = path.join(acceptedRoot, 'data', 'iclr2026_accepted.json'); const pdfRoot = path.join(acceptedRoot, 'data', 'pdfs'); fs.mkdirSync(pdfRoot, { recursive: true, mode: 0o700 }); const id = 'q05hC1Pzkr'; fs.writeFileSync(path.join(pdfRoot, `${id}.pdf`), pdf(), { mode: 0o600 }); fs.writeFileSync(metadata, JSON.stringify([{ forum_id: id, title: 'ICLR Accepted Local Paper' }]), { mode: 0o600 });
     const blogRoot = path.join(f.root, 'blog'); const pagePath = 'content/posts/iclr2026-paper.md'; const pageFile = path.join(blogRoot, pagePath); fs.mkdirSync(path.dirname(pageFile), { recursive: true, mode: 0o700 }); const pageBytes = Buffer.from('---\ntitle: iclr accepted local paper\ndate: 2026-05-01\n---\nNo body input.\n'); fs.writeFileSync(pageFile, pageBytes, { mode: 0o600 }); const pageKey = `page:${'c'.repeat(64)}`;
-    const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'), scope: { type: 'conference', key: 'iclr-2026' }, identityHints: { status: 'none', candidates: [] } }] }, assignments: { [pageKey]: { status: 'pending' } } }; const fingerprints = new Set([api.pageTitleBinding({ blogRoot, pageKey, pagePath, pageContentSha256: state.source.papers[0].pageContentSha256 }).titleFingerprintSha256]); const index = api.scanIclrAcceptedMatches({ iclrAcceptedRoot: acceptedRoot, titleFingerprintSha256s: fingerprints }); const groups = api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); const prepared = api.prepareConferenceCrawlAuthority({ identityRoot: f.identityRoot, dataRoot: f.dataRoot, blogRoot, iclrAcceptedRoot: acceptedRoot, match: groups[0].match, titleBindings: groups[0].titleBindings, apply: true }); assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle); assert.equal(JSON.stringify(api.authorityHandleSnapshot(prepared.authorityHandle).authority).includes('ICLR Accepted Local Paper'), false);
+    const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'), scope: { type: 'conference', key: 'iclr-2026' }, identityHints: { status: 'none', candidates: [] } }] }, assignments: { [pageKey]: { status: 'pending' } } }; const fingerprints = new Set([api.pageTitleBinding({ blogRoot, pageKey, pagePath, pageContentSha256: state.source.papers[0].pageContentSha256 }).titleFingerprintSha256]); const index = original.scanIclrAcceptedMatches({ iclrAcceptedRoot: acceptedRoot, titleFingerprintSha256s: fingerprints }); const groups = original.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); const prepared = savedCrawlFixture('conference', { identityRoot: f.identityRoot, dataRoot: f.dataRoot, blogRoot, iclrAcceptedRoot: acceptedRoot, match: groups[0].match, titleBindings: groups[0].titleBindings, apply: true }); assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle); assert.equal(JSON.stringify(api.authorityHandleSnapshot(prepared.authorityHandle).authority).includes('ICLR Accepted Local Paper'), false);
+});
+
+test('会议历史读取器拒绝以当前头或当前论文身份重签旧凭证', t => {
+    const f = fixture(t), codec = require('../scripts/lib/protocol-codec');
+    const ids = require('../scripts/lib/paper-identity');
+    const match = original.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }).matches.get(`openreview-forum-id:${f.id}`)[0];
+    const saved = savedCrawlFixture('conference', { ...f, match });
+    const { contract, version, authoritySha256, ...body } = api.authorityHandleSnapshot(saved.authorityHandle).authority;
+    const reseal = value => ({ ...value, authoritySha256: api.stableHash(value) });
+    assert.throws(() => api.normalizeAuthority(reseal(codec.record(api.CONTRACT, body))), /只接受已登记的原历史格式/);
+    const { contract: identityContract, ...identityFields } = body.identity;
+    const identity = ids.createIdentity(identityFields);
+    assert.throws(() => api.normalizeAuthority(reseal({ contract, version, ...body, identity,
+        identitySha256: ids.identitySha256(identity), identityRecordSha256: ids.recordSha256(identity) })), /不能换用当前论文身份/);
 });

@@ -9,6 +9,7 @@ const sourceApi = require('../scripts/lib/conference-source-context');
 const engine = require('../scripts/analysis-engine');
 const stop = require('../scripts/lib/analysis-stop-control');
 const repair = require('../scripts/lib/reader-repair');
+const codec = require('../scripts/lib/protocol-codec');
 function fixture(t) {
     const f = require('./helpers/conference-production-plan-fixture').productionPlanFixture(t);
     const sourceHandle = sourceApi.buildConferenceSourceContext({ planHandle: f.planHandle, paperId: f.paperId, sourceRoot: f.sourceRoot });
@@ -51,9 +52,41 @@ test('independent six/two response ledger is shared across three invocations, wi
     await f.run(() => assert.throws(() => api.reserveReaderResponse(f.paper, f.identity(), 'patch', 6),
         { code: 'CONFERENCE_READER_GRANT_BUDGET_EXHAUSTED' }));
     const ledger = JSON.parse(fs.readFileSync(f.ledgerFile));
+    assert.equal(codec.isCurrentHeader(ledger, 'conference-granted-reader-budget'), true);
     assert.equal(ledger.requests.length, 6); assert.equal(ledger.requests.filter(row => row.kind === 'full').length, 2);
     for (const row of ledger.requests) assert.equal(repair.shaText(JSON.parse(fs.readFileSync(path.join(f.options.executionDir, row.responseFile))).rawResponse), row.outputTextSha256);
     assert.deepEqual(fs.readFileSync(old), original);
+});
+
+test('实际原Git预算写入程序的请求响应可冷核，原头和次数不改且续写不另开账', async t => {
+    const f = fixture(t), Module = require('node:module'), child = require('node:child_process');
+    const filename = require.resolve('../scripts/lib/conference-reader-recovery-window');
+    const instance = new Module(filename, module); instance.filename = filename;
+    instance.paths = Module._nodeModulePaths(path.dirname(filename));
+    instance._compile(child.execFileSync('git', ['show',
+        '05ab504df7f84da3b8d961878323cfa161f23eb0:scripts/lib/conference-reader-recovery-window.js'],
+    { cwd: path.resolve(__dirname, '..') }).toString('utf8'), filename);
+    const original = instance.exports;
+    await engine.withPaperAnalysisLock(f.paper, () => f.sourceScope(() => original.withConferenceReaderGrant(f.opaque, f.options, () => {
+        const identity = { ...f.identity(), ...original.identityFields(f.paper, f.sourceDetails.text) };
+        original.settleReaderResponse(original.reserveReaderResponse(f.paper, identity, 'full', 1),
+            'content', '{"syntheticOriginalReturnedBytes":true}');
+    })));
+    const before = new Map(fs.readdirSync(f.options.executionDir).map(name => [name, fs.readFileSync(path.join(f.options.executionDir, name))]));
+    const ledger = JSON.parse(before.get('reader-grant-budget.json'));
+    assert.equal(ledger.contract, codec.historicalContract('conference-granted-reader-budget', 'fixed-six-content-two-full'));
+    f.sourceScope(() => api.withConferenceReaderGrantReadOnly(f.opaque, f.options, () => {}));
+    for (const [name, bytes] of before) assert.deepEqual(fs.readFileSync(path.join(f.options.executionDir, name)), bytes);
+    await f.run(() => api.settleReaderResponse(api.reserveReaderResponse(f.paper, f.identity(), 'patch', 2), 'no_content'));
+    const after = JSON.parse(fs.readFileSync(f.ledgerFile));
+    assert.equal(after.contract, ledger.contract); assert.equal(after.requests.length, 2);
+    assert.deepEqual(after.requests[0], ledger.requests[0]);
+    for (const [name, bytes] of before) if (name !== 'reader-grant-budget.json')
+        assert.deepEqual(fs.readFileSync(path.join(f.options.executionDir, name)), bytes);
+    const bytes = fs.readFileSync(f.ledgerFile);
+    fs.writeFileSync(f.ledgerFile, JSON.stringify({ ...after, contract: codec.contract('conference-granted-reader-budget') }));
+    assert.throws(() => f.sourceScope(() => api.withConferenceReaderGrantReadOnly(f.opaque, f.options, () => {})), /原账本格式声明未知/);
+    fs.writeFileSync(f.ledgerFile, bytes);
 });
 
 test('full cap, new candidate identity and unfinished requests cannot reopen the same window', async t => {

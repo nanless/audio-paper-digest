@@ -1,0 +1,57 @@
+{
+  "protocols": [
+    {
+      "name": "llm-usage",
+      "currentVariant": "immutable-request-events",
+      "currentSchema": {
+        "kinds": ["request_started", "request", "disposition"],
+        "pairing": ["eventId", "runId", "paperId", "stage", "unitId", "contentAttempt", "transportAttempt", "protocol", "model", "inputSha256"],
+        "providerUsage": "reported-separately-from-character-estimates",
+        "persistence": "exclusive-private-immutable-file-per-event",
+        "header": "contract-and-schema-fingerprint-without-version"
+      },
+      "historical": [{"tag": "llm-usage-v1", "variant": "immutable-request-events", "header": {"version": "llm-usage-v1"}}]
+    },
+    {
+      "name": "llm-usage-report",
+      "currentVariant": "requests-and-dispositions",
+      "currentSchema": {
+        "groups": ["stage", "model", "outcome", "dispositions", "usage", "estimatedInputTextTokens", "durationMs"],
+        "pending": "authorized-start-with-no-matching-terminal-event",
+        "totals": "provider-reported-only"
+      },
+      "historical": [{"tag": "llm-usage-v1", "variant": "requests-and-dispositions", "header": {"version": "llm-usage-v1"}}]
+    },
+    {
+      "name": "llm-usage-summary",
+      "currentVariant": "daily-observed-costs",
+      "currentSchema": {
+        "fields": ["date", "total", "success", "failed", "cost", "costEvents", "byStage", "byModel", "byAccount"],
+        "date": "event-at-in-beijing-time",
+        "cost": "explicit-recorded-amounts-only"
+      },
+      "historical": [{"tag": "llm-usage-summary-v1", "variant": "daily-observed-costs", "header": {"version": "llm-usage-summary-v1"}}]
+    },
+    {
+      "name": "analysis-batch-diagnostics",
+      "currentVariant": "reader-refresh-observation",
+      "currentSchema": {
+        "identity": ["runId", "flow"],
+        "flow": "reader-refresh",
+        "diagnosticOnly": true,
+        "newApiRequestsAuthorized": false
+      },
+      "historical": [{"tag": "analysis-batch-diagnostics-v1", "variant": "reader-refresh-observation"}]
+    },
+    {
+      "name": "llm-accounts-report",
+      "currentVariant": "configured-and-observed",
+      "currentSchema": {
+        "fields": ["configured", "observedHistory", "quotaObservation"],
+        "quotaObservation": "stored_cooldown_only",
+        "credentials": "never-displayed"
+      },
+      "historical": []
+    }
+  ]
+}

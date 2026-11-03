@@ -3,6 +3,7 @@
 // completion receipt, budget, or publish authority is asserted by this fixture.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const codec = require('../scripts/lib/protocol-codec');
 const { validateDocuments, stable, sha, draftHash,rawReviewFeedback } = require('../scripts/lib/conference-reader-review-maintenance-evidence');
 const {fixture,seal}=require('./helpers/conference-reader-review-maintenance-fixture');
 test('exact whole review set and native summary display message; sidecars excluded', () => {
@@ -210,6 +211,15 @@ test('real final aggregate author failure remains generation-deferred beside gen
 test('aggregate deferred evidence cannot hide failure or claim passed repaired or Reader authority',()=>{
  for(const extra of [{passed:true},{repaired:true},{kind:'normal-reader'},{nextAction:'skip-review'}])
   assert.throws(()=>validateDocuments(aggregateDeferredInput(extra)),/deferred aggregate cannot/);
+});
+
+test('current aggregate classification retains the original exact rejection and rejects a different fingerprint',()=>{
+ const family='conference-reader-aggregate-review-classification';
+ const header=codec.recordHeader(family,family);
+ const input=aggregateDeferredInput(header);
+ assert.deepEqual(validateDocuments(input).paperIds,[actualLouroRejection.paperId]);
+ assert.deepEqual(input.reviewBatch.pages.at(-1),actualAggregateRejection);
+ assert.throws(()=>validateDocuments(aggregateDeferredInput({...header,schemaFingerprint:'0'.repeat(64)})),/deferred aggregate cannot/);
 });
 
 const actualNativeTransient={"contract":"conference-page-content-review-failure-v1","path":"content/posts/conference-interspeech-2026-conference-paper-id-bhooi26-interspeech-fbf1131447.md","sha256":"072517aacf737d5f77c926f686c8a9a03f5006cc64dde46ed1f74f8250ec2d33","paperId":"conference:interspeech:2026:conference-paper-id:bhooi26_interspeech","passed":false,"stage":"image","protocol":"f4d6875f8480ff54f99ff08cf80090cd345600a9bb7d8994c1f9b8ef33e8a29b","issues":[{"severity":"error","type":"infrastructure","description":"多模态图片 review: Refining the Latent Bridge: Superior ASR Performance via Adapter-Only Alignment with Diffusion LLMs [图 2/2] 协议校验失败：issues[0] 表示无法确定审查结论"}],"completed":true,"failureKind":"transient","imageCount":2,"failureSha256":"44b331c5c176dab2d41632b0fcb109efc25261cb585127be00616157a2821d36"};

@@ -145,17 +145,52 @@ struct PublishedAggregateStore {
         try PublishedAggregateReader.require(try read(url,limit:max(data.count,1))==data,"汇总原件保存后不一致")
     }
     private func json<T:Encodable>(_ value:T)throws->Data {let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return try encoder.encode(value)}
-    private struct Activation:Codable {let contract:String;let snapshotSHA256:String;let validationEpoch:String;let catalogSHA256:String}
+    private static let catalogFamily = "published-aggregate-index"
+    private func catalogRecord(_ catalog:PublishedAggregateCatalog, original:Data?=nil)throws->Data {
+        let family=Self.catalogFamily
+        guard let fields=try JSONSerialization.jsonObject(with:json(catalog)) as? [String:Any] else {
+            throw AggregateFailure.invalid("汇总目录格式无效")
+        }
+        let expected:[String:Any]
+        if let original {
+            guard let saved=try JSONSerialization.jsonObject(with:original) as? [String:Any],
+                  ClientProtocols.hasValidHeader(saved,family) else {
+                throw AggregateFailure.invalid("汇总目录格式无效")
+            }
+            expected=try ClientProtocols.recordHeader(saved["contract"],family,saved["schemaFingerprint"] as? String).merging(fields) { old,_ in old }
+            try PublishedAggregateReader.require(try JSONSerialization.data(withJSONObject:saved,options:[.sortedKeys])==JSONSerialization.data(withJSONObject:expected,options:[.sortedKeys]),"汇总目录与原来源不一致")
+            return original
+        }
+        expected=try ClientProtocols.record(family,fields:fields)
+        return try JSONSerialization.data(withJSONObject:expected,options:[.sortedKeys])
+    }
+    private static let activationFamily = "published-aggregate-activation"
+    private func checkActivation(_ raw:Data, snapshot:String, epoch:String, catalogSHA:String)throws {
+        let family=Self.activationFamily
+        let body=["snapshotSHA256":snapshot,"validationEpoch":epoch,"catalogSHA256":catalogSHA]
+        guard let value=try JSONSerialization.jsonObject(with:raw) as? [String:Any],
+              ClientProtocols.hasValidHeader(value,family),
+              Set(value.keys)==(try ClientProtocols.recordKeys(value["contract"],family,fields:Set(body.keys),fingerprints:value["schemaFingerprint"] as? String)),
+              body.allSatisfy({value[$0.key] as? String == $0.value}) else {
+            throw AggregateFailure.invalid("汇总激活代与原来源不一致")
+        }
+    }
     private func epoch(_ value:String)throws->String {guard let id=UUID(uuidString:value) else{throw AggregateFailure.invalid("汇总目录验证代无效")};return id.uuidString.lowercased()}
     func stage(manifest:Data,validationEpoch:String)throws->PublishedAggregateCatalog {
         let identity=try epoch(validationEpoch)
         let catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
         try immutable(manifest,to:child(["aggregate-manifests",catalog.snapshotSHA256+".json"]))
         let sidecar=try child(["aggregate-index",catalog.snapshotSHA256+".json"])
-        try immutable(json(catalog),to:sidecar)
-        let actual=try read(sidecar,limit:8*1024*1024)
-        let activation=Activation(contract:"published-aggregate-activation-v1",snapshotSHA256:catalog.snapshotSHA256,validationEpoch:identity,catalogSHA256:PublishedAggregateReader.sha(actual))
-        try immutable(json(activation),to:child(["aggregate-activations",catalog.snapshotSHA256,identity+".json"]))
+        if !fm.fileExists(atPath:sidecar.path) { try immutable(catalogRecord(catalog),to:sidecar) }
+        let actual=try catalogRecord(catalog,original:read(sidecar,limit:8*1024*1024))
+        let marker=try child(["aggregate-activations",catalog.snapshotSHA256,identity+".json"])
+        let actualSHA=PublishedAggregateReader.sha(actual)
+        if fm.fileExists(atPath:marker.path) {
+            try checkActivation(read(marker,limit:4096),snapshot:catalog.snapshotSHA256,epoch:identity,catalogSHA:actualSHA)
+        } else {
+            let activation=try ClientProtocols.record(Self.activationFamily,fields:["snapshotSHA256":catalog.snapshotSHA256,"validationEpoch":identity,"catalogSHA256":actualSHA])
+            try immutable(JSONSerialization.data(withJSONObject:activation,options:[.sortedKeys]),to:marker)
+        }
         return catalog
     }
     /// Neither a matching manifest nor an orphan activation from a cancelled same-SHA sync can grant currentness.
@@ -172,8 +207,8 @@ struct PublishedAggregateStore {
         metrics?.sourceParses += 1
         #endif
         let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
-        let actual=try read(sidecar,limit:8*1024*1024),saved=try JSONDecoder().decode(PublishedAggregateCatalog.self,from:actual),activation=try JSONDecoder().decode(Activation.self,from:read(marker,limit:4096))
-        try PublishedAggregateReader.require(saved==catalog && activation.contract=="published-aggregate-activation-v1" && activation.snapshotSHA256==activeSnapshotSHA256 && activation.validationEpoch==identity && activation.catalogSHA256==PublishedAggregateReader.sha(actual),"汇总sidecar或激活代与原来源不一致")
+        let actual=try catalogRecord(catalog,original:read(sidecar,limit:8*1024*1024))
+        try checkActivation(read(marker,limit:4096),snapshot:activeSnapshotSHA256,epoch:identity,catalogSHA:PublishedAggregateReader.sha(actual))
         readScope?.catalogs[activeSnapshotSHA256]=catalog;readScope?.activations[activationKey]=catalog
         return catalog
     }
@@ -217,10 +252,10 @@ struct PublishedAggregateStore {
         let folder=["aggregate-documents",PublishedAggregateReader.sha(Data(descriptor.id.utf8)),descriptor.source.manifestSHA256,rawHTMLSHA256]
         if !fm.fileExists(atPath:try child(folder).path){return try importAndroidDocument(descriptor,rawSHA:rawHTMLSHA256)}
         let raw=try read(try child(folder+["original.html"]),limit:16*1024*1024)
-        let saved=try JSONDecoder().decode(AggregateDocument.self,from:read(try child(folder+["document.json"]),limit:20*1024*1024))
+        let (saved,format)=try AggregateDocumentFormat.read(read(try child(folder+["document.json"]),limit:20*1024*1024),platform:.macos)
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(raw)==rawHTMLSHA256 && saved.descriptor==descriptor,"汇总原HTML或目录绑定不一致")
         guard let responseURL=URL(string:saved.responseURL) else{throw AggregateFailure.invalid("汇总原响应地址无效")}
-        let actual=try LibraryService.extractAggregateHTML(raw,descriptor:descriptor,responseURL:responseURL,fetchedAt:saved.fetchedAt,siteBaseURL:siteBase)
+        let actual=try LibraryService.extractAggregateHTML(raw,descriptor:descriptor,responseURL:responseURL,fetchedAt:saved.fetchedAt,siteBaseURL:siteBase,format:format)
         try PublishedAggregateReader.require(actual==saved && (try read(try child(folder+["body.html"]),limit:16*1024*1024))==Data(actual.bodyHTML.utf8),"汇总派生正文与原HTML不一致")
         return actual
     }
@@ -263,9 +298,15 @@ extension PublishedAggregateStore {
         let folder=["aggregate-documents",PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256]
         return try LibraryService.aggregateImagePlan(source,rawHTML:read(child(folder+["original.html"]),limit:16*1024*1024),siteBaseURL:siteBase)
     }
-    private func resourceFolder(_ source:AggregateDocument)throws->[String] {
+    private func resourceFolder(_ source:AggregateDocument,platform:AggregateDocumentFormat.Platform = .macos,legacy:Bool=false)throws->[String] {
         try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(source.rawHTMLSHA256),"图片原网页SHA无效")
-        return [AggregateResources.renderDirectory,PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256,AggregateResources.contract]
+        return try [AggregateResources.directory(platform,legacy:legacy),PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256,AggregateResources.folderContract(legacy:legacy)]
+    }
+    private func imageBlobFile(_ sha:String,legacy:Bool)throws->URL {
+        try child([legacy ? AggregateResources.legacyBlobDirectory() : AggregateResources.blobDirectory,sha])
+    }
+    private func resourceLocations(_ source:AggregateDocument,platform:AggregateDocumentFormat.Platform = .macos)throws->[(legacy:Bool,folder:URL)] {
+        try [false,true].map{legacy in (legacy,try child(resourceFolder(source,platform:platform,legacy:legacy)))}
     }
     func cacheResourceRendering(source:AggregateDocument,plan:AggregateImagePlan,images:[Int:AggregateImageBytes],missing:[Int:String],observedAt:String)throws->AggregateResourceRender {
         try PublishedAggregateReader.require(try imagePlan(source)==plan,"图片位置或原来源已变化")
@@ -280,7 +321,7 @@ extension PublishedAggregateStore {
         try validResourceTime(observedAt)
         let bytes=try json(manifest),sha=PublishedAggregateReader.sha(bytes)
         try PublishedAggregateReader.require(bytes.count<=4*1024*1024,"图片资源清单超过大小限制")
-        for (sha,asset) in assets.sorted(by:{$0.key<$1.key}) {try immutable(asset.data,to:child(["aggregate-image-bytes-v1",sha]))}
+        for (sha,asset) in assets.sorted(by:{$0.key<$1.key}) {try immutable(asset.data,to:imageBlobFile(sha,legacy:false))}
         try immutable(bytes,to:child(resourceFolder(source)+[sha+".json"]))
         return try cachedResourceRendering(source:source,manifestSHA256:sha)
     }
@@ -290,20 +331,25 @@ extension PublishedAggregateStore {
         try PublishedAggregateReader.require(time != nil,"图片资源观察时间无效")
     }
     /// Re-read a retained source-bound image before reusing it in a later partial rendering.
-    func retainedResourceBytes(_ record:AggregateImageRecord)throws->AggregateImageBytes {
+    func retainedResourceBytes(_ record:AggregateImageRecord,legacy:Bool)throws->AggregateImageBytes {
         guard let sha=record.sha256,PublishedAggregateReader.validSHA(sha),let mime=record.mime,
               let size=record.bytes,size>0,size<=AggregateResources.maxImageBytes,record.missingReason==nil else{throw AggregateFailure.invalid("已存图片记录不完整")}
-        let bytes=try read(child(["aggregate-image-bytes-v1",sha]),limit:size)
+        let bytes=try read(imageBlobFile(sha,legacy:legacy),limit:size)
         try PublishedAggregateReader.require(bytes.count==size&&PublishedAggregateReader.sha(bytes)==sha&&LibraryService.aggregateImageMIME(bytes)==mime,"已存图片真实字节或类型不符")
         return .init(data:bytes,mime:mime)
     }
     func cachedResourceRendering(source:AggregateDocument,manifestSHA256:String)throws->AggregateResourceRender {
         let plan=try imagePlan(source)
         try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(manifestSHA256),"图片资源修订SHA无效")
-        let bytes=try read(child(resourceFolder(source)+[manifestSHA256+".json"]),limit:4*1024*1024)
+        let files=try resourceLocations(source).map{location in
+            (location.legacy,try child(resourceFolder(source,legacy:location.legacy)+[manifestSHA256+".json"]))
+        }.filter{fm.fileExists(atPath:$0.1.path)}
+        guard files.count==1,let (legacy,file)=files.first else{throw AggregateFailure.invalid("图片资源修订缺失或在多个格式目录重复")}
+        let bytes=try read(file,limit:4*1024*1024)
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(bytes)==manifestSHA256,"图片资源清单真实字节已变化")
+        try AggregateResources.validateManifestHeader(bytes,platform:.macos,legacy:legacy)
         let manifest=try JSONDecoder().decode(AggregateResourceManifest.self,from:bytes)
-        try PublishedAggregateReader.require(manifest.contract==AggregateResources.contract&&manifest.plan==plan&&manifest.completeOffline==false,"图片资源原HTML、目录或派生版本不符")
+        try PublishedAggregateReader.require(manifest.plan==plan.replayHeader(of:manifest.plan)&&manifest.completeOffline==false,"图片资源原HTML、目录或派生版本不符")
         try validResourceTime(manifest.observedAt)
         try AggregateResources.validateReferenceBudget(manifest.images)
         var assets:[String:AggregateImageBytes]=[:]
@@ -311,7 +357,7 @@ extension PublishedAggregateStore {
             if let sha=record.sha256,let mime=record.mime {
                 try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(sha),"图片字节SHA无效")
                 guard let size=record.bytes else{throw AggregateFailure.invalid("图片字节长度缺失")}
-                let data=try read(child(["aggregate-image-bytes-v1",sha]),limit:size)
+                let data=try read(imageBlobFile(sha,legacy:legacy),limit:size)
                 try PublishedAggregateReader.require(data.count==size,"图片字节长度与清单不一致")
                 assets[sha] = .init(data:data,mime:mime)
             }
@@ -325,12 +371,14 @@ extension PublishedAggregateStore {
 extension PublishedAggregateStore {
     /// Strict same-HTML scope. Every peer is cold-verified; damaged peers cannot be skipped for an older render.
     func latestResourceRendering(source:AggregateDocument)throws->AggregateResourceRender? {
-        let folder=try child(resourceFolder(source));try noLinks(folder)
-        guard fm.fileExists(atPath:folder.path) else{return nil}
+        let locations=try resourceLocations(source).filter{fm.fileExists(atPath:$0.folder.path)}
+        guard !locations.isEmpty else{return nil}
         _=try imagePlan(source)
-        let files=try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil)
         var latest:AggregateResourceRender?
-        for file in files.sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
+        for (_,folder) in locations {
+            try noLinks(folder)
+            let files=try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil)
+            for file in files.sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
             let name=file.lastPathComponent
             try PublishedAggregateReader.require(name.hasSuffix(".json")&&PublishedAggregateReader.validSHA(String(name.dropLast(5))),"图片修订目录含未知项，未挑选旧修订")
             let value=try cachedResourceRendering(source:source,manifestSHA256:String(name.dropLast(5)))
@@ -338,8 +386,10 @@ extension PublishedAggregateStore {
             func time(_ text:String)->Date{formatter.date(from:text) ?? ISO8601DateFormatter().date(from:text)!}
             if latest==nil || time(value.manifest.observedAt)>time(latest!.manifest.observedAt) ||
                 (time(value.manifest.observedAt)==time(latest!.manifest.observedAt) && value.manifest.images.filter{$0.sha256 != nil}.count>latest!.manifest.images.filter{$0.sha256 != nil}.count){latest=value}
+            }
+            try noLinks(folder)
         }
-        try noLinks(folder);return latest
+        return latest
     }
 }
 
@@ -350,8 +400,8 @@ extension PublishedAggregateStore {
         _=try originalRow(for:descriptor);try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(rawSHA),"Android原网页修订无效")
         let folder=["aggregate-documents-android",PublishedAggregateReader.sha(Data(descriptor.id.utf8)),descriptor.source.manifestSHA256,rawSHA]
         let raw=try read(child(folder+["original.html"]),limit:16*1024*1024)
-        let witness=try JSONDecoder().decode(AggregateDocument.self,from:read(child(folder+["document.json"]),limit:20*1024*1024))
-        try PublishedAggregateReader.require(witness.contract=="published-aggregate-document-v1"&&witness.parserContract=="published-aggregate-jsoup-v1"&&witness.descriptor==descriptor&&witness.rawHTMLSHA256==rawSHA&&PublishedAggregateReader.sha(raw)==rawSHA&&witness.rawHTMLBytes==raw.count&&witness.responseURL==descriptor.sourceURL&&witness.completeOffline==false,"Android原网页来源或格式不受支持，原件保留")
+        let (witness,_)=try AggregateDocumentFormat.read(read(child(folder+["document.json"]),limit:20*1024*1024),platform:.android)
+        try PublishedAggregateReader.require(witness.descriptor==descriptor&&witness.rawHTMLSHA256==rawSHA&&PublishedAggregateReader.sha(raw)==rawSHA&&witness.rawHTMLBytes==raw.count&&witness.responseURL==descriptor.sourceURL&&witness.completeOffline==false,"Android原网页来源或格式不受支持，原件保留")
         let body=try read(child(folder+["body.html"]),limit:16*1024*1024)
         try PublishedAggregateReader.require(body==Data(witness.bodyHTML.utf8)&&PublishedAggregateReader.sha(body)==witness.sanitizedBodySHA256,"Android原网页派生见证未通过核验")
         // The native extractor alone remains authoritative, including canonical URL/HTML shape guards.
@@ -384,46 +434,52 @@ extension PublishedAggregateStore {
         return latest
     }
     private struct AndroidImageWitness:Decodable {
-        let contract:String;let parserContract:String;let plan:AggregateImagePlan;let observedAt:String;let images:[AggregateImageRecord];let renderedBodySHA256:String;let completeOffline:Bool
+        let plan:AggregateImagePlan;let observedAt:String;let images:[AggregateImageRecord];let renderedBodySHA256:String;let completeOffline:Bool
     }
     func importAndroidResourceRendering(_ source:AggregateDocument)throws->AggregateResourceRender? {
-        let folder=try child(["aggregate-resource-renders-android-v1",PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256,AggregateResources.contract])
-        guard fm.fileExists(atPath:folder.path)else{return nil};try noLinks(folder)
+        let locations=try resourceLocations(source,platform:.android).filter{fm.fileExists(atPath:$0.folder.path)}
+        guard !locations.isEmpty else{return nil}
         let plan=try imagePlan(source)
         let android=try androidSource(source.descriptor,rawSHA:source.rawHTMLSHA256)
-        var selected:AndroidImageWitness?,selectedSHA:String?
+        var selected:AndroidImageWitness?,selectedSHA:String?,selectedLegacy=false
+        var seen=Set<String>()
         func time(_ value:String)throws->Date {let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds];if let date=formatter.date(from:value){return date};formatter.formatOptions=[.withInternetDateTime];guard let date=formatter.date(from:value)else{throw AggregateFailure.invalid("Android图片观察时间无效")};return date}
-        for entry in try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
+        for (legacy,folder) in locations {
+            try noLinks(folder)
+            for entry in try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
             let name=entry.lastPathComponent
             try PublishedAggregateReader.require(name.hasSuffix(".json")&&PublishedAggregateReader.validSHA(String(name.dropLast(5))),"Android图片修订目录格式未知，原件保留")
-            let raw=try read(entry,limit:4*1024*1024),sha=PublishedAggregateReader.sha(raw);try PublishedAggregateReader.require(sha==String(name.dropLast(5)),"Android图片见证真实字节已变化")
+            let raw=try read(entry,limit:4*1024*1024),sha=PublishedAggregateReader.sha(raw);try PublishedAggregateReader.require(sha==String(name.dropLast(5))&&seen.insert(sha).inserted,"Android图片见证真实字节已变化或重复")
+            try AggregateResources.validateManifestHeader(raw,platform:.android,legacy:legacy)
             let value=try JSONDecoder().decode(AndroidImageWitness.self,from:raw)
-            try PublishedAggregateReader.require(value.contract==AggregateResources.contract&&value.parserContract=="published-aggregate-jsoup-images-v1"&&value.completeOffline==false&&value.plan.contract==AggregateResources.contract&&value.plan.descriptor==source.descriptor&&value.plan.rawHTMLSHA256==source.rawHTMLSHA256&&value.plan.originalBodySHA256==android.witness.sanitizedBodySHA256&&PublishedAggregateReader.sha(Data(value.plan.templateBodyHTML.utf8))==value.plan.templateBodySHA256,"Android图片来源见证未通过核验")
+            try PublishedAggregateReader.require(value.completeOffline==false&&value.plan.descriptor==source.descriptor&&value.plan.rawHTMLSHA256==source.rawHTMLSHA256&&value.plan.originalBodySHA256==android.witness.sanitizedBodySHA256&&PublishedAggregateReader.sha(Data(value.plan.templateBodyHTML.utf8))==value.plan.templateBodySHA256,"Android图片来源见证未通过核验")
             try PublishedAggregateReader.require(value.plan.slots==plan.slots&&value.images.map{$0.slot}==plan.slots,"两端图片位置或图注不同，未把其他派生图片接到本端正文")
             try AggregateResources.validateReferenceBudget(value.images)
             for record in value.images {
                 if let sha=record.sha256,let mime=record.mime,let size=record.bytes {
                     try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(sha),"Android图片SHA无效")
-                    let data=try read(child(["aggregate-image-bytes-v1",sha]),limit:size)
+                    let data=try read(imageBlobFile(sha,legacy:legacy),limit:size)
                     try PublishedAggregateReader.require(data.count==size&&PublishedAggregateReader.sha(data)==sha&&LibraryService.aggregateImageMIME(data)==mime,"Android图片实际字节或类型不符")
                 }else{try PublishedAggregateReader.require(record.sha256==nil&&record.mime==nil&&record.bytes==nil&&record.missingReason?.isEmpty==false,"Android图片缺项状态无效")}
             }
             let observed=try time(value.observedAt)
             let priorDate=try selected.map{try time($0.observedAt)}
-            if priorDate==nil||observed>priorDate!{selected=value;selectedSHA=sha}
+            if priorDate==nil||observed>priorDate!{selected=value;selectedSHA=sha;selectedLegacy=legacy}
+            }
+            try noLinks(folder)
         }
-        try noLinks(folder);guard let selected,let selectedSHA else{return nil}
+        guard let selected,let selectedSHA else{return nil}
         var images:[Int:AggregateImageBytes]=[:],missing:[Int:String]=[:]
         for record in selected.images {
             if let sha=record.sha256,let mime=record.mime,let size=record.bytes {
-                let data=try read(child(["aggregate-image-bytes-v1",sha]),limit:size);try PublishedAggregateReader.require(data.count==size,"Android图片实际长度已变化")
+                let data=try read(imageBlobFile(sha,legacy:selectedLegacy),limit:size);try PublishedAggregateReader.require(data.count==size,"Android图片实际长度已变化")
                 images[record.slot.index] = .init(data:data,mime:mime)
             }else{missing[record.slot.index]=record.missingReason}
         }
         let native=try cacheResourceRendering(source:source,plan:plan,images:images,missing:missing,observedAt:selected.observedAt)
         // Append-only provenance is auxiliary; neither foreign rendered body nor its SHA becomes native authority.
-        let provenance:[String:Any]=["contract":"published-aggregate-resource-import-v1","nativePlatform":"macos","nativeManifestSHA256":native.manifestSHA256,"foreignPlatform":"android","foreignManifestSHA256":selectedSHA,"rawHTMLSHA256":source.rawHTMLSHA256,"sourceManifestSHA256":source.descriptor.source.manifestSHA256]
-        try immutable(JSONSerialization.data(withJSONObject:provenance,options:[.sortedKeys,.withoutEscapingSlashes]),to:child(["aggregate-resource-imports-macos-v1",native.manifestSHA256,selectedSHA+".json"]))
+        let provenance=try ClientProtocols.record("published-aggregate-resource-import",fields:["nativePlatform":"macos","nativeManifestSHA256":native.manifestSHA256,"foreignPlatform":"android","foreignManifestSHA256":selectedSHA,"rawHTMLSHA256":source.rawHTMLSHA256,"sourceManifestSHA256":source.descriptor.source.manifestSHA256])
+        try immutable(JSONSerialization.data(withJSONObject:provenance,options:[.sortedKeys,.withoutEscapingSlashes]),to:child([AggregateResources.importDirectory,native.manifestSHA256,selectedSHA+".json"]))
         return native
     }
 }

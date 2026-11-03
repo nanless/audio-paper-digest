@@ -1,0 +1,53 @@
+{
+  "catalog": {
+    "protocols": [
+      {
+        "name": "client-protocol-test",
+        "currentVariant": "source-bound-payload",
+        "currentSchema": {
+          "fields": [
+            "payload",
+            "sourceSha256"
+          ],
+          "algorithm": "source-bound-bytes"
+        },
+        "historical": [
+          {
+            "tag": "client-protocol-test",
+            "variant": "original-payload",
+            "header": {
+              "contract": "client-protocol-test",
+              "schemaFingerprint": "860919109f335e040b44d1e9415d4fc9b4b4de64bde7620a014f185599dc0a8a"
+            },
+            "schema": {
+              "fields": [
+                "payload"
+              ],
+              "algorithm": "original-bytes"
+            }
+          },
+          {
+            "tag": 1,
+            "variant": "integer-header",
+            "header": {
+              "version": 1
+            }
+          },
+          {
+            "tag": "client-protocol-test-kind",
+            "variant": "legacy-kind-header",
+            "header": {
+              "contract": "client-protocol-test-kind",
+              "kind": "original-mode"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "name": "client-protocol-test",
+    "currentFingerprint": "3083da9659b35b3209dedc2eef68d9f9697a89afd0a7d03d1b09bc8edf51a1f4",
+    "historicalFingerprint": "860919109f335e040b44d1e9415d4fc9b4b4de64bde7620a014f185599dc0a8a"
+  }
+}

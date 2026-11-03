@@ -6,9 +6,9 @@ const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
 const { loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
-    IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
+    IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hasImplementationAllowanceLineage,
     hasUnusedImplementationAllowance, TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError,
-    REPAIR_VERSION, validateImplementationAllowance, TABLE_BINDING_ORDER_ISSUE_CODE, readTableBindingOrderIssue, readTableCountIssue } = require('./reader-repair.js');
+    isCandidateEnvelope, validateImplementationAllowance, TABLE_BINDING_ORDER_ISSUE_CODE, readTableBindingOrderIssue, readTableCountIssue } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
@@ -27,7 +27,7 @@ function readFullResolvedReader(directory, filename, expectedSha) {
     const envelope = checked.envelope;
     assertSafeResolvedJson(envelope);
     if (!envelope.identity || typeof envelope.identity !== 'object' || Array.isArray(envelope.identity)
-        || envelope.version !== REPAIR_VERSION
+        || !isCandidateEnvelope(envelope)
         || envelope.payloadSha256 !== hashDraft(envelope.payload)
         || envelope.payload?.status !== 'failed'
         || !Number.isInteger(envelope.payload.attempts) || envelope.payload.attempts < 0
@@ -43,8 +43,7 @@ function readFullResolvedReader(directory, filename, expectedSha) {
                 || envelope.payload.validationFailureStreak < 0))
         || Object.prototype.hasOwnProperty.call(envelope.payload, 'implementationRepairAllowance')
         || (envelope.payload.implementationRepairAllowanceLineage !== undefined
-            && envelope.payload.implementationRepairAllowanceLineage
-                !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT)
+            && !hasImplementationAllowanceLineage(envelope.payload.implementationRepairAllowanceLineage))
         || (envelope.payload.consumedImplementationAllowanceSha256 !== undefined
             && (!Array.isArray(envelope.payload.consumedImplementationAllowanceSha256)
                 || envelope.payload.consumedImplementationAllowanceSha256.some(value => !/^[a-f0-9]{64}$/.test(value))
@@ -63,15 +62,16 @@ function readFullResolvedReader(directory, filename, expectedSha) {
     return { ...checked, envelopeSha256:expectedSha };
 }
 
-const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
+const CONTRACT = 'reader-recovery-diagnostics-revision';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
-    'resourceLocalRevisionContract', 'readerFactLocalRevisionContract', 'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256']);
+    'resourceLocalRevisionContract', 'readerFactLocalRevisionContract', 'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256',
+    ...require('./reader-candidate-format').identityFormatFields]);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256')
     && !['repairPromptSha256', 'promptSha256'].includes(field));
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
+const withoutRevisionFields = identity => Object.fromEntries(Object.entries(require('./reader-candidate-format').semanticIdentity(identity))
     .filter(([key]) => !ALLOWED_FIELDS.includes(key)));
 const getConferenceAnalysisContext = () => require('./conference-analysis-context.js').getConferenceAnalysisContext();
 
@@ -113,7 +113,7 @@ function finishRevisionArchives(directory, identity, payload) {
         const auditScopeValid = identity.freshAnalysis?.runId
             ? audit.runId === identity.freshAnalysis.runId
             : conference?.executionId ? conferenceScopeValid : directScopeValid;
-        if (audit.contract !== CONTRACT || expectedRunId && audit.runId !== expectedRunId
+        if (!require('./protocol-codec').hasValidHeader(audit, CONTRACT) || expectedRunId && audit.runId !== expectedRunId
             || !auditScopeValid
             || audit.fromIdentitySha256 === hashDraft(identity)
             || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
@@ -193,13 +193,13 @@ function restoreUnfundedDiagnosticFailureState(directory, identity, payload) {
         const old = envelope.payload, oldIdentity = envelope.identity;
         const changed = [...new Set([...Object.keys(oldIdentity || {}), ...Object.keys(nodeIdentity)])]
             .filter(key => !isDeepStrictEqual(oldIdentity?.[key], nodeIdentity[key])).sort();
-        if (checked.envelopeSha256 !== audit.oldEnvelopeSha256 || envelope.version !== REPAIR_VERSION
+        if (checked.envelopeSha256 !== audit.oldEnvelopeSha256 || !isCandidateEnvelope(envelope)
             || envelope.payloadSha256 !== hashDraft(old) || old?.status !== 'failed' || !parseRecoveryDraft(old?.draft)
             || hashDraft(oldIdentity) !== audit.fromIdentitySha256 || hashDraft(old) !== audit.oldPayloadSha256
             || !same.sameInput(oldIdentity, nodeIdentity) || !isDeepStrictEqual([...audit.changedFields].sort(), changed)
             || changed.some(key => !implementationFields.includes(key) || key === 'readerRecoveryEpochSha256')
-            || old.implementationRepairAllowanceProof || old.implementationRepairAllowanceLineage !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT
-            || node.implementationRepairAllowanceLineage !== old.implementationRepairAllowanceLineage
+            || old.implementationRepairAllowanceProof || !hasImplementationAllowanceLineage(old.implementationRepairAllowanceLineage)
+            || !isDeepStrictEqual(node.implementationRepairAllowanceLineage, old.implementationRepairAllowanceLineage)
             || ['attempts','fullAttempts','transportFailures'].some(key => (node[key] || 0) !== (old[key] || 0) || audit[key] !== (old[key] || 0))
             || audit.oldNoProgress !== old.noProgress || audit.oldFailureSignature !== old.failureSignature
             || audit.inputDraftSha256 !== hashDraft(old.draft) || audit.outputDraftSha256 !== hashDraft(node.draft)
@@ -284,11 +284,13 @@ function assertNoPromptOnlyAttemptReset(directory, identity, selectedIdentitySha
         // Only the original selector in this module can nominate a candidate;
         // no caller option grants a new Prompt migration or content allowance.
         if (hashDraft(old.identity) === selectedIdentitySha256) continue;
+        const formatChanged = require('./reader-candidate-format').identityFormatFields.some(key =>
+            !isDeepStrictEqual(old.identity[key], identity[key]));
         if ((old.payload.attempts > 0 || old.payload.fullAttempts > 0 || old.payload.transportFailures > 0)
             && (old.identity.promptSha256 !== identity.promptSha256
-                || old.identity.repairPromptSha256 !== identity.repairPromptSha256)
+                || old.identity.repairPromptSha256 !== identity.repairPromptSha256 || formatChanged)
             && sameInput(withoutPrompts(old.identity), withoutPrompts(identity))) {
-            throw Object.assign(new Error('同篇同输入已有请求历史；提示词版本变化不能重置原Reader次数，须受控恢复原候选。'), {
+            throw Object.assign(new Error('同篇同输入已有请求历史；提示词或格式声明变化不能重置原Reader次数，须受控恢复原候选。'), {
                 code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY', retryable: false, scope: 'paper',
                 candidateIdentitySha256: hashDraft(old.identity), candidateEnvelopeSha256: checked.envelopeSha256
             });
@@ -303,12 +305,12 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
     }
     if (identity?.resourceLocalRevisionContract !== undefined
         && (identity.resourceLocalRevisionContract !== 'signed-reader-resource-local-repair-v1'
-            || identity.contentMode !== 'reader-source-signed-revision-v1')) {
+            || !require('./reader-content-mode').is(identity, 'signed-revision'))) {
         throw new Error('资源局部修订的恢复模式记录无效');
     }
     if (identity?.readerFactLocalRevisionContract !== undefined
         && (identity.readerFactLocalRevisionContract !== 'signed-reader-fact-local-repair-v1'
-            || identity.contentMode !== 'reader-source-signed-revision-v1'
+            || !require('./reader-content-mode').is(identity, 'signed-revision')
             || identity.resourceLocalRevisionContract !== undefined)) {
         throw new Error('事实局部修订的恢复模式记录无效');
     }
@@ -351,7 +353,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         const changedFields = ALLOWED_FIELDS.filter(field =>
             !isDeepStrictEqual(old.envelope.identity[field], identity[field]));
         const audit = {
-            contract: CONTRACT, runId: identity.freshAnalysis.runId,
+            ...require('./protocol-codec').recordHeader(CONTRACT, CONTRACT), runId: identity.freshAnalysis.runId,
             scope: 'daily-fresh-source', paperId: identity.paperId,
             fromIdentitySha256: hashDraft(old.envelope.identity), toIdentitySha256: hashDraft(identity),
             oldPayloadSha256: old.envelope.payloadSha256, oldEnvelopeSha256: old.envelopeSha256,
@@ -406,7 +408,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         if (!canonicalMatch) throw new Error('长文恢复的 arXiv 身份格式无效');
         const canonicalPaperId = canonicalMatch[1];
         const expectation = context.sourceExpectations[canonicalPaperId];
-        const sealedIdentity = expectation?.sourceMode === 'sealed-arxiv-bundle-v1'
+        const sealedIdentity = require('./daily-source-format').isBundleExpectation(expectation)
             ? require('./fresh-analysis-context.js').freshAnalysisIdentity(canonicalPaperId) : null;
         const sourceMatches = sealedIdentity
             ? isDeepStrictEqual(identity.freshAnalysis, sealedIdentity)
@@ -484,7 +486,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         }
         verifyPixels(old.payload);
         const updated = structuredClone(old.payload);
-        const audit = { contract:CONTRACT,runId:revisionRunId,scope:revisionScope,paperId:identity.paperId,
+        const audit = { ...require('./protocol-codec').recordHeader(CONTRACT, CONTRACT),runId:revisionRunId,scope:revisionScope,paperId:identity.paperId,
             fromIdentitySha256:hashDraft(old.identity),toIdentitySha256:hashDraft(identity),
             oldPayloadSha256:old.payloadSha256,oldEnvelopeSha256:request.envelopeSha256,
             resolvedSourceName:request.basename,changedFields,clearedNoProgress:false,
@@ -675,7 +677,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         && Boolean(previousActiveAllowance);
     const clearDiagnosticState = false;
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
-    const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
+    const audit = { ...require('./protocol-codec').recordHeader(CONTRACT, CONTRACT), revisedAt: new Date().toISOString(), scope: revisionScope,
         runId: revisionRunId, paperId: identity.paperId,
         fromIdentitySha256: hashDraft(old.identity), toIdentitySha256: hashDraft(identity),
         changedFields: old.changedFields, archivedName,
@@ -691,11 +693,15 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
     updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
     delete updated.implementationRepairAllowance;
     if (grantOrTransferAllowance) {
-        updated.implementationRepairAllowanceLineage = IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
+        updated.implementationRepairAllowanceLineage ||= IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     }
+    const formatOnlyChange = old.changedFields.length > 0
+        && old.changedFields.every(field => require('./reader-candidate-format').identityFormatFields.includes(field))
+        && isDeepStrictEqual(require('./reader-candidate-format').semanticIdentity(old.identity),
+            require('./reader-candidate-format').semanticIdentity(identity));
     const transferUnusedAllowance = !updated.explicitReaderRetryRound && old.changedFields.length > 0
         && (old.plainChinesePromptUpgrade
-            || old.changedFields.every(field => ['repairPromptSha256', 'promptSha256'].includes(field)))
+            || old.changedFields.every(field => ['repairPromptSha256', 'promptSha256'].includes(field)) || formatOnlyChange)
         && Boolean(previousActiveAllowance);
     if (previousActiveAllowance && !transferUnusedAllowance) {
         updated.consumedImplementationAllowanceSha256 = [...new Set([
@@ -704,7 +710,9 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         ])].sort();
     }
     if (transferUnusedAllowance) {
-        const body = { contract: 'reader-repair-prompt-unused-allowance-transfer-v1',
+        const body = { ...(formatOnlyChange ? require('./protocol-codec').recordHeader(
+            'reader-unused-allowance-transfer', 'reader-unused-allowance-transfer')
+            : require('./protocol-codec').historicalHeader('reader-unused-allowance-transfer', 'exact-prompt-pair')),
             fromIdentitySha256: audit.fromIdentitySha256, toIdentitySha256: hashDraft(identity),
             oldPayloadSha256: audit.oldPayloadSha256, revisionAuditSha256: hashDraft(audit),
             originalAllowanceSha256: previousActiveAllowance.allowanceSha256 };
@@ -730,10 +738,10 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
     return loadFailedCandidate(directory, identity);
 }
 
-module.exports = { CONTRACT, ALLOWED_FIELDS, loadReaderRecoveryRevision,
+module.exports = { CONTRACT, ALLOWED_FIELDS, loadReaderRecoveryRevision, assertNoPromptOnlyAttemptReset,
     readFullResolvedReaderForReadOnlyInspection: readFullResolvedReader };
 function implementationAllowanceProof(identity, audit) {
-    const body = { contract: IMPLEMENTATION_ALLOWANCE_CONTRACT,
+    const body = { ...require('./protocol-codec').recordHeader(IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_CONTRACT),
         fromIdentitySha256: audit.fromIdentitySha256, toIdentitySha256: hashDraft(identity),
         oldPayloadSha256: audit.oldPayloadSha256, revisionAuditSha256: hashDraft(audit),
         changedFields: audit.changedFields.filter(field => implementationFields.includes(field)).sort() };

@@ -1,6 +1,6 @@
 {
-  "contract": "git-prompt-evidence-v1",
-  "version": 1,
+  "contract": "git-prompt-evidence",
+  "schemaFingerprint": "ea28d21561ca3b135866589256280a3508aee550dc12be636560dda6208c5cdd",
   "provenanceCommit": "6753f5c098a3804af72e702eb93124ce91d86d3b",
   "retiredPaths": {
     "prompts/api-reader-article-v8.md": "755a393402a7f819a99e8c08073ea48efa6ad6d10ff945c7f195dbcf6177de15",
@@ -117,7 +117,27 @@
     "prompts/deep-analysis-v7.md": "b8856b5e510d17f610f98b2292329553f8f8df361be23db66d5140df45639b22",
     "prompts/api-reader-article-v10.md": "676bd4cd5cfd6486a9ae1c8737e02cbc2db0695880985dd3119d3869d1811026",
     "prompts/gap-fill-v4.md": "b1b3619eeb05e568253c30b67f34fb692aeb6dcace9abc875c9e26276427cc84",
-    "prompts/structure-repair-v3.md": "fcb0890e1176bc9dc10a7600b5c553ba901fbaafc18bf97f5cb7f2fd754bbb88"
+    "prompts/structure-repair-v3.md": "fcb0890e1176bc9dc10a7600b5c553ba901fbaafc18bf97f5cb7f2fd754bbb88",
+    "prompts/api-reader-article-v11.md": "7923eedaa2b9239274af49d943e9f290f3df563b7c02b4e81a4f2fa7897b108e",
+    "prompts/api-reader-concept-terms-v1.md": "563c7cc7e2a4b335294f259307844ed137574bf194cac171dc3d1563d41be8a8",
+    "prompts/api-reader-fact-local-v3.md": "be06bf409adc3dc82904045cae2ac421c508aa038bab25e298b2458d632fb3f2",
+    "prompts/api-reader-repair-v13.md": "e8bfdff8a12a27d3960cfe11187d87c4e3a4df2f3518bcb8bbd93c0cd86a6ab4",
+    "prompts/core-summary-repair-v7.md": "6ec38784347a06787fca41a2021ed5608c015de984ceb9b887fb62c42b1d0f8c",
+    "prompts/deep-analysis-v8.md": "a70364ee076a65196be12a118731f2fa20d3226a311a6aab695d78755c9388c4",
+    "prompts/digest-cover-v2.md": "3b87054bbfa630b6a5faeb79092b9f677d18bae1d533ef6538e35a34ef775f77",
+    "prompts/filter-v5.md": "5ad686d96ed9739c6593179d439f31c57540fe4a6e20c6e4e17f81a05d1261f5",
+    "prompts/gap-fill-v5.md": "3439f554c287acf94c67e25a38ddd48ae5ce1045ed7d7726b22ce53e72d61361",
+    "prompts/image-supplement-v3.md": "21cb9b4eb130505849d30232cfe408f1b02e1a03cc62e222c46d77d57af62e62",
+    "prompts/method-fill-v3.md": "1fb72028192964aa827face9971bb2a5b42ea6d68b8c976b2721fc62faeae70f",
+    "prompts/opensource-scan-v3.md": "40ad0fbef90bc865e6833d3859542b794b97be7bd076ae83eecbd8c666bdc64c",
+    "prompts/primary-fact-local-repair-v1.md": "98eedc0d445dd28c0c10de8e1cc34c96bc949e93b28ef72c94758f668f780c07",
+    "prompts/scoring-audit-v5.md": "06b1fbcd27fad5dee517560a6016809e68b6efe9ccae5b182537633a1ec2a553",
+    "prompts/structure-repair-v4.md": "dfd23d8a35b0dbea6415cb5d3fe02423e1e5ded2e485a93f2711044c880d0c23",
+    "prompts/table-fill-v2.md": "488423da892383c36fe8aae341209fcfb73b8db4c9f86a0e0eda8990ab6542c0",
+    "prompts/tag-repair-v3.md": "6edc21d29a772efb33dbe078416bdf1d7ad7e5f7b59f3f97cf99aeacbd56c462",
+    "prompts/visual-summary-v2.md": "24c9a261b52d6fe198faed1c5da0a118687b3a801396d5de88970cd87946d51d",
+    "prompts/current/visual-summary.md": "24c9a261b52d6fe198faed1c5da0a118687b3a801396d5de88970cd87946d51d",
+    "prompts/current/digest-cover.md": "3b87054bbfa630b6a5faeb79092b9f677d18bae1d533ef6538e35a34ef775f77"
   },
   "blobs": {
     "9c2793d7a4b3139b1ccdba327eb3624bac0ae593ccc2abcc2164a7d79052ab94": {
@@ -189,6 +209,7 @@
     "06b1fbcd27fad5dee517560a6016809e68b6efe9ccae5b182537633a1ec2a553": {
       "blobOid": "cf39dafa588528752c12fc4d039fdca566563f27",
       "paths": [
+        "prompts/current/scoring-audit.md",
         "prompts/scoring-audit-v5.md"
       ]
     },
@@ -333,6 +354,7 @@
     "1fb72028192964aa827face9971bb2a5b42ea6d68b8c976b2721fc62faeae70f": {
       "blobOid": "3eac82836a6292d161f6b5a3d099ec778604856f",
       "paths": [
+        "prompts/current/method-fill.md",
         "prompts/method-fill-v3.md"
       ]
     },
@@ -351,6 +373,7 @@
     "21cb9b4eb130505849d30232cfe408f1b02e1a03cc62e222c46d77d57af62e62": {
       "blobOid": "c0893b12d0f50de293f628be33837b1f076f7fe4",
       "paths": [
+        "prompts/current/image-supplement.md",
         "prompts/image-supplement-v3.md"
       ]
     },
@@ -369,6 +392,7 @@
     "24c9a261b52d6fe198faed1c5da0a118687b3a801396d5de88970cd87946d51d": {
       "blobOid": "bc6255f0e156d626950ff453a535eab9e82e6812",
       "paths": [
+        "prompts/current/visual-summary.md",
         "prompts/visual-summary-v2.md"
       ]
     },
@@ -495,6 +519,7 @@
     "3b87054bbfa630b6a5faeb79092b9f677d18bae1d533ef6538e35a34ef775f77": {
       "blobOid": "d5a50c81017c9633b089c8bbf443122d0eba6003",
       "paths": [
+        "prompts/current/digest-cover.md",
         "prompts/digest-cover-v2.md"
       ]
     },
@@ -555,6 +580,7 @@
     "40ad0fbef90bc865e6833d3859542b794b97be7bd076ae83eecbd8c666bdc64c": {
       "blobOid": "5b9f78a99ea2d109e11022a2705e745607757841",
       "paths": [
+        "prompts/current/opensource-scan.md",
         "prompts/opensource-scan-v3.md"
       ]
     },
@@ -597,6 +623,7 @@
     "488423da892383c36fe8aae341209fcfb73b8db4c9f86a0e0eda8990ab6542c0": {
       "blobOid": "b3998e30242ae855ccf556164523b6a1eae126a2",
       "paths": [
+        "prompts/current/table-fill.md",
         "prompts/table-fill-v2.md"
       ]
     },
@@ -753,7 +780,8 @@
     "563c7cc7e2a4b335294f259307844ed137574bf194cac171dc3d1563d41be8a8": {
       "blobOid": "26c7c303d2ea73d75c25210b92f9efffa559c860",
       "paths": [
-        "prompts/api-reader-concept-terms-v1.md"
+        "prompts/api-reader-concept-terms-v1.md",
+        "prompts/current/api-reader-concept-terms.md"
       ]
     },
     "578740d31ab4989ef2a37827bea500f3237db50fd4881c2d2c4e61afa9fea584": {
@@ -777,6 +805,7 @@
     "5ad686d96ed9739c6593179d439f31c57540fe4a6e20c6e4e17f81a05d1261f5": {
       "blobOid": "2589d657f739d25889e5037aacc21c19d4fc0e30",
       "paths": [
+        "prompts/current/filter.md",
         "prompts/filter-v5.md"
       ]
     },
@@ -1203,6 +1232,7 @@
     "98eedc0d445dd28c0c10de8e1cc34c96bc949e93b28ef72c94758f668f780c07": {
       "blobOid": "42c8bb4be9e65c677d9d0cb788d87794ba2517b0",
       "paths": [
+        "prompts/current/primary-fact-local-repair.md",
         "prompts/primary-fact-local-repair-v1.md"
       ]
     },
@@ -1473,7 +1503,8 @@
     "be06bf409adc3dc82904045cae2ac421c508aa038bab25e298b2458d632fb3f2": {
       "blobOid": "604b91e3dcfee8c2d6b0aaa99869f91ba392adeb",
       "paths": [
-        "prompts/api-reader-fact-local-v3.md"
+        "prompts/api-reader-fact-local-v3.md",
+        "prompts/current/api-reader-fact-local.md"
       ]
     },
     "bebc545e8bb91017b99b6bce2e104cf12f063990a4b0eeaa98f2448a9959a119": {
@@ -1906,6 +1937,55 @@
       "blobOid": "80a84a687db3834962d801672bbf340599e8e3be",
       "paths": [
         "prompts/api-reader-article-v10.md"
+      ]
+    },
+    "7923eedaa2b9239274af49d943e9f290f3df563b7c02b4e81a4f2fa7897b108e": {
+      "blobOid": "47cc5b79706bbc45e61bd11191f180e3375dba94",
+      "paths": [
+        "prompts/api-reader-article-v11.md",
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "e8bfdff8a12a27d3960cfe11187d87c4e3a4df2f3518bcb8bbd93c0cd86a6ab4": {
+      "blobOid": "1e81231bf1fb053d4b4953c966156ccd7efbb694",
+      "paths": [
+        "prompts/api-reader-repair-v13.md",
+        "prompts/current/api-reader-repair.md"
+      ]
+    },
+    "6ec38784347a06787fca41a2021ed5608c015de984ceb9b887fb62c42b1d0f8c": {
+      "blobOid": "98a5534212c40c9107a76feeb0332c7160de28ef",
+      "paths": [
+        "prompts/core-summary-repair-v7.md",
+        "prompts/current/core-summary-repair.md"
+      ]
+    },
+    "a70364ee076a65196be12a118731f2fa20d3226a311a6aab695d78755c9388c4": {
+      "blobOid": "1773f61bdfd791aa38e5fe4cf0471c437f63862a",
+      "paths": [
+        "prompts/current/deep-analysis.md",
+        "prompts/deep-analysis-v8.md"
+      ]
+    },
+    "3439f554c287acf94c67e25a38ddd48ae5ce1045ed7d7726b22ce53e72d61361": {
+      "blobOid": "a5191ac3858ed5e5c99ca7aa113e91b4156f2a79",
+      "paths": [
+        "prompts/current/gap-fill.md",
+        "prompts/gap-fill-v5.md"
+      ]
+    },
+    "dfd23d8a35b0dbea6415cb5d3fe02423e1e5ded2e485a93f2711044c880d0c23": {
+      "blobOid": "95df0c3b6d6e5954b7b136e9b7cee1e0d760b782",
+      "paths": [
+        "prompts/current/structure-repair.md",
+        "prompts/structure-repair-v4.md"
+      ]
+    },
+    "6edc21d29a772efb33dbe078416bdf1d7ad7e5f7b59f3f97cf99aeacbd56c462": {
+      "blobOid": "35fb7f276c817d037abd60895801c5db0bfa0164",
+      "paths": [
+        "prompts/current/tag-repair.md",
+        "prompts/tag-repair-v3.md"
       ]
     }
   }

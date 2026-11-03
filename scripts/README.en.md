@@ -67,7 +67,7 @@ Saved-record replay reopens original sources, drafts, and receipts and repeats t
 
 After a rejected local patch, the next local request retains at most 3000 characters of rejection diagnostics. Normalization rebuilds current issues/targets. `patchRejectionFeedback` preserves diagnostics across transport failure and clears them after successful patch application. The old diagnostic grants no target or SHA; current target lists govern. Counts, no-progress decisions, and `lastContentError` budget rules stay unchanged.
 
-All workflows depend on controlled environment/paths, model/proxy/account routing, catalogs, locks, usage, immutable sources, temporary original-paper figures, table/formula/author source checks, and visual planning/registration/waiver support. Images are generated with the built-in tool only when separately requested by the user. This project has no image-generation API; daily digests retain the no-generated-images setting.
+All workflows depend on controlled environment/paths, model/proxy/account routing, catalogs, locks, usage, immutable sources, temporary original-paper figures, table/formula/author source checks, and publication completion checks. Daily digests directly register the standing no-generated-images instruction after publication. Retired generated images have read-only checks; original paper figures remain part of normal article review.
 
 `manual/scripts` retains only old source/signature/article/prompt-contract verification and independent single-page review. Bulk author/task/spec production, social publishing, backfill, experiments, and visual debugging entries are retired. New independent reviews actually use `gpt-6.1-sol/high` and real v4 identity under `manual_agent_policy.py`; old model declarations cannot sign new reviews.
 
@@ -102,7 +102,7 @@ Use a workflow entry first, then locate its libraries here. “Internal library�
 | `batch-analyze.js` | Resumes sealed daily sources under per-paper locks. Full conditions follow this table under the same filename. |
 | `lib/daily-arxiv-oai-source.js`, `lib/daily-arxiv-announcement-source.js` | Implements explicit `--official-oai-recovery` only after both date and category Atom queries actually return HTTP 429 for the same category and fixed window. Full conditions follow this table under the same filename. |
 | `deep-analysis-only.js` | Continues selected but unfinished daily papers using the current `dailyFreshSourceRun` PDF/TXT. Missing or mismatched sources stop processing; no refetch or old-cache fallback. |
-| `deep-analyzer.js` | Runs source-adapted full-paper analysis, score audits, Reader writing, and original-paper figure planning. Daily recovery reads this batch's sealed sources. After structural repair, verifies `core-summary-detailed-v3` solely against the original paper. Stage dependencies, SHAs, and checkpoints determine the necessary recovery work. |
+| `deep-analyzer.js` | Runs source-adapted full-paper analysis, score audits, Reader writing, and original-paper figure planning. Daily recovery reads this batch's sealed sources. After structural repair, verifies the detailed core summary solely against the original paper. Stage dependencies, SHAs, and checkpoints determine the necessary recovery work. |
 | `lib/analysis-section-titles.js` | Recognizes analysis headings and code fences, extracts the unique assessment section, and supports old headings without rewriting text. |
 | `lib/analysis-stop-control.js` | Handles graceful stops during batch analysis and Reader refresh: stops new papers and model requests while preserving returned content and original costs. Nested calls share stop state; parallel calls keep separate state; listeners are removed on exit. See [stopping analysis](../docs/analysis-stop.md). |
 | `lib/analysis-terminal-summary.js` | Provides Chinese display labels for final analysis status, text-source types, and counts; unknown values retain their original spelling. |
@@ -135,12 +135,12 @@ Use a workflow entry first, then locate its libraries here. “Internal library�
 | `lib/daily-scoring-refresh-checkpoint-cli.js` | Private file-descriptor entry used by Python daily publication when a private saved result belongs to the same source run. Calls the same recovery verifier only to identify pending work, with networking forbidden; does not adopt scores or grant models. |
 | `lib/selected-full-stage-reanalysis.js` | Fully regenerates explicitly selected papers from current sealed text, archiving old stages, costs, and feedback under the lock. Same-round recovery retains new costs; ordinary recovery does not enable this mode. |
 | `reanalyze-selected.js` | Reanalyzes only specified arXiv IDs and synchronizes recovery statistics. |
-| `prepare-reader-revision.js` | Prepares a per-paper Reader revision by saving `readerRevisionHistory`, retiring old failed candidates, and clearing the Reader stage, without changing sources or costs. Skips both pending fact feedback (`pending fact feedback`) and completed obligations whose proof would be lost (`fact feedback proof would be lost`). |
-| `reconfirm-analysis-success.js` | Clears a stale failure marker only when both actual analysis text and Reader records pass current validation; otherwise rejects. |
 | `reanalyze.js` | Archives and disables all old failed Reader candidates, clears Reader and supplementary-image state, and forces full reanalysis. Reads only the daily PDF/TXT precisely bound to formal analysis; does not restore old text or caches. |
 | `refresh-api-reader.js` | Refreshes Reader, scoring, authors, and image stages for IDs or a dated batch. Full conditions follow this table under the same filename. |
 | `waive-analysis-failures.js` | Records an explicit user waiver for current daily analysis failures against existing files; does not overwrite failed attempts. |
 
+
+When primary analysis is complete and only the explanatory article needs updating, use `npm run api:reader:refresh -- ID`. To resume existing failures in their original batch, use `npm run batch`. Both verify the sealed sources bound to current formal results, reread the parent under the paper lock, and merge saved changes against its current identity. Fact corrections still require the corresponding explicit feedback entry. Do not recover by manually deleting failure markers, completion proofs, or candidates. The program clears resolved failures only after normal whole-paper qualification and successful saving; original drafts, historical counts, and costs remain preserved.
 
 **`batch-analyze.js` — full operating conditions**
 
@@ -349,17 +349,17 @@ Review uses text/multimodal/Markdown/Hugo, summaries first, default concurrency 
 | `historical-source-identity-supplement.js` | Verifies all sealed sources and old pages without formal tags, producing an independent immutable identity supplement. Keeps conference identity/version disclosure; no models. Parameters are in the historical maintenance guide. |
 | `historical-source-tag-assignment.js` | Classifies from original sources with per-request selection/review/decision checkpoints. The same UUID resumes only after input verification. Exhausted accounts produce a numbered partial record, without occupying the final result path. Parameters are in the historical maintenance guide. |
 | `historical-tag-checkpoint-export.js` | Exports page tags and reports from verified classification checkpoints or partial runs, preserving original caches and requesting no model. Recovery/exclusion/new-run parameters are documented in the historical maintenance guide. |
-| `historical_page_scan.py` | Scans with `historical-page-ledger-v1`, excluding old full text. Records stable pageId/cohort, each link target, unverified tags, Git tree, and remote main; checks CAS before/after scanning and before exclusive `O_EXCL` save. |
+| `historical_page_scan.py` | Scans historical pages without retaining their article text. New inventories record page identity, cohort date, each link target, unverified tags, the Git content tree, and remote main. Saved inventories are checked under their original rules. Checks the Git snapshot before and after scanning and before exclusive save. |
 | `history-conflict-identity.js` | In one process, verifies official arXiv sources, records an explicitly selected existing conflicting hint as a verified decision, and writes by CAS. Does not read old text or titles. |
 | `history-inventory.py` | Read-only inventories configured historical blog pages, URLs, and summary relationships. Dry-run writes nothing; apply creates immutable inventory/receipt pairs on clean main. |
 | `history-resume.js` | Unified entry for current-plan pause recovery and restricted resumption of existing legacy source tasks. |
 | `lib/arxiv-source-authority.js` | Fetches official arXiv text with the mandatory-proxy fetcher, separately saving request, source pairing, response record, full text, snapshot, receipt, and authority. Every save checks bytes and is immutable; resume verifies original requests/all source bytes and rejects old blog text. |
 | `lib/fresh-rewrite-publication.js` | Backs up formal analysis and the blog baseline before rewriting. Replaces formal results only when the new result is complete and source/baseline content still matches. |
 | `lib/fresh-rewrite-run.js` | Creates an independent rewrite run from allowlisted original metadata, prepares same-source files, restores only that run's analysis, and promotes formal data only after complete validation. |
-| `lib/historical-archive-crawl-authority.js` | Uses stable arXiv IDs/input SHAs from archived fetch records as identity evidence only, never as article text, figures, or old analysis. |
+| `lib/historical-archive-crawl-authority.js` | Rechecks saved archive identity records against their original arXiv IDs and input hashes. It does not issue new records or provide article text, figures, or analysis. |
 | `lib/historical-arxiv-batch.js` | Fallback reads only named immutable handoffs from a new arXiv fetch failure. Verifies inventory/page SHA/non-title links, then records decisions only for listed pages while the original decision state still matches. Does not scan pending hints. |
 | `lib/historical-arxiv-publication-metadata.js` | Seals publication-only Atom attachments per historical arXiv paper. On read, checks raw Atom, metadata/abstract SHA, exact `vN` query or unversioned observation window, original acquisition generation/manifest/snapshot. Does not modify the four source files. |
-| `lib/historical-conference-crawl-authority.js` | Uses stable conference IDs from existing metadata/PDFs as identity authority, including replayable local ICASSP/ICLR sources. |
+| `lib/historical-conference-crawl-authority.js` | Rechecks saved conference identity records against their original IDs, metadata, and PDFs, including local ICASSP and ICLR sources. It does not issue new records. |
 | `lib/historical-conference-local-sources.js` | Creates `historical-conference-local-sources-v2`, combining retained conference metadata/PDFs and authenticated ICML poster-to-forum mappings. Reads existing roots and new runtime files only. Each new PDF requires a unique OpenReview/alternative receipt; records metadata/paper/acquisition/source SHAs and marks missing PDFs unavailable. |
 | `lib/historical-conference-page-projections.js` | Checks frozen-page/metadata/PDF SHAs to map conference papers to historical pages. Page bytes are verified; old article text never becomes writing input. |
 | `lib/historical-daily-primary-arxiv-binding.js` | Checks frozen Daily-page SHA and accepts a primary canonical `[arxiv]` link only from a unique valid scoring row. Saves byte ranges/row hash; citations in article text are not primary identity. |
@@ -373,7 +373,7 @@ Review uses text/multimodal/Markdown/Hugo, summaries first, default concurrency 
 | `lib/historical-direct-tag-supplement.js` | Read-only checks completed direct sources/analysis/private pages and extracts concept IDs/primary roles under the original classification version. Supplements bind old page/full-body SHAs, preserve old text/tags, list failures, and do not certify unfinished analyses. |
 | `lib/historical-icml-alternate-pdf-source.js` | When OpenReview is blocked by a challenge page, permits only fixed allowlisted poster/forum/alternative URLs and checks title/ordered authors. `n1mAjfRDZ6` also permits SSRN browser import with title/authors/date/cross-page text and fixed DOI under a non-network receipt. Never claims OpenReview or camera-ready bytes. |
 | `lib/historical-icml-poster-authority.js` | Authenticates the original ICML 2026 poster-to-forum snapshot and Daily-entry/summary identities with forum-named local PDFs. Old text never enters writing. |
-| `lib/historical-local-crawl-authority.js` | Combines stable arXiv identity from archived/current local fetch records; no network or text reading. |
+| `lib/historical-local-crawl-authority.js` | Rechecks saved local crawl identity records and their original identity snapshots. It does not issue new records, use the network, or read article text. |
 | `lib/historical-openreview-pdf-source.js` | Fetches a missing PDF for an authenticated poster/forum through project CONNECT with bounded manual redirects/streaming. Saves immutable atomic `0600` forum-named PDF and self-verifiable receipt. Resume checks authority/bytes before removing only known same-host dead-writer temporary hardlinks. An orphan PDF still requires refetch and byte comparison; partial files and unknown links remain errors. |
 | `lib/historical-source-identity-supplement.js` | Checks sealed arXiv/conference identity and old page SHA. New outputs use v2/tagStatus; complete old outputs can be reused only after original digest/byte validation. Identity does not certify tags or article completion. |
 | `lib/historical-source-tag-assignment.js` | For historical pages lacking valid formal tags, selects tags from numbered source excerpts, inserts exact quotations by program, then independently reviews. Uses the shared model route; distinguishes missing catalog coverage, pending review, and papers not reached before account exhaustion. |
@@ -565,7 +565,7 @@ Normal parsing/engine save remain required. Preview registers no obligation; app
 | `lib/prompt-evidence.js` | Controlled reading of current prompts or indexed Git blobs, strictly verifying original path/OID/whole-file and optional declared SHA. Does not write old prompt text. |
 | `lib/git-prompt-evidence-index.json` | Read-only metadata containing original historical prompt paths, Git blob OIDs, and whole-file SHAs, not their text. |
 | `lib/prompt-rendering-contract.js` | Identifies inputs altered by old prompt substitutions and invalidates only affected stages. Normal inputs retain fingerprints/recovery records. |
-| `lib/prompt-text-versions.js` | Registers current text paths/version identities for each stage and exports the 18 current templates. Saved old declarations select their original paths through Git evidence; absent versions use v1 identity, unknown versions fail. |
+| `lib/prompt-contracts.js` | Registers current text paths/version identities for each stage and provides the current template paths. Saved old declarations select their original paths through Git evidence; absent versions use v1 identity, unknown versions fail. |
 | `prompt_evidence.py` | Python strictly reads original historical prompt objects from local Git; current templates must come from the working tree. |
 | `local_git_object.py` | Internal bounded fixed-Git reader for one local commit/tree/blob: checks type/size/raw bytes/OID, forbids lazy fetching and object replacement, and changes no objects/index/refs. Ordinary results do not prove complete trees/deletions/deltas/publication. |
 | `local_git_commit_delta.py` | Internal complete-directory/single-parent commit comparison against an explicit baseline, including required bytes/deletions/exact paths. Uses fixed offline reads within one call; unreviewed bodies/full object graph remain unchecked. Ordinary output grants no review/worktree/publication authority. |
@@ -610,15 +610,14 @@ Shared page templates/tag compatibility/Git transactions/batch receipts/publicat
 
 Independent manual v4 separates semantic articles from `machineAssets`, while the final receipt covers the complete manifest. Passed pages persist by path/content SHA and are not re-reviewed unchanged; rejected unchanged content is reconsidered only when both complete legal old/new review-protocol SHAs differ.
 
-### Visual planning and state
+### Publication completion and historical generated images
 
 | File | Role and limits |
 |---|---|
-| `digest-cover-state.js` | Plans/checks/records daily-summary-cover tasks, handles failures, and archives history. |
-| `plan-post-publish-visuals.py` | After verified remote blog publication, calls shared visual-task planning. |
-| `visual-summary-integration.js` | Coordinates paper long-image and summary-cover state under the same publication proof. |
-| `visual-summary-state.js` | Plans/checks/records/archives TOP 10 paper long-image tasks. Current v3 uses only verified Reader thesis/full sections; daily planning verifies official-figure identity then returns empty reference paths instead of old caches. QA binds section SHAs and never falls back to analysis summaries. |
-| `waive-post-publish-visuals.js` | Implements the user's standing no-generated-images setting for future daily digests, binding a waiver to the current publication and both task manifests. Original-paper figure review remains required. |
+| `lib/published-blog-receipt.js` | Checks formal snapshots, per-paper source/article bindings, saved review receipts, and recorded remote commits. Deployment and live pages require separate verification. |
+| `lib/post-publication-policy.js` | Shared no-generation record validation. New records bind the actual review file; historical records still bind their original task manifests. |
+| `lib/historical-visual-records.js`, `lib/historical-cover-records.js` | Read-only checks of retired generated images: original prompts, sources, task identities, actual PNG files, and hashes. Creates no tasks, fetches no figures, and writes no assets. |
+| `waive-post-publish-visuals.js` | Verifies formal publication evidence, then directly records that this daily batch generates no images. Original-paper figure review remains required. |
 
 ### Environment, files, logs, and validation
 
@@ -705,7 +704,7 @@ Retains pass caches/checkpoints/costs. Pending activation blocks ordinary genera
 
 `npm run verify:web -- --date DATE [--deploy OID]` checks batch summary/single-page HTTP 200, narrowly normalized final URLs, and limited title conditions; writes data/current/web-verification-<date>.json. Does not compare exact titles/H1/canonical/full text.
 
-`--deploy` checks Pages workflow, `--wait` polls, `--json` emits deployment snapshots/summary/final JSONL. Atomic output includes schemaVersion/createdAt/partial/deploy; see [completion checks](../docs/maintenance.md#发布后网页核验与收尾).
+`--deploy` checks Pages workflow, `--wait` polls, `--json` emits deployment snapshots/summary/final JSONL. Atomic output includes contract/schemaFingerprint/createdAt/partial/deploy; see [completion checks](../docs/maintenance.md#发布后网页核验与收尾).
 
 **`workspace-role.js` — full operating conditions**
 

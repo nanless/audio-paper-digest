@@ -402,11 +402,11 @@ function legacyConferenceResourceIdentity(paper) {
     const stage = paper?.analysisManifest?.stages?.apiReaderArticle;
     return paper?.source === 'conference' && paper.conferencePaperId === paper.id
         && /^conference:[a-z0-9-]+:\d{4}:[^\s]+$/u.test(String(paper.id || ''))
-        && contracts?.apiReaderResourceIdentity === 'api-reader-resource-identity-v1'
-        && paper?.apiReaderResources?.contract === 'api-reader-resource-identity-v1'
-        && stage?.resourceIdentityContractVersion === 'api-reader-resource-identity-v1'
+        && !Object.hasOwn(paper?.apiReaderResources || {}, 'schemaFingerprint')
+        && require('./reader-identity-format').payloadBinding(paper, 'resources')
         && contracts.readerResourceClaims === undefined
-        && stage?.readerResourceClaimsContractVersion === undefined;
+        && stage?.readerResourceClaimsContractVersion === undefined
+        && stage?.readerResourceClaimsProtocol === undefined;
 }
 
 module.exports = {

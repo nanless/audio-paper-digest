@@ -14,7 +14,7 @@ test(`评分维护按真实输入触发三次共识并保留来源反馈（缓�
         documentType: '方法研究',
         confidence: '高',
         evidenceProfile: {
-            version: 1,
+            ...require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader(),
             multiComponentClaimed: false,
             ablationStatus: 'not_applicable',
             targetEvaluation: 'public',
@@ -127,9 +127,9 @@ test(`评分维护按真实输入触发三次共识并保留来源反馈（缓�
         // 下游 Reader 复用仅在本控制中隔离：评分请求、来源和完整正文检查均使用真实实现。
         const engine = require('../scripts/analysis-engine');
         const author = require('../scripts/lib/reader-author-source');
-        const previousEngine = engine.hasValidApiReaderV3Records;
+        const previousEngine = engine.hasValidIntegratedApiReaderRecords;
         const previousAuthor = author.canReuseReaderAuthorInputs;
-        engine.hasValidApiReaderV3Records = () => true;
+        engine.hasValidIntegratedApiReaderRecords = () => true;
         author.canReuseReaderAuthorInputs = () => true;
         try {
             testData.paper.analysisManifest.stages.apiReaderArticle
@@ -149,9 +149,9 @@ test(`评分维护按真实输入触发三次共识并保留来源反馈（缓�
                     .withDailyFreshPaperSource(testData.plan, testData.paper,
                         source => deep.refreshApiScoringAndReaderFromSource(testData
                             .paper, source))));
-            assert.equal(result.analysisManifest.stages.scoringAudit.resourceNormalizationContract,
-                'scoring-source-release-declarations-v1');
-            assert.equal(result.analysisManifest.stages.scoringAudit.requestFormatContract, 'scoring-request-format-v1');
+            const scoringStage = result.analysisManifest.stages.scoringAudit;
+            const expectedFormats = require('../scripts/lib/scoring-record-format').currentStageFields();
+            for (const [key, value] of Object.entries(expectedFormats)) assert.equal(scoringStage[key], value);
             assert.deepEqual(result.analysisManifest.stages.scoringAudit.factReview,
                 validatedFeedback.proof);
             assert.deepEqual(result.analysisManifest.stages.primaryAnalysis.factReview,
@@ -168,7 +168,7 @@ test(`评分维护按真实输入触发三次共识并保留来源反馈（缓�
             assert.ok(Math.abs(result.analysisManifest.stages.scoringAudit.stabilityResolution.scoreDifference - 0.1) < 1e-9);
             console.log('REFRESH_SCORING_THIRD_PASS_SHARED');
         } finally {
-            engine.hasValidApiReaderV3Records = previousEngine;
+            engine.hasValidIntegratedApiReaderRecords = previousEngine;
             author.canReuseReaderAuthorInputs = previousAuthor;
         }
     } finally {

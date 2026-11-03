@@ -309,9 +309,9 @@ function historicalNormalAdmission(root, member, item, declaration, savedBefore 
         if (!pairs.some(name => {
             const response = read(path.join(folder, name)), request = read(path.join(folder, name.replace('.response.', '.request.')));
             const r = request.value, s = response.value;
-            return r.contract === 'reader-repair-request-diagnostics-v1' && s.contract === r.contract && r.id === s.id
+            return require('./reader-diagnostic-format').hasDiagnosticFormat(r) && require('./reader-diagnostic-format').sameDiagnosticFormat(r, s) && r.id === s.id
                 && r.identity?.paperId === item.paperId && r.identity.sourceSha256 === member.sourceSha256
-                && r.identity.contentMode === 'reader-source-only-v1' && r.identity.conferenceReaderRetryEpoch === 1
+                && require('./reader-content-mode').is(r.identity, 'source-only') && r.identity.conferenceReaderRetryEpoch === 1
                 && r.identity.conferenceReaderGrant === undefined && r.promptSha256 === sha(r.prompt)
                 && r.draftSha256 === hash(r.draft) && s.requestSha256 === request.sha256
                 && typeof s.rawResponse === 'string' && s.rawResponse.length > 0 && s.outputTextSha256 === sha(s.rawResponse);
@@ -498,7 +498,7 @@ function readBaseline(batch, row, loaded, planHandle, sourceRoot, { cold = false
     }
     const identity = candidate.identity;
     if (identity.paperId !== r.paperId || identity.sourceSha256 !== r.sourceSha256 || identity.freshAnalysis !== undefined
-        || identity.contentMode !== 'reader-source-only-v1' || identity.conferenceReaderRetryEpoch !== 1
+        || !require('./reader-content-mode').is(identity, 'source-only') || identity.conferenceReaderRetryEpoch !== 1
         || candidate.payload.attempts < 1 || (correctionMemberKind(r) !== PAID_RAW_JSON_SCHEMA
             && !repair.parseRecoveryDraft(candidate.payload.draft))) fail('原候选不是同源会议失败稿');
     const { draft, appendData, originalDraft } = originHandle
@@ -580,7 +580,7 @@ function projectReaderResourceScan(active, raw) {
         || sha(source.text) !== r.sourceSha256 || raw.sourceSha256 !== r.sourceSha256
         || raw.analysisManifest?.sourceAcquisition?.sourceSha256 !== r.sourceSha256
         || parent.analysis.status !== 'complete' || parent.run.status !== 'complete'
-        || scan?.status !== 'complete' || scan.resourceEvidenceContract !== 'api-reader-resource-identity-v1'
+        || scan?.status !== 'complete' || !require('./reader-identity-format').openSourceBinding(scan, raw.apiReaderResources)
         || !isDeepStrictEqual(scan, parent.analysis.papers[0].analysisManifest?.stages?.openSourceScan)) {
         fail('资源扫描绑定恢复缺少同源原父稿及固定Reader预检范围');
     }
@@ -706,7 +706,7 @@ function current(paper, identity) {
         || actual.executionDir !== active.loaded.directory || actual.readerPdfSourceHandle !== active.pdf
         || paper.id !== r.paperId || paper.arxivId || paper.paper_id || paper.sourceSha256 !== r.sourceSha256
         || identity.paperId !== r.paperId || identity.sourceSha256 !== r.sourceSha256
-        || identity.freshAnalysis !== undefined || identity.contentMode !== 'reader-source-only-v1') fail('人工修正离开真实会议身份/来源作用域');
+        || identity.freshAnalysis !== undefined || !require('./reader-content-mode').is(identity, 'source-only')) fail('人工修正离开真实会议身份/来源作用域');
     assertOriginals(active);
     assertCompatibleIdentity(active.candidate.identity, identity);
     const expectedGrant = require('./conference-reader-recovery-window').getCurrentReaderWindow(paper);
@@ -746,7 +746,8 @@ function assertMayAccessNetwork() { if (scope.getStore()) fail('人工修正禁�
 const implementationFields = require('./reader-recovery-revision').ALLOWED_FIELDS.filter(key =>
     key.endsWith('ImplementationSha256') || ['repairImplementationSha256','tableCompilerSha256','draftOrderContract','mechanicalContractSha256'].includes(key));
 function assertCompatibleIdentity(original, actual) {
-    const logical = value => Object.fromEntries(Object.entries(value).filter(([key]) => !implementationFields.includes(key)));
+    const logical = value => Object.fromEntries(Object.entries(require('./reader-candidate-format').semanticIdentity(value))
+        .filter(([key]) => !implementationFields.includes(key)));
     if (!isDeepStrictEqual(logical(original), logical(actual))) fail('人工重放改变了原Prompt、模型、来源、正文、资源或预算逻辑身份');
 }
 function originalPrompt(stage, expected) {
@@ -820,7 +821,7 @@ function finalizeReaderFailure(paper) {
     assertOutput(active, paper);
     assertCheckpointImageSupplement(active, paper, true);
     const engine = require('../analysis-engine');
-    if (!engine.hasValidApiReaderV3Records(paper)) fail('新Reader尚未通过完整记录校验，不能解除原失败');
+    if (!engine.hasValidIntegratedApiReaderRecords(paper)) fail('新Reader尚未通过完整记录校验，不能解除原失败');
     // Qualify a temporary view first. The actual object stays unchanged on any
     // source/upstream/Reader/pending-obligation failure; archives stay unchanged.
     const completed = clone(paper);

@@ -20,10 +20,10 @@ const { loadOriginalConferenceProcessApis } = require('./helpers/conference-proc
 
 const H = value => processApi.stableHash(value);
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-function executionIdentity({ env = {}, limits = {}, secondary = {} } = {}) {
-    const analysisConfig = Object.fromEntries(processApi.DEEP_EXECUTION_LIMIT_FIELDS
+function executionIdentity({ env = {}, limits = {}, secondary = {} } = {}, api = processApi) {
+    const analysisConfig = Object.fromEntries(api.DEEP_EXECUTION_LIMIT_FIELDS
         .map(field => [field, /Temperature$/.test(field) ? 0.1 : 1000]));
-    return processApi.deepExecutionConfigIdentity({
+    return api.deepExecutionConfigIdentity({
         env: {
             PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
             PAPER_ANALYZER_ENDPOINT: 'https://opencode.ai/zen/go/v1',
@@ -44,7 +44,7 @@ function fixture(t, count = 1, original = null) {
         sourceIdentity: `conference-paper-id:paper.${index + 1}`
     }));
     const runtimeAuthority = { implementationSha256: original ? original.implementationSha256 : H('implementation'),
-        deepExecutionConfig: executionIdentity() };
+        deepExecutionConfig: executionIdentity({}, original ? original.processApi : processApi) };
     const authority = { conferenceId: 'odyssey-2026', catalogName: 'catalog.json', reportName: 'report.json',
         filterId: '11111111-1111-4111-8111-111111111111', catalogSha256: H('catalog'), reportSha256: H('report'),
         filterPolicySha256: H('policy'), selectionReceiptSha256: H('selection'),
@@ -175,7 +175,7 @@ test('共享来源集合只做一次全批绑定事务，所有成员在付费�
         reportName: 'report.json', filterId: f.authority.filterId, concurrency: 3 }, {
         ...f.deps, engine: wrappedEngine, processPaper: async (_context, _shared, item) => {
             const stateFile = path.join(f.files.conferenceProcessDir,
-                processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT), 'state.json');
+                processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.processIdentityDomain()), 'state.json');
             const state = processApi.assertState(JSON.parse(fs.readFileSync(stateFile)));
             assert.ok(Object.values(state.items).every(entry => entry.sourceProof));
             return success(item);
@@ -404,14 +404,14 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const baseline = fingerprint();
     // 当前文章使用 v10、开源提示词使用 v3、主分析v7与评分v5；v1 清单保留原路径。
-    for (const name of ['prompts/api-reader-article-v11.md', 'prompts/deep-analysis-v8.md', 'prompts/scoring-audit-v5.md', 'prompts/opensource-scan-v3.md']) {
+    for (const name of ['prompts/current/api-reader-article.md', 'prompts/current/deep-analysis.md', 'prompts/current/scoring-audit.md', 'prompts/current/opensource-scan.md']) {
         assert.ok(processApi.currentImplementationFiles().includes(name), name);
     }
     assert.equal(processApi.currentImplementationFiles().includes('prompts/api-reader-article-v2.md'), false);
     for (const name of ['scripts/deep-analyzer.js', 'scripts/config.js', 'scripts/env-loader.js',
         'scripts/llm-account-pool.js', 'scripts/paper_identity.py', 'scripts/utils.py',
-        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article-v11.md',
-        'prompts/deep-analysis-v8.md', 'prompts/scoring-audit-v5.md']) {
+        'scripts/lib/reader-resource-sync.js', 'prompts/current/api-reader-article.md',
+        'prompts/current/deep-analysis.md', 'prompts/current/scoring-audit.md']) {
         const original = sources.get(name); sources.set(name, Buffer.concat([original, Buffer.from('\nrepresentative drift')]));
         assert.notEqual(fingerprint(), baseline, name); sources.set(name, original);
     }
@@ -468,7 +468,7 @@ test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可�
     const legacy = fingerprint('v1');
     assert.notEqual(current, legacy);
     // 当前开源提示词必须绑定 v3；v1 清单保持原路径，旧 v2 字节不影响这两种指纹。
-    assert.ok(processApi.currentImplementationFiles().includes('prompts/opensource-scan-v3.md'));
+    assert.ok(processApi.currentImplementationFiles().includes('prompts/current/opensource-scan.md'));
     assert.equal(processApi.currentImplementationFiles().includes('prompts/opensource-scan-v2.md'), false);
     const oldV2Name = 'prompts/opensource-scan-v2.md';
     const oldV2 = sources.get(oldV2Name);
@@ -476,7 +476,7 @@ test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可�
     assert.equal(fingerprint(), current);
     assert.equal(fingerprint('v1'), legacy);
     sources.set(oldV2Name, oldV2);
-    const v3Name = 'prompts/opensource-scan-v3.md';
+    const v3Name = 'prompts/current/opensource-scan.md';
     const v1Name = 'prompts/opensource-scan.md';
     const v3 = sources.get(v3Name); const v1 = sources.get(v1Name);
     sources.set(v3Name, Buffer.concat([v3, Buffer.from('\nv3 bytes changed')]));
@@ -490,8 +490,8 @@ test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可�
     assert.equal(fingerprint(), current);
     assert.equal(fingerprint('v1'), legacy);
     // 版本映射本身在被哈希的集合里，改映射会改变当前指纹。
-    assert.ok(processApi.currentImplementationFiles().includes('scripts/lib/prompt-text-versions.js'));
-    const mappingName = 'scripts/lib/prompt-text-versions.js';
+    assert.ok(processApi.currentImplementationFiles().includes('scripts/lib/prompt-contracts.js'));
+    const mappingName = 'scripts/lib/prompt-contracts.js';
     const mapping = sources.get(mappingName);
     sources.set(mappingName, Buffer.concat([mapping, Buffer.from('\nmapping drift')]));
     assert.notEqual(fingerprint(), current);
@@ -566,7 +566,7 @@ test('深度执行身份会归一化路由、绑定语义配置，并排除所�
     for (const forbidden of [secretA, keyHash(secretA), secretSecondary,
         keyHash(secretSecondary), secretHeader, 'fallback', 'proxy-secret', 'private-session',
         'opencode.ai', 'PAPER_ANALYZER', 'Authorization']) assert.equal(serialized.includes(forbidden), false, forbidden);
-    assert.deepEqual(Object.keys(baseline).sort(), ['audit', 'contract', 'identitySha256', 'version']);
+    assert.deepEqual(Object.keys(baseline).sort(), ['audit', 'contract', 'identitySha256', 'schemaFingerprint']);
     assert.equal(processApi.assertDeepExecutionConfigIdentity(baseline), baseline);
     assert.throws(() => executionIdentity({ env: {
         PAPER_ANALYZER_MODEL: ' muse-spark-1.3-contributor'
@@ -602,7 +602,7 @@ test('深度执行配置漂移会改变进程身份，也就无法再指向旧�
     } });
     f.context.authority = { ...f.context.authority,
         deepExecutionConfig: f.runtimeAuthority.deepExecutionConfig };
-    const nextId = processApi.deterministicUuid(processApi.stableHash(f.context.authority), processApi.CONTRACT);
+    const nextId = processApi.deterministicUuid(processApi.stableHash(f.context.authority), processApi.processIdentityDomain());
     assert.notEqual(nextId, first.processId);
     assert.equal(fs.existsSync(path.join(f.files.conferenceProcessDir, nextId)), false);
     assert.throws(() => cli.processStatus(options, { dependencies: f.deps }), /ENOENT|no such file/i);
@@ -649,7 +649,7 @@ test('同授权的实际执行串行执行，抛异常时释放操作锁以便�
         return g.deps.prepareShared(...args);
     }, processPaper: async (_context, _shared, item) => success(item) };
     await assert.rejects(processApi.runConferenceProcess(options, recoverableDeps), /fixture crash/);
-    const processId = processApi.deterministicUuid(processApi.stableHash(g.authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(g.authority), processApi.processIdentityDomain());
     assert.equal(fs.existsSync(path.join(g.files.conferenceProcessDir, processId, '.operation.lock')), false);
     assert.equal((await processApi.runConferenceProcess(options, recoverableDeps)).status, 'complete');
 });
@@ -674,7 +674,7 @@ test('汇总之前实现漂移，会让进程停在未完成状态，且不生�
             return success(item);
         }
     }), /implementation drifted before aggregate/);
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.processIdentityDomain());
     const directory = path.join(f.files.conferenceProcessDir, processId);
     const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
     assert.notEqual(state.status, 'complete');
@@ -701,7 +701,7 @@ test('最终完成事务在发布凭证之前，会再核对一次配置身份',
         withProcessLock: async (_target, callback) => callback(),
         processPaper: async (_context, _shared, item) => success(item)
     }), /deep execution config drifted during final completion transaction/);
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.processIdentityDomain());
     const directory = path.join(f.files.conferenceProcessDir, processId);
     const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
     assert.notEqual(state.status, 'complete');
@@ -713,7 +713,7 @@ test('最终完成事务在发布凭证之前，会再核对一次配置身份',
 test('条目条件更新（CAS）保留其他任务已完成的结果，最终事务再次确认所有条目已完成', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.processIdentityDomain());
     const stateFile = path.join(f.files.conferenceProcessDir, processId, 'state.json');
     const completedByPeer = await processApi.runConferenceProcess(options, { ...f.deps,
         processPaper: async (_context, _shared, item) => {
@@ -731,7 +731,7 @@ test('条目条件更新（CAS）保留其他任务已完成的结果，最终�
     assert.equal(JSON.parse(fs.readFileSync(stateFile)).items[f.members[0].paperId].status, 'complete');
 
     const g = fixture(t); const gProcessId = processApi.deterministicUuid(
-        processApi.stableHash(g.authority), processApi.CONTRACT);
+        processApi.stableHash(g.authority), processApi.processIdentityDomain());
     const gStateFile = path.join(g.files.conferenceProcessDir, gProcessId, 'state.json');
     await assert.rejects(processApi.runConferenceProcess(options, { ...g.deps,
         processPaper: async (_context, _shared, item) => success(item),
@@ -774,11 +774,10 @@ test('检查点或完成凭证被篡改，一律直接失败', async t => {
 test('自动的来源接受是显式的，不能称作人工审查', () => {
     const members = [{ paperId: 'conference:odyssey:2026:conference-paper-id:a.1',
         sourceIdentity: 'conference-paper-id:a.1', receiptName: 'a-receipt.json' }];
-    const value = staging.normalizeExtractionManifest({ contract: staging.AUTOMATED_EXTRACTION_CONTRACT,
-        version: staging.VERSION, conference: { id: 'odyssey-2026', year: 2026 }, acceptance: {
-            method: 'official-proceedings-exact-pdf-v1', catalogSha256: H('catalog'),
+    const value = staging.normalizeExtractionManifest({ ...require('../scripts/lib/protocol-codec').recordHeader(staging.AUTOMATED_EXTRACTION_CONTRACT, 'conference-deterministic-source-seal'), conference: { id: 'odyssey-2026', year: 2026 }, acceptance: {
+            method: require('../scripts/lib/protocol-codec').contract('official-proceedings-exact-pdf'), catalogSha256: H('catalog'),
             selectionReceiptSha256: H('selection') }, members, membersSha256: staging.stableHash(members) });
-    assert.equal(value.review, undefined); assert.equal(value.acceptance.method, 'official-proceedings-exact-pdf-v1');
+    assert.equal(value.review, undefined); assert.equal(value.acceptance.method, require('../scripts/lib/protocol-codec').contract('official-proceedings-exact-pdf'));
     assert.throws(() => staging.normalizeExtractionManifest({ ...value,
         acceptance: { ...value.acceptance, method: 'manual-review' } }), /method is unsupported/);
 });
@@ -817,7 +816,8 @@ test('真实的官方精确 PDF 来源保存后，能在不声称人工审查的
         decisionName: 'included.json', artifact });
     filter.applyDecision({ filterRoot: path.join(root, 'filters'), filterId,
         decisionHandle: filter.loadDecisionHandle(decisionFile), owner: 'filter-reviewer', now: stamp });
-    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
+    const tagCatalogPath = path.join(root, 'tag-catalog.json');
+    fs.copyFileSync(require('../scripts/config').FILES.tagCatalogFile, tagCatalogPath);
     const files = { conferenceDiscoveryCatalogDir: path.join(root, 'catalogs'),
         conferenceDiscoveryReportDir: path.join(root, 'reports'), conferenceFiltersDir: path.join(root, 'filters'),
         conferenceStagingSpecsDir: path.join(root, 'specs'), conferenceStagingSourceDir: path.join(root, 'source'),
@@ -838,7 +838,7 @@ test('真实的官方精确 PDF 来源保存后，能在不声称人工审查的
     const seal = JSON.parse(fs.readFileSync(path.join(files.conferenceStagingSpecsDir, shared.names.extraction)));
     assert.equal(seal.contract, staging.AUTOMATED_EXTRACTION_CONTRACT); assert.equal(seal.review, undefined);
     const stagingReceipt = JSON.parse(fs.readFileSync(path.join(files.conferenceStagingDir, shared.names.stagingReceipt)));
-    assert.equal(stagingReceipt.extraction.acceptance.method, 'official-proceedings-exact-pdf-v1');
+    assert.equal(stagingReceipt.extraction.acceptance.method, require('../scripts/lib/protocol-codec').contract('official-proceedings-exact-pdf'));
     assert.equal(stagingReceipt.extraction.review, undefined);
     assert.ok(fs.existsSync(path.join(files.conferenceSourceLedgerDir, shared.names.ledger)));
     assert.ok(fs.existsSync(path.join(files.conferenceRunsDir, shared.names.run)));
@@ -846,7 +846,7 @@ test('真实的官方精确 PDF 来源保存后，能在不声称人工审查的
     // 模拟一个过期的 pin。它的字节永远不会被当成当前证据：
     // 新的打包文件必须从单独核验过的 PDF 重新生成。
     const oldReceiptFile = path.join(files.conferenceStagingSourceDir, shared.sealed[0].receiptName);
-    const oldReceipt = JSON.parse(fs.readFileSync(oldReceiptFile)); oldReceipt.extractor.version = '0.0.0';
+    const oldReceipt = JSON.parse(fs.readFileSync(oldReceiptFile)); oldReceipt.extractor.implementationSha256 = '0'.repeat(64);
     delete oldReceipt.receiptSha256; oldReceipt.receiptSha256 = H(oldReceipt);
     const oldBytes = Buffer.from(JSON.stringify(oldReceipt)); fs.writeFileSync(oldReceiptFile, oldBytes);
     const analysisSentinel = path.join(files.conferenceAnalysisDir, 'preserved-analysis.json');
@@ -1074,7 +1074,7 @@ test('迁移后旧实现仍可寻址，并且绝不重分析已完成的论文',
     // 之前建的空分叉不能盖住已经迁移过来的完成记录。
     const dormant = JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, first.processId, 'state.json')));
     dormant.authority = f.context.authority;
-    dormant.processId = processApi.deterministicUuid(H(dormant.authority), processApi.CONTRACT);
+    dormant.processId = processApi.deterministicUuid(H(dormant.authority), processApi.processIdentityDomain());
     dormant.status = 'pending'; dormant.aggregate = null; dormant.completionReceiptSha256 = null;
     for (const item of Object.values(dormant.items)) {
         Object.assign(item, { analysisRunId: processApi.deterministicUuid(dormant.processId, item.paperId, 'analysis'),
@@ -1285,7 +1285,7 @@ test('模型网络失败已经用尽，也不影响后面的会议论文', async
 
 test('标签审查让批次继续走，先扣住页面，并报告一个可见的队列', async t => {
     const f = fixture(t, 3); const options = { apply: true, concurrency: 2 };
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.processIdentityDomain());
     const executionOf = paperId => processApi.deterministicUuid(processId, paperId, 'analysis');
     const reviewPaperId = f.members[1].paperId;
     const blockedReasons = ['primary-task:unknown:#不存在的主任务', 'selection:标签不是 active 中文首选标签: #不存在的主任务'];
@@ -1320,8 +1320,7 @@ test('标签审查让批次继续走，先扣住页面，并报告一个可见�
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 
     const queue = JSON.parse(fs.readFileSync(first.tagReviewQueueFile, 'utf8'));
-    assert.equal(queue.contract, 'conference-tag-review-queue-v2');
-    assert.equal(queue.version, 2);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(queue, 'conference-tag-review-queue'), true);
     assert.equal(queue.tagReview, 1);
     assert.equal(queue.items[0].paperId, reviewPaperId);
     assert.equal(queue.items[0].status, 'needs_tag_review');
@@ -1392,8 +1391,7 @@ test('标签审查让批次继续走，先扣住页面，并报告一个可见�
         .items[reviewPaperId].attempts, 1);
     assert.equal(fs.existsSync(legacyQueueFile), false);
     const rebuiltQueue = JSON.parse(fs.readFileSync(quiet.tagReviewQueueFile));
-    assert.equal(rebuiltQueue.contract, 'conference-tag-review-queue-v2');
-    assert.equal(rebuiltQueue.version, 2);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(rebuiltQueue, 'conference-tag-review-queue'), true);
     assert.equal(rebuiltQueue.items[0].status, 'needs_tag_review');
     const queueBody = { ...rebuiltQueue }; delete queueBody.queueSha256;
     assert.equal(rebuiltQueue.queueSha256, processApi.stableHash(queueBody));
@@ -1785,8 +1783,8 @@ test('来源升级完成保存瞬态失败也停止派发，不能转成单篇�
                 updateJsonFileLocked(filename, updater, lockOptions) {
                     return f.deps.engine.updateJsonFileLocked(filename, current => {
                         const next = updater(current);
-                        if (next?.contract === 'conference-source-upgrade-state-v1') lastStateFile = filename;
-                        if (!injected && next?.contract === 'conference-source-upgrade-state-v1'
+                        if (require('../scripts/lib/protocol-codec').hasValidHeader(next, 'conference-source-upgrade-state')) lastStateFile = filename;
+                        if (!injected && require('../scripts/lib/protocol-codec').hasValidHeader(next, 'conference-source-upgrade-state')
                             && Object.values(next.items).some(item => item.status === 'complete')) {
                             injected = true; throw error;
                         }
@@ -1818,8 +1816,7 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
     h.control.creatingNewGeneration = true; h.control.calls = [];
     const options = { fromProcessId: original.processId, concurrency: 1 };
     const plan = upgrade.planSourceUpgrade(options, deps); assert.equal(plan.papers.length, 3);
-    assert.equal(plan.contract, 'conference-source-upgrade-plan-v2');
-    assert.equal(plan.version, 2);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(plan, 'conference-source-upgrade-plan'), true);
     assert.equal(Object.hasOwn(plan.authority, 'taxonomyRegistrySha256'), false);
     await assert.rejects(upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256,
         paperIds: ['conference:odyssey:2026:conference-paper-id:unknown'] }, deps), /not in the authorized plan/);
@@ -1840,10 +1837,9 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
     const promotedState = processApi.assertState(JSON.parse(fs.readFileSync(promotedStateFile)));
     const receipt = JSON.parse(fs.readFileSync(path.join(path.dirname(promotedStateFile), 'completion-receipt.json')));
     processApi.validateCompletionReceipt(promotedState, receipt);
-    assert.equal(promotedState.contract, 'conference-process-v2');
-    assert.equal(promotedState.version, 2);
-    assert.equal(receipt.contract, 'conference-process-completion-receipt-v2');
-    assert.equal(receipt.version, 2);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(promotedState, 'conference-process'), true);
+    assert.equal(Object.hasOwn(promotedState, 'version'), false);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(receipt, 'conference-process-completion-receipt'), true);
     assert.equal(cli.processStatus(options, { dependencies: deps }).processId, promoted.processId);
     let retainedReplays = 0;
     t.mock.method(require('../scripts/lib/conference-retained-source-replay'), 'replayCompletedPromotedShared', ({ state }) => {
@@ -2301,8 +2297,8 @@ test('原零尝试初始化例外保留，实现变化只创建新版进程而�
     assert.notEqual(current.processId, oldId);
     assert.deepEqual(fs.readFileSync(oldFile), oldBytes);
     const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, current.processId, 'state.json'))));
-    assert.equal(state.contract, 'conference-process-v2');
-    assert.equal(state.version, 2);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(state, 'conference-process'), true);
+    assert.equal(Object.hasOwn(state, 'version'), false);
     assert.equal(Object.hasOwn(state.authority, 'taxonomyRegistrySha256'), false);
 });
 

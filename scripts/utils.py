@@ -4,6 +4,7 @@ Paper Digest 公共工具模块 (Python)
 统一封装：Markdown 处理与分析文本解析
 """
 
+from tag_catalog import tag_catalog_identity, catalog_header
 import math
 import re
 import os
@@ -286,7 +287,7 @@ def _validate_tag_selection(tag_catalog, tags, primary_task_tag, primary_method_
     return {
         'valid': not errors,
         'errors': errors,
-        'registryVersion': tag_catalog['version'],
+        'registryVersion': tag_catalog_identity(tag_catalog),
         'registrySha256': tag_catalog.get('registrySha256'),
         'primaryTaskId': task['id'] if task is not None else None,
         'primaryMethodId': method['id'] if method is not None else None,
@@ -468,7 +469,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
         'tagValidation': {
             'valid': False,
             'errors': ['缺少标签章节'],
-            'registryVersion': registry['version'],
+            'registryVersion': tag_catalog_identity(registry),
             'registrySha256': registry.get('registrySha256'),
             'primaryTaskId': None,
             'primaryMethodId': None,

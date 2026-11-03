@@ -62,7 +62,7 @@ test('旧会议v1资源只读保留原绑定，默认资格与已声明新协议
     stage.resourceCount = 1;
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
     const before = JSON.stringify(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), false);
     assert.equal(engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules }), true);
     assert.equal(JSON.stringify(paper), before);
     for (const mutate of [

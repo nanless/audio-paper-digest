@@ -21,7 +21,7 @@ from tag_catalog import (
     load_tag_catalog, tag_prompt_text_sha256,
 )
 
-from tag_stage_record import (TAG_STAGE_RECORD_CONTRACT,
+from tag_stage_record import (tag_stage_record_declaration, TAG_STAGE_RECORD_CONTRACT,
                               TAG_STAGE_BINDING_FIELDS as CURRENT_TAG_STAGE_BINDING_FIELDS,
                               LEGACY_TAG_STAGE_BINDING_FIELDS, read_tag_stage_record)
 from publish_common import (  # noqa: E402
@@ -63,8 +63,8 @@ from publish_common import (  # noqa: E402
     validate_experiment_table_contract,
     validate_method_detail_contract,
     validate_image_narrative_contract,
-    validate_final_manual_v4_markdown,
-    validate_manual_editorial_quality_v4,
+    validate_final_structured_manual_markdown,
+    validate_manual_reader_quality,
     validate_digest_index_reader_quality,
     validate_review_payload,
     MANUAL_AUDIT_CHECKS,
@@ -83,12 +83,12 @@ from publish_common import (  # noqa: E402
     _manual_editorial_prose_paragraphs,
     _manual_han_character_count,
     _manual_numeric_lexemes,
-    _manual_v4_reader_view,
+    _manual_structured_reader_view,
     _open_publish_json_with_account_pool,
     _final_markdown_image_occurrences,
     _validate_manual_result_claim_bindings,
-    _validate_manual_v4_result_claims,
-    _validate_manual_v5_all_rejected_images,
+    _validate_manual_attributed_result_claims,
+    _validate_manual_rejected_image_coverage,
     _validate_manual_takeover_manifest,
 )
 from utils import parse_analysis  # noqa: E402
@@ -166,7 +166,7 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
         'conceptIds': selection['conceptIds'],
     }
     if record_format == 'current':
-        manifest.setdefault('contracts', {})['tagSelectionRecord'] = TAG_STAGE_RECORD_CONTRACT
+        manifest.setdefault('contracts', {})['tagSelectionRecord'] = tag_stage_record_declaration()
     else:
         manifest.setdefault('contracts', {})['taxonomy'] = selection_contract
     manifest.setdefault('stages', {}).setdefault('structureRepair', {})[
@@ -536,23 +536,23 @@ class PublishCommonSanitizerTest(unittest.TestCase):
                 'captionIdentity': 'ResponseTokenCurve diagnostic panel',
             },
         ]
-        self.assertIsNone(_validate_manual_v5_all_rejected_images(
+        self.assertIsNone(_validate_manual_rejected_image_coverage(
             paper, decisions, '测试样例数据',
         ))
         with self.assertRaisesRegex(PublishDataValidationError, '未逐项覆盖'):
-            _validate_manual_v5_all_rejected_images(paper, decisions[:-1], '测试样例数据')
+            _validate_manual_rejected_image_coverage(paper, decisions[:-1], '测试样例数据')
         generic = copy.deepcopy(decisions)
         generic[0]['reason'] = '图片在移动端不够清晰，因此不建议插入正文；它没有提供比文字更有价值的信息，也不适合在博客中展示。'
         with self.assertRaisesRegex(PublishDataValidationError, '不是论文特有'):
-            _validate_manual_v5_all_rejected_images(paper, generic, '测试样例数据')
+            _validate_manual_rejected_image_coverage(paper, generic, '测试样例数据')
         duplicated = copy.deepcopy(decisions)
         duplicated[1]['reason'] = duplicated[0]['reason'].replace('1917×989', '1917 × 989')
         with self.assertRaisesRegex(PublishDataValidationError, '不得跨图复用'):
-            _validate_manual_v5_all_rejected_images(paper, duplicated, '测试样例数据')
+            _validate_manual_rejected_image_coverage(paper, duplicated, '测试样例数据')
         inconsistent = copy.deepcopy(paper)
         inconsistent['imageManifest']['insertionPlan'] = [{'imageNumber': 1}]
         with self.assertRaisesRegex(PublishDataValidationError, '空 insertionPlan'):
-            _validate_manual_v5_all_rejected_images(inconsistent, decisions, '测试样例数据')
+            _validate_manual_rejected_image_coverage(inconsistent, decisions, '测试样例数据')
 
     def test_manual_v5_all_reject_images_accepts_js_specific_visual_anchors(self):
         """发布端必须接受 JS 记录和规格检查允许的同一组具体图片描述词。"""
@@ -577,7 +577,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             }
             for index, (url, anchor) in enumerate(zip(urls, anchors), start=1)
         ]
-        self.assertIsNone(_validate_manual_v5_all_rejected_images(
+        self.assertIsNone(_validate_manual_rejected_image_coverage(
             paper, decisions, '测试样例数据',
         ))
 
@@ -605,7 +605,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             '只报告准确率。下一个任务重新训练。',
         ]:
             with self.subTest(sentence=sentence):
-                self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
+                self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n' + sentence))
         for sentence in [
             '模型只在一个任务上评测。', '共有一个条件。', '比较了两个条件的结果。',
             'batch为一。', '阈值为三。', '实验只在这一个任务上评测。',
@@ -613,19 +613,19 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             '另一个条件提升百分之三。', '这一个任务训练一轮。',
         ]:
             with self.subTest(sentence=sentence):
-                self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
+                self.assertIsNotNone(validate_manual_reader_quality('## 核心摘要\n' + sentence))
 
     def test_reader_seed_reference_saved_prose_and_exact_surface(self):
         from publish_common import _is_discourse_task_condition_numeral
         # chen26l 既有付费稿经正常 Node 排版后的真实语句，不是整篇资格证明。
         sentence = '三是在另一个随机种子或另一份挖掘切分上重复，确认提升不是切分运气。'
-        self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
-        self.assertIsNone(validate_manual_editorial_quality_v4(
+        self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n' + sentence))
+        self.assertIsNone(validate_manual_reader_quality(
             '## 核心摘要\n只报告准确率。另一个随机种子上重复。'))
         for prefix in '上下这另哪':
             text = f'{prefix}一个随机种子上的结果需要复核。'
             with self.subTest(text=text):
-                self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+                self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n' + text))
                 self.assertTrue(_is_discourse_task_condition_numeral(text, 1, '一个随机种子'))
                 for index in (0, 2, -1):
                     self.assertFalse(_is_discourse_task_condition_numeral(text, index, '一个随机种子'))
@@ -638,15 +638,15 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(_is_discourse_task_condition_numeral(
                     text, text.index('一个随机种子'), '一个随机种子'))
-                self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+                self.assertIsNotNone(validate_manual_reader_quality('## 核心摘要\n' + text))
         for text in ('实验只用一个随机种子。', '实验仅用一个随机种子。',
                      '至少一个随机种子通过测试。', '至多一个随机种子通过测试。'):
             with self.subTest(text=text):
-                self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+                self.assertIsNotNone(validate_manual_reader_quality('## 核心摘要\n' + text))
         for counted in ('三个随机种子', '一千个样本', '三轮'):
             text = f'在另一个随机种子上重复，然后检查{counted}。'
             with self.subTest(text=text):
-                result = validate_manual_editorial_quality_v4('## 核心摘要\n' + text)
+                result = validate_manual_reader_quality('## 核心摘要\n' + text)
                 self.assertIsNotNone(result)
                 self.assertIn(counted, result)
         # 同一指代前的字节偏移照旧核验；屏蔽它不能匹配后面的真实计数。
@@ -674,7 +674,7 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
                                 input=json.dumps(samples, ensure_ascii=False),
                                 text=True, capture_output=True, check=True, timeout=20)
         node = json.loads(result.stdout)
-        python = [validate_manual_editorial_quality_v4('## 核心摘要\n' + text) is None
+        python = [validate_manual_reader_quality('## 核心摘要\n' + text) is None
                   for text in samples]
         self.assertEqual(node, python)
         self.assertEqual(python, [True] * len(accepted) + [False] * len(rejected))
@@ -685,7 +685,7 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
 这一类任务采用声学核心与社会学残差的二分解释，形成有趣二分。
 模型真实运行 2 次，并分别记录每次运行的计算成本。
 '''
-        self.assertIsNone(validate_manual_editorial_quality_v4(safe))
+        self.assertIsNone(validate_manual_reader_quality(safe))
         blocked = {
             '五成': '命中率达到五成。',
             '三比二': '类别比例为三比二。',
@@ -699,10 +699,10 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
         }
         for token, sentence in blocked.items():
             with self.subTest(token=token):
-                issue = validate_manual_editorial_quality_v4(f'## 核心摘要\n{sentence}\n')
+                issue = validate_manual_reader_quality(f'## 核心摘要\n{sentence}\n')
                 self.assertIsNotNone(issue)
                 self.assertIn('精确定量', issue)
-        semantic_issue = validate_manual_editorial_quality_v4(
+        semantic_issue = validate_manual_reader_quality(
             '## 核心摘要\n长度分组没有消除长上下文的 2 次计算成本。\n',
         )
         self.assertIn('重复或断裂连接表达', semantic_issue)
@@ -716,7 +716,7 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
         )
         for sentence in malformed_relations:
             with self.subTest(sentence=sentence):
-                issue = validate_manual_editorial_quality_v4(
+                issue = validate_manual_reader_quality(
                     f'## 核心摘要\n{sentence}\n',
                 )
                 self.assertIsNotNone(issue)
@@ -724,12 +724,12 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
         legal_comparisons = '''## 核心摘要
 方案 A 区别于方案 B；slimmable 共享网络区别于 3 个独立网络。
 '''
-        self.assertIsNone(validate_manual_editorial_quality_v4(legal_comparisons))
+        self.assertIsNone(validate_manual_reader_quality(legal_comparisons))
         complete_double_contrast = '''## 核心摘要
 3 类改写均导致性能下降，但 CodecSep 的回落更平缓且在 2 类上保持小幅领先，说明通道级掩蔽对词汇级变化有一定鲁棒性，但未测试含时序或关系结构的提示。
 '''
-        self.assertIsNone(validate_manual_editorial_quality_v4(complete_double_contrast))
-        dangling = validate_manual_editorial_quality_v4(
+        self.assertIsNone(validate_manual_reader_quality(complete_double_contrast))
+        dangling = validate_manual_reader_quality(
             '## 核心摘要\n模型在 2 个数据集上有一定鲁棒性，但\n',
         )
         self.assertIn('悬空连接词', dangling)
@@ -744,9 +744,9 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
         )
         for markdown in safe_cases:
             with self.subTest(markdown=markdown):
-                self.assertIsNone(validate_manual_editorial_quality_v4(markdown))
+                self.assertIsNone(validate_manual_reader_quality(markdown))
 
-        issue = validate_manual_editorial_quality_v4(
+        issue = validate_manual_reader_quality(
             '## 核心摘要\n系统使用三个公开数据集完成评测。\n',
         )
         self.assertIn('精确定量', issue)
@@ -759,7 +759,7 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
         }
         for heading, sentence in cases.items():
             with self.subTest(heading=heading):
-                issue = validate_manual_editorial_quality_v4(
+                issue = validate_manual_reader_quality(
                     f'## {heading}\n{sentence}\n',
                 )
                 self.assertIsNotNone(issue)
@@ -786,7 +786,7 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
         )
         for sentence in blocked:
             with self.subTest(sentence=sentence):
-                issue = validate_manual_editorial_quality_v4(
+                issue = validate_manual_reader_quality(
                     f'## 核心摘要\n{sentence}\n',
                 )
                 self.assertIsNotNone(issue)
@@ -800,17 +800,17 @@ process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseN
             'Qwen2.5-7B-Instruct 与 6-DoF 控制均作为合法技术标识。\n'
             '系统根据注意力一次性保留缓存。\n'
         )
-        self.assertIsNone(validate_manual_editorial_quality_v4(safe))
+        self.assertIsNone(validate_manual_reader_quality(safe))
 
     def test_manual_v4_blocks_rendered_and_implicit_innovation_double_numbering(self):
         rendered = '## 核心创新点\n1. 首要贡献说明机制。\n2. 第 2 个增量说明证据。\n'
-        self.assertIn('双重编号', validate_manual_editorial_quality_v4(rendered))
+        self.assertIn('双重编号', validate_manual_reader_quality(rendered))
 
         implicit = '## 核心创新点\n首要贡献说明机制。\n\n第 2 个增量说明证据。\n'
-        self.assertIn('自动渲染为列表', validate_manual_editorial_quality_v4(implicit))
+        self.assertIn('自动渲染为列表', validate_manual_reader_quality(implicit))
 
         legal_prose = '## 核心摘要\n正文比较第 2 个条件与基线，并说明该序数只用于定位实验条件。\n'
-        self.assertIsNone(validate_manual_editorial_quality_v4(legal_prose))
+        self.assertIsNone(validate_manual_reader_quality(legal_prose))
 
     def test_digest_index_reader_quality_is_marked_and_historical_compatible(self):
         valid = '''---
@@ -844,6 +844,23 @@ paper_digest_reader_quality: "reader-facing-v3"
 | 1 | Paper A | 10.0 | 前10% |
 '''
         self.assertIsNone(validate_digest_index_reader_quality(valid, required=True))
+        from publish_common import DIGEST_INDEX_READER_QUALITY_CONTRACT, DIGEST_INDEX_READER_QUALITY_FINGERPRINT
+        old_marker = 'paper_digest_reader_quality: "reader-facing-v3"'
+        current_marker = (f'paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_CONTRACT}"\n'
+                          f'paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FINGERPRINT}"')
+        current = valid.replace(old_marker, current_marker)
+        self.assertIsNone(validate_digest_index_reader_quality(current, required=True))
+        self.assertIsNone(validate_digest_index_reader_quality(current.replace('\n', '\r\n'), required=True))
+        for malformed in [
+            current.replace(DIGEST_INDEX_READER_QUALITY_FINGERPRINT, '0' * 64),
+            valid.replace(old_marker, f'paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_CONTRACT}"'),
+            valid.replace(old_marker, old_marker + f'\npaper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FINGERPRINT}"'),
+            current.replace(current_marker, current_marker + f'\npaper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_CONTRACT}"'),
+            valid.replace(old_marker, f'paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FINGERPRINT}"'),
+            current.replace(DIGEST_INDEX_READER_QUALITY_CONTRACT, 'unregistered-reader-marker'),
+        ]:
+            with self.subTest(marker=malformed[:200]):
+                self.assertIsNotNone(validate_digest_index_reader_quality(malformed))
         wrong_english = valid.replace(
             '/audio-paper-digest-blog/posts/2026-09-02-paper-a)*',
             '/audio-paper-digest-blog/posts/another-paper)*',
@@ -871,12 +888,12 @@ paper_digest_reader_quality: "reader-facing-v3"
         self.assertIn('协议标记', validate_digest_index_reader_quality(historical, required=True))
 
     def test_digest_quality_validates_shared_classification_before_masking_only_its_copy(self):
-        from tag_catalog import load_tag_catalog
+        from tag_catalog import load_tag_catalog, tag_catalog_identity
         from tag_presentation import render_tag_hierarchy_markdown, TAG_HIERARCHY_END
         catalog = load_tag_catalog(); by_id = {item['id']: item for item in catalog['concepts']}
         ids = ['task.av-speech-separation', 'method.test-time-adaptation',
                'research_focus.adversarial-robustness', 'setting.code-switching', 'signal.speech']
-        metadata = {'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+        metadata = {'registryVersion': tag_catalog_identity(catalog), 'registrySha256': catalog['registrySha256'],
             'concepts': [{'id': cid, 'facet': by_id[cid]['facet'], 'label': by_id[cid]['preferredLabel']['zh']} for cid in ids]}
         block = render_tag_hierarchy_markdown(metadata, catalog)
         self.assertGreater(block.count('?concept='), 7, '真实多层路径超过普通散文句标预算')
@@ -917,7 +934,7 @@ title: "Reader page"
 
 这是局限段落。
 '''
-        reader_view = _manual_v4_reader_view(markdown)
+        reader_view = _manual_structured_reader_view(markdown)
         self.assertIn('上一节的收束段落。\n\n\n## 实验结果\n', reader_view)
         self.assertIn('这是实验段落。\n\n## 局限与问题\n', reader_view)
 
@@ -938,12 +955,12 @@ paper_digest_manual_depth: "full-text-evidence-v5"
 
 这段正文说明系统如何把输入、状态分工、比较证据与不能外推的边界串成连续叙事，而不是回退到固定方法栏目。
 '''
-        self.assertIsNone(validate_final_manual_v4_markdown(v5_markdown))
+        self.assertIsNone(validate_final_structured_manual_markdown(v5_markdown))
 
         missing_article = v5_markdown.replace('### 🧭 深度解读\n\n', '')
         self.assertIn(
             'Manual v5 读者章节: 深度解读',
-            validate_final_manual_v4_markdown(missing_article),
+            validate_final_structured_manual_markdown(missing_article),
         )
 
     def test_final_manual_image_occurrences_count_sanitized_self_link_once(self):
@@ -972,7 +989,7 @@ paper_digest_manual_depth: "full-text-evidence-v5"
         sanitized = sanitize_markdown_for_publish(markdown)
         self.assertEqual(
             [item[1] for item in _final_markdown_image_occurrences(
-                _manual_v4_reader_view(sanitized)
+                _manual_structured_reader_view(sanitized)
             )],
             [url],
         )
@@ -981,7 +998,7 @@ paper_digest_manual_depth: "full-text-evidence-v5"
         # 不应把同一张图片重复计数并误报 selectedImageUrls 顺序不符。
         self.assertNotIn(
             '图片 URL/顺序',
-            validate_final_manual_v4_markdown(sanitized, paper) or '',
+            validate_final_structured_manual_markdown(sanitized, paper) or '',
         )
 
     def test_final_manual_v4_markdown_rechecks_sanitized_reader_contracts(self):
@@ -1034,8 +1051,8 @@ paper_digest_manual_depth: "full-text-evidence-v4"
 证据覆盖单一测试划分，尚未报告跨语言迁移，因此当前数字不能说明其他语料上的统一收益。
 '''
         sanitized = sanitize_markdown_for_publish(valid)
-        self.assertIsNone(validate_final_manual_v4_markdown(sanitized))
-        self.assertIsNone(validate_final_manual_v4_markdown(sanitized.replace(
+        self.assertIsNone(validate_final_structured_manual_markdown(sanitized))
+        self.assertIsNone(validate_final_structured_manual_markdown(sanitized.replace(
             '训练采用论文披露的数据划分与优化目标',
             '这一步承接上一步，下一步逐项核对每一步；训练采用论文披露的数据划分与优化目标',
             1,
@@ -1057,12 +1074,12 @@ paper_digest_manual_depth: "full-text-evidence-v4"
 
         summary_sentence = '本文检验流式识别在固定测试划分中的错误率与速度权衡，并把结论限制在论文实际报告的设置内。'
         at_paragraph_limits = '甲' * 260 + '；!?;！？。'
-        self.assertIsNone(validate_final_manual_v4_markdown(sanitized.replace(
+        self.assertIsNone(validate_final_structured_manual_markdown(sanitized.replace(
             summary_sentence, at_paragraph_limits, 1,
         )))
         for paragraph in ('甲' * 261 + '。', at_paragraph_limits + '?'):
             with self.subTest(paragraph_boundary=paragraph[-8:]):
-                self.assertIn('段落过长', validate_final_manual_v4_markdown(sanitized.replace(
+                self.assertIn('段落过长', validate_final_structured_manual_markdown(sanitized.replace(
                     summary_sentence, paragraph, 1,
                 )))
         innovation_sentence = '相较固定上下文基线，该方法把分块状态与对齐监督联合起来，并由测试集上的错误率变化提供直接证据。'
@@ -1109,10 +1126,10 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         }
         for expected, candidate in cases.items():
             with self.subTest(expected=expected):
-                self.assertIn(expected, validate_final_manual_v4_markdown(candidate))
+                self.assertIn(expected, validate_final_structured_manual_markdown(candidate))
 
         ordinal = sanitized.replace('强基线', '排名第三的强基线', 1)
-        self.assertIsNone(validate_final_manual_v4_markdown(ordinal))
+        self.assertIsNone(validate_final_structured_manual_markdown(ordinal))
 
         v4_paper = {
             'analysisManifest': {
@@ -1121,14 +1138,14 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             'selectedImageUrls': [url],
             'parsed': {'documentType': '方法研究'},
         }
-        self.assertIn('缺少 Manual v4 深度标记', validate_final_manual_v4_markdown(
+        self.assertIn('缺少 Manual v4 深度标记', validate_final_structured_manual_markdown(
             sanitized.replace(
                 'paper_digest_manual_depth: "full-text-evidence-v4"\n', '',
             ),
             v4_paper,
         ))
 
-        self.assertIsNone(validate_final_manual_v4_markdown(
+        self.assertIsNone(validate_final_structured_manual_markdown(
             sanitized.replace(
                 'paper_digest_manual_depth: "full-text-evidence-v4"',
                 'paper_digest_manual_depth: "full-text-evidence-v3"',
@@ -1222,14 +1239,14 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             'publishImageExclusions': [{'url': excluded_url}],
             'parsed': {'documentType': '方法研究'},
         }
-        issue = validate_final_manual_v4_markdown(markdown, paper)
+        issue = validate_final_structured_manual_markdown(markdown, paper)
         self.assertIn('最终页面的结果声明与读者正文的对应检查未通过', issue)
         self.assertIn('readerBindings 未共同落在', issue)
 
         passing = copy.deepcopy(paper)
         passing['analysisManifest']['manualTakeover']['resultClaims'][2] = \
             bind_to_result_table(manual_result_claim_fixture('7.9'))
-        self.assertIsNone(validate_final_manual_v4_markdown(markdown, passing))
+        self.assertIsNone(validate_final_structured_manual_markdown(markdown, passing))
 
         no_ablation_markdown = markdown.replace(
             '主方法、强基线、参考系统与关键消融',
@@ -1244,14 +1261,14 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             bind_to_result_table(manual_result_claim_fixture(
                 '7.9', method='参考系统', source_method='reference system',
             ))
-        non_result_ablation['analysis'] = _manual_v4_reader_view(
+        non_result_ablation['analysis'] = _manual_structured_reader_view(
             no_ablation_markdown,
         ).replace(
             '编码器接收声学特征，经分块注意力与对齐目标产生逐帧表示，解码器再输出文字序列。',
             '编码器接收声学特征，经分块注意力与对齐目标产生逐帧表示，解码器再输出文字序列。论文没有提供逐组件消融。',
             1,
         )
-        self.assertIsNone(validate_final_manual_v4_markdown(
+        self.assertIsNone(validate_final_structured_manual_markdown(
             no_ablation_markdown, non_result_ablation,
         ))
 
@@ -1374,7 +1391,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                     lines.append(f'LibriSpeech test-clean {method}相对强基线的 WER 为 '
                                  f'{claimed_value}%，越低越好。')
                 with self.assertRaisesRegex(PublishDataValidationError, '数值|未覆盖'):
-                    _validate_manual_v4_result_claims(
+                    _validate_manual_attributed_result_claims(
                         {'documentType': '方法研究', 'resultClaims': claims},
                         '## 实验结果\n' + '\n'.join(lines), '测试样例数据')
 
@@ -1394,7 +1411,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                     claims.append(claim)
                     lines.append(f'LibriSpeech test-clean {method}相对强基线的 WER 为 '
                                  f'{claimed_value}%，越低越好。')
-                self.assertEqual(_validate_manual_v4_result_claims(
+                self.assertEqual(_validate_manual_attributed_result_claims(
                     {'documentType': '方法研究', 'resultClaims': claims},
                     '## 实验结果\n' + '\n'.join(lines), '测试样例数据'), claims)
 
@@ -1417,54 +1434,54 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         ]
         takeover = {'documentType': '方法研究', 'resultClaims': claims}
         self.assertEqual(
-            _validate_manual_v4_result_claims(takeover, analysis, '测试样例数据'), claims,
+            _validate_manual_attributed_result_claims(takeover, analysis, '测试样例数据'), claims,
         )
 
         too_few = copy.deepcopy(takeover)
         too_few['resultClaims'] = too_few['resultClaims'][:2]
         with self.assertRaisesRegex(PublishDataValidationError, '至少需要 3 条'):
-            _validate_manual_v4_result_claims(too_few, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(too_few, analysis, '测试样例数据')
 
         empty = copy.deepcopy(takeover)
         empty['resultClaims'][0]['baseline'] = ''
         with self.assertRaisesRegex(PublishDataValidationError, 'baseline 缺失'):
-            _validate_manual_v4_result_claims(empty, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(empty, analysis, '测试样例数据')
 
         quote_drift = copy.deepcopy(takeover)
         quote_drift['resultClaims'][0]['sourceQuote'] = 'The full system improves recognition.'
         with self.assertRaisesRegex(PublishDataValidationError, 'sourceBindings'):
-            _validate_manual_v4_result_claims(quote_drift, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(quote_drift, analysis, '测试样例数据')
 
         mixed_not_reported = copy.deepcopy(takeover)
         mixed_not_reported['resultClaims'][0]['unit'] = 'notReported 7.1'
         with self.assertRaisesRegex(PublishDataValidationError, '不得把 notReported 与数值混写'):
-            _validate_manual_v4_result_claims(mixed_not_reported, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(mixed_not_reported, analysis, '测试样例数据')
 
         body_drift = copy.deepcopy(takeover)
         body_drift['resultClaims'][0]['value'] = '6.8'
         body_drift['resultClaims'][0] = manual_result_claim_fixture('6.8')
         with self.assertRaisesRegex(PublishDataValidationError, '未共同落在'):
-            _validate_manual_v4_result_claims(body_drift, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(body_drift, analysis, '测试样例数据')
 
         invalid_direction = copy.deepcopy(takeover)
         invalid_direction['resultClaims'][0]['direction'] = '越快越好'
         with self.assertRaisesRegex(PublishDataValidationError, '方向语义'):
-            _validate_manual_v4_result_claims(invalid_direction, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(invalid_direction, analysis, '测试样例数据')
 
         scalar_not_reported = copy.deepcopy(takeover)
         scalar_not_reported['resultClaims'][0]['unit'] = '未报告'
         with self.assertRaisesRegex(PublishDataValidationError, '必须使用.*notReported'):
-            _validate_manual_v4_result_claims(scalar_not_reported, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(scalar_not_reported, analysis, '测试样例数据')
 
         duplicate = copy.deepcopy(takeover)
         duplicate['resultClaims'][1] = copy.deepcopy(duplicate['resultClaims'][0])
         with self.assertRaisesRegex(PublishDataValidationError, '重复'):
-            _validate_manual_v4_result_claims(duplicate, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(duplicate, analysis, '测试样例数据')
 
         missing_binding_field = copy.deepcopy(takeover)
         del missing_binding_field['resultClaims'][0]['readerBindings']['metric']
         with self.assertRaisesRegex(PublishDataValidationError, '必须且只能包含'):
-            _validate_manual_v4_result_claims(missing_binding_field, analysis, '测试样例数据')
+            _validate_manual_attributed_result_claims(missing_binding_field, analysis, '测试样例数据')
 
         qualitative_claims = copy.deepcopy(takeover)
         qualitative_analysis = analysis + ' 定性结果不可得，只保留论文报告的失败方向。'
@@ -1477,7 +1494,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             claim['sourceBindings']['value'] = 'qualitative result'
             claim['readerBindings']['value'] = '定性结果不可得'
         with self.assertRaisesRegex(PublishDataValidationError, '实证论文.*至少需要 1 条'):
-            _validate_manual_v4_result_claims(
+            _validate_manual_attributed_result_claims(
                 qualitative_claims, qualitative_analysis, '测试样例数据',
             )
 

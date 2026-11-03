@@ -75,7 +75,7 @@ class PublicationFigureViewTests(unittest.TestCase):
         return {'kind': kind, 'paperId': paperid, 'path': target, 'sourcePath': str(p),
                 'manifestSha256': 'd'*64, 'sourceSha256': view.sha(data), 'size': len(data)}
     def outcome_for(self, items, **extra):
-        body = {'contract': view.CROP_CONTRACT, 'purpose': 'publication-display-only',
+        body = {**view.protocols.record_header(view.CROP_CONTRACT, view.CROP_CONTRACT), 'purpose': 'publication-display-only',
                 'conferenceId': CONFERENCE, 'processId': PROCESS, 'baseGenerationSha256': 'e'*64,
                 'baseGenerationFileSha256': 'f'*64, 'manifestFileSha256': '1'*64,
                 'derivations': copy.deepcopy(items), 'status': 'complete', 'blocked': [],
@@ -132,7 +132,10 @@ class PublicationFigureViewTests(unittest.TestCase):
 
     def test_pure_fd_transform_reuses_exact_page_projection_without_granting_authority(self):
         cli=load('view_pure_transform',SCRIPTS/'conference_publication_figure_view_replay.py')
-        value={'contract':'conference-publication-figure-view-transform-input-v1',
+        protocol=view.protocols
+        family='conference-publication-figure-view-transform-input'
+        value={**protocol.record_header(family, family),
+               'viewFormat':protocol.record_header(view.CONTRACT, view.CONTRACT),
                'rawPageBase64':base64.b64encode(self.raw.encode()).decode(),
                'rawPageSha256':view.sha(self.raw.encode()),'kind':'paper','paperId':self.paperid,
                'nodeDerivation':self.outcome}
@@ -143,6 +146,16 @@ class PublicationFigureViewTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(result['projectedPageBase64']),Path(page['sourcePath']).read_bytes())
         self.assertEqual(result['projectedPageSha256'],page['sourceSha256'])
         self.assertIs(result['doesNotGrantSourceOrReviewOrPublication'],True)
+        projected=base64.b64decode(result['projectedPageBase64'])
+        self.assertIn(b'paper_digest_publication_view_schema_fingerprint:',projected)
+        old_format=protocol.historical_header(view.CONTRACT, 'exact-raw-to-display-projection')
+        original=base64.b64decode(cli.transform({**value,'viewFormat':old_format})['projectedPageBase64'])
+        self.assertNotIn(b'paper_digest_publication_view_schema_fingerprint:',original)
+        self.assertIn(b'paper_digest_publication_view_contract: "conference-publication-figure-view-v1"',original)
+        self.assertEqual(original, projected.replace(
+            b'paper_digest_publication_view_contract: "conference-publication-figure-view"',
+            b'paper_digest_publication_view_contract: "conference-publication-figure-view-v1"').replace(
+            f'paper_digest_publication_view_schema_fingerprint: "{value["viewFormat"]["schemaFingerprint"]}"\n'.encode(),b''))
         for bad in [{**value,'rawPageSha256':'0'*64},{**value,'kind':'asset'},
                     {**value,'path':'/arbitrary/path'},{**value,'nodeDerivation':{**self.outcome,'derivationSha256':'0'*64}}]:
             with self.assertRaises(ValueError):cli.transform(bad)

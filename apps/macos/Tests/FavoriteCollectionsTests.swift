@@ -14,10 +14,17 @@ import Foundation
         func items()->[String:[String:Any]]{metadata()["items"] as? [String:[String:Any]] ?? [:]}
         func edit(_ action:String,_ more:[String:Any]=[:])throws{try store.editFavorites(["action":action,"expectedRevision":revision()].merging(more){_,b in b})}
         let t1=Date(timeIntervalSince1970:1_700_000_000.123),t2=t1.addingTimeInterval(600)
-        var legacy=store.snapshot();legacy["favorites"]=["old"]
+        let fresh=store.snapshot()
+        check("new independent root uses current protocol",ClientProtocols.isCurrentHeader(fresh,"paperdigest-personal-library") && fresh["schema"]==nil)
+        try store.editList(["key":"favorites","action":"add","ids":["stable"]],now:t1)
+        check("new independent root writes current collection format",ClientProtocols.isCurrentHeader(metadata(),"paperdigest-favorite-collections") && store.browserSnapshot()["favoriteCollectionsWritable"] as? Bool == true && store.snapshot()["favoriteCollectionsWritable"]==nil)
+        var legacy=fresh;legacy.removeValue(forKey:"contract");legacy.removeValue(forKey:"schemaFingerprint");legacy["schema"]=1;legacy["favorites"]=["old"]
+        var mixedNested=legacy;mixedNested["favoriteCollections"]=metadata()
+        rejected("released root cannot import stable nested collection"){try store.restorePersonal(mixedNested)}
         try store.restorePersonal(legacy)
         check("legacy extension absent",store.snapshot()["favoriteCollections"]==nil)
         try store.editList(["key":"favorites","action":"add","ids":["new"]],now:t1)
+        check("released root and collection header remain writable",store.snapshot()["schema"] as? Int==1 && store.snapshot()["contract"]==nil && metadata()["version"] as? Int==1 && metadata()["contract"]==nil)
         check("native clock millis",items()["new"]?["addedAt"] as? String=="2023-11-14T22:13:20.123Z")
         check("old favorite timestamp remains absent",items()["old"]==nil)
         let r=revision();try store.editList(["key":"favorites","action":"add","ids":["new"]],now:t2)
@@ -67,6 +74,8 @@ import Foundation
         try store.editList(["key":"reading","action":"add","ids":["two"]]);_=try store.saveNote(id:"old",text:"future notes still editable",baseRevision:1)
         check("future opaque extension unchanged",encoded(store.snapshot()["favoriteCollections"] as! [String:Any])==futureBytes)
         try store.restorePersonal(original)
+        var mixed=original;mixed["contract"]="paperdigest-personal-library";mixed["schemaFingerprint"]=ClientProtocols.schemaFingerprint("paperdigest-personal-library")
+        rejected("mixed personal header cannot import"){try store.restorePersonal(mixed)}
         for bad in ["1500-02-29T00:00:00Z","1900-02-29T00:00:00Z","2025-02-29T00:00:00Z","2024-02-30T00:00:00Z","2024-01-01T00:00:60Z","0000-01-01T00:00:00Z","2024-01-01T00:00:00+00:00"]{check("reject invalid UTC "+bad,!FavoriteCollections.validTime(bad))}
         for good in ["1582-10-10T00:00:00Z","1600-02-29T00:00:00Z","2000-02-29T00:00:00Z","2024-02-29T00:00:00Z","2024-02-29T00:00:00.123456789Z","2024-02-29T23:59:59.999999999Z"]{check("accept real UTC "+good,FavoriteCollections.validTime(good))}
         for bad:Any in [true,"1",1.5,-1,2_147_483_648] {var malformed=original,m=metadata();m["revision"]=bad;malformed["favoriteCollections"]=m;rejected("invalid revision rejected"){try store.restorePersonal(malformed)}}
@@ -97,7 +106,7 @@ import Foundation
             var accepted=true;do{try DesktopStore.validate(object)}catch{accepted=false}
             check("shared validation "+name,accepted==valid)
             if valid,let editable=(fixture["expected"] as? [String:Any])?["editable"] as? Bool {
-                var actual=true;do{_=try FavoriteCollections.editable(object["favoriteCollections"])}catch{actual=false}
+                var actual=true;do{_=try FavoriteCollections.editable(object["favoriteCollections"],root:object)}catch{actual=false}
                 check("shared editability "+name,actual==editable)
             }
         }

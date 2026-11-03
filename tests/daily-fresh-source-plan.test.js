@@ -335,7 +335,7 @@ test('日更来源绑定要求清单来源镜像和来源获取 SHA', async t =>
             fetchPdf: async requested => ({ bytes: Buffer.from(`%PDF-1.4\n${requested}\n%%EOF\n`), url: `https://arxiv.org/pdf/${requested}.pdf`, fetchedAt: new Date().toISOString() })
         }) });
     const descriptor = daily.readDailyFreshSource(plan, { arxivId: id }).freshSourceDescriptor;
-    const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+    const proof = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
         sourceSha256: descriptor.sourceSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
         sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceGeneration: descriptor.sourceGeneration,
         sourceManifestSha256: descriptor.sourceManifestSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
@@ -400,7 +400,7 @@ async function capturedPlanWithBoundPaper(t, id, batchId) {
                 url: `https://arxiv.org/pdf/${requested}.pdf`, fetchedAt: new Date().toISOString() })
         }) });
     const descriptor = daily.readDailyFreshSource(plan, { arxivId: id }).freshSourceDescriptor;
-    const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId, sourceGeneration: 1,
+    const proof = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId, sourceGeneration: 1,
         sourceManifestSha256: descriptor.sourceManifestSha256, sourceSha256: descriptor.sourceSha256,
         sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
     const bound = { arxivId: id, title: '已完成的论文', analysis: '已完成的整篇分析', parsed: { score: 9 },
@@ -531,7 +531,7 @@ test('旧成功日更遇到封存数学字母必须重分析，普通旧结果�
         });
         const details = daily.readDailyFreshSource(plan, { arxivId: id });
         const descriptor = details.freshSourceDescriptor;
-        const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        const proof = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
             sourceSha256: descriptor.sourceSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
             sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceGeneration: descriptor.sourceGeneration,
             sourceManifestSha256: descriptor.sourceManifestSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
@@ -553,4 +553,35 @@ test('旧成功日更遇到封存数学字母必须重分析，普通旧结果�
         assert.equal(daily.isPaperBoundToPlan(paper, plan), true);
         assert.equal(daily.readDailyFreshSource(plan, paper).freshSourceDescriptor.sourceSha256, proof.sourceSha256);
     }
+});
+
+
+test('同一批次使用原运行身份，原封存清单与来源引用可按实际原字节重开', t => {
+    const { sourceRoot } = fixture(t);
+    const formats = require('../scripts/lib/daily-source-format');
+    const input = { batchDate: '2026-10-09', batchId: 'same-batch', papers: [{ arxivId: '2610.12345' }] };
+    const plan = daily.createDailyFreshSourcePlan(input);
+    const file = path.join(plan.runDir, 'run.json');
+    const currentReference = daily.dailyFreshSourceReference(plan);
+    assert.equal(currentReference.contract, formats.REFERENCE);
+    assert.equal(currentReference.schemaFingerprint, formats.currentHeader(formats.REFERENCE).schemaFingerprint);
+    assert.equal(daily.readDailyFreshSourcePlan(currentReference, { rootDir: sourceRoot }).runId, plan.runId);
+    assert.throws(() => daily.readDailyFreshSourcePlan({ ...currentReference, version: 1 }, { rootDir: sourceRoot }), /引用无效/);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete raw.schemaFingerprint;
+    Object.assign(raw, formats.originalRunHeader);
+    raw.sourceExpectations = Object.fromEntries(raw.paperIds.map(id => [id, formats.bundleExpectation(1, true)]));
+    const canonical = value => Array.isArray(value) ? value.map(canonical)
+        : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
+            .map(key => [key, canonical(value[key])])) : value;
+    const historicalBytes = Buffer.from(JSON.stringify(canonical(raw), null, 2) + '\n');
+    fs.writeFileSync(file, historicalBytes);
+    const reopened = daily.createDailyFreshSourcePlan(input);
+    assert.equal(reopened.runId, plan.runId);
+    assert.deepEqual(fs.readFileSync(file), historicalBytes);
+    const originalReference = daily.dailyFreshSourceReference(reopened);
+    assert.equal(originalReference.contract, formats.originalReferenceHeader.contract);
+    assert.equal(originalReference.runManifestSha256, sha(historicalBytes));
+    assert.throws(() => daily.readDailyFreshSourcePlan({ ...currentReference, runManifestSha256: sha(historicalBytes) },
+        { rootDir: sourceRoot }), /封存运行不匹配/);
 });

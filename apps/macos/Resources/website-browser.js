@@ -1,3 +1,5 @@
+import './website-tags/protocol-registry.js';
+import {favoriteCollectionsWritable} from './favorites-ui.js';
 import './website-tags/website-tag-core.js';
 const tags = globalThis.ResearchTags;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -142,7 +144,7 @@ export function mountWebsiteBrowser(app, {panelHost, contextHost, onChange, onVi
     $('classification-breadcrumb').innerHTML=`<button type="button" data-classification-all>${{favorites:'全部收藏','reading-list':'全部待读',today:'当期论文',conference:'会议论文'}[view]||'全部论文'}</button>`+(currentNode&&graph?.byId[currentNode]?graph.path(currentNode).map(node=>`<span aria-hidden="true">›</span><button type="button" data-classification-choose="${esc(node.id)}" ${node.id===currentNode?'aria-current="location"':''}>${esc(node.zh)}</button>`).join(''):'');
     $('classification-chips').innerHTML=(selected.length>1?selected:[]).map(id=>`<button type="button" data-classification-remove="${esc(id)}" aria-label="移除${esc(graph?.byId[id]?.zh||id)}筛选">${esc(graph?.byId[id]?.zh||id)} <span aria-hidden="true">×</span></button>`).join('')+((selected.length>1||selection.researchType!=='all'||selection.domainScope!=='all')?'<button type="button" class="classification-clear" data-classification-all>清除分类筛选</button>':'');
     const description=$('classification-description'),node=graph?.byId[currentNode];description.hidden=!node;if(node){description.querySelector('summary').textContent=node.zh+' · 定义与范围';description.querySelector('div').innerHTML=`<p>${esc(node.en||'')} · ${esc(node.id)}</p><p>${esc(node.definition||'网站未提供定义。')}</p>${tags.readerScopeNote(node.scopeNote)?`<p>${esc(tags.readerScopeNote(node.scopeNote))}</p>`:''}`;}
-    const metadata=app.state.personal?.favoriteCollections,upgrade=metadata!=null&&metadata.version!==1?'收藏资料来自更新版本，请升级工作台后编辑收藏；':'';
+    const upgrade=!favoriteCollectionsWritable(app.state.personal)?'收藏资料来自更新版本，请升级工作台后编辑收藏；':'';
     const advancedActive=selection.scope!=='subtree'||selection.role!=='any'||selection.researchType!=='all'||selection.domainScope!=='all',rules=[selection.scope==='subtree'?'包括子类':'仅直接标签',selection.role==='primary'?'主要角色':'全部角色'];
     if(selection.researchType!=='all')rules.push(tags.researchTypeLabels[selection.researchType]||'研究类型未标明');if(selection.domainScope!=='all')rules.push(tags.domainLabels[selection.domainScope]||'研究范围未标明');
     $('website-classification-status').textContent=upgrade+(index.notice||`${selected.length?selected.length+' 个方向 · ':''}${rules.join(' · ')}`);
@@ -184,5 +186,5 @@ export function mountWebsiteBrowser(app, {panelHost, contextHost, onChange, onVi
   $('favorite-grouping').onchange=()=>{grouping=$('favorite-grouping').value;changed();};
   function snapshot(){return {selection:structuredClone(selection),expanded:[...expanded],directoryQuery,currentNode,open,grouping,directoryScroll:$('classification-tree').scrollTop,advancedOpen:$('classification-advanced').open,descriptionOpen:$('classification-description').open};}
   function restore(saved,nextView){selection=saved?.selection?structuredClone(saved.selection):{facets:{},scope:'subtree',role:'any',researchType:'all',domainScope:'all'};expanded=new Set(saved?.expanded||[]);directoryQuery=saved?.directoryQuery||'';currentNode=saved?.currentNode||'';open=saved?.open??nextView==='directions';grouping=saved?.grouping||'relative';$('classification-search').value=directoryQuery;$('classification-advanced').open=saved?.advancedOpen||false;$('classification-description').open=saved?.descriptionOpen||false;treeSignature='';render(nextView);$('classification-tree').scrollTop=saved?.directoryScroll||0;}
-  return {prepare,render,matches:id=>matched.has(id),snapshot,restore,get grouping(){return grouping;},get readOnly(){const metadata=app.state.personal?.favoriteCollections;return metadata!=null&&metadata.version!==1;},summary:index.summary,paths:index.paths,guides:index.guides};
+  return {prepare,render,matches:id=>matched.has(id),snapshot,restore,get grouping(){return grouping;},get readOnly(){return !favoriteCollectionsWritable(app.state.personal);},summary:index.summary,paths:index.paths,guides:index.guides};
 }

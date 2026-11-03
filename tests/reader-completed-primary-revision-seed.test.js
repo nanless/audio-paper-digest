@@ -73,7 +73,7 @@ test('同一已核验反馈的正确主文可引用当前真实 Reader，不造�
     const before = JSON.stringify(sample.paper);
     await daily.withDailyFreshAnalysisContext(sample.plan, () => daily.withDailyFreshPaperSource(sample.plan, sample.paper,
         () => facts.withFactReview(sample.bound, () => {
-            assert.equal(engine.hasValidApiReaderV3Records(sample.paper), true);
+            assert.equal(engine.hasValidIntegratedApiReaderRecords(sample.paper), true);
             const seed = deep.prepareApiReaderRevisionSeed(sample.paper, sample.source.text, sample.feedback.readerFeedback);
             assert.equal(seed.metadata.revisionSeedStageRecovery, 'reviewed-completed-primary-reader-stage-v1');
             assert.equal(seed.metadata.revisionSeedArticleSha256, sample.paper.apiReaderArticleSha256);

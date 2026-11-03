@@ -2,9 +2,9 @@
 const test=require('node:test'),assert=require('node:assert/strict'),path=require('node:path');
 const fixture=require('../../../tests/fixtures/workbench-website-query-golden.json');
 globalThis.ResearchTags=require('../Resources/website-tags/website-tag-core.js');
-// Explicit Node-only dependency URL adapter; browser integration loads unchanged modules.
-const source=require('node:fs').readFileSync(path.join(__dirname,'../Resources/website-browser.js'),'utf8').replace("'./website-tags/website-tag-core.js'",JSON.stringify(require('node:url').pathToFileURL(path.join(__dirname,'../Resources/website-tags/website-tag-core.js')).href));
-const moduleReady=import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+// Import the actual resource module so every relative dependency is resolved
+// from the same native bundle path as in the browser.
+const moduleReady=import(require('node:url').pathToFileURL(path.join(__dirname,'../Resources/website-browser.js')).href);
 function filters(value){return {facets:{},scope:'subtree',role:'any',researchType:'all',domainScope:'all',...value};}
 for(const item of fixture.cases)test('Mac website display index: '+item.name,async()=>{
  const {createWebsiteIndex}=await moduleReady,tags=globalThis.ResearchTags,graph=tags.createRegistry(fixture.display.snapshot,fixture.display.versions),raw=item.recordKeys.map(key=>fixture.records[key]),groups=tags.groupPapers(raw,graph);

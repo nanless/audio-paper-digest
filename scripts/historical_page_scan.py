@@ -22,12 +22,12 @@ from typing import Any, Callable
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
 from path_config import HISTORICAL_PAGE_INVENTORY_DIR, PROJECT_ROOT
+import protocol_codec
 
 
 DEFAULT_OUTPUT_DIR = HISTORICAL_PAGE_INVENTORY_DIR
-LEDGER_CONTRACT = "historical-page-ledger-v1"
-RECEIPT_CONTRACT = "historical-page-ledger-receipt-v1"
-VERSION = 1
+LEDGER_CONTRACT = protocol_codec.contract("historical-page-ledger")
+RECEIPT_CONTRACT = protocol_codec.contract("historical-page-ledger-receipt")
 MAX_MARKDOWN_BYTES = 64 * 1024 * 1024
 MAX_CONFIG_BYTES = 16 * 1024 * 1024
 SAFE_JSON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,159}\.json$")
@@ -44,72 +44,42 @@ HTML_LINK_RE = re.compile(r"<a\b[^>]*\bhref\s*=\s*([\"'])(.*?)\1", re.I | re.DOT
 CONFERENCE_RE = re.compile(r"^(icassp|iclr|icml)-(\d{4})$", re.I)
 CONFERENCE_FILE_RE = re.compile(r"^(icassp|iclr|icml)(\d{4})-(summary|task-[a-z0-9._-]+)$", re.I)
 DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-|$)")
-PAGE_ID_CONTRACT = "historical-page-id-v1"
+PAGE_ID_CONTRACT = "historical-page-id"
 LINK_TYPES = {"markdown-inline", "html-anchor"}
 LINK_STATUSES = {"resolved", "unresolved", "ambiguous"}
-LEGACY_PUBLICATION_EVIDENCE_FIELDS = {
-    "paper_digest_abstract_sha256", "paper_digest_api_reader_article_sha256",
-    "paper_digest_api_reader_author_count", "paper_digest_api_reader_author_identity_contract",
-    "paper_digest_api_reader_author_identity_sha256", "paper_digest_api_reader_contract",
-    "paper_digest_api_reader_decision_projection", "paper_digest_api_reader_plan_sha256",
-    "paper_digest_api_reader_resource_count", "paper_digest_api_reader_resource_identity_contract",
-    "paper_digest_api_reader_resource_identity_sha256", "paper_digest_api_reader_source_binding_contract",
-    "paper_digest_api_reader_source_bindings_sha256", "paper_digest_api_reader_source_formula_count",
-    "paper_digest_api_reader_source_table_count", "paper_digest_api_reader_structured_artifacts_sha256",
-    "paper_digest_arxiv_id", "paper_digest_arxiv_version", "paper_digest_arxiv_versioned_id",
-    "paper_digest_document_type", "paper_digest_fresh_authoring_contract",
-    "paper_digest_fresh_authoring_sha256", "paper_digest_manual_depth", "paper_digest_page_type",
-    "paper_digest_pipeline_owned", "paper_digest_primary_task", "paper_digest_rank_bucket",
-    "paper_digest_primary_method", "paper_digest_taxonomy_concepts",
-    "paper_digest_taxonomy_contract", "paper_digest_taxonomy_registry_sha256",
-    "paper_digest_taxonomy_registry_version", "paper_digest_taxonomy_scope",
-    "paper_digest_taxonomy_selection_contract",
-    "paper_digest_reader_article_sha256", "paper_digest_reader_quality", "paper_digest_score",
-    "paper_digest_sidecars", "paper_digest_tutorial_artifact_plan_sha256",
-    "paper_digest_tutorial_contract", "paper_digest_tutorial_payload_contract",
-    "paper_digest_tutorial_payload_sha256", "paper_digest_tutorial_quality_sha256",
-    "paper_digest_workbench_contract",
-}
 LEGACY_TAG_FIELDS = {"paper_digest_taxonomy_" + field for field in (
     "contract", "selection_contract", "registry_version", "registry_sha256", "concepts", "scope")}
 TAG_FIELDS = {"paper_digest_tags_" + field for field in (
-    "contract", "selection_contract", "registry_version", "registry_sha256", "concepts", "scope")}
-PUBLICATION_EVIDENCE_FIELDS = LEGACY_PUBLICATION_EVIDENCE_FIELDS | TAG_FIELDS
-
-LEGACY_SCAN_POLICY = {
-    "contract": "historical-page-scan-policy-v3",
-    "bodyRetention": "sha256-only",
-    "identityHints": "frontmatter-filename-explicit-links-v1",
-    "outboundLinks": "strict-balanced-inline-occurrences-v3",
-    "linkOffsetUnit": "utf8-byte-body-relative",
-    "taxonomyRoutes": "unverified-candidates-v2",
-    "publicationEvidence": "schema-checked-hash-default-whitelist-v3",
-    "targetRecordBinding": "target-page-snapshot-sha256-v1",
-}
-
-LEGACY_SCAN_POLICY_V4 = {key: value for key, value in LEGACY_SCAN_POLICY.items() if key != "taxonomyRoutes"}
-LEGACY_SCAN_POLICY_V4.update({
-    "contract": "historical-page-scan-policy-v4",
-    "tagRoutes": "unverified-candidates-v2",
-    "publicationEvidence": "schema-checked-hash-default-whitelist-v4",
-})
-
-LEGACY_SCAN_POLICY_V5 = {**LEGACY_SCAN_POLICY_V4,
-               "contract": "historical-page-scan-policy-v5",
-               "tagRoutes": "unverified-candidates-v3"}
-
-SCAN_POLICY = {**LEGACY_SCAN_POLICY_V5, "contract": "historical-page-scan-policy-v6",
-               "identityHints": "frontmatter-filename-exact-explicit-links-v2"}
+    "contract", "selection_contract", "registry_version", "registry_sha256", "concepts", "scope", "schema_fingerprint")}
+SCAN_POLICY_CONTRACT = "historical-page-scan-policy"
+_SCAN_HEADER = protocol_codec.record_header(SCAN_POLICY_CONTRACT, SCAN_POLICY_CONTRACT)
+_SCAN_DECLARATION = protocol_codec.declared_schema(SCAN_POLICY_CONTRACT, SCAN_POLICY_CONTRACT, _SCAN_HEADER["schemaFingerprint"])
+SCAN_POLICY = {**_SCAN_HEADER, **_SCAN_DECLARATION["policy"]}
+PUBLICATION_EVIDENCE_FIELDS = set(_SCAN_DECLARATION["evidenceFields"])
 
 
-def _scan_fields(policy: Any) -> tuple[str, str, set[str]]:
-    if policy == LEGACY_SCAN_POLICY:
-        return "legacyTaxonomyCandidates", "taxonomy", LEGACY_PUBLICATION_EVIDENCE_FIELDS
-    if policy == LEGACY_SCAN_POLICY_V4:
-        return "legacyTaxonomyCandidates", "taxonomy", PUBLICATION_EVIDENCE_FIELDS
-    if policy == LEGACY_SCAN_POLICY_V5 or policy == SCAN_POLICY:
-        return "legacyTagRouteCandidates", "routeGroup", PUBLICATION_EVIDENCE_FIELDS
-    raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：扫描策略不是受支持的完整格式。")
+def _scan_fields(policy: Any) -> tuple[str, str, set[str], dict[str, Any]]:
+    if not protocol_codec.has_valid_header(policy, SCAN_POLICY_CONTRACT):
+        raise _fail("历史页面标签链接候选被拒绝：扫描策略不是受支持的完整格式。")
+    header = protocol_codec.record_header(policy["contract"], SCAN_POLICY_CONTRACT, policy.get("schemaFingerprint"))
+    if "schemaFingerprint" in header:
+        declaration = protocol_codec.declared_schema(header["contract"], SCAN_POLICY_CONTRACT, header["schemaFingerprint"])
+        if policy != {**header, **declaration["policy"]}:
+            raise _fail("历史页面标签链接候选被拒绝：扫描策略不是受支持的完整格式。")
+        page_id_header = declaration["pageIdentityFormat"]
+        if (not protocol_codec.has_valid_header(page_id_header, PAGE_ID_CONTRACT)
+                or page_id_header != protocol_codec.record_header(page_id_header["contract"], PAGE_ID_CONTRACT, page_id_header.get("schemaFingerprint"))):
+            raise _fail("历史页面身份格式不受支持")
+    else:
+        raw = (PROJECT_ROOT / "config" / "historical-page-scan-formats.json").read_bytes()
+        if sha256_bytes(raw) != "476009a8b42973cd1bf1836774674e49d3cc98d73aec0992f8a0296796cfa9e1":
+            raise _fail("历史页面扫描格式目录的原字节已变化")
+        catalog = _strict_json(raw, "历史页面扫描格式目录")
+        declaration = next((item for item in catalog["formats"] if item["policy"]["contract"] == header["contract"]), None)
+        if declaration is None or stable_hash(declaration["policy"]) != declaration["sha256"] or stable_hash(policy) != declaration["sha256"]:
+            raise _fail("历史页面标签链接候选被拒绝：扫描策略不是受支持的完整格式。")
+        page_id_header = protocol_codec.historical_header(PAGE_ID_CONTRACT, "path-and-primary-url")
+    return declaration["candidateField"], declaration["groupField"], set(declaration["evidenceFields"]), page_id_header
 
 PRESERVED_PUBLICATION_STRING_FIELDS = {
     "paper_digest_arxiv_id",
@@ -766,7 +736,7 @@ def _page_record(repo: Path, path: Path, raw: bytes, base: str, git_blob_oid: st
     cohort_date = date_match.group(1) if date_match else published_date
     file_match = CONFERENCE_FILE_RE.fullmatch(path.stem)
     legacy_task_key = file_match.group(3).lower() if file_match and file_match.group(3).lower().startswith("task-") else None
-    page_id = f"page:{stable_hash({'contract': PAGE_ID_CONTRACT, 'path': relative, 'primaryUrl': primary_url})}"
+    page_id = f"page:{stable_hash({**_SCAN_DECLARATION['pageIdentityFormat'], 'path': relative, 'primaryUrl': primary_url})}"
     marker_fields = sorted(key for key in frontmatter if key.startswith("paper_digest_"))
     marker_values = {key: frontmatter[key] for key in marker_fields}
     marker = {"pipelineOwned": frontmatter.get("paper_digest_pipeline_owned")
@@ -867,7 +837,7 @@ def scan_historical_pages(blog_repo: Path, *, require_clean_main: bool = False,
                           remote_name: str = "origin",
                           after_scan_hook: Callable[[], None] | None = None) -> dict[str, Any]:
     """构建并自检一份不可变快照，不写任何输出。"""
-    if SCAN_POLICY["contract"] != "historical-page-scan-policy-v6" or SCAN_POLICY["tagRoutes"] != "unverified-candidates-v3":
+    if SCAN_POLICY != {**_SCAN_HEADER, **_SCAN_DECLARATION["policy"]}:
         raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：新的扫描只能使用当前标签链接候选格式。")
     repo = _safe_directory(Path(blog_repo))
     before = _git_snapshot(repo, remote_name)
@@ -928,7 +898,7 @@ def scan_historical_pages(blog_repo: Path, *, require_clean_main: bool = False,
         "gitObjectFormat": object_format, "contentTreeOid": content_tree_oid,
         "trackedPages": {"count": len(tracked_pages), "setSha256": stable_hash(tracked_pages)}}
     policy = dict(SCAN_POLICY)
-    body = {"contract": LEDGER_CONTRACT, "version": VERSION, "source": source,
+    body = {**protocol_codec.record_header(LEDGER_CONTRACT, LEDGER_CONTRACT), "source": source,
             "policy": policy, "pages": pages, "urlCollisions": collisions,
             "outboundPostLinks": outbound_links, "outboundPostLinksSha256": stable_hash(outbound_links),
             "counts": counts, "pageSetSha256": stable_hash(pages)}
@@ -937,11 +907,12 @@ def scan_historical_pages(blog_repo: Path, *, require_clean_main: bool = False,
 
 
 def validate_ledger(value: Any) -> dict[str, Any]:
-    value = _exact(value, {"contract", "version", "source", "policy", "pages", "urlCollisions",
+    if not protocol_codec.has_valid_header(value, LEDGER_CONTRACT):
+        raise _fail("historical inventory format is unsupported")
+    header = protocol_codec.record_header(value["contract"], LEDGER_CONTRACT, value.get("schemaFingerprint"))
+    value = _exact(value, {*header, "source", "policy", "pages", "urlCollisions",
                            "outboundPostLinks", "outboundPostLinksSha256", "counts", "pageSetSha256",
                            "ledgerSha256"}, "historical page ledger")
-    if value["contract"] != LEDGER_CONTRACT or value["version"] != VERSION:
-        raise _fail("historical page ledger contract/version is unsupported")
     body = dict(value); body.pop("ledgerSha256")
     if _sha(value["ledgerSha256"], "ledgerSha256") != stable_hash(body):
         raise _fail("ledgerSha256 drifted")
@@ -993,12 +964,12 @@ def validate_ledger(value: Any) -> dict[str, Any]:
     for field in ("pageCount", "publishedPageCount"):
         if not isinstance(hugo_runtime[field], int) or isinstance(hugo_runtime[field], bool) or hugo_runtime[field] < 0:
             raise _fail(f"source.hugoRuntime.{field} is invalid")
-    candidate_field, group_field, evidence_fields = _scan_fields(value["policy"])
+    candidate_field, group_field, evidence_fields, page_id_header = _scan_fields(value["policy"])
     if not isinstance(value["pages"], list) or not value["pages"]:
         raise _fail("ledger pages must be non-empty")
     paths = []
     for index, page in enumerate(value["pages"]):
-        _validate_page(page, index, evidence_fields, candidate_field, group_field)
+        _validate_page(page, index, evidence_fields, candidate_field, group_field, page_id_header)
         for field in (page["primaryUrl"], *page["aliases"],
                       *(link["targetUrl"] for link in page["outboundPostLinks"])):
             if _canonical_blog_url(field, source["baseUrl"]) != field:
@@ -1077,7 +1048,7 @@ def validate_ledger(value: Any) -> dict[str, Any]:
     return _json_value(value)
 
 
-def _validate_page(page: Any, index: int, publication_fields: set[str], candidate_field: str, group_field: str) -> None:
+def _validate_page(page: Any, index: int, publication_fields: set[str], candidate_field: str, group_field: str, page_id_header: dict[str, Any]) -> None:
     if not isinstance(page, dict):
         raise HistoricalPageInventoryError(f"历史页面标签链接候选被拒绝：页面 {index} 必须是对象。")
     if "legacyTagRouteCandidates" in page and "legacyTaxonomyCandidates" in page:
@@ -1110,7 +1081,7 @@ def _validate_page(page: Any, index: int, publication_fields: set[str], candidat
     for field in ("contentSha256", "frontmatterSha256", "bodySha256"):
         _sha(page[field], f"pages[{index}].{field}")
     _safe_text(page["primaryUrl"], f"pages[{index}].primaryUrl")
-    expected_page_id = f"page:{stable_hash({'contract': PAGE_ID_CONTRACT, 'path': page['path'], 'primaryUrl': page['primaryUrl']})}"
+    expected_page_id = f"page:{stable_hash({**page_id_header, 'path': page['path'], 'primaryUrl': page['primaryUrl']})}"
     if page["pageId"] != expected_page_id:
         raise _fail(f"pages[{index}].pageId does not bind path and primaryUrl")
     if (not isinstance(page["aliases"], list) or any(not isinstance(item, str) for item in page["aliases"])
@@ -1276,7 +1247,7 @@ def build_receipt(ledger: dict[str, Any], ledger_name: str) -> tuple[bytes, dict
     if not isinstance(ledger_name, str) or not SAFE_JSON_NAME.fullmatch(ledger_name):
         raise _fail("ledger output name must be a safe direct JSON filename")
     ledger_bytes = encoded_json(checked)
-    body = {"contract": RECEIPT_CONTRACT, "version": VERSION,
+    body = {**protocol_codec.record_header(RECEIPT_CONTRACT, RECEIPT_CONTRACT),
             "ledger": {"name": ledger_name, "fileSha256": sha256_bytes(ledger_bytes),
                        "ledgerSha256": checked["ledgerSha256"],
                        "pageSetSha256": checked["pageSetSha256"], "pageCount": len(checked["pages"])},
@@ -1286,10 +1257,11 @@ def build_receipt(ledger: dict[str, Any], ledger_name: str) -> tuple[bytes, dict
 
 
 def _receipt_file_binding(value: Any, ledger_bytes: bytes, ledger_name: str) -> dict[str, Any]:
-    value = _exact(value, {"contract", "version", "ledger", "repositorySnapshotSha256", "receiptSha256"},
+    if not protocol_codec.has_valid_header(value, RECEIPT_CONTRACT):
+        raise _fail("historical inventory format is unsupported")
+    header = protocol_codec.record_header(value["contract"], RECEIPT_CONTRACT, value.get("schemaFingerprint"))
+    value = _exact(value, {*header, "ledger", "repositorySnapshotSha256", "receiptSha256"},
                    "historical page receipt")
-    if value["contract"] != RECEIPT_CONTRACT or value["version"] != VERSION:
-        raise _fail("historical page receipt contract/version is unsupported")
     bound = _exact(value["ledger"], {"name", "fileSha256", "ledgerSha256", "pageSetSha256", "pageCount"},
                    "receipt ledger binding")
     if not isinstance(bound["pageCount"], int) or isinstance(bound["pageCount"], bool) or bound["pageCount"] < 1:
@@ -1429,7 +1401,7 @@ def load_inventory_pair(ledger_path: Path, receipt_path: Path) -> tuple[dict[str
 
 __all__ = [
     "DEFAULT_OUTPUT_DIR", "HistoricalPageInventoryError", "LEDGER_CONTRACT", "RECEIPT_CONTRACT",
-    "VERSION", "build_receipt", "encoded_json", "load_inventory_pair", "scan_historical_pages",
+    "build_receipt", "encoded_json", "load_inventory_pair", "scan_historical_pages",
     "sha256_bytes", "stable_hash", "validate_ledger", "validate_receipt", "write_inventory_pair",
 ]
 

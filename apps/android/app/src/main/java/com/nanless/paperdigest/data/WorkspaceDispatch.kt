@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import org.json.JSONObject
+import com.nanless.paperdigest.protocols.ClientProtocols
 import java.io.File
 import java.util.UUID
 
@@ -14,16 +15,18 @@ class WorkspaceDispatch(directory: File) {
         return if (file.exists()) {
             val bytes = JsonFiles.read(file, 4096)
             controlled.file("dispatch.json", required = true)
-            JSONObject(PublishedUtf8.decode(bytes)).getString("epoch").also { UUID.fromString(it) }
+            val original=JSONObject(PublishedUtf8.decode(bytes))
+            require(ClientProtocols.hasValidHeader(original,"paperdigest-device-dispatch")){"设备调度格式或结构指纹未知，原文件保留"}
+            original.getString("epoch").also { UUID.fromString(it) }
         } else UUID.randomUUID().toString().also {
-            JsonFiles.write(file, JSONObject().put("contract", "paperdigest-device-dispatch-v1").put("epoch", it))
+            JsonFiles.write(file, ClientProtocols.record("paperdigest-device-dispatch").put("epoch", it))
             controlled.file("dispatch.json", required = true)
         }
     }
     @Synchronized fun rotate() {
         val file = controlled.file("dispatch.json", required = true)
         val fresh = UUID.randomUUID().toString()
-        JsonFiles.write(file, JSONObject().put("contract", "paperdigest-device-dispatch-v1").put("epoch", fresh))
+        JsonFiles.write(file, ClientProtocols.record("paperdigest-device-dispatch").put("epoch", fresh))
         controlled.file("dispatch.json", required = true)
         epoch = fresh
     }

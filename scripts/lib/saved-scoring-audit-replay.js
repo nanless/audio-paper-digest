@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 
 // A snapshot supplies a candidate, never scoring permission. Only the normal
 // scoring fingerprint check in deep-analyzer can accept it after a fresh probe.
@@ -124,7 +126,7 @@ function source(paper, plan) {
 }
 function validatePaidPair(start, terminal, paper, stage, runId) {
     for (const entry of [start, terminal]) {
-        if (entry.version !== 'llm-usage-v1' || entry.runId !== runId
+        if (!isUsageEventFormat(entry) || entry.runId !== runId
             || id({ arxivId: entry.paperId }) !== id(paper) || entry.stage !== 'scoringAudit'
             || entry.contentAttempt !== 1 || entry.transportAttempt !== 1
             || entry.model !== stage.model || entry.protocol !== stage.protocol

@@ -155,3 +155,24 @@ test('名称和语义标识不接受结尾换行，两种语言都不能构造�
         }
     }
 });
+
+
+test('已登记头枚举包含同名原指纹，副本不改变登记且不接受未知身份', () => {
+    const original = createCodec(catalogs);
+    const rows = structuredClone(catalogs);
+    rows[0].protocols[0].historical.push({ tag: 'example-record', variant: 'source-bound',
+        header: original.recordHeader('example-record', 'example-record'), schema: structuredClone(catalogs[0].protocols[0].currentSchema) });
+    rows[0].protocols[0].currentSchema.fields.push('actualSourceFiles');
+    const codec = createCodec(rows), headers = codec.registeredHeaders('example-record');
+    assert.equal(headers.length, 4);
+    assert.deepEqual(headers[0], codec.recordHeader('example-record', 'example-record'));
+    assert.deepEqual(headers[3], original.recordHeader('example-record', 'example-record'));
+    assert.equal(headers.every(header => codec.hasValidHeader(header, 'example-record')), true);
+    headers[0].schemaFingerprint = '0'.repeat(64);
+    assert.notEqual(codec.registeredHeaders('example-record')[0].schemaFingerprint, headers[0].schemaFingerprint);
+    assert.throws(() => codec.registeredHeaders('unregistered-record'));
+    const result = JSON.parse(execFileSync('bash', ['scripts/python-runtime.sh', '-c',
+        'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;c=Codec(json.load(sys.stdin));print(json.dumps(c.registered_headers("example-record")))'], {
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(rows), encoding: 'utf8' }));
+    assert.deepEqual(result, codec.registeredHeaders('example-record'));
+});

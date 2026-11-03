@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { READER_SOURCE_CONTENT_MODE } = require('../scripts/lib/reader-contract.js');
+const readerMode = require('../scripts/lib/reader-content-mode.js');
 
 test('Reader 证据不受正式正文影响，并保留原始来源标记', () => {
     const { buildApiReaderEvidenceContext } = require('../scripts/deep-analyzer.js');
@@ -69,7 +69,9 @@ test('第一次真正的 Reader 请求排除正式记录和已有 Reader，同�
     assert.equal(requests, 1);
     const envelopes = fs.readdirSync(directory).map(filename => JSON.parse(fs.readFileSync(path.join(directory, filename), 'utf8')));
     assert.equal(envelopes.length, 1);
-    assert.equal(envelopes[0].identity.contentMode, READER_SOURCE_CONTENT_MODE);
+    for (const [key, value] of Object.entries(readerMode.fields('source-only'))) {
+        assert.equal(envelopes[0].identity[key], value);
+    }
     assert.doesNotMatch(JSON.stringify(envelopes[0]), /OLD_CANONICAL_UNIQUE_MARKER|OLD_READER_UNIQUE_MARKER/);
     assert.equal(envelopes[0].payload.rawDraft, '无');
 });

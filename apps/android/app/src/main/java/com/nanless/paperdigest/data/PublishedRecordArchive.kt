@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -35,7 +37,7 @@ class PublishedRecordArchive(private val directory: File) {
         val rawManifest = JsonFiles.read(File(directory, "index-manifests/$snapshot.json"), 1024 * 1024)
         require(sha256(rawManifest) == snapshot) { "原始目录清单字节已变化" }
         val manifest = JSONObject(decodeUTF8(rawManifest))
-        require(manifest.getString("contract") == "paper-search-index-manifest-v1") { "原始目录协议尚不支持" }
+        require(ClientProtocols.hasValidHeader(manifest,"paper-search-index-manifest")) { "原始目录协议尚不支持" }
         val shards = manifest.getJSONArray("shards").objects()
         require(shards.size in 1..128)
         val wanted = paper.appearances.toSet().ifEmpty { setOf(paper.blogURL) }
@@ -62,7 +64,7 @@ class PublishedRecordArchive(private val directory: File) {
             }
         }
         require(count == manifest.getLong("recordCount") && totalBytes == manifest.getLong("totalBytes") && found == wanted) { "原始目录成员、总量或论文出现记录不完整" }
-        JSONObject().put("contract", "android-published-record-archive-v1").put("status", "verified-local-originals")
+        ClientProtocols.record("paperdigest-published-record-archive").put("status", "verified-local-originals")
             .put("snapshotID", snapshot).put("manifestSHA256", snapshot).put("manifestBytes", rawManifest.size)
             .put("manifestRawBase64", java.util.Base64.getEncoder().encodeToString(rawManifest)).put("records", records)
     }
@@ -70,6 +72,6 @@ class PublishedRecordArchive(private val directory: File) {
         private fun decodeUTF8(bytes: ByteArray): String = Charsets.UTF_8.newDecoder()
             .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
             .decode(java.nio.ByteBuffer.wrap(bytes)).toString()
-        fun unavailable(message: String) = JSONObject().put("contract", "android-published-record-archive-v1").put("status", "unavailable").put("message", message)
+        fun unavailable(message: String) = ClientProtocols.record("paperdigest-published-record-archive").put("status", "unavailable").put("message", message)
     }
 }

@@ -10,7 +10,8 @@ import re
 import stat
 
 from blog_entry_loader import load_publish_to_blog
-from tag_catalog import _parse_tag_catalog_bytes
+from tag_catalog import _parse_tag_catalog_bytes, tag_catalog_identity
+import protocol_codec as protocols
 import tag_paths
 
 
@@ -64,7 +65,7 @@ def validate_published_tag_catalog(blog_repo, registry_sha, registry_version):
         if hashlib.sha256(source_raw).hexdigest() != registry_sha:
             raise ValueError('项目原词表字节与页面绑定 SHA 不一致。')
         source = _parse_tag_catalog_bytes(source_raw)
-        if source['version'] != registry_version:
+        if tag_catalog_identity(source) != registry_version:
             raise ValueError('项目原词表版本与页面绑定版本不一致。')
         publisher = load_publish_to_blog()
         expected = publisher.build_tag_catalog_snapshot(source)
@@ -82,13 +83,14 @@ def validate_published_tag_catalog(blog_repo, registry_sha, registry_version):
         display = pair('tag-catalog-snapshot.json')
         versions = pair('tag-catalog-versions.json')
         if not isinstance(display, dict) or not isinstance(versions, dict) \
-                or versions.get('contract') != publisher.TAG_CATALOG_VERSIONS_CONTRACT \
-                or display.get('contract') != publisher.TAG_CATALOG_SNAPSHOT_CONTRACT:
+                or not protocols.has_valid_header(versions,'paper-tag-catalog-versions') \
+                or not protocols.has_valid_header(display,'paper-tag-catalog-snapshot'):
             raise ValueError('博客标签显示资源不是当前受控格式。')
         saved = publisher._validate_tag_version_catalog(versions)
         publisher._validate_tag_catalog_snapshot(display)
         current = saved[versions['currentSha256']]
-        if display != publisher._build_tag_catalog_display_snapshot(current):
+        display_header=protocols.record_header(display['contract'],'paper-tag-catalog-snapshot',display.get('schemaFingerprint'))
+        if display != publisher._build_tag_catalog_display_snapshot(current,target_header=display_header):
             raise ValueError('博客当前显示词表与版本目录不一致。')
         issued = saved.get(registry_sha)
         if issued is None or publisher._build_tag_catalog_display_snapshot(issued) != expected:
@@ -96,7 +98,7 @@ def validate_published_tag_catalog(blog_repo, registry_sha, registry_version):
         archived = pair(f'tag-catalog-history/{registry_sha}.json')
         if archived != issued:
             raise ValueError('博客本次词表完整归档与版本目录不一致。')
-        return {'contract': 'published-tag-catalog-availability-v1',
+        return {**protocols.record_header('published-tag-catalog-availability','published-tag-catalog-availability'),
                 'registrySha256': registry_sha, 'registryVersion': registry_version,
                 'displayRegistrySha256': display['registrySha256'],
                 'sourceCatalogSha256': hashlib.sha256(source_raw).hexdigest(),

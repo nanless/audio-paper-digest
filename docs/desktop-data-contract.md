@@ -1,6 +1,8 @@
 # Mac 客户端静态数据合同
 
-本文定义后续可选的 `desktop/v1` 静态数据接口。专用出口和导出器尚未启用；当前论文速递工作台通过已有搜索目录和已发布页面同步内容，见[网站数据适配](mac-app-data.md)及[Android 说明](../apps/android/README.md)。下文是新接口的字段与失败处理设计，当前搜索索引仍使用自己的既有协议。
+本文保留“独立论文详情与内容寻址正文”的后续设计，专用详情出口和导出器尚未启用。当前源码已采用 `client/index.json` 目录、`client/papers/` 四份附属文件，以及对原公开入口的精确兼容读取，见[网站数据适配](mac-app-data.md)及[Android 说明](../apps/android/README.md)。这不等于下文的详情、删除事件或快照出口已经实现，也不表示已经重新发行客户端。
+
+拟议接口不再用路径编号或合同编号表示结构变化。下文的名称和字段是设计建议，实施时须先登记实际结构，再由共享生成器提供稳定合同名与 `schemaFingerprint`；未登记、未生成的设计字段不能当作可访问地址或已通过检查的记录。
 
 产品范围与界面见[桌面研究工作台规划](desktop-research-workbench-plan.md)。本合同不修改日更、会议、历史的来源资格、审查、费用或发布凭证。
 
@@ -15,11 +17,11 @@
 | 来源 | 已有内容 | 边界 |
 |---|---|---|
 | 博客 `layouts/_default/index.json` | 标题、短摘要、页面类型、分类、分数、身份与 citation 投影 | `summary` 不是完整 Reader；`date` 是页面日期 |
-| 博客 `scripts/shard-search-index.js` | 带字节数、SHA、条数的内容寻址分片 | 现合同为 `paper-search-index-manifest-v1`，不直接改名成桌面协议 |
+| 博客 `scripts/shard-search-index.js` | 带字节数、SHA、条数的内容寻址分片 | 当前内部格式为 `paper-search-index-manifest` 加结构指纹；原入口保留已发行客户端的精确旧格式 |
 | 博客 `assets/js/search-index-loader.js` | 同源目录、UTF-8、字节、SHA、数量检查与旧格式兼容 | Mac 使用自己的下载、事务与缓存实现 |
 | 博客 `content/posts/` | 已发布图文正文、评分解释、来源版本与标签元数据 | 不把未提交工作区、草稿、待审或失败稿当已发布内容 |
-| 博客 `static/data/papers/` | `citation.json`、BibTeX、RIS、`rethink-context.json` | 后者是摘要和研究上下文，不包含完整长文 |
-| 本项目 `scripts/publish-to-blog.py` | arXiv 与会议共用的四文件序列化及 SHA 记录 | 旧 `researcher-sidecars-v1` 和 URL 保持兼容 |
+| 博客 `static/client/papers/` 与构建目录中的原地址兼容文件 | `citation.json`、BibTeX、RIS、`rethink-context.json` | 后者是摘要和研究上下文，不包含完整长文 |
+| 本项目 `scripts/publish-to-blog.py` | arXiv 与会议共用的四文件序列化及 SHA 记录 | 引用与上下文的旧声明、原字节及公开 URL 保持兼容 |
 
 首次导出可以重新排版、序列化和校验已有成果，模型请求数必须为 0。历史缺失的作者、日期、来源版本或资产逐项留缺，不能借导出协议升级重写论文、补签旧资格或猜测事实。
 
@@ -38,12 +40,12 @@
 路径相对站点部署前缀；当前前缀为 `/audio-paper-digest-blog/`，不能拼接为域名根目录。
 
 ```text
-desktop/v1/manifest.json
-desktop/v1/snapshots/<sha256>.json
-desktop/v1/catalog/<sha256>.json
-desktop/v1/papers/<sha256>.json
-desktop/v1/articles/<sha256>.html
-desktop/v1/assets/<sha256>.<ext>
+client/details/manifest.json
+client/details/snapshots/<sha256>.json
+client/details/catalog/<sha256>.json
+client/details/papers/<sha256>.json
+client/details/articles/<sha256>.html
+client/details/assets/<sha256>.<ext>
 ```
 
 `manifest.json` 是可变入口，其他由内容 SHA 寻址的对象不可原地改写。JSON 使用 UTF-8；SHA-256 按实际下载文件的原始字节计算，不能对解析后重新序列化的对象计算，也不能用 URL 的哈希冒充资源 SHA。
@@ -52,19 +54,19 @@ desktop/v1/assets/<sha256>.<ext>
 
 | 字段 | 类型与含义 |
 |---|---|
-| `contract` | 固定 `paper-desktop-manifest-v1` |
-| `schemaVersion` | 整数 `1` |
+| `contract` | 拟定稳定名 `paper-desktop-manifest`；尚未登记 |
+| `schemaFingerprint` | 完整结构声明的实际 SHA-256；实施时生成，不在设计文档中猜填 |
 | `snapshotId` | 快照 JSON 原始字节 SHA-256，64 位小写十六进制 |
 | `snapshot` | 文件描述符，指向对应 `snapshots/<snapshotId>.json` |
 | `generatedAt` | 真实构建时间，带时区的 ISO 时间 |
 | `sourceCommit` | 真实博客 Git OID |
 | `basePath` | 站点部署前缀，首尾有 `/` |
 
-快照 JSON 固定合同 `paper-desktop-snapshot-v1`，包含 `schemaVersion`、`sourceCommit`、`catalogShards`、`recordCount`、`paperCount`、`appearanceCount`、`tombstoneShards`、`tombstoneCount`、`tagCatalogs`。无删除记录时使用空数组和 0，不省略成未知。快照不包含自己的 SHA，避免循环计算。
+快照 JSON 的拟定稳定名为 `paper-desktop-snapshot`，包含 `schemaFingerprint`、`sourceCommit`、`catalogShards`、`recordCount`、`paperCount`、`appearanceCount`、`tombstoneShards`、`tombstoneCount`、`tagCatalogs`。无删除记录时使用空数组和 0，不省略成未知。快照不包含自己的 SHA，避免循环计算。
 
 文件描述符固定为 `url`、`bytes`、`sha256`；含记录数组的文件另外有 `recordCount`。URL 必须是协议限定的相对站内路径，不含凭据、查询串、片段或 `..`。所有计数是非负安全整数；实际 UTF-8 JSON、记录数、总数和文件字节必须一致。
 
-v1 初始调度上限：目录单分片 1 MiB、最多 128 个、目录总量 64 MiB，沿用现有搜索协议的量级；完整正文不放进目录。实现还须分别设置详情、正文和资产的文件大小及总下载预算，超限保留旧版本并报告原因，不能自动放宽。协议不识别的合同版本拒绝切换；已知版本的新增可选字段可以忽略，不能忽略完整性所需字段或改变必需字段的含义。
+拟议首批调度上限：目录单分片 1 MiB、最多 128 个、目录总量 64 MiB，沿用现有搜索协议的量级；完整正文不放进目录。实现还须分别设置详情、正文和资产的文件大小及总下载预算，超限保留旧版本并报告原因，不能自动放宽。未登记的合同名称或结构指纹拒绝切换；新增可选字段也须遵循对应已登记结构的规则，不能忽略完整性所需字段或改变必需字段的含义。
 
 SHA 证明字节一致，不证明科学正确，也不能替代 HTTPS 或原发布资格。
 
@@ -97,7 +99,7 @@ arXiv 基础论文身份和 `v1/v2` 来源版本分开；会议继续保留如 `
 
 ## 5. 论文详情、引用完整性与评分
 
-详情 JSON 固定合同 `paper-desktop-detail-v1`，包含论文身份、来源版本、出现记录、当前导读修订、引用资料、作者、原摘要及可用出处。详情可以按修订分文件，目录通过文件描述符引用，避免下载时混入后来版本。
+详情 JSON 的拟定稳定名为 `paper-desktop-detail`，包含论文身份、来源版本、出现记录、当前导读修订、引用资料、作者、原摘要及可用出处。详情可以按修订分文件，目录通过文件描述符引用，避免下载时混入后来版本。
 
 | 字段组 | 必须保留的含义 |
 |---|---|
@@ -109,7 +111,7 @@ arXiv 基础论文身份和 `v1/v2` 来源版本分开；会议继续保留如 `
 | 分类 | 概念 ID、原词表身份、当前显示词表和 withheld/缺失状态 |
 | 评分 | 网站原总分、原量表版本、分项和解释，不调用客户端模型重评或猜测换算 |
 
-`citation` 保留现有 `paper-citation-source-v1` 投影或明确版本适配结果。`verified` 只说明当前论文身份已核验，`complete` 按身份、原题、来源链接、作者、论文日期等原标准计算。另给 `missingFields` 和逐字段来源/可用状态，不能只用一个布尔隐藏缺口。DOI 缺失不自动推导身份无效，也不能因为有作者就宣称所有标准书目字段齐全。
+`citation` 保留 `paper-citation-source` 与实际结构指纹，或明确登记的旧格式兼容结果。`verified` 只说明当前论文身份已核验，`complete` 按身份、原题、来源链接、作者、论文日期等原标准计算。另给 `missingFields` 和逐字段来源/可用状态，不能只用一个布尔隐藏缺口。DOI 缺失不自动推导身份无效，也不能因为有作者就宣称所有标准书目字段齐全。
 
 现有 Citation JSON、BibTeX、RIS 四文件中的三种引用导出保持兼容并提供原 SHA。完整性不同的旧记录可导入，缺项如实展示；不生成伪造作者、日期或 DOI。
 
@@ -131,7 +133,7 @@ PDF 默认保留导读绑定的精确官方版本 URL，打开或离线时按需
 
 ## 7. 增量、撤稿和删除
 
-v1 使用完整轻目录快照和内容寻址对象，不要求先实现差量补丁。客户端按 SHA 复用已有对象，只下载变化项；详情、正文或资源被需要时才取。这样已经具备增量下载能力。
+这份设计先使用完整轻目录快照和内容寻址对象，不要求先实现差量补丁。客户端按 SHA 复用已有对象，只下载变化项；详情、正文或资源被需要时才取。这样已经具备增量下载能力。
 
 目录中消失的记录只有在新快照全部校验完成后才能被判定为站点移除，下载失败或部分分片缺失不能解释为删除。生产者为实际移除提供 tombstone，字段为 `appearanceId`、适用的 `paperId`、`previousArticleRevisionId`、`reason`、`effectiveAt`、`sourceCommit` 和可选 `replacementAppearanceId`。
 
@@ -145,7 +147,7 @@ v1 使用完整轻目录快照和内容寻址对象，不要求先实现差量�
 
 ## 8. 原子同步与失败恢复
 
-1. 下载 manifest，核验合同、版本、可信站点与路径。
+1. 下载入口清单，核验已登记合同及结构指纹、可信站点与路径。
 2. 获取并核对快照原字节 SHA、长度和来源提交一致性。
 3. 下载全部目录及必要词表到暂存区，核对逐文件和总数量、唯一身份、引用与 tombstone 关系。
 4. 用本地事务切换当前站点快照。未下载的详情仍明确为按需状态，不授予离线资格。

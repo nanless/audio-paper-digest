@@ -1,7 +1,20 @@
 'use strict';
 const crypto = require('node:crypto');
-const CONTRACT = 'primary-local-fact-repair-v1';
-const VALIDATION_CONTRACT = 'primary-local-fact-validation-v1';
+const protocols = require('./protocol-codec');
+const CONTRACT = 'primary-local-fact-repair';
+const ORIGINAL_HEADER = Object.freeze(protocols.historicalHeader(CONTRACT, 'bounded-source-backed-paragraphs'));
+const VALIDATION_CONTRACT = protocols.historicalContract('primary-local-fact-validation', 'historic-replay-only');
+const history = require('../../config/primary-local-fact-history.json');
+const currentHeader = () => protocols.recordHeader(CONTRACT, CONTRACT);
+function readHeader(record) {
+    if (!protocols.hasValidHeader(record, CONTRACT)) reject('局部修订格式或结构指纹不合法');
+    return protocols.recordHeader(record.contract, CONTRACT, record.schemaFingerprint);
+}
+function originalImplementationSha() {
+    const entry = history.originalImplementation;
+    const raw = require('./git-file-bytes').readGitBlob(require('node:path').resolve(__dirname, '../..'), entry.blobOid, entry.sha256);
+    return crypto.createHash('sha256').update(raw).digest('hex');
+}
 const sha = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 function validateHeadings(analysis) {
     const contract = require('../analysis-contract');
@@ -25,7 +38,8 @@ function uniqueKeys(value, keys) {
     return value && typeof value === 'object' && !Array.isArray(value)
         && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
 }
-function buildPlan(analysis, feedback) {
+function buildPlan(analysis, feedback, header = currentHeader()) {
+    header = readHeader(header);
     if (typeof analysis !== 'string' || sha(analysis) !== feedback.coreAnalysisSha256) reject('原正文SHA不对应受控反馈');
     if (!String(feedback.primaryFeedback || '').trim()) reject('缺少主文纠错范围');
     const paragraphs = [];
@@ -52,14 +66,16 @@ function buildPlan(analysis, feedback) {
     }
     if (!allowed.size) reject('没有可定位错误原句');
     const targets = [...allowed.values()].sort((left, right) => left.start - right.start);
-    return { contract: CONTRACT, inputSha256: sha(analysis), targets,
+    return { ...header, inputSha256: sha(analysis), targets,
         targetsSha256: sha(JSON.stringify(targets)) };
 }
 function applyPatch(analysis, plan, raw) {
     let patch;
     try { patch = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (_) { reject('输出必须是完整JSON'); }
-    if (!uniqueKeys(patch, ['contract', 'inputSha256', 'replacements'])
-        || patch.contract !== CONTRACT || patch.inputSha256 !== plan.inputSha256
+    const header = readHeader(plan);
+    if (!uniqueKeys(patch, [...Object.keys(header), 'inputSha256', 'replacements'])
+        || !Object.entries(header).every(([key, expected]) => patch[key] === expected)
+        || patch.inputSha256 !== plan.inputSha256
         || sha(analysis) !== plan.inputSha256 || !Array.isArray(patch.replacements)
         || patch.replacements.length !== plan.targets.length) reject('补丁字段、原稿SHA或片段数量不匹配');
     const used = new Set();
@@ -75,15 +91,19 @@ function applyPatch(analysis, plan, raw) {
     }).sort((left, right) => right.start - left.start);
     let output = analysis;
     for (const change of changes) output = output.slice(0, change.start) + change.to + output.slice(change.end);
-    return { analysis: output, receipt: { contract: CONTRACT, inputSha256: plan.inputSha256,
+    return { analysis: output, receipt: { ...header, inputSha256: plan.inputSha256,
         outputSha256: sha(output), targetsSha256: plan.targetsSha256,
         responseSha256: sha(typeof raw === 'string' ? raw : JSON.stringify(raw)) } };
 }
 function fingerprintFields(receipt) {
     if (!receipt) return {};
-    if (!uniqueKeys(receipt, ['contract', 'inputSha256', 'outputSha256', 'targetsSha256', 'responseSha256'])
-        || receipt.contract !== CONTRACT || Object.entries(receipt).some(([key, value]) => key !== 'contract'
-            && !/^[a-f0-9]{64}$/.test(value))) reject('保存的局部修订凭证不合法');
+    const header = readHeader(receipt);
+    const bindings = ['inputSha256', 'outputSha256', 'targetsSha256', 'responseSha256'];
+    if (!uniqueKeys(receipt, [...Object.keys(header), ...bindings])
+        || bindings.some(key => typeof receipt[key] !== 'string' || !/^[a-f0-9]{64}$/.test(receipt[key]))) {
+        reject('保存的局部修订凭证不合法');
+    }
     return { primaryLocalFactRepair: receipt };
 }
-module.exports = { CONTRACT, VALIDATION_CONTRACT, sha, buildPlan, applyPatch, fingerprintFields, validateHeadings };
+module.exports = { CONTRACT, VALIDATION_CONTRACT, readHeader, currentHeader, ORIGINAL_HEADER,
+    originalPromptPath: history.originalPromptPath, originalImplementationSha, sha, buildPlan, applyPatch, fingerprintFields, validateHeadings };

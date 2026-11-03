@@ -5,6 +5,8 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const crypto = require('node:crypto'), child = require('node:child_process');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
+const codec = require('./protocol-codec');
+const readerPdfIdentity = require('./conference-reader-pdf-identity');
 const scope = new AsyncLocalStorage(), registered = new WeakMap();
 const canonicalReaderPdfSources = new WeakMap();
 // Issued pure-byte dependencies stay private; callers receive only the real source handle.
@@ -369,16 +371,16 @@ function verifyColdSourceChain(loaded, descriptor, deps, pinnedFiles = []) {
         equal(snapshot.sourceBinding[kind === 'artifacts' ? 'artifactsFileSha256' : kind + 'Sha256'], expected, '原来源快照' + kind + 'SHA');
     }
     equal(snapshot.identity.key, bound.sourceIdentity, '本篇原身份'); equal(sha(cached.text), loaded.analysis.papers[0].sourceSha256, '分析来源全文SHA');
-    const details = deps.adapter.sourceDetails({ paperId: loaded.run.paperId, text: new TextDecoder('utf-8', { fatal: true }).decode(cached.text),
+    const details = deps.adapter.replayPersistedSourceDetails({ paperId: loaded.run.paperId, text: new TextDecoder('utf-8', { fatal: true }).decode(cached.text),
         structuredArtifacts: deps.ledger.readRegularJson(deps.ledger.safeArtifactPath(sourceRoot, member[0].artifactsFile)).value,
-        sourceBinding: snapshot.sourceBinding, tableAvailability: { available: false }, formulaAvailability: { available: false }, figureAvailability: { available: false } });
+        sourceBinding: snapshot.sourceBinding, tableAvailability: { available: false }, formulaAvailability: { available: false }, figureAvailability: { available: false } }, loaded.source.sourceDetails);
     equal(details, loaded.source.sourceDetails, '原来源全文与结构投影');
     return { sourceRoot, bound, cached };
 }
 
 function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
     const deps = require('./conference-process').defaultDependencies();
-    if (sourceIdentity?.contract !== 'conference-reader-pdf-source-v1'
+    if (!codec.hasValidHeader(sourceIdentity, readerPdfIdentity.CONTRACT)
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(sourceIdentity.executionId || '')) {
         throw new Error('会议 PDF 表格冷核缺少原规范完成运行');
     }
@@ -386,7 +388,7 @@ function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
         executionId: sourceIdentity.executionId });
     if (loaded.analysis.readerRevisionProgress !== undefined) {
         const revision = deps.adapter.readJsonRecord(path.join(loaded.directory, 'reader-revision.json')).value;
-        if (revision.contract === 'conference-reader-recovery-window-v1') {
+        if (codec.hasValidHeader(revision, 'conference-reader-recovery-window')) {
             // A current source proof is not authority for an additional budget.
             // Cold table replay retains the registered grant and original CAS chain.
             loaded = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
@@ -394,12 +396,7 @@ function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
         }
     }
     const original = loaded.analysis.papers[0];
-    const expected = { contract: 'conference-reader-pdf-source-v1', paperId: loaded.run.paperId,
-        sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
-        rawStructuredArtifactsSha256: loaded.source.sourceSnapshotBinding.sourceBinding.artifactsPayloadSha256,
-        effectiveStructuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
-        sourceSnapshotBinding: loaded.source.sourceSnapshotBinding,
-        planAuthorityBinding: loaded.source.planAuthorityBinding, executionId: loaded.run.executionId };
+    const expected = readerPdfIdentity.projectSavedExecution(loaded);
     if (!isDeepStrictEqual(sourceIdentity, expected) || !isDeepStrictEqual(paper.apiReaderPlan, original.apiReaderPlan)
         || paper.apiReaderArticle !== original.apiReaderArticle || paper.sourceSha256 !== original.sourceSha256
         || (paper.directPaperId || paper.id) !== loaded.run.paperId) throw new Error('会议 PDF 表格冷核与原完整 Reader 或来源不同');

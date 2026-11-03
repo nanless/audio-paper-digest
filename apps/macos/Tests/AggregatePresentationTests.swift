@@ -15,6 +15,7 @@ actor AggregateFixtureTransport {
         requests[url.absoluteString, default: 0] += 1
         if delayed { try await Task.sleep(nanoseconds: 100_000_000) }
         if failure { throw URLError(.notConnectedToInternet) }
+        if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
         guard let data = files[url.absoluteString], data.count <= limit else { FileHandle.standardError.write(Data(("MISSING " + url.absoluteString + " keys=" + files.keys.sorted().joined(separator:",") + "\n").utf8)); throw URLError(.fileDoesNotExist) }
         return data
     }
@@ -38,7 +39,7 @@ actor AggregateFixtureTransport {
     }
     static func routingRegressions(_ root: URL) async throws {
         let fm=FileManager.default,base="https://nanless.github.io/audio-paper-digest-blog/"
-        let fixtureRoot=CommandLine.arguments.count>1 ? URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true) : URL(fileURLWithPath:fm.currentDirectoryPath).appendingPathComponent("apps/macos/Tests/Fixtures")
+        let fixtureRoot=CommandLine.arguments.count>1 ? URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true) : URL(fileURLWithPath:fm.currentDirectoryPath).appendingPathComponent("tests/fixtures/workbench")
         let original=try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-original.html"))
         let rowBytes=try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-rows.json"))
         try expect(PublishedAggregateReader.sha(original)=="c51f3797c5e9036ddb5afef60fab0463c6a2ab48991980639f557d915fe9ab1a","real published daily24 original bytes retained")

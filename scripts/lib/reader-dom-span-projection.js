@@ -19,7 +19,7 @@ function sealedArtifacts(paper) {
             if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(provenance.runId || '')) return null;
             const runDir = path.join(Config.FILES.dailyFreshSourceRunsDir, provenance.runId);
             const run = require('./reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
-            if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT) return null;
+            if (!fresh.isDailySourceRun(run)) return null;
             source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
         }
         const descriptor = source?.freshSourceDescriptor, acquisition = paper.analysisManifest?.sourceAcquisition;

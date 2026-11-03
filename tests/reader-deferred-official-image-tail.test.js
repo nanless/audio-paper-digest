@@ -66,7 +66,7 @@ test('正常封存来源和已签Reader用相同正常指纹结束deferred图片
         assert.equal(stages.imageDownload.status, 'skipped');
         assert.equal(stages.imageSupplement.status, 'skipped');
         assert.equal(stages.imageSupplement.officialFiguresSha256, deep.stableFingerprint(paper.apiReaderFigures));
-        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
         assert.deepEqual(withoutTail(paper), before);
         assert.equal(deep.finalizeDeferredDailyReaderImages(paper, source), false);
     });
@@ -87,7 +87,7 @@ test('封存零来源图/零候选/明确签名零像素的构造Reader按原正
         assert.deepEqual(source.structuredArtifacts.figures, []);
         assert.deepEqual(source.imageInfos, []);
         assert.deepEqual(paper.apiReaderFigures, []);
-        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
         assert.equal(deep.finalizeDeferredDailyReaderImages(paper, source), true);
         assert.equal(paper.analysisManifest.stages.imageSupplement.officialFigureCount, 0);
         assert.equal(paper.analysisManifest.stages.imageSupplement.officialFiguresSha256, deep.stableFingerprint([]));

@@ -8,12 +8,36 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const cheerio = require('cheerio');
 const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const { readRegularBytes } = require('./git-file-bytes');
 
-const VERSION = 1;
-const HTTP_RECEIPT_CONTRACT = 'official-conference-http-response-v1';
-const CATALOG_RECEIPT_CONTRACT = 'official-conference-catalog-receipt-v1';
-const PDF_RECEIPT_CONTRACT = 'official-conference-pdf-receipt-v1';
-const PARSER_VERSION = 'official-proceedings-cheerio-v1';
+const HTTP_RECEIPT_CONTRACT = codec.contract('official-conference-http-response');
+const CATALOG_RECEIPT_CONTRACT = codec.contract('official-conference-catalog-receipt');
+const PDF_RECEIPT_CONTRACT = codec.contract('official-conference-pdf-receipt');
+function receiptHeader(value, family) {
+    if (value && !codec.hasValidHeader(value, family)) fail(`${family} 格式头不受支持`);
+    return value ? recordHeaderFor(value, family) : codec.recordHeader(codec.contract(family), family);
+}
+function parserProfile() {
+    const root = path.resolve(__dirname, '../..');
+    const files = Object.fromEntries(['scripts/lib/official-conference-acquisition.js', 'scripts/icmc-proceedings.py', 'package-lock.json']
+        .map(filename => [filename, sha256(readRegularBytes(path.join(root, filename)))]));
+    return { ...codec.recordHeader(codec.contract('official-proceedings-parser'), 'official-proceedings-parser'),
+        implementationSha256: stableHash(files) };
+}
+function parserFields(value = null) {
+    if (!value || codec.isCurrentHeader(value, 'official-conference-catalog-receipt')) return { parserProfile: parserProfile() };
+    receiptHeader(value, 'official-conference-catalog-receipt');
+    require('./workflow-legacy-codec').assertHistoricalAcquisitionParserCompatible();
+    return { parserVersion: codec.historicalContract('official-proceedings-parser', 'official-index-identities') };
+}
+function existingCatalog(paths) {
+    if (!fs.existsSync(paths.catalogReceiptFile)) return null;
+    const value = readCanonicalJson(paths.catalogReceiptFile, 'existing catalog receipt', 1024 * 1024).value;
+    receiptHeader(value, 'official-conference-catalog-receipt'); parserFields(value);
+    return value;
+}
 // ACL 2026 的官方事件索引有几千条记录，超过 16 MiB。给已保存的索引留一个明确的大小上限。
 const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
@@ -860,7 +884,7 @@ function validObservedAt(value) {
 }
 
 function responseReceipt(provider, fetched, relativePath, issue = null) {
-    const body = { contract: HTTP_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
+    const body = { ...receiptHeader(null, 'official-conference-http-response'), providerId: provider.conference.id,
         resource: issue ? 'catalog-issue' : 'catalog-index', requestedUrl: fetched.requestedUrl, finalUrl: fetched.finalUrl,
         redirects: fetched.redirects, responseStatus: fetched.responseStatus, contentType: fetched.contentType,
         observedAt: fetched.observedAt, body: { relativePath, bytes: fetched.bytes.length, sha256: sha256(fetched.bytes) } };
@@ -869,7 +893,7 @@ function responseReceipt(provider, fetched, relativePath, issue = null) {
 }
 
 function pdfReceipt(provider, paper, fetched, metadataSha256) {
-    const body = { contract: PDF_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
+    const body = { ...receiptHeader(null, 'official-conference-pdf-receipt'), providerId: provider.conference.id,
         paperId: paper.id, metadataSha256, requestedUrl: fetched.requestedUrl, finalUrl: fetched.finalUrl,
         redirects: fetched.redirects, responseStatus: fetched.responseStatus, contentType: fetched.contentType,
         observedAt: fetched.observedAt,
@@ -891,12 +915,12 @@ function validateRedirects(provider, receipt, kind) {
 function replayResponseReceipt(provider, responseFile, receiptFile, relativePath, issue = null) {
     const label = issue ? `issue ${issue.number} response` : 'index response';
     const loaded = readCanonicalJson(receiptFile, `${label} receipt`, 1024 * 1024); const receipt = loaded.value;
-    const keys = ['body', 'contentType', 'contract', 'finalUrl', 'observedAt', 'providerId', 'receiptSha256',
-        'redirects', 'requestedUrl', 'resource', 'responseStatus', 'version'];
+    const header = receiptHeader(receipt, 'official-conference-http-response');
+    const keys = [...Object.keys(header), 'body', 'contentType', 'finalUrl', 'observedAt', 'providerId', 'receiptSha256',
+        'redirects', 'requestedUrl', 'resource', 'responseStatus'];
     if (issue) keys.push('issueId', 'issueNumber');
     exact(receipt, keys, `${label} receipt`);
-    if (receipt.contract !== HTTP_RECEIPT_CONTRACT || receipt.version !== VERSION
-        || receipt.providerId !== provider.conference.id || receipt.resource !== (issue ? 'catalog-issue' : 'catalog-index')
+    if (receipt.providerId !== provider.conference.id || receipt.resource !== (issue ? 'catalog-issue' : 'catalog-index')
         || receipt.responseStatus !== 200 || !/^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(receipt.contentType)
         || !validObservedAt(receipt.observedAt)
         || (issue && (receipt.issueNumber !== issue.number || receipt.issueId !== issue.issueId
@@ -919,7 +943,7 @@ function replayIndexReceipt(provider, paths) {
 }
 
 function icmcCombinedResponseReceipt(provider, fetched) {
-    const body = { contract: HTTP_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
+    const body = { ...receiptHeader(null, 'official-conference-http-response'), providerId: provider.conference.id,
         resource: 'catalog-proceedings-pdf', requestedUrl: fetched.requestedUrl, finalUrl: fetched.finalUrl,
         redirects: fetched.redirects, responseStatus: fetched.responseStatus, contentType: fetched.contentType,
         observedAt: fetched.observedAt,
@@ -930,10 +954,9 @@ function icmcCombinedResponseReceipt(provider, fetched) {
 function replayIcmcCombinedReceipt(provider, paths) {
     const loaded = readCanonicalJson(paths.combinedPdfReceiptFile, 'ICMC combined proceedings receipt', 1024 * 1024);
     const receipt = loaded.value;
-    exact(receipt, ['body', 'contentType', 'contract', 'finalUrl', 'observedAt', 'providerId', 'receiptSha256',
-        'redirects', 'requestedUrl', 'resource', 'responseStatus', 'version'], 'ICMC combined proceedings receipt');
-    if (receipt.contract !== HTTP_RECEIPT_CONTRACT || receipt.version !== VERSION
-        || receipt.providerId !== provider.conference.id || receipt.resource !== 'catalog-proceedings-pdf'
+    exact(receipt, [...Object.keys(receiptHeader(receipt, 'official-conference-http-response')), 'body', 'contentType', 'finalUrl', 'observedAt', 'providerId', 'receiptSha256',
+        'redirects', 'requestedUrl', 'resource', 'responseStatus'], 'ICMC combined proceedings receipt');
+    if (receipt.providerId !== provider.conference.id || receipt.resource !== 'catalog-proceedings-pdf'
         || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
         || !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(receipt.contentType)) {
         fail('ICMC 合并 proceedings 的 receipt envelope 无效');
@@ -954,7 +977,7 @@ function replayIcmcCombinedReceipt(provider, paths) {
     return { receipt, receiptFileSha256: loaded.sha256, pdf };
 }
 
-function runIcmcMetadataExtractor(combinedPdfFile, provider) {
+function runIcmcMetadataExtractor(combinedPdfFile, provider, recordedPageMap = null) {
     const script = path.join(__dirname, '..', 'icmc-proceedings.py');
     const result = spawnSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), script, 'metadata', combinedPdfFile,
         '--index-url', provider.indexUrl, '--pdf-url', provider.combinedPdfUrl], {
@@ -971,9 +994,9 @@ function runIcmcMetadataExtractor(combinedPdfFile, provider) {
     catch { fail('ICMC 合并 proceedings 的元数据提取器返回了无效 JSON'); }
     exact(value, ['metadata', 'pageMap'], 'ICMC metadata extraction result');
     const metadata = normalizeMetadata(value.metadata, provider);
-    exact(value.pageMap, ['contract', 'papers', 'sourcePages', 'version'], 'ICMC page map');
-    if (value.pageMap.contract !== 'icmc-combined-proceedings-page-map-v1' || value.pageMap.version !== 1
-        || !Number.isSafeInteger(value.pageMap.sourcePages) || value.pageMap.sourcePages < 1
+    const pageMapHeader = receiptHeader(value.pageMap, 'icmc-combined-proceedings-page-map');
+    exact(value.pageMap, [...Object.keys(pageMapHeader), 'papers', 'sourcePages'], 'ICMC page map');
+    if (!Number.isSafeInteger(value.pageMap.sourcePages) || value.pageMap.sourcePages < 1
         || !Array.isArray(value.pageMap.papers)) fail('ICMC 页码映射的 envelope 无效');
     const expectedIds = metadata.papers.map(paper => paper.id);
     const pageMap = value.pageMap.papers.map((item, index) => {
@@ -988,13 +1011,14 @@ function runIcmcMetadataExtractor(combinedPdfFile, provider) {
     if (pageMap.length !== expectedIds.length || pageMap.some((item, index) => item.id !== expectedIds[index])) {
         fail('ICMC 页码映射与提取出的论文集合不匹配');
     }
-    return { metadata, pageMap: { contract: value.pageMap.contract, version: value.pageMap.version,
+    const outputHeader = recordedPageMap ? receiptHeader(recordedPageMap, 'icmc-combined-proceedings-page-map') : pageMapHeader;
+    return { metadata, pageMap: { ...outputHeader,
         sourcePages: value.pageMap.sourcePages, papers: pageMap } };
 }
 
-function icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot, metadataBytes, pageMapBytes) {
-    const body = { contract: CATALOG_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
-        parserVersion: PARSER_VERSION, indexReceiptSha256: indexSnapshot.receipt.receiptSha256,
+function icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot, metadataBytes, pageMapBytes, original = null) {
+    const body = { ...receiptHeader(original, 'official-conference-catalog-receipt'), providerId: provider.conference.id,
+        ...parserFields(original), indexReceiptSha256: indexSnapshot.receipt.receiptSha256,
         indexReceiptFileSha256: indexSnapshot.receiptFileSha256,
         combinedPdfReceiptSha256: combinedSnapshot.receipt.receiptSha256,
         combinedPdfReceiptFileSha256: combinedSnapshot.receiptFileSha256,
@@ -1010,10 +1034,10 @@ function replayIssueReceipt(provider, paths, issue) {
         artifacts.responseRelativePath, issue), artifacts, issue };
 }
 
-function catalogReceipt(provider, indexSnapshot, metadataBytes) {
+function catalogReceipt(provider, indexSnapshot, metadataBytes, original = null) {
     const metadata = JSON.parse(metadataBytes.toString('utf8'));
-    const body = { contract: CATALOG_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
-        parserVersion: PARSER_VERSION, indexReceiptSha256: indexSnapshot.receipt.receiptSha256,
+    const body = { ...receiptHeader(original, 'official-conference-catalog-receipt'), providerId: provider.conference.id,
+        ...parserFields(original), indexReceiptSha256: indexSnapshot.receipt.receiptSha256,
         indexReceiptFileSha256: indexSnapshot.receiptFileSha256,
         metadata: { relativePath: 'metadata.json', bytes: metadataBytes.length, sha256: sha256(metadataBytes) },
         paperSetSha256: stableHash(metadata.papers) };
@@ -1038,7 +1062,7 @@ function combineAaaiIssueSnapshots(provider, snapshots) {
     return { metadata: normalizeMetadata({ conference: clone(provider.conference), papers }, provider), issuePaperSets };
 }
 
-function multiIssueCatalogReceipt(provider, snapshots, issuePaperSets, metadataBytes) {
+function multiIssueCatalogReceipt(provider, snapshots, issuePaperSets, metadataBytes, original = null) {
     const metadata = JSON.parse(metadataBytes.toString('utf8'));
     const issues = snapshots.map((snapshot, index) => ({
         number: snapshot.issue.number,
@@ -1052,8 +1076,8 @@ function multiIssueCatalogReceipt(provider, snapshots, issuePaperSets, metadataB
     }));
     const issueManifest = provider.issues.map(issue => ({ number: issue.number, issueId: issue.issueId,
         title: issue.title, url: issue.url }));
-    const body = { contract: CATALOG_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
-        parserVersion: PARSER_VERSION, issueManifestSha256: stableHash(issueManifest), issues,
+    const body = { ...receiptHeader(original, 'official-conference-catalog-receipt'), providerId: provider.conference.id,
+        ...parserFields(original), issueManifestSha256: stableHash(issueManifest), issues,
         metadata: { relativePath: 'metadata.json', bytes: metadataBytes.length, sha256: sha256(metadataBytes) },
         paperSetSha256: stableHash(metadata.papers) };
     return { ...body, receiptSha256: stableHash(body) };
@@ -1064,18 +1088,18 @@ function replayIcmcCatalog(provider, paths) {
     const combinedSnapshot = replayIcmcCombinedReceipt(provider, paths);
     const metadataLoaded = readCanonicalJson(paths.metadataFile, 'ICMC proceedings metadata', MAX_INDEX_BYTES);
     const pageMapLoaded = readCanonicalJson(paths.pageMapFile, 'ICMC proceedings page map', MAX_INDEX_BYTES);
-    const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider);
+    const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider, pageMapLoaded.value);
     const expectedMetadataBytes = prettyBytes(extracted.metadata);
     const expectedPageMapBytes = prettyBytes(extracted.pageMap);
     if (!metadataLoaded.bytes.equals(expectedMetadataBytes)) fail('ICMC 元数据与合并 proceedings PDF 不一致');
     if (!pageMapLoaded.bytes.equals(expectedPageMapBytes)) fail('ICMC 页码映射与合并 proceedings PDF 不一致');
     const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'ICMC catalog receipt', 1024 * 1024);
     const receipt = catalogLoaded.value;
-    exact(receipt, ['combinedPdfReceiptFileSha256', 'combinedPdfReceiptSha256', 'contract',
+    exact(receipt, [...Object.keys(receiptHeader(receipt, 'official-conference-catalog-receipt')), 'combinedPdfReceiptFileSha256', 'combinedPdfReceiptSha256',
         'indexReceiptFileSha256', 'indexReceiptSha256', 'metadata', 'pageMap', 'paperSetSha256',
-        'parserVersion', 'providerId', 'receiptSha256', 'version'], 'ICMC catalog receipt');
+        ...Object.keys(parserFields(receipt)), 'providerId', 'receiptSha256'], 'ICMC catalog receipt');
     const expected = icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot,
-        metadataLoaded.bytes, pageMapLoaded.bytes);
+        metadataLoaded.bytes, pageMapLoaded.bytes, receipt);
     if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('ICMC catalog receipt 与其来源 bundle 不一致');
     return { provider, paths, metadata: extracted.metadata, pageMap: extracted.pageMap,
         metadataSha256: metadataLoaded.sha256, receipt, combinedSnapshot };
@@ -1091,9 +1115,9 @@ function replayCatalog(providerId, outputRoot) {
         if (!metadataLoaded.bytes.equals(prettyBytes(combined.metadata))) fail('metadata 与重放出的完整 AAAI 期号集合不一致');
         const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'catalog receipt', 1024 * 1024);
         const receipt = catalogLoaded.value;
-        exact(receipt, ['contract', 'issueManifestSha256', 'issues', 'metadata', 'paperSetSha256',
-            'parserVersion', 'providerId', 'receiptSha256', 'version'], 'multi-issue catalog receipt');
-        const expected = multiIssueCatalogReceipt(provider, snapshots, combined.issuePaperSets, metadataLoaded.bytes);
+        exact(receipt, [...Object.keys(receiptHeader(receipt, 'official-conference-catalog-receipt')), 'issueManifestSha256', 'issues', 'metadata', 'paperSetSha256',
+            ...Object.keys(parserFields(receipt)), 'providerId', 'receiptSha256'], 'multi-issue catalog receipt');
+        const expected = multiIssueCatalogReceipt(provider, snapshots, combined.issuePaperSets, metadataLoaded.bytes, receipt);
         if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('catalog receipt 与重放出的完整 AAAI catalog 不一致');
         return { provider, paths, metadata: combined.metadata, metadataSha256: metadataLoaded.sha256, receipt };
     }
@@ -1105,9 +1129,9 @@ function replayCatalog(providerId, outputRoot) {
     if (!prettyBytes(replayed).equals(metadataLoaded.bytes)) fail('metadata 与重放出的官方 index 不一致');
     const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'catalog receipt', 1024 * 1024);
     const receipt = catalogLoaded.value;
-    exact(receipt, ['contract', 'indexReceiptFileSha256', 'indexReceiptSha256', 'metadata', 'paperSetSha256',
-        'parserVersion', 'providerId', 'receiptSha256', 'version'], 'catalog receipt');
-    const expected = catalogReceipt(provider, indexSnapshot, metadataLoaded.bytes);
+    exact(receipt, [...Object.keys(receiptHeader(receipt, 'official-conference-catalog-receipt')), 'indexReceiptFileSha256', 'indexReceiptSha256', 'metadata', 'paperSetSha256',
+        ...Object.keys(parserFields(receipt)), 'providerId', 'receiptSha256'], 'catalog receipt');
+    const expected = catalogReceipt(provider, indexSnapshot, metadataLoaded.bytes, receipt);
     if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('catalog receipt 与重放出的 catalog 不一致');
     return { provider, paths, metadata, metadataSha256: metadataLoaded.sha256, receipt };
 }
@@ -1179,6 +1203,7 @@ async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUES
 
 async function acquireMultiIssueCatalog(provider, outputRoot, dependencies) {
     const paths = acquisitionPaths(outputRoot, true);
+    const original = existingCatalog(paths);
     issueArtifactPaths(paths, provider.issues[0], true);
     const snapshots = []; const writes = { issueResponsesCreated: 0, issueResponsesRecovered: 0,
         issueReceiptsCreated: 0, issueReceiptsRecovered: 0 };
@@ -1206,7 +1231,7 @@ async function acquireMultiIssueCatalog(provider, outputRoot, dependencies) {
     const metadataBytes = prettyBytes(combined.metadata);
     writes.metadata = writeExclusiveOrCompare(paths.metadataFile, metadataBytes,
         'official proceedings metadata', MAX_INDEX_BYTES);
-    const catalog = multiIssueCatalogReceipt(provider, snapshots, combined.issuePaperSets, metadataBytes);
+    const catalog = multiIssueCatalogReceipt(provider, snapshots, combined.issuePaperSets, metadataBytes, original);
     writes.catalogReceipt = writeExclusiveOrCompare(paths.catalogReceiptFile, prettyBytes(catalog),
         'catalog receipt', 1024 * 1024);
     replayCatalog(provider.conference.id, outputRoot);
@@ -1217,6 +1242,7 @@ async function acquireMultiIssueCatalog(provider, outputRoot, dependencies) {
 
 async function acquireIcmcCatalog(provider, outputRoot, dependencies) {
     const paths = acquisitionPaths(outputRoot, true);
+    const original = existingCatalog(paths);
     const rawPresent = fs.existsSync(paths.indexFile); const receiptPresent = fs.existsSync(paths.indexReceiptFile);
     if (receiptPresent && !rawPresent) fail('ICMC index receipt 存在，却没有对应响应字节');
     let indexSnapshot; let indexStatus = 'recovered'; let receiptStatus = 'recovered';
@@ -1242,11 +1268,15 @@ async function acquireIcmcCatalog(provider, outputRoot, dependencies) {
             'ICMC combined proceedings PDF receipt', 1024 * 1024);
         combinedSnapshot = replayIcmcCombinedReceipt(provider, paths);
     }
-    const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider);
+    const previousPageMap = fs.existsSync(paths.pageMapFile)
+        ? readCanonicalJson(paths.pageMapFile, 'existing ICMC page map', MAX_INDEX_BYTES).value
+        : original && !codec.isCurrentHeader(original, 'official-conference-catalog-receipt')
+            ? codec.historicalHeader('icmc-combined-proceedings-page-map', 'exact-proceedings-page-ranges') : null;
+    const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider, previousPageMap);
     const metadataBytes = prettyBytes(extracted.metadata); const pageMapBytes = prettyBytes(extracted.pageMap);
     const metadataStatus = writeExclusiveOrCompare(paths.metadataFile, metadataBytes, 'ICMC proceedings metadata', MAX_INDEX_BYTES);
     const pageMapStatus = writeExclusiveOrCompare(paths.pageMapFile, pageMapBytes, 'ICMC proceedings page map', MAX_INDEX_BYTES);
-    const catalog = icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot, metadataBytes, pageMapBytes);
+    const catalog = icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot, metadataBytes, pageMapBytes, original);
     const catalogStatus = writeExclusiveOrCompare(paths.catalogReceiptFile, prettyBytes(catalog), 'ICMC catalog receipt', 1024 * 1024);
     replayCatalog(provider.conference.id, outputRoot);
     return { command: 'catalog', mode: 'apply', providerId: provider.conference.id, outputRoot,
@@ -1274,6 +1304,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     if (provider.parser === 'icmc-combined') return acquireIcmcCatalog(provider, outputRoot, dependencies);
     if (provider.issues) return acquireMultiIssueCatalog(provider, outputRoot, dependencies);
     const paths = acquisitionPaths(outputRoot, true);
+    const original = existingCatalog(paths);
     const rawPresent = fs.existsSync(paths.indexFile); const receiptPresent = fs.existsSync(paths.indexReceiptFile);
     if (receiptPresent && !rawPresent) fail('index receipt 存在，却没有对应响应字节');
     let indexSnapshot; let indexStatus = 'recovered'; let receiptStatus = 'recovered';
@@ -1288,7 +1319,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     const metadata = parseCatalog(providerId, new TextDecoder('utf-8', { fatal: true }).decode(indexSnapshot.index.bytes));
     const metadataBytes = prettyBytes(metadata);
     const metadataStatus = writeExclusiveOrCompare(paths.metadataFile, metadataBytes, 'official proceedings metadata', MAX_INDEX_BYTES);
-    const catalog = catalogReceipt(provider, indexSnapshot, metadataBytes);
+    const catalog = catalogReceipt(provider, indexSnapshot, metadataBytes, original);
     const catalogStatus = writeExclusiveOrCompare(paths.catalogReceiptFile, prettyBytes(catalog), 'catalog receipt', 1024 * 1024);
     replayCatalog(providerId, outputRoot);
     return { command: 'catalog', mode: 'apply', providerId, outputRoot, papers: metadata.papers.length,
@@ -1318,12 +1349,12 @@ function icmcPageRange(catalog, paper) {
 
 function icmcPdfReceipt(catalog, paper, pdf, range) {
     const combined = catalog.combinedSnapshot;
-    const body = { contract: PDF_RECEIPT_CONTRACT, version: VERSION, providerId: catalog.provider.conference.id,
+    const body = { ...receiptHeader(null, 'official-conference-pdf-receipt'), providerId: catalog.provider.conference.id,
         paperId: paper.id, metadataSha256: catalog.metadataSha256, requestedUrl: paper.pdfUrl,
         finalUrl: paper.pdfUrl, redirects: [], responseStatus: 200, contentType: 'application/pdf',
         observedAt: combined.receipt.observedAt,
         pdf: { relativePath: paper.pdfFile, bytes: pdf.length, sha256: sha256(pdf) },
-        derivation: { contract: 'icmc-combined-paper-slice-v1', version: 1,
+        derivation: { ...receiptHeader(null, 'icmc-combined-paper-slice'),
             sourceReceiptSha256: combined.receipt.receiptSha256,
             sourceRelativePath: 'responses/proceedings.source', sourceSha256: combined.receipt.body.sha256,
             startPage: range.startPage, endPage: range.endPage } };
@@ -1334,11 +1365,10 @@ function replayIcmcPdfReceipt(catalog, paper) {
     const filename = pdfReceiptPath(catalog.paths, paper);
     const loaded = readCanonicalJson(filename, `${paper.id} ICMC PDF receipt`, 1024 * 1024);
     const receipt = loaded.value;
-    exact(receipt, ['contentType', 'contract', 'derivation', 'finalUrl', 'metadataSha256', 'observedAt', 'paperId',
-        'pdf', 'providerId', 'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus', 'version'],
+    exact(receipt, [...Object.keys(receiptHeader(receipt, 'official-conference-pdf-receipt')), 'contentType', 'derivation', 'finalUrl', 'metadataSha256', 'observedAt', 'paperId',
+        'pdf', 'providerId', 'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus'],
         'ICMC PDF receipt');
-    if (receipt.contract !== PDF_RECEIPT_CONTRACT || receipt.version !== VERSION
-        || receipt.providerId !== catalog.provider.conference.id || receipt.paperId !== paper.id
+    if (receipt.providerId !== catalog.provider.conference.id || receipt.paperId !== paper.id
         || receipt.metadataSha256 !== catalog.metadataSha256 || receipt.requestedUrl !== paper.pdfUrl
         || receipt.finalUrl !== paper.pdfUrl || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
         || receipt.contentType !== 'application/pdf') fail(`${paper.id} 的 ICMC PDF receipt envelope 无效`);
@@ -1350,11 +1380,10 @@ function replayIcmcPdfReceipt(catalog, paper) {
         || receipt.pdf.bytes < 5 || receipt.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(receipt.pdf.sha256)) {
         fail(`${paper.id} 的 ICMC PDF 字节绑定无效`);
     }
-    exact(receipt.derivation, ['contract', 'endPage', 'sourceReceiptSha256', 'sourceRelativePath', 'sourceSha256',
-        'startPage', 'version'], 'ICMC PDF derivation');
+    exact(receipt.derivation, [...Object.keys(receiptHeader(receipt.derivation, 'icmc-combined-paper-slice')), 'endPage', 'sourceReceiptSha256', 'sourceRelativePath', 'sourceSha256',
+        'startPage'], 'ICMC PDF derivation');
     const range = icmcPageRange(catalog, paper); const combined = catalog.combinedSnapshot;
-    if (receipt.derivation.contract !== 'icmc-combined-paper-slice-v1' || receipt.derivation.version !== 1
-        || receipt.derivation.sourceReceiptSha256 !== combined.receipt.receiptSha256
+    if (receipt.derivation.sourceReceiptSha256 !== combined.receipt.receiptSha256
         || receipt.derivation.sourceRelativePath !== 'responses/proceedings.source'
         || receipt.derivation.sourceSha256 !== combined.receipt.body.sha256
         || receipt.derivation.startPage !== range.startPage || receipt.derivation.endPage !== range.endPage) {
@@ -1370,10 +1399,9 @@ function replayPdfReceipt(catalog, paper) {
     if (catalog.provider.parser === 'icmc-combined') return replayIcmcPdfReceipt(catalog, paper);
     const filename = pdfReceiptPath(catalog.paths, paper);
     const loaded = readCanonicalJson(filename, `${paper.id} PDF receipt`, 1024 * 1024); const receipt = loaded.value;
-    exact(receipt, ['contentType', 'contract', 'finalUrl', 'metadataSha256', 'observedAt', 'paperId', 'pdf',
-        'providerId', 'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus', 'version'], 'PDF receipt');
-    if (receipt.contract !== PDF_RECEIPT_CONTRACT || receipt.version !== VERSION
-        || receipt.providerId !== catalog.provider.conference.id || receipt.paperId !== paper.id
+    exact(receipt, [...Object.keys(receiptHeader(receipt, 'official-conference-pdf-receipt')), 'contentType', 'finalUrl', 'metadataSha256', 'observedAt', 'paperId', 'pdf',
+        'providerId', 'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus'], 'PDF receipt');
+    if (receipt.providerId !== catalog.provider.conference.id || receipt.paperId !== paper.id
         || receipt.metadataSha256 !== catalog.metadataSha256 || receipt.requestedUrl !== paper.pdfUrl
         || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
         || !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(receipt.contentType)) {
@@ -1636,7 +1664,7 @@ function verifyAcquisition({ providerId, outputRoot } = {}) {
 }
 
 module.exports = {
-    VERSION, HTTP_RECEIPT_CONTRACT, CATALOG_RECEIPT_CONTRACT, PDF_RECEIPT_CONTRACT, PARSER_VERSION,
+    HTTP_RECEIPT_CONTRACT, CATALOG_RECEIPT_CONTRACT, PDF_RECEIPT_CONTRACT, parserProfile,
     MAX_INDEX_BYTES, MAX_PDF_BYTES, MAX_COMBINED_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, AAAI_2026_ISSUES, PROVIDERS,
     OfficialConferenceAcquisitionError, sha256, stableHash, prettyBytes, providerFor, validateFetchUrl,
     validateRedirectTarget,

@@ -1,16 +1,21 @@
 'use strict';
 
-// 这里只核对论文身份：将固定的历史 arXiv 线索与保留的筛选结果记录对应起来。
-// 不提供全文、表格、公式、图片，也不提供 Reader 正文所需的来源材料。
+// 只读重放已保存的归档爬虫身份凭据；不再扫描或签发新的凭据。
+// 这里只核对论文身份，不提供 Reader 写作所需的全文、图表或公式。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const identityApi = require('./paper-identity.js');
-const { writeImmutableFile } = require('./immutable-file.js');
 
-const CONTRACT = 'historical-archive-crawl-identity-authority-v1';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('historical-archive-crawl-identity-authority');
+function authorityHeader(value) {
+    if (!codec.hasValidHeader(value, 'historical-archive-crawl-identity-authority')
+        || Object.hasOwn(value, 'schemaFingerprint')) fail('归档爬虫身份凭据只接受已登记的原历史格式');
+    return recordHeaderFor(value, 'historical-archive-crawl-identity-authority');
+}
 const EVIDENCE_KIND = 'archive-crawl-identity';
 const AUTHORITY_PREFIX = 'archive-crawl-arxiv-';
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -48,13 +53,10 @@ function canonical(value) {
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 function sha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} 必须是 SHA-256`); return value; }
-function safeDirectory(directory, label, { create = false } = {}) {
+function safeDirectory(directory, label) {
     if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对目录`);
     const resolved = path.resolve(directory);
-    if (!fs.existsSync(resolved)) {
-        if (!create) fail(`${label} 不存在`);
-        fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
-    }
+    if (!fs.existsSync(resolved)) fail(`${label} 不存在`);
     const info = fs.lstatSync(resolved);
     if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(resolved) !== resolved) fail(`${label} is unsafe`);
     return resolved;
@@ -99,54 +101,16 @@ function normalizedArxivId(record) {
     if (Object.keys(record).some(key => /^(?:analysis(?:$|Checkpoint|Manifest|Stage|Recovery)|parsed$|apiReader|freshRewrite|freshSource)/.test(key))) return null;
     return arxivId;
 }
-function retainedFilteredPaths(dataRoot) {
-    const root = safeDirectory(dataRoot, 'dataRoot'); const paths = [];
-    const archive = path.join(root, 'archive'); const archiveInfo = fs.lstatSync(archive, { throwIfNoEntry: false });
-    if (archiveInfo) {
-        if (!archiveInfo.isDirectory() || archiveInfo.isSymbolicLink() || fs.realpathSync(archive) !== archive) fail('archive directory is unsafe');
-        for (const item of fs.readdirSync(archive).sort()) {
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(item)) continue;
-            const directory = path.join(archive, item); const info = fs.lstatSync(directory);
-            if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail(`archive date directory is unsafe: ${item}`);
-            if (fs.existsSync(path.join(directory, 'filtered-papers.json'))) paths.push(`archive/${item}/filtered-papers.json`);
-        }
-    }
-    return paths;
-}
-function scanRetainedFilteredPapers({ dataRoot } = {}) {
-    const matches = new Map(); const files = [];
-    for (const relativePath of retainedFilteredPaths(dataRoot)) {
-        const loaded = readRetainedFilteredFile(dataRoot, relativePath); files.push({ relativePath, fileSha256: loaded.fileSha256 });
-        loaded.papers.forEach((record, recordIndex) => {
-            const arxivId = normalizedArxivId(record); if (!arxivId) return;
-            const item = { arxivId, archiveRelativePath: relativePath, archiveFileSha256: loaded.fileSha256,
-                recordIndex, record: clone(record), recordSha256: stableHash(record) };
-            const values = matches.get(arxivId) || []; values.push(item); matches.set(arxivId, values);
-        });
-    }
-    for (const values of matches.values()) values.sort((left, right) => left.archiveRelativePath.localeCompare(right.archiveRelativePath)
-        || left.recordIndex - right.recordIndex || left.recordSha256.localeCompare(right.recordSha256));
-    return { files: files.sort((left, right) => left.relativePath.localeCompare(right.relativePath)), matches };
-}
-function authorityNameFor(arxivId, match) {
-    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || '')) || !match || match.arxivId !== arxivId
-        || !SHA_RE.test(String(match.archiveFileSha256 || '')) || !SHA_RE.test(String(match.recordSha256 || ''))
-        || typeof match.archiveRelativePath !== 'string' || !Number.isSafeInteger(match.recordIndex) || match.recordIndex < 0) {
-        fail('arXiv ID 与归档记录指针必须已规范化');
-    }
-    const pointerSha256 = stableHash({ archiveRelativePath: match.archiveRelativePath, archiveFileSha256: match.archiveFileSha256,
-        recordIndex: match.recordIndex, recordSha256: match.recordSha256 });
-    return `${AUTHORITY_PREFIX}${arxivId}-${pointerSha256}.json`;
-}
 function normalizeRecord(record, expectedId) {
     if (!plain(record) || normalizedArxivId(record) !== expectedId) fail('归档爬虫记录未绑定预期的 arXiv ID');
     return clone(record);
 }
 function normalizeAuthority(value) {
-    exact(value, ['contract', 'version', 'paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'evidenceKind',
+    const header = authorityHeader(value);
+    exact(value, [...Object.keys(header), 'paperId', 'identity', 'identitySha256', 'identityRecordSha256', 'evidenceKind',
         'archiveRelativePath', 'archiveFileSha256', 'recordIndex', 'record', 'recordSha256', 'authoritySha256'],
     'archive crawl identity authority');
-    if (value.contract !== CONTRACT || value.version !== VERSION || value.evidenceKind !== EVIDENCE_KIND
+    if (value.evidenceKind !== EVIDENCE_KIND
         || !Number.isSafeInteger(value.recordIndex) || value.recordIndex < 0
         || !/^archive\/\d{4}-\d{2}-\d{2}\/filtered-papers\.json$/.test(String(value.archiveRelativePath || ''))) {
         fail('归档爬虫身份授权凭据的 contract 无效');
@@ -154,6 +118,7 @@ function normalizeAuthority(value) {
     let identity;
     try { identity = identityApi.normalizeIdentity(value.identity); }
     catch (error) { fail(error.message); }
+    if (Object.hasOwn(identity, 'schemaFingerprint')) fail('退役归档凭据不能换用当前论文身份格式');
     if (identity.kind !== 'arxiv' || identity.citation !== null || value.paperId !== identity.canonicalId
         || sha(value.identitySha256, 'identitySha256') !== identityApi.identitySha256(identity)
         || sha(value.identityRecordSha256, 'identityRecordSha256') !== identityApi.recordSha256(identity)) fail('归档爬虫身份绑定无效');
@@ -174,18 +139,6 @@ function verifyMatchAgainstRetained({ dataRoot, match }) {
     return { arxivId: match.arxivId, archiveRelativePath: match.archiveRelativePath, archiveFileSha256: loaded.fileSha256,
         recordIndex: match.recordIndex, record: clone(record), recordSha256: match.recordSha256 };
 }
-function identityFor(arxivId) {
-    return identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'arxiv', canonicalId: `arxiv:${arxivId}`,
-        arxivId, conference: null, externalId: null, source: { status: 'official', url: `https://arxiv.org/abs/${arxivId}` }, citation: null });
-}
-function authorityFor(match) {
-    const identity = identityFor(match.arxivId);
-    const body = { contract: CONTRACT, version: VERSION, paperId: identity.canonicalId, identity,
-        identitySha256: identityApi.identitySha256(identity), identityRecordSha256: identityApi.recordSha256(identity),
-        evidenceKind: EVIDENCE_KIND, archiveRelativePath: match.archiveRelativePath, archiveFileSha256: match.archiveFileSha256,
-        recordIndex: match.recordIndex, record: match.record, recordSha256: match.recordSha256 };
-    return { ...body, authoritySha256: stableHash(body) };
-}
 function readAuthority(identityRoot, authorityName) {
     const root = safeDirectory(identityRoot, 'archiveIdentityRoot');
     if (!SAFE_JSON_NAME.test(String(authorityName || ''))) fail('authorityName is unsafe');
@@ -204,10 +157,6 @@ function readAuthority(identityRoot, authorityName) {
         if (!bytes.equals(prettyBytes(normalized))) fail('归档身份授权凭据的字节不是规范形式');
         return { filename: fs.realpathSync(filename), bytes, sha256: sha256(bytes), authority: normalized, dev: opened.dev, ino: opened.ino };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
-}
-function writeExact(identityRoot, authorityName, bytes) {
-    const root = safeDirectory(identityRoot, 'archiveIdentityRoot', { create: true });
-    writeImmutableFile(path.join(root, authorityName), bytes, fail);
 }
 function authorityHandleSnapshot(handle) {
     if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('需要已认证的归档爬虫身份句柄');
@@ -238,23 +187,6 @@ function replayAuthorityHandle(handle, { requireProduction = false } = {}) {
     if (loaded.dev !== original.authorityFileDev || loaded.ino !== original.authorityFileIno || stableHash(current) !== stableHash(original.public)) fail('句柄创建后，归档爬虫身份授权凭据或保留证据发生变化');
     return handle;
 }
-function prepareArchiveCrawlAuthority({ identityRoot, dataRoot, arxivId, match, apply = false } = {}) {
-    if (!match || match.arxivId !== arxivId) fail('所选的归档匹配记录必须绑定请求的 arXiv ID');
-    const authorityName = authorityNameFor(arxivId, match);
-    if (!apply) return { status: 'dry-run', paperId: `arxiv:${arxivId}`, arxivId, authorityName };
-    const retained = verifyMatchAgainstRetained({ dataRoot, match });
-    if (retained.arxivId !== arxivId) fail('所选的归档记录属于另一个 arXiv ID');
-    const authority = authorityFor(retained); const bytes = prettyBytes(authority); const filename = path.join(path.resolve(identityRoot), authorityName);
-    const existed = fs.existsSync(filename); writeExact(identityRoot, authorityName, bytes);
-    const loaded = readAuthority(identityRoot, authorityName);
-    verifyMatchAgainstRetained({ dataRoot, match: { arxivId, archiveRelativePath: loaded.authority.archiveRelativePath,
-        archiveFileSha256: loaded.authority.archiveFileSha256, recordIndex: loaded.authority.recordIndex,
-        recordSha256: loaded.authority.recordSha256 } });
-    const handle = loadArchiveCrawlAuthorityHandle({ identityRoot, dataRoot, authorityName });
-    return { status: existed ? 'recovered' : 'created', paperId: `arxiv:${arxivId}`, arxivId, authorityName, authorityHandle: handle, retained };
-}
-
-module.exports = { CONTRACT, VERSION, EVIDENCE_KIND, AUTHORITY_PREFIX, SAFE_JSON_NAME, HistoricalArchiveCrawlAuthorityError,
-    stableHash, prettyBytes, safeDirectory, readRetainedFilteredFile, normalizedArxivId, retainedFilteredPaths,
-    scanRetainedFilteredPapers, authorityNameFor, normalizeAuthority, verifyMatchAgainstRetained,
-    prepareArchiveCrawlAuthority, loadArchiveCrawlAuthorityHandle, authorityHandleSnapshot, replayAuthorityHandle };
+module.exports = { CONTRACT, EVIDENCE_KIND, AUTHORITY_PREFIX, SAFE_JSON_NAME, HistoricalArchiveCrawlAuthorityError,
+    stableHash, prettyBytes, safeDirectory, readRetainedFilteredFile, normalizedArxivId, normalizeAuthority, verifyMatchAgainstRetained,
+    loadArchiveCrawlAuthorityHandle, authorityHandleSnapshot, replayAuthorityHandle };

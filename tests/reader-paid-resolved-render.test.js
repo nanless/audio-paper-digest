@@ -32,7 +32,7 @@ function createSample() {
     const paper = { arxivId: '2610.03602v1', sourceSha256: identity.sourceSha256, apiReaderFigures: [],
         apiReaderArticleSha256: 'd'.repeat(64), apiReaderPlanSha256: 'e'.repeat(64),
         analysisManifest: { stages: { apiReaderArticle: stage } } };
-    const envelope = { version: repair.REPAIR_VERSION, identity, payload, payloadSha256: repair.hashDraft(payload) };
+    const envelope = { ...repair.candidateEnvelopeHeader(), identity, payload, payloadSha256: repair.hashDraft(payload) };
     return { paper, source, checked: { envelope }, expectedPaperSha: stableHash(paper) };
 }
 

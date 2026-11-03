@@ -61,8 +61,8 @@ class FakeModule:
         self.calls.append('load_verified_review_receipt')
         return self._paths, self._receipt
 
-    def preflight_post_publish_visual_capability(self, _date, require_visual_plan=False):
-        self.calls.append('preflight_post_publish_visual_capability')
+    def preflight_production_publication(self, _date, require_production_receipt=False):
+        self.calls.append('preflight_production_publication')
         return True
 
     def validate_git_publish_branch(self):

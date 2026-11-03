@@ -63,6 +63,11 @@ test('真实PDF引文正常绑定、保留列并通过冷态来源guard，改值
             paper.sourceSha256 = source.freshSourceDescriptor.sourceSha256;
             Object.assign(paper.analysisManifest.sourceAcquisition, { sourceSha256: paper.sourceSha256,
                 structuredArtifactsSha256: artifacts.payloadSha256 });
+            // This component fixture's empty resource set must bind the actual
+            // selected source before identity preparation, not a fixture SHA.
+            paper.apiReaderResources.sourceTextSha256 = paper.sourceSha256;
+            const { identitySha256: _fixtureSha, ...resourceBody } = paper.apiReaderResources;
+            paper.apiReaderResources.identitySha256 = deep.stableFingerprint(resourceBody);
             const before = deep.buildApiReaderEvidenceContext('', source.text, artifacts, id, null, null, false);
             pdf.withArtifacts(artifacts, id, () => {
                 const full = pdf.document().normalizedFullText;
@@ -112,9 +117,6 @@ test('真实PDF引文正常绑定、保留列并通过冷态来源guard，改值
     authors.identity.sourceTextSha256 = paper.sourceSha256;
     authors.identity.authors[0].affiliationBindings[0].sourceTextSha256 = paper.sourceSha256;
     authors.identitySha256 = deep.stableFingerprint(authors.identity);
-    paper.apiReaderResources.sourceTextSha256 = paper.sourceSha256;
-    const { identitySha256: _oldResourceSha, ...resourceIdentity } = paper.apiReaderResources;
-    paper.apiReaderResources.identitySha256 = deep.stableFingerprint(resourceIdentity);
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
     const seal = () => {
         paper.apiReaderPlan.sourceBindingsSha256 = deep.stableFingerprint({ tableBindings: paper.apiReaderPlan.tableBindings, formulaBindings: [] });
@@ -127,12 +129,12 @@ test('真实PDF引文正常绑定、保留列并通过冷态来源guard，改值
             readerAuthorIdentitySha256: authors.identitySha256, resourceIdentitySha256: paper.apiReaderResources.identitySha256 });
     };
     seal();
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     for (const mutate of [p => p.apiReaderPlan.tableBindings[0].sealedPdfQuoteEvidence[0].rawStartCodePoint++,
         p => p.apiReaderPlan.tableBindings[0].sealedPdfQuoteEvidence[0].quote += ' invented',
         p => p.apiReaderPlan.structuredSourcePayload += ' ',
         p => p.apiReaderPlan.tableBindings[0].sourceQuotes.push({ quote: 'Fabricated result 0.123456', sourceQuoteSha256: sha('Fabricated result 0.123456') })]) {
-        const bad = structuredClone(paper); mutate(bad); assert.equal(engine.hasValidApiReaderV3Records(bad), false);
+        const bad = structuredClone(paper); mutate(bad); assert.equal(engine.hasValidIntegratedApiReaderRecords(bad), false);
     }
     // A genuine quotation proof with self-consistent content hashes still cannot
     // authorize an invented scalar or attach another metric's dB unit.
@@ -146,7 +148,7 @@ test('真实PDF引文正常绑定、保留列并通过冷态来源guard，改值
         bad.apiReaderArticleSha256 = sha(bad.apiReaderArticle);
         Object.assign(bad.analysisManifest.stages.apiReaderArticle, { planSha256: bad.apiReaderPlanSha256,
             articleSha256: bad.apiReaderArticleSha256, sourceBindingsSha256: bad.apiReaderPlan.sourceBindingsSha256 });
-        assert.equal(engine.hasValidApiReaderV3Records(bad), false);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(bad), false);
     }
     for (const [file, digest] of originals) assert.equal(sha(fs.readFileSync(file)), digest);
 });

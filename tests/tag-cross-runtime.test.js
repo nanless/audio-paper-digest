@@ -55,7 +55,7 @@ test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一
         buildTagPromptText(legacyCatalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT), 'utf8').digest('hex'),
         '96813f030122a5d6b3b5b51da583b40002411355c3bbdfabed3a4b0b6b101b27',
         '显式旧快照与旧提示格式的完整字节保持原 SHA');
-    const expected={version:tagCatalog.version,registrySha256:tagCatalog.registrySha256,
+    const expected={version:require('../scripts/lib/tag-catalog').tagCatalogIdentity(tagCatalog),registrySha256:tagCatalog.registrySha256,
         projectionSha256:getDefaultTagRules().projectionSha256,
         selectionContract:TAG_SELECTION_CONTRACT,legacySelectionContract:LEGACY_TAG_SELECTION_CONTRACT,
         promptTexts,
@@ -66,10 +66,10 @@ test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一
         'import json, sys, faulthandler',
         'faulthandler.dump_traceback_later(30)',
         'sys.path.insert(0,"scripts")',
-        'from tag_catalog import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256, build_tag_prompt_text, TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT',
+        'from tag_catalog import tag_catalog_identity, TAG_PROMPT_TEXT_CONTRACT, load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256, build_tag_prompt_text, TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT',
         't=load_tag_catalog(); p=json.load(sys.stdin)',
-        'prompt_texts=[{"projectionContract":v,"text":build_tag_prompt_text(t,v),"sha256":tag_prompt_text_sha256(t,v)} for v in ["paper-taxonomy-prompt-projection-v1","paper-tag-prompt-text-v2"]]',
-        'r={"version":t["version"],"registrySha256":t["registrySha256"],"projectionSha256":tag_prompt_text_sha256(t),',
+        'prompt_texts=[{"projectionContract":v,"text":build_tag_prompt_text(t,v),"sha256":tag_prompt_text_sha256(t,v)} for v in ["paper-taxonomy-prompt-projection-v1",TAG_PROMPT_TEXT_CONTRACT]]',
+        'r={"version":tag_catalog_identity(t),"registrySha256":t["registrySha256"],"projectionSha256":tag_prompt_text_sha256(t),',
         '"selectionContract":TAG_SELECTION_CONTRACT,"legacySelectionContract":LEGACY_TAG_SELECTION_CONTRACT,',
         '"promptTexts":prompt_texts,"resolved":[(resolve_label(t,s) or {}).get("id") for s in p["labels"]],',
         '"faceted":[(resolve_label(t,s,f) or {}).get("id") for s,f in p["faceted"]],',
@@ -267,7 +267,7 @@ test('标签阶段的旧新完整绑定、只读结果和拒绝边界在两端�
     delete current.analysisManifest.stages.taxonomySeal;
     current.analysisManifest.stages.tagSelection = newStage;
     delete current.analysisManifest.contracts.taxonomy;
-    current.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+    current.analysisManifest.contracts.tagSelectionRecord = records.tagStageRecordDeclaration();
     current.analysisStageCheckpoints.tagSelection = current.analysisStageCheckpoints.taxonomySeal;
     delete current.analysisStageCheckpoints.taxonomySeal;
     const fixtures = [];

@@ -5,7 +5,7 @@ requireExternalRuntime('llm-usage-report');
 const fs = require('node:fs');
 const path = require('node:path');
 const Config = require('./config.js');
-const { summarizeLlmUsage, usagePaperKey, VERSION } = require('./lib/llm-usage.js');
+const { summarizeLlmUsage, usagePaperKey, isUsageEventFormat } = require('./lib/llm-usage.js');
 
 function readUsageEvents(directory) {
     if (!fs.existsSync(directory)) return [];
@@ -18,7 +18,7 @@ function readUsageEvents(directory) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32768) throw new Error('用量事件必须是普通文件，不能是符号链接或超过 32 KiB');
         const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (value?.version !== VERSION || !['request', 'request_started', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：version 或 kind 不是这个版本认识的取值');
+        if (!isUsageEventFormat(value) || !['request', 'request_started', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：格式声明或 kind 不属于已登记的用量记录');
         events.push(value);
     }
     return events;

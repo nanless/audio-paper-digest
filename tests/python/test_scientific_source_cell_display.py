@@ -7,6 +7,7 @@ import unittest
 
 from test_publish_to_blog import publish_to_blog as publish
 from publish_common import strict_source_cell_math_display
+from protocol_codec import record_header
 
 
 class ScientificSourceCellDisplayTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class ScientificSourceCellDisplayTests(unittest.TestCase):
             (r'+0.010×10+03+0.010\times 10^{+03}', '+0.010×10⁺⁰³')
         ]:
             self.assertEqual(strict_source_cell_math_display(raw), {
-                'contract': 'source-cell-math-display-v1', 'kind': 'scientific-notation-duplicate',
+                **record_header('source-cell-math-display', 'source-cell-math-display'), 'kind': 'scientific-notation-duplicate',
                 'sourceText': raw, 'sourceTextSha256': hashlib.sha256(raw.encode()).hexdigest(), 'displayText': display})
             self.assertIsNone(strict_source_cell_math_display(display))
         for raw in [

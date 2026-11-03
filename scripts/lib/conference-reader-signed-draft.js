@@ -34,7 +34,7 @@ function inspectConferenceSignedReader({analysisRoot,executionId,planHandle,sour
     const revisionFile = path.join(loaded.directory,'reader-revision.json');
     if (fs.existsSync(revisionFile)) {
         const revision = adapter.readJsonRecord(revisionFile).value;
-        loaded = revision.contract === 'conference-reader-recovery-window-v1'
+        loaded = require('./protocol-codec').hasValidHeader(revision, 'conference-reader-recovery-window')
             ? adapter.loadGrantedConferenceRecovery({analysisRoot,executionId})
             : adapter.loadConferenceReaderRevision({analysisRoot,executionId});
     }

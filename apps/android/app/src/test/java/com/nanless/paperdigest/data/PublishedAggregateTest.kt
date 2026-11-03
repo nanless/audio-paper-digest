@@ -35,6 +35,49 @@ class PublishedAggregateTest {
     @Test fun sameManifestRequiresExactCurrentValidationEpoch() = fixture { _, store ->
         val c = store.stage(manifest, epoch); assertNull(store.load(c.snapshotSHA256, null)); assertNull(store.load(c.snapshotSHA256, "00000000-0000-0000-0000-000000000002")); assertEquals(c, store.load(c.snapshotSHA256, epoch))
     }
+    @Test fun activationKeepsOriginalHeaderOnColdReplayAndRestage() = fixture { directory, store ->
+        val catalog=store.stage(manifest,epoch)
+        val marker=File(directory,"aggregate-activations/${catalog.snapshotSHA256}/$epoch.json")
+        val record=JSONObject(marker.readText())
+        val family="published-aggregate-activation"
+        val protocols=com.nanless.paperdigest.protocols.ClientProtocols
+        assertTrue(protocols.isCurrentHeader(record,family))
+        val sidecar=File(directory,"aggregate-index/${catalog.snapshotSHA256}.json")
+        val sidecarRecord=JSONObject(sidecar.readText())
+        assertTrue(protocols.isCurrentHeader(sidecarRecord,"published-aggregate-index"))
+        sidecarRecord.remove("schemaFingerprint")
+        val historicalSidecar=sidecarRecord.put("contract","published-aggregate-index-v1").toString().toByteArray()
+        sidecar.writeBytes(historicalSidecar)
+        record.put("catalogSHA256",PublishedAggregateReader.sha(historicalSidecar))
+        record.remove("schemaFingerprint")
+        record.put("contract","published-aggregate-activation-v1")
+        val historical=record.toString().toByteArray()
+        marker.writeBytes(historical)
+        val cold=PublishedAggregateStore(directory)
+        assertEquals(catalog,cold.load(catalog.snapshotSHA256,epoch))
+        assertEquals(catalog,cold.stage(manifest,epoch))
+        assertTrue(marker.readBytes().contentEquals(historical))
+        assertTrue(sidecar.readBytes().contentEquals(historicalSidecar))
+        marker.writeText(record.put("schemaFingerprint",protocols.schemaFingerprint(family)).toString())
+        assertTrue(runCatching{cold.load(catalog.snapshotSHA256,epoch)}.isFailure)
+    }
+    @Test fun actualDocumentParserProfileControlsColdReplay() = fixture { directory, store ->
+        val descriptor=store.stage(manifest,epoch).records.first{it.kind=="daily"}
+        val html="<html><body><div id='article-body' class='post-content'><p>Original body</p></div></body></html>".toByteArray()
+        val record=store.cacheDocument(html,descriptor,descriptor.sourceURL,"2026-10-27T00:00:00Z")
+        val sha=record.getString("rawHTMLSHA256")
+        val path=File(directory,"aggregate-documents-android/${PublishedAggregateReader.sha(descriptor.id.toByteArray())}/${descriptor.source.manifestSHA256}/$sha/document.json")
+        assertTrue(com.nanless.paperdigest.protocols.ClientProtocols.isCurrentHeader(record,"published-aggregate-document"))
+        record.remove("schemaFingerprint")
+        record.put("contract","published-aggregate-document-v1").put("parserContract","published-aggregate-jsoup-v1")
+        val historical=OfflineFoundationJSON.encode(record)
+        path.writeBytes(historical)
+        val cold=PublishedAggregateStore(directory)
+        assertEquals("published-aggregate-jsoup-v1",cold.cachedDocument(descriptor,sha).getString("parserContract"))
+        assertTrue(path.readBytes().contentEquals(historical))
+        path.writeBytes(OfflineFoundationJSON.encode(record.put("parserContract","published-aggregate-html-v1")))
+        assertTrue(runCatching{cold.cachedDocument(descriptor,sha)}.isFailure)
+    }
     @Test fun originalPublisherFieldsRetainRowWitness() = fixture { _, store ->
         val descriptor = store.stage(manifest, epoch).records.first(); val raw = store.originalRow(descriptor); assertTrue(JSONObject(PublishedUtf8.decode(raw)).has("futurePublisherField")); assertEquals(descriptor.source.normalizedRowSHA256, PublishedAggregateReader.sha(raw))
     }

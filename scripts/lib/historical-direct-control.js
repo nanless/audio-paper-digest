@@ -13,10 +13,12 @@ const aggregateApi = require('./historical-direct-aggregate.js');
 const directPages = require('./historical-direct-page-staging.js');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const PAUSE_CONTRACT = 'historical-direct-rewrite-pause-request-v1';
-const STATUS_CONTRACT = 'historical-direct-rewrite-status-v1';
-const SOURCE_STATUS_CONTRACT = 'historical-direct-source-status-v1';
+const PAUSE_CONTRACT = codec.contract('historical-direct-rewrite-pause-request');
+const STATUS_CONTRACT = codec.contract('historical-direct-rewrite-status');
+const SOURCE_STATUS_CONTRACT = codec.contract('historical-direct-source-status');
 const SHA_RE = /^[a-f0-9]{64}$/;
 
 class HistoricalDirectControlError extends Error {
@@ -27,6 +29,10 @@ class HistoricalDirectControlError extends Error {
     }
 }
 const fail = message => { throw new HistoricalDirectControlError(message); };
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`格式声明不符合要求：${error.message}`); }
+}
 function canonical(value) {
     if (Array.isArray(value)) return value.map(canonical);
     if (value && typeof value === 'object') {
@@ -74,17 +80,17 @@ function sourceStatusRecord(plan, generation, createdAt) {
     const normalized = planApi.normalizePlan(plan); generationNumber(generation);
     const entries = normalized.queue.map(item => ({ paperId: item.paperId, route: item.route.kind,
         status: 'pending', attempts: 0, updatedAt: null, outcomeSha256: null, error: null }));
-    const body = { contract: SOURCE_STATUS_CONTRACT, version: 1, planSha256: normalized.planSha256,
+    const body = { ...codec.recordHeader(SOURCE_STATUS_CONTRACT, 'historical-direct-source-status'), planSha256: normalized.planSha256,
         generation, createdAt, entries, entrySetSha256: stableHash(entries) };
     return { ...body, statusSha256: stableHash(body) };
 }
 function normalizeSourceStatus(value, plan, generation) {
     const normalized = planApi.normalizePlan(plan);
-    const fields = ['contract', 'version', 'planSha256', 'generation', 'createdAt', 'entries',
+    const header = recordHeaderFor(value, 'historical-direct-source-status');
+    const fields = [...Object.keys(header), 'planSha256', 'generation', 'createdAt', 'entries',
         'entrySetSha256', 'statusSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')
-        || value.contract !== SOURCE_STATUS_CONTRACT || value.version !== 1
         || value.planSha256 !== normalized.planSha256 || value.generation !== generation
         || Number.isNaN(Date.parse(value.createdAt || '')) || new Date(value.createdAt).toISOString() !== value.createdAt
         || !Array.isArray(value.entries) || !SHA_RE.test(value.entrySetSha256 || '') || !SHA_RE.test(value.statusSha256 || '')) {
@@ -104,7 +110,7 @@ function normalizeSourceStatus(value, plan, generation) {
     });
     if (seen.size !== expected.size || entries.some((entry, index) => entry.paperId !== normalized.queue[index].paperId)
         || stableHash(entries) !== value.entrySetSha256) fail('来源状态未恰好覆盖计划队列');
-    const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
+    const body = { ...header, planSha256: value.planSha256,
         generation: value.generation, createdAt: value.createdAt, entries, entrySetSha256: value.entrySetSha256 };
     if (stableHash(body) !== value.statusSha256) fail('来源状态记录的 SHA 已变化');
     return { ...body, statusSha256: value.statusSha256 };
@@ -147,7 +153,7 @@ function updateSourceStatus({ sourceRoot, plan, generation = 1, event, now = new
     const entries = current.entries.slice(); const before = entries[index];
     entries[index] = { ...before, status: event.status, attempts: before.attempts + 1, updatedAt: now,
         outcomeSha256: stableHash(event), error: event.status === 'failed' ? String(event.error || '来源准备失败').slice(0, 2000) : null };
-    const body = { contract: SOURCE_STATUS_CONTRACT, version: 1, planSha256: current.planSha256,
+    const body = { ...recordHeaderFor(current, 'historical-direct-source-status'), planSha256: current.planSha256,
         generation: current.generation, createdAt: current.createdAt, entries, entrySetSha256: stableHash(entries) };
     const status = { ...body, statusSha256: stableHash(body) }; writeAtomicStatus(loaded.filename, status);
     return { filename: loaded.filename, status };
@@ -177,6 +183,10 @@ function phasePaths({ phase = 'analysis', registryRoot, sourceRoot, plan, genera
 }
 
 function pauseRecord(plan, generation, requestedAt, reason) {
+    return buildPauseRecord(plan, generation, requestedAt, reason,
+        codec.recordHeader(PAUSE_CONTRACT, 'historical-direct-rewrite-pause-request'));
+}
+function buildPauseRecord(plan, generation, requestedAt, reason, header) {
     const normalized = planApi.normalizePlan(plan); const checked = generationNumber(generation);
     if (Number.isNaN(Date.parse(requestedAt || '')) || new Date(requestedAt).toISOString() !== requestedAt) {
         fail('暂停请求时间必须是规范化的 ISO-8601');
@@ -189,18 +199,18 @@ function pauseRecord(plan, generation, requestedAt, reason) {
         || typeof reason.detail !== 'string' || reason.detail !== runner.safeErrorText(reason.detail))) {
         fail('暂停原因的字段或原因代码无效，或说明中含不安全文本');
     }
-    const body = { contract: PAUSE_CONTRACT, version: 1, planSha256: normalized.planSha256,
+    const body = { ...header, planSha256: normalized.planSha256,
         generation: checked, requestedAt, ...(reason ? { reason } : {}) };
     return { ...body, requestSha256: stableHash(body) };
 }
 function normalizePauseRecord(value, plan, generation) {
-    const expectedKeys = ['contract', 'version', 'planSha256', 'generation', 'requestedAt', 'requestSha256'];
+    const header = recordHeaderFor(value, 'historical-direct-rewrite-pause-request');
+    const expectedKeys = [...Object.keys(header), 'planSha256', 'generation', 'requestedAt', 'requestSha256'];
     if (Object.hasOwn(value || {}, 'reason')) expectedKeys.push('reason');
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) fail('暂停请求的字段结构无效');
-    const expected = pauseRecord(plan, generation, value.requestedAt, value.reason);
-    if (value.contract !== expected.contract || value.version !== expected.version
-        || value.planSha256 !== expected.planSha256 || value.generation !== expected.generation) fail('暂停请求不属于本次计划或代次');
+    const expected = buildPauseRecord(plan, generation, value.requestedAt, value.reason, header);
+    if (value.planSha256 !== expected.planSha256 || value.generation !== expected.generation) fail('暂停请求不属于本次计划或代次');
     if (value.requestSha256 !== expected.requestSha256 || !SHA_RE.test(value.requestSha256)) fail('暂停请求的 SHA 已变化');
     return expected;
 }
@@ -303,8 +313,9 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
             const filename = path.join(runRoot, entry.name);
             try {
                 const loaded = conferencePageMappingsApi.readStableJson(filename, '历史汇总的状态输入记录'); const value = loaded.value;
-                if (value?.contract !== aggregateApi.CONTRACT || value?.version !== aggregateApi.VERSION
+                if (!codec.isContract(value?.contract, 'historical-direct-aggregate')
                     || value?.status !== 'complete' || value?.source?.planSha256 !== plan.planSha256) continue;
+                recordHeaderFor(value, 'historical-direct-aggregate');
                 const body = structuredClone(value); const manifestSha256 = body.manifestSha256; delete body.manifestSha256;
                 if (!SHA_RE.test(manifestSha256 || '') || aggregateApi.stableHash(body) !== manifestSha256) {
                     fail('历史汇总清单的 SHA 已变化');
@@ -356,8 +367,8 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
             continue;
         }
         const value = loaded.value;
-        // contract、version 或 planSha 不符时，此文件不作为本计划的汇总记录检查；跳过它不算损坏。
-        if (value?.contract !== aggregateApi.PROJECTION_CONTRACT || value?.version !== aggregateApi.PROJECTION_VERSION
+        // 其他协议或计划不属于本次范围；已登记的本计划格式仍须完整核验。
+        if (!codec.isContract(value?.contract, 'historical-direct-aggregate-projection')
             || value?.planSha256 !== plan.planSha256) continue;
         let normalized;
         try { normalized = aggregateApi.normalizeAggregateProjection(value, plan); }
@@ -539,7 +550,7 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
         : staged < total ? 'idle-incomplete' : missingAggregates || aggregates.missing.conferenceTask.length ? 'awaiting-aggregates'
             : blockers.length ? 'awaiting-closeout' : 'complete';
     const complete = blockers.length === 0;
-    return { contract: STATUS_CONTRACT, version: 1, observedAt, plan: { filename: planFile,
+    return { ...codec.recordHeader(STATUS_CONTRACT, 'historical-direct-rewrite-status'), observedAt, plan: { filename: planFile,
         fileSha256: loaded.fileSha256, planSha256: plan.planSha256, canonicalPapers: total,
         projectedPages: plan.projectedPages.length, coverage }, execution: { generation: generationNumber(generation),
         registryFile: paths.registryFile, pauseFile: paths.pauseFile, operationLockDirectory: paths.operationLockDirectory,

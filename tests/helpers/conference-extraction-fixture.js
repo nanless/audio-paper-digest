@@ -50,7 +50,7 @@ function runProductionExtraction({ sourceRoot, value, discoveryBinding, pdfBytes
         identity: { type: 'icassp-arnumber', value }, title: `Paper ${value}`, ...(authors ? { authors } : {}) }));
     const identityEvidence = { conferenceIdPointer: '/conferenceId', conferenceYearPointer: '/year',
         identityTypePointer: '/identity/type', identityValuePointer: '/identity/value' };
-    const request = { contract: extraction.REQUEST_CONTRACT, version: extraction.VERSION, paperId, sourceIdentity,
+    const request = { ...require('../../scripts/lib/protocol-codec').recordHeader(extraction.REQUEST_CONTRACT, 'conference-pdf-extraction-request'), paperId, sourceIdentity,
         source: { metadata: { file: names.metadata, sha256: sha256(metadata), identityEvidence,
             discoveryBinding, provenance: { kind: 'official-metadata', locator: `fixture:${value}:metadata`, retrievedAt: stamp } },
         pdf: { file: names.pdf, sha256: sha256(pdfBytes),

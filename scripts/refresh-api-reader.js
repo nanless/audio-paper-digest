@@ -27,7 +27,7 @@ const {
     updateJsonFileLocked,
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock,
-    hasValidApiReaderV3Records,
+    hasValidIntegratedApiReaderRecords,
     getAnalysisRunSummary
 } = require('./analysis-engine.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
@@ -155,7 +155,7 @@ function paperRefreshInputIdentity(paper) {
 
 function hasCurrentReaderV3(paper, options) {
     return !scoringRefresh.hasCheckpoint(paper) && !scoringRefresh.hasPreservedCheckpoint(paper, options)
-        && hasValidApiReaderV3Records(paper)
+        && hasValidIntegratedApiReaderRecords(paper)
         && !paper?.latestAnalysisAttemptError;
 }
 
@@ -332,17 +332,17 @@ function canRepairScoringBinding(paper) {
         ? crypto.createHash('sha256').update(article).digest('hex') : '';
     const reusableRevisionSeed = article.length > 0
         && paper?.apiReaderPlan && typeof paper.apiReaderPlan === 'object'
-        && paper.apiReaderPlan.version === 3
+        && require('./lib/reader-record-format').isIntegratedPlan(paper.apiReaderPlan)
+        && paper.apiReaderPlan.contract === manifest?.contracts?.apiReaderArticle
         && paper.apiReaderArticleSha256 === articleSha256
         && paper.apiReaderPlanSha256 === stableFingerprint(paper.apiReaderPlan);
     return typeof paper?.analysis === 'string' && paper.analysis.trim().length > 0
-        && manifest?.version === 1
+        && require('./lib/analysis-quality-format').manifestHeader(manifest) !== null
         && scoring?.status === 'complete'
-        && scoring?.scoringContract === 'api-scoring-audit-v2'
+        && require('./lib/scoring-record-format').hasScoringAuditFormat(scoring)
         && (reader?.status === 'complete'
             || (reader?.status === 'invalid_output' && reusableRevisionSeed))
-        && ['beginner-researcher-v2', 'beginner-researcher-v3']
-            .includes(manifest?.contracts?.apiReaderArticle);
+        && require('./lib/reader-record-format').isStructuredContract(manifest?.contracts?.apiReaderArticle);
 }
 
 function canRepairSurfaceBinding(paper) {

@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -16,7 +17,7 @@ data class AggregateCachedRevision(val rawHTMLSHA256:String,val fetchedAt:String
 
 /** Original manifest + per-shard witness required. Scattered legacy caches never grant a retroactive manifest. */
 class PublishedAggregateStore(private val directory:File) {
-    companion object {private val immutablePublishLock=Any()}
+    companion object {private val immutablePublishLock=Any();private const val activationFamily="published-aggregate-activation";private const val catalogFamily="published-aggregate-index"}
     private data class SourceFile(val file:File,val limit:Int,val sha256:String)
     private data class ParsedSource(val catalog:PublishedAggregateCatalog,val shapeSHA256:String)
     private data class ParsedImagePlan(val plan:AggregateImagePlan,val canonical:String)
@@ -110,15 +111,38 @@ class PublishedAggregateStore(private val directory:File) {
         }
     }
     private fun epoch(value:String):String {val id=UUID.fromString(value).toString();require(id.equals(value,true)){"汇总目录验证代无效"};return id}
+    private fun catalogRecord(catalog:PublishedAggregateCatalog, original:ByteArray?=null):ByteArray {
+        val body=catalog.json()
+        if(original==null)return OfflineFoundationJSON.encode(ClientProtocols.record(catalogFamily,body))
+        val saved=JSONObject(PublishedUtf8.decode(original))
+        require(ClientProtocols.hasValidHeader(saved,catalogFamily)){"汇总目录格式无效"}
+        val expected=ClientProtocols.recordHeader(saved.get("contract"),catalogFamily,saved.opt("schemaFingerprint") as? String)
+        body.keys().forEach{key->expected.put(key,body.get(key))}
+        require(canonical(saved)==canonical(expected)){"汇总目录与原清单不一致"}
+        return original
+    }
+    private fun checkActivation(raw:ByteArray, snapshot:String, epoch:String, catalogSHA:String) {
+        val value=JSONObject(PublishedUtf8.decode(raw))
+        val body=mapOf("snapshotSHA256" to snapshot,"validationEpoch" to epoch,"catalogSHA256" to catalogSHA)
+        require(ClientProtocols.hasValidHeader(value,activationFamily)&&
+            value.keys().asSequence().toSet()==ClientProtocols.recordKeys(value.get("contract"),activationFamily,body.keys,value.opt("schemaFingerprint") as? String)&&
+            body.all{(key,expected)->value.opt(key)==expected}){"汇总激活代与原清单不一致"}
+    }
     fun stage(rawManifest:ByteArray,validationEpoch:String,check:()->Unit={}):PublishedAggregateCatalog {
         val identity=epoch(validationEpoch)
         val catalog=PublishedAggregateReader.read(rawManifest,check){read(child("index","${it.sha256}.json"),it.bytes)}
         check();immutable(child("aggregate-manifests","${catalog.snapshotSHA256}.json"),rawManifest)
         check();val sidecar=child("aggregate-index","${catalog.snapshotSHA256}.json")
-        if(sidecar.exists())require(canonical(JSONObject(PublishedUtf8.decode(read(sidecar,8*1024*1024))))==canonical(catalog.json())) else immutable(sidecar,OfflineFoundationJSON.encode(catalog.json()))
-        val actual=read(sidecar,8*1024*1024)
-        val activation=JSONObject().put("contract","published-aggregate-activation-v1").put("snapshotSHA256",catalog.snapshotSHA256).put("validationEpoch",identity).put("catalogSHA256",PublishedAggregateReader.sha(actual))
-        check();immutable(child("aggregate-activations",catalog.snapshotSHA256,"$identity.json"),OfflineFoundationJSON.encode(activation))
+        if(!sidecar.exists())immutable(sidecar,catalogRecord(catalog))
+        val actual=catalogRecord(catalog,read(sidecar,8*1024*1024))
+        val marker=child("aggregate-activations",catalog.snapshotSHA256,"$identity.json")
+        val actualSHA=PublishedAggregateReader.sha(actual)
+        check()
+        if(marker.exists()) checkActivation(read(marker,4096),catalog.snapshotSHA256,identity,actualSHA)
+        else {
+            val activation=ClientProtocols.record(activationFamily).put("snapshotSHA256",catalog.snapshotSHA256).put("validationEpoch",identity).put("catalogSHA256",actualSHA)
+            immutable(marker,OfflineFoundationJSON.encode(activation))
+        }
         return catalog
     }
     fun load(activeSnapshotSHA256:String,validationEpoch:String?,check:()->Unit={}):PublishedAggregateCatalog? {
@@ -127,8 +151,8 @@ class PublishedAggregateStore(private val directory:File) {
         val manifest=child("aggregate-manifests","$activeSnapshotSHA256.json");val sidecar=child("aggregate-index","$activeSnapshotSHA256.json");val marker=child("aggregate-activations",activeSnapshotSHA256,"$identity.json")
         if(!manifest.exists()||!sidecar.exists()||!marker.exists())return null
         val catalog=sourceCatalog(activeSnapshotSHA256,check)
-        val actual=sourceBytes(sidecar,8*1024*1024);val activation=JSONObject(PublishedUtf8.decode(sourceBytes(marker,4096)))
-        require(canonical(JSONObject(PublishedUtf8.decode(actual)))==canonical(catalog.json())&&activation.getString("contract")=="published-aggregate-activation-v1"&&activation.getString("snapshotSHA256")==activeSnapshotSHA256&&activation.getString("validationEpoch")==identity&&activation.getString("catalogSHA256")==PublishedAggregateReader.sha(actual)){"汇总sidecar/激活代与原清单不一致"}
+        val actual=catalogRecord(catalog,sourceBytes(sidecar,8*1024*1024))
+        checkActivation(sourceBytes(marker,4096),activeSnapshotSHA256,identity,PublishedAggregateReader.sha(actual))
         return catalog
     }
     private fun sourceCatalog(snapshot:String,check:()->Unit={}):PublishedAggregateCatalog {
@@ -184,7 +208,7 @@ class PublishedAggregateStore(private val directory:File) {
         val raw=read(child(*prefix,"original.html"),16*1024*1024);require(PublishedAggregateReader.sha(raw)==rawHTMLSHA256)
         val saved=JSONObject(PublishedUtf8.decode(read(child(*prefix,"document.json"),20*1024*1024)))
         require(canonical(saved.getJSONObject("descriptor"))==canonical(descriptor.json()))
-        val actual=AggregateHtml.parse(raw,descriptor,saved.getString("responseURL"),saved.getString("fetchedAt"))
+        val actual=AggregateHtml.parse(raw,descriptor,saved.getString("responseURL"),saved.getString("fetchedAt"),saved)
         require(canonical(saved)==canonical(actual)&&read(child(*prefix,"body.html"),16*1024*1024).contentEquals(actual.getString("bodyHTML").toByteArray()))
         return actual
     }
@@ -192,7 +216,7 @@ class PublishedAggregateStore(private val directory:File) {
     fun cacheImageBlob(bytes:ByteArray):AggregateImageBlob {
         require(bytes.size in 1..AggregateImages.MAX_IMAGE_BYTES)
         val mime=AggregateImages.rasterMIME(bytes.copyOfRange(0,minOf(16,bytes.size)));val sha=PublishedAggregateReader.sha(bytes)
-        immutable(child("aggregate-image-bytes-v1",sha),bytes)
+        immutable(child(AggregateImages.blobDirectory(false),sha),bytes)
         return AggregateImageBlob(sha,mime,bytes.size)
     }
     fun imagePlan(descriptor:PublishedAggregate,rawHTMLSHA256:String):AggregateImagePlan {
@@ -206,14 +230,23 @@ class PublishedAggregateStore(private val directory:File) {
         return plan
     }
 
-    private fun imageFolder(descriptor:PublishedAggregate,raw:String):Array<String> {
+    private fun imageFolder(descriptor:PublishedAggregate,raw:String,platform:String="android",legacy:Boolean=false):Array<String> {
         require(PublishedAggregateReader.validSHA(raw))
-        return arrayOf(AggregateImages.DIRECTORY,PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,raw,AggregateImages.CONTRACT)
+        return arrayOf(AggregateImages.directory(platform,legacy),PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,raw,AggregateImages.folderContract(legacy))
+    }
+    private fun imageLocations(descriptor:PublishedAggregate,raw:String,platform:String="android")=
+        listOf(false,true).map{legacy->legacy to child(*imageFolder(descriptor,raw,platform,legacy))}
+    private fun sameSavedPlan(plan:AggregateImagePlan,saved:JSONObject):Boolean {
+        val expected=JSONObject(canonicalImagePlan(plan))
+        expected.remove("contract");expected.remove("schemaFingerprint")
+        val original=ClientProtocols.recordHeader(saved.get("contract"),AggregateImages.PLAN,saved.opt("schemaFingerprint") as? String)
+        expected.keys().forEach{key->original.put(key,expected.get(key))}
+        return canonical(saved)==canonical(original)
     }
     /** Hash/type/length verification and delivery share one opened handle; no large image ByteArray is retained. */
-    private fun openVerifiedImage(record:AggregateImageRecord):java.io.InputStream {
+    private fun openVerifiedImage(record:AggregateImageRecord,legacy:Boolean):java.io.InputStream {
         val sha=requireNotNull(record.sha256);require(PublishedAggregateReader.validSHA(sha));val size=requireNotNull(record.bytes);require(size in 1..AggregateImages.MAX_IMAGE_BYTES)
-        val file=child("aggregate-image-bytes-v1",sha);val before=attrs(file)
+        val file=child(AggregateImages.blobDirectory(legacy),sha);val before=attrs(file)
         require(before.isRegularFile&&before.fileKey()!=null&&before.size()==size.toLong()){"图片实际长度与清单不一致"}
         val channel=FileChannel.open(file.toPath(),READ,NOFOLLOW_LINKS)
         try {
@@ -239,35 +272,57 @@ class PublishedAggregateStore(private val directory:File) {
     internal fun cacheImageRendering(plan:AggregateImagePlan,records:List<AggregateImageRecord>,observedAt:String,origin:AggregateImageImport?=null):AggregateImageAccess {
         require(canonical(imagePlan(plan.descriptor,plan.rawHTMLSHA256).json())==canonical(plan.json())){"图片位置或原来源已变化"}
         require(records.map{it.slot}==plan.slots);AggregateImages.validateReferenceBudget(records)
-        records.filter{it.sha256!=null}.forEach{openVerifiedImage(it).close()}
+        records.filter{it.sha256!=null}.distinctBy{it.sha256}.forEach{record->
+            val sha=requireNotNull(record.sha256)
+            if(!Files.exists(child(AggregateImages.blobDirectory(false),sha).toPath(),NOFOLLOW_LINKS)) {
+                // A current observation carries its own verified blob; copy
+                // one bounded old image only after checking its original file.
+                val size=requireNotNull(record.bytes)
+                val original=openVerifiedImage(record,true).use{stream->
+                    ByteArray(size).also{buffer->
+                        var offset=0
+                        while(offset<size){val count=stream.read(buffer,offset,size-offset);require(count>0);offset+=count}
+                        require(stream.read()==-1)
+                    }
+                }
+                require(cacheImageBlob(original).sha256==sha)
+            }
+        }
+        records.filter{it.sha256!=null}.forEach{openVerifiedImage(it,false).close()}
         val manifest=AggregateImages.manifest(plan,records,observedAt,origin);val bytes=OfflineFoundationJSON.encode(manifest);require(bytes.size<=4*1024*1024)
         val sha=PublishedAggregateReader.sha(bytes);immutable(child(*imageFolder(plan.descriptor,plan.rawHTMLSHA256),"$sha.json"),bytes)
         return cachedImageRendering(plan.descriptor,plan.rawHTMLSHA256,sha)
     }
     internal fun cachedImageRendering(descriptor:PublishedAggregate,rawHTMLSHA256:String,manifestSHA256:String):AggregateImageAccess {
         val plan=imagePlan(descriptor,rawHTMLSHA256);require(PublishedAggregateReader.validSHA(manifestSHA256))
-        val bytes=read(child(*imageFolder(descriptor,rawHTMLSHA256),"$manifestSHA256.json"),4*1024*1024);require(PublishedAggregateReader.sha(bytes)==manifestSHA256)
-        val manifest=JSONObject(PublishedUtf8.decode(bytes));require(manifest.getString("contract")==AggregateImages.CONTRACT&&manifest.getString("parserContract")=="published-aggregate-jsoup-images-v1"&&manifest.get("completeOffline")==false&&canonical(manifest.getJSONObject("plan"))==canonicalImagePlan(plan))
+        val (legacy,file)=imageLocations(descriptor,rawHTMLSHA256).map{(legacy,_)->legacy to child(*imageFolder(descriptor,rawHTMLSHA256,legacy=legacy),"$manifestSHA256.json")}
+            .filter{Files.exists(it.second.toPath(),NOFOLLOW_LINKS)}.single()
+        val bytes=read(file,4*1024*1024);require(PublishedAggregateReader.sha(bytes)==manifestSHA256)
+        val manifest=JSONObject(PublishedUtf8.decode(bytes));val originalPlan=AggregateImages.verifyManifestHeader(manifest,"android",legacy)
+        require(manifest.get("completeOffline")==false&&sameSavedPlan(plan,originalPlan))
         java.time.Instant.parse(manifest.getString("observedAt"))
         // Declared per-reference budget is validated before any blob; every physical blob is then checked immediately.
         val records=AggregateImages.records(plan,manifest.getJSONArray("images"))
-        records.filter{it.sha256!=null}.forEach{openVerifiedImage(it).close()}
+        records.filter{it.sha256!=null}.forEach{openVerifiedImage(it,legacy).close()}
         require(renderedImageBodySHA(plan,records)==manifest.getString("renderedBodySHA256"))
         val origin=manifest.optJSONObject("importedFrom")?.let{AggregateImageImport(it.getString("platform"),it.getString("manifestSHA256"))}
-        return AggregateImageAccess(manifestSHA256,plan,records,manifest.getString("observedAt"),::openVerifiedImage,origin)
+        return AggregateImageAccess(manifestSHA256,plan,records,manifest.getString("observedAt"),{openVerifiedImage(it,legacy)},origin)
     }
     internal fun latestImageRendering(descriptor:PublishedAggregate,rawHTMLSHA256:String):AggregateImageAccess? {
-        val folder=child(*imageFolder(descriptor,rawHTMLSHA256))
-        if(!Files.exists(folder.toPath(),NOFOLLOW_LINKS))return null
+        val locations=imageLocations(descriptor,rawHTMLSHA256).filter{Files.exists(it.second.toPath(),NOFOLLOW_LINKS)}
+        if(locations.isEmpty())return null
         imagePlan(descriptor,rawHTMLSHA256)
-        noLinks(folder);val before=attrs(folder);require(before.isDirectory&&before.fileKey()!=null)
-        val files=Files.newDirectoryStream(folder.toPath()).use{it.toList().sortedBy{p->p.fileName.toString()}}
         var latest:AggregateImageAccess?=null
-        for(file in files){val name=file.fileName.toString();require(name.endsWith(".json")&&PublishedAggregateReader.validSHA(name.removeSuffix(".json"))){"图片修订目录含未知项，未改用其他修订"}
-            val value=cachedImageRendering(descriptor,rawHTMLSHA256,name.removeSuffix(".json"))
-            if(latest==null||java.time.Instant.parse(value.observedAt)>java.time.Instant.parse(latest.observedAt))latest=value
+        for((_,folder) in locations){
+            noLinks(folder);val before=attrs(folder);require(before.isDirectory&&before.fileKey()!=null)
+            val files=Files.newDirectoryStream(folder.toPath()).use{it.toList().sortedBy{p->p.fileName.toString()}}
+            for(file in files){val name=file.fileName.toString();require(name.endsWith(".json")&&PublishedAggregateReader.validSHA(name.removeSuffix(".json"))){"图片修订目录含未知项，未改用其他修订"}
+                val value=cachedImageRendering(descriptor,rawHTMLSHA256,name.removeSuffix(".json"))
+                if(latest==null||java.time.Instant.parse(value.observedAt)>java.time.Instant.parse(latest.observedAt))latest=value
+            }
+            noLinks(folder);val after=attrs(folder);require(before.fileKey()==after.fileKey()&&before.lastModifiedTime()==after.lastModifiedTime())
         }
-        noLinks(folder);val after=attrs(folder);require(before.fileKey()==after.fileKey()&&before.lastModifiedTime()==after.lastModifiedTime());return latest
+        return latest
     }
 
     /** Foreign derived bodies are evidence only; authoritative display always replays this platform's raw parser. */
@@ -276,7 +331,8 @@ class PublishedAggregateStore(private val directory:File) {
         val prefix=arrayOf("aggregate-documents",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,raw)
         val bytes=read(child(*prefix,"original.html"),16*1024*1024);require(PublishedAggregateReader.sha(bytes)==raw)
         val saved=JSONObject(PublishedUtf8.decode(read(child(*prefix,"document.json"),20*1024*1024)))
-        require(saved.getString("contract")=="published-aggregate-document-v1"&&saved.getString("parserContract")=="published-aggregate-html-v1"&&canonical(saved.getJSONObject("descriptor"))==canonical(descriptor.json())&&saved.getString("rawHTMLSHA256")==raw&&saved.getInt("rawHTMLBytes")==bytes.size&&saved.getString("responseURL")==descriptor.sourceURL){"Mac原网页来源或格式不受支持，原件保留"}
+        AggregateDocumentFormat.replay(saved,AggregateDocumentFormat.Platform.MACOS)
+        require(canonical(saved.getJSONObject("descriptor"))==canonical(descriptor.json())&&saved.getString("rawHTMLSHA256")==raw&&saved.getInt("rawHTMLBytes")==bytes.size&&saved.getString("responseURL")==descriptor.sourceURL){"Mac原网页来源或格式不受支持，原件保留"}
         val body=read(child(*prefix,"body.html"),16*1024*1024)
         require(body.contentEquals(saved.getString("bodyHTML").toByteArray())&&PublishedAggregateReader.sha(body)==saved.getString("sanitizedBodySHA256")){"Mac原网页派生见证未通过核验"}
         // Also require this raw HTML to pass the unchanged native parser; never display foreign bodyHTML.
@@ -297,24 +353,27 @@ class PublishedAggregateStore(private val directory:File) {
     }
     internal fun importMacImageRendering(descriptor:PublishedAggregate,raw:String):AggregateImageAccess? {
         require(PublishedAggregateReader.validSHA(raw))
-        val folder=child("aggregate-resource-renders-macos-v1",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,raw,AggregateImages.CONTRACT)
-        if(!Files.exists(folder.toPath(),NOFOLLOW_LINKS))return null
+        val locations=imageLocations(descriptor,raw,"macos").filter{Files.exists(it.second.toPath(),NOFOLLOW_LINKS)}
+        if(locations.isEmpty())return null
         val plan=imagePlan(descriptor,raw)
         val foreignSource=macSource(descriptor,raw).second
-        noLinks(folder);val before=attrs(folder);require(before.isDirectory&&before.fileKey()!=null)
-        val names=Files.newDirectoryStream(folder.toPath()).use{it.toList().map{p->p.fileName.toString()}.sorted()}
         var selectedRecords:List<AggregateImageRecord>?=null;var selectedSHA:String?=null;var selectedTime:String?=null
-        for(name in names){
+        val seen=mutableSetOf<String>()
+        for((legacy,folder) in locations){
+            noLinks(folder);val before=attrs(folder);require(before.isDirectory&&before.fileKey()!=null)
+            val names=Files.newDirectoryStream(folder.toPath()).use{it.toList().map{p->p.fileName.toString()}.sorted()}
+            for(name in names){
             require(name.endsWith(".json")&&PublishedAggregateReader.validSHA(name.removeSuffix(".json"))){"Mac图片修订目录格式未知，原件保留"}
-            val sha=name.removeSuffix(".json");val bytes=read(File(folder,name),4*1024*1024);require(PublishedAggregateReader.sha(bytes)==sha)
-            val saved=JSONObject(PublishedUtf8.decode(bytes));val foreignPlan=saved.getJSONObject("plan")
-            require(saved.getString("contract")==AggregateImages.CONTRACT&&saved.get("completeOffline")==false&&foreignPlan.getString("contract")==AggregateImages.CONTRACT&&canonical(foreignPlan.getJSONObject("descriptor"))==canonical(descriptor.json())&&foreignPlan.getString("rawHTMLSHA256")==raw&&foreignPlan.getString("originalBodySHA256")==foreignSource.getString("sanitizedBodySHA256")&&PublishedAggregateReader.sha(foreignPlan.getString("templateBodyHTML").toByteArray())==foreignPlan.getString("templateBodySHA256")){"Mac图片来源见证未通过核验"}
+            val sha=name.removeSuffix(".json");val bytes=read(File(folder,name),4*1024*1024);require(PublishedAggregateReader.sha(bytes)==sha&&seen.add(sha))
+            val saved=JSONObject(PublishedUtf8.decode(bytes));val foreignPlan=AggregateImages.verifyManifestHeader(saved,"macos",legacy)
+            require(saved.get("completeOffline")==false&&canonical(foreignPlan.getJSONObject("descriptor"))==canonical(descriptor.json())&&foreignPlan.getString("rawHTMLSHA256")==raw&&foreignPlan.getString("originalBodySHA256")==foreignSource.getString("sanitizedBodySHA256")&&PublishedAggregateReader.sha(foreignPlan.getString("templateBodyHTML").toByteArray())==foreignPlan.getString("templateBodySHA256")){"Mac图片来源见证未通过核验"}
             require(canonical(foreignPlan.getJSONArray("slots"))==canonical(JSONArray(plan.slots.map{it.json()}))){"两端图片位置或图注不同，未把其他派生图片接到本端正文"}
-            val records=AggregateImages.records(plan,saved.getJSONArray("images"));records.filter{it.sha256!=null}.forEach{openVerifiedImage(it).close()}
+            val records=AggregateImages.records(plan,saved.getJSONArray("images"));records.filter{it.sha256!=null}.forEach{openVerifiedImage(it,legacy).close()}
             val time=saved.getString("observedAt");java.time.Instant.parse(time)
             if(selectedTime==null||java.time.Instant.parse(time)>java.time.Instant.parse(selectedTime)){selectedRecords=records;selectedSHA=sha;selectedTime=time}
+            }
+            noLinks(folder);val after=attrs(folder);require(before.fileKey()==after.fileKey()&&before.lastModifiedTime()==after.lastModifiedTime())
         }
-        noLinks(folder);val after=attrs(folder);require(before.fileKey()==after.fileKey()&&before.lastModifiedTime()==after.lastModifiedTime())
         if(selectedRecords==null)return null
         // The foreign body/renderedBodySHA is never reused: this creates a separate native derivation.
         return cacheImageRendering(plan,selectedRecords,requireNotNull(selectedTime),AggregateImageImport("macos",requireNotNull(selectedSHA)))

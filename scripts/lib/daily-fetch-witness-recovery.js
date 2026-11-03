@@ -2,6 +2,7 @@
 
 // This grants only a wider fetch overlap. The lost latest input remains lost;
 // no analysis, Reader, review, publication or model authority is reconstructed.
+const { sourceBoundGeneration, strictReceipt, matchesSnapshotReceipt } = require('./blog-record-format');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -100,10 +101,10 @@ function remoteIdentity(repo, name) {
 }
 function verifyPublication(repo, observed, manifestRecord, receiptRecord) {
     const m = manifestRecord.value, r = receiptRecord.value, date = observed.date;
-    if ([m, r].some(v => v.schemaVersion !== 3 || v.date !== date || v.publicationScope)
+    if (!sourceBoundGeneration(m) || !strictReceipt(r) || [m, r].some(v => v.date !== date || v.publicationScope)
         || r.strictReview !== true || r.hugoGate !== 'hugo' || r.baseHead !== m.baseHead
         || r.generationManifestSha256 !== manifestRecord.sha256 || !SHA.test(r.reviewProtocolFingerprint || '')
-        || r.generationInputIntegrity !== 'typed-json-f64-utf16-v1'
+        || !matchesSnapshotReceipt(m, r)
         || !OID.test(r.publicationCommit || '') || r.remoteVerifiedOid !== r.publicationCommit
         || r.remoteName !== 'origin' || !r.remoteVerifiedAt
         || r.remoteIdentitySha256 !== remoteIdentity(repo, 'origin')) fail('原生成/审查/远端发布身份不一致');
@@ -113,8 +114,7 @@ function verifyPublication(repo, observed, manifestRecord, receiptRecord) {
     for (const [rk, mk] of Object.entries(bindings)) {
         if (!equal(r[rk] ?? null, m[mk] ?? null)) fail('原审查凭证与生成输入绑定不符');
     }
-    if (m.publishedPapersFingerprintContract !== 'typed-json-f64-utf16-v1'
-        || !Array.isArray(m.publishedPapers) || !m.publishedPapers.length
+    if (!Array.isArray(m.publishedPapers) || !m.publishedPapers.length
         || hash(JSON.stringify(portable(m.publishedPapers))) !== m.publishedPapersFingerprint
         || !SHA.test(m.inputFingerprint || '')) fail('原论文快照完整性不符');
     const files = recordFiles(m.files), reviewed = recordFiles(r.files);

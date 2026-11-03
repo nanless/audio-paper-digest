@@ -46,7 +46,7 @@ function appendPinnedSingleSourceTable({ spec, specSha256, packageBytes, pdfByte
     check(hash(envelope.identity) === spec.originalIdentitySha256 && hash(envelope.payload) === spec.originalPayloadSha256
         && envelope.payloadSha256 === spec.originalPayloadSha256, 'full original candidate logical input/payload');
     check(envelope.identity.paperId === spec.paperId && envelope.identity.sourceSha256 === spec.sourceTextSha256
-        && envelope.identity.contentMode === 'reader-source-only-v1'
+        && require('./reader-content-mode').is(envelope.identity, 'source-only')
         && envelope.identity.conferenceReaderGrant?.executionId === spec.executionId
         && envelope.identity.conferenceReaderGrant?.paperId === spec.paperId, 'original conference candidate identity');
     const before = envelope.payload.draft;

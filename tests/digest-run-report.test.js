@@ -22,7 +22,7 @@ const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const {
     cardTaskToken,
     visualSummaryAssetPath
-} = require('../scripts/visual-summary-state.js');
+} = require('../scripts/lib/historical-visual-records');
 
 function crc32(buffer) {
     const table = new Uint32Array(256);

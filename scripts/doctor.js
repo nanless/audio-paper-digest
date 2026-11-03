@@ -28,8 +28,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const {
-    STATE_SCHEMA_VERSION: LLM_POOL_STATE_SCHEMA_VERSION,
-    POLICY_VERSION: LLM_POOL_POLICY_VERSION
+    hasAccountPoolHeader
 } = require('./llm-account-pool.js');
 // 复用 config:check 的集中 .env schema：必填项、模型名、密钥识别与运行时一致的解析。
 const {
@@ -1024,9 +1023,7 @@ function readAccountPoolState(stateFile, nowMs = Date.now()) {
     } catch (_error) {
         return { exists: true, valid: false, error: 'JSON 无法解析', mode };
     }
-    if (!state || typeof state !== 'object' || Array.isArray(state)
-        || state.schemaVersion !== LLM_POOL_STATE_SCHEMA_VERSION
-        || state.policyVersion !== LLM_POOL_POLICY_VERSION
+    if (!hasAccountPoolHeader(state)
         || !isPlainObject(state.services)
         || !Number.isSafeInteger(state.generation) || state.generation < 0) {
         return { exists: true, valid: false, error: 'schema 非法', mode };

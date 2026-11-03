@@ -1,0 +1,219 @@
+{
+  "protocols": [
+    {
+      "name": "daily-analysis-waiver",
+      "currentVariant": "bound-failed-paper-set",
+      "currentSchema": {
+        "identity": [
+          "batchDate",
+          "status",
+          "requestedBy",
+          "reason",
+          "waivedAt"
+        ],
+        "source": [
+          "deepAnalysisResultSha256",
+          "filteredPapersSha256",
+          "papersDatabaseSha256"
+        ],
+        "papers": [
+          "paperId",
+          "deepPaperSha256",
+          "sourceSha256",
+          "originalDigestStatus",
+          "originalLatestAttemptStatus"
+        ],
+        "seal": "canonical-original-body-sha256",
+        "authority": "explicit-user-waiver-only"
+      },
+      "historical": [
+        {
+          "tag": "daily-analysis-waiver-v1",
+          "variant": "bound-failed-paper-set",
+          "header": {
+            "contract": "daily-analysis-waiver-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "post-publish-visual-waiver",
+      "currentVariant": "publication-receipt-bound",
+      "currentSchema": {
+        "identity": [
+          "batchDate",
+          "status",
+          "requestedBy",
+          "reason",
+          "waivedAt"
+        ],
+        "publication": [
+          "publicationCommit",
+          "remoteVerifiedOid",
+          "generationManifestSha256",
+          "reviewReceiptSha256"
+        ],
+        "generatedImages": false,
+        "sourceFigures": "retained-and-source-verified",
+        "authority": "standing-user-no-generation-instruction"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "remote-publication-bound",
+          "header": {
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-publication-policy",
+      "currentVariant": "source-figures-only",
+      "currentSchema": {
+        "generatedImages": false,
+        "sourceFigures": "retained-and-source-verified",
+        "authority": "standing-user-no-generation-instruction"
+      },
+      "historical": []
+    },
+    {
+      "name": "digest-live-status",
+      "currentVariant": "observed-batch-status",
+      "currentSchema": {
+        "sources": [
+          "saved-batch-documents",
+          "usage-events",
+          "account-cooldowns",
+          "local-log"
+        ],
+        "io": "read-only",
+        "authority": "observation-only-no-publication-or-request-grant"
+      },
+      "historical": [
+        {
+          "tag": "digest-live-status-v1",
+          "variant": "observed-batch-status",
+          "header": {
+            "version": "digest-live-status-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "digest-run-report",
+      "currentVariant": "unknown-counts-and-gated-completion",
+      "currentSchema": {
+        "counts": "null-means-unknown-zero-means-observed-empty",
+        "gates": [
+          "sources",
+          "analysis",
+          "review",
+          "remote-commit",
+          "no-image-record"
+        ],
+        "webVerification": "separate-required-check"
+      },
+      "historical": [
+        {
+          "tag": 3,
+          "variant": "unknown-counts-and-gated-completion",
+          "header": {
+            "version": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "digest-status-error",
+      "currentVariant": "read-only-status-failure",
+      "currentSchema": {
+        "fields": [
+          "error"
+        ],
+        "authority": "error-only"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "read-only-status-failure",
+          "header": {
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "recover-saved-records",
+      "currentVariant": "read-only-collection",
+      "currentSchema": {
+        "collectionMode": "saved_records",
+        "semanticCoverage": "not_checked",
+        "scopeComplete": false,
+        "authority": "saved-input-diagnostics-only"
+      },
+      "historical": [
+        {
+          "tag": "recover-saved-records-v1",
+          "variant": "read-only-collection"
+        }
+      ]
+    },
+    {
+      "name": "analysis-batch-retry-diagnostics",
+      "currentVariant": "bound-batch-observation",
+      "currentSchema": {
+        "identity": [
+          "workflow",
+          "batchDate",
+          "sourceReferenceSha256",
+          "scopeIds",
+          "scopeSha256"
+        ],
+        "rounds": [
+          "maxRounds",
+          "roundsCompleted",
+          "rounds",
+          "manualHandoff"
+        ],
+        "diagnosticOnly": true,
+        "newApiRequestsAuthorized": false
+      },
+      "historical": [
+        {
+          "tag": "analysis-batch-retry-diagnostics-v1",
+          "variant": "bound-batch-observation"
+        }
+      ]
+    },
+    {
+      "name": "web-verification",
+      "currentVariant": "page-responses-and-deployment",
+      "currentSchema": {
+        "fields": [
+          "date",
+          "results",
+          "publicationOid",
+          "generationManifestSha256",
+          "deploy",
+          "expected",
+          "checked",
+          "ok",
+          "failed",
+          "partial"
+        ],
+        "authority": "observation-only"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "page-responses-and-deployment",
+          "header": {
+            "schemaVersion": 1
+          }
+        }
+      ]
+    }
+  ]
+}

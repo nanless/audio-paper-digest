@@ -196,9 +196,7 @@ fi
 run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"
 run_stage 6 "模型审查博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
 if [ "$start_index" -le 7 ]; then
-  run_stage 7 "发布博客并规划视觉任务" bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan
-else
-  run_stage 8 "规划发布后视觉任务" bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"
+  run_stage 7 "发布博客并核对正式凭证" bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-production-receipt
 fi
 run_stage 8 "登记日更不生图" node scripts/waive-post-publish-visuals.js --date "$target_date" --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"
 echo "==> 已登记当前发布版本的视觉豁免；继续完成部署与逐页上线核验。"

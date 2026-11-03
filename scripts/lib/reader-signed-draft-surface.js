@@ -56,7 +56,7 @@ function reconstructReaderDraftSurface({paper, paperId}) {
         if (body !== body.trim()) fail(`section ${index} body is not exact canonical spacing`);
         return { ...pick(section, ['kind', 'heading']), body };
     });
-    const draft = { version: 3, ...pick(plan, ['readerTitle', 'oneSentenceThesis']), sections,
+    const draft = { ...require('./reader-record-format').draftHeaderForSavedPlan(plan), ...pick(plan, ['readerTitle', 'oneSentenceThesis']), sections,
         conceptBridges: bridges,
         figurePlacements: plan.figurePlacements.map(value => pick(value, ['figureOrdinal', 'targetKind', 'marker', 'focusPoints'])),
         formulaBindings: plan.formulaBindings.map(value => pick(value, ['formulaOrdinal', 'targetKind', 'marker'])),
@@ -79,7 +79,8 @@ function replayReaderDraftSurface({ paper, sourceDetails, paperId, parserOptions
     const minimumIntegratedTables = require('./reader-contract').readerRequirements({version:3,
         availableTableCount:[...evidence.matchAll(/^TABLE_(\d+):/gm)].length}).minimumTables;
     const parsed = parseApiReaderArticleResult(JSON.stringify(surface.draft), {
-        requiredVersion:3, requireIntegratedTables:true, minimumIntegratedTables,
+        ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
+        requireIntegratedTables:true, minimumIntegratedTables,
         availableFigureOrdinals:paper.apiReaderFigures.map(figure => figure.ordinal),
         requireSourceBindings:true, allowDeterministicQuoteRepair:true,
         ...parserOptions, structuredArtifacts:artifacts, sourceText:sourceDetails.text,

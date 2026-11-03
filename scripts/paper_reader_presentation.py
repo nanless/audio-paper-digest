@@ -162,8 +162,8 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
                                       for resource in (paper.get('apiReaderResources') or {}).get('resources', []))
     authenticated_pdf = authenticated_pdf_tables or authenticated_pdf_resources
     source_correction = paper.get('conferenceSourceCorrection')
-    declared_source_correction = isinstance(source_correction, dict) and source_correction.get('contract') in {
-        'conference-source-resource-correction-v1', 'conference-source-core-correction-v1'}
+    from conference_source_correction_format import locator_family
+    declared_source_correction = bool(locator_family(source_correction))
     if publication_evidence is not None:
         request['publicationEvidence'] = publication_evidence
     payload = json.dumps(request,

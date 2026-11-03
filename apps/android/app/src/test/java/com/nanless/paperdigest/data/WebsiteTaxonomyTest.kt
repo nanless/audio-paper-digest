@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -13,6 +14,18 @@ class WebsiteTaxonomyTest {
     private fun current()=snapshot(listOf(node("task.audio","音频"),node("task.music","音乐",listOf("task.audio")),node("task.mixing","混音",listOf("task.audio","task.music"))))
     private fun row(label:String="混音",hash:String=sha)=JSONObject().put("tagContract","paper-tag-flat-tags-v2").put("tagCatalogSha256",hash).put("tagConcepts",JSONArray().put(JSONObject().put("id","task.mixing").put("facet","task").put("label",label)))
     private fun paper(vararg rows:JSONObject)=Paper("synthetic:1","Synthetic",original=JSONObject().put("websiteTagRecords",JSONArray(rows.toList())))
+    @Test fun currentFingerprintHeadersAndHistoricalBodyRemainStrictlyBound(){
+        val display=bundle(current());val source=display.getJSONObject("snapshot")
+        fun replaceHeader(value:JSONObject,family:String){value.remove("contract");value.remove("schemaFingerprint");ClientProtocols.recordHeader(family,family).keys().forEach{value.put(it,ClientProtocols.recordHeader(family,family).get(it))}}
+        replaceHeader(source,"paper-tag-catalog-snapshot");replaceHeader(display.getJSONObject("versions"),"paper-tag-catalog-versions")
+        val graph=WebsiteTaxonomy.parse(display)
+        val selected=row().put("tagContract",ClientProtocols.contract("paper-tag-flat-tags")).put("tagSchemaFingerprint",ClientProtocols.schemaFingerprint("paper-tag-flat-tags"))
+        assertEquals("verified",graph.classify(selected).status)
+        assertEquals("legacy",graph.classify(selected.copy().put("tagSchemaFingerprint","0".repeat(64))).status)
+        assertEquals("invalid",graph.classify(selected.copy().put("taxonomySchemaFingerprint",selected.get("tagSchemaFingerprint"))).status)
+        val invalid=display.copy();invalid.getJSONObject("snapshot").put("schemaFingerprint","0".repeat(64))
+        assertThrows(IllegalArgumentException::class.java){WebsiteTaxonomy.parse(invalid)}
+    }
     @Test fun exactIssuedConceptGetsWebsiteThreeLevelNavigationWithoutChangingDirectTags(){
         val taxonomy=WebsiteTaxonomy.parse(bundle(current()));val source=row();val before=source.toString()
         assertEquals(listOf("task.audio","task.music","task.mixing"),taxonomy.paths(paper(source)).single().map{it.id})

@@ -149,7 +149,7 @@ test('真实FO当前v2完整prepare及normal finalizer纯preview保留原作者�
             const output = await signed.preview(handle, paper);
             assert.deepEqual(output.apiReaderAuthors, before.apiReaderAuthors);
             assert.deepEqual(output.apiReaderResources, before.apiReaderResources);
-            assert.equal(engine.hasValidApiReaderV3Records(output), true);
+            assert.equal(engine.hasValidIntegratedApiReaderRecords(output), true);
             const original = saved.readSavedFeedback(paper, plan);
             const qualify = () => facts.withReaderFactReview(facts.validateFeedback(feedbacks.get('2610.16202'), plan, output), output,
                 () => assert.equal(engine.isSuccessfulAnalysisRecord(output), true));

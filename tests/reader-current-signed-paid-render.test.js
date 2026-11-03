@@ -82,7 +82,7 @@ test('真实当前签名修订只接原唯一已付完整稿，不改候选、�
 test('隔离空runtime仍从真实原四文件冷核；缺失PDF或原字节变化不能建立父seed', () => {
     const f = input();
     assert.notEqual(path.resolve(privateSourceRoot), path.resolve(previousSourceRoot));
-    assert.deepEqual(require('../scripts/analysis-engine').getApiReaderV3RecordDiagnostics(f.parent), []);
+    assert.deepEqual(require('../scripts/analysis-engine').getIntegratedApiReaderRecordDiagnostics(f.parent), []);
     assert.equal(fs.readdirSync(path.join(runDir, 'sources')).length, 1);
     const pdf = path.join(bundleDir, 'source.pdf'), pdfBytes = fs.readFileSync(pdf);
     fs.unlinkSync(pdf);

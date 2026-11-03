@@ -8,13 +8,13 @@ test('saved Reader guard accepts only visible complete explanations and keeps te
  const original=fixture({noFigures:true}).paper;
  const sample=(explanation,terms=['强制对齐','`<score>`标记'])=>{const p=structuredClone(original),bridge=p.apiReaderPlan.conceptBridges[0],old=bridge.explanation;bridge.terms=terms;bridge.explanation=explanation;p.apiReaderArticle=p.apiReaderArticle.replace(old,explanation);p.apiReaderArticleSha256=sha256(p.apiReaderArticle);p.apiReaderPlanSha256=stableHash(p.apiReaderPlan);Object.assign(p.analysisManifest.stages.apiReaderArticle,{articleSha256:p.apiReaderArticleSha256,planSha256:p.apiReaderPlanSha256});return p;};
  const text='强制对齐负责定位，`<score>` 标记负责保留词边界的声学表示。两者按清楚的接口组合，说明定位信息如何进入评分过程，以及哪些边界仍需额外证据。';
- const valid=sample(text),before=JSON.stringify(valid);assert.equal(engine.hasValidApiReaderV3Records(valid),true);assert.equal(JSON.stringify(valid),before);
- for(const hidden of ['<!--\n\n'+text+'\n\n-->','```text\n'+text+'\n```','`'+text.replaceAll('`','')+'`']){const p=sample(hidden);assert.equal(engine.hasValidApiReaderV3Records(p),false);}
- assert.equal(engine.hasValidApiReaderV3Records(sample(text.replace('强制对齐','其他定位'))),false);
- assert.equal(engine.hasValidApiReaderV3Records(sample(text.replace('强制对齐','A BC'),['AB C','`<score>`标记'])),false);
- assert.equal(engine.hasValidApiReaderV3Records(sample(text,['`<score>`标记','`<score>` 标记'])),false);
- assert.equal(engine.hasValidApiReaderV3Records(sample(text.replace('强制对齐','`<word>` 标记'),['`<word>`标记','`<score>`标记'])),true);
+ const valid=sample(text),before=JSON.stringify(valid);assert.equal(engine.hasValidIntegratedApiReaderRecords(valid),true);assert.equal(JSON.stringify(valid),before);
+ for(const hidden of ['<!--\n\n'+text+'\n\n-->','```text\n'+text+'\n```','`'+text.replaceAll('`','')+'`']){const p=sample(hidden);assert.equal(engine.hasValidIntegratedApiReaderRecords(p),false);}
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(sample(text.replace('强制对齐','其他定位'))),false);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(sample(text.replace('强制对齐','A BC'),['AB C','`<score>`标记'])),false);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(sample(text,['`<score>`标记','`<score>` 标记'])),false);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(sample(text.replace('强制对齐','`<word>` 标记'),['`<word>`标记','`<score>`标记'])),true);
  const numeric=sample('6 维感知轴负责诊断，2 次复核负责统一校对。二者按清楚的接口组合，说明感知结果如何进入复核过程，以及哪些边界仍需额外证据。',['六维感知轴','二次复核']);
- const numericBefore=JSON.stringify(numeric);assert.equal(engine.hasValidApiReaderV3Records(numeric),true);assert.equal(JSON.stringify(numeric),numericBefore);
- assert.equal(engine.hasValidApiReaderV3Records(sample('2 阶段训练负责顺序，另一个模块负责校对。两者按清楚的接口组合，说明结果如何进入训练过程，以及哪些边界仍需额外证据。',['两阶段训练','二阶段训练'])),false);
+ const numericBefore=JSON.stringify(numeric);assert.equal(engine.hasValidIntegratedApiReaderRecords(numeric),true);assert.equal(JSON.stringify(numeric),numericBefore);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(sample('2 阶段训练负责顺序，另一个模块负责校对。两者按清楚的接口组合，说明结果如何进入训练过程，以及哪些边界仍需额外证据。',['两阶段训练','二阶段训练'])),false);
 });

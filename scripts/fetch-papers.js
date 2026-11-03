@@ -15,10 +15,10 @@ const cheerio = require('cheerio');
 const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
 const { parseFilterDecision, parseFilterDecisionDetails } = require('./lib/filter-decision.js');
 const { renderFilterPrompt } = require('./lib/filter-prompt.js');
-const { LLM_FILTER_PROMPT_PATH } = require('./lib/prompt-text-versions.js');
+const { LLM_FILTER_PROMPT_PATH } = require('./lib/prompt-contracts.js');
 const { captureFilterScopeEvidence, assertFilterScopeEvidence, renderFilterScopeEvidence, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
-    KEYWORD_PREFILTER_VERSION,
+    KEYWORD_PREFILTER_PROFILE,
     evaluateKeywordPrefilter,
     filterPapersByKeywords
 } = require('./lib/keyword-prefilter.js');
@@ -1867,7 +1867,7 @@ async function filterPapersWithLLM(papers, options = {}) {
                 retryable: false,
                 decidedAt: getBeijingISOString(),
                 inputSha256: buildFilterInputSha256(paper),
-                keywordPrefilterVersion: result.version,
+                keywordPrefilterProfile: result.profile,
                 keywordMatchedGroups: result.matchedGroups,
                 keywordMatchedKeywords: result.matchedKeywords,
                 keywordCategoryFallback: result.categoryFallback,
@@ -1875,7 +1875,7 @@ async function filterPapersWithLLM(papers, options = {}) {
                 ...decisionMetadata
             });
         }
-        console.log(`[filter] 关键词预筛 v${KEYWORD_PREFILTER_VERSION}：${papers.length} 篇 → ${papersToCheck.length} 篇交给 LLM，确定性排除 ${keywordDecisions.size} 篇`);
+        console.log(`[filter] 关键词预筛 ${KEYWORD_PREFILTER_PROFILE.contract}：${papers.length} 篇 → ${papersToCheck.length} 篇交给 LLM，确定性排除 ${keywordDecisions.size} 篇`);
     } else {
         console.log('[filter] 关键词预筛已禁用：全部候选交给 LLM');
     }

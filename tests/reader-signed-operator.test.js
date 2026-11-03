@@ -77,7 +77,7 @@ function setup(t, options={}) {
         {loaded:reload(),request},{...deps,isSuccessfulAnalysisRecord:()=>true,...hooks}));
     const withSource=callback=>fresh.withFreshAnalysisContext({runDir,runId:f.runId,
         sourceExpectations:run.sourceExpectations},callback);
-    const valid=paper=>withSource(()=>engine.hasValidApiReaderV3Records(paper));
+    const valid=paper=>withSource(()=>engine.hasValidIntegratedApiReaderRecords(paper));
     return {...f,request,run,rootDir,runDir,sourceDir,other,patchFile,writeRequest,read,reload,apply,accept,withSource,valid};
 }
 
@@ -86,7 +86,7 @@ test('真实解析器和共用保存核验会写入人工来源、保留 API 出
     global.fetch=async()=>{calls++;throw new Error('no network is authorized');};t.after(()=>{global.fetch=oldFetch;});
     const result=await f.apply();assert.equal(result.status,'fact_review_pending');assert.equal(calls,0);
     const analysis=f.read('analysis'),paper=analysis.papers[0],stage=paper.analysisManifest.stages.apiReaderArticle;
-    assert.equal(engine.hasValidApiReaderV3Records(paper),false,'新合同的冷态对象不能代替真实来源能力');
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false,'新合同的冷态对象不能代替真实来源能力');
     assert.equal(f.valid(paper),true);assert.equal(JSON.stringify(f.paper),parent);
     assert.equal(stage.executionKind,'operator');assert.equal(stage.model,'operator-local');
     assert.equal(stage.promptTemplateSha256,undefined);assert.equal(stage.temperature,undefined);
@@ -337,7 +337,7 @@ function reportRequest(f) {
 test('显式绑定 SHA 的独立事实验收恢复为完成，并保留文章、计划和 API 出处',async t=>{
     const f=setup(t);await f.apply();const request=reportRequest(f),before=f.read('analysis').papers[0];
     const result=await f.accept(request,{isSuccessfulAnalysisRecord:paper=>paper.arxivId===f.paper.arxivId
-        ? engine.hasValidApiReaderV3Records(paper) : true}),after=f.read('analysis').papers[0];
+        ? engine.hasValidIntegratedApiReaderRecords(paper) : true}),after=f.read('analysis').papers[0];
     assert.equal(result.status,'complete');assert.equal(after.readerFactReview.status,'complete');
     assert.equal(after.apiReaderArticle,before.apiReaderArticle);assert.deepEqual(after.apiReaderPlan,before.apiReaderPlan);
     assert.deepEqual(after.analysisManifest,before.analysisManifest);

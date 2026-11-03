@@ -140,7 +140,7 @@ function validateLegacyBatchRoot({ descriptor, paper, plan, source, normalProduc
         : require('./daily-reader-signed-correction').validateNormalProducerProof(normalProducerProof, checked);
     const deep = require('../deep-analyzer');
     const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
-        arxivId: paper.arxivId, requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+        arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan), requireIntegratedTables: true, minimumIntegratedTables: 2,
         requireSourceBindings: true, allowDeterministicQuoteRepair: true,
         allowDeterministicUnsupportedClaimPruning: true, enforceResourceAvailabilityClaims: true,
         verifiedResourceIdentity: paper.apiReaderResources, structuredArtifacts: source.structuredArtifacts, sourceText: source.text,

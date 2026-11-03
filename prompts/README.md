@@ -2,13 +2,13 @@
 
 [English](README.en.md) · [项目文档](../docs/README.md) · [Reader 写作说明](../docs/reader-writing.md)
 
-这个目录保存程序现用的 18 份提示词模板。模板规定模型接收哪些材料、完成什么任务、返回什么结构，以及材料不足或修复失败时不能做什么。它们不是依次运行的教程：程序根据实际流程、已保存的进度和当前错误选择需要的阶段。
+`current/` 保存程序现用的 16 份提示词模板。模板规定模型接收哪些材料、完成什么任务、返回什么结构，以及材料不足或修复失败时不能做什么。它们不是依次运行的教程：程序根据实际流程、已保存的进度和当前错误选择需要的阶段。
 
 本页供维护模板和排查模型输入的执行者阅读。只想学习怎样写论文解读，先读[把技术写清楚](../skills/clear-technical-writing/SKILL.md)、[项目写作约定](../docs/writing-guide.md)和 [Reader 写作说明](../docs/reader-writing.md)。运行日更、会议或历史更新，请从[项目操作规程](../SKILL.md)进入，不在目录里挑一个模板直接启动生产。
 
 ## 模板怎样进入一次请求
 
-[JavaScript 版本登记表](../scripts/lib/prompt-text-versions.js)选择 15 份通用模板，包括筛选；另 3 份用于已经明确范围的事实或术语修复。Python 的[现用模板清单](../scripts/prompt_evidence.py)须与它一致。
+[JavaScript 提示词登记表](../scripts/lib/prompt-contracts.js)选择 15 份通用模板，包括筛选；另 3 份用于已经明确范围的事实或术语修复。Python 的[现用模板清单](../scripts/prompt_evidence.py)须与它一致。
 
 加载器只读取模板的第一个围栏代码块，并把其中的 `{title}` 等占位符替换为本次材料。占位符是程序接口，不能随意改名。首围栏外的用途说明不发给模型，但整份文件也参与身份核验，因此不能把围栏外文字当作可直接润色的例外。
 
@@ -20,11 +20,11 @@
 
 | 任务 | 当前文件 | 主要产物或范围 |
 |---|---|---|
-| 判断是否与语音、音乐或音频相关 | [filter-v5.md](filter-v5.md) | 固定格式的理由与结论，不写全文分析 |
-| 全文主分析 | [deep-analysis-v8.md](deep-analysis-v8.md) | 13 个固定章节中的分析、机器摘要、标签及评分资料 |
-| 对照原文审校分析 | [gap-fill-v5.md](gap-fill-v5.md) | 核对事实和评分，按原章节结构返回完整替换文本 |
-| 独立复核评分 | [scoring-audit-v5.md](scoring-audit-v5.md) | 结构化分数、理由与证据，不改正文 |
-| 编写博客论文解读 | [api-reader-article-v11.md](api-reader-article-v11.md) | 完整 Reader 写作计划，随后由程序装配和核验 |
+| 判断是否与语音、音乐或音频相关 | [filter.md](current/filter.md) | 固定格式的理由与结论，不写全文分析 |
+| 全文主分析 | [deep-analysis.md](current/deep-analysis.md) | 13 个固定章节中的分析、机器摘要、标签及评分资料 |
+| 对照原文审校分析 | [gap-fill.md](current/gap-fill.md) | 核对事实和评分，按原章节结构返回完整替换文本 |
+| 独立复核评分 | [scoring-audit.md](current/scoring-audit.md) | 结构化分数、理由与证据，不改正文 |
+| 编写博客论文解读 | [api-reader-article.md](current/api-reader-article.md) | 完整 Reader 写作计划，随后由程序装配和核验 |
 
 日更与会议筛选共用筛选模板，入口分别填入相应来源和会议配置。日更、会议和历史更新共用 Reader 的写作与解析要求，但来源、运行身份和恢复入口分别核验。默认博客正文由 Reader 根据论文原文独立写作，不直接复制主分析正文。
 
@@ -32,13 +32,13 @@
 
 | 任务 | 当前文件 | 修改边界 |
 |---|---|---|
-| 提取开源与复现信息 | [opensource-scan-v3.md](opensource-scan-v3.md) | 逐字提取实际资源链接；可达状态由程序另查 |
-| 补充实验表格 | [table-fill-v2.md](table-fill-v2.md) | 只返回实验结果章节，不编造数字或图片 |
-| 补充方法解释 | [method-fill-v3.md](method-fill-v3.md) | 只返回方法概述和架构章节 |
-| 纠正分类标签 | [tag-repair-v3.md](tag-repair-v3.md) | 从提供的词表选择概念，不改正文 |
-| 修复核心摘要 | [core-summary-repair-v7.md](core-summary-repair-v7.md) | 只改核心摘要，其余 12 节保持不变 |
-| 修复分析结构 | [structure-repair-v4.md](structure-repair-v4.md) | 只修反馈指出的章节边界或内容问题 |
-| 修复 Reader 指定目标 | [api-reader-repair-v13.md](api-reader-repair-v13.md) | 按原稿及目标 SHA 返回受限补丁，不默认重写全文 |
+| 提取开源与复现信息 | [opensource-scan.md](current/opensource-scan.md) | 逐字提取实际资源链接；可达状态由程序另查 |
+| 补充实验表格 | [table-fill.md](current/table-fill.md) | 只返回实验结果章节，不编造数字或图片 |
+| 补充方法解释 | [method-fill.md](current/method-fill.md) | 只返回方法概述和架构章节 |
+| 纠正分类标签 | [tag-repair.md](current/tag-repair.md) | 从提供的词表选择概念，不改正文 |
+| 修复核心摘要 | [core-summary-repair.md](current/core-summary-repair.md) | 只改核心摘要，其余 12 节保持不变 |
+| 修复分析结构 | [structure-repair.md](current/structure-repair.md) | 只修反馈指出的章节边界或内容问题 |
+| 修复 Reader 指定目标 | [api-reader-repair.md](current/api-reader-repair.md) | 按原稿及目标 SHA 返回受限补丁，不默认重写全文 |
 
 主分析和标签修复共用当前 386 项词表，只选择本篇有原文依据的直接标签。原有 3–5 项、主任务、主方法以及 JSON 或四行文本结构保持不变。发布器从同一词表推导父级导航；模型不输出整套目录，也不把祖先概念补进直接标签凑数。目录里的零计数方向可以保留，但不能因此给论文强贴标签。
 
@@ -46,14 +46,12 @@
 
 | 任务 | 当前文件 | 使用条件 |
 |---|---|---|
-| 选择论文原图并写读图说明 | [image-supplement-v3.md](image-supplement-v3.md) | 只用本次实际收到像素的候选图；不改原分析 |
-| 修正主分析局部事实 | [primary-fact-local-repair-v1.md](primary-fact-local-repair-v1.md) | 只改来源反馈明确许可的原段落 |
-| 修正 Reader 错误原句 | [api-reader-fact-local-v3.md](api-reader-fact-local-v3.md) | 只替换获准的完整错误句，不改句外字符或其他字段 |
-| 修正术语组合中的名称 | [api-reader-concept-terms-v1.md](api-reader-concept-terms-v1.md) | 只在程序确认术语长度是唯一阻断时使用 |
-| 规划论文视觉长图 | [visual-summary-v2.md](visual-summary-v2.md) | 保留给用户以后明确要求的视觉任务 |
-| 规划汇总封面 | [digest-cover-v2.md](digest-cover-v2.md) | 保留给用户以后明确要求的视觉任务 |
+| 选择论文原图并写读图说明 | [image-supplement.md](current/image-supplement.md) | 只用本次实际收到像素的候选图；不改原分析 |
+| 修正主分析局部事实 | [primary-fact-local-repair.md](current/primary-fact-local-repair.md) | 只改来源反馈明确许可的原段落 |
+| 修正 Reader 错误原句 | [api-reader-fact-local.md](current/api-reader-fact-local.md) | 只替换获准的完整错误句，不改句外字符或其他字段 |
+| 修正术语组合中的名称 | [api-reader-concept-terms.md](current/api-reader-concept-terms.md) | 只在程序确认术语长度是唯一阻断时使用 |
 
-用户已持续要求日更不再生图。日更不生成论文长图或汇总封面，也不运行 `visual:prepare` 或调用生图工具。论文原图的获取、来源核验、正文展示与审查仍正常进行。保留两份视觉模板及其历史身份，不等于恢复日更生图。
+用户已持续要求日更不再生图。日更不生成论文长图或汇总封面，不再提供图片任务入口，也不调用生图工具。论文原图的获取、来源核验、正文展示与审查仍正常进行。两份视觉模板已退出工作目录与现用登记，只保留原 Git 字节供历史凭证核验，不保留写作入口。
 
 ## 写清楚，同时保住输出协议
 
@@ -75,9 +73,9 @@ Reader 首次写作只依据本次提供的全文和实际收到的图像。可�
 
 ## 修改模板与核验旧记录
 
-模板当前路径以程序登记为准，文件名不一定等于协议版本。例如 `structure-repair-v4.md` 对应 `analysis-prompt-text-v5`。在文档里引用现用模板时更新路径，叙述历史记录时保留原版本。
+现用模板使用 `current/` 下的稳定文件名，新请求使用不带编号的提示词合同，并记录实际内容指纹。文件名或合同名称不替代内容核验；历史记录仍按原路径、原声明和原 SHA 读取。
 
-确需修改任何模板字节，包括围栏外说明时，按[提示词修改规则](../docs/maintenance.md#prompt-修改)新增版本，核对新旧占位符和输出结构，并同步版本登记、历史证据与相关测试。现有正确规则不为追求改动数量而升级。JS、Python 和选定阶段重分析中实际读取的清单都须同步核对，不能只改一处登记。
+确需修改任何模板字节，包括围栏外说明时，先保全原 Git 对象及其整文件 SHA，再按[提示词修改规则](../docs/maintenance.md#prompt-修改)修改稳定路径中的现用模板。核对新旧占位符和输出结构，同步内容证据、共享登记和相关测试；不再通过增加文件编号表达变化。现有正确规则不为追求改动数量而更新。JavaScript、Python 和选定阶段重分析共用现用登记，历史格式和原预算由集中读取器核验，不能从旧稿重新取得请求额度。
 
 旧模板不保存在工作树。[历史证据索引](../scripts/lib/git-prompt-evidence-index.json)保存原路径、Git 对象编号和整文件 SHA；读取器核对整文件及首围栏模板 SHA。旧对象缺失或字节不符时停止，不重建一份近似文本冒充原稿。原声明、论文来源、稿件、请求次数、费用和恢复范围继续保留；升级不能补签旧稿、删账或清零失败。
 

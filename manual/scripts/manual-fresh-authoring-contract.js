@@ -1,4 +1,6 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 /**
  * 默认 Manual v5 写作流程共用的来源核验约定，依据落在文件上。
@@ -13,7 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { normalizedId } = require('../../scripts/utils.js');
 
-const FRESH_AUTHORING_CONTRACT = 'fresh-authoring-v1';
+const FRESH_AUTHORING_CONTRACT = historicalManualContract('manual-fresh-authoring', 'source-only');
 const FRESH_AUTHORING_MODE = 'fresh_from_evidence';
 const FRESH_INPUT_KINDS = Object.freeze([
     'paper_metadata',
@@ -29,6 +31,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const AUTHORING_PROMPT_PATH = path.join(PROJECT_ROOT, 'manual', 'prompts', 'manual-tutorial-article.md');
 const EDITORIAL_CONTRACT_PATH = path.join(PROJECT_ROOT, 'manual', 'docs', 'editorial-reference-contract.md');
 const BLANK_SCHEMA_PATH = path.join(PROJECT_ROOT, 'manual', 'scripts', 'manual-tutorial-quality-contract.js');
+const originalFiles = require('../../scripts/lib/original-file-evidence.js');
 
 function sha256(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -89,7 +92,7 @@ function resolveArtifactAuthority(artifactManifestPath, expected) {
     }
     const id = normalizedId(expected.paperId);
     if (!manifest || manifest.mode !== 'manual_artifact_index'
-        || manifest.parserVersion !== 'manual-artifact-parser-v2-structured'
+        || manifest.parserVersion !== historicalManualContract('manual-artifact-parser', 'structured-source')
         || manifest.date !== expected.date
         || manifest.filteredBatchSha256 !== expected.filteredBatchSha256) {
         throw new Error(`${id} ArtifactIndex manifest 未绑定当前日期/parser/filtered 批次`);
@@ -165,9 +168,24 @@ function buildAuthorityInputs(paths) {
     }
     return Object.fromEntries(kinds.map(kind => {
         if (kind === 'authoring_prompt' && path.resolve(expected[kind]) === AUTHORING_PROMPT_PATH) {
-            const bytes = require('../../scripts/lib/prompt-evidence.js')
-                .readPromptEvidenceBytes('manual/prompts/manual-tutorial-article.md');
+            let bytes;
+            try {
+                bytes = require('../../scripts/lib/prompt-evidence.js')
+                    .readPromptEvidenceBytes('manual/prompts/manual-tutorial-article.md', {
+                        expectedSha256: paths.historicalInputSha256?.[kind] ?? null
+                    });
+            } catch (cause) { throw new Error('fresh authority authoring_prompt.sha256 原提示词证据缺失或不一致', { cause }); }
             return [kind, { kind, path: AUTHORING_PROMPT_PATH, sha256: sha256(bytes) }];
+        }
+        if (['editorial_contract', 'blank_schema'].includes(kind)) {
+            const filePath = path.resolve(expected[kind]);
+            const relative = path.relative(PROJECT_ROOT, filePath).split(path.sep).join('/');
+            if (originalFiles.isOriginalFilePath(relative)) {
+                const bytes = originalFiles.readOriginalFileBytes(relative, {
+                    expectedSha256: paths.historicalInputSha256?.[kind] ?? null
+                });
+                return [kind, { kind, path: filePath, sha256: sha256(bytes) }];
+            }
         }
         const filePath = assertPlainFile(expected[kind], `fresh authority ${kind}`);
         return [kind, { kind, path: filePath, sha256: rawFileSha256(filePath, `fresh authority ${kind}`) }];
@@ -200,7 +218,10 @@ function validateFreshAuthoringReceipt(receipt, options) {
     if (normalizeArticle(options.readerArticle) !== normalizeArticle(articleText)) {
         throw new Error(`${label} 受控 article.md 与 editorial.readerArticle 不是同一篇完整新稿`);
     }
-    const expectedInputs = buildAuthorityInputs({ ...options.authorityPaths, paperId: id });
+    const historicalInputSha256 = Object.fromEntries((Array.isArray(receipt.inputs) ? receipt.inputs : [])
+        .filter(item => item && ['authoring_prompt', 'editorial_contract', 'blank_schema'].includes(item.kind))
+        .map(item => [item.kind, item.sha256]));
+    const expectedInputs = buildAuthorityInputs({ ...options.authorityPaths, paperId: id, historicalInputSha256 });
     const expectedKinds = Object.keys(expectedInputs);
     if (!Array.isArray(receipt.inputs) || receipt.inputs.length !== expectedKinds.length) {
         throw new Error(`${label}.inputs 必须精确覆盖当前冷启动权威输入`);
@@ -217,10 +238,12 @@ function validateFreshAuthoringReceipt(receipt, options) {
     for (const kind of expectedKinds) {
         const actual = actualByKind.get(kind);
         const expected = expectedInputs[kind];
-        if (kind === 'authoring_prompt' && expected.path === AUTHORING_PROMPT_PATH) {
+        const originalPath = ['editorial_contract', 'blank_schema'].includes(kind)
+            && originalFiles.isOriginalFilePath(path.relative(PROJECT_ROOT, expected.path).split(path.sep).join('/'));
+        if ((kind === 'authoring_prompt' && expected.path === AUTHORING_PROMPT_PATH) || originalPath) {
             // 历史 Prompt 仍绑定原逻辑路径；buildAuthorityInputs 已从 Git 重放其精确字节。
-            if (path.resolve(String(actual?.path || '')) !== AUTHORING_PROMPT_PATH) {
-                throw new Error(`${label}.inputs.${kind}.path 未绑定当前受控路径: expected=${AUTHORING_PROMPT_PATH} actual=${actual?.path}`);
+            if (path.resolve(String(actual?.path || '')) !== expected.path) {
+                throw new Error(`${label}.inputs.${kind}.path 未绑定当前受控路径: expected=${expected.path} actual=${actual?.path}`);
             }
         } else assertExactPath(actual?.path, expected.path, `${label}.inputs.${kind}.path`);
         if (actual.sha256 !== expected.sha256) {

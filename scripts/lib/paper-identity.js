@@ -1,17 +1,18 @@
 'use strict';
 
 // 跨运行时的论文身份记录，论文可能来自 arXiv 或会议论文集。
-// 它有意不导入历史上的 arXiv 辅助模块：使用方必须显式选择这套 v1 约定，
-// 而不是悄悄改变旧的日更身份行为。
+// 规范编号保持不变；已有记录按其实际格式计算原身份摘要，不改签旧记录。
 
 const crypto = require('node:crypto');
 
-const CONTRACT = 'paper-identity-v1';
-const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
-const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const formats = require('./protocol-codec');
+const CONTRACT = formats.contract('paper-identity');
+const BODY_FIELDS = Object.freeze(['kind', 'canonicalId', 'arxivId', 'conference', 'externalId', 'source', 'citation']);
+const ARXIV_ID_RE = /^\d{4}\.\d{4,5}(?![\s\S])/;
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/;
 const SCHEMES = new Set(['icassp-arnumber', 'openreview-forum-id', 'conference-paper-id']);
-const CONFERENCE_PAPER_ID_RE = /^[A-Za-z0-9._-]{1,200}$/;
-const SHA_RE = /^[a-f0-9]{64}$/;
+const CONFERENCE_PAPER_ID_RE = /^[A-Za-z0-9._-]{1,200}(?![\s\S])/;
+const SHA_RE = /^[a-f0-9]{64}(?![\s\S])/;
 
 function fail(message) { throw new Error(`Invalid paper identity: ${message}`); }
 
@@ -140,9 +141,19 @@ function assertCanonicalConferencePaperId(value, conference, sourceIdentity) {
     return expected;
 }
 
+function currentHeader() { return formats.recordHeader(CONTRACT, CONTRACT); }
+function readHeader(value) {
+    if (!formats.hasValidHeader(value, CONTRACT)) fail('contract or schema fingerprint is unknown or mixed');
+    return formats.recordHeader(value.contract, CONTRACT, value.schemaFingerprint);
+}
+function createIdentity(fields) {
+    assertExactFields(fields, BODY_FIELDS, 'new paper identity');
+    return normalizeIdentity({ ...currentHeader(), ...fields });
+}
 function normalizeIdentity(value) {
-    assertExactFields(value, ['contract', 'kind', 'canonicalId', 'arxivId', 'conference', 'externalId', 'source', 'citation'], 'paper identity');
-    if (value.contract !== CONTRACT) fail(`contract must be ${CONTRACT}`);
+    assertPlainObject(value, 'paper identity');
+    const header = readHeader(value);
+    assertExactFields(value, [...Object.keys(header), ...BODY_FIELDS], 'paper identity');
     if (value.kind !== 'arxiv' && value.kind !== 'conference') fail('kind must be arxiv or conference');
     const source = validateSource(value.source);
     const citation = validateCitation(value.citation);
@@ -155,7 +166,7 @@ function normalizeIdentity(value) {
         if (source.status === 'official' && source.url !== `https://arxiv.org/abs/${value.arxivId}`) {
             fail('official arxiv source.url must bind its exact canonical abs URL');
         }
-        return { contract: CONTRACT, kind: 'arxiv', canonicalId, arxivId: value.arxivId,
+        return { ...header, kind: 'arxiv', canonicalId, arxivId: value.arxivId,
             conference: null, externalId: null, source, citation };
     }
 
@@ -166,7 +177,7 @@ function normalizeIdentity(value) {
     const externalId = validateExternalId(value.externalId);
     const canonicalId = canonicalConferenceId(conference, externalId);
     if (value.canonicalId !== canonicalId) fail('canonicalId does not bind conference, year, scheme, and value');
-    return { contract: CONTRACT, kind: 'conference', canonicalId, arxivId: null,
+    return { ...header, kind: 'conference', canonicalId, arxivId: null,
         conference, externalId, source, citation };
 }
 
@@ -183,9 +194,10 @@ function sha256(value) { return crypto.createHash('sha256').update(value).digest
 function stableSha256(value) { return sha256(stableJson(value)); }
 function identityPayload(value) {
     const normalized = normalizeIdentity(value);
+    const header = readHeader(normalized);
     return normalized.kind === 'arxiv'
-        ? { contract: CONTRACT, kind: 'arxiv', canonicalId: normalized.canonicalId, arxivId: normalized.arxivId }
-        : { contract: CONTRACT, kind: 'conference', canonicalId: normalized.canonicalId,
+        ? { ...header, kind: 'arxiv', canonicalId: normalized.canonicalId, arxivId: normalized.arxivId }
+        : { ...header, kind: 'conference', canonicalId: normalized.canonicalId,
             conference: normalized.conference, externalId: normalized.externalId };
 }
 function identitySha256(value) { return stableSha256(identityPayload(value)); }
@@ -193,7 +205,7 @@ function recordSha256(value) { return stableSha256(normalizeIdentity(value)); }
 function isSha256(value) { return SHA_RE.test(String(value || '')); }
 
 module.exports = {
-    CONTRACT, ARXIV_ID_RE, SCHEMES, CONFERENCE_PAPER_ID_RE, canonicalConferenceId, conferenceCoordinates,
+    CONTRACT, currentHeader, readHeader, createIdentity, ARXIV_ID_RE, SCHEMES, CONFERENCE_PAPER_ID_RE, canonicalConferenceId, conferenceCoordinates,
     canonicalConferencePaperId, assertCanonicalConferencePaperId, validateExternalId,
     validateOfficialUrl, validateSource, validateCitation, normalizeIdentity,
     identityPayload, stableJson, sha256, stableSha256, identitySha256, recordSha256, isSha256

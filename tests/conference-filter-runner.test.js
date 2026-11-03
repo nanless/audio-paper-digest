@@ -76,7 +76,9 @@ function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model', f
         return { path: filename, sha256: sha(bytes), size: bytes.length };
     }).sort((a, b) => a.path.localeCompare(b.path));
     const pdfByTitle = new Map(pdfCatalog.map(item => [path.basename(item.path, '.pdf'), item]));
-    const manifest = { contract: discovery.CONTRACT, version: discovery.VERSION, adapter: 'icassp',
+    const manifest = { ...(filterApi.VERSION
+        ? require('../scripts/lib/protocol-codec').historicalHeader('conference-discovery', 'metadata-pdf-catalog')
+        : require('../scripts/lib/protocol-codec').recordHeader(discovery.CONTRACT, 'conference-discovery')), adapter: 'icassp',
         conference: { id: 'icassp-2026', year: 2026 },
         metadataSnapshot: { file: metadataFile, sha256: sha(metadataBytes), size: metadataBytes.length }, pdfRoot: root,
         pdfCatalogSha256: ledger.stableHash(pdfCatalog), pdfCatalog, members: metadata.map((record, metadataIndex) => ({
@@ -89,7 +91,8 @@ function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model', f
     fs.writeFileSync(path.join(dirs.reports, 'report.json'), discovery.canonicalBytes(report), { mode: 0o600 });
     const discoveryHandle = discovery.loadDiscoveryHandle(path.join(dirs.catalogs, 'catalog.json'),
         path.join(dirs.reports, 'report.json'));
-    evidenceApi.prepareEvidence({ evidenceRunsRoot: dirs.evidence, runId: evidenceRunId, discoveryHandle,
+    const evidenceWriter = filterApi.VERSION ? require('./helpers/conference-filter-evidence-fixture').loadHistoricalEvidenceApi() : evidenceApi;
+    evidenceWriter.prepareEvidence({ evidenceRunsRoot: dirs.evidence, runId: evidenceRunId, discoveryHandle,
         apply: true, limit: metadata.length, extract: (itemRoot, { request }) => {
             const text = Buffer.from('Abstract\nThis audio study provides sufficiently detailed experimental evidence and reproducible evaluation for the conference filtering fixture.\nIntroduction\nBody.');
             const artifacts = Buffer.from(`${JSON.stringify({ pages: [{ page: 1, textStart: 0, textEnd: text.length }] }, null, 2)}\n`);
@@ -131,8 +134,8 @@ test('生产 runner 用真实的公共传输，并保留绑定的意图、原始
     const result = await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
     const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
     assert.equal(result.processed[0].status, 'included'); assert.equal(service.calls.length, 1);
-    assert.equal(f.spec.contract, 'conference-filter-spec-v6'); assert.equal(f.spec.version, 6);
-    assert.equal(state.contract, 'conference-filter-v6'); assert.equal(state.version, 6);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(f.spec, 'conference-filter-spec'), true);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(state, 'conference-filter'), true);
     assert.equal(state.input.tagCatalogSha256, f.spec.tagCatalogSha256);
     assert.equal(Object.hasOwn(state.input, 'taxonomyRegistrySha256'), false);
     assert.equal(service.calls[0].url, '/v1/chat/completions'); assert.equal(service.calls[0].headers.authorization, 'Bearer fixture-key');
@@ -143,7 +146,7 @@ test('生产 runner 用真实的公共传输，并保留绑定的意图、原始
     const envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64'));
     assert.equal(service.calls[0].body.messages[0].content, filter.renderDailyFilterPrompt(envelope));
     assert.doesNotMatch(service.calls[0].body.messages[0].content, /conference-filter-llm-request/);
-    assert.equal(envelope.contract, 'conference-filter-llm-request-v3'); assert.equal(envelope.version, 3);
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(envelope, 'conference-filter-llm-request'), true);
     assert.equal(envelope.filter.tagCatalogSha256, f.spec.tagCatalogSha256);
     assert.equal(Object.hasOwn(envelope.filter, 'taxonomyRegistrySha256'), false);
     assert.equal(envelope.paperId, pid('100')); assert.equal(envelope.metadataRecord.arnumber, '100');
@@ -171,10 +174,10 @@ test('生产 runner 用真实的公共传输，并保留绑定的意图、原始
             envelope: { encoding: 'base64', size: bytes.length, sha256: sha(bytes), data: bytes.toString('base64') } };
         const intentBody = { ...changedIntent }; delete intentBody.intentSha256;
         changedIntent.intentSha256 = filter.stableHash(intentBody);
-        assert.throws(() => filter.normalizeLlmIntent(changedIntent), /不能混用新旧词表哈希字段|LLM request contract\/version mismatch/);
+        assert.throws(() => filter.normalizeLlmIntent(changedIntent), /不能混用新旧词表哈希字段|LLM request contract\/version mismatch|format header|unknown or missing/);
     }
     const legacy = { ...intent, contract: 'conference-filter-llm-intent-v1', version: 1 }; delete legacy.envelope;
-    assert.throws(() => filter.normalizeLlmIntent(legacy), /unknown or missing fields|contract\/version mismatch/);
+    assert.throws(() => filter.normalizeLlmIntent(legacy), /unknown or missing fields|contract\/version mismatch|format header/);
     assert.equal(filter.runLlmDecision, undefined);
     assert.equal(runner.productionLlmConfig, undefined);
     await assert.rejects(() => runner.main(args(), { files: f.files, env: f.env, transportRequestFn: async () => ({}) }),
@@ -465,7 +468,7 @@ test('锁回收对存活持有者一律拒绝，对已死且过期的持有者�
     const directory = path.join(f.dirs.filters, filterId); const lock = path.join(directory, 'operation.lock');
     function writeLock(processId) {
         fs.mkdirSync(lock, { mode: 0o700 });
-        const body = { contract: filter.LOCK_OWNER_CONTRACT, version: filter.LOCK_OWNER_VERSION, owner: 'fixture.lock', pid: processId,
+        const body = { ...require('../scripts/lib/protocol-codec').recordHeader(filter.LOCK_OWNER_CONTRACT, 'conference-filter-lock-owner'), owner: 'fixture.lock', pid: processId,
             hostname: os.hostname(), token: lockToken, startedAt: stamp, heartbeatAt: stamp, leaseMs: filter.LOCK_STALE_MS };
         const record = { ...body, ownerSha256: filter.stableHash(body) };
         fs.writeFileSync(path.join(lock, 'owner.json'), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
@@ -525,6 +528,24 @@ function mockLegacyFilter(calls) {
         return { statusCode: 200, body, raw: JSON.stringify(body) };
     });
 }
+
+test('原Git现用窗口按真实旧spec、来源和policy延续，未派发请求视图逐字不变', async t => {
+    const service = await serverFixture(t);
+    const original = loadLegacyFilter(async () => { throw new Error('此例禁止模型请求'); }, true);
+    const f = fixture(t, service.endpoint, null, 'fixture-filter-model', original);
+    const stateFile = path.join(f.dirs.filters, filterId, 'state.json');
+    const stateBytes = fs.readFileSync(stateFile), state = original.readFilter({ filterRoot: f.dirs.filters, filterId });
+    const paperId = Object.keys(state.decisions)[0];
+    const expected = original.requestEnvelope({ state, paperId, discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle });
+    assert.deepEqual(filter.requestEnvelope({ state, paperId, discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle }), expected);
+    const replayed = filter.prepareFilter({ filterRoot: f.dirs.filters, filterId, spec: f.spec,
+        discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle, now: stamp });
+    assert.deepEqual(replayed, state);
+    assert.deepEqual(fs.readFileSync(stateFile), stateBytes);
+    assert.throws(() => filter.writeFilterSpec({ specRoot: f.dirs.specs, specName: 'new-old.json', spec: f.spec }), /当前记录格式/);
+    assert.equal(fs.existsSync(path.join(f.dirs.specs, 'new-old.json')), false);
+    assert.equal(service.calls.length, 0);
+});
 
 test('原 v5 生成器的已保存响应在同 UUID 恢复，不重复请求且不改写原证明', async t => {
     const service = await serverFixture(t); const originalCalls = [];

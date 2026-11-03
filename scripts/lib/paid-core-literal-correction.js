@@ -156,7 +156,7 @@ function validatePlainDailyPaidReplay(paper) {
     if (!fs.existsSync(runFile)) return null; // Historical/conference roots have their own contracts.
     try {
         const run = snapshot(runFile).value;
-        if (run.contract !== daily.CONTRACT) return null;
+        if (!require('./daily-source-format').isDailySourceRun(run)) return null;
         const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...run, runDir: path.dirname(runFile) }));
         const source = daily.readDailyFreshSource(plan, paper);
         const directory = path.join(plan.readerAttemptsDir, 'core-summary-repair', 'direct-' + sha('arxiv:' + id));

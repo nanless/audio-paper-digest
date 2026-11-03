@@ -11,9 +11,11 @@ const path = require('node:path');
 const freshSource = require('./fresh-arxiv-rewrite-source.js');
 const freshRun = require('./fresh-rewrite-run.js');
 const metadataApi = require('./arxiv-metadata-source.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'historical-arxiv-publication-metadata-v1';
-const VERSION = 1;
+const CONTRACT = codec.contract('historical-arxiv-publication-metadata');
+const MANIFEST_CONTRACT = codec.contract('historical-arxiv-publication-metadata-manifest');
 const MANIFEST_NAME = 'metadata-manifest.json';
 const METADATA_NAME = 'metadata.json';
 const ATOM_NAME = 'metadata.atom.xml';
@@ -34,6 +36,10 @@ class HistoricalArxivPublicationMetadataError extends Error {
     }
 }
 const fail = message => { throw new HistoricalArxivPublicationMetadataError(message); };
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`来源格式声明不符合要求：${error.message}`); }
+}
 
 function canonical(value) {
     if (Array.isArray(value)) return value.map(canonical);
@@ -132,7 +138,7 @@ function sourceBinding(sourceRoot, id, generation) {
     if (milliseconds.some(value => !Number.isFinite(value))) fail('已封存来源的获取时间无效');
     const sourceVersionIdentitySha256 = source.runtimeDetails.sourceVersion?.identitySha256 || null;
     return { source,
-        value: { contract: source.manifest.contract, version: source.manifest.version,
+        value: { ...codec.recordHeader(source.manifest.contract, 'fresh-arxiv-source-manifest', source.manifest.schemaFingerprint),
             generation, sourceManifestSha256: source.sourceManifestSha256,
             sourceSnapshotSha256: sourceSnapshotSha(source.runtimeDetails),
             sourceTextSha256: source.manifest.text.responseSha256, sourceId: source.manifest.text.sourceId,
@@ -173,7 +179,7 @@ function querySourceIdForSource({ sourceRoot, arxivId: value, generation } = {})
 }
 function manifestFor({ id, generation, capturedAt, source, official, metadataBytes }) {
     const abstract = official.metadata.abstract;
-    return { contract: CONTRACT, version: VERSION, paperId: `arxiv:${id}`, arxivId: id, generation,
+    return { ...codec.recordHeader(MANIFEST_CONTRACT, 'historical-arxiv-publication-metadata-manifest'), paperId: `arxiv:${id}`, arxivId: id, generation,
         capturedAt: new Date(capturedAt).toISOString(), source,
         atom: { contract: metadataApi.CONTRACT, filename: ATOM_NAME, sourceName: official.proof.sourceName,
             querySourceId: official.proof.querySourceId,
@@ -200,16 +206,18 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
     catch (error) { fail(`发布元数据不是有效 JSON：${error.message}`); }
     if (!manifestBytes.equals(Buffer.from(canonicalJson(manifest)))
         || !metadataBytes.equals(Buffer.from(canonicalJson(metadata)))) fail('发布元数据 JSON 必须按固定的字段顺序和保存格式写入');
-    exactKeys(manifest, ['contract', 'version', 'paperId', 'arxivId', 'generation', 'capturedAt', 'source', 'atom', 'metadata'], '元数据清单');
+    const header = recordHeaderFor(manifest, 'historical-arxiv-publication-metadata-manifest');
+    exactKeys(manifest, [...Object.keys(header), 'paperId', 'arxivId', 'generation', 'capturedAt', 'source', 'atom', 'metadata'], '元数据清单');
     const hasSourceVersion = Object.hasOwn(manifest.source || {}, 'sourceVersionIdentitySha256');
-    exactKeys(manifest.source, ['contract', 'version', 'generation', 'sourceManifestSha256', 'sourceSnapshotSha256',
+    const sourceHeader = recordHeaderFor(manifest.source, 'fresh-arxiv-source-manifest');
+    exactKeys(manifest.source, [...Object.keys(sourceHeader), 'generation', 'sourceManifestSha256', 'sourceSnapshotSha256',
         'sourceTextSha256', 'sourceId', 'sourceCapturedAt', 'textFetchedAt', 'pdfFetchedAt',
         'sourceEarliestCapturedAt', 'sourceLatestCapturedAt',
         ...(hasSourceVersion ? ['sourceVersionIdentitySha256'] : [])], '来源对应记录');
     exactKeys(manifest.atom, ['contract', 'filename', 'sourceName', 'querySourceId', 'responseBytes', 'responseSha256',
         'entryVersion', 'entryUpdatedAt', 'publishedAt', 'observedAt'], 'Atom 对应记录');
     exactKeys(manifest.metadata, ['filename', 'responseBytes', 'responseSha256', 'recordSha256', 'abstractSha256'], '元数据对应记录');
-    if (manifest.contract !== CONTRACT || manifest.version !== VERSION || manifest.paperId !== `arxiv:${id}`
+    if (manifest.paperId !== `arxiv:${id}`
         || manifest.arxivId !== id || manifest.generation !== generation
         || !Number.isFinite(Date.parse(manifest.capturedAt)) || new Date(manifest.capturedAt).toISOString() !== manifest.capturedAt
         || manifest.atom.contract !== metadataApi.CONTRACT || manifest.atom.filename !== ATOM_NAME
@@ -280,7 +288,9 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
         sourceSnapshotSha256: manifest.source.sourceSnapshotSha256,
         sourceTextSha256: manifest.source.sourceTextSha256, abstract: metadata.abstract,
         authors,
-        proof: { contract: CONTRACT, paperId: `arxiv:${id}`, manifestSha256: sha256(manifestBytes),
+        proof: { ...codec.recordHeader(manifest.contract === MANIFEST_CONTRACT ? CONTRACT
+            : codec.historicalContract('historical-arxiv-publication-metadata', 'atom-sidecar-proof'),
+        'historical-arxiv-publication-metadata'), paperId: `arxiv:${id}`, manifestSha256: sha256(manifestBytes),
             atomResponseSha256: manifest.atom.responseSha256,
             metadataRecordSha256: manifest.metadata.recordSha256, abstractSha256: manifest.metadata.abstractSha256,
             entryVersion: manifest.atom.entryVersion, entryUpdatedAt: manifest.atom.entryUpdatedAt,
@@ -385,7 +395,7 @@ function findReusableOfficialAtom({ freshRewriteRoot, arxivId: value } = {}) {
     return reusableOfficialAtomIndex({ freshRewriteRoot, paperIds: [id] }).get(id) || null;
 }
 
-module.exports = { CONTRACT, VERSION, MANIFEST_NAME, METADATA_NAME, ATOM_NAME,
+module.exports = { CONTRACT, MANIFEST_CONTRACT, MANIFEST_NAME, METADATA_NAME, ATOM_NAME,
     HistoricalArxivPublicationMetadataError, sidecarDirectory, sourceSnapshotSha,
     readPublicationMetadata, sealPublicationMetadata, validateOfficialCompatibility, querySourceIdForSource,
     reusableOfficialAtomIndex,

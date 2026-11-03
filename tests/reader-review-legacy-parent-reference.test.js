@@ -11,7 +11,7 @@ function setup(){
  let active=null,canonical=structuredClone(parent),normalValid=false,publicationValid=true,publicationCalls=0,tamper=null,deep,maintenance;
  const cap=Object.freeze({synthetic:true});
  const context={getConferenceAnalysisContext:()=>active,withConferenceAnalysisSource:(input,fn)=>{const saved=active;active=input;try{return fn()}finally{active=saved}}};
- const engine={hasValidApiReaderV3Records:()=>normalValid,isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>{publicationCalls++;return publicationValid}};
+ const engine={hasValidIntegratedApiReaderRecords:()=>normalValid,isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>{publicationCalls++;return publicationValid}};
  const wrap={prepareApiReaderRevisionSeed:(paper,source,feedback)=>{
    if(tamper==='resource'){paper=structuredClone(paper);paper.apiReaderResources.resources.push({url:'forged'})}
    if(tamper==='reader'){paper=structuredClone(paper);paper.apiReaderArticle+='forged'}

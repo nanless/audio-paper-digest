@@ -1,7 +1,9 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const CONTRACT = 'source-cell-math-display-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'source-cell-math-display';
+const header = () => codec.recordHeader(codec.contract(CONTRACT), CONTRACT);
 const number = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const signedNumber = String.raw`[+−-]?${number}`;
 const visibleNumeric = new RegExp(`^(${signedNumber})[ \\t]*±[ \\t]*(${number})$`);
@@ -21,7 +23,7 @@ function strictSourceCellMathDisplay(sourceText) {
         const superscript = { '+': '⁺', '-': '⁻', '−': '⁻',
             '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
             '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
-        return { contract: CONTRACT, kind: 'scientific-notation-duplicate', sourceText,
+        return { ...header(), kind: 'scientific-notation-duplicate', sourceText,
             sourceTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex'),
             displayText: `${scientific[1]}×10${[...scientific[2]].map(char => superscript[char]).join('')}` };
     }
@@ -44,7 +46,7 @@ function strictSourceCellMathDisplay(sourceText) {
         kind = 'nested-power-duplicate';
     }
     return {
-        contract: CONTRACT, kind, sourceText,
+        ...header(), kind, sourceText,
         sourceTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex'),
         displayText, ...(style ? { style } : {})
     };

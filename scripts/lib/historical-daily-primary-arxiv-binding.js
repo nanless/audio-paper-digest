@@ -7,8 +7,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CONTRACT = 'historical-daily-primary-arxiv-binding-v1';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('historical-daily-primary-arxiv-binding');
 const MAPPING = 'frozen-daily-score-row-primary-arxiv-link';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
@@ -162,7 +163,7 @@ function parsePrimaryRow(text, bodyStart) {
         sourceByteStart, sourceByteEnd, semanticLineSha256: sha256(Buffer.from(selected.line, 'utf8')) };
 }
 
-function buildDailyPrimaryArxivBinding({ blogRoot, page, identityHints = page?.identityHints } = {}) {
+function buildWithHeader({ blogRoot, page, identityHints = page?.identityHints } = {}, header) {
     if (!plain(page) || !PAGE_KEY_RE.test(String(page.pageKey || '')) || typeof page.pagePath !== 'string'
         || !SHA_RE.test(String(page.pageContentSha256 || '')) || page.scope?.type !== 'daily') {
         fail('规范化后的每日清单页面无效');
@@ -186,7 +187,7 @@ function buildDailyPrimaryArxivBinding({ blogRoot, page, identityHints = page?.i
     if (namedId && !candidateSources.includes('filename')) {
         fail('文件名的 arXiv 证据不在冻结候选来源中');
     }
-    const body = { contract: CONTRACT, version: VERSION, mapping: MAPPING, pageKey: page.pageKey,
+    const body = { ...header, mapping: MAPPING, pageKey: page.pageKey,
         pagePath: page.pagePath, pageContentSha256: page.pageContentSha256,
         sourceByteStart: selected.sourceByteStart, sourceByteEnd: selected.sourceByteEnd,
         semanticLineSha256: selected.semanticLineSha256, linkLabel: 'arxiv',
@@ -195,14 +196,19 @@ function buildDailyPrimaryArxivBinding({ blogRoot, page, identityHints = page?.i
     return { ...body, bindingSha256: stableHash(body) };
 }
 
+function buildDailyPrimaryArxivBinding(options) {
+    return buildWithHeader(options, codec.recordHeader(CONTRACT, CONTRACT));
+}
+
 function normalizeDailyPrimaryArxivBinding(value) {
-    exact(value, ['contract', 'version', 'mapping', 'pageKey', 'pagePath', 'pageContentSha256',
+    const header = recordHeaderFor(value, CONTRACT);
+    exact(value, [...Object.keys(header), 'mapping', 'pageKey', 'pagePath', 'pageContentSha256',
         'sourceByteStart', 'sourceByteEnd', 'semanticLineSha256', 'linkLabel', 'originalUrl',
         'arxivId', 'candidateSources', 'frontmatterArxivId', 'filenameArxivId', 'bindingSha256'],
     'daily primary arXiv binding');
     const body = clone(value); delete body.bindingSha256;
     const urlMatch = String(value.originalUrl || '').match(/^https:\/\/arxiv\.org\/abs\/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?$/u);
-    if (value.contract !== CONTRACT || value.version !== VERSION || value.mapping !== MAPPING
+    if (value.mapping !== MAPPING
         || !PAGE_KEY_RE.test(String(value.pageKey || '')) || typeof value.pagePath !== 'string' || !value.pagePath
         || path.isAbsolute(value.pagePath) || value.pagePath.includes('\\')
         || value.pagePath.split('/').some(segment => !segment || segment === '.' || segment === '..')
@@ -231,13 +237,13 @@ function verifyDailyPrimaryArxivBinding({ binding, paper, blogRoot } = {}) {
         || normalized.pageContentSha256 !== paper.pageContentSha256) {
         fail('主 arXiv 绑定与冻结页面不一致');
     }
-    const replayed = buildDailyPrimaryArxivBinding({ blogRoot, page: paper });
+    const replayed = buildWithHeader({ blogRoot, page: paper }, recordHeaderFor(normalized, CONTRACT));
     if (stableHash(replayed) !== stableHash(normalized)) fail('主 arXiv 评分行的原始字节或候选来源已变化');
     return normalized;
 }
 
 module.exports = {
-    CONTRACT, VERSION, MAPPING, verifyBodyOnlyIdentityHints, verifyDailyPrimaryArxivBinding,
+    CONTRACT, MAPPING, verifyBodyOnlyIdentityHints, verifyDailyPrimaryArxivBinding,
     contract: CONTRACT, mapping: MAPPING,
     HistoricalDailyPrimaryArxivBindingError,
     build: buildDailyPrimaryArxivBinding,

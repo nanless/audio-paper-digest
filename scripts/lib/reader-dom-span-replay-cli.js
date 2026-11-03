@@ -1,5 +1,6 @@
 'use strict';
 // Publisher replay: local sealed source and actual article only, no model/network.
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 try {
     require('../env-loader').requireExternalRuntime('reader-dom-span-replay-cli.js');
@@ -23,7 +24,7 @@ try {
     if (typeof root !== 'string' || !path.isAbsolute(root) || path.basename(root) !== 'sources'
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(proof?.runId || '')
         || path.basename(path.dirname(root)) !== proof.runId || !/^\d{4}\.\d{4,5}$/.test(id)
-        || proof.contract !== 'fresh-source-analysis-v1' || proof.sourceGeneration !== 1
+        || !isFreshSourceProvenance(proof) || proof.sourceGeneration !== 1
         || proof.sourceOnly !== true || proof.oldGeneratedTextIncluded !== false
         || stable(proof) !== stable(paper.analysisManifest?.freshRewriteProvenance)) throw new Error('Sealed provenance mismatch');
     const keys = require('./fresh-analysis-context').withVerifiedBundleReaderAuthorFiles({ rootDir: root, arxivId: id,

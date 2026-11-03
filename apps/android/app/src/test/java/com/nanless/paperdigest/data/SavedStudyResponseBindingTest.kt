@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -17,7 +18,7 @@ class SavedStudyResponseBindingTest {
         fun file(suffix: String) = File(root, "ModelUsage/${record.getString("id")}-$suffix")
         fun read() = readSavedStudyInput(record, root)
     }
-    private fun fixture(android: Boolean): Fixture {
+    private fun fixture(android: Boolean,currentMac:Boolean=false): Fixture {
         val source = JSONObject().put("paperID", "fixture-paper").put("kind", "pdf-selection")
             .put("pdfSHA", "a".repeat(64)).put("pages", JSONArray(listOf(2)))
         val config = JSONObject().put("model", "synthetic-model").put("endpoint", "https://example.invalid/v1")
@@ -33,14 +34,20 @@ class SavedStudyResponseBindingTest {
             .put("messages", messages).put("source", source).put("model", config.get("model"))
             .put("endpoint", config.get("endpoint")).put("protocol", "chat").put("maxTokens", 8192)
             .put("evidence", evidence).put("responsesStream", false).put("reasoningEffort", "default")
+        val stableIdentity=ClientProtocols.record("paperdigest-mac-study-identity")
+        if(currentMac)identity.put("contract",stableIdentity.getString("contract"))
+            .put("schemaFingerprint",stableIdentity.getString("schemaFingerprint")).put("extractor","paperdigest-mac-pdf-extractor")
         val fingerprint = sha256((if (android) canonical(identity) else desktopStudyJSON(identity)).toByteArray())
         val sealed = JSONObject().put("config", config).put("messages", messages).put("source", source).put("fingerprint", fingerprint)
         if (android) sealed.put("contract", "android-study-input-v1").put("identity", identity)
+        val stableInput=ClientProtocols.record("paperdigest-mac-study-input")
+        if(currentMac)sealed.put("contract",stableInput.getString("contract")).put("schemaFingerprint",stableInput.getString("schemaFingerprint")).put("identityFormat",stableIdentity)
         val input = (if (android) canonical(sealed) else desktopStudyJSON(sealed)).toByteArray()
         val record = JSONObject().put("id", id).put("kind", "study").put("paperID", "fixture-paper")
             .put("question", "Why?").put("source", source).put("fingerprint", fingerprint).put("model", "synthetic-model")
             .put("inputSHA256", sha256(input)).put("startedAt", "2026-10-28T00:00:00Z")
             .put("status", "pending").put("requestIssued", true)
+        if(currentMac)record.put("studyInputFormat",stableInput)
         val root = Files.createTempDirectory("synthetic-study-response-").toFile()
         File(root, "ModelUsage").mkdir()
         return Fixture(root, record, input, android).also { it.file("input.json").writeBytes(input) }
@@ -61,9 +68,26 @@ class SavedStudyResponseBindingTest {
             // it does not produce a UUID-response.bin file or a responseSHA256 field.
             f.record.put("status", "complete").put("text", "Synthetic answer").put("response", "Synthetic answer")
                 .put("endedAt", "2026-10-28T00:00:01Z").put("protocol", "openai").put("finishStatus", "stop")
-            f.file("response.json").writeText(canonical(JSONObject().put("contract", "desktop-model-response-recovery-v1")
-                .put("session", f.record.copy()).put("mac", "synthetic-opaque-not-authenticated")))
+            val envelope=if(f.record.has("studyInputFormat"))ClientProtocols.record("paperdigest-mac-model-response-recovery")
+                else JSONObject().put("contract","desktop-model-response-recovery-v1")
+            f.file("response.json").writeText(canonical(envelope.put("session",f.record.copy()).put("mac","synthetic-opaque-not-authenticated")))
         }
+    }
+    @Test fun macCurrentInputAndResponseRequireTheirActualFormat() {
+        val f=fixture(android=false,currentMac=true)
+        try {
+            saveResponse(f)
+            assertNotNull(f.read()?.originalResponseBinding)
+            val original=f.file("response.json").readBytes()
+            val receipt=JSONObject(original.toString(Charsets.UTF_8))
+            receipt.remove("schemaFingerprint")
+            f.file("response.json").writeText(receipt.put("contract","desktop-model-response-recovery-v1").toString())
+            assertNull(f.read())
+            f.file("response.json").writeBytes(original)
+            f.record.getJSONObject("studyInputFormat").put("schemaFingerprint","f".repeat(64))
+            assertNull(f.read())
+            assertTrue(f.file("response.json").readBytes().contentEquals(original))
+        } finally {f.root.deleteRecursively()}
     }
     @Test fun actualAndroidAndMacSchemasBindExactOriginalReceiptWithoutSecretsOrMutation() {
         for (android in listOf(true, false)) {

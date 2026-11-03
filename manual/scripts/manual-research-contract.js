@@ -1,4 +1,6 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, assertAgentIdentity,
     boundModelPolicy } = require('./manual-agent-policy.js');
@@ -6,7 +8,7 @@ const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, assertAgent
 const { normalizedId } = require('../../scripts/utils.js');
 const { validateManualLongformBundle } = require('./manual-longform-contract.js');
 
-const MANUAL_RESEARCH_CONTRACT_VERSION = 'audio-researcher-v1';
+const MANUAL_RESEARCH_CONTRACT = historicalManualContract('manual-research-brief', 'audio-evidence');
 const MANUAL_STAGE_REVIEW_VERSION = 2;
 const REQUIRED_RESEARCH_KINDS = Object.freeze([
     'task_boundary',
@@ -28,8 +30,8 @@ const INSERTION_SECTIONS = new Set([
 ]);
 // v3 是一条需要显式选用的新记录约定。已发布的 v1/v2 记录仍然可以读，但新写的
 // 教程不能只把旧的固定小节扩写到 2,400 字就算过关。
-const TUTORIAL_CONTRACT_VERSION = 'graduate-researcher-tutorial-v1';
-const READER_FORMAT_CONTRACT_VERSION = 'graduate-researcher-tutorial-quality-v2';
+const TUTORIAL_CONTRACT_VERSION = historicalManualContract('manual-reader-tutorial', 'domain-teaching');
+const READER_FORMAT_CONTRACT_VERSION = historicalManualContract('manual-tutorial-quality', 'evidence-and-pedagogy');
 const REQUIRED_TUTORIAL_KINDS = Object.freeze([
     'problem_tension', 'related_routes', 'end_to_end_flow', 'training_reproduction',
     'experimental_protocol', 'complete_results', 'negative_boundary', 'reader_takeaway'
@@ -575,8 +577,8 @@ function validateResearchBrief(brief, options = {}) {
     const label = `${paperId || 'paper'}.researchBrief`;
     const policy = boundModelPolicy(brief, options.expectedModelPolicy, label);
     if (!brief || typeof brief !== 'object' || Array.isArray(brief)
-        || brief.version !== 1 || brief.contract !== MANUAL_RESEARCH_CONTRACT_VERSION) {
-        throw new Error(`${label} 必须是 ${MANUAL_RESEARCH_CONTRACT_VERSION} version=1 对象`);
+        || brief.version !== 1 || brief.contract !== MANUAL_RESEARCH_CONTRACT) {
+        throw new Error(`${label} 必须是 ${MANUAL_RESEARCH_CONTRACT} version=1 对象`);
     }
     if (brief.audience !== 'audio_researcher') {
         throw new Error(`${label}.audience 必须是 audio_researcher`);
@@ -1075,7 +1077,7 @@ function validateExactFactCoverage(analysis, sourceText, options = {}) {
     return { tokens: exactFactTokens(readerText), missing: [] };
 }
 
-function validateResultClaimCoverageV5(claims, options = {}) {
+function validateAttributedResultClaimCoverage(claims, options = {}) {
     const { documentType = '', evidenceProfile = {}, label = 'resultClaims' } = options;
     const items = Array.isArray(claims) ? claims : [];
     const empirical = !['综述', '理论研究'].includes(documentType);
@@ -1128,7 +1130,7 @@ function validateResultClaimCoverageV5(claims, options = {}) {
 }
 
 module.exports = {
-    MANUAL_RESEARCH_CONTRACT_VERSION,
+    MANUAL_RESEARCH_CONTRACT,
     MANUAL_STAGE_REVIEW_VERSION,
     REQUIRED_RESEARCH_KINDS,
     validatePaperSubagent,
@@ -1150,6 +1152,6 @@ module.exports = {
     validateOpenSourceEvidence,
     exactFactTokens,
     validateExactFactCoverage,
-    validateResultClaimCoverageV5,
+    validateAttributedResultClaimCoverage,
     extractSection
 };

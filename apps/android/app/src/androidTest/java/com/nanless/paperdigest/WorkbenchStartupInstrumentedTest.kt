@@ -46,7 +46,7 @@ class WorkbenchStartupInstrumentedTest {
         val context=object:ContextWrapper(target){override fun getNoBackupFilesDir()=directory}
         val research=RootResearchDirectory.resolve(directory);val personal=PersonalStore(research)
         val row=JSONObject().put("pageType","paper").put("title","Synthetic startup source").put("identityStatus","verified").put("sourceKind","arxiv").put("arxivId","2601.00001").put("permalink","posts/startup-fixture/")
-        val repository=CatalogRepository(context,personal){url,_->if(url==CatalogRepository.SITE+"index.json")JSONArray().put(row).toString().toByteArray()else error("Synthetic optional resource missing")}
+        val repository=CatalogRepository(context,personal){url,_->if(url==CatalogRepository.SITE+"client/index.json")throw PublishedHttpStatus(404) else if(url==CatalogRepository.SITE+"index.json")JSONArray().put(row).toString().toByteArray()else error("Synthetic optional resource missing")}
         runBlocking{repository.sync()}
         val file=research.resolve("PublishedLibrary/current.json");val valid=file.readBytes();val corrupt="{\"format\":broken-synthetic-catalog".toByteArray();JsonFiles.write(file,corrupt)
         val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO);val starts=AtomicInteger();var created:RootController?=null

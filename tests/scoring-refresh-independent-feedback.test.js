@@ -13,7 +13,7 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
         documentType: '方法研究',
         confidence: '高',
         evidenceProfile: {
-            version: 1,
+            ...require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader(),
             multiComponentClaimed: false,
             ablationStatus: 'not_applicable',
             targetEvaluation: 'public',
@@ -126,9 +126,9 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
         // 下游 Reader 复用仅在本控制中隔离：评分请求、来源和完整正文检查均使用真实实现。
         const engine = require('../scripts/analysis-engine');
         const author = require('../scripts/lib/reader-author-source');
-        const previousEngine = engine.hasValidApiReaderV3Records;
+        const previousEngine = engine.hasValidIntegratedApiReaderRecords;
         const previousAuthor = author.canReuseReaderAuthorInputs;
-        engine.hasValidApiReaderV3Records = () => true;
+        engine.hasValidIntegratedApiReaderRecords = () => true;
         author.canReuseReaderAuthorInputs = () => true;
         try {
             testData.paper.analysisManifest.stages.apiReaderArticle
@@ -148,9 +148,9 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
                     .withDailyFreshPaperSource(testData.plan, testData.paper,
                         source => deep.refreshApiScoringAndReaderFromSource(testData
                             .paper, source))));
-            assert.equal(result.analysisManifest.stages.scoringAudit.resourceNormalizationContract,
-                'scoring-source-release-declarations-v1');
-            assert.equal(result.analysisManifest.stages.scoringAudit.requestFormatContract, 'scoring-request-format-v1');
+            const scoringStage = result.analysisManifest.stages.scoringAudit;
+            const expectedFormats = require('../scripts/lib/scoring-record-format').currentStageFields();
+            for (const [key, value] of Object.entries(expectedFormats)) assert.equal(scoringStage[key], value);
             assert.deepEqual(result.analysisManifest.stages.scoringAudit.scoringFactReview,
                 validatedFeedback.proof);
             assert.equal(result.analysisManifest.stages.primaryAnalysis.factReview, undefined);
@@ -200,7 +200,7 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
             assert.equal(legacyAudit.stabilityResolution.status, 'not_required');
             console.log('REFRESH_SCORING_PROOF_SUCCESS_BOUND_AND_LEGACY_COMPATIBLE');
         } finally {
-            engine.hasValidApiReaderV3Records = previousEngine;
+            engine.hasValidIntegratedApiReaderRecords = previousEngine;
             author.canReuseReaderAuthorInputs = previousAuthor;
         }
     } finally {

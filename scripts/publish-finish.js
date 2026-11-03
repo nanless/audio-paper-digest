@@ -7,20 +7,8 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 
-function validateWaiver(data, { date, manifestSha, receiptCommit, visualSha, coverSha } = {}) {
-    if (!data || typeof data !== 'object') return false;
-    const oidPattern = /^[0-9a-f]{40}$/i;
-    return data.status === 'waived' && data.version === 1 && data.batchDate === date
-        && typeof data.requestedBy === 'string' && data.requestedBy.trim()
-        && typeof data.reason === 'string' && data.reason.trim().length >= 10
-        && Boolean(manifestSha) && data.generationManifestSha256 === manifestSha
-        && oidPattern.test(String(data.publicationCommit || ''))
-        && oidPattern.test(String(data.remoteVerifiedOid || ''))
-        && data.remoteVerifiedOid === data.publicationCommit
-        && Boolean(receiptCommit) && data.publicationCommit === receiptCommit
-        && Boolean(visualSha) && data.visualManifestSha256 === visualSha
-        && Boolean(coverSha) && data.coverManifestSha256 === coverSha;
-}
+const { validNoGenerationRecord: validateWaiver } = require('./lib/post-publication-policy');
+
 
 function visualManifestPath(date, currentDir = CURRENT) { return path.join(currentDir, 'visual-summary-manifests', `${date}.json`); }
 function coverManifestPath(date, currentDir = CURRENT) { return path.join(currentDir, 'digest-cover-manifests', `${date}.json`); }
@@ -53,14 +41,19 @@ function main(argv = process.argv.slice(2)) {
             if (fs.existsSync(webArtifact)) {
                 try {
                     const web = JSON.parse(fs.readFileSync(webArtifact, 'utf8'));
-                    webOk = web.partial !== true && web.deploy && web.deploy.status === 'completed' && web.deploy.conclusion === 'success';
+                    webOk = require('./verify-web').hasVerificationArtifactFormat(web)
+                        && web.date === date && web.publicationOid === receiptCommit
+                        && web.generationManifestSha256 === manifestSha && web.partial === false
+                        && web.deploy?.status === 'completed' && web.deploy.conclusion === 'success';
                 } catch (_) { webOk = false; }
             }
             const visualSha = shaOf(visualManifestPath(date));
             const coverSha = shaOf(coverManifestPath(date));
-            const valid = validateWaiver(data, { date, manifestSha, receiptCommit, visualSha, coverSha });
+            const valid = validateWaiver(data, { date, manifestSha, receiptCommit, receiptSha: shaOf(receiptFile),
+                publicationPolicy: manifestExists ? JSON.parse(fs.readFileSync(manifestFile, 'utf8')).postPublicationPolicy : null,
+                postPublishVisuals: receipt?.postPublishVisuals, remoteVerifiedOid: receipt?.remoteVerifiedOid, visualSha, coverSha });
             if (valid) {
-                console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；不要执行视觉:prepare 或生图。`);
+                console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；无需再创建长图或封面任务。`);
                 if (!webOk) console.log('   注意：web-verification artifact 缺失或未证明部署成功，最终验收仍需 verify:web --deploy。');
             } else {
                 console.log(`3) 视觉：豁免文件存在但与当前批次不匹配（${waiver}）；请核对 status/batchDate/清单 SHA/发布 OID/审查凭证，不要直接跳过。`);
@@ -71,7 +64,7 @@ function main(argv = process.argv.slice(2)) {
             return 1;
         }
     } else {
-        console.log('3) 日更默认不生图：若发布任务记录缺失，先 npm run visual:post-publish -- --date ' + date + '；成功后 npm run digest:waive-visuals -- --date ' + date + ' --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"。');
+        console.log('3) 日更默认不生图：运行 npm run digest:waive-visuals -- --date ' + date + ' --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"。');
         if (fs.existsSync(visualManifest)) console.log(`   已有视觉清单：${visualManifest}`);
     }
     console.log('4) 完成后重新运行 digest:status，并以部署/网页核验结果作为最终验收。');

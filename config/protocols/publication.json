@@ -1,0 +1,264 @@
+{
+  "protocols": [
+    {
+      "name": "llm-api-production-publication",
+      "currentVariant": "per-member-complete-format-sets",
+      "currentSchema": {
+        "members": [
+          "paperId",
+          "article-plan-figures-authors-sha256",
+          "analysis-source-scoring-sha256",
+          "finalScore",
+          "model",
+          "protocol"
+        ],
+        "formatSets": [
+          "readerFormats",
+          "sourceBindingFormats",
+          "authorIdentityFormats",
+          "resourceIdentityFormats",
+          "scoringFormats",
+          "coreSummaryFormats"
+        ],
+        "formatIdentity": "exact-member-header-with-actual-fingerprint-when-present",
+        "bindingFingerprint": "original-python-float-json-sha256",
+        "authority": "fully-validated-source-analysis-reader-scoring-only"
+      },
+      "historical": [
+        {
+          "tag": "llm-api-production-publication-v1",
+          "variant": "uniform-original-declarations"
+        }
+      ]
+    },
+    {
+      "name": "blog-generation",
+      "currentVariant": "source-bound-snapshot",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "inputFingerprint",
+          "publishedPapers",
+          "publishedPapersFingerprint",
+          "files"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "file-list",
+          "header": {
+            "schemaVersion": 1
+          }
+        },
+        {
+          "tag": 2,
+          "variant": "file-hashes",
+          "header": {
+            "schemaVersion": 2
+          }
+        },
+        {
+          "tag": 3,
+          "variant": "source-bound-snapshot",
+          "header": {
+            "schemaVersion": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "blog-generation-file-list",
+      "currentVariant": "file-list",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "files",
+          "date"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": []
+    },
+    {
+      "name": "blog-review-receipt",
+      "currentVariant": "strict-page-and-asset-review",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "generationManifestSha256",
+          "baseHead",
+          "hugoGate",
+          "files"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": [
+        {
+          "tag": 3,
+          "variant": "strict-page-and-asset-review",
+          "header": {
+            "schemaVersion": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "blog-generation-journal",
+      "currentVariant": "baseline-bound-rollback",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "baseHead",
+          "inputFingerprint",
+          "templateFingerprint",
+          "papers"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "baseline-bound-rollback",
+          "header": {
+            "schemaVersion": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "blog-review-checkpoint",
+      "currentVariant": "one-page-review",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "path",
+          "sha256",
+          "generationManifestSha256",
+          "result"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "one-page-review",
+          "header": {
+            "schemaVersion": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "blog-review-pass-cache",
+      "currentVariant": "same-page-bytes",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "files",
+          "date"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "same-page-bytes",
+          "header": {
+            "schemaVersion": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "blog-review-failures",
+      "currentVariant": "typed-page-outcomes",
+      "currentSchema": {
+        "requiredRecordFields": [
+          "files",
+          "issues",
+          "generationManifestSha256"
+        ],
+        "authority": "existing-content-source-and-git-validation-required"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "untyped-outcomes",
+          "header": {
+            "schemaVersion": 1
+          }
+        },
+        {
+          "tag": 2,
+          "variant": "typed-page-outcomes",
+          "header": {
+            "schemaVersion": 2
+          }
+        },
+        {
+          "tag": 3,
+          "variant": "typed-page-outcomes",
+          "header": {
+            "schemaVersion": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "published-papers-fingerprint",
+      "currentVariant": "typed-float-and-utf16-json",
+      "currentSchema": {
+        "numbers": "ieee754-binary64-hex",
+        "strings": "utf16-units",
+        "keys": "utf16-lexical",
+        "output": "sha256-of-typed-json",
+        "nullAndBool": "distinct-type-markers"
+      },
+      "historical": [
+        {
+          "tag": "typed-json-f64-utf16-v1",
+          "variant": "typed-float-and-utf16-json"
+        }
+      ]
+    },
+    {
+      "name": "blog-review-request-checkpoint",
+      "currentVariant": "exact-request-result",
+      "currentSchema": {
+        "fields": [
+          "kind",
+          "reviewProtocolFingerprint",
+          "inputSha256",
+          "passed",
+          "issues",
+          "resultSha256"
+        ],
+        "authority": "checks-apply-only-to-the-exact-input"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "exact-request-result",
+          "header": {
+            "schemaVersion": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "publication-image-exclusions",
+      "currentVariant": "exact-paper-and-url",
+      "currentSchema": {
+        "fields": [
+          "exclusions"
+        ],
+        "authority": "checks-apply-only-to-the-exact-input"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "exact-paper-and-url",
+          "header": {
+            "schemaVersion": 1
+          }
+        }
+      ]
+    }
+  ]
+}

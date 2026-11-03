@@ -7,6 +7,7 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { requireExternalRuntime } = require('./env-loader');
 const Config = require('./config');
+const tagCatalogApi = require('./lib/tag-catalog.js');
 
 const PREVIEW_FORMAT = Object.freeze({
     bundle: 'paper-tag-preview-bundle-v2', index: 'paper-tag-preview-v2',
@@ -88,7 +89,7 @@ function readPreviewBundle(indexPath, tagCatalog) {
         throw new Error('预览索引、报告和标签处理方式的格式版本不一致。');
     }
     for (const value of [manifest, snapshot, report]) {
-        if (previewCatalogVersion(value, format) !== tagCatalog.version
+        if (previewCatalogVersion(value, format) !== tagCatalogApi.tagCatalogIdentity(tagCatalog)
             || value.registrySha256 !== tagCatalog.registrySha256) {
             throw new Error('预览绑定的词表版本或 SHA 已变化，请重新运行 npm run tags:preview。');
         }
@@ -145,7 +146,7 @@ function main(argv = process.argv.slice(2)) {
     const { loadTagCatalog } = require('./lib/tag-catalog');
     const tagCatalog = loadTagCatalog(Config.FILES.tagCatalogFile);
     if (options.command === 'validate') {
-        console.log(JSON.stringify({ status: 'valid', version: tagCatalog.version,
+        console.log(JSON.stringify({ status: 'valid', version: tagCatalogApi.tagCatalogIdentity(tagCatalog),
             concepts: tagCatalog.concepts.length, facets: tagCatalog.facets.length, registrySha256: tagCatalog.registrySha256 }));
         return;
     }

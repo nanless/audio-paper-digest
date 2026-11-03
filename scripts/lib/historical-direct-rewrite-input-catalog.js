@@ -1,6 +1,6 @@
 'use strict';
 
-// 为历史直改构建 scoped v5 目录。输入是一份已批准的本地内容清单（会议 PDF 和元数据）
+// 为历史直改构建有明确范围的本地输入目录。输入是一份已批准的会议 PDF 和元数据清单
 // 加上冻结的清单。arXiv 条目来自冻结的单条 hint，以及为冲突或多日更页面保存的
 // primary score-row 绑定；它们有意没有保留的本地写作输入，因为每次运行都必须抓取
 // 并保存全新的官方文本和 PDF，之后才能分析。
@@ -14,9 +14,10 @@ const conferencePageMappingsApi = require('./historical-conference-page-projecti
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
 const alternatePdfApi = require('./historical-icml-alternate-pdf-source.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'merged-good-historical-local-data-v5';
-const VERSION = 5;
+const CONTRACT = codec.contract('historical-direct-local-input-catalog');
 const SCOPE = 'historical-corresponding-local-sources-only';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
@@ -25,7 +26,7 @@ const SAFE_NAME_RE = /^(?!current\.json$)[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 const BLOCKED_CROSS_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const AUTHORIZED_PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
-const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
+const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = codec.contract('historical-author-prior-preprint-disclosure');
 
 class HistoricalDirectRewriteInputCatalogError extends Error {
     constructor(message) {
@@ -36,6 +37,10 @@ class HistoricalDirectRewriteInputCatalogError extends Error {
 }
 
 const fail = message => { throw new HistoricalDirectRewriteInputCatalogError(message); };
+function recordHeaderFor(value, family) {
+    try { return readRecordHeader(value, family); }
+    catch (error) { fail(`格式声明不符合要求：${error.message}`); }
+}
 const plain = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -76,10 +81,14 @@ const directEligibleConferenceSource = (source, paperId = null) => source?.pdf?.
         || authorizedPriorPreprintProfile(source, paperId) !== null);
 
 function priorPreprintSourceDisclosure(source, paperId) {
+    return buildPriorPreprintSourceDisclosure(source, paperId,
+        codec.recordHeader(PRIOR_PREPRINT_DISCLOSURE_CONTRACT, 'historical-author-prior-preprint-disclosure'));
+}
+function buildPriorPreprintSourceDisclosure(source, paperId, header) {
     if (source?.pdf?.acquisition?.versionRelation !== BLOCKED_CROSS_VERSION_RELATION) return null;
     const profile = authorizedPriorPreprintProfile(source, paperId);
     if (!profile) fail('跨版本预印本不是经过代码评审的例外');
-    const body = { contract: PRIOR_PREPRINT_DISCLOSURE_CONTRACT, version: 1, paperId,
+    const body = { ...header, paperId,
         icmlTitle: profile.title, preprintTitle: profile.sourceTitle, doi: profile.sourceDoi,
         versionRelation: profile.versionRelation, sourceKind: profile.sourceKind,
         receiptSelfSha256: source.pdf.acquisition.receipt.selfSha256,
@@ -87,6 +96,12 @@ function priorPreprintSourceDisclosure(source, paperId) {
         openreviewResponseBytes: false,
         statement: 'This input is an author prior preprint with a different title; it is neither the ICML camera-ready paper nor OpenReview response bytes.' };
     return { ...body, disclosureSha256: stableHash(body) };
+}
+function replayPriorPreprintSourceDisclosure(source, paperId, value) {
+    const header = recordHeaderFor(value, 'historical-author-prior-preprint-disclosure');
+    const expected = buildPriorPreprintSourceDisclosure(source, paperId, header);
+    if (!expected || stableHash(expected) !== stableHash(value)) fail('先前预印本披露无法按原来源和原格式重放');
+    return expected;
 }
 
 function exact(value, fields, label) {
@@ -291,7 +306,7 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
         conferencePapers: conferenceEntries.length, canonicalRecords: entries.length,
         sourceRecords: conferenceEntries.length,
         conferenceSourceSets: Object.fromEntries(Object.entries(sourceSets).sort(([left], [right]) => left.localeCompare(right))) };
-    return { contract: CONTRACT, version: VERSION, scope: SCOPE,
+    return { ...codec.recordHeader(CONTRACT, 'historical-direct-local-input-catalog'), scope: SCOPE,
         scopeBinding: { inventoryPath: inventory.filename, inventorySha256: inventory.fileSha256,
             inventoryLedgerSha256: normalizedInventory.ledgerSha256, inventoryPageSetSha256: normalizedInventory.pageSetSha256,
             arxivPageCount: arxiv.pageCount, singleArxivPageCount: arxiv.singlePageCount,
@@ -309,14 +324,15 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
 }
 
 function normalizeCatalog(value) {
-    if (!plain(value) || value.contract !== CONTRACT || value.version !== VERSION || value.scope !== SCOPE
+    const header = recordHeaderFor(value, 'historical-direct-local-input-catalog');
+    if (!plain(value) || value.scope !== SCOPE
         || !plain(value.scopeBinding) || !Array.isArray(value.inputs) || !plain(value.summary) || !Array.isArray(value.entries)) {
-        fail('限域 v5 直接重写目录的契约非法');
+        fail('范围受限的直接重写目录格式无效');
     }
-    exact(value, ['contract', 'version', 'scope', 'scopeBinding', 'inputs', 'summary', 'dailyPrimaryArxivBindings',
+    exact(value, [...Object.keys(header), 'scope', 'scopeBinding', 'inputs', 'summary', 'dailyPrimaryArxivBindings',
         'dailyPrimaryArxivBindingSetSha256', 'dailyIcmlPosterBindings', 'dailyIcmlPosterBindingSetSha256',
         'dailyIcmlPosterRoutableBindings', 'dailyIcmlPosterRoutableBindingSetSha256',
-        'icmlPosterAuthoritySha256', 'entries'], 'scoped v5 direct rewrite catalog');
+        'icmlPosterAuthoritySha256', 'entries'], 'scoped direct rewrite catalog');
     exact(value.scopeBinding, ['inventoryPath', 'inventorySha256', 'inventoryLedgerSha256', 'inventoryPageSetSha256',
         'arxivPageCount', 'singleArxivPageCount', 'dailyPrimaryArxivBindingCount', 'dailyIcmlPosterBindingCount',
         'dailyIcmlPosterRoutableBindingCount', 'conferencePageCount'], 'catalog scope binding');
@@ -435,7 +451,7 @@ function normalizeCatalog(value) {
         || value.scopeBinding.arxivPageCount !== value.scopeBinding.singleArxivPageCount + dailyPrimaryArxivBindings.length) {
         fail('目录的 scope 计数发生变化');
     }
-    return { contract: CONTRACT, version: VERSION, scope: SCOPE, scopeBinding: clone(value.scopeBinding),
+    return { ...header, scope: SCOPE, scopeBinding: clone(value.scopeBinding),
         inputs: [clone(value.inputs[0])], summary: expectedSummary, dailyPrimaryArxivBindings,
         dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256,
         dailyIcmlPosterBindings, dailyIcmlPosterBindingSetSha256: value.dailyIcmlPosterBindingSetSha256,
@@ -482,8 +498,8 @@ function writeCurrentCatalogPointer({ catalogRoot, catalogName, fileSha256 } = {
     if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)) {
         fail('current catalog pointer target is unsafe');
     }
-    const pointer = { contract: 'direct-local-input-catalog-pointer-v1', version: 1,
-        activeCatalog: catalogName, sha256: fileSha256, scope: 'historical-direct-local-first-v5' };
+    const pointer = codec.record('direct-local-input-catalog-pointer', {
+        activeCatalog: catalogName, sha256: fileSha256, scope: 'historical-direct-local-first' });
     const bytes = prettyBytes(pointer);
     const temporary = path.join(root, `.current.json.${crypto.randomUUID()}.tmp`);
     let fd;
@@ -522,9 +538,9 @@ function buildAndWrite(options, overrides = {}) {
     return { ...result, status: written.status, filename: written.filename, currentCatalogPointer: current.filename };
 }
 
-module.exports = { CONTRACT, VERSION, SCOPE, SAFE_NAME_RE, BLOCKED_CROSS_VERSION_RELATION,
+module.exports = { CONTRACT, SCOPE, SAFE_NAME_RE, BLOCKED_CROSS_VERSION_RELATION,
     AUTHORIZED_PRIOR_PREPRINT_PAPER_ID, PRIOR_PREPRINT_DISCLOSURE_CONTRACT,
     HistoricalDirectRewriteInputCatalogError, stableHash, prettyBytes, directEligibleConferenceSource,
-    priorPreprintSourceDisclosure,
+    priorPreprintSourceDisclosure, replayPriorPreprintSourceDisclosure,
     dailyPrimaryArxivBindingsFromFrozenInventory, dailyIcmlPosterEntries, arxivEntriesFromFrozenInventory, scopeConferenceEntries,
     buildScopedCatalog, normalizeCatalog, writeCatalog, writeCurrentCatalogPointer, buildAndWrite };

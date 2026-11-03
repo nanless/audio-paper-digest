@@ -5,8 +5,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
-const { CURRENT_PROMPT_FILES } = require('./prompt-text-versions');
+const { readRegularBytes, readGitBlob } = require('./git-file-bytes');
+const { CURRENT_PROMPT_FILES } = require('./prompt-contracts');
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const LIMIT = 8 * 1024 * 1024;
 const SHA = /^[a-f0-9]{64}$/;
@@ -23,20 +23,7 @@ function controlledPath(relative) {
     return relative;
 }
 function readPlain(filename) {
-    if (fs.realpathSync(filename) !== filename) throw new Error('Prompt evidence forbids symlink paths');
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    try {
-        const before = fs.fstatSync(fd);
-        if (!before.isFile() || before.nlink !== 1 || before.size > LIMIT) throw new Error('Prompt evidence requires a bounded single-link regular file');
-        const bytes = fs.readFileSync(fd);
-        const after = fs.fstatSync(fd);
-        const named = fs.lstatSync(filename);
-        if (['dev', 'ino', 'size', 'nlink', 'mtimeMs', 'ctimeMs'].some(key => before[key] !== after[key])
-            || named.dev !== after.dev || named.ino !== after.ino || named.isSymbolicLink()
-            || fs.realpathSync(filename) !== filename
-            || bytes.length !== before.size) throw new Error('Prompt evidence changed during reading');
-        return bytes;
-    } finally { fs.closeSync(fd); }
+    return readRegularBytes(filename);
 }
 function loadIndex(root) {
     const filename = path.join(root, 'scripts/lib/git-prompt-evidence-index.json');
@@ -49,7 +36,9 @@ function loadIndex(root) {
     const { strictJson } = require('./publication-file-primitives');
     const bytes = readPlain(filename);
     const index = strictJson(bytes, 'Git Prompt evidence index');
-    if (index?.contract !== 'git-prompt-evidence-v1' || index.version !== 1
+    const protocol = require('./protocol-codec.js');
+    const validHeader = protocol.hasValidHeader(index, 'git-prompt-evidence');
+    if (!validHeader
         || !OID.test(index.provenanceCommit || '') || !index.retiredPaths || !index.blobs
         || Array.isArray(index.retiredPaths) || Array.isArray(index.blobs)) throw new Error('Invalid Git Prompt evidence index');
     for (const [relative, sha] of Object.entries(index.retiredPaths)) {
@@ -70,19 +59,7 @@ function promptEvidenceIndexFingerprint({ root = PROJECT_ROOT } = {}) {
     return indexCache.get(path.join(base, 'scripts/lib/git-prompt-evidence-index.json')).sha256;
 }
 function readBlob(root, blob, sha) {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-    Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1',
-        GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' });
-    let bytes;
-    try {
-        bytes = execFileSync('git', ['--no-lazy-fetch', '--no-replace-objects', '-C', root,
-            'cat-file', 'blob', blob.blobOid], { env, timeout: 10000, maxBuffer: LIMIT,
-            stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch (_error) {
-        throw new Error('Retired Prompt Git object is unavailable; restore repository history before validating old records');
-    }
-    if (sha256(bytes) !== sha) throw new Error('Retired Prompt Git bytes do not match the original SHA256');
-    return bytes;
+    return readGitBlob(root, blob.blobOid, sha);
 }
 function historicalPromptEvidenceBytesForSha256(sha, { root = PROJECT_ROOT, relativePath = null } = {}) {
     if (!SHA.test(String(sha || ''))) return null;
@@ -114,6 +91,20 @@ function readPromptEvidenceBytes(relativePath, { expectedSha256 = null, root = P
     if (expectedSha256 !== null && sha256(bytes) !== expectedSha256) throw new Error('Prompt bytes do not match the declared SHA256');
     return bytes;
 }
+// Explicit original-byte evidence for an already bound request. This does not
+// select a writing scope or authorize retries. Current files must remain safe;
+// their changed contents cannot replace a declared original Git blob.
+function readDeclaredPromptEvidenceBytes(relativePath, expectedSha256, { root = PROJECT_ROOT } = {}) {
+    const relative = controlledPath(relativePath), base = fs.realpathSync(root);
+    if (typeof expectedSha256 !== 'string' || !SHA.test(expectedSha256)) throw new Error('Invalid original Prompt SHA256');
+    if (CURRENT_PROMPT_FILES.includes(relative)) {
+        const current = readPlain(path.join(base, relative));
+        if (sha256(current) === expectedSha256) return current;
+    }
+    const bytes = historicalPromptEvidenceBytesForSha256(expectedSha256, { root: base, relativePath: relative });
+    if (!bytes) throw new Error('Original Prompt path/SHA256 is not registered');
+    return bytes;
+}
 
 // Evidence lookup only: this neither installs a Prompt declaration nor changes
 // current writing. Authenticated paid-replay scopes still own that authority.
@@ -137,17 +128,20 @@ function declaredPromptTemplateEvidence(relativePath, templateSha256, { root = P
     return { path: relative, fileSha256, templateSha256, bytes };
 }
 function declaredStagePromptTemplateEvidence(stage, templateSha256, options = {}) {
-    const versions = require('./prompt-text-versions'), matches = [];
-    for (const [name, contract] of Object.entries(versions)) {
-        if (!/^ANALYSIS_PROMPT_TEXT_V\d+_CONTRACT$/u.test(name)) continue;
+    const versions = require('./prompt-contracts'), matches = [];
+    for (const contract of require('./prompt-legacy-codec').legacyDeclarations(stage)) {
         let relative; try { relative = versions.promptFilePathForContract(stage, contract); } catch { continue; }
         const evidence = declaredPromptTemplateEvidence(relative, templateSha256, options);
         if (evidence) matches.push({ ...evidence, contract });
     }
     if (matches.length > 1) throw new Error('Declared Prompt stage/template identity is ambiguous');
-    return matches[0] || null;
+    if (matches.length) return matches[0];
+    let current;
+    try { current = versions.currentTextStagePromptPath(stage); } catch { return null; }
+    const evidence = declaredPromptTemplateEvidence(current, templateSha256, options);
+    return evidence ? { ...evidence, contract: versions.CURRENT_PROMPT_CONTRACT } : null;
 }
 
-module.exports = { readPromptEvidenceBytes, historicalPromptEvidenceBytesForSha256,
+module.exports = { readPromptEvidenceBytes, readDeclaredPromptEvidenceBytes, historicalPromptEvidenceBytesForSha256,
     listHistoricalPromptEvidence, promptEvidenceIndexFingerprint,
     declaredPromptTemplateEvidence, declaredStagePromptTemplateEvidence };

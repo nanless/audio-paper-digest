@@ -12,6 +12,9 @@ const publication = require('../scripts/lib/conference-reader-publication-eviden
 const context = require('../scripts/lib/conference-analysis-context');
 const deep = require('../scripts/deep-analyzer');
 const Config = require('../scripts/config');
+const readerProtocols = require('../scripts/lib/reader-stage-protocols');
+const readerContentMode = require('../scripts/lib/reader-content-mode');
+const codec = require('../scripts/lib/protocol-codec');
 const markdown = '| Method | EDT (s) | C50 (dB) |\n|---|---|---|\n|Alpha|0.10|3.2|\n|Beta|0.20|4.3|';
 const executionId = '33333333-3333-4333-8333-333333333333';
 
@@ -48,13 +51,15 @@ function fixture(t) {
         [{tableIndex:1,sourceType:'source_quotes',sourceTableOrdinal:null,cellBindings:[],sourceQuotes:quotes}],[],
         {sourceText:details.text,structuredArtifacts:details.structuredArtifacts}));
     assert.ok(bound.tableBindings[0].authenticatedPdfTableEvidence);
-    const plan = {readerTitle:'Literal source table',oneSentenceThesis:'Evaluate literal source evidence.',sections:[],conceptBridges:[],
-        sourceBindingsContract:'api-reader-source-bindings-v4',tableBindings:bound.tableBindings,formulaBindings:[],sourceBindingsSha256:bound.sourceBindingsSha256};
+    const bindingHeader = readerProtocols.header('sourceBindings');
+    const plan = {...readerProtocols.header('article'),readerTitle:'Literal source table',oneSentenceThesis:'Evaluate literal source evidence.',sections:[],conceptBridges:[],
+        sourceBindingsContract:bindingHeader.contract,sourceBindingsSchemaFingerprint:bindingHeader.schemaFingerprint,
+        tableBindings:bound.tableBindings,formulaBindings:[],sourceBindingsSha256:bound.sourceBindingsSha256};
     const resourcesBody = {contract:'api-reader-resource-identity-v1',sourceTextSha256:sha(details.text),resources:[]};
     const paper = {...loaded.analysis.papers[0],sourceSha256:sha(details.text),apiReaderArticle:bound.article,apiReaderPlan:plan,
         apiReaderPlanSha256:deep.stableFingerprint(plan),apiReaderResources:{...resourcesBody,identitySha256:deep.stableFingerprint(resourcesBody)},
-        analysisManifest:{contracts:{apiReaderSourceBindings:'api-reader-source-bindings-v4'},sourceAcquisition:{sourceSha256:sha(details.text),
-            structuredArtifactsSha256:details.structuredArtifacts.payloadSha256},stages:{apiReaderArticle:{sourceBindingsContractVersion:'api-reader-source-bindings-v4',
+        analysisManifest:{contracts:{apiReaderArticle:plan.contract,apiReaderSourceBindings:bindingHeader.contract},sourceAcquisition:{sourceSha256:sha(details.text),
+            structuredArtifactsSha256:details.structuredArtifacts.payloadSha256},stages:{apiReaderArticle:{...readerProtocols.stageFields(plan),...readerContentMode.fields('source-only'),
             sourceBindingsSha256:bound.sourceBindingsSha256,sourceBindingsSourceTextSha256:sha(details.text),
             structuredArtifactsSha256:details.structuredArtifacts.payloadSha256,tableBindingCount:1,formulaBindingCount:0}}}};
     const analysis = {...loaded.analysis,status:'complete',completedAt:f.stamp,papers:[paper]};
@@ -67,6 +72,7 @@ function fixture(t) {
 
 test('正常签发的新PDF字段经真实canonical和原计划冷核，再由共享只读worker交给Python核单位', t => {
     const f = fixture(t), proof = f.paper.apiReaderPlan.tableBindings[0].authenticatedPdfTableEvidence;
+    assert.ok(codec.isCurrentHeader(proof.sourceIdentity,'conference-reader-pdf-source'));
     const original = fs.readFileSync(path.join(f.loaded.directory,'analysis.json'));
     const handle = publication.replayCanonicalReaderPdfSource(f.paper,proof.sourceIdentity);
     assert.equal(pdfApi.withVerifiedSource(handle,()=>pdfApi.withSavedPaper(f.paper,()=>true)),true);
@@ -84,9 +90,10 @@ test('正常签发的新PDF字段经真实canonical和原计划冷核，再由�
     const python = `import json,sys\nsys.path.insert(0,'scripts')\nimport importlib.util\ns=importlib.util.spec_from_file_location('publisher','scripts/publish-to-blog.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)\nx=json.load(open(sys.argv[1]));assert p._validate_api_reader_source_bindings(x['paper'],publication_table_evidence=x['evidence'])['tableCount']==1\nprint('python-cold-unit-bridge-ok')`;
     assert.match(child.execFileSync('bash',['scripts/python-runtime.sh','-c',python,payload],{cwd:path.resolve(__dirname,'..')}).toString(),/python-cold-unit-bridge-ok/);
     assert.deepEqual(fs.readFileSync(path.join(f.loaded.directory,'analysis.json')),original);
-    for (const change of ['executionId','pdfSha','table','article']) {
+    for (const change of ['executionId','schemaFingerprint','pdfSha','table','article']) {
         const bad = structuredClone(f.paper), identity=bad.apiReaderPlan.tableBindings[0].authenticatedPdfTableEvidence.sourceIdentity;
         if(change==='executionId')identity.executionId='44444444-4444-4444-8444-444444444444';
+        else if(change==='schemaFingerprint')identity.schemaFingerprint='0'.repeat(64);
         else if(change==='pdfSha')identity.sourceSnapshotBinding.sourceBinding.pdfSha256='0'.repeat(64);
         else if(change==='table')bad.apiReaderPlan.tableBindings[0].renderedTableSha256='0'.repeat(64);
         else bad.apiReaderArticle+='\nchanged';

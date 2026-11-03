@@ -6,7 +6,7 @@
 // 更新后的阶段记录必须通过 analysis-contract 核验，才能返回可写入的分析记录。
 // 无法继续时返回原有 blocked 结果，并按具体原因标明是否需要人工或模型重新核对。
 
-const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./tag-stage-record.js');
+const { TAG_STAGE_RECORD_CONTRACT, tagStageRecordDeclaration, isTagStageRecordDeclaration, readTagStageRecord } = require('./tag-stage-record.js');
 const registryChange = require('./tag-catalog-change.js');
 const { isSupportedTagSelectionContract } = require('./tag-rules.js');
 
@@ -114,8 +114,9 @@ function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', sn
     if (mode === 'reproject') {
         const originalStageBindingFields = Object.fromEntries(tagRecord.bindingFields.map(field => [field, tagStage[field]]));
         const expectedStageRecordContract = tagRecord.format === 'current'
-            ? TAG_STAGE_RECORD_CONTRACT : tagStage.selectionContract;
-        if (!isSupportedTagSelectionContract(tagStage.selectionContract)
+            ? paper.analysisManifest?.contracts?.[tagRecord.contractKey] : tagStage.selectionContract;
+        if ((tagRecord.format === 'current' && !isTagStageRecordDeclaration(expectedStageRecordContract))
+            || !isSupportedTagSelectionContract(tagStage.selectionContract)
             || tagStage.bindingSha256 !== contractApi.manualSha256(originalStageBindingFields)
             || paper.analysisManifest?.contracts?.[tagRecord.contractKey] !== expectedStageRecordContract) {
             return { ok: false, analysis: null, item: stageResult({ ...updateResultFields,
@@ -228,7 +229,7 @@ function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', sn
     if (mode === 'reproject') {
         updatedPaper.analysisManifest.contracts = Object.fromEntries(
             Object.entries(paper.analysisManifest.contracts).map(([key, value]) =>
-                key === tagRecord.contractKey ? ['tagSelectionRecord', TAG_STAGE_RECORD_CONTRACT] : [key, value]));
+                key === tagRecord.contractKey ? ['tagSelectionRecord', tagStageRecordDeclaration()] : [key, value]));
         updatedPaper.analysisStageCheckpoints = Object.fromEntries(
             Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
                 key === tagRecord.checkpointKey ? ['tagSelection', value] : [key, value]));

@@ -180,6 +180,11 @@ class Codec:
         return self.has_valid_header(value, name, tag_field) and value[tag_field] == name \
             and value['schemaFingerprint'] == self.schema_fingerprint(name)
 
+    def registered_headers(self, name):
+        # Metadata only; never supplies an authenticated source or saved run.
+        entry = self._entry(name)
+        return [json.loads(value['header']) for value in (entry['current'], *entry['history'])]
+
     def record(self, name, fields=None):
         fields = {} if fields is None else fields
         if type(fields) is not dict or RESERVED.intersection(fields):
@@ -200,6 +205,16 @@ def catalog_paths(directory=DIRECTORY):
             raise ValueError('协议目录要求有界普通文件')
         result.append(filename)
     return result
+
+
+def server_catalog_paths(directory=DIRECTORY):
+    """Publication/scientific dependencies exclude schemas used only inside native apps.
+
+    Public client formats stay in clients.json; shared server tag formats stay in
+    tags.json. A server consumer must move any newly shared format out of the
+    native-only clients-* namespace before using it.
+    """
+    return [path for path in catalog_paths(directory) if not path.name.startswith('clients-')]
 
 
 def read_catalogs(directory=DIRECTORY):
@@ -238,3 +253,5 @@ def record_header(raw, name, *selectors): return _codec().record_header(raw, nam
 def has_valid_header(value, name, tag_field='contract'): return _codec().has_valid_header(value, name, tag_field)
 def is_current_header(value, name, tag_field='contract'): return _codec().is_current_header(value, name, tag_field)
 def record(name, fields=None): return _codec().record(name, fields)
+
+def registered_headers(name): return _codec().registered_headers(name)

@@ -143,9 +143,8 @@ describe('Manual v5 fresh-authoring-v1 文件约定', () => {
         const f = fixture();
         context.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
         const contractPath = f.files.editorialContractPath;
-        const contractBytes = fs.readFileSync(path.resolve(
-            __dirname, '..', 'docs', 'editorial-reference-contract.md'
-        ));
+        const contractBytes = require('../../scripts/lib/original-file-evidence')
+            .readOriginalFileBytes('manual/docs/editorial-reference-contract.md');
         fs.writeFileSync(contractPath, contractBytes);
         const input = f.receipt.inputs.find(item => item.kind === 'editorial_contract');
         input.sha256 = sha256(contractBytes);

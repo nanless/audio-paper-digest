@@ -1,5 +1,6 @@
 'use strict';
 // Bare numeric units require source-bound original DOM columns and unique paths.
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const savedScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const { normalizeReaderSourceDisplayArtifacts: display } = require('./reader-source-display');
 const text = value => display(String(value ?? '')).normalize('NFKC').replace(/[*_`]/g,'').replace(/\s+/g,' ').trim();
@@ -377,7 +378,7 @@ function coverage(rendered, quotes) {
             || (context.sourceText !== undefined && !context.sourceText.includes(quote))) return [];
         return [quote];
     });
-    const pdf = (quotes || []).filter(item => item?.contract === 'reader-sealed-pdf-quotes-v1');
+    const pdf = (quotes || []).filter(require('./reader-sealed-pdf-quote-evidence').isQuote);
     let grouped = [];
     const hasVectorGrid = context.artifacts.tables.some(table => table?.matrix?.[0]?.[0] === ''
         && /^\(/u.test(String(table?.matrix?.[2]?.[0] || '').trim()));
@@ -408,12 +409,12 @@ function withSavedPaper(paper, callback) {
             .some(issue => /^(?:%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)$/.test(issue.unit)));
     if (!possible) return callback();
     const fresh = require('./fresh-analysis-context'), provenance = paper.freshRewriteProvenance;
-    if (provenance?.contract !== 'fresh-source-analysis-v1' || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) return callback();
+    if (!isFreshSourceProvenance(provenance) || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) return callback();
     const runDir = require('node:path').join(require('../config').FILES.dailyFreshSourceRunsDir,provenance.runId);
     const runFile = require('node:path').join(runDir,'run.json');
     if (!require('node:fs').existsSync(runFile)) return callback();
     const run = require('./reader-proof-read-scope').readReaderProofJson(runFile).value;
-    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT || run.runId !== provenance.runId) return callback();
+    if (!fresh.isDailySourceRun(run) || run.runId !== provenance.runId) return callback();
     if (!require('node:util').isDeepStrictEqual(provenance,paper.analysisManifest?.freshRewriteProvenance)) throw new Error('DOM column saved provenance differs');
     const source = fresh.readFreshSource(runDir,paper,{runId:run.runId,sourceExpectations:run.sourceExpectations});
     const d=source.freshSourceDescriptor, acquisition=paper.analysisManifest?.sourceAcquisition, stage=paper.analysisManifest?.stages?.apiReaderArticle;

@@ -55,7 +55,7 @@ function analysisRecord(options = {}) {
     const projectionSha256 = options.projectionSha256 ?? current.projectionSha256;
     const priorCatalog = registrySha256 !== current.registrySha256
         ? registryChange.resolveRegistrySnapshot(registrySha256) : null;
-    const registryVersion = options.registryVersion ?? priorCatalog?.version ?? current.registryVersion;
+    const registryVersion = options.registryVersion ?? (priorCatalog ? tagCatalogApi.tagCatalogIdentity(priorCatalog) : current.registryVersion);
     const binding = {
         registryVersion,
         registrySha256,

@@ -1,9 +1,14 @@
 'use strict';
 
-const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection-v2';
-const READER_TABLE_ELIGIBILITY_CONTRACT = 'reader-table-eligibility-v1';
-const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage-v1';
-const READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT = 'reader-complete-table-eligibility-v1';
+const codec = require('./protocol-codec');
+const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection';
+const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage';
+const originalTableSelectionDomain = () => codec.historicalContract(READER_TABLE_SELECTION_CONTRACT, 'exact-original-subset');
+// Both eligibility packets enter the original model-input and failure-issue
+// domains. Keep their exact registered representations until those input
+// renderers can prove original and current wire bytes independently.
+const READER_TABLE_ELIGIBILITY_CONTRACT = codec.historicalContract('reader-table-eligibility', 'single-eligible-original-table');
+const READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT = codec.historicalContract('reader-complete-table-eligibility', 'all-original-rows-and-columns');
 const READER_SOURCE_TABLE_ISSUE_CODE = 'reader_source_table_unrenderable';
 const sha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
@@ -316,7 +321,7 @@ function readerResultTableRequirement(artifacts) {
             }));
         return rows.length >= 2 && measurementCells.length >= 4;
     }).map(table => table.ordinal);
-    return { contract: READER_RESULT_COVERAGE_CONTRACT,
+    return { ...codec.recordHeader(READER_RESULT_COVERAGE_CONTRACT, READER_RESULT_COVERAGE_CONTRACT),
         minimumResultTables: sourceTableOrdinals.length ? 1 : 0, sourceTableOrdinals };
 }
 
@@ -779,7 +784,7 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
     return { sections: copiedSections, tableBindings, selectionTableIndexes };
 }
 
-module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
+module.exports = { READER_TABLE_SELECTION_CONTRACT, originalTableSelectionDomain, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT, READER_SOURCE_TABLE_ISSUE_CODE,
     assessReaderCompleteTableEligibility, renderReaderCompleteTable, readerSourceTableError,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,

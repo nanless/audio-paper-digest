@@ -11,6 +11,7 @@ private actor PreloadTransport {
     func read(_ url: URL, _ limit: Int) async throws -> Data {
         requests.append(url.absoluteString)
         if slow && !url.path.hasSuffix(".json") { try await Task.sleep(nanoseconds: 5_000_000_000) }
+        if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
         guard let bytes = files[url.absoluteString], bytes.count <= limit else { throw URLError(.fileDoesNotExist) }
         return bytes
     }

@@ -18,6 +18,7 @@ private actor ReaderPublishedFixture {
   }
   if url.path.contains("/posts/reader"){return Data("<html><body><div id='article-body' class='post-content'><h1>Explicit published reader fixture</h1><h2>Actual isolated source v\(version)</h2><p>Version-bound fixture prose.</p></div></body></html>".utf8)}
   if url.path.hasPrefix("/pdf/"){pdfReads+=1;return pdf}
+  if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
   throw URLError(.fileDoesNotExist)
  }
 }

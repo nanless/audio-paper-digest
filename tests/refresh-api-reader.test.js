@@ -160,9 +160,10 @@ describe('refresh-api-reader 批量命令行', () => {
         assert.strictEqual(resolveSavedAnalysisBatchDate({}), '');
     });
 
-    it('Reader 短暂失败后，从已签名的 v3 修订种子修复评分', () => {
+    it('Reader 短暂失败后，从实际原格式或现用格式的完整修订种子修复评分', () => {
         const article = '仍可复用的完整 Reader 正文';
-        const plan = { version: 3, sections: [] };
+        const codec = require('../scripts/lib/protocol-codec');
+        const plan = { version: 3, ...codec.historicalHeader('beginner-researcher', 'integrated-article'), sections: [] };
         const crypto = require('node:crypto');
         const stableFingerprint = require('../scripts/deep-analyzer.js').stableFingerprint;
         const paper = {
@@ -183,6 +184,12 @@ describe('refresh-api-reader 批量命令行', () => {
                 }
             }
         };
+        assert.strictEqual(canRepairScoringBinding(paper), true);
+        const currentPlan = { ...codec.recordHeader(codec.contract('beginner-researcher'), 'beginner-researcher'), sections: [] };
+        paper.apiReaderPlan = currentPlan;
+        paper.apiReaderPlanSha256 = stableFingerprint(currentPlan);
+        assert.strictEqual(canRepairScoringBinding(paper), false);
+        paper.analysisManifest.contracts.apiReaderArticle = currentPlan.contract;
         assert.strictEqual(canRepairScoringBinding(paper), true);
         paper.apiReaderArticleSha256 = '0'.repeat(64);
         assert.strictEqual(canRepairScoringBinding(paper), false);

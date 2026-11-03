@@ -21,7 +21,7 @@
 
 ## OpenCode Go 账号池状态
 
-`data/runtime/llm-account-pool.json` 使用 `opencode-go-sticky-quota-failover-v1`（该字符串是历史兼容标识，语义已升级为同池等权轮转）。它保存服务和账号的 SHA-256 身份、轮转游标、最近选择的观测字段、归一化额度窗口、`blockedUntil` 及更新计数，不保存 API key、认证头、请求或响应正文。账号稳定指纹仍属于敏感操作信息，文件权限须为 `0600`，不得上传或归档。更换密钥会形成新的账号身份，但账号身份不进入筛选、分析或发布内容的指纹。
+`data/runtime/llm-account-pool.json` 保存同池账号轮转状态。新记录带实际结构指纹，原记录按原字段读取。它保存服务和账号的 SHA-256 身份、轮转游标、最近选择的观测字段、归一化额度窗口、`blockedUntil` 及更新计数，不保存 API key、认证头、请求或响应正文。账号稳定指纹仍属于敏感操作信息，文件权限须为 `0600`，不得上传或归档。更换密钥会形成新的账号身份，但账号身份不进入筛选、分析或发布内容的指纹。
 
 Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号选择与状态更新，HTTP 请求在锁外发送。未知格式、损坏 JSON 或符号链接状态路径会使程序停止。同一池内所有 key 等权，按账号 ID 稳定排序轮转，跳过已排除与冷却未到期账号；只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才在同一逻辑请求内切换并记录冷却，普通认证 401 停止运行，其他 429、5xx、传输或内容失败不触发切换。冷却到期后账号自动回到轮转。
 
@@ -67,11 +67,13 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 默认 API 的正式分析结果。每篇保存论文信息、`analysis`、`parsed`、来源身份、阶段检查点、`analysisManifest`、评分和解读正文的发布依据。论文集合须精确覆盖入选集合，各必需阶段须达到对应终态。
 
-若数据声明 `dailyFreshSourceRun`，该引用须使用 `daily-fresh-source-reference-v1`，绑定 `batchDate`、完整论文集合、运行清单 SHA 和来源集合 SHA。每篇的 `freshRewriteProvenance` 与 `analysisManifest.freshRewriteProvenance` 须一致，并能核对到本次获取的来源文件。文件缺失或多出、来源或集合变化、混入旧来源记录，都不能取得默认 API 的发布资格。
+若数据声明 `dailyFreshSourceRun`，新引用用 `daily-fresh-source-reference` 和对应的结构指纹，绑定 `batchDate`、完整论文集合、运行清单 SHA 和来源集合 SHA。每篇的 `freshRewriteProvenance` 与 `analysisManifest.freshRewriteProvenance` 须一致，并能核对到本次获取的来源文件。文件缺失或多出、来源或集合变化、混入旧来源记录，都不能取得默认 API 的发布资格。
 
 ## 日更来源的保存与核验
 
-日更来源运行使用 `daily-fresh-source-run-v1`，位于 `data/runtime/daily-fresh-source-runs/<runId>/`。每篇的 `sources/<arxivId>/generation-000001/` 只包含以下四文件：
+新的日更来源运行使用 `daily-fresh-source-run` 和对应的结构指纹，位于 `data/runtime/daily-fresh-source-runs/<runId>/`。同一批次仍使用原来的运行身份；已有运行保持原文件字节和原来源引用。新运行里的每篇 `fresh-source-analysis` 声明与该运行的格式和封存文件对应。
+
+每篇的 `sources/<arxivId>/generation-000001/` 只包含以下四文件：
 
 | 文件 | 内容 |
 |---|---|
@@ -82,7 +84,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 这些文件是保留的论文来源，不是随日期轮换的缓存。图片字节、base64、缓存路径和临时文件名不得写入这组文件。来源引用、获取序号、清单及快照 SHA 须共同匹配，不能只补一个 SHA 字段让旧结果看起来符合要求。
 
-当前无版本号的官方 PDF 确认返回 HTTP 404 后，获取器才可尝试同一论文的官方历史版本。`source-runtime.json.sourceVersion` 使用 `arxiv-historical-version-source-v1`，记录实际选中的 `selectedSourceId`、PDF 地址、当前 PDF 的 404、固定警告和身份 SHA。文本必须从选中的 PDF 提取；普通当前 PDF 不携带这条历史版本记录。Node 与 Python 都检查这些条件，而不只比较文件哈希。
+当前无版本号的官方 PDF 确认返回 HTTP 404 后，获取器才可尝试同一论文的官方历史版本。`source-runtime.json.sourceVersion` 按已登记的历史版本来源格式记录实际选中的 `selectedSourceId`、PDF 地址、当前 PDF 的 404、固定警告和身份 SHA。文本必须从选中的 PDF 提取；普通当前 PDF 不携带这条历史版本记录。Node 与 Python 都检查这些条件，而不只比较文件哈希。
 
 论文的 `sourceVersion` 须与保存记录一致，两处来源记录中的 `sourceVersionIdentitySha256` 也须匹配。缺少该绑定的旧历史版本分析必须重新分析，不能在旧成功记录上补写证明。普通来源不增加这些可选字段；传递标题或版本说明也不改变既有来源快照字段、顺序和 SHA 的计算方式。
 
@@ -112,7 +114,7 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 ## 会议博客审查后的 Reader 维护记录
 
-已完成会议的正常付费维护使用 `conference-reader-review-maintenance-batch-v1`，与原失败迁移 grant、零请求人工清单分开。
+已完成会议的正常付费维护的新清单使用 `conference-reader-review-maintenance-batch` 及其结构指纹，与原失败迁移 grant、零请求人工清单分开。
 
 私有根为 `conference-processes/<processId>/review-reader-maintenance/<batchId>/`，不可变 manifest 绑定实际停稳完整 state、当前 canonical generation、完整正常 review batch 及各原失败的物理/语义 SHA；原 current complete 父包 analysis/run/source、PDF、来源快照及明确类型的 Reader 父稿表面逐一 CAS 对应。
 
@@ -122,7 +124,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 `baseline-state.json`、`generation.json`、`review-batch.json`、`failures/`、`classifications/` 保留原材料。全部 text 及分类为 normal-reader 的 Markdown/图片构成完整唯一成员集；其余 markdown/image 失败仍完整分类并保留原 stage，不改名为 text。`raw-review-findings-v1` 只发送带待核验警示的真实意见，`corrective-assertion-v1` 另绑定旧节点与逐字来源。deferred-review/deferred-publication-format 明确 pending-new-page-review，不得带 repaired/passed，也不能授新模型或发布通过。
 
-`aggregateClassifications` 逐条绑定真实汇总拒稿，固定8字段合同 `conference-reader-aggregate-review-classification-v1`：kind=`deferred-aggregate-generation`、status=`pending-new-page-review`、nextAction=`normal-aggregate-generation-then-normal-review`。`nativeReviewClassifications` 完整绑定已结算 transient 原件，固定8字段合同 `conference-reader-native-review-classification-v1`、kind=`deferred-native-review`、相同 pending 状态及 nextAction=`normal-publication-review`。两类都保留原路径、页/失败的物理与语义 SHA，不加入单篇 members、不声称 passed/repaired，也不能漏失败；后续仍正常生成/复审。
+`aggregateClassifications` 逐条绑定真实汇总拒稿，使用 `conference-reader-aggregate-review-classification` 及其结构指纹：kind=`deferred-aggregate-generation`、status=`pending-new-page-review`、nextAction=`normal-aggregate-generation-then-normal-review`。`nativeReviewClassifications` 完整绑定已结算 transient 原件，使用 `conference-reader-native-review-classification` 及其结构指纹、kind=`deferred-native-review`、相同 pending 状态及 nextAction=`normal-publication-review`。已有分类记录仍按实际旧头和原字节核验。两类都保留原路径、页/失败的物理与语义 SHA，不加入单篇 members、不声称 passed/repaired，也不能漏失败；后续仍正常生成/复审。
 
 `aggregatePaperFeedback` 的 `conference-reader-aggregate-author-feedback-v1` 绑定 paperId、实际汇总 failureSha256、aggregateEntryRank/aggregateEntrySha256、officialRecordUrl、authorName 和 sourceQuote；父包/Reader surface/CAS 仍逐篇绑定，纯意见仍发送原失败。原单篇 passed 不改失败；真实来源重放与明确 v2 作者解析必须证实对应变化，原 aggregate 字节及当前父包持续核验。作者 identity 新字段 `conferencePdfAuthorParser: conference-pdf-author-lines-v2` 明确新解析；无该字段的旧签名按原逐行 v1 冷核，不倒写。
 
@@ -150,7 +152,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 冷读取重放原包、费用与当前正文对应关系，再正常核验完整资格，不补造不存在的首次成功 raw archive。
 
-下一窗使用 `conference-reader-review-maintenance-window-v1`，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
+新的追加窗口使用 `conference-reader-review-maintenance-window` 及其结构指纹，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。已登记的旧窗口继续按原材料和原字段复验。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
 
 未签发准备的恢复位于本维护根 `unissued-preflight-recoveries/<executionId>/`。`before/` 保留原五份准备文件和 `member-progress.json`，`new-preflight.json` 保存正常探测快照，`receipt.json` 使用 `conference-reader-unissued-preflight-recovery-v1`，绑定维护清单、父 CAS、原文件 SHA、新预检 SHA、探测次数及是否恢复 Reader-only。只有原始 pending、generation 0、零尝试、无修订、seed、候选和请求材料时可使用；资源模式在真实 child 的认证 PDF 来源作用域内派生。
 
@@ -258,13 +260,17 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 ### 发布范围与来源证明
 
-schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确非空页面和受控下载文件集合、逐文件 SHA、新建或覆盖或删除状态、输入及模板指纹、实际渲染的 `publishedPapers`、一致的 `publicationMode` 与发布依据，以及论文长图与汇总封面不在发布前生成的标记。
+正式生成清单使用 `blog-generation` 和对应的结构指纹。清单记录日期、`category`、博客基线 `HEAD`、精确非空页面和受控下载文件集合、逐文件 SHA、新建或覆盖或删除状态、输入及模板指纹、实际渲染的 `publishedPapers`、一致的 `publicationMode` 与发布依据，以及论文长图与汇总封面不在发布前生成的标记。
 
-默认 API 日更使用 `llm_api_production`；会议和历史另核对各自正式来源与发布清单。旧 Manual 发布依据仅按原记录核验。混合来源资格、缺少绑定或使用旧 schema，不能用于新日更发布。
+默认 API 日更使用 `llm_api_production`；会议和历史另核对各自正式来源与发布清单。旧 Manual 发布依据仅按原记录核验。混合来源资格、缺少来源绑定或只有文件清单，不能用于新日更发布。完整的历史清单按原字段重验，程序不会补写新字段。
+
+论文快照用 `published-papers-fingerprint` 声明实际编码规则。程序区分数字、字符串、布尔值和空值，再从快照内容重算 SHA-256；声明格式变了，同一论文快照的编码与哈希保持一致。审查凭证用 `blog-review-receipt` 保存本次生成清单的 SHA、快照规则、生成输入指纹和实际审查文件。只改格式字段，不能让旧凭证覆盖新的生成清单。
+
+逐页生成日志、审查检查点、通过缓存和失败记录各自登记格式。这些文件可以用于续跑，但不能代替正式生成清单、严格审查或远端发布证明。
 
 ### 原图恢复与派生资产
 
-新 schema v3 同时保存 `derivedFigureAssets` 及其指纹。日更封存 SVG 缺失或循环引用绘图定义时，`reader-sealed-pdf-page-asset-v1` 独立绑定原 Reader 像素 SHA、原 SVG 与 DOM SHA、同篇四份来源 SHA、唯一完整图注与图号、原 PDF 页码及完整 mediaBox、渲染实现和新 PNG SHA。
+现行清单同时保存 `derivedFigureAssets` 及其指纹。日更封存 SVG 缺失或循环引用绘图定义时，`reader-sealed-pdf-page-asset-v1` 独立绑定原 Reader 像素 SHA、原 SVG 与 DOM SHA、同篇四份来源 SHA、唯一完整图注与图号、原 PDF 页码及完整 mediaBox、渲染实现和新 PNG SHA。
 
 另一个受限触发条件是 LaTeXML `foreignObject` 中声明白字却实际继承黑色：程序必须从相邻同坐标系的受限闭合圆角矩形、完整文字容器包围盒和不透明填色证明黑字落在深底，且黑字对比度小于 3、原声明白字对比度大于 4.5；正确的标准 `color` 映射、可读蓝橙底、未知变换、越界、透明或遮罩均不触发。程序不补猜 CSS，也不把其他字色差异统称为损坏。
 
@@ -310,13 +316,13 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。会议后续整批可混合旧协议 passed 与当前协议失败；passed 必须逐字段等于 canonical `page-review-passes/<stable({path,sha256})>.json` 的真实原件，核 `conference-page-content-review-v1`、`resultSha256`、路径/页 SHA 及合法原协议；不能无缓存伪造 passed 或改签原协议。失败仍严格绑定当前整批协议与原不可变 failure。
 
-独立人工审查 v4 将文章语义记录 `files` 与 `machineAssets` 分开；后者使用 `manual-review-controlled-assets-v1`，仅容纳 schema v3 清单中的现存受控引用资料、词表和论文图，逐项保存 `{path, deleted: false, sha256}`。两者的精确并集必须等于完整生成及发布清单，不能漏项、夹入未知资产或给资产伪造审查者。机器资产在签发和推送时重新核验当前生成、正式同源分析、封存来源、词表、伴随文件重建及已通过且 SHA 一致的引用页。逐图记录中的站内地址只接受当前部署前缀下、同一清单和当前字节匹配的受控论文图；旧纯文章声明保持原规则。
+独立人工审查将文章语义记录 `files` 与 `machineAssets` 分开；后者使用 `manual-review-controlled-assets` 和对应的结构指纹，仅容纳来源绑定生成清单中的现存受控引用资料、词表和论文图，逐项保存 `{path, deleted: false, sha256}`。两者的精确并集必须等于完整生成及发布清单，不能漏项、夹入未知资产或给资产伪造审查者。机器资产在签发和推送时重新核验当前生成、正式同源分析、封存来源、词表、伴随文件重建及已通过且 SHA 一致的引用页。逐图记录中的站内地址只接受当前部署前缀下、同一清单和当前字节匹配的受控论文图；旧纯文章声明保持原规则。
 
 单图模型输入在前图解释与本图导读共享同一段时，记录其原文边界及前图序号，并明确标注过渡段与本图自有上下文；正文和图片字节不变，不能因前图特征不在当前像素中就认定正文错误。本图真实冲突仍须报告，标注不构成审查豁免。
 
 对当前签名 V3 Reader，审查输入只在来源清单、运行元数据及逐图 DOM、标签、图注和唯一资源映射核验后，说明三种编号：图片 K 是本次位置，论文图 N 是来源 DOM 条目，Figure M 是作者印刷图号。N 可跳号或重排；编号不同、URL 文件名及作者图注的概括程度本身不能证明配错图。实际错图、印刷标签矛盾及图文科学冲突仍阻断。旧记录、非 DOM 来源或缺真实作者标签不套用此说明；文本单元缓存显式绑定说明内容，图片单元沿用完整实际提示词身份。
 
-新独立人工审查的 v4 外层声明使用 `manual-agents-sol-high-v2`，逐页必须实际配置并如实记录 `gpt-6.1-sol/high` 身份；旧版本只按原模型规则读取，不允许补填新身份。
+新的独立人工审查用 `manual-review-statement` 标明声明格式，`modelPolicy` 保存模型规则的完整名称和结构指纹。每篇的 `reviewSubagent` 保存对应的逐页记录格式、实际助手名称和实际运行的 `gpt-6.1-sol/high`。旧声明和旧通过记录按原字段读取，不补填新身份；只有现行声明可以签发新的审查凭证。
 
 发布器代码变化仍使生成阶段重新渲染，以发现真实字节变化。模板、站点脚本、模型、发布器代码、协议或生成清单元数据变化时，须重跑当前批次检查并生成新审查记录；已经通过且最终内容未变的页面仍复用原通过记录，只有内容变化的通过页重新审查。
 
@@ -330,7 +336,7 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 普通生成保留“已发布日期不可直接覆盖”的保护。用户明确要求同一完整日批更新模板或多级标签呈现时，使用 `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，再按正常 `blog:review`、`blog:push` 顺序发布；UUID必须为规范小写，恢复同一事务须复用同日期同UUID。只接受当前正式数据中的完整canonical日批，拒绝all、include/exclude子集、自定义数据和旧legacy范围。
 
-`daily_republication.py` 在共享博客锁与日期锁内核验原schema-v3生成清单、审查凭证、原发布提交及实际远端祖先关系，重新核对完整来源引用、每篇四份封存文件、正式分析和受控页面/资产字节。Git index须为空；无关人工改动保留。已受控维护的当前成对词表目录可按严格兼容规则核验，其余受控文件漂移仍阻断，不能借重发布吸收手改页面。
+`daily_republication.py` 在共享博客锁与日期锁内核验原来带完整论文快照的生成清单、审查凭证、原发布提交及实际远端祖先关系，重新核对完整来源引用、每篇四份封存文件、正式分析和受控页面/资产字节。Git index须为空；无关人工改动保留。已受控维护的当前成对词表目录可按严格兼容规则核验，其余受控文件漂移仍阻断，不能借重发布吸收手改页面。
 
 事务保存在 `data/runtime/daily-republications/<UUID>/`：`intent.json` 记录不可变意图，`archive/` 按原相对路径逐字备份并核对SHA，`completion.json` 记录退休与准备完成；日期标记位于 `data/current/blog-republications/<DATE>.json`。原manifest、receipt、失败与安装日志等活跃指针只在完整备份后按CAS受控退休；逐页通过缓存和检查点保留原地复用。事务待激活时普通生成、审查和推送均阻断，用显式同UUID命令恢复，不手工删除标记或凭证。
 

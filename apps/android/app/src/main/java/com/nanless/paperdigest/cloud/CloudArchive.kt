@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.cloud
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -52,15 +53,15 @@ data class CloudReference(val month: String, val id: String) {
 data class CloudChunk(val index: Int, val bytes: Int, val sha256: String) {
     fun json() = JSONObject().put("index", index).put("bytes", bytes).put("sha256", sha256)
 }
-data class CloudManifest(val reference: CloudReference, val createdAt: Long, val encodedBytes: Long, val sha256: String, val chunks: List<CloudChunk>) {
-    fun json() = JSONObject().put("contract", "paperdigest-cloud-snapshot-v1").put("reference", reference.json()).put("createdAt", createdAt).put("encodedBytes", encodedBytes).put("sha256", sha256).put("chunks", JSONArray(chunks.map { it.json() }))
+data class CloudManifest(val reference: CloudReference, val createdAt: Long, val encodedBytes: Long, val sha256: String, val chunks: List<CloudChunk>, val rawContract: String = ClientProtocols.contract("paperdigest-cloud-snapshot"), val schemaFingerprint: String? = ClientProtocols.schemaFingerprint("paperdigest-cloud-snapshot")) {
+    fun json() = ClientProtocols.recordHeader(rawContract,"paperdigest-cloud-snapshot",schemaFingerprint).also { header -> require(header.opt("schemaFingerprint") as? String == schemaFingerprint) }.put("reference", reference.json()).put("createdAt", createdAt).put("encodedBytes", encodedBytes).put("sha256", sha256).put("chunks", JSONArray(chunks.map { it.json() }))
     fun info() = JSONObject().put("reference", reference.json()).put("createdAt", Instant.ofEpochMilli(createdAt).toString()).put("encodedBytes", encodedBytes).put("sha256", sha256).put("chunkCount", chunks.size)
     companion object {
         const val CHUNK = 8 * 1024 * 1024
         fun parse(bytes: ByteArray, expected: CloudReference): CloudManifest {
             if (bytes.size > 128 * 1024) throw CloudFailure("oversizedResponse")
             try {
-                val o = JSONObject(bytes.toString(Charsets.UTF_8)); require(o.getString("contract") == "paperdigest-cloud-snapshot-v1")
+                val o = JSONObject(bytes.toString(Charsets.UTF_8)); require(ClientProtocols.hasValidHeader(o,"paperdigest-cloud-snapshot"))
                 val r = o.getJSONObject("reference"); val rawID = r.getString("id"); require(Regex("[A-Fa-f0-9-]{36}").matches(rawID))
                 val ref = CloudReference(r.getString("month"), UUID.fromString(rawID).toString()); require(ref == expected)
                 val time = number(o, "createdAt"); require(time % 1000 == 0L && month(time) == ref.month)
@@ -72,7 +73,7 @@ data class CloudManifest(val reference: CloudReference, val createdAt: Long, val
                     val size = number(c, "bytes"); require(size == minOf(CHUNK.toLong(), count - offset)); offset += size
                     val sha = c.getString("sha256"); require(BackupCodec.validSHA(sha)); CloudChunk(i, size.toInt(), sha)
                 }
-                require(offset == count); return CloudManifest(ref, time, count, hash, chunks)
+                require(offset == count); return CloudManifest(ref, time, count, hash, chunks, o.getString("contract"), o.opt("schemaFingerprint") as? String)
             } catch (e: Exception) { if (e is CloudFailure) throw e; throw CloudFailure("integrity") }
         }
         fun number(obj: JSONObject, key: String): Long { val n = obj.get(key); require(n is Number && n.toDouble().isFinite() && n.toDouble() == n.toLong().toDouble()); return n.toLong() }
@@ -93,18 +94,18 @@ data class CloudSnapshotIdentity(val reference: CloudReference, val createdAt: L
             manifest.createdAt, manifest.encodedBytes, manifest.sha256, manifest.chunks.size, BackupCodec.hash(raw), raw.size)
     }
 }
-data class CloudCheckpoint(val destinationID: String, val folder: String, val manifest: CloudManifest, val verified: Set<Int> = emptySet(), val manifestVerified: Boolean = false, val retryAfter: Long? = null) {
-    fun json() = JSONObject().put("contract", "paperdigest-android-cloud-transfer-v1").put("destinationID", destinationID).put("folder", folder).put("manifest", manifest.json()).put("verified", JSONArray(verified.sorted())).put("manifestVerified", manifestVerified).put("retryAfter", retryAfter ?: JSONObject.NULL)
+data class CloudCheckpoint(val destinationID: String, val folder: String, val manifest: CloudManifest, val verified: Set<Int> = emptySet(), val manifestVerified: Boolean = false, val retryAfter: Long? = null, val rawContract: String = ClientProtocols.contract("paperdigest-android-cloud-transfer"), val schemaFingerprint: String? = ClientProtocols.schemaFingerprint("paperdigest-android-cloud-transfer")) {
+    fun json() = ClientProtocols.recordHeader(rawContract,"paperdigest-android-cloud-transfer",schemaFingerprint).also { header -> require(header.opt("schemaFingerprint") as? String == schemaFingerprint) }.put("destinationID", destinationID).put("folder", folder).put("manifest", manifest.json()).put("verified", JSONArray(verified.sorted())).put("manifestVerified", manifestVerified).put("retryAfter", retryAfter ?: JSONObject.NULL)
     companion object {
         fun parse(obj: JSONObject): CloudCheckpoint {
-            require(obj.getString("contract") == "paperdigest-android-cloud-transfer-v1")
+            require(ClientProtocols.hasValidHeader(obj,"paperdigest-android-cloud-transfer"))
             val manifestJSON = obj.getJSONObject("manifest"); val refJSON = manifestJSON.getJSONObject("reference")
             val ref = CloudReference(refJSON.getString("month"), UUID.fromString(refJSON.getString("id")).toString())
             val manifest = CloudManifest.parse(manifestJSON.toString().toByteArray(), ref)
             val a = obj.getJSONArray("verified"); val indices = (0 until a.length()).map { val n = a.get(it); require(n is Number && n.toDouble() == n.toInt().toDouble()); n.toInt() }
             require(indices.toSet().size == indices.size && indices.all { it in manifest.chunks.indices })
             require(obj.get("manifestVerified") is Boolean)
-            return CloudCheckpoint(obj.getString("destinationID"), obj.getString("folder"), manifest, indices.toSet(), obj.getBoolean("manifestVerified"), if (obj.isNull("retryAfter")) null else CloudManifest.number(obj, "retryAfter"))
+            return CloudCheckpoint(obj.getString("destinationID"), obj.getString("folder"), manifest, indices.toSet(), obj.getBoolean("manifestVerified"), if (obj.isNull("retryAfter")) null else CloudManifest.number(obj, "retryAfter"), obj.getString("contract"), obj.opt("schemaFingerprint") as? String)
         }
     }
 }

@@ -10,8 +10,9 @@ from pathlib import Path
 from unittest import mock
 
 import test_manual_review_arxiv_identity as identity_tests
-from test_manual_review_blog import attestation, current_attestation, manual_review_blog
-from manual_agent_policy import CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, review_model_policy
+from test_manual_review_blog import attestation, current_attestation, original_sol_attestation, manual_review_blog
+from manual_agent_policy import (CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, review_model_policy,
+                                 current_review_model_policy, STATEMENT)
 
 
 class ManualReviewModelPolicyTest(unittest.TestCase):
@@ -22,7 +23,7 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
             item.pop('reviewSubagent')
             item.pop('imageFindings')
         with tempfile.TemporaryDirectory() as tmp:
-            for payload in (legacy_v2, attestation(), current_attestation()):
+            for payload in (legacy_v2, attestation(), original_sol_attestation(), current_attestation()):
                 before = copy.deepcopy(payload)
                 path = Path(tmp) / 'statement.json'
                 raw = json.dumps(payload, ensure_ascii=False).encode()
@@ -32,7 +33,8 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
                 self.assertEqual(payload, before)
                 self.assertEqual(path.read_bytes(), raw)
                 self.assertEqual(sha, hashlib.sha256(raw).hexdigest())
-                expected = CURRENT_MODEL_POLICY if payload['version'] == 4 else LEGACY_MODEL_POLICY
+                expected = (current_review_model_policy() if 'contract' in payload else
+                            CURRENT_MODEL_POLICY if payload['version'] == 4 else LEGACY_MODEL_POLICY)
                 self.assertEqual(review_model_policy(actual), expected)
 
     def test_outer_version_cannot_borrow_another_model_rule(self):
@@ -56,7 +58,7 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
     def test_current_identity_rejects_legacy_unknown_missing_and_mixed_receipts(self):
         mutations = [('model', 'gpt-5.6-terra'), ('model', 'unknown-model'), ('model', None),
                      ('reasoningEffort', 'medium'), ('reasoningEffort', None),
-                     ('version', 1), ('version', None), ('version', 2.0),
+                     ('version', 1), ('schemaFingerprint', None), ('schemaFingerprint', 'a' * 64),
                      ('modelPolicy', LEGACY_MODEL_POLICY), ('modelPolicy', None),
                      ('singleFileOnly', False), ('isolatedContext', False)]
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,8 +80,8 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = helper.run_assembler(tmp, 'hep-th/9901001')
             actual, sha = manual_review_blog._load_review_statement(output)
-            self.assertEqual(actual['version'], 4)
-            self.assertEqual(actual['modelPolicy'], CURRENT_MODEL_POLICY)
+            self.assertEqual(actual['contract'], STATEMENT)
+            self.assertEqual(actual['modelPolicy'], current_review_model_policy())
             self.assertEqual(actual['files'][0]['reviewSubagent']['model'], 'gpt-6.1-sol')
             self.assertEqual(sha, hashlib.sha256(output.read_bytes()).hexdigest())
             self.assertIsNone(helper.receipt_error(Path(tmp), 'hep-th/9901001'))
@@ -109,7 +111,7 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
         reviewed = {'page': {'passed': True, 'reviewProtocolFingerprint': 'original'}}
         with mock.patch.object(publisher, 'save_review_pass_cache') as cache, \
                 mock.patch.object(publisher, 'atomic_write_json') as writer:
-            with self.assertRaisesRegex(publisher.PublishDataValidationError, '新人工审查.*v4'):
+            with self.assertRaisesRegex(publisher.PublishDataValidationError, '新人工审查.*现行声明'):
                 publisher.save_review_receipt('2026-08-25', [], {},
                     generation_manifest='/missing-never-read.json', reviewed_results=reviewed,
                     manual_review_record=old)
@@ -207,8 +209,8 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
                 self.assertIsNone(publisher._manual_review_record_error(saved,
                     date_str='2026-08-25', generation_manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
                     expected_base_head=base))
-            self.assertEqual(saved['reviewProvenance']['version'], 4)
-            self.assertEqual(saved['reviewProvenance']['modelPolicy'], CURRENT_MODEL_POLICY)
+            self.assertEqual(saved['reviewProvenance']['contract'], STATEMENT)
+            self.assertEqual(saved['reviewProvenance']['modelPolicy'], current_review_model_policy())
             self.assertEqual(saved['reviewProvenance']['files'][0]['reviewSubagent']['model'], 'gpt-6.1-sol')
             self.assertEqual(saved['baseHead'], base)
             self.assertEqual(saved['files'][0]['sha256'], sha)

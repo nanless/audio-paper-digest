@@ -9,11 +9,11 @@ const Module = require('node:module');
 const assert = require('node:assert/strict');
 const ORIGINAL_IMPLEMENTATION_SHA256 = '493fd34b7c55908bbaa500b1927ff5d107ab380c8d5a3bf449552b54a4e66bed';
 const SOURCES = [
-    ['scripts/lib/conference-process.js', 'conference-process-v1-source.txt', '9db6bb8ab26911bff893d2fd04dda4dcf5f07efbd73a41dc30c9470f77af67ba'],
-    ['scripts/lib/conference-process-recovery.js', 'conference-process-recovery-v1-source.txt', 'e3adcebae4be48137fc0e4c258a8b1ba1913b79d7e81c8623c5aa782dd434a3f'],
-    ['scripts/lib/conference-source-upgrade.js', 'conference-source-upgrade-v1-source.txt', 'a7ad3ba00f00da9554f843e0cb41d9993f45cc450ce61fe9e0cc22efe35dab15'],
-    ['scripts/migrate-conference-process.js', 'migrate-conference-process-v1-source.txt', '414e85cf74f5eaca96ba2d1643d34ba0abe7dd36fba660e504be7c24eabb1782'],
-    ['scripts/conference-workspace.js', 'conference-workspace-v1-source.txt', 'de035ec54d8c4519a9099669a1acec14c0444f2222767bc3958f127bd8e1316c'],
+    ['scripts/lib/conference-process.js', 'conference-process-original-source.txt', '9db6bb8ab26911bff893d2fd04dda4dcf5f07efbd73a41dc30c9470f77af67ba'],
+    ['scripts/lib/conference-process-recovery.js', 'conference-process-recovery-original-source.txt', 'e3adcebae4be48137fc0e4c258a8b1ba1913b79d7e81c8623c5aa782dd434a3f'],
+    ['scripts/lib/conference-source-upgrade.js', 'conference-source-upgrade-original-source.txt', 'a7ad3ba00f00da9554f843e0cb41d9993f45cc450ce61fe9e0cc22efe35dab15'],
+    ['scripts/migrate-conference-process.js', 'migrate-conference-process-original-source.txt', '414e85cf74f5eaca96ba2d1643d34ba0abe7dd36fba660e504be7c24eabb1782'],
+    ['scripts/conference-workspace.js', 'conference-workspace-original-source.txt', 'de035ec54d8c4519a9099669a1acec14c0444f2222767bc3958f127bd8e1316c'],
 ];
 
 function loadOriginalConferenceProcessApis() {
@@ -23,6 +23,11 @@ function loadOriginalConferenceProcessApis() {
         assert.equal(crypto.createHash('sha256').update(raw).digest('hex'), sha256);
         return [path.join(root, original), raw];
     }));
+    const records = JSON.parse(fs.readFileSync(path.join(root, 'config/workflow-historical-records.json')));
+    const extractionPath = 'scripts/lib/conference-extraction-receipt.js';
+    const extractionPin = records.filterPolicies.sourcePins[extractionPath];
+    sources.set(path.join(root, extractionPath), require('../../scripts/lib/git-file-bytes')
+        .readGitBlob(root, extractionPin.oid, extractionPin.sha256));
     const instances = new Map();
     const load = filename => {
         if (instances.has(filename)) return instances.get(filename).exports;

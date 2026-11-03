@@ -1,6 +1,8 @@
 'use strict';
 
-const PROMPT_RENDERING_CONTRACT = 'prompt-single-pass-v1';
+const sourceInputFormats = require('./source-input-format');
+// Keep the actual request fingerprint domain when replaying saved requests.
+const PROMPT_RENDERING_CONTRACT = sourceInputFormats.original('prompt');
 // 只识别当前调用真正使用的模板键，不把普通 TeX 花括号视作旧渲染风险。
 const PROMPT_INPUT_KEYS = Object.freeze([
     'title', 'abstract', 'categories', 'hasFullText', 'authors', 'arxivId', 'textForAnalysis',
@@ -29,7 +31,7 @@ function promptRenderingFingerprintFields(...inputs) {
 }
 
 function legacyPromptRenderingNeedsReplay(paper, sourceDetails = '') {
-    if (paper?.analysisManifest?.sourceAcquisition?.promptRenderingContract === PROMPT_RENDERING_CONTRACT) return false;
+    if (sourceInputFormats.read('prompt', paper?.analysisManifest?.sourceAcquisition)) return false;
     // 旧记录没有每次请求的完整渲染输入，不能猜它是否碰巧逃过了二次替换。
     // 只对含已知模板字面量的论文保守重跑；普通旧记录保持原来的复用资格。
     return containsPromptInputPlaceholder([

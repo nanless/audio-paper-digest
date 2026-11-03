@@ -62,7 +62,7 @@ function readSource() {
         || direct.route !== 'arxiv-fresh-fetch') fail('actual same-paper daily fresh and direct scopes are required');
     const source = fresh.readFreshSource(context.runDir, context.paperId, context);
     const descriptor = source?.freshSourceDescriptor;
-    if (descriptor?.contract !== 'fresh-source-bundle-v2'
+    if (!require('./daily-source-format').isBundleDescriptor(descriptor)
         || ['runId', 'sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256', 'sourceGeneration', 'sourceManifestSha256']
             .some(key => descriptor[key] !== direct[key])
         || !isDeepStrictEqual(source, direct.sourceDetails)) fail('physical four-file source differs from the actual direct scope');

@@ -14,7 +14,7 @@ const { writeImmutableFile } = require('./immutable-file.js');
 
 const CONTRACT = 'historical-conference-page-projections-v3';
 const VERSION = 3;
-const CATALOG_CONTRACT = 'merged-good-historical-local-data-v5';
+const CATALOG_CONTRACT = require('./protocol-codec').contract('historical-direct-local-input-catalog');
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_JSON_BYTES = 128 * 1024 * 1024;
@@ -115,14 +115,14 @@ function readStableJson(filename, label, maxBytes = MAX_JSON_BYTES) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // 用目录生产者的校验器检查当前的 scoped v5 格式。较早的采集记录可能用了同样的
-    // contract 和 version，却省略 scopeBinding、少带两份输入清单，或者仍然保留本地
+    // 用目录生产者的校验器检查当前限定范围的输入。较早的采集记录可能用了相同的
+    // 格式声明，却省略 scopeBinding、少带两份输入清单，或者仍然保留本地
     // arXiv 写作来源。这些记录不能当作当前目录接受。
     let normalized;
     try {
         normalized = require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`带范围限制的 v5 本地来源目录未通过检查： ${error.message}`);
+        fail(`范围受限的本地来源目录未通过检查： ${error.message}`);
     }
     return normalized;
 }

@@ -362,7 +362,7 @@ test('Reader单独反馈不强制core再付费，不影响其他stage配方',asy
 });
 
 test('有反馈的新已执行证明可在无外部文件时复用，无反馈请求不混入证明',async t=>{
-    const registry=require('../scripts/lib/prompt-text-versions');
+    const registry=require('../scripts/lib/prompt-contracts');
     const contract=registry.currentPromptTextContract('coreSummaryRepair');
     const oldCore=deep.buildTextStageFingerprint('coreSummaryRepair',original,sourceText,contract,{});
     const oldReader=deep.buildApiReaderExecutionFingerprint('configuration',sourceText,{},null,{});
@@ -396,11 +396,11 @@ test('有效旧成功Reader在早期迁移中不能改签外部事实反馈；�
     const bound=review.validateFeedback(f.feedback,f.plan,f.paper);
     const engine=require('../scripts/analysis-engine');
     const legacy=require('./valid-analysis-fixture').validLegacyApiAnalysisPaper(ID);
-    assert.equal(engine.hasValidApiReaderV3Records(legacy),true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(legacy),true);
     const artifacts={tables:[],formulas:[],figures:[]};
     const evidence=deep.buildApiReaderEvidenceContext(legacy.analysis,sourceText,artifacts,ID);
     const legacyFingerprint=deep.buildLegacyAnalysisBoundApiReaderFingerprint(
-        deep.buildLegacyApiReaderV3ConfigurationFingerprint(ID),legacy.analysis,evidence,artifacts);
+        deep.buildOriginalIntegratedReaderConfigurationFingerprint(ID),legacy.analysis,evidence,artifacts);
     const base=deep.buildRecoveryFingerprints(legacy,sourceText,ID,legacy.analysisManifest).apiReaderArticle;
     legacy.analysisManifest.stages.apiReaderArticle.fingerprint=legacyFingerprint;
     const normal=structuredClone(legacy);
@@ -461,7 +461,7 @@ test('主分析反馈独立绑定配方，正常失效全下游且完整保留�
  f.feedback.primaryFeedback='根据逐字来源重新生成全部13节，纠正实验节中错误的余弦损失解释。';
  f.feedback.rejectedPrimaryClaims=[wrong];
  const bound=review.validateFeedback(f.feedback,f.plan,f.paper);
- const contract=require('../scripts/lib/prompt-text-versions').currentPromptTextContract('primaryAnalysis');
+ const contract=require('../scripts/lib/prompt-contracts').currentPromptTextContract('primaryAnalysis');
  const old=deep.buildPrimaryAnalysisBaseFingerprint(contract,f.paper,sourceText,ID,f.paper.analysisManifest.stages.primaryAnalysis);
  const oldBytes=JSON.stringify(f.paper.analysisManifest.stages);
  let updated;
@@ -578,7 +578,7 @@ test('纠错主分析完成而评分缺失时正常入口两次无反馈恢复�
         f.paper.analysisStageCheckpoints.primaryAnalysis = baseline;
         const primary = f.paper.analysisManifest.stages.primaryAnalysis;
         primary.factReview = bound.proof;
-        primary.promptTextContract = require('../scripts/lib/prompt-text-versions').currentPromptTextContract('primaryAnalysis');
+        primary.promptTextContract = require('../scripts/lib/prompt-contracts').currentPromptTextContract('primaryAnalysis');
         primary.fingerprint = deep.buildPrimaryAnalysisBaseFingerprint(primary.promptTextContract, f.paper, sourceText, ID, primary);
         delete f.paper.analysisManifest.stages.scoringAudit;
         delete f.paper.analysisStageCheckpoints.scoringAudit;

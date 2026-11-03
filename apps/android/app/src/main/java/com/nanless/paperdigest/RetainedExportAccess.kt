@@ -1,6 +1,7 @@
 package com.nanless.paperdigest
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.data.*
 import org.json.JSONObject
 import java.io.File
@@ -90,7 +91,13 @@ internal class RetainedExportAccess(
         require(job.getString("kind") in KINDS && job.getString("paperID").isEmpty())
         require(job.getString("status") in STATES)
         val value = job.copy().put("localRetainedExport", true).put("nativeOperationID", operationID)
-        val wrapper = JSONObject().put("contract", JOB).put("operationID", operationID)
+        val file=jobFile(operationID,id)
+        val header=if(file.exists()){
+            val original=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)))
+            require(ClientProtocols.hasValidHeader(original,JOB)&&original.keys().asSequence().toSet()==ClientProtocols.recordKeys(original.get("contract"),JOB,setOf("operationID","documentID","job"),original.opt("schemaFingerprint") as? String)&&original.getString("operationID")==operationID&&original.getString("documentID")==row.documentID&&original.getJSONObject("job").getString("id")==id&&original.getJSONObject("job").getString("kind")==job.getString("kind")){"原保留控制任务格式或身份已变化"}
+            ClientProtocols.recordHeader(original.get("contract"),JOB,original.opt("schemaFingerprint") as? String)
+        }else ClientProtocols.recordHeader(JOB,JOB)
+        val wrapper = header.put("operationID", operationID)
             .put("documentID", row.documentID).put("job", value)
         JsonFiles.write(jobFile(operationID, id), wrapper)
     }
@@ -103,8 +110,8 @@ internal class RetainedExportAccess(
         return files.map { file ->
             require(file.name.matches(Regex("retained-native-job-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\\.json")))
             val raw = JSONObject(PublishedUtf8.decode(JsonFiles.read(BackupCodec.checkedFile(directory, file.name), 65536)))
-            require(raw.keys().asSequence().toSet() == setOf("contract", "operationID", "documentID", "job"))
-            require(raw.getString("contract") == JOB && raw.getString("operationID") == row.operationID && raw.getString("documentID") == row.documentID)
+            require(ClientProtocols.hasValidHeader(raw,JOB)&&raw.keys().asSequence().toSet() == ClientProtocols.recordKeys(raw.get("contract"),JOB,setOf("operationID", "documentID", "job"),raw.opt("schemaFingerprint") as? String))
+            require(ClientProtocols.hasValidHeader(raw,JOB) && raw.getString("operationID") == row.operationID && raw.getString("documentID") == row.documentID)
             val job = raw.getJSONObject("job"); val id = job.getString("id")
             require(file == jobFile(row.operationID, id) && job.getString("kind") in KINDS && job.getString("status") in STATES)
             require(job.opt("localRetainedExport") == true && job.getString("nativeOperationID") == row.operationID && job.getString("paperID").isEmpty())
@@ -122,7 +129,7 @@ internal class RetainedExportAccess(
         return File(directory, "retained-native-job-$id.json")
     }
     companion object {
-        private const val JOB = "paperdigest-native-retained-export-job-v1"
+        private const val JOB = "paperdigest-native-retained-export-job"
         private val KINDS = setOf("export.retained.prepare", "export.retained.save")
         private val STATES = setOf("running", "completed", "failed", "cancelled", "interrupted")
     }

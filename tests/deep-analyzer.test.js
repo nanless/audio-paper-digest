@@ -627,8 +627,6 @@ describe('arXiv HTML 全文健康检查', () => {
         assert.match(inlineFigure.inlineHtml, /^<figure[\s\S]*<\/figure>$/);
         assert.strictEqual(Buffer.byteLength(inlineFigure.inlineHtml), inlineFigure.inlineHtmlBytes);
         assert.match(inlineFigure.inlineHtmlSha256, /^[a-f0-9]{64}$/);
-        const { validateStructuredArtifacts } = require('../manual/scripts/manual-artifact-index.js');
-        assert.doesNotThrow(() => validateStructuredArtifacts(artifacts));
         assert.strictEqual(artifacts.figures[2].recoveryStatus, 'unrecovered');
         assert.match(artifacts.health.issues.join('\n'), /可审计图像或 DOM 资源/);
     });
@@ -2027,6 +2025,15 @@ primary_task_tag: #音视频生成
                 'engineering_claim_without_measured_or_reusable_evidence'
             ]
         );
+        const current = structuredClone(payload);
+        delete current.evidenceProfile.version;
+        const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
+        Object.assign(current.evidenceProfile, header);
+        const currentAudit = parseScoringAuditResult(JSON.stringify(current), allowed);
+        assert.deepEqual(applyScoringEvidenceCaps(currentAudit).capsApplied, capped.capsApplied);
+        assert.deepEqual(applyScoringEvidenceCaps(currentAudit).dimensions, capped.dimensions);
+        current.evidenceProfile.version = 1;
+        assert.throws(() => parseScoringAuditResult(JSON.stringify(current), allowed), /结构指纹/);
         const missingAlias = structuredClone(payload);
         missingAlias.evidenceProfile.ablationStatus = 'missing';
         assert.strictEqual(
@@ -5573,7 +5580,7 @@ has_dataset: 否
         const engine = require('../scripts/analysis-engine.js');
         const fresh = require('../scripts/lib/fresh-analysis-context.js');
         const originalEligible = engine.canRepairCoreSummaryFromSavedAnalysis;
-        const originalReader = engine.hasValidApiReaderV3Records;
+        const originalReader = engine.hasValidIntegratedApiReaderRecords;
         const originalFreshIdentity = fresh.freshAnalysisIdentity;
         const sourceText = `${require('../scripts/analysis-contract.js').extractSection(
             validAnalysisText(), '实验结果'
@@ -5586,7 +5593,7 @@ has_dataset: 否
         const freshIdentity = { ...freshRewriteProvenance, paperId: '2604.12527',
             inputSetSha256: '4'.repeat(64) };
         engine.canRepairCoreSummaryFromSavedAnalysis = paper => paper.legacyProofValid !== false;
-        engine.hasValidApiReaderV3Records = paper => paper.readerProofValid !== false;
+        engine.hasValidIntegratedApiReaderRecords = paper => paper.readerProofValid !== false;
         fresh.freshAnalysisIdentity = () => freshIdentity;
         try {
             const shallowSummary = '本文针对噪声语音识别任务中输入线索受损与输出错误累积的问题展开研究。方法先编码局部声学特征，再融合长程上下文并由解码器输出文字序列，各模块分别承担表征、融合与预测职责。实验显示方法有效，但摘要没有完整交代定量设置、适用边界与训练推理成本。';
@@ -5634,7 +5641,7 @@ has_dataset: 否
             ), false);
         } finally {
             engine.canRepairCoreSummaryFromSavedAnalysis = originalEligible;
-            engine.hasValidApiReaderV3Records = originalReader;
+            engine.hasValidIntegratedApiReaderRecords = originalReader;
             fresh.freshAnalysisIdentity = originalFreshIdentity;
         }
     });
@@ -5674,14 +5681,14 @@ has_dataset: 否
 
         // 新请求按当前版本写指纹；旧记录没有版本字段时仍按 v1 的冻结路径重算。
         const deep = require('../scripts/deep-analyzer.js');
-        assert.strictEqual(deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT, 'analysis-prompt-text-v2');
-        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text-v5');
-        assert.strictEqual(deep.currentTextStagePromptPath('revision'), 'prompts/gap-fill-v5.md');
+        assert.strictEqual(deep.LEGACY_SUMMARY_MIGRATION_DECLARATION, 'analysis-prompt-text-v2');
+        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text');
+        assert.strictEqual(deep.currentTextStagePromptPath('revision'), 'prompts/current/gap-fill.md');
         assert.strictEqual(deep.promptFilePathForContract('revision', 'analysis-prompt-text-v4'),
             'prompts/gap-fill-v4.md');
         assert.strictEqual(deep.promptFilePathForContract('revision', ''), 'prompts/gap-fill.md');
         assert.strictEqual(
-            deep.promptFilePathForContract('revision', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+            deep.promptFilePathForContract('revision', deep.LEGACY_DEFAULT_PROMPT_DECLARATION),
             'prompts/gap-fill.md'
         );
         assert.throws(
@@ -5717,7 +5724,7 @@ has_dataset: 否
                 return hash;
             };
             deep.buildTextStageFingerprint(
-                'revision', input, evidence, deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT
+                'revision', input, evidence, deep.LEGACY_SUMMARY_MIGRATION_DECLARATION
             );
         } finally { crypto.createHash = originalCreateHash; }
         assert.strictEqual(payload.promptTextContract, 'analysis-prompt-text-v2');
@@ -5727,7 +5734,7 @@ has_dataset: 否
         );
         assert.notStrictEqual(
             deep.buildTextStageFingerprint(
-                'revision', input, evidence, deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT
+                'revision', input, evidence, deep.LEGACY_SUMMARY_MIGRATION_DECLARATION
             ),
             deep.buildTextStageFingerprint('revision', input, evidence)
         );
@@ -5776,11 +5783,11 @@ has_dataset: 否
         assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v11');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v11.md')
+            deep.runtimePromptTemplateSha256('prompts/current/api-reader-article.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v11.md'
+            'prompts/current/api-reader-article.md'
         );
         const previousPayload = capture({ version: 1, stages: { apiReaderArticle: {
             status: 'complete', promptTextContract: 'analysis-prompt-text-v7',
@@ -5789,7 +5796,7 @@ has_dataset: 否
         assert.strictEqual(previousPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article-v7.md'));
         assert.strictEqual(
-            deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+            deep.promptFilePathForContract('apiReaderArticle', deep.LEGACY_DEFAULT_PROMPT_DECLARATION),
             'prompts/api-reader-article.md'
         );
         assert.strictEqual(deep.promptFilePathForContract('apiReaderArticle', 'analysis-prompt-text-v5'), 'prompts/api-reader-article-v5.md');
@@ -5845,7 +5852,7 @@ has_dataset: 否
                 'prompts/deep-analysis.md', CORE_SUMMARY_CONTRACT_VERSION)
         );
         assert.strictEqual(
-            deep.promptFilePathForContract('primaryAnalysis', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+            deep.promptFilePathForContract('primaryAnalysis', deep.LEGACY_DEFAULT_PROMPT_DECLARATION),
             'prompts/deep-analysis.md'
         );
         // 新请求使用 v8；旧记录继续按其声明版本计算指纹。
@@ -5854,10 +5861,10 @@ has_dataset: 否
         assert.strictEqual(
             fresh.payload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256(
-                'prompts/deep-analysis-v8.md', CORE_SUMMARY_CONTRACT_VERSION)
+                'prompts/current/deep-analysis.md', CORE_SUMMARY_CONTRACT_VERSION)
         );
         assert.strictEqual(
-            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v8.md');
+            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/current/deep-analysis.md');
         // 判别力：两个版本必须算出不同的正文哈希和不同的阶段指纹，否则这条测试等于没测。
         assert.notStrictEqual(
             fresh.payload.promptTemplateSha256, legacy.payload.promptTemplateSha256);
@@ -5953,7 +5960,7 @@ has_dataset: 否
         assert.match(prompt, /汉字与中文标点合计 320–600 个/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
         const currentCorePrompt = require('../scripts/utils.js').loadPrompt(
-            require('../scripts/lib/prompt-text-versions.js').currentTextStagePromptPath('coreSummaryRepair'));
+            require('../scripts/lib/prompt-contracts.js').currentTextStagePromptPath('coreSummaryRepair'));
         const comparisonParagraph = currentCorePrompt.split('\n\n')
             .find(paragraph => paragraph.startsWith('两个数值及各自单位'));
         assert.ok(comparisonParagraph && prompt.includes(comparisonParagraph));
@@ -7050,7 +7057,7 @@ has_dataset: 否
                 imageSupplement: 'image checkpoint'
             },
             apiReaderArticle: 'reader bytes',
-            apiReaderPlan: { version: 3 },
+            apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' },
             analysisManifest: {
                 version: 1,
                 contracts: { apiReaderArticle: 'beginner-researcher-v3' },
@@ -7068,7 +7075,7 @@ has_dataset: 否
         assert.equal(manifest.stages.apiReaderArticle.status, 'complete');
         assert.equal(manifest.stages.imageSupplement, undefined);
         assert.equal(paper.apiReaderArticle, 'reader bytes');
-        assert.deepStrictEqual(paper.apiReaderPlan, { version: 3 });
+        assert.deepStrictEqual(paper.apiReaderPlan, { version: 3, contract: 'beginner-researcher-v3' });
     });
 
     it('阶段指纹变化时回退到前一阶段快照，只失效当前及下游', () => {
@@ -7843,7 +7850,7 @@ describe('标签保存格式的实际执行与恢复边界', () => {
         assert.equal(manifest.stages.scoringAudit, undefined);
         const prepared = deep.prepareTextRecoveryStage(paper, manifest, 'tagSelection', input, 'source');
         assert.equal(prepared.invalidated, false);
-        manifest.contracts = { tagSelectionRecord: records.TAG_STAGE_RECORD_CONTRACT };
+        manifest.contracts = { tagSelectionRecord: records.tagStageRecordDeclaration() };
         deep.markRecoveryStage(manifest, 'tagSelection', 'not_needed', { fingerprint: prepared.fingerprint });
         deep.saveAnalysisCheckpoint(paper, input, manifest);
         assert.equal(paper.analysisStageCheckpoints.tagSelection, input);

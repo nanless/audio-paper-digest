@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const codec = require('./protocol-codec');
 
 const MAX_ATTEMPTS = 3;
 const RETRY_COOLDOWN_MS = 15 * 60 * 1000;
@@ -45,8 +46,8 @@ function eligible(item, now) {
 
 function resolveProcess(context, deps, api) {
     const root = deps.files.conferenceProcessDir;
-    api.authorityForComparison(context.authority, api.PROCESS_VERSION);
-    const derived = api.deterministicUuid(api.stableHash(context.authority), api.CONTRACT);
+    api.authorityForComparison(context.authority);
+    const derived = api.deterministicUuid(api.stableHash(context.authority), api.processIdentityDomain());
     if (!fs.existsSync(root)) return derived;
     const matches = [], older = [];
     const withoutImplementation = (value, version) => {
@@ -62,6 +63,13 @@ function resolveProcess(context, deps, api) {
         // 匹配后仍须核验原状态 SHA、格式及新旧词表字段，再比较完整运行资料。
         const candidateAuthority = { ...(saved?.authority || {}) };
         const currentAuthority = { ...context.authority };
+        // Reject-only candidate matching. A matching record is then fully
+        // verified, including its original config header and self-SHA below.
+        for (const value of [candidateAuthority, currentAuthority]) {
+            if (value.deepExecutionConfig && typeof value.deepExecutionConfig === 'object') {
+                value.deepExecutionConfig = { audit: value.deepExecutionConfig.audit };
+            }
+        }
         for (const key of ['implementationSha256', 'taxonomyVersion', 'taxonomyRegistrySha256', 'tagCatalogVersion', 'tagCatalogSha256']) {
             delete candidateAuthority[key];
             delete currentAuthority[key];
@@ -81,11 +89,11 @@ function resolveProcess(context, deps, api) {
         if (api.stableHash(candidateCatalog) !== api.stableHash({ version: context.authority.tagCatalogVersion,
             sha256: context.authority.tagCatalogSha256 })) continue;
         const state = api.assertState(saved);
-        if (api.stableHash(withoutImplementation(state.authority, state.version))
-            !== api.stableHash(withoutImplementation(context.authority, api.PROCESS_VERSION))) continue;
+        if (api.stableHash(withoutImplementation(state.authority, api.processFormat(state)))
+            !== api.stableHash(withoutImplementation(context.authority))) continue;
         if (state.processId !== id) throw new Error('会议任务目录名与记录的任务 ID 不同');
-        if (api.stableHash(api.authorityForComparison(state.authority, state.version))
-            !== api.stableHash(api.authorityForComparison(context.authority, api.PROCESS_VERSION))) {
+        if (api.stableHash(api.authorityForComparison(state.authority, api.processFormat(state)))
+            !== api.stableHash(api.authorityForComparison(context.authority))) {
             // 进程可能在共享来源准备阶段就失败，这时还没有任何条目完成保存与核验，
             // 也没有分析。在这种没有进展的窄情况下，实现变更不会让分析失效
             // （本来就没有分析要保留），所以可以让新实现派生新的进程命名空间，
@@ -99,7 +107,7 @@ function resolveProcess(context, deps, api) {
         api.assertState(state, { authority: context.authority, paperIds: context.members.map(item => item.paperId).sort() });
         if (state.sourceUpgradePromotion) {
             sourceImplementation(state, directory, api);
-        } else if (id !== api.deterministicUuid(api.stableHash(state.authority), state.contract)) {
+        } else if (id !== api.deterministicUuid(api.stableHash(state.authority), api.processIdentityDomain(state))) {
             const records = fs.readdirSync(directory).filter(name => /^implementation-migration(?:-[a-f0-9]{12})?\.json$/.test(name))
                 .map(name => readPrivateJson(path.join(directory, name)));
             const record = records.find(value => value.toImplementationSha256 === state.authority.implementationSha256);
@@ -139,12 +147,13 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
             readPrivateJson(path.join(directory, 'source-upgrade-plan.json')));
         const { planSha256, ...plan } = savedPlan;
         if (planSha256 !== api.stableHash(plan) || planSha256 !== promotion.planSha256
-            || plan.version !== state.version
+            || require('./conference-source-upgrade').upgradeFormat(plan) !== api.processFormat(state)
+            || codec.isCurrentHeader(plan, 'conference-source-upgrade-plan') !== codec.isCurrentHeader(state, 'conference-process')
             // 来源升级后的任务仍可显式迁移实现。原来源升级计划的内容受 SHA 保护，
             // 因此计划保留升级时的运行资料，检查点则记录当前实现。
             // 来源、筛选和论文集合必须保持相同；这里只允许有迁移记录的实现 SHA 更新。
-            || api.stableHash(withoutImplementation(plan.authority, plan.version))
-                !== api.stableHash(withoutImplementation(state.authority, state.version))
+            || api.stableHash(withoutImplementation(plan.authority, require('./conference-source-upgrade').upgradeFormat(plan)))
+                !== api.stableHash(withoutImplementation(state.authority, api.processFormat(state)))
             || plan.fromProcessId !== promotion.originalProcessId
             || plan.sourceImplementationSha256 !== promotion.sourceImplementationSha256
             || api.stableHash(plan.pageRepairPolicy || null) !== api.stableHash(promotion.pageRepairPolicy || null)
@@ -166,14 +175,18 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
             return copy;
         };
         if (parentSource !== plan.sourceImplementationSha256
-            || api.stableHash(sourceAuthority(parent.authority, parent.version)) !== api.stableHash(sourceAuthority(plan.authority, plan.version))
+            || api.stableHash(sourceAuthority(parent.authority, api.processFormat(parent))) !== api.stableHash(sourceAuthority(plan.authority,
+                require('./conference-source-upgrade').upgradeFormat(plan)))
             || plan.papers.some(item => parent.items[item.paperId]?.analysisRunId !== item.previousExecutionId
                 || parent.items[item.paperId]?.status !== item.previousStatus
                 || parent.items[item.paperId]?.sourceIdentity !== state.items[item.paperId]?.sourceIdentity)
             || (parent.sourceUpgradePromotion
-                ? api.deterministicUuid(parent.sourceUpgradePromotion.planSha256, 'conference-source-upgrade-process-v1')
+                ? api.deterministicUuid(parent.sourceUpgradePromotion.planSha256,
+                    codec.isCurrentHeader(parent.sourceUpgradePromotion, 'conference-source-upgrade-promotion')
+                        ? codec.contract('conference-source-upgrade-process')
+                        : codec.historicalContract('conference-source-upgrade-process', 'plan-derived-process'))
                 : api.deterministicUuid(api.stableHash({ ...parent.authority, implementationSha256: parentSource }),
-                    parent.contract)) !== parent.processId) {
+                    api.processIdentityDomain(parent))) !== parent.processId) {
             throw new Error('来源升级前的来源、运行资料或任务 UUID 未通过完整性检查');
         }
         if (parent.status === 'complete') api.validateCompletionReceipt(parent,
@@ -181,7 +194,7 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
         return promotion.sourceImplementationSha256;
     }
     const bindsOrigin = implementationSha256 => /^[a-f0-9]{64}$/.test(implementationSha256 || '')
-        && api.deterministicUuid(api.stableHash({ ...state.authority, implementationSha256 }), state.contract) === state.processId;
+        && api.deterministicUuid(api.stableHash({ ...state.authority, implementationSha256 }), api.processIdentityDomain(state)) === state.processId;
     if (state.sourceImplementationSha256) {
         if (!bindsOrigin(state.sourceImplementationSha256)) throw new Error('原实现 SHA 无法计算出记录中的原任务 UUID');
     }
@@ -189,7 +202,7 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
         .map(name => readPrivateJson(path.join(directory, name)));
     for (const value of records) {
         const { receiptSha256, ...body } = value;
-        if (value.contract !== 'conference-process-implementation-migration-v1' || value.version !== 1
+        if (!codec.hasValidHeader(value, 'conference-process-implementation-migration')
             || value.processId !== state.processId || value.conferenceId !== state.authority.conferenceId
             || !/^[a-f0-9]{64}$/.test(value.fromImplementationSha256 || '')
             || !/^[a-f0-9]{64}$/.test(value.toImplementationSha256 || '')

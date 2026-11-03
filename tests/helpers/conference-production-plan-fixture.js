@@ -58,7 +58,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
         discoveryBinding: { catalogSha256: replay.catalogSha256, metadataSnapshotSha256: replay.metadataSnapshotSha256,
             metadataIndex: replay.metadataIndex, metadataRecordSha256: replay.metadataRecordSha256 } });
     const members = [{ paperId, sourceIdentity, receiptName: generated.receiptName }];
-    const reviewed = { contract: staging.EXTRACTION_CONTRACT, version: staging.VERSION,
+    const reviewed = { ...require('../../scripts/lib/protocol-codec').recordHeader(staging.EXTRACTION_CONTRACT, 'conference-reviewed-extraction'),
         conference: { id: 'icassp-2026', year: 2026 }, review: { actor: 'reviewer', reviewedAt: NOW }, members,
         membersSha256: staging.stableHash(members) };
     const staged = staging.bindInputs({ selectionHandle, discoveryHandle, extractionManifest: reviewed,
@@ -78,7 +78,8 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     const importHandle = importer.loadImportHandle(path.join(roots.ledgers, 'ledger.json'),
         path.join(roots.ledgers, 'ledger.import-receipt.json'), stagingHandle);
     // 原源码实例保留原文件名与原词表版本；当前默认样本使用新名称。
-    const tagField = planApi.PLAN_CONTRACT === 'conference-run-plan-v2' ? 'taxonomy' : 'tagMetadata';
+    const codec = require('../../scripts/lib/protocol-codec');
+    const tagField = codec.format(planApi.PLAN_CONTRACT, 'conference-run-plan') === 'taxonomy' ? 'taxonomy' : 'tagMetadata';
     const tagCatalogVersion = tagCatalogBytes ? JSON.parse(tagCatalogBytes).version
         : tagField === 'taxonomy' ? 'taxonomy-v1' : 'paper-tag-catalog-v2';
     const tagCatalogPath = path.join(root, tagField === 'taxonomy' ? 'taxonomy.json' : 'tag-catalog.json');
@@ -86,9 +87,9 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     files.tagCatalogFile = tagCatalogPath;
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     // 原源码实例按其旧格式生成样本；不修改新版对象的字段，也不重新计算其 SHA 来冒充旧记录。
-    const runPlan = planApi.normalizePlan({ contract: planApi.PLAN_CONTRACT, version: planApi.VERSION, ledgerName: 'ledger.json',
+    const runPlan = planApi.normalizePlan({ ...codec.recordHeader(planApi.PLAN_CONTRACT, 'conference-run-plan'), ledgerName: 'ledger.json',
         [tagField]: { version: tagCatalogVersion, sha256: sha256(fs.readFileSync(tagCatalogPath)) },
-        selectionPolicy: { contract: planApi.SELECTION_CONTRACT, identities,
+        selectionPolicy: { ...codec.recordHeader(planApi.SELECTION_CONTRACT, 'conference-selected-members'), identities,
             selectedMemberSetSha256: planApi.stableHash(identities.map(member => member.paperId)) },
         shards: [{ shardId: 'all', paperIds: identities.map(member => member.paperId) }] });
     fs.writeFileSync(path.join(roots.ledgers, 'plan.json'), `${JSON.stringify(runPlan, null, 2)}\n`, { mode: 0o600 });
@@ -115,7 +116,7 @@ function loadOriginalConferenceApis() {
     const Module = require('node:module');
     const loadedApis = {};
     for (const [name, expectedSha] of Object.entries(ORIGINAL_CONFERENCE_SOURCE_PINS)) {
-        const raw = fs.readFileSync(path.join(__dirname, `../fixtures/${name}-v2-source.txt`));
+        const raw = fs.readFileSync(path.join(__dirname, `../fixtures/${name}-original-source.txt`));
         if (sha256(raw) !== expectedSha) throw new Error('原会议源码归档的内容哈希不匹配。');
         const filename = path.resolve(__dirname, `../../scripts/lib/${name}.js`);
         const loaded = new Module(filename, module);

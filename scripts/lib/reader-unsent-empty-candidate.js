@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // A failed request that provably never started transport cannot replace an
 // earlier paid draft. This scope only removes that empty obstruction; selection,
 // normalization, pixel checks and migration remain owned by the normal loader.
@@ -11,7 +13,7 @@ const hash = value => require('./reader-repair').hashDraft(value);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = text => { throw new Error(`Unsent Reader recovery refused: ${text}`); };
 function isUnsent(event) {
-    return event?.version === 'llm-usage-v1' && event.kind === 'request'
+    return isUsageEventFormat(event) && event.kind === 'request'
         && event.outcome === 'blocked_before_transport' && event.transportStarted === false
         && event.statusCode === null && event.outputTextSha256 === null
         && event.usage?.status === 'unavailable'
@@ -47,7 +49,7 @@ function initialTransportOnly(empty, events, allEvents, identity, sameInputCandi
     const savedAt = fs.statSync(empty[0].filename).mtimeMs;
     return events.every(({ event, at }, index) => {
         const start = starts.find(item => item.eventId === event.eventId);
-        return event.version === 'llm-usage-v1' && uuid.test(String(event.eventId || '') + '.json')
+        return isUsageEventFormat(event) && uuid.test(String(event.eventId || '') + '.json')
             && event.outcome === 'transport_error' && event.transportStarted === true
             && event.statusCode === null && event.outputTextSha256 === null
             && event.usage?.status === 'unavailable'
@@ -56,7 +58,7 @@ function initialTransportOnly(empty, events, allEvents, identity, sameInputCandi
             && event.transportAttempt === index + 1 && event.inputSha256 === input
             && event.model === identity.model?.model && event.protocol === identity.model?.protocol
             && at <= savedAt && (!index || at > events[index - 1].at)
-            && start?.version === 'llm-usage-v1' && start.outcome === 'result_unknown'
+            && isUsageEventFormat(start) && start.outcome === 'result_unknown'
             && labels.every(key => (start[key] ?? null) === (event[key] ?? null))
             && Number.isFinite(Date.parse(start.at)) && Date.parse(start.at) <= at
             && (!index || Date.parse(start.at) > events[index - 1].at);
@@ -67,7 +69,7 @@ function proof(file, expectedSha256) {
 }
 function safeScope(directory, identity) {
     const fresh = require('./fresh-analysis-context'), context = fresh.getFreshAnalysisContext();
-    if (identity.contentMode !== 'reader-source-only-v1'
+    if (!require('./reader-content-mode').is(identity, 'source-only')
         || !fresh.isDailyFreshSourceScope() || context?.refreshReaderDiagnostics !== true
         || !require('../analysis-engine').paperAnalysisLockHeld({ arxivId: identity.paperId })
         || path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')) return null;

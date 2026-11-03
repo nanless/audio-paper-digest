@@ -636,7 +636,7 @@ describe('标签阶段的新旧保存格式', () => {
         delete paper.analysisManifest.stages.taxonomySeal;
         paper.analysisManifest.stages.tagSelection = stage;
         delete paper.analysisManifest.contracts.taxonomy;
-        paper.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+        paper.analysisManifest.contracts.tagSelectionRecord = records.tagStageRecordDeclaration();
         paper.analysisStageCheckpoints = { tagSelection: paper.analysis };
         if (status === 'complete') paper.analysisStageCheckpoints.structureRepair = paper.analysis;
         return { ...fixture, stage, originalStage };
@@ -745,7 +745,7 @@ describe('标签阶段的新旧保存格式', () => {
         delete current.analysisManifest.stages.taxonomySeal;
         delete current.analysisManifest.contracts.taxonomy;
         current.analysisManifest.stages.tagSelection = tagStage;
-        current.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+        current.analysisManifest.contracts.tagSelectionRecord = records.tagStageRecordDeclaration();
         current.analysisStageCheckpoints = { tagSelection: current.analysis };
         assert.equal(contract.validateCoreSummaryStageBinding(current), null);
         const untagged = structuredClone(old);
@@ -760,7 +760,7 @@ describe('标签阶段的新旧保存格式', () => {
             delete paper.analysisManifest.stages.taxonomySeal;
             delete paper.analysisManifest.contracts.taxonomy;
             delete paper.analysisStageCheckpoints.taxonomySeal;
-            paper.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+            paper.analysisManifest.contracts.tagSelectionRecord = records.tagStageRecordDeclaration();
             if (stage !== undefined) paper.analysisManifest.stages.tagSelection = stage;
             assert.match(contract.validateCoreSummaryStageBinding(paper), /上游标签阶段记录/);
         }

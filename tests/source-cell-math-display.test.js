@@ -17,7 +17,7 @@ test('真实封存单元格和构造正反例严格 whole-cell 同值，保留�
         assert.equal(proof.displayText, c.displayText, c.input);
         assert.equal(proof.sourceText, c.input);
         assert.equal(proof.sourceTextSha256, sha(c.input));
-        assert.equal(proof.contract, 'source-cell-math-display-v1');
+        assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(proof, 'source-cell-math-display'), true);
         if (c.proofKind) assert.equal(proof.kind, c.proofKind);
         if (c.kind === 'real-sealed-source') {
             const source = sources.find(s => s.paperId === c.paperId);
@@ -105,7 +105,7 @@ test('正常完整 Reader parser 保留真实原表全部行格、来源原文/D
     paper.analysisManifest.freshRewriteProvenance.structuredArtifactsSha256 = artifacts.payloadSha256;
     paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = artifacts.payloadSha256;
     require('./reader-signed-draft-fixture').sign(paper);
-    assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(structuredClone(paper)), true);
+    assert.equal(require('../scripts/analysis-engine').hasValidIntegratedApiReaderRecords(structuredClone(paper)), true);
     const wrong = structuredClone(paper);
     wrong.apiReaderPlan.tableBindings[2].cellBindings.find(c => c.sourceRow === 1 && c.sourceColumn === 1).sourceText
         = String.raw`0.5117±0.0042¯\underline{0.5118\pm 0.0042}`;

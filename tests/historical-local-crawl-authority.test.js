@@ -6,8 +6,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const local = require('../scripts/lib/historical-local-crawl-authority.js');
-const legacy = require('../scripts/lib/historical-archive-crawl-authority.js');
 const paperAuthority = require('../scripts/lib/paper-source-authority.js');
+const { originalCrawlApi, savedCrawlFixture } = require('./helpers/original-crawl-authority');
+const original = originalCrawlApi('local'), legacy = originalCrawlApi('archive');
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'local-crawl-authority-'));
@@ -24,14 +25,14 @@ function fixture(t) {
 }
 
 test('当前论文映射不接受 paper_id，只保存 ID 与 SHA 证据，并在当前数据变化后复核', t => {
-    const f = fixture(t); const index = local.scanLocalCrawlPapers({ dataRoot: f.dataRoot });
+    const f = fixture(t); const index = original.scanLocalCrawlPapers({ dataRoot: f.dataRoot });
     const current = index.matches.get(f.currentId).find(item => item.sourceKind === 'current');
     assert.deepEqual(current.recordIdentity, { arxivId: f.currentId, paperId: f.currentId });
     assert.equal(current.recordPointer.value, f.currentId);
-    const prepared = local.prepareLocalCrawlAuthority({ identityRoot: f.identityRoot, snapshotRoot: f.snapshotRoot, dataRoot: f.dataRoot,
-        arxivId: f.currentId, match: current, apply: true });
+    const prepared = savedCrawlFixture('local', { identityRoot: f.identityRoot, snapshotRoot: f.snapshotRoot, dataRoot: f.dataRoot,
+        arxivId: f.currentId, match: current });
     const snapshot = local.authorityHandleSnapshot(prepared.authorityHandle);
-    assert.equal(snapshot.authority.contract, local.CONTRACT);
+    assert.equal(snapshot.authority.contract, original.CONTRACT);
     assert.equal(snapshot.authority.sourceRelativePath, 'current/papers.json');
     assert.equal(snapshot.authority.currentIdentitySnapshot !== null, true);
     const serialized = JSON.stringify(snapshot.authority);
@@ -43,6 +44,14 @@ test('当前论文映射不接受 paper_id，只保存 ID 与 SHA 证据，并�
     assert.equal(local.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle);
     assert.ok(local.loadLocalCrawlAuthorityHandle({ identityRoot: f.identityRoot, snapshotRoot: f.snapshotRoot,
         dataRoot: f.dataRoot, authorityName: prepared.authorityName }));
+    assert.equal(local.prepareLocalCrawlAuthority, undefined);
+    assert.equal(local.prepareCurrentIdentitySnapshot, undefined);
+    assert.equal(local.scanLocalCrawlPapers, undefined);
+    const codec = require('../scripts/lib/protocol-codec');
+    const old = local.readSnapshot(f.snapshotRoot, snapshot.authority.currentIdentitySnapshot.snapshotName).snapshot;
+    const { contract, version, snapshotSha256: ignored, ...fields } = old;
+    const fake = codec.record('historical-local-crawl-current-identity-snapshot', fields);
+    assert.throws(() => local.normalizeCurrentIdentitySnapshot({ ...fake, snapshotSha256: local.stableHash(fake) }), /只接受已登记的原历史格式/);
 });
 
 test('当前论文读取器在 128 MiB 上限内接受 126 MiB 的合法快照', t => {
@@ -64,14 +73,14 @@ test('旧版归档身份经独立的旧版根目录复核，不做状态迁移',
     const index = legacy.scanRetainedFilteredPapers({ dataRoot: f.dataRoot });
     const names = [];
     for (const record of records) {
-        const prepared = legacy.prepareArchiveCrawlAuthority({ identityRoot: f.legacyIdentityRoot, dataRoot: f.dataRoot,
-            arxivId: record.arxivId, match: index.matches.get(record.arxivId)[0], apply: true });
+        const prepared = savedCrawlFixture('archive', { identityRoot: f.legacyIdentityRoot, dataRoot: f.dataRoot,
+            arxivId: record.arxivId, match: index.matches.get(record.arxivId)[0] });
         names.push(prepared.authorityName);
     }
     for (const authorityName of names) {
         const handle = local.loadLocalCrawlAuthorityHandle({ identityRoot: f.identityRoot, legacyIdentityRoot: f.legacyIdentityRoot,
             snapshotRoot: f.snapshotRoot, dataRoot: f.dataRoot, authorityName });
-        assert.equal(local.authorityHandleSnapshot(handle).authority.contract, local.LEGACY_CONTRACT);
+        assert.equal(local.authorityHandleSnapshot(handle).authority.contract, legacy.CONTRACT);
         assert.equal(local.replayAuthorityHandle(handle, { requireProduction: true }), handle);
     }
     assert.equal(fs.existsSync(f.identityRoot), false);

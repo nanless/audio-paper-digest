@@ -111,7 +111,7 @@ test('保存稿自洽SHA冷核仍拒错科学量，原合法稿保留', () => {
     const engine = require('../scripts/analysis-engine');
     const { validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture');
     const original = validLegacyApiAnalysisPaper('2601.12345');
-    assert.equal(engine.hasValidApiReaderV3Records(original), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(original), true);
     function paperWith(value) {
         const paper = structuredClone(original), article = table(value);
         paper.apiReaderArticle += '\n\n' + article;
@@ -125,9 +125,9 @@ test('保存稿自洽SHA冷核仍拒错科学量，原合法稿保留', () => {
             sourceBindingsSha256: plan.sourceBindingsSha256, tableBindingCount: 1 });
         return paper;
     }
-    assert.equal(engine.hasValidApiReaderV3Records(paperWith('3×10⁻⁴')), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paperWith('3×10⁻⁴')), true);
     for (const value of ['3×10⁻⁹', '3×10⁺⁴', '3×10', '3×10₋₄', '3×10⁻⁴ ms'])
-        assert.equal(engine.hasValidApiReaderV3Records(paperWith(value)), false, value);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paperWith(value)), false, value);
 });
 
 test('科学量实现叶的实际字节进入Reader阶段指纹，上游指纹不变', t => {

@@ -51,7 +51,9 @@ function assertArtifact(dir, date) {
     const artifactPath = path.join(dir, `web-verification-${date}.json`);
     assert.ok(fs.existsSync(artifactPath), `缺少 artifact: ${artifactPath}`);
     const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
-    assert.strictEqual(artifact.schemaVersion, verifyWeb.ARTIFACT_VERSION);
+    assert.strictEqual(artifact.contract, verifyWeb.ARTIFACT_FORMAT);
+    assert.strictEqual(verifyWeb.hasVerificationArtifactFormat(artifact), true);
+    assert.strictEqual(verifyWeb.hasVerificationArtifactFormat({ ...artifact, schemaVersion: 1 }), false);
     assert.ok(Number.isFinite(Date.parse(artifact.createdAt)), 'createdAt 必须是 ISO 时间');
     assert.strictEqual(artifact.date, date);
     assert.strictEqual(typeof artifact.partial, 'boolean');

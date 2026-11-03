@@ -275,7 +275,7 @@ class GitPublicationTest(unittest.TestCase):
         self.cid, self.pid = 'test-2026', '11111111-1111-4111-8111-111111111111'
         catalog = reviewer._PAGE_TAG_CATALOG
         snapshot = reviewer.build_tag_catalog_snapshot(catalog)
-        versions = {'contract': reviewer.TAG_CATALOG_VERSIONS_CONTRACT,
+        versions = {**reviewer.public_protocols.record_header(reviewer.TAG_CATALOG_VERSIONS_CONTRACT, 'paper-tag-catalog-versions'),
                     'currentSha256': snapshot['registrySha256'], 'snapshots': [snapshot]}
         for prefix in ('data', 'static/data'):
             for name, value in [('tag-catalog-snapshot.json', snapshot),
@@ -292,7 +292,7 @@ class GitPublicationTest(unittest.TestCase):
         page_bytes = ('---\ntitle: Approved conference fixture\n'
                       'paper_digest_tags_contract: "paper-tag-flat-tags-v2"\n'
                       f'paper_digest_tags_registry_sha256: "{catalog["registrySha256"]}"\n'
-                      f'paper_digest_tags_registry_version: "{catalog["version"]}"\n'
+                      f'paper_digest_tags_registry_version: "{reviewer.tag_catalog_identity(catalog)}"\n'
                       '---\napproved\n').encode()
         self.record = self.record_file(self.blog, self.record['path'], page_bytes)
         source = self.root / 'source.md'
@@ -312,9 +312,9 @@ class GitPublicationTest(unittest.TestCase):
             self.addCleanup(patch.stop)
         page = {'path': record['path'], 'sourceSha256': record['sourceSha256'],
                 'url': 'https://example.com/posts/test/', 'formulaCount': 0, 'projectionSha256': 'p'}
-        self.acceptance = {'status': 'passed', 'contract': gate.GATE_CONTRACT,
+        self.acceptance = {'status': 'passed', **gate.mechanical_gate_header(),
                            'checks': [{'url': page['url']}, {'url': publisher.IMAGE_BASE_URL + '/' + asset['path']}]}
-        self.gate = {'status': 'passed', 'contract': gate.GATE_CONTRACT, 'pages': [page],
+        self.gate = {'status': 'passed', **gate.mechanical_gate_header(), 'pages': [page],
                      'implementationSha256': publisher.gate_fingerprint()}
         # review() 的内容审查要求真实 Hugo 运行时和带 frontmatter 的页面；这些
         # 测试只验证发布流程，内容审查本身由 test_publish_conference.py 覆盖。
@@ -526,10 +526,12 @@ class GitPublicationTest(unittest.TestCase):
         directory = publisher.publication_dir(self.cid, self.pid)
         generation = publisher.read_json(directory / 'generation.json')
         review = publisher.read_json(directory / 'review.json')
-        generation['version'] = 1
+        generation.pop('schemaFingerprint')
+        generation.update(publisher.protocols.historical_header('conference-blog-generation', 'local-assets'))
         generation.pop('generationSha256')
         generation['generationSha256'] = publisher.stable(generation)
-        review.update(version=1, generationSha256=generation['generationSha256'])
+        review.pop('schemaFingerprint')
+        review.update(**publisher.protocols.historical_header('conference-blog-mechanical-review', 'mechanical-only'), generationSha256=generation['generationSha256'])
         review['contentReview'] = {'status': 'passed', 'pages': [], 'protocol': 'not-verified'}
         review.pop('reviewSha256')
         review['reviewSha256'] = publisher.stable(review)
@@ -545,6 +547,12 @@ class GitPublicationTest(unittest.TestCase):
         directory = publisher.publication_dir(self.cid, self.pid)
         review = publisher.read_json(directory / 'review.json')
         review.pop('contentReview')
+        # Only the actually registered original no-FP review format allowed the
+        # pre-semantic historical receipt. Current stable receipts must reject it.
+        self.assertRaises(publisher.ConferencePublicationError, publisher.validate_review,
+            publisher.read_json(directory / 'generation.json'), review, current=False)
+        review.pop('schemaFingerprint')
+        review.update(publisher.protocols.historical_header('conference-blog-review', 'content-and-html'))
         review.pop('reviewSha256')
         review['reviewSha256'] = publisher.stable(review)
         (directory / 'review.json').write_bytes(publisher.json_bytes(review))
@@ -673,16 +681,19 @@ class GitPublicationTest(unittest.TestCase):
         generation = publisher.read_json(directory / 'generation.json')
         review = publisher.read_json(directory / 'review.json')
         published = publisher.read_json(directory / 'publish.json')
-        generation.update(version=1, imagePublicationCommit=published['imagePublicationCommit'])
+        generation.pop('schemaFingerprint')
+        generation.update(**publisher.protocols.historical_header('conference-blog-generation', 'local-assets'), imagePublicationCommit=published['imagePublicationCommit'])
         def resign(value, key):
             value.pop(key, None)
             value[key] = publisher.stable(value)
             return value
         resign(generation, 'generationSha256')
-        review.update(version=1, generationSha256=generation['generationSha256'],
+        review.pop('schemaFingerprint')
+        review.update(**publisher.protocols.historical_header('conference-blog-mechanical-review', 'mechanical-only'), generationSha256=generation['generationSha256'],
                       imagePublicationCommit=published['imagePublicationCommit'], hugo={'status': 'passed'})
         resign(review, 'reviewSha256')
-        published.update(version=1, generationSha256=generation['generationSha256'], reviewSha256=review['reviewSha256'])
+        published.pop('schemaFingerprint')
+        published.update(**publisher.protocols.historical_header('conference-blog-commit', 'remote-oid-only'), generationSha256=generation['generationSha256'], reviewSha256=review['reviewSha256'])
         published.pop('imagePublicationCommit')
         published.pop('urlAcceptance')
         resign(published, 'publishSha256')
@@ -703,6 +714,7 @@ class GitPublicationTest(unittest.TestCase):
                 with self.assertRaisesRegex(publisher.ConferencePublicationError, '旧发布凭证'):
                     publisher.verify(self.cid, self.pid)
             self.assertFalse((directory / 'verification-v2.json').exists())
+            self.assertFalse((directory / 'verification.json').exists())
             with mock.patch.object(publisher, 'run_hugo', return_value=self.gate) as hugo, \
                     mock.patch.object(publisher, 'verify_publication_urls', return_value=self.acceptance), \
                     mock.patch.object(publisher, 'commit_delta', side_effect=AssertionError('legacy commit')):
@@ -711,6 +723,17 @@ class GitPublicationTest(unittest.TestCase):
                 self.assertTrue(result['legacyReverified'])
                 self.assertEqual(hugo.call_args.args[1]['renderTree'], published['publicationCommit'])
             self.assertTrue(publisher.status(self.cid, self.pid)['complete'])
+            current_proof = directory / 'verification.json'
+            old_location = directory / 'verification-v2.json'
+            self.assertTrue(current_proof.is_file())
+            self.assertFalse(old_location.exists())
+            current_proof.rename(old_location)
+            proof_bytes = old_location.read_bytes()
+            self.assertTrue(publisher.status(self.cid, self.pid)['complete'])
+            self.assertEqual(old_location.read_bytes(), proof_bytes)
+            current_proof.write_bytes(proof_bytes)
+            with self.assertRaisesRegex(publisher.ConferencePublicationError, '有两份'):
+                publisher.status(self.cid, self.pid)
         for name, data in original.items():
             self.assertEqual((directory / name).read_bytes(), data)
 

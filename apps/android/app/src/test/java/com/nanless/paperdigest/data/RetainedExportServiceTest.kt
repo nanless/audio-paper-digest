@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import kotlinx.coroutines.*
 import org.json.*
 import org.junit.Assert.*
@@ -45,7 +46,7 @@ class RetainedExportServiceTest {
   val output=object:ByteArrayOutputStream(){override fun close(){closed=true;super.close()}}
   val result=service.save(delivery,"content://synthetic.documents/original",{output}){_,sha,bytes->reads++;assertTrue(closed);assertEquals(bytes,output.size().toLong());assertEquals(sha,BackupCodec.hash(output.toByteArray()))}
   assertEquals("verified",result.getString("state"));assertFalse(result.getBoolean("cleanupEligible"));assertEquals(1,reads);assertArrayEquals(f.capture.file.readBytes(),output.toByteArray());assertEquals(original,f.originals())
-  val history=File(f.research,"ExportHistory").listFiles()!!.single();val value=JSONObject(history.readText());assertEquals("retained-capture-v1",value.getString("kind"));assertFalse(value.has("uri"));assertFalse(value.has("savedProofID"));assertFalse(File(f.device,"ExportSaveProofs").exists());assertTrue(File(f.device,"RetainedCaptureExportProofs").isDirectory)
+  val history=File(f.research,"ExportHistory").listFiles()!!.single();val value=JSONObject(history.readText());assertEquals("retained-capture",value.getString("kind"));assertFalse(value.has("uri"));assertFalse(value.has("savedProofID"));assertFalse(File(f.device,"ExportSaveProofs").exists());assertTrue(File(f.device,"RetainedCaptureExportProofs").isDirectory)
  }}
  @Test fun unverifiedSourceAndForgedPresentationObjectNeverGetProviderAuthority()=fixture{f->
   val service=f.service();val real=service.prepareSnapshot(f.row.operationID);val fake=object:RetainedSnapshot{override val operationID=real.operationID;override val documentID=real.documentID;override val mime=real.mime;override val name=real.name;override val bytes=real.bytes;override val sha256=real.sha256}
@@ -136,6 +137,39 @@ class RetainedExportServiceTest {
   val service=f.service();val snapshot=service.prepareSnapshot(f.row.operationID);val delivery=service.beginDelivery(snapshot);service.save(delivery,"content://synthetic.documents/proven",{ByteArrayOutputStream()}){_,_,_->}
   val file=File(f.directory,"retained-attempt-${delivery.attemptID}.json");val record=file.readBytes();assertTrue(File(f.device,"RetainedCaptureExportProofs/${delivery.attemptID}.json").delete())
   val view=f.service().deliveryHistory(snapshot.operationID).single();assertEquals("unconfirmed",view.getString("state"));assertFalse(view.getBoolean("readbackProven"));assertFalse(view.getBoolean("cleanupEligible"));assertArrayEquals(record,file.readBytes())
+ }}
+
+ @Test fun constructedHistoricalRetainedProofKeepsOriginalDomainHmacHistoryAndBytes()=fixture{f->runBlocking{
+  val original=f.originals();val service=f.service();val delivery=service.beginDelivery(service.prepareSnapshot(f.row.operationID));val output=ByteArrayOutputStream()
+  service.save(delivery,"content://synthetic.documents/history",{output}){_,sha,count->assertEquals(count,output.size().toLong());assertEquals(sha,BackupCodec.hash(output.toByteArray()))}
+  val historyFile=File(f.research,"ExportHistory/retained-${delivery.attemptID}.json")
+  val proofRoot=File(f.device,"RetainedCaptureExportProofs");val proofFile=File(proofRoot,"${delivery.attemptID}.json")
+  val currentHistory=JSONObject(historyFile.readText())
+  fun oldHeader(value:JSONObject,family:String,variant:String,label:String):JSONObject {
+   value.remove("contract");value.remove("schemaFingerprint");value.remove(label)
+   val header=ClientProtocols.historicalHeader(family,variant,null);header.keys().forEach{value.put(it,header.get(it))};return value
+  }
+  val history=oldHeader(currentHistory.copy(),"paperdigest-retained-capture-export-history","retained-backup-readback-history","kind")
+  val historyRaw=canonical(history).toByteArray();historyFile.writeBytes(historyRaw)
+  val proof=oldHeader(JSONObject(proofFile.readText()),"paperdigest-retained-capture-export-proof","device-authenticated-retained-readback","domain").put("history",history).put("historySHA256",BackupCodec.hash(historyRaw))
+  fun sign(value:JSONObject):ByteArray {
+   value.remove("hmacSHA256");val key=File(proofRoot,"retained-capture-integrity.key").readBytes()
+   try{val mac=javax.crypto.Mac.getInstance("HmacSHA256");mac.init(javax.crypto.spec.SecretKeySpec(key,"HmacSHA256"));value.put("hmacSHA256",mac.doFinal((value.getString("domain")+"\n"+canonical(value)).toByteArray()).joinToString(""){"%02x".format(it.toInt() and 255)})}finally{key.fill(0)}
+   return canonical(value).toByteArray()
+  }
+  val proofRaw=sign(proof);proofFile.writeBytes(proofRaw)
+  val records=listOf(File(f.directory,"retained-delivery.json"),File(f.directory,"retained-attempt-${delivery.attemptID}.json"))
+  records.forEach{file->file.writeText(canonical(oldHeader(JSONObject(file.readText()),"paperdigest-retained-capture-attempt","retained-backup-save-attempt","kind")))}
+  val before=(records+historyFile+proofFile).associateWith{it.readBytes()}
+  assertEquals("verified",f.service().deliveries(f.row.operationID).getString("state"))
+  assertEquals(1,f.service().deliveryHistory(f.row.operationID).size)
+  before.forEach{(file,raw)->assertArrayEquals(raw,file.readBytes())};assertEquals(original,f.originals())
+  val wrongHistory=proof.copy().put("history",currentHistory).put("historySHA256",BackupCodec.hash(canonical(currentHistory).toByteArray()))
+  proofFile.writeBytes(sign(wrongHistory));assertTrue(runCatching{f.service().deliveries(f.row.operationID)}.isFailure)
+  val wrongDomain=proof.copy();val header=ClientProtocols.recordHeader("paperdigest-retained-capture-export-proof","paperdigest-retained-capture-export-proof");header.keys().forEach{wrongDomain.put(it,header.get(it))}
+  proofFile.writeBytes(sign(wrongDomain));assertTrue(runCatching{f.service().deliveries(f.row.operationID)}.isFailure)
+  wrongDomain.put("domain","retained-capture").put("schemaFingerprint","0".repeat(64));val malformed=sign(wrongDomain);proofFile.writeBytes(malformed)
+  assertTrue(runCatching{f.service().deliveries(f.row.operationID)}.isFailure);assertArrayEquals(malformed,proofFile.readBytes());assertArrayEquals(historyRaw,historyFile.readBytes());assertEquals(original,f.originals())
  }}
 
 }

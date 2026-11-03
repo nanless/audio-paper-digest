@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.review
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.data.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
@@ -173,4 +174,30 @@ class StorageCapacityTest {
             allow = true; val retry = f.service.cleanupPrepare(f.verifier); assertEquals(1, retry.getInt("documents")); assertEquals("completed", f.service.cleanupCommit(retry.getString("planID"), f.verifier).getString("status"))
         } finally { f.close() }
     }
+    @Test fun constructedHistoricalHmacAndHistoryAreReadWithoutRewritingAndWrongFingerprintCannotAcquireCleanup()=runBlocking {
+        val f=Fixture()
+        try {
+            val document=f.export();val result=f.service.markExportSaved(document.id,document.uri,f.verifier);val proofID=result.getString("proofID")
+            val historyFile=File(f.research,"ExportHistory/$proofID.json");val proofFile=File(f.device,"ExportSaveProofs/$proofID.json")
+            fun oldHeader(value:JSONObject,family:String,variant:String):JSONObject {
+                assertTrue(ClientProtocols.isCurrentHeader(value,family));value.remove("contract");value.remove("schemaFingerprint")
+                val header=ClientProtocols.historicalHeader(family,variant,null);header.keys().forEach{value.put(it,header.get(it))};return value
+            }
+            val history=oldHeader(JSONObject(historyFile.readText()),"paperdigest-export-history","verified-export-history")
+            val historyRaw=canonical(history).toByteArray();historyFile.writeBytes(historyRaw)
+            val proof=oldHeader(JSONObject(proofFile.readText()),"paperdigest-native-export-save","device-authenticated-destination-readback").put("historySHA256",sha256(historyRaw))
+            fun sign(value:JSONObject):ByteArray {
+                value.remove("hmacSHA256");val key=File(f.device,"export-save-integrity.key").readBytes()
+                try{val mac=javax.crypto.Mac.getInstance("HmacSHA256");mac.init(javax.crypto.spec.SecretKeySpec(key,"HmacSHA256"));value.put("hmacSHA256",mac.doFinal(canonical(value).toByteArray()).joinToString(""){"%02x".format(it.toInt() and 255)})}finally{key.fill(0)}
+                return canonical(value).toByteArray()
+            }
+            val proofRaw=sign(proof);proofFile.writeBytes(proofRaw);val metadata=document.metadata.readBytes()
+            assertEquals(1,f.newService().cleanupPrepare(f.verifier).getInt("documents"))
+            assertArrayEquals(proofRaw,proofFile.readBytes());assertArrayEquals(historyRaw,historyFile.readBytes());assertArrayEquals(metadata,document.metadata.readBytes())
+            proof.put("contract","paperdigest-native-export-save").put("schemaFingerprint","0".repeat(64));val malformed=sign(proof);proofFile.writeBytes(malformed)
+            val rejected=f.newService().cleanupPrepare(f.verifier);assertEquals(0,rejected.getInt("documents"));assertEquals(1,rejected.getInt("retainedDocuments"))
+            assertArrayEquals(malformed,proofFile.readBytes());assertArrayEquals(historyRaw,historyFile.readBytes());assertArrayEquals(document.bytes,document.bin.readBytes())
+        }finally{f.close()}
+    }
+
 }

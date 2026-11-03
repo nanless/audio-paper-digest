@@ -1,4 +1,6 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 /*
  * Tutorial quality gate shared by preview and the sealed default Manual v5
@@ -9,7 +11,7 @@
 const crypto = require('crypto');
 const { normalizedId } = require('../../scripts/utils.js');
 
-const MANUAL_TUTORIAL_QUALITY_CONTRACT = 'graduate-researcher-tutorial-quality-v2';
+const MANUAL_TUTORIAL_QUALITY_CONTRACT = historicalManualContract('manual-tutorial-quality', 'evidence-and-pedagogy');
 const MIN_ARTICLE_CHARS = 6000;
 const MIN_SECTIONS = 8;
 const MAX_SECTIONS = 18;
@@ -17,8 +19,8 @@ const REQUIRED_SECTION_KINDS = Object.freeze([
     'teaching_entry', 'mental_model', 'mechanism', 'training_reproduction',
     'experiment_protocol', 'complete_results', 'negative_boundary', 'reader_closeout'
 ]);
-const READER_TUTORIAL_PATH = 'reader-tutorial-path-v1';
-const FRESH_AUTHORING_CONTRACT = 'fresh-authoring-v1';
+const READER_TUTORIAL_PATH = historicalManualContract('manual-reader-path', 'source-bound-sections');
+const FRESH_AUTHORING_CONTRACT = historicalManualContract('manual-fresh-authoring', 'source-only');
 const FRESH_AUTHORING_INPUT_KINDS = new Set([
     'paper_metadata', 'source_snapshot', 'structured_fulltext', 'artifact_index',
     'paper_figure', 'paper_table', 'paper_formula', 'fact_ledger',

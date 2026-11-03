@@ -10,7 +10,10 @@ actor LibraryFixtureTransport {
     func read(_ url: URL, _ limit: Int) async throws -> Data {
         requests.append(url.path)
         if delay > 0 { try await Task.sleep(nanoseconds: delay) }
-        guard let data = files[url.path] ?? files[url.path + "/"] else { throw LibraryService.ServiceError.network("fixture missing: \(url.path)") }
+        guard let data = files[url.path] ?? files[url.path + "/"] else {
+            if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
+            throw LibraryService.ServiceError.network("fixture missing: \(url.path)")
+        }
         return data
     }
     func update(_ path: String, _ data: Data) { files[path] = data }
@@ -30,7 +33,12 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         Self.lock.lock();let data=Self.files[path] ?? Self.files[path+"/"],delay=Self.delays[path] ?? Self.delays[path.trimmingCharacters(in:CharacterSet(charactersIn:"/"))] ?? Self.delays[path.hasSuffix("/") ? String(path.dropLast()):path+"/"] ?? 0;Self.lock.unlock()
         DispatchQueue.global().asyncAfter(deadline:.now()+delay) {
             self.stateLock.lock();defer{self.stateLock.unlock()};guard !self.finished else{return};self.finished=true
-            guard let data else{self.client?.urlProtocol(self,didFailWithError:URLError(.fileDoesNotExist));return}
+            guard let data else{
+                if path.contains("/client/"),let response=HTTPURLResponse(url:self.request.url!,statusCode:404,httpVersion:"HTTP/1.1",headerFields:["Content-Length":"0"]) {
+                    self.client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed);self.client?.urlProtocolDidFinishLoading(self)
+                }else{self.client?.urlProtocol(self,didFailWithError:URLError(.fileDoesNotExist))}
+                return
+            }
             let response=HTTPURLResponse(url:self.request.url!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Length":String(data.count)])!
             self.client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed);self.client?.urlProtocol(self,didLoad:data);self.client?.urlProtocolDidFinishLoading(self)
         }
@@ -104,7 +112,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(await library.list(minimumScore: 8).count == 1, "minimum score")
         let firstRequests = await transport.count()
         _ = try await library.sync()
-        try expect(await transport.count() == firstRequests + 1, "unchanged immutable shards reused with bytes/SHA validation")
+        try expect(await transport.count() == firstRequests + 2, "unchanged immutable shards reused with bytes/SHA validation")
         let listing = try await library.handle(command: "library.list", payload: ["query": "Beta", "limit": 100])
         try expect(listing["total"] as? Int == 1, "search pagination total matches filter")
         let restarted = try service(folder, transport)

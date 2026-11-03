@@ -64,12 +64,23 @@ def attestation():
     }
 
 
-def current_attestation():
+def original_sol_attestation():
     payload = attestation()
     payload['version'] = 4
     payload['modelPolicy'] = 'manual-agents-sol-high-v2'
     subagent = payload['files'][0]['reviewSubagent']
     subagent.update(version=2, modelPolicy=payload['modelPolicy'], model='gpt-6.1-sol')
+    return payload
+
+
+def current_attestation():
+    from manual_agent_policy import current_review_statement_fields, current_review_subagent_fields
+    payload = attestation()
+    payload.pop('version')
+    payload.update(current_review_statement_fields())
+    subagent = payload['files'][0]['reviewSubagent']
+    subagent.pop('version')
+    subagent.update(current_review_subagent_fields())
     return payload
 
 
@@ -148,7 +159,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
             module.reusable_verified_publication_review.return_value = None
             module.has_publication_evidence_for_generation.return_value = False
             module.normalize_publish_arxiv_id.side_effect = AssertionError('旧版错误地继续处理 v2 声明')
-            with self.assertRaisesRegex(ValueError, '新人工审查.*v4.*gpt-6.1-sol/high'):
+            with self.assertRaisesRegex(ValueError, '新人工审查.*现行声明.*gpt-6.1-sol/high'):
                 manual_review_blog._run(module, '2026-08-25', statement)
             module.review_and_fix_post.assert_not_called()
             module.run_hugo_gate.assert_not_called()
@@ -164,7 +175,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 ]}
                 for version in (2, 3):
                     with self.subTest(schema=schema, depth=depth, version=version):
-                        with self.assertRaisesRegex(ValueError, '新人工审查.*v4'):
+                        with self.assertRaisesRegex(ValueError, '新人工审查.*现行声明'):
                             manual_review_blog._require_current_review_statement_version(
                                 Module, generation, {'version': version},
                             )

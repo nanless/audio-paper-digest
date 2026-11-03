@@ -7,12 +7,12 @@ import sys
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
 from publish_common import (  # noqa: E402
-    MANUAL_V6_SIGNATURE_CONTRACT,
+    MANUAL_SIGNATURE_CONTRACT,
     PublishDataValidationError,
-    _manual_v6_canonical_json,
-    _manual_v6_hash,
-    _prepare_manual_v6_json_hash_input,
-    _manual_v6_text,
+    _manual_signature_canonical_json,
+    _manual_signature_hash,
+    _prepare_manual_signature_input,
+    _normalize_signed_manual_text,
 )
 
 
@@ -24,22 +24,22 @@ class ManualSignatureContractTest(unittest.TestCase):
             cls.vectors = json.load(handle)
 
     def test_shared_stable_json_unicode_nfkc_and_hash_vectors(self):
-        self.assertEqual(self.vectors['contract'], MANUAL_V6_SIGNATURE_CONTRACT)
+        self.assertEqual(self.vectors['contract'], MANUAL_SIGNATURE_CONTRACT)
         for vector in self.vectors['accepted']:
-            canonical = _manual_v6_canonical_json(
-                _prepare_manual_v6_json_hash_input(vector['value'])
+            canonical = _manual_signature_canonical_json(
+                _prepare_manual_signature_input(vector['value'])
             )
             self.assertEqual(canonical, vector['canonicalJson'], vector['name'])
-            self.assertEqual(_manual_v6_hash(vector['value']), vector['sha256'], vector['name'])
-            self.assertEqual(_manual_v6_text(vector['nfkcInput']), vector['nfkcText'], vector['name'])
+            self.assertEqual(_manual_signature_hash(vector['value']), vector['sha256'], vector['name'])
+            self.assertEqual(_normalize_signed_manual_text(vector['nfkcInput']), vector['nfkcText'], vector['name'])
 
     def test_non_ascii_keys_and_illegal_numbers_fail_closed(self):
         for vector in self.vectors['rejected']:
             with self.assertRaises(PublishDataValidationError, msg=vector['name']):
-                _prepare_manual_v6_json_hash_input(vector['value'])
+                _prepare_manual_signature_input(vector['value'])
         for value in (2 ** 53, float(2 ** 53), float('nan'), float('inf'), -0.0):
             with self.assertRaises(PublishDataValidationError):
-                _prepare_manual_v6_json_hash_input({'value': value})
+                _prepare_manual_signature_input({'value': value})
 
 
 if __name__ == '__main__':

@@ -565,7 +565,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
         structuredArtifactsSha256: provenance.structuredArtifactsSha256
     });
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true, '测试正文必须通过当前 Reader 内容检查');
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true, '测试正文必须通过当前 Reader 内容检查');
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, '测试分析记录必须通过当前分析内容检查');
     return paper;
 }
@@ -955,7 +955,7 @@ test('持久的暂停标记会在接新活之前停下，标记删掉后同一�
     fs.unlinkSync(pauseFile);
     const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
         arxivGeneration: 1, concurrency: 1 }, dependencies);
-    assert.equal(resumed.status, 'complete'); assert.equal(resumed.progress.processed, 2);
+    assert.equal(resumed.status, 'complete', JSON.stringify(resumed.results)); assert.equal(resumed.progress.processed, 2);
     assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2);
 });
 
@@ -1063,7 +1063,7 @@ test('两个直连运行器立刻回收同一个刚死亡的同主机操作持�
         runner.runDirectRewrite(options, dependencies),
         runner.runDirectRewrite(options, dependencies)
     ]);
-    assert.deepEqual(results.map(result => result.status), ['complete', 'complete']);
+    assert.deepEqual(results.map(result => result.status), ['complete', 'complete'], JSON.stringify(results.map(result => result.results)));
     assert.equal(analyses, 1);
     assert.equal(results.flatMap(result => result.results)
         .filter(result => result.status === 'staged').length, 1);
@@ -2295,7 +2295,7 @@ function correctionRateHistoricalFixture(t) {
         const paper = sealedAnalysis(item, sourceDescriptor, sourceDetails);
         paper.arxivId = id;
         bindCorrectionRateSummary(paper, id, summary);
-        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
         assert.equal(require('../scripts/analysis-contract').validateCoreSummaryStageBinding(paper), null);
         assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, 'the actual direct source scope passes the full unmodified engine');
         return paper;
@@ -2340,7 +2340,7 @@ test('历史来源绑定核心摘要的完整资格在分析后和两条冷暂�
         assert.equal(context.getDirectRewriteAnalysisContext(), null);
         assert.equal(engine.isSuccessfulAnalysisRecord(record), false, 'no global source qualification survives scope exit');
         assert.match(engine.getIncompleteAnalysisContentReason(record), /核心摘要语义的原封存来源未通过核验/);
-        assert.equal(initial.results[0].status, 'staged', 'source-bound core must not lose its real source before staging');
+        assert.equal(initial.results[0].status, 'staged', `source-bound core must not lose its real source before staging: ${JSON.stringify(initial.results)}`);
         const replayed = await runner.runDirectRewrite(options, { ...dependencies,
             analyze: () => assert.fail('staged cold replay must not analyze') });
         assert.equal(replayed.results[0].status, 'recovered');
@@ -2440,7 +2440,7 @@ function historicalResourceClaimsPaper(input) {
     assert.equal(require('../scripts/analysis-contract').validateCoreSummarySemanticContract(paper.analysis), null);
     assert.equal(paper.apiReaderPlan.tableBindings.length, 0);
     assert.equal(paper.apiReaderResources.resources.length, 0);
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return paper;
 }
@@ -2463,9 +2463,9 @@ test('历史普通核心的新资源声明在初次暂存和两条冷重放保�
     assert.equal(context.getDirectRewriteAnalysisContext(), null);
     assert.equal(initial.results[0].status, 'staged', 'new Reader claims must retain their source after normal analysis returns');
     const before = JSON.stringify(saved.analysis);
-    const readerCheck = engine.hasValidApiReaderV3Records;
+    const readerCheck = engine.hasValidIntegratedApiReaderRecords;
     let textOnlyChecks = 0;
-    t.mock.method(engine, 'hasValidApiReaderV3Records', (...args) => {
+    t.mock.method(engine, 'hasValidIntegratedApiReaderRecords', (...args) => {
         const active = context.getDirectRewriteAnalysisContext();
         assert.ok(active, 'normal cold qualification must have the actual direct source');
         assert.equal(active.readerPdfSourceHandle, undefined, 'text-only replay must not attach PDF table/footnote authority');

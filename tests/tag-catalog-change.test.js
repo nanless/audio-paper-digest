@@ -23,6 +23,7 @@ const OLD_ALIAS_REMOVAL = path.join(HISTORY,
 
 const raw = () => JSON.parse(fs.readFileSync(CURRENT, 'utf8'));
 const clone = value => JSON.parse(JSON.stringify(value));
+const historicalCatalog = (value,version) => ({version,facets:value.facets,concepts:value.concepts});
 const byId = (registry, id) => registry.concepts.find(concept => concept.id === id);
 const codes = detail => detail.reasons.map(reason => reason.code);
 
@@ -299,7 +300,7 @@ test('快照按字节 SHA 解析，内容对不上就拒绝', () => {
     const sha = crypto.createHash('sha256').update(fs.readFileSync(OLD_SEED)).digest('hex');
     const snapshot = api.resolveRegistrySnapshot(sha);
     assert.equal(snapshot.registrySha256, sha);
-    assert.equal(snapshot.version, 'paper-taxonomy-v1');
+    assert.equal(tagCatalogApi.tagCatalogIdentity(snapshot), 'paper-taxonomy-v1');
     assert.equal(api.resolveRegistrySnapshot('0'.repeat(64)), null);
     assert.equal(api.resolveRegistrySnapshot('not-a-sha'), null);
 
@@ -320,7 +321,10 @@ test('批准的386概念词表只在原262完整对象之后追加，不回退�
     assert.equal(crypto.createHash('sha256').update(previousBytes).digest('hex'), PRE_DISPLAY_ALIGNMENT_SHA);
     const previous = tagCatalogApi.loadTagCatalog(PRE_DISPLAY_ALIGNMENT);
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
-    assert.equal(current.registrySha256, 'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8');
+    const original=tagCatalogApi.loadTagCatalog(path.join(HISTORY,'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8.json'));
+    assert.equal(original.registrySha256,'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8');
+    assert.deepEqual(current.concepts,original.concepts);
+    assert.deepEqual(current.facets,original.facets);
     assert.equal(current.concepts.length, 386);
     assert.equal(api.isStrictAppendOnlyCatalog(previous, current), true);
     assert.deepEqual(current.facets, previous.facets);
@@ -424,8 +428,8 @@ test('registryUpgradeFrom 标注会生成，并按重算出的级别校验', () 
         acknowledgeDestructive: true
     });
     assert.equal(annotation.contract, api.REGISTRY_UPGRADE_CONTRACT);
-    assert.equal(annotation.contract, 'paper-tag-catalog-upgrade-v2');
-    assert.equal(annotation.version, 2);
+    assert.equal(annotation.contract, 'paper-tag-catalog-upgrade');
+    assert.equal(annotation.schemaFingerprint,require('../scripts/lib/protocol-codec').schemaFingerprint('paper-tag-catalog-upgrade'));
     assert.equal(annotation.fromRegistrySha256, from.registrySha256);
     assert.equal(annotation.toRegistrySha256, to.registrySha256);
     assert.ok(annotation.reasons.includes('concept-added'));
@@ -438,14 +442,15 @@ test('registryUpgradeFrom 标注会生成，并按重算出的级别校验', () 
     const expected = {
         fromRegistrySha256: from.registrySha256,
         toRegistrySha256: to.registrySha256,
-        registryVersion: to.version,
-        fromRegistryVersion: from.version,
-        toRegistryVersion: to.version,
+        registryVersion: tagCatalogApi.tagCatalogIdentity(to),
+        fromRegistryVersion: tagCatalogApi.tagCatalogIdentity(from),
+        toRegistryVersion: tagCatalogApi.tagCatalogIdentity(to),
         changeLevel,
         detail
     };
     assert.equal(api.validateRegistryUpgradeAnnotation(annotation, expected), null);
-    const legacy = { ...annotation, contract: 'paper-taxonomy-registry-upgrade-v1', version: 1 };
+    const {schemaFingerprint, ...originalFields}=annotation;
+    const legacy = { ...originalFields, contract: 'paper-taxonomy-registry-upgrade-v1', version: 1 };
     const savedLegacy = JSON.stringify(legacy);
     assert.equal(api.validateRegistryUpgradeAnnotation(legacy, expected), null);
     assert.equal(JSON.stringify(legacy), savedLegacy);
@@ -738,8 +743,8 @@ test('面对同一份固定数据，Node 与 Python 的词表升级检查结论�
             from: JSON.parse(fs.readFileSync(OLD_ALIAS_REMOVAL, 'utf8')), to: raw() },
         { name: 'seed-to-current',
             from: JSON.parse(fs.readFileSync(OLD_SEED, 'utf8')), to: raw() },
-        { name: 'catalog-version-migration', from: { ...raw(), version: 'paper-taxonomy-v1' }, to: raw() },
-        { name: 'catalog-version-downgrade', from: raw(), to: { ...raw(), version: 'paper-taxonomy-v1' } },
+        { name: 'catalog-version-migration', from: historicalCatalog(raw(),'paper-taxonomy-v1'), to: raw() },
+        { name: 'catalog-version-downgrade', from: raw(), to: historicalCatalog(raw(),'paper-taxonomy-v1') },
         { name: 'current-to-current', from: raw(), to: raw() }
     ];
     const pythonProgram = [
@@ -1037,14 +1042,14 @@ test('已知的目录改名迁移会保留各项检查，藏不住破坏性改�
     const annotation = api.buildRegistryUpgradeAnnotation({
         from: previous, to: current, changeLevel, detail, note: '仅迁移词表版本名称。'
     });
-    const check = (value = annotation, fromRegistryVersion = previous.version) => api.validateTagCatalogUpgrade({
+    const check = (value = annotation, fromRegistryVersion = tagCatalogApi.tagCatalogIdentity(previous)) => api.validateTagCatalogUpgrade({
         fromRegistrySha256: previous.registrySha256, fromRegistryVersion,
         currentRegistry: current, conceptIds: ['task.asr'], annotation: value
     });
     assert.equal(check().ok, true);
     assert.equal(JSON.stringify(previous), saved);
-    assert.equal(check({ ...annotation, fromRegistryVersion: current.version }).ok, false);
-    assert.match(check(annotation, current.version).error, /与旧词表快照不一致/);
+    assert.equal(check({ ...annotation, fromRegistryVersion: tagCatalogApi.tagCatalogIdentity(current) }).ok, false);
+    assert.match(check(annotation, tagCatalogApi.tagCatalogIdentity(current)).error, /与旧词表快照不一致/);
     const reverse = api.classifyRegistryChange(current, previous);
     assert.equal(reverse.changeLevel, 'destructive');
     assert.ok(codes(reverse.detail).includes('version-changed'));

@@ -72,8 +72,9 @@ function assertNoPaidLegacyDisplayCandidateInternal(directory, identity) {
         const record = repair.readFailedCandidateEnvelope(directory, null, path.join(directory, name));
         if (!record) throw new Error('旧修订候选在检查期间消失');
         const old = record.envelope.identity;
-        if (!['paperId', 'contentMode', 'sourceSha256', 'inputFingerprint', 'freshAnalysis']
-            .every(key => isDeepStrictEqual(old[key], identity[key]))) continue;
+        if (!require('./reader-content-mode').sameMode(old, identity)
+            || !['paperId', 'sourceSha256', 'inputFingerprint', 'freshAnalysis']
+                .every(key => isDeepStrictEqual(old[key], identity[key]))) continue;
         const payload = record.envelope.payload;
         if (payload.attempts > 0 || payload.fullAttempts > 0 || payload.transportFailures > 0
             || payload.explicitReaderRetryRound || payload.draft || payload.rawDraft) {

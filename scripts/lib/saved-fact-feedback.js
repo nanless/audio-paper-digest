@@ -175,7 +175,7 @@ function completedReaderUpstream(paper, plan) {
             && !contract.isRecoveryStageTerminal(stage, stages[stage]?.status))
         || contract.validateTagStageProof(paper, { parsed: require('../utils').parseAnalysis(paper.analysis) })
         || contract.validateCoreSummaryStageBinding(paper)) return false;
-    return stages.scoringAudit?.scoringContract === 'api-scoring-audit-v2'
+    return require('./scoring-record-format').hasScoringAuditFormat(stages.scoringAudit)
         && engine.scoringAuditBindsFinalAnalysis(paper) && engine.scoringStabilityIsResolved(stages.scoringAudit);
 }
 function strongCompletedReaderUpstream(paper, plan) {
@@ -303,7 +303,7 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
 }
 function recoverArchivedCompletedReader(paper, plan) {
     const engine = require('../analysis-engine'), repair = require('./reader-repair');
-    if (!engine.paperAnalysisLockHeld(paper) || engine.hasValidApiReaderV3Records(paper)
+    if (!engine.paperAnalysisLockHeld(paper) || engine.hasValidIntegratedApiReaderRecords(paper)
         || !daily.isPaperReusableForAnalysis(paper, plan)) return null;
     const oldStage = paper.analysisManifest?.stages?.apiReaderArticle;
     const directory = plan.readerAttemptsDir;
@@ -322,7 +322,7 @@ function recoverArchivedCompletedReader(paper, plan) {
         const active = facts.current(require('../utils').normalizedId(paper));
         if ([active?.proof, active?.readerBound?.proof, active?.coreBound?.proof, active?.primaryBound?.proof].filter(Boolean)
             .some(proof => !savedProofs(candidate).some(saved => daily.stableHash(saved) === daily.stableHash(proof)))) continue;
-        if (!engine.hasValidApiReaderV3Records(candidate)
+        if (!engine.hasValidIntegratedApiReaderRecords(candidate)
             || !withRecoveredFeedback(candidate, plan, () => engine.isSuccessfulAnalysisRecord(candidate))) continue;
         const receipt = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).some(name => {
             const checked = repair.readFailedCandidateEnvelope(directory, null, path.join(directory, name));

@@ -7,9 +7,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
 
-const CONTRACT = 'conference-pdf-source-v1';
-const VERSION = 1;
+const CONTRACT = codec.contract('conference-pdf-source');
 const KIND = 'local_pdf';
 const DEFAULT_MAX_PDF_BYTES = 64 * 1024 * 1024;
 const ABSOLUTE_MAX_PDF_BYTES = 256 * 1024 * 1024;
@@ -268,13 +269,13 @@ function normalizeExtraction(value) {
         formulaTeX: { available: true, reliability: 'reliable', formulas } };
 }
 
-function descriptorBody({ identity, relativePath, pdfSha256, pdfBytes, extraction, ledgerBinding = null }) {
+function descriptorBody({ identity, relativePath, pdfSha256, pdfBytes, extraction, ledgerBinding = null,
+    header = codec.recordHeader(CONTRACT, 'conference-pdf-source') }) {
     const textSha256 = extraction.text === null ? null : sha256(extraction.text);
     const structuredArtifactsSha256 = extraction.structuredArtifacts === null ? null : stableSha256(extraction.structuredArtifacts);
     const formulaTeXSha256 = extraction.formulaTeX.available ? stableSha256(extraction.formulaTeX) : null;
     const body = {
-        contract: CONTRACT,
-        version: VERSION,
+        ...header,
         kind: KIND,
         identity: clone(identity),
         pdfRelativePath: relativePath,
@@ -308,7 +309,7 @@ function signedDescriptor(body) {
  * 同步的本地抽取器；它拿到 PDF 字节的副本，可以返回文本或结构化提取结果。不传抽取器也是
  * 合法的，此时相关字段明确写成不可得，而不是编造一份全文。
  */
-function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = null } = {}) {
+function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = null, descriptorHeader } = {}) {
     const root = requireSafeDirectory(cacheRoot);
     const checked = requireRecord(record);
     const bytes = readVerifiedPdf(root, checked.relativePath, requireMaxBytes(maxBytes));
@@ -318,7 +319,8 @@ function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = 
     const extraction = normalizeExtraction(extractPdf && extractPdf({
         pdfBytes: Buffer.from(bytes), pdfSha256: actualPdfSha256, identity: clone(checked.identity), record: clone(record),
     }));
-    const descriptor = signedDescriptor(descriptorBody({ ...checked, pdfBytes: bytes.length, extraction, ledgerBinding }));
+    const descriptor = signedDescriptor(descriptorBody({ ...checked, pdfBytes: bytes.length, extraction, ledgerBinding,
+        ...(descriptorHeader ? { header: descriptorHeader } : {}) }));
     return Object.freeze({
         descriptor,
         text: extraction.text,
@@ -347,7 +349,9 @@ function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) 
     readVerifiedArtifact(root, member.metadataFile, member.metadataSha256, '会议元数据文件');
     readVerifiedArtifact(root, member.textFile, member.textSha256, '会议全文文件');
     readVerifiedArtifact(root, member.artifactsFile, member.artifactsSha256, '会议结构化提取文件');
-    return { root, member: clone(member), binding };
+    const descriptorHeader = codec.isCurrentHeader(ledger, 'conference-source-ledger', Object.hasOwn(ledger, 'contract') ? 'contract' : 'version')
+        ? codec.recordHeader(CONTRACT, 'conference-pdf-source') : codec.historicalHeader('conference-pdf-source', 'exact-local-pdf');
+    return { root, member: clone(member), binding, descriptorHeader };
 }
 
 /**
@@ -362,18 +366,22 @@ function buildConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identity
         maxBytes,
         extractPdf,
         ledgerBinding: checked.binding,
+        descriptorHeader: checked.descriptorHeader,
     });
 }
 
 /** 核对 PDF 描述对象的字段、哈希格式、可用状态，以及预期的来源清单绑定。 */
 function validateDescriptorBody(body, expectedLedgerBinding) {
+    let header;
+    try { header = recordHeaderFor(body, 'conference-pdf-source'); }
+    catch (error) { throw fail(`PDF 描述对象格式不受支持：${error.message}`); }
     const baseFields = [
-        'contract', 'version', 'kind', 'identity', 'pdfRelativePath', 'pdfSha256', 'pdfBytes',
+        ...Object.keys(header), 'kind', 'identity', 'pdfRelativePath', 'pdfSha256', 'pdfBytes',
         'textSha256', 'structuredArtifactsSha256', 'formulaTeXSha256', 'extractor', 'availability'
     ];
     const fields = expectedLedgerBinding === null ? baseFields : [...baseFields, 'ledgerBinding'];
     requireExactKeys(body, fields, 'PDF 描述对象');
-    if (body.contract !== CONTRACT || body.version !== VERSION || body.kind !== KIND) {
+    if (body.kind !== KIND) {
         throw fail('PDF 描述对象的 contract、version 或 kind 不属于支持的组合');
     }
     const checked = requireRecord({ identity: body.identity, pdfRelativePath: body.pdfRelativePath, pdfSha256: body.pdfSha256 });
@@ -402,7 +410,7 @@ function validateDescriptorBody(body, expectedLedgerBinding) {
 }
 
 function replaySource({ cacheRoot, record, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes, expectedLedgerBinding = null } = {}) {
-    if (!isPlainObject(descriptor) || descriptor.contract !== CONTRACT || descriptor.version !== VERSION || descriptor.kind !== KIND) {
+    if (!isPlainObject(descriptor) || !codec.hasValidHeader(descriptor, 'conference-pdf-source') || descriptor.kind !== KIND) {
         throw fail('PDF 描述对象的 contract、version 或 kind 不属于支持的组合');
     }
     const { descriptorSha256, ...body } = descriptor;
@@ -454,7 +462,6 @@ function replayConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identit
 
 module.exports = {
     CONTRACT,
-    VERSION,
     KIND,
     DEFAULT_MAX_PDF_BYTES,
     buildConferencePdfSource,

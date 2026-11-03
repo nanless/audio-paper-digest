@@ -33,11 +33,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from path_config import PROJECT_ROOT, LLM_ACCOUNT_POOL_STATE_FILE, atomic_write_json
+import protocol_codec as formats
 
-STATE_SCHEMA_VERSION = 1
-# policyVersion 保持旧字符串只为兼容已落盘状态和跨运行时读取；它不再是
-# “粘滞主账号”语义，当前语义是同一池内所有 key 等权轮转。
-POLICY_VERSION = 'opencode-go-sticky-quota-failover-v1'
+ACCOUNT_POOL_CONTRACT = formats.contract('opencode-go-account-pool')
 LOCK_TIMEOUT_SECONDS = 3
 LOCK_STALE_SECONDS = 120
 MAX_BLOCK_MS = 370 * 24 * 60 * 60 * 1000
@@ -359,12 +357,14 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
 
 
 def _new_state():
-    return {
-        'schemaVersion': STATE_SCHEMA_VERSION,
-        'policyVersion': POLICY_VERSION,
-        'generation': 0,
-        'services': {},
-    }
+    return formats.record(ACCOUNT_POOL_CONTRACT, {'generation': 0, 'services': {}})
+
+
+def _has_account_pool_header(state):
+    if type(state) is not dict:
+        return False
+    current = 'contract' in state
+    return formats.has_valid_header(state, ACCOUNT_POOL_CONTRACT, 'contract' if current else 'policyVersion')
 
 
 def _reject_non_finite_json(value):
@@ -389,12 +389,8 @@ def read_state_strict(state_file=LLM_ACCOUNT_POOL_STATE_FILE):
         raise LlmAccountPoolStateError(
             f'LLM 账号池状态损坏或不可读，已阻止覆盖 {target}: {exc}'
         ) from exc
-    schema_version = state.get('schemaVersion') if isinstance(state, dict) else None
     generation = state.get('generation') if isinstance(state, dict) else None
-    if not isinstance(state, dict) \
-            or type(schema_version) is not int \
-            or schema_version != STATE_SCHEMA_VERSION \
-            or state.get('policyVersion') != POLICY_VERSION \
+    if not _has_account_pool_header(state) \
             or type(generation) is not int \
             or generation < 0 or generation > MAX_SAFE_INTEGER \
             or not isinstance(state.get('services'), dict):
@@ -457,6 +453,9 @@ def _update_state(state_file, updater):
         if current['generation'] >= MAX_SAFE_INTEGER:
             raise LlmAccountPoolStateError('LLM 账号池 generation 已超出安全整数范围')
         updated['generation'] = current['generation'] + 1
+        updated.pop('policyVersion', None)
+        updated.pop('schemaVersion', None)
+        updated.update(formats.record_header(ACCOUNT_POOL_CONTRACT, ACCOUNT_POOL_CONTRACT))
         atomic_write_json(target, updated, mode=0o600)
         return updated
 
@@ -796,7 +795,7 @@ def classify_opencode_go_quota_response(status, headers, body, *, raw='', now_ms
 
 
 __all__ = [
-    'STATE_SCHEMA_VERSION', 'POLICY_VERSION', 'MAX_SAFE_INTEGER',
+    'ACCOUNT_POOL_CONTRACT', 'MAX_SAFE_INTEGER',
     'LlmAccountPoolExhaustedError',
     'LlmAccountAuthError',
     'LlmAccountPoolStateError', 'LlmAccountPoolConfigError',

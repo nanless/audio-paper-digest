@@ -13,8 +13,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const VERSION = 'llm-usage-summary-v1';
-const USAGE_EVENT_VERSION = 'llm-usage-v1';
+const { isUsageEventFormat } = require('./llm-usage-format');
+const formats = require('./protocol-codec');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 // 文件写入时间与事件时间通常只差毫秒；留一段余量容忍时钟偏移和跨盘复制。
@@ -120,7 +120,7 @@ function extractCost(event) {
 
 function compactUsageRecord(event) {
     if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
-    if (event.version !== USAGE_EVENT_VERSION || event.kind !== 'request') return null;
+    if (!isUsageEventFormat(event) || event.kind !== 'request') return null;
     const date = eventDate(event.at);
     if (!date) return null;
     const eventId = typeof event.eventId === 'string' && event.eventId ? event.eventId : null;
@@ -144,7 +144,7 @@ const defaultCache = createUsageSummaryCache();
 
 function emptySummary(date) {
     return {
-        version: VERSION,
+        ...formats.recordHeader('llm-usage-summary', 'llm-usage-summary'),
         date,
         total: 0,
         success: 0,
@@ -478,8 +478,6 @@ function clearUsageSummaryCache(cache = defaultCache) {
 }
 
 module.exports = {
-    VERSION,
-    USAGE_EVENT_VERSION,
     DEFAULT_MTIME_SLACK_MS,
     beijingDateFromMs,
     isValidDate,

@@ -5,7 +5,22 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const active = new AsyncLocalStorage(), leases = new WeakMap();
-const CONTRACT = 'conference-granted-reader-budget-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = codec.contract('conference-granted-reader-budget');
+const currentHeader = name => codec.recordHeader(codec.contract(name), name);
+function ledgerHeader(ledger) {
+    if (!codec.hasValidHeader(ledger, 'conference-granted-reader-budget')) fail('原账本格式声明未知或混用');
+    return codec.recordHeader(ledger.contract, 'conference-granted-reader-budget', ledger.schemaFingerprint);
+}
+function materialHeader(ledger, role) {
+    const header = ledgerHeader(ledger), family = `conference-granted-reader-${role}`;
+    const value = Object.hasOwn(header, 'schemaFingerprint')
+        ? codec.declaredSchema(ledger.contract, 'conference-granted-reader-budget', ledger.schemaFingerprint)[`${role}Format`]
+        : codec.historicalHeader(family, role === 'request' ? 'reserved-original-input' : 'sealed-returned-bytes', null);
+    if (!codec.hasValidHeader(value, family)
+        || !isDeepStrictEqual(value, codec.recordHeader(value.contract, family, value.schemaFingerprint))) fail('原账本没有绑定完整原请求/响应格式');
+    return value;
+}
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const hash = value => require('./reader-repair').hashDraft(value);
 const fail = (message, cause) => { throw Object.assign(new Error(`会议独立Reader额度拒绝：${message}`, { cause }),
@@ -97,7 +112,10 @@ function readLedger(state) {
         return null;
     }
     const ledger = read.value;
-    if (ledger.contract !== CONTRACT || !isDeepStrictEqual(ledger.binding, binding(state))
+    const header = ledgerHeader(ledger);
+    if (Object.hasOwn(header, 'schemaFingerprint') && !isDeepStrictEqual(Object.keys(ledger).sort(),
+        [...Object.keys(header), 'binding', 'logicalIdentitySha256', 'requests'].sort())) fail('当前账本含未知或缺失字段');
+    if (!isDeepStrictEqual(ledger.binding, binding(state))
         || !Array.isArray(ledger.requests) || ledger.requests.length > 128
         || ledger.requests.some((row, index) => row.ordinal !== index + 1
             || !/^[a-f0-9-]{36}$/u.test(row.id) || !['full', 'patch'].includes(row.kind)
@@ -116,7 +134,7 @@ function readLedger(state) {
         expectedNames.add(requestName);
         try {
             const request = require('./conference-analysis-adapter').readJsonRecord(path.join(state.executionDir, requestName));
-            if (!isDeepStrictEqual(request.value, { contract: CONTRACT, binding: binding(state),
+            if (!isDeepStrictEqual(request.value, { ...materialHeader(ledger, 'request'), binding: binding(state),
                 logicalIdentitySha256: ledger.logicalIdentitySha256, id: row.id, ordinal: row.ordinal,
                 kind: row.kind, contentAttempt: row.contentAttempt, identitySha256: row.identitySha256,
                 startedAt: row.startedAt })) fail('请求原账与可变索引不一致');
@@ -126,8 +144,11 @@ function readLedger(state) {
                 const response = require('./conference-analysis-adapter').readJsonRecord(path.join(state.executionDir, responseName));
                 const value = response.value;
                 if (row.responseFile !== responseName || response.sha256 !== row.responseFileSha256
-                    || !isDeepStrictEqual(Object.keys(value).sort(), ['contract', 'requestId', 'identitySha256', 'outputTextSha256', 'rawResponse'].sort())
-                    || value.contract !== CONTRACT || value.requestId !== row.id || value.identitySha256 !== row.identitySha256
+                    || !isDeepStrictEqual(Object.keys(value).sort(), [...Object.keys(materialHeader(ledger, 'response')),
+                        'requestId', 'identitySha256', 'outputTextSha256', 'rawResponse'].sort())
+                    || !isDeepStrictEqual(Object.fromEntries(Object.keys(materialHeader(ledger, 'response')).map(key => [key, value[key]])),
+                        materialHeader(ledger, 'response'))
+                    || value.requestId !== row.id || value.identitySha256 !== row.identitySha256
                     || typeof value.rawResponse !== 'string' || !value.rawResponse.length
                     || sha(value.rawResponse) !== row.outputTextSha256 || value.outputTextSha256 !== row.outputTextSha256) {
                     fail('原响应文件、身份或实际输出SHA不一致');
@@ -162,7 +183,7 @@ function reserveReaderResponse(paper, identity, kind, contentAttempt) {
     if (!isDeepStrictEqual(identity.conferenceReaderGrant, expected) || !['full', 'patch'].includes(kind)
         || !Number.isSafeInteger(contentAttempt) || contentAttempt < 1 || contentAttempt > 6) fail('请求缺少原授权身份或内容次数非法');
     const previous = readLedger(state), logicalIdentitySha256 = hash(logicalIdentity(identity));
-    const ledger = previous?.value || { contract: CONTRACT, binding: binding(state), logicalIdentitySha256, requests: [] };
+    const ledger = previous?.value || { ...currentHeader('conference-granted-reader-budget'), binding: binding(state), logicalIdentitySha256, requests: [] };
     if (ledger.logicalIdentitySha256 !== logicalIdentitySha256) fail('同一新窗口的来源/模型/Prompt/逻辑输入发生变化，不能另开预算');
     if (ledger.requests.some(row => row.status === 'pending')) fail('上次在途请求尚未闭合，保守保留其额度，不重复请求');
     if (ledger.requests.filter(row => row.status === 'no_content').length >= state.registered.limits.readerTransportAttempts) {
@@ -177,7 +198,7 @@ function reserveReaderResponse(paper, identity, kind, contentAttempt) {
         identitySha256: hash(identity), status: 'pending', startedAt: new Date().toISOString() };
     try {
         require('./conference-analysis-adapter').writeBytesAtomic(path.join(state.executionDir, `reader-grant-request-${row.id}.json`),
-            Buffer.from(JSON.stringify({ contract: CONTRACT, binding: binding(state), logicalIdentitySha256,
+            Buffer.from(JSON.stringify({ ...materialHeader(ledger, 'request'), binding: binding(state), logicalIdentitySha256,
                 id: row.id, ordinal: row.ordinal, kind, contentAttempt, identitySha256: row.identitySha256,
                 startedAt: row.startedAt }) + '\n'));
     } catch (error) { fail('请求原账无法封存，停止新请求', error); }
@@ -197,7 +218,7 @@ function settleReaderResponse(lease, outcome, raw) {
         if (typeof raw !== 'string' || !raw.length || Buffer.byteLength(raw) > 16 * 1024 * 1024) fail('原Reader响应缺失或超过封存上限');
         // Persist the real returned bytes before any parser or candidate changes.
         const name = `reader-grant-response-${row.id}.json`;
-        const bytes = Buffer.from(JSON.stringify({ contract: CONTRACT, requestId: row.id,
+        const bytes = Buffer.from(JSON.stringify({ ...materialHeader(ledger, 'response'), requestId: row.id,
             identitySha256: row.identitySha256, outputTextSha256: sha(raw), rawResponse: raw }) + '\n');
         try { require('./conference-analysis-adapter').writeBytesAtomic(path.join(state.executionDir, name), bytes); }
         catch (error) { fail('已返回原响应无法封存，停止派发', error); }

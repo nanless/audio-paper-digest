@@ -34,6 +34,8 @@ Save edits and quit the old application normally before upgrading. Applications 
 
 Library search covers metadata, explanations already read, and personal notes. Use search inside the PDF reader for the original paper; PDF text is not part of the library-wide full-text index.
 
+The current source reads `client/index.json` first and uses the original catalog endpoint only after an explicit HTTP 404 or 410. Sidecars in the new format are checked against the paper identity, date, and SHA declared by the reading page; the original public addresses remain available to released applications. Corrupt formats and network failures do not trigger fallback to the original endpoint; existing data is preserved on failure. This describes source-level interface compatibility, not a newly released installation package. See the [website data adapter guide (Chinese)](../../docs/mac-app-data.md) for the full boundary.
+
 ### Configure a model and ask a question
 
 “个人解析” is personal follow-up research. It does not rewrite the published explanation or original paper. In Settings, enter your own API endpoint, model, protocol, budget, and any required HTTP CONNECT proxy. The endpoint is the service address that receives requests; the protocol determines their format. Use values supplied by the actual service. A native secure-entry window stores the key in this application's Keychain. Connection tests also send real requests.

@@ -190,6 +190,75 @@ function inScope(sample, callback) {
     return daily.withDailyFreshAnalysisContext(sample.plan, () =>
         policy.withSelectedFullStageReanalysis(options(sample), callback));
 }
+test('原Git许可writer的真实旧头与七份原提示词可冷核和锁内续跑，身份错配不增加额度', async t => {
+    const sample = await createSample(t);
+    const Module = require('node:module');
+    const vm = require('node:vm');
+    const { execFileSync } = require('node:child_process');
+    const root = path.resolve(__dirname, '..');
+    const baseline = '05ab504df7f84da3b8d961878323cfa161f23eb0';
+    const original = file => execFileSync('git', ['--no-lazy-fetch', '--no-replace-objects', 'show', `${baseline}:${file}`], { cwd: root, encoding: 'utf8' });
+    const registryScope = { module: { exports: {} } };
+    vm.runInNewContext(original('scripts/lib/prompt-text-versions.js'), registryScope);
+    const oldRegistry = registryScope.module.exports;
+    const filename = path.join(root, 'scripts/lib/selected-full-stage-reanalysis.js');
+    const historical = new Module(filename, module);
+    historical.filename = filename; historical.paths = Module._nodeModulePaths(path.dirname(filename));
+    historical.require = function(specifier) {
+        if (specifier === './prompt-text-versions') return oldRegistry;
+        if (specifier === 'node:fs') return { ...fs, readFileSync(file, encoding) {
+            const relative = path.relative(root, file).split(path.sep).join('/');
+            if (oldRegistry.CURRENT_PROMPT_FILES.includes(relative)) {
+                const bytes = require('../scripts/lib/prompt-evidence').readPromptEvidenceBytes(relative);
+                return encoding ? bytes.toString(encoding) : bytes;
+            }
+            return fs.readFileSync(file, encoding);
+        } };
+        return Module.prototype.require.call(this, specifier);
+    };
+    historical._compile(original('scripts/lib/selected-full-stage-reanalysis.js'), filename);
+    let paidParent;
+    const callCount = calls.length;
+    await daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        historical.exports.withSelectedFullStageReanalysis(options(sample), () =>
+            engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+                paidParent = historical.exports.preparePaperLocked(sample.paper);
+            }))));
+    const before = JSON.stringify(paidParent);
+    assert.notEqual(paidParent.fullStageReanalysis.contract, policy.CONTRACT);
+    assert.equal(paidParent.fullStageReanalysis.schemaFingerprint, undefined);
+    assert.deepEqual(policy.fingerprintFields(paidParent).fullStageReanalysis, paidParent.fullStageReanalysis);
+    await inScope(sample, () => engine.withPaperAnalysisLock(paidParent, () => facts.withFactReview(sample.bound, () => {
+        assert.equal(JSON.stringify(policy.preparePaperLocked(paidParent)), before);
+        fresh.withFreshPaperContext(paidParent, () => {
+            const row = paidParent.fullStageReanalysis.promptBindings.apiReaderArticle;
+            assert.deepEqual(policy.originalPromptBinding('apiReaderArticle'), row);
+            assert.equal(deep.currentPromptTextContract('apiReaderArticle'), row.contract);
+            assert.equal(deep.currentTextStagePromptPath('apiReaderArticle'), row.path);
+            const originalBytes = require('../scripts/lib/prompt-evidence').readDeclaredPromptEvidenceBytes(row.path, row.fileSha256);
+            assert.equal(deep.runtimePromptTemplateSha256(row.path), require('../scripts/lib/prompt-history').promptTemplateSha256(originalBytes.toString()));
+        });
+        for (const mutate of [
+            value => { value.fullStageReanalysis.schemaFingerprint = 'f'.repeat(64); },
+            value => { value.fullStageReanalysis.promptBindings.primaryAnalysis.fileSha256 = 'f'.repeat(64); },
+            value => { value.fullStageReanalysis.promptBindings.primaryAnalysis.path = value.fullStageReanalysis.promptBindings.apiReaderArticle.path; },
+            value => { value.fullStageReanalysis.sourceRunId = '00000000-0000-4000-8000-000000000000'; }
+        ]) {
+            const changed = structuredClone(paidParent); mutate(changed);
+            const parent = changed.fullStageReanalysisHistory.find(row => row.runId === changed.fullStageReanalysis.runId);
+            const originalPaper = parent.originalPaper;
+            Object.assign(parent, structuredClone(changed.fullStageReanalysis), { originalPaper });
+            assert.throws(() => policy.assertPrepared(changed));
+        }
+    })));
+    assert.equal(JSON.stringify(paidParent), before);
+    await inScope(sample, () => engine.withPaperAnalysisLock(paidParent, () => fresh.withFreshPaperContext(paidParent, () => {
+        policy.current(paidParent).prepared.set(sample.id, structuredClone(paidParent.fullStageReanalysis));
+        assert.equal(policy.originalPromptBinding('apiReaderArticle'), null, 'A copied public record cannot install the private original-template scope');
+    })));
+    assert.equal(policy.originalPromptBinding('apiReaderArticle'), null);
+    assert.equal(calls.length, callCount);
+});
 test('选定论文锁内归档完整原账、普通论文不变、同轮中断不重置已付费阶段', async t => {
     const sample = await createSample(t);
     const before = structuredClone(sample.paper);

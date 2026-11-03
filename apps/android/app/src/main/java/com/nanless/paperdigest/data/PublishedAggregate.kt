@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
@@ -16,7 +18,7 @@ data class AggregateSource(val manifestSHA256:String,val shardSHA256:String,val 
     fun json()=JSONObject().put("manifestSHA256",manifestSHA256).put("shardSHA256",shardSHA256).put("shardBytes",shardBytes).put("shardURL",shardURL).put("rowIndex",rowIndex).put("normalizedRowSHA256",normalizedRowSHA256).put("normalizedRowAlgorithm",normalizedRowAlgorithm)
 }
 data class PublishedAggregateCatalog(val snapshotSHA256:String,val sourceRecordCount:Int,val records:List<PublishedAggregate>) {
-    fun json()=JSONObject().put("contract","published-aggregate-index-v1").put("snapshotSHA256",snapshotSHA256).put("sourceRecordCount",sourceRecordCount).put("aggregateCount",records.size).put("records",JSONArray(records.map{it.json()}))
+    fun json()=JSONObject().put("snapshotSHA256",snapshotSHA256).put("sourceRecordCount",sourceRecordCount).put("aggregateCount",records.size).put("records",JSONArray(records.map{it.json()}))
 }
 object PublishedAggregateReader {
     const val SITE="https://nanless.github.io/audio-paper-digest-blog/"
@@ -33,7 +35,7 @@ object PublishedAggregateReader {
     private fun strictInt(value:JSONObject,key:String):Int {val raw=value.get(key);require(raw is Int||raw is Long){"清单数量必须为整数"};val number=(raw as Number).toLong();require(number in 0..Int.MAX_VALUE);return number.toInt()}
     fun manifest(raw:ByteArray):Manifest {
         require(raw.size in 1..2*1024*1024);val value=JSONObject(PublishedUtf8.decode(raw))
-        require(value.getString("contract")=="paper-search-index-manifest-v1");val descriptors=value.getJSONArray("shards");require(descriptors.length() in 1..128)
+        require(ClientProtocols.hasValidHeader(value,"paper-search-index-manifest"));val descriptors=value.getJSONArray("shards");require(descriptors.length() in 1..128)
         val seen=mutableSetOf<String>();val shards=(0 until descriptors.length()).map{i->val d=descriptors.getJSONObject(i);val s=Shard(d.getString("url"),strictInt(d,"bytes"),d.getString("sha256"),strictInt(d,"recordCount"));require(s.url.matches(Regex("search-index/part-[0-9]{4,}-[a-f0-9]{12}\\.json"))&&validSHA(s.sha256)&&s.url.endsWith("-${s.sha256.take(12)}.json")&&s.bytes in 1..1024*1024&&s.recordCount>0&&seen.add(s.url));s}
         val count=strictInt(value,"recordCount");val total=strictInt(value,"totalBytes");require(count>0&&total in 1..64*1024*1024&&shards.sumOf{it.bytes.toLong()}==total.toLong()&&shards.sumOf{it.recordCount.toLong()}==count.toLong())
         return Manifest(count,total,shards)

@@ -1,0 +1,77 @@
+{
+  "protocols": [
+    {
+      "name": "manual-review-statement",
+      "currentVariant": "isolated-page-review-and-controlled-assets",
+      "currentSchema": {
+        "modelPolicy": "complete-model-policy-header",
+        "pageReviews": "one-distinct-task-per-page",
+        "cacheReuse": "original-passed-byte-proof"
+      },
+      "historical": []
+    },
+    {
+      "name": "manual-review-model-policy",
+      "currentVariant": "isolated-sol-high",
+      "currentSchema": {
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      },
+      "historical": [
+        {
+          "tag": "manual-agents-sol-high-v2",
+          "variant": "isolated-sol-high"
+        },
+        {
+          "tag": "manual-agents-terra-high-v1",
+          "variant": "historical-terra-high"
+        }
+      ]
+    },
+    {
+      "name": "manual-review-subagent",
+      "currentVariant": "isolated-single-page",
+      "currentSchema": {
+        "modelPolicy": "complete-model-policy-header",
+        "model": "gpt-6.1-sol",
+        "reasoningEffort": "high",
+        "requires": [
+          "singleFileOnly",
+          "isolatedContext",
+          "taskName"
+        ]
+      },
+      "historical": []
+    },
+    {
+      "name": "manual-review-controlled-assets",
+      "currentVariant": "same-generation-assets",
+      "currentSchema": {
+        "files": [
+          "path",
+          "deleted",
+          "sha256"
+        ],
+        "authority": "real-generation-and-source-replay"
+      },
+      "historical": [
+        {
+          "tag": "manual-review-controlled-assets-v1",
+          "variant": "same-generation-assets"
+        }
+      ]
+    },
+    {
+      "name": "manual-review-cache-evidence",
+      "currentVariant": "original-byte-identity",
+      "currentSchema": {
+        "fields": [
+          "record",
+          "recordSha256"
+        ],
+        "authority": "same-page-bytes-and-original-passed-record"
+      },
+      "historical": []
+    }
+  ]
+}

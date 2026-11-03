@@ -203,7 +203,7 @@ test('缺失扫描路径按空集合处理而不是崩溃', t => {
 
 test('盘点读取新旧阶段但不把冲突容器回退成合法旧记录', () => {
     const api = require('../scripts/tag-check-inventory.js');
-    const contract = require('../scripts/lib/tag-stage-record.js').TAG_STAGE_RECORD_CONTRACT;
+    const contract = require('../scripts/lib/tag-stage-record.js').tagStageRecordDeclaration();
     const current = { papers: [{ id: 'new', analysisManifest: {
         contracts: { tagSelectionRecord: contract }, stages: { tagSelection: seal('not_needed', CURRENT) }
     } }] };

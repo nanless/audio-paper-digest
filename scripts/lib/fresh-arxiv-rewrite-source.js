@@ -11,20 +11,21 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readFormatHeader } = require('./workflow-record-format');
 
-const CONTRACT = 'fresh-arxiv-rewrite-source-v1';
-const VERSION = 2;
-const EXTRACTOR_CONTRACT = 'deep-analyzer-official-arxiv-fulltext-v1';
-const DEFAULT_EXTRACTOR_VERSION = 'arxiv-html-or-pdf-text-v1';
+const CONTRACT = codec.contract('fresh-arxiv-source-manifest');
+const EXTRACTOR_CONTRACT = codec.contract('official-arxiv-fulltext-extraction');
+const DEFAULT_EXTRACTOR_IDENTITY = codec.schemaFingerprint('official-arxiv-fulltext-extraction');
 const MANIFEST_NAME = 'source-manifest.json';
 const TEXT_NAME = 'source.txt';
 const PDF_NAME = 'source.pdf';
 const RUNTIME_METADATA_NAME = 'source-runtime.json';
-const RUNTIME_METADATA_CONTRACT = 'fresh-arxiv-rewrite-runtime-metadata-v1';
+const RUNTIME_METADATA_CONTRACT = codec.contract('fresh-arxiv-rewrite-runtime-metadata');
 const SOURCE_FILES = Object.freeze([MANIFEST_NAME, PDF_NAME, RUNTIME_METADATA_NAME, TEXT_NAME]);
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
 const ARXIV_SOURCE_ID_RE = /^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/;
-const HISTORICAL_VERSION_CONTRACT = 'arxiv-historical-version-source-v1';
+const HISTORICAL_VERSION_CONTRACT = codec.contract('arxiv-historical-version-source');
 const SHA_RE = /^[a-f0-9]{64}$/;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 512 * 1024 * 1024;
@@ -39,6 +40,10 @@ class FreshArxivRewriteSourceError extends Error {
 }
 
 const fail = message => { throw new FreshArxivRewriteSourceError(message); };
+function recordHeaderFor(value, name) {
+    try { return readFormatHeader(value, name); }
+    catch (error) { fail(`来源格式声明不符合要求：${error.message}`); }
+}
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => structuredClone(value);
 
@@ -190,7 +195,7 @@ function validateTextResponse(value, arxivId, capturedAt, extractorVersion) {
     const fetchedAt = value.fetchedAt === undefined ? capturedAt : asIso(value.fetchedAt, '正文 fetchedAt');
     const responseSha256 = sha256(bytes);
     return { bytes, source, sourceId, url, fetchedAt, responseSha256,
-        extractor: { contract: EXTRACTOR_CONTRACT, version: extractorVersion } };
+        extractor: codec.record('official-arxiv-fulltext-extraction', { implementation: extractorVersion }) };
 }
 
 function validatePdfResponse(value, arxivId, capturedAt) {
@@ -229,7 +234,7 @@ function historicalVersionIdentity({ arxivId, textSourceId, pdf, warnings = [] }
         || normalizedSourceId(textSourceId, id, '带版本号的正文来源 ID') !== selectedSourceId) {
         fail('历史版本来源记录必须包含当前 PDF 不可用且返回 HTTP 404，并使正文和 PDF 的来源 ID 相同');
     }
-    const body = { contract: HISTORICAL_VERSION_CONTRACT, version: 1, canonicalArxivId: id,
+    const body = { ...codec.recordHeader(HISTORICAL_VERSION_CONTRACT, 'arxiv-historical-version-source'), canonicalArxivId: id,
         selectedSourceId, textSourceId: selectedSourceId, selectedPdfUrl: officialUrl(pdf.url, 'pdf', id, selectedSourceId),
         currentPdfAvailable: false, attemptedCurrentPdfStatus: 404,
         attemptedCurrentPdfUrl: officialUrl('', 'pdf', id, id) };
@@ -239,17 +244,18 @@ function historicalVersionIdentity({ arxivId, textSourceId, pdf, warnings = [] }
     return { ...sealed, identitySha256: sha256(JSON.stringify(canonical(sealed))) };
 }
 function normalizeHistoricalVersionIdentity(value, arxivId) {
-    const fields = ['contract', 'version', 'canonicalArxivId', 'selectedSourceId', 'textSourceId', 'selectedPdfUrl',
+    const header = recordHeaderFor(value, 'arxiv-historical-version-source');
+    const fields = [...Object.keys(header), 'canonicalArxivId', 'selectedSourceId', 'textSourceId', 'selectedPdfUrl',
         'currentPdfAvailable', 'attemptedCurrentPdfStatus', 'attemptedCurrentPdfUrl', 'warning', 'identitySha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')) fail('历史版本来源记录必须是对象，并且字段集合必须符合固定格式');
     const id = normalizedArxivId(arxivId); const selected = normalizedSourceId(value.selectedSourceId, id);
-    const body = { contract: HISTORICAL_VERSION_CONTRACT, version: 1, canonicalArxivId: id,
+    const body = { ...header, canonicalArxivId: id,
         selectedSourceId: selected, textSourceId: normalizedSourceId(value.textSourceId, id),
         selectedPdfUrl: officialUrl(value.selectedPdfUrl, 'pdf', id, selected), currentPdfAvailable: false,
         attemptedCurrentPdfStatus: 404, attemptedCurrentPdfUrl: officialUrl(value.attemptedCurrentPdfUrl, 'pdf', id, id) };
     const warning = historicalVersionWarning(body); const sealed = { ...body, warning };
-    if (selected === id || value.contract !== HISTORICAL_VERSION_CONTRACT || value.version !== 1
+    if (selected === id
         || value.canonicalArxivId !== id || value.textSourceId !== selected || value.currentPdfAvailable !== false
         || value.attemptedCurrentPdfStatus !== 404 || value.warning !== warning
         || value.identitySha256 !== sha256(JSON.stringify(canonical(sealed)))) {
@@ -310,7 +316,7 @@ function runtimeDetailsFromFreshCapture(rawText, text, arxivId) {
     };
 }
 function runtimeMetadataFromDetails(details, text, arxivId) {
-    const metadata = { contract: RUNTIME_METADATA_CONTRACT, version: 1, paperId: `arxiv:${arxivId}`,
+    const metadata = { ...codec.recordHeader(RUNTIME_METADATA_CONTRACT, 'fresh-arxiv-rewrite-runtime-metadata'), paperId: `arxiv:${arxivId}`,
         title: sourceTitle(details.title), textSha256: text.responseSha256, structuredArtifacts: clone(details.structuredArtifacts),
         imageInfos: clone(details.imageInfos), readerAuthors: details.readerAuthors === null ? null : clone(details.readerAuthors),
         htmlAvailability: String(details.htmlAvailability || ''), htmlAttempts: details.htmlAttempts,
@@ -328,12 +334,12 @@ function runtimeMetadataFromDetails(details, text, arxivId) {
     return assertNoPersistentImageBytes(metadata);
 }
 function validateRuntimeMetadata(metadata, text, arxivId) {
-    const keys = ['contract', 'htmlAttempts', 'htmlAvailability', 'imageInfos', 'paperId', 'readerAuthors',
-        'structuredArtifacts', 'textSha256', 'title', 'version', 'warnings',
+    const header = recordHeaderFor(metadata, 'fresh-arxiv-rewrite-runtime-metadata');
+    const keys = [...Object.keys(header), 'htmlAttempts', 'htmlAvailability', 'imageInfos', 'paperId', 'readerAuthors',
+        'structuredArtifacts', 'textSha256', 'title', 'warnings',
         ...(Object.hasOwn(metadata || {}, 'sourceVersion') ? ['sourceVersion'] : [])];
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
         || Object.keys(metadata).sort().join('\0') !== keys.sort().join('\0')
-        || metadata.contract !== RUNTIME_METADATA_CONTRACT || metadata.version !== 1
         || metadata.paperId !== `arxiv:${arxivId}` || metadata.textSha256 !== text.responseSha256
         || typeof metadata.title !== 'string' || metadata.title !== sourceTitle(metadata.title)
         || !metadata.structuredArtifacts || typeof metadata.structuredArtifacts !== 'object' || Array.isArray(metadata.structuredArtifacts)
@@ -361,8 +367,7 @@ function runtimeDetailsFromMetadata(metadata, text, arxivId) {
 
 function manifestFor({ arxivId, generation, capturedAt, text, pdf, runtimeMetadataBytes }) {
     return {
-        contract: CONTRACT,
-        version: VERSION,
+        ...codec.recordHeader(CONTRACT, 'fresh-arxiv-source-manifest'),
         arxivId,
         paperId: `arxiv:${arxivId}`,
         generation,
@@ -390,24 +395,26 @@ function manifestFor({ arxivId, generation, capturedAt, text, pdf, runtimeMetada
 }
 
 function validateManifest(manifest, arxivId, generation) {
-    const keys = ['arxivId', 'capturedAt', 'contract', 'generation', 'paperId', 'pdf', 'runtimeMetadata', 'text', 'version'];
+    const header = recordHeaderFor(manifest, 'fresh-arxiv-source-manifest');
+    const keys = [...Object.keys(header), 'arxivId', 'capturedAt', 'generation', 'paperId', 'pdf', 'runtimeMetadata', 'text'].sort();
     if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
         || Object.keys(manifest).sort().join('\0') !== keys.join('\0')
-        || manifest.contract !== CONTRACT || manifest.version !== VERSION
         || manifest.arxivId !== arxivId || manifest.paperId !== `arxiv:${arxivId}`
         || manifest.generation !== generation) fail('来源清单的字段集合、格式版本、论文 ID 或来源获取序号不符合要求');
     asIso(manifest.capturedAt, '来源清单的抓取时间');
     const text = manifest.text; const pdf = manifest.pdf; const runtimeMetadata = manifest.runtimeMetadata;
     const textKeys = ['extractor', 'fetchedAt', 'filename', 'responseBytes', 'responseSha256', 'source', 'sourceId', 'url'];
     const pdfKeys = ['fetchedAt', 'filename', 'responseBytes', 'responseSha256', 'url'];
+    const extractorHeader = recordHeaderFor(text?.extractor, 'official-arxiv-fulltext-extraction');
+    const implementationField = text.extractor.contract === EXTRACTOR_CONTRACT ? 'implementation' : 'version';
     if (!text || typeof text !== 'object' || Array.isArray(text)
         || Object.keys(text).sort().join('\0') !== textKeys.join('\0')
         || !['html', 'pdf'].includes(text.source) || text.filename !== TEXT_NAME
         || normalizedArxivId(text.sourceId) !== arxivId || !Number.isSafeInteger(text.responseBytes)
         || text.responseBytes < 1 || text.responseBytes > MAX_TEXT_BYTES || !SHA_RE.test(text.responseSha256)
         || !text.extractor || typeof text.extractor !== 'object' || Array.isArray(text.extractor)
-        || Object.keys(text.extractor).sort().join('\0') !== ['contract', 'version'].join('\0')
-        || text.extractor.contract !== EXTRACTOR_CONTRACT || typeof text.extractor.version !== 'string' || !text.extractor.version) {
+        || Object.keys(text.extractor).sort().join('\0') !== [...Object.keys(extractorHeader), implementationField].sort().join('\0')
+        || typeof text.extractor[implementationField] !== 'string' || !text.extractor[implementationField]) {
         fail('正文清单的字段集合、来源类型、文件名、来源 ID、字节数、SHA 或提取器记录不符合要求');
     }
     officialUrl(text.url, text.source === 'html' ? 'text' : 'pdf', arxivId, text.sourceId);
@@ -568,7 +575,7 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
     if (typeof fetchText !== 'function' || typeof fetchPdf !== 'function' || typeof extractPdfText !== 'function') {
         fail('官方 HTML 正文抓取、PDF 抓取和 PDF 文字提取三个入口都必须是函数');
     }
-    const extractorVersion = String(options.extractorVersion || DEFAULT_EXTRACTOR_VERSION).trim();
+    const extractorVersion = String(options.extractorVersion || DEFAULT_EXTRACTOR_IDENTITY).trim();
     if (!extractorVersion || extractorVersion.length > 200) fail('extractorVersion 去掉首尾空白后不得为空或超过 200 个字符');
     let temporary = null;
     try {
@@ -727,7 +734,7 @@ async function withEphemeralArxivFigures(options = {}, callback, overrides = {})
 }
 
 module.exports = {
-    CONTRACT, VERSION, EXTRACTOR_CONTRACT, DEFAULT_EXTRACTOR_VERSION, HISTORICAL_VERSION_CONTRACT,
+    CONTRACT, EXTRACTOR_CONTRACT, DEFAULT_EXTRACTOR_IDENTITY, HISTORICAL_VERSION_CONTRACT,
     MANIFEST_NAME, TEXT_NAME, PDF_NAME, RUNTIME_METADATA_NAME, SOURCE_FILES, FreshArxivRewriteSourceError,
     sha256, normalizedArxivId, normalizedGeneration, generationName, sourceDirectory,
     EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS, isTransientEphemeralFigureFetchError,

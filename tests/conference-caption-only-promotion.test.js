@@ -43,12 +43,17 @@ test('只修图注的阶段加载器在读阶段之前，就拒绝未签发的�
 
 function provenance(t) {
  const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'caption-parent-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const origin=H('issued original implementation'), authority={catalogSha256:H('catalog'),tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('old-registry'),implementationSha256:origin};
+ const origin=H('issued original implementation'), authority={deepExecutionConfig:api.currentDeepExecutionConfigIdentity({
+  analysisConfig:Object.fromEntries(api.DEEP_EXECUTION_LIMIT_FIELDS.map(field=>[field,/Temperature$/.test(field)?0.1:1000])),
+  env:{PAPER_ANALYZER_MODEL:'muse-spark-1.3-contributor',PAPER_ANALYZER_ENDPOINT:'https://example.invalid/v1'}
+ }),catalogSha256:H('catalog'),tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('old-registry'),implementationSha256:origin};
  const paperId='conference:interspeech:2026:conference-paper-id:du26b_interspeech';
  const parent={contract:api.CONTRACT,version:api.PROCESS_VERSION,authority,items:{[paperId]:{analysisRunId:'33333333-3333-4333-8333-333333333333',status:'pending',sourceIdentity:'conference-paper-id:du26b_interspeech'}},status:'running'};
  parent.processId=api.deterministicUuid(H(authority),api.CONTRACT);parent.stateSha256=H(parent);
  const newer={...authority,tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('a3'),implementationSha256:H('current')};
- const plan={contract:'conference-source-upgrade-plan-v2',version:2,authority:newer,fromProcessId:parent.processId,originalStateSha256:parent.stateSha256,sourceImplementationSha256:origin,papers:[{paperId,previousExecutionId:parent.items[paperId].analysisRunId,previousStatus:'pending'}]};plan.planSha256=H(plan);
+ const extraction=require('../scripts/lib/conference-extraction-receipt');
+ const targetExtractor={...require('../scripts/lib/protocol-codec').registeredHeaders('conference-source-upgrade-extractor-target').find(x=>Object.hasOwn(x,'version')),backendVersion:extraction.BACKEND_VERSION};
+ const plan={targetExtractor,contract:'conference-source-upgrade-plan-v2',version:2,authority:newer,fromProcessId:parent.processId,originalStateSha256:parent.stateSha256,sourceImplementationSha256:origin,papers:[{paperId,previousExecutionId:parent.items[paperId].analysisRunId,previousStatus:'pending'}]};plan.planSha256=H(plan);
  const child={contract:api.CONTRACT,version:api.PROCESS_VERSION,processId:api.deterministicUuid(plan.planSha256,'conference-source-upgrade-process-v1'),authority:newer,items:structuredClone(parent.items),status:'running',sourceUpgradePromotion:{originalProcessId:parent.processId,sourceImplementationSha256:origin,planSha256:plan.planSha256}};
  const save=(state,p)=>{const dir=path.join(root,state.processId);fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'state.json'),JSON.stringify(state),{mode:0o600});if(p)fs.writeFileSync(path.join(dir,'source-upgrade-plan.json'),JSON.stringify(p),{mode:0o600});return dir;};
  const childDir=save(child,plan);save(parent);

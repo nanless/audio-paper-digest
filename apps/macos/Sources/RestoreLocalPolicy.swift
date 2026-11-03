@@ -5,7 +5,16 @@ import Foundation
 enum RequestBudgetContinuity {
     static let filename = "RequestBudgetContinuity.json"
     struct Issued: Codable, Equatable { let id: String; let startedAt: String }
-    struct Record: Codable { let contract: String; let requests: [Issued] }
+    struct Record: Codable {
+        let contract: String
+        let schemaFingerprint: String?
+        let requests: [Issued]
+        init(requests: [Issued]) {
+            contract=ClientProtocols.contract("paperdigest-request-continuity")
+            schemaFingerprint=ClientProtocols.schemaFingerprint("paperdigest-request-continuity")
+            self.requests=requests
+        }
+    }
     static func entries(directory: URL) throws -> [Issued] {
         let file = directory.appendingPathComponent(filename)
         guard FileManager.default.fileExists(atPath: file.path) else {
@@ -14,7 +23,9 @@ enum RequestBudgetContinuity {
         }
         let checked = try PrivateStoragePaths.checkedFile(relative: filename, directory: directory)
         let record = try JSONDecoder().decode(Record.self, from: PrivateStoragePaths.boundedData(checked, limit: 32 * 1024 * 1024))
-        guard record.contract == "paperdigest-request-continuity-v1", record.requests.count <= 100_000 else { throw DesktopError.message("请求连续性记录无效") }
+        var header:[String:Any] = ["contract":record.contract]
+        if let fingerprint=record.schemaFingerprint { header["schemaFingerprint"]=fingerprint }
+        guard ClientProtocols.hasValidHeader(header,"paperdigest-request-continuity"), record.requests.count <= 100_000 else { throw DesktopError.message("请求连续性记录无效") }
         _ = try union([record.requests]); return record.requests
     }
     static func fromSessions(_ sessions: [[String: Any]]) throws -> [Issued] {
@@ -96,10 +107,20 @@ enum RequestBudgetContinuity {
         try original.write(to: receipt, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receipt.path)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let continuity = try encoder.encode(RequestBudgetContinuity.Record(contract: "paperdigest-request-continuity-v1", requests: requests))
+        let continuity = try encoder.encode(RequestBudgetContinuity.Record(requests: requests))
         try continuity.write(to: stage.appendingPathComponent(RequestBudgetContinuity.filename), options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stage.appendingPathComponent(RequestBudgetContinuity.filename).path)
         try JSONSerialization.data(withJSONObject: restored, options: .sortedKeys).write(to: stagedFile, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagedFile.path)
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension RequestBudgetContinuity.Record {
+    init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-request-continuity")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        requests=try values.decode([RequestBudgetContinuity.Issued].self,forKey:.requests)
     }
 }

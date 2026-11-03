@@ -44,7 +44,7 @@ except Exception as e:
 }
 test('正常Node parser的HTML全幅分类空白投影通过Python同一来源资格且原字节不变', async t => {
  const f=await fixture(t), before=JSON.stringify(f.paper);
- assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),true);
  const result=pythonPublisher(f);
  assert.equal(result.verified,true,result.error);
  assert.equal(result.spanCalls,1,'同一篇所有空白格只能一次批量Node重放');

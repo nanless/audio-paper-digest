@@ -56,7 +56,7 @@ function input(f, { full = true } = {}) {
         text: full ? { file: 'text/100.txt', sha256: sha(extracted), provenance: { extractor: 'pdftotext', version: '24.02' } } : null,
         artifacts: full ? { file: 'artifacts/100.json', sha256: sha(artifacts), provenance: { extractor: 'layout', version: '1' } } : null
     };
-    return { contract: importer.CONTRACT, version: importer.VERSION, conference: { id: 'icassp-2026', year: 2026 },
+    return { ...require('../scripts/lib/protocol-codec').recordHeader(importer.CONTRACT, 'conference-import-manifest'), conference: { id: 'icassp-2026', year: 2026 },
         members: [member], memberSetSha256: ledgerApi.memberSetSha256([{ identity: member.identity }]) };
 }
 
@@ -205,7 +205,7 @@ function productionFixture(t) {
             metadataSnapshotSha256: replay.metadataSnapshotSha256, metadataIndex: replay.metadataIndex,
             metadataRecordSha256: replay.metadataRecordSha256 } });
     const extracted = [{ paperId, sourceIdentity, receiptName: generated.receiptName }];
-    const extraction = { contract: stagingApi.EXTRACTION_CONTRACT, version: stagingApi.VERSION,
+    const extraction = { ...require('../scripts/lib/protocol-codec').recordHeader(stagingApi.EXTRACTION_CONTRACT, 'conference-reviewed-extraction'),
         conference: { id: 'icassp-2026', year: 2026 }, review: { actor: 'reviewer', reviewedAt: NOW }, members: extracted,
         membersSha256: stagingApi.stableHash(extracted) };
     const staged = stagingApi.bindInputs({ selectionHandle, discoveryHandle, extractionManifest: extraction,
@@ -266,9 +266,10 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
     const runs = path.join(f.root, 'runs'); const executions = path.join(f.root, 'executions');
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     const selectedMemberSetSha256 = planApi.stableHash(identities.map(member => member.paperId));
-    const plan = { contract: planApi.PLAN_CONTRACT, version: planApi.VERSION, ledgerName: 'ledger.json',
+    const codec = require('../scripts/lib/protocol-codec');
+    const plan = { ...codec.recordHeader(planApi.PLAN_CONTRACT, 'conference-run-plan'), ledgerName: 'ledger.json',
         tagMetadata: { version: 'paper-tag-catalog-v2', sha256: sha(fs.readFileSync(tagCatalogPath)) },
-        selectionPolicy: { contract: planApi.SELECTION_CONTRACT, identities, selectedMemberSetSha256 },
+        selectionPolicy: { ...codec.recordHeader(planApi.SELECTION_CONTRACT, 'conference-selected-members'), identities, selectedMemberSetSha256 },
         shards: [{ shardId: 'all', paperIds: identities.map(member => member.paperId) }] };
     fs.writeFileSync(path.join(f.output, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`);
     const planFiles = { ...f.files, conferenceRunsDir: runs, tagCatalogFile: tagCatalogPath };
@@ -281,10 +282,10 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
     assert.equal(appliedPlan.status, 'created');
     const writtenRun = JSON.parse(fs.readFileSync(path.join(runs, 'cli-run.json'), 'utf8'));
     const writtenReceipt = JSON.parse(fs.readFileSync(path.join(runs, 'cli-run.plan-receipt.json'), 'utf8'));
-    assert.equal(writtenRun.version, 3);
+    assert.equal(writtenRun.schemaFingerprint, codec.schemaFingerprint('conference-run'));
     assert.equal(writtenRun.tagCatalogVersion, plan.tagMetadata.version);
     assert.equal(Object.hasOwn(writtenRun, 'taxonomyVersion'), false);
-    assert.equal(writtenReceipt.version, 3);
+    assert.equal(writtenReceipt.schemaFingerprint, codec.schemaFingerprint('conference-run-plan-secure-receipt'));
     assert.deepEqual(writtenReceipt.tagMetadata, plan.tagMetadata);
     assert.equal(Object.hasOwn(writtenReceipt, 'taxonomy'), false);
     assert.equal(fs.statSync(runs).mode & 0o777, 0o700);

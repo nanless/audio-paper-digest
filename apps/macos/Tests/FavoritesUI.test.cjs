@@ -1,8 +1,9 @@
 const {chromium}=require('playwright');
 const http=require('http'),fs=require('fs'),path=require('path'),assert=require('assert/strict'),crypto=require('crypto'),vm=require('vm');
 const root=path.resolve(__dirname,'../Resources'),fixture=require('../../../tests/fixtures/workbench-website-taxonomy-golden.json'),corePath=path.resolve(root,'website-tags/website-tag-core.js');
-const sandbox={module:{exports:{}}};vm.runInNewContext(fs.readFileSync(corePath,'utf8'),sandbox);const tags=sandbox.module.exports,graph=tags.createRegistry(fixture.display.snapshot,fixture.display.versions);
-assert.equal(crypto.createHash('sha256').update(fs.readFileSync(corePath)).digest('hex'),fixture.upstream.sha256);
+const source=require('../Resources/website-tags/website-tag-core.source.json');
+const sandbox={module:{exports:{}},require:require('node:module').createRequire(corePath)};vm.runInNewContext(fs.readFileSync(corePath,'utf8'),sandbox);const tags=sandbox.module.exports,graph=tags.createRegistry(fixture.display.snapshot,fixture.display.versions);
+assert.equal(crypto.createHash('sha256').update(fs.readFileSync(corePath)).digest('hex'),source.sha256);
 for(const c of fixture.cases){if(c.expected.error){assert.throws(()=>graph.resolveRecord(c.record));continue;}const resolved=graph.resolveRecord(c.record);assert.equal(resolved.status,c.expected.status,c.name);assert.deepEqual(JSON.parse(JSON.stringify(resolved.concepts.map(n=>n.id))),c.expected.issuedConceptIds,c.name);}
 for(const c of fixture.groupingCases)assert.deepEqual(JSON.parse(JSON.stringify(tags.query(tags.groupPapers(c.records,graph),c.filters,graph).map(g=>g.paperId))),c.expected.matchedPaperIDs);
 let browser;const server=http.createServer((req,res)=>{const name=decodeURIComponent(req.url.split('?')[0]);if(name==='/app.js'){res.setHeader('Content-Type','text/javascript');return res.end('');}const file=path.resolve(root,'.'+(name==='/'?'/index.html':name));if(!file.startsWith(root+path.sep)){res.writeHead(403);return res.end();}try{res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(file));}catch{res.writeHead(404);res.end();}});

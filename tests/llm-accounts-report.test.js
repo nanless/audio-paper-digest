@@ -51,7 +51,7 @@ function configuredEnv(extra = {}) {
 }
 function historicalState() {
     const identity = pool.getPoolIdentity([...fakeKeys, 'retired-fake-account'], endpoint);
-    return { schemaVersion: 1, policyVersion: pool.POLICY_VERSION, generation: 4, services: {
+    return { ...require('../scripts/lib/protocol-codec').recordHeader(pool.ACCOUNT_POOL_CONTRACT, pool.ACCOUNT_POOL_CONTRACT), generation: 4, services: {
         [identity.serviceId]: { endpoint: identity.service, accounts: Object.fromEntries(identity.accountIds.map((id, i) =>
             [id, { status: i === 0 || i === 8 ? 'quota_blocked' : 'eligible', blockedUntilMs: i === 0 || i === 8 ? NOW + 60_000 : 0 }])), groups: {} }
     } };
@@ -60,7 +60,7 @@ function historicalState() {
 test('当前配置8与历史9独立分账，保留历史冷却且不显示凭据身份', () => {
     const state = historicalState(), before = JSON.stringify(state);
     const result = report.describeConfigured(configuredEnv(), state, NOW);
-    assert.strictEqual(result.version, 2);
+    assert.strictEqual(result.contract, 'llm-accounts-report');
     assert.strictEqual(result.configured.accountCount, 8);
     assert.deepStrictEqual(result.configured.routes.map(route => route.accountCount), [8, 8]);
     assert.strictEqual(result.configured.cooling, 1);
@@ -107,10 +107,12 @@ function cliFixture(t, env, state) {
     for (const filename of ['scripts/llm-accounts-report.js', 'scripts/llm-account-pool.js', 'scripts/env-loader.js',
         'scripts/utils.js', 'scripts/config.js', 'scripts/lib/active-time-budget.js',
         'scripts/lib/analysis-section-titles.js', 'scripts/lib/filter-decision.js',
-        'scripts/lib/tag-rules.js', 'scripts/lib/tag-catalog.js', 'config/tag-catalog.json']) {
+        'scripts/lib/tag-rules.js', 'scripts/lib/tag-catalog.js', 'scripts/lib/protocol-codec.js',
+        'scripts/lib/strict-json.js', 'config/tag-catalog.json']) {
         fs.mkdirSync(path.dirname(path.join(root, filename)), { recursive: true });
         fs.copyFileSync(path.join(__dirname, '..', filename), path.join(root, filename));
     }
+    fs.cpSync(path.join(__dirname, '../config/protocols'), path.join(root, 'config/protocols'), { recursive: true });
     fs.writeFileSync(path.join(root, '.env'), Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n'), { mode: 0o600 });
     const stateFile = path.join(root, 'state.json');
     if (state !== undefined) fs.writeFileSync(stateFile, typeof state === 'string' ? state : JSON.stringify(state));

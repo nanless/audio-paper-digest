@@ -1,4 +1,6 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 if (require.main === module) {
     require('../../scripts/env-loader.js').requireExternalRuntime('manual-paper-source-identity.js');
@@ -7,7 +9,7 @@ if (require.main === module) {
 const crypto = require('crypto');
 const path = require('path');
 
-const MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT = 'manual-paper-source-identity-v1';
+const MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT = historicalManualContract('manual-paper-source-identity', 'per-paper-inputs');
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
 function stableValue(value) {

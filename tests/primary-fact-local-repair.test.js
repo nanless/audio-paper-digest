@@ -7,7 +7,7 @@ function createLocalRepairSample() {
     const feedback = { coreAnalysisSha256: repair.sha(analysis), primaryFeedback: 'B仍使用random掩码。',
         rejectedPrimaryClaims: ['无掩码基线'] };
     const plan = repair.buildPlan(analysis, feedback);
-    const patch = { contract: repair.CONTRACT, inputSha256: plan.inputSha256,
+    const patch = { ...repair.currentHeader(), inputSha256: plan.inputSha256,
         replacements: [{ from: plan.targets[0].text, to: plan.targets[0].text.replace('无掩码基线', 'random掩码的未适配基线') }] };
     return { analysis, feedback, plan, patch };
 }
@@ -46,7 +46,7 @@ test('无错误句、跨段拒句或核心摘要范围不能扩大为主文请�
     for (const claim of ['不存在的错误', '正确摘要保持。', '条件正确。\n\n另一正确段。']) {
         assert.throws(() => repair.buildPlan(sample.analysis, { ...sample.feedback, rejectedPrimaryClaims: [claim] }), /唯一出现|跨段/);
     }
-    assert.throws(() => repair.fingerprintFields({ contract: repair.CONTRACT }), /凭证/);
+    assert.throws(() => repair.fingerprintFields(repair.currentHeader()), /凭证/);
 });
 
 
@@ -56,7 +56,7 @@ test('仅缺标签的原始主分析保留12节，正常后续标签阶段仍须
     repair.validateHeadings(analysis);
     const plan = repair.buildPlan(analysis, { coreAnalysisSha256: repair.sha(analysis),
         primaryFeedback: '只更正实验错误。', rejectedPrimaryClaims: ['错误事实'] });
-    const output = repair.applyPatch(analysis, plan, { contract: repair.CONTRACT,
+    const output = repair.applyPatch(analysis, plan, { ...repair.currentHeader(),
         inputSha256: plan.inputSha256, replacements: [{ from: plan.targets[0].text,
             to: plan.targets[0].text.replace('错误事实', '原文支持的事实') }] }).analysis;
     repair.validateHeadings(output);
@@ -69,4 +69,15 @@ test('仅缺标签的原始主分析保留12节，正常后续标签阶段仍须
         analysis + '\n\n## 评分\n重复。',
         analysis.replace('## 评分', '## 机器摘要').replace('## 机器摘要\n本节保持。\n\n## 机器摘要', '## 机器摘要\n本节保持。\n\n## 评分')
     ]) assert.throws(() => repair.validateHeadings(invalid), /固定章节不合法/);
+});
+
+test('旧原字段可重放；新请求不接受旧响应或缺少实际指纹的响应', () => {
+    const { analysis, feedback, plan, patch } = createLocalRepairSample();
+    const oldPlan = repair.buildPlan(analysis, feedback, repair.ORIGINAL_HEADER);
+    const oldPatch = { ...repair.ORIGINAL_HEADER, inputSha256: patch.inputSha256, replacements: patch.replacements };
+    assert.equal(repair.applyPatch(analysis, oldPlan, oldPatch).analysis, repair.applyPatch(analysis, plan, patch).analysis);
+    assert.throws(() => repair.applyPatch(analysis, plan, oldPatch), /补丁字段/);
+    assert.throws(() => repair.applyPatch(analysis, plan, { ...patch, schemaFingerprint: '0'.repeat(64) }), /补丁字段/);
+    assert.throws(() => repair.applyPatch(analysis, oldPlan, patch), /补丁字段/);
+    assert.equal(repair.originalImplementationSha(), require('../config/primary-local-fact-history.json').originalImplementation.sha256);
 });

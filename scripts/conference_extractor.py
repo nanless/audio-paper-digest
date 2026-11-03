@@ -26,21 +26,20 @@ from typing import Any, Callable, Iterable
 
 from paper_identity import assert_canonical_conference_paper_id
 from path_config import CONFERENCE_STAGING_SOURCE_DIR
+import protocol_codec as protocols
+from git_file_bytes import read_regular_bytes
 
 
 DEFAULT_STAGING_SOURCE_DIR = CONFERENCE_STAGING_SOURCE_DIR
 
-REQUEST_CONTRACT = "conference-pdf-extraction-request-v2"
-ARTIFACT_CONTRACT = "conference-structured-artifacts-v2"
-RECEIPT_CONTRACT = "conference-pdf-extraction-receipt-v2"
-VERIFICATION_CONTRACT = "conference-pdf-extraction-verification-v2"
-BLOCKED_VERIFICATION_CONTRACT = "conference-pdf-extraction-blocked-verification-v1"
-CONTRACT_VERSION = 2
+REQUEST_CONTRACT = protocols.contract("conference-pdf-extraction-request")
+ARTIFACT_CONTRACT = protocols.contract("conference-structured-artifacts")
+RECEIPT_CONTRACT = protocols.contract("conference-pdf-extraction-receipt")
+VERIFICATION_CONTRACT = protocols.contract("conference-pdf-extraction-verification")
+BLOCKED_VERIFICATION_CONTRACT = protocols.contract("conference-pdf-extraction-blocked-verification")
 EXTRACTOR_NAME = "audio-paper-digest-conference-structured"
-EXTRACTOR_VERSION = "2.3.1"
-PROFILE = "replayable-pdf-layout-v1"
-VISUAL_AUDIT_CONTRACT = "conference-pdf-visual-audit-v1"
-VISUAL_AUDIT_VERSION = 1
+PROFILE = protocols.contract("conference-pdf-replayable-layout")
+VISUAL_AUDIT_CONTRACT = protocols.contract("conference-pdf-visual-audit")
 VISUAL_RENDER_DPI = 72
 MAX_VISUAL_AUDIT_BYTES = 48 * 1024 * 1024
 OFFSET_UNIT = "utf8-byte"
@@ -48,7 +47,7 @@ MINIMUM_TEXT_CHARACTERS = 5000
 SHORT_PROCEEDINGS_MINIMUM_TEXT_CHARACTERS = 3000
 SUPPORTED_MINIMUM_TEXT_CHARACTERS = frozenset({MINIMUM_TEXT_CHARACTERS, SHORT_PROCEEDINGS_MINIMUM_TEXT_CHARACTERS})
 PAGE_SEPARATOR = "\n\f\n"
-NORMALIZATION = "unicode-nfc-lf-rstrip-v1"
+NORMALIZATION = protocols.contract("conference-pdf-text-normalization")
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_METADATA_BYTES = 16 * 1024 * 1024
 MAX_PDF_BYTES = 256 * 1024 * 1024
@@ -120,6 +119,27 @@ def _quiet_pymupdf_output():
 
 def _fail(message: str) -> ConferenceExtractionIntegrityError:
     return ConferenceExtractionIntegrityError(f"Conference PDF extraction rejected: {message}")
+
+
+def _protocol_header(value: Any, family: str, field: str = "contract") -> dict[str, Any]:
+    if not protocols.has_valid_header(value, family, field):
+        raise _fail(f"unsupported or inconsistent {family} format header")
+    return protocols.record_header(value[field], family, value.get("schemaFingerprint"))
+
+
+def _header_for_request(request: dict[str, Any] | None, family: str, variant: str) -> dict[str, Any]:
+    if request is None or protocols.is_current_header(request, "conference-pdf-extraction-request"):
+        return protocols.record_header(protocols.contract(family), family)
+    _protocol_header(request, "conference-pdf-extraction-request")
+    return protocols.historical_header(family, variant)
+
+
+def _marker_for_request(request: dict[str, Any] | None, family: str, variant: str) -> str:
+    return _header_for_request(request, family, variant)["contract"]
+
+
+def extractor_implementation_sha256() -> str:
+    return sha256_bytes(read_regular_bytes(Path(__file__).absolute()))
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -258,13 +278,12 @@ def _strict_json_object(raw: bytes, label: str) -> dict[str, Any]:
 
 
 def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
+    header = _protocol_header(value, "conference-pdf-extraction-request")
     request = _exact_object(
         value,
-        ["contract", "version", "paperId", "sourceIdentity", "source", "outputs", "options"],
+        [*header, "paperId", "sourceIdentity", "source", "outputs", "options"],
         "extraction request",
     )
-    if request["contract"] != REQUEST_CONTRACT or request["version"] != CONTRACT_VERSION:
-        raise _fail(f"extraction request contract/version is unsupported: expected {REQUEST_CONTRACT!r} v{CONTRACT_VERSION}, actual {request['contract']!r} v{request['version']!r}")
     paper_id = _plain_text(request["paperId"], "paperId")
     source_identity = _plain_text(request["sourceIdentity"], "sourceIdentity")
     source = _exact_object(request["source"], ["metadata", "pdf"], "source")
@@ -278,8 +297,7 @@ def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
         "options",
     )
     normalized = {
-        "contract": REQUEST_CONTRACT,
-        "version": CONTRACT_VERSION,
+        **header,
         "paperId": paper_id,
         "sourceIdentity": source_identity,
         "source": {
@@ -307,10 +325,12 @@ def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
             "pageSeparator": options["pageSeparator"],
         },
     }
-    if (normalized["options"]["minimumTextCharacters"] not in SUPPORTED_MINIMUM_TEXT_CHARACTERS
-            or normalized["options"]["normalization"] != NORMALIZATION
+    normalization = _marker_for_request(request, "conference-pdf-text-normalization", "unicode-nfc-lf-rstrip")
+    if (type(normalized["options"]["minimumTextCharacters"]) is not int
+            or normalized["options"]["minimumTextCharacters"] not in SUPPORTED_MINIMUM_TEXT_CHARACTERS
+            or normalized["options"]["normalization"] != normalization
             or normalized["options"]["pageSeparator"] != PAGE_SEPARATOR):
-        raise _fail(f"extraction options must exactly match the supported conference profile: minimumTextCharacters={normalized['options']['minimumTextCharacters']!r} (supported {sorted(SUPPORTED_MINIMUM_TEXT_CHARACTERS)}), normalization={normalized['options']['normalization']!r} (supported {NORMALIZATION!r}), pageSeparator={normalized['options']['pageSeparator']!r} (supported {PAGE_SEPARATOR!r})")
+        raise _fail(f"extraction options must exactly match the supported conference profile: minimumTextCharacters={normalized['options']['minimumTextCharacters']!r} (supported {sorted(SUPPORTED_MINIMUM_TEXT_CHARACTERS)}), normalization={normalized['options']['normalization']!r} (supported {normalization!r}), pageSeparator={normalized['options']['pageSeparator']!r} (supported {PAGE_SEPARATOR!r})")
     names = [manifest_name, metadata["file"], pdf["file"], *normalized["outputs"].values()]
     if len(set(names)) != len(names):
         raise _fail(f"manifest, input, and output filenames must all differ: duplicated {sorted({name for name in names if names.count(name) > 1})}")
@@ -485,7 +505,7 @@ def _layout_tex(glyphs: list[dict[str, Any]]) -> str | None:
     return result
 
 
-def _formula_layout_candidates(page: Any) -> list[dict[str, Any]]:
+def _formula_layout_candidates(page: Any, format_reference: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """把附近的字形都收进来，孤立的上下标行也不例外。"""
     glyphs = []
     for block in page.get_text("rawdict").get("blocks", []):
@@ -532,7 +552,7 @@ def _formula_layout_candidates(page: Any) -> list[dict[str, Any]]:
         members = sorted((glyphs[i] for i in selected), key=lambda g: (g["origin"][0], g["origin"][1]))
         bbox = [min(g["bbox"][0] for g in members), min(g["bbox"][1] for g in members),
                 max(g["bbox"][2] for g in members), max(g["bbox"][3] for g in members)]
-        layout = {"contract": "pdf-formula-glyph-layout-v1", "bbox": bbox, "glyphs": members}
+        layout = {**_header_for_request(format_reference, "pdf-formula-glyph-layout", "positioned-glyphs"), "bbox": bbox, "glyphs": members}
         tex = _layout_tex(members)
         # 式子内部的横线或其他绘图可能表示分式、上划线、根号等。那是证据，
         # 不是装饰。
@@ -581,7 +601,7 @@ def _caption_candidate(text: str) -> tuple[str, int] | None:
     return label, int(raw_number)
 
 
-def _build_visual_audit(document: Any) -> dict[str, Any]:
+def _build_visual_audit(document: Any, format_reference: dict[str, Any] | None = None) -> dict[str, Any]:
     """用 PyMuPDF 文档生成确定的视觉证据。"""
     pages: list[dict[str, Any]] = []
     table_candidates: list[dict[str, Any]] = []
@@ -609,7 +629,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
             "pngBase64": base64.b64encode(png_bytes).decode("ascii"),
         })
 
-        for candidate in _formula_layout_candidates(page):
+        for candidate in _formula_layout_candidates(page, format_reference):
             formula_candidates.append({
                 "page": page_number, "bbox": candidate["layout"]["bbox"],
                 "text": "".join(g["text"] for g in candidate["layout"]["glyphs"]),
@@ -708,8 +728,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
             })
 
     body = {
-        "contract": VISUAL_AUDIT_CONTRACT,
-        "version": VISUAL_AUDIT_VERSION,
+        **_header_for_request(format_reference, "conference-pdf-visual-audit", "rendered-page-and-layout"),
         "backend": {"name": "pymupdf", "version": str(document.__class__.__module__)},
         "renderDpi": VISUAL_RENDER_DPI,
         "pages": pages,
@@ -729,7 +748,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
     return body
 
 
-def load_pypdf_backend() -> ExtractionBackend:
+def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> ExtractionBackend:
     """按需加载固定版本的 PyMuPDF 后端（沿用旧函数名）。"""
     try:
         fitz = importlib.import_module("fitz")
@@ -968,7 +987,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                         if any(current[index] for index in range(1, len(current))):
                             rows.append(current)
                         elif current[0]:
-                            # 凭证约定（conference-pdf-extraction-receipt-v2）
+                            # 原字节抽取凭证约定
                             # 把每个单元格限制在 500 字符内；合并换行标签时也要
                             # 守住这个上限，长标签才不会让后续读取和核验失败。
                             cells[0] = clean_structure_text(f"{current[0]} {cells[0]}", 500)
@@ -1103,7 +1122,7 @@ def load_pypdf_backend() -> ExtractionBackend:
     def formula_records(pdf_document: Any, page_number: int, next_ordinal: int,
                         render_sha: str | None = None) -> tuple[list[dict[str, Any]], int]:
         page = pdf_document[page_number - 1]
-        candidates = _formula_layout_candidates(page)
+        candidates = _formula_layout_candidates(page, format_reference)
         if not candidates:
             return [], next_ordinal
         # 让结构记录绑定到 visual_audit 已经留下的那张原页渲染图。少数 PDF 用
@@ -1123,7 +1142,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                 "sourceRef": f"pdf:formula:{ordinal}:page:{page_number}",
                 "recoveryStatus": "layout-preserved",
                 "sourceExpression": {
-                    "contract": "pdf-formula-source-expression-v1",
+                    **_header_for_request(format_reference, "pdf-formula-source-expression", "pdf-layout-not-author-tex"),
                     "kind": "recovered-from-pdf-layout",
                     "originalTexAvailable": False,
                     "layoutSha256": candidate["layoutSha256"],
@@ -1257,7 +1276,7 @@ def load_pypdf_backend() -> ExtractionBackend:
             # 变成来源结构。
             conservative_visual_only = False
             if visual_audit is None:
-                audit_probe = _build_visual_audit(pdf_document)
+                audit_probe = _build_visual_audit(pdf_document, format_reference)
                 conservative_visual_only = any(
                     isinstance(candidate, dict) and (
                         candidate.get("rows", 0) > 0 or "rawCells" in candidate)
@@ -1303,7 +1322,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                 document = fitz.open(stream=pdf_bytes, filetype="pdf")
                 if document.needs_pass:
                     raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
-                result = _build_visual_audit(document)
+                result = _build_visual_audit(document, format_reference)
                 result["backend"] = {"name": "pymupdf", "version": version}
                 result.pop("auditSha256", None)
                 result["auditSha256"] = _stable_hash(result)
@@ -1435,7 +1454,7 @@ def run_extraction(
         extraction_error: ConferenceExtractionError | None = None
         pages: list[str] | None = None
         if active_backend is None:
-            active_backend = load_pypdf_backend()
+            active_backend = load_pypdf_backend(request)
         if active_backend is not None:
             try:
                 pages = active_backend.extract_pages(pdf_bytes)
@@ -1500,9 +1519,8 @@ def run_extraction(
                             f"extracted non-whitespace text is below {minimum_text_characters} characters: actual {non_whitespace}"}
                             if short else None)
                         artifact = {
-                            "contract": ARTIFACT_CONTRACT,
-                            "version": CONTRACT_VERSION,
-                            "profile": PROFILE,
+                            **_header_for_request(request, "conference-structured-artifacts", "replayable-layout"),
+                            "profile": _marker_for_request(request, "conference-pdf-replayable-layout", "replayable-layout"),
                             "offsetUnit": OFFSET_UNIT,
                             "flattenedTextSha256": sha256_bytes(text_bytes),
                             "pages": ranges,
@@ -1532,9 +1550,13 @@ def run_extraction(
             "file": request["outputs"]["artifactsFile"],
             "sha256": sha256_bytes(artifact_bytes),
         }
+        extractor_identity = ({**protocols.record_header(protocols.contract("conference-pdf-extractor"), "conference-pdf-extractor"),
+            "name": EXTRACTOR_NAME, "implementationSha256": extractor_implementation_sha256(), "backend": backend_info}
+            if protocols.is_current_header(request, "conference-pdf-extraction-request")
+            else {"name": EXTRACTOR_NAME,
+                **protocols.historical_header("conference-pdf-extractor", "fixed-implementation-release"), "backend": backend_info})
         receipt_body = {
-            "contract": RECEIPT_CONTRACT,
-            "version": CONTRACT_VERSION,
+            **_header_for_request(request, "conference-pdf-extraction-receipt", "raw-input-output-bindings"),
             "status": status,
             "textReplayable": status == "ready",
             "structuredReplayable": status == "ready",
@@ -1545,7 +1567,7 @@ def run_extraction(
                 "metadata": {**request["source"]["metadata"], "sha256": sha256_bytes(metadata_bytes)},
                 "pdf": {**request["source"]["pdf"], "sha256": pdf_sha},
             },
-            "extractor": {"name": EXTRACTOR_NAME, "version": EXTRACTOR_VERSION, "backend": backend_info},
+            "extractor": extractor_identity,
             "options": options,
             "pageCount": page_count,
             "text": text_descriptor,
@@ -1629,8 +1651,7 @@ def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING
             raise _fail(f"existing {key} differs from a fresh pinned extraction replay: actual {sha256_bytes(current_outputs[key])}, expected {sha256_bytes(replayed_outputs[key])}")
     receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed receipt")
     body = {
-        "contract": VERIFICATION_CONTRACT,
-        "version": CONTRACT_VERSION,
+        **_header_for_request(request, "conference-pdf-extraction-verification", "pinned-replay"),
         "status": "verified",
         "paperId": request["paperId"],
         "sourceIdentity": request["sourceIdentity"],
@@ -1707,13 +1728,13 @@ def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT
         if current_outputs[key] != replayed:
             raise _fail(f"existing blocked {key} differs from a fresh pinned extraction replay: actual {sha256_bytes(current_outputs[key])}, expected {sha256_bytes(replayed)}")
     receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed blocked receipt")
-    _exact_object(receipt, ["contract", "version", "status", "textReplayable", "structuredReplayable",
+    receipt_header = _protocol_header(receipt, "conference-pdf-extraction-receipt")
+    _exact_object(receipt, [*receipt_header, "status", "textReplayable", "structuredReplayable",
         "paperId", "sourceIdentity", "request", "source", "extractor", "options", "pageCount", "text",
         "artifacts", "blockedReason", "receiptSha256"], "blocked extraction receipt")
-    if (receipt["contract"] != RECEIPT_CONTRACT or receipt["version"] != CONTRACT_VERSION
-            or receipt["status"] != "blocked" or receipt["textReplayable"] is not False
+    if (receipt["status"] != "blocked" or receipt["textReplayable"] is not False
             or receipt["structuredReplayable"] is not False):
-        raise _fail(f"blocked extraction receipt contract/status is invalid: contract={receipt['contract']!r} (expected {RECEIPT_CONTRACT!r}), version={receipt['version']!r} (expected {CONTRACT_VERSION}), status={receipt['status']!r} (expected 'blocked'), textReplayable={receipt['textReplayable']!r}, structuredReplayable={receipt['structuredReplayable']!r}")
+        raise _fail(f"blocked extraction receipt status is invalid: status={receipt['status']!r}, textReplayable={receipt['textReplayable']!r}, structuredReplayable={receipt['structuredReplayable']!r}")
     reason = _exact_object(receipt["blockedReason"], ["code", "message"], "blockedReason")
     if reason["code"] not in {"TEXT_TOO_SHORT", "PDF_EXTRACTION_FAILED"}:
         raise _fail(f"blocked extraction reason code is unsupported: actual {reason['code']!r}, supported ['PDF_EXTRACTION_FAILED', 'TEXT_TOO_SHORT']")
@@ -1725,8 +1746,7 @@ def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT
     text_sha = None if "textFile" not in replayed_outputs else sha256_bytes(replayed_outputs["textFile"])
     artifacts_sha = None if "artifactsFile" not in replayed_outputs else sha256_bytes(replayed_outputs["artifactsFile"])
     body = {
-        "contract": BLOCKED_VERIFICATION_CONTRACT,
-        "version": 1,
+        **_header_for_request(request, "conference-pdf-extraction-blocked-verification", "verified-unavailable-text"),
         "status": "verified-blocked",
         "paperId": request["paperId"],
         "sourceIdentity": request["sourceIdentity"],
@@ -1758,14 +1778,13 @@ def parse_args(argv: list[str]) -> tuple[str, str, Path]:
 
 __all__ = [
     "ARTIFACT_CONTRACT",
-    "CONTRACT_VERSION",
     "ConferenceExtractionDependencyError",
     "ConferenceExtractionError",
     "ConferenceExtractionIntegrityError",
     "ConferencePdfExtractionError",
     "DEFAULT_STAGING_SOURCE_DIR",
     "EXTRACTOR_NAME",
-    "EXTRACTOR_VERSION",
+    "extractor_implementation_sha256",
     "ExtractionBackend",
     "MINIMUM_TEXT_CHARACTERS",
     "SHORT_PROCEEDINGS_MINIMUM_TEXT_CHARACTERS",

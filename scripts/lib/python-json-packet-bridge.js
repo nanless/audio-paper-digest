@@ -9,8 +9,7 @@ const scripts = path.resolve(__dirname, '..');
 const MAX_PACKET_BYTES = 64 * 1024 * 1024;
 const TIMEOUT_MS = 60 * 1000;
 function sourceReplay(paper) {
-    return paper && (['conference-source-resource-correction-v1','conference-source-core-correction-v1']
-        .includes(paper.conferenceSourceCorrection?.contract)
+    return paper && (require('./conference-source-correction-format').locatorFamily(paper.conferenceSourceCorrection)
         || (paper.apiReaderPlan?.tableBindings || []).some(b => b && Object.hasOwn(b,'authenticatedPdfTableEvidence'))
         || (paper.apiReaderResources?.resources || []).some(r => r && Object.hasOwn(r,'authenticatedPdfFootnoteEvidence')));
 }

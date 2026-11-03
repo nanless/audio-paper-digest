@@ -115,7 +115,7 @@ class UsageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             directory = root / 'ledger'
-            llm_usage.write_llm_usage_event({'version': llm_usage.VERSION}, directory)
+            llm_usage.write_llm_usage_event(llm_usage.usage_event_header(), directory)
             file = next(directory.glob('*.json'))
             self.assertEqual(file.stat().st_mode & 0o777, 0o600)
             (root / 'link').symlink_to(directory, target_is_directory=True)

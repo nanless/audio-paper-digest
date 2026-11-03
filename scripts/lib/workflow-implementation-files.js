@@ -55,11 +55,38 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
             if (resolved) return;
         }
     }
+    function addProtocolCatalogs() {
+        const directory = path.join(base, 'config/protocols');
+        const stat = fs.lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
+            throw new Error('Protocol catalog must be a regular project directory');
+        }
+        // Native-only schemas cannot change scientific or publication identity.
+        // Shared public formats remain clients.json; server tag formats are tags.json.
+        for (const name of fs.readdirSync(directory).filter(name => /^[a-z][a-z0-9-]*\.json$/.test(name) && !name.startsWith('clients-')).sort()) {
+            const relative = add(path.join('config/protocols', name), true);
+            const file = fs.lstatSync(path.join(base, relative));
+            if (file.nlink !== 1 || file.size > 4 * 1024 * 1024) throw new Error('Protocol catalog must be a bounded single-link file');
+        }
+    }
     for (const entry of entryFiles) add(entry, true);
     // The collector itself controls the closure and is therefore fingerprinted.
     add('scripts/lib/workflow-implementation-files.js');
     while (pending.length) {
         const filename = pending.shift();
+        if (filename === 'scripts/lib/workflow-legacy-codec' + '.js') {
+            add('config/workflow-historical-records.json', true);
+        }
+        if (filename === 'scripts/lib/page-source-crosswalk' + '.js' || filename === 'scripts/historical_page_scan' + '.py') {
+            add('config/historical-page-scan-formats.json', true);
+        }
+        if (filename === 'scripts/lib/official-conference-acquisition' + '.js') {
+            add('package-lock.json', true);
+            add('scripts/icmc-proceedings.py', true);
+        }
+        if (filename === 'scripts/lib/protocol-codec' + '.js' || filename === 'scripts/protocol_codec' + '.py') {
+            addProtocolCatalogs();
+        }
         // This Python matcher reads rule data through a dynamic Path expression.
         // Keep its stem separate from the extension: this collector scans its
         // own literals, and a full code filename here would create a new root.
@@ -68,6 +95,16 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
         }
         if (['scripts/lib/prompt-evidence.js', 'scripts/prompt_evidence.py'].includes(filename)) {
             add('scripts/lib/git-prompt-evidence-index.json', true);
+        }
+        if (filename === 'scripts/prompt_evidence.py') {
+            add('scripts/lib/prompt-current-records.json', true);
+            add('scripts/lib/prompt-legacy-records.json', true);
+        }
+        if (filename === 'scripts/reader_record_format.py') {
+            add('scripts/lib/reader-legacy-records.json', true);
+        }
+        if (['scripts/lib/original-file-evidence.js', 'scripts/original_file_evidence.py'].includes(filename)) {
+            add('config/original-file-evidence.json', true);
         }
         if (!CODE.test(filename)) continue;
         const text = fs.readFileSync(path.join(base, filename), 'utf8');

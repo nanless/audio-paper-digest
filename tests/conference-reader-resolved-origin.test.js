@@ -88,7 +88,7 @@ test('immutable migration bytes and original failed history cannot be changed', 
         parserImplementationSha256: '1'.repeat(64) };
     const payload = { status: 'failed', draft: sample.draft, attempts: 2, fullAttempts: 1,
         noProgress: 1, validationFailureStreak: 2, issues: [], failureSignature: 'literal-test' };
-    const envelope = { version: repair.REPAIR_VERSION, identity: originalIdentity,
+    const envelope = { ...repair.candidateEnvelopeHeader(), identity: originalIdentity,
         payload, payloadSha256: repair.hashDraft(payload) };
     const name = repair.hashDraft(originalIdentity) + '.migrated-00000000-0000-4000-8000-000000000001.json';
     const file = path.join(directory, name), bytes = Buffer.from(JSON.stringify(envelope));

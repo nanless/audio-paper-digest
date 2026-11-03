@@ -1,4 +1,6 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // An explicitly bound, zero-request configuration failure can retain its real
 // signed seed. This scope neither edits the parent nor changes request credit.
 const fs = require('node:fs');
@@ -41,8 +43,8 @@ function validateState(parent, current, proof) {
         || current.error || current.digestStatus?.latestAttemptStatus === 'analysis_failed'
         || !equal(current.analysisFactReviewObligation, proof)
         || !equal(protectedState(parent), protectedState(current))
-        || parent.analysisManifest?.stages?.apiReaderArticle?.contentMode !== 'reader-source-only-v1'
-        || !engine.hasValidApiReaderV3Records(current)
+        || !require('./reader-content-mode').is(parent.analysisManifest?.stages?.apiReaderArticle, 'source-only')
+        || !engine.hasValidIntegratedApiReaderRecords(current)
         || engine.getIncompleteAnalysisContentReason(current) !== null) fail('signed parent, pending scope or unchanged upstream differs');
     if (Object.keys(current).some(key => key.startsWith('latestAnalysisAttempt')
         && !['latestAnalysisAttemptAt', 'latestAnalysisAttemptError', 'latestAnalysisAttemptErrorCode',
@@ -70,7 +72,7 @@ function validateUsage(events, parent, proof) {
     const relevant = events.filter(event => ['request', 'request_started'].includes(event.kind)
         && paperKey(event.paperId) === paperKey(proof.paperId) && event.runId === proof.runId
         && ['apiReaderArticle', 'apiReaderRepair'].includes(event.stage));
-    if (relevant.some(event => event.version !== 'llm-usage-v1' || !['request', 'request_started'].includes(event.kind)
+    if (relevant.some(event => !isUsageEventFormat(event) || !['request', 'request_started'].includes(event.kind)
         || !Number.isFinite(Date.parse(event.at)))) fail('unknown Reader request event');
     const terminals = relevant.filter(event => event.kind === 'request').sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const paid = terminals.filter(event => !require('./reader-unsent-empty-candidate').isUnsent(event)).at(-1);

@@ -14,7 +14,12 @@ const doctor = require('./doctor.js');
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 const SITE_TITLE_MARKER = '语音/音乐/音频论文速递';
-const ARTIFACT_VERSION = 1;
+const formats = require('./lib/protocol-codec');
+const ARTIFACT_FORMAT = 'web-verification';
+
+function hasVerificationArtifactFormat(value) {
+    return formats.hasValidHeader(value, ARTIFACT_FORMAT, Object.hasOwn(value || {}, 'schemaVersion') ? 'schemaVersion' : 'contract');
+}
 
 function readEnv() {
     const file = path.join(ROOT, '.env');
@@ -147,7 +152,7 @@ async function verify(date, options = {}) {
     const failed = results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0);
     const ok = results.filter(item => item.ok).length;
     const summary = {
-        schemaVersion: ARTIFACT_VERSION,
+        ...formats.recordHeader(ARTIFACT_FORMAT, ARTIFACT_FORMAT),
         createdAt: new Date().toISOString(),
         date,
         partial: failed > 0 || results.length === 0 || results.length < expected,
@@ -475,7 +480,8 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 module.exports = {
-    ARTIFACT_VERSION,
+    ARTIFACT_FORMAT,
+    hasVerificationArtifactFormat,
     SITE_TITLE_MARKER,
     pageUrls,
     titleOf,

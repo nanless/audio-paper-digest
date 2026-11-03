@@ -41,7 +41,7 @@ test('unknown native error location remains blocked instead of guessing',()=>{co
 
 function nativeFullPrompt(changes={},historical=false) {
     const deep=require(path.join(ROOT,'scripts/deep-analyzer')),utils=require(path.join(ROOT,'scripts/utils'));
-    const versions=require(path.join(ROOT,'scripts/lib/prompt-text-versions'));
+    const versions=require(path.join(ROOT,'scripts/lib/prompt-contracts'));
     // Run the canonical loader body unchanged. Only its historical byte reader
     // is supplied from the already authenticated Git object; this is a render
     // fixture, not a source/declaration capability or a production override.
@@ -65,7 +65,7 @@ test('original v9 full canonical prompt renderer preserves the exact recorded pr
     const vars=fixture.nativeFullPromptVariables;assert.equal(vars.sourceEvidence.length,174837);assert.equal(sha(vars.sourceEvidence),fixture.nativeSourceEvidenceSha256);assert.ok(result.originalPrompt.includes(vars.sourceEvidence)&&result.prompt.includes(vars.sourceEvidence));assert.equal(result.previousDraft,raw);assert.equal(fixture.nativePromptReconstruction.originalSignedDisplayMatchesActiveIdentity,true);
 });
 test('current registered v11 full renderer preserves real evidence and the diagnostic-only context limit',()=>{
-    assert.equal(require(path.join(ROOT,'scripts/lib/prompt-text-versions')).currentTextStagePromptPath('apiReaderArticle'),'prompts/api-reader-article-v11.md');
+    assert.equal(require(path.join(ROOT,'scripts/lib/prompt-contracts')).currentTextStagePromptPath('apiReaderArticle'),'prompts/current/api-reader-article.md');
     const result=nativeFullPrompt();assert.notEqual(result.originalPrompt,fixture.nativeOriginalPrompt);
     assert.ok(result.originalPrompt.includes('独立 PDF 引文只用于明确允许的恢复'));
     assert.ok(result.originalPrompt.includes(fixture.nativeFullPromptVariables.sourceEvidence)&&result.prompt.includes(fixture.nativeFullPromptVariables.sourceEvidence));

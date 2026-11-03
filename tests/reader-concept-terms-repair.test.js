@@ -17,7 +17,7 @@ test('唯一术语长度问题只授权单一叶值，原文证据逐字发送',
     assert.deepEqual(context.targets.map(target => target.path), ['/conceptBridges/0/terms/1']);
     assert.equal(context.sourceQuotes[0], source);
     const target = context.targets[0];
-    const patch = repair.compileConceptTermsPatch(draft, { version: 1, draftSha256: context.draftSha256,
+    const patch = repair.compileConceptTermsPatch(draft, { ...require('../scripts/lib/protocol-codec').record('reader-concept-term-patch'), draftSha256: context.draftSha256,
         termReplacements: [{ path: target.path, oldSha256: target.oldSha256, value: '候选数 K' }] }, context);
     const after = repair.applyReaderPatch(draft, patch, ['/conceptBridges/0']);
     assert.deepEqual(after.sections, draft.sections);
@@ -36,9 +36,12 @@ test('语言来源或结构问题同时存在时不缩小真实修复范围', ()
 test('错误SHA、越权路径、重复、整正文、原值和丢符号全部拒绝', () => {
     const { draft, issues } = sample(), context = repair.buildConceptTermsRepairContext(draft, issues, source);
     const target = context.targets[0];
-    const valid = { version: 1, draftSha256: context.draftSha256,
+    const valid = { ...require('../scripts/lib/protocol-codec').record('reader-concept-term-patch'), draftSha256: context.draftSha256,
         termReplacements: [{ path: target.path, oldSha256: target.oldSha256, value: '候选数 K' }] };
     for (const edit of [value => { value.draftSha256 = '0'.repeat(64); },
+        value => { delete value.contract; delete value.schemaFingerprint; value.version = 1; },
+        value => { value.version = 1; },
+        value => { value.schemaFingerprint = '0'.repeat(64); },
         value => { value.termReplacements[0].oldSha256 = '0'.repeat(64); },
         value => { value.termReplacements[0].path = '/sections/0/body'; },
         value => { value.termReplacements.push(value.termReplacements[0]); },
@@ -75,7 +78,7 @@ test('正常生成器自动分流，只回术语叶值，仍经整篇解析并�
             const line = prompt.split('\n').find(line => line.startsWith('{"draftSha256"'));
             const context = JSON.parse(line), target = context.targets[0];
             assert.equal(target.path, '/conceptBridges/0/terms/1');
-            return JSON.stringify({ version: 1, draftSha256: context.draftSha256,
+            return JSON.stringify({ ...require('../scripts/lib/protocol-codec').record('reader-concept-term-patch'), draftSha256: context.draftSha256,
                 termReplacements: [{ path: target.path, oldSha256: target.oldSha256, value: '检索候选数 K' }] });
         },
     });
@@ -116,7 +119,7 @@ test('真实11792两次付费原请求只需一项术语，正文表图及原档
             assert.ok(JSON.stringify(repair.conceptTermsPromptVariables(context)).length < 12000);
             assert.ok(request.prompt.length > 100000);
             const target = context.targets[0];
-            const patch = repair.compileConceptTermsPatch(draft, { version: 1, draftSha256: context.draftSha256,
+            const patch = repair.compileConceptTermsPatch(draft, { ...require('../scripts/lib/protocol-codec').record('reader-concept-term-patch'), draftSha256: context.draftSha256,
                 termReplacements: [{ path: target.path, oldSha256: target.oldSha256, value: '检索序列条数 K' }] }, context);
             const after = repair.applyReaderPatch(draft, patch, ['/conceptBridges/2']);
             assert.deepEqual(after.sections, draft.sections);
@@ -140,7 +143,12 @@ test('实际准备身份包含窄模板实现SHA，而普通v12模板声明不�
         fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-target-ordinal-patch.js'), 'utf8'),
         require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(repair.CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
         require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8'),
-        fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-request-diagnostics.js'), 'utf8')].join('\0')).digest('hex');
+        fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-request-diagnostics.js'), 'utf8'),
+        ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
+            'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',
+            'reader-resource-claims-format.js', 'reader-proof-format.js', 'reader-content-mode.js',
+            'protocol-codec.js', 'reader-legacy-records.json'].map(file => fs.readFileSync(path.join(__dirname, '../scripts/lib', file), 'utf8')),
+        ...['reader.json', 'reader-retry.json'].map(file => fs.readFileSync(path.join(__dirname, '../config/protocols', file), 'utf8'))].join('\0')).digest('hex');
     assert.equal(context.identity.repairImplementationSha256, expected);
     assert.equal(context.identity.repairImplementationSha256, repair.readerRepairImplementationSha256());
 });

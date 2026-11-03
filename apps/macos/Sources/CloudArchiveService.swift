@@ -37,6 +37,7 @@ public actor CloudArchiveService {
     }
     public struct UploadCheckpoint: Codable, Sendable, Equatable {
         public let contract: String
+        public var schemaFingerprint: String? = nil
         public let destinationID: UUID
         public let folder: String
         public let reference: SnapshotReference
@@ -80,8 +81,9 @@ public actor CloudArchiveService {
             }
         }
     }
-    private struct Manifest: Codable, Sendable, Equatable {
+    fileprivate struct Manifest: Codable, Sendable, Equatable {
         let contract: String
+        var schemaFingerprint: String? = nil
         let reference: SnapshotReference
         let createdAt: Date
         let encodedBytes: Int
@@ -138,7 +140,7 @@ public actor CloudArchiveService {
         let chunks = Self.makeChunks(data)
         var state: UploadCheckpoint
         if let checkpoint {
-            guard checkpoint.contract == "paperdigest-cloud-transfer-v1", checkpoint.destinationID == destinationID,
+            guard ClientProtocols.hasValidHeader(checkpoint.contract,fingerprint:checkpoint.schemaFingerprint,"paperdigest-cloud-transfer"), checkpoint.destinationID == destinationID,
                   checkpoint.folder == folder, Self.validReference(checkpoint.reference), checkpoint.encodedBytes == data.count,
                   checkpoint.sha256 == Self.hash(data), checkpoint.chunks == chunks,
                   Set(checkpoint.verifiedChunkIndices).count == checkpoint.verifiedChunkIndices.count,
@@ -148,7 +150,7 @@ public actor CloudArchiveService {
             if let cooldown = checkpoint.retryAfter, cooldown > now() { retryAfter = max(retryAfter ?? cooldown, cooldown) }
         } else {
             let createdAt = Self.canonicalDate(now())
-            state = .init(contract: "paperdigest-cloud-transfer-v1", destinationID: destinationID, folder: folder,
+            state = .init(contract: ClientProtocols.contract("paperdigest-cloud-transfer"), schemaFingerprint: ClientProtocols.schemaFingerprint("paperdigest-cloud-transfer"), destinationID: destinationID, folder: folder,
                           reference: .init(month: Self.month(createdAt), id: UUID()), createdAt: createdAt,
                           encodedBytes: data.count, sha256: Self.hash(data), chunks: chunks,
                           verifiedChunkIndices: [], manifestVerified: false, retryAfter: nil)
@@ -156,7 +158,16 @@ public actor CloudArchiveService {
         currentCheckpoint = state
         try await save(state) // durable identity before any remote mutation
         let base = snapshotPath(state.reference)
-        let manifest = Manifest(contract: "paperdigest-cloud-snapshot-v1", reference: state.reference, createdAt: state.createdAt,
+        // An old checkpoint resumes the original remote header, never a rewritten manifest.
+        let snapshotHeader:[String:Any]
+        if let fingerprint=state.schemaFingerprint {
+            let originalSchema=try ClientProtocols.declaredSchema(state.contract,"paperdigest-cloud-transfer",fingerprint)
+            guard let original=originalSchema["snapshotFormat"] as? [String:Any],ClientProtocols.hasValidHeader(original,"paperdigest-cloud-snapshot") else { throw CloudError.invalidCheckpoint }
+            snapshotHeader=original
+        } else {
+            snapshotHeader=try ClientProtocols.historicalHeader("paperdigest-cloud-snapshot",variant:"chunked-immutable-snapshot",fingerprints:nil)
+        }
+        let manifest = Manifest(contract: snapshotHeader["contract"] as! String, schemaFingerprint: snapshotHeader["schemaFingerprint"] as? String, reference: state.reference, createdAt: state.createdAt,
                                 encodedBytes: state.encodedBytes, sha256: state.sha256, chunks: state.chunks)
         try await ensureCollection("/dav/\(folder)/")
         try await ensureCollection("/dav/\(folder)/\(state.reference.month)/")
@@ -368,7 +379,7 @@ public actor CloudArchiveService {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .millisecondsSince1970
         let manifest: Manifest
         do { manifest = try decoder.decode(Manifest.self,from:bytes) } catch { throw CloudError.integrity }
-        guard manifest.contract == "paperdigest-cloud-snapshot-v1", manifest.reference == reference,
+        guard ClientProtocols.hasValidHeader(manifest.contract,fingerprint:manifest.schemaFingerprint,"paperdigest-cloud-snapshot"), manifest.reference == reference,
               validReference(reference), manifest.createdAt.timeIntervalSince1970.isFinite, manifest.createdAt == canonicalDate(manifest.createdAt),
               month(manifest.createdAt) == reference.month,
               manifest.encodedBytes > 0, manifest.encodedBytes <= maxEncodedBytes, validSHA(manifest.sha256),
@@ -556,5 +567,38 @@ private final class CloudBoundedRequest: NSObject, URLSessionDataDelegate, @unch
         if error != nil { finish(.failure(CloudArchiveService.CloudError.transport)) }
         else if let response { finish(.success(.init(data:bytes,response:response))) }
         else { finish(.failure(CloudArchiveService.CloudError.transport)) }
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension CloudArchiveService.UploadCheckpoint {
+    public init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-cloud-transfer")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        destinationID=try values.decode(UUID.self,forKey:.destinationID)
+        folder=try values.decode(String.self,forKey:.folder)
+        reference=try values.decode(CloudArchiveService.SnapshotReference.self,forKey:.reference)
+        createdAt=try values.decode(Date.self,forKey:.createdAt)
+        encodedBytes=try values.decode(Int.self,forKey:.encodedBytes)
+        sha256=try values.decode(String.self,forKey:.sha256)
+        chunks=try values.decode([CloudArchiveService.Chunk].self,forKey:.chunks)
+        verifiedChunkIndices=try values.decode([Int].self,forKey:.verifiedChunkIndices)
+        manifestVerified=try values.decode(Bool.self,forKey:.manifestVerified)
+        retryAfter=try values.decodeIfPresent(Date.self,forKey:.retryAfter)
+    }
+}
+
+// Validate the original format header before decoding its body.
+extension CloudArchiveService.Manifest {
+    init(from decoder: Decoder) throws {
+        let header=try ClientProtocols.decodeHeader(decoder,"paperdigest-cloud-snapshot")
+        let values=try decoder.container(keyedBy:CodingKeys.self)
+        contract=header.raw;schemaFingerprint=header.fingerprint
+        reference=try values.decode(CloudArchiveService.SnapshotReference.self,forKey:.reference)
+        createdAt=try values.decode(Date.self,forKey:.createdAt)
+        encodedBytes=try values.decode(Int.self,forKey:.encodedBytes)
+        sha256=try values.decode(String.self,forKey:.sha256)
+        chunks=try values.decode([CloudArchiveService.Chunk].self,forKey:.chunks)
     }
 }

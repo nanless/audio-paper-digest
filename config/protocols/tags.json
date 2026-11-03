@@ -1,0 +1,138 @@
+{
+  "protocols": [
+    {
+      "name": "paper-tag-prompt-text",
+      "currentVariant": "plain-chinese-active-concepts",
+      "currentSchema": {
+        "encoding": "utf8-ordered-facets-codepoint-ordered-concept-rows",
+        "identity": "declared-catalog-tag-and-original-sha256"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-prompt-text-v2",
+          "variant": "plain-chinese-active-concepts"
+        },
+        {
+          "tag": "paper-taxonomy-prompt-projection-v1",
+          "variant": "legacy-active-concepts"
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-stage-record",
+      "currentVariant": "separate-tag-surface",
+      "currentSchema": {
+        "declaration": "nested-exact-contract-and-schema-fingerprint",
+        "stage": "tagSelection",
+        "surfaceField": "tagSectionAndPrimaryTagsSha256",
+        "bindingFields": [
+          "registryVersion",
+          "registrySha256",
+          "projectionContract",
+          "projectionSha256",
+          "selectionContract",
+          "inputAnalysisSha256",
+          "outputAnalysisSha256",
+          "inputProtectedProjectionSha256",
+          "outputProtectedProjectionSha256",
+          "tagSectionAndPrimaryTagsSha256",
+          "primaryTaskId",
+          "primaryMethodId",
+          "conceptIds"
+        ],
+        "legacy": "original-taxonomySeal-and-surface-fields-remain-separately-bound"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-stage-record-v2",
+          "variant": "separate-tag-surface"
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-catalog-upgrade",
+      "currentVariant": "explicit-concept-change-review",
+      "currentSchema": {
+        "fields": [
+          "fromRegistrySha256",
+          "fromRegistryVersion",
+          "toRegistrySha256",
+          "toRegistryVersion",
+          "changeLevel",
+          "reasons",
+          "note",
+          "destructiveAcknowledgement"
+        ],
+        "proof": "original-catalog-byte-sha256-and-recomputed-full-change-detail",
+        "acknowledgement": "unchanged-explicit-eligible-reasons-only-no-deletions",
+        "maxNoteChars": 500,
+        "maxReasonCodes": 32
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-catalog-upgrade-v2",
+          "variant": "explicit-concept-change-review",
+          "header": {
+            "contract": "paper-tag-catalog-upgrade-v2",
+            "version": 2
+          }
+        },
+        {
+          "tag": "paper-taxonomy-registry-upgrade-v1",
+          "variant": "legacy-concept-change-review",
+          "header": {
+            "contract": "paper-taxonomy-registry-upgrade-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "paper-tag-presentation-policy",
+      "currentVariant": "approved-display-catalog",
+      "currentSchema": {
+        "fields": [
+          "baseRegistrySha256",
+          "baseSnapshotSha256",
+          "preferredRegistrySha256",
+          "preferredSnapshotSha256",
+          "preferredProjectionSha256"
+        ],
+        "authority": "original-issued-policy-bytes-and-exact-source-snapshot-hashes",
+        "changes": "complete-original-concept-identity-and-ordered-prefix-only"
+      },
+      "historical": [
+        {
+          "tag": "paper-tag-presentation-policy-v2",
+          "variant": "approved-display-catalog"
+        },
+        {
+          "tag": "paper-taxonomy-presentation-selection-v1",
+          "variant": "legacy-display-catalog"
+        }
+      ]
+    },
+    {
+      "name": "published-tag-catalog-availability",
+      "currentVariant": "exact-original-catalog-and-mirrors",
+      "currentSchema": {
+        "fields": [
+          "registrySha256",
+          "registryVersion",
+          "displayRegistrySha256",
+          "sourceCatalogSha256",
+          "files",
+          "valid"
+        ],
+        "checks": "actual-source-whole-sha-and-complete-archive-plus-two-identical-display-mirrors",
+        "authority": "read-only-observation-not-a-persisted-source-capability"
+      },
+      "historical": [
+        {
+          "tag": "published-tag-catalog-availability-v1",
+          "variant": "exact-original-catalog-and-mirrors"
+        }
+      ]
+    }
+  ]
+}

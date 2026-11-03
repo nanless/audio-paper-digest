@@ -8,8 +8,8 @@ const engine = require('../scripts/analysis-engine'), config = require('../scrip
 function sample() {
     const input = '## 评分\n6/10\n\n## 核心摘要\n受保护摘要。\n\n## 实验结果\n原段只写无掩码基线。其它数字14.9°和条件保持。\n\n独立的受保护长段，用于验证局部段落的外部字节不能被修改。\n\n## 核心创新点\n受保护创新点。\n';
     const feedback = { coreAnalysisSha256: repair.sha(input), primaryFeedback: '该基线仍使用random掩码。', rejectedPrimaryClaims: ['无掩码基线'] };
-    const plan = repair.buildPlan(input, feedback);
-    const result = repair.applyPatch(input, plan, { contract: repair.CONTRACT, inputSha256: plan.inputSha256,
+    const plan = repair.buildPlan(input, feedback, repair.ORIGINAL_HEADER);
+    const result = repair.applyPatch(input, plan, { ...repair.ORIGINAL_HEADER, inputSha256: plan.inputSha256,
         replacements: [{ from: plan.targets[0].text, to: plan.targets[0].text.replace('无掩码基线', 'random掩码未适配基线') }] });
     return { input, feedback, ...result };
 }

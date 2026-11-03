@@ -7,6 +7,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import reader_sealed_pdf_quote_evidence as rule
+import reader_pdf_quote_projection as current
+import protocol_codec as codec
 
 
 def fixture(repeated=False):
@@ -110,6 +112,18 @@ class SealedPdfQuoteTests(unittest.TestCase):
             quote = document['normalizedFullText'][start:start + 1200]
             quote = quote[:quote.rfind(' ')]
             proof = rule.quote_evidence(document, quote)
+            original_header = codec.historical_header(current.QUOTE, 'unique-contiguous-official-pdf-fragment')
+            self.assertEqual(current.extract_pdf_quote_document(files['source.pdf'], original_header), document)
+            self.assertEqual(current.quote_evidence(document, quote), proof)
+            current_document = current.extract_pdf_quote_document(files['source.pdf'])
+            new_proof = current.quote_evidence(current_document, quote)
+            self.assertTrue(codec.is_current_header(new_proof, current.QUOTE))
+            self.assertTrue(codec.is_current_header(new_proof['extraction']['projection'], current.PROJECTION))
+            for field in ('quote', 'rawFragment', 'pages', 'pdfSha256', 'normalizedFullTextSha256'):
+                self.assertEqual(new_proof[field], proof[field])
+            self.assertNotEqual(new_proof['evidenceSha256'], proof['evidenceSha256'])
+            with self.assertRaisesRegex(ValueError, 'unknown_or_mixed'):
+                current.quote_evidence({**current_document, 'schemaFingerprint': 'f'*64}, quote)
             self.assertTrue(all(value in proof['quote'] for value in values))
             self.assertEqual(proof['pdfSha256'], rule.sha(files['source.pdf']))
             self.assertEqual(files, {p.name: p.read_bytes() for p in directory.iterdir()})

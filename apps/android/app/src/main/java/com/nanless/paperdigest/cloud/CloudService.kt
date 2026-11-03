@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.cloud
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.secret.SecretStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +38,7 @@ class CloudService(
         require(!controlRoot.canonicalPath.startsWith(researchRoot.canonicalPath + "/") && controlRoot.canonicalPath != researchRoot.canonicalPath)
         if (!controlRoot.exists()) require(controlRoot.mkdirs()); BackupCodec.checkedDirectory(controlRoot); BackupCodec.privateDirectory(controlRoot)
         val file = File(controlRoot, "profile.json")
-        profile = if (file.exists()) readJSON(file, 64 * 1024) else JSONObject().put("contract", "paperdigest-android-cloud-profile-v1").put("destinationID", UUID.randomUUID().toString()).put("account", "").put("folder", "PaperDigest").put("automatic", false).put("intervalHours", 24).put("automaticPaused", false)
+        profile = if (file.exists()) readJSON(file, 64 * 1024) else ClientProtocols.record("paperdigest-android-cloud-profile").put("destinationID", UUID.randomUUID().toString()).put("account", "").put("folder", "PaperDigest").put("automatic", false).put("intervalHours", 24).put("automaticPaused", false)
         validateProfile(profile)
         borrowing?.attachOwner(::credentialBinding, ::borrowedAuthorization)
     }
@@ -128,7 +129,7 @@ class CloudService(
             val folder = targetFolder(); require(folder.exists() || folder.mkdir()); BackupCodec.privateDirectory(folder)
             val snapshot = workspace.capture(File(folder, "snapshot.paperdigest"))
             require(snapshot.file.canonicalPath == File(folder, "snapshot.paperdigest").canonicalPath && snapshot.encodedBytes == snapshot.file.length()) { "快照材料未绑定本机原文件" }
-            pendingRecord = JSONObject().put("contract", "paperdigest-android-cloud-pending-v1").put("destinationID", destinationID).put("createdAt", Instant.ofEpochMilli(now()).toString()).put("fileCount", snapshot.fileCount).put("encodedBytes", snapshot.encodedBytes).put("sha256", snapshot.sha256)
+            pendingRecord = ClientProtocols.record("paperdigest-android-cloud-pending").put("destinationID", destinationID).put("createdAt", Instant.ofEpochMilli(now()).toString()).put("fileCount", snapshot.fileCount).put("encodedBytes", snapshot.encodedBytes).put("sha256", snapshot.sha256)
             BackupCodec.atomicJSON(File(folder, "pending.json"), pendingRecord)
         }
         val original = pendingRecord ?: error("未找到待传材料"); val file = validateSnapshot(original,check)
@@ -210,7 +211,7 @@ class CloudService(
     private fun pending(id: String = destinationID): JSONObject? {
         val file = File(targetFolder(id), "pending.json"); if (!file.exists()) return null
         val o = readJSON(file, 4 * 1024 * 1024)
-        require(o.getString("contract") == "paperdigest-android-cloud-pending-v1" && o.getString("destinationID") == id)
+        require(ClientProtocols.hasValidHeader(o,"paperdigest-android-cloud-pending") && o.getString("destinationID") == id)
         require(CloudManifest.number(o, "encodedBytes") in 1..BackupCodec.MAX_ENCODED && CloudManifest.number(o, "fileCount") in 1..BackupCodec.MAX_ENTRIES.toLong() && BackupCodec.validSHA(o.getString("sha256")))
         return o
     }
@@ -242,7 +243,7 @@ class CloudService(
     }
     companion object {
         private fun validateProfile(o: JSONObject) {
-            require(o.getString("contract") == "paperdigest-android-cloud-profile-v1"); UUID.fromString(o.getString("destinationID"))
+            require(ClientProtocols.hasValidHeader(o,"paperdigest-android-cloud-profile")); UUID.fromString(o.getString("destinationID"))
             val account = o.getString("account"); require(account.toByteArray().size <= 320 && ':' !in account && account.none { it.code < 32 || it.code == 127 })
             require(CloudArchive.validFolder(o.getString("folder")) && CloudManifest.number(o, "intervalHours") in 6..168 && o.get("automatic") is Boolean && o.get("automaticPaused") is Boolean)
         }

@@ -85,7 +85,7 @@ async function fixture(t, { historical = false, rawSchema = false, tableRestorat
     }
     let identity;
     await engine.withPaperAnalysisLock(paper, () => sourceScope(() => budget.withConferenceReaderGrant(registered.handle, opts, () => {
-        const versions = require('../../scripts/lib/prompt-text-versions'), evidence = require('../../scripts/lib/prompt-evidence'), history = require('../../scripts/lib/prompt-history');
+        const versions = require('../../scripts/lib/prompt-contracts'), evidence = require('../../scripts/lib/prompt-evidence'), history = require('../../scripts/lib/prompt-history');
         identity = { paperId: f.paperId, sourceSha256: member.sourceSha256, contentMode: 'reader-source-only-v1',
             conferenceReaderRetryEpoch: 1,
             promptSha256: history.promptTemplateSha256(evidence.readPromptEvidenceBytes(versions.currentTextStagePromptPath('apiReaderArticle')).toString('utf8')),

@@ -7,7 +7,7 @@ import hashlib
 ORIGINAL_SHA256 = "702aa7c869290618d27e2a318343295af1be6c05206d79fbb6ef044b5295bac4"
 ORIGINAL_COMMIT = "d13197e8406532327074145137ea8b6a98c1b361"
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "tests" / "fixtures" / "historical-page-scan-v4-source.txt"
+SOURCE = ROOT / "tests" / "fixtures" / "historical-page-scan-original-source.txt"
 
 
 def load_original_page_scan():

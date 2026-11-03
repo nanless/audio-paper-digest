@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.work.*
 import com.nanless.paperdigest.cloud.*
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.data.*
 import com.nanless.paperdigest.model.StudyService
 import com.nanless.paperdigest.pdf.*
@@ -1838,7 +1839,14 @@ class RootController private constructor(private val context: Context, private v
         val actual = pendingStore.get(view.operationID)
         require(actual.jobID == view.jobID && actual.documentID == view.documentID && canonical(actual.sourceIdentity) == canonical(view.sourceIdentity))
         val row = job.copy().put("localRescueExport", true).put("nativeOperationID", view.operationID)
-        val wrapper = JSONObject().put("contract", "paperdigest-native-export-job-v1").put("operationID", view.operationID)
+        val file=nativeJobFile(view,row.getString("id"))
+        val family="paperdigest-native-export-job"
+        val header=if(file.exists()){
+            val original=JSONObject(PublishedUtf8.decode(JsonFiles.read(file,65536)))
+            require(ClientProtocols.hasValidHeader(original,family)&&original.keys().asSequence().toSet()==ClientProtocols.recordKeys(original.get("contract"),family,setOf("operationID","documentID","job"),original.opt("schemaFingerprint") as? String)&&original.getString("operationID")==view.operationID&&original.getString("documentID")==view.documentID&&original.getJSONObject("job").getString("id")==row.getString("id")&&original.getJSONObject("job").getString("kind")==row.getString("kind")){"原本机救援控制任务的格式或身份已变化"}
+            ClientProtocols.recordHeader(original.get("contract"),family,original.opt("schemaFingerprint") as? String)
+        }else ClientProtocols.recordHeader(family,family)
+        val wrapper = header.put("operationID", view.operationID)
             .put("documentID", view.documentID).put("job", row)
         JsonFiles.write(nativeJobFile(view, row.getString("id")), wrapper)
         nativeExportJobs[row.getString("id")] = row
@@ -1862,8 +1870,8 @@ class RootController private constructor(private val context: Context, private v
         for (file in files) {
             require(file.name.matches(Regex("native-job-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\\.json")))
             val raw = JSONObject(PublishedUtf8.decode(JsonFiles.read(BackupCodec.checkedFile(directory, file.name), 65536)))
-            require(raw.keys().asSequence().toSet() == setOf("contract", "operationID", "documentID", "job"))
-            require(raw.getString("contract") == "paperdigest-native-export-job-v1" && raw.getString("operationID") == view.operationID && raw.getString("documentID") == view.documentID)
+            require(ClientProtocols.hasValidHeader(raw,"paperdigest-native-export-job")&&raw.keys().asSequence().toSet() == ClientProtocols.recordKeys(raw.get("contract"),"paperdigest-native-export-job",setOf("operationID","documentID","job"),raw.opt("schemaFingerprint") as? String))
+            require(ClientProtocols.hasValidHeader(raw,"paperdigest-native-export-job") && raw.getString("operationID") == view.operationID && raw.getString("documentID") == view.documentID)
             val job = raw.getJSONObject("job"); val id = job.getString("id")
             require(file == nativeJobFile(view, id) && ids.add(id))
             require(job.opt("localRescueExport") == true && job.getString("nativeOperationID") == view.operationID)

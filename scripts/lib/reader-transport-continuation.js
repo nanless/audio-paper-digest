@@ -1,9 +1,17 @@
 'use strict';
+const { isUsageEventFormat } = require('./llm-usage-format');
+
 // A technical supplement to ONE existing window, never a new content window.
 // The original 80k ledger remains authoritative for its unused 32k of patches;
 // this separate ledger can reserve exactly one identical 48k full transport.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
-const CONTRACT = 'reader-explicit-transport-continuation-v1';
+const protocols = require('./protocol-codec');
+const CONTRACT = 'reader-explicit-transport-continuation';
+const currentHeader = name => protocols.recordHeader(name, name);
+function readHeader(value, name) {
+    if (!protocols.hasValidHeader(value, name)) fail('unknown transport continuation format');
+    return protocols.recordHeader(value.contract, name, value.schemaFingerprint);
+}
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const hash = value => require('./reader-repair').hashDraft(value);
 const equal = (a, b) => hash(a) === hash(b);
@@ -60,7 +68,7 @@ function assertHistory(rows, identity, parent) {
         && ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cacheCreationInputTokens', 'reasoningTokens']
             .every(key => event.usage[key] === null);
     if (starts.length !== 1 || terminals.length !== 2 || !start || !terminal || !blocked
-        || rows.some(({ event }) => event.version !== 'llm-usage-v1' || !uuid.test(event.eventId || '')
+        || rows.some(({ event }) => !isUsageEventFormat(event) || !uuid.test(event.eventId || '')
             || event.paperId !== identity.paperId || event.runId !== identity.freshAnalysis.runId
             || event.stage !== 'apiReaderArticle' || event.contentAttempt !== 1
             || event.protocol !== identity.model?.protocol || event.model !== identity.model?.model)
@@ -84,7 +92,7 @@ function basis(parentRecord, candidateRecord, directory, rows) {
     const payload = envelope.payload, identity = envelope.identity;
     const retry = require('./explicit-reader-retry-round');
     retry.assertGrant(parent.grant);
-    if (parent.grant.contract !== retry.CONTRACT || parent.status !== 'active'
+    if (!retry.isBaseRound(parent.grant) || parent.status !== 'active'
         || parent.physicalRequests !== 1 || parent.reservedOutputTokens !== 48000
         || parent.requests?.length !== 1 || parent.requests[0].stage !== 'apiReaderArticle'
         || parent.requests[0].tokens !== 48000 || !Number.isFinite(Date.parse(parent.requests[0].at))
@@ -125,7 +133,7 @@ function describe({ directory, identity, paper, continuationId = crypto.randomUU
         if (fs.existsSync(location(directory, roundId))) fail('continuation already installed');
         const rows = usageRows(identity, Date.parse(parent.value.requests?.[0]?.at));
         const actual = basis(parent, candidate, directory, rows);
-        return { grant: { contract: CONTRACT, continuationId, parentRoundId: roundId,
+        return { grant: { ...currentHeader(CONTRACT), continuationId, parentRoundId: roundId,
             runId: parent.value.grant.runId, paperId: parent.value.grant.paperId, batchDate: parent.value.grant.batchDate,
             identitySha256: repair.hashDraft(identity), candidateEnvelopeSha256: candidate.sha256,
             payloadSha256: hash(candidate.value.payload), parentReceiptSha256: parent.sha256,
@@ -142,7 +150,7 @@ function install(options) {
     const actual = describe({ ...options, continuationId: options.grant?.continuationId });
     if (!uuid.test(actual.grant.continuationId || '') || !equal(actual.grant, options.grant)) fail('grant or CAS differs');
     const filename = location(options.directory, actual.grant.parentRoundId);
-    const receipt = { contract: CONTRACT, grant: actual.grant, parentSnapshot: snapshot(actual.parent),
+    const receipt = { ...currentHeader(CONTRACT), grant: actual.grant, parentSnapshot: snapshot(actual.parent),
         candidateSnapshot: snapshot(actual.candidate), physicalRequests: 0, reservedOutputTokens: 0, requests: [] };
     const fd = fs.openSync(filename, 'wx', 0o600);
     try { fs.writeFileSync(fd, JSON.stringify(receipt)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -153,7 +161,7 @@ function read(directory, parent) {
     const filename = location(directory, parent.grant.roundId);
     if (!fs.existsSync(filename)) return null;
     const record = checked(filename), receipt = record.value, grant = receipt.grant;
-    if (receipt.contract !== CONTRACT || grant?.contract !== CONTRACT || !uuid.test(grant.continuationId || '')
+    if (!equal(readHeader(receipt, CONTRACT), readHeader(grant, CONTRACT)) || !uuid.test(grant.continuationId || '')
         || grant.parentRoundId !== parent.grant.roundId || grant.parentGrantSha256 !== hash(parent.grant)
         || grant.runId !== parent.grant.runId || grant.paperId !== parent.grant.paperId
         || grant.batchDate !== parent.grant.batchDate || !equal(grant.sourceFiles, parent.grant.sourceFiles)
@@ -191,7 +199,7 @@ function read(directory, parent) {
     }
     return { filename, receipt, identity: original.identity, payload: original.payload };
 }
-const CONSUMED_PAID_ANCHOR = 'reader-consumed-transport-paid-anchor-v1';
+const CONSUMED_PAID_ANCHOR = 'reader-consumed-transport-paid-anchor';
 function paidAnchorFile(directory, roundId) {
     return path.join(path.dirname(location(directory, roundId)), roundId + '.consumed-paid-anchor.json');
 }
@@ -208,7 +216,7 @@ function anchorPaidRows(files, identity, receipt, rawSha256) {
     if (starts.length !== 1 || terminals.length !== 1 || dispositions.length !== 1) fail('consumed paid anchor history is ambiguous');
     const start = starts[0].event, terminal = terminals[0].event, disposition = dispositions[0].event;
     const labels = ['runId','paperId','stage','unitId','contentAttempt','transportAttempt','protocol','model','inputSha256'];
-    if (rows.some(({event}) => event.version !== 'llm-usage-v1' || event.runId !== identity.freshAnalysis.runId
+    if (rows.some(({event}) => !isUsageEventFormat(event) || event.runId !== identity.freshAnalysis.runId
         || event.paperId !== identity.paperId || event.stage !== 'apiReaderArticle' || event.contentAttempt !== 1)
         || start.eventId !== terminal.eventId || !labels.every(key => (start[key] ?? null) === (terminal[key] ?? null))
         || start.model !== identity.model.model || start.protocol !== identity.model.protocol
@@ -227,7 +235,7 @@ function readConsumedPaidAnchor(directory, state) {
     const receipt = state.receipt, grant = receipt.grant;
     const record = checked(paidAnchorFile(directory, grant.parentRoundId)), anchor = record.value;
     const candidate = unpack(anchor.candidateSnapshot), envelope = candidate.value, payload = envelope.payload;
-    if (anchor.contract !== CONSUMED_PAID_ANCHOR || receipt.physicalRequests !== 1
+    if (!protocols.hasValidHeader(anchor, CONSUMED_PAID_ANCHOR) || receipt.physicalRequests !== 1
         || receipt.reservedOutputTokens !== 48000 || receipt.requests.length !== 1
         || anchor.sidecarReceiptSha256 !== sha(fs.readFileSync(state.filename))
         || anchor.sidecarGrantSha256 !== hash(grant) || anchor.originalA0EnvelopeSha256 !== grant.candidateEnvelopeSha256
@@ -254,13 +262,15 @@ function prepareConsumedPaidAnchor({ directory, identity, paper, usageFiles }) {
     if (!state || hash(identity) !== state.receipt.grant.identitySha256) fail('consumed anchor must start from the original supplement identity');
     return require('./explicit-reader-retry-round').withExplicitRound(paper,parent.value.grant,()=>{
         candidateLink(directory,state,identity,candidate.value.payload);
-        const anchor = { contract: CONSUMED_PAID_ANCHOR, parentRoundId: roundId,
+        const filename = paidAnchorFile(directory,roundId);
+        const existing = fs.existsSync(filename) ? checked(filename).value : null;
+        const header = existing ? readHeader(existing, CONSUMED_PAID_ANCHOR) : currentHeader(CONSUMED_PAID_ANCHOR);
+        const anchor = { ...header, parentRoundId: roundId,
             sidecarReceiptSha256: sha(fs.readFileSync(state.filename)), sidecarGrantSha256: hash(state.receipt.grant),
             originalA0EnvelopeSha256: state.receipt.grant.candidateEnvelopeSha256,
             identitySha256: hash(identity), rawSha256: sha(candidate.value.payload.rawDraft),
             candidateSnapshot: snapshot(candidate), fees: usageFiles, newRequests: 0, newBudget: 0 };
-        const filename = paidAnchorFile(directory,roundId);
-        if (fs.existsSync(filename)) {
+        if (existing) {
             if (!equal(checked(filename).value,anchor)) fail('a different consumed paid anchor already exists');
         } else {
             // Validate before the create-only write; the temporary record is

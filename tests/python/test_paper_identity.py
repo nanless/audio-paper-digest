@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts import paper_identity as identity  # noqa: E402
 
 
-VECTORS = json.loads((Path(__file__).resolve().parents[2] / "config" / "paper-identity-v1-vectors.json").read_text("utf-8"))
+VECTORS = json.loads((Path(__file__).resolve().parents[2] / "config" / "paper-identity-vectors.json").read_text("utf-8"))
 
 
 class PaperIdentityTests(unittest.TestCase):
@@ -47,7 +47,8 @@ class PaperIdentityTests(unittest.TestCase):
             identity.normalize_identity(record)
 
     def test_vectors_are_canonical_and_cross_runtime_stable(self) -> None:
-        self.assertEqual(VECTORS["contract"], identity.CONTRACT)
+        self.assertTrue(identity.formats.is_contract(VECTORS["contract"], identity.CONTRACT))
+        self.assertNotEqual(VECTORS["contract"], identity.CONTRACT)
         for vector in VECTORS["vectors"]:
             normalized = identity.normalize_identity(vector["record"])
             self.assertEqual(normalized, vector["normalized"], vector["name"])

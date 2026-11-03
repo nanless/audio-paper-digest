@@ -7,6 +7,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/paper-source-authority.js');
+const codec = require('../scripts/lib/protocol-codec');
+const head = name => codec.recordHeader(codec.contract(name), name);
 const identityApi = require('../scripts/lib/paper-identity.js');
 const contextApi = require('../scripts/lib/conference-source-context.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
@@ -21,17 +23,17 @@ function arxivFixture(t) {
     const paperId = 'arxiv:2601.00001'; const fulltextName = 'paper.txt';
     const text = `${'full source evidence '.repeat(1200)}\n`; fs.writeFileSync(path.join(root, fulltextName), text, { mode: 0o600 });
     const fulltextSha256 = sha(text); const snapshotName = 'snapshot.json';
-    const snapshot = seal({ contract: api.ARXIV_SNAPSHOT_CONTRACT, version: api.VERSION, paperId,
+    const snapshot = seal({ ...head('arxiv-paper-source-snapshot'), paperId,
         arxivId: '2601.00001', officialUrl: 'https://arxiv.org/abs/2601.00001', fulltextSha256 }, 'snapshotSha256');
     const snapshotFileSha256 = writeJson(root, snapshotName, snapshot); const receiptName = 'source-receipt.json';
-    const receipt = seal({ contract: api.ARXIV_RECEIPT_CONTRACT, version: api.VERSION,
+    const receipt = seal({ ...head('arxiv-paper-source-receipt'),
         snapshotName, snapshotFileSha256, snapshotSha256: snapshot.snapshotSha256,
         fulltextName, fulltextSha256 }, 'receiptSha256');
     const receiptFileSha256 = writeJson(root, receiptName, receipt);
-    const identity = { contract: identityApi.CONTRACT, kind: 'arxiv', canonicalId: paperId,
+    const identity = { ...identityApi.currentHeader(), kind: 'arxiv', canonicalId: paperId,
         arxivId: '2601.00001', conference: null, externalId: null,
         source: { status: 'official', url: 'https://arxiv.org/abs/2601.00001' }, citation: null };
-    const body = { contract: api.CONTRACT, version: api.VERSION, paperId, identity,
+    const body = { ...head('paper-source-authority'), paperId, identity,
         identitySha256: identityApi.identitySha256(identity), identityRecordSha256: identityApi.recordSha256(identity),
         evidenceKind: 'arxiv-official-fulltext',
         proof: { snapshotName, snapshotFileSha256, snapshotSha256: snapshot.snapshotSha256,
@@ -81,7 +83,7 @@ test('会议授权要求并复核真实的计划、导入、台账和来源上�
     const context = contextApi.buildConferenceSourceContext({ planHandle: fixture.planHandle,
         paperId: fixture.paperId, sourceRoot: fixture.sourceRoot });
     const sourceContextName = 'conference-context.json'; const sourceContextFileSha256 = writeJson(root, sourceContextName, context);
-    const identity = { contract: identityApi.CONTRACT, kind: 'conference', canonicalId: fixture.paperId,
+    const identity = { ...identityApi.currentHeader(), kind: 'conference', canonicalId: fixture.paperId,
         arxivId: null, conference: { slug: 'icassp', year: 2026 },
         externalId: { scheme: 'icassp-arnumber', value: '100' },
         source: { status: 'unavailable', url: null }, citation: null };
@@ -90,7 +92,7 @@ test('会议授权要求并复核真实的计划、导入、台账和来源上�
         observationBindingSha256: context.observationBindingSha256,
         planAuthorityBindingSha256: context.productionAuthorization.binding.bindingSha256,
         fulltextSha256: sha(Buffer.from(context.text, 'utf8')) };
-    const body = { contract: api.CONTRACT, version: api.VERSION, paperId: fixture.paperId, identity,
+    const body = { ...head('paper-source-authority'), paperId: fixture.paperId, identity,
         identitySha256: identityApi.identitySha256(identity), identityRecordSha256: identityApi.recordSha256(identity),
         evidenceKind: 'conference-plan-source-context', proof };
     writeJson(root, 'conference-authority.json', seal(body, 'authoritySha256'));

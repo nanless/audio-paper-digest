@@ -7,8 +7,9 @@ const crypto = require('node:crypto');
 const RUN_CONTRACT = 'fresh-rewrite-run-v1';
 const INPUT_CONTRACT = 'fresh-rewrite-inputs-v1';
 const ANALYSIS_CONTRACT = 'fresh-rewrite-analysis-v1';
-const FRESHNESS_CONTRACT = 'fresh-source-analysis-v1';
-const BUNDLE_SOURCE_MODE = 'sealed-arxiv-bundle-v1';
+const FRESHNESS_CONTRACT = require('./daily-source-format').originalProvenanceHeader.contract;
+const sourceFormats = require('./daily-source-format');
+const BUNDLE_SOURCE_MODE = sourceFormats.originalBundleMode;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
 const SAVED_ANALYSIS_RECOVERY_PERMISSIONS = new WeakMap();
@@ -43,7 +44,7 @@ function createSavedAnalysisRecoveryPermissions(loaded, selectedIds, sourceRecor
             sourceSha256: descriptor.sourceSha256,
             structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
             sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
-            ...(descriptor.contract === 'fresh-source-bundle-v2' ? { sourceGeneration: descriptor.sourceGeneration,
+            ...(sourceFormats.isBundleDescriptor(descriptor) ? { sourceGeneration: descriptor.sourceGeneration,
                 sourceManifestSha256: descriptor.sourceManifestSha256 } : {}),
             consumed: false
         });

@@ -51,10 +51,10 @@ test('索引缓存不能遮盖重复键、文件替换、Git内容哈希错配�
     assert.throws(() => evidence.readPromptEvidenceBytes(f.relative, { root: f.root }), /ENOENT/);
 });
 test('当前模板始终读取工作树，缺失或symlink/FIFO不能用历史blob补齐', t => {
-    const f = fixture(t); const current = 'prompts/filter-v5.md';
+    const f = fixture(t); const current = 'prompts/current/filter.md';
     f.index.retiredPaths[current] = sha(f.bytes); f.index.blobs[sha(f.bytes)].paths.push(current); f.save();
     assert.throws(() => evidence.readPromptEvidenceBytes(current, { root: f.root }), /ENOENT/);
-    fs.mkdirSync(path.join(f.root, 'prompts'));
+    fs.mkdirSync(path.join(f.root, 'prompts/current'), { recursive: true });
     const target = path.join(f.root, current); fs.symlinkSync(f.filename, target);
     assert.throws(() => evidence.readPromptEvidenceBytes(current, { root: f.root }), /symlink/);
     fs.unlinkSync(target); execFileSync('mkfifo', [target]);

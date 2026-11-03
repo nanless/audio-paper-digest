@@ -18,6 +18,7 @@ actor ContextPublishedFixture {
   }
   if url.path.contains("/posts/context"){return Data("<html><body><div id='article-body' class='post-content'><h1>Published context fixture</h1><h2>Actual local fixture v\(version)</h2><p>Version-bound public fixture text.</p></div></body></html>".utf8)}
   if url.path.hasPrefix("/pdf/"){return pdf}
+  if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
   throw URLError(.fileDoesNotExist)
  }
 }

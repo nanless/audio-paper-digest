@@ -20,6 +20,7 @@ private actor AppDocsPublishedFixture {
   if url.lastPathComponent=="citation.ris" {return Data("TY  - JOUR\nTI  - MiCLA integration fixture\nER  - \n".utf8)}
   if url.path.contains("/posts/evidence") {return Data(("<html><body><div id='article-body' class='post-content'>"+body+"</div><a href='/blog/files/citation.json'>JSON</a><a href='/blog/files/citation.bib'>BibTeX</a><a href='/blog/files/citation.ris'>RIS</a></body></html>").utf8)}
   if url.path.hasPrefix("/pdf/"){return pdf}
+  if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
   throw URLError(.fileDoesNotExist)
  }
 }

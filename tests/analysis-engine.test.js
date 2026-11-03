@@ -27,7 +27,7 @@ const {
     mergeStoredAnalysisState,
     isSuccessfulAnalysisRecord,
     scoringStabilityIsResolved,
-    hasValidApiReaderV3Records,
+    hasValidIntegratedApiReaderRecords,
     getAnalysisRunStatus,
     getAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
@@ -1057,7 +1057,7 @@ describe('analyzePaperWithRetry', () => {
         };
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
         bindValidApiReaderV3(automatic);
-        assert.strictEqual(hasValidApiReaderV3Records(automatic), true);
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(automatic), true);
         const conferencePdf = structuredClone(automatic);
         const pdfStableHash = value => crypto.createHash('sha256')
             .update(JSON.stringify((function stable(item) {
@@ -1088,7 +1088,7 @@ describe('analyzePaperWithRetry', () => {
             pdfStableHash(conferencePdf.apiReaderAuthors);
         conferencePdf.analysisManifest.stages.apiReaderArticle.readerAuthorIdentitySha256 =
             conferencePdf.apiReaderAuthors.identitySha256;
-        assert.strictEqual(hasValidApiReaderV3Records(conferencePdf), true,
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(conferencePdf), true,
             'a SHA-bound conference PDF text author identity must pass canonical proof');
         const emptyAuthors = structuredClone(automatic);
         emptyAuthors.authors = [];
@@ -1111,7 +1111,7 @@ describe('analyzePaperWithRetry', () => {
             .update(JSON.stringify(emptyIdentityStable(emptyAuthors.apiReaderAuthors))).digest('hex');
         emptyAuthors.analysisManifest.stages.apiReaderArticle.authorIdentitySha256 =
             emptyAuthors.apiReaderAuthors.identitySha256;
-        assert.strictEqual(hasValidApiReaderV3Records(emptyAuthors), false,
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(emptyAuthors), false,
             'a self-consistent but empty author identity must fail closed');
         const { paper: ephemeral } = require('./reader-signed-draft-fixture').fixture();
         const stable = value => Array.isArray(value) ? value.map(stable)
@@ -1131,12 +1131,12 @@ describe('analyzePaperWithRetry', () => {
         ephemeral.analysisManifest.stages.apiReaderArticle.figuresSha256 = stableHash(
             ephemeral.apiReaderFigures
         );
-        assert.strictEqual(hasValidApiReaderV3Records(ephemeral), true);
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(ephemeral), true);
         ephemeral.apiReaderFigures[0].assetSha256 = 'bad';
         ephemeral.analysisManifest.stages.apiReaderArticle.figuresSha256 = stableHash(
             ephemeral.apiReaderFigures
         );
-        assert.strictEqual(hasValidApiReaderV3Records(ephemeral), false);
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(ephemeral), false);
         const deep = require('../scripts/deep-analyzer.js');
         const readerBytesBefore = JSON.stringify({
             article: automatic.apiReaderArticle,
@@ -1187,16 +1187,16 @@ describe('analyzePaperWithRetry', () => {
         };
         automatic.apiReaderArticle += '\n\n![未绑定图片](https://arxiv.org/html/2403.14817v1/figure.png)';
         resealArticle();
-        assert.strictEqual(hasValidApiReaderV3Records(automatic), false, '未绑定的额外图片不能取得展示资格');
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(automatic), false, '未绑定的额外图片不能取得展示资格');
         const { paper: figureFormula } = require('./reader-signed-draft-fixture').fixture();
         const originalImage = figureFormula.apiReaderArticle.match(/!\[[^\n]*\]\([^\n]*\)/)[0];
         figureFormula.apiReaderArticle = figureFormula.apiReaderArticle.replace(originalImage,
             `![Figure under laboratory \\[28\\]](${figureFormula.apiReaderFigures[0].url})`);
         resealArticle(figureFormula);
-        assert.strictEqual(hasValidApiReaderV3Records(figureFormula), true);
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(figureFormula), true);
         figureFormula.apiReaderArticle += '\n\n\\[x=1\\]';
         resealArticle(figureFormula);
-        assert.strictEqual(hasValidApiReaderV3Records(figureFormula), false);
+        assert.strictEqual(hasValidIntegratedApiReaderRecords(figureFormula), false);
 
         const nonApi = validAnalysisPaper('2604.00021v5');
         assert.strictEqual(isSuccessfulAnalysisRecord(nonApi), true);

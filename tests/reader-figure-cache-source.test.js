@@ -24,14 +24,14 @@ function seal(paper) {
 }
 test('Reader 缓存要求图注对应原始来源，不能只靠重新计算 SHA 或设置已检查标志',()=>{
     const {paper,source,payload}=affected();seal(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper),false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false);
     paper.apiReaderPlan.figurePixelsVerified=true;seal(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper),false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false);
     delete paper.apiReaderPlan.figurePixelsVerified;
     paper.apiReaderPlan.structuredSourcePayload=payload;seal(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper),true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),true);
     paper.apiReaderPlan.structuredSourcePayload=payload.replace('Overview','Changed');seal(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper),false);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false);
     for(const key of ['ordinal','caption','label','sourceDomSha256','flattenedTextSha256']) {
         const changed=structuredClone(source);
         if(key==='flattenedTextSha256') changed[key]='0'.repeat(64);
@@ -39,7 +39,7 @@ test('Reader 缓存要求图注对应原始来源，不能只靠重新计算 SHA
         const next=JSON.stringify(changed);paper.apiReaderPlan.structuredSourcePayload=next;
         paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256=sha(next);
         paper.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256=sha(next);seal(paper);
-        assert.equal(engine.hasValidApiReaderV3Records(paper),false,key);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false,key);
     }
 });
 test('Reader 缓存拒绝指定图片的无像素依据描述；移除该描述后仍可使用来源记录',()=>{
@@ -54,8 +54,8 @@ test('Reader 缓存拒绝指定图片的无像素依据描述；移除该描述�
     paper.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256=digest;
     const clean=paper.apiReaderArticle;
     paper.apiReaderArticle+='\n\n绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。';seal(paper);
-    assert.equal(engine.hasValidApiReaderV3Records(paper),false);
-    paper.apiReaderArticle=clean;seal(paper);assert.equal(engine.hasValidApiReaderV3Records(paper),true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),false);
+    paper.apiReaderArticle=clean;seal(paper);assert.equal(engine.hasValidIntegratedApiReaderRecords(paper),true);
 });
 test('来源记录包含同一图注时，插图整理结果保留可按 SHA 核对的原始记录',()=>{
     const {paper,source,payload}=affected(),artifacts={...source,payloadSha256:sha(payload)};

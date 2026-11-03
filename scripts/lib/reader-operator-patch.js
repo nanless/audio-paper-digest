@@ -1,10 +1,11 @@
 'use strict';
 
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const repair = require('./reader-repair.js');
-const { READER_SOURCE_CONTENT_MODE, READER_SIGNED_REVISION_CONTENT_MODE } = require('./reader-contract.js');
+const content = require('./reader-content-mode');
 const CONTRACT = 'reader-operator-patch-v1';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const isSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
@@ -74,12 +75,12 @@ function parserOptions(details, identity, payload, deps) {
     const descriptor = details?.freshSourceDescriptor;
     const fresh = identity.freshAnalysis;
     if (!descriptor || identity.paperId !== descriptor.paperId || identity.sourceSha256 !== descriptor.sourceSha256
-        || fresh?.contract !== 'fresh-source-analysis-v1' || fresh.runId !== descriptor.runId
+        || !isFreshSourceProvenance(fresh) || fresh.runId !== descriptor.runId
         || fresh.paperId !== descriptor.paperId || fresh.sourceSha256 !== descriptor.sourceSha256
         || fresh.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256
         || fresh.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256
         || fresh.sourceOnly !== true || fresh.oldGeneratedTextIncluded !== false
-        || ![READER_SOURCE_CONTENT_MODE, READER_SIGNED_REVISION_CONTENT_MODE].includes(identity.contentMode)
+        || !['source-only', 'signed-revision'].includes(content.modeOf(identity))
         || sha(details.text || '') !== descriptor.sourceSha256
         || details.structuredArtifacts?.payloadSha256 !== descriptor.structuredArtifactsSha256) {
         throw new Error('人工补丁草稿未对应本次来源记录，或身份、内容模式、来源快照字段不同');
@@ -112,19 +113,19 @@ function dependencies(overrides) {
 }
 
 function validateScratchParent(current, identity, details, run, deps) {
-    const { hasValidApiReaderV3Records } = require('../analysis-engine.js');
+    const { hasValidIntegratedApiReaderRecords } = require('../analysis-engine.js');
     if (!current || (current.arxivId || current.paper_id) !== identity.paperId) {
         throw new Error('人工补丁需要本次运行中同一篇论文的分析记录');
     }
-    if (identity.contentMode === READER_SOURCE_CONTENT_MODE) {
-        if (hasValidApiReaderV3Records(current) || deps.isSuccessfulAnalysisRecord(current)) {
+    if (content.is(identity, 'source-only')) {
+        if (hasValidIntegratedApiReaderRecords(current) || deps.isSuccessfulAnalysisRecord(current)) {
             throw new Error('仅使用论文来源资料的人工补丁不能改动已成功的分析或已签名的读者文章');
         }
         return;
     }
     // 这里只允许修改失败留下的草稿。已签名修订入口读取草稿前，仍须重新计算
     // 「父记录 + 反馈」的输入身份；父记录有效不能代替本次修订凭证。
-    if (current.latestAnalysisAttemptError || !hasValidApiReaderV3Records(current)) {
+    if (current.latestAnalysisAttemptError || !hasValidIntegratedApiReaderRecords(current)) {
         throw new Error('已签名修订的人工补丁需要没有最新失败记录且签名有效的父级读者文章');
     }
     require('./fresh-rewrite-run.js').assertFreshSourceRecordMatchesRun(current, run, details.freshSourceDescriptor);
@@ -218,7 +219,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
             operatorPatches: [...(payload.operatorPatches || []), committedAudit] };
         const expectedIntent = { contract: CONTRACT, audit: committedAudit, afterPayloadSha256: repair.hashDraft(updated) };
         if (intent && !same(intent, expectedIntent)) throw new Error('人工补丁的准备记录与本次准备保存的补丁记录不同');
-        if (Buffer.byteLength(JSON.stringify({ version: repair.REPAIR_VERSION, identity,
+        if (Buffer.byteLength(JSON.stringify({ ...repair.candidateEnvelopeHeader(), identity,
             payload: updated, payloadSha256: repair.hashDraft(updated) })) > 20 * 1024 * 1024) {
             throw new Error('人工补丁修改后的完整读者文章草稿记录超过 20 MiB');
         }

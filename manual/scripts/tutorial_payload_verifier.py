@@ -16,14 +16,15 @@ if str(SHARED_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS))
 
 from path_config import CURRENT_DIR, PROJECT_ROOT
+from protocol_codec import historical_contract as historical_manual_contract
 from publish_common import PublishDataValidationError, normalize_publish_arxiv_id
 
 
-TUTORIAL_FORMAT_CONTRACT = 'graduate-researcher-tutorial-quality-v2'
-FRESH_AUTHORING_CONTRACT = 'fresh-authoring-v1'
+TUTORIAL_FORMAT_CONTRACT = historical_manual_contract('manual-tutorial-quality', 'evidence-and-pedagogy')
+FRESH_AUTHORING_CONTRACT = historical_manual_contract('manual-fresh-authoring', 'source-only')
 FRESH_AUTHORING_MODE = 'fresh_from_evidence'
-MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT = 'manual-v5-tutorial-payload-v1'
-MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT = 'manual-tutorial-validation-orchestrator-v1'
+MANUAL_TUTORIAL_PAYLOAD_CONTRACT = historical_manual_contract('manual-tutorial-payload', 'evidence-packet')
+MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT = historical_manual_contract('manual-tutorial-orchestrator', 'ordered-checks')
 MANUAL_TUTORIAL_ORCHESTRATOR_FINGERPRINT = (
     '18809add501110190affd304aff462c504770ce2b8c48a08b11b6bdf46058f7b'
 )
@@ -47,9 +48,10 @@ def normalize_fresh_article(value):
     ).replace('\r', '\n').strip()
 
 
-def validate_manual_v5_fresh_authoring(
+def validate_manual_fresh_authoring(
         paper, article, date_str, *, current_dir=CURRENT_DIR,
         project_root=PROJECT_ROOT):
+    project_root = Path(project_root).resolve(strict=True)
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
     fresh = takeover.get('freshAuthoring') if isinstance(takeover, dict) else None
@@ -132,16 +134,17 @@ def validate_manual_v5_fresh_authoring(
     for kind in expected_kinds:
         item = by_kind[kind]
         historical_prompt = kind == 'authoring_prompt'
+        historical_static = kind in {'editorial_contract', 'blank_schema'}
         try:
             candidate = Path(str(item.get('path') or ''))
             if candidate.is_symlink():
                 raise PublishDataValidationError(f'{paper_id} 新写作所需的 {kind} 材料不得使用符号链接。')
-            bound_path = candidate.resolve(strict=not historical_prompt)
+            bound_path = candidate.resolve(strict=not (historical_prompt or historical_static))
         except (OSError, RuntimeError) as exc:
             raise PublishDataValidationError(
                 f'{paper_id} 新写作所需的 {kind} 材料路径不存在，或无法解析。'
             ) from exc
-        if not historical_prompt and (bound_path.is_symlink() or not bound_path.is_file()):
+        if not (historical_prompt or historical_static) and (bound_path.is_symlink() or not bound_path.is_file()):
             raise PublishDataValidationError(
                 f'{paper_id} 新写作所需的 {kind} 材料解析后的路径必须指向普通文件。'
             )
@@ -200,6 +203,15 @@ def validate_manual_v5_fresh_authoring(
                 raise PublishDataValidationError(
                     f'{paper_id} 新写作所需的 {kind} 原提示词证据缺失或 SHA 不一致。'
                 ) from exc
+        elif historical_static:
+            from original_file_evidence import read_original_file_bytes
+            try:
+                raw = read_original_file_bytes(bound_path.relative_to(project_root).as_posix(),
+                                               item.get('sha256'), project_root=project_root)
+            except (ValueError, OSError) as exc:
+                raise PublishDataValidationError(
+                    f'{paper_id} 所需的 {kind} 原文件证据缺失或 SHA 不一致。'
+                ) from exc
         else:
             raw = bound_path.read_bytes()
         actual_sha = hashlib.sha256(raw).hexdigest()
@@ -226,7 +238,7 @@ def validate_manual_v5_fresh_authoring(
     return {'receiptSha256': receipt_sha, 'articleSha256': normalized_sha}
 
 
-def validate_manual_v5_tutorial_payload(
+def validate_manual_tutorial_payload(
         paper, article, date_str, *, current_dir=CURRENT_DIR):
     """读取真实文件，核对 v5 教程的正文、质量检查记录和图表计划。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -234,15 +246,15 @@ def validate_manual_v5_tutorial_payload(
     takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
     paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
     if not isinstance(contracts, dict) \
-            or contracts.get('tutorialPayload') != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT:
+            or contracts.get('tutorialPayload') != MANUAL_TUTORIAL_PAYLOAD_CONTRACT:
         raise PublishDataValidationError(
-            f'{paper_id} Manual v5 未声明 {MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT} 教程材料格式；'
+            f'{paper_id} Manual v5 未声明 {MANUAL_TUTORIAL_PAYLOAD_CONTRACT} 教程材料格式；'
             '历史 v5 记录仅可兼容读取，不能据此重新生成教程材料。'
         )
     payload = takeover.get('tutorialPayload') if isinstance(takeover, dict) else None
     fresh = takeover.get('freshAuthoring') if isinstance(takeover, dict) else None
     if not isinstance(payload, dict) \
-            or payload.get('contract') != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT:
+            or payload.get('contract') != MANUAL_TUTORIAL_PAYLOAD_CONTRACT:
         raise PublishDataValidationError(
             f'{paper_id} 正式分析记录缺少有效的教程材料记录，或材料格式不符合当前要求。'
         )

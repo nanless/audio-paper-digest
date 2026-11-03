@@ -177,7 +177,7 @@ API Reader v3 会直接把安全准备的官方论文图交给主模型，因此
 
 `PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。默认日更在归档或抓取前，必须同步并核验该仓库的 `origin/main`，以正式已发布页确定去重和补抓基线。目录缺失、Git 更新或基线核验失败都会停止，不能跳过去重继续抓取。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。
 
-外部进程有明确等待上限。图片审查、Hugo、Git 本地操作、提交及 hook、推送与远端核验、视觉规划默认分别为 120、300、30、180、180、120 秒。可在 `env.example` 规定范围内，分别使用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`、`PD_GIT_NETWORK_TIMEOUT_SECONDS` 和 `PD_VISUAL_PLANNER_TIMEOUT_SECONDS` 调整。超时不会被记录为审查或远端发布成功；有效的本地发布提交若尚未验证远端，会保留供续跑核对和使用。
+外部进程有明确等待上限。图片审查、Hugo、Git 本地操作、提交及 hook、推送与远端核验默认分别为 120、300、30、180、180 秒。可在 `env.example` 规定范围内，分别使用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`和 `PD_GIT_NETWORK_TIMEOUT_SECONDS` 调整。超时不会被记录为审查或远端发布成功；有效的本地发布提交若尚未验证远端，会保留供续跑核对和使用。
 
 ## 安全边界
 

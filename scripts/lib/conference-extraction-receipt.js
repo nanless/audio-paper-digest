@@ -8,22 +8,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const paperIdentity = require('./paper-identity.js');
+const codec = require('./protocol-codec');
+const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
+const { readRegularBytes } = require('./git-file-bytes');
 
-const REQUEST_CONTRACT = 'conference-pdf-extraction-request-v2';
-const ARTIFACT_CONTRACT = 'conference-structured-artifacts-v2';
-const RECEIPT_CONTRACT = 'conference-pdf-extraction-receipt-v2';
-const VERIFICATION_CONTRACT = 'conference-pdf-extraction-verification-v2';
-const VERSION = 2;
-const PROFILE = 'replayable-pdf-layout-v1';
-const WEAK_PROFILE = 'weak-pdf-layout-v1';
-const REPLAYABLE_PROFILE = 'replayable-pdf-layout-v1';
+const REQUEST_CONTRACT = codec.contract('conference-pdf-extraction-request');
+const ARTIFACT_CONTRACT = codec.contract('conference-structured-artifacts');
+const RECEIPT_CONTRACT = codec.contract('conference-pdf-extraction-receipt');
+const VERIFICATION_CONTRACT = codec.contract('conference-pdf-extraction-verification');
+const PROFILE = codec.contract('conference-pdf-replayable-layout');
+const WEAK_PROFILE = codec.contract('conference-pdf-weak-layout');
+const REPLAYABLE_PROFILE = PROFILE;
 const OFFSET_UNIT = 'utf8-byte';
 const EXTRACTOR_NAME = 'audio-paper-digest-conference-structured';
-const EXTRACTOR_VERSION = '2.3.1';
+const EXTRACTOR_IMPLEMENTATION_SHA256 = crypto.createHash('sha256')
+    .update(readRegularBytes(path.resolve(__dirname, '../conference_extractor.py'))).digest('hex');
 const BACKEND_NAME = 'pymupdf';
 const BACKEND_VERSION = '1.27.2.3';
 const OPTIONS = Object.freeze({ minimumTextCharacters: 5000,
-    normalization: 'unicode-nfc-lf-rstrip-v1', pageSeparator: '\n\f\n' });
+    normalization: codec.contract('conference-pdf-text-normalization'), pageSeparator: '\n\f\n' });
 const SHORT_PROCEEDINGS_OPTIONS = Object.freeze({ minimumTextCharacters: 3000,
     normalization: OPTIONS.normalization, pageSeparator: OPTIONS.pageSeparator });
 const SHORT_PROCEEDINGS_CONFERENCES = new Set(['jep-2026', 'icmc-2026']);
@@ -42,6 +45,16 @@ const MAX_TEXT_BYTES = 64 * 1024 * 1024;
 const MAX_FIGURE_ASSET_BASE64_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 4;
 const EXTRACTION_HANDLES = new WeakSet();
 const EXTRACTION_HANDLE_DATA = new WeakMap();
+function recordHeaderFor(value, family, field = 'contract') {
+    try { return readRecordHeader(value, family, field); }
+    catch (error) { fail(`format header invalid: ${error.message}`); }
+}
+function headerForRequest(request, family, variant) {
+    return codec.isCurrentHeader(request, 'conference-pdf-extraction-request')
+        ? codec.recordHeader(codec.contract(family), family) : codec.historicalHeader(family, variant);
+}
+function isReplayableProfile(profile) { return codec.isContract(profile, 'conference-pdf-replayable-layout'); }
+function isWeakProfile(profile) { return codec.isContract(profile, 'conference-pdf-weak-layout'); }
 // Python 的 str.isspace() 是 Unicode White_Space 加上四个 C0 信息分隔符。ECMAScript
 // 的 \s 不含 U+001C..U+001F 却包含 U+FEFF，所以没法逐字符复现抽取器给出的 receipt
 // 计数。
@@ -205,7 +218,9 @@ function normalizeSourceEntry(value, kind) {
 }
 function normalizeOptions(value) {
     exact(value, Object.keys(OPTIONS), 'extraction options');
-    if (!SUPPORTED_OPTIONS.some(profile => stableHash(value) === stableHash(profile))) {
+    const historical = codec.historicalContract('conference-pdf-text-normalization', 'unicode-nfc-lf-rstrip');
+    if (![...SUPPORTED_OPTIONS, ...SUPPORTED_OPTIONS.map(profile => ({ ...profile, normalization: historical }))]
+        .some(profile => stableHash(value) === stableHash(profile))) {
         fail('抽取参数与本会议允许的配置不同');
     }
     return clone(value);
@@ -216,11 +231,11 @@ function optionsForConference(conferenceId) {
         ? SHORT_PROCEEDINGS_OPTIONS : OPTIONS);
 }
 function normalizeRequest(value, requestName) {
-    exact(value, ['contract', 'version', 'paperId', 'sourceIdentity', 'source', 'outputs', 'options'], 'extraction request');
-    if (value.contract !== REQUEST_CONTRACT || value.version !== VERSION) fail('抽取请求的格式标识或版本不受支持');
+    const header = recordHeaderFor(value, 'conference-pdf-extraction-request');
+    exact(value, [...Object.keys(header), 'paperId', 'sourceIdentity', 'source', 'outputs', 'options'], 'extraction request');
     exact(value.source, ['metadata', 'pdf'], 'extraction request source');
     exact(value.outputs, ['textFile', 'artifactsFile', 'receiptFile'], 'extraction request outputs');
-    const result = { contract: REQUEST_CONTRACT, version: VERSION,
+    const result = { ...header,
         paperId: text(value.paperId, 'request.paperId'), sourceIdentity: text(value.sourceIdentity, 'request.sourceIdentity'),
         source: { metadata: normalizeSourceEntry(value.source.metadata, 'metadata'),
             pdf: normalizeSourceEntry(value.source.pdf, 'pdf') },
@@ -228,6 +243,9 @@ function normalizeRequest(value, requestName) {
             artifactsFile: safeName(value.outputs.artifactsFile, SAFE_JSON_NAME, 'outputs.artifactsFile'),
             receiptFile: safeName(value.outputs.receiptFile, SAFE_JSON_NAME, 'outputs.receiptFile') },
         options: normalizeOptions(value.options) };
+    const expectedNormalization = codec.isCurrentHeader(value, 'conference-pdf-extraction-request') ? OPTIONS.normalization
+        : codec.historicalContract('conference-pdf-text-normalization', 'unicode-nfc-lf-rstrip');
+    if (result.options.normalization !== expectedNormalization) fail('抽取请求与文本规范化声明不能混用新旧格式');
     const names = [requestName, result.source.metadata.file, result.source.pdf.file, ...Object.values(result.outputs)];
     if (new Set(names).size !== names.length) fail('请求文件、来源文件和输出文件必须使用互不相同的文件名');
     return result;
@@ -235,10 +253,10 @@ function normalizeRequest(value, requestName) {
 
 function validateVisualAudit(value) {
     if (!plain(value)) fail('visualAudit 必须是普通对象，不能是数组或自定义对象');
-    exact(value, ['contract', 'version', 'backend', 'renderDpi', 'pages', 'embeddedImages',
+    const header = recordHeaderFor(value, 'conference-pdf-visual-audit');
+    exact(value, [...Object.keys(header), 'backend', 'renderDpi', 'pages', 'embeddedImages',
         'tableCandidates', 'formulaCandidates', 'figureCandidates', 'visualBytes', 'limitations', 'auditSha256'], 'visualAudit');
-    if (value.contract !== 'conference-pdf-visual-audit-v1' || value.version !== 1
-        || !plain(value.backend) || value.backend.name !== BACKEND_NAME
+    if (!plain(value.backend) || value.backend.name !== BACKEND_NAME
         || value.backend.version !== BACKEND_VERSION || value.renderDpi !== 72
         || !Array.isArray(value.pages) || !Array.isArray(value.embeddedImages)
         || !Array.isArray(value.tableCandidates) || !Array.isArray(value.formulaCandidates)
@@ -306,9 +324,9 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
         || formula.recoveryStatus !== 'layout-preserved') fail('PDF 公式必须保留原排版，不能提供可发布的 TeX；公式序号、页码或状态也须满足要求');
     text(formula.sourceRef, 'formula.sourceRef');
     const expression = formula.sourceExpression;
-    exact(expression, ['contract', 'kind', 'originalTexAvailable', 'layoutSha256', 'renderSha256', 'recoveredTex', 'crop'], 'formula.sourceExpression');
-    if (expression.contract !== 'pdf-formula-source-expression-v1'
-        || expression.kind !== 'recovered-from-pdf-layout' || expression.originalTexAvailable !== false
+    const expressionHeader = recordHeaderFor(expression, 'pdf-formula-source-expression');
+    exact(expression, [...Object.keys(expressionHeader), 'kind', 'originalTexAvailable', 'layoutSha256', 'renderSha256', 'recoveredTex', 'crop'], 'formula.sourceExpression');
+    if (expression.kind !== 'recovered-from-pdf-layout' || expression.originalTexAvailable !== false
         || !(expression.recoveredTex === null || typeof expression.recoveredTex === 'string' && expression.recoveredTex.length <= 4000)) {
         fail('PDF 公式的来源表达格式无效，或将推导的表达冒充原始 TeX');
     }
@@ -321,7 +339,8 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
     if (matches.length !== 1) fail('PDF 公式必须恰好对应一条排版候选记录');
     const candidate = matches[0];
     const layout = candidate.layout;
-    exact(layout, ['contract', 'bbox', 'glyphs'], 'formula glyph layout');
+    const layoutHeader = recordHeaderFor(layout, 'pdf-formula-glyph-layout');
+    exact(layout, [...Object.keys(layoutHeader), 'bbox', 'glyphs'], 'formula glyph layout');
     const coordinates = (value, length) => Array.isArray(value) && value.length === length
         && value.every(number => typeof number === 'number' && Number.isFinite(number));
     const crop = expression.crop;
@@ -339,7 +358,7 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
         || cropBytes.readUInt32BE(16) < 1 || cropBytes.readUInt32BE(16) > 842
         || cropBytes.readUInt32BE(20) < 1 || cropBytes.readUInt32BE(20) > 194
         || sha256(cropBytes) !== assertSha(crop.sha256, 'formula crop SHA')) fail('PDF 公式裁剪图片的文件头、尺寸、大小或 SHA 与要求不同');
-    if (layout.contract !== 'pdf-formula-glyph-layout-v1' || !coordinates(layout.bbox, 4)
+    if (!coordinates(layout.bbox, 4)
         || !Array.isArray(layout.glyphs) || !layout.glyphs.length
         || candidate.status !== 'visual-only-no-tex'
         || candidate.derivedTex !== expression.recoveredTex
@@ -361,23 +380,30 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
 }
 
 function validateArtifact(value, textBytes) {
-    const allowed = ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
+    const header = recordHeaderFor(value, 'conference-structured-artifacts');
+    const allowed = [...Object.keys(header), 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
         'tables', 'formulas', 'figures', 'payloadSha256'];
     if (Object.keys(value).sort().join('\0') !== [...allowed, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort().join('\0')) {
         fail('结构化抽取结果缺少必需字段，或含有额外字段');
     }
-    if (value.contract !== ARTIFACT_CONTRACT || value.version !== VERSION || ![WEAK_PROFILE, REPLAYABLE_PROFILE].includes(value.profile)
+    if ((!isWeakProfile(value.profile) && !isReplayableProfile(value.profile))
         || value.offsetUnit !== OFFSET_UNIT) fail('结构化抽取结果的格式标识、版本、证据能力配置或偏移单位不受支持');
+    const current = codec.isCurrentHeader(value, 'conference-structured-artifacts');
+    const profileFamily = isReplayableProfile(value.profile) ? 'conference-pdf-replayable-layout' : 'conference-pdf-weak-layout';
+    if ((value.profile === codec.contract(profileFamily)) !== current) fail('抽取结果与能力配置不能混用新旧格式');
     if (assertSha(value.flattenedTextSha256, 'flattenedTextSha256') !== sha256(textBytes)) {
         fail('结构化抽取结果的 flattenedTextSha256 与实际全文字节的 SHA 不同');
     }
     const { payloadSha256, ...body } = value;
     if (assertSha(payloadSha256, 'payloadSha256') !== sha256(JSON.stringify(body))) fail('结构化抽取结果的 payloadSha256 与实际记录内容的 SHA 不同');
-    if (Object.hasOwn(value, 'visualAudit')) validateVisualAudit(value.visualAudit);
+    if (Object.hasOwn(value, 'visualAudit')) {
+        validateVisualAudit(value.visualAudit);
+        if (codec.isCurrentHeader(value.visualAudit, 'conference-pdf-visual-audit') !== current) fail('抽取结果与页面审计不能混用新旧格式');
+    }
     if (!Array.isArray(value.pages) || !value.pages.length
         || !Array.isArray(value.tables) || !Array.isArray(value.formulas)
         || !Array.isArray(value.figures)) fail('结构化抽取结果必须包含非空页面对应记录，以及表格、公式和图片数组');
-    if (value.profile === WEAK_PROFILE
+    if (isWeakProfile(value.profile)
         && (value.tables.length || value.formulas.length || value.figures.length)) {
         fail('证据能力有限的抽取结果不能包含恢复出的表格、公式或图片结构');
     }
@@ -393,7 +419,7 @@ function validateArtifact(value, textBytes) {
         previousEnd = page.textEnd;
     });
     if (previousEnd !== textBytes.length) fail('页面对应记录必须覆盖全部 UTF-8 全文字节');
-    if (value.profile === REPLAYABLE_PROFILE) {
+    if (isReplayableProfile(value.profile)) {
         const checkText = (item, label, empty = false, maximum = 4000) => {
             if (typeof item !== 'string' || (!empty && !item.trim()) || item.length > maximum
                 || /[\u0000-\u001f\u007f]/u.test(item)) fail(`${label} 必须是允许长度范围内的文本，不能含控制字符；要求非空时不能只有空白字符`);
@@ -438,20 +464,23 @@ function validateArtifact(value, textBytes) {
     return clone(value);
 }
 function normalizeReceipt(value) {
-    exact(value, ['contract', 'version', 'status', 'textReplayable', 'structuredReplayable', 'paperId',
+    const header = recordHeaderFor(value, 'conference-pdf-extraction-receipt');
+    exact(value, [...Object.keys(header), 'status', 'textReplayable', 'structuredReplayable', 'paperId',
         'sourceIdentity', 'request', 'source', 'extractor', 'options', 'pageCount', 'text', 'artifacts',
         'blockedReason', 'receiptSha256'], 'extraction receipt');
-    if (value.contract !== RECEIPT_CONTRACT || value.version !== VERSION || value.status !== 'ready'
+    if (value.status !== 'ready'
         || value.textReplayable !== true || typeof value.structuredReplayable !== 'boolean' || value.blockedReason !== null) {
         fail('只有状态为 ready、文本可重新核验且未被阻断的会议抽取凭证才能用于暂存');
     }
     exact(value.request, ['file', 'sha256'], 'receipt.request');
     exact(value.source, ['metadata', 'pdf'], 'receipt.source');
-    exact(value.extractor, ['name', 'version', 'backend'], 'receipt.extractor');
+    const current = codec.isCurrentHeader(value, 'conference-pdf-extraction-receipt');
+    const extractorHeader = recordHeaderFor(value.extractor, 'conference-pdf-extractor', current ? 'contract' : 'version');
+    exact(value.extractor, [...Object.keys(extractorHeader), 'name', ...(current ? ['implementationSha256'] : []), 'backend'], 'receipt.extractor');
     exact(value.extractor.backend, ['name', 'version'], 'receipt.extractor.backend');
     exact(value.text, ['file', 'sha256', 'utf8Bytes', 'nonWhitespaceCharacters'], 'receipt.text');
     exact(value.artifacts, ['file', 'sha256'], 'receipt.artifacts');
-    if (value.extractor.name !== EXTRACTOR_NAME || value.extractor.version !== EXTRACTOR_VERSION
+    if (value.extractor.name !== EXTRACTOR_NAME || (current && value.extractor.implementationSha256 !== EXTRACTOR_IMPLEMENTATION_SHA256)
         || value.extractor.backend.name !== BACKEND_NAME || value.extractor.backend.version !== BACKEND_VERSION) {
         fail('抽取器或其底层程序的名称、版本与指定实现不同');
     }
@@ -473,10 +502,11 @@ function normalizeReceipt(value) {
 }
 
 function normalizeVerification(value) {
-    exact(value, ['contract', 'version', 'status', 'paperId', 'sourceIdentity', 'requestSha256',
+    const header = recordHeaderFor(value, 'conference-pdf-extraction-verification');
+    exact(value, [...Object.keys(header), 'status', 'paperId', 'sourceIdentity', 'requestSha256',
         'metadataSha256', 'pdfSha256', 'textSha256', 'artifactsSha256', 'receiptFileSha256',
         'receiptSha256', 'verificationSha256'], 'Python extraction verification');
-    if (value.contract !== VERIFICATION_CONTRACT || value.version !== VERSION || value.status !== 'verified') {
+    if (value.status !== 'verified') {
         fail('Python 抽取核验结果的格式标识、版本或状态不符合要求');
     }
     text(value.paperId, 'Python verification paperId');
@@ -514,7 +544,7 @@ function boundVerification({ request, requestLoaded, metadataLoaded, pdfLoaded, 
     // 调用方已经逐字节核对过每个来源和输出与 receipt 是否一致。重试时如果按设计
     // 跳过 Python 的确定性复算，就在这里重建同一套校验绑定。
     const body = {
-        contract: VERIFICATION_CONTRACT, version: VERSION, status: 'verified',
+        ...headerForRequest(request, 'conference-pdf-extraction-verification', 'pinned-replay'), status: 'verified',
         paperId: request.paperId, sourceIdentity: request.sourceIdentity,
         requestSha256: requestLoaded.sha256, metadataSha256: metadataLoaded.sha256,
         pdfSha256: pdfLoaded.sha256, textSha256: textLoaded.sha256,
@@ -534,7 +564,8 @@ function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
     const requestLoaded = readDirect(root, receipt.request.file, SAFE_JSON_NAME, MAX_JSON_BYTES, 'extraction request');
     if (requestLoaded.sha256 !== receipt.request.sha256) fail('抽取请求文件的 SHA 与凭证中记录的值不同');
     const request = normalizeRequest(strictJson(requestLoaded.bytes, 'extraction request'), receipt.request.file);
-    if (request.paperId !== receipt.paperId || request.sourceIdentity !== receipt.sourceIdentity
+    if (codec.isCurrentHeader(request, 'conference-pdf-extraction-request') !== codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')
+        || request.paperId !== receipt.paperId || request.sourceIdentity !== receipt.sourceIdentity
         || stableHash(request.source) !== stableHash(receipt.source)
         || stableHash(request.options) !== stableHash(receipt.options)
         || request.outputs.receiptFile !== receiptName
@@ -560,6 +591,9 @@ function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
     if (textLoaded.bytes.length !== receipt.text.utf8Bytes
         || nonWhitespaceCharacters !== receipt.text.nonWhitespaceCharacters) fail('凭证记录的全文字节数或非空白字符数与实际全文不同');
     const artifact = validateArtifact(strictJson(artifactLoaded.bytes, 'structured artifact'), textLoaded.bytes);
+    if (codec.isCurrentHeader(artifact, 'conference-structured-artifacts') !== codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')) {
+        fail('抽取凭证与结构化结果不能混用新旧格式');
+    }
     if (artifact.pages.length !== receipt.pageCount) fail('凭证页数与结构化抽取结果的页面数量不同');
     const verification = replay
         ? verifyWithPinnedPython(root, receipt.request.file)
@@ -572,17 +606,20 @@ function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
         || verification.receiptSha256 !== receipt.receiptSha256) {
         fail('指定 Python 程序返回的论文身份或文件 SHA 与本次读取的抽取资料不同');
     }
+    const provenance = codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')
+        ? { extractor: EXTRACTOR_NAME, implementationSha256: EXTRACTOR_IMPLEMENTATION_SHA256 }
+        : { extractor: EXTRACTOR_NAME, version: `${receipt.extractor.version}+${BACKEND_NAME}-${BACKEND_VERSION}` };
     const snapshot = {
-        contract: RECEIPT_CONTRACT, version: VERSION, paperId: request.paperId,
+        ...recordHeaderFor(receipt, 'conference-pdf-extraction-receipt'), paperId: request.paperId,
         sourceIdentity: request.sourceIdentity, conference: identity.conference, identity: identity.identity,
         metadata: clone(request.source.metadata), pdf: clone(request.source.pdf),
         text: { file: request.outputs.textFile, sha256: textLoaded.sha256,
-            provenance: { extractor: EXTRACTOR_NAME, version: `${EXTRACTOR_VERSION}+${BACKEND_NAME}-${BACKEND_VERSION}` } },
+            provenance: clone(provenance) },
         artifacts: { file: request.outputs.artifactsFile, sha256: artifactLoaded.sha256,
-            provenance: { extractor: EXTRACTOR_NAME, version: `${EXTRACTOR_VERSION}+${BACKEND_NAME}-${BACKEND_VERSION}` } },
+            provenance: clone(provenance) },
         receipt: { file: receiptName, fileSha256: receiptLoaded.sha256, receiptSha256: receipt.receiptSha256 },
         verification,
-        pageCount: receipt.pageCount, profile: receipt.structuredReplayable ? REPLAYABLE_PROFILE : WEAK_PROFILE,
+        pageCount: receipt.pageCount, profile: artifact.profile,
         structuredCapabilitiesAvailable: receipt.structuredReplayable
     };
     const handle = Object.freeze(Object.create(null)); EXTRACTION_HANDLES.add(handle);
@@ -594,8 +631,8 @@ function extractionHandleSnapshot(handle) {
 }
 
 module.exports = { REQUEST_CONTRACT, ARTIFACT_CONTRACT, RECEIPT_CONTRACT, VERIFICATION_CONTRACT,
-    VERSION, PROFILE, WEAK_PROFILE, REPLAYABLE_PROFILE, OFFSET_UNIT,
-    EXTRACTOR_NAME, EXTRACTOR_VERSION, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SHORT_PROCEEDINGS_OPTIONS,
+    PROFILE, WEAK_PROFILE, REPLAYABLE_PROFILE, OFFSET_UNIT,
+    EXTRACTOR_NAME, EXTRACTOR_IMPLEMENTATION_SHA256, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SHORT_PROCEEDINGS_OPTIONS,
     isShortProceedingsConference: conferenceId => SHORT_PROCEEDINGS_CONFERENCES.has(String(conferenceId || '').trim()),
     optionsForConference, SAFE_JSON_NAME,
     ConferenceExtractionReceiptError, loadExtractionHandle, extractionHandleSnapshot, stableHash,

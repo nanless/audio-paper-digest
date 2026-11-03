@@ -657,7 +657,42 @@ test('普通会议状态不把损坏PDF或损坏凭证计为完成', async t => 
     fs.writeFileSync(target, original);
     const receipt = path.join(outputRoot, 'receipts/alpha26_odyssey.json');
     fs.writeFileSync(receipt, '{}\n');
-    assert.throws(() => acquisition.acquisitionStatus(args), /schema/);
+    assert.throws(() => acquisition.acquisitionStatus(args), /schema|格式头/);
+});
+
+test('原Git目录和PDF凭证按原头及原解析声明续读，原算法区段逐字不变', async t => {
+    const records = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../config/workflow-historical-records.json')));
+    const sourceName = 'scripts/lib/official-conference-acquisition.js', pin = records.filterPolicies.sourcePins[sourceName];
+    const root = path.resolve(__dirname, '..');
+    const originalBytes = require('../scripts/lib/git-file-bytes').readGitBlob(root, pin.oid, pin.sha256);
+    const originalSource = originalBytes.toString('utf8'), currentSource = fs.readFileSync(path.join(root, sourceName), 'utf8');
+    const algorithm = source => source.slice(source.indexOf('// ACL 2026'), source.indexOf('function responseReceipt('));
+    assert.equal(algorithm(currentSource), algorithm(originalSource), 'Metadata/header migration must not alter any original parser expression, provider or validation rule');
+    const Module = require('node:module'), filename = path.join(root, sourceName), original = new Module(filename, module);
+    original.filename = filename; original.paths = Module._nodeModulePaths(path.dirname(filename));
+    original._compile(originalSource, filename);
+    for (const [providerId, html] of Object.entries(FIXTURES)) {
+        assert.deepEqual(acquisition.parseCatalog(providerId, html), original.exports.parseCatalog(providerId, html));
+    }
+    const { outputRoot } = temporaryRoot(t), args = { providerId: 'odyssey-2026', outputRoot, apply: true };
+    const deps = dependencies(async url => url.endsWith('.pdf')
+        ? httpResponse('%PDF-1.4\noriginal-paper\n%%EOF', 'application/pdf') : httpResponse(ODYSSEY_FIXTURE, 'text/html'));
+    await original.exports.acquireCatalog(args, deps); await original.exports.downloadPapers(args, deps);
+    const snapshot = () => Object.fromEntries(fs.readdirSync(outputRoot, { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile()).map(entry => {
+            const name = path.join(entry.parentPath || entry.path, entry.name);
+            return [path.relative(outputRoot, name), fs.readFileSync(name).toString('base64')];
+        }));
+    const before = snapshot();
+    assert.equal(acquisition.acquisitionStatus(args).complete, true);
+    await acquisition.acquireCatalog(args, dependencies(() => assert.fail('existing original source must not be fetched again')));
+    assert.deepEqual(snapshot(), before);
+    const receiptFile = path.join(outputRoot, 'catalog.receipt.json');
+    const bytes = fs.readFileSync(receiptFile), receipt = JSON.parse(bytes);
+    receipt.parserVersion = 'unregistered-parser'; delete receipt.receiptSha256;
+    receipt.receiptSha256 = acquisition.stableHash(receipt); fs.writeFileSync(receiptFile, acquisition.prettyBytes(receipt));
+    assert.throws(() => acquisition.replayCatalog('odyssey-2026', outputRoot), /不一致/);
+    fs.writeFileSync(receiptFile, bytes); assert.deepEqual(snapshot(), before);
 });
 
 

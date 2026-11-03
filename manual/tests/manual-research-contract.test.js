@@ -8,7 +8,7 @@ const {
     validateReaderArticle,
     validateEditorialReview,
     validateResearchScoringCaps,
-    validateResultClaimCoverageV5,
+    validateAttributedResultClaimCoverage,
     validateFigureReview,
     validateStageReviews
 } = require('../scripts/manual-research-contract.js');
@@ -329,7 +329,7 @@ describe('Manual v5 音频研究者约定', () => {
             sourceBindings: { direction: '越低越好', value: `${index + 1}.0` },
             readerBindings: { direction: 'WER↓', value: `${index + 1}.0` }
         }));
-        assert.throws(() => validateResultClaimCoverageV5(claims, {
+        assert.throws(() => validateAttributedResultClaimCoverage(claims, {
             documentType: '系统技术报告',
             evidenceProfile: { publicGeneralizationEvaluated: true, ablationStatus: 'none' },
             label: 'TLIVE.resultClaims'
@@ -347,7 +347,7 @@ describe('Manual v5 音频研究者约定', () => {
             sourceBindings: { direction: sourceDirections[index], value: `${index + 1}.0` },
             readerBindings: { direction: readerDirections[index], value: `${index + 1}.0` }
         }));
-        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, {
+        assert.doesNotThrow(() => validateAttributedResultClaimCoverage(claims, {
             documentType: '方法研究',
             evidenceProfile: { publicGeneralizationEvaluated: false, ablationStatus: 'none' },
             label: 'accuracy-direction.resultClaims'
@@ -365,7 +365,7 @@ describe('Manual v5 音频研究者约定', () => {
             sourceBindings: { direction: sourceDirections[index], value: 'qualitative observation' },
             readerBindings: { direction: readerDirections[index], value: '定性谱图观察' }
         }));
-        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, {
+        assert.doesNotThrow(() => validateAttributedResultClaimCoverage(claims, {
             documentType: '方法研究',
             evidenceProfile: { publicGeneralizationEvaluated: false, ablationStatus: 'none' },
             label: 'qualitative-direction.resultClaims'
@@ -461,14 +461,14 @@ describe('Manual v5 结果声明的原数值', () => {
             };
         });
         const readerResultsText = claims.map(claim => claim.readerNarrative).join('\n\n');
-        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, { documentType: '方法研究' }));
+        assert.doesNotThrow(() => validateAttributedResultClaimCoverage(claims, { documentType: '方法研究' }));
         assert.equal(validateResultClaims(claims, readerResultsText, {
             documentType: '方法研究', readerResultsText, requireReaderNarrative: true
         }).valid, true);
         claims[0].sourceQuote = claims[0].sourceQuote.replace('3.7%', '3.73.7%');
         claims[0].sourceBindings.value = '3.73.7';
         const sourceText = claims.map(claim => claim.sourceQuote).join('\n');
-        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, { documentType: '方法研究' }));
+        assert.doesNotThrow(() => validateAttributedResultClaimCoverage(claims, { documentType: '方法研究' }));
         const result = validateResultClaims(claims, sourceText, {
             documentType: '方法研究', readerResultsText, requireReaderNarrative: true
         });

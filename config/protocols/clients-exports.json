@@ -1,0 +1,264 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-export-producer",
+      "currentVariant": "normal-capture-completion",
+      "currentSchema": {
+        "fields": [
+          "producer",
+          "operationID",
+          "documentID",
+          "sourceIdentity",
+          "mime",
+          "suggestedName",
+          "bytes",
+          "sha256",
+          "fileCount"
+        ],
+        "admission": "private-normal-capture-return-and-complete-original-byte-inventory-replay",
+        "receipt": "create-only-device-operation-directory"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-export-producer-v1",
+          "variant": "normal-capture-completion"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-pending-export",
+      "currentVariant": "reserved-export-operation",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "jobID",
+          "documentID",
+          "format",
+          "sourceIdentity",
+          "createdAt",
+          "updatedAt",
+          "preparation",
+          "phase",
+          "delivery",
+          "attemptID"
+        ],
+        "identity": "original-reserved-document-and-operation-uuid",
+        "recovery": "same-original-artifacts-no-recapture-or-budget-reset",
+        "additionalState": "existing-candidate-sha-failure-message-and-verified-time-only"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-pending-export-v1",
+          "variant": "reserved-export-operation"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-export-delivery",
+      "currentVariant": "same-operation-save-attempt",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "documentID",
+          "attemptID",
+          "createdAt",
+          "updatedAt",
+          "delivery",
+          "manifestSHA256"
+        ],
+        "optionalFields": [
+          "verifiedAt"
+        ],
+        "identity": "actual-operation-original-document-and-unique-save-attempt",
+        "terminal": "verified-history-immutable"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-export-delivery-v1",
+          "variant": "same-operation-save-attempt"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-export-history",
+      "currentVariant": "verified-export-history",
+      "currentSchema": {
+        "fields": [
+          "proofID",
+          "documentID",
+          "savedAt",
+          "sha256",
+          "bytes",
+          "mime",
+          "suggestedName"
+        ],
+        "authority": "same-actual-destination-readback-and-native-hmac-proof",
+        "privateDestination": "not-in-portable-history"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-export-history-v1",
+          "variant": "verified-export-history"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-native-export-save",
+      "currentVariant": "device-authenticated-destination-readback",
+      "currentSchema": {
+        "fields": [
+          "proofID",
+          "documentID",
+          "uri",
+          "savedAt",
+          "sha256",
+          "bytes",
+          "manifestSHA256",
+          "historySHA256",
+          "hmacSHA256"
+        ],
+        "signature": "hmac-sha256-canonical-original-full-header-and-body-excluding-hmacSHA256",
+        "authority": "native-complete-destination-readback-plus-original-document-cas",
+        "keyScope": "device-local-never-portable-backup"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-native-export-save-v1",
+          "variant": "device-authenticated-destination-readback"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-retained-capture-attempt",
+      "currentVariant": "retained-backup-save-attempt",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "documentID",
+          "attemptID",
+          "sha256",
+          "bytes",
+          "state",
+          "createdAt"
+        ],
+        "kind": "retained-capture",
+        "scope": "same-private-lease-and-actual-retained-original",
+        "restore": "retire-chooser-without-opening-uri-or-recapturing",
+        "cleanup": "never-ordinary-export-cleanup-authority"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-retained-capture-attempt-v1",
+          "variant": "retained-backup-save-attempt",
+          "header": {
+            "contract": "paperdigest-retained-capture-attempt-v1",
+            "kind": "retained-capture-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-retained-capture-export-history",
+      "currentVariant": "retained-backup-readback-history",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "documentID",
+          "attemptID",
+          "sha256",
+          "bytes",
+          "mime",
+          "suggestedName",
+          "readbackAt"
+        ],
+        "kind": "retained-capture",
+        "history": "only-after-actual-complete-destination-readback",
+        "privateDestination": "not-in-portable-history"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-retained-capture-export-history-v1",
+          "variant": "retained-backup-readback-history",
+          "header": {
+            "contract": "paperdigest-retained-capture-export-history-v1",
+            "kind": "retained-capture-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-retained-capture-export-proof",
+      "currentVariant": "device-authenticated-retained-readback",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "documentID",
+          "attemptID",
+          "sha256",
+          "bytes",
+          "uri",
+          "readbackAt",
+          "history",
+          "historySHA256",
+          "hmacSHA256"
+        ],
+        "domain": "retained-capture",
+        "hmacDomain": "retained-capture",
+        "historyFormat": {
+          "contract": "paperdigest-retained-capture-export-history",
+          "schemaFingerprint": "9e2e15f0b1907d72c37a5024a8ee8d6b44dfb6173621c0905e2c02b7c92cc27d"
+        },
+        "signature": "hmac-sha256-original-domain-newline-canonical-original-unsigned-record",
+        "scope": "same-complete-retained-capture-only-no-recapture-or-normal-cleanup"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-retained-capture-export-proof-v1",
+          "variant": "device-authenticated-retained-readback",
+          "header": {
+            "contract": "paperdigest-retained-capture-export-proof-v1",
+            "domain": "retained-capture-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-native-retained-export-job",
+      "currentVariant": "native-retained-control-job",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "documentID",
+          "job"
+        ],
+        "scope": "native-later-control-task-not-original-capture-or-paid-history",
+        "states": "original-export-only-kinds-and-terminal-history-preserved"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-native-retained-export-job-v1",
+          "variant": "native-retained-control-job"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-native-export-job",
+      "currentVariant": "native-rescue-export-control-job",
+      "currentSchema": {
+        "fields": [
+          "operationID",
+          "documentID",
+          "job"
+        ],
+        "scope": "device-control-job-only-not-original-paid-history",
+        "binding": "actual-pending-operation-source-and-reserved-document-id"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-native-export-job-v1",
+          "variant": "native-rescue-export-control-job"
+        }
+      ]
+    }
+  ]
+}

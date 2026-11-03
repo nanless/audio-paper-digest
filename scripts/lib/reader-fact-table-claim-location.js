@@ -1,6 +1,7 @@
 'use strict';
 // An erroneous global table prohibition can be narrowed to its actual location.
 // The original feedback, model input, pending proof and candidate stay intact.
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual: equal } = require('node:util');
@@ -42,7 +43,7 @@ function planFor(paper, optional = false) {
     const marked = paper?.[FIELD] !== undefined || paper?.analysisManifest?.stages?.apiReaderArticle?.[STAGE_FIELD] !== undefined;
     const prov = paper?.freshRewriteProvenance;
     const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-    if (prov?.contract !== 'fresh-source-analysis-v1' || !uuid.test(prov?.runId || '')) {
+    if (!isFreshSourceProvenance(prov) || !uuid.test(prov?.runId || '')) {
         if (optional && !marked) return null;
         fail('更正标记缺少真实日更来源');
     }
@@ -53,7 +54,7 @@ function planFor(paper, optional = false) {
         if (optional && !marked && error.code === 'ENOENT') return null;
         throw error;
     }
-    if (run.contract !== require('./fresh-analysis-context').DAILY_SOURCE_RUN_CONTRACT) {
+    if (!require('./fresh-analysis-context').isDailySourceRun(run)) {
         if (optional && !marked) return null;
         fail('更正标记不能跨非日更来源');
     }
@@ -157,7 +158,7 @@ function paidRequestMaterial(plan, candidate) {
 }
 function replayPaidRequest(record, sourceText) {
     const request = JSON.parse(record.requestBytes), response = JSON.parse(record.responseBytes);
-    need(request.contract === 'reader-repair-request-diagnostics-v1' && response.contract === request.contract
+    need(require('./reader-diagnostic-format').hasDiagnosticFormat(request) && require('./reader-diagnostic-format').sameDiagnosticFormat(request, response)
         && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(request.id || '')
         && response.id === request.id && equal(request.identity, record.candidateEnvelope.identity)
         && request.contentAttempt === record.candidateEnvelope.payload.attempts
@@ -402,9 +403,12 @@ async function replaySavedCorrection(paper, source, { reviewFeedback } = {}) {
         const evidence = deep.buildApiReaderEvidenceContext('', actualSource.text, actualSource.structuredArtifacts, paper.arxivId);
         const parsed = parseSavedDraft(record, actualSource, paper);
         const base = deep.buildRecoveryFingerprints(paper, actualSource.text, paper.arxivId).apiReaderArticle;
+        const content = require('./reader-content-mode');
+        const mode = content.modeOf(saved.identity);
+        need(mode, '已付候选缺少受支持的实际Reader模式');
         const execution = { ...structuredClone(record.parentPaper.analysisManifest.stages.apiReaderArticle),
             fingerprint: deep.buildApiReaderExecutionFingerprint(base, evidence, actualSource.structuredArtifacts),
-            contentMode: saved.identity.contentMode, attempts: saved.payload.attempts, fullAttempts: saved.payload.fullAttempts,
+            ...content.fields(mode), attempts: saved.payload.attempts, fullAttempts: saved.payload.fullAttempts,
             transportFailures: saved.payload.transportFailures, model: saved.identity.model.model,
             reviewFeedbackSha256: sha(reviewFeedback || ''),
             savedClaimLocationReplay: { contract: CONTRACT, candidateIdentitySha256: record.candidateIdentitySha256,

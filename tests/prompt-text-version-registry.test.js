@@ -1,4 +1,4 @@
-// 提示词版本表有两份：JS 的 scripts/lib/prompt-text-versions.js 是源头，
+// 提示词版本表有两份：JS 的 scripts/lib/prompt-contracts.js 是源头，
 // scripts/publish-to-blog.py 里另有一份版本表 _VISUAL_PROMPT_TEXT_FILES，
 // 用于核对历史发布后视觉任务清单。这里检查两份表，避免新增版本时漏改一边，
 // 导致 JS 接受而 Python 不接受同一版本，或两边读取不同文件。
@@ -17,14 +17,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
-    ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-    ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-    FROZEN_V1_PROMPT_FILES,
     PROMPT_FILE_VERSIONS
-} = require('../scripts/lib/prompt-text-versions.js');
+} = require('../scripts/lib/prompt-contracts.js');
+const { ANALYSIS_PROMPT_TEXT_V1_CONTRACT, ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+    FROZEN_V1_PROMPT_FILES } = require('../scripts/lib/prompt-legacy-codec.js').compatibilityExports;
 
 const PROJECT = path.join(__dirname, '..');
 const PROMPTS_DIR = path.join(PROJECT, 'prompts');
+const legacy = require('../scripts/lib/prompt-legacy-codec');
+const evidence = require('../scripts/lib/prompt-evidence');
+const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
 
 // Python 侧用 kebab-case 的阶段名（manifest 的 kind），JS 侧用 camelCase 键。
 function toKebab(name) {
@@ -51,16 +53,18 @@ function pythonRegistry() {
         'sys.path.insert(0, "scripts")',
         'from blog_entry_loader import load_publish_to_blog',
         'PUB = load_publish_to_blog()',
+        'import hashlib, prompt_evidence',
         'print(json.dumps({',
-        '    "v1Contract": PUB.PROMPT_TEXT_V1_CONTRACT,',
-        '    "v2Contract": PUB.PROMPT_TEXT_V2_CONTRACT,',
+        '    "v1Contract": PUB.PROMPT_TEXT_DEFAULT_CONTRACT,',
+        '    "v2Contract": PUB.LEGACY_PROMPT_RECORDS["originalCurrent"]["visualSummary"]["contract"],',
         '    "promptsDir": str(PUB.PROJECT_ROOT / "prompts"),',
         '    "files": PUB._VISUAL_PROMPT_TEXT_FILES,',
+        '    "sha256": {stage: {contract: hashlib.sha256(prompt_evidence.read_prompt_evidence_bytes("prompts/" + filename)).hexdigest() for contract, filename in entries.items()} for stage, entries in PUB._VISUAL_PROMPT_TEXT_FILES.items()},',
         '}, ensure_ascii=False))',
     ].join('\n')));
 }
 
-test('Node 与 Python 提示词版本表的旧 v1 原路径身份、当前格式标识和当前路径一致', () => {
+test('Node 与 Python 对已退休视觉两阶段逐一核同一原路径与Git字节，不能恢复现用入口', () => {
     const py = pythonRegistry();
 
     // 先比较版本格式标识：两边的 v1 和 v2 名称必须分别相同。
@@ -86,9 +90,8 @@ test('Node 与 Python 提示词版本表的旧 v1 原路径身份、当前格式
         assert.ok(jsV1,
             `Python 登记了阶段 ${pythonStage}（对应 JS 键 ${stage}），但 JS 的 FROZEN_V1_PROMPT_FILES 里没有它；`
             + `JS 现有阶段是 ${Object.keys(FROZEN_V1_PROMPT_FILES).join('、')}`);
-        const jsCurrent = PROMPT_FILE_VERSIONS[stage];
-        assert.ok(jsCurrent,
-            `Python 登记了阶段 ${pythonStage}（对应 JS 键 ${stage}），但 JS 的 PROMPT_FILE_VERSIONS 里没有它`);
+        assert.equal(Object.hasOwn(PROMPT_FILE_VERSIONS, stage), false);
+        assert.throws(() => require('../scripts/lib/prompt-contracts').currentTextStagePromptPath(stage), /没有登记/);
 
         const pythonV1 = entry[py.v1Contract];
         assert.ok(pythonV1,
@@ -96,20 +99,19 @@ test('Node 与 Python 提示词版本表的旧 v1 原路径身份、当前格式
         assert.equal(`prompts/${pythonV1}`, jsV1,
             `阶段 ${pythonStage} 的 v1 路径两端不一致：Python 写 prompts/${pythonV1}，JS 写 ${jsV1}`);
 
-        const pythonCurrent = entry[jsCurrent.contract];
-        assert.ok(pythonCurrent,
-            `阶段 ${pythonStage} 的 Python 副本没登记 JS 当前格式标识 ${jsCurrent.contract}，只登记了 ${pythonContracts}；`
-            + 'JS 升了新版本而 Python 那份没跟上，新记录会被 Python 拒绝');
-        assert.equal(`prompts/${pythonCurrent}`, jsCurrent.path,
-            `阶段 ${pythonStage} 使用格式标识 ${jsCurrent.contract} 时的路径两端不一致：`
-            + `Python 写 prompts/${pythonCurrent}，JS 写 ${jsCurrent.path}`);
+        for (const declared of legacy.legacyDeclarations(stage)) {
+            const filename = legacy.legacyPromptPath(stage, declared);
+            assert.equal(`prompts/${entry[declared]}`, filename);
+            assert.equal(py.sha256[pythonStage][declared], sha(evidence.readPromptEvidenceBytes(filename)));
+            assert.equal(fs.existsSync(path.join(PROJECT, filename)), false);
+        }
 
         // 这里检查的发布后视觉阶段，两端应接受同一组格式标识。
         // 多登记或少登记一个版本，都可能让两端对同一任务清单得出不同结论。
         assert.deepEqual(Object.keys(entry).sort(),
-            [py.v1Contract, jsCurrent.contract].sort(),
+            legacy.legacyDeclarations(stage).sort(),
             `阶段 ${pythonStage} 登记的格式标识集合两端不一致：Python 认 ${pythonContracts}，`
-            + `JS 只认 ${[ANALYSIS_PROMPT_TEXT_V1_CONTRACT, jsCurrent.contract].sort().join('、')}`);
+            + `JS 只认 ${legacy.legacyDeclarations(stage).sort().join('、')}`);
 
         assert.equal(toKebab(stage), pythonStage,
             `阶段名转换后不一致：JS 键 ${stage} 换回 kebab 是 ${toKebab(stage)}，Python 用的是 ${pythonStage}`);

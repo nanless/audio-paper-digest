@@ -1,0 +1,8 @@
+{
+  "originalPromptPath": "prompts/primary-fact-local-repair-v1.md",
+  "originalImplementation": {
+    "path": "scripts/lib/primary-fact-local-repair.js",
+    "blobOid": "868199ae7bc5084675a6f4f2b30d48f29876e505",
+    "sha256": "165b5d9448a2140a885666fb6e5bf96c8e002176684a73902b55a5549529764c"
+  }
+}

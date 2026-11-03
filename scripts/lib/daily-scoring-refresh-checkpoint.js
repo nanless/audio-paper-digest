@@ -3,6 +3,7 @@
 // A completed scoring refresh is pending Reader work, never a completed paper.
 // It is replayed only in the original locked daily source scope, with the normal
 // scoring fingerprint and scientific/resource checks repeated before any request.
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -43,7 +44,7 @@ function scoringView(paper) {
         for (const key of Object.keys(result.analysisManifest.contracts || {}))
             if (key.startsWith('apiReader') || ['readerResourceClaims', 'imageNarrative'].includes(key))
                 delete result.analysisManifest.contracts[key];
-        for (const key of ['resourceEvidenceContract', 'resourceEvidenceSha256'])
+        for (const key of ['resourceEvidenceContract', 'resourceEvidenceProtocol', 'resourceEvidenceSha256'])
             delete result.analysisManifest.stages?.openSourceScan?.[key];
         delete result.analysisManifest.sourceAcquisition?.structuredArtifactsSha256;
     }
@@ -51,7 +52,7 @@ function scoringView(paper) {
 }
 function canKeepReader(parent, paper, source, feedback) {
     const engine = require('../analysis-engine');
-    return engine.hasValidApiReaderV3Records(parent)
+    return engine.hasValidIntegratedApiReaderRecords(parent)
         && require('./reader-author-source').canReuseReaderAuthorInputs(parent, source)
         && parent.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256
             === (feedback ? sha(feedback) : null)
@@ -155,7 +156,7 @@ function dailyOwner(paper) {
     const context = fresh.getFreshAnalysisContext();
     // This only selects possible recovery work. A historical/new daily source
     // owner must not inherit an old daily obligation merely by sharing an ID.
-    if (!proof || proof.contract !== fresh.CONTRACT
+    if (!proof || !isFreshSourceProvenance(proof)
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(proof.runId)
         || proof.sourceGeneration !== require('./daily-fresh-source-plan').SOURCE_GENERATION
         || !/^[a-f0-9]{64}$/.test(proof.sourceManifestSha256)
@@ -334,7 +335,7 @@ function finishCheckpoint(paper, plan, source, feedback) {
 }
 function hasCompletedReader(paper, receipt) {
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
-    return !!require('../analysis-engine').hasValidApiReaderV3Records(paper) && stage?.reviewFeedbackSha256
+    return !!require('../analysis-engine').hasValidIntegratedApiReaderRecords(paper) && stage?.reviewFeedbackSha256
         === (receipt.feedback ? sha(receipt.feedback) : null)
         && (receipt.reuseReader
             ? isDeepStrictEqual(stage, receipt.parentPaper.analysisManifest.stages.apiReaderArticle)

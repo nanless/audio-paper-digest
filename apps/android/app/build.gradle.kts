@@ -10,7 +10,10 @@ android {
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     testOptions { unitTests.isReturnDefaultValues = false }
-    sourceSets.getByName("androidTest").assets.srcDir("src/test/resources")
+    // Both clients read these original publisher bytes from one shared fixture.
+    val sharedWorkbenchFixtures = rootProject.file("../../tests/fixtures/workbench")
+    sourceSets.getByName("test").resources.srcDir(sharedWorkbenchFixtures)
+    sourceSets.getByName("androidTest").assets.srcDirs("src/test/resources", sharedWorkbenchFixtures)
     packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1", "META-INF/LICENSE.md", "META-INF/LICENSE-notice.md") }
 }
 kotlin { jvmToolchain(17) }
@@ -60,6 +63,19 @@ dependencies {
 // Debug is the private scientific verification channel. Formal release has its
 // own freshly generated empty bootstrap and never consumes the debug output.
 val assetRepoRoot = rootProject.projectDir.parentFile.parentFile
+// The native registry is generated from the same catalog as Node/Python. A
+// stale embedded copy must fail even when Gradle is invoked without build.sh.
+val verifyClientProtocols = tasks.register<Exec>("verifyClientProtocols") {
+    workingDir(assetRepoRoot)
+    commandLine("bash", File(assetRepoRoot, "scripts/python-runtime.sh").absolutePath,
+        File(assetRepoRoot, "apps/generate-client-protocols.py").absolutePath, "--check")
+    inputs.file(File(assetRepoRoot, "config/protocols/clients.json"))
+    inputs.file(File(assetRepoRoot, "apps/generate-client-protocols.py"))
+    inputs.file(file("src/main/java/com/nanless/paperdigest/protocols/ClientProtocolRegistry.generated.kt"))
+}
+tasks.configureEach {
+    if (name.startsWith("compile") && name.endsWith("Kotlin")) dependsOn(verifyClientProtocols)
+}
 for ((variantName, contentChannel) in mapOf("debug" to "private-qa", "release" to "release")) {
     val capitalized = variantName.replaceFirstChar { it.uppercaseChar() }
     val generatedAssets = layout.buildDirectory.dir("generated/published-assets/$variantName")

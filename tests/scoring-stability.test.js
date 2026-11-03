@@ -165,3 +165,27 @@ test('两种已保存证明仅容纳原分数减法机器误差且不改原证�
         }
     }
 });
+
+test('新共识证明按真实格式指纹跨语言读取，错误指纹和混合头仍拒绝', async () => {
+    const { runScoringAuditConsensus } = require('../scripts/lib/scoring-audit-consensus');
+    const crypto = require('node:crypto');
+    const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    const first = { score: 7, audit: { score: 7 }, attempts: 1 };
+    const second = { score: 7.2, audit: { score: 7.2 }, attempts: 1 };
+    const result = await runScoringAuditConsensus({ firstResult: first, firstScore: 7,
+        requiresConsensus: true, auditAgain: async () => second,
+        scoreOfResult: value => value.score, fingerprintAudit: hash });
+    assert.equal(result.resolution.contract, 'api-scoring-stability-resolution');
+    assert.match(result.resolution.schemaFingerprint, /^[a-f0-9]{64}$/);
+    const stage = { stabilityWarning: true, finalScore: second.score,
+        auditSha256: hash(second.audit), stabilityResolution: result.resolution };
+    const variants = [stage, ...[{ schemaFingerprint: '0'.repeat(64) }, { schemaFingerprint: undefined },
+        { version: 1 }].map(change => ({ ...stage, stabilityResolution: { ...result.resolution, ...change } }))];
+    const expected = [true, false, false, false];
+    assert.deepEqual(variants.map(predicate), expected);
+    const resultPython = spawnSync('bash', ['scripts/python-runtime.sh', '-c',
+        'import json,sys;sys.path.insert(0,"scripts");from scoring_stability import scoring_stability_is_resolved;print(json.dumps([scoring_stability_is_resolved(s) for s in json.load(sys.stdin)]))'], {
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(variants), encoding: 'utf8' });
+    assert.equal(resultPython.status, 0, resultPython.stderr);
+    assert.deepEqual(JSON.parse(resultPython.stdout), expected);
+});

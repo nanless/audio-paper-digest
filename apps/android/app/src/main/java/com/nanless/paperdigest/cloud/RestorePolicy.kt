@@ -2,6 +2,7 @@ package com.nanless.paperdigest.cloud
 
 import org.json.JSONArray
 import org.json.JSONObject
+import com.nanless.paperdigest.protocols.ClientProtocols
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
@@ -31,12 +32,12 @@ object RequestContinuity {
     fun read(directory: File, check: () -> Unit = {}): List<Issued> {
         val file = File(directory, FILE); if (!file.exists()) { require(!Files.isSymbolicLink(file.toPath())); return emptyList() }
         BackupCodec.checkedFile(directory, FILE); require(file.length() <= 32L * 1024 * 1024)
-        val obj = JSONObject(com.nanless.paperdigest.data.PublishedUtf8.decode(RestorePolicyIO.read(file,32L*1024*1024,check))); require(obj.getString("contract") == "paperdigest-request-continuity-v1")
+        val obj = JSONObject(com.nanless.paperdigest.data.PublishedUtf8.decode(RestorePolicyIO.read(file,32L*1024*1024,check))); require(ClientProtocols.hasValidHeader(obj, "paperdigest-request-continuity"))
         val a = obj.getJSONArray("requests"); require(a.length() <= 100_000)
         return union((0 until a.length()).map { check(); val row = a.getJSONObject(it); Issued(row.getString("id"), row.getString("startedAt")) })
     }
     fun count(dayUTC: String, directory: File, personal: JSONObject): Int = union(read(directory), sessions(personal)).count { it.startedAt.startsWith(dayUTC + "T") }
-    fun json(entries: List<Issued>) = JSONObject().put("contract", "paperdigest-request-continuity-v1").put("requests", JSONArray(entries.map { JSONObject().put("id", it.id).put("startedAt", it.startedAt) }))
+    fun json(entries: List<Issued>) = ClientProtocols.record("paperdigest-request-continuity", JSONObject().put("requests", JSONArray(entries.map { JSONObject().put("id", it.id).put("startedAt", it.startedAt) })))
 }
 
 /** Root holds its shared maintenance lock, flushes edits, and obtains consent first. */

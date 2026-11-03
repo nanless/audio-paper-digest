@@ -1,0 +1,37 @@
+{
+  "protocols": [
+    {
+      "name": "paper-identity",
+      "currentVariant": "canonical-source-independent-identity",
+      "currentSchema": {
+        "fields": [
+          "kind",
+          "canonicalId",
+          "arxivId",
+          "conference",
+          "externalId",
+          "source",
+          "citation"
+        ],
+        "kinds": [
+          "arxiv",
+          "conference"
+        ],
+        "identityProjection": "actual-header-kind-canonical-id-and-source-coordinates",
+        "identityExcludes": [
+          "source",
+          "citation"
+        ],
+        "recordProjection": "complete-normalized-record-including-actual-header",
+        "canonicalId": "unchanged-arxiv-or-conference-coordinate-string",
+        "authority": "identity-only-not-network-or-scientific-source-authority"
+      },
+      "historical": [
+        {
+          "tag": "paper-identity-v1",
+          "variant": "canonical-source-independent-identity"
+        }
+      ]
+    }
+  ]
+}

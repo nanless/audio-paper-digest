@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile, execFileSync } = require('node:child_process');
 const { promisify } = require('node:util');
+const codec = require('./protocol-codec');
 
 const execFileAsync = promisify(execFile);
 const SCRIPTS_ROOT = path.resolve(__dirname, '..');
@@ -43,8 +44,8 @@ function assertNoPixels(value, label = '视觉审计记录') {
 }
 
 function validateVisualAudit(audit) {
-    if (!audit || typeof audit !== 'object' || audit.contract !== 'conference-pdf-visual-audit-v1'
-        || audit.version !== 1 || audit.backend?.name !== 'pymupdf'
+    if (!audit || typeof audit !== 'object' || !codec.hasValidHeader(audit, 'conference-pdf-visual-audit')
+        || audit.backend?.name !== 'pymupdf'
         || !Number.isSafeInteger(audit.renderDpi) || audit.renderDpi < 1
         || !Array.isArray(audit.pages) || !Array.isArray(audit.embeddedImages)
         || !Array.isArray(audit.tableCandidates) || !Array.isArray(audit.formulaCandidates)

@@ -7,6 +7,7 @@ private actor PublicFixtureTransport {
     init(_ files:[String:Data]){self.files=files}
     func read(_ url:URL,_ limit:Int)throws->Data {
         requests += 1
+        if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
         guard let bytes=files[url.absoluteString],bytes.count<=limit else{throw URLError(.fileDoesNotExist)}
         return bytes
     }
@@ -79,7 +80,7 @@ private actor PublicFixtureTransport {
         try expect(await transport.requests==requests,"complete warm presentation makes no network or image requests")
         print(String(format:"BENCH complete-warm-presentation synthetic rows=%d htmlBytes=%d seconds=%.3f (compile optimization is selected by the test caller)",rows.count,html.count,warmSeconds))
 
-        let blob=root.appendingPathComponent("aggregate-image-bytes-v1/"+PublishedAggregateReader.sha(image))
+        let blob=root.appendingPathComponent(AggregateResources.blobDirectory+"/"+PublishedAggregateReader.sha(image))
         var brokenImage=image;brokenImage[brokenImage.startIndex] ^= 1;try brokenImage.write(to:blob)
         try expect(rejects{try optimized.withVerifiedReadScope{try $0.latestResourceRendering(source:source)}},"bad saved image bytes still reject the complete image-cache read")
         try image.write(to:blob)

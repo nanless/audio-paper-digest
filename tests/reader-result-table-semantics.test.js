@@ -7,7 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const deep = require('../scripts/deep-analyzer');
 const { loadPrompt } = require('../scripts/utils');
-const prompts = require('../scripts/lib/prompt-text-versions');
+const prompts = require('../scripts/lib/prompt-contracts');
 const evidence = require('../scripts/lib/prompt-evidence');
 const paid = require('./fixtures/reader-resource-paid-tail-20261018.json').cases.find(row => row.name === 'zhang');
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');

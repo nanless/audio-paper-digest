@@ -133,7 +133,7 @@ class ManualReviewArxivIdentityTest(unittest.TestCase):
             payload = json.loads(workspace.output.read_text())
             self.assertEqual([record['path'] for record in payload['files']], [item['path']])
             self.assertEqual(payload['machineAssets'], {
-                'contract': 'manual-review-controlled-assets-v1', 'files': [asset],
+                **publisher.asset_header(), 'files': [asset],
             })
             self.assertEqual(shard.read_bytes(), before)
             self.assertEqual(image.read_bytes(), pixels)

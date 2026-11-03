@@ -1,5 +1,6 @@
 'use strict';
 
+const { isFreshSourceProvenance } = require('./daily-source-format');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -53,7 +54,7 @@ function provenanceFor(paperId) {
     const id = String(paperId || '').replace(/^arxiv:/, '').replace(/v\d+$/, '');
     const source = fresh.readFreshSource(context.runDir, id, context);
     const d = source?.freshSourceDescriptor;
-    return d && { contract: 'fresh-source-analysis-v1', runId: d.runId,
+    return d && { ...context.sourceProvenanceHeader, runId: d.runId,
         sourceSha256: d.sourceSha256, structuredArtifactsSha256: d.structuredArtifactsSha256,
         sourceManifestSha256: d.sourceManifestSha256, sourceGeneration: d.sourceGeneration };
 }
@@ -135,7 +136,7 @@ function backendInventory(directories) {
 
 function derive(artifacts, paperId, provenance) {
     const id = String(paperId || '').replace(/^arxiv:/, '').replace(/v\d+$/, '');
-    if (!/^\d{4}\.\d{4,5}$/.test(id) || provenance?.contract !== 'fresh-source-analysis-v1'
+    if (!/^\d{4}\.\d{4,5}$/.test(id) || !isFreshSourceProvenance(provenance)
         || !/^[a-f0-9-]{36}$/i.test(provenance.runId || '') || provenance.sourceGeneration !== 1
         || !/^[a-f0-9]{64}$/.test(provenance.sourceManifestSha256 || '')) {
         throw new Error('PDF逐格确认缺少正常日更封存来源身份');
@@ -149,7 +150,12 @@ function derive(artifacts, paperId, provenance) {
         && cached.backendFiles.every(file => sha(verifiedBytes(file.path)) === file.sha256)) {
         return structuredClone(cached.proofs);
     }
-    const input = { paperId: id, sourceDirectory, provenance, artifacts };
+    // This frozen extraction worker consumes the original transport head.
+    // The caller's actual current declaration and sealed bytes were checked
+    // above and remain in the cache identity; no source proof is rewritten.
+    const { contract: _tag, schemaFingerprint: _fp, ...originalTransportFields } = provenance;
+    const workerProvenance = { ...require('./daily-source-format').originalProvenanceHeader, ...originalTransportFields };
+    const input = { paperId: id, sourceDirectory, provenance: workerProvenance, artifacts };
     const raw = child.execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), pythonFile], {
         cwd: projectRoot, input: JSON.stringify(input), encoding: 'utf8', timeout: 180000,
         maxBuffer: 32 * 1024 * 1024,
@@ -314,7 +320,7 @@ function replaySavedProofMetadata(paper, manifest = paper?.analysisManifest) {
             articleSha256:paper.apiReaderArticleSha256,oldPlanSha256:paper.apiReaderPlanSha256,
             newPlanSha256:candidate.apiReaderPlanSha256,changes}]};
     candidate.analysisManifest=nextManifest;
-    if (!require('../analysis-engine').hasValidApiReaderV3Records(candidate)) {
+    if (!require('../analysis-engine').hasValidIntegratedApiReaderRecords(candidate)) {
         throw new Error('PDF检查记录更新后，长文的完整来源资格仍未通过');
     }
     paper.apiReaderPlan=nextPlan;paper.apiReaderPlanSha256=candidate.apiReaderPlanSha256;

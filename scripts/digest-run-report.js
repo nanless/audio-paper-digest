@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { historicalContract: historicalManualContract } = require('./lib/protocol-codec');
 // --watch 是只读监控：不得安装文件日志、不得创建 logs/ 文件、不得触发 pruneLogFiles，
 // 否则 --json --watch 的首行会被 "[log] 输出文件" 污染。validate-data-files.js 在 require
 // 阶段就会安装文件日志，所以 watch 模式延迟加载它；默认报告路径仍在模块加载时 require，
@@ -19,7 +20,7 @@ const {
     isSuccessfulAnalysisRecord,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
-    hasValidApiReaderV3Records,
+    hasValidIntegratedApiReaderRecords,
     updateJsonFileLocked
 } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
@@ -34,15 +35,14 @@ const {
     validateCompletedCard,
     assertVisualArchiveUniqueness,
     visualSummaryAssetPath,
-    assertPublishedBlogReceipt,
     assertVisualManifestCurrent,
-    paperBatchDate
-} = require('./visual-summary-state.js');
+} = require('./lib/historical-visual-records');
+const { assertPublishedBlogReceipt, paperBatchDate } = require('./lib/published-blog-receipt');
 const {
     coverTaskToken,
     validateCompletedCover,
     assertDigestCoverManifestCurrent
-} = require('./digest-cover-state.js');
+} = require('./lib/historical-cover-records');
 const { buildLiveStatus, formatLiveStatus } = require('./lib/digest-live-status.js');
 const { createUsageSummaryCache } = require('./lib/llm-usage-summary.js');
 
@@ -85,19 +85,13 @@ function sha256File(filePath) {
 }
 
 function postPublishVisualWaiverIsValid(waiver, targetDate, publication, visualPath, coverPath) {
-    return Boolean(
-        waiver?.version === 1
-        && waiver?.batchDate === targetDate
-        && waiver?.status === 'waived'
-        && waiver?.requestedBy === 'user'
-        && typeof waiver?.reason === 'string' && waiver.reason.trim().length >= 10
-        && waiver?.publicationCommit === publication?.publicationCommit
-        && waiver?.remoteVerifiedOid === publication?.remoteVerifiedOid
-        && waiver?.remoteVerifiedOid === waiver?.publicationCommit
-        && waiver?.generationManifestSha256 === publication?.generationManifestSha256
-        && waiver?.visualManifestSha256 === sha256File(visualPath)
-        && waiver?.coverManifestSha256 === sha256File(coverPath)
-    );
+    return require('./lib/post-publication-policy').validNoGenerationRecord(waiver, {
+        date: targetDate, manifestSha: publication?.generationManifestSha256,
+        publicationPolicy: publication?.postPublicationPolicy, postPublishVisuals: publication?.postPublishVisuals,
+        receiptCommit: publication?.publicationCommit, remoteVerifiedOid: publication?.remoteVerifiedOid,
+        receiptSha: sha256File(path.join(Config.CURRENT_DIR, `blog-review-receipt-${targetDate}.json`)),
+        visualSha: sha256File(visualPath), coverSha: sha256File(coverPath)
+    });
 }
 
 function papersFrom(value) {
@@ -105,7 +99,7 @@ function papersFrom(value) {
     return Array.isArray(value?.papers) ? value.papers : [];
 }
 
-function productionV6PaperComplete(paper) {
+function productionSignedManualPaperComplete(paper) {
     const contracts = paper?.analysisManifest?.contracts;
     const provenance = paper?.manualV6Provenance;
     const acquisition = paper?.analysisManifest?.sourceAcquisition;
@@ -116,14 +110,14 @@ function productionV6PaperComplete(paper) {
         'readerLongformSha256', 'readerLongformArticleSha256'
     ];
     return Boolean(
-        paper?.manualDepth === 'full-text-evidence-v6'
-        && contracts?.manualDepth === 'full-text-evidence-v6'
-        && contracts?.readerLongform === 'reader-longform-v2'
-        && contracts?.artifactIndex === 'manual-artifact-parser-v2-structured'
+        paper?.manualDepth === historicalManualContract('manual-analysis-depth', 'signed-longform')
+        && contracts?.manualDepth === historicalManualContract('manual-analysis-depth', 'signed-longform')
+        && contracts?.readerLongform === historicalManualContract('manual-reader-longform', 'signed-blocks')
+        && contracts?.artifactIndex === historicalManualContract('manual-artifact-parser', 'structured-source')
         && provenance?.specVersion === 6
         && provenance?.runtimeMode === 'production'
         && paper?.manualArtifactIndex?.inventoryHealth?.status === 'complete'
-        && paper?.manualReaderLongform?.contract === 'reader-longform-v2'
+        && paper?.manualReaderLongform?.contract === historicalManualContract('manual-reader-longform', 'signed-blocks')
         && requiredShaFields.every(field => (
             /^[a-f0-9]{64}$/.test(String(provenance?.[field] || ''))
             && (!Object.hasOwn(acquisition || {}, field)
@@ -149,7 +143,8 @@ function textSha256(value) {
     return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
 }
 
-const BATCH_RETRY_DIAGNOSTIC_CONTRACT = 'analysis-batch-retry-diagnostics-v1';
+const formats = require('./lib/protocol-codec');
+const BATCH_RETRY_DIAGNOSTIC_CONTRACT = formats.contract('analysis-batch-retry-diagnostics');
 function createAnalysisBatchRetryReporter(filePath, { workflow, batchDate, sourceReference, papers }) {
     const scopeIds = papers.map(normalizedId).filter(Boolean).sort();
     if (scopeIds.length !== papers.length || new Set(scopeIds).size !== scopeIds.length) {
@@ -161,7 +156,7 @@ function createAnalysisBatchRetryReporter(filePath, { workflow, batchDate, sourc
         const fields = ['round', 'inputIds', 'attemptedIds', 'successIds', 'skippedIds', 'failedIds',
             'retryableFailedIds', 'unstartedIds', 'noProgressById', 'durationMs', 'stopped'];
         rounds.push(Object.fromEntries(fields.filter(key => Object.hasOwn(context, key)).map(key => [key, context[key]])));
-        const diagnostic = { contract: BATCH_RETRY_DIAGNOSTIC_CONTRACT, diagnosticOnly: true,
+        const diagnostic = { ...formats.recordHeader(BATCH_RETRY_DIAGNOSTIC_CONTRACT, BATCH_RETRY_DIAGNOSTIC_CONTRACT), diagnosticOnly: true,
             workflow, batchDate, sourceReferenceSha256, scopeIds, scopeSha256: stableSha256(scopeIds),
             maxRounds: context.maxRounds, roundsCompleted: rounds.length, rounds: structuredClone(rounds),
             manualHandoff: structuredClone(context.manualHandoff), newApiRequestsAuthorized: false };
@@ -185,7 +180,7 @@ function currentAnalysisBatchRetryDiagnostic(snapshot, batchDate, failedIds = []
     const scopeIdSet = new Set(Array.isArray(diagnostic?.scopeIds) ? diagnostic.scopeIds : []);
     const canonicalRows = papersFrom(snapshot), canonicalIds = canonicalRows.map(normalizedId).filter(Boolean);
     const canonicalIdSet = new Set(canonicalIds);
-    if (diagnostic?.contract !== BATCH_RETRY_DIAGNOSTIC_CONTRACT || diagnostic.diagnosticOnly !== true
+    if (!formats.hasValidHeader(diagnostic, BATCH_RETRY_DIAGNOSTIC_CONTRACT) || diagnostic.diagnosticOnly !== true
         || diagnostic.batchDate !== batchDate || diagnostic.newApiRequestsAuthorized !== false
         || diagnostic.sourceReferenceSha256 !== stableSha256(snapshot.dailyFreshSourceRun || null)
         || !Array.isArray(diagnostic.scopeIds) || diagnostic.scopeSha256 !== stableSha256(diagnostic.scopeIds)
@@ -229,13 +224,13 @@ function llmApiPaperComplete(paper) {
     const finalScore = Number(scoring?.finalScore);
     const isSha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
     return Boolean(
-        contracts?.apiReaderArticle === 'beginner-researcher-v3'
-        && paper?.apiReaderPlan?.version === 3
+        contracts?.apiReaderArticle === paper?.apiReaderPlan?.contract
+        && require('./lib/reader-record-format').isIntegratedPlan(paper?.apiReaderPlan)
         && source?.fullTextAvailable === true
         && isSha256(source?.sourceSha256)
         && paper?.sourceSha256 === source.sourceSha256
         && scoring?.status === 'complete'
-        && scoring?.scoringContract === 'api-scoring-audit-v2'
+        && require('./lib/scoring-record-format').hasScoringAuditFormat(scoring)
         && scoringStabilityIsResolved(scoring)
         && isSha256(scoring?.auditSha256)
         && isSha256(scoring?.evidenceSha256)
@@ -253,7 +248,7 @@ function llmApiPaperComplete(paper) {
         && reader.planSha256 === paper.apiReaderPlanSha256
         && reader.figuresSha256 === stableSha256(paper?.apiReaderFigures || [])
         && reader.readerAuthorsSha256 === stableSha256(paper?.apiReaderAuthors || {})
-        && hasValidApiReaderV3Records(paper)
+        && hasValidIntegratedApiReaderRecords(paper)
     );
 }
 
@@ -614,7 +609,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         && review?.remoteVerifiedOid === review?.publicationCommit;
     const visualsWaived = reviewComplete
         && postPublishVisualWaiverIsValid(
-            visualWaiver, targetDate, review, visualPath, coverPath
+            visualWaiver, targetDate, publication, visualPath, coverPath
         );
     const visualGateComplete = visualComplete || visualsWaived;
     const coverGateComplete = coverComplete || visualsWaived;
@@ -634,7 +629,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         }).length
         : null;
     const productionV6Complete = deepBatch.length > 0
-        && deepBatch.every(productionV6PaperComplete);
+        && deepBatch.every(productionSignedManualPaperComplete);
     // 至少有一篇可发布的分析；豁免不会把全失败批次变成空内容发布。
     const llmApiComplete = requiredAnalysis.length > 0
         && requiredAnalysis.every(llmApiPaperComplete);
@@ -652,7 +647,7 @@ function buildDigestRunReport(targetDate, options = {}) {
     const productionAnalysisComplete = productionV6Complete || (llmApiComplete && dailySourceComplete);
     const unresolvedScoringIds = requiredAnalysis.filter(paper => {
         const scoring = paper?.analysisManifest?.stages?.scoringAudit;
-        return scoring?.scoringContract === 'api-scoring-audit-v2'
+        return require('./lib/scoring-record-format').hasScoringAuditFormat(scoring)
             && !scoringStabilityIsResolved(scoring);
     }).map(normalizedId).filter(Boolean);
     const analysisComplete = Boolean(deep && filtered) && analysisWaiverCheck.valid
@@ -700,8 +695,8 @@ function buildDigestRunReport(targetDate, options = {}) {
         Number.isInteger(decidedTotal) && Number.isInteger(decidedCount)
     ) ? Math.max(0, decidedTotal - decidedCount) : null;
     return {
-        // v3 区分未知计数与零，并单列读取问题；视觉状态由核验结果确定。
-        version: 3,
+        // 未知计数与零分开记录；完成状态仍由各项实际核验决定。
+        ...formats.recordHeader('digest-run-report', 'digest-run-report'),
         batchDate: targetDate,
         generatedAt: getBeijingISOString(),
         overallStatus: overallComplete ? 'complete' : 'incomplete',
@@ -963,7 +958,7 @@ async function runWatch(options = {}) {
                 if (stopped) return;
                 const message = error?.message || String(error);
                 // 一次快照读失败不应结束 watch；按同一输出格式继续下一轮。
-                if (json) print(JSON.stringify({ version: 1, error: message }));
+                if (json) print(JSON.stringify(formats.record('digest-status-error', { error: message })));
                 else print(`[digest-live] 快照失败: ${message}`);
             } finally {
                 inFlight = false;
@@ -1081,7 +1076,7 @@ module.exports = {
     filterSnapshotsAreConsistent,
     visualAssetsAreValid,
     postPublishVisualWaiverIsValid,
-    productionV6PaperComplete,
+    productionSignedManualPaperComplete,
     llmApiPaperComplete,
     buildDigestRunReport,
     formatDigestRunSummary,

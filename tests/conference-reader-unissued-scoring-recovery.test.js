@@ -72,7 +72,7 @@ function scoringFlow(options={}){
   prepareApiReaderRevisionSeed:()=>{calls.push('ordinary-seed');return seed;},refreshApiReaderArticleFromSource:async(p,s,o)=>{calls.push('reader');assert.equal(p.analysis,'new normal scored body');assert.equal(o.revisionSeed,seed);assert.equal(o.reviewFeedback,'actual review');if(options.opaque){assert.equal(o.readerReviewParentSeedHandle,handle);assert.equal(o.preserveScientificUpstream,true);}else assert.equal(o.readerReviewParentSeedHandle,undefined);},require:name=>{
    if(name==='./lib/daily-fact-review')return facts;if(name==='./lib/fresh-analysis-context.js')return {attachFreshSourceRecord:()=>{}};
    if(name==='./lib/model-text-sanitization.js')return {canReuseModelTextInputs:()=>true};
-   if(name==='./analysis-engine.js')return {hasValidApiReaderV3Records:()=>{calls.push('old-reader-check');return true;}};
+   if(name==='./analysis-engine.js')return {hasValidIntegratedApiReaderRecords:()=>{calls.push('old-reader-check');return true;}};
    if(name==='./lib/reader-author-source.js')return {canReuseReaderAuthorInputs:()=>true};
    if(name==='./lib/conference-reader-review-maintenance')return {readVerifiedUnissuedScoringResources:(h,args)=>{assert.equal(h,handle);assert.equal(args.revisionSeed,seed);calls.push('fixed-resource');return {identitySha256:'r',resources:[]};},readVerifiedParentReaderSeed:(h,args)=>{calls.push('opaque-seed');assert.equal(h,handle);assert.equal(args.revisionSeed,seed);assert.equal(args.paper.analysis,'old body');if(options.badHandle)throw new Error('bad opaque');return seed;}};
    throw new Error('Unexpected dependency '+name);

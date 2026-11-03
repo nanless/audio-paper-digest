@@ -1,6 +1,20 @@
 """识别标签阶段的保存格式，返回原记录及其哈希绑定字段。"""
 
-TAG_STAGE_RECORD_CONTRACT = 'paper-tag-stage-record-v2'
+from protocol_codec import contract, record_header, is_contract, has_valid_header
+
+TAG_STAGE_RECORD_CONTRACT = contract('paper-tag-stage-record')
+
+
+def tag_stage_record_declaration():
+    return record_header(TAG_STAGE_RECORD_CONTRACT,TAG_STAGE_RECORD_CONTRACT)
+
+
+def is_tag_stage_record_declaration(value):
+    if type(value) is str:
+        return value != TAG_STAGE_RECORD_CONTRACT and is_contract(value,TAG_STAGE_RECORD_CONTRACT)
+    return (type(value) is dict and 'schemaFingerprint' in value and has_valid_header(value,TAG_STAGE_RECORD_CONTRACT)
+            and value == record_header(value['contract'],TAG_STAGE_RECORD_CONTRACT,value.get('schemaFingerprint')))
+
 LEGACY_TAG_STAGE_BINDING_FIELDS = (
     'registryVersion', 'registrySha256', 'projectionContract',
     'projectionSha256', 'selectionContract', 'inputAnalysisSha256',
@@ -31,7 +45,7 @@ def read_tag_stage_record(manifest, checkpoints=None):
     if has_legacy_format and has_current_format:
         raise ValueError('标签阶段记录不能混用新旧格式。')
     if 'tagSelectionRecord' in contracts \
-            and contracts['tagSelectionRecord'] != TAG_STAGE_RECORD_CONTRACT:
+            and not is_tag_stage_record_declaration(contracts['tagSelectionRecord']):
         raise ValueError('标签阶段记录的格式版本无效。')
     stage_key = 'tagSelection' if has_current_format else 'taxonomySeal'
     contract_key = 'tagSelectionRecord' if has_current_format else 'taxonomy'

@@ -40,7 +40,8 @@ async function restorePaidFinalAnalysis(paper, plan, expected) {
             try { assert.deepEqual(old[field], paper[field]); } catch (_) { reject(`原记录与当前${field}不同`); }
         }
     }
-    for (const old of [input, completed]) for (const field of ['modelTextSanitizationContract', 'promptRenderingContract']) {
+    for (const old of [input, completed]) for (const field of ['modelTextSanitizationContract', 'modelTextSanitizationSchemaFingerprint',
+        'promptRenderingContract', 'promptRenderingSchemaFingerprint']) {
         if (old.analysisManifest?.sourceAcquisition?.[field] !== paper.analysisManifest?.sourceAcquisition?.[field]
             || (old[field] !== undefined && old[field] !== paper[field])) reject(`原来源的${field}不同`);
     }

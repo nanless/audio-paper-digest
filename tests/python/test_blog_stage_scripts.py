@@ -41,7 +41,6 @@ def load_script(name, root=SCRIPTS):
 review_blog = load_script('review-blog.py')
 push_blog = load_script('push-blog.py')
 generate_blog = load_script('generate-blog.py')
-plan_visuals = load_script('plan-post-publish-visuals.py')
 assemble_manual_review = load_script(
     'assemble-manual-review-attestation.py', MANUAL_SCRIPTS,
 )
@@ -80,7 +79,6 @@ class BlogStageEntryTest(unittest.TestCase):
             SCRIPTS / 'generate-blog.py',
             SCRIPTS / 'review-blog.py',
             SCRIPTS / 'push-blog.py',
-            SCRIPTS / 'plan-post-publish-visuals.py',
             MANUAL_SCRIPTS / 'manual-review-blog.py',
             MANUAL_SCRIPTS / 'assemble-manual-review-attestation.py',
         ]
@@ -311,17 +309,6 @@ class BlogStageEntryTest(unittest.TestCase):
                     with self.assertRaises(SystemExit) as caught:
                         parser(module)
                     self.assertEqual(caught.exception.code, 2)
-        for argv in (
-            ['--date'],
-            ['--unknown', 'value'],
-            ['--d', '2026-07-10'],
-            ['--date', '2026-07-10', '--date', '2026-07-11'],
-        ):
-            with self.subTest(entry='plan-post-publish-visuals.py', argv=argv), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit) as caught:
-                    plan_visuals.parse_date(module, argv)
-                self.assertEqual(caught.exception.code, 2)
         for parser, argv in (
             (review_blog.parse_options, [
                 '--include-id', '2607.00001', '--include-id', '2607.00002',
@@ -330,7 +317,7 @@ class BlogStageEntryTest(unittest.TestCase):
                 '--include-id', '2607.00001', '--include-id', '2607.00002',
             ]),
             (push_blog.parse_options, [
-                '--include-id', '2607.00001', '--require-visual-plan',
+                '--include-id', '2607.00001', '--require-production-receipt',
             ]),
         ):
             with self.subTest(parser=parser.__module__, argv=argv), \
@@ -578,7 +565,7 @@ body
             validate_publish_date=lambda value: value,
             blog_publication_lock=lambda _date: contextlib.nullcontext(),
             load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
-            preflight_post_publish_visual_capability=mock.Mock(return_value=True),
+            preflight_production_publication=mock.Mock(return_value=True),
             validate_git_publish_branch=mock.Mock(),
             validate_git_index=mock.Mock(),
             git_push=mock.Mock(return_value=True),
@@ -592,63 +579,13 @@ body
                 contextlib.redirect_stdout(io.StringIO()):
             push_blog.main()
         module.load_verified_review_receipt.assert_called_once_with('2026-07-10')
-        module.preflight_post_publish_visual_capability.assert_called_once_with(
-            '2026-07-10', require_visual_plan=False,
+        module.preflight_production_publication.assert_called_once_with(
+            '2026-07-10', require_production_receipt=False,
         )
         module.git_push.assert_called_once_with('2026-07-10', [path])
-        module.plan_post_publish_visual_assets.assert_called_once_with('2026-07-10')
+        module.plan_post_publish_visual_assets.assert_not_called()
         module.review_all_posts.assert_not_called()
         module.load_papers.assert_not_called()
-
-    def test_visual_planning_failure_does_not_turn_verified_blog_push_into_failure(self):
-        path = Path('/tmp/content/posts/2026-07-10.md')
-        module = SimpleNamespace(
-            PublishDataValidationError=ValueError,
-            validate_publish_target=mock.Mock(),
-            get_today_bj=lambda value=None: value or '2026-07-10',
-            validate_publish_date=lambda value: value,
-            blog_publication_lock=lambda _date: contextlib.nullcontext(),
-            load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
-            preflight_post_publish_visual_capability=mock.Mock(return_value=True),
-            validate_git_publish_branch=mock.Mock(),
-            validate_git_index=mock.Mock(),
-            git_push=mock.Mock(return_value=True),
-            plan_post_publish_visual_assets=mock.Mock(return_value=False),
-        )
-        output = io.StringIO()
-        with mock.patch.object(push_blog, 'require_external_runtime'), \
-                mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
-                mock.patch.object(sys, 'argv', ['push-blog.py', '--date', '2026-07-10']), \
-                contextlib.redirect_stdout(output):
-            push_blog.main()
-        self.assertIn('全部博客推送完成；发布后视觉任务尚待重试', output.getvalue())
-
-    def test_daily_push_mode_requires_visual_planning_success(self):
-        path = Path('/tmp/content/posts/2026-07-10.md')
-        module = SimpleNamespace(
-            PublishDataValidationError=ValueError,
-            validate_publish_target=mock.Mock(),
-            get_today_bj=lambda value=None: value or '2026-07-10',
-            validate_publish_date=lambda value: value,
-            blog_publication_lock=lambda _date: contextlib.nullcontext(),
-            load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
-            preflight_post_publish_visual_capability=mock.Mock(return_value=True),
-            validate_git_publish_branch=mock.Mock(),
-            validate_git_index=mock.Mock(),
-            git_push=mock.Mock(return_value=True),
-            plan_post_publish_visual_assets=mock.Mock(return_value=False),
-        )
-        output = io.StringIO()
-        with mock.patch.object(push_blog, 'require_external_runtime'), \
-                mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
-                mock.patch.object(sys, 'argv', [
-                    'push-blog.py', '--date', '2026-07-10', '--require-visual-plan',
-                ]), \
-                contextlib.redirect_stdout(output), \
-                self.assertRaises(SystemExit) as caught:
-            push_blog.main()
-        self.assertEqual(caught.exception.code, 2)
-        self.assertIn('博客已发布并验证远端 OID，但发布后视觉任务规划失败', output.getvalue())
 
     def test_daily_push_rejects_legacy_generation_before_git_push(self):
         path = Path('/tmp/content/posts/2026-07-10.md')
@@ -659,7 +596,7 @@ body
             validate_publish_date=lambda value: value,
             blog_publication_lock=lambda _date: contextlib.nullcontext(),
             load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
-            preflight_post_publish_visual_capability=mock.Mock(
+            preflight_production_publication=mock.Mock(
                 side_effect=ValueError('schema v1 仅支持历史维护发布')
             ),
             validate_git_publish_branch=mock.Mock(),
@@ -670,7 +607,7 @@ body
         with mock.patch.object(push_blog, 'require_external_runtime'), \
                 mock.patch.object(push_blog, 'load_publish_to_blog', return_value=module), \
                 mock.patch.object(sys, 'argv', [
-                    'push-blog.py', '--date', '2026-07-10', '--require-visual-plan',
+                    'push-blog.py', '--date', '2026-07-10', '--require-production-receipt',
                 ]), contextlib.redirect_stdout(io.StringIO()), \
                 self.assertRaises(SystemExit) as caught:
             push_blog.main()
@@ -687,7 +624,7 @@ body
             validate_publish_date=lambda value: value,
             blog_publication_lock=lambda _date: contextlib.nullcontext(),
             load_verified_review_receipt=mock.Mock(return_value=([path], Path('receipt.json'))),
-            preflight_post_publish_visual_capability=mock.Mock(return_value=False),
+            preflight_production_publication=mock.Mock(return_value=False),
             validate_git_publish_branch=mock.Mock(),
             validate_git_index=mock.Mock(),
             git_push=mock.Mock(return_value=True),
@@ -701,7 +638,7 @@ body
             push_blog.main()
         module.git_push.assert_called_once()
         module.plan_post_publish_visual_assets.assert_not_called()
-        self.assertIn('历史维护博客推送完成', output.getvalue())
+        self.assertIn('博客推送完成，远端提交已核验', output.getvalue())
 
 
 if __name__ == '__main__':

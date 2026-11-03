@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const acquisition = require('../scripts/lib/official-conference-acquisition.js');
 const discovery = require('../scripts/lib/conference-discovery.js');
+const protocols = require('../scripts/lib/protocol-codec');
 const cli = require('../scripts/conference-discover.js');
 
 const STAMP = '2026-09-09T00:00:00.000Z';
@@ -20,7 +21,7 @@ function fixture(t) {
     const provider = acquisition.providerFor('iwslt-2026');
     const indexBytes = Buffer.from(INDEX_HTML);
     fs.writeFileSync(path.join(root, 'responses/index.html'), indexBytes, { mode: 0o600 });
-    const responseBody = { contract: acquisition.HTTP_RECEIPT_CONTRACT, version: acquisition.VERSION,
+    const responseBody = { ...protocols.record(acquisition.HTTP_RECEIPT_CONTRACT),
         providerId: provider.conference.id, resource: 'catalog-index', requestedUrl: provider.indexUrl,
         finalUrl: provider.indexUrl, redirects: [], responseStatus: 200, contentType: 'text/html',
         observedAt: STAMP, body: { relativePath: 'responses/index.html', bytes: indexBytes.length,
@@ -32,8 +33,8 @@ function fixture(t) {
     const metadata = acquisition.parseCatalog(provider.conference.id, INDEX_HTML);
     const metadataBytes = acquisition.prettyBytes(metadata);
     fs.writeFileSync(path.join(root, 'metadata.json'), metadataBytes, { mode: 0o600 });
-    const catalogBody = { contract: acquisition.CATALOG_RECEIPT_CONTRACT, version: acquisition.VERSION,
-        providerId: provider.conference.id, parserVersion: acquisition.PARSER_VERSION,
+    const catalogBody = { ...protocols.record(acquisition.CATALOG_RECEIPT_CONTRACT),
+        providerId: provider.conference.id, parserProfile: acquisition.parserProfile(),
         indexReceiptSha256: response.receiptSha256, indexReceiptFileSha256: acquisition.sha256(responseBytes),
         metadata: { relativePath: 'metadata.json', bytes: metadataBytes.length, sha256: acquisition.sha256(metadataBytes) },
         paperSetSha256: acquisition.stableHash(metadata.papers) };
@@ -43,7 +44,7 @@ function fixture(t) {
     for (const paper of metadata.papers) {
         const pdfBytes = Buffer.from('%PDF-1.7\nfixture pdf\n');
         fs.writeFileSync(path.join(root, paper.pdfFile), pdfBytes, { mode: 0o600 });
-        const receiptBody = { contract: acquisition.PDF_RECEIPT_CONTRACT, version: acquisition.VERSION,
+        const receiptBody = { ...protocols.record(acquisition.PDF_RECEIPT_CONTRACT),
             providerId: provider.conference.id, paperId: paper.id, metadataSha256: acquisition.sha256(metadataBytes),
             requestedUrl: paper.pdfUrl, finalUrl: paper.pdfUrl, redirects: [], responseStatus: 200,
             contentType: 'application/pdf', observedAt: STAMP,

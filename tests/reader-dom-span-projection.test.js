@@ -19,15 +19,15 @@ async function fixture(t){
 }
 test('真正封存HTML colspan分类行由正常parser编译，最终guard在scope和cold都通过且字节不变',async t=>{
  const f=await fixture(t),before=JSON.stringify(f.paper);assert.match(f.paper.apiReaderArticle,/\| Proprietary Models \|  \|  \|  \|  \|  \|/);assert.equal(f.paper.apiReaderPlan.structuredSourcePayload,undefined);
- await daily.withDailyFreshAnalysisContext(f.plan,()=>daily.withDailyFreshPaperSource(f.plan,f.paper,()=>assert.equal(engine.hasValidApiReaderV3Records(f.paper),true)));
- assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);assert.equal(JSON.stringify(f.paper),before);
+ await daily.withDailyFreshAnalysisContext(f.plan,()=>daily.withDailyFreshPaperSource(f.plan,f.paper,()=>assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),true)));
+ assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),true);assert.equal(JSON.stringify(f.paper),before);
 });
 test('空白投影只核真实全幅DOM且保留首格，拒错SHA、span、坐标、源字、缺格或测量值误删',async t=>{
  const f=await fixture(t),binding=f.paper.apiReaderPlan.tableBindings[1],cell=binding.cellBindings.find(c=>c.sourceRow===1&&c.sourceColumn===1),rendered=require('../scripts/analysis-contract').extractMarkdownTables(f.paper.apiReaderArticle)[1];
  assert.equal(span.fullWidthLabelBlankMatches(f.table,binding,cell,'',rendered),true);
  for(const alter of [(a,b,c,r)=>{a.cells.find(c=>c.row===1).colspan=5;},(a,b,c,r)=>{a.cells.find(c=>c.row===1).rowspan=2;},(a,b,c,r)=>{c.sourceDomSha256='c'.repeat(64);},(a,b,c,r)=>{c.sourceColumn=6;},(a,b,c,r)=>{c.sourceText='forged';},(a,b,c,r)=>{a.cells.push({...a.cells.find(c=>c.row===1),column:1,colspan:1});},(a,b,c,r)=>{r.rows[0][0]='';},(a,b,c,r)=>{a.cells.find(c=>c.row===1).text='1.0';a.matrix[1]=Array(6).fill('1.0');},(a,b,c,r)=>{b.cellBindings=b.cellBindings.filter(c=>!(c.renderedRow===1&&c.renderedColumn===4));}]){const a=structuredClone(f.table),b=structuredClone(binding),c=structuredClone(cell),r=structuredClone(rendered);alter(a,b,c,r);assert.equal(span.fullWidthLabelBlankMatches(a,b,c,'',r),false);}
- const file=path.join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001','source-runtime.json');const bytes=fs.readFileSync(file);fs.appendFileSync(file,' ');assert.equal(engine.hasValidApiReaderV3Records(f.paper),false);fs.writeFileSync(file,bytes);
- const wrong=structuredClone(f.paper);wrong.freshRewriteProvenance.sourceManifestSha256='d'.repeat(64);wrong.analysisManifest.freshRewriteProvenance=structuredClone(wrong.freshRewriteProvenance);assert.equal(engine.hasValidApiReaderV3Records(wrong),false);
+ const file=path.join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001','source-runtime.json');const bytes=fs.readFileSync(file);fs.appendFileSync(file,' ');assert.equal(engine.hasValidIntegratedApiReaderRecords(f.paper),false);fs.writeFileSync(file,bytes);
+ const wrong=structuredClone(f.paper);wrong.freshRewriteProvenance.sourceManifestSha256='d'.repeat(64);wrong.analysisManifest.freshRewriteProvenance=structuredClone(wrong.freshRewriteProvenance);assert.equal(engine.hasValidIntegratedApiReaderRecords(wrong),false);
 });
 
 test('分组行作为选中表头且选取部分列时，逐格核完整且唯一的行列投影', async t => {

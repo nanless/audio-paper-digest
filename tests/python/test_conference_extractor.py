@@ -3,6 +3,8 @@ import os
 import stat
 import sys
 import tempfile
+import types
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -34,6 +36,7 @@ from conference_extractor import (  # noqa: E402
 )
 from paper_identity import canonical_conference_paper_id  # noqa: E402
 from path_config import CONFERENCE_STAGING_SOURCE_DIR  # noqa: E402
+import protocol_codec as protocols
 
 
 def build_pdf(page_lines):
@@ -79,6 +82,39 @@ def build_pdf(page_lines):
 
 
 class ConferenceExtractorTest(unittest.TestCase):
+    def test_original_git_extractor_bundle_replays_exactly_in_python_and_node(self):
+        pages = [[f"original-line-{index:03d}-" + "a" * 55 for index in range(70)] for _ in range(2)]
+        manifest, request = self.write_request(build_pdf(pages))
+        for key in ["contract", "schemaFingerprint"]:
+            request.pop(key, None)
+        request = {**protocols.historical_header("conference-pdf-extraction-request", "frozen-source-options"), **request}
+        request["options"]["normalization"] = protocols.historical_contract("conference-pdf-text-normalization", "unicode-nfc-lf-rstrip")
+        (self.root / manifest).write_text(json.dumps(request), encoding="utf-8")
+        records = json.loads((ROOT / "config/workflow-historical-records.json").read_text())
+        pin = records["filterPolicies"]["sourcePins"]["scripts/conference_extractor.py"]
+        from git_file_bytes import read_git_blob
+        original = types.ModuleType("original_conference_extractor")
+        original.__file__ = str(SCRIPTS / "conference_extractor.py")
+        sys.modules[original.__name__] = original
+        try:
+            exec(compile(read_git_blob(ROOT, pin["oid"], pin["sha256"]), original.__file__, "exec"), original.__dict__)
+            result = original.run_extraction(manifest, apply=True, source_root=self.root)
+            self.assertEqual(result["status"], "ready")
+            before = {name: (self.root / name).read_bytes() for name in request["outputs"].values()}
+            verified = verify_extraction(manifest, source_root=self.root)
+            self.assertTrue(protocols.has_valid_header(verified, "conference-pdf-extraction-verification"))
+            code = "const a=require('./scripts/lib/conference-extraction-receipt');const h=a.loadExtractionHandle(process.argv[1],process.argv[2]);console.log(JSON.stringify(a.extractionHandleSnapshot(h)))"
+            child = subprocess.run(["node", "-e", code, str(self.root), request["outputs"]["receiptFile"]],
+                cwd=ROOT, capture_output=True, text=True, timeout=30)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            snapshot = json.loads(child.stdout)
+            self.assertEqual(snapshot["verification"], verified)
+            self.assertNotIn("schemaFingerprint", snapshot)
+            self.assertEqual(snapshot["text"]["sha256"], sha256_bytes(before[request["outputs"]["textFile"]]))
+            self.assertEqual({name: (self.root / name).read_bytes() for name in before}, before)
+        finally:
+            sys.modules.pop(original.__name__, None)
+
     def test_native_pymupdf_output_cannot_pollute_json_stdout(self):
         read_fd, write_fd = os.pipe()
         saved_stdout, saved_stderr = os.dup(1), os.dup(2)
@@ -138,8 +174,7 @@ class ConferenceExtractorTest(unittest.TestCase):
     def write_request(self, pdf_bytes, *, name="extract.json", prefix="paper"):
         (self.root / "paper.pdf").write_bytes(pdf_bytes)
         request = {
-            "contract": REQUEST_CONTRACT,
-            "version": 2,
+            **protocols.record_header(REQUEST_CONTRACT, "conference-pdf-extraction-request"),
             "paperId": canonical_conference_paper_id(
                 {"id": "icassp-2026", "year": 2026},
                 {"type": "icassp-arnumber", "value": "123"}),
@@ -185,7 +220,7 @@ class ConferenceExtractorTest(unittest.TestCase):
         artifacts = json.loads((self.root / request["outputs"]["artifactsFile"]).read_text())
         receipt = json.loads((self.root / request["outputs"]["receiptFile"]).read_text())
         self.assertEqual(artifacts["contract"], ARTIFACT_CONTRACT)
-        self.assertEqual(artifacts["profile"], "replayable-pdf-layout-v1")
+        self.assertEqual(artifacts["profile"], protocols.contract("conference-pdf-replayable-layout"))
         self.assertEqual(len(artifacts["pages"]), 2)
         self.assertIn(PAGE_SEPARATOR.encode(), text_bytes)
         previous_end = 0
@@ -208,7 +243,7 @@ class ConferenceExtractorTest(unittest.TestCase):
         self.assertEqual(artifacts["formulas"], [])
         self.assertEqual(artifacts["figures"], [])
         audit = artifacts["visualAudit"]
-        self.assertEqual(audit["contract"], "conference-pdf-visual-audit-v1")
+        self.assertTrue(protocols.is_current_header(audit, "conference-pdf-visual-audit"))
         self.assertEqual(audit["backend"]["name"], "pymupdf")
         self.assertEqual(audit["renderDpi"], 72)
         self.assertEqual(len(audit["pages"]), 2)
@@ -250,7 +285,7 @@ class ConferenceExtractorTest(unittest.TestCase):
         artifacts = json.loads((self.root / request["outputs"]["artifactsFile"]).read_text())
         self.assertEqual(receipt["blockedReason"]["code"], "TEXT_TOO_SHORT")
         self.assertFalse(receipt["textReplayable"])
-        self.assertEqual(artifacts["profile"], "replayable-pdf-layout-v1")
+        self.assertEqual(artifacts["profile"], protocols.contract("conference-pdf-replayable-layout"))
 
     def test_write_failure_keeps_replacement_and_cleans_owned_outputs(self):
         manifest, request = self.write_request(build_pdf([["too short"]]))

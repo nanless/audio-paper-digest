@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -14,7 +15,8 @@ class WebsiteTaxonomy private constructor(val nodes: Map<String, Node>, private 
         fun field(name:String):Any? { val pair=fields.single {it.first==name};return record.opt(if(current)pair.first else pair.second) }
         fun text(name:String)=field(name) as? String ?: ""
         if(text("tagPublicationStatus")=="withheld")return Classification("withheld",emptyList())
-        if(text("tagContract") !in setOf("paper-tag-flat-tags-v2","paper-taxonomy-flat-tags-compat-v1"))return Classification("legacy",emptyList())
+        val header=JSONObject().put("contract",text("tagContract")).also{if(field("tagSchemaFingerprint")!=null)it.put("schemaFingerprint",field("tagSchemaFingerprint"))}
+        if(!ClientProtocols.hasValidHeader(header,"paper-tag-flat-tags"))return Classification("legacy",emptyList())
         val selected=field("tagConcepts") as? JSONArray?:return Classification("legacy",emptyList())
         val source=versions[text("tagCatalogSha256")]?:return Classification(if(text("tagCatalogSha256").isEmpty())"unbound-version"else"unknown-version",emptyList())
         val issued=ArrayList<Node>()
@@ -56,13 +58,13 @@ class WebsiteTaxonomy private constructor(val nodes: Map<String, Node>, private 
     companion object {
         val facets=linkedMapOf("task" to "任务","method" to "方法","setting" to "条件","signal" to "信号","application" to "应用","research_focus" to "研究重点","artifact" to "研究产物","scientific_topic" to "科学主题","model_family" to "模型家族")
         private val roleFacets=mapOf("engineering" to setOf("task"),"science" to setOf("scientific_topic"),"analysis" to setOf("scientific_topic","research_focus"),"evaluation" to setOf("research_focus"),"resource" to setOf("artifact"),"review" to setOf("task","scientific_topic","research_focus"),"experience" to setOf("task","scientific_topic","research_focus","artifact"),"position" to setOf("scientific_topic","research_focus"))
-        private val fields=listOf("Contract","Concepts","CatalogSha256","PublicationStatus","EvidenceContract","EvidenceType","ProofSha256","PageSha256","ClassificationContract").map { suffix -> "tag$suffix" to "taxonomy${if(suffix=="CatalogSha256")"RegistrySha256"else suffix}" }
+        private val fields=listOf("Contract","SchemaFingerprint","Concepts","CatalogSha256","PublicationStatus","EvidenceContract","EvidenceType","ProofSha256","PageSha256","ClassificationContract").map { suffix -> "tag$suffix" to "taxonomy${if(suffix=="CatalogSha256")"RegistrySha256"else suffix}" }
         private val additional=setOf("permalink","arxivId","identityStatus","sourceKind","pageType","title","titleZh","originalTitle","summary","date","score","tags","citation","paperId","primaryTaskId","primaryMethodId","task","method","researchType","domainScope","primaryResearchRole","primaryScientificTopicId","primaryScientificTopicLabel","methodNotApplicable","methodNotApplicableReason")
         fun record(row:JSONObject)=JSONObject().also {out->(fields.flatMap{listOf(it.first,it.second)}+additional).forEach {if(row.has(it))out.put(it,row.get(it))} }.copy()
         fun records(paper:Paper):List<JSONObject> = paper.original?.optJSONArray("websiteTagRecords")?.objects().orEmpty()
         fun parse(value:JSONObject):WebsiteTaxonomy {
             val raw=value.copy();val snapshot=raw.getJSONObject("snapshot");val versions=raw.getJSONObject("versions")
-            require(versions.getString("contract")=="paper-tag-catalog-versions-v2")
+            require(ClientProtocols.hasValidHeader(versions,"paper-tag-catalog-versions"))
             val current=graph(snapshot);val sha=snapshot.getString("registrySha256");require(versions.getString("currentSha256")==sha)
             val list=versions.getJSONArray("snapshots");require(list.length() in 1..128);val historical=linkedMapOf<String,Map<String,Node>>();val versionNames=linkedMapOf<String,String>()
             for(i in 0 until list.length()) {val source=list.getJSONObject(i);val id=source.getString("registrySha256");require(id.matches(Regex("[a-f0-9]{64}"))&&!historical.containsKey(id));val nodes=graph(source);nodes.forEach{(key,node)->require(current[key]==null||current[key]?.facet==node.facet)};historical[id]=nodes;versionNames[id]=source.optString("registryVersion")
@@ -71,7 +73,7 @@ class WebsiteTaxonomy private constructor(val nodes: Map<String, Node>, private 
             require(sha in historical);return WebsiteTaxonomy(current,historical,versionNames,raw)
         }
         private fun graph(snapshot:JSONObject):Map<String,Node> {
-            require(snapshot.getString("contract") in setOf("paper-tag-catalog-snapshot-v2","paper-taxonomy-registry-snapshot-v1"));require(snapshot.getString("registrySha256").matches(Regex("[a-f0-9]{64}")))
+            require(ClientProtocols.hasValidHeader(snapshot,"paper-tag-catalog-snapshot"));require(snapshot.getString("registrySha256").matches(Regex("[a-f0-9]{64}")))
             val entries=snapshot.getJSONArray("concepts");require(entries.length() in 1..10000);val nodes=linkedMapOf<String,Node>();val labelOwners=mutableMapOf<String,String>()
             for(i in 0 until entries.length()) {val r=entries.getJSONObject(i);val id=r.getString("id");val facet=r.getString("facet");val label=r.getString("zh");val ancestors=r.getJSONArray("ancestorIds").strings();val aliases=r.getJSONArray("aliases").strings();require(id.matches(Regex("[a-z][a-z0-9_]*\\.[a-z0-9][a-z0-9.-]*"))&&facet in facets&&id.startsWith("$facet.")&&label.isNotBlank()&&id !in nodes&&ancestors.size<=64&&ancestors.all{it.isNotBlank()}&&aliases.all{it.isNotBlank()});val labels=listOf(label,r.optString("en"))+aliases
                 labels.filter{it.isNotBlank()}.forEach { text->val normalized=java.text.Normalizer.normalize(text.trim(),java.text.Normalizer.Form.NFKC).lowercase(java.util.Locale.ROOT);val key=facet+"\u0000"+normalized;require(labelOwners[key]==null||labelOwners[key]==id){"网站分类别名存在歧义"};labelOwners[key]=id }
@@ -79,6 +81,6 @@ class WebsiteTaxonomy private constructor(val nodes: Map<String, Node>, private 
             nodes.values.forEach {node->val chain=ArrayList<String>();val seen=hashSetOf(node.id);var parent=node.ancestors.lastOrNull();while(parent!=null){val p=nodes[parent]?:error("网站分类父级缺失");require(p.facet==node.facet&&p.active&&seen.add(parent));chain.add(0,parent);parent=p.ancestors.lastOrNull()};require(chain==node.ancestors){"网站分类祖先路径不闭合"}}
             return nodes.toMap()
         }
-        private fun canonical(value:Any?,includeContract:Boolean=true):String=when(value){is JSONObject->value.keys().asSequence().filter{includeContract||it!="contract"}.sorted().joinToString(prefix="{",postfix="}"){JSONObject.quote(it)+":"+canonical(value.get(it))};is JSONArray->(0 until value.length()).joinToString(prefix="[",postfix="]"){canonical(value.get(it))};is String->JSONObject.quote(value);else->value?.toString()?:"null"}
+        private fun canonical(value:Any?,includeContract:Boolean=true):String=when(value){is JSONObject->value.keys().asSequence().filter{includeContract||it !in setOf("contract","schemaFingerprint")}.sorted().joinToString(prefix="{",postfix="}"){JSONObject.quote(it)+":"+canonical(value.get(it))};is JSONArray->(0 until value.length()).joinToString(prefix="[",postfix="]"){canonical(value.get(it))};is String->JSONObject.quote(value);else->value?.toString()?:"null"}
     }
 }

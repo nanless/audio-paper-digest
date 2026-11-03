@@ -1,0 +1,5992 @@
+{
+  "version": "paper-tag-catalog-v2",
+  "facets": [
+    {
+      "id": "task",
+      "label": "研究任务"
+    },
+    {
+      "id": "method",
+      "label": "方法"
+    },
+    {
+      "id": "setting",
+      "label": "条件与阶段"
+    },
+    {
+      "id": "signal",
+      "label": "研究信号"
+    },
+    {
+      "id": "application",
+      "label": "应用"
+    },
+    {
+      "id": "research_focus",
+      "label": "研究重点"
+    },
+    {
+      "id": "artifact",
+      "label": "数据、评测基准、工具与模型文件"
+    },
+    {
+      "id": "scientific_topic",
+      "label": "科学主题"
+    },
+    {
+      "id": "model_family",
+      "label": "模型族"
+    }
+  ],
+  "concepts": [
+    {
+      "id": "task.asr",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音识别",
+        "en": "Automatic speech recognition"
+      },
+      "aliases": [
+        "ASR",
+        "自动语音识别"
+      ],
+      "broaderId": null,
+      "definition": "将声学语音转写为语言符号。",
+      "scopeNote": "输入必须包含语音声学证据；脑信号词分类不是声学ASR。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-asr",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频语音识别",
+        "en": "Audio-visual speech recognition"
+      },
+      "aliases": [
+        "AVSR"
+      ],
+      "broaderId": "task.asr",
+      "definition": "利用语音与视觉证据转写言语内容。",
+      "scopeNote": "不是仅用视频或字幕的普通视频理解。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.keyword-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "关键词检测",
+        "en": "Keyword spotting"
+      },
+      "aliases": [
+        "KWS"
+      ],
+      "broaderId": null,
+      "definition": "检测语音中指定词或短语是否出现。",
+      "scopeNote": "不等同完整连续语音转写。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.wake-word",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音唤醒",
+        "en": "Wake-word detection"
+      },
+      "aliases": [],
+      "broaderId": "task.keyword-detection",
+      "definition": "检测指定唤醒词以启动交互。",
+      "scopeNote": "不能将任意关键词检索都称唤醒。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.forced-alignment",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "强制对齐",
+        "en": "Forced alignment"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "将已知转写与语音时间轴对齐。",
+      "scopeNote": "输入包含已有文本，不是未知内容识别。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.language-identification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语言识别",
+        "en": "Spoken language identification"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "判定语音所用语言或方言类别。",
+      "scopeNote": "不是识别说话人身份。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-translation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音翻译",
+        "en": "Speech translation"
+      },
+      "aliases": [
+        "ST"
+      ],
+      "broaderId": null,
+      "definition": "将口语内容转换为另一语言的文本或语音。",
+      "scopeNote": "与同语言转写分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.spoken-understanding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "口语理解",
+        "en": "Spoken language understanding"
+      },
+      "aliases": [
+        "SLU",
+        "语音理解"
+      ],
+      "broaderId": null,
+      "definition": "从口语获取语义、意图或槽位。",
+      "scopeNote": "不因使用语言模型就自动标记此任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.intent-slot",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "口语意图与槽位识别",
+        "en": "Spoken intent and slot recognition"
+      },
+      "aliases": [],
+      "broaderId": "task.spoken-understanding",
+      "definition": "预测口语意图及语义槽位。",
+      "scopeNote": "必须有意图或槽位输出，不以词错率代替。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speaker-identification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "说话人识别",
+        "en": "Speaker identification"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "从候选身份集合判定说话人是谁。",
+      "scopeNote": "与验证给定身份声明的说话人验证不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speaker-verification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "说话人验证",
+        "en": "Speaker verification"
+      },
+      "aliases": [
+        "SV"
+      ],
+      "broaderId": null,
+      "definition": "验证两段语音或身份声明是否属于同一说话人。",
+      "scopeNote": "不是从多类身份库作分类。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.diarization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "说话人分离标注",
+        "en": "Speaker diarization"
+      },
+      "aliases": [
+        "说话人日志",
+        "diarization"
+      ],
+      "broaderId": null,
+      "definition": "标注录音中谁在何时说话。",
+      "scopeNote": "不输出分离波形；裸说话人分离含歧义，不能自动映入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speaker-counting",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "说话人计数",
+        "en": "Speaker counting"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "估计录音中的说话人数。",
+      "scopeNote": "不要求输出每个人的身份。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.vad",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音活动检测",
+        "en": "Voice activity detection"
+      },
+      "aliases": [
+        "VAD"
+      ],
+      "broaderId": null,
+      "definition": "定位语音活动与非语音时段。",
+      "scopeNote": "与检测任意声音事件不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.overlap-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "重叠语音检测",
+        "en": "Overlapping speech detection"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "判断或定位多说话人同时发声时段。",
+      "scopeNote": "不等于恢复各说话人波形。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-interaction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音交互",
+        "en": "Speech interaction"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过语音开展交互并处理会话行为。",
+      "scopeNote": "纯文本对话不能仅因有可选TTS而标为核心语音交互。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-dialogue",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音对话系统",
+        "en": "Spoken dialogue systems"
+      },
+      "aliases": [],
+      "broaderId": "task.speech-interaction",
+      "definition": "建模口语对话中的理解、应答和交互。",
+      "scopeNote": "以对话行为为任务，不仅单向语音合成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.full-duplex",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "全双工语音交互",
+        "en": "Full-duplex speech interaction"
+      },
+      "aliases": [],
+      "broaderId": "task.speech-interaction",
+      "definition": "同时听取与输出语音并协调交互。",
+      "scopeNote": "低延迟不充分证明全双工。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.turn-taking",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "轮次切换",
+        "en": "Turn taking"
+      },
+      "aliases": [],
+      "broaderId": "task.speech-interaction",
+      "definition": "预测或控制对话发言与应答时机。",
+      "scopeNote": "不把仅端点检测概括成完整轮次决策。本任务限于语音/会话层面的发言与应答时机研究，故保留为语音交互的下位；纯文本对话的轮次预测不因存在可选 TTS 而归入语音交互。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-synthesis",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音合成",
+        "en": "Speech synthesis"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "人工生成具有语言内容的语音。",
+      "scopeNote": "宽任务不限定文本输入；TTS是其子任务，语音克隆不无条件归入TTS。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.tts",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文本到语音",
+        "en": "Text-to-speech synthesis"
+      },
+      "aliases": [
+        "TTS",
+        "文本转语音"
+      ],
+      "broaderId": "task.speech-synthesis",
+      "definition": "将输入文本转成语音。",
+      "scopeNote": "不包括所有语音转换或说话人克隆设置。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.voice-conversion",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音转换",
+        "en": "Voice conversion"
+      },
+      "aliases": [
+        "VC"
+      ],
+      "broaderId": null,
+      "definition": "改变输入语音的声音属性并保持所需语言内容。",
+      "scopeNote": "不是无条件从文本生成语音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.voice-cloning",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音克隆",
+        "en": "Voice cloning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "复现目标说话人的声音特征。",
+      "scopeNote": "可由合成或转换实现，不以某一实现路径作父任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-editing",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音编辑",
+        "en": "Speech editing"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "局部修改现有语音的内容或属性。",
+      "scopeNote": "不将任意整段重新合成称为编辑贡献。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.dubbing",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音配音",
+        "en": "Voice dubbing"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "为目标内容生成或替换配音并满足同步等约束。",
+      "scopeNote": "同步、翻译和身份保持按实际目标记录。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-synthesis",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频语音合成",
+        "en": "Audio-visual speech synthesis"
+      },
+      "aliases": [],
+      "broaderId": "task.speech-synthesis",
+      "definition": "将视觉条件或视听协调作为语音生成问题的一部分。",
+      "scopeNote": "普通TTS附带播放器不是视听语音合成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-enhancement",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音增强",
+        "en": "Speech enhancement"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "改善退化语音中的目标言语信号。",
+      "scopeNote": "不是通过扬声器反向声场实施主动降噪。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.dereverberation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "去混响",
+        "en": "Dereverberation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "减少声信号中的混响影响。",
+      "scopeNote": "加性噪声实验不能证明去混响效果。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.echo-cancellation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "回声消除",
+        "en": "Acoustic echo cancellation"
+      },
+      "aliases": [
+        "AEC",
+        "声学回声消除"
+      ],
+      "broaderId": null,
+      "definition": "移除可参照远端信号的声学回声。",
+      "scopeNote": "不能把普通语音降噪一概叫回声消除。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-separation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频分离",
+        "en": "Audio source separation"
+      },
+      "aliases": [
+        "通用声源分离"
+      ],
+      "broaderId": null,
+      "definition": "从混合声信号恢复各目标声源。",
+      "scopeNote": "任务输出为声源信号，不是说话人时间标注。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-separation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音分离",
+        "en": "Speech separation"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-separation",
+      "definition": "从混合语音中恢复各语音源。",
+      "scopeNote": "不映射裸说话人分离，后者可能意指diarization。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.target-speaker",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "目标说话人提取",
+        "en": "Target speaker extraction"
+      },
+      "aliases": [],
+      "broaderId": "task.speech-separation",
+      "definition": "依据目标说话人条件提取其语音。",
+      "scopeNote": "与盲分离的目标指定条件不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-source-separation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频声源分离",
+        "en": "Audio-visual source separation"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-separation",
+      "definition": "利用视觉证据分离对应的声音源。",
+      "scopeNote": "不限定声源为语音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-speech-separation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频语音分离",
+        "en": "Audio-visual speech separation"
+      },
+      "aliases": [],
+      "broaderId": "task.av-source-separation",
+      "definition": "利用视觉条件分离语音源。",
+      "scopeNote": "单父级取视听声源分离；语音专题导航不再创建第二语义父级。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-separation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐源分离",
+        "en": "Music source separation"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-separation",
+      "definition": "从混合音乐分离声部或乐器源。",
+      "scopeNote": "乐器分类不属于波形分离。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-restoration",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频修复",
+        "en": "Audio restoration"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "恢复受缺失、失真或损伤影响的音频。",
+      "scopeNote": "需要恢复目标而非任意编码器变换。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.packet-loss",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "丢包修复",
+        "en": "Packet-loss concealment"
+      },
+      "aliases": [
+        "PLC"
+      ],
+      "broaderId": "task.audio-restoration",
+      "definition": "重建传输丢失的音频片段。",
+      "scopeNote": "与提升采样率或去噪分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.declipping",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "去削波",
+        "en": "Audio declipping"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-restoration",
+      "definition": "恢复削波造成失真的音频。",
+      "scopeNote": "不等于一般动态范围压缩。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-super-resolution",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频超分辨",
+        "en": "Audio super-resolution"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-restoration",
+      "definition": "从带限的低分辨率音频恢复高分辨率信息；核心假设是“带限即缺失”，即缺失的高频或细粒度内容可由可观测部分推断重建。",
+      "scopeNote": "宽标签需按原文区分频带、时间等目标，普通上采样不构成证据；无“带限=缺失”假设的插值放大不属于本任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-super-resolution",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音超分",
+        "en": "Speech super-resolution"
+      },
+      "aliases": [
+        "语音超分辨"
+      ],
+      "broaderId": "task.audio-super-resolution",
+      "definition": "恢复低分辨语音中的高分辨信息。",
+      "scopeNote": "不把全部历史超分自动解释为频带扩展。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-super-resolution",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐超分辨",
+        "en": "Music super-resolution"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-super-resolution",
+      "definition": "恢复音乐信号的高分辨信息。",
+      "scopeNote": "需明示被恢复的分辨率与评测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-classification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频分类",
+        "en": "Audio classification"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "为音频片段分配类别。",
+      "scopeNote": "不自动包含事件起止时间定位。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.scene-classification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声学场景分类",
+        "en": "Acoustic scene classification"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-classification",
+      "definition": "根据声音判别场景类别。",
+      "scopeNote": "场景类别不等于独立声音事件类别。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.event-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频事件检测",
+        "en": "Sound event detection"
+      },
+      "aliases": [
+        "声音事件检测",
+        "SED"
+      ],
+      "broaderId": null,
+      "definition": "识别声音事件并定位其发生时段。",
+      "scopeNote": "与仅片段级标签的音频分类不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.anomaly-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "异常声音检测",
+        "en": "Anomalous sound detection"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "检测偏离正常声学模式的声音。",
+      "scopeNote": "异常定义应来自任务设置而非主观噪声偏好。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-understanding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频理解",
+        "en": "Audio understanding"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "解释音频中的内容、关系或语义。",
+      "scopeNote": "宽任务仅供真正综合理解研究或显式待细分记录，不用于容纳所有无法明确分类的任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-question-answering",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频问答",
+        "en": "Audio question answering"
+      },
+      "aliases": [
+        "AQA"
+      ],
+      "broaderId": "task.audio-understanding",
+      "definition": "基于音频证据回答问题。",
+      "scopeNote": "文本问题必须依赖音频才能回答。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-captioning",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频字幕生成",
+        "en": "Audio captioning"
+      },
+      "aliases": [
+        "音频描述生成"
+      ],
+      "broaderId": "task.audio-understanding",
+      "definition": "用自然语言描述声音内容。",
+      "scopeNote": "不是逐字转写语音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频检索",
+        "en": "Audio retrieval"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "根据查询检索相关音频。",
+      "scopeNote": "查询模态与检索目标需按原文注明。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频生成",
+        "en": "Audio generation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "生成通用声音信号。",
+      "scopeNote": "宽任务可用于统一多种声音生成，不能仅因输出是波形而重复覆盖具体子任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐生成",
+        "en": "Music generation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "生成音乐内容。",
+      "scopeNote": "音频与符号音乐的输入输出表示另行注明。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.symbolic-music",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "符号音乐生成",
+        "en": "Symbolic music generation"
+      },
+      "aliases": [],
+      "broaderId": "task.music-generation",
+      "definition": "生成音符、乐谱或其他符号音乐序列。",
+      "scopeNote": "不等同生成音乐波形。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.singing",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "歌唱生成",
+        "en": "Singing synthesis"
+      },
+      "aliases": [
+        "歌唱合成",
+        "歌唱语音合成"
+      ],
+      "broaderId": "task.music-generation",
+      "definition": "生成具有旋律和歌词等条件的歌唱。",
+      "scopeNote": "不能把全部说话语音合成视为歌唱。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-understanding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐分析",
+        "en": "Music analysis"
+      },
+      "aliases": [
+        "音乐理解",
+        "Music understanding"
+      ],
+      "broaderId": null,
+      "definition": "对音乐音频或符号乐谱的内容、结构、节奏、和声与语义要素进行分析的任务总称，涵盖转录、音高、节拍、和弦、结构等具体分析子任务。",
+      "scopeNote": "具体转录、和弦等任务优先使用对应叶子；本节点只用于真正的多项综合音乐分析研究。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.transcription",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐转录",
+        "en": "Music transcription"
+      },
+      "aliases": [],
+      "broaderId": "task.music-understanding",
+      "definition": "将音乐音频转换为音符等符号表示。",
+      "scopeNote": "不包括语音转写。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.pitch-melody",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音高与旋律提取",
+        "en": "Pitch and melody estimation"
+      },
+      "aliases": [],
+      "broaderId": "task.music-understanding",
+      "definition": "估计音乐的音高轨迹或主旋律。",
+      "scopeNote": "多音高、主旋律等协议仍须保留，不当同义混为单项。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.beat-tracking",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "节拍跟踪",
+        "en": "Beat tracking"
+      },
+      "aliases": [],
+      "broaderId": "task.music-understanding",
+      "definition": "估计音乐节拍在时间轴上的位置。",
+      "scopeNote": "速度估计不一定提供节拍位置。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.chord-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "和弦识别",
+        "en": "Chord recognition"
+      },
+      "aliases": [],
+      "broaderId": "task.music-understanding",
+      "definition": "识别音乐和弦标签及其时间变化。",
+      "scopeNote": "不等同生成符合和声规则的音乐。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐检索",
+        "en": "Music retrieval"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "检索相关音乐项目或片段。",
+      "scopeNote": "音乐信息检索也可指更广学科，不将其裸标签当本任务同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-text-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐文本检索",
+        "en": "Text-music retrieval"
+      },
+      "aliases": [],
+      "broaderId": "task.music-retrieval",
+      "definition": "在音乐与文本之间进行检索。",
+      "scopeNote": "不等于依据用户历史作推荐。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-recommendation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐推荐",
+        "en": "Music recommendation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "为用户或情境推荐音乐。",
+      "scopeNote": "一般相似片段搜索不自动属于个性推荐。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.localization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声源定位",
+        "en": "Sound source localization"
+      },
+      "aliases": [
+        "SSL"
+      ],
+      "broaderId": null,
+      "definition": "估计声源的空间位置或方向。",
+      "scopeNote": "与只检测声音事件不同。别名 SSL 与自监督学习（self-supervised learning）的常用缩写歧义：此处保留 SSL 以召回历史“声源定位”标签，检索须结合分面消歧（task.localization vs method）；method.self-supervised 的 \"SSL learning\" 别名已在 v1.1 删除，避免跨分面误命中。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.source-tracking",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声源追踪",
+        "en": "Sound source tracking"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "估计声源位置随时间的轨迹。",
+      "scopeNote": "定位单个静态方向不等于追踪。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.seld",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "联合声音事件检测定位",
+        "en": "Sound event localization and detection"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "联合识别声音事件及其空间位置。",
+      "scopeNote": "输出同时包含事件与空间信息，不能只凭多通道输入推断。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sound-field",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声场重建",
+        "en": "Sound field reconstruction"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "从观测重建空间声场。",
+      "scopeNote": "不等于生成任意双声道音频。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.rir-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "房间脉冲响应估计",
+        "en": "Room impulse response estimation"
+      },
+      "aliases": [
+        "RIR估计"
+      ],
+      "broaderId": null,
+      "definition": "估计声学传播系统的房间脉冲响应。",
+      "scopeNote": "RIR编码压缩与估计不是同一个目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.spatial-rendering",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "空间音频渲染",
+        "en": "Spatial audio rendering"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "生成或变换具有目标空间听感的音频。",
+      "scopeNote": "空间音频是更广主题，不能无条件当渲染任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.active-noise-control",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "主动降噪",
+        "en": "Active noise control"
+      },
+      "aliases": [
+        "ANC"
+      ],
+      "broaderId": null,
+      "definition": "通过次级声源控制物理声场以降低噪声。",
+      "scopeNote": "与录音信号离线去噪不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-coding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频编码",
+        "en": "Audio coding"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "压缩或表示音频以支持传输、存储或重建。",
+      "scopeNote": "任意网络encoder不自动构成编码任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-coding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音编码",
+        "en": "Speech coding"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-coding",
+      "definition": "编码压缩语音信号。",
+      "scopeNote": "以保真或码率为任务，不是仅借用codec token。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-quality",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音质量评估",
+        "en": "Speech quality assessment"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "预测或评价语音的感知质量。",
+      "scopeNote": "词错率不等于主观语音质量。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-quality",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频质量评估",
+        "en": "Audio quality assessment"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "评价通用音频的感知质量。",
+      "scopeNote": "音乐或语音专门协议不能任意互换。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.intelligibility",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音可懂度评估",
+        "en": "Speech intelligibility assessment"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "评价语音内容被听者理解的程度。",
+      "scopeNote": "与自然度、音色或总体质量分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.emotion-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音情感识别",
+        "en": "Speech emotion recognition"
+      },
+      "aliases": [
+        "SER"
+      ],
+      "broaderId": null,
+      "definition": "从语音识别情绪或情感状态。",
+      "scopeNote": "不把任意心理健康指标等同情绪标签。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-attributes",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音属性识别",
+        "en": "Speech attribute recognition"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "识别语音中的非转写属性。",
+      "scopeNote": "宽属性任务不自动代表身份、病理或情绪的每一子项。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-spoofing",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音伪造检测",
+        "en": "Speech spoofing detection"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-forgery",
+      "definition": "检测伪造、合成或转换等语音欺骗。",
+      "scopeNote": "不将所有身份验证问题都称伪造检测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-forgery",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频伪造检测",
+        "en": "Audio forgery detection"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "检测音频是否经伪造或恶意篡改。",
+      "scopeNote": "深度伪造是特定生成方式，不是所有伪造的同义词。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-deepfake",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频深度伪造检测",
+        "en": "Audio deepfake detection"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-forgery",
+      "definition": "检测学习型生成模型造成的音频伪造。",
+      "scopeNote": "不包括所有传统剪辑篡改。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.watermarking",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频水印",
+        "en": "Audio watermarking"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "嵌入或检测附加于音频的水印信息。",
+      "scopeNote": "不等于从固有信号计算指纹。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.fingerprinting",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频指纹",
+        "en": "Audio fingerprinting"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "从音频计算可用于身份匹配的指纹。",
+      "scopeNote": "不需要向声音嵌入水印。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.anonymization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "说话人匿名化",
+        "en": "Speaker anonymization"
+      },
+      "aliases": [
+        "语音匿名化"
+      ],
+      "broaderId": null,
+      "definition": "降低语音中的说话人身份可识别性。",
+      "scopeNote": "不保证所有内容或敏感属性都被隐藏。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.neural-speech-decoding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "言语神经解码",
+        "en": "Neural speech decoding"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "从神经活动解码言语内容或相关表示。",
+      "scopeNote": "脑信号输入不是声学ASR，哪怕输出为词。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.silent-speech",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "静默语音接口",
+        "en": "Silent speech interfaces"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "从非声学发声相关信号恢复言语信息。",
+      "scopeNote": "普通低音量声学语音识别并不等同静默接口。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.pathological-speech",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "病理语音评估",
+        "en": "Pathological speech assessment"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "根据言语证据评估病理相关状态或功能。",
+      "scopeNote": "仅测试病理数据不必然使其他任务变为诊断。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-understanding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频理解",
+        "en": "Audio-visual understanding"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "综合音频与视觉证据解释内容。",
+      "scopeNote": "不因模型能接收两种输入就假定本文研究综合理解。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频生成",
+        "en": "Audio-visual generation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "生成协调的音频与视觉内容。",
+      "scopeNote": "不是给已有视频独立附上一段无关声音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-question-answering",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频问答",
+        "en": "Audio-visual question answering"
+      },
+      "aliases": [],
+      "broaderId": "task.av-understanding",
+      "definition": "结合音频与视觉证据回答问题。",
+      "scopeNote": "纯视频问答不自动属于视听问答。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-to-audio",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视频到声音生成",
+        "en": "Video-to-audio generation"
+      },
+      "aliases": [],
+      "broaderId": "task.audio-generation",
+      "definition": "以视频为条件生成对应声音。",
+      "scopeNote": "不将所有视听联合生成压缩为单向任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-interaction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频交互",
+        "en": "Audio interaction"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "使用声音信号进行交互式系统操作。",
+      "scopeNote": "宽任务不限于口语对话，但须有交互行为。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-interaction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频交互",
+        "en": "Audio-visual interaction"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过视听信号进行交互。",
+      "scopeNote": "单向视听识别或播放不自动属于交互。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.generative",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "生成模型",
+        "en": "Generative modeling"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "建立数据生成分布并生成样本。",
+      "scopeNote": "选择已审具体下位方法时不重复存本祖先。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.end-to-end-learning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "端到端学习",
+        "en": "End-to-end learning"
+      },
+      "aliases": [
+        "端到端训练",
+        "端到端联合学习",
+        "E2E learning"
+      ],
+      "broaderId": null,
+      "definition": "以输入到目标输出的统一可微目标联合学习原本可由多个独立模块完成的映射。",
+      "scopeNote": "只在端到端联合优化本身是主要方法时使用；仅描述系统输入输出直连时使用setting.end-to-end，且不能替代Transformer等具体架构。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.autoregressive",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "自回归模型",
+        "en": "Autoregressive modeling"
+      },
+      "aliases": [],
+      "broaderId": "method.generative",
+      "definition": "按条件依赖顺序生成或建模序列。",
+      "scopeNote": "不把所有逐步执行的系统称为自回归。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.diffusion",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "扩散模型",
+        "en": "Diffusion modeling"
+      },
+      "aliases": [],
+      "broaderId": "method.generative",
+      "definition": "通过噪声扰动及逆过程建立生成模型。",
+      "scopeNote": "与流匹配不作自动同义合并。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.flow-matching",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "流匹配",
+        "en": "Flow matching"
+      },
+      "aliases": [],
+      "broaderId": "method.generative",
+      "definition": "学习连接分布的连续流或速度场。",
+      "scopeNote": "流匹配与扩散有联系但目标不完全相同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.gan",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "生成对抗网络",
+        "en": "Generative adversarial networks"
+      },
+      "aliases": [
+        "GAN"
+      ],
+      "broaderId": "method.generative",
+      "definition": "通过生成器与判别器的对抗目标学习生成。",
+      "scopeNote": "普通对抗鲁棒训练不等于GAN。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.vae",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "变分自编码器",
+        "en": "Variational autoencoders"
+      },
+      "aliases": [
+        "VAE"
+      ],
+      "broaderId": "method.generative",
+      "definition": "利用变分推断学习潜变量生成模型。",
+      "scopeNote": "不是所有autoencoder都有变分目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.transformer",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "Transformer",
+        "en": "Transformer"
+      },
+      "aliases": [
+        "自注意力架构"
+      ],
+      "broaderId": null,
+      "definition": "使用基于注意力的Transformer架构。",
+      "scopeNote": "仅使用已有基座不必将架构作为贡献方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.cnn",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "CNN",
+        "en": "Convolutional neural networks"
+      },
+      "aliases": [
+        "卷积神经网络"
+      ],
+      "broaderId": null,
+      "definition": "使用卷积结构提取或建模特征。",
+      "scopeNote": "卷积只是组件时按研究贡献决定是否记录。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.rnn",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "RNN",
+        "en": "Recurrent neural networks"
+      },
+      "aliases": [
+        "循环神经网络"
+      ],
+      "broaderId": null,
+      "definition": "使用循环状态建模序列。",
+      "scopeNote": "不与任意状态空间模型作同义合并。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.gnn",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "图神经网络",
+        "en": "Graph neural networks"
+      },
+      "aliases": [
+        "GNN"
+      ],
+      "broaderId": null,
+      "definition": "通过图结构上的神经计算建模关系。",
+      "scopeNote": "图可视化不是图神经网络。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.capsule",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "胶囊网络",
+        "en": "Capsule networks"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "使用胶囊表示及其路由机制。",
+      "scopeNote": "不是任意分组向量表示。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.state-space",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "状态空间模型",
+        "en": "State-space models"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过状态及状态转移建模动态序列。",
+      "scopeNote": "Mamba为具体模型族，不是全部状态空间模型的同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.moe",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "混合专家模型",
+        "en": "Mixture of experts"
+      },
+      "aliases": [
+        "混合专家",
+        "MoE"
+      ],
+      "broaderId": null,
+      "definition": "由路由或门控组合多个专家模型。",
+      "scopeNote": "一般模型集成不必有输入依赖路由。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.vector-quantization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "向量量化",
+        "en": "Vector quantization"
+      },
+      "aliases": [
+        "VQ"
+      ],
+      "broaderId": null,
+      "definition": "将向量映射到离散码本表示。",
+      "scopeNote": "与压低模型权重数值精度的模型量化不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.self-supervised",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "自监督学习",
+        "en": "Self-supervised learning"
+      },
+      "aliases": [
+        "自监督"
+      ],
+      "broaderId": null,
+      "definition": "利用输入数据构造监督信号学习表示。",
+      "scopeNote": "不能将其全部并入无监督学习。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.unsupervised",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "无监督学习",
+        "en": "Unsupervised learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "不依赖外部标注目标学习数据结构。",
+      "scopeNote": "自监督任务构造属于不同标注描述，不自动映射。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.semi-supervised",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "半监督学习",
+        "en": "Semi-supervised learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "结合有标签与无标签数据进行学习。",
+      "scopeNote": "低资源并不充分证明半监督。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.weak-supervised",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "弱监督学习",
+        "en": "Weakly supervised learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "利用不完整、不精确或噪声监督。",
+      "scopeNote": "监督弱不等于无监督。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.contrastive",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "对比学习",
+        "en": "Contrastive learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过样本间相似与差异关系学习表示。",
+      "scopeNote": "普通分类损失不自动属于对比目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.reinforcement",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "强化学习",
+        "en": "Reinforcement learning"
+      },
+      "aliases": [
+        "RL"
+      ],
+      "broaderId": null,
+      "definition": "通过奖励信号优化决策或策略。",
+      "scopeNote": "偏好数据微调不总是强化学习。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.preference-optimization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "偏好优化",
+        "en": "Preference optimization"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "根据偏好比较优化模型行为。",
+      "scopeNote": "不把所有后训练阶段都称偏好优化。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.distillation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "知识蒸馏",
+        "en": "Knowledge distillation"
+      },
+      "aliases": [
+        "KD"
+      ],
+      "broaderId": null,
+      "definition": "利用教师模型知识训练学生模型。",
+      "scopeNote": "不将参数高效微调或普通迁移学习一律叫蒸馏。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.transfer",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "迁移学习",
+        "en": "Transfer learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "将已有任务或域学习到的知识迁往新任务或域。",
+      "scopeNote": "不是数据增强的别名。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.domain-adaptation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "领域适应",
+        "en": "Domain adaptation"
+      },
+      "aliases": [],
+      "broaderId": "method.transfer",
+      "definition": "适配源域与目标域间的数据分布差异。",
+      "scopeNote": "仅跨域评测不意味着执行了适应。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.test-time-adaptation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "测试时自适应",
+        "en": "Test-time adaptation"
+      },
+      "aliases": [
+        "测试时适应",
+        "TTA"
+      ],
+      "broaderId": "method.domain-adaptation",
+      "definition": "利用测试阶段信息更新模型或适应状态。",
+      "scopeNote": "仅增加推理预算、缓存或解码搜索而不更新模型状态的不属本类。更新须在测试阶段（常见为无标签测试流）缩小与训练分布的差异，故保留为领域适应的下位；与需要目标域标注的适配区分，普通跨域评测也不自动归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.meta-learning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "元学习",
+        "en": "Meta-learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "从多个任务学习可快速适配的学习机制。",
+      "scopeNote": "不是所有多任务学习都具备元目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.continual",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "持续学习",
+        "en": "Continual learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "在持续到达的任务或数据中学习并控制遗忘。",
+      "scopeNote": "单次追加训练不一定研究持续学习问题。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.curriculum",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "课程学习",
+        "en": "Curriculum learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "按设计的难度或次序安排学习样本或任务。",
+      "scopeNote": "普通随机批次不构成课程。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.adversarial-training",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "对抗训练",
+        "en": "Adversarial training"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "使用对抗目标或样本训练模型。",
+      "scopeNote": "对抗样本评测本身不等于训练方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.multitask",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "多任务学习",
+        "en": "Multi-task learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "联合优化多个任务以共享知识。",
+      "scopeNote": "多数据集同任务评测不自动属于多任务学习。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.compression",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "模型压缩",
+        "en": "Model compression"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "减少模型表示或执行的资源需求。",
+      "scopeNote": "有具体压缩子方法时避免重复存祖先。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.pruning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "模型剪枝",
+        "en": "Model pruning"
+      },
+      "aliases": [],
+      "broaderId": "method.compression",
+      "definition": "移除模型参数、结构或计算单元以压缩。",
+      "scopeNote": "与改变权重位宽的量化不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.quantization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "模型量化",
+        "en": "Model quantization"
+      },
+      "aliases": [],
+      "broaderId": "method.compression",
+      "definition": "降低模型权重或激活的数值表示精度。",
+      "scopeNote": "不等于音频信号码本的向量量化。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.model-combination",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "模型融合",
+        "en": "Model combination"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "组合多个模型的参数、表示或预测形成系统。",
+      "scopeNote": "旧宽标签不能自动选成权重合并或预测集成的某个叶子。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.model-ensemble",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "模型集成",
+        "en": "Prediction ensembling"
+      },
+      "aliases": [],
+      "broaderId": "method.model-combination",
+      "definition": "组合多个模型的预测输出。",
+      "scopeNote": "只指推理期的预测组合（投票、加权、混合器），不含训练期学习组合机制的研究，也不含权重/参数合并（那属于上位模型融合的其他形态）。与集成学习互斥：贡献核心是推理期预测组合策略时选本节点。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.ensemble-learning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "集成学习",
+        "en": "Ensemble learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "学习或构建多个学习器的联合预测机制。",
+      "scopeNote": "只指训练期构建多个学习器并学习其联合预测机制（bagging、boosting、stacking 的训练过程与多样性构造），不含推理期才引入的预测组合，也不含权重合并。与模型集成互斥：贡献核心是学习机制时选本节点；两者无法判定核心时用上位模型融合。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.peft",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "参数高效微调",
+        "en": "Parameter-efficient fine-tuning"
+      },
+      "aliases": [
+        "PEFT"
+      ],
+      "broaderId": null,
+      "definition": "仅优化少量参数或低成本增量来适配模型。",
+      "scopeNote": "不能无依据选成LoRA或Adapter。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.lora",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "LoRA",
+        "en": "Low-rank adaptation"
+      },
+      "aliases": [
+        "低秩适配"
+      ],
+      "broaderId": "method.peft",
+      "definition": "以低秩增量进行模型适配。",
+      "scopeNote": "低秩压缩而无适配目标不自动是低秩适配；本节点必须引入可训练低秩增量并以适配目标更新，只做参数/激活低秩近似以省资源的归低秩压缩，两者互斥。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.adapter",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "Adapter",
+        "en": "Adapter tuning"
+      },
+      "aliases": [
+        "适配器调优"
+      ],
+      "broaderId": "method.peft",
+      "definition": "通过可训练适配模块进行模型适配。",
+      "scopeNote": "不要映射成LoRA。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.prefix-tuning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "前缀微调",
+        "en": "Prefix tuning"
+      },
+      "aliases": [],
+      "broaderId": "method.peft",
+      "definition": "通过优化前缀表示适配模型。",
+      "scopeNote": "普通手写输入前缀不是参数训练。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.prompt-learning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "提示学习",
+        "en": "Prompt learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "学习或优化提示以控制模型。",
+      "scopeNote": "固定人工提示不能自动称学习方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.instruction-tuning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "指令微调",
+        "en": "Instruction tuning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "使用指令与响应样本进行微调。",
+      "scopeNote": "与所有监督微调不完全同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.sft",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "SFT",
+        "en": "Supervised fine-tuning"
+      },
+      "aliases": [
+        "监督微调"
+      ],
+      "broaderId": null,
+      "definition": "使用监督目标对已有模型微调。",
+      "scopeNote": "不能无条件别名成指令微调。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.federated",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "联邦学习",
+        "en": "Federated learning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "在分散数据持有者间协调学习。",
+      "scopeNote": "分布式并行训练不必保护数据本地持有。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.augmentation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "数据增强",
+        "en": "Data augmentation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过变换或生成数据扩展训练条件。",
+      "scopeNote": "数据增强不等于预训练。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.retrieval-augmented",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "检索增强",
+        "en": "Retrieval augmentation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过检索外部证据增强模型计算。",
+      "scopeNote": "并非所有音频检索论文都提出检索增强系统。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.human-evaluation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "人类参与评测",
+        "en": "Human-participant evaluation"
+      },
+      "aliases": [
+        "人类评测",
+        "Human evaluation"
+      ],
+      "broaderId": null,
+      "definition": "由人类参与者直接提供判断、行为或感知数据来评估研究对象。",
+      "scopeNote": "仅有人类标注训练数据不等于人类参与评测；更具体的主观评测或用户研究应优先选其后代。心理测量测量的是人的特质、心理声学实验测量的是感知机制，二者目标类型不同，v1.1 起移出本分支独立成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.subjective-evaluation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "主观评测",
+        "en": "Subjective evaluation"
+      },
+      "aliases": [
+        "主观听测",
+        "Subjective listening test"
+      ],
+      "broaderId": "method.human-evaluation",
+      "definition": "通过参与者对质量、自然度、可懂度或偏好的主观评分比较系统或刺激。",
+      "scopeNote": "与真实交互中的用户研究分开；有明确声学感知操控时优先心理声学实验（v1.1 起为独立方法根节点，不再作为本节点后代）。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.user-study",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "用户研究",
+        "en": "User study"
+      },
+      "aliases": [
+        "用户实验",
+        "User evaluation"
+      ],
+      "broaderId": "method.human-evaluation",
+      "definition": "在使用或交互情境中研究目标用户的行为、体验、可用性或任务表现。",
+      "scopeNote": "单次音质打分属于主观评测；没有真实用户任务或交互协议时不要使用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.psychometrics",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "心理测量",
+        "en": "Psychometrics"
+      },
+      "aliases": [
+        "心理计量",
+        "Psychometric analysis"
+      ],
+      "broaderId": null,
+      "definition": "使用量表、潜变量模型或信效度分析测量人的能力、态度或感知特质。",
+      "scopeNote": "普通平均主观分不自动构成心理测量，必须有测量模型、量表性质或信效度分析。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.crowdsourced-evaluation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "众包评测",
+        "en": "Crowdsourced evaluation"
+      },
+      "aliases": [
+        "众包评估",
+        "众包测试",
+        "Crowdsourced testing"
+      ],
+      "broaderId": "method.subjective-evaluation",
+      "definition": "通过分布式受试者或标注者收集主观判断，并据此形成评测结果。",
+      "scopeNote": "仅在众包受试者组织与质量控制构成核心评测方法时使用；普通数据众包、一般人工听测或仅使用众包数据不属于本方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.psychoacoustic-experiment",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "心理声学实验",
+        "en": "Psychoacoustic experiment"
+      },
+      "aliases": [
+        "心理声学听测",
+        "Psychoacoustic listening experiment"
+      ],
+      "broaderId": null,
+      "definition": "系统操控声学刺激并测量听者感知或辨别反应，以检验听觉机制或感知阈值。",
+      "scopeNote": "仅比较系统输出偏好时使用主观评测；必须存在受控刺激、感知变量或阈值设计。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.dataset-curation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "数据集构建",
+        "en": "Dataset curation"
+      },
+      "aliases": [
+        "数据整理",
+        "语料构建",
+        "Corpus curation"
+      ],
+      "broaderId": null,
+      "definition": "按明确的采集、筛选、清理、组织与质量控制流程构建研究数据集。",
+      "scopeNote": "仅使用现有数据集不属于本方法；若核心贡献是标注协议与质量，应优先数据标注。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.data-annotation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "数据标注",
+        "en": "Data annotation"
+      },
+      "aliases": [
+        "语料标注",
+        "Annotation protocol"
+      ],
+      "broaderId": null,
+      "definition": "以明确指南、标注者组织、质量控制和一致性分析为数据赋予标签或转录。",
+      "scopeNote": "自动生成伪标签不等同人工数据标注；若论文只清洗数据，应使用数据清洗。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.evaluation-protocol",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "评测协议",
+        "en": "Evaluation protocol"
+      },
+      "aliases": [
+        "评估协议",
+        "Evaluation methodology"
+      ],
+      "broaderId": null,
+      "definition": "规定数据划分、指标、比较条件与统计程序，使不同系统获得可重复的评测。",
+      "scopeNote": "普通按既有指标报告结果不构成新评测协议；设计可复用 benchmark 时优先基准设计。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.benchmark-design",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "基准设计",
+        "en": "Benchmark design"
+      },
+      "aliases": [
+        "基准构建",
+        "Benchmark construction"
+      ],
+      "broaderId": "method.evaluation-protocol",
+      "definition": "联合设计任务、数据划分、指标、基线和比较规则，形成可复用研究基准。",
+      "scopeNote": "在已有评测基准上做实验，不等于设计新基准；artifact.benchmark 表示论文贡献的评测任务、协议或基准集合，本概念表示设计方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.literature-review",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "文献综述方法",
+        "en": "Literature review method"
+      },
+      "aliases": [
+        "文献回顾",
+        "Literature review"
+      ],
+      "broaderId": null,
+      "definition": "通过定义范围、检索、筛选和综合规则整理已有研究证据。",
+      "scopeNote": "引言中的相关工作不是综述方法；具有系统检索或计量分析时优先更具体后代。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.systematic-review",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "系统综述",
+        "en": "Systematic review"
+      },
+      "aliases": [
+        "系统性综述",
+        "Systematic literature review"
+      ],
+      "broaderId": "method.literature-review",
+      "definition": "使用预先规定且可重放的检索、纳排和证据综合流程完成综述。",
+      "scopeNote": "没有明确数据库、检索式或纳排标准的叙述性综述不属于系统综述。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.bibliometric-analysis",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "文献计量分析",
+        "en": "Bibliometric analysis"
+      },
+      "aliases": [
+        "科学计量分析",
+        "Scientometric analysis"
+      ],
+      "broaderId": "method.literature-review",
+      "definition": "利用引用、作者、主题或发表关系的定量统计刻画文献结构与演化。",
+      "scopeNote": "仅统计论文数量不足以构成文献计量分析，需有明确计量变量和分析过程。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.formal-analysis",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "形式化分析",
+        "en": "Formal analysis"
+      },
+      "aliases": [
+        "形式化证明",
+        "Formal proof"
+      ],
+      "broaderId": null,
+      "definition": "以明确定义、假设、定理和证明推导性质、界限或正确性。",
+      "scopeNote": "理论动机或公式描述不等于形式化分析，必须有可检查的推导或证明链。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.statistical-analysis",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "统计分析",
+        "en": "Statistical analysis"
+      },
+      "aliases": [
+        "统计建模",
+        "Statistical modelling"
+      ],
+      "broaderId": null,
+      "definition": "使用统计估计、假设检验、不确定性量化或统计模型分析数据与效应。",
+      "scopeNote": "只报告均值或单个指标不构成统计分析；需有明确统计问题与方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.multimodal-learning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "多模态学习",
+        "en": "Multimodal learning"
+      },
+      "aliases": [
+        "跨模态学习",
+        "Multimodal representation learning"
+      ],
+      "broaderId": null,
+      "definition": "联合学习两种或更多模态的表示、对齐、融合或生成关系。",
+      "scopeNote": "输入含多模态不自动构成核心方法；model_family.multimodal 描述模型家族，不能替代本学习机制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.attention",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "注意力机制",
+        "en": "Attention mechanism"
+      },
+      "aliases": [
+        "注意力",
+        "Attention"
+      ],
+      "broaderId": null,
+      "definition": "根据查询与上下文相关性动态加权信息交互或聚合。",
+      "scopeNote": "Transformer 包含注意力但二者不是同义词；只有注意力设计本身是核心方法时使用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.regularization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "正则化",
+        "en": "Regularization"
+      },
+      "aliases": [
+        "正则化训练",
+        "Regularized training"
+      ],
+      "broaderId": null,
+      "definition": "通过损失约束、参数约束或随机扰动限制模型复杂度并改善泛化。",
+      "scopeNote": "常规 weight decay 不是论文核心方法时不应作为主方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.conformer",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "Conformer",
+        "en": "Conformer"
+      },
+      "aliases": [
+        "Conformer架构",
+        "Conformer architecture",
+        "卷积增强自注意力架构"
+      ],
+      "broaderId": null,
+      "definition": "结合自注意力与卷积模块以同时建模长程和局部序列结构的架构。",
+      "scopeNote": "仅把 Conformer 当常规 backbone 且贡献不在架构时，应选择论文真正提出的方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.ctc",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "CTC",
+        "en": "Connectionist temporal classification"
+      },
+      "aliases": [
+        "连接时序分类",
+        "连接主义时序分类"
+      ],
+      "broaderId": null,
+      "definition": "通过包含 blank 的路径边缘化，在无帧级对齐条件下训练序列映射。",
+      "scopeNote": "仅使用常规 CTC 损失不一定构成主方法；需与注意力解码或转导器目标区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.signal-processing",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "信号处理",
+        "en": "Signal processing"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过信号的结构与变换进行分析或估计。",
+      "scopeNote": "宽方法不是所有音频论文必贴的背景领域词。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.beamforming",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "波束成形",
+        "en": "Beamforming"
+      },
+      "aliases": [
+        "波束形成"
+      ],
+      "broaderId": null,
+      "definition": "按空间响应组合阵列通道信号。",
+      "scopeNote": "多通道输入本身不证明使用波束形成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.time-frequency",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "时频分析",
+        "en": "Time-frequency analysis"
+      },
+      "aliases": [],
+      "broaderId": "method.signal-processing",
+      "definition": "联合分析信号随时间变化的频率结构。",
+      "scopeNote": "仅绘制频谱不必构成核心方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.adaptive-filtering",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "自适应滤波",
+        "en": "Adaptive filtering"
+      },
+      "aliases": [],
+      "broaderId": "method.signal-processing",
+      "definition": "通过在线更新滤波参数估计或控制信号。",
+      "scopeNote": "不是一般神经网络领域适应。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.multilingual",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "多语言",
+        "en": "Multilingual"
+      },
+      "aliases": [
+        "多语种"
+      ],
+      "broaderId": null,
+      "definition": "任务或模型明确涉及多个语言。",
+      "scopeNote": "与将知识迁移到另一语言的跨语言条件分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.cross-lingual",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "跨语言",
+        "en": "Cross-lingual"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "训练、迁移或应用跨越语言边界。",
+      "scopeNote": "多语言覆盖不自动证明跨语言迁移。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.zero-shot",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "零样本",
+        "en": "Zero-shot"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "相对明示任务、说话人、语言或域没有目标示例。",
+      "scopeNote": "必须注明零样本的参照对象。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.few-shot",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "少样本",
+        "en": "Few-shot"
+      },
+      "aliases": [
+        "少样本学习"
+      ],
+      "broaderId": null,
+      "definition": "在明示目标上只提供少量示例。",
+      "scopeNote": "与总数据不足的低资源条件不完全同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.low-resource",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "低资源",
+        "en": "Low-resource"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究目标场景中可用数据或标注受限。",
+      "scopeNote": "不是所有小模型实验都属于低资源。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.streaming",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "流式处理",
+        "en": "Streaming"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "无需等待完整序列即可增量消费或输出。",
+      "scopeNote": "可有有限前视，不等于严格因果或实测实时。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.real-time",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "实时处理",
+        "en": "Real-time processing"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "处理满足具体应用所需的时延或吞吐约束。",
+      "scopeNote": "标签不是测量证据；必须另存硬件、协议及claimed或measured状态。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.multichannel",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "多通道",
+        "en": "Multichannel"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "输入或系统使用多个音频通道。",
+      "scopeNote": "不能仅据此推断波束成形方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.microphone-array",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "麦克风阵列",
+        "en": "Microphone array"
+      },
+      "aliases": [
+        "阵列麦克风",
+        "多麦克风阵列"
+      ],
+      "broaderId": "setting.multichannel",
+      "definition": "输入由具有明确空间布局的多个麦克风共同采集。",
+      "scopeNote": "麦克风阵列是采集设置，不自动意味着使用波束成形或声源定位方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.single-channel",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "单通道",
+        "en": "Single-channel"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "音频输入或指定处理路径为单通道。",
+      "scopeNote": "不等于整个系统只有一种模态。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.online-inference",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "在线推理",
+        "en": "Online inference"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "推理时随输入到达持续处理。",
+      "scopeNote": "裸在线可能指训练更新，故不作为无条件别名。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.offline-inference",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "离线推理",
+        "en": "Offline inference"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "推理可使用完整已取得的输入。",
+      "scopeNote": "裸离线可能指无网络运行或训练方式，不自动映射。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.long-audio",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "长音频处理",
+        "en": "Long-audio processing"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "以长录音的依赖、计算或记忆问题为显式条件。",
+      "scopeNote": "不能仅凭输入有若干秒就推断长音频。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.pretraining",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "预训练",
+        "en": "Pretraining"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "在下游使用或适配前进行基础模型训练。",
+      "scopeNote": "训练阶段，不是数据增强的别名。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.post-training",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "后训练",
+        "en": "Post-training"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "对已有基础模型实施后续适配或行为优化。",
+      "scopeNote": "阶段不说明具体用了SFT、偏好优化或RL。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.end-to-end",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "端到端",
+        "en": "End-to-end"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "系统主要映射通过联合设计或训练连接输入与输出。",
+      "scopeNote": "设计属性，不代替具体模型方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.causal",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "严格因果",
+        "en": "Strictly causal"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "推理输出不使用未来输入。",
+      "scopeNote": "有有限前视的流式模型不能声称严格因果。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.on-device",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "端侧运行",
+        "en": "On-device execution"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "计算在目标终端设备本地执行。",
+      "scopeNote": "不依据小参数量推断已在终端实测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.speech",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "语音",
+        "en": "Speech"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "包含言语产生的声学信号。",
+      "scopeNote": "研究对象分面，不自动补为语音识别任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.music",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "音乐",
+        "en": "Music"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "具有音乐结构或音乐表演来源的信号。",
+      "scopeNote": "符号与波形表示需另记输入输出模态。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.environmental",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "环境声",
+        "en": "Environmental sound"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "非言语非音乐为主的场景声音。",
+      "scopeNote": "不直接将声音事件类别扩成任务词表。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.audiovisual",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "音视频",
+        "en": "Audio and video"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "同时涉及音频与视频信号。",
+      "scopeNote": "不等于多模态模型架构声明。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.neural",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "脑信号",
+        "en": "Neural signals"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "源自神经活动测量的信号。",
+      "scopeNote": "脑信号词输出不等于声学语音识别。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.biosignal",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "生理信号",
+        "en": "Physiological signals"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "来自生理活动测量的信号。",
+      "scopeNote": "需注明信号来源，不任意视作声音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.spatial-audio",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "空间音频信号",
+        "en": "Spatial audio signals"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "携带空间声场或空间听觉信息的音频表示。",
+      "scopeNote": "不与宽研究主题空间音频自动同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.industrial",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "工业应用",
+        "en": "Industrial applications"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向工业生产、检测或运行场景。",
+      "scopeNote": "仅引用一个工业数据集不必表示核心应用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.medical",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "医疗音频",
+        "en": "Medical audio"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向临床、健康或医学的声学应用。",
+      "scopeNote": "不因医疗背景愿景就声称临床有效性。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.speech-biomarker",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "语音生物标志物",
+        "en": "Speech biomarker"
+      },
+      "aliases": [
+        "声音生物标志物",
+        "Vocal biomarker"
+      ],
+      "broaderId": "application.medical",
+      "definition": "利用语音或声音特征辅助刻画健康、疾病或生理状态。",
+      "scopeNote": "相关性分析不等于临床诊断有效；只有语音标志物是核心医学应用时使用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.cockpit",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "智能座舱",
+        "en": "Intelligent vehicle cockpits"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向车辆座舱内的声音与交互系统。",
+      "scopeNote": "不包含所有车外交通声音分析。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.moderation",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "内容审核",
+        "en": "Content moderation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "筛查或管理不适当、违规或有害内容。",
+      "scopeNote": "内容审核不等同所有音频安全研究。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.games",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "游戏音频",
+        "en": "Game audio"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向游戏的声音生成、理解或交互。",
+      "scopeNote": "在游戏视频上测试不必形成游戏应用贡献。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.smart-speaker",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "智能音箱",
+        "en": "Smart speakers"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向智能音箱设备的声学与语音系统。",
+      "scopeNote": "普通语音交互系统不自动属于此设备场景。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.hearing-aids",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "助听器",
+        "en": "Hearing aids"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向助听设备或听觉辅助系统。",
+      "scopeNote": "不能仅凭降噪效果宣称临床助听收益。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.meeting",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "会议转录",
+        "en": "Meeting transcription"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向会议记录的言语处理应用。",
+      "scopeNote": "可包含ASR或分离标注，但应用不替代它们的任务身份。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.education",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "教育",
+        "en": "Education"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向教学、学习或教育评价场景。",
+      "scopeNote": "仅采用学生数据不自动属于教育干预。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.bioacoustics",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "生物声学监测",
+        "en": "Bioacoustic monitoring"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "使用生物声音开展生态或动物监测。",
+      "scopeNote": "动物声音产生机理研究也可为科学主题而非监测任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.robustness",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "鲁棒性",
+        "en": "Robustness"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究方法在扰动或分布变化下的稳定表现。",
+      "scopeNote": "需有相关论证或评测，不从引言愿景推断。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.adversarial-robustness",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "对抗鲁棒性",
+        "en": "Adversarial robustness"
+      },
+      "aliases": [
+        "对抗攻击鲁棒性",
+        "Robustness to adversarial attacks"
+      ],
+      "broaderId": "research_focus.robustness",
+      "definition": "研究模型面对蓄意构造扰动或攻击时的稳定性与防御能力。",
+      "scopeNote": "自然噪声、域偏移或普通数据增强不属于对抗鲁棒性。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.efficiency",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "高效推理",
+        "en": "Inference efficiency"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究推理资源、时延或吞吐效率。",
+      "scopeNote": "小模型或流式接口不自动证明实测高效。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.theory",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "理论分析",
+        "en": "Theoretical analysis"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "以理论性质、边界或形式化分析为研究重点。",
+      "scopeNote": "不能用于代替未明确分类的工程主任务，也不取代文档类型字段。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.evaluation",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "模型评估",
+        "en": "Model evaluation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究模型能力、错误或评价方法。",
+      "scopeNote": "做了实验不自动使评估成为本文研究重点。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.comparison",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "模型比较",
+        "en": "Model comparison"
+      },
+      "aliases": [],
+      "broaderId": "research_focus.evaluation",
+      "definition": "以不同模型或策略的可比分析为重点。",
+      "scopeNote": "必须保留比较协议，不只看数值排名。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.interpretability",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "可解释性",
+        "en": "Interpretability"
+      },
+      "aliases": [
+        "可解释AI",
+        "可解释性AI"
+      ],
+      "broaderId": null,
+      "definition": "研究模型行为或表示的可理解解释。",
+      "scopeNote": "可视化存在不等于解释可信。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.fairness",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "公平性",
+        "en": "Fairness"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究不同群体间的性能或待遇差异。",
+      "scopeNote": "不以总体准确率代替群体公平证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.privacy",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "隐私保护",
+        "en": "Privacy"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究敏感信息的暴露与保护。",
+      "scopeNote": "说话人匿名化不保证所有隐私属性安全。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.security",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "音频安全",
+        "en": "Audio security"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究音频系统的攻击面、滥用与防御。",
+      "scopeNote": "水印或鉴伪任务不自动覆盖全部系统安全。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "artifact.dataset",
+      "facet": "artifact",
+      "preferredLabel": {
+        "zh": "数据集",
+        "en": "Dataset"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "作为论文贡献提供数据集合。",
+      "scopeNote": "使用别人的数据集不等于贡献数据集。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "artifact.benchmark",
+      "facet": "artifact",
+      "preferredLabel": {
+        "zh": "基准测试",
+        "en": "Benchmark"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "作为贡献提供可重用评测任务、协议或基准集合。",
+      "scopeNote": "普通实验或排行榜引用不是新基准。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "artifact.software",
+      "facet": "artifact",
+      "preferredLabel": {
+        "zh": "软件工具",
+        "en": "Software tools"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "作为论文贡献提供可操作的软件或工具。",
+      "scopeNote": "存在工具标签不证明代码已可达或许可证开放。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "artifact.open-source-tool",
+      "facet": "artifact",
+      "preferredLabel": {
+        "zh": "开源工具",
+        "en": "Open-source tools"
+      },
+      "aliases": [],
+      "broaderId": "artifact.software",
+      "definition": "论文明确贡献按开源方式发布的软件工具。",
+      "scopeNote": "此标签不是可用性证明，实际开源声明仍需资源与许可证证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.data-cleaning",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "数据清洗",
+        "en": "Data cleaning"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "通过清理或校正流程改善数据质量。",
+      "scopeNote": "不得将预训练数据的普通存在误称清洗贡献。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.phonation",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "发声与构音",
+        "en": "Speech production and articulation"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究言语产生、发声器官与构音机制。",
+      "scopeNote": "可无工程输出任务，不应硬归ASR。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.phonetics",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "语音学与音系",
+        "en": "Phonetics and phonology"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究语音单位、音系结构及实现。",
+      "scopeNote": "不将研究语言现象都当识别系统开发。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.prosody",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "韵律",
+        "en": "Prosody"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究节奏、重音、语调等言语组织现象。",
+      "scopeNote": "描述性韵律研究不强求语音合成任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.speech-perception",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "言语感知",
+        "en": "Speech perception"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究听者如何感知和理解言语。",
+      "scopeNote": "与预测ASR性能不同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.auditory-cognition",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "听觉与音乐认知",
+        "en": "Auditory and music cognition"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究听觉和音乐加工的知觉认知机制。",
+      "scopeNote": "不能仅因使用音乐数据就推断认知研究。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.language-acquisition",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "语言习得",
+        "en": "Language acquisition"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究语言学习和第二语言发展机制。",
+      "scopeNote": "不把模型训练过程无条件当人类语言习得。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.speech-disorders",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "言语障碍",
+        "en": "Speech disorders"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究言语障碍的表现、机制或变化。",
+      "scopeNote": "分类诊断可另有任务，描述性研究可没有。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.sociophonetics",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "社会语音学",
+        "en": "Sociophonetics"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究语音变异与社会因素的关系。",
+      "scopeNote": "不等于所有多语言性能比较。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.spatial-audio",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "空间音频",
+        "en": "Spatial audio"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究空间声音的表示、感知与声场性质。",
+      "scopeNote": "宽主题不自动归为声源定位或空间渲染。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.music-information",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "音乐信息检索",
+        "en": "Music information retrieval"
+      },
+      "aliases": [
+        "MIR"
+      ],
+      "broaderId": null,
+      "definition": "研究音乐信息的计算分析、组织与访问。",
+      "scopeNote": "作为学科宽主题，不无条件别名为具体音乐检索任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.bioacoustics",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "生物声学",
+        "en": "Bioacoustics"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "研究生物声音的产生、传播与功能。",
+      "scopeNote": "监测系统可有应用任务，现象研究不强求工程任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.llm",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "大语言模型",
+        "en": "Large language models"
+      },
+      "aliases": [
+        "LLM",
+        "LLMs"
+      ],
+      "broaderId": null,
+      "definition": "以语言建模为基础的大规模模型族。",
+      "scopeNote": "不据此推断模型有音频输入能力。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.audio-language",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "音频大模型",
+        "en": "Large audio models"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "面向广泛音频能力的大规模模型族。",
+      "scopeNote": "语音专用、音频语言与统一音频能力不可仅凭名称全部互换。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.speech",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "语音大模型",
+        "en": "Large speech models"
+      },
+      "aliases": [
+        "语音LLM"
+      ],
+      "broaderId": null,
+      "definition": "面向广泛语音能力的大规模模型族。",
+      "scopeNote": "不与说话人小模型或全部多模态模型等同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.multimodal",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "多模态模型",
+        "en": "Multimodal models"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "联合处理多种信息模态的模型族。",
+      "scopeNote": "音视频为信号组合，不是该模型族的同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.unified-audio",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "统一音频模型",
+        "en": "Unified audio models"
+      },
+      "aliases": [],
+      "broaderId": null,
+      "definition": "在同一模型中统一多类音频任务或信号能力。",
+      "scopeNote": "只有单一任务的音频大模型不自动称统一。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-reasoning",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频推理",
+        "en": "Audio reasoning"
+      },
+      "aliases": [
+        "Auditory reasoning",
+        "听觉推理"
+      ],
+      "broaderId": "task.audio-understanding",
+      "definition": "基于音频证据进行多步推理以得出结论，包括计数、比较、状态变化与因果链推断。",
+      "scopeNote": "聚焦通用推理链；只回答声音之间关系、时序或因果的问题优先声音关系与推理。输入必须包含音频证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-synchronization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音画同步",
+        "en": "Audio-visual synchronization"
+      },
+      "aliases": [
+        "AV synchronization",
+        "音视频同步"
+      ],
+      "broaderId": "task.av-generation",
+      "definition": "使音频与视频在时间轴上保持一致，包括为视觉内容生成同步音频，以及估计或校正已有音画流的时间偏移。",
+      "scopeNote": "仅报告同步评测指标而无生成或校正贡献不属本任务；不涉及视频的纯音频生成不归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.bandwidth-extension",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "带宽扩展",
+        "en": "Bandwidth extension"
+      },
+      "aliases": [
+        "BWE",
+        "频带扩展"
+      ],
+      "broaderId": "task.audio-super-resolution",
+      "definition": "从带限的语音或音频中恢复缺失频带，重建截止频率以上的高频内容。",
+      "scopeNote": "输入必须是带限（频率维度缺失）信号且输出包含被补出的频带；普通重采样或仅提升采样率不属本任务，与语音超分的时间等其他维度目标区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.cover-song-identification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "翻唱与曲目识别",
+        "en": "Cover song identification"
+      },
+      "aliases": [
+        "Cover song detection",
+        "翻唱识别"
+      ],
+      "broaderId": "task.music-retrieval",
+      "definition": "在不同演唱或编曲版本之间识别归属同一旋律来源的曲目。",
+      "scopeNote": "查询与库中条目须为不同演绎版本；同一录音的重复检索属音频指纹范畴，不归入本任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.forgery-localization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "伪造片段定位",
+        "en": "Forgery localization"
+      },
+      "aliases": [
+        "Audio forgery localization",
+        "篡改定位"
+      ],
+      "broaderId": "task.audio-forgery",
+      "definition": "在音频中定位被伪造或篡改的具体时间段或区域。",
+      "scopeNote": "输出必须是时间/区域定位而非整段判定；整段真伪判定属于音频伪造检测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.inverse-text-normalization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "逆文本规范化",
+        "en": "Inverse text normalization"
+      },
+      "aliases": [
+        "ITN"
+      ],
+      "broaderId": "task.asr",
+      "definition": "将自动语音识别输出中的口语形式转换为便于阅读的书面形式，如把口述数字、日期与符号还原为数字及规范书写。",
+      "scopeNote": "作为语音识别输出的后处理子任务，输入是口语形式的转写文本而非声学；书面文本转为可朗读形式属于文本规范化（TN），不归入本概念；纯文本正则化研究不自动归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.lip-reading",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "唇读",
+        "en": "Lip reading"
+      },
+      "aliases": [
+        "Visual speech recognition",
+        "视觉语音识别"
+      ],
+      "broaderId": "task.av-asr",
+      "definition": "仅利用唇部及面部视觉信号识别言语内容。",
+      "scopeNote": "输入不含音频，按报告指定挂在音视频语音识别之下作为视觉支路特例；普通视频内容理解或字幕识别不归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.multi-talker-asr",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "多说话人语音识别",
+        "en": "Multi-talker speech recognition"
+      },
+      "aliases": [
+        "Multi-talker ASR",
+        "MTASR"
+      ],
+      "broaderId": "task.asr",
+      "definition": "对多说话人语音同时进行说话人区分与内容转写。",
+      "scopeNote": "仅输出“谁在何时说话”属于说话人分离标注；波形分离输出独立音频，两者不互为父子。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-structure-analysis",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐结构分析",
+        "en": "Music structure analysis"
+      },
+      "aliases": [
+        "Structure analysis",
+        "曲式分析"
+      ],
+      "broaderId": "task.music-understanding",
+      "definition": "划分音乐的段落与层次结构，如主歌、副歌、乐句及其边界。",
+      "scopeNote": "输出为结构标签或边界；与转录、和弦等要素识别区分，也与仅做曲目级检索区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.overlapped-speech-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "重叠语音识别",
+        "en": "Overlapped speech recognition"
+      },
+      "aliases": [
+        "Overlapped ASR",
+        "重叠语音转写"
+      ],
+      "broaderId": "task.asr",
+      "definition": "在多人同时发言的语音上转写各自的言语内容。",
+      "scopeNote": "与重叠检测区分（后者只判断是否存在重叠）；与波形分离区分（分离输出独立音频，本任务输出文本）。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.privacy-attack-defense",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频隐私攻击与防御",
+        "en": "Audio privacy attack and defense"
+      },
+      "aliases": [
+        "Audio privacy",
+        "隐私攻击"
+      ],
+      "broaderId": null,
+      "definition": "研究从音频或语音中推断敏感属性的攻击方法以及对应的防护与匿名化策略。",
+      "scopeNote": "需有攻击或防御实验；研究重点分面的隐私记录“关注性质”，本任务记录具体攻击/防御问题，两者按分面分开；父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.pronunciation-assessment",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "发音评估",
+        "en": "Pronunciation assessment"
+      },
+      "aliases": [
+        "Pronunciation scoring",
+        "发音评分"
+      ],
+      "broaderId": "task.speech-attributes",
+      "definition": "对说话人发音的正确性、准确性或流利度给出音素、音节或词级的评价与分数。",
+      "scopeNote": "输出是发音属性的判定与评分，故挂语音属性识别之下；与面向系统输出的语音质量、可懂度评测区分，也与仅识别口音等属性区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.prosody-style-control",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "韵律与风格控制",
+        "en": "Prosody and style control"
+      },
+      "aliases": [
+        "Prosody control",
+        "风格控制"
+      ],
+      "broaderId": "task.speech-synthesis",
+      "definition": "在合成或编辑语音时显式控制韵律、语气、语速与说话风格。",
+      "scopeNote": "需有显式可控条件或风格标签；仅生成自然韵律而无可控接口不属本任务，也不与语音克隆混用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.punctuation-restoration",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "标点恢复",
+        "en": "Punctuation restoration"
+      },
+      "aliases": [
+        "Punctuation prediction",
+        "标点预测"
+      ],
+      "broaderId": "task.asr",
+      "definition": "为语音识别输出的无标点文本恢复句读、分段与结构标记。",
+      "scopeNote": "对象是识别系统的文本输出而非声学信号；不面向语音识别输出的纯文本标点研究不自动归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.score-alignment",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "乐谱对齐",
+        "en": "Score alignment"
+      },
+      "aliases": [
+        "Sheet music alignment",
+        "谱面对齐"
+      ],
+      "broaderId": "task.music-understanding",
+      "definition": "将音乐音频或演奏与符号乐谱在时间轴上对齐，确定音符或小节的演奏位置。",
+      "scopeNote": "输入必须包含符号乐谱；与不含乐谱的语音强制对齐区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sound-reasoning",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声音关系与推理",
+        "en": "Sound reasoning"
+      },
+      "aliases": [
+        "Sound relation reasoning",
+        "声音关系推理"
+      ],
+      "broaderId": "task.audio-understanding",
+      "definition": "基于音频证据回答需要比较、因果或关系推断的问题，而非直接描述声学内容。",
+      "scopeNote": "聚焦声音事件之间的关系、时序与因果推断；通用多步推理问答归音频推理，两者为兄弟节点不得互指为父子。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.temporal-grounding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频时间定位",
+        "en": "Audio temporal grounding"
+      },
+      "aliases": [
+        "Temporal grounding",
+        "文本音频定位"
+      ],
+      "broaderId": "task.audio-understanding",
+      "definition": "给定文本或查询，在音频中定位其对应或相关的起止时间段。",
+      "scopeNote": "输出必须是时间区间；仅给出事件类别或整段描述不属本任务，与事件检测的帧级标注区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.voice-agent-planning",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音代理规划与工具使用",
+        "en": "Voice agent planning and tool use"
+      },
+      "aliases": [
+        "Voice agent",
+        "语音代理"
+      ],
+      "broaderId": "task.speech-interaction",
+      "definition": "语音代理在对话中规划任务步骤、调用外部工具并依据结果继续交互。",
+      "scopeNote": "需有显式规划或工具调用证据；仅语音问答或单步指令执行不自动归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.domain-generalization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "域泛化",
+        "en": "Domain generalization"
+      },
+      "aliases": [
+        "DG"
+      ],
+      "broaderId": "method.transfer",
+      "definition": "在多个源域上训练，使模型无需目标域数据即可应对未见域的分布差异。",
+      "scopeNote": "泛化设定下不使用任何目标域样本，与需要目标域数据的领域适应在训练信号上互斥；两者同为迁移学习下的下位兄弟节点，差异仅在是否使用目标域分布（主流程复核已改挂）。普通跨域评测不得当作泛化研究，也不得因共用“域”字样与领域适应混同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.dynamic-computation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "动态计算与早退",
+        "en": "Dynamic computation"
+      },
+      "aliases": [
+        "Early exit",
+        "早退"
+      ],
+      "broaderId": "method.compression",
+      "definition": "按样本难度动态分配计算量，如早退、自适应深度或条件计算。",
+      "scopeNote": "需有运行时的计算分配机制；静态剪枝或量化不归本类。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.low-rank-compression",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "低秩压缩",
+        "en": "Low-rank compression"
+      },
+      "aliases": [
+        "Low-rank factorization",
+        "低秩分解"
+      ],
+      "broaderId": "method.compression",
+      "definition": "用低秩分解近似权重或激活矩阵，降低参数量与计算量。",
+      "scopeNote": "与低秩适配互斥：本节点只做参数/激活的低秩近似以节省资源，不引入可训练适配目标；有适配目标的低秩增量归参数高效微调的低秩适配，两者不得互指为父子。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.neural-codec",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "神经编解码与离散单元",
+        "en": "Neural codec"
+      },
+      "aliases": [
+        "Neural audio codec",
+        "离散语音单元"
+      ],
+      "broaderId": "method.vector-quantization",
+      "definition": "用神经网络将音频压缩为离散码本单元或比特流并可重建波形。",
+      "scopeNote": "核心是离散化编码表示；仅用向量量化做训练正则而不产出编解码表示的不自动归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.tool-augmentation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "工具增强与约束解码",
+        "en": "Tool augmentation and constrained decoding"
+      },
+      "aliases": [
+        "Tool use",
+        "Constrained decoding"
+      ],
+      "broaderId": null,
+      "definition": "在生成或推理过程中调用外部工具、执行器，或以输出规则约束解码结果。",
+      "scopeNote": "涵盖工具调用与词表/语法约束两条路径；仅检索外部证据的系统属检索增强，is-a 不成立，故本节点成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.uncertainty-estimation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "不确定性估计与校准",
+        "en": "Uncertainty estimation"
+      },
+      "aliases": [
+        "Calibration",
+        "置信度校准"
+      ],
+      "broaderId": null,
+      "definition": "估计模型预测的不确定性并校准置信度与真实错误率的一致性。",
+      "scopeNote": "需有不确定性或校准指标（如 ECE、NLL）；仅报告准确率不归本类。父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.accent-dialect",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "口音与方言",
+        "en": "Accent and dialect"
+      },
+      "aliases": [
+        "Accent",
+        "方言"
+      ],
+      "broaderId": null,
+      "definition": "以说话人的口音或方言差异作为研究或评测条件。",
+      "scopeNote": "记录条件而非识别任务；口音/方言识别本身按任务分面记录。父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.code-switching",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "代码转换",
+        "en": "Code-switching"
+      },
+      "aliases": [
+        "Code switching",
+        "语码转换"
+      ],
+      "broaderId": "setting.multilingual",
+      "definition": "在同一话语或对话中混用两种或以上语言的使用条件。",
+      "scopeNote": "以多语言使用为前提；跨语言迁移属跨语言条件，两者不互为同义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.long-context",
+      "facet": "setting",
+      "preferredLabel": {
+        "zh": "长上下文",
+        "en": "Long context"
+      },
+      "aliases": [
+        "Long-context",
+        "长序列"
+      ],
+      "broaderId": "setting.long-audio",
+      "definition": "以模型需处理的超长输入序列（上下文）作为显式条件，涉及注意力、缓存或记忆开销问题。",
+      "scopeNote": "记录模型侧的序列长度条件；长音频处理存在故挂其下，但两者不互为同义（长上下文也可由长文本触发）。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.vibration",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "振动信号",
+        "en": "Vibration signal"
+      },
+      "aliases": [
+        "Vibration",
+        "振动"
+      ],
+      "broaderId": null,
+      "definition": "以机械或结构振动测量为研究对象的信号。",
+      "scopeNote": "与声学信号区分：振动由接触式传感器测得，经声化处理后再按声学信号记录。父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.accessibility",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "无障碍",
+        "en": "Accessibility"
+      },
+      "aliases": [
+        "Assistive technology",
+        "无障碍技术"
+      ],
+      "broaderId": null,
+      "definition": "面向听障、视障或其他障碍人群的可访问性与辅助应用。",
+      "scopeNote": "需有可访问性目标或真实用户场景证据；仅把无障碍写进未来工作不归入。父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "application.mental-health",
+      "facet": "application",
+      "preferredLabel": {
+        "zh": "精神健康筛查",
+        "en": "Mental health screening"
+      },
+      "aliases": [
+        "Mental health",
+        "心理健康筛查"
+      ],
+      "broaderId": "application.medical",
+      "definition": "以语音或声音线索对精神健康状态进行筛查或风险识别的应用。",
+      "scopeNote": "需有临床或筛查证据；仅在愿景中提及心理健康不归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.hallucination-faithfulness",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "幻觉与忠实度",
+        "en": "Hallucination and faithfulness"
+      },
+      "aliases": [
+        "Hallucination",
+        "忠实度"
+      ],
+      "broaderId": null,
+      "definition": "研究生成内容缺乏输入证据支撑（幻觉）以及与输入证据保持一致（忠实）的性质。",
+      "scopeNote": "需有幻觉或忠实度的专门评测；仅报告通用准确率不归本重点。父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "artifact.model-weights",
+      "facet": "artifact",
+      "preferredLabel": {
+        "zh": "模型权重",
+        "en": "Model weights"
+      },
+      "aliases": [
+        "Model parameters",
+        "预训练权重"
+      ],
+      "broaderId": null,
+      "definition": "训练得到并可发布的模型参数文件或检查点。",
+      "scopeNote": "记录论文贡献的模型权重文件；是否开源由资源证据决定，不由标签声称。未设上级概念，因此是根概念。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.listening-effort",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "听觉努力与认知负荷",
+        "en": "Listening effort"
+      },
+      "aliases": [
+        "Cognitive load",
+        "认知负荷"
+      ],
+      "broaderId": null,
+      "definition": "研究听者在噪声或困难听音条件下付出的努力与认知负荷及其测量。",
+      "scopeNote": "需有努力或负荷的测量（生理、行为或量表）；一般听觉机制归听觉与音乐认知主题。按报告指定成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.pragmatics-discourse",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "语用与话语",
+        "en": "Pragmatics and discourse"
+      },
+      "aliases": [
+        "Pragmatics",
+        "话语分析"
+      ],
+      "broaderId": null,
+      "definition": "研究语言在语境中的使用、会话结构与话语组织规律。",
+      "scopeNote": "关注语言使用现象本身；以工程任务为主的对话系统研究按任务分面记录。父节点缺失故成根。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-editing",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频编辑",
+        "en": "Audio editing"
+      },
+      "aliases": [
+        "Audio editing"
+      ],
+      "broaderId": null,
+      "definition": "对现有声音片段的指定事件、内容、局部或属性作定向修改，并保留非目标内容。",
+      "scopeNote": "区别于无原始片段的生成和恢复受损信号；语音专用编辑保留原task.speech-editing。 task.audio-editing与task.speech-editing当前是并行节点；本新增节点不表示既有语音编辑已迁移到其下级，语音专用编辑仍用原节点。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-post-production",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐后期制作",
+        "en": "Music post-production"
+      },
+      "aliases": [
+        "Music post-production"
+      ],
+      "broaderId": "task.audio-editing",
+      "definition": "对已有音乐录音或分轨实施效果处理、精修、重组与制作控制。",
+      "scopeNote": "不将从无到有的作曲或音乐生成当后期制作；不含纯符号乐谱修改。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-mixing",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐混音",
+        "en": "Automatic music mixing"
+      },
+      "aliases": [
+        "Automatic music mixing"
+      ],
+      "broaderId": "task.music-post-production",
+      "definition": "通过电平、声像、均衡、动态及效果控制，将音乐分轨组合为目标混音。",
+      "scopeNote": "不是从单轨恢复各声源的音乐分离；参考制作风格控制不等于作曲风格生成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-driven-video",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频驱动视频生成",
+        "en": "Audio-driven video generation"
+      },
+      "aliases": [
+        "Audio-driven video generation"
+      ],
+      "broaderId": null,
+      "definition": "以已有音频为必要条件生成与之对应的视觉帧或视频。",
+      "scopeNote": "输出可以只有视频；不要求同时合成新音频；与视频到声音方向相反。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.talking-portrait",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音驱动人像视频生成",
+        "en": "Audio-driven talking portrait synthesis"
+      },
+      "aliases": [
+        "Audio-driven talking portrait synthesis"
+      ],
+      "broaderId": "task.audio-driven-video",
+      "definition": "以输入语音和人像身份条件生成口型、表情与头部动态协调的人像视频。",
+      "scopeNote": "只输出动作轨迹的手势研究不是人像视频生成；附有现成音轨不能冒称联合生成新音频。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-driven-gesture",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音驱动手势生成",
+        "en": "Co-speech gesture generation"
+      },
+      "aliases": [
+        "Co-speech gesture generation"
+      ],
+      "broaderId": null,
+      "definition": "以语音或言语条件生成与言语协调的身体手势或动作轨迹。",
+      "scopeNote": "不等同语音合成，也不要求输出视频；流式或严格因果另在setting记录。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-driven-motion",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐驱动演奏动作生成",
+        "en": "Music-conditioned performance motion generation"
+      },
+      "aliases": [
+        "Music-conditioned performance motion generation"
+      ],
+      "broaderId": null,
+      "definition": "依据音乐音频、MIDI或其他明确音乐条件生成演奏者或舞者的动作。",
+      "scopeNote": "输入可能是符号音乐，故不挂在仅音频输入的父类；不是生成音乐本身；数据集中的用例不能自动升为全文主任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.acoustic-articulatory-inversion",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声学到构音反演",
+        "en": "Acoustic-to-articulatory inversion"
+      },
+      "aliases": [
+        "Acoustic-to-articulatory inversion"
+      ],
+      "broaderId": null,
+      "definition": "从声学语音或其表示估计舌、唇等构音器官状态或运动轨迹。",
+      "scopeNote": "输入输出方向与静默语音接口相反；EMA/构音测量不是语音识别输出。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.prosodic-segmentation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "韵律边界检测",
+        "en": "Prosodic boundary detection"
+      },
+      "aliases": [
+        "Prosodic boundary detection"
+      ],
+      "broaderId": null,
+      "definition": "利用语音声学及可得语言证据定位韵律单元边界。",
+      "scopeNote": "不同于仅给ASR文本加标点，也不同于只检测语音/非语音段的VAD。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.spoken-unit-discovery",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "无监督口语单元发现",
+        "en": "Unsupervised spoken unit discovery"
+      },
+      "aliases": [
+        "Unsupervised spoken unit discovery"
+      ],
+      "broaderId": null,
+      "definition": "从语音中发现重复的词、音节等单位并形成类别或词库，而非使用既定转写标签。",
+      "scopeNote": "词库评价是该目标的评测对象，不等于论文提出新的发现算法；ABX表示评价本身不自动证明单位发现。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-summarization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音摘要",
+        "en": "Speech summarization"
+      },
+      "aliases": [
+        "Speech summarization"
+      ],
+      "broaderId": "task.spoken-understanding",
+      "definition": "从口语材料提炼压缩的语义摘要，输出文本或语音。",
+      "scopeNote": "翻译要求转换语言，摘要要求压缩内容；跨语言摘要可同时记录翻译，不将二者混成同义词。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.grapheme-to-phoneme",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "字素到音素转换",
+        "en": "Grapheme-to-phoneme conversion"
+      },
+      "aliases": [
+        "Grapheme-to-phoneme conversion"
+      ],
+      "broaderId": null,
+      "definition": "把书写形式转换为发音音素表示。",
+      "scopeNote": "文本输入、音素输出；不是从声学识别文字，也不是直接生成语音波形；不得归为逆文本规范化。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.acoustic-parameter-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声学系统参数估计",
+        "en": "Audio-system parameter estimation"
+      },
+      "aliases": [
+        "Audio-system parameter estimation"
+      ],
+      "broaderId": null,
+      "definition": "从声音或脉冲响应推断产生或处理该声音的物理、控制或观测参数。",
+      "scopeNote": "输出为系统参数，而非重新估计已作为输入给出的脉冲响应；不包括舌唇构音轨迹或文本转写。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.synthesizer-inversion",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声音合成器反演",
+        "en": "Synthesizer inversion"
+      },
+      "aliases": [
+        "Synthesizer inversion"
+      ],
+      "broaderId": "task.acoustic-parameter-estimation",
+      "definition": "从音频推断声音合成器控制参数，以解释或重建对应音色。",
+      "scopeNote": "MIDI音符不是全部合成器参数；区别于音乐转录和直接生成新音乐。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.source-power-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声源功率成分估计",
+        "en": "Source power component estimation"
+      },
+      "aliases": [
+        "Source power component estimation"
+      ],
+      "broaderId": null,
+      "definition": "估计混合声音中目标成分的时频功率、功率谱或占比。",
+      "scopeNote": "不要求恢复独立波形；不能把VAD下游演示拔高为全文核心，也不能等同片段类别预测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sonification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "数据声化",
+        "en": "Data sonification"
+      },
+      "aliases": [
+        "Data sonification"
+      ],
+      "broaderId": null,
+      "definition": "把非声音数据或结构映射为可听声音，以传达信息、辅助辨别或探索。",
+      "scopeNote": "不要求机器学习生成分布；用于人工听辨不等于自动异常检测；主观感知效果需独立听者证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.acoustic-frontend-design",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声音采集前端设计",
+        "en": "Audio acquisition frontend design"
+      },
+      "aliases": [
+        "Audio acquisition frontend design"
+      ],
+      "broaderId": null,
+      "definition": "设计拾音、读出、模拟前端、数字化或采集传输系统。",
+      "scopeNote": "硬件分弦采集不等于算法源分离；ADC量化不等于模型权重量化或音频压缩。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.acoustic-transducer-design",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声学换能器设计",
+        "en": "Acoustic transducer design"
+      },
+      "aliases": [
+        "Acoustic transducer design"
+      ],
+      "broaderId": null,
+      "definition": "设计或驱动在机械运动、电信号与声场之间转换能量的器件及阵列。",
+      "scopeNote": "MEMS器件原型、非线性驱动不是神经网络方法；不能由语音识别应用愿景推导ASR主任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.musical-interface-design",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "数字乐器接口设计",
+        "en": "Digital musical instrument interface design"
+      },
+      "aliases": [
+        "Digital musical instrument interface design"
+      ],
+      "broaderId": null,
+      "definition": "设计人可演奏的数字乐器控制、传感或声音交互接口。",
+      "scopeNote": "核心为乐器接口及实现，不是自动作曲；开源硬件状态须独立资源证据，标签不宣称已可用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-software-compilation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频处理程序编译",
+        "en": "Audio DSP program compilation"
+      },
+      "aliases": [
+        "Audio DSP program compilation"
+      ],
+      "broaderId": null,
+      "definition": "将音频计算图或处理模型转换为可执行的DSP程序，并保持规定的处理语义。",
+      "scopeNote": "输出为程序而非新声音样本；部署效率与正确性须按实际验证，不以端侧标签代替编译方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-multibackend-rendering",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐表示与多后端渲染",
+        "en": "Multi-backend music rendering"
+      },
+      "aliases": [
+        "Multi-backend music rendering"
+      ],
+      "broaderId": null,
+      "definition": "从统一音乐时间与实体表示生成声音、乐谱或控制事件等多个一致输出。",
+      "scopeNote": "保持同一音乐内容的多表示输出，不等于创造音乐；未发布软件不能标开源工具。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.visual-music-transcription",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视觉音乐转录",
+        "en": "Visual music transcription"
+      },
+      "aliases": [
+        "Visual music transcription"
+      ],
+      "broaderId": null,
+      "definition": "从演奏视频中的可见动作和乐器状态推断音符、键状态、力度等音乐符号。",
+      "scopeNote": "输入可以无音频；不静默扩大现task.transcription的音频输入定义；不是扫描乐谱识别。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.optical-music-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "光学乐谱识别",
+        "en": "Optical music recognition"
+      },
+      "aliases": [
+        "Optical music recognition"
+      ],
+      "broaderId": "task.music-understanding",
+      "definition": "从乐谱图像恢复音乐符号及其结构化编码。",
+      "scopeNote": "研究对象为图像中的符号乐谱，区别于演奏视频和音频转录。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.midi-velocity-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "MIDI力度估计",
+        "en": "MIDI velocity estimation"
+      },
+      "aliases": [
+        "MIDI velocity estimation"
+      ],
+      "broaderId": "task.music-understanding",
+      "definition": "利用音乐证据估计逐音符的MIDI力度或相应演奏强度参数。",
+      "scopeNote": "力度不是音高、音量或全部演奏表情的同义词；已知音符条件须保留，不能冒称完整转录。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-sounding-object-segmentation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音视频发声对象分割",
+        "en": "Audio-visual sounding-object segmentation"
+      },
+      "aliases": [
+        "Audio-visual sounding-object segmentation"
+      ],
+      "broaderId": "task.av-understanding",
+      "definition": "根据音频与视频证据定位和分割发声对象，可包含实例身份及时间追踪。",
+      "scopeNote": "输出为视觉掩膜而非分离波形或声源方向；语言查询指代不自动等于发声对象证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-guided-video-segmentation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音指代表达视频分割",
+        "en": "Speech-guided referring video segmentation"
+      },
+      "aliases": [
+        "Speech-guided referring video segmentation"
+      ],
+      "broaderId": null,
+      "definition": "按口语描述指明的对象恢复其视频掩膜轨迹。",
+      "scopeNote": "语音在此传递语言指令，不要求目标自身发声；与音视频发声对象分割分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.multimodal-sentiment",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "多模态情感极性分析",
+        "en": "Multimodal sentiment analysis"
+      },
+      "aliases": [
+        "Multimodal sentiment analysis"
+      ],
+      "broaderId": null,
+      "definition": "结合多种模态估计表达或内容的情感极性、效价或强度。",
+      "scopeNote": "区别于仅语音情绪类别识别；不得把跨模态整体研究全部归为语音子任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-affect-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声音感知情感估计",
+        "en": "Perceived audio affect estimation"
+      },
+      "aliases": [
+        "Perceived audio affect estimation"
+      ],
+      "broaderId": null,
+      "definition": "估计音乐或一般声音引发或被感知的效价、唤醒度等情感维度。",
+      "scopeNote": "对象不是说话人的情绪类别；区分人类感知标签、EEG与声音模型输出，不能把相关预测称情绪因果机制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.rapport-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "互动亲和度估计",
+        "en": "Interaction rapport estimation"
+      },
+      "aliases": [
+        "Interaction rapport estimation"
+      ],
+      "broaderId": null,
+      "definition": "从交互证据预测亲和、协调或关系质量的操作化评分。",
+      "scopeNote": "亲和度不同于正负情感或单人情绪；第三方评分来源与协议须明确，不推断临床或人格结论。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-system-attack-defense",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频系统攻击与防御",
+        "en": "Audio-system attack and defense"
+      },
+      "aliases": [
+        "Audio-system attack and defense"
+      ],
+      "broaderId": null,
+      "definition": "对音频或语音系统实施或研究攻击及防护，包括资源耗尽与功能误导。",
+      "scopeNote": "DoS不等于隐私攻击；自然噪声鲁棒性和常规对抗训练不能代替攻击目标证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.physical-acoustics",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "物理声学与声信号机理",
+        "en": "Physical acoustics"
+      },
+      "aliases": [
+        "Physical acoustics"
+      ],
+      "broaderId": null,
+      "definition": "研究声音的产生、传播、振动耦合或物理与声信号性质。",
+      "scopeNote": "不是任意音频工程论文的默认主题；需研究现象或机理本身，不能用宽主题逃避已有明确工程任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.human-language-processing",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "人类语言加工",
+        "en": "Human language processing"
+      },
+      "aliases": [
+        "Human language processing"
+      ],
+      "broaderId": null,
+      "definition": "研究人类理解语言结构、语义及语用的认知或神经过程。",
+      "scopeNote": "不局限听觉输入；脑ERP句法研究不是言语神经解码、声学ASR或机器意图识别。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.neurophysiological-experiment",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "神经生理实验",
+        "en": "Neurophysiological experiment"
+      },
+      "aliases": [
+        "Neurophysiological experiment"
+      ],
+      "broaderId": null,
+      "definition": "操控研究条件并测量ERP、EEG等神经生理反应，以检验认知或语言加工问题。",
+      "scopeNote": "signal.neural只说明输入；与从神经信号解码言语的工程任务及一般主观听测分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.hardware-system-design",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "硬件系统设计与验证",
+        "en": "Hardware system design and validation"
+      },
+      "aliases": [
+        "Hardware system design and validation"
+      ],
+      "broaderId": null,
+      "definition": "以电路、器件、阵列或嵌入式结构的设计、实现与测量验证解决系统问题。",
+      "scopeNote": "不要求新学习模型；仿真或原型不等于量产部署；存在硬件图片不充分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.compiler-design",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "编译与语义保持变换",
+        "en": "Compiler construction"
+      },
+      "aliases": [
+        "Compiler construction"
+      ],
+      "broaderId": null,
+      "definition": "通过明确中间表示、变换规则及后端契约生成程序或多种目标表示。",
+      "scopeNote": "不是仅调用编译器或写软件；需要转换结构与语义保持流程本身构成方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.rule-based",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "规则与词典方法",
+        "en": "Rule- and dictionary-based processing"
+      },
+      "aliases": [
+        "Rule- and dictionary-based processing"
+      ],
+      "broaderId": null,
+      "definition": "以显式规则、词典和确定性回退程序实现映射或决策。",
+      "scopeNote": "固定输入提示不是规则系统；与提示学习、神经微调及知识检索增强分开。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.representation-probing",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "表示探测",
+        "en": "Representation probing"
+      },
+      "aliases": [
+        "Representation probing"
+      ],
+      "broaderId": null,
+      "definition": "设计可控读出、探针或匹配对照，检验模型内部表示编码的属性。",
+      "scopeNote": "只展示可视化不构成探测；探针相关性不是因果证明，不将被探模型架构冒充主要研究方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.concept-activation-analysis",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "概念激活向量分析",
+        "en": "Concept activation vector analysis"
+      },
+      "aliases": [
+        "Concept activation vector analysis"
+      ],
+      "broaderId": "method.representation-probing",
+      "definition": "用具有定义的概念方向和敏感性读出分析内部表示及预测影响。",
+      "scopeNote": "编码可恢复性与影响预测的敏感性分开；不是普通分类器训练，也不是仅计算PCA。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.logit-lens",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "中间层词表透镜",
+        "en": "Logit lens"
+      },
+      "aliases": [
+        "Logit lens"
+      ],
+      "broaderId": "method.representation-probing",
+      "definition": "将中间层表示送入规定的终端读出，分析词表概念随层次变化。",
+      "scopeNote": "提前读出本身不证明模型使用该信息；因果影响须由独立干预证据支撑。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.activation-intervention",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "激活因果干预",
+        "en": "Activation intervention"
+      },
+      "aliases": [
+        "Activation intervention"
+      ],
+      "broaderId": null,
+      "definition": "通过激活替换、删除、抑制或转向，并观察输出变化，检验内部表示作用。",
+      "scopeNote": "不是普通表示相关性或永久结构剪枝；只能对实际受控干预条件提出因果范围内结论。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.sparse-autoencoder",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "稀疏自编码器",
+        "en": "Sparse autoencoder"
+      },
+      "aliases": [
+        "Sparse autoencoder"
+      ],
+      "broaderId": null,
+      "definition": "用重建目标及稀疏约束学习可分析的潜在特征表示。",
+      "scopeNote": "不等于VAE；使用已有SAE的逆问题不自动算重新训练SAE，需分清核心贡献。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.sparse-reconstruction",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "稀疏逆问题求解",
+        "en": "Sparse inverse reconstruction"
+      },
+      "aliases": [
+        "Sparse inverse reconstruction"
+      ],
+      "broaderId": null,
+      "definition": "在明确重建目标和稀疏约束下恢复稀疏支撑或系数。",
+      "scopeNote": "不以静态神经元相似度排序代替逆问题；不是模型剪枝或参数低秩压缩。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.clustering",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "聚类与类别匹配",
+        "en": "Clustering and cluster assignment"
+      },
+      "aliases": [
+        "Clustering and cluster assignment"
+      ],
+      "broaderId": null,
+      "definition": "依据明确相似性、目标或动态参考，把数据划分为组或匹配到组。",
+      "scopeNote": "聚类可免训练运行，不能自动冒称训练期无监督表示学习；K类标签预测也不自动是聚类。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.adversarial-attack",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "对抗攻击构造",
+        "en": "Adversarial attack construction"
+      },
+      "aliases": [
+        "Adversarial attack construction"
+      ],
+      "broaderId": null,
+      "definition": "按具体攻击目标构造输入、扰动或行为以破坏目标系统。",
+      "scopeNote": "生成扰动攻击不同于训练防御模型；不能仅由research_focus.security推出方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.case-study",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "案例研究与实践报告",
+        "en": "Case study and practice report"
+      },
+      "aliases": [
+        "Case study and practice report"
+      ],
+      "broaderId": null,
+      "definition": "以明确边界的项目、过程与观察组织证据，分析实践约束、决策及失效。",
+      "scopeNote": "位置论文若只有主张而无系统观察不得强贴；不推断随机对照或跨案例因果效力。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "artifact.hardware",
+      "facet": "artifact",
+      "preferredLabel": {
+        "zh": "硬件原型",
+        "en": "Hardware prototype"
+      },
+      "aliases": [
+        "Hardware prototype"
+      ],
+      "broaderId": null,
+      "definition": "作为研究贡献提供器件、电路、乐器接口或其他硬件实现。",
+      "scopeNote": "产物不替代任务和方法；开源、可购买、可量产另需实际资源状态。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.impulse-response-identification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "系统脉冲响应辨识",
+        "en": "System impulse-response identification"
+      },
+      "aliases": [
+        "System impulse-response identification"
+      ],
+      "broaderId": null,
+      "definition": "根据系统输入输出辨识LTI等系统脉冲响应或传递函数。",
+      "scopeNote": "通用系统不等于房间；仅在明确房间传播时使用原task.rir-estimation；这是信号/系统相邻扩展。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.acoustic-response-prediction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声学响应预测",
+        "en": "Acoustic response prediction"
+      },
+      "aliases": [
+        "Acoustic response prediction"
+      ],
+      "broaderId": null,
+      "definition": "依据器件结构或物理条件预测声学响应、共振或衰减特性。",
+      "scopeNote": "已有脉冲响应的反演参数估计方向相反；被动谐振器降声不是主动噪声控制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.acoustic-propagation-prediction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声传播场预测",
+        "en": "Acoustic propagation-field prediction"
+      },
+      "aliases": [
+        "Acoustic propagation-field prediction"
+      ],
+      "broaderId": null,
+      "definition": "由介质环境与传播条件预测声压、传输损失等空间场。",
+      "scopeNote": "不是由声场观测重建未知场的task.sound-field；传播条件与监督来源必须留存。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.neural-operator",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "神经算子",
+        "en": "Neural operator"
+      },
+      "aliases": [
+        "Neural operator"
+      ],
+      "broaderId": null,
+      "definition": "学习函数空间之间的映射，如介质场到声场的算子。",
+      "scopeNote": "不仅是普通CNN/Transformer输入数组；须有算子映射和相应架构证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.ultrasound-tomography",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "超声层析成像",
+        "en": "Ultrasound computed tomography"
+      },
+      "aliases": [
+        "Ultrasound computed tomography"
+      ],
+      "broaderId": null,
+      "definition": "利用超声传播测量反演介质或组织的空间声学属性以形成图像。",
+      "scopeNote": "不归为医疗语音应用；初至拾取、波形反演可作为核心步骤，不能叫声音事件检测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sonar-object-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声呐图像目标检测",
+        "en": "Sonar image object detection"
+      },
+      "aliases": [
+        "Sonar image object detection"
+      ],
+      "broaderId": null,
+      "definition": "在声呐成像中定位目标并输出目标框等检测结果。",
+      "scopeNote": "声呐图像为声学成像，不是普通听音或视频；不等于声音事件检测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sonar-optical-understanding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声呐与光学融合感知",
+        "en": "Sonar-optical perception"
+      },
+      "aliases": [
+        "Sonar-optical perception"
+      ],
+      "broaderId": null,
+      "definition": "联合或对照声呐与光学成像证据开展目标识别、计数、问答或描述。",
+      "scopeNote": "不得以名字带声呐就归入音视频语音任务；各输入模式与具体输出须保留。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sonar-image-segmentation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声呐图像分割",
+        "en": "Sonar image segmentation"
+      },
+      "aliases": [
+        "Sonar image segmentation"
+      ],
+      "broaderId": null,
+      "definition": "为声呐图像赋予像素区域或语义标签。",
+      "scopeNote": "不是从混合声波分离声源；海草生态制图不等于基于动物鸣声的生物声学监测。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.spiking-neural-network",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "脉冲神经网络",
+        "en": "Spiking neural network"
+      },
+      "aliases": [
+        "Spiking neural network"
+      ],
+      "broaderId": null,
+      "definition": "以脉冲事件及相应状态演化进行神经计算。",
+      "scopeNote": "不与RNN或生理脑信号测量同义；稀疏活动本身不充分证明SNN，能耗结论要按实测范围。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "signal.acoustic-imaging",
+      "facet": "signal",
+      "preferredLabel": {
+        "zh": "声学成像信号",
+        "en": "Acoustic imaging signal"
+      },
+      "aliases": [
+        "Acoustic imaging signal"
+      ],
+      "broaderId": null,
+      "definition": "由超声或声呐测量形成的回波、波形或空间图像。",
+      "scopeNote": "与可听语音、音乐和音视频分开；输入音频标签不能代替成像坐标与物理机制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.voice-rights",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "声音身份与权利",
+        "en": "Vocal identity and rights"
+      },
+      "aliases": [
+        "Vocal identity and rights"
+      ],
+      "broaderId": null,
+      "definition": "研究声音身份、声音克隆涉及的法律权利与治理问题。",
+      "scopeNote": "语音技术相关治理研究，不是语音克隆模型开发；不得用医学或匿名化工程主任务兜底。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.comparative-legal-analysis",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "比较法律分析",
+        "en": "Comparative legal analysis"
+      },
+      "aliases": [
+        "Comparative legal analysis"
+      ],
+      "broaderId": null,
+      "definition": "比较明示法域、权利框架及救济结构来分析法律问题。",
+      "scopeNote": "不是技术形式化证明或工程隐私防御；法律结论需按实际法域和版本。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.image-forgery-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "图像伪造检测",
+        "en": "Image forgery detection"
+      },
+      "aliases": [
+        "Image forgery detection"
+      ],
+      "broaderId": null,
+      "definition": "判别图像是否经生成或伪造。",
+      "scopeNote": "不因引言提及audio就标音频鉴伪；图像输入与视觉实验须独立保持。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.document-visual-grounding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文档视觉问答与定位",
+        "en": "Document visual QA and grounding"
+      },
+      "aliases": [
+        "Document visual QA and grounding"
+      ],
+      "broaderId": null,
+      "definition": "依据文档图像回答问题并定位支撑答案的视觉区域。",
+      "scopeNote": "不是音频问答或音频时间定位；文本与图片证据不能冒称听音证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-social-reasoning",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视频社会状态推理",
+        "en": "Video-grounded social reasoning"
+      },
+      "aliases": [
+        "Video-grounded social reasoning"
+      ],
+      "broaderId": null,
+      "definition": "从视频与可得对话文本推断人物信念、意图、关系或群体共识。",
+      "scopeNote": "视频与转写文本组合不自动含声学证据；社会推理非语音情绪分类。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.general-recommendation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "通用项目推荐",
+        "en": "General item recommendation"
+      },
+      "aliases": [
+        "General item recommendation"
+      ],
+      "broaderId": null,
+      "definition": "依据用户行为或反馈对通用项目进行推荐排序。",
+      "scopeNote": "推荐项目不是音乐时不能用音乐推荐；可选语音交互不使系统成为语音研究。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.unified-multimodal-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "统一多模态检索",
+        "en": "Unified multimodal retrieval"
+      },
+      "aliases": [
+        "Unified multimodal retrieval"
+      ],
+      "broaderId": null,
+      "definition": "在同一查询和排序空间中跨多种内容类型检索。",
+      "scopeNote": "音频检索是可分离子协议，不能代表整篇统一文件检索；不是RAG生成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.automated-scientific-workflow",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "自动化科学研究流程",
+        "en": "Automated scientific research workflow"
+      },
+      "aliases": [
+        "Automated scientific research workflow"
+      ],
+      "broaderId": null,
+      "definition": "组织证据感知、构思、实验及文稿形成的自动研究流程。",
+      "scopeNote": "音频作为一类证据不等于核心音频理解任务；生成稿件不等于科学结论获确认。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.formal-concept-analysis",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "形式概念分析",
+        "en": "Formal concept analysis"
+      },
+      "aliases": [
+        "Formal concept analysis"
+      ],
+      "broaderId": null,
+      "definition": "通过形式上下文、概念缩放与格结构分析属性关系。",
+      "scopeNote": "不是神经概念激活分析；音乐元数据演示不等于音乐音频分析任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.sensor-swarm-coordination",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "传感驱动群体任务协同",
+        "en": "Sensor-driven swarm mission coordination"
+      },
+      "aliases": [
+        "Sensor-driven swarm mission coordination"
+      ],
+      "broaderId": null,
+      "definition": "依据多传感证据生成或协调机器群体任务与行动。",
+      "scopeNote": "声学仅一类传感输入时不硬归音频代理；硬件安全边界不等于模型对抗训练。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.generic-multimodal-qa",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "通用多模态问答",
+        "en": "Generic multimodal question answering"
+      },
+      "aliases": [
+        "Generic multimodal question answering"
+      ],
+      "broaderId": null,
+      "definition": "依据明示的异构证据组合回答问题。",
+      "scopeNote": "没有实际音频证据时不用音频或音视频问答；不得根据摘要列举speech推断实验含声音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.industrial-timeseries-monitoring",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "工业时间序列监测",
+        "en": "Industrial time-series monitoring"
+      },
+      "aliases": [
+        "Industrial time-series monitoring"
+      ],
+      "broaderId": null,
+      "definition": "按各工业数据协议监测退化、异常排序或预测残差等目标。",
+      "scopeNote": "声学MIMII只是子协议；异构标签不可合成一个异常排名或临床任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.underwater-acoustic-communication",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "水下声通信",
+        "en": "Underwater acoustic communication"
+      },
+      "aliases": [
+        "水声通信"
+      ],
+      "broaderId": null,
+      "definition": "通过水下声信道传输数据，设计或改进发射、接收及链路处理以提高通信可靠性或效率。",
+      "scopeNote": "包含以通信链路为目标的发射波束成形、同步、均衡及多普勒补偿；不包含仅定位声源、一般拾音前端或以科学解释为目标的声传播分析。原有method.beamforming只能说明方法，不能替代该通信任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-feature-extraction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频特征提取",
+        "en": "Audio feature extraction"
+      },
+      "aliases": [
+        "声学特征提取"
+      ],
+      "broaderId": null,
+      "definition": "从已采集的音频计算供下游分析或学习使用的特征表示，并以特征提取过程本身的构造、保真或计算性质为研究目标。",
+      "scopeNote": "包含以音频前端为核心贡献的时频、频带和倒谱等特征计算；不是拾音/ADC等采集硬件设计，不是为传输存储重建压缩音频，不因系统使用了encoder就认定为本任务。下游分类仅用于检验特征效用时，不将这些分类目标认定为论文主任务；识别/生成系统的常规特征步骤不自动成为论文主任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "scientific_topic.ai-mental-health",
+      "facet": "scientific_topic",
+      "preferredLabel": {
+        "zh": "人工智能与精神健康",
+        "en": "Artificial intelligence and mental health"
+      },
+      "aliases": [
+        "AI与精神健康"
+      ],
+      "broaderId": null,
+      "definition": "研究人工智能在精神健康状态评估、支持服务与照护中的证据、适用条件及伦理治理问题。",
+      "scopeNote": "包含以精神健康相关AI研究为对象的系统综述、科学比较与证据综合；不把综述列举的诊断、治疗或对话应用当作本文实现的工程任务。不是任意医学AI，也不静默扩大原application.mental-health的语音筛查定义。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.evolutionary-optimization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "进化优化",
+        "en": "Evolutionary optimization"
+      },
+      "aliases": [
+        "进化搜索",
+        "Evolutionary search"
+      ],
+      "broaderId": null,
+      "definition": "通过候选群体的选择及随机变异、重组或搜索分布适应，按目标函数迭代寻找解。",
+      "scopeNote": "包含演化策略与CMA-ES等具有上述演化机制的参数搜索；不是所有黑盒或无梯度优化的统称，单独三分搜索、网格搜索、随机试验或SPSA不据此归入。优化器必须是核心求解方法，而不是被调参模型的附带训练工具。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.tts-friendly-text-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "朗读友好文本生成",
+        "en": "TTS-friendly text generation"
+      },
+      "aliases": [
+        "TTS友好文本生成",
+        "面向朗读的文本生成"
+      ],
+      "broaderId": null,
+      "definition": "生成或改写适合经文本转语音系统朗读的自然语言文本，以可朗读性及口头呈现约束为明确输出目标。",
+      "scopeNote": "包含直接对齐语言模型生成朗读友好回答以及明确面向朗读的文本改写。输出仍是文本，不是输入文本输出语音的TTS；不是音素转换、ASR输出逆文本规范化、仅替换标点或任意文风润色；以实际朗读约束为证，不因产品附有可选TTS而归入。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.pretrained-expert-consolidation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "预训练专家模型整合",
+        "en": "Pretrained expert model consolidation"
+      },
+      "aliases": [
+        "专家模型整合"
+      ],
+      "broaderId": null,
+      "definition": "从多个已训练的专家模型构建单一目标模型或其可部署初始化，使其利用多个专家的能力并适应明确目标域或目标能力范围。",
+      "scopeNote": "输入必须包含多个既有专家，输出必须是单一模型或单一参数初始化，且整合目标本身是核心贡献。具体可用参数混合、蒸馏等方法；不包含保留多个模型的预测集成、只选一个专家、普通单模型微调或按某个图像/语音评测集推断的下游任务。已有method.model-combination记录实现机制，不能替代主目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.dataset-distribution-alignment",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "数据集分布对齐",
+        "en": "Dataset distribution alignment"
+      },
+      "aliases": [
+        "数据分布输运"
+      ],
+      "broaderId": null,
+      "definition": "学习两个数据集或概率分布之间的映射、耦合或输运，使源样本与目标分布相匹配，并满足明示的结构或对应关系约束。",
+      "scopeNote": "包含以分布间输运、几何保持及无配对数据集对齐为核心目标的研究；不是时间轴强制对齐、音画同步、文本音频表示匹配，也不是任何用了领域适应的下游分类任务。扩散桥或最优传输是方法，不等同本目标；适用不限定声学输入，须明确通用或外域范围。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.spoken-topic-segmentation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "口语主题分割",
+        "en": "Spoken document topic segmentation"
+      },
+      "aliases": [
+        "口语话题边界检测"
+      ],
+      "broaderId": "task.spoken-understanding",
+      "definition": "将口语文档或其转写划分为语义连贯的主题片段，输出句间或时间轴上的话题转换边界。",
+      "scopeNote": "包含播客、演讲、视频口语等材料的主题边界检测，可结合语音声学与文本。不是语音活动检测、说话人轮次、韵律边界、音频事件或主题类别分类；纯书面文档分割不自动归入。本任务获取口语语义结构，故是口语理解的下位，选择时不得同时选父子节点。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.non-acoustic-source-separation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "非声学信号源分离",
+        "en": "Non-acoustic source separation"
+      },
+      "aliases": [
+        "非声学混合信号分量恢复"
+      ],
+      "broaderId": null,
+      "definition": "从多个非声学信号源的混合观测中恢复目标或各个源分量，输出为分离后的源信号或其后验估计。",
+      "scopeNote": "纳入：生理、雷达或其他明确非声学传感信号的混合源分解；以目标分量恢复为目的、可显式处理运动干扰及观测噪声的源分离。排除：输出声源波形的音频或语音分离；只输出诊断类别、心率数值或定位结果；没有可区分源分量恢复目标的通用去噪、滤波、预测或任意时序建模。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.apparent-personality-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "外显人格估计",
+        "en": "Apparent personality estimation"
+      },
+      "aliases": [
+        "感知人格预测",
+        "第三方印象人格分析"
+      ],
+      "broaderId": null,
+      "definition": "根据可观察的行为或表达线索预测第三方感知的人格特质评分，例如外显大五人格。",
+      "scopeNote": "纳入：以外部观察者形成的人格印象标签为目标的回归或分类；语音、文字、视觉或其组合提供的外显人格线索。排除：未经证据认证的内在人格或临床人格诊断；瞬时情绪、情感极性、沟通融洽度或说话人身份；只依据已有问卷分数作统计分析而无外部行为预测目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.av-quality-assessment",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视听联合质量评估",
+        "en": "Audio-visual quality assessment"
+      },
+      "aliases": [
+        "联合音视频质量预测",
+        "AVQ assessment"
+      ],
+      "broaderId": null,
+      "definition": "预测或评价同一视听内容的联合感知质量，显式考虑音频与视频对整体体验的相互作用。",
+      "scopeNote": "纳入：联合音视频质量分数或主观感知评分预测；有参照或无参照的视听质量评价协议。排除：仅音频或仅语音的质量评价；只估计码率、延迟等服务质量而无感知质量目标；内容识别、音画同步或以VMAF/GML为中间特征的非质量任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-action-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视频动作识别",
+        "en": "Video action recognition"
+      },
+      "aliases": [
+        "视频行为识别"
+      ],
+      "broaderId": null,
+      "definition": "以视频中的可见时空活动为必要证据，识别视频或片段中执行的动作、活动类别，可结合辅助音频或文字。",
+      "scopeNote": "纳入：视频动作类别预测；以动作识别为最终目标的跨域、源数据不可得适应协议。排除：仅声音事件分类或声源定位；生成动作轨迹、手势视频或动作描述；只研究表示分布匹配而不证明动作分类输出；直接预测视听场景或人物社会状态而没有动作识别目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.visual-gesture-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视觉手势识别",
+        "en": "Visual gesture recognition"
+      },
+      "aliases": [
+        "视觉手势指令识别"
+      ],
+      "broaderId": null,
+      "definition": "从图像或视频中识别可见手势及其明确对应的指令类别，可利用文本指令或知识条件辅助判别。",
+      "scopeNote": "纳入：手势图像或序列的类别识别；以视觉手势表达操作意图的命令识别。排除：依据语音生成伴随手势或人像视频；没有可见手势类别输出的任意视觉语言问答或混合现实交互；只在产品描述提及语音，却无实验声学输入的语音识别。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.asr-error-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音识别错误估计",
+        "en": "ASR error estimation"
+      },
+      "aliases": [
+        "转写错误率预测",
+        "WER estimation"
+      ],
+      "broaderId": null,
+      "definition": "在运行时参考转写不可得或受限时，预测已有语音识别输出的错误率、错误位置或编辑操作。",
+      "scopeNote": "纳入：词错率或其他明确识别误差的估计；识别输出中的替换、删除、插入及正确匹配序列预测。排除：直接将语音转成文字的ASR；具有真实参考转写时机械计算编辑距离；音频感知质量或可懂度的预测；没有识别错误语义的通用置信度、拒识或校准。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.text-system-attack-defense",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文本系统攻击与防御",
+        "en": "Text-system attack and defense"
+      },
+      "aliases": [
+        "NLP系统对抗攻击与防御"
+      ],
+      "broaderId": null,
+      "definition": "以文本输入为攻击面研究语言处理或文本条件系统的对抗失效与防御，目标为攻击成功、鲁棒性或安全行为。",
+      "scopeNote": "纳入：针对文本分类、翻译或语言模型的有意文本扰动攻击；保留可读语义的字体、字符或词级扰动及其对应防御。排除：声学输入攻击及音频系统服务失效；普通文本分类或机器翻译而无攻击/防御目标；只列举TTS或图像生成风险而未给该模态实际受验证攻击协议。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.visuotactile-perception",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视觉触觉物理感知",
+        "en": "Visuotactile physical perception"
+      },
+      "aliases": [
+        "视触觉感知",
+        "视觉与接触传感融合感知"
+      ],
+      "broaderId": null,
+      "definition": "联合视觉与实际接触传感证据识别物体或材料属性，并预测与接触交互直接相关的抓取结果。",
+      "scopeNote": "纳入：可见物体与触觉图像、接触声音、压力等传感输入的物体或材质识别；基于物体接触证据的抓取结果预测及跨传感器泛化。排除：仅视觉分类、普通环境听音或语言指令识别；没有实际触觉证据的任意具身推理；直接生成机器人控制策略或完成任意操作规划；仅模态对齐方法而无物体属性/接触结果目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.malware-classification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "恶意软件分类",
+        "en": "Malware classification"
+      },
+      "aliases": [
+        "恶意软件家族识别"
+      ],
+      "broaderId": null,
+      "definition": "从软件样本及其静态或动态派生表示预测恶意软件类别、家族或变种归属。",
+      "scopeNote": "纳入：二进制或APK样本的恶意软件家族分类；由程序字节派生的图像、信号或其他表示用于同一安全标签预测。排除：声音事件、场景或物体类别识别；只有真假/安全与否二分类而无恶意软件类别目标的通用检测；通过攻击声音模型评估鲁棒性。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.visual-affect-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视觉情绪与情感估计",
+        "en": "Visual affect estimation"
+      },
+      "aliases": [
+        "基于视觉行为的情感估计"
+      ],
+      "broaderId": null,
+      "definition": "根据可见面部、身体或眼动行为预测情绪、情感维度或有明确情感关联的行为标签，视觉行为是必要输入证据。",
+      "scopeNote": "纳入：视觉或眼动输入的效价、唤醒度、支配度估计；用可见行为预测有明示标签的笑、哭、叹息等情感表达。排除：语音声学输入的情绪识别；声音引发的感知情感或只预测情感极性；把由声学模型产生的代理标签当人类情绪真值、因果结论或诊断；纯眼动轨迹重建而无情感预测目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.text-video-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文本查询视频检索",
+        "en": "Text-query video retrieval"
+      },
+      "aliases": [
+        "文本到视频检索"
+      ],
+      "broaderId": null,
+      "definition": "根据自然语言查询检索相关视频或视频中的片段，并输出候选排序或相应匹配位置。",
+      "scopeNote": "纳入：整段或部分内容相关的文本查询视频检索；检索库视频排序，以及有明确文本语义查询的视频片段检索。排除：只检索音频或音乐；统一多种内容目标类型的共同检索空间不能由本任务代表；无检索排序或定位输出的视频分类、描述或问答。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-moment-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文本查询视频时段检索",
+        "en": "Video moment retrieval"
+      },
+      "aliases": [
+        "视频时刻检索",
+        "语言查询视频时间定位"
+      ],
+      "broaderId": "task.text-video-retrieval",
+      "definition": "根据自然语言查询在视频内检索匹配的时间段，输出起止边界及候选相关性或排序。",
+      "scopeNote": "纳入：语言查询的视频时间段定位与检索；对已有候选时间段进行相关性重评分以改善视频时段检索。排除：只返回视频条目而不识别时间段的部分相关视频检索；仅声音事件起止检测或音频片段定位；无语言查询的视频动作识别或镜头切分；计算校准损失但未验证视频时段检索目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.depth-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "深度估计",
+        "en": "Depth estimation"
+      },
+      "aliases": [
+        "场景深度预测",
+        "稠密深度估计"
+      ],
+      "broaderId": null,
+      "definition": "从图像或其他明确几何观测预测场景表面的距离或深度图，可结合回声等辅助传感证据。",
+      "scopeNote": "纳入：图像或多传感器输入的稠密或稀疏深度预测；回声与RGB联合推断场景表面的深度。排除：仅输出声源方向或发声位置；只给物体类别、分割掩膜或视频行为类别；无场景深度输出的通用视听理解；把深度图当可见图像重建质量的任务。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.active-speaker-detection",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "可见活跃说话人检测",
+        "en": "Active speaker detection"
+      },
+      "aliases": [
+        "Active speaker detection"
+      ],
+      "broaderId": "task.av-understanding",
+      "definition": "结合音频与视频证据判断视频中可见人物在各时刻是否正在说话，输出人物级说话活动标记。",
+      "scopeNote": "纳入：可见人物与当前语音活动的帧级或片段级关联；说话活动及其转换边界检测。排除：只有声音、没有人物视觉关联的VAD或说话人分段；识别人物身份但不判断是否说话；唇读转写或生成说话人视频。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.entity-linking",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "实体链接与消歧",
+        "en": "Entity linking and disambiguation"
+      },
+      "aliases": [
+        "Entity linking and disambiguation"
+      ],
+      "broaderId": null,
+      "definition": "根据提及项及其上下文，把歧义提及链接到知识库中的正确实体；上下文可包含文本、图像、音频或视频。",
+      "scopeNote": "纳入：多模态提及的知识库实体选择；同名人物、组织、地点或其他实体的上下文消歧。排除：只检测实体名称而无知识库链接；回答开放问题或检索文档而无实体身份对应；把输入多模态等同音视频综合理解。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.brain-response-encoding",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "刺激到脑响应预测",
+        "en": "Brain response encoding"
+      },
+      "aliases": [
+        "Brain response encoding"
+      ],
+      "broaderId": null,
+      "definition": "根据外部刺激及其表示预测测得的脑或神经响应，输出脑响应信号或响应模式，可建模受试者差异。",
+      "scopeNote": "纳入：电影、语言或其他感官刺激到fMRI等脑响应的编码预测；以脑响应预测为目标的跨受试者解码器或融合设计。排除：从神经信号恢复语音或文字的反方向解码；只有临床诊断类别而无脑响应预测；未经控制实验就认证人类语言或听觉加工的因果机制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.physiological-waveform-translation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "生理波形跨模态转换",
+        "en": "Cross-modal physiological waveform translation"
+      },
+      "aliases": [
+        "Cross-modal physiological waveform translation"
+      ],
+      "broaderId": null,
+      "definition": "根据一种已观测生理信号生成同一生理过程的另一种信号波形，并验证时序或生理结构的一致性。",
+      "scopeNote": "纳入：ECG与PCG等耦合生理波形的单向或双向合成；以源波形及其生理结构为条件的跨模态生理信号生成。排除：仅生成语音、音乐或普通环境声音；输出诊断类别而非生理波形；无跨模态源信号条件的任意生理去噪、源分离或无条件生成；以合成数值拟合结果冒称临床有效性。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-driven-3d-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频驱动三维对象生成",
+        "en": "Audio-driven 3D object generation"
+      },
+      "aliases": [
+        "Audio-driven 3D object generation"
+      ],
+      "broaderId": null,
+      "definition": "以音频为必要条件生成或编辑与声音语义对应的三维对象几何、网格或其纹理。",
+      "scopeNote": "纳入：音频条件的显式三维网格或对象构建；声音属性引导的三维形状或纹理编辑。排除：只生成视觉帧或视频；音频本身的生成；只用文字而未证明声音条件作用的三维生成；输出空间声场而非三维对象。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.face-voice-association",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "人脸与声音身份关联",
+        "en": "Face-voice association"
+      },
+      "aliases": [
+        "Face-voice association"
+      ],
+      "broaderId": null,
+      "definition": "判断或匹配人脸视觉样本与声音样本是否来自同一人物，输出跨模态身份对应、验证或候选匹配。",
+      "scopeNote": "纳入：人脸与声音的跨模态同身份验证；从候选人脸或声音中匹配对应人物。排除：两段语音之间的说话人验证；可见人物是否正在说话的活动检测；仅识别人脸类别或检索普通声像内容而无同身份目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.spectral-phase-retrieval",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "频谱相位恢复",
+        "en": "Spectral phase retrieval"
+      },
+      "aliases": [
+        "Spectral phase retrieval"
+      ],
+      "broaderId": null,
+      "definition": "根据给定的频谱幅度或强度及明确先验恢复缺失的谱相位，可进一步重建原信号。",
+      "scopeNote": "纳入：从STFT幅度恢复相位；以幅度或强度观测为条件、验证相位歧义与重建误差的算法。排除：从受噪波形作一般语音增强；计算已有信号的时频表示而未恢复缺失相位；只估计到达角、距离或传播参数。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.music-driven-stage-lighting",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音乐驱动舞台灯光控制",
+        "en": "Music-driven stage lighting control"
+      },
+      "aliases": [
+        "Music-driven stage lighting control"
+      ],
+      "broaderId": null,
+      "definition": "根据音乐生成或预测舞台灯光设备的时序控制参数，使灯光设计与音乐表达相协调。",
+      "scopeNote": "纳入：音频条件的色相、亮度或设备控制序列生成；学习灯光师示例的音乐到灯光控制映射。排除：音乐类别识别或音乐本身生成；只有屏幕视频帧而无灯光控制输出；未经验证就声称真实舞台观众体验或设备安全性。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.ecological-species-prediction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "生态物种识别与分布预测",
+        "en": "Ecological species identification and distribution prediction"
+      },
+      "aliases": [
+        "Ecological species identification and distribution prediction"
+      ],
+      "broaderId": null,
+      "definition": "依据生态观测或环境条件预测物种身份、出现情况或地理分布，输出有明确物种语义的类别或出现概率。",
+      "scopeNote": "纳入：多传感器生态观测的物种分类；环境、图像或声音等证据支撑的物种出现及分布预测。排除：无物种标签的通用场景分类；只研究生物声音的传播机制而无物种预测；因为一部分数据有音频就把所有协议归为声学分类；把模型预测的出现概率当已认证的保护政策效果。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-summarization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视频摘要与片段选择",
+        "en": "Video summarization"
+      },
+      "aliases": [
+        "Video summarization"
+      ],
+      "broaderId": null,
+      "definition": "从已有视频选择或组织代表性帧和片段，形成保留主要内容的短摘要，可联合文字或音频作为选择证据。",
+      "scopeNote": "纳入：视频重要度预测与代表片段选择；多模态语义支撑的紧凑视频摘要。排除：生成新的视频内容；只生成文字描述而无摘要片段目标；按特定查询返回相关时段的检索；以平台重播热度代理标注冒称普遍人类重要度真值。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视频生成",
+        "en": "Video generation"
+      },
+      "aliases": [
+        "Video generation"
+      ],
+      "broaderId": null,
+      "definition": "生成视觉帧序列或视频，可由文字、图像、历史帧等条件控制，并保持所要求的时空内容与连续性。",
+      "scopeNote": "纳入：条件或无条件的新视觉帧序列生成；长视频续写与时空一致性生成。排除：只对已有视频分类、检索或摘要；只有三维几何而无视觉帧序列；同时生成协调新音频与视觉内容时忽略其双输出；未经证据将一个audio-conditioned扩展认定为整篇主目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.distributed-model-training",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "分布式模型训练优化",
+        "en": "Distributed model training optimization"
+      },
+      "aliases": [
+        "Distributed model training optimization"
+      ],
+      "broaderId": null,
+      "definition": "在多设备或多节点上完成模型训练，并以计算、通信、内存或训练吞吐等分布式执行性质为直接研究目标。",
+      "scopeNote": "纳入：异构模型或样本下的训练负载均衡；流水线、张量、上下文或数据并行的训练执行优化。排除：只有推理延迟或模型压缩目标；在不同数据持有者间协调学习的隐私或联邦目标；把常规多GPU训练配置当论文主任务；只报告硬件成本而无训练执行贡献。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.distributed-parallel-training",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "分布式并行训练",
+        "en": "Distributed parallel training"
+      },
+      "aliases": [
+        "Distributed parallel training"
+      ],
+      "broaderId": null,
+      "definition": "通过多设备或多节点的模型、数据、流水线或上下文划分及通信调度，协同计算训练目标并更新模型。",
+      "scopeNote": "纳入：训练图的并行分解、流水线调度与跨设备负载平衡；异构模块或样本的分布式训练调度设计。排除：无训练目标的分布式推理；以私有数据持有者协调为核心的联邦学习；没有贡献的普通GPU数量设置；按单样本难度早退的动态计算。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.visual-result-verification",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视觉结果验证",
+        "en": "Visual outcome verification"
+      },
+      "aliases": [
+        "Visual outcome verification"
+      ],
+      "broaderId": null,
+      "definition": "判断视觉结果是否满足给定提示、意图或明确约束，并可定位支持或否定该判断的视觉证据。",
+      "scopeNote": "纳入：图像结果与提示约束的一致性判定；带区域证据、结构化理由或校正反馈的视觉结果核验。排除：普通文档内容问答或开放描述；直接生成图像而无验证目标；把判断校准或强化学习方法本身充作任务；凭模型认可冒称所有事实或安全性已验证。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.visual-storyboard-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视觉故事分镜生成",
+        "en": "Visual storyboard generation"
+      },
+      "aliases": [
+        "Visual storyboard generation"
+      ],
+      "broaderId": null,
+      "definition": "根据故事或创作意图生成相互协调的分镜脚本与关键帧图像，组织跨镜头叙事、角色和画面的一致性。",
+      "scopeNote": "纳入：脚本起草、扩写或续写与关键帧图像的联合创作；为后续视频制作生成连贯多镜头分镜。排除：只有普通文章或图像而无分镜叙事组织；直接合成连续视频帧或波形且没有分镜产出；把脚本中的声音文字描述认定为新音频生成；后续调用其他模型生成视听素材等同本模型直接双模态生成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.nonnegative-matrix-factorization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "非负矩阵分解",
+        "en": "Nonnegative matrix factorization"
+      },
+      "aliases": [
+        "Nonnegative matrix factorization"
+      ],
+      "broaderId": null,
+      "definition": "把给定非负矩阵近似分解为非负因子的乘积，以分解误差、可行性、收敛或求解效率作为直接研究目标。",
+      "scopeNote": "纳入：NMF求解算法及非负约束处理；真实或合成矩阵的分解质量、等价性或收敛评测。排除：只压缩神经网络权重或激活以节省资源；把低秩适配增量或任意矩阵运算称为NMF；只有音频去噪下游应用提及却没有音频任务实证；以新任务节点预先决定论文为工程或纯理论类型。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.constrained-numerical-optimization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "约束数值优化",
+        "en": "Constrained numerical optimization"
+      },
+      "aliases": [
+        "Constrained numerical optimization"
+      ],
+      "broaderId": null,
+      "definition": "为具有明确可行域或约束的数值目标构造迭代或解析求解算法，并验证其求解性质。",
+      "scopeNote": "纳入：非负、等式或不等式约束下的数值求解；内点、外点、投影或惩罚等约束处理与收敛分析。排除：只有通用神经模型梯度训练且优化器不是核心贡献；没有数值求解的定理证明；以随机群体变异为核心的进化优化而不证明本节点必要；只做目标的统计估计而无明确约束求解。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.human-visual-attention-prediction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "人类视觉注意预测",
+        "en": "Human visual attention prediction"
+      },
+      "aliases": [
+        "Human visual attention prediction"
+      ],
+      "broaderId": null,
+      "definition": "根据视觉刺激及任务条件预测人的注视位置、显著性分布或视觉注意轨迹，可结合相关声音与文字。",
+      "scopeNote": "纳入：图像、视频或视听场景的人类注视显著性预测；任务语义条件下的动态人类视觉注意建模。排除：模型内部query-key注意力权重本身的设计；没有人的视觉注意目标的对象检测；把预测性能当认知机制或因果解释已证实；把音频辅助输入认证为听觉认知科学主角色。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.video-forgery-detection-attribution",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视频伪造检测与溯源",
+        "en": "Video forgery detection and attribution"
+      },
+      "aliases": [
+        "Video forgery detection and attribution"
+      ],
+      "broaderId": null,
+      "definition": "根据视频内的时空或跨模态不一致证据判断视觉内容是否被生成或篡改，并可识别相应生成来源。",
+      "scopeNote": "纳入：口型、头姿、时序或音画关系支撑的视频伪造鉴别；对已疑似伪造视频识别生成方法或来源类别。排除：只检测伪造语音而无视频证据；静态图像鉴别且没有时空视觉协议；普通音画同步校正或活跃说话人检测；把模型来源分类冒称现实责任主体的法律认定。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.dataset-distillation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "数据集蒸馏与凝缩",
+        "en": "Dataset distillation and condensation"
+      },
+      "aliases": [
+        "合成小数据集学习",
+        "Dataset condensation"
+      ],
+      "broaderId": null,
+      "definition": "把已有数据集的训练效用凝缩到显著更小的合成数据集合，直接学习这些样本，使在其上训练的模型保留原数据支持的性能。",
+      "scopeNote": "纳入：以合成小样本集合为产出的数据集蒸馏、凝缩，以及围绕其训练效用、压缩比、构造时间和存储成本的研究。排除：只压缩模型参数或迁移教师输出而没有凝缩数据集合；普通数据增强、数据筛选、收集清理或任意跨域分布对齐；以检索、分类等下游检验协议代替数据凝缩本身的核心目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.line-spectral-estimation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "一般线谱参数估计",
+        "en": "General line spectral parameter estimation"
+      },
+      "aliases": [
+        "General line spectral parameter estimation"
+      ],
+      "broaderId": null,
+      "definition": "从采样或含噪观测中估计复指数或正弦分量的连续频率、幅度等参数，以参数恢复、分辨率、可识别性或求解误差为直接研究目标。",
+      "scopeNote": "纳入：无预置网格的复正弦混合线谱估计、原子范数/稀疏表示求解与线谱参数恢复验证；不以信号来源自动决定领域。排除：只画频谱或生成时频表示而不恢复分量参数；仅有声学背景应用便称来自声音或脉冲响应的物理/控制参数；说话人/疾病类别预测；把任意一般原子集合优化都当线谱估计。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.singing-skill-evaluation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "歌唱技能与音准质量评估",
+        "en": "Singing skill and pitch accuracy evaluation"
+      },
+      "aliases": [
+        "Singing skill and pitch accuracy evaluation"
+      ],
+      "broaderId": "task.music-understanding",
+      "definition": "依据歌唱声学证据估计演唱控制技能、音准准确性或其质量指标，输出评分、排序、概率指标或其他明确的演唱质量判断。",
+      "scopeNote": "纳入：单项音准质量评估及多维歌唱技能评估；由半音音高直方图等特征推断技术控制质量，含参考独立的概率比较。排除：仅估计音高轨迹/主旋律或和弦而无技能/质量判断；歌唱生成或纠音处理；音乐风格/流派类别识别；仅以主观偏好/喜欢程度代替定义明确的演唱技能目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.speech-native-interaction-agenda",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "语音原生交互架构与采纳议程",
+        "en": "Speech-native interaction architecture and adoption agenda"
+      },
+      "aliases": [
+        "Speech-native interaction architecture and adoption agenda"
+      ],
+      "broaderId": null,
+      "definition": "以语音或音频作为人机交互与模型训练的一等信息载体，研究或论证交互架构、语音原生数据与表示设计、用户采纳障碍及相关研究议程。",
+      "scopeNote": "纳入：对语音原生基础模型/接口和由文本优先转向语音优先的明确设计、立场或实践研究；对习惯惯性、采纳障碍和架构选择的实质论证。排除：仅做语音识别/合成准确率任务而无交互架构或采纳研究；仅提及未来语音功能；把附属用户问卷自动当主要研究方法；将语用会话规律研究或单纯模型评测冒充整体设计议程。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-navigation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "声引导导航",
+        "en": "Audio-guided navigation"
+      },
+      "aliases": [
+        "声音引导导航",
+        "Sound-guided navigation"
+      ],
+      "broaderId": null,
+      "definition": "利用环境声音提供的目标或空间线索，选择智能体移动动作、航路或路径以到达目标位置。",
+      "scopeNote": "纳入：以真实或仿真环境中的具身移动、目标到达、路径效率或动作决策为主要输出的声音引导任务；视觉等信号可参与。排除：只输出声源方向/坐标而无导航动作；对音视频内容做分类、问答或语义解释；由语音指令指定路线但不使用环境声音导航；只通过提示音向人提供非研究性界面反馈。有视听联合感知这一明确任务限制时优先视听导航后代，不重复同时选择祖先。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-visual-navigation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "视听导航",
+        "en": "Audio-visual navigation"
+      },
+      "aliases": [
+        "Audio-visual embodied navigation"
+      ],
+      "broaderId": "task.audio-navigation",
+      "definition": "联合环境音频与第一人称视觉感知生成具身智能体的移动决策或路径，使其到达发声目标或其他由视听线索确定的导航目标。",
+      "scopeNote": "纳入：以音频和视觉共同驱动导航策略，并评测目标到达、路径/动作效率或导航成功的任务。排除：静态声源定位、音视频同步/事件理解、仅有语音指令的视觉导航以及只做音视频内容检索；不能因数据包含双模态而自动认定导航。声源方位/距离可为子部件，但不能取代完整导航目标。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.language-resource-coverage",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "语言技术资源覆盖与适用性",
+        "en": "Language-technology resource coverage and suitability"
+      },
+      "aliases": [
+        "语言资源生态研究",
+        "Language resource ecosystem analysis"
+      ],
+      "broaderId": null,
+      "definition": "以语言技术数据集、语料、评测资源及工具生态的覆盖、组织、可用性与适用性为主要研究问题，综合分析任务、语言或方言、模态、领域、标注与评价协议之间的资源分布和缺口。",
+      "scopeNote": "纳入：资源生态综述、跨任务资源清单及有关语言/方言覆盖、标注一致性、评测可比性、资源许可或适用范围的实质综合分析；不限于某个国家或语言。排除：仅使用若干数据集完成模型实验；仅引用数据稀缺作为背景；将整理别人资源自动标为贡献新数据集/新基准；单纯模型性能比较或人类语言认知机制研究。资源检索与综合是否属于文献综述/系统综述须另凭方法证据判断。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.conversational-text-emotion-recognition",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文本会话情绪识别",
+        "en": "Conversational text emotion recognition"
+      },
+      "aliases": [
+        "Text-based emotion recognition in conversation",
+        "Textual ERC"
+      ],
+      "broaderId": null,
+      "definition": "根据会话的文本内容、说话轮次及历史上下文识别参与者当前或指定话语中的情绪标签、分布或状态。",
+      "scopeNote": "纳入：文本会话情绪识别/分类，包括利用角色或人格条件改善话语情绪预测。排除：从语音声学信号识别情绪（语音情感识别）；仅做正负极性情感分析；从视觉判断情绪；预测稳定人格特征；仅生成情绪一致回复而没有识别目标。源数据集可能同时提供音视频，但本任务分支必须依据实际使用的文本输入而非数据集名称认模态。情绪一致回复可以是辅助目标，不能据此把文本ERC硬归语音对话。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.robot-skill-learning-adaptation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "机器人技能学习与适配",
+        "en": "Robot skill learning and adaptation"
+      },
+      "aliases": [
+        "Robot skill acquisition and adaptation"
+      ],
+      "broaderId": null,
+      "definition": "学习或表示机器人具身操作技能，并根据示教、任务要求或用户反馈调整可执行运动轨迹、技能参数或接触行为。",
+      "scopeNote": "纳入：从示教获取技能、运动基元或操作策略；在线修正、目标/障碍变化下的技能适配及真实或仿真执行验证。语音、物理示教、图形界面可为互补输入，不要求每篇都具备全部模态。排除：仅识别语音或生成文字回复而无机器人技能产物；只估计位置；群体任务分配而未学习或适配单体操作技能；仅低层控制稳定性推导而无技能学习/适配目标。使用LLM工具或强化学习须凭实际机制，不能从机器人场景推定。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.periodic-waveform-denoising",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "周期波形去噪与恢复",
+        "en": "Periodic waveform denoising and recovery"
+      },
+      "aliases": [
+        "Periodic signal waveform estimation"
+      ],
+      "broaderId": null,
+      "definition": "从含噪观测中恢复周期或准周期信号的目标波形，以波形误差、输出信噪比或去噪质量为直接研究输出。",
+      "scopeNote": "纳入：利用重复结构或已知/估计周期进行波形估计、周期信号去噪及适用条件分析；信号来源与领域另据实际数据判断。排除：只恢复连续频率/幅度等线谱分量参数；预测疾病/故障标签；仅提取特征或检测周期；把背景列举的语音、医学、雷达、声呐当作实际评测。明确以音频恢复为主要对象时须比较已有音频修复的更具体适用范围，不重复堆叠同目标近义概念。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.multimodal-semantic-transport",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "多模态语义传输",
+        "en": "Multimodal semantic transport"
+      },
+      "aliases": [
+        "Task-oriented multimodal media transport"
+      ],
+      "broaderId": null,
+      "definition": "为接收端任务传输联合或并行的多模态信息，以保留任务相关语义并降低网络载荷、交付时延或传输开销为主要目标。",
+      "scopeNote": "纳入：面向模型/智能体接收端的模态载荷编码或组合、语义与结构化信息混合表示、交付时序与重建接口的传输系统；以传输成本和下游任务保持度共同验证。排除：无通信/交付目标的多模态内容理解或融合；仅做音频波形保真/码率优化；仅借用codec/tokenizer而没有传输系统研究；把已有编码器当作本文新编码算法。具体编码方法、网络实现与模拟/真实部署分别须有证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.conversational-depression-screening",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "会话抑郁风险筛查",
+        "en": "Conversational depression-risk screening"
+      },
+      "aliases": [
+        "Conversation-based depression detection"
+      ],
+      "broaderId": null,
+      "definition": "根据会话中的语言、行为或实际使用的声学证据，预测会话参与者的抑郁相关标签、严重度或筛查风险。",
+      "scopeNote": "纳入：有明确抑郁筛查目标、临床量表/标签或相应数据协议的会话级预测；可同时研究症状线索归因和可解释性。排除：普通情绪/正负极性识别；预测稳定人格；通用心理健康愿景；AI精神健康文献综述而未实现本任务。输入模态只由实际方法和评测确定，不从DAIC等数据集名称推定声学，也不凭结论一句未展开的声学声明扩大领域。模型筛查结果不等于独立临床诊断。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.radio-map-reconstruction",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "射频空间场重建",
+        "en": "Radio-frequency spatial field reconstruction"
+      },
+      "aliases": [
+        "Radio map reconstruction",
+        "Spectrum cartography"
+      ],
+      "broaderId": null,
+      "definition": "从稀疏或异构无线测量重建空间射频量的分布，例如接收信号强度、路径损耗或功率谱密度场。",
+      "scopeNote": "纳入：频谱制图/无线电环境图的插值、反演或回归重建，并验证场分布误差与计算代价。排除：声压或空间声场重建；只定位无线目标坐标；通信符号解码；仅为任意回归算法列举射频背景而无实际场重建协议。电磁射频与声学领域不能因共享阵列、核回归或传播词面而混同。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.accessible-interface-adaptation",
+      "facet": "research_focus",
+      "preferredLabel": {
+        "zh": "界面无障碍适配与设计议程",
+        "en": "Accessible interface adaptation and design agenda"
+      },
+      "aliases": [
+        "Accessibility-oriented interface adaptation"
+      ],
+      "broaderId": null,
+      "definition": "以用户能力、内容变化与访问障碍为主要研究问题，研究或论证交互界面的适配机制、无障碍设计政策及其可用性、信息忠实性与用户控制条件。",
+      "scopeNote": "纳入：自适应或生成式界面如何应对不同用户能力及不可控内容；有关设计政策、适配质量、访问性与内容忠实性权衡的实质研究、立场或综合议程。排除：仅有辅助技术应用或一个无障碍Demo而未研究界面适配问题；普通界面生成/速度优化；仅因一个音频提示或语音输入原型而认定全文为语音原生交互；从少量方便样本预定普遍技术采纳结论。与application.accessibility的应用目的不同；与speech-native focus互有交叉但不作其祖先/子项。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.wireless-localization",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "无线电定位",
+        "en": "Radio-based localization"
+      },
+      "aliases": [
+        "Wireless target localization",
+        "RF localization"
+      ],
+      "broaderId": null,
+      "definition": "依据无线电传播测量、锚点或无线信号观测估计目标的空间位置、方向或相应位置分布。",
+      "scopeNote": "纳入：TOA/TDOA/AOA等无线定位及LOS/NLOS、多径/衍射条件下的定位估计，以位置误差、界限或鲁棒性直接验证。排除：声源定位；空间射频场制图而未定位目标；导航动作/路径规划；仅画传播路径或估计信道参数而无位置产物。不因无线和声学共享TOA或阵列术语合并领域；定位算法与求解方法分别需真实证据。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.nonnegative-matrix-factorization",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "非负矩阵分解方法",
+        "en": "Nonnegative matrix factorization method"
+      },
+      "aliases": [
+        "NMF",
+        "Nonnegative matrix factorization method"
+      ],
+      "broaderId": null,
+      "definition": "以非负因子乘积近似非负数据矩阵，通过优化重建误差或散度及非负约束获得可解释基、字典或激活，用于信号分解、重构或表示建模。",
+      "scopeNote": "纳入：经典或约束NMF及有固定/预训练部分基的分解，通过乘性更新或其他明确求解算法恢复非负因子；以数据矩阵分解为真实核心机制。排除：神经网络权重/激活的低秩压缩；低秩适配增量；显式词典规则映射；只提到任意矩阵乘法或非负激活。半监督NMF的已知部分基不自动满足method.semi-supervised的有标签与无标签数据学习定义；稀疏NMF须另有稀疏目标/约束，不能凭低秩推定。与task.nonnegative-matrix-factorization正交：方法用于其它明确任务时仍是method；把分解质量/求解本身作为目标时另审任务，不自动选两者。NMF别名须按method/task分面消歧。",
+      "status": "active",
+      "replacedBy": null
+    }
+  ]
+}

@@ -1,20 +1,22 @@
 (function (root, factory) {
   'use strict';
-  var api = factory();
+  var api = factory(root);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.ResearchTags = api;
-}(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+}(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
   'use strict';
 
-  var CONTRACT = 'paper-tag-flat-tags-v2';
-  var LEGACY_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
+  var protocols = typeof module === 'object' && module.exports ? require('./protocol-registry.js') : root.PaperDigestProtocols;
+  if (!protocols) throw new Error('Public protocol registry is unavailable');
+  var CONTRACT = protocols.contract('paper-tag-flat-tags');
+  var LEGACY_CONTRACT = protocols.historicalContract('paper-tag-flat-tags','legacy-preferred-labels');
   var V2_CONTRACT = 'historical-source-taxonomy-classification-v2';
   var V3_CONTRACT = 'historical-source-taxonomy-classification-v3';
   var QUALIFIED_CONTRACT = 'exact1028-independent-review-qualified-classification-v1';
-  var SNAPSHOT_CONTRACT = 'paper-tag-catalog-snapshot-v2';
-  var LEGACY_SNAPSHOT_CONTRACT = 'paper-taxonomy-registry-snapshot-v1';
-  var VERSIONS_CONTRACT = 'paper-tag-catalog-versions-v2';
-  var LEGACY_VERSIONS_CONTRACT = 'paper-taxonomy-version-catalog-v1';
+  var SNAPSHOT_CONTRACT = protocols.contract('paper-tag-catalog-snapshot');
+  var LEGACY_SNAPSHOT_CONTRACT = protocols.historicalContract('paper-tag-catalog-snapshot','legacy-public-concept-hierarchy');
+  var VERSIONS_CONTRACT = protocols.contract('paper-tag-catalog-versions');
+  var LEGACY_VERSIONS_CONTRACT = protocols.historicalContract('paper-tag-catalog-versions','legacy-sha-keyed-snapshot-set');
   var researchTypeLabels = Object.freeze({ engineering: '工程研究', science: '科学研究', analysis: '机制分析',
     evaluation: '评测研究', resource: '研究资源', review: '综述', experience: '实践报告', position: '观点论文' });
   var domainLabels = Object.freeze({ 'in-domain': '音频研究', 'cross-domain': '跨域交叉',
@@ -31,7 +33,7 @@
     scientific_topic: '科学主题', model_family: '模型家族' });
   var own = function (object, key) { return Object.prototype.hasOwnProperty.call(object, key); };
   var tagFieldNames = [
-    ['tagContract', 'taxonomyContract'], ['tagConcepts', 'taxonomyConcepts'],
+    ['tagContract', 'taxonomyContract'], ['tagSchemaFingerprint','taxonomySchemaFingerprint'], ['tagConcepts', 'taxonomyConcepts'],
     ['tagCatalogSha256', 'taxonomyRegistrySha256'], ['tagPublicationStatus', 'taxonomyPublicationStatus'],
     ['tagEvidenceContract', 'taxonomyEvidenceContract'], ['tagEvidenceType', 'taxonomyEvidenceType'],
     ['tagProofSha256', 'taxonomyProofSha256'], ['tagPageSha256', 'taxonomyPageSha256'],
@@ -42,7 +44,7 @@
     var hasLegacy = tagFieldNames.some(function (names) { return own(record, names[1]); });
     if (hasCurrent && hasLegacy) throw new Error('标签字段不能混用新旧命名。');
     var fields = {};
-    tagFieldNames.forEach(function (names) { fields[names[0]] = record[names[hasCurrent ? 0 : 1]]; });
+    tagFieldNames.forEach(function (names) { var key=names[hasCurrent ? 0 : 1]; if(names[0]!=='tagSchemaFingerprint'||own(record,key))fields[names[0]] = record[key]; });
     return fields;
   }
   var text = function (value) { return typeof value === 'string' ? value.trim() : ''; };
@@ -61,32 +63,35 @@
       var keys = Object.keys(a);
       return keys.length === Object.keys(b).length && keys.every(function (key) { return own(b, key) && sameValue(a[key], b[key]); });
     }
-    var keys = Object.keys(left).filter(function (key) { return key !== 'contract'; });
-    return keys.length === Object.keys(right).filter(function (key) { return key !== 'contract'; }).length
+    var keys = Object.keys(left).filter(function (key) { return !['contract','schemaFingerprint'].includes(key); });
+    return keys.length === Object.keys(right).filter(function (key) { return !['contract','schemaFingerprint'].includes(key); }).length
       && keys.every(function (key) { return own(right, key) && sameValue(left[key], right[key]); });
   }
   function loadDisplayAssets(indexUrl, fetchImpl) {
     var options = { credentials: 'same-origin', redirect: 'error' };
-    function request(filename) { return fetchImpl(new URL('data/' + filename, indexUrl), options); }
-    function readOld(filename) {
-      return fetchImpl(new URL('data/' + filename, indexUrl), { credentials: 'same-origin' }).then(function (response) { return response && response.ok ? response.json() : null; })
-        .catch(function () { return null; });
-    }
-    return Promise.all([request('tag-catalog-snapshot.json'), request('tag-catalog-versions.json')]).then(function (responses) {
-      if (responses.every(function (response) { return response && response.status === 404; })) {
-        return Promise.all([readOld('taxonomy-registry.json'), readOld('taxonomy-catalog.json')])
-          .then(function (values) { return { snapshot: values[0], versions: values[1] }; });
-      }
-      if (responses.some(function (response) { return !response || !response.ok; })) throw new Error('新版标签显示资源缺失或读取失败。');
-      return Promise.all(responses.map(function (response) { return response.json(); })).then(function (values) {
-        var snapshot = values[0], versions = values[1];
-        if (!snapshot || snapshot.contract !== SNAPSHOT_CONTRACT || !versions || versions.contract !== VERSIONS_CONTRACT) {
-          throw new Error('新版标签显示资源的格式不受支持。');
-        }
-        createRegistry(snapshot, versions);
-        return { snapshot: snapshot, versions: versions };
+    var rootIndex=new URL(indexUrl);
+    rootIndex.pathname=rootIndex.pathname.replace(/\/client\/index\.json$/, '/index.json');
+    function request(filename,prefix) { return fetchImpl(new URL(prefix + filename, rootIndex), options); }
+    function pair(prefix, next) {
+      var families=['paper-tag-catalog-snapshot','paper-tag-catalog-versions'];
+      var exactContracts=prefix==='client/data/' ? families : [
+        protocols.historicalHeader(families[0],'public-concept-hierarchy',null).contract,
+        protocols.historicalHeader(families[1],'sha-keyed-snapshot-set',null).contract
+      ];
+      return Promise.all([request('tag-catalog-snapshot.json',prefix),request('tag-catalog-versions.json',prefix)]).then(function(responses){
+        if (responses.every(function(response){return response && response.status===404;})) return next();
+        if (responses.some(function(response){return !response || !response.ok;})) throw new Error('标签显示资源缺失或读取失败。');
+        return Promise.all(responses.map(function(response){return response.json();})).then(function(values){
+          if (!values.every(function(value,index){return protocols.hasValidHeader(value,families[index]) && value.contract===exactContracts[index];})) throw new Error('标签显示资源的格式或结构指纹不受支持。');
+          createRegistry(values[0],values[1]);return {snapshot:values[0],versions:values[1]};
+        });
       });
-    });
+    }
+    function original(){
+      function read(filename){return request(filename,'data/').then(function(response){return response && response.ok ? response.json():null;}).catch(function(){return null;});}
+      return Promise.all([read('taxonomy-registry.json'),read('taxonomy-catalog.json')]).then(function(values){return {snapshot:values[0],versions:values[1]};});
+    }
+    return pair('client/data/',function(){return pair('data/',original);});
   }
 
   // 词表快照使用有序祖先链；不完整或不支持的图须拒绝，不能将任意数组当作分类树。
@@ -94,9 +99,10 @@
     if (!snapshot || !Array.isArray(snapshot.concepts) || !snapshot.concepts.length) {
       throw new Error('分类目录缺少概念');
     }
-    if (snapshot.contract && ![SNAPSHOT_CONTRACT, LEGACY_SNAPSHOT_CONTRACT].includes(snapshot.contract)) {
+    if (snapshot.contract && !protocols.hasValidHeader(snapshot,'paper-tag-catalog-snapshot')) {
       throw new Error('分类目录版本不受支持');
     }
+    if(snapshot.contract&&!['public-concept-hierarchy','legacy-public-concept-hierarchy'].includes(protocols.format(snapshot.contract,'paper-tag-catalog-snapshot',snapshot.schemaFingerprint)))throw new Error('分类目录语义格式尚不受支持');
     var byId = Object.create(null);
     var childrenById = Object.create(null);
     var rootsByFacet = Object.create(null);
@@ -172,18 +178,19 @@
     if (!catalog && graph.registrySha256) versions[graph.registrySha256] = graph;
     graph.hasVersionCatalog = !!catalog;
     if (catalog) {
-      if (![VERSIONS_CONTRACT, LEGACY_VERSIONS_CONTRACT].includes(catalog.contract) || !Array.isArray(catalog.snapshots)
+      if (!protocols.hasValidHeader(catalog,'paper-tag-catalog-versions') || !Array.isArray(catalog.snapshots)
         || catalog.currentSha256 !== graph.registrySha256 || !catalog.snapshots.length) throw new Error('分类版本目录非法');
+      if(!['sha-keyed-snapshot-set','legacy-sha-keyed-snapshot-set'].includes(protocols.format(catalog.contract,'paper-tag-catalog-versions',catalog.schemaFingerprint)))throw new Error('分类版本目录语义格式尚不受支持');
       var seenVersions = new Set();
       catalog.snapshots.forEach(function (version) {
         var sha = version && version.registrySha256;
         if (!/^[a-f0-9]{64}$/.test(sha || '') || seenVersions.has(sha)) throw new Error('分类版本重复或无效');
         seenVersions.add(sha);
-        if (catalog.contract === VERSIONS_CONTRACT && ![SNAPSHOT_CONTRACT, LEGACY_SNAPSHOT_CONTRACT].includes(version.contract)) {
+        if (protocols.isContract(catalog.contract,'paper-tag-catalog-versions','sha-keyed-snapshot-set',catalog.schemaFingerprint) && !protocols.hasValidHeader(version,'paper-tag-catalog-snapshot')) {
           throw new Error('当时保存的词表快照格式不受支持。');
         }
         var historical = createRegistry(version);
-        var currentContentMatches = snapshot.contract === SNAPSHOT_CONTRACT || catalog.contract === VERSIONS_CONTRACT
+        var currentContentMatches = protocols.isContract(snapshot.contract,'paper-tag-catalog-snapshot','public-concept-hierarchy',snapshot.schemaFingerprint) || protocols.isContract(catalog.contract,'paper-tag-catalog-versions','sha-keyed-snapshot-set',catalog.schemaFingerprint)
           ? sameSnapshotContent(snapshot, version)
           : historical.registryVersion === graph.registryVersion
             && JSON.stringify(Object.values(historical.byId)) === JSON.stringify(Object.values(graph.byId));
@@ -208,7 +215,9 @@
       if (tags.tagPublicationStatus === 'withheld') {
         result.status = 'withheld'; return result;
       }
-      if (![CONTRACT, LEGACY_CONTRACT].includes(tags.tagContract) || !Array.isArray(tags.tagConcepts)) {
+      var tagHeader={contract:tags.tagContract};
+      if (tags.tagSchemaFingerprint !== undefined) tagHeader.schemaFingerprint=tags.tagSchemaFingerprint;
+      if (!protocols.hasValidHeader(tagHeader,'paper-tag-flat-tags') || !Array.isArray(tags.tagConcepts)) {
         result.status = 'legacy'; return result;
       }
       if (!source) return result;

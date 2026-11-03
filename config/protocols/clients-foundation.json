@@ -1,0 +1,283 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-backup",
+      "currentVariant": "portable-research-files",
+      "currentSchema": {
+        "fields": [
+          "sourceDirectory",
+          "files"
+        ],
+        "fileFields": [
+          "path",
+          "sha256",
+          "data"
+        ],
+        "binaryEncoding": "standard-base64",
+        "maxDecodedBytes": 536870912,
+        "maxEncodedBytes": 786432000,
+        "maxEntries": 100000,
+        "maxPathUtf8Bytes": 4096,
+        "paths": "relative-no-links-nfc-case-fold-unique",
+        "integrity": "sha256-of-original-decoded-file-bytes",
+        "localIntegrityKeys": "excluded-from-new-exports-preserved-as-original-evidence-on-import"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-backup-v2",
+          "variant": "portable-research-files"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-storage-aliases",
+      "currentVariant": "sha-bound-root-relocation",
+      "currentSchema": {
+        "fields": [
+          "roots"
+        ],
+        "maxEntries": 100000,
+        "roots": "absolute-nonoverlapping-nfc-case-fold-unique",
+        "relocationRequires": "expected-original-file-sha256",
+        "authority": "path-relocation-only"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-storage-aliases-v1",
+          "variant": "sha-bound-root-relocation"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-request-continuity",
+      "currentVariant": "original-dispatch-identities",
+      "currentSchema": {
+        "fields": [
+          "requests"
+        ],
+        "requestFields": [
+          "id",
+          "startedAt"
+        ],
+        "maxEntries": 100000,
+        "maxRequestIdUtf8Bytes": 256,
+        "timestamp": "gregorian-utc-iso8601-with-original-one-to-nine-fractional-digits",
+        "merge": "same-id-requires-identical-original-time",
+        "authority": "issued-request-count-continuity-not-billing-or-model-permission"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-request-continuity-v1",
+          "variant": "original-dispatch-identities"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-cloud-snapshot",
+      "currentVariant": "chunked-immutable-snapshot",
+      "currentSchema": {
+        "fields": [
+          "reference",
+          "createdAt",
+          "encodedBytes",
+          "sha256",
+          "chunks"
+        ],
+        "chunkBytes": 8388608,
+        "maxEncodedBytes": 786432000,
+        "createdAt": "whole-second-utc-milliseconds",
+        "integrity": "original-encoded-backup-and-each-chunk-sha256"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-cloud-snapshot-v1",
+          "variant": "chunked-immutable-snapshot"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-cloud-transfer",
+      "currentVariant": "mac-resumable-snapshot",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "folder",
+          "reference",
+          "createdAt",
+          "encodedBytes",
+          "sha256",
+          "chunks",
+          "verifiedChunkIndices",
+          "manifestVerified",
+          "retryAfter"
+        ],
+        "authority": "saved-upload-identity-requires-remote-readback",
+        "snapshotFormat": {
+          "contract": "paperdigest-cloud-snapshot",
+          "schemaFingerprint": "f785ff340a8735f4c397889d8acd5b5aee3afd56d5ced50dd817aec434511967"
+        }
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-cloud-transfer-v1",
+          "variant": "mac-resumable-snapshot"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-cloud-profile",
+      "currentVariant": "mac-device-destination",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "account",
+          "folder",
+          "automatic",
+          "intervalHours",
+          "lastAttemptAt",
+          "lastBackup",
+          "automaticPaused"
+        ],
+        "storage": "outside-portable-research-data",
+        "intervalHours": [
+          6,
+          168
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-cloud-profile-v1",
+          "variant": "mac-device-destination"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-cloud-pending",
+      "currentVariant": "mac-original-snapshot",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "createdAt",
+          "fileCount",
+          "encodedBytes",
+          "sha256",
+          "checkpoint"
+        ],
+        "identity": "original-local-file-bytes-never-reencoded-on-resume"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-cloud-pending-v1",
+          "variant": "mac-original-snapshot"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-android-cloud-transfer",
+      "currentVariant": "android-resumable-snapshot",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "folder",
+          "manifest",
+          "verified",
+          "manifestVerified",
+          "retryAfter"
+        ],
+        "authority": "saved-upload-identity-requires-remote-readback"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-android-cloud-transfer-v1",
+          "variant": "android-resumable-snapshot"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-android-cloud-profile",
+      "currentVariant": "android-device-destination",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "account",
+          "folder",
+          "automatic",
+          "intervalHours",
+          "automaticPaused",
+          "lastAttemptAt",
+          "lastBackup"
+        ],
+        "storage": "outside-portable-research-data",
+        "intervalHours": [
+          6,
+          168
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-android-cloud-profile-v1",
+          "variant": "android-device-destination"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-android-cloud-pending",
+      "currentVariant": "android-original-snapshot",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "createdAt",
+          "fileCount",
+          "encodedBytes",
+          "sha256",
+          "checkpoint"
+        ],
+        "identity": "original-local-file-bytes-never-reencoded-on-resume"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-android-cloud-pending-v1",
+          "variant": "android-original-snapshot"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-offline-package",
+      "currentVariant": "paper-and-article-bound-files",
+      "currentSchema": {
+        "fields": [
+          "id",
+          "paperID",
+          "title",
+          "createdAt",
+          "blogURL",
+          "sourceURL",
+          "sourceVersion",
+          "articleRevisionSHA256",
+          "articleContentSHA256",
+          "paperContentSHA256",
+          "pdfURL",
+          "pdfSHA256",
+          "files"
+        ],
+        "files": "paper.json-article.json-optional-original.pdf-and-sha-named-images",
+        "id": "sha256-original-normalized-article-paper-source-pdf-images-projection",
+        "limits": {
+          "maxFiles": 35,
+          "maxManifestBytes": 2097152
+        },
+        "integrity": "every-original-file-sha256-before-local-use"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-offline-package-v2",
+          "variant": "paper-and-article-bound-files"
+        },
+        {
+          "tag": "paperdigest-offline-package-v1",
+          "variant": "article-bound-files"
+        }
+      ]
+    }
+  ]
+}

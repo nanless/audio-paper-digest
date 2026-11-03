@@ -94,5 +94,49 @@ test('real conference dependency closure includes current daily Reader source gu
         'scripts/lib/reader-source-display.js', 'scripts/lib/reader-scientific-quote-coverage.js',
         'scripts/lib/reader-resource-input-admission.js',
         'scripts/lib/prompt-evidence.js', 'scripts/prompt_evidence.py',
-        'scripts/lib/git-prompt-evidence-index.json']) assert(files.includes(file), file);
+        'scripts/lib/git-prompt-evidence-index.json', 'scripts/lib/protocol-codec.js',
+        'scripts/protocol_codec.py', 'scripts/lib/strict-json.js']) assert(files.includes(file), file);
+    for (const name of fs.readdirSync(path.join(root, 'config/protocols')).filter(name => /^[a-z][a-z0-9-]*\.json$/.test(name))) {
+        assert.equal(files.includes(`config/protocols/${name}`), !name.startsWith('clients-'), name);
+    }
+});
+
+test('协议目录只进入实际使用 codec 的实现范围，并拒绝不安全文件', t => {
+    const f = dynamicRulesFixture(t);
+    f.write('scripts/protocol-entry.js', "require('./lib/protocol-codec');");
+    f.write('scripts/lib/protocol-codec.js', "const directory = 'config/protocols'; // dynamic read, never execute this fixture");
+    f.write('config/protocols/history.json', '{"protocols":[]}');
+    f.write('config/unrelated.json', '{}');
+    const files = f.collect('scripts/protocol-entry.js');
+    assert(files.includes('config/protocols/history.json'));
+    assert(!files.includes('config/unrelated.json'));
+    assert(!f.collect('scripts/unrelated.js').includes('config/protocols/history.json'));
+    const catalog = path.join(f.root, 'config/protocols/history.json');
+    fs.unlinkSync(catalog); fs.mkdirSync(catalog);
+    assert.throws(() => f.collect('scripts/protocol-entry.js'), /regular project file/);
+    fs.rmdirSync(catalog);
+    const other = path.join(f.root, 'outside-catalog.json'); fs.writeFileSync(other, '{}');
+    fs.symlinkSync(other, catalog);
+    assert.throws(() => f.collect('scripts/protocol-entry.js'), /regular project file/);
+});
+
+
+test('客户端私有格式新增或改动不进入科学指纹，共享格式仍按实际字节绑定', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'protocol-dependency-scope-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const write = (name, value) => { const file = path.join(root, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
+    write('scripts/lib/protocol-codec.js', '// metadata owner; do not execute');
+    const declaration = (name, field) => JSON.stringify({ protocols: [{ name, currentVariant: 'source-bound', currentSchema: { field }, historical: [] }] });
+    write('config/protocols/clients.json', declaration('public-source', 'before'));
+    write('config/protocols/tags.json', declaration('shared-tags', 'before'));
+    write('config/protocols/clients-foundation.json', declaration('native-settings', 'before'));
+    const collect = () => collectWorkflowImplementationFiles({ root, entryFiles: ['scripts/lib/protocol-codec.js'] });
+    const hash = () => require('node:crypto').createHash('sha256').update(JSON.stringify(collect().map(file => [file, fs.readFileSync(path.join(root, file), 'utf8')]))).digest('hex');
+    const original = hash();
+    write('config/protocols/clients-foundation.json', declaration('native-settings', 'after'));
+    write('config/protocols/clients-research.json', declaration('native-research', 'added'));
+    assert.equal(hash(), original);
+    write('config/protocols/tags.json', declaration('shared-tags', 'after'));
+    assert.notEqual(hash(), original);
+    assert(collect().includes('config/protocols/clients.json'));
 });

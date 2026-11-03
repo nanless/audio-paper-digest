@@ -1,6 +1,7 @@
 'use strict';
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const test = require('node:test');
+const { recordHeader } = require('../scripts/lib/protocol-codec');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -61,7 +62,7 @@ function setup(t, mutate = () => {}) {
     const file = path.join(directory, `${repair.hashDraft(identity)}.json`);
     const sourceDirectory = path.join(plan.sourcesDir, '2610.90071', 'generation-000001');
     const sourceFiles = Object.fromEntries(['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json'].map(name => [name, sha(fs.readFileSync(path.join(sourceDirectory, name)))]));
-    const grant = { contract: retry.CONTRACT, batchDate: plan.batchDate, runId: plan.runId, sourceFiles, originalIdentitySha256: repair.hashDraft(identity), paperId: '2610.90071', roundId: crypto.randomUUID(),
+    const grant = { ...recordHeader(retry.CONTRACT, retry.CONTRACT), batchDate: plan.batchDate, runId: plan.runId, sourceFiles, originalIdentitySha256: repair.hashDraft(identity), paperId: '2610.90071', roundId: crypto.randomUUID(),
         identitySha256: repair.hashDraft(identity), envelopeSha256: sha(fs.readFileSync(file)),
         payloadSha256: repair.hashDraft(payload), wholeSha256: sha(paper.analysisCheckpoint || paper.analysis),
         maxResponses: 3, maxFullResponses: 1, maxPhysicalRequests: 6, maxReservedOutputTokens: 80000 };
@@ -633,7 +634,7 @@ async function setupExhaustedParent(t, tokensUsed = [48000, 16000, 16000], saved
     }));
     const parentReceipt = fs.readFileSync(parent.explicitReaderRetryRound.receiptFile);
     const file = path.join(directory, repair.hashDraft(f.identity) + '.json');
-    const childGrant = { ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT,
+    const childGrant = { ...f.grant, ...recordHeader(retry.LOCAL_REPAIR_CONTRACT, retry.LOCAL_REPAIR_CONTRACT),
         roundId: crypto.randomUUID(), parentRoundId: f.grant.roundId,
         parentReceiptSha256: sha(parentReceipt), envelopeSha256: sha(fs.readFileSync(file)),
         payloadSha256: repair.hashDraft(parent), maxResponses: 1, maxFullResponses: 0,
@@ -678,7 +679,7 @@ test('首次经真实长文入口开始父轮局部修复，不丢原稿或请�
         });
         const parentReceipt = fs.readFileSync(parent.explicitReaderRetryRound.receiptFile);
         const originalBytes = fs.readFileSync(file);
-        const child = { ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT,
+        const child = { ...f.grant, ...recordHeader(retry.LOCAL_REPAIR_CONTRACT, retry.LOCAL_REPAIR_CONTRACT),
             roundId: crypto.randomUUID(), parentRoundId: f.grant.roundId,
             parentReceiptSha256: sha(parentReceipt), envelopeSha256: sha(originalBytes),
             payloadSha256: repair.hashDraft(parent), maxResponses: 1, maxFullResponses: 0,
@@ -964,7 +965,7 @@ test('首个显式轮可明确选择无进展整篇再生，旧稿和旧次数�
         assert.deepEqual(saved.draft, draft); assert.deepEqual(fs.readFileSync(receipt.archivedFile), bytes);
         assert.equal(receipt.oldAttempts, 6); assert.equal(receipt.oldFullAttempts, 2);
         assert.equal(receipt.grant.maxReservedOutputTokens, 80000); assert.equal(receipt.reservedOutputTokens, 48000);
-        assert.throws(() => retry.assertGrant({ ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT }), /授权类型/);
+        assert.throws(() => retry.assertGrant({ ...f.grant, ...recordHeader(retry.LOCAL_REPAIR_CONTRACT, retry.LOCAL_REPAIR_CONTRACT) }), /授权类型/);
     });
 });
 
@@ -1086,7 +1087,7 @@ test('代码SHA升级经0API公有迁移准备后，真正generate首次追加�
             parent = { ...parent, attempts: 3, fullAttempts: 1 };
             repair.saveFailedCandidate(directory, identity, parent);
         });
-        legacy = { ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT,
+        legacy = { ...f.grant, ...recordHeader(retry.LOCAL_REPAIR_CONTRACT, retry.LOCAL_REPAIR_CONTRACT),
             roundId: crypto.randomUUID(), parentRoundId: f.grant.roundId,
             parentReceiptSha256: sha(fs.readFileSync(parent.explicitReaderRetryRound.receiptFile)),
             envelopeSha256: sha(fs.readFileSync(file)), payloadSha256: repair.hashDraft(parent),
@@ -1221,7 +1222,7 @@ test('同一轮原档恢复拒绝覆盖真实新稿、已保存响应、局部�
             assert.deepEqual(retry.restoreExplicitRoundOriginalDraft(directory, f.identity, current, paper), current);
             assert.deepEqual(fs.readFileSync(f.file), bytes);
             // 每个控制独立回到0只写测试磁盘快照；生产save接口仍禁止减次数。
-            fs.writeFileSync(f.file, JSON.stringify({ version:repair.REPAIR_VERSION,identity:f.identity,payload:next,payloadSha256:repair.hashDraft(next) }), {mode:0o600});
+            fs.writeFileSync(f.file, JSON.stringify({ ...repair.candidateEnvelopeHeader(),identity:f.identity,payload:next,payloadSha256:repair.hashDraft(next) }), {mode:0o600});
         }
         const current = { ...next, draft:null, rawDraft:'无' };
         repair.saveFailedCandidate(directory, f.identity, current);

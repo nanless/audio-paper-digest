@@ -11,12 +11,11 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const tagCatalogApi = require('./tag-catalog.js');
+const protocols = require('./protocol-codec.js');
 
 const CHANGE_LEVELS = Object.freeze(['none', 'additive', 'destructive']);
-const REGISTRY_UPGRADE_CONTRACT = 'paper-tag-catalog-upgrade-v2';
-const REGISTRY_UPGRADE_VERSION = 2;
-const LEGACY_REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1';
-const LEGACY_REGISTRY_UPGRADE_VERSION = 1;
+const REGISTRY_UPGRADE_CONTRACT = protocols.contract('paper-tag-catalog-upgrade');
+const LEGACY_REGISTRY_UPGRADE_CONTRACT = protocols.historicalContract('paper-tag-catalog-upgrade','legacy-concept-change-review');
 const REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500;
 const REGISTRY_UPGRADE_REASON_CAP = 32;
 const SHA256_RE = /^[a-f0-9]{64}$/;
@@ -75,11 +74,10 @@ function isPlainObject(value) {
 function normalizeRegistry(value, label = '词表') {
     if (typeof value === 'string') {
         const loaded = tagCatalogApi.loadTagCatalog(value);
-        return { version: loaded.version, facets: loaded.facets,
-            concepts: loaded.concepts, registrySha256: loaded.registrySha256 };
+        return { ...tagCatalogApi.registryData(loaded), registrySha256: loaded.registrySha256 };
     }
     if (!isPlainObject(value)) throw new Error(`${label} 必须是词表对象或词表文件路径。`);
-    const data = { version: value.version, facets: value.facets, concepts: value.concepts };
+    const data = { ...tagCatalogApi.catalogHeader(value), facets: value.facets, concepts: value.concepts };
     tagCatalogApi.validateTagCatalog(data);
     const registrySha256 = value.registrySha256;
     if (registrySha256 !== undefined && registrySha256 !== null
@@ -144,11 +142,9 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
         facetsRemoved: 0
     };
 
-    if (from.version !== to.version
-        && !(from.version === tagCatalogApi.LEGACY_TAG_CATALOG_VERSION
-            && to.version === tagCatalogApi.TAG_CATALOG_VERSION)) {
+    if (!tagCatalogApi.isCatalogUpgrade(from,to)) {
         note('destructive', 'version-changed',
-            `词表版本从 ${from.version} 改为 ${to.version}，必须重新分析整篇论文`);
+            `词表版本从 ${tagCatalogApi.tagCatalogIdentity(from)} 改为 ${tagCatalogApi.tagCatalogIdentity(to)}，必须重新分析整篇论文`);
     }
 
     const oldFacets = new Map(from.facets.map(facet => [facet.id, facet]));
@@ -287,8 +283,8 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
             changeLevel,
             oldRegistrySha256: from.registrySha256,
             newRegistrySha256: to.registrySha256,
-            oldVersion: from.version,
-            newVersion: to.version,
+            oldVersion: tagCatalogApi.tagCatalogIdentity(from),
+            newVersion: tagCatalogApi.tagCatalogIdentity(to),
             counts,
             reasons,
             summary
@@ -416,8 +412,7 @@ function resolveRegistrySnapshot(registrySha256, options = {}) {
     try {
         const loaded = tagCatalogApi.loadTagCatalog(path.join(directory, `${sha}.json`));
         if (loaded.registrySha256 !== sha) return null;
-        return { version: loaded.version, facets: loaded.facets,
-            concepts: loaded.concepts, registrySha256: loaded.registrySha256 };
+        return { ...tagCatalogApi.registryData(loaded), registrySha256: loaded.registrySha256 };
     } catch {
         return null;
     }
@@ -429,14 +424,22 @@ function isStrictAppendOnlyCatalog(previous, current) {
     try {
         const from = normalizeRegistry(previous);
         const to = normalizeRegistry(current);
-        return from.version === to.version
+        return protocols.format(tagCatalogApi.tagCatalogIdentity(from),'paper-tag-catalog',from.schemaFingerprint) === protocols.format(tagCatalogApi.tagCatalogIdentity(to),'paper-tag-catalog',to.schemaFingerprint)
             && isDeepStrictEqual(from.facets, to.facets)
             && to.concepts.length > from.concepts.length
             && isDeepStrictEqual(from.concepts, to.concepts.slice(0, from.concepts.length));
     } catch { return false; }
 }
 
-function resolveAppendOnlyProofCatalog(registrySha256, current, options = {}) {
+function isHeaderOnlyCatalogMigration(previous,current) {
+    try {
+        const from=normalizeRegistry(previous),to=normalizeRegistry(current);
+        return !isDeepStrictEqual(tagCatalogApi.catalogHeader(from),tagCatalogApi.catalogHeader(to))
+            && protocols.format(tagCatalogApi.tagCatalogIdentity(from),'paper-tag-catalog',from.schemaFingerprint)===protocols.format(tagCatalogApi.tagCatalogIdentity(to),'paper-tag-catalog',to.schemaFingerprint)
+            && isDeepStrictEqual(from.facets,to.facets)&&isDeepStrictEqual(from.concepts,to.concepts);
+    } catch { return false; }
+}
+function resolveOriginalProofCatalog(registrySha256,current,options,predicate) {
     const sha = String(registrySha256 || '');
     if (!SHA256_RE.test(sha)) return null;
     const directory = options?.historyDir || defaultHistoryDir();
@@ -444,9 +447,17 @@ function resolveAppendOnlyProofCatalog(registrySha256, current, options = {}) {
     try {
         // 不能用调用方提供的对象或 resolver 代替保存的原文件字节。
         const previous = tagCatalogApi.loadTagCatalog(path.join(directory, `${sha}.json`));
-        return previous.registrySha256 === sha && isStrictAppendOnlyCatalog(previous, current)
+        return previous.registrySha256 === sha && predicate(previous, current)
             ? previous : null;
     } catch { return null; }
+}
+
+function resolveAppendOnlyProofCatalog(registrySha256,current,options={}) {
+    return resolveOriginalProofCatalog(registrySha256,current,options,isStrictAppendOnlyCatalog);
+}
+function resolveCompatibleProofCatalog(registrySha256,current,options={}) {
+    return resolveOriginalProofCatalog(registrySha256,current,options,(previous,current)=>
+        isStrictAppendOnlyCatalog(previous,current)||isHeaderOnlyCatalogMigration(previous,current));
 }
 
 function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
@@ -464,12 +475,11 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
         throw new Error('为破坏性变更生成升级说明时，必须明确设置 acknowledgeDestructive=true。');
     }
     const annotation = {
-        contract: REGISTRY_UPGRADE_CONTRACT,
-        version: REGISTRY_UPGRADE_VERSION,
+        ...protocols.recordHeader(REGISTRY_UPGRADE_CONTRACT,'paper-tag-catalog-upgrade'),
         fromRegistrySha256: String(fromRegistry?.registrySha256 || ''),
-        fromRegistryVersion: String(fromRegistry?.version || ''),
+        fromRegistryVersion: (fromRegistry ? tagCatalogApi.tagCatalogIdentity(fromRegistry) : ''),
         toRegistrySha256: String(toRegistry?.registrySha256 || ''),
-        toRegistryVersion: String(toRegistry?.version || ''),
+        toRegistryVersion: (toRegistry ? tagCatalogApi.tagCatalogIdentity(toRegistry) : ''),
         changeLevel,
         reasons: [...new Set((detail?.reasons || []).map(reason => reason.code))].sort()
             .slice(0, REGISTRY_UPGRADE_REASON_CAP),
@@ -478,9 +488,7 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
     if (!SHA256_RE.test(annotation.fromRegistrySha256) || !SHA256_RE.test(annotation.toRegistrySha256)) {
         throw new Error('registryUpgradeFrom 中的新旧词表 SHA 必须格式有效。');
     }
-    if (!annotation.fromRegistryVersion || (annotation.fromRegistryVersion !== annotation.toRegistryVersion
-        && !(annotation.fromRegistryVersion === tagCatalogApi.LEGACY_TAG_CATALOG_VERSION
-            && annotation.toRegistryVersion === tagCatalogApi.TAG_CATALOG_VERSION))) {
+    if (!tagCatalogApi.isCatalogIdentityUpgrade(annotation.fromRegistryVersion,annotation.toRegistryVersion)) {
         throw new Error('registryUpgradeFrom 中的新旧词表版本必须一致，或属于允许的单向版本迁移。');
     }
     if (changeLevel === 'destructive') {
@@ -501,8 +509,10 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
 // 破坏性变更须另外核对显式确认；其他字段仍须与本次词表和阶段记录一致。
 function validateRegistryUpgradeAnnotation(annotation, expected = {}) {
     if (!isPlainObject(annotation)) return 'registryUpgradeFrom 升级说明缺失或不是普通对象。';
-    if (!(annotation.contract === REGISTRY_UPGRADE_CONTRACT && annotation.version === REGISTRY_UPGRADE_VERSION)
-        && !(annotation.contract === LEGACY_REGISTRY_UPGRADE_CONTRACT && annotation.version === LEGACY_REGISTRY_UPGRADE_VERSION)) {
+    let expectedHeader;
+    try { expectedHeader=protocols.recordHeader(annotation.contract,'paper-tag-catalog-upgrade'); } catch { return 'registryUpgradeFrom 的格式标识和版本不属于支持的组合。'; }
+    if (['contract','schemaFingerprint','version','schemaVersion'].some(key => Object.hasOwn(expectedHeader,key)
+        ? annotation[key] !== expectedHeader[key] : Object.hasOwn(annotation,key))) {
         return 'registryUpgradeFrom 的格式标识和版本不属于支持的组合。';
     }
     if (!SHA256_RE.test(String(annotation.fromRegistrySha256 || ''))
@@ -576,7 +586,7 @@ function checkTagCatalogUpgrade({
     if (!snapshot) {
         return fail(`无法取得更新前的词表快照 ${fromRegistrySha256}，不能沿用标签阶段记录。`);
     }
-    if (fromRegistryVersion !== undefined && snapshot.version !== fromRegistryVersion) {
+    if (fromRegistryVersion !== undefined && tagCatalogApi.tagCatalogIdentity(snapshot) !== fromRegistryVersion) {
         return fail('标签阶段记录中的词表版本与旧词表快照不一致。');
     }
     const { changeLevel, detail } = classifyRegistryChange(snapshot, current);
@@ -599,9 +609,9 @@ function checkTagCatalogUpgrade({
     const issue = validateRegistryUpgradeAnnotation(annotation, {
         fromRegistrySha256: String(fromRegistrySha256),
         toRegistrySha256: currentSha,
-        registryVersion: current.version,
-        fromRegistryVersion: snapshot.version,
-        toRegistryVersion: current.version,
+        registryVersion: tagCatalogApi.tagCatalogIdentity(current),
+        fromRegistryVersion: tagCatalogApi.tagCatalogIdentity(snapshot),
+        toRegistryVersion: tagCatalogApi.tagCatalogIdentity(current),
         changeLevel,
         detail
     });
@@ -625,11 +635,10 @@ function checkTagCatalogUpgrade({
 }
 
 module.exports = {
+    isHeaderOnlyCatalogMigration, resolveCompatibleProofCatalog,
     CHANGE_LEVELS,
     REGISTRY_UPGRADE_CONTRACT,
-    REGISTRY_UPGRADE_VERSION,
     LEGACY_REGISTRY_UPGRADE_CONTRACT,
-    LEGACY_REGISTRY_UPGRADE_VERSION,
     REGISTRY_UPGRADE_NOTE_MAX_CHARS,
     ACKNOWLEDGEMENT_ELIGIBLE_CODES,
     ACKNOWLEDGEMENT_FORBIDDEN_CODES,

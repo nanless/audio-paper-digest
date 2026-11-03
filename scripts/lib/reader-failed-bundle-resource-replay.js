@@ -23,7 +23,7 @@ function assertSource(paper, source) {
 }
 function prepareRecoveryReaderResources(paper, source, options = {}) {
     const deep = require('../deep-analyzer'), daily = require('./daily-fresh-source-plan');
-    if (!assertSource(paper, source) || require('../analysis-engine').hasValidApiReaderV3Records(paper)) return null;
+    if (!assertSource(paper, source) || require('../analysis-engine').hasValidIntegratedApiReaderRecords(paper)) return null;
     const review = String(options.reviewFeedback || '').trim();
     if (review) {
         try { if (deep.prepareApiReaderRevisionSeed(paper, source.text, review)) return null; }
@@ -32,11 +32,12 @@ function prepareRecoveryReaderResources(paper, source, options = {}) {
         }
     }
     const stage = paper.analysisManifest?.stages?.openSourceScan;
-    if (stage?.status !== 'complete' || stage.resourceEvidenceContract !== 'api-reader-resource-identity-v1'
+    if (stage?.status !== 'complete' || (stage.resourceEvidenceContract === undefined && stage.resourceEvidenceProtocol === undefined)
         || !/^[a-f0-9]{64}$/.test(stage.resourceEvidenceSha256 || '') || !stage.fingerprint) return null;
     const matches = (paper.apiReaderFailedBundleHistory || []).filter(packet => {
         const resources = packet?.fields?.apiReaderResources;
         return packet.sourceSha256 === paper.sourceSha256 && resources?.sourceTextSha256 === paper.sourceSha256
+            && require('./reader-identity-format').openSourceBinding(stage, resources)
             && resources.identitySha256 === stage.resourceEvidenceSha256;
     });
     if (!matches.length) return null;

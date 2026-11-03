@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.cloud.RequestContinuity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -69,10 +70,10 @@ class StorageCapacity(researchRoot: File, exportsRoot: File, cloudControlRoot: F
         val time = timestamp(); val proofID = UUID.randomUUID().toString()
         val next = original.meta.copy().put("savedAt", time).put("savedSHA256", original.sha256).put("savedBytes", original.bytes).put("savedProofID", proofID)
         val nextBytes = canonical(next).toByteArray(Charsets.UTF_8)
-        val history = JSONObject().put("contract", "paperdigest-export-history-v1").put("proofID", proofID).put("documentID", documentID)
+        val history = ClientProtocols.record("paperdigest-export-history").put("proofID", proofID).put("documentID", documentID)
             .put("savedAt", time).put("sha256", original.sha256).put("bytes", original.bytes).put("mime", next.getString("mime")).put("suggestedName", next.getString("suggestedName"))
         val historyBytes = canonical(history).toByteArray(Charsets.UTF_8)
-        val proof = JSONObject().put("contract", "paperdigest-native-export-save-v1").put("proofID", proofID).put("documentID", documentID).put("uri", uri)
+        val proof = ClientProtocols.record("paperdigest-native-export-save").put("proofID", proofID).put("documentID", documentID).put("uri", uri)
             .put("savedAt", time).put("sha256", original.sha256).put("bytes", original.bytes).put("manifestSHA256", sha256(nextBytes)).put("historySHA256", sha256(historyBytes))
         proof.put("hmacSHA256", authenticate(proof, create = true))
         val historyFile = historyFile(proofID); val proofFile = proofFile(proofID)
@@ -188,13 +189,13 @@ class StorageCapacity(researchRoot: File, exportsRoot: File, cloudControlRoot: F
         // merely to discover that no native saved proof exists.
         val d = document(id, verifyBin = false); val proofID = d.meta.getString("savedProofID"); uuid(proofID)
         val proofFile = proofFile(proofID); val proofRaw = JsonFiles.read(proofFile, PROOF_LIMIT); val proof = JSONObject(proofRaw.toString(Charsets.UTF_8))
-        require(proof.keys().asSequence().toSet() == PROOF_KEYS && proof.getString("contract") == "paperdigest-native-export-save-v1" && proof.getString("documentID") == id && proof.getString("proofID") == proofID)
+        require(ClientProtocols.hasValidHeader(proof,"paperdigest-native-export-save") && proof.keys().asSequence().toSet() == ClientProtocols.recordKeys(proof.get("contract"),"paperdigest-native-export-save",PROOF_KEYS-setOf("contract"),proof.opt("schemaFingerprint") as? String) && proof.getString("documentID") == id && proof.getString("proofID") == proofID)
         val signature = proof.getString("hmacSHA256"); require(BackupCodec.validSHA(signature)); val unsigned = proof.copy().also { it.remove("hmacSHA256") }
         require(MessageDigest.isEqual(signature.toByteArray(), authenticate(unsigned, create = false).toByteArray())) { "本机原生导出证明不符" }
         require(proof.getString("manifestSHA256") == sha256(d.raw) && proof.getString("sha256") == d.sha256 && integer(proof, "bytes") == d.bytes)
         require(d.meta.getString("savedSHA256") == d.sha256 && integer(d.meta, "savedBytes") == d.bytes && d.meta.getString("savedAt") == proof.getString("savedAt") && RequestContinuity.validTime(proof.getString("savedAt")))
         val historyFile = historyFile(proofID); val historyRaw = JsonFiles.read(historyFile, PROOF_LIMIT); val history = JSONObject(historyRaw.toString(Charsets.UTF_8))
-        require(sha256(historyRaw) == proof.getString("historySHA256") && history.keys().asSequence().toSet() == HISTORY_KEYS && history.getString("contract") == "paperdigest-export-history-v1" && history.getString("proofID") == proofID && history.getString("documentID") == id)
+        require(sha256(historyRaw) == proof.getString("historySHA256") && ClientProtocols.hasValidHeader(history,"paperdigest-export-history") && history.keys().asSequence().toSet() == ClientProtocols.recordKeys(history.get("contract"),"paperdigest-export-history",HISTORY_KEYS-setOf("contract"),history.opt("schemaFingerprint") as? String) && history.getString("proofID") == proofID && history.getString("documentID") == id)
         require(history.getString("sha256") == d.sha256 && integer(history, "bytes") == d.bytes && history.getString("savedAt") == proof.getString("savedAt") && history.getString("mime") == d.meta.getString("mime") && history.getString("suggestedName") == d.meta.getString("suggestedName"))
         val uri = proof.getString("uri"); contentURI(uri)
         require(fileSHA(d.bin, d.bytes) == d.sha256) { "导出临时原件与原保存证明不符" }

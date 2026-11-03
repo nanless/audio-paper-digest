@@ -62,7 +62,7 @@ test('真实来源绑定保留合法重复整数，即使同段另有半值也�
     for (const value of ['130130', '6868', '40964096', '2020', '1212']) {
         const source = `Training uses ${value} utterances. The development split has 130 utterances.`;
         assert.equal(bind(value, source).article, table(value));
-        assert.equal(engine.hasValidApiReaderV3Records(oldPaper(value, source)), true);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(oldPaper(value, source)), true);
     }
 });
 
@@ -82,7 +82,7 @@ test('纯数字重复不能证明半值，旧自洽 Reader 绑定也须拒绝', 
     ]) {
         const source = `Training reports ${sourceValue} under the controlled protocol.`;
         assert.throws(() => bind(rendered, source), /关键数字缺少 exact quote\/cell 证据/);
-        assert.equal(engine.hasValidApiReaderV3Records(oldPaper(rendered, source)), false, sourceValue);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(oldPaper(rendered, source)), false, sourceValue);
         assert.equal(engine.isSuccessfulAnalysisRecord(oldPaper(rendered, source)), false, sourceValue);
     }
 });
@@ -90,7 +90,7 @@ test('纯数字重复不能证明半值，旧自洽 Reader 绑定也须拒绝', 
 test('明确 TeX 数值单位双写仍按逐字原句绑定，错值错单位仍拒绝', () => {
     const source = 'Observed latency was μ=4,852\\mu=4{,}852 ms under the controlled protocol.';
     assert.equal(bind('4,852 ms', source).article, table('4,852 ms'));
-    assert.equal(engine.hasValidApiReaderV3Records(oldPaper('4,852 ms', source)), true);
+    assert.equal(engine.hasValidIntegratedApiReaderRecords(oldPaper('4,852 ms', source)), true);
     assert.throws(() => bind('4,852 s', source), /关键数字缺少 exact quote\/cell 证据/);
     assert.throws(() => bind('4,851 ms', source), /关键数字缺少 exact quote\/cell 证据/);
 });
@@ -121,8 +121,8 @@ function oldCellPaper(rendered, sourceValue) {
 
 test('旧 DOM 绑定也重核实际单元格，不能以自 SHA 认可裸符号或数值折半', () => {
     for (const [rendered, source] of [['130', '130130'], ['−22.9', '−22.9-22.9'], ['+20%', '++20%']]) {
-        assert.equal(engine.hasValidApiReaderV3Records(oldCellPaper(rendered, source)), false);
-        assert.equal(engine.hasValidApiReaderV3Records(oldCellPaper(source, source)), true);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(oldCellPaper(rendered, source)), false);
+        assert.equal(engine.hasValidIntegratedApiReaderRecords(oldCellPaper(source, source)), true);
         assert.match(deep.normalizeApiReaderTablePasteArtifacts(table(source)), new RegExp(
             source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         ));

@@ -6,7 +6,7 @@ const root=process.env.PD_DOCUMENT_TABLE_REPO||path.resolve(__dirname,'../../..'
 const mac=path.join(root,'apps/macos');
 const {chromium}=require(path.join(mac,'node_modules/playwright'));
 const source=process.env.PD_DOCUMENT_TABLE_SOURCE||path.join(root,'apps/android/app/src/main/java/com/nanless/paperdigest/data/ExportService.kt');
-const fixture=path.join(mac,'Tests/Fixtures/aggregate-daily24-links-original.html');
+const fixture=path.join(root,'tests/fixtures/workbench/aggregate-daily24-links-original.html');
 const digest=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const inputs=Object.fromEntries([__filename,source,fixture].map(p=>[p,digest(fs.readFileSync(p))]));
 assert.equal(inputs[fixture],'c51f3797c5e9036ddb5afef60fab0463c6a2ab48991980639f557d915fe9ab1a');

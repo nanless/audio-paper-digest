@@ -63,10 +63,10 @@ describe('发布后长图与封面提示词的风格要求', () => {
         assert.ok(!Object.hasOwn(pkg.scripts, 'visual:render'));
     });
 
-    // v1 永久冻结，上面两条测试保留旧版样式检查。实际使用的提示词由版本登记表解析，
-    // 所以还须检查当前中文正文中的设计要求，防止换版时遗漏。
-    it('当前长图与封面提示词保留规定的设计要素和禁止样式', () => {
-        const { currentTextStagePromptPath } = require('../scripts/lib/prompt-text-versions.js');
+    // 两版原始字节都只供历史凭证核验，不能重新成为现用写作入口。
+    it('已退休中文长图与封面保留原设计事实，现用登记拒绝两阶段', () => {
+        const { currentTextStagePromptPath } = require('../scripts/lib/prompt-contracts.js');
+        const { originalCurrent } = require('../scripts/lib/prompt-legacy-codec.js');
         const cases = [
             {
                 stage: 'visualSummary',
@@ -107,7 +107,8 @@ describe('发布后长图与封面提示词的风格要求', () => {
             },
         ];
         for (const { stage, required } of cases) {
-            const promptPath = currentTextStagePromptPath(stage);
+            assert.throws(() => currentTextStagePromptPath(stage), /没有登记/);
+            const promptPath = originalCurrent[stage].path;
             const prompt = readPrompt(path.basename(promptPath));
             for (const phrase of required) {
                 assert.match(

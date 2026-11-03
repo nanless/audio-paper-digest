@@ -115,10 +115,10 @@ fs.closeSync = function (fd) {
             .prepareReaderOperatorPatchResult({ parent: paper, sourceDetails: data.sourceDetails, run, request,
                 patchFileSha256: 'e'.repeat(64), appliedAt: '2026-09-06T08:00:00Z' });
         const engine = require(path.join(code, 'scripts/analysis-engine.js'));
-        const coldValid = engine.hasValidApiReaderV3Records(result.paper);
+        const coldValid = engine.hasValidIntegratedApiReaderRecords(result.paper);
         const valid = require(path.join(code, 'scripts/lib/fresh-analysis-context.js')).withFreshAnalysisContext({
             runDir, runId: run.runId, sourceExpectations: run.sourceExpectations
-        }, () => engine.hasValidApiReaderV3Records(result.paper));
+        }, () => engine.hasValidIntegratedApiReaderRecords(result.paper));
         observation = { valid, coldValid,
             figures: result.paper.apiReaderFigures.length, newApiRequests: result.provenance.newApiRequests };
     } catch (error) {

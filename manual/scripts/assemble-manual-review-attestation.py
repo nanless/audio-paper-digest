@@ -21,13 +21,14 @@ FILE_CHECKS = {
     'experimentComparisons', 'reproducibility', 'limitations',
     'scoring', 'images',
 }
-from manual_agent_policy import CURRENT_MODEL_POLICY, review_subagent_identity_error
+from manual_agent_policy import (current_review_model_policy, current_review_statement_fields,
+                                 review_subagent_identity_error)
 
 
 def valid_review_subagent(subagent):
     return (
         isinstance(subagent, dict)
-        and review_subagent_identity_error(subagent, CURRENT_MODEL_POLICY) is None
+        and review_subagent_identity_error(subagent, current_review_model_policy()) is None
         and subagent.get('singleFileOnly') is True
         and subagent.get('isolatedContext') is True
         and isinstance(subagent.get('taskName'), str)
@@ -185,8 +186,7 @@ def main():
             output_item['deleted'] = True
         files.append(output_item)
     payload = {
-        'version': 4,
-        'modelPolicy': CURRENT_MODEL_POLICY,
+        **current_review_statement_fields(),
         'mode': 'manual_complete',
         'agent': 'Codex 独立单页人工审查',
         'basis': 'deterministic_and_manual_semantic_review',

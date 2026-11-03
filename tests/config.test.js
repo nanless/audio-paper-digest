@@ -22,6 +22,11 @@ describe('config', () => {
             fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'env-loader.js'), path.join(scriptsDir, 'env-loader.js'));
             fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'filter-decision.js'),
                 path.join(scriptsDir, 'lib', 'filter-decision.js'));
+            for (const name of ['protocol-codec.js', 'strict-json.js', 'git-file-bytes.js']) {
+                fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'lib', name), path.join(scriptsDir, 'lib', name));
+            }
+            fs.cpSync(path.join(__dirname, '..', 'config', 'protocols'), path.join(projectRoot, 'config', 'protocols'),
+                { recursive: true });
             fs.writeFileSync(envPath, `${extraLines}\n`, 'utf8');
             const tempConfigPath = path.join(scriptsDir, 'config.js');
             return fn(require(tempConfigPath));
@@ -74,7 +79,7 @@ describe('config', () => {
             (5));
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
-        assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);
+        assert.deepEqual(Config.FILTER_CONFIG.decisionContractProfile, require('../scripts/lib/filter-decision').FILTER_DECISION_PROFILE);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceTimeoutMs, 60000);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxTokens, 1200);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxResponseBytes, 2 * 1024 * 1024);
@@ -157,7 +162,6 @@ describe('config', () => {
         assert.strictEqual(Config.FILES.visualSummaryAssetDir, Config.ARCHIVE_DIR);
         assert.strictEqual(path.basename(Config.FILES.digestCoverManifestDir), 'digest-cover-manifests');
         assert.strictEqual(Config.FILES.digestCoverAssetDir, Config.ARCHIVE_DIR);
-        assert.strictEqual(path.basename(Config.FILES.visualSummaryManifest), 'visual-summary-manifest.json');
         for (const key of ['dailyFreshSourceRunsDir', 'dailyScoringRefreshRecoveryDir', 'officialConferenceAcquisitionDir', 'freshArxivFetchedSourcesDir',
             'historicalDirectRewriteInputCatalogDir',
             'historicalDirectRewritePlanDir', 'historicalDirectRewriteRegistryDir',

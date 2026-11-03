@@ -80,7 +80,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 |---|---|
 | Current commands, entry points, and shared modules | [Script index](../scripts/README.en.md), [workflow map](three-workflows.md) |
 | Changes, validation, Chinese commits, and pushing | [Maintenance](maintenance.md) |
-| The 18 current prompts and original historical bytes | [Prompt index](../prompts/README.en.md), [prompt changes](maintenance.md#prompt-修改) |
+| Current prompts and original historical bytes | [Prompt index](../prompts/README.en.md), [prompt changes](maintenance.md#prompt-修改) |
 | Explanation structure and source requirements | [Reader writing](reader-writing.md) |
 | Explanations, paragraphs, figures, and bilingual maintenance | [Writing rules](writing-guide.md), [writing skill](../skills/clear-technical-writing/SKILL.md) |
 | Fields, manifests, and publication receipts | [Data format](data-format.md) |

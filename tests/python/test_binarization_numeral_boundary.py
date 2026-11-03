@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from publish_common import validate_manual_editorial_quality_v4
+from publish_common import validate_manual_reader_quality
 
 
 class BinarizationNumeralBoundary(unittest.TestCase):
@@ -19,16 +19,16 @@ class BinarizationNumeralBoundary(unittest.TestCase):
         self.assertRegex(saved['sourceText'], r'thresholded at 0\.5 to obtain\s+binary state predictions')
         # The number itself still needs ordinary formatting; the fixed operation
         # name does not become a spurious threshold of two in the publish gate.
-        self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n按 0.5 阈值二值化后输出状态。'))
+        self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n按 0.5 阈值二值化后输出状态。'))
 
     def test_same_complete_term_boundary_as_node(self):
         cases = json.loads((ROOT / 'tests/fixtures/binarization-numeral-boundary.json').read_text())
         for text in cases['accept']:
             with self.subTest(text=text):
-                self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+                self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n' + text))
         for text in cases['reject']:
             with self.subTest(text=text):
-                issue = validate_manual_editorial_quality_v4('## 核心摘要\n' + text)
+                issue = validate_manual_reader_quality('## 核心摘要\n' + text)
                 self.assertIsNotNone(issue)
                 self.assertIn('精确定量', issue)
 
@@ -36,10 +36,10 @@ class BinarizationNumeralBoundary(unittest.TestCase):
         axis = json.loads((ROOT / 'tests/fixtures/reader-measured-axis-20261016.json').read_text())
         for text in [axis['actualSentence'], *axis['constructedAccept']]:
             with self.subTest(text=text):
-                self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+                self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n' + text))
         # Python has no independent comparison-unit gate; do not invent one or
         # claim its unrelated quantity checker validates percentage comparisons.
-        issue = validate_manual_editorial_quality_v4('## 核心摘要\n有十七八个百分点在静音下还在。')
+        issue = validate_manual_reader_quality('## 核心摘要\n有十七八个百分点在静音下还在。')
         self.assertIsNotNone(issue)
         self.assertIn('精确定量', issue)
 
@@ -54,7 +54,7 @@ class BinarizationNumeralBoundary(unittest.TestCase):
         # Reader typography inserts ordinary Han/Latin boundaries before the
         # publish style gate; retain the original paid bytes in the fixture.
         formatted = re.sub(r'(?<=[\u4e00-\u9fff])(?=[A-Za-z])|(?<=[A-Za-z0-9])(?=[\u4e00-\u9fff])', ' ', sentence)
-        self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + formatted))
+        self.assertIsNone(validate_manual_reader_quality('## 核心摘要\n' + formatted))
 
 
 if __name__ == '__main__':

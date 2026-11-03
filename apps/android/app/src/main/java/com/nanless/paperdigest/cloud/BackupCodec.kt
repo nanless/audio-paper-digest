@@ -3,6 +3,7 @@ package com.nanless.paperdigest.cloud
 import android.icu.lang.UCharacter
 import org.json.JSONArray
 import org.json.JSONObject
+import com.nanless.paperdigest.protocols.ClientProtocols
 import java.io.*
 import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
@@ -100,7 +101,7 @@ object BackupCodec {
         require(next.canonicalPath.startsWith(root.canonicalPath + File.separator)) { "研究文件越界" }; return next
     }
     private fun roots(bytes: ByteArray): List<String> {
-        val obj = JSONObject(bytes.toString(Charsets.UTF_8)); require(obj.keys().asSequence().toSet() == setOf("contract", "roots") && obj.getString("contract") == "paperdigest-storage-aliases-v1") { "旧路径映射合同无效" }
+        val obj = JSONObject(bytes.toString(Charsets.UTF_8)); require(ClientProtocols.hasValidHeader(obj, "paperdigest-storage-aliases") && obj.keys().asSequence().toSet() == ClientProtocols.recordKeys(obj.optString("contract"), "paperdigest-storage-aliases", setOf("roots"), obj.opt("schemaFingerprint") as? String)) { "旧路径映射合同无效" }
         val array = obj.getJSONArray("roots"); require(array.length() <= MAX_ENTRIES)
         return (0 until array.length()).map { array.getString(it) }.also { validateRoots(it) }
     }
@@ -130,7 +131,8 @@ object BackupCodec {
         try {
             LimitedOutput(temporary.outputStream().buffered(), MAX_ENCODED, check).use { out ->
                 fun text(s: String) = out.write(s.toByteArray(Charsets.UTF_8))
-                text("{\"contract\":\"paperdigest-backup-v2\",\"files\":[")
+                val header = ClientProtocols.recordHeader(ClientProtocols.contract("paperdigest-backup"), "paperdigest-backup")
+                text(header.toString().dropLast(1) + ",\"files\":[")
                 entries.sortedBy { it.first }.forEachIndexed { index, (relative, file) ->
                     check()
                     if (index > 0) text(",")
@@ -165,11 +167,12 @@ object BackupCodec {
         try {
             val bounded = LimitedInput(input.buffered(), MAX_ENCODED, check); val digest = MessageDigest.getInstance("SHA-256")
             val parser = JsonStream(java.security.DigestInputStream(bounded, digest)); val paths = Paths(); val entries = ArrayList<Entry>(); val seen = HashSet<String>()
-            var contract: String? = null; var source: String? = null; var total = 0L
+            var contract: String? = null; var fingerprint: String? = null; var source: String? = null; var total = 0L
             parser.obj { key ->
                 require(seen.add(key)) { "备份根字段重复" }
                 when (key) {
                     "contract" -> contract = parser.string(128)
+                    "schemaFingerprint" -> fingerprint = parser.string(64)
                     "sourceDirectory" -> source = parser.string(4096)
                     "files" -> parser.array {
                         require(entries.size < MAX_ENTRIES) { "备份条目超限" }
@@ -186,18 +189,21 @@ object BackupCodec {
                     else -> error("备份含未知根字段")
                 }
             }
-            parser.end(); paths.finish(); require(contract == "paperdigest-backup-v2" && seen == setOf("contract", "sourceDirectory", "files")) { "备份合同无效" }
+            parser.end(); paths.finish()
+            val header = JSONObject().put("contract", contract)
+            fingerprint?.let { header.put("schemaFingerprint", it) }
+            require(ClientProtocols.hasValidHeader(header, "paperdigest-backup") && seen == ClientProtocols.recordKeys(contract, "paperdigest-backup", setOf("sourceDirectory", "files"),fingerprint)) { "备份合同无效" }
             checkedRoot(source ?: error("备份缺少来源目录")); val personal = checkedFile(stage, "personal.json"); validatePersonal(JSONObject(personal.readText()))
             val map = File(stage, ROOTS_FILE); val inherited = if (map.exists()) roots(map.readBytes()) else emptyList(); val combined = listOf(source!!) + inherited.filter { it != source }
             validateRoots(combined)
-            atomicJSON(map, JSONObject().put("contract", "paperdigest-storage-aliases-v1").put("roots", JSONArray(combined)))
+            atomicJSON(map, ClientProtocols.record("paperdigest-storage-aliases", JSONObject().put("roots", JSONArray(combined))))
             entries.filter { it.path != ROOTS_FILE }.forEach { check(); require(checkedHash(checkedFile(stage, it.path), check) == it.sha256) }
             check()
             return Staged(stage, source!!, entries, hex(digest.digest()), bounded.count)
         } catch (t: Throwable) { stage.deleteRecursively(); throw t }
     }
     fun validatePersonal(obj: JSONObject) {
-        require(obj.opt("schema") is Number && (obj.get("schema") as Number).toDouble() == 1.0)
+        require(com.nanless.paperdigest.data.PersonalStore.validPersonalHeader(obj))
         require(obj.opt("notes") is JSONObject && obj.opt("settings") is JSONObject && obj.opt("favorites") is JSONArray && obj.opt("reading") is JSONArray && obj.opt("readingState") is JSONObject && obj.opt("annotations") is JSONObject && obj.opt("sessions") is JSONArray && obj.opt("jobs") is JSONArray) { "个人资料结构无效" }
         val notes = obj.getJSONObject("notes"); notes.keys().forEach { key -> val n = notes.getJSONObject(key); val revision = n.opt("revision"); require(n.opt("text") is String && revision is Number && revision.toDouble() >= 0 && revision.toDouble() == revision.toLong().toDouble()) { "笔记版本无效" } }
         for (key in listOf("favorites", "reading")) { val a = obj.getJSONArray(key); for (i in 0 until a.length()) require(a.get(i) is String) }

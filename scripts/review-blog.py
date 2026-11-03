@@ -2,6 +2,7 @@
 """严格审查已生成的博客清单，并保存哈希核验记录。"""
 
 import argparse
+from blog_record_format import source_bound_generation
 import json
 import re
 import sys
@@ -252,7 +253,7 @@ def _run_review(module, date_str):
                 '已保留既有 receipt，拒绝开始新 review 覆盖唯一发布证据'
             )
         authoritative_papers = None
-        if generation.get('schemaVersion') == 3:
+        if source_bound_generation(generation):
             authoritative_papers = generation.get('publishedPapers') or []
         page_artifacts = {}
         if hasattr(module, 'build_final_page_artifact'):

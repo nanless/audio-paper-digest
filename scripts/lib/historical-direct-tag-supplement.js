@@ -92,7 +92,7 @@ async function buildSupplement(options) {
                 const bodySha256 = digest(Buffer.from(pageBody(loaded.bytes), 'utf8'));
                 const record = { paperId: item.paperId, runId: item.runId, pageKey: page.pageKey,
                     pageSha256: loaded.fileSha256, bodySha256, pageBodySha256: bodySha256,
-                    registrySha256: tagCatalog.registrySha256, registryVersion: tagCatalog.version,
+                    registrySha256: tagCatalog.registrySha256, registryVersion: tagCatalogApi.tagCatalogIdentity(tagCatalog),
                     canonicalAnalysisSha256: digest(Buffer.from(member.canonical.analysis.analysis, 'utf8')),
                     canonicalAnalysisFileSha256: member.canonical.analysisFileSha256,
                     canonicalAnalysisRecordSha256: member.canonical.analysisRecordSha256,

@@ -22,30 +22,22 @@ const analysisContract = require('../analysis-contract.js');
 const tagRulesApi = require('./tag-rules.js');
 const sourceContextApi = require('./conference-source-context.js');
 
-const CONTRACT = 'conference-paper-page-staging-v2';
-const PAGE_VERSION = 2;
-const LEGACY_PAGE_CONTRACT = 'conference-paper-page-staging-v1';
-const AGGREGATE_CONTRACT = 'conference-aggregate-staging-v2';
-const AGGREGATE_VERSION = 2;
-const ASSIGNMENT_CONTRACT = 'conference-tag-assignment-v2';
-const ASSIGNMENT_VERSION = 2;
-const LEGACY_ASSIGNMENT_CONTRACT = 'conference-taxonomy-assignment-v1';
-const LEGACY_PROJECTION_CONTRACT = 'conference-page-projection-v2';
-const LEGACY_PROJECTION_VERSION = 2;
-const PROJECTION_CONTRACT = 'conference-page-projection-v3';
-const PROJECTION_VERSION = 3;
-const HIERARCHY_CONTRACT = 'conference-tag-hierarchy-v2';
-const VERSION = 1;
+const codec = require('./protocol-codec');
+const { recordHeaderFor } = require('./workflow-record-format');
+const CONTRACT = codec.contract('conference-paper-page-staging');
+const AGGREGATE_CONTRACT = codec.contract('conference-aggregate-staging');
+const ASSIGNMENT_CONTRACT = codec.contract('conference-tag-assignment');
+const PROJECTION_CONTRACT = codec.contract('conference-page-projection');
+const HIERARCHY_CONTRACT = codec.contract('conference-tag-hierarchy');
 const ID_RE = /^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
 const FULL = { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' };
 const PDF_VISUAL = { fullText: 'full', tables: 'unavailable', formulas: 'unavailable', figures: 'available' };
-const READER_CONTRACT = 'beginner-researcher-v3';
-const SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4';
-const SCORING_CONTRACT = 'api-scoring-audit-v2';
-const PUBLICATION_CONTRACT = 'conference-official-publication-v1';
-const READER_FACING_CONTRACT = 'reader-facing-v3';
+const readerFormats = require('./reader-record-format');
+const readerProtocols = require('./reader-stage-protocols');
+const scoringFormats = require('./scoring-record-format');
+const READER_FACING_CONTRACT = codec.contract('reader-facing-page');
 const CONFERENCE_IMAGE_BASE_URL = (process.env.PAPER_DIGEST_IMAGE_BASE_URL
     || 'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main').replace(/\/$/, '');
 const SCORE_DIMENSIONS = Object.freeze([
@@ -58,6 +50,15 @@ const stableHash = fresh.stableHash;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const canonicalBytes = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
 function fail(message) { const error = new Error(`会议后处理检查未通过：${message}`); error.code = 'CONFERENCE_POSTPROCESS_INTEGRITY'; throw error; }
+function storedHeader(value, name, tagField = 'contract') {
+    if (!codec.hasValidHeader(value, name, tagField)) fail(`${name} 的格式声明无效。`);
+    return recordHeaderFor(value, name, tagField);
+}
+function storedFormat(value, name, tagField = 'contract') {
+    storedHeader(value, name, tagField);
+    return codec.format(value[tagField], name, value.schemaFingerprint);
+}
+const currentHeader = name => codec.recordHeader(codec.contract(name), name);
 function publicHttps(value, label, { identitySafe = false, conferenceOnly = false, normalize = false } = {}) {
     if (identitySafe) {
         try {
@@ -84,13 +85,13 @@ function publicHttps(value, label, { identitySafe = false, conferenceOnly = fals
 }
 function getPublicationUrls(paper) {
     const value = paper?.conferencePublication;
+    const header = storedHeader(value, 'conference-official-publication');
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join('\0') !== ['contract', 'pdfUrl', 'recordUrl'].sort().join('\0')
-        || value.contract !== PUBLICATION_CONTRACT) fail('会议论文的发布记录无效；必须包含规定的格式版本、记录网址和 PDF 网址。');
+        || Object.keys(value).sort().join('\0') !== [...Object.keys(header), 'pdfUrl', 'recordUrl'].sort().join('\0')) fail('会议论文的发布记录无效；必须包含规定的格式声明、记录网址和 PDF 网址。');
     const recordUrl = publicHttps(value.recordUrl, 'official record URL', { identitySafe: true, conferenceOnly: true });
     const pdfUrl = publicHttps(value.pdfUrl, 'official PDF URL', { conferenceOnly: true });
     if (recordUrl === pdfUrl) fail('官方论文记录网址与 PDF 网址必须不同。');
-    return { contract: PUBLICATION_CONTRACT, recordUrl, pdfUrl };
+    return { ...header, recordUrl, pdfUrl };
 }
 function validateReaderAndScoring(paper, sourceText) {
     const contracts = paper?.analysisManifest?.contracts || {};
@@ -106,17 +107,16 @@ function validateReaderAndScoring(paper, sourceText) {
         fail(`会议论文必须有基于全文的分析，包含规定的 13 节，并通过核心摘要阶段校验${issue ? `: ${issue}` : ''}`);
     }
     const readerDiagnostics = [];
-    if (contracts.apiReaderArticle !== READER_CONTRACT
-        || contracts.apiReaderSourceBindings !== SOURCE_BINDINGS_CONTRACT
-        || paper?.apiReaderPlan?.contract !== READER_CONTRACT
-        || paper?.apiReaderPlan?.sourceBindingsContract !== SOURCE_BINDINGS_CONTRACT
-        || !analysisEngine.hasValidApiReaderV3Records(paper, { legacyConferenceResourceBindings: true,
+    if (!readerFormats.isIntegratedPlan(paper?.apiReaderPlan)
+        || !readerProtocols.validateBindings(contracts, paper?.analysisManifest?.stages?.apiReaderArticle,
+            paper?.apiReaderPlan)
+        || !analysisEngine.hasValidIntegratedApiReaderRecords(paper, { legacyConferenceResourceBindings: true,
             conferencePublicationEvidence: true, diagnostics: readerDiagnostics })) {
         const detail = readerDiagnostics.map(item => `${item.code || item.check}: ${item.message}`).join('；');
         fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。'
             + (detail ? ` ${detail}` : ''));
     }
-    if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT
+    if (scoring.status !== 'complete' || !scoringFormats.hasScoringAuditFormat(scoring)
         || !analysisEngine.scoringAuditBindsFinalAnalysis(paper)
         || !analysisEngine.scoringStabilityIsResolved(scoring, paper)) {
         fail('评分审查的状态、规则、正文绑定或稳定性未通过校验。');
@@ -192,7 +192,8 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     // 此时只跳过当前计划与原计划的交叉检查，下方对运行、分析、完成凭证、
     // 来源及论文集合的检查仍全部执行，其他调用方的行为保持原样。
     const hasCurrentResourceClaims = loaded.analysis?.papers?.[0]?.analysisManifest?.contracts?.readerResourceClaims !== undefined
-        || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion !== undefined;
+        || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion !== undefined
+        || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsProtocol !== undefined;
     let verifiedPlanPdfSource = null;
     if (!trustEvidence || hasCurrentResourceClaims) {
         try { verifiedPlanPdfSource = (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
@@ -226,7 +227,8 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     }
     if (stableHash(loaded.run.capabilities) === stableHash(PDF_VISUAL)
         && (artifacts.tables.length || artifacts.formulas.length
-            || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables')) {
+            || !codec.hasValidHeader(artifacts, 'conference-reader-pdf-artifacts',
+                Object.hasOwn(artifacts, 'contract') ? 'contract' : 'parserVersion'))) {
         fail('仅提供 PDF 图像的来源不能声明已有原表单元格或 TeX 公式。');
     }
     const sourcePaper = loaded.analysis.papers[0];
@@ -272,7 +274,7 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     if (resourceIssues.length) fail(`当前封存来源下的读者资源声明未通过：${resourceIssues[0].message}`);
     loaded.resourcePresentation = deep.readerResourcePublicationResources(sourcePaper, sourceText);
     const coordinates = identityApi.conferenceCoordinates(loaded.run.conference);
-    const identity = identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference',
+    const identity = identityApi.normalizeIdentity({ ...identityApi.currentHeader(), kind: 'conference',
         canonicalId: loaded.run.paperId, arxivId: null, conference: coordinates,
         externalId: structuredClone(sourcePaper.externalId), source: { status: 'official', url: publication.recordUrl }, citation: null });
     loaded.identity = identity; loaded.identitySha256 = identityApi.identitySha256(identity); loaded.publication = publication;
@@ -363,13 +365,12 @@ function resolve(tagCatalog, label, facet, reasons, role) {
     return found[0];
 }
 function isKnownAssignmentFormat(value) {
-    return value?.contract === ASSIGNMENT_CONTRACT && value.version === ASSIGNMENT_VERSION
-        || value?.contract === LEGACY_ASSIGNMENT_CONTRACT && value.version === VERSION;
+    return codec.hasValidHeader(value, 'conference-tag-assignment');
 }
 function readStageTagMetadata(manifest) {
-    const current = manifest.contract === CONTRACT && manifest.version === PAGE_VERSION;
-    const legacy = manifest.contract === LEGACY_PAGE_CONTRACT && manifest.version === VERSION;
-    if (!current && !legacy) fail('会议论文页面的保存格式版本不受支持。');
+    const format = storedFormat(manifest, 'conference-paper-page-staging');
+    const current = format === 'tag-catalog';
+    if (!current && format !== 'taxonomy') fail('会议论文页面的保存格式不受支持。');
     for (const [oldKey, newKey] of [['taxonomy', 'tagMetadata'], ['taxonomyAssignmentFileSha256', 'tagAssignmentFileSha256']]) {
         if (Object.hasOwn(manifest, oldKey) && Object.hasOwn(manifest, newKey)) fail('会议论文页面不能混用新旧标签字段。');
         if (Object.hasOwn(manifest, current ? oldKey : newKey)) fail('会议论文页面的标签字段与保存格式版本不一致。');
@@ -378,7 +379,7 @@ function readStageTagMetadata(manifest) {
     const tagAssignmentFileSha256 = manifest[current ? 'tagAssignmentFileSha256' : 'taxonomyAssignmentFileSha256'];
     if (!tagMetadata || typeof tagMetadata !== 'object' || Array.isArray(tagMetadata)
         || !isKnownAssignmentFormat(tagMetadata)
-        || tagMetadata.contract !== (current ? ASSIGNMENT_CONTRACT : LEGACY_ASSIGNMENT_CONTRACT)
+        || storedFormat(tagMetadata, 'conference-tag-assignment') !== format
         || current && (typeof tagAssignmentFileSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(tagAssignmentFileSha256))) {
         fail('会议论文页面的标签记录或分配文件哈希不符合保存格式要求。');
     }
@@ -438,8 +439,8 @@ function buildAssignment(loaded, tagCatalog, savedAssignment) {
     const ids = tagCatalogApi.pruneAncestors(tagCatalog, [...concepts.keys()].sort()).sort();
     if ((task && !ids.includes(task.id)) || (method && !ids.includes(method.id))) reasons.push('primary-concept:ancestor-pruned');
     const blockedReasons = [...new Set(reasons)].sort(); const receipt = loaded.run.completionReceipt;
-    const body = { contract: savedAssignment === undefined ? ASSIGNMENT_CONTRACT : savedAssignment.contract,
-        version: savedAssignment === undefined ? ASSIGNMENT_VERSION : savedAssignment.version, paperId: loaded.run.paperId,
+    const body = { ...(savedAssignment === undefined ? currentHeader('conference-tag-assignment')
+        : storedHeader(savedAssignment, 'conference-tag-assignment')), paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
         completionReceiptSha256: receipt.receiptSha256, sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
         registryVersion: tagRules.registryVersion, registrySha256: tagCatalog.registrySha256,
@@ -483,18 +484,20 @@ function implementationFingerprint() {
     const implementationDependencies = implementationFiles.map(relativePath => ({ relativePath,
         fileSha256: pageApi.readRegular(path.join(__dirname, '..', '..', relativePath),
             16 * 1024 * 1024, 'conference projection dependency').fileSha256 }));
-    const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, ...sources,
+    const body = { ...currentHeader('conference-page-projection'), ...sources,
         implementationDependenciesSha256: stableHash(implementationDependencies) };
     return { ...body, implementationSha256: stableHash(body) };
 }
 function fingerprint(dependencies) {
     const value = (dependencies.implementationFingerprint || implementationFingerprint)(); const body = structuredClone(value); delete body.implementationSha256;
-    const expectedKeys = ['contract', 'version', 'nodeSourceSha256', 'rendererSourceSha256', 'publisherSourceSha256',
+    const header = storedHeader(value, 'conference-page-projection');
+    const expectedKeys = [...Object.keys(header), 'nodeSourceSha256', 'rendererSourceSha256', 'publisherSourceSha256',
         'publisherCommonSourceSha256', 'analysisSectionsSourceSha256', 'analysisSectionTitlesSourceSha256',
         'tagStageRecordSourceSha256', 'pythonTagStageRecordSourceSha256',
         'loaderSourceSha256', 'parserSourceSha256', 'pythonParserSourceSha256', 'tagCatalogSourceSha256', 'identitySourceSha256', 'implementationSha256'];
-    const current = value?.contract === PROJECTION_CONTRACT && value.version === PROJECTION_VERSION;
-    const legacy = value?.contract === LEGACY_PROJECTION_CONTRACT && value.version === LEGACY_PROJECTION_VERSION;
+    const format = storedFormat(value, 'conference-page-projection');
+    const current = format === 'full-dependency-closure';
+    const legacy = format === 'direct-files';
     if (current) expectedKeys.push('implementationDependenciesSha256');
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
@@ -529,7 +532,7 @@ function buildFormulaEvidenceRecord(source) {
         return { ordinal: formula.ordinal, page: formula.page,
             sourceRef: formula.sourceRef, sourceExpression: structuredClone(formula.sourceExpression) };
     });
-    const body = { contract: 'conference-pdf-formula-images-v1',
+    const body = { ...currentHeader('conference-pdf-formula-images'),
         pdfSha256: source.sourceBinding.pdfSha256, sourceSnapshotSha256: source.sourceSnapshotSha256,
         candidateCount: raw.visualAudit?.formulaCandidates?.length || 0, regions };
     return { ...body, evidenceSha256: stableHash(body) };
@@ -557,10 +560,19 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     if (JSON.stringify(rendered).includes('paper_digest_arxiv_id') || /arxiv\.org/i.test(rendered.markdown)) {
         fail('arXiv identity leaked into conference renderer output');
     }
-    const sidecarRoot = `static/data/papers/${date}/conference-${sha256(loaded.run.paperId).slice(0, 24)}/`;
     const sidecarNames = ['citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json'];
     const sidecarRecordsLine = rendered.markdown.match(/^paper_digest_sidecars: (.+)$/m);
     const sidecarRecords = sidecarRecordsLine ? pageApi.strictJson(Buffer.from(sidecarRecordsLine[1]), 'conference workbench sidecar records') : null;
+    let contextHeader = null;
+    if (sidecarRecords) {
+        const candidates = rendered.assets.filter(asset => typeof asset?.path === 'string' && asset.path.endsWith('/rethink-context.json'));
+        if (candidates.length !== 1 || typeof candidates[0].base64 !== 'string') fail('会议工作区缺少唯一的实际上下文文件。');
+        const context = pageApi.strictJson(Buffer.from(candidates[0].base64, 'base64'), 'conference workbench context');
+        contextHeader = storedHeader(context, 'paper-research-context');
+    }
+    const sidecarPrefix = contextHeader?.contract === codec.contract('paper-research-context')
+        ? 'static/client/papers' : 'static/data/papers';
+    const sidecarRoot = `${sidecarPrefix}/${date}/conference-${sha256(loaded.run.paperId).slice(0, 24)}/`;
     const paper = loaded.analysis.papers[0];
     const assetFiles = rendered.assets.map((asset, index) => {
         const image = asset && typeof asset.path === 'string'
@@ -582,6 +594,14 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
                 || bytes.length > 256 * 1024 || bytes.includes(13)) fail('conference workbench export is not bound to page records');
             if (sidecarName.endsWith('.json')) {
                 const record = pageApi.strictJson(bytes, 'conference workbench source-bound JSON');
+                const family = sidecarName === 'rethink-context.json' ? 'paper-research-context' : 'researcher-sidecars';
+                const actualHeader = storedHeader(record, family);
+                if (sidecarName === 'citation.json') {
+                    const expected = Object.hasOwn(contextHeader, 'schemaFingerprint')
+                        ? codec.declaredSchema(contextHeader.contract, 'paper-research-context', contextHeader.schemaFingerprint).citationFormat
+                        : codec.historicalHeader('researcher-sidecars', 'source-bound-citation', null);
+                    if (stableHash(actualHeader) !== stableHash(expected)) fail('会议引用文件与原上下文的格式绑定不一致。');
+                } else if (stableHash(actualHeader) !== stableHash(contextHeader)) fail('会议上下文格式在渲染期间变化。');
                 const cleanAuthors = paper.apiReaderAuthors.authors.map(author => ({
                     name: author.name.replace(/\s+/g, ' ').trim(),
                     affiliations: author.affiliations.map(value => value.replace(/\s+/g, ' ').trim()) }));
@@ -601,15 +621,22 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     }
     if (new Set(assetFiles.map(asset => asset.path)).size !== assetFiles.length) fail('conference renderer returned duplicate assets');
     const pageBytes = Buffer.from(rendered.markdown, 'utf8'); const assignmentBytes = canonicalBytes(assignment);
-    const body = { contract: CONTRACT, version: PAGE_VERSION, status: 'complete', paperId: loaded.run.paperId,
+    const body = { ...currentHeader('conference-paper-page-staging'), status: 'complete', paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
         completionReceiptSha256: loaded.run.completionReceipt.receiptSha256, sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
         identity: loaded.identity, identitySha256: loaded.identitySha256, implementation,
         capabilities: structuredClone(loaded.run.capabilities), date,
         tagMetadata: assignment, tagAssignmentFileSha256: sha256(assignmentBytes), pagePath: `content/posts/${stem}.md`,
         primaryUrl: `/posts/${stem}/`, contentSha256: sha256(pageBytes), title: loaded.analysis.papers[0].title,
-        publication: structuredClone(loaded.publication), readerContract: READER_CONTRACT,
-        sourceBindingsContract: SOURCE_BINDINGS_CONTRACT, scoringContract: SCORING_CONTRACT,
+        publication: structuredClone(loaded.publication), readerContract: loaded.analysis.papers[0].apiReaderPlan.contract,
+        ...(Object.hasOwn(loaded.analysis.papers[0].apiReaderPlan, 'schemaFingerprint')
+            ? { readerSchemaFingerprint: loaded.analysis.papers[0].apiReaderPlan.schemaFingerprint } : {}),
+        sourceBindingsContract: loaded.analysis.papers[0].apiReaderPlan.sourceBindingsContract,
+        ...(Object.hasOwn(loaded.analysis.papers[0].apiReaderPlan, 'sourceBindingsSchemaFingerprint')
+            ? { sourceBindingsSchemaFingerprint: loaded.analysis.papers[0].apiReaderPlan.sourceBindingsSchemaFingerprint } : {}),
+        scoringContract: loaded.analysis.papers[0].analysisManifest.stages.scoringAudit.scoringContract,
+        ...(Object.hasOwn(loaded.analysis.papers[0].analysisManifest.stages.scoringAudit, 'scoringSchemaFingerprint')
+            ? { scoringSchemaFingerprint: loaded.analysis.papers[0].analysisManifest.stages.scoringAudit.scoringSchemaFingerprint } : {}),
         readerTitle: loaded.analysis.papers[0].apiReaderPlan.readerTitle,
         oneSentenceThesis: loaded.analysis.papers[0].apiReaderPlan.oneSentenceThesis,
         summary: loaded.analysis.papers[0].parsed.summary, score: Number(loaded.analysis.papers[0].parsed.score),
@@ -876,9 +903,10 @@ function stageAssetInventory(directory) {
 }
 function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repair = false, repairMode, repairPolicy }, dependencies = {}) {
     if (repairMode !== undefined && (repairMode !== 'caption-only' || !repair
-        || repairPolicy?.contract !== 'conference-caption-only-page-repair-policy-v1'
+        || !codec.hasValidHeader(repairPolicy, 'conference-caption-only-page-repair-policy')
         || repairPolicy.mode !== repairMode || repairPolicy.implementationSha256 !== sha256(fs.readFileSync(__filename))
-        || Object.keys(repairPolicy).sort().join('\0') !== ['contract', 'mode', 'implementationSha256'].sort().join('\0'))) {
+        || Object.keys(repairPolicy).sort().join('\0') !== [...Object.keys(storedHeader(repairPolicy,
+            'conference-caption-only-page-repair-policy')), 'mode', 'implementationSha256'].sort().join('\0'))) {
         fail('caption-only repair requires the exact authorized policy');
     }
     if (!UUID_RE.test(executionId || '') || !ID_RE.test(paperId || '') || !pageProof
@@ -913,7 +941,8 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
             }
             const tagFields = readStageTagMetadata(manifest);
             if (!isKnownAssignmentFormat(assignment) || assignment.contract !== tagFields.tagMetadata.contract
-                || assignment.version !== tagFields.tagMetadata.version
+                || stableHash(storedHeader(assignment, 'conference-tag-assignment'))
+                    !== stableHash(storedHeader(tagFields.tagMetadata, 'conference-tag-assignment'))
                 || tagFields.tagMetadata.assignmentSha256 !== assignment.assignmentSha256
                 || tagFields.tagMetadata.registrySha256 !== assignment.registrySha256) {
                 fail(`论文 ${paperId} 原页面的标签分配身份、哈希或页面绑定不符合要求。`);
@@ -945,12 +974,12 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
                 continue;
             }
             const repairBody = repairMode === 'caption-only'
-                ? { contract: 'conference-deterministic-page-repair-v1', version: 11, mode: repairMode,
+                ? { ...currentHeader('conference-caption-page-repair'), mode: repairMode,
                     implementationSha256: repairPolicy.implementationSha256,
                     fromManifestSha256: manifest.manifestSha256, fromContentSha256: manifest.contentSha256,
                     assignmentFileSha256: assignmentRecord.fileSha256, assetSetSha256: stableHash(declaredAssets),
                     replacements: ['literal-quoted-phonetic-gloss-in-generated-figure-caption'] }
-                : { contract: 'conference-deterministic-page-repair-v1', version: 10,
+                : { ...currentHeader('conference-deterministic-page-repair'),
                 fromManifestSha256: manifest.manifestSha256, fromContentSha256: manifest.contentSha256,
                 replacements: ['math-angle-brackets-to-tex-commands', 'normalize-math-closing-delimiters',
                     'local-conference-image-path-to-dedicated-image-repository-url',
@@ -1023,7 +1052,7 @@ function aggregateHierarchy(tagCatalog, memberConceptIds) {
     // 汇总流程先核对各单篇页面绑定了同一词表，再按这份词表构建层级统计。
     // 本函数仍检查概念是否存在并已启用，不能遇到未知概念就猜选替代项。
     if (!tagCatalog || typeof tagCatalog !== 'object' || !Array.isArray(tagCatalog.facets)
-        || !Array.isArray(tagCatalog.concepts) || typeof tagCatalog.version !== 'string'
+        || !Array.isArray(tagCatalog.concepts) || typeof tagCatalogApi.tagCatalogIdentity(tagCatalog) !== 'string'
         || !/^[a-f0-9]{64}$/.test(String(tagCatalog.registrySha256 || ''))) {
         fail('构建标签层级需要词表的分类维度、概念、版本和格式有效的 SHA。');
     }
@@ -1086,7 +1115,7 @@ function aggregateHierarchy(tagCatalog, memberConceptIds) {
         parent.children.push(node);
     }
     for (const node of nodes.values()) node.children.sort(compare);
-    return { contract: HIERARCHY_CONTRACT, registryVersion: tagCatalog.version,
+    return { ...currentHeader('conference-tag-hierarchy'), registryVersion: tagCatalogApi.tagCatalogIdentity(tagCatalog),
         registrySha256: tagCatalog.registrySha256, memberCount: memberConceptIds.length,
         // 每分面一棵树；只有计数 > 0 的节点存在，空分面保留为 nodes: []。
         facets: tagCatalog.facets.map(facet => ({ id: facet.id, label: facet.label,
@@ -1332,6 +1361,7 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
         `tags: ${JSON.stringify(aggregateTags)}`, `categories: ${JSON.stringify([`${conferenceId} 论文`])}`,
         `description: "共收录 ${members.length} 篇 ${conferenceId} 会议论文深度解读"`,
         'paper_digest_page_type: index', `paper_digest_reader_quality: "${READER_FACING_CONTRACT}"`,
+        `paper_digest_reader_quality_schema_fingerprint: "${codec.schemaFingerprint('reader-facing-page')}"`,
         `paper_digest_tags_contract: "${tagRulesApi.TAG_FLAT_COMPAT_CONTRACT}"`,
         `paper_digest_tags_selection_contract: "${aggregateTagMetadata.selectionContract}"`,
         `paper_digest_tags_registry_version: "${aggregateTagMetadata.registryVersion}"`,
@@ -1372,8 +1402,9 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
     const aggregateImplementationSha256 = fingerprint(dependencies).implementationSha256;
     const aggregateId = stableHash({ planProofSha256: authenticated.proof.proofSha256,
         registrySha256: tagCatalog.registrySha256, selectionSetSha256, aggregateImplementationSha256 }).slice(0, 32);
-    const body = { contract: AGGREGATE_CONTRACT, version: AGGREGATE_VERSION, status: 'complete', aggregateId, conferenceId, date: aggregateDate,
+    const body = { ...currentHeader('conference-aggregate-staging'), status: 'complete', aggregateId, conferenceId, date: aggregateDate,
         plan: authenticated.proof, readerQuality: READER_FACING_CONTRACT,
+        readerQualitySchemaFingerprint: codec.schemaFingerprint('reader-facing-page'),
         tagMetadata: { contract: tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, selectionContract: aggregateTagMetadata.selectionContract,
             registryVersion: aggregateTagMetadata.registryVersion, registrySha256: tagCatalog.registrySha256,
             scope: 'aggregate-primary-task-counts' },
@@ -1397,9 +1428,8 @@ function writeAggregateArtifacts(aggregateRoot, manifest) {
     pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(manifest));
 }
 
-module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION,
-    ASSIGNMENT_CONTRACT, ASSIGNMENT_VERSION, LEGACY_ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, LEGACY_PROJECTION_CONTRACT, LEGACY_PROJECTION_VERSION, HIERARCHY_CONTRACT,
-    VERSION, stableHash, planProof, readOriginalTagProof,
+module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, HIERARCHY_CONTRACT,
+    stableHash, planProof, readOriginalTagProof,
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
     repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,

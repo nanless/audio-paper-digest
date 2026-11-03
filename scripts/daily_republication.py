@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import uuid
 
+from blog_record_format import source_bound_generation, strict_receipt, matches_snapshot_receipt
+from daily_source_format import is_daily_source_reference
 from path_config import DAILY_REPUBLICATION_RUNS_DIR, DAILY_REPUBLICATION_MARKER_DIRNAME
 from publication_activation import child, encoded, read, safe_dir, sha, sync_dir, write
 
@@ -162,12 +164,11 @@ def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *, 
     if sha(read(formal_path)) != canonical_sha:
         raise ValueError('正式分析发生变化，不能作为同批次重新呈现')
     formal = json.loads(read(formal_path))
-    if not isinstance(formal.get('dailyFreshSourceRun'), dict) \
-            or formal['dailyFreshSourceRun'].get('contract') != 'daily-fresh-source-reference-v1':
+    if not is_daily_source_reference(formal.get('dailyFreshSourceRun')):
         raise ValueError('重新发布必须使用当前完整日更封存来源')
-    for value in (manifest, receipt):
-        if value.get('schemaVersion') != 3 or value.get('date') != date or value.get('publicationScope'):
-            raise ValueError('日更重新发布仅支持完整已发布 schema3 日批')
+    if not source_bound_generation(manifest) or not strict_receipt(receipt) or any(
+            value.get('date') != date or value.get('publicationScope') for value in (manifest, receipt)):
+        raise ValueError('日更重新发布仅支持有完整来源与审查凭证的已发布日批')
     commit = receipt.get('publicationCommit')
     if not OID.fullmatch(str(commit or '')) or receipt.get('remoteVerifiedOid') != commit \
             or receipt.get('strictReview') is not True or receipt.get('hugoGate') != 'hugo' \
@@ -176,7 +177,7 @@ def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *, 
             or not SHA.fullmatch(str(receipt.get('reviewProtocolFingerprint') or '')) \
             or receipt.get('remoteName') != module.GITHUB_REMOTE or not receipt.get('remoteVerifiedAt'):
         raise ValueError('原发布凭证、审查或生成清单身份不一致')
-    if receipt.get('generationInputIntegrity') != module.PUBLISHED_PAPERS_FINGERPRINT_CONTRACT:
+    if not matches_snapshot_receipt(manifest, receipt):
         raise ValueError('原审查凭证缺少完整输入核验规则')
     bindings = {'generationInputFingerprint': 'inputFingerprint',
                 'publishedPapersFingerprint': 'publishedPapersFingerprint',
@@ -229,8 +230,9 @@ def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *, 
     # 只准许四个已经受控维护的目录资源变化；成对资源、完整当前原档和
     # 当前386概念身份均须独立通过，不能将任意静态文件视为“目录升级”。
     from tag_catalog_publication import validate_published_tag_catalog
+    from tag_catalog import tag_catalog_identity
     catalog = module._PAGE_TAG_CATALOG
-    availability = validate_published_tag_catalog(repo, catalog['registrySha256'], catalog['version'])
+    availability = validate_published_tag_catalog(repo, catalog['registrySha256'], tag_catalog_identity(catalog))
     expected_assets = module.tag_catalog_file_contents(repo)
     maintained = []
     for item, path in zip(reviewed, paths):

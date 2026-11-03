@@ -1,0 +1,68 @@
+{
+  "contract": "analysis-prompt-text",
+  "stages": {
+    "primaryAnalysis": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/deep-analysis.md"
+    },
+    "openSourceScan": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/opensource-scan.md"
+    },
+    "revision": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/gap-fill.md"
+    },
+    "tableRepair": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/table-fill.md"
+    },
+    "methodRepair": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/method-fill.md"
+    },
+    "coreSummaryRepair": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/core-summary-repair.md"
+    },
+    "structureRepair": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/structure-repair.md"
+    },
+    "tagSelection": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/tag-repair.md"
+    },
+    "scoringAudit": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/scoring-audit.md"
+    },
+    "imageSupplement": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/image-supplement.md"
+    },
+    "apiReaderArticle": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/api-reader-article.md"
+    },
+    "apiReaderRepair": {
+      "contract": "analysis-prompt-text",
+      "path": "prompts/current/api-reader-repair.md"
+    }
+  },
+  "filter": "prompts/current/filter.md",
+  "special": [
+    "prompts/current/primary-fact-local-repair.md",
+    "prompts/current/api-reader-fact-local.md",
+    "prompts/current/api-reader-concept-terms.md"
+  ],
+  "specialByRole": {
+    "primaryFactRepair": "prompts/current/primary-fact-local-repair.md",
+    "readerFactRepair": "prompts/current/api-reader-fact-local.md",
+    "readerConceptTerms": "prompts/current/api-reader-concept-terms.md"
+  },
+  "specialContracts": {
+    "readerFactRepair": "reader-fact-local-sentence-prompt",
+    "readerConceptTerms": "reader-concept-terms-prompt"
+  }
+}

@@ -175,8 +175,8 @@ describe('v5 教程表格保留原表中的模型名称和数字', () => {
         const {
             defaultTutorialPayloadPaths,
             validateTutorialPayloadReceipt,
-            MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
-        } = require('../scripts/manual-v5-tutorial-payload');
+            MANUAL_TUTORIAL_PAYLOAD_CONTRACT
+        } = require('../scripts/manual-tutorial-payload');
         const sha = value => crypto.createHash('sha256').update(value).digest('hex');
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-row-identity-'));
         try {
@@ -251,7 +251,7 @@ describe('v5 教程表格保留原表中的模型名称和数字', () => {
                 freshAuthoring: fresh
             };
             const receipt = validateTutorialPayloadReceipt({
-                contract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+                contract: MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
                 ...paths
             }, options);
             assert.equal(receipt.validation.tableCount, 1);
@@ -276,7 +276,7 @@ describe('v5 教程表格保留原表中的模型名称和数字', () => {
             data.packet.artifactPlan.sha256 = artifactPlanBindingSha256(plan);
             writePayloadFiles();
             assert.throws(() => validateTutorialPayloadReceipt({
-                contract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+                contract: MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
                 ...paths
             }, options), /显示转换记录与按原始单元格计算的记录不一致/);
         } finally {

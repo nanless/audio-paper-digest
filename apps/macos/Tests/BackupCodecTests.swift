@@ -32,7 +32,7 @@ private struct BackupTestError: Error, LocalizedError {
         func stages()->[String]{(try? fm.contentsOfDirectory(atPath:root.path).filter{$0.hasPrefix(".paperdigest-restore-")}) ?? []}
         let original=try BackupCodec.collect(sourceDirectory:live)
         check("collect includes hidden files and complete immutable journal bytes") {
-            try require(original.contract=="paperdigest-backup-v2" && original.files.count==4,"complete files contract")
+            try require(original.contract==ClientProtocols.contract("paperdigest-backup") && original.schemaFingerprint==ClientProtocols.schemaFingerprint("paperdigest-backup") && original.files.count==4,"complete files contract with validated declared schema")
             try require(original.files.contains{$0.path==".hidden"},"hidden file included")
             try require(original.files.first{$0.path=="files/archive.json"}?.data==journal,"original journal unchanged")
             for file in original.files{try require(file.sha256==hash(file.data),"real file SHA")}
@@ -112,6 +112,13 @@ private struct BackupTestError: Error, LocalizedError {
             try require(stages()==before,"hash corruption creates no stage");try unchanged()
         }
         check("contract, personal store and malformed source roots rejected") {
+            let current=try JSONSerialization.jsonObject(with:BackupCodec.encode(original)) as! [String:Any]
+            for field in ["version","schemaVersion","policyVersion"] {
+                var malformed=current;malformed[field]=1
+                try rejects{_=try BackupCodec.parse(JSONSerialization.data(withJSONObject:malformed))}
+            }
+            var badFingerprint=current;badFingerprint["schemaFingerprint"]=String(repeating:"0",count:64)
+            try rejects{_=try BackupCodec.parse(JSONSerialization.data(withJSONObject:badFingerprint))}
             var object=try JSONSerialization.jsonObject(with:BackupCodec.encode(original)) as! [String:Any];object["contract"]="paperdigest-backup-v1"
             try rejects{_=try BackupCodec.parse(JSONSerialization.data(withJSONObject:object))}
             try rejects{_=try BackupCodec.stage(.init(sourceDirectory:live.path,files:[entry("unrelated")]),parentDirectory:root)}

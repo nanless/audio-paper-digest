@@ -125,7 +125,7 @@ function applyBoundedTextPatch(original, record) {
 }
 function parseDraft(draft, paper, source, envelope, options = {}) {
     return require('../deep-analyzer').parseApiReaderArticleResult(JSON.stringify(draft), {
-        arxivId: paper.arxivId, requiredVersion: 3, requireIntegratedTables: true,
+        arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan), requireIntegratedTables: true,
         minimumIntegratedTables: 2, requireSourceBindings: true, allowDeterministicQuoteRepair: true,
         sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
         ...(options.prune ? { allowDeterministicUnsupportedClaimPruning: true } : {}),
@@ -465,7 +465,7 @@ async function finalize(handle, paper, persist) {
                     modelImagePreflightEvidenceSha256: stage.modelImagePreflightEvidenceSha256,
                     providerImageExclusions: structuredClone(checked.envelope.payload.providerImageExclusions || []) },
                 { readerAuthors: original.apiReaderAuthors, readerResources: original.apiReaderResources,
-                    execution: { ...stage, executionKind: 'operator', contentMode: 'reader-source-operator-revision-v1',
+                    execution: { ...stage, executionKind: 'operator', ...require('./reader-content-mode').fields('operator-revision'),
                         model: 'operator-local', protocol: 'local_operator', newReaderApiRequests: 0,
                         fingerprint: daily.stableHash(provenance), operatorProvenance: provenance,
                         ...(legacy ? { originBatchOperatorStage: legacy.rootStage, legacyBatchRoot: record.legacyBatchRoot }
@@ -507,7 +507,7 @@ async function finalize(handle, paper, persist) {
                                 JSON.parse(JSON.stringify(original.apiReaderPlan).replaceAll(from, to)), result.apiReaderPlan, source.text)))
                     || JSON.stringify(result.apiReaderFigures) !== JSON.stringify(original.apiReaderFigures).replaceAll(from, to)) fail('正常拼装改变了获准字词之外的Reader内容');
             }
-            if (!require('../analysis-engine').hasValidApiReaderV3Records(result)) fail('完整正常Reader资格未通过');
+            if (!require('../analysis-engine').hasValidIntegratedApiReaderRecords(result)) fail('完整正常Reader资格未通过');
             facts.validateRepairedClaims('apiReaderArticle', result.apiReaderArticle, paper.arxivId);
             // Preview must exercise the same pending-feedback stage gate as
             // the engine, without persisting a new packet or clearing a duty.

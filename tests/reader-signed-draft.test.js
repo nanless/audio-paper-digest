@@ -92,7 +92,7 @@ test('计划中的术语解释与实际正文不同，即使重算计划SHA也�
     const { stableHash } = require('../scripts/lib/fresh-rewrite-run');
     sample.paper.apiReaderPlanSha256 = stableHash(sample.paper.apiReaderPlan);
     sample.paper.analysisManifest.stages.apiReaderArticle.planSha256 = sample.paper.apiReaderPlanSha256;
-    assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(sample.paper), false);
+    assert.equal(require('../scripts/analysis-engine').hasValidIntegratedApiReaderRecords(sample.paper), false);
     const before = JSON.stringify(sample);
     assert.throws(() => reconstructReaderDraftFromVerifiedArticle(sample), error => (
         error.code === 'READER_SIGNED_DRAFT_NOT_REVERSIBLE'

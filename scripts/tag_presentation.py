@@ -4,7 +4,7 @@ import html
 import re
 from urllib.parse import parse_qs, quote, urlsplit
 
-from tag_catalog import _validate_tag_catalog_content
+from tag_catalog import tag_catalog_identity, _validate_tag_catalog_content
 from path_config import resolve_blog_base_path
 
 FACET_DISPLAY_LABELS = {
@@ -21,7 +21,7 @@ def build_tag_hierarchy(metadata, catalog):
     _validate_tag_catalog_content(catalog)
     if (not isinstance(metadata, dict)
             or not re.fullmatch(r'[a-f0-9]{64}', str(catalog.get('registrySha256') or ''))
-            or metadata.get('registryVersion') != catalog['version']
+            or metadata.get('registryVersion') != tag_catalog_identity(catalog)
             or metadata.get('registrySha256') != catalog['registrySha256']
             or not isinstance(metadata.get('concepts'), list)):
         raise ValueError('标签展示必须绑定同一词表版本、SHA 和实际所选概念。')
@@ -115,7 +115,7 @@ def mask_verified_tag_hierarchy_for_quality(markdown, catalog=None, *, base_path
                 ids.append(query['concept'][0])
         if not 1 <= len(ids) <= 5 or len(set(ids)) != len(ids) or any(cid not in by_id for cid in ids):
             raise ValueError('多级分类块包含重复、未知或过多的直接概念。')
-        metadata = {'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+        metadata = {'registryVersion': tag_catalog_identity(catalog), 'registrySha256': catalog['registrySha256'],
                     'concepts': [{'id': cid, 'facet': by_id[cid]['facet'],
                                   'label': by_id[cid]['preferredLabel']['zh']} for cid in ids]}
         expected = render_tag_hierarchy_markdown(metadata, catalog, base_path=base_path).rstrip('\n')

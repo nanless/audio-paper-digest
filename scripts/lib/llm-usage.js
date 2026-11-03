@@ -17,7 +17,8 @@ function withPersistedLlmUsageRecords(callback) {
         ? result.then(value => ({ result: value, records: records.slice() }))
         : { result, records: records.slice() };
 }
-const VERSION = 'llm-usage-v1';
+const { usageEventHeader, isUsageEventFormat } = require('./llm-usage-format');
+const formats = require('./protocol-codec');
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const label = value => typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,200}$/.test(value) ? value : null;
@@ -107,7 +108,7 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
     else if (terminal) outcome = 'incomplete';
     else outcome = 'completed';
     return {
-        version: VERSION, kind: 'request', eventId, at, runtime: 'node', ...usageContext(context),
+        ...usageEventHeader(), kind: 'request', eventId, at, runtime: 'node', ...usageContext(context),
         protocol: label(protocol), model: label(model),
         outcome,
         ...(typeof transportStarted === 'boolean' ? { transportStarted } : {}),
@@ -181,7 +182,7 @@ function recordLlmDisposition(input, options = {}) {
     if (!['accepted', 'rejected'].includes(input?.disposition) || !digest(input.outputTextSha256)) {
         throw new Error('模型结果的接受或拒绝记录不合法：disposition 必须为 accepted 或 rejected，outputTextSha256 必须为 64 位小写十六进制 SHA-256');
     }
-    const event = { version: VERSION, kind: 'disposition', eventId: crypto.randomUUID(),
+    const event = { ...usageEventHeader(), kind: 'disposition', eventId: crypto.randomUUID(),
         at: new Date().toISOString(), runtime: 'node', ...usageContext(input),
         outputTextSha256: input.outputTextSha256, disposition: input.disposition,
         errorCode: label(input.errorCode) };
@@ -199,7 +200,7 @@ function summarizeLlmUsage(events, options = {}) {
         event.unitId || null, event.contentAttempt ?? null, event.outputTextSha256]);
     const dispositions = new Map();
     for (const event of events) {
-        if (event?.version !== VERSION || event.kind !== 'disposition' || !digest(event.outputTextSha256)
+        if (!isUsageEventFormat(event) || event.kind !== 'disposition' || !digest(event.outputTextSha256)
             || !['accepted', 'rejected'].includes(event.disposition)) continue;
         const key = dispositionKey(event);
         const values = dispositions.get(key) || new Set();
@@ -207,7 +208,7 @@ function summarizeLlmUsage(events, options = {}) {
         dispositions.set(key, values);
     }
     for (const event of events) {
-        if (event?.version !== VERSION || event.kind !== 'request' || !event.eventId || seen.has(event.eventId)) continue;
+        if (!isUsageEventFormat(event) || event.kind !== 'request' || !event.eventId || seen.has(event.eventId)) continue;
         seen.add(event.eventId);
         const key = JSON.stringify([event.runId || null, event.paperId || null, event.stage || 'unknown']);
         if (!groups.has(key)) groups.set(key, { runId: event.runId || null, paperId: event.paperId || null, stage: event.stage || 'unknown',
@@ -239,10 +240,10 @@ function summarizeLlmUsage(events, options = {}) {
         group.durationMs += count(event.durationMs) || 0;
     }
     const pendingUnknownRequests = require('./llm-pending-request').orphanedPendingLlmRequests(events, options.pairingEvents || events);
-    return { version: VERSION, pendingUnknownRequestCount: pendingUnknownRequests.length, pendingUnknownRequests, note: 'pendingUnknownRequests 是已授权但缺终态的传输记录，结果与费用未知；requests 是已有终态的调用记录总数，包含发送前被本地拦截的 blockedBeforeTransport；transportErrors 单列连接错误。用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
+    return { ...formats.recordHeader('llm-usage-report', 'llm-usage-report'), pendingUnknownRequestCount: pendingUnknownRequests.length, pendingUnknownRequests, note: 'pendingUnknownRequests 是已授权但缺终态的传输记录，结果与费用未知；requests 是已有终态的调用记录总数，包含发送前被本地拦截的 blockedBeforeTransport；transportErrors 单列连接错误。用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
         groups: [...groups.values()].map(group => ({ ...group, usage: Object.fromEntries(Object.entries(group.usage)
             .map(([name, value]) => [name, { ...value, sum: value.reportedRequests ? value.sum : null }])) })) };
 }
 
-module.exports = { withPersistedLlmUsageRecords, VERSION, normalizeUsagePaperId, usagePaperKey, normalizeLlmUsage, withLlmUsageContext, usageContext, inputStatistics,
+module.exports = { withPersistedLlmUsageRecords, usageEventHeader, isUsageEventFormat, normalizeUsagePaperId, usagePaperKey, normalizeLlmUsage, withLlmUsageContext, usageContext, inputStatistics,
     buildLlmUsageEvent, writeLlmUsageEvent, recordLlmUsage, recordLlmDisposition, summarizeLlmUsage };

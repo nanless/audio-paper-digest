@@ -68,6 +68,10 @@ globalThis.fetch = deny;
         ? require('./conference-source-context').readerPdfSourceForContext(authenticatedHandle).sourceText : input.sourceText;
     if (crypto.createHash('sha256').update(sourceText).digest('hex') !== input.paper.sourceSha256) throw new Error('Authenticated PDF source text SHA differs');
     const deep = require('../deep-analyzer');
+    if (!require('./reader-content-mode').validForSavedPlan(
+        input.paper.analysisManifest?.stages?.apiReaderArticle, input.paper.apiReaderPlan)) {
+        throw new Error('Reader content mode is missing, mixed, or unknown');
+    }
     require('./reader-request-diagnostics').validateReaderVersionMetadataPublicationCompletion(input.paper);
     require('./reader-target-ordinal-patch').validateCompletion(input.paper);
     require('./reader-fact-table-claim-location').validatePublication(input.paper);

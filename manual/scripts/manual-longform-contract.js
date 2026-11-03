@@ -1,11 +1,13 @@
 'use strict';
+const { historicalContract: historicalManualContract } = require('../../scripts/lib/protocol-codec');
+
 
 const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, assertAgentIdentity, boundModelPolicy } = require('./manual-agent-policy.js');
 
 const crypto = require('crypto');
 const { normalizedId } = require('../../scripts/utils.js');
 
-const MANUAL_LONGFORM_CONTRACT_VERSION = 'reader-longform-v2';
+const MANUAL_LONGFORM_CONTRACT = historicalManualContract('manual-reader-longform', 'signed-blocks');
 const MANUAL_LONGFORM_BUNDLE_VERSION = 2;
 const LONGFORM_BLOCK_KINDS = new Set([
     'prerequisites', 'problem', 'related_work', 'signal_path', 'architecture',
@@ -592,8 +594,8 @@ function validateManualLongformBundle(bundle, article, artifactIndex, options = 
     const policy = boundModelPolicy(value, options.expectedModelPolicy, label);
     const index = assertObject(artifactIndex, `${label}.artifactIndex`);
     if (value.version !== MANUAL_LONGFORM_BUNDLE_VERSION
-        || value.contract !== MANUAL_LONGFORM_CONTRACT_VERSION) {
-        throw new Error(`${label} 必须是 ${MANUAL_LONGFORM_CONTRACT_VERSION} version=${MANUAL_LONGFORM_BUNDLE_VERSION}`);
+        || value.contract !== MANUAL_LONGFORM_CONTRACT) {
+        throw new Error(`${label} 必须是 ${MANUAL_LONGFORM_CONTRACT} version=${MANUAL_LONGFORM_BUNDLE_VERSION}`);
     }
     const paperId = normalizedId(value.paperId);
     if (!paperId || (options.paperId && paperId !== normalizedId(options.paperId))) {
@@ -689,7 +691,7 @@ function validateManualLongformBundle(bundle, article, artifactIndex, options = 
 }
 
 module.exports = {
-    MANUAL_LONGFORM_CONTRACT_VERSION,
+    MANUAL_LONGFORM_CONTRACT,
     MANUAL_LONGFORM_BUNDLE_VERSION,
     LONGFORM_BLOCK_KINDS,
     stableSha256,

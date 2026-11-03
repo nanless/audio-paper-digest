@@ -18,6 +18,8 @@ from test_blog_stage_scripts import (
     load_script, MANUAL_SCRIPTS,
 )
 manual = load_script('manual-review-blog.py', MANUAL_SCRIPTS)
+from manual_agent_policy import current_review_statement_fields
+
 DATE = '2026-07-10'
 
 
@@ -53,7 +55,7 @@ class ManualMixedManifestTest(unittest.TestCase):
     def record(self):
         path = pub.generation_manifest_path(DATE)
         path.write_text(json.dumps(self.manifest))
-        return {'version': 4,
+        return {**current_review_statement_fields(),
             'generationManifestSha256': pub._sha256_file(path),
             'machineAssets': pub.manual_review_machine_assets(self.manifest, DATE),
             'files': [{'path': self.page_rel, 'sha256': self.manifest['files'][0]['sha256']}]}
@@ -159,10 +161,11 @@ class ManualMixedManifestTest(unittest.TestCase):
         self.assertEqual(result['pending'], [self.page_rel])
         self.assertEqual(reuse.call_count, 1)
 
-    def pure_page_receipt(self, version=4):
-        from test_manual_review_blog import current_attestation, attestation
-        payload = current_attestation() if version == 4 else attestation()
-        payload['version'] = version
+    def pure_page_receipt(self, version=None):
+        from test_manual_review_blog import current_attestation, original_sol_attestation, attestation
+        payload = current_attestation() if version is None else original_sol_attestation() if version == 4 else attestation()
+        if version is not None:
+            payload['version'] = version
         self.page.write_text('---\npaper_digest_arxiv_id: "2607.00001"\n---\nWER 7.1% 构造测试正文。\n')
         item = payload['files'][0]
         item.update(path=self.page_rel, sha256=pub._sha256_file(self.page),
@@ -184,7 +187,7 @@ class ManualMixedManifestTest(unittest.TestCase):
         return receipt
 
     def test_pure_page_v1_v2_v3_v4_historical_validation_unchanged(self):
-        for version in (1, 2, 3, 4):
+        for version in (1, 2, 3, 4, None):
             with self.subTest(version=version):
                 receipt = self.pure_page_receipt(version)
                 self.assertIsNone(pub._manual_review_record_error(receipt, date_str=DATE))
@@ -193,7 +196,7 @@ class ManualMixedManifestTest(unittest.TestCase):
 
     def test_statement_assets_only_v4_not_null_or_extra_keys(self):
         for mode in ('v2', 'v3', 'null', 'extra', 'duplicate'):
-            receipt = self.pure_page_receipt(4)
+            receipt = self.pure_page_receipt()
             payload = receipt['reviewProvenance']
             payload['machineAssets'] = pub.manual_review_machine_assets(self.manifest, DATE)
             if mode in ('v2', 'v3'):
@@ -212,7 +215,7 @@ class ManualMixedManifestTest(unittest.TestCase):
                 manual._load_review_statement(path)
 
     def test_mixed_provenance_none_date_fails_cleanly_not_exception(self):
-        receipt = self.pure_page_receipt(4)
+        receipt = self.pure_page_receipt()
         self.manifest['files'][0] = self.file_record(self.page_rel)
         bound = self.record()
         receipt['files'] = self.manifest['files']
@@ -270,7 +273,7 @@ class ManualMixedManifestTest(unittest.TestCase):
             pub.validate_manual_cache_reuse(item, DATE)
 
     def test_invalid_mixed_provenance_does_not_write_pass_cache(self):
-        receipt = self.pure_page_receipt(4)
+        receipt = self.pure_page_receipt()
         self.manifest['files'][0] = self.file_record(self.page_rel)
         bound = self.record()
         record = receipt['reviewProvenance']
