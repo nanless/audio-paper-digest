@@ -62,8 +62,14 @@ import org.json.JSONObject
                         aggregate.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
                         if(aggregate.catalogStale)Text("目录有更新，请重新读取后打开页面。",color=MaterialTheme.colorScheme.tertiary)
                         FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                            if(aggregate.catalog!=null)OutlinedButton({action("aggregate.list",JSONObject())},enabled=!aggregate.loading){Text("刷新目录")}
-                            if(aggregate.catalog==null&&!aggregate.offlineMode)OutlinedButton({action("library.sync",JSONObject())},enabled=!aggregate.loading&&!state.busy){Text("同步已发布内容")}
+                            if(aggregate.offlineMode && aggregate.catalog!=null) {
+                                OutlinedButton({action("aggregate.list",JSONObject())},enabled=!aggregate.loading){Text("重读本机目录")}
+                            }
+                            if(!aggregate.offlineMode) {
+                                OutlinedButton({action("library.sync",JSONObject())},enabled=!aggregate.loading&&!state.busy){
+                                    Text(if(aggregate.catalog==null)"同步已发布内容" else "刷新日更与网站目录")
+                                }
+                            }
                         }
                         if(aggregate.offlineMode)Text(if(aggregate.catalog==null)"尚无保存的网站目录。关闭离线模式后可同步内容。"else"离线模式 · 阅读已经保存的页面。",style=MaterialTheme.typography.bodySmall)
                         if(state.busy)Text("资料任务正在进行，可到任务页查看进度。",style=MaterialTheme.typography.bodySmall)

@@ -1,6 +1,8 @@
 package com.nanless.paperdigest.data
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.JsonReader
 import android.util.JsonToken
 import java.io.InputStream
@@ -29,6 +31,15 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private val directory = File(personal.directory, "PublishedLibrary").also { it.mkdirs() }
     private val current = File(directory, "current.json")
     private val syncMutex = Mutex()
+    private val publishedHttp by lazy {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        SafeHttp.publishedSite {
+            val network = connectivity?.activeNetwork
+            network != null && connectivity.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+    }
+
     private val offlineIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private data class CatalogState(val published: List<Paper>, val retired: List<Paper>, val summary: JSONObject, val epoch: String, val taxonomy: WebsiteTaxonomy? = null) {
         val all = (published + retired).distinctBy { it.id }
@@ -567,7 +578,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private suspend fun read(url: String, limit: Int): ByteArray {
         fetchOverride?.let { return it(url, limit).also { b -> require(b.size <= limit) } }
         val safe = sameSite(url)
-        val response = SafeHttp().execute(Request.Builder().url(safe).build(), limit)
+        val response = publishedHttp.execute(Request.Builder().url(safe).build(), limit)
         require(response.code == 200) { "网站资料暂不可用，原资料保留" }
         return response.bytes
     }
@@ -580,7 +591,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             val isArxiv = uri.host.lowercase() in setOf("arxiv.org", "export.arxiv.org")
             val proxy = personal.settings().nullableString("httpProxy")
             if (isArxiv) require(!proxy.isNullOrBlank()) { "arXiv 原文需要设置 HTTP CONNECT 代理；已有导读仍可阅读" }
-            val response = SafeHttp(if (isArxiv) proxy else null).execute(Request.Builder().url(url).build(), limit)
+            val http = if (uri.host == "nanless.github.io") publishedHttp else SafeHttp(if (isArxiv) proxy else null)
+            val response = http.execute(Request.Builder().url(url).build(), limit)
             if (response.code in listOf(301, 302, 303, 307, 308)) {
                 val location = response.headers.entries.firstOrNull { it.key.equals("Location", true) }?.value ?: error("重定向缺少地址")
                 url = uri.resolve(location).toASCIIString()
