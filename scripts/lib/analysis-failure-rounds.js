@@ -1,8 +1,9 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const CONTRACT = 'analysis-failure-rounds-v1';
-const HANDOFF_CONTRACT = 'analysis-batch-manual-handoff-v1';
+const codec = require('./protocol-codec');
+const ROUND_HEADER = codec.recordHeader('analysis-failure-rounds', 'analysis-failure-rounds');
+const HANDOFF_HEADER = codec.recordHeader('analysis-batch-manual-handoff', 'analysis-batch-manual-handoff');
 const stableHash = value => {
     const sort = item => Array.isArray(item) ? item.map(sort) : item && typeof item === 'object'
         ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort(item[key])])) : item;
@@ -120,7 +121,7 @@ async function runFailureRounds(items, options = {}) {
                     : details.retryable === false ? 'nonretryable_failure' : 'content_retry' };
         });
         const eligible = !halted && small && records.every(record => record.eligible);
-        return { contract: HANDOFF_CONTRACT, eligible, status: eligible ? 'ready' : 'not_ready',
+        return { ...HANDOFF_HEADER, eligible, status: eligible ? 'ready' : 'not_ready',
             reason: eligible ? (records.every(record => record.noProgressRounds >= manualHandoffNoProgressRounds)
                 ? 'small_stalled_failed_set' : 'small_persistently_failed_set') : halted ? 'run_stopped'
                 : !small ? 'failed_set_not_small' : 'insufficient_semantic_stagnation_or_blocked_failure',
@@ -190,7 +191,7 @@ async function runFailureRounds(items, options = {}) {
             await new Promise(resolve => setTimeout(resolve, roundDelayMs));
         }
     }
-    const result = { contract: CONTRACT, outcomes, rounds, stopped: Boolean(halted), manualHandoff: handoff(),
+    const result = { ...ROUND_HEADER, outcomes, rounds, stopped: Boolean(halted), manualHandoff: handoff(),
         failedIds: ids.filter((_, index) => outcomes[index]?.success === false),
         unstartedIds: ids.filter((_, index) => attempts[index] === 0),
         unfinishedIds: ids.filter((_, index) => attempts[index] > 0 && !outcomes[index]) };
@@ -217,4 +218,4 @@ async function runFailureRounds(items, options = {}) {
     return result;
 }
 
-module.exports = { CONTRACT, HANDOFF_CONTRACT, runFailureRounds, semanticAnalysisProgress, failureDetails };
+module.exports = { runFailureRounds, semanticAnalysisProgress, failureDetails };

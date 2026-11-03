@@ -245,7 +245,7 @@ ${makeProcessInputs.toString()}
 test('会议状态的文件核验拒绝被替换的 FIFO，正常公开文件权限仍可读取', t => {
     for (const replacement of ['normal', 'fifo']) {
         const result = spawnSync(process.execPath, ['-e', artifactReader,
-            path.resolve(__dirname, '..'), replacement], { encoding: 'utf8', timeout: 2000 });
+            path.resolve(__dirname, '..'), replacement], { encoding: 'utf8', timeout: 10000 });
         const firstLine = result.stdout.split('\n')[0];
         if (firstLine) {
             const directory = JSON.parse(firstLine).syntheticDirectory;

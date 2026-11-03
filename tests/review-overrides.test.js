@@ -15,6 +15,20 @@ test('schema 校验拒绝缺证据/错 SHA', () => {
     assert.throws(() => overrides.validateOverrides({ ...base, publicationCommit: 'short' }), /publicationCommit/);
 });
 
+test('稳定审查解释格式只接受登记的结构指纹', () => {
+    const codec = require('../scripts/lib/protocol-codec');
+    const name = 'blog-review-overrides';
+    const value = {
+        ...codec.recordHeader(name, name),
+        batchDate: '2026-10-21',
+        publicationCommit: 'b'.repeat(40),
+        overrides: [validEntry()]
+    };
+    assert.strictEqual(overrides.validateOverrides(value).length, 1);
+    assert.throws(() => overrides.validateOverrides({ ...value, schemaFingerprint: '0'.repeat(64) }), /指纹/);
+    assert.throws(() => overrides.validateOverrides({ ...value, contract: 'blog-review-overrides-v1' }), /指纹/);
+});
+
 test('批次级 override 可被 schema 接受并匹配批次 issues', () => {
     const base = { contract: 'blog-review-overrides-v1', batchDate: '2026-10-21', publicationCommit: 'b'.repeat(40) };
     const batchEntry = { path: 'batch', pageSha256: null, claim: '博客仓库有未提交改动', evidence: 'git status 输出', reviewer: 'r' };
@@ -37,7 +51,7 @@ test('applyOverrides 只把匹配页面+claim 的 error 降为 warn', () => {
     assert.strictEqual(failure.files[0].issues[1].severity, 'error');
 });
 
-test('v1 单条记录仍可解释同页多条同 claim，并分别记录本次 issue 位置', () => {
+test('旧格式单条记录仍可解释同页多条同 claim，并分别记录本次 issue 位置', () => {
     const entry = validEntry();
     const failure = { files: [{ path: entry.path, sha256: entry.pageSha256, passed: false, issues: [
         { severity: 'error', description: entry.claim },

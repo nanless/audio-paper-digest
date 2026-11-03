@@ -73,7 +73,11 @@ it('parallel storage/service and stop-notification failures retain all causes an
 it('small persistently failing set is only an unsigned manual handoff report after three rounds', async () => {
     const result = await runFailureRounds(items(2), { runItem: async (item, context) => ({
         ...failure(item), result: { ...item, failedDraft: `new failed draft ${context.round}` } }) });
-    assert.equal(result.rounds.length, 3); assert.equal(result.manualHandoff.eligible, true);
+    const codec = require('../scripts/lib/protocol-codec');
+    assert.equal(codec.hasValidHeader(result, 'analysis-failure-rounds'), true);
+    assert.equal(codec.hasValidHeader(result.manualHandoff, 'analysis-batch-manual-handoff'), true);
+    assert.equal(result.rounds.length, 3);
+    assert.equal(result.manualHandoff.eligible, true);
     assert.equal(result.manualHandoff.reason, 'small_persistently_failed_set');
     assert.equal(result.manualHandoff.newApiRequestsAuthorized, false);
     assert.ok(result.outcomes.every(outcome => outcome.success === false));

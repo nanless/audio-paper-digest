@@ -321,8 +321,8 @@ test('调用方装了处理器时，SIGTERM 会保留进行中的抓取锁，并
         'const api=require(process.argv[1]),deep=require(process.argv[2]);',
         'const root=process.argv[3],id=process.argv[4],marker=process.argv[5];',
         'const lock=root+"/.arxiv-"+id+".lock";',
-        'process.once("SIGTERM",()=>fs.writeFileSync(marker,fs.existsSync(lock)?"held":"released"));',
-        'deep.fetchArxivTextDetailedUncached=async()=>{process.stdout.write("READY\\n");await new Promise(r=>setTimeout(r,150));',
+        'process.once("SIGTERM",()=>{fs.writeFileSync(marker,fs.existsSync(lock)?"held":"released");process.stdout.write("SIGNALLED\\n");});',
+        'deep.fetchArxivTextDetailedUncached=async()=>{process.stdout.write("READY\\n");await new Promise(r=>process.stdin.once("data",r));',
         'const text="Official methods experiments evidence references. ".repeat(300);',
         'const flat=crypto.createHash("sha256").update(text).digest("hex");',
         'const body={version:1,source:"arxiv_html",tables:[],formulas:[],flattenedTextSha256:flat};',
@@ -330,20 +330,36 @@ test('调用方装了处理器时，SIGTERM 会保留进行中的抓取锁，并
         'htmlAttempts:1,warnings:[],structuredArtifacts:{...body,payloadSha256:crypto.createHash("sha256").update(JSON.stringify(body)).digest("hex")}}};',
         'api.prepareArxivSourceAuthority({authorityRoot:root,arxivId:id,authorityName:"arxiv-"+id+".json",apply:true})',
         '.then(()=>process.exit(8)).catch(error=>{fs.appendFileSync(marker,"|"+error.message+"|"+(fs.existsSync(lock)?"locked":"unlocked"));process.exit(0);});'
-    ].join('');
+    ].join('\n');
     const child = spawn(process.execPath, ['-e', statements, modulePath, deepPath, root, id, marker],
-        { stdio: ['ignore', 'pipe', 'pipe'] });
+        { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
-    await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error(`child not ready: ${stderr}`)), 2000);
-        child.stdout.on('data', () => { if (stdout.includes('READY\n')) { clearTimeout(timeout); resolve(); } });
-        child.once('exit', code => { if (!stdout.includes('READY\n')) { clearTimeout(timeout); reject(new Error(`early exit ${code}: ${stderr}`)); } });
-    });
+    async function waitForMarker(markerText) {
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => finish(new Error(`child did not report ${markerText}: ${stderr}`)), 10000);
+            function finish(error) {
+                clearTimeout(timeout);
+                child.stdout.off('data', onData);
+                child.off('exit', onExit);
+                if (error) reject(error);
+                else resolve();
+            }
+            function onData() { if (stdout.includes(markerText + '\n')) finish(); }
+            function onExit(code) { finish(new Error(`early exit ${code}: ${stderr}`)); }
+            child.stdout.on('data', onData);
+            child.once('exit', onExit);
+            onData();
+        });
+    }
+    await waitForMarker('READY');
     child.kill('SIGTERM');
-    const [code, signal] = await once(child, 'exit');
+    await waitForMarker('SIGNALLED');
+    const exited = once(child, 'exit');
+    child.stdin.end('continue');
+    const [code, signal] = await exited;
     assert.deepEqual({ code, signal }, { code: 0, signal: null });
     const state = fs.readFileSync(marker, 'utf8');
     assert.match(state, /^held\|.*收到进程信号，正在停止来源操作\|unlocked$/);

@@ -214,6 +214,73 @@
           }
         }
       ]
+    },
+    {
+      "name": "analysis-failure-rounds",
+      "currentVariant": "batch-scheduling-report",
+      "currentSchema": {
+        "fields": [
+          "outcomes",
+          "rounds",
+          "stopped",
+          "manualHandoff",
+          "failedIds",
+          "unstartedIds",
+          "unfinishedIds"
+        ],
+        "authority": "scheduling-report-only"
+      },
+      "historical": [
+        {
+          "tag": "analysis-failure-rounds-v1",
+          "variant": "batch-scheduling-report"
+        }
+      ]
+    },
+    {
+      "name": "analysis-batch-manual-handoff",
+      "currentVariant": "bounded-failure-advice",
+      "currentSchema": {
+        "fields": [
+          "eligible",
+          "status",
+          "reason",
+          "maxItems",
+          "minRounds",
+          "noProgressRounds",
+          "items",
+          "eligibleIds",
+          "blockedIds",
+          "budgetExhaustedIds",
+          "requiresControlledCorrection",
+          "newApiRequestsAuthorized"
+        ],
+        "authority": "advisory-only-no-new-requests"
+      },
+      "historical": [
+        {
+          "tag": "analysis-batch-manual-handoff-v1",
+          "variant": "bounded-failure-advice"
+        }
+      ]
+    },
+    {
+      "name": "blog-review-overrides",
+      "currentVariant": "reference-only-explanations",
+      "currentSchema": {
+        "fields": [
+          "batchDate",
+          "publicationCommit",
+          "overrides"
+        ],
+        "authority": "exact-page-sha-and-claim-reference-only"
+      },
+      "historical": [
+        {
+          "tag": "blog-review-overrides-v1",
+          "variant": "reference-only-explanations"
+        }
+      ]
     }
   ]
 }

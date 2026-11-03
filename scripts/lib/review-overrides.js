@@ -2,6 +2,7 @@
 // 误报解释记录的结构检查：页级比对页面 SHA，批次条目无页面 SHA。
 // 提交与人工证据为参考字段；本模块不认证正式审查凭证，不授发布资格。
 
+const codec = require('./protocol-codec');
 const SHA256 = /^[a-f0-9]{64}$/;
 // 审查凭证的提交字段在不同版本里叫法不同；只认这三个明确字段，不做模糊匹配。
 const RECEIPT_COMMIT_FIELDS = Object.freeze(['publicationCommit', 'reviewedCommit', 'commit']);
@@ -32,7 +33,7 @@ function assertReceiptBinding(publicationCommit, receipt) {
 
 function validateOverrides(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('overrides 必须是对象');
-    if (value.contract !== 'blog-review-overrides-v1') throw new Error('overrides.contract 必须为 blog-review-overrides-v1');
+    if (!codec.hasValidHeader(value, 'blog-review-overrides')) throw new Error('审查解释记录的格式或指纹不匹配');
     if (typeof value.batchDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.batchDate)) throw new Error('batchDate 非法');
     if (typeof value.publicationCommit !== 'string' || !/^[a-f0-9]{40}$/.test(value.publicationCommit)) throw new Error('publicationCommit 非法');
     if (!Array.isArray(value.overrides) || !value.overrides.length) throw new Error('overrides 不能为空');
