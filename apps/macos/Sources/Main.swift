@@ -40,6 +40,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var maintenanceBusy=false {didSet{if maintenanceBusy{if !oldValue{emit("library.willChange")};suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
+    var cloudRestoreSelections: [UUID: CloudRestoreSelection] = [:]
     var cloudBusy=false,cloudCredentialState="unknown"
     var cloudAutomaticPausedInMemory=false
     var cloudActiveJobID:String?,cloudLastError:String?

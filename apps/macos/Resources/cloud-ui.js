@@ -75,7 +75,7 @@ export function mountCloud(app){
  let state={account:'',folder:'PaperDigest',automatic:false,intervalHours:24,credentialState:'unknown',busy:false},request=0,action=0,listGeneration=0,submitting=false,cancelPending=false,disposed=false,message='',localError='',stateReadError='',checkedTarget=null;
  $('cloud-month').value=new Date().toISOString().slice(0,7);
  const monthValid=value=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value)&&Number(value.slice(0,4))>=2000;
- const snapshotValid=(s,month)=>s&&s.month===month&&typeof s.id==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(s.id)&&Number.isSafeInteger(s.encodedBytes)&&s.encodedBytes>=0&&Number.isSafeInteger(s.chunkCount)&&s.chunkCount>=1&&typeof s.sha256==='string'&&/^[a-f0-9]{64}$/.test(s.sha256);
+ const snapshotValid=(s,month)=>s&&s.month===month&&typeof s.id==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(s.id)&&typeof s.restoreToken==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(s.restoreToken)&&Number.isSafeInteger(s.encodedBytes)&&s.encodedBytes>=0&&Number.isSafeInteger(s.chunkCount)&&s.chunkCount>=1&&typeof s.sha256==='string'&&/^[a-f0-9]{64}$/.test(s.sha256);
  function size(bytes){if(!Number.isSafeInteger(bytes)||bytes<0)return '大小未记录';return bytes<1024?bytes+' B':bytes<1024*1024?(bytes/1024).toFixed(1)+' KiB':(bytes/1024/1024).toFixed(1)+' MiB';}
  function time(value){const date=typeof value==='string'?new Date(value):null;return date&&Number.isFinite(date.getTime())?new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(date):'时间未记录';}
  function form(){return {account:nodes.account.value.trim(),folder:nodes.folder.value,automatic:nodes.automatic.checked,intervalHours:Number(nodes.intervalHours.value)};}
@@ -180,7 +180,7 @@ export function mountCloud(app){
     const title=document.createElement('strong');title.textContent=time(entry.createdAt);
     const detail=document.createElement('p');detail.textContent=size(entry.encodedBytes)+' · '+entry.chunkCount+' 个已登记分块 · 版本 '+entry.id.slice(0,8);
     const button=document.createElement('button');button.type='button';button.textContent='恢复这个版本…';button.dataset.cloudRestore=entry.id;
-    button.onclick=()=>{if(generation!==listGeneration||$('cloud-month').value!==month)return;return perform('cloud.restore',{month,id:entry.id});};
+    button.onclick=()=>{if(generation!==listGeneration||$('cloud-month').value!==month)return;return perform('cloud.restore',{restoreToken:entry.restoreToken});};
     row.append(title,detail,button);$('cloud-versions').append(row);
    }
   });

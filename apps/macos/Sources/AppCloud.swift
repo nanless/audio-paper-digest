@@ -67,6 +67,13 @@ actor CloudCredentialSession {
     }
 }
 
+struct CloudRestoreSelection {
+    let reference: CloudArchiveService.SnapshotReference
+    let manifestSHA: String
+    let target: CloudSessionCredentials.Target
+    let generation: UUID
+}
+
 @MainActor extension PaperDigestApp {
     func cloudLocalStore() throws -> CloudLocalStore {
         if let cloudLocal { return cloudLocal }
@@ -165,7 +172,7 @@ actor CloudCredentialSession {
             let previous = local.profile.destinationID
             let hadMemory = cloudSessionCredentials.available(for: .init(destination: previous, account: local.profile.account))
             try local.save(account: account, folder: folder, automatic: automatic, intervalHours: interval)
-            if local.profile.destinationID != previous { cloudSessionCredentials.clear(); cloudArchive = nil; cloudCredentialState = "unknown"; cloudLastError = nil; cloudAutomaticPausedInMemory = hadMemory; if hadMemory { try local.pauseAutomatic(true) } }
+            if local.profile.destinationID != previous { cloudRestoreSelections.removeAll(); cloudSessionCredentials.clear(); cloudArchive = nil; cloudCredentialState = "unknown"; cloudLastError = nil; cloudAutomaticPausedInMemory = hadMemory; if hadMemory { try local.pauseAutomatic(true) } }
             configureCloudSchedule(); emit("cloud.changed"); return try cloudState()
         }
         if command == "cloud.setPassword" || command == "cloud.setSessionPassword" {
@@ -198,17 +205,18 @@ actor CloudCredentialSession {
                 guard local.profile.destinationID == target.destination, local.profile.account == target.account else { throw DesktopError.message("原目标密码已保存，但当前云连接已变化；请重新检查当前连接") }
                 cloudCredentialState = "confirmed"; emit("cloud.changed")
             }
+            cloudRestoreSelections.removeAll()
             return try cloudState()
         }
         if command == "cloud.clearSessionPassword" {
-            cloudSessionCredentials.clear(); cloudArchive = nil; cloudCredentialState = "unknown"
+            cloudRestoreSelections.removeAll(); cloudSessionCredentials.clear(); cloudArchive = nil; cloudCredentialState = "unknown"
             cloudAutomaticPausedInMemory = true; emit("cloud.changed")
             try local.pauseAutomatic(true); return try cloudState()
         }
         if command == "cloud.deletePassword" {
             if let remove = cloudVaultRemoveOverride { try remove(local.profile.destinationID) }
             else { try CloudCredentialVault.remove(local.profile.destinationID) }
-            cloudSessionCredentials.clear(); cloudArchive = nil; cloudCredentialState = "missing"; cloudAutomaticPausedInMemory = true
+            cloudRestoreSelections.removeAll(); cloudSessionCredentials.clear(); cloudArchive = nil; cloudCredentialState = "missing"; cloudAutomaticPausedInMemory = true
             emit("cloud.changed")
             try local.pauseAutomatic(true); return try cloudState()
         }
@@ -262,17 +270,31 @@ actor CloudCredentialSession {
                 try local.pauseAutomatic(cloudSessionCredentials.available(for: credentialTarget)); cloudAutomaticPausedInMemory = false; return try cloudState()
             }
             if command == "cloud.list" {
+                cloudRestoreSelections.removeAll()
                 guard let month = payload["month"] as? String else { throw DesktopError.message("请选择要查看的备份月份") }
                 return try await performCloudJob(command) {
-                    let rows = try await service.list(month: month)
+                    let rows = try await service.listIdentities(month: month)
+                    try Task.checkCancellation()
                     try self.cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)
-                    return ["snapshots": rows.map { ["month": $0.reference.month, "id": $0.reference.id.uuidString, "createdAt": ISO8601DateFormatter().string(from: $0.createdAt), "encodedBytes": $0.encodedBytes, "sha256": $0.sha256, "chunkCount": $0.chunkCount] }]
+                    let formatter = ISO8601DateFormatter()
+                    let snapshots: [[String: Any]] = rows.map { row in
+                        let info = row.info, token = UUID()
+                        self.cloudRestoreSelections[token] = .init(reference: info.reference, manifestSHA: row.manifestSHA,
+                            target: credentialTarget, generation: credentialGeneration)
+                        return ["month": info.reference.month, "id": info.reference.id.uuidString,
+                                "createdAt": formatter.string(from: info.createdAt), "encodedBytes": info.encodedBytes,
+                                "sha256": info.sha256, "chunkCount": info.chunkCount, "restoreToken": token.uuidString]
+                    }
+                    return ["snapshots": snapshots]
                 }
             }
-            guard let month = payload["month"] as? String, let rawID = payload["id"] as? String, let id = UUID(uuidString: rawID) else { throw DesktopError.message("请选择已回读的真实云端快照") }
-            let reference = CloudArchiveService.SnapshotReference(month: month, id: id)
+            guard payload.count == 1, let rawToken = payload["restoreToken"] as? String, let token = UUID(uuidString: rawToken),
+                  let selection = cloudRestoreSelections[token], selection.target == credentialTarget,
+                  selection.generation == credentialGeneration else {
+                throw DesktopError.message("云端版本选择已失效，请重新读取该月份后再恢复")
+            }
             return try await performCloudJob(command) {
-                let downloaded = try await service.download(reference: reference)
+                let downloaded = try await service.download(reference: selection.reference, expectedManifestSHA: selection.manifestSHA)
                 try self.cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)
                 try await self.flushEdits(); try self.requireMainContextAvailable()
                 guard let ownJob = self.cloudActiveJobID, self.jobs.keys.allSatisfy({ $0 == ownJob }), !self.terminationPending, !self.maintenanceBusy else {
@@ -287,6 +309,7 @@ actor CloudCredentialSession {
             if cloudCredentialContextCurrent(target: credentialTarget, generation: credentialGeneration) {
                 cloudLastError = error is CancellationError || error is DesktopOperationCancelled ? nil : error.localizedDescription
                 if let cause = error as? CloudArchiveService.CloudError, cause == .authentication || cause == .credentialsUnavailable {
+                    cloudRestoreSelections.removeAll()
                     cloudSessionCredentials.invalidateVerification()
                     cloudAutomaticPausedInMemory = true; cloudCredentialState = "unknown"
                     try local.pauseAutomatic(true)

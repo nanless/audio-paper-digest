@@ -56,11 +56,12 @@ public actor CloudArchiveService {
         public let chunkCount: Int
     }
     public enum CloudError: Error, LocalizedError, Sendable, Equatable {
-        case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret
+        case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret, selectionChanged
         case credentialsUnavailable, authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
         case httpStatus(Int), throttled(Date)
         public var errorDescription: String? {
             switch self {
+            case .selectionChanged: return "云端版本清单已变化，请重新读取该月份后选择要恢复的版本"
             case .invalidConfiguration: return "坚果云配置无效；请使用单级英文目录和应用专用密码"
             case .invalidBackup: return "研究备份无效或超过完整备份上限（原资料512MiB、编码750MiB）"
             case .localOnlySecret: return "旧快照含本机专用校验密钥，已停止上传；原快照与检查点保留在本机，请先原样保留后新建备份"
@@ -197,6 +198,9 @@ public actor CloudArchiveService {
         return manifest.info
     }
     public func list(month: String) async throws -> [SnapshotInfo] {
+        try await listIdentities(month: month).map(\.info)
+    }
+    func listIdentities(month: String) async throws -> [(info: SnapshotInfo, manifestSHA: String)] {
         try begin(); defer { end() }
         guard Self.validMonth(month) else { throw CloudError.invalidConfiguration }
         let path = "/dav/\(folder)/\(month)/"
@@ -205,15 +209,15 @@ public actor CloudArchiveService {
                                          limit: Self.listingLimit, accepted: [207,404])
         if response.response.statusCode == 404 { return [] }
         let references = try CloudDAVListing.parse(response.data, path: path, month: month)
-        var snapshots: [SnapshotInfo] = []
+        var snapshots: [(info: SnapshotInfo, manifestSHA: String)] = []
         // A partial UUID directory has no manifest and is deliberately not success.
         // Rate budget exhaustion throws; never return an apparently complete prefix.
         for reference in references {
             if let bytes = try await optionalGet(snapshotPath(reference) + "manifest.json", limit: Self.manifestLimit) {
-                snapshots.append(try Self.decodeManifest(bytes, reference: reference).info)
+                snapshots.append((try Self.decodeManifest(bytes, reference: reference).info, Self.hash(bytes)))
             }
         }
-        return snapshots.sorted { $0.createdAt == $1.createdAt ? $0.reference.id.uuidString < $1.reference.id.uuidString : $0.createdAt > $1.createdAt }
+        return snapshots.sorted { $0.info.createdAt == $1.info.createdAt ? $0.info.reference.id.uuidString < $1.info.reference.id.uuidString : $0.info.createdAt > $1.info.createdAt }
     }
     func personalDocuments() async throws -> [String: Data] {
         try begin(); defer { end() }
@@ -254,10 +258,16 @@ public actor CloudArchiveService {
     }
 
     public func download(reference: SnapshotReference) async throws -> Data {
+        try await download(reference: reference, expectedManifestSHA: nil)
+    }
+    func download(reference: SnapshotReference, expectedManifestSHA: String?) async throws -> Data {
         try begin(); defer { end() }
         guard Self.validReference(reference) else { throw CloudError.invalidConfiguration }
         let base = snapshotPath(reference)
         let bytes = try await request("GET", path: base + "manifest.json", limit: Self.manifestLimit, accepted: [200]).data
+        if let expectedManifestSHA, Self.hash(bytes) != expectedManifestSHA {
+            throw CloudError.selectionChanged
+        }
         let manifest = try Self.decodeManifest(bytes, reference: reference)
         var data = Data(); data.reserveCapacity(manifest.encodedBytes)
         for chunk in manifest.chunks {
