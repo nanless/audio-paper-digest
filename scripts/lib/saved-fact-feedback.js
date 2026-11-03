@@ -342,6 +342,46 @@ function recoverArchivedCompletedReader(paper, plan) {
     return null;
 }
 
+function recoverArchivedSignedFactRevision(paper, plan, bound) {
+    const engine = require('../analysis-engine');
+    const pending = require('./pending-fact-feedback');
+    const ordinal = require('./reader-target-ordinal-patch');
+    const rejection = '读者文章与论文来源及分析记录的对应关系未通过核验。';
+    if (!engine.paperAnalysisLockHeld(paper)
+        || paper.latestAnalysisAttemptError !== rejection
+        || !readerOnlyFeedback(bound.feedback)
+        || !require('node:util').isDeepStrictEqual(pending.read(paper, plan)?.proof, bound.proof)) return null;
+    const stages = paper.analysisManifest.stages;
+    const fields = ['apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan', 'apiReaderPlanSha256',
+        'apiReaderResources', 'apiReaderFigures', 'apiReaderAuthors'];
+    const currentSha = daily.stableHash(paper);
+    const packets = (paper.apiReaderFailedBundleHistory || []).filter(packet =>
+        packet.sourceSha256 === paper.sourceSha256
+        && require('node:util').isDeepStrictEqual(packet.stages?.apiReaderArticle?.factReview, bound.proof)
+        && Object.keys(packet.stages).length === 1
+        && Object.keys(packet.fields || {}).length === fields.length
+        && fields.every(field => Object.hasOwn(packet.fields, field))
+        && Object.keys(packet.contracts || {}).every(field => /^apiReader/.test(field)));
+    if (packets.length !== 1) return null;
+    const packet = packets[0], candidate = structuredClone(paper);
+    const stage = packet.stages.apiReaderArticle;
+    if (stage.revisionSeedArticleSha256 !== stages.apiReaderArticle?.articleSha256
+        || stage.revisionSeedPlanSha256 !== stages.apiReaderArticle?.planSha256
+        || !daily.isPaperReusableForAnalysis(paper, plan)) return null;
+    Object.assign(candidate, structuredClone(packet.fields));
+    Object.assign(candidate.analysisManifest.stages, structuredClone(packet.stages));
+    Object.assign(candidate.analysisManifest.contracts, structuredClone(packet.contracts));
+    if (daily.stableHash(protectedReaderUpstream(candidate)) !== daily.stableHash(protectedReaderUpstream(paper)))
+        throw new Error('归档Reader复验不能改变原主文、摘要、评分或费用');
+    if (!ordinal.hasReplayedArchivedSignedFactRevision(candidate)
+        || engine.getIncompleteAnalysisContentReason(candidate) !== null
+        || !pending.completed(candidate, plan)) return null;
+    if (daily.stableHash(paper) !== currentSha) throw new Error('归档Reader复验期间原稿发生变化');
+    // Keep the obligation for the ordinary engine to check and clear on success.
+    Object.assign(paper, candidate);
+    return paper;
+}
+
 async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
     if (!explicitFeedback) {
         const archived = recoverArchivedCompletedReader(paper, plan);
@@ -426,6 +466,8 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         if (explicitFeedback || Object.hasOwn(paper, 'analysisFactReviewObligation'))
             require('./pending-fact-feedback').register(paper, plan, feedback);
         facts.withFactReview(bound, () => undefined);
+        const archived = recoverArchivedSignedFactRevision(paper, plan, bound);
+        if (archived) return archived;
         if (require('./cancelled-reader-audit-recovery').reusableCancelledReaderAuditResult(paper)) return analyze();
         return refreshProtectedReader(paper, options, bound.proof.feedbackSha256, parentUpstreamPreflight);
     });

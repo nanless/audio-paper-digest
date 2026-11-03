@@ -454,27 +454,61 @@ function validateCompletion(paper){
 // request, or usage record and leaves the ordinary Reader gates in force.
 function matchesArchivedOrdinaryCompletion(paper, attempts, actualRun, runFile) {
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
+    const signed = require('./reader-content-mode').is(stage, 'signed-revision');
     if (stage?.status !== 'complete' || stage.executionKind !== undefined
         || stage.operatorProvenance !== undefined || stage.ordinalPatchHistory !== undefined
         || stage.newReaderApiRequests !== undefined || !Number.isSafeInteger(stage.attempts)
         || stage.attempts < 1 || stage.attempts > 6
-        || !require('./reader-content-mode').is(stage, 'source-only')) return false;
+        || (!signed && !require('./reader-content-mode').is(stage, 'source-only'))) return false;
     const daily = require('./daily-fresh-source-plan'), fresh = require('./fresh-analysis-context');
     const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({
         ...actualRun, runDir: path.dirname(runFile)
     }));
     if (!daily.isPaperBoundToPlan(paper, plan)) return false;
     const paperSha = stableSha(paper);
+    if (signed) {
+        const savedFacts = require('./saved-fact-feedback');
+        const pending = require('./pending-fact-feedback').read(paper, plan);
+        const saved = savedFacts.readSavedFeedback(paper, plan);
+        const feedback = pending?.feedback || saved?.readerFeedback || saved?.feedback;
+        const facts = require('./daily-fact-review');
+        if (!savedFacts.readerOnlyFeedback(feedback)
+            || !isDeepStrictEqual(stage.factReview, facts.proofFor(feedback))
+            || (pending && !isDeepStrictEqual(stage.factReview, pending.proof))
+            || !SHA.test(stage.signedRevisionDisplaySha256 || '')
+            || stage.attempts !== 1 || stage.fullAttempts !== 1
+            || !SHA.test(stage.reviewFeedbackSha256 || '')) return false;
+        const parent = (paper.analysisStaleSnapshots || []).find(snapshot =>
+            snapshot.invalidatedStage === 'apiReaderArticle'
+            && snapshot.replacementFingerprint === stage.factReview.feedbackSha256
+            && require('../deep-analyzer').validateStaleAnalysisSnapshot(snapshot)
+            && snapshot.payload.stages.apiReaderArticle?.articleSha256 === stage.revisionSeedArticleSha256
+            && snapshot.payload.stages.apiReaderArticle?.planSha256 === stage.revisionSeedPlanSha256
+            && sha(snapshot.payload.analysisCheckpoint) === stage.factReview.coreAnalysisSha256);
+        if (!parent || stage.revisionSeedSourceSha256 !== paper.sourceSha256) return false;
+        const bound = facts.validateFeedback(feedback, plan, paper);
+        const validFeedback = facts.withReadOnlyReaderCompletion(bound, paper, () => {
+            if (sha(facts.reviewFeedback('apiReaderArticle', paper.arxivId)) !== stage.reviewFeedbackSha256) return false;
+            facts.validateRepairedClaims('apiReaderArticle', paper.apiReaderArticle, paper.arxivId);
+            return true;
+        });
+        if (!validFeedback) return false;
+    }
     for (const name of fs.readdirSync(attempts)) {
-        if (!/^[a-f0-9]{64}\.[a-f0-9-]{36}\.resolved\.json$/.test(name)) continue;
+        const active = signed && /^[a-f0-9]{64}\.json$/.test(name);
+        if (!active && !/^[a-f0-9]{64}\.[a-f0-9-]{36}\.resolved\.json$/.test(name)) continue;
         const filename = path.join(attempts, name);
         const initial = read(filename);
         const identity = initial.value?.identity;
         if (identity?.paperId !== paper.arxivId || identity.freshAnalysis?.runId !== plan.runId
             || identity.sourceSha256 !== paper.sourceSha256
-            || !require('./reader-content-mode').is(identity, 'source-only')) continue;
-        const checked = require('./reader-recovery-revision').readFullResolvedReaderForReadOnlyInspection(
-            attempts, filename, initial.sha256);
+            || !require('./reader-content-mode').is(identity, signed ? 'signed-revision' : 'source-only')
+            || (signed && (identity.signedRevisionDisplaySha256 !== stage.signedRevisionDisplaySha256
+                || identity.signedRevisionDisplayContract !== stage.signedRevisionDisplayContract))) continue;
+        const checked = active ? repair.readFailedCandidateEnvelope(attempts, identity)
+            : require('./reader-recovery-revision').readFullResolvedReaderForReadOnlyInspection(
+                attempts, filename, initial.sha256);
+        if (!checked) continue;
         const {payload} = checked.envelope;
         if (payload.attempts !== stage.attempts || ![1,2].includes(payload.fullAttempts)
             || payload.fullAttempts > payload.attempts || payload.transportFailures !== 0
@@ -548,7 +582,10 @@ function matchesArchivedOrdinaryCompletion(paper, attempts, actualRun, runFile) 
                     && stage.planSha256 === paper.apiReaderPlanSha256
                     && isDeepStrictEqual(final.figures,paper.apiReaderFigures) && stableSha(final.figures) === stage.figuresSha256;
             })));
-        checked.assertUnchanged();
+        if (active) {
+            if (repair.readFailedCandidateEnvelope(attempts,identity)?.envelopeSha256 !== initial.sha256
+                || checked.envelopeSha256 !== initial.sha256) fail('signed revision candidate changed during replay','run');
+        } else checked.assertUnchanged();
         if (stableSha(paper) !== paperSha || !isDeepStrictEqual(source,savedSourceScope(paper,identity,attempts)))
             fail('archived ordinary completion changed during replay','run');
         if (matches) return true;
@@ -580,7 +617,7 @@ function readVerifiedCompletion(paper, planning=false){
     const retainedCandidate=!explicitOperator&&!unfinishedPlanning&&!files.length
         &&operator.hasRetainedOrdinalCandidate(paper,attempts);
     if(retainedCandidate&&!marked&&matchesArchivedOrdinaryCompletion(paper,attempts,actualRun,runFile))
-        return {archivedOrdinary:true};
+        return {archivedOrdinary:true, signedFactRevision: require('./reader-content-mode').is(stage, 'signed-revision')};
     const operatorCompletion=explicitOperator||retainedCandidate;
     if(operatorCompletion){
         if(marked)fail('operator completion retains ordinary completion markers','run');
@@ -697,6 +734,9 @@ function replayNormalCompletion(paper,{source,last,saved}){
     return true;
 }
 
-module.exports={CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
+function hasReplayedArchivedSignedFactRevision(paper) {
+    return readVerifiedCompletion(paper)?.signedFactRevision === true;
+}
+module.exports={hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
     hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
