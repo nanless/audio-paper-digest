@@ -215,6 +215,15 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
     assertCompleteOperatorTail(inspectDailyOperatorTail(plan, papers, factFeedbacks), [...records.keys()]);
     return scope.run({manifest,records},callback);
 }
+function hasActiveSourceOnlyCorrection(paper) {
+    const active = scope.getStore(), selected = active?.records.get(id(paper));
+    if (!selected || !require('../analysis-engine').paperAnalysisLockHeld(paper)) return false;
+    const fresh = require('./fresh-analysis-context'), context = fresh.getFreshAnalysisContext();
+    if (!fresh.isDailyFreshSourceScope() || context?.runId !== selected.record.runId
+        || !require('./reader-content-mode').is(selected.original.identity, 'source-only')) return false;
+    unchanged(active.manifest); unchanged(selected.file); unchanged(selected.baseline);
+    return true;
+}
 function current(paper, identity, readerInputAnalysis) {
     const active = scope.getStore(), record = active?.records.get(id(paper));
     if (!record) return null;
@@ -444,5 +453,5 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     if (daily.stableHash(paper) !== paperSha256) fail('paper/stage changed during read-only replay');
     return true;
 }
-module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,retainedPaidFingerprintInput,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
+module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,hasActiveSourceOnlyCorrection,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,retainedPaidFingerprintInput,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
     inspectDailyOperatorTail,assertCompleteOperatorTail};

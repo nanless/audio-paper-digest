@@ -382,6 +382,93 @@ function recoverArchivedSignedFactRevision(paper, plan, bound) {
     return paper;
 }
 
+function inspectOperatorCompletedCoreCheckpoint(paper, plan, original) {
+    const equal = require('node:util').isDeepStrictEqual;
+    const pending = require('./pending-fact-feedback').read(paper, plan);
+    const core = paper.analysisManifest?.stages?.coreSummaryRepair;
+    const scoring = paper.analysisManifest?.stages?.scoringAudit;
+    const checkpoint = paper.analysisCheckpoint;
+    if (original?.savedParentStage !== 'coreSummaryRepair' || !coreOnlyFeedback(original.feedback)
+        || !readerOnlyFeedback(original.readerFeedback) || !pending || core?.status !== 'complete'
+        || !equal(core.factReview, pending.proof) || !equal(facts.proofFor(original.feedback), pending.proof)
+        || typeof checkpoint !== 'string' || !checkpoint || checkpoint === paper.analysis
+        || facts.sha(checkpoint) !== scoring?.outputAnalysisSha256) return null;
+    const coreBound = facts.validateFeedback(original.feedback, plan, paper);
+    const readerBound = facts.validateFeedback(original.readerFeedback, plan, paper);
+    const view = { ...paper, analysis: checkpoint, parsed: require('../utils').parseAnalysis(checkpoint) };
+    return facts.withCoreSummaryFactReview(coreBound, paper, () => {
+        const source = require('./model-text-sanitization').currentModelInputSource(view);
+        return source && require('./reader-parent-upstream-preflight')
+            .inspectSavedReaderParentUpstream(view, source).current
+            ? { coreBound, readerBound, checkpoint } : null;
+    });
+}
+
+async function replayOperatorCompletedCoreCheckpoint(paper, plan, original, analyze) {
+    const qualified = inspectOperatorCompletedCoreCheckpoint(paper, plan, original);
+    if (!qualified) throw new Error('人工修正缺少来源绑定且评分已完成的原核心检查点');
+    const { coreBound, readerBound, checkpoint } = qualified;
+    const equal = require('node:util').isDeepStrictEqual;
+    const packing = new Set(['analysis', 'parsed', 'analysisCheckpoint', 'analysisStageCheckpoints',
+        'latestAnalysisAttemptError', 'latestAnalysisAttemptAt', 'analysisRecoveryImageManifest',
+        'imageUrls', 'selectedImageUrls', 'allImageUrls']);
+    const preserved = current => {
+        const copy = protectedReaderUpstream(current);
+        for (const name of packing) delete copy[name];
+        delete copy.analysisManifest.updatedAt;
+        for (const field of ['apiReaderResources', 'apiReaderFailedBundleHistory'])
+            copy[field] = structuredClone(current[field]);
+        return copy;
+    };
+    const initial = structuredClone(paper), originalUpstream = preserved(initial);
+    const checkpointBefore = initial.analysisStageCheckpoints;
+    const tag = require('./tag-stage-record').readTagStageRecord(initial.analysisManifest, checkpointBefore);
+    const packedCheckpoints = { [tag.checkpointKey]: tag.checkpoint };
+    if (tag.stage?.status === 'complete') packedCheckpoints.structureRepair = checkpointBefore.structureRepair;
+    const key = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
+    const descriptor = Object.getOwnPropertyDescriptor(paper, key);
+    const persist = paper[key];
+    const assertUpstream = (current, final = false) => {
+        const error = () => { throw new Error('人工修正改变了已核验核心检查点的上游或计数'); };
+        if (!current || ![initial.analysis, checkpoint].includes(current.analysis)
+            || !equal(preserved(current), originalUpstream)) error();
+        if (final) {
+            if (current.analysis !== checkpoint || !equal(current.parsed, require('../utils').parseAnalysis(checkpoint))
+                || !equal(current.analysisStageCheckpoints, packedCheckpoints)
+                || ['analysisCheckpoint', 'analysisRecoveryImageManifest', 'latestAnalysisAttemptError',
+                    'latestAnalysisAttemptAt'].some(name => Object.hasOwn(current, name))) error();
+        } else {
+            if (current.analysisCheckpoint !== checkpoint
+                || current.latestAnalysisAttemptError !== initial.latestAnalysisAttemptError
+                || current.latestAnalysisAttemptAt !== initial.latestAnalysisAttemptAt
+                || !equal(current.parsed, initial.parsed)
+                || Object.entries(checkpointBefore).some(([name, value]) => current.analysisStageCheckpoints?.[name] !== value)
+                || Object.entries(current.analysisStageCheckpoints || {}).some(([name, value]) =>
+                    !Object.hasOwn(checkpointBefore, name) && value !== checkpoint)) error();
+        }
+    };
+    Object.defineProperty(paper, key, { configurable: true, value: current => {
+        assertUpstream(current);
+        return typeof persist === 'function' ? persist(current) : undefined;
+    } });
+    try {
+        const result = await require('./analysis-stop-control').withModelRequestsForbidden(() =>
+            facts.withCoreSummaryFactReview(coreBound, paper, () => analyze()));
+        assertUpstream(result, true);
+        if (result.analysis !== checkpoint || !String(result.apiReaderArticle || '').trim()
+            || readerBound.feedback.rejectedReaderClaims.some(claim => result.apiReaderArticle.includes(claim)))
+            throw new Error('人工修正未保留已核验核心正文或旧Reader事实约束');
+        return result;
+    } catch (error) {
+        for (const name of Object.keys(paper)) delete paper[name];
+        Object.assign(paper, initial);
+        throw error;
+    } finally {
+        if (descriptor) Object.defineProperty(paper, key, descriptor);
+        else delete paper[key];
+    }
+}
+
 async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
     if (!explicitFeedback) {
         const archived = recoverArchivedCompletedReader(paper, plan);
@@ -402,6 +489,9 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         }
     }
     const original = explicitFeedback ? null : readSavedFeedback(paper, plan);
+    if (original?.savedParentStage === 'coreSummaryRepair' && Object.hasOwn(paper, 'analysisFactReviewObligation')
+        && require('./daily-reader-operator-correction').hasActiveSourceOnlyCorrection(paper))
+        return replayOperatorCompletedCoreCheckpoint(paper, plan, original, analyze);
     const feedback = explicitFeedback || original?.readerFeedback || original?.feedback;
     if (!readerOnlyFeedback(feedback)) {
         // 原完整上游只缺 Reader 时走公共刷新；不依赖已清理的主分析初稿检查点。
