@@ -4,6 +4,7 @@ import copy
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from conference_extractor import load_pypdf_backend
 import reader_pdf_cell_evidence as legacy
 import reader_pdf_visual_audit_cache as visual_cache
+from protocol_codec import record_header
 
 
 def real_pdf(text='A real PDF visual audit'):
@@ -107,6 +109,55 @@ class VisualCacheTest(unittest.TestCase):
         self.cache.extract(real_pdf('Second'), self.backend, self.identity)
         self.cache.extract(real_pdf('Third'), self.backend, self.identity)
         self.assertEqual(len(self.cache._entries), 2)
+
+
+class CurrentProofReplayTest(unittest.TestCase):
+    def test_real_pdf_old_and_current_headers_preserve_cells_and_rule_digest(self):
+        directory = os.environ.get('PD_PDF_CHIME_REAL_SOURCE_DIR')
+        if not directory:
+            self.skipTest('explicit real sealed CHiME source is required')
+        source = Path(directory).resolve()
+        artifacts = json.loads((source / 'source-runtime.json').read_bytes())['structuredArtifacts']
+        manifest_bytes = (source / 'source-manifest.json').read_bytes()
+        manifest = json.loads(manifest_bytes)
+        provenance = {'contract': 'fresh-source-analysis-v1', 'runId': source.parents[2].name,
+                      'sourceGeneration': 1, 'sourceSha256': manifest['text']['responseSha256'],
+                      'sourceManifestSha256': hashlib.sha256(manifest_bytes).hexdigest(),
+                      'structuredArtifactsSha256': artifacts['payloadSha256']}
+        original = legacy.derive({'paperId': '2610.05155', 'sourceDirectory': str(source),
+                                  'artifacts': artifacts, 'provenance': provenance})[0]
+        table = next(item for item in artifacts['tables'] if item['ordinal'] == original['sourceTableOrdinal'])
+        cells = []
+        for row, values in enumerate(table['matrix']):
+            for column in range(len(values)):
+                [cell] = [item for item in table['cells']
+                          if item['row'] <= row < item['row'] + item['rowspan']
+                          and item['column'] <= column < item['column'] + item['colspan']]
+                cells.append({'sourceRow': row, 'sourceColumn': column, 'renderedRow': row,
+                              'renderedColumn': column, 'sourceText': cell['text'],
+                              'sourceDomSha256': cell['sourceDomSha256']})
+        paper = {'arxivId': '2610.05155', 'freshRewriteProvenance': provenance,
+                 'analysisManifest': {'freshRewriteProvenance': provenance},
+                 'apiReaderPlan': {'structuredSourcePayload': json.dumps(artifacts),
+                                   'tableBindings': [{'tableIndex': 1, 'sourceTableOrdinal': table['ordinal'],
+                                       'sourceTableDomSha256': table['sourceDomSha256'], 'cellBindings': cells,
+                                       'pdfCellConfirmation': original}]}}
+        expected = visual_cache.verify_saved_bindings_cached(legacy, paper, source.parents[3])
+        current = {**original, **record_header('sealed-pdf-cell-confirmation', 'sealed-pdf-cell-confirmation')}
+        binding = paper['apiReaderPlan']['tableBindings'][0]
+        binding['pdfCellConfirmation'] = current
+        before = copy.deepcopy(paper)
+        self.assertEqual(visual_cache.verify_saved_bindings_cached(legacy, paper, source.parents[3]), expected)
+        self.assertEqual(paper, before)
+        for key, value in [('ruleSha256', '0' * 64), ('schemaFingerprint', '0' * 64),
+                           ('page', True), ('pdfCaption', 'unverified caption')]:
+            binding['pdfCellConfirmation'] = {**current, key: value}
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                visual_cache.verify_saved_bindings_cached(legacy, paper, source.parents[3])
+        binding['pdfCellConfirmation'] = current
+        cells[0]['renderedColumn'] += 1
+        with self.assertRaises(ValueError):
+            visual_cache.verify_saved_bindings_cached(legacy, paper, source.parents[3])
 
 
 class RealSealedSourceCacheTest(unittest.TestCase):

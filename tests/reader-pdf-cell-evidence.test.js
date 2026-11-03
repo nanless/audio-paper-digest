@@ -195,7 +195,13 @@ test('真实PDF合并列头所有展开格都沿用同一原DOM确认', {
         structuredArtifactsSha256: artifacts.payloadSha256 };
     Config.FILES.dailyFreshSourceRunsDir = path.resolve(directory, '../../../..');
     try {
+        const api = require('../scripts/lib/reader-pdf-cell-evidence');
+        const codec = require('../scripts/lib/protocol-codec');
+        const family = 'sealed-pdf-cell-confirmation';
+        let proof;
         withArtifacts(artifacts, '2610.05155', () => {
+            proof = api.evidence(artifacts.tables[0]);
+            assert.ok(codec.isCurrentHeader(proof, family));
             for (const column of [3, 4]) assert.equal(displayCell(artifacts.tables[0], 0, column), 'DNSMOS OVRL↑');
             for (const column of [5, 6, 7, 8]) assert.equal(displayCell(artifacts.tables[0], 0, column), 'WER (%)↓');
             const cell = artifacts.tables[0].cells.find(cell => cell.row === 0 && cell.column === 3);
@@ -204,6 +210,33 @@ test('真实PDF合并列头所有展开格都沿用同一原DOM确认', {
             assert.throws(() => displayCell(artifacts.tables[0], 0, 4), /改变/);
             cell.sourceDomSha256 = original;
         }, provenance);
+        const table = artifacts.tables[0];
+        const cellBindings = table.matrix.flatMap((row, rowIndex) => row.map((_cell, columnIndex) => ({
+            sourceRow: rowIndex, sourceColumn: columnIndex, renderedRow: rowIndex, renderedColumn: columnIndex
+        })));
+        const { contract, schemaFingerprint, ...body } = proof;
+        const original = { ...codec.historicalHeader(family, 'source-bound-complete-cell-proof'), ...body };
+        for (const saved of [original, proof]) {
+            const binding = { sourceTableOrdinal: table.ordinal, sourceTableDomSha256: table.sourceDomSha256,
+                cellBindings, pdfCellConfirmation: saved };
+            const paper = { arxivId: '2610.05155', freshRewriteProvenance: provenance,
+                analysisManifest: { freshRewriteProvenance: provenance },
+                apiReaderPlan: { structuredSourcePayload: JSON.stringify(artifacts), tableBindings: [binding] } };
+            const before = structuredClone(paper);
+            api.withSavedPaper(paper, () => assert.deepEqual(api.evidence(table), saved));
+            assert.deepEqual(paper, before);
+            for (const mutation of [
+                value => { value.pdfCellConfirmation.ruleSha256 = '0'.repeat(64); },
+                value => { value.pdfCellConfirmation.confirmedCells[0].visibleText = 'unverified value'; },
+                value => { value.cellBindings[0].renderedColumn += 1; },
+                value => { value.cellBindings[0] = value.cellBindings[1]; },
+                value => { value.pdfCellConfirmation.schemaFingerprint = '0'.repeat(64); }
+            ]) {
+                const changed = structuredClone(paper);
+                mutation(changed.apiReaderPlan.tableBindings[0]);
+                assert.throws(() => api.withSavedPaper(changed, () => assert.fail()), /重放|格式/);
+            }
+        }
     } finally { Config.FILES.dailyFreshSourceRunsDir = previousRoot; }
 });
 

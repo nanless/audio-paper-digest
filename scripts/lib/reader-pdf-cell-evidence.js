@@ -7,9 +7,20 @@ const crypto = require('node:crypto');
 const child = require('node:child_process');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
+const formats = require('./protocol-codec');
 const scope = new AsyncLocalStorage();
 const verifiedCache = new Map();
-const CONTRACT = 'sealed-pdf-cell-confirmation-v1';
+const CONTRACT = 'sealed-pdf-cell-confirmation';
+const ORIGINAL_HEADER = formats.historicalHeader(CONTRACT, 'source-bound-complete-cell-proof');
+const CURRENT_HEADER = formats.recordHeader(CONTRACT, CONTRACT);
+function encodeProof(proof, header) {
+    const { contract, schemaFingerprint, ...body } = proof;
+    return { ...header, ...body };
+}
+function proofForSavedHeader(proof, saved) {
+    if (!formats.hasValidHeader(saved, CONTRACT)) throw new Error('PDF逐格来源记录格式已改变');
+    return encodeProof(proof, formats.recordHeader(saved.contract, CONTRACT, saved.schemaFingerprint));
+}
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const stable = value => require('./reader-repair').hashDraft(value);
 const projectRoot = path.resolve(__dirname, '../..');
@@ -164,7 +175,8 @@ function derive(artifacts, paperId, provenance) {
     });
     const response = JSON.parse(raw);
     const result = response.proofs;
-    if (!Array.isArray(result) || !result.length || result.some(item => item.contract !== CONTRACT
+    if (!Array.isArray(result) || !result.length || result.some(item => !formats.hasValidHeader(item, CONTRACT)
+        || item.contract !== ORIGINAL_HEADER.contract
         || item.ruleSha256 !== sha(fs.readFileSync(pythonFile)))) {
         throw new Error('PDF逐格确认未返回完整当前提取规则证明');
     }
@@ -183,9 +195,10 @@ function derive(artifacts, paperId, provenance) {
     if (!inventory.every(filename => response.backendFiles.some(file => file.path === filename))) {
         throw new Error('PDF提取后端存在未核验的新文件');
     }
-    verifiedCache.set(cacheKey, { proofs: structuredClone(result), backendFiles: response.backendFiles,
+    const proofs = result.map(proof => encodeProof(proof, CURRENT_HEADER));
+    verifiedCache.set(cacheKey, { proofs: structuredClone(proofs), backendFiles: response.backendFiles,
         backendDirectories: response.backendDirectories, backendInventory: inventory });
-    return result;
+    return proofs;
 }
 
 function withArtifacts(artifacts, paperId, fn, provenance = null) {
@@ -297,7 +310,7 @@ function replaySavedProofMetadata(paper, manifest = paper?.analysisManifest) {
         const previous = binding.pdfCellConfirmation;
         const matches = proofs.filter(proof => proof.sourceTableOrdinal === binding.sourceTableOrdinal);
         if (matches.length !== 1) throw new Error('PDF检查记录更新的原表位置不唯一');
-        const current = matches[0];
+        const current = proofForSavedHeader(matches[0], previous);
         if (isDeepStrictEqual(previous, current)) continue;
         const {ruleSha256:oldRule,...oldContent}=previous;
         const {ruleSha256:newRule,...newContent}=current;
@@ -341,19 +354,30 @@ function withSavedPaper(paper, fn) {
     return withArtifacts(artifacts, paper.arxivId, () => {
         const current = scope.getStore();
         if (!current) throw new Error('PDF逐格来源记录不属于准确支持的纯小数双写结构');
+        const selected = new Map(current.tables);
         for (const binding of bindings.filter(item => item?.pdfCellConfirmation !== undefined)) {
             const proof = current.tables.get(binding.sourceTableOrdinal);
             const table = artifacts.tables.find(table => table.ordinal === binding.sourceTableOrdinal);
+            const replayed = proof && proofForSavedHeader(proof, binding.pdfCellConfirmation);
+            const coordinates = new Set();
             if (!proof || !table || binding.sourceTableDomSha256 !== table.sourceDomSha256
                 || !Array.isArray(binding.cellBindings)
                 || binding.cellBindings.length !== table.matrix.length * table.matrix[0].length
-                || binding.cellBindings.some(cell => cell.renderedRow !== cell.sourceRow
-                    || cell.renderedColumn !== cell.sourceColumn)
-                || !isDeepStrictEqual(proof, binding.pdfCellConfirmation)) {
+                || binding.cellBindings.some(cell => {
+                    const { sourceRow, sourceColumn, renderedRow, renderedColumn } = cell || {};
+                    const key = `${sourceRow}/${sourceColumn}`;
+                    if (!Number.isSafeInteger(sourceRow) || sourceRow < 0 || sourceRow >= table.matrix.length
+                        || !Number.isSafeInteger(sourceColumn) || sourceColumn < 0 || sourceColumn >= table.matrix[sourceRow].length
+                        || renderedRow !== sourceRow || renderedColumn !== sourceColumn || coordinates.has(key)) return true;
+                    coordinates.add(key);
+                    return false;
+                })
+                || !isDeepStrictEqual(replayed, binding.pdfCellConfirmation)) {
                 throw new Error('PDF逐格来源记录不能由当前真实封存PDF重放');
             }
+            selected.set(binding.sourceTableOrdinal, replayed);
         }
-        return fn();
+        return scope.run({ artifacts, tables: selected }, fn);
     }, provenance);
 }
 

@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 import threading
 import weakref
+from daily_source_format import is_fresh_source_provenance, PROVENANCE
+from protocol_codec import has_valid_header, historical_header
 
 
 def _sha(raw):
@@ -68,6 +70,48 @@ class _VisualAuditCache:
 _CACHE = _VisualAuditCache()
 _INSTALL_LOCK = threading.RLock()
 _ADAPTERS = weakref.WeakKeyDictionary()
+_CELL_FAMILY = 'sealed-pdf-cell-confirmation'
+
+
+def _extractor_view(paper):
+    """Give the frozen extractor its original headers without changing proof bodies."""
+    plan = paper['apiReaderPlan']
+    manifest = paper['analysisManifest']
+    provenance = paper.get('freshRewriteProvenance')
+    if not is_fresh_source_provenance(provenance) or type(provenance.get('sourceGeneration')) is not int \
+            or provenance != manifest.get('freshRewriteProvenance'):
+        raise ValueError('论文与阶段封存来源证明不同')
+    old_source = historical_header(PROVENANCE, 'original-source-identity')
+    old_source.update({key: value for key, value in provenance.items()
+                       if key not in {'contract', 'schemaFingerprint'}})
+    bindings = []
+    for binding in plan['tableBindings']:
+        if 'pdfCellConfirmation' not in binding:
+            bindings.append(binding)
+            continue
+        proof = binding['pdfCellConfirmation']
+        if not has_valid_header(proof, _CELL_FAMILY):
+            raise ValueError('PDF逐格来源记录格式已改变')
+        for cell in binding.get('cellBindings', []):
+            if any(type(cell.get(key)) is not int for key in ('renderedRow', 'renderedColumn')):
+                raise ValueError('PDF逐格来源证明的坐标类型非法')
+        body = {key: value for key, value in proof.items() if key not in {'contract', 'schemaFingerprint'}}
+        # The original proof contains no boolean fields. Python's loose equality
+        # would otherwise treat true as a valid page or cell coordinate of 1.
+        pending = list(body.values())
+        while pending:
+            value = pending.pop()
+            if type(value) is bool:
+                raise ValueError('PDF逐格来源证明的正文类型非法')
+            if isinstance(value, dict):
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+        original = historical_header(_CELL_FAMILY, 'source-bound-complete-cell-proof')
+        bindings.append({**binding, 'pdfCellConfirmation': {**original, **body}})
+    return {**paper, 'freshRewriteProvenance': old_source,
+            'analysisManifest': {**manifest, 'freshRewriteProvenance': old_source},
+            'apiReaderPlan': {**plan, 'tableBindings': bindings}}
 
 
 def _implementation_identity(legacy):
@@ -103,4 +147,4 @@ def verify_saved_bindings_cached(legacy, paper, runtime_root):
         elif legacy.load_pypdf_backend is not installed:
             raise ValueError('PDF visual adapter dependency changed after installation')
     # Neither derive nor verify_saved_bindings is replaced or cached.
-    return legacy.verify_saved_bindings(paper, runtime_root)
+    return legacy.verify_saved_bindings(_extractor_view(paper), runtime_root)
