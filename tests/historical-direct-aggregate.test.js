@@ -151,7 +151,8 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         const dailyPage = pages.find(item => item.path === 'content/posts/icml-daily.md');
         icmlBinding = icmlPosterApi.bindDailyPage({ authorityHandle: handle, blogRoot: blog, page: dailyPage });
         icmlAuthoritySha256 = authority.authoritySha256;
-        const posterBinding = { authorityContract: authority.contract, authoritySha256: authority.authoritySha256,
+        const posterBinding = { authorityContract: authority.contract,
+            authoritySchemaFingerprint: authority.schemaFingerprint, authoritySha256: authority.authoritySha256,
             recordBindingSha256: record.recordBindingSha256, posterId: record.posterId,
             officialUrl: record.officialUrl, openreviewUrl: record.openreviewUrl };
         icmlSource = boundSource({ paperId: 'conference:icml:2026:openreview-forum-id:Icml_123',

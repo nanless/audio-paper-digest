@@ -106,6 +106,36 @@ test('写入会保存并核验 0600 权限的论坛 ID PDF，以及可恢复的�
     assert.equal(second.status, 'recovered'); assert.equal(calls, 1);
 });
 
+test('备用来源在 PDF 核验中被替换的已签收据不能作为恢复证据', async t => {
+    const f = fixture(t);
+    const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
+        pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-08T00:00:00.000Z' };
+    const saved = await api.sealAlternatePdf(options, { fetchPdf: async () => downloaded(f) });
+    const { receiptSha256, ...body } = saved.receipt;
+    body.fetchedAt = '2026-09-08T00:00:01.000Z';
+    const replacement = api.normalizeReceipt({ ...body, receiptSha256: api.stableHash(body) });
+    const replacementFile = saved.receiptFile + '.replacement';
+    const canonical = value => Array.isArray(value) ? value.map(canonical)
+        : value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+    fs.writeFileSync(replacementFile, JSON.stringify(canonical(replacement), null, 2) + '\n', { mode: 0o600 });
+    const open = fs.openSync;
+    let replaced = false;
+    const hook = t.mock.method(fs, 'openSync', (target, ...args) => {
+        if (target === saved.pdfFile && !replaced) {
+            fs.renameSync(replacementFile, saved.receiptFile);
+            replaced = true;
+        }
+        return open(target, ...args);
+    });
+    try {
+        await assert.rejects(api.sealAlternatePdf(options, { fetchPdf: async () => { assert.fail('must not fetch'); } }),
+            /获取收据在核验期间发生变化/);
+        assert.equal(replaced, true);
+    } finally { hook.mock.restore(); }
+    assert.deepEqual(api.readReceipt(saved.receiptFile), replacement);
+});
+
 test('已审查的 n1m 先前预印本可以从浏览器下载导入，不需要编造 HTTP 证据', async t => {
     const f = fixture(t, BEYOND); fs.mkdirSync(f.pdfRoot); fs.mkdirSync(f.receiptRoot);
     const importFile = path.join(f.root, 'browser-download.pdf'); fs.writeFileSync(importFile, PDF);
