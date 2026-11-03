@@ -29,7 +29,10 @@ POLICY = (
          '09c198d25e6a3e658212f5ed70f2c662022a5ad9e42ea2779a3404f0e4c3d668', 'daily-deployment-local-status-v1'),
         ('outcome', 'daily-deployment-attempt-outcome',
          'f62646531a8680943b2ce2310b62dbe6ad576892df07df282f0ec578b66d0651', 'daily-deployment-attempt-outcome-v1'),
+        ('collector', 'github-pages-metadata-observation',
+         '2b8190d13f6920a0a2a603ff20d905ab4c91f2d35dc8b3e21eab1f5addc262c6', 'github-pages-metadata-observation-v1'),
     )),
+    ('collector_profile', ('fixed-hugo-workflow', '9713785163253df82d691f5bf9e3ef82b5ff322eb1857a0671ac83dc051f4fd0', 'fixed-hugo-workflow-v1')),
     ('intent_bytes', 8192), ('binding_bytes', 65536), ('snapshot_bytes', 2097152),
     ('result_bytes', 2097152), ('control_bytes', 65536), ('store_items', 10000), ('primary_pages', 512),
     ('store_bytes', 134217728), ('text_bytes', 8192), ('json_depth', 32),
@@ -73,12 +76,12 @@ POLICY = (
                     'observationCoverage', 'coverage', 'unknownInputs', 'targetsSha256', 'recordSha256')),
     ('target_hash_keys', ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                          'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')),
-    ('collector_keys', ('contract', 'version', 'status', 'metadataOutcome', 'partial', 'fullE05', 'requestedCommit',
+    ('collector_keys', ('status', 'metadataOutcome', 'partial', 'fullE05', 'requestedCommit',
                        'policy', 'selection', 'workflowSource', 'jobs', 'deployment', 'artifacts', 'requests',
                        'coverage', 'issues', 'metadataSha256', 'capabilities')),
     ('collector_policy', (('repositoryId', 1214235086), ('fullName', 'nanless/audio-paper-digest-blog'),
         ('workflowId', 262722446), ('workflowPath', '.github/workflows/hugo.yaml'), ('branch', 'main'),
-        ('environment', 'github-pages'), ('profile', 'fixed-hugo-workflow-v1'),
+        ('environment', 'github-pages'),
         ('workflowSourceSha256', 'cbf3a52e317973a4273f5c64c0a8d4e1c5dda2ee709f0e4ad12863c78cc5fe0d'))),
     ('collector_states', (('metadata_observed', 'success'), ('pending', 'pending'), ('failed', 'failure'),
                           ('unknown', 'unknown'), ('stale', 'unknown'), ('unsupported', 'unknown'), ('blocked', 'unknown'))),
@@ -848,18 +851,24 @@ def _binding_relations(value, snapshot):
         _fail('invalid_record', 'record_binding')
 
 
-def _collector_metadata(value, commit):
-    _keys(value, _p('collector_keys'))
+def _collector_metadata(value, commit, attempt_format):
+    metadata_format = _record_format(value, 'collector', _p('collector_keys'))
+    if metadata_format is None or (attempt_format == 'original' and metadata_format != 'original'):
+        _fail('invalid_record', 'record_shape')
     _canonical(value, 1048576)
-    _version(value['version'])
-    if (value['contract'] != 'github-pages-metadata-observation-v1' or value['partial'] is not True
-            or value['fullE05'] is not False or value['requestedCommit'] != commit):
+    if (value['partial'] is not True or value['fullE05'] is not False or value['requestedCommit'] != commit):
         _fail('invalid_record', 'record_binding')
     _hex(value['requestedCommit'], 40)
     states = dict(_p('collector_states'))
     if type(value['status']) is not str or value['status'] not in states or value['metadataOutcome'] != states[value['status']]:
         _fail('invalid_record', 'record_shape')
-    if value['policy'] != dict(_p('collector_policy')):
+    profile, fingerprint, original_profile = _p('collector_profile')
+    expected_policy = dict(_p('collector_policy'))
+    if metadata_format == 'original':
+        expected_policy['profile'] = original_profile
+    else:
+        expected_policy.update(profile=profile, profileSchemaFingerprint=fingerprint)
+    if value['policy'] != expected_policy:
         _fail('invalid_record', 'record_binding')
     _caps_check(value['capabilities'])
     _issue_shape(value['issues'])
@@ -1048,7 +1057,8 @@ def _result(value, intent, binding):
     if value['metadata'] is not None:
         if binding is None:
             _fail('invalid_record', 'record_binding')
-        metadata_status = _collector_metadata(value['metadata'], binding['publicationBinding']['commitOid'])
+        metadata_status = _collector_metadata(value['metadata'], binding['publicationBinding']['commitOid'],
+                                              format_name)
         expected_status = 'unavailable' if metadata_status == 'unknown' else metadata_status
         if value['bindingVerified'] and value['status'] != expected_status:
             _fail('invalid_record', 'record_binding')

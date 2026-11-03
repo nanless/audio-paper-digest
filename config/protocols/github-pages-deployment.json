@@ -1,0 +1,77 @@
+{
+  "protocols": [
+    {
+      "name": "github-pages-metadata-observation",
+      "currentVariant": "partial-deployment-metadata",
+      "currentSchema": {
+        "fields": [
+          "status",
+          "metadataOutcome",
+          "partial",
+          "fullE05",
+          "requestedCommit",
+          "policy",
+          "selection",
+          "workflowSource",
+          "jobs",
+          "deployment",
+          "artifacts",
+          "requests",
+          "coverage",
+          "issues",
+          "metadataSha256",
+          "capabilities"
+        ],
+        "hashField": "metadataSha256",
+        "policyFormat": "fixed-hugo-workflow",
+        "authority": "metadata-only-no-publication-or-source-grant"
+      },
+      "historical": [
+        {
+          "tag": "github-pages-metadata-observation-v1",
+          "variant": "partial-deployment-metadata",
+          "header": {
+            "contract": "github-pages-metadata-observation-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "fixed-hugo-workflow",
+      "currentVariant": "fixed-reviewed-hugo-workflow",
+      "currentSchema": {
+        "fields": [
+          "repositoryId",
+          "fullName",
+          "workflowId",
+          "workflowPath",
+          "branch",
+          "environment",
+          "profile",
+          "profileSchemaFingerprint",
+          "workflowSourceSha256"
+        ],
+        "wireHeader": {
+          "contract": "profile",
+          "schemaFingerprint": "profileSchemaFingerprint"
+        },
+        "repositoryId": 1214235086,
+        "workflowId": 262722446,
+        "workflowPath": ".github/workflows/hugo.yaml",
+        "branch": "main",
+        "environment": "github-pages",
+        "workflowSourceSha256": "cbf3a52e317973a4273f5c64c0a8d4e1c5dda2ee709f0e4ad12863c78cc5fe0d"
+      },
+      "historical": [
+        {
+          "tag": "fixed-hugo-workflow-v1",
+          "variant": "fixed-reviewed-hugo-workflow",
+          "header": {
+            "contract": "fixed-hugo-workflow-v1"
+          }
+        }
+      ]
+    }
+  ]
+}

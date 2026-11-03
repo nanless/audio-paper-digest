@@ -49,12 +49,18 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         key = hashlib.sha256(self.canonical(self.selector)).hexdigest()
         return Path(self.root) / key / 'attempts' / intent['attemptId']
 
-    def metadata(self, commit):
+    def metadata(self, commit, *, historical=False):
         # Schema-complete declarations only: no HTTP/Git/normal proof is claimed.
+        from protocol_codec import record_header
+        name = 'github-pages-metadata-observation'
+        metadata_header = record_header(name + '-v1' if historical else name, name)
+        profile = 'fixed-hugo-workflow'
+        profile_header = record_header(profile + '-v1' if historical else profile, profile)
         sha = 'a' * 64
         policy = {'repositoryId': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog',
             'workflowId': 262722446, 'workflowPath': '.github/workflows/hugo.yaml', 'branch': 'main',
-            'environment': 'github-pages', 'profile': 'fixed-hugo-workflow-v1',
+            'environment': 'github-pages', 'profile': profile_header['contract'],
+            **({} if historical else {'profileSchemaFingerprint': profile_header['schemaFingerprint']}),
             'workflowSourceSha256': 'cbf3a52e317973a4273f5c64c0a8d4e1c5dda2ee709f0e4ad12863c78cc5fe0d'}
         repo = {'id': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog'}
         when = '2026-09-07T00:00:00+00:00'
@@ -72,7 +78,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         coverage.update(pagination='complete')
         coverage.update(dict.fromkeys(('artifactLineage', 'productionInputs', 'web', 'assets',
                                        'remoteNow', 'currentEligibility'), 'not_checked'))
-        return self.hashed({'contract': 'github-pages-metadata-observation-v1', 'version': 1,
+        return self.hashed({**metadata_header,
             'status': 'metadata_observed', 'metadataOutcome': 'success', 'partial': True, 'fullE05': False,
             'requestedCommit': commit, 'policy': policy,
             'selection': {'runId': 1, 'runNumber': 1, 'runAttempt': 1, 'headSha': commit, 'branch': 'main',
@@ -121,6 +127,30 @@ class DailyDeploymentStoreTest(unittest.TestCase):
                 self.assertEqual(leaf._protocol_header(kind, historical=True), record_header(original, current))
                 if kind in ('status', 'outcome'):
                     self.assertEqual(owner._deployment_fallback_header(kind), record_header(current, current))
+
+    def test_collector_headers_and_nested_profile_use_the_same_exact_domain(self):
+        from protocol_codec import record_header
+        from github_pages_deployment import _empty, _Budget
+        leaf = self.leaf()
+        commit = 'a' * 40
+        produced = _empty(commit, _Budget())
+        name = 'github-pages-metadata-observation'
+        profile = 'fixed-hugo-workflow'
+        self.assertEqual({key: produced[key] for key in ('contract', 'schemaFingerprint')},
+                         record_header(name, name))
+        self.assertEqual({'contract': produced['policy']['profile'],
+                          'schemaFingerprint': produced['policy']['profileSchemaFingerprint']},
+                         record_header(profile, profile))
+        for historical, attempt_format in ((True, 'original'), (True, 'current'), (False, 'current')):
+            metadata = self.metadata(commit, historical=historical)
+            self.assertEqual(leaf._collector_metadata(metadata, commit, attempt_format), 'metadata_observed')
+            body = {key: value for key, value in metadata.items() if key != 'metadataSha256'}
+            other_policy = self.metadata(commit, historical=not historical)['policy']
+            changed = self.hashed({**body, 'policy': other_policy}, 'metadataSha256')
+            with self.assertRaises(leaf.DeploymentStoreError):
+                leaf._collector_metadata(changed, commit, attempt_format)
+        with self.assertRaises(leaf.DeploymentStoreError):
+            leaf._collector_metadata(self.metadata(commit), commit, 'original')
 
     def test_previous_writer_store_replays_original_bytes_and_advances_without_mixing_attempt_headers(self):
         from types import ModuleType
@@ -229,7 +259,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'bindingSha256': binding['bindingSha256'] if binding is not None else None,
             'startedAt': intent['requestedAt'], 'finishedAt': intent['requestedAt'], 'status': state,
             'bindingVerified': binding is not None,
-            'metadata': self.metadata(binding['publicationBinding']['commitOid']) if success else None,
+            'metadata': self.metadata(binding['publicationBinding']['commitOid'], historical='version' in intent) if success else None,
             'partial': True, 'fullE05': False, 'implementationObservation': self.implementation() if success else None,
             'coverage': coverage, 'issues': [] if success else [{'domain': 'normal', 'code': 'normal_rejected', 'reason': 'initial'}],
             'capabilities': self.caps()}, 'recordSha256')

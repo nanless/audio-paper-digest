@@ -13,12 +13,15 @@ import time
 
 POLICY_NAMES = ('POLICY',)
 POLICY = (
-    ('contract', 'github-pages-metadata-observation-v1'), ('version', 1),
+    # Keep the pinned restricted-loader headers aligned with the catalogue.
+    ('contract', 'github-pages-metadata-observation'),
+    ('schema_fingerprint', '2b8190d13f6920a0a2a603ff20d905ab4c91f2d35dc8b3e21eab1f5addc262c6'),
     ('host', 'api.github.com'), ('repository', 'nanless/audio-paper-digest-blog'),
     ('repository_id', 1214235086), ('workflow_id', 262722446),
     ('workflow_path', '.github/workflows/hugo.yaml'), ('branch', 'main'),
     ('workflow_name', 'Deploy Hugo to Pages'), ('event', 'push'),
-    ('environment', 'github-pages'), ('profile', 'fixed-hugo-workflow-v1'),
+    ('environment', 'github-pages'), ('profile', 'fixed-hugo-workflow'),
+    ('profile_schema_fingerprint', '9713785163253df82d691f5bf9e3ef82b5ff322eb1857a0671ac83dc051f4fd0'),
     ('workflow_sha256', 'cbf3a52e317973a4273f5c64c0a8d4e1c5dda2ee709f0e4ad12863c78cc5fe0d'),
     ('headers', (('User-Agent', 'audio-paper-digest-deployment-observer/1'),
                  ('Accept', 'application/vnd.github+json'), ('Accept-Encoding', 'identity'),
@@ -561,11 +564,12 @@ def _deployment_state(value):
 
 
 def _empty(commit, budget):
-    return {'contract': _p('contract'), 'version': _p('version'), 'status': 'unknown',
+    return {'contract': _p('contract'), 'schemaFingerprint': _p('schema_fingerprint'), 'status': 'unknown',
         'metadataOutcome': 'unknown', 'partial': True, 'fullE05': False, 'requestedCommit': commit,
         'policy': {'repositoryId': _p('repository_id'), 'fullName': _p('repository'),
             'workflowId': _p('workflow_id'), 'workflowPath': _p('workflow_path'), 'branch': _p('branch'),
-            'environment': _p('environment'), 'profile': _p('profile'), 'workflowSourceSha256': _p('workflow_sha256')},
+            'environment': _p('environment'), 'profile': _p('profile'),
+            'profileSchemaFingerprint': _p('profile_schema_fingerprint'), 'workflowSourceSha256': _p('workflow_sha256')},
         'selection': None, 'workflowSource': None, 'jobs': [], 'deployment': None,
         'artifacts': {'listing': 'not_checked', 'totalCount': None, 'content': 'not_checked',
             'attemptBinding': 'not_checked', 'consumedByDeploy': 'not_checked'},
