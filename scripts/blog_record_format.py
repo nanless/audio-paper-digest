@@ -74,3 +74,8 @@ def matches_snapshot_receipt(manifest, receipt):
     fields = _snapshot_fields(header, 'generationInputIntegrity')
     return all(receipt.get(key) == val for key, val in fields.items()) \
         and ('generationInputIntegritySchemaFingerprint' in receipt) == ('schemaFingerprint' in header)
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

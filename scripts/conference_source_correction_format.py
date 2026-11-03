@@ -11,3 +11,8 @@ def locator_family(value):
         if protocols.has_valid_header(value, name):
             return name
     return None
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

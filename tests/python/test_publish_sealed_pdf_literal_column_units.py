@@ -35,6 +35,22 @@ def private_write(file, raw):
     file.chmod(0o600)
 
 
+def write_original_run(directory):
+    from daily_source_format import bundle_expectation
+    from protocol_codec import historical_header
+
+    run = directory.parents[2]
+    paper_id = directory.parent.name
+    identity = {'batchDate': '2026-10-20', 'batchId': 'original-pdf-fixture',
+                'paperIds': [paper_id]}
+    body = {**historical_header('daily-fresh-source-run', 'sealed-official-source-set'),
+            **identity, 'runId': run.name,
+            'sourceSetSha256': sha(publisher._daily_fresh_compact_json_bytes(
+                {**identity, 'sourceGeneration': 1})),
+            'sourceExpectations': {paper_id: bundle_expectation(1, original=True)}}
+    private_write(run / 'run.json', publisher._daily_fresh_canonical_json_bytes(body))
+
+
 def bundle(root, item):
     """Keep the complete saved original page/text/artifacts, never fake a PDF DOM."""
     paper_id, run_id = item['arxivId'], '11111111-1111-4111-8111-111111111111'
@@ -159,9 +175,7 @@ class PublisherRealLiteralPdfUnitsTests(unittest.TestCase):
         caption = real['sourceText'][start:real['sourceText'].index('\nAI Model', start)].strip()
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(publisher, 'DAILY_FRESH_SOURCE_RUNS_DIR', Path(tmp)):
             paper, rendered, binding, raw, quotes, directory = bundle(Path(tmp), item)
-            run = directory.parents[2]
-            private_write(run / 'run.json', publisher._daily_fresh_canonical_json_bytes({
-                'contract': 'daily-fresh-source-run-v1', 'runId': run.name}))
+            write_original_run(directory)
             binding['sourceQuotes'] = [{'quote': caption, 'sourceQuoteSha256': sha(caption.encode())}]
             covered = publisher._reader_dom_column_unit_coverage(paper, rendered, binding)
             self.assertEqual(len(covered), 12)

@@ -23,3 +23,8 @@ def manifest_header(value):
     field = 'version' if 'version' in value else 'contract'
     return (protocols.record_header(value[field], MANIFEST, value.get('schemaFingerprint'))
             if protocols.has_valid_header(value, MANIFEST, field) else None)
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

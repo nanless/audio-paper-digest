@@ -126,7 +126,11 @@ function evidenceForQuotes(quotes) {
 }
 function quoteEvidence(quote) { return evidenceForQuotes([quote])[0]; }
 function assertQuoteEvidence(proof) {
-    const actual = quoteEvidence(proof?.quote);
+    const active = scope.getStore();
+    const header = format.readHeader(proof, CONTRACT);
+    if (!active) throw new Error('PDF quotation requires the actual verified source scope');
+    const actual = isDeepStrictEqual(header, active.header) ? quoteEvidence(proof.quote)
+        : deriveBundle(active.expectation, [proof.quote], null, header).results[0]?.evidence;
     if (!isDeepStrictEqual(actual, proof)) throw new Error('PDF quotation proof differs from the actual sealed PDF');
     return true;
 }

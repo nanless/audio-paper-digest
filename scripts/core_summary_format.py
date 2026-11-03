@@ -30,3 +30,8 @@ def read_stage(declaration, stage):
     if any(stage.get(field) != value for field, value in fields.items()):
         return None
     return header
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

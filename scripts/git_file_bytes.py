@@ -52,3 +52,8 @@ def read_git_blob(root, blob_oid, sha256):
     if len(result.stdout) != size or hashlib.sha256(result.stdout).hexdigest() != sha256:
         raise ValueError('Original Git bytes do not match the original SHA256')
     return result.stdout
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

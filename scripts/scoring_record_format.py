@@ -36,3 +36,8 @@ def has_scoring_stage_formats(stage):
     return all(header is not None for header in headers) and len({
         'schemaFingerprint' in header for header in headers
     }) == 1
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

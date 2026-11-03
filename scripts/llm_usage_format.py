@@ -14,3 +14,8 @@ def is_usage_event_format(event):
         return False
     current = 'contract' in event
     return formats.has_valid_header(event, EVENT_CONTRACT, 'contract' if current else 'version')
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

@@ -48,3 +48,8 @@ def bundle_expectation(generation, *, original):
     head = protocols.record_header(BUNDLE_EXPECTATION, BUNDLE_EXPECTATION)
     return {'sourceMode': head['contract'], 'sourceModeSchemaFingerprint': head['schemaFingerprint'],
             'sourceGeneration': generation}
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

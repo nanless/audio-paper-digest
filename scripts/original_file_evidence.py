@@ -53,3 +53,8 @@ def read_original_file_bytes(relative, expected_sha256=None, *, project_root=Non
     if type(sha) is not str or not SHA.fullmatch(sha) or relative not in registered['blobs'].get(sha, {}).get('paths', []):
         raise ValueError('Unregistered original file path/SHA256')
     return read_git_blob(root, registered['blobs'][sha]['blobOid'], sha)
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

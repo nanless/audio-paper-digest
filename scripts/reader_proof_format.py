@@ -21,3 +21,8 @@ def grid_profile(header):
     header = grid_header(header)
     return codec.record_header(codec.contract(PROFILE), PROFILE) if codec.is_current_header(header, GRID) \
         else codec.historical_contract(PROFILE, 'fixed-explicit-glyphs')
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

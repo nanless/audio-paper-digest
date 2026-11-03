@@ -184,3 +184,8 @@ def resource_source_binding(stage, resources):
         return 'schemaFingerprint' not in actual and stage.get('resourceEvidenceContract') == actual['contract']
     except (KeyError, TypeError, ValueError):
         return False
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

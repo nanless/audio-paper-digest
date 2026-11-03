@@ -12,7 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_publish_sealed_pdf_literal_column_units import bundle, publisher, private_write, sha
+from test_publish_sealed_pdf_literal_column_units import bundle, publisher, private_write, write_original_run, sha
 from reader_grouped_vector_column_units import coverage
 
 RAW = (ROOT / 'tests/fixtures/reader-daily-vector-unit-tables-20261021-real.json.gz').read_bytes()
@@ -30,9 +30,7 @@ class PublisherGroupedVectorUnitsTests(unittest.TestCase):
                        sourceQuotes=[{'quote': q, 'sourceQuoteSha256': sha(q.encode())}
                                      for q in original['sourceQuotes']])
         paper['apiReaderPlan']['tableBindings'] = [binding]
-        run = directory.parents[2]
-        private_write(run / 'run.json', publisher._daily_fresh_canonical_json_bytes({
-            'contract': 'daily-fresh-source-run-v1', 'runId': run.name}))
+        write_original_run(directory)
         return paper, rendered, binding, directory
 
     def test_real_saved_tables_pass_cold_publication_and_preserve_four_sources(self):

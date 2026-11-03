@@ -255,3 +255,8 @@ def is_current_header(value, name, tag_field='contract'): return _codec().is_cur
 def record(name, fields=None): return _codec().record(name, fields)
 
 def registered_headers(name): return _codec().registered_headers(name)
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)

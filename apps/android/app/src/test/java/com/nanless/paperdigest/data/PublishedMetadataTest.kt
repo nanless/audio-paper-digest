@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -7,7 +8,7 @@ import org.junit.Test
 
 class PublishedMetadataTest {
     private fun paper() = Paper("arxiv:2610.27491", "Original scientific title", "中文导读标题", listOf("Catalog Author"), "2026-10-24", sourceKind = "arxiv", identityStatus = "verified", blogURL = "https://nanless.github.io/audio-paper-digest-blog/posts/original/", sourceURL = "https://arxiv.org/abs/2610.27491v1", pdfURL = "https://arxiv.org/pdf/2610.27491v1.pdf", sourceVersion = "2610.27491v1")
-    private fun sidecar() = JSONObject().put("contract", "researcher-sidecars-v1").put("arxivId", "2610.27491").put("id", "2610.27491v1").put("arxivVersionedId", "2610.27491v1").put("absUrl", "https://arxiv.org/abs/2610.27491v1").put("pdfUrl", "https://arxiv.org/pdf/2610.27491v1.pdf").put("originalTitle", "Original scientific title").put("authors", JSONArray().put(JSONObject().put("name", "Original Author").put("affiliations", JSONArray(listOf("Original institution")))))
+    private fun sidecar() = JSONObject().put("contract", "researcher-sidecars-v1").put("schemaVersion", 1).put("arxivId", "2610.27491").put("id", "2610.27491v1").put("arxivVersionedId", "2610.27491v1").put("absUrl", "https://arxiv.org/abs/2610.27491v1").put("pdfUrl", "https://arxiv.org/pdf/2610.27491v1.pdf").put("originalTitle", "Original scientific title").put("authors", JSONArray().put(JSONObject().put("name", "Original Author").put("affiliations", JSONArray(listOf("Original institution")))))
     @Test fun unknownPublicationDateNeverUsesTheBlogDate() {
         val actual = ExportService.citationPaper(paper(), null)
         assertEquals("", actual.date); assertNotEquals(paper().date, actual.date)
@@ -23,7 +24,14 @@ class PublishedMetadataTest {
     @Test fun sidecarsNeedTheirRealContractOwnerVersionAndSource() {
         val p = paper()
         CatalogRepository.validatedSidecar(sidecar(), p, false)
-        listOf(sidecar().put("contract", "unknown-v9"), sidecar().put("arxivId", "2610.00001"), sidecar().put("arxivVersionedId", "2610.27491v2"), sidecar().put("absUrl", "https://arxiv.org/abs/2610.27491v2")).forEach { wrong -> assertThrows(IllegalArgumentException::class.java) { CatalogRepository.validatedSidecar(wrong, p, true) } }
+        val current = sidecar().apply {
+            remove("schemaVersion")
+            val header = ClientProtocols.record("researcher-sidecars")
+            put("contract", header.getString("contract"))
+            put("schemaFingerprint", header.getString("schemaFingerprint"))
+        }
+        assertEquals(current.toString(), CatalogRepository.validatedSidecar(current, p, false).toString())
+        listOf(sidecar().put("contract", "unknown-v9"), sidecar().put("arxivId", "2610.00001"), sidecar().put("arxivVersionedId", "2610.27491v2"), sidecar().put("absUrl", "https://arxiv.org/abs/2610.27491v2")).forEach { wrong -> assertThrows(IllegalArgumentException::class.java) { CatalogRepository.validatedSidecar(wrong, p, false) } }
         val conference = p.copy(id = "conference:fixture:2026:1", sourceKind = "conference", sourceVersion = null)
         assertThrows(IllegalArgumentException::class.java) { CatalogRepository.validatedSidecar(sidecar(), conference, false) }
     }

@@ -106,7 +106,7 @@ test('官方 Reader 图绑定后旧下载明确跳过；确需旧补图才沿原
     const deep = loadDeferredDownloadStep();
     const urls = ['https://example.invalid/one.png', 'https://example.invalid/two.png'];
     const figures = [{ figureOrdinal: 1 }];
-    const paper = { apiReaderFigures: figures };
+    const paper = { apiReaderFigures: figures, apiReaderPlan: { contract: 'beginner-researcher-v3', version: 3 } };
     const manifest = { contracts: { apiReaderArticle: 'beginner-researcher-v3' }, stages: {
         apiReaderArticle: { status: 'complete', figureCount: 1, figuresSha256: deep.stableFingerprint(figures) }
     } };
