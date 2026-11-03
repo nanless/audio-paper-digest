@@ -1,0 +1,318 @@
+{
+  "protocols": [
+    {
+      "name": "historical-direct-visual-disposition",
+      "currentVariant": "audited-image-exclusion-or-waiver",
+      "currentSchema": {
+        "fields": [
+          "planSha256",
+          "scope",
+          "mode",
+          "reason",
+          "requestedBy",
+          "createdAt",
+          "dispositionSha256"
+        ],
+        "proof": "content SHA and scope"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-visual-disposition-v1",
+          "variant": "audited-image-exclusion-or-waiver",
+          "header": {
+            "contract": "historical-direct-visual-disposition-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-status",
+      "currentVariant": "observed-publication-state",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "phase",
+          "complete",
+          "blockers",
+          "planSha256",
+          "publicationPlanSha256",
+          "rewritePlanSha256",
+          "retainedPages",
+          "visual",
+          "stages"
+        ],
+        "proof": "read-only observation; never grants publication"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-status-v1",
+          "variant": "observed-publication-state",
+          "header": {
+            "contract": "historical-direct-publication-status-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-plan",
+      "currentVariant": "source-bound-plan",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "createdAt",
+          "authorityProof",
+          "authorityProofSha256",
+          "retainedDisposition",
+          "visualDisposition",
+          "blogBaseline",
+          "blogBaselineSha256",
+          "files",
+          "fileSetSha256",
+          "exactDelta",
+          "exactDeltaSha256",
+          "retainedPages",
+          "retainedPageSetSha256",
+          "roots",
+          "publicationScope",
+          "selectedPaperIds",
+          "planSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-plan-v1",
+          "variant": "original-source-bound-plan",
+          "header": {
+            "contract": "historical-direct-publication-plan-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-generation",
+      "currentVariant": "verified-generation",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "planSha256",
+          "planFileSha256",
+          "authorityProofSha256",
+          "baseHead",
+          "remoteName",
+          "remoteIdentitySha256",
+          "remoteMainOid",
+          "files",
+          "fileSetSha256",
+          "exactDeltaSha256",
+          "generationSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-generation-v1",
+          "variant": "original-verified-generation",
+          "header": {
+            "contract": "historical-direct-publication-generation-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-generation-intent",
+      "currentVariant": "prepared-generation",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "planSha256",
+          "generationSha256",
+          "fileSetSha256",
+          "intentSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-generation-v1-intent",
+          "variant": "original-prepared-generation",
+          "header": {
+            "contract": "historical-direct-publication-generation-v1-intent",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-review",
+      "currentVariant": "strict-semantic-review",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "planSha256",
+          "generationSha256",
+          "generationFileSha256",
+          "baseHead",
+          "remoteName",
+          "remoteIdentitySha256",
+          "remoteMainOid",
+          "reviewProtocolFingerprint",
+          "strictReview",
+          "reviewMode",
+          "files",
+          "fileSetSha256",
+          "hugoGate",
+          "semanticReview",
+          "reviewedAt",
+          "reviewSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record",
+        "reviewMode": "historical-semantic-multimodal"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-review-v1",
+          "variant": "original-strict-semantic-review",
+          "header": {
+            "contract": "historical-direct-publication-review-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-activation-intent",
+      "currentVariant": "prepared-installation",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "planSha256",
+          "generationSha256",
+          "reviewSha256",
+          "baseHead",
+          "exactDeltaSha256",
+          "intentSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-activation-intent-v1",
+          "variant": "original-prepared-installation",
+          "header": {
+            "contract": "historical-direct-publication-activation-intent-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-activation",
+      "currentVariant": "verified-installation",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "intentSha256",
+          "planSha256",
+          "generationSha256",
+          "reviewSha256",
+          "baseHead",
+          "exactDeltaSha256",
+          "activatedFiles",
+          "activatedAt",
+          "activationSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-activation-v1",
+          "variant": "original-verified-installation",
+          "header": {
+            "contract": "historical-direct-publication-activation-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-commit",
+      "currentVariant": "verified-commit",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "planSha256",
+          "reviewSha256",
+          "activationSha256",
+          "baseHead",
+          "publicationCommit",
+          "exactDeltaSha256",
+          "committedAt",
+          "commitSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-commit-v1",
+          "variant": "original-verified-commit",
+          "header": {
+            "contract": "historical-direct-publication-commit-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-remote",
+      "currentVariant": "verified-remote-commit",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "planSha256",
+          "reviewSha256",
+          "activationSha256",
+          "commitSha256",
+          "publicationCommit",
+          "remoteName",
+          "remoteIdentitySha256",
+          "remoteVerifiedOid",
+          "remoteVerifiedAt",
+          "exactDeltaSha256",
+          "publicationSha256"
+        ],
+        "hashDomain": "actual-header-and-complete-record"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-publication-remote-v1",
+          "variant": "original-verified-remote-commit",
+          "header": {
+            "contract": "historical-direct-publication-remote-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-publication-review-mode",
+      "currentVariant": "semantic-multimodal",
+      "currentSchema": {
+        "semantic": "text and image review plus Hugo gate"
+      },
+      "historical": [
+        {
+          "tag": "historical-semantic-multimodal-v1",
+          "variant": "semantic-multimodal",
+          "header": {
+            "reviewMode": "historical-semantic-multimodal-v1"
+          }
+        }
+      ]
+    }
+  ]
+}

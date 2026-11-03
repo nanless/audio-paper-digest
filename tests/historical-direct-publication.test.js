@@ -448,6 +448,17 @@ function versionedFixture() {
     return { arxivId, selectedSourceId, sourceVersion, item, source };
 }
 
+test('正式发布只允许当前会议工作区的四个约定客户端路径', () => {
+    const prefix = `static/client/papers/2026-11-03/conference-${'a'.repeat(24)}/`;
+    for (const basename of ['citation.bib', 'citation.json', 'citation.ris', 'rethink-context.json']) {
+        assert.equal(api.safeRelative(prefix + basename), prefix + basename);
+    }
+    for (const path of [prefix + 'raw.json', prefix + '../citation.bib', prefix + 'citation.json\n',
+        prefix.replace('conference-', 'arxiv-') + 'citation.json']) {
+        assert.throws(() => api.safeRelative(path), /路径不安全/);
+    }
+});
+
 test('发布权威记录显式绑定注册表和暂存的历史版本身份', () => {
     const f = versionedFixture();
     const proof = api.historicalSourceVersionProof(f.item, { source: f.source }, { sourceDisclosure: f.sourceVersion });
@@ -459,6 +470,18 @@ test('发布权威记录显式绑定注册表和暂存的历史版本身份', ()
         /登记表与暂存页面的历史版本证明已变化|identity evidence\/SHA drifted/);
     assert.throws(() => api.historicalSourceVersionProof(f.item, { source: { ...f.source, sourceVersion: undefined } },
         { sourceDisclosure: f.sourceVersion }), /缺少登记表中的来源证明/);
+    const protocols = require('../scripts/lib/protocol-codec');
+    const family = freshSource.HISTORICAL_VERSION_CONTRACT;
+    const originalHeader = protocols.registeredHeaders(family).find(header => !header.schemaFingerprint);
+    const { contract, schemaFingerprint, identitySha256, ...fields } = f.sourceVersion;
+    const rawOriginal = { ...originalHeader, ...fields };
+    const original = { ...rawOriginal, identitySha256: require('node:crypto').createHash('sha256')
+        .update(protocols.canonical(rawOriginal)).digest('hex') };
+    const originalProof = api.historicalSourceVersionProof(f.item, { source: { ...f.source, sourceVersion: original } },
+        { sourceDisclosure: original });
+    assert.deepEqual(originalProof.sourceVersion, original);
+    assert.throws(() => api.historicalSourceVersionProof(f.item, { source: f.source },
+        { sourceDisclosure: { ...f.sourceVersion, schemaFingerprint: '0'.repeat(64) } }), /格式或原结构指纹无效/);
 });
 
 test('确定性发布审查要求带版本号的直连页面只有一条精确的顶部警告', () => {

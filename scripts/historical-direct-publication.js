@@ -117,7 +117,7 @@ function existingDisposition(filename, expected) {
         throw new Error('视觉处置文件不是原入口生成的完整 JSON 字节');
     }
     const stored = api.normalizeVisualDisposition(value, { planSha256: expected.planSha256 });
-    for (const field of ['contract', 'version', 'planSha256', 'scope', 'mode', 'reason', 'requestedBy']) {
+    for (const field of ['planSha256', 'scope', 'mode', 'reason', 'requestedBy']) {
         if (stored[field] !== expected[field]) throw new Error(`已有视觉处置的 ${field} 与本次请求不同，不能覆盖`);
     }
     return stored;

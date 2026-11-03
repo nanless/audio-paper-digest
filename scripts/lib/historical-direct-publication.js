@@ -15,23 +15,26 @@ const runnerApi = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
 const directPageStagingApi = require('./historical-direct-page-staging.js');
 const freshArxivSourceApi = require('./fresh-arxiv-rewrite-source.js');
+const protocols = require('./protocol-codec');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const { hasPageTagMetadata, PAGE_TAG_FIELDS, LEGACY_PAGE_TAG_FIELDS } = require('./page-tag-metadata.js');
 
-const PLAN_CONTRACT = 'historical-direct-publication-plan-v1';
-const GENERATION_CONTRACT = 'historical-direct-publication-generation-v1';
-const REVIEW_CONTRACT = 'historical-direct-publication-review-v1';
-const ACTIVATION_INTENT_CONTRACT = 'historical-direct-publication-activation-intent-v1';
-const ACTIVATION_CONTRACT = 'historical-direct-publication-activation-v1';
-const COMMIT_CONTRACT = 'historical-direct-publication-commit-v1';
-const PUBLICATION_CONTRACT = 'historical-direct-publication-remote-v1';
-const VISUAL_DISPOSITION_CONTRACT = 'historical-direct-visual-disposition-v1';
-const STATUS_CONTRACT = 'historical-direct-publication-status-v1';
+const PLAN_CONTRACT = 'historical-direct-publication-plan';
+const GENERATION_CONTRACT = 'historical-direct-publication-generation';
+const GENERATION_INTENT_CONTRACT = 'historical-direct-publication-generation-intent';
+const REVIEW_CONTRACT = 'historical-direct-publication-review';
+const ACTIVATION_INTENT_CONTRACT = 'historical-direct-publication-activation-intent';
+const ACTIVATION_CONTRACT = 'historical-direct-publication-activation';
+const COMMIT_CONTRACT = 'historical-direct-publication-commit';
+const PUBLICATION_CONTRACT = 'historical-direct-publication-remote';
+const VISUAL_DISPOSITION_CONTRACT = 'historical-direct-visual-disposition';
+const STATUS_CONTRACT = 'historical-direct-publication-status';
 const VERSION = 1;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const GIT_OID_RE = /^[a-f0-9]{40,64}$/;
 const SAFE_ARTIFACT_RE = /^(?:content\/posts\/[A-Za-z0-9._/-]+\.md|static\/(?:images|data)\/papers\/[A-Za-z0-9._/-]+)$/;
+const CLIENT_WORKBENCH_ARTIFACT_RE = /^static\/client\/papers\/\d{4}-\d{2}-\d{2}\/conference-[a-f0-9]{24}\/(?:citation\.(?:bib|json|ris)|rethink-context\.json)(?![\s\S])/u;
 const MAX_ARTIFACT_BYTES = 128 * 1024 * 1024;
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
 const HISTORICAL_VERSION_NOTICE_MARKER = '来源版本说明（当前稿不可用）';
@@ -60,13 +63,37 @@ function exact(value, fields, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== fields.slice().sort().join('\0')) fail(`${label} 的对象类型或字段集合无效`);
 }
+const currentHeader = family => protocols.recordHeader(family, family);
+function savedHeader(value, family) {
+    if (!protocols.hasValidHeader(value, family)) fail(`未登记或不完整的发布格式：${family}`);
+    return protocols.recordHeader(value.contract, family, value.schemaFingerprint);
+}
+function preparedHeaders(filename, intentFamily, resultFamily, originalVariant) {
+    if (!fs.existsSync(filename)) {
+        return { intentHeader: currentHeader(intentFamily), resultHeader: currentHeader(resultFamily) };
+    }
+    const saved = strictJsonFile(filename, '原事务准备记录').value;
+    const intentHeader = savedHeader(saved, intentFamily);
+    if (protocols.isCurrentHeader(saved, intentFamily)) {
+        return { intentHeader, resultHeader: currentHeader(resultFamily) };
+    }
+    if (saved.schemaFingerprint !== undefined) fail('保存的准备记录没有可用的原凭证重放规则');
+    return { intentHeader, resultHeader: protocols.historicalHeader(resultFamily, originalVariant, null) };
+}
+function reviewMode(receipt) {
+    if (receipt.schemaFingerprint !== undefined) {
+        return protocols.declaredSchema(receipt.contract, REVIEW_CONTRACT, receipt.schemaFingerprint).reviewMode;
+    }
+    return protocols.historicalHeader('historical-direct-publication-review-mode', 'semantic-multimodal', null).reviewMode;
+}
+
 function iso(value) {
     return typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 function safeRelative(value, label = '发布路径') {
     if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\')
         || path.posix.normalize(value) !== value || value.split('/').some(part => !part || part === '.' || part === '..')
-        || !SAFE_ARTIFACT_RE.test(value)) fail(`${label} 的路径不安全：${value}`);
+        || (!SAFE_ARTIFACT_RE.test(value) && !CLIENT_WORKBENCH_ARTIFACT_RE.test(value))) fail(`${label} 的路径不安全：${value}`);
     return value;
 }
 function safeRoot(value, label, create = false) {
@@ -120,9 +147,11 @@ function artifactSourcePath(record, roots) {
 }
 
 function normalizeVisualDisposition(value, plan) {
-    const common = ['contract', 'version', 'planSha256', 'scope', 'mode', 'reason', 'requestedBy', 'createdAt', 'dispositionSha256'];
+    if (!protocols.hasValidHeader(value, VISUAL_DISPOSITION_CONTRACT)) fail('图片任务处理记录的格式、字段或 SHA 已变化');
+    const header = protocols.recordHeader(value.contract, VISUAL_DISPOSITION_CONTRACT, value.schemaFingerprint);
+    const common = [...Object.keys(header), 'planSha256', 'scope', 'mode', 'reason', 'requestedBy', 'createdAt', 'dispositionSha256'];
     exact(value, common, '图片任务处理记录'); const body = clone(value); delete body.dispositionSha256;
-    if (value.contract !== VISUAL_DISPOSITION_CONTRACT || value.version !== VERSION || value.planSha256 !== plan.planSha256
+    if (value.planSha256 !== plan.planSha256
         || !['full-history-publication', 'selected-sample-publication'].includes(value.scope)
         || !['excluded', 'waived'].includes(value.mode)
         || typeof value.reason !== 'string' || value.reason.trim().length < 10 || !iso(value.createdAt)
@@ -133,7 +162,7 @@ function normalizeVisualDisposition(value, plan) {
 }
 function buildVisualDisposition({ plan, mode, reason, scope = 'full-history-publication',
     requestedBy = mode === 'waived' ? 'user' : 'system-contract', createdAt = new Date().toISOString() } = {}) {
-    const body = { contract: VISUAL_DISPOSITION_CONTRACT, version: VERSION, planSha256: plan.planSha256,
+    const body = { ...protocols.recordHeader(VISUAL_DISPOSITION_CONTRACT, VISUAL_DISPOSITION_CONTRACT), planSha256: plan.planSha256,
         scope, mode, reason: String(reason || '').trim(), requestedBy, createdAt };
     return normalizeVisualDisposition(seal(body, 'dispositionSha256'), plan);
 }
@@ -170,8 +199,13 @@ function absorbArtifact(byPath, record) {
 }
 function historicalSourceVersionProof(item, active, manifest) {
     const sourceVersion = active?.source?.sourceVersion;
-    const manifestVersion = manifest?.sourceDisclosure?.contract === freshArxivSourceApi.HISTORICAL_VERSION_CONTRACT
-        ? manifest.sourceDisclosure : null;
+    const disclosure = manifest?.sourceDisclosure;
+    const family = freshArxivSourceApi.HISTORICAL_VERSION_CONTRACT;
+    const manifestVersion = protocols.registeredHeaders(family).some(header => header.contract === disclosure?.contract)
+        ? disclosure : null;
+    if (manifestVersion && !protocols.hasValidHeader(manifestVersion, family)) {
+        fail(`${item.paperId} 的暂存历史版本说明格式或原结构指纹无效`);
+    }
     if (!sourceVersion) {
         if (manifestVersion) fail(`${item.paperId} 的暂存历史版本说明缺少登记表中的来源证明`);
         return null;
@@ -387,7 +421,7 @@ function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'or
         artifact => (dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes))(artifact, authority.roots), dependencies);
     const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '完成规划时的博客状态');
     if (stableHash(closing) !== stableHash(opening)) fail('生成计划期间博客状态已变化');
-    const body = { contract: PLAN_CONTRACT, version: VERSION, publicationId, createdAt,
+    const body = { ...currentHeader(PLAN_CONTRACT), publicationId, createdAt,
         authorityProof: authority.proof, authorityProofSha256: authority.proof.proofSha256,
         retainedDisposition: { mode: 'retain-unchanged', count: authority.retainedPages.length,
             retainedPageSetSha256: authority.projection.retainedPageSetSha256,
@@ -408,14 +442,14 @@ function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'or
 }
 function validatePlan(value, publicationId = value?.publicationId) {
     const hasScopeFields = Object.hasOwn(value || {}, 'publicationScope') || Object.hasOwn(value || {}, 'selectedPaperIds');
-    const fields = ['contract', 'version', 'publicationId', 'createdAt', 'authorityProof', 'authorityProofSha256',
+    const fields = [...Object.keys(savedHeader(value, PLAN_CONTRACT)), 'publicationId', 'createdAt', 'authorityProof', 'authorityProofSha256',
         'retainedDisposition', 'visualDisposition', 'blogBaseline', 'blogBaselineSha256', 'files', 'fileSetSha256',
         'exactDelta', 'exactDeltaSha256', 'retainedPages', 'retainedPageSetSha256', 'roots', 'planSha256'];
     const normalizedFields = hasScopeFields ? [...fields.slice(0, -1), 'publicationScope', 'selectedPaperIds', 'planSha256'] : fields;
     exact(value, normalizedFields, '直接发布计划'); const body = clone(value); delete body.planSha256;
     const publicationScope = value.publicationScope || 'full-history';
     const selectedPaperIds = value.selectedPaperIds || [];
-    if (value.contract !== PLAN_CONTRACT || value.version !== VERSION || value.publicationId !== publicationId
+    if (!protocols.hasValidHeader(value, PLAN_CONTRACT) || value.publicationId !== publicationId
         || !UUID_RE.test(value.publicationId || '') || !iso(value.createdAt) || value.planSha256 !== stableHash(body)
         || value.authorityProofSha256 !== value.authorityProof?.proofSha256 || !SHA_RE.test(value.authorityProofSha256 || '')
         || value.blogBaselineSha256 !== stableHash(validateBlogState(value.blogBaseline, '已保存的博客基线'))
@@ -504,14 +538,17 @@ function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remot
     if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('博客状态与发布计划的基线不同');
     const files = loaded.plan.files.map(record => ({ path: record.path, operation: record.operation,
         baselineSha256: record.baselineSha256, sha256: record.sha256 }));
-    const body = { contract: GENERATION_CONTRACT, version: VERSION, publicationId, planSha256: loaded.plan.planSha256,
+    const originalIntentPath = path.join(generationDirectory(loaded.directory), 'intent.json');
+    const { intentHeader, resultHeader } = preparedHeaders(originalIntentPath,
+        GENERATION_INTENT_CONTRACT, GENERATION_CONTRACT, 'original-verified-generation');
+    const body = { ...resultHeader, publicationId, planSha256: loaded.plan.planSha256,
         planFileSha256: loaded.fileSha256, authorityProofSha256: loaded.plan.authorityProofSha256,
         baseHead: state.head, remoteName: state.remoteName, remoteIdentitySha256: state.remoteIdentitySha256,
         remoteMainOid: state.remoteOid, files, fileSetSha256: stableHash(files), exactDeltaSha256: loaded.plan.exactDeltaSha256 };
     const manifest = seal(body, 'generationSha256');
     if (!apply) return { status: 'dry-run', manifest };
     const root = safeRoot(generationDirectory(loaded.directory), '生成目录', true);
-    const intent = seal({ contract: `${GENERATION_CONTRACT}-intent`, version: VERSION, publicationId,
+    const intent = seal({ ...intentHeader, publicationId,
         planSha256: loaded.plan.planSha256, generationSha256: manifest.generationSha256,
         fileSetSha256: manifest.fileSetSha256 }, 'intentSha256');
     const intentPath = path.join(root, 'intent.json');
@@ -540,7 +577,7 @@ function loadGeneration(loadedPlan) {
     const body = clone(value); delete body.generationSha256;
     const expectedFiles = loadedPlan.plan.files.map(({ path, operation, baselineSha256, sha256 }) =>
         ({ path, operation, baselineSha256, sha256 }));
-    if (value.contract !== GENERATION_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
+    if (!protocols.hasValidHeader(value, GENERATION_CONTRACT) || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.planFileSha256 !== loadedPlan.fileSha256
         || value.generationSha256 !== stableHash(body) || value.fileSetSha256 !== stableHash(value.files)
         || !Array.isArray(value.files) || stableHash(value.files) !== stableHash(expectedFiles)
@@ -574,7 +611,7 @@ function reviewProtocolFingerprint(dependencies = {}) {
     const root = path.resolve(__dirname, '../..');
     const code = files.map(filename => ({ filename: path.relative(root, filename).split(path.sep).join('/'),
         sha256: sha256(fs.readFileSync(filename)) }));
-    return stableHash({ contract: REVIEW_CONTRACT, version: VERSION, code,
+    return stableHash({ ...currentHeader(REVIEW_CONTRACT), code,
         semanticReview: semanticReviewProtocol(),
         hugo: String(dependencies.hugoVersion || defaultHugoVersion()) });
 }
@@ -781,11 +818,11 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
     if (!semantic?.receipt || semantic.receipt.passed !== true || !SHA_RE.test(semantic.receipt.semanticReviewSha256 || '')) {
         fail('页面文字和图片审查未返回完整的通过凭证');
     }
-    const body = { contract: REVIEW_CONTRACT, version: VERSION, publicationId, planSha256: loaded.plan.planSha256,
+    const body = { ...currentHeader(REVIEW_CONTRACT), publicationId, planSha256: loaded.plan.planSha256,
         generationSha256: generation.manifest.generationSha256, generationFileSha256: generation.fileSha256,
         baseHead: state.head, remoteName: state.remoteName, remoteIdentitySha256: state.remoteIdentitySha256,
         remoteMainOid: state.remoteOid, reviewProtocolFingerprint: protocol, strictReview: true,
-        reviewMode: 'historical-semantic-multimodal-v1', files, fileSetSha256: stableHash(files), hugoGate,
+        reviewMode: 'historical-semantic-multimodal', files, fileSetSha256: stableHash(files), hugoGate,
         semanticReview: { semanticReviewSha256: semantic.receipt.semanticReviewSha256,
             semanticReviewFileSha256: semantic.fileSha256 || null, semanticProtocol: semantic.receipt.semanticProtocol,
             pageResults: semantic.receipt.results, pageResultSetSha256: semantic.receipt.resultSetSha256 },
@@ -803,9 +840,9 @@ function loadReview(loadedPlan) {
     const generationByPath = new Map(generation.manifest.files.map(item => [item.path, item]));
     const expectedPages = generation.manifest.files.filter(item => item.path.endsWith('.md')).map(item => item.path).sort();
     const semantic = value.semanticReview;
-    if (value.contract !== REVIEW_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
+    if (!protocols.hasValidHeader(value, REVIEW_CONTRACT) || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.strictReview !== true || value.reviewSha256 !== stableHash(body)
-        || value.reviewMode !== 'historical-semantic-multimodal-v1'
+        || value.reviewMode !== reviewMode(value)
         || value.fileSetSha256 !== stableHash(value.files) || value.baseHead !== loadedPlan.plan.blogBaseline.head
         || value.generationSha256 !== generation.manifest.generationSha256
         || value.generationFileSha256 !== generation.fileSha256
@@ -984,14 +1021,14 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
             && existing.generationSha256 === generation.manifest.generationSha256) {
             return { status: 'already-activated', receipt: existing, filename: existingReceipt };
         }
-        const reboundIntentBody = { contract: ACTIVATION_INTENT_CONTRACT, version: VERSION, publicationId,
+        const reboundIntentBody = { ...currentHeader(ACTIVATION_INTENT_CONTRACT), publicationId,
             planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
             reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: existing.baseHead,
             exactDeltaSha256: loaded.plan.exactDeltaSha256 };
         const reboundIntent = seal(reboundIntentBody, 'intentSha256');
         if (!apply) return { status: 'dry-run', intent: reboundIntent, deltaCount: delta.length };
         atomicReplace(path.join(loaded.directory, 'activation', 'intent.json'), prettyBytes(reboundIntent));
-        const reboundBody = { contract: ACTIVATION_CONTRACT, version: VERSION, publicationId,
+        const reboundBody = { ...currentHeader(ACTIVATION_CONTRACT), publicationId,
             intentSha256: reboundIntent.intentSha256, planSha256: loaded.plan.planSha256,
             generationSha256: generation.manifest.generationSha256,
             reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: existing.baseHead,
@@ -1012,7 +1049,9 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
         if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('安装页面时的博客基线与计划不同');
     }
     if (reviewReceipt.receipt.baseHead !== state.head) fail('安装页面时的博客基线与审查记录不同');
-    const intentBody = { contract: ACTIVATION_INTENT_CONTRACT, version: VERSION, publicationId,
+    const { intentHeader, resultHeader } = preparedHeaders(recoveryIntentPath,
+        ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT, 'original-verified-installation');
+    const intentBody = { ...intentHeader, publicationId,
         planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
         reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: state.head, exactDeltaSha256: loaded.plan.exactDeltaSha256 };
     const intent = seal(intentBody, 'intentSha256');
@@ -1035,7 +1074,7 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
         if (readRegular(target).sha256 !== record.sha256) fail(`安装页面后的文件 SHA 检查失败：${record.path}`);
     }
     (dependencies.validateActivatedWorktree || defaultValidateActivatedWorktree)(blogRepo, delta.map(item => item.path));
-    const body = { contract: ACTIVATION_CONTRACT, version: VERSION, publicationId, intentSha256: intent.intentSha256,
+    const body = { ...resultHeader, publicationId, intentSha256: intent.intentSha256,
         planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
         reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: state.head, exactDeltaSha256: loaded.plan.exactDeltaSha256,
         activatedFiles: delta.map(item => ({ path: item.path, sha256: item.sha256 })), activatedAt: dependencies.now?.() || new Date().toISOString() };
@@ -1050,7 +1089,7 @@ function loadActivation(loadedPlan) {
     const body = clone(value); delete body.activationSha256;
     const expectedFiles = loadedPlan.plan.files.filter(item => item.operation !== 'unchanged')
         .map(item => ({ path: item.path, sha256: item.sha256 }));
-    if (value.contract !== ACTIVATION_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
+    if (!protocols.hasValidHeader(value, ACTIVATION_CONTRACT) || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256
         || value.baseHead !== loadedPlan.plan.blogBaseline.head
         || !Array.isArray(value.activatedFiles)
@@ -1111,7 +1150,7 @@ function defaultPushAndVerify({ blogRepo, remoteName, commit }) {
 function loadCommit(loadedPlan) {
     const loaded = strictJsonFile(path.join(loadedPlan.directory, 'commit.json'), '发布提交凭证'); const value = loaded.value;
     const body = clone(value); delete body.commitSha256;
-    if (value.contract !== COMMIT_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
+    if (!protocols.hasValidHeader(value, COMMIT_CONTRACT) || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.baseHead !== loadedPlan.plan.blogBaseline.head
         || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256 || !GIT_OID_RE.test(value.publicationCommit || '')
         || !iso(value.committedAt) || value.commitSha256 !== stableHash(body)) fail('发布提交凭证的字段或 SHA 已变化');
@@ -1149,7 +1188,7 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     }
     const commit = (dependencies.publishGit || defaultPublishGit)({ blogRepo, plan: loaded.plan, publicationId, message });
     if (!GIT_OID_RE.test(String(commit || '').toLowerCase())) fail('发布提交 OID 无效');
-    const commitBody = { contract: COMMIT_CONTRACT, version: VERSION, publicationId,
+    const commitBody = { ...currentHeader(COMMIT_CONTRACT), publicationId,
         planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
         activationSha256: activation.receipt.activationSha256, baseHead: loaded.plan.blogBaseline.head,
         publicationCommit: commit.toLowerCase(), exactDeltaSha256: loaded.plan.exactDeltaSha256,
@@ -1167,7 +1206,7 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     }
     const remote = (dependencies.pushAndVerify || defaultPushAndVerify)({ blogRepo, remoteName, commit: commit.toLowerCase() });
     if (remote.remoteVerifiedOid !== commit.toLowerCase() || !SHA_RE.test(remote.remoteIdentitySha256 || '')) fail('推送未返回已实时核验的远端身份和提交 OID');
-    const body = { contract: PUBLICATION_CONTRACT, version: VERSION, publicationId,
+    const body = { ...currentHeader(PUBLICATION_CONTRACT), publicationId,
         planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
         activationSha256: activation.receipt.activationSha256, commitSha256: commitReceipt.commitSha256,
         publicationCommit: commit.toLowerCase(), remoteName: remote.remoteName || remoteName,
@@ -1190,7 +1229,7 @@ function loadPublication(loadedPlan) {
     const review = loadReview(loadedPlan).receipt;
     const activation = loadActivation(loadedPlan).receipt;
     const commit = loadCommit(loadedPlan).receipt;
-    if (value.contract !== PUBLICATION_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
+    if (!protocols.hasValidHeader(value, PUBLICATION_CONTRACT) || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.remoteVerifiedOid !== value.publicationCommit
         || !GIT_OID_RE.test(value.publicationCommit || '') || !SHA_RE.test(value.remoteIdentitySha256 || '')
         || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256
@@ -1210,7 +1249,7 @@ function loadPublication(loadedPlan) {
 function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null, remoteName = 'origin' } = {}, dependencies = {}) {
     let loaded;
     try { loaded = loadPlan({ outputRoot, publicationId }); }
-    catch (error) { return { contract: STATUS_CONTRACT, version: VERSION, publicationId, phase: 'absent', complete: false,
+    catch (error) { return { ...protocols.recordHeader(STATUS_CONTRACT, STATUS_CONTRACT), publicationId, phase: 'absent', complete: false,
         blockers: [{ code: 'plan-missing-or-invalid', detail: error.message }] }; }
     const stages = {}; const blockers = [];
     const probe = (name, loader, missingCode) => {
@@ -1243,7 +1282,7 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
     const phase = complete ? `published-with-visual-${visual.status}` : !generationOk ? 'planned'
         : !reviewOk ? 'generated' : !activationOk ? 'reviewed' : !publicationOk ? 'activated'
             : !liveRemote ? 'awaiting-live-remote-verification' : 'awaiting-visual-disposition';
-    return { contract: STATUS_CONTRACT, version: VERSION, publicationId, phase, complete, planSha256: loaded.plan.planSha256,
+    return { ...protocols.recordHeader(STATUS_CONTRACT, STATUS_CONTRACT), publicationId, phase, complete, planSha256: loaded.plan.planSha256,
         publicationPlanSha256: loaded.plan.planSha256, rewritePlanSha256: loaded.plan.authorityProof.plan.planSha256,
         retainedPages: { status: 'retained-unchanged', count: loaded.plan.retainedPages.length,
             setSha256: loaded.plan.retainedPageSetSha256 }, visual, stages, blockers };

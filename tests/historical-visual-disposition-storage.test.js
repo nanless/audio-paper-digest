@@ -77,7 +77,9 @@ test('真实视觉处置入口短写失败不留下正式半文件，同命令�
 test('真实视觉处置入口保留旧有效凭证的时间、字节和 inode，拒绝不同请求', t => {
     const f = fixture(t);
     fs.mkdirSync(f.outputRoot);
-    const original = storedValue(f);
+    const { contract, schemaFingerprint, dispositionSha256, ...fields } = storedValue(f);
+    const historical = { contract: 'historical-direct-visual-disposition-v1', version: 1, ...fields };
+    const original = { ...historical, dispositionSha256: api.stableHash(historical) };
     writeValue(f.output, original);
     const before = fs.readFileSync(f.output);
     const identity = fs.statSync(f.output);
