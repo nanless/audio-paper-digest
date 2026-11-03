@@ -377,6 +377,7 @@ test('导入凭证自洽重签也不能替换暂存会议或任何来源声明',
         cases.push([`${kind} 来源凭证`, ledger => {
             const provenance = ledger.members[0].provenance[kind];
             if (kind === 'metadata' || kind === 'pdf') provenance.locator = 'https://example.invalid/wrong-source';
+            else if (Object.hasOwn(provenance, 'implementationSha256')) provenance.implementationSha256 = sha('错误提取器实现');
             else provenance.version = '错误提取器版本';
         }]);
     }

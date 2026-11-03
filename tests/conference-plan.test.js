@@ -39,7 +39,8 @@ test('计划拒绝混用标签字段，并核对格式与版本', () => {
     assert.throws(() => plan.normalizePlan({ ...valid(), version: 2 }), /包含未允许的字段/);
     assert.throws(() => plan.normalizePlan({ ...valid(), contract: 'unsupported-conference-run-plan' }), /不属于支持的组合/);
     assert.throws(() => plan.normalizePlan({ ...valid(), schemaFingerprint: '0'.repeat(64) }), /不属于支持的组合/);
-    assert.throws(() => plan.normalizePlan({ ...valid(), contract: 'conference-run-plan-v2', version: 2 }), /标签字段与格式版本不一致/);
+    const { schemaFingerprint: _currentFingerprint, ...body } = valid();
+    assert.throws(() => plan.normalizePlan({ ...body, contract: 'conference-run-plan-v2', version: 2 }), /标签字段与格式版本不一致/);
 });
 
 test('旧计划和凭证可按原字节读取，但不能创建另一份运行记录', t => {

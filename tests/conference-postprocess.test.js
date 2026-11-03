@@ -123,6 +123,8 @@ function bindFixtureSource(paper, details) {
     Object.assign(stage, { structuredArtifactsSha256: details.structuredArtifacts.payloadSha256,
         sourceBindingsSourceTextSha256: paper.sourceSha256 });
     paper.apiReaderAuthors = require('../scripts/lib/reader-author-parser.js').resolveVerifiedReaderAuthors(paper, details);
+    paper.analysisManifest.contracts.apiReaderAuthorIdentity = paper.apiReaderAuthors.identity.contract;
+    require('../scripts/lib/reader-identity-format').refreshAuthorFields(stage, paper.apiReaderAuthors, paper.apiReaderResources);
     stage.readerAuthorsSha256 = api.stableHash(paper.apiReaderAuthors);
     stage.readerAuthorIdentitySha256 = paper.apiReaderAuthors.identitySha256;
     paper.apiReaderResources.sourceTextSha256 = paper.sourceSha256;

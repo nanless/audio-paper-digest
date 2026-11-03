@@ -86,15 +86,17 @@ function buildExecution({ analysisRoot, executionId, record }) {
     const observationBinding = { sourceSnapshotSha256, observationSha256: 'd'.repeat(64) };
     const observationBindingSha256 = adapter.stableHash(observationBinding);
     const sourceBody = {
-        contract: adapter.SOURCE_CONTRACT, version: adapter.VERSION, paperId,
+        ...require('../scripts/lib/protocol-codec').recordHeader(adapter.SOURCE_CONTRACT, 'conference-analysis-source'), paperId,
         sourceSnapshotSha256, observationBindingSha256, planAuthorityBinding,
         sourceSnapshotBinding, observationBinding, sourceDetails: details
     };
     const source = { ...sourceBody, recordSha256: adapter.stableHash(sourceBody) };
     const sourceBytes = jsonBytes(source);
-    const analysisBytes = jsonBytes(record);
+    const { contract: _originalContract, version: _originalVersion, ...analysisBody } = record;
+    const analysisHeader = require('../scripts/lib/protocol-codec').recordHeader(adapter.ANALYSIS_CONTRACT, 'conference-analysis-canonical');
+    const analysisBytes = jsonBytes({ ...analysisHeader, ...analysisBody });
     const intentBody = {
-        contract: adapter.PREPARE_INTENT_CONTRACT, version: adapter.VERSION,
+        ...require('../scripts/lib/protocol-codec').recordHeader(adapter.PREPARE_INTENT_CONTRACT, 'conference-analysis-prepare-intent'),
         executionId, paperId, sourceSnapshotSha256, observationBindingSha256,
         planAuthorityBindingSha256: adapter.stableHash(planAuthorityBinding),
         sourceRecordSha256: source.recordSha256,
@@ -104,7 +106,7 @@ function buildExecution({ analysisRoot, executionId, record }) {
     const intent = { ...intentBody, intentSha256: adapter.stableHash(intentBody) };
     const intentBytes = jsonBytes(intent);
     const runBody = {
-        contract: adapter.RUN_CONTRACT, version: adapter.VERSION, executionId, paperId,
+        ...require('../scripts/lib/protocol-codec').recordHeader(adapter.RUN_CONTRACT, 'conference-analysis-execution'), executionId, paperId,
         conference: { id: 'icassp-2026', year: 2026 },
         createdAt: '2026-09-07T00:00:00.000Z',
         status: 'source_ready',
@@ -198,14 +200,14 @@ function fixture(t, options = {}) {
         pagePath: 'content/posts/index.md'
     };
     const receiptBody = {
-        contract: processApi.COMPLETION_CONTRACT, version: processApi.VERSION,
+        ...require('../scripts/lib/protocol-codec').recordHeader(processApi.COMPLETION_CONTRACT, 'conference-process-completion-receipt'),
         processId: PROCESS_ID, authority, planReceiptSha256: 'c'.repeat(64),
         items: [{ paperId: PAPER_ID, analysisRunId: EXECUTION_ID, sourceProof, analysisProof, pageProof }],
         aggregate
     };
     const receipt = { ...receiptBody, receiptSha256: processApi.stableHash(receiptBody) };
     const state = {
-        contract: processApi.CONTRACT, version: processApi.VERSION, generation: 1,
+        ...require('../scripts/lib/protocol-codec').recordHeader(processApi.CONTRACT, 'conference-process'), generation: 1,
         processId: PROCESS_ID, createdAt: '2026-09-07T00:00:00.000Z', updatedAt: '2026-09-07T00:30:00.000Z',
         authority, status: 'complete',
         items: {
@@ -446,8 +448,7 @@ test('分析文件内容发生变化时，更新会在写入前停止', async t 
     const tamperedSha256 = sha256(tamperedBytes);
     const run = JSON.parse(fs.readFileSync(fx.runFile, 'utf8'));
     const receiptBody = {
-        contract: 'conference-analysis-completion-receipt-v1',
-        version: adapter.VERSION,
+        ...require('../scripts/lib/protocol-codec').recordHeader('conference-analysis-completion-receipt', 'conference-analysis-completion-receipt'),
         executionId: fx.executionId,
         paperId: fx.paperId,
         sourceSnapshotSha256: run.sourceSnapshotSha256,

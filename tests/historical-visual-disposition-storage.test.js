@@ -15,7 +15,7 @@ function fixture(t) {
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const emptySha = planner.stableHash([]);
     const body = {
-        contract: planner.CONTRACT, version: planner.VERSION,
+        ...require('../scripts/lib/protocol-codec').recordHeader(planner.CONTRACT, 'historical-direct-rewrite-plan'),
         catalogFileSha256: 'a'.repeat(64),
         inventory: { ledgerSha256: 'b'.repeat(64), pageSetSha256: 'c'.repeat(64) },
         conferenceProjectionArtifactSha256: 'd'.repeat(64),

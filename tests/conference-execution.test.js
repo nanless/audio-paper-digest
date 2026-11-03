@@ -166,7 +166,7 @@ test('执行模板拒绝混用词表字段，并核对状态的格式版本', t 
     }
     assert.throws(() => execution.assertConferenceExecution({ ...state, version: 2 }), /unknown or missing fields/);
     assert.throws(() => execution.assertConferenceExecution({ ...state, contract: 'unsupported-conference-execution' }), /无法识别/);
-    assert.throws(() => execution.assertConferenceExecution({ ...state, schemaFingerprint: '0'.repeat(64) }), /format header differs/);
+    assert.throws(() => execution.assertConferenceExecution({ ...state, schemaFingerprint: '0'.repeat(64) }), /未登记该标签与结构指纹的组合/);
     const mixed = { ...state, ...require('../scripts/lib/protocol-codec').recordHeader(
         require('../scripts/lib/protocol-codec').historicalContract('conference-execution', 'taxonomy'), 'conference-execution') };
     delete mixed.schemaFingerprint;

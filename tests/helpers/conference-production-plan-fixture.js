@@ -80,10 +80,13 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     // 原源码实例保留原文件名与原词表版本；当前默认样本使用新名称。
     const codec = require('../../scripts/lib/protocol-codec');
     const tagField = codec.format(planApi.PLAN_CONTRACT, 'conference-run-plan') === 'taxonomy' ? 'taxonomy' : 'tagMetadata';
-    const tagCatalogVersion = tagCatalogBytes ? JSON.parse(tagCatalogBytes).version
-        : tagField === 'taxonomy' ? 'taxonomy-v1' : 'paper-tag-catalog-v2';
+    const originalCatalog = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d.json';
+    const catalogBytes = tagCatalogBytes || (tagField === 'taxonomy'
+        ? fs.readFileSync(path.resolve(__dirname, '../../config/tag-catalog-history', originalCatalog))
+        : Buffer.from(JSON.stringify({ version: 'paper-tag-catalog-v2' }) + '\n'));
+    const tagCatalogVersion = require('../../scripts/lib/tag-catalog').tagCatalogIdentity(JSON.parse(catalogBytes));
     const tagCatalogPath = path.join(root, tagField === 'taxonomy' ? 'taxonomy.json' : 'tag-catalog.json');
-    fs.writeFileSync(tagCatalogPath, tagCatalogBytes || `${JSON.stringify({ version: tagCatalogVersion })}\n`, { mode: 0o600 });
+    fs.writeFileSync(tagCatalogPath, catalogBytes, { mode: 0o600 });
     files.tagCatalogFile = tagCatalogPath;
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     // 原源码实例按其旧格式生成样本；不修改新版对象的字段，也不重新计算其 SHA 来冒充旧记录。

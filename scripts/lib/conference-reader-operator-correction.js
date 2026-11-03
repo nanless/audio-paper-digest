@@ -276,26 +276,31 @@ function historicalNormalAdmission(root, member, item, declaration, savedBefore 
                 && !/PROMPT_CHANGE/u.test(failure.code))) fail('历史执行只有计数、停止或配置错误，没有正常Reader失败');
         if (loaded.recoveryWindow) {
             const ledger = read(path.join(loaded.directory, 'reader-grant-budget.json')).value;
+            const budget = require('./conference-reader-recovery-window');
+            const { hasValidHeader } = require('./protocol-codec');
             const authority = loaded.recoveryWindow.authority;
             const expected = { grantId: authority.grantId, grantSha256: authority.grantSha256,
                 processId: authority.processId, paperId: loaded.run.paperId, executionId: loaded.run.executionId,
                 sourceSha256: member.sourceSha256, sourceSnapshotSha256: member.sourceSnapshotSha256,
                 parentAnalysisFileSha256: authority.parentAnalysisFileSha256, failedAnalysisFileSha256: authority.failedAnalysisFileSha256 };
-            if (ledger.contract !== 'conference-granted-reader-budget-v1' || !isDeepStrictEqual(ledger.binding, expected)
+            if (!hasValidHeader(ledger, budget.CONTRACT) || !isDeepStrictEqual(ledger.binding, expected)
                 || !Array.isArray(ledger.requests) || ledger.requests.some(row => row.status === 'pending')) fail('历史窗口没有完整已结算的原Reader账本');
+            const requestHeader = budget.materialHeader(ledger, 'request');
+            const responseHeader = budget.materialHeader(ledger, 'response');
             const contents = ledger.requests.filter(row => row.status === 'content');
             if (!contents.length) fail('历史窗口没有实际Reader内容响应');
             for (const row of contents) {
                 const request = read(path.join(loaded.directory, `reader-grant-request-${row.id}.json`));
                 const response = read(path.join(loaded.directory, `reader-grant-response-${row.id}.json`));
-                if (!isDeepStrictEqual(request.value, { contract: ledger.contract, binding: expected,
+                if (!isDeepStrictEqual(request.value, { ...requestHeader, binding: expected,
                     logicalIdentitySha256: ledger.logicalIdentitySha256, id: row.id, ordinal: row.ordinal,
                     kind: row.kind, contentAttempt: row.contentAttempt, identitySha256: row.identitySha256, startedAt: row.startedAt })
                     || response.sha256 !== row.responseFileSha256 || row.responseFile !== path.basename(response.file)
-                    || response.value.contract !== ledger.contract || response.value.requestId !== row.id
-                    || response.value.identitySha256 !== row.identitySha256 || !response.value.rawResponse
-                    || sha(response.value.rawResponse) !== row.outputTextSha256
-                    || response.value.outputTextSha256 !== row.outputTextSha256) fail('历史Reader原请求响应与真实账本不一致');
+                    || !isDeepStrictEqual(response.value, { ...responseHeader, requestId: row.id,
+                        identitySha256: row.identitySha256, outputTextSha256: row.outputTextSha256,
+                        rawResponse: response.value.rawResponse })
+                    || typeof response.value.rawResponse !== 'string' || !response.value.rawResponse
+                    || sha(response.value.rawResponse) !== row.outputTextSha256) fail('历史Reader原请求响应与真实账本不一致');
             }
             if (loaded.run.executionId === current.run.executionId && (contents.length < 2
                 || candidate.payload.attempts !== contents.length

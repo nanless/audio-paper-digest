@@ -53,7 +53,7 @@ test('追加许可只由完整原失败集显式登记，真实品牌冷恢复�
     assert.equal(member.parentAnalysisFileSha256, f.parent.analysisFileSha256);
     assert.equal(member.failedAnalysisFileSha256, f.failed.analysisFileSha256);
     assert.throws(() => grants.readRecoveryGrantMember(handle, f.paperId + '-other'), /不在/);
-    const record = { contract: 'conference-reader-recovery-window-v1', version: 1,
+    const record = { ...member.windowFormat,
         grantId: member.grantId, grantSha256: member.grantSha256, paperId: f.paperId,
         originalMemberPaperId: f.paperId, executionId: member.expectedExecutionId,
         failedExecutionId: f.failedExecutionId, failedAnalysisFileSha256: member.failedAnalysisFileSha256,

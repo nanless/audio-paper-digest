@@ -228,4 +228,4 @@ function settleReaderResponse(lease, outcome, raw) {
     saveLedger(state, ledger, previous); leases.delete(lease);
 }
 module.exports = { CONTRACT, withConferenceReaderGrant, withConferenceReaderGrantReadOnly, getCurrentReaderWindow, identityFields,
-    reserveReaderResponse, settleReaderResponse };
+    reserveReaderResponse, settleReaderResponse, materialHeader };
