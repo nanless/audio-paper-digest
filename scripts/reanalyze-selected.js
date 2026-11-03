@@ -133,6 +133,11 @@ async function reanalyzeSelected(ids, options = {}) {
         return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
     };
     if (options.resolvedReaderCandidates !== undefined && (!options.resolvedReaderCandidates || typeof options.resolvedReaderCandidates !== 'object' || Array.isArray(options.resolvedReaderCandidates) || Object.keys(options.resolvedReaderCandidates).some(id=>!idSet.has(id)))) throw new Error('resolvedReaderCandidates 必须只包含明确选定论文');
+    const savedFacts = require('./lib/saved-fact-feedback');
+    const assertOrdinaryReaderUpstream = paper => {
+        if (!savedFacts.completedReaderUpstream(paper, dailySourcePlan))
+            throw new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
+    };
     const readerFeedbacks = new Map();
     if (options.readerFeedbackFiles !== undefined && !Array.isArray(options.readerFeedbackFiles))
         throw new Error('readerFeedbackFiles 必须为反馈路径数组');
@@ -144,6 +149,9 @@ async function reanalyzeSelected(ids, options = {}) {
             && !options.readerInputSnapshotRecovery?.[feedback.paperId])) throw new Error('Reader反馈须保留已完成主分析');
         if (fullStageOptions && paper.fullStageReanalysis?.runId !== fullStageOptions.runId)
             throw new Error('独立Reader纠错不能发起全新主分析');
+        if (!savedFacts.readerOnlyFeedback(feedback))
+            throw new Error('独立Reader纠错只接受Reader反馈');
+        if (!fullStageOptions) assertOrdinaryReaderUpstream(paper);
         factReview.validateFeedback(feedback, dailySourcePlan, paper);
         readerFeedbacks.set(feedback.paperId, { file, sha256: fileSha(file) });
     }
@@ -203,6 +211,7 @@ async function reanalyzeSelected(ids, options = {}) {
             if (idSet.has(normalizedId(envelope.identity?.paperId))
                 && !options.coreSummaryDiagnosticIds?.[normalizedId(envelope.identity?.paperId)]
                 && !coreFeedbacks.has(normalizedId(envelope.identity?.paperId))
+                && !readerFeedbacks.has(normalizedId(envelope.identity?.paperId))
                 && readerRepair.retireFailedCandidate(dailySourcePlan.readerAttemptsDir, envelope.identity)) {
                 retiredReaderCandidates += 1;
             }
@@ -231,7 +240,7 @@ async function reanalyzeSelected(ids, options = {}) {
         const aid = normalizedId(p);
         if (idSet.has(aid)) {
             const cleanPaper = dailyFreshSources.prepareDailyPaper(
-                fullStageOptions || options.resolvedReaderCandidates?.[aid] || options.coreSummaryDiagnosticIds?.[aid] || coreFeedbacks.has(aid) ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
+                fullStageOptions || options.resolvedReaderCandidates?.[aid] || options.coreSummaryDiagnosticIds?.[aid] || coreFeedbacks.has(aid) || readerFeedbacks.has(aid) ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
             );
             toReanalyze.push(cleanPaper);
         }
@@ -310,7 +319,8 @@ async function reanalyzeSelected(ids, options = {}) {
                         options.coreSummaryDiagnosticIds[normalizedId(latest)]));
                 }
             }
-            readReaderLocked(latest);
+            const lockedReader = readReaderLocked(latest);
+            if (lockedReader && !fullStageOptions) assertOrdinaryReaderUpstream(latest);
             if (fullStageOptions) {
                 const feedback = feedbacks.get(normalizedId(latest));
                 const original = latest.fullStageReanalysis?.runId === fullStageOptions.runId
@@ -359,6 +369,14 @@ async function reanalyzeSelected(ids, options = {}) {
             const bound = boundFeedbacks.get(normalizedId(paper));
             const core = readCoreLocked(paper);
             const reader = readReaderLocked(paper);
+            if (reader && !fullStageOptions) {
+                return dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
+                    analyze: (target, sourceOptions) => savedFacts.analyzeWithRecoveredFeedback(
+                        target, dailySourcePlan,
+                        () => { throw new Error('独立Reader纠错不进入完整分析'); },
+                        reader.feedback, { ...sourceOptions, naturalResourceProse: options.naturalResourceProse === true })
+                })(paper);
+            }
             const execute = () => {
                 if (core) {
                     // 原包与未完成义务先由公共保存器持久化；旧成功正文不能代替本次核心纠错。
