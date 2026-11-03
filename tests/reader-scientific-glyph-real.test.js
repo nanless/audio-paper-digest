@@ -17,7 +17,7 @@ if(privateRoot){
  fs.copyFileSync(path.join(privateRoot,'scripts/reader_sealed_pdf_quote_evidence.py'),privatePy);
  fs.writeFileSync(privateWrapper,`#!/bin/bash\nexport PYTHONPATH=${JSON.stringify(path.join(ROOT,'scripts'))}\nexec bash ${JSON.stringify(path.join(ROOT,'scripts/python-runtime.sh'))} "$@"\n`,{mode:0o600});
 }
-const scripts=['reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'].map(p=>path.join(ROOT,'scripts',p));
+const scripts=['reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_column_units.py','reader_pdf_column_unit_projection.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'].map(p=>path.join(ROOT,'scripts',p));
 require(path.join(ROOT,'tests/helpers/isolated-tmp-write-guard.cjs')).installTmpOnlyWriteGuard(temp,{readOnlyPythonScripts:[...scripts,...(privatePy?[privatePy]:[])]});
 process.env.TMPDIR=temp;process.env.TMP=temp;process.env.TEMP=temp;
 for(const[name,methods]of [['http',['request','get']],['https',['request','get']],['net',['connect','createConnection']],['tls',['connect']]])

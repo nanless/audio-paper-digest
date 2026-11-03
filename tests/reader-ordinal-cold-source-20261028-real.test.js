@@ -11,7 +11,7 @@ fs.mkdirSync(path.join(workspace,'.venv/bin'),{recursive:true});fs.writeFileSync
 process.env.NODE_PATH=process.env.TEST_ORDINAL_NODE_MODULES||path.join(ROOT,'node_modules');require('node:module').Module._initPaths();
 const originalRefs=fixture.cases.flatMap(c=>[c.completion,...Object.values(c.sourceFiles),...c.files]).filter(r=>fs.existsSync(r.originalPath)).map(r=>({file:r.originalPath,sha256:r.sha256}));
 for(const r of originalRefs)assert.equal(sha(fs.readFileSync(r.file)),r.sha256);
-const py=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
+const py=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_pdf_column_unit_projection.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
 require(path.join(ROOT,'tests/helpers/isolated-tmp-write-guard.cjs')).installTmpOnlyWriteGuard(workspace,{readOnlyPythonScripts:py.map(n=>path.join(workspace,'scripts',n))});
 Object.assign(process.env,{TMPDIR:workspace,TMP:workspace,TEMP:workspace,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(workspace,'pycache')});
 const env=require(path.join(workspace,'scripts/env-loader')),model=fixture.cases[0].paper.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations[0].identity.model;

@@ -16,6 +16,7 @@ private actor ImageTransportFixture {
  static func page(_ body:String)->String{"<html><head><link rel='canonical' href='https://nanless.github.io/audio-paper-digest-blog/ci-images/'/></head><body><div id='article-body' class='post-content'><p>Controlled normal transport body.</p>"+body+"</div></body></html>"}
  func data(_ url:URL,_ limit:Int) async throws->Data {
   addresses.append(url.absoluteString)
+  if url.path.hasSuffix("/client/index.json"){throw LibraryService.ServiceError.httpStatus(404)}
   if url.path.hasSuffix("/index.json"){return manifest}
   if url.path.hasSuffix(shardPath){return shard}
   if url.host=="arxiv.org"{imageStarted=true;imageLimits.append(limit);if failedImages.contains(url.lastPathComponent){throw URLError(.notConnectedToInternet)};if blockImages{try await Task.sleep(nanoseconds:30_000_000_000)};if var next=queued[url.absoluteString],!next.isEmpty{let bytes=next.removeFirst();queued[url.absoluteString]=next;return bytes};return overrides[url.absoluteString] ?? image}

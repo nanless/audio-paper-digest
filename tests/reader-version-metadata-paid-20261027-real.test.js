@@ -24,7 +24,7 @@ assert.equal(sha(originalRepairBytes),originalRepairSha);
 const temp=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'version-metadata-cold-private-'));
 // Install before the first project import or compiled private source.
 const guard=require('./helpers/isolated-tmp-write-guard.cjs').installTmpOnlyWriteGuard(temp,{readOnlyPythonScripts:[
- 'reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py',
+ 'reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_pdf_column_unit_projection.py','reader_authenticated_pdf_hierarchical_table.py',
  'reader_authenticated_pdf_footnote_evidence.py'].map(name=>path.join(ROOT,'scripts',name))});
 Object.assign(process.env,{TMPDIR:temp,TMP:temp,TEMP:temp,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(temp,'pycache')});
 const noNetwork=()=>{throw Object.assign(Error('TEST_NETWORK_FORBIDDEN'),{code:'TEST_NETWORK_FORBIDDEN'});};

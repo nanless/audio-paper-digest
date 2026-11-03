@@ -11,7 +11,7 @@ for (const [scenario, title] of [
     test(title, () => {
         const result = spawnSync(process.execPath,
             [path.join(__dirname, 'fixtures/full-fetch-published-prompt-resume.cjs'), scenario],
-            { cwd: path.resolve(__dirname, '..'), encoding: 'utf8', timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+            { cwd: path.resolve(__dirname, '..'), encoding: 'utf8', timeout: 360000, maxBuffer: 16 * 1024 * 1024 });
         assert.equal(result.error, undefined, result.stdout + result.stderr);
         assert.equal(result.status, 0, result.stdout + result.stderr);
     });

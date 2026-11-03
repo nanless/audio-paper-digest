@@ -32,7 +32,7 @@ const originalCanonicalParent=path.join(project,'data/runtime/daily-fresh-source
 const canonicalParent=fs.existsSync(originalCanonicalParent)?originalCanonicalParent:path.join(project,'tests/fixtures/reader-transport-continuation-2610-34220.json.gz');
 const canonicalBefore=fs.readFileSync(canonicalParent);
 const canonicalUsage=path.join(project,'data/runtime/llm-usage'),canonicalUsageMtime=fs.existsSync(canonicalUsage)?fs.statSync(canonicalUsage).mtimeMs:null;
-const readOnlyPythonNames=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
+const readOnlyPythonNames=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_pdf_quote_projection.py','reader_sealed_pdf_column_units.py','reader_pdf_column_unit_projection.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
 for(const name of readOnlyPythonNames)assert.equal(sha(fs.readFileSync(path.join(workspace,'scripts',name))),sha(fs.readFileSync(path.join(project,'scripts',name))));
 const writeGuard=require(guardPath).installTmpOnlyWriteGuard(workspace,{allowNormalizationImmutableLinks:true,readOnlyPythonScripts:readOnlyPythonNames.map(name=>path.join(workspace,'scripts',name))});
 Object.assign(process.env,{TMPDIR:workspace,TMP:workspace,TEMP:workspace,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(workspace,'pycache')});

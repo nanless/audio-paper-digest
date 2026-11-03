@@ -13,6 +13,7 @@ private actor RepeatTransport {
   manifest=try JSONSerialization.data(withJSONObject:["contract":"paper-search-index-manifest-v1","recordCount":2,"totalBytes":shard.count,"shards":[["url":shardName,"sha256":sha,"bytes":shard.count,"recordCount":2]]],options:.sortedKeys)
  }
  func read(_ url:URL,_ limit:Int)throws->Data {
+  if url.path.hasSuffix("/client/index.json"){throw LibraryService.ServiceError.httpStatus(404)}
   if url.path.hasSuffix("/index.json"){return manifest};if url.path.hasSuffix(shardName){return shard}
   if url.host=="arxiv.org"{requests+=1;return image}
   return Data(("<html><body><div id='article-body' class='post-content'><p>Five actual positions</p>"+Array(repeating:"<figure><img src='https://arxiv.org/html/2501.00001v1/shared.png' alt='Repeated actual image'/><figcaption>Same original image at a separate position.</figcaption></figure>",count:5).joined()+"</div></body></html>").utf8)
