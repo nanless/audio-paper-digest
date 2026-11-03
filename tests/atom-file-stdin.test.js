@@ -5,10 +5,11 @@ const fs = require('node:fs');
 const child = require('node:child_process');
 const { parseArxivXML } = require('../scripts/fetch-papers');
 const { fetchCategoryPrefix, fetchDailyArxivCategory } = require('../scripts/lib/daily-arxiv-prefix-source');
+const { recordHeader } = require('../scripts/lib/protocol-codec');
 const { isDailyXmlOperationalError, runDailyXmlPython } = require('../scripts/lib/daily-xml-file-stdin');
 const entry = (index, summary) => `<entry><id>https://arxiv.org/abs/2610.${String(index).padStart(5, '0')}v1</id><title>Audio &amp; speech ${index}</title><summary>${summary}</summary><published>2026-10-23T00:00:00Z</published><author><name>Author</name></author><category term="cs.AI"/></entry>`;
 const feed = entries => `<feed xmlns="http://www.w3.org/2005/Atom" xmlns:o="http://a9.com/-/spec/opensearch/1.1/"><o:totalResults>${entries.length}</o:totalResults><o:startIndex>0</o:startIndex><o:itemsPerPage>100</o:itemsPerPage>${entries.join('')}</feed>`;
-const boundary = { since: '2026-10-23T00:00:00.000Z', until: '2026-10-24T01:40:55.209Z', identitySha256: 'a'.repeat(64) };
+const boundary = { ...recordHeader('daily-fetch-boundary', 'daily-fetch-boundary'), since: '2026-10-23T00:00:00.000Z', until: '2026-10-24T01:40:55.209Z', identitySha256: 'a'.repeat(64) };
 
 test('Atom large input/output uses private finite fd and preserves full parser output', t => {
     const original = child.spawnSync, descriptors = [];
