@@ -96,6 +96,18 @@ class ReviewSourceFigureSemanticsTest(unittest.TestCase):
         self.assertEqual(pub._review_source_figure_context_quotes('Fig. 2 reports ' + 'x' * 1200, [original]), [])
         self.assertEqual(pub._review_source_figure_context_quotes(source, [{'label': 'Unnumbered', 'caption': ''}]), [])
 
+    def test_distinct_pipeline_figures_keep_separate_source_quotes(self):
+        source = ('Figure 2: PianoTalk data recipe.\n'
+                  'Figure 2 shows how the PianoTalk corpus is constructed.\n'
+                  'Our construction pipeline is shown in Figure 4.\n'
+                  'Figure 4: Schematic construction of PianoBench.\n')
+        figures = [{'label': 'Figure 2:', 'caption': 'Figure 2: PianoTalk data recipe.'},
+                   {'label': 'Figure 4:', 'caption': 'Figure 4: Schematic construction of PianoBench.'}]
+        self.assertEqual(pub._review_source_figure_context_quotes(source, figures), [
+            'Figure 2 shows how the PianoTalk corpus is constructed.',
+            'Our construction pipeline is shown in Figure 4.'])
+        self.assertNotIn('Figure 2 provides an overview of the pipeline.', source)
+
     def test_real_three_numbering_mappings_and_author_caption_get_same_note(self):
         expected = [([1, 3, 4], ['Figure 1:', 'Figure 2:', 'Figure 3:']),
                     ([1, 2, 4], ['Figure 1:', 'Figure 3:', 'Figure 5:']),
