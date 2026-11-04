@@ -93,6 +93,7 @@
 | 分类词表的设计背景 | [标签设计](tag-system-design.md) |
 | 耗时测量与优化范围 | [性能说明](daily-performance.md) |
 | 兼容保留与文档维护原则 | [维护约定](repository-maintenance-review.md) |
+| 清理旧入口、迁移格式与恢复生产批次 | [维护可续跑的生产流程](../skills/stateful-workflow-maintenance/SKILL.md) |
 
 ## 阅读历史评审记录
 
@@ -101,6 +102,7 @@
 - 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
+- 两次日更的恢复、上线和仓库清理：[2026 年 11 月 2 日、3 日复盘](2026-11-daily-maintenance-retrospective.md)。
 
 写作和文档维护直接使用[项目写作约定](writing-guide.md)、[技术写作方法](../skills/clear-technical-writing/SKILL.md)与[维护约定](repository-maintenance-review.md)。已经结束的逐文件整理报告保留在 Git 历史中，避免过时的路径、行号和检查计数混入现行指南。
 

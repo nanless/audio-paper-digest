@@ -14,6 +14,8 @@
 4. 按改动影响安排检查。只改说明文字时，核对命令、链接、事实与格式，不启动论文重分析或全批重跑。实现改动的定向检查通过、版本稳定后，运行一次完整 `npm run verify`；分套件或分片通过不能代替完整汇总。
 5. 交叉审查事实、来源、预算和发布边界，再核对 Markdown、链接与文档命令，使用具体中文提交并及时推送。
 
+项目最终只保留 `main`。审阅可以在不写入正式运行数据的隔离环境进行。已有临时分支时，先确认有效修改已经合入 `main`，再清理分支，并核对远端提交。暂存时按文件区分本轮改动与工作区里已有的修改。
+
 完整语法检查排除客户端固定的构建、SDK 缓存和验收副本目录（两端 `.build`、`.qa`，以及 Android 的 Gradle/CMake 输出）。这些目录中的历史项目副本不属于当前正式源码；客户端正式资源、构建脚本、测试，以及其他位置同名的 `build` 或 `.qa` 目录仍正常检查。排除路径由 `verify-project.js` 明确登记，不随任意 `.gitignore` 规则变化。
 
 文档与论文讲解按[写作约定](writing-guide.md)组织；参数、协议名和强制条件以实现及权威文档为准。没有新证据或新改动时，不重复运行刚通过的相同子集。
@@ -213,9 +215,11 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run blog:push -- --date DATE --dry-run`：只列出审查凭证允许的精确文件清单，不 commit/push。
 - `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-paper-digest-blog`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
 
-  `--wait` 默认最多等待 120 秒，默认每 10000 毫秒轮询；可用 `--wait-seconds N` 与 `--poll-interval-ms N` 调整。无 gh、部署仍在进行或部署证据不可得时，默认不能完成验收。`--json` 在等待时输出 JSONL（部署快照行、summary、最终结果）；保存文件含 schemaVersion、createdAt、partial、deploy、generationManifestSha256 和 publicationOid。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
+  `--wait` 默认最多等待 120 秒，默认每 10000 毫秒轮询；可用 `--wait-seconds N` 与 `--poll-interval-ms N` 调整。无 gh、部署仍在进行或部署证据不可得时，默认不能完成验收。`--json` 在等待时输出 JSONL（部署快照行、summary、最终结果）。现用保存文件使用 `contract` 和 `schemaFingerprint` 声明格式，并记录 `createdAt`、`partial`、`deploy`、`generationManifestSha256` 和 `publicationOid`。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
 
   页面检查仅要求 HTTP 200、最终 URL 去掉查询参数、片段和末尾斜杠后与期望地址一致、标题包含站点标记，且汇总标题含日期、单篇标题去掉站点标记后长度大于 4。它不核对准确论文标题、H1、canonical 或完整正文；这些须在最终全页核验中另查，不能将该命令通过解释为全部内容正确。
+
+  核对完整标题时，用结果中的 `file` 找到发布提交里的对应页面文件，读取文件开头声明的 `title`，再按 Hugo 的页面标题规则与记录的网页 `<title>` 比对。汇总与单篇都要覆盖。页面内主标题、规范网址标签或正文需要核验时，从实际网页按各自规则检查。两次日更的标题补验见[复盘](2026-11-daily-maintenance-retrospective.md#两次发布留下了什么证据)。
 
   默认要求完整页面与部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时标记 partial 并返回非零。`--allow-partial` 只放宽页面/抽样 partial 的退出判断；`--allow-degraded` 只放宽部署不可得或进行中的退出判断，不降低页面与凭证要求，也不把诊断记录升级为完整验收。
 

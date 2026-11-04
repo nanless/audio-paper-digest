@@ -90,6 +90,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 | Classification-vocabulary design | [Tag design](tag-system-design.md) |
 | Timing measurements and optimization scope | [Performance](daily-performance.md) |
 | Compatibility retention and documentation maintenance | [Maintenance principles](repository-maintenance-review.md) |
+| Retire entry points, migrate formats, and recover production batches | [Maintaining resumable production workflows](../skills/stateful-workflow-maintenance/SKILL.md) |
 
 ## Read historical review records
 
@@ -98,6 +99,7 @@ These records explain the problems, changes, and actual verification at the time
 - Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).
+- Digest recovery, deployment, and repository cleanup: [November 2–3, 2026 retrospective](2026-11-daily-maintenance-retrospective.md).
 
 For current writing and documentation maintenance, use the [project writing guide](writing-guide.md), [technical writing methods](../skills/clear-technical-writing/SKILL.md), and [maintenance principles](repository-maintenance-review.md). Completed file-by-file editing reports remain in Git history so their old paths, line numbers, and test counts do not become current instructions.
 

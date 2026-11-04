@@ -377,6 +377,7 @@ npm run digest:status -- --date YYYY-MM-DD
 ## 修改与验证
 
 - 文件编辑使用可恢复方式，保留用户无关改动；禁止未授权 `git reset --hard`、强推或批量删除。
+- 仓库最终只保留 `main`。已有临时分支须先核对有效改动已合入 `main`，再按[维护指南](docs/maintenance.md#一次修改怎样完成)清理并核对远端。
 - 提示词文件的第一个围栏代码块是 `loadPrompt()` 实际读取的内容；修改后检查占位符、解析器、SHA 和阶段指纹。工作树只保留当前登记的模板；旧记录的提示词由 Git blob、原路径和原 SHA 受控只读核验，不修改旧声明或补签结果。
 - 新 LLM 调用复用公共路由/请求封装；新分析入口复用 `analysis-engine.js`；新路径进入集中配置。
 - CI 运行 `npm test`、`npm run validate:data -- --allow-empty`、三流程及旧记录兼容 JS/Python 检查及全仓 shell 语法检查。 普通 push 不触发远端 CI；稳定的一轮修改通过定向检查与交叉审查后主动运行一次，PR 仍自动检查。保留完整覆盖，按实际最终提交核验全部检查，见[维护指南](docs/maintenance.md#什么时候运行远端-ci)。
