@@ -446,7 +446,7 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     # caption equality after these two exact projections counts.
                     wrapped = re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '', block[4])
                     wrapped = _pdf_caption_text(wrapped)
-                    wrapped = re.sub(r'^Fig\.\s+(\d+)\.\s*', r'Figure \1: ', wrapped, flags=re.I)
+                    wrapped = re.sub(r'^(?:Fig\.|Figure)\s+(\d+)\.\s*', r'Figure \1: ', wrapped, flags=re.I)
                     if wrapped == displayed_caption:
                         matches.append((page.number, block[4]))
         need(len(matches) == 1 and numbers == [matches[0][0] + 1],
