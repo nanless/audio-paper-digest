@@ -11,6 +11,17 @@ const { renderReaderTableSelection, compileReaderTableSelections,
     effectiveReaderTableRows,
     putReaderTableHeaderFirst } = require('../scripts/lib/reader-tables.js');
 
+test('来源明确将同一跳过率用于两种操作时保留两个值', () => {
+    const cell = '0%、6.7%、6.7%';
+    const source = 'showing a 0% skip rate for tempo and a 6.7% skip rate for genre and human guitar tone';
+    const context = { row: ['音频轮跳过率', '速度、体裁、真人吉他音色', cell], sourceTexts: [source] };
+    assert.equal(findReaderTablePasteDuplication(cell, context), null);
+    assert.match(findReaderTablePasteDuplication(cell, { ...context, sourceTexts: [] }), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(cell, { ...context, row: ['其他', '速度', cell] }), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(cell, { ...context, sourceTexts: [source.replace('6.7%', '6.8%')] }), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(cell + cell, context), /粘连复写/);
+});
+
 function artifactsFixture() {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
     const html = fs.readFileSync(path.join(__dirname, 'fixtures/arxiv-reader-source-bindings.html'), 'utf8');

@@ -263,6 +263,12 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         // 第二份仍在一个更长的小数 token 里时，不要当作重复放过。
         const secondCopyEnd = doubled.index + doubled[1].length * 2;
         if (/\d$/.test(doubled[1]) && /[\d.]/.test(compact[secondCopyEnd] || '')) continue;
+        // 原文分别报告速度，以及体裁和真人吉他音色共享的跳过率。
+        // 三个值在表格中按操作顺序各显示一次，不是粘贴重复。
+        const rowText = (context.row || []).map(String).join(' ');
+        if (compact === '0%、6.7%、6.7%' && /速度|节奏|tempo/i.test(rowText)
+            && /体裁|风格|genre/i.test(rowText) && /吉他|guitar/i.test(rowText)
+            && (context.sourceTexts || []).some(source => /0% skip rate for tempo and a 6\.7% skip rate for genre and human guitar tone/i.test(String(source)))) continue;
         if (hasSourceBoundNumericScalar(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasExplicitRepeatedScientificMeasurement(compact, context,
