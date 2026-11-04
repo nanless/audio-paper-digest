@@ -195,3 +195,21 @@ describe('refresh-api-reader 批量命令行', () => {
         assert.strictEqual(canRepairScoringBinding(paper), false);
     });
 });
+
+describe('逐篇审查反馈批量刷新', () => {
+    it('要求反馈与指定论文一一对应，并拒绝混用', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-feedback-'));
+        const file = path.join(dir, 'feedback.json');
+        try {
+            fs.writeFileSync(file, JSON.stringify({ '2611.04122': '核实表格', '2611.05124': '核实图片' }));
+            const options = parseRefreshCliArgs(['--feedback-file', file, '2611.04122', '2611.05124']);
+            assert.equal(options.reviewFeedbackById['2611.04122'], '核实表格');
+            assert.equal(options.reviewFeedbackById['2611.05124'], '核实图片');
+            assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '2611.04122']), /恰好覆盖/);
+            assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '--feedback', '另一条', '2611.04122']), /不能混用/);
+            assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '--figures-only', '2611.04122']), /完整读者文章/);
+            fs.writeFileSync(file, JSON.stringify({ '2611.04122': '  ' }));
+            assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '2611.04122']), /非空文字/);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+});

@@ -59,6 +59,8 @@ function parseRefreshCliArgs(args) {
         figuresOnly: false,
         surfaceBindingsOnly: false,
         reviewFeedback: '',
+        reviewFeedbackFile: '',
+        reviewFeedbackById: null,
         all: false,
         date: null,
         concurrency: Config.ANALYSIS_CONFIG?.apiReaderConcurrency ?? 5,
@@ -77,12 +79,13 @@ function parseRefreshCliArgs(args) {
         else if (value === '--figures-only') options.figuresOnly = true;
         else if (value === '--surface-bindings-only') options.surfaceBindingsOnly = true;
         else if (value === '--all') options.all = true;
-        else if (value === '--date' || value === '--concurrency' || value === '--rounds' || value === '--feedback') {
+        else if (value === '--date' || value === '--concurrency' || value === '--rounds' || value === '--feedback' || value === '--feedback-file') {
             const next = args[index + 1];
             if (!next || next.startsWith('--')) throw new Error(`参数 ${value} 缺少对应的值。`);
             index += 1;
             if (value === '--date') options.date = next;
             else if (value === '--feedback') options.reviewFeedback = next.trim();
+            else if (value === '--feedback-file') options.reviewFeedbackFile = next;
             else {
                 if (!/^\d+$/.test(next)) throw new Error(`${value} 的值必须是整数。`);
                 options[value === '--rounds' ? 'maxRounds' : 'concurrency'] = Number.parseInt(next, 10);
@@ -136,6 +139,24 @@ function parseRefreshCliArgs(args) {
         if (options.reviewFeedback.length > 4000) {
             throw new Error('--feedback 的内容不能超过 4000 个字符。');
         }
+    }
+    if (options.reviewFeedbackFile) {
+        if (options.reviewFeedback || options.all || options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly) {
+            throw new Error('--feedback-file 必须与明确论文 ID 和完整读者文章刷新一起使用，不能混用其他反馈或局部模式。');
+        }
+        const feedback = JSON.parse(require('node:fs').readFileSync(options.reviewFeedbackFile, 'utf8'));
+        if (!feedback || Array.isArray(feedback) || typeof feedback !== 'object') throw new Error('逐篇反馈必须是以论文 ID 为键的对象。');
+        const ids = options.ids.map(normalizedId);
+        if (new Set(ids).size !== ids.length || ids.some(id => !/^\d{4}\.\d{4,5}$/.test(id))
+                || Object.keys(feedback).length !== ids.length
+                || ids.some(id => !Object.hasOwn(feedback, id))) throw new Error('逐篇反馈必须恰好覆盖全部指定论文，且 ID 唯一。');
+        for (const id of ids) {
+            if (typeof feedback[id] !== 'string' || !feedback[id].trim() || feedback[id].length > 4000) {
+                throw new Error(`逐篇反馈 ${id} 必须是 1–4000 字符的非空文字。`);
+            }
+            feedback[id] = feedback[id].trim();
+        }
+        options.reviewFeedbackById = feedback;
     }
     return options;
 }
@@ -271,7 +292,9 @@ async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
             },
             runItem: async id => {
                 try {
-                    const result = await refreshApiReader(id, options);
+                    const itemOptions = options.reviewFeedbackById
+                        ? { ...options, reviewFeedback: options.reviewFeedbackById[id] } : options;
+                    const result = await refreshApiReader(id, itemOptions);
                     failures.delete(id);
                     return { success: true, result };
                 } catch (error) {
