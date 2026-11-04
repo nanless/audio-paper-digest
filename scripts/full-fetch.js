@@ -53,6 +53,7 @@ const {
     backupPapersJson
 } = require('./digest-status.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const dailySourceSkip = require('./lib/daily-source-skip.js');
 const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPublishedPaperIds, hasVerifiedFetchContinuity, validateDailyFetchContinuityCheckpoint } = require('./lib/daily-fetch-boundary.js');
 const {
     LLM_FILTER_PROMPT_PATH
@@ -2235,22 +2236,43 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         ? dailyFreshSources.dailyFreshSourceReference(dailySourcePlan) : null;
     if (dailySourcePlan) {
         console.log(`  📚 日更 source phase：封存 ${dailySourcePlan.paperIds.length} 篇官方 arXiv PDF/TXT 后再分析`);
-        await dailyFreshSources.captureDailyFreshSources(dailySourcePlan);
+        const captureOutcome = await dailyFreshSources.captureDailyFreshSources(dailySourcePlan);
+        // 官方 PDF 在全部候选地址都 404 的论文，按用户要求少量跳过，不阻塞整批。
+        // 跳过只接受这一类确定性缺失，并且受篇数上限约束；其他失败照旧停止。
+        if (captureOutcome.skipped.length) {
+            const skipRecord = dailySourceSkip.writeDailySourceSkips(dailySourcePlan, captureOutcome.skipped);
+            console.log(`  ⏭️ 官方 PDF 全部候选地址 404，本批跳过 ${skipRecord.count}/${skipRecord.limit} 篇：`
+                + skipRecord.papers.map(paper => paper.arxivId).join(', '));
+        }
+    }
+    const sourceSkipRecord = dailySourcePlan ? dailySourceSkip.readDailySourceSkips(dailySourcePlan) : null;
+    const sourceSkippedIds = dailySourceSkip.skippedPaperIds(sourceSkipRecord);
+    // 跳过记录是不可变证据：本批曾跳过，但这次重新抓取到了该论文的来源时不能悄悄改口，
+    // 必须停下来核对；同样，全部论文都被跳过时没有可发布内容，也不能继续。
+    if (sourceSkipRecord && !captureOutcome.skipped.length) {
+        throw new Error('本批已有跳过记录，但这次重新抓到了被跳过论文的官方来源；请核对后决定是否重跑整批');
+    }
+    // 被跳过的论文不进入分析与页面；其余论文照常走完整流程。
+    const analysisPapers = sourceSkippedIds.size
+        ? filteredNew.filter(paper => !sourceSkippedIds.has(normalizedId(paper)))
+        : filteredNew;
+    if (dailySourcePlan && !analysisPapers.length) {
+        throw new Error('本批全部论文的官方来源都取不到，没有可分析的论文，停止发布');
     }
     // 首遍规划只读同一快照，避免按篇反复解析整批；实际处理仍在论文锁内重读。
     const initialStoredById = readStoredAnalysisIndex(outputFile);
-    const papersToAnalyze = filteredNew.map(paper => {
+    const papersToAnalyze = analysisPapers.map(paper => {
         const storedAnalysisRecord = mergeStoredAnalysisState(paper, initialStoredById.get(normalizedId(paper)));
         return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(storedAnalysisRecord, dailySourcePlan) : storedAnalysisRecord;
     });
     const skippedAlreadyAnalyzed = dailySourcePlan
-        ? filteredNew.filter(paper => {
+        ? analysisPapers.filter(paper => {
             const storedAnalysisRecord = initialStoredById.get(normalizedId(paper));
             return isSuccessfulAnalysisRecord(storedAnalysisRecord) && dailyFreshSources.isPaperReusableForAnalysis(storedAnalysisRecord, dailySourcePlan);
         }).length
         : 0;
     if (skippedAlreadyAnalyzed > 0) {
-        console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${filteredNew.length - skippedAlreadyAnalyzed} 篇`);
+        console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${analysisPapers.length - skippedAlreadyAnalyzed} 篇`);
     }
     const analyzedPapers = new Map();
 
@@ -2264,7 +2286,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             batchDate: today, batchId,
-            papers: filteredNew.map(paper => {
+            papers: analysisPapers.map(paper => {
                 const stored = currentById.get(normalizedId(paper));
                 const merged = mergeStoredAnalysisState(paper, stored);
                 return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(merged, dailySourcePlan) : merged;
@@ -2404,13 +2426,14 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
 
     let result;
     try {
-        result = finalizeAnalysisResults(outputFile, filteredNew, {
+        result = finalizeAnalysisResults(outputFile, analysisPapers, {
             batchDate: today,
             analysisStatus,
             arxivFetched: arxivFetchedCount,
             hfFetched: hfFetchedCount,
             totalMerged: allPapers.length,
             afterFilter: filtered.length,
+            sourceSkipped: sourceSkipRecord?.count || 0,
             newlyAnalyzed: [...analyzedPapers.values()].filter(isSuccessfulAnalysisRecord).length,
             preservedExisting: existingPapers.length,
             arxivOnly,
@@ -2446,6 +2469,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
     if (blogSkippedCount > 0) console.log(`  - 博客去重: -${blogSkippedCount} 篇`);
     console.log(`  - 本次分析成功: ${[...analyzedPapers.values()].filter(isSuccessfulAnalysisRecord).length} 篇`);
+    if (sourceSkipRecord?.count) {
+        console.log(`  - 官方来源 404 跳过: ${sourceSkipRecord.count} 篇（${sourceSkipRecord.papers.map(paper => paper.arxivId).join(', ')}）`);
+    }
     console.log(`  - 保留已有: ${existingPapers.length} 篇`);
     console.log(`  - 合并后总计: ${result.papers.length} 篇`);
     if (result.stats.remainingFailed > 0) console.log(`  - 尚未完成: ${result.stats.remainingFailed} 篇`);

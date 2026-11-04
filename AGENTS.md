@@ -101,6 +101,8 @@ npm run digest:prepare -- YYYY-MM-DD
 
 检查完整性时，除了文件存在，还须确认候选、筛选决定、入选集和分析结果的日期、来源、候选指纹及论文集合相互对应。运行 `npm run validate:data` 做只读验证；只有干净检出的仓库才可显式加 `--allow-empty`。
 
+若某篇入选论文的官方 PDF 在全部候选地址上都返回 404，按用户要求最多跳过两篇（`PD_DAILY_SOURCE_SKIP_MAX`，0–5），把论文编号、原始错误和跳过理由写进本次来源运行目录的 `daily-source-skips.json` 后继续封存和分析其余论文。超过上限、超时、认证错误、5xx 或解析失败仍停止整批。跳过的论文不进入分析、不生成页面、不计为成功；页面与汇总不包含它，`digest:status` 单列已跳过篇数。
+
 ## 模型、代理、并发与预算
 
 `muse-spark-*` 模型使用 OpenAI Responses，`/v1` 转为 `/v1/responses`；兼容的 `mimo-v2.6-flash` 在 OpenCode Go 上走 OpenAI Chat Completions，基础端点原样使用。所有 Node LLM 请求必须经 `requestLlmJson()`；Python 发布请求必须经 `call_publish_llm_api()`。

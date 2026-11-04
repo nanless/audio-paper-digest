@@ -14,6 +14,7 @@ const { normalizedId } = require('../utils.js');
 const fresh = require('./fresh-analysis-context.js');
 const arxivSource = require('./fresh-arxiv-rewrite-source.js');
 const direct = require('./direct-rewrite-analysis-context.js');
+const sourceSkip = require('./daily-source-skip.js');
 
 const dailyFormats = require('./daily-source-format');
 const CONTRACT = dailyFormats.RUN;
@@ -237,9 +238,28 @@ async function captureDailyFreshSources(plan, options = {}) {
     // 来源下载独立保留八路上限，增加模型分析并发不应使新日更在下载前失败。
     // 显式传入的非法值仍交给 bounded 拒绝，不把 0 当作默认配置。
     const concurrency = options.concurrency ?? Math.min(8, Config.ANALYSIS_CONFIG.concurrency);
+    const skipLimit = options.skipLimit ?? sourceSkip.resolveSkipLimit();
+    if (!Number.isSafeInteger(skipLimit) || skipLimit < 0 || skipLimit > sourceSkip.MAX_LIMIT) {
+        fail('可跳过篇数必须是 0 到 5 之间的整数');
+    }
     const identity = analysisIdentity(plan);
+    const skipped = [];
     const results = await bounded(plan.paperIds, concurrency, async arxivId => {
-        const captured = await capture({ rootDir: plan.sourcesDir, arxivId, generation: SOURCE_GENERATION });
+        let captured;
+        try {
+            captured = await capture({ rootDir: plan.sourcesDir, arxivId, generation: SOURCE_GENERATION });
+        } catch (error) {
+            // 只有官方 PDF 在全部候选地址都 404 时才允许跳过；其他错误保持原样停止。
+            if (!sourceSkip.isSkippableSourceError(error)
+                || String(error.arxivId || '').replace(/v\d+$/i, '') !== arxivId) throw error;
+            skipped.push({
+                arxivId,
+                errorCode: error.code,
+                status: error.status,
+                message: String(error.message || '').trim(),
+            });
+            return null;
+        }
         if (!captured || captured.arxivId !== arxivId || captured.generation !== SOURCE_GENERATION
             || !SHA.test(String(captured.sourceManifestSha256 || ''))
             || !SHA.test(String(captured.manifest?.text?.responseSha256 || ''))
@@ -254,7 +274,13 @@ async function captureDailyFreshSources(plan, options = {}) {
         return { arxivId, status: captured.status, sourceManifestSha256: captured.sourceManifestSha256,
             sourceSha256: details.freshSourceDescriptor.sourceSha256 };
     });
-    return results.sort((left, right) => left.arxivId.localeCompare(right.arxivId));
+    if (skipped.length > skipLimit) {
+        fail(`本批有 ${skipped.length} 篇论文的官方 PDF 返回 404，超过可跳过上限 ${skipLimit} 篇`);
+    }
+    return {
+        results: results.filter(Boolean).sort((left, right) => left.arxivId.localeCompare(right.arxivId)),
+        skipped: skipped.sort((left, right) => left.arxivId.localeCompare(right.arxivId)),
+    };
 }
 
 function readDailyFreshSource(plan, paper) {
@@ -338,13 +364,17 @@ function readRecoveryMetadata(payload, { papers = null, label = '日更恢复' }
     if (payload.batchDate !== plan.batchDate) {
         fail(`${label} 的 batchDate 与封存的每日来源运行不同`);
     }
+    // 取不到官方来源而被跳过的论文不在分析集合里，但它们仍属于本次来源运行。
+    const skipRecord = sourceSkip.readDailySourceSkips(plan);
+    const skipped = sourceSkip.skippedPaperIds(skipRecord);
+    const expectedIds = plan.paperIds.filter(id => !skipped.has(id));
     const ids = sourceIds(rows);
-    if (ids.some(id => !ARXIV_ID.test(id)) || new Set(ids).size !== ids.length
-        || ids.length !== plan.paperIds.length
-        || ids.slice().sort().join('\0') !== plan.paperIds.join('\0')) {
+    if (ids.some(id => !ARXIV_ID.test(id) || skipped.has(id)) || new Set(ids).size !== ids.length
+        || ids.length !== expectedIds.length
+        || ids.slice().sort().join('\0') !== expectedIds.slice().sort().join('\0')) {
         fail(`${label} 的 papers 与封存的每日来源运行不完全吻合`);
     }
-    return { plan, rows };
+    return { plan, rows, skippedIds: skipped };
 }
 
 function requireDailyFreshSourceRecoveryPlan(payload, options = {}) {
@@ -410,8 +440,11 @@ function prepareDailyFreshSourceRecoveryPayload(payload, filtered, { label = '�
         || new Set(existingIds).size !== existingIds.length) fail(`${label} 的论文集合不符合完整筛选批次`);
     const existing = new Map(payload.papers.map(paper => [normalizedId(paper), paper]));
     const { mergeStoredAnalysisState } = require('../analysis-engine.js');
+    const skipRecord = sourceSkip.readDailySourceSkips(plan);
+    const skipped = sourceSkip.skippedPaperIds(skipRecord);
     const result = { ...payload, batchDate: plan.batchDate, batchId: plan.batchId,
-        papers: filtered.papers.map(paper => mergeStoredAnalysisState(paper, existing.get(normalizedId(paper)))) };
+        papers: filtered.papers.filter(paper => !skipped.has(normalizedId(paper)))
+            .map(paper => mergeStoredAnalysisState(paper, existing.get(normalizedId(paper)))) };
     // 保持原严格守卫：全集合及每篇四份实体文件都必须通过，之后才能保存或请求模型。
     requireDailyFreshSourceRecoveryPlan(result, { label });
     return result;

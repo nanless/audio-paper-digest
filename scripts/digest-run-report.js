@@ -619,11 +619,27 @@ function buildDigestRunReport(targetDate, options = {}) {
         && filtered?.status === 'complete'
         && filterSnapshotsComplete
     );
-    // total 统计实际分析记录，expected 和 missing 另行表示入选集合及缺口。
+    // 官方 PDF 全部候选地址 404 的论文按规则少量跳过；跳过记录保存在封存来源运行目录里。
+    let sourceSkipRecord = null;
+    if (deep && !Array.isArray(deep) && deep.dailyFreshSourceRun) {
+        try {
+            const plan = require('./lib/daily-fresh-source-plan.js')
+                .readDailyFreshSourcePlan(deep.dailyFreshSourceRun);
+            sourceSkipRecord = require('./lib/daily-source-skip.js').readDailySourceSkips(plan);
+        } catch (error) {
+            readProblems.push({ path: Config.FILES.deepAnalysisResult,
+                kind: 'daily-source-skip', message: error.message });
+        }
+    }
+    const sourceSkippedIds = new Set((sourceSkipRecord?.papers || []).map(paper => paper.arxivId));
+    const skippedOutsideFiltered = [...sourceSkippedIds].filter(id =>
+        !filteredBatch.some(paper => normalizedId(paper) === id));
+    const analysisBatch = filteredBatch.filter(paper => !sourceSkippedIds.has(normalizedId(paper)));
+    // total 统计实际分析记录，expected 和 missing 另行表示入选集合并扣除已跳过的论文。
     const deepIds = new Set(deepBatch.map(normalizedId).filter(Boolean));
-    const analysisExpected = filtered ? filteredBatch.length : null;
+    const analysisExpected = filtered ? analysisBatch.length : null;
     const analysisMissing = filtered
-        ? filteredBatch.filter(paper => {
+        ? analysisBatch.filter(paper => {
             const id = normalizedId(paper);
             return !id || !deepIds.has(id);
         }).length
@@ -653,12 +669,16 @@ function buildDigestRunReport(targetDate, options = {}) {
     const analysisComplete = Boolean(deep && filtered) && analysisWaiverCheck.valid
         && productionAnalysisComplete && (
         failed.length === 0
-        && successful.length + waived.length === filteredBatch.length
-        && samePaperIds([...successful, ...waived], filteredBatch)
+        && skippedOutsideFiltered.length === 0
+        && successful.length + waived.length === analysisBatch.length
+        && samePaperIds([...successful, ...waived], analysisBatch)
     );
     const errors = [];
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
+    if (skippedOutsideFiltered.length > 0) {
+        errors.push(`跳过记录的论文不在本批入选集: ${skippedOutsideFiltered.join(', ')}`);
+    }
     if (unresolvedScoringIds.length > 0) {
         errors.push(`评分稳定性二次审计尚未收敛: ${unresolvedScoringIds.join(', ')}`);
     }
@@ -732,6 +752,8 @@ function buildDigestRunReport(targetDate, options = {}) {
             total: deepBatch.length,
             expected: analysisExpected,
             missing: analysisMissing,
+            skipped: sourceSkippedIds.size,
+            skippedIds: [...sourceSkippedIds],
             successful: successful.length,
             waived: waived.length,
             waivedIds: waived.map(normalizedId).filter(Boolean),
@@ -817,7 +839,7 @@ function formatDigestRunSummary(report) {
         `[digest-status] ${report.batchDate} 本报告状态=${displayStatus(report.overallStatus)} 问题数=${report.errors.length}`,
         `  抓取 ${state(report.fetch.complete)} | 候选数=${report.fetch.rawCandidateCount ?? '?'}`,
         `  筛选 ${state(report.filter.complete)} | 入选数=${report.filter.selectedCount} | 候选数=${report.filter.totalCandidates ?? '?'} | 尚未保存决定数=${report.filter.pendingDecisions ?? '?'}`,
-        `  分析 ${state(report.analysis.complete)} | 通过分析检查数=${report.analysis.successful}/${report.analysis.total} | 预期入选数=${report.analysis.expected ?? '?'} | 缺少分析记录数=${report.analysis.missing ?? '?'} | 已豁免分析数=${report.analysis.waived || 0} | 失败数=${report.analysis.failed}`,
+        `  分析 ${state(report.analysis.complete)} | 通过分析检查数=${report.analysis.successful}/${report.analysis.total} | 预期入选数=${report.analysis.expected ?? '?'} | 缺少分析记录数=${report.analysis.missing ?? '?'} | 已跳过=${report.analysis.skipped || 0} | 已豁免分析数=${report.analysis.waived || 0} | 失败数=${report.analysis.failed}`,
         ...(report.analysis.scoringStabilityUnresolvedIds?.length
             ? [`  评分稳定性 尚未解决的论文=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),

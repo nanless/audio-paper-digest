@@ -50,6 +50,7 @@ const {
 } = require('../manual/scripts/manual-paper-source-identity.js');
 const { resolveArtifactAuthority } = require('../manual/scripts/manual-fresh-authoring-contract.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const dailySourceSkip = require('./lib/daily-source-skip.js');
 const { loadAnalysisWaiver, validateAnalysisWaiver } = require('./analysis-waiver.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
@@ -593,10 +594,19 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
         || normalizedId(paper);
     const paperIds = papers.map(dailyPaperId);
     const sortedPaperIds = [...paperIds].sort();
-    const sourceRunPaperIds = [...plan.paperIds].sort();
-    if (paperIds.some(id => !id) || new Set(paperIds).size !== paperIds.length
-        || sortedPaperIds.length !== sourceRunPaperIds.length
-        || !sortedPaperIds.every((id, index) => id === sourceRunPaperIds[index])) {
+    // 取不到官方来源而被跳过的论文属于本次来源运行，但不应出现在分析结果里。
+    let skippedIds = new Set();
+    try {
+        const skipRecord = dailySourceSkip.readDailySourceSkips(plan);
+        skippedIds = dailySourceSkip.skippedPaperIds(skipRecord);
+    } catch (error) {
+        addIssue(issues, filePath, `每日来源跳过记录未通过核验: ${error.message}`);
+        return sourceTexts;
+    }
+    const expectedAnalysisIds = plan.paperIds.filter(id => !skippedIds.has(id)).sort();
+    if (paperIds.some(id => !id || skippedIds.has(id)) || new Set(paperIds).size !== paperIds.length
+        || sortedPaperIds.length !== expectedAnalysisIds.length
+        || !sortedPaperIds.every((id, index) => id === expectedAnalysisIds[index])) {
         addIssue(issues, filePath, 'dailyFreshSourceRun 中的论文集合与深度分析论文集合不完全一致，或论文标识为空、重复。');
         return sourceTexts;
     }

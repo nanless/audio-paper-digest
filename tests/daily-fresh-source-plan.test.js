@@ -69,7 +69,8 @@ test('分析并发十路时来源封存仍正常执行，下载最多八路且�
         } finally { active--; }
     };
     const results = await daily.captureDailyFreshSources(plan, { capture });
-    assert.equal(results.length, 12);
+    assert.equal(results.results.length, 12);
+    assert.equal(results.skipped.length, 0);
     assert.equal(calls, 12);
     assert.equal(peak, 8);
     assert.equal(Config.ANALYSIS_CONFIG.concurrency, 10);
@@ -77,6 +78,53 @@ test('分析并发十路时来源封存仍正常执行，下载最多八路且�
         await assert.rejects(daily.captureDailyFreshSources(plan, { concurrency, capture }), /1 到 8/);
         assert.equal(calls, 12);
     }
+});
+
+test('官方 PDF 全部候选地址 404 的论文按上限跳过并留下可核验记录', async t => {
+    fixture(t);
+    const papers = [{ arxivId: '2610.81001' }, { arxivId: '2610.81002' }, { arxivId: '2610.81003' }];
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-09', batchId: 'source-skip', papers });
+    const capture = async options => {
+        if (options.arxivId === '2610.81002') {
+            const error = new Error(`arXiv PDF ${options.arxivId} download failed: HTTP 404`);
+            error.code = 'ARXIV_PDF_NOT_FOUND'; error.status = 404; error.arxivId = options.arxivId;
+            throw error;
+        }
+        return require('../scripts/lib/fresh-arxiv-rewrite-source.js').captureFreshArxivRewriteSource(options, {
+            fetchText: async () => sourcePayload(options.arxivId),
+            fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nControlled source\n%%EOF\n'),
+                url: `https://arxiv.org/pdf/${options.arxivId}` })
+        });
+    };
+    const outcome = await daily.captureDailyFreshSources(plan, { capture, concurrency: 1 });
+    assert.equal(outcome.results.length, 2);
+    assert.equal(outcome.skipped.length, 1);
+    assert.equal(outcome.skipped[0].arxivId, '2610.81002');
+    const skip = require('../scripts/lib/daily-source-skip.js');
+    const record = skip.writeDailySourceSkips(plan, outcome.skipped);
+    assert.equal(record.count, 1);
+    assert.equal(skip.readDailySourceSkips(plan).papers[0].arxivId, '2610.81002');
+    // 非 404 的来源错误照旧停止整批。
+    const failing = async options => {
+        if (options.arxivId === '2610.81003') {
+            const error = new Error('network down'); error.code = 'ECONNRESET'; throw error;
+        }
+        return capture(options);
+    };
+    await assert.rejects(daily.captureDailyFreshSources(plan, { capture: failing, concurrency: 1 }), /network down/);
+});
+
+test('超过可跳过上限时整批停止，不把多数缺失写成通过', async t => {
+    fixture(t);
+    const papers = [{ arxivId: '2610.81101' }, { arxivId: '2610.81102' }, { arxivId: '2610.81103' }];
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-09', batchId: 'source-skip-limit', papers });
+    const capture = async options => {
+        const error = new Error(`arXiv PDF ${options.arxivId} download failed: HTTP 404`);
+        error.code = 'ARXIV_PDF_NOT_FOUND'; error.status = 404; error.arxivId = options.arxivId;
+        throw error;
+    };
+    await assert.rejects(daily.captureDailyFreshSources(plan, { capture, concurrency: 1 }),
+        /超过可跳过上限/);
 });
 
 test('历史版本信息进入日更分析和结果，两条来源证明保持一致', async t => {

@@ -175,6 +175,21 @@
           "variant": "unicode-safe-official-excerpt"
         }
       ]
+    },
+    {
+      "name": "daily-source-skip",
+      "currentVariant": "bounded-unavailable-source",
+      "currentSchema": {
+        "requiredFields": [
+          "batchDate",
+          "runId",
+          "limit",
+          "count",
+          "papers"
+        ],
+        "identity": "one-bounded-skip-record-per-source-run"
+      },
+      "historical": []
     }
   ]
 }
