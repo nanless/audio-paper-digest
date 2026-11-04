@@ -144,6 +144,7 @@ npm run test:compat
 | `lib/arxiv-metadata-source.js` | Node 库：通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。现行 v1 先严格校验 XML，再按既有规则保留字段中的实体和作者空白，以按原规则重新计算并核验旧封存 SHA；正常日更抓取使用解码后的 XML 字段。 |
 | `lib/daily-arxiv-prefix-source.js` | Node 库：日期查询终止于 HTTP 429 时，使用同一官方 Atom 类别列表完整覆盖固定窗口，保存旧见证、分页端点、响应 SHA 和首页重放证明；当前恢复、只读校验及下次补抓共用覆盖核验。 |
 | `lib/daily-fetch-boundary.js` | Node 库：从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见边界说明。 |
+| `lib/daily-fetch-format.js` | Node 库：日更抓取边界、连续性、来源与恢复窗口的格式读取统一走协议登记；旧记录按原声明识别，未知格式直接拒绝。 |
 | `lib/daily-announcement-restart.js` | 原抓取窗口超过当日官方公告时，保全已停止尝试的原文件，并逐类核对实际公告时间。新窗口独立抓取，已有筛选或分析材料时拒绝切换。 |
 | `lib/daily-xml-file-stdin.js` | Node 库：为日更 OAI 与 RSS 的原 Python 校验器传递完整输入，通过私有临时普通文件的只读描述符避免同步管道等待结束；保留原期限及输出上限，调用后清理，并将本地运行故障与来源内容否定分开。 |
 | `lib/daily-fresh-source-plan.js` | Node 库：日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
@@ -345,6 +346,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。保留上游时验证实际返回的原论文 Reader，假想的未保存主文投影不授予人工权限。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-sealed-figure-alias.js` | Node 库：在真实日更封存来源的同步作用域内，核验未选图号引用同一图片资产的别名关系；保留全部原始图片证据，所选图片仍须去重。返回前重读四份来源并核对输入，不授予请求预算或整篇通过资格。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
+| `reader_pdf_column_unit_projection.py` | Python 辅助：把现场提取的真实 PDF 列单位证明包装成稳定信封，绑定原 PDF 字节、单元格与引文 SHA；发布端冷读时按原格式重放，不猜补证据。 |
 | `reader_sealed_pdf_literal_column_units.py` | 日更真实封存 PDF 完整表的独立列单位证明；保留方法与条件分带、双层表头、累计配置、组件/参数轴及全部原格，另在封闭表型内核验前端/攻击双身份、预算、泄露时长与输入条件轴及原变化注；数学字形、均值±区间、量级和下划线均依原表实物证明，不依赖 HTML 显示等价。 |
 | `reader_grouped_vector_column_units.py` | 发布端重放与 Reader 相同的完整偏好向量表列单位；调用方先核四份封存来源及真实 PDF 引文，保留两层列路径、全部行和均值差合并格。 |
 | `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |

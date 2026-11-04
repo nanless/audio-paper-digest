@@ -73,6 +73,8 @@ class ClientProtocolGenerationTest(unittest.TestCase):
             from protocol_codec import canonical
             self.assertEqual(value['catalogSHA256'],hashlib.sha256(canonical(value['families']).encode('utf-8')).hexdigest())
 
+    @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('xcrun'),
+                         'Swift 读者核验需要本机 Xcode 工具链，CI 的 Linux 环境没有 xcrun。')
     def test_actual_swift_reader_selects_both_complete_schemas_without_changing_old_header(self):
         with tempfile.TemporaryDirectory(prefix='client-protocol-history-') as temporary:
             root = Path(temporary)

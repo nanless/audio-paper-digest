@@ -9536,8 +9536,11 @@ body
             self.assertEqual(
                 publish_to_blog.export_tag_catalog_files(root / 'missing'), [],
             )
+            site_header = publish_to_blog.public_protocols.record_header(
+                publish_to_blog.SITE_TAG_CATALOG_SNAPSHOT_CONTRACT, 'paper-tag-catalog-snapshot')
             expected = publish_to_blog.tag_catalog_snapshot_bytes(
-                publish_to_blog.build_tag_catalog_snapshot(),
+                publish_to_blog._build_tag_catalog_display_snapshot(
+                    publish_to_blog.build_tag_catalog_snapshot(), target_header=site_header),
             )
             with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
                 written = publish_to_blog.export_tag_catalog_files(repo)

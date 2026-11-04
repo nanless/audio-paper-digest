@@ -69,6 +69,10 @@ class TagVersionFilesTests(unittest.TestCase):
             'LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT': 'paper-taxonomy-registry-snapshot-v1',
             'TAG_CATALOG_VERSIONS_CONTRACT': public_protocols.contract('paper-tag-catalog-versions'),
             'LEGACY_TAG_CATALOG_VERSIONS_CONTRACT': 'paper-taxonomy-version-catalog-v1',
+            'SITE_TAG_CATALOG_SNAPSHOT_CONTRACT': public_protocols.historical_contract(
+                'paper-tag-catalog-snapshot', 'public-concept-hierarchy'),
+            'SITE_TAG_CATALOG_VERSIONS_CONTRACT': public_protocols.historical_contract(
+                'paper-tag-catalog-versions', 'sha-keyed-snapshot-set'),
             'TAG_PRESENTATION_POLICY_CONTRACT': public_protocols.contract('paper-tag-presentation-policy'),
             'LEGACY_TAG_PRESENTATION_POLICY_CONTRACT': 'paper-taxonomy-presentation-selection-v1',
             'TAG_DISPLAY_POLICY_PATH': self.root / 'absent-approved-policy.json',
@@ -81,6 +85,11 @@ class TagVersionFilesTests(unittest.TestCase):
              'definition': '原登记定义', 'scopeNote': '原登记排除说明'}]}
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), self.env)
         self.current = self.call('build_tag_catalog_snapshot')
+        # 发布边界把当前快照按网站现用格式序列化，归档与显示文件都以这份字节为准。
+        self.site_current = self.call(
+            'build_tag_catalog_snapshot',
+            snapshot_contract=public_protocols.historical_contract(
+                'paper-tag-catalog-snapshot', 'public-concept-hierarchy'))
         self.old = json.loads(json.dumps(self.current))
         self.old.pop('schemaFingerprint', None)
         self.old.update(registrySha256='a'*64, registryVersion='v1',
@@ -109,7 +118,7 @@ class TagVersionFilesTests(unittest.TestCase):
         self.assertEqual(len(paths), 8)
         catalog = json.loads((self.repo/'data/tag-catalog-versions.json').read_text())
         self.assertEqual(catalog['currentSha256'], 'b'*64)
-        self.assertEqual(catalog['snapshots'], [self.old, self.current])
+        self.assertEqual(catalog['snapshots'], [self.old, self.site_current])
         self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
         self.assertEqual((self.repo/'data/tag-catalog-history'/('a'*64+'.json')).read_bytes(),
                          (self.repo/'static/data/tag-catalog-history'/('a'*64+'.json')).read_bytes())
@@ -190,7 +199,7 @@ class TagVersionFilesTests(unittest.TestCase):
         self.assertFalse(any('/taxonomy-snapshots/' in record['path'] for record in records))
         self.call('resume_generation_installation', journal, self.root/'journal.json', posts)
         self.assertTrue(all(record['installed'] for record in records))
-        self.assertEqual(json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text()), self.current)
+        self.assertEqual(json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text()), self.site_current)
         before = {record['path']: (self.repo / record['path']).read_bytes() for record in records}
         self.call('resume_generation_installation', journal, self.root/'journal.json', posts)
         self.assertEqual({record['path']: (self.repo / record['path']).read_bytes() for record in records}, before)
@@ -294,7 +303,8 @@ class TagVersionFilesTests(unittest.TestCase):
         original = (self.repo / 'data/taxonomy-registry.json').read_bytes()
         assets = self.call('tag_catalog_file_contents', self.repo)
         catalog = json.loads(assets['data/tag-catalog-versions.json'])
-        self.assertTrue(public_protocols.is_current_header(catalog, 'paper-tag-catalog-versions'))
+        self.assertTrue(public_protocols.has_valid_header(catalog, 'paper-tag-catalog-versions'))
+        self.assertFalse(public_protocols.is_current_header(catalog, 'paper-tag-catalog-versions'))
         self.assertEqual(catalog['snapshots'][0], self.old)
         self.assertEqual(json.loads(assets['data/tag-catalog-history/'+'a'*64+'.json']), self.old)
         self.call('export_tag_catalog_files', self.repo)

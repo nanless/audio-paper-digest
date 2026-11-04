@@ -80,7 +80,10 @@ class PresentationPolicyTests(unittest.TestCase):
         self.prepare()
         self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'b'*64
         self.env['_PAGE_TAG_CATALOG']['version'] = 'paper-tag-catalog-v2'
-        current = self.call('build_tag_catalog_snapshot')
+        current = self.call(
+            'build_tag_catalog_snapshot',
+            snapshot_contract=self.env['public_protocols'].historical_contract(
+                'paper-tag-catalog-snapshot', 'public-concept-hierarchy'))
         self.policy = dict(self.policy, contract='paper-tag-presentation-policy-v2',
             baseRegistrySha256='b'*64,
             baseSnapshotSha256=hashlib.sha256(self.call('tag_catalog_snapshot_bytes', current)).hexdigest())
@@ -449,9 +452,12 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual(issued[self.preferred['registrySha256']], self.preferred)
         display = json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text())
         protocols = self.env['public_protocols']
-        header = protocols.record_header('paper-tag-catalog-snapshot', 'paper-tag-catalog-snapshot')
+        header = protocols.record_header(
+            protocols.historical_contract('paper-tag-catalog-snapshot', 'public-concept-hierarchy'),
+            'paper-tag-catalog-snapshot')
         self.assertEqual(display, {**self.preferred, **header})
-        self.assertTrue(protocols.is_current_header(issued['b'*64], 'paper-tag-catalog-snapshot'))
+        self.assertTrue(protocols.has_valid_header(issued['b'*64], 'paper-tag-catalog-snapshot'))
+        self.assertFalse(protocols.is_current_header(issued['b'*64], 'paper-tag-catalog-snapshot'))
         self.assertEqual(self.policy['preferredSnapshotSha256'], PREFERRED[self.preferred['registrySha256']][0])
         self.assertEqual(self.policy['preferredProjectionSha256'], PREFERRED[self.preferred['registrySha256']][1])
         self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
