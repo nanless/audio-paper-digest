@@ -118,6 +118,13 @@ async function captureFilterScopeEvidence(paper, batchDate, overrides = {}) {
 }
 function validatedDecisionInputSha256(paper, decision, options = {}) {
     if (decision?.filterModel === 'manual_offline' && !options.allowManual) fail('API 筛选决定不能声明为人工决定');
+    const pdfUnavailable = decision?.parseSource === 'official_pdf_404_skipped';
+    if (pdfUnavailable && (decision.related !== false || decision.retryable !== false
+        || decision.fallback !== false || decision.errorCode !== 'ARXIV_PDF_NOT_FOUND'
+        || decision.errorStatus !== 404 || decision.filterScopeEvidence
+        || decision.error !== `arXiv PDF ${sources.normalizedArxivId(paper.arxivId || paper.paper_id || paper.id)} download failed: HTTP 404`)) {
+        fail('官方 PDF 404 跳过记录不完整');
+    }
     const pendingRecheck = decision?.parseSource === 'explicit_recheck_pending';
     if (pendingRecheck && !(decision.related === null && decision.retryable === true && decision.fallback === true && decision.rawResponse === ''))
         fail('待重筛占位不能声明为正式决定');
@@ -127,7 +134,7 @@ function validatedDecisionInputSha256(paper, decision, options = {}) {
         if (options.filterPromptHash !== undefined && !acceptedPromptHashes.includes(decision?.filterPromptHash)) fail('逐篇决定的提示词与本批次不一致');
     }
     const definitiveModelDecision = typeof decision?.related === 'boolean'
-        && !decision.retryable && !decision.fallback && decision.parseSource !== 'keyword_prefilter'
+        && !decision.retryable && !decision.fallback && decision.parseSource !== 'keyword_prefilter' && !pdfUnavailable
         && decision.filterModel !== 'manual_offline';
     if (definitiveModelDecision && evaluateKeywordPrefilter(paper).requiresScopeEvidence
         && !decision.filterScopeEvidence) fail('需要官方全文确认模态的正式模型决定缺少来源证明');

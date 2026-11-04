@@ -186,6 +186,32 @@ test('任一范围来源失败时，所有论文都尚未请求模型或保存�
     assert.equal(counts.model, 0);
     assert.equal(counts.saved, 0);
 });
+test('官方 PDF 全部返回 404 时记录跳过并继续筛选其他论文', async t => {
+    fixture(t);
+    const counts = { text: 0, pdf: 0, model: 0 };
+    const overrides = officialSources(counts);
+    const fetchPdf = overrides.fetchPdf;
+    overrides.fetchPdf = async id => {
+        if (id === '2610.90011') {
+            const error = new Error(`arXiv PDF ${id} download failed: HTTP 404`);
+            error.code = 'ARXIV_PDF_NOT_FOUND'; error.status = 404; error.arxivId = id;
+            throw error;
+        }
+        return fetchPdf(id);
+    };
+    const skipped = paper();
+    const other = paper('2610.90012');
+    const result = await run([skipped, other], options(overrides, async () => {
+        counts.model++; return decision(true);
+    }));
+    assert.deepEqual(result.selected.map(item => item.arxivId), [other.arxivId]);
+    const record = result.decisions[skipped.arxivId];
+    assert.equal(record.parseSource, 'official_pdf_404_skipped');
+    assert.match(record.reason, /未判断论文是否相关/);
+    assert.equal(scope.validatedDecisionInputSha256(skipped, record), record.inputSha256);
+    assert.throws(() => scope.validatedDecisionInputSha256(skipped, { ...record, errorStatus: 500 }), /跳过记录/);
+    assert.equal(counts.model, 1);
+});
 test('封存完成但尚无决定时继续筛选不重抓，明确非音频结果可正常保存', async t => {
     fixture(t);
     const candidate = paper();

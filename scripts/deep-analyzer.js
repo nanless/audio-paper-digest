@@ -16096,7 +16096,11 @@ async function fetchArxivPdfUncached(arxivId, options = {}) {
                 currentPdfUnavailable: candidate !== normalized, currentPdfStatus };
         }
     }
-    throw new Error(`arXiv PDF ${normalized} download failed: HTTP ${currentPdfStatus || 404}`);
+    const error = new Error(`arXiv PDF ${normalized} download failed: HTTP ${currentPdfStatus || 404}`);
+    error.code = 'ARXIV_PDF_NOT_FOUND';
+    error.status = 404;
+    error.arxivId = normalized;
+    throw error;
 }
 
 // 历史全新重写的图片证据有意不走 data/current/image-cache。生命周期归调用方，落在操作

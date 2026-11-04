@@ -1907,10 +1907,25 @@ async function filterPapersWithLLM(papers, options = {}) {
     for (const paper of papersToCheck) {
         if (!evaluateKeywordPrefilter(paper).requiresScopeEvidence) continue;
         const id = normalizedId(paper);
-        const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
-            decisionOptions.scopeSourceOverrides || {});
-        scopeById.set(id, evidence);
+        try {
+            const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
+                decisionOptions.scopeSourceOverrides || {});
+            scopeById.set(id, evidence);
+        } catch (error) {
+            if (error.code !== 'ARXIV_PDF_NOT_FOUND' || error.status !== 404 || error.arxivId !== id) throw error;
+            decisions.set(id, {
+                id, paper_id: paper.paper_id || paper.arxivId || paper.id || id,
+                title: paper.title || '', related: false,
+                reason: '官方 PDF 返回 404，本批跳过，未判断论文是否相关',
+                rawResponse: '', parseSource: 'official_pdf_404_skipped',
+                error: error.message, errorCode: error.code, errorStatus: 404,
+                fallback: false, retryable: false, decidedAt: getBeijingISOString(),
+                inputSha256: buildFilterInputSha256(paper), ...decisionMetadata
+            });
+            console.log(`[filter] 跳过官方 PDF 返回 404 的论文：${id}`);
+        }
     }
+    papersToCheck = papersToCheck.filter(paper => decisions.get(normalizedId(paper))?.parseSource !== 'official_pdf_404_skipped');
     papersToCheck = papersToCheck.map(paper => scopeById.has(normalizedId(paper))
         ? { ...paper, filterScopeEvidence: scopeById.get(normalizedId(paper)) } : paper);
     for (const paper of papersToCheck) {
