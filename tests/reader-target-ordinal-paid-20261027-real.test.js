@@ -142,6 +142,19 @@ test('strict RAW rejects duplicates, unsafe keys, float/exponent ordinals, trunc
  assert.equal(ordinal.parseAck(raw).requestToken,token);
  for(const bad of [raw.replace('"requestToken":','"requestToken":"0123456789abcdef","requestToken":'),raw.replace('"targetOrdinal":1','"targetOrdinal":1,"targetOrdinal":1'),raw.replace('"targetOrdinal":1','"targetOrdinal":1.0'),raw.replace('"targetOrdinal":1','"targetOrdinal":1e0'),raw.replace('"targetOrdinal":1','"\\u0074argetOrdinal":1.0'),raw.replace('"value":"x"','"value":{"__proto__":{}}'),raw.replace('"value":"x"','"value":{"constructor":{}}'),raw.replace('"value":"x"','"value":{"prototype":{}}'),raw.slice(0,-1),'```json\n'+raw+'\n```',raw+raw,JSON.stringify({...good,path:'/sections/0/body'}),JSON.stringify({...good,draftSha256:'0'.repeat(64)})])assert.throws(()=>ordinal.parseAck(bad));
 });
+test('仅同一请求令牌的真实指纹单字符缺失可在受控请求内恢复',()=>{
+ const token='0123456789abcdef',header=ordinal.requestHeader();
+ const request={...header,requestToken:token};
+ const value={...header,schemaFingerprint:header.schemaFingerprint.slice(0,-1),requestToken:token,replacements:[{targetOrdinal:1,value:'x'}]};
+ assert.equal(ordinal.parseAck(JSON.stringify(value),request).schemaFingerprint,header.schemaFingerprint);
+ assert.throws(()=>ordinal.parseAck(JSON.stringify(value)));
+ for(const changed of [
+  {...value,requestToken:'fedcba9876543210'},
+  {...value,schemaFingerprint:header.schemaFingerprint.slice(0,-2)},
+  {...value,schemaFingerprint:'0'+header.schemaFingerprint.slice(1,-1)},
+  {...value,contract:'other'},
+ ]) assert.throws(()=>ordinal.parseAck(JSON.stringify(changed),request));
+});
 test('private capability, request nonce, target set/type, draft/node and special-scope guards',async()=>{
  const f=setup(fixture.cases[1]);assert.throws(()=>ordinal.prepare({...f,repairContext:f.context}),/scope/);
  await f.scope(()=>{

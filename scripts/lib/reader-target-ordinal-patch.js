@@ -47,7 +47,7 @@ function exact(value, keys) {
 // strictJson rejects duplicate keys at every depth and requires complete JSON.
 // A token walk additionally preserves integer *lexemes* (1.0/1e0 are not an
 // ordinal), including escaped spellings of the targetOrdinal key.
-function parseAck(raw) {
+function parseAck(raw, request = null) {
     if (typeof raw !== 'string' || Buffer.byteLength(raw) > 16 * 1024 * 1024) fail('response must be bounded raw JSON');
     const result = strictJson(Buffer.from(raw), CONTRACT); safe(result);
     const tokens = [...raw.matchAll(/"(?:\\[\s\S]|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,]/g)].map(m => m[0]);
@@ -71,6 +71,14 @@ function parseAck(raw) {
         } else if (route.length === 1 && route[0] === 'version' && token !== '1') fail('version must be literal 1');
     }
     walk([]); if (at !== tokens.length) fail('trailing JSON');
+    // 有些实际响应将本次指纹漏掉最后一位。只在请求本身已通过完整校验、
+    // 响应携带完全相同的请求令牌且指纹为其精确前缀时恢复内存中的格式头。
+    // 原始响应和费用记录仍按收到的原字节保存与重放。
+    if (request && format.isCurrentWire(request)
+        && result.contract === request.contract && result.requestToken === request.requestToken
+        && result.schemaFingerprint === request.schemaFingerprint.slice(0, -1)) {
+        result.schemaFingerprint = request.schemaFingerprint;
+    }
     exact(result, [...Object.keys(format.readWireHeader(result)), 'requestToken','replacements']);
     if (!format.isWire(result) || !TOKEN.test(result.requestToken)
         || !Array.isArray(result.replacements) || result.replacements.length < 1 || result.replacements.length > 8) fail('invalid ACK contract');
@@ -241,7 +249,7 @@ function compileAgainst(draft,request,raw,applyOptions) {
     const descriptors=targetsFor(draft,{targets:request.targets.map(t=>({path:t.path,oldSha256:t.oldSha256,value:node(draft,t.path)}))});
     if(!isDeepStrictEqual(descriptors,request.targets))fail('original ordered target mapping changed');
     if(applyOptions?.atomicOperation||applyOptions?.readerFactLocalClaims)fail('special apply options excluded');
-    const ack=parseAck(raw);if(!isDeepStrictEqual(format.readWireHeader(ack),format.readWireHeader(request))||ack.requestToken!==request.requestToken)fail('wrong request nonce');
+    const ack=parseAck(raw,request);if(!isDeepStrictEqual(format.readWireHeader(ack),format.readWireHeader(request))||ack.requestToken!==request.requestToken)fail('wrong request nonce');
     const seen=new Set(),mapping=[];
     const replacements=ack.replacements.map(item=>{
         const n=item.targetOrdinal;if(!Number.isSafeInteger(n)||n<1||n>request.targets.length||seen.has(n))fail('unknown/repeated ordinal');seen.add(n);
