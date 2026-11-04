@@ -283,7 +283,7 @@ TABLE_DIRECTION_MARK_RE = re.compile(
     flags=re.IGNORECASE,
 )
 TABLE_DIRECTIONAL_METRIC_RE = re.compile(
-    r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)',
+    r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\bmse\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)',
     flags=re.IGNORECASE,
 )
 # “无条件 AVG ↑”这类汇总列是可测量的指标，但与 WER、准确率不同，它本身
@@ -4934,10 +4934,28 @@ def _validate_experiment_table_evidence_depth(
         and all(re.search(r'distilled checkpoints[^\n]{0,140}(?<![0-9.])' + re.escape(number) + r'%[^\n]{0,140}scored worse on the bias benchmark than the original variants', source_text, re.I)
                 for number in re.findall(r'([0-9]+(?:\.[0-9]+)?)%', sentence))
         for sentence in re.split(r'[。；\n]', results))
-    result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
+    # 同一四分类 Score 表同时保留本文与更高的已发表对照时，
+    # 按原文明确的任务、方法和数值核对，不套用二分类的结论。
+    source_rank_regression = False
+    source_rank = re.search(
+        r'On the 4-class task[\s\S]{0,400}?SoftFiLM\s+64\.11%[\s\S]{0,900}?leading 4-class-only\s+methods[\s\S]{0,120}?Dong et al\.[\s\S]{0,40}?67\.55%',
+        complete_source_text or '', re.I)
+    if source_rank:
+        for table in tables:
+            for column, header in enumerate(table['header']):
+                if not re.search(r'4\s*类.*Score.*↑', header, re.I):
+                    continue
+                rows = table['rows']
+                own = any('SoftFiLM' in ' '.join(row) and column < len(row)
+                          and row[column].strip() == '64.11' for row in rows)
+                reference = any(re.search(r'Dong\s+et\s+al\.', ' '.join(row), re.I)
+                                and column < len(row) and row[column].strip() == '67.55' for row in rows)
+                if own and reference:
+                    source_rank_regression = True
+    result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or source_rank_regression or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
-        r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
+        r'未显著|不显著|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|'
         r'未改善|没有改善|无效|性能回落|回落至|负面|负结果|暴露短板|跨零|落后|损失|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
