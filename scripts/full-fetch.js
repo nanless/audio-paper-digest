@@ -2234,9 +2234,10 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     }) : null;
     const dailyFreshSourceRun = dailySourcePlan
         ? dailyFreshSources.dailyFreshSourceReference(dailySourcePlan) : null;
+    let captureOutcome = { results: [], skipped: [] };
     if (dailySourcePlan) {
         console.log(`  📚 日更 source phase：封存 ${dailySourcePlan.paperIds.length} 篇官方 arXiv PDF/TXT 后再分析`);
-        const captureOutcome = await dailyFreshSources.captureDailyFreshSources(dailySourcePlan);
+        captureOutcome = await dailyFreshSources.captureDailyFreshSources(dailySourcePlan);
         // 官方 PDF 在全部候选地址都 404 的论文，按用户要求少量跳过，不阻塞整批。
         // 跳过只接受这一类确定性缺失，并且受篇数上限约束；其他失败照旧停止。
         if (captureOutcome.skipped.length) {
