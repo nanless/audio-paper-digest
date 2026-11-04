@@ -25,6 +25,12 @@ Hugo 会把 front matter 解析成参数 map，并把嵌套 map 的键递归小�
 
 Android 此前遇到同一写法会静默跳过导读上下文，1.4.2 按正常资料读取。
 
+## 发行状态
+
+Mac 1.4.2 已按发行流程构建、检查并打包：`PaperDigest-macOS-1.4.2-arm64.zip`、同名 DMG 与六件发布材料通过 `prepare` 与 `verify`，源码提交 `328981ab`，标签 `v1.4.2` 指向该提交。GitHub 上已创建 1.4.2 草稿 Release，下载附件后按 `SHA256SUMS` 复核通过；尚未公开。
+
+Android 1.4.2 的源码与 Mac 同期升级，正式 APK 仍需在本机用发行签名库签名，签名口令只能由维护者手动输入；公开前还须完成 69 项适用验收和云端/发行 17 项记录。草稿 Release 当前只含 Mac 附件，公开与补入 Android 附件按这两项的实际完成情况处理。
+
 ## 验证
 
 - Mac：`PublicProtocolEndpointsTests` 覆盖小写别名通过、小写错指纹拒绝、驼峰与小写冲突拒绝，并断言不是回退到旧缓存。
