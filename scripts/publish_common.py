@@ -4870,6 +4870,17 @@ def _validate_experiment_table_evidence_depth(
         results,
         re.I,
     )
+    # 原文的训练试点比较三项设置，须在同一表中保留各自的数值。
+    pilot_source = str(complete_source_text or '')
+    if (re.search(r'eleven pilot runs[\s\S]{0,700}factorial[\s\S]{0,400}BPE-dropout', pilot_source, re.I)
+            and re.search(r'CR-CTC[\s\S]{0,100}0\.0115[\s\S]{0,200}CTC.side weight 0\.1 instead of 0\.3[\s\S]{0,100}0\.0020[\s\S]{0,200}BPE-dropout 0\.1 instead of none[\s\S]{0,100}0\.0062', pilot_source, re.I)):
+        for table in tables:
+            rows = [' '.join(row) for row in table['rows']]
+            if (any(re.search(r'CR-CTC', row, re.I) and '0.0115' in row for row in rows)
+                    and any(re.search(r'CTC', row, re.I) and all(value in row for value in ('0.1', '0.3', '0.0020')) for row in rows)
+                    and any(re.search(r'BPE.dropout', row, re.I) and '0.0062' in row for row in rows)):
+                result_has_ablation = True
+                break
     result_has_ablation = result_has_ablation or _has_reported_experiment_phrase(
         results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
         r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
