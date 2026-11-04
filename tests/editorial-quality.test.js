@@ -29,6 +29,12 @@ const {
     validateEditorialQuality
 } = require('../scripts/editorial-quality.js');
 
+it('小数位数是精度设置，附近真实错误率数值仍检查单位', () => {
+    const sentence = '随后从同一检查点分出两个各持续 16,000 步的降温过程，学习率按平方根衰减从该检查点对应的学习率值降至 10−6，一个用主混合，一个用降温混合，各取最后检查点和最后三存档平均共 4 个候选，按两开发集平均词错误率选最低者，若均值在 3 位小数相同则取检查点数少者。';
+    assert.deepEqual(findMissingComparisonUnits(sentence), []);
+    assert.ok(findMissingComparisonUnits('按两开发集平均词错误率选最低者，词错误率从 12 降至 8，若均值在 3 位小数相同则取检查点数少者。').length);
+});
+
 describe('读者中文的精确怪译与检查话术诊断', () => {
     it('定位真实怪译并给保留数字与来源的修正引导，不改原文', () => {
         const text = '😀 引言。\n\n最优评论家固定时，生成器得到分数差梯度。\n'

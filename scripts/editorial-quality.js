@@ -1475,6 +1475,8 @@ function findMissingComparisonUnits(text) {
                 const before = numericText.slice(0, match.index);
                 const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
+                // 明确的小数位数是精度设定，不是附近指标的数值。
+                if (/^\d+$/.test(match[0]) && /^\s*位小数/u.test(after)) return false;
                 if (/^\d+$/.test(match[0]) && /^\s*句(?=$|[^A-Za-z0-9_.])/u.test(after)) return false;
                 // 明确的人数不是准确率值；仅整数配合完整人员名称时排除。
                 if (/^(?:\d+|[零〇一二两三四五六七八九十百千万]+)$/.test(match[0])
