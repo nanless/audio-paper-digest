@@ -19,7 +19,7 @@ if __name__ == '__main__':
     raise SystemExit('This helper is called through the normal blog publisher.')
 
 import fitz
-from reader_inline_svg import source_descriptor, validate_svg
+from reader_inline_svg import source_descriptor, validate_svg, has_unsaved_latexml_static_layout
 
 CONTRACT = 'reader-sealed-pdf-page-asset-v1'
 DPI = 144
@@ -352,7 +352,28 @@ def dependency_failure(raw):
 
     if any(cycle(key) for key in graph):
         return {'reason': 'cyclic_local_fragment_dependencies', 'targets': []}
-    return _white_on_dark_css_failure(root)
+    color_failure = _white_on_dark_css_failure(root)
+    if color_failure:
+        return color_failure
+    # LaTeXML minipage spans use an inline width, but the isolated renderer has
+    # no stylesheet to turn these spans into inline blocks. Width therefore has
+    # no effect and text spills into adjacent cells. Require actual text and the
+    # exact unstyled foreignObject wrappers; arbitrary classes are not evidence.
+    parents = {child: parent for parent in root.iter() for child in parent}
+    witnesses = []
+    for node in root.iter():
+        classes = set(node.attrib.get('class', '').split())
+        declarations = _declarations(node)
+        if (node.tag.split('}')[-1] != 'span'
+                or not {'ltx_inline-block', 'ltx_minipage'}.issubset(classes)
+                or not re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)em', declarations.get('width', ''))
+                or 'display' in declarations or not ''.join(node.itertext()).strip()
+                or not has_unsaved_latexml_static_layout(node, parents)):
+            continue
+        witnesses.append({'elementId': node.get('id'), 'width': declarations['width']})
+    if len(witnesses) >= 3:
+        return {'reason': 'unmapped_latexml_minipage_layout', 'witnesses': witnesses}
+    return None
 
 
 def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, source_files):
@@ -419,6 +440,15 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     numbers.append(page.number + 1)
                 if text in {displayed_caption, colonless_caption}:
                     matches.append((page.number, block[4]))
+                elif failure['reason'] == 'unmapped_latexml_minipage_layout':
+                    # PDF line-wrap hyphens may split a word, and its caption
+                    # may use Fig. N. instead of HTML Figure N:. Only the full
+                    # caption equality after these two exact projections counts.
+                    wrapped = re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '', block[4])
+                    wrapped = _pdf_caption_text(wrapped)
+                    wrapped = re.sub(r'^Fig\.\s+(\d+)\.\s*', r'Figure \1: ', wrapped, flags=re.I)
+                    if wrapped == displayed_caption:
+                        matches.append((page.number, block[4]))
         need(len(matches) == 1 and numbers == [matches[0][0] + 1],
              'pdf_page_full_caption_or_figure_number_not_unique')
         index, raw_caption = matches[0]
