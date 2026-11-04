@@ -223,7 +223,19 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
                 descriptors.keys().forEach{filename->
                     val record=descriptors.getJSONObject(filename);val url=CatalogRepository.sameSite(URI(base).resolve(record.getString("url")).toASCIIString())
                     require(URI(url).path==ownerRoot+filename&&record.getString("sha256").matches(Regex("[a-f0-9]{64}"))){"当前引用文件超出已发布目录或缺少真实SHA"}
-                    if(filename=="rethink-context.json")require(ClientProtocols.hasValidHeader(record,"paper-research-context")&&record.getString("contract")==ClientProtocols.contract("paper-research-context")){"当前上下文格式声明无效"}
+                    if(filename=="rethink-context.json"){
+                        // 已发布页面曾把 schemaFingerprint 写成小写（Hugo 参数键小写化）。
+                        // 只接受这一个已知别名，归一化后仍走严格头校验。
+                        val context=JSONObject(record.toString())
+                        if(context.has("schemafingerprint")){
+                            val legacy=context.get("schemafingerprint")
+                            require(legacy is String){"当前上下文格式声明无效"}
+                            if(context.has("schemaFingerprint"))require(context.get("schemaFingerprint")==legacy){"当前上下文格式声明无效"}
+                            else context.put("schemaFingerprint",legacy)
+                            context.remove("schemafingerprint")
+                        }
+                        require(ClientProtocols.hasValidHeader(context,"paper-research-context")&&context.getString("contract")==ClientProtocols.contract("paper-research-context")){"当前上下文格式声明无效"}
+                    }
                     locations[filename]=url
                 }
                 require(locations.values.map{it.substringBeforeLast('/')}.toSet().size==1){"当前引用文件混用了不同目录"}

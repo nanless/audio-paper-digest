@@ -55,6 +55,21 @@ class PublishedCitationRepositoryTest {
   f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$descriptors</script>").toByteArray()
   val corrupt=f.bound();assertTrue(f.repo.declaredFiles(f.paper,corrupt).isEmpty())
   assertTrue(runCatching{f.repo.original(f.paper,corrupt,PublishedCitationRepository.Format.JSON)}.isFailure)
+  val legacy=JSONObject(descriptors.toString())
+  val correct=ClientProtocols.recordHeader("paper-research-context","paper-research-context").getString("schemaFingerprint")
+  legacy.getJSONObject("rethink-context.json").apply{put("schemaFingerprint",correct);put("schemafingerprint",remove("schemaFingerprint"))}
+  f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$legacy</script>").toByteArray()
+  val legacyArticle=f.bound();assertEquals(4,f.repo.declaredFiles(f.paper,legacyArticle).size)
+  val wrong=JSONObject(legacy.toString());wrong.getJSONObject("rethink-context.json").put("schemafingerprint","0".repeat(64))
+  f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$wrong</script>").toByteArray()
+  val wrongBound=f.bound();assertTrue(f.repo.declaredFiles(f.paper,wrongBound).isEmpty())
+  val conflict=JSONObject(legacy.toString())
+  conflict.getJSONObject("rethink-context.json").apply{put("schemaFingerprint",correct);put("schemafingerprint","0".repeat(64))}
+  f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$conflict</script>").toByteArray()
+  val conflictBound=f.bound();assertTrue(f.repo.declaredFiles(f.paper,conflictBound).isEmpty())
+  val nonString=JSONObject(legacy.toString());nonString.getJSONObject("rethink-context.json").apply{remove("schemaFingerprint");put("schemafingerprint",123)}
+  f.responses[f.paper.blogURL]=(PublishedUtf8.decode(original)+"<script type='application/json' class='paper-tools__client-sidecars'>$nonString</script>").toByteArray()
+  val nonStringBound=f.bound();assertTrue(f.repo.declaredFiles(f.paper,nonStringBound).isEmpty())
   assertFalse(f.calls.any{it.contains("/data/papers/")})
  }
  @Test fun actualMiclaThreeFormatsAreExactPublishedOriginalBytesWithHonestSingleFileScope()=fixture("arxiv-micla"){f->

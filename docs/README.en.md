@@ -96,7 +96,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 
 These records explain the problems, changes, and actual verification at the time. They are not separate current operating procedures.
 
-- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md).
+- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).
 - Digest recovery, deployment, and repository cleanup: [November 2–3, 2026 retrospective](2026-11-daily-maintenance-retrospective.md).

@@ -90,6 +90,60 @@ private actor EndpointFixture {
         do{_=try await library.citationFile(for:"arxiv:2610.41381",format:"json")}catch{changedRejected=true}
         try check(changedRejected,"changed canonical file bytes must fail even with a valid format and owner")
         try check(!(await fixture.paths()).contains(where:{$0.contains("/data/papers/")}),"failed new material cannot silently use the old anchor")
+        // 已发布页面曾把 schemaFingerprint 写成小写；客户端只接受这一个已知别名，
+        // 值必须与登记指纹一致，且归一化后仍走严格校验。
+        var legacyDescriptors=descriptors
+        if var context=legacyDescriptors["rethink-context.json"] as? [String:Any] {
+            let current=context["schemaFingerprint"]
+            context.removeValue(forKey:"schemaFingerprint")
+            context["schemafingerprint"]=current
+            legacyDescriptors["rethink-context.json"]=context
+        }
+        let legacyDeclaration=String(data:try bytes(legacyDescriptors),encoding:.utf8)!
+        let legacyHTML="<html><body><div id='article-body' class='post-content'><p>Synthetic published guide.</p></div><script type='application/json' class='paper-tools__client-sidecars'>"+legacyDeclaration+"</script></body></html>"
+        await fixture.update("/blog/posts/paper/",Data(legacyHTML.utf8))
+        let legacyArticle=try await library.article(for:"arxiv:2610.41381",refresh:true,downloadImages:false)
+        try check(legacyArticle.researchContext != nil && legacyArticle.isStale != true
+                  && !legacyArticle.notices.contains(where:{$0.contains("结构声明无效")}),
+                  "legacy lowercase declaration must be fetched, not fall back to a stale article")
+        var corruptDescriptors=legacyDescriptors
+        if var context=corruptDescriptors["rethink-context.json"] as? [String:Any] {
+            context["schemafingerprint"]=String(repeating:"0",count:64)
+            corruptDescriptors["rethink-context.json"]=context
+        }
+        let corruptDeclaration=String(data:try bytes(corruptDescriptors),encoding:.utf8)!
+        let corruptHTML="<html><body><div id='article-body' class='post-content'><p>Synthetic published guide.</p></div><script type='application/json' class='paper-tools__client-sidecars'>"+corruptDeclaration+"</script></body></html>"
+        await fixture.update("/blog/posts/paper/",Data(corruptHTML.utf8))
+        // 上一次成功读取会留下缓存；坏页复验失败时客户端退回旧导读并标为 stale，
+        // 首次打开则直接报“结构声明无效”。这里核对复验确实被拒。
+        let corruptArticle=try await library.article(for:"arxiv:2610.41381",refresh:true,downloadImages:false)
+        try check(corruptArticle.isStale==true && corruptArticle.notices.contains(where:{$0.contains("结构声明无效")}),
+                  "lowercase alias with a wrong fingerprint must be rejected by the fetch")
+        var conflictDescriptors=descriptors
+        if var context=conflictDescriptors["rethink-context.json"] as? [String:Any] {
+            context["schemafingerprint"]=String(repeating:"0",count:64)
+            conflictDescriptors["rethink-context.json"]=context
+        }
+        let conflictDeclaration=String(data:try bytes(conflictDescriptors),encoding:.utf8)!
+        let conflictHTML="<html><body><div id='article-body' class='post-content'><p>Synthetic published guide.</p></div><script type='application/json' class='paper-tools__client-sidecars'>"+conflictDeclaration+"</script></body></html>"
+        await fixture.update("/blog/posts/paper/",Data(conflictHTML.utf8))
+        let conflictArticle=try await library.article(for:"arxiv:2610.41381",refresh:true,downloadImages:false)
+        try check(conflictArticle.isStale==true && conflictArticle.notices.contains(where:{$0.contains("结构声明无效")}),
+                  "conflicting camelCase and lowercase fingerprints must be rejected")
+        var nonStringDescriptors=descriptors
+        if var context=nonStringDescriptors["rethink-context.json"] as? [String:Any] {
+            context["schemafingerprint"]=123
+            context.removeValue(forKey:"schemaFingerprint")
+            nonStringDescriptors["rethink-context.json"]=context
+        }
+        let nonStringDeclaration=String(data:try bytes(nonStringDescriptors),encoding:.utf8)!
+        let nonStringHTML="<html><body><div id='article-body' class='post-content'><p>Synthetic published guide.</p></div><script type='application/json' class='paper-tools__client-sidecars'>"+nonStringDeclaration+"</script></body></html>"
+        await fixture.update("/blog/posts/paper/",Data(nonStringHTML.utf8))
+        let nonStringArticle=try await library.article(for:"arxiv:2610.41381",refresh:true,downloadImages:false)
+        try check(nonStringArticle.isStale==true && nonStringArticle.notices.contains(where:{$0.contains("结构声明无效")}),
+                  "non-string lowercase alias must be rejected")
+        await fixture.update("/blog/posts/paper/",Data(html.utf8))
+
         for status in [404,410] {
             let directory=try folder();defer{try? FileManager.default.removeItem(at:directory)}
             let old=EndpointFixture(["/blog/index.json":original],["/blog/client/index.json":status])

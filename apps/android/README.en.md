@@ -4,7 +4,7 @@
 
 This native Android client reads the Paper Digest website's published paper catalog, illustrated explanations, daily digests, and conference overviews. It supports original PDFs, notes, offline reading, personal study, Zotero archiving, and Nutstore backup. Reading or synchronizing existing articles does not request new model analysis.
 
-The source version is **1.4.1, build 17**. Public package availability is determined by [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`, and formal packages retain the previous signing identity. See [validation and release scope (Chinese)](../../docs/android-validation.md) and the [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md).
+The source version is **1.4.2, build 18**. Public package availability is determined by [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`, and formal packages retain the previous signing identity. See [validation and release scope (Chinese)](../../docs/android-validation.md) and the [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md).
 
 Quoted interface labels below refer to the application's Chinese interface. Detailed linked documents are in Chinese unless stated otherwise.
 

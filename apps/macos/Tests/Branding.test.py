@@ -1,5 +1,6 @@
 """Offline branding regression checks; never builds/signs/starts an app."""
 import copy
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -22,8 +23,15 @@ class Branding(unittest.TestCase):
         check_app_branding(info, '论文速递工作台.app')
         self.assertEqual(info['CFBundleIdentifier'], 'com.nanless.PaperDigest')
         self.assertEqual(info['CFBundleExecutable'], 'PaperDigest')
-        self.assertEqual(info['CFBundleShortVersionString'], '1.4.0')
-        self.assertEqual(info['CFBundleVersion'], '16')
+        self.assertEqual(info['CFBundleShortVersionString'], '1.4.2')
+        self.assertEqual(info['CFBundleVersion'], '18')
+
+    def test_bundled_license_manifest_matches_current_version(self):
+        info = plistlib.loads((APP / 'Info.plist').read_bytes())
+        manifest = json.loads((APP / 'Resources/licenses/manifest.json').read_text())
+        own = next(row for row in manifest['components'] if row['id'] == 'paper-digest')
+        self.assertEqual(own['version'], info['CFBundleShortVersionString'])
+        self.assertEqual(own['version'], '1.4.2')
 
     def test_actual_plist_missing_or_old_branding_is_rejected(self):
         original = plistlib.loads((APP / 'Info.plist').read_bytes())
@@ -100,7 +108,7 @@ class Branding(unittest.TestCase):
             after = check_licenses(web)
             expected = copy.deepcopy(before)
             own = next(row for row in expected['components'] if row['id'] == 'paper-digest')
-            own.update(title='论文速递工作台', version='1.4.0')
+            own.update(title='论文速递工作台', version='1.4.2')
             self.assertEqual(after, expected)
             for path, raw in originals.items():
                 self.assertEqual((web / 'licenses' / path).read_bytes(), raw)

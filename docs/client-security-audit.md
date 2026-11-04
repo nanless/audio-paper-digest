@@ -15,7 +15,7 @@ Mac 和 Android 客户端统一称为“论文速递工作台”；项目和网�
 
 安装、配置及格式支持见[Mac说明](../apps/macos/README.md)和[Android说明](../apps/android/README.md)。下载入口为[项目发行页](https://github.com/nanless/audio-paper-digest/releases)；每个版本的构建信息、来源清单和SHA-256校验表随安装附件提供。
 
-上表是当时接受审计的 1.0.1，不是现行版本表。当前两端为 1.3.0，Mac build5、Android code8；正式包、旧资料升级与公开下载范围见[1.3.0 记录](workbench-1.3.0-review.md#正式发行与升级检查)。本页未对后续版本重新执行完整历史扫描，不能用 1.0.1 的检查替代新包核验。
+上表是当时接受审计的 1.0.1，不是现行版本表。当前两端为 1.4.2，Mac build18、Android code18；正式包、旧资料升级与公开下载范围见[1.4.2 记录](workbench-1.4.2-review.md)。本页未对后续版本重新执行完整历史扫描，不能用 1.0.1 的检查替代新包核验。
 
 ## 检查范围与结果
 

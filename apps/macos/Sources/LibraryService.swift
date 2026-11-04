@@ -1214,7 +1214,18 @@ actor LibraryService {
                 let url=try sameSite(address)
                 guard url.deletingLastPathComponent().path==(ownerRoot.path.hasSuffix("/") ? String(ownerRoot.path.dropLast()):ownerRoot.path),url.lastPathComponent==name else { throw ServiceError.invalid("当前引用文件超出已发布资料目录。") }
                 if name=="rethink-context.json" {
-                    guard ClientProtocols.hasValidHeader(record,"paper-research-context"),record["contract"] as? String==ClientProtocols.contract("paper-research-context") else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                    // 2026-11-03 与 11-04 的页面曾把 schemaFingerprint 写成小写
+                    // schemafingerprint（Hugo 参数键小写化）。这里只接受这一个已知别名，
+                    // 归一化后仍走严格头校验，不放开其他键或历史格式。
+                    var context=record
+                    if let legacyValue=context["schemafingerprint"] {
+                        guard let legacy=legacyValue as? String else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                        if let currentValue=context["schemaFingerprint"] {
+                            guard let current=currentValue as? String,current==legacy else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                        } else { context["schemaFingerprint"]=legacy }
+                        context.removeValue(forKey:"schemafingerprint")
+                    }
+                    guard ClientProtocols.hasValidHeader(context,"paper-research-context"),context["contract"] as? String==ClientProtocols.contract("paper-research-context") else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
                 }
                 result[name]=url.absoluteString;hashes[name]=hash
             }

@@ -22,7 +22,7 @@
 
 个人研究是应用中的独立功能。只有用户主动研究或测试连接时，应用才调用自己配置的模型服务；这不代表推理一定在设备上完成。个人回答、实际用量、费用和授权，与网站生产任务分别保存。两部分怎样读取和保存资料，见[客户端数据流图](docs/images/client-data-flow.svg)。恢复备份沿用原记录，新增请求仍按当前任务授权执行。
 
-1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。目前 Mac 和安卓源码均为 1.3.7（构建号 15），并提供 WebDAV 个人资料同步。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。安装包是否公开，以[发行页](https://github.com/nanless/audio-paper-digest/releases)为准。
+1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。目前 Mac 和安卓源码均为 1.4.2（构建号 18），并提供 WebDAV 个人资料同步。1.4.2 修复了 2026 年 11 月 3 日、4 日导读打不开的上下文声明问题。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。安装包是否公开，以[发行页](https://github.com/nanless/audio-paper-digest/releases)为准。
 
 Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本地签名，尚未通过 Apple 公证。Android 包含四种处理器架构的原生库（ABI），沿用原签名和应用标识。安装方法、实际验证范围和限制分别见两端使用说明与[客户端安全说明](docs/client-security-audit.md)。
 

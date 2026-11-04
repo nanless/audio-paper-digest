@@ -23,6 +23,8 @@
 | 博客 `static/client/papers/` 与构建目录中的原地址兼容文件 | `citation.json`、BibTeX、RIS、`rethink-context.json` | 后者是摘要和研究上下文，不包含完整长文 |
 | 本项目 `scripts/publish-to-blog.py` | arXiv 与会议共用的四文件序列化及 SHA 记录 | 引用与上下文的旧声明、原字节及公开 URL 保持兼容 |
 
+页面里的 `paper-tools__client-sidecars` 声明必须保留 `schemaFingerprint` 的驼峰写法。Hugo 会把 front matter 参数 map 的嵌套键递归小写，博客模板因此按白名单逐字段重建声明，构建时再校验；2026-11-03 与 11-04 的页面曾输出小写 `schemafingerprint`，客户端只把它当作唯一已知别名，归一化后仍按登记指纹严格校验，不放开其他字段或历史格式。
+
 首次导出可以重新排版、序列化和校验已有成果，模型请求数必须为 0。历史缺失的作者、日期、来源版本或资产逐项留缺，不能借导出协议升级重写论文、补签旧资格或猜测事实。
 
 ## 2. 已发布提交与部署边界
