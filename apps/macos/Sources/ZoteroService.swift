@@ -110,8 +110,13 @@ actor ZoteroService {
         let filename: String
         let contentType: String
         let data: Data
-        var sha256: String { ZoteroService.sha256(data) }
-        var md5: String { Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+        let sha256: String
+        let md5: String
+        init(role: String, filename: String, contentType: String, data: Data) {
+            self.role = role; self.filename = filename; self.contentType = contentType; self.data = data
+            self.sha256 = ZoteroService.sha256(data)
+            self.md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
     }
     private let directory: URL
     private let pathDirectory: URL

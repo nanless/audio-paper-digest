@@ -26,6 +26,13 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
 
+private val ARXIV_VERSION_SUFFIX=Regex("v[1-9][0-9]*$")
+private val ARXIV_ID_PATTERN=Regex("(?:[0-9]{4}\\.[0-9]{4,5}|[a-z-]+(?:\\.[A-Z]{2})?/[0-9]{7})")
+private val SHA256_PATTERN=Regex("^[a-f0-9]{64}$")
+private val SEARCH_SHARD_PATTERN=Regex("^search-index/part-[0-9]{4,}-[a-f0-9]{12}\\.json$")
+private val HTML_ALLOWED_TAGS=("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s sup sub br hr details summary dl dt dd math mrow mi mo mn msup msub msubsup mfrac msqrt mroot mtext mtable mtr mtd mover munder munderover semantics annotation").split(' ').toSet()
+private val HTML_ALLOWED_ATTRS=("id class title alt width height colspan rowspan scope display mathvariant xmlns encoding").split(' ').toSet()
+
 class CatalogRepository(private val context: Context, private val personal: PersonalStore,
     private val fetchOverride: (suspend (String, Int) -> ByteArray)? = null) {
     private val directory = File(personal.directory, "PublishedLibrary").also { it.mkdirs() }
@@ -304,7 +311,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             val urls = mutableSetOf<String>()
             descriptors.forEach { s ->
                 val path = s.getString("url"); val hash = s.getString("sha256")
-                require(path.matches(Regex("search-index/part-[0-9]{4,}-[a-f0-9]{12}\\.json")) && hash.matches(Regex("[a-f0-9]{64}")) && path.endsWith("-${hash.take(12)}.json") && urls.add(path) && s.getInt("bytes") in 1..1024 * 1024 && s.getInt("recordCount") > 0) { "网站分片描述无效" }
+                require(path.matches(SEARCH_SHARD_PATTERN) && hash.matches(SHA256_PATTERN) && path.endsWith("-${hash.take(12)}.json") && urls.add(path) && s.getInt("bytes") in 1..1024 * 1024 && s.getInt("recordCount") > 0) { "网站分片描述无效" }
             }
             require(descriptors.sumOf { it.getLong("bytes") } == manifest.getLong("totalBytes") && descriptors.sumOf { it.getLong("recordCount") } == manifest.getLong("recordCount")) { "网站目录总数量或字节不一致" }
             shards = descriptors.size
@@ -527,8 +534,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         throw AppFailure("transport", "官方资源重定向次数过多")
     }
     private fun immutableArxiv(p: Paper): Boolean {
-        if (p.sourceKind != "arxiv" || p.sourceVersion == null || !Regex("v[1-9][0-9]*$").containsMatchIn(p.sourceVersion)) return false
-        val version = p.sourceVersion; val base = version.replace(Regex("v[1-9][0-9]*$"), "")
+        if (p.sourceKind != "arxiv" || p.sourceVersion == null || !ARXIV_VERSION_SUFFIX.containsMatchIn(p.sourceVersion)) return false
+        val version = p.sourceVersion; val base = version.replace(ARXIV_VERSION_SUFFIX, "")
         return runCatching {
             val abs = URI(p.sourceURL ?: ""); val pdf = URI(p.pdfURL ?: "")
             p.id == "arxiv:$base" && listOf(abs.host, pdf.host).all { it in setOf("arxiv.org", "export.arxiv.org") } && abs.path == "/abs/$version" && pdf.path.removeSuffix(".pdf") == "/pdf/$version"
@@ -658,13 +665,13 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             val kind = row.optString("sourceKind", citation.optString("sourceKind", "unknown"))
             val blog = sameSite(row.getString("permalink"))
             val arxiv = row.optString("arxivId", citation.optString("arxivId"))
-            val base = arxiv.replace(Regex("v[1-9][0-9]*$"), "")
+            val base = arxiv.replace(ARXIV_VERSION_SUFFIX, "")
             val explicit = row.optString("paperId", citation.optString("paperId"))
-            val id = if (status == "verified" && kind == "arxiv" && base.matches(Regex("(?:[0-9]{4}\\.[0-9]{4,5}|[a-z-]+(?:\\.[A-Z]{2})?/[0-9]{7})"))) "arxiv:$base" else if (status == "verified" && kind != "arxiv" && explicit.isNotEmpty()) explicit else "page:${URI(blog).path}"
+            val id = if (status == "verified" && kind == "arxiv" && base.matches(ARXIV_ID_PATTERN)) "arxiv:$base" else if (status == "verified" && kind != "arxiv" && explicit.isNotEmpty()) explicit else "page:${URI(blog).path}"
             val title = row.optString("originalTitle", citation.optString("title", row.optString("title")))
             require(title.isNotEmpty()) { "论文目录缺少题名" }
             val hashes = listOf(row.nullableString("pdfSha256"), row.nullableString("pdfSHA256"), citation.nullableString("pdfSha256"), citation.nullableString("pdfSHA256")).filterNotNull().toSet()
-            require(hashes.size <= 1 && hashes.all { it.matches(Regex("[a-f0-9]{64}")) }) { "已发布 PDF 指纹无效或相互矛盾" }
+            require(hashes.size <= 1 && hashes.all { it.matches(SHA256_PATTERN) }) { "已发布 PDF 指纹无效或相互矛盾" }
             val pdfSHA = hashes.firstOrNull()
             return Paper(id, title, row.optString("titleZh", row.optString("title", title)), citation.optJSONArray("authors")?.strings() ?: emptyList(), row.optString("date"), Paper.score(row.opt("score")), row.optString("task"), row.optString("method"), row.optJSONArray("tags")?.strings() ?: emptyList(), kind, status, blog,
                 cleanHTTPS(citation.nullableString("sourceUrl") ?: citation.nullableString("url")), if (status == "verified") cleanHTTPS(citation.nullableString("pdfUrl")) else null, citation.nullableString("arxivId"), citation, pdfSHA, listOf(blog), original = JSONObject().put("websiteTagRecords", JSONArray().put(WebsiteTaxonomy.record(row))))
@@ -673,9 +680,9 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             require(ClientProtocols.hasValidHeader(value,if(context)"paper-research-context" else "researcher-sidecars")) { "引用或上下文附加文件合同不受支持" }
             if (paper.identityStatus == "verified") {
                 if (paper.sourceKind == "arxiv") {
-                    val base = value.optString("arxivId", value.optString("id")).replace(Regex("v[1-9][0-9]*$"), "")
+                    val base = value.optString("arxivId", value.optString("id")).replace(ARXIV_VERSION_SUFFIX, "")
                     require("arxiv:$base" == paper.id) { "附加文件属于另一篇论文" }
-                    if (paper.sourceVersion != null) listOf("arxivVersionedId", "id", "arxivId").mapNotNull { value.nullableString(it) }.forEach { id -> require(!Regex("v[1-9][0-9]*$").containsMatchIn(id) || id == paper.sourceVersion) { "附加文件对应另一原文版本" } }
+                    if (paper.sourceVersion != null) listOf("arxivVersionedId", "id", "arxivId").mapNotNull { value.nullableString(it) }.forEach { id -> require(!ARXIV_VERSION_SUFFIX.containsMatchIn(id) || id == paper.sourceVersion) { "附加文件对应另一原文版本" } }
                     listOf("absUrl" to paper.sourceURL, "pdfUrl" to paper.pdfURL).forEach { (field, expected) -> val address = value.nullableString(field); require(address == null || expected == null || address == expected) { "附加文件来源与当前原文版本不一致" } }
                 } else require(value.optString("paperId") == paper.id || value.optString("id") == paper.id) { "附加文件属于另一会议论文" }
             }
@@ -709,7 +716,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             require(paper.identityStatus != "verified" || owner.isEmpty() || owner == paper.id) { "页面正文与目录论文身份不符" }
             if (paper.identityStatus == "verified" && paper.sourceKind == "arxiv") {
                 val version = citation.optString("arxivId")
-                require(!Regex("v[1-9][0-9]*$").containsMatchIn(version) || paper.sourceVersion == null || version == paper.sourceVersion) { "页面原文版本与目录不符" }
+                require(!ARXIV_VERSION_SUFFIX.containsMatchIn(version) || paper.sourceVersion == null || version == paper.sourceVersion) { "页面原文版本与目录不符" }
                 listOf("sourceUrl" to paper.sourceURL, "pdfUrl" to paper.pdfURL).forEach { (key, expected) -> require(expected == null || citation.optString(key).isEmpty() || citation.optString(key) == expected) { "页面来源地址与目录不符" } }
             }
             sanitize(body, paper.blogURL)
@@ -728,8 +735,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             return copy.wholeText()
         }
         private fun sanitize(root: Element, base: String) {
-            val allowed = ("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s sup sub br hr details summary dl dt dd math mrow mi mo mn msup msub msubsup mfrac msqrt mroot mtext mtable mtr mtd mover munder munderover semantics annotation").split(' ').toSet()
-            val attrs = ("id class title alt width height colspan rowspan scope display mathvariant xmlns encoding").split(' ').toSet()
+            val allowed = HTML_ALLOWED_TAGS
+            val attrs = HTML_ALLOWED_ATTRS
             root.children().toList().forEach { child ->
                 if (child.normalName() !in allowed) child.remove() else {
                     child.attributes().asList().forEach { attr ->

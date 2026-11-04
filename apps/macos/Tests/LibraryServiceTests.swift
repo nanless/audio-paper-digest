@@ -220,6 +220,9 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(result["text"] as? String == String(data: original, encoding: .utf8), "actual published BibTeX bytes retained without regeneration")
         try expect(result["sha256"] as? String == sha(original), "export SHA binds exact source bytes")
         try await expectFailure("missing RIS refused, not manufactured") { _ = try await library.citationFile(for: "arxiv:2501.00001", format: "ris") }
+        let foreignHTML="<html><body><div id='article-body' class='post-content'><p>原文导读</p></div><script type='application/json' class='paper-tools__citation-record'>{\"paperKey\":\"arxiv:9999.99999\"}</script></body></html>"
+        await transport.update("/blog/posts/a/",Data(foreignHTML.utf8))
+        try await expectFailure("citation export must reject a published page whose identity differs from the catalog") { _ = try await library.citationFile(for: "arxiv:2501.00001", format: "bib") }
         print("ROUND 6 actual citation-file export: PASS")
     }
     static func testFreshnessAndIsolation() async throws {

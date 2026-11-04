@@ -21,6 +21,12 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.util.IdentityHashMap
 import java.util.concurrent.ConcurrentHashMap
 
+private val SHA256_PATTERN=Regex("^[a-f0-9]{64}$")
+private val ARXIV_VERSION_SUFFIX=Regex("v[1-9][0-9]*$")
+private val WHITESPACE_PATTERN=Regex("\\s+")
+private val RIS_SPLIT_PATTERN=Regex("\\r\\n|\\n|\\r")
+private val RIS_LINE_PATTERN=Regex("^([A-Z0-9]{2})  - ?(.*)$")
+
 /** Published citation originals only: never rebuild bibliography text from catalog fields. */
 class PublishedCitationRepository(researchDirectory:File,private val read:suspend(String,Int)->ByteArray) {
     enum class Format(val route:String,val filename:String,val mime:String) {
@@ -154,7 +160,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         }
         if(paper.sourceKind=="arxiv") {
             val version=paper.sourceVersion?:error("引用导出需要明确的当前 arXiv 原文版本")
-            require(Regex("v[1-9][0-9]*$").containsMatchIn(version)&&paper.id=="arxiv:"+version.replace(Regex("v[1-9][0-9]*$"),"")){"引用论文编号与原文版本不一致"}
+            require(ARXIV_VERSION_SUFFIX.containsMatchIn(version)&&paper.id=="arxiv:"+version.replace(ARXIV_VERSION_SUFFIX,"")){"引用论文编号与原文版本不一致"}
             val source=URI(paper.sourceURL!!);val pdf=URI(paper.pdfURL?:error("引用缺少当前原始PDF地址"))
             require(listOf(source,pdf).all{it.scheme=="https"&&it.host in listOf("arxiv.org","export.arxiv.org")&&it.port in listOf(-1,443)&&it.userInfo==null&&it.query==null&&it.fragment==null}&&source.path=="/abs/$version"&&pdf.path.removeSuffix(".pdf")=="/pdf/$version"){"引用来源地址没有固定到当前 arXiv 版本"}
         }else require(paper.id.startsWith("conference:")){"会议引用缺少明确的会议论文身份"}
@@ -203,9 +209,9 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
                 RootAnchor(before,pin).also{anchors[root.absolutePath]=WeakReference(it)}
             }catch(error:Throwable){try{pin.close()}catch(close:Throwable){error.addSuppressed(close)};throw error}
         }
-        private fun validSHA(value:String)=value.matches(Regex("[a-f0-9]{64}"))
+        private fun validSHA(value:String)=value.matches(SHA256_PATTERN)
         private fun strictCount(value:JSONObject,key:String):Long {val n=value.get(key);require(n is Number&&n.toDouble().isFinite()&&n.toDouble()==n.toLong().toDouble()&&n.toLong()>0);return n.toLong()}
-        private fun normalize(value:String)=value.replace(Regex("\\s+")," ").trim()
+        private fun normalize(value:String)=value.replace(WHITESPACE_PATTERN," ").trim()
         private fun pageURL(value:String):String=CatalogRepository.sameSite(value).also {require(URI(it).path.startsWith("/audio-paper-digest-blog/posts/")){"引用页面超出已发布论文目录"}}
         private fun selectLink(html:String,base:String,name:String,paper:Paper):String? {
             require(name in listOf("citation.json","citation.bib","citation.ris","rethink-context.json"))
@@ -222,7 +228,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
                 val locations=mutableMapOf<String,String>()
                 descriptors.keys().forEach{filename->
                     val record=descriptors.getJSONObject(filename);val url=CatalogRepository.sameSite(URI(base).resolve(record.getString("url")).toASCIIString())
-                    require(URI(url).path==ownerRoot+filename&&record.getString("sha256").matches(Regex("[a-f0-9]{64}"))){"当前引用文件超出已发布目录或缺少真实SHA"}
+                    require(URI(url).path==ownerRoot+filename&&record.getString("sha256").matches(SHA256_PATTERN)){"当前引用文件超出已发布目录或缺少真实SHA"}
                     if(filename=="rethink-context.json"){
                         // 已发布页面曾把 schemaFingerprint 写成小写（Hugo 参数键小写化）。
                         // 只接受这一个已知别名，归一化后仍走严格头校验。
@@ -274,10 +280,10 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         }
         private fun ris(text:String):Map<String,List<String>> {
             val fields=linkedMapOf<String,MutableList<String>>();var current:String?=null;var ended=false
-            for(line in text.split(Regex("\\r\\n|\\n|\\r"))) {
+            for(line in text.split(RIS_SPLIT_PATTERN)) {
                 if(line.isBlank())continue
                 require(!ended){"RIS包含不止一份引用或尾随内容"}
-                val m=Regex("^([A-Z0-9]{2})  - ?(.*)$").matchEntire(line)
+                val m=RIS_LINE_PATTERN.matchEntire(line)
                 if(m==null){require(line.startsWith("  ")&&current!=null){"RIS行格式无效"};val rows=fields.getValue(current!!);rows[rows.lastIndex]+=" "+line.trim();continue}
                 val key=m.groupValues[1];val value=m.groupValues[2]
                 if(fields.isEmpty())require(key=="TY"){"RIS缺少起始类型"}

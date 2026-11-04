@@ -1013,27 +1013,39 @@ actor LibraryService {
         }
     }
 
-    static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
-        let doc = try htmlDocumentPreservingMath(raw)
+    // 真实已发布页面的身份校验：正文唯一、citation 记录与目录一致。引用导出也走这里，
+    // 不能因为只取 sidecar 就跳过页面身份检查。
+    private static func validatePublishedPageIdentity(_ doc: XMLDocument, paper: Paper) throws {
         // Foundation's HTML tidy removes HTML5 <article>/<section> wrappers on macOS;
         // the published body's exact id + class survive and must match uniquely.
         let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
-        guard nodes.count == 1, let body = nodes.first as? XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
+        guard nodes.count == 1, nodes.first is XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
+        let citationNode = try doc.nodes(forXPath: "//script[@type='application/json' and contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__citation-record ')]").first
+        let attributeNode = try doc.nodes(forXPath: "//*[@data-citation-record]").first as? XMLElement
+        guard let rawCitation = (citationNode?.stringValue ?? attributeNode?.attribute(forName: "data-citation-record")?.stringValue)?.data(using: .utf8),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: rawCitation),
+              case .object(let fields) = value else { return }
+        if case .string(let key) = fields["paperKey"], paper.identityStatus == "verified", !key.isEmpty, key != paper.id {
+            throw ServiceError.invalid("页面论文身份与目录不一致，未把其他论文的正文合并进来。")
+        }
+        if paper.identityStatus == "verified", paper.sourceKind == "arxiv" {
+            if case .string(let version) = fields["arxivId"], version.range(of: #"v[1-9][0-9]*$"#, options: .regularExpression) != nil, let expected = paper.sourceVersion, version != expected { throw ServiceError.invalid("页面原文版本与目录不同，未将旧稿标为当前版本。") }
+            for (field, expected) in [("sourceUrl", paper.sourceURL), ("pdfUrl", paper.pdfURL)] {
+                if case .string(let address) = fields[field], !address.isEmpty, let expected, address != expected { throw ServiceError.invalid("页面来源地址与当前目录不一致，未授予当前版本身份。") }
+            }
+        }
+    }
+
+    static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
+        let doc = try htmlDocumentPreservingMath(raw)
+        try Self.validatePublishedPageIdentity(doc, paper: paper)
+        let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
+        guard let body = nodes.first as? XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
         var citation = paper.citation
         let citationNode = try doc.nodes(forXPath: "//script[@type='application/json' and contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__citation-record ')]").first
         let attributeNode = try doc.nodes(forXPath: "//*[@data-citation-record]").first as? XMLElement
         if let rawCitation = (citationNode?.stringValue ?? attributeNode?.attribute(forName: "data-citation-record")?.stringValue)?.data(using: .utf8),
            let value = try? JSONDecoder().decode(JSONValue.self, from: rawCitation) {
-            if case .object(let fields) = value, case .string(let key) = fields["paperKey"],
-               paper.identityStatus == "verified", !key.isEmpty, key != paper.id {
-                throw ServiceError.invalid("页面论文身份与目录不一致，未把其他论文的正文合并进来。")
-            }
-            if case .object(let fields) = value, paper.identityStatus == "verified", paper.sourceKind == "arxiv" {
-                if case .string(let version) = fields["arxivId"], version.range(of: #"v[1-9][0-9]*$"#, options: .regularExpression) != nil, let expected = paper.sourceVersion, version != expected { throw ServiceError.invalid("页面原文版本与目录不同，未将旧稿标为当前版本。") }
-                for (field, expected) in [("sourceUrl", paper.sourceURL), ("pdfUrl", paper.pdfURL)] {
-                    if case .string(let address) = fields[field], !address.isEmpty, let expected, address != expected { throw ServiceError.invalid("页面来源地址与当前目录不一致，未授予当前版本身份。") }
-                }
-            }
             citation = value
         }
         try sanitize(body, pageURL: pageURL)
@@ -1182,8 +1194,8 @@ actor LibraryService {
             // Discover the actual published download link; never synthesize BibTeX/RIS from metadata.
             let data = try await read(try sameSite(paper.blogURL), limit: 8 * 1024 * 1024)
             guard let html = String(data: data, encoding: .utf8) else { throw ServiceError.invalid("引用来源页面不是UTF-8。") }
-            _ = try Self.extractArticle(html, paper: paper, pageURL: URL(string: paper.blogURL)!)
             let doc = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+            try Self.validatePublishedPageIdentity(doc, paper: paper)
             let declared = try publishedSidecarLinks(doc,paper:paper)
             addresses=declared.urls;hashes=declared.hashes
         }

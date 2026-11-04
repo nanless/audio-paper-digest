@@ -86,7 +86,7 @@ function scientificMathAt(text,start){
  }
  return null;
 }
-function nextScientificMath(text){for(let i=0;i<text.length;i++){const match=scientificMathAt(text,i);if(match)return match;}return null;}
+function nextScientificMath(text,from=0){for(let i=from;i<text.length;i++){const match=scientificMathAt(text,i);if(match)return match;}return null;}
 function prepareDisplayMath(wrapper){wrapper.tabIndex=0;wrapper.setAttribute('role','region');wrapper.setAttribute('aria-label','数学公式');wrapper.setAttribute('aria-description','内容较宽时可左右滚动');}
 function renderScientificMath(text,element,display){window.katex.render(text,element,{displayMode:display,throwOnError:false,output:'mathml',trust:false,strict:'warn'});if(display){const math=element.querySelector('math[display=block]');if(math)prepareDisplayMath(math.parentElement);}}
 function markdownHTML(text){
@@ -114,9 +114,9 @@ function renderMath(body){
  while(walker.nextNode()){const node=walker.currentNode;if(!node.parentElement.closest('pre,code,math,annotation'))nodes.push(node);}
  for(const node of nodes){
   const text=node.textContent,fragment=document.createDocumentFragment();let start=0,match;
-  while((match=nextScientificMath(text.slice(start)))){
-   const offset=start+match.start;fragment.append(text.slice(start,offset));
-   const span=document.createElement('span');renderScientificMath(match.text,span,match.display);fragment.append(span);start+=match.end;
+  while((match=nextScientificMath(text,start))){
+   const offset=match.start;fragment.append(text.slice(start,offset));
+   const span=document.createElement('span');renderScientificMath(match.text,span,match.display);fragment.append(span);start=match.end;
   }
   if(start){fragment.append(text.slice(start));node.replaceWith(fragment);}
  }
