@@ -6185,7 +6185,14 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
                     or asset.get('publicUrl') != public_url):
                 raise PublishDataValidationError('汇总内联图的像素 SHA、目标路径或 URL 与原图片记录不一致。')
             local_image = neutral_image.replace(f'({source_url})', f'({public_url})', 1)
-            return f'[{local_image}]({source_url})'
+            linked = f'[{local_image}]({source_url})'
+            proof = asset.get('derivedAssetProof')
+            if proof is not None:
+                label = proof.get('displayLabel', '')
+                if not re.fullmatch(r'原论文 PDF 第 [1-9]\d* 页（含图 [1-9]\d*）', label):
+                    raise PublishDataValidationError('汇总 PDF 整页图片缺少准确页码说明。')
+                return linked + f'\n\n*图片来源：{label}。完整图注与解读见独立文章。*'
+            return linked
         ordinal = figure.get('ordinal') if isinstance(figure, dict) else 1
         if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
             return ''
