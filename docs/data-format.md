@@ -73,6 +73,8 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 新的日更来源运行使用 `daily-fresh-source-run` 和对应的结构指纹，位于 `data/runtime/daily-fresh-source-runs/<runId>/`。同一批次仍使用原来的运行身份；已有运行保持原文件字节和原来源引用。新运行里的每篇 `fresh-source-analysis` 声明与该运行的格式和封存文件对应。
 
+取不到官方 PDF 的论文单独记在运行目录的 `daily-source-skips.json`，格式为 `daily-source-skip`。记录绑定批次日期、运行 ID、上限和篇数，每篇只保存论文编号、`ARXIV_PDF_NOT_FOUND`、404 和原始错误。被跳过的论文属于本次来源运行，但不出现在分析结果和博客页面里；读取这一批时必须同时核验跳过记录与剩余论文集合完全吻合。
+
 每篇的 `sources/<arxivId>/generation-000001/` 只包含以下四文件：
 
 | 文件 | 内容 |
