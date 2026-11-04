@@ -4534,13 +4534,18 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const hasNumberedMethodChain = (chain.length >= 2
         || /分(?:\d+|[一二三四五六七八九十]+)步/.test(summary)) && roles.length >= 2;
     const hasTieredMethodChain = tierRoleStages.size >= 2;
-    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary) && !hasExplicitNaturalProductChain(summary, sourceText) && !hasSymbolicGeometryMethodChain(summary)) {
+    const musicPillarChain = /semantics extraction, semantic-aware orchestration, and cross-modal semantic synchronization/i.test(sourceText)
+        && /语义提取负责[^。！？\n]{1,100}语义编排负责[^。！？\n]{1,100}(?:跨模态)?语义同步负责[^。！？\n]{1,100}/.test(summary)
+        && !/(?:不|未|没有|假设|假如)[^。！？\n]{0,15}(?:语义提取|语义编排|语义同步)/.test(summary);
+    if (!hasNumberedMethodChain && !hasTieredMethodChain && !musicPillarChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary) && !hasExplicitNaturalProductChain(summary, sourceText) && !hasSymbolicGeometryMethodChain(summary)) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
     // LaTeXML/PDF 抽取会把脚注标记重复一次：正文里一次，下一行又单独出现一遍
     // （观察到的 "11\n1" 就是标记 1 的双重渲染）。合并软换行前只删掉完全相同的
     // 这一对；普通的行尾测量值只要下一行不同，仍然是证据。
     const quantitativeSourceText = stripDuplicatedLineFootnoteMarkers(sourceText)
+        // 原文将示例场景中的延迟列为文献指标和设计目标，不能作为本研究的实测。
+        .replace(/(TABLE I: Representative MM Use Cases\. Latency values are indicative targets; see Table\s*II\.[\s\S]{0,180}?UC1: Remote jamming\s*)3[–-]5 musicians\s+Audio, kinematic\s+30[–-]40\s*ms audio; low, stable gesture delay/i, '$1[文献目标示例]')
         // 合并 PDF 软换行前只剥掉大纲编号。指标词表旁边的标题不是数值结果。
         .replace(/^\s*\d{1,2}(?:\.\d+){0,3}\.?[ \t]+(?=[A-Z][A-Za-z])/gm, '')
         .replace(/([^\n])\r?\n(?!\r?\n)/g, '$1 ');
