@@ -358,7 +358,9 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
         if (!/^\d{4}\.\d{4,5}$/.test(id) || metadata.paper_digest_pipeline_owned !== true || metadata.paper_digest_page_type !== 'paper'
             || metadata.draft !== false || metadata.date !== date) throw new Error(`日更独立页身份不完整：${name}`);
         const sidecars = metadata.paper_digest_sidecars || {};
-        const citationPath = `static/data/papers/${date}/${id.replace('.', '-')}/citation.json`;
+        const legacyCitationPath = `static/data/papers/${date}/${id.replace('.', '-')}/citation.json`;
+        const citationPath = paths.includes(legacyCitationPath) ? legacyCitationPath
+            : `static/client/papers/${date}/${id.replace('.', '-')}/citation.json`;
         const citationBytes = git('show', `${head}:${citationPath}`); const citation = JSON.parse(citationBytes);
         if (normalizedId(citation.arxivId) !== id || sidecars['citation.json']?.sha256 !== hash(citationBytes)) throw new Error(`日更引用元数据不符：${name}`);
         const month = Number(id.slice(2, 4)); if (month < 1 || month > 12) throw new Error('论文编号月份无效');
@@ -436,7 +438,11 @@ function readPublishedDigest(blogRepo, date, head = null) {
         if (!/^\d{4}\.\d{4,5}$/.test(id) || p.date !== date || p.draft !== false
             || month < 1 || month > 12
             || p.paper_digest_pipeline_owned !== true || p.paper_digest_page_type !== 'paper') throw new Error('已发布来源论文身份非法');
-        const citationPath = `static/data/papers/${date}/${id.replace('.', '-')}/citation.json`;
+        const legacyCitationPath = `static/data/papers/${date}/${id.replace('.', '-')}/citation.json`;
+        const committedPaths = git('ls-tree', '-r', '--name-only', head, '--',
+            legacyCitationPath).toString().trim();
+        const citationPath = committedPaths === legacyCitationPath ? legacyCitationPath
+            : `static/client/papers/${date}/${id.replace('.', '-')}/citation.json`;
         const citation = git('show', `${head}:${citationPath}`);
         if (normalizedId(JSON.parse(citation)) !== id || p.paper_digest_sidecars?.['citation.json']?.sha256 !== hash(citation)) {
             throw new Error('已发布来源引用身份不一致');

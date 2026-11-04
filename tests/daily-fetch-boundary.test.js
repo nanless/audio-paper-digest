@@ -72,6 +72,22 @@ test('拒绝无已发布日更、引用SHA损坏和错误时间', t => {
     assert.throws(() => resolveDailyFetchBoundary(f.root, { until }), /初次抓取/);
 });
 
+test('已发布引用资料迁移到客户端目录后仍核验原文和摘要', t => {
+    const f = createPublishedBlogRepo(t);
+    const oldPath = 'static/data/papers/2026-10-03/2610-00026/citation.json';
+    const newPath = 'static/client/papers/2026-10-03/2610-00026/citation.json';
+    f.put(newPath, fs.readFileSync(path.join(f.root, oldPath)));
+    f.git('rm', oldPath); f.git('add', newPath); f.git('commit', '-m', 'move');
+    f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    assert.equal(resolveDailyFetchBoundary(f.root, { until }).lastDigestDate, '2026-10-03');
+    const { readPublishedDigest } = require('../scripts/lib/daily-fetch-boundary.js');
+    assert.equal(readPublishedDigest(f.root, '2026-10-03').papers[0].citationPath, newPath);
+    f.put(newPath, '{}'); f.git('add', newPath); f.git('commit', '-m', 'corrupt');
+    f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until }), /元数据/);
+    assert.throws(() => readPublishedDigest(f.root, '2026-10-03'), /引用身份/);
+});
+
 test('已发布ID只读远端正式页字段，不读正文链接或未推送页', t => {
     const f = createPublishedBlogRepo(t);
     assert.deepEqual([...readCommittedPublishedPaperIds(f.root)], ['2610.00026']);
