@@ -27,6 +27,8 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 
 The [1.3.0 record](workbench-1.3.0-review.md) covers classification browsing, both interfaces, final packages, upgrades, and public downloads. Other versions retain their own dates, environments, and tested scope. They do not establish that every real-service operation was repeated on the current package.
 
+Use the [workbench review and release playbook](workbench-review-playbook.md) for cross-platform reviews, sync checks, and releases. See the [promotional production notes](workbench-promo-production.md) for recording demos, making covers, and preparing social copy.
+
 ### Implementation, backups, and archiving
 
 | Topic | Guide |
