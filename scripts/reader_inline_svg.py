@@ -208,17 +208,25 @@ def validate_svg(raw):
         # LaTeXML emits static verbatim prompts and citation labels inside an
         # HTML foreignObject. Admit those containers only in that HTML subtree;
         # all descendant attributes/resources still pass the same checks below.
-        static_html = element.tag.split('}')[-1].lower() in {'pre', 'cite'}
+        local_tag = element.tag.split('}')[-1].lower()
+        static_html = local_tag in {'pre', 'cite', 'section', 'h5'}
         if static_html:
             ancestor = parents.get(element)
             while ancestor is not None and ancestor.tag not in {
                     'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}:
                 ancestor = parents.get(ancestor)
-            if (element.tag not in {'pre', 'cite', '{http://www.w3.org/1999/xhtml}pre',
-                                    '{http://www.w3.org/1999/xhtml}cite'} or ancestor is None):
+            if (element.tag not in {local_tag, '{http://www.w3.org/1999/xhtml}' + local_tag}
+                    or ancestor is None):
                 raise ValueError('内联 SVG 的静态 HTML 元素必须位于 foreignObject 内')
-            unsupported_layout_dependency = (unsupported_layout_dependency
-                                             or has_unsaved_latexml_static_layout(element, parents))
+            if local_tag in {'section', 'h5'}:
+                classes = set(element.attrib.get('class', '').split())
+                required = {'ltx_paragraph'} if local_tag == 'section' else {'ltx_title', 'ltx_title_paragraph'}
+                if not required.issubset(classes):
+                    raise ValueError('内联 SVG 的静态段落类型无效')
+                unsupported_layout_dependency = True
+            else:
+                unsupported_layout_dependency = (unsupported_layout_dependency
+                                                 or has_unsaved_latexml_static_layout(element, parents))
         unsaved_icon = has_unsaved_css_icon(element)
         unsupported_dependency = unsupported_dependency or unsaved_icon
         if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS and not static_html:
@@ -311,7 +319,7 @@ def validate_svg(raw):
     if unsupported_dependency:
         raise UnsupportedSvgDependency('封存内联 SVG 含未封存的 CSS 图标依赖，不能取得完整像素')
     if unsupported_layout_dependency:
-        raise UnsupportedSvgDependency('封存内联 SVG 的静态 pre/cite 依赖未封存的 LaTeXML 布局 CSS，不能取得完整像素',
+        raise UnsupportedSvgDependency('封存内联 SVG 的静态文字依赖未封存的 LaTeXML 布局 CSS，不能取得完整像素',
                                        reason='external_latexml_layout_css')
     return text
 

@@ -33,6 +33,15 @@ function resource(inlineSvg) {
 const dependent = () => resource(svg('<span class="ltx_inline-block fas fa-fire" aria-hidden="true"></span>'));
 const layoutDependent = () => resource(svg('<span class="ltx_foreignobject_container"><span class="ltx_foreignobject_content"><cite>Actual citation</cite></span></span>')
     .replace('<foreignObject ', '<foreignObject style="--ltx-fo-width:10em;--ltx-fo-height:2em;--ltx-fo-depth:0em;font-size:10pt;" '));
+test('仅将论文内联排版段落归为缺少样式，危险内容继续拒绝', async () => {
+    const markup = '<section class="ltx_paragraph"><h5 class="ltx_title ltx_title_paragraph">Circle</h5></section>';
+    await assert.rejects(renderer.renderOfficialInlineSvg(resource(svg(markup))), error =>
+        renderer.isUnsupportedDependencyFailure(error) && error.unsupportedDependencyReason === 'external_latexml_layout_css');
+    for (const invalid of [markup.replace('ltx_paragraph', 'other'), markup.replace('<h5 ', '<h5 onclick="alert(1)" ')]) {
+        await assert.rejects(renderer.renderOfficialInlineSvg(resource(svg(invalid))), error =>
+            error.code === 'READER_INLINE_SVG_INTEGRITY' && !renderer.isUnsupportedDependencyFailure(error));
+    }
+});
 function rendererWithProcess(result) {
     const filename = require.resolve('../scripts/lib/reader-inline-svg');
     const isolated = new Module(filename, module);

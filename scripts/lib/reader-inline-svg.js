@@ -13,7 +13,7 @@ function isUnsupportedDependencyFailure(error) { return unsupportedDependencyFai
 function unsupportedDependency(cause) {
     const reason = unsupportedDependencyCauses.get(cause);
     const error = new Error(reason === 'external_latexml_layout_css'
-        ? '内联论文图不可用：静态 pre/cite 依赖未封存的 LaTeXML 布局 CSS，无法取得完整像素'
+        ? '内联论文图不可用：静态文字依赖未封存的 LaTeXML 布局 CSS，无法取得完整像素'
         : '内联论文图不可用：封存来源含未封存的 CSS 图标依赖，无法取得完整像素', { cause });
     error.code = 'READER_INLINE_SVG_UNSUPPORTED_DEPENDENCY';
     error.unsupportedDependencyReason = reason;
