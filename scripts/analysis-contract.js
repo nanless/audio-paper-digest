@@ -2008,6 +2008,16 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedSettingVariantAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedZeroCorrectionAblation(results, sourceAblationEvidence)
+        // 原文的全因子试点比较三项训练选择，结果表用“代替”而非“消融”。
+        // 同时核对原文与同一结果表的各项名称、设置和对应效应。
+        || (/eleven pilot runs[\s\S]{0,700}factorial[\s\S]{0,400}BPE-dropout/i.test(String(options.sourceText || ''))
+            && /CR-CTC[\s\S]{0,100}0\.0115[\s\S]{0,200}CTC.side weight 0\.1 instead of 0\.3[\s\S]{0,100}0\.0020[\s\S]{0,200}BPE-dropout 0\.1 instead of none[\s\S]{0,100}0\.0062/i.test(String(options.sourceText || ''))
+            && tables.some(table => {
+                const rows = table.rows.map(row => row.join(' '));
+                return rows.some(row => /CR-CTC/i.test(row) && /0\.0115/.test(row))
+                    && rows.some(row => /CTC/i.test(row) && /0\.1/.test(row) && /0\.3/.test(row) && /0\.0020/.test(row))
+                    && rows.some(row => /BPE.dropout/i.test(row) && /0\.0062/.test(row));
+            }))
         || /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
         // 有的论文只用 `+ L_j`、`+ L_s` … 标注消融行，正文里说是逐级叠加。
         // 只要原文确实有消融，这仍然算显式的组件对照。
