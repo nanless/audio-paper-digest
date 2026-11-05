@@ -19,6 +19,7 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.io.File
 import java.net.URI
@@ -376,7 +377,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             val page = citationRepository.fetchPage(paper)
             var result: Article
             try {
-                result = extractArticle(page.html, paper, epoch())
+                // One verified parse of this page; bindPage replays the same parse instead of parsing the bytes again.
+                result = citationRepository.extractPage(paper, page, epoch())
                 try { result = citationRepository.bindPage(paper, result, page) }
                 catch (error: Exception) {
                     if (error is kotlinx.coroutines.CancellationException) throw error
@@ -386,14 +388,15 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             } finally { citationRepository.releasePage(page) }
             // The sealed, sanitized body is useful before any optional scientific image or sidecar.
             // Save this partial version too: cancelling a prefetch must not discard readable text.
-            result = result.copy(resources = Jsoup.parseBodyFragment(result.html).select("img").map { image ->
+            // One body parse serves both the pending resource list and the sealed-image rewrite below.
+            val doc = Jsoup.parseBodyFragment(result.html)
+            result = result.copy(resources = doc.select("img").map { image ->
                 ArticleResource(image.attr("src"), missingReason = "图片正在后台准备")
             }, completeOffline = false)
             previous?.let { preserve(it) }
             coroutineContext.ensureActive(); JsonFiles.write(file, result.json()); offlineIds += paper.id
             onReadable(hydrateReading(result))
             val images = mutableListOf<ArticleResource>(); val notices = result.notices.toMutableList()
-            val doc = Jsoup.parseBodyFragment(result.html)
             var total = 0
             for (image in doc.select("img")) {
                 coroutineContext.ensureActive()
@@ -704,13 +707,16 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             if (text.contains("<svg") && !Regex("<!ENTITY|<script|foreignObject|javascript:|\\bon[a-z]+\\s*=|(?:href|src)\\s*=\\s*[\"'](?!#)|url\\(\\s*(?!#)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "image/svg+xml"
             throw AppFailure("invalid", "科学图内容不受支持或包含外部执行引用")
         }
-        fun extractArticle(raw: String, paper: Paper, epoch: String = ""): Article {
-            val doc = Jsoup.parse(raw, paper.blogURL)
-            val bodies = doc.select("div#article-body.post-content")
+        fun extractArticle(raw: String, paper: Paper, epoch: String = ""): Article =
+            extractArticle(Jsoup.parse(raw, paper.blogURL), paper, epoch)
+        /** The same parser over an already verified parse: only the body subtree is copied, so the document stays
+         * pristine and the caller can reuse it for declarations without parsing the same page twice. */
+        internal fun extractArticle(document: Document, paper: Paper, epoch: String = ""): Article {
+            val bodies = document.select("div#article-body.post-content")
             require(bodies.size == 1) { "网站正文结构发生变化，未读取导航内容或用模型补写" }
-            val body = bodies.single()
-            val json = doc.selectFirst("script.paper-tools__citation-record[type=application/json]")?.data()
-                ?: doc.selectFirst("[data-citation-record]")?.attr("data-citation-record")
+            val body = bodies.single().clone()
+            val json = document.selectFirst("script.paper-tools__citation-record[type=application/json]")?.data()
+                ?: document.selectFirst("[data-citation-record]")?.attr("data-citation-record")
             val citation = if (json.isNullOrBlank()) paper.citation else JSONObject(json)
             val owner = citation.optString("paperKey")
             require(paper.identityStatus != "verified" || owner.isEmpty() || owner == paper.id) { "页面正文与目录论文身份不符" }

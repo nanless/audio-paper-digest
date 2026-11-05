@@ -10,13 +10,15 @@ const artifacts=process.env.PD_GUIDE_REVIEW_ARTIFACTS||path.join(repo,'apps/maco
 fs.mkdirSync(artifacts,{recursive:true});
 const results=[];let browser;
 const digest=s=>crypto.createHash('sha256').update(s).digest('hex');
-async function one(name,html,verify,changes={}){
+async function one(name,html,verify,changes={},article={}){
  const page=await browser.newPage({viewport:{width:1440,height:900}});page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const paper={...primary,title:'Explicit original title',titleZh:'明确译题',score:null,...changes};
- await installFixture(page,{papers:[paper],primary:paper,article:{paperID:paper.id,html,markdown:null,revisionSHA256:digest(html),notices:[],sourceVersion:paper.sourceVersion}});
+ await installFixture(page,{papers:[paper],primary:paper,article:{paperID:paper.id,html,markdown:null,revisionSHA256:digest(html),notices:[],sourceVersion:paper.sourceVersion,...article}});
  try{
   await page.goto(`http://127.0.0.1:${server.address().port}`);
+  // Count actual HTML parse/sanitize passes while the guide is assembled.
+  await page.evaluate(()=>{window.__guideParses=0;const parse=DOMParser.prototype.parseFromString;DOMParser.prototype.parseFromString=function(...args){window.__guideParses++;return parse.apply(this,args);};});
   await page.locator('[data-library-open]').first().click();
   await page.waitForFunction(()=>document.querySelector('#guide-frame')?.contentDocument?.querySelector('main'));
   const frame=page.frameLocator('#guide-frame');
@@ -29,7 +31,7 @@ async function one(name,html,verify,changes={}){
  try{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
-  await one('published exact H2 title + hash anchor removed; first science section retained','<h2 id="title">明确译题<a href="#title">#</a></h2><p>评分：7.5/10，创新 1.5/2，技术严谨 1.2/1.5。</p><h2 id="methods">方法<a href="#methods">#</a></h2><p>科学正文保留。</p>',async f=>{assert.equal(await f.locator('h1').count(),1);assert.deepEqual(await f.locator('h2').allTextContents(),['方法']);assert.equal(await f.locator('h2 a').count(),0);assert.match(await f.locator('main').innerText(),/科学正文保留/);assert.match(await f.locator('main').innerText(),/创新 1.5\/2/);assert.equal((await f.locator('main').innerText()).match(/评分：7.5\/10/g)?.length,1);});
+  await one('published exact H2 title + hash anchor removed; first science section retained','<h2 id="title">明确译题<a href="#title">#</a></h2><p>评分：7.5/10，创新 1.5/2，技术严谨 1.2/1.5。</p><h2 id="methods">方法<a href="#methods">#</a></h2><p>科学正文保留。</p>',async (f,page)=>{assert.equal(await page.evaluate(()=>window.__guideParses),1,'published HTML is parsed and sanitized once');assert.equal(await f.locator('h1').count(),1);assert.deepEqual(await f.locator('h2').allTextContents(),['方法']);assert.equal(await f.locator('h2 a').count(),0);assert.match(await f.locator('main').innerText(),/科学正文保留/);assert.match(await f.locator('main').innerText(),/创新 1.5\/2/);assert.equal((await f.locator('main').innerText()).match(/评分：7.5\/10/g)?.length,1);});
   await one('published exact H3 original title removed','<h3>Explicit original title<a href="#original">#</a></h3><h2>结果</h2><table><tr><td>43.2</td></tr></table>',async f=>{assert.equal(await f.locator('h3').count(),0);assert.equal(await f.locator('table').count(),1);assert.match(await f.locator('table').innerText(),/43.2/);});
   await one('nonexact science heading beginning with paper title is preserved','<h2>明确译题的方法与限制<a href="#limits">#</a></h2><p>不能因包含题名而删节。</p>',async f=>assert.deepEqual(await f.locator('h2').allTextContents(),['明确译题的方法与限制']));
   await one('later exact title section is content and not removed','<p>首段科学内容。</p><h2>明确译题</h2><p>后续内容。</p>',async f=>{assert.deepEqual(await f.locator('h2').allTextContents(),['明确译题']);assert.match(await f.locator('main').innerText(),/首段科学内容/);} );
@@ -37,6 +39,28 @@ async function one(name,html,verify,changes={}){
   await one('missing catalog score shown as body reference; actual body score kept','<h2>问题背景</h2><p>评分：8.25/10，创新 1.5/2。</p><h2>评分明细</h2><table><tr><td>8.25</td></tr></table>',async f=>{const text=await f.locator('main').innerText();assert.match(text,/网站评分见正文/);assert.doesNotMatch(text,/条目评分 (?:null|undefined|0)/);assert.match(text,/8.25\/10/);} );
   await one('actual numeric zero remains declared entry zero','<h2>科学内容</h2><p>真实零分并非缺失。</p>',async f=>assert.match(await f.locator('.meta').innerText(),/条目评分 0/),{score:0});
   await one('title H1 cleanup must preserve introductory science and assets before first H2','<h1>明确译题<a href="#title">#</a></h1><p>Introductory scientific finding 73.6%</p><table><tr><td>Intro table 19.2</td></tr></table><h2>方法</h2><p>后续内容。</p>',async f=>{assert.equal(await f.locator('h1').count(),1);assert.match(await f.locator('main').innerText(),/Introductory scientific finding 73.6%/);assert.match(await f.locator('table').innerText(),/19.2/);});
+  const markdown='首段科学内容保留 73.6%，公式 $x_1$ 与 **强调**。\n\n## 方法\n\n<script>parent.__unsafeGuide=1</script><p onclick="parent.__unsafeGuide=1">段落</p><img alt="未缓存"><a href="javascript:alert(1)">坏链接</a><a href="https://example.org/ok">真实链接</a>';
+  await one('markdown guide is sanitized and parsed once and mounts that same sanitized DOM','',async (f,page)=>{
+   assert.equal(await page.evaluate(()=>window.__guideParses),1,'markdown is parsed and sanitized once, never re-sanitized through serialized HTML');
+   const shape=await f.locator('main').evaluate(main=>[...main.children].map(node=>node.tagName+(typeof node.className==='string'&&node.className?'.'+node.className:'')));
+   assert.deepEqual(shape.slice(0,4),['DIV.eyebrow','H1','DIV.original','P.meta']);
+   assert.equal(shape.at(-1),'P.notice');
+   assert.equal(await f.locator('h1').count(),1);
+   assert.equal(await f.locator('h1').innerText(),'明确译题');
+   assert.equal(await f.locator('.eyebrow').innerText(),'音频分类 · 网站导读');
+   assert.match(await f.locator('.meta').innerText(),/网站发布 2026-10-21 · 网站评分见正文/);
+   assert.equal(await f.locator('.original').innerText(),'Explicit original title');
+   assert.equal(await f.locator('.notice').innerText(),'独立来源提示');
+   assert.match(await f.locator('main').innerText(),/首段科学内容保留 73.6%/);
+   assert.equal(await f.locator('strong').innerText(),'强调');
+   assert.equal(await f.locator('math annotation[encoding="application/x-tex"]').first().textContent(),'x_1');
+   assert.equal(await f.locator('script,[onclick],a[href^="javascript:"]').count(),0);
+   assert.equal(await f.locator('img').count(),0);
+   assert.match(await f.locator('main').innerText(),/\[图片未缓存\]/);
+   assert.equal(await f.locator('main a[href^="paperapp://app/reader-link/"]').count(),1);
+   assert.equal(await f.locator('main a:not([href])').innerText(),'坏链接');
+   assert.equal(await page.evaluate(()=>parent.__unsafeGuide),undefined);
+  },'',{html:null,markdown,revisionSHA256:digest(markdown),notices:['独立来源提示']});
  }finally{
   if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));
   const failed=results.filter(r=>!r.passed).length;

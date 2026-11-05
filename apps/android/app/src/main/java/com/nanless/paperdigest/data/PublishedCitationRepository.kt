@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import java.io.File
 import java.lang.ref.WeakReference
 import java.net.URI
@@ -50,6 +51,28 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     private val identity=anchor.identity
     private val mutex=locks.computeIfAbsent(root.absolutePath+"|"+identity){Mutex()}
     private val fetched=IdentityHashMap<PublishedPage,Fetched>()
+    private class Declaration(val url:String,val sha256:String?)
+    /**
+     * The verified bytes of one immutable page SHA and the single parse taken from them. The declaration table and the
+     * replay article are derived from this entry, so opening or exporting the same page reuses them instead of parsing
+     * the same megabytes again. Nothing here is keyed by a mutable file or a copied JSON: a different SHA (or page URL)
+     * replaces the entry, and every caller still re-reads and re-checks the sealed bytes against that SHA.
+     */
+    private class VerifiedPage(val sha256:String,val raw:ByteArray,val base:String,val document:Document) {
+        private var declaredKey:String?=null
+        private var declaredKnown=false
+        private var declarations:Map<String,Declaration> = emptyMap()
+        private val replays=HashMap<String,Article>()
+        @Synchronized fun declared(key:String):Map<String,Declaration>? = if(declaredKnown&&declaredKey==key)declarations else null
+        @Synchronized fun rememberDeclarations(key:String,table:Map<String,Declaration>) { declaredKey=key;declarations=table;declaredKnown=true }
+        @Synchronized fun replay(key:String):Article? = replays[key]
+        @Synchronized fun rememberReplay(key:String,article:Article) { if(replays.size<8)replays[key]=article }
+    }
+    private val parsedLock=Any()
+    private var parsedPage:VerifiedPage?=null
+    /** Diagnostic counter: full-page parses actually performed by this instance. Memoized reads never increase it. */
+    @Volatile internal var pageParseCount:Int=0
+        private set
 
     /** This opaque handle is issued only by this instance's safe website reader. */
     suspend fun fetchPage(paper:Paper):PublishedPage=withContext(Dispatchers.IO) {
@@ -61,14 +84,25 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     }
     fun releasePage(page:PublishedPage){synchronized(fetched){fetched.remove(page)}}
 
+    /** Parse the already-fetched page once for this open; bindPage then replays that same verified parse. */
+    suspend fun extractPage(paper:Paper,page:PublishedPage,epoch:String=""):Article=withContext(Dispatchers.IO) {
+        val witness=synchronized(fetched){fetched[page]}?:throw AppFailure("citation","已发布页面读取凭证已失效，未把另一页面绑定为引用来源")
+        // 身份与原文版本仍在 bindPage 内校验，保持原有错误分类与提示；这里只解析已核验字节。
+        checkRoot()
+        require(sha256(witness.raw)==witness.hash){"实际发布页面字节已变化"}
+        val verified=verifiedPage(paper.blogURL,witness.hash,witness.raw)
+        CatalogRepository.extractArticle(verified.document,paper,epoch).also{article->verified.rememberReplay(replayKey(paper,article),article)}
+    }
+
     /** Before hydration, replay the actual parser against the same raw page. A copied JSON cannot mint this handle. */
     suspend fun bindPage(paper:Paper,article:Article,page:PublishedPage,requireCurrent:()->Unit={}):Article=withContext(Dispatchers.IO) {
         val witness=synchronized(fetched){fetched.remove(page)}?:throw AppFailure("citation","已发布页面读取凭证已失效，未把另一页面绑定为引用来源")
         mutex.withLock {
             currentCoroutineContext().ensureActive();requireCurrent();checkRoot()
-            require(pageURL(paper.blogURL)==page.sourceURL&&canonical(paperIdentity(paper))==canonical(paperIdentity(witness.paper))){"页面属于另一论文或原文版本"}
+            val address=pageURL(paper.blogURL)
+            require(address==page.sourceURL&&canonical(paperIdentity(paper))==canonical(paperIdentity(witness.paper))){"页面属于另一论文或原文版本"}
             require(sha256(witness.raw)==witness.hash){"实际发布页面字节已变化"}
-            val replay=replayPage(paper,article,witness.raw)
+            val replay=replayPage(paper,article,verifiedPage(paper.blogURL,witness.hash,witness.raw))
             require(article.html==replay.html&&article.markdown==replay.markdown){"引用页面只能绑定尚未hydrate且逐字一致的真实导读正文"}
             val proof=ClientProtocols.record(PAGE_CONTRACT).put("paper",paperIdentity(paper)).put("pageURL",page.sourceURL)
                 .put("pageSHA256",witness.hash).put("pageBytes",witness.raw.size).put("articleRevisionSHA256",replay.revisionSHA256)
@@ -80,15 +114,15 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
 
     /** Metadata/Context discovery is also exact per-file, never citation.json's guessed siblings. */
     suspend fun declaredFiles(paper:Paper,article:Article):Map<String,String> =withContext(Dispatchers.IO){mutex.withLock{
-        val raw=boundPage(paper,article);val html=PublishedUtf8.decode(raw)
-        (Format.entries.map{it.filename}+"rethink-context.json").mapNotNull{name->runCatching{selectLink(html,paper.blogURL,name,paper)}.getOrNull()?.let{name to it}}.toMap()
+        val page=boundPage(paper,article)
+        (Format.entries.map{it.filename}+"rethink-context.json").mapNotNull{name->runCatching{selectLink(page,paper.blogURL,name,paper)}.getOrNull()?.let{name to it}}.toMap()
     }}
 
     /** Read only a filename declared by the same pinned page; new declarations bind its exact response SHA. */
     suspend fun declaredBytes(paper:Paper,article:Article,name:String):ByteArray=withContext(Dispatchers.IO){mutex.withLock{
-        val page=boundPage(paper,article);val html=PublishedUtf8.decode(page)
-        val address=selectLink(html,paper.blogURL,name,paper)?:throw AppFailure("citationUnavailable","此阅读版本没有所选附加文件的真实链接")
-        val expected=Jsoup.parse(html,paper.blogURL).select("script.paper-tools__client-sidecars").singleOrNull()?.data()?.let{JSONObject(it).getJSONObject(name).getString("sha256")}
+        val page=boundPage(paper,article)
+        val address=selectLink(page,paper.blogURL,name,paper)?:throw AppFailure("citationUnavailable","此阅读版本没有所选附加文件的真实链接")
+        val expected=declaredSHA(page,paper.blogURL,name,paper)
         val raw=read(address,MAX_CITATION);require(raw.size in 1..MAX_CITATION)
         require(expected==null||sha256(raw)==expected){"附加文件与该阅读页面声明的SHA不符，未读取另一版本"}
         currentCoroutineContext().ensureActive();boundPage(paper,article)
@@ -101,10 +135,10 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         mutex.withLock {
             checkRoot();requireCurrent();currentCoroutineContext().ensureActive()
             val page=boundPage(frozen,article)
-            val address=selectLink(PublishedUtf8.decode(page),frozen.blogURL,format.filename,frozen)
+            val address=selectLink(page,frozen.blogURL,format.filename,frozen)
                 ?:throw AppFailure("citationUnavailable","这个已发布版本没有此格式的真实引用原件；未现场生成替代引用。")
-            val declared=Jsoup.parse(PublishedUtf8.decode(page),frozen.blogURL).select("script.paper-tools__client-sidecars").singleOrNull()?.data()?.let{JSONObject(it).getJSONObject(format.filename).getString("sha256")}
-            val binding=binding(frozen,article,sha256(page))
+            val declared=declaredSHA(page,frozen.blogURL,format.filename,frozen)
+            val binding=binding(frozen,article,page.sha256)
             val key=sha256(canonical(JSONObject().put("binding",binding).put("format",format.route).put("sourceURL",address)).toByteArray())
             val receipt=checked("receipts",key+".json")
             val old=if(receipt.exists())readOriginal(receipt,binding,address,format)else null
@@ -131,17 +165,28 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         }
     }
 
-    private fun boundPage(paper:Paper,article:Article):ByteArray {
+    private fun boundPage(paper:Paper,article:Article):VerifiedPage {
         ReadingSourceBinding.requireArticle(paper,article);ReadingSourceBinding.requireCitation(paper,article.citation);checkRoot()
         val proof=article.original?.optJSONObject(PAGE_FIELD)?.copy()?:throw AppFailure("citationUnavailable","这份旧导读没有封存真实引用下载页面；请显式刷新导读后再导出引用，其他研究资料仍可正常使用。")
         require(ClientProtocols.hasValidHeader(proof,PAGE_CONTRACT)&&canonical(proof.getJSONObject("paper"))==canonical(paperIdentity(paper))&&proof.getString("pageURL")==pageURL(paper.blogURL)&&proof.getString("articleRevisionSHA256")==article.revisionSHA256){"引用页面与实际阅读论文或修订不一致"}
         val hash=proof.getString("pageSHA256");require(validSHA(hash))
         val raw=JsonFiles.read(checked("pages",hash+".html"),MAX_PAGE.toLong())
         require(raw.size.toLong()==strictCount(proof,"pageBytes")&&sha256(raw)==hash){"原引用下载页面的保存字节已变化"}
-        replayPage(paper,article,raw);checkRoot();return raw
+        val page=verifiedPage(paper.blogURL,hash,raw)
+        replayPage(paper,article,page);checkRoot();return page
     }
-    private fun replayPage(paper:Paper,article:Article,raw:ByteArray):Article {
-        val replay=CatalogRepository.extractArticle(PublishedUtf8.decode(raw),paper,article.catalogEpoch)
+    /** The immutable parse for one verified SHA; changed bytes, a changed SHA or another page URL invalidates it. */
+    private fun verifiedPage(base:String,hash:String,raw:ByteArray):VerifiedPage {
+        synchronized(parsedLock){parsedPage?.takeIf{it.sha256==hash&&it.base==base&&it.raw.contentEquals(raw)}?.let{return it}}
+        // 解析是整页最贵的一步，放在锁外；并发同页最多各解析一次，随后以最后一次为准。
+        val parsed=VerifiedPage(hash,raw,base,Jsoup.parse(PublishedUtf8.decode(raw),base))
+        return synchronized(parsedLock){parsedPage=parsed;pageParseCount++;parsed}
+    }
+    /** One replay per immutable page plus every parser input that can change its result; the equality checks stay. */
+    private fun replayKey(paper:Paper,article:Article)=canonical(paperIdentity(paper))+"\u0000"+paper.blogURL+"\u0000"+article.catalogEpoch+"\u0000"+canonical(paper.citation)
+    private fun replayPage(paper:Paper,article:Article,page:VerifiedPage):Article {
+        val key=replayKey(paper,article)
+        val replay=page.replay(key)?:CatalogRepository.extractArticle(page.document,paper,article.catalogEpoch).also{page.rememberReplay(key,it)}
         ReadingSourceBinding.requireArticle(paper,article);ReadingSourceBinding.requireArticle(paper,replay)
         require(replay.revisionSHA256==article.revisionSHA256&&replay.plainText==article.plainText&&replay.markdown==article.markdown&&canonical(replay.citation)==canonical(article.citation)){"新的发布页面与实际阅读导读不是同一修订，未替换旧来源。"}
         if(paper.identityStatus=="verified") {
@@ -149,6 +194,60 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
             require(title!=null&&normalize(title)==normalize(paper.title)){"已发布页面的原题名与阅读论文不一致"}
         }
         return replay
+    }
+    private fun declaredSHA(page:VerifiedPage,base:String,name:String,paper:Paper):String?=declarations(page,base,paper)[name]?.sha256
+    /** Every input the declaration table validation depends on, so a different paper identity is never served a table. */
+    private fun declarationKey(base:String,paper:Paper)=base+"\u0000"+paper.identityStatus+"\u0000"+paper.sourceKind+"\u0000"+paper.id+"\u0000"+paper.date.take(10)
+    /** The four-file declaration table of one verified page; an empty table means this page only has legacy links. */
+    private fun declarations(page:VerifiedPage,base:String,paper:Paper):Map<String,Declaration> {
+        val key=declarationKey(base,paper)
+        page.declared(key)?.let{return it}
+        val document=page.document
+        val scripts=document.select("script.paper-tools__client-sidecars")
+        if(scripts.isEmpty()){page.rememberDeclarations(key,emptyMap());return emptyMap()}
+        require(scripts.size==1){"当前引用文件存在冲突声明，未改读旧格式"}
+        val text=scripts.single().data();require(text.toByteArray().size<=8192)
+        val descriptors=JSONObject(text)
+        require(descriptors.keys().asSequence().toSet()==DECLARED_FILES.toSet()){"当前引用文件声明不完整"}
+        require(paper.identityStatus=="verified"&&paper.date.take(10).matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))){"当前引用声明没有明确的已发布论文身份或日期"}
+        val owner=if(paper.sourceKind=="arxiv")paper.id.removePrefix("arxiv:").replace('.','-').replace('/','-') else "conference-"+sha256(paper.id.toByteArray()).take(24)
+        val ownerRoot="/audio-paper-digest-blog/client/papers/"+paper.date.take(10)+"/"+owner+"/"
+        val table=linkedMapOf<String,Declaration>()
+        descriptors.keys().forEach{filename->
+            val record=descriptors.getJSONObject(filename);val url=CatalogRepository.sameSite(URI(base).resolve(record.getString("url")).toASCIIString())
+            val declaredHash=record.getString("sha256")
+            require(URI(url).path==ownerRoot+filename&&declaredHash.matches(SHA256_PATTERN)){"当前引用文件超出已发布目录或缺少真实SHA"}
+            if(filename=="rethink-context.json"){
+                // 已发布页面曾把 schemaFingerprint 写成小写（Hugo 参数键小写化）。
+                // 只接受这一个已知别名，归一化后仍走严格头校验。
+                val context=JSONObject(record.toString())
+                if(context.has("schemafingerprint")){
+                    val legacy=context.get("schemafingerprint")
+                    require(legacy is String){"当前上下文格式声明无效"}
+                    if(context.has("schemaFingerprint"))require(context.get("schemaFingerprint")==legacy){"当前上下文格式声明无效"}
+                    else context.put("schemaFingerprint",legacy)
+                    context.remove("schemafingerprint")
+                }
+                require(ClientProtocols.hasValidHeader(context,"paper-research-context")&&context.getString("contract")==ClientProtocols.contract("paper-research-context")){"当前上下文格式声明无效"}
+            }
+            table[filename]=Declaration(url,declaredHash)
+        }
+        require(table.values.map{it.url.substringBeforeLast('/')}.toSet().size==1){"当前引用文件混用了不同目录"}
+        page.rememberDeclarations(key,table)
+        return table
+    }
+    private fun selectLink(page:VerifiedPage,base:String,name:String,paper:Paper):String? {
+        require(name in DECLARED_FILES)
+        val table=declarations(page,base,paper)
+        if(table.isNotEmpty())return table[name]?.url
+        val matches=page.document.select("a[href]").mapNotNull{element->
+            val raw=element.attr("href");val relative=runCatching{URI(raw)}.getOrNull()?:return@mapNotNull null
+            if(relative.path?.substringAfterLast('/')!=name)return@mapNotNull null
+            require(relative.path.split('/').none{it=="."||it==".."}){"引用下载路径包含不明确的父目录"}
+            val url=CatalogRepository.sameSite(URI(base).resolve(relative).toASCIIString())
+            require(URI(url).path.startsWith("/audio-paper-digest-blog/data/papers/")){"引用原件下载地址超出已发布文件目录"};url
+        }.distinct()
+        require(matches.size<=1){"此格式存在不同的引用下载地址，未猜选其中一份"};return matches.singleOrNull()
     }
     private fun requireEligible(paper:Paper,article:Article) {
         require(paper.identityStatus=="verified"&&paper.sourceKind in listOf("arxiv","conference")&&!paper.id.startsWith("local:")){"此资料没有可核验的已发布引用原件；未猜写出版类型或论文编号。"}
@@ -213,49 +312,8 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         private fun strictCount(value:JSONObject,key:String):Long {val n=value.get(key);require(n is Number&&n.toDouble().isFinite()&&n.toDouble()==n.toLong().toDouble()&&n.toLong()>0);return n.toLong()}
         private fun normalize(value:String)=value.replace(WHITESPACE_PATTERN," ").trim()
         private fun pageURL(value:String):String=CatalogRepository.sameSite(value).also {require(URI(it).path.startsWith("/audio-paper-digest-blog/posts/")){"引用页面超出已发布论文目录"}}
-        private fun selectLink(html:String,base:String,name:String,paper:Paper):String? {
-            require(name in listOf("citation.json","citation.bib","citation.ris","rethink-context.json"))
-            val document=Jsoup.parse(html,base)
-            val declarations=document.select("script.paper-tools__client-sidecars")
-            if(declarations.isNotEmpty()) {
-                require(declarations.size==1){"当前引用文件存在冲突声明，未改读旧格式"}
-                val text=declarations.single().data();require(text.toByteArray().size<=8192)
-                val descriptors=JSONObject(text)
-                require(descriptors.keys().asSequence().toSet()==setOf("citation.json","citation.bib","citation.ris","rethink-context.json")){"当前引用文件声明不完整"}
-                require(paper.identityStatus=="verified"&&paper.date.take(10).matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))){"当前引用声明没有明确的已发布论文身份或日期"}
-                val owner=if(paper.sourceKind=="arxiv")paper.id.removePrefix("arxiv:").replace('.','-').replace('/','-') else "conference-"+sha256(paper.id.toByteArray()).take(24)
-                val ownerRoot="/audio-paper-digest-blog/client/papers/"+paper.date.take(10)+"/"+owner+"/"
-                val locations=mutableMapOf<String,String>()
-                descriptors.keys().forEach{filename->
-                    val record=descriptors.getJSONObject(filename);val url=CatalogRepository.sameSite(URI(base).resolve(record.getString("url")).toASCIIString())
-                    require(URI(url).path==ownerRoot+filename&&record.getString("sha256").matches(SHA256_PATTERN)){"当前引用文件超出已发布目录或缺少真实SHA"}
-                    if(filename=="rethink-context.json"){
-                        // 已发布页面曾把 schemaFingerprint 写成小写（Hugo 参数键小写化）。
-                        // 只接受这一个已知别名，归一化后仍走严格头校验。
-                        val context=JSONObject(record.toString())
-                        if(context.has("schemafingerprint")){
-                            val legacy=context.get("schemafingerprint")
-                            require(legacy is String){"当前上下文格式声明无效"}
-                            if(context.has("schemaFingerprint"))require(context.get("schemaFingerprint")==legacy){"当前上下文格式声明无效"}
-                            else context.put("schemaFingerprint",legacy)
-                            context.remove("schemafingerprint")
-                        }
-                        require(ClientProtocols.hasValidHeader(context,"paper-research-context")&&context.getString("contract")==ClientProtocols.contract("paper-research-context")){"当前上下文格式声明无效"}
-                    }
-                    locations[filename]=url
-                }
-                require(locations.values.map{it.substringBeforeLast('/')}.toSet().size==1){"当前引用文件混用了不同目录"}
-                return locations[name]
-            }
-            val matches=document.select("a[href]").mapNotNull{element->
-                val raw=element.attr("href");val relative=runCatching{URI(raw)}.getOrNull()?:return@mapNotNull null
-                if(relative.path?.substringAfterLast('/')!=name)return@mapNotNull null
-                require(relative.path.split('/').none{it=="."||it==".."}){"引用下载路径包含不明确的父目录"}
-                val url=CatalogRepository.sameSite(URI(base).resolve(relative).toASCIIString())
-                require(URI(url).path.startsWith("/audio-paper-digest-blog/data/papers/")){"引用原件下载地址超出已发布文件目录"};url
-            }.distinct()
-            require(matches.size<=1){"此格式存在不同的引用下载地址，未猜选其中一份"};return matches.singleOrNull()
-        }
+        private val DECLARED_FILES=listOf("citation.json","citation.bib","citation.ris","rethink-context.json")
+
         private fun validateBytes(raw:ByteArray,paper:Paper,format:Format) {
             require(raw.isNotEmpty()&&raw.size<=MAX_CITATION);val text=PublishedUtf8.decode(raw)
             require(text.isNotBlank()&&!Regex("(?i)<html(?:\\s|>)|<!doctype\\s+html").containsMatchIn(text)){"引用下载返回了空文件或错误网页"}

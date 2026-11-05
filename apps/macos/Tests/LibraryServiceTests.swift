@@ -119,6 +119,61 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(await restarted.list().count == 2, "atomic snapshot survives restart")
         print("ROUND 1 catalog/incremental: PASS")
     }
+    static func testCompactCatalogProjection() async throws {
+        let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
+        var first = row("2501.00001", slug: "compact-a", title: "Compact Alpha", date: "2026-01-01", score: 8)
+        first["summary"] = "合成的导读摘要仍逐篇随导读保存"
+        let newer = row("2501.00001", slug: "compact-a2", title: "Compact Alpha", date: "2026-02-01", score: 9)
+        let second = row("2501.00002", slug: "compact-b", title: "Compact Beta", date: "2026-01-02")
+        let transport = LibraryFixtureTransport(try fixture([[first, second], [newer]])), library = try service(folder, transport)
+        _ = try await library.sync()
+        let full=try await library.handle(command:"library.list",payload:["limit":100]),fullRows=full["papers"] as! [[String:Any]]
+        try expect(fullRows.allSatisfy{$0["citation"] is [String:Any] && !(($0["websiteTagRecords"] as? [[String:Any]]) ?? []).isEmpty},"default list keeps the published per-row citation and guide records")
+        let listing=try await library.handle(command:"library.list",payload:["limit":100,"compact":true]),rows=listing["papers"] as! [[String:Any]]
+        try expect(rows.count==2 && rows.allSatisfy{$0["citation"] == nil && $0["websiteTagRecords"] == nil},"compact list rows carry neither the citation nor the guide records")
+        let alpha=rows.first{$0["id"] as? String=="arxiv:2501.00001"}!
+        try expect(alpha["title"] as? String=="Compact Alpha" && Set(alpha["tags"] as? [String] ?? [])==Set(["音频","中文"]) && alpha["localRetained"] as? Bool==false,"compact row keeps every published query field")
+        let searched=try await library.handle(command:"library.list",payload:["limit":100,"query":"Compact Beta","compact":true])
+        try expect(searched["total"] as? Int==1 && ((searched["papers"] as? [[String:Any]])?.count ?? 0)==1,"compact projection keeps filtering and totals")
+        try expect(full["websiteTaxonomy"] is NSNull && full["websiteTaxonomyIdentity"] == nil,"default first page keeps the published display-asset slot")
+        try expect(listing["websiteTaxonomy"] == nil && listing["websiteTaxonomyIdentity"] is NSNull,"compact first page leaves the display assets to the guide index")
+        let index=try await library.handle(command:"library.tagIndex",payload:[:]),byPaper=index["papers"] as! [String:[[String:Any]]]
+        try expect(index["websiteTaxonomy"] is NSNull && index["websiteTaxonomyIdentity"] is NSNull,"guide index carries the display assets the app keeps alongside its evidence")
+        try expect(index["snapshotID"] as? String==listing["snapshotID"] as? String && byPaper.keys.sorted()==["arxiv:2501.00001","arxiv:2501.00002"],"guide index covers exactly the identities the list can show")
+        let guides=byPaper["arxiv:2501.00001"]!
+        try expect(guides.count==2,"every published guide of one identity stays independently addressable")
+        let guide=guides.first{$0["permalink"] as? String=="/blog/posts/compact-a/"}!,inherited=Set(guide["inherit"] as? [String] ?? [])
+        try expect((guide["citation"] as? [String:Any])?["authors"] as? [String]==["Author 中文"],"guide keeps the author names the browsing search reads")
+        try expect(inherited.contains("title") && inherited.contains("tags") && inherited.contains("task") && inherited.contains("pageType"),"guide defers repeated row values to the row")
+        try expect(guide["title"] == nil && guide["tags"] == nil && guide["task"] == nil && guide["pageType"] == nil,"repeated values are not sent twice")
+        try expect(guide["summary"] as? String=="合成的导读摘要仍逐篇随导读保存" && guide["permalink"] as? String=="/blog/posts/compact-a/" && guide["date"] as? String=="2026-01-01","guide keeps its own summary, permalink and date")
+        var restored=guide
+        for key in inherited {
+            switch key {
+            case "pageType": restored[key]=alpha["pageType"]
+            case "sourceKind": restored[key]=alpha["sourceKind"]
+            case "identityStatus": restored[key]=alpha["identityStatus"]
+            case "title": restored[key]=alpha["title"]
+            case "titleZh": restored[key]=alpha["titleZh"]
+            case "task": restored[key]=alpha["task"]
+            case "method": restored[key]=alpha["method"]
+            case "tags": restored[key]=alpha["tags"]
+            case "paperId": restored[key]=alpha["id"]
+            case "arxivId": restored[key]=alpha["sourceVersion"]
+            default: break
+            }
+        }
+        restored["inherit"]=nil
+        let published=(fullRows.first{$0["id"] as? String=="arxiv:2501.00001"}!["websiteTagRecords"] as! [[String:Any]]).first{$0["permalink"] as? String=="/blog/posts/compact-a/"}!
+        try expect(JSONSerialization.isValidJSONObject(restored),"restored guide stays a JSON object")
+        try expect(restored["title"] as? String==published["title"] as? String && restored["task"] as? String==published["task"] as? String && restored["tags"] as? [String]==published["tags"] as? [String],"restoring from the row reproduces the published guide values")
+        try expect(restored["date"] as? String==published["date"] as? String && restored["score"] as? Double==published["score"] as? Double && restored["permalink"] as? String==published["permalink"] as? String,"guide keeps its own published date, score and permalink")
+        let detail=try await library.handle(command:"library.paperDetail",payload:["paperID":"arxiv:2501.00001"]),detailRow=detail["paper"] as! [String:Any]
+        try expect((detailRow["citation"] as? [String:Any])?["paperKey"] as? String=="arxiv:2501.00001" && (detailRow["websiteTagRecords"] as? [[String:Any]])?.count==2,"detail by identity returns the complete published row")
+        try expect(detail["snapshotID"] as? String==listing["snapshotID"] as? String,"detail names the snapshot it was read from")
+        try await expectFailure("detail refuses an identity the catalog does not publish") { _ = try await library.handle(command:"library.paperDetail",payload:["paperID":"arxiv:9999.99999"]) }
+        print("COMPACT CATALOG: citation and guide records load by identity, repeated row values restored losslessly")
+    }
     static func testFailuresAndRetirement() async throws {
         let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
         let a = row("2501.00001", slug: "a", title: "Alpha", date: "2026-01-01")
@@ -483,6 +538,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
             else if CommandLine.arguments.contains("--citations-live") { try await liveCitations() }
             else {
                 try await testCatalogAndIncremental()
+                try await testCompactCatalogProjection()
                 try await testFailuresAndRetirement()
                 try await testHTML()
                 try await testAddressAndProxy()

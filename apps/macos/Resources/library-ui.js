@@ -13,6 +13,20 @@ function paperDetails(paper, expanded, classificationGuides=[]) {
   const guideLinks=guides.length?`<div class="library-published-guides"><strong>网站已发布导读 · ${guides.length} 篇</strong>${guides.map((url,i)=>{const info=classificationGuides.find(value=>{try{return new URL(value.row.permalink,paper.blogURL).href===url;}catch{return false;}}),row=info?.row||guideRows.find(row=>{try{return new URL(row.permalink,paper.blogURL).href===url;}catch{return false;}}),publishedScore=row?.score==null||String(row.score).trim()===''?'未提供':String(row.score);return `<div class="library-guide-entry"><span>${url===paper.blogURL?'默认阅读导读 · ':''}${info?.matched?'匹配当前筛选 · ':''}${escape(row?.date||'日期未标明')} · 网站评分 ${escape(publishedScore)}</span><button type="button" data-library-guide="${escape(url)}">${escape(row?.titleZh||row?.title||'网站导读 '+(i+1))}<span>在原站打开 ↗</span></button>${info?.paths.length?`<p>${escape(info.paths.join('；'))}</p>`:''}</div>`;}).join('')}</div>`:'';
   return `<details class="library-paper-details" ${expanded ? 'open' : ''}><summary>${escape(sourceLabel(paper.sourceKind))} · ${escape(method)}<span class="library-details-hint">${tags.length ? tags.length+' 个标签' : '文献信息'}</span></summary><dl>${fields.map(([label,value])=>`<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`).join('')}</dl>${guideLinks}</details>`;
 }
+/** Guide values the native list leaves out because the paper row already states them verbatim. */
+const inheritedTagFields = {pageType: p => p.pageType, sourceKind: p => p.sourceKind, identityStatus: p => p.identityStatus, title: p => p.title, titleZh: p => p.titleZh, task: p => p.task, method: p => p.method, tags: p => p.tags, arxivId: p => p.sourceVersion, paperId: p => paperID(p)};
+/** `library.tagIndex` sends each guide record without the values its row repeats. Put them back so
+ * the existing guide index, facet filters and guide links read exactly the same records as before. */
+function expandTagRecord(record, paper) {
+  if (!record || typeof record !== 'object' || Array.isArray(record) || !Array.isArray(record.inherit)) return record;
+  const expanded = {...record};
+  delete expanded.inherit;
+  for (const key of record.inherit) {
+    const read = inheritedTagFields[key], value = read ? read(paper) : undefined;
+    if (value !== undefined) expanded[key] = value;
+  }
+  return expanded;
+}
 
 /** Published catalog view. All durable personal writes go through the native store. */
 export function mountLibrary(app, {onVisibilityChange}={}) {
@@ -91,19 +105,35 @@ export function mountLibrary(app, {onVisibilityChange}={}) {
     } catch (error) { fail(error); }
     finally { persistBusy = false; updateSelection(); }
   }
+  const guideRecords={cacheKey:null,evidence:null};
+  /** Guide evidence and display assets for one catalog snapshot. They only change with the
+   * published catalog, so a personal-only refresh reuses the answer instead of resending it. */
+  async function guideRecordsFor(snapshotID, taxonomyKey) {
+    const cacheKey=snapshotID+'\u0000'+taxonomyKey;
+    if(guideRecords.evidence&&guideRecords.cacheKey===cacheKey)return guideRecords.evidence;
+    for(let attempt=0;attempt<2;attempt++){
+      try {
+        const result=await app.call('library.tagIndex',{snapshotID});
+        if(!result||result.snapshotID!==snapshotID||!result.papers||typeof result.papers!=='object')return null;
+        const evidence={byPaperID:new Map(Object.entries(result.papers).filter(([,records])=>Array.isArray(records))),taxonomy:result.websiteTaxonomy||null};
+        guideRecords.cacheKey=cacheKey;guideRecords.evidence=evidence;return evidence;
+      } catch { /* 首次失败后重试一次，仍失败由调用方显示可重试提示。 */ }
+    }
+    return null;
+  }
   async function refresh() {
     if (loading){try{return await loading;}catch{return;}}
     const generation=refreshGeneration,personalAtStart=app.state.personal;
     const flight=(async()=>{
       catalogNotice.hidden=false;catalogRetry.hidden=true;catalogMessage.textContent='正在读取本机目录…';
-      const [summary, first, snapshot] = await Promise.all([app.call('library.status', {}), app.call('library.list', {limit:10000,offset:0}),app.call('personal.snapshot',{})]);
+      const [summary, first, snapshot] = await Promise.all([app.call('library.status', {}), app.call('library.list', {limit:10000,offset:0,compact:true}),app.call('personal.snapshot',{})]);
       if(generation!==refreshGeneration)return;
       const rows=[...(first.papers||[])],total=first.total??rows.length,stamp=first.snapshotID;
       if(stamp!==undefined&&summary.snapshotID!==undefined&&stamp!==summary.snapshotID)throw new Error('目录摘要与列表发生变化，请重新读取；上一份列表仍保留');
       if(!Number.isSafeInteger(total)||total<rows.length||total>1000000)throw new Error('本机目录分页总数无效，上一份列表仍保留');
       while(rows.length<total){
         catalogMessage.textContent=`正在读取本机目录：${rows.length.toLocaleString()} / ${total.toLocaleString()} 篇…`;
-        const next=await app.call('library.list',{limit:10000,offset:rows.length});
+        const next=await app.call('library.list',{limit:10000,offset:rows.length,compact:true});
         if(generation!==refreshGeneration)return;
         if(next.total!==total || (stamp!==undefined&&next.snapshotID!==stamp))throw new Error('读取期间目录发生变化，请重新读取；上一份列表仍保留');
         if(!Array.isArray(next.papers)||!next.papers.length||rows.length+next.papers.length>total)throw new Error('本机目录分页不完整，上一份列表仍保留');
@@ -111,11 +141,25 @@ export function mountLibrary(app, {onVisibilityChange}={}) {
       }
       if(new Set(rows.map(paperID)).size!==rows.length)throw new Error('本机目录分页身份重复，请重新读取；上一份列表仍保留');
       if(generation!==refreshGeneration)return;
-      if(app.state.personal===personalAtStart)app.state.personal=snapshot;app.state.summary=summary;app.state.catalog=rows;app.state.websiteTaxonomy=first.websiteTaxonomy||null;app.state.websiteTaxonomyNotice=first.websiteTaxonomyNotice||'';
+      if(fullRowsStamp!==stamp){fullRows.clear();fullRowsStamp=stamp;}
+      // 先把列表交给界面；分类证据单独请求，失败也不拖住首屏。
+      if(app.state.personal===personalAtStart)app.state.personal=snapshot;
+      app.state.summary=summary;app.state.catalog=rows;app.state.websiteTaxonomy=first.websiteTaxonomy||null;app.state.websiteTaxonomyNotice=first.websiteTaxonomyNotice||'';
       loaded = true;catalogNotice.hidden=true;
       const ids = new Set(catalog().map(paperID)); for (const id of selected) if (!ids.has(id)) selected.delete(id);
       for (const id of expandedMetadata) if (!ids.has(id)) expandedMetadata.delete(id);
-      counts(); await render();
+      await render();
+      const identity=first.websiteTaxonomyIdentity,taxonomyKey=identity&&typeof identity==='object'?[identity.snapshotContentSHA256||'',identity.versionsContentSHA256||''].join('|'):'';
+      const evidence=stamp?await guideRecordsFor(stamp,taxonomyKey):null;
+      if(generation!==refreshGeneration)return;
+      if(evidence){
+        for(const row of rows){const guides=evidence.byPaperID.get(paperID(row));if(guides)row.websiteTagRecords=guides.map(record=>expandTagRecord(record,row));}
+        app.state.websiteTaxonomy=first.websiteTaxonomy||evidence.taxonomy||null;
+        app.state.websiteTaxonomyNotice=first.websiteTaxonomyNotice||'';
+        await render();
+      } else if(!first.websiteTaxonomy){
+        app.state.websiteTaxonomyNotice='网页分类证据暂未载入，列表仍可用；下次刷新会重试。';
+      }
     })();
     loading=flight;
     try { return await flight; } catch (error) {if(generation===refreshGeneration){catalogNotice.hidden=false;catalogMessage.textContent=error.message||String(error);catalogRetry.hidden=false;fail(error);} } finally { if(loading===flight)loading = null; }
@@ -200,17 +244,29 @@ export function mountLibrary(app, {onVisibilityChange}={}) {
     updateSelection();if(restoredScroll!==null)$('library-view').querySelector('.library-table-wrap').scrollTop=restoredScroll;
   }
   function closePopup() { popup?.remove(); popup=null; }
+  const fullRows=new Map();let fullRowsStamp;
+  /** The browsing row carries no citation; opening one asks for its published source instead. */
+  async function fullRow(paper) {
+    const id=paperID(paper);
+    if(paper.citation)return paper;
+    if(fullRows.has(id))return fullRows.get(id);
+    try {
+      const result=await app.call('library.paperDetail',{paperID:id}),row=result?.paper;
+      if(row&&paperID(row)===id){fullRows.set(id,row);return row;}
+    } catch {}
+    return paper;
+  }
   function openContext(event, paper) {
     event.preventDefault(); closePopup();
     const id=paperID(paper); if(!selected.has(id)){selected.clear();selected.add(id);render().catch(fail);}
     popup=document.createElement('div');popup.className='library-context';popup.setAttribute('role','menu');
     const favorite=membership('favorites').has(id),reading=membership('reading').has(id);
-    const actions=[['打开导读',()=>app.openPaper(paper,{resume:true})], [favorite?'取消收藏':'收藏论文',()=>persistedList('favorites',[id],favorite)], [reading?'移出待读':'加入待读',()=>persistedList('reading',[id],reading)], ...(paper.blogURL?[['在浏览器打开网站',()=>app.call('app.external',{url:paper.blogURL})]]:[])];
+    const actions=[['打开导读',async()=>app.openPaper(await fullRow(paper),{resume:true})], [favorite?'取消收藏':'收藏论文',()=>persistedList('favorites',[id],favorite)], [reading?'移出待读':'加入待读',()=>persistedList('reading',[id],reading)], ...(paper.blogURL?[['在浏览器打开网站',()=>app.call('app.external',{url:paper.blogURL})]]:[])];
     for(const [label,action] of actions){const button=document.createElement('button');button.type='button';button.textContent=label;button.setAttribute('role','menuitem');button.onclick=()=>{closePopup();Promise.resolve().then(action).catch(fail);};popup.append(button);}
     document.body.append(popup);popup.style.left=`${Math.max(8,Math.min(event.clientX,innerWidth-popup.offsetWidth-8))}px`;popup.style.top=`${Math.max(8,Math.min(event.clientY,innerHeight-popup.offsetHeight-8))}px`;popup.querySelector('button').focus();
   }
   $('paper-rows').addEventListener('toggle',event=>{const detail=event.target;if(!detail.isConnected||!detail.matches('details.library-paper-details'))return;const id=detail.closest('[data-library-row]')?.dataset.libraryRow;if(id)detail.open?expandedMetadata.add(id):expandedMetadata.delete(id);},true);
-  $('paper-rows').onclick=event=>{const guide=event.target.closest('[data-library-guide]');if(guide){app.call('app.external',{url:guide.dataset.libraryGuide}).catch(fail);return;}const check=event.target.closest('[data-library-select]');if(check){check.checked?selected.add(check.dataset.librarySelect):selected.delete(check.dataset.librarySelect);render().catch(fail);return;}const button=event.target.closest('[data-library-open]');if(button){const paper=catalog().find(p=>paperID(p)===button.dataset.libraryOpen);if(paper)Promise.resolve(app.openPaper(paper,{resume:true})).catch(fail);}};
+  $('paper-rows').onclick=event=>{const guide=event.target.closest('[data-library-guide]');if(guide){app.call('app.external',{url:guide.dataset.libraryGuide}).catch(fail);return;}const check=event.target.closest('[data-library-select]');if(check){check.checked?selected.add(check.dataset.librarySelect):selected.delete(check.dataset.librarySelect);render().catch(fail);return;}const button=event.target.closest('[data-library-open]');if(button){const paper=catalog().find(p=>paperID(p)===button.dataset.libraryOpen);if(paper)Promise.resolve(fullRow(paper)).then(value=>app.openPaper(value,{resume:true})).catch(fail);}};
   $('paper-rows').addEventListener('contextmenu',event=>{const row=event.target.closest('[data-library-row]');if(!row)return;const paper=catalog().find(p=>paperID(p)===row.dataset.libraryRow);if(paper)openContext(event,paper);});
   $('search-input').oninput=()=>{page=0;clearTimeout(searchTimer);searchTimer=setTimeout(()=>render().catch(fail),220);};
   $('sort').onchange=()=>{page=0;render().catch(fail);};

@@ -17,7 +17,50 @@ data class AggregateCachedRevision(val rawHTMLSHA256:String,val fetchedAt:String
 
 /** Original manifest + per-shard witness required. Scattered legacy caches never grant a retroactive manifest. */
 class PublishedAggregateStore(private val directory:File) {
-    companion object {private val immutablePublishLock=Any();private const val activationFamily="published-aggregate-activation";private const val catalogFamily="published-aggregate-index"}
+    companion object {
+        private val immutablePublishLock=Any();private const val activationFamily="published-aggregate-activation";private const val catalogFamily="published-aggregate-index"
+        /**
+         * Store-level derivation memo keyed by the immutable document identity (native descriptor, source
+         * manifest, sealed raw HTML SHA and the stored response/fetch witness). It only avoids rebuilding
+         * the same Jsoup DOM: every hit still re-reads the sealed original bytes and the saved document and
+         * body files of the calling store, so reuse never replaces source verification and no foreign body
+         * can stand in for a missing local derivation.
+         */
+        private const val derivationLimit=4
+        private const val derivationBytes=8*1024*1024
+        private val derivationLock=Any()
+        private class SavedDerivation(val content:String,val slots:List<AggregateImageSlot>)
+        // Access order: the entry used last is the last candidate for eviction.
+        private val derivations=object:LinkedHashMap<String,SavedDerivation>(8,0.75f,true){}
+        private fun rememberDerivation(key:String,parsed:AggregateHtml.Parsed){
+            val content=contentCanonical(parsed.document);val slots=parsed.imageSlots.toList()
+            // 超过总预算的单条派生不入缓存：否则 while 会先清空其他条目再把它自己删掉。
+            if(content.length>derivationBytes)return
+            synchronized(derivationLock){
+                derivations[key]=SavedDerivation(content,slots)
+                var bytes=derivations.values.sumOf{it.content.length.toLong()}
+                while(derivations.isNotEmpty()&&(derivations.size>derivationLimit||bytes>derivationBytes)){
+                    val eldest=derivations.entries.iterator().next();bytes-=eldest.value.content.length;derivations.remove(eldest.key)
+                }
+            }
+        }
+        private fun knownDerivation(key:String):SavedDerivation?=synchronized(derivationLock){derivations[key]}
+        /** Format headers are identity fields, never content: the saved file's own header is replayed last. */
+        private fun contentCanonical(document:JSONObject):String {
+            val value=JSONObject(document.toString())
+            value.remove("contract");value.remove("schemaFingerprint");value.remove("parserContract")
+            return canonical(value)
+        }
+        private fun withFormat(content:String,format:JSONObject):JSONObject {
+            val value=JSONObject(content)
+            value.remove("contract");value.remove("schemaFingerprint");value.remove("parserContract")
+            format.keys().forEach{key->value.put(key,format.get(key))}
+            return value
+        }
+        /** Immutable identity of one saved derivation; fields that only reach the stored document join the key. */
+        private fun derivationKey(descriptor:PublishedAggregate,rawHTMLSHA256:String,responseURL:String,fetchedAt:String)=
+            canonical(descriptor.json())+"|"+rawHTMLSHA256+"|"+responseURL+"|"+fetchedAt
+    }
     private data class SourceFile(val file:File,val limit:Int,val sha256:String)
     private data class ParsedSource(val catalog:PublishedAggregateCatalog,val shapeSHA256:String)
     private data class ParsedImagePlan(val plan:AggregateImagePlan,val canonical:String)
@@ -171,10 +214,15 @@ class PublishedAggregateStore(private val directory:File) {
     }
     /** Platform-specific derivation namespace preserves any restored Mac rendering instead of replacing it. */
     fun cacheDocument(raw:ByteArray,descriptor:PublishedAggregate,responseURL:String,fetchedAt:String):JSONObject {
-        originalRow(descriptor);val document=AggregateHtml.parse(raw,descriptor,responseURL,fetchedAt);val encoded=OfflineFoundationJSON.encode(document);require(encoded.size<=20*1024*1024)
-        val prefix=arrayOf("aggregate-documents-android",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,document.getString("rawHTMLSHA256"))
+        originalRow(descriptor)
+        val parsed=AggregateHtml.parseAll(raw,descriptor,responseURL,fetchedAt);val document=parsed.document
+        val rawHTMLSHA256=document.getString("rawHTMLSHA256")
+        // This sealed derivation feeds the plan immediately afterwards; no consumer rebuilds the same DOM.
+        rememberDerivation(derivationKey(descriptor,rawHTMLSHA256,responseURL,fetchedAt),parsed)
+        val encoded=OfflineFoundationJSON.encode(document);require(encoded.size<=20*1024*1024)
+        val prefix=arrayOf("aggregate-documents-android",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,rawHTMLSHA256)
         immutable(child(*prefix,"original.html"),raw);immutable(child(*prefix,"body.html"),document.getString("bodyHTML").toByteArray())
-        if(child(*prefix,"document.json").exists())return cachedDocument(descriptor,document.getString("rawHTMLSHA256"))
+        if(child(*prefix,"document.json").exists())return cachedDocument(descriptor,rawHTMLSHA256)
         immutable(child(*prefix,"document.json"),encoded)
         return document
     }
@@ -201,17 +249,34 @@ class PublishedAggregateStore(private val directory:File) {
         noLinks(root);val after=attrs(root);require(before.fileKey()==after.fileKey()&&before.lastModifiedTime()==after.lastModifiedTime()){"保存修订清单读取期间已变化，请重新核验"}
         return revisions.sortedWith(compareByDescending<AggregateCachedRevision>{java.time.Instant.parse(it.fetchedAt)}.thenBy{it.rawHTMLSHA256})
     }
-    fun cachedDocument(descriptor:PublishedAggregate,rawHTMLSHA256:String):JSONObject {
+    private data class Derivation(val document:JSONObject,val slots:List<AggregateImageSlot>)
+    /** One sealed-source derivation per immutable identity: the stored document and its image-plan material.
+     * The sealed original HTML, the saved document and the saved body are still re-read and compared here, so a
+     * memo hit cannot outlive, replace or bypass the calling store's own source verification. */
+    private fun derivation(descriptor:PublishedAggregate,rawHTMLSHA256:String):Derivation {
         originalRow(descriptor);require(PublishedAggregateReader.validSHA(rawHTMLSHA256))
         val prefix=arrayOf("aggregate-documents-android",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,rawHTMLSHA256)
-        if(!Files.exists(child(*prefix).toPath(),NOFOLLOW_LINKS))return importMacDocument(descriptor,rawHTMLSHA256)
-        val raw=read(child(*prefix,"original.html"),16*1024*1024);require(PublishedAggregateReader.sha(raw)==rawHTMLSHA256)
+        // A restored Mac revision is derived into this platform's namespace first; the derivation below is then native.
+        if(!Files.exists(child(*prefix).toPath(),NOFOLLOW_LINKS))importMacDocument(descriptor,rawHTMLSHA256)
+        val raw=read(child(*prefix,"original.html"),16*1024*1024);require(raw.size in 1..16*1024*1024&&PublishedAggregateReader.sha(raw)==rawHTMLSHA256)
         val saved=JSONObject(PublishedUtf8.decode(read(child(*prefix,"document.json"),20*1024*1024)))
         require(canonical(saved.getJSONObject("descriptor"))==canonical(descriptor.json()))
-        val actual=AggregateHtml.parse(raw,descriptor,saved.getString("responseURL"),saved.getString("fetchedAt"),saved)
-        require(canonical(saved)==canonical(actual)&&read(child(*prefix,"body.html"),16*1024*1024).contentEquals(actual.getString("bodyHTML").toByteArray()))
-        return actual
+        val responseURL=saved.getString("responseURL");val fetchedAt=saved.getString("fetchedAt")
+        val key=derivationKey(descriptor,rawHTMLSHA256,responseURL,fetchedAt)
+        val known=knownDerivation(key)
+        val document:JSONObject;val slots:List<AggregateImageSlot>
+        if(known==null){
+            val parsed=AggregateHtml.parseAll(raw,descriptor,responseURL,fetchedAt,saved)
+            rememberDerivation(key,parsed)
+            document=parsed.document;slots=parsed.imageSlots
+        }else{
+            // Replaying the saved header keeps historical parser declarations exact instead of re-signing them.
+            document=withFormat(known.content,AggregateDocumentFormat.replay(saved,AggregateDocumentFormat.Platform.ANDROID));slots=known.slots
+        }
+        require(canonical(saved)==canonical(document)&&read(child(*prefix,"body.html"),16*1024*1024).contentEquals(document.getString("bodyHTML").toByteArray()))
+        return Derivation(document,slots)
     }
+    fun cachedDocument(descriptor:PublishedAggregate,rawHTMLSHA256:String):JSONObject = derivation(descriptor,rawHTMLSHA256).document
     /** Image bytes are immutable SHA blobs shared across platform derivation namespaces. */
     fun cacheImageBlob(bytes:ByteArray):AggregateImageBlob {
         require(bytes.size in 1..AggregateImages.MAX_IMAGE_BYTES)
@@ -223,9 +288,10 @@ class PublishedAggregateStore(private val directory:File) {
         require(PublishedAggregateReader.validSHA(rawHTMLSHA256))
         val key=canonical(descriptor.json())+"|"+rawHTMLSHA256
         ownedSourceReadScope()?.plans?.get(key)?.let{return it.plan}
-        val source=cachedDocument(descriptor,rawHTMLSHA256)
-        val raw=read(child("aggregate-documents-android",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,rawHTMLSHA256,"original.html"),16*1024*1024)
-        val plan=AggregateHtml.imagePlan(raw,descriptor,source.getString("responseURL"),source.getString("fetchedAt")).also{require(it.originalBodySHA256==source.getString("sanitizedBodySHA256"))}
+        val source=derivation(descriptor,rawHTMLSHA256);val document=source.document
+        // The plan reuses the sanitized body captured by the single parse; no second DOM or clean pass.
+        val plan=AggregateImagePlan(descriptor,rawHTMLSHA256,document.getString("sanitizedBodySHA256"),source.slots.map{it},document.getString("bodyHTML"))
+        require(plan.rawHTMLSHA256==document.getString("rawHTMLSHA256")&&plan.originalBodySHA256==document.getString("sanitizedBodySHA256")){"图片位置或原来源已变化"}
         ownedSourceReadScope()?.plans?.put(key,ParsedImagePlan(plan,canonical(plan.json())))
         return plan
     }

@@ -79,6 +79,29 @@ class PublishedCitationRepositoryTest {
   assertTrue(PublishedUtf8.decode(f.repo.original(f.paper,article,PublishedCitationRepository.Format.BIBTEX).bytes).contains("archivePrefix = {arXiv}"))
   val ris=PublishedUtf8.decode(f.repo.original(f.paper,article,PublishedCitationRepository.Format.RIS).bytes);assertTrue(ris.contains("ID  - 2610.27491v1"));assertTrue(ris.contains("L1  - https://arxiv.org/pdf/2610.27491v1.pdf"));assertEquals(4,f.calls.size)
  }
+ @Test fun oneFetchedPageRevisionIsParsedOnceAndReusedByEveryLaterRead()=fixture("arxiv-micla"){f->
+  val page=f.repo.fetchPage(f.paper)
+  val extracted=f.repo.extractPage(f.paper,page,"fixture-actual-catalog")
+  val article=try{f.repo.bindPage(f.paper,extracted,page)}finally{f.repo.releasePage(page)}
+  assertEquals(extracted.html,article.html);assertEquals(extracted.revisionSHA256,article.revisionSHA256)
+  assertEquals(1,f.repo.pageParseCount)
+  assertEquals(1,f.calls.count{it==f.paper.blogURL})
+  val files=f.repo.declaredFiles(f.paper,article)
+  assertEquals(3,files.size)
+  assertEquals(files,f.repo.declaredFiles(f.paper,article))
+  assertEquals(1,f.repo.pageParseCount)
+  val json=f.repo.declaredBytes(f.paper,article,"citation.json")
+  assertArrayEquals(f.responses.getValue(f.address(PublishedCitationRepository.Format.JSON)),json)
+  assertArrayEquals(json,f.repo.declaredBytes(f.paper,article,"citation.json"))
+  assertEquals(1,f.repo.pageParseCount)
+  for(format in PublishedCitationRepository.Format.entries){val original=f.repo.original(f.paper,article,format);assertArrayEquals(f.responses.getValue(f.address(format)),original.bytes)}
+  assertEquals(1,f.repo.pageParseCount)
+  val reopened=f.bound()
+  assertEquals(1,f.repo.pageParseCount)
+  assertEquals(article.html,reopened.html);assertEquals(article.revisionSHA256,reopened.revisionSHA256)
+  assertEquals(article.original!!.getJSONObject(PublishedCitationRepository.PAGE_FIELD).getString("pageSHA256"),reopened.original!!.getJSONObject(PublishedCitationRepository.PAGE_FIELD).getString("pageSHA256"))
+  assertEquals(2,f.calls.count{it==f.paper.blogURL})
+ }
  @Test fun actualTurnGuideHasNoPublishedOriginalAndNeverFabricatesAnEprint()=fixture("conference-turnguide"){f->
   val article=f.bound();for(format in PublishedCitationRepository.Format.entries){val error=runCatching{f.repo.original(f.paper,article,format)}.exceptionOrNull();assertTrue(error is AppFailure);assertEquals("citationUnavailable",(error as AppFailure).category)}
   assertEquals(listOf(f.paper.blogURL),f.calls);assertTrue(f.artifactFiles().isEmpty())

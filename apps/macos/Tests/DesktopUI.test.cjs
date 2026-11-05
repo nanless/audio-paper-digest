@@ -48,6 +48,8 @@ async function installFixture(page, initial={}) {
         case 'aggregates.list':return {records:[],available:false,notice:'This isolated paper fixture has no source-bound aggregate manifest'};
         case 'library.status':return {paperCount:b.papers.length,recordCount:b.papers.length};
         case 'library.list':return copy({papers:b.papers});
+        case 'library.paperDetail':return copy({paper:(b.papers||[]).find(p=>String(p.paperID||p.id)===String(payload.paperID))||(b.papers||[])[0],snapshotID:'isolated-fixture'});
+        case 'library.tagIndex':return copy({papers:{},count:0,snapshotID:'isolated-fixture',websiteTaxonomy:null});
         case 'library.search':case 'personal.search':return {ids:[]};
         case 'app.setPaper':b.selected=copy(payload);return {};
         case 'library.article':if(b.holdArticle||b.holdArticleFor===payload.paperID)await new Promise(r=>b.releaseArticle=r);return copy(payload.paperID===b.primary.id?b.article:{...b.article,paperID:payload.paperID,revisionSHA256:'fixture-second-revision',markdown:'# Fixture secondary document\n\n## Isolated transition fixture\n\nNo paper analysis is claimed.'});
