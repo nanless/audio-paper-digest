@@ -10,6 +10,8 @@
 
 ## 结论
 
+1.4.4 已于 2026-11-05 公开，地址为 <https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4>。附注标签 `v1.4.4` 指向提交 `aecf5c25eeccabae0602316486168141d94a02e0`。Release 共十二件附件，Mac 六件、Android 六件；公开后未登录访问 Release 页面和每件附件均返回 HTTP 200，文件大小与两份校验表一致。Android 包用新签名库签发，证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，已安装 1.4.3 的用户需要卸载重装。
+
 1.4.3 已于 2026-11-05 公开，地址为 <https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3>。附注标签 `v1.4.3` 的对象为 `975a9a2334e4b81294897fafae6c5e7412460a98`，指向提交 `47c30d98c323f56e988215fe5148e59aa6fa8a56`。Release 共十二件附件，Mac 六件、Android 六件。公开后未登录访问 Release 页面和每件附件均返回 HTTP 200，文件大小与两份校验表一致。
 
 ## 两端签名对照
