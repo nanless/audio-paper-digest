@@ -150,3 +150,126 @@ it('旧汇总只认原五类声明，重算包内校验值不能添入新格式'
     }
     checks.assertLlmApiProductionGeneration(baseline, papers);
 });
+
+const EMPTY_DATE = '2026-11-05';
+
+function emptyDailyMarker(extra = {}) {
+    return {
+        contract: 'daily-empty-batch-confirmation-v1',
+        batchId: 'batch-empty-1',
+        batchDate: EMPTY_DATE,
+        zeroCandidates: true,
+        analysisStatus: 'complete',
+        rawCandidatesSha256: 'd'.repeat(64),
+        sourceHealthSha256: 'e'.repeat(64),
+        ...extra
+    };
+}
+
+function writeEmptyDailyReceipt(currentDir, overrides = {}, generationOverrides = {}) {
+    fs.mkdirSync(currentDir, { recursive: true });
+    const generation = {
+        schemaVersion: 3,
+        date: EMPTY_DATE,
+        category: '论文速递',
+        visualSummaryRequired: false,
+        digestCoverRequired: false,
+        inputFingerprint: 'c'.repeat(64),
+        publishAll: false,
+        publishedPapers: [],
+        publishedPapersFingerprintContract: 'typed-json-f64-utf16-v1',
+        publishedPapersFingerprint: publishedPapersFingerprint([], { allowEmpty: true }),
+        manualV6Bindings: [],
+        llmApiBindings: [],
+        publicationMode: 'empty_daily_batch',
+        emptyDailyBatch: emptyDailyMarker(),
+        postPublicationPolicy: require('../scripts/lib/protocol-codec').record('daily-publication-policy', {
+            generatedImages: false, sourceFigures: 'retained-and-source-verified'
+        }),
+        ...generationOverrides
+    };
+    const generationPath = path.join(currentDir, `blog-generation-manifest-${EMPTY_DATE}.json`);
+    const raw = Buffer.from(JSON.stringify(generation));
+    fs.writeFileSync(generationPath, raw);
+    const receiptPath = path.join(currentDir, `blog-review-receipt-${EMPTY_DATE}.json`);
+    fs.writeFileSync(receiptPath, JSON.stringify({
+        schemaVersion: 3,
+        date: EMPTY_DATE,
+        strictReview: true,
+        hugoGate: 'hugo',
+        reviewProtocolFingerprint: 'b'.repeat(64),
+        generationManifestSha256: crypto.createHash('sha256').update(raw).digest('hex'),
+        generationInputIntegrity: 'typed-json-f64-utf16-v1',
+        generationInputFingerprint: generation.inputFingerprint,
+        publishedPapersFingerprint: generation.publishedPapersFingerprint,
+        publicationCommit: 'a'.repeat(40),
+        remoteVerifiedOid: 'a'.repeat(40),
+        remoteVerifiedAt: '2026-11-06T02:00:00+08:00',
+        publicationMode: 'empty_daily_batch',
+        manualV6ProductionFingerprint: null,
+        llmApiProductionFingerprint: null,
+        postPublishVisuals: 'not_requested',
+        ...overrides
+    }));
+    return receiptPath;
+}
+
+describe('显式零候选空日的发布凭证', () => {
+    it('只有带放行证据的空日生成才能登记不生图', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-empty-daily-'));
+        const originalCurrent = Config.CURRENT_DIR;
+        try {
+            Config.CURRENT_DIR = dir;
+            const receipt = writeEmptyDailyReceipt(dir);
+            const publication = assertPublishedBlogReceipt(EMPTY_DATE, receipt);
+            assert.strictEqual(publication.publicationMode, 'empty_daily_batch');
+            assert.deepStrictEqual(publication.publishedPapers, []);
+            assert.strictEqual(publication.emptyDailyBatch.zeroCandidates, true);
+            assert.strictEqual(publication.postPublishVisuals, 'not_requested');
+        } finally {
+            Config.CURRENT_DIR = originalCurrent;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('缺少放行证据或证据无效时仍拒绝空的已发布论文快照', () => {
+        for (const generationOverrides of [
+            { emptyDailyBatch: undefined },
+            { emptyDailyBatch: emptyDailyMarker({ zeroCandidates: false }) },
+            { emptyDailyBatch: emptyDailyMarker({ batchDate: '2026-11-04' }) },
+            { emptyDailyBatch: emptyDailyMarker(), publishedPapers: [], publicationMode: 'manual_v6_production' },
+            { emptyDailyBatch: emptyDailyMarker(), publishedPapers: [paper()], publicationMode: 'empty_daily_batch',
+                publishedPapersFingerprint: publishedPapersFingerprint([paper()]) }
+        ]) {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-empty-invalid-'));
+            const originalCurrent = Config.CURRENT_DIR;
+            try {
+                Config.CURRENT_DIR = dir;
+                const receipt = writeEmptyDailyReceipt(dir, {}, generationOverrides);
+                assert.throws(
+                    () => assertPublishedBlogReceipt(EMPTY_DATE, receipt),
+                    /已发布论文快照|显式放行证据|production generation/
+                );
+            } finally {
+                Config.CURRENT_DIR = originalCurrent;
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('空日不能借用其他发布模式的证明指纹', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-empty-proof-'));
+        const originalCurrent = Config.CURRENT_DIR;
+        try {
+            Config.CURRENT_DIR = dir;
+            const receipt = writeEmptyDailyReceipt(dir, { manualV6ProductionFingerprint: 'f'.repeat(64) });
+            assert.throws(
+                () => assertPublishedBlogReceipt(EMPTY_DATE, receipt),
+                /production generation/
+            );
+        } finally {
+            Config.CURRENT_DIR = originalCurrent;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});

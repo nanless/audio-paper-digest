@@ -466,7 +466,11 @@ actor LibraryService {
     }
 
     func sync(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Summary {
-        try await ensureReady()
+        // A full published sync replaces the local catalog, so it is also a repair path for a
+        // failed startup decode: rejecting it at the ready gate would leave the app stuck on the
+        // old error with only `library.retryLoad` as a way back. A pending decode is still awaited
+        // so the merge below starts from the real saved catalog rather than a placeholder.
+        if case .failed = loadPhase {} else { try await ensureReady() }
         if let syncTask { return try await withTaskCancellationHandler(operation: { try await syncTask.value }, onCancel: { syncTask.cancel() }) }
         let identifier = UUID()
         syncID = identifier
@@ -584,6 +588,11 @@ actor LibraryService {
         }
         try atomicWrite(encoded, to: directory.appendingPathComponent("current.json"))
         snapshot = replacement
+        // The replacement catalog is now both persisted and in memory, so an earlier decode
+        // failure no longer describes what this service serves: promote it to ready and the
+        // ordinary commands stop rethrowing the old error. Only the failed phase is promoted; a
+        // concurrent retry owns `.loading` and publishes that read itself.
+        if case .failed = loadPhase { loadPhase = .ready }
         progress(Progress(phase: "complete", message: "已同步 \(summary.paperCount) 篇论文，\(summary.recordCount) 条页面记录", completed: shardCount, total: shardCount))
         return summary
     }
@@ -1461,9 +1470,10 @@ actor LibraryService {
     func handle(command: String, payload: sending [String: Any], progress: @escaping @Sendable ([String: Any]) -> Void = { _ in }) async throws -> sending [String: Any] {
         switch command {
         case "library.status": return try await statusResponse()
-        // `library.retryLoad` is the command that repairs a failed load; gating it behind
-        // `ensureReady()` would rethrow the old failure before its own branch could re-read.
-        case "library.network", "library.cancel", "library.retryLoad": break
+        // `library.retryLoad` and `library.sync` are the commands that repair a failed load;
+        // gating them behind `ensureReady()` would rethrow the old failure before their own
+        // branches could re-read. `sync()` still awaits a decode that is genuinely pending.
+        case "library.network", "library.cancel", "library.retryLoad", "library.sync": break
         default: try await ensureReady()
         }
         let notify: @Sendable (Progress) -> Void = { progress($0.json) }

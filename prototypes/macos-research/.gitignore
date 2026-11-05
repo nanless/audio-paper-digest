@@ -1,5 +1,13 @@
 /assets/*
+# 测试固定资产：两端测试在干净 checkout 上直接读取这四个文件，
+# 因此必须入库；其余本机准备或生成的材料继续忽略。
+# 来源是公开论文 arXiv:2610.27491v1，可公开分发，不得替换为生产数据。
 !/assets/README.md
+!/assets/README.en.md
+!/assets/figure-1.png
+!/assets/figure-2.png
+!/assets/figure-3.png
+!/assets/micla-2610.27491v1.pdf
 /.qa/
 /node_modules/
 __pycache__/

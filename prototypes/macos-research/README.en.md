@@ -11,7 +11,7 @@ The browser demo, its standalone web server, and its PDF.js dependency have been
 | Path | Contents | Actual use |
 |---|---|---|
 | `sample.json` | Fixed MiCLA explanation, bibliography, formulas, tables, original-figure coordinates, and expected checksums | Scientific layout, source navigation, and package-isolation tests on both platforms |
-| `assets/` | Locally prepared original PDF and three fixed crops | Local application tests; these files are neither committed to Git nor included in formal releases |
+| `assets/` | Committed test fixtures: the original PDF and three fixed crops | Local application and CI tests; public arXiv material, never replaced with production data |
 | `prepare_assets.py` | Preparation script using fixed PDF pages and coordinates | Reads an explicitly supplied PDF and writes verified local sample assets |
 | `vendor/marked.esm.js` | Markdown display library | Consumed by both build processes, with its MIT license retained |
 | `vendor/lucide.min.js` | Interface icon library | Used by the Mac web display layer, with its license retained |

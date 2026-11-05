@@ -7,6 +7,16 @@ from pathlib import Path
 from unittest import mock
 from test_publish_to_blog import publish_to_blog as publisher
 
+_REAL_RUN_BOUNDED_SUBPROCESS = publisher._run_bounded_subprocess
+
+
+def hugo_fixture_or_real_closure(command, **kwargs):
+    """Keep Hugo's identity deterministic while the real closure bridge still runs."""
+    if any(str(part).endswith('workflow-implementation-files-cli.js') for part in command):
+        return _REAL_RUN_BOUNDED_SUBPROCESS(command, **kwargs)
+    return SimpleNamespace(returncode=0, timed_out=False, output_truncated=False,
+                           stdout='hugo fixture', stderr='')
+
 
 class PublicationTemplateDependencyTest(unittest.TestCase):
     def test_each_new_replay_leaf_changes_current_generation_and_review_protocol(self):
@@ -18,8 +28,8 @@ class PublicationTemplateDependencyTest(unittest.TestCase):
                    scripts/'scoring_record_format.py', scripts/'lib/scoring-record-format.js',
                    scripts.parent/'config/protocols/accounts.json']
         with mock.patch.object(publisher, 'blog_runtime_fingerprint', return_value='9'*64), \
-                mock.patch.object(publisher, '_run_bounded_subprocess', return_value=SimpleNamespace(
-                    returncode=0, timed_out=False, output_truncated=False, stdout='hugo fixture', stderr='')), \
+                mock.patch.object(publisher, '_run_bounded_subprocess',
+                    side_effect=hugo_fixture_or_real_closure), \
                 mock.patch.dict(publisher._REVIEW_PROTOCOL_CACHE, {}, clear=True):
             generation = publisher.generation_template_fingerprint()
             review = publisher.review_protocol_fingerprint()
@@ -37,8 +47,8 @@ class PublicationTemplateDependencyTest(unittest.TestCase):
         shared = scripts.parent / 'config/protocols/clients.json'
         original = publisher._sha256_file
         with mock.patch.object(publisher, 'blog_runtime_fingerprint', return_value='9'*64), \
-                mock.patch.object(publisher, '_run_bounded_subprocess', return_value=SimpleNamespace(
-                    returncode=0, timed_out=False, output_truncated=False, stdout='hugo fixture', stderr='')), \
+                mock.patch.object(publisher, '_run_bounded_subprocess',
+                    side_effect=hugo_fixture_or_real_closure), \
                 mock.patch.dict(publisher._REVIEW_PROTOCOL_CACHE, {}, clear=True):
             before = (publisher.generation_template_fingerprint(), publisher.review_protocol_fingerprint())
             with mock.patch.object(publisher, '_sha256_file', side_effect=lambda path:

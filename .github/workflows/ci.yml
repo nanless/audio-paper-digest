@@ -157,15 +157,12 @@ jobs:
         run: test "$VERIFY_RESULT" = success
 
   # 客户端测试不进服务端分片矩阵，独立作业避免拖慢上述十二个检查：
-  # Android 需要 JDK、Gradle 与 SDK，与 Node/Python 分片没有共享资源，
-  # 也不并入 test 汇总检查。
-  # macOS 客户端测试当前没有 CI 作业：多个套件直接读取
-  # prototypes/macos-research/assets 下的 PDF 与图片，而该目录被
-  # prototypes/macos-research/.gitignore 排除，干净 checkout 上不存在。
-  # 这些测试仍在本机通过 apps/macos/test.sh 运行；接入 CI 需要先解决资产
-  # 不入库的问题，不能用下载步骤绕过（测试不联网）。
-  # 本作业只运行仓库里已有的 Gradle 单元测试；未在 GitHub Actions 上实测，
-  # 不改动上面的 verify/test。
+  # Android 需要 JDK、Gradle 与 SDK，macOS 需要 Xcode 与 Playwright 浏览器，
+  # 都与 Node/Python 分片没有共享资源，也不并入 test 汇总检查。
+  # macOS 的测试固定资产（公开论文 arXiv:2610.27491v1 的 PDF 与三张图）已入库，
+  # 干净 checkout 能直接读取；NativeLibraryAccessibility 在无 AX 窗口的环境以 77
+  # 退出，test.sh 只把 77 记为跳过，其它非零仍失败。
+  # 两个作业都只运行仓库里已有的客户端测试入口，未在 GitHub Actions 上实测。
   client-android:
     name: client (android)
     runs-on: ubuntu-24.04
@@ -199,9 +196,42 @@ jobs:
         run: npm ci
 
       - name: 运行 Android 客户端单元测试
-        # 不运行 apps/android/test.sh：其中的 Python 测试需要
-        # prototypes/macos-research/assets 下的 PDF，而该目录不入库。
-        # debug 变体的资产准备任务会渲染 prototypes 样本，干净 checkout 上必然 ENOENT；
-        # 单元测试不读取打包资产，因此排除该任务。
+        # 不运行 apps/android/test.sh：除 :app:testDebugUnitTest 外，它还会构建、
+        # lint 并运行整套发行/签名检查；本作业只覆盖 Gradle 单元测试。
+        # 单元测试不读取打包资产，因此排除资产准备任务；该任务未在 CI 上验证。
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest --no-daemon -x :app:prepareDebugPublishedAssets
+
+  client-macos:
+    name: client (macos)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 部分套件按 Git 清单读取已提交文件，需要完整历史。
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 配置 Python 测试运行时
+        # test.sh 委托 scripts/python-runtime.sh 调用协议生成检查与打包测试，要求 Python >= 3.11。
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装项目依赖
+        run: npm ci
+
+      - name: 安装客户端依赖与浏览器
+        # 根目录没有 npm workspaces，playwright 随 apps/macos 安装；npm ci 不下载浏览器。
+        working-directory: apps/macos
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: 运行 macOS 客户端隔离测试
+        run: bash apps/macos/test.sh

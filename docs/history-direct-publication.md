@@ -53,6 +53,8 @@ npm run history:publication -- visual-disposition --apply \
 
 输出必须直接位于配置的 `historical-direct-visual-dispositions` 目录。先写私有临时文件，再以不可覆盖链接保存；同一命令重跑时，先重新核验已有凭证自身的 SHA，以及计划、范围、模式、原因和声明来源，全部一致才保留原创建时间与字节。恢复只清理由已退出的同机写者留下、与已验证正式文件对应的临时硬链接；旧半截文件、未知链接或不同请求都保留并拒绝，不能因此推断新增视觉授权。下面 plan/generate 的 `--visual-disposition` 使用同一个实际输出文件。
 
+这份清单同样没有生成器：可用 `node scripts/export-review-failure-manifest.js --kind historical-visual-disposition --publication PUBLICATION_UUID --out /absolute/skeleton.json` 从已保存发布计划导出 `planSha256`/`scope` 骨架；`mode`、`reason`、`requestedBy`、`createdAt` 和 `dispositionSha256` 仍须人工确认与签名，导出物不能被当作视觉授权。
+
 ## 生成、审查与发布命令
 
 ```bash

@@ -101,6 +101,26 @@ class BlogStageEntryTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout.strip(), 'outer-test-key')
 
+    def test_review_read_generated_pages_allows_confirmed_empty_index_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            index = Path(tmp) / '2026-11-05.md'
+            index.write_text(
+                '---\npaper_digest_page_type: index\n---\n今日没有新论文。\n',
+                encoding='utf-8',
+            )
+            slugs, scored = review_blog.read_generated_pages(
+                publish_module, '2026-11-05', [index], [], {},
+                allow_empty_index_only=True,
+            )
+            self.assertEqual(slugs, {})
+            self.assertEqual(scored, [])
+            with self.assertRaisesRegex(
+                publish_module.PublishDataValidationError, '没有可审查的论文页',
+            ):
+                review_blog.read_generated_pages(
+                    publish_module, '2026-11-05', [index], None, {},
+                )
+
     def test_review_entry_rejects_generation_byte_drift_before_llm_or_hugo(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / 'blog'

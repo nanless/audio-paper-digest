@@ -557,6 +557,44 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect((listing["papers"] as? [[String: Any]])?.count == 1, "the catalog re-read by the retry command serves list data")
         print("RETRY COMMAND: a failed load recovers through library.retryLoad")
     }
+    /// A failed startup decode must not make `library.sync` unreachable either. It differs from
+    /// `library.retryLoad`: it re-reads the published website instead of the saved file, and its
+    /// success is itself a successful read of the catalog, so the service must leave the failed
+    /// phase instead of keeping the old decode error for every later command.
+    static func testSyncCommandRecoversFailedLoad() async throws {
+        let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
+        let published = folder.appendingPathComponent("PublishedLibrary", isDirectory: true)
+        try FileManager.default.createDirectory(at: published, withIntermediateDirectories: true)
+        // Large enough to stay pending at launch, then corrupt so the ready gate fails.
+        var broken = Data("{not a catalog".utf8)
+        broken.append(Data(repeating: 0x20, count: 9 * 1024 * 1024))
+        try broken.write(to: published.appendingPathComponent("current.json"))
+        // This transport serves a real published catalog, unlike the retry fixture.
+        let transport = LibraryFixtureTransport(try fixture([[row("2501.00001", slug: "sync-recovery", title: "Sync recovery", date: "2026-01-01")]]))
+        let library = try service(folder, transport)
+        var failure: Error?
+        do { try await library.waitUntilReady() } catch { failure = error }
+        try expect(failure != nil, "the corrupt saved catalog leaves the service in the failed phase")
+        var blocked: Error?
+        do { _ = try await library.handle(command: "library.list", payload: ["limit": 10]) } catch { blocked = error }
+        try expect(blocked != nil, "an ordinary command still reports the failed load before the sync command")
+        let failedStatus = try await library.handle(command: "library.status", payload: [:])
+        try expect(failedStatus["error"] != nil, "status reports the load error before the sync command")
+        let synced = try await library.handle(command: "library.sync", payload: [:])
+        try expect(synced["paperCount"] as? Int == 1, "the sync command runs although the load phase is failed")
+        let listing = try await library.handle(command: "library.list", payload: ["limit": 10])
+        try expect((listing["papers"] as? [[String: Any]])?.count == 1, "a sync from the failed phase serves list data")
+        try expect(listing["snapshotID"] as? String == synced["snapshotID"] as? String, "the recovered list names the snapshot the sync published")
+        let status = try await library.handle(command: "library.status", payload: [:])
+        try expect(status["error"] == nil && status["loading"] == nil, "a successful sync clears the reported load error")
+        try expect(status["snapshotID"] as? String == synced["snapshotID"] as? String, "status after the sync reports the published snapshot, not the failed one")
+        let again = try await library.sync()
+        try expect(again.snapshotID == synced["snapshotID"] as? String, "the recovered service keeps syncing from its ready state")
+        let restarted = try service(folder, transport)
+        try await restarted.waitUntilReady()
+        try expect(await restarted.list().count == 1, "the catalog a failed-phase sync wrote is readable after a restart")
+        print("SYNC COMMAND: a failed load recovers through library.sync")
+    }
     /// Staging a catalog from shards a sync already read and parsed must not read or parse them
     /// again, and must still reject any byte/row identity change and any row the source path denies.
     static func testAggregateStagePreparedShards() async throws {
@@ -714,6 +752,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
                 try await testPublishedScoreScalar()
                 try await testLazyStartupAndRetry()
                 try await testRetryLoadCommandRecovery()
+                try await testSyncCommandRecoversFailedLoad()
                 try await testAggregateStagePreparedShards()
                 try await testPersonalCatalogJoin()
             }

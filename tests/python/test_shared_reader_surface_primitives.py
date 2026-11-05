@@ -16,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_env_isolation import isolate_module_environment, restore_environment_after
 import paper_reader_presentation as presentation
 import publish_common as common
-from test_publish_to_blog import publish_to_blog as publisher, llm_api_publication_fixture
+from test_publish_to_blog import (
+    publish_to_blog as publisher, fingerprint_subprocess, llm_api_publication_fixture,
+)
 import test_conference_page_render as conference
 import test_historical_page_render as historical
 import test_historical_direct_review as history_review
@@ -215,8 +217,10 @@ class SharedReaderSurfacePrimitiveTests(unittest.TestCase):
     def test_review_protocol_reads_shared_presentation_leaf_and_changes_with_its_bytes(self):
         original = publisher._sha256_file
         with mock.patch.object(publisher, 'blog_runtime_fingerprint', return_value='a' * 64), \
-                mock.patch.object(publisher, '_run_bounded_subprocess', return_value=SimpleNamespace(
-                    returncode=0, timed_out=False, stdout='hugo fixture\n')), \
+                mock.patch.object(publisher, '_run_bounded_subprocess',
+                    side_effect=fingerprint_subprocess(SimpleNamespace(
+                        returncode=0, timed_out=False, output_truncated=False,
+                        stdout='hugo fixture\n', stderr=''))), \
                 mock.patch.dict(publisher._REVIEW_PROTOCOL_CACHE, {}, clear=True), \
                 mock.patch.object(publisher, '_sha256_file', wraps=original) as reads:
             expected = publisher.review_protocol_fingerprint()

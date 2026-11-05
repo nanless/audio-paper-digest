@@ -174,6 +174,7 @@ npm run test:compat
 | `conference-staging.js` | 将完整入选集和已审提取结果一一核验，生成不可覆盖的导入清单与凭证；不复制文件，不调用模型。 |
 | `conference-tools.js` | 只读校验私有会议 ledger/run；只接受受控运行目录内的直接文件名，不导入 PDF、不联网、不调用模型。 |
 | `conference-workspace.js` | 检查会议运行所需目录、工作区和受控来源准备状态。 |
+| `export-review-failure-manifest.js` | CLI：只读导出两种无生成器清单的骨架 JSON。`--kind conference-figure-crop` 读取 `page-review-failures` 与原 `generation.json`，按同协议、同页 SHA 导出完整 `imageFailureUniverse`、可推导身份与占位 `members`；`--kind historical-visual-disposition` 从发布计划导出 `planSha256`/`scope`。无法推导的字段留 null 并写入 `_todo`，不写生产数据、不联网、不授予任何审查或发布资格。 |
 | `conference_extractor.py` | 实现会议 PDF 提取：核验文件与 SHA，记录 UTF-8 字节偏移，生成页文本、PNG、图片与版面候选；以 `O_EXCL` 保存，按结构字段报告 blocked/integrity 状态。 |
 | `conference_publication_gate.py` | 核验会议身份、来源账本和页面发布资格。 |
 | `icmc-proceedings.py` | 从官方 ICMC 2026 合并 proceedings PDF 的书签和目录提取论文顺序、页范围与作者元数据，并按页范围无栅格化拆分单篇 PDF；不调用模型、不改写原始图表公式。 |
@@ -524,7 +525,9 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/source-classification-failures.js` | Node 库：只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
 | `lib/source-classification-scheduler.js` | Node 库：以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
 | `lib/source-evidence-snippets.js` | Node 库：`buildSourceEvidenceSnippets` 按字符预算提取并编号连续原文片段；`fillConceptQuotesFromSnippets` 按模型选择的编号填入原文引文。保留原始空白及 UTF16 位置，拒绝未知编号。 |
+| `lib/empty-daily-batch.js` | Node 库：核对生成清单里的 `emptyDailyBatch` 证据标记及其绑定的原始候选/分析快照；只服务显式放行的零候选空日，普通批次不进入这些分支。 |
 | `lib/workflow-implementation-files.js` | 静态收集实际可执行传递依赖，供当前实现指纹核验。 |
+| `lib/workflow-implementation-files-cli.js` | 只读桥：从私有继承描述符接收入口清单，返回与 Node 工作流相同的实现闭包；只读项目文件、不执行被扫描模块，不触碰模型、网络或运行数据。 |
 | `llm-account-pool.js` | 管理 Node OpenCode Go 账号池：同一池内所有 key 等权，按账号 ID 稳定排序轮转，跳过已排除或冷却未到期账号，冷却到期自动回归；只在明确额度/余额错误时切换，并保存跨进程轮转与冷却状态。 |
 | `llm-usage-report.js` | 只读汇总真实请求用量；`--paper` 支持新旧 arXiv ID 和完整会议论文 ID。区分服务提供的 usage、不可得状态和字符估算，不推算未经证实的费用；旧记录缺失的论文身份不能自动补回。 |
 | `llm_account_pool.py` | 按与 Node 相同的等权轮转语义、数据格式和锁协议管理 OpenCode Go 账号池。 |

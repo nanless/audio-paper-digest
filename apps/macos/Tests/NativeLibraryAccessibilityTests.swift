@@ -32,6 +32,11 @@ private final class LibraryAXScheme:NSObject,WKURLSchemeHandler {
  case "personal.annotations":replyHandler(["annotations":[]],nil)
  case "library.article":replyHandler(["paperID":"qa:0","html":"<h2>Explicit isolated reader body</h2><p>Not scientific output or source eligibility.</p>","markdown":"","revisionSHA256":String(repeating:"a",count:64),"completeOffline":false,"notices":[]],nil)
  case "library.search","personal.search":replyHandler(["ids":[]],nil)
+ case "library.paperDetail":
+  // The browsing row omits citation; opening a row asks the host for the full record.
+  let wanted=(body["paperID"] as? String) ?? ""
+  let papers=fixture["papers"] as? [[String:Any]] ?? []
+  replyHandler(["paper":papers.first{($0["paperID"] as? String)==wanted || ($0["id"] as? String)==wanted} as Any],nil)
  case "aggregates.list":replyHandler(["records":[["id":"page:/qa-daily/","kind":"daily","title":"Isolated daily fixture","displayDate":"2026-10-30","sourceURL":"https://nanless.github.io/audio-paper-digest-blog/qa-daily/","tags":[]]],"available":true],nil)
  case "app.setPaper","pdf.close","personal.reading","pdf.frame","aggregates.preload":replyHandler([:],nil)
  default:blocked.append(command);replyHandler(nil,"Own isolated fixture prohibits command: "+command)

@@ -765,7 +765,7 @@ def _binding_relations(value, snapshot, attempt_format):
     target_header = _target_header(target, _p('target_binding_keys'), attempt_format)
     _keys(local, _p('local_binding_keys'))
     _keys(policy, _p('repository_keys'))
-    if normal['date'] != value['selector']['date'] or normal['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance'):
+    if normal['date'] != value['selector']['date'] or normal['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance', 'empty_daily_batch'):
         _fail('invalid_record', 'record_binding')
     expected_scope = None
     if value['selector']['includeId'] is not None:

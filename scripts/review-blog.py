@@ -65,13 +65,17 @@ def parse_date(module, argv=None):
 
 def read_generated_pages(
     module, date_str, paths, authoritative_papers=None, page_artifacts=None,
+    allow_empty_index_only=False,
 ):
     paper_slugs = {}
     scored_papers = []
     normalize_id = getattr(module, 'normalize_publish_arxiv_id', lambda value: str(value or ''))
     authoritative_by_id = {}
     if authoritative_papers is not None:
-        if not isinstance(authoritative_papers, list) or not authoritative_papers:
+        if (
+            not isinstance(authoritative_papers, list)
+            or (not authoritative_papers and not allow_empty_index_only)
+        ):
             raise module.PublishDataValidationError('generation publishedPapers 缺少非空权威快照')
         for paper in authoritative_papers:
             if not isinstance(paper, dict) or not paper.get('arxivId'):
@@ -119,7 +123,7 @@ def read_generated_pages(
             'arxivId': arxiv_id, 'title': title_match.group(1),
         })
         scored_papers.append((0.0, paper, {}))
-    if not paper_slugs:
+    if not paper_slugs and not allow_empty_index_only:
         raise module.PublishDataValidationError('生成清单中没有可审查的论文页')
     return paper_slugs, scored_papers
 
@@ -252,6 +256,9 @@ def _run_review(module, date_str):
                 '当前 generation 已存在发布证据，但实时 remote/OID 或严格凭证复核失败；'
                 '已保留既有 receipt，拒绝开始新 review 覆盖唯一发布证据'
             )
+        empty_daily_batch = bool(
+            getattr(module, 'is_empty_daily_batch_generation', lambda _value: False)(generation)
+        )
         authoritative_papers = None
         if source_bound_generation(generation):
             authoritative_papers = generation.get('publishedPapers') or []
@@ -269,6 +276,7 @@ def _run_review(module, date_str):
                     page_artifacts[str(page)] = artifact
         paper_slugs, scored_papers = read_generated_pages(
             module, date_str, paths, authoritative_papers, page_artifacts,
+            allow_empty_index_only=empty_daily_batch,
         )
         authoritative_by_filename = None
         if authoritative_papers is not None:

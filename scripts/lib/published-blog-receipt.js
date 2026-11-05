@@ -13,6 +13,9 @@ const SIGNED_MANUAL_PRODUCTION_MODE = 'manual_v6_production';
 const SIGNED_MANUAL_PUBLICATION_CONTRACT = 'manual-v6-production-publication-v1';
 const LLM_API_PRODUCTION_MODE = 'llm_api_production';
 const LLM_API_PRODUCTION_CONTRACT = formats.contract('llm-api-production-publication');
+const {
+    EMPTY_DAILY_BATCH_MODE, emptyDailyBatchMarker
+} = require('./empty-daily-batch');
 const scoringFormats = require('./scoring-record-format');
 const LLM_API_READER_CONTRACT = formats.historicalContract('beginner-researcher', readerFormats.INTEGRATED);
 const LLM_API_SCORING_CONTRACT = formats.historicalContract('api-scoring-audit', 'evidence-bound-final-analysis');
@@ -221,7 +224,30 @@ function hasReaderPublicationBindingHeader(binding) {
     } catch { return false; }
 }
 
+function assertEmptyDailyBatchGeneration(generation, publishedPapers) {
+    const marker = emptyDailyBatchMarker(generation, generation?.date);
+    if (!marker || publishedPapers.length !== 0) {
+        throw new Error('零候选空日生成清单缺少有效的显式放行证据');
+    }
+    // 空日不能同时携带任一正式论文发布模式、逐篇绑定或单篇发布范围。
+    if (generation.manualV6Production !== undefined || generation.llmApiProduction !== undefined
+        || (Array.isArray(generation.manualV6Bindings) && generation.manualV6Bindings.length > 0)
+        || (Array.isArray(generation.llmApiBindings) && generation.llmApiBindings.length > 0)
+        || (generation.publicationScope !== undefined && generation.publicationScope !== null)) {
+        throw new Error('零候选空日生成清单不能包含论文发布证明或单篇发布范围');
+    }
+    return {
+        proof: null,
+        proofFingerprint: null,
+        publicationMode: EMPTY_DAILY_BATCH_MODE,
+        fingerprintField: null
+    };
+}
+
 function assertProductionGeneration(generation, publishedPapers) {
+    if (generation?.publicationMode === EMPTY_DAILY_BATCH_MODE) {
+        return assertEmptyDailyBatchGeneration(generation, publishedPapers);
+    }
     if (generation?.publicationMode === SIGNED_MANUAL_PRODUCTION_MODE) {
         return {
             ...assertSignedManualProductionGeneration(generation, publishedPapers),
@@ -265,8 +291,8 @@ function portableFingerprintValue(value, label = 'publishedPapers') {
     throw new Error(`${label} 包含不可序列化类型: ${typeof value}`);
 }
 
-function publishedPapersFingerprint(publishedPapers) {
-    if (!Array.isArray(publishedPapers) || publishedPapers.length === 0) {
+function publishedPapersFingerprint(publishedPapers, { allowEmpty = false } = {}) {
+    if (!Array.isArray(publishedPapers) || (publishedPapers.length === 0 && !allowEmpty)) {
         throw new Error('generation manifest 缺少已发布论文权威快照');
     }
     return stableSha256(portableFingerprintValue(publishedPapers));
@@ -316,6 +342,7 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
     }
     const generationManifestSha256 = sha256Buffer(generationRaw);
     const publishedPapers = generation.publishedPapers;
+    const emptyDailyBatch = generation.publicationMode === EMPTY_DAILY_BATCH_MODE;
     if (generationManifestSha256 !== receipt.generationManifestSha256
         || !sourceBoundGeneration(generation) || generation.date !== targetDate
         || generation.visualSummaryRequired !== false || generation.digestCoverRequired !== false
@@ -324,15 +351,21 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         || !snapshotHeader(generation)
         || !/^[0-9a-f]{64}$/i.test(String(generation.publishedPapersFingerprint || ''))
         || typeof generation.category !== 'string' || !generation.category
-        || !Array.isArray(publishedPapers) || publishedPapers.length === 0) {
+        || !Array.isArray(publishedPapers)
+        || (publishedPapers.length === 0 && !emptyDailyBatch)) {
         throw new Error('博客发布凭证与 generation manifest 或已发布论文快照不一致');
+    }
+    if (emptyDailyBatch && publishedPapers.length !== 0) {
+        throw new Error('零候选空日生成清单不能包含已发布论文快照');
     }
     const ids = publishedPapers.map(normalizedId);
     if (ids.some(id => !id) || new Set(ids).size !== ids.length) {
         throw new Error('generation manifest 的已发布论文快照包含空或重复 ID');
     }
     publishedPapers.forEach(validatePublishImageExclusions);
-    const snapshotFingerprint = publishedPapersFingerprint(publishedPapers);
+    const snapshotFingerprint = publishedPapersFingerprint(publishedPapers, {
+        allowEmpty: emptyDailyBatch
+    });
     if (snapshotFingerprint !== generation.publishedPapersFingerprint
         || !matchesSnapshotReceipt(generation, receipt)
         || receipt.generationInputFingerprint !== generation.inputFingerprint
@@ -346,8 +379,14 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         throw new Error('正式生成清单的不生图设置不完整或格式未知');
     }
     const expectedVisualState = policy === undefined ? 'required' : 'not_requested';
+    // 空日没有 production 证明指纹；两份正式证明字段都必须留空，不能借用
+    // 别的模式指纹。
+    const productionFingerprintOk = production.fingerprintField === null
+        ? receipt.manualV6ProductionFingerprint == null
+            && receipt.llmApiProductionFingerprint == null
+        : receipt[production.fingerprintField] === production.proofFingerprint;
     if (receipt.publicationMode !== production.publicationMode
-        || receipt[production.fingerprintField] !== production.proofFingerprint
+        || !productionFingerprintOk
         || receipt.postPublishVisuals !== expectedVisualState) {
         throw new Error('博客发布凭证未绑定当前 production generation，禁止登记发布完成');
     }
@@ -362,6 +401,9 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         remoteVerifiedOid: receipt.remoteVerifiedOid.toLowerCase(),
         category: generation.category,
         publishedPapers,
+        ...(emptyDailyBatch
+            ? { emptyDailyBatch: emptyDailyBatchMarker(generation, targetDate) }
+            : {}),
         publicationMode: receipt.publicationMode,
         manualV6ProductionFingerprint: receipt.manualV6ProductionFingerprint || null,
         llmApiProductionFingerprint: receipt.llmApiProductionFingerprint || null
@@ -423,4 +465,4 @@ function validatePublishImageExclusions(paper) {
     });
 }
 
-module.exports = { sha256Buffer, stableJson, stableSha256, pythonFloatText, stableApiBindingsSha256, assertSignedManualProductionGeneration, assertLlmApiProductionGeneration, hasReaderPublicationBindingHeader, assertProductionGeneration, portableFingerprintValue, publishedPapersFingerprint, validateDate, assertPublishedBlogReceipt, paperBatchDate, validatePublishImageExclusions };
+module.exports = { sha256Buffer, stableJson, stableSha256, pythonFloatText, stableApiBindingsSha256, assertSignedManualProductionGeneration, assertLlmApiProductionGeneration, assertEmptyDailyBatchGeneration, hasReaderPublicationBindingHeader, assertProductionGeneration, portableFingerprintValue, publishedPapersFingerprint, validateDate, assertPublishedBlogReceipt, paperBatchDate, validatePublishImageExclusions, EMPTY_DAILY_BATCH_MODE };

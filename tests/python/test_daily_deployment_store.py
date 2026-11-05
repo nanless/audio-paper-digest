@@ -194,6 +194,22 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         self.assertEqual(status['latestAttempt']['recordSha256'], terminal['recordSha256'])
         self.assertEqual(status['lastObserved']['recordSha256'], old_terminal['recordSha256'])
 
+    def test_empty_daily_batch_normal_binding_is_accepted_by_exact_mode(self):
+        leaf = self.leaf()
+        intent, handle = leaf.reserve(self.root, self.selector)
+        binding = self.bind_data(intent, handle, publication_mode='empty_daily_batch')
+        outcome = leaf.finish(handle, self.terminal(intent, binding))
+        self.assertEqual(outcome['recording'], 'recorded')
+        self.assertTrue(leaf.read_status(self.root, self.selector)['indexConsistent'])
+
+    def test_unknown_normal_publication_mode_is_still_rejected(self):
+        leaf = self.leaf()
+        intent, handle = leaf.reserve(self.root, self.selector)
+        with self.assertRaises(leaf.DeploymentStoreError) as caught:
+            self.bind_data(intent, handle, publication_mode='empty_daily_batch_lookalike')
+        self.assertEqual((caught.exception.code, caught.exception.reason),
+                         ('invalid_record', 'record_binding'))
+
     def test_existing_stable_attempt_accepts_exact_original_target_without_rewriting(self):
         from protocol_codec import record_header
         leaf = self.leaf()
@@ -220,7 +236,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             with self.assertRaises(leaf.DeploymentStoreError):
                 leaf._target_header(invalid, (), outer)
 
-    def bind_data(self, intent, handle, *, historical_target=False):
+    def bind_data(self, intent, handle, *, historical_target=False, publication_mode='legacy_v5_maintenance'):
         from protocol_codec import record_header
         historical_target = historical_target or 'version' in intent
         family = 'daily-reviewed-primary-targets'
@@ -230,7 +246,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         profile_header.pop('version', None)
         # Full schema does not make these invented bytes scientific or published facts.
         sha = 'a' * 64
-        normal = {'date': self.selector['date'], 'publicationMode': 'legacy_v5_maintenance',
+        normal = {'date': self.selector['date'], 'publicationMode': publication_mode,
             'publicationScope': None, 'generationManifestSha256': sha, 'receiptSha256': sha,
             'reviewBaseHead': 'a' * 40, 'reviewProtocolFingerprint': sha,
             'reviewedAt': '2026-09-07T00:00:00+00:00'}

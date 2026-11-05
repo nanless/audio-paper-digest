@@ -59,6 +59,7 @@ const SCHEMA = Object.freeze([
     { name: 'PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS', required: false, type: 'int', min: 3, max: 10 },
     { name: 'PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS', required: false, type: 'int', min: 3, max: 10 },
     { name: 'PD_DAILY_SOURCE_SKIP_MAX', required: false, type: 'int', min: 0, max: 5 },
+    { name: 'PD_ALLOW_EMPTY_DAILY', required: false, type: 'bool', hint: '仅用于 .env 写法；命令行请用 --allow-empty-daily，且用完应删除' },
     { name: 'PD_ANALYSIS_API_MAX_RETRIES', required: false, type: 'int', min: 1 },
     { name: 'PD_ARXIV_PDF_TIMEOUT_MS', required: false, type: 'int', min: 1 },
     { name: 'PD_ANALYSIS_API_MAX_TOKENS', required: false, type: 'int', min: 1 },

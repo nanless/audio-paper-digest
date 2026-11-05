@@ -2,7 +2,7 @@
 
 ## 当前源码与已发行版本
 
-Mac 和 Android 的当前源码统一为 **1.4.3（构建号 19）**，1.4.3 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+Mac 和 Android 的当前源码统一为 **1.4.4（构建号 20）**；1.4.3 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)。1.4.4 的改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
 
 ## 1.4.3 公开发行
 
@@ -85,7 +85,7 @@ API 28、API 35 是 Android 系统接口级别，不是应用版本号。模拟�
 
 ## 发行状态
 
-当前公开版本为 1.4.3（构建号 19），标签 `v1.4.3` 指向提交 `47c30d98`，Release 含十二件附件，公开后匿名下载与 SHA 复核通过。1.4.3 的安装包核验、证书和附件范围见[客户端发行核验](client-release-verification.md)；本轮没有重做 86 项人工验收。
+1.4.3 是 2026-11-05 的公开发行版本（构建号为 19），标签 `v1.4.3` 指向提交 `47c30d98`，Release 含十二件附件，公开后匿名下载与 SHA 复核通过。1.4.4 的构建与签名核验见[客户端发行核验](client-release-verification.md)与[1.4.4 记录](workbench-1.4.4-review.md)；本轮没有重做 86 项人工验收。
 
 1.3.0 联合发行固定来源为 `a39fa8d0`。两端正常安装包、原 Android 签名、旧资料升级、远端注释标签、发行说明及十二件公开下载均已核验，具体环境与继承范围见该版本记录。1.3.2 安卓修复版的新增范围另列，不复用 Mac 版本号。1.0.0、1.0.1 的旧 Release 条目已移除，Git 标签、历史和原签名及升级验证凭据保留。
 

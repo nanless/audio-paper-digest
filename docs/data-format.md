@@ -51,7 +51,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 保存当日已获取、合并、规范化并排除已发布论文的候选。只有全部必需来源完整时，这份集合才是完整筛选输入；来源失败时保留的部分候选不能冒充完整覆盖。筛选决定必须覆盖正式候选集合，不能只对成功响应的论文计算覆盖率。
 
-根对象为 `{ stats, sourceHealth, papers }`。`stats.zeroCandidates` 表示本批进入筛选的候选是否为 0：来源全部正常、但候选数为 0 时为 `true`，程序在付费筛选前停止，只有确认当天确实没有新论文并显式加 `--allow-empty-daily` 重跑才继续，见[零候选停止](daily-fetch-boundary.md#zero-candidates)。
+根对象为 `{ stats, sourceHealth, papers }`。`stats.zeroCandidates` 表示本批进入筛选的候选是否为 0：来源全部正常、但候选数为 0 时为 `true`，程序在付费筛选前停止，只有确认当天确实没有新论文并显式加 `--allow-empty-daily` 重跑才继续，见[零候选停止](daily-fetch-boundary.md#zero-candidates)。放行后该批仍会正常写完成的分析结果；生成阶段据此只产出“今日没有新论文”汇总页，没有单篇页和论文图片。
 
 ### `filter-decisions.json`
 
@@ -269,6 +269,8 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 正式生成清单使用 `blog-generation` 和对应的结构指纹。清单记录日期、`category`、博客基线 `HEAD`、精确非空页面和受控下载文件集合、逐文件 SHA、新建或覆盖或删除状态、输入及模板指纹、实际渲染的 `publishedPapers`、一致的 `publicationMode` 与发布依据，以及论文长图与汇总封面不在发布前生成的标记。
 
 默认 API 日更使用 `llm_api_production`；会议和历史另核对各自正式来源与发布清单。旧 Manual 发布依据仅按原记录核验。混合来源资格、缺少来源绑定或只有文件清单，不能用于新日更发布。完整的历史清单按原字段重验，程序不会补写新字段。
+
+经抓取阶段 `--allow-empty-daily` 确认的零候选日使用 `empty_daily_batch`：清单带 `emptyDailyBatch` 放行证据，`publishedPapers` 为空数组，`files` 只含当日汇总页，审查凭证照常签发。该模式不是普通正式论文批次，不能含单篇页、论文图或 pipeline production 证明；缺少放行证据或来源致命失败时仍在生成阶段报错。`digest:status` 对空日同样按数据、审查、远端和不生图登记四项判定完成，`publishedPapers` 为空不会自动放行；部署与网页仍单独核验。
 
 论文快照用 `published-papers-fingerprint` 声明实际编码规则。程序区分数字、字符串、布尔值和空值，再从快照内容重算 SHA-256；声明格式变了，同一论文快照的编码与哈希保持一致。审查凭证用 `blog-review-receipt` 保存本次生成清单的 SHA、快照规则、生成输入指纹和实际审查文件。只改格式字段，不能让旧凭证覆盖新的生成清单。
 

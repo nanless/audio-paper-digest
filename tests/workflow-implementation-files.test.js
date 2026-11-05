@@ -140,3 +140,45 @@ test('客户端私有格式新增或改动不进入科学指纹，共享格式�
     assert.notEqual(hash(), original);
     assert(collect().includes('config/protocols/clients.json'));
 });
+
+test('私有描述符只接收根与入口并返回同一闭包，不执行被扫描模块', t => {
+    const { spawnSync } = require('node:child_process');
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'workflow-closure-bridge-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const write = (name, text) => {
+        const file = path.join(root, name);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, text);
+    };
+    write('scripts/lib/workflow-implementation-files.js',
+        fs.readFileSync(require.resolve('../scripts/lib/workflow-implementation-files')));
+    write('scripts/entry.js', "throw new Error('must not execute'); require('./lib/shared');");
+    write('scripts/lib/shared.js', '// shared validator');
+    const request = path.join(root, 'request.json');
+    const run = (payload, mode = 0o600) => {
+        fs.writeFileSync(request, JSON.stringify(payload));
+        fs.chmodSync(request, mode);
+        const fd = fs.openSync(request, 'r');
+        try {
+            return spawnSync(process.execPath,
+                [require.resolve('../scripts/lib/workflow-implementation-files-cli'), '3'],
+                { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe', fd] });
+        } finally {
+            fs.closeSync(fd);
+        }
+    };
+    const ok = run({ root, entryFiles: ['scripts/entry.js'] });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.deepEqual(JSON.parse(ok.stdout), { files: [
+        'scripts/entry.js', 'scripts/lib/shared.js', 'scripts/lib/workflow-implementation-files.js',
+    ] });
+    const absolute = run({ root, entryFiles: [path.join(root, 'scripts/entry.js')] });
+    assert.equal(absolute.status, 1);
+    assert.match(absolute.stderr, /project-relative/);
+    const extra = run({ root, entryFiles: ['scripts/entry.js'], extra: true });
+    assert.equal(extra.status, 1);
+    assert.match(extra.stderr, /exactly/);
+    const loose = run({ root, entryFiles: ['scripts/entry.js'] }, 0o644);
+    assert.equal(loose.status, 1);
+    assert.match(loose.stderr, /private file/);
+});

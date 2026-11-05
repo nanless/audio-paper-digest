@@ -56,6 +56,32 @@ REVIEW_SPEC = importlib.util.spec_from_file_location(
 review_blog = importlib.util.module_from_spec(REVIEW_SPEC)
 REVIEW_SPEC.loader.exec_module(review_blog)
 
+_REAL_RUN_BOUNDED_SUBPROCESS = publish_to_blog._run_bounded_subprocess
+
+
+def is_closure_command(command):
+    return any(str(part).endswith('workflow-implementation-files-cli.js')
+               for part in command)
+
+
+_REAL_WHICH = publish_to_blog.shutil.which
+
+
+def hugo_only_which(missing='/missing/hugo'):
+    """只替换 Hugo 的查找结果；真实闭包桥仍需从 PATH 找到 Node.js。"""
+    def which(name, *args, **kwargs):
+        return missing if name == 'hugo' else _REAL_WHICH(name, *args, **kwargs)
+    return which
+
+
+def fingerprint_subprocess(fixture):
+    """把 Hugo 版本固定为测试值，同时让审查协议的真实闭包桥继续运行。"""
+    def run(command, **kwargs):
+        if is_closure_command(command):
+            return _REAL_RUN_BOUNDED_SUBPROCESS(command, **kwargs)
+        return fixture
+    return run
+
 
 def manual_v5_reader_paper():
     article = (
@@ -886,6 +912,45 @@ def init_blog_repo(root, with_remote=False):
         git(repo, 'remote', 'add', 'origin', str(remote))
         git(repo, 'push', '-u', 'origin', 'main')
     return repo, posts, remote
+
+
+def write_allowed_empty_daily_batch(current, date_str, batch_id='batch-empty-1'):
+    """写入一份经 --allow-empty-daily 放行的零候选批次证据。"""
+    current = Path(current)
+    current.mkdir(parents=True, exist_ok=True)
+    source_health = {
+        'arxiv': {
+            'ok': True,
+            'categories': [
+                {'id': 'eess.AS', 'categoryId': 'eess.AS', 'ok': True},
+                {'id': 'cs.SD', 'categoryId': 'cs.SD', 'ok': True},
+            ],
+        },
+        'huggingface': {'ok': True, 'totalFetched': 0},
+    }
+    deep = current / 'deep-analysis-result.json'
+    deep.write_text(json.dumps({
+        'batchDate': date_str,
+        'batchId': batch_id,
+        'status': 'complete',
+        'papers': [],
+        'stats': {
+            'analysisStatus': 'complete',
+            'pipelineStatus': 'analysis_complete',
+            'expected': 0,
+            'remainingFailed': 0,
+            'totalAfterMerge': 0,
+            'sourceHealth': source_health,
+        },
+    }, ensure_ascii=False), encoding='utf-8')
+    (current / 'raw-candidates.json').write_text(json.dumps({
+        'batchDate': date_str,
+        'batchId': batch_id,
+        'stats': {'zeroCandidates': True, 'afterBlogSkip': 0},
+        'sourceHealth': source_health,
+        'papers': [],
+    }, ensure_ascii=False), encoding='utf-8')
+    return deep
 
 
 def save_bound_review_receipt(date_str, paths, hugo_gate='hugo', expected_base_head=None):
@@ -2827,6 +2892,10 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     ), \
                     mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish'), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[]), \
+                    mock.patch.object(
+                        publish_to_blog, 'detect_allowed_empty_daily_batch',
+                        return_value=None,
+                    ), \
                     contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
@@ -2836,6 +2905,170 @@ class PublishToBlogReviewTest(unittest.TestCase):
             for name in names:
                 self.assertFalse((current / name).exists(), name)
             self.assertFalse(stage.exists())
+
+    def test_zero_candidate_allow_empty_requires_complete_batch_evidence(self):
+        date_str = '2026-11-05'
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            deep = write_allowed_empty_daily_batch(current, date_str)
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                evidence = publish_to_blog.detect_allowed_empty_daily_batch(deep, date_str)
+                self.assertIsNotNone(evidence)
+                self.assertEqual(
+                    evidence['contract'],
+                    publish_to_blog.EMPTY_DAILY_BATCH_EVIDENCE_CONTRACT,
+                )
+                self.assertEqual(evidence['batchId'], 'batch-empty-1')
+                self.assertTrue(evidence['zeroCandidates'])
+
+                raw_path = current / 'raw-candidates.json'
+                raw = json.loads(raw_path.read_text(encoding='utf-8'))
+                raw['stats']['zeroCandidates'] = False
+                raw_path.write_text(json.dumps(raw), encoding='utf-8')
+                self.assertIsNone(
+                    publish_to_blog.detect_allowed_empty_daily_batch(deep, date_str)
+                )
+
+                raw['stats']['zeroCandidates'] = True
+                raw['sourceHealth']['arxiv']['ok'] = False
+                raw_path.write_text(json.dumps(raw), encoding='utf-8')
+                self.assertIsNone(
+                    publish_to_blog.detect_allowed_empty_daily_batch(deep, date_str)
+                )
+
+                raw['sourceHealth']['arxiv']['ok'] = True
+                raw['batchId'] = 'another-batch'
+                raw_path.write_text(json.dumps(raw), encoding='utf-8')
+                self.assertIsNone(
+                    publish_to_blog.detect_allowed_empty_daily_batch(deep, date_str)
+                )
+
+                self.assertIsNone(publish_to_blog.detect_allowed_empty_daily_batch(
+                    deep, '2026-11-06',
+                ))
+
+    def test_empty_daily_index_renders_summary_only_without_paper_pages(self):
+        date_str = '2026-11-05'
+        markdown = publish_to_blog.generate_index_page(
+            [], [], date_str, {}, '论文速递', empty_batch_confirmed=True,
+        )
+        self.assertIn('语音/音乐/音频论文速递 2026-11-05', markdown)
+        self.assertIn(f'date: {date_str}', markdown)
+        self.assertIn('今日没有新论文', markdown)
+        self.assertIn('paper_digest_page_type: index', markdown)
+        self.assertNotIn('paper_digest_page_type: paper', markdown)
+        self.assertNotIn('/posts/', markdown)
+        self.assertNotIn('![', markdown)
+        self.assertIsNone(
+            publish_to_blog.validate_digest_index_reader_quality(markdown, required=True)
+        )
+        self.assertEqual(
+            markdown,
+            publish_to_blog.generate_index_page([], [], date_str, {}),
+            '0 篇渲染是纯函数；是否放行空批次由生成入口的显式证据闸门决定',
+        )
+
+    def test_empty_daily_generation_manifest_binds_index_only_and_empty_snapshot(self):
+        date_str = '2026-11-05'
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'current'
+            deep = write_allowed_empty_daily_batch(current, date_str)
+            index_page = posts / f'{date_str}.md'
+            index_page.write_text(
+                publish_to_blog.generate_index_page(
+                    [], [], date_str, {}, empty_batch_confirmed=True,
+                ),
+                encoding='utf-8',
+            )
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                evidence = publish_to_blog.detect_allowed_empty_daily_batch(deep, date_str)
+                self.assertIsNotNone(evidence)
+                input_reference = publish_to_blog.build_generation_input_source_reference(deep)
+                input_fingerprint = publish_to_blog.generation_input_fingerprint(
+                    [], date_str, '论文速递', False,
+                    input_source_reference=input_reference,
+                )
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    date_str, [index_page],
+                    input_fingerprint=input_fingerprint,
+                    template_fingerprint='b' * 64,
+                    base_head='c' * 40,
+                    category='论文速递',
+                    published_papers=[],
+                    publish_all=False,
+                    publication_mode=publish_to_blog.EMPTY_DAILY_BATCH_MODE,
+                    input_source_reference=input_reference,
+                    empty_daily_batch=evidence,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                self.assertEqual(
+                    manifest['publicationMode'],
+                    publish_to_blog.EMPTY_DAILY_BATCH_MODE,
+                )
+                self.assertEqual(manifest['publishedPapers'], [])
+                self.assertEqual(manifest['emptyDailyBatch'], evidence)
+                self.assertEqual(
+                    [record['path'] for record in manifest['files']],
+                    [f'content/posts/{date_str}.md'],
+                )
+                self.assertTrue(publish_to_blog.is_empty_daily_batch_generation(manifest))
+                self.assertTrue(publish_to_blog.preflight_production_publication(
+                    date_str, require_production_receipt=True,
+                ))
+
+                reviewed = {
+                    str(index_page.resolve()): {
+                        'passed': True,
+                        'reviewedSha256': publish_to_blog._sha256_file(index_page),
+                        'imageReviewMode': 'deterministic_only',
+                    },
+                }
+                receipt_path = publish_to_blog.save_review_receipt(
+                    date_str, [index_page], 'hugo',
+                    generation_manifest=manifest_path,
+                    reviewed_results=reviewed,
+                )
+                receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+                self.assertEqual(
+                    receipt['publishedPapersFingerprint'],
+                    publish_to_blog.published_papers_fingerprint([], allow_empty=True),
+                )
+                self.assertEqual(receipt['postPublishVisuals'], 'not_requested')
+                self.assertEqual(
+                    [record['path'] for record in receipt['files']],
+                    [f'content/posts/{date_str}.md'],
+                )
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '非空的论文快照数组',
+                ):
+                    publish_to_blog.save_generation_manifest(
+                        date_str, [index_page],
+                        input_fingerprint=input_fingerprint,
+                        template_fingerprint='b' * 64,
+                        base_head='c' * 40,
+                        category='论文速递',
+                        published_papers=[],
+                        publication_mode=publish_to_blog.EMPTY_DAILY_BATCH_MODE,
+                        input_source_reference=input_reference,
+                    )
+                tampered = dict(evidence)
+                tampered['zeroCandidates'] = False
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '放行证据无效',
+                ):
+                    publish_to_blog.save_generation_manifest(
+                        date_str, [index_page],
+                        input_fingerprint=input_fingerprint,
+                        template_fingerprint='b' * 64,
+                        base_head='c' * 40,
+                        category='论文速递',
+                        published_papers=[],
+                        publication_mode=publish_to_blog.EMPTY_DAILY_BATCH_MODE,
+                        input_source_reference=input_reference,
+                        empty_daily_batch=tampered,
+                    )
 
     def test_empty_generation_preserves_remote_verified_publication_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8105,24 +8338,25 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
         with mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
                 mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
-                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed) as run, \
+                mock.patch.object(publish_to_blog.shutil, 'which', side_effect=hugo_only_which()), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', side_effect=fingerprint_subprocess(completed)) as run, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a'}):
             first = publish_to_blog.review_protocol_fingerprint()
             self.assertEqual(first, publish_to_blog.review_protocol_fingerprint())
-            self.assertEqual(run.call_count, 1)
+            self.assertEqual(sum(
+                1 for call in run.call_args_list if not is_closure_command(call.args[0])), 1)
         with mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
                 mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
-                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed), \
+                mock.patch.object(publish_to_blog.shutil, 'which', side_effect=hugo_only_which()), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', side_effect=fingerprint_subprocess(completed)), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-b'}):
             second = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, second)
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
         with mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
                 mock.patch.object(publish_to_blog, '_sha256_file', return_value='a' * 64), \
-                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed), \
+                mock.patch.object(publish_to_blog.shutil, 'which', side_effect=hugo_only_which()), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', side_effect=fingerprint_subprocess(completed)), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'model-a', 'PD_BLOG_REVIEW_MAX_TOKENS': '8000'}):
             third = publish_to_blog.review_protocol_fingerprint()
         self.assertNotEqual(first, third)
@@ -8192,9 +8426,11 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         ), mock.patch.object(
                 publish_to_blog, '_sha256_file', return_value='f' * 64,
         ), mock.patch.object(
-                publish_to_blog.shutil, 'which', return_value='/missing/hugo',
+                publish_to_blog.shutil, 'which',
+                side_effect=hugo_only_which(),
         ), mock.patch.object(
-                publish_to_blog, '_run_bounded_subprocess', return_value=completed,
+                publish_to_blog, '_run_bounded_subprocess',
+                side_effect=fingerprint_subprocess(completed),
         ):
             generation_before = publish_to_blog.generation_template_fingerprint()
             review_before = publish_to_blog.review_protocol_fingerprint()
@@ -8226,8 +8462,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
                 with mock.patch.object(publish_to_blog, '_sha256_file', side_effect=dependency_digest), \
                         mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
-                        mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                        mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed) as version:
+                        mock.patch.object(publish_to_blog.shutil, 'which', side_effect=hugo_only_which()), \
+                        mock.patch.object(publish_to_blog, '_run_bounded_subprocess', side_effect=fingerprint_subprocess(completed)) as version:
                     yield rules, original_rules, original_bytes, calls, version
         finally:
             publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
@@ -8286,8 +8522,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
         with mock.patch.object(publish_to_blog, '_sha256_file', side_effect=dependency_digest), \
                 mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
-                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
-                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed):
+                mock.patch.object(publish_to_blog.shutil, 'which', side_effect=hugo_only_which()), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', side_effect=fingerprint_subprocess(completed)):
             for module in ('tag_presentation.py', 'tag_catalog.py', 'tag_paths.py', 'path_config.py'):
                 with self.subTest(module=module):
                     dependency_state[:] = [module, 'a' * 64]
@@ -8315,9 +8551,11 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         ), mock.patch.object(
                 publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64,
         ), mock.patch.object(
-                publish_to_blog.shutil, 'which', return_value='/missing/hugo',
+                publish_to_blog.shutil, 'which',
+                side_effect=hugo_only_which(),
         ), mock.patch.object(
-                publish_to_blog, '_run_bounded_subprocess', return_value=completed,
+                publish_to_blog, '_run_bounded_subprocess',
+                side_effect=fingerprint_subprocess(completed),
         ):
             first_generation = publish_to_blog.generation_template_fingerprint()
             first_review = publish_to_blog.review_protocol_fingerprint()
@@ -8339,9 +8577,11 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         ) as digest, mock.patch.object(
                 publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64,
         ), mock.patch.object(
-                publish_to_blog.shutil, 'which', return_value='/missing/hugo',
+                publish_to_blog.shutil, 'which',
+                side_effect=hugo_only_which(),
         ), mock.patch.object(
-                publish_to_blog, '_run_bounded_subprocess', return_value=completed,
+                publish_to_blog, '_run_bounded_subprocess',
+                side_effect=fingerprint_subprocess(completed),
         ):
             publish_to_blog.review_protocol_fingerprint()
         dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}

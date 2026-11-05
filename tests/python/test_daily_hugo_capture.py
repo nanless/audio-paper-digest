@@ -585,5 +585,24 @@ class CaptureTest(unittest.TestCase):
         self.assertEqual(original, current)
 
 
+    def test_empty_daily_batch_mode_is_accepted_without_capture(self):
+        binding = copy.deepcopy(self.binding)
+        binding['publicationMode'] = 'empty_daily_batch'
+        binding['layoutPlan'] = {'status': 'unsupported', 'reason': 'empty daily index only'}
+        with capture.review_scope(binding=binding, known_input_reader=lambda: copy.deepcopy(self.known),
+                                  observation_root=self.store) as session:
+            self.assertFalse(session.supported)
+
+    def test_unknown_publication_mode_is_not_treated_as_empty_daily_batch(self):
+        binding = copy.deepcopy(self.binding)
+        binding['publicationMode'] = 'empty_daily_batch_lookalike'
+        binding['layoutPlan'] = {'status': 'unsupported', 'reason': 'empty daily index only'}
+        with self.assertRaises(capture.CaptureError):
+            with capture.review_scope(binding=binding,
+                                      known_input_reader=lambda: copy.deepcopy(self.known),
+                                      observation_root=self.store):
+                pass
+
+
 if __name__ == '__main__':
     unittest.main()

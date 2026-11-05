@@ -25,6 +25,8 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
+Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also completes the test fixtures on both clients, fills gaps in the macOS suite, and adds a macOS client CI job. See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
+
 Version 1.4.3 performance work (compact catalog projection, background startup decoding, reused explanation and aggregate parsing, offline index, merged bridge calls) is recorded in the [1.4.3 record](workbench-1.4.3-review.md).
 
 1.4.2 fixed the context declaration on the explanations published on 3 and 4 November 2026: the blog template rebuilds the declaration from a whitelist and keeps camelCase, while the Mac and Android apps accept the single lowercase alias in already-published pages. See the [1.4.2 record](workbench-1.4.2-review.md).
@@ -109,7 +111,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 
 These records explain the problems, changes, and actual verification at the time. They are not separate current operating procedures.
 
-- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md).
+- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md).
 - Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).

@@ -15,6 +15,17 @@ for suite in ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollec
   xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
   if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
     "$test_work/$suite" "$(command -v node)"
+  elif [[ "$suite" == "NativeLibraryAccessibility" ]]; then
+    # 该套件直接读取本进程的 AppKit 辅助功能树，需要已解锁桌面和可用的 AXWindow。
+    # 探针拿不到窗口时以 77 退出并写出 blocked；这是环境限制，不是断言失败，
+    # 因此只对这一种退出记为跳过。其它非零退出（解析、断言、真实回归）仍终止。
+    status=0
+    "$test_work/$suite" || status=$?
+    if [[ $status -eq 77 ]]; then
+      echo 'NativeLibraryAccessibility 跳过：当前环境没有可用的自进程 AXWindow（需要解锁桌面与辅助功能）；该套件未通过，不计为回归。'
+    else
+      exit "$status"
+    fi
   else
     "$test_work/$suite"
   fi

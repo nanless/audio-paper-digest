@@ -17,6 +17,8 @@
 
 抓取没有致命来源错误、但进入筛选的候选为 0 时，程序把 `stats.zeroCandidates: true` 写进当批 `raw-candidates.json`，并在付费筛选前停止；只有确认当天确实没有新论文后才显式放行。放行方式是在抓取阶段加 `--allow-empty-daily`：日更入口用 `npm run digest:prepare -- YYYY-MM-DD --allow-empty-daily`，直接抓取用 `npm run fetch -- --allow-empty-daily`，两者都支持；该参数只对抓取阶段有效，其他阶段会直接报错。项目 `.env` 里写 `PD_ALLOW_EMPTY_DAILY=1` 也能放行，但环境加载器会把它带进之后的所有批次，等于长期关闭这道闸门，命令行传入的 `PD_ALLOW_EMPTY_DAILY` 也会被 `.env` 覆盖；因此 `.env` 写法只在无法传参时使用，用完要删。
 
+放行后生成阶段只产出一份当日汇总页，标题和日期照常，正文明确写“今日没有新论文”，不生成单篇页、论文图或封面；审查和推送照常执行。生成侧会重读同批 `raw-candidates.json` 的 `stats.zeroCandidates`、批次号和来源状态：没有这份显式证据、批次号不符或来源有致命失败时，仍按原来的“没有论文可生成”拒绝，不会因为输入文件为空就自动放行。
+
 ## 取不到官方 PDF 的论文怎么跳过
 
 用户要求单篇 404 不影响整批日更。这条规则分两处执行，都只认“官方 PDF 的全部候选地址都明确返回 404”，超时、认证错误、5xx 和解析失败仍按原规则停止。

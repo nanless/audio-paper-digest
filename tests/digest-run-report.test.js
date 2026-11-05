@@ -1213,3 +1213,189 @@ describe('状态报告的上线核验范围', () => {
         }
     });
 });
+
+describe('digest:status 显式零候选空日', () => {
+    const DATE = '2026-11-05';
+
+    function stableSha(value) {
+        const canonical = input => {
+            if (Array.isArray(input)) return input.map(canonical);
+            if (input && typeof input === 'object') {
+                return Object.fromEntries(Object.keys(input).sort()
+                    .map(key => [key, canonical(input[key])]));
+            }
+            return input;
+        };
+        return crypto.createHash('sha256')
+            .update(Buffer.from(JSON.stringify(canonical(value)), 'utf8')).digest('hex');
+    }
+
+    function writeEmptyDaily(current, date, { withGeneration = true } = {}) {
+        const sourceHealth = healthySourceHealth();
+        const raw = {
+            batchDate: date,
+            batchId: 'batch-empty-1',
+            stats: { zeroCandidates: true, afterBlogSkip: 0 },
+            sourceHealth,
+            papers: []
+        };
+        const rawBytes = Buffer.from(JSON.stringify(raw));
+        fs.writeFileSync(Config.FILES.rawCandidates, rawBytes);
+        const marker = {
+            contract: 'daily-empty-batch-confirmation-v1',
+            batchId: raw.batchId,
+            batchDate: date,
+            zeroCandidates: true,
+            analysisStatus: 'complete',
+            rawCandidatesSha256: crypto.createHash('sha256').update(rawBytes).digest('hex'),
+            sourceHealthSha256: stableSha(sourceHealth)
+        };
+        fs.writeFileSync(path.join(current, `blog-generation-manifest-${date}.json`), JSON.stringify({
+            schemaVersion: 3,
+            date,
+            category: '论文速递',
+            visualSummaryRequired: false,
+            digestCoverRequired: false,
+            inputFingerprint: 'c'.repeat(64),
+            publishAll: false,
+            publishedPapers: [],
+            publishedPapersFingerprintContract: 'typed-json-f64-utf16-v1',
+            publishedPapersFingerprint: require('../scripts/lib/published-blog-receipt')
+                .publishedPapersFingerprint([], { allowEmpty: true }),
+            manualV6Bindings: [],
+            llmApiBindings: [],
+            publicationMode: 'empty_daily_batch',
+            emptyDailyBatch: marker,
+            postPublicationPolicy: require('../scripts/lib/protocol-codec').record('daily-publication-policy', {
+                generatedImages: false, sourceFigures: 'retained-and-source-verified'
+            })
+        }));
+        const generationRaw = fs.readFileSync(path.join(current, `blog-generation-manifest-${date}.json`));
+        fs.writeFileSync(path.join(current, `blog-review-receipt-${date}.json`), JSON.stringify({
+            schemaVersion: 3,
+            date,
+            strictReview: true,
+            hugoGate: 'hugo',
+            reviewProtocolFingerprint: 'b'.repeat(64),
+            generationManifestSha256: crypto.createHash('sha256').update(generationRaw).digest('hex'),
+            generationInputIntegrity: 'typed-json-f64-utf16-v1',
+            generationInputFingerprint: 'c'.repeat(64),
+            publishedPapersFingerprint: require('../scripts/lib/published-blog-receipt')
+                .publishedPapersFingerprint([], { allowEmpty: true }),
+            publicationCommit: 'a'.repeat(40),
+            remoteVerifiedOid: 'a'.repeat(40),
+            remoteVerifiedAt: '2026-11-06T02:00:00+08:00',
+            publicationMode: 'empty_daily_batch',
+            manualV6ProductionFingerprint: null,
+            llmApiProductionFingerprint: null,
+            postPublishVisuals: 'not_requested'
+        }));
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({
+            batchDate: date,
+            batchId: raw.batchId,
+            status: 'complete',
+            papers: [],
+            stats: {
+                analysisStatus: 'complete',
+                pipelineStatus: 'analysis_complete',
+                expected: 0,
+                remainingFailed: 0,
+                totalAfterMerge: 0,
+                sourceHealth
+            }
+        }));
+        fs.writeFileSync(Config.FILES.filterDecisions, JSON.stringify({
+            batchDate: date,
+            batchId: raw.batchId,
+            stats: {
+                complete: true,
+                totalCandidates: 0,
+                decided: 0,
+                related: 0,
+                retryable: 0,
+                keywordRejected: 0,
+                llmCandidates: 0
+            },
+            decisions: {}
+        }));
+        fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({
+            batchDate: date,
+            batchId: raw.batchId,
+            status: 'complete',
+            stats: {
+                afterBlogSkip: 0,
+                decisionCount: 0,
+                afterFilter: 0,
+                afterArchiveSkip: 0,
+                skippedFromArchive: 0
+            },
+            papers: []
+        }));
+        const waiverDir = path.join(current, 'post-publish-visual-waivers');
+        fs.mkdirSync(waiverDir, { recursive: true });
+        Config.FILES.postPublishVisualWaiverDir = waiverDir;
+        const receiptPath = path.join(current, `blog-review-receipt-${date}.json`);
+        fs.writeFileSync(path.join(waiverDir, `${date}.json`), JSON.stringify({
+            ...require('../scripts/lib/protocol-codec').recordHeader(
+                'post-publish-visual-waiver', 'post-publish-visual-waiver'
+            ),
+            batchDate: date,
+            status: 'waived',
+            requestedBy: 'user',
+            reason: '用户已明确要求以后日更不再生图，本次发布沿用该持续设置。',
+            waivedAt: '2026-11-06T04:00:00+08:00',
+            publicationCommit: 'a'.repeat(40),
+            remoteVerifiedOid: 'a'.repeat(40),
+            generationManifestSha256: crypto.createHash('sha256').update(generationRaw).digest('hex'),
+            reviewReceiptSha256: crypto.createHash('sha256').update(fs.readFileSync(receiptPath)).digest('hex'),
+            generatedImages: false,
+            sourceFigures: 'retained-and-source-verified'
+        }));
+        if (!withGeneration) {
+            fs.rmSync(path.join(current, `blog-generation-manifest-${date}.json`));
+        }
+    }
+
+    it('数据、审查、远端和不生图四项成立时判定完成', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-empty-daily-'));
+        const originalWaiverDir = Config.FILES.postPublishVisualWaiverDir;
+        try {
+            withDigestPaths(dir, ({ current }) => {
+                writeEmptyDaily(current, DATE);
+                const report = buildDigestRunReport(DATE, { today: DATE });
+                assert.strictEqual(report.fetch.complete, true);
+                assert.strictEqual(report.filter.complete, true);
+                assert.strictEqual(report.filter.selectedCount, 0);
+                assert.strictEqual(report.analysis.complete, true);
+                assert.strictEqual(report.analysis.publicationMode, 'empty_daily_batch');
+                assert.strictEqual(report.blog.complete, true);
+                assert.strictEqual(report.visuals.waived, true);
+                assert.strictEqual(report.visuals.gateComplete, true);
+                assert.strictEqual(report.cover.complete, true);
+                assert.deepStrictEqual(report.errors, []);
+                assert.strictEqual(report.overallStatus, 'complete');
+            });
+        } finally {
+            Config.FILES.postPublishVisualWaiverDir = originalWaiverDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('缺少生成清单中的空日放行证据时，空的候选不会被当成完成', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-empty-no-marker-'));
+        const originalWaiverDir = Config.FILES.postPublishVisualWaiverDir;
+        try {
+            withDigestPaths(dir, ({ current }) => {
+                writeEmptyDaily(current, DATE, { withGeneration: false });
+                const report = buildDigestRunReport(DATE, { today: DATE });
+                assert.strictEqual(report.fetch.complete, false);
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.analysis.complete, false);
+                assert.strictEqual(report.overallStatus, 'incomplete');
+            });
+        } finally {
+            Config.FILES.postPublishVisualWaiverDir = originalWaiverDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});

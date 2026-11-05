@@ -180,6 +180,9 @@ DIGEST_COVER_RENDERING_CONTRACT = {
     'maxPngBytes': VISUAL_SUMMARY_MAX_BYTES,
 }
 _REVIEW_PROTOCOL_CACHE = {}
+# 依赖闭包只由源码的 import 与局部字面量决定，同一进程对同一根目录和入口
+# 只问一次 Node；文件字节仍在每次指纹计算时重新求哈希，进程内的改动不会被缓存掩盖。
+_REVIEW_IMPLEMENTATION_CLOSURE_CACHE = {}
 _REVIEW_UNIT_CONTEXT = contextvars.ContextVar('blog_review_unit_context', default=None)
 PUBLISH_IMAGE_EXCLUSIONS_PATH = PROJECT_ROOT / 'config' / 'publish-image-exclusions.json'
 PUBLISH_IMAGE_EXCLUSIONS_FIELD = 'publishImageExclusions'
@@ -199,6 +202,11 @@ EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1
 LLM_API_SCORING_CONTRACT = public_protocols.contract('api-scoring-audit')
 CORE_SUMMARY_DETAILED_CONTRACT = core_summary_formats.ORIGINAL_TAG
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
+# 零候选日经人工确认（抓取阶段 --allow-empty-daily）后，本批只产出一份
+# “今日没有新论文”汇总页。它没有单篇页和正式论文证明，因此不能复用
+# llm_api_production / manual_v6_production，也不能被当成普通空清单。
+EMPTY_DAILY_BATCH_MODE = 'empty_daily_batch'
+EMPTY_DAILY_BATCH_EVIDENCE_CONTRACT = 'daily-empty-batch-confirmation-v1'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
 RETIRED_TUTORIAL_PREVIEW_MESSAGE = (
     '封存教程预览仅供只读检查，已停用生成、签发新审查凭证和推送；'
@@ -6217,9 +6225,60 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
     return ''
 
 
-def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
-    """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
+def _render_empty_digest_index(date_str, category):
+    """渲染经确认的零候选日汇总页：只有标题、日期和“今日没有新论文”。"""
+    conference_title = 'ICML 2026 论文速递' if category == 'icml-2026' \
+        else f'语音/音乐/音频论文速递 {date_str}'
+    markdown = f'''---
+title: "{conference_title}"
+date: {date_str}
+draft: false
+tags: []
+categories: [{category}]
+description: "今日没有新论文"
+layout: "posts"
+paper_digest_pipeline_owned: true
+paper_digest_page_type: index
+paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_CONTRACT}"
+paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FINGERPRINT}"
+---
+
+# {conference_title}
+
+共分析 **0** 篇论文
+
+今日没有新论文。
+
+---
+
+## ⚡ 今日概览
+
+✅ 抓取与筛选已完成：本批没有进入分析的论文。
+
+### 🏷️ 热门方向
+
+本批没有论文，因此没有可统计的方向。
+
+## 📋 论文列表
+
+本批没有论文，因此没有单篇页面和论文图片。
+
+---
+'''
+    return sanitize_markdown_for_publish(markdown)
+
+
+def generate_index_page(
+        scored, unscored, date_str, paper_slugs, category='论文速递', *,
+        empty_batch_confirmed=False):
+    """生成每日汇总页面（index.md），包含概览和每篇论文的链接。"""
     total = len(scored) + len(unscored)
+    if total == 0:
+        # 渲染入口对 0 篇论文保持纯函数行为；是否允许进入生成由
+        # generate_main 里的显式零候选证据闸门决定，不能在这里自动放行整批。
+        return _render_empty_digest_index(date_str, category)
+    if empty_batch_confirmed:
+        raise PublishDataValidationError('非空批次不能按零候选空日渲染汇总页')
     papers = [p for _, p, _ in scored] + unscored
     tag_metadata = _current_batch_tag_metadata(papers)
     tag_set = [concept['label'] for concept in tag_metadata['concepts']] if tag_metadata \
@@ -14360,9 +14419,13 @@ def _portable_fingerprint_value(value, label='publishedPapers'):
     raise PublishDataValidationError(f'{label} 包含不可序列化类型: {type(value).__name__}')
 
 
-def published_papers_fingerprint(published_papers):
-    """返回发布快照的跨运行时完整性指纹。"""
-    if not isinstance(published_papers, list) or not published_papers:
+def published_papers_fingerprint(published_papers, *, allow_empty=False):
+    """返回发布快照的跨运行时完整性指纹。
+
+    ``allow_empty`` 只用于已核验放行证据的零候选空日；普通正式清单
+    仍必须绑定非空论文集合。
+    """
+    if not isinstance(published_papers, list) or (not published_papers and not allow_empty):
         raise PublishDataValidationError('正式 generation manifest 缺少已发布论文权威快照')
     return _stable_json_sha256(_portable_fingerprint_value(published_papers))
 
@@ -14652,6 +14715,10 @@ def _llm_api_production_proof_from_checked_bindings(published_papers, bindings, 
 
 def infer_generation_publication_mode(papers):
     """按全部论文记录的对应关系选择发布模式；旧 v5 维护模式须明确指定。"""
+    if not papers:
+        # 空批次只能由抓取阶段显式放行的零候选证据进入，不能靠“0 == 0”
+        # 误判成任一正式论文模式。
+        raise PublishDataValidationError('空批次必须先核验显式放行证据，不能自动推断发布模式')
     if len(signed_manual_publication_bindings(papers)) == len(papers):
         return SIGNED_MANUAL_PRODUCTION_MODE
     if len(llm_api_publication_bindings(papers)) == len(papers):
@@ -14667,6 +14734,10 @@ def validate_generation_publication_mode(papers, publication_mode):
         return signed_manual_production_proof(papers)
     if publication_mode == LLM_API_PRODUCTION_MODE:
         return llm_api_production_proof(papers)
+    if publication_mode == EMPTY_DAILY_BATCH_MODE:
+        if papers:
+            raise PublishDataValidationError('零候选空日模式不能包含论文记录')
+        return None
     if publication_mode == LEGACY_V5_MAINTENANCE_MODE:
         if signed_manual_publication_bindings(papers):
             raise PublishDataValidationError(
@@ -14856,15 +14927,23 @@ def _validate_generation_input_integrity(manifest, date_str):
     published_papers = manifest.get('publishedPapers')
     category = manifest.get('category')
     publish_all = manifest.get('publishAll')
+    empty_daily_mode = manifest.get('publicationMode') == EMPTY_DAILY_BATCH_MODE
     if (
         not isinstance(category, str)
         or not category.strip()
         or not isinstance(publish_all, bool)
         or not isinstance(published_papers, list)
-        or not published_papers
+        or (not published_papers and not empty_daily_mode)
     ):
         raise PublishDataValidationError(
             '正式生成清单中的类别、发布全部论文的选项或论文快照缺失，或格式无效。'
+        )
+    empty_marker = None
+    if empty_daily_mode:
+        if published_papers != []:
+            raise PublishDataValidationError('零候选空日生成清单不能包含论文快照')
+        empty_marker = _validate_empty_daily_batch_evidence(
+            manifest.get('emptyDailyBatch'), date_str,
         )
     actual_input = str(manifest.get('inputFingerprint') or '')
     scope = _validate_publication_scope(manifest, published_papers)
@@ -14888,6 +14967,8 @@ def _validate_generation_input_integrity(manifest, date_str):
         # 先核对来源文件内容，再重算输入 SHA，这样归档或 --data-file 有变化时
         # 会明确报告来源文件变化，而不是笼统的不匹配。
         validate_generation_input_source_reference(manifest, date_str)
+    if empty_marker is not None:
+        _validate_empty_daily_batch_input(manifest, date_str, empty_marker)
     expected_input = generation_input_fingerprint(
         published_papers, date_str, category, publish_all,
         scope.get('includeId') if scope else None,
@@ -14902,7 +14983,9 @@ def _validate_generation_input_integrity(manifest, date_str):
     if blog_formats.snapshot_header(manifest) is None:
         raise PublishDataValidationError('正式生成清单缺少要求的论文快照指纹规则版本。')
     actual_snapshot = str(manifest.get('publishedPapersFingerprint') or '')
-    expected_snapshot = published_papers_fingerprint(published_papers)
+    expected_snapshot = published_papers_fingerprint(
+        published_papers, allow_empty=empty_daily_mode,
+    )
     if actual_snapshot != expected_snapshot:
         raise PublishDataValidationError('正式生成清单中的论文快照指纹与实际快照不一致。')
     if 'derivedFigureAssets' in manifest or 'derivedFigureAssetsFingerprint' in manifest:
@@ -14956,6 +15039,18 @@ def _validate_generation_input_integrity(manifest, date_str):
         expected_proof_sha = _stable_json_sha256(expected_proof)
         if manifest.get('llmApiProductionFingerprint') != expected_proof_sha:
             raise PublishDataValidationError('正式生成清单中的 API 发布证明指纹不一致。')
+    elif publication_mode == EMPTY_DAILY_BATCH_MODE:
+        if (
+            empty_marker is None
+            or expected_signed_manual
+            or expected_api
+            or production_proof is not None
+            or api_proof is not None
+            or scope is not None
+        ):
+            raise PublishDataValidationError(
+                '零候选空日生成清单不能包含论文证明、单篇范围或其他发布模式记录。'
+            )
     elif publication_mode == LEGACY_V5_MAINTENANCE_MODE:
         if expected_signed_manual or expected_api or production_proof is not None or api_proof is not None:
             raise PublishDataValidationError('旧 v5 维护模式的生成清单中不能包含正式发布证明。')
@@ -15000,6 +15095,7 @@ def _expected_post_publish_visuals(manifest, publication_scope_value=None):
         blog_formats.source_bound_generation(manifest)
         and manifest.get('publicationMode') in {
             SIGNED_MANUAL_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE,
+            EMPTY_DAILY_BATCH_MODE,
         }
     ):
         return 'not_requested' if no_generation else 'required'
@@ -15208,75 +15304,101 @@ def blog_runtime_fingerprint(blog_repo=None):
     })
 
 
+# 日更审查证据必须跟随真正校验页面的代码。这里只列入口，会议、历史与日更
+# 共用同一个 Node 收集器：入口 import 的模块和以局部字面量加载的脚本都自动
+# 进入闭包，新增共享校验器无需再补手写清单。
+_REVIEW_IMPLEMENTATION_ENTRIES = (
+    'scripts/publish-to-blog.py',
+    'scripts/review-blog.py',
+    'scripts/generate-blog.py',
+    'scripts/publish_common.py',
+    'scripts/paper_reader_presentation.py',
+    'scripts/markdown_hugo_gate.py',
+    'scripts/lib/workflow-implementation-files-cli.js',
+    'manual/scripts/manual-review-blog.py',
+    'manual/scripts/tutorial_payload_verifier.py',
+)
+_REVIEW_IMPLEMENTATION_ENTRY_LIMIT = 64
+
+
+def review_implementation_closure(root=None, entry_files=None):
+    """用共享收集器算日更审查的传递依赖闭包。
+
+    返回项目根目录下的 POSIX 相对路径元组。收集器只读取源码并解析
+    import 与局部字面量，不执行被扫描的模块，因此这一步不联网、不加载模型。
+    """
+    root = Path(root if root is not None else Path(__file__).resolve().parent.parent).resolve()
+    entries = tuple(_REVIEW_IMPLEMENTATION_ENTRIES if entry_files is None else entry_files)
+    if not entries or len(entries) > _REVIEW_IMPLEMENTATION_ENTRY_LIMIT:
+        raise PublishDataValidationError('审查协议依赖入口数量无效。')
+    cache_key = (str(root), entries)
+    cached = _REVIEW_IMPLEMENTATION_CLOSURE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('审查协议依赖闭包需要 Node.js。')
+    payload = json.dumps(
+        {'root': str(root), 'entryFiles': list(entries)},
+        ensure_ascii=False, separators=(',', ':'))
+    if len(payload) > 1024 * 1024:
+        raise PublishDataValidationError('审查协议依赖闭包输入超过上限。')
+    with tempfile.TemporaryFile() as source:
+        source.write(payload.encode('utf-8'))
+        source.flush()
+        source.seek(0)
+        result = _run_bounded_subprocess(
+            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'workflow-implementation-files-cli.js'),
+             str(source.fileno())],
+            cwd=str(root),
+            env={key: value for key, value in os.environ.items()
+                 if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=60,
+            max_output_bytes=4 * 1024 * 1024,
+            pass_fds=(source.fileno(),),
+        )
+    if (result.returncode != 0 or getattr(result, 'timed_out', False)
+            or getattr(result, 'output_truncated', False)):
+        detail = str(getattr(result, 'stderr', '') or '').strip().splitlines()
+        raise PublishDataValidationError(
+            '审查协议依赖闭包无法计算：'
+            + (detail[-1] if detail else f'退出码 {result.returncode}'))
+    try:
+        response = json.loads(result.stdout)
+    except (TypeError, ValueError) as exc:
+        raise PublishDataValidationError('审查协议依赖闭包返回的 JSON 无效。') from exc
+    files = response.get('files') if isinstance(response, dict) else None
+    if (not isinstance(files, list) or not files
+            or any(not isinstance(item, str) or not item for item in files)):
+        raise PublishDataValidationError('审查协议依赖闭包缺少文件清单。')
+    resolved = []
+    for relative in files:
+        candidate = Path(relative)
+        if candidate.is_absolute() or '..' in candidate.parts or '\\' in relative:
+            raise PublishDataValidationError(f'审查协议依赖路径无效：{relative}')
+        absolute = root / relative
+        if absolute.is_symlink() or not absolute.is_file():
+            raise PublishDataValidationError(f'审查协议依赖必须是普通文件：{relative}')
+        resolved.append(relative)
+    closure = tuple(resolved)
+    _REVIEW_IMPLEMENTATION_CLOSURE_CACHE[cache_key] = closure
+    return closure
+
+
+def _review_protocol_dependency_hashes(root=None, entry_files=None):
+    """按入口闭包逐个求当前文件字节的 SHA-256。"""
+    root_path = Path(
+        root if root is not None else Path(__file__).resolve().parent.parent
+    ).resolve()
+    return {
+        relative: _sha256_file(root_path / relative)
+        for relative in review_implementation_closure(root_path, entry_files)
+    }
+
+
 def review_protocol_fingerprint():
     """把可复用的审查证据绑定到代码、提示词与模型以及 Hugo 运行时。"""
-    script_dir = Path(__file__).resolve().parent
-    dependency_paths = {
-        'reader_record_format.py': script_dir / 'reader_record_format.py',
-        'reader_proof_format.py': script_dir / 'reader_proof_format.py',
-        'lib/reader-proof-format.js': script_dir / 'lib' / 'reader-proof-format.js',
-        'lib/reader-content-mode.js': script_dir / 'lib' / 'reader-content-mode.js',
-        'lib/reader-resource-claims-format.js': script_dir / 'lib' / 'reader-resource-claims-format.js',
-        'lib/reader-record-format.js': script_dir / 'lib' / 'reader-record-format.js',
-        'lib/reader-stage-protocols.js': script_dir / 'lib' / 'reader-stage-protocols.js',
-        'lib/reader-identity-format.js': script_dir / 'lib' / 'reader-identity-format.js',
-        'lib/reader-legacy-records.json': script_dir / 'lib' / 'reader-legacy-records.json',
-        'original_file_evidence.py': script_dir / 'original_file_evidence.py',
-        'git_file_bytes.py': script_dir / 'git_file_bytes.py',
-        'lib/original-file-evidence.js': script_dir / 'lib' / 'original-file-evidence.js',
-        'lib/git-file-bytes.js': script_dir / 'lib' / 'git-file-bytes.js',
-        'config/original-file-evidence.json': script_dir.parent / 'config' / 'original-file-evidence.json',
-        'protocol_codec.py': script_dir / 'protocol_codec.py',
-        'blog_record_format.py': script_dir / 'blog_record_format.py',
-        'daily_source_format.py': script_dir / 'daily_source_format.py',
-        'daily-source-format.js': script_dir / 'lib' / 'daily-source-format.js',
-        'blog-record-format.js': script_dir / 'lib' / 'blog-record-format.js',
-        'scoring_record_format.py': script_dir / 'scoring_record_format.py',
-        'core_summary_format.py': script_dir / 'core_summary_format.py',
-        'analysis_quality_format.py': script_dir / 'analysis_quality_format.py',
-        'analysis-quality-format.js': script_dir / 'lib' / 'analysis-quality-format.js',
-        'core-summary-format.js': script_dir / 'lib' / 'core-summary-format.js',
-        'lib/scoring-record-format.js': script_dir / 'lib' / 'scoring-record-format.js',
-        'lib/protocol-codec.js': script_dir / 'lib' / 'protocol-codec.js',
-        'lib/strict-json.js': script_dir / 'lib' / 'strict-json.js',
-        'publish-to-blog.py': script_dir / 'publish-to-blog.py',
-        'daily_hugo_capture.py': script_dir / 'daily_hugo_capture.py',
-        'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
-        'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
-        'reader_pdf_quote_projection.py': script_dir / 'reader_pdf_quote_projection.py',
-        'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
-        'review-blog.py': script_dir / 'review-blog.py',
-        'manual/manual-review-blog.py': MANUAL_SCRIPTS_DIR / 'manual-review-blog.py',
-        'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
-        'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
-        'publish_common.py': script_dir / 'publish_common.py',
-        'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
-        'publication_local_replay.py': script_dir / 'publication_local_replay.py',
-        'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
-        'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
-        'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
-        'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
-        'lib/daily-reader-operator-correction.js': script_dir / 'lib' / 'daily-reader-operator-correction.js',
-        'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
-        'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
-        'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
-        'reader_damaged_raster_pdf_asset.py': script_dir / 'reader_damaged_raster_pdf_asset.py',
-        'llm_account_pool.py': script_dir / 'llm_account_pool.py',
-        'utils.py': script_dir / 'utils.py',
-        'analysis_sections.py': script_dir / 'analysis_sections.py',
-        'tag_stage_record.py': script_dir / 'tag_stage_record.py',
-        'tag_presentation.py': script_dir / 'tag_presentation.py',
-        'tag_catalog.py': script_dir / 'tag_catalog.py',
-        'tag_paths.py': script_dir / 'tag_paths.py',
-        'path_config.py': script_dir / 'path_config.py',
-    }
-    from protocol_codec import server_catalog_paths
-    for catalog in server_catalog_paths(script_dir.parent / 'config' / 'protocols'):
-        dependency_paths[f'config/protocols/{catalog.name}'] = catalog
-    dependencies = {
-        name: _sha256_file(path)
-        for name, path in dependency_paths.items()
-    }
+    dependencies = _review_protocol_dependency_hashes()
     hugo_path = shutil.which('hugo')
     try:
         hugo_stat = Path(hugo_path).stat() if hugo_path else None
@@ -15317,7 +15439,8 @@ def review_protocol_fingerprint():
     except OSError:
         hugo_version = 'unavailable'
     fingerprint = _stable_json_sha256({
-        'contractVersion': 3,
+        'contractVersion': 4,
+        'dependencyClosure': 'workflow-implementation-files-v1',
         'dependencies': dependencies,
         'primaryModel': os.environ.get('PAPER_ANALYZER_MODEL', ''),
         'primaryEndpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
@@ -15672,7 +15795,7 @@ def save_generation_manifest(
     date_str, publish_paths, *, input_fingerprint=None,
     template_fingerprint=None, base_head=None, category='论文速递',
     published_papers=None, publish_all=False, include_id=None,
-    publication_mode=None, input_source_reference=None,
+    publication_mode=None, input_source_reference=None, empty_daily_batch=None,
 ):
     """保存确切的生成与删除路径清单，供单独的审查步骤使用。"""
     _require_active_publication_request(include_id)
@@ -15720,10 +15843,15 @@ def save_generation_manifest(
         'digestCoverRequired': False,
     }
     if input_fingerprint:
-        if not isinstance(published_papers, list) or not published_papers:
+        if not isinstance(published_papers, list) or (
+                not published_papers and not empty_daily_batch):
             raise PublishDataValidationError('正式生成清单必须包含非空的论文快照数组。')
         if not isinstance(publish_all, bool):
             raise PublishDataValidationError('正式生成清单中的发布全部论文选项必须是布尔值。')
+        if empty_daily_batch:
+            _validate_empty_daily_batch_evidence(empty_daily_batch, validated_date)
+            if include_id is not None:
+                raise PublishDataValidationError('零候选空日不能使用单篇发布范围')
         expected_input = generation_input_fingerprint(
             published_papers, validated_date, validated_category, publish_all,
             include_id, input_source_reference=input_source_reference,
@@ -15736,23 +15864,29 @@ def save_generation_manifest(
         # proof assembly and manifest fields consume these exact local results;
         # _validate_generation_input_integrity below remains a fresh boundary.
         api_bindings = llm_api_publication_bindings(published_papers)
-        if publication_mode is None:
-            if len(signed_manual_publication_bindings(published_papers)) == len(published_papers):
-                publication_mode = SIGNED_MANUAL_PRODUCTION_MODE
-            elif len(api_bindings) == len(published_papers):
-                publication_mode = LLM_API_PRODUCTION_MODE
-            else:
-                raise PublishDataValidationError(
-                    '发布输入未全部满足 Manual v6 要求，也未全部满足 API 正式发布要求。'
-                )
-        if publication_mode == LLM_API_PRODUCTION_MODE:
-            production_proof = _llm_api_production_proof_from_checked_bindings(
-                published_papers, api_bindings,
-            )
+        if empty_daily_batch:
+            if publication_mode not in (None, EMPTY_DAILY_BATCH_MODE):
+                raise PublishDataValidationError('零候选空日不能绑定正式论文发布模式')
+            publication_mode = EMPTY_DAILY_BATCH_MODE
+            production_proof = None
         else:
-            production_proof = validate_generation_publication_mode(
-                published_papers, publication_mode,
-            )
+            if publication_mode is None:
+                if len(signed_manual_publication_bindings(published_papers)) == len(published_papers):
+                    publication_mode = SIGNED_MANUAL_PRODUCTION_MODE
+                elif len(api_bindings) == len(published_papers):
+                    publication_mode = LLM_API_PRODUCTION_MODE
+                else:
+                    raise PublishDataValidationError(
+                        '发布输入未全部满足 Manual v6 要求，也未全部满足 API 正式发布要求。'
+                    )
+            if publication_mode == LLM_API_PRODUCTION_MODE:
+                production_proof = _llm_api_production_proof_from_checked_bindings(
+                    published_papers, api_bindings,
+                )
+            else:
+                production_proof = validate_generation_publication_mode(
+                    published_papers, publication_mode,
+                )
         manifest['postPublicationPolicy'] = public_protocols.record('daily-publication-policy', {
             'generatedImages': False, 'sourceFigures': 'retained-and-source-verified',
         })
@@ -15763,13 +15897,17 @@ def save_generation_manifest(
             'publishAll': publish_all,
             'publishedPapers': published_papers,
             **blog_formats.current_snapshot_fields(),
-            'publishedPapersFingerprint': published_papers_fingerprint(published_papers),
+            'publishedPapersFingerprint': published_papers_fingerprint(
+                published_papers, allow_empty=bool(empty_daily_batch),
+            ),
             'manualV6Bindings': signed_manual_publication_bindings(published_papers),
             'llmApiBindings': api_bindings,
             'publicationMode': publication_mode,
         })
         if input_source_reference is not None:
             manifest['inputSourceReference'] = input_source_reference
+        if empty_daily_batch:
+            manifest['emptyDailyBatch'] = empty_daily_batch
         publication_scope_value = _single_publication_scope(include_id)
         if publication_scope_value is not None:
             _validate_publication_scope(
@@ -15847,6 +15985,7 @@ def preflight_production_publication(date_str, *, require_production_receipt=Fal
         scope = _validate_active_publication_scope(manifest)
         formal = manifest.get('publicationMode') in {
             SIGNED_MANUAL_PRODUCTION_MODE, LLM_API_PRODUCTION_MODE,
+            EMPTY_DAILY_BATCH_MODE,
         }
         if require_production_receipt and (scope is not None or not formal):
             raise PublishDataValidationError('标准日更必须绑定完整批次的正式发布快照')
@@ -15919,14 +16058,17 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                 workbench_saved_tag_registries[paper_id] = _page_saved_tag_registry(page_frontmatter)
                 workbench_context_contracts[paper_id] = _page_context_contract(page_frontmatter)
                 workbench_context_fingerprints[paper_id] = _page_context_fingerprint(page_frontmatter)
-    if not paper_ids:
+    empty_daily_mode = manifest.get('publicationMode') == EMPTY_DAILY_BATCH_MODE
+    if not paper_ids and not empty_daily_mode:
         raise PublishDataValidationError('生成清单中没有可绑定视觉摘要的论文页')
+    if empty_daily_mode and paper_ids:
+        raise PublishDataValidationError('零候选空日生成清单不能包含单篇论文页')
     if blog_formats.source_bound_generation(manifest):
         published_papers = manifest.get('publishedPapers')
         if (
             not re.fullmatch(r'[0-9a-f]{64}', str(manifest.get('inputFingerprint') or ''))
             or not isinstance(published_papers, list)
-            or not published_papers
+            or (not published_papers and not empty_daily_mode)
         ):
             raise PublishDataValidationError('正式生成清单缺少输入指纹或已发布论文权威快照')
         snapshot_ids = []
@@ -17753,6 +17895,143 @@ def has_verified_publication_receipt(date_str):
     )
 
 
+def _empty_batch_source_health_issue(source_health):
+    """核对零候选批次的来源状态；返回阻断原因，正常时返回 None。
+
+    只看文件为空不能放行：来源缺失、任一 arXiv 类别失败、全部 arXiv
+    类别失败，或抓到了 HuggingFace 但失败，都可能是真实故障。
+    """
+    if not isinstance(source_health, dict):
+        return '缺少来源状态'
+    arxiv = source_health.get('arxiv')
+    categories = arxiv.get('categories') if isinstance(arxiv, dict) else None
+    arxiv_attempted = isinstance(categories, list) and bool(categories)
+    huggingface = source_health.get('huggingface')
+    huggingface_attempted = isinstance(huggingface, dict)
+    if not arxiv_attempted and not huggingface_attempted:
+        return '缺少来源抓取记录'
+    if arxiv_attempted:
+        if arxiv.get('ok') is not True:
+            return 'arXiv 来源不完整'
+        if any(not isinstance(category, dict) or category.get('ok') is not True
+               for category in categories):
+            return 'arXiv 存在失败的类别'
+    if huggingface_attempted and huggingface.get('ok') is not True:
+        return 'HuggingFace 来源失败'
+    return None
+
+
+def detect_allowed_empty_daily_batch(data_file, target_date):
+    """确认本批是经 --allow-empty-daily 显式放行的零候选空日。
+
+    必须同时满足：分析输入无论文且已完成、批次号与本批原始候选一致、
+    原始候选明确记录 ``stats.zeroCandidates`` 与 0 篇去重后候选、来源状态
+    没有致命失败。任一证据缺失都返回 None，由调用方保留原来的空批次报错，
+    避免把故障或未放行批次当成正常空日。
+    """
+    try:
+        payload = json.loads(Path(data_file).read_text(encoding='utf-8'))
+        raw_bytes = Path(CURRENT_DIR, 'raw-candidates.json').read_bytes()
+        raw = json.loads(raw_bytes.decode('utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(raw, dict):
+        return None
+    if payload.get('papers') != [] or raw.get('papers') != []:
+        return None
+    if payload.get('batchDate') != target_date or raw.get('batchDate') != target_date:
+        return None
+    batch_id = payload.get('batchId')
+    if not isinstance(batch_id, str) or not batch_id.strip() or raw.get('batchId') != batch_id:
+        return None
+    stats = payload.get('stats') if isinstance(payload.get('stats'), dict) else {}
+    if stats.get('analysisStatus') != 'complete' or stats.get('remainingFailed') != 0:
+        return None
+    if stats.get('expected') != 0 or stats.get('totalAfterMerge') != 0:
+        return None
+    pipeline_status = stats.get('pipelineStatus')
+    if pipeline_status is not None and pipeline_status != 'analysis_complete':
+        return None
+    if payload.get('status') not in (None, 'complete'):
+        return None
+    raw_stats = raw.get('stats') if isinstance(raw.get('stats'), dict) else {}
+    if raw_stats.get('zeroCandidates') is not True:
+        return None
+    if raw_stats.get('afterBlogSkip') != 0:
+        return None
+    raw_health = raw.get('sourceHealth')
+    if _empty_batch_source_health_issue(raw_health) is not None:
+        return None
+    deep_health = stats.get('sourceHealth')
+    if deep_health is not None and _empty_batch_source_health_issue(deep_health) is not None:
+        return None
+    return {
+        'contract': EMPTY_DAILY_BATCH_EVIDENCE_CONTRACT,
+        'batchId': batch_id,
+        'batchDate': target_date,
+        'zeroCandidates': True,
+        'analysisStatus': 'complete',
+        'rawCandidatesSha256': hashlib.sha256(raw_bytes).hexdigest(),
+        'sourceHealthSha256': _stable_json_sha256(raw_health),
+    }
+
+
+def _validate_empty_daily_batch_evidence(marker, target_date):
+    """核对空日生成清单中的显式证据，拒绝手填或错绑批次的空清单。"""
+    if not isinstance(marker, dict):
+        raise PublishDataValidationError('空批次生成清单缺少显式放行证据')
+    if set(marker) != {
+        'contract', 'batchId', 'batchDate', 'zeroCandidates', 'analysisStatus',
+        'rawCandidatesSha256', 'sourceHealthSha256',
+    }:
+        raise PublishDataValidationError('空批次生成清单的放行证据字段不完整')
+    if (
+        marker.get('contract') != EMPTY_DAILY_BATCH_EVIDENCE_CONTRACT
+        or marker.get('batchDate') != target_date
+        or marker.get('zeroCandidates') is not True
+        or marker.get('analysisStatus') != 'complete'
+        or not isinstance(marker.get('batchId'), str) or not marker['batchId'].strip()
+        or not all(re.fullmatch(r'[0-9a-f]{64}', str(marker.get(key) or ''))
+                   for key in ('rawCandidatesSha256', 'sourceHealthSha256'))
+    ):
+        raise PublishDataValidationError('空批次生成清单的放行证据无效或批次日期不符')
+    return marker
+
+
+def _validate_empty_daily_batch_input(manifest, target_date, marker):
+    """重放空批次输入，确认它确实是没有论文的已完成批次。"""
+    reference = manifest.get('inputSourceReference')
+    if not isinstance(reference, dict) or not isinstance(reference.get('path'), str):
+        raise PublishDataValidationError('空批次生成清单缺少可重放的输入来源')
+    try:
+        payload = json.loads(Path(reference['path']).read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError('空批次输入来源无法重放') from exc
+    if not isinstance(payload, dict) or payload.get('papers') != []:
+        raise PublishDataValidationError('空批次输入来源不是无论文的已完成批次')
+    stats = payload.get('stats') if isinstance(payload.get('stats'), dict) else {}
+    if (
+        payload.get('batchDate') != target_date
+        or payload.get('batchId') != marker.get('batchId')
+        or stats.get('analysisStatus') != 'complete'
+        or stats.get('expected') != 0
+        or stats.get('remainingFailed') != 0
+    ):
+        raise PublishDataValidationError('空批次输入来源与生成清单的放行证据不一致')
+    return marker
+
+
+def is_empty_daily_batch_generation(manifest):
+    """只读判断一份正式生成清单是否为本批确认过的零候选空日。"""
+    return bool(
+        isinstance(manifest, dict)
+        and blog_formats.source_bound_generation(manifest)
+        and manifest.get('publicationMode') == EMPTY_DAILY_BATCH_MODE
+        and manifest.get('publishedPapers') == []
+        and isinstance(manifest.get('emptyDailyBatch'), dict)
+    )
+
+
 def generate_main(options=None):
     from log_setup import setup_script_logging
     setup_script_logging(__file__)
@@ -17806,22 +18085,30 @@ def generate_main(options=None):
         print(f'🎯 单篇灰度 generation: {normalized_include}；不生成汇总页、不清理同日其他页面')
     _require_active_publication_request(normalized_include)
 
+    empty_daily_batch = None
     if not papers:
         if has_verified_publication_receipt(today):
             raise PublishDataValidationError(
                 f'目标批次 {today} 已有远端验证发布凭证，但当前输入没有论文；'
                 '已保留既有 generation/review/push 证据'
             )
-        # 失败的空生成不能留下同一天的清单或
-        # 审查、发布凭证，否则之后单独调起的阶段
-        # 可能把它误当成这次运行已生成的结果。
-        generation_manifest_path(today).unlink(missing_ok=True)
-        review_receipt_path(today).unlink(missing_ok=True)
-        review_failure_path(today).unlink(missing_ok=True)
-        generation_journal_path(today).unlink(missing_ok=True)
-        shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
-        raise PublishDataValidationError(
-            f'目标批次 {today} 没有论文可生成；已阻止复用该日期的旧 generation/review/push 证据'
+        if not normalized_excluded and not normalized_include:
+            empty_daily_batch = detect_allowed_empty_daily_batch(data_file, today)
+        if empty_daily_batch is None:
+            # 失败的空生成不能留下同一天的清单或
+            # 审查、发布凭证，否则之后单独调起的阶段
+            # 可能把它误当成这次运行已生成的结果。
+            generation_manifest_path(today).unlink(missing_ok=True)
+            review_receipt_path(today).unlink(missing_ok=True)
+            review_failure_path(today).unlink(missing_ok=True)
+            generation_journal_path(today).unlink(missing_ok=True)
+            shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
+            raise PublishDataValidationError(
+                f'目标批次 {today} 没有论文可生成；已阻止复用该日期的旧 generation/review/push 证据'
+            )
+        print(
+            '📭 已确认零候选空日（抓取阶段显式 --allow-empty-daily）：'
+            '本批只生成“今日没有新论文”汇总页，不生成单篇页或图片'
         )
 
     try:
@@ -17876,7 +18163,11 @@ def generate_main(options=None):
             '请先恢复网络与原 remote，或人工核查证据漂移'
         )
     try:
-        if publication_mode is None:
+        if empty_daily_batch is not None:
+            if publication_mode not in (None, EMPTY_DAILY_BATCH_MODE):
+                raise PublishDataValidationError('空批次不能指定其他发布模式')
+            publication_mode = EMPTY_DAILY_BATCH_MODE
+        elif publication_mode is None:
             publication_mode = infer_generation_publication_mode(papers)
         validate_generation_publication_mode(papers, publication_mode)
     except PublishDataValidationError as exc:
@@ -17963,7 +18254,10 @@ def generate_main(options=None):
         if index_record is None:
             print('🎯 单篇灰度 generation 跳过批次汇总页')
         elif index_record.get('status') != 'generated':
-            index_md = generate_index_page(scored, unscored, today, paper_slugs, category)
+            index_md = generate_index_page(
+                scored, unscored, today, paper_slugs, category,
+                empty_batch_confirmed=empty_daily_batch is not None,
+            )
             index_md = sanitize_markdown_for_publish(index_md)
             index_quality_issue = validate_digest_index_reader_quality(index_md, required=True)
             if index_quality_issue:
@@ -18023,6 +18317,7 @@ def generate_main(options=None):
         include_id=normalized_include,
         publication_mode=publication_mode,
         input_source_reference=input_source_reference,
+        empty_daily_batch=empty_daily_batch,
     )
     generation_journal_path(today).unlink(missing_ok=True)
     shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)

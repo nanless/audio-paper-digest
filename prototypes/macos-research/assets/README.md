@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-此目录存放客户端测试使用的原始 MiCLA PDF 和 3 张科学图裁图，不纳入 Git。正文及公开元数据在上级 `sample.json` 中，原 PDF 与图的版权仍属于原作者。
+此目录存放客户端测试使用的原始 MiCLA PDF 和 3 张科学图裁图；这四份固定资产已纳入 Git，只用于本机与 CI 测试，不随客户端正式包发布。正文及公开元数据在上级 `sample.json` 中，原 PDF 与图的版权仍属于原作者。
 
 原论文：[MiCLA v1 官方页面](https://arxiv.org/abs/2610.27491v1)
 

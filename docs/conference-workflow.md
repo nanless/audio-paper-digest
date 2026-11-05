@@ -547,7 +547,7 @@ npm run conference:publish:generate -- --conference-id CONFERENCE_ID --process-i
 npm run conference:publish:review -- --conference-id CONFERENCE_ID --process-id PROCESS_UUID
 ```
 
-两个派生参数只属于 generate。它仍先完整核原生 process bundle，再经固定 Node 禁网来源重放派生，原 raw stage/Reader/原模型像素和旧证明不变；新 PNG 与 raw→view 页面按内容地址另存。review/push 从 generation 的 `figurePublicationView` 重新核原 PDF、完整派生证明及实际页面/图片字节，不接受自行构造的 view JSON。
+两个派生参数只属于 generate。它仍先完整核原生 process bundle，再经固定 Node 禁网来源重放派生，原 raw stage/Reader/原模型像素和旧证明不变；新 PNG 与 raw→view 页面按内容地址另存。review/push 从 generation 的 `figurePublicationView` 重新核原 PDF、完整派生证明及实际页面/图片字节，不接受自行构造的 view JSON。这份清单没有生成器：可用 `node scripts/export-review-failure-manifest.js --kind conference-figure-crop --process PROCESS_UUID --out /absolute/skeleton.json` 只读导出骨架，同协议、同页 SHA 的失败全集会逐项填好；图号、分析/Reader 字段、路由与 `baseGeneration` 选择仍须人工核对，骨架不是通过凭证，也不能代替签名。
 
 真实新页须正常多模态审查，换展示不消除原语义错误。完整页复审后仍有真实图文语义拒稿时，再以实际新失败和当前父稿正常 Reader 维护；同一坏 source crop 不应盲目多轮重付。
 

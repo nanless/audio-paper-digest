@@ -38,6 +38,8 @@ const {
     assertVisualManifestCurrent,
 } = require('./lib/historical-visual-records');
 const { assertPublishedBlogReceipt, paperBatchDate } = require('./lib/published-blog-receipt');
+const { emptyDailyBatchConfirmation } = require('./lib/empty-daily-batch');
+const { sourceBoundGeneration } = require('./lib/blog-record-format');
 const {
     coverTaskToken,
     validateCompletedCover,
@@ -297,13 +299,15 @@ function resolveDigestRuntimeSnapshot(
     return { value: archived, source: 'archive', path: archivedPath };
 }
 
-function sourceHealthComplete(raw, targetDate) {
+function sourceHealthComplete(raw, targetDate, { emptyConfirmed = false } = {}) {
     const categories = raw?.sourceHealth?.arxiv?.categories;
     const expectedIds = new Set(Config.ARXIV_CATEGORIES.map(item => item.id));
     const actualIds = new Set(Array.isArray(categories) ? categories.map(item => item?.id) : []);
     return Boolean(
         raw?.batchDate === targetDate
-        && papersFrom(raw).length > 0
+        && (emptyConfirmed
+            ? papersFrom(raw).length === 0
+            : papersFrom(raw).length > 0)
         && raw?.sourceHealth?.arxiv?.ok === true
         && Array.isArray(categories)
         && categories.length === Config.ARXIV_CATEGORIES.length
@@ -335,7 +339,7 @@ function uniquePaperIds(papers) {
     return new Set(values);
 }
 
-function filterSnapshotsAreConsistent(raw, decisions, filtered, targetDate) {
+function filterSnapshotsAreConsistent(raw, decisions, filtered, targetDate, { emptyConfirmed = false } = {}) {
     if (
         !snapshotMatchesDate(raw, targetDate, 'raw')
         || !snapshotMatchesDate(decisions, targetDate, 'decisions')
@@ -350,7 +354,12 @@ function filterSnapshotsAreConsistent(raw, decisions, filtered, targetDate) {
     const filteredPapers = papersFrom(filtered);
     const rawIds = uniquePaperIds(rawPapers);
     const filteredIds = uniquePaperIds(filteredPapers);
-    if (!rawIds || !filteredIds || rawIds.size === 0) return false;
+    // 普通批次仍要求非空候选；只有已核验的空日标记才允许候选和入选
+    // 同时为空，且两者必须确实都是空集合。
+    if (!rawIds || !filteredIds) return false;
+    if (rawIds.size === 0) {
+        if (!emptyConfirmed || rawPapers.length !== 0 || filteredPapers.length !== 0) return false;
+    }
 
     const normalizedDecisions = new Map();
     for (const [key, decision] of Object.entries(decisions.decisions)) {
@@ -516,6 +525,28 @@ function buildDigestRunReport(targetDate, options = {}) {
     const filtered = filteredSnapshot.value;
     const decisions = decisionsSnapshot.value;
     const deep = deepSnapshot.value;
+    // 空日只在生成清单带有 `--allow-empty-daily` 放行证据，并与当前候选
+    // 字节、来源状态和分析结果互相绑定时才成立；普通批次完全不进入这里。
+    let emptyDailyBatch = false;
+    if (raw && papersFrom(raw).length === 0) {
+        const generation = readJson(
+            path.join(Config.CURRENT_DIR, `blog-generation-manifest-${targetDate}.json`), readProblems
+        );
+        let rawBytes = null;
+        if (rawSnapshot.path) {
+            try {
+                rawBytes = fs.readFileSync(rawSnapshot.path);
+            } catch (error) {
+                if (error?.code !== 'ENOENT') {
+                    readProblems.push({ path: rawSnapshot.path, kind: 'unreadable', code: error?.code || null });
+                }
+            }
+        }
+        emptyDailyBatch = sourceBoundGeneration(generation)
+            && Boolean(emptyDailyBatchConfirmation({
+                generation, targetDate, rawBytes, raw, deep
+            }));
+    }
     const review = readJson(
         path.join(Config.CURRENT_DIR, `blog-review-receipt-${targetDate}.json`), readProblems
     );
@@ -547,10 +578,10 @@ function buildDigestRunReport(targetDate, options = {}) {
     // 和「快照根本不在」不是一回事；旧写法两者都是 0，摘要于是出现
     // `candidates=0` 同屏 `selected=53` 这种不可能的组合。
     const rawCount = raw ? papersFrom(raw).length : null;
-    const fetchComplete = sourceHealthComplete(raw, targetDate);
+    const fetchComplete = sourceHealthComplete(raw, targetDate, { emptyConfirmed: emptyDailyBatch });
     const decisionStats = decisions?.stats || {};
     const filterSnapshotsComplete = filterSnapshotsAreConsistent(
-        raw, decisions, filtered, targetDate
+        raw, decisions, filtered, targetDate, { emptyConfirmed: emptyDailyBatch }
     );
     let publication = null;
     let publicationVerified = false;
@@ -653,26 +684,33 @@ function buildDigestRunReport(targetDate, options = {}) {
     if (deep && !Array.isArray(deep)) {
         validateDailyFreshSourceRun(deepSnapshot.path || Config.FILES.deepAnalysisResult, deep, deepBatch, dailySourceIssues);
     }
-    const dailySourceComplete = llmApiComplete && dailySourceIssues.length === 0
-        && Boolean(deep?.dailyFreshSourceRun);
-    const analysisPublicationMode = productionV6Complete
-        ? 'manual_v6_production'
-        : (llmApiComplete
-            ? (waived.length ? 'llm_api_production_with_operator_waiver' : 'llm_api_production')
-            : 'invalid_or_legacy');
-    const productionAnalysisComplete = productionV6Complete || (llmApiComplete && dailySourceComplete);
+    // 显式空日没有单篇来源运行；普通批次仍须逐项通过来源检查。
+    const dailySourceComplete = emptyDailyBatch || (llmApiComplete && dailySourceIssues.length === 0
+        && Boolean(deep?.dailyFreshSourceRun));
+    const analysisPublicationMode = emptyDailyBatch
+        ? 'empty_daily_batch'
+        : (productionV6Complete
+            ? 'manual_v6_production'
+            : (llmApiComplete
+                ? (waived.length ? 'llm_api_production_with_operator_waiver' : 'llm_api_production')
+                : 'invalid_or_legacy'));
+    const productionAnalysisComplete = emptyDailyBatch
+        || productionV6Complete || (llmApiComplete && dailySourceComplete);
     const unresolvedScoringIds = requiredAnalysis.filter(paper => {
         const scoring = paper?.analysisManifest?.stages?.scoringAudit;
         return require('./lib/scoring-record-format').hasScoringAuditFormat(scoring)
             && !scoringStabilityIsResolved(scoring);
     }).map(normalizedId).filter(Boolean);
     const analysisComplete = Boolean(deep && filtered) && analysisWaiverCheck.valid
-        && productionAnalysisComplete && (
-        failed.length === 0
-        && skippedOutsideFiltered.length === 0
-        && successful.length + waived.length === analysisBatch.length
-        && samePaperIds([...successful, ...waived], analysisBatch)
-    );
+        && (emptyDailyBatch
+            ? (deepBatch.length === 0 && filteredBatch.length === 0
+                && failed.length === 0 && skippedOutsideFiltered.length === 0
+                && successful.length === 0 && waived.length === 0)
+            : (productionAnalysisComplete
+                && failed.length === 0
+                && skippedOutsideFiltered.length === 0
+                && successful.length + waived.length === analysisBatch.length
+                && samePaperIds([...successful, ...waived], analysisBatch)));
     const errors = [];
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
@@ -685,14 +723,20 @@ function buildDigestRunReport(targetDate, options = {}) {
     if (analysisWaiver && !analysisWaiverCheck.valid) {
         errors.push(`日更分析 waiver 无效: ${analysisWaiverCheck.issues.join('; ')}`);
     }
-    if (!analysisComplete) errors.push(analysisFailureMessage({
-        productionAnalysisComplete,
-        failedCount: failed.length,
-        failedIds,
-        missing: analysisMissing,
-        total: deepBatch.length,
-        expected: analysisExpected
-    }));
+    if (!analysisComplete) {
+        if (emptyDailyBatch) {
+            errors.push('零候选空日的筛选或分析集合不完整或不是空集合');
+        } else {
+            errors.push(analysisFailureMessage({
+                productionAnalysisComplete,
+                failedCount: failed.length,
+                failedIds,
+                missing: analysisMissing,
+                total: deepBatch.length,
+                expected: analysisExpected
+            }));
+        }
+    }
     if (llmApiComplete && !dailySourceComplete) {
         errors.push(`日更来源运行记录及封存的 TXT/PDF 不完整：${dailySourceIssues.join('; ') || '缺少 dailyFreshSourceRun'}`);
     }

@@ -1,11 +1,11 @@
 # 论文速递工作台 Mac 版：构建与发行
 
-本页说明当前版本 1.4.3（构建号 19）的本地准备和联合发行操作。1.4.3 已于 2026-11-05 公开发布，下载与实际状态见 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)，本轮改动与检查范围见 [1.4.3 记录](workbench-1.4.3-review.md)，签名、附件和匿名下载的核对结果见[客户端发行核验](client-release-verification.md)。
+本页说明当前版本 1.4.4（构建号 20）的本地准备和联合发行操作。1.4.4 的改动与验证范围见 [1.4.4 记录](workbench-1.4.4-review.md)，构建与签名核验见发行记录；已公开发布的 1.4.3 下载与实际状态见 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)，其签名、附件和匿名下载的核对结果见[客户端发行核验](client-release-verification.md)。
 
 | 项目 | 当前发行目标 |
 |---|---|
 | 应用 | 论文速递工作台.app |
-| 版本、构建号 | 1.4.3、19 |
+| 版本、构建号 | 1.4.4、20 |
 | 架构、最低系统 | arm64、macOS 15 |
 | 运行时 | 随包 Node 24.19.0 |
 | 签名 | 本地 ad-hoc 签名，未 Apple 公证 |
@@ -37,17 +37,17 @@ npm --prefix apps/macos run install:app
 apps/macos/release.sh inspect \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.3
+  --version 1.4.4
 
 apps/macos/release.sh prepare \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.3 \
-  --output 'apps/macos/.build/releases/1.4.3-arm64' \
+  --version 1.4.4 \
+  --output 'apps/macos/.build/releases/1.4.4-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.4.3-arm64'
+  --prepared 'apps/macos/.build/releases/1.4.4-arm64'
 ```
 
 `inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。
@@ -56,13 +56,13 @@ apps/macos/release.sh verify \
 
 | 输出 | 核对内容 |
 |---|---|
-| `PaperDigest-macOS-1.4.3-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
+| `PaperDigest-macOS-1.4.4-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
 | 同名 DMG | 应用与指向 `/Applications` 的拖入目标；检查映像并只读挂载回读 |
 | `build-info.json` | 版本、架构、时间、来源身份和相对文件摘要，无本机构建路径 |
 | `RELEASE_NOTES.md` | 按真实范围生成的版本、安装、签名与支持说明 |
 | `release-manifest.json`、`SHA256SUMS` | 完整附件集合与实际字节摘要 |
 
-打包和回读不启动应用。1.4.3 的安装、图形首启、升级和业务操作没有在本轮重新执行；最近一次完整人工范围属于 1.3.0，见[本轮记录](workbench-1.3.0-review.md#正式发行与升级检查)及[验证说明](mac-app-validation.md)，不能由构建成功推定界面验收通过。
+打包和回读不启动应用。本版没有重新执行安装、图形首启、升级和业务操作；最近一次完整人工范围属于 1.3.0，见[本轮记录](workbench-1.3.0-review.md#正式发行与升级检查)及[验证说明](mac-app-validation.md)，不能由构建成功推定界面验收通过。
 
 ## 3. 来源、许可与隐私
 
@@ -78,7 +78,7 @@ Android 正式包按 `prepare → sign → verify` 单独处理，不修改已�
 
 ```sh
 python3 apps/android/release_tools.py --repo "$PWD" prepare \
-  --output "$ANDROID_PREPARED" --version 1.4.3 --code 19
+  --output "$ANDROID_PREPARED" --version 1.4.4 --code 20
 
 python3 apps/android/release_tools.py --repo "$PWD" sign \
   --prepared "$ANDROID_PREPARED" --output "$ANDROID_SIGNED" \

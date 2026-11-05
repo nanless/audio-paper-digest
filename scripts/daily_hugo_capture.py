@@ -271,7 +271,7 @@ def _files(value):
 def _common(value, keys):
     if not isinstance(value, dict) or set(value) != keys:
         _fail('Invalid observation binding fields', 'invalid')
-    if value['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance'):
+    if value['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance', 'empty_daily_batch'):
         _fail('Unsupported normal publication mode', 'invalid')
     try:
         if datetime.date.fromisoformat(value['date']).isoformat() != value['date']:
@@ -500,7 +500,7 @@ def review_scope(*, binding, known_input_reader, observation_root, limits=DEFAUL
         _fail('A normal render observation scope is already active', 'invalid')
     _validate_limits(limits)
     binding = _common(binding, _BIND_KEYS)
-    if binding['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance'):
+    if binding['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance', 'empty_daily_batch'):
         _fail('Unsupported normal publication mode', 'invalid')
     if not callable(known_input_reader) or not isinstance(binding['pages'], list) or not binding['pages']:
         _fail('Observation needs normal owner and complete pages', 'invalid')
@@ -1094,7 +1094,7 @@ def _validate_ref(*, observation_root, ref, expected, limits=DEFAULT_LIMITS):
                                                   manifest.get('schemaFingerprint'))
     if set(manifest) != required | set(record_header):
         _fail('Invalid render observation manifest contract', 'invalid')
-    if manifest['purpose'] != 'normal-review-same-render-observation' or manifest['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance'):
+    if manifest['purpose'] != 'normal-review-same-render-observation' or manifest['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance', 'empty_daily_batch'):
         _fail('Invalid render observation purpose/mode', 'invalid')
     actual = {key: manifest[key] for key in _FINAL_KEYS - {'files'}}
     actual['files'] = manifest['reviewedFiles']

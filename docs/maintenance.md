@@ -40,6 +40,8 @@
 | 客户端版本与发行 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` | 两端源码的版本号与构建号、两端 README、`docs/README.md` 与 `docs/README.en.md` 的版本段和版本列表、当期 `docs/workbench-<版本>-review.md` 的发行状态、发行附件核验 |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
 
+日更审查协议指纹不再维护手写文件清单：`review_protocol_fingerprint()` 通过 `scripts/lib/workflow-implementation-files-cli.js` 调用会议和历史共用的 `workflow-implementation-files.js`，自动纳入入口的传递依赖闭包，因此新增或修改共享校验器（如 `publish_common.py`）会改变协议指纹并需要重签本批凭证，内容未变的通过页仍按路径与内容 SHA 复用。
+
 ## 不可破坏的边界
 
 - 默认日更始终使用 LLM/API；API 错误不能使其切换 Manual。
@@ -168,7 +170,7 @@ Python 日志清理会把目录读取、文件检查及删除失败写入 `probl
 npm run storage:prune -- --apply
 ```
 
-保留期默认 30 天，可用正整数 `PD_STORAGE_RETENTION_DAYS` 覆写，也可写入项目 `.env`。清理范围是 `logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无程序读取的旧调试目录：`deep_analyzer_input_output`、`filter_input_output`、`iclr_filter_input_output` 下的**全部普通文件**，不限 `.log`；因此 `logs/` 中不得放置手册、脚本或证据文件。三类缓存删除前扫描 `data/current` 与 `data/archive` 的正式 JSON，核对绝对/相对路径和 URL SHA-256 引用。正式分析 JSON、发布/视觉清单、归档成品及博客文件不在白名单内。
+保留期默认 30 天，可用正整数 `PD_STORAGE_RETENTION_DAYS` 覆写，也可写入项目 `.env`。清理范围是 `logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无程序读取的旧调试目录：`deep_analyzer_input_output`、`filter_input_output`、`iclr_filter_input_output`；`logs` 根只清 `.log`，其余目录下的**全部普通文件**都会被清理，不限 `.log`。运维手册、脚本与证据文件放在 `data/archive/logs-assets-<date>/`，不要放在 `logs/` 根下（`storage:prune` 只清 `.log`，但根目录仍应只放日志）。三类缓存删除前扫描 `data/current` 与 `data/archive` 的正式 JSON，核对绝对/相对路径和 URL SHA-256 引用。正式分析 JSON、发布/视觉清单、归档成品及博客文件不在白名单内。
 
 JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前整批阻断。本机锁持有者 PID 存活，或远端/非法持有者无法可靠判活时，同样拒绝删除；清理器不替调用者删锁。它会复扫引用与候选，但扫描和删除之间没有所有写入者共用的事务锁，仍可能发生竞态，因此 `--apply` 前停写是必要条件。预览可以报告这些阻断，不能把预览成功当成删除授权。
 
@@ -181,6 +183,8 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 轻量监控遇到审查记录的 `postPublishVisuals: required` 时，仍按两类任务清单推导内部 `visual` 阶段，不使用生成清单的发布前标志省略其中一项；人类可见名称为“发布收尾”。该字段只接受已知的单篇或旧维护不适用模式，旧审查记录缺该字段时沿用原生成标志，未知值不表示完成。
 
 这个视图不核验完整图片资产、当前发布豁免或部署网页，因此默认不生图的批次也可能停留在“发布收尾”。建议从 `./run-daily-digest.sh DATE --from visual` 继续，由正常日更入口重核发布并按持续设置登记不生图，不执行图片准备或生图。该提示不授予任何完成资格；最终仍查看普通 `digest:status` 的实际豁免核验，再核对部署和全部目标页面。
+
+显式空日也不因没有单篇页而放宽完成定义：推送后仍须登记本次发布不生图，`digest:status` 的数据、审查、远端和不生图四项成立才算 complete，部署和全部目标网页另行核验。
 
 主要生产入口（fetch、deep、batch、reanalyze、Reader 刷新与博客三阶段）在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
 
@@ -217,6 +221,8 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-paper-digest-blog`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
 
   `--wait` 默认最多等待 120 秒，默认每 10000 毫秒轮询；可用 `--wait-seconds N` 与 `--poll-interval-ms N` 调整。无 gh、部署仍在进行或部署证据不可得时，默认不能完成验收。`--json` 在等待时输出 JSONL（部署快照行、summary、最终结果）。现用保存文件使用 `contract` 和 `schemaFingerprint` 声明格式，并记录 `createdAt`、`partial`、`deploy`、`generationManifestSha256` 和 `publicationOid`。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
+
+  `--workflow-source` 把上线核验推进到 workflow 源层：用 gh 核对该提交对应 run 的仓库、分支、事件与固定工作流，workflow 文件按 `.github/workflows/hugo.yaml` 的固定 SHA-256 与 git blob OID 核对，`unit`/`build`/`deploy` 三个 job 及固定 step 编号、名称、结论必须成功；任一不符或缺 gh 都在 `deploy.workflowSourceVerified`/`workflowError` 记录并返回非零，`--allow-degraded`/`--allow-partial` 不能把未核验的 workflow 源升级为通过。它仍不判定 public 产物消费链、页面正文与资产、GitHub 环境审批和部署后的真实站点；这些仍须人工或另行核验。
 
   页面检查仅要求 HTTP 200、最终 URL 去掉查询参数、片段和末尾斜杠后与期望地址一致、标题包含站点标记，且汇总标题含日期、单篇标题去掉站点标记后长度大于 4。它不核对准确论文标题、H1、canonical 或完整正文；这些须在最终全页核验中另查，不能将该命令通过解释为全部内容正确。
 
@@ -270,7 +276,7 @@ gh workflow run ci.yml --ref main
 
 ### 完整覆盖与并行范围
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 两套测试及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22 与 Android SDK，运行根 `npm ci` 后还要在 `apps/macos` 执行 `npm ci`，因为 `:app:testDebugUnitTest` 的任务图包含 `:app:prepareDebugPublishedAssets`，它无条件从 `apps/macos/node_modules/katex` 复制文件；最后在 `apps/android` 执行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业不运行 `apps/android/test.sh`，因为其中的 Python 测试需要 `prototypes/macos-research/assets` 下的 PDF。它不进上述分片矩阵，也不并入 `test` 汇总检查，避免拖慢上述十二个检查。macOS 客户端测试仍在本机通过 `apps/macos/test.sh` 运行；接入 CI 需要先解决 `prototypes/macos-research/assets` 不入库的问题。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 两套测试及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22 与 Android SDK，运行根 `npm ci` 后还要在 `apps/macos` 执行 `npm ci`，因为 `:app:testDebugUnitTest` 的任务图包含 `:app:prepareDebugPublishedAssets`，它无条件从 `apps/macos/node_modules/katex` 复制文件；最后在 `apps/android` 执行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业不运行 `apps/android/test.sh`：除 Gradle 单元测试外，它还会构建、lint 并运行整套发行/签名检查。它不进上述分片矩阵，也不并入 `test` 汇总检查，避免拖慢上述十二个检查。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15`（应用最低支持 15.0），配置 Node 22 与 Python 3.11，根 `npm ci` 后在 `apps/macos` 执行 `npm ci` 与 `npx playwright install chromium`（`npm ci` 不下载浏览器），最后执行 `bash apps/macos/test.sh`。测试直接读取的公开论文 PDF 与三张图（`prototypes/macos-research/assets/micla-2610.27491v1.pdf`、`figure-1.png`～`figure-3.png`，来源 arXiv:2610.27491v1）已入库，干净 checkout 不再缺资产。`NativeLibraryAccessibility` 需要已解锁桌面与可用的自进程 AXWindow，`test.sh` 只在它明确以 77 号退出时记为跳过，其它非零退出仍终止。两个客户端作业都不并入 `test` 汇总检查。
 
 JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)` 才报告完整通过；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 

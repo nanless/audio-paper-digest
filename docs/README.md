@@ -23,6 +23,8 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
+1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时补齐两端测试资料与 macOS 测试套件，并新增 macOS 客户端 CI 作业。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
+
 1.4.3 的性能优化（目录紧凑投影、启动后台解码、导读与汇总解析复用、离线索引、桥接合并）见[1.4.3 记录](workbench-1.4.3-review.md)。
 
 1.4.2 修复 2026 年 11 月 3 日、4 日导读的上下文声明问题：博客模板按白名单重建声明并保留 camelCase，Mac 与 Android 兼容已发布页面里唯一的小写别名。见[1.4.2 记录](workbench-1.4.2-review.md)。
@@ -107,7 +109,7 @@
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
