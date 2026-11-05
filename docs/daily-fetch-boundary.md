@@ -17,11 +17,11 @@
 
 用户要求单篇 404 不影响整批日更。这条规则分两处执行，都只认“官方 PDF 的全部候选地址都明确返回 404”，超时、认证错误、5xx 和解析失败仍按原规则停止。
 
-筛选阶段需要查看官方 PDF 时，程序记录论文编号、实际失败和本次跳过，再继续处理其余候选。这不等于判定论文不相关。
+筛选阶段需要查看官方 PDF 时，程序把这条跳过记录写进当批 `filter-decisions.json`：`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；`related`、`retryable`、`fallback` 均为 `false`，且不带 `filterScopeEvidence`。然后继续处理其余候选。这不等于判定论文不相关。
 
-筛选完成、封存来源时，如果某篇入选论文的官方 PDF 在全部候选地址上都是 404，这篇论文同样跳过：程序把跳过原因、原始错误信息和论文编号写进本次来源运行目录的 `daily-source-skips.json`，然后继续封存和分析其余论文。每批最多跳过两篇，可用 `PD_DAILY_SOURCE_SKIP_MAX` 调整（0–5）；超过上限就停止整批，不会为了继续发布而扩大跳过范围。
+筛选完成、封存来源时，如果某篇入选论文的官方 PDF 在全部候选地址上都是 404，这篇论文同样跳过：程序把跳过原因、原始错误信息和论文编号写进本次来源运行目录 `data/runtime/daily-fresh-source-runs/<runId>/daily-source-skips.json`，然后继续封存和分析其余论文。封存来源阶段每批最多跳过两篇，可用 `PD_DAILY_SOURCE_SKIP_MAX` 调整（0–5）；超过上限就停止整批，不会为了继续发布而扩大跳过范围。
 
-跳过记录绑定本次批次的日期、运行 ID 和篇数，读取时逐项核验，只接受 `ARXIV_PDF_NOT_FOUND` 加 404 的证据。被跳过的论文不进入深度分析，不生成博客页面，也不计为分析成功；其余论文仍须完整通过来源、分析和审查。页面和汇总里不会出现这篇论文，`digest:status` 会单列已跳过篇数，而不是把缺失写成通过。
+跳过记录使用 `daily-source-skip` 格式，绑定本次批次的日期、运行 ID、上限和篇数；每篇保存 `arxivId`、`errorCode: ARXIV_PDF_NOT_FOUND`、`status: 404`、`reason` 和原始 `message`。读取时逐项核验，只接受 `ARXIV_PDF_NOT_FOUND` 加 404 的证据。被跳过的论文不进入深度分析，不生成博客页面，也不计为分析成功；其余论文仍须完整通过来源、分析和审查。页面和汇总里不会出现这篇论文，`digest:status` 会单列已跳过篇数，而不是把缺失写成通过。
 
 ## 先固定已发布基线和窗口
 
@@ -75,7 +75,7 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 执行者明确启用 `requirePreviouslyFetched: true` 时，边界仍先核验上一正式发布的五份文件证明，再从原抓取检查点为七类 arXiv 分别选取提交时间最新的已获取 ID，为 HuggingFace 精选选取真实 `hfSelectedAt` 最新的已获取 ID。同一时间的候选按规范化 ID 排序确定见证，避免续跑身份漂移。该模式没有上一批完整的抓取证明时直接失败，不能从页面编号、库内记录或月首猜测以前获取过哪些论文。
 
-新增 `boundary.continuity` 使用 `daily-fetch-continuity-v1`，记录 `required: true`、原精确起点 `originalSince`、旧检查点整个文件的 `archiveCheckpointSha256`、各来源的期望见证及 `overlapCutoffDate`，共同纳入原有边界身份 SHA。实际 `since` 取原起点、七类见证提交时间所在分钟、旧精选入选日北京时间零点中的最早时刻；HuggingFace 以单独的重叠截止日补抓。`lastDigestDate` 继续表示原正式发布日期，不能为了扩展范围改写它。普通模式的原有边界和身份计算保持兼容。
+新增 `boundary.continuity` 使用 `daily-fetch-continuity` 及其结构指纹，记录 `required: true`、原精确起点 `originalSince`、旧检查点整个文件的 `archiveCheckpointSha256`、各来源的期望见证及 `overlapCutoffDate`，共同纳入原有边界身份 SHA。旧的 `daily-fetch-continuity-v1` 头只用于读取原记录。实际 `since` 取原起点、七类见证提交时间所在分钟、旧精选入选日北京时间零点中的最早时刻；HuggingFace 以单独的重叠截止日补抓。`lastDigestDate` 继续表示原正式发布日期，不能为了扩展范围改写它。普通模式的原有边界和身份计算保持兼容。
 
 旧获取 ID 只证明分页到达旧范围，不能替代正式已发布页面的去重基线。每页仍处理完整内容、继续核验整个时间窗，不在某个重复 ID 处立即终止。来源健康记录必须同时保存期望 ID、实际命中的规范 ID 及官方原始提交时间或精选入选时间；共享校验器检查二者属于同一时刻，没有实际观察记录时不能声明 `encounterVerified`。来源记录和正式候选集合仍须通过各自的数量、内容 SHA 与完整范围检查。
 

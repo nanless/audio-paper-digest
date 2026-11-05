@@ -12,7 +12,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 | Item | Supported configuration |
 |---|---|
-| Source version | 1.4.3, build 19; see the release page for available public packages |
+| Version | 1.4.3, build 19; published on 5 November 2026 |
 | Operating system | macOS 15 or later |
 | Processor | Apple Silicon, arm64; the current package does not contain both Intel and Apple Silicon architectures |
 | Signing | Local ad-hoc signing; not notarized by Apple |
@@ -20,7 +20,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 Mac and Android packages and checksums are available on the same [GitHub Releases page](https://github.com/nanless/audio-paper-digest/releases). Drag the extracted `论文速递工作台.app`, or the application inside the DMG, into Applications. If macOS blocks the first launch, verify the download source and published checksum, then use the appropriate Privacy & Security action to allow the application to open.
 
-Version 1.3.0 adds site-wide hierarchical classification, reorganizes desktop navigation, and aligns query rules with Android. See the [implementation and acceptance record (Chinese)](../../docs/workbench-1.3.0-review.md). A source version does not by itself establish that an installation package is public or has passed acceptance; download a version actually offered on the release page.
+Version 1.3.0 adds site-wide hierarchical classification, reorganizes desktop navigation, and aligns query rules with Android. See the [implementation and acceptance record (Chinese)](../../docs/workbench-1.3.0-review.md). Version 1.4.3 moves the large catalog into a background load, uses a compact browsing projection, and reduces repeated work when opening explanations and uploading cloud backups. See the [1.4.3 record (Chinese)](../../docs/workbench-1.4.3-review.md#发行状态) for automated tests, the manual acceptance not repeated, and the release state, and [client performance](../../docs/client-performance.md) for measured changes. The published package is 1.4.3; signing and asset checks are in [client release verification](../../docs/client-release-verification.md).
 
 Save edits and quit the old application normally before upgrading. Applications with the old name are not removed automatically. Old and new packages share the existing data directory and Keychain service, so do not run them simultaneously. Removing the application package leaves your personal research data in place. Export a backup before separately clearing that data.
 
@@ -34,7 +34,7 @@ Save edits and quit the old application normally before upgrading. Applications 
 
 Library search covers metadata, explanations already read, and personal notes. Use search inside the PDF reader for the original paper; PDF text is not part of the library-wide full-text index.
 
-The current source reads `client/index.json` first and uses the original catalog endpoint only after an explicit HTTP 404 or 410. Sidecars in the new format are checked against the paper identity, date, and SHA declared by the reading page; the original public addresses remain available to released applications. Corrupt formats and network failures do not trigger fallback to the original endpoint; existing data is preserved on failure. This describes source-level interface compatibility, not a newly released installation package. See the [website data adapter guide (Chinese)](../../docs/mac-app-data.md) for the full boundary.
+The current source reads `client/index.json` first and uses the original catalog endpoint only after an explicit HTTP 404 or 410. Sidecars in the new format are checked against the paper identity, date, and SHA declared by the reading page; the original public addresses remain available to released applications. Corrupt formats and network failures do not trigger fallback to the original endpoint; existing data is preserved on failure. This compatible reading shipped with 1.4.3; released versions 1.4.2 and earlier continue to use the original endpoint. See the [website data adapter guide (Chinese)](../../docs/mac-app-data.md) for the full boundary.
 
 ### Configure a model and ask a question
 
@@ -118,6 +118,6 @@ The application identifier `com.nanless.PaperDigest`, executable `PaperDigest`, 
 
 AppKit provides native windows, WebKit lays out explanations, and PDFKit displays original papers. These components work within the application; users do not set up a web server.
 
-Further documentation, in Chinese: [data and recovery](../../docs/mac-app-data.md), [validation scope](../../docs/mac-app-validation.md), and [release operations](../../docs/mac-app-release.md).
+Further documentation, in Chinese: [data and recovery](../../docs/mac-app-data.md), [validation scope](../../docs/mac-app-validation.md), [release operations](../../docs/mac-app-release.md), [client performance](../../docs/client-performance.md), and [release verification](../../docs/client-release-verification.md).
 
 In the library, choose **一键同步 WebDAV**. Use the same saved Nutstore account and folder on both devices. The action synchronizes personal reading data separately from PDFs, saved offline guides, research originals, exports, and archive history. Either part can be retried from settings. A retry after interruption uses the original pending snapshot. Full backup and restore remain separate actions. If the same record or path has different contents, the workbench keeps the local version and the other device’s original. Imported archive history is read-only. Resume an archive from the device that created it.

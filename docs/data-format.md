@@ -4,7 +4,7 @@
 
 这一页回答三个问题：各类文件保存什么、哪些值需要相互核对、失败后能否继续运行。字段的具体校验以程序为准；旧 Manual 记录的只读核验边界见 [兼容目录](../manual/README.md)。
 
-第一次阅读时，沿“候选 → 筛选决定 → 入选集合 → 正式分析 → 页面清单 → 审查 → 发布”理解各文件的关系。箭头表示后一步必须能对应前一步的输入，不表示只凭前一步文件存在就能继续。常见术语解释见 [写作约定中的术语表](writing-guide.md#术语先解释再统一称呼)。
+第一次阅读时，沿“候选 → 筛选决定 → 入选集合 → 正式分析 → 页面清单 → 审查 → 发布”理解各文件的关系。箭头表示后一步必须能对应前一步的输入，不表示只凭前一步文件存在就能继续。常见术语解释见 [写作约定中的术语表](writing-guide.md#术语先解释再统一称呼)；记录格式的登记、结构指纹和新增方法见[协议登记与结构指纹](protocols.md)。
 
 ## 数据分类
 
@@ -53,7 +53,9 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ### `filter-decisions.json`
 
-按规范论文 ID 保存模型或关键词预筛的决定、理由、原始响应、解析方式、输入 SHA 和配置指纹。模型、提示词、协议或关键词规则变化时须重新筛选；仍完整有效的候选数据不必重新抓取。
+按规范论文 ID 保存模型或关键词预筛的决定、理由、原始响应、解析方式、输入 SHA 和配置指纹。`filter-decision` 的合同和结构指纹计入本批筛选配置身份；解析规则变化会使旧决定失效。模型、提示词、协议或关键词规则变化时须重新筛选；仍完整有效的候选数据不必重新抓取。
+
+官方 PDF 在全部候选地址上都返回 404 时，筛选阶段可写一条跳过记录，避免整批停在这一篇：字段为 `related: false`、`retryable: false`、`fallback: false`、`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；该记录不带 `filterScopeEvidence`。它只说明这篇取不到官方来源，不是“论文不相关”的模型结论；读取时须逐字段核验，跳过项不进入后续正常筛选与分析集合。
 
 仅命中泛多模态词、未明确声音模态的候选会交给模型判断，并在任何付费筛选请求前取得全部这类候选的官方材料；取得或核验失败时停止，已保存的完整材料可核验后复用。摘要达到80字只满足本地预筛的长度条件，不证明它列全了论文模态。人工流程不因此新增联网。`filterScopeEvidence` 保存四个来源文件的核验信息、选取的实际原文和内容 SHA；这份证据也进入决定的输入 SHA。恢复和数据校验会重新读取核验，不能只信保存的 SHA 字段。材料只帮助模型判断实际输入、输出和评测模态，不直接把论文标为相关，也不改写原始候选。
 
@@ -108,11 +110,11 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 ## 会议独立追加窗口
 
-仅明确获准的会议剩余失败集合使用 `conference-recovery-grant-v1`。`data/runtime/conference-recovery-grants/<grantId>/` 的 `manifest.json`、`baseline-state.json` 和最后保存的 `registration.json` 不可变，绑定原 process、完整失败集合、原父子稿与候选 CAS、来源和 3轮/Reader累计6次/全文2次上限。普通状态 JSON 不能代替已核验的私有运行能力。
+仅明确获准的会议剩余失败集合使用 `conference-recovery-grant` 及其结构指纹；更早的数字版本许可按原登记只读核验。`data/runtime/conference-recovery-grants/<grantId>/` 的 `manifest.json`、`baseline-state.json` 和最后保存的 `registration.json` 不可变，绑定原 process、完整失败集合、原父子稿与候选 CAS、来源和 3轮/Reader累计6次/全文2次上限。普通状态 JSON 不能代替已核验的私有运行能力。
 
-原失败子稿保持不变；新子运行的 `reader-revision.json` 使用 `conference-reader-recovery-window-v1`，同时指向原完成父稿、原失败子稿和唯一已登记许可。`recovery-seed.json` 不可变保存正常接续的初始检查点；若先复用原付费核心摘要，必须由真实旧来源、原响应及正常引擎生成检查点，并逐字保护其余十二节，不能手写通过阶段。新 `readerRevisionProgress` 只累计本窗口轮次，process 的 `retryReleases` 按同一 grantId 只登记一次，重复执行不重新起算。
+原失败子稿保持不变；新子运行的 `reader-revision.json` 使用 `conference-reader-recovery-window` 及其结构指纹，同时指向原完成父稿、原失败子稿和唯一已登记许可；旧的 `conference-reader-recovery-window-v1` 头按原格式读取。`recovery-seed.json` 不可变保存正常接续的初始检查点；若先复用原付费核心摘要，必须由真实旧来源、原响应及正常引擎生成检查点，并逐字保护其余十二节，不能手写通过阶段。新 `readerRevisionProgress` 只累计本窗口轮次，process 的 `retryReleases` 按同一 grantId 只登记一次，重复执行不重新起算。
 
-`reader-grant-budget.json` 使用 `conference-granted-reader-budget-v1`，逐请求预留，绑定实际 Reader 身份。`reader-grant-request-<id>.json` 和内容响应的 `reader-grant-response-<id>.json` 是不可变原账；冷核须逐项与账本和真实输出 SHA 相符。未结请求保守占额，账本缺失或裁剪不能重开额度。新增请求沿公共费用记录保存，以该 grantId 作为 `runId`、新子运行 ID 的 SHA 作为默认 `unitId`，覆盖必要主分析、摘要、评分及 Reader，旧费用与旧连续失败不修改。生成、冷后处理和发布仍须核验真实会议来源及原完整链，详见[操作与恢复边界](conference-workflow.md#原额度耗尽后的独立付费恢复)。
+`reader-grant-budget.json` 使用 `conference-granted-reader-budget` 及其结构指纹，逐请求预留，绑定实际 Reader 身份；旧的 `conference-granted-reader-budget-v1` 账本按原格式读取。`reader-grant-request-<id>.json` 和内容响应的 `reader-grant-response-<id>.json` 是不可变原账；冷核须逐项与账本和真实输出 SHA 相符。未结请求保守占额，账本缺失或裁剪不能重开额度。新增请求沿公共费用记录保存，以该 grantId 作为 `runId`、新子运行 ID 的 SHA 作为默认 `unitId`，覆盖必要主分析、摘要、评分及 Reader，旧费用与旧连续失败不修改。生成、冷后处理和发布仍须核验真实会议来源及原完整链，详见[操作与恢复边界](conference-workflow.md#原额度耗尽后的独立付费恢复)。
 
 ## 会议博客审查后的 Reader 维护记录
 
@@ -156,7 +158,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 新的追加窗口使用 `conference-reader-review-maintenance-window` 及其结构指纹，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。已登记的旧窗口继续按原材料和原字段复验。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
 
-未签发准备的恢复位于本维护根 `unissued-preflight-recoveries/<executionId>/`。`before/` 保留原五份准备文件和 `member-progress.json`，`new-preflight.json` 保存正常探测快照，`receipt.json` 使用 `conference-reader-unissued-preflight-recovery-v1`，绑定维护清单、父 CAS、原文件 SHA、新预检 SHA、探测次数及是否恢复 Reader-only。只有原始 pending、generation 0、零尝试、无修订、seed、候选和请求材料时可使用；资源模式在真实 child 的认证 PDF 来源作用域内派生。
+未签发准备的恢复位于本维护根 `unissued-preflight-recoveries/<executionId>/`。`before/` 保留原五份准备文件和 `member-progress.json`，`new-preflight.json` 保存正常探测快照，`receipt.json` 使用 `conference-reader-unissued-preflight-recovery` 及其结构指纹，绑定维护清单、父 CAS、原文件 SHA、新预检 SHA、探测次数及是否恢复 Reader-only；旧的 `conference-reader-unissued-preflight-recovery-v1` 回执按原格式读取。只有原始 pending、generation 0、零尝试、无修订、seed、候选和请求材料时可使用；资源模式在真实 child 的认证 PDF 来源作用域内派生。
 
 若新快照已封存但回执未写，恢复须先核原六文件归档、当前五文件、原失败及父稿和来源 CAS，再重放原快照，不覆盖它或重新探测。正常生成的回执以 `resumedSavedPreflightFileSha256` 绑定该快照，`normalProbeInvocations` 保留原探测次数，`normalProbeInvocationsThisResume: 0` 记录本次零新探测。已有回执恢复仍核对前后字节及真实来源作用域；这些记录不授予 Reader 通过，不改旧证明、失败、次数或费用。
 
@@ -180,9 +182,9 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 共享批量调用返回 `rounds`、`failedIds`、`unstartedIds` 和 `manualHandoff`。每轮的 `inputIds` 是该轮固定集合；`attemptedIds`、`successIds`、`skippedIds`、`failedIds`、`retryableFailedIds` 和 `unstartedIds` 分开记录。下一轮只取可重试失败项，不把尚未启动或被预算/来源阻断的论文算成成功。结果数组保留每篇最近一次真实结果，`stats.roundsCompleted` 是已结束轮数；成功/失败数量按最新结果计算，不能把同篇多次尝试当成多篇成功。
 
-每篇结果和费用仍逐次保存，轮次边界等待所有在途结果与保存回调结束。会议另写不可变的 `conference-process-round-v1` 回执，绑定 process、当前 state SHA、generation 与本轮输入/成功/失败集合；历史在进入下一轮前保存原 registry 和恢复记录。轮次报告用于解释调度，不替代来源、Reader、页面、审查或发布凭证。
+每篇结果和费用仍逐次保存，轮次边界等待所有在途结果与保存回调结束。会议另写不可变的 `conference-process-round` 回执（带结构指纹），绑定 process、当前 state SHA、generation 与本轮输入/成功/失败集合；旧的 `conference-process-round-v1` 回执按原格式读取，历史在进入下一轮前保存原 registry 和恢复记录。轮次报告用于解释调度，不替代来源、Reader、页面、审查或发布凭证。
 
-日更分析和恢复入口将 `analysis-batch-retry-diagnostics-v1` 写入正式结果的 `stats.analysisBatchRetry`，绑定日期、当前封存来源引用 SHA 和本次论文范围 SHA。`digest:status` 只展示仍对应当前日期、来源和范围的诊断；后续修正已改变失败集合时，旧人工建议不能继续显示为就绪。Reader 刷新另以 `0600` 保存 `data/runtime/analysis-batch-reports/<runId>.json`，使用 `analysis-batch-diagnostics-v1`，记录本次固定论文集合、封存来源引用、轮次、失败和未启动项。两者均声明 `diagnosticOnly=true`、`newApiRequestsAuthorized=false`，不能补签成功或解锁费用。
+日更分析和恢复入口将 `analysis-batch-retry-diagnostics` 及其结构指纹写入正式结果的 `stats.analysisBatchRetry`，绑定日期、当前封存来源引用 SHA 和本次论文范围 SHA。`digest:status` 只展示仍对应当前日期、来源和范围的诊断；后续修正已改变失败集合时，旧人工建议不能继续显示为就绪。Reader 刷新另以 `0600` 保存 `data/runtime/analysis-batch-reports/<runId>.json`，使用 `analysis-batch-diagnostics` 及其结构指纹，记录本次固定论文集合、封存来源引用、轮次、失败和未启动项。旧的 `-v1` 诊断记录按原格式读取。两者均声明 `diagnosticOnly=true`、`newApiRequestsAuthorized=false`，不能补签成功或解锁费用。
 
 `manualHandoff` 使用稳定名称 `analysis-batch-manual-handoff` 和结构指纹，包含 `eligible`、`status`、`reason`、逐项 `attempts`/`noProgressRounds`/错误作用域及预算状态，以及 `eligibleIds`、`blockedIds`、`budgetExhaustedIds`。阶段完成与正文/草稿 SHA 的实质变化才算进展，时间、次数、费用变化不算。`ready` 只表示少量持续失败达到建议阈值；`newApiRequestsAuthorized=false`，失败仍是失败，额度仍按原账。服务故障、不可重试和耗尽项保留原阻断，不授予发布资格，见 [统一恢复规则](three-workflows.md#全批轮次与失败集合)。
 
@@ -197,12 +199,12 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 | `apiReaderArticle` | 读者看到的长文。 |
 | `apiReaderPlan` | 章节、术语解释、图片安排及表格、公式来源记录。 |
 | `apiReaderFigures` | 实际输入图片的来源、DOM、像素 SHA 和显示网址等身份信息。 |
-| `apiReaderAuthors` | `api-reader-author-identity-v1` 逐项核对作者姓名和机构。 |
-| `apiReaderResources` | `api-reader-resource-identity-v1` 核对原文或 Demo 来源、重定向终点及可达状态。 |
+| `apiReaderAuthors` | `api-reader-author-identity`（带登记的结构指纹）逐项核对作者姓名和机构。 |
+| `apiReaderResources` | `api-reader-resource-identity`（带登记的结构指纹）核对原文或 Demo 来源、重定向终点及可达状态。 |
 | 评分证据与稳定性裁决 | 说明八维分数及最终评分所依据的分析。 |
 | `llm_api_production` | 确认本次发布论文集合满足默认 API 要求。 |
 
-Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和公式来源；它们各管一部分要求，版本号不必相同。新发布还须满足作者和资源的 v1 来源核验要求。Reader v1/v2 及缺少任一当前来源要求的旧 v3 只供历史兼容读取。摘要级分析默认不可发布。
+`beginner-researcher` 规定正文结构，`api-reader-source-bindings` 核对表格和公式来源；两者各自登记结构指纹，指纹不必相同。新发布还须满足作者和资源来源核验的当前结构。旧的 `-v1`、`-v2`、`-v3`、`-v4` 头只用于读取原记录：Reader v1/v2 及缺少任一当前来源要求的旧 v3 只供历史兼容读取，不能据此取得新的发布资格。摘要级分析默认不可发布。
 
 机构解析无法与作者逐人绑定时，新记录明确写“机构信息未能在本次解析中与作者逐人可靠绑定”，不能据此声称论文未披露机构；旧签名仅按原字节兼容核验。原 HTML 无法保留时，只有公共来源读取逐一核验四个文件及清单绑定后，才能使用封存元数据中的作者机构。正常日更调用中传递的完整详情须与已核验来源一致，并再次核对四个文件；外部手构或克隆的对象不能自行取得许可，被修改的详情会被拒绝。合法的空作者元数据仍明确标为不可得；不改来源记录补签。
 
@@ -210,7 +212,7 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 `source_quotes` 表格的列头单位也属于数值证据。裸单元格数字须由同一指标、同一局部分句的明确单位声明支持，不能借另一指标或另一句话中的百分号、秒或毫秒；单元格已明确写出的单位继续按原数字引文规则核验。仅有共享表头而无法逐值定位时，要求按原文修复来源记录或明确单元格单位，不自动转换数值。旧成功记录和 Python 发布同样执行这项检查；`artifact_table` 仍按原表 DOM 逐格核验。
 
-`selection` 用来声明从原表选择哪些行和列。正常编译得到的 PDF 显示子表，可以另存 `sealedPdfTableSelection`（`reader-compiled-pdf-table-selection-v1`）。这里的子表是显示视图，原完整表和来源文件不改写。
+`selection` 用来声明从原表选择哪些行和列。正常编译得到的 PDF 显示子表，可以另存 `sealedPdfTableSelection`（`reader-compiled-pdf-table-selection` 及其结构指纹；旧的 `-v1` 记录按原格式读取）。这里的子表是显示视图，原完整表和来源文件不改写。
 
 生成时的热解析必须持有真实编译器产物。保存后及出版时的冷核，则从磁盘重新读取同篇四源、完整原 DOM 和独立 PDF 网格证明，再重新编译原选择，逐格核对行列、来源文本、DOM SHA 和显示值。普通手写 `artifact_table`、克隆对象或自报投影不能取得此能力；旧完整原表与 legacy PDF 证明保持原规则。
 
@@ -292,19 +294,19 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 ### 页面元数据与四份下载文件
 
-当前 Reader v3 和已保存的旧 Manual v6 论文页使用 `researcher-workbench-v1` 页面元数据，保存读者标题、原始标题、规范 arXiv ID、明确输入或由已保存并核验的来源确定的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
+新论文页使用 `researcher-workbench` 页面元数据，写入 `paper_digest_workbench_contract` 和对应的结构指纹；已保存的旧 Manual v6 页面只写 `researcher-workbench-v1`，按原字段读取。元数据保存读者标题、原始标题、规范 arXiv ID、明确输入或由已保存并核验的来源确定的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
 
 每篇有四个同源下载文件：`citation.json`、`citation.bib`、`citation.ris` 和 `rethink-context.json`。写入暂存结果前校验路径、LF/UTF-8、JSON/TeX/RIS 转义及 256 KiB 上限；四个 SHA 同时记录在页面元数据、生成清单和审查记录中。审查从 `publishedPapers` 快照重建这些文件并逐字比较，推送只允许审查记录指定的精确变更。
 
-新 `rethink-context.json` 使用 `paper-research-context-v2`、`schemaVersion=2`，标签记录位于 `assessment.tagMetadata`。页面 `paper_digest_sidecars` 中该文件的记录保存 `contract`、URL 和 SHA。旧 `researcher-sidecars-v1`、`schemaVersion=1` 使用原 `assessment.taxonomy`，原页面记录不带新的格式标识；读取时按旧格式重建，不改写原文件。格式与版本须正确配对，新旧标签字段不能混用，即使值相同或为空。其他三份引用文件保持原格式。
+新 `rethink-context.json` 使用 `paper-research-context` 和对应的结构指纹，不再写 `schemaVersion`，标签记录位于 `assessment.tagMetadata`。页面 `paper_digest_sidecars` 中该文件的记录保存 `contract`、`schemaFingerprint`、URL 和 SHA；其余三份引用文件的记录仍只保存 URL 和 SHA。发布端写给网页的客户端声明（`paper-tools__client-sidecars`）必须按白名单逐字段重建，并保留 `schemaFingerprint` 的驼峰写法，不能直接序列化 Hugo 参数 map；已发布的 2026-11-03、11-04 页面曾输出小写 `schemafingerprint`，读取端只把这一个已知别名归一化，之后仍按登记指纹严格校验。旧 `paper-research-context-v2`（`schemaVersion: 2`）和旧上下文格式 `researcher-sidecars-v1`（`schemaVersion: 1`、原 `assessment.taxonomy`）只用于读取原记录，原页面记录不带新的格式标识；读取时按旧格式重建，不改写原文件。格式头与结构指纹须正确配对，新旧标签字段不能混用，即使值相同或为空。
 
 历史版本引用采用已核验的 `sourceVersion.selectedSourceId`。输入和已保存来源都没有明确版本时，保存 `version: null` 并使用无版本 abs/PDF URL，不能猜成 `v1`。
 
 ### 分类字段、卡片与统计范围
 
-新论文把 3–5 个当前分类表中启用的首选标签写入 Hugo 的 `tags`，并记录 `paper-tag-flat-tags-v2`、选择规则、分类表版本及 SHA、有序的 `{id, facet, label}`、显式主任务和主方法。标签采用中文首选名称；既定 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 八个专名保留原形，并在分类表中配中文别名，不能扩成任意英文标签。`rethink-context.json.assessment.tagMetadata` 保存同一分类信息。
+新论文把 3–5 个当前分类表中启用的首选标签写入 Hugo 的 `tags`，并记录 `paper-tag-flat-tags` 及其结构指纹、选择规则、分类表版本及 SHA、有序的 `{id, facet, label}`、显式主任务和主方法。标签采用中文首选名称；既定 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 八个专名保留原形，并在分类表中配中文别名，不能扩成任意英文标签。`rethink-context.json.assessment.tagMetadata` 保存同一分类信息。
 
-旧页面仍按原 `paper-taxonomy-flat-tags-compat-v1` 读取，不因新发布而改写。两版的标签规则相同；日更汇总页“热门方向”只将主任务追溯到最上级统计，不计方法、条件和补充任务。
+旧页面仍按原 `paper-taxonomy-flat-tags-compat-v1` 读取；`paper-tag-flat-tags-v2` 记录也只按原头读取。两者都不因新发布而改写，标签规则与当前一致；日更汇总页“热门方向”只将主任务追溯到最上级统计，不计方法、条件和补充任务。
 
 当前标签分类与新版导航均包含386项九维概念。页首的扁平兼容字段只存直接命中项；正文和分类卡片从这些ID推导多级路径，祖先不写进直接集合，不显示空分面或兄弟方向。旧262项的原文件按SHA归档，严格纯追加时按原规则完整重放旧阶段，而非修改其绑定。会议及历史发布还核对站点 `data/`、`static/data/` 中本次SHA的完整原快照和版本目录。目录可见范围、版本投影及恢复见[标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
 
@@ -316,7 +318,7 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 ## 审查记录与远端发布
 
-审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。会议后续整批可混合旧协议 passed 与当前协议失败；passed 必须逐字段等于 canonical `page-review-passes/<stable({path,sha256})>.json` 的真实原件，核 `conference-page-content-review-v1`、`resultSha256`、路径/页 SHA 及合法原协议；不能无缓存伪造 passed 或改签原协议。失败仍严格绑定当前整批协议与原不可变 failure。
+审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。会议后续整批可混合旧协议 passed 与当前协议失败；passed 必须逐字段等于 canonical `page-review-passes/<stable({path,sha256})>.json` 的真实原件，核 `conference-page-content-review` 及其结构指纹、`resultSha256`、路径/页 SHA 及合法原协议，旧的 `conference-page-content-review-v1` 通过记录按原头和缓存核验；不能无缓存伪造 passed 或改签原协议。失败仍严格绑定当前整批协议与原不可变 failure。
 
 独立人工审查将文章语义记录 `files` 与 `machineAssets` 分开；后者使用 `manual-review-controlled-assets` 和对应的结构指纹，仅容纳来源绑定生成清单中的现存受控引用资料、词表和论文图，逐项保存 `{path, deleted: false, sha256}`。两者的精确并集必须等于完整生成及发布清单，不能漏项、夹入未知资产或给资产伪造审查者。机器资产在签发和推送时重新核验当前生成、正式同源分析、封存来源、词表、伴随文件重建及已通过且 SHA 一致的引用页。逐图记录中的站内地址只接受当前部署前缀下、同一清单和当前字节匹配的受控论文图；旧纯文章声明保持原规则。
 
@@ -365,23 +367,26 @@ npm run digest:status -- --date YYYY-MM-DD
 
 `validate:data --allow-empty` 只用于明确没有运行数据的干净 checkout。状态报告反映读取时的状态，后续推送、登记或取消配图后须重新运行。
 
-`digest:status` 将当前 **version 3** 报告保存为 `data/current/digest-run-reports/<日期>.json`。
+`digest:status` 将当前报告保存为 `data/current/digest-run-reports/<日期>.json`。当前报告写 `contract: digest-run-report` 和结构指纹，不写 `version`。
 
 | 字段 | 当前含义 |
 |---|---|
+| `dataSources` | 本次实际读取的候选、筛选决定、入选集和分析结果来源状态（`rawCandidates`、`filteredPapers`、`filterDecisions`、`deepAnalysisResult`），取值为 `current`、`archive`、`missing` 或 `invalid`。 |
 | `filter.pendingDecisions` | 候选总数减已决定数，即尚无明确决定的数量。可重试决定另计 `filter.retryableDecisions`。 |
-| `analysis.expected` / `analysis.missing` | 入选集大小，以及其中未进入分析结果的篇数。`analysis.total` 是结果记录数。 |
+| `analysis.expected` / `analysis.missing` | 入选集扣除已跳过论文后的大小，以及其中未进入分析结果的篇数。`analysis.total` 是结果记录数，`analysis.skipped` 是官方 PDF 404 已跳过篇数。 |
 | `blog.remoteOidVerified` | 实际远端 OID 是否与发布提交一致。 |
 | `blog.publicationVerified` | 完整发布凭证是否通过核验；与远端提交分别报告。 |
+| `visuals.gateComplete` | 长图完成门是否通过；不生图记录有效时也可为 `true`。 |
 | `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读时为 `null`，摘要显示 `?`。 |
 | `cover.status` | 按实际封面检查结果确定，检查失败不返回 `complete`。 |
-| `visuals.status` | 完成声明未通过资产或发布绑定时为 `incomplete`；原 `pending`/`partial_failed` 保留，清单不存在为 `missing`。 |
+| `visuals.status` | 通过资产与发布绑定检查时为 `complete`；不生图记录有效时为 `waived`；原 `pending`/`partial_failed` 保留；检查不通过为 `incomplete`，清单不存在为 `missing`。 |
+| `visuals.waived` / `cover.waived` | 当前发布的不生图记录是否有效，以及是否同时替代长图和汇总封面的完成条件。 |
 | `fetch.rawCandidateCount` | 候选快照可读且为空才是 `0`；不可读为 `null`，摘要显示 `?`。 |
 | `readProblems` | 文件存在但无法读取的项目：`invalid-json` 或 `unreadable`，后者带实际错误 `code`。尚未生成的缺失文件不进入此数组。 |
 
 分析未完成时先区分“逐篇复验不通过”与“集合缺篇”。前者按当前词表、来源和阶段检查保存稿，应定位具体阻断再选择必要修复，不直接推断原运行失败或整批重跑。
 
-读取旧报告时保留原版本：v1 的 `pendingDecisions` 计可重试决定、无 `retryableDecisions`，远端与凭证合为 `remoteVerified`，缺失视觉计数可能为 0，封面状态直接取清单；v2 的 `visuals.status` 直接取 `overallStatus`，候选缺失与空集都可能为 0，不区分坏文件和缺失文件。旧字段用于解释当时报告，最终完成仍执行当前来源、发布、部署及页面核验。
+读取旧报告时保留原版本：`version: 3` 的报告按原头读取；v1 的 `pendingDecisions` 计可重试决定、无 `retryableDecisions`，远端与凭证合为 `remoteVerified`，缺失视觉计数可能为 0，封面状态直接取清单；v2 的 `visuals.status` 直接取 `overallStatus`，候选缺失与空集都可能为 0，不区分坏文件和缺失文件。旧字段用于解释当时报告，最终完成仍执行当前来源、发布、部署及页面核验。
 
 
 归档优先使用显式 `batchDate`，刷新时间和 `lastUpdated` 不改变批次归属；缺显式日期的旧记录才按已有时间字段处理。归档仅移动原字节，不重写原稿、费用或发布输入 SHA。异日刷新过的旧分析若曾按时间戳存到其他日期目录，上一发布证明只能按当前已审生成清单的输入 SHA 和原 `batchDate` 冷查找；目标文件已存在但损坏时必须拒绝，不能用其他目录掩盖损坏。

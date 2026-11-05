@@ -37,6 +37,7 @@
 | Reader 写作、图表或修复 | 当前登记的 `prompts/current/api-reader-article.md`、`prompts/current/api-reader-repair.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
+| 客户端版本与发行 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` | 两端源码的版本号与构建号、两端 README、`docs/README.md` 与 `docs/README.en.md` 的版本段和版本列表、当期 `docs/workbench-<版本>-review.md` 的发行状态、发行附件核验 |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
 
 ## 不可破坏的边界
@@ -236,7 +237,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查根 `README.md`、`AGENTS.md`、`scripts/README.md` 及 `docs/` 下全部 Markdown 中的 `npm run <script>` 是否存在于 `package.json`；未知命令返回非零。根 `SKILL.md`、`manual/`、原型文档及链接、参数另作定向检查。新增命令时同步对应文档。
+- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`scripts/README.md`、`docs/` 与 `skills/` 下全部 Markdown 中的 `npm run <script>` 是否存在于 `package.json`；同一入口还核对文档里写的当前客户端版本（构建号）与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 是否一致，以及 `docs/README.md` 与 `docs/README.en.md` 的工作台版本列表是否包含当前版本。未知命令或版本不符返回非零。全仓 Markdown 的相对链接和按最近 `package.json` 解析的 npm 命令由 `tests/documentation.test.js` 覆盖，根 `SKILL.md`、`manual/` 和原型文档也在其中；参数和配置项由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令或升级客户端时，同步对应文档、版本段和版本列表。
 
 ## 存储保留建议
 

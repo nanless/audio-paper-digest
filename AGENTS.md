@@ -74,6 +74,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | API 路由与 Node 请求 | `scripts/utils.js` |
 | 发布 LLM 请求 | `scripts/publish_common.py` |
 | 默认 API 脚本职责 | [scripts/README.md](scripts/README.md) |
+| 客户端版本与发行状态 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts`、`docs/workbench-*-review.md#发行状态` |
 | Manual 协议 | [manual/README.md](manual/README.md) |
 
 文档与实现冲突时，先遵守当前实现；检查未通过时停止，并在同一变更中修正文档。

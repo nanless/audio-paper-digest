@@ -48,6 +48,7 @@ async function installFixture(page, initial={}) {
         case 'app.bootstrap':return copy({personal:b.personal,settings:b.settings,paper:b.selected,library:{paperCount:b.papers.length,recordCount:b.papers.length}});
         case 'aggregates.list':return {records:[],available:false,notice:'This isolated paper fixture has no source-bound aggregate manifest'};
         case 'library.status':return {paperCount:b.papers.length,recordCount:b.papers.length};
+        case 'library.retryLoad':return copy({papers:(b.papers||[]).slice(0,100),count:Math.min(100,(b.papers||[]).length),total:(b.papers||[]).length,snapshotID:'isolated-fixture'});
         case 'library.list':return copy({papers:b.papers});
         case 'library.paperDetail':return copy({paper:(b.papers||[]).find(p=>String(p.paperID||p.id)===String(payload.paperID))||(b.papers||[])[0],snapshotID:'isolated-fixture'});
         case 'library.tagIndex':return copy({papers:{},count:0,snapshotID:'isolated-fixture',websiteTaxonomy:null});

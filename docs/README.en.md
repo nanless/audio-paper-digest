@@ -42,6 +42,8 @@ Use the [workbench review and release playbook](workbench-review-playbook.md) fo
 | Android product and implementation scope | [Application design](android-app-plan.md) |
 | Android Zotero and full backups | [Zotero integration](android-zotero-research.md), [backup contract](android-cloud-contract.md) |
 | Cross-platform backup format and actual validation | [Portable fixtures](android-cloud-portable-fixtures.md), [Android validation](android-validation.md) |
+| Client performance measurements and optimization scope | [Client performance](client-performance.md) |
+| Client release verification | [Release verification](client-release-verification.md) |
 | Client security and licensing | [Security record](client-security-audit.md), [Android license inventory](../apps/android/licenses.README.en.md) |
 | Proposed static data interface | [desktop/v1 contract](desktop-data-contract.md); this optional interface is not deployed |
 | Shared test samples and display resources | [Preparation and use boundaries](../prototypes/macos-research/README.en.md) |
@@ -86,6 +88,8 @@ Standing paid authorization permits necessary subsequent windows, with original 
 | Explanation structure and source requirements | [Reader writing](reader-writing.md) |
 | Explanations, paragraphs, figures, and bilingual maintenance | [Writing rules](writing-guide.md), [writing skill](../skills/clear-technical-writing/SKILL.md) |
 | Fields, manifests, and publication receipts | [Data format](data-format.md) |
+| Data-record protocols and schema fingerprints | [Protocol registry](protocols.md) |
+| Phone-first demo videos, covers, and social copy | [Phone-first demo production](../skills/phone-first-demo-production/SKILL.md), [promo notes](workbench-promo-production.md) |
 | Hierarchical classifications, old signatures, and site-catalog synchronization | [Shared classification rules](tag-display-policy.md#三条流程共用的目录与呈现) |
 | Classification-vocabulary design | [Tag design](tag-system-design.md) |
 | Timing measurements and optimization scope | [Performance](daily-performance.md) |
@@ -96,7 +100,8 @@ Standing paid authorization permits necessary subsequent windows, with original 
 
 These records explain the problems, changes, and actual verification at the time. They are not separate current operating procedures.
 
-- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md).
+- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md).
+- Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).
 - Digest recovery, deployment, and repository cleanup: [November 2–3, 2026 retrospective](2026-11-daily-maintenance-retrospective.md).

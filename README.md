@@ -22,9 +22,9 @@
 
 个人研究是应用中的独立功能。只有用户主动研究或测试连接时，应用才调用自己配置的模型服务；这不代表推理一定在设备上完成。个人回答、实际用量、费用和授权，与网站生产任务分别保存。两部分怎样读取和保存资料，见[客户端数据流图](docs/images/client-data-flow.svg)。恢复备份沿用原记录，新增请求仍按当前任务授权执行。
 
-1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。目前 Mac 和安卓源码均为 1.4.3（构建号 19），并提供 WebDAV 个人资料同步。1.4.2 修复了 2026 年 11 月 3 日、4 日导读打不开的上下文声明问题。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。安装包是否公开，以[发行页](https://github.com/nanless/audio-paper-digest/releases)为准。
+1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。Mac 和安卓当前均为 1.4.3（构建号 19），并继续提供 WebDAV 个人资料同步；1.4.3 已于 2026-11-05 公开发布，十二件附件见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)，签名、证书和匿名下载核验见[客户端发行核验](docs/client-release-verification.md)。1.4.3 减少启动、目录、导读和云上传的重复工作，改动前后的数据和复测方法见[客户端性能](docs/client-performance.md)。1.4.2 修复了 2026 年 11 月 3 日、4 日导读打不开的上下文声明问题。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。
 
-Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本地签名，尚未通过 Apple 公证。Android 包含四种处理器架构的原生库（ABI），沿用原签名和应用标识。安装方法、实际验证范围和限制分别见两端使用说明与[客户端安全说明](docs/client-security-audit.md)。
+Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本地签名，尚未通过 Apple 公证。Android 包含四种处理器架构的原生库（ABI），沿用原签名和应用标识；公开 APK 的证书 SHA-256 与签名方案见[客户端发行核验](docs/client-release-verification.md)。安装方法、实际验证范围和限制分别见两端使用说明与[客户端安全说明](docs/client-security-audit.md)。
 
 <a id="默认行为"></a>
 <a id="架构概览"></a>
@@ -130,6 +130,8 @@ npm run digest:prepare -- YYYY-MM-DD
 
 - [项目导读](docs/project-guide.md)：先认识来源、处理结果、博客和阅读应用的关系。
 - [操作手册](SKILL.md)：正常顺序、恢复入口和完成要求。
+- [客户端性能](docs/client-performance.md)：1.4.3 的启动、目录、导读和云上传优化，缓存位置与复测方法。
+- [客户端发行核验](docs/client-release-verification.md)：两端签名、证书、十二件附件、校验表和匿名下载核验。
 - [文档索引](docs/README.md)：按读者任务找到配置、来源、解读、分类和故障说明。
 - [脚本索引](scripts/README.md)：查入口、公共模块和旧记录兼容代码。
 - [写作 skill](skills/clear-technical-writing/SKILL.md)与[项目写作约定](docs/writing-guide.md)：初学者解释、段落、术语、图表和双语要求。

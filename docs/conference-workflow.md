@@ -33,7 +33,7 @@ npm run workspace:role -- status
 
 后文的冷核，是重新打开保存的来源、稿件及凭证，执行同一组检查；重放则按原请求、响应和处理规则重新构建结果。它们不能仅靠 JSON 自报通过。“闭合”要求相关材料的来源、字节 SHA、父子身份及数量关系全部对应；具体需要哪些材料，仍以各条条件为准。
 
-会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题、类型感知八维评分、`beginner-researcher-v3` 解读及 `api-reader-source-bindings-v4` 来源核验。单篇页面和 `reader-facing-v3` 会议汇总使用现行标签体系，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。
+会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题、类型感知八维评分、`beginner-researcher` 解读及 `api-reader-source-bindings` 来源核验；两者分别按登记的结构指纹核对。单篇页面和 `reader-facing-page` 会议汇总使用现行标签体系，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。旧的 `beginner-researcher-v3`、`api-reader-source-bindings-v4` 和 `reader-facing-v3` 头只用于读取原记录。
 
 会议汇总只读取已通过来源、解读和分类检查的单篇结果，不再让模型总结整批，因此不会为了汇总重复生成每篇深度解读。队列入口只协调已筛选会议的处理和发布，不负责获取或筛选。
 
@@ -107,7 +107,7 @@ npm run conference:discover -- --apply \
 
 ## 筛选前提取摘要证据
 
-筛选前必须完成离线 PDF 摘要证据批次。程序认证 discovery catalog/report，把每篇唯一 `exact` PDF 安全复制到隔离目录，生成绑定原始记录的对应文件，再使用固定 PyMuPDF 提取器。`abstract-locator-v1` 只取前两页中唯一、且有明确结束标题的 Abstract 原文，不总结、不调用模型，也不作入选决定。
+筛选前必须完成离线 PDF 摘要证据批次。程序认证 discovery catalog/report，把每篇唯一 `exact` PDF 安全复制到隔离目录，生成绑定原始记录的对应文件，再使用固定 PyMuPDF 提取器。`conference-abstract-locator` 及其结构指纹只取前两页中唯一、且有明确结束标题的 Abstract 原文，不总结、不调用模型，也不作入选决定。
 
 摘要缺失、歧义或过短记为不可用；提取器失败则阻止继续，不能自动排除这篇论文。命令如下：
 
@@ -137,7 +137,7 @@ npm run conference:evidence -- apply \
 
 这样既避免误启动数万篇任务，也减少小批次恢复时反复扫描已有回执的本地开销。状态保存在 `data/runtime/conference-filter-evidence-runs/<runId>/`。恢复先重验已完成成员的回执、摘要定位结果、文本及解析证据 SHA；半成品、提取器错误或字节变化都会停止，不能改成排除决定。
 
-非 AAAI 会议继续使用不带 `profile` 的默认定位实现。只有 `aaai-2026` 使用 `aaai-2026-bare-introduction-v1`，允许前两页唯一独占行 `Introduction` 作为摘要终点。实现 SHA 必须来自代码登记表，CLI 不接受任意 profile/hash；更换 profile 必须建立新运行，不能改写旧回执。
+非 AAAI 会议继续使用不带 `profile` 的默认定位实现。只有 `aaai-2026` 使用 `conference-abstract-bare-introduction-profile`（带结构指纹），允许前两页唯一独占行 `Introduction` 作为摘要终点。实现 SHA 必须来自代码登记表，CLI 不接受任意 profile/hash；更换 profile 必须建立新运行，不能改写旧回执。
 
 全集完成后才生成 `evidence-catalog.json` 和 `evidence-report.json`。筛选通过 `loadEvidenceHandle()` / `evidenceHandleSnapshot()` 读取已经认证的对象，把 catalog/report/state、各篇回执和摘要 SHA、定位版本一起纳入输入、请求及恢复核验。
 
@@ -145,7 +145,7 @@ npm run conference:evidence -- apply \
 
 ## 配置与执行会议筛选
 
-当前 `conference-filter-v6` 保存候选发现记录、完整摘要证据目录与报告、逐篇回执和定位信息，并绑定来源 SHA、选择规则、提示词、模型、请求格式和标签词表 SHA。记录分别标明入选、排除、待处理或失败；全部论文处理完成且没有失败，任务才记为 `complete`。
+当前 `conference-filter`（带结构指纹）保存候选发现记录、完整摘要证据目录与报告、逐篇回执和定位信息，并绑定来源 SHA、选择规则、提示词、模型、请求格式和标签词表 SHA；旧 `conference-filter-v6`、`-v5` 记录按原头读取。记录分别标明入选、排除、待处理或失败；全部论文处理完成且没有失败，任务才记为 `complete`。
 
 `conference:filter` 管理配置、状态和显式人工决定；`conference:filter:run` 是生产 LLM 筛选入口。它逐篇核验官方记录和完整输入，通过 `requestLlmJson()` 使用项目路由、代理及同池等权轮转的账号池：
 
@@ -225,7 +225,7 @@ npm run conference:process -- --status --verify-files \
 
 `--concurrency` 默认 1，范围 1–60，覆盖单篇处理生命周期；每篇进入分析引擎时内部并发为 1，单篇本轮不会自行重复跑整条流水线。初始有资格的成员先统一完成正常首轮，全部在途结果保存后只续可重试失败项。
 
-总轮数读取公共 `PD_ANALYSIS_BATCH_MAX_ROUNDS`，默认3，但不超过原单篇3次尝试窗口及其剩余额度；成功项不再请求模型。每轮保存不可变的 `conference-process-round-v1` 回执，语义进展读取原分析/恢复记录中的完成阶段、正文和草稿，不以尝试或费用增加代替。
+总轮数读取公共 `PD_ANALYSIS_BATCH_MAX_ROUNDS`，默认3，但不超过原单篇3次尝试窗口及其剩余额度；成功项不再请求模型。每轮保存不可变的 `conference-process-round` 回执（带结构指纹），语义进展读取原分析/恢复记录中的完成阶段、正文和草稿，不以尝试或费用增加代替。
 
 会议外层并发仅决定同时处理多少篇，不改变来源计划、模型、单篇内部并发、原请求额度或整批轮次。Reader 重阶段仍由原 `PD_API_READER_CONCURRENCY` 独立限流；正常完整分析修订仍受原主分析配置且最多3槽限制。积压主要是 Reader 且原配置为10时，可显式使用 `--concurrency 10` 填满已有槽位；不要为加速更改已绑定的模型或预算。
 
@@ -779,12 +779,12 @@ process 的重试窗口和子运行固定轮次是两个上限；任一实际耗
 
 ### 顺序处理已筛选会议
 
-队列使用 `conference-queue-plan-v1` 计划，按数组顺序完成一个会议的 `process → generate → review → push → verify`，再进入下一个。每项指定原 catalog/report/filter：
+队列使用 `conference-queue-plan` 计划并写入对应的结构指纹，按数组顺序完成一个会议的 `process → generate → review → push → verify`，再进入下一个。旧的 `conference-queue-plan-v1`（`version: 1`）只用于读取原计划。每项指定原 catalog/report/filter：
 
 ```json
 {
-  "contract": "conference-queue-plan-v1",
-  "version": 1,
+  "contract": "conference-queue-plan",
+  "schemaFingerprint": "08c8282ce9549b8c7867da4e00363302af0827c886217123fe75b1f9af7e5a3d",
   "conferences": [
     {
       "conferenceId": "acl-2026",
@@ -1092,7 +1092,7 @@ npm run conference:migrate-process -- --apply \
 
 随后使用同一入口的 `--postprocess-only --source-corrections ABSOLUTE_PATH`，清单必须物理登记在原 process 的对应私有目录，绑定停稳状态、完整获准集合、每篇原稿与新子运行固定 UUID。不能同时传 `--reader-corrections`，不能混入付费调度。
 
-资源纠正使用 `source-resource-corrections/` 内的 `conference-source-resource-correction-batch-v1`；单句核心纠正使用独立 `source-core-corrections/` 与 `conference-source-core-correction-batch-v1`。两份合同、清单、记录及回执分别验证，不共用编辑权限。
+资源纠正使用 `source-resource-corrections/` 内的 `conference-source-resource-correction-batch` 及其结构指纹；单句核心纠正使用独立 `source-core-corrections/` 与 `conference-source-core-correction-batch` 及其结构指纹。两份合同、清单、记录及回执分别验证，不共用编辑权限。
 
 每批1–15篇，授权集合、来源集合与记录集合必须完全一致；本任务的资源纠正须一次覆盖已识别的全部11篇。资源纠正不能改核心；核心纠正仅替换来源明确支持的唯一一句，保护其余十二节、资源和完整八维评分对象，不能借资源理由修正权限。
 

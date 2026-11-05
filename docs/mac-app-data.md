@@ -4,7 +4,7 @@
 
 ## 网站资料与个人研究
 
-当前源码先从站点前缀下的 `client/index.json` 读取目录入口，再取得相对于该入口的搜索分片。只有新入口明确返回 HTTP 404 或 410，才读取原来的 `index.json`。格式损坏、未知结构指纹、服务器错误和普通网络故障均不能改读旧入口。已发行的旧客户端继续使用原入口；源码中的兼容读取不表示已经重新发行客户端。
+当前源码先从站点前缀下的 `client/index.json` 读取目录入口，再取得相对于该入口的搜索分片。只有新入口明确返回 HTTP 404 或 410，才读取原来的 `index.json`。格式损坏、未知结构指纹、服务器错误和普通网络故障均不能改读旧入口。已发行的旧客户端继续使用原入口；1.4.3 已包含这组兼容读取。
 
 分片就是将大目录拆成的若干小文件。应用核对每份文件的字节、大小、条数和 SHA 内容指纹，全部成功后才替换本机目录快照。快照表示某个时点的一份完整目录。取消或失败时，上一份完整目录继续可用，不把已经下载的一部分当作全站结果。新同步保存的本机目录也带结构指纹；已有目录按它实际保存的格式读取。未知或混用格式不能当成空目录重新保存。
 
@@ -18,7 +18,7 @@
 
 | 资料 | 保存范围 |
 |---|---|
-| 网站缓存 | `PublishedLibrary/` 下的目录、正文修订、图片、指定版本 PDF 与引用记录 |
+| 网站缓存 | `PublishedLibrary/` 下的目录、正文修订、图片、指定版本 PDF 与引用记录；Android 的 `PublishedLibrary/offline-index.json` 是启动用派生索引，可重建，不作为发布或阅读资格的权威 |
 | 个人存储 | 笔记、标注、收藏、待读、阅读状态、任务及模型会话 |
 | 模型材料 | `ModelUsage/` 下的实际输入、响应、来源、用量和恢复记录 |
 | Zotero 记录 | 目标身份、选定材料、逐步结果与续传检查点 |
@@ -73,6 +73,10 @@ PDF 保存实际字节 SHA、来源、版本和物理页数。原链接更新后
 
 ## 开发接口与依据
 
-下列接口供应用界面向本机服务请求操作，不是网页可以任意调用的公共网络 API：`library.status`、`library.sync`、`library.list`、`library.search`、`library.article`、`library.citationFile`、`library.downloadPDF`、`library.network` 与 `library.cancel`。读取论文、来源与版本时使用明确身份；进度返回实际阶段、完成数与总量。
+下列接口供应用界面向本机服务请求操作，不是网页可以任意调用的公共网络 API：`library.status`、`library.sync`、`library.list`、`library.search`、`library.article`、`library.citationFile`、`library.downloadPDF`、`library.paperDetail`、`library.tagIndex`、`library.retryLoad`、`library.network` 与 `library.cancel`。读取论文、来源与版本时使用明确身份；进度返回实际阶段、完成数与总量。
+
+`library.list` 默认返回完整行；传入 `compact: true` 时省略逐篇完整引用和官网分类记录，只保留浏览所需字段。省略的两部分由 `library.tagIndex` 按目录快照提供，`library.paperDetail` 按论文 id 返回完整行。分类证据按目录 `snapshotID` 与网页词表内容身份（`snapshotContentSHA256`、`versionsContentSHA256`）复用，个人资料变化不会重新发送；`library.paperDetail` 只按 id 取当前或已移除论文的完整行。
+
+启动只在主线程同步解码 8 MiB 以内的小目录；超过 8 MiB 的 `current.json` 与全文索引都在后台任务中载入。就绪前 `library.status` 返回 `loading` 且不带 `snapshotID`，读取命令等待就绪，不会把尚未载入当成空目录。载入失败后由命令级 `library.retryLoad` 显式重试，其他命令不会因失败反复全量读取。备份恢复在暂存完成和替换完成后都等待目录就绪，替换失败时回滚到原目录。
 
 实现依据：[BackupCodec](../apps/macos/Sources/BackupCodec.swift)、[RestoreLocalPolicy](../apps/macos/Sources/RestoreLocalPolicy.swift)、[ModelService](../apps/macos/Sources/ModelService.swift)。当前测试与实际操作范围见[验证说明](mac-app-validation.md)。

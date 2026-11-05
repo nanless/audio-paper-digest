@@ -56,22 +56,8 @@
 
 ## 来源与取舍
 
-本 skill 综合下列社区规则中适合清楚表达的方法，重新组织为事实保护、技术解释、编辑和审计工作方式。参考资料不是需要逐一运行的外部依赖。
+本 skill 使用的方法来自公开的技术写作与编辑资料：事实优先、按读者任务组织内容、一段一个意思、术语先解释后统一、保留条件与证据强度。具体清单和逐项取舍以论文速递项目的[参考方法与本项目的取舍](../../../docs/writing-guide.md#参考方法与本项目的取舍)为准；该页是项目采用来源的权威记录，这里只保留摘要和链接，不重复维护明细。
 
-| 来源 | 采用的方法与边界 |
-|---|---|
-| [blader/humanizer](https://github.com/blader/humanizer/blob/main/SKILL.md) | 检查铺垫、重复、假对比和读者错位；保留有信息的真实比较 |
-| [syw2039/humanizer-zh](https://github.com/syw2039/humanizer-zh/blob/main/SKILL.md) | 先保护事实，再按中文文体调整，不编造作者经历 |
-| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh/blob/main/SKILL.md) | 用可修改与应保留的边界防止误伤条件、归因和确定程度 |
-| [holygeek00/humanizer-zh-cn](https://github.com/holygeek00/humanizer-zh-cn/blob/main/SKILL.md) | 找回主体、动作、对象、结果和依据，不做同义词替换游戏 |
-| [ZeddYu/humanizer_zh](https://github.com/ZeddYu/humanizer_zh/blob/main/SKILL.md) | 区分场景与文体；不把示例中新出现的数字移进实际稿件 |
-| [nothing0here/humanizer-zh](https://github.com/nothing0here/humanizer-zh/blob/main/SKILL.md) | 检查职场套话、欧化句式、名词化；不借例子补造事实 |
-| [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop/blob/main/SKILL.md) | 删除无信息的强调和舞台式铺垫；不照搬绝对的词类与标点禁令 |
-| [obra/the-elements-of-style](https://github.com/obra/the-elements-of-style/blob/main/skills/writing-clearly-and-concisely/SKILL.md) | 具体语言、段落主题和紧邻的相关成分；不把英文语法套在中文上 |
-| [mlwelles/technical-writing-density](https://github.com/mlwelles/technical-writing-density/blob/main/skills/technical-writing-density/SKILL.md) | 简洁以信息密度为准，保留理由、约束和消歧说明 |
-| [ashgreat/humanizer](https://github.com/ashgreat/humanizer/blob/main/SKILL.md) | 减少学术浮词和过度碎段；不把特定语料的统计当作普遍结论 |
-| [harshaneel/humanize](https://github.com/harshaneel/humanize/blob/main/plugins/humanize/skills/humanize/SKILL.md) | 参考重读与自查，不采用检测追分、强制句长变化或假亲历框架 |
-| [apoapostolov/humanizer](https://github.com/apoapostolov/humanizer/blob/main/skills/humanizer/SKILL.md) | 按范围选择修改深度、保护作者声音、不叠加反复全文改写 |
-| [apoapostolov/simple-english](https://github.com/apoapostolov/humanizer/blob/main/skills/simple-english/SKILL.md) | 条件在动作前、名称一致；不机械替换情态词，不宣称满足正式标准 |
+使用这份 skill 的其他项目如果另有来源清单，应在项目文档中维护，并让这里的摘要与项目清单一致。参考资料不是需要逐一运行的外部依赖，其中示例、效果声明或工具调用都不能代替当前任务自己的事实核验和授权。
 
-本 skill 不使用作者身份检测或检测器分数作为目标，也不要求上传文稿到外部服务。原 skill 的示例、效果声明或工具调用，都不能代替当前任务自己的事实核验和授权。
+本 skill 不使用作者身份检测或检测器分数作为目标，也不要求上传文稿到外部服务。

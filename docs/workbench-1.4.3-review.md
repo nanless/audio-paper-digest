@@ -4,7 +4,7 @@ Mac 和 Android 的源码版本均为 1.4.3，构建号均为 19。1.4.3 不改�
 
 ## 目录与启动
 
-Mac 的目录列表改为紧凑投影：列表不再逐篇携带完整 citation 与官网分类记录，改为按快照加载分类证据、打开论文时按 id 取完整行；列表行直接构造，不再逐篇编码再解码。大目录的解码移到后台，界面先显示 loading，就绪后自行刷新；失败后由显式重试入口重新载入，不会被每条命令反复触发全量读取。
+Mac 的目录列表改为紧凑投影：列表不再逐篇携带完整 citation 与官网分类记录，改为按快照加载分类证据、打开论文时按 id 取完整行；列表行直接构造，不再逐篇编码再解码。大目录的解码移到后台，界面先显示 loading，就绪后自行刷新；载入失败后由命令级 `library.retryLoad` 显式重试，界面上的“重新读取本机目录”按钮尚未接入该命令，其他命令也不会因失败反复触发全量读取。
 
 Android 启动改用轻量离线索引，只读取小索引并核对文件集合、大小与时间；索引缺失或损坏时回退一次全扫重建。导读与指针保存时原子更新索引，坏指针保留为负条目，避免每次启动反复全扫。
 
@@ -20,12 +20,12 @@ Mac 同步把已核验分片传给汇总暂存，省掉重复读取与解析，�
 
 ## 验证与发行
 
-Mac 全套件、Android 全量单元测试与 lint 均通过。版本升级后两端使用同一版本号与构建号；安装包按发行流程另行登记，未完成的本机签名与验收项目如实保留。
+Mac 全套件、Android 全量单元测试与 lint 均通过，两端安装包完成包体校验。1.4.3 没有重新执行 69 项人工图形验收，也未新增实体机或完整辅助功能遍历；这些项目沿用原版本的通过记录和限制，不能写成本轮重新完成。
 
 ## 发行状态
 
-1.4.3 已公开发布，标签 `v1.4.3` 指向 `47c30d98`，Release 含十二件附件：Mac 的 ZIP、DMG 与四件发布材料，Android 的正式签名 APK 与五件构建材料。
+1.4.3 已于 2026-11-05 公开发布，地址为 [v1.4.3](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)，标签 `v1.4.3` 指向提交 `47c30d98`。Release 含十二件附件：Mac 的 ZIP、DMG、RELEASE_NOTES、SHA256SUMS、build-info 与 release-manifest，Android 的正式签名 APK、ANDROID-SHA256SUMS、android-build-info、android-source-inputs、android-runtime-materials 与 android-release-manifest。
 
-Android 签名使用项目发行签名库，证书 SHA-256 为 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，签名后通过 `apksigner` 验证。签名口令保存在本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目中，没有写入仓库或发布材料；签名入口仍然要求终端交互，本次通过本机钥匙串提供口令完成。
+Android 签名使用项目发行签名库，公开 APK 的证书 SHA-256 为 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，`apksigner verify` 通过，签名方案为 v3。签名口令保存在本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目中；钥匙串只存口令，签名库和私钥在仓库外单独保存，口令没有写入仓库或发布材料。签名入口仍然要求终端交互，本次通过本机钥匙串提供口令完成。
 
-发布前已重新下载十二件附件，Mac 按 `SHA256SUMS`、Android 按 `ANDROID-SHA256SUMS` 复核通过；匿名访问 Release 页面与各附件均为 HTTP 200，文件大小与本地产物一致。人工适用验收与真机项目仍按各自记录另行维护，不以本次自动测试代替。
+发布前已重新下载十二件附件，Mac 按 `SHA256SUMS`、Android 按 `ANDROID-SHA256SUMS` 复核通过；匿名访问 Release 页面与各附件均为 HTTP 200，文件大小与本地产物一致。签名对照、附件表与核验步骤见[客户端发行核验](client-release-verification.md)，性能改动的前后数据见[客户端性能](client-performance.md)。

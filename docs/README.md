@@ -49,6 +49,8 @@
 | Android Zotero 与完整备份 | [Zotero 接入](android-zotero-research.md)、[完整备份](android-cloud-contract.md) |
 | 两端全资料同步设计与验收 | [同步与冲突处理](workbench-full-webdav-sync.md) |
 | 跨端备份格式与实际验证 | [跨端格式](android-cloud-portable-fixtures.md)、[Android 验证](android-validation.md) |
+| 客户端性能测量与优化范围 | [客户端性能](client-performance.md) |
+| 客户端发行核验 | [发行核验](client-release-verification.md) |
 | 客户端安全与许可 | [安全说明](client-security-audit.md)、[Android 许可清单说明](../apps/android/licenses.README.md) |
 | 后续静态数据接口设计 | [desktop/v1 数据合同](desktop-data-contract.md)，当前并未部署该接口 |
 | 两端共用的测试样稿与显示资源 | [样稿准备与使用边界](../prototypes/macos-research/README.md) |
@@ -93,6 +95,8 @@
 | 解读长文的结构与来源要求 | [解读写作](reader-writing.md) |
 | 怎样解释、分段、用图和维护双语 | [写作约定](writing-guide.md)、[写作 skill](../skills/clear-technical-writing/SKILL.md) |
 | 字段、清单与发布凭证 | [数据格式](data-format.md) |
+| 数据记录协议与结构指纹 | [协议登记](protocols.md) |
+| 制作手机端演示短片、封面与发帖文案 | [手机端演示制作](../skills/phone-first-demo-production/SKILL.md)、[宣传素材复盘](workbench-promo-production.md) |
 | 多级分类、旧签名与站点目录同步 | [统一分类规则](tag-display-policy.md#三条流程共用的目录与呈现) |
 | 分类词表的设计背景 | [标签设计](tag-system-design.md) |
 | 耗时测量与优化范围 | [性能说明](daily-performance.md) |
@@ -104,6 +108,7 @@
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
 - 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)。
+- Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
 - 两次日更的恢复、上线和仓库清理：[2026 年 11 月 2 日、3 日复盘](2026-11-daily-maintenance-retrospective.md)。

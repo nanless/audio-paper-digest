@@ -2,11 +2,15 @@
 
 ## 当前源码与已发行版本
 
-Mac 和 Android 的当前源码统一为 **1.4.3（构建号 19）**。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+Mac 和 Android 的当前源码统一为 **1.4.3（构建号 19）**，1.4.3 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+
+## 1.4.3 公开发行
+
+公开 APK 为 `paperdigest-android-1.4.3-19-universal.apk`，versionName 1.4.3、versionCode 19，minSdk 28、targetSdk 37，包含四种 ABI，证书 SHA-256 为 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，`apksigner verify` 通过并使用 v3 方案。1.4.3 完成全量单元测试、lint 与包体校验；没有重做 86 项人工验收，也没有新增实体机或完整 TalkBack 遍历。安装、覆盖升级和真机操作的最新完整范围仍属 1.3.0，见下节。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)，启动与导读性能改动见[客户端性能](client-performance.md)。
 
 ## 1.3.3 安卓阅读排版修复版
 
-当时的源码版本为 **1.3.3（构建号 11）**，针对自动同步、导读打开速度、DNS 和阅读器异常退出、手机正文排版进行修复。新增紧凑排版和阅读页字号操作见 [1.3.3 审改记录](android-1.3.3-review.md)，自动同步与异常恢复的前序范围见 [1.3.2 审改记录](android-1.3.2-review.md)，正式安装包是否公开以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。该修复版独立更新安卓；Mac 保持 1.3.0，不能把安卓的新增测试记成 Mac 重新验收。
+当时的源码版本为 **1.3.3（构建号 11）**，针对自动同步、导读打开速度、DNS 和阅读器异常退出、手机正文排版进行修复。新增紧凑排版和阅读页字号操作见 [1.3.3 审改记录](android-1.3.3-review.md)，自动同步与异常恢复的前序范围见 [1.3.2 审改记录](android-1.3.2-review.md)，正式安装包是否公开以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。该修复版独立更新安卓；当时 Mac 保持 1.3.0，不能把安卓的新增测试记成 Mac 重新验收。
 
 ## 1.3.0 既有联合发行记录
 
@@ -80,6 +84,8 @@ API 28、API 35 是 Android 系统接口级别，不是应用版本号。模拟�
 - 官方 Zotero 离线读取结果适用于已测试的 1.0.0-247 和指定归档。群组附件不使用 WebDAV。
 
 ## 发行状态
+
+当前公开版本为 1.4.3（构建号 19），标签 `v1.4.3` 指向提交 `47c30d98`，Release 含十二件附件，公开后匿名下载与 SHA 复核通过。1.4.3 的安装包核验、证书和附件范围见[客户端发行核验](client-release-verification.md)；本轮没有重做 86 项人工验收。
 
 1.3.0 联合发行固定来源为 `a39fa8d0`。两端正常安装包、原 Android 签名、旧资料升级、远端注释标签、发行说明及十二件公开下载均已核验，具体环境与继承范围见该版本记录。1.3.2 安卓修复版的新增范围另列，不复用 Mac 版本号。1.0.0、1.0.1 的旧 Release 条目已移除，Git 标签、历史和原签名及升级验证凭据保留。
 
