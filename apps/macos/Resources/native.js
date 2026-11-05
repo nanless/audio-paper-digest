@@ -16,6 +16,7 @@ const state={paper:null,article:null,personal:{},settings:{},summary:{},catalog:
 let library,zotero,storageUI,noteTimer,readingTimer,opening=0,guideFrame,noteSaving,annotationSaving,noteEditorRevision=0;
 const annotationDrafts=new Map();let annotationTimer,pdfRequest=0,pdfPending=null,settingsReload=0,settingsEvents=0,previewRequest=0;
 const readingWrites=new Map();
+let personalFlush=null,personalFlushUnsupported=false;
 let fontTarget=null,fontSaving=null,fontRevision=0;
 let favoriteSaving=false;
 function updateFavoriteButton(){const saved=(state.personal.favorites||[]).includes(state.paper?.id),future=!favoriteCollectionsWritable(state.personal);$('favorite').setAttribute('aria-pressed',String(saved));$('favorite').setAttribute('aria-label',saved?'取消收藏当前论文':'收藏当前论文');$('favorite').disabled=favoriteSaving||!!future||!state.paper;$('favorite').title=future?'请升级工作台后编辑收藏':favoriteSaving?'正在保存收藏…':saved?'取消收藏':'收藏论文';}
@@ -186,11 +187,7 @@ function originalFrameHTML(frame){
 }
 window.paperDigestFlushPendingNote=async(syncCommit=false)=>{
  if(fontSaving)await fontSaving;
- await saveNote();await saveAnnotations();
- if(state.paper){
-  const snapshot=readingSnapshot(),saved=state.personal.readingState?.[snapshot.paperID];
-  if(!syncCommit||Object.entries(snapshot).some(([key,value])=>saved?.[key]!==value))await saveReading();
- }
+ await flushPersonalWrites({reading:true,syncCommit});
  return {saved:true};
 };
 window.paperDigestArchiveHTML=()=>{if(!state.paper||!state.article||guideFrame?.dataset.paperID!==state.paper.id||guideFrame?.dataset.revision!==state.article.revisionSHA256)return null;return {paperID:state.paper.id,revision:state.article.revisionSHA256,html:originalFrameHTML(guideFrame)};};
@@ -303,8 +300,9 @@ function setReadingSplit(value){const ratio=Number.isFinite(value)?Math.max(38,M
 function readingSnapshot(extra={}){return {paperID:state.paper?.id,question:$('question').value,scope:$('evidence-scope').value,from:Number($('range-from').value),to:Number($('range-to').value),chapter:Number($('pdf-chapter').value),split:parseFloat(getComputedStyle($('reading-area')).getPropertyValue('--split'))||46,mode:state.mode,pdfPage:state.pdfStatus.page||1,pdfOpen:initialGuideSnapshot()?.waiting?true:state.pdf,guideScroll:guideScroll(),...extra};}
 async function saveReading(extra={}){if(!state.paper)return;const snapshot=readingSnapshot(extra),revision=(readingWrites.get(snapshot.paperID)||0)+1;readingWrites.set(snapshot.paperID,revision);await call('personal.reading',snapshot);if(readingWrites.get(snapshot.paperID)!==revision)return;state.personal={...state.personal,readingState:{...(state.personal.readingState||{}),[snapshot.paperID]:{...snapshot,updatedAt:new Date().toISOString()}}};}
 async function saveNote(){
+ if(personalFlush)await personalFlush.catch(()=>{});
  if(noteSaving)return await noteSaving;
- noteSaving=(async()=>{while(state.paper&&state.noteDirty){clearTimeout(noteTimer);const id=state.paper.id,text=$('note-editor').value;const saved=await call('personal.note',{paperID:id,text,baseRevision:noteEditorRevision});state.personal={...state.personal,notes:{...(state.personal.notes||{}),[id]:saved}};if(state.paper?.id===id)noteEditorRevision=saved.revision;if(state.paper?.id===id&&$('note-editor').value===text){state.noteDirty=false;$('note-status').textContent='已保存到本机';}else if(state.paper?.id!==id)break;}})();
+ noteSaving=(async()=>{while(state.paper&&state.noteDirty){clearTimeout(noteTimer);const id=state.paper.id,text=$('note-editor').value;const saved=await call('personal.note',{paperID:id,text,baseRevision:noteEditorRevision});applyNoteSave(id,saved,text);if(state.paper?.id!==id)break;}})();
  try{return await noteSaving;}finally{noteSaving=null;}
 }
 function restoreDraft(p){
@@ -352,9 +350,7 @@ window.paperDigestInstallOfflineReceipt=async(receipt,presentationID,previousPap
  if(!receipt?.paper?.id||!receipt.paper.offlinePackageID||(state.paper?.id||'')!==previousPaperID)throw new Error('阅读资料已变化，未接收其他论文的离线快照');
  const token=nextOpening(),previous={paper:state.paper,article:state.article,pdf:state.pdf,pdfStatus:{...state.pdfStatus},mode:state.mode,view:state.view};
  const current=()=>token===opening&&state.paper===previous.paper;
- await saveNote();if(!current())throw new Error('保存期间阅读资料已变化');
- await saveAnnotations();if(!current())throw new Error('保存期间阅读资料已变化');
- if(state.paper)await saveReading();if(!current())throw new Error('保存期间阅读资料已变化');
+ await flushPersonalWrites({reading:true,syncCommit:true});if(!current())throw new Error('保存期间阅读资料已变化');
  const personal=await call('personal.snapshot');if(!current())throw new Error('阅读资料已变化，未安装过期快照');
  state.personal=personal;nativeOfflineTransaction={id:presentationID,token,previous};
  try{await installReading(receipt.paper,receipt.article);if(token!==opening||state.paper!==receipt.paper)throw new Error('阅读资料已变化，未确认过期快照');return {installed:true,paperID:receipt.paper.id,offlinePackageID:receipt.paper.offlinePackageID};}
@@ -374,7 +370,7 @@ async function openPaper(p,options={}){
  if(p.offlinePackageID)return openOffline(p.offlinePackageID,options);
  const token=nextOpening();
  try{
-  await saveNote();await saveAnnotations();await saveReading();if(token!==opening)return;
+  await flushPersonalWrites({reading:true,syncCommit:true});if(token!==opening)return;
   state.pdf=false;layoutPDF();await call('app.setPaper',p);if(token!==opening)return;
   if(options.recordHistory!==false&&returnRoute?.view!=='reader')rememberRoute(returnRoute);updateBack();
   await installReading(p,null,options);$('article').innerHTML='<div class="loading-state">读取完整图文导读…</div>';
@@ -384,16 +380,72 @@ async function openPaper(p,options={}){
 }
 async function openOffline(id,options={}){
  const token=nextOpening();
- try{await saveNote();await saveAnnotations();await saveReading();if(token!==opening)return;
+ try{await flushPersonalWrites({reading:true,syncCommit:true});if(token!==opening)return;
  const result=await call('storage.open',{id});if(token!==opening)return;await installReading(result.paper,result.article,options);toast('正在阅读已核验离线快照，未联网判断网站后续更新');}
  catch(e){if(token===opening)error(e);}
 }
 function scheduleReading(){clearTimeout(readingTimer);const owner=state.paper?.id;readingTimer=setTimeout(()=>{if(owner&&state.paper?.id===owner)saveReading().catch(error);},500);}
 async function saveAnnotations(){
+ if(personalFlush)await personalFlush.catch(()=>{});
  if(annotationSaving)return annotationSaving;
  clearTimeout(annotationTimer);
- annotationSaving=(async()=>{while(annotationDrafts.size){const [key,draft]=annotationDrafts.entries().next().value;const snapshot={...draft};await call('personal.annotationNote',snapshot);if(annotationDrafts.get(key)?.comment===snapshot.comment)annotationDrafts.delete(key);}})();
+ annotationSaving=(async()=>{while(annotationDrafts.size){const [key,draft]=annotationDrafts.entries().next().value;const snapshot={...draft};await call('personal.annotationNote',snapshot);applyAnnotationSave({key,snapshot});}})();
  try{return await annotationSaving;}finally{annotationSaving=null;}
+}
+// One round trip for the personal writes a single tick asks for. The native side keeps the
+// individual commands' order, note revision check and reading identity guard, stops at the
+// first failure and reports what already landed, so a failed item keeps its dirty state
+// instead of silently disappearing or being re-sent with a stale base revision.
+function readingSnapshotDirty(snapshot){const saved=state.personal.readingState?.[snapshot.paperID];return !saved||Object.entries(snapshot).some(([key,value])=>saved[key]!==value);}
+function applyNoteSave(id,saved,text){state.personal={...state.personal,notes:{...(state.personal.notes||{}),[id]:saved}};if(state.paper?.id!==id)return;noteEditorRevision=saved.revision;if($('note-editor').value===text){state.noteDirty=false;$('note-status').textContent='已保存到本机';}}
+function applyAnnotationSave(item){if(annotationDrafts.get(item.key)?.comment===item.snapshot.comment)annotationDrafts.delete(item.key);}
+function applyReadingSave(snapshot,revision){if(readingWrites.get(snapshot.paperID)!==revision)return;state.personal={...state.personal,readingState:{...(state.personal.readingState||{}),[snapshot.paperID]:{...snapshot,updatedAt:new Date().toISOString()}}};}
+// Hosts without personal.flush keep the old per-command writes; this path is only used after
+// the batch call itself failed and the same writes then succeeded one by one.
+async function fallbackPersonalWrites(payload,drafts,revision){
+ if(payload.note){const saved=await call('personal.note',payload.note);applyNoteSave(payload.note.paperID,saved,payload.note.text);}
+ for(const item of drafts){await call('personal.annotationNote',item.snapshot);applyAnnotationSave(item);}
+ if(payload.reading){await call('personal.reading',payload.reading);applyReadingSave(payload.reading,revision);readingWrites.set(payload.reading.paperID,revision);}
+}
+async function flushPersonalWrites({reading=false,syncCommit=false}={}){
+ if(personalFlush)return personalFlush;
+ if(!state.paper&&!annotationDrafts.size)return false;
+ personalFlush=(async()=>{
+  try{
+   for(;;){
+    if(noteSaving)await noteSaving.catch(()=>{});
+    if(annotationSaving)await annotationSaving.catch(()=>{});
+    clearTimeout(noteTimer);clearTimeout(annotationTimer);
+    const payload={},note=state.paper&&state.noteDirty?{paperID:state.paper.id,text:$('note-editor').value,baseRevision:noteEditorRevision}:null;
+    if(note)payload.note=note;
+    const drafts=[...annotationDrafts].map(([key,draft])=>({key,snapshot:{...draft}}));
+    if(drafts.length)payload.annotations=drafts.map(item=>item.snapshot);
+    const snapshot=reading&&state.paper?readingSnapshot():null;
+    if(snapshot&&(!syncCommit||readingSnapshotDirty(snapshot)))payload.reading=snapshot;
+    if(!payload.note&&!payload.annotations&&!payload.reading)return false;
+    const revision=payload.reading?(readingWrites.get(payload.reading.paperID)||0)+1:0;
+    if(personalFlushUnsupported){await fallbackPersonalWrites(payload,drafts,revision);return true;}
+    let result;
+    try{result=await call('personal.flush',payload);}
+    catch(e){
+     // The batch entry point itself failed: repeat the same writes one by one. Only a fully
+     // successful fallback marks the host as lacking the batch command, so a real failure
+     // (busy store, disk error) still surfaces instead of being mistaken for a protocol gap.
+     await fallbackPersonalWrites(payload,drafts,revision);
+     // 只有宿主明确不认识该命令时才永久降级；磁盘/busy 等真实故障照常上抛。
+     if(/应用不支持此操作|unsupported|unknown command/i.test(String(e?.message||e)))personalFlushUnsupported=true;
+     return true;
+    }
+    if(payload.note&&result?.note)applyNoteSave(payload.note.paperID,result.note,payload.note.text);
+    const applied=Number(result?.annotationsApplied)||0;
+    for(let index=0;index<applied&&index<drafts.length;index++)applyAnnotationSave(drafts[index]);
+    if(payload.reading&&result?.reading){applyReadingSave(payload.reading,revision);readingWrites.set(payload.reading.paperID,revision);}
+    if(result?.ok===false)throw new Error(result.error||'本机个人资料保存未完成');
+    if(!(state.paper&&state.noteDirty)&&!annotationDrafts.size)return true;
+   }
+  }finally{personalFlush=null;}
+ })();
+ return personalFlush;
 }
 async function openAggregate(id,options={}){
  const returnRoute=currentRoute();
@@ -401,7 +453,7 @@ async function openAggregate(id,options={}){
  const clearPreviousSource=()=>{if(token!==opening)return;openAggregate.unboundPaper=null;state.paper=null;state.article=null;state.pdf=false;state.noteDirty=false;resetGuideAnchor();guideFrame=null;readerNotices.clear();layoutPDF();};
  const ownsIntent=()=>token===opening&&route===setView.sequence&&state.view===from&&state.mode===mode;
  try{
-  await saveNote();await saveAnnotations();await saveReading();if(!ownsIntent())return;
+  await flushPersonalWrites({reading:true,syncCommit:true});if(!ownsIntent())return;
   if(state.view==='aggregate')await aggregates.leave();if(!ownsIntent())return;
   openAggregate.unboundPaper=state.paper;
   if(options.recordHistory!==false)rememberRoute(returnRoute);updateBack();
@@ -458,7 +510,37 @@ async function togglePDF(force){
  pdfPending={...context,promise};return promise;
 }
 function updatePDF(){const s=state.pdfStatus;$('pdf-page').value=s.page||1;$('pdf-page').max=s.pageCount||1;$('pdf-total').textContent='/ '+(s.pageCount||'—');$('pdf-name').textContent=state.paper?.title||'原文 PDF';$('pdf-zoom').textContent=Math.round((s.scale||1)*100)+'%';$('pdf-version').textContent=(s.version||'原始 PDF')+(s.isStale?' · 旧缓存，当前性未通过':'');$('pdf-version').title=(s.notices||[]).join('\n');$('pdf-text-status').textContent=s.pageTextStatus==='available'?'本页可提取文字':s.pageTextStatus==='empty'?'本页未提取到文字 · 无 OCR，可继续阅读原件':'当前页文字状态未检查';}
-function layoutPDF(){captureGuideScroll();const visible=state.pdf&&state.view==='reader'&&!document.querySelector('[data-dialog-surface][open]');$('reading-area').classList.toggle('is-split',visible);$('pdf-pane').hidden=!visible;$('splitter').hidden=!visible;$('pdf-toggle').setAttribute('aria-pressed',String(visible));queueGuideReflow();requestAnimationFrame(()=>{if(nativeTasksUI?.enabled)nativeTasksUI.update().catch(error);if(nativeNotesUI?.enabled)nativeNotesUI.update().catch(error);const r=$('pdf-scroll').getBoundingClientRect();call('pdf.frame',{visible,x:r.x,y:r.y,width:r.width,height:r.height}).catch(error);});}
+// The native PDF view is positioned from WebKit geometry. Resize/ResizeObserver/
+// MutationObserver call layoutPDF many times per frame, so the frame report is
+// coalesced into one animation frame, unchanged geometry sends nothing, and
+// repeated genuine changes are throttled to one per window while a trailing send
+// always delivers the latest rectangle. A visibility flip is never throttled: the
+// PDF view must appear or hide in the same frame as its pane.
+const pdfFrameWindow=150;
+let pdfFrameSent=null,pdfFrameSentAt=0,pdfFrameTimer=0,pdfFramePending=null,pdfLayoutFrame=0;
+function pdfFrameState(){const visible=state.pdf&&state.view==='reader'&&!document.querySelector('[data-dialog-surface][open]'),box=$('pdf-scroll').getBoundingClientRect();return {visible,x:box.x,y:box.y,width:box.width,height:box.height};}
+function samePDFFrame(previous,next){if(!previous||!next||previous.visible!==next.visible)return false;if(!previous.visible)return true;return Math.abs(previous.x-next.x)<.5&&Math.abs(previous.y-next.y)<.5&&Math.abs(previous.width-next.width)<.5&&Math.abs(previous.height-next.height)<.5;}
+function sendPDFFrame(frame){if(samePDFFrame(pdfFrameSent,frame))return;const sent={...frame};pdfFrameSent=sent;pdfFrameSentAt=performance.now();call('pdf.frame',frame).catch(error=>{if(pdfFrameSent===sent)pdfFrameSent=null;error;});}
+function commitPDFFrame(frame){
+ const now=performance.now(),previous=pdfFrameSent;
+ if(pdfFrameTimer){clearTimeout(pdfFrameTimer);pdfFrameTimer=0;}
+ if(!previous||previous.visible!==frame.visible||now-pdfFrameSentAt>=pdfFrameWindow){pdfFramePending=null;sendPDFFrame(frame);return;}
+ pdfFramePending=frame;
+ pdfFrameTimer=setTimeout(()=>{pdfFrameTimer=0;const pending=pdfFramePending;pdfFramePending=null;if(pending)sendPDFFrame(pending);},Math.max(0,pdfFrameWindow-(now-pdfFrameSentAt)));
+}
+function layoutPDF(){
+ captureGuideScroll();
+ const visible=state.pdf&&state.view==='reader'&&!document.querySelector('[data-dialog-surface][open]');
+ $('reading-area').classList.toggle('is-split',visible);$('pdf-pane').hidden=!visible;$('splitter').hidden=!visible;$('pdf-toggle').setAttribute('aria-pressed',String(visible));
+ queueGuideReflow();
+ if(pdfLayoutFrame)return;
+ pdfLayoutFrame=requestAnimationFrame(()=>{
+  pdfLayoutFrame=0;
+  if(nativeTasksUI?.enabled)nativeTasksUI.update().catch(error);
+  if(nativeNotesUI?.enabled)nativeNotesUI.update().catch(error);
+  commitPDFFrame(pdfFrameState());
+ });
+}
 function renderNotes(){
  renderNotesIndex({previous:$('notes-view'),personal:state.personal,papers:state.catalog,formatTime:sessionTime,openNote:async id=>{
   const p=state.catalog.find(p=>p.id===id)||state.personal.personalPapers?.[id];

@@ -116,6 +116,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         let listing = try await library.handle(command: "library.list", payload: ["query": "Beta", "limit": 100])
         try expect(listing["total"] as? Int == 1, "search pagination total matches filter")
         let restarted = try service(folder, transport)
+        try await restarted.waitUntilReady()
         try expect(await restarted.list().count == 2, "atomic snapshot survives restart")
         print("ROUND 1 catalog/incremental: PASS")
     }
@@ -459,6 +460,130 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(await library.list(minimumScore:7.5).count==5,"score filters use published decimal strings and numeric values consistently")
         print("ROUND 11 published score scalar: PASS")
     }
+    /// The window's first frame must not decode a large published catalog. A small local catalog
+    /// keeps the old eager behavior; a large one is pending until a command awaits the ready gate.
+    static func testLazyStartupAndRetry() async throws {
+        let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
+        let published = folder.appendingPathComponent("PublishedLibrary", isDirectory: true)
+        try FileManager.default.createDirectory(at: published, withIntermediateDirectories: true)
+        // Build a real saved catalog, then inflate an optional field past the eager-decode limit.
+        let sourceFolder = try temporary(); defer { try? FileManager.default.removeItem(at: sourceFolder) }
+        let sourceLibrary = try service(sourceFolder, LibraryFixtureTransport(try fixture([[row("2501.00001", slug: "lazy", title: "Lazy startup", date: "2026-01-01")]])))
+        _ = try await sourceLibrary.sync()
+        let smallCatalog = try Data(contentsOf: sourceFolder.appendingPathComponent("PublishedLibrary/current.json"))
+        var catalogObject = try JSONSerialization.jsonObject(with: smallCatalog) as! [String: Any]
+        catalogObject["validationEpoch"] = String(repeating: "a", count: 9 * 1024 * 1024)
+        let largeCatalog = try JSONSerialization.data(withJSONObject: catalogObject, options: [.sortedKeys])
+        try expect(largeCatalog.count > 8 * 1024 * 1024, "fixture catalog exceeds the eager startup limit")
+        try largeCatalog.write(to: published.appendingPathComponent("current.json"))
+
+        let started = Date()
+        let library = try LibraryService(dataDirectory: folder, siteBaseURL: base, transport: { _, _ in throw LibraryService.ServiceError.network("lazy startup fixture must not request") })
+        let startupSeconds = Date().timeIntervalSince(started)
+        try expect(startupSeconds < 0.5, "initializer returns without decoding the large published catalog (\(startupSeconds)s)")
+        let loading = try await library.handle(command: "library.status", payload: [:])
+        try expect(loading["loading"] as? Bool == true && loading["snapshotID"] == nil, "status before readiness reports explicit loading, not an empty library")
+        try await library.waitUntilReady()
+        let summary = await library.status()
+        try expect(summary.paperCount == 1 && summary.loading == nil && summary.message == nil, "background decode publishes the real catalog")
+        try expect(await library.list().count == 1, "ready catalog serves the same list as before")
+        let readyStatus = try await library.handle(command: "library.status", payload: [:])
+        let readyListing = try await library.handle(command: "library.list", payload: ["limit": 10])
+        try expect(readyStatus["loading"] == nil && readyStatus["snapshotID"] as? String == readyListing["snapshotID"] as? String, "a ready status matches the list snapshot exactly as before")
+
+        // A small malformed local catalog is still reported by the initializer, as before.
+        let smallBad = try temporary(); defer { try? FileManager.default.removeItem(at: smallBad) }
+        let smallBadPublished = smallBad.appendingPathComponent("PublishedLibrary", isDirectory: true)
+        try FileManager.default.createDirectory(at: smallBadPublished, withIntermediateDirectories: true)
+        try Data("{not a catalog".utf8).write(to: smallBadPublished.appendingPathComponent("current.json"))
+        var smallRejected = false
+        do { _ = try LibraryService(dataDirectory: smallBad, siteBaseURL: base, transport: { _, _ in throw LibraryService.ServiceError.network("must not request") }) } catch { smallRejected = true }
+        try expect(smallRejected, "a small malformed local catalog is still reported by the initializer")
+
+        // A large malformed catalog fails the ready gate with a retryable error, never as an empty library.
+        let brokenFolder = try temporary(); defer { try? FileManager.default.removeItem(at: brokenFolder) }
+        let brokenPublished = brokenFolder.appendingPathComponent("PublishedLibrary", isDirectory: true)
+        try FileManager.default.createDirectory(at: brokenPublished, withIntermediateDirectories: true)
+        var broken = Data("{not a catalog".utf8)
+        broken.append(Data(repeating: 0x20, count: 9 * 1024 * 1024))
+        try broken.write(to: brokenPublished.appendingPathComponent("current.json"))
+        let retryable = try LibraryService(dataDirectory: brokenFolder, siteBaseURL: base, transport: { _, _ in throw LibraryService.ServiceError.network("retry fixture must not request") })
+        var failure: Error?
+        do { try await retryable.waitUntilReady() } catch { failure = error }
+        try expect(failure != nil, "a large corrupt local catalog fails the ready gate")
+        try expect((failure?.localizedDescription ?? "").contains("原文件保留"), "load failure says the original file is kept")
+        let failedStatus = try await retryable.handle(command: "library.status", payload: [:])
+        try expect(failedStatus["error"] != nil && failedStatus["snapshotID"] == nil, "status after a failure reports the error instead of an empty library")
+        try largeCatalog.write(to: brokenPublished.appendingPathComponent("current.json"))
+        let recovered = try await retryable.handle(command: "library.list", payload: ["limit": 10])
+        try expect((recovered["papers"] as? [[String: Any]])?.count == 1, "a retried load recovers without restarting the app")
+        print("LAZY STARTUP: large catalog decodes off the constructor, loading/error states stay explicit, retry recovers")
+    }
+    /// Staging a catalog from shards a sync already read and parsed must not read or parse them
+    /// again, and must still reject any byte/row identity change and any row the source path denies.
+    static func testAggregateStagePreparedShards() async throws {
+        let fm = FileManager.default
+        func fixture(_ groups: [[[String: Any]]]) throws -> (manifest: Data, prepared: [String: PublishedAggregateReader.PreparedShard], shards: [[String: Any]], root: URL) {
+            let root = try temporary(), index = root.appendingPathComponent("index", isDirectory: true)
+            try fm.createDirectory(at: index, withIntermediateDirectories: true)
+            var shards: [[String: Any]] = [], prepared: [String: PublishedAggregateReader.PreparedShard] = [:], totalBytes = 0
+            for (position, group) in groups.enumerated() {
+                let bytes = try JSONSerialization.data(withJSONObject: group, options: [.sortedKeys])
+                let hash = sha(bytes), name = "search-index/part-" + String(format: "%04d", position + 1) + "-" + String(hash.prefix(12)) + ".json"
+                try bytes.write(to: index.appendingPathComponent(hash + ".json"))
+                shards.append(["url": name, "bytes": bytes.count, "sha256": hash, "recordCount": group.count])
+                prepared[name] = PublishedAggregateReader.PreparedShard(bytes: bytes, rows: group)
+                totalBytes += bytes.count
+            }
+            let manifest = try JSONSerialization.data(withJSONObject: ["contract": "paper-search-index-manifest-v1", "recordCount": groups.reduce(0) { $0 + $1.count }, "totalBytes": totalBytes, "shards": shards], options: [.sortedKeys])
+            return (manifest, prepared, shards, root)
+        }
+        let groups: [[[String: Any]]] = [
+            [["permalink": "/audio-paper-digest-blog/prepared-daily/", "pageType": "daily", "title": "制备分片汇总", "date": "2026-11-01"],
+             ["permalink": "/audio-paper-digest-blog/prepared-paper/", "pageType": "paper", "title": "Prepared paper", "date": "2026-11-01"]],
+            [["permalink": "/audio-paper-digest-blog/prepared-alias/", "pageType": "daily-summary", "title": "Alias summary", "date": "2026-11-01"],
+             ["permalink": "/audio-paper-digest-blog/prepared-page/", "pageType": "page", "title": "Prepared page", "date": "2026-11-01"]],
+            [["permalink": "/audio-paper-digest-blog/prepared-conference/", "pageType": "conference", "title": "Prepared conference", "conferenceScope": "overview", "date": "2026-11-01"]]
+        ]
+        let source = try fixture(groups); defer { try? fm.removeItem(at: source.root) }
+        let epoch = UUID().uuidString
+        let baselineMetrics = AggregateReadMetrics()
+        let baseline = try PublishedAggregateStore(directory: source.root, metrics: baselineMetrics).stage(manifest: source.manifest, validationEpoch: epoch)
+        // The prepared root has no shard files at all, so only the pre-read rows can satisfy it.
+        let preparedRoot = try temporary(); defer { try? fm.removeItem(at: preparedRoot) }
+        let preparedMetrics = AggregateReadMetrics()
+        let staged = try PublishedAggregateStore(directory: preparedRoot, metrics: preparedMetrics).stage(manifest: source.manifest, validationEpoch: epoch, preparedShards: source.prepared)
+        try expect(staged == baseline, "prepared shards build exactly the same aggregate catalog, including the daily-summary alias")
+        try expect(baselineMetrics.fileReads == preparedMetrics.fileReads + source.prepared.count, "prepared staging skips exactly one shard read per shard")
+        try expect(try Data(contentsOf: preparedRoot.appendingPathComponent("aggregate-manifests/" + baseline.snapshotSHA256 + ".json")) == source.manifest, "prepared staging keeps the original manifest bytes")
+        let firstURL = source.shards[0]["url"] as! String
+        func rejects(_ name: String, _ mutate: (inout [String: PublishedAggregateReader.PreparedShard]) -> Void) throws {
+            var value = source.prepared
+            mutate(&value)
+            let root = try temporary(); defer { try? fm.removeItem(at: root) }
+            var rejected = false
+            do { _ = try PublishedAggregateStore(directory: root).stage(manifest: source.manifest, validationEpoch: epoch, preparedShards: value) } catch { rejected = true }
+            try expect(rejected, name)
+        }
+        try rejects("tampered prepared bytes are rejected by the size/SHA check") { value in
+            var bytes = value[firstURL]!.bytes
+            bytes[bytes.startIndex] ^= 1
+            value[firstURL] = PublishedAggregateReader.PreparedShard(bytes: bytes, rows: value[firstURL]!.rows)
+        }
+        try rejects("a missing prepared shard is rejected, never skipped") { value in value.removeValue(forKey: firstURL) }
+        try rejects("a prepared row-count mismatch is rejected") { value in
+            value[firstURL] = PublishedAggregateReader.PreparedShard(bytes: value[firstURL]!.bytes, rows: Array(value[firstURL]!.rows.dropLast()))
+        }
+        // A row the source path denies must also be denied when it is supplied pre-parsed.
+        let invalid = try fixture([[["permalink": "/audio-paper-digest-blog/prepared-unknown/", "pageType": "unsupported", "title": "Unsupported", "date": "2026-11-01"]]])
+        defer { try? fm.removeItem(at: invalid.root) }
+        var sourceRejected = false, preparedRejected = false
+        do { _ = try PublishedAggregateStore(directory: invalid.root).stage(manifest: invalid.manifest, validationEpoch: UUID().uuidString) } catch { sourceRejected = true }
+        let invalidRoot = try temporary(); defer { try? fm.removeItem(at: invalidRoot) }
+        do { _ = try PublishedAggregateStore(directory: invalidRoot).stage(manifest: invalid.manifest, validationEpoch: UUID().uuidString, preparedShards: invalid.prepared) } catch { preparedRejected = true }
+        try expect(sourceRejected && preparedRejected, "the prepared path accepts exactly the rows the source path accepts")
+        print("AGGREGATE STAGING: prepared sync shards skip the second read/parse and keep every byte/row check")
+    }
     @MainActor static func testPersonalCatalogJoin() async throws {
         let folder=try temporary();defer{try? FileManager.default.removeItem(at:folder)}
         let a=row("2501.00001",slug:"join-a",title:"Alpha",date:"2026-01-01"),b=row("2501.00002",slug:"join-b",title:"Beta",date:"2026-01-02")
@@ -549,6 +674,8 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
                 try await testPDFVersionContract()
                 try await testStrictLegacyIdentifiers()
                 try await testPublishedScoreScalar()
+                try await testLazyStartupAndRetry()
+                try await testAggregateStagePreparedShards()
                 try await testPersonalCatalogJoin()
             }
             print("PASS \(assertions) assertions")

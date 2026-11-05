@@ -41,6 +41,9 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private val syncMutex = Mutex()
     private val publishedHttp by lazy { SafeHttp.publishedSite() }
     private val offlineIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val offlineIndexFile = File(directory, "offline-index.json")
+    private val offlineIndexLock = Any()
+    @Volatile private var offlineIndex = OfflineIndexSnapshot(emptyMap(), emptyMap())
     private data class CatalogState(val published: List<Paper>, val retired: List<Paper>, val summary: JSONObject, val epoch: String, val taxonomy: WebsiteTaxonomy? = null) {
         val all = (published + retired).distinctBy { it.id }
     }
@@ -118,10 +121,65 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         }
     }
     private fun reindexOffline() {
-        offlineIds.clear()
-        File(directory, "articles").listFiles()?.filter { it.isFile && it.name.endsWith(".json") }?.forEach { file -> runCatching { val a = Article.fromJson(JSONObject(JsonFiles.read(file, 128 * 1024 * 1024L).toString(Charsets.UTF_8))); if (a.html.isNotBlank() || !a.markdown.isNullOrBlank()) offlineIds += a.paperID } }
-        File(directory, "pdf-pointers").listFiles()?.filter { it.isFile && it.name.endsWith(".json") }?.forEach { file -> runCatching { val o = JSONObject(JsonFiles.read(file, 1024 * 1024L).toString(Charsets.UTF_8)); val original = StoragePaths.resolve(o.getString("filePath"), personal.directory, o.getString("sha256"), 100 * 1024 * 1024L); require(original.length() == o.getLong("bytes")); offlineIds += o.getString("paperID") } }
+        val articles = File(directory, "articles")
+        val pointers = File(directory, "pdf-pointers")
+        // Startup trusts only a fully revalidated derived index; any disagreement with the
+        // actual article/PDF-pointer files falls back to one real scan before rebuilding.
+        val indexed = synchronized(offlineIndexLock) {
+            val stored = OfflineIndex.read(offlineIndexFile)
+            val verified = stored?.let { OfflineIndex.offlineIDs(it, articles, pointers) }
+            if (stored != null && verified != null) { offlineIndex = stored; verified } else {
+                val (rebuilt, scanned) = rebuildOfflineIndex(articles, pointers)
+                offlineIndex = rebuilt
+                runCatching { OfflineIndex.write(offlineIndexFile, rebuilt) }
+                scanned
+            }
+        }
+        offlineIds.clear(); offlineIds.addAll(indexed)
         personal.personalPapers().forEach { p -> if (p.localPDFPath != null && p.pdfSHA256 != null) runCatching { StoragePaths.resolve(p.localPDFPath, personal.directory, p.pdfSHA256); offlineIds += p.id } }
+    }
+
+    /** Only the fallback path opens article bodies; it also recreates the index atomically. */
+    private fun rebuildOfflineIndex(articles: File, pointers: File): Pair<OfflineIndexSnapshot, Set<String>> {
+        val (articleEntries, articleIDs) = OfflineIndex.scanArticles(articles)
+        val (pdfEntries, pdfIDs) = OfflineIndex.scanPointers(pointers) { receipt ->
+            val original = StoragePaths.resolve(receipt.getString("filePath"), personal.directory, receipt.getString("sha256"), 100 * 1024 * 1024L)
+            require(original.length() == receipt.getLong("bytes"))
+            original
+        }
+        val ids = linkedSetOf<String>(); ids.addAll(articleIDs); ids.addAll(pdfIDs)
+        return OfflineIndexSnapshot(articleEntries, pdfEntries) to ids
+    }
+
+    /** Article bytes and their index entry are separate atomic writes; a crash between them
+     * leaves a detectable mismatch for the next start to repair, never a half-written file. */
+    private fun saveArticle(file: File, article: Article) {
+        JsonFiles.write(file, article.json())
+        offlineIds += article.paperID
+        recordOfflineArticle(file, article)
+    }
+    private fun recordOfflineArticle(file: File, article: Article) {
+        val entry = OfflineIndex.articleEntry(file, article.paperID, article.html.isNotBlank() || !article.markdown.isNullOrBlank()) ?: return
+        synchronized(offlineIndexLock) {
+            val current = offlineIndex
+            if (current.articles[file.name] == entry) return
+            val next = OfflineIndexSnapshot(current.articles + (file.name to entry), current.pdfPointers)
+            offlineIndex = next
+            runCatching { OfflineIndex.write(offlineIndexFile, next) }
+        }
+    }
+    private fun recordOfflinePointer(pointer: File, receipt: JSONObject) {
+        val paperID = receipt.optString("paperID").takeIf { it.isNotEmpty() } ?: return
+        offlineIds += paperID
+        val originalPath = receipt.optString("filePath").takeIf { it.isNotEmpty() } ?: return
+        synchronized(offlineIndexLock) {
+            val entry = OfflineIndex.pdfEntry(pointer, receipt, File(originalPath)) ?: return
+            val current = offlineIndex
+            if (current.pdfPointers[pointer.name] == entry) return
+            val next = OfflineIndexSnapshot(current.articles, current.pdfPointers + (pointer.name to entry))
+            offlineIndex = next
+            runCatching { OfflineIndex.write(offlineIndexFile, next) }
+        }
     }
 
     /** Current epoch, not a coincidentally equal old manifest SHA, activates aggregate metadata. */
@@ -370,7 +428,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         if (!refresh && previous != null && parserCurrent && sourceMatches && previous.completeOffline && previous.catalogEpoch == epoch() && age(previous.fetchedAt) < 21600 && resourcesValid(previous)) return@withContext hydrateReading(previous)
         if (previous != null && parserCurrent && sourceMatches) onReadable(hydrateReading(previous.copy(isStale = true,
             notices = (previous.notices + "先显示已保存导读，正在后台核对网站当前版本。").distinct())))
-        if (!refresh && previous == null && epoch() == "bundled-sample") seedArticle(paper)?.let { JsonFiles.write(file, it.json()); offlineIds += paper.id; return@withContext hydrate(it) }
+        if (!refresh && previous == null && epoch() == "bundled-sample") seedArticle(paper)?.let { saveArticle(file, it); return@withContext hydrate(it) }
         try {
             require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式" }
             val citationRepository = citationRepo()
@@ -394,7 +452,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 ArticleResource(image.attr("src"), missingReason = "图片正在后台准备")
             }, completeOffline = false)
             previous?.let { preserve(it) }
-            coroutineContext.ensureActive(); JsonFiles.write(file, result.json()); offlineIds += paper.id
+            coroutineContext.ensureActive(); saveArticle(file, result)
             onReadable(hydrateReading(result))
             val images = mutableListOf<ArticleResource>(); val notices = result.notices.toMutableList()
             var total = 0
@@ -433,7 +491,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             result = result.copy(html = doc.body().html(), resources = images, completeOffline = images.all { it.localPath != null }, notices = notices.distinct(), researchContext = context, original = original)
             if (result.catalogEpoch != epoch()) result = result.copy(isStale = true, notices = result.notices + "读取期间目录发生更新，请刷新核验当前修订")
             previous?.let { preserve(it) }; preserve(result)
-            coroutineContext.ensureActive(); JsonFiles.write(file, result.json()); offlineIds += paper.id; hydrateReading(result)
+            coroutineContext.ensureActive(); saveArticle(file, result); hydrateReading(result)
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val old = previous ?: throw e
@@ -512,12 +570,14 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             if (!historical.exists()) JsonFiles.write(historical, receipt)
             JsonFiles.write(pointer, receipt); pdfReceipts[paper.id] = receipt
             offlineIds += paper.id
+            recordOfflinePointer(pointer, receipt)
             file to hash
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val old = previous ?: throw e; val file = previousFile ?: throw e
             val stale = old.copy().put("isStale", true).put("cacheStatus", "stale").put("validationAttemptedAt", now()).put("notices", JSONArray(listOf("原文当前性复核未完成，正在读取先前保存的旧 SHA 副本；不代表网站当前原文。")))
             pdfReceipts[paper.id] = stale; JsonFiles.write(pointer, stale)
+            recordOfflinePointer(pointer, stale)
             file to old.getString("sha256")
         }
     }
@@ -760,6 +820,190 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             }
         }
         private fun age(date: String): Long = runCatching { (Instant.now().toEpochMilli() - Instant.parse(date).toEpochMilli()).coerceAtLeast(0) / 1000 }.getOrDefault(Long.MAX_VALUE)
+    }
+}
+
+/** One article cache file: identity plus enough metadata to detect replacement without parsing it. */
+internal data class OfflineArticleIndexEntry(val paperID: String?, val hasBody: Boolean, val bytes: Long, val modifiedMs: Long)
+/** One PDF pointer file and the already verified local original it resolves to. */
+internal data class OfflinePdfIndexEntry(val paperID: String, val pointerBytes: Long, val pointerModifiedMs: Long,
+    val originalPath: String, val originalBytes: Long, val originalModifiedMs: Long)
+internal data class OfflineIndexSnapshot(val articles: Map<String, OfflineArticleIndexEntry>, val pdfPointers: Map<String, OfflinePdfIndexEntry>)
+
+/**
+ * Derived startup cache for [CatalogRepository.offlinePaperIDs]. It is never authority for
+ * publication or reading: every entry is revalidated against the actual file size and
+ * modification time (metadata only), and any missing, extra or changed directory entry makes
+ * the whole snapshot unusable so the caller performs one real scan and rebuilds it atomically.
+ */
+internal object OfflineIndex {
+    const val FORMAT = "paperdigest-android-offline-index"
+    const val VERSION = 1
+    const val MAX_BYTES = 16L * 1024 * 1024
+    const val MAX_ENTRIES = 100000
+    private val ROOT_KEYS = setOf("format", "version", "articles", "pdfPointers")
+    private val ARTICLE_KEYS = setOf("paperID", "hasBody", "bytes", "modifiedMs")
+    private val PDF_KEYS = setOf("paperID", "pointerBytes", "pointerModifiedMs", "originalPath", "originalBytes", "originalModifiedMs")
+
+    // Article caches are normally "<sha256>.json"; the fallback scan accepts any plain file name,
+    // so the index accepts the same names while rejecting separators, controls and traversal.
+    private fun validCacheName(name: String): Boolean = name.endsWith(".json") && name != "." && name != ".." &&
+        name.length <= 255 && name.none { it == '/' || it == '\\' || it.code < 32 }
+
+    private fun signature(file: File): Pair<Long, Long>? = runCatching {
+        require(file.isFile && !Files.isSymbolicLink(file.toPath()))
+        file.length() to file.lastModified()
+    }.getOrNull()
+
+    private fun names(directory: File): Set<String>? {
+        if (!directory.exists()) return emptySet()
+        if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return null
+        val files = directory.listFiles() ?: return null
+        return files.filter { it.isFile && it.name.endsWith(".json") && !Files.isSymbolicLink(it.toPath()) }.mapTo(linkedSetOf()) { it.name }
+    }
+
+    /** Null when the cache file itself cannot be measured, so the caller must scan. */
+    fun articleEntry(file: File, paperID: String?, hasBody: Boolean): OfflineArticleIndexEntry? {
+        val (bytes, modified) = signature(file) ?: return null
+        val identity = paperID?.takeIf { it.isNotEmpty() }
+        return OfflineArticleIndexEntry(identity, hasBody && identity != null, bytes, modified)
+    }
+
+    /** Null when the pointer or its original changed/moved; the caller then rescans instead of trusting an old entry. */
+    fun pdfEntry(pointer: File, receipt: JSONObject, original: File): OfflinePdfIndexEntry? {
+        val paperID = receipt.optString("paperID").takeIf { it.isNotEmpty() } ?: return null
+        val (pointerBytes, pointerModified) = signature(pointer) ?: return null
+        val (originalBytes, originalModified) = signature(original) ?: return null
+        val receiptBytes = (receipt.opt("bytes") as? Number)?.toLong() ?: -1L
+        if (receiptBytes >= 0 && receiptBytes != originalBytes) return null
+        return OfflinePdfIndexEntry(paperID, pointerBytes, pointerModified, original.absolutePath, originalBytes, originalModified)
+    }
+
+    /** Fallback scan: parse every cached article once. An unreadable file still gets an entry so
+     * one corrupt cache cannot force the same full scan on every subsequent start. */
+    fun scanArticles(articles: File): Pair<Map<String, OfflineArticleIndexEntry>, Set<String>> {
+        val entries = sortedMapOf<String, OfflineArticleIndexEntry>()
+        val ids = linkedSetOf<String>()
+        articles.listFiles()?.filter { it.isFile && it.name.endsWith(".json") }?.sortedBy { it.name }?.forEach { file ->
+            val decoded = runCatching {
+                val article = Article.fromJson(JSONObject(JsonFiles.read(file, 128 * 1024 * 1024L).toString(Charsets.UTF_8)))
+                article.paperID to (article.html.isNotBlank() || !article.markdown.isNullOrBlank())
+            }.getOrNull()
+            val entry = articleEntry(file, decoded?.first, decoded?.second ?: false) ?: return@forEach
+            entries[file.name] = entry
+            if (entry.hasBody) entry.paperID?.let(ids::add)
+        }
+        return entries to ids
+    }
+
+    /** Fallback scan: the resolver must return the already verified local original, or null. */
+    fun scanPointers(pointers: File, original: (JSONObject) -> File?): Pair<Map<String, OfflinePdfIndexEntry>, Set<String>> {
+        val entries = sortedMapOf<String, OfflinePdfIndexEntry>()
+        val ids = linkedSetOf<String>()
+        pointers.listFiles()?.filter { it.isFile && it.name.endsWith(".json") }?.sortedBy { it.name }?.forEach { file ->
+            val entry = runCatching {
+                val receipt = JSONObject(JsonFiles.read(file, 1024 * 1024L).toString(Charsets.UTF_8))
+                pdfEntry(file, receipt, original(receipt) ?: error("原文指针无法定位已核验原文件")) ?: error("原文指针缺少离线索引字段")
+            }.getOrNull() ?: run {
+                // 坏指针也记一条负条目，只用于让下次启动的目录集合对得上；不参与离线集合。
+                val (bytes, modified) = signature(file) ?: return@forEach
+                OfflinePdfIndexEntry("", bytes, modified, "", 0, 0)
+            }
+            entries[file.name] = entry
+            if (entry.paperID.isNotEmpty()) ids += entry.paperID
+        }
+        return entries to ids
+    }
+
+    /** A missing, oversized, unreadable, malformed or future-format index is not a success. */
+    fun read(file: File): OfflineIndexSnapshot? {
+        val (bytes, _) = signature(file) ?: return null
+        if (bytes !in 1..MAX_BYTES) return null
+        val raw = runCatching { JsonFiles.read(file, MAX_BYTES).toString(Charsets.UTF_8) }.getOrNull() ?: return null
+        return runCatching { parse(JSONObject(raw)) }.getOrNull()
+    }
+
+    fun parse(value: JSONObject): OfflineIndexSnapshot {
+        require(value.keys().asSequence().toSet() == ROOT_KEYS) { "离线索引字段不符" }
+        require(value.getString("format") == FORMAT) { "离线索引格式不符" }
+        val version = value.get("version") as? Number ?: error("离线索引版本不符")
+        require(version.toLong() == VERSION.toLong() && version.toDouble() == VERSION.toDouble()) { "离线索引版本不符" }
+        val articlesJson = value.getJSONObject("articles"); val pdfJson = value.getJSONObject("pdfPointers")
+        require(articlesJson.length() <= MAX_ENTRIES && pdfJson.length() <= MAX_ENTRIES) { "离线索引条目超过范围" }
+        val articles = LinkedHashMap<String, OfflineArticleIndexEntry>()
+        articlesJson.keys().forEach { name ->
+            require(validCacheName(name)) { "离线索引文章文件名无效" }
+            val row = articlesJson.getJSONObject(name)
+            require(row.keys().asSequence().toSet() == ARTICLE_KEYS) { "离线索引文章条目字段不符" }
+            val paperID = if (row.isNull("paperID")) null else row.getString("paperID").also { require(it.isNotBlank()) { "离线索引文章身份为空" } }
+            val hasBody = row.opt("hasBody") as? Boolean ?: error("离线索引正文标记不符")
+            require(!hasBody || paperID != null) { "离线索引正文缺少论文身份" }
+            val bytes = row.getLong("bytes"); require(bytes >= 0) { "离线索引文章大小无效" }
+            val modified = row.getLong("modifiedMs"); require(modified >= 0) { "离线索引文章时间无效" }
+            articles[name] = OfflineArticleIndexEntry(paperID, hasBody, bytes, modified)
+        }
+        val pdfPointers = LinkedHashMap<String, OfflinePdfIndexEntry>()
+        pdfJson.keys().forEach { name ->
+            require(validCacheName(name)) { "离线索引原文指针文件名无效" }
+            val row = pdfJson.getJSONObject(name)
+            require(row.keys().asSequence().toSet() == PDF_KEYS) { "离线索引原文条目字段不符" }
+            val paperID = row.getString("paperID")
+            val pointerBytes = row.getLong("pointerBytes"); require(pointerBytes >= 0) { "离线索引原文指针大小无效" }
+            val pointerModified = row.getLong("pointerModifiedMs"); require(pointerModified >= 0) { "离线索引原文指针时间无效" }
+            val originalPath = row.getString("originalPath")
+            if (paperID.isNotEmpty()) require(originalPath.isNotBlank() && originalPath.length <= 4096 && File(originalPath).isAbsolute) { "离线索引原文路径无效" }
+            else require(originalPath.isEmpty()) { "离线索引无效原文条目不得带路径" }
+            val originalBytes = row.getLong("originalBytes"); require(originalBytes >= 0) { "离线索引原文大小无效" }
+            val originalModified = row.getLong("originalModifiedMs"); require(originalModified >= 0) { "离线索引原文时间无效" }
+            pdfPointers[name] = OfflinePdfIndexEntry(paperID, pointerBytes, pointerModified, originalPath, originalBytes, originalModified)
+        }
+        return OfflineIndexSnapshot(articles, pdfPointers)
+    }
+
+    /** Null means the index disagrees with the directory; never return a partial or stale set. */
+    fun offlineIDs(snapshot: OfflineIndexSnapshot, articles: File, pdfPointers: File): Set<String>? {
+        val articleNames = names(articles) ?: return null
+        if (articleNames != snapshot.articles.keys) return null
+        val ids = linkedSetOf<String>()
+        snapshot.articles.forEach { (name, entry) ->
+            val (bytes, modified) = signature(File(articles, name)) ?: return null
+            if (bytes != entry.bytes || modified != entry.modifiedMs) return null
+            if (entry.hasBody) ids += entry.paperID ?: return null
+        }
+        val pdfNames = names(pdfPointers) ?: return null
+        if (pdfNames != snapshot.pdfPointers.keys) return null
+        snapshot.pdfPointers.forEach { (name, entry) ->
+            val (bytes, modified) = signature(File(pdfPointers, name)) ?: return null
+            if (bytes != entry.pointerBytes || modified != entry.pointerModifiedMs) return null
+            if (entry.paperID.isEmpty()) return@forEach
+            val (originalBytes, originalModified) = signature(File(entry.originalPath)) ?: return null
+            if (originalBytes != entry.originalBytes || originalModified != entry.originalModifiedMs) return null
+            ids += entry.paperID
+        }
+        return ids
+    }
+
+    private fun envelope(snapshot: OfflineIndexSnapshot): JSONObject {
+        val articles = JSONObject()
+        snapshot.articles.toSortedMap().forEach { (name, entry) ->
+            articles.put(name, JSONObject().put("paperID", entry.paperID ?: JSONObject.NULL).put("hasBody", entry.hasBody)
+                .put("bytes", entry.bytes).put("modifiedMs", entry.modifiedMs))
+        }
+        val pdf = JSONObject()
+        snapshot.pdfPointers.toSortedMap().forEach { (name, entry) ->
+            pdf.put(name, JSONObject().put("paperID", entry.paperID).put("pointerBytes", entry.pointerBytes)
+                .put("pointerModifiedMs", entry.pointerModifiedMs).put("originalPath", entry.originalPath)
+                .put("originalBytes", entry.originalBytes).put("originalModifiedMs", entry.originalModifiedMs))
+        }
+        return JSONObject().put("format", FORMAT).put("version", VERSION).put("articles", articles).put("pdfPointers", pdf)
+    }
+
+    /** Same atomic replacement and canonical JSON as other new local identities. */
+    fun write(file: File, snapshot: OfflineIndexSnapshot) {
+        require(snapshot.articles.size <= MAX_ENTRIES && snapshot.pdfPointers.size <= MAX_ENTRIES) { "离线索引条目超过范围" }
+        val encoded = canonical(envelope(snapshot)).toByteArray(Charsets.UTF_8)
+        require(encoded.size <= MAX_BYTES) { "离线索引超过大小限制" }
+        JsonFiles.write(file, encoded)
     }
 }
 

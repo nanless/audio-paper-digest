@@ -8,6 +8,54 @@ final class AggregateReadMetrics {
 }
 #endif
 
+extension PublishedAggregateReader {
+    /// One manifest shard that the requesting sync already read. `rows` must be the parse of
+    /// exactly these `bytes`; staging still re-verifies the declared size, SHA-256 and UTF-8
+    /// encoding and still checks the record count, so no source or byte check is skipped.
+    struct PreparedShard {
+        let bytes: Data
+        let rows: [[String: Any]]
+    }
+    /// The same catalog construction as `read(manifest:siteBase:shardBytes:)`, for a caller that
+    /// already read and parsed every shard of this manifest during one sync. This only removes the
+    /// duplicate local read and JSON parse; the byte identity and every row rule stay identical.
+    static func read(manifest raw: Data, siteBase: URL = site, preparedShards: [String: PreparedShard]) throws -> PublishedAggregateCatalog {
+        let m = try manifest(raw), snapshot = sha(raw)
+        let rowEncodingFamily = "foundation-sorted-keys-json"
+        let rowEncoding = m.contract == "paper-search-index-manifest" ? ClientProtocols.contract(rowEncodingFamily)
+            : try ClientProtocols.historicalContract(rowEncodingFamily, variant: "original-row-canonical-byte-encoding")
+        var result: [PublishedAggregate] = [], pages = Set<String>(), rowsSeen = 0
+        for shard in m.shards {
+            try Task.checkCancellation()
+            guard let prepared = preparedShards[shard.url] else { throw AggregateFailure.invalid("汇总分片缺少已核验记录") }
+            let bytes = prepared.bytes
+            try require(bytes.count == shard.bytes && sha(bytes) == shard.sha256 && String(data: bytes, encoding: .utf8) != nil, "汇总分片原件与清单不一致")
+            let rows = prepared.rows
+            guard rows.count == shard.recordCount else { throw AggregateFailure.invalid("汇总分片记录数量无效") }
+            for (position, row) in rows.enumerated() {
+                try Task.checkCancellation(); rowsSeen += 1
+                guard let pageType = row["pageType"] as? String, let permalink = row["permalink"] as? String else { throw AggregateFailure.invalid("原目录缺少页面类型或地址") }
+                let url = try pageURL(permalink, siteBase: siteBase)
+                try require(pages.insert(url.absoluteString).inserted, "原目录页面地址重复")
+                if pageType == "paper" { continue }
+                // The old search input daily-summary is an explicit display-only alias; raw row stays untouched.
+                guard let kind = PublishedAggregate.Kind(rawValue: pageType == "daily-summary" ? "daily" : pageType) else { throw AggregateFailure.invalid("目录出现尚未支持的非论文类型") }
+                guard let title = row["title"] as? String, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AggregateFailure.invalid("汇总缺少标题") }
+                let rawDate = row["date"] as? String ?? ""
+                let displayDate = rawDate.isEmpty || rawDate.hasPrefix("0001-01-01") ? nil : rawDate
+                let explicitScope = row["conferenceScope"] as? String
+                try require(explicitScope == nil || kind == .conference && ["overview", "task"].contains(explicitScope!), "会议范围字段无效")
+                let citation = row["citation"] as? [String: Any]
+                if let declared = citation?["pageUrl"] as? String, !declared.isEmpty { try require(try pageURL(declared, siteBase: siteBase) == url, "汇总声明地址与原页面不一致") }
+                let source = PublishedAggregate.Source(manifestSHA256: snapshot, shardSHA256: shard.sha256, shardBytes: shard.bytes, shardURL: shard.url, rowIndex: position, normalizedRowSHA256: sha(try normalizedRow(row)), normalizedRowAlgorithm: rowEncoding)
+                result.append(PublishedAggregate(id: "page:" + URLComponents(url: url, resolvingAgainstBaseURL: false)!.percentEncodedPath, kind: kind, conferenceScope: explicitScope, title: title, titleZh: row["titleZh"] as? String ?? title, summary: row["summary"] as? String ?? "", rawDate: rawDate, displayDate: displayDate, categories: row["categories"] as? [String] ?? [], tags: row["tags"] as? [String] ?? [], sourceURL: url.absoluteString, source: source))
+            }
+        }
+        try require(rowsSeen == m.recordCount, "汇总原目录集合不完整")
+        return PublishedAggregateCatalog(snapshotSHA256: snapshot, sourceRecordCount: rowsSeen, aggregateCount: result.count, records: result.sorted { $0.id < $1.id })
+    }
+}
+
 /// Sidecars activate only with the actual paper current.json snapshot; a legacy cache cannot grant a manifest.
 struct PublishedAggregateStore {
     let directory: URL
@@ -176,9 +224,17 @@ struct PublishedAggregateStore {
         }
     }
     private func epoch(_ value:String)throws->String {guard let id=UUID(uuidString:value) else{throw AggregateFailure.invalid("汇总目录验证代无效")};return id.uuidString.lowercased()}
-    func stage(manifest:Data,validationEpoch:String)throws->PublishedAggregateCatalog {
+    /// A sync that already read and parsed every manifest shard may pass them here: staging then
+    /// re-verifies bytes, SHA-256, UTF-8 and row counts instead of reading/parsing the shards again.
+    /// Without `preparedShards` the original source-read path is unchanged.
+    func stage(manifest:Data,validationEpoch:String,preparedShards:[String:PublishedAggregateReader.PreparedShard]?=nil)throws->PublishedAggregateCatalog {
         let identity=try epoch(validationEpoch)
-        let catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+        let catalog:PublishedAggregateCatalog
+        if let preparedShards {
+            catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase,preparedShards:preparedShards)
+        } else {
+            catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+        }
         try immutable(manifest,to:child(["aggregate-manifests",catalog.snapshotSHA256+".json"]))
         let sidecar=try child(["aggregate-index",catalog.snapshotSHA256+".json"])
         if !fm.fileExists(atPath:sidecar.path) { try immutable(catalogRecord(catalog),to:sidecar) }

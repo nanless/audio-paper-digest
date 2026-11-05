@@ -98,6 +98,10 @@ actor LibraryService {
         var source: String
         var syncing: Bool
         var missingFromLatest: [String]
+        /// Set only while the published catalog is still being decoded, so a status read is
+        /// never mistaken for an empty library. Persisted catalogs never carry it.
+        var loading: Bool? = nil
+        var message: String? = nil
     }
     struct Progress: Sendable {
         var phase: String
@@ -132,7 +136,7 @@ actor LibraryService {
             try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]))
         }
     }
-    private struct StoredSnapshot: Codable {
+    private struct StoredSnapshot: Codable, Sendable {
         static let family="paperdigest-published-library"
         var format: String?
         var contract: String?
@@ -180,12 +184,24 @@ actor LibraryService {
         var shards: [Shard]
     }
     typealias Transport = @Sendable (URL, Int) async throws -> Data
+    /// The complete published state decoded off the calling thread during startup.
+    private struct LoadedLibrary: Sendable {
+        let snapshot: StoredSnapshot
+        let fullTextIndex: [String: String]
+    }
+    /// Startup reads only the small local catalog eagerly. The published catalog can be tens of
+    /// megabytes, so a larger one stays pending until `ensureReady()` waits for the background
+    /// decode. Commands never treat that pending state as an empty library.
+    private enum LoadPhase: Equatable { case loading, ready, failed(String) }
     private let directory: URL
     private let privateDirectory: URL
     private let siteBaseURL: URL
     private let transport: Transport?
     private let session: URLSession
     private var snapshot: StoredSnapshot
+    private var loadPhase: LoadPhase = .loading
+    private var loadTask: Task<LoadedLibrary, Error>?
+    private var loadID: UUID?
     private var syncTask: Task<Summary, Error>?
     private var syncID: UUID?
     private var httpProxy: URL?
@@ -193,6 +209,9 @@ actor LibraryService {
     private var fullTextIndex: [String: String] = [:]
     private let seedDirectory: URL?
     private static let maxTotal = 64 * 1024 * 1024
+    /// Small catalogs are decoded by the initializer exactly as before: a restart is immediate and
+    /// a malformed local file is reported at launch. Only the large published catalog is deferred.
+    private static let eagerDecodeLimit = 8 * 1024 * 1024
     private static let approvedHosts: Set<String> = ["arxiv.org", "export.arxiv.org", "www.isca-archive.org", "isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org"]
     // These are published image layouts, not a grant to arbitrary GitHub content.
     // Keep owner/repository/branch and every path component exact; each redirect
@@ -239,39 +258,148 @@ actor LibraryService {
         config.urlCache = nil
         config.httpCookieStorage = nil
         session = URLSession(configuration: config)
-        self.seedDirectory = seedDirectory ?? Bundle.main.resourceURL?.appendingPathComponent("Seed", isDirectory: true)
+        let seedDirectory = seedDirectory ?? Bundle.main.resourceURL?.appendingPathComponent("Seed", isDirectory: true)
+        self.seedDirectory = seedDirectory
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // The window's first frame must not wait for the published catalog: only a small local
+        // catalog is decoded eagerly. A large one stays pending until a command awaits the gate.
         let current = directory.appendingPathComponent("current.json")
-        if FileManager.default.fileExists(atPath: current.path) {
-            let bytes = try Data(contentsOf: current)
-            guard bytes.count <= Self.maxTotal else { throw ServiceError.invalid("本地目录超过大小限制，请保留原文件后恢复备份。") }
-            snapshot = try JSONDecoder().decode(StoredSnapshot.self, from: bytes)
-        } else {
-            snapshot = StoredSnapshot(summary: Summary(paperCount: 0, recordCount: 0, shardCount: 0, snapshotID: "", syncedAt: nil, source: "尚未同步", syncing: false, missingFromLatest: []), papers: [])
-        }
-        if snapshot.papers.isEmpty, let seed = self.seedDirectory,
-           let bytes = try? Data(contentsOf: seed.appendingPathComponent("sample.json")), bytes.count <= 8 * 1024 * 1024,
-           let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any], let rows = object["librarySample"] as? [[String: Any]] {
-            let papers = rows.compactMap { row -> Paper? in
-                guard let identifier = row["id"] as? String, let title = row["title"] as? String,
-                      let blog = row["blogUrl"] as? String, let url = URL(string: blog), url.host == siteBaseURL.host,
-                      url.path.hasPrefix(siteBaseURL.path + "/") else { return nil }
-                let authors = (row["authors"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
-                let source = row["absUrl"] as? String, pdf = row["pdfUrl"] as? String
-                let version = source.flatMap(URL.init(string:))?.lastPathComponent
-                guard let citation = try? ClientProtocols.record("paper-citation-source", fields: ["paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]) else {return nil}
-                return Paper(id: "arxiv:" + identifier, title: title, titleZh: row["titleZh"] as? String ?? title, authors: authors, date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]), task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [], sourceKind: "arxiv", identityStatus: "verified", pageType: "paper", blogURL: blog, sourceURL: source, pdfURL: pdf, sourceVersion: version, appearances: [blog], citation: (try? JSONValue.from(citation)) ?? .null)
+        let currentExists = FileManager.default.fileExists(atPath: current.path)
+        var eagerSnapshot: StoredSnapshot?
+        if currentExists {
+            let size = ((try FileManager.default.attributesOfItem(atPath: current.path))[.size] as? NSNumber)?.intValue ?? 0
+            if size <= Self.eagerDecodeLimit {
+                let bytes = try Data(contentsOf: current)
+                guard bytes.count <= Self.maxTotal else { throw ServiceError.invalid("本地目录超过大小限制，请保留原文件后恢复备份。") }
+                if bytes.count <= Self.eagerDecodeLimit { eagerSnapshot = try JSONDecoder().decode(StoredSnapshot.self, from: bytes) }
             }
-            snapshot = StoredSnapshot(summary: Summary(paperCount: papers.count, recordCount: rows.count, shardCount: 0, snapshotID: Self.sha256(bytes), syncedAt: nil, source: "应用内已发布样稿（尚未全站同步）", syncing: false, missingFromLatest: []), papers: papers)
         }
-        if let data = try? Data(contentsOf: directory.appendingPathComponent("fulltext.json")), data.count <= 32 * 1024 * 1024,
-           let values = try? JSONDecoder().decode([String: String].self, from: data) { fullTextIndex = values }
+        if let eagerSnapshot { snapshot = eagerSnapshot }
+        else if !currentExists, let seeded = Self.seedSnapshot(seedDirectory: seedDirectory, siteBaseURL: siteBaseURL) { snapshot = seeded }
+        else { snapshot = Self.emptySnapshot() }
+        let libraryDirectory = directory
+        let eagerlyLoaded = eagerSnapshot
+        loadID = UUID()
+        loadTask = Task.detached(priority: .utility) {
+            try Self.loadContent(directory: libraryDirectory, seedDirectory: seedDirectory, siteBaseURL: siteBaseURL, eagerlyLoaded: eagerlyLoaded)
+        }
     }
 
-    func status() -> Summary {
+    /// The pending state used before the catalog is available. It is not a claim that the library is empty.
+    private static func emptySnapshot() -> StoredSnapshot {
+        StoredSnapshot(summary: Summary(paperCount: 0, recordCount: 0, shardCount: 0, snapshotID: "", syncedAt: nil, source: "尚未同步", syncing: false, missingFromLatest: []), papers: [])
+    }
+    /// The small bundled publication sample. It is a local cache, not a full website catalog.
+    private static func seedSnapshot(seedDirectory: URL?, siteBaseURL: URL) -> StoredSnapshot? {
+        guard let seed = seedDirectory, let bytes = try? Data(contentsOf: seed.appendingPathComponent("sample.json")), bytes.count <= 8 * 1024 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any], let rows = object["librarySample"] as? [[String: Any]] else { return nil }
+        let papers = rows.compactMap { row -> Paper? in
+            guard let identifier = row["id"] as? String, let title = row["title"] as? String,
+                  let blog = row["blogUrl"] as? String, let url = URL(string: blog), url.host == siteBaseURL.host,
+                  url.path.hasPrefix(siteBaseURL.path + "/") else { return nil }
+            let authors = (row["authors"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+            let source = row["absUrl"] as? String, pdf = row["pdfUrl"] as? String
+            let version = source.flatMap(URL.init(string:))?.lastPathComponent
+            guard let citation = try? ClientProtocols.record("paper-citation-source", fields: ["paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]) else {return nil}
+            return Paper(id: "arxiv:" + identifier, title: title, titleZh: row["titleZh"] as? String ?? title, authors: authors, date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]), task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [], sourceKind: "arxiv", identityStatus: "verified", pageType: "paper", blogURL: blog, sourceURL: source, pdfURL: pdf, sourceVersion: version, appearances: [blog], citation: (try? JSONValue.from(citation)) ?? .null)
+        }
+        return StoredSnapshot(summary: Summary(paperCount: papers.count, recordCount: rows.count, shardCount: 0, snapshotID: Self.sha256(bytes), syncedAt: nil, source: "应用内已发布样稿（尚未全站同步）", syncing: false, missingFromLatest: []), papers: papers)
+    }
+    /// Reads the published catalog and the disposable full-text cache away from the calling
+    /// thread. A catalog already decoded eagerly by the initializer is reused, not read again.
+    private static func loadContent(directory: URL, seedDirectory: URL?, siteBaseURL: URL, eagerlyLoaded: StoredSnapshot?) throws -> LoadedLibrary {
+        var snapshot = eagerlyLoaded
+        if snapshot == nil {
+            let current = directory.appendingPathComponent("current.json")
+            if FileManager.default.fileExists(atPath: current.path) {
+                let bytes = try Data(contentsOf: current)
+                guard bytes.count <= maxTotal else { throw ServiceError.invalid("本地目录超过大小限制，请保留原文件后恢复备份。") }
+                do { snapshot = try JSONDecoder().decode(StoredSnapshot.self, from: bytes) }
+                catch { throw ServiceError.invalid("本机已发布资料目录无法读取（\(error.localizedDescription)）。原文件保留；可再次尝试或从备份恢复。") }
+            } else {
+                snapshot = emptySnapshot()
+            }
+        }
+        if let loaded = snapshot, loaded.papers.isEmpty, let seeded = seedSnapshot(seedDirectory: seedDirectory, siteBaseURL: siteBaseURL) { snapshot = seeded }
+        var fullTextIndex: [String: String] = [:]
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("fulltext.json")), data.count <= 32 * 1024 * 1024,
+           let values = try? JSONDecoder().decode([String: String].self, from: data) { fullTextIndex = values }
+        return LoadedLibrary(snapshot: snapshot ?? emptySnapshot(), fullTextIndex: fullTextIndex)
+    }
+
+    /// Every command that reads the published snapshot awaits this gate first. A failed load is
+    /// reported to the caller (so the app can show it and retry) rather than as an empty catalog.
+    func waitUntilReady() async throws {
+        try await ensureReady()
+    }
+    /// Explicit retry after a failed load; ordinary commands stay failed instead of re-reading
+    /// the whole catalog on every call.
+    func retryLoad() async throws {
+        loadPhase = .loading
+        startLoad()
+        try await ensureReady()
+    }
+    private func ensureReady() async throws {
+        while true {
+            switch loadPhase {
+            case .ready: return
+            case .loading: break
+            case .failed(let message):
+                throw ServiceError.invalid(message)
+            }
+            guard let task = loadTask, let identity = loadID else { throw ServiceError.unavailable("本机资料目录尚未开始载入，请稍后重试。") }
+            do {
+                let loaded = try await task.value
+                guard loadID == identity else { continue }
+                snapshot = loaded.snapshot
+                fullTextIndex = loaded.fullTextIndex
+                loadPhase = .ready
+                loadTask = nil
+                loadID = nil
+                return
+            } catch {
+                guard loadID == identity else { continue }
+                loadTask = nil
+                loadID = nil
+                loadPhase = .failed(error.localizedDescription)
+                if error is ServiceError { throw error }
+                throw ServiceError.invalid("本机资料目录载入失败：\(error.localizedDescription)。原文件保留；可再次尝试或从备份恢复。")
+            }
+        }
+    }
+    private func startLoad() {
+        let identity = UUID()
+        loadID = identity
+        loadPhase = .loading
+        let directory = self.directory, seedDirectory = self.seedDirectory, siteBaseURL = self.siteBaseURL
+        loadTask = Task.detached(priority: .utility) {
+            try Self.loadContent(directory: directory, seedDirectory: seedDirectory, siteBaseURL: siteBaseURL, eagerlyLoaded: nil)
+        }
+    }
+
+    func status() async -> Summary {
+        _ = try? await ensureReady()
         var value = snapshot.summary
         value.syncing = syncTask != nil
+        switch loadPhase {
+        case .ready: break
+        case .loading: value.loading = true; value.message = "正在载入本机目录…"
+        case .failed(let message): value.loading = false; value.message = "本机目录载入失败：\(message)"
+        }
         return value
+    }
+    /// `library.status` answers before the catalog is decoded. A pending load is reported as an
+    /// explicit loading result without `snapshotID`: a summary read racing the first list can
+    /// never be mistaken for a different, empty catalog.
+    private func statusResponse() async throws -> [String: Any] {
+        switch loadPhase {
+        case .ready: return try Self.dictionary(await status())
+        case .loading:
+            return ["loading": true, "message": "正在载入本机目录…",
+                    "syncing": syncTask != nil, "missingFromLatest": [String]()]
+        case .failed(let message):
+            return ["loading": false, "error": message, "message": "本机目录载入失败：\(message)"]
+        }
     }
 
     private func matchingPapers(query:String,source:String?,minimumScore:Double?,sort:Sort,includeRetained:Bool=false)->[Paper] {
@@ -293,6 +421,8 @@ actor LibraryService {
         return filtered
     }
 
+    /// Synchronous current-source read. Command entry points await `ensureReady()` first; the only
+    /// in-app synchronous callers are reached from an already gated aggregate command.
     func list(query: String = "", source: String? = nil, minimumScore: Double? = nil, sort: Sort = .date, offset: Int = 0, limit: Int = 200) -> [Paper] {
         Array(matchingPapers(query:query,source:source,minimumScore:minimumScore,sort:sort).dropFirst(max(0,offset)).prefix(max(0,min(limit,10000))))
     }
@@ -336,6 +466,7 @@ actor LibraryService {
     }
 
     func sync(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Summary {
+        try await ensureReady()
         if let syncTask { return try await withTaskCancellationHandler(operation: { try await syncTask.value }, onCancel: { syncTask.cancel() }) }
         let identifier = UUID()
         syncID = identifier
@@ -368,6 +499,10 @@ actor LibraryService {
         let raw = try JSONSerialization.jsonObject(with: index)
         var records: [[String: Any]] = []
         var shardCount = 0
+        // Shard bytes and rows already read and checked here; staging the aggregate catalog
+        // re-verifies both instead of reading and parsing the same shards a second time.
+        var preparedShards: [String: PublishedAggregateReader.PreparedShard] = [:]
+        var preparedBytes = 0
         if let legacy = raw as? [[String: Any]] {
             guard indexURL.path == siteBaseURL.appendingPathComponent("index.json").path else { throw ServiceError.invalid("新网站目录缺少完整格式声明。") }
             records = legacy
@@ -403,6 +538,8 @@ actor LibraryService {
                 }
                 guard let values = try JSONSerialization.jsonObject(with: data!) as? [[String: Any]], values.count == shard.recordCount else { throw ServiceError.invalid("网站分片记录数量不符。") }
                 records.append(contentsOf: values)
+                preparedShards[shard.url] = PublishedAggregateReader.PreparedShard(bytes: data!, rows: values)
+                preparedBytes += data!.count
                 progress(Progress(phase: "catalog", message: "正在同步论文目录（\(i + 1)/\(shardCount) 分片）", completed: i + 1, total: shardCount))
             }
         }
@@ -440,7 +577,9 @@ actor LibraryService {
         let encoded = try JSONEncoder().encode(replacement)
         guard encoded.count <= Self.maxTotal else { throw ServiceError.invalid("合并后的本地目录超过大小限制。") }
         if shardCount>0 {
-            _ = try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).stage(manifest:index,validationEpoch:replacement.validationEpoch!)
+            // 保留全部分片会在 manifest 之外再占一份总字节；超过 16MiB 时回落到逐片读取路径。
+            let reusableShards = preparedBytes <= 16 * 1024 * 1024 ? preparedShards : nil
+            _ = try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).stage(manifest:index,validationEpoch:replacement.validationEpoch!,preparedShards:reusableShards)
             try Task.checkCancellation();guard syncID==identifier else{throw CancellationError()}
         }
         try atomicWrite(encoded, to: directory.appendingPathComponent("current.json"))
@@ -560,6 +699,7 @@ actor LibraryService {
     }
 
     func article(for paperID: String, refresh: Bool = false, downloadImages: Bool = true, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Article {
+        try await ensureReady()
         guard let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) else { throw ServiceError.unavailable("论文不在已保存的发布资料库中。请先同步，或从论文库重新选择。") }
         let cache = cacheURL("articles", key: Self.sha256(Data(paper.blogURL.utf8)), extension: "json")
         var previous: Article?
@@ -1135,6 +1275,7 @@ actor LibraryService {
     }
 
     func downloadPDF(for paperID: String, refresh: Bool = false, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> PDFDownload {
+        try await ensureReady()
         guard let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }), paper.identityStatus == "verified", let address = paper.pdfURL, let url = URL(string: address) else { throw ServiceError.unavailable("此记录没有经过核验的原文PDF链接。") }
         let sourceURL=paper.sourceURL.flatMap(URL.init(string:))
         let pdfVersion=(url.path.hasPrefix("/pdf/") ? String(url.path.dropFirst("/pdf/".count)):url.lastPathComponent).replacingOccurrences(of: #"\.pdf$"#, with: "", options: .regularExpression)
@@ -1223,6 +1364,7 @@ actor LibraryService {
     }
 
     func citationFile(for paperID: String, format: String) async throws -> [String: Any] {
+        try await ensureReady()
         let names = ["bib": "citation.bib", "ris": "citation.ris", "json": "citation.json"]
         guard let name = names[format], let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) else { throw ServiceError.invalid("未选择可导出引用的论文或格式。") }
         var addresses: [String: String] = [:],hashes:[String:String]=[:]
@@ -1317,9 +1459,13 @@ actor LibraryService {
     }
 
     func handle(command: String, payload: sending [String: Any], progress: @escaping @Sendable ([String: Any]) -> Void = { _ in }) async throws -> sending [String: Any] {
+        switch command {
+        case "library.status": return try await statusResponse()
+        case "library.network", "library.cancel": break
+        default: try await ensureReady()
+        }
         let notify: @Sendable (Progress) -> Void = { progress($0.json) }
         switch command {
-        case "library.status": return try Self.dictionary(status())
         case "library.sync": return try Self.dictionary(try await sync(progress: notify))
         case "library.list":
             let query = payload["query"] as? String ?? "", source = payload["source"] as? String
@@ -1348,6 +1494,9 @@ actor LibraryService {
         case "library.search":
             let hits=searchCachedText(payload["query"] as? String ?? "")
             return ["ids":hits,"cachedTextIDs":hits,"scope":"仅本机已读取导读正文，不检索PDF原文"]
+        case "library.retryLoad":
+            try await retryLoad()
+            return try Self.dictionary(await status())
         case "library.citationFile":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }
             return try await citationFile(for: id, format: payload["format"] as? String ?? "json")

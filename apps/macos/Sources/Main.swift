@@ -227,18 +227,24 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func dispatch(_ command:String,payload:[String:Any]) async throws->[String:Any] {
         let readingCommands:Set<String>=["app.setPaper","library.article","pdf.open","pdf.close","pdf.page","pdf.fit","pdf.zoom","pdf.locate","pdf.highlight","pdf.removeAnnotation","storage.open","storage.prepare","model.run","archive.materials","zotero.archive","storage.cleanupPlan","storage.cleanup","app.openLocal","app.restore","app.export","app.backup","app.diagnostics","app.findQuery","model.preview","pdf.selection","pdf.outline","pdf.find","pdf.openExternal"]
         if readingCommands.contains(command){try requireMainContextAvailable()}
-        let savingCommands:Set<String>=["personal.note","personal.reading","personal.annotationNote","settings.save","pdf.frame","personal.snapshot"]
+        let savingCommands:Set<String>=["personal.note","personal.reading","personal.annotationNote","personal.flush","settings.save","pdf.frame","personal.snapshot"]
         if maintenanceBusy {guard ["pdf.frame","cloud.state","cloud.revealTransfers"].contains(command) else{throw DesktopError.message("正在整理资料，请稍后再操作")}}
         if terminationPending {
             guard savingCommands.contains(command) else{throw DesktopError.message("正在保存并退出或整理资料，请稍后再操作")}
         }
         if (aggregateSession != nil || aggregateTransitionPending), Self.aggregateForbids(command){throw DesktopError.message("汇总页面只供阅读，请先打开单篇论文再使用这项研究功能")}
-        if command.hasPrefix("aggregates."){return try await dispatchAggregates(command,payload:payload)}
+        if command.hasPrefix("aggregates."){try await library.waitUntilReady();return try await dispatchAggregates(command,payload:payload)}
         if command.hasPrefix("cloud."){return try await dispatchCloud(command,payload:payload)}
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
-            return ["personal":store.browserSnapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") ?? "development","initialView":"today","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
+            // The window is already on screen. A large published catalog is still being decoded in
+            // the background, so bootstrap reports that explicitly instead of an empty library and
+            // re-reads once the same catalog becomes available.
+            let libraryStatus=try await library.handle(command:"library.status",payload:[:])
+            // The page's own startup refresh awaits the same ready gate; do not emit a second
+            // library.changed here, or it invalidates the in-flight first read and loads twice.
+            return ["personal":store.browserSnapshot(),"settings":settings,"paper":currentPaper,"library":libraryStatus,"version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") ?? "development","initialView":"today","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
         }
         if command.hasPrefix("library.") {
             if ["library.article", "library.sync", "library.downloadPDF"].contains(command) { cancelAggregatePreload() }
@@ -266,6 +272,22 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "personal.setList":guard let key=payload["key"] as? String,let ids=payload["ids"] as? [String] else{throw DesktopError.message("资料清单无效")};try store.setList(key,ids:ids);return store.browserSnapshot()
         case "personal.note":return try store.saveNote(id:payload["paperID"] as? String ?? currentPaperID,text:payload["text"] as? String ?? "",baseRevision:payload["baseRevision"] as? Int ?? 0)
         case "personal.reading":guard let owner=payload["paperID"] as? String,!owner.isEmpty,owner==currentPaperID || (store.value["personalPapers"] as? [String:[String:Any]])?[owner] != nil else{throw DesktopError.message("阅读身份缺失，未覆盖其他文献状态")};try store.saveReading(id:owner,state:payload);return [:]
+        case "personal.flush":
+            // One round trip for the note/annotation/reading writes a single tick asks for.
+            // Items keep the individual commands' order, revision checks and identity guards;
+            // the first failure stops the batch and the reply reports both the items already
+            // written and the original error, so the page keeps the unsaved draft instead of
+            // silently dropping it or re-applying a write that already landed.
+            var flushed:[String:Any]=["ok":true];var flushError:String?
+            if let note=payload["note"] as? [String:Any] {do{flushed["note"]=try await dispatch("personal.note",payload:note)}catch{flushError=error.localizedDescription}}
+            if flushError==nil,let annotations=payload["annotations"] as? [[String:Any]] {
+                var applied=0
+                for entry in annotations {do{_=try await dispatch("personal.annotationNote",payload:entry);applied+=1}catch{flushError=error.localizedDescription;break}}
+                flushed["annotationsApplied"]=applied
+            }
+            if flushError==nil,let reading=payload["reading"] as? [String:Any] {do{_=try await dispatch("personal.reading",payload:reading);flushed["reading"]=true}catch{flushError=error.localizedDescription}}
+            if let flushError{flushed["ok"]=false;flushed["error"]=flushError}
+            return flushed
         case "personal.annotations":return ["annotations":store.annotations(id:currentPaperID)]
         case "personal.search":
             let query=(payload["query"] as? String ?? "").lowercased();let notes=store.value["notes"] as? [String:[String:Any]] ?? [:]

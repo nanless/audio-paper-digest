@@ -240,7 +240,7 @@ import UniformTypeIdentifiers
         let staged=try BackupCodec.stage(payload,parentDirectory:parent),stage=staged.stageDirectory
         defer{try? fm.removeItem(at:stage)}
         try RestoreLocalPolicy.apply(stage:stage,current:directory)
-        let stagedStore=try DesktopStore(directory:stage);try validateSettings(stagedStore.value["settings"] as? [String:Any] ?? [:]);_=try LibraryService(dataDirectory:stage)
+        let stagedStore=try DesktopStore(directory:stage);try validateSettings(stagedStore.value["settings"] as? [String:Any] ?? [:]);let stagedLibrary=try LibraryService(dataDirectory:stage);try await stagedLibrary.waitUntilReady()
         let alert=NSAlert()
         alert.messageText="恢复个人研究空间？"
         alert.informativeText="备份文件已通过完整性校验。\n\n确认后会先保留当前研究空间，再恢复所选快照。快照之后的笔记、解析和原始用量可从恢复前副本找回。\n\n本机模型、网络和预算设置，以及已派发请求计数继续保留；API、网盘与 Zotero 许可不随备份替换。"
@@ -260,10 +260,13 @@ import UniformTypeIdentifiers
         do{try fm.moveItem(at:stage,to:directory)}catch{try? fm.moveItem(at:old,to:directory);throw error}
         do{
             let restoredStore=try DesktopStore(directory:directory),restoredLibrary=try LibraryService(dataDirectory:directory),restoredZotero=ZoteroService(dataDirectory:directory),restoredModel=ModelService(directory:directory,store:restoredStore)
+            try await restoredLibrary.waitUntilReady()
             store=restoredStore;library=restoredLibrary;zotero=restoredZotero;model=restoredModel;storage=DesktopStorage(directory:directory,store:restoredStore)
         }catch{
             let failed=parent.appendingPathComponent("PaperDigest-failed-restore-"+UUID().uuidString)
-            try fm.moveItem(at:directory,to:failed);try fm.moveItem(at:old,to:directory);throw error
+            try? fm.moveItem(at:directory,to:failed)
+            do{try fm.moveItem(at:old,to:directory)}catch{throw DesktopError.message("恢复失败且旧资料未能移回原位：" + error.localizedDescription + "。旧资料保留在 " + old.path)}
+            throw error
         }
         configureSchedule()
         contextGeneration+=1;pdfView.document=nil;pdfView.isHidden=true;currentPaper=[:];currentPaperID="";pdfOwner="";pdfVersion="";currentPDFSHA="";currentPDFPath=nil;annotationsByID=[:];currentArticle=[:];selectionSource=[:];offlinePDF=nil;currentPDFReceipt=[:];emit("personal.changed")

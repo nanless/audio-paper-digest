@@ -40,9 +40,10 @@ async function installFixture(page, initial={}) {
   await page.addInitScript(f=>{
     if (window.top!==window) return;
     const copy=x=>structuredClone(x);
-    window.__calls=[];window.__unimplemented=[];window.__fixture={...f,personal:copy(f.initialPersonal||{favorites:[],reading:[],notes:{},sessions:[],readingState:{},annotations:{}}),selected:null,pendingReadings:[],pendingAnnotations:[],failSettings:false,failNote:false,holdArticle:false,releaseArticle:null};
+    window.__calls=[];window.__unimplemented=[];window.__bridge=[];window.__fixtureDepth=0;window.__fixture={...f,personal:copy(f.initialPersonal||{favorites:[],reading:[],notes:{},sessions:[],readingState:{},annotations:{}}),selected:null,pendingReadings:[],pendingAnnotations:[],failSettings:false,failNote:false,holdArticle:false,releaseArticle:null};
     window.webkit={messageHandlers:{desktop:{postMessage:async({command,payload={}})=>{
       const b=window.__fixture;window.__calls.push({command,payload:copy(payload)});
+      if(!window.__fixtureDepth)window.__bridge.push(command);
       switch(command) {
         case 'app.bootstrap':return copy({personal:b.personal,settings:b.settings,paper:b.selected,library:{paperCount:b.papers.length,recordCount:b.papers.length}});
         case 'aggregates.list':return {records:[],available:false,notice:'This isolated paper fixture has no source-bound aggregate manifest'};
@@ -60,6 +61,17 @@ async function installFixture(page, initial={}) {
         case 'personal.snapshot':return copy(b.personal);
         case 'personal.note':if(b.failNote)throw Error('Fixture note disk failure');if(b.strictNoteRevision&&payload.baseRevision!==(b.personal.notes[payload.paperID]?.revision||0))throw Error('Fixture note changed');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};return copy(b.personal.notes[payload.paperID]);
         case 'personal.reading':{const owner=payload.paperID||b.selected.id,snapshot=copy(payload);if(b.holdReadingFor===owner)await new Promise(resolve=>b.pendingReadings.push(resolve));b.personal.readingState[owner]={...snapshot,updatedAt:new Date().toISOString()};return {};}
+        // Batched personal write: real bridge counts one request, fixture records the
+        // decomposed commands so callers keep seeing the same per-item protocol.
+        case 'personal.flush':{
+          const reply={ok:true},send=async(command,inner)=>{window.__fixtureDepth++;try{return await window.webkit.messageHandlers.desktop.postMessage({command,payload:inner});}finally{window.__fixtureDepth--;}};
+          try{
+            if(payload.note)reply.note=await send('personal.note',payload.note);
+            if(payload.annotations?.length){reply.annotationsApplied=0;for(const entry of payload.annotations){await send('personal.annotationNote',entry);reply.annotationsApplied++;}}
+            if(payload.reading){await send('personal.reading',payload.reading);reply.reading=true;}
+            return reply;
+          }catch(error){reply.ok=false;reply.error=error.message;return reply;}
+        }
         case 'personal.list.edit':{if(b.holdFavorite)await new Promise(resolve=>b.releaseFavorite=resolve);if(b.failFavorite)throw Error('Fixture favorite disk failure');const set=new Set(b.personal[payload.key]||[]);payload.ids.forEach(id=>payload.action==='remove'?set.delete(id):set.add(id));b.personal[payload.key]=[...set];return copy(b.personal);}
         case 'personal.setList':b.personal[payload.key]=payload.ids;return copy(b.personal);
         case 'pdf.open':return {page:b.personal.readingState?.[b.selected?.id]?.pdfPage||1,pageCount:13,scale:1,version:'2610.27491v1',sha256:'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c'};
@@ -266,6 +278,85 @@ if(require.main===module)(async()=>{
       await p.locator('[data-offline]').click();await p.waitForFunction(()=>paperDigestArchiveHTML()?.html.includes('离线界面测试夹具'));assert.equal(await p.frameLocator('#guide-frame').locator('math').count(),4);assert.equal(await p.frameLocator('#guide-frame').locator('img').count(),3);assert.equal(await p.frameLocator('#guide-frame').locator('table').count(),4);assert.deepEqual(await p.evaluate(()=>__unimplemented),[]);
     }finally{await p.close();}
   });
+  await check('one batched personal.flush carries note, annotation comment and reading instead of three writes',async()=>{
+    const p=await fresh({initialPersonal:{favorites:[],reading:[],notes:{},sessions:[],readingState:{},annotations:{[primary.id]:[{...mark}]}}});
+    try{
+      await p.locator('[data-library-open="'+primary.id+'"]').click();await p.waitForFunction(id=>paperDigestArchiveHTML()?.paperID===id,primary.id);
+      await p.locator('#tab-note').click();await p.waitForSelector('[data-annotation-comment]');
+      const result=await p.evaluate(async()=>{
+        const box=document.getElementById('note-editor');box.value='Batched note fixture';box.dispatchEvent(new Event('input'));
+        const field=document.querySelector('[data-annotation-comment]');field.value='Batched comment fixture';field.dispatchEvent(new Event('input'));
+        document.getElementById('question').value='Batched reading fixture';
+        const callMark=__calls.length,bridgeMark=__bridge.length;
+        await paperDigestFlushPendingNote(true);
+        return {bridge:__bridge.slice(bridgeMark),calls:__calls.slice(callMark),status:document.getElementById('note-status').textContent,personal:structuredClone(__fixture.personal)};
+      });
+      assert.deepEqual(result.bridge.filter(command=>['personal.flush','personal.note','personal.annotationNote','personal.reading'].includes(command)),['personal.flush'],'同一 tick 的三类个人写入只应产生一次桥接往返');
+      const flush=result.calls.find(entry=>entry.command==='personal.flush').payload;
+      assert.equal(flush.note.text,'Batched note fixture');assert.equal(flush.note.baseRevision,0);
+      assert.equal(flush.annotations.length,1);assert.equal(flush.annotations[0].comment,'Batched comment fixture');assert.equal(flush.annotations[0].id,mark.id);
+      assert.equal(flush.reading.question,'Batched reading fixture');
+      assert.equal(result.status,'已保存到本机');
+      assert.deepEqual({note:result.personal.notes[primary.id].text,comment:result.personal.annotations[primary.id][0].comment,question:result.personal.readingState[primary.id].question},{note:'Batched note fixture',comment:'Batched comment fixture',question:'Batched reading fixture'});
+      const clean=await p.evaluate(async()=>{const count=__bridge.length;await paperDigestFlushPendingNote(true);return {count,after:__bridge.length};});
+      assert.equal(clean.after,clean.count,'没有待写内容时不得再发个人资料写入');
+    }finally{await p.close();}
+  });
+  await check('batched note revision conflict is reported, keeps the draft and skips later writes',async()=>{
+    const p=await fresh({initialPersonal:{favorites:[],reading:[],notes:{[primary.id]:{text:'Saved batched note',revision:4}},sessions:[],readingState:{},annotations:{}}});
+    try{
+      await p.locator('[data-library-open="'+primary.id+'"]').click();await p.waitForFunction(id=>paperDigestArchiveHTML()?.paperID===id,primary.id);
+      await p.locator('#tab-note').click();
+      const result=await p.evaluate(async()=>{
+        document.getElementById('question').value='Reading must not be written after a note conflict';
+        const box=document.getElementById('note-editor');box.value='Local batched draft';box.dispatchEvent(new Event('input'));
+        __fixture.strictNoteRevision=true;__fixture.personal.notes[__fixture.primary.id]={text:'Remote batched note',revision:9};
+        const callMark=__calls.length;let error=null;
+        try{await paperDigestFlushPendingNote(true);}catch(e){error=e.message;}
+        return {error,calls:__calls.slice(callMark).map(entry=>entry.command),notes:structuredClone(__fixture.personal.notes),draft:box.value,status:document.getElementById('note-status').textContent};
+      });
+      assert.equal(result.error,'Fixture note changed');
+      assert.equal(result.notes[primary.id].text,'Remote batched note');
+      assert.equal(result.draft,'Local batched draft');
+      assert.ok(!result.status.includes('已保存'));
+      assert.ok(result.calls.includes('personal.flush'));
+      assert.ok(!result.calls.includes('personal.reading'),'笔记 CAS 失败后不得继续写阅读进度');
+    }finally{await p.close();}
+  });
+  await check('PDF frame reports coalesce same-tick layouts, throttle drag churn and always deliver the final rectangle',async()=>{
+    const runtime=fs.readFileSync(path.join(resources,'native.js'),'utf8'),p=await browser.newPage({viewport:{width:1440,height:900}});p.setDefaultTimeout(10000);
+    try{
+      await installFixture(p);
+      await p.route('**/native.js',route=>route.fulfill({contentType:'text/javascript',body:runtime+'\nwindow.__pdfFrames={layoutPDF,state};'}));
+      await p.goto(base);await p.locator('[data-library-open="'+primary.id+'"]').click();await p.waitForFunction(()=>document.querySelector('#guide-frame')?.contentDocument?.querySelector('main'));
+      await p.locator('#pdf-toggle').click();await p.waitForFunction(()=>document.querySelector('#pdf-toggle').getAttribute('aria-pressed')==='true');await p.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+      const start=await p.evaluate(()=>__calls.filter(entry=>entry.command==='pdf.frame').length);
+      const burst=await p.evaluate(async()=>{document.getElementById('reading-area').style.setProperty('--split','52%');for(let i=0;i<40;i++)__pdfFrames.layoutPDF();await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return __calls.filter(entry=>entry.command==='pdf.frame').length;});
+      assert.ok(burst-start<=1,`同一 tick 的 40 次排版只应合并为一次 pdf.frame，实际 ${burst-start}`);
+      await p.evaluate(async()=>{const area=document.getElementById('reading-area');for(let i=0;i<30;i++){area.style.setProperty('--split',(50+i*.2)+'%');__pdfFrames.layoutPDF();await new Promise(requestAnimationFrame);}});
+      const throttled=await p.evaluate(()=>__calls.filter(entry=>entry.command==='pdf.frame').length);
+      assert.ok(throttled-burst<=8,`约 30 帧连续几何变化后 pdf.frame 应保持在个位数，实际 ${throttled-burst}`);
+      await p.waitForTimeout(220);
+      const settled=await p.evaluate(()=>{const calls=__calls.filter(entry=>entry.command==='pdf.frame'),box=document.getElementById('pdf-scroll').getBoundingClientRect();return {last:calls.at(-1).payload,visible:__pdfFrames.state.pdf,x:box.x,y:box.y,width:box.width,height:box.height};});
+      assert.equal(settled.last.visible,settled.visible===true);
+      assert.ok(Math.abs(settled.last.x-settled.x)<1&&Math.abs(settled.last.y-settled.y)<1&&Math.abs(settled.last.width-settled.width)<1&&Math.abs(settled.last.height-settled.height)<1,`节流后必须以最新几何收尾 ${JSON.stringify(settled)}`);
+      const closing=await p.evaluate(async()=>{
+        const area=document.getElementById('reading-area');
+        area.style.setProperty('--split','54%');__pdfFrames.layoutPDF();await new Promise(requestAnimationFrame);
+        area.style.setProperty('--split','56%');__pdfFrames.layoutPDF();await new Promise(requestAnimationFrame);
+        const before=__calls.filter(entry=>entry.command==='pdf.frame').length;
+        document.getElementById('pdf-close').click();
+        await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+        const calls=__calls.filter(entry=>entry.command==='pdf.frame');
+        return {before,during:calls.length,last:calls.at(-1).payload.visible};
+      });
+      assert.ok(closing.during>closing.before,'关闭 PDF 必须通过一次 pdf.frame 立刻隐藏原生视图');
+      assert.equal(closing.last,false,'可见性变化必须立即发送，不能等待节流窗口');
+      await p.waitForTimeout(220);
+      assert.equal(await p.evaluate(()=>__calls.filter(entry=>entry.command==='pdf.frame').at(-1).payload.visible),false,'关闭后待发的可见帧不得回写');
+    }finally{await p.close();}
+  });
+
   const settingPage=await browser.newPage({viewport:{width:800,height:700}});settingPage.setDefaultTimeout(10000);await installFixture(settingPage);await settingPage.goto(base+'/settings.html');await settingPage.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));
   await check('settings really persist via bridge after edit',async()=>{await settingPage.locator('#appearance').selectOption('dark');await settingPage.waitForFunction(()=>__fixture.settings.appearance==='dark');assert.equal(await settingPage.locator('#save-status').innerText(),'设置已保存到本机');assert.equal(await settingPage.evaluate(()=>__calls.filter(c=>c.command==='settings.save').length),1);});
   await check('settings write failure clearly replaces previous saved status',async()=>{await settingPage.evaluate(()=>__fixture.failSettings=true);await settingPage.locator('#appearance').selectOption('light');await settingPage.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Fixture settings disk failure'));assert.equal(await settingPage.evaluate(()=>__fixture.settings.appearance),'dark');assert.ok(!(await settingPage.locator('#save-status').innerText()).includes('已保存'));});
