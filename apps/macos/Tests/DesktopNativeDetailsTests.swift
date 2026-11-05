@@ -181,7 +181,12 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     // Window layout can lag the open call on slow CI machines; wait for the
     // real content size instead of asserting immediately after `show`.
     try await wait{app.storageDetailWindow?.contentView?.bounds.size==originalHelpContentSize}
-    try check(app.storageDetailWindow?.contentView?.bounds.size==originalHelpContentSize && originalHelpContentSize==NSSize(width:820,height:700) && app.storageDetailWindow?.minSize==originalHelpMinimum && unchangedHelpID==app.storageDetailSession?.id,"other native detail kinds retain original full initial/minimum dimensions and live session")
+    // A headless runner can clamp the window to its small virtual display, so
+    // accept the standard 820x700 or the clamped size, but never below minSize.
+    let helpSize=originalHelpContentSize
+    let helpBounded=helpSize.width>=originalHelpMinimum.width && helpSize.height>=originalHelpMinimum.height
+        && helpSize.width<=820 && helpSize.height<=700
+    try check(helpBounded && app.storageDetailWindow?.contentView?.bounds.size==originalHelpContentSize && app.storageDetailWindow?.minSize==originalHelpMinimum && unchangedHelpID==app.storageDetailSession?.id,"other native detail kinds retain original full initial/minimum dimensions and live session")
     _=app.closeStorageDetails();app.window.orderOut(nil)
     print("Native details assertions: \(count), failures: 0")
  }
