@@ -297,7 +297,7 @@ function guideHeader(doc,paper,original,sourceVersion){
 }
 function renderGuide(){const p=state.paper,a=state.article;if(!p||!a){readerNotices.clear();return;}readerNotices.update();const previous=guideFrame?.dataset.paperID===p.id?guideFrame:null;const scroll=previous?guideScroll():state.personal.readingState?.[p.id]?.guideScroll||0;const body=a.markdown?markdownBody(a.markdown):sanitized(a.html||'');if(!a.markdown)renderMath(body);for(const anchor of body.querySelectorAll('h1 a,h2 a,h3 a,h4 a'))if(anchor.getAttribute('href')?.startsWith('#')&&anchor.textContent.trim()==='#')anchor.remove();const firstHeading=body.firstElementChild;if(firstHeading&&/^H[1-3]$/.test(firstHeading.tagName)&&matchesPublishedGuideHeading(firstHeading,[p.title,p.titleZh].filter(Boolean)))firstHeading.remove();const sourceVersion=typeof a.sourceVersion==='string'&&a.sourceVersion.trim()?a.sourceVersion:'导读来源版本未记录',original=p.title&&p.title!==(p.titleZh||p.title)&&!hasPreambleEnglishTitle(body,p.title);body.insertBefore(guideHeader(body.ownerDocument,p,original,sourceVersion),body.firstChild);for(const notice of a.notices||[]){const node=body.ownerDocument.createElement('p');node.className='notice';node.textContent=notice;body.append(node);}resetGuideAnchor();guideFrame=mountFrame($('article'),body,p.titleZh||p.title);guideFrame.id='guide-frame';guideFrame.dataset.paperID=p.id;guideFrame.dataset.revision=a.revisionSHA256;const renderedFrame=guideFrame;if(initialGuideRestore&&isCurrent(initialGuideRestore.owner)){initialGuideRestore={...initialGuideRestore,frame:renderedFrame,revision:String(a.revisionSHA256)};}renderedFrame.dataset.scrollTarget=String(scroll);renderedFrame.dataset.scrollReady='false';let initialized=false;const initialize=()=>{if(renderedFrame!==guideFrame||state.paper?.id!==p.id)return;const doc=renderedFrame.contentDocument;if(initialized||!doc?.querySelector('main'))return;initialized=true;const outline=$('outline');outline.replaceChildren();for(const [i,h]of [...doc.querySelectorAll('h2,h3')].entries()){if(!h.id)h.id='section-'+i;const button=document.createElement('button');button.textContent=h.textContent;button.onclick=()=>navigateGuideTo(h);outline.append(button);}updateOutlineVisibility();restoreGuidePosition();guideResize=new ResizeObserver(()=>{if(renderedFrame===guideFrame)queueGuideReflow();});guideResize.observe(renderedFrame);for(const name of ['wheel','touchstart','pointerdown'])doc.addEventListener(name,()=>{if(renderedFrame===guideFrame){cancelInitialGuideRestore(renderedFrame);cancelGuideReflow();}},{passive:true,capture:true});doc.addEventListener('keydown',e=>{if(renderedFrame===guideFrame&&!e.metaKey&&!e.ctrlKey&&!e.altKey&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key)){cancelInitialGuideRestore(renderedFrame);cancelGuideReflow();}},{capture:true});doc.defaultView.addEventListener('scroll',()=>{if(renderedFrame===guideFrame)captureGuideScroll();clearTimeout(readingTimer);const owner=p.id;readingTimer=setTimeout(()=>{if(renderedFrame===guideFrame&&state.paper?.id===owner)saveReading({guideScroll:guideScroll(),pdfPage:state.pdfStatus.page||1}).catch(error);},600);});};renderedFrame.addEventListener('load',initialize);initialize();}
 function setReadingSplit(value){const ratio=Number.isFinite(value)?Math.max(38,Math.min(62,value)):46;$('reading-area').style.setProperty('--split',ratio+'%');$('splitter').setAttribute('aria-valuenow',String(Math.round(ratio)));}
-function readingSnapshot(extra={}){return {paperID:state.paper?.id,question:$('question').value,scope:$('evidence-scope').value,from:Number($('range-from').value),to:Number($('range-to').value),chapter:Number($('pdf-chapter').value),split:parseFloat(getComputedStyle($('reading-area')).getPropertyValue('--split'))||46,mode:state.mode,pdfPage:state.pdfStatus.page||1,pdfOpen:initialGuideSnapshot()?.waiting?true:state.pdf,guideScroll:guideScroll(),...extra};}
+function readingSnapshot(extra={},waitingIntent=true){const savedOpen=state.personal.readingState?.[state.paper?.id]?.pdfOpen===true;return {paperID:state.paper?.id,question:$('question').value,scope:$('evidence-scope').value,from:Number($('range-from').value),to:Number($('range-to').value),chapter:Number($('pdf-chapter').value),split:parseFloat(getComputedStyle($('reading-area')).getPropertyValue('--split'))||46,mode:state.mode,pdfPage:state.pdfStatus.page||1,pdfOpen:waitingIntent&&savedOpen&&initialGuideSnapshot()?.waiting?true:state.pdf,guideScroll:guideScroll(),...extra};}
 async function saveReading(extra={}){if(!state.paper)return;const snapshot=readingSnapshot(extra),revision=(readingWrites.get(snapshot.paperID)||0)+1;readingWrites.set(snapshot.paperID,revision);await call('personal.reading',snapshot);if(readingWrites.get(snapshot.paperID)!==revision)return;state.personal={...state.personal,readingState:{...(state.personal.readingState||{}),[snapshot.paperID]:{...snapshot,updatedAt:new Date().toISOString()}}};}
 async function saveNote(){
  if(personalFlush)await personalFlush.catch(()=>{});
@@ -405,10 +405,12 @@ function applyReadingSave(snapshot,revision){if(readingWrites.get(snapshot.paper
 async function fallbackPersonalWrites(payload,drafts,revision){
  if(payload.note){const saved=await call('personal.note',payload.note);applyNoteSave(payload.note.paperID,saved,payload.note.text);}
  for(const item of drafts){await call('personal.annotationNote',item.snapshot);applyAnnotationSave(item);}
- if(payload.reading){await call('personal.reading',payload.reading);applyReadingSave(payload.reading,revision);readingWrites.set(payload.reading.paperID,revision);}
+ if(payload.reading){await call('personal.reading',payload.reading);readingWrites.set(payload.reading.paperID,revision);applyReadingSave(payload.reading,revision);}
 }
 async function flushPersonalWrites({reading=false,syncCommit=false}={}){
- if(personalFlush)return personalFlush;
+ // Wait for an in-flight batch instead of returning its promise: the caller may have typed
+ // after that batch captured its payload, and the new draft must still be written.
+ if(personalFlush)await personalFlush.catch(()=>{});
  if(!state.paper&&!annotationDrafts.size)return false;
  personalFlush=(async()=>{
   try{
@@ -421,7 +423,9 @@ async function flushPersonalWrites({reading=false,syncCommit=false}={}){
     const drafts=[...annotationDrafts].map(([key,draft])=>({key,snapshot:{...draft}}));
     if(drafts.length)payload.annotations=drafts.map(item=>item.snapshot);
     const snapshot=reading&&state.paper?readingSnapshot():null;
-    if(snapshot&&(!syncCommit||readingSnapshotDirty(snapshot)))payload.reading=snapshot;
+    // Only a real change is written; navigation-time commits of identical reading state must
+    // not produce a redundant bridge call.
+    if(snapshot&&readingSnapshotDirty(snapshot))payload.reading=snapshot;
     if(!payload.note&&!payload.annotations&&!payload.reading)return false;
     const revision=payload.reading?(readingWrites.get(payload.reading.paperID)||0)+1:0;
     if(personalFlushUnsupported){await fallbackPersonalWrites(payload,drafts,revision);return true;}
@@ -439,8 +443,13 @@ async function flushPersonalWrites({reading=false,syncCommit=false}={}){
     if(payload.note&&result?.note)applyNoteSave(payload.note.paperID,result.note,payload.note.text);
     const applied=Number(result?.annotationsApplied)||0;
     for(let index=0;index<applied&&index<drafts.length;index++)applyAnnotationSave(drafts[index]);
-    if(payload.reading&&result?.reading){applyReadingSave(payload.reading,revision);readingWrites.set(payload.reading.paperID,revision);}
-    if(result?.ok===false)throw new Error(result.error||'本机个人资料保存未完成');
+    if(payload.reading&&result?.reading){readingWrites.set(payload.reading.paperID,revision);applyReadingSave(payload.reading,revision);}
+    if(result?.ok===false){
+      // The batch stopped at the first conflict. Repeat the same writes individually so the
+      // existing revision/error semantics surface, then report the original failure.
+      try{await fallbackPersonalWrites(payload,drafts,revision);}catch(fallbackError){throw fallbackError;}
+      throw new Error(result.error||'本机个人资料保存未完成');
+    }
     if(!(state.paper&&state.noteDirty)&&!annotationDrafts.size)return true;
    }
   }finally{personalFlush=null;}

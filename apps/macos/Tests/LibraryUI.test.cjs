@@ -41,11 +41,11 @@ await page.locator('#search-input').fill('no-visible-selection');await page.wait
 await page.evaluate(async()=>{testApp.state.view='favorites';await testLibrary.render();});assert.equal(await page.locator('#search-input').inputValue(),'favorite-own-query');
 // Startup can read the summary before the published catalog finishes decoding: it is an explicit
 // loading value without snapshotID, while the gated list remains the authoritative catalog.
-await page.evaluate(async()=>{testApp.state.view='library';await testLibrary.render();});
+await page.evaluate(async()=>{testApp.state.view='library';await testLibrary.render();document.querySelector('#search-input').value='';for(const [id,value] of [['library-source','all'],['library-min-score',''],['library-date-from',''],['library-date-until','']]){const field=document.getElementById(id);if(field){field.value=value;field.dispatchEvent(new Event('change'));}}await testLibrary.render();});
 await page.evaluate(()=>{const original=testApp.call;testApp.call=async function(command,payload){if(command==='library.status')return{loading:true,message:'正在载入本机目录…'};return original.call(this,command,payload);};});
 await page.evaluate(()=>testLibrary.refresh());
 assert.equal(await page.locator('#paper-rows tr[data-library-row]').count(),100,'a loading summary still renders the ready catalog without a snapshot mismatch error');
 assert.equal(await page.evaluate(()=>document.getElementById('library-count').textContent),'1227','a loading summary falls back to the loaded catalog count');
 assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>Object.keys(localStorage).length),0);
 console.log('PASS Library UI: pagination, multi-select, native persistence, private/fulltext search, combined filters, context actions, independent view filters/page/selection/scroll, refresh continuity, hidden-selection notice, desktop width, no localStorage');
-await browser.close();server.close();})().catch(error=>{console.error(error);server.close();process.exitCode=1;});
+await browser.close();server.close();})().catch(async error=>{console.error(error);try{await browser?.close();}catch{}server.close();process.exitCode=1;});
