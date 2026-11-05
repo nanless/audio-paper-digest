@@ -207,9 +207,10 @@ jobs:
       - name: 运行 Android 客户端单元测试
         # 不运行 apps/android/test.sh：除 :app:testDebugUnitTest 外，它还会构建、
         # lint 并运行整套发行/签名检查；本作业只覆盖 Gradle 单元测试。
-        # 单元测试不读取打包资产，因此排除资产准备任务；该任务未在 CI 上验证。
+        # 单元测试会读取打包后的已发布样本，因此保留资产准备任务；样本资产已入库，
+        # katex 依赖已在上一阶段安装。
         working-directory: apps/android
-        run: ./gradlew :app:testDebugUnitTest --no-daemon -x :app:prepareDebugPublishedAssets
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
 
   client-macos:
     name: client (macos)
