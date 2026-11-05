@@ -178,6 +178,9 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     _=try await longView.evaluateJavaScript("document.querySelector('#details-close').click();true")
     try await wait{app.storageDetailSession==nil}
     let (_,unchangedHelpID)=try await show(.help)
+    // Window layout can lag the open call on slow CI machines; wait for the
+    // real content size instead of asserting immediately after `show`.
+    try await wait{app.storageDetailWindow?.contentView?.bounds.size==originalHelpContentSize}
     try check(app.storageDetailWindow?.contentView?.bounds.size==originalHelpContentSize && originalHelpContentSize==NSSize(width:820,height:700) && app.storageDetailWindow?.minSize==originalHelpMinimum && unchangedHelpID==app.storageDetailSession?.id,"other native detail kinds retain original full initial/minimum dimensions and live session")
     _=app.closeStorageDetails();app.window.orderOut(nil)
     print("Native details assertions: \(count), failures: 0")
