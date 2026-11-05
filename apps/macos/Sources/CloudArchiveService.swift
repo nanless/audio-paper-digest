@@ -149,6 +149,7 @@ public actor CloudArchiveService {
         do { payload = try BackupCodec.parse(data) } catch { throw CloudError.invalidBackup }
         do { try BackupCodec.requirePortable(payload) } catch { throw CloudError.localOnlySecret }
         let chunks = Self.makeChunks(data)
+        let freshUpload = checkpoint == nil
         var state: UploadCheckpoint
         if let checkpoint {
             guard ClientProtocols.hasValidHeader(checkpoint.contract,fingerprint:checkpoint.schemaFingerprint,"paperdigest-cloud-transfer"), checkpoint.destinationID == destinationID,
@@ -184,7 +185,7 @@ public actor CloudArchiveService {
         if fullSync { try await ensureCollection(scopePath) }
         try await ensureCollection(scopePath + state.reference.month + "/")
         // UUID paths are unique. Resume may encounter the directory created before a lost reply.
-        try await ensureCollection(base)
+        try await ensureCollection(base, trustingCreated: true)
         if let completed = try await optionalGet(base + "manifest.json", limit: Self.manifestLimit) {
             let remote = try Self.decodeManifest(completed, reference: state.reference)
             guard remote == manifest else { throw CloudError.integrity }
@@ -197,15 +198,15 @@ public actor CloudArchiveService {
         for chunk in chunks {
             try Task.checkCancellation()
             let bytes = Self.bytes(data, chunk: chunk), path = base + Self.chunkName(chunk.index)
-            if let existing = try await optionalGet(path, limit: chunk.bytes) {
+            if !freshUpload, let existing = try await optionalGet(path, limit: chunk.bytes) {
                 guard existing.count == chunk.bytes, Self.hash(existing) == chunk.sha256 else { throw CloudError.integrity }
             } else {
                 // Never overwrite even an uncommitted remote object. If the reply is
                 // lost, a later explicit resume GET checks what actually reached it.
-                let result = try await request("PUT", path: path, body: bytes, headers: ["If-None-Match":"*", "Content-Type":"application/octet-stream"], limit: 64 * 1024, accepted: [200,201,204,412])
-                guard [200,201,204,412].contains(result.response.statusCode) else { throw CloudError.integrity }
-                let readback = try await request("GET", path: path, limit: chunk.bytes, accepted: [200]).data
-                guard readback == bytes else { throw CloudError.integrity }
+                _ = try await request("PUT", path: path, body: bytes, headers: ["If-None-Match":"*", "Content-Type":"application/octet-stream"], limit: 64 * 1024, accepted: [200,201,204,412])
+                // 412 表示远端已有该 UUID 对象；无论哪种状态都回读核对字节。
+                let readback = try await request("GET", path: path, limit: chunk.bytes, accepted: [200,404])
+                guard readback.response.statusCode == 200, readback.data == bytes else { throw CloudError.integrity }
             }
             state.verifiedChunkIndices = Array(Set(state.verifiedChunkIndices + [chunk.index])).sorted()
             state.retryAfter = nil; try await save(state)
@@ -406,10 +407,11 @@ public actor CloudArchiveService {
         do { try await checkpointSink(state); currentCheckpoint = state }
         catch { try Self.preserveCancellation(error); throw CloudError.checkpointStore }
     }
-    private func ensureCollection(_ path: String) async throws {
-        _ = try await request("MKCOL", path: path, limit: 64 * 1024, accepted: [201,405])
-        // 405 alone is not evidence a collection exists (it may be a file or a
-        // server denying MKCOL). Probe the actual exact collection in that case.
+    private func ensureCollection(_ path: String, trustingCreated: Bool = false) async throws {
+        let created = try await request("MKCOL", path: path, limit: 64 * 1024, accepted: [201,405])
+        // 只有本次新生成的 UUID 目录可以信任 201；共享路径（/dav/、scope、月份）仍要
+        // 用 PROPFIND 核对它确实是集合，避免不合规服务器把文件当目录返回。
+        if trustingCreated, created.response.statusCode == 201 { return }
         let response = try await request("PROPFIND", path: path, body: Self.propfind,
                                          headers:["Depth":"0", "Content-Type":"application/xml; charset=utf-8"], limit: Self.listingLimit, accepted:[207])
         try CloudDAVListing.requireCollection(response.data, path: path)

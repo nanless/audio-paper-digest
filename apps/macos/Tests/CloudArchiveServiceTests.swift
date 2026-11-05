@@ -330,6 +330,10 @@ private actor CloudIndependentPublishGate {
             try require(states.first?.verifiedChunkIndices==[] && states.last?.manifestVerified==true,"durable initial and final states")
             let requests=await dav.records(),puts=requests.filter{$0.method=="PUT"}
             try require(puts.count==4 && puts.allSatisfy{$0.createOnly},"only create-only chunks then manifest")
+            for path in puts.dropLast().map({$0.path}) {
+                let methods=requests.filter{$0.path==path}.map{$0.method}
+                try require(methods.first=="PUT","fresh upload must create each chunk before any probe GET")
+            }
             try require(puts.last?.path.hasSuffix("manifest.json")==true && puts.dropLast().allSatisfy{$0.bytes<=CloudArchiveService.chunkBytes},"manifest written last, each file below vendor limit")
             try require(try await s.download(reference:info.reference)==large,"download is exact original encoded bytes")
             try require(try await s.list(month:info.reference.month)==[info],"only complete verified manifest listed")
