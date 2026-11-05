@@ -815,6 +815,43 @@ function getFatalEmptyCandidateSourceFailures(sourceHealth) {
     return [];
 }
 
+// 零候选日确认闸门：抓取链路没有抛出致命来源错误，但本批进入筛选的候选为 0 时，
+// 既可能是来源故障（页面改版、空列表），也可能是官方公告当日尚未生成。两者都不能
+// 当作正常日更继续。修复前这种空批次会一路走到发布侧，在“没有论文可生成”处失败；
+// 现在提前到付费筛选前停止，避免为不存在的新论文调用筛选模型。确认当天确实没有新论文后，
+// 才用 --allow-empty-daily（CLI，主推）或 PD_ALLOW_EMPTY_DAILY=1（.env 兼容写法）显式放行。
+// 来源部分失败与官方 PDF 404 跳过不经过这里。
+function isAllowEmptyDailyEnabled(value = process.env.PD_ALLOW_EMPTY_DAILY) {
+    if (value === true) return true;
+    return String(value == null ? '' : value).trim() === '1';
+}
+
+function evaluateZeroCandidateGate({ candidateCount, batchDate, publishedSkippedCount = 0, allowEmptyDaily } = {}) {
+    const zeroCandidates = Number(candidateCount) === 0;
+    // CLI 显式传 true 优先；未传（undefined）时才回退到 .env 的 PD_ALLOW_EMPTY_DAILY。
+    const allowed = isAllowEmptyDailyEnabled(allowEmptyDaily);
+    if (!zeroCandidates) {
+        return { zeroCandidates: false, allowed, stop: false, warning: null, errorMessage: null };
+    }
+    const skipped = Number(publishedSkippedCount) || 0;
+    const stop = !allowed;
+    const warning = [
+        '⚠️  本批进入筛选的候选为 0：可能是来源故障或公告未生成，不能当作正常日更。',
+        `   日期 ${batchDate}：抓取合并 ${candidateCount + skipped} 篇，已发布去重移除 ${skipped} 篇，进入筛选 0 篇。`,
+        '   请先确认 arXiv 公告与 HuggingFace 精选页可访问且确实没有新论文，'
+            + '再核对 data/current/raw-candidates.json 的 stats/sourceHealth 与 data/current/fetch-checkpoint.json 的逐来源计数。',
+        stop
+            ? '   未显式放行（--allow-empty-daily）：在付费筛选前停止，原始候选与抓取检查点已保留。'
+            : '   已显式放行（--allow-empty-daily 或 PD_ALLOW_EMPTY_DAILY=1）：继续进入付费筛选。'
+    ].join('\n');
+    const errorMessage = stop
+        ? `本批候选为 0（日期 ${batchDate}），可能是来源故障或公告未生成；已保存原始候选和抓取检查点，未调用筛选模型。`
+            + '先核对 data/current/raw-candidates.json 的 stats/sourceHealth 与 fetch-checkpoint.json 的逐来源计数，'
+            + '确认 arXiv 公告与 HuggingFace 精选页确实没有新论文后，加 --allow-empty-daily 重跑才会继续付费筛选。'
+        : null;
+    return { zeroCandidates, allowed, stop, warning, errorMessage };
+}
+
 function writeFilterArtifacts({
     allPapers,
     allPapersFiltered,
@@ -1312,13 +1349,14 @@ function parseFullFetchArgs(argv = []) {
     const options = {};
     for (let index = 0; index < argv.length; index += 2) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (['--require-previously-fetched', '--official-oai-recovery'].includes(flag)) {
-            const key = flag === '--require-previously-fetched' ? 'requirePreviouslyFetched' : 'officialOaiRecovery';
+        if (['--require-previously-fetched', '--official-oai-recovery', '--allow-empty-daily'].includes(flag)) {
+            const key = flag === '--require-previously-fetched' ? 'requirePreviouslyFetched'
+                : flag === '--official-oai-recovery' ? 'officialOaiRecovery' : 'allowEmptyDaily';
             if (options[key]) throw new Error(`参数不得重复：${flag}`);
             options[key] = true; index -= 1; continue;
         }
         if (!value || !['--date', '--refilter', '--refilter-reason', '--fetch-witness-recovery-manifest', '--official-announcement-cutoff'].includes(flag)) {
-            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH] [--refilter ARXIV_ID --refilter-reason 复核原因]');
+            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--allow-empty-daily] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH] [--refilter ARXIV_ID --refilter-reason 复核原因]');
         }
         if (flag === '--refilter') (options.refilterIds ||= []).push(value);
         else {
@@ -2012,6 +2050,12 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         }
 
         const rawPapersSha256 = stableContentSha256(allPapersFiltered);
+        const zeroCandidateGate = evaluateZeroCandidateGate({
+            candidateCount: allPapersFiltered.length,
+            batchDate,
+            publishedSkippedCount: blogSkippedCount,
+            allowEmptyDaily: options.allowEmptyDaily
+        });
         writeFileAtomic(RAW_CANDIDATES_FILE, JSON.stringify({
             timestamp: batchStartedAt,
             batchDate,
@@ -2025,7 +2069,8 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 skippedFromBlog: blogSkippedCount,
                 arxivOnly,
                 hfOnly,
-                both
+                both,
+                zeroCandidates: zeroCandidateGate.zeroCandidates
             },
             sourceHealth,
             papers: allPapersFiltered
@@ -2033,6 +2078,12 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         console.log(`💾 原始候选论文已保存到: ${RAW_CANDIDATES_FILE}`);
         if (hasRequiredSourceFailure(sourceHealth)) {
             throw new Error(`抓取来源不完整，已保存原始候选和抓取检查点，禁止调用筛选模型: ${getSourceFailures(sourceHealth).join('; ')}`);
+        }
+        if (zeroCandidateGate.warning) {
+            console.warn(`\n${'='.repeat(78)}\n${zeroCandidateGate.warning}\n${'='.repeat(78)}\n`);
+        }
+        if (zeroCandidateGate.stop) {
+            throw new Error(zeroCandidateGate.errorMessage);
         }
         writeStageSummary({
             stage: '抓取', status: 'ok', date: batchDate,
@@ -2561,6 +2612,8 @@ module.exports = {
     getSourceFailures,
     hasRequiredSourceFailure,
     getFatalEmptyCandidateSourceFailures,
+    evaluateZeroCandidateGate,
+    isAllowEmptyDailyEnabled,
     loadCompleteFilteredForToday,
     loadCurrentSuccessfulAnalysisIds,
     loadStoredAnalysisRecord,

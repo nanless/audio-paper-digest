@@ -1920,7 +1920,9 @@ async function filterPapersWithLLM(papers, options = {}) {
                 rawResponse: '', parseSource: 'official_pdf_404_skipped',
                 error: error.message, errorCode: error.code, errorStatus: 404,
                 fallback: false, retryable: false, decidedAt: getBeijingISOString(),
-                inputSha256: buildFilterInputSha256(paper), ...decisionMetadata
+                inputSha256: buildFilterInputSha256(paper), ...decisionMetadata,
+                // 结构化跳过身份：与 error 文本中的规范化 arXiv ID 相互印证，供后续核验。
+                arxivId: id
             });
             console.log(`[filter] 跳过官方 PDF 返回 404 的论文：${id}`);
         }

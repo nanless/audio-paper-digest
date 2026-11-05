@@ -51,11 +51,13 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 保存当日已获取、合并、规范化并排除已发布论文的候选。只有全部必需来源完整时，这份集合才是完整筛选输入；来源失败时保留的部分候选不能冒充完整覆盖。筛选决定必须覆盖正式候选集合，不能只对成功响应的论文计算覆盖率。
 
+根对象为 `{ stats, sourceHealth, papers }`。`stats.zeroCandidates` 表示本批进入筛选的候选是否为 0：来源全部正常、但候选数为 0 时为 `true`，程序在付费筛选前停止，只有确认当天确实没有新论文并显式加 `--allow-empty-daily` 重跑才继续，见[零候选停止](daily-fetch-boundary.md#zero-candidates)。
+
 ### `filter-decisions.json`
 
 按规范论文 ID 保存模型或关键词预筛的决定、理由、原始响应、解析方式、输入 SHA 和配置指纹。`filter-decision` 的合同和结构指纹计入本批筛选配置身份；解析规则变化会使旧决定失效。模型、提示词、协议或关键词规则变化时须重新筛选；仍完整有效的候选数据不必重新抓取。
 
-官方 PDF 在全部候选地址上都返回 404 时，筛选阶段可写一条跳过记录，避免整批停在这一篇：字段为 `related: false`、`retryable: false`、`fallback: false`、`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；该记录不带 `filterScopeEvidence`。它只说明这篇取不到官方来源，不是“论文不相关”的模型结论；读取时须逐字段核验，跳过项不进入后续正常筛选与分析集合。
+官方 PDF 在全部候选地址上都返回 404 时，筛选阶段可写一条跳过记录，避免整批停在这一篇：字段为 `related: false`、`retryable: false`、`fallback: false`、`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；该记录不带 `filterScopeEvidence`。`error` 不逐字比对，只要求是含本论文规范化编号的非空文本；新记录另写入 `arxivId`，旧记录可缺。它只说明这篇取不到官方来源，不是“论文不相关”的模型结论；读取时须逐字段核验，跳过项不进入后续正常筛选与分析集合。
 
 仅命中泛多模态词、未明确声音模态的候选会交给模型判断，并在任何付费筛选请求前取得全部这类候选的官方材料；取得或核验失败时停止，已保存的完整材料可核验后复用。摘要达到80字只满足本地预筛的长度条件，不证明它列全了论文模态。人工流程不因此新增联网。`filterScopeEvidence` 保存四个来源文件的核验信息、选取的实际原文和内容 SHA；这份证据也进入决定的输入 SHA。恢复和数据校验会重新读取核验，不能只信保存的 SHA 字段。材料只帮助模型判断实际输入、输出和评测模态，不直接把论文标为相关，也不改写原始候选。
 

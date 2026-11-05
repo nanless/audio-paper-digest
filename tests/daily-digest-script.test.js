@@ -200,3 +200,31 @@ test('官方 OAI 恢复仅在显式抓取参数中透传，默认不启用', t =
         assert.equal(fs.readFileSync(log, 'utf8'), '');
     }
 });
+
+test('空批次放行仅在显式抓取参数中透传，跳阶段或重复使用被拒绝', t => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'daily-empty-option-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const log = path.join(dir, 'commands.log');
+    const fake = path.join(dir, 'node');
+    fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexit 23\n`);
+    fs.chmodSync(fake, 0o755);
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH || ''}` };
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    for (const extra of [[], ['--allow-empty-daily']]) {
+        fs.writeFileSync(log, '');
+        const result = spawnSync('bash', [scriptPath, today, '--no-visuals', ...extra], { env, encoding: 'utf8' });
+        assert.equal(result.status, 23, result.stderr);
+        const command = fs.readFileSync(log, 'utf8').trim();
+        assert.equal(command, `scripts/full-fetch.js --date ${today} --require-previously-fetched${extra.length ? ' --allow-empty-daily' : ''}`);
+    }
+    fs.writeFileSync(log, '');
+    const laterStage = spawnSync('bash', [scriptPath, today, '--from', 'generate', '--allow-empty-daily'], { env, encoding: 'utf8' });
+    assert.equal(laterStage.status, 2, laterStage.stderr);
+    assert.match(laterStage.stderr, /--allow-empty-daily 仅适用于抓取阶段/);
+    assert.equal(fs.readFileSync(log, 'utf8'), '');
+    fs.writeFileSync(log, '');
+    const repeated = spawnSync('bash', [scriptPath, today, '--allow-empty-daily', '--allow-empty-daily'], { env, encoding: 'utf8' });
+    assert.equal(repeated.status, 2, repeated.stderr);
+    assert.match(repeated.stderr, /--allow-empty-daily 不能重复使用/);
+    assert.equal(fs.readFileSync(log, 'utf8'), '');
+});

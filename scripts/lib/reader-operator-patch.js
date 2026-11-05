@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const repair = require('./reader-repair.js');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const content = require('./reader-content-mode');
 const codec = require('./protocol-codec');
 const CONTRACT = 'reader-operator-patch';
@@ -79,7 +80,8 @@ function validateRequest(value, run) {
         || typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 2000) {
         throw new Error('人工补丁的字段、论文编号、身份或来源 SHA、修改理由无效，或论文不在本次运行中');
     }
-    if (!Array.isArray(value.patch?.replacements) || value.patch.replacements.length < 1 || value.patch.replacements.length > 8) {
+    if (!Array.isArray(value.patch?.replacements) || value.patch.replacements.length < MIN_READER_PATCH_NODES
+        || value.patch.replacements.length > MAX_READER_PATCH_NODES) {
         throw new Error('人工补丁需要替换 1 到 8 个已有字段或条目');
     }
     return value;

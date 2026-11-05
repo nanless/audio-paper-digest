@@ -208,9 +208,64 @@ test('官方 PDF 全部返回 404 时记录跳过并继续筛选其他论文', a
     const record = result.decisions[skipped.arxivId];
     assert.equal(record.parseSource, 'official_pdf_404_skipped');
     assert.match(record.reason, /未判断论文是否相关/);
+    assert.equal(record.arxivId, skipped.arxivId);
     assert.equal(scope.validatedDecisionInputSha256(skipped, record), record.inputSha256);
     assert.throws(() => scope.validatedDecisionInputSha256(skipped, { ...record, errorStatus: 500 }), /跳过记录/);
     assert.equal(counts.model, 1);
+});
+function skipped404Record(candidate, error = `arXiv PDF ${candidate.arxivId} download failed: HTTP 404`) {
+    return {
+        id: candidate.arxivId, arxivId: candidate.arxivId, paper_id: candidate.arxivId, title: candidate.title,
+        related: false, reason: '官方 PDF 返回 404，本批跳过，未判断论文是否相关',
+        rawResponse: '', parseSource: 'official_pdf_404_skipped',
+        error, errorCode: 'ARXIV_PDF_NOT_FOUND', errorStatus: 404,
+        fallback: false, retryable: false, decidedAt: '2026-10-11T00:00:00.000Z',
+        inputSha256: pipeline.buildFilterInputSha256(candidate)
+    };
+}
+test('404 跳过记录的身份契约是结构化字段加含 arXiv ID 的 error，改写文案后仍可核验', async t => {
+    fixture(t);
+    const candidate = paper();
+    const record = skipped404Record(candidate, '官方 PDF 地址全部返回 404，已跳过（arXiv 2610.90011）');
+    assert.equal(scope.validatedDecisionInputSha256(candidate, record), record.inputSha256);
+    const legacyLiteral = skipped404Record(candidate);
+    assert.equal(scope.validatedDecisionInputSha256(candidate, legacyLiteral), legacyLiteral.inputSha256);
+    // 旧记录没有 arxivId 字段，逐字旧文案照常通过。
+    const { arxivId, ...legacyWithoutId } = legacyLiteral;
+    assert.equal(scope.validatedDecisionInputSha256(candidate, legacyWithoutId), legacyWithoutId.inputSha256);
+    // 其它字段仍然是严格契约。
+    for (const corrupted of [{ errorCode: 'ARXIV_PDF_ERROR' }, { errorStatus: 500 }, { related: true },
+        { retryable: true }, { fallback: true }, { filterScopeEvidence: { contract: 'x' } }, { arxivId: '2610.90012' }]) {
+        assert.throws(() => scope.validatedDecisionInputSha256(candidate, { ...record, ...corrupted }), /跳过记录/,
+            JSON.stringify(corrupted));
+    }
+});
+test('404 跳过记录的 error 不含规范化的 arXiv ID 时必须拒绝', async t => {
+    fixture(t);
+    const candidate = paper();
+    for (const error of ['arXiv PDF download failed: HTTP 404', '', '   ', 404, null,
+        'arXiv PDF 2610.90012 download failed: HTTP 404']) {
+        assert.throws(() => scope.validatedDecisionInputSha256(candidate, skipped404Record(candidate, error)), /跳过记录/,
+            String(error));
+    }
+});
+test('404 跳过记录的 error 按 arXiv ID 边界匹配，不能被更长编号的子串冒充', async t => {
+    fixture(t);
+    const shorter = paper('2610.9001');
+    const longer = paper('2610.90011');
+    // `2610.90011` 里包含 `2610.9001`，但不能用来给论文 2610.9001 作证。
+    assert.throws(() => scope.validatedDecisionInputSha256(shorter,
+        skipped404Record(shorter, 'arXiv PDF 2610.90011 download failed: HTTP 404')), /跳过记录/);
+    // 反过来，较短编号的文案同样不能证明较长编号。
+    assert.throws(() => scope.validatedDecisionInputSha256(longer,
+        skipped404Record(longer, 'arXiv PDF 2610.9001 download failed: HTTP 404')), /跳过记录/);
+    // 带版本号的写法及原始文案仍按边界命中。
+    for (const error of ['arXiv PDF 2610.9001v2 download failed: HTTP 404',
+        'arXiv PDF 2610.9001 download failed: HTTP 404',
+        '官方 PDF 地址全部返回 404，已跳过（arXiv 2610.9001v3）']) {
+        const record = skipped404Record(shorter, error);
+        assert.equal(scope.validatedDecisionInputSha256(shorter, record), record.inputSha256, error);
+    }
 });
 test('封存完成但尚无决定时继续筛选不重抓，明确非音频结果可正常保存', async t => {
     fixture(t);

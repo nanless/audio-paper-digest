@@ -270,7 +270,7 @@ gh workflow run ci.yml --ref main
 
 ### 完整覆盖与并行范围
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 两套测试及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 两套测试及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22 与 Android SDK，运行根 `npm ci` 后还要在 `apps/macos` 执行 `npm ci`，因为 `:app:testDebugUnitTest` 的任务图包含 `:app:prepareDebugPublishedAssets`，它无条件从 `apps/macos/node_modules/katex` 复制文件；最后在 `apps/android` 执行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业不运行 `apps/android/test.sh`，因为其中的 Python 测试需要 `prototypes/macos-research/assets` 下的 PDF。它不进上述分片矩阵，也不并入 `test` 汇总检查，避免拖慢上述十二个检查。macOS 客户端测试仍在本机通过 `apps/macos/test.sh` 运行；接入 CI 需要先解决 `prototypes/macos-research/assets` 不入库的问题。
 
 JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)` 才报告完整通过；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 

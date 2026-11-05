@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { READER_LIMITS } = require('./reader-contract.js');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS } = require('./reader-draft-order.js');
 
 const candidateFormat = require('./reader-candidate-format');
@@ -342,7 +343,8 @@ function canContinueRevalidatedIssuesWithinBudget({ recovered, identity, current
 function isSafeExistingReaderPatchContext(draft, context, sourceBindingNeedsFullRetry, currentIssues) {
     if (!draft || sourceBindingNeedsFullRetry || !context || context.atomicOperation
         || context.sectionGroupPlanContract || context.draftSha256 !== hashDraft(draft)
-        || !Array.isArray(context.targets) || context.targets.length < 1 || context.targets.length > 8
+        || !Array.isArray(context.targets) || context.targets.length < MIN_READER_PATCH_NODES
+        || context.targets.length > MAX_READER_PATCH_NODES
         || !Array.isArray(context.issues) || !Array.isArray(context.figureOrdinals)
         || typeof context.evidence !== 'string'
         || context.targets.some(target => !target || typeof target.path !== 'string')
@@ -873,8 +875,8 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         || Object.keys(patch).sort().join(',') !== [...Object.keys(codec.recordHeader(patch[tagField],
             'reader-node-patch', patch.schemaFingerprint)), 'draftSha256', 'replacements'].sort().join(',')
         || patch.draftSha256 !== hashDraft(draft)
-        || !Array.isArray(patch.replacements) || patch.replacements.length < 1
-        || patch.replacements.length > 8) throw new Error('Reader patch has invalid shape or stale draft SHA');
+        || !Array.isArray(patch.replacements) || patch.replacements.length < MIN_READER_PATCH_NODES
+        || patch.replacements.length > MAX_READER_PATCH_NODES) throw new Error('Reader patch has invalid shape or stale draft SHA');
     const allowed = new Set(allowedPaths);
     const seen = [];
     for (const item of patch.replacements) {
@@ -2370,7 +2372,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             if (!verifiedReaderFactIssues(draft, [issue.claim]).some(current => current.path === issue.path)) return [];
             paths.add(issue.path);
         }
-        if (!paths.size || paths.size > 8) return [];
+        if (!paths.size || paths.size > MAX_READER_PATCH_NODES) return [];
         return [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
             repairInstruction: '只在这组已有绑定和承载正文中修复已拒表格显示，保留每项正确方法、条件、数字、单位、区间及负面证据；其他表与标记保持。若原DOM字符有错，用同一封存全文或实际PDF连续原文完整支持的source_quotes写实际Markdown并同步绑定；PDF引文仍须正常核验，不能猜重复值的半值、改正负号、删表或换无关原表。' }));
     }
@@ -2385,7 +2387,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             && (!allowed.has(issue.path) || !currentIssues.some(current =>
                 current.path === issue.path && current.claim === issue.claim)))) return [];
         const pointers = [...new Set(currentIssues.map(issue => issue.path))];
-        if (pointers.length > 8) return [];
+        if (pointers.length > MAX_READER_PATCH_NODES) return [];
         return pointers
             .map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)),
                 value: nodeAt(draft, pointer),
@@ -2501,7 +2503,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         draft.sections.forEach((section, index) => {
             if (removeUnavailableFigureProse(section.body) !== section.body) add(`/sections/${index}/body`);
         });
-        if (paths.size > 8) return [];
+        if (paths.size > MAX_READER_PATCH_NODES) return [];
         return [...paths].map(pointer => ({ path: pointer,
             oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
             repairInstruction: pointer === '/figurePlacements' ? '本次没有可用图像素，只清空为 []；不新增图或图解。'
@@ -2579,7 +2581,7 @@ function buildRepairTargets(draft, issues, options = {}) {
                 || !String(nodeAt(draft, bodyPath)).split(/\n\s*\n/).some(block => block.trim() === marker))) return [];
             if (sourceTableIssues.some(issue => issue.bindingPath === `/tableBindings/${index}` && issue.path !== bodyPath)) return [];
             const group = [`/tableBindings/${index}`, bodyPath];
-            if (new Set([...selected, ...group]).size > 8) break;
+            if (new Set([...selected, ...group]).size > MAX_READER_PATCH_NODES) break;
             group.forEach(pointer => selected.add(pointer));
         }
         return [...selected].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
@@ -2645,20 +2647,20 @@ function buildRepairTargets(draft, issues, options = {}) {
         // 每个来源记录与唯一正文位置同时授权；八节点放不下的整对留给下一轮。
         const selected = new Set();
         for (const group of groups) {
-            if (new Set([...selected, ...group]).size > 8) break;
+            if (new Set([...selected, ...group]).size > MAX_READER_PATCH_NODES) break;
             group.forEach(pointer => selected.add(pointer));
         }
         if (hasInvalidQuotes) {
             const pairedPaths = new Set(groups.flat());
             for (const pointer of paths) {
-                if (!pairedPaths.has(pointer) && !pointer.startsWith('/tableBindings/') && selected.size < 8) selected.add(pointer);
+                if (!pairedPaths.has(pointer) && !pointer.startsWith('/tableBindings/') && selected.size < MAX_READER_PATCH_NODES) selected.add(pointer);
             }
         }
         return [...selected].map(pointer => ({ path: pointer,
             oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
             ...(hasInvalidQuotes ? {repairInstruction: '本轮来源引文与唯一对应正文一起修订。只用请求中的完整原文连续句，保留正确数字、单位、方法和表前后解释；正文中的文风问题也只在授权字段内修复。不能回传原值假称已修复，其他字段只读，最后仍核验完整来源。'} : {}) }));
     };
-    const boundedTargets = () => multipleTablePairs() || (paths.size > 8 ? pairedTableTargets() || [...paths].slice(0, 8).map(pointer => ({ path: pointer,
+    const boundedTargets = () => multipleTablePairs() || (paths.size > MAX_READER_PATCH_NODES ? pairedTableTargets() || [...paths].slice(0, MAX_READER_PATCH_NODES).map(pointer => ({ path: pointer,
         oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }))
         : [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) })));
 
@@ -2683,10 +2685,10 @@ function buildRepairTargets(draft, issues, options = {}) {
             if (!group || seenBridgeIndexes.has(group.index)) continue;
             seenBridgeIndexes.add(group.index);
             for (const pointer of group.paths) {
-                if (paths.size >= 8) break;
+                if (paths.size >= MAX_READER_PATCH_NODES) break;
                 add(pointer);
             }
-            if (paths.size >= 8) break;
+            if (paths.size >= MAX_READER_PATCH_NODES) break;
         }
         if (paths.size) {
             return [...paths].map(pointer => ({ path: pointer,
@@ -2706,7 +2708,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         const destinations = draft.sections.flatMap((section, index) => (
             ['result', 'ablation'].includes(section?.kind) ? [`/sections/${index}/body`] : []
         ));
-        if (destinations.length && destinations.length < 8) {
+        if (destinations.length && destinations.length < MAX_READER_PATCH_NODES) {
             paths.clear();
             add(missingSelection.path);
             destinations.forEach(add);
@@ -2726,7 +2728,7 @@ function buildRepairTargets(draft, issues, options = {}) {
     ));
     const orderPathsExceedLimit = new Set(blockingIssues.filter(issue => (
         classifyTableBindingOrderIssue(issue).actionable && issue.path
-    )).map(issue => issue.path)).size > 8;
+    )).map(issue => issue.path)).size > MAX_READER_PATCH_NODES;
     if ((pairedTableIssues.length
         && locateReaderDraftTables(draft).length !== draft.tableBindings?.length) || orderPathsExceedLimit) {
         const tables = locateReaderDraftTables(draft);
@@ -2740,7 +2742,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         if (unboundMarkerPaths.length && !pairedTableIssues.length && bindingIndexes.length) {
             bindingIndexes.unshift(bindingIndexes.pop());
         }
-        const pairedPaths = new Set(unboundMarkerPaths.slice(0, 8));
+        const pairedPaths = new Set(unboundMarkerPaths.slice(0, MAX_READER_PATCH_NODES));
         for (const index of bindingIndexes) {
             const binding = draft.tableBindings?.[index];
             if (!binding) continue;
@@ -2753,7 +2755,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             if (!bodyPaths.length) continue;
             const group = [...new Set([...bodyPaths, `/tableBindings/${index}`])];
             const additions = group.filter(pointer => !pairedPaths.has(pointer));
-            if (pairedPaths.size + additions.length > 8) break;
+            if (pairedPaths.size + additions.length > MAX_READER_PATCH_NODES) break;
             group.forEach(pointer => pairedPaths.add(pointer));
         }
         if (pairedPaths.size) return [...pairedPaths].map(pointer => ({
@@ -2846,7 +2848,7 @@ function buildRepairTargets(draft, issues, options = {}) {
                 || bindings.some((binding, index) => binding?.tableIndex !== index + 1)
                 || !hasStableExistingTableMarkers(draft, tables, bindings)) return [];
             const paired = new Set(resultTables.flatMap(table => [table.path, `/tableBindings/${table.bindingIndex}`]));
-            if (paired.size > 8) return [];
+            if (paired.size > MAX_READER_PATCH_NODES) return [];
             return [...paired].map(pointer => ({ path: pointer,
                 oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
                 repairInstruction: '只在原结果/消融表位置修正数值列和同一绑定；完整保留已有正确数字、单位、比较条件、事实、表数、表序及绑定序号。不得搬入数据、配置或成本表，不得合并/删表、添加未知配置或修改其他节点。原表或逐字引文仍须支持每格，四个测量格要求不变；原范围内无解时保留失败。' }));
@@ -3129,7 +3131,7 @@ function scientificDoubleRenderingGuidance(draft, issues, targets, sourceText) {
 const FACT_LOCAL_PROMPT_CONTRACT = require('./prompt-contracts').specialPromptContracts.readerFactRepair;
 function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuotes) {
     if (!context || context.atomicOperation || !Array.isArray(context.targets)
-        || context.targets.length === 0 || context.targets.length > 8
+        || context.targets.length === 0 || context.targets.length > MAX_READER_PATCH_NODES
         || typeof reviewFeedback !== 'string' || !reviewFeedback.trim()
         || !Array.isArray(sourceQuotes) || sourceQuotes.length === 0
         || sourceQuotes.some(quote => typeof quote !== 'string' || !sourceText.includes(quote))) {
@@ -3156,7 +3158,7 @@ function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuo
 // 只有显式获准的事实局部调用可以编译这组原句回应。
 function factLocalSentenceTargets(context) {
     if (!context || context.atomicOperation || !Array.isArray(context.targets)
-        || !context.targets.length || context.targets.length > 8) throw new Error('事实原句请求缺少受控目标');
+        || !context.targets.length || context.targets.length > MAX_READER_PATCH_NODES) throw new Error('事实原句请求缺少受控目标');
     const sentences = [];
     const paths = new Set();
     for (const target of context.targets) {
@@ -3909,7 +3911,7 @@ function buildConceptTermsRepairContext(draft, issues, sourceText) {
             targets.push({ path: `/conceptBridges/${index}/terms/${termIndex}`, oldSha256: hashDraft(term), value: term });
         }
     }
-    if (!targets.length || targets.length > 8 || excerpts.join('\n').length > 12000) return null;
+    if (!targets.length || targets.length > MAX_READER_PATCH_NODES || excerpts.join('\n').length > 12000) return null;
     return { draftSha256: hashDraft(draft), targets, issues: blocking, explanations, sourceQuotes: excerpts,
         promptContract: CONCEPT_TERMS_PROMPT_CONTRACT, promptPath: CONCEPT_TERMS_PROMPT_PATH,
         promptTemplateSha256: shaText(require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8')) };

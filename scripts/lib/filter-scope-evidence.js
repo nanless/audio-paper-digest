@@ -19,6 +19,11 @@ function canonical(value) {
     return value;
 }
 function sha(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
+function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+// arXiv ID 按编号边界匹配：`2610.9001` 不能命中 `2610.90011`，`<id>v2` 等版本写法仍算命中。
+function errorMentionsArxivId(error, arxivId) {
+    return new RegExp(`(?:^|[^0-9])${escapeRegExp(arxivId)}(?![0-9])`).test(error);
+}
 function fail(message) {
     const error = new Error(`筛选范围来源检查未通过：${message}`);
     error.code = 'FILTER_SCOPE_SOURCE_INTEGRITY'; error.retryable = false; error.stopBatch = true;
@@ -119,11 +124,20 @@ async function captureFilterScopeEvidence(paper, batchDate, overrides = {}) {
 function validatedDecisionInputSha256(paper, decision, options = {}) {
     if (decision?.filterModel === 'manual_offline' && !options.allowManual) fail('API 筛选决定不能声明为人工决定');
     const pdfUnavailable = decision?.parseSource === 'official_pdf_404_skipped';
-    if (pdfUnavailable && (decision.related !== false || decision.retryable !== false
-        || decision.fallback !== false || decision.errorCode !== 'ARXIV_PDF_NOT_FOUND'
-        || decision.errorStatus !== 404 || decision.filterScopeEvidence
-        || decision.error !== `arXiv PDF ${sources.normalizedArxivId(paper.arxivId || paper.paper_id || paper.id)} download failed: HTTP 404`)) {
-        fail('官方 PDF 404 跳过记录不完整');
+    if (pdfUnavailable) {
+        // 跳过的身份契约是 errorCode/errorStatus/arxivId 三元组加上 error 文本里的规范化
+        // arXiv ID；error 的具体措辞不参与核验，只要求它是含该 ID 的非空字符串，且 ID 按
+        // 编号边界匹配（`2610.9001` 不能被 `2610.90011` 冒充，`<id>v2` 仍可通过），
+        // 因此改写文案不影响历史跳过记录，逐字旧文案也照常通过。
+        const skippedArxivId = sources.normalizedArxivId(paper.arxivId || paper.paper_id || paper.id);
+        if (decision.related !== false || decision.retryable !== false
+            || decision.fallback !== false || decision.errorCode !== 'ARXIV_PDF_NOT_FOUND'
+            || decision.errorStatus !== 404 || decision.filterScopeEvidence
+            || typeof decision.error !== 'string' || decision.error.trim() === ''
+            || !errorMentionsArxivId(decision.error, skippedArxivId)
+            || (decision.arxivId !== undefined && decision.arxivId !== skippedArxivId)) {
+            fail('官方 PDF 404 跳过记录不完整');
+        }
     }
     const pendingRecheck = decision?.parseSource === 'explicit_recheck_pending';
     if (pendingRecheck && !(decision.related === null && decision.retryable === true && decision.fallback === true && decision.rawResponse === ''))

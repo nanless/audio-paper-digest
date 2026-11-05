@@ -1461,7 +1461,9 @@ actor LibraryService {
     func handle(command: String, payload: sending [String: Any], progress: @escaping @Sendable ([String: Any]) -> Void = { _ in }) async throws -> sending [String: Any] {
         switch command {
         case "library.status": return try await statusResponse()
-        case "library.network", "library.cancel": break
+        // `library.retryLoad` is the command that repairs a failed load; gating it behind
+        // `ensureReady()` would rethrow the old failure before its own branch could re-read.
+        case "library.network", "library.cancel", "library.retryLoad": break
         default: try await ensureReady()
         }
         let notify: @Sendable (Progress) -> Void = { progress($0.json) }

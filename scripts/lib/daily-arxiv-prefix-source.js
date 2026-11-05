@@ -15,6 +15,48 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const prefixUrl = (category, start, size) => `https://export.arxiv.org/api/query?search_query=cat:${category}&sortBy=submittedDate&sortOrder=descending&start=${start}&max_results=${size}`;
 const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+// A real date-query 429 belongs to one category. Later categories of the same
+// run may reuse the verified prefix route, but they must record that switch
+// (routeSwitch) instead of claiming the first category's failure as their own.
+// Records written before per-category attribution keep a legacy read-only shape
+// (dateQueryFailure alone); once routeSwitch is present the strict switch rules
+// apply and a foreign own-category claim is refused.
+function prefixTriggerIdentity(health) {
+    return health?.categoryId ?? health?.id;
+}
+
+function isHttp429DateQueryFailure(health, boundary) {
+    return Array.isArray(health?.failures) && health.failures.some(item => item?.error === 'HTTP 429')
+        && health?.provider?.boundaryIdentity === boundary?.identitySha256;
+}
+
+// Legacy read-only shape, kept only for replaying real archives such as
+// data/archive/2026-11-03/fetch-checkpoint.json: records written before 2026-11
+// attributed the first 429 category's evidence (eess.SP there) to every later
+// category of the same run (cs.MM / cs.CL / cs.AI) and wrote no routeSwitch at
+// all. Replaying such a record must not make 11-03 unreproducible, so a foreign
+// declared category is accepted while the field is absent. New writes always
+// record routeSwitch (see recordRouteTrigger), never this shape.
+function hasVerifiedPrefixRouteTrigger(prefix, boundary, categoryId) {
+    const own = prefix?.dateQueryFailure, switched = prefix?.routeSwitch;
+    // Exactly one trigger shape must be present.
+    if (Boolean(own) === Boolean(switched)) return false;
+    if (own) {
+        const declared = prefixTriggerIdentity(own.health);
+        const foreign = declared !== undefined && declared !== categoryId;
+        // Any present routeSwitch field marks the new per-category record, so a
+        // foreign own-category claim then stays refused; only the field's total
+        // absence is the legacy archive shape described above.
+        if (foreign && Object.hasOwn(prefix, 'routeSwitch')) return false;
+        return isHttp429DateQueryFailure(own.health, boundary);
+    }
+    const evidence = switched?.dateQueryFailure?.health;
+    return /^[a-z]+\.[A-Z]{2}$/.test(switched?.categoryId || '')
+        && switched.categoryId !== categoryId
+        && prefixTriggerIdentity(evidence) === switched.categoryId
+        && isHttp429DateQueryFailure(evidence, boundary);
+}
+
 // Optional route evidence extends v7 coverage without changing its time window
 // or candidate identity. Both production reuse and the read-only validator use
 // this same check; legacy date-window providers retain their existing rules.
@@ -68,9 +110,9 @@ function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health
             || JSON.stringify(replay.last) !== JSON.stringify(first.last)) return false;
         if (prefix.completionReason === 'category-exhausted' ? offset !== total
             : prefix.completionReason !== 'strict-lower-bound-crossed' || offset >= total || previous >= since) return false;
-        if (requireTrigger && !prefix.dateQueryFailure) return false;
-        if (prefix.dateQueryFailure && (!prefix.dateQueryFailure.health?.failures?.some(item => item.error === 'HTTP 429')
-            || prefix.dateQueryFailure.health?.provider?.boundaryIdentity !== boundary.identitySha256)) return false;
+        const hasTrigger = Boolean(prefix.dateQueryFailure || prefix.routeSwitch);
+        if (requireTrigger && !hasTrigger) return false;
+        if (hasTrigger && !hasVerifiedPrefixRouteTrigger(prefix, boundary, category)) return false;
         return true;
     } catch { return false; }
 }
@@ -401,6 +443,23 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
     const state = options.strategyState || {};
     const windowFetch = options.windowFetch || require('../fetch-papers').fetchCategoryPapersSince;
     let failure = state.categoryPrefixFailure;
+    // Attribute the 429 to the category that actually observed it. The first
+    // category that hit the limit keeps it as its own dateQueryFailure; later
+    // categories of this run record an explicit route switch instead.
+    // A 429 without any declared category identity cannot be attributed at all:
+    // the old dateQueryFailure-only shape is read-only replay for real archives,
+    // so writing it here would persist evidence nobody can own. Fail closed
+    // instead of producing an unattributable source checkpoint.
+    const recordRouteTrigger = (health, actual) => {
+        const prefix = health.provider.categoryPrefix;
+        const declared = actual.health?.categoryId ?? actual.health?.id;
+        if (declared === undefined) {
+            throw Object.assign(new Error('429 证据缺少类别身份，不能写入来源检查点'),
+                { code: 'SOURCE_FETCH_FAILED' });
+        }
+        if (declared === categoryId) prefix.dateQueryFailure = actual;
+        else prefix.routeSwitch = { categoryId: declared, dateQueryFailure: actual };
+    };
     if (!state.categoryPrefix) {
         try { return await windowFetch(categoryId, boundary, existingIds, options); }
         catch (error) {
@@ -411,7 +470,7 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
     }
     try {
         const result = await fetchCategoryPrefix(categoryId, boundary, existingIds, options);
-        if (failure) result._sourceHealth.provider.categoryPrefix.dateQueryFailure = failure;
+        if (failure) recordRouteTrigger(result._sourceHealth, failure);
         if (!hasVerifiedCategoryPrefix(result._sourceHealth, boundary, categoryId)) {
             const health = result._sourceHealth;
             health.coverageComplete = health.ok = health.provider.window.covered = false;
@@ -423,7 +482,12 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
         state.categoryPrefixFailure = failure;
         return result;
     } catch (error) {
-        if (failure && error.sourceHealth) error.sourceHealth.provider.categoryPrefix.dateQueryFailure = failure;
+        if (failure && error.sourceHealth) {
+            // Fail closed before writing, but keep the actual fetch failure as
+            // the cause so a refused record still reports what really broke.
+            try { recordRouteTrigger(error.sourceHealth, failure); }
+            catch (recordError) { throw Object.assign(recordError, { cause: error }); }
+        }
         throw error;
     }
 }

@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const runner = require('./fresh-rewrite-run.js');
 const repair = require('./reader-repair.js');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const { reconstructReaderDraftFromVerifiedArticle } = require('./reader-signed-draft.js');
 const codec = require('./protocol-codec');
 const CONTRACT = 'reader-signed-operator';
@@ -30,8 +31,8 @@ function validateReaderOperatorPatchRequest(request, run) {
         || !['parentPaperSha256','parentArticleSha256','parentPlanSha256','sourceSha256'].every(key => validSha(request[key]))
         || request.sourceSha256 !== run.sourceExpectations[request.paperId]?.sourceSha256
         || typeof request.reason !== 'string' || !request.reason.trim() || request.reason.length > 2000
-        || !Array.isArray(request.patch?.replacements) || request.patch.replacements.length < 1
-        || request.patch.replacements.length > 8) throw new Error('Invalid signed operator envelope/run/source');
+        || !Array.isArray(request.patch?.replacements) || request.patch.replacements.length < MIN_READER_PATCH_NODES
+        || request.patch.replacements.length > MAX_READER_PATCH_NODES) throw new Error('Invalid signed operator envelope/run/source');
     return request;
 }
 

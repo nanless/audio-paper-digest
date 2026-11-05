@@ -1098,3 +1098,86 @@ it('归档以正式batchDate为准，异日刷新时间不拆散同批来源与�
         assert.equal(fs.existsSync(input),false);
     }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+describe('零候选日确认闸门', () => {
+    const {
+        evaluateZeroCandidateGate, isAllowEmptyDailyEnabled, parseFullFetchArgs
+    } = require('../scripts/full-fetch.js');
+    const savedEnv = process.env.PD_ALLOW_EMPTY_DAILY;
+
+    function withEnv(value, fn) {
+        try {
+            if (value === undefined) delete process.env.PD_ALLOW_EMPTY_DAILY;
+            else process.env.PD_ALLOW_EMPTY_DAILY = value;
+            return fn();
+        } finally {
+            if (savedEnv === undefined) delete process.env.PD_ALLOW_EMPTY_DAILY;
+            else process.env.PD_ALLOW_EMPTY_DAILY = savedEnv;
+        }
+    }
+
+    it('CLI 参数 --allow-empty-daily 解析为布尔 true，未传时保持 undefined', () => {
+        assert.strictEqual(parseFullFetchArgs(['--allow-empty-daily']).allowEmptyDaily, true);
+        assert.strictEqual(parseFullFetchArgs(['--date', '2026-11-05', '--allow-empty-daily']).allowEmptyDaily, true);
+        assert.strictEqual(parseFullFetchArgs(['--allow-empty-daily']).date, undefined);
+        assert.strictEqual(parseFullFetchArgs(['--date', '2026-11-05']).allowEmptyDaily, undefined);
+        assert.strictEqual(parseFullFetchArgs([]).allowEmptyDaily, undefined);
+        assert.throws(() => parseFullFetchArgs(['--allow-empty-daily', '--allow-empty-daily']), /参数不得重复：--allow-empty-daily/);
+    });
+
+    it('真零候选且未显式放行时停在付费筛选前，并说明确认方式', () => withEnv(undefined, () => {
+        const gate = evaluateZeroCandidateGate({
+            candidateCount: 0, batchDate: '2026-11-05', publishedSkippedCount: 0, allowEmptyDaily: undefined
+        });
+        assert.strictEqual(gate.zeroCandidates, true);
+        assert.strictEqual(gate.stop, true);
+        assert.match(gate.warning, /本批进入筛选的候选为 0/);
+        assert.match(gate.warning, /抓取合并 0 篇，已发布去重移除 0 篇，进入筛选 0 篇/);
+        assert.match(gate.warning, /--allow-empty-daily/);
+        assert.match(gate.errorMessage, /--allow-empty-daily/);
+        assert.match(gate.errorMessage, /raw-candidates\.json/);
+        assert.match(gate.errorMessage, /fetch-checkpoint\.json/);
+    }));
+
+    it('即使抓取到的候选全被博客去重，零候选仍会停止（重跑分支已回退）', () => withEnv(undefined, () => {
+        const gate = evaluateZeroCandidateGate({
+            candidateCount: 0, batchDate: '2026-11-05', publishedSkippedCount: 2, allowEmptyDaily: undefined
+        });
+        assert.strictEqual(gate.zeroCandidates, true);
+        assert.strictEqual(gate.stop, true);
+        assert.match(gate.errorMessage, /--allow-empty-daily/);
+        assert.match(gate.warning, /抓取合并 2 篇，已发布去重移除 2 篇，进入筛选 0 篇/);
+        assert.doesNotMatch(gate.warning, /同日重跑/);
+    }));
+
+    it('CLI --allow-empty-daily 与 .env 的 PD_ALLOW_EMPTY_DAILY=1 都能放行，CLI 优先', () => withEnv(undefined, () => {
+        const cli = evaluateZeroCandidateGate({ candidateCount: 0, batchDate: '2026-11-05', allowEmptyDaily: true });
+        assert.strictEqual(cli.zeroCandidates, true);
+        assert.strictEqual(cli.stop, false);
+        assert.strictEqual(cli.errorMessage, null);
+        assert.match(cli.warning, /--allow-empty-daily/);
+
+        withEnv('1', () => {
+            const envOnly = evaluateZeroCandidateGate({ candidateCount: 0, batchDate: '2026-11-05', allowEmptyDaily: undefined });
+            assert.strictEqual(envOnly.stop, false);
+            assert.strictEqual(isAllowEmptyDailyEnabled('1'), true);
+            assert.strictEqual(isAllowEmptyDailyEnabled(' 1 '), true);
+            assert.strictEqual(isAllowEmptyDailyEnabled(true), true);
+            for (const value of ['', '0', 'true', 'yes', false]) {
+                assert.strictEqual(isAllowEmptyDailyEnabled(value), false, `${JSON.stringify(value)} 不应等同于放行`);
+            }
+            // CLI 显式 false 不再受 .env 影响，用来证明参数值优先于环境变量。
+            assert.strictEqual(evaluateZeroCandidateGate({
+                candidateCount: 0, batchDate: '2026-11-05', allowEmptyDaily: false
+            }).stop, true);
+        });
+    }));
+
+    it('有候选时不进入零候选停止分支', () => {
+        const gate = evaluateZeroCandidateGate({ candidateCount: 3, batchDate: '2026-11-05', allowEmptyDaily: undefined });
+        assert.strictEqual(gate.zeroCandidates, false);
+        assert.strictEqual(gate.stop, false);
+        assert.strictEqual(gate.warning, null);
+        assert.strictEqual(gate.errorMessage, null);
+    });
+});

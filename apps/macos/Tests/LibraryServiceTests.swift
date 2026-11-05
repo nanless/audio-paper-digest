@@ -515,9 +515,47 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         let failedStatus = try await retryable.handle(command: "library.status", payload: [:])
         try expect(failedStatus["error"] != nil && failedStatus["snapshotID"] == nil, "status after a failure reports the error instead of an empty library")
         try largeCatalog.write(to: brokenPublished.appendingPathComponent("current.json"))
+        // Repairing the file alone does not open the gate: only the explicit retry re-reads the
+        // catalog, so an ordinary command keeps reporting the failed load instead of retrying it.
+        var stillFailed: Error?
+        do { _ = try await retryable.handle(command: "library.list", payload: ["limit": 10]) } catch { stillFailed = error }
+        try expect(stillFailed != nil, "ordinary commands stay failed after a load error instead of re-reading")
+        try await retryable.retryLoad()
         let recovered = try await retryable.handle(command: "library.list", payload: ["limit": 10])
         try expect((recovered["papers"] as? [[String: Any]])?.count == 1, "a retried load recovers without restarting the app")
+        let recoveredStatus = try await retryable.handle(command: "library.status", payload: [:])
+        try expect(recoveredStatus["error"] == nil && recoveredStatus["snapshotID"] as? String == recovered["snapshotID"] as? String, "a successful retry clears the reported error and serves the re-read catalog")
         print("LAZY STARTUP: large catalog decodes off the constructor, loading/error states stay explicit, retry recovers")
+    }
+    /// The app's retry button sends `library.retryLoad` over IPC, so the command path itself must
+    /// recover a failed load. The direct `retryLoad()` call in the previous suite does not prove
+    /// that the command reaches the retry branch instead of the ordinary ready gate.
+    static func testRetryLoadCommandRecovery() async throws {
+        let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
+        let published = folder.appendingPathComponent("PublishedLibrary", isDirectory: true)
+        try FileManager.default.createDirectory(at: published, withIntermediateDirectories: true)
+        // Build a real saved catalog, then inflate it past the eager-decode limit.
+        let sourceFolder = try temporary(); defer { try? FileManager.default.removeItem(at: sourceFolder) }
+        let sourceLibrary = try service(sourceFolder, LibraryFixtureTransport(try fixture([[row("2501.00001", slug: "retry-command", title: "Retry command", date: "2026-01-01")]])))
+        _ = try await sourceLibrary.sync()
+        var catalogObject = try JSONSerialization.jsonObject(with: Data(contentsOf: sourceFolder.appendingPathComponent("PublishedLibrary/current.json"))) as! [String: Any]
+        catalogObject["validationEpoch"] = String(repeating: "b", count: 9 * 1024 * 1024)
+        let healthyCatalog = try JSONSerialization.data(withJSONObject: catalogObject, options: [.sortedKeys])
+        var broken = Data("{not a catalog".utf8)
+        broken.append(Data(repeating: 0x20, count: 9 * 1024 * 1024))
+        try broken.write(to: published.appendingPathComponent("current.json"))
+
+        let library = try LibraryService(dataDirectory: folder, siteBaseURL: base, transport: { _, _ in throw LibraryService.ServiceError.network("retry command fixture must not request") })
+        var failure: Error?
+        do { try await library.waitUntilReady() } catch { failure = error }
+        try expect(failure != nil, "the corrupt catalog leaves the service in the failed state")
+        // Repairing the file alone must not open the gate, but the retry command must.
+        try healthyCatalog.write(to: published.appendingPathComponent("current.json"))
+        let retried = try await library.handle(command: "library.retryLoad", payload: [:])
+        let listing = try await library.handle(command: "library.list", payload: ["limit": 10])
+        try expect(retried["loading"] == nil && retried["snapshotID"] as? String == listing["snapshotID"] as? String, "the retry command itself recovers the failed load instead of rethrowing it")
+        try expect((listing["papers"] as? [[String: Any]])?.count == 1, "the catalog re-read by the retry command serves list data")
+        print("RETRY COMMAND: a failed load recovers through library.retryLoad")
     }
     /// Staging a catalog from shards a sync already read and parsed must not read or parse them
     /// again, and must still reject any byte/row identity change and any row the source path denies.
@@ -675,6 +713,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
                 try await testStrictLegacyIdentifiers()
                 try await testPublishedScoreScalar()
                 try await testLazyStartupAndRetry()
+                try await testRetryLoadCommandRecovery()
                 try await testAggregateStagePreparedShards()
                 try await testPersonalCatalogJoin()
             }

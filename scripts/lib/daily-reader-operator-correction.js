@@ -5,6 +5,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage();
 const codec = require('./protocol-codec');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const CONTRACT = 'daily-reader-operator-correction-batch';
 const PROOF = 'daily-reader-operator-correction';
 const EDIT = 'reader-human-source-edit';
@@ -103,7 +104,8 @@ function replay(record, candidate) {
         || repair.hashDraft(candidate.identity) !== path.basename(record.baselineCandidateFile,'.json')
         || record.baselineDraftSha256 !== repair.hashDraft(candidate.payload.draft)
         || !repair.parseRepairableDraft(record.draft) || !Array.isArray(record.patch?.replacements)
-        || record.patch.replacements.length < 1 || record.patch.replacements.length > 8)
+        || record.patch.replacements.length < MIN_READER_PATCH_NODES
+        || record.patch.replacements.length > MAX_READER_PATCH_NODES)
         throw new Error('Operator correction original draft or bounded patch differs');
     const paths = record.patch.replacements.map(r=>r.path);
     if (paths.some(p=>!/^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/(?:body|explanation))?$/.test(p)))

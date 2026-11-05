@@ -6,6 +6,7 @@ const { isUsageEventFormat } = require('./llm-usage-format');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const CONTRACT = 'reader-compatible-candidate-replay';
 const IMPLEMENTATION_FIELDS = new Set(['parserImplementationSha256', 'editorialImplementationSha256',
     'mechanicalContractSha256', 'tableCompilerSha256', 'repairImplementationSha256',
@@ -327,7 +328,8 @@ function archivedMigrationGraph(directory, compatible, normalizeReplayDraft, pai
 function replayRepair(request, response, payload, source, normalizeReplayDraft, allowExactArchivedDraft = false) {
     const repair = require('./reader-repair');
     const targetsValid = () => {
-        if (!Array.isArray(request.repairTargets) || request.repairTargets.length < 1 || request.repairTargets.length > 8) return false;
+        if (!Array.isArray(request.repairTargets) || request.repairTargets.length < MIN_READER_PATCH_NODES
+            || request.repairTargets.length > MAX_READER_PATCH_NODES) return false;
         const seen = [];
         for (const target of request.repairTargets) {
             if (typeof target?.path !== 'string' || seen.some(pointer => target.path === pointer

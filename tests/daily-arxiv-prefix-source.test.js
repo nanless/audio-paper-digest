@@ -15,13 +15,13 @@ const records = [entry('2610.00001', '2026-10-19T03:00:00Z'),
 function feed(entries, start, total, size = 2) {
     return `<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><opensearch:totalResults>${total}</opensearch:totalResults><opensearch:startIndex>${start}</opensearch:startIndex><opensearch:itemsPerPage>${size}</opensearch:itemsPerPage>${entries.join('')}</feed>`;
 }
-function options(transform, values = records) {
+function options(transform, values = records, categoryId = 'eess.AS') {
     const calls = [];
     return { calls, pageSize: 2, requestScheduler: { run: async (host, task, opts) => {
         assert.equal(host, 'export.arxiv.org'); assert.equal(opts.minimumCooldownMs, 3000); return task();
     } }, requestFn: async url => {
         calls.push(url); const query = new URL(url).searchParams;
-        assert.equal(query.get('search_query'), 'cat:eess.AS');
+        assert.equal(query.get('search_query'), `cat:${categoryId}`);
         assert.equal(query.get('sortBy'), 'submittedDate'); assert.equal(query.get('sortOrder'), 'descending');
         const start = Number(query.get('start'));
         const response = { status: 200, data: feed(values.slice(start, start + 2), start, values.length) };
@@ -65,7 +65,9 @@ test('missing or changed real continuity witness cannot certify complete source'
     await assert.rejects(fetchCategoryPrefix('eess.AS', changed, null, options()), /did not encounter witness/);
 });
 test('only an actual HTTP429 source failure enables fallback and it preserves original evidence', async () => {
-    const original = { failures: [{ error: 'HTTP 429' }], attempts: 5, provider: { boundaryIdentity: boundary.identitySha256 } };
+    // A written record must declare the category that actually observed the 429;
+    // the identity-less shape is read-only legacy and fails closed on write.
+    const original = { categoryId: 'eess.AS', failures: [{ error: 'HTTP 429' }], attempts: 5, provider: { boundaryIdentity: boundary.identitySha256 } };
     const state = {};
     const opts = { ...options(), strategyState: state, windowFetch: async () => {
         throw Object.assign(new Error('date query HTTP 429'), { sourceHealth: original });
@@ -78,6 +80,138 @@ test('only an actual HTTP429 source failure enables fallback and it preserves or
     const refused = Object.assign(new Error('source corrupted'), { sourceHealth: { failures: [{ error: 'HTTP 500' }] } });
     await assert.rejects(fetchDailyArxivCategory('eess.AS', boundary, null,
         { ...options(), windowFetch: async () => { throw refused; } }), e => e === refused);
+});
+
+test('HTTP429 evidence without a declared category fails closed instead of writing an unowned record', async () => {
+    // The legacy dateQueryFailure-only shape stays readable for real archives,
+    // but the write path must never produce an unattributable 429 record: that
+    // would freeze evidence nobody can own into a source checkpoint.
+    const state = {}, opts = options();
+    let failure;
+    try {
+        await fetchDailyArxivCategory('eess.AS', boundary, null, { ...opts, strategyState: state,
+            windowFetch: async () => { throw Object.assign(new Error('date query HTTP 429'), { sourceHealth: {
+                failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: boundary.identitySha256 } } }); } });
+    } catch (error) { failure = error; }
+    assert.ok(failure);
+    assert.equal(failure.code, 'SOURCE_FETCH_FAILED');
+    assert.match(failure.message, /429 证据缺少类别身份，不能写入来源检查点/);
+    // Nothing attributable was written: the error carries no sourceHealth, the
+    // strategy state stays cold, and the fetched prefix is not promoted.
+    assert.equal(failure.sourceHealth, undefined);
+    assert.equal(state.categoryPrefix, undefined);
+    assert.equal(state.categoryPrefixFailure, undefined);
+});
+
+test('cross-category HTTP429 trigger reuse is refused; route reuse keeps its real category', async () => {
+    const plainBoundary = { ...boundary, continuity: { required: false, witnesses: { arxiv: [] } } };
+    const ownFailure = { categoryId: 'eess.AS', source: 'arxiv-api-since', attempts: 4, successfulRequests: 0,
+        failures: [{ error: 'HTTP 429' }], coverageComplete: false, ok: false, allFailed: true,
+        provider: { boundaryIdentity: plainBoundary.identitySha256,
+            window: { since: plainBoundary.since, until: plainBoundary.until, covered: false } } };
+    const state = {};
+    const first = await fetchDailyArxivCategory('eess.AS', plainBoundary, null, { ...options(), strategyState: state,
+        windowFetch: async () => { throw Object.assign(new Error('date query HTTP 429'), { sourceHealth: ownFailure }); } });
+    const own = first._sourceHealth.provider.categoryPrefix;
+    assert.deepEqual(own.dateQueryFailure.health, ownFailure);
+    assert.equal(own.routeSwitch, undefined);
+    assert.equal(hasVerifiedCategoryPrefix(first._sourceHealth, plainBoundary, 'eess.AS'), true);
+    const csRecords = [entry('2610.01001', '2026-10-19T01:00:00Z', 'cs.SD'),
+        entry('2610.01002', '2026-10-18T12:00:00Z', 'cs.SD'), entry('2610.01003', '2026-10-17T12:00:00Z', 'cs.SD')];
+    let windowCalls = 0;
+    const second = await fetchDailyArxivCategory('cs.SD', plainBoundary, null, { ...options(null, csRecords, 'cs.SD'),
+        strategyState: state, windowFetch: async () => { windowCalls++; throw new Error('must not repeat the limited date query'); } });
+    const reuse = second._sourceHealth.provider.categoryPrefix;
+    assert.equal(windowCalls, 0);
+    assert.equal(reuse.dateQueryFailure, undefined);
+    assert.equal(reuse.routeSwitch.categoryId, 'eess.AS');
+    assert.deepEqual(reuse.routeSwitch.dateQueryFailure.health, ownFailure);
+    assert.equal(hasVerifiedCategoryPrefix(second._sourceHealth, plainBoundary, 'cs.SD'), true);
+    // The saved record survives its JSON checkpoint round-trip and cannot serve
+    // as this category's own OAI trigger, which still requires its own 429.
+    assert.equal(hasVerifiedCategoryPrefix(JSON.parse(JSON.stringify(second._sourceHealth)), plainBoundary, 'cs.SD'), true);
+    assert.equal(hasEligibleOaiTrigger(second._sourceHealth, plainBoundary, 'cs.SD'), false);
+    // A record whose only trigger names a foreign category is the pre-2026-11
+    // legacy shape: read-only replay accepts it, whether the identity sits in
+    // categoryId or the older id field. The write path never produces it,
+    // because a later category always records routeSwitch.
+    const legacyOwn = structuredClone(second._sourceHealth);
+    delete legacyOwn.provider.categoryPrefix.routeSwitch;
+    legacyOwn.provider.categoryPrefix.dateQueryFailure = { health: structuredClone(ownFailure) };
+    assert.equal(hasVerifiedCategoryPrefix(legacyOwn, plainBoundary, 'cs.SD'), true);
+    const legacyIdOnly = structuredClone(legacyOwn);
+    delete legacyIdOnly.provider.categoryPrefix.dateQueryFailure.health.categoryId;
+    legacyIdOnly.provider.categoryPrefix.dateQueryFailure.health.id = 'eess.AS';
+    assert.equal(hasVerifiedCategoryPrefix(legacyIdOnly, plainBoundary, 'cs.SD'), true);
+    // The same bytes plus a routeSwitch field are the new shape and must pass
+    // the strict switch rules instead, so the foreign own evidence is refused.
+    const legacyWithSwitch = structuredClone(legacyOwn);
+    legacyWithSwitch.provider.categoryPrefix.routeSwitch = { categoryId: 'eess.AS',
+        dateQueryFailure: { health: structuredClone(ownFailure) } };
+    assert.equal(hasVerifiedCategoryPrefix(legacyWithSwitch, plainBoundary, 'cs.SD'), false);
+    // Even an empty routeSwitch field marks the new record: the field's absence,
+    // not its truthiness, is what identifies a legacy archive.
+    const legacyNullSwitch = structuredClone(legacyOwn);
+    legacyNullSwitch.provider.categoryPrefix.routeSwitch = null;
+    assert.equal(hasVerifiedCategoryPrefix(legacyNullSwitch, plainBoundary, 'cs.SD'), false);
+    // A switch may not name the current category, and may not carry evidence
+    // whose declared category differs from the switch it claims to reuse.
+    const mislabelled = structuredClone(second._sourceHealth);
+    mislabelled.provider.categoryPrefix.routeSwitch.categoryId = 'cs.SD';
+    assert.equal(hasVerifiedCategoryPrefix(mislabelled, plainBoundary, 'cs.SD'), false);
+    const drifted = structuredClone(second._sourceHealth);
+    drifted.provider.categoryPrefix.routeSwitch.dateQueryFailure.health.categoryId = 'cs.CL';
+    assert.equal(hasVerifiedCategoryPrefix(drifted, plainBoundary, 'cs.SD'), false);
+    const selfReuse = structuredClone(second._sourceHealth);
+    selfReuse.provider.categoryPrefix.routeSwitch = { categoryId: 'cs.SD', dateQueryFailure: { health: {
+        categoryId: 'cs.SD', failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: plainBoundary.identitySha256 } } } };
+    assert.equal(hasVerifiedCategoryPrefix(selfReuse, plainBoundary, 'cs.SD'), false);
+    // Archived records written before per-category attribution stay readable.
+    const legacy = structuredClone(second._sourceHealth);
+    delete legacy.provider.categoryPrefix.routeSwitch;
+    legacy.provider.categoryPrefix.dateQueryFailure = { health: { failures: [{ error: 'HTTP 429' }],
+        provider: { boundaryIdentity: plainBoundary.identitySha256 } } };
+    assert.equal(hasVerifiedCategoryPrefix(legacy, plainBoundary, 'cs.SD'), true);
+});
+
+test('real 2026-11-03 legacy shape (eess.SP 429 under cs.MM without routeSwitch) replays, its routeSwitch form does not', async () => {
+    // Verbatim shape from data/archive/2026-11-03/fetch-checkpoint.json: the
+    // pre-per-category code wrote the first limited category's evidence
+    // (eess.SP) into cs.MM / cs.CL / cs.AI and never wrote routeSwitch, so
+    // read-only replay of that date must not require same-category attribution.
+    const plainBoundary = { ...boundary, continuity: { required: false, witnesses: { arxiv: [] } } };
+    const mmRecords = [entry('2610.02001', '2026-10-19T01:00:00Z', 'cs.MM'),
+        entry('2610.02002', '2026-10-18T12:00:00Z', 'cs.MM'), entry('2610.02003', '2026-10-17T12:00:00Z', 'cs.MM')];
+    const result = await fetchCategoryPrefix('cs.MM', plainBoundary, null, options(null, mmRecords, 'cs.MM'));
+    const health = result._sourceHealth, prefix = health.provider.categoryPrefix;
+    const frozenFailure = { id: 'eess.SP', categoryId: 'eess.SP', source: 'arxiv-api-since', attempts: 3,
+        successfulRequests: 0, failures: [{ error: 'HTTP 429' }], coverageComplete: false, ok: false, allFailed: true,
+        provider: { boundaryIdentity: plainBoundary.identitySha256,
+            window: { since: plainBoundary.since, until: plainBoundary.until, covered: false } } };
+    assert.equal(hasVerifiedCategoryPrefix(health, plainBoundary, 'cs.MM', false), true);
+    prefix.dateQueryFailure = { health: structuredClone(frozenFailure) };
+    assert.equal(Object.hasOwn(prefix, 'routeSwitch'), false);
+    assert.equal(hasVerifiedCategoryPrefix(health, plainBoundary, 'cs.MM'), true);
+    // The legacy acceptance is read-only replay of saved bytes, so it must
+    // survive the JSON checkpoint round-trip unchanged.
+    assert.equal(hasVerifiedCategoryPrefix(JSON.parse(JSON.stringify(health)), plainBoundary, 'cs.MM'), true);
+    // The very same evidence with a routeSwitch is the new shape and is judged
+    // by the strict rules: it is refused because both shapes are present...
+    const bothShapes = structuredClone(health);
+    bothShapes.provider.categoryPrefix.routeSwitch = { categoryId: 'eess.SP',
+        dateQueryFailure: { health: structuredClone(frozenFailure) } };
+    assert.equal(hasVerifiedCategoryPrefix(bothShapes, plainBoundary, 'cs.MM'), false);
+    // ...and a switch-only record still cannot claim the current category.
+    const switched = structuredClone(bothShapes);
+    delete switched.provider.categoryPrefix.dateQueryFailure;
+    assert.equal(hasVerifiedCategoryPrefix(switched, plainBoundary, 'cs.MM'), true);
+    switched.provider.categoryPrefix.routeSwitch.categoryId = 'cs.MM';
+    assert.equal(hasVerifiedCategoryPrefix(switched, plainBoundary, 'cs.MM'), false);
+    // A foreign category alone is not enough either: the frozen evidence still
+    // has to be the real HTTP 429 for this exact boundary.
+    const wrongFailure = structuredClone(health);
+    wrongFailure.provider.categoryPrefix.dateQueryFailure.health.failures = [{ error: 'HTTP 500' }];
+    assert.equal(hasVerifiedCategoryPrefix(wrongFailure, plainBoundary, 'cs.MM'), false);
 });
 
 test('cold prefix proof rejects incomplete pages, changed coverage, replay and missing contract', async () => {
@@ -118,7 +252,7 @@ test('formal health projection and checkpoint reload retain and enforce prefix e
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const bound = { contract: 'daily-fetch-boundary-v1', lastDigestDate: '2026-10-15', since: boundary.since, until: boundary.until };
     bound.identitySha256 = pipeline.stableContentSha256(bound);
-    const originalFailure = { failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: bound.identitySha256 } };
+    const originalFailure = { categoryId: 'eess.AS', failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: bound.identitySha256 } };
     const papers = await fetchDailyArxivCategory('eess.AS', bound, null, { ...options(),
         windowFetch: async () => { throw Object.assign(new Error('date query limited'), { sourceHealth: originalFailure }); } });
     const health = pipeline.buildArxivCategoryHealth(config.ARXIV_CATEGORIES.find(c => c.id === 'eess.AS'),
@@ -163,7 +297,7 @@ test('wrapper rejects mismatched original HTTP429 trigger before promoting strat
     const state = {};
     await assert.rejects(fetchDailyArxivCategory('eess.AS', boundary, null, { ...options(), strategyState: state,
         windowFetch: async () => { throw Object.assign(new Error('date limited'), { sourceHealth: {
-            failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: 'f'.repeat(64) } } }); }
+            categoryId: 'eess.AS', failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: 'f'.repeat(64) } } }); }
     }), error => error.code === 'SOURCE_FETCH_FAILED' && error.sourceHealth.ok === false);
     assert.equal(state.categoryPrefix, undefined);
 });

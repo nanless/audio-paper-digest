@@ -14,6 +14,7 @@ const Config = require('./config.js');
 const { readJsonFileStrict } = require('./analysis-engine.js');
 const daily = require('./lib/daily-fresh-source-plan.js');
 const repair = require('./lib/reader-repair.js');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./lib/reader-patch-limits');
 const utils = require('./utils.js');
 const correction = require('./lib/daily-reader-operator-correction.js');
 
@@ -34,7 +35,8 @@ function nodeAt(draft, pointer) {
 function validateSpec(spec) {
     if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new Error('spec 必须是对象');
     if (typeof spec.paperId !== 'string' || !/^\d{4}\.\d{4,5}$/.test(spec.paperId)) throw new Error('spec.paperId 非法');
-    if (!Array.isArray(spec.replacements) || spec.replacements.length < 1 || spec.replacements.length > 8) throw new Error('replacements 须为 1–8 项');
+    if (!Array.isArray(spec.replacements) || spec.replacements.length < MIN_READER_PATCH_NODES
+        || spec.replacements.length > MAX_READER_PATCH_NODES) throw new Error('replacements 须为 1–8 项');
     for (const replacement of spec.replacements) {
         if (!replacement || typeof replacement.path !== 'string' || !/^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/(?:body|explanation))?$/.test(replacement.path)) {
             throw new Error(`replacement.path 非法：${replacement && replacement.path}`);

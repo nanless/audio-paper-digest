@@ -7,6 +7,7 @@ const { isUsageEventFormat } = require('./llm-usage-format');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const repair = require('./reader-repair');
+const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const { strictJson } = require('./publication-file-primitives');
 const format = require('./reader-ordinal-format');
 const CONTRACT = format.wireHeader().contract;
@@ -67,6 +68,8 @@ function parseAck(raw, request = null) {
             for (;;) { walk([...route, index++]); const end = tokens[at++]; if (end === ']') break;
                 if (end !== ',') fail('invalid JSON array terminator'); }
         } else if (route.length === 3 && route[0] === 'replacements' && route[2] === 'targetOrdinal') {
+            // 此处 1..8 的 ordinal 字面量与 reader-patch-limits 的上限常量隐式耦合：
+            // 放宽 MAX_READER_PATCH_NODES 后必须同步改正则，否则合法序号会被拒绝。
             if (!/^[1-8]$/.test(token)) fail('ordinal must be a literal integer 1..8');
         } else if (route.length === 1 && route[0] === 'version' && token !== '1') fail('version must be literal 1');
     }
@@ -81,7 +84,8 @@ function parseAck(raw, request = null) {
     }
     exact(result, [...Object.keys(format.readWireHeader(result)), 'requestToken','replacements']);
     if (!format.isWire(result) || !TOKEN.test(result.requestToken)
-        || !Array.isArray(result.replacements) || result.replacements.length < 1 || result.replacements.length > 8) fail('invalid ACK contract');
+        || !Array.isArray(result.replacements) || result.replacements.length < MIN_READER_PATCH_NODES
+        || result.replacements.length > MAX_READER_PATCH_NODES) fail('invalid ACK contract');
     for (const item of result.replacements) exact(item, ['targetOrdinal','value']);
     return result;
 }
@@ -100,7 +104,8 @@ function node(draft, pointer) {
     return values[index][m[4]];
 }
 function eligible(context, options = {}) {
-    return Boolean(context && Array.isArray(context.targets) && context.targets.length >= 1 && context.targets.length <= 8
+    return Boolean(context && Array.isArray(context.targets)
+        && context.targets.length >= MIN_READER_PATCH_NODES && context.targets.length <= MAX_READER_PATCH_NODES
         && context.atomicOperation == null && !context.sectionGroupPlanContract && !context.conceptTermsContext
         && !options.metadataOperation && !options.conceptTermsContext && !options.readerFactLocalRevision
         && !options.resourceLocalRevision && !options.atomicOperation);
@@ -245,7 +250,8 @@ function compileAgainst(draft,request,raw,applyOptions) {
     if(!format.isWire(request)||!TOKEN.test(request.requestToken)||!/^([a-f0-9]{32})$/.test(request.requestSalt)
         ||!SHA.test(request.identitySha256)||!SHA.test(request.candidateEnvelopeSha256)
         ||request.requestToken!==committedToken(request)||request.templateSha256!==format.templateSha(request)
-        ||request.draftSha256!==repair.hashDraft(draft)||!Array.isArray(request.targets)||!request.targets.length||request.targets.length>8)fail('invalid original request');
+        ||request.draftSha256!==repair.hashDraft(draft)||!Array.isArray(request.targets)
+        ||request.targets.length<MIN_READER_PATCH_NODES||request.targets.length>MAX_READER_PATCH_NODES)fail('invalid original request');
     const descriptors=targetsFor(draft,{targets:request.targets.map(t=>({path:t.path,oldSha256:t.oldSha256,value:node(draft,t.path)}))});
     if(!isDeepStrictEqual(descriptors,request.targets))fail('original ordered target mapping changed');
     if(applyOptions?.atomicOperation||applyOptions?.readerFactLocalClaims)fail('special apply options excluded');

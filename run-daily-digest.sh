@@ -10,7 +10,7 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--allow-empty-daily] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
 
 运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
 单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
@@ -18,6 +18,7 @@ usage() {
   ./run-daily-digest.sh 2026-07-23 --from review
 
 日更默认不生成长图和封面，--no-visuals 保留为兼容参数，无须每次添加。
+确认当天确实没有新论文后，抓取阶段可加 --allow-empty-daily 放行零候选批次。
 脚本在真实发布后登记与本次提交绑定的不生图记录。成功结束后，还须确认
 对应提交的 GitHub Pages 构建和部署成功，逐页检查正式地址、HTTP 200 与标题，
 再重新读取 digest:status。论文原图仍正常展示和审查。
@@ -71,6 +72,7 @@ shift
 
 start_stage="fetch"
 no_visuals_option_seen=0
+allow_empty_daily=0
 official_oai_recovery=0
 official_announcement_cutoff=""
 fetch_witness_recovery_manifest=""
@@ -97,6 +99,14 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       no_visuals_option_seen=1
+      shift
+      ;;
+    --allow-empty-daily)
+      if [ "$allow_empty_daily" -eq 1 ]; then
+        echo "--allow-empty-daily 不能重复使用" >&2
+        exit 2
+      fi
+      allow_empty_daily=1
       shift
       ;;
     --official-oai-recovery)
@@ -154,6 +164,10 @@ if [ "$official_oai_recovery" -eq 1 ] && [ "$start_index" -ne 1 ]; then
   echo "--official-oai-recovery 仅适用于抓取阶段。" >&2
   exit 2
 fi
+if [ "$allow_empty_daily" -eq 1 ] && [ "$start_index" -ne 1 ]; then
+  echo "--allow-empty-daily 仅适用于抓取阶段。" >&2
+  exit 2
+fi
 if [ -n "$official_announcement_cutoff" ] && { [ "$start_index" -ne 1 ] || [ "$official_oai_recovery" -ne 1 ] || [ -n "$fetch_witness_recovery_manifest" ]; }; then
   echo "--official-announcement-cutoff 仅适用于官方 OAI 抓取恢复，不能与旧见证恢复混用。" >&2
   exit 2
@@ -199,6 +213,7 @@ run_stage() {
 
 if [ "$start_index" -eq 1 ]; then
   fetch_options=(--require-previously-fetched)
+  if [ "$allow_empty_daily" -eq 1 ]; then fetch_options+=(--allow-empty-daily); fi
   if [ "$official_oai_recovery" -eq 1 ]; then fetch_options+=(--official-oai-recovery); fi
   if [ -n "$official_announcement_cutoff" ]; then fetch_options+=(--official-announcement-cutoff "$official_announcement_cutoff"); fi
   if [ -n "$fetch_witness_recovery_manifest" ]; then

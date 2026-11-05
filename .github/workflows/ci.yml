@@ -155,3 +155,53 @@ jobs:
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
         run: test "$VERIFY_RESULT" = success
+
+  # 客户端测试不进服务端分片矩阵，独立作业避免拖慢上述十二个检查：
+  # Android 需要 JDK、Gradle 与 SDK，与 Node/Python 分片没有共享资源，
+  # 也不并入 test 汇总检查。
+  # macOS 客户端测试当前没有 CI 作业：多个套件直接读取
+  # prototypes/macos-research/assets 下的 PDF 与图片，而该目录被
+  # prototypes/macos-research/.gitignore 排除，干净 checkout 上不存在。
+  # 这些测试仍在本机通过 apps/macos/test.sh 运行；接入 CI 需要先解决资产
+  # 不入库的问题，不能用下载步骤绕过（测试不联网）。
+  # 本作业只运行仓库里已有的 Gradle 单元测试；未在 GitHub Actions 上实测，
+  # 不改动上面的 verify/test。
+  client-android:
+    name: client (android)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 配置 Android SDK
+        # local.properties 不入库；build.sh 缺少 ANDROID_HOME 时不会指向任何 SDK。
+        # setup-android 设置 ANDROID_HOME/ANDROID_SDK_ROOT 并接受 SDK 许可。
+        uses: android-actions/setup-android@v3
+
+      - name: 安装项目依赖
+        run: npm ci
+
+      - name: 安装 katex（Gradle 资产步骤依赖）
+        # 根目录没有 npm workspaces。:app:testDebugUnitTest 的任务图包含
+        # :app:prepareDebugPublishedAssets，它无条件从 apps/macos/node_modules/katex
+        # 复制文件；只跑根 npm ci 会在干净 checkout 上 ENOENT。
+        working-directory: apps/macos
+        run: npm ci
+
+      - name: 运行 Android 客户端单元测试
+        # 不运行 apps/android/test.sh：其中的 Python 测试需要
+        # prototypes/macos-research/assets 下的 PDF，而该目录不入库。
+        # debug 变体的资产准备任务会渲染 prototypes 样本，干净 checkout 上必然 ENOENT；
+        # 单元测试不读取打包资产，因此排除该任务。
+        working-directory: apps/android
+        run: ./gradlew :app:testDebugUnitTest --no-daemon -x :app:prepareDebugPublishedAssets

@@ -13,11 +13,17 @@
 
 分页大小只控制一次返回多少条，不能决定整个窗口覆盖多少论文。下面先说明基线和窗口，再说明旧记录兼容、显式恢复以及限流时的官方来源。
 
+<a id="zero-candidates"></a>
+
+抓取没有致命来源错误、但进入筛选的候选为 0 时，程序把 `stats.zeroCandidates: true` 写进当批 `raw-candidates.json`，并在付费筛选前停止；只有确认当天确实没有新论文后才显式放行。放行方式是在抓取阶段加 `--allow-empty-daily`：日更入口用 `npm run digest:prepare -- YYYY-MM-DD --allow-empty-daily`，直接抓取用 `npm run fetch -- --allow-empty-daily`，两者都支持；该参数只对抓取阶段有效，其他阶段会直接报错。项目 `.env` 里写 `PD_ALLOW_EMPTY_DAILY=1` 也能放行，但环境加载器会把它带进之后的所有批次，等于长期关闭这道闸门，命令行传入的 `PD_ALLOW_EMPTY_DAILY` 也会被 `.env` 覆盖；因此 `.env` 写法只在无法传参时使用，用完要删。
+
 ## 取不到官方 PDF 的论文怎么跳过
 
 用户要求单篇 404 不影响整批日更。这条规则分两处执行，都只认“官方 PDF 的全部候选地址都明确返回 404”，超时、认证错误、5xx 和解析失败仍按原规则停止。
 
-筛选阶段需要查看官方 PDF 时，程序把这条跳过记录写进当批 `filter-decisions.json`：`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；`related`、`retryable`、`fallback` 均为 `false`，且不带 `filterScopeEvidence`。然后继续处理其余候选。这不等于判定论文不相关。
+筛选阶段需要查看官方 PDF 时，程序把这条跳过记录写进当批 `filter-decisions.json`：`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留本论文规范编号 `arxivId`、原始 `error`、`reason`、`decidedAt` 和输入 SHA；`related`、`retryable`、`fallback` 均为 `false`，且不带 `filterScopeEvidence`。新记录一律写入 `arxivId`，2026-11 之前写下的旧记录可以缺少这个字段，读取时按缺省兼容。然后继续处理其余候选。这不等于判定论文不相关。
+
+读取这条记录时不再逐字比对 `error` 文案，只要求它是一个非空字符串，并且含有本论文的规范化 arXiv ID；ID 按编号边界匹配，因此 `2610.90011` 不会被当成 `2610.9001`，`arXiv PDF <id> download failed: HTTP 404` 与带版本号的 `<id>v2` 等写法都算命中。`arxivId` 字段若存在则必须等于本论文编号。
 
 筛选完成、封存来源时，如果某篇入选论文的官方 PDF 在全部候选地址上都是 404，这篇论文同样跳过：程序把跳过原因、原始错误信息和论文编号写进本次来源运行目录 `data/runtime/daily-fresh-source-runs/<runId>/daily-source-skips.json`，然后继续封存和分析其余论文。封存来源阶段每批最多跳过两篇，可用 `PD_DAILY_SOURCE_SKIP_MAX` 调整（0–5）；超过上限就停止整批，不会为了继续发布而扩大跳过范围。
 
@@ -98,6 +104,8 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 类别列表从第0条开始读取，每页核验实际偏移、总数、页长、论文身份、类别和提交时间的全局顺序。只有完整读完越过严格下界的一页，或读尽整个类别，才完成范围覆盖；与下界相同的时间仍继续分页，遇到旧编号不能终止。实际命中原见证并核对同一提交时刻后，再独立重读首页，核对总数及规范论文内容没有变化。官方30000条偏移范围内仍未覆盖下界、页间总数或首页发生变化、见证缺失、响应失败时均拒绝完成，不静默截断或换用网页缓存。
 
 来源健康记录保留原日期查询失败及类别分页的真实URL、原响应SHA、论文内容SHA、覆盖终点和首页复核证据。同一次运行成功验证该路径后，其余类别可沿用；网络、认证、解析、来源身份和覆盖校验失败不能触发这个限流恢复。全部来源仍须通过正常来源健康及跨文件完整性检查，才能进入筛选和分析。
+
+首个类别真实返回 HTTP 429 之后，其余类别沿用这条已验证的类别列表路径时，必须在自己的来源健康记录中写入 `provider.categoryPrefix.routeSwitch`：`categoryId` 是真正遇到 429 的那个类别，`dateQueryFailure` 是它的原失败证据。这份字段只说明“本类别沿用了别处验证过的路径”，不能把首个类别的失败冒称成本类别自己的 `dateQueryFailure`。2026-11 之前的旧记录会把首个 429 类别写进后续类别的 `dateQueryFailure`，那种形状只做只读回放兼容；新记录一律使用 `routeSwitch`。
 
 ## 两条 Atom 查询均限流时的官方 OAI 恢复
 

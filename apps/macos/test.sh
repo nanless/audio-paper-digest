@@ -10,7 +10,7 @@ trap 'rm -rf "$test_work"' EXIT
 mkdir "$test_work/Sources"
 cp "$app_root"/Sources/*.swift "$test_work/Sources/"
 sources=("$test_work"/Sources/*.swift)
-for suite in ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollections BackupCodec ReleaseBootstrap ReleaseEmptyLibrary PersonalWebDavSync FullWebDavSync SyncedArchiveHistory CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService NativeLibraryAccessibility WebsiteClassification LibraryCatalogPaging CatalogScheduling LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregateReadScope AggregateImageReadScope AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeAggregateHost NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment; do
+for suite in ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollections BackupCodec ReleaseBootstrap ReleaseEmptyLibrary PersonalWebDavSync FullWebDavSync SyncedArchiveHistory CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService NativeLibraryAccessibility WebsiteClassification LibraryCatalogPaging CatalogScheduling LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePreload AggregateReadScope AggregateImageReadScope AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeAggregateHost NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment; do
   echo "正在核验 ${suite}（隔离临时资料，不访问用户文库或付费服务）"
   xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
   if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
@@ -40,6 +40,13 @@ node "$app_root/Tests/CloudUI.test.cjs"
 node "$app_root/Tests/ZoteroUI.test.cjs"
 node "$app_root/Tests/ZoteroSettingsIntegration.test.cjs"
 node "$app_root/Tests/ZoteroResumePresentation.test.cjs"
+# 该套件只读核验本机已安装 Zotero 的源码（与 ZoteroServiceTests 内的同源契约一致）。
+# 未安装时显式跳过，不把缺少第三方应用当成回归；本地完整环境仍会实际运行。
+if [[ -f /Applications/Zotero.app/Contents/Resources/app/omni.ja ]]; then
+  node --test "$app_root/Tests/ZoteroInstalledContractReview.test.cjs"
+else
+  echo '已安装 Zotero 契约审查跳过：本机未安装 Zotero；隔离套件仍已运行。'
+fi
 node "$app_root/Tests/DesktopUI.test.cjs"
 node "$app_root/Tests/AggregateUI.test.cjs"
 node "$app_root/Tests/AggregateHydration.test.cjs"
