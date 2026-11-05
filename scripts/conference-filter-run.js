@@ -38,8 +38,12 @@ function parseArgs(argv) {
     if (!filter.UUID_RE.test(values['--filter'])) throw new Error('--filter 必须是规范的 UUID v4');
     if (!evidenceApi.UUID_RE.test(values['--evidence-run'])) throw new Error('--evidence-run 必须是规范的 UUID v4');
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(values['--owner'])) throw new Error('--owner 格式不对：只能用字母、数字和 . _ : -，并且要字母或数字开头');
-    const limit = values['--limit'] === undefined ? 10000 : Number(values['--limit']);
+    const limitWasExplicit = values['--limit'] !== undefined;
+    const limit = limitWasExplicit ? Number(values['--limit']) : 10000;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) throw new Error(`--limit 必须是 1 到 10000 的整数：当前是 ${values['--limit']}`);
+    if (!limitWasExplicit) {
+        console.warn('[conference-filter] 未显式传 --limit，按默认上限 10000 处理；候选规模接近该值时会整批付费，请先核对数量。');
+    }
     return { catalogName: values['--catalog'], reportName: values['--report'], evidenceRunId: values['--evidence-run'],
         specName: values['--spec'],
         filterId: values['--filter'], owner: values['--owner'], limit, retryFailed: values['--retry-failed'] === true };

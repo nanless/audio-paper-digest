@@ -8,7 +8,7 @@
 
 ## 模板怎样进入一次请求
 
-[JavaScript 提示词登记表](../scripts/lib/prompt-contracts.js)选择 15 份通用模板，包括筛选；另 3 份用于已经明确范围的事实或术语修复。Python 的[现用模板清单](../scripts/prompt_evidence.py)须与它一致。
+[JavaScript 提示词登记表](../scripts/lib/prompt-contracts.js)选择 13 份通用模板，包括筛选；另 3 份用于已经明确范围的事实或术语修复。Python 的[现用模板清单](../scripts/prompt_evidence.py)须与它一致。
 
 加载器只读取模板的第一个围栏代码块，并把其中的 `{title}` 等占位符替换为本次材料。占位符是程序接口，不能随意改名。首围栏外的用途说明不发给模型，但整份文件也参与身份核验，因此不能把围栏外文字当作可直接润色的例外。
 

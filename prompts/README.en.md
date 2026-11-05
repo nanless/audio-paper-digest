@@ -8,7 +8,7 @@ This page is for people maintaining templates or investigating model inputs. For
 
 ## How a template becomes a request
 
-The [JavaScript version registry](../scripts/lib/prompt-contracts.js) selects 15 general templates, including filtering. Three additional templates handle facts or terminology within an explicitly established scope. The [Python current-template list](../scripts/prompt_evidence.py) must match this registry.
+The [JavaScript version registry](../scripts/lib/prompt-contracts.js) selects 13 general templates, including filtering. Three additional templates handle facts or terminology within an explicitly established scope. The [Python current-template list](../scripts/prompt_evidence.py) must match this registry.
 
 The loader reads only the first fenced code block and replaces placeholders such as `{title}` with material for the request. Placeholders are program interfaces, so their names must remain exact. Explanatory text outside that block is not sent to the model, but it is included when checking the exact bytes of the whole file. It cannot be edited without following the versioning rules.
 

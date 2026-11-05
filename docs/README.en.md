@@ -25,6 +25,14 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
+Version 1.4.3 performance work (compact catalog projection, background startup decoding, reused explanation and aggregate parsing, offline index, merged bridge calls) is recorded in the [1.4.3 record](workbench-1.4.3-review.md).
+
+1.4.2 fixed the context declaration on the explanations published on 3 and 4 November 2026: the blog template rebuilds the declaration from a whitelist and keeps camelCase, while the Mac and Android apps accept the single lowercase alias in already-published pages. See the [1.4.2 record](workbench-1.4.2-review.md).
+
+1.4.1 covers Nutstore favorites and note fixes, website paper classification, and re-verification on a Xiaomi physical device; see the [1.4.1 record](workbench-1.4.1-review.md).
+
+1.4.0 covers WebDAV full-data sync on both platforms, Nutstore testing, and acceptance of the official installers; see the [1.4.0 record](workbench-1.4.0-review.md).
+
 The [1.3.0 record](workbench-1.3.0-review.md) covers classification browsing, both interfaces, final packages, upgrades, and public downloads. Other versions retain their own dates, environments, and tested scope. They do not establish that every real-service operation was repeated on the current package.
 
 Use the [workbench review and release playbook](workbench-review-playbook.md) for cross-platform reviews, sync checks, and releases. See the [promotional production notes](workbench-promo-production.md) for recording demos, making covers, and preparing social copy.
@@ -42,6 +50,7 @@ Use the [workbench review and release playbook](workbench-review-playbook.md) fo
 | Android product and implementation scope | [Application design](android-app-plan.md) |
 | Android Zotero and full backups | [Zotero integration](android-zotero-research.md), [backup contract](android-cloud-contract.md) |
 | Cross-platform backup format and actual validation | [Portable fixtures](android-cloud-portable-fixtures.md), [Android validation](android-validation.md) |
+| Full data sync design and acceptance on both platforms | [Sync and conflict handling](workbench-full-webdav-sync.md) |
 | Client performance measurements and optimization scope | [Client performance](client-performance.md) |
 | Client release verification | [Release verification](client-release-verification.md) |
 | Client security and licensing | [Security record](client-security-audit.md), [Android license inventory](../apps/android/licenses.README.en.md) |

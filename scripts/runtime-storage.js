@@ -628,7 +628,7 @@ function buildPrunePlan(options = {}) {
     const references = scanAuthoritativeReferences(layout);
     const blockers = [...references.blockers, ...activeRuntimeLockBlockers(layout)];
     const candidates = [];
-    const retained = { recent: 0, referenced: 0 };
+    const retained = { recent: 0, referenced: 0, nonLog: 0 };
 
     for (const controlled of layout.controlled) {
         const root = path.resolve(controlled.root);
@@ -636,6 +636,11 @@ function buildPrunePlan(options = {}) {
             if (!stat.isFile()) return;
             if (!isInside(entryPath, root)) {
                 blockers.push({ type: 'path_escape', path: entryPath, message: '候选文件逃逸受控根' });
+                return;
+            }
+            // logs 根只清理 .log，避免把运维手册、偶发脚本和证据文件当旧日志删掉。
+            if (controlled.key === 'logs' && !/\.log$/i.test(entryPath)) {
+                retained.nonLog += 1;
                 return;
             }
             if (stat.mtimeMs >= cutoffMs) {

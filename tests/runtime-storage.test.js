@@ -279,6 +279,7 @@ describe('运行时存储的引用感知清理', () => {
             const oldAsset = writeFile(projectRoot, 'data/current/api-reader-assets/paper/old.png', '12');
             const oldVisual = writeFile(projectRoot, 'data/current/visual-reference-inputs/day/old.png', '1');
             const oldLog = writeFile(projectRoot, 'logs/old.log', '123');
+            const manual = writeFile(projectRoot, 'logs/RESUME-PLAYBOOK.md', '# 续跑手册');
             const oldDebug = writeFile(projectRoot, 'data/current/deep_analyzer_input_output/old.json', '{}');
             const recent = writeFile(projectRoot, 'data/current/image-cache/recent.bin', 'recent', NOW_MS - 5 * 24 * 60 * 60 * 1000);
             writeFile(projectRoot, 'data/current/state.json', '{}');
@@ -290,6 +291,8 @@ describe('运行时存储的引用感知清理', () => {
             for (const filePath of [oldCache, oldAsset, oldVisual, oldLog, oldDebug]) {
                 assert.strictEqual(fs.existsSync(filePath), false);
             }
+            // logs 根只清理 .log；手册、脚本和证据文件即使过期也必须保留。
+            assert.strictEqual(fs.existsSync(manual), true);
             assert.strictEqual(fs.existsSync(recent), true);
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });

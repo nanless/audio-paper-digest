@@ -70,6 +70,8 @@ def required_workspace_role_for_command(command_name):
         return 'daily'
     if name in {'conference-extract.py', 'history-inventory.py'}:
         return 'history'
+    if name.startswith(('conference-', 'historical-', 'history-')):
+        return 'history'
     return None
 
 

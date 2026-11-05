@@ -2076,6 +2076,16 @@ function loadPrompt(mdPath, vars = {}, { originalFileSha256 = null } = {}) {
             : require('./lib/prompt-evidence.js').readDeclaredPromptEvidenceBytes(relativePath, originalFileSha256)).toString('utf8')
         : fs.readFileSync(fullPath, 'utf8');
 
+    // 首个围栏的 info string 只允许空或 text。其他值（如 ```json）会让下面的
+    // 正则跳过头块、把第一块之后的散文当模板返回，必须在解析前直接报错。
+    const fenceMatch = content.match(/^(`{3,}|~{3,})([^\r\n]*)\r?\n/m);
+    if (fenceMatch) {
+        const fenceInfo = fenceMatch[2].trim();
+        if (fenceInfo && fenceInfo !== 'text') {
+            throw new Error(`提示词文件 ${mdPath} 的首个围栏标记只允许为空或 text，实际为 "${fenceInfo}"`);
+        }
+    }
+
     // 提取第一个围栏代码块内的内容（兼容 CRLF 换行和更长的围栏标记）
     const blockMatch = content.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);
     if (!blockMatch) {

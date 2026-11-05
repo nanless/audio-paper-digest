@@ -17,6 +17,8 @@ jobs:
     # ubuntu-latest 已在 2026-11 切到 26.04，当前 Playwright 1.60 不支持该发行版的
     # chromium，安装浏览器会直接失败。固定到 24.04 LTS，测试内容与命令不变。
     runs-on: ubuntu-24.04
+    # 单个分片挂死时不要让作业占满默认的 360 分钟。
+    timeout-minutes: 120
     # 模块加载时会检查正式环境变量。CI 使用无法联网的占位配置，
     # 单元测试模拟请求，不读取仓库或组织的密钥。
     env:
@@ -144,6 +146,7 @@ jobs:
     if: always()
     needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       matrix:
         node-version: [20.x, 22.x]

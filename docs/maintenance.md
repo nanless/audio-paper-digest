@@ -168,7 +168,7 @@ Python 日志清理会把目录读取、文件检查及删除失败写入 `probl
 npm run storage:prune -- --apply
 ```
 
-保留期默认 30 天，可用正整数 `PD_STORAGE_RETENTION_DAYS` 覆写。清理范围仅有 `logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无程序读取的旧调试目录：`deep_analyzer_input_output`、`filter_input_output`、`iclr_filter_input_output`。三类缓存删除前扫描 `data/current` 与 `data/archive` 的正式 JSON，核对绝对/相对路径和 URL SHA-256 引用。正式分析 JSON、发布/视觉清单、归档成品及博客文件不在白名单内。
+保留期默认 30 天，可用正整数 `PD_STORAGE_RETENTION_DAYS` 覆写，也可写入项目 `.env`。清理范围是 `logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无程序读取的旧调试目录：`deep_analyzer_input_output`、`filter_input_output`、`iclr_filter_input_output` 下的**全部普通文件**，不限 `.log`；因此 `logs/` 中不得放置手册、脚本或证据文件。三类缓存删除前扫描 `data/current` 与 `data/archive` 的正式 JSON，核对绝对/相对路径和 URL SHA-256 引用。正式分析 JSON、发布/视觉清单、归档成品及博客文件不在白名单内。
 
 JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前整批阻断。本机锁持有者 PID 存活，或远端/非法持有者无法可靠判活时，同样拒绝删除；清理器不替调用者删锁。它会复扫引用与候选，但扫描和删除之间没有所有写入者共用的事务锁，仍可能发生竞态，因此 `--apply` 前停写是必要条件。预览可以报告这些阻断，不能把预览成功当成删除授权。
 

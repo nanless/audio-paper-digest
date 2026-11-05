@@ -10,7 +10,7 @@
 
 | 类别 | 保存内容 |
 |---|---|
-| 持久论文库 | `papers.json` 跨运行保存论文和去重状态，不随日期批次移走。 |
+| 持久论文库 | `papers.json` 跨运行保存论文和筛选/分析状态，不随日期批次移走；抓取去重只看博客已发布页。 |
 | 日期批次 | 当前或归档目录中的候选、筛选决定、入选论文和分析结果。 |
 | 发布与视觉记录 | 页面生成清单、审查记录、发布提交、配图任务及资产信息。 |
 | 跨批次请求状态 | `data/runtime/llm-account-pool.json` 保存账号池轮转游标、最近选择与额度冷却状态，不随日批次归档。 |
@@ -37,7 +37,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ### `papers.json`
 
-跨运行去重库。每篇的 `digestStatus` 可记录分析成功、待分析、失败和最近一次尝试。旧成功正文可以保留，但后来的失败仍须写入 `latestAttemptStatus`，不能用旧结果掩盖最新失败。
+跨运行累计论文库与状态账本，不参与抓取去重（去重基线是博客已发布页）。每篇的 `digestStatus` 可记录分析成功、待分析、失败和最近一次尝试。旧成功正文可以保留，但后来的失败仍须写入 `latestAttemptStatus`，不能用旧结果掩盖最新失败。
 
 ### `fetch-checkpoint.json`
 
@@ -356,9 +356,9 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 ## 归档
 
-`data/archive/<date>/` 保存日批次快照及最终视觉资产。历史 `digest:status` 只有在候选、决定、入选及分析文件的日期和集合都匹配时，才可使用归档；当前日期不会用归档掩盖当前数据的故障。
+`data/archive/<date>/` 保存日批次快照及最终视觉资产；`data/archive/` 下另有 `papers-<date>.json.gz` 与对应 `.manifest.json`（论文库压缩备份，保留最近 7 组）和 `cleanup/`（退役分析结果归档）。历史 `digest:status` 只有在候选、决定、入选及分析文件的日期和集合都匹配时，才可使用归档；当前日期不会用归档掩盖当前数据的故障。
 
-## 只读验证
+## 验证与状态读取（后者会写报告）
 
 ```bash
 npm run validate:data
@@ -377,7 +377,7 @@ npm run digest:status -- --date YYYY-MM-DD
 | `blog.remoteOidVerified` | 实际远端 OID 是否与发布提交一致。 |
 | `blog.publicationVerified` | 完整发布凭证是否通过核验；与远端提交分别报告。 |
 | `visuals.gateComplete` | 长图完成门是否通过；不生图记录有效时也可为 `true`。 |
-| `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读时为 `null`，摘要显示 `?`。 |
+| `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读或本次已登记不生图时为 `null`，摘要显示 `?`。 |
 | `cover.status` | 按实际封面检查结果确定，检查失败不返回 `complete`。 |
 | `visuals.status` | 通过资产与发布绑定检查时为 `complete`；不生图记录有效时为 `waived`；原 `pending`/`partial_failed` 保留；检查不通过为 `incomplete`，清单不存在为 `missing`。 |
 | `visuals.waived` / `cover.waived` | 当前发布的不生图记录是否有效，以及是否同时替代长图和汇总封面的完成条件。 |
