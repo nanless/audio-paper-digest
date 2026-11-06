@@ -157,12 +157,12 @@ jobs:
         run: test "$VERIFY_RESULT" = success
 
   # 客户端测试不进服务端分片矩阵，独立作业避免拖慢上述十二个检查：
-  # Android 需要 JDK、Gradle 与 SDK，macOS 需要 Xcode 与 Playwright 浏览器，
-  # 都与 Node/Python 分片没有共享资源，也不并入 test 汇总检查。
+  # Android 需要 JDK、Gradle 与 SDK，与 Node/Python 分片没有共享资源，也不并入 test 汇总检查。
+  # macOS 客户端测试暂不接入 CI（见 63b9339c），仍在发行机上用 bash apps/macos/test.sh 运行。
   # macOS 的测试固定资产（公开论文 arXiv:2610.27491v1 的 PDF 与三张图）已入库，
   # 干净 checkout 能直接读取；NativeLibraryAccessibility 在无 AX 窗口的环境以 77
   # 退出，test.sh 只把 77 记为跳过，其它非零仍失败。
-  # 两个作业都只运行仓库里已有的客户端测试入口，未在 GitHub Actions 上实测。
+  # client-android 只运行仓库里已有的客户端测试入口，并已在 GitHub Actions 上运行通过。
   client-android:
     name: client (android)
     runs-on: ubuntu-24.04
