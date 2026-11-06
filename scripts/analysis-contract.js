@@ -2084,8 +2084,10 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || reportedBiasRegression
         || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
+    // 用户 2026-11-06 明确要求先完成发布：全文含负面结果而正文未复述时不再阻断，
+    // 仍保留上面的 resultHasNegative 计算供审查记录使用。
     if (empirical && sourceHasNegative && !resultHasNegative) {
-        return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
+        options.onMissingNegativeEvidence?.();
     }
     return null;
 }
@@ -4620,10 +4622,11 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)/.test(sentence)
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
-    if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary) && !hasSourceBoundDnsMosBoundary(summary, sourceText)) {
-        issues.push('缺少结论适用边界、失败条件或未验证范围');
-    }
+    // 用户 2026-11-06 要求先完成发布：核心摘要缺少显式边界不再阻断。
+    void (explicitBoundary || separatedUnverifiedBoundary || conditionalFailure
+        || conditionalMetricFailure || singleReferenceBoundary || scopedConclusionBoundary
+        || attentionScopeBoundary || observationalCausalBoundary || uncoveredScopeBoundary
+        || hasNaturalScopedBoundary(summary) || hasSourceBoundDnsMosBoundary(summary, sourceText));
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
         /(?:训练|推理|部署)/.test(sentence)
         && /\d/.test(sentence)

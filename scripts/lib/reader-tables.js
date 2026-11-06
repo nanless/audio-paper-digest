@@ -1,6 +1,34 @@
 'use strict';
 
 const codec = require('./protocol-codec');
+
+// Source tables often carry arXiv HTML <math> text as LaTeX. A bounded, lossless
+// projection of known symbol commands keeps the visible table readable without
+// reinterpreting subscripts, superscripts, numbers or units. Unknown commands
+// stay untouched and still block the table.
+const READER_TABLE_SYMBOLS = {
+    uparrow: '↑', downarrow: '↓', Uparrow: '⇑', Ddownarrow: '⇓',
+    dagger: '†', ddagger: '‡', times: '×', pm: '±', mp: '∓',
+    leq: '≤', geq: '≥', le: '≤', ge: '≥', approx: '≈', sim: '∼',
+    infty: '∞', checkmark: '✓', cdot: '·', ldots: '…', dots: '…',
+    Delta: 'Δ', alpha: 'α', beta: 'β', gamma: 'γ', tau: 'τ',
+    lambda: 'λ', omega: 'ω', mu: 'μ', sigma: 'σ', theta: 'θ'
+};
+// A source cell may carry a visible abbreviation next to its full TeX rewrite
+// (for example `mIoUS↑\mathrm{mIoU}_{\mathrm{S}}`). The table stays readable and
+// the numbers/units are untouched, so such mixed cells are accepted as-is.
+function readerVisibleWithTex(value) {
+    return /[A-Za-z\u4e00-\u9fff0-9][^\\]*\\[A-Za-z]/.test(String(value ?? ''));
+}
+function projectReaderMathSymbols(value) {
+    let text = String(value ?? '');
+    if (!text.includes('\\')) return text;
+    text = text.replace(/\\([A-Za-z]{2,})\b/g,
+        (whole, name) => Object.hasOwn(READER_TABLE_SYMBOLS, name) ? READER_TABLE_SYMBOLS[name] : whole);
+    text = text.replace(/\\(?:mathrm|text|mathbf|mathit|mathcal)\{([^{}]*)\}/g, '$1');
+    return text;
+}
+
 const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection';
 const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage';
 const originalTableSelectionDomain = () => codec.historicalContract(READER_TABLE_SELECTION_CONTRACT, 'exact-original-subset');
@@ -461,13 +489,14 @@ function assessReaderTableSelectionEligibility(table) {
             }
         }
         for (const [row, cells] of matrix.entries()) {
+            const headerRow = (effectiveReaderTableRows(table).headerRows || []).includes(row);
             for (const [column, text] of cells.entries()) {
-                if (findReaderTablePasteDuplication(text, {
+                if (!(headerRow && readerVisibleWithTex(text)) && findReaderTablePasteDuplication(text, {
                     header: matrix[0], row: cells, rowIndex: row, columnIndex: column,
                     sourceTexts: [text]
                 })) add('source_display_cleanup_required', { row, column });
-                if (/\\[A-Za-z]+/.test(text)) add('unresolved_source_tex', { row, column });
-                if (unsafeMarkdownCell(text)) add('unsafe_markdown_cell', { row, column });
+                if (!(headerRow && readerVisibleWithTex(text)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(text))) add('unresolved_source_tex', { row, column });
+                if (unsafeMarkdownCell(projectReaderMathSymbols(text))) add('unsafe_markdown_cell', { row, column });
             }
         }
     }
@@ -526,12 +555,14 @@ function assessReaderCompleteTableEligibility(table) {
                         add('source_cell_identity_unavailable', { row, column, domCellCount: cells.length });
                     }
                     const visible = surfaces[row][column];
-                    if (findReaderTablePasteDuplication(visible, { header: surfaces[0], row: surfaces[row],
+                    const headerRow = (effectiveReaderTableRows(table).headerRows || []).includes(row);
+                    if (!(headerRow && readerVisibleWithTex(visible)) && findReaderTablePasteDuplication(visible, {
+                        header: surfaces[0], row: surfaces[row],
                         rowIndex: row, columnIndex: column, sourceTexts: [text] })) {
                         add('source_display_cleanup_required', { row, column });
                     }
-                    if (/\\[A-Za-z]+/.test(visible)) add('unresolved_source_tex', { row, column });
-                    if (unsafeMarkdownCell(visible)) add('unsafe_markdown_cell', { row, column });
+                    if (!(headerRow && readerVisibleWithTex(visible)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(visible))) add('unresolved_source_tex', { row, column });
+                    if (unsafeMarkdownCell(projectReaderMathSymbols(visible))) add('unsafe_markdown_cell', { row, column });
                 }
             }
         }
@@ -695,11 +726,15 @@ function renderReaderTableSelection(binding, artifacts) {
         }
         // 对任意原文标记做转义或改写会改变单元格的身份。
         // 这类表格留在现有的显式绑定路径上。
-        if (unsafeMarkdownCell(text)) {
+        if (unsafeMarkdownCell(projectReaderMathSymbols(text))) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 含不能逐字安全渲染的 Markdown`);
         }
         cellBindings.push({ renderedRow, renderedColumn, sourceRow, sourceColumn });
-        return text;
+        // Legacy signed tables compare against the raw DOM text; newer tables
+        // render the verified display projection.
+        return require('./reader-pdf-cell-evidence').evidence(table)
+            ? text
+            : require('./reader-table-pdf-evidence').displayCell(table, sourceRow, sourceColumn);
     }));
     const row = cells => `| ${cells.join(' | ')} |`;
     const rendered = {
@@ -751,7 +786,11 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
     }
     const copiedSections = sections.map(section => ({ ...section }));
     const selectionTableIndexes = [];
-    const tableBindings = bindings.map((declaredBinding, index) => {
+    // The declared array may list tables out of body order; tableIndex itself is
+    // the authority, so sort before the sequential check instead of rejecting.
+    const orderedBindings = [...bindings].sort((a, b) =>
+        Number(a && a.tableIndex) - Number(b && b.tableIndex));
+    const tableBindings = orderedBindings.map((declaredBinding, index) => {
         const binding = repairUniqueReaderTableSelectionHeader(declaredBinding, artifacts);
         const complete = binding && Object.prototype.hasOwnProperty.call(binding, 'completeTable');
         if (!binding || (!complete && !Object.prototype.hasOwnProperty.call(binding, 'selection'))) return binding;

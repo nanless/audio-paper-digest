@@ -5,6 +5,10 @@ function strictJson(bytes, label) {
     let source;
     try { source = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { throw new Error(`${label} 必须使用有效的 UTF-8 编码。`); }
+    // 模型有时把 JSON 包在 Markdown 代码围栏里；只要整段就是一个围栏，
+    // 去掉围栏后仍按同一严格规则校验，不改变重复字段与编码检查。
+    const fenced = /^\s*```[A-Za-z]*\s*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(source);
+    if (fenced) source = fenced[1];
     const stack = [];
     for (const match of source.matchAll(/"(?:\\[\s\S]|[^"\\])*"|[{}\[\]:,]/g)) {
         const token = match[0]; const top = stack[stack.length - 1];

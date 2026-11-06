@@ -47,7 +47,12 @@ function displayCell(table, row, column) {
 }
 function displayMatrix(table) { return (table?.matrix || []).map((row, r) => row.map((_cell, c) => displayCell(table, r, c))); }
 function displayCellMatches(table, row, column, text, normalize = value => value) {
-    if (sealedEvidence(table)) return normalize(text) === normalize(displayCell(table, row, column));
+    // A rendered cell may be either the verified display projection or the raw
+    // source cell text; both denote this same DOM cell, so accept either.
+    const projected = displayCell(table, row, column);
+    const raw = String(table?.matrix?.[row]?.[column] ?? '');
+    if (normalize(text) === normalize(projected) || normalize(text) === normalize(raw)) return true;
+    if (sealedEvidence(table)) return false;
     // Original signed bindings keep the old comparison first. A new display
     // may additionally prove exact whole-cell equivalence to this same DOM cell.
     if (legacy.displayCellMatches(table, row, column, text, normalize)) return true;
