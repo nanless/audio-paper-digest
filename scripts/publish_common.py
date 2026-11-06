@@ -4962,8 +4962,8 @@ def _validate_experiment_table_evidence_depth(
         results,
         re.I,
     )
-    # 用户 2026-11-06 要求先完成发布：全文含负面结果而正文未复述时不再阻断。
-    _ = (empirical, source_has_negative, result_has_negative)
+    if empirical and source_has_negative and not result_has_negative:
+        return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据'
     return None
 
 
