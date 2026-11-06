@@ -77,6 +77,6 @@ PDF 保存实际字节 SHA、来源、版本和物理页数。原链接更新后
 
 `library.list` 默认返回完整行；传入 `compact: true` 时省略逐篇完整引用和官网分类记录，只保留浏览所需字段。省略的两部分由 `library.tagIndex` 按目录快照提供，`library.paperDetail` 按论文 id 返回完整行。分类证据按目录 `snapshotID` 与网页词表内容身份（`snapshotContentSHA256`、`versionsContentSHA256`）复用，个人资料变化不会重新发送；`library.paperDetail` 只按 id 取当前或已移除论文的完整行。
 
-启动只在主线程同步解码 8 MiB 以内的小目录；超过 8 MiB 的 `current.json` 与全文索引都在后台任务中载入。就绪前 `library.status` 返回 `loading` 且不带 `snapshotID`，读取命令等待就绪，不会把尚未载入当成空目录。载入失败后由命令级 `library.retryLoad` 显式重试，其他命令不会因失败反复全量读取。备份恢复在暂存完成和替换完成后都等待目录就绪，替换失败时回滚到原目录。
+启动只在主线程同步解码 8 MiB 以内的小目录；超过 8 MiB 的 `current.json` 与全文索引都在后台任务中载入。就绪前 `library.status` 返回 `loading` 且不带 `snapshotID`，读取命令等待就绪，不会把尚未载入当成空目录。载入失败后由命令级 `library.retryLoad` 显式重试；`library.sync` 也从同一失败状态直接开始整站同步，失败阶段下不调用 `ensureReady`，同步写入后把阶段提升为就绪。其他命令不会因失败反复全量读取。备份恢复在暂存完成和替换完成后都等待目录就绪，替换失败时回滚到原目录。
 
 实现依据：[BackupCodec](../apps/macos/Sources/BackupCodec.swift)、[RestoreLocalPolicy](../apps/macos/Sources/RestoreLocalPolicy.swift)、[ModelService](../apps/macos/Sources/ModelService.swift)。当前测试与实际操作范围见[验证说明](mac-app-validation.md)。

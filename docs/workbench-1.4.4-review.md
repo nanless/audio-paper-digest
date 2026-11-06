@@ -18,7 +18,7 @@ Mac 的多个测试套件直接读取 `prototypes/macos-research/assets` 下的�
 
 1.4.4 曾新增 `client-macos` CI 作业，在 `macos-15` 上准备 Node 22、Python 3.11 和两端依赖，安装 playwright 的 Chromium 后运行 `bash apps/macos/test.sh`；作业固定 macOS 15，是因为应用最低支持 15.0，较早的运行器可能无法编译或启动。该作业随后退出 CI（`63b9339c`）：本机 `bash apps/macos/test.sh` 通过，但 GitHub 的 macos-15 runner 在虚拟显示器压缩 820x700 原生详情窗口、PDFKit 提取混合文字/空白页文本两处与本机不同，属于 runner 环境差异，需要专门适配后再加回，不能用跳过套件的方式让作业变绿。macOS 测试现在仍在本机运行。
 
-客户端 CI 现在只保留 `client-android` 作业，运行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业保留完整的 debug 资产准备（`92086447`）：单元测试会读取打包后的已发布样本，排除 `:app:prepareDebugPublishedAssets` 会让测试读不到资产；资产已入库，katex 依赖也在作业中单独安装。作业不运行 `apps/android/test.sh`。
+CI 现在共 `verify`、`test`、`client-android` 三个作业；客户端只剩 `client-android`，运行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业保留完整的 debug 资产准备（`92086447`）：单元测试会读取打包后的已发布样本，排除 `:app:prepareDebugPublishedAssets` 会让测试读不到资产；资产已入库，katex 依赖也在作业中单独安装。作业不运行 `apps/android/test.sh`。
 
 ## macOS 套件修补
 

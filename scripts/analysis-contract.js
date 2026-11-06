@@ -2084,10 +2084,12 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || reportedBiasRegression
         || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
-    // 用户 2026-11-06 明确要求先完成发布：全文含负面结果而正文未复述时不再阻断，
-    // 仍保留上面的 resultHasNegative 计算供审查记录使用。
+    // 2026-11-06 曾以“先完成发布”为由取消这条阻断，但替换进来的回调没有任何调用方，
+    // 也没有降级或审查记录，等于静默放行只挑正面结果的写法；发布端的同名规则和本文件的
+    // 回归用例都仍要求拒绝。因此恢复原判据：来源含退化、不显著或失败结果时，
+    // 实验结果必须把负面证据写出来，不能只报告提升。
     if (empirical && sourceHasNegative && !resultHasNegative) {
-        options.onMissingNegativeEvidence?.();
+        return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
     }
     return null;
 }
@@ -4622,11 +4624,14 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)/.test(sentence)
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
-    // 用户 2026-11-06 要求先完成发布：核心摘要缺少显式边界不再阻断。
-    void (explicitBoundary || separatedUnverifiedBoundary || conditionalFailure
-        || conditionalMetricFailure || singleReferenceBoundary || scopedConclusionBoundary
-        || attentionScopeBoundary || observationalCausalBoundary || uncoveredScopeBoundary
-        || hasNaturalScopedBoundary(summary) || hasSourceBoundDnsMosBoundary(summary, sourceText));
+    // 2026-11-06 曾以“先完成发布”为由整段取消除阻断，但写作提示词（core-summary-repair.md）
+    // 和发布端的同名规则仍要求结论适用边界，只关 Node 一侧会让两端判定分叉，并让下面这组
+    // 已经按真实保存稿迭代过的边界判据连同回归用例一起失效。因此恢复原判据：
+    // 没有可核验的结论适用边界、失败条件或未验证范围时仍然拒绝。
+    if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
+        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary) && !hasSourceBoundDnsMosBoundary(summary, sourceText)) {
+        issues.push('缺少结论适用边界、失败条件或未验证范围');
+    }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
         /(?:训练|推理|部署)/.test(sentence)
         && /\d/.test(sentence)
