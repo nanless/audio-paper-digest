@@ -113,7 +113,7 @@ python3 apps/android/release_tools.py --repo "$PWD" joint-private-draft-plan \
 
 工具只读查询固定仓库 `nanless/audio-paper-digest` 的标签，核对真实提交，生成带 `--draft`、`--verify-tag` 的参数。维护者复核后执行草稿命令，保留实际 Release ID；旧 `publish-plan`、`joint-plan` 同样只生成草稿计划，不能直接公开。
 
-核对真实草稿、说明与全部上传附件后，完成 `REL-03`、`REL-04`，用同一固定输入生成公开参数：
+核对真实草稿、说明与全部上传附件后，完成 `REL-03`、`REL-04`（Android 侧为 `A-REL-03`、`A-REL-04`），用同一固定输入生成公开参数：
 
 ```sh
 python3 apps/android/release_tools.py --repo "$PWD" joint-public-plan \

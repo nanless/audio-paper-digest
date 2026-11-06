@@ -31,7 +31,33 @@
 | Android | `android-runtime-materials.json` | 31654 | `b22576b093c870d36e4f0d9b95eab83073a0f6a982dc845aa3591f1dd4b8160b` |
 | Android | `android-release-manifest.json` | 591 | `0405979c66eaa4f11bb69c8f8e9745c23f652fe3df8fd42b009e19877d3925d4` |
 
-## 两端签名对照（1.4.3）
+## 1.4.4 的签名
+
+Mac 包是本地 ad-hoc 签名。公开 ZIP 中的应用包经 `codesign -dv --verbose=4` 核对：标识 `com.nanless.PaperDigest`，格式为 arm64 的 Mach-O，签名 `adhoc`，`TeamIdentifier=not set`，CDHash `41bf313e955d3e95fcadc9fc0ca9398427dea737`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份，也不能代替公证；换一台机器重建会得到不同的 CDHash，版本来源以 `build-info.json`、附注标签和 ZIP/DMG 校验值为准。
+
+公开 APK 用新签名库签发，经 `apksigner verify --print-certs` 核对：
+
+```text
+Signer #1 certificate DN: CN=Paper Digest, OU=Release, O=nanless, L=Shanghai, ST=Shanghai, C=CN
+Signer #1 certificate SHA-256 digest: 6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb
+Signer #1 certificate SHA-1 digest: de65bb1ed6ba93137e36e75eab18d4d2ca1da67b
+```
+
+签名验证通过，实际使用 v3 方案；`apksigner verify --verbose` 对 v1、v2、v3.1、v4 均返回 false。APK 的身份为 `com.nanless.paperdigest`、versionName `1.4.4`、versionCode `20`、minSdk 28、targetSdk 37，四种 ABI（`armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64`）齐全，原生库按 16 KiB 对齐。证书 DN 与 1.4.3 的 `CN=PaperDigest` 不同，这是换签名库的直接结果。
+
+## 证书与钥匙串
+
+Android 正式签名库、私钥和证书在仓库外单独保存，签名库文件权限为 `0600`、父目录为 `0700`，且不能位于仓库内。签名入口要求终端交互，运行时提示输入签名库密码和密钥密码，不把口令放进命令行参数、环境文件或发布附件。
+
+签名口令保存在本机登录钥匙串的服务 `com.nanless.PaperDigest.android-release-signing.v1` 中；1.4.4 重新生成签名库后仍使用同一服务条目。**钥匙串条目只存口令**，不存签名库、私钥或证书；删除或更换钥匙串条目不影响已发布 APK 的验证，但会让下一次签名无法取到口令。签名库和私钥需要单独备份，不能只依赖钥匙串。
+
+Mac 包没有对应的发行证书或私钥。构建使用 ad-hoc 签名，签名身份由包内代码目录的 CDHash 表示；换一台机器重建会得到不同的 CDHash，因此发布记录以构建记录、来源提交和 ZIP/DMG 校验值为准。
+
+## 上一版 1.4.3
+
+2026-11-05 公开，地址为 <https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3>；附注标签 `v1.4.3` 的对象为 `975a9a2334e4b81294897fafae6c5e7412460a98`，指向提交 `47c30d98c323f56e988215fe5148e59aa6fa8a56`。Release 共十二件附件，公开后未登录访问 Release 页面和每件附件均返回 HTTP 200，文件大小与两份校验表一致。以下保留该版的签名对照、两种包的实际核对输出、附件表和校验表。
+
+### 两端签名对照
 
 下表逐项记录 1.4.3 的核对结果。1.4.4 的应用标识与签名方式不变，但 Android 证书换成 `6a0c3138…`，所以 1.4.3 不能覆盖升级到 1.4.4。
 
@@ -56,15 +82,7 @@ Signer #1 certificate SHA-1 digest: 208f7e44c00650750bd65e22fd786830492d840c
 
 签名验证通过，实际使用 v3 方案，v1、v2、v4 未用于该包；minSdk 28 对应 Android 9，支持 v3 验证。APK 的身份为 `com.nanless.paperdigest`、versionName `1.4.3`、versionCode `19`、minSdk 28、targetSdk 37，四种 ABI 齐全。
 
-## 证书与钥匙串
-
-Android 正式签名库、私钥和证书在仓库外单独保存，签名库文件权限为 `0600`、父目录为 `0700`，且不能位于仓库内。签名入口要求终端交互，运行时提示输入签名库密码和密钥密码，不把口令放进命令行参数、环境文件或发布附件。
-
-签名口令保存在本机登录钥匙串的服务 `com.nanless.PaperDigest.android-release-signing.v1` 中；1.4.4 重新生成签名库后仍使用同一服务条目。**钥匙串条目只存口令**，不存签名库、私钥或证书；删除或更换钥匙串条目不影响已发布 APK 的验证，但会让下一次签名无法取到口令。签名库和私钥需要单独备份，不能只依赖钥匙串。
-
-Mac 包没有对应的发行证书或私钥。构建使用 ad-hoc 签名，签名身份由包内代码目录的 CDHash 表示；换一台机器重建会得到不同的 CDHash，因此发布记录以构建记录、来源提交和 ZIP/DMG 校验值为准。
-
-## 1.4.3 的十二件附件
+### 十二件附件
 
 | 平台 | 附件 | 字节 | SHA-256 |
 |---|---|---:|---|
@@ -81,7 +99,7 @@ Mac 包没有对应的发行证书或私钥。构建使用 ad-hoc 签名，签�
 | Android | `android-runtime-materials.json` | 31654 | `b22576c093c870d36e4f0d9b95eab83073a0f6a982dc845aa3591f1dd4b8160b` |
 | Android | `android-release-manifest.json` | 591 | `f848e3f6a39067f57806cd61fab5c102a9454646f20b26f0906164bf2f2d1a06` |
 
-## 1.4.3 的两份校验表
+### 两份校验表
 
 Mac 的 `SHA256SUMS`：
 
@@ -106,7 +124,9 @@ a426a79a54a7cb48148190958560a8d5bebd6c88f2650e5b8069db44485ebdaa  android-source
 
 ## 匿名下载核验
 
-1.4.3 公开后，用不带登录 Cookie 和认证头的请求逐个访问 Release 页面与十二件附件。Release 页面和各下载地址均返回 HTTP 200；`github.com` 的下载地址会重定向到 `release-assets.githubusercontent.com`，重定向后的响应仍为 200。GitHub 记录的十二件附件大小与上表一致；实际下载的 APK、ZIP、两份校验表和构建记录经 SHA-256 复核，也与上表一致。1.4.4 公开后按同一方法逐件核对，结果见上文结论；2026-11-06 复查 Release 页面与 `SHA256SUMS` 仍返回 HTTP 200。
+1.4.4 公开后，用不带登录 Cookie 和认证头的请求逐个访问 Release 页面与十二件附件。Release 页面和各下载地址均返回 HTTP 200；`github.com` 的下载地址会重定向到 `release-assets.githubusercontent.com`，重定向后的响应仍为 200。2026-11-06 重新下载全部十二件附件，字节数与上表一致，SHA-256 也逐件相符；`SHA256SUMS` 与 `ANDROID-SHA256SUMS` 的每一行都在对应资产上复现。
+
+1.4.3 在 2026-11-05 公开后按同一方法核对，Release 页面与十二件附件均返回 HTTP 200，文件大小与两份校验表一致，实际下载的 APK、ZIP、两份校验表和构建记录经 SHA-256 复核也与该版上表一致。
 
 ```sh
 curl -sS -L -o /dev/null -w '%{http_code} %{size_download}\n' \
@@ -120,7 +140,7 @@ curl -sS -L -o /dev/null -w '%{http_code} %{size_download}\n' \
 1. 固定发行提交和附注标签，确认标签对象指向的提交就是两端构建使用的来源提交。
 2. Mac 执行 `inspect → prepare → verify`；Android 执行 `prepare → sign → verify`。两端包体、版本、架构或 ABI、签名和来源必须一致。
 3. 用同一份已核验产物生成 `joint-private-draft-plan`，人工复核后创建私有草稿，保存实际 Release ID。
-4. 按资产 ID 从草稿下载全部附件，用 `verify-downloaded` 逐件核对大小和 SHA；完成 `REL-03`、`REL-04` 的草稿侧记录。
+4. 按资产 ID 从草稿下载全部附件，用 `verify-downloaded` 逐件核对大小和 SHA；完成 Mac 的 `REL-03`、`REL-04` 与 Android 的 `A-REL-03`、`A-REL-04` 草稿侧记录。
 5. 用同一固定输入和同一草稿 ID 生成 `joint-public-plan`，人工复核后公开。
 6. 公开后重新匿名核对 Release 页面、标签、草稿未变和全部附件；晚到的验收记录在公开后单独提交，不回头改已固定资产。
 
