@@ -202,7 +202,7 @@ npm run conference:filter -- apply --filter UUID --decision DECISION.json --owne
 
 ## 新会议统一处理与暂存
 
-会议分析、Reader、评分、标签及逐篇暂存统一由 `conference:process` 调度，使用与日更相同的公共引擎及当前提示词。恢复仍核对完整目录、筛选集合、来源和保存的检查点；不再提供分离的执行、分析和页面处理入口。
+会议分析、Reader、评分、标签及逐篇暂存统一由 `conference:process` 调度，使用与日更相同的公共引擎及当前提示词。恢复仍核对完整目录、筛选集合、来源和保存的检查点。分步入口 `conference:extract`、`conference:staging`、`conference:import`、`conference:plan` 仍可单独执行，用于取数、暂存和页面生成；它们不改变统一调度的质量与来源要求。
 
 ```bash
 npm run conference:process -- --dry-run \
@@ -354,11 +354,12 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 
 不能只扫描在途失败目录挑一部分，也不能把原 process 或论文改成 partial 来套旧恢复许可。
 
-原审查记录中的 `text/content` 全部进入正常维护。`markdown/content` 也不能遗漏，但要按实际检查结果分成三类：
+原审查记录中的 `text/content` 全部进入正常维护。`markdown/content` 也不能遗漏，分类只接受两种值：
 
-1. 当前真实 Markdown 检查已通过，且页面字节未变：记为 `gate-rule-revalidation`，等待新协议下的正常全页复审。
-2. 通过共享 `sanitize` 生成检查用视图后，仍不能通过正常 Markdown 检查：送入 `normal-reader`。
-3. 只需修正出版格式：记为 `deferred-publication-format`，保留等待新页审查。
+1. 通过共享 `sanitize` 生成检查用视图后，仍不能通过正常 Markdown 检查：送入 `normal-reader`。
+2. 只需修正出版格式：记为 `deferred-publication-format`，状态 `pending-new-page-review`、下一步 `publication-format-then-normal-review`，保留等待新页审查。
+
+没有把旧 Markdown 拒稿直接改记为通过的分类；页面字节未变也仍须按上面的分类进入新协议下的正常全页复审。
 
 分类不允许猜币种，也不能豁免科学正文中的裸符号。检查用视图不改原审查材料。
 
@@ -573,7 +574,7 @@ Reader 更新后，旧派生父 CAS 不会自动获得 current 出版权限；�
 
 ### 自动验收覆盖什么
 
-Hugo 和正文审查的页面集合只包含单篇及汇总 Markdown。研究工作区的四份 sidecar 不冒充 HTML 页，仍完整保留在 generation、review、Git 精确差异及线上字节验收集合中；例如本会 1355 个页面与 5416 份 sidecar 分别核对，不能以总文件数代替 HTML 页面数。
+Hugo 和正文审查的页面集合只包含单篇及汇总 Markdown。研究工作区的四份 sidecar 不冒充 HTML 页，仍完整保留在 generation、review、Git 精确差异及线上字节验收集合中；页面数与 sidecar 数分别核对（具体数字随会议规模变化），不能以总文件数代替 HTML 页面数。
 
 推送博客和图床后，发布程序自动读取已审页面和全部图片。核验通过后才保存发布完成记录。页面检查 HTTP 200、HTML 类型、最终 URL 与唯一正式地址一致，以及已审正文、图片顺序和表格单元格的对应关系；含公式时还检查数学脚本存在。
 
@@ -1088,7 +1089,7 @@ npm run conference:migrate-process -- --apply \
 
 ### 认证来源事实的零请求纠正
 
-已有真实完整 Reader 的资源归属或单句核心事实确需纠正时，先停止生产并完成当前实现的 `conference:migrate-process --apply … --postprocess-only --retry-failed`。此操作保留正常全批检查发现的失败，不增加次数。
+已有真实完整 Reader 的资源归属或单句核心事实确需纠正时，先停止生产并完成当前实现的 `conference:migrate-process --apply … --postprocess-only --retry-failed`。此操作保留正常全批检查发现的失败，不增加次数；这里的 `--retry-failed` 只让后处理在存在失败稿时也跑完并记账，不放行重试、不重新派发模型请求。
 
 随后使用同一入口的 `--postprocess-only --source-corrections ABSOLUTE_PATH`，清单必须物理登记在原 process 的对应私有目录，绑定停稳状态、完整获准集合、每篇原稿与新子运行固定 UUID。不能同时传 `--reader-corrections`，不能混入付费调度。
 

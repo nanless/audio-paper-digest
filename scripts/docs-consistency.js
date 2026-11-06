@@ -10,10 +10,13 @@ const MARKDOWN_DIRS = ['docs', 'skills'];
 const COMMAND = /npm run ([a-z][a-z0-9:_-]*)/g;
 const VERSION_CLAIMS = [
     /(\d+\.\d+\.\d+)（构建号\s*(\d+)）/g,
-    /(\d+\.\d+\.\d+)，构建号\s*(\d+)/g,
+    /(\d+\.\d+\.\d+)[、,，]\s*构建号\s*(\d+)/g,
+    /(\d+\.\d+\.\d+)\s+构建号\s*(\d+)/g,
     /(\d+\.\d+\.\d+)\s*\(build\s*(\d+)\)/gi,
     /(\d+\.\d+\.\d+),\s*build\s*(\d+)/gi
 ];
+// 只写构建号、版本在同句省略的写法，例如「当前构建号为 19」。
+const BUILD_ONLY = /构建号为\s*(\d+)/;
 const CURRENT_MARKER = /当前|目前|现在/;
 const VERSION_DOCS = ['docs/README.md', 'docs/README.en.md'];
 const VERSION_LIST = /工作台版本|Workbench versions/;
@@ -81,8 +84,15 @@ function checkVersionClaims(files, versions) {
         const lines = text.split('\n');
         for (let index = 0; index < lines.length; index += 1) {
             const claims = VERSION_CLAIMS.flatMap(pattern => [...lines[index].matchAll(pattern)]);
-            if (!claims.length) continue;
             const currentState = CURRENT_MARKER.test(lines[index]);
+            if (!claims.length) {
+                // 「当前构建号为 19」这种只写构建号的写法，同样按当前值核对。
+                const buildOnly = BUILD_ONLY.exec(lines[index]);
+                if (buildOnly && currentState && buildOnly[1] !== current.build) {
+                    issues.push({ file, line: index + 1, message: `写的是构建号 ${buildOnly[1]}，实际为 ${current.build}` });
+                }
+                continue;
+            }
             for (const claim of claims) {
                 const sameLine = claim[1].split('.').slice(0, 2).join('.') === line;
                 if (!sameLine && !currentState) continue;
@@ -110,6 +120,116 @@ function checkVersionLists(versions) {
     return issues;
 }
 
+// 文档里的相对链接必须指向真实文件；安装副本（如 ~/.codex/skills）另由
+// tests/documentation.test.js 按 skill 目录范围单独核验。
+const LINK = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+
+function checkLinks(files, root = ROOT) {
+    const issues = [];
+    for (const file of files) {
+        const text = fs.readFileSync(path.resolve(root, file), 'utf8');
+        text.split('\n').forEach((line, index) => {
+            for (const match of line.matchAll(LINK)) {
+                const raw = match[1].replace(/^<|>$/g, '');
+                const target = raw.split('#')[0].split('?')[0];
+                if (!target || /^(https?:|mailto:|tel:|data:)/i.test(target)) continue;
+                const resolved = target.startsWith('/') ? path.join(root, target) : path.resolve(root, path.dirname(file), target);
+                if (!fs.existsSync(resolved)) issues.push({ file, line: index + 1, message: `链接目标不存在：${match[1]}` });
+            }
+        });
+    }
+    return issues;
+}
+
+// docs/ 下每篇文章都要在两份索引里至少出现一次，避免新增文档只有作者知道。
+// 递归子目录：docs/images/README.md 这类说明同样要能被索引找到。
+function checkRegistration(root = ROOT) {
+    const docsDir = path.join(root, 'docs');
+    if (!fs.existsSync(docsDir)) return [];
+    const index = ['docs/README.md', 'docs/README.en.md']
+        .filter(name => fs.existsSync(path.join(root, name)))
+        .map(name => fs.readFileSync(path.join(root, name), 'utf8')).join('\n');
+    const entries = [];
+    const walk = (directory, prefix) => {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+            if (entry.name.startsWith('.')) continue;
+            const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) { walk(path.join(directory, entry.name), relative); continue; }
+            if (entry.name.endsWith('.md')) entries.push(relative);
+        }
+    };
+    walk(docsDir, '');
+    const issues = [];
+    for (const entry of entries) {
+        if (entry === 'README.md' || entry === 'README.en.md') continue;
+        if (!index.includes(entry)) issues.push({ file: 'docs/README.md', message: `docs/${entry} 未在文档索引中登记` });
+    }
+    return issues;
+}
+
+// 已废弃写法：带版本号后缀的协议名、旧工作区路径。
+const FORBIDDEN = [
+    { pattern: /协议[^\n]{0,12}?-[vV]\d+\b/, message: '协议名带 -vN 版本后缀，应改为稳定名称 + 结构指纹' },
+    {
+        pattern: /audio-paper-digest-rewrite-all/,
+        message: '引用了已废弃的旧工作区，当前工作区是 audio-paper-digest',
+        // 明确说明「已废弃」的句子本身是提醒，不是违规引用。
+        unless: /废弃|不再|旧工作区/
+    }
+];
+
+function checkForbidden(files, root = ROOT) {
+    const issues = [];
+    for (const file of files) {
+        const text = fs.readFileSync(path.resolve(root, file), 'utf8');
+        text.split('\n').forEach((line, index) => {
+            for (const rule of FORBIDDEN) {
+                if (!rule.pattern.test(line)) continue;
+                if (rule.unless && rule.unless.test(line)) continue;
+                issues.push({ file, line: index + 1, message: rule.message });
+            }
+        });
+    }
+    return issues;
+}
+
+// 文档提到的 PD_* 环境变量必须真的被代码读取。
+const ENV_NAME = /\bPD_[A-Z0-9_]+\b/g;
+const ENV_DIRS = ['scripts', 'apps/macos', 'apps/android', 'apps/src', 'tests'];
+
+function collectEnvNames(root = ROOT) {
+    const names = new Set();
+    const walk = directory => {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+            if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+            const target = path.join(directory, entry.name);
+            if (entry.isDirectory()) { walk(target); continue; }
+            if (!/\.(js|mjs|cjs|py|sh|ts|kt|swift)$/.test(entry.name)) continue;
+            for (const match of fs.readFileSync(target, 'utf8').matchAll(ENV_NAME)) names.add(match[0]);
+        }
+    };
+    for (const directory of ENV_DIRS) {
+        const target = path.join(root, directory);
+        if (fs.existsSync(target)) walk(target);
+    }
+    return names;
+}
+
+function checkEnvNames(files, root = ROOT, known = collectEnvNames(root)) {
+    const issues = [];
+    for (const file of files) {
+        const text = fs.readFileSync(path.resolve(root, file), 'utf8');
+        text.split('\n').forEach((line, index) => {
+            for (const match of line.matchAll(ENV_NAME)) {
+                // 表格里的通配写法（如 PD_API_READER_*_MAX_CHARS）只给出前缀，跳过。
+                if (match[0].endsWith('_')) continue;
+                if (!known.has(match[0])) issues.push({ file, line: index + 1, message: `环境变量 ${match[0]} 在代码里不存在` });
+            }
+        });
+    }
+    return issues;
+}
+
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('docs-consistency.js'); } catch (error) { console.error(`[docs-consistency] ${error.message}`); return 1; }
 
@@ -119,16 +239,29 @@ function main(argv = process.argv.slice(2)) {
     const missing = checkDocs(files, scripts);
     const versions = readVersionSources();
     const versionIssues = checkVersionClaims(files, versions).concat(checkVersionLists(versions));
-    if (json) console.log(JSON.stringify({ missing, versionIssues }, null, 2));
-    else if (!missing.length && !versionIssues.length) console.log('文档命令与版本一致性检查通过。');
+    const linkIssues = checkLinks(files);
+    const registrationIssues = checkRegistration();
+    const forbiddenIssues = checkForbidden(files);
+    const envIssues = checkEnvNames(files);
+    const total = missing.length + versionIssues.length + linkIssues.length
+        + registrationIssues.length + forbiddenIssues.length + envIssues.length;
+    if (json) console.log(JSON.stringify({ missing, versionIssues, linkIssues, registrationIssues, forbiddenIssues, envIssues }, null, 2));
+    else if (!total) console.log('文档命令、版本、链接、登记、废弃写法与环境变量检查通过。');
     else {
         for (const item of missing) console.log(`❌ ${item.file} 引用了不存在的命令：npm run ${item.command}`);
         for (const item of versionIssues) console.log(`❌ ${item.file}${item.line ? `:${item.line}` : ''} ${item.message}`);
+        for (const item of linkIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
+        for (const item of registrationIssues) console.log(`❌ ${item.file} ${item.message}`);
+        for (const item of forbiddenIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
+        for (const item of envIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
     }
-    return missing.length || versionIssues.length ? 1 : 0;
+    return total ? 1 : 0;
 }
 
-module.exports = { checkDocs, checkVersionClaims, checkVersionLists, main, markdownFiles, readVersionSources };
+module.exports = {
+    checkDocs, checkVersionClaims, checkVersionLists, main, markdownFiles, readVersionSources,
+    checkLinks, checkRegistration, checkForbidden, checkEnvNames, collectEnvNames
+};
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[docs-consistency] ${error.message}`); process.exitCode = 2; }

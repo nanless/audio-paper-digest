@@ -23,7 +23,7 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时补齐两端测试资料与 macOS 测试套件，并新增 macOS 客户端 CI 作业。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
+1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时补齐两端测试资料与 macOS 测试套件。macOS 客户端测试仍在本机通过 `bash apps/macos/test.sh` 运行，暂不接入 CI；Android 只把 Gradle 单元测试放在独立作业。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
 
 1.4.3 的性能优化（目录紧凑投影、启动后台解码、导读与汇总解析复用、离线索引、桥接合并）见[1.4.3 记录](workbench-1.4.3-review.md)。
 
@@ -96,6 +96,7 @@
 | 现用提示词和旧原字节 | [提示词索引](../prompts/README.md)、[提示词修改](maintenance.md#prompt-修改) |
 | 解读长文的结构与来源要求 | [解读写作](reader-writing.md) |
 | 怎样解释、分段、用图和维护双语 | [写作约定](writing-guide.md)、[写作 skill](../skills/clear-technical-writing/SKILL.md) |
+| 文档示意图说明什么、怎样命名、改图要同步哪里 | [示意图说明](images/README.md) |
 | 字段、清单与发布凭证 | [数据格式](data-format.md) |
 | 数据记录协议与结构指纹 | [协议登记](protocols.md) |
 | 制作手机端演示短片、封面与发帖文案 | [手机端演示制作](../skills/phone-first-demo-production/SKILL.md)、[宣传素材复盘](workbench-promo-production.md) |

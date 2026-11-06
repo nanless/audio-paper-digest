@@ -231,6 +231,7 @@ Runs the full batch first, then explicitly retryable failures. Saves `analysis-b
 | `conference-staging.js` | Checks the complete selection against reviewed extraction results and creates immutable import manifests/receipts. Copies no files and requests no models. |
 | `conference-tools.js` | Read-only validates private conference ledger/run files; accepts direct filenames only inside controlled run directories. No PDF import, network, or models. |
 | `conference-workspace.js` | Checks conference workspace directories and controlled source preparation. |
+| `export-review-failure-manifest.js` | CLI: read-only export of skeleton JSON for two manifests that have no generator. `--kind conference-figure-crop` reads `page-review-failures` and the original `generation.json` and exports the complete `imageFailureUniverse`, derivable identities, and placeholder `members` under the same protocol and page SHA; `--kind historical-visual-disposition` exports `planSha256`/`scope` from the publication plan. Fields that cannot be derived stay null with a `_todo` note; it writes no production data, uses no network, and grants no review or publication authority. |
 | `conference_extractor.py` | Verifies PDF bytes and SHA, records UTF-8 byte offsets, and extracts page text, PNGs, images, and layout candidates. Saves with `O_EXCL` and reports structured blocked/integrity status. |
 | `conference_publication_gate.py` | Checks conference identity, source ledger, and page publication eligibility. |
 | `icmc-proceedings.py` | Uses bookmarks and the official ICMC 2026 combined proceedings directory to derive paper order, page ranges, and authors, splitting original PDFs without rasterization or model calls. Original charts and formulas remain unchanged. |
@@ -424,6 +425,7 @@ Rebuilds daily/conference/task private summaries without old text. Mapping v3 us
 | `lib/reader-pre-image-check.js` | Before image download, reads exhausted failed drafts whose current text/source-table checks still fail. New authorization, remaining attempts, or current acceptance continue normal image download and full checks; old pixel evidence is not reused. |
 | `lib/reader-proof-read-scope.js` | Reuses unchanged proof-file reads only during one recovery-preparation scope, checking file state each time and clearing on exit. The full recovery chain is still verified. |
 | `lib/reader-recovery-revision.js` | Explicitly migrates same-source failed-candidate diagnostics, preserving payment counts, ordinal adjustments, old no-progress state, and archived bytes. Table-count wording cannot trigger text normalization; produces no success receipt. |
+| `lib/reader-patch-limits.js` | Shared constant: the single source of the 1–8 existing-node limit for manual and controlled Reader patches. It is not a model-request or whole-article budget. |
 | `lib/reader-target-ordinal-patch.js` | Implements ordinary existing-node context commitments, short ordinal replies, strict SHA patch compilation, normal cost sealing, and saved replay. Daily replay reconstructs the actual authenticated synchronous source context, retaining PDF table/footnote proofs. Initially Responses-only; other protocols keep their route. Grants neither budget nor completion. |
 | `lib/reader-pdf-selection-replay-cli.js` | Private read-only FD bridge for Python publication to rerun normal table row/column selection offline. Full DOM/PDF/cell-display evidence still requires real source scope; returns no write or source capability. |
 | `lib/reader-repair.js` | Saves failed Reader drafts, checks permitted-node SHAs, and applies verified local patches. Full conditions follow this table under the same filename. |
@@ -570,6 +572,8 @@ Normal parsing/engine save remain required. Preview registers no obligation; app
 | `lib/git-prompt-evidence-index.json` | Read-only metadata containing original historical prompt paths, Git blob OIDs, and whole-file SHAs, not their text. |
 | `lib/prompt-rendering-contract.js` | Identifies inputs altered by old prompt substitutions and invalidates only affected stages. Normal inputs retain fingerprints/recovery records. |
 | `lib/prompt-contracts.js` | Registers current text paths/version identities for each stage and provides the current template paths. Saved old declarations select their original paths through Git evidence; absent versions use v1 identity, unknown versions fail. |
+| `lib/prompt-current-records.json` | Sole registry of current templates: paths for 12 analysis stages, 1 filter template, and 3 specialized repair templates. Node's `lib/prompt-contracts.js` and Python's `prompt_evidence.py` read the same file; tests pin the total at 16 and check that `prompts/current/` matches the registry one to one. |
+| `lib/prompt-legacy-records.json` | Central registry of retired templates and original declarations (stage, original path, declaration name, output budget, index formats). `lib/prompt-legacy-codec.js` reads values only by their original declaration; it offers no writing entry point and grants no request budget. |
 | `prompt_evidence.py` | Python strictly reads original historical prompt objects from local Git; current templates must come from the working tree. |
 | `local_git_object.py` | Internal bounded fixed-Git reader for one local commit/tree/blob: checks type/size/raw bytes/OID, forbids lazy fetching and object replacement, and changes no objects/index/refs. Ordinary results do not prove complete trees/deletions/deltas/publication. |
 | `local_git_commit_delta.py` | Internal complete-directory/single-parent commit comparison against an explicit baseline, including required bytes/deletions/exact paths. Uses fixed offline reads within one call; unreviewed bodies/full object graph remain unchecked. Ordinary output grants no review/worktree/publication authority. |
@@ -675,7 +679,9 @@ Independent manual v4 separates semantic articles from `machineAssets`, while th
 | `lib/source-classification-failures.js` | Uses structured common-request errors only to identify account/service faults and stop dispatch. Content validation and truncation stay paper-level; never guesses service failure/account switching from prose. |
 | `lib/source-classification-scheduler.js` | Processes source classification with 1–3 concurrent tasks. Account-level failures/stops halt new requests, retain returned responses, merge in original selection order, and record unfinished papers. |
 | `lib/source-evidence-snippets.js` | `buildSourceEvidenceSnippets` selects/labels continuous original excerpts within character budgets; `fillConceptQuotesFromSnippets` inserts model-selected IDs' literal quotes. Preserves whitespace/UTF-16 offsets and rejects unknown IDs. |
+| `lib/empty-daily-batch.js` | Node library: checks the `emptyDailyBatch` evidence marker in the generation manifest and the candidate/analysis snapshots it binds. Serves only explicitly allowed zero-candidate empty days; ordinary batches never enter those branches. |
 | `lib/workflow-implementation-files.js` | Statically collects actual executable transitive dependencies for current implementation fingerprints. |
+| `lib/workflow-implementation-files-cli.js` | Read-only bridge: takes an entry list over an inherited private descriptor and returns the same implementation closure as the Node workflow. Reads project files only, does not execute the scanned modules, and touches neither models, network, nor run data. |
 | `llm-account-pool.js` | Node OpenCode Go pool: equal-weight keys, stable account-ID-ordered round-robin, excluding blocked/cooling accounts and automatically readmitting expired cooldowns. Switches only on explicit quota/balance errors and persists cross-process cursor/cooldowns. |
 | `llm-usage-report.js` | Read-only actual usage totals; `--paper` supports new/old arXiv IDs and complete conference IDs. Distinguishes provider usage/unavailable/character estimates and never invents costs or fills missing old paper identity. |
 | `llm_account_pool.py` | Python counterpart using the same equal-weight rotation, data format, and lock protocol. |
@@ -755,7 +761,7 @@ Check the formats of sealed sources, analysis quality, summaries, scores, and pu
 
 ### Paper explanations and source evidence
 
-Identify explanation drafts, articles, author and resource records, stages, recovery records, and manual corrections. Verify PDF quotations against the sealed source.
+Identify explanation drafts, articles, author and resource records, stages, recovery records, and manual corrections. Verify PDF quotations against the sealed source. Two JSON entries in the list are shared data rather than code: `lib/validation-rules.json` holds the table-header unit whitelist and glued-value test vectors used by both `table-check.js` and the Python column-unit check, and `lib/reader-legacy-records.json` holds the original values of old Reader plan versions, stage fields, and ordered replies; reading it grants no source or publication authority.
 
 - `reader_record_format.py`
 - `reader_proof_format.py`
@@ -772,3 +778,5 @@ Identify explanation drafts, articles, author and resource records, stages, reco
 - `lib/reader-section-format.js`
 - `lib/reader-diagnostic-format.js`
 - `lib/reader-content-mode.js`
+- `lib/reader-legacy-records.json`
+- `lib/validation-rules.json`

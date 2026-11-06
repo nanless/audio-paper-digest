@@ -2,7 +2,11 @@
 
 ## 当前源码与已发行版本
 
-Mac 和 Android 的当前源码统一为 **1.4.4（构建号 20）**；1.4.3 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.3)。1.4.4 的改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+Mac 和 Android 的当前源码统一为 **1.4.4（构建号 20）**；1.4.4 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)。1.4.3 于同日公开发布，原记录保留。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装。1.4.4 的改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+
+## 1.4.4 公开发行
+
+公开 APK 为 `paperdigest-android-1.4.4-20-universal.apk`，versionName 1.4.4、versionCode 20，minSdk 28、targetSdk 37，包含四种 ABI，应用标识为 `com.nanless.paperdigest`。公开的 `android-build-info.json` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，所以 1.4.3 不能覆盖升级到 1.4.4。用户需要先导出完整备份、卸载旧版，再安装 1.4.4、恢复资料并重新配置设备凭据。1.4.4 没有重做 86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；构建与签名见公开记录。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)，性能改动见[客户端性能](client-performance.md)。
 
 ## 1.4.3 公开发行
 
@@ -85,7 +89,7 @@ API 28、API 35 是 Android 系统接口级别，不是应用版本号。模拟�
 
 ## 发行状态
 
-1.4.3 是 2026-11-05 的公开发行版本（构建号为 19），标签 `v1.4.3` 指向提交 `47c30d98`，Release 含十二件附件，公开后匿名下载与 SHA 复核通过。1.4.4 的构建与签名核验见[客户端发行核验](client-release-verification.md)与[1.4.4 记录](workbench-1.4.4-review.md)；本轮没有重做 86 项人工验收。
+1.4.4 是当前公开发行版本（构建号 20），标签 `v1.4.4` 指向提交 `aecf5c25`，Release 含十二件附件，公开后匿名下载与 SHA 复核通过；Android 证书为 `6a0c3138…`，1.4.3 用户必须卸载重装。1.4.3 是 2026-11-05 的前一版（构建号 19），标签 `v1.4.3` 指向提交 `47c30d98`。两版的构建与签名核验见[客户端发行核验](client-release-verification.md)；本轮没有重做 86 项人工验收。
 
 1.3.0 联合发行固定来源为 `a39fa8d0`。两端正常安装包、原 Android 签名、旧资料升级、远端注释标签、发行说明及十二件公开下载均已核验，具体环境与继承范围见该版本记录。1.3.2 安卓修复版的新增范围另列，不复用 Mac 版本号。1.0.0、1.0.1 的旧 Release 条目已移除，Git 标签、历史和原签名及升级验证凭据保留。
 

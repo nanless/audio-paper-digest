@@ -43,7 +43,7 @@ flowchart LR
 | 网络与模型 | `utils.js`、`llm-account-pool.js`、`publish_common.py` | Muse/arXiv 强制代理，只有声明的账号额度故障可按等权轮转切换 |
 | 全文、表格、公式、作者和资源身份 | `lib/fresh-analysis-context.js`、`lib/reader-*`、`reader_sealed_pdf_*.py` | 来源 SHA、结构化单元格、原始 TeX、真实像素、作者逐项身份与资源可达状态 |
 | Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`reader-repair.js`、`reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算；新稿、保存稿与 Python 发布共用占位结果表检测，旧签名不能代替当前内容资格 |
-| 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”等闭合概念列举只识别自身范围；作者提供声明须有同类型原文且保留当前核验限定，不豁免前后独立当前声明或双否；新阶段绑定 reader-resource-availability-claims-v1 |
+| 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”等闭合概念列举只识别自身范围；作者提供声明须有同类型原文且保留当前核验限定，不豁免前后独立当前声明或双否；新阶段绑定当前 `reader-resource-availability-claims` 头（旧 `-v1` 按原格式读取） |
 | 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分；第三方闭源对照与本文资源缺失分开检查，后者仍按原维度归属；当前中文标签与明确主任务/方法，严格纯追加按原SHA只读重放旧分类证明 |
 | 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` | 同一资源去重、作者展示、评分说明、多级分类路径及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
 | 站点分类版本 | 日更 `tag_catalog_file_contents()`；会议/历史 `tag_catalog_publication.py` | 日更将词表资产纳入发布清单；会议/历史只读核验双份版本目录及本批原快照，缺失先阻断 |
@@ -155,11 +155,11 @@ Reader 批量刷新默认使用配置并发5和总轮数3，分别可用 `--conc
 
 ### 最后几篇持续失败时，人工建议能做什么
 
-只有自动正常流程经过多轮、最终只剩少量持续失败项时，才考虑受控人工修正。`manualHandoff` 是建议和诊断：默认最多 5 篇、每项本次至少失败 3 轮；语义无进展默认观察 3 轮。到总轮上限仍有新稿变化，也可报告 `small_persistently_failed_set`；配置更多轮时，达到连续无进展阈值可提前结束自动轮。次数、时间戳和费用增加不算正文进展。把 `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` 设为 0 可关闭这项建议。
+只有自动正常流程经过多轮、最终只剩少量持续失败项时，才考虑受控人工修正。`manualHandoff` 是建议和诊断：默认最多 5 篇、每项本次至少失败 3 轮；语义无进展默认观察 3 轮。到总轮上限时，全部项都达到连续无进展阈值报告 `small_stalled_failed_set`，仍有新稿变化则报告 `small_persistently_failed_set`；配置更多轮时，达到连续无进展阈值可提前结束自动轮。次数、时间戳和费用增加不算正文进展。把 `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` 设为 0 可关闭这项建议。
 
 报告不修改失败状态，`newApiRequestsAuthorized` 始终为 `false`：该字段仅表示 `manualHandoff` 工具本身没有安装模型调用窗口，不是否认用户已有的任务级付费授权。服务故障、不可重试和预算耗尽分别保留阻断原因；执行者可在已有授权内登记必要的受控后续窗口，但不能让建议报告自动重开旧额度。人工修改须保留原稿和真实费用，绑定本篇来源、当前失败稿 SHA、具体反馈及获准修改范围；修正后重新通过正常来源、正文、Reader、评分、标签和发布审查。不得手填 complete、删除失败记录或跳过校验来“手动通过”，见 [独立人工审查边界](../manual/README.md)。
 
-会议最后的失败集合有单独的[零请求人工入口](conference-workflow.md#最后失败集合的零请求-reader-修正)。显式 `historical-normal-terminal-v1` 可核验至少2次真实同源正常执行及当前技术停止，不能把它称为当前许可已满3轮。仅版本字段有误的完整付费JSON和原两张已绑定TABLE占位恢复，分别使用明确来源及字节声明，真实记录null候选、版本投影和0→2表格变化；仍受完整失败集、原材料树、来源、最多8个已有节点及正常全文校验约束。这些会议适配不改变日更或历史入口的默认人工准入。
+会议最后的失败集合有单独的[零请求人工入口](conference-workflow.md#最后失败集合的零请求-reader-修正)。显式 `historical-normal-terminal`（旧 `-v1` 标签按原格式读取）可核验至少2次真实同源正常执行及当前技术停止，不能把它称为当前许可已满3轮。仅版本字段有误的完整付费JSON和原两张已绑定TABLE占位恢复，分别使用明确来源及字节声明，真实记录null候选、版本投影和0→2表格变化；仍受完整失败集、原材料树、来源、最多8个已有节点及正常全文校验约束。这些会议适配不改变日更或历史入口的默认人工准入。
 
 ## 必须保留的适配差异
 
@@ -175,7 +175,7 @@ Reader 批量刷新默认使用配置并发5和总轮数3，分别可用 `--conc
 
 ## 日更审查的同次 HTML 观察记录
 
-正常 `review-blog.py` 审查可为日更凭证保存本次 Hugo 实际生成的主 HTML 和来源对应表。新引用和记录使用稳定名称与结构指纹，已有记录按原引用和原文件摘要复验。适用模式为 `llm_api_production` 与 `legacy_v5_maintenance`，发布范围仍取原生成清单。来源、Reader、文字、图片、资产和最终页面字节检查全部照常执行；观察记录不能代替其中任何一项。
+正常 `review-blog.py` 审查可为日更凭证保存本次 Hugo 实际生成的主 HTML 和来源对应表。新引用和记录使用稳定名称与结构指纹，已有记录按原引用和原文件摘要复验。适用模式为 `llm_api_production`、`legacy_v5_maintenance` 与 `empty_daily_batch`，发布范围仍取原生成清单。来源、Reader、文字、图片、资产和最终页面字节检查全部照常执行；观察记录不能代替其中任何一项。
 
 首版只识别单个本地主题或根布局、标准 `main/baseof`、单语言及普通页唯一 HTML 输出，保留首页原有 HTML/RSS/JSON 输出格式。原 Hugo 调用的工作目录、选定配置、外置内容、静态文件、资源及资产隔离方式保留；只在临时目录复制根布局并附加不输出正文的映射模板，不改博客仓库。事前识别为不支持的布局沿原审查流程运行，不附观察引用。已选择捕获后，复制、构建、映射、输入变化或保存失败都必须中止本次凭证签发，不能去掉引用再宣称审查成功。
 
@@ -246,7 +246,7 @@ Reader 批量刷新默认使用配置并发5和总轮数3，分别可用 `--conc
 
 整批 Manual v5/v6/shadow 作者、任务、spec 与 records 链，以及微信、飞书、小红书、旧 backfill、隔离 Reader 效率实验和视觉调试渲染已退役。
 
-会议独立 execution/analyze/postprocess CLI 已删除，统一走 `conference:process`。历史旧独立分析、标签、暂存、汇总、发布 CLI 和旧整批重写 CLI 已删除，统一走当前历史计划与 `history:resume`。
+会议独立 execution/analyze/postprocess CLI 已删除，统一走 `conference:process`；取数与暂存的分步入口 `conference:extract`、`conference:staging`、`conference:import`、`conference:plan` 仍保留，只负责准备材料，不替代统一调度对来源、阶段和账本的要求。历史旧独立分析、标签、暂存、汇总、发布 CLI 和旧整批重写 CLI 已删除，统一走当前历史计划与 `history:resume`。
 
 `manual/` 的剩余源码仅为旧记录来源/签名/正文核验，以及独立单页人工审查。旧历史核心中仍被受限恢复入口调用的部分保留，不允许重新建立旧任务或重置预算。单篇人工修正与审查是三流程的恢复能力。
 

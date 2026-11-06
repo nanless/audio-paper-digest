@@ -30,7 +30,7 @@
 
 发布器默认用当前项目词表生成博客目录。已有明确批准的展示策略时，也可以展示归档中较丰富的词表。这个选择只影响目录，不改变论文的标签、主任务、主方法或原分类所对应的词表 SHA，也不重新判断旧论文的分类。
 
-当前策略文件是博客仓库的 `data/tag-presentation-policy.json` 和 `static/data/tag-presentation-policy.json`，格式为 `paper-tag-presentation-policy-v2`。项目的 `config/tag-display-policy.json` 保存已批准策略，生成时核对它与博客已有策略的原始字节；博客尚无策略时，可以安装这份已批准策略。两处博客副本须逐字节相同，缺一份、格式错误或内容不同都会停止，不能悄悄改用默认版本。没有博客策略且没有项目批准配置时，才使用默认词表。
+当前策略文件是博客仓库的 `data/tag-presentation-policy.json` 和 `static/data/tag-presentation-policy.json`，当前已批准文件使用 `paper-tag-presentation-policy-v2` 头；读取按登记头核验，稳定名 `paper-tag-presentation-policy` 加 `schemaFingerprint` 的写法也能识别。项目的 `config/tag-display-policy.json` 保存已批准策略，生成时核对它与博客已有策略的原始字节；博客尚无策略时，可以安装这份已批准策略。两处博客副本须逐字节相同，缺一份、格式错误或内容不同都会停止，不能悄悄改用默认版本。没有博客策略且没有项目批准配置时，才使用默认词表。
 
 旧发布记录中的 `taxonomy-presentation-policy.json` 和 `paper-taxonomy-presentation-selection-v1` 按原格式核验和恢复。它们不是创建新发布文件时应使用的名称，不能把新格式写到旧文件路径，也不能改写旧凭证使新字节通过。
 
@@ -38,7 +38,7 @@
 
 ### Markdown 与网页各保留什么
 
-生成的Markdown保留共享渲染器输出的多级分类块，供独立审查及离线阅读。单篇网页由页头的 `paper_tags` 呈现同一分类；只有该页头确实已呈现经词表核验的分类，且正文恰有一对完整、有序的无空白边界注释时，`reader_article_content` 才在网页渲染时去掉这一块，避免分类重复。汇总页保留每篇的分类块；没有边界的旧页面或边界不完整、重复、顺序异常的内容均不猜测删除范围。这个处理不改源Markdown，不删除Reader正文，也不批量修改旧文章。
+生成的Markdown保留共享渲染器输出的多级分类块，供独立审查及离线阅读。单篇网页由页头的 `paper_digest_tags_contract`、`paper_digest_tags_schema_fingerprint` 和 `paper_digest_tags_concepts` 呈现同一分类；只有该页头确实已呈现经词表核验的分类，且正文恰有一对完整、有序的无空白边界注释时，`reader_article_content` 才在网页渲染时去掉这一块，避免分类重复。汇总页保留每篇的分类块；没有边界的旧页面或边界不完整、重复、顺序异常的内容均不猜测删除范围。这个处理不改源Markdown，不删除Reader正文，也不批量修改旧文章。
 
 ## 已发布页面切换到当前呈现
 
@@ -72,24 +72,24 @@
 
 ## 策略中的六个字段
 
-当前策略只允许以下六个字段，五个 SHA 均为 64 位小写十六进制字符串。
+当前已批准策略使用 `paper-tag-presentation-policy-v2` 头，只允许以下六个字段，五个 SHA 均为 64 位小写十六进制字符串；稳定名加结构指纹的写法另带 `schemaFingerprint`。
 
 | 字段 | 含义 |
 |---|---|
-| `contract` | 当前格式名称 `paper-tag-presentation-policy-v2` |
+| `contract` | 已批准文件的格式名称 `paper-tag-presentation-policy-v2`；新结构使用稳定名 `paper-tag-presentation-policy` 加 `schemaFingerprint` |
 | `baseRegistrySha256` | 策略签发时的基础分类词表原文件 SHA |
 | `baseSnapshotSha256` | 策略签发时按固定格式生成的基础原快照字节 SHA |
 | `preferredRegistrySha256` | 已批准展示的归档词表原文件 SHA |
 | `preferredSnapshotSha256` | 归档中所选原快照的完整字节 SHA |
 | `preferredProjectionSha256` | 按固定历史格式重新生成的标签提示文本 SHA |
 
-基础词表与展示词表的原文件 SHA 必须不同。原词表文件、归档快照、当前展示副本和标签提示文本是不同内容，不能互换哈希。展示副本使用新格式名称，也不代表归档原快照或原词表变了；`preferredSnapshotSha256` 仍核对原归档，不核对换了格式头的展示副本。
+基础词表与展示词表的原文件 SHA 必须不同。原词表文件、归档快照、当前展示副本和标签提示文本是不同内容，不能互换哈希。展示副本换成稳定名加结构指纹的头，也不代表归档原快照或原词表变了；`preferredSnapshotSha256` 仍核对原归档，不核对换了格式头的展示副本。
 
 历史标签提示文本保留 `historical-taxonomy-prompt-projection-v2` 哈希前缀。文本包含固定格式、词表版本及 SHA、分类维度、概念 ID、首选标签、定义和范围说明，不能缩成 ID 列表再计算哈希。这里的旧前缀用于核验既有批准记录，与当前模型提示的格式分开。六字段策略用于核对所选内容，本身不证明用户已经批准该版本。
 
 ## 从已有归档选择版本
 
-当前展示副本分别保存为 `data/tag-catalog-snapshot.json` 和 `static/data/tag-catalog-snapshot.json`；版本目录分别为两处的 `tag-catalog-versions.json`。版本目录保存原快照对象，展示副本只按当前格式呈现所选快照。两类文件分别使用 `paper-tag-catalog-snapshot-v2` 和 `paper-tag-catalog-versions-v2`，路径与格式须对应。
+当前展示副本分别保存为 `data/tag-catalog-snapshot.json` 和 `static/data/tag-catalog-snapshot.json`；版本目录分别为两处的 `tag-catalog-versions.json`。版本目录保存原快照对象，展示副本只按当前格式呈现所选快照。博客中已安装的副本目前带 `paper-tag-catalog-snapshot-v2` 和 `paper-tag-catalog-versions-v2` 历史头；生成器新写入的是稳定名 `paper-tag-catalog-snapshot` 和 `paper-tag-catalog-versions` 加 `schemaFingerprint`。两种头都按登记格式读取，路径与格式须对应。
 
 新生成的词表归档使用 `data/tag-catalog-history/<SHA>.json` 和 `static/data/tag-catalog-history/<SHA>.json`，两份文件的字节须相同。快照对象、概念顺序及来源 SHA 保持原格式，不因为目录改名而替换快照的格式名称。
 

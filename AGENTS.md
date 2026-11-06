@@ -74,7 +74,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | API 路由与 Node 请求 | `scripts/utils.js` |
 | 发布 LLM 请求 | `scripts/publish_common.py` |
 | 默认 API 脚本职责 | [scripts/README.md](scripts/README.md) |
-| 客户端版本与发行状态 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts`、`docs/workbench-*-review.md#发行状态` |
+| 客户端版本与发行状态 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts`、[客户端发行核验](docs/client-release-verification.md) |
 | Manual 协议 | [manual/README.md](manual/README.md) |
 
 文档与实现冲突时，先遵守当前实现；检查未通过时停止，并在同一变更中修正文档。
@@ -383,5 +383,5 @@ npm run digest:status -- --date YYYY-MM-DD
 - 仓库最终只保留 `main`。已有临时分支须先核对有效改动已合入 `main`，再按[维护指南](docs/maintenance.md#一次修改怎样完成)清理并核对远端。
 - 提示词文件的第一个围栏代码块是 `loadPrompt()` 实际读取的内容；修改后检查占位符、解析器、SHA 和阶段指纹。工作树只保留当前登记的模板；旧记录的提示词由 Git blob、原路径和原 SHA 受控只读核验，不修改旧声明或补签结果。
 - 新 LLM 调用复用公共路由/请求封装；新分析入口复用 `analysis-engine.js`；新路径进入集中配置。
-- CI 运行 `npm run verify`（内含 `npm test` 与 `validate:data`），覆盖三流程及旧记录兼容 JS/Python 检查与全仓 shell 语法检查。 普通 push 不触发远端 CI；稳定的一轮修改通过定向检查与交叉审查后主动运行一次，PR 仍自动检查。保留完整覆盖，按实际最终提交核验全部检查，见[维护指南](docs/maintenance.md#什么时候运行远端-ci)。
+- CI 运行 `npm run verify`；它在各作业里分片调用 JavaScript 测试、`validate:data` 与客户端检查，从不运行裸 `npm test`。覆盖三流程及旧记录兼容 JS/Python 检查与全仓 shell 语法检查。 普通 push 不触发远端 CI；稳定的一轮修改通过定向检查与交叉审查后主动运行一次，PR 仍自动检查。保留完整覆盖，按实际最终提交核验全部检查，见[维护指南](docs/maintenance.md#什么时候运行远端-ci)。
 - 提交信息使用具体中文，说明原因、范围与影响；提交前确认 `data/`、`logs/`、`.env`、缓存和密钥未被跟踪。

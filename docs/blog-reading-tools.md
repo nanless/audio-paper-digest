@@ -28,4 +28,4 @@
 
 博客已取消收藏、待读、阅读笔记、备份与恢复、复制 AI 提问、直接保存到 Zotero、本机模型调用、Zotero 确认导入、通过本机助手下载 PDF，以及助手启动指引。浏览器按官方链接手动保存原 PDF 仍可使用。前端不再向本机服务传递地址或参数；博客构建检查应防止这些依赖重新出现。
 
-新页面使用 `researcher-sidecars` 描述四份静态附属文件。文件发布在 `client/papers/`，清单记录每份文件的 SHA-256。上下文文件还声明 `paper-research-context` 和结构指纹。已经发布的页面按其原有路径和格式读取。
+新页面的页面元数据 `paper_digest_sidecars` 描述四份静态附属文件：三份引用文件使用 `researcher-sidecars`，上下文文件另声明 `paper-research-context` 和结构指纹。文件发布在 `client/papers/`，清单记录每份文件的 SHA-256。已经发布的页面按其原有路径和格式读取。

@@ -27,7 +27,7 @@
 
 读取这条记录时不再逐字比对 `error` 文案，只要求它是一个非空字符串，并且含有本论文的规范化 arXiv ID；ID 按编号边界匹配，因此 `2610.90011` 不会被当成 `2610.9001`，`arXiv PDF <id> download failed: HTTP 404` 与带版本号的 `<id>v2` 等写法都算命中。`arxivId` 字段若存在则必须等于本论文编号。
 
-筛选完成、封存来源时，如果某篇入选论文的官方 PDF 在全部候选地址上都是 404，这篇论文同样跳过：程序把跳过原因、原始错误信息和论文编号写进本次来源运行目录 `data/runtime/daily-fresh-source-runs/<runId>/daily-source-skips.json`，然后继续封存和分析其余论文。封存来源阶段每批最多跳过两篇，可用 `PD_DAILY_SOURCE_SKIP_MAX` 调整（0–5）；超过上限就停止整批，不会为了继续发布而扩大跳过范围。
+筛选完成、封存来源时，如果某篇入选论文的官方 PDF 在全部候选地址上都是 404，这篇论文同样跳过：程序把跳过原因、原始错误信息和论文编号写进本次来源运行目录 `data/runtime/daily-fresh-source-runs/<runId>/daily-source-skips.json`，然后继续封存和分析其余论文。封存来源阶段每批最多跳过两篇，可用 `PD_DAILY_SOURCE_SKIP_MAX` 调整（0–5，设为 0 时不允许跳过、遇到 404 仍停止整批）；超过上限就停止整批，不会为了继续发布而扩大跳过范围。
 
 跳过记录使用 `daily-source-skip` 格式，绑定本次批次的日期、运行 ID、上限和篇数；每篇保存 `arxivId`、`errorCode: ARXIV_PDF_NOT_FOUND`、`status: 404`、`reason` 和原始 `message`。读取时逐项核验，只接受 `ARXIV_PDF_NOT_FOUND` 加 404 的证据。被跳过的论文不进入深度分析，不生成博客页面，也不计为分析成功；其余论文仍须完整通过来源、分析和审查。页面和汇总里不会出现这篇论文，`digest:status` 会单列已跳过篇数，而不是把缺失写成通过。
 

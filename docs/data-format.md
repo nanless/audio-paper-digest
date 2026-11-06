@@ -29,7 +29,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 `data/runtime/llm-usage/` 中 Node/Python 的 `request_started` 与真实终态请求事件共用 `eventId`。只有开始记录的请求仍是未知消费，不能按零消费处理；旧终态协议继续只读兼容。终态或 Reader 采用事件保存失败停止新请求，费用统计不能把缺失事件补成成功。
 
-账本保存故障时，程序尝试将实际返回的响应另存到 `data/runtime/llm-response-recovery/`，使用独立的 `llm-response-recovery-v1`，记录它与原安全事件、响应和文件 SHA 的对应关系。若独立响应文件也无法保存，须明确报告；不能声称恢复材料已经落盘。
+账本保存故障时，程序尝试将实际返回的响应另存到 `data/runtime/llm-response-recovery/`，使用独立的 `llm-response-recovery-v1`，记录原安全事件的 SHA-256、响应正文和响应的 SHA-256；写入器另返回文件名与文件 SHA，供调用方保存对应关系。若独立响应文件也无法保存，须明确报告；不能声称恢复材料已经落盘。
 
 这些文件用于证明当时实际收到什么，属于受保护运行证据，不能上传或清理。它们不直接授予来源、完成或发布资格；恢复仍须走原受控入口，详见[费用记录保存失败](troubleshooting.md#费用记录保存失败)。
 
@@ -37,7 +37,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ### `papers.json`
 
-跨运行累计论文库与状态账本，不参与抓取去重（去重基线是博客已发布页）。每篇的 `digestStatus` 可记录分析成功、待分析、失败和最近一次尝试。旧成功正文可以保留，但后来的失败仍须写入 `latestAttemptStatus`，不能用旧结果掩盖最新失败。
+跨运行累计论文库与状态账本，不参与抓取去重（去重基线是博客已发布页）。每篇的 `digestStatus` 对象可记录分析成功、待分析、失败和最近一次尝试。旧成功正文可以保留，但后来的失败仍须写入同一对象的 `digestStatus.latestAttemptStatus`（例如 `analysis_failed`），不能用旧结果掩盖最新失败。
 
 ### `fetch-checkpoint.json`
 
@@ -77,7 +77,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 新的日更来源运行使用 `daily-fresh-source-run` 和对应的结构指纹，位于 `data/runtime/daily-fresh-source-runs/<runId>/`。同一批次仍使用原来的运行身份；已有运行保持原文件字节和原来源引用。新运行里的每篇 `fresh-source-analysis` 声明与该运行的格式和封存文件对应。
 
-取不到官方 PDF 的论文单独记在运行目录的 `daily-source-skips.json`，格式为 `daily-source-skip`。记录绑定批次日期、运行 ID、上限和篇数，每篇只保存论文编号、`ARXIV_PDF_NOT_FOUND`、404 和原始错误。被跳过的论文属于本次来源运行，但不出现在分析结果和博客页面里；读取这一批时必须同时核验跳过记录与剩余论文集合完全吻合。
+取不到官方 PDF 的论文单独记在运行目录的 `daily-source-skips.json`，格式为 `daily-source-skip`。记录绑定批次日期、运行 ID、上限和篇数，每篇保存论文编号、`ARXIV_PDF_NOT_FOUND`、404、固定说明 `reason` 和原始错误 `message`。被跳过的论文属于本次来源运行，但不出现在分析结果和博客页面里；读取这一批时必须同时核验跳过记录与剩余论文集合完全吻合。
 
 每篇的 `sources/<arxivId>/generation-000001/` 只包含以下四文件：
 
@@ -204,7 +204,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 | `apiReaderAuthors` | `api-reader-author-identity`（带登记的结构指纹）逐项核对作者姓名和机构。 |
 | `apiReaderResources` | `api-reader-resource-identity`（带登记的结构指纹）核对原文或 Demo 来源、重定向终点及可达状态。 |
 | 评分证据与稳定性裁决 | 说明八维分数及最终评分所依据的分析。 |
-| `llm_api_production` | 确认本次发布论文集合满足默认 API 要求。 |
+| `publicationMode: llm_api_production` 与 `llmApiProduction` 批次证明 | 确认本次发布论文集合满足默认 API 要求。 |
 
 `beginner-researcher` 规定正文结构，`api-reader-source-bindings` 核对表格和公式来源；两者各自登记结构指纹，指纹不必相同。新发布还须满足作者和资源来源核验的当前结构。旧的 `-v1`、`-v2`、`-v3`、`-v4` 头只用于读取原记录：Reader v1/v2 及缺少任一当前来源要求的旧 v3 只供历史兼容读取，不能据此取得新的发布资格。摘要级分析默认不可发布。
 

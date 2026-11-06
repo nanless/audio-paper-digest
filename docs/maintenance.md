@@ -33,10 +33,10 @@
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js`、当前 `prompts/current/deep-analysis.md` 及评分提示词 | Node/Python 解析器和发布器 |
-| 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`tag_catalog.py`、`tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
+| 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`scripts/tag_catalog.py`、`scripts/tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
 | Reader 写作、图表或修复 | 当前登记的 `prompts/current/api-reader-article.md`、`prompts/current/api-reader-repair.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
-| 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
+| 不生图登记与发布豁免 | `waive-post-publish-visuals.js`、`lib/post-publication-policy.js` | `digest:status`、`publish:finish`、日更第 8 阶段与登记写入 |
 | 客户端版本与发行 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` | 两端源码的版本号与构建号、两端 README、`docs/README.md` 与 `docs/README.en.md` 的版本段和版本列表、当期 `docs/workbench-<版本>-review.md` 的发行状态、发行附件核验 |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
 
@@ -52,7 +52,7 @@
 - 日更分析、Reader 和发布只读取绑定的文本、PDF、来源元数据与清单。文件缺失或不符时，目标仍为北京时间当天才可重跑 `digest:prepare`；历史日期保留失败记录，按历史维护处理，不能用旧缓存补源。
 - 历史 arXiv 每次来源获取都重新保存并核验官方四份文件；历史会议核验绑定的本地元数据/PDF SHA。两者都不能把旧博客、分析或 Reader 正文作为写作来源。
 - generate、review、push 各自独立；review 只读最终字节。
-- 发布资格证明、页面 SHA、Git 基线、远端 OID 和视觉任务须分别核验对应关系。
+- 发布资格证明、页面 SHA、Git 基线、远端 OID 和不生图记录须分别核验对应关系。
 - 项目脚本不调用图像 API。
 
 ## Prompt 修改
@@ -164,7 +164,7 @@ Python 日志清理会把目录读取、文件检查及删除失败写入 `probl
 
 `npm run storage:status` 只读统计文件大小与数量，包括受保护的日更来源、历史来源/计划/私有页面、会议来源及异常响应保全目录。它们是可重新核验的输入与运行证据，`storage:prune` 不删除。状态命令遇到目录读取错误会显示路径和原因，并非零退出，已读到的统计仍会显示。
 
-`npm run storage:prune` 默认只扫描引用并输出预计删除清单。status 和预览可在任务运行时使用，不要求停止写入者。真正删除须先人工核对清单，并停止全部抓取、筛选、分析、博客生成/审查/推送和视觉任务，再运行：
+`npm run storage:prune` 默认只扫描引用并输出预计删除清单。status 和预览可在任务运行时使用，不要求停止写入者。真正删除须先人工核对清单，并停止全部抓取、筛选、分析、博客生成/审查/推送和不生图登记，再运行：
 
 ```bash
 npm run storage:prune -- --apply
@@ -203,7 +203,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ### 准备人工修正材料，不能据此采纳
 
-- `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；工具准备范围不含完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
+- `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；工具准备范围不含完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<YYYYMMDD>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
 
 ### 错误码与文字建议的用途
 
@@ -243,7 +243,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`scripts/README.md`、`docs/` 与 `skills/` 下全部 Markdown 中的 `npm run <script>` 是否存在于 `package.json`；同一入口还核对文档里写的当前客户端版本（构建号）与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 是否一致，以及 `docs/README.md` 与 `docs/README.en.md` 的工作台版本列表是否包含当前版本。未知命令或版本不符返回非零。全仓 Markdown 的相对链接和按最近 `package.json` 解析的 npm 命令由 `tests/documentation.test.js` 覆盖，根 `SKILL.md`、`manual/` 和原型文档也在其中；参数和配置项由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令或升级客户端时，同步对应文档、版本段和版本列表。
+- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`scripts/README.md`、`docs/` 与 `skills/` 下全部 Markdown：`npm run <script>` 是否存在于 `package.json`，相对链接的目标文件是否存在，`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` 中登记，是否出现带 `-vN` 后缀的协议名或废弃工作区路径，以及代码未读取的 `PD_*` 变量；同一入口还核对文档里写的当前客户端版本（构建号）与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 是否一致，两份文档索引的工作台版本列表是否包含当前版本。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖，根 `SKILL.md`、`manual/` 和原型文档也在其中；参数和配置项由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
 
 ## 存储保留建议
 

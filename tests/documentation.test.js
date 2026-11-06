@@ -138,3 +138,24 @@ test('操作文档行内流程也不得使用已退休的历史公共别名', ()
             `${relative} 的行内流程含已退休入口；应使用 package.json 中的当前名称`);
     }
 });
+
+test('skill 的相对链接在安装副本里仍可解析', () => {
+    // 安装副本只复制 skills/<name>/ 目录，指向仓库内 docs/ 等位置的相对链接会变成死链。
+    const offenders = [];
+    for (const relative of markdownFiles().filter(file => /^skills\/[^/]+\//.test(file))) {
+        const filePath = path.join(ROOT, relative);
+        const skillDirectory = path.join(ROOT, relative.split('/').slice(0, 2).join('/'));
+        const source = fs.readFileSync(filePath, 'utf8');
+        for (const rawTarget of relativeMarkdownLinks(source)) {
+            const targetWithoutAnchor = rawTarget.split('#')[0];
+            if (!targetWithoutAnchor) continue;
+            let decoded = targetWithoutAnchor;
+            try { decoded = decodeURIComponent(targetWithoutAnchor); } catch {}
+            const resolved = path.resolve(path.dirname(filePath), decoded);
+            if (!resolved.startsWith(skillDirectory + path.sep)) {
+                offenders.push(`${relative} -> ${rawTarget}`);
+            }
+        }
+    }
+    assert.deepEqual(offenders, []);
+});

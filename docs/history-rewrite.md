@@ -74,17 +74,17 @@ npm run history:plan -- --apply \
 
 后三个命令也接受 `--dry-run`，可以先检查再保存。不要向 `history:inputs` 传 `--arxiv-manifest`；它不接受另一份本地 arXiv 来源清单，也不会把旧 TXT、PDF、图片、分析或 Reader 当作重写输入。会议部分先核对冻结页面 SHA，再读取 front matter 的标题指纹，与本地论文信息精确匹配，不把正文用于创作。
 
-会议来源优先使用工作区爬虫保存的记录。`accepted-local-iclr-*` 只有在它是某个冻结 ICLR 页唯一且标题精确对应的来源时才保留，不能带入外部 accepted corpus 的其他记录。输出协议为 `merged-good-historical-local-data-v5`，只保存来源类型、路径和 SHA，默认文件是 `data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json`。旧 `historical-direct-rewrite-input-catalog-v1` 合并器输出不能用于当前计划。
+会议来源优先使用工作区爬虫保存的记录。`accepted-local-iclr-*` 只有在它是某个冻结 ICLR 页唯一且标题精确对应的来源时才保留，不能带入外部 accepted corpus 的其他记录。输出协议为 `historical-direct-local-input-catalog`（旧 `merged-good-historical-local-data-v5` 标签按原格式读取），只保存来源类型、路径和 SHA，默认文件是 `data/runtime/direct-local-inputs/scoped-historical-local-data.json`。未按登记格式生成的旧合并器输出不能用于当前计划。
 
 `history:inputs --name` 可指定不可变来源清单的文件名，但不能使用 `current.json`。这个名字专供当前清单指针使用；程序在创建输出目录前拒绝该保留名，防止指针覆盖清单自身。
 
 `history:conference-projections` 记录论文与历史会议页面的对应关系。程序名中的 projection 在这里就是这份对应记录：一篇论文可能对应多个旧页面，后续必须全部覆盖。它核对冻结页面、论文信息和 PDF 的 SHA；如果完整 inline TeX 曾被 Hugo 确定性省略，还会检查论文信息中对应省略形式的指纹。任一形式对应多个会议论文身份时都会拒绝，不能用标题相似度选择。这种页面对应关系不赋予旧 crosswalk 身份确认权限。
 
-`history:plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用生成来源清单时使用的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
+`history:plan` 生成当前 `historical-direct-rewrite-plan` 计划（旧 `historical-direct-rewrite-plan-v5` 标签按原格式读取，更旧的清单会被拒绝）。页面对应关系和计划都使用生成来源清单时使用的完整严格校验。计划对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
 
-主评分行路线抓取失败时写入 v2 备用记录，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 备用记录。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
+主评分行路线抓取失败时写入 `historical-arxiv-primary-fresh-failure-handoff` 备用记录（旧 `historical-arxiv-fresh-failure-crosswalk-handoff-v2` 标签按原格式读取），附完整评分行绑定；原单提示路线写入 `historical-arxiv-fresh-failure-crosswalk-handoff`（旧 `-v1` 标签按原格式读取），仍使用原字节格式。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
 
-没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录未找到对应冻结历史页面的来源所涉及的论文 ID、来源类型和原因；该报告不是待执行任务清单。
+没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report`（旧 `-v1` 标签按原格式读取），记录未找到对应冻结历史页面的来源所涉及的论文 ID、来源类型和原因；该报告不是待执行任务清单。
 
 ## 获取和检查论文来源
 
@@ -97,7 +97,7 @@ npm run history:sources -- --apply --plan /absolute/path/direct-rewrite-plan-v5.
 
 arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。未显式选择 ID 的限量续跑会严格核验并跳过同一获取序号已有的 arXiv 四文件，会议项按稳定计划顺序继续检查。本地会议文件缺失或损坏只使对应项失败，不能进入 arXiv 备用获取或写入 crosswalk。只有新 arXiv 获取失败、由 scheduler/run 保存的有固定名称、保存后不再改写的备用记录文件可进入后文备用流程，其余会议来源继续处理。
 
-每项结果在同一调度锁内更新带自哈希的 `historical-direct-source-status-v1`，另一进程的 `history:status` 可查看会议核验和 arXiv 文件状态。该记录也是分析的必需前提：`history:run --apply` 在任何来源抓取、PDF 提取或模型调用前，要求选中论文在同一计划及获取序号中均为 `ready`。缺记录、`handoff` 或 `failed` 都拒绝；后续仍核对实际来源字节，不能只信状态记录。
+每项结果在同一调度锁内更新带自哈希的 `historical-direct-source-status`（旧 `-v1` 标签按原格式读取），另一进程的 `history:status` 可查看会议核验和 arXiv 文件状态。该记录也是分析的必需前提：`history:run --apply` 在任何来源抓取、PDF 提取或模型调用前，要求选中论文在同一计划及获取序号中均为 `ready`。缺记录、`handoff` 或 `failed` 都拒绝；后续仍核对实际来源字节，不能只信状态记录。
 
 ### 当前 PDF 不可用时的历史版本
 
@@ -107,7 +107,7 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 
 ## 分析、图片和发布用元数据
 
-历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析、八维评分、标签、`beginner-researcher-v3` Reader 与来源核验。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
+历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析、八维评分、标签、`beginner-researcher` Reader 与来源核验。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
 
 页面渲染通过 `paper-page-staging.js` 使用同一日更发布器；真实会议身份的作者、资源、摘要和评分展示通过 `paper_reader_presentation.py` 复用，保留历史 URL、论文身份与特殊来源披露。渲染实现 SHA 根据实际本地依赖闭包计算，包含共享 Python/Node 校验器；共享修复升级后旧暂存页重新生成。
 
@@ -185,7 +185,7 @@ Node 历史分析读取错误代码和作用范围，识别账号池耗尽、认
 
 ## 生成每日和会议汇总
 
-`history:aggregate projection` 从计划与冻结博客清单生成 `historical-direct-aggregate-projection-v3`。随后 `aggregate` 读取该文件、执行记录和完整单篇暂存 manifest，核对同一日期或会议的完整论文集合与每页 SHA，生成 `historical-direct-aggregate-v2` 汇总及 `pages/content/posts/...` 的实际暂存 Markdown。仅有 `analysis.json` 或 `staging-input.json` 不能生成汇总，旧汇总正文也不能用于补写内容。
+`history:aggregate projection` 从计划与冻结博客清单生成 `historical-direct-aggregate-projection`（旧 `-v3` 标签按原格式读取）。随后 `aggregate` 读取该文件、执行记录和完整单篇暂存 manifest，核对同一日期或会议的完整论文集合与每页 SHA，生成 `historical-direct-aggregate` 汇总（旧 `-v2` 标签按原格式读取）及 `pages/content/posts/...` 的实际暂存 Markdown。仅有 `analysis.json` 或 `staging-input.json` 不能生成汇总，旧汇总正文也不能用于补写内容。
 
 ```bash
 npm run history:aggregate -- projection --apply \
@@ -198,15 +198,15 @@ npm run history:aggregate -- aggregate --apply \
 # 会议汇总将 --daily YYYY-MM-DD 改为 --conference conference-key
 ```
 
-`registryFile` 与汇总页面对应文件以命令实际输出为准。每日集合可同时包含本次 arXiv 来源与通过核验的本地会议 PDF；纯来源集合沿用各自协议，混合集合记录自哈希 `historical-direct-mixed-source-v1`，分别绑定同一 arXiv 获取序号的逐篇 manifest 和逐篇会议 PDF SHA。会议集合仅允许本地会议 PDF。获取序号、manifest 或 PDF 的 SHA、论文成员集合及每篇来源身份，只要与原记录不一致，就拒绝汇总。
+`registryFile` 与汇总页面对应文件以命令实际输出为准。每日集合可同时包含本次 arXiv 来源与通过核验的本地会议 PDF；纯来源集合沿用各自协议，混合集合记录自哈希 `historical-direct-mixed-source`（旧 `-v1` 标签按原格式读取），分别绑定同一 arXiv 获取序号的逐篇 manifest 和逐篇会议 PDF SHA。会议集合仅允许本地会议 PDF。获取序号、manifest 或 PDF 的 SHA、论文成员集合及每篇来源身份，只要与原记录不一致，就拒绝汇总。
 
-v3 汇总页面对应文件保留冻结会议任务页的路径、URL、旧字节 SHA、会议及任务键（`task key`），只按冻结链接关系确定论文成员。链接集合、目标页 SHA、渲染实现及任务覆盖情况均有自哈希。会议汇总先生成全部任务页，再生成会议总页作为同一轮完成标记。没有重写论文成员的冻结每日页记录为 `retain-unchanged`；`pageCoverage` 覆盖清单每一页，才允许 `publicationReady=true`。
+汇总页面对应文件保留冻结会议任务页的路径、URL、旧字节 SHA、会议及任务键（`task key`），只按冻结链接关系确定论文成员。链接集合、目标页 SHA、渲染实现及任务覆盖情况均有自哈希。会议汇总先生成全部任务页，再生成会议总页作为同一轮完成标记。没有重写论文成员的冻结每日页记录为 `retain-unchanged`；`pageCoverage` 覆盖清单每一页，才允许 `publicationReady=true`。
 
-汇总使用 `reader-facing-v3`。排行榜和中英文题目都链接冻结历史单篇 URL；详情只显示一次标签及八维评分，评分后依次放分档、文档类型和可用 arXiv 原文，再放作者机构、核心摘要与逐项可点击的 HTTPS 资源状态。“热门方向”只统计每篇当前标签注册表的主任务。
+汇总使用当前 `reader-facing-page` 头（旧 `reader-facing-v3` 只用于读取原记录）。排行榜和中英文题目都链接冻结历史单篇 URL；详情只显示一次标签及八维评分，评分后依次放分档、文档类型和可用 arXiv 原文，再放作者机构、核心摘要与逐项可点击的 HTTPS 资源状态。“热门方向”只统计每篇当前标签注册表的主任务。
 
 每日、会议总页和会议任务页均通过同一次有界 Python 桥，调用 `tag_presentation.py` 生成成员的多级标签块，避免逐篇额外启动进程。汇总页首显式记录 `aggregate-primary-task-counts` 范围和去重主任务的 `paper_digest_tags_concepts`；正文仍按各论文自己的完整所选集合显示，不用汇总主任务集合替代单篇分类。
 
-若来源含通过核验的 `arxiv-historical-version-source-v1`，汇总保存其 `identitySha256`、实际 `vN` 和官方带版本 PDF URL，并在排行榜及双语标题条目旁明确显示“当前稿不可用/分析官方历史版本 vN”。普通来源不增加这些字段，沿用原生成分支。
+若来源含通过核验的 `arxiv-historical-version-source`（旧 `-v1` 标签按原格式读取），汇总保存其 `identitySha256`、实际 `vN` 和官方带版本 PDF URL，并在排行榜及双语标题条目旁明确显示“当前稿不可用/分析官方历史版本 vN”。普通来源不增加这些字段，沿用原生成分支。
 
 ## 查看状态和验收结果
 
@@ -263,11 +263,11 @@ npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --
   --checkpoint ABS [--exclude-paper-ids ID,...]
 ```
 
-`history:tag-supplement` 对已由当前渲染实现暂存、且页面缺少标签元数据的论文，从已核验的分析记录和当前词表确定性分类，不请求模型；按运行标识写入 `historical-direct-tag-supplement-v2` 的 `tag-history.json` 和 `report.json`，文件不可覆盖。
+`history:tag-supplement` 对已由当前渲染实现暂存、且页面缺少标签元数据的论文，从已核验的分析记录和当前词表确定性分类，不请求模型；按运行标识写入 `historical-direct-tag-supplement` 的 `tag-history.json` 和 `report.json`（旧 `-v2` 标签按原格式重放），文件不可覆盖。
 
-`history:source-tags` 是没有可用正式分析记录时按来源证据请求模型的分类入口，也是这四个入口里唯一调用模型的。它保存论文选择集合、标签选择响应、独立审核和分类决策的检查点，写入 `historical-source-tag-classification-v2`；同一运行标识可续跑，`--concurrency` 只接受 1–3，默认 1。`partial` 部分运行记录不能当作续跑检查点；要从正规检查点开始新的论文集合，须同时给出 `--resume-after-checkpoint` 和 `--resume-after-export`。特殊来源重做须换新的运行标识，并显式给出 `--only-paper-ids`。
+`history:source-tags` 是没有可用正式分析记录时按来源证据请求模型的分类入口，也是这四个入口里唯一调用模型的。它保存论文选择集合、标签选择响应、独立审核和分类决策的检查点，写入 `historical-source-tag-classification`（旧 `-v2` 与 `historical-source-taxonomy-classification-v1` 按原格式读取）；同一运行标识可续跑，`--concurrency` 只接受 1–3，默认 1。`partial` 部分运行记录不能当作续跑检查点；要从正规检查点开始新的论文集合，须同时给出 `--resume-after-checkpoint` 和 `--resume-after-export`。特殊来源重做须换新的运行标识，并显式给出 `--only-paper-ids`。
 
-`history:source-identity` 只核验来源身份，写入 `historical-source-identity-supplement-v2`，不请求模型。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划再按原格式复算，全部字节一致才复用；缺少完整输出、只有旧格式的部分检查点或校验失败时命令停止，保留原文件并换新的运行标识。
+`history:source-identity` 只核验来源身份，写入 `historical-source-identity-supplement`（旧 `-v2` 与 `-v1` 按原格式读取），不请求模型。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划再按原格式复算，全部字节一致才复用；缺少完整输出、只有旧格式的部分检查点或校验失败时命令停止，保留原文件并换新的运行标识。
 
 `history:tag-checkpoint-export` 读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录，同样不请求模型；报告同时保留失败项和未处理论文。
 

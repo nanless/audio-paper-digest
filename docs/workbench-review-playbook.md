@@ -1,6 +1,6 @@
 # 工作台审查、同步与发行手册
 
-适用于同时修改 Mac 与 Android 的工作台、同步协议或安装包时安排审查与验收。各版本通过的项目与实际环境见 [1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)和 [1.4.1](workbench-1.4.1-review.md)记录。下面的场景是后续验收清单，具体实现以对应协议和发行版本为准。
+适用于同时修改 Mac 与 Android 的工作台、同步协议或安装包时安排审查与验收。各版本通过的项目与实际环境见 [1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.3](workbench-1.4.3-review.md)和 [1.4.4](workbench-1.4.4-review.md)记录。下面的场景是后续验收清单，具体实现以对应协议和发行版本为准。
 
 ## 从使用路径检查两个端
 

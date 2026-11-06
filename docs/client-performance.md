@@ -4,11 +4,11 @@
 
 ## 结论
 
-1.4.3 主要减少三类重复工作：启动时同步解码大目录、打开导读时反复解析同一份 HTML、云端全新上传时逐块探测。Mac 的目录刷新从约 40 MB 降到约 8 MB；导读解析次数 Mac 从 4 次降到 2 次，Android 从约 10 次降到 1 次；Android 启动不再逐篇解析离线导读 JSON。所有改动都保留原有的来源、字节、身份和恢复检查。
+1.4.3 主要减少三类重复工作：启动时同步解码大目录、打开导读时反复解析同一份 HTML、云端全新上传时逐块探测。Mac 的目录列表传输量从约 40 MB 降到约 8 MB；导读解析次数 Mac 从 4 次降到 2 次，Android 从约 10 次降到 1 次；Android 启动不再逐篇解析离线导读 JSON。所有改动都保留原有的来源、字节、身份和恢复检查。1.4.4 没有新增性能改动，本节数字仍只对应 1.4.3 的审计。
 
 | 轮次 | 改动对象 | 改动前 | 改动后 |
 |---|---|---|---|
-| 1 | Mac 启动与打开论文 | 启动同步解码 38.8 MB 目录；打开论文三次串行保存 | 超过 8 MiB 的目录和全文索引移到后台；首帧先出；打开论文少 2–3 次桥接往返；PDF 几何按帧合并 |
+| 1 | Mac 启动与打开论文 | 启动同步解码 38.8 MB 目录；打开论文三次串行保存 | 超过 8 MiB 的目录不在启动路径同步解码，改由后台任务读取，命令在 ready 门等待；全文索引也在后台读取（上限 32 MiB）；首帧先出；打开论文少 2–3 次桥接往返；PDF 几何按帧合并 |
 | 1 | Mac 同步 | 同步后再次读取并解析同一批分片 | 已核验分片直接交给暂存；无变化同步少一次读取与解析 |
 | 1 | Android 启动 | 逐篇解析离线导读 JSON | 只读 `offline-index.json`，核对文件集合、大小与时间；缺失或损坏时回退一次全扫重建 |
 | 2 | Mac 目录列表 | 每篇携带完整 citation 与官网分类，约 40 MB | `compact` 投影省略逐篇重复数据，约 8 MB；分类证据按快照单独加载 |
@@ -36,7 +36,7 @@ Android 的网站缓存位于研究目录下的 `PublishedLibrary/`。`offline-i
 ## 怎样复测
 
 1. 准备真实网站目录和至少一篇含图、表、公式的长导读，记录目录字节数、分片数和页面 SHA。
-2. Mac 运行 `cd apps/macos && npm test`。`LibraryServiceTests` 覆盖大目录延后载入、`library.retryLoad`、`compact` 投影与详情读取；`DesktopUI.test.cjs` 覆盖列表先渲染、分类证据后补；`CloudArchiveServiceTests` 断言全新上传的每块先 PUT。
+2. Mac 运行 `cd apps/macos && npm test`。`LibraryServiceTests` 覆盖大目录延后载入、`library.retryLoad`、`compact` 投影与详情读取；`LibraryUI.test.cjs` 覆盖列表先渲染、分类证据后补；`CloudArchiveServiceTests` 断言全新上传的每块先 PUT。
 3. Android 运行 `./apps/android/test.sh`。`OfflineIndexTest` 覆盖索引命中、缺失和重建；`AggregateDerivationTest` 覆盖一次解析同时产出文档与图片计划、命中缓存仍核对原字节；`PublishedCitationRepositoryTest` 覆盖导读解析只做一次。
 4. 复测目录传输量时，分别在改动前后统计 `library.list` 返回的字节数；复测解析次数时使用测试中的解析计数器，不以界面主观速度代替。
 5. 复测云上传请求数时，用隔离 WebDAV 服务记录方法序列：全新上传不应出现逐块前置 GET，续传仍应先 GET；共享集合仍应出现 `PROPFIND`。

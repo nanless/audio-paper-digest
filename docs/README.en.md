@@ -25,7 +25,7 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
-Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also completes the test fixtures on both clients, fills gaps in the macOS suite, and adds a macOS client CI job. See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
+Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also completes the test fixtures on both clients and fills gaps in the macOS suite. macOS client tests still run locally through `bash apps/macos/test.sh` and are not part of CI; Android puts only its Gradle unit tests in a separate job. See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
 
 Version 1.4.3 performance work (compact catalog projection, background startup decoding, reused explanation and aggregate parsing, offline index, merged bridge calls) is recorded in the [1.4.3 record](workbench-1.4.3-review.md).
 
@@ -98,6 +98,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 | Current prompts and original historical bytes | [Prompt index](../prompts/README.en.md), [prompt changes](maintenance.md#prompt-修改) |
 | Explanation structure and source requirements | [Reader writing](reader-writing.md) |
 | Explanations, paragraphs, figures, and bilingual maintenance | [Writing rules](writing-guide.md), [writing skill](../skills/clear-technical-writing/SKILL.md) |
+| What each documentation diagram shows, how to name one, and what to update with it | [Diagram notes](images/README.md), in Chinese |
 | Fields, manifests, and publication receipts | [Data format](data-format.md) |
 | Data-record protocols and schema fingerprints | [Protocol registry](protocols.md) |
 | Phone-first demo videos, covers, and social copy | [Phone-first demo production](../skills/phone-first-demo-production/SKILL.md), [promo notes](workbench-promo-production.md) |

@@ -433,6 +433,8 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/git-prompt-evidence-index.json` | 只读元数据：仅保存历史 Prompt 的原路径、Git blob OID 与整文件 SHA，没有旧正文。 |
 | `lib/prompt-rendering-contract.js` | Node 库：识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/prompt-contracts.js` | Node 库：登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 16 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
+| `lib/prompt-current-records.json` | 现用模板的唯一登记：12 个分析阶段、1 份筛选模板和 3 份专项修复模板的路径。Node 的 `lib/prompt-contracts.js` 与 Python 的 `prompt_evidence.py` 读同一份；测试固定总数为 16，并核验 `prompts/current/` 与登记一一对应。 |
+| `lib/prompt-legacy-records.json` | 旧模板与原版本声明的集中登记（阶段、原路径、声明名、输出预算、索引格式）；`lib/prompt-legacy-codec.js` 只按原声明取值，不提供写作入口，也不授予请求次数。 |
 | `prompt_evidence.py` | Python旧凭证严格读取本地Git原始Prompt物件，当前模板必须来自工作树。 |
 | `local_git_object.py` | Python 内部库：用固定 Git、参数和隔离环境有界读取一个本地 commit/tree/blob，核类型、尺寸、原始字节及 Git OID；禁止自动补抓和替换对象，不修改仓库对象、索引或引用。普通结果不证明完整树、删除、提交差异或发布资格。 |
 | `local_git_commit_delta.py` | Python 内部库：核对显式基线与单父提交的完整目录树、必要文件内容、删除及精确路径差异；复用同次固定离线读取，未审文件正文和完整对象图仍未检查，普通结果不授予正常审查、当前工作区或发布资格。 |
@@ -593,7 +595,7 @@ Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇
 
 ### 论文解读与原文证明
 
-识别解读草稿、正文、作者、资源、阶段、恢复记录和人工修正。PDF 引文核验重新读取封存原文。
+识别解读草稿、正文、作者、资源、阶段、恢复记录和人工修正。PDF 引文核验重新读取封存原文。清单里的两份 JSON 是共享数据而不是代码：`lib/validation-rules.json` 保存表头单位白名单与粘连复写的测试向量，`table-check.js` 和 Python 列单位检查共用；`lib/reader-legacy-records.json` 保存旧 Reader 的计划版本、阶段字段与有序回复的原始取值，读取时不得据此授予来源或发布资格。
 
 - `reader_record_format.py`
 - `reader_proof_format.py`
@@ -610,3 +612,5 @@ Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇
 - `lib/reader-section-format.js`
 - `lib/reader-diagnostic-format.js`
 - `lib/reader-content-mode.js`
+- `lib/reader-legacy-records.json`
+- `lib/validation-rules.json`

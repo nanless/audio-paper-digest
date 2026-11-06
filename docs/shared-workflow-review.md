@@ -19,7 +19,7 @@
 | 分析、论文锁、保存与恢复 | `analysis-engine.js`、`deep-analyzer.js` |
 | 批次失败轮 | `lib/analysis-failure-rounds.js` |
 | Reader 与局部修复 | `lib/reader-contract.js`、`reader-repair.js`、`reader-draft-order.js` |
-| 筛选解析、模板选择与填充 | `lib/filter-decision.js`、`lib/filter-prompt.js`、`lib/prompt-text-versions.js` |
+| 筛选解析、模板选择与填充 | `lib/filter-decision.js`、`lib/filter-prompt.js`、`lib/prompt-contracts.js` |
 | PDF 纯提取 | `lib/reader-pdf-extraction-scope.js` 与认证来源适配 |
 | 错误类型与运行范围 | `lib/workflow-error-policy.js` |
 | 页面和引用展示 | `paper_reader_presentation.py`、`tag_presentation.py`、研究引用导出 |

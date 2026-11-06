@@ -28,4 +28,6 @@ Mac 全套件、Android 全量单元测试与 lint 均通过，两端安装包�
 
 Android 签名使用项目发行签名库，公开 APK 的证书 SHA-256 为 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，`apksigner verify` 通过，签名方案为 v3。签名口令保存在本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目中；钥匙串只存口令，签名库和私钥在仓库外单独保存，口令没有写入仓库或发布材料。签名入口仍然要求终端交互，本次通过本机钥匙串提供口令完成。
 
+1.4.4 重新生成了 Android 发布签名库，证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，与本版不同。已安装 1.4.3 的 Android 用户不能覆盖升级，需要先导出完整备份、卸载旧版，再安装 1.4.4 并恢复资料。两版的签名、附件与证书分别登记在[客户端发行核验](client-release-verification.md)，不能互相替代。
+
 发布前已重新下载十二件附件，Mac 按 `SHA256SUMS`、Android 按 `ANDROID-SHA256SUMS` 复核通过；匿名访问 Release 页面与各附件均为 HTTP 200，文件大小与本地产物一致。签名对照、附件表与核验步骤见[客户端发行核验](client-release-verification.md)，性能改动的前后数据见[客户端性能](client-performance.md)。
