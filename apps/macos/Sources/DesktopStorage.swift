@@ -147,7 +147,7 @@ actor DesktopStorage {
         let proposed=try await calculateCleanup(),identifier=UUID().uuidString
         plans=plans.filter{Date().timeIntervalSince($0.value.createdAt)<600}
         plans[identifier]=Plan(files:proposed.0,evidence:proposed.1,createdAt:Date())
-        return ["planID":identifier,"files":try proposed.0.map{try Self.object($0)},"bytes":proposed.0.reduce(0){$0+$1.bytes},"count":proposed.0.count,"requiresConfirmation":true,"scope":"仅未引用的科学图与旧导读缓存；个人来源、离线包、导出和费用均保留"]
+        return ["planID":identifier,"files":try proposed.0.map{try Self.object($0)},"bytes":proposed.0.reduce(0){$0+$1.bytes},"count":proposed.0.count,"requiresConfirmation":true,"scope":"仅未引用的科学图、旧导读修订、可重新下载的原文 PDF 缓存、PDF 回执与汇总页解析缓存；个人来源、离线包、导出和费用均保留"]
     }
     /// Call immediately before NSWorkspace.recycle after confirmation; unknown/stale plans fail closed.
     func validateCleanupPlan(planID:String) async throws->[String:Any] {
@@ -187,6 +187,18 @@ actor DesktopStorage {
             guard let journal=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],journal["id"] is String,journal["request"] is [String:Any] else{throw StorageError.invalid("Zotero 归档检查点损坏，未提供清理候选")}
             evidence.append(Self.sha(bytes));collect(journal,hashes:&protected,paths:&paths)
         }
+        // Re-downloadable caches. A cached PDF stays while its current pointer names it; a
+        // receipt follows that same pin. Offline packages, personal state, current articles and
+        // Zotero journals were already collected into `protected` above.
+        var pinnedPDF=Set<String>(),receipts:[(path:String,sha256:String)]=[]
+        for(file,path) in all where path.hasSuffix(".json") && (path.hasPrefix("PublishedLibrary/pdf-pointers/") || path.hasPrefix("PublishedLibrary/pdf-receipts/")) {
+            let bytes=try PrivateStoragePaths.boundedData(file,limit:1024*1024)
+            guard let object=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],let sha=object["sha256"] as? String,PrivateStoragePaths.validSHA(sha) else{
+                throw StorageError.invalid(path.hasPrefix("PublishedLibrary/pdf-pointers/") ? "原文 PDF 指针无法核验，未提供清理候选" : "原文 PDF 回执无法核验，未提供清理候选")
+            }
+            if path.hasPrefix("PublishedLibrary/pdf-pointers/") {pinnedPDF.insert(sha)} else {receipts.append((path,sha))}
+        }
+        evidence.append(contentsOf:pinnedPDF.sorted());evidence.append(contentsOf:receipts.map{$0.path+":"+$0.sha256}.sorted())
         var revisions:[(URL,String,[String:Any])]=[]
         for(file,path) in all where (path.hasPrefix("PublishedLibrary/articles/") || path.hasPrefix("PublishedLibrary/article-revisions/")) && path.hasSuffix(".json") {
             let bytes=try PrivateStoragePaths.boundedData(file,limit:128*1024*1024)
@@ -200,11 +212,19 @@ actor DesktopStorage {
         for(file,path) in all {
             let image=path.hasPrefix("PublishedLibrary/assets/") && file.deletingPathExtension().lastPathComponent.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil && ["png","jpg","jpeg","webp","gif","svg"].contains(file.pathExtension.lowercased())
             let revision=path.hasPrefix("PublishedLibrary/article-revisions/") && file.pathExtension=="json" && PrivateStoragePaths.validSHA(file.deletingPathExtension().lastPathComponent)
-            guard image || revision else{continue}
+            let cachedPDF=path.hasPrefix("PublishedLibrary/pdf/") && file.pathExtension=="pdf" && PrivateStoragePaths.validSHA(file.deletingPathExtension().lastPathComponent)
+            let receipt=path.hasPrefix("PublishedLibrary/pdf-receipts/") && file.pathExtension=="json"
+            // Native aggregate documents are re-derived from the website; the manifest/index/
+            // activation evidence and imported Android witnesses are not disposable caches.
+            let aggregateDocument=path.hasPrefix("PublishedLibrary/aggregate-documents/")
+            guard image || revision || cachedPDF || receipt || aggregateDocument else{continue}
             let hash=try PrivateStoragePaths.sha256File(file)
             guard !protected.contains(hash),!protected.contains(file.deletingPathExtension().lastPathComponent),!paths.contains(file.path),!paths.contains(file.resolvingSymlinksInPath().path) else{continue}
             if revision,let record=revisions.first(where:{$0.1==path})?.2,owners.contains(record["paperID"] as? String ?? "") || protected.contains(record["revisionSHA256"] as? String ?? "") {continue}
-            candidates.append(Candidate(path:path,filePath:file.path,bytes:try size(file),sha256:hash,category:image ? "images":"revisions"))
+            if cachedPDF,pinnedPDF.contains(file.deletingPathExtension().lastPathComponent) {continue}
+            if receipt,let record=receipts.first(where:{$0.path==path}),protected.contains(record.sha256) || pinnedPDF.contains(record.sha256) {continue}
+            let category=image ? "images":revision ? "revisions":cachedPDF ? "pdf":receipt ? "receipts":"aggregates"
+            candidates.append(Candidate(path:path,filePath:file.path,bytes:try size(file),sha256:hash,category:category))
         }
         candidates.sort{$0.path<$1.path}
         evidence.append(contentsOf:protected.sorted());evidence.append(contentsOf:paths.sorted())

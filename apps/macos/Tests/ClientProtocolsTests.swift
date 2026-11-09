@@ -26,6 +26,15 @@ import Foundation
         catch { checks+=1;print("PASS fields cannot override the current header") }
         check(try ClientProtocols.recordKeys(old,name,fields:["files","sourceDirectory"])==["contract","files","sourceDirectory"],"historical exact field set is unchanged")
         check(try ClientProtocols.recordKeys(name,name,fields:["files","sourceDirectory"])==["contract","schemaFingerprint","files","sourceDirectory"],"current exact field set includes the verified fingerprint")
+        check(ClientProtocols.isCatalogAvailable,"embedded registry parsed without trapping")
+        check(ClientProtocols.catalogError == nil,"usable registry exposes no retryable error")
+        if case .success(let parsed) = ClientProtocols.parseCatalog(GeneratedClientProtocols.json) {
+            check(!parsed.isEmpty,"embedded registry decodes to protocol families")
+        } else { preconditionFailure("valid embedded registry must parse") }
+        for corrupt in ["{not json","[]","{\"paperdigest-backup\":1}"] {
+            guard case .failure(let error) = ClientProtocols.parseCatalog(corrupt) else { preconditionFailure("corrupt registry must fail instead of trapping: "+corrupt) }
+            check(error.localizedDescription.contains("重试"),"corrupt registry returns the retryable error: "+corrupt)
+        }
         print("Client protocol checks: \(checks)")
     }
 }

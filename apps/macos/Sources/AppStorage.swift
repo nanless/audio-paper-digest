@@ -46,7 +46,7 @@ extension PaperDigestApp {
         guard jobs.isEmpty,!terminationPending,!maintenanceBusy else{throw DesktopError.message("保存期间任务状态变化，请重新检查")}
         maintenanceBusy=true;defer{maintenanceBusy=false}
         guard let plan=payload["planID"] as? String else{throw DesktopError.message("请先生成真实清理计划")}
-        let alert=NSAlert();alert.messageText="将未引用的缓存移到废纸篓？";alert.informativeText="确认后会重新核验文件和引用。个人笔记、PDF 原文、离线包、模型响应和 Zotero 检查点均保留。可在 Finder 的废纸篓中恢复。";alert.addButton(withTitle:"移到废纸篓");alert.addButton(withTitle:"取消")
+        let alert=NSAlert();alert.messageText="将未引用的缓存移到废纸篓？";alert.informativeText="确认后会重新核验文件和引用。个人笔记、离线包内原文、模型响应和 Zotero 检查点均保留；可重新下载的原文 PDF、PDF 回执与汇总页解析缓存会移到废纸篓。可在 Finder 的废纸篓中恢复。";alert.addButton(withTitle:"移到废纸篓");alert.addButton(withTitle:"取消")
         guard await confirmStorageCleanup(alert) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消整理")}
         let checked=try await storage.validateCleanupPlan(planID:plan)
         let rows=checked["files"] as? [[String:Any]] ?? []

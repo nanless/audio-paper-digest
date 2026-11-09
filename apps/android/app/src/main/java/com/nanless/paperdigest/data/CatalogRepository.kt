@@ -289,19 +289,18 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         return result
     }
 
+    /** Probe and sync must resolve the same entry, otherwise a deployment that serves different
+     *  bytes at the two addresses makes every foreground check look like a new full snapshot. */
+    private suspend fun readCatalogIndex(): Pair<String, ByteArray> = catalogIndexEntry { url -> read(url, MAX_TOTAL) }
+
     internal suspend fun hasPublishedCatalogUpdate(): Boolean {
         if (personal.settings().optBoolean("offlineMode")) return false
-        val index = read(SITE + "index.json", MAX_TOTAL)
-        return sha256(index) != snapshot.summary.optString("snapshotID")
+        return catalogUpdateDetected(readCatalogIndex().second, snapshot.summary.optString("snapshotID"))
     }
 
     suspend fun sync(progress: (Int, Int, String) -> Unit = { _, _, _ -> }): JSONObject = syncMutex.withLock { withContext(Dispatchers.IO) {
         require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式，请先在设置中允许联网" }
-        var indexURL=SITE+"client/index.json"
-        val index=try { read(indexURL,MAX_TOTAL) } catch(error:PublishedHttpStatus) {
-            if(error.status !in listOf(404,410))throw error
-            indexURL=SITE+"index.json";read(indexURL,MAX_TOTAL)
-        }
+        val (indexURL, index) = readCatalogIndex()
         val snapshotID = sha256(index)
         val first = index.firstOrNull { it.toInt().toChar() !in " \t\r\n" }
         val legacyIndex = first == '['.code.toByte()
@@ -716,6 +715,21 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     companion object {
         const val SITE = "https://nanless.github.io/audio-paper-digest-blog/"
         const val MAX_TOTAL = 64 * 1024 * 1024
+        /** The one catalog entry both [sync] and the foreground probe read. The preferred
+         *  `client/index.json` only falls back to the legacy `index.json` on the exact 404/410
+         *  that means the entry does not exist; every other failure stays an error. */
+        internal suspend fun catalogIndexEntry(read: suspend (String) -> ByteArray): Pair<String, ByteArray> {
+            val preferred = SITE + "client/index.json"
+            try {
+                return preferred to read(preferred)
+            } catch (error: PublishedHttpStatus) {
+                if (error.status !in listOf(404, 410)) throw error
+            }
+            val legacy = SITE + "index.json"
+            return legacy to read(legacy)
+        }
+        /** The snapshot ID is always the SHA-256 of the bytes read from that same entry. */
+        internal fun catalogUpdateDetected(index: ByteArray, snapshotID: String): Boolean = sha256(index) != snapshotID
         fun sameSite(value: String): String {
             val uri = URI(SITE).resolve(value)
             require(uri.scheme == "https" && uri.host == "nanless.github.io" && (uri.port == -1 || uri.port == 443) && uri.userInfo == null && uri.query == null && uri.fragment == null && uri.rawPath.startsWith("/audio-paper-digest-blog/") && !uri.rawPath.contains('%') && !uri.rawPath.contains('\\') && !uri.rawPath.contains("//") && uri.path.split('/').none { it == ".." || it == "." }) { "资料地址超出可信站点目录" }

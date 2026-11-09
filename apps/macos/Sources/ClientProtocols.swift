@@ -4,18 +4,55 @@ import CoreFoundation
 /// Format recognition only. Callers retain their original byte, identity,
 /// signature, path and permission checks; no imported record is rewritten here.
 public enum ClientProtocols {
-    public enum FormatError: Error { case unknownFamily, unknownFormat, invalidHeader, reservedField }
-    private static let entries = try! JSONSerialization.jsonObject(with: Data(GeneratedClientProtocols.json.utf8)) as! [String: [String: Any]]
+    public enum FormatError: Error, LocalizedError {
+        case unknownFamily, unknownFormat, invalidHeader, reservedField, catalogUnavailable
+        /// Only a corrupt embedded registry is user-actionable; the other cases are caller bugs.
+        public var errorDescription: String? {
+            guard case .catalogUnavailable = self else { return nil }
+            return "客户端协议注册表无法读取；请重试当前操作，若仍失败请重新安装应用。"
+        }
+    }
+    /// Decoded once. A malformed embedded registry is reported as a recoverable error at the
+    /// operation boundary instead of trapping during app start or a background sync.
+    private static let catalog: Result<[String: [String: Any]], FormatError> = parseCatalog(GeneratedClientProtocols.json)
+    /// `nil` while the embedded registry is usable; otherwise a retryable user-facing reason.
+    public static var catalogError: String? {
+        guard case .failure = catalog else { return nil }
+        return FormatError.catalogUnavailable.localizedDescription
+    }
+    public static var isCatalogAvailable: Bool {
+        if case .success = catalog { return true }
+        return false
+    }
+    /// Exposed so a regression test can prove corrupt bytes return an error instead of trapping.
+    static func parseCatalog(_ json: String) -> Result<[String: [String: Any]], FormatError> {
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: [String: Any]] else {
+                return .failure(.catalogUnavailable)
+            }
+            return .success(object)
+        } catch {
+            return .failure(.catalogUnavailable)
+        }
+    }
+    private static func entries() throws -> [String: [String: Any]] { try catalog.get() }
+    private static func formats(_ name: String) throws -> [[String: Any]] {
+        guard let formats = try entry(name)["formats"] as? [[String: Any]] else { throw FormatError.catalogUnavailable }
+        return formats
+    }
     public static var catalogSHA256: String { GeneratedClientProtocols.catalogSHA256 }
     private static let reserved: Set<String> = ["contract", "schemaFingerprint", "version", "schemaVersion", "policyVersion", "__proto__"]
 
     private static func entry(_ name: String) throws -> [String: Any] {
-        guard let value = entries[name] else { throw FormatError.unknownFamily }
+        guard let value = try entries()[name] else { throw FormatError.unknownFamily }
         return value
     }
     private static func choices(_ raw: Any?, _ name: String) throws -> [[String:Any]] {
         guard let raw else { return [] }
-        return (try entry(name)["formats"] as! [[String:Any]]).filter { sameJSONValue($0["tag"]!,raw) }
+        return try formats(name).filter { format in
+            guard let tag = format["tag"] else { return false }
+            return sameJSONValue(tag, raw)
+        }
     }
     private static func select(_ raw: Any?,_ name:String,_ selectors:[String?]) throws->[String:Any] {
         guard selectors.count<=1 else { throw FormatError.unknownFormat }
@@ -23,7 +60,9 @@ public enum ClientProtocols {
         guard found.count==1 else { throw FormatError.unknownFormat };return found[0]
     }
     public static func contract(_ name: String) -> String {
-        precondition(entries[name] != nil, "Unknown client protocol family")
+        // A corrupt registry cannot be checked here; record()/recordHeader() still throw
+        // catalogUnavailable so no record is written without a verified header.
+        if let available = try? entries() { precondition(available[name] != nil, "Unknown client protocol family") }
         return name
     }
     public static func isContract(_ raw: Any?, _ name: String, variant: String? = nil, fingerprints:String?...) -> Bool {
@@ -31,35 +70,42 @@ public enum ClientProtocols {
         return variant == nil || found.allSatisfy { $0["variant"] as? String == variant }
     }
     public static func format(_ raw: Any?, _ name: String, _ fingerprints:String?...) throws -> String {
-        try select(raw,name,fingerprints)["variant"] as! String
+        guard let variant = try select(raw,name,fingerprints)["variant"] as? String else { throw FormatError.catalogUnavailable }
+        return variant
     }
     public static func identityDomain(_ raw: String?, _ name: String, _ fingerprints:String?...) throws -> String {
         _ = try select(raw, name,fingerprints)
         return raw!
     }
     public static func historicalContract(_ name: String, variant: String) throws -> String {
-        let found=(try entry(name)["formats"] as! [[String:Any]]).filter {$0["historical"] as? Bool == true && $0["variant"] as? String == variant}
+        let found=try formats(name).filter {$0["historical"] as? Bool == true && $0["variant"] as? String == variant}
         guard found.count==1,found[0]["fp"] is NSNull,let raw=found[0]["tag"] as? String,try choices(raw,name).count==1 else { throw FormatError.unknownFormat };return raw
     }
     public static func historicalHeader(_ name:String,variant:String,fingerprints:String?...) throws->[String:Any] {
         guard fingerprints.count<=1 else { throw FormatError.unknownFormat }
-        let found=(try entry(name)["formats"] as! [[String:Any]]).filter {$0["historical"] as? Bool == true && $0["variant"] as? String == variant && (fingerprints.isEmpty || ($0["fp"] as? String)==fingerprints[0])}
-        guard found.count==1 else { throw FormatError.unknownFormat };return found[0]["header"] as! [String:Any]
+        let found=try formats(name).filter {$0["historical"] as? Bool == true && $0["variant"] as? String == variant && (fingerprints.isEmpty || ($0["fp"] as? String)==fingerprints[0])}
+        guard found.count==1,let header=found[0]["header"] as? [String:Any] else { throw FormatError.unknownFormat };return header
     }
     public static func schemaFingerprint(_ name: String) -> String {
-        precondition(entries[name] != nil, "Unknown client protocol family")
-        return entries[name]!["schemaFingerprint"] as! String
+        guard let available = try? entries() else { return "" }
+        precondition(available[name] != nil, "Unknown client protocol family")
+        return available[name]?["schemaFingerprint"] as? String ?? ""
     }
     public static func declaredSchema(_ raw:Any?,_ name:String,_ fingerprint:String?) throws->[String:Any] {
         guard let schema=try select(raw,name,[fingerprint])["schema"] as? [String:Any] else { throw FormatError.unknownFormat }
-        return try JSONSerialization.jsonObject(with:JSONSerialization.data(withJSONObject:schema)) as! [String:Any]
+        guard let object = try JSONSerialization.jsonObject(with:JSONSerialization.data(withJSONObject:schema)) as? [String:Any] else { throw FormatError.catalogUnavailable }
+        return object
     }
     public static func recordHeader(_ raw: Any?, _ name: String, _ fingerprints:String?...) throws -> [String: Any] {
         try header(raw,name,fingerprints)
     }
     private static func header(_ raw:Any?,_ name:String,_ selectors:[String?]) throws->[String:Any] {
-        if selectors.isEmpty,raw as? String == name { return (try entry(name)["headers"] as! [String:[String:Any]])[name]! }
-        return try select(raw,name,selectors)["header"] as! [String:Any]
+        if selectors.isEmpty,raw as? String == name {
+            guard let headers = try entry(name)["headers"] as? [String:[String:Any]], let header = headers[name] else { throw FormatError.catalogUnavailable }
+            return header
+        }
+        guard let header = try select(raw,name,selectors)["header"] as? [String:Any] else { throw FormatError.catalogUnavailable }
+        return header
     }
     public static func record(_ name: String, fields: [String: Any] = [:]) throws -> [String: Any] {
         guard Set(fields.keys).isDisjoint(with: reserved) else { throw FormatError.reservedField }

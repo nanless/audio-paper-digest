@@ -32,6 +32,9 @@ for suite in ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollec
 done
 node --test "$app_root/Tests/DesktopProtocolReview.test.cjs" "$repo_root/tests/llm-declared-protocol.test.js"
 node "$app_root/Tests/LibraryPDFRevalidation.test.cjs"
+# ModelServiceTests 不在上面的 swiftc 套件循环里：它需要真实回环 HTTP，由这个 CJS 壳
+# 用 swiftc 显式编译 ModelServiceTests.swift 并 spawn 运行。下面这一行就是它的唯一执行入口，
+# 删除它等于静默跳过整个模型服务套件。
 node "$app_root/Tests/ModelWorker.test.cjs"
 node --test "$app_root/Tests/WorkerErrorPrivacy.test.cjs"
 node "$app_root/Tests/LibraryUI.test.cjs"

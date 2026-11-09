@@ -87,6 +87,28 @@ import Darwin
             try await rejects("ordinary JSON or guessed plan ID cannot grant deletion list"){_=try await storage.validateCleanupPlan(planID:UUID().uuidString)}
             let oldPlan=try await storage.cleanupPlan();try store.updateSettings(["font":19])
             try await rejects("changed real personal state invalidates issued plan"){_=try await storage.validateCleanupPlan(planID:oldPlan["planID"] as! String)}
+            // Re-downloadable caches: only the PDF named by the current pointer (and its receipt)
+            // stays; stale PDFs, their receipts and native aggregate documents are reclaimable.
+            let currentPDF=Data("%PDF-1.4 current pointer fixture".utf8),currentPDFSHA=hash(currentPDF),currentPDFPath="PublishedLibrary/pdf/"+currentPDFSHA+".pdf"
+            let stalePDF=Data("%PDF-1.4 stale cache fixture".utf8),stalePDFSHA=hash(stalePDF),stalePDFPath="PublishedLibrary/pdf/"+stalePDFSHA+".pdf"
+            try put(currentPDFPath,currentPDF);try put(stalePDFPath,stalePDF)
+            try put("PublishedLibrary/pdf-pointers/current.json",json(["sha256":currentPDFSHA,"filePath":root.appendingPathComponent(currentPDFPath).path,"sourceURL":"https://example.org/current.pdf","bytes":currentPDF.count]))
+            let currentReceiptPath="PublishedLibrary/pdf-receipts/current/"+currentPDFSHA+".json"
+            let staleReceiptPath="PublishedLibrary/pdf-receipts/stale/"+stalePDFSHA+".json"
+            let currentReceipt:[String:Any]=["sha256":currentPDFSHA,"sourceURL":"https://example.org/current.pdf","bytes":currentPDF.count]
+            let staleReceipt:[String:Any]=["sha256":stalePDFSHA,"sourceURL":"https://example.org/stale.pdf","bytes":stalePDF.count]
+            try put(currentReceiptPath,json(currentReceipt));try put(staleReceiptPath,json(staleReceipt))
+            let aggregateCache:[String:Any]=["fixture":"native aggregate cache"]
+            let aggregatePath="PublishedLibrary/aggregate-documents/aggregate-fixture/snapshot-fixture/raw-fixture/document.json"
+            try put(aggregatePath,json(aggregateCache))
+            let cachePlan=try await storage.cleanupPlan(),cacheFiles=cachePlan["files"] as! [[String:Any]],cacheCandidates=Set(cacheFiles.compactMap{$0["path"] as? String})
+            try expect(cacheCandidates.isSuperset(of:Set([stalePDFPath,staleReceiptPath,aggregatePath])),"cleanup reclaims stale PDFs, receipts and native aggregate caches")
+            try expect(!cacheCandidates.contains(currentPDFPath) && !cacheCandidates.contains(currentReceiptPath),"current pointer pins its PDF and receipt")
+            try expect(cacheCandidates.contains(orphanPath) && cacheCandidates.contains(unusedRevisionPath),"extended cleanup keeps the original image and revision candidates")
+            let cacheBytes=cacheFiles.filter{["pdf","receipts","aggregates"].contains($0["category"] as? String ?? "")}.reduce(0){$0+($1["bytes"] as? Int ?? 0)}
+            try expect(cacheBytes==stalePDF.count+(try json(staleReceipt)).count+(try json(aggregateCache)).count,"reclaimed cache byte estimate is exact")
+            let cacheChecked=try await storage.validateCleanupPlan(planID:cachePlan["planID"] as! String)
+            try expect(cacheChecked["count"] as? Int==cacheCandidates.count,"native confirmation revalidates every extended cache candidate")
             let packagePDF=root.appendingPathComponent("Offline/"+identifier+"/original.pdf"),saved=try Data(contentsOf:packagePDF)
             try Data("bad PDF".utf8).write(to:packagePDF)
             try await rejects("offline PDF corruption detected"){_=try await storage.verifyPackage(id:identifier)}

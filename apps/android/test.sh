@@ -37,4 +37,6 @@ bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseCompile
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackagedAssets.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseSignatureSchemes.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseFinalizeSigned.test.py"
+# 资产通道的 17 个负例此前只有文件、没有执行入口；这里与其它非设备检查同列。
+node --test "$app_root/AssetsChannel.test.mjs"
 exec "$app_root/build.sh" :app:testDebugUnitTest :app:lintDebug "$@"
