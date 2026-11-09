@@ -11,7 +11,7 @@
     "workspace:role": "node scripts/workspace-role.js",
     "digest:prepare": "PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh",
     "digest:api": "PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh",
-    "fetch": "node scripts/workspace-role.js exec daily -- node scripts/full-fetch.js",
+    "fetch": "node scripts/workspace-role.js exec daily -- node scripts/full-fetch.js --require-previously-fetched",
     "fetch:witness:prepare": "node scripts/workspace-role.js exec daily -- node scripts/prepare-daily-fetch-witness-recovery.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js manual/tests/*.test.js",
     "test:default": "node --test --test-concurrency=1 tests/*.test.js",
