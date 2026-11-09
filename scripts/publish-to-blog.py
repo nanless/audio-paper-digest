@@ -4901,6 +4901,11 @@ def _strip_core_summary_non_result_numerals(text):
         r'(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*',
         ' ', value,
     )
+    # 与 Node 的 stripCoreSummaryNonResultNumerals 保持同一口径：参考文献的卷、期和
+    # 页码范围是文献定位，不是测量值。双栏 PDF 抽取会把文献行粘进正文句子，
+    # 页码于是成了句内唯一数值，与指标词拼成一条并不存在的结果。
+    value = re.sub(r'\b(?:pp?\.|pages?)\s*\d+(?:\s*[–—~-]\s*\d+)?', ' ', value, flags=re.IGNORECASE)
+    value = re.sub(r'\b(?:vol|no)\.\s*\d+(?:\s*[–—~-]\s*\d+)?', ' ', value, flags=re.IGNORECASE)
     value = re.sub(
         r'(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])',
         ' ', value, flags=re.IGNORECASE,

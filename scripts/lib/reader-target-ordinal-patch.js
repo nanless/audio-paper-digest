@@ -95,10 +95,18 @@ function parseAck(raw, request = null) {
         && result.schemaFingerprint === request.schemaFingerprint.slice(0, -1)) {
         result.schemaFingerprint = request.schemaFingerprint;
     }
+    // 拒绝说明必须能指向真实缺陷：此前四种原因共用一句「invalid ACK contract」，
+    // 下一轮既不知道是头、令牌还是条数出错，也就无从修正。判定条件一条没放宽，
+    // 只把同一次拒绝写成具体原因。
+    if (!format.isWire(result)) fail('ACK contract/schemaFingerprint is not the current ordinal header');
     exact(result, [...Object.keys(format.readWireHeader(result)), 'requestToken','replacements']);
-    if (!format.isWire(result) || !TOKEN.test(result.requestToken)
-        || !Array.isArray(result.replacements) || result.replacements.length < MIN_READER_PATCH_NODES
-        || result.replacements.length > MAX_READER_PATCH_NODES) fail('invalid ACK contract');
+    if (typeof result.requestToken !== 'string' || !TOKEN.test(result.requestToken))
+        fail("ACK requestToken must be this request's 16-character lowercase hex value (received "
+            + (typeof result.requestToken === 'string' ? result.requestToken.length + ' chars' : 'non-string') + ')');
+    if (!Array.isArray(result.replacements)) fail('ACK replacements must be an array');
+    if (result.replacements.length < MIN_READER_PATCH_NODES || result.replacements.length > MAX_READER_PATCH_NODES)
+        fail('ACK must carry ' + MIN_READER_PATCH_NODES + '..' + MAX_READER_PATCH_NODES
+            + ' replacements (received ' + result.replacements.length + ')');
     for (const item of result.replacements) exact(item, ['targetOrdinal','value']);
     return result;
 }
@@ -273,7 +281,17 @@ function compileAgainst(draft,request,raw,applyOptions) {
     const replacements=ack.replacements.map(item=>{
         const n=item.targetOrdinal;if(!Number.isSafeInteger(n)||n<1||n>request.targets.length||seen.has(n))fail('unknown/repeated ordinal');seen.add(n);
         const target=request.targets[n-1],old=node(draft,target.path);
-        if(repair.hashDraft(old)!==target.oldSha256||kind(item.value)!==target.valueType)fail('stale node or replacement type mismatch');
+        // 节点被换掉（stale）与 value 类型不对（type mismatch）需要完全不同的修法：
+        // 前者要重读当前节点，后者要把值写成同类型 JSON。合成一句会让下一轮改错方向，
+        // 2026-11-09 的 2611.06074/2611.06010 就是这样把对象节点写成了 JSON 字符串却
+        // 只看到「stale node」。判定条件不变，只把两种拒绝分开报。
+        if(repair.hashDraft(old)!==target.oldSha256)
+            fail('stale node: targetOrdinal '+n+' ('+target.path+') no longer matches its oldSha256');
+        if(kind(item.value)!==target.valueType)
+            fail('replacement type mismatch: targetOrdinal '+n+' ('+target.path+') is '+target.valueType
+                +', but the ACK value is '+kind(item.value)
+                +(target.valueType==='object'&&kind(item.value)==='string'
+                    ?'; send the JSON object itself, not a string containing JSON':''));
         mapping.push({...target,newSha256:repair.hashDraft(item.value)});
         return {path:target.path,oldSha256:target.oldSha256,value:item.value};
     });

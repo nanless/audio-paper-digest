@@ -2335,6 +2335,52 @@ function resolvedDeclaredSourceQuotes(binding, sourceText, allowWhitespaceRepair
     }))];
 }
 
+// 引文绑定失败时，下一轮修复需要知道原文到底怎么写。按词重合度在全文里找
+// 最接近的整句，只作为反馈证据，不参与通过判定，也不改写引文。
+function readerClosestSourcePassage(quote, sourceText, limit = 260) {
+    const text = String(sourceText || '');
+    const value = String(quote || '').trim();
+    if (!text || value.length < 12) return '';
+    const words = new Set(value.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
+    if (words.size === 0) return '';
+    // 小数点和缩写会骗过朴素的标点切句（9.29.2% 会在 9. 处断开），
+    // 用 Intl.Segmenter 的整句切分；不可用时退回按句末标点切分。
+    const sentences = [];
+    try {
+        const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+        for (const item of segmenter.segment(text)) sentences.push(item.segment);
+    } catch (_error) {
+        for (const match of text.matchAll(/[^.!?。！？\n]+[.!?。！？]?/g)) sentences.push(match[0]);
+    }
+    let best = null;
+    for (const raw of sentences) {
+        const sentence = raw.trim();
+        if (!sentence) continue;
+        const sentenceWords = new Set(sentence.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
+        let shared = 0;
+        for (const word of words) if (sentenceWords.has(word)) shared += 1;
+        const score = shared / words.size;
+        if (!best || score > best.score) best = { score, sentence };
+    }
+    if (!best || best.score < 0.6) return '';
+    return best.sentence.length <= limit ? best.sentence : `${best.sentence.slice(0, limit - 1)}…`;
+}
+
+function readerExactQuoteFailureDetail(binding, sourceText) {
+    const invalid = (Array.isArray(binding?.sourceQuotes) ? binding.sourceQuotes : [])
+        .map((quote, quoteIndex) => ({ quote, quoteIndex }))
+        .filter(({ quote }) => !(typeof quote === 'string' && quote.length >= 12
+            && quote.length <= 4000 && String(sourceText).includes(quote)));
+    // 反馈历史上限 3000 字符；只点名前 8 项，避免一次坏稿把其他修复信息挤掉。
+    const details = invalid.slice(0, 8).map(({ quote, quoteIndex }) => {
+        const passage = readerClosestSourcePassage(quote, sourceText);
+        return `sourceQuotes[${quoteIndex}]` + (passage
+            ? ` 的原文原句是“${passage}”` : ' 在全文找不到接近的连续原句');
+    });
+    if (invalid.length > details.length) details.push(`另有 ${invalid.length - details.length} 项不是原文连续原句`);
+    return details.length ? `：${details.join('；')}` : '';
+}
+
 // PDF quotations remain a separate input channel. Only the program may turn
 // them into saved evidence, using the actual four-file source scope.
 function resolvedDeclaredPdfSourceQuotes(binding) {
@@ -2729,7 +2775,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         throw new Error('Reader source-binding v4 正文含内部绑定失败占位；必须修复证据与表格，不得把绑定失败写成原文缺失');
     }
     let boundArticle = normalizeApiReaderTablePasteArtifacts(
-        normalizeKnownReaderDuplicateRows(String(article || ''), options.arxivId)
+        normalizeKnownReaderDuplicateRows(String(article || ''), options.arxivId),
+        declaredTableBindings
     );
     const formulaOrdinals = new Set();
     const formulaBindings = declaredFormulaBindings.map((binding, index) => {
@@ -3047,7 +3094,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         }
         const { htmlQuotes: exactQuotes, pdfQuotes: sealedPdfQuoteEvidence } = quotesForTable(binding, rendered);
         if (exactQuotes.length === 0 && sealedPdfQuoteEvidence.length === 0) {
-            throw new Error(`读者文章 tableBindings[${index}] 无法确定性绑定 exact sourceQuote`);
+            throw new Error(`读者文章 tableBindings[${index}] 无法确定性绑定 exact sourceQuote`
+                + readerExactQuoteFailureDetail(binding, sourceText)
+                + '。引文必须逐字复制原文连续原句；原文双写数值（如 9.29.2%）必须原样保留，'
+                + '不能同义改写、翻译或清理成单一数值');
         }
         const sourceQuotes = exactQuotes.map((quote, quoteIndex) => {
             if (quote.length < 12 || quote.length > 4000 || !sourceText.includes(quote)) {
@@ -6487,7 +6537,7 @@ function findApiReaderTablePasteDuplication(cell) {
     return findReaderTablePasteDuplication(cell);
 }
 
-function normalizeApiReaderTablePasteArtifacts(article) {
+function normalizeApiReaderTablePasteArtifacts(article, tableBindings = []) {
     const rebuild = rows => [
         `| ${rows[0].join(' | ')} |`,
         `| ${rows[0].map(() => '---').join(' | ')} |`,
@@ -6496,10 +6546,21 @@ function normalizeApiReaderTablePasteArtifacts(article) {
     const canonicalLabel = value => String(value || '').normalize('NFKC')
         .replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
     let output = String(article || '');
-    for (const table of extractMarkdownTables(output)) {
-        const rows = [table.header, ...table.rows].map(row => row.map(cell => {
+    for (const [tablePosition, table] of extractMarkdownTables(output).entries()) {
+        // selection 编译出来的 artifact 表是原表 DOM 的逐格投影，字节已与
+        // cellBindings 的原 cell 绑定。对这些格子做“粘贴残留”清理会改写原格，
+        // 让随后的逐格校验必然失败；它们不是模型手写内容，跳过清理。
+        const binding = (Array.isArray(tableBindings) ? tableBindings : [])
+            .find(item => item?.tableIndex === tablePosition + 1);
+        const compiledCells = new Set(binding?.sourceType === 'artifact_table'
+            ? (binding.cellBindings || []).map(cell => `${cell?.renderedRow}:${cell?.renderedColumn}`)
+            : []);
+        const rows = [table.header, ...table.rows].map((row, rowIndex) => row.map((cell, columnIndex) => {
             const displayCleaned = normalizeReaderSourceDisplayArtifacts(cell);
             if (displayCleaned !== String(cell)) return displayCleaned;
+            // 编译格已经由 displayCell 恢复成原 DOM 字节；未知 LaTeX 注解是原文
+            // 本身，不是模型粘贴残留，不能再按“改写成纯文本”删除。
+            if (compiledCells.has(`${rowIndex}:${columnIndex}`)) return cell;
             if (!findApiReaderTablePasteDuplication(cell)) return cell;
             let cleaned = String(cell)
                 .replace(/±\s*\\pm\s*/g, ' ± ')
@@ -6573,14 +6634,17 @@ function validateApiReaderTablePasteDuplication(article, options = {}) {
         const rows = [table.header, ...table.rows];
         for (const [rowIndex, row] of rows.entries()) {
             for (const [columnIndex, cell] of row.entries()) {
+                const cellBindings = (binding?.cellBindings || []).filter(item => (
+                    item?.renderedRow === rowIndex && item?.renderedColumn === columnIndex
+                ));
                 const sourceTexts = binding?.sourceType === 'source_quotes'
                     ? [...(binding.sourceQuotes || []), ...(binding.sealedPdfQuoteEvidence || [])].map(item => typeof item === 'string'
                         ? item : item?.quote).filter(Boolean)
-                    : (binding?.cellBindings || []).filter(item => (
-                        item?.renderedRow === rowIndex && item?.renderedColumn === columnIndex
-                    )).map(item => item?.sourceText).filter(Boolean);
+                    : cellBindings.map(item => item?.sourceText).filter(Boolean);
                 const reason = findReaderTablePasteDuplication(cell, {
-                    header: table.header, row, rowIndex, columnIndex, sourceTexts
+                    header: table.header, row, rowIndex, columnIndex, sourceTexts,
+                    // 原表逐格绑定：这一格是 DOM 原文投影，不是模型手写内容。
+                    verifiedSourceCell: binding?.sourceType === 'artifact_table' && cellBindings.length > 0
                 });
                 if (reason) {
                     throw new Error(
@@ -8242,6 +8306,22 @@ async function withApiReaderGenerationSlot(callback) {
 
 const READER_SAVED_REQUEST_INPUT_PROOF = Symbol('reader-saved-request-input-proof');
 
+// 补丁被拒后的格式反馈。非序号路径保持原有文案不变；普通序号 ACK 是严格机器协议，
+// 被拒时额外说明三条可判定的格式要求（裸 JSON、requestToken 逐字、value 与节点同类型）。
+// 这里只给格式上下文，不授予目标、不改变任何校验，也不进入阶段指纹。
+function readerPatchRejectionPromptTail(feedback, options = {}) {
+    if (typeof feedback !== 'string' || !feedback.trim()) return '';
+    const base = `\n\n上一局部补丁拒绝诊断（仅用于修正响应格式）：\n${feedback}\n`
+        + '旧诊断中的路径、received 与 expected-current 仅解释上次拒绝，不授予修改目标。'
+        + '本次请求的当前目标清单及 draftSha256、oldSha256 才是唯一有效依据；不得照抄旧 SHA 或新增目标。';
+    if (!options.ordinal) return base;
+    return base
+        + '\n本次响应必须整段是一个裸 JSON 对象：不要 Markdown 围栏、前后说明或第二个对象。'
+        + '\nrequestToken 必须逐字复制本次请求给出的 16 位小写十六进制值。'
+        + '\n每个 value 必须与对应节点当前值同类型：对象节点直接给 JSON 对象本身，'
+        + '不能给被字符串包裹的 JSON（例如 "{\\"a\\":1}"），也不能改目标路径或 targetOrdinal。';
+}
+
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
     return withApiReaderGenerationSlot(() => generateApiReaderArticleDetailedUnlocked(
         paper, analysis, sourceEvidence, options
@@ -8377,6 +8457,14 @@ function buildApiReaderValidationFeedback(error) {
             + '若数字明明在原文表格 DOM 里以独立单元格存在、却因正文排版拼合找不到连续 quote，'
             + '在正文和来源记录都已授权时，可用 completeTable 指定完整原表，由程序生成全部逐格绑定；'
             + '也可按原有 artifact_table 协议完整绑定原表，不要坚持 source_quotes'
+        );
+    }
+    if (/无法确定性绑定 exact sourceQuote/.test(message)) {
+        fixes.push(
+            '把报错点名的每个 sourceQuotes 项替换成报错给出的原文原句，逐字连续复制，不要保留同义改写或翻译；'
+            + '原文若把同一数值写了两遍（例如 9.29.2%），引文必须原样保留双写，不能清理成 9.2%。'
+            + '引文确定后，表内每个数字和单位仍须由这些原句逐字覆盖；'
+            + '若手写摘要表无法被连续原句完整覆盖，删除该表并在正文说明，或按原表协议绑定完整原表，不要放宽数字。'
         );
     }
     if (/selection 原表身份或恢复状态非法/.test(message)) {
@@ -9920,6 +10008,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         };
         let previousDraftPromptView = previousDraft;
         const buildReaderPrompt = indexExamples => {
+            // 普通序号 ACK 被拒后必须把拒绝原因带回下一轮：这一支的提示词由
+            // renderPrompt 渲染并登记进能力集合，所以只能作为 feedback 变量进入，
+            // 不能在 renderPrompt 之后再拼接，否则诊断绑定与真实输入不再逐字一致。
+            const ordinalRejectionTail = readerPatchRejectionPromptTail(patchRejectionFeedback, { ordinal: true });
             const rendered = require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
             ? loadPrompt(conceptTermsContext.promptPath, { title: paper.title || '', arxivId: getPaperArxivId(paper),
@@ -9935,7 +10027,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     options.sourceText || '', require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.sourceQuotes) })
             : ordinalCapability ? ordinaryOrdinal.renderPrompt(ordinalCapability, {
                 feedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
-                    savedInputContinuity?.validationFeedback, ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
+                    savedInputContinuity?.validationFeedback, ordinalRejectionTail.trim(),
+                    ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
                 evidence: repairContext.evidence, mechanicalContract, naturalResourceProse })
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
@@ -9959,10 +10052,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             previousDraft: previousDraftPromptView,
             mechanicalContract
         }), naturalResourceProse);
-            return repairContext && patchRejectionFeedback && !ordinalCapability
-                ? `${rendered}\n\n上一局部补丁拒绝诊断（仅用于修正响应格式）：\n${patchRejectionFeedback}\n`
-                    + '旧诊断中的路径、received 与 expected-current 仅解释上次拒绝，不授予修改目标。'
-                    + '本次请求的当前目标清单及 draftSha256、oldSha256 才是唯一有效依据；不得照抄旧 SHA 或新增目标。'
+            return repairContext && !ordinalCapability && patchRejectionFeedback
+                ? rendered + readerPatchRejectionPromptTail(patchRejectionFeedback, { ordinal: false })
                 : rendered;
         };
         let prompt = buildReaderPrompt('');
@@ -21535,6 +21626,7 @@ module.exports = {
     mergeShortReaderFigureLead,
     removeOrphanReaderTableMarkers,
     normalizeApiReaderTablePasteArtifacts,
+    validateApiReaderTablePasteDuplication,
     separateApiReaderTableBlocks,
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
@@ -21554,6 +21646,7 @@ module.exports = {
     recoverableStaleReaderRevisionStage,
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
+    readerPatchRejectionPromptTail,
     refreshApiReaderArticleFromSource,
     finalizeDeferredDailyReaderImages,
     inspectSavedConferenceReaderCompletion,

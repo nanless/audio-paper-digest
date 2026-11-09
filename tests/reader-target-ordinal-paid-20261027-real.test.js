@@ -280,3 +280,56 @@ for(const c of fixture.cases)test('SYNTHETIC actual normal Reader loop/finalizer
  assert.equal(calls,1);console.log('ordinary normal '+c.paperId+' actual publication CLI cold and marker-strip rejection passed');
 
 });
+
+// 2026-11-09 的 2611.06074/2611.06010 把对象节点写成「JSON 字符串」后只收到
+// 「stale node or replacement type mismatch」，且该拒绝从未进入下一轮提示词，
+// 于是每次重试都重复同一格式错误。这里用同一真实 2 目标草稿驱动真实引擎循环：
+// 第 3 次响应故意给字符串化对象，第 4 次给正确对象，断言拒绝原因与实际反馈
+// 逐字进入下一次请求，且没有任何额度或来源被放宽。
+for(const c of fixture.cases.slice(0,1))test('SYNTHETIC ordinal rejection reaches the next prompt and the retry compiles',{skip:!sourceAvailable(c)&&'Original 32310 four-file source absent; pure rejection coverage remains.'},async()=>{
+ const f=setup(c),current=currentInputs.papers.find(p=>p.arxivId===c.paperId);Object.assign(f.paper,structuredClone(current));
+ let calls=0;const prompts=[];let objectTarget=null;
+ await f.scope(async()=>{
+  const details=daily.readDailyFreshSource(f.plan,f.paper),evidence=deep.buildApiReaderEvidenceContext('',details.text,details.structuredArtifacts,f.paper.arxivId,null,f.paper.apiReaderResources,false);
+  const api=require(path.join(workspace,'scripts/utils')),usageApi=require(path.join(workspace,'scripts/lib/llm-usage'));
+  const canvas=require('@napi-rs/canvas').createCanvas(32,32);const context=canvas.getContext('2d');context.fillStyle='white';context.fillRect(0,0,32,32);const png=canvas.toBuffer('image/png');
+  const promptText=messages=>(messages||[]).map(message=>typeof message.content==='string'?message.content
+   :(Array.isArray(message.content)?message.content.map(part=>typeof part==='string'?part:(part&&part.text)||'').join('\n'):'')).join('\n');
+  const options={sourceText:details.text,structuredArtifacts:details.structuredArtifacts,readerAttemptsDir:f.directory,readerMaxAttempts:4,
+   readerMaterializeFigures:async figures=>figures.map(fig=>({...fig,rawBytes:png,assetSha256:sha(png),assetBytes:png.length,assetMediaType:'image/png',mediaType:'image/png'})),
+   readerRecordDisposition:event=>usageApi.recordLlmDisposition(event,{directory:Config.FILES.llmUsageDir}),
+   readerCallModel:async(messages,tokens,requestOptions)=>{
+    calls+=1;prompts.push(promptText(messages));
+    assert.ok(requestOptions.readerTargetOrdinalCapability,'retry must stay on the ordinary ordinal branch');
+    const request=ordinal.requestContract(requestOptions.readerTargetOrdinalCapability),old=JSON.parse(response(c).rawResponse),values=new Map(old.replacements.map(row=>[row.path,row.value]));
+    objectTarget=request.targets.find(target=>target.valueType==='object');
+    assert.ok(objectTarget,'fixture keeps an object target');
+    const replacements=request.targets.map(target=>({targetOrdinal:target.targetOrdinal,
+     value:calls===1&&target.path===objectTarget.path?JSON.stringify(values.get(target.path)):values.get(target.path)}));
+    const raw=JSON.stringify({...ordinal.requestHeader(),requestToken:request.requestToken,replacements});
+    return deep.callModelWithConfig(messages,tokens,1,{endpoint:f.identity.model.endpoint,model:f.identity.model.model,key:'unused-test-no-network',apiKeys:[],temperature:requestOptions.temperature,
+     usageContext:requestOptions.usageContext,readerTargetOrdinalCapability:requestOptions.readerTargetOrdinalCapability,
+     requestFn:(url,endpoint,model,body,headers,wireOptions)=>api.requestLlmJson(url,endpoint,model,body,{}, {...wireOptions,usageDirectory:Config.FILES.llmUsageDir,transportRequestFn:async()=>({statusCode:200,body:{status:'completed',usage:{input_tokens:1,output_tokens:1,total_tokens:2},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:raw}]}]}})})});
+   }};
+  const prepared=await deep.prepareApiReaderRetryIdentity(f.paper,f.paper.analysisCheckpoint,evidence,options);
+  const oldFile=f.candidate;f.identity=prepared.identity;f.candidate=path.join(f.directory,repair.hashDraft(f.identity)+'.json');
+  const figures=[...evidence.matchAll(/^FIGURE_(\d+):\s*([^\n]*)\nFIGURE_\1_URL:\s*([^\s]+)$/gm)].map(m=>({ordinal:Number(m[1]),caption:m[2].trim(),url:m[3].trim()}));
+  const preflight=await deep.preflightReaderModelImages(figures.map(fig=>({...fig,kind:'figure',inputId:`figure:${fig.ordinal}:${sha(png)}`,rawBytes:png,assetSha256:sha(png),assetBytes:png.length,mediaType:'image/png',label:fig.url})));
+  assert.equal(preflight.rejected.length,0);
+  const imageEvidence=preflight.ready.map(i=>({inputId:i.inputId,kind:i.kind,ordinal:i.ordinal,url:i.url,sha256:i.sourceSha256,sourceSha256:i.sourceSha256,sourceBytes:i.sourceBytes,sourceWidth:i.sourceWidth,sourceHeight:i.sourceHeight,modelPayloadSha256:i.modelPayloadSha256,modelPayloadBytes:i.modelPayloadBytes,modelPayloadWidth:i.modelPayloadWidth,modelPayloadHeight:i.modelPayloadHeight,modelPayloadTransform:i.modelPayloadTransform,status:'ready'}));
+  const payload={status:'failed',draft:structuredClone(f.draft),rawDraft:JSON.stringify(f.draft),attempts:2,fullAttempts:2,transportFailures:0,noProgress:0,failureSignature:'',validationFailureStreak:0,issues:[],imageEvidence,ephemeralImageEvidence:{imageEvidence,directSupplementaryEvidence:[]}};
+  if(oldFile!==f.candidate)fs.unlinkSync(oldFile);repair.saveFailedCandidate(f.directory,f.identity,payload);
+  test.mock.method(require(path.join(workspace,'scripts/lib/direct-rewrite-analysis-context')),'directReaderCandidateCommitDeferred',()=>true);
+  const result=await deep.generateApiReaderArticleDetailed(f.paper,f.paper.analysisCheckpoint,evidence,options);
+  assert.equal(calls,2,'one rejected format response then one accepted patch');
+  assert.equal(prompts[0].includes('上一局部补丁拒绝诊断'),false,'first prompt has no earlier rejection');
+  assert.match(prompts[1],/上一局部补丁拒绝诊断（仅用于修正响应格式）/);
+  assert.match(prompts[1],new RegExp('replacement type mismatch: targetOrdinal '+objectTarget.targetOrdinal+' \\('+objectTarget.path.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\) is object, but the ACK value is string; send the JSON object itself, not a string containing JSON'));
+  assert.match(prompts[1],/本次响应必须整段是一个裸 JSON 对象/);
+  assert.match(prompts[1],/requestToken 必须逐字复制本次请求给出的 16 位小写十六进制值/);
+  assert.match(prompts[1],/对象节点直接给 JSON 对象本身，不能给被字符串包裹的 JSON/);
+  assert.equal(result.ordinalPatchCompilations.length,1);
+  assert.equal(result.attempts,4);
+  console.log('ordinary normal '+c.paperId+' ordinal rejection feedback reached the retry prompt');
+ });
+});

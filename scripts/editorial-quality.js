@@ -430,6 +430,14 @@ function findQuantitativeChineseNumerals(text) {
                 && LEXICAL_SCALE_UNITS.has(finding.match.replace(/\s+/gu, ''))) {
                 continue;
             }
+            // 「上千万条 / 近千万条 / 约千万条」是近似量级（原文 hundreds of
+            // thousands to millions），不是精确计数；换成阿拉伯数字反而会凭空
+            // 造出一个精确值。只放过紧邻近似前缀的量级词，精确的「千万条」仍拦截。
+            if (reason === 'measured_large_integer'
+                && /^[十百千万亿]/u.test(finding.match)
+                && /(?:超过|逾|上|近|约)\s*$/u.test(value.slice(0, finding.index))) {
+                continue;
+            }
             if (reason === 'mixed_magnitude'
                 && /^\s*对\s*\d/u.test(value.slice(finding.index + finding.match.length))) {
                 continue;

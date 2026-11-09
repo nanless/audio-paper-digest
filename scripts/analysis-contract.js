@@ -2429,6 +2429,12 @@ function stripCoreSummaryNonResultNumerals(text) {
         .replace(/§\s*\d+(?:\.\d+)*/g, ' ')
         .replace(/\b(?:theorem|lemma|proposition|corollary|definition|def\.?|problem|prob\.?|assumption|equation|fig(?:ure)?\.?|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
         .replace(/(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*/g, ' ')
+        // 参考文献的卷、期和页码范围是文献定位，不是测量值。双栏 PDF 抽取会把
+        // 文献行粘进正文句子，页码于是成了句内唯一数值，与正文的指标词拼成一条
+        // 假结果（2611.05637 的 “pp. 1497–1500” 与 “accuracy” 就是这样被读成
+        // 实测准确率）。只删这些定位记号，句内真正的测量值保留并照常判定。
+        .replace(/\b(?:pp?\.|pages?)\s*\d+(?:\s*[–—~-]\s*\d+)?/gi, ' ')
+        .replace(/\b(?:vol|no)\.\s*\d+(?:\s*[–—~-]\s*\d+)?/gi, ' ')
         // Calendar intervals and decades describe recording/composition history,
         // not a measured from/to improvement. Other numbers in the sentence stay.
         .replace(/\b(?:from|between)\s+(?:[12]?[0-9]|3[01])\s+(?:to|and)\s+(?:[12]?[0-9]|3[01])\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+(?:19|20)\d{2})?\b/gi, ' ')

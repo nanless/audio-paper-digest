@@ -380,6 +380,18 @@ describe('Manual v4 编辑质量的基础函数', () => {
         assert.ok(findQuantitativeChineseNumerals('阈值：三，系统训练三 GPU 小时，开销为三 mac、三 gb，评分范围为三至五等级。').length >= 5);
     });
 
+    it('近似量级「上千万/近千万/约千万」不是精确计数，精确的「千万条」仍拦截', () => {
+        // 2026-11-09 2611.05638：原文 hundreds of thousands to millions of
+        // utterances 被写成「几十万到上千万条语音」，量级词不应改写成精确数字。
+        assert.deepEqual(findQuantitativeChineseNumerals('说话人验证基准有几十万到上千万条语音。'), []);
+        assert.deepEqual(findQuantitativeChineseNumerals('基准包含近千万条语音和约千万条判断。'), []);
+        assert.deepEqual(findQuantitativeChineseNumerals('覆盖超过千万条语音。'), []);
+        assert.ok(findQuantitativeChineseNumerals('精确规模为千万条语音。')
+            .some(item => item.match === '千万条'));
+        assert.ok(findQuantitativeChineseNumerals('恰好千万条语音。')
+            .some(item => item.match === '千万条'));
+    });
+
     it('人物介绍中的一位保留白话，实验人数和位宽仍按数值检查', () => {
         assert.deepEqual(findQuantitativeChineseNumerals(
             '说话人信息以“这是一位 <gender> 性别、说 <language> 语言的说话人的录音”的形式给出。'

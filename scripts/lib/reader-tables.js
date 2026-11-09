@@ -278,7 +278,10 @@ function findReaderTablePasteDuplication(cell, context = {}) {
     if (text.includes('±') && text.includes('\\pm')) return '同一单元格同时出现 ± 与 \\pm';
     if (text.includes('×') && text.includes('\\times')) return '同一单元格同时出现 × 与 \\times';
     if (text.includes('%') && text.includes('\\%')) return '同一单元格同时出现 % 与 \\%';
-    if (/\\bf\b|\\text\{|\\mathrm|SIUnitSymbolMicro/.test(text)) {
+    // 已逐字绑定到原表 DOM 的格子，其中的 LaTeX 注解是原文本身，不是模型粘贴残留。
+    // 这类格子先由逐格校验保证与 source cell 字节一致，不能再按“应改写成纯文本”拒绝。
+    if (!context.verifiedSourceCell
+        && /\\bf\b|\\text\{|\\mathrm|SIUnitSymbolMicro/.test(text)) {
         return '单元格残留 LaTeX 命令（\\bf/\\text/\\mathrm 等），应改写成纯文本';
     }
     if (text.includes('{=}')) return '单元格残留 TeX 关系符写法 {=}，应改写成 =';
