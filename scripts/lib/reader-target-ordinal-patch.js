@@ -26,7 +26,11 @@ const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const fail = (message, scope = 'content', code = 'READER_TARGET_ORDINAL_REJECTED') => {
     const e = new Error('Reader ordinal patch refused: ' + message);
     e.code = code; if(scope==='run'){e.scope='run';e.retryable=false;} throw e; };
-function io(action){try{return action();}catch(cause){const e=new Error('Reader ordinal diagnostic failed: '+cause.message,{cause});e.code='READER_DIAGNOSTIC_FAILED';e.scope='run';e.retryable=false;throw e;}}
+function io(action){try{return action();}catch(cause){
+    // 证明断言失败（READER_TARGET_ORDINAL_REJECTED）是可判定的单篇内容问题，
+    // 不是诊断 I/O 故障；包装成 run 会把整批当运行级故障中止。
+    if(cause&&cause.code==='READER_TARGET_ORDINAL_REJECTED')throw cause;
+    const e=new Error('Reader ordinal diagnostic failed: '+cause.message,{cause});e.code='READER_DIAGNOSTIC_FAILED';e.scope='run';e.retryable=false;throw e;}}
 function safe(value, seen = new Set()) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
     if (typeof value === 'number' && Number.isFinite(value)) return;

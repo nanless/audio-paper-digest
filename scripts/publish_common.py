@@ -271,7 +271,7 @@ TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
     r'measure)(?:\b|$)|^(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?$|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
-    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)',
+    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|(?:潜|隐|表征|嵌入|特征|语义)空间)',
     flags=re.IGNORECASE,
 )
 TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
@@ -4825,7 +4825,7 @@ def _validate_experiment_table_evidence_depth(
         after = next((
             paragraph for paragraph in after_candidates
             if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 50
-            and (re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于', paragraph) or _source_backed_sample_size_boundary(paragraph, table, complete_source_text, results))
+            and (re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于|不宜|不能|不可|不应', paragraph) or _source_backed_sample_size_boundary(paragraph, table, complete_source_text, results))
         ), '')
         if not before:
             return f'实验结果第 {index} 张表前缺少与上下文衔接的具体比较问题'
@@ -4884,8 +4884,38 @@ def _validate_experiment_table_evidence_depth(
     result_has_ablation = result_has_ablation or _has_reported_experiment_phrase(
         results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
         r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
+
+def _has_source_backed_component_switch_ablation(results, source_text=''):
+    """原文写「加入/引入某组件后指标从 A 升到 B」时，保留同表两值的组件对照就算消融。
+
+    与 scripts/analysis-contract.js 的 hasSourceBackedComponentSwitchAblation 同规则：
+    句子里必须有开关动作 + 组件名 + 同一句内的数值变化，且两个数值都能在原文找到。
+    """
+    source = str(source_text or '')
+    denied = re.compile(
+        r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|建议|拟|并非|不是|没有|未|不能|不会|他人|第三方|先前(?:研究|工作)|相关工作|引用|引述|转述)')
+    switch_pattern = re.compile(
+        r'(?:加入|引入|启用|加回|关闭|冻结|去掉|移除|去除)[^。；，,\n]{0,12}?(?:分支|模块|组件|编码器|解码器|损失项?|约束|适配器|监督)')
+    change_pattern = re.compile(
+        r'从\s*([-+]?\d+(?:\.\d+)?)\s*[A-Za-z%]{0,6}\s*(?:升至|降至|变为|升到|降到)\s*([-+]?\d+(?:\.\d+)?)')
+    for sentence in re.split(r'[。；\n]', str(results or '')):
+        text = sentence.strip()
+        if not text or denied.search(text) or not switch_pattern.search(text):
+            continue
+        change = change_pattern.search(text)
+        if not change or float(change.group(1)) == float(change.group(2)):
+            continue
+        if not source:
+            return True
+        if all(re.search(r'(?<![0-9.])' + re.escape(value) + r'(?![0-9])', source)
+               for value in (change.group(1), change.group(2))):
+            return True
+    return False
+
+
     reported_reward_ablation = _has_source_backed_reward_switch_ablation(results, tables, source_text)
-    if empirical and source_has_ablation and not result_has_ablation and not reported_reward_ablation:
+    component_switch_ablation = _has_source_backed_component_switch_ablation(results, source_text)
+    if empirical and source_has_ablation and not result_has_ablation and not reported_reward_ablation and not component_switch_ablation:
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照'
     source_negative_evidence = re.sub(
         r'\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+'
@@ -4957,7 +4987,7 @@ def _validate_experiment_table_evidence_depth(
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|'
-        r'未改善|没有改善|无效|性能回落|回落至|负面|负结果|暴露短板|跨零|落后|损失|回退|'
+        r'未改善|没有改善|没有带来改善|无效|性能回落|回落至|负面|负结果|暴露短板|跨零|落后|损失|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
         results,
         re.I,
