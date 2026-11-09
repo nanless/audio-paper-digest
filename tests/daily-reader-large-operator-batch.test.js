@@ -50,3 +50,27 @@ test('大型人工收尾按完整原封存入选集计算十百分比，绝不�
     assert.throws(() => operator.largeBatchCorrectionLimit(plan, papers), /清单的内容已变化/);
     fs.writeFileSync(manifest, bytes);
 });
+
+test('用户明确授权的 PD_DAILY_CORRECTION_LIMIT 只能把名额抬高到硬上限 15', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'operator-limit-override-'));
+    const previous = Config.FILES.dailyFreshSourceRunsDir;
+    Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-runs');
+    t.after(() => {
+        Config.FILES.dailyFreshSourceRunsDir = previous;
+        delete process.env.PD_DAILY_CORRECTION_LIMIT;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    const papers = Array.from({ length: 43 }, (_, i) => ({ arxivId: `2610.${81000 + i}v1` }));
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-11-09',
+        batchId: 'synthetic-operator-limit-override', papers });
+    delete process.env.PD_DAILY_CORRECTION_LIMIT;
+    assert.equal(operator.largeBatchCorrectionLimit(plan, papers), 10);
+    process.env.PD_DAILY_CORRECTION_LIMIT = '15';
+    assert.equal(operator.largeBatchCorrectionLimit(plan, papers), 15);
+    process.env.PD_DAILY_CORRECTION_LIMIT = '12';
+    assert.equal(operator.largeBatchCorrectionLimit(plan, papers), 12);
+    for (const invalid of ['0', '16', '1.5', 'abc']) {
+        process.env.PD_DAILY_CORRECTION_LIMIT = invalid;
+        assert.throws(() => operator.largeBatchCorrectionLimit(plan, papers), /PD_DAILY_CORRECTION_LIMIT/);
+    }
+});

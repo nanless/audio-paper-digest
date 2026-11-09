@@ -135,6 +135,8 @@ function isCurrentFailedPaper(paper, plan, factFeedbacks = new Map()) {
 }
 // The extension beyond ten is only for a small tail of a complete large batch.
 // Read the original sealed manifest; a caller-selected subset cannot set N.
+// PD_DAILY_CORRECTION_LIMIT 是用户明确授权的批次级放宽：默认仍按 10% 计算，
+// 显式设置时只允许抬高到硬上限 15，不能降低默认值，也不能超过 15。
 function largeBatchCorrectionLimit(plan, papers) {
     const daily = require('./daily-fresh-source-plan');
     const original = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference(plan));
@@ -144,7 +146,13 @@ function largeBatchCorrectionLimit(plan, papers) {
         || actual.length !== expected.length || new Set(actual).size !== actual.length
         || !isDeepStrictEqual(actual.slice().sort(), expected.slice().sort()))
         throw new Error('Large operator correction requires the complete original sealed batch');
-    return Math.min(15, Math.max(10, Math.floor(expected.length / 10)));
+    const base = Math.min(15, Math.max(10, Math.floor(expected.length / 10)));
+    const raw = process.env.PD_DAILY_CORRECTION_LIMIT;
+    if (raw === undefined || raw === '') return base;
+    const override = Number(raw);
+    if (!Number.isInteger(override) || override < 1 || override > 15)
+        throw new Error('PD_DAILY_CORRECTION_LIMIT 必须是 1–15 的整数');
+    return Math.max(base, override);
 }
 // The normal entry must already have checked the complete actual plan/papers.
 // This shared observation does not authenticate a caller-supplied JSON plan

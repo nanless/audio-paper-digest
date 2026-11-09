@@ -54,6 +54,7 @@ const SCHEMA = Object.freeze([
     { name: 'PD_FILTER_BATCH_SIZE', required: false, type: 'int', min: 1 },
     { name: 'PD_BLOG_REVIEW_CONCURRENCY', required: false, type: 'int', min: 1, max: 5 },
     { name: 'PD_ANALYSIS_BATCH_MAX_ROUNDS', required: false, type: 'int', min: 1, max: 10 },
+    { name: 'PD_DAILY_CORRECTION_LIMIT', required: false, type: 'int', min: 1, max: 15, hint: '用户明确授权的日更人工修正名额，只允许抬高到硬上限 15；默认按入选数 10% 计算' },
     { name: 'PD_ANALYSIS_MAX_RETRIES', required: false, type: 'int', min: 0, max: 9 },
     { name: 'PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS', required: false, type: 'int', min: 0, max: 5 },
     { name: 'PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS', required: false, type: 'int', min: 3, max: 10 },
