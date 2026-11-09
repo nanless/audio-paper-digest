@@ -3019,7 +3019,17 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         if (binding.sourceType !== 'source_quotes' || binding.sourceTableOrdinal !== null
             || !Array.isArray(binding.cellBindings) || binding.cellBindings.length !== 0
             || !Array.isArray(binding.sourceQuotes)) {
-            throw new Error(`读者文章 tableBindings[${index}] 正文 quote 绑定结构非法`);
+            // 结构错误必须点名具体字段，否则修复轮只能看到“结构非法”而无法定位。
+            const detail = binding.sourceType !== 'source_quotes'
+                ? `sourceType=${JSON.stringify(binding.sourceType)}，source_quotes 只允许该模式`
+                : binding.sourceTableOrdinal !== null
+                    ? `sourceTableOrdinal=${JSON.stringify(binding.sourceTableOrdinal)}，source_quotes 必须为 null`
+                    : !Array.isArray(binding.cellBindings)
+                        ? 'cellBindings 必须是数组'
+                        : binding.cellBindings.length !== 0
+                            ? `cellBindings 必须是空数组（收到 ${binding.cellBindings.length} 项）`
+                            : 'sourceQuotes 必须是数组';
+            throw new Error(`读者文章 tableBindings[${index}] 正文 quote 绑定结构非法（${detail}）`);
         }
         const validDeclaredQuotes = resolvedDeclaredSourceQuotes(
             binding, sourceText, options.allowDeterministicQuoteRepair === true
@@ -4920,7 +4930,9 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         if (/(?:不能(?:据此)?直接写成|未能(?:直接|可靠|独立|明确)?确认)[^。！？!?；;，,]{0,48}$/u
             .test(currentAssertionPrefix)) return true;
         if (/(?:无法确认|尚无法确认|未确认|未证明|未报告|不证明|不涉及|不讨论|不等于|不代表|不要(?:把|将|默认|声称|写|表示|推断|断言)|不能(?:据此)?(?:確認|确认|认定|推断|断言|宣告|说)|不能仅凭[^。！？!?；;，,]{1,28}就(?:确认|认定|推断|断言))[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
-        if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|绑定|验证)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
+        // 「原文也没有声称代码模型数据已开源」是闭合否定：否定动词后可以接不带
+        // 分隔符的资源名词串（代码模型数据），不构成作者当前的开放声明。
+        if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
         if (/需要补(?:充)?(?:的)?(?:验证|检查|步骤)(?:是|包括)?[^。！？!?；;，,]{0,36}$/.test(prefix)) return true;
         if (/(?:先|再|应|需)(?:单独|分别|实际)?(?:验证|核对|确认)[^。！？!?；;，,]{0,16}$/.test(prefix)) return true;
         if (/属于第三方[^。！？!?；;，,]{0,16}$/.test(prefix) && availableTypes.has('third_party')) return true;
@@ -4931,6 +4943,15 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             && !/(?:本文|本论文|作者团队)[^。！？!?；;]{0,32}(?:数据集|语料库)[^。！？!?；;]{0,16}(?:已|现已|已经)(?:公开|发布|开放)/.test(segment)) return true;
         if (type === 'dataset' && /全量可用下(?:论文)?(?:报告|评测|测试)/.test(segment)) return true;
         return false;
+    };
+    // 「将在同行评审发表后存档于公开仓库」是计划中的存档动作，不是当前可达声明。
+    // 只有明确的将来时前缀才豁免；已完成或现在时的存档/发布仍按原规则核验。
+    const isFutureResourceArchivePlan = (segment, matchIndex) => {
+        const prefix = segment.slice(Math.max(0, matchIndex - 64), matchIndex);
+        if (/(?:已经|现已|目前已|当前已)[^。！？!?；;，,]{0,16}$/.test(prefix)
+            || /(?:已经|现已|目前已|当前已|已)[^。！？!?；;，,]{0,10}(?:存档|存放|保存|上传|托管|发布|提供|开源|公开)(?:于|在|到|至)?$/.test(prefix)) return false;
+        return /(?<!已)(?<!经)(?:将(?:会)?|拟|计划|预计|打算|日后|以后|后续|发表后|发表之后|录用后|接收后|见刊后|出版后|上线后)[^。！？!?；;，,]{0,56}(?:存档|存放|保存|上传|托管|发布|提供|放到|放在|提交)(?:于|在|到|至)$/.test(prefix)
+            || /(?<!已)(?<!经)将(?:会)?(?:在|于)$/.test(prefix);
     };
     const isReportedReleaseWithCurrentQualification = (value, type, matchIndex, matchEnd) => {
         const sourceNouns = {
@@ -5521,6 +5542,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
                 || isBoundedResourceDeclarationDenial(value, match.index, match.index + match[0].length)
                 || isScopedResourceNonClaim(segment, localMatchIndex, type)
+                || isFutureResourceArchivePlan(segment, localMatchIndex)
                 || isReportedReleaseWithCurrentQualification(value, type, match.index, match.index + match[0].length)
                 || isSourceBackedDependencyUseOrPriorDatasetAccess(value, type, match.index)
                 || isSourceBackedBaselineUsage(value, type, match.index)
@@ -8412,6 +8434,8 @@ function buildApiReaderValidationFeedback(error) {
         fixes.push(
             '先核对报错单元格对应的原始 DOM 或连续原文；裸数字重复不能证明它是粘贴错误，不得猜测半值。'
             + '只有明确 TeX 语法证明是同一数值及同一单位的显示副本时才删除副本；合法完整数字原样保留。'
+            + '若原表 DOM 单元格本身是 MathJax 双写（例如 0.000.00），而本次证据里的封存 PDF 原文对同一格只给出单一值 0.00，'
+            + '正文表按封存 PDF 的单一真实值写一次，双写形式只保留在引文里，并用该 PDF 原文作来源；不能把双写形式抄进正文表。'
             + 'artifact_table 会按 cellBindings 从封存 DOM 恢复每格；仅修改正文显示或继续绑定同一裸双写原格，不能消除这个错误。'
             + '若本轮同时授权该 tableBindings 项及承载表格的小节正文，可按给出的完整来源改选同论文其他合法原表或原行列，并同步绑定与正文解释；'
             + '必须保留全部正确事实、数字单位、结果对比、现有表数和必要宽列。不能删掉结果、改数字或只留无关配置表来避开检查。'
@@ -8424,6 +8448,24 @@ function buildApiReaderValidationFeedback(error) {
             + '生成证据里的旧_SELECTION说明仅保留原输入兼容视图；本轮以新来源诊断中的sourceTableEligibility、usableSourceTables及其完整表能力为准，不能据旧说明重复复制坏格。'
             + '改选证据里具有合法完整表或合法选区能力的原表；或用连续逐字原文完整覆盖所有数字、单位与比较条件，改为source_quotes实际Markdown。'
             + '保留正确事实、结果对比、现有表数与必要宽列；来源诊断只提供证据，不能自行扩大授权、猜半值或删除结果。');
+    }
+    if (/读者文章格式头未登记或字段混用/.test(message)) {
+        const header = require('./lib/protocol-codec').recordHeader('reader-draft', 'reader-draft');
+        fixes.push('顶层格式头必须逐字输出 ' + JSON.stringify(header)
+            + '；不要输出 version、schemaVersion、policyVersion 或其他旧版头字段。'
+            + '上一版草稿的格式头若无效就不要沿用它；除格式头外仍须按当前完整文章要求输出全部字段，'
+            + '不能只改头部而沿用旧稿的无效结构');
+    }
+    if (/PDF quotation is missing or ambiguous|pdf_quote_not_unique|pdf_quote_length_invalid|pdfSourceQuotes/.test(message)) {
+        fixes.push('pdfSourceQuotes 只能逐字复制本次证据里封存 PDF 的原文字符串（只合并空白）；'
+            + '本次没有给出该 PDF 原文时，删除 pdfSourceQuotes，只保留 HTML 全文的 sourceQuotes。'
+            + '不能把 HTML 全文里的重复数字（同一数值出现两遍）、换行连字符、TeX 残留改写后当作 PDF 引文，'
+            + '也不能改标点、去连字符或猜值；报错指出的数组项必须整条替换或删除');
+    }
+    if (/正文 quote 绑定结构非法|source_quotes 结构非法/.test(message)) {
+        fixes.push('source_quotes 绑定的 sourceTableOrdinal 必须为 null，cellBindings 必须为 []，正文直接写 Markdown 表；'
+            + '原表数值只以封存 PDF 连续原文覆盖时，把该原文放进 pdfSourceQuotes 并把 sourceTableOrdinal 设为 null，'
+            + '不能同时保留原表序号；不要用把整张 DOM 表拍平成的长串冒充连续原句');
     }
     if (/中文字数必须/.test(message)) {
         fixes.push(
@@ -9123,6 +9165,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let recovered = null;
     let readerRecoveryRevisions = [];
     let ordinalPatchCompilations = [];
+    // 一次非序号补丁改写基线后，旧付费序号链不再派生最终正文；这里保留它作为
+    // 阶段历史，绝不把它挂成完成证明。
+    let supersededOrdinalPatchCompilations = null;
     const sectionGroupCompilations = [];
     let candidate = null;
     let draftOrderMappings = [];
@@ -9440,6 +9485,27 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         : recovered?.draft ? structuredClone(recovered.draft) : null;
     for (const record of ordinalPatchCompilations) require('./lib/reader-target-ordinal-patch').replay({
         paper, identity: record.identity, directory: candidateDirectory, requestId: record.requestId, pins: record.pins });
+    // 保存候选的序号链只有在其最后一笔付费编译仍派生当前草稿时才能作为完成证明。
+    // 之后若有一次非序号补丁改写基线（例如原子表格追加），链就不再派生正文；此时
+    // 由模块按内容级可判定错误拒绝挂载，这里把链登记为被接替历史，按无序号完成继续，
+    // 既不伪造完成证明，也不让整批因单篇证明缺失中止。
+    const attachSavedOrdinalChain = (result, normalization) => {
+        if (!ordinalPatchCompilations.length) return result;
+        try {
+            require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
+                paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations,
+                activeCandidateFile: operatorCorrection?.proof?.originalCandidateFile
+            }, result, normalization);
+        } catch (error) {
+            if (error?.code !== 'READER_ORDINAL_ORIGIN_MISMATCH' || error?.scope === 'run') throw error;
+            supersededOrdinalPatchCompilations = structuredClone(ordinalPatchCompilations);
+            ordinalPatchCompilations = [];
+            delete result.ordinalPatchCompilations;
+            result.supersededOrdinalPatchCompilations = structuredClone(supersededOrdinalPatchCompilations);
+            console.log('    [deep] ℹ️  保存候选的序号链已不再派生当前正文，登记为被接替历史，按无序号完成继续');
+        }
+        return result;
+    };
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
@@ -9550,10 +9616,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 providerImageExclusions, resumedCandidate: true, draftOrderMappings, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 ...(operatorCorrection ? {operatorCorrectionProof:operatorCorrection.proof} : {}),
                 ...(recovered?.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: recovered.resolvedReaderCandidateReplayProof } : {}) };
-            if (ordinalPatchCompilations.length) require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
-                paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations,
-                activeCandidateFile: operatorCorrection?.proof?.originalCandidateFile
-            }, result, { issues: currentIssues, pixelFigureOrdinals });
+            attachSavedOrdinalChain(result, { issues: currentIssues, pixelFigureOrdinals });
             const retiredCandidate = operatorCorrection || recovered?.resolvedReaderCandidateReplayProof ? null : deferOrRetireReaderCandidate(
                 result, repair, candidateDirectory, identity
             );
@@ -9646,10 +9709,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 const result = { ...parsed, ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}), ...contentModeFields, attempts: completedAttempts,
                     imageEvidence, modelImagePreflightEvidenceSha256, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                     providerImageExclusions, resumedCandidate: true, draftOrderMappings };
-                if (ordinalPatchCompilations.length) require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
-                    paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations,
-                    activeCandidateFile: operatorCorrection?.proof?.originalCandidateFile
-                }, result, { issues: currentIssues, pixelFigureOrdinals });
+                attachSavedOrdinalChain(result, { issues: currentIssues, pixelFigureOrdinals });
                 const retiredCandidate = deferOrRetireReaderCandidate(
                     result, repair, candidateDirectory, identity
                 );
@@ -10214,6 +10274,15 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             normalizeCandidate();
             if (candidate) raw = JSON.stringify(candidate);
             const parsed = parseCandidate(raw);
+            // 本次被接受的若是一次非序号补丁（原子操作/元数据/局部修订），它改写了
+            // 草稿基线：之前付费的序号链不再派生这份正文。保留成被接替历史，结果
+            // 不再携带 ordinalPatchCompilations，finalize 也就不会去挂一个无法
+            // 冷核重放的完成证明（sealCompletion 只认真正的 origin）。
+            if (ordinalPatchCompilations.length && !ordinalCapability) {
+                supersededOrdinalPatchCompilations = structuredClone(ordinalPatchCompilations);
+                ordinalPatchCompilations = [];
+                console.log('    [deep] ℹ️  本次非序号补丁改写正文基线，旧序号编译链登记为被接替历史');
+            }
             if (metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND) {
                 const captured = require('./lib/llm-usage').withPersistedLlmUsageRecords(() =>
                     recordReaderDisposition({ ...dispositionBase, disposition: 'accepted', responseText: originalPaidResponse }));
@@ -10232,6 +10301,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 providerImageExclusions,
                 repairProtocol: repair.candidateEnvelopeHeader(),
                 draftOrderMappings, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                ...(supersededOrdinalPatchCompilations ? { supersededOrdinalPatchCompilations } : {}),
                 ...(sectionGroupCompilations.length ? { sectionGroupCompilations } : {}),
                 fullAttempts,
                 transportFailures,
@@ -10241,7 +10311,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const acceptedRecoveryPayload = {
                 ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}),
                 status: 'failed', draft: candidate, rawDraft: JSON.stringify(candidate),
-                draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: [],
+                draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                ...(supersededOrdinalPatchCompilations ? { supersededOrdinalPatchCompilations } : {}), issues: [],
                 attempts: attempt, fullAttempts, noProgress: 0, failureSignature: '', imageEvidence,
                 providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
@@ -11170,6 +11241,13 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     }
     if (generated.metadataRecoveryProof) require('./lib/reader-request-diagnostics')
         .sealReaderVersionMetadataCompletion(paper, generated.metadataRecoveryProof);
+    // 非序号补丁改写基线后，旧序号链只作阶段历史保留；本阶段不声明 ordinal 合同，
+    // 也不写完成索引（没有可冷核重放的完成证明）。历史必须在完成快照之前写入，
+    // 否则之后补的字段会让已封存 stage 快照与当前 stage 不一致。
+    if (readerResult.supersededOrdinalPatchCompilations?.length) {
+        require('./lib/reader-target-ordinal-patch').recordSupersededOrdinalChain(
+            manifest.stages.apiReaderArticle, readerResult.supersededOrdinalPatchCompilations);
+    }
     if (readerResult.ordinalPatchCompilations?.length
         || (require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance)
             && previousOrdinalProof)) {
@@ -19531,6 +19609,13 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 } : {}),
                 ...apiReaderOperatorExecution(readerResult.operatorCorrectionProof)
             });
+            // 非序号补丁改写基线后，旧序号链只作阶段历史保留；本阶段不声明 ordinal
+            // 合同，也不写完成索引（没有可冷核重放的完成证明）。历史必须在完成快照
+            // 之前写入，否则之后补的字段会让已封存 stage 快照与当前 stage 不一致。
+            if (readerResult.supersededOrdinalPatchCompilations?.length) {
+                require('./lib/reader-target-ordinal-patch').recordSupersededOrdinalChain(
+                    analysisManifest.stages.apiReaderArticle, readerResult.supersededOrdinalPatchCompilations);
+            }
             if (readerResult.ordinalPatchCompilations?.length) {
                 // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
                 // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。

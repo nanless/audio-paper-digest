@@ -121,7 +121,12 @@ function evidenceForQuotes(quotes) {
     if (!active) throw new Error('PDF quotation requires the actual verified source scope');
     const response = deriveBundle(active.expectation, quotes, null, active.header);
     if (!isDeepStrictEqual(response.document, active.document)) throw new Error('PDF quotation text changed inside source scope');
-    if (response.results.some(r => !r.eligible)) throw new Error('PDF quotation is missing or ambiguous: ' + response.results.filter(r => !r.eligible).map(r => r.reason).join('; '));
+    // 逐项点名失败位置与原因：修复轮必须知道是第几条、缺在 PDF 还是出现多次，
+    // 否则只能猜着改整条绑定。
+    const failed = response.results.map((result, index) => ({ result, index }))
+        .filter(item => !item.result.eligible);
+    if (failed.length) throw new Error('PDF quotation is missing or ambiguous: '
+        + failed.map(item => `[${item.index}] ${item.result.reason}`).join('; '));
     return response.results.map(r => structuredClone(r.evidence));
 }
 function quoteEvidence(quote) { return evidenceForQuotes([quote])[0]; }

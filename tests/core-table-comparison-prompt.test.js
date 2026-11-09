@@ -19,7 +19,7 @@ const oldPath = 'prompts/core-summary-repair-v6.md';
 const oldSha = '7ec79cf1d922655503ba2cd04564afcc1cd3bb14ad8603a8c9db0afed8c22fb6';
 const oldBlob = 'bf06c408a2cb52848690121d73d08405421889e1';
 
-test('核心v7只纠正表格比较的取证说明，保留原首围栏其余字节及输出权限', () => {
+test('核心摘要提示词只按登记的两处差异修改：表格比较取证说明与方法链衔接', () => {
     const old = evidence.readPromptEvidenceBytes(oldPath, { expectedSha256: oldSha });
     assert.equal(sha(old), oldSha);
     assert.deepEqual(old, execFileSync('git', ['cat-file', 'blob', oldBlob], { cwd: root }));
@@ -31,7 +31,14 @@ test('核心v7只纠正表格比较的取证说明，保留原首围栏其余字
     const oldParagraph = before.split('\n\n').find(p => p.startsWith('两个数值及各自单位'));
     const newParagraph = after.split('\n\n').find(p => p.startsWith('两个数值及各自单位'));
     assert.ok(oldParagraph && newParagraph);
-    assert.equal(before.replace(oldParagraph, newParagraph), after);
+    // 2026-11-09：方法链要求写成可执行顺序词与产物交接（2611.06345 真实失败）。
+    const oldMethodChain = '方法说明包含 2–4 个步骤，写清各步的职责，以及前一步的输出怎样进入下一步。';
+    const newMethodChain = '方法说明包含 2–4 个步骤，用“先”“再”“最后”这类顺序词把步骤串起来，'
+        + '写清各步的职责，以及前一步的输出怎样进入下一步：用“提取”“输出”“送入”这类词写出产物的具体名称，'
+        + '并说明它被哪一步接收、用来做什么。';
+    assert.ok(before.includes(oldMethodChain));
+    assert.ok(after.includes(newMethodChain));
+    assert.equal(before.replace(oldParagraph, newParagraph).replace(oldMethodChain, newMethodChain), after);
     assert.match(newParagraph, /同一原表中明确可比的记录/);
     assert.match(newParagraph, /不同方法行/);
     assert.match(newParagraph, /除被比较因素外其余评测条件一致/);

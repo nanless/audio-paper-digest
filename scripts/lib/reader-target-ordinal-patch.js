@@ -20,8 +20,12 @@ const SHA = /^[a-f0-9]{64}$/, TOKEN = /^[a-f0-9]{16}$/, ID = /^[a-f0-9]{8}-[a-f0
 const caps = new WeakMap();
 const originSymbol=Symbol('ordinary-reader-ordinal-origin');
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-const fail = (message, scope = 'content') => { const e = new Error('Reader ordinal patch refused: ' + message);
-    e.code = 'READER_TARGET_ORDINAL_REJECTED'; if(scope==='run'){e.scope='run';e.retryable=false;} throw e; };
+// 证明失败分两种：真正的运行级完整性问题（scope=run，整批停止）和可判定的
+// 单篇证明缺失（scope=content，论文按普通内容失败继续）。完成来源缺失/不一致
+// 属于后者：它只说明这一篇拿不出冷核可重放的证明，不能把整批当运行故障中止。
+const fail = (message, scope = 'content', code = 'READER_TARGET_ORDINAL_REJECTED') => {
+    const e = new Error('Reader ordinal patch refused: ' + message);
+    e.code = code; if(scope==='run'){e.scope='run';e.retryable=false;} throw e; };
 function io(action){try{return action();}catch(cause){const e=new Error('Reader ordinal diagnostic failed: '+cause.message,{cause});e.code='READER_DIAGNOSTIC_FAILED';e.scope='run';e.retryable=false;throw e;}}
 function safe(value, seen = new Set()) {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
@@ -50,6 +54,11 @@ function exact(value, keys) {
 // ordinal), including escaped spellings of the targetOrdinal key.
 function parseAck(raw, request = null) {
     if (typeof raw !== 'string' || Buffer.byteLength(raw) > 16 * 1024 * 1024) fail('response must be bounded raw JSON');
+    // 普通序号 ACK 是严格机器协议：整段必须就是 JSON 对象本身。共享 strictJson 会
+    // 剥离单层 Markdown 围栏以容纳其它模型输出，但这里不接受任何包装（围栏、
+    // 前后说明或第二个对象），否则令牌行走会把包装当成无意义字节而放行。
+    const bare = raw.trim();
+    if (!bare.startsWith('{') || !bare.endsWith('}')) fail('response must be bare JSON without a wrapper');
     const result = strictJson(Buffer.from(raw), CONTRACT); safe(result);
     const tokens = [...raw.matchAll(/"(?:\\[\s\S]|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,]/g)].map(m => m[0]);
     let at = 0;
@@ -396,9 +405,29 @@ function attachSavedOrigin({paper,identity,directory,draft,records,activeCandida
     const samePaper=current&&canonical(current.envelope.identity?.paperId)===canonical(paper.arxivId);
     if(!current||!samePaper||!isDeepStrictEqual(current.envelope.payload.draft,draft)
         ||!isDeepStrictEqual(current.envelope.payload.ordinalPatchCompilations,records)||!records.length)fail('saved origin is not active candidate','run');
-    for(const record of records)replay({paper,identity:record.identity,directory,requestId:record.requestId,pins:record.pins});
+    const source=savedSourceScope(paper,identity,directory);
+    let last=null;
+    for(const record of records)last=replay({paper,identity:record.identity,directory,requestId:record.requestId,pins:record.pins});
+    // 保存的链只有在其最后一笔付费编译仍然派生当前草稿时才是这份正文的证明。
+    // 之后若有一次非序号补丁改写了基线，链就不再派生正文；此时若仍挂 origin，
+    // seal 出来的完成记录无法通过冷核重放（normalize(last.after) 已不是该草稿）。
+    // 按内容级可判定错误拒绝，由调用方把链登记为被接替历史，不伪造完成证明。
+    if(!completionDerivesDraft(last.after,draft,normalization,paper,source))
+        fail('saved ordinal chain does not derive the active draft','content','READER_ORDINAL_ORIGIN_MISMATCH');
     const capability=Object.freeze({});caps.set(capability,{paper,identity:structuredClone(identity),directory,completionOnly:true});
     Object.defineProperty(result,originSymbol,{enumerable:true,value:{capability,records:structuredClone(records),normalization:structuredClone(normalization)}});return result;
+}
+// 冷核重放（replayNormalCompletion）用保存的 normalization 快照归一化最后一笔
+// 编译的 afterDraft，再整篇解析成正文。这里用同一关系在挂载 origin 前先算一遍，
+// 避免把“链已不派生当前草稿”的结果挂成可完成。
+function completionDerivesDraft(after,draft,normalization,paper,source){
+    if(!normalization||!Array.isArray(normalization.issues)||!Array.isArray(normalization.pixelFigureOrdinals))
+        fail('completion normalization snapshot missing','content','READER_ORDINAL_ORIGIN_MISMATCH');
+    const normalized={};
+    require('../deep-analyzer').normalizeApiReaderRecoveryDraftForSource(structuredClone(after),normalization.issues,{
+        paperId:paper.arxivId||canonical(paper),sourceText:source.text,structuredArtifacts:source.structuredArtifacts,
+        pixelFigureOrdinals:normalization.pixelFigureOrdinals,draftOrderMappings:[]},normalized);
+    return isDeepStrictEqual(normalized.draft,draft);
 }
 function completionDirectory(directory,create=false){
     const dir=path.join(directory,'ordinal-completions');
@@ -414,9 +443,19 @@ function completionFiles(dir,paper){
     return fs.readdirSync(dir).filter(name=>name.startsWith(id+'-')&&/^\d{4}\.\d{4,5}-\d{8}\.json$/.test(name)).sort();
 }
 function stageCore(stage){return Object.fromEntries(Object.entries(stage||{}).filter(([key])=>key!=='ordinalCompletionProof'));}
-function sealCompletion(paper,result){
+// 完成证明只承认同一 result 对象上、由本进程实际编译/封签的能力挂载的 origin，
+// 且 origin 快照必须与最终数组逐字一致。两种失败分开报：没有 origin（本次内存
+// 完成/恢复/人工修正都没有真正绑定）与快照后数组被追加（origin 已被改写）。
+// 两者都是可判定的单篇证明缺失，按内容级失败继续，不把整批当运行故障中止。
+function completionOrigin(result){
     const origin=result?.[originSymbol],state=origin&&caps.get(origin.capability);
-    if(!state||!isDeepStrictEqual(origin.records,result.ordinalPatchCompilations))fail('normal in-memory completion origin missing','run');
+    if(!state)fail('normal in-memory completion origin missing','content','READER_ORDINAL_ORIGIN_MISSING');
+    if(!isDeepStrictEqual(origin.records,result.ordinalPatchCompilations))
+        fail('completion origin no longer matches the final compilations','content','READER_ORDINAL_ORIGIN_MISMATCH');
+    return{origin,state};
+}
+function sealCompletion(paper,result){
+    const{origin,state}=completionOrigin(result);
     sourceScope(paper,state.identity,state.directory);
     const stage=paper.analysisManifest?.stages?.apiReaderArticle;
     if(stage?.status!=='complete'||paper.apiReaderArticle!==result.article||!isDeepStrictEqual(paper.apiReaderPlan,result.plan)
@@ -440,6 +479,24 @@ function isCombinedReaderFinalRejection(paper) {
         && paper.latestAnalysisAttemptErrorCode === null
         && paper.latestAnalysisAttemptErrorScope === null
         && paper.latestAnalysisAttemptRetryable === true;
+}
+
+const SUPERSEDED_ORDINAL_CHAIN_REASON = 'non-ordinal-repair-supersedes-ordinal-chain';
+// 一次非序号补丁（原子操作/元数据/局部修订/全文重生成）改写了草稿基线后，旧的
+// 付费序号链不再派生最终正文。它仍是真实付费历史，但不能再作为完成证明；把链
+// 原样登记成阶段历史，阶段不写 ordinalPatchContract，也不写完成索引。
+function recordSupersededOrdinalChain(stage, compilations) {
+    if (!stage || !Array.isArray(compilations) || !compilations.length) return false;
+    // 人工修正已有自己的接替历史，不能被本次自动接替覆盖。
+    if (stage.ordinalPatchHistory?.reason === 'operator-correction-supersedes-ordinal-completion') return false;
+    stage.ordinalPatchHistory = {
+        ...require('./protocol-codec').recordHeader('reader-ordinal-history', 'reader-ordinal-history'),
+        reason: SUPERSEDED_ORDINAL_CHAIN_REASON,
+        compilations: structuredClone(compilations),
+        previousCompletionProof: null,
+        previousStage: null
+    };
+    return true;
 }
 
 function clearSupersededCompletionMarker(paper) {
@@ -861,4 +918,5 @@ function hasReplayedArchivedSignedFactRevision(paper) {
 }
 module.exports={isCombinedReaderFinalRejection,clearSupersededCompletionMarker,recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
-    verifiedSupersededCompletionPointer,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
+    verifiedSupersededCompletionPointer,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion,
+    recordSupersededOrdinalChain,SUPERSEDED_ORDINAL_CHAIN_REASON};

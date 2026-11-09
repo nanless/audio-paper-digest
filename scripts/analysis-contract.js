@@ -253,7 +253,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (/^推理窗长$/u.test(normalized)) return true;
@@ -991,6 +991,27 @@ function hasSourceBackedPresenceComparison(results, tables, sourceText) {
             && !denied.test((sourceLines[index - 1] || '').slice(-300) + '\n' + line + '\n' + (sourceLines[index + 1] || '').slice(0, 400))
             && /\bwithout\b/iu.test(line) && values.every(value =>
                 new RegExp(`(?<![\\d.])${value.replace('.', '\\.')}`, 'u').test(line)))) return true;
+    }
+    return false;
+}
+
+// 组件开关对照（"加入分支后 SI-SDRi 从 10.47 dB 升至 11.84 dB""冻结唇编码器时
+// 加入分支没有带来改善"）同样是消融，即使行文没有出现"消融"二字，也不套用
+// "无X时…有X后…"的固定句式。要求同一句里同时出现开关动作、组件名词和带数值的
+// 前后变化，且两个数值都能在原文里找到；假设、未来工作、他人转述都不算。
+function hasSourceBackedComponentSwitchAblation(results, sourceText = '') {
+    const source = String(sourceText || '');
+    const denied = /(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|建议|拟|并非|不是|没有|未|不能|不会|他人|第三方|先前(?:研究|工作)|相关工作|引用|引述|转述)/u;
+    const switchPattern = /(?:加入|引入|启用|加回|关闭|冻结|去掉|移除|去除)[^。；，,\n]{0,12}?(?:分支|模块|组件|编码器|解码器|损失项?|约束|适配器|监督)/u;
+    const changePattern = /从\s*([-+]?\d+(?:\.\d+)?)\s*[A-Za-z%]{0,6}\s*(?:升至|降至|变为|升到|降到)\s*([-+]?\d+(?:\.\d+)?)/u;
+    for (const sentence of String(results || '').split(/[。；\n]/u)) {
+        const text = sentence.trim();
+        if (!text || denied.test(text) || !switchPattern.test(text)) continue;
+        const change = changePattern.exec(text);
+        if (!change || Number(change[1]) === Number(change[2])) continue;
+        if (!source) return true;
+        const present = value => new RegExp(`(?<![0-9.])${value.replace('.', '\\.')}(?![0-9])`, 'u').test(source);
+        if (present(change[1]) && present(change[2])) return true;
     }
     return false;
 }
@@ -1970,7 +1991,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
             }
         }
         const comparisonPattern = /(?:比较|对比|基线|对照|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些)/;
-        const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于)/;
+        const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于|不宜(?:直接)?(?:解释|推广|视为|当作)|不能(?:直接)?(?:解释|推广|视为)|不可(?:直接)?(?:解释|推广|视为)|不应(?:直接)?(?:解释|推广|视为))/;
         const before = resultLines.slice(0, table.startLine).join('\n').trim()
             .split(/\n\s*\n/).filter(Boolean).slice(-5).reverse()
             .find(paragraph => paragraph.replace(/[*_`#>\s]/g, '').length >= 20
@@ -2008,6 +2029,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedSettingVariantAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedZeroCorrectionAblation(results, sourceAblationEvidence)
+        || hasSourceBackedComponentSwitchAblation(results, sourceAblationEvidence)
         // 原文的全因子试点比较三项训练选择，结果表用“代替”而非“消融”。
         // 同时核对原文与同一结果表的各项名称、设置和对应效应。
         || (/eleven pilot runs[\s\S]{0,700}factorial[\s\S]{0,400}BPE-dropout/i.test(String(options.sourceText || ''))
@@ -2033,6 +2055,10 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     // "does not degrade" 源性能；否则光凭 `degrad` 这个词会把意思读反。
     const sourceNegativeEvidence = observedSourceNegativeEvidence(sourceText).replace(
         /\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)/gi,
+        ' '
+    ).replace(
+        // "平台拒绝计为攻击失败"只是评测口径定义，不是论文报告的退化或失败结果。
+        /\b(?:count(?:s|ed|ing)?|treated|recorded|considered|scored|classif(?:y|ied))\s+as\s+(?:an?\s+)?(?:[A-Za-z-]+\s+){0,3}fail(?:ure|ures)\b/gi,
         ' '
     );
     const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|负(?:面)?结果|性能回落|回落至|降幅|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceNegativeEvidence)
@@ -2082,7 +2108,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || explicitMetricDecline
         || reportedLowerScore
         || reportedBiasRegression
-        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
+        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     // 2026-11-06 曾以“先完成发布”为由取消这条阻断，但替换进来的回调没有任何调用方，
     // 也没有降级或审查记录，等于静默放行只挑正面结果的写法；发布端的同名规则和本文件的
@@ -3510,6 +3536,33 @@ function hasSourceBoundDnsMosBoundary(summary, sourceText) {
             /真实录音(?:类)?(?:上)?[，,]?(?:零前视StreamSE的)?(?:DNSMOS[ \t]+)?SIG(?:和|与)(?:DNSMOS[ \t]+)?OVL仍落后于SELM(?![A-Za-z0-9_.-])/u);
 }
 
+// "在24个新地点…的登记测试中" / "在16个源位置的方位角估计中"：带计数的评测范围
+// 本身就是具体设置。要求数量、量词、评测动作与范围标记同时出现；假设、未来工作、
+// 他人转述和否定语境不算。调用方给了原文时，计数值必须真的出现在原文里，避免
+// 编造"在100个地点测试中"。
+function hasCountedEvaluationScope(sentence, sourceText = '') {
+    const text = String(sentence || '');
+    if (/(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|并非|不是|不能|未在|没有|未进行|未做|将(?:会|要)?(?:在|于))/u.test(text)) return false;
+    if (/(?:他人|第三方|其他研究|先前研究|相关工作|转述|引用|引述)/u.test(text)) return false;
+    const scope = /(?:在|于)([^。！？!?\n]{0,90}?)([1-9][0-9]{0,5})\s*个([^。！？!?\n]{0,60}?)(?:测试|实验|测量|估计|评测|评估|检验|比较)(?:中|上)/u.exec(text);
+    if (!scope) return false;
+    const source = String(sourceText || '');
+    if (!source) return true;
+    return new RegExp(`(?<![0-9.])${scope[2]}(?![0-9.])`, 'u').test(source);
+}
+
+// "按1 km内命中地点数计" 是原文自己的命中计数口径（places/clips hit within 1 km），
+// 不是泛化的"指标""分数"或"多项指标"。只有原文确实按命中与距离口径报告结果时，
+// 才把这个指标名当结果指标。
+function hasSourceBoundHitCountMetric(sentence, sourceText = '') {
+    const text = String(sentence || '');
+    if (!/(?:按|以|用)[^，,。；]{0,24}?命中(?:地点|位置|片段|录音|包|时刻|窗口|流|单元)(?:数|比例|率)?/u.test(text)) return false;
+    if (/(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|并非|不是|没有|未|不能|他人|第三方|先前(?:研究|工作)|相关工作|引用|引述|转述)/u.test(text)) return false;
+    const source = String(sourceText || '');
+    return /\b(?:hit|hits|place[sd]?|clips?|packets?)\b[^.\n]{0,100}\bwithin\s+[0-9]+(?:\.[0-9]+)?\s*(?:km|m)\b/iu.test(source)
+        || /\bwithin\s+[0-9]+(?:\.[0-9]+)?\s*(?:km|m)\b[^.\n]{0,100}\b(?:hit|hits|place[sd]?)\b/iu.test(source);
+}
+
 function coreSummaryQuantitativeResultState(text, sourceText = null) {
     const correctionRates = sourceBoundCorrectionRateObservations(text, sourceText);
     const rawSentences = String(text || '').split(/[。！？!?\n]/);
@@ -3545,6 +3598,7 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
             || !/(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b/iu.test(sentence)
                 && CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(sentence)
             || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult || plannerSelection || correctionRates[sentenceIndex]?.metric
+            || hasSourceBoundHitCountMetric(sentence, sourceText)
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
@@ -3561,6 +3615,7 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         const hasSetting = hasMeasuredCrossValidation || narrowMeasuredResult || /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
             || hasNamedSetting || retrievalComparison
             || /(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)/i.test(rawSentence) || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence, sourceText)
+            || hasCountedEvaluationScope(sentence, sourceText)
             || /(?:在|于)\s*FLEURS(?![A-Za-z0-9_])(?:[\u3400-\u9fff]{1,8}(?:到|→)[\u3400-\u9fff]{1,8}(?:上|中)|[^，,；;。！？!?\n]{0,60}(?:oracle提交决策|校准评测)上下文(?:上|中))/.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
@@ -4624,12 +4679,17 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)/.test(sentence)
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
+    // “换对话域或换模型可能失效”是失败条件，“对照外部知识库核查不在验证范围”是
+    // 未验证范围；两者都符合本节要求，只是没有用“局限/适用”这些词。前者必须带
+    // 可能性副词，且不能是否定式（“不会失效”不算边界）。
+    const failureConditionBoundary = /(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)/.test(summary);
+    const unverifiedScopeBoundary = /(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围/.test(summary);
     // 2026-11-06 曾以“先完成发布”为由整段取消除阻断，但写作提示词（core-summary-repair.md）
     // 和发布端的同名规则仍要求结论适用边界，只关 Node 一侧会让两端判定分叉，并让下面这组
     // 已经按真实保存稿迭代过的边界判据连同回归用例一起失效。因此恢复原判据：
     // 没有可核验的结论适用边界、失败条件或未验证范围时仍然拒绝。
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary) && !hasSourceBoundDnsMosBoundary(summary, sourceText)) {
+        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !failureConditionBoundary && !unverifiedScopeBoundary && !hasNaturalScopedBoundary(summary) && !hasSourceBoundDnsMosBoundary(summary, sourceText)) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
@@ -5933,6 +5993,7 @@ module.exports = {
     hasCompleteSoftwareFunctionalValidationResult,
     coreSummarySentenceView,
     validateCoreSummarySemanticContract,
+    coreSummaryQuantitativeResultState,
     hasExplicitNaturalProductChain,
     hasConcreteProductHandoff,
     hasExplicitArtifactHandoff,

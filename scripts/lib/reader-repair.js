@@ -1594,14 +1594,20 @@ function collectDraftIssues(draft, parserError, options = {}) {
 }
 
 function hasVerifiedPdfSourceQuotes(binding) {
+    return pdfSourceQuoteFailure(binding) === null;
+}
+
+// 返回具体的失败原因而不是布尔值，让修复轮知道是第几条、缺在 PDF 还是出现多次。
+function pdfSourceQuoteFailure(binding) {
     const quotes = binding?.pdfSourceQuotes;
     if (binding?.sourceType !== 'source_quotes' || !Array.isArray(quotes)
         || !quotes.length || quotes.length > 64 || quotes.some(quote =>
             typeof quote !== 'string' || Array.from(quote).length < 12
-            || Array.from(quote).length > 4000)) return false;
+            || Array.from(quote).length > 4000)) return '引文必须是 12–4000 字符的非空字符串数组';
     try {
-        return require('./reader-sealed-pdf-quote-evidence').evidenceForQuotes(quotes).length === quotes.length;
-    } catch (_) { return false; }
+        return require('./reader-sealed-pdf-quote-evidence').evidenceForQuotes(quotes).length === quotes.length
+            ? null : '引文条数与核验结果不一致';
+    } catch (error) { return String(error?.message || error); }
 }
 
 function collectTableBindingIssues(draft, options = {}) {
@@ -1668,15 +1674,19 @@ function collectTableBindingIssues(draft, options = {}) {
             add(index, '普通绑定必须且仅含 tableIndex/sourceType/sourceTableOrdinal/cellBindings/sourceQuotes');
         }
         if (binding.sourceType === 'source_quotes') {
-            const pdfValid = hasVerifiedPdfSourceQuotes(binding);
+            const pdfFailure = pdfSourceQuoteFailure(binding);
+            const pdfValid = pdfFailure === null;
             if (own(binding, 'pdfSourceQuotes') && !pdfValid) {
-                add(index, 'pdfSourceQuotes 必须在当前真实封存 PDF 作用域中，逐项核验为12–4000字符、未裁数字与单位的唯一连续原文引文；不能用模型自签证明。');
+                add(index, 'pdfSourceQuotes 必须在当前真实封存 PDF 作用域中，逐项核验为12–4000字符、未裁数字与单位的唯一连续原文引文；'
+                    + `本次核验结果：${pdfFailure}。不能用模型自签证明，也不能用 HTML 全文冒充 PDF 引文。`);
             }
             if (binding.sourceTableOrdinal !== null || !Array.isArray(binding.cellBindings)
                 || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes)
                 || !(binding.sourceQuotes.length || pdfValid)) {
-                add(index, 'source_quotes 结构非法：sourceTableOrdinal 必须为 null；cellBindings 必须是 []，'
-                    + '不接受 quoteIndex/value/渲染坐标；sourceQuotes 必须为非空原文字符串数组');
+                add(index, 'source_quotes 结构非法：sourceTableOrdinal 必须为 null'
+                    + `（当前为 ${JSON.stringify(binding.sourceTableOrdinal)}）；cellBindings 必须是 []，`
+                    + '不接受 quoteIndex/value/渲染坐标；sourceQuotes 必须为非空原文字符串数组，'
+                    + '或改为提供可核验的 pdfSourceQuotes（两数组至少一项非空）');
             }
             if (Array.isArray(binding.sourceQuotes)) {
                 const invalid = binding.sourceQuotes.flatMap((quote, quoteIndex) => (
@@ -3258,7 +3268,9 @@ function repairOperationProtocol(context) {
 
 function repairTableEvidenceGuidance(draft, issues, targets, sourceText, options) {
     if (!Array.isArray(options.structuredArtifacts?.tables) || !String(sourceText)) return '';
-    if (!issues.some(issue => /宽表|source_table|粘连复写|关键数字缺少|sourceQuotes/.test(String(issue?.message || ''))
+    // pdfSourceQuotes 的大小写与 sourceQuotes 不同，必须单独列出；否则 PDF 引文失败时
+    // 修复请求不会带封存 PDF 原文，模型只能猜或整条删掉。
+    if (!issues.some(issue => /宽表|source_table|粘连复写|关键数字缺少|sourceQuotes|pdfSourceQuotes|PDF quotation/.test(String(issue?.message || ''))
         || issue?.code === 'reader_source_table_unrenderable')) return '';
     const tables = require('./reader-tables');
     const locations = require('./reader-draft-order').locateReaderDraftTables(draft);
@@ -3959,4 +3971,4 @@ module.exports = { readTopLevelMembers, READER_VERSION_METADATA_KIND, buildReade
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, repairTableEvidenceGuidance, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
-    retireFailedCandidate, hasUnusedImplementationAllowance, isCandidateEnvelope, candidateEnvelopeHeader };
+    retireFailedCandidate, hasUnusedImplementationAllowance, isCandidateEnvelope, candidateEnvelopeHeader, pdfSourceQuoteFailure };

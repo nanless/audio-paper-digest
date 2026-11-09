@@ -56,6 +56,13 @@ test('current templates preserve original text apart from the declared changes; 
             const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
             assert.equal(actual.toString(), originalBytes.toString().replace('    "version": 1,',
                 `    "contract": "${header.contract}",\n    "schemaFingerprint": "${header.schemaFingerprint}",`));
+        } else if (current === 'prompts/current/core-summary-repair.md') {
+            // 2026-11-09：方法链要求写成可执行顺序词与产物交接（2611.06345 真实失败）。
+            assert.equal(actual.toString(), originalBytes.toString().replace(
+                '方法说明包含 2–4 个步骤，写清各步的职责，以及前一步的输出怎样进入下一步。',
+                '方法说明包含 2–4 个步骤，用“先”“再”“最后”这类顺序词把步骤串起来，写清各步的职责，'
+                + '以及前一步的输出怎样进入下一步：用“提取”“输出”“送入”这类词写出产物的具体名称，'
+                + '并说明它被哪一步接收、用来做什么。'));
         } else assert.deepEqual(actual, originalBytes, current);
         assert.deepEqual(evidence.readPromptEvidenceBytes(original, { expectedSha256: sha(originalBytes) }), originalBytes);
         assert.equal(fs.existsSync(path.join(root, original)), false);

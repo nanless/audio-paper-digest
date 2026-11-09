@@ -480,3 +480,29 @@ test('前置定语资源概念列表仅豁免列表自身，不掩盖独立公�
         '本文可下载权重已经公开。'
     ]) assert.ok(issues(text).some(issue => /model/.test(issue.message)), text);
 });
+
+// 2026-11-09 日更两篇真实失败稿的原句：否定动词后接不带分隔符的资源名词串，
+// 以及「将在同行评审发表后存档于公开仓库」的将来存档计划，都不是当前可达声明。
+test('2026-11-09 真实稿的闭合否定与将来存档计划不再被判成作者资源开放声明', () => {
+    const f = example();
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(f.options.sourceText), resources: [] };
+    const identity = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const issues = text => deep.readerResourceClaimIssues({ sections: [{ kind: 'reproduction', body: text }] },
+        identity, f.options.sourceText);
+    for (const text of [
+        '综述纳入的83项与各模态合成表给出了起点，但没有提供统一代码、模型或数据已公开的保证，原文也没有声称代码模型数据已开源，复现时要逐项核对原始论文的划分与预处理。',
+        '原文也没有声称代码模型数据已开源。',
+        '关于资源，论文声明补充材料含照片、截图、视频、数据与分析代码，将在同行评审发表后存档于公开仓库，当前依据本次证据不能声称代码、模型或数据已公开。',
+        '将在同行评审发表后存档于公开仓库。',
+        '代码将存档于公开仓库。'
+    ]) assert.deepEqual(issues(text), [], text);
+    // 同一批句式一旦转成肯定、完成或转折后的真实声明，仍必须拒绝。
+    for (const text of [
+        '原文也没有声称代码模型数据已开源，但仓库已公开。',
+        '论文已在同行评审发表后存档于公开仓库。',
+        '作者已将代码存档于公开仓库。',
+        '代码已存档于公开仓库。',
+        '将在同行评审发表后存档于公开仓库，且本文代码现已开源。',
+        '原文也没有声称代码已开源，不过本文代码当前可用。'
+    ]) assert.ok(issues(text).length > 0, text);
+});
