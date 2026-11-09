@@ -110,11 +110,14 @@ Batch Manual authoring and WeChat, Feishu, and Xiaohongshu publication are retir
 
 ## What counts as completion
 
-1. Formal analysis, sources, the explanation, assessment, and classification pass current checks.
-2. Final pages pass programmatic, text, figure, and Hugo review. The receipt covers the complete target set.
-3. Only the exact changes allowed by the receipt are pushed, and the remote `main` commit ID is verified.
-4. The corresponding commit, or a descendant preserving the reviewed page bytes, deploys successfully. Every target page is checked for HTTP 200, its official address, and title, with records saved.
-5. A no-image-generation record is bound to the current publication, and status is read again. Image generation is retired; if the user asks for images, restore the implementation through the maintenance flow and approve it separately. Do not start it inside this batch.
+A daily batch is complete when all six items in [AGENTS.md](AGENTS.md#日更完成的六项) hold; this section reuses the same numbering and wording, and AGENTS.md is authoritative:
+
+1. Data and sources: formal analysis, sealed sources, the explanation, assessment, and classification pass current checks.
+2. Review: final pages pass programmatic, text, figure, and Hugo review, and the receipt covers the complete target set.
+3. Remote publication: only the exact changes allowed by the receipt are pushed, and the remote `main` commit ID is verified.
+4. Deployment: the corresponding commit, or a descendant preserving the reviewed page bytes, deploys successfully.
+5. Web verification: every target page is checked for HTTP 200, its official address, and title, with records saved.
+6. No-image record and status re-read: a no-image-generation record is bound to the current publication, and status is read again. Image generation is retired; if the user asks for images, restore the implementation through the maintenance flow and approve it separately. Do not start it inside this batch.
 
 `digest:status` describes the state at the time it is read. Deployment and web pages require separate verification. During work, `--watch` refreshes every ten seconds by default, but does not fully verify publication waivers. After a push, image record, or waiver changes, read the ordinary full status again.
 

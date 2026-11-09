@@ -263,7 +263,7 @@ OpenAI Responses 的普通既有节点修复可使用 `reader-target-ordinal-pat
 npm run batch -- --reader-operator-corrections /absolute/path/operator-manifest.json --refresh-reader-diagnostics
 ```
 
-清单必须覆盖当前完整失败集合，不能拆分清单、隐藏失败项或包含已成功论文。默认上限为 10 篇；大批次可按原封存入选集的 10% 向下取整增加，绝不超过 15 篇，即 `min(15, max(10, floor(N / 10)))`。
+清单必须覆盖当前完整失败集合，不能拆分清单、隐藏失败项或包含已成功论文。名额按原封存入选集篇数 `N` 计算为 `min(15, max(10, floor(N / 10)))`：`N<110` 时固定 10 篇，`N≥110` 才随批次增大，绝不超过 15 篇。用户明确授权的批次可用 `PD_DAILY_CORRECTION_LIMIT`（1–15）把名额抬高，该变量只允许抬高、不能降低默认值，超出范围直接报错。
 
 `npm run manifest:new` 可准备新清单。新清单和成员分别使用 `daily-reader-operator-correction-batch` 与 `reader-human-source-edit`，各自带结构指纹。程序核对历史清单和成员时仍读取其实际原字节和 SHA。只有通过正常修正和冷核的结果才具有相应的 Reader 资格。
 

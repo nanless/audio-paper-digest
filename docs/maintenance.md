@@ -184,7 +184,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 这个视图不核验完整图片资产、当前发布豁免或部署网页，因此默认不生图的批次也可能停留在“发布收尾”。建议从 `./run-daily-digest.sh DATE --from visual` 继续，由正常日更入口重核发布并按持续设置登记不生图，不执行图片准备或生图。该提示不授予任何完成资格；最终仍查看普通 `digest:status` 的实际豁免核验，再核对部署和全部目标页面。
 
-显式空日也不因没有单篇页而放宽完成定义：推送后仍须登记本次发布不生图，`digest:status` 的数据、审查、远端和不生图四项成立才算 complete，部署和全部目标网页另行核验。
+显式空日也不因没有单篇页而放宽完成定义：推送后仍须登记本次发布不生图。`digest:status` 的 complete 只覆盖数据、审查、远端和不生图登记四项；部署与逐页网页核验另属六项完成定义的第 4、5 项，须单独验收，清单见[日更完成的六项](../AGENTS.md#日更完成的六项)。
 
 主要生产入口（fetch、deep、batch、reanalyze、Reader 刷新与博客三阶段）在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
 
@@ -192,7 +192,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 - `npm run source:probe -- --date YYYY-MM-DD`：只读探测 arXiv Atom/官方 OAI/RSS 三入口，并判断 RSS 公告是否目标日；失败时给出等待/换入口/官方 OAI 的建议，不抓取、不写数据。
 - `npm run llm:accounts`：只读查看账号池每个账号的状态、冷却与最早恢复；账号只显示本次运行的序号，不显示任何密钥或稳定指纹。
-- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，支持 `--json`。大小写 HTTP 代理变量均逐项校验，`ALL_PROXY` 仍允许 curl 使用 SOCKS；整数须在 JavaScript 安全整数范围内。检查失败标明具体配置项，不代表每条运行路由都会选择该项，也不改变运行时的代理选择或整数解析规则。
+- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，参数只有 `--json`、`--env PATH` 和 `--help`，不联网，也没有 `--offline` 开关（传了会按未知参数退出 2；`--offline` 是 `doctor` 的参数）。大小写 HTTP 代理变量均逐项校验，`ALL_PROXY` 仍允许 curl 使用 SOCKS；整数须在 JavaScript 安全整数范围内。检查失败标明具体配置项，不代表每条运行路由都会选择该项，也不改变运行时的代理选择或整数解析规则。schema 之外的 `PD_*`（例如 `PD_GIT_ARCHIVE_TIMEOUT_SECONDS`、`PD_CHECKPOINT_TIMING`）由各自实现读取和校验，`config:check` 与 `doctor` 不对它们做类型或范围检查。
 - `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。doctor 比较主副配置的唯一密钥值集合，重复列出同一个值不会误报为部分重叠；集合相同只描述配置关系，不能证明端点属于同一服务或账号可用。
 
 ## 恢复决策与清单生成
@@ -243,7 +243,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`scripts/README.md`、`docs/` 与 `skills/` 下全部 Markdown：`npm run <script>` 是否存在于 `package.json`，相对链接的目标文件是否存在，`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` 中登记，是否出现带 `-vN` 后缀的协议名或废弃工作区路径，以及代码未读取的 `PD_*` 变量；同一入口还核对文档里写的当前客户端版本（构建号）与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 是否一致，两份文档索引的工作台版本列表是否包含当前版本。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖，根 `SKILL.md`、`manual/` 和原型文档也在其中；参数和配置项由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
+- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`scripts/README.md`、`docs/` 与 `skills/` 下全部 Markdown：`npm run <script>` 是否存在于 `package.json`（正则只匹配首字母小写的命令名，命令名大小写写错时查不到），相对链接的目标文件是否存在（去掉 `#锚点` 和 `?query` 后只判文件存在，不校验锚点），`docs/` 下每篇文档是否在两份索引拼接后的文本里至少出现一次（OR 语义：只在中文或只在英文索引出现都算通过，不要求两份都登记），是否出现带 `-vN` 后缀的协议名或废弃工作区路径，以及代码未读取的 `PD_*` 变量；同一入口还核对文档里写的当前客户端版本（构建号）与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 是否一致，两份文档索引的工作台版本列表是否包含当前版本。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖，根 `SKILL.md`、`manual/` 和原型文档也在其中；参数和已登记配置项由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
 
 ## 存储保留建议
 
@@ -260,7 +260,7 @@ npm run verify
 git diff --check
 ```
 
-完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含三流程与旧记录兼容 JS）、两处 Python 单测和只读 `validate:data`。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
+完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含三流程与旧记录兼容 JS）、两处 Python 单测和只读 `validate:data`。验证计划里没有任何客户端构建或测试步骤；客户端版本一致性由 `npm test` 内的 `docs-consistency` 检查，Android 客户端测试由独立作业 `client-android` 覆盖，见下文完整覆盖与并行范围。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
 
 只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:compat` 或选定测试；完整验证通过后无须重复这些子集。
 

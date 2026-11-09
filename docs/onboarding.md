@@ -63,6 +63,10 @@ Git 推送、站点部署和网页可读是不同结果。只有它们都核验�
 | `data/current/blog-generation-manifest-<date>.json` | `blog:generate` | 本次生成的页面与资产清单 |
 | `data/current/blog-review-passes-<date>.json` | `blog:review` | 与路径及内容 SHA 绑定的已通过页面缓存 |
 | `data/current/blog-review-failure-<date>.json` | `blog:review` | 本次未通过页面与具体问题 |
+| `data/current/blog-review-receipt-<date>.json` | `blog:review` | 本次审查凭证；推送只提交它允许的差异，不生图登记也绑定它的完整 SHA |
+| `data/current/blog-republications/<date>.json` | `blog:generate --republish` | 重发布日期标记；事务待激活时会阻断普通生成、审查和推送 |
+| `data/runtime/analysis-batch-reports/` | 分析与恢复入口 | 批次轮次、当前失败集合和 `manualHandoff` 报告 |
+| `data/current/web-verification-<date>.json` | `verify:web` | 部署状态与逐页 HTTP 200、正式地址、标题的核验记录 |
 | `data/runtime/llm-account-pool.json` | Node/Python 账号池 | 轮转游标和冷却状态，权限 `0600` |
 | `data/runtime/llm-usage/` | 公共请求封装 | 请求开始、终态和实际用量；费用未知时保留未知 |
 | `logs/summaries/<date>-summary.log` | Node/Python 入口 | 本次各阶段的摘要 |

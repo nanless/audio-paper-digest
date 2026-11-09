@@ -141,6 +141,7 @@ npm run test:compat
 | `fetch-huggingface-papers.js` | Node 模块/入口：通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `fetch-papers.js` | Node 模块/入口：负责 arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选；独立使用抓取模块也需要项目 Python 3.11+ 运行器来严格解析 Atom。 |
 | `full-fetch.js` | Node 入口：先核已发布基线与抓取边界，再归档、抓取、按已发布页面去重、筛选、封存入选论文来源、深度分析，并逐篇保存结果。旧结果首遍用ID索引，初始化按映射合并，内存只保留每篇最新尝试；逐次失败、检查点及费用仍持久保存。 |
+| `prepare-daily-fetch-witness-recovery.js` | Node 入口（`fetch:witness:prepare`）：为已发布原输入字节失配登记私有旧窗口恢复材料。持日更运行锁，只读真实博客 Git 对象与已有来源，创建不可覆盖的 `data/runtime/daily-fetch-witness-recoveries/<UUID>/`；不抓取、不调用模型，不授予分析或发布资格。 |
 | `lib/arxiv-metadata-source.js` | Node 库：通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。现行 v1 先严格校验 XML，再按既有规则保留字段中的实体和作者空白，以按原规则重新计算并核验旧封存 SHA；正常日更抓取使用解码后的 XML 字段。 |
 | `lib/daily-arxiv-prefix-source.js` | Node 库：日期查询终止于 HTTP 429 时，使用同一官方 Atom 类别列表完整覆盖固定窗口，保存旧见证、分页端点、响应 SHA 和首页重放证明；当前恢复、只读校验及下次补抓共用覆盖核验。 |
 | `lib/daily-fetch-boundary.js` | Node 库：从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见边界说明。 |
@@ -237,7 +238,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 
 | 文件 | 类型与职责 |
 |---|---|
-| `activate-fresh-publication.js` | Node 入口：显式接替同日已提升重写结果的旧发布，持有本运行操作锁后调用 Python 归档旧凭证；不生成内容或推送。 |
+| `activate-fresh-publication.js` | Node 入口：显式接替同日已提升重写结果的旧发布，持有本运行操作锁后调用 Python 归档旧凭证；不生成内容或推送。命令 `npm run blog:activate-fresh` 固定为 history 角色，在 daily 工作区运行需要 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`；反向（history 工作区跑 daily 命令）仍拒绝。 |
 | `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用来维护来源授权；它不是 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
 | `historical-arxiv-batch.js` | 备用入口只接收 `--handoffs NAME.json[,NAME.json...]` 命名、不可变的 arXiv 获取失败交接文件，逐页核验冻结清单、页面 SHA 和非标题链接；不扫描 crosswalk pending 页、不调用模型，也不阻断 direct 队列。 |
 | `historical-arxiv-publication-metadata.js` | 默认对直接重写计划全部 arXiv 论文预览或批量封存官方 Atom 附件。只复用满足当前论文版本和时间窗的原始 Atom，其余按封存来源 ID 经公共 CONNECT 适配器精确获取，不调用模型。瞬时失败最多重试三次；单篇耗尽后继续整批，最后报告 partial 并非零退出。失败项不生成附件，重跑只补缺失项。 |
@@ -381,7 +382,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 
 | 文件 | 类型与职责 |
 |---|---|
-| `lib/daily-reader-operator-correction.js` | Node 库：显式日更人工修正清单覆盖完整失败集合，通常最多10篇；大批次按重读原封存入选集的10%取整增加、硬限15篇，扩展时核验完整唯一集合。重读四份封存来源、原失败草稿与每篇1–8节点SHA补丁；原候选及费用不改，由正常 Reader 全量解析验收并记录本地修正来源，不作为模型响应或新收费额度。 |
+| `lib/daily-reader-operator-correction.js` | Node 库：显式日更人工修正清单覆盖完整失败集合。名额为 `min(15, max(10, floor(N/10)))`（`N` 为原封存入选集篇数；`N<110` 时固定10篇，硬限15篇），用户明确授权时可用 `PD_DAILY_CORRECTION_LIMIT`（1–15）抬高；超过10篇时重读原封存清单并要求完整唯一集合。重读四份封存来源、原失败草稿与每篇1–8节点SHA补丁；原候选及费用不改，由正常 Reader 全量解析验收并记录本地修正来源，不作为模型响应或新收费额度。 |
 | `lib/reader-operator-patch.js` | Node 库：显式应用同一全新重写运行的人工局部补丁，核验来源、每个修改字段或数组项的原内容 SHA，以及完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
 | `lib/reader-signed-draft.js` | Node 库：日更封存来源的已签 Reader 逆算入口；保留原 fresh 准入及正文、计划、图片 SHA 精确往返要求，不写文件或调用模型。 |
 | `lib/reader-signed-draft-surface.js` | Node 库：纯表示逆算，恢复完整术语组合和原图引用；不授予来源、API 作者身份、修改许可或发布资格。 |
@@ -483,7 +484,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
 | `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
 | `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 区分当前主副配置及历史观察记录，仅报告已有冷却，不探测余额或清理状态；只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
-| `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
+| `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥、不联网。参数只有 `--json`、`--env PATH` 和 `--help`，没有 `--offline`；传未知参数按错误退出 2。schema 之外的 `PD_*` 由各自实现校验，本入口不检查其类型或范围。 |
 | `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 汇总已保存的失败、事实义务和审查问题，按错误码建议入口；默认只读。记录完整性与实际来源、完整失败集合、正式恢复权限分别核验；`--execute --yes` 仍受原入口检查约束，见[恢复工具](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 准备每篇 1–8 个既有节点的修正记录和清单，计算 SHA/UUID。默认 dry-run，`--write` 才写 `data/runtime`；正式采纳另核完整当前输入、原付费链、真实来源与整篇质量，见[清单准备范围](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
@@ -493,7 +494,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对页面 SHA、逐字问题与误报解释。退出判断使用 `currentMatchVerdict`；旧 `overriddenFailedPages` 等字段只作兼容投影。诊断不修改审查结果或授予发布资格，完整范围见[误报记录](../docs/maintenance.md#发布后网页核验与收尾)。 |
 | `storage-report.js` | Node 入口：`npm run storage:report [--advice-only]` 打印“必须保留/可压缩/可删”建议，并只读运行 storage:status；不删除。 |
 | `locks.js` | Node 入口：`npm run locks` 在原有有界范围观察锁的持有者、时间和心跳，包含 `.analysis-runs`、`conference-processes` 及真实 Git common-dir 共享锁。先核 `scanComplete`、`scopes`、`problems`；部分观测退出 1。`--recover` 只预览，不删除；观察结果不授予持锁或回收权限。 |
-| `docs-consistency.js` | Node 入口：`npm run docs:check` 核对根 README、AGENTS、此索引、`docs/` 与 `skills/` 全部 Markdown 中的 npm 脚本名；并核对文档里的“当前版本/构建号”与 `Info.plist`、Android Gradle 实际值一致，两份 docs README 的版本列表都包含当前版本。命令参数与相对链接由文档测试另行核对。 |
+| `docs-consistency.js` | Node 入口：`npm run docs:check` 核对根 README、AGENTS、此索引、`docs/` 与 `skills/` 全部 Markdown 中的 npm 脚本名（只匹配首字母小写的命令名）；并核对文档里的“当前版本/构建号”与 `Info.plist`、Android Gradle 实际值一致，两份 docs README 的版本列表都包含当前版本。相对链接只判目标文件存在，不校验 `#锚点`；`docs/` 登记按两份索引拼接后的子串判定（OR 语义）。按最近 `package.json` 解析的命令参数与全仓链接由文档测试另行核对。 |
 | `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥；会警告主池与副模型池共用同一 key 值（只比较值）。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
@@ -562,44 +563,59 @@ Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇
 
 用格式名和结构指纹识别记录。核验原文件或 Git 对象时保留原字节。
 
-- `protocol_codec.py`
-- `original_file_evidence.py`
-- `git_file_bytes.py`
+| 文件 | 职责 |
+|---|---|
+| `protocol_codec.py` | Python 侧读取 `config/protocols/` 的稳定名与结构指纹；拒绝带 `-vN` 后缀的名字，写入时保护 `contract`/`schemaFingerprint` 等保留字段。 |
+| `original_file_evidence.py` | 按登记名返回受控原文件或 Git blob 的真实字节；只接受固定路径与 40/64 位 OID，不执行读到的内容，也不授予来源或完成资格。 |
+| `git_file_bytes.py` | 直接读取工作树文件或 Git 对象字节（单文件上限 8 MiB），不执行、不解释内容。 |
+
+Node 侧同构实现，与上表一一对应：
+
 - `lib/protocol-codec.js`
+- `lib/original-file-evidence.js`
+- `lib/git-file-bytes.js`
 - `lib/workflow-legacy-codec.js`
 - `lib/workflow-record-format.js`
 - `lib/strict-json.js`
-- `lib/git-file-bytes.js`
-- `lib/original-file-evidence.js`
 
 ### 论文来源、评分和发布
 
 核对封存来源、分析质量、摘要、评分和发布记录的格式。会议来源修正和费用记录使用各自的登记规则。
 
-- `daily_source_format.py`
-- `analysis_quality_format.py`
-- `core_summary_format.py`
-- `scoring_record_format.py`
-- `blog_record_format.py`
-- `conference_source_correction_format.py`
-- `llm_usage_format.py`
+| 文件 | 职责 |
+|---|---|
+| `daily_source_format.py` | 识别封存日更来源运行（`daily-fresh-source-run`）与引用（`daily-fresh-source-reference`）两种布局，逐字段核对运行 ID、批次与来源集合 SHA。 |
+| `analysis_quality_format.py` | 只在原质量规则与现行规则之间选择，不修改原记录。 |
+| `core_summary_format.py` | 读核心摘要声明与阶段头，保留原证明字节。 |
+| `scoring_record_format.py` | 读评分审计、资源声明、请求格式与证据上限四类格式头。 |
+| `blog_record_format.py` | 按真实头区分生成清单、文件清单、审查凭证、生成日志、检查点、通过缓存与失败记录。 |
+| `conference_source_correction_format.py` | 识别会议来源纠正的资源与核心两类记录格式，供本地重放前判定。 |
+| `llm_usage_format.py` | 只识别用量事件的原格式；不改原账目，也不授予请求额度。 |
+
+Node 侧同构实现，与上表同源；末尾两项是来源输入与旧提示词读取器：
+
 - `lib/daily-source-format.js`
-- `lib/source-input-format.js`
 - `lib/analysis-quality-format.js`
 - `lib/core-summary-format.js`
 - `lib/scoring-record-format.js`
 - `lib/blog-record-format.js`
 - `lib/conference-source-correction-format.js`
 - `lib/llm-usage-format.js`
+- `lib/source-input-format.js`
 - `lib/prompt-legacy-codec.js`
 
 ### 论文解读与原文证明
 
 识别解读草稿、正文、作者、资源、阶段、恢复记录和人工修正。PDF 引文核验重新读取封存原文。清单里的两份 JSON 是共享数据而不是代码：`lib/validation-rules.json` 保存表头单位白名单与粘连复写的测试向量，`table-check.js` 和 Python 列单位检查共用；`lib/reader-legacy-records.json` 保存旧 Reader 的计划版本、阶段字段与有序回复的原始取值，读取时不得据此授予来源或发布资格。
 
-- `reader_record_format.py`
-- `reader_proof_format.py`
-- `reader_pdf_quote_projection.py`
+| 文件 | 职责 |
+|---|---|
+| `reader_record_format.py` | 读现行与原始 Reader 元数据（含 `compact-article` 旧档），不授予来源资格。 |
+| `reader_proof_format.py` | 选择确切的证明表示（如 PDF 表格网格），不认证来源或数值。 |
+| `reader_pdf_quote_projection.py` | 把来源派生的 PDF 引文编码成投影，保持原提取器字节不变，只描述结果表示。 |
+
+Node 侧同构实现与其余读取器：
+
 - `lib/reader-record-format.js`
 - `lib/reader-proof-format.js`
 - `lib/reader-resource-claims-format.js`

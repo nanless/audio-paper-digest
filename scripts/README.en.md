@@ -198,6 +198,7 @@ Runs the full batch first, then explicitly retryable failures. Saves `analysis-b
 | `fetch-huggingface-papers.js` | Fetches Hugging Face Papers using `curl` with the minimal child-process environment. |
 | `fetch-papers.js` | Fetches arXiv, completes abstracts, applies keyword prefiltering, and makes per-paper model filtering decisions. Even standalone fetching needs the project Python 3.11+ runner for strict Atom parsing. |
 | `full-fetch.js` | Checks the published baseline and fetch boundary, then archives, fetches, deduplicates only published pages, filters, seals selected sources, analyzes, and saves each paper. First-pass recovery indexes old results by ID and merges by that map; memory retains only each paper's latest attempt, while every failure, checkpoint, and cost stays persistent. |
+| `prepare-daily-fetch-witness-recovery.js` | `fetch:witness:prepare` registers private material for an older fetch window when a published batch's original analysis bytes are no longer available. Holds the daily run lock, reads only real blog Git objects and existing sources, and writes an immutable `data/runtime/daily-fetch-witness-recoveries/<UUID>/`; no fetch, no model call, no analysis or publication authority. |
 | `lib/arxiv-metadata-source.js` | Fetches one official arXiv Atom entry through project HTTP CONNECT, verifies response SHA, and extracts allowed title/abstract/authors/categories. Existing v1 strictly checks XML but preserves entity spelling and author whitespace when recomputing old sealed SHAs; normal daily fetching uses decoded fields. |
 | `lib/daily-arxiv-prefix-source.js` | After date-query HTTP 429, completely traverses the same official Atom category list for the fixed window, retaining witnesses, pagination endpoints, response SHAs, and first-page replay. Recovery, read-only validation, and the next fetch share coverage checks. |
 | `lib/daily-fetch-boundary.js` | Derives fetch windows from verified remote daily publications and controlled archives, and reads formal-page fields for deduplication; see the boundary guide. |
@@ -332,7 +333,7 @@ Review uses text/multimodal/Markdown/Hugo, summaries first, default concurrency 
 
 | File | Role and limits |
 |---|---|
-| `activate-fresh-publication.js` | Explicitly replaces an older publication after same-day rewritten results have been promoted. Holds this run's operation lock before Python archives old receipts; generates no content and does not push. |
+| `activate-fresh-publication.js` | Explicitly replaces an older publication after same-day rewritten results have been promoted. Holds this run's operation lock before Python archives old receipts; generates no content and does not push. `npm run blog:activate-fresh` is a history-role command: running it from a daily workspace requires `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`, while the reverse direction is still refused. |
 | `arxiv-source-authority.js` | Plans or fetches official text for a canonical arXiv ID to manage source authority. Not a selector for direct rewriting or failed-fetch fallback batches. Dry-run is offline and writes nothing. |
 | `historical-arxiv-batch.js` | Fallback only for named immutable arXiv fetch-failure handoffs supplied with `--handoffs NAME.json[,NAME.json...]`. Verifies frozen inventory, page SHA, and non-title links per page. Does not scan crosswalk pending pages, request models, or block the direct queue. |
 | `historical-arxiv-publication-metadata.js` | Previews or seals official Atom publication sidecars for all arXiv papers in a direct-rewrite plan by default. Full conditions follow this table under the same filename. |
@@ -515,7 +516,7 @@ Its restricted table shapes also verify front-end/attack identities, budgets, le
 
 | File | Role and limits |
 |---|---|
-| `lib/daily-reader-operator-correction.js` | Explicit daily operator manifests cover the complete failure set, normally at most 10 papers; larger batches use floor(10% of the reread original selection), capped at 15, with full unique-member checking. Full conditions follow this table under the same filename. |
+| `lib/daily-reader-operator-correction.js` | Explicit daily operator manifests cover the complete failure set. The allowance is `min(15, max(10, floor(N/10)))` where `N` is the original sealed selection (10 papers while `N<110`, hard cap 15); an explicitly authorized batch may raise it with `PD_DAILY_CORRECTION_LIMIT` (1–15). Above 10 papers the original sealed manifest is reread and must match the complete unique member set. Full conditions follow this table under the same filename. |
 | `lib/reader-operator-patch.js` | Explicit local operator patches within the same fresh rewrite run verify sources, original field/array-item SHAs, and complete Reader parsing. Save only a failed candidate, preserving budget/immutable original archives/replay records, and never issue successful-article evidence. |
 | `lib/reader-signed-draft.js` | Inverse Reader representation for signed daily sealed sources, retaining fresh-source admission and exact article/plan/figure round-trip SHAs. No writes or models. |
 | `lib/reader-signed-draft-surface.js` | Pure inverse representation reconstructing full term combinations and original figure references. Grants no sources/API authorship/edit scope/publication eligibility. |
@@ -532,7 +533,7 @@ Its restricted table shapes also verify front-end/attack identities, budgets, le
 
 **`lib/daily-reader-operator-correction.js` — full operating conditions**
 
-Explicit daily operator manifests cover the complete failure set, normally at most 10 papers; larger batches use floor(10% of the reread original selection), capped at 15, with full unique-member checking.
+Explicit daily operator manifests cover the complete failure set. The allowance is `min(15, max(10, floor(N/10)))` for the original sealed selection `N` (10 papers while `N<110`, hard cap 15); `PD_DAILY_CORRECTION_LIMIT` (1–15) may raise it for an explicitly authorized batch. Above 10 papers the original sealed manifest is reread and must match the complete unique member set.
 
 Rereads four sources/failed drafts/1–8 existing-node SHA patches. Original candidate/cost stays unchanged; normal complete parsing validates and records local provenance, never model output or added allowance.
 
@@ -635,7 +636,7 @@ Independent manual v4 separates semantic articles from `machineAssets`, while th
 | `daily_republication.py` | Explicit presentation-only republication of a complete already-published daily batch via `blog:generate -- --date DATE --republish UUID`. Full conditions follow this table under the same filename. |
 | `source-probe.js` | `npm run source:probe -- --date YYYY-MM-DD` read-only probes arXiv Atom/official OAI/RSS and checks target-day announcement identity. Supports `--json`; no candidate fetching or data/current writes. |
 | `llm-accounts-report.js` | `npm run llm:accounts` distinguishes current primary/secondary configuration from historical observations, reporting existing cooldown only. Does not probe balances or clear state. Shows per-invocation numbers, not keys/stable fingerprints; supports `--json`. |
-| `config-check.js` | `npm run config:check` read-only checks `.env` required fields/types/ranges/unregistered variables. No writes or key echoing; supports `--json`. |
+| `config-check.js` | `npm run config:check` read-only checks `.env` required fields/types/ranges/unregistered variables. No writes, no key echoing, no network. Accepts only `--json`, `--env PATH`, and `--help`; there is no `--offline` (unknown arguments exit 2). `PD_*` names outside the schema are validated by their own implementations, not here. |
 | `recover.js` | `npm run recover -- --date YYYY-MM-DD` collects saved failures/fact obligations/review findings and suggests existing entries by error code; read-only by default. Record completeness is distinct from real sources/full failure scope/recovery authority. `--execute --yes` still uses original entry checks; see [recovery tools](../docs/maintenance.md#恢复决策与清单生成). |
 | `manifest-new.js` | `npm run manifest:new -- --spec SPEC.json` prepares 1–8-existing-node correction records/manifests and computes SHAs/UUIDs. Default dry-run; `--write` writes `data/runtime` only. Formal adoption independently rechecks full current input/paid origin/real sources/whole-paper quality; see [preparation scope](../docs/maintenance.md#恢复决策与清单生成). |
 | `table-check.js` | `npm run table:check -- --draft DRAFT.json` offline checks duplicated joined numbers/column counts/unit declarations without writing data. |
@@ -645,7 +646,7 @@ Independent manual v4 separates semantic articles from `machineAssets`, while th
 | `review-overrides-cli.js` | `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` read-only matches page SHA/literal claims/false-positive explanations. Exit decisions use `currentMatchVerdict`; old `overriddenFailedPages` and similar fields are compatibility views only. Changes no review outcome or publication eligibility; see the maintenance guide. |
 | `storage-report.js` | `npm run storage:report [--advice-only]` reports must-keep/compressible/deletable categories and read-only storage status; deletes nothing. |
 | `locks.js` | `npm run locks` observes owners/times/heartbeats in the original bounded scope, including `.analysis-runs`, `conference-processes`, and actual Git common-dir shared locks. Check `scanComplete`/`scopes`/`problems`; partial observation exits 1. `--recover` previews only, never deletes. Observation grants neither possession nor reclaim authority. |
-| `docs-consistency.js` | `npm run docs:check` checks npm script names in root README/AGENTS/this index/all `docs/` and `skills/` Markdown; it also checks that documented current version/build matches `Info.plist` and Android Gradle, and that both docs README version lists include the current version. Argument syntax and relative links are checked separately by documentation tests. |
+| `docs-consistency.js` | `npm run docs:check` checks npm script names in root README/AGENTS/this index/all `docs/` and `skills/` Markdown (the pattern only matches a lowercase command name); it also checks that documented current version/build matches `Info.plist` and Android Gradle, and that both docs README version lists include the current version. Relative links only require the target file to exist (anchors are not checked), and `docs/` registration passes when a file appears in either index (OR semantics over the joined text). Argument syntax and repository-wide links are checked separately by documentation tests. |
 | `doctor.js` | Read-only preflight for Node/Python/dependencies/`.env` permissions/models/proxy/role/disk/blog/accounts, with optional arXiv three-endpoint probing. Accepts `--date YYYY-MM-DD`, default `--offline`, `--network`, `--json`. No writes/model requests/key printing. Warns if primary/secondary pools contain the same key values; this is value comparison only. |
 | `digest-run-report.js` | Reports fetch/filter/analysis/remote-publication/two visual states and saves/reads daily-round/handoff diagnostics against actual date/source/scope. `--watch` prints stage/failure/cost/account/no-progress snapshots; default single report is unchanged. Does not automatically verify deployment/webpages. |
 | `digest-status.js` | Synchronizes papers.json analysis/batch/recovery status. Normal daily/deep/batch finalizers use `synchronizeCompletedAnalysisDigestStatuses` for skipped old successes, under canonical paper locks with fresh formal/source reads. Saves only mismatched successful states and never overwrites the latest failure. |
@@ -728,44 +729,59 @@ Checks workspace roles before npm production entries and again in shared direct 
 
 Identify records by format name and schema fingerprint. Verify the original bytes of saved files and Git objects.
 
-- `protocol_codec.py`
-- `original_file_evidence.py`
-- `git_file_bytes.py`
+| File | Responsibility |
+|---|---|
+| `protocol_codec.py` | Python side of the stable-name and schema-fingerprint registry; rejects `-vN` suffixes and protects reserved fields on write. |
+| `original_file_evidence.py` | Returns registered original file or Git-blob bytes from fixed paths and 40/64-character OIDs; never executes the bytes and grants no source or completion authority. |
+| `git_file_bytes.py` | Reads working-tree or Git-object bytes directly (8 MiB per file) without executing or interpreting them. |
+
+Node counterparts:
+
 - `lib/protocol-codec.js`
+- `lib/original-file-evidence.js`
+- `lib/git-file-bytes.js`
 - `lib/workflow-legacy-codec.js`
 - `lib/workflow-record-format.js`
 - `lib/strict-json.js`
-- `lib/git-file-bytes.js`
-- `lib/original-file-evidence.js`
 
 ### Paper sources, scoring, and publication
 
 Check the formats of sealed sources, analysis quality, summaries, scores, and publication records. Conference corrections and usage records have their own format rules.
 
-- `daily_source_format.py`
-- `analysis_quality_format.py`
-- `core_summary_format.py`
-- `scoring_record_format.py`
-- `blog_record_format.py`
-- `conference_source_correction_format.py`
-- `llm_usage_format.py`
+| File | Responsibility |
+|---|---|
+| `daily_source_format.py` | Recognises sealed daily source runs and references and checks run ID, batch, and source-set SHA field by field. |
+| `analysis_quality_format.py` | Selects the original or current quality rules without changing the record. |
+| `core_summary_format.py` | Reads the core-summary declaration and stage header, preserving original proof bytes. |
+| `scoring_record_format.py` | Reads the audit, resource, request, and evidence-cap format headers. |
+| `blog_record_format.py` | Distinguishes generation manifests, file lists, review receipts, journals, checkpoints, pass caches, and failure records by their real headers. |
+| `conference_source_correction_format.py` | Identifies conference resource and core correction record formats before local replay. |
+| `llm_usage_format.py` | Recognises the original usage-event format only; it changes no ledger entry and grants no request budget. |
+
+Node counterparts (the last two read source inputs and legacy prompts):
+
 - `lib/daily-source-format.js`
-- `lib/source-input-format.js`
 - `lib/analysis-quality-format.js`
 - `lib/core-summary-format.js`
 - `lib/scoring-record-format.js`
 - `lib/blog-record-format.js`
 - `lib/conference-source-correction-format.js`
 - `lib/llm-usage-format.js`
+- `lib/source-input-format.js`
 - `lib/prompt-legacy-codec.js`
 
 ### Paper explanations and source evidence
 
 Identify explanation drafts, articles, author and resource records, stages, recovery records, and manual corrections. Verify PDF quotations against the sealed source. Two JSON entries in the list are shared data rather than code: `lib/validation-rules.json` holds the table-header unit whitelist and glued-value test vectors used by both `table-check.js` and the Python column-unit check, and `lib/reader-legacy-records.json` holds the original values of old Reader plan versions, stage fields, and ordered replies; reading it grants no source or publication authority.
 
-- `reader_record_format.py`
-- `reader_proof_format.py`
-- `reader_pdf_quote_projection.py`
+| File | Responsibility |
+|---|---|
+| `reader_record_format.py` | Reads current and original Reader metadata (including `compact-article`) without granting source authority. |
+| `reader_proof_format.py` | Chooses an exact proof representation (such as PDF table grids) without authenticating sources or values. |
+| `reader_pdf_quote_projection.py` | Encodes source-derived PDF quotations as a projection, leaving the original extractor bytes unchanged. |
+
+Node counterparts and the remaining readers:
+
 - `lib/reader-record-format.js`
 - `lib/reader-proof-format.js`
 - `lib/reader-resource-claims-format.js`

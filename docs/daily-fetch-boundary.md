@@ -17,7 +17,7 @@
 
 抓取没有致命来源错误、但进入筛选的候选为 0 时，程序把 `stats.zeroCandidates: true` 写进当批 `raw-candidates.json`，并在付费筛选前停止；只有确认当天确实没有新论文后才显式放行。放行方式是在抓取阶段加 `--allow-empty-daily`：日更入口用 `npm run digest:prepare -- YYYY-MM-DD --allow-empty-daily`，直接抓取用 `npm run fetch -- --allow-empty-daily`，两者都支持；该参数只对抓取阶段有效，其他阶段会直接报错。项目 `.env` 里写 `PD_ALLOW_EMPTY_DAILY=1` 也能放行，但环境加载器会把它带进之后的所有批次，等于长期关闭这道闸门，命令行传入的 `PD_ALLOW_EMPTY_DAILY` 也会被 `.env` 覆盖；因此 `.env` 写法只在无法传参时使用，用完要删。
 
-放行后生成阶段只产出一份当日汇总页，标题和日期照常，正文明确写“今日没有新论文”，不生成单篇页、论文图或封面；审查和推送照常执行。生成侧会重读同批 `raw-candidates.json` 的 `stats.zeroCandidates`、批次号和来源状态：没有这份显式证据、批次号不符或来源有致命失败时，仍按原来的“没有论文可生成”拒绝，不会因为输入文件为空就自动放行。
+放行后生成阶段只产出一份当日汇总页，标题和日期照常，正文明确写“今日没有新论文”，不生成单篇页、论文图或封面；审查和推送照常执行。生成清单的 `files` 不是只有这一页：标签词表文件随批次一起安装，所以清单同时包含 `data/` 与 `static/data/` 下的 `tag-catalog-snapshot.json`、`tag-catalog-versions.json` 及各版本归档，但没有单篇页、论文图或 sidecar。生成侧会重读同批 `raw-candidates.json` 的 `stats.zeroCandidates`、批次号和来源状态：没有这份显式证据、批次号不符或来源有致命失败时，仍按原来的“没有论文可生成”拒绝，不会因为输入文件为空就自动放行。
 
 ## 取不到官方 PDF 的论文怎么跳过
 
@@ -29,7 +29,9 @@
 
 筛选完成、封存来源时，如果某篇入选论文的官方 PDF 在全部候选地址上都是 404，这篇论文同样跳过：程序把跳过原因、原始错误信息和论文编号写进本次来源运行目录 `data/runtime/daily-fresh-source-runs/<runId>/daily-source-skips.json`，然后继续封存和分析其余论文。封存来源阶段每批最多跳过两篇，可用 `PD_DAILY_SOURCE_SKIP_MAX` 调整（0–5，设为 0 时不允许跳过、遇到 404 仍停止整批）；超过上限就停止整批，不会为了继续发布而扩大跳过范围。
 
-跳过记录使用 `daily-source-skip` 格式，绑定本次批次的日期、运行 ID、上限和篇数；每篇保存 `arxivId`、`errorCode: ARXIV_PDF_NOT_FOUND`、`status: 404`、`reason` 和原始 `message`。读取时逐项核验，只接受 `ARXIV_PDF_NOT_FOUND` 加 404 的证据。被跳过的论文不进入深度分析，不生成博客页面，也不计为分析成功；其余论文仍须完整通过来源、分析和审查。页面和汇总里不会出现这篇论文，`digest:status` 会单列已跳过篇数，而不是把缺失写成通过。
+跳过记录使用 `daily-source-skip` 格式，绑定本次批次的日期、运行 ID、上限和篇数；每篇保存 `arxivId`、`errorCode: ARXIV_PDF_NOT_FOUND`、`status: 404`、`reason` 和原始 `message`。读取时逐项核验，只接受 `ARXIV_PDF_NOT_FOUND` 加 404 的证据。被跳过的论文不进入深度分析，不生成博客页面，也不计为分析成功；其余论文仍须完整通过来源、分析和审查。页面和汇总里不会出现这篇论文，`digest:status` 的 `analysis.skipped` 会单列已跳过篇数，而不是把缺失写成通过。
+
+两条 404 跳过通道的可见度不同，不能互相代替：封存阶段的跳过受上面 0–5 上限约束、写入 `daily-source-skips.json`，因此出现在 `digest:status`；筛选阶段的跳过没有篇数上限，只把 `parseSource: official_pdf_404_skipped` 逐篇记进 `filter-decisions.json`，不写 `daily-source-skips.json`，所以既不计入 `analysis.skipped`，也不会触发跳过报警。要判断某天筛选阶段跳过了多少篇，只能统计 `filter-decisions.json` 里带该 `parseSource` 的记录。
 
 ## 先固定已发布基线和窗口
 
@@ -81,6 +83,8 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 重新启动后核验时，程序直接重读私有封存的全部材料，重新执行原检查，不依赖 `current` 或原日期归档仍存在。这就是本页所说的冷核。下一日核验已发布的恢复批次时，也要重放这条来源及激活链。私有材料变化、符号链接、额外成员或权限变化均拒绝，不缓存通过结论。
 
+正式补抓必须带 `--require-previously-fetched`：`run-daily-digest.sh` 与 `npm run fetch` 都带这个旗标；直接运行 `node scripts/full-fetch.js` 而省略它时，边界不建立 `continuity`（`scripts/lib/daily-fetch-boundary.js` 在缺旗标时令 `continuity = null`），只能当复筛或调试入口，不能作为正式补抓。根目录的 `run-full-fetch.sh` 是旧抓取脚本，头部仍在讲已退役的微信公众号发布，既没有该旗标也没有日更边界，不要把它当日更入口。
+
 执行者明确启用 `requirePreviouslyFetched: true` 时，边界仍先核验上一正式发布的五份文件证明，再从原抓取检查点为七类 arXiv 分别选取提交时间最新的已获取 ID，为 HuggingFace 精选选取真实 `hfSelectedAt` 最新的已获取 ID。同一时间的候选按规范化 ID 排序确定见证，避免续跑身份漂移。该模式没有上一批完整的抓取证明时直接失败，不能从页面编号、库内记录或月首猜测以前获取过哪些论文。
 
 新增 `boundary.continuity` 使用 `daily-fetch-continuity` 及其结构指纹，记录 `required: true`、原精确起点 `originalSince`、旧检查点整个文件的 `archiveCheckpointSha256`、各来源的期望见证及 `overlapCutoffDate`，共同纳入原有边界身份 SHA。旧的 `daily-fetch-continuity-v1` 头只用于读取原记录。实际 `since` 取原起点、七类见证提交时间所在分钟、旧精选入选日北京时间零点中的最早时刻；HuggingFace 以单独的重叠截止日补抓。`lastDigestDate` 继续表示原正式发布日期，不能为了扩展范围改写它。普通模式的原有边界和身份计算保持兼容。
@@ -93,7 +97,7 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 当前目录中的合法 JSON 若属于另一日期或尚未关联上次已发布页面，可以保守重叠抓取，并通过不写入边界身份的诊断信息说明原因；已关联正式页面的 v7 来源证明损坏则停止，不能退回月首掩盖问题。读取或 JSON 解析失败也必须报出。
 
-日更的整个抓取流程先取得独立运行锁，避免两个批次同时改写当前数据。默认使用 `LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY`：锁记录、权限和文件身份均符合要求，且明确确认持有者属于本机、进程已退出时，可以在原过期时间之前恢复这把运行锁。仍活跃的进程、其他机器的持有者或不安全的锁不能走这条提前恢复；不能仅凭时间较久或一次启动超时手工删除锁。原有过期判断及逐篇论文锁规则不变。取得运行锁后仍须核对北京时间批次日期，随后才可归档和抓取。
+日更的整个抓取流程先取得独立运行锁，避免两个批次同时改写当前数据。默认使用 `LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY`：锁记录、权限和文件身份均符合要求，且明确确认持有者属于本机、进程已退出时，可以在原过期时间之前恢复这把运行锁。仍活跃的进程、其他机器的持有者或不安全的锁不能走这条提前恢复；不能仅凭时间较久或一次启动超时手工删除锁。原有过期判断及逐篇论文锁规则不变：锁超过有效期限后，格式严格（目录 `0700`、owner 文件 `0600`）且 owner 字段完整的锁即使登记的是其他主机也按过期回收；只有 `0755`/`0644` 的旧格式锁才要求本机已退出进程。取得运行锁后仍须核对北京时间批次日期，随后才可归档和抓取。
 
 ## 请求等待
 

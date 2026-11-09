@@ -270,7 +270,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 默认 API 日更使用 `llm_api_production`；会议和历史另核对各自正式来源与发布清单。旧 Manual 发布依据仅按原记录核验。混合来源资格、缺少来源绑定或只有文件清单，不能用于新日更发布。完整的历史清单按原字段重验，程序不会补写新字段。
 
-经抓取阶段 `--allow-empty-daily` 确认的零候选日使用 `empty_daily_batch`：清单带 `emptyDailyBatch` 放行证据，`publishedPapers` 为空数组，`files` 只含当日汇总页，审查凭证照常签发。该模式不是普通正式论文批次，不能含单篇页、论文图或 pipeline production 证明；缺少放行证据或来源致命失败时仍在生成阶段报错。`digest:status` 对空日同样按数据、审查、远端和不生图登记四项判定完成，`publishedPapers` 为空不会自动放行；部署与网页仍单独核验。
+经抓取阶段 `--allow-empty-daily` 确认的零候选日使用 `empty_daily_batch`：清单带 `emptyDailyBatch` 放行证据，`publishedPapers` 为空数组，审查凭证照常签发。`files` 不是只有汇总页：标签词表文件随批次安装，所以同时包含当日汇总页和 `data/`、`static/data/` 下的 `tag-catalog-snapshot.json`、`tag-catalog-versions.json` 及各版本归档，但不含单篇页、论文图或 sidecar。该模式不是普通正式论文批次，不能含单篇页、论文图或 pipeline production 证明；缺少放行证据或来源致命失败时仍在生成阶段报错。`digest:status` 对空日同样按数据、审查、远端和不生图登记判定其 complete 字段，`publishedPapers` 为空不会自动放行；部署与网页属[六项完成定义](../AGENTS.md#日更完成的六项)的第 4、5 项，仍单独核验。
 
 论文快照用 `published-papers-fingerprint` 声明实际编码规则。程序区分数字、字符串、布尔值和空值，再从快照内容重算 SHA-256；声明格式变了，同一论文快照的编码与哈希保持一致。审查凭证用 `blog-review-receipt` 保存本次生成清单的 SHA、快照规则、生成输入指纹和实际审查文件。只改格式字段，不能让旧凭证覆盖新的生成清单。
 
@@ -377,7 +377,7 @@ npm run digest:status -- --date YYYY-MM-DD
 |---|---|
 | `dataSources` | 本次实际读取的候选、筛选决定、入选集和分析结果来源状态（`rawCandidates`、`filteredPapers`、`filterDecisions`、`deepAnalysisResult`），取值为 `current`、`archive`、`missing` 或 `invalid`。 |
 | `filter.pendingDecisions` | 候选总数减已决定数，即尚无明确决定的数量。可重试决定另计 `filter.retryableDecisions`。 |
-| `analysis.expected` / `analysis.missing` | 入选集扣除已跳过论文后的大小，以及其中未进入分析结果的篇数。`analysis.total` 是结果记录数，`analysis.skipped` 是官方 PDF 404 已跳过篇数。 |
+| `analysis.expected` / `analysis.missing` | 入选集扣除已跳过论文后的大小，以及其中未进入分析结果的篇数。`analysis.total` 是结果记录数，`analysis.skipped` 只统计封存阶段官方 PDF 404 已跳过篇数；筛选阶段的 404 跳过不设上限，只记在 `filter-decisions.json`，不计入这里。 |
 | `blog.remoteOidVerified` | 实际远端 OID 是否与发布提交一致。 |
 | `blog.publicationVerified` | 完整发布凭证是否通过核验；与远端提交分别报告。 |
 | `visuals.gateComplete` | 长图完成门是否通过；不生图记录有效时也可为 `true`。 |
