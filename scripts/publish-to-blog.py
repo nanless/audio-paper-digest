@@ -11399,7 +11399,10 @@ def build_generation_input_source_reference(data_file):
     }
 
 
-def validate_generation_input_source_reference(manifest, target_date):
+_SOURCE_REFERENCE_REPLAY_CACHE = {}
+
+
+def validate_generation_input_source_reference(manifest, target_date, *, fresh=False):
     """在审查和推送之前，重放生成清单指定的确切输入文件。
 
     旧清单确实可以没有文件引用。新生成的清单带有引用，
@@ -11427,6 +11430,13 @@ def validate_generation_input_source_reference(manifest, target_date):
     ):
         raise PublishDataValidationError('generation 输入来源引用缺失或格式非法')
     source = Path(reference['path'])
+    # 同一次 push 里这份封存来源证明会被重放 6 次（凭证加载 2 次、预检 1 次、
+    # git_push 内 2 次、推送前 1 次），单次约 88 秒、75 个 Node 子进程。
+    # 用「路径 + 清单记录的内容 SHA + 字节数 + 目标日期」做键缓存；真正改动 Git
+    # 之前的那一次用 fresh=True 强制全量重放，语义边界不变。
+    replay_key = (str(source), str(reference['sha256']), int(reference['bytes']), str(target_date))
+    if not fresh and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE:
+        return _SOURCE_REFERENCE_REPLAY_CACHE[replay_key]
     try:
         entry = source.lstat()
     except OSError as exc:
@@ -11440,6 +11450,7 @@ def validate_generation_input_source_reference(manifest, target_date):
     if len(payload) != reference['bytes'] or hashlib.sha256(payload).hexdigest() != reference['sha256']:
         raise PublishDataValidationError('generation 输入来源文件字节或 SHA-256 已漂移')
     validate_daily_fresh_sources_for_publish(str(source), target_date)
+    _SOURCE_REFERENCE_REPLAY_CACHE[replay_key] = str(source)
     return str(source)
 
 
@@ -14110,7 +14121,7 @@ def _validate_push_generation_input_integrity(date_str):
     if manifest.get('publicationMode') == SEALED_TUTORIAL_PREVIEW_MODE:
         raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     if blog_formats.source_bound_generation(manifest):
-        _validate_generation_input_integrity(manifest, date_str)
+        _validate_generation_input_integrity(manifest, date_str, fresh=True)
 
 
 def _git_tracks_path(relative_path):
@@ -14982,7 +14993,7 @@ def generation_input_fingerprint(
     return _stable_json_sha256(payload)
 
 
-def _validate_generation_input_integrity(manifest, date_str):
+def _validate_generation_input_integrity(manifest, date_str, *, fresh=False):
     _validate_post_publication_policy(manifest)
     """按论文快照和相关来源记录重新计算生成输入，核对记录、发布证明及其指纹。"""
     published_papers = manifest.get('publishedPapers')
@@ -15027,7 +15038,7 @@ def _validate_generation_input_integrity(manifest, date_str):
     if input_source_reference is not None:
         # 先核对来源文件内容，再重算输入 SHA，这样归档或 --data-file 有变化时
         # 会明确报告来源文件变化，而不是笼统的不匹配。
-        validate_generation_input_source_reference(manifest, date_str)
+        validate_generation_input_source_reference(manifest, date_str, fresh=fresh)
     if empty_marker is not None:
         _validate_empty_daily_batch_input(manifest, date_str, empty_marker)
     expected_input = generation_input_fingerprint(
