@@ -12642,7 +12642,9 @@ def review_all_posts(
         with review_unit_cache(date_str, index_file, required=require_llm, run_id=index_run_id):
             _img_passed, img_issues = multimodal_review_images(
                 content, '汇总页面', required=require_llm,
-                image_concurrency=get_blog_review_concurrency(),
+                # 汇总页的图片单元仍沿用 1–5 的上限：论文页已按
+                # PD_BLOG_REVIEW_CONCURRENCY 并行，再叠加一层大并发会直接撞限流。
+                image_concurrency=min(5, get_blog_review_concurrency()),
             )
         if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
             img_issues = list(img_issues or []) + [{
