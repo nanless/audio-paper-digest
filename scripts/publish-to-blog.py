@@ -14111,6 +14111,15 @@ def _validate_push_generation_input_integrity(date_str):
         _validate_generation_input_integrity(manifest, date_str)
 
 
+def _git_tracks_path(relative_path):
+    result = subprocess.run(
+        ['git', 'ls-files', '--error-unmatch', '--', relative_path],
+        cwd=str(Path(BLOG_REPO).expanduser().resolve()),
+        capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
 def git_push(date_str, publish_paths, rollback_state=None):
     """提交，把 HEAD 显式推送到 main，并核验远端对象 ID。"""
     manifest = _git_relative_manifest(publish_paths)
@@ -14191,9 +14200,15 @@ def git_push(date_str, publish_paths, rollback_state=None):
         if state is None:
             state = capture_git_publish_state(publish_paths)
         if manifest and not retrying_existing_commit:
-            _run_git(
-                ['add', '--', *manifest], check=True,
-            )
+            # 已删除且从未提交过的派生资产（例如本次重新生成时被移除的图）
+            # 既不在工作树也不在索引里，git add 会以 128 失败；这类路径本来
+            # 就没有差异可提交，跳过即可，其余路径仍逐个精确暂存。
+            addable = [item for item in manifest
+                       if os.path.exists(item) or _git_tracks_path(item)]
+            if addable:
+                _run_git(
+                    ['add', '--', *addable], check=True,
+                )
             validate_git_index(publish_paths)
             validate_git_index_against_review_receipt(receipt, publish_paths)
         staged = _run_git(
