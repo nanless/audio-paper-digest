@@ -12502,7 +12502,12 @@ def _review_single_paper(args):
 
     # 3. 多模态图片审查
     with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id, run_id=_paper_fresh_run_id(paper)):
-        img_passed, img_issues = multimodal_review_images(content, title, required=require_llm, paper=paper)
+        # 单页内图片默认串行，实测每页约 3.9 张、每张 p50 14.3 秒，是论文页审查
+        # 的主要耗时。论文页之间已按 PD_BLOG_REVIEW_CONCURRENCY 并行，这里只把
+        # 单页内图片提到 2 路，避免页面并发 × 图片并发叠乘后撞限流。
+        img_passed, img_issues = multimodal_review_images(
+            content, title, required=require_llm, paper=paper, image_concurrency=2,
+        )
     if img_passed is False and count_blocking_review_issues(img_issues) == 0:
         img_issues = list(img_issues or []) + [{
             'severity': 'error',
