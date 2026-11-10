@@ -7141,6 +7141,32 @@ def _read_daily_publication_source_text(paper):
     return content.decode('utf-8')
 
 
+_MATHJAX_DOUBLE_WRITE_RULES = (
+    # ≥10\geq 10 → ≥10；Unicode 符号与同义 LaTeX 命令同时出现时只留前者。
+    (re.compile(r'([≥≤≠≈])\s*([-−]?\d+(?:\.\d+)?)\s*\\(?:geq|leq|neq|approx)\s*\2'), r'\1\2'),
+    # λ=1\lambda=1 → λ=1
+    (re.compile(r'(λ|μ|σ|π|Δ)\s*=\s*([-−]?\d+(?:\.\d+)?)\s*'
+                r'\\(?:lambda|mu|sigma|pi|Delta)\s*=\s*\2'), r'\1=\2'),
+    # q^\hat{q} → \hat{q}
+    (re.compile(r'([A-Za-z])\^\\hat\{\1\}'), r'\\hat{\1}'),
+    # −7.39-7.39 → −7.39（Unicode 负号与 ASCII 负号重复同一数值）
+    (re.compile(r'(?<![\d.])([−-])(\d+(?:\.\d+)?)-\2(?![\d.])'), r'\1\2'),
+)
+
+
+def _collapse_mathjax_double_write(text):
+    """Collapse Unicode/LaTeX double-written symbols in the rendered page only.
+
+    The saved Reader keeps its exact bytes; this projection only removes the
+    redundant second copy so the page does not show e.g. "≥10\geq 10".
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    for pattern, replacement in _MATHJAX_DOUBLE_WRITE_RULES:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def _project_source_quoted_codec_display(article, paper):
     saved = _api_reader_markdown_tables(paper['apiReaderArticle'])
     tables = extract_markdown_tables(article)
@@ -7411,6 +7437,9 @@ def _normalize_api_reader_source_cell(value):
                     + scalar + r'\]%[ \t]+(?:\\\*){1,3}[ \t]*', str(value or '')):
         value = value.replace(r'\*', '*')
     value = _normalize_api_reader_explicit_symbol_projection(value)
+    # 封存 DOM 里 Unicode 符号与同义 LaTeX 命令被同时抽出（≥10\geq 10、
+    # λ=1\lambda=1、−7.39-7.39）时，两侧都按同一投影折叠，比较仍逐字有效。
+    value = _collapse_mathjax_double_write(value)
     # 在 NFKC 把脚注 ℓ 转成 l 之前核对原始脚注与明确 \ell 注解。
     value = _normalize_api_reader_display_artifacts(value)
     value = unicodedata.normalize('NFKC', value)
@@ -10325,6 +10354,7 @@ def _api_reader_payload(paper):
                 raise PublishDataValidationError('PDF 整页派生图片必须对应唯一正文图片节点。')
             rendered_article = rendered_article.replace(image_line, image_line + '\n\n> **图片来源：** '
                 + asset['derivedAssetProof']['displayLabel'], 1)
+    rendered_article = _collapse_mathjax_double_write(rendered_article)
     return {
         'contract': reader_contract,
         **({'schemaFingerprint': plan['schemaFingerprint']}
