@@ -10013,7 +10013,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // 这里只缩小本轮目标清单，不改 JSON 解析、令牌、SHA、条数或类型校验。
         if (repairContext && fresh.isDailyFreshSourceScope() && readerContentMode.is(identity, 'source-only')
             && identity.model?.protocol === 'openai_responses') {
-            const invalidOrdinalAck = /不是有效的 JSON|JSON 中出现重复字段/.test(String(patchRejectionFeedback || ''));
+            // 同一篇上一轮（可能是上一次运行）因 ACK 坏 JSON 失败过，也要从本轮起收紧
+            // 授权目标数：否则每次重新分析都会先给多目标、再写坏一次才收敛。
+            const invalidOrdinalAck = /不是有效的 JSON|JSON 中出现重复字段/.test(String(patchRejectionFeedback || ''))
+                || /不是有效的 JSON/.test(String(paper.latestAnalysisAttemptError || ''));
             const roundPlan = ordinaryOrdinal.applyRoundTargetBudget(repairContext, {
                 limit: ordinaryOrdinal.roundTargetLimit({ invalidAck: invalidOrdinalAck })
             });
