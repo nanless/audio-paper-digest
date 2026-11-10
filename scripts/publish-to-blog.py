@@ -11400,6 +11400,20 @@ def build_generation_input_source_reference(data_file):
     }
 
 
+def _daily_source_run_stamp(run_id):
+    """封存运行目录的廉价指纹：路径+大小+mtime，用于让重放缓存能感知源文件改写。"""
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    try:
+        entries = []
+        for path in sorted(run_dir.rglob('*')):
+            if path.is_file():
+                info = path.stat()
+                entries.append((str(path.relative_to(run_dir)), info.st_size, info.st_mtime_ns))
+    except OSError:
+        return None
+    return hashlib.sha256(repr(entries).encode('utf-8')).hexdigest() if entries else None
+
+
 _SOURCE_REFERENCE_REPLAY_CACHE = {}
 
 
@@ -11445,13 +11459,24 @@ def validate_generation_input_source_reference(manifest, target_date, *, fresh=F
         raise PublishDataValidationError('generation 输入来源文件字节或 SHA-256 已漂移')
     # 上面的字节与 SHA 核对每次仍然执行（16MB 读取，0.1 秒级），只有后面这份
     # 88 秒、75 个 Node 子进程的封存来源重放才复用：同一次 push 里它会被调用
-    # 6 次。键里带已核验的 SHA，文件一漂移就必然换键；真正改动 Git 之前的那一次
-    # 用 fresh=True 强制全量重放，语义边界不变。
-    replay_key = (str(source), reference['sha256'], int(reference['bytes']), str(target_date))
-    if not fresh and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE:
+    # 6 次。键里除了数据文件已核验的 SHA，还带封存运行目录的（路径、大小、mtime）
+    # 戳——源文件被改写时戳必然变化，重放照跑；真正改动 Git 之前的那一次仍用
+    # fresh=True 强制全量重放。
+    replay_key = None
+    try:
+        reference_payload = json.loads(payload.decode('utf-8'))
+        run_id = reference_payload.get('dailyFreshSourceRun', {}).get('runId')
+    except (UnicodeError, json.JSONDecodeError, AttributeError):
+        run_id = None
+    run_stamp = _daily_source_run_stamp(run_id) if isinstance(run_id, str) else None
+    if run_stamp is not None:
+        replay_key = (str(source), reference['sha256'], int(reference['bytes']),
+                      str(target_date), run_stamp)
+    if not fresh and replay_key is not None and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE:
         return str(source)
     validate_daily_fresh_sources_for_publish(str(source), target_date)
-    _SOURCE_REFERENCE_REPLAY_CACHE[replay_key] = str(source)
+    if replay_key is not None:
+        _SOURCE_REFERENCE_REPLAY_CACHE[replay_key] = str(source)
     return str(source)
 
 
