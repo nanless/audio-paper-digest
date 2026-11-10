@@ -921,7 +921,9 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
             verifyRevisionPointer();
             return returnVerifiedRevisionPointer ? structuredClone(revision.completionProof) : null;
         }
-        fail('completion index/marker removed','run');
+        // 完成标记缺失是可判定的单篇证明缺失：按内容失败让这篇重新生成，
+        // 不能把整批当运行级故障中止。
+        fail('completion index/marker removed','content','READER_ORDINAL_ORIGIN_MISSING');
     }
     if(!marked&&revision?.contract==='daily-reader-revision-history-v1'
         &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
@@ -936,7 +938,7 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
             ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
         return null;
     }
-    if(!marked||!stage)fail('completion index/marker removed','run');
+    if(!marked||!stage)fail('completion index/marker removed','content','READER_ORDINAL_ORIGIN_MISSING');
     const ref=stage.ordinalCompletionProof;if(!ref||path.resolve(ref.path)!==path.join(dir,files.at(-1)))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
     savedSourceScope(paper,saved.identity,attempts);

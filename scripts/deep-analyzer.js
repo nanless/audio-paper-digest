@@ -1716,29 +1716,91 @@ function omitReaderSelectedTablesForProseCheck(article, selectionTableIndexes = 
 function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtifacts) {
     let output = String(article || '');
     const bindings = Array.isArray(tableBindings) ? tableBindings : [];
-    for (const binding of bindings) {
+    const tableShape = rows => `${rows.length}行×${rows[0]?.length || 0}列`;
+    const headerPreview = table => String((table?.header || [])
+        .map(value => normalizeReaderSourceDisplayArtifacts(String(value).trim()))
+        .filter(Boolean).slice(0, 4).join(' / ')).slice(0, 160);
+    // 模型最常犯的定位错误是把 tableIndex 当成原表序号，或新增/删除正文表后没有重编号。
+    // 只说「坐标无法重放」模型无法定位是哪张表错了；这里点名绑定、正文表、原表尺寸，
+    // 并在正文里找出与所选原表同尺寸的表，给出可直接照抄的 tableIndex 修正。
+    const describeTableIndexMismatch = (binding, bindingIndex, table, sourceTable, rows) => {
+        const bindingLabel = `tableBindings[${bindingIndex}]`;
+        const sourceMatrix = Array.isArray(sourceTable?.matrix) ? sourceTable.matrix : [];
+        const sourceWidth = sourceMatrix[0]?.length || 0;
+        const renderedWidth = table.header?.length || 0;
+        // selection 只选原表的部分行列时，正文表本来就会比原矩阵小；只有逐格绑定
+        // 覆盖完整原矩阵（completeTable 或整表 artifact_table）才可能用尺寸判断
+        // tableIndex 指错了表。部分选择仍交给逐格坐标检查。
+        const claimsWholeSourceTable = sourceMatrix.length * sourceWidth > 0
+            && binding.cellBindings.length === sourceMatrix.length * sourceWidth;
+        if (!claimsWholeSourceTable || !sourceWidth || !renderedWidth
+            || (rows.length === sourceMatrix.length && renderedWidth === sourceWidth)) return '';
+        const tables = extractMarkdownTables(output);
+        const candidates = tables.flatMap((candidate, index) => {
+            const candidateRows = [candidate.header, ...candidate.rows];
+            return candidateRows.length === sourceMatrix.length
+                && candidateRows[0]?.length === sourceWidth ? [index + 1] : [];
+        });
+        const actualHeader = headerPreview(table);
+        const sourceHeader = headerPreview({ header: sourceMatrix[0] });
+        return `：${bindingLabel}（sourceTableOrdinal=${binding.sourceTableOrdinal}）绑定的是 `
+            + `${tableShape(sourceMatrix)} 的原表${sourceHeader ? `（首行：${sourceHeader}）` : ''}，`
+            + `但正文第${binding.tableIndex}张 Markdown 表是 ${tableShape(rows)}`
+            + `${actualHeader ? `（表头：${actualHeader}）` : ''}。tableIndex 是正文表序，不是原表序号。`
+            + (candidates.length === 1
+                ? `正文第${candidates[0]}张表是 ${tableShape(sourceMatrix)}，与原表尺寸一致；`
+                    + `请把 ${bindingLabel}.tableIndex 改为 ${candidates[0]}，并让所有 tableBindings 按最终正文表序连续编号。`
+                : candidates.length > 1
+                    ? `正文第${candidates.join('、')}张表都是 ${tableShape(sourceMatrix)}；`
+                        + '请按表头与原表逐列核对后选择正确的一张，并让所有 tableBindings 按最终正文表序连续编号。'
+                    : `正文中没有 ${tableShape(sourceMatrix)} 的表；请确认该原表的 Markdown 表仍在正文中，`
+                        + '或改用 selection/completeTable/逐字引文，不能把手写表绑到错误的表号。')
+            + (tables.length === bindings.length ? ''
+                : `正文当前有 ${tables.length} 张 Markdown 表但只有 ${bindings.length} 条 tableBindings；`
+                    + '每张正文表都要有来源记录（无原表时用 source_quotes 的逐字引文，或删除该表），'
+                    + '否则后续表号必然错位。')
+            + '若这是完整原表被合并了两层表头，程序只接受能由原 DOM 跨行/跨列唯一证明的合并；'
+            + '请保留原表全部行列，或改用 completeTable 由程序按原 DOM 生成整表。'
+            + '不能只改正文或删表绕过：保留原比较条件、数字、单位与结果。';
+    };
+    for (const [bindingIndex, binding] of bindings.entries()) {
         if (binding?.sourceType !== 'artifact_table'
             || !Number.isSafeInteger(binding.tableIndex)
             || !Array.isArray(binding.cellBindings)
             || binding.cellBindings.length === 0) continue;
-        const table = extractMarkdownTables(output)[binding.tableIndex - 1];
+        const tables = extractMarkdownTables(output);
+        const table = tables[binding.tableIndex - 1];
         const sourceTable = (structuredArtifacts?.tables || []).find(item => (
             item?.ordinal === binding.sourceTableOrdinal && item?.recoveryStatus === 'complete'
         ));
         if (!table || !sourceTable) {
-            throw new Error(`Reader selection table ${binding.tableIndex} 无法从原始表重放`);
+            throw new Error(`读者文章表格绑定无法定位正文表或原表（cell 坐标无法重放）：`
+                + `tableBindings[${bindingIndex}] 的 tableIndex=${binding.tableIndex} 在正文中找不到 Markdown 表，`
+                + `或 sourceTableOrdinal=${binding.sourceTableOrdinal} 不是唯一且 recoveryStatus=complete 的原表。`
+                + `正文现有 ${tables.length} 张 Markdown 表；tableIndex 必须按最终正文表序连续编号，`
+                + '原表身份必须来自本次证据，不能发明序号或改绑另一张表。');
         }
         let rows = [table.header, ...table.rows];
         rows = restoreUniquelyMergedReaderHeaderRows(rows, binding, sourceTable) || rows;
+        const mismatch = describeTableIndexMismatch(binding, bindingIndex, table, sourceTable, rows);
+        if (mismatch) throw new Error(`读者文章表格绑定表号错位（cell 坐标无法重放）${mismatch}`);
         const mapped = new Map();
-        for (const cellBinding of binding.cellBindings) {
+        for (const [cellIndex, cellBinding] of binding.cellBindings.entries()) {
             const key = `${cellBinding?.renderedRow}:${cellBinding?.renderedColumn}`;
             const sourceCell = findStructuredTableCell(
                 sourceTable, cellBinding?.sourceRow, cellBinding?.sourceColumn
             );
             if (!sourceCell || mapped.has(key)
                 || rows[cellBinding?.renderedRow]?.[cellBinding?.renderedColumn] === undefined) {
-                throw new Error(`Reader selection table ${binding.tableIndex} 的 cell 坐标无法重放`);
+                const reason = !sourceCell
+                    ? `sourceRow=${cellBinding?.sourceRow}、sourceColumn=${cellBinding?.sourceColumn} 不在原表 DOM 单元格内`
+                    : mapped.has(key)
+                        ? `renderedRow=${cellBinding?.renderedRow}、renderedColumn=${cellBinding?.renderedColumn} 与前面的坐标重复`
+                        : `renderedRow=${cellBinding?.renderedRow}、renderedColumn=${cellBinding?.renderedColumn} 超出正文第${binding.tableIndex}张表的 ${tableShape(rows)} 范围`;
+                throw new Error(`读者文章表格绑定的逐格坐标无法重放：`
+                    + `tableBindings[${bindingIndex}].cellBindings[${cellIndex}] ${reason}。`
+                    + `逐格坐标必须与正文 Markdown 表的行列一一对应，并落在原表 DOM 单元格内；`
+                    + '不要复用坐标、猜坐标或把别的表/别的原表的坐标抄进来。');
             }
             mapped.set(key, normalizeReaderSourceDisplayArtifacts(require('./lib/reader-table-pdf-evidence')
                 .displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn)));
@@ -1746,7 +1808,10 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
         const rebuiltRows = rows.map((row, rowIndex) => row.map((_cell, columnIndex) => {
             const key = `${rowIndex}:${columnIndex}`;
             if (!mapped.has(key)) throw new Error(
-                `Reader selection table ${binding.tableIndex} 的 cell 绑定不完整`
+                `读者文章表格绑定的 cellBindings 不完整：`
+                + `正文第${binding.tableIndex}张表的 renderedRow=${rowIndex}、renderedColumn=${columnIndex} `
+                + `（${tableShape(rows)}）没有对应的 cellBindings 项。artifact_table 必须逐格绑定完整原表，`
+                + '不能只绑定部分行、漏掉表头或把合并单元格拆成少格。'
             );
             return mapped.get(key);
         }));

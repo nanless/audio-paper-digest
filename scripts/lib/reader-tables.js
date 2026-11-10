@@ -461,9 +461,15 @@ function validateReaderResultTableCoverage(sections, artifacts) {
             .replace(/^约\s*(?=[+−-]?(?:\d|\.\d))/, '');
         // 同格明确报告两个结果值的升降，不把远处的方法型号或日期借作结果。
         const number = '[+−-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+−-]?\\d+)?';
-        const transition = new RegExp(`^(?:从|由)\\s*${number}\\s*%?\\s*(?:到|至|升至|降至|提高到|降低到)\\s*${number}(?=$|[%，,;；。]|\\s*(?:%|对照|相比|相对|，|,|;|；|。|$))`, 'u');
+        // 中文正文里的测量单位要和英文单位同权：`14.51秒`、`25.5倍` 是实测值，
+        // 不能因为单位写成中文就被当成非数字。只收物理量、比率与分数单位；
+        // 年份、编号、数量（年/月/日/号/个/条）仍不能充当结果。
+        const unit = '(?:(?:ms|s|hz|khz|mhz|ghz|db|mb|gb|kb|fps)\\b'
+            + '|(?:毫秒|微秒|纳秒|秒|分钟|小时|倍|赫兹|千赫兹|兆赫兹|吉赫兹|分贝|帧|分|美元)'
+            + '|×|x(?![A-Za-z0-9]))';
+        const transition = new RegExp(`^(?:从|由)\\s*${number}\\s*%?\\s*(?:到|至|升至|降至|提高到|降低到)\\s*${number}(?=$|[%，,;；。]|\\s*(?:%|对照|相比|相对|，|,|;|；|。|$)|${unit})`, 'u');
         if (transition.test(text)) return true;
-        return /^(?:[($（]\s*)?[≈~<>≤≥]?\s*[+−-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+−-]?\d+)?(?=$|[\s%±(),，）;:/]|[–—-]\s*\d|(?:ms|s|hz|khz|mhz|ghz|db|mb|gb|kb|fps)\b)/i.test(text);
+        return new RegExp(`^(?:[($（]\\s*)?[≈~<>≤≥]?\\s*${number}(?=$|[\\s%±(),，）;:/]|[–—-]\\s*\\d|${unit})`, 'i').test(text);
     };
     const numericResultTables = results.flatMap(section => extractMarkdownTables(String(section.body || '')))
         .filter(table => {
@@ -481,21 +487,28 @@ function validateReaderResultTableCoverage(sections, artifacts) {
         const resultTables = requirement.sourceTableOrdinals.map(ordinal => (
             inventory.filter(table => table?.ordinal === ordinal).length === 1
                 ? inventory.find(table => table.ordinal === ordinal) : null));
-        const bindable = resultTables.filter(table => table && (
-            assessReaderTableSelectionEligibility(table).eligible
-                || assessReaderCompleteTableEligibility(table).eligible)).map(table => `TABLE_${table.ordinal}`);
-        const unrenderable = resultTables.filter(table => table && !bindable.includes(`TABLE_${table.ordinal}`))
-            .map(table => `TABLE_${table.ordinal}`);
+        const selectionBindable = resultTables.filter(table => table
+            && assessReaderTableSelectionEligibility(table).eligible).map(table => `TABLE_${table.ordinal}`);
+        const completeOnly = resultTables.filter(table => table
+            && !selectionBindable.includes(`TABLE_${table.ordinal}`)
+            && assessReaderCompleteTableEligibility(table).eligible).map(table => `TABLE_${table.ordinal}`);
+        const unrenderable = resultTables.filter(table => table
+            && !selectionBindable.includes(`TABLE_${table.ordinal}`)
+            && !completeOnly.includes(`TABLE_${table.ordinal}`)).map(table => `TABLE_${table.ordinal}`);
         throw new Error('读者文章主结果表覆盖不足：原论文 TABLE_'
             + requirement.sourceTableOrdinals.join('/TABLE_')
             + ' 明确提供定量结果；result/ablation 小节必须含至少一张可核对的数字结果表。'
             + '不能只用数据集表和配置表凑数量。保留可运行策略、必要基线与比较条件，'
             + '必要时将一张配置表改为结果表并同步正文和 tableBindings，配置事实保留在文字中。'
             + (unrenderable.length ? `${unrenderable.join('/')} 的原表无法安全渲染（程序检查未通过），`
-                + '不要再用这些原表或数据集表、配置表凑数；'
-                + (bindable.length ? `${bindable.join('/')} 可安全绑定，优先用它。` : '')
-                + '若要覆盖这些原表的数字，请用封存全文的连续逐字引文完整覆盖全部数字、单位与比较条件，'
-                + '写成 source_quotes 表。' : ''));
+                + '不要再用这些原表或数据集表、配置表凑数；' : '')
+            + (selectionBindable.length ? `${selectionBindable.join('/')} 可安全绑定，优先用它。` : '')
+            + (completeOnly.length ? `${completeOnly.join('/')} 的 selection 不合格（例如原表未声明表头），`
+                + '但可用 completeTable 完整声明：正文独占一段写 [[TABLE_N]]，记录只含 '
+                + '{"tableIndex":N,"completeTable":{"sourceTableOrdinal":J}}，程序按原 DOM 生成整表。' : '')
+            + (unrenderable.length
+                ? '若要覆盖这些原表的数字，请用封存全文的连续逐字引文完整覆盖全部数字、单位与比较条件，写成 source_quotes 表。'
+                : ''));
     }
     return { ...requirement, numericResultTables: numericResultTables.length };
 }

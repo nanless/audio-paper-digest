@@ -101,6 +101,24 @@ test('同格明确结果变化计为测量，日期型号与编号不能替代�
     }
 });
 
+test('中文单位的实测值计为测量，年份编号与数量仍不能充数', () => {
+    const artifacts = sourceTables();
+    const positive = '| 条件 | 成功率 | 策略耗时 | 效率 |\n|---|---|---|---|\n'
+        + '| 固定最好策略 | 70.45% | 14.51秒每场景 | 1.00倍 |\n'
+        + '| 学出路由器 | 71.55% | 11.05秒每场景 | 1.33倍 |';
+    assert.equal(validateReaderResultTableCoverage([{ kind: 'result', body: positive }], artifacts).numericResultTables, 1);
+    const ratio = '| 测试床 | 参考 | 效率倍数 |\n|---|---|---|\n'
+        + '| 代码 | 总是用Opus | 25.5倍 |\n| 文本 | 总是用GPT-4 | 7.1倍 |\n'
+        + '| 图像 | 固定生成器 | 1.35× |\n| 机器人 | 固定策略 | 1.33倍 |';
+    assert.equal(validateReaderResultTableCoverage([{ kind: 'ablation', body: ratio }], artifacts).numericResultTables, 1);
+    for (const invalid of [
+        '| 条件 | 年份 | 版本 | 数量 | 编号 |\n|---|---|---|---|---|\n'
+            + '| A | 2024年 | 第2版 | 1个 | 编号3 |\n| B | 2025年 | 第3版 | 2个 | 编号4 |',
+        '| 条件 | 年份 | 数量 | 说明 |\n|---|---|---|---|\n'
+            + '| A | 2024年 | 1个 | 同一协议 |\n| B | 2025年 | 2个 | 同一协议 |'
+    ]) assert.throws(() => validateReaderResultTableCoverage([{ kind: 'result', body: invalid }], artifacts), /主结果表覆盖不足/);
+});
+
 test('结果变化格式不免除逐字来源检查', () => {
     const { bindApiReaderSourceEvidence } = require('../scripts/deep-analyzer');
     const body = '| 方法 | 结果比较 |\n| --- | --- |\n| A | 从67.6到76.3 |\n| B | 从73.6到81.9 |\n| C | 从5.1到4.2 |\n| D | 从88.75到90.25 |';

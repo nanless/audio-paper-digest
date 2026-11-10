@@ -2947,6 +2947,29 @@ function buildRepairTargets(draft, issues, options = {}) {
                 ? [{ ...globalWideTableIssue, path: `/tableBindings/${firstBindingIndex}` }]
                 : [globalWideTableIssue];
     }
+    // 表号错位或逐格坐标不可重放时，修复必须能整组重编号 tableBindings；
+    // 只授权报错的那一条会让模型改完首项后仍与后续表号冲突。正文表路径同时
+    // 授权，允许模型删除多余的未绑定表或补写对应 Markdown 表；仍由完整解析器核验。
+    const cellReplayIssue = blockingIssues.find(issue => (
+        !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+        && /cell 坐标无法重放|cell 绑定不完整/.test(String(issue?.message || ''))
+    ));
+    if (cellReplayIssue) {
+        add('/tableBindings');
+        for (const table of locateReaderDraftTables(draft)) {
+            if (table.path) add(table.path);
+        }
+        if (paths.size) {
+            return [...paths].slice(0, MAX_READER_PATCH_NODES).map(pointer => ({
+                path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+                ...(pointer === '/tableBindings' ? { repairInstruction:
+                    '本轮按正文最终表序重排整组 tableBindings：tableIndex 必须从 1 连续递增并对应正文实际 Markdown 表；'
+                    + '新增/删除正文表后要同步重编号。artifact_table 的 cellBindings 必须逐格对应原表 DOM 坐标；'
+                    + '没有原表可绑定的正文表补 source_quotes 逐字连续原句或删除该表。保留正确数字、单位、比较条件和表前后解释，'
+                    + '不得改绑无关原表或编造坐标。' } : {})
+            }));
+        }
+    }
     const languageIssueKey = issue => JSON.stringify([issue.code, issue.path, issue.match]);
     const currentLanguageIssues = new Set(actionableIssues.some(issue => LANGUAGE_ISSUE_CODES.has(issue.code))
         ? collectReaderLanguageIssues(draft).map(languageIssueKey) : []);
