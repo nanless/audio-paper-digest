@@ -9946,31 +9946,8 @@ def render_ephemeral_api_reader_figures(article, figures):
     return ''.join(paragraphs)
 
 
-_API_READER_PAYLOAD_CACHE = {}
-
-
 def _api_reader_payload(paper):
-    """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。
-
-    单篇核验约 0.5 秒（正文/计划/阶段三份 SHA 与表格绑定），一次 generate 会
-    对同一篇调用 3–5 次（staging、页面渲染、清单校验）。按对象身份缓存，
-    缓存持有 paper 因此 id 不会被回收复用；核验逻辑本身不变。
-    """
-    article = paper.get('apiReaderArticle') if isinstance(paper, dict) else None
-    cache_key = (
-        id(paper), len(article) if isinstance(article, str) else None,
-        paper.get('apiReaderArticleSha256') if isinstance(paper, dict) else None,
-        paper.get('apiReaderPlanSha256') if isinstance(paper, dict) else None,
-    )
-    cached = _API_READER_PAYLOAD_CACHE.get(cache_key)
-    if cached is not None and cached[0] is paper:
-        return cached[1]
-    result = _api_reader_payload_uncached(paper)
-    _API_READER_PAYLOAD_CACHE[cache_key] = (paper, result)
-    return result
-
-
-def _api_reader_payload_uncached(paper):
+    """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。"""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     reader_contract = contracts.get('apiReaderArticle')
@@ -11454,13 +11431,6 @@ def validate_generation_input_source_reference(manifest, target_date, *, fresh=F
     ):
         raise PublishDataValidationError('generation 输入来源引用缺失或格式非法')
     source = Path(reference['path'])
-    # 同一次 push 里这份封存来源证明会被重放 6 次（凭证加载 2 次、预检 1 次、
-    # git_push 内 2 次、推送前 1 次），单次约 88 秒、75 个 Node 子进程。
-    # 用「路径 + 清单记录的内容 SHA + 字节数 + 目标日期」做键缓存；真正改动 Git
-    # 之前的那一次用 fresh=True 强制全量重放，语义边界不变。
-    replay_key = (str(source), str(reference['sha256']), int(reference['bytes']), str(target_date))
-    if not fresh and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE:
-        return _SOURCE_REFERENCE_REPLAY_CACHE[replay_key]
     try:
         entry = source.lstat()
     except OSError as exc:
@@ -11473,6 +11443,13 @@ def validate_generation_input_source_reference(manifest, target_date, *, fresh=F
         raise PublishDataValidationError('generation 输入来源文件无法读取') from exc
     if len(payload) != reference['bytes'] or hashlib.sha256(payload).hexdigest() != reference['sha256']:
         raise PublishDataValidationError('generation 输入来源文件字节或 SHA-256 已漂移')
+    # 上面的字节与 SHA 核对每次仍然执行（16MB 读取，0.1 秒级），只有后面这份
+    # 88 秒、75 个 Node 子进程的封存来源重放才复用：同一次 push 里它会被调用
+    # 6 次。键里带已核验的 SHA，文件一漂移就必然换键；真正改动 Git 之前的那一次
+    # 用 fresh=True 强制全量重放，语义边界不变。
+    replay_key = (str(source), reference['sha256'], int(reference['bytes']), str(target_date))
+    if not fresh and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE:
+        return str(source)
     validate_daily_fresh_sources_for_publish(str(source), target_date)
     _SOURCE_REFERENCE_REPLAY_CACHE[replay_key] = str(source)
     return str(source)

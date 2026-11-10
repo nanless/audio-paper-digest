@@ -3145,14 +3145,16 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     standard,
                 )
 
-    def test_blog_review_concurrency_defaults_to_five_and_reads_project_env(self):
+    def test_blog_review_concurrency_defaults_to_sixteen_and_reads_project_env(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('PD_BLOG_REVIEW_CONCURRENCY', None)
-            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 16)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': '12'}):
-            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 12)
+        with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': '99'}):
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 32)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CONCURRENCY': 'invalid'}):
-            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 5)
+            self.assertEqual(publish_to_blog.get_blog_review_concurrency(), 16)
 
     def test_index_review_chunks_run_concurrently_and_merge_in_source_order(self):
         import threading
