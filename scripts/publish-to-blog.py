@@ -14944,11 +14944,26 @@ def _legacy_reader_pixel_assets(manifest, papers):
                 raise PublishDataValidationError('旧清单只可保持原 Reader 像素，不得缺少派生证明而替换图片。')
 
 
+_GENERATION_INPUT_FINGERPRINT_CACHE = {}
+
+
 def generation_input_fingerprint(
     papers, date_str, category, publish_all, include_id=None,
     input_source_reference=None, *, _include_pdf_page_derivations=True,
 ):
     """把可续跑的生成绑定到确切的发布输入和选项。"""
+    # 16.1MB 的论文快照要做一次 JS 兼容的逐字符规范化，单次要 1–2 分钟，
+    # 而同一份快照在一次保存里会被算多次。按对象身份缓存（缓存持有该对象，
+    # 所以 id 不会被回收复用），算法与结果完全不变。
+    cache_key = (
+        id(papers), date_str, category, bool(publish_all), include_id,
+        len(papers) if isinstance(papers, list) else None,
+        _stable_json_sha256(input_source_reference) if input_source_reference is not None else None,
+        bool(_include_pdf_page_derivations),
+    )
+    cached = _GENERATION_INPUT_FINGERPRINT_CACHE.get(cache_key)
+    if cached is not None and cached[0] is papers:
+        return cached[1]
     image_exclusions = []
     seen_exclusions = set()
     for paper in papers:
@@ -14990,7 +15005,9 @@ def generation_input_fingerprint(
         payload['publicationScope'] = scope
     if input_source_reference is not None:
         payload['inputSourceReference'] = input_source_reference
-    return _stable_json_sha256(payload)
+    result = _stable_json_sha256(payload)
+    _GENERATION_INPUT_FINGERPRINT_CACHE[cache_key] = (papers, result)
+    return result
 
 
 def _validate_generation_input_integrity(manifest, date_str, *, fresh=False):
