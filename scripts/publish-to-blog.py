@@ -38,6 +38,7 @@ import functools
 import errno
 import html
 import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
+import concurrent.futures
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
 from contextlib import contextmanager
 from pathlib import Path
@@ -9945,8 +9946,31 @@ def render_ephemeral_api_reader_figures(article, figures):
     return ''.join(paragraphs)
 
 
+_API_READER_PAYLOAD_CACHE = {}
+
+
 def _api_reader_payload(paper):
-    """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。"""
+    """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。
+
+    单篇核验约 0.5 秒（正文/计划/阶段三份 SHA 与表格绑定），一次 generate 会
+    对同一篇调用 3–5 次（staging、页面渲染、清单校验）。按对象身份缓存，
+    缓存持有 paper 因此 id 不会被回收复用；核验逻辑本身不变。
+    """
+    article = paper.get('apiReaderArticle') if isinstance(paper, dict) else None
+    cache_key = (
+        id(paper), len(article) if isinstance(article, str) else None,
+        paper.get('apiReaderArticleSha256') if isinstance(paper, dict) else None,
+        paper.get('apiReaderPlanSha256') if isinstance(paper, dict) else None,
+    )
+    cached = _API_READER_PAYLOAD_CACHE.get(cache_key)
+    if cached is not None and cached[0] is paper:
+        return cached[1]
+    result = _api_reader_payload_uncached(paper)
+    _API_READER_PAYLOAD_CACHE[cache_key] = (paper, result)
+    return result
+
+
+def _api_reader_payload_uncached(paper):
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     reader_contract = contracts.get('apiReaderArticle')
@@ -13461,7 +13485,7 @@ def planned_publish_paths(staged_posts_dir, content_dir, date_str):
 
 def prepare_api_reader_staged_assets(papers, stage_root):
     stage_root = Path(stage_root).resolve()
-    staged = []
+    jobs = []
     seen = set()
     for paper in papers:
         payload = _api_reader_payload(paper)
@@ -13472,19 +13496,35 @@ def prepare_api_reader_staged_assets(papers, stage_root):
             if relative.as_posix() in seen:
                 raise PublishDataValidationError(f'API reader figure 目标路径重复: {relative}')
             seen.add(relative.as_posix())
-            generated = asset.get('generatedBytes')
-            source = None if generated is not None else Path(asset['sourcePath']).resolve()
             target = (stage_root / relative).resolve()
             try:
                 target.relative_to(stage_root)
             except ValueError as exc:
                 raise PublishDataValidationError(f'API reader figure staging 路径逃逸: {relative}') from exc
-            raw = generated if generated is not None else source.read_bytes()
-            if not isinstance(raw, bytes) or hashlib.sha256(raw).hexdigest() != asset['sha256']:
-                raise PublishDataValidationError('论文图暂存写入前的像素 SHA 不一致。')
-            _atomic_write_bytes(target, raw, mode=0o600)
-            staged.append(target)
-    return staged
+            jobs.append((target, asset))
+    if not jobs:
+        return []
+
+    # 每张图都要读源、算 SHA、写临时文件并 fsync，250 张串行时 fsync 等待会排队
+    # 到四分钟。这里是纯 I/O，按 8 路并行写，校验项、错误文案与返回顺序都不变。
+    results = [None] * len(jobs)
+
+    def write_one(index):
+        target, asset = jobs[index]
+        generated = asset.get('generatedBytes')
+        source = None if generated is not None else Path(asset['sourcePath']).resolve()
+        raw = generated if generated is not None else source.read_bytes()
+        if not isinstance(raw, bytes) or hashlib.sha256(raw).hexdigest() != asset['sha256']:
+            raise PublishDataValidationError('论文图暂存写入前的像素 SHA 不一致。')
+        _atomic_write_bytes(target, raw, mode=0o600)
+        results[index] = target
+
+    workers = min(8, len(jobs))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(write_one, index) for index in range(len(jobs))]
+        for future in futures:
+            future.result()
+    return results
 
 
 def prepare_researcher_workbench_staged_assets(papers, date_str, stage_root):
