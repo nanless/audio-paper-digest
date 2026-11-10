@@ -734,12 +734,12 @@ def blog_publication_lock(date_str, *, timeout_seconds=30, republish_id=None):
 
 def get_blog_review_concurrency():
     """独立论文页与单独汇总页文字/图片单元共用并发数；论文页内图片仍串行。"""
-    raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "5").strip()
+    raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "16").strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 5
-    return min(5, max(1, value))
+        value = 16
+    return min(32, max(1, value))
 
 
 def current_image_review_mode():
@@ -14203,8 +14203,9 @@ def git_push(date_str, publish_paths, rollback_state=None):
             # 已删除且从未提交过的派生资产（例如本次重新生成时被移除的图）
             # 既不在工作树也不在索引里，git add 会以 128 失败；这类路径本来
             # 就没有差异可提交，跳过即可，其余路径仍逐个精确暂存。
+            blog_root = Path(BLOG_REPO).expanduser().resolve()
             addable = [item for item in manifest
-                       if os.path.exists(item) or _git_tracks_path(item)]
+                       if (blog_root / item).exists() or _git_tracks_path(item)]
             if addable:
                 _run_git(
                     ['add', '--', *addable], check=True,

@@ -138,7 +138,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | Reader 局部补丁输出 | 8000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
-| 独立博客页审查并发 | 5，范围 1–5 | `PD_BLOG_REVIEW_CONCURRENCY` |
+| 独立博客页审查并发 | 16，范围 1–32 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
 主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE，`PD_OPENAI_RESPONSES_STREAM` 与 `PD_OPENAI_RESPONSES_REASONING_EFFORT` 对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 
