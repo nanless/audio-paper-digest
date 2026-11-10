@@ -407,19 +407,29 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
     colonless_caption = re.sub(r'^((?:Figure|Fig\.?)\s+\d+)\s*:\s*', r'\1 ', displayed_caption, flags=re.I)
     numbered = re.match(r'^(?:Figure|Fig\.?)\s+(\d+)\s*[:.]\s*\S', caption, re.I)
     label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(\d+)\s*[:.]?', norm(figure.get('label', '')), re.I)
-    need(numbered is not None and label is not None and numbered[1] == label[1]
-         and type(figure.get('ordinal')) is int and figure['ordinal'] > 0,
-         'pdf_page_figure_number_or_caption_invalid')
+    # 封存来源本身没有图注时（例如 LaTeXML 只抽到空 caption），仍可按原图号
+    # 定位唯一整页，但必须显式记为「图注未完整抽取」，不能冒完整图注。
+    caption_limited = not caption
+    if caption_limited:
+        need(label is not None and type(figure.get('ordinal')) is int and figure['ordinal'] > 0,
+             'pdf_page_figure_number_or_caption_invalid')
+        figure_number = int(label[1])
+    else:
+        need(numbered is not None and label is not None and numbered[1] == label[1]
+             and type(figure.get('ordinal')) is int and figure['ordinal'] > 0,
+             'pdf_page_figure_number_or_caption_invalid')
+        figure_number = int(numbered[1])
     renderer = {'contract': 'pymupdf-full-media-box-png-v1', 'dpi': DPI,
                 'backend': 'pymupdf', 'version': fitz.version[0],
                 'helperSha256': sha(Path(__file__).read_bytes()),
                 'svgValidatorSha256': sha(Path(__file__).with_name('reader_inline_svg.py').read_bytes())}
     identity = {'contract': CONTRACT, 'paperId': paper_id, 'figureOrdinal': figure['ordinal'],
-                'figureNumber': int(numbered[1]), 'sourceUrl': descriptor['url'],
+                'figureNumber': figure_number, 'sourceUrl': descriptor['url'],
                 'sourceDomSha256': figure['sourceDomSha256'],
                 'sourceSvgSha256': descriptor['inlineSvgSourceSha256'],
                 'originalReaderPixelSha256': figure['assetSha256'],
                 'sourceFiles': dict(source_files), 'caption': caption,
+                'captionLimited': caption_limited,
                 'captionSha256': sha(caption.encode()), 'dependencyFailure': failure,
                 'renderer': renderer}
     if caption_projection:
@@ -436,8 +446,12 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
         for page in document:
             for block in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT):
                 text = _pdf_caption_text(block[4])
-                if re.match(r'^(?:Figure|Fig\.?)\s+' + str(int(numbered[1])) + r'(?!\d)(?:\s*[:.]|\s+\S)', text, re.I):
+                if re.match(r'^(?:Figure|Fig\.?)\s+' + str(figure_number) + r'(?!\d)(?:\s*[:.]|\s+\S)', text, re.I):
                     numbers.append(page.number + 1)
+                    if caption_limited:
+                        matches.append((page.number, text))
+                if caption_limited:
+                    continue
                 if text in {displayed_caption, colonless_caption}:
                     matches.append((page.number, block[4]))
                 elif failure['reason'] == 'unmapped_latexml_minipage_layout':
@@ -449,9 +463,16 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     wrapped = re.sub(r'^(?:Fig\.|Figure)\s+(\d+)\.\s*', r'Figure \1: ', wrapped, flags=re.I)
                     if wrapped == displayed_caption:
                         matches.append((page.number, block[4]))
-        need(len(matches) == 1 and numbers == [matches[0][0] + 1],
-             'pdf_page_full_caption_or_figure_number_not_unique')
-        index, raw_caption = matches[0]
+        if caption_limited:
+            # 无图注时只要求「图号在全文唯一对应一页」；正文里以 Figure N 开头的
+            # 引用句与图注同页时不算冲突，但仍不能跨页。
+            pages = sorted({page_no for page_no, _text in matches})
+            need(len(pages) == 1, 'pdf_page_full_caption_or_figure_number_not_unique')
+            index, raw_caption = pages[0], ''
+        else:
+            need(len(matches) == 1 and numbers == [matches[0][0] + 1],
+                 'pdf_page_full_caption_or_figure_number_not_unique')
+            index, raw_caption = matches[0]
         page = document[index]
         media = list(page.mediabox)
         need(page.rotation == 0 and list(page.cropbox) == media and list(page.rect) == media
@@ -473,7 +494,9 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                  'pageTextSha256': sha(page.get_text('text', flags=fitz.TEXTFLAGS_TEXT).encode()),
                  'assetSha256': sha(pixels), 'assetBytes': len(pixels),
                  'assetWidth': width, 'assetHeight': height,
-                 'displayLabel': f'原论文 PDF 第 {index + 1} 页（含图 {int(numbered[1])}）'}
+                 'displayLabel': (f'原论文 PDF 第 {index + 1} 页（含图 {figure_number}；图注未完整抽取，以原页为准）'
+                                 if caption_limited else
+                                 f'原论文 PDF 第 {index + 1} 页（含图 {figure_number}）')}
     proof['proofSha256'] = stable(proof)
     if len(_CACHE) >= 4:
         _CACHE.pop(next(iter(_CACHE)))

@@ -9775,7 +9775,12 @@ def _reader_missing_figure_caption_matches(paper, plan, figure, source_proof):
                 or source.get('sourceDomSha256') != figure.get('sourceDomSha256')
                 or not isinstance(source.get('caption'), str) or source['caption'].strip()):
             continue
-        if any(isinstance(image, dict) and image.get('url') == figure.get('url')
+        # 内联 SVG 没有独立的光栅 URL，封存来源里这一项 url 为空；此时按
+        # 序号与 DOM SHA 认定同一张原图，不拿空串去比带 fragment 的正文地址。
+        inline_figure = '#' in str(figure.get('url') or '')
+        if any(isinstance(image, dict) and (
+                (not inline_figure and image.get('url') == figure.get('url'))
+                or (inline_figure and not image.get('url')))
                for image in source.get('images', [])):
             matches.append(source)
     return len(matches) == 1
@@ -10176,7 +10181,10 @@ def _api_reader_payload(paper):
                 if isinstance(item.get('caption'), str) and not item['caption'].strip() \
                         and not _reader_missing_figure_caption_matches(
                         paper, plan, item, source_binding_proof):
-                    raise PublishDataValidationError('空图注没有对应唯一封存原图的明确缺失状态。')
+                    raise PublishDataValidationError(
+                        f"{paper.get('arxivId', '')} 空图注没有对应唯一封存原图的明确缺失状态"
+                        f"（figure ordinal={item.get('ordinal')}）。"
+                    )
                 _ephemeral_figure_note(item)
                 raster_recovery = _publication_raster_recovery_target(paper, item) if not inline_svg else None
                 if raster_recovery is not None:
