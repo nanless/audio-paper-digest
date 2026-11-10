@@ -9,6 +9,7 @@ const { renderReaderTableSelection, compileReaderTableSelections,
     hasExplicitRepeatedScientificMeasurement, hasSourceBoundRepeatedNumericVector,
     hasSourceBoundRepeatedRangeChain,
     effectiveReaderTableRows,
+    validateReaderResultTableCoverage,
     putReaderTableHeaderFirst } = require('../scripts/lib/reader-tables.js');
 
 test('来源明确将同一跳过率用于两种操作时保留两个值', () => {
@@ -556,4 +557,128 @@ test('完整原文英文三元参数列表保留重复值，不能截取长列�
         '1280, 1280, and 320, 320', '1280, 1280, 320']) {
         assert.ok(findReaderTablePasteDuplication(value, { sourceTexts: [source] }), value);
     }
+});
+
+function blankDeclaredHeaderTable() {
+    const sha = 'c'.repeat(64);
+    const matrix = [
+        ['', '', '', ''],
+        ['Method', 'CLAPT↑', 'Acc.↑', 'F1↑'],
+        ['No Processing', '0.21', '-', '-'],
+        ['AnomSep (Ours)', '0.33', '0.69', '0.66'],
+        ['', '', '', '']
+    ];
+    const cells = [
+        { row: 0, column: 0, rowspan: 1, colspan: 4, header: true, text: '', sourceDomSha256: sha },
+        ...matrix[1].map((text, column) => ({ row: 1, column, rowspan: 1, colspan: 1,
+            header: column === 0, text, sourceDomSha256: sha })),
+        ...matrix.slice(2, 4).flatMap((row, offset) => row.map((text, column) => ({ row: offset + 2,
+            column, rowspan: 1, colspan: 1, header: column === 0, text, sourceDomSha256: sha }))),
+        { row: 4, column: 0, rowspan: 1, colspan: 4, header: true, text: '', sourceDomSha256: sha }
+    ];
+    return { ordinal: 7, caption: 'TABLE VII: Evaluation results on real mixtures.', matrix, cells,
+        headerRows: [0, 4], bodyRows: [1, 2, 3], recoveryStatus: 'complete', sourceDomSha256: sha };
+}
+
+test('声明的表头行全空时用第一个有文字的行做表头，原DOM坐标保持可重放', () => {
+    for (const headerRows of [[0, 4], []]) {
+        const table = blankDeclaredHeaderTable();
+        table.headerRows = [...headerRows];
+        const before = JSON.stringify(table);
+        assert.deepEqual(effectiveReaderTableRows(table), {
+            headerRows: [1], bodyRows: [2, 3], inferred: true,
+            inferenceContract: 'first-visible-row-after-blank-header-declaration-v1'
+        }, JSON.stringify(headerRows));
+        assert.equal(JSON.stringify(table), before, '推断不能改写已保存的原表记录');
+        const eligibility = assessReaderTableSelectionEligibility(table);
+        assert.equal(eligibility.eligible, true, JSON.stringify(eligibility.reasonCodes));
+        const rendered = renderReaderTableSelection({ tableIndex: 1, selection: {
+            sourceTableOrdinal: 7, sourceRows: [1, 2, 3], sourceColumns: [0, 1, 2, 3]
+        } }, { tables: [table] });
+        assert.match(rendered.markdown, /^\| Method \| CLAPT↑ \| Acc\.↑ \| F1↑ \|$/m);
+        assert.match(rendered.markdown, /^\| AnomSep \(Ours\) \| 0\.33 \| 0\.69 \| 0\.66 \|$/m);
+        assert.deepEqual(rendered.binding.cellBindings.map(cell => [cell.renderedRow, cell.renderedColumn,
+            cell.sourceRow, cell.sourceColumn]), [[0, 0, 1, 0], [0, 1, 1, 1], [0, 2, 1, 2], [0, 3, 1, 3],
+            [1, 0, 2, 0], [1, 1, 2, 1], [1, 2, 2, 2], [1, 3, 2, 3],
+            [2, 0, 3, 0], [2, 1, 3, 1], [2, 2, 3, 2], [2, 3, 3, 3]]);
+        for (const binding of rendered.binding.cellBindings) {
+            const dom = table.cells.filter(cell => cell.row === binding.sourceRow
+                && cell.column === binding.sourceColumn);
+            assert.equal(dom.length, 1);
+            assert.equal(dom[0].text, table.matrix[binding.sourceRow][binding.sourceColumn]);
+        }
+        assert.equal(JSON.stringify(table), before);
+    }
+});
+
+test('表头行正常、全表无文字或没有数据行时不推断表头', () => {
+    const normal = blankDeclaredHeaderTable();
+    normal.headerRows = [1];
+    normal.bodyRows = [2, 3];
+    assert.equal(effectiveReaderTableRows(normal).inferred, false, '已声明非空表头不能被替换');
+
+    const allBlank = blankDeclaredHeaderTable();
+    for (const row of allBlank.matrix) row.fill('');
+    for (const cell of allBlank.cells) cell.text = '';
+    assert.deepEqual(effectiveReaderTableRows(allBlank), {
+        headerRows: [0, 4], bodyRows: [1, 2, 3], inferred: false
+    });
+    assert.equal(assessReaderTableSelectionEligibility(allBlank).eligible, false);
+    assert.ok(assessReaderTableSelectionEligibility(allBlank).reasonCodes.includes('empty_source_header'));
+
+    const headerOnly = blankDeclaredHeaderTable();
+    headerOnly.matrix = [['Method', 'CLAPT↑', 'Acc.↑', 'F1↑'], ['', '', '', ''],
+        ['', '', '', ''], ['', '', '', '']];
+    headerOnly.cells = headerOnly.matrix.flatMap((row, rowIndex) => row.map((text, column) => ({
+        row: rowIndex, column, rowspan: 1, colspan: 1, header: rowIndex > 0, text, sourceDomSha256: 'c'.repeat(64)
+    })));
+    headerOnly.headerRows = [1, 2, 3];
+    headerOnly.bodyRows = [0];
+    assert.equal(effectiveReaderTableRows(headerOnly).inferred, false, '没有数据行时不能只换表头');
+
+    const declaredEmpty = blankDeclaredHeaderTable();
+    declaredEmpty.matrix[0] = [...declaredEmpty.matrix[1]];
+    declaredEmpty.cells.filter(cell => cell.row === 0)
+        .forEach((cell, column) => { cell.text = declaredEmpty.matrix[0][column]; });
+    declaredEmpty.headerRows = [];
+    assert.equal(effectiveReaderTableRows(declaredEmpty).inferred, false,
+        '空 headerRows 且首行有内容时是旧解析器的无表头数据表，不能把首行改成表头');
+});
+
+test('主结果覆盖失败时点名可绑定与不可渲染的原表，并给出逐字引文路径', () => {
+    const sha = 'd'.repeat(64);
+    const build = (ordinal, caption, matrix, headerRows, texCell) => ({
+        ordinal, caption, matrix, headerRows,
+        bodyRows: matrix.map((_row, index) => index).filter(index => !headerRows.includes(index)),
+        recoveryStatus: 'complete', sourceDomSha256: sha,
+        cells: matrix.flatMap((row, rowIndex) => row.map((text, column) => ({
+            row: rowIndex, column, rowspan: 1, colspan: 1, header: headerRows.includes(rowIndex),
+            text: texCell && texCell.row === rowIndex && texCell.column === column ? texCell.text : text,
+            sourceDomSha256: sha
+        })))
+    });
+    const bindable = build(1, 'Evaluation results on synthetic mixtures.', [
+        ['Method', 'Acc', 'F1'], ['No Processing', '0.50', '0.60'], ['Ours', '0.90', '0.88']
+    ], [0]);
+    const tex = '\\mathrm{score}';
+    const blocked = build(2, 'Evaluation results on real mixtures.', [
+        ['', '', ''], ['Method', 'Acc', 'F1'], ['No Processing', '0.50', '0.60'],
+        ['Ours', '0.90', '0.88'], ['Ours+', tex, '0.89']
+    ], [0], { row: 4, column: 1, text: tex });
+    const artifacts = { tables: [bindable, blocked] };
+    const sections = [{ kind: 'result', body: '| 配置 | 值 |\n| --- | --- |\n| 采样率 | 16 kHz |\n' }];
+    assert.equal(assessReaderTableSelectionEligibility(bindable).eligible, true);
+    assert.equal(assessReaderTableSelectionEligibility(blocked).eligible, false);
+    assert.throws(() => validateReaderResultTableCoverage(sections, artifacts), error => {
+        assert.match(error.message, /TABLE_1\/TABLE_2 明确提供定量结果/);
+        assert.match(error.message, /TABLE_2 的原表无法安全渲染/);
+        assert.match(error.message, /TABLE_1 可安全绑定，优先用它/);
+        assert.match(error.message, /封存全文的连续逐字引文.*source_quotes 表/);
+        return true;
+    });
+    const noBlocked = { tables: [bindable] };
+    assert.throws(() => validateReaderResultTableCoverage(sections, noBlocked),
+        /TABLE_1 明确提供定量结果.*必要时将一张配置表改为结果表/);
+    assert.doesNotMatch((() => { try { validateReaderResultTableCoverage(sections, noBlocked); } catch (error) { return error.message; } })(),
+        /无法安全渲染/);
 });

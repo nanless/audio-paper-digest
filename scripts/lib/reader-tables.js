@@ -402,6 +402,23 @@ function effectiveReaderTableRows(table) {
             .filter(index => index > 0 && !declaredHeaders.includes(index)), inferred: true,
         inferenceContract: 'full-width-protocol-divider-header-v1' };
     }
+    // LaTeXML 有时把表格前的空行和表格后的空行都声明成 headerRows，
+    // 有时干脆给出空数组，于是渲染器把全空行当表头，整张表失去列头。
+    // 只有声明本身全是空行时才按矩阵找回列头；空数组是「没有声明表头」的
+    // 常见旧形态，只有矩阵第一行也是空行时才说明表头行被漏标。
+    const declaredHeadersBlank = declaredHeaders.length > 0
+        ? declaredHeaders.every(row => Number.isInteger(row) && row >= 0 && row < matrix.length
+            && matrix[row].every(text => !String(text).trim()))
+        : matrix[0].every(text => !String(text).trim());
+    if (declaredHeadersBlank) {
+        const headerRow = matrix.findIndex(row => row.some(text => String(text).trim()));
+        const bodyRows = matrix.map((_row, index) => index)
+            .filter(index => index > headerRow && matrix[index].some(text => String(text).trim()));
+        if (headerRow >= 0 && bodyRows.length) {
+            return { headerRows: [headerRow], bodyRows, inferred: true,
+                inferenceContract: 'first-visible-row-after-blank-header-declaration-v1' };
+        }
+    }
     const dataRows = Array.from({ length: matrix.length - 2 }, (_, index) => index + 2);
     // 兼容旧解析器那种表头传染的固定形态：顶层分组表头是明确的，
     // 它的第二层是唯一声明的数据行，而后面每个模型或数值行之所以被标成表头，
@@ -458,11 +475,27 @@ function validateReaderResultTableCoverage(sections, artifacts) {
                 + measurementColumns.filter(column => measurementValue(row[column])).length, 0) >= 4;
         });
     if (!numericResultTables.length) {
+        // 主结果表覆盖失败时，模型往往不知道哪张原表其实不能安全渲染。
+        // 只按原表身份逐张核验，并明确指出可绑定的表与必须走逐字引文的表。
+        const inventory = Array.isArray(artifacts?.tables) ? artifacts.tables : [];
+        const resultTables = requirement.sourceTableOrdinals.map(ordinal => (
+            inventory.filter(table => table?.ordinal === ordinal).length === 1
+                ? inventory.find(table => table.ordinal === ordinal) : null));
+        const bindable = resultTables.filter(table => table && (
+            assessReaderTableSelectionEligibility(table).eligible
+                || assessReaderCompleteTableEligibility(table).eligible)).map(table => `TABLE_${table.ordinal}`);
+        const unrenderable = resultTables.filter(table => table && !bindable.includes(`TABLE_${table.ordinal}`))
+            .map(table => `TABLE_${table.ordinal}`);
         throw new Error('读者文章主结果表覆盖不足：原论文 TABLE_'
             + requirement.sourceTableOrdinals.join('/TABLE_')
             + ' 明确提供定量结果；result/ablation 小节必须含至少一张可核对的数字结果表。'
             + '不能只用数据集表和配置表凑数量。保留可运行策略、必要基线与比较条件，'
-            + '必要时将一张配置表改为结果表并同步正文和 tableBindings，配置事实保留在文字中。');
+            + '必要时将一张配置表改为结果表并同步正文和 tableBindings，配置事实保留在文字中。'
+            + (unrenderable.length ? `${unrenderable.join('/')} 的原表无法安全渲染（程序检查未通过），`
+                + '不要再用这些原表或数据集表、配置表凑数；'
+                + (bindable.length ? `${bindable.join('/')} 可安全绑定，优先用它。` : '')
+                + '若要覆盖这些原表的数字，请用封存全文的连续逐字引文完整覆盖全部数字、单位与比较条件，'
+                + '写成 source_quotes 表。' : ''));
     }
     return { ...requirement, numericResultTables: numericResultTables.length };
 }

@@ -143,6 +143,48 @@ function targetsFor(draft, context) {
         return { targetOrdinal: index + 1, path: target.path, oldSha256: target.oldSha256, valueType: kind(value) };
     });
 }
+// 单轮补丁预算。普通序号 ACK 由模型手写嵌套 JSON，一次 ACK 里的每个 replacement
+// 都是一层新的数组元素边界。2026-11-09 的 2611.06010（5 次）、2611.07420、
+// 2611.06796 的坏 JSON 全部落在同一个位置：第一个 replacement（表格绑定对象，
+// sourceQuotes 里是一条长引文）之后、第二个 replacement 之前，模型把 replacements
+// 数组的 ] 写成了 }。单条 replacement 的 81 轮里没有出现过这个错误。
+// 因此上一轮 ACK 被判为坏 JSON 时，这一轮只授权第一个目标，让模型先把单条
+// replacement 的嵌套写对。判定条件一条都没有放宽：这里只缩小「这一轮允许改哪几个
+// 目标」，JSON 解析、合同头、令牌、节点 SHA、条数与类型校验全部保持原样。
+const ROUND_TARGETS_MAX_AFTER_INVALID_ACK = 1;
+function roundTargetLimit(options = {}) {
+    return options.invalidAck === true ? ROUND_TARGETS_MAX_AFTER_INVALID_ACK : MAX_READER_PATCH_NODES;
+}
+function planRoundTargets(targets, options = {}) {
+    const list = Array.isArray(targets) ? targets : [];
+    const limit = Math.min(MAX_READER_PATCH_NODES, Math.max(MIN_READER_PATCH_NODES,
+        Number.isSafeInteger(options.limit) ? options.limit : MAX_READER_PATCH_NODES));
+    const kept = list.slice(0, limit);
+    return { limit, targets: kept, kept: kept.map(target => target.path),
+        deferred: list.slice(kept.length).map(target => target.path) };
+}
+// 复用 buildRepairContext 生成的原文案，只把「本轮只允许修改这些目标」的清单换成
+// 本轮真正授权的子集，并说明其余目标顺延；不新增任何授权，也不改写诊断字段。
+function roundTargetGuidance(guidance, plan) {
+    const text = String(guidance || '');
+    const note = `上一轮 ACK 不是有效 JSON，本轮只授权 ${plan.targets.length} 个目标，`
+        + '先把单条 replacement 的嵌套与闭合写对；'
+        + `其余 ${plan.deferred.length} 个目标留到下一轮重新核验后授权，不要在本轮输出。`;
+    const marker = '本轮只允许修改这些目标：';
+    const start = text.indexOf(marker);
+    const end = start < 0 ? -1 : text.indexOf('。', start);
+    if (start < 0 || end < 0) return text ? `${text}\n${note}` : note;
+    return text.slice(0, start) + marker + JSON.stringify(plan.kept) + '。' + text.slice(end + 1) + note;
+}
+// 请求发出前缩小本轮目标清单。返回值只描述计划；真正的目标、SHA 与请求令牌
+// 仍由 prepare() 按这份清单重新计算，冷核重放读的是请求里的原始清单。
+function applyRoundTargetBudget(repairContext, options = {}) {
+    const plan = planRoundTargets(repairContext?.targets, options);
+    if (!plan.deferred.length) return plan;
+    repairContext.targets = plan.targets;
+    repairContext.targetGuidance = roundTargetGuidance(repairContext.targetGuidance, plan);
+    return plan;
+}
 function sourceScope(paper, identity, directory) {
     const fresh = require('./fresh-analysis-context'), engine = require('../analysis-engine');
     const context = fresh.getFreshAnalysisContext();
@@ -939,6 +981,7 @@ function hasReplayedArchivedSignedFactRevision(paper) {
     return readVerifiedCompletion(paper)?.signedFactRevision === true;
 }
 module.exports={isCombinedReaderFinalRejection,clearSupersededCompletionMarker,recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
+    planRoundTargets,roundTargetGuidance,applyRoundTargetBudget,roundTargetLimit,ROUND_TARGETS_MAX_AFTER_INVALID_ACK,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
     verifiedSupersededCompletionPointer,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion,
     recordSupersededOrdinalChain,SUPERSEDED_ORDINAL_CHAIN_REASON};

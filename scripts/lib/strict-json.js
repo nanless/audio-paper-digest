@@ -22,7 +22,13 @@ function strictJson(bytes, label) {
             top.keys.add(key); top.expectKey = false;
         }
     }
-    try { return JSON.parse(source); } catch { throw new Error(`${label} 的内容不是有效的 JSON。`); }
+    // 只补充解析器给出的位置与原因（例如第 1626 字符的 "Expected ',' or ']' after
+    // array element"）。这类信息只说明括号/逗号在哪一层写坏，不含模型正文，也不改变
+    // 任何判定：仍然抛错、仍然不尝试修复或截断响应。
+    try { return JSON.parse(source); } catch (error) {
+        const reason = String(error?.message || '').replace(/^JSON\.parse:\s*/, '').trim();
+        throw new Error(`${label} 的内容不是有效的 JSON${reason ? `（${reason}）` : ''}。`);
+    }
 }
 
 module.exports = { strictJson };

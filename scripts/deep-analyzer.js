@@ -8319,7 +8319,36 @@ function readerPatchRejectionPromptTail(feedback, options = {}) {
         + '\n本次响应必须整段是一个裸 JSON 对象：不要 Markdown 围栏、前后说明或第二个对象。'
         + '\nrequestToken 必须逐字复制本次请求给出的 16 位小写十六进制值。'
         + '\n每个 value 必须与对应节点当前值同类型：对象节点直接给 JSON 对象本身，'
-        + '不能给被字符串包裹的 JSON（例如 "{\\"a\\":1}"），也不能改目标路径或 targetOrdinal。';
+        + '不能给被字符串包裹的 JSON（例如 "{\\"a\\":1}"），也不能改目标路径或 targetOrdinal。'
+        // 2026-11-09 的 2611.06010/2611.07420/2611.06796 都把 replacements 数组的 ]
+        // 写成了 }（…3.466†"]}}}）。闭合规则必须逐条写明，否则下一轮仍会重复同一处。
+        + '\nreplacements 数组只能以 ] 关闭：两个 replacement 对象之间必须写 },{；'
+        + '数组关闭后再写 } 结束最外层对象，整段响应以 ]} 结尾。不要在 ] 的位置写 }。'
+        + '\n如果一次补丁同时要改表格绑定和承载该表的正文，本轮只提交提示词「当前授权目标」里列出的目标，'
+        + '未列出的目标留到下一轮，不要自行扩大清单。';
+}
+
+// 普通绑定（source_quotes/artifact_table）的最小正确骨架。2026-11-09 的
+// 2611.07485 在 tableBindings[0] 上反复两轮：先漏 sourceType/sourceTableOrdinal/
+// cellBindings，收到「必须且仅含 tableIndex/sourceType/sourceTableOrdinal/
+// cellBindings/sourceQuotes」后把 artifact_table 的原表序号照抄进 source_quotes
+// 绑定，写出 sourceTableOrdinal=1。字段清单本身没说类型与取值，模型只能猜；
+// 这里只给字段名与类型，不给任何数据，也不改变结构校验。
+const SOURCE_QUOTES_BINDING_SKELETON = 'source_quotes 普通绑定的最小正确骨架（只照抄字段名与类型，值换成真实数据）：'
+    + '{"tableIndex":1,"sourceType":"source_quotes","sourceTableOrdinal":null,"cellBindings":[],'
+    + '"sourceQuotes":["全文逐字连续原句"]}。'
+    + '只用封存 PDF 原文作证时，在同一对象里再加 "pdfSourceQuotes":["封存PDF逐字连续原文"]，其余字段不变。'
+    + 'sourceTableOrdinal 只在 sourceType 为 "artifact_table" 时才是整数原表序号；source_quotes 必须写 null'
+    + '（不是 0、不是 1，也不是字符串 "null"），cellBindings 必须是空数组 []；'
+    + '不要照抄上一版 artifact_table 绑定里的 sourceTableOrdinal 或 cellBindings';
+const READER_BINDING_STRUCTURE_PATTERN =
+    /正文 quote 绑定结构非法|source_quotes 结构非法|普通绑定必须且仅含|缺少字段: [^\n]*sourceType|sourceType 只能为/;
+// 序号路径的提示词直接使用 issue.message，不经过 buildApiReaderValidationFeedback；
+// 这个辅助让骨架也能出现在那一支的格式反馈里，且整轮只出现一次。
+function readerSourceQuotesBindingSkeletonFeedback(issues) {
+    const list = Array.isArray(issues) ? issues : [];
+    return list.some(issue => READER_BINDING_STRUCTURE_PATTERN.test(String(issue?.message || '')))
+        ? SOURCE_QUOTES_BINDING_SKELETON : '';
 }
 
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
@@ -8555,6 +8584,7 @@ function buildApiReaderValidationFeedback(error) {
             + '原表数值只以封存 PDF 连续原文覆盖时，把该原文放进 pdfSourceQuotes 并把 sourceTableOrdinal 设为 null，'
             + '不能同时保留原表序号；不要用把整张 DOM 表拍平成的长串冒充连续原句');
     }
+    if (READER_BINDING_STRUCTURE_PATTERN.test(message)) fixes.push(SOURCE_QUOTES_BINDING_SKELETON);
     if (/中文字数必须/.test(message)) {
         fixes.push(
             '只扩写或压缩现有小节正文，使中文字符数进入报错给出的区间，不改变事实、数字和章节顺序；'
@@ -9978,6 +10008,20 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 }
             }
         }
+        // 上一轮序号 ACK 被判为坏 JSON 时，本轮只授权第一个目标：模型手写的嵌套
+        // replacement 只剩一层数组边界，避免在第二个 replacement 前把 ] 写成 }。
+        // 这里只缩小本轮目标清单，不改 JSON 解析、令牌、SHA、条数或类型校验。
+        if (repairContext && fresh.isDailyFreshSourceScope() && readerContentMode.is(identity, 'source-only')
+            && identity.model?.protocol === 'openai_responses') {
+            const invalidOrdinalAck = /不是有效的 JSON|JSON 中出现重复字段/.test(String(patchRejectionFeedback || ''));
+            const roundPlan = ordinaryOrdinal.applyRoundTargetBudget(repairContext, {
+                limit: ordinaryOrdinal.roundTargetLimit({ invalidAck: invalidOrdinalAck })
+            });
+            if (roundPlan.deferred.length) {
+                console.log(`    [deep] ℹ️  上一轮序号 ACK 不是有效 JSON：本轮只授权 ${roundPlan.targets.length} 个目标，`
+                    + `其余 ${roundPlan.deferred.length} 个目标留到下一轮`);
+            }
+        }
         const ordinalCapability = fresh.isDailyFreshSourceScope() && readerContentMode.is(identity, 'source-only')
             && identity.model?.protocol === 'openai_responses'
             && ordinaryOrdinal.eligible(repairContext, { ...options, metadataOperation, conceptTermsContext })
@@ -10026,7 +10070,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...repair.factLocalSentencePromptVariables(repairContext, String(options.reviewFeedback || '').trim(),
                     options.sourceText || '', require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.sourceQuotes) })
             : ordinalCapability ? ordinaryOrdinal.renderPrompt(ordinalCapability, {
-                feedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
+                feedback: [repairContext.targetGuidance, readerSourceQuotesBindingSkeletonFeedback(currentIssues),
+                    numericSpellingGuidance, repairReviewFeedbackPrefix,
                     savedInputContinuity?.validationFeedback, ordinalRejectionTail.trim(),
                     ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
                 evidence: repairContext.evidence, mechanicalContract, naturalResourceProse })
@@ -10517,6 +10562,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt, fullAttempts, noProgress, failureSignature, imageEvidence,
                 providerImageExclusions,
+                // 补丁拒绝原文必须随失败候选落盘：进程中断后续跑时 savedPatchRejectionFeedback
+                // 依赖它，否则下一轮看不到「ACK 不是有效 JSON」这类格式反馈。
+                ...(patchRejectionFeedback ? { patchRejectionFeedback } : {}),
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, validationFailureSignature: normalizedFailureSignature,
                 validationFailureStreak, implementationRepairAllowanceProof,
@@ -21646,6 +21694,8 @@ module.exports = {
     recoverableStaleReaderRevisionStage,
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
+    readerSourceQuotesBindingSkeletonFeedback,
+    SOURCE_QUOTES_BINDING_SKELETON,
     readerPatchRejectionPromptTail,
     refreshApiReaderArticleFromSource,
     finalizeDeferredDailyReaderImages,
