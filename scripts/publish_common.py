@@ -4367,6 +4367,34 @@ def _has_source_backed_reward_switch_ablation(results, tables, source_text):
     return False
 
 
+def _has_source_backed_component_switch_ablation(results, source_text=''):
+    """原文写「加入/引入某组件后指标从 A 升到 B」时，保留同表两值的组件对照就算消融。
+
+    与 scripts/analysis-contract.js 的 hasSourceBackedComponentSwitchAblation 同规则：
+    句子里必须有开关动作 + 组件名 + 同一句内的数值变化，且两个数值都能在原文找到。
+    """
+    source = str(source_text or '')
+    denied = re.compile(
+        r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|建议|拟|并非|不是|没有|未|不能|不会|他人|第三方|先前(?:研究|工作)|相关工作|引用|引述|转述)')
+    switch_pattern = re.compile(
+        r'(?:加入|引入|启用|加回|关闭|冻结|去掉|移除|去除)[^。；，,\n]{0,12}?(?:分支|模块|组件|编码器|解码器|损失项?|约束|适配器|监督)')
+    change_pattern = re.compile(
+        r'从\s*([-+]?\d+(?:\.\d+)?)\s*[A-Za-z%]{0,6}\s*(?:升至|降至|变为|升到|降到)\s*([-+]?\d+(?:\.\d+)?)')
+    for sentence in re.split(r'[。；\n]', str(results or '')):
+        text = sentence.strip()
+        if not text or denied.search(text) or not switch_pattern.search(text):
+            continue
+        change = change_pattern.search(text)
+        if not change or float(change.group(1)) == float(change.group(2)):
+            continue
+        if not source:
+            return True
+        if all(re.search(r'(?<![0-9.])' + re.escape(value) + r'(?![0-9])', source)
+               for value in (change.group(1), change.group(2))):
+            return True
+    return False
+
+
 def _source_bound_matched_acoustic_gap(results, tables, source_text):
     """Replay the same source-owned matched comparison as the Node gate."""
     if _source_evidence_extra_i(results, source_text) or re.search(
@@ -4884,34 +4912,6 @@ def _validate_experiment_table_evidence_depth(
     result_has_ablation = result_has_ablation or _has_reported_experiment_phrase(
         results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
         r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
-
-def _has_source_backed_component_switch_ablation(results, source_text=''):
-    """原文写「加入/引入某组件后指标从 A 升到 B」时，保留同表两值的组件对照就算消融。
-
-    与 scripts/analysis-contract.js 的 hasSourceBackedComponentSwitchAblation 同规则：
-    句子里必须有开关动作 + 组件名 + 同一句内的数值变化，且两个数值都能在原文找到。
-    """
-    source = str(source_text or '')
-    denied = re.compile(
-        r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|建议|拟|并非|不是|没有|未|不能|不会|他人|第三方|先前(?:研究|工作)|相关工作|引用|引述|转述)')
-    switch_pattern = re.compile(
-        r'(?:加入|引入|启用|加回|关闭|冻结|去掉|移除|去除)[^。；，,\n]{0,12}?(?:分支|模块|组件|编码器|解码器|损失项?|约束|适配器|监督)')
-    change_pattern = re.compile(
-        r'从\s*([-+]?\d+(?:\.\d+)?)\s*[A-Za-z%]{0,6}\s*(?:升至|降至|变为|升到|降到)\s*([-+]?\d+(?:\.\d+)?)')
-    for sentence in re.split(r'[。；\n]', str(results or '')):
-        text = sentence.strip()
-        if not text or denied.search(text) or not switch_pattern.search(text):
-            continue
-        change = change_pattern.search(text)
-        if not change or float(change.group(1)) == float(change.group(2)):
-            continue
-        if not source:
-            return True
-        if all(re.search(r'(?<![0-9.])' + re.escape(value) + r'(?![0-9])', source)
-               for value in (change.group(1), change.group(2))):
-            return True
-    return False
-
 
     reported_reward_ablation = _has_source_backed_reward_switch_ablation(results, tables, source_text)
     component_switch_ablation = _has_source_backed_component_switch_ablation(results, source_text)

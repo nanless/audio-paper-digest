@@ -61,8 +61,16 @@ class ReaderNumberPreservationTest(unittest.TestCase):
         )
 
     def test_legacy_dom_cells_keep_numbers_and_signs_exact(self):
-        for rendered, source_value in [('130', '130130'), ('−22.9', '−22.9-22.9'), ('+20%', '++20%')]:
-            for value, accepted in [(rendered, False), (source_value, True)]:
+        # 2026-11-10 起发布视图按 _MATHJAX_DOUBLE_WRITE_RULES 折叠“Unicode 负号 +
+        # 同值 ASCII 负号”双写（−22.9-22.9 → −22.9），逐格来源比较两边用同一投影，
+        # 所以该双写可对应可见的 −22.9；猜半值、重复符号和不同数值仍须逐字拒绝。
+        for rendered, source_value, rendered_accepted in [
+            ('130', '130130', False),
+            ('−22.9', '−22.9-22.9', True),
+            ('−22.9', '−22.9-22.8', False),
+            ('+20%', '++20%', False),
+        ]:
+            for value, accepted in [(rendered, rendered_accepted), (source_value, True)]:
                 with self.subTest(value=value, source_value=source_value):
                     result = paper(value, f'Training reports {value} under the controlled protocol.')
                     binding = result['apiReaderPlan']['tableBindings'][0]
