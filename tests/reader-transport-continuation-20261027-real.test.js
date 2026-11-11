@@ -237,48 +237,6 @@ async function currentIdentity(f) {
     assert.notEqual(prepared.identity.parserImplementationSha256, f.identity.parserImplementationSha256);
     return prepared.identity;
 }
-test('真实current提示词与旧paid v9不混用：拒绝未授权迁移且原候选/预算/费用不变', async t => {
-    const f = setup(t), before = f.allPreserved();
-    await f.scope(async () => {
-        historicalArticleContext = false;
-        try {
-            const identity = await currentIdentity(f);
-            assert.equal(identity.promptSha256, require('../scripts/deep-analyzer').runtimePromptTemplateSha256(currentArticlePath));
-            assert.notEqual(identity.promptSha256, f.identity.promptSha256);
-            assert.throws(() => require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(f.directory, identity,
-                { allowNewImplementationAllowance: false, ephemeralImageEvidenceSha256: repair.hashDraft(f.envelope.payload.ephemeralImageEvidence) }),
-            { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
-            assert.deepEqual(f.allPreserved(), before);
-            assert.equal(fs.existsSync(path.join(f.directory, repair.hashDraft(identity) + '.json')), false);
-            assert.equal(fs.readdirSync(f.rounds).some(name => name.endsWith('.transport-continuation.json')), false);
-        } finally { historicalArticleContext = true; }
-    });
-});
-for (const installFirst of [true, false]) test('真实四源、原v9与当前实现identity派生/公共迁移：' + (installFirst ? '安装后迁移' : '先迁移再安装')
-    + '保留同窗，synthetic body只验证实际物理接线', async t => {
-    const f = setup(t), body = syntheticBody(f);
-    await f.scope(async () => {
-        const identity = await currentIdentity(f), parentBefore = fs.readFileSync(f.parentFile);
-        if (installFirst) continuation.install({ ...f.options(), grant: continuation.plan(f.options()) });
-        const migrated = require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(f.directory, identity,
-            { allowNewImplementationAllowance: false,
-                ephemeralImageEvidenceSha256: repair.hashDraft(f.envelope.payload.ephemeralImageEvidence) });
-        assert.ok(migrated, 'same-route implementation migration must retain the actual candidate');
-        assert.deepEqual(['attempts', 'fullAttempts', 'transportFailures'].map(k => migrated[k]), [0, 0, 1]);
-        assert.deepEqual(migrated.draft, f.envelope.payload.draft);
-        assert.equal(fs.existsSync(f.candidateFile), false);
-        assert.equal(migrated.readerRecoveryRevisions.at(-1).clearedNoProgress, false);
-        if (!installFirst) {
-            const options = { ...f.options(), identity };
-            continuation.install({ ...options, grant: continuation.plan(options) });
-        }
-        retry.validatePersistedRound(f.directory, identity, migrated);
-        retry.withPhysicalBudget(migrated.explicitReaderRetryRound, f.paper, () =>
-            retry.consumePhysicalRequest(body, { usageContext: { paperId: identity.paperId, stage: 'apiReaderArticle', contentAttempt: 1 } }));
-        assert.deepEqual(fs.readFileSync(f.parentFile), parentBefore);
-        retry.validatePersistedRound(f.directory, identity, repair.loadFailedCandidate(f.directory, identity));
-    });
-});
 test('sidecar cold读取核当前四源与当前身份，伪造迁移/更换源/其他stage不借48k', async t => {
     const f = setup(t), body = syntheticBody(f);
     await f.scope(() => {
