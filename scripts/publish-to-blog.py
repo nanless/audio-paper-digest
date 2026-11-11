@@ -10133,7 +10133,114 @@ def render_ephemeral_api_reader_figures(article, figures):
     return ''.join(paragraphs)
 
 
+_API_READER_PAYLOAD_CACHE = {}
+_API_READER_PAYLOAD_CACHE_LIMIT = 256
+
+
+def _api_reader_payload_file_identity(path):
+    """按路径、大小与 mtime 记录一个 payload 会读取的文件状态。
+
+    封存来源与图片缓存的既有重放缓存也用同一口径（路径+大小+mtime）感知改写；
+    内容一旦变化，大小或 mtime 必然变化，缓存因此未命中。
+    """
+    try:
+        info = Path(path).expanduser().lstat()
+    except (OSError, TypeError, ValueError):
+        return (str(path), None, None)
+    return (str(path), info.st_size, info.st_mtime_ns)
+
+
+def _api_reader_payload_asset_identity(paper):
+    """列出发行 payload 会读取的图片缓存文件状态；文件变化必须让缓存未命中。"""
+    figures = paper.get('apiReaderFigures') if isinstance(paper, dict) else None
+    if not isinstance(figures, list):
+        return ()
+    identity = []
+    for figure in figures:
+        if not isinstance(figure, dict):
+            continue
+        declared = figure.get('cachePath')
+        if not isinstance(declared, str) or not declared:
+            continue
+        identity.append((*_api_reader_payload_file_identity(declared),
+                         figure.get('assetSha256')))
+    return tuple(sorted(identity))
+
+
+def _api_reader_payload_override_asset_identity(paper):
+    """2609.18673 的出版图裁切文件是 payload 唯一额外读取的仓库内资产。"""
+    try:
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+    except (TypeError, ValueError, PublishDataValidationError):
+        return None
+    if paper_id != '2609.18673':
+        return None
+    return _api_reader_payload_file_identity(
+        PROJECT_ROOT / 'assets' / 'publish-figure-overrides'
+        / '2609-18673-figure-1-cropped.png'
+    )
+
+
+def _api_reader_payload_input_identity(paper):
+    """给读者正文核验结果算一个只在本进程内使用的完整输入键。
+
+    键覆盖 payload 实际读取的全部输入：论文对象全字段、封存运行目录 stamp、
+    图片缓存文件状态、坏 PNG 显式恢复输入、该篇的额外资产，以及会改变路径
+    与公开 URL 的模块常量。``json.dumps`` 只用作内部键，不参与任何跨语言
+    指纹，因此开销远低于逐字符规范化。
+    """
+    if not isinstance(paper, dict):
+        return None
+    try:
+        paper_digest = hashlib.sha256(json.dumps(
+            paper, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+            default=str,
+        ).encode('utf-8')).hexdigest()
+    except (TypeError, ValueError):
+        return None
+    proof = paper.get('freshRewriteProvenance')
+    run_id = proof.get('runId') if isinstance(proof, dict) else None
+    run_stamp = _daily_source_run_stamp(run_id) if isinstance(run_id, str) else None
+    recovery = _publication_raster_recovery_input()
+    recovery_identity = (
+        (recovery['file'], recovery['sha256'],
+         recovery['receipt']['file'], recovery['receipt']['sha256'])
+        if isinstance(recovery, dict) else None
+    )
+    return (
+        paper_digest,
+        run_stamp,
+        _api_reader_payload_asset_identity(paper),
+        _api_reader_payload_override_asset_identity(paper),
+        recovery_identity,
+        str(CURRENT_DIR),
+        BASE_PATH,
+    )
+
+
 def _api_reader_payload(paper):
+    """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。
+
+    同一进程内按「论文全字段 + 封存来源 + 图片文件 + 恢复输入」的内容身份
+    复用上一轮成功核验的结果；任何输入变化都会未命中并重新完整核验，
+    核验失败不写缓存。核验逻辑本身没有改动。
+    """
+    identity = _api_reader_payload_input_identity(paper)
+    if identity is not None:
+        cached = _API_READER_PAYLOAD_CACHE.get(identity)
+        if cached is not None:
+            # payload 与 paper 共享嵌套对象；进出缓存都做隔离，调用方或论文
+            # 对象之后被就地修改时，缓存里保留的仍是核验当时的内容。
+            return copy.deepcopy(cached)
+    result = _api_reader_payload_uncached(paper)
+    if identity is not None:
+        if len(_API_READER_PAYLOAD_CACHE) >= _API_READER_PAYLOAD_CACHE_LIMIT:
+            _API_READER_PAYLOAD_CACHE.clear()
+        _API_READER_PAYLOAD_CACHE[identity] = copy.deepcopy(result)
+    return result
+
+
+def _api_reader_payload_uncached(paper):
     """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。"""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
@@ -14189,6 +14296,65 @@ def validate_single_publication_worktree(paths):
         )
 
 
+def _git_batch_blob_bytes(rev, relatives):
+    """用一次 ``git cat-file --batch`` 读取 ``rev:path`` 的全部 blob。
+
+    返回按相对路径索引的字节或 ``None``（路径在该修订里不存在）。只读取
+    本地对象库，不改变索引、工作树或任何引用；输出按输入顺序解析，二进制
+    内容按头部声明的字节数读取，不会被内容里的换行截断。
+    """
+    relatives = list(relatives)
+    if not relatives:
+        return {}
+    request = ''.join(f'{rev}:{relative}\n' for relative in relatives).encode('utf-8')
+    timeout_seconds = _bounded_positive_seconds(
+        'PD_GIT_LOCAL_TIMEOUT_SECONDS', GIT_LOCAL_TIMEOUT_SECONDS, 5, 300,
+    )
+    try:
+        process = subprocess.run(
+            ['git', 'cat-file', '--batch'],
+            cwd=str(Path(BLOG_REPO).expanduser().resolve()),
+            env=_git_env(),
+            input=request,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        raise subprocess.TimeoutExpired(['git', 'cat-file', '--batch'], timeout_seconds)
+    if process.returncode != 0:
+        detail = process.stderr.decode('utf-8', errors='replace').strip()
+        raise PublishDataValidationError(f'批量读取 Git 对象失败：{detail[-500:]}')
+    output = process.stdout
+    if len(output) > 512 * 1024 * 1024:
+        raise PublishDataValidationError('批量读取 Git 对象的输出超过安全上限')
+    result = {}
+    cursor = 0
+    for relative in relatives:
+        newline = output.find(b'\n', cursor)
+        if newline < 0:
+            raise PublishDataValidationError('批量读取 Git 对象的输出不完整')
+        header = output[cursor:newline]
+        cursor = newline + 1
+        if header.endswith(b' missing'):
+            result[relative] = None
+            continue
+        parts = header.split(b' ')
+        if len(parts) != 3 or not parts[2].isdigit():
+            raise PublishDataValidationError('批量读取 Git 对象的响应格式无效')
+        size = int(parts[2])
+        if parts[1] != b'blob':
+            raise PublishDataValidationError(f'发布路径不是普通文件对象: {relative}')
+        raw = output[cursor:cursor + size]
+        if len(raw) != size:
+            raise PublishDataValidationError('批量读取 Git 对象的字节数不完整')
+        result[relative] = raw
+        cursor += size
+        if output[cursor:cursor + 1] == b'\n':
+            cursor += 1
+    return result
+
+
 def validate_git_index_against_review_receipt(receipt, paths):
     """校验已暂存的二进制对象和删除记录与已签名审查凭证完全一致。"""
     manifest = set(_git_relative_manifest(paths))
@@ -14203,13 +14369,13 @@ def validate_git_index_against_review_receipt(receipt, paths):
     if set(by_path) != manifest or len(by_path) != len(records):
         raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
 
+    # 一次批量读取代替 374 次 git show；逐项校验与错误文案保持不变。
+    staged_blobs = _git_batch_blob_bytes('', sorted(manifest))
     for relative in sorted(manifest):
         record = by_path[relative]
-        staged = _run_git(
-            ['show', f':{relative}'],
-        )
+        staged = staged_blobs.get(relative)
         if record.get('deleted') is True:
-            if staged.returncode == 0:
+            if staged is not None:
                 raise PublishDataValidationError(
                     f'审查凭证要求删除，但 index 仍包含文件: {relative}'
                 )
@@ -14217,9 +14383,9 @@ def validate_git_index_against_review_receipt(receipt, paths):
         expected = str(record.get('sha256') or '')
         if not re.fullmatch(r'[0-9a-f]{64}', expected):
             raise PublishDataValidationError(f'审查凭证文件哈希非法: {relative}')
-        if staged.returncode != 0:
+        if staged is None:
             raise PublishDataValidationError(f'index 缺少已审查文件: {relative}')
-        actual = hashlib.sha256(staged.stdout).hexdigest()
+        actual = hashlib.sha256(staged).hexdigest()
         if actual != expected:
             raise PublishDataValidationError(
                 f'index 中的文件字节与 review 凭证不一致: {relative}'
@@ -14228,18 +14394,21 @@ def validate_git_index_against_review_receipt(receipt, paths):
 
 def _expected_commit_delta_paths(receipt, base_head):
     """对照不可变的审查基线，算出确切的已审查差异。"""
+    records = [record for record in receipt.get('files') or []
+               if isinstance(record, dict) and isinstance(record.get('path'), str)]
+    baselines = _git_batch_blob_bytes(
+        base_head, sorted({record['path'] for record in records}),
+    )
     expected = set()
-    for record in receipt.get('files') or []:
+    for record in records:
         relative = record['path']
-        baseline = _run_git(
-            ['show', f'{base_head}:{relative}'],
-        )
+        baseline = baselines.get(relative)
         if record.get('deleted') is True:
-            if baseline.returncode == 0:
+            if baseline is not None:
                 expected.add(relative)
             continue
         reviewed_sha = str(record.get('sha256') or '')
-        baseline_sha = hashlib.sha256(baseline.stdout).hexdigest() if baseline.returncode == 0 else None
+        baseline_sha = hashlib.sha256(baseline).hexdigest() if baseline is not None else None
         if baseline_sha != reviewed_sha:
             expected.add(relative)
     return expected
@@ -14275,19 +14444,19 @@ def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
         raise PublishDataValidationError(
             f'发布提交完整变更集与审查凭证不一致；额外={unexpected}，缺失={missing}'
         )
+    # 一次批量读取代替 374 次 git show；逐项校验与错误文案保持不变。
+    committed_blobs = _git_batch_blob_bytes(commit, sorted(manifest))
     for relative in sorted(manifest):
         record = by_path[relative]
-        committed = _run_git(
-            ['show', f'{commit}:{relative}'],
-        )
+        committed = committed_blobs.get(relative)
         if record.get('deleted') is True:
-            if committed.returncode == 0:
+            if committed is not None:
                 raise PublishDataValidationError(
                     f'审查凭证要求删除，但提交仍包含文件: {relative}'
                 )
             continue
         expected = str(record.get('sha256') or '')
-        if committed.returncode != 0 or hashlib.sha256(committed.stdout).hexdigest() != expected:
+        if committed is None or hashlib.sha256(committed).hexdigest() != expected:
             raise PublishDataValidationError(
                 f'提交中的文件字节与 review 凭证不一致: {relative}'
             )
@@ -14361,6 +14530,8 @@ def _validate_push_generation_input_integrity(date_str):
     有意保留原有的旧行为；
     它们的凭证检查不变。
     """
+    import time
+    started = time.monotonic()
     manifest_path = generation_manifest_path(date_str)
     try:
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
@@ -14373,7 +14544,10 @@ def _validate_push_generation_input_integrity(date_str):
     if manifest.get('publicationMode') == SEALED_TUTORIAL_PREVIEW_MODE:
         raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     if blog_formats.source_bound_generation(manifest):
-        _validate_generation_input_integrity(manifest, date_str, fresh=True)
+        try:
+            _validate_generation_input_integrity(manifest, date_str, fresh=True)
+        finally:
+            print(f'  ⏱ fresh 来源重放: {time.monotonic() - started:.2f}s')
 
 
 def _git_tracks_path(relative_path):
@@ -14387,6 +14561,7 @@ def _git_tracks_path(relative_path):
 
 def git_push(date_str, publish_paths, rollback_state=None):
     """提交，把 HEAD 显式推送到 main，并核验远端对象 ID。"""
+    import time
     manifest = _git_relative_manifest(publish_paths)
     state = rollback_state
     try:
@@ -14463,7 +14638,9 @@ def git_push(date_str, publish_paths, rollback_state=None):
         if not retrying_existing_commit and current_head != base_head:
             raise PublishDataValidationError('博客 HEAD 已偏离 review 时基线，拒绝推送未审查的本地提交；请重新生成并 review')
         if state is None:
+            capture_started = time.monotonic()
             state = capture_git_publish_state(publish_paths)
+            print(f'  ⏱ capture state: {time.monotonic() - capture_started:.2f}s')
         if manifest and not retrying_existing_commit:
             # 已删除且从未提交过的派生资产（例如本次重新生成时被移除的图）
             # 既不在工作树也不在索引里，git add 会以 128 失败；这类路径本来
@@ -14472,9 +14649,12 @@ def git_push(date_str, publish_paths, rollback_state=None):
             addable = [item for item in manifest
                        if (blog_root / item).exists() or _git_tracks_path(item)]
             if addable:
+                add_started = time.monotonic()
                 _run_git(
                     ['add', '--', *addable], check=True,
                 )
+                print(f'  ⏱ git add ({len(addable)} 路径): '
+                      f'{time.monotonic() - add_started:.2f}s')
             validate_git_index(publish_paths)
             validate_git_index_against_review_receipt(receipt, publish_paths)
         staged = _run_git(
@@ -14492,6 +14672,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 if receipt.get('reviewMode') == MANUAL_REVIEW_MODE
                 else '提交已通过严格 LLM、多模态图片与 Hugo gate 审查；'
             )
+            commit_started = time.monotonic()
             _run_git(
                 [
                     'commit',
@@ -14501,6 +14682,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
                 ],
                 check=True, timeout_kind='commit',
             )
+            print(f'  ⏱ git commit: {time.monotonic() - commit_started:.2f}s')
             local_head = validate_git_publish_branch()
             validate_git_commit_against_review_receipt(receipt, publish_paths, local_head)
             receipt['publicationCommit'] = local_head
@@ -14520,8 +14702,10 @@ def git_push(date_str, publish_paths, rollback_state=None):
             print(f"  ❌ Git add/commit 失败，且自动恢复失败: {exc}; 恢复错误: {restore_exc}")
         return False
 
+    push_started = time.monotonic()
     remote_identity_before, identity_error = _remote_identity_sha256()
     if remote_identity_before is None:
+        print(f'  ⏱ remote identity: {time.monotonic() - push_started:.2f}s')
         _report_push_retry(local_head, identity_error)
         return False
     result = _run_git(
@@ -14537,6 +14721,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
     ):
         if result.returncode != 0:
             print('  ℹ️ git push 返回非零，但远端 main 已与本地 HEAD 一致，以 OID 验证结果为准')
+        print(f'  ⏱ 远端推送与核验: {time.monotonic() - push_started:.2f}s')
         print(f"  ✅ 已推送并验证远端 main={remote_oid}，自动部署中...")
         receipt['remoteVerifiedOid'] = remote_oid
         receipt['remoteVerifiedAt'] = datetime.datetime.now(
@@ -14550,6 +14735,7 @@ def git_push(date_str, publish_paths, rollback_state=None):
             print(f"  🌐 {blog_url}/{date_str}/")
         return True
 
+    print(f'  ⏱ 远端推送与核验（失败）: {time.monotonic() - push_started:.2f}s')
     detail = verify_error or identity_error
     if remote_identity_after is not None and remote_identity_after != remote_identity_before:
         detail = 'Git remote 在 push 与远端 OID 校验之间发生变化'
@@ -15122,8 +15308,12 @@ def _require_active_publication_request(include_id):
     return expected
 
 
-def _derived_figure_asset_bindings(papers):
-    """Recompute independent publication derivatives, not Reader bindings."""
+def _derived_figure_asset_bindings(papers, *, reader_payloads=None):
+    """Recompute independent publication derivatives, not Reader bindings.
+
+    ``reader_payloads`` 只在调用方刚按同一批论文对象完成整批读者正文核验时
+    传入（以 id(paper) 为键）；未覆盖的论文仍在这里独立重算。
+    """
     from reader_pdf_page_asset import dependency_failure
     result = []
     for paper in papers:
@@ -15137,7 +15327,12 @@ def _derived_figure_asset_bindings(papers):
                 paper.get('structuredArtifactsSha256'), paper.get('sourceSha256'))
             affected = affected or dependency_failure(resource['inlineSvg'].encode('utf-8')) is not None
         if affected:
-            payload = _api_reader_payload(paper)
+            payload = (
+                reader_payloads.get(id(paper))
+                if isinstance(reader_payloads, dict) else None
+            )
+            if payload is None:
+                payload = _api_reader_payload(paper)
             result.extend(copy.deepcopy(asset['derivedAssetProof'])
                           for asset in payload.get('assets', []) if asset.get('derivedAssetProof'))
     recovery = _publication_raster_recovery_input()
@@ -16739,15 +16934,56 @@ def review_tag_catalog_files(date_str, publish_paths, manifest_path, file_result
     return blocking
 
 
+_ATTEST_API_READER_PAYLOAD_SNAPSHOT = None
+
+
+def _attest_api_reader_payload_snapshot(manifest_path, published_papers):
+    """复用同一批次上一轮 attest 的读者正文 payload。
+
+    键包含清单 SHA、每篇论文的完整输入身份（论文全字段 + 封存运行目录
+    stamp + 图片文件状态 + 恢复输入）与模块路径常量；任何一项变化都未命中。
+    只有整批 payload 全部核验成功才写入快照，失败不会留下可复用的结果。
+    """
+    global _ATTEST_API_READER_PAYLOAD_SNAPSHOT
+    try:
+        manifest_sha256 = _sha256_file(manifest_path)
+    except OSError:
+        manifest_sha256 = None
+    identities = tuple(
+        _api_reader_payload_input_identity(paper) for paper in published_papers
+    )
+    key = (
+        str(Path(manifest_path).resolve()),
+        manifest_sha256,
+        identities,
+    )
+    cached = _ATTEST_API_READER_PAYLOAD_SNAPSHOT
+    if cached is not None and cached[0] == key:
+        return copy.deepcopy(cached[1])
+    payloads = [_api_reader_payload(paper) for paper in published_papers]
+    _ATTEST_API_READER_PAYLOAD_SNAPSHOT = (key, copy.deepcopy(payloads))
+    return payloads
+
+
 def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results, *, preflight_only=False):
     """把每张论文图和伴随文件绑定到确切的已审查页面与字节记录。"""
     manifest = _load_json_object(manifest_path, '生成清单')
     records = manifest.get('files')
     if not isinstance(records, list):
         raise PublishDataValidationError('生成清单中没有文件记录')
+    published_papers = [
+        paper for paper in manifest.get('publishedPapers') or [] if isinstance(paper, dict)
+    ]
+    # review 的预检与最终绑定点各调一次本函数，同批次读者正文核验只算一次；
+    # 页面/资产字节仍在每次调用里逐项核对。
+    reader_payloads = _attest_api_reader_payload_snapshot(manifest_path, published_papers)
+    reader_payload_by_paper = {
+        id(paper): payload for paper, payload in zip(published_papers, reader_payloads)
+    }
     if 'derivedFigureAssets' in manifest or 'derivedFigureAssetsFingerprint' in manifest:
         _validate_derived_figure_asset_manifest(manifest,
-            _derived_figure_asset_bindings(manifest.get('publishedPapers') or []))
+            _derived_figure_asset_bindings(manifest.get('publishedPapers') or [],
+                                           reader_payloads=reader_payload_by_paper))
     else:
         _legacy_reader_pixel_assets(manifest, manifest.get('publishedPapers') or [])
     repo = Path(BLOG_REPO).expanduser().resolve()
@@ -16776,10 +17012,11 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
         except (OSError, UnicodeError, PublishDataValidationError):
             page_frontmatter[page] = {}
     expected_sidecars = {}
+    reader_payload_iter = iter(reader_payloads)
     for paper in manifest.get('publishedPapers') or []:
         if not isinstance(paper, dict):
             continue
-        api_reader_payload = _api_reader_payload(paper)
+        api_reader_payload = next(reader_payload_iter)
         signed_manual_payload = _signed_manual_reader_payload(paper)
         reader_plan = (
             signed_manual_payload.get('plan') if isinstance(signed_manual_payload, dict)
@@ -17952,6 +18189,8 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
 
 def load_verified_review_receipt(date_str):
     """读取严格审查凭证，并逐项核对当前博客文件的内容哈希。"""
+    import time
+    started = time.monotonic()
     path = review_receipt_path(date_str)
     if not path.is_file():
         raise PublishDataValidationError(
@@ -18089,6 +18328,7 @@ def load_verified_review_receipt(date_str):
         if manual_review_record.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
             raise PublishDataValidationError('人工审查记录中的审查协议指纹与发布凭证不一致。')
     _validate_render_observation_ref(receipt)
+    print(f'  ⏱ 凭证复核: {time.monotonic() - started:.2f}s')
     return paths, path
 
 
