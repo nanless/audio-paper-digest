@@ -83,7 +83,7 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 重新启动后核验时，程序直接重读私有封存的全部材料，重新执行原检查，不依赖 `current` 或原日期归档仍存在。这就是本页所说的冷核。下一日核验已发布的恢复批次时，也要重放这条来源及激活链。私有材料变化、符号链接、额外成员或权限变化均拒绝，不缓存通过结论。
 
-正式补抓必须带 `--require-previously-fetched`：`run-daily-digest.sh` 与 `npm run fetch` 都带这个旗标；直接运行 `node scripts/full-fetch.js` 而省略它时，边界不建立 `continuity`（`scripts/lib/daily-fetch-boundary.js` 在缺旗标时令 `continuity = null`），只能当复筛或调试入口，不能作为正式补抓。根目录的 `run-full-fetch.sh` 是旧抓取脚本，头部仍在讲已退役的微信公众号发布，既没有该旗标也没有日更边界，不要把它当日更入口。
+正式补抓必须带 `--require-previously-fetched`：`run-daily-digest.sh` 与 `npm run fetch` 都带这个旗标；直接运行 `node scripts/full-fetch.js` 而省略它时，边界不建立 `continuity`（`scripts/lib/daily-fetch-boundary.js` 在缺旗标时令 `continuity = null`），只能当复筛或调试入口，不能作为正式补抓。根目录的 `run-full-fetch.sh` 已改成拒绝执行的占位脚本，不再调用 `full-fetch.js`；正式入口是 `npm run digest:prepare`，只跑抓取阶段用 `npm run fetch`。
 
 执行者明确启用 `requirePreviouslyFetched: true` 时，边界仍先核验上一正式发布的五份文件证明，再从原抓取检查点为七类 arXiv 分别选取提交时间最新的已获取 ID，为 HuggingFace 精选选取真实 `hfSelectedAt` 最新的已获取 ID。同一时间的候选按规范化 ID 排序确定见证，避免续跑身份漂移。该模式没有上一批完整的抓取证明时直接失败，不能从页面编号、库内记录或月首猜测以前获取过哪些论文。
 

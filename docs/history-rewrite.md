@@ -239,6 +239,16 @@ ICML Daily 页使用 catalog v5 保存的 poster 对应记录。冻结单篇页�
 
 历史保留 PDF 只从显式 `--icml-pdf-root` 读取。新下载保存到 `data/runtime/historical-icml-pdf-sources/`，通过 `--icml-fresh-pdf-root` 作为补充来源读取，不回写旧 `data/pdfs/`。每个新 PDF 必须恰有一份 OpenReview 或替代来源凭证；缺凭证、双凭证、孤立凭证、旧新 PDF 字节冲突都会拒绝。凭证文件 SHA、自哈希、版本关系和 PDF SHA 共同绑定来源，catalog、计划与执行器每层重新检查，不能只看字段是否像 SHA。
 
+会议缺少的 OpenReview PDF 由专用来源程序在首次 `history:conference-local-sources --apply` 前封存。它只接受冻结海报快照中已记录、且 forum ID 精确对应的条目，按 OpenReview 的 forum ID 下载 PDF 并保存凭证；标题和相似度不能替代：
+
+```bash
+npm run history:openreview-pdf-source -- --dry-run --snapshot /abs/poster-authority.json --forum-id OPENREVIEW_ID
+npm run history:openreview-pdf-source -- --apply --snapshot /abs/poster-authority.json --forum-id OPENREVIEW_ID \
+  [--pdf-root /abs/pdf-root] [--receipt-root /abs/receipt-root]
+```
+
+`--snapshot` 是冻结页面使用的 poster authority 快照；`--pdf-root`、`--receipt-root` 分别覆盖 PDF 与凭证目录。`--dry-run` 只打印计划；`--apply` 才联网下载并写入，已有同 forum 的凭证按原字节重放，不重复下载。PDF 与凭证仍按来源清单、计划和执行器逐层核验。
+
 ### 两项固定替代来源
 
 优先通过官方 OpenReview 来源程序获取 PDF。公开端点被浏览器挑战页阻断时，`history:icml-alternate-pdf-source` 只允许代码已审查的固定 poster、forum 和来源 URL 组合：`jfpkqjhex4` 对应同标题、同作者的官方 arXiv v3；`n1mAjfRDZ6` 对应作者在 SSRN 发布的早期预印本。后者凭证须保留两个标题、作者显示名差异、DOI 和 `author-prior-preprint-cross-version`，不能声称 PDF 来自 OpenReview 响应或是 ICML 会议终稿（camera-ready）。
@@ -285,6 +295,26 @@ npm run history:arxiv-batch -- --dry-run --crosswalk UUID --owner fallback.worke
 ```
 
 正常重写不调用任意 `crosswalk` 或单篇 `arxiv-source --crosswalk` 组合。备用批处理只有在核验本次获取失败的命名备用记录及冻结页面身份后才可写入；标题不能作为论文身份依据。
+
+显式 crosswalk 身份裁定需要新的官方 arXiv 来源时，用 `history:arxiv-source` 保存来源授权。它只核验并保存官方 arXiv 来源，不生成页面，也不属于正常历史重写主链：
+
+```bash
+npm run history:arxiv-source -- --dry-run --id 2609.03622 --authority arxiv-2609.03622.json
+npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.03622.json \
+  [--crosswalk UUID --page-key page:SHA256 --decision NAME.json --owner OWNER]
+```
+
+`--authority` 是不带子目录的安全文件名；同时给出 `--crosswalk`、`--page-key`、`--decision`、`--owner` 时，会把已核验来源写成该页的裁定并应用，四个参数必须一起出现且只能配合 `--apply`。
+
+`history:resolve-conflict` 只处理 crosswalk 中 `identityHints` 为 `conflict` 或 `multiple`、且页面分配仍为 `pending` 的记录，要求所选身份是该页已有提示中的唯一一项且不能来自标题；它先核验真实官方 arXiv 来源，再写决定：
+
+```bash
+npm run history:resolve-conflict -- --apply --crosswalk UUID --page-key page:SHA256 \
+  --scheme arxiv --value 2609.03622 --authority arxiv-2609.03622.json \
+  --decision NAME.json --owner OWNER --operation-id UUID
+```
+
+两个命令都不能补抓普通来源、改旧正文或充当正常发布入口；标题不能作为论文身份依据。
 
 ## 已保存旧运行的恢复
 

@@ -95,7 +95,6 @@ const promptEvidence=require(path.join(ROOT,'scripts/lib/prompt-evidence')),norm
 promptEvidence.readPromptEvidenceBytes=function(relative,options={}){const original=historicalPrompts.get(relative);if(!original)return normalPromptRead(relative,options);
  if(options.expectedSha256!==undefined&&options.expectedSha256!==null)assert.equal(options.expectedSha256,original.sha256);return Buffer.from(original.bytes);};
 const versions=require(path.join(ROOT,'scripts/lib/prompt-contracts'));
-const currentArticlePath=versions.currentTextStagePromptPath('apiReaderArticle');
 const normalPromptPath=versions.currentTextStagePromptPath,normalPromptContract=versions.currentPromptTextContract;
 assert.equal(require(path.join(ROOT,'scripts/lib/prompt-history')).promptTemplateSha256(originalArticleBytes.toString()),current.identity.promptSha256);
 assert.equal(require(path.join(ROOT,'scripts/lib/prompt-history')).promptTemplateSha256(originalRepairBytes.toString()),current.identity.repairPromptSha256);
@@ -120,10 +119,9 @@ if(relative==='scripts/deep-analyzer.js'){
  }
 const m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));require.cache[file]=m;m._compile(source,file);m.loaded=true;return m.exports;}
 const usage=compile('scripts/lib/llm-usage.js'),repair=compile('scripts/lib/reader-repair.js'),diagnostics=compile('scripts/lib/reader-request-diagnostics.js');
-const transportContinuation=compile('scripts/lib/reader-transport-continuation.js');
 const deep=compile('scripts/deep-analyzer.js'),engine=compile('scripts/analysis-engine.js');
 const daily=require(path.join(ROOT,'scripts/lib/daily-fresh-source-plan'));
-let activeIdentity=current.identity,activeCandidateFile;
+let activeCandidateFile;
 const runDir=path.join(Config.FILES.dailyFreshSourceRunsDir,sourceFixture.runId),attempts=path.join(runDir,'reader-attempts');
 function put(file,bytes){fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,bytes,{mode:0o600});}
 put(path.join(runDir,'run.json'),decode(sourceFixture.runManifest));
@@ -159,10 +157,7 @@ put(path.join(attempts,'explicit-retry-rounds','d1befe86-db14-4c74-8615-9888cccc
 const originalFees=real.usage.map(record=>{const file=path.join(Config.FILES.llmUsageDir,path.basename(record.file));put(file,decode(record));return {file,sha256:record.sha256};});
 for(const record of sourceFixture.usage)put(path.join(Config.FILES.llmUsageDir,record.basename),decode(record));
 const plan=daily.readDailyFreshSourcePlan(sourceFixture.reference),paper=structuredClone(sourceFixture.paper);
-const whole=paper.analysisCheckpoint||paper.analysis||'';
 let origin,pending,finalPaper;
-function inSource(callback){return daily.withDailyFreshAnalysisContext(plan,()=>daily.withDailyFreshPaperSource(plan,paper,details=>
- engine.withPaperAnalysisLock(paper,()=>callback(details))),{refreshReaderDiagnostics:true});}
 
 test('capture exposes only fsync persisted original writer records and stays isolated for sync/async calls',async()=>{
  const plain={version:'llm-usage-v1',kind:'disposition',eventId:crypto.randomUUID(),at:new Date().toISOString()};

@@ -28,7 +28,7 @@ Terms such as “current,” section requirements, length, and task roles in tho
 
 ## Independent review of a current page
 
-New independent reviews must actually use `gpt-6.1-sol` with `high`, a declaration and page identities with their registered schema fingerprints. Record the real subagent identity for every page; entering a model name alone is insufficient. Old `gpt-5.6-terra/high` declarations are accepted only when reading their original records. The governing implementation is `scripts/manual_agent_policy.py`. These review rules do not change the Muse model configured for paper analysis in the three workflows.
+New independent reviews must actually use `gpt-6.1-sol` with `high`, a declaration and page identities with their registered schema fingerprints. Record the real subagent identity for every page; entering a model name alone is insufficient. Old `gpt-5.6-terra/high` declarations are accepted only when reading their original records. The governing implementation is `scripts/manual_agent_policy.py`. These review rules do not change the Muse model configured for paper analysis in the three workflows. Analysis manifests follow a separate rule in `manual/scripts/manual-agent-policy.js`, whose current analysis-side identifier is `manual-agents-sol-high-v2`; do not rewrite it using the publication-side rule.
 
 The shared recovery entry points for independent single-page review are:
 
@@ -39,6 +39,8 @@ npm run blog:manual-review -- --date YYYY-MM-DD ...
 ```
 
 Replace the date and complete `...` with the actual parameters required by each parser and the current page-generation manifest. These examples are not complete commands with invented task materials.
+
+When filling new single-page review materials, `current_review_subagent_fields()` in `scripts/manual_agent_policy.py` supplies the registered format fields. It supplies only the format and required model settings; `taskName`, the page scope, isolated records, and review findings must come from the actual work.
 
 A human content correction must bind this paper's verified sources, the original failed-draft SHA, and an explicit edit scope. After correction, run the normal article, Reader, scoring, tag, source, and publication checks. Actual review and figure evidence must bind the final page bytes. Do not weaken integrity checks, fill in a successful status by hand, or fabricate model-review records.
 

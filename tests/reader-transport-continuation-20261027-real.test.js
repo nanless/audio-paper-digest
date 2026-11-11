@@ -17,7 +17,6 @@ const originalRepairBytes = require('../scripts/lib/prompt-evidence').readPrompt
     { expectedSha256: 'e8bfdff8a12a27d3960cfe11187d87c4e3a4df2f3518bcb8bbd93c0cd86a6ab4' });
 assert.equal(require('../scripts/lib/prompt-history').promptTemplateSha256(originalRepairBytes.toString()), fixtureIdentity.repairPromptSha256);
 const normalPromptPath = versions.currentTextStagePromptPath, normalPromptContract = versions.currentPromptTextContract;
-const currentArticlePath = normalPromptPath('apiReaderArticle');
 let historicalArticleContext = true;
 // Only this isolated test process reconstructs the real v9 writing context;
 // production still refuses the current prompt transition without recovery.
@@ -223,20 +222,6 @@ test('synthetic公共requestLlmJson：一次真实入口mock传输、未知旧us
         assert.deepEqual(fs.readFileSync(f.candidateFile), before.candidate);
     });
 });
-async function currentIdentity(f) {
-    const deep = require('../scripts/deep-analyzer'), details = daily.readDailyFreshSource(f.plan, f.paper);
-    const evidence = deep.buildApiReaderEvidenceContext(f.paper.analysisCheckpoint, details.text,
-        details.structuredArtifacts, f.paper.arxivId, null, f.paper.apiReaderResources, false);
-    const prepared = await deep.prepareApiReaderRetryIdentity(f.paper, f.paper.analysisCheckpoint, evidence,
-        { sourceText: details.text, structuredArtifacts: details.structuredArtifacts });
-    assert.equal(prepared.identity.inputFingerprint, f.identity.inputFingerprint);
-    assert.equal(prepared.identity.sourceSha256, f.identity.sourceSha256);
-    assert.deepEqual(prepared.identity.model, f.identity.model);
-    assert.equal(prepared.identity.repairMaxTokens, f.identity.repairMaxTokens);
-    assert.equal(prepared.identity.maxAttempts, f.identity.maxAttempts);
-    assert.notEqual(prepared.identity.parserImplementationSha256, f.identity.parserImplementationSha256);
-    return prepared.identity;
-}
 test('sidecar cold读取核当前四源与当前身份，伪造迁移/更换源/其他stage不借48k', async t => {
     const f = setup(t), body = syntheticBody(f);
     await f.scope(() => {

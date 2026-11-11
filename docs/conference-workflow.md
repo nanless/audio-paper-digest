@@ -1165,6 +1165,18 @@ npm run conference:process -- --source-upgrade-promote \
 
 `npm run conference:recover-locks` 会实际回收符合条件的锁，不是只读查询。它只处理程序判定可回收、owner 确认死亡的 process 操作锁；锁格式损坏、进程存活或存活未知时保留并报告跳过，不批量删除锁文件。
 
+### 台账与运行的只读核验
+
+会议处理或迁移前，可以先用三个只读命令核对私有记录；它们只接受配置运行目录下的直接 JSON 文件名，不联网、不调用模型，也不导入 PDF。
+
+```bash
+npm run conference:validate-ledger -- --ledger NAME.json
+npm run conference:verify-ledger -- --ledger NAME.json
+npm run conference:validate-run -- --run NAME.json --ledger NAME.json
+```
+
+`validate-ledger` 检查台账结构、自哈希和成员身份；`verify-ledger` 还会逐个读取成员文件，核对 PDF、文本、元数据和 artifacts 文件的 SHA，并要求所有成员已 verified，耗时取决于文件数量。`validate-run` 只核对 run 与传入台账的会议身份、台账 SHA、成员 membership/identity 及 run 结构，不替代 `verify-ledger` 的文件核验。三者都只报告校验结果，不授予来源、发布或模型请求资格。
+
 ## 与全历史重写的衔接
 
 单个既有日批次可查 [`history:resume`](history-rewrite.md)。全历史会议页优先走 `history:conference-local-sources → history:inputs → history:conference-projections → history:plan` 后进入直接重写队列，不要求先跑旧账本或执行状态，也不把旧全文、任意路径或旧解读直接塞进正式分析。

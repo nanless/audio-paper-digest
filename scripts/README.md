@@ -53,6 +53,28 @@ Reader 局部补丁被拒绝后，下一次局部请求仍携带最多3000字符
 
 安装后的显式路由诊断使用 `test-api-key.js`，它会发送真实请求。历史 Prompt 通过原 Git blob 和 SHA 只读核验，不生成工作树中的旧正文归档。
 
+## 专项维护命令
+
+以下入口不属于日常三流程主链，只在来源核验、旧标签维护或用户明确授权的例外中使用。参数以 `package.json` 和各脚本解析器为准；会写文件的入口已在“关键参数”中说明。
+
+| 命令 | 用途 | 何时用 | 关键参数 |
+|---|---|---|---|
+| `npm run conference:validate-ledger` | 只读校验私有会议来源台账的结构、自哈希和成员身份。 | 会议处理或迁移前确认台账可读。 | `--ledger NAME.json`（配置目录内的直接文件名）。 |
+| `npm run conference:verify-ledger` | 在台账校验之外逐个核对成员 PDF、文本、元数据和 artifacts 的 SHA，并要求全部成员 verified。 | 需要证明来源文件完整、可重放时。 | `--ledger NAME.json`；读取全部成员文件，耗时随成员数增加。 |
+| `npm run conference:validate-run` | 只读核对 run 的会议身份、台账 SHA、membership/identity 和成员绑定。 | 恢复或迁移会议 process 前。 | `--run NAME.json --ledger NAME.json`。 |
+| `npm run tags:validate` | 加载当前词表，输出词表版本、概念数、分面数和 registry SHA-256。 | 改词表或发布前确认词表可读。 | 无参数，只读。 |
+| `npm run tags:preview` | 从历史博客元数据生成私有标签预览包，不改论文页面。 | 评估旧标签处理和迁移方式时。 | `--blog-repo ABS`、`--output ABS`（可选）；会写预览文件。 |
+| `npm run tags:serve` | 只读提供已生成标签迁移包的本地预览。 | 运行 `tags:preview` 后人工查看。 | `--port N`（默认 8766，1024–65535）。 |
+| `npm run tags:update-records` | 按词表更新会议分析记录的标签阶段，或归档、比较旧词表。 | 更新词表前后处理旧标签记录。 | 先运行 `--archive-snapshot` 归档当前词表；`--from UUID [--apply] [--mode reproject 或 annotate]`；只读检查用 `--mark-stale` 或 `--classify --old OLD --new NEW`。 |
+| `npm run tags:check-inventory` | 只读盘点会议、日更和历史记录使用的词表 SHA。 | 更新词表前确认受影响记录。 | `[--json]`；可选 `--executions DIR --deep FILE --assignments DIR --registry FILE`。 |
+| `npm run history:arxiv-source` | 保存一篇历史论文的官方 arXiv 来源授权，供 crosswalk 裁定读取。 | 显式身份裁定需要新官方来源时。 | `--dry-run` 或 `--apply --id ID --authority FILE`；裁定另加 `--crosswalk UUID --page-key page:SHA256 --decision NAME.json --owner OWNER`，组合必须用 `--apply`。 |
+| `npm run history:openreview-pdf-source` | 把认证的 OpenReview PDF 保存为会议来源可用的 forum-ID 文件。 | 会议页缺 PDF、首次运行来源清单前。 | `--dry-run` 或 `--apply --snapshot ABS --forum-id ID [--pdf-root DIR] [--receipt-root DIR]`。 |
+| `npm run history:resolve-conflict` | 对 crosswalk 中待处理的 conflict 或 multiple 页面裁定唯一论文身份。 | 显式身份裁定且已有非标题线索时。 | `--apply --crosswalk UUID --page-key page:SHA256 --scheme arxiv --value ID --authority FILE --decision NAME.json --owner OWNER --operation-id UUID`。 |
+| `npm run keyword:recall` | 用人工样例和历史入选记录回归当前关键词预筛。 | 修改关键词规则或预筛实现后。 | 可选位置参数 `ARCHIVE_DIR`；默认读 `data/archive`。 |
+| `npm run digest:waive-analysis` | 记录用户明确接受的本批分析失败豁免。 | 用户已确认当前批可带失败发布时。 | `--date YYYY-MM-DD --paper-id ID [--paper-id ...] --reason TEXT`（理由至少 10 个字符）。 |
+
+会议、标签、历史和日更的完整条件分别见 [会议流程](../docs/conference-workflow.md)、[标签规则](../docs/tag-display-policy.md)、[历史更新](../docs/history-rewrite.md) 与[三流程](../docs/three-workflows.md)。
+
 ## 验证
 
 ```bash

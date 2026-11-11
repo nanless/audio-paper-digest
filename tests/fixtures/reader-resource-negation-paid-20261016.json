@@ -4,7 +4,7 @@
   "cases": [
     {
       "paperId": "2610.20327",
-      "candidateFile": "/Users/francis7999/code/github_repos/audio-paper-digest/data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/566d705fd4e9536fe843936de18e0e0d047a5afd430fcb6cf02fa9d62e6790a2.json",
+      "candidateFile": "data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/566d705fd4e9536fe843936de18e0e0d047a5afd430fcb6cf02fa9d62e6790a2.json",
       "candidateFileSha256": "fb49aad937882372acffb0af2e7d78579f3ecf7afbe71713198ed3a56c468ff1",
       "candidatePayloadSha256": "d04c1beb9f14c4e4fa707fcea1af32bf04254caf7d0787f14efcfd90ed09f1d0",
       "sectionIndex": 16,
@@ -1096,7 +1096,7 @@
     },
     {
       "paperId": "2610.20263",
-      "candidateFile": "/Users/francis7999/code/github_repos/audio-paper-digest/data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/726caaf8134ab263782c5272a7df75b39ac27b6b80e39bf128ed9304c3219f29.json",
+      "candidateFile": "data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/726caaf8134ab263782c5272a7df75b39ac27b6b80e39bf128ed9304c3219f29.json",
       "candidateFileSha256": "6a54c76810607b522d9f95aad595d73d0a189ddc91002ae0a961a6bda2ad7220",
       "candidatePayloadSha256": "c4383aaf111ea1097226a8d0ec3efa3c0714d831a15a64fdf38b9af664381494",
       "sectionIndex": 13,
@@ -1355,7 +1355,7 @@
     },
     {
       "paperId": "2610.19726",
-      "candidateFile": "/Users/francis7999/code/github_repos/audio-paper-digest/data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/78374ca68f6ced73a86a8c22225695e2a93e8da8e4f3d8f77cec4d1d63228b7c.json",
+      "candidateFile": "data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/78374ca68f6ced73a86a8c22225695e2a93e8da8e4f3d8f77cec4d1d63228b7c.json",
       "candidateFileSha256": "4456024cf25c7d7ba2616f179588dcd7f160524cd9ffb2b00bb59fedae93c8b6",
       "candidatePayloadSha256": "026da6cc019ca74b90a9d38d34870e26ba00c72e61c95f079990889937c65793",
       "sectionIndex": 13,
@@ -1697,7 +1697,7 @@
     },
     {
       "paperId": "2610.20263",
-      "candidateFile": "/Users/francis7999/code/github_repos/audio-paper-digest/data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/335f290d86859949ac12c2e344f375f0fbb560f61263810f5b3659f7ff1cc9db.json",
+      "candidateFile": "data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/335f290d86859949ac12c2e344f375f0fbb560f61263810f5b3659f7ff1cc9db.json",
       "candidateFileSha256": "43936dd9dc30b4147b3d9fe65df16209b5cc70ddd521b880e42236aaa9a8aee6",
       "inputFingerprint": "0204aa67f8c8d9810eaaeee99eee4dbf8b01b35d4f31587db27306132fa642bf",
       "savedAttempts": 3,

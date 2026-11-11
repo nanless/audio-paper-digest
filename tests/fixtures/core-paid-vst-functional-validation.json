@@ -1,6 +1,6 @@
 {
   "realPositive": true,
-  "responseFile": "/Users/francis7999/code/github_repos/audio-paper-digest/data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/core-summary-repair/direct-ec822b6e87e22a99c9996244be41cd3b03158a8ca7a15b328102bd1012d099b5/request-diagnostics/1bef1952-9cf8-43a5-bd14-d5878dc548c6.response.json",
+  "responseFile": "data/runtime/daily-fresh-source-runs/e8fb670d-9d73-4a6e-92e0-abb7f7bee53d/reader-attempts/core-summary-repair/direct-ec822b6e87e22a99c9996244be41cd3b03158a8ca7a15b328102bd1012d099b5/request-diagnostics/1bef1952-9cf8-43a5-bd14-d5878dc548c6.response.json",
   "responseFileSha256": "4a76e25b8161bcbf18ada25e7a7aa85b0fc7d67a839ffebfbe3acf9891ad9a31",
   "outputTextSha256": "d1cbd3e0567df9b9f83152852909ada7959c2ff66816f515c7aaf6a4a5faad42",
   "rawResponse": "## 核心摘要\n用音频插件批量生成数据集时，每个音频观测的产生条件容易丢失，后续难以判断文件是否在预期软件与参数下渲染，也难以发现文件是否被替换或损坏。Python包先选取参数与固定MIDI输入并生成带哈希的采样计划，该计划作为渲染命令的输入限定待渲染的参数组合与信号来源。渲染前客户端请求宿主加载指定插件并返回宿主与插件身份，客户端比对宿主报告的解析路径与请求路径，render命令再比对参数清单中的插件标识与宿主返回标识，任一比对失败或关键身份缺失则不开始渲染，宿主报告的二进制哈希留作溯源证据。通过检查后外部宿主加载运行VST3插件完成渲染，包端把保留观测写入保留记录文件、把丢弃与失败事件写入独立失败账本，并用密封清单绑定软件身份、渲染设置与输出哈希。离线校验在不加载插件的情况下重算清单摘要与文件哈希并核对数量对应关系，配套仓库则为受控样例补充尝试级证据并重新密封。现有Python软件支持离线音频插件渲染，本文提供渲染工作流背景但不比较其溯源能力。在锁定的macOS arm64与Python 3.12组合上，两次全新进程渲染均复现了同一采样计划哈希与8个预期输出哈希覆盖4组采样参数与2个固定MIDI信号，12个负向用例与31个包测试同样通过。结论适用范围限于该受控插件、上述参数与信号构成的8个输出，不支持跨机器、跨平台或商业插件的移植性推论，原文未披露训练、推理或部署成本，不报告模型训练实验。",

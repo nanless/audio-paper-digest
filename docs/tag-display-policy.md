@@ -103,6 +103,26 @@
 
 策略含有重复 JSON 键或多余字段，策略或所选归档缺少副本、内容不同、使用符号链接或多个硬链接，以及词表未知、归档缺失、SHA 或上下级关系不符时，都会阻断生成。这些检查确认输入与批准内容一致，不能代替对展示版本的批准。
 
+## 词表更新与旧标签检查
+
+改动词表或切换展示版本前，先用只读工具确认现有记录和旧标签分布；这些命令不改论文页面，也不调用模型。
+
+```bash
+npm run tags:validate
+npm run tags:check-inventory -- --json
+npm run tags:preview -- [--blog-repo ABS] [--output ABS]
+npm run tags:serve -- [--port 8766]
+```
+
+- `tags:validate` 加载当前 `config/tag-catalog.json`，校验结构并输出词表版本、概念数、分面数和 registry SHA-256；它与生成、发布使用同一加载器。
+- `tags:check-inventory` 只读扫描会议执行记录、当前日更分析结果和历史标签分配目录，按词表 SHA 分组列出待更新记录。可用 `--executions DIR`、`--deep FILE`、`--assignments DIR`、`--registry FILE` 限定来源；只出清单，不判断发布资格，也不改写记录。
+- `tags:preview` 从历史博客元数据生成私有预览包，包含索引、迁移报告和旧标签七种处理方式的 CSV，默认写入 `data/runtime/tag-preview`；`--blog-repo` 指定博客检出，`--output` 指定输出目录。它不改写论文页面，也不重新分类。
+- `tags:serve` 在 `127.0.0.1` 提供只读预览，默认端口 8766（1024–65535）。启动时核对预览包与当前词表版本、registry SHA-256 及博客提交；预览包缺失、过期或字节不符时直接拒绝，不能手工改预览文件绕过。
+
+词表更新后，用 `npm run tags:update-records` 处理会议分析记录中的标签阶段：默认只计算并输出报告，不更新分析或进程文件；`--from UUID` 指定会议处理进程，`--mode reproject`（默认）按当前词表重建标签阶段，`--mode annotate` 只追加 `registryUpgradeFrom` 升级说明；`--apply` 才按规划时的 SHA 顺序写入 analysis、run 和 state，并把 complete 进程改为 running。`--report NAME.json` 另存报告到 `data/runtime/tag-record-update-reports/`。
+
+破坏性变更只有在白名单内并显式给出 `--acknowledge-destructive`（可配 `--acknowledge-note TEXT`）时才继续；不能人工确认的删除、改名或 status 变化仍记为 blocked。只读检查用 `--classify --old OLD.json --new NEW.json`（比较两份词表并给出 `changeLevel`、`acknowledgementEligible`）或 `--mark-stale`（列出旧词表记录），两者都不写分析或进程文件。修改 `config/tag-catalog.json` 之前必须先运行 `npm run tags:update-records -- --archive-snapshot`，把当前词表按内容 SHA 归档到 `config/tag-catalog-history/`；没有旧快照，后续更新会拒绝执行，且已存在的同 SHA 文件不会被覆盖。
+
 ## 生成、审查和恢复
 
 生成器保留策略 JSON 的原始字节，包括排版和尾换行。策略及展示文件进入暂存目录、安装记录、生成清单和当前批次审查，推送时只提交凭证允许的精确差异。单篇发布仍不得借此升级全站词表。

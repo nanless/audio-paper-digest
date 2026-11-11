@@ -10,6 +10,18 @@ test('真实DOM维度的越界、重复、数量不足仍拒绝，反馈指出�
  assert.equal(JSON.stringify(artifacts),before);assert.ok(tables.renderReaderTableSelection(binding([1,2],[0,1]),artifacts).binding.cellBindings.length>=4);
  const evidence=deep.buildApiReaderArtifactEvidence(artifacts);const rules=JSON.parse(evidence.match(/^TABLE_1_INDEX_RULES: (.+)$/m)[1]);assert.equal(rules.maximumRowIndex,3);assert.equal(rules.maximumColumnIndex,2);assert.equal(rules.minimumSelectedRows,2);assert.equal(rules.distinctIndexesRequired,true);
 });
+test('矩阵改值而原始DOM未变时不静默重放，仍拒绝',()=>{
+ const artifacts=fixture(),before=JSON.stringify(artifacts),changed=structuredClone(artifacts);
+ changed.tables[0].matrix[2][1]='4.9';
+ assert.throws(()=>tables.renderReaderTableSelection(binding([1,2],[0,1]),changed),/不能唯一重放到原始 DOM cell/);
+ assert.equal(JSON.stringify(artifacts),before);
+ assert.ok(tables.renderReaderTableSelection(binding([1,2],[0,1]),artifacts).binding.cellBindings.length>=4);
+});
+test('SD裸值借用表头单位仍识别为缺来源，不静默接受',()=>{
+ const rendered={header:['方法','duration (s)'],rows:[['A','0.18 (0.33)'],['B','1.91 (2.3)']]};
+ const issues=deep.readerTableHeaderUnitEvidenceFailures(rendered,['duration (s) 0.18 (0.33). duration (s) 1.91 (2.3).']);
+ assert.deepEqual(issues.map(issue=>[issue.token,issue.unit]),[['0.33','s'],['2.3','s']]);
+});
 test('行列错误只授权binding，其他实际错误仍可独立授权正文',()=>{
  const draft={sections:[{kind:'result',body:'问题。\n\n[[TABLE_1]]\n\n解释。'}],conceptBridges:[],figurePlacements:[],formulaBindings:[],tableBindings:[binding([0,2,4])]};
  const issues=[{path:'/tableBindings/0',message:'tableBindings[0] 读者文章 tableBindings[0] selection 行列重复、越界或数量不足：sourceRows合法范围=0..3'}];
