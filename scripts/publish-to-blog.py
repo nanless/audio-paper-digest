@@ -12407,7 +12407,9 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     ):
         raise PublishDataValidationError('daily sealed source run 未精确覆盖发布输入论文集合')
     records = {}
-    for paper, paper_id in zip(papers, [_daily_fresh_normalized_paper_id(p) for p in papers]):
+    paper_ids = [_daily_fresh_normalized_paper_id(p) for p in papers]
+
+    def validate_one(paper, paper_id):
         proof = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
         if (
                 not matches_run_provenance(run, proof)
@@ -12419,8 +12421,21 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
                 ))
         ):
             raise PublishDataValidationError(f'{paper_id} 缺少精确 daily sealed fresh provenance')
-        details = _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
-        records[paper_id] = {'paper': copy.deepcopy(paper), 'source': details}
+        return {'paper': copy.deepcopy(paper),
+                'source': _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)}
+
+    # 每篇一次 Node 冷重放（约 1.3 秒），66 篇串行约 88 秒；这是纯子进程等待，
+    # 按 8 路并行跑，结果仍按原顺序写回 records，逐篇校验逻辑一字未改。
+    workers = min(8, len(papers)) if len(papers) > 1 else 1
+    if workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(validate_one, paper, paper_id)
+                       for paper, paper_id in zip(papers, paper_ids)]
+            for paper_id, future in zip(paper_ids, futures):
+                records[paper_id] = future.result()
+    else:
+        for paper, paper_id in zip(papers, paper_ids):
+            records[paper_id] = validate_one(paper, paper_id)
     author_batch = _READER_AUTHOR_REPLAY_BATCH.get()
     if author_batch is not None:
         _flush_reader_author_replay_batch(author_batch)
