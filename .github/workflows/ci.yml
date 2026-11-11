@@ -156,6 +156,139 @@ jobs:
           VERIFY_RESULT: ${{ needs.verify.result }}
         run: test "$VERIFY_RESULT" = success
 
+  # Node 24 JavaScript shards. The existing verify/test matrices keep their
+  # Node 20/22 shape because tests/verify-project.test.js asserts that exact
+  # matrix and job count; folding 24 into the matrix needs a test update.
+  # This separate lane still runs every JavaScript shard on Node 24.
+  verify-node24:
+    name: verify (24.x, ${{ matrix.partition.label }})
+    # ubuntu-latest 已在 2026-11 切到 26.04，当前 Playwright 1.60 不支持该发行版的
+    # chromium，安装浏览器会直接失败。固定到 24.04 LTS，测试内容与命令不变。
+    runs-on: ubuntu-24.04
+    # 单个分片挂死时不要让作业占满默认的 360 分钟。
+    timeout-minutes: 120
+    # 模块加载时会检查正式环境变量。CI 使用无法联网的占位配置，
+    # 单元测试模拟请求，不读取仓库或组织的密钥。
+    env:
+      PAPER_ANALYZER_ENDPOINT: https://example.invalid/v1
+      PAPER_ANALYZER_API_KEY: ci-placeholder-not-a-secret
+      PAPER_ANALYZER_MODEL: muse-spark-1.3-contributor
+      PAPER_ANALYZER_SECONDARY_ENDPOINT: https://example.invalid/v1
+      PAPER_ANALYZER_SECONDARY_API_KEY: ci-secondary-placeholder-not-a-secret
+      PAPER_ANALYZER_SECONDARY_MODEL: muse-spark-1.3-contributor
+    strategy:
+      fail-fast: false
+      matrix:
+        partition:
+          - { suite: javascript, shard: '1/4', label: js-1 }
+          - { suite: javascript, shard: '2/4', label: js-2 }
+          - { suite: javascript, shard: '3/4', label: js-3 }
+          - { suite: javascript, shard: '4/4', label: js-4 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 旧已付费记录只读核验需要原 Git blob，当前工作树不保存旧提示词。
+          fetch-depth: 0
+
+      - name: 配置 Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: 安装项目依赖
+        run: npm ci
+
+      - name: 配置 Python 测试环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 Python 测试依赖
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements.txt
+          bash scripts/python-runtime.sh -m pip check
+
+      - name: 安装论文图渲染所需浏览器
+        run: bash scripts/python-runtime.sh -m playwright install --with-deps chromium
+
+      - name: 安装中日韩字体
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
+
+      - name: 安装固定版本 Hugo 并核验官方校验和
+        env:
+          HUGO_VERSION: '0.160.1'
+        run: |
+          set -euo pipefail
+          hugo_download_dir="$(mktemp -d)"
+          archive="hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz"
+          release="https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "$release/$archive" --output "$hugo_download_dir/$archive"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            "$release/hugo_${HUGO_VERSION}_checksums.txt" --output "$hugo_download_dir/checksums.txt"
+          cd "$hugo_download_dir"
+          awk -v archive="$archive" '$2 == archive { print; count++ } END { if (count != 1) exit 1 }' checksums.txt > selected-checksum.txt
+          sha256sum --check --strict selected-checksum.txt
+          tar -xzf "$archive" hugo
+          sudo install -m 0755 hugo /usr/local/bin/hugo
+          hugo version
+
+      - name: 创建独立的 CI 环境配置
+        run: |
+          umask 077
+          printf '%s\n' \
+            "PAPER_ANALYZER_ENDPOINT=$PAPER_ANALYZER_ENDPOINT" \
+            "PAPER_ANALYZER_API_KEY=$PAPER_ANALYZER_API_KEY" \
+            "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" \
+            "PAPER_ANALYZER_SECONDARY_ENDPOINT=$PAPER_ANALYZER_SECONDARY_ENDPOINT" \
+            "PAPER_ANALYZER_SECONDARY_API_KEY=$PAPER_ANALYZER_SECONDARY_API_KEY" \
+            "PAPER_ANALYZER_SECONDARY_MODEL=$PAPER_ANALYZER_SECONDARY_MODEL" \
+            "PD_WORKSPACE_ALLOW_CROSS_ROLE=1" \
+            "HTTPS_PROXY=http://127.0.0.1:9" > .env
+
+      - name: 绑定并核验 CI 工作区角色
+        run: |
+          npm run workspace:role -- set daily
+          npm run workspace:role -- status
+
+      - name: 运行 Node 24 JavaScript 分片
+        # data/ 不纳入版本控制，因此 CI 显式允许空数据；
+        # 单元测试另行构造数据，检查正式文件的格式与对应关系。
+        env:
+          VERIFY_SUITE: javascript
+          VERIFY_SHARD: ${{ matrix.partition.shard }}
+          NODE_OPTIONS: --test-reporter=tap
+        run: |
+          set -euo pipefail
+          verify_args=(--allow-empty --suite "$VERIFY_SUITE")
+          if [ -n "$VERIFY_SHARD" ]; then
+            verify_args+=(--shard "$VERIFY_SHARD")
+          fi
+          npm run verify -- "${verify_args[@]}" 2>&1 | tee verification.log
+
+      - name: 保存逐套件验证日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-24.x-${{ matrix.partition.label }}
+          path: verification.log
+          if-no-files-found: ignore
+
+  test-node24:
+    name: test (24.x)
+    if: always()
+    needs: verify-node24
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: 确认 Node 24 全部分片通过
+        env:
+          VERIFY_RESULT: ${{ needs.verify-node24.result }}
+        run: test "$VERIFY_RESULT" = success
+
   # 客户端测试不进服务端分片矩阵，独立作业避免拖慢上述十二个检查：
   # Android 需要 JDK、Gradle 与 SDK，与 Node/Python 分片没有共享资源，也不并入 test 汇总检查。
   # macOS 客户端测试暂不接入 CI（见 63b9339c），仍在发行机上用 bash apps/macos/test.sh 运行。
