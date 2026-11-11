@@ -74,12 +74,22 @@ tableCase('table-identifier', 'Family ID', 'Family ID');
 tableCase('table-identifier', '系统拓扑', '系统拓扑');
 tableCase('table-identifier', '识别词加指标-Family准确率', 'Family 准确率 ↓');
 tableCase('table-identifier', '识别词加指标-拓扑相似度', '拓扑相似度 ↓');
+// 2026-11-11 把 Python TABLE_DIRECTIONAL_METRIC_RE 补齐到 Node 同表后补的守护语料：
+// 这些词都必须按“带方向标记的指标列”处理，不能因为前缀像识别词就当成行身份。
+for (const header of ['模型评分 ↓', '评估 L2 ↓', 'NMSE ↓', 'MR-STFT ↓', '裁判分 ↓']) {
+    tableCase('table-identifier', header, header);
+}
 
 // ── 规则 2：识别列表头“（潜|隐|表征|嵌入|特征|语义）空间” ──────────────────────
 // Node: analysis-contract.js::isTableIdentifierHeader 的 TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE
-// Py  : publish_common.py::_is_table_identifier_header 的 TABLE_IDENTIFIER_HEADER_RE
+// Py  : publish_common.py::_is_table_identifier_header 的附加识别词
 for (const header of ['潜空间', '隐空间', '表征空间', '嵌入空间', '特征空间', '语义空间',
     '潜在空间', '语义相似空间', '潜空间（词级）', '隐空间-说话人']) {
+    tableCase('latent-space-header', header, header);
+}
+// 2026-11-11 两侧统一为“整列 + 一个括号限定”后补的边界语料：带后缀、带空格、
+// 带连字符的写法都不是识别列；精确词条仍然通过。
+for (const header of ['语义空间分析', '潜空间可视化', '隐空间（说话人）']) {
     tableCase('latent-space-header', header, header);
 }
 
@@ -134,7 +144,14 @@ const boundaryCases = {
     '仅说明': '这张表只说明当前设置下的相对差别，不支持把结论外推到其他语料或部署环境，'
         + '作者也未报告置信区间与显著性检验。',
     '证据范围限于': '这些数字只覆盖英语朗读语料，证据范围限于当前测试集与单一采样率，'
-        + '换语言或换设备后是否成立仍需重新测量。'
+        + '换语言或换设备后是否成立仍需重新测量。',
+    // 2026-11-11 两侧统一到“边界词 + 推断/外推动词”后补的正例。
+    '不能直接解释': '不能直接解释为通用结论，因为样本只来自一个语料，比较对象也只有两个基线，'
+        + '换语言与换设备后的表现还需另行测量。',
+    '不可直接视为': '不可直接视为因果证据，因为该表只比较两个设置，其他变量的影响没有单独控制，'
+        + '读者仍需结合正文方法部分理解各条件之间的关系。',
+    '不应直接推广': '不应直接推广到全部语料，因为分数只来自一个留出集，作者也没有报告完整置信区间，'
+        + '换数据后的表现仍需重新测量。'
 };
 for (const [name, after] of Object.entries(boundaryCases)) {
     tableCase('table-boundary', name, '方法', { after });
@@ -189,60 +206,31 @@ const numeralTexts = [
     '三个模块', '排名第三', '二到三成', '2.5 百万条', '三位说话人', '五位评审',
     '这一位说话人', '这是一位说话人，负责核对标注。', '三分之一', '五个百分点',
     '四分之一宽', '阈值二值化', '使用了 3 个模型', '2.5 万条', '3 倍', '2.5 秒',
-    '四个方向', '这一位读者'
+    '四个方向', '这一位读者',
+    // 2026-11-11 补齐人物介绍豁免后补的边界语料。排名类中文序数没有进入
+    // 语料：Python 自 2026-09-01「汇总页允许自然序数名次」起故意放行，
+    // 与 Node 的 exact_rank 仍是登记分歧（见 KNOWN_DIVERGENCES）。
+    '第三阶段', '第三作者',
+    '那是一位读者，负责整理笔记。', '这是一位说话人，实验统计人数为三人。',
+    '这一位说话人负责核对。'
 ];
 for (const text of numeralTexts) numeralCase(text, text);
 
-// ── 当前不一致清单（2026-11-11 实测，剩 8 条） ────────────────────────────────
-// 每条记录“哪条语料、Node 结论、Python 结论”。测试对命中项动态跳过并打印实测值；
-// 若上游实现后续修好（两侧变为一致），该条语料自然转入普通断言，测试保持通过。
-// 若两侧出现本清单未登记的新分歧，测试直接失败并打印语料与两侧结论。
-//
-// 2026-11-11 本轮已把 5 条“JS 放行、Python 拒绝”的分歧修在 Python 侧并从本清单
-// 移除（table-identifier/Family、table-identifier/拓扑、negative-evidence/
-// 未带来提升、无显著差异、负增益），它们现在是硬断言。剩余 8 条见下。
+// ── 当前不一致清单（2026-11-11 实测，剩 1 条） ────────────────────────────────
+// 本轮已修 7 条并从本清单移除：table-identifier/评估 L1 ↓、
+// latent-space-header/潜空间（词级）、隐空间-说话人、table-boundary/裸不能、
+// 裸不可、裸不应、manual-numeral/这是一位说话人；上一轮已修 Family、拓扑、
+// 未带来提升、无显著差异、负增益。它们现在是普通硬断言。
+// 剩下的排名类分歧不是漏修：Python 在 2026-09-01「汇总页允许自然序数名次」
+// （231a2a5f）里故意删掉 exact_rank，并有两个回归测试要求放行；Node 侧
+// exact_rank 未同步。要收敛只能放松 Node（本任务不可改），或确认改回阿拉伯
+// 数字并同步修改那两个测试，需另行决定。
 const KNOWN_DIVERGENCES = Object.freeze({
-    'table-identifier/评估 L1 ↓': {
-        js: '实验结果第 1 张表缺少方法、数据集或设置识别列',
-        py: null,
-        note: 'Node TABLE_DIRECTIONAL_METRIC_RE 含 \\bl[12]\\b，Python 同常量缺失该项，'
-            + '于是“评估 L1 ↓”在 Python 被当成识别列'
-    },
-    'latent-space-header/潜空间（词级）': {
-        js: '实验结果第 1 张表缺少方法、数据集或设置识别列',
-        py: null,
-        note: 'Node 把“潜空间”类放在整列锚定的附加识别词里；Python 主词表未锚定，'
-            + '带后缀的“潜空间（词级）”也被当成识别列'
-    },
-    'latent-space-header/隐空间-说话人': {
-        js: '实验结果第 1 张表缺少方法、数据集或设置识别列',
-        py: null,
-        note: '与上一条同源：Python 未锚定的空间类识别词接受带后缀写法'
-    },
-    'table-boundary/裸不能': {
-        js: '实验结果第 1 张表后缺少最关键差异、解释与证据边界',
-        py: null,
-        note: 'Node 要求“不能（直接）解释/推广/视为”；Python 只匹配裸词“不能/不可/不应/不宜”'
-    },
-    'table-boundary/裸不可': {
-        js: '实验结果第 1 张表后缺少最关键差异、解释与证据边界',
-        py: null,
-        note: '同上：Python 裸词“不可”放行，Node 要求完整搭配'
-    },
-    'table-boundary/裸不应': {
-        js: '实验结果第 1 张表后缺少最关键差异、解释与证据边界',
-        py: null,
-        note: '同上：Python 裸词“不应”放行，Node 要求完整搭配'
-    },
     'manual-numeral/排名第三': {
         js: true,
         py: false,
-        note: 'Node 有 exact_rank（排名第/第 N 名）；Python exact_quantity_patterns 缺该模式'
-    },
-    'manual-numeral/这是一位说话人，负责核对标注。': {
-        js: false,
-        py: true,
-        note: 'Node 把“这是一位说话人”当人物介绍豁免；Python 复刻未包含该豁免'
+        note: 'Node exact_rank 命中“排名第/第 N 名”；Python 自 2026-09-01 起'
+            + '故意允许自然序数名次（231a2a5f 与 test_publish_common.py 的两个回归用例）'
     }
 });
 

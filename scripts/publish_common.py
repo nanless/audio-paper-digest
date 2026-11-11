@@ -271,7 +271,7 @@ TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
     r'measure|family|language family)(?:\b|$)|^(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?$|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
-    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|拓扑|(?:潜|隐|表征|嵌入|特征|语义)空间)',
+    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|拓扑)',
     flags=re.IGNORECASE,
 )
 TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
@@ -283,7 +283,7 @@ TABLE_DIRECTION_MARK_RE = re.compile(
     flags=re.IGNORECASE,
 )
 TABLE_DIRECTIONAL_METRIC_RE = re.compile(
-    r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\bmse\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)',
+    r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\bmse\b|\bnmse\b|\bmste\b|\bmr[- ]?stft\b|\berle\b|\bmos\b|\bl[12]\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度|评分|分数|裁判分)',
     flags=re.IGNORECASE,
 )
 # “无条件 AVG ↑”这类汇总列是可测量的指标，但与 WER、准确率不同，它本身
@@ -319,7 +319,7 @@ def _is_table_identifier_header(value):
     if re.fullmatch(r'(?:(?:检验|统计检验)?统计量|统计检验结果|(?:F|t|z|χ²)\s*统计量|(?:test\s+)?statistics?|[Ftzp][ -]?(?:values?|statistics?))', normalized, flags=re.IGNORECASE):
         return False
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
@@ -4853,7 +4853,7 @@ def _validate_experiment_table_evidence_depth(
         after = next((
             paragraph for paragraph in after_candidates
             if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 50
-            and (re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于|不宜|不能|不可|不应', paragraph) or _source_backed_sample_size_boundary(paragraph, table, complete_source_text, results))
+            and (re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于|不宜(?:直接)?(?:解释|推广|视为|当作)|不能(?:直接)?(?:解释|推广|视为)|不可(?:直接)?(?:解释|推广|视为)|不应(?:直接)?(?:解释|推广|视为)', paragraph) or _source_backed_sample_size_boundary(paragraph, table, complete_source_text, results))
         ), '')
         if not before:
             return f'实验结果第 {index} 张表前缺少与上下文衔接的具体比较问题'
@@ -5336,6 +5336,23 @@ def _is_discourse_task_condition_numeral(text, index, surface):
     return not re.search(r'(?:仅|只|至少|至多|恰好|共有|共计|总共|总计|一共|剩余)', prefix)
 
 
+def _is_person_introduction_numeral(text, match):
+    """“这是一位说话人”是在介绍人物，不是在报告实验人数。
+
+    与 editorial-quality.js 的候选豁免同规则：只放过“这是/那是 + 一位 +
+    人物名词”，且同一句不能同时出现实验、样本、统计等技术语境。
+    """
+    if match.group(0) != '一位':
+        return False
+    if not re.search(r'(?:这|那)是\s*$', text[:match.start()]):
+        return False
+    clause = re.split(r'[。！？!?；;\n]', text[match.end():])[0]
+    if not re.match(r'^.{0,64}?(?:说话人|听者|读者|用户|研究者|作者)', clause):
+        return False
+    return not re.search(
+        r'(?:量化|比特|位宽|编码|精度|实验|样本|人数|统计|均值|平均|错误率|数量)', clause)
+
+
 def validate_manual_reader_quality(analysis):
     """发布阶段对 Manual v4 读者闸做高置信度复刻。
 
@@ -5521,8 +5538,9 @@ def validate_manual_reader_quality(analysis):
             quantity_body,
         )
         for pattern in exact_quantity_patterns:
-            match = pattern.search(quantity_body)
-            if match:
+            for match in pattern.finditer(quantity_body):
+                if _is_person_introduction_numeral(quantity_body, match):
+                    continue
                 return f'manual v4 {section} 精确定量必须使用阿拉伯数字: {match.group(0)}'
         for pattern in reader_template_patterns:
             match = pattern.search(body)

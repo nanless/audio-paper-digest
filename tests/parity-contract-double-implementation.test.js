@@ -6,10 +6,10 @@
 // 就会变成新的发布阻断。本测试用同一批语料分别调用两侧公开入口，断言结论一致；
 // 不一致时打印「哪条语料、Node 结果、Python 结果」。
 //
-// 现状（2026-11-11）：13 条语料两侧不一致，全部登记在
-// tests/parity-contract-corpus.cjs 的 KNOWN_DIVERGENCES 中并动态跳过；
-// 其余 63 条语料作为硬断言。上游实现修好后，已登记语料自然转入普通断言。
-// 新增的、未登记的分歧会让测试直接失败。
+// 现状（2026-11-11）：最初登记的 13 条两侧分歧已修 12 条；剩 1 条排名类推文
+// （Python 自 2026-09-01 起故意允许自然序数名次，Node exact_rank 未同步）。
+// 103 条语料中 102 条作为硬断言，1 条登记在 KNOWN_DIVERGENCES 并动态跳过。
+// 新增的未登记分歧会让测试直接失败。
 //
 // 运行：node --test tests/parity-contract-*.test.js
 // Python 侧：bash scripts/python-runtime.sh -m unittest discover -s tests/python -p "test_parity_*.py"
