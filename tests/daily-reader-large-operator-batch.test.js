@@ -9,6 +9,13 @@ const daily = require('../scripts/lib/daily-fresh-source-plan');
 const operator = require('../scripts/lib/daily-reader-operator-correction');
 
 test('大型人工收尾按完整原封存入选集计算十百分比，绝不超十五或接受虚增集合', async t => {
+    // 批次级放宽只影响真实运行；这条测试断言默认公式，必须自己隔离环境变量。
+    const savedLimit = process.env.PD_DAILY_CORRECTION_LIMIT;
+    delete process.env.PD_DAILY_CORRECTION_LIMIT;
+    t.after(() => {
+        if (savedLimit === undefined) delete process.env.PD_DAILY_CORRECTION_LIMIT;
+        else process.env.PD_DAILY_CORRECTION_LIMIT = savedLimit;
+    });
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'operator-large-batch-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-runs');
