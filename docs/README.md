@@ -93,6 +93,7 @@
 |---|---|
 | 当前命令、入口与公共模块 | [脚本索引](../scripts/README.md)、[三流程表](three-workflows.md) |
 | 修改、验证、中文提交与推送 | [维护指南](maintenance.md) |
+| 用真实付费材料做人工验收 | [人工验收清单](manual-acceptance-checklist.md) |
 | 现用提示词和旧原字节 | [提示词索引](../prompts/README.md)、[提示词修改](maintenance.md#prompt-修改) |
 | 解读长文的结构与来源要求 | [解读写作](reader-writing.md) |
 | 怎样解释、分段、用图和维护双语 | [写作约定](writing-guide.md)、[写作 skill](../skills/clear-technical-writing/SKILL.md) |
