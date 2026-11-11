@@ -1,4 +1,20 @@
-# 客户端发行核验（1.4.4）
+# 客户端发行核验（1.4.5）
+
+## 1.4.5 公开结果
+
+| 项 | 值 |
+|---|---|
+| 标签 | `v1.4.5`（附注标签），指向发行提交 `f9241190` |
+| 发布时间 | 2026-11-12 03:35（北京时间） |
+| 发行页 | https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.5 |
+| 附件 | 12 件：Mac 6 件（ZIP、DMG、`build-info.json`、`RELEASE_NOTES.md`、`release-manifest.json`、`SHA256SUMS`），Android 6 件（APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`） |
+| 匿名下载 | Mac ZIP 未登录请求返回 200 |
+| Android 签名 | 沿用 1.4.4 签名库，证书 SHA-256 `6a0c3138…`；1.4.4 用户可直接覆盖升级，1.4.3 用户仍需备份后卸载重装 |
+| 人工验收 | 未重新执行 84/86 项人工矩阵；受影响项（Mac `APP-03`、`DATA-01`、`DATA-05`、`DATA-11`，Android `DATA-05`、`DATA-13`，两端 `APP-01`、`APP-09`、`REL-01`、`REL-02`、`REL-05`）只完成自动测试与包体层面覆盖 |
+
+1.4.5 的改动与验证范围见 [1.4.5 记录](workbench-1.4.5-review.md)。
+
+# 1.4.4 发行核验
 
 本文记录 1.4.4 公开发行后的签名、附件和下载核验结果；1.4.3 的结论保留在“上一版”一节，供下一次发行对照。两版的附件、签名和证书分别登记，不能互相替代。发行操作本身见 [Mac 构建与发行](mac-app-release.md)，性能改动见[客户端性能](client-performance.md)。
 
