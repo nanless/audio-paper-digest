@@ -8,6 +8,7 @@ const codec = require('./protocol-codec');
 // stay untouched and still block the table.
 const READER_TABLE_SYMBOLS = {
     uparrow: '↑', downarrow: '↓', Uparrow: '⇑', Ddownarrow: '⇓',
+    rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', Rightarrow: '⇒', Leftrightarrow: '⇔',
     dagger: '†', ddagger: '‡', times: '×', pm: '±', mp: '∓',
     leq: '≤', geq: '≥', le: '≤', ge: '≥', approx: '≈', sim: '∼',
     infty: '∞', checkmark: '✓', cdot: '·', ldots: '…', dots: '…',
@@ -20,12 +21,55 @@ const READER_TABLE_SYMBOLS = {
 function readerVisibleWithTex(value) {
     return /[A-Za-z\u4e00-\u9fff0-9][^\\]*\\[A-Za-z]/.test(String(value ?? ''));
 }
+// 可见符号与紧随其后的 TeX 命令必须是同一符号、且命令后不再跟下标或运算符，
+// 否则这一格是坏的双写/渲染残片（✓\\times、×\\times_{j}、×\\times + 2）。
+// 数据格里只剩一条裸 TeX 命令、连数字都没有（整格 \alpha、k=\tilde{k}）时，
+// 说明这一格是未渲染的来源 TeX，不是可逐字复现的测量值。
+function readerCellIsBareTexWithoutNumber(value) {
+    const text = String(value ?? '');
+    if (!/\\[A-Za-z]+/.test(text)) return false;
+    // 去掉 TeX 命令与结构符号后剩下的可见内容不足 5 个字符，才视为「整格是裸 TeX」；
+    // ADNI →\\rightarrow Tongji (private) 这类带说明文字的比较格不算。
+    // 只有「整格以 TeX 命令开头」才算裸 TeX（\alpha）；✓\\checkmark 这种
+    // 可见符号在前的双写格是正常布尔标记，不算。
+    const trimmed = text.trim();
+    if (!/^\\[A-Za-z]/.test(trimmed)) return false;
+    const rest = trimmed.replace(/\\[A-Za-z]+/g, '').replace(/[{}^_]/g, '').trim();
+    return rest.length <= 4 && !/\d/.test(rest);
+}
+
+
+function readerCellHasConflictingTexSymbol(value) {
+    const text = String(value ?? '');
+    if (!text.includes('\\')) return false;
+    for (const match of text.matchAll(/([^\\])\\([A-Za-z]{2,})/g)) {
+        const [whole, before, name] = match;
+        const projected = READER_TABLE_SYMBOLS[name];
+        const end = match.index + whole.length;
+        const rest = text.slice(end);
+        if (projected === undefined) continue;
+        if (before !== projected) return true;
+        if (/^[_^]/.test(rest) || /^\s*[+\-*/×÷]/.test(rest)) return true;
+    }
+    return false;
+}
+
+
 function projectReaderMathSymbols(value) {
     let text = String(value ?? '');
     if (!text.includes('\\')) return text;
-    text = text.replace(/\\([A-Za-z]{2,})\b/g,
-        (whole, name) => Object.hasOwn(READER_TABLE_SYMBOLS, name) ? READER_TABLE_SYMBOLS[name] : whole);
-    text = text.replace(/\\(?:mathrm|text|mathbf|mathit|mathcal)\{([^{}]*)\}/g, '$1');
+    // 不能用 \b：\pm12.44 的命令后面紧跟数字，\b 不成立；\DeltaSDR 又是「命令+正文」
+    // 连写。这里按最长前缀匹配已知命令，匹配不到就原样保留（继续阻断）。
+    text = text.replace(/\\([A-Za-z]{2,})/g, (whole, name) => {
+        for (let length = name.length; length >= 2; length -= 1) {
+            const head = name.slice(0, length);
+            if (Object.hasOwn(READER_TABLE_SYMBOLS, head)) {
+                return READER_TABLE_SYMBOLS[head] + name.slice(length);
+            }
+        }
+        return whole;
+    });
+    text = text.replace(/\\(?:mathrm|text|mathbf|mathit|mathcal|bm|boldsymbol)\{([^{}]*)\}/g, '$1');
     return text;
 }
 
@@ -544,7 +588,12 @@ function assessReaderTableSelectionEligibility(table) {
                     header: matrix[0], row: cells, rowIndex: row, columnIndex: column,
                     sourceTexts: [text]
                 })) add('source_display_cleanup_required', { row, column });
-                if (!(headerRow && readerVisibleWithTex(text)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(text))) add('unresolved_source_tex', { row, column });
+                if (!(headerRow && readerVisibleWithTex(text))
+                    && (readerCellHasConflictingTexSymbol(text)
+                        || (row > 0 && readerCellIsBareTexWithoutNumber(text))
+                        || /\\[A-Za-z]+/.test(projectReaderMathSymbols(text)))) {
+                    add('unresolved_source_tex', { row, column });
+                }
                 if (unsafeMarkdownCell(projectReaderMathSymbols(text))) add('unsafe_markdown_cell', { row, column });
             }
         }
@@ -610,7 +659,12 @@ function assessReaderCompleteTableEligibility(table) {
                         rowIndex: row, columnIndex: column, sourceTexts: [text] })) {
                         add('source_display_cleanup_required', { row, column });
                     }
-                    if (!(headerRow && readerVisibleWithTex(visible)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(visible))) add('unresolved_source_tex', { row, column });
+                    if (!(headerRow && readerVisibleWithTex(visible))
+                        && (readerCellHasConflictingTexSymbol(visible)
+                            || (row > 0 && readerCellIsBareTexWithoutNumber(visible))
+                            || /\\[A-Za-z]+/.test(projectReaderMathSymbols(visible)))) {
+                        add('unresolved_source_tex', { row, column });
+                    }
                     if (unsafeMarkdownCell(projectReaderMathSymbols(visible))) add('unsafe_markdown_cell', { row, column });
                 }
             }
