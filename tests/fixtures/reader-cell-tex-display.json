@@ -1,0 +1,189 @@
+{
+  "contract": "reader-cell-tex-display-parity-v1",
+  "cases": [
+    {
+      "input": "≈250\\approx 250",
+      "expected": "≈250"
+    },
+    {
+      "input": "≈2.5\\approx 2.5",
+      "expected": "≈2.5"
+    },
+    {
+      "input": "≈10\\approx 10",
+      "expected": "≈10"
+    },
+    {
+      "input": "CLAPT↑{}_{\\mathrm{T}}\\!\\uparrow",
+      "expected": "CLAPT↑"
+    },
+    {
+      "input": "≥10\\geq 10 (MTurk, averaged)",
+      "expected": "≥10 (MTurk, averaged)"
+    },
+    {
+      "input": "q^\\hat{q} (half-width)",
+      "expected": "q̂ (half-width)"
+    },
+    {
+      "input": "Noise σ=0.25\\sigma=0.25",
+      "expected": "Noise σ=0.25"
+    },
+    {
+      "input": "Noise σ=0.5\\sigma=0.5",
+      "expected": "Noise σ=0.5"
+    },
+    {
+      "input": "Noise σ=1.0\\sigma=1.0",
+      "expected": "Noise σ=1.0"
+    },
+    {
+      "input": "FIDk↓{}_{k}\\downarrow",
+      "expected": "FIDk↓"
+    },
+    {
+      "input": "FIDg↓{}_{g}\\downarrow",
+      "expected": "FIDg↓"
+    },
+    {
+      "input": "Divk→{}_{k}\\rightarrow",
+      "expected": "Divk→"
+    },
+    {
+      "input": "Divg→{}_{g}\\rightarrow",
+      "expected": "Divg→"
+    },
+    {
+      "input": "BAS→\\rightarrow",
+      "expected": "BAS→"
+    },
+    {
+      "input": "w/o L→\\rightarrowH",
+      "expected": "w/o L→H"
+    },
+    {
+      "input": "EH↓E_{H}\\downarrow",
+      "expected": "EH↓"
+    },
+    {
+      "input": "EA↓E_{A}\\downarrow",
+      "expected": "EA↓"
+    },
+    {
+      "input": "CRESiST (τ\\tau=0.5)",
+      "expected": "CRESiST (τ=0.5)"
+    },
+    {
+      "input": "mIoUM↑\\mathrm{mIoU}_{\\mathrm{M}}^{\\uparrow}",
+      "expected": "mIoUM↑"
+    },
+    {
+      "input": "mSILAM↑\\mathrm{mSILA}_{\\mathrm{M}}^{\\uparrow}",
+      "expected": "mSILAM↑"
+    },
+    {
+      "input": "Fsame,M↓F_{\\mathrm{same},\\mathrm{M}}^{\\downarrow}",
+      "expected": "Fsame,M↓"
+    },
+    {
+      "input": "SC​-​DSM↑\\mathrm{SC\\mbox{-}DS}_{\\mathrm{M}}^{\\uparrow}",
+      "expected": "SC​-​DSM↑"
+    },
+    {
+      "input": "5+5\\,+ new",
+      "expected": "5+5+ new"
+    },
+    {
+      "input": "FDPANNs\\mathrm{\\textbf{FD}_{\\textbf{PANNs}}}↓",
+      "expected": "FDPANNs↓"
+    },
+    {
+      "input": "FDPaSST\\mathrm{\\textbf{FD}_{\\textbf{PaSST}}}↓",
+      "expected": "FDPaSST↓"
+    },
+    {
+      "input": "KLPANNs\\mathrm{\\textbf{KL}_{\\textbf{PANNs}}}↓",
+      "expected": "KLPANNs↓"
+    },
+    {
+      "input": "𝝉\\boldsymbol{\\tau} (s)",
+      "expected": "𝝉 (s)"
+    },
+    {
+      "input": "𝒔\\boldsymbol{s} (𝝉\\boldsymbol{\\tau})",
+      "expected": "𝒔 (𝝉)"
+    },
+    {
+      "input": "Mean P⁡(same)P(\\mathrm{same})",
+      "expected": "Mean P⁡(same)"
+    },
+    {
+      "input": "Roracle2−Rtransfer2R^{2}_{\\mathrm{oracle}}-R^{2}_{\\mathrm{transfer}}",
+      "expected": "Roracle2−Rtransfer2"
+    },
+    {
+      "input": "β1real−β1synth\\beta_{1}^{\\mathrm{real}}-\\beta_{1}^{\\mathrm{synth}}",
+      "expected": "β1real−β1synth"
+    },
+    {
+      "input": "Trak λ=1\\lambda=1",
+      "expected": "Trak λ=1"
+    },
+    {
+      "input": "Trak λ=0.1\\lambda=0.1",
+      "expected": "Trak λ=0.1"
+    },
+    {
+      "input": "Trak λ=0.01\\lambda=0.01",
+      "expected": "Trak λ=0.01"
+    },
+    {
+      "input": "d¯\\overline{d}",
+      "expected": "d̄"
+    },
+    {
+      "input": "Pathwise w/ detached critic sg⁡(𝐟⁡(𝐱τ))\\mathrm{sg}(\\mathbf{f}({\\mathbf{x}}_{\\tau}))",
+      "expected": "Pathwise w/ detached critic sg⁡(𝐟⁡(𝐱τ))"
+    },
+    {
+      "input": "Flow-product w/ non-detach critic 𝐟⁡(𝐱τ)\\mathbf{f}({\\mathbf{x}}_{\\tau})",
+      "expected": "Flow-product w/ non-detach critic 𝐟⁡(𝐱τ)"
+    },
+    {
+      "input": "2.222.22",
+      "expected": "2.222.22"
+    },
+    {
+      "input": "3.093.09",
+      "expected": "3.093.09"
+    },
+    {
+      "input": "k=\\tilde{k}",
+      "expected": "k=\\tilde{k}"
+    },
+    {
+      "input": "22.96 ±\\pm 0.08",
+      "expected": "22.96 ± 0.08"
+    },
+    {
+      "input": "FD\\mathrm{FD_{norm}}",
+      "expected": "FD\\mathrm{FD_{norm}}"
+    },
+    {
+      "input": "FD\\mathrm{FD}",
+      "expected": "FD"
+    },
+    {
+      "input": "\\unknowncommand",
+      "expected": "\\unknowncommand"
+    },
+    {
+      "input": "23.4\\,ms",
+      "expected": "23.4ms"
+    },
+    {
+      "input": "\\hat{q} (half-width)",
+      "expected": "q̂ (half-width)"
+    }
+  ]
+}

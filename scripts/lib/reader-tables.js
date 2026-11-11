@@ -29,6 +29,14 @@ function projectReaderMathSymbols(value) {
     return text;
 }
 
+// 选择与完整表共用同一个单元格显示投影：先取原 DOM 的已验证显示视图，
+// 再用同一套双写折叠规范化。两条路径因此对同一原格得到同一显示字节。
+function readerTableCellDisplay(table, row, column) {
+    const display = require('./reader-table-pdf-evidence').displayCell(table, row, column);
+    const { projectReaderCellTexDisplay, normalizeReaderSourceDisplayArtifacts } = require('./reader-source-display');
+    return normalizeReaderSourceDisplayArtifacts(projectReaderCellTexDisplay(display));
+}
+
 const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection';
 const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage';
 const originalTableSelectionDomain = () => codec.historicalContract(READER_TABLE_SELECTION_CONTRACT, 'exact-original-subset');
@@ -651,8 +659,8 @@ function renderReaderCompleteTable(binding, artifacts) {
     const table = candidates[0];
     const eligibility = assessReaderCompleteTableEligibility(table);
     if (!eligibility.eligible) throw readerSourceTableError(binding.tableIndex, table, eligibility);
-    const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
-    const displayMatrix = require('./reader-table-pdf-evidence').displayMatrix(table).map(row => row.map(normalize));
+    const displayMatrix = table.matrix.map((row, rowIndex) => row.map(
+        (_cell, columnIndex) => readerTableCellDisplay(table, rowIndex, columnIndex)));
     const line = cells => `| ${cells.join(' | ')} |`;
     return { markdown: [line(displayMatrix[0]), line(displayMatrix[0].map(() => '---')),
         ...displayMatrix.slice(1).map(line)].join('\n'),
@@ -775,15 +783,14 @@ function renderReaderTableSelection(binding, artifacts) {
         }
         // 对任意原文标记做转义或改写会改变单元格的身份。
         // 这类表格留在现有的显式绑定路径上。
-        if (unsafeMarkdownCell(projectReaderMathSymbols(text))) {
+        const display = readerTableCellDisplay(table, sourceRow, sourceColumn);
+        if (unsafeMarkdownCell(projectReaderMathSymbols(display))) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 含不能逐字安全渲染的 Markdown`);
         }
         cellBindings.push({ renderedRow, renderedColumn, sourceRow, sourceColumn });
-        // Legacy signed tables compare against the raw DOM text; newer tables
-        // render the verified display projection.
-        return require('./reader-pdf-cell-evidence').evidence(table)
-            ? text
-            : require('./reader-table-pdf-evidence').displayCell(table, sourceRow, sourceColumn);
+        // 选择与完整表共用同一显示投影；旧签稿的 DOM 字节仍由上面的
+        // 原单元格身份检查保护，不按正文回填或手写。
+        return display;
     }));
     const row = cells => `| ${cells.join(' | ')} |`;
     const rendered = {

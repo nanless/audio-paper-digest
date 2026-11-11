@@ -7430,6 +7430,193 @@ def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
     return normalize_repeated_bold_prefixes(value)
 
 
+# 表格单元格里 LaTeXML 会把同一个值输出两遍：一次可见副本、一次同义 TeX 注解。
+# Reader（scripts/lib/reader-source-display.js 的 projectReaderCellTexDisplay）与
+# 发布端使用同一套折叠规则；只折“可见值 == TeX 纯文本投影”的完整重复，未知命令
+# 或数值不同时保持原样，由未渲染 TeX 检查拒绝，不能静默删值。
+_READER_TEX_SYMBOLS = {
+    'uparrow': '↑', 'downarrow': '↓', 'rightarrow': '→', 'leftarrow': '←', 'leftrightarrow': '↔',
+    'times': '×', 'pm': '±', 'cdot': '·', 'approx': '≈', 'geq': '≥', 'leq': '≤', 'neq': '≠', 'sim': '∼',
+    'sigma': 'σ', 'lambda': 'λ', 'tau': 'τ', 'beta': 'β', 'alpha': 'α', 'mu': 'μ', 'pi': 'π',
+    'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ',
+}
+_READER_TEX_STYLE_NAMES = re.compile(
+    r'\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|'
+    r'widehat|overline|underline|tilde|hat|bar)'
+)
+
+
+def _reader_tex_cell_canonical(value):
+    text = unicodedata.normalize('NFKC', str(value or ''))
+    text = re.sub(r'[\u200b\u200c\u200d\ufeff\u2061\u2062]', '', text)
+    return re.sub(r'\s+', '', text.replace('−', '-')).strip()
+
+
+def _reader_tex_plain(value):
+    output = str(value or '')
+    if '\\' not in output:
+        return output
+    output = re.sub(r'\\[,;:!]', '', output)
+    for _round in range(10):
+        before = output
+        output = re.sub(r'([A-Za-z0-9]+)\^\{((?:[^{}]|\{[^{}]*\})*)\}_\{((?:[^{}]|\{[^{}]*\})*)\}',
+                        r'\1\3\2', output)
+        output = re.sub(r'([A-Za-z0-9]+)_\{((?:[^{}]|\{[^{}]*\})*)\}\^\{((?:[^{}]|\{[^{}]*\})*)\}',
+                        r'\1\2\3', output)
+        output = _READER_TEX_STYLE_NAMES.sub('', output)
+        output = re.sub(r'\{([^{}]*)\}', r'\1', output)
+        if output == before:
+            break
+
+    def command(match):
+        name = match.group(1)
+        if name in _READER_TEX_SYMBOLS:
+            return _READER_TEX_SYMBOLS[name]
+        for length in range(len(name) - 1, 1, -1):
+            head = name[:length]
+            if head in _READER_TEX_SYMBOLS:
+                return _READER_TEX_SYMBOLS[head] + name[length:]
+        return match.group(0)
+
+    output = re.sub(r'\\([A-Za-z]+)', command, output)
+    return re.sub(r'[{}^_]', '', output)
+
+
+def _reader_tex_align_tail(plain, canonical_prefix):
+    for index in range(len(plain) + 1):
+        if _reader_tex_cell_canonical(plain[:index]) == canonical_prefix:
+            return plain[index:]
+    return None
+
+
+def _fold_reader_tex_cell_duplicate(value):
+    text = str(value or '')
+    for split in range(1, len(text)):
+        if '\\' not in text[split:]:
+            continue
+        prefix, suffix = text[:split], text[split:]
+        plain = _reader_tex_plain(suffix)
+        if not plain or '\\' in plain:
+            continue
+        canonical_prefix = _reader_tex_cell_canonical(prefix)
+        canonical_plain = _reader_tex_cell_canonical(plain)
+        if not canonical_plain or len(canonical_prefix) < 2:
+            continue
+        if canonical_plain == canonical_prefix:
+            return prefix
+        if len(canonical_prefix) > len(canonical_plain) and canonical_prefix.endswith(canonical_plain):
+            return prefix
+        if canonical_plain.startswith(canonical_prefix):
+            remainder = _reader_tex_align_tail(plain, canonical_prefix)
+            # 只有 TeX 注解之后是独立正文或尾符号时才保留；注解自己的下标/内容
+            # （FD\mathrm{FD_{norm}} 的 norm）不是独立正文，不能当重复删一半。
+            if remainder is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°]', remainder):
+                return prefix + remainder
+        # 注解只重复可见值开头的一个符号（CRESiST 的 τ、w/o L→ 的箭头），
+        # 保留可见副本来替换整个注解；剩余文字里的独立副本仍由下一轮折叠加守。
+        if re.match(r'[\\{^_]', suffix) and len(canonical_plain) > 1 \
+                and len(canonical_prefix) > 1 and canonical_prefix.endswith(canonical_plain[0]):
+            return prefix + plain[1:]
+    return text
+
+
+def _project_reader_cell_tex_display(value):
+    output = str(value or '')
+    if '\\' not in output:
+        return output
+    output = re.sub(r'\\[,;:]', '', output)
+    # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
+    def bold(match):
+        visible, name = match.group(1), match.group(2)
+        command_value = name[1:] if name.startswith('\\') else name
+        projected = _READER_TEX_SYMBOLS.get(command_value, command_value)
+        return visible if _reader_tex_cell_canonical(visible) == _reader_tex_cell_canonical(projected) else match.group(0)
+
+    output = re.sub(r'([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}', bold, output)
+    output = re.sub(r'([A-Za-z])\^\\(?:hat|widehat)\{([A-Za-z]+)\}',
+                    lambda match: match.group(1) + '\u0302'
+                    if match.group(1) == match.group(2) else match.group(0), output)
+    output = re.sub(r'\\hat\{([A-Za-z])\}', lambda match: match.group(1) + '\u0302', output)
+    output = re.sub(r'([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}',
+                    lambda match: match.group(1) + '\u0304'
+                    if match.group(1) == match.group(2) else match.group(0), output)
+    output = re.sub(r'\\overline\{([A-Za-z])\}', lambda match: match.group(1) + '\u0304', output)
+    for _round in range(6):
+        if '\\' not in output:
+            break
+        folded = _fold_reader_tex_cell_duplicate(output)
+        if folded == output:
+            break
+        output = folded
+    return output
+
+
+def _reader_cell_comparison(value):
+    """逐格比较时两侧都先折叠同义 TeX 双写，再按严格来源规范比较。"""
+    return _normalize_api_reader_source_cell(_project_reader_cell_tex_display(value))
+
+
+def _rendered_table_bare_tex(article):
+    """返回渲染后表格里仍未解释的裸 TeX（排除 \(...\)、$...$、\[...\] 与转义竖线）。"""
+    for line in str(article or '').splitlines():
+        if not line.startswith('|'):
+            continue
+        text = line.replace('\\|', '')
+        text = re.sub(r'\\\(.*?\\\)', '', text)
+        text = re.sub(r'\$[^$]*\$', '', text)
+        text = re.sub(r'\\\[.*?\\\]', '', text)
+        match = re.search(r'\\[A-Za-z]+', text)
+        if match:
+            return line.strip()[:160], match.group(0)
+    return None
+
+
+def _project_artifact_table_cell_tex_display(article, plan):
+    """只改已核对 artifact_table 单元格的显示副本；保存的 Reader 字节不变。"""
+    tables = extract_markdown_tables(article)
+    lines = article.split('\n')
+    for binding in plan.get('tableBindings', []):
+        if binding.get('sourceType') != 'artifact_table':
+            continue
+        index = binding.get('tableIndex')
+        if not isinstance(index, int) or isinstance(index, bool) or not 1 <= index <= len(tables):
+            raise PublishDataValidationError('来源单元格 TeX 显示投影的表序号不符合已验证计划。')
+        table = tables[index - 1]
+        for cell in binding.get('cellBindings', []):
+            row, column = cell.get('renderedRow'), cell.get('renderedColumn')
+            if not isinstance(row, int) or isinstance(row, bool) or not isinstance(column, int) or isinstance(column, bool):
+                raise PublishDataValidationError('来源单元格 TeX 显示投影的单元格坐标无效。')
+            if row < 0 or column < 0 or column >= len(table['header']) or row > len(table['rows']):
+                raise PublishDataValidationError('来源单元格 TeX 显示投影的单元格坐标超出表格范围。')
+            line_index = table['start_line'] + row + (1 if row else 0)
+            line = lines[line_index]
+            pipes = list(re.finditer(r'(?<!\\)\|', line))
+            start, end = pipes[column].end(), pipes[column + 1].start()
+            original = line[start:end]
+            current_text = original.strip()
+            projected = _project_reader_cell_tex_display(current_text)
+            if projected == current_text:
+                continue
+            if _reader_cell_comparison(projected) \
+                    != _reader_cell_comparison(cell.get('sourceText')):
+                raise PublishDataValidationError(
+                    '来源单元格 TeX 显示投影与保存的原 DOM 文本不一致，不能改写页面。')
+            leading = original[:len(original) - len(original.lstrip())]
+            trailing = original[len(original.rstrip()):]
+            lines[line_index] = line[:start] + leading + projected + trailing + line[end:]
+    return '\n'.join(lines)
+
+
+def _assert_rendered_tables_have_no_bare_tex(article):
+    remaining = _rendered_table_bare_tex(article)
+    if remaining:
+        line, command = remaining
+        raise PublishDataValidationError(
+            '读者文章的表格仍有未渲染的 TeX 注解（' + command + '）：' + line
+            + '。请让表格单元格使用已验证的显示投影或改为 source_quotes 逐字引文，'
+            + '不能把 \\mathrm、\\tau、\\uparrow 等原样发布到页面。')
+
+
 def _normalize_api_reader_source_cell(value):
     # Undo only the exact whole-cell CI footnote display escape emitted by
     # escape_statistical_significance_stars. Other backslashes/TeX stay strict.
@@ -9218,10 +9405,10 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                     # still bind both copies. Decode only this exact view.
                     canonical_comparison_text = math_display['sourceText']
                     display_source_text = math_display['sourceText']
-                if _normalize_api_reader_source_cell(canonical_comparison_text) \
-                        != _normalize_api_reader_source_cell(display_source_text) \
-                        or (_normalize_api_reader_source_cell(display_source_text) \
-                        != _normalize_api_reader_source_cell(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
+                if _reader_cell_comparison(canonical_comparison_text) \
+                        != _reader_cell_comparison(display_source_text) \
+                        or (_reader_cell_comparison(display_source_text) \
+                        != _reader_cell_comparison(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
                         and not (_reader_merged_cell_matches(paper, binding, cell, display_source_text)
                             if index in pdf_values or not paper.get('freshRewriteProvenance')
                             else (index, rendered_row, rendered_column) in html_blank_span_keys)) \
@@ -10337,6 +10524,7 @@ def _api_reader_payload(paper):
     if integrated:
         rendered_article = _normalize_api_reader_display_artifacts(rendered_article)
         rendered_article = _project_bound_source_cell_math_display(rendered_article, plan)
+        rendered_article = _project_artifact_table_cell_tex_display(rendered_article, plan)
         if r'G.711 μ\mu-law' in rendered_article:
             rendered_article = _project_source_quoted_codec_display(rendered_article, paper)
     if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
@@ -10356,6 +10544,8 @@ def _api_reader_payload(paper):
             rendered_article = rendered_article.replace(image_line, image_line + '\n\n> **图片来源：** '
                 + asset['derivedAssetProof']['displayLabel'], 1)
     rendered_article = _collapse_mathjax_double_write(rendered_article)
+    if integrated:
+        _assert_rendered_tables_have_no_bare_tex(rendered_article)
     return {
         'contract': reader_contract,
         **({'schemaFingerprint': plan['schemaFingerprint']}

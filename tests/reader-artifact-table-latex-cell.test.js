@@ -17,7 +17,10 @@ const {
     findReaderTablePasteDuplication
 } = require('../scripts/lib/reader-tables.js');
 
-const LATEX_HEADER = String.raw`FD\mathrm{FD}`;
+// 这里刻意用与原可见列头不是同一值的注解：同值双写现在由选择/完整表共用的
+// 显示投影折叠（见 reader-source-display 的 projectReaderCellTexDisplay），
+// 本测试继续锁定“合格原表里的不同值注解原样绑定、不被粘贴残留清理改写”。
+const LATEX_HEADER = String.raw`FD\mathrm{FD_{norm}}`;
 const SOURCE_TEXT = 'Synthetic source text for the Reader artifact table binding test.';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const sortKeys = value => Array.isArray(value)

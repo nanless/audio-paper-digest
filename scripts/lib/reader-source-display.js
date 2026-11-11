@@ -106,6 +106,100 @@ function normalizeExplicitReaderSymbolProjection(value) {
         .replace(/([+/])\\;\1\\;/g, '$1');
 }
 
+// 表格单元格里 LaTeXML 会把同一个值输出两遍：一次可见副本、一次同义 TeX 注解。
+// 只按“可见值 == TeX 纯文本投影”折叠完整重复；未知命令或数值不同时保持原样，
+// 交给调用方的 unresolved_source_tex 检查拒绝，不能静默删值。
+const READER_TEX_SYMBOLS = Object.freeze({
+    uparrow: '↑', downarrow: '↓', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔',
+    times: '×', pm: '±', cdot: '·', approx: '≈', geq: '≥', leq: '≤', neq: '≠', sim: '∼',
+    sigma: 'σ', lambda: 'λ', tau: 'τ', beta: 'β', alpha: 'α', mu: 'μ', pi: 'π',
+    Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ',
+});
+const READER_TEX_STYLE_NAMES = /\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|widehat|overline|underline|tilde|hat|bar)/g;
+function readerTexCellCanonical(value) {
+    return String(value ?? '').normalize('NFKC')
+        .replace(/[\u200b\u200c\u200d\ufeff\u2061\u2062]/g, '')
+        .replace(/−/g, '-').replace(/\s+/g, '').trim();
+}
+function readerTexPlain(value) {
+    let output = String(value ?? '');
+    if (!output.includes('\\')) return output;
+    output = output.replace(/\\[,;:!]/g, '');
+    for (let round = 0; round < 10; round++) {
+        const before = output;
+        output = output
+            .replace(/([A-Za-z0-9]+)\^\{((?:[^{}]|\{[^{}]*\})*)\}_\{((?:[^{}]|\{[^{}]*\})*)\}/g, '$1$3$2')
+            .replace(/([A-Za-z0-9]+)_\{((?:[^{}]|\{[^{}]*\})*)\}\^\{((?:[^{}]|\{[^{}]*\})*)\}/g, '$1$2$3')
+            .replace(READER_TEX_STYLE_NAMES, '')
+            .replace(/\{([^{}]*)\}/g, '$1');
+        if (output === before) break;
+    }
+    output = output.replace(/\\([A-Za-z]+)/g, (whole, name) => {
+        if (Object.hasOwn(READER_TEX_SYMBOLS, name)) return READER_TEX_SYMBOLS[name];
+        for (let length = name.length - 1; length >= 2; length--) {
+            const head = name.slice(0, length);
+            if (Object.hasOwn(READER_TEX_SYMBOLS, head)) return READER_TEX_SYMBOLS[head] + name.slice(length);
+        }
+        return whole;
+    });
+    return output.replace(/[{}^_]/g, '');
+}
+function readerTexAlignTail(plain, canonicalPrefix) {
+    for (let index = 0; index <= plain.length; index++) {
+        if (readerTexCellCanonical(plain.slice(0, index)) === canonicalPrefix) return plain.slice(index);
+    }
+    return null;
+}
+function foldReaderTexCellDuplicate(value) {
+    const text = String(value ?? '');
+    for (let split = 1; split < text.length; split++) {
+        if (!text.slice(split).includes('\\')) continue;
+        const prefix = text.slice(0, split), suffix = text.slice(split);
+        const plain = readerTexPlain(suffix);
+        if (!plain || plain.includes('\\')) continue;
+        const canonicalPrefix = readerTexCellCanonical(prefix);
+        const canonicalPlain = readerTexCellCanonical(plain);
+        if (!canonicalPlain || canonicalPrefix.length < 2) continue;
+        if (canonicalPlain === canonicalPrefix) return prefix;
+        if (canonicalPrefix.length > canonicalPlain.length && canonicalPrefix.endsWith(canonicalPlain)) return prefix;
+        if (canonicalPlain.startsWith(canonicalPrefix)) {
+            const remainder = readerTexAlignTail(plain, canonicalPrefix);
+            // 只有 TeX 注解之后是独立正文或尾符号时才保留；注解自己的下标/内容
+            // （FD\mathrm{FD_{norm}} 的 norm）不是独立正文，不能当重复删一半。
+            if (remainder !== null && /^[\s(（\[,:：;；↑↓→←↔±×%°]/.test(remainder)) return prefix + remainder;
+        }
+        // 注解只重复可见值开头的一个符号（−72.9-72.9、w/o L→\rightarrowH 的箭头），
+        // 保留可见副本来替换整个注解；剩余文字里的独立副本仍由下一轮折叠加守。
+        if (/^[\\{^_]/.test(suffix) && canonicalPlain.length > 1 && canonicalPrefix.length > 1
+            && canonicalPrefix.endsWith(canonicalPlain[0])) return prefix + plain.slice(1);
+    }
+    return text;
+}
+function projectReaderCellTexDisplay(value) {
+    let output = String(value ?? '');
+    if (!output.includes('\\')) return output;
+    output = output.replace(/\\[,;:]/g, '');
+    // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
+    output = output.replace(/([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}/gu,
+        (whole, visible, name) => {
+            const value = name.startsWith('\\') ? name.slice(1) : name;
+            const projected = Object.hasOwn(READER_TEX_SYMBOLS, value) ? READER_TEX_SYMBOLS[value] : value;
+            return readerTexCellCanonical(visible) === readerTexCellCanonical(projected) ? visible : whole;
+        });
+    output = output.replace(/([A-Za-z])\^\\(?:hat|widehat)\{([A-Za-z]+)\}/g,
+        (whole, visible, name) => visible === name ? visible + '\u0302' : whole);
+    output = output.replace(/\\hat\{([A-Za-z])\}/g, (_whole, name) => name + '\u0302');
+    output = output.replace(/([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}/g,
+        (whole, visible, name) => visible === name ? visible + '\u0304' : whole);
+    output = output.replace(/\\overline\{([A-Za-z])\}/g, (_whole, name) => name + '\u0304');
+    for (let round = 0; round < 6 && output.includes('\\'); round++) {
+        const folded = foldReaderTexCellDuplicate(output);
+        if (folded === output) break;
+        output = folded;
+    }
+    return output;
+}
+
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = normalizeExplicitReaderSymbolProjection(value);
     // 只投影完整表格格值：分子、分母的可见副本与显式 {,} 注解须逐字一致。
@@ -205,4 +299,4 @@ function normalizeReaderSourceDisplayArtifacts(value) {
     return output;
 }
 
-module.exports = { normalizeExplicitReaderSymbolProjection, normalizeReaderSourceDisplayArtifacts };
+module.exports = { normalizeExplicitReaderSymbolProjection, normalizeReaderSourceDisplayArtifacts, projectReaderCellTexDisplay };

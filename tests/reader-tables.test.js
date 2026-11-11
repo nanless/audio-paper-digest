@@ -159,6 +159,10 @@ test('需要清理的数值或未处理的 TeX 不能直接选用，合法数值
         assert.equal(result.eligible, false, text);
         assert.ok(result.reasonCodes.some(code => ['source_display_cleanup_required', 'unresolved_source_tex'].includes(code)));
     }
+    // 同值双写只影响“已合格原表”的显示投影，不放宽选择资格；投影本身在
+    // reader-source-display 的共享语料里逐条锁定。
+    assert.equal(require('../scripts/lib/reader-source-display')
+        .normalizeReaderSourceDisplayArtifacts('22.96 ±\\pm 0.08'), '22.96 ± 0.08');
     for (const text of ['2.22', '3.09', '2.22 dB', '3.09 ms', '2025']) {
         const table = structuredClone(artifacts.tables[1]);
         table.matrix[1][1] = text;
