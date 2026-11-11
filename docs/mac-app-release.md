@@ -1,11 +1,19 @@
 # 论文速递工作台 Mac 版：构建与发行
 
-本页说明当前版本 1.4.4（构建号 20）的本地准备和联合发行操作。1.4.4 的改动与验证范围见 [1.4.4 记录](workbench-1.4.4-review.md)，该版已于 2026-11-05 公开发布，下载与实际状态见 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)，签名、附件和匿名下载的核对结果见[客户端发行核验](client-release-verification.md)。上一版 1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
+本页说明当前准备版本 1.4.5（构建号 21）的本地准备和联合发行操作。1.4.5 尚未公开发布：版本号、测试和发行材料可以先准备，建立标签、上传附件与公开仍需用户确认。1.4.5 只含 1.4.4 之后已修复、尚未发版的客户端问题，见下节。上一版 1.4.4 已于 2026-11-05 公开发布，记录见 [1.4.4 记录](workbench-1.4.4-review.md) 和[客户端发行核验](client-release-verification.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
+
+## 1.4.5 准备范围
+
+1.4.5 是 1.4.4 的补丁版，不改变内容生产、来源和发布规则：
+
+- macOS：修复已保存目录 JSON 损坏时的崩溃；载入失败改为可恢复错误，应用内重试或同步即可恢复。缓存清理范围补上可重新下载的原文 PDF、PDF 回执和汇总页解析缓存，被当前指针、离线包、个人资料或证据引用的文件仍保留。
+- Android：前台目录检查与同步共用 `client/index.json` 入口，仅在 404/410 时回退旧入口；修复两个入口字节不一致时反复触发整站同步的问题。
+- 两端同时升到 1.4.5、构建号 21；Android 沿用 1.4.4 的发布签名库，已安装 1.4.4 的用户可以覆盖升级；1.4.3 用户仍需卸载重装。
 
 | 项目 | 当前发行目标 |
 |---|---|
 | 应用 | 论文速递工作台.app |
-| 版本、构建号 | 1.4.4、20 |
+| 版本、构建号 | 1.4.5、21 |
 | 架构、最低系统 | arm64、macOS 15 |
 | 运行时 | 随包 Node 24.19.0 |
 | 签名 | 本地 ad-hoc 签名，未 Apple 公证 |
@@ -37,17 +45,17 @@ npm --prefix apps/macos run install:app
 apps/macos/release.sh inspect \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.4
+  --version 1.4.5
 
 apps/macos/release.sh prepare \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.4 \
-  --output 'apps/macos/.build/releases/1.4.4-arm64' \
+  --version 1.4.5 \
+  --output 'apps/macos/.build/releases/1.4.5-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.4.4-arm64'
+  --prepared 'apps/macos/.build/releases/1.4.5-arm64'
 ```
 
 `inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。
@@ -56,7 +64,7 @@ apps/macos/release.sh verify \
 
 | 输出 | 核对内容 |
 |---|---|
-| `PaperDigest-macOS-1.4.4-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
+| `PaperDigest-macOS-1.4.5-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
 | 同名 DMG | 应用与指向 `/Applications` 的拖入目标；检查映像并只读挂载回读 |
 | `build-info.json` | 版本、架构、时间、来源身份和相对文件摘要，无本机构建路径 |
 | `RELEASE_NOTES.md` | 按真实范围生成的版本、安装、签名与支持说明 |
@@ -78,7 +86,7 @@ Android 正式包按 `prepare → sign → verify` 单独处理，不修改已�
 
 ```sh
 python3 apps/android/release_tools.py --repo "$PWD" prepare \
-  --output "$ANDROID_PREPARED" --version 1.4.4 --code 20
+  --output "$ANDROID_PREPARED" --version 1.4.5 --code 21
 
 python3 apps/android/release_tools.py --repo "$PWD" sign \
   --prepared "$ANDROID_PREPARED" --output "$ANDROID_SIGNED" \
@@ -91,7 +99,7 @@ python3 apps/android/release_tools.py --repo "$PWD" verify \
 
 签名入口要求本机终端交互，运行时提示输入签名库密码和密钥密码。1.4.4 的口令取自本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目；该条目只保存口令，不保存签名库、私钥或证书。1.4.4 重新生成的签名库在仓库外以 `0600` 权限单独保存，父目录为 `0700`。不要把口令、签名库或私钥写入仓库、Release 或终端历史。
 
-1.4.4 的证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，公开的 `android-build-info.json` 记录了这一值。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，已安装 1.4.3 的用户不能覆盖升级到 1.4.4：先导出完整备份、卸载旧版，再安装 1.4.4、恢复资料并重新配置设备凭据。1.4.4 的公开 `android-build-info.json` 记录 `signingOrigin: apksigner-sign`、`buildTools 36.0.0`，签名工具指纹与实际发行包一致；本页只登记这些可复核的来源，签名方案与证书主题以发行机器上 `apksigner verify --print-certs` 的输出为准。Android 来源、版本、四种 ABI、16 KiB 对齐、许可与包体核验必须与 Mac 使用同一发行提交。
+1.4.4 的证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，公开的 `android-build-info.json` 记录了这一值。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，已安装 1.4.3 的用户不能覆盖升级到 1.4.4：先导出完整备份、卸载旧版，再安装 1.4.4、恢复资料并重新配置设备凭据。1.4.4 的公开 `android-build-info.json` 记录 `signingOrigin: apksigner-sign`、`buildTools 36.0.0`，签名工具指纹与实际发行包一致；本页只登记这些可复核的来源，签名方案与证书主题以发行机器上 `apksigner verify --print-certs` 的输出为准。Android 来源、版本、四种 ABI、16 KiB 对齐、许可与包体核验必须与 Mac 使用同一发行提交。 1.4.5 沿用 1.4.4 的发布签名库与证书，因此已安装 1.4.4 的用户可以直接覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
 
 ## 5. 私有草稿、下载核验与公开
 
@@ -99,9 +107,9 @@ python3 apps/android/release_tools.py --repo "$PWD" verify \
 
 联合发行使用同一干净提交准备 Mac 与正式签名 Android 包，两端版本一致，Android 来源等于选定发行提交。1.4.4 的来源提交为 `aecf5c25`，公开的 `build-info.json` 与附注标签 `v1.4.4` 都指向该提交；1.4.3 的来源提交为 `47c30d98`。先整理版本说明，再正常生成并固定附件、清单与校验文件；之后不手工修改已固定的文件。
 
-1.4.3 的公开记录由该轮自动测试、包体校验和未变化功能的原通过记录组成；该轮没有重新执行 69 项人工图形验收，不能把沿用记录写成重新完成。1.4.4 同样没有重新执行 69 项人工图形验收，其附件与签名核验见[客户端发行核验](client-release-verification.md)。[原69项功能检查](mac-app-acceptance.md)和[新增17项](mac-app-cloud.md)保留全部原 ID，状态唯一。创建私有草稿前须有 84 项通过记录；仅依赖真实草稿的 `REL-03`、`REL-04` 可为待验。公开前须有全部 86 项通过记录，失败、受阻或不适用不能替代通过。
+1.4.3 的公开记录由该轮自动测试、包体校验和未变化功能的原通过记录组成；该轮没有重新执行 69 项人工图形验收，不能把沿用记录写成重新完成。1.4.4 同样没有重新执行 69 项人工图形验收，其附件与签名核验见[客户端发行核验](client-release-verification.md)。[原69项功能检查](mac-app-acceptance.md)和[新增17项](mac-app-cloud.md)保留全部原 ID，状态唯一。创建私有草稿前须有 84 项通过记录；仅依赖真实草稿的 `REL-03`、`REL-04` 可为待验。公开前须有全部 86 项通过记录，失败、受阻或不适用不能替代通过。 1.4.5 是补丁版，本次需重新执行或补记的受影响项为：Mac `APP-03`、`DATA-01`、`DATA-05`、`DATA-11`，Android `DATA-05`、`DATA-13`，以及两端 `APP-01`、`APP-09`、`REL-01`、`REL-02`、`REL-05`。其余项目按原证据范围复用，并在验收表中注明来源版本；不能用旧记录冒充本版重跑。
 
-先明确建立并核对远端版本标签。单端 `private-draft-plan` 只生成草稿参数；两端联合使用 Android 工具，以下路径变量代表已正常生成的对应产物和实际验收快照：
+1.4.5 尚未建立标签或 Release。完成全量测试、86 项验收和用户确认后，先提交并推送最终字节，再建立并核对远端标签、固定附件。单端 `private-draft-plan` 只生成草稿参数；两端联合使用 Android 工具，以下路径变量代表已正常生成的对应产物和实际验收快照：
 
 ```sh
 python3 apps/android/release_tools.py --repo "$PWD" joint-private-draft-plan \

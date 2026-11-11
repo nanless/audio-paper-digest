@@ -23,7 +23,7 @@ for suite in ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollec
     "$test_work/$suite" || status=$?
     if [[ $status -eq 77 ]]; then
       echo 'NativeLibraryAccessibility 跳过：当前环境没有可用的自进程 AXWindow（需要解锁桌面与辅助功能）；该套件未通过，不计为回归。'
-    else
+    elif [[ $status -ne 0 ]]; then
       exit "$status"
     fi
   else

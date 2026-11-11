@@ -111,7 +111,7 @@
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。

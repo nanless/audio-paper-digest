@@ -2,7 +2,7 @@
 
 ## 当前源码与已发行版本
 
-Mac 和 Android 的当前源码统一为 **1.4.4（构建号 20）**；1.4.4 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)。1.4.3 于同日公开发布，原记录保留。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装。1.4.4 的改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+Mac 和 Android 的当前源码统一为 **1.4.5（构建号 21）**；1.4.4 已于 2026-11-05 公开发布，下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)。1.4.3 于同日公开发布，原记录保留。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装。1.4.4 的改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
 
 ## 1.4.4 公开发行
 

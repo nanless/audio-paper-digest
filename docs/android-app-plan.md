@@ -2,7 +2,7 @@
 
 “论文速递工作台”提供 Mac 与 Android 两个原生客户端，用于阅读网站已发布的论文解读、核对原始 PDF、保存个人研究，以及连接 Zotero 和坚果云。主项目与网站仍叫“论文速递”，日更、会议和历史文章继续由网站工作流生产。客户端安装、同步、阅读或换设备均不自动重新分析论文。
 
-当前 Mac 与 Android 源码均为 1.4.4（构建号 20），1.4.4 已于 2026-11-05 公开发布，公开安装包以[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)为准；1.4.3 同日发布，保留原记录。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出备份、卸载旧版再安装。1.3.0 时的全站分类、两端界面及正式发行验收见 [1.3.0 审改记录](workbench-1.3.0-review.md)；1.4.4 的改动与验证范围见 [1.4.4 记录](workbench-1.4.4-review.md)，1.4.3 的改动、自动测试与未重做的人工验收见 [1.4.3 记录](workbench-1.4.3-review.md#发行状态)。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)；性能与发行核验见[客户端性能](client-performance.md)和[客户端发行核验](client-release-verification.md)。
+当前 Mac 与 Android 源码均为 1.4.5（构建号 21），1.4.4 已于 2026-11-05 公开发布，公开安装包以[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)为准；1.4.3 同日发布，保留原记录。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出备份、卸载旧版再安装。1.3.0 时的全站分类、两端界面及正式发行验收见 [1.3.0 审改记录](workbench-1.3.0-review.md)；1.4.4 的改动与验证范围见 [1.4.4 记录](workbench-1.4.4-review.md)，1.4.3 的改动、自动测试与未重做的人工验收见 [1.4.3 记录](workbench-1.4.3-review.md#发行状态)。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)；性能与发行核验见[客户端性能](client-performance.md)和[客户端发行核验](client-release-verification.md)。
 
 ## 两个原生界面，共用研究资料
 
