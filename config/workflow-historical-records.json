@@ -91,7 +91,7 @@
     "files": {
       "scripts/lib/official-conference-acquisition.js": "7e8ddec3e1e1a1e7c9eda1de0883ca3b159d19b03270198abbc98e767ad4401e",
       "scripts/icmc-proceedings.py": "cf5e41213b0dd54bdf2ee065159d437d2904cdec4da843ca4dd646a4cf463f00",
-      "package-lock.json": "3374129530a66f407987ed4af7d4155dbd57859d52a4f82b47a1a5e110f562c4"
+      "package-lock.json": "c0c662ee94121bbab2da878b0b68369c3fa1042cc1abeeef0b54de1b1bd7c8a6"
     },
     "originalSourceSha256": "bdef7d66f934a1f4094b0453d10459e839e56f7e636132de0e213f654f14e7e7"
   }

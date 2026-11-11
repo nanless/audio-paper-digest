@@ -16,6 +16,16 @@ output/
 .env.*
 .paper-digest-workspace-role.json
 
+# 凭据与私钥，禁止提交
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+*.jks
+id_rsa*
+credentials*
+
 # 系统生成的文件
 .DS_Store
 Thumbs.db
