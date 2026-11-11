@@ -21,10 +21,10 @@ Mac 与 Android 的论文速递工作台使用共同的资料包和坚果云版�
 | 层 | 合同或入口 | 保存与恢复规则 | 范围 |
 |---|---|---|---|
 | 研究空间 | `BackupCodec`，`paperdigest-backup` | 保留研究原件、逐文件 SHA、整体上限与路径检查；新导出排除两份本机完整性密钥 | 来源真实性、模型请求与远端授权分别核验 |
-| 云端完成版本 | `CloudArchiveService`，`paperdigest-cloud-snapshot` | 同一路径、UTC月份、分块索引/大小/哈希、完成清单和逐块回读 | 全部块、清单与本机回执均核验后完成 |
+| 云端完成版本 | `CloudArchive`（Android）/ `CloudArchiveService`（Mac），`paperdigest-cloud-snapshot` | 同一路径、UTC月份、分块索引/大小/哈希、完成清单和逐块回读 | 全部块、清单与本机回执均核验后完成 |
 | 研究数据 | `personal.json` 原格式或带结构指纹的新格式、离线包、原始 `ModelUsage` | 保持原 ID、版本、原文/图/输入/回答/费用字节；未知字段保留 | 恢复不能重签旧模型输入、给旧缓存升级“最新”状态 |
-| 恢复政策 | `RestoreLocalPolicy`、请求连续性记录、`applyRestorePayload` | 保本机路由与预算、原资料旁存、暂存/确认/回滚 | 下载后经用户确认再恢复；不自动合并两台设备的笔记 |
-| 本机云控制 | `CloudLocalStore` profile/pending/checkpoint | Android 使用独立私有控制目录和独立凭据引用 | 不从快照替换账号、设备目标ID、自动计划或待传快照 |
+| 恢复政策 | `RestorePolicy`（Android）/ `RestoreLocalPolicy`、`applyRestorePayload`（Mac）、请求连续性记录 | 保本机路由与预算、原资料旁存、暂存/确认/回滚 | 下载后经用户确认再恢复；不自动合并两台设备的笔记 |
+| 本机云控制 | `CloudService`（Android）/ `CloudLocalStore`（Mac）的 profile、pending 与 checkpoint | Android 使用独立私有控制目录和独立凭据引用 | 不从快照替换账号、设备目标ID、自动计划或待传快照 |
 | 密码与授权 | Mac Keychain；Android Keystore 适配 | 各设备主动配置自己的 API key、应用密码与授权 | 不迁移系统钥匙串、Keystore 私钥或其他应用的许可 |
 
 现有共享研究目录保留原个人资料与收藏文件格式，更新后的客户端编辑后，已发行客户端仍可直接读取这些文件。新导出的备份和云端清单已使用稳定合同与结构指纹；读取这类新包须使用支持它们的客户端，即使包内个人资料仍是旧格式。独立新建目录的个人资料也使用稳定格式。恢复时逐项核对原文件字节，不为了兼容旧客户端改签资料。详见[收藏资料格式](favorite-collections.md#两端共用的个人资料)。
@@ -66,7 +66,7 @@ noBackupFilesDir/
 
 ## 3. 研究备份的字节合同
 
-现有实现为 [BackupCodec.swift](<../apps/macos/Sources/BackupCodec.swift>)，不是 ZIP，也没有额外压缩或端到端加密。旧备份仍按原 `paperdigest-backup-v2` 合同和原字节核验。新旧完整结构登记在[两端共用协议目录](../config/protocols/clients-foundation.json)。
+现有实现为 [BackupCodec.swift](<../apps/macos/Sources/BackupCodec.swift>)（Mac）与 [BackupCodec.kt](<../apps/android/app/src/main/java/com/nanless/paperdigest/cloud/BackupCodec.kt>)（Android），不是 ZIP，也没有额外压缩或端到端加密。旧备份仍按原 `paperdigest-backup-v2` 合同和原字节核验。新旧完整结构登记在[两端共用协议目录](../config/protocols/clients-foundation.json)。
 
 | 字段 | 类型与解释 |
 |---|---|
@@ -75,7 +75,7 @@ noBackupFilesDir/
 | `sourceDirectory` | 原研究目录的有效绝对路径；仅作为受控旧路径映射信息，不是恢复写入目的地 |
 | `files` | 文件条目数组，最多100000项；新导出按相对路径排序 |
 | `files[].path` | 非空、无尾斜杠的相对路径，UTF-8最多4096 bytes |
-| `files[].sha256` | 原始解码文件字节的64位小写十六进制 SHA-256 |
+| `files[].sha256` | 原始解码文件字节的 SHA-256，写作 64 个小写十六进制字符 |
 | `files[].data` | 标准 Base64 编码的原文件字节，对应 Swift `Data` 的 JSON 表达 |
 
 上限为原文件合计 **536870912 bytes（512 MiB）**、整个 JSON 编码 **786432000 bytes（750 MiB）**，以及100000个文件条目。每个文件也受剩余总额约束；先检查输入大小，再流式/有界解码，不能先无限分配 Base64 对象。超限整体拒绝，不能删除图片、账本、旧导读或隐藏文件后把子集叫完整成功。Android 应避免同时保留多份750 MiB字符串、Base64副本及全部解码字节，可在私有临时文件逐项校验并保持同一最终编码字节。
@@ -86,7 +86,7 @@ Base64 把文件字节表示为可放入 JSON 的文字，因此编码后的文�
 
 1. 验合同、条目数量、原根路径；拒绝空段、`.`、`..`、反斜杠、控制字符、绝对条目路径和尾斜杠。
 2. 路径及每一级目录片段，按现有 NFC 归一及大小写折叠检查别名碰撞；不能只依赖 Android 的大小写敏感文件系统。重复文件、`A/x` 与 `a/y`、文件与其子路径并存均拒绝。
-3. 每份 Base64 解码字节计入总额，核原 SHA。`personal.json` 必须存在且可解析为对象；进入应用恢复前还须通过 `DesktopStore` 对实际合同、笔记、设置、清单、会话和任务结构的校验。
+3. 每份 Base64 解码字节计入总额，核原 SHA。`personal.json` 必须存在且可解析为对象；进入应用恢复前还须按当前个人资料合同校验实际结构（Mac 由 `DesktopStore`，Android 由 `BackupCodec.stage` 调用的 `validatePersonal` 与 `PersonalStore`）。
 4. 如有 `RestoredPathRoots.json`，旧文件只允许原两个键 `contract` / `roots`，合同为 `paperdigest-storage-aliases-v1`；新文件使用稳定名称 `paperdigest-storage-aliases` 并增加结构指纹。旧根不能重复、大小写/NFC碰撞或互相包含；保护保留名本身及其目录别名。
 5. 全部校验通过后才创建新的暂存目录；文件按私有权限写入，再逐文件回读。拒绝符号链接、特殊文件及经过链接的父目录。
 
@@ -96,7 +96,7 @@ Base64 把文件字节表示为可放入 JSON 的文字，因此编码后的文�
 
 ## 4. 坚果云远端版本合同
 
-固定服务为 `https://dav.jianguoyun.com/dav/`。两端可使用相同用户指定的独立目录，默认 `PaperDigest`；目录限定 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`，禁止含 `..`，并大小写不敏感地拒绝整个目录名 `zotero`。账号不得含冒号或控制字符。使用各自创建的第三方应用密码，不采用网页登录密码。[坚果云应用密码说明](https://help.jianguoyun.com/?p=2064)
+固定服务为 `https://dav.jianguoyun.com/dav/`。两端可使用相同用户指定的独立目录，默认 `PaperDigest`；目录限定 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`，禁止含 `..`，并大小写不敏感地拒绝整个目录名 `zotero`。账号不得含冒号或控制字符，长度不超过 320 字节。使用各自创建的第三方应用密码，不采用网页登录密码。[坚果云应用密码说明](https://help.jianguoyun.com/?p=2064)
 
 ```text
 /dav/PaperDigest/

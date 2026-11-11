@@ -10,7 +10,7 @@ Hugo 会把 front matter 解析成参数 map，并把嵌套 map 的键递归小�
 
 ## 网站模板的修复
 
-博客模板改为按白名单逐字段重建声明，不再直接序列化参数 map：
+博客模板改为按白名单逐字段重建声明，不再直接序列化参数 map（以下四行提到的模板、脚本和测试都在博客仓库 `audio-paper-digest-blog`，不在本仓库）：
 
 - `layouts/partials/client_sidecars.html` 重建四个文件记录，上下文记录写回 `contract` 与 `schemaFingerprint`，并用 `protocol_header_valid.html` 校验头。
 - `paper_toolbar.html` 与 `layouts/_default/index.json` 共用这份重建结果；索引侧按站点前缀和发布日期核对目录，不再接受任意来源地址。

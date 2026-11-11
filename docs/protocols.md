@@ -4,12 +4,12 @@
 
 项目保存的很多 JSON 需要说明“这是什么格式”。新记录不再把 `-v1`、`-v2` 写进格式名，而是写一个稳定的用途名（`contract`）和一份结构声明的内容指纹（`schemaFingerprint`）。名称说明用途，指纹说明实际字段和规则；两者一起才能确定这条记录该按哪种结构读取。
 
-登记集中在 [`config/protocols/`](../config/protocols/)。Node 与 Python 读取同一批文件，不各写一套解析：
+登记集中在 [`config/protocols/`](../config/protocols/)，当前有 36 份 JSON 文件。Node 读取全部登记；Python 的发布与科学身份只读其中非 `clients-*` 的服务端目录，原生客户端专用格式由 [`apps/generate-client-protocols.py`](../apps/generate-client-protocols.py) 读取，两边不是同一份文件清单：
 
-| 语言 | 入口 |
-|---|---|
-| Node | [`scripts/lib/protocol-codec.js`](../scripts/lib/protocol-codec.js) |
-| Python | [`scripts/protocol_codec.py`](../scripts/protocol_codec.py) |
+| 语言 | 入口 | 读取范围 |
+|---|---|---|
+| Node | [`scripts/lib/protocol-codec.js`](../scripts/lib/protocol-codec.js) | 全部 `config/protocols/*.json` |
+| Python | [`scripts/protocol_codec.py`](../scripts/protocol_codec.py) | `server_catalog_paths()` 返回的非 `clients-*` 目录 |
 
 两份实现使用同一套规范化 JSON 和 SHA-256 算法。格式登记本身不是签名，也不授予来源、分析、费用或发布资格；它只回答“这条记录声明的是哪种结构”。
 
@@ -71,7 +71,7 @@
 { "name": "...", "currentVariant": "...", "currentSchema": { ... } }
 ```
 
-规范化规则：对象的键按字典序排列，使用紧凑分隔符，保留 UTF-8；字段名只用普通 ASCII 字符；数字必须是安全整数。结果是 64 位小写十六进制 SHA-256。Node 与 Python 的实现逐字一致，同一份登记在两边得到同一个值。
+规范化规则：对象的键按字典序排列，使用紧凑分隔符，保留 UTF-8；字段名只用普通 ASCII 字符；数字必须是安全整数。结果是 64 位小写十六进制 SHA-256。Node 与 Python 的实现逐字一致，同一份登记在两边得到同一个值。登记里的数字要写成 JSON 整数：写成 `2.0` 时 Node 会当作整数 2，Python 会拒绝，两边无法得到同一个指纹。
 
 登记时不需要手填指纹，程序会计算。手抄、复制别的格式或凭印象填写都会在加载时被拒绝。
 

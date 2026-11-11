@@ -75,6 +75,16 @@ Git 推送、站点部署和网页可读是不同结果。只有它们都核验�
 
 ## 3. 按故障选择下一步
 
+### 当天候选为 0
+
+抓取正常、但当天没有可筛选的新论文时，程序在付费筛选前停下，并在 `raw-candidates.json` 写入 `stats.zeroCandidates: true`。确认当天确实没有新论文后，才在抓取阶段重跑并显式放行：
+
+```bash
+npm run digest:prepare -- YYYY-MM-DD --allow-empty-daily
+```
+
+放行后只生成“今日没有新论文”的汇总页，没有单篇页和论文图；该参数只对抓取阶段有效，其他阶段传入会直接报错。详见[抓取边界](daily-fetch-boundary.md)。
+
 ### 来源服务限流或公告未更新
 
 先用 `npm run source:probe -- --date DATE` 检查真实入口，再按[抓取边界](daily-fetch-boundary.md)决定等待或恢复。

@@ -10,12 +10,12 @@ Mac 和 Android 客户端统一称为“论文速递工作台”；项目和网�
 
 | 客户端 | 版本与系统要求 | 签名与设备覆盖 |
 |---|---|---|
-| Mac | 1.0.1，构建号1；Apple Silicon（arm64），macOS 15及以上；内置Node 24.19.0 | 本地签名，未经过Apple公证 |
-| Android | 1.0.1，versionCode 4；最低API 28，目标API 37；四种ABI，原生库按16 KiB对齐 | 延续原发行签名；安装、功能及覆盖升级在隔离模拟器验证，实体机和Google Play未覆盖 |
+| Mac | 1.0.1、构建号 1；Apple Silicon（arm64），macOS 15 及以上；内置 Node 24.19.0 | 本地签名，未经过 Apple 公证 |
+| Android | 1.0.1、versionCode 4；最低 API 28，目标 API 37；四种 ABI，原生库按 16 KiB 对齐 | 延续原发行签名；安装、功能及覆盖升级在隔离模拟器验证，实体机和 Google Play 未覆盖 |
 
 安装、配置及格式支持见[Mac说明](../apps/macos/README.md)和[Android说明](../apps/android/README.md)。下载入口为[项目发行页](https://github.com/nanless/audio-paper-digest/releases)；每个版本的构建信息、来源清单和SHA-256校验表随安装附件提供。
 
-上表是当时接受审计的 1.0.1，不是现行版本表。当前两端为 1.4.4（构建号 20，Android versionCode 20）；1.4.4 已于 2026-11-05 公开发布，Mac 仍为 ad-hoc 本地签名，Android 正式包证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版证书不同，已安装 1.4.3 的 Android 用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装 1.4.4。签名库与私钥在仓库外保存，本机钥匙串只额外保存签名口令。正式包、签名、附件与匿名下载范围见[客户端发行核验](client-release-verification.md)和[1.4.4 记录](workbench-1.4.4-review.md)。本页未对后续版本重新执行完整历史扫描，不能用 1.0.1 的检查替代新包核验。
+上表是当时接受审计的 1.0.1，不是现行版本表。当前两端为 1.4.4（构建号 20；Android versionCode 20、minSdk 28、targetSdk 37）；1.4.4 已于 2026-11-05 公开发布，Mac 仍为 ad-hoc 本地签名，Android 正式包证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版证书不同，已安装 1.4.3 的 Android 用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装 1.4.4。签名库与私钥在仓库外保存，本机钥匙串只额外保存签名口令。正式包、签名、附件与匿名下载范围见[客户端发行核验](client-release-verification.md)和[1.4.4 记录](workbench-1.4.4-review.md)。本页未对后续版本重新执行完整历史扫描，不能用 1.0.1 的检查替代新包核验。
 
 ## 检查范围与结果
 

@@ -42,7 +42,7 @@ flowchart LR
 | 分析编排、锁、检查点、费用与恢复 | `scripts/analysis-engine.js`、`scripts/deep-analyzer.js` | 同篇锁内重读合并，原稿、失败与费用保留 |
 | 网络与模型 | `utils.js`、`llm-account-pool.js`、`publish_common.py` | Muse/arXiv 强制代理，只有声明的账号额度故障可按等权轮转切换 |
 | 全文、表格、公式、作者和资源身份 | `lib/fresh-analysis-context.js`、`lib/reader-*`、`reader_sealed_pdf_*.py` | 来源 SHA、结构化单元格、原始 TeX、真实像素、作者逐项身份与资源可达状态 |
-| Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`reader-repair.js`、`reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算；新稿、保存稿与 Python 发布共用占位结果表检测，旧签名不能代替当前内容资格 |
+| Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`lib/reader-repair.js`、`lib/reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算；新稿、保存稿与 Python 发布共用占位结果表检测，旧签名不能代替当前内容资格 |
 | 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”等闭合概念列举只识别自身范围；作者提供声明须有同类型原文且保留当前核验限定，不豁免前后独立当前声明或双否；新阶段绑定当前 `reader-resource-availability-claims` 头（旧 `-v1` 按原格式读取） |
 | 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分；第三方闭源对照与本文资源缺失分开检查，后者仍按原维度归属；当前中文标签与明确主任务/方法，严格纯追加按原SHA只读重放旧分类证明 |
 | 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` | 同一资源去重、作者展示、评分说明、多级分类路径及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
@@ -133,7 +133,7 @@ PDF 表格单位另由认证来源适配到共享 Reader。日更保留真实四
 
 公共调度由 `scripts/lib/analysis-failure-rounds.js` 实现。`PD_ANALYSIS_BATCH_MAX_ROUNDS` 控制本次调用最多执行多少轮，默认 3，范围 1–10；旧 `PD_ANALYSIS_MAX_RETRIES=N` 兼容为总共 `N+1` 轮，默认 2 对应 3 轮。它们改变外层调度，不清零阶段尝试、Reader 原候选、无进展记录或费用，也不自动建立新的付费 Reader 窗口。这些是单次调用的技术限制；已有持续付费授权不因达到该数值失效，必要后续窗口按受控入口登记，不靠重复确认或修改旧计数续跑。单篇内部恢复、明确预算追加和来源重新获取是不同操作，见 [Reader 恢复预算](reader-explicit-retry.md)。
 
-三流程共用 `reader-repair.js` 对当前 Reader 问题与原双签名作保守比较。完整解析已运行、原记录完整一致、新问题不再包含旧规则组，且原内容响应额度尚未耗尽时，旧连续失败停止条件不阻断新问题使用原余额；计数和历史保留。全文已用完两次时，只能对明确覆盖全部新问题的 1–8 个既有节点使用原局部补丁余额，最终请求前核对整稿和旧节点 SHA，禁止来源整稿重试、整组操作和全文回退。同组新增单元格、改变数量阈值、缺失签名、归一化先失败、传输或来源阻断均不授予这种续跑，详见[正常原余额](reader-explicit-retry.md#正常候选中的原余额)。
+三流程共用 `lib/reader-repair.js` 对当前 Reader 问题与原双签名作保守比较。完整解析已运行、原记录完整一致、新问题不再包含旧规则组，且原内容响应额度尚未耗尽时，旧连续失败停止条件不阻断新问题使用原余额；计数和历史保留。全文已用完两次时，只能对明确覆盖全部新问题的 1–8 个既有节点使用原局部补丁余额，最终请求前核对整稿和旧节点 SHA，禁止来源整稿重试、整组操作和全文回退。同组新增单元格、改变数量阈值、缺失签名、归一化先失败、传输或来源阻断均不授予这种续跑，详见[正常原余额](reader-explicit-retry.md#正常候选中的原余额)。
 
 三条流程仍有必要边界：日更只使用当前批次完整封存来源；会议每篇仍受原尝试窗口和跨调用冷却约束，同次调用的轮次最多为公共上限与原 3 次窗口的较小值，这是当前技术窗口而非人类授权总轮数；历史的队列、`--paper-ids`、`--max-papers` 在首轮确定，失败轮不扩大该范围。来源下载、会议筛选和博客审查保留各自请求及恢复规则，不能把分析轮次参数套用到这些阶段。
 

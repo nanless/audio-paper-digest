@@ -25,7 +25,7 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
-Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also completes the test fixtures on both clients and fills gaps in the macOS suite. macOS client tests still run locally through `bash apps/macos/test.sh` and are not part of CI; Android puts only its Gradle unit tests in a separate job. See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
+Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also adds to the repository the public-paper PDF and three figure crops that the macOS tests read, and closes gaps in the macOS suite. macOS client tests still run locally through `bash apps/macos/test.sh` and are not part of CI; Android puts only its Gradle unit tests in a separate job. See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
 
 Version 1.4.3 performance work (compact catalog projection, background startup decoding, reused explanation and aggregate parsing, offline index, merged bridge calls) is recorded in the [1.4.3 record](workbench-1.4.3-review.md).
 
@@ -117,7 +117,6 @@ These records explain the problems, changes, and actual verification at the time
 - Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).
-- Digest recovery, deployment, and repository cleanup: [November 2–3, 2026 retrospective](2026-11-daily-maintenance-retrospective.md).
 
 For current writing and documentation maintenance, use the [project writing guide](writing-guide.md), [technical writing methods](../skills/clear-technical-writing/SKILL.md), and [maintenance principles](repository-maintenance-review.md). Completed file-by-file editing reports remain in Git history so their old paths, line numbers, and test counts do not become current instructions.
 

@@ -35,27 +35,29 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ## `data/current/` 核心文件
 
+候选、筛选决定和入选集三份当前产物共用一组头字段：北京时间 `timestamp`、与它一致的 `batchDate`、`batchId`、`candidateFingerprint`、`sourceConfigFingerprint`、`blogDedupFingerprint`、`rawPapersSha256` 和 `fetchSourcesSha256`。其中 `rawPapersSha256` 绑定原始候选的 `papers`，`fetchSourcesSha256` 绑定本次抓取检查点。筛选决定和入选集另带 `filterConfigFingerprint`、`filterModel` 和 `filterPromptHash`。
+
 ### `papers.json`
 
-跨运行累计论文库与状态账本，不参与抓取去重（去重基线是博客已发布页）。每篇的 `digestStatus` 对象可记录分析成功、待分析、失败和最近一次尝试。旧成功正文可以保留，但后来的失败仍须写入同一对象的 `digestStatus.latestAttemptStatus`（例如 `analysis_failed`），不能用旧结果掩盖最新失败。
+根对象为 `{ papers, lastUpdated }`，`papers` 是按论文 ID 索引的对象映射。它跨运行累计论文库与状态账本，不参与抓取去重（去重基线是博客已发布页）。每篇的 `digestStatus.status` 允许 `seen`、`pending_analysis`、`analyzed`、`analysis_failed`，`latestAttemptStatus` 只允许 `analyzed` 或 `analysis_failed`，`error` 必须是字符串或 `null`。旧成功正文可以保留，但后来的失败仍须写入同一对象的 `digestStatus.latestAttemptStatus`（例如 `analysis_failed`），不能用旧结果掩盖最新失败。
 
 ### `fetch-checkpoint.json`
 
-当前补抓使用 `fetchSourceFormat` 声明 `daily-fetch-source` 及其结构指纹，并保存 `coverageStrategy: previous-digest-window` 和完整 `fetchBoundary`。它绑定上次已发布日期、固定 `since`/`until` 与身份 SHA；七类 arXiv 和 HuggingFace 均须提供对应窗口的完整覆盖证明。续跑须以原 `until` 重新解析远端已发布基线并核对全部身份，不能移动终点后拼接旧检查点。旧记录只有在保存了完整边界和逐源证明时，才能按原格式复验为完整抓取。更早的记录仍可保留用于查阅。
+当前补抓使用 `fetchSourceFormat` 声明 `daily-fetch-source` 及其结构指纹，并保存 `coverageStrategy: previous-digest-window`、`pageSize: 100` 和完整 `fetchBoundary`。它绑定上次已发布日期、固定 `since`/`until` 与身份 SHA；七类 arXiv 和 HuggingFace 均须提供对应窗口的完整覆盖证明。续跑须以原 `until` 重新解析远端已发布基线并核对全部身份，不能移动终点后拼接旧检查点。旧记录只有在保存了完整边界和逐源证明时，才能按原格式复验为完整抓取。更早的记录仍可保留用于查阅。
 
-按 arXiv 类别和 HuggingFace 保存来源状态、候选数、内容 SHA 及恢复信息。某一来源损坏只使该来源的记录失效；新筛选和筛选续跑都须先确认全部必需来源完整。未完成的来源不能进入付费筛选或分析，已有记录仍保留供恢复。仅有完整窗口的抓取检查点、尚缺原始候选时，数据校验会报告批次未完整；同日抓取仍可按核验后的检查点恢复。
+按 arXiv 类别和 HuggingFace 保存 `status`、`papers`、`papersCount`、`papersSha256`、`health` 及恢复信息，并用 `fetchSourcesSha256` 汇总核对；`categoryOrder` 必须完整覆盖当前七个 arXiv 类别，`historicalDedupIds` 是无重复字符串数组。某一来源损坏只使该来源的记录失效；新筛选和筛选续跑都须先确认全部必需来源完整。未完成的来源不能进入付费筛选或分析，已有记录仍保留供恢复。仅有完整窗口的抓取检查点、尚缺原始候选时，数据校验会报告批次未完整；同日抓取仍可按核验后的检查点恢复。
 
-来源协议从 v5 升至 v6 时，HuggingFace 两个端点都须提供规范 arXiv 编号及非空题目、摘要，重复 ID 页也先核验条目。此次协议升级会改变整个 `candidateFingerprint`，所以旧 v5 抓取检查点整体不能复用，与同一协议下仅某个来源损坏的处理不同。目标日期仍为北京时间当天时，重新运行同一日更入口可以重新抓取；历史日期不能从抓取阶段续跑，须使用受控历史维护流程。升级不改写或重签已有运行数据；条目格式完整也不等于全文真实性已经核验。
+更早的整数版本头（如 `sourceContractVersion: 7`）按原登记只读兼容。抓取来源协议升级会改变整个 `candidateFingerprint`，所以旧协议版本的抓取检查点整体不能复用，与同一协议下仅某个来源损坏的处理不同。目标日期仍为北京时间当天时，重新运行同一日更入口可以重新抓取；历史日期不能从抓取阶段续跑，须使用受控历史维护流程。升级不改写或重签已有运行数据；条目格式完整也不等于全文真实性已经核验。
 
 ### `raw-candidates.json`
 
 保存当日已获取、合并、规范化并排除已发布论文的候选。只有全部必需来源完整时，这份集合才是完整筛选输入；来源失败时保留的部分候选不能冒充完整覆盖。筛选决定必须覆盖正式候选集合，不能只对成功响应的论文计算覆盖率。
 
-根对象为 `{ stats, sourceHealth, papers }`。`stats.zeroCandidates` 表示本批进入筛选的候选是否为 0：来源全部正常、但候选数为 0 时为 `true`，程序在付费筛选前停止，只有确认当天确实没有新论文并显式加 `--allow-empty-daily` 重跑才继续，见[零候选停止](daily-fetch-boundary.md#zero-candidates)。放行后该批仍会正常写完成的分析结果；生成阶段据此只产出“今日没有新论文”汇总页，没有单篇页和论文图片。
+根对象为 `{ stats, sourceHealth, papers }`。`stats` 还必须包含 `beforeBlogSkip`、`afterBlogSkip`、`skippedFromBlog`、`arxivOnly`、`hfOnly`、`both`，且 `afterBlogSkip` 等于 `papers` 数量、`beforeBlogSkip` 等于 `arxivOnly + hfOnly + both`；`rawPapersSha256` 与 `papers` 内容一致。`stats.zeroCandidates` 表示本批进入筛选的候选是否为 0：来源全部正常、但候选数为 0 时为 `true`，程序在付费筛选前停止，只有确认当天确实没有新论文并显式加 `--allow-empty-daily` 重跑才继续，见[零候选停止](daily-fetch-boundary.md#zero-candidates)。放行后该批仍会正常写完成的分析结果；生成阶段据此只产出“今日没有新论文”汇总页，没有单篇页和论文图片。
 
 ### `filter-decisions.json`
 
-按规范论文 ID 保存模型或关键词预筛的决定、理由、原始响应、解析方式、输入 SHA 和配置指纹。`filter-decision` 的合同和结构指纹计入本批筛选配置身份；解析规则变化会使旧决定失效。模型、提示词、协议或关键词规则变化时须重新筛选；仍完整有效的候选数据不必重新抓取。
+按规范论文 ID 保存模型或关键词预筛的决定、理由、原始响应、解析方式、输入 SHA 和配置指纹。根对象为 `{ decisions, stats }`，并保存 `filterModel`、`filterPromptHash`、`filterConfigFingerprint` 和 `rawPapersSha256`；逐篇决定必须有布尔 `related` 和 `inputSha256`，`retryable`/`fallback` 为真会被数据校验拒绝。`filter-decision` 的合同和结构指纹计入本批筛选配置身份；解析规则变化会使旧决定失效。模型、提示词、协议或关键词规则变化时须重新筛选；仍完整有效的候选数据不必重新抓取。
 
 官方 PDF 在全部候选地址上都返回 404 时，筛选阶段可写一条跳过记录，避免整批停在这一篇：字段为 `related: false`、`retryable: false`、`fallback: false`、`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；该记录不带 `filterScopeEvidence`。`error` 不逐字比对，只要求是含本论文规范化编号的非空文本；新记录另写入 `arxivId`，旧记录可缺。它只说明这篇取不到官方来源，不是“论文不相关”的模型结论；读取时须逐字段核验，跳过项不进入后续正常筛选与分析集合。
 
@@ -65,11 +67,11 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ### `filtered-papers.json`
 
-正式入选集合，必须等于候选中的 `related=true` 决定扣除显式排除的 `excludedRelatedIds`。API 错误、未知决定或缺失项不能被静默丢弃。
+正式入选集合，必须等于候选中的 `related=true` 决定扣除显式排除的 `excludedRelatedIds`。`status` 只能是 `filtering`、`filter_complete`、`complete` 或 `source_partial_failed`；`excludedRelatedIds` 必须对应原始候选中 `related=true` 且来自 HuggingFace 的论文，`stats.skippedFromArchive` 等于其数量，`stats.afterArchiveSkip` 等于最终 `papers` 数量。API 错误、未知决定或缺失项不能被静默丢弃。
 
 ### `deep-analysis-result.json`
 
-默认 API 的正式分析结果。每篇保存论文信息、`analysis`、`parsed`、来源身份、阶段检查点、`analysisManifest`、评分和解读正文的发布依据。论文集合须精确覆盖入选集合，各必需阶段须达到对应终态。
+默认 API 的正式分析结果。根对象保存 `status`、`stats` 和 `papers`；`status` 只能是 `running`、`complete`、`partial_failed`、`failed` 或 `filter_failed`，并与逐篇检查得到的批次状态一致；`deepAnalysisCompletedAt` 只在 `complete` 时保留。每篇保存论文信息、`analysis`、`parsed`、来源身份、阶段检查点、`analysisManifest`、评分和解读正文的发布依据。论文集合须精确覆盖入选集合，各必需阶段须达到对应终态。
 
 若数据声明 `dailyFreshSourceRun`，新引用用 `daily-fresh-source-reference` 和对应的结构指纹，绑定 `batchDate`、完整论文集合、运行清单 SHA 和来源集合 SHA。每篇的 `freshRewriteProvenance` 与 `analysisManifest.freshRewriteProvenance` 须一致，并能核对到本次获取的来源文件。文件缺失或多出、来源或集合变化、混入旧来源记录，都不能取得默认 API 的发布资格。
 
@@ -381,12 +383,12 @@ npm run digest:status -- --date YYYY-MM-DD
 | `blog.remoteOidVerified` | 实际远端 OID 是否与发布提交一致。 |
 | `blog.publicationVerified` | 完整发布凭证是否通过核验；与远端提交分别报告。 |
 | `visuals.gateComplete` | 长图完成门是否通过；不生图记录有效时也可为 `true`。 |
-| `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读或本次已登记不生图时为 `null`，摘要显示 `?`。 |
+| `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读或对应计数字段缺失时为 `null`，摘要显示 `?`。登记不生图时状态为 `waived`，计数仍按清单实际内容返回。 |
 | `cover.status` | 按实际封面检查结果确定，检查失败不返回 `complete`。 |
 | `visuals.status` | 通过资产与发布绑定检查时为 `complete`；不生图记录有效时为 `waived`；原 `pending`/`partial_failed` 保留；检查不通过为 `incomplete`，清单不存在为 `missing`。 |
 | `visuals.waived` / `cover.waived` | 当前发布的不生图记录是否有效，以及是否同时替代长图和汇总封面的完成条件。 |
 | `fetch.rawCandidateCount` | 候选快照可读且为空才是 `0`；不可读为 `null`，摘要显示 `?`。 |
-| `readProblems` | 文件存在但无法读取的项目：`invalid-json` 或 `unreadable`，后者带实际错误 `code`。尚未生成的缺失文件不进入此数组。 |
+| `readProblems` | 文件存在但无法读取的项目：`invalid-json` 或 `unreadable`，后者带实际错误 `code`；封存来源跳过记录读取失败另记 `daily-source-skip`。尚未生成的缺失文件不进入此数组。 |
 
 分析未完成时先区分“逐篇复验不通过”与“集合缺篇”。前者按当前词表、来源和阶段检查保存稿，应定位具体阻断再选择必要修复，不直接推断原运行失败或整批重跑。
 

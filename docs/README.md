@@ -23,7 +23,7 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时补齐两端测试资料与 macOS 测试套件。macOS 客户端测试仍在本机通过 `bash apps/macos/test.sh` 运行，暂不接入 CI；Android 只把 Gradle 单元测试放在独立作业。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
+1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时把 macOS 测试读取的公开论文 PDF 与三张裁图纳入仓库，并修补 macOS 测试套件。macOS 客户端测试仍在本机通过 `bash apps/macos/test.sh` 运行，暂不接入 CI；Android 只把 Gradle 单元测试放在独立作业。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
 
 1.4.3 的性能优化（目录紧凑投影、启动后台解码、导读与汇总解析复用、离线索引、桥接合并）见[1.4.3 记录](workbench-1.4.3-review.md)。
 
@@ -115,7 +115,6 @@
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
-- 两次日更的恢复、上线和仓库清理：[2026 年 11 月 2 日、3 日复盘](2026-11-daily-maintenance-retrospective.md)。
 
 写作和文档维护直接使用[项目写作约定](writing-guide.md)、[技术写作方法](../skills/clear-technical-writing/SKILL.md)与[维护约定](repository-maintenance-review.md)。已经结束的逐文件整理报告保留在 Git 历史中，避免过时的路径、行号和检查计数混入现行指南。
 

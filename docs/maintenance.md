@@ -226,7 +226,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
   页面检查仅要求 HTTP 200、最终 URL 去掉查询参数、片段和末尾斜杠后与期望地址一致、标题包含站点标记，且汇总标题含日期、单篇标题去掉站点标记后长度大于 4。它不核对准确论文标题、H1、canonical 或完整正文；这些须在最终全页核验中另查，不能将该命令通过解释为全部内容正确。
 
-  核对完整标题时，用结果中的 `file` 找到发布提交里的对应页面文件，读取文件开头声明的 `title`，再按 Hugo 的页面标题规则与记录的网页 `<title>` 比对。汇总与单篇都要覆盖。页面内主标题、规范网址标签或正文需要核验时，从实际网页按各自规则检查。两次日更的标题补验见[复盘](2026-11-daily-maintenance-retrospective.md#两次发布留下了什么证据)。
+  核对完整标题时，用结果中的 `file` 找到发布提交里的对应页面文件，读取文件开头声明的 `title`，再按 Hugo 的页面标题规则与记录的网页 `<title>` 比对。汇总与单篇都要覆盖。页面内主标题、规范网址标签或正文需要核验时，从实际网页按各自规则检查。
 
   默认要求完整页面与部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时标记 partial 并返回非零。`--allow-partial` 只放宽页面/抽样 partial 的退出判断；`--allow-degraded` 只放宽部署不可得或进行中的退出判断，不降低页面与凭证要求，也不把诊断记录升级为完整验收。
 
@@ -276,7 +276,7 @@ gh workflow run ci.yml --ref main
 
 ### 完整覆盖与并行范围
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 两套测试及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22 与 Android SDK，运行根 `npm ci` 后还要在 `apps/macos` 执行 `npm ci`，因为 `:app:testDebugUnitTest` 的任务图包含 `:app:prepareDebugPublishedAssets`，它无条件从 `apps/macos/node_modules/katex` 复制文件；最后在 `apps/android` 执行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业不运行 `apps/android/test.sh`：除 Gradle 单元测试外，它还会构建、lint 并运行整套发行/签名检查。它不进上述分片矩阵，也不并入 `test` 汇总检查，避免拖慢上述十二个检查。macOS 客户端测试仍在本机通过 `bash apps/macos/test.sh` 运行，暂不接入 CI：本机全部套件通过，但 GitHub 的 macos-15 runner 有两处环境敏感断言——虚拟显示器压缩 820x700 的 native 详情窗口、PDFKit 对混合文字/空白页的文本提取结果不同（`DesktopNativeTests` 的 mixed text/blank PDF 用例）。测试直接读取的公开论文 PDF 与三张图（`prototypes/macos-research/assets/micla-2610.27491v1.pdf`、`figure-1.png`～`figure-3.png`，来源 arXiv:2610.27491v1）已入库，干净 checkout 不再缺资产；`NativeLibraryAccessibility` 需要已解锁桌面与可用的自进程 AXWindow，`test.sh` 只在它明确以 77 号退出时记为跳过，其它非零退出仍终止。适配 runner 环境后再加回作业，不能用跳过套件的方式让作业变绿。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 测试（`tests/python` 与 `manual/tests/python` 两处目录）及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22 与 Android SDK，运行根 `npm ci` 后还要在 `apps/macos` 执行 `npm ci`，因为 `:app:testDebugUnitTest` 的任务图包含 `:app:prepareDebugPublishedAssets`，它无条件从 `apps/macos/node_modules/katex` 复制文件；最后在 `apps/android` 执行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业不运行 `apps/android/test.sh`：除 Gradle 单元测试外，它还会构建、lint 并运行整套发行/签名检查。它不进上述分片矩阵，也不并入 `test` 汇总检查，避免拖慢上述十二个检查。macOS 客户端测试仍在本机通过 `bash apps/macos/test.sh` 运行，暂不接入 CI：本机全部套件通过，但 GitHub 的 macos-15 runner 有两处环境敏感断言——虚拟显示器压缩 820x700 的 native 详情窗口、PDFKit 对混合文字/空白页的文本提取结果不同（`DesktopNativeTests` 的 mixed text/blank PDF 用例）。测试直接读取的公开论文 PDF 与三张图（`prototypes/macos-research/assets/micla-2610.27491v1.pdf`、`figure-1.png`～`figure-3.png`，来源 arXiv:2610.27491v1）已入库，干净 checkout 不再缺资产；`NativeLibraryAccessibility` 需要已解锁桌面与可用的自进程 AXWindow，`test.sh` 只在它明确以 77 号退出时记为跳过，其它非零退出仍终止。适配 runner 环境后再加回作业，不能用跳过套件的方式让作业变绿。
 
 JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)` 才报告完整通过；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 
