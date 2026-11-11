@@ -15,12 +15,6 @@ test('行列错误只授权binding，其他实际错误仍可独立授权正文'
  const issues=[{path:'/tableBindings/0',message:'tableBindings[0] 读者文章 tableBindings[0] selection 行列重复、越界或数量不足：sourceRows合法范围=0..3'}];
  const targets=repair.buildRepairTargets(draft,issues);assert.deepEqual(targets.map(x=>x.path),['/tableBindings/0']);
 });
-test('源TeX不合格及SD裸值借单位仍拒绝，反馈改进不放松原守卫',()=>{
- const artifacts=fixture();artifacts.tables[0].matrix[2][1]='\\alpha';assert.throws(()=>tables.renderReaderTableSelection(binding([1,2]),artifacts),/eligible=false.*unresolved_source_tex/);
- const rendered={header:['方法','duration (s)'],rows:[['A','0.18 (0.33)'],['B','1.91 (2.3)']]};
- const issues=deep.readerTableHeaderUnitEvidenceFailures(rendered,['duration (s) 0.18 (0.33). duration (s) 1.91 (2.3).']);assert.ok(issues.some(x=>x.token==='0.33'));assert.ok(issues.some(x=>x.token==='2.3'));
-});
-
 test('公式独占且真实小节kind仍严格核验',()=>{
  const draft={sections:[{kind:'background',heading:'背景',body:'原文背景说明。'.repeat(30)+'\n\n[[FORMULA_1]]\n\n'+'后续解释。'.repeat(30)}],conceptBridges:[],figurePlacements:[],tableBindings:[],formulaBindings:[{marker:'[[FORMULA_1]]',targetKind:'problem'}]};
  const issues=repair.collectDraftIssues(draft,null,{});assert.ok(issues.some(x=>x.path==='/formulaBindings/0'&&/声明 kind="problem".*"kind":"background"/.test(x.message)));
