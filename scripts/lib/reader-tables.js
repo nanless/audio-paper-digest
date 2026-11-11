@@ -23,6 +23,10 @@ function readerVisibleWithTex(value) {
 function projectReaderMathSymbols(value) {
     let text = String(value ?? '');
     if (!text.includes('\\')) return text;
+    // 单元格里已经有可见数学符号（↑ × ✓ ≤ 等）又混着 TeX 命令时，说明这一格
+    // 本身是坏的（符号与 TeX 重复或相互冲突），一律不投影，让它按“未解析 TeX”
+    // 继续阻断；只有纯 TeX 的格子才做无损投影。
+    if (/[\u00B1\u00D7\u2190-\u21FF\u2200-\u22FF\u25A0-\u27BF]/.test(text)) return text;
     text = text.replace(/\\([A-Za-z]{2,})\b/g,
         (whole, name) => Object.hasOwn(READER_TABLE_SYMBOLS, name) ? READER_TABLE_SYMBOLS[name] : whole);
     text = text.replace(/\\(?:mathrm|text|mathbf|mathit|mathcal)\{([^{}]*)\}/g, '$1');
@@ -544,7 +548,10 @@ function assessReaderTableSelectionEligibility(table) {
                     header: matrix[0], row: cells, rowIndex: row, columnIndex: column,
                     sourceTexts: [text]
                 })) add('source_display_cleanup_required', { row, column });
-                if (!(headerRow && readerVisibleWithTex(text)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(text))) add('unresolved_source_tex', { row, column });
+                // 数学符号投影只服务表头（\uparrow→↑ 这类列名）；数据格里出现裸 TeX
+                // 说明来源或模型写坏了，仍然按未解析 TeX 阻断。
+                const projectedForTex = headerRow ? projectReaderMathSymbols(text) : text;
+                if (!(headerRow && readerVisibleWithTex(text)) && /\\[A-Za-z]+/.test(projectedForTex)) add('unresolved_source_tex', { row, column });
                 if (unsafeMarkdownCell(projectReaderMathSymbols(text))) add('unsafe_markdown_cell', { row, column });
             }
         }
