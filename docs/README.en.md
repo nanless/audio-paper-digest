@@ -105,6 +105,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 | Hierarchical classifications, old signatures, and site-catalog synchronization | [Shared classification rules](tag-display-policy.md#三条流程共用的目录与呈现) |
 | Classification-vocabulary design | [Tag design](tag-system-design.md) |
 | Timing measurements and optimization scope | [Performance](daily-performance.md) |
+| Publishing-stage timing baselines and fixed constraints | [Publishing performance](publishing-performance.md) |
 | Compatibility retention and documentation maintenance | [Maintenance principles](repository-maintenance-review.md) |
 | Retire entry points, migrate formats, and recover production batches | [Maintaining resumable production workflows](../skills/stateful-workflow-maintenance/SKILL.md) |
 

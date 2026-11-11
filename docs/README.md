@@ -103,6 +103,7 @@
 | 多级分类、旧签名与站点目录同步 | [统一分类规则](tag-display-policy.md#三条流程共用的目录与呈现) |
 | 分类词表的设计背景 | [标签设计](tag-system-design.md) |
 | 耗时测量与优化范围 | [性能说明](daily-performance.md) |
+| 发布三阶段的耗时基线与不可改约束 | [发布性能](publishing-performance.md) |
 | 兼容保留与文档维护原则 | [维护约定](repository-maintenance-review.md) |
 | 清理旧入口、迁移格式与恢复生产批次 | [维护可续跑的生产流程](../skills/stateful-workflow-maintenance/SKILL.md) |
 

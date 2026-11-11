@@ -15072,9 +15072,16 @@ def generation_input_fingerprint(
     return result
 
 
-def _validate_generation_input_integrity(manifest, date_str, *, fresh=False):
+def _validate_generation_input_integrity(
+    manifest, date_str, *, fresh=False, checked_derived_figure_assets=None,
+):
+    """按论文快照和相关来源记录重新计算生成输入，核对记录、发布证明及其指纹。
+
+    ``checked_derived_figure_assets`` 只由刚在同一调用里用这批论文对象算出
+    派生证明的保存入口传入；清单字段与指纹仍在这里核对，其他调用点的独立
+    重算边界不变。
+    """
     _validate_post_publication_policy(manifest)
-    """按论文快照和相关来源记录重新计算生成输入，核对记录、发布证明及其指纹。"""
     published_papers = manifest.get('publishedPapers')
     category = manifest.get('category')
     publish_all = manifest.get('publishAll')
@@ -15140,7 +15147,12 @@ def _validate_generation_input_integrity(manifest, date_str, *, fresh=False):
     if actual_snapshot != expected_snapshot:
         raise PublishDataValidationError('正式生成清单中的论文快照指纹与实际快照不一致。')
     if 'derivedFigureAssets' in manifest or 'derivedFigureAssetsFingerprint' in manifest:
-        _validate_derived_figure_asset_manifest(manifest, _derived_figure_asset_bindings(published_papers))
+        expected_derived = (
+            checked_derived_figure_assets
+            if checked_derived_figure_assets is not None
+            else _derived_figure_asset_bindings(published_papers)
+        )
+        _validate_derived_figure_asset_manifest(manifest, expected_derived)
     else:
         _legacy_reader_pixel_assets(manifest, published_papers)
     expected_signed_manual = signed_manual_publication_bindings(published_papers)
@@ -16102,8 +16114,14 @@ def save_generation_manifest(
         recovery = _publication_raster_recovery_input()
         if recovery is not None:
             manifest['rasterRecoveryInput'] = {k: recovery[k] for k in ('file', 'sha256')}
-        manifest['derivedFigureAssets'] = _derived_figure_asset_bindings(published_papers)
-        manifest['derivedFigureAssetsFingerprint'] = _stable_json_sha256(manifest['derivedFigureAssets'])
+        # 派生图片证明要重放封存来源与图片派生，代价与一次读者正文核验相当。
+        # 这里算出的就是写入清单的同一份结果；同一调用内的输入完整性校验
+        # 复用它比对清单字段与指纹，不再对同一批论文对象重算第二遍。
+        derived_figure_assets = _derived_figure_asset_bindings(published_papers)
+        manifest['derivedFigureAssets'] = derived_figure_assets
+        manifest['derivedFigureAssetsFingerprint'] = _stable_json_sha256(
+            derived_figure_assets
+        )
         if publication_mode == SIGNED_MANUAL_PRODUCTION_MODE:
             manifest['manualV6Production'] = production_proof
             manifest['manualV6ProductionFingerprint'] = _stable_json_sha256(
@@ -16114,7 +16132,10 @@ def save_generation_manifest(
             manifest['llmApiProductionFingerprint'] = _stable_json_sha256(
                 production_proof
             )
-        _validate_generation_input_integrity(manifest, validated_date)
+        _validate_generation_input_integrity(
+            manifest, validated_date,
+            checked_derived_figure_assets=derived_figure_assets,
+        )
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
     # 新一代生成只会让批次级证据失效。逐文件的确切

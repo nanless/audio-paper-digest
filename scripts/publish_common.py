@@ -269,9 +269,9 @@ TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|'
     r'comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|'
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
-    r'measure)(?:\b|$)|^(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?$|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
+    r'measure|family|language family)(?:\b|$)|^(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?$|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
-    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|(?:潜|隐|表征|嵌入|特征|语义)空间)',
+    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|拓扑|(?:潜|隐|表征|嵌入|特征|语义)空间)',
     flags=re.IGNORECASE,
 )
 TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
@@ -4985,9 +4985,10 @@ def _validate_experiment_table_evidence_depth(
     result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or source_rank_regression or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
-        r'未显著|不显著|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
+        r'未显著|不显著|无显著(?:差异)?|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|'
-        r'未改善|没有改善|没有带来改善|无效|性能回落|回落至|负面|负结果|暴露短板|跨零|落后|损失|回退|'
+        r'(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|'
+        r'未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|损失|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
         results,
         re.I,
