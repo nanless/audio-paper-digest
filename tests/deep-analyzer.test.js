@@ -543,6 +543,16 @@ describe('arXiv HTML 全文健康检查', () => {
     it('Reader 数字证据把前导小数 .119 规范为 0.119，不误读为 119', () => {
         const { readerNumericTokens } = require('../scripts/deep-analyzer.js');
         assert.deepStrictEqual(readerNumericTokens('| score | .119 | -.222 |'), ['0.119', '-0.222']);
+        // NFKC 会把这些字符映射成普通数字；Node 侧按等长字符纳入，保证与 Python 的
+        // `_api_reader_numeric_tokens` 给出同一组词元（双方各自已有断言）。
+        assert.deepStrictEqual(readerNumericTokens('𝟏𝟐'), ['12']);
+        assert.deepStrictEqual(readerNumericTokens('12²'), ['122']);
+        assert.deepStrictEqual(readerNumericTokens('¹⁰'), ['10']);
+        assert.deepStrictEqual(readerNumericTokens('10⁻⁴'), ['10', '4']);
+        assert.deepStrictEqual(readerNumericTokens('１２'), ['12']);
+        // ½ 这类会展开成多字符的分数在两侧都不当数字（避免切片错位），
+        // 所以 1½ 在 Node 侧只取到 1，Python 侧另有一份口径，属于已知差异。
+        assert.deepStrictEqual(readerNumericTokens('½'), []);
     });
 
     it('Reader 数字证据不把科学计数指数与后续 warm-up 步数粘成伪千分位', () => {

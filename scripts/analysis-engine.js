@@ -693,6 +693,23 @@ function cleanupCreatedFileLock(lockPath, createdDirectory, ownerToken) {
     }
 }
 
+function describeFileLockHolder(lockPath) {
+    // 超时信息要能直接定位到「谁持锁、持了多久」，否则多个分析进程并发时只能看到路径。
+    try {
+        const snapshot = readFileLockSnapshot(lockPath);
+        const owner = snapshot?.owner;
+        if (owner && typeof owner === 'object') {
+            return `; 持有人 pid=${owner.pid ?? '?'} host=${owner.hostname ?? '?'}`
+                + ` token=${String(owner.token ?? '').slice(0, 8)}`
+                + ` acquiredAt=${owner.acquiredAt ?? '?'}`;
+        }
+        if (snapshot && snapshot.ownerError) return `; 持有人记录不可读：${snapshot.ownerError}`;
+        return '; 未找到持有人记录（可能正在写入或已损坏）';
+    } catch (error) {
+        return `; 读取持有人记录失败：${error.message}`;
+    }
+}
+
 function acquireFileLockSync(filePath, options = {}) {
     const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
     const staleMs = options.staleMs ?? DEFAULT_STALE_LOCK_MS;
@@ -742,7 +759,9 @@ function acquireFileLockSync(filePath, options = {}) {
                 throw statError;
             }
             if (Date.now() - startedAt >= timeoutMs) {
-                throw new Error(`等待文件锁超时: ${lockPath}`);
+                throw new Error(`等待文件锁超时: ${lockPath}`
+                    + `（等待 ${Math.round((Date.now() - startedAt) / 1000)} 秒）`
+                    + describeFileLockHolder(lockPath));
             }
             sleepSync(50);
         }
@@ -796,7 +815,11 @@ async function acquireFileLock(filePath, options = {}) {
                 if (statError.code === 'ENOENT') continue;
                 throw statError;
             }
-            if (Date.now() - startedAt >= timeoutMs) throw new Error(`等待文件锁超时: ${lockPath}`);
+            if (Date.now() - startedAt >= timeoutMs) {
+                throw new Error(`等待文件锁超时: ${lockPath}`
+                    + `（等待 ${Math.round((Date.now() - startedAt) / 1000)} 秒）`
+                    + describeFileLockHolder(lockPath));
+            }
             await sleep(50);
         }
     }

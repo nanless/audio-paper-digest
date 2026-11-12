@@ -1977,7 +1977,14 @@ function readerNumericTokenMatches(value) {
     // quote 落在错误位置、token 永远对不上。全角数字/小数点/百分号与数学减号
     // 纳入字符类；比较归一化仍由 normalizeReaderNumericToken 负责。
     // 注意：en/em dash 不算减号，避免把页码范围误读成负数。
-    const digit = '[\\d\\uFF10-\\uFF19]';
+    // NFKC 会把数学粗体、等宽与上下标数字映射成普通数字；这里按等长字符一并纳入，
+    // 保证与 Python 侧「先 NFKC 再匹配」得到同一组词元（½ 这类会展开成多字符的分数
+    // 不纳入，避免 match.index 与原文切片错位）。字符类含增补平面字符，正则必须带 u。
+    // 上标 ¹²³ 在拉丁补充区（U+00B9/B2/B3），其余上标与全部下标在各自区段。
+    // 上标正负号不进字符类：10⁻⁴ 在两侧都拆成 10 与 4 两个词元（Python 的 NFKC
+    // 先展开再匹配，得到的也是这两个），保持同一结果。
+    const digit = '[\\d\\uFF10-\\uFF19\\u{1D7CE}-\\u{1D7FF}'
+        + '\\u2070-\\u2079\\u00B2\\u00B3\\u00B9\\u2080-\\u2089]';
     const sign = '[-+\\uFF0D\\u2212]';
     const dot = '(?:[\\.\\uFF0E])';
     const percent = '(?:\\s*%|\\s*\\uFF05)';
@@ -1995,7 +2002,7 @@ function readerNumericTokenMatches(value) {
     const doubledDecimal = `(?:\\+(${decimal})\\+\\1|[-\\uFF0D\\u2212](${decimal})[-\\uFF0D\\u2212]\\2|${sign}?(${decimal})\\3)(?!${digit}|${dot}${digit})`;
     const pattern = new RegExp(
         `${lookbehind}(?:${doubledDecimal}|${sign}?(?:${groupedInteger}(?:${dot}${digit}+)?|${dot}${digit}+))(?:${percent}|\\s*(?:${unit}))?`,
-        'gi'
+        'giu'
     );
     // LaTeXML 会把显式的 TeX 颜色命令压平成像 \\textcolorblue58.62 的样子。只屏蔽紧挨
     // 在数字前面的标准颜色名前缀；用等长空格替换，原文下标和引文字节都不变。标识符边界
