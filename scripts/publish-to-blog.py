@@ -7461,7 +7461,7 @@ def _reader_tex_cell_canonical(value):
 
 def _reader_tex_plain(value):
     output = str(value or '')
-    if '\\' not in output and not re.search(r'[_^]\{', output):
+    if '\\' not in output and not re.search(r'[_^]\{', output) and '{,}' not in output:
         return output
     output = re.sub(r'\\[,;:!]', '', output)
     for _round in range(10):
@@ -7507,7 +7507,7 @@ def _fold_reader_tex_cell_duplicate(value):
             return dual.group(1)
     for split in range(1, len(text)):
         suffix_probe = text[split:]
-        if '\\' not in suffix_probe and not re.search(r'[_^]\{', suffix_probe):
+        if '\\' not in suffix_probe and not re.search(r'[_^]\{', suffix_probe) and '{,}' not in suffix_probe:
             # 来源 DOM 里也有不带反斜杠的副本（dz=128d_{z}=128）。
             continue
         prefix, suffix = text[:split], text[split:]
@@ -7567,6 +7567,10 @@ def _project_reader_cell_tex_display(value):
         output = _project_reader_anon_macro(output)
     # 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = re.sub(r'([+−])(?:[+−-])(?=[\d.])', r'\1', output)
+    # 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
+    output = output.replace('{,}', ',')
+    if not re.fullmatch(r'(?:19|20)\d{2}', output.strip()):
+        output = re.sub(r'(?<![\d,])(\d{1,3}(?:,\d{3})+|\d{2,})\1(?![\d,])', r'\1', output)
     # 纯数字被原样写了两遍（3232 → 32、100100 → 100）。一位数重复是正常数值
     # （55、99），四位年份（2020）也不能动。
     whole = output.strip()
