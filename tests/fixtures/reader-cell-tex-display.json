@@ -212,6 +212,18 @@
     {
       "input": "5.45.4 [−2.9,15.9][-2.9,15.9]",
       "expected": "5.45.4 [−2.9,15.9][-2.9,15.9]"
+    },
+    {
+      "input": "Δ\\DeltaIC ↓",
+      "expected": "ΔIC ↓"
+    },
+    {
+      "input": "+ n∼𝒰0,1n\\sim\\mathcal{U}_{0,1} + REPA",
+      "expected": "+ n∼𝒰0,1 + REPA"
+    },
+    {
+      "input": "−𝟗𝟎\\mathbf{-90} / 2.3",
+      "expected": "−𝟗𝟎 / 2.3"
     }
   ]
 }

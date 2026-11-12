@@ -7512,7 +7512,15 @@ def _fold_reader_tex_cell_duplicate(value):
             continue
         canonical_prefix = _reader_tex_cell_canonical(prefix)
         canonical_plain = _reader_tex_cell_canonical(plain)
-        if not canonical_plain or len(canonical_prefix) < 2:
+        if not canonical_plain:
+            continue
+        # 单字符符号前缀 + 副本继续给出余下文字（Δ\DeltaIC → ΔIC）。
+        if len(canonical_prefix) == 1 and len(canonical_plain) > 1 \
+                and canonical_plain.startswith(canonical_prefix):
+            tail = _reader_tex_align_tail(plain, canonical_prefix)
+            if tail is not None and re.match(r'[A-Za-z0-9\u4e00-\u9fff\s(（\[,:：;；]', tail):
+                return prefix + tail
+        if len(canonical_prefix) < 2:
             continue
         # 前缀可能带「+ 」「· 「」这类装饰符号，TeX 副本只复制了实体部分；
         # 去掉开头非字母数字后再比一次（n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。

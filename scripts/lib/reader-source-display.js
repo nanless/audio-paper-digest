@@ -159,7 +159,19 @@ function foldReaderTexCellDuplicate(value) {
         if (!plain || plain.includes('\\')) continue;
         const canonicalPrefix = readerTexCellCanonical(prefix);
         const canonicalPlain = readerTexCellCanonical(plain);
-        if (!canonicalPlain || canonicalPrefix.length < 2) continue;
+        if (!canonicalPlain) continue;
+        // 前缀可能带「+ 」这类装饰符，副本只复制实体部分（+ n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
+        const strippedPrefix = canonicalPrefix.replace(/^[^0-9A-Za-z\u4e00-\u9fff]+/u, '');
+        if (strippedPrefix && strippedPrefix !== canonicalPrefix && canonicalPlain.startsWith(strippedPrefix)) {
+            const strippedTail = readerTexAlignTail(plain, strippedPrefix);
+            if (strippedTail !== null && /^[\s(（\[,:：;；↑↓→←↔±×%°+\-]/.test(strippedTail)) return prefix + strippedTail;
+        }
+        // 单字符符号前缀 + 副本继续给出余下文字（Δ\DeltaIC → ΔIC）。
+        if (canonicalPrefix.length === 1 && canonicalPlain.length > 1 && canonicalPlain.startsWith(canonicalPrefix)) {
+            const symbolTail = readerTexAlignTail(plain, canonicalPrefix);
+            if (symbolTail !== null && /^[A-Za-z0-9\u4e00-\u9fff\s(（\[,:：;；]/u.test(symbolTail)) return prefix + symbolTail;
+        }
+        if (canonicalPrefix.length < 2) continue;
         if (canonicalPlain === canonicalPrefix) return prefix;
         if (canonicalPrefix.length > canonicalPlain.length && canonicalPrefix.endsWith(canonicalPlain)) return prefix;
         if (canonicalPlain.startsWith(canonicalPrefix)) {
