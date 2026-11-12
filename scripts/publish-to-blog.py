@@ -7603,7 +7603,9 @@ def _project_reader_cell_tex_display(value):
             break
         output = folded
     # 简单指数 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
-    output = re.sub(r'(\d)\^\{([-−+]\d+)\}', r'\1\2', output)
+    # 统一用 U+2212 负号，避免与 ASCII 连字符比较不上。
+    output = re.sub(r'(\d)\^\{([-−+]\d+)\}',
+                    lambda match: match.group(1) + match.group(2).replace('-', '\u2212'), output)
     # 整格就是一小段纯上下标 TeX（d_{z}）时，按可见形式投影成 dz。
     stripped_cell = output.strip()
     if len(stripped_cell) <= 40 and '\\' not in stripped_cell and re.search(r'[_^]\{', stripped_cell):

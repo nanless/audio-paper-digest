@@ -235,7 +235,7 @@ function projectReaderCellTexDisplay(value) {
         output = folded;
     }
     // 简单指数 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
-    output = output.replace(/(\d)\^\{([-−+]\d+)\}/g, '$1$2');
+    output = output.replace(/(\d)\^\{([-−+]\d+)\}/g, (_w, base, exp) => base + exp.replace('-', '\u2212'));
     // 整格就是一小段纯上下标 TeX（d_{z}）时，按可见形式投影成 dz。
     const strippedCell = output.trim();
     if (strippedCell.length <= 40 && !strippedCell.includes('\\') && /[_^]\{/.test(strippedCell)) {
