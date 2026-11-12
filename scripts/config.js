@@ -83,11 +83,12 @@ const FILTER_CONFIG = {
     batchSize: 5,
     delayBetweenBatchesMs: 2000,
     temperature: 0.3,
-    maxTokens: 1000,
+    // Responses 的推理 token 也算在 max_output_tokens 里；1000 在 xhigh 下会被推理吃光。
+    maxTokens: 4000,
     decisionContractProfile: require('./lib/filter-decision.js').FILTER_DECISION_PROFILE,
     keywordPrefilterEnabled: true,
     conferenceTimeoutMs: 60000,
-    conferenceMaxTokens: 1200,
+    conferenceMaxTokens: 4000,
     conferenceMaxResponseBytes: 2 * 1024 * 1024,
     conferenceTemperature: 0,
     conferenceRetryBackoffMs: 5 * 60 * 1000
@@ -114,20 +115,22 @@ const ANALYSIS_CONFIG = {
     // 模型 JSON 或 SSE 响应的总字节上限；超过后停止读取，不解析截断内容。
     apiMaxResponseBytes: 16 * 1024 * 1024,
     // 局部检查和修复使用较小的输出上限，与主分析和 Reader 长文分别设置。
-    repairMaxTokens: 16000,
+    // 局部修复同样要塞推理；16000 在 xhigh 下挤压可见输出。
+    repairMaxTokens: 24000,
     // 审校会重写完整分析，输出容量单独设置，避免误用局部修复上限。
     revisionMaxTokens: 64000,
     // 完整结构修复同样输出全部章节，不能使用局部修复容量。
     structureMaxTokens: 64000,
     // 单节核心摘要保留严格长度约束，为模型推理留足独立输出容量。
-    coreSummaryRepairMaxTokens: 32000,
+    coreSummaryRepairMaxTokens: 40000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
-    apiReaderMaxTokens: 48000,
+    // Reader 长文 + xhigh 推理共用同一预算，按主分析同档给到 64000。
+    apiReaderMaxTokens: 64000,
     apiReaderThinkingMode: 'disabled',
     repairThinkingMode: 'disabled',
     primaryThinkingMode: 'disabled',
     auxiliaryThinkingMode: 'disabled',
-    apiReaderRepairMaxTokens: 8000,
+    apiReaderRepairMaxTokens: 16000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,

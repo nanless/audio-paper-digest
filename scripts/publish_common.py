@@ -270,7 +270,7 @@ TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|'
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
     r'measure|family|language family)(?:\b|$)|^(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?$|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
-    r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
+    r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|语系|语族|场景|条件|设置|划分|类别|'
     r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|拓扑)',
     flags=re.IGNORECASE,
 )
@@ -4931,7 +4931,7 @@ def _validate_experiment_table_evidence_depth(
     source_has_negative = re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
-        r'未显著|不显著|退化|失败|更差|无效|回退|'
+        r'未显著|不显著|退化|失败|更差|无效|回退|负(?:面)?结果|性能回落|回落至|降幅|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
         source_negative_evidence,
         re.I,
@@ -4992,6 +4992,7 @@ def _validate_experiment_table_evidence_depth(
         r'更差|比(?!较)[^。；\n]{0,30}差|净下降|'
         r'(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|'
         r'未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|损失(?!函数|项|权重|率)|回退|'
+        r'(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)|'
         r'不单调(?:性|改进)?|非单调(?:性|响应|作答|情况|变化)?|不保证单调(?:改进|提升)',
         results,
         re.I,
@@ -6978,10 +6979,10 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
             'temperature': temperature,
             'input': [{'role': 'user', 'content': content}],
         }
-        reasoning_effort = os.environ.get(
-            'PD_OPENAI_RESPONSES_REASONING_EFFORT', ''
-        ).strip().lower()
-        if reasoning_effort in {'low', 'medium', 'high'}:
+        reasoning_effort = normalize_reasoning_effort(
+            os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT', '')
+        )
+        if reasoning_effort:
             payload['reasoning'] = {'effort': reasoning_effort}
         return payload
     content = [{'type': 'text', 'text': prompt}]
@@ -7026,6 +7027,20 @@ def _publish_llm_requires_proxy(endpoint, model):
 
 
 _PUBLISH_OPENCODE_SESSION_ID = None
+
+
+# Responses 推理强度档位：minimal 最省、xhigh 最强。网关对未知值不报错而是静默降级，
+# 所以按白名单规范化，写错的值一律不发送（而不是被悄悄当成默认档）。
+REASONING_EFFORTS = ('minimal', 'low', 'medium', 'high', 'xhigh')
+
+
+REASONING_EFFORT_ALIASES = {'max': 'xhigh', 'highest': 'xhigh', 'maximum': 'xhigh'}
+
+
+def normalize_reasoning_effort(value):
+    effort = str(value or '').strip().lower()
+    effort = REASONING_EFFORT_ALIASES.get(effort, effort)
+    return effort if effort in REASONING_EFFORTS else ''
 
 
 def _publish_opencode_session_id():

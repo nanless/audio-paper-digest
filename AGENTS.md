@@ -102,7 +102,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 检查完整性时，除了文件存在，还须确认候选、筛选决定、入选集和分析结果的日期、来源、候选指纹及论文集合相互对应。运行 `npm run validate:data` 做只读验证；只有干净检出的仓库才可显式加 `--allow-empty`。
 
-若某篇入选论文的官方 PDF 在全部候选地址上都返回 404，按用户要求最多跳过两篇（`PD_DAILY_SOURCE_SKIP_MAX`，0–5），把论文编号、原始错误和跳过理由写进本次来源运行目录的 `daily-source-skips.json` 后继续封存和分析其余论文。超过上限、超时、认证错误、5xx 或解析失败仍停止整批。跳过的论文不进入分析、不生成页面、不计为成功；页面与汇总不包含它，`digest:status` 的 `analysis.skipped` 单列封存阶段已跳过篇数。筛选阶段也会跳过官方 PDF 全地址 404 的论文，但那条通道不设篇数上限、不写入 `daily-source-skips.json`，只逐篇记进 `filter-decisions.json`，因此不出现在 `analysis.skipped` 里。
+若某篇入选论文的官方 PDF 在全部候选地址上都返回 404，按用户要求默认最多跳过两篇（`PD_DAILY_SOURCE_SKIP_MAX`，0–5），把论文编号、原始错误和跳过理由写进本次来源运行目录的 `daily-source-skips.json` 后继续封存和分析其余论文。超过上限、超时、认证错误、5xx 或解析失败仍停止整批。跳过的论文不进入分析、不生成页面、不计为成功；页面与汇总不包含它，`digest:status` 的 `analysis.skipped` 单列封存阶段已跳过篇数。筛选阶段也会跳过官方 PDF 全地址 404 的论文，但那条通道不设篇数上限、不写入 `daily-source-skips.json`，只逐篇记进 `filter-decisions.json`，因此不出现在 `analysis.skipped` 里。
 
 ## 模型、代理、并发与预算
 
@@ -131,16 +131,16 @@ npm run digest:prepare -- YYYY-MM-DD
 | 主分析输出 | 64000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` |
 | 完整正文审校重写输出 | 64000 tokens | `PD_ANALYSIS_REVISION_MAX_TOKENS` |
 | 完整正文结构重写输出 | 64000 tokens | `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` |
-| 核心摘要修补输出 | 32000 tokens | `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` |
-| 局部修复输出 | 16000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
+| 核心摘要修补输出 | 40000 tokens | `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` |
+| 局部修复输出 | 24000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
-| API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
-| Reader 局部补丁输出 | 8000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
+| API Reader 输出 | 64000 tokens | `PD_API_READER_MAX_TOKENS` |
+| Reader 局部补丁输出 | 16000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
-| 独立博客页审查并发 | 16，范围 1–32 | `PD_BLOG_REVIEW_CONCURRENCY` |
+| 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
-主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE，`PD_OPENAI_RESPONSES_STREAM` 与 `PD_OPENAI_RESPONSES_REASONING_EFFORT` 对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
+主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 取 `minimal`/`low`/`medium`/`high`/`xhigh`（`max`、`highest`、`maximum` 视作 `xhigh`），写错的值不发送、由 `npm run config:check` 拦截，本机固定 `xhigh`。推理 token 与可见输出共用 `max_output_tokens`，上表的输出预算已按 `xhigh` 留出推理开销；改预算会改变阶段指纹。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 
 ## 恢复原则
 
@@ -394,5 +394,5 @@ npm run digest:status -- --date YYYY-MM-DD
 - 仓库最终只保留 `main`。已有临时分支须先核对有效改动已合入 `main`，再按[维护指南](docs/maintenance.md#一次修改怎样完成)清理并核对远端。
 - 提示词文件的第一个围栏代码块是 `loadPrompt()` 实际读取的内容；修改后检查占位符、解析器、SHA 和阶段指纹。工作树只保留当前登记的模板；旧记录的提示词由 Git blob、原路径和原 SHA 受控只读核验，不修改旧声明或补签结果。
 - 新 LLM 调用复用公共路由/请求封装；新分析入口复用 `analysis-engine.js`；新路径进入集中配置。
-- CI 运行 `npm run verify`；`scripts/verify-project.js` 的验证计划是固定版本 Hugo、全仓 JS/Python/shell 语法、JavaScript 测试（`npm test` 或其分片）、两处 Python 单测和只读 `validate:data`，不含任何 `apps/` 构建或测试步骤。`npm test` 里的 `tests/docs-consistency-real.test.js` 会跑 `docs-consistency.main()`，其中只核对文档声明的客户端版本与构建号是否等于 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts`，属于版本一致性检查，不是客户端测试。Android 客户端测试由独立作业 `client-android` 覆盖，它不进 verify 的分片矩阵，也不并入 `test` 汇总检查。普通 push 不触发远端 CI；稳定的一轮修改通过定向检查与交叉审查后主动运行一次，PR 仍自动检查。保留完整覆盖，按实际最终提交核验全部检查，见[维护指南](docs/maintenance.md#什么时候运行远端-ci)。
+- CI 运行 `npm run verify`；主矩阵覆盖 Node 20/22，另有 Node 24 独立通道（4 个 JavaScript 分片 + `test (24.x)` 汇总），该通道设置 `NODE_OPTIONS=--test-reporter=tap`，本地用 Node 24 跑 `npm test` 时也要同样设置。`scripts/verify-project.js` 的验证计划是固定版本 Hugo、全仓 JS/Python/shell 语法、JavaScript 测试（`npm test` 或其分片）、两处 Python 单测和只读 `validate:data`，不含任何 `apps/` 构建或测试步骤。`npm test` 里的 `tests/docs-consistency-real.test.js` 会跑 `docs-consistency.main()`，其中只核对文档声明的客户端版本与构建号是否等于 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts`，属于版本一致性检查，不是客户端测试。Android 客户端测试由独立作业 `client-android` 覆盖，它不进 verify 的分片矩阵，也不并入 `test` 汇总检查。普通 push 不触发远端 CI；稳定的一轮修改通过定向检查与交叉审查后主动运行一次，PR 仍自动检查。保留完整覆盖，按实际最终提交核验全部检查，见[维护指南](docs/maintenance.md#什么时候运行远端-ci)。
 - 提交信息使用具体中文，说明原因、范围与影响；提交前确认 `data/`、`logs/`、`.env`、缓存和密钥未被跟踪。

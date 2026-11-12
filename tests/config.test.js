@@ -50,7 +50,7 @@ describe('config', () => {
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.repairMaxTokens,
-            (16000)
+            (24000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.revisionMaxTokens,
@@ -58,11 +58,11 @@ describe('config', () => {
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderMaxTokens,
-            (48000)
+            (64000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens,
-            (8000)
+            (16000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs,
@@ -81,7 +81,7 @@ describe('config', () => {
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.deepEqual(Config.FILTER_CONFIG.decisionContractProfile, require('../scripts/lib/filter-decision').FILTER_DECISION_PROFILE);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceTimeoutMs, 60000);
-        assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxTokens, 1200);
+        assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxTokens, 4000);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxResponseBytes, 2 * 1024 * 1024);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceTemperature, 0);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);
@@ -214,7 +214,7 @@ describe('config', () => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffMinRounds, 4);
             assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffNoProgressRounds, 5);
             assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxRetries, 3);
-            assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderMaxTokens, 48000);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderMaxTokens, 64000);
         });
         for (const config of ['PD_ANALYSIS_BATCH_MAX_ROUNDS=0', 'PD_ANALYSIS_BATCH_MAX_ROUNDS=11',
             'PD_ANALYSIS_BATCH_MAX_ROUNDS=2oops', 'PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS=6',
@@ -280,8 +280,8 @@ describe('config', () => {
         for (const [requested, expected] of [[1, 1], [6, 6], [12, 12], [60, 60], [72, 60], [0, 5], [-1, 5], ['invalid', 5]]) {
             withProjectEnv(`PD_API_READER_CONCURRENCY=${requested}`, configured => {
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderConcurrency, expected);
-                assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderMaxTokens, 48000);
-                assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderRepairMaxTokens, 8000);
+                assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderMaxTokens, 64000);
+                assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderRepairMaxTokens, 16000);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.maxRetries, 2);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiMaxRetries, 3);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs, 2400000);

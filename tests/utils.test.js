@@ -724,6 +724,36 @@ describe('buildRequestBody', () => {
         }
     });
 
+    it('OpenAI Responses 接受 minimal 与 xhigh 两档，并把 max 视作 xhigh', () => {
+        const previous = process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+        try {
+            for (const [input, expected] of [['minimal', 'minimal'], ['xhigh', 'xhigh'], ['MAX', 'xhigh'], ['  High ', 'high']]) {
+                process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = input;
+                const body = buildRequestBody('openai_responses', 'muse-spark-1.2-contributor', [
+                    { role: 'user', content: 'hello' }
+                ], 12000, 0.7);
+                assert.deepStrictEqual(body.reasoning, { effort: expected }, `input=${input}`);
+            }
+        } finally {
+            if (previous === undefined) delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+            else process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = previous;
+        }
+    });
+
+    it('未知推理强度不发送 reasoning 字段，避免网关静默降级', () => {
+        const previous = process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+        process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = 'ultra';
+        try {
+            const body = buildRequestBody('openai_responses', 'muse-spark-1.2-contributor', [
+                { role: 'user', content: 'hello' }
+            ], 12000, 0.7);
+            assert.strictEqual(body.reasoning, undefined);
+        } finally {
+            if (previous === undefined) delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+            else process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = previous;
+        }
+    });
+
     it('OpenAI Responses 可启用 SSE 流式传输', () => {
         const previous = process.env.PD_OPENAI_RESPONSES_STREAM;
         process.env.PD_OPENAI_RESPONSES_STREAM = '1';

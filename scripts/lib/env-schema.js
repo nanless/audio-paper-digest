@@ -77,7 +77,9 @@ const SCHEMA = Object.freeze([
     { name: 'PD_ARXIV_PDF_MAX_BYTES', required: false, type: 'int', min: 1 },
     { name: 'PD_BLOG_REVIEW_CHUNK_CHARS', required: false, type: 'int', min: 1 },
     { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PD_OPENAI_RESPONSES_REASONING_EFFORT', required: false, type: 'string' },
+    // Responses 推理强度；max/highest/maximum 视作 xhigh（网关支持的最高档）。
+    { name: 'PD_OPENAI_RESPONSES_REASONING_EFFORT', required: false, type: 'string',
+        allowed: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'highest', 'maximum'] },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },
     { name: 'PD_STORAGE_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 }
 ]);
@@ -208,6 +210,15 @@ function validateValue(item, rawValue) {
     case 'path':
     case 'string':
     default:
+        if (Array.isArray(item.allowed)) {
+            // 字符串型白名单：写错的值不会报错而是被静默忽略，所以在配置检查里直接拦住。
+            const seen = String(value).trim().toLowerCase();
+            if (!item.allowed.includes(seen)) {
+                return { ok: 'fail', detail: `不在允许值内：${value}`,
+                    hint: `允许值：${item.allowed.join('/')}` };
+            }
+            return { ok: 'ok', detail: seen };
+        }
         return { ok: 'ok', detail: '已配置（值不显示）' };
     }
 }

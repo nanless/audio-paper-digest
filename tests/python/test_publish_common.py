@@ -2138,6 +2138,39 @@ primary_method_tag: #基准测试
             )
         self.assertEqual(responses['reasoning'], {'effort': 'low'})
 
+    def test_responses_reasoning_effort_accepts_xhigh_and_aliases(self):
+        previous = os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT')
+        try:
+            for value, expected in (('xhigh', 'xhigh'), ('MAX', 'xhigh'),
+                                    ('  Minimal ', 'minimal'), ('highest', 'xhigh')):
+                with mock.patch.dict(os.environ, {
+                        'PD_OPENAI_RESPONSES_REASONING_EFFORT': value}, clear=False):
+                    payload = build_publish_payload(
+                        'openai_responses', 'muse-spark-1.2-contributor',
+                        'review', 100, 0.1,
+                    )
+                self.assertEqual(payload.get('reasoning'), {'effort': expected}, value)
+            with mock.patch.dict(os.environ, {
+                    'PD_OPENAI_RESPONSES_REASONING_EFFORT': 'ultra'}, clear=False):
+                payload = build_publish_payload(
+                    'openai_responses', 'muse-spark-1.2-contributor',
+                    'review', 100, 0.1,
+                )
+            self.assertNotIn('reasoning', payload)
+        finally:
+            if previous is None:
+                os.environ.pop('PD_OPENAI_RESPONSES_REASONING_EFFORT', None)
+            else:
+                os.environ['PD_OPENAI_RESPONSES_REASONING_EFFORT'] = previous
+
+    def test_normalize_reasoning_effort_whitelist(self):
+        from publish_common import normalize_reasoning_effort as normalize
+        self.assertEqual(normalize('xhigh'), 'xhigh')
+        self.assertEqual(normalize('max'), 'xhigh')
+        self.assertEqual(normalize(' HIGH '), 'high')
+        self.assertEqual(normalize('ultra'), '')
+        self.assertEqual(normalize(None), '')
+
     def test_muse_responses_api_uses_project_proxy(self):
         response = mock.Mock()
         response.status = 200

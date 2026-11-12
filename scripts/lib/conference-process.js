@@ -195,9 +195,9 @@ function deepExecutionConfigIdentity(options = {}) {
         ? endpointAudit(String(secondaryModelConfig.endpoint || primaryEndpoint),
             normalizedModel(secondaryModelRaw, 'secondary model'), utilsApi)
         : null;
-    const reasoning = String(env.PD_OPENAI_RESPONSES_REASONING_EFFORT || '').trim().toLowerCase();
+    const reasoning = utilsApi.normalizeReasoningEffort(env.PD_OPENAI_RESPONSES_REASONING_EFFORT);
     const responses = {
-        reasoningEffort: ['low', 'medium', 'high'].includes(reasoning) ? reasoning : null,
+        reasoningEffort: reasoning || null,
         stream: ['1', 'true', 'yes', 'on'].includes(
             String(env.PD_OPENAI_RESPONSES_STREAM || '').trim().toLowerCase()
         )

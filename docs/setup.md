@@ -155,7 +155,9 @@ npm run validate:data -- --allow-empty
 
 筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。
 
-当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理设置；两项配置不作用于 Chat Completions 请求。
+当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理强度，取值 `minimal`、`low`、`medium`、`high`、`xhigh`，写 `max`/`highest`/`maximum` 视作 `xhigh`；不设置时不发送 `reasoning` 字段，写错的值不会生效（`npm run config:check` 会直接报错）。当前本机配置为 `xhigh`。两项配置不作用于 Chat Completions 请求。
+
+推理 token 与可见输出共用 `max_output_tokens`，因此高强度档位下各阶段的输出预算要留出推理开销：筛选批次 4000、筛选会议 4000、局部修复 24000、Reader 局部补丁 16000、核心摘要修补 40000、Reader 长文 64000、主分析与完整重写 64000。改这些预算会改变阶段指纹，下一轮分析会重新执行对应阶段。
 
 日更开始时的原文和 PDF 封存下载保留独立的八路上限。未显式指定下载并发时，使用整篇分析并发与 8 中较小的值；因此把模型分析设为 10 路不会阻止来源下载，也不会把模型分析自动降为 8 路。程序显式传入下载并发时仍须为 1–8 的整数。
 
@@ -175,7 +177,7 @@ API Reader v3 会直接把安全准备的官方论文图交给主模型，因此
 
 ## 博客与 Hugo
 
-`PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。默认日更在归档或抓取前，必须同步并核验该仓库的 `origin/main`，以正式已发布页确定去重和补抓基线。目录缺失、Git 更新或基线核验失败都会停止，不能跳过去重继续抓取。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。
+`PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。默认日更在归档或抓取前，必须同步并核验该仓库的 `origin/main`，以正式已发布页确定去重和补抓基线。目录缺失、Git 更新或基线核验失败都会停止，不能跳过去重继续抓取。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。发布后的部署核验还要使用已登录的 `gh` CLI；缺失或未登录时 `verify:web` 取不到 job 证据，不能把部署记为已核验。
 
 外部进程有明确等待上限。图片审查、Hugo、Git 本地操作、提交及 hook、推送与远端核验默认分别为 120、300、30、180、180 秒。可在 `env.example` 规定范围内，分别使用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`和 `PD_GIT_NETWORK_TIMEOUT_SECONDS` 调整。超时不会被记录为审查或远端发布成功；有效的本地发布提交若尚未验证远端，会保留供续跑核对和使用。
 

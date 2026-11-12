@@ -619,6 +619,17 @@ function normalizeOpenAIContent(content) {
     return kept;
 }
 
+// Responses 的推理强度档位：minimal 最省、xhigh 最强。网关对未知值不报错而是静默
+// 降级，所以这里按白名单规范化，写错的值一律不发送（而不是被悄悄当成默认档）。
+const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+const REASONING_EFFORT_ALIASES = { max: 'xhigh', highest: 'xhigh', maximum: 'xhigh' };
+
+function normalizeReasoningEffort(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    const effort = REASONING_EFFORT_ALIASES[raw] || raw;
+    return REASONING_EFFORTS.includes(effort) ? effort : '';
+}
+
 function normalizeResponsesContent(content) {
     const blocks = Array.isArray(content) ? content : [{ type: 'text', text: String(content || '') }];
     return blocks.filter(block => !isProviderReasoningEnvelope(block)).map(block => {
@@ -704,10 +715,10 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
             max_output_tokens: maxTokens
         };
         if (Number.isFinite(temperature)) body.temperature = temperature;
-        const reasoningEffort = String(
-            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT || ''
-        ).trim().toLowerCase();
-        if (['low', 'medium', 'high'].includes(reasoningEffort)) {
+        const reasoningEffort = normalizeReasoningEffort(
+            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT
+        );
+        if (reasoningEffort) {
             body.reasoning = { effort: reasoningEffort };
         }
         if (['1', 'true', 'yes', 'on'].includes(String(
@@ -2115,6 +2126,7 @@ function loadPrompt(mdPath, vars = {}, { originalFileSha256 = null } = {}) {
 }
 
 module.exports = {
+    normalizeReasoningEffort,
     writeFileAtomic,
     readJsonSafe,
     ensureDir,
