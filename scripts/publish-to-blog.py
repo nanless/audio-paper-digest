@@ -7597,6 +7597,10 @@ def _project_reader_cell_tex_display(value):
         if folded == output:
             break
         output = folded
+    # 整格就是一小段纯上下标 TeX（d_{z}）时，按可见形式投影成 dz。
+    stripped_cell = output.strip()
+    if len(stripped_cell) <= 40 and '\\' not in stripped_cell and re.search(r'[_^]\{', stripped_cell):
+        output = _reader_tex_plain(stripped_cell)
     return output
 
 
@@ -7657,7 +7661,10 @@ def _project_artifact_table_cell_tex_display(article, plan):
             if _reader_cell_comparison(projected) \
                     != _reader_cell_comparison(cell.get('sourceText')):
                 raise PublishDataValidationError(
-                    '来源单元格 TeX 显示投影与保存的原 DOM 文本不一致，不能改写页面。')
+                    '来源单元格 TeX 显示投影与保存的原 DOM 文本不一致，不能改写页面。'
+                    f'（表 {index} 行 {row} 列 {column}'
+                    f' 原文={current_text!r} 投影={projected!r}'
+                    f' 来源={cell.get("sourceText")!r}）')
             leading = original[:len(original) - len(original.lstrip())]
             trailing = original[len(original.rstrip()):]
             lines[line_index] = line[:start] + leading + projected + trailing + line[end:]

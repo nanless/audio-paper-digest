@@ -225,6 +225,11 @@ function projectReaderCellTexDisplay(value) {
         if (folded === output) break;
         output = folded;
     }
+    // 整格就是一小段纯上下标 TeX（d_{z}）时，按可见形式投影成 dz。
+    const strippedCell = output.trim();
+    if (strippedCell.length <= 40 && !strippedCell.includes('\\') && /[_^]\{/.test(strippedCell)) {
+        output = readerTexPlain(strippedCell);
+    }
     return output;
 }
 
