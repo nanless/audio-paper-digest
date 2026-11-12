@@ -170,7 +170,7 @@ function foldReaderTexCellDuplicate(value) {
         if (!canonicalPlain) continue;
         // 前缀可能带「+ 」这类装饰符，副本只复制实体部分（+ n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
         const strippedPrefix = canonicalPrefix.replace(/^[^0-9A-Za-z\u4e00-\u9fff]+/u, '');
-        if (strippedPrefix && strippedPrefix !== canonicalPrefix && canonicalPlain.startsWith(strippedPrefix)) {
+        if (strippedPrefix.length >= 2 && strippedPrefix !== canonicalPrefix && canonicalPlain.startsWith(strippedPrefix)) {
             const strippedTail = readerTexAlignTail(plain, strippedPrefix);
             if (strippedTail !== null && /^[\s(（\[,:：;；↑↓→←↔±×%°+\-]/.test(strippedTail)) return prefix + strippedTail;
         }
@@ -191,6 +191,7 @@ function foldReaderTexCellDuplicate(value) {
         // 注解只重复可见值开头的一个符号（−72.9-72.9、w/o L→\rightarrowH 的箭头），
         // 保留可见副本来替换整个注解；剩余文字里的独立副本仍由下一轮折叠加守。
         if (/^[\\{^_]/.test(suffix) && canonicalPlain.length > 1 && canonicalPrefix.length > 1
+            && !/[0-9]/.test(canonicalPlain[0])
             && canonicalPrefix.endsWith(canonicalPlain[0])) return prefix + plain.slice(1);
     }
     return text;
