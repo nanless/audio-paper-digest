@@ -113,6 +113,7 @@ const READER_TEX_SYMBOLS = Object.freeze({
     uparrow: '↑', downarrow: '↓', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔',
     times: '×', pm: '±', cdot: '·', approx: '≈', geq: '≥', leq: '≤', neq: '≠', sim: '∼',
     sigma: 'σ', lambda: 'λ', tau: 'τ', beta: 'β', alpha: 'α', mu: 'μ', pi: 'π',
+    delta: 'δ', eta: 'η', theta: 'θ', kappa: 'κ', rho: 'ρ', phi: 'φ', chi: 'χ', psi: 'ψ', zeta: 'ζ', nu: 'ν', xi: 'ξ', epsilon: 'ε', varepsilon: 'ε',
     Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ', dagger: '†',
 });
 const READER_TEX_STYLE_NAMES = /\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|widehat|overline|underline|tilde|hat|bar)/g;
@@ -123,7 +124,7 @@ function readerTexCellCanonical(value) {
 }
 function readerTexPlain(value) {
     let output = String(value ?? '');
-    if (!output.includes('\\')) return output;
+    if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
     output = output.replace(/\\[,;:!]/g, '');
     for (let round = 0; round < 10; round++) {
         const before = output;
@@ -153,7 +154,7 @@ function readerTexAlignTail(plain, canonicalPrefix) {
 function foldReaderTexCellDuplicate(value) {
     const text = String(value ?? '');
     for (let split = 1; split < text.length; split++) {
-        if (!text.slice(split).includes('\\')) continue;
+        if (!text.slice(split).includes('\\') && !/[_^]\{/.test(text.slice(split))) continue;
         const prefix = text.slice(0, split), suffix = text.slice(split);
         const plain = readerTexPlain(suffix);
         if (!plain || plain.includes('\\')) continue;
@@ -196,7 +197,9 @@ function projectReaderAnonMacro(value) {
 function projectReaderCellTexDisplay(value) {
     let output = String(value ?? '');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
-    if (!output.includes('\\')) return output;
+    // 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
+    output = output.replace(/([+−])(?:[+−-])(?=[\d.])/g, '$1');
+    if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     output = output.replace(/([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}/gu,
@@ -211,7 +214,7 @@ function projectReaderCellTexDisplay(value) {
     output = output.replace(/([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}/g,
         (whole, visible, name) => visible === name ? visible + '\u0304' : whole);
     output = output.replace(/\\overline\{([A-Za-z])\}/g, (_whole, name) => name + '\u0304');
-    for (let round = 0; round < 6 && output.includes('\\'); round++) {
+    for (let round = 0; round < 6 && (output.includes('\\') || /[_^]\{/.test(output)); round++) {
         const folded = foldReaderTexCellDuplicate(output);
         if (folded === output) break;
         output = folded;

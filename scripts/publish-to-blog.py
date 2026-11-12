@@ -7442,6 +7442,8 @@ _READER_TEX_SYMBOLS = {
     'uparrow': '↑', 'downarrow': '↓', 'rightarrow': '→', 'leftarrow': '←', 'leftrightarrow': '↔',
     'times': '×', 'pm': '±', 'cdot': '·', 'approx': '≈', 'geq': '≥', 'leq': '≤', 'neq': '≠', 'sim': '∼',
     'sigma': 'σ', 'lambda': 'λ', 'tau': 'τ', 'beta': 'β', 'alpha': 'α', 'mu': 'μ', 'pi': 'π',
+    'delta': 'δ', 'eta': 'η', 'theta': 'θ', 'kappa': 'κ', 'rho': 'ρ', 'phi': 'φ', 'chi': 'χ',
+    'psi': 'ψ', 'zeta': 'ζ', 'nu': 'ν', 'xi': 'ξ', 'epsilon': 'ε', 'varepsilon': 'ε',
     'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ', 'dagger': '†',
     'varnothing': '∅', 'emptyset': '∅', 'circ': '∘', 'star': '⋆', 'bullet': '•', 'prime': '′',
 }
@@ -7459,7 +7461,7 @@ def _reader_tex_cell_canonical(value):
 
 def _reader_tex_plain(value):
     output = str(value or '')
-    if '\\' not in output:
+    if '\\' not in output and not re.search(r'[_^]\{', output):
         return output
     output = re.sub(r'\\[,;:!]', '', output)
     for _round in range(10):
@@ -7504,7 +7506,9 @@ def _fold_reader_tex_cell_duplicate(value):
         if plain and '\\' not in plain and all(ch in dual.group(1) for ch in plain):
             return dual.group(1)
     for split in range(1, len(text)):
-        if '\\' not in text[split:]:
+        suffix_probe = text[split:]
+        if '\\' not in suffix_probe and not re.search(r'[_^]\{', suffix_probe):
+            # 来源 DOM 里也有不带反斜杠的副本（dz=128d_{z}=128）。
             continue
         prefix, suffix = text[:split], text[split:]
         plain = _reader_tex_plain(suffix)
@@ -7561,7 +7565,9 @@ def _project_reader_cell_tex_display(value):
     output = str(value or '')
     if '\\anon[' in output:
         output = _project_reader_anon_macro(output)
-    if '\\' not in output:
+    # 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
+    output = re.sub(r'([+−])(?:[+−-])(?=[\d.])', r'\1', output)
+    if '\\' not in output and not re.search(r'[_^]\{', output):
         return output
     output = re.sub(r'\\[,;:]', '', output)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
@@ -7581,7 +7587,7 @@ def _project_reader_cell_tex_display(value):
                     if match.group(1) == match.group(2) else match.group(0), output)
     output = re.sub(r'\\overline\{([A-Za-z])\}', lambda match: match.group(1) + '\u0304', output)
     for _round in range(6):
-        if '\\' not in output:
+        if '\\' not in output and not re.search(r'[_^]\{', output):
             break
         folded = _fold_reader_tex_cell_duplicate(output)
         if folded == output:
@@ -7590,9 +7596,17 @@ def _project_reader_cell_tex_display(value):
     return output
 
 
+_TRAILING_DIRECTION_RUN = re.compile(r'([↑↓→←↔])\1+')
+
+
 def _reader_cell_comparison(value):
-    """逐格比较时两侧都先折叠同义 TeX 双写，再按严格来源规范比较。"""
-    return _normalize_api_reader_source_cell(_project_reader_cell_tex_display(value))
+    """逐格比较时两侧都先折叠同义 TeX 双写，再按严格来源规范比较。
+
+    来源 DOM 会把同一箭头写成「可见箭头 + LaTeX 命令」两份，折叠后可能剩两个
+    相同箭头（↓↓）；比较时按一个处理，显示的仍是折叠后的可见副本。
+    """
+    projected = _project_reader_cell_tex_display(value)
+    return _normalize_api_reader_source_cell(_TRAILING_DIRECTION_RUN.sub(r'\1', projected))
 
 
 def _rendered_table_bare_tex(article):
@@ -8091,6 +8105,26 @@ def _api_reader_numeric_tokens(value):
 
 
 _READER_CITATION_GROUP = re.compile(r'\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]')
+
+
+_READER_CIRCLED_LABEL = re.compile(r'[\u2460-\u2473]')
+
+
+def _reader_circled_label_numeric_tokens(table):
+    """①②③ 这类带圈序号是行标签，不是测量值。
+
+    NFKC 会把 ① 归一成数字 1，于是行标签被当成「表里出现过数字 1」要求引文证据。
+    只有同一数字在别处以普通数字出现时才仍按测量值处理。
+    """
+    texts = [str(value or '') for value in table.get('header') or []]
+    for row in table.get('rows') or []:
+        texts.extend(str(value or '') for value in row)
+    labels, plain = set(), set()
+    for text in texts:
+        for match in _READER_CIRCLED_LABEL.finditer(text):
+            labels.update(_api_reader_numeric_tokens(match.group(0)))
+        plain.update(_api_reader_numeric_tokens(_READER_CIRCLED_LABEL.sub(' ', text)))
+    return labels - plain
 
 
 def _reader_citation_only_numeric_tokens(table):
@@ -9558,6 +9592,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             # 参考文献编号（如 Orig. CFM [37]）不是测量值，不要求数值引文证据；
             # 同一数字若在方括号之外出现，仍按测量值要求证据。
             missing -= _reader_citation_only_numeric_tokens(rendered)
+            missing -= _reader_circled_label_numeric_tokens(rendered)
             if index in publication_tables:
                 missing -= set(publication_tables[index]['numericTokens'])
             if missing:

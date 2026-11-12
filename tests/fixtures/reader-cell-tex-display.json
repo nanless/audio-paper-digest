@@ -224,6 +224,18 @@
     {
       "input": "−𝟗𝟎\\mathbf{-90} / 2.3",
       "expected": "−𝟗𝟎 / 2.3"
+    },
+    {
+      "input": "dz=128d_{z}=128",
+      "expected": "dz=128"
+    },
+    {
+      "input": "++0.0",
+      "expected": "+0.0"
+    },
+    {
+      "input": "−-19.6",
+      "expected": "−19.6"
     }
   ]
 }
