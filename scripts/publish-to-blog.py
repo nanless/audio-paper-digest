@@ -7442,6 +7442,8 @@ _READER_TEX_SYMBOLS = {
     'uparrow': '↑', 'downarrow': '↓', 'rightarrow': '→', 'leftarrow': '←', 'leftrightarrow': '↔',
     'times': '×', 'pm': '±', 'cdot': '·', 'approx': '≈', 'geq': '≥', 'leq': '≤', 'neq': '≠', 'sim': '∼',
     'sigma': 'σ', 'lambda': 'λ', 'tau': 'τ', 'beta': 'β', 'alpha': 'α', 'mu': 'μ', 'pi': 'π',
+    'delta': 'δ', 'eta': 'η', 'theta': 'θ', 'kappa': 'κ', 'rho': 'ρ', 'phi': 'φ', 'chi': 'χ',
+    'psi': 'ψ', 'zeta': 'ζ', 'nu': 'ν', 'xi': 'ξ', 'epsilon': 'ε', 'varepsilon': 'ε',
     'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ', 'dagger': '†',
     'varnothing': '∅', 'emptyset': '∅', 'circ': '∘', 'star': '⋆', 'bullet': '•', 'prime': '′',
 }
@@ -7459,7 +7461,7 @@ def _reader_tex_cell_canonical(value):
 
 def _reader_tex_plain(value):
     output = str(value or '')
-    if '\\' not in output:
+    if '\\' not in output and not re.search(r'[_^]\{', output):
         return output
     output = re.sub(r'\\[,;:!]', '', output)
     for _round in range(10):
@@ -7527,7 +7529,8 @@ def _fold_reader_tex_cell_duplicate(value):
     # 外层按轮次重复，最终两种写法会收敛到同一形态。
     for split in range(len(text) - 1, 0, -1):
         suffix = text[split:]
-        if '\\' not in suffix:
+        if '\\' not in suffix and not re.search(r'[_^]\{', suffix):
+            # 来源 DOM 里也有不带反斜杠的副本（dz=128d_{z}=128），同样要折叠。
             continue
         prefix = text[:split]
         plain = _reader_tex_plain(suffix)
@@ -7579,10 +7582,32 @@ def _reader_tex_align_tail(plain, canonical_prefix):
     return None
 
 
+def _project_reader_anon_macro(value):
+    """匿名投稿的自定义宏 `\\anon[匿名写法]{真名}` 在扁平文本里只剩 `\\anon[匿名写法]真名`。
+
+    宏的可见输出是方括号里的匿名写法；方括号后紧跟的纯词是投稿版不该出现的真名。
+    只有「紧跟一段字母数字短词」时才按匿名写法显示，后面接标点或别的文字就不动，
+    避免把正文误删。
+    """
+    return re.sub(r'\\anon\[([^\]]*)\][A-Za-z0-9\-]*(?![A-Za-z0-9])', r'\1', value)
+
+
 def _project_reader_cell_tex_display(value):
     output = str(value or '')
-    if '\\' not in output:
+    # 这两类清理与 TeX 无关，任何单元格都要做：零宽字符、重复符号。
+    output = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', output)
+    output = re.sub(r'([+−-])(?:[+\-−])(?=[\d.])', r'\1', output)
+    output = re.sub(r'^([+\-−])\1+', r'\1', output)
+    number_shadow = re.fullmatch(r'(\d+(?:\.\d+)?)\1', output.strip())
+    needs_work = ('\\' in output or re.search(r'[_^]\{', output) or number_shadow)
+    if not needs_work:
         return output
+    if '\\anon[' in output:
+        output = _project_reader_anon_macro(output)
+    number_shadow = re.fullmatch(r'(\d+(?:\.\d+)?)\1', output.strip())
+    if number_shadow:
+        # 纯数字被原样写了两次（64 64 → 6464），只留一份。
+        return number_shadow.group(1)
     output = re.sub(r'\\[,;:]', '', output)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     def bold(match):
@@ -7601,7 +7626,7 @@ def _project_reader_cell_tex_display(value):
                     if match.group(1) == match.group(2) else match.group(0), output)
     output = re.sub(r'\\overline\{([A-Za-z])\}', lambda match: match.group(1) + '\u0304', output)
     for _round in range(6):
-        if '\\' not in output:
+        if '\\' not in output and not re.search(r'[_^]\{', output):
             break
         folded = _fold_reader_tex_cell_duplicate(output)
         if folded == output:
@@ -8111,6 +8136,49 @@ def _api_reader_numeric_tokens(value):
 
 
 _READER_CITATION_GROUP = re.compile(r'\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]')
+
+
+_READER_CROSS_REFERENCE = re.compile(
+    r'(?:Table|Tab\.|Figure|Fig\.|Section|Sec\.|Equation|Eqs?\.|Algorithm|Appendix|Step|'
+    r'表|图|节|式|算法)\s*(\d+(?:\.\d+)*)', re.I)
+
+
+_READER_CIRCLED_LABEL = re.compile(r'[\u2460-\u2473]')
+
+
+def _reader_circled_label_numeric_tokens(table):
+    """①②③ 这类带圈序号是行标签，不是测量值。
+
+    NFKC 会把 ① 归一成数字 1，于是「行标签」被当成「表里出现过数字 1」要求原文
+    引文证据。只有同一数字在别处以普通数字出现时才仍按测量值处理。
+    """
+    texts = [str(value or '') for value in table.get('header') or []]
+    for row in table.get('rows') or []:
+        texts.extend(str(value or '') for value in row)
+    labels = set()
+    plain = set()
+    for text in texts:
+        for match in _READER_CIRCLED_LABEL.finditer(text):
+            labels.update(_api_reader_numeric_tokens(match.group(0)))
+        plain.update(_api_reader_numeric_tokens(_READER_CIRCLED_LABEL.sub(' ', text)))
+    return labels - plain
+
+
+def _reader_cross_reference_numeric_tokens(table):
+    """表格标题/正文里的「Table 1」「Figure 2」「第 3 节」是交叉引用编号，不是测量值。
+
+    只有同一数字在别处以数值形式出现时才仍按测量值要求引文证据。
+    """
+    texts = [str(value or '') for value in table.get('header') or []]
+    for row in table.get('rows') or []:
+        texts.extend(str(value or '') for value in row)
+    references = set()
+    plain = set()
+    for text in texts:
+        for match in _READER_CROSS_REFERENCE.finditer(text):
+            references.update(_api_reader_numeric_tokens(match.group(1)))
+        plain.update(_api_reader_numeric_tokens(_READER_CROSS_REFERENCE.sub(' ', text)))
+    return references - plain
 
 
 def _reader_citation_only_numeric_tokens(table):
@@ -9582,11 +9650,15 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             # 参考文献编号（如 Orig. CFM [37]）不是测量值，不要求数值引文证据；
             # 同一数字若在方括号之外出现，仍按测量值要求证据。
             missing -= _reader_citation_only_numeric_tokens(rendered)
+            missing -= _reader_cross_reference_numeric_tokens(rendered)
+            missing -= _reader_circled_label_numeric_tokens(rendered)
             if index in publication_tables:
                 missing -= set(publication_tables[index]['numericTokens'])
             if missing:
                 raise PublishDataValidationError(
                     f'第 {index} 个表格中的数字或单位未被来源引文完整覆盖：{sorted(missing)}'
+                    f'（{locals().get("paper", {}).get("arxivId", "?")}；'
+                    f'表文本={str(rendered.get("markdown") or "")[:160]!r}）'
                 )
         else:
             raise PublishDataValidationError(f'第 {index} 个表格的来源类型不符合要求。')
