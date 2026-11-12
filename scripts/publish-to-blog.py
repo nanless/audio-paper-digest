@@ -7514,6 +7514,14 @@ def _fold_reader_tex_cell_duplicate(value):
         canonical_plain = _reader_tex_cell_canonical(plain)
         if not canonical_plain or len(canonical_prefix) < 2:
             continue
+        # 前缀可能带「+ 」「· 「」这类装饰符号，TeX 副本只复制了实体部分；
+        # 去掉开头非字母数字后再比一次（n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
+        stripped_prefix = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical_prefix)
+        if stripped_prefix and stripped_prefix != canonical_prefix \
+                and canonical_plain.startswith(stripped_prefix):
+            tail = _reader_tex_align_tail(plain, stripped_prefix)
+            if tail is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°+\-]', tail):
+                return prefix + tail
         if canonical_plain == canonical_prefix:
             return prefix
         if len(canonical_prefix) > len(canonical_plain) and canonical_prefix.endswith(canonical_plain):
