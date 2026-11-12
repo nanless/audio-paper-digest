@@ -7569,8 +7569,11 @@ def _project_reader_cell_tex_display(value):
     output = re.sub(r'([+−])(?:[+−-])(?=[\d.])', r'\1', output)
     # 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace('{,}', ',')
+    # 带千位分隔的重复（55,00855,008）前面紧贴数字，不能用先行断言挡；
+    # 纯整数的重复仍要求左右都不是数字或逗号。
+    output = re.sub(r'(\d{1,3}(?:,\d{3})+)\1(?![\d,])', r'\1', output)
     if not re.fullmatch(r'(?:19|20)\d{2}', output.strip()):
-        output = re.sub(r'(?<![\d,])(\d{1,3}(?:,\d{3})+|\d{2,})\1(?![\d,])', r'\1', output)
+        output = re.sub(r'(?<![\d,])(\d{2,})\1(?![\d,])', r'\1', output)
     # 纯数字被原样写了两遍（3232 → 32、100100 → 100）。一位数重复是正常数值
     # （55、99），四位年份（2020）也不能动。
     whole = output.strip()
