@@ -199,6 +199,12 @@ function projectReaderCellTexDisplay(value) {
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     // 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = output.replace(/([+−])(?:[+−-])(?=[\d.])/g, '$1');
+    // 纯数字被原样写了两遍（3232 → 32、100100 → 100）；一位数重复与年份不动。
+    const whole = output.trim();
+    if (whole.length >= 4 && !/^(?:19|20)\d{2}$/.test(whole)) {
+        const doubled = /^(\d{2,})\1$/.exec(whole);
+        if (doubled) return doubled[1];
+    }
     if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。

@@ -7567,6 +7567,13 @@ def _project_reader_cell_tex_display(value):
         output = _project_reader_anon_macro(output)
     # 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = re.sub(r'([+−])(?:[+−-])(?=[\d.])', r'\1', output)
+    # 纯数字被原样写了两遍（3232 → 32、100100 → 100）。一位数重复是正常数值
+    # （55、99），四位年份（2020）也不能动。
+    whole = output.strip()
+    if len(whole) >= 4 and not re.fullmatch(r'(?:19|20)\d{2}', whole):
+        doubled = re.fullmatch(r'(\d{2,})\1', whole)
+        if doubled:
+            return doubled.group(1)
     if '\\' not in output and not re.search(r'[_^]\{', output):
         return output
     output = re.sub(r'\\[,;:]', '', output)
@@ -9529,7 +9536,11 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                             if index in pdf_values or not paper.get('freshRewriteProvenance')
                             else (index, rendered_row, rendered_column) in html_blank_span_keys)) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
-                    raise PublishDataValidationError(f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。')
+                    raise PublishDataValidationError(
+                        f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。'
+                        f'（渲染={canonical_comparison_text!r} 显示={display_source_text!r}'
+                        f' 来源={cell.get("sourceText")!r}）'
+                    )
                 seen.add(key)
             if len(seen) != expected_cells:
                 raise PublishDataValidationError(f'第 {index} 个表格仍有单元格缺少来源记录。')
