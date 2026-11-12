@@ -27,7 +27,7 @@ const {
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
-const { resetReaderForSelectedReanalysis, updateReanalysisStats } = require('./lib/reanalysis-helpers.js');
+const { papersFromAnalysisData, resetReaderForSelectedReanalysis, updateReanalysisStats } = require('./lib/reanalysis-helpers.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const readerRepair = require('./lib/reader-repair.js');
@@ -58,7 +58,7 @@ async function reanalyzeSelected(ids, options = {}) {
 
     const data = readJsonFileStrict(RESULT_FILE);
 
-    const papers = data.papers || [];
+    const papers = papersFromAnalysisData(data);
     const idSet = new Set(ids.map(id => normalizedId(id)).filter(Boolean));
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
         papers, label: 'selected reanalyze recovery'
@@ -72,15 +72,28 @@ async function reanalyzeSelected(ids, options = {}) {
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean')
         throw new Error('refreshReaderDiagnostics 必须为布尔值');
     if (options.coreSummaryDiagnosticIds !== undefined) {
-        if (!options.coreSummaryDiagnosticIds || typeof options.coreSummaryDiagnosticIds !== 'object' || Array.isArray(options.coreSummaryDiagnosticIds)
-            || Object.entries(options.coreSummaryDiagnosticIds).some(([id, value]) => !idSet.has(id) || normalizedId(id) !== id || !/^[a-f0-9-]{36}$/.test(String(value))))
-            throw new Error('付费摘要复用必须明确指定本次选定论文及原请求 ID');
+        const invalidDiagnostics = !options.coreSummaryDiagnosticIds || typeof options.coreSummaryDiagnosticIds !== 'object'
+            || Array.isArray(options.coreSummaryDiagnosticIds)
+            ? [['(整体)', String(options.coreSummaryDiagnosticIds)]]
+            : Object.entries(options.coreSummaryDiagnosticIds).filter(([id, value]) => (
+                !idSet.has(id) || normalizedId(id) !== id || !/^[a-f0-9-]{36}$/.test(String(value))));
+        if (invalidDiagnostics.length) {
+            throw new Error('付费摘要复用必须明确指定本次选定论文及原请求 ID：'
+                + invalidDiagnostics.map(([id, value]) => `${id}=${String(value)}`).join(', ')
+                + `；本次选定 ${[...idSet].join(', ')}`);
+        }
         if (options.fullStageReanalysis && Object.keys(options.coreSummaryDiagnosticIds).some(id => {
             const paper = papers.find(item => normalizedId(item) === id);
             return !paper?.fullStageReanalysis || paper.fullStageReanalysis.runId !== options.fullStageReanalysis.runId
                 || paper.fullStageReanalysis.sourceRunId !== options.fullStageReanalysis.sourceRunId
                 || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete';
-        })) throw new Error('付费摘要仅可继续同轮已完成主分析，不能强制全新生成');
+        })) throw new Error('付费摘要仅可继续同轮已完成主分析，不能强制全新生成：'
+            + Object.keys(options.coreSummaryDiagnosticIds).filter(id => {
+                const paper = papers.find(item => normalizedId(item) === id);
+                return !paper?.fullStageReanalysis || paper.fullStageReanalysis.runId !== options.fullStageReanalysis.runId
+                    || paper.fullStageReanalysis.sourceRunId !== options.fullStageReanalysis.sourceRunId
+                    || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete';
+            }).join(', '));
     }
     const fullStages = require('./lib/selected-full-stage-reanalysis');
     let fullStageOptions = options.fullStageReanalysis;
@@ -90,6 +103,7 @@ async function reanalyzeSelected(ids, options = {}) {
     }
     const factReview = require('./lib/daily-fact-review');
     const feedbacks = new Map();
+    const feedbackSources = new Map();
     const boundFeedbacks = new Map();
     const coreFeedbacks = new Map();
     if (options.coreFeedbackFiles !== undefined && !Array.isArray(options.coreFeedbackFiles))
@@ -103,18 +117,21 @@ async function reanalyzeSelected(ids, options = {}) {
     for (const file of options.coreFeedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
         if (!require('./lib/saved-fact-feedback').coreOnlyFeedback(feedback))
-            throw new Error('独立核心反馈不能授权主文、Reader、评分或标签修改');
-        if (!idSet.has(feedback.paperId) || coreFeedbacks.has(feedback.paperId)) throw new Error('核心反馈须属于唯一选定论文');
+            throw new Error(`独立核心反馈不能授权主文、Reader、评分或标签修改：${file}（论文 ${feedback.paperId}）`);
+        if (!idSet.has(feedback.paperId) || coreFeedbacks.has(feedback.paperId))
+            throw new Error(`核心反馈须属于唯一选定论文：${file}（论文 ${feedback.paperId}；本次选定 ${[...idSet].join(', ')}）`);
         const paper = papers.find(item => normalizedId(item) === feedback.paperId);
         if (!paper || (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
-            && !options.coreInputRecovery?.[feedback.paperId])) throw new Error('核心反馈须保留已完成主分析');
+            && !options.coreInputRecovery?.[feedback.paperId]))
+            throw new Error(`核心反馈须保留已完成主分析：${file}（论文 ${feedback.paperId}）`);
         if (fullStageOptions && paper.fullStageReanalysis?.runId !== fullStageOptions.runId)
-            throw new Error('独立核心纠错不能发起全新主分析');
+            throw new Error(`独立核心纠错不能发起全新主分析：${file}（论文 ${feedback.paperId}）`);
         factReview.validateFeedback(feedback, dailySourcePlan, paper);
         coreFeedbacks.set(feedback.paperId, { file, sha256: fileSha(file) });
     }
     if (coreFeedbacks.size && [...idSet].some(id => !coreFeedbacks.has(id)))
-        throw new Error('独立核心纠错须覆盖本次所有选定论文，不能混入普通主文重分析');
+        throw new Error('独立核心纠错须覆盖本次所有选定论文，不能混入普通主文重分析：缺少 '
+            + [...idSet].filter(id => !coreFeedbacks.has(id)).join(', '));
     const paidCoreLiterals = new Map(), paidCoreLiteralHandles = new Map();
     if (options.paidCoreLiteralCorrectionFiles !== undefined && !Array.isArray(options.paidCoreLiteralCorrectionFiles))
         throw new Error('已付核心术语修正须提供显式记录路径数组');
@@ -123,44 +140,49 @@ async function reanalyzeSelected(ids, options = {}) {
         const record = checked.record.value;
         if (!coreFeedbacks.has(record.paperId) || paidCoreLiterals.has(record.paperId)
             || options.coreSummaryDiagnosticIds?.[record.paperId] !== record.diagnosticId)
-            throw new Error('已付核心术语修正须同时绑定唯一选定核心反馈与原付费ID');
+            throw new Error(`已付核心术语修正须同时绑定唯一选定核心反馈与原付费ID：${file}（论文 ${record.paperId}）`);
         paidCoreLiterals.set(record.paperId, { file, sha256: fileSha(file) });
     }
     const readCoreLocked = paper => {
         const entry = coreFeedbacks.get(normalizedId(paper));
         if (!entry) return null;
-        if (fileSha(entry.file) !== entry.sha256) throw new Error('核心反馈文件在运行中变化');
+        if (fileSha(entry.file) !== entry.sha256) throw new Error(`核心反馈文件在运行中变化：${entry.file}`);
         return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
     };
-    if (options.resolvedReaderCandidates !== undefined && (!options.resolvedReaderCandidates || typeof options.resolvedReaderCandidates !== 'object' || Array.isArray(options.resolvedReaderCandidates) || Object.keys(options.resolvedReaderCandidates).some(id=>!idSet.has(id)))) throw new Error('resolvedReaderCandidates 必须只包含明确选定论文');
+    if (options.resolvedReaderCandidates !== undefined && (!options.resolvedReaderCandidates || typeof options.resolvedReaderCandidates !== 'object' || Array.isArray(options.resolvedReaderCandidates) || Object.keys(options.resolvedReaderCandidates).some(id=>!idSet.has(id)))) throw new Error('resolvedReaderCandidates 必须只包含明确选定论文：'
+        + (options.resolvedReaderCandidates && typeof options.resolvedReaderCandidates === 'object'
+            ? Object.keys(options.resolvedReaderCandidates).filter(id => !idSet.has(id)).join(', ') : '(非对象)'));
     const savedFacts = require('./lib/saved-fact-feedback');
     const assertOrdinaryReaderUpstream = paper => {
         if (!savedFacts.completedReaderUpstream(paper, dailySourcePlan))
-            throw new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
+            throw new Error(`独立Reader纠错缺少已完成的主文、摘要或评分：论文 ${normalizedId(paper) || '(缺少 ID)'}`);
     };
     const readerFeedbacks = new Map();
     if (options.readerFeedbackFiles !== undefined && !Array.isArray(options.readerFeedbackFiles))
         throw new Error('readerFeedbackFiles 必须为反馈路径数组');
     for (const file of options.readerFeedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
-        if (!idSet.has(feedback.paperId) || readerFeedbacks.has(feedback.paperId)) throw new Error('Reader反馈须属于唯一选定论文');
+        if (!idSet.has(feedback.paperId) || readerFeedbacks.has(feedback.paperId))
+            throw new Error(`Reader反馈须属于唯一选定论文：${file}（论文 ${feedback.paperId}；本次选定 ${[...idSet].join(', ')}）`);
         const paper = papers.find(item => normalizedId(item) === feedback.paperId);
         if (!paper || (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
-            && !options.readerInputSnapshotRecovery?.[feedback.paperId])) throw new Error('Reader反馈须保留已完成主分析');
+            && !options.readerInputSnapshotRecovery?.[feedback.paperId]))
+            throw new Error(`Reader反馈须保留已完成主分析：${file}（论文 ${feedback.paperId}）`);
         if (fullStageOptions && paper.fullStageReanalysis?.runId !== fullStageOptions.runId)
-            throw new Error('独立Reader纠错不能发起全新主分析');
+            throw new Error(`独立Reader纠错不能发起全新主分析：${file}（论文 ${feedback.paperId}）`);
         if (!savedFacts.readerOnlyFeedback(feedback))
-            throw new Error('独立Reader纠错只接受Reader反馈');
+            throw new Error(`独立Reader纠错只接受Reader反馈：${file}（论文 ${feedback.paperId}）`);
         if (!fullStageOptions) assertOrdinaryReaderUpstream(paper);
         factReview.validateFeedback(feedback, dailySourcePlan, paper);
         readerFeedbacks.set(feedback.paperId, { file, sha256: fileSha(file) });
     }
     if (readerFeedbacks.size && [...idSet].some(id => !readerFeedbacks.has(id)))
-        throw new Error('独立Reader纠错须覆盖本次所有选定论文，不能混入普通主文重分析');
+        throw new Error('独立Reader纠错须覆盖本次所有选定论文，不能混入普通主文重分析：缺少 '
+            + [...idSet].filter(id => !readerFeedbacks.has(id)).join(', '));
     const readReaderLocked = paper => {
         const entry = readerFeedbacks.get(normalizedId(paper));
         if (!entry) return null;
-        if (fileSha(entry.file) !== entry.sha256) throw new Error('Reader反馈文件在运行中变化');
+        if (fileSha(entry.file) !== entry.sha256) throw new Error(`Reader反馈文件在运行中变化：${entry.file}`);
         return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
     };
     if (options.readerInputSnapshotRecovery !== undefined) {
@@ -173,18 +195,24 @@ async function reanalyzeSelected(ids, options = {}) {
                 || (Object.hasOwn(value, 'recoveryHistorySha256') && !/^[a-f0-9]{64}$/.test(value.recoveryHistorySha256 || ''))
                 || !/^[a-f0-9]{64}$/.test(value.paperSha256 || '')
                 || !/^[a-f0-9]{64}$/.test(value.snapshotSha256 || ''))) {
-            throw new Error('Reader原输入恢复须指定原全阶段运行、独立反馈及准确的当前记录与快照SHA');
+            throw new Error('Reader原输入恢复须指定原全阶段运行、独立反馈及准确的当前记录与快照SHA：'
+                + (recovery && typeof recovery === 'object' && !Array.isArray(recovery)
+                    ? Object.keys(recovery).join(', ') : '(非对象)'));
         }
     }
-    if (coreFeedbacks.size && readerFeedbacks.size) throw new Error('独立核心和Reader纠错不能混用');
+    if (coreFeedbacks.size && readerFeedbacks.size) throw new Error('独立核心和Reader纠错不能混用：核心 '
+        + [...coreFeedbacks.keys()].join(', ') + '；Reader ' + [...readerFeedbacks.keys()].join(', '));
     for (const file of options.feedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
-        if (feedbacks.has(feedback.paperId)) throw new Error('同篇反馈重复');
+        if (feedbacks.has(feedback.paperId))
+            throw new Error(`同篇反馈重复：论文 ${feedback.paperId}（${feedbackSources.get(feedback.paperId) || '前一个反馈'}；${file}）`);
         feedbacks.set(feedback.paperId, feedback);
+        feedbackSources.set(feedback.paperId, file);
     }
     for (const [id, feedback] of feedbacks) {
         const paper = papers.find(item => normalizedId(item) === id);
-        if (!paper || !idSet.has(id)) throw new Error('反馈不属于本次明确选定论文');
+        if (!paper || !idSet.has(id))
+            throw new Error(`反馈不属于本次明确选定论文：论文 ${id}（${feedbackSources.get(id) || '反馈文件'}）`);
         const original = fullStageOptions && paper.fullStageReanalysis?.runId === fullStageOptions.runId
             ? paper.fullStageReanalysisHistory.find(item => item.runId === fullStageOptions.runId)?.originalPaper : paper;
         boundFeedbacks.set(id, factReview.validateFeedback(feedback, dailySourcePlan, original));
@@ -193,7 +221,8 @@ async function reanalyzeSelected(ids, options = {}) {
         const originalFeedbacks = {};
         for (const file of options.originalFeedbackFiles || []) {
             const feedback = factReview.readFeedback(file);
-            if (!idSet.has(feedback.paperId)) throw new Error('原反馈不属于选定论文');
+            if (!idSet.has(feedback.paperId))
+                throw new Error(`原反馈不属于选定论文：${file}（论文 ${feedback.paperId}；本次选定 ${[...idSet].join(', ')}）`);
             (originalFeedbacks[feedback.paperId] ||= []).push({ path: file,
                 fileSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
                 feedback });
@@ -209,9 +238,13 @@ async function reanalyzeSelected(ids, options = {}) {
         const names = fullStageOptions ? [] : fs.readdirSync(dailySourcePlan.readerAttemptsDir)
             .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
         for (const name of names) {
-            const envelope = JSON.parse(fs.readFileSync(
-                path.join(dailySourcePlan.readerAttemptsDir, name), 'utf8'
-            ));
+            const candidatePath = path.join(dailySourcePlan.readerAttemptsDir, name);
+            let envelope;
+            try {
+                envelope = JSON.parse(fs.readFileSync(candidatePath, 'utf8'));
+            } catch (error) {
+                throw new Error(`Reader 失败候选无法读取：${candidatePath}：${error.message}`, { cause: error });
+            }
             if (idSet.has(normalizedId(envelope.identity?.paperId))
                 && !options.coreSummaryDiagnosticIds?.[normalizedId(envelope.identity?.paperId)]
                 && !coreFeedbacks.has(normalizedId(envelope.identity?.paperId))
@@ -447,7 +480,7 @@ async function reanalyzeSelected(ids, options = {}) {
     }
 
     const updatedAt = getBeijingISOString();
-    const effectiveStats = { ...stats, failed: stats.failed + missingIds.length };
+    const effectiveStats = { ...stats, failed: (stats.failed || 0) + missingIds.length };
     data.papers = Array.from(mergedMap.values());
     const recoveredCount = updateReanalysisStats(
         data,

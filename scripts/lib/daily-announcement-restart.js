@@ -14,13 +14,13 @@ function validateAnnouncementRestartCutoff(cutoff, previousUntil) {
     const instant = Date.parse(cutoff), previous = Date.parse(previousUntil);
     if (typeof cutoff !== 'string' || !Number.isFinite(instant) || new Date(instant).toISOString() !== cutoff
             || !Number.isFinite(previous) || instant >= previous) {
-        throw new Error('公告截止时间必须是早于原抓取截止的标准 UTC 时间');
+        throw new Error(`公告截止时间必须是早于原抓取截止的标准 UTC 时间（收到 cutoff=${JSON.stringify(cutoff)}，原截止=${JSON.stringify(previousUntil)}）`);
     }
     const parts = value => Object.fromEntries(eastern.formatToParts(value).map(part => [part.type, part.value]));
     const start = parts(instant), old = parts(previous);
     if (instant % 1000 !== 0 || start.hour !== '00' || start.minute !== '00' || start.second !== '00'
             || ['year', 'month', 'day'].some(key => start[key] !== old[key])) {
-        throw new Error('公告截止时间必须是原抓取截止所在纽约日期的当地午夜');
+        throw new Error(`公告截止时间必须是原抓取截止所在纽约日期的当地午夜（收到 cutoff=${cutoff}，原截止=${previousUntil}）`);
     }
 }
 
@@ -28,7 +28,7 @@ function assertNoDownstreamArtifacts(files) {
     for (const filename of files) {
         if (!filename) continue;
         if (fs.lstatSync(filename, { throwIfNoEntry: false })) {
-            throw new Error('当日已存在筛选或分析数据，禁止为公告时间另开抓取范围');
+            throw new Error(`当日已存在筛选或分析数据，禁止为公告时间另开抓取范围：${filename}`);
         }
     }
 }
@@ -42,7 +42,14 @@ async function prepareAnnouncementRestart({
             || boundary.since !== previous.since
             || JSON.stringify(boundary.continuity) !== JSON.stringify(previous.continuity)
             || JSON.stringify(boundary.provenance) !== JSON.stringify(previous.provenance)) {
-        throw new Error('公告恢复不能改变原发布基线、重叠起点或连续性证明');
+        const changed = [
+            boundary.until !== cutoff ? 'until' : '',
+            boundary.lastDigestDate !== previous.lastDigestDate ? 'lastDigestDate' : '',
+            boundary.since !== previous.since ? 'since' : '',
+            JSON.stringify(boundary.continuity) !== JSON.stringify(previous.continuity) ? 'continuity' : '',
+            JSON.stringify(boundary.provenance) !== JSON.stringify(previous.provenance) ? 'provenance' : ''
+        ].filter(Boolean);
+        throw new Error(`公告恢复不能改变原发布基线、重叠起点或连续性证明（变化字段：${changed.join(', ')}）`);
     }
     assertNoDownstreamArtifacts(downstreamPaths);
     const checkpoint = readRegular(checkpointPath);
@@ -60,8 +67,9 @@ async function prepareAnnouncementRestart({
         const evidenceDir = path.join(directory, 'rss', category.id);
         assertSafeDirectory(evidenceDir, true);
         const evidence = await announcement.fetchDailyAnnouncement(category.id, boundary, { evidenceDir, requestScheduler });
-        if (announcement.replayDailyAnnouncement(evidence, boundary, category.id).pubDate !== cutoff) {
-            throw new Error(`官方公告 ${category.id} 的实际发布时间不等于指定截止时间`);
+        const actual = announcement.replayDailyAnnouncement(evidence, boundary, category.id).pubDate;
+        if (actual !== cutoff) {
+            throw new Error(`官方公告 ${category.id} 的实际发布时间不等于指定截止时间（实际 ${actual}，期望 ${cutoff}）`);
         }
         announcements.set(category.id, evidence);
     }

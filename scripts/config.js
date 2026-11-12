@@ -124,13 +124,12 @@ const ANALYSIS_CONFIG = {
     // 单节核心摘要保留严格长度约束，为模型推理留足独立输出容量。
     coreSummaryRepairMaxTokens: 40000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
-    // Reader 长文 + xhigh 推理共用同一预算，按主分析同档给到 64000。
-    apiReaderMaxTokens: 64000,
+    apiReaderMaxTokens: 48000,
     apiReaderThinkingMode: 'disabled',
     repairThinkingMode: 'disabled',
     primaryThinkingMode: 'disabled',
     auxiliaryThinkingMode: 'disabled',
-    apiReaderRepairMaxTokens: 16000,
+    apiReaderRepairMaxTokens: 8000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,

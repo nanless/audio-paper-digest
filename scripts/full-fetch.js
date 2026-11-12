@@ -1318,7 +1318,9 @@ function loadAnalyzedIdsFromArchive() {
                 }
             }
         } catch (e) {
-            // 忽略损坏的归档文件
+            // 忽略损坏的归档文件，但不能静默：坏归档会影响历史去重集合的判断，
+            // 至少留下可定位的路径，方便下一次维护时复核。
+            console.warn(`  [归档] 跳过无法读取的历史分析结果：${archiveFile}（${e.message}）`);
         }
     }
     return analyzedIds;
@@ -1328,7 +1330,7 @@ function refreshCommittedPublishedPaperIds(blogRepo) {
     try {
         require('node:child_process').execFileSync('git', ['-C', blogRepo, 'fetch', 'origin', 'main'], { stdio: 'pipe' });
     } catch (cause) {
-        throw new Error('无法更新博客远端 main，未开始归档或抓取；请检查仓库与 Git 连接', { cause });
+        throw new Error(`无法更新博客远端 main，未开始归档或抓取：${blogRepo}；请检查仓库与 Git 连接（${cause.message}）`, { cause });
     }
     return readCommittedPublishedPaperIds(blogRepo);
 }
@@ -1338,7 +1340,11 @@ function validateRefilterOptions(options = {}) {
     if (!Array.isArray(options.refilterIds) || !options.refilterIds.length
         || options.refilterIds.some(id => typeof id !== 'string' || !/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(id))
         || typeof options.refilterReason !== 'string' || !options.refilterReason.trim()) {
-        throw new Error('指定论文复筛须提供有效的 arXiv ID 数组和非空复核原因');
+        const invalidIds = Array.isArray(options.refilterIds)
+            ? options.refilterIds.filter(id => typeof id !== 'string' || !/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(id))
+            : [];
+        throw new Error('指定论文复筛须提供有效的 arXiv ID 数组和非空复核原因'
+            + (invalidIds.length ? `（无效 ID：${invalidIds.map(String).join(', ')}）` : ''));
     }
     const ids = options.refilterIds.map(normalizedId);
     if (new Set(ids).size !== ids.length) throw new Error('指定论文复筛的 arXiv ID 不得重复');
@@ -1372,7 +1378,7 @@ function parseFullFetchArgs(argv = []) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number(date.slice(0, 4)) < 1
             || Number.isNaN(Date.parse(`${date}T00:00:00Z`))
             || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
-            throw new Error('抓取日期必须是有效的 YYYY-MM-DD 公历日期');
+            throw new Error(`抓取日期必须是有效的 YYYY-MM-DD 公历日期（收到 ${JSON.stringify(options.date)}）`);
         }
     }
     if (options.fetchWitnessRecoveryManifest !== undefined) {

@@ -35,16 +35,20 @@ loadEnvFile();
 
 function parseDeepCliArgs(argv = process.argv.slice(2)) {
     if (!Array.isArray(argv)) throw new TypeError('命令行参数 argv 必须是数组。');
+    const usage = '用法: npm run deep -- --date YYYY-MM-DD [--id ARXIV_ID --core-feedback-file FILE]';
     const options = { date: getBeijingDateString(), id: null, coreFeedbackFile: null };
     const seen = new Set();
     for (let i = 0; i < argv.length; i += 2) {
         const flag = argv[i], value = argv[i + 1];
-        if (!['--date', '--id', '--core-feedback-file'].includes(flag)
-            || seen.has(flag) || !value || value.startsWith('--')) throw new Error('用法: npm run deep -- --date YYYY-MM-DD [--id ARXIV_ID --core-feedback-file FILE]');
+        if (!['--date', '--id', '--core-feedback-file'].includes(flag)) {
+            throw new Error(`无法识别参数 ${flag || '(空)'}。${usage}`);
+        }
+        if (seen.has(flag)) throw new Error(`参数 ${flag} 不能重复使用。${usage}`);
+        if (!value || value.startsWith('--')) throw new Error(`参数 ${flag} 缺少对应的值。${usage}`);
         seen.add(flag);
         if (flag === '--date') options.date = value;
         if (flag === '--id') {
-            if (!/^\d{4}\.\d{4,5}$/.test(value)) throw new Error('--id 须为规范arXiv ID');
+            if (!/^\d{4}\.\d{4,5}$/.test(value)) throw new Error(`--id 须为规范 arXiv ID（收到 ${value}）。${usage}`);
             options.id = value;
         }
         if (flag === '--core-feedback-file') options.coreFeedbackFile = value;
@@ -52,8 +56,12 @@ function parseDeepCliArgs(argv = process.argv.slice(2)) {
     const parsedDate = new Date(`${options.date}T00:00:00Z`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)
         || Number.isNaN(parsedDate.getTime())
-        || parsedDate.toISOString().slice(0, 10) !== options.date) throw new Error('--date 不是有效日期');
-    if (options.coreFeedbackFile && (!options.id || !seen.has('--date'))) throw new Error('事实反馈必须明确提供--id和--date');
+        || parsedDate.toISOString().slice(0, 10) !== options.date) {
+        throw new Error(`--date 不是有效日期（收到 ${options.date || '(空)'}）。${usage}`);
+    }
+    if (options.coreFeedbackFile && (!options.id || !seen.has('--date'))) {
+        throw new Error(`事实反馈必须同时明确提供 --id 和 --date。${usage}`);
+    }
     return options;
 }
 function parseTargetDate(argv = process.argv.slice(2)) { return parseDeepCliArgs(argv).date; }
@@ -80,7 +88,11 @@ function validateDeepAnalysisInput(existingData, filteredData, today) {
     const missing = [...expectedIds].filter(id => !actualIds.has(id));
     const unexpected = [...actualIds].filter(id => !expectedIds.has(id));
     if (missing.length > 0 || unexpected.length > 0) {
-        throw new Error(`分析结果与目标日期的筛选集合不一致：缺少 ${missing.length} 篇，多出 ${unexpected.length} 篇。`);
+        const sample = values => values.slice(0, 3).join(', ')
+            + (values.length > 3 ? ` 等 ${values.length} 篇` : '');
+        throw new Error('分析结果与目标日期的筛选集合不一致：'
+            + `缺少 ${missing.length} 篇${missing.length ? `（${sample(missing)}）` : ''}，`
+            + `多出 ${unexpected.length} 篇${unexpected.length ? `（${sample(unexpected)}）` : ''}。`);
     }
     return existingData;
 }

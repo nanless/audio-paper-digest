@@ -2127,6 +2127,7 @@ function loadPrompt(mdPath, vars = {}, { originalFileSha256 = null } = {}) {
 
 module.exports = {
     normalizeReasoningEffort,
+    REASONING_EFFORTS,
     writeFileAtomic,
     readJsonSafe,
     ensureDir,

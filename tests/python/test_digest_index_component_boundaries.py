@@ -85,7 +85,9 @@ class DigestIndexComponentBoundaryTests(unittest.TestCase):
         source = '![原文图 1](https://example.org/fig2.png)\n![same](a.png)\n![same](b.png)\n![](c.png)'
         actual = dedupe_image_alts(source)
         self.assertIn('![原文图 1](https://example.org/fig2.png)', actual)
-        self.assertIn('![same - 图 2](b.png)', actual)
+        # 重复 alt 的序号必须写成“同说明配图”，不能写成“图 2”：审查员会把
+        # “图 N”当成论文里的第 N 张印刷图，从而误判配图错误。
+        self.assertIn('![same（页面第 2 张同说明配图）](b.png)', actual)
         self.assertIn('![论文图 4](c.png)', actual)
         self.assertEqual(source.splitlines()[0], actual.splitlines()[0])
 

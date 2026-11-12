@@ -227,7 +227,9 @@ function assertDeepExecutionConfigIdentity(value) {
         }
     }
     exactKeys(value.audit.responses, ['reasoningEffort', 'stream'], 'deep execution Responses config');
-    if (![null, 'low', 'medium', 'high'].includes(value.audit.responses.reasoningEffort)
+    // 推理强度白名单与请求构造共用同一份常量，避免审计接受而请求拒绝。
+    const reasoningEfforts = require('../utils.js').REASONING_EFFORTS;
+    if (![null, ...reasoningEfforts].includes(value.audit.responses.reasoningEffort)
         || typeof value.audit.responses.stream !== 'boolean') {
         throw new Error('deep execution Responses config is invalid');
     }

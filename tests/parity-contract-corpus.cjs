@@ -80,6 +80,14 @@ tableCase('table-identifier', '评测对象', '评测对象');
 tableCase('table-identifier', '量化水平', '量化水平');
 tableCase('table-identifier', '操作', '操作');
 tableCase('table-identifier', '识别词加指标-操作耗时', '操作耗时 ↓');
+// 2026-11-13 逐词对拍发现：语系/语族在 Node 的主识别词表里（e6c334b1 与
+// TABLE_STRONG_IDENTITY_HEADER_RE 一起加进去），Python 只加进了强身份词表，
+// 于是语言族做行身份的表格 Node 通过、Python 报缺少识别列。语义上是行身份，
+// 应补 Python 主词表；在补齐前登记为已知分歧。
+for (const header of ['语系', '语族', '语系 ↓', '语族 平均 ↑']) {
+    tableCase('table-identifier', header, header);
+}
+
 // 2026-11-11 把 Python TABLE_DIRECTIONAL_METRIC_RE 补齐到 Node 同表后补的守护语料：
 // 这些词都必须按“带方向标记的指标列”处理，不能因为前缀像识别词就当成行身份。
 for (const header of ['模型评分 ↓', '评估 L2 ↓', 'NMSE ↓', 'MR-STFT ↓', '裁判分 ↓']) {
@@ -220,6 +228,50 @@ for (const [name, sentence] of Object.entries(negativeCounterparts)) {
     tableCase('negative-evidence', name, '方法', { after: AFTER + sentence, sourceText: NEG_SOURCE });
 }
 
+// ── 规则 5b：2026-11-13 逐条复核 publish_common.py 得到的差集 ─────────────────
+// 三类语料，各自由实测确定是哪一侧慢了一拍：
+//   1) 训练配置词：损失函数/损失项/损失权重/损失率是训练超参，不是退化证据。
+//      Python 已加排除，Node 原先把裸“损失”一律当负面证据，于是出现了
+//      “分析通过、发布拒绝”——Node 放行后 Python 仍报没有保留负面证据。
+//   2) 未能完成：Python 已登记为负面证据，Node 词表漏登记（反向误报）。
+//   3) 例外/反例 + 低于/下降/更差：Node 独有的负面证据写法，Python 尚无对应
+//      分支；这条登记为待 Python 补齐的分歧（见 KNOWN_DIVERGENCES）。
+const negativeLossPhrases = {
+    '损失函数': '训练损失函数采用交叉熵。',
+    '损失项': '训练目标包含三个损失项。',
+    '损失权重': '各损失权重保持一致。',
+    '损失率': '验证损失率为 2.31。',
+    '损失函数-同段正向结论': '训练损失函数使用了标签平滑，主要结果见上表。',
+    '未能完成': '部分模型未能完成训练。'
+};
+for (const [name, sentence] of Object.entries(negativeLossPhrases)) {
+    tableCase('negative-evidence', name, '方法', { after: AFTER + sentence, sourceText: NEG_SOURCE });
+}
+// 裸“损失”仍是退化证据：训练损失上升就是负面结果，不能被 1) 的排除吃掉。
+tableCase('negative-evidence', '损失-裸上升', '方法',
+    { after: AFTER + '训练损失明显上升。', sourceText: NEG_SOURCE });
+const negativeExceptionPhrases = {
+    '例外-低于': '这组设置是唯一例外，指标低于基线。',
+    '反例-下降': '存在反例，指标下降。'
+};
+for (const [name, sentence] of Object.entries(negativeExceptionPhrases)) {
+    tableCase('negative-evidence', name, '方法', { after: AFTER + sentence, sourceText: NEG_SOURCE });
+}
+
+// ── 规则 5c：来源侧负面证据词表 ───────────────────────────────────────────────
+// Node 的来源侧词表登记了“性能回落/回落至/降幅/负面结果”，Python 的同名词表
+// 没有这四个词，于是同一份来源在 Node 判“必须保留负面证据”、在 Python 放行。
+// 方向是 Node 先挡住（不会发出坏页面），但两边判定不一致，登记为待 Python 补齐。
+const sourceNegativeCases = {
+    '来源-性能回落': 'On the harder test set the authors report 性能回落 on the noisy subset.',
+    '来源-回落至': 'The score 回落至 10.2% on the noisy subset, below every baseline.',
+    '来源-降幅': 'A 降幅 of 3.1 points was observed on the noisy subset.',
+    '来源-负面结果': 'The authors report 负面结果 for the low-resource condition.'
+};
+for (const [name, sourceText] of Object.entries(sourceNegativeCases)) {
+    tableCase('negative-evidence', name, '方法', { sourceText });
+}
+
 // ── 规则 6：中文计量单位与精确量词 ────────────────────────────────────────────
 // Node: editorial-quality.js::findQuantitativeChineseNumerals
 // Py  : publish_common.py::validate_manual_reader_quality（精确定量必须使用阿拉伯数字）
@@ -253,7 +305,24 @@ for (const text of numeralTexts) numeralCase(text, text);
 // （231a2a5f）里故意删掉 exact_rank，并有两个回归测试要求放行；Node 侧
 // exact_rank 未同步。要收敛只能放松 Node（本任务不可改），或确认改回阿拉伯
 // 数字并同步修改那两个测试，需另行决定。
+// ── 已收敛的登记项（2026-11-13 复核 → py-publish 补齐 → 转硬断言） ─────────────
+// 上一版这里有 10 条 KNOWN_DIVERGENCES，全部是“Node 侧语义正确、Python 慢一拍”。
+// py-publish 补齐后两侧一致，条目已删除，语料改为硬断言；下面保留当时的补丁点，
+// 供以后再出现单侧改动时定位。
+//   publish_common.py TABLE_IDENTIFIER_HEADER_RE += 语系|语族
+//     → 语料 语系 / 语族 / 语系 ↓ / 语族 平均 ↑（表头变异 1030 条曾出 14 例分歧）
+//   publish_common.py result_has_negative += (?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)
+//     → 语料 例外-低于 / 反例-下降（结果句变异 25 条曾出 3 例分歧）
+//   publish_common.py source_has_negative += 负(?:面)?结果|性能回落|回落至|降幅
+//     → 语料 来源-性能回落 / 来源-回落至 / 来源-降幅 / 来源-负面结果（来源句变异 5 条曾出 4 例分歧）
+// 单侧再改动时，这里会以“未登记的新分歧”失败，提示先确认语义再动实现。
+const IDENTIFIER_MISSING = '实验结果第 1 张表缺少方法、数据集或设置识别列';
+const NEGATIVE_MISSING = '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
+
 const KNOWN_DIVERGENCES = Object.freeze({
+    // 历史登记（2026-11-11 实测），与本轮无关：Python 自 231a2a5f 起故意允许
+    // 自然序数名次，Node 的 exact_rank 未同步；要收敛只能改 Node 或改那两个
+    // Python 回归用例，需另行决定。
     'manual-numeral/排名第三': {
         js: true,
         py: false,

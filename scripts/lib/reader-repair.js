@@ -43,6 +43,30 @@ const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', '
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const compiledReaderFactIssues = new WeakMap();
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
+// 表格单元格的显示形态：与 renderReaderTableSelection / renderReaderCompleteTable
+// 渲染时用的是同一个管线（先 projectReaderCellTexDisplay，再
+// normalizeReaderSourceDisplayArtifacts，见 reader-tables.js 的 readerTableCellDisplay）。
+const readerCellDisplayForm = value => {
+    const display = require('./reader-source-display');
+    return display.normalizeReaderSourceDisplayArtifacts(
+        display.projectReaderCellTexDisplay(String(value ?? '')));
+};
+// 已付稿是按购买时的显示规则渲染的，重新编译却用当前规则；同一张原表因此可能
+// 只差一个值的不同写法（`−-0.37` → `−0.37`、`55{,}008` → `55,008`）。
+// 这个比较只抹平显示写法：行列数、每行列数、分隔行列数与顺序都必须逐项一致，
+// 所以重排、删行、错列仍然拒绝；数值真伪仍由 sourceTableDomSha256（原表 DOM）
+// 和 renderedTableSha256（已付正文逐字 SHA）绑定，不靠这个比较授权。
+// 只用于定位“这张已付表就是这张原表”，不授予来源、完成或付费权限。
+function displayAlignedReaderTable(left, right) {
+    if (!left?.header || !right?.header || !Array.isArray(left.rows) || !Array.isArray(right.rows)
+        || left.header.length !== right.header.length || left.rows.length !== right.rows.length
+        || left.separatorColumns !== right.separatorColumns) return false;
+    const sameRow = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length
+        && a.every((cell, index) => String(cell) === String(b[index])
+            || readerCellDisplayForm(cell) === readerCellDisplayForm(b[index]));
+    return sameRow(left.header, right.header)
+        && left.rows.every((row, index) => sameRow(row, right.rows[index]));
+}
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 // 按 Unicode 码点比较，结果与 Python 的 sorted() 一致。
 // 不能直接用 < 比较：JS 比的是 UTF-16 码元，遇到 emoji 这类非 BMP 字符会排出
@@ -2269,7 +2293,11 @@ function verifiedCompiledReaderTableFactIssues(draft, claims, parsed) {
         || !Array.isArray(parsed.plan?.tableBindings)
         || parsed.plan.tableBindings.length !== rendered.length) return [];
     // Refuse reorder/prune/normalization ambiguities instead of guessing indexes.
-    if (rendered.some((table, index) => table.markdown !== compiledTables[index].markdown)) return [];
+    // 逐字相等快路径保留；只有在显示形态一致（且行列数、分隔行列数相同）时才
+    // 认定是同一张表。已付稿用购买时的显示规则渲染，逐字比较会把“同一原表、
+    // 只是显示写法升级”误判成错位，从而让整篇可修复的稿子变成不可修复。
+    if (rendered.some((table, index) => table.markdown !== compiledTables[index].markdown
+        && !displayAlignedReaderTable(table, compiledTables[index]))) return [];
     const issues = [];
     for (const claim of claims || []) {
         if (typeof claim !== 'string' || claim.length < 12 || claim.length > 3000
@@ -3990,7 +4018,7 @@ function compileConceptTermsPatch(draft, response, context) {
         path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
 }
 
-module.exports = { readTopLevelMembers, READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, conceptTermsRepairPromptBindings, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, verifiedCompiledReaderTableFactIssues, REPAIR_CONTRACT, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { readTopLevelMembers, READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, conceptTermsRepairPromptBindings, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, verifiedCompiledReaderTableFactIssues, displayAlignedReaderTable, REPAIR_CONTRACT, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hasImplementationAllowanceLineage, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

@@ -2108,7 +2108,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || explicitMetricDecline
         || reportedLowerScore
         || reportedBiasRegression
-        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|净下降|(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|非单调(?:性|响应|作答|情况|变化)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
+        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|损失(?!函数|项|权重|率)|更差|比(?!较)[^。；\n]{0,30}差|净下降|(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|非单调(?:性|响应|作答|情况|变化)?|不保证单调(?:改进|提升)|(?:例外|反例)(?![^。；\n]{0,80}(?:耗时|成本|时间|速度|内存|显存))[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     // 2026-11-06 曾以“先完成发布”为由取消这条阻断，但替换进来的回调没有任何调用方，
     // 也没有降级或审查记录，等于静默放行只挑正面结果的写法；发布端的同名规则和本文件的

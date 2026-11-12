@@ -136,8 +136,8 @@ npm run test:compat
 | `lib/daily-scoring-refresh-checkpoint.js` | Node 库：日更评分刷新在Reader前持锁保存新评分，按原四源、完整评分指纹、反馈与父稿冷核后只续Reader；待完成记录阻发布，漂移不重付评分。 |
 | `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复辅助函数冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
-| `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
-| `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
+| `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。与 `deep --date` 的“只补未完成”不同，普通模式下每个选定 ID 都会先清空旧正文与 Reader 阶段，再按当前封存来源重新分析；评分等上游阶段是否复用由检查点与失败轮决定。Reader 序号完成证明先登记为接替历史。显式核心、Reader、候选或全阶段恢复模式按各自原包保留上游，不走普通重置。 |
+| `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。与 `deep --date` 不同，这不是只补未完成集合；仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。清 Reader 阶段前同样先把序号完成证明登记为接替历史。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。未指定并发时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`（默认5），`--concurrency N` 可覆写为1–60；总轮数使用 `batchMaxRounds`（默认3），`--rounds N` 可覆写为1–10。先全批再仅续明确可重试失败，诊断保存到 `analysis-batch-reports`；只读取封存 PDF/TXT，图片只为本次调用在系统临时目录中准备。 |
 | `waive-analysis-failures.js` | CLI：记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
 

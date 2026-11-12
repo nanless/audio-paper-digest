@@ -206,10 +206,17 @@ describe('逐篇审查反馈批量刷新', () => {
             assert.equal(options.reviewFeedbackById['2611.04122'], '核实表格');
             assert.equal(options.reviewFeedbackById['2611.05124'], '核实图片');
             assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '2611.04122']), /恰好覆盖/);
+            assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '2611.04122']),
+                /缺少反馈 2611\.04122|缺少反馈 2611\.05124|多出反馈/);
             assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '--feedback', '另一条', '2611.04122']), /不能混用/);
             assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '--figures-only', '2611.04122']), /完整读者文章/);
             fs.writeFileSync(file, JSON.stringify({ '2611.04122': '  ' }));
             assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '2611.04122']), /非空文字/);
+            fs.writeFileSync(file, '{ not json');
+            assert.throws(() => parseRefreshCliArgs(['--feedback-file', file, '2611.04122']),
+                /读取逐篇反馈失败：/);
+            assert.throws(() => parseRefreshCliArgs(['--date', '2026-09-01', '2611.04122']),
+                /--date 只能与 --all/);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 });

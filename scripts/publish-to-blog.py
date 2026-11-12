@@ -7518,6 +7518,12 @@ def _fold_reader_tex_cell_duplicate(value):
         canonical_plain = _reader_tex_cell_canonical(plain)
         if not canonical_plain:
             continue
+        # 整格只有「一个可见符号 + 同义命令」时也是完整的同义双写
+        # （∅\varnothing、∘\circ）。命令的纯文本必须和可见值逐字相等，
+        # 所以 `2^{2}` 这种真实上标和 `∅\circ` 这种不同值都不会被折叠。
+        if len(canonical_prefix) == 1 and canonical_plain == canonical_prefix \
+                and suffix.startswith('\\'):
+            return prefix
         # 单字符符号前缀 + 副本继续给出余下文字（Δ\DeltaIC → ΔIC）。
         if len(canonical_prefix) == 1 and len(canonical_plain) > 1 \
                 and canonical_plain.startswith(canonical_prefix):
@@ -7560,9 +7566,24 @@ def _project_reader_anon_macro(value):
     """匿名投稿自定义宏 `\\anon[匿名写法]{真名}` 在扁平文本里只剩 `\\anon[匿名写法]真名`。
 
     可见输出是方括号里的匿名写法，紧跟的纯词是投稿版不该出现的真名。
-    只在「紧跟一段字母数字短词」时替换，后面接标点或长句就不动。
+    只在「紧跟一段字母数字短词或一条 URL」时替换，后面接标点或长句就不动。
+    URL 必须整条丢掉：只吃掉 `https` 会把仓库地址原样留在页面上。
     """
+    value = re.sub(
+        r'\\anon\[([^\]]*)\][A-Za-z][A-Za-z0-9+.\-]*://[^\s，。、；：）】]*', r'\1', value)
     return re.sub(r'\\anon\[([^\]]*)\][A-Za-z0-9\-]*(?![A-Za-z0-9])', r'\1', value)
+
+
+def _fold_reader_duplicate_digits(match):
+    """同一个整数写两遍时只留一份；四位年份本身不当作重复。
+
+    `2020-2021`、`trained 2020` 里的年份不是重复写法，不能折成 `20`；
+    整格恰好是年份的情况同样由这里兜住，不需要额外的前置判断。
+    """
+    repeated = match.group(0)
+    if re.fullmatch(r'(?:19|20)\d{2}', repeated):
+        return repeated
+    return match.group(1)
 
 
 def _project_reader_cell_tex_display(value):
@@ -7576,11 +7597,12 @@ def _project_reader_cell_tex_display(value):
     # 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace('{,}', ',')
     output = re.sub(r'(\d{1,3}(?:,\d{3})+)\1(?![\d,])', r'\1', output)
-    whole_cell = output.strip()
-    if len(whole_cell) >= 4 and not re.fullmatch(r'(?:19|20)\d{2}', whole_cell):
-        output = re.sub(r'(?<![\d,])(\d{2,})\1(?![\d,])', r'\1', output)
+    # 同一个整数写两遍：3232 → 32。小数点和千位分隔符两侧不算同一段数字
+    # （0.7070.707 里的 7070 是 0.707 的尾数接下一份的首位，不是重复），
+    # 四位年份 2020 与一位数 55/99 也不能折叠。
+    output = re.sub(r'(?<![\d,.])(\d{2,})\1(?![\d,.])', _fold_reader_duplicate_digits, output)
     if '\\' not in output and not re.search(r'[_^]\{', output) \
-            and not re.search(r'(\d{2,})\1', output.strip()):
+            and not re.search(r'(?<![\d,.])(\d{2,})\1(?![\d,.])', output.strip()):
         return output
     output = re.sub(r'\\[,;:]', '', output)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
@@ -7962,6 +7984,8 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
                     # bare 10^-4. It is the same complete atom as 1×10^-4, not
                     # a licence to borrow another coefficient. Only scan this
                     # line when it has no explicit coefficient atom.
+                    if re.search(r'\d+(?:\.\d+)?\s*(?:×|\\times|\{\\times\})\s*10', line):
+                        continue
                     bare = re.compile(r'(?<![A-Za-z0-9_])10([+−-][0-9]+)(?:\s*(kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%))?(?![A-Za-z0-9_])')
                     for match in bare.finditer(line):
                         bare_key = ('1', exponent_key(match.group(1)), (match.group(2) or '').strip().lower())

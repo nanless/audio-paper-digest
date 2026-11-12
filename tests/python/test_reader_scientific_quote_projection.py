@@ -216,6 +216,27 @@ class ReaderScientificQuoteProjectionTest(unittest.TestCase):
         self.assertEqual([(proof['coefficient'], proof['signedExponent']) for proof in bare['proofs']],
                          [('1', '-4')])
 
+    def test_prose_with_explicit_coefficients_cannot_lend_a_bare_coefficient_one_atom(self):
+        """整句已经写了 1×10−4 时，不能再从同一处 10−4 尾巴上拆出「系数 1」证据。
+
+        裸 10^-4 的兜底只用于 LaTeXML 那种整行只有 10^-4 的行；同一行已经有显式
+        系数原子时继续扫描，等于让散文借出一个 1×10^-4 去覆盖表格里的 1×10−4。
+        这条守卫与 JS 侧 reader-scientific-quote-coverage.js 的注释同义。
+        """
+        prose = ('We use AdamW with learning rates of 1×10−4, 2×10−6, and 5×10−6 '
+                 'for SFT and RL respectively.')
+        for value in ('1×10−4', '2×10−6', '5×10−6'):
+            with self.subTest(value=value):
+                result, _ = self.project(self.table(value), [prose])
+                self.assertTrue(result['failures'])
+                self.assertFalse(result['proofs'])
+        # 负例：整行没有显式系数原子时，裸 10−4 仍按系数 1 归一，不因守卫被误杀。
+        bare, _ = self.project(self.table('1 × 10−4'),
+                               ['The reported overflow happens at 10−4 and at 10−4 again.'])
+        self.assertFalse(bare['failures'])
+        self.assertEqual([(proof['coefficient'], proof['signedExponent']) for proof in bare['proofs']],
+                         [('1', '-4')])
+
 
 if __name__ == '__main__':
     unittest.main()

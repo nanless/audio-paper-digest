@@ -64,15 +64,17 @@ function recordFor(plan, skipped, { limit = resolveSkipLimit() } = {}) {
     const seen = new Set();
     const papers = skipped.map(item => {
         const arxivId = String(item?.arxivId || '').trim().replace(/v\d+$/i, '');
-        if (!/^\d{4}\.\d{4,5}$/.test(arxivId)) fail('跳过记录的论文标识无效');
+        if (!/^\d{4}\.\d{4,5}$/.test(arxivId)) {
+            fail(`跳过记录的论文标识无效：${JSON.stringify(String(item?.arxivId ?? ''))}`);
+        }
         if (seen.has(arxivId)) fail(`跳过记录中的论文重复：${arxivId}`);
         seen.add(arxivId);
         if (!plan.paperIds.includes(arxivId)) fail(`跳过的论文不在本次来源运行中：${arxivId}`);
         if (item.errorCode !== 'ARXIV_PDF_NOT_FOUND' || item.status !== 404) {
-            fail('只有官方 PDF 全部候选地址返回 404 的论文才能跳过');
+            fail(`${arxivId} 只有官方 PDF 全部候选地址返回 404 才能跳过（收到 code=${item.errorCode ?? '(空)'} status=${item.status ?? '(空)'}）`);
         }
         const message = String(item.message || '').trim();
-        if (!message || message.length > 500) fail('跳过记录需要保留原始错误信息');
+        if (!message || message.length > 500) fail(`${arxivId} 的跳过记录需要保留原始错误信息（1–500 字符）`);
         return {
             arxivId,
             errorCode: 'ARXIV_PDF_NOT_FOUND',
@@ -112,10 +114,14 @@ function validate(record, plan, { limit = resolveSkipLimit() } = {}) {
         if (seen.has(paper.arxivId)) fail(`跳过记录中的论文重复：${paper.arxivId}`);
         seen.add(paper.arxivId);
         if (paper.errorCode !== 'ARXIV_PDF_NOT_FOUND' || paper.status !== 404) {
-            fail('跳过记录只接受官方 PDF 404 证据');
+            fail(`${paper.arxivId} 的跳过记录只接受官方 PDF 404 证据（收到 code=${paper.errorCode ?? '(空)'} status=${paper.status ?? '(空)'}）`);
         }
-        if (typeof paper.message !== 'string' || !paper.message.trim()) fail('跳过记录缺少原始错误信息');
-        if (typeof paper.reason !== 'string' || !paper.reason.trim()) fail('跳过记录缺少跳过理由');
+        if (typeof paper.message !== 'string' || !paper.message.trim()) {
+            fail(`${paper.arxivId} 的跳过记录缺少原始错误信息`);
+        }
+        if (typeof paper.reason !== 'string' || !paper.reason.trim()) {
+            fail(`${paper.arxivId} 的跳过记录缺少跳过理由`);
+        }
     }
     return record;
 }

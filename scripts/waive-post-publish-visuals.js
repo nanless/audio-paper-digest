@@ -18,13 +18,14 @@ function parseArgs(argv) {
         else if (flag === '--reason' && result.reason === undefined) result.reason = value;
         else throw new Error(`未知或重复参数: ${flag}`);
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(result.date || '')) throw new Error('--date 非法');
-    if (String(result.reason || '').trim().length < 10) throw new Error('--reason 至少 10 个字符');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(result.date || '')) {
+        throw new Error(`--date 非法（收到 ${String(result.date || '(空)')}）：需要 YYYY-MM-DD`);
+    }
+    const reason = String(result.reason || '').trim();
+    if (reason.length < 10) {
+        throw new Error(`--reason 至少 10 个字符（当前 ${reason.length} 个字符，收到 ${JSON.stringify(String(result.reason || ''))}）`);
+    }
     return result;
-}
-
-function sha256File(filePath) {
-    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function run(argv = process.argv.slice(2)) {
@@ -36,13 +37,24 @@ function run(argv = process.argv.slice(2)) {
     }
     const receiptPath = path.join(Config.CURRENT_DIR, `blog-review-receipt-${date}.json`);
     const receiptRaw = fs.readFileSync(receiptPath);
-    const receipt = JSON.parse(receiptRaw.toString('utf8'));
-    if (crypto.createHash('sha256').update(receiptRaw).digest('hex') !== publication.reviewReceiptSha256
-        || receipt.publicationCommit !== publication.publicationCommit
-        || receipt.generationManifestSha256 !== publication.generationManifestSha256
-        || receipt.remoteVerifiedOid !== receipt.publicationCommit
-        || !receipt.remoteVerifiedAt) {
-        throw new Error('博客发布 receipt 未保留可核验的远端 OID 绑定');
+    let receipt;
+    try {
+        receipt = JSON.parse(receiptRaw.toString('utf8'));
+    } catch (error) {
+        throw new Error(`博客发布 receipt 无法解析：${receiptPath}：${error.message}`, { cause: error });
+    }
+    const mismatches = [
+        crypto.createHash('sha256').update(receiptRaw).digest('hex') !== publication.reviewReceiptSha256
+            ? 'reviewReceiptSha256' : '',
+        receipt.publicationCommit !== publication.publicationCommit ? 'publicationCommit' : '',
+        receipt.generationManifestSha256 !== publication.generationManifestSha256
+            ? 'generationManifestSha256' : '',
+        receipt.remoteVerifiedOid !== receipt.publicationCommit ? 'remoteVerifiedOid' : '',
+        !receipt.remoteVerifiedAt ? 'remoteVerifiedAt' : ''
+    ].filter(Boolean);
+    if (mismatches.length) {
+        throw new Error(`博客发布 receipt 未保留可核验的远端 OID 绑定（日期 ${date}；不一致字段：`
+            + `${mismatches.join(', ')}；receipt ${receiptPath}）`);
     }
     const payload = {
         ...formats.recordHeader('post-publish-visual-waiver', 'post-publish-visual-waiver'),
@@ -70,4 +82,4 @@ if (require.main === module) {
     try { run(); } catch (error) { console.error(`不生图登记失败: ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = { parseArgs, sha256File, run };
+module.exports = { parseArgs, run };

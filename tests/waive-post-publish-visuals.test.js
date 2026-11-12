@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const Config = require('../scripts/config.js');
-const { run, parseArgs, sha256File } = require('../scripts/waive-post-publish-visuals.js');
+const { run, parseArgs } = require('../scripts/waive-post-publish-visuals.js');
 const { publishedPapersFingerprint } = require('../scripts/lib/published-blog-receipt');
 const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 const { productionV6GenerationFields, productionV6ReceiptFields } =
@@ -21,7 +21,7 @@ const { productionV6GenerationFields, productionV6ReceiptFields } =
 const DATE = '2026-07-13';
 const REASON = '用户确认本批不再补发布后生图，评审记录已留档';
 
-// 独立算一遍，别用被测模块自己的 sha256File 当期望值。
+// 独立算一遍，不使用被测模块的哈希实现。
 function hashFile(filePath) {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
@@ -162,6 +162,8 @@ describe('digest:waive-visuals 写入侧', () => {
             { date: DATE, reason: '1234567890' });
         assert.throws(() => parseArgs(['--date', DATE, '--reason', '123456789']),
             /--reason 至少 10 个字符/);
+        assert.throws(() => parseArgs(['--date', DATE, '--reason', '123456789']),
+            /当前 9 个字符/);
     });
 
     it('参数未知、重复、缺值和日期非法都拒绝', () => {
@@ -173,6 +175,8 @@ describe('digest:waive-visuals 写入侧', () => {
             /--reason 缺少值/);
         assert.throws(() => parseArgs(['--date', '2026-7-13', '--reason', REASON]),
             /--date 非法/);
+        assert.throws(() => parseArgs(['--date', '2026-7-13', '--reason', REASON]),
+            /收到 2026-7-13/);
     });
 
     it('缺少博客发布凭证时连豁免记录都不写', () => {

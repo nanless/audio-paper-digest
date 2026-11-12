@@ -228,6 +228,206 @@
     {
       "input": "3232",
       "expected": "32"
+    },
+    {
+      "input": "\\anon[AnonymousModel]RealName",
+      "expected": "AnonymousModel"
+    },
+    {
+      "input": "\\anon[匿名写法]RealName",
+      "expected": "匿名写法"
+    },
+    {
+      "input": "x\\anon[Anon]Name",
+      "expected": "xAnon"
+    },
+    {
+      "input": "\\anon[Model-1]Real",
+      "expected": "Model-1"
+    },
+    {
+      "input": "\\anon[Model]Name↓",
+      "expected": "Model↓"
+    },
+    {
+      "input": "55",
+      "expected": "55"
+    },
+    {
+      "input": "99",
+      "expected": "99"
+    },
+    {
+      "input": "22",
+      "expected": "22"
+    },
+    {
+      "input": "2020",
+      "expected": "2020"
+    },
+    {
+      "input": "2021",
+      "expected": "2021"
+    },
+    {
+      "input": "6464",
+      "expected": "64"
+    },
+    {
+      "input": "1616",
+      "expected": "16"
+    },
+    {
+      "input": "55{,}00855{,}008",
+      "expected": "55,008"
+    },
+    {
+      "input": "1,0001,000",
+      "expected": "1,000"
+    },
+    {
+      "input": "12{,}34512{,}345",
+      "expected": "12,345"
+    },
+    {
+      "input": "++0.0",
+      "expected": "+0.0"
+    },
+    {
+      "input": "−-19.6",
+      "expected": "−19.6"
+    },
+    {
+      "input": "+-3.2",
+      "expected": "+3.2"
+    },
+    {
+      "input": "10^{-4}",
+      "expected": "10−4"
+    },
+    {
+      "input": "10^{−4}",
+      "expected": "10−4"
+    },
+    {
+      "input": "x_{i}^{2}",
+      "expected": "xi2"
+    },
+    {
+      "input": "d_{z}",
+      "expected": "dz"
+    },
+    {
+      "input": "A∅\\varnothing",
+      "expected": "A∅"
+    },
+    {
+      "input": "AB∘\\circ",
+      "expected": "AB∘"
+    },
+    {
+      "input": "AB•\\bullet",
+      "expected": "AB•"
+    },
+    {
+      "input": "AB⋆\\star",
+      "expected": "AB⋆"
+    },
+    {
+      "input": "AB′\\prime",
+      "expected": "AB′"
+    },
+    {
+      "input": "AB∅\\emptyset",
+      "expected": "AB∅"
+    },
+    {
+      "input": "∅\\varnothing",
+      "expected": "∅"
+    },
+    {
+      "input": "vv-MF∅CFGmSTFT{}_{\\mathrm{mSTFT}}^{\\varnothing\\mathrm{CFG}}",
+      "expected": "vv-MF∅CFGmSTFT"
+    },
+    {
+      "input": "abc{}_{a}^{c}",
+      "expected": "abc"
+    },
+    {
+      "input": "test{}_{t}^{st}",
+      "expected": "test"
+    },
+    {
+      "input": "AB{}_{cd}^{\\mathrm{int}}",
+      "expected": "AB{}_{cd}^{\\mathrm{int}}"
+    },
+    {
+      "input": "0.7070.707",
+      "expected": "0.7070.707"
+    },
+    {
+      "input": "12.1212.12",
+      "expected": "12.1212.12"
+    },
+    {
+      "input": "2020-2021",
+      "expected": "2020-2021"
+    },
+    {
+      "input": "trained 2020",
+      "expected": "trained 2020"
+    },
+    {
+      "input": "1919",
+      "expected": "1919"
+    },
+    {
+      "input": "20192019",
+      "expected": "2019"
+    },
+    {
+      "input": "20202020",
+      "expected": "2020"
+    },
+    {
+      "input": "3232 3232",
+      "expected": "32 32"
+    },
+    {
+      "input": "1{,}5",
+      "expected": "1,5"
+    },
+    {
+      "input": "\\anon[anonymised for review]https://github.com/jasper-zheng/music2latent-scripted",
+      "expected": "anonymised for review"
+    },
+    {
+      "input": "53.753.7 s (of a 9090 s clip)",
+      "expected": "53.753.7 s (of a 90 s clip)"
+    },
+    {
+      "input": "∘\\circ",
+      "expected": "∘"
+    },
+    {
+      "input": "⋆\\star",
+      "expected": "⋆"
+    },
+    {
+      "input": "•\\bullet",
+      "expected": "•"
+    },
+    {
+      "input": "′\\prime",
+      "expected": "′"
+    },
+    {
+      "input": "∅\\emptyset",
+      "expected": "∅"
+    },
+    {
+      "input": "∅\\circ",
+      "expected": "∅\\circ"
     }
   ]
 }

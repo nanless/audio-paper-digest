@@ -54,6 +54,9 @@ function projectScientificQuoteCoverage(table, quotes, numericTokens, options = 
                     // bare 10^-4. It is the same complete atom as 1×10^-4, not
                     // a licence to borrow another coefficient. Only scan this
                     // line when it has no explicit coefficient atom.
+                    // 整行已经写了显式系数原子时，10−4 只是它的尾巴，不能再借出
+                    // 一个系数 1 的原子（b79362c7 注释写了这个前提但没实现）。
+                    if (/\d+(?:\.\d+)?\s*(?:×|\\times|\{\\times\})\s*10/.test(line)) continue;
                     const bare = /(?<![A-Za-z0-9_])10([+−-][0-9]+)(?:\s*(kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%))?(?![A-Za-z0-9_])/g;
                     for (const match of line.matchAll(bare)) {
                         const bareQuantity = JSON.stringify(['1', exponentKey(match[1]),

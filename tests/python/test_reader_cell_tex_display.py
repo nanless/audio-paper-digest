@@ -72,6 +72,114 @@ class ReaderCellTexDisplayTest(unittest.TestCase):
                                 ('1616', '16'), ('100100', '100')):
             self.assertEqual(publish._project_reader_cell_tex_display(value), expected)
 
+    def test_duplicate_numbers_never_cross_a_decimal_point(self):
+        """`0.7070.707` 里的 7070 是两份 0.707 的接缝，不是重复写了两遍的整数。
+
+        真实稿里出现过这个格；按整数折叠会得到 `0.70.707`，比原样保留更糟。
+        小数双写本轮不折叠，与共享语料里的 2.222.22 / 3.093.09 保持一致。
+        """
+        for value in ('0.7070.707', '12.1212.12', '2.222.22', '3.093.09', '5.15.1 %'):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+
+    def test_years_inside_a_cell_are_not_folded_as_duplicates(self):
+        """年份夹在文字或区间里时也不能折成两位数。"""
+        for value in ('2020', '1919', '2020-2021', 'trained 2020', 'WER 2020'):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+        # 同一份年份确实写了两遍时仍然折叠。
+        for value, expected in (('20192019', '2019'), ('20202020', '2020'),
+                                ('3232 3232', '32 32')):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), expected)
+
+    def test_thousands_annotation_is_not_a_duplicate_value(self):
+        self.assertEqual(publish._project_reader_cell_tex_display('55{,}00855{,}008'), '55,008')
+        self.assertEqual(publish._project_reader_cell_tex_display('1{,}0241{,}024'), '1,024')
+        # 负例：{,} 只是千位分隔写法，不能当成重复证据。
+        self.assertEqual(publish._project_reader_cell_tex_display('1{,}5'), '1,5')
+        self.assertEqual(publish._project_reader_cell_tex_display('1,024'), '1,024')
+
+    def test_anonymous_macro_projects_only_the_anonymous_form(self):
+        self.assertEqual(publish._project_reader_cell_tex_display(r'\anon[Anonymous Author]John'),
+                         'Anonymous Author')
+        self.assertEqual(publish._project_reader_cell_tex_display(r'\anon[匿名写法]RealName'),
+                         '匿名写法')
+        # 紧跟真实仓库地址时整条丢掉；只吃掉 https 会把地址留在页面上。
+        projected = publish._project_reader_cell_tex_display(
+            r'\anon[anonymised for review]https://github.com/jasper-zheng/music2latent-scripted')
+        self.assertEqual(projected, 'anonymised for review')
+        self.assertNotIn('github.com', projected)
+        # 负例：不是这个宏的写法原样保留。
+        for value in (r'\another[X]Name', 'anon[Anonymous]Name'):
+            self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+
+    def test_inline_math_delimiters_are_only_wrappers(self):
+        self.assertEqual(publish._project_reader_cell_tex_display(r'\(x^2\)'), 'x^2')
+        self.assertEqual(publish._project_reader_cell_tex_display(r'\(a\)b'), 'ab')
+        # 负例：普通括号与 $...$ 不是这两个定界符。
+        for value in ('(a)', '$x$'):
+            self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+
+    def test_repeated_signs_keep_one_copy_only_before_a_number(self):
+        for value, expected in (('++0.0', '+0.0'), ('−-19.6', '−19.6'), ('+-3.2', '+3.2')):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), expected)
+        for value in ('+ 0.0', '--19.6', '±0.5', 'p<0.05'):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+
+    def test_simple_exponent_projects_to_the_visible_unicode_minus(self):
+        self.assertEqual(publish._project_reader_cell_tex_display('10^{-4}'), '10−4')
+        self.assertEqual(publish._project_reader_cell_tex_display('10^{−4}'), '10−4')
+        # 负例：指数不是整数时没有等价可见写法，保留原样由裸 TeX 检查拒绝。
+        raw = r'10^{-4.5}\mathrm{ms}'
+        self.assertEqual(publish._project_reader_cell_tex_display(raw), raw)
+
+    def test_whole_cell_sub_superscripts_use_the_visible_form(self):
+        self.assertEqual(publish._project_reader_cell_tex_display('d_{z}'), 'dz')
+        self.assertEqual(publish._project_reader_cell_tex_display('x_{i}^{2}'), 'xi2')
+        # 负例：带命令或超长（不是「整格一小段上下标」）时保持不变。
+        for value in (r'\mathrm{d}_{z}', 'd_{z}' + 'x' * 45):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+
+    def test_symbol_table_covers_the_commands_the_reader_knows(self):
+        """JS 侧符号表必须和这里一致，否则分析端会留下 TeX、发布端却折叠。"""
+        for value, expected in ((r'A∅\varnothing', 'A∅'), (r'AB∅\emptyset', 'AB∅'),
+                                (r'AB∘\circ', 'AB∘'), (r'AB⋆\star', 'AB⋆'),
+                                (r'AB•\bullet', 'AB•'), (r'AB′\prime', 'AB′'),
+                                # 整格只有一个可见符号 + 同义命令时同样是完整双写。
+                                (r'∅\varnothing', '∅'), (r'∘\circ', '∘'),
+                                (r'⋆\star', '⋆'), (r'•\bullet', '•'),
+                                (r'′\prime', '′'), (r'∅\emptyset', '∅')):
+            with self.subTest(value=value):
+                self.assertEqual(publish._project_reader_cell_tex_display(value), expected)
+        # 负例：命令值不同（∅ 与 ∘）时不是重复，保留原样由裸 TeX 检查拒绝。
+        self.assertEqual(publish._project_reader_cell_tex_display(r'∅\circ'), r'∅\circ')
+
+    def test_brace_sub_superscript_duplicate_drops_the_annotation(self):
+        self.assertEqual(publish._project_reader_cell_tex_display(r'abc{}_{a}^{c}'), 'abc')
+        self.assertEqual(publish._project_reader_cell_tex_display(r'test{}_{t}^{st}'), 'test')
+        self.assertEqual(
+            publish._project_reader_cell_tex_display(
+                r'vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{\varnothing\mathrm{CFG}}'),
+            'vv-MF∅CFGmSTFT')
+        # 负例：副本里有可见部分没有的字符时不能删。
+        raw = r'AB{}_{cd}^{\mathrm{int}}'
+        self.assertEqual(publish._project_reader_cell_tex_display(raw), raw)
+
+    def test_projection_stays_comparable_with_the_saved_source_cell(self):
+        """投影只改显示：折叠后的可见值必须仍能和保存的原单元格比较相等。"""
+        for source, projected in (('3232', '32'), ('55{,}00855{,}008', '55,008'),
+                                  ('d_{z}', 'dz'), ('10^{-4}', '10−4'), ('x_{i}^{2}', 'xi2'),
+                                  (r'abc{}_{a}^{c}', 'abc'),
+                                  (r'vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{\varnothing\mathrm{CFG}}',
+                                   'vv-MF∅CFGmSTFT')):
+            with self.subTest(source=source):
+                self.assertEqual(publish._reader_cell_comparison(source),
+                                 publish._reader_cell_comparison(projected))
+
 
 if __name__ == '__main__':
     unittest.main()

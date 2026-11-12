@@ -27,6 +27,10 @@ const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./dige
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const readerRepair = require('./lib/reader-repair.js');
+const {
+    parseReanalyzeConcurrency,
+    resetReaderForForcedReanalysis
+} = require('./lib/reanalysis-helpers.js');
 
 loadEnvFile();
 
@@ -50,8 +54,12 @@ const args = process.argv.slice(2);
 let dataFileArg = null;
 let concurrencyArg = null;
 for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--concurrency' && i + 1 < args.length) {
-        concurrencyArg = parseInt(args[i + 1], 10);
+    if (args[i] === '--concurrency') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('--')) {
+            console.error('[reanalyze] 错误: --concurrency 缺少整数值，用法: npm run reanalyze -- [--concurrency N] [数据文件]');
+            process.exit(1);
+        }
+        concurrencyArg = args[i + 1];
         i++;
     } else if (!args[i].startsWith('--')) {
         dataFileArg = args[i];
@@ -61,35 +69,21 @@ for (let i = 0; i < args.length; i++) {
 const DEFAULT_CURRENT_FILE = Config.FILES.deepAnalysisResult;
 const DATA_FILE = dataFileArg || DEFAULT_CURRENT_FILE;
 
-// 并发度：命令行 > 环境变量 > 配置默认值
-const CONCURRENCY = concurrencyArg ?? (parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency);
-if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) {
-    console.error(`[reanalyze] 错误: --concurrency / PD_REANALYZE_CONCURRENCY 必须是正整数，收到: ${CONCURRENCY}`);
-    writeStageSummary({ stage: '分析', status: 'error', message: `并发参数非法: ${CONCURRENCY}` });
-    printErrorGuidance(Object.assign(new Error(`--concurrency / PD_REANALYZE_CONCURRENCY 必须是正整数，收到: ${CONCURRENCY}`),
+// 并发度：命令行 > 环境变量 > 配置默认值。非法值直接停止，不能像旧实现那样
+// 用 parseInt 截断小数，或把无效的 PD_REANALYZE_CONCURRENCY 静默换成默认值。
+let CONCURRENCY;
+try {
+    CONCURRENCY = parseReanalyzeConcurrency({
+        cliValue: concurrencyArg,
+        envValue: process.env.PD_REANALYZE_CONCURRENCY,
+        fallback: Config.ANALYSIS_CONFIG.concurrency
+    });
+} catch (error) {
+    console.error(`[reanalyze] 错误: ${error.message}`);
+    writeStageSummary({ stage: '分析', status: 'error', message: `并发参数非法: ${error.message}` });
+    printErrorGuidance(Object.assign(new Error(error.message),
         { code: 'INVALID_CONCURRENCY' }), { stage: 'reanalyze' });
     process.exit(1);
-}
-
-function resetReaderForForcedReanalysis(paper) {
-    const next = structuredClone(paper);
-    const manifest = next.analysisManifest;
-    if (manifest?.stages) {
-        delete manifest.stages.apiReaderArticle;
-        delete manifest.stages.imageSupplement;
-    }
-    if (manifest?.contracts) {
-        delete manifest.contracts.apiReaderArticle;
-        delete manifest.contracts.imageNarrative;
-        if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
-    }
-    if (next.analysisStageCheckpoints) {
-        delete next.analysisStageCheckpoints.apiReaderArticle;
-        delete next.analysisStageCheckpoints.imageSupplement;
-    }
-    for (const key of ['apiReaderArticle', 'apiReaderPlan', 'apiReaderFigures', 'apiReaderAuthors',
-        'apiReaderResources', 'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete next[key];
-    return next;
 }
 
 async function reanalyzeAll(options = {}) {
@@ -123,9 +117,13 @@ async function reanalyzeAll(options = {}) {
         const names = fs.readdirSync(dailySourcePlan.readerAttemptsDir)
             .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
         for (const name of names) {
-            const envelope = JSON.parse(fs.readFileSync(
-                path.join(dailySourcePlan.readerAttemptsDir, name), 'utf8'
-            ));
+            const candidatePath = path.join(dailySourcePlan.readerAttemptsDir, name);
+            let envelope;
+            try {
+                envelope = JSON.parse(fs.readFileSync(candidatePath, 'utf8'));
+            } catch (error) {
+                throw new Error(`Reader 失败候选无法读取：${candidatePath}：${error.message}`, { cause: error });
+            }
             if (readerRepair.retireFailedCandidate(dailySourcePlan.readerAttemptsDir, envelope.identity)) {
                 retiredReaderCandidates += 1;
             }

@@ -101,7 +101,7 @@ async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks
         await withPaperAnalysisLock(candidate, () => updateJsonFileLocked(resultPath, current => {
             const papers = Array.isArray(current) ? current : current.papers || [];
             const paper = papers.find(item => normalizedId(item) === normalizedId(candidate));
-            if (!paper) throw new Error('完成态规范化时论文已离开当前集合');
+            if (!paper) throw new Error(`完成态规范化时论文 ${normalizedId(candidate) || '(缺少 ID)'} 已离开当前集合`);
             const plan = dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(current, {
                 entryPlan, paper, label: '锁内完成态规范化'
             });
@@ -110,7 +110,7 @@ async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks
             let proofReplayed = false;
             if (paper.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
                 && paper.apiReaderPlan?.tableBindings?.some(binding => binding.pdfCellConfirmation)) {
-                if (!dailyFreshSources.isPaperBoundToPlan(paper, plan)) throw new Error('PDF检查记录重放的论文封存来源不一致');
+                if (!dailyFreshSources.isPaperBoundToPlan(paper, plan)) throw new Error(`PDF检查记录重放的论文 ${normalizedId(paper) || '(缺少 ID)'} 封存来源不一致`);
                 dailyFreshSources.readDailyFreshSource(plan, paper);
                 proofReplayed = require('./lib/reader-pdf-cell-evidence').replaySavedProofMetadata(paper);
             }
@@ -151,8 +151,12 @@ async function main(options = {}) {
         if (typeof manifestPath !== 'string' || !manifestPath.trim() || manifestPath.startsWith('--')) {
             throw new Error('明确新轮重试必须提供 readerRetryManifestPath 或 --reader-retry-manifest');
         }
-        explicitManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-        if (!Array.isArray(explicitManifest.rounds)) throw new Error('Reader 重试清单的格式不符合要求');
+        try {
+            explicitManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        } catch (error) {
+            throw new Error(`读取 Reader 新轮清单失败：${manifestPath}：${error.message}`, { cause: error });
+        }
+        if (!Array.isArray(explicitManifest.rounds)) throw new Error(`Reader 重试清单的格式不符合要求：${manifestPath} 缺少 rounds 数组`);
         for (const grant of explicitManifest.rounds) readerExplicitRound.assertGrant(grant);
     }
     const feedbackFiles = options.factFeedbackFiles === undefined ? parseFactFeedbackFiles() : options.factFeedbackFiles;
@@ -228,22 +232,26 @@ async function main(options = {}) {
     if (explicitManifest) {
         const manifest = explicitManifest;
         if (manifest.batchDate !== batchDate || manifest.runId !== dailySourcePlan.runId
-            || !Array.isArray(manifest.rounds)) throw new Error('Reader 新轮清单批次不匹配');
+            || !Array.isArray(manifest.rounds)) throw new Error(`Reader 新轮清单批次不匹配：清单 batchDate=${manifest.batchDate} runId=${manifest.runId}，`
+                + `当前 batchDate=${batchDate} runId=${dailySourcePlan.runId}`);
         for (const grant of manifest.rounds) {
             readerExplicitRound.assertGrant(grant);
-            if (explicitRounds.has(grant.paperId) || !notAnalyzed.some(p => normalizedId(p) === grant.paperId)) {
-                throw new Error('Reader 新轮目标重复或不是未完成论文');
+            if (explicitRounds.has(grant.paperId)) {
+                throw new Error(`Reader 新轮 ${grant.paperId} 在清单中重复出现`);
+            }
+            if (!notAnalyzed.some(p => normalizedId(p) === grant.paperId)) {
+                throw new Error(`Reader 新轮 ${grant.paperId} 不是当前未完成论文`);
             }
             const target = papers.find(p => normalizedId(p) === grant.paperId);
             if (target && isSuccessfulAnalysisRecord(target)
-                && dailyFreshSources.isPaperReusableForAnalysis(target, dailySourcePlan)) throw new Error('不能对已通过的论文开 Reader 新轮');
+                && dailyFreshSources.isPaperReusableForAnalysis(target, dailySourcePlan)) throw new Error(`Reader 新轮 ${grant.paperId} 不能对已通过的论文开新轮`);
             if (require('./lib/daily-fact-review').sha(target.analysisCheckpoint || target.analysis || '') !== grant.wholeSha256
-                || grant.batchDate !== batchDate || grant.runId !== dailySourcePlan.runId) throw new Error('Reader 新轮当前正文或批次不匹配');
+                || grant.batchDate !== batchDate || grant.runId !== dailySourcePlan.runId) throw new Error(`Reader 新轮 ${grant.paperId} 当前正文或批次不匹配`);
             const details = dailyFreshSources.readDailyFreshSource(dailySourcePlan, target);
             const sourceDir = path.join(dailySourcePlan.sourcesDir, grant.paperId,
                 `generation-${String(details.freshSourceDescriptor.sourceGeneration).padStart(6, '0')}`);
             for (const [name, expected] of Object.entries(grant.sourceFiles)) {
-                if (require('./lib/daily-fact-review').sha(fs.readFileSync(path.join(sourceDir, name))) !== expected) throw new Error('Reader 新轮四来源不匹配');
+                if (require('./lib/daily-fact-review').sha(fs.readFileSync(path.join(sourceDir, name))) !== expected) throw new Error(`Reader 新轮 ${grant.paperId} 的四来源 ${name} 不匹配`);
             }
             explicitRounds.set(grant.paperId, grant);
         }

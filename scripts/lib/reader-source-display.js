@@ -115,6 +115,7 @@ const READER_TEX_SYMBOLS = Object.freeze({
     sigma: 'σ', lambda: 'λ', tau: 'τ', beta: 'β', alpha: 'α', mu: 'μ', pi: 'π',
     delta: 'δ', eta: 'η', theta: 'θ', kappa: 'κ', rho: 'ρ', phi: 'φ', chi: 'χ', psi: 'ψ', zeta: 'ζ', nu: 'ν', xi: 'ξ', epsilon: 'ε', varepsilon: 'ε',
     Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ', dagger: '†',
+    varnothing: '∅', emptyset: '∅', circ: '∘', star: '⋆', bullet: '•', prime: '′',
 });
 const READER_TEX_STYLE_NAMES = /\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|widehat|overline|underline|tilde|hat|bar)/g;
 function readerTexCellCanonical(value) {
@@ -124,14 +125,8 @@ function readerTexCellCanonical(value) {
 }
 function readerTexPlain(value) {
     let output = String(value ?? '');
-    if (!output.includes('\\') && !/[_^]\{/.test(output) && !output.includes('{,}')
-        && !/(\d{2,})\1/.test(output.trim())) return output;
+    if (!output.includes('\\') && !/[_^]\{/.test(output) && !output.includes('{,}')) return output;
     output = output.replace(/\\[,;:!]/g, '');
-    output = output.replace(/{,}/g, ',');
-    output = output.replace(/(\d{1,3}(?:,\d{3})+)\1(?![\d,])/g, '$1');
-    if (!/^(?:19|20)\d{2}$/.test(output.trim())) {
-        output = output.replace(/(?<![\d,])(\d{2,})\1(?![\d,])/g, '$1');
-    }
     for (let round = 0; round < 10; round++) {
         const before = output;
         output = output
@@ -159,6 +154,16 @@ function readerTexAlignTail(plain, canonicalPrefix) {
 }
 function foldReaderTexCellDuplicate(value) {
     const text = String(value ?? '');
+    // 可见文字后面又跟一段 `{}_{...}^{...}` 上下标副本时，只要副本里的字符
+    // 全部已在可见部分出现，就丢弃副本
+    // （vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{\varnothing\mathrm{CFG}}）。
+    const dual = /^([\s\S]*?)\{\}_\{([\s\S]+)\}\^\{([\s\S]+)\}$/.exec(text);
+    if (dual && dual[0].length === text.length) {
+        const plain = readerTexPlain(dual[2] + dual[3]);
+        if (plain && !plain.includes('\\') && [...plain].every((char) => dual[1].includes(char))) {
+            return dual[1];
+        }
+    }
     for (let split = 1; split < text.length; split++) {
         const tailProbe = text.slice(split);
         if (!tailProbe.includes('\\') && !/[_^]\{/.test(tailProbe) && !tailProbe.includes('{,}')) continue;
@@ -168,6 +173,11 @@ function foldReaderTexCellDuplicate(value) {
         const canonicalPrefix = readerTexCellCanonical(prefix);
         const canonicalPlain = readerTexCellCanonical(plain);
         if (!canonicalPlain) continue;
+        // 整格只有「一个可见符号 + 同义命令」时也是完整的同义双写
+        // （∅\varnothing、∘\circ）。命令的纯文本必须和可见值逐字相等，
+        // 所以 `2^{2}` 这种真实上标和 `∅\circ` 这种不同值都不会被折叠。
+        if (canonicalPrefix.length === 1 && canonicalPlain === canonicalPrefix
+            && suffix.startsWith('\\')) return prefix;
         // 前缀可能带「+ 」这类装饰符，副本只复制实体部分（+ n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
         const strippedPrefix = canonicalPrefix.replace(/^[^0-9A-Za-z\u4e00-\u9fff]+/u, '');
         if (strippedPrefix.length >= 2 && strippedPrefix !== canonicalPrefix && canonicalPlain.startsWith(strippedPrefix)) {
@@ -198,8 +208,11 @@ function foldReaderTexCellDuplicate(value) {
 }
 function projectReaderAnonMacro(value) {
     // 匿名投稿的自定义宏 `\\anon[匿名写法]{真名}` 在扁平文本里只剩 `\\anon[匿名写法]真名`。
-    // 可见输出是方括号里的匿名写法；只在紧跟一段字母数字短词时替换。
-    return value.replace(/\\anon\[([^\]]*)\][A-Za-z0-9-]*(?![A-Za-z0-9])/g, '$1');
+    // 可见输出是方括号里的匿名写法；只在紧跟一段字母数字短词或一条 URL 时替换。
+    // URL 必须整条丢掉：只吃掉 `https` 会把仓库地址原样留在页面上。
+    return String(value ?? '')
+        .replace(/\\anon\[([^\]]*)\][A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s，。、；：）】]*/g, '$1')
+        .replace(/\\anon\[([^\]]*)\][A-Za-z0-9-]*(?![A-Za-z0-9])/g, '$1');
 }
 
 function projectReaderCellTexDisplay(value) {
@@ -212,9 +225,11 @@ function projectReaderCellTexDisplay(value) {
     // 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace(/{,}/g, ',');
     output = output.replace(/(\d{1,3}(?:,\d{3})+)\1(?![\d,])/g, '$1');
-    if (!/^(?:19|20)\d{2}$/.test(output.trim())) {
-        output = output.replace(/(?<![\d,])(\d{2,})\1(?![\d,])/g, '$1');
-    }
+    // 同一个整数写两遍：3232 → 32。小数点和千位分隔符两侧不算同一段数字
+    // （0.7070.707 里的 7070 是 0.707 的尾数接下一份的首位，不是重复），
+    // 四位年份 2020 与一位数 55/99 也不能折叠。
+    output = output.replace(/(?<![\d,.])(\d{2,})\1(?![\d,.])/g,
+        (whole) => (/^(?:19|20)\d{2}$/.test(whole) ? whole : whole.slice(0, whole.length / 2)));
     if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。

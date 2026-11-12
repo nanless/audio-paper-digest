@@ -2,6 +2,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const { writeStageSummary } = require('./log-setup');
 const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
 const refreshRecoveryEntryScope = new (require('node:async_hooks').AsyncLocalStorage)();
@@ -121,10 +122,13 @@ function parseRefreshCliArgs(args) {
                 && parsed.getUTCDate() === day;
         })();
         if (!validDate) {
-            throw new Error('使用 --all 时，必须同时提供有效的日期：--date YYYY-MM-DD。');
+            throw new Error('使用 --all 时，必须同时提供有效的日期：--date YYYY-MM-DD'
+                + `（收到 --date ${String(options.date || '(空)')}）。`);
         }
     } else if (options.date) {
-        throw new Error('--date 只能用于 --all 全量刷新。');
+        throw new Error(`--date 只能与 --all 一起做整批刷新；按论文 ID 刷新不需要 --date（收到 --date ${options.date}`
+            + (options.ids.length ? ` 和 ${options.ids.length} 个论文 ID：${options.ids.join(', ')}` : '')
+            + '）。');
     }
     if (!options.all && options.ids.length === 0) {
         throw new Error('请指定论文 ID，或使用 --all --date YYYY-MM-DD 刷新整个批次。');
@@ -144,34 +148,41 @@ function parseRefreshCliArgs(args) {
         if (options.reviewFeedback || options.all || options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly) {
             throw new Error('--feedback-file 必须与明确论文 ID 和完整读者文章刷新一起使用，不能混用其他反馈或局部模式。');
         }
-        const feedback = JSON.parse(require('node:fs').readFileSync(options.reviewFeedbackFile, 'utf8'));
-        if (!feedback || Array.isArray(feedback) || typeof feedback !== 'object') throw new Error('逐篇反馈必须是以论文 ID 为键的对象。');
-        const ids = options.ids.map(normalizedId);
-        if (new Set(ids).size !== ids.length || ids.some(id => !/^\d{4}\.\d{4,5}$/.test(id))
-                || Object.keys(feedback).length !== ids.length
-                || ids.some(id => !Object.hasOwn(feedback, id))) throw new Error('逐篇反馈必须恰好覆盖全部指定论文，且 ID 唯一。');
+        let feedback;
+        try {
+            feedback = JSON.parse(fs.readFileSync(options.reviewFeedbackFile, 'utf8'));
+        } catch (error) {
+            throw new Error(`读取逐篇反馈失败：${options.reviewFeedbackFile}：${error.message}`, { cause: error });
+        }
+        if (!feedback || Array.isArray(feedback) || typeof feedback !== 'object') {
+            throw new Error(`逐篇反馈必须是以论文 ID 为键的对象：${options.reviewFeedbackFile}`);
+        }
+        const rawIds = options.ids;
+        const invalidIds = rawIds.filter(id => !/^\d{4}\.\d{4,5}$/.test(normalizedId(id)));
+        const ids = rawIds.map(normalizedId);
+        const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+        const feedbackKeys = Object.keys(feedback);
+        const missing = ids.filter(id => !Object.hasOwn(feedback, id));
+        const extra = feedbackKeys.filter(key => !ids.includes(key));
+        if (invalidIds.length || duplicateIds.length || missing.length || extra.length) {
+            const details = [
+                invalidIds.length ? `无效或规范化后为空的 ID ${invalidIds.join(', ')}` : '',
+                duplicateIds.length ? `重复 ID ${duplicateIds.join(', ')}` : '',
+                missing.length ? `缺少反馈 ${missing.join(', ')}` : '',
+                extra.length ? `多出反馈 ${extra.join(', ')}` : ''
+            ].filter(Boolean);
+            throw new Error('逐篇反馈必须恰好覆盖全部指定论文，且 ID 唯一：'
+                + `文件 ${options.reviewFeedbackFile}；${details.join('；')}。`);
+        }
         for (const id of ids) {
             if (typeof feedback[id] !== 'string' || !feedback[id].trim() || feedback[id].length > 4000) {
-                throw new Error(`逐篇反馈 ${id} 必须是 1–4000 字符的非空文字。`);
+                throw new Error(`逐篇反馈 ${id} 必须是 1–4000 字符的非空文字（来自 ${options.reviewFeedbackFile}）。`);
             }
             feedback[id] = feedback[id].trim();
         }
         options.reviewFeedbackById = feedback;
     }
     return options;
-}
-
-function paperRefreshInputIdentity(paper) {
-    return stableFingerprint({
-        paperId: normalizedId(paper),
-        sourceSha256: paper?.sourceSha256 || '',
-        analysisSha256: stableFingerprint(String(paper?.analysis || '')),
-        scoringAuditSha256: paper?.analysisManifest?.stages?.scoringAudit?.auditSha256 || '',
-        scoringOutputSha256: paper?.analysisManifest?.stages?.scoringAudit?.outputAnalysisSha256 || '',
-        readerFingerprint: paper?.analysisManifest?.stages?.apiReaderArticle?.fingerprint || '',
-        readerArticleSha256: paper?.apiReaderArticleSha256 || '',
-        readerPlanSha256: paper?.apiReaderPlanSha256 || ''
-    });
 }
 
 function hasCurrentReaderV3(paper, options) {
@@ -533,8 +544,9 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
     }
 
+    let result, failure;
     try {
-        return await withPaperAnalysisLock(existing, async () => {
+        result = await withPaperAnalysisLock(existing, async () => {
         const { paper: storedAnalysisRecord, plan: lockedDailySourcePlan } =
             readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore() || initialDailySourcePlan);
         if (!options.scoringAndReader && (scoringRefresh.hasCheckpoint(storedAnalysisRecord) || scoringRefresh.hasPreservedCheckpoint(storedAnalysisRecord)))
@@ -557,9 +569,9 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             if (!Array.isArray(rows)) throw new Error('分析结果中的论文列表 papers 不是数组。');
             const matches = rows.map((paper, index) => normalizedId(paper) === requested ? index : -1)
                 .filter(index => index >= 0);
-            if (matches.length !== 1) throw new Error(`保存 ${requested} 时论文身份不唯一。`);
+            if (matches.length !== 1) throw new Error(`保存 ${requested} 时论文身份不唯一（匹配 ${matches.length} 条记录）。`);
             if (stableFingerprint(rows[matches[0]]) !== inputIdentity)
-                throw new Error(`${requested} canonical_changed_during_refresh`);
+                throw new Error(`${requested} canonical_changed_during_refresh：正式分析结果在刷新期间被其他进程改写，本次结果未覆盖保存；请核对并发进程后重试。`);
             dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(payload, {
                 entryPlan: refreshRecoveryEntryScope.getStore() || initialDailySourcePlan,
                 paper: rows[matches[0]], label: '保存日更Reader刷新' });
@@ -768,11 +780,20 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 + ` | papers_sync=${sync.updated}`);
         return savedRecord;
         });
-    } finally {
+    } catch (error) { failure = error; }
+    // 结束来源核验是独立失败源：原刷新失败与收尾核验失败必须同时保留，
+    // 不能像旧写法那样让 finally 里的错误覆盖真正的失败原因。
+    try {
         if (!refreshRecoveryEntryScope.getStore()) {
             validateRefreshFinalSources(resultPath, initialDailySourcePlan);
         }
+    } catch (error) {
+        if (failure) throw new AggregateError([failure, error],
+            `Reader 刷新失败，结束来源核验亦失败：${error.message}`, { cause: failure });
+        throw error;
     }
+    if (failure) throw failure;
+    return result;
 }
 
 if (require.main === module) {
@@ -823,7 +844,6 @@ module.exports = {
     resolveBatchRefreshIds,
     hasCurrentReaderV3,
     resolveSavedAnalysisBatchDate,
-    paperRefreshInputIdentity,
     canRepairScoringBinding,
     canRepairCompletedPrimaryReader,
     finishReviewedPrimaryReaderRefresh,

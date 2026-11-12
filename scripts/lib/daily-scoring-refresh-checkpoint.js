@@ -36,9 +36,12 @@ function reject(message) {
 }
 function hasCheckpoint(paper) { return !!paper && Object.hasOwn(paper, FIELD); }
 function assertNoPending(paper, options) {
-    if (hasCheckpoint(paper) || hasPreservedCheckpoint(paper, options)) throw Object.assign(new Error('日更新评分已保存，须使用 api:reader:refresh --scoring-and-reader 续原反馈Reader，普通分析不得洗掉检查点'), {
-        code: 'DAILY_SCORING_REFRESH_REQUIRES_READER_RECOVERY', scope: 'paper', retryable: false
-    });
+    if (hasCheckpoint(paper) || hasPreservedCheckpoint(paper, options)) {
+        const label = paper ? id(paper) : '';
+        throw Object.assign(new Error(`日更新评分已保存${label ? `（论文 ${label}）` : ''}，须使用 api:reader:refresh --scoring-and-reader 续原反馈Reader，普通分析不得洗掉检查点`), {
+            code: 'DAILY_SCORING_REFRESH_REQUIRES_READER_RECOVERY', scope: 'paper', retryable: false
+        });
+    }
 }
 function failureFields(paper) {
     return Object.fromEntries(Object.entries(paper).filter(([key]) =>

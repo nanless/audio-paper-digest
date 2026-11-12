@@ -27,10 +27,13 @@ function readFeedback(filename) {
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 32 * 1024) fail('反馈须为不超过32KiB的普通独立文件');
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 32 * 1024) {
+            fail(`反馈须为不超过32KiB的普通独立文件：${filename}`);
+        }
         const bytes = fs.readFileSync(fd);
         let value;
-        try { value = JSON.parse(bytes.toString('utf8')); } catch { fail('反馈不是有效JSON'); }
+        try { value = JSON.parse(bytes.toString('utf8')); }
+        catch (error) { fail(`反馈文件不是有效JSON：${filename}：${error.message}`); }
         validateShape(value);
         originalBytes.set(value, bytes);
         return value;

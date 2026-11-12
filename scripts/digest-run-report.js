@@ -162,18 +162,23 @@ function createAnalysisBatchRetryReporter(filePath, { workflow, batchDate, sourc
             workflow, batchDate, sourceReferenceSha256, scopeIds, scopeSha256: stableSha256(scopeIds),
             maxRounds: context.maxRounds, roundsCompleted: rounds.length, rounds: structuredClone(rounds),
             manualHandoff: structuredClone(context.manualHandoff), newApiRequestsAuthorized: false };
-        updateJsonFileLocked(filePath, current => {
-            const canonicalRows = papersFrom(current), canonicalIds = canonicalRows.map(normalizedId).filter(Boolean);
-            const canonicalIdSet = new Set(canonicalIds);
-            if (!current || Array.isArray(current)
-                || current.batchDate && current.batchDate !== batchDate
-                || stableSha256(current.dailyFreshSourceRun || null) !== sourceReferenceSha256
-                || canonicalIds.length !== canonicalRows.length || canonicalIdSet.size !== canonicalIds.length
-                || !scopeIds.every(id => canonicalIdSet.has(id))) {
-                throw new Error('批次轮次诊断的日期、来源或论文范围已变化，拒绝写入其他批次');
-            }
-            return { ...current, stats: { ...(current.stats || {}), analysisBatchRetry: diagnostic } };
-        });
+        try {
+            updateJsonFileLocked(filePath, current => {
+                const canonicalRows = papersFrom(current), canonicalIds = canonicalRows.map(normalizedId).filter(Boolean);
+                const canonicalIdSet = new Set(canonicalIds);
+                if (!current || Array.isArray(current)
+                    || current.batchDate && current.batchDate !== batchDate
+                    || stableSha256(current.dailyFreshSourceRun || null) !== sourceReferenceSha256
+                    || canonicalIds.length !== canonicalRows.length || canonicalIdSet.size !== canonicalIds.length
+                    || !scopeIds.every(id => canonicalIdSet.has(id))) {
+                    throw new Error('批次轮次诊断的日期、来源或论文范围已变化，拒绝写入其他批次');
+                }
+                return { ...current, stats: { ...(current.stats || {}), analysisBatchRetry: diagnostic } };
+            });
+        } catch (error) {
+            throw new Error(`批次轮次诊断写入失败（workflow=${workflow}，batchDate=${batchDate}，`
+                + `论文范围 ${scopeIds.length} 篇）：${error.message}`, { cause: error });
+        }
     };
 }
 
@@ -1059,6 +1064,11 @@ async function runWatchCli(targetDate, watchOptions) {
 }
 
 function formatMarkdownDailyReport(targetDate, report, summaryText) {
+    const visualStatus = report.visuals?.waived === true
+        ? '已豁免'
+        : ({ complete: '完成', incomplete: '未完成', waived: '已豁免', missing: '缺失', pending: '待处理', failed: '失败', partial_failed: '部分失败' }[
+            report.visuals?.status
+        ] || (report.postPublishVisualWaiver ? '已豁免' : '未知'));
     return [
         `# 论文速递日报 ${targetDate}`,
         '',
@@ -1067,7 +1077,7 @@ function formatMarkdownDailyReport(targetDate, report, summaryText) {
         '## 关键字段',
         `- 状态：${report.overallStatus || '未知'}（问题数 ${report.errors?.length ?? report.issueCount ?? '?'}）`,
         `- 远端 OID 已验证：${(report.blog?.remoteOidVerified ?? report.remoteOidVerified) === true ? '是' : (report.blog?.remoteOidVerified ?? report.remoteOidVerified) === false ? '否' : '未知'}`,
-        `- 视觉：${report.visuals?.status || (report.postPublishVisualWaiver ? '豁免' : '未知')}`,
+        `- 视觉：${visualStatus}`,
         '',
         '> 本日报只读汇总当前状态，不替代部署/网页核验；最终以 verify:web 与 CI/部署结果为准。',
         '',
