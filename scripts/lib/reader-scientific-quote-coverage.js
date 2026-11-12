@@ -8,8 +8,8 @@ function projectScientificQuoteCoverage(table, quotes, numericTokens, options = 
     const tokens = [...new Set(numericTokens(table.markdown))];
     // NFKC is a reject-only candidate detector. Raw full-cell parsing and
     // source atoms below never normalize fullwidth/math digits into support.
-    const marker = /(?:×|\\[A-Za-z]+|\{\\[A-Za-z]+\})\s*10/;
-    const hasScientificMarker = value => marker.test(value.normalize('NFKC'));
+    const marker = /(?:×|\\times|\{\\times\}|\\[A-Za-z]+)(?<!\\cdot)\s*10(?!\d)/;
+    const hasScientificMarker = value => marker.test(value) || marker.test(value.normalize('NFKC'));
     if (!cells.some(cell => hasScientificMarker(cell.value)))
         return { tokens, failures: [], cells, proofs: [] };
     const cellTokens = new Set(cells.flatMap(cell => cell.tokens));
@@ -21,7 +21,8 @@ function projectScientificQuoteCoverage(table, quotes, numericTokens, options = 
     const superDigits = '⁰¹²³⁴⁵⁶⁷⁸⁹';
     const unit = '(?:kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%)';
     const atom = `(?<coefficient>${coefficient})\\s*(?:×10(?<sup>[⁺⁻]?[${superDigits}]+)`
-        + `|(?:\\\\times|\\{\\\\times\\}|×)\\s*10\\^\\{(?<tex>${exponent})\\})`
+        + `|(?:\\\\times|\\{\\\\times\\}|×)\\s*10\\^\\{(?<tex>${exponent})\\}`
+        + `|(?:\\\\times|\\{\\\\times\\}|×)\\s*10(?<plain>[+−-][0-9]+))`
         + `(?<unit>\\s*${unit})?`;
     const wholeAtom = new RegExp(`^\\s*${atom}\\s*$`);
     const dual = new RegExp(`^\\s*(?<coefficient>${coefficient})×10`
@@ -48,8 +49,20 @@ function projectScientificQuoteCoverage(table, quotes, numericTokens, options = 
                 quantity = key(g, (g.texSign || '+') + g.texExponent);
             } else {
                 const single = wholeAtom.exec(line);
-                if (!single) continue; // A malformed pair never falls back to its TeX suffix.
-                quantity = key(single.groups, single.groups.sup || single.groups.tex);
+                if (!single) {
+                    // HTML/LaTeXML often prints a coefficient-one quantity as a
+                    // bare 10^-4. It is the same complete atom as 1×10^-4, not
+                    // a licence to borrow another coefficient. Only scan this
+                    // line when it has no explicit coefficient atom.
+                    const bare = /(?<![A-Za-z0-9_])10([+−-][0-9]+)(?:\s*(kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%))?(?![A-Za-z0-9_])/g;
+                    for (const match of line.matchAll(bare)) {
+                        const bareQuantity = JSON.stringify(['1', exponentKey(match[1]),
+                            (match[2] || '').trim().toLowerCase()]);
+                        if (!sourceAtoms.has(bareQuantity)) sourceAtoms.set(bareQuantity, { quoteIndex, lineIndex });
+                    }
+                    continue; // A malformed pair never falls back to its TeX suffix.
+                }
+                quantity = key(single.groups, single.groups.sup || single.groups.tex || single.groups.plain);
             }
             if (!sourceAtoms.has(quantity)) sourceAtoms.set(quantity, { quoteIndex, lineIndex });
         }
@@ -100,7 +113,7 @@ function projectScientificQuoteCoverage(table, quotes, numericTokens, options = 
                 reason: 'scientific_quantity_not_complete_or_supported' });
             continue;
         }
-        const g = match.groups, quantity = key(g, g.sup || g.tex);
+        const g = match.groups, quantity = key(g, g.sup || g.tex || g.plain);
         if (!sourceAtoms.has(quantity)) {
             failures.push({ row: cell.row, column: cell.column, value: cell.value,
                 reason: 'scientific_quantity_missing_exact_bound_quote' });

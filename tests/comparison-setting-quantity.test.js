@@ -45,3 +45,18 @@ test('设置只遮本身，裸比较、结果位置的时间和伪单位仍拒�
         '准确率从2秒提前量提高到3秒提前量。'
     ]) assert.ok(quality.findMissingComparisonUnits(text).length, text);
 });
+
+test('模态数与 Mel bins 数是设置，不冒充邻近指标的百分比值', () => {
+    for (const text of [
+        '注意 32 bins 的 WER 更低但 DNSMOS 略降，说明单纯压低 bins 不能无代价提升音质。',
+        '文本与音频来源混合不同，2 模态准确率差距不能读成转写与波形的直接对比。',
+        '文本与音频来源混合不同，两模态准确率差距不能读成转写与波形的直接对比。',
+        '表中无引导与 256 bins 的 WER 都超过 100%，128 bins 大幅下降，作者折中选 64 bins。'
+    ]) assert.deepEqual(quality.findMissingComparisonUnits(text), [], text);
+    for (const text of [
+        '表中无引导与 256 bins 的 WER 都超过 100，128 bins 大幅下降。',
+        '采样步也不能太少，WaveGen-B 在 NFE 为 4 时 WER 高达 52.0，到 8 步才降到可用水平，32 步后继续加到 100 步提升很小。',
+        '去掉首步引导在 F5-TTS 八步词错误率从 2.33 升到 6.37，因此官方首步应保留。',
+        '2 模态下准确率从 80 提高到 90。'
+    ]) assert.ok(quality.findMissingComparisonUnits(text).length > 0, text);
+});

@@ -37,6 +37,18 @@ function readerTableCellDisplay(table, row, column) {
     return normalizeReaderSourceDisplayArtifacts(projectReaderCellTexDisplay(display));
 }
 
+// 校验/证据路径只投影“本来就会因残留 TeX 或粘连被拒绝”的格；纯粹的同义双写
+// 若在旧管线里不影响判定，保持原字节，避免改变既有付费草稿的证据与错误顺序。
+function projectReaderCellForValidation(value) {
+    const raw = String(value ?? '');
+    if (!raw.includes('\\')) return raw;
+    const projected = require('./reader-source-display').projectReaderCellTexDisplay(raw);
+    if (projected === raw) return raw;
+    const flagged = Boolean(findReaderTablePasteDuplication(raw))
+        || /\\[A-Za-z]+/.test(projectReaderMathSymbols(raw));
+    return flagged ? projected : raw;
+}
+
 const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection';
 const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage';
 const originalTableSelectionDomain = () => codec.historicalContract(READER_TABLE_SELECTION_CONTRACT, 'exact-original-subset');
@@ -597,7 +609,9 @@ function assessReaderCompleteTableEligibility(table) {
         add('invalid_source_matrix');
     } else {
         const display = require('./reader-table-pdf-evidence').displayMatrix(table);
-        const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
+        const displayFormats = require('./reader-source-display');
+        const normalize = value => displayFormats.normalizeReaderSourceDisplayArtifacts(
+            projectReaderCellForValidation(value));
         if (display.length !== matrix.length || display.some(row => !Array.isArray(row) || row.length !== width)) {
             add('invalid_display_matrix');
         } else {
@@ -894,4 +908,5 @@ module.exports = { READER_TABLE_SELECTION_CONTRACT, originalTableSelectionDomain
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, putReaderTableHeaderFirst,
     renderReaderTableSelection, readCompiledReaderTableSelection, repairUniqueReaderTableSelectionHeader,
+    projectReaderCellForValidation,
     compileReaderTableSelections };

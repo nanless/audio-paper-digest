@@ -35,6 +35,29 @@ def normalize_quote(value):
     return re.sub(r'\s+', ' ', value).strip()
 
 
+def _fold_line_break_hyphen(value):
+    # A PDF line break can split a word as "im-\nprovement". The projection
+    # has already collapsed that newline to one space, so fold only a hyphen
+    # between ASCII letters followed by one space and a lowercase letter.
+    # This is matching-only; the stored normalized text and raw fragment keep
+    # their original bytes.
+    return re.sub(r'(?<=[A-Za-z])- (?=[a-z])', '', value)
+
+
+def _folded_projection(value):
+    output, mapping, index = [], [], 0
+    while index < len(value):
+        if (index > 0 and value[index] == '-' and value[index - 1].isalpha()
+                and index + 2 < len(value) and value[index + 1] == ' '
+                and value[index + 2].islower()):
+            index += 2
+            continue
+        output.append(value[index])
+        mapping.append(index)
+        index += 1
+    return ''.join(output), mapping
+
+
 def _projection(raw):
     text, spans = [], []
     for token in re.finditer(r'\s+|\S', raw):
@@ -94,6 +117,8 @@ def quote_evidence(document, requested_quote):
     projected, spans = _projection(raw)
     need(projected == document['normalizedFullText'] and sha(projected.encode())
          == document['normalizedFullTextSha256'], 'pdf_projection_changed')
+    folded = None
+    folded_end = None
     starts, offset = [], 0
     while True:
         start = projected.find(quote, offset)
@@ -101,8 +126,26 @@ def quote_evidence(document, requested_quote):
             break
         starts.append(start)
         offset = start + 1
+    if not starts:
+        # Older PDFs (and the model's copied sentence) may omit a typesetting
+        # hyphen at a line break. Search a folded view only when the literal
+        # search found nothing; exact matches and ambiguity checks are unchanged.
+        folded, mapping = _folded_projection(projected)
+        folded_quote = _fold_line_break_hyphen(quote)
+        folded_starts, offset = [], 0
+        while True:
+            match_start = folded.find(folded_quote, offset)
+            if match_start < 0:
+                break
+            folded_starts.append(match_start)
+            offset = match_start + 1
+        need(len(folded_starts) <= 1, 'pdf_quote_not_unique:' + str(len(folded_starts)))
+        if folded_starts:
+            starts = [mapping[folded_starts[0]]]
+            folded_end = mapping[folded_starts[0] + len(folded_quote) - 1] + 1
     need(len(starts) == 1, 'pdf_quote_not_unique:' + str(len(starts)))
-    start, end = starts[0], starts[0] + len(quote)
+    start = starts[0]
+    end = folded_end if folded_end is not None else start + len(quote)
     # A contiguous substring cannot silently drop a leading digit/sign or a
     # trailing precision digit/unit character from the original PDF token.
     def word_character(character):
@@ -125,7 +168,9 @@ def quote_evidence(document, requested_quote):
     need(not (word_character(trailing) and re.match(r'^[-‐‑]\s*\w', projected[end:])), 'pdf_quote_end_splits_hyphenated_token')
     raw_start, raw_end = spans[start][0], spans[end - 1][1]
     fragment = raw[raw_start:raw_end]
-    need(normalize_quote(fragment) == quote, 'pdf_quote_projection_not_continuous')
+    need((normalize_quote(fragment) == quote
+          or _fold_line_break_hyphen(normalize_quote(fragment)) == _fold_line_break_hyphen(quote)),
+         'pdf_quote_projection_not_continuous')
     pages = []
     for page in document['pageRanges']:
         lo, hi = max(raw_start, page['rawStartCodePoint']), min(raw_end, page['rawEndCodePoint'])

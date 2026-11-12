@@ -113,7 +113,7 @@ const READER_TEX_SYMBOLS = Object.freeze({
     uparrow: '↑', downarrow: '↓', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔',
     times: '×', pm: '±', cdot: '·', approx: '≈', geq: '≥', leq: '≤', neq: '≠', sim: '∼',
     sigma: 'σ', lambda: 'λ', tau: 'τ', beta: 'β', alpha: 'α', mu: 'μ', pi: 'π',
-    Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ',
+    Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ', dagger: '†',
 });
 const READER_TEX_STYLE_NAMES = /\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|widehat|overline|underline|tilde|hat|bar)/g;
 function readerTexCellCanonical(value) {

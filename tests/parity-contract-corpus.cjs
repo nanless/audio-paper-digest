@@ -74,6 +74,12 @@ tableCase('table-identifier', 'Family ID', 'Family ID');
 tableCase('table-identifier', '系统拓扑', '系统拓扑');
 tableCase('table-identifier', '识别词加指标-Family准确率', 'Family 准确率 ↓');
 tableCase('table-identifier', '识别词加指标-拓扑相似度', '拓扑相似度 ↓');
+// 2026-11-12 日更 2611.11777 暴露的识别词缺口：评测对象 / 量化水平 / 操作
+// 是合法的行身份列；带指标后缀的“操作耗时 ↓”仍必须让位给指标读法。
+tableCase('table-identifier', '评测对象', '评测对象');
+tableCase('table-identifier', '量化水平', '量化水平');
+tableCase('table-identifier', '操作', '操作');
+tableCase('table-identifier', '识别词加指标-操作耗时', '操作耗时 ↓');
 // 2026-11-11 把 Python TABLE_DIRECTIONAL_METRIC_RE 补齐到 Node 同表后补的守护语料：
 // 这些词都必须按“带方向标记的指标列”处理，不能因为前缀像识别词就当成行身份。
 for (const header of ['模型评分 ↓', '评估 L2 ↓', 'NMSE ↓', 'MR-STFT ↓', '裁判分 ↓']) {
@@ -194,6 +200,22 @@ const negativeCounterparts = {
     '负例-存在显著差异': '加入该模块后两组结果存在显著差异。',
     '负例-净增益为正': '加入该模块后净增益为正。'
 };
+// 2026-11-12 日更 2611.12478 暴露的负面证据写法：非单调、净下降。
+// 反向的“保持单调提升 / 净提升”不得被读成负面证据。
+const negativeFixes20261112 = {
+    '非单调': '加入该模块后相邻条件出现非单调的作答变化。',
+    '净下降': '加入该模块后不同分组出现 2 个百分点的净下降。'
+};
+for (const [name, sentence] of Object.entries(negativeFixes20261112)) {
+    tableCase('negative-evidence', name, '方法', { after: AFTER + sentence, sourceText: NEG_SOURCE });
+}
+const negativeCounterparts20261112 = {
+    '负例-保持单调提升': '加入该模块后结果保持单调提升。',
+    '负例-净提升': '加入该模块后指标净提升 2 个百分点。'
+};
+for (const [name, sentence] of Object.entries(negativeCounterparts20261112)) {
+    tableCase('negative-evidence', name, '方法', { after: AFTER + sentence, sourceText: NEG_SOURCE });
+}
 for (const [name, sentence] of Object.entries(negativeCounterparts)) {
     tableCase('negative-evidence', name, '方法', { after: AFTER + sentence, sourceText: NEG_SOURCE });
 }

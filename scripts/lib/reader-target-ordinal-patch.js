@@ -982,8 +982,68 @@ function replayNormalCompletion(paper,{source,last,saved}){
 function hasReplayedArchivedSignedFactRevision(paper) {
     return readVerifiedCompletion(paper)?.signedFactRevision === true;
 }
+
+// 指定重分析会先清掉 Reader 阶段。清阶段前必须把该篇已有的序号完成证明登记为
+// “被本次重做接替”；否则下一轮初始化会撞上 completion index/marker removed，
+// 既不能复用旧证明也不能重新全文生成。
+function supersedeOrdinalCompletionBeforeReset(paper) {
+    const manifest = paper?.analysisManifest, stage = manifest?.stages?.apiReaderArticle;
+    if (!stage) return false;
+    const proof = stage.ordinalCompletionProof;
+    if (proof?.path && proof?.sha256) {
+        const previous = paper.readerRevisionHistory;
+        if (previous?.contract === 'daily-reader-revision-history-v1'
+            && previous?.completionProof?.path === proof.path
+            && previous?.completionProof?.sha256 === proof.sha256) return true;
+        paper.readerRevisionHistory = {
+            contract: 'daily-reader-revision-history-v1',
+            reason: 'stage-invalidated',
+            completionProof: { path: proof.path, sha256: proof.sha256 },
+            previousArticleSha256: stage.articleSha256 || null,
+            previousPlanSha256: stage.planSha256 || null,
+            previousOrdinalPatchCompilations: structuredClone(stage.ordinalPatchCompilations || []),
+            recordedAt: new Date().toISOString()
+        };
+        return true;
+    }
+    // 旧重置入口已经删过阶段、失败尝试又写入了新的 invalid_output 阶段：证明指针
+    // 丢失，但 ordinal-completions 里的完成文件仍在。只有完整核验该文件与本次
+    // 封存来源/论文一致后，才把它记成被接替历史；不授予完成、不替代生成校验。
+    return adoptOrphanedOrdinalCompletion(paper);
+}
+function adoptOrphanedOrdinalCompletion(paper) {
+    const manifest = paper?.analysisManifest, stage = manifest?.stages?.apiReaderArticle;
+    if (!stage || stage.status === 'complete' || paper.apiReaderArticle) return false;
+    if (paper.readerRevisionHistory?.completionProof) return false;
+    const marked = manifest?.contracts?.readerTargetOrdinalPatch !== undefined
+        || stage.ordinalPatchContract !== undefined || stage.ordinalPatchSchemaFingerprint !== undefined
+        || stage.ordinalPatchCompilations !== undefined || stage.ordinalCompletionProof !== undefined
+        || stage.ordinalPatchHistory !== undefined;
+    if (marked) return false;
+    const prov = paper?.freshRewriteProvenance;
+    if (!isFreshSourceProvenance(prov)) return false;
+    const attempts = path.join(require('../config').FILES.dailyFreshSourceRunsDir, prov.runId, 'reader-attempts');
+    const dir = completionDirectory(attempts), files = completionFiles(dir, paper);
+    if (!files.length || files.some((name, index) => Number(name.slice(-13, -5)) !== index + 1)) return false;
+    const file = path.join(dir, files.at(-1)), checked = read(file), saved = checked.value;
+    if (!format.isCompilation(saved) || saved.kind !== 'normal-final-completion'
+        || saved.paperId !== canonical(paper) || saved.sequence !== files.length
+        || !isDeepStrictEqual(saved.freshRewriteProvenance, prov)) return false;
+    savedSourceScope(paper, saved.identity, attempts);
+    paper.readerRevisionHistory = {
+        contract: 'daily-reader-revision-history-v1',
+        reason: 'stage-invalidated',
+        completionProof: { path: file, sha256: checked.sha256 },
+        previousArticleSha256: saved.articleSha256,
+        previousPlanSha256: saved.planSha256,
+        previousOrdinalPatchCompilations: structuredClone(saved.records || []),
+        recordedAt: new Date().toISOString()
+    };
+    return true;
+}
+
 module.exports={isCombinedReaderFinalRejection,clearSupersededCompletionMarker,recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     planRoundTargets,roundTargetGuidance,applyRoundTargetBudget,roundTargetLimit,ROUND_TARGETS_MAX_AFTER_INVALID_ACK,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
-    verifiedSupersededCompletionPointer,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion,
+    verifiedSupersededCompletionPointer,supersedeOrdinalCompletionBeforeReset,adoptOrphanedOrdinalCompletion,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion,
     recordSupersededOrdinalChain,SUPERSEDED_ORDINAL_CHAIN_REASON};

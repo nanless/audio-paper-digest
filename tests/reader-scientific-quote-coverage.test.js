@@ -148,3 +148,19 @@ test('科学量实现叶的实际字节进入Reader阶段指纹，上游指纹�
     for (const stage of ['primaryAnalysis', 'demoLinkScan', 'imageSupplement'])
         assert.equal(after[stage], before[stage], stage);
 });
+
+test('plain LaTeXML visible quantity is covered only by the same complete coefficient and exponent', () => {
+    const source = 'Original settings:\n1×10−4\n2×10−5\nEnd of settings.';
+    const article = table('1 × 10−4', '2 × 10−5');
+    assert.equal(bind(article, source, [source]).article, article);
+    assert.throws(() => bind(table('1 × 10−5', '2 × 10−5'), source, [source]), /科学量|exact quote\/cell/);
+    const bare = 'The model is optimised with AdamW (lr = 10−4, weight decay = 10−4).';
+    assert.equal(bind(table('1 × 10−4', '1 × 10−4'), bare, [bare]).article,
+        table('1 × 10−4', '1 × 10−4'));
+});
+
+test('dimension multipliers are not scientific quantities', () => {
+    const quote = 'The pipeline uses 1024×1024 px spectrograms and a batch size of 16.';
+    const article = '| Setting | Value |\n| --- | --- |\n| Resolution | 1024×1024 px |\n| Batch | 16 |';
+    assert.equal(bind(article, quote, [quote]).article, article);
+});

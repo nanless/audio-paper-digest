@@ -253,7 +253,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|评测对象|量化水平|操作|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (/^推理窗长$/u.test(normalized)) return true;
@@ -2108,7 +2108,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || explicitMetricDecline
         || reportedLowerScore
         || reportedBiasRegression
-        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
+        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|净下降|(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|非单调(?:性|响应|作答|情况|变化)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     // 2026-11-06 曾以“先完成发布”为由取消这条阻断，但替换进来的回调没有任何调用方，
     // 也没有降级或审查记录，等于静默放行只挑正面结果的写法；发布端的同名规则和本文件的

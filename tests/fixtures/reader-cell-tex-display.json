@@ -184,6 +184,34 @@
     {
       "input": "\\hat{q} (half-width)",
       "expected": "q̂ (half-width)"
+    },
+    {
+      "input": "N=50†N{=}50^{\\dagger}",
+      "expected": "N=50†"
+    },
+    {
+      "input": "FmaxF_{\\mathrm{max}} (MHz)",
+      "expected": "Fmax (MHz)"
+    },
+    {
+      "input": "Area×\\timesDelay",
+      "expected": "Area×Delay"
+    },
+    {
+      "input": "2.62×𝟏𝟎𝟔\\mathbf{2.62\\times 10^{6}}",
+      "expected": "2.62×𝟏𝟎𝟔"
+    },
+    {
+      "input": "5.15.1 %",
+      "expected": "5.15.1 %"
+    },
+    {
+      "input": "100100",
+      "expected": "100100"
+    },
+    {
+      "input": "5.45.4 [−2.9,15.9][-2.9,15.9]",
+      "expected": "5.45.4 [−2.9,15.9][-2.9,15.9]"
     }
   ]
 }

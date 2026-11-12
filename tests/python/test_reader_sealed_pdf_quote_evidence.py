@@ -72,6 +72,32 @@ class SealedPdfQuoteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'hyphenated_token'):
             rule.quote_evidence(doc, 'Alpha obtains 12.30 dB under the fixed protocol.')
 
+    def test_line_break_hyphenation_folds_for_matching_without_rewriting_the_proof(self):
+        doc = rule.fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), 'The baseline reports a performance im-')
+        page.insert_text((50, 70), 'provement across all seven datasets.')
+        raw = doc.tobytes(); doc.close()
+        document = rule.extract_pdf_quote_document(raw)
+        proof = rule.quote_evidence(document, 'The baseline reports a performance improvement across all seven datasets.')
+        self.assertIn('im-\nprovement', proof['rawFragment'])
+        self.assertNotIn('im-\nprovement', proof['quote'])
+        self.assertEqual(proof['quoteSha256'], rule.sha(proof['quote'].encode()))
+        self.assertEqual(proof['rawFragmentSha256'], rule.sha(proof['rawFragment'].encode()))
+
+    def test_folded_line_break_quote_must_still_be_unique(self):
+        doc = rule.fitz.open()
+        page = doc.new_page()
+        page.insert_text((50, 50), 'The baseline reports a performance im-')
+        page.insert_text((50, 70), 'provement across all seven datasets.')
+        page.insert_text((50, 110), 'The baseline reports a performance im-')
+        page.insert_text((50, 130), 'provement across all seven datasets.')
+        raw = doc.tobytes(); doc.close()
+        document = rule.extract_pdf_quote_document(raw)
+        with self.assertRaisesRegex(ValueError, 'not_unique:2'):
+            rule.quote_evidence(document, 'The baseline reports a performance improvement across all seven datasets.')
+
+
     def test_repeated_identical_quote_is_ambiguous_and_short_or_unreadable_refuse(self):
         doc = rule.extract_pdf_quote_document(fixture(True))
         with self.assertRaisesRegex(ValueError, 'not_unique:2'):

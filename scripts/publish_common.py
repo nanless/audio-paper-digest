@@ -319,7 +319,7 @@ def _is_table_identifier_header(value):
     if re.fullmatch(r'(?:(?:检验|统计检验)?统计量|统计检验结果|(?:F|t|z|χ²)\s*统计量|(?:test\s+)?statistics?|[Ftzp][ -]?(?:values?|statistics?))', normalized, flags=re.IGNORECASE):
         return False
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|评测对象|量化水平|操作|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
@@ -4986,10 +4986,10 @@ def _validate_experiment_table_evidence_depth(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|无显著(?:差异)?|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
-        r'更差|比(?!较)[^。；\n]{0,30}差|'
+        r'更差|比(?!较)[^。；\n]{0,30}差|净下降|'
         r'(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|'
         r'未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|损失|回退|'
-        r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
+        r'不单调(?:性|改进)?|非单调(?:性|响应|作答|情况|变化)?|不保证单调(?:改进|提升)',
         results,
         re.I,
     )

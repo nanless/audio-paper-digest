@@ -2096,9 +2096,30 @@ function readerNumericTokens(value) {
     return readerNumericTokenMatches(value).map(match => normalizeReaderNumericToken(match[0]));
 }
 
+// 表格方法名里的 [37]、[12, 37] 是参考文献编号，不是测量值，不能被当作
+// “数值+单位”证据要求。只有同一数字在方括号之外也以数值形式出现时，才仍按
+// 测量值要求引文；数字本身仍保留原单元格的 DOM 证据。
+function readerCitationOnlyNumericTokens(rows) {
+    const texts = (Array.isArray(rows) ? rows : [])
+        .flat().map(value => String(value ?? ''));
+    const citationGroup = /\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]/g;
+    const outside = new Set(texts.flatMap(text => (
+        readerNumericTokens(text.replace(citationGroup, ' '))
+    )));
+    const citations = new Set();
+    for (const text of texts) {
+        for (const group of text.match(citationGroup) || []) {
+            for (const token of readerNumericTokens(group)) citations.add(token);
+        }
+    }
+    return new Set([...citations].filter(token => !outside.has(token)));
+}
+
 function readerScientificQuoteProjection(table, quotes) {
     const values = quotes.map(item => typeof item === 'string' ? item : item?.quote);
-    const hasScientific = [table.header, ...table.rows].some(row => row.some(value => /(?:×|\\times)\s*10/.test(String(value))));
+    const scientificMarker = /(?:×|\\times)\s*10(?!\d)/;
+    const hasScientific = [table.header, ...table.rows].some(row => row.some(value => scientificMarker.test(String(value))
+        || scientificMarker.test(String(value).normalize('NFKC'))));
     const pdfCapability = hasScientific && quotes.some(item => item?.valueOrigin === 'sealed_pdf')
         ? require('./lib/reader-sealed-pdf-quote-evidence').scientificCoverageForQuotes(quotes) : null;
     return require('./lib/reader-scientific-quote-coverage').projectScientificQuoteCoverage(
@@ -2986,8 +3007,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         if (scientific.failures.length) numericEvidenceFailures.push(
             `tableBindings[${index}] 关键数字缺少 exact quote/cell 证据：科学量 `
             + readerScientificQuoteFailure(scientific));
+        const citationOnly = readerCitationOnlyNumericTokens(renderedRows);
         const missingNumbers = scientific.tokens.filter(token => (
-            !readerSourceQuotesCoverNumericToken(
+            !citationOnly.has(token)
+            && !readerSourceQuotesCoverNumericToken(
                 token, htmlQuotes, pdfQuotes, structuredArtifacts.sourceKind === 'conference_pdf'
             )
         ));
@@ -3195,8 +3218,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         if (scientific.failures.length) throw new Error(
             `读者文章 tableBindings[${index}] 关键数字缺少 exact quote/cell 证据：科学量 `
             + readerScientificQuoteFailure(scientific));
+        const citationOnly = readerCitationOnlyNumericTokens(renderedRows);
         const missingNumbers = scientific.tokens.filter(token => (
-            !readerSourceQuotesCoverNumericToken(
+            !citationOnly.has(token)
+            && !readerSourceQuotesCoverNumericToken(
                 token, sourceQuotes, sealedPdfQuoteEvidence, structuredArtifacts.sourceKind === 'conference_pdf'
             )
         ));
@@ -4265,6 +4290,10 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
     const affirmative = /(?:已经|已|现已|目前已|当前已|正式)(?:经)?(?:开源|公开|发布|提供|开放|上线|可用)|(?<![不未许])可(?:访问|下载|获取|用)(?!性|状态|于)|(?:为|是|属于)(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|(?:代码|源代码|代码仓库|仓库|模型权重|权重|检查点|数据集|语料库|在线演示|演示页面|复现材料)(?:为|是|属于)?(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|开源地址|公开仓库|\b(?:public|open[- ]source(?:d)?)\b|\b(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|publicly\s+)?(?:available|released|open[- ]sourced|accessible|downloadable)\b|\b(?:we|the\s+authors?)\s+(?:release|provide|publish)\b/i;
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
+    // “手稿本身不构成已发布数据集”“该链接不等于可用资源”是在否定发布/可用
+    // 状态，不是作者资源可用声明；只在否定词紧邻前缀时豁免，避免吞掉后文
+    // 真正的转折肯定。
+    const nonConstitutingPrefix = /(?:不|并不|不能|不足以|无法)(?:构成|等于|算作|视为)(?:任何|一个)?$/u;
     const isConceptDistinction = (value, matchIndex, matchEnd) => {
         // A closed, owner-free instruction enumerates concepts, not resources
         // presently supplied by the paper. Only the exact list span is exempt.
@@ -5275,6 +5304,17 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         }
         return false;
     };
+    // 论文把「公开的教师检查点」当作第三方实验输入时，说的是被评测的上游模型，
+    // 不是作者自己的模型发布；只有来源明确写到 public checkpoints/teachers 时才豁免，
+    // 作者自称自有检查点已公开的句子仍按声明处理。
+    const isSourceBackedPublicTeacherCheckpointUsage = (segment, type) => {
+        if (type !== 'model') return false;
+        if (/(?:本文|本论文|本研究|本工作|作者团队|项目团队|我们)[^。！？!?；;，,]{0,48}(?:模型|权重|检查点)[^。！？!?；;，,]{0,24}(?:已|现已|当前|本次)?(?:开源|公开|开放|可用|发布)/.test(segment)) return false;
+        if (!/(?:教师|teacher)[^。！？!?；;，,]{0,16}(?:检查点|模型权重|权重|模型|checkpoints?|models?|weights?)/i.test(segment)) return false;
+        const source = String(sourceText || '').replace(/\s+/g, ' ');
+        return /(?:experiments?\s+(?:use|run)|we\s+(?:use|run|evaluate|adopt))[^.]{0,160}(?:public\s+(?:checkpoints?|teachers?)|released\s+checkpoints?|open[- ]weight\s+checkpoints?)/i.test(source)
+            || /(?:public\s+(?:checkpoints?|teachers?)|released\s+checkpoints?|open[- ]weight\s+checkpoints?)[^.]{0,160}(?:are\s+used|used\s+for|run\s+with)/i.test(source);
+    };
     const isBoundedResourceMeaningNonClaim = (value, type, matchIndex, matchEnd) => {
         // Only the matched predicate's complete local grammatical span can be
         // non-assertive. Another resource assertion in this sentence stays live.
@@ -5662,11 +5702,13 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 || isSourceBackedDependencyUseOrPriorDatasetAccess(value, type, match.index)
                 || isSourceBackedBaselineUsage(value, type, match.index)
                 || isSourceBackedPriorModelEvaluation(value, type, match.index)
+                || isSourceBackedPublicTeacherCheckpointUsage(segment, type)
                 || isPostfixedNonEquivalence(
                     value.slice(segmentStart), localMatchIndex, localMatchEnd
                 )) continue;
             const prefix = segment.slice(Math.max(0, localMatchIndex - 48), localMatchIndex);
-            if (directDenialPrefix.test(prefix) || conditionalPrefix.test(prefix)
+            if (directDenialPrefix.test(prefix) || nonConstitutingPrefix.test(prefix)
+                || conditionalPrefix.test(prefix)
                 || isConceptDistinction(value, match.index, match.index + match[0].length)) continue;
             if (unavailableResources.some(resource => resource.type === type)) {
                 const tail = value.slice(match.index + match[0].length);
@@ -6380,8 +6422,16 @@ function bindDirectApiReaderFiguresWithAliasTicket(figures, imageEvidence, alias
 
 function preserveReaderPostProcessingRetryability(error) {
     const failure = error instanceof Error ? error : new Error(String(error || 'Reader post-processing failed'));
-    if (typeof failure.retryable === 'boolean') return failure;
     const code = String(failure.code || failure.cause?.code || '');
+    // 完成来源缺失/不一致是可判定的单篇内容失败：生成已经完成，但这一篇
+    // 拿不出可冷核重放的完成证明。下一轮完整 Reader 生成可以合法重建证明，
+    // 不能把它误标成不可重试而让失败集合永远停在终态。
+    if (failure.scope !== 'run'
+        && ['READER_ORDINAL_ORIGIN_MISSING', 'READER_ORDINAL_ORIGIN_MISMATCH'].includes(code)) {
+        failure.retryable = true;
+        return failure;
+    }
+    if (typeof failure.retryable === 'boolean') return failure;
     const message = String(failure.message || '');
     const status = Number.parseInt(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1] || '', 10);
     const transient = /^(?:ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ETIMEDOUT|UND_ERR_)/.test(code)
@@ -6706,16 +6756,21 @@ function validateApiReaderTablePasteDuplication(article, options = {}) {
                     ? [...(binding.sourceQuotes || []), ...(binding.sealedPdfQuoteEvidence || [])].map(item => typeof item === 'string'
                         ? item : item?.quote).filter(Boolean)
                     : cellBindings.map(item => item?.sourceText).filter(Boolean);
-                const reason = findReaderTablePasteDuplication(cell, {
+                const verifiedSourceCell = binding?.sourceType === 'artifact_table' && cellBindings.length > 0;
+                // 已逐格绑定原表的格子是 DOM 原文投影；只对它做同值双写投影后再查粘连，
+                // 不修改正文/保存稿字节，避免破坏已付稿的冷重放确定性。
+                const displayed = verifiedSourceCell
+                    ? require('./lib/reader-tables').projectReaderCellForValidation(cell)
+                    : cell;
+                const reason = findReaderTablePasteDuplication(displayed, {
                     header: table.header, row, rowIndex, columnIndex, sourceTexts,
-                    // 原表逐格绑定：这一格是 DOM 原文投影，不是模型手写内容。
-                    verifiedSourceCell: binding?.sourceType === 'artifact_table' && cellBindings.length > 0
+                    verifiedSourceCell
                 });
                 if (reason) {
                     throw new Error(
                         `读者文章第 ${tableIndex + 1} 张表粘连复写`
                         + `（${rowIndex === 0 ? '表头' : `数据行 ${rowIndex}`}第 ${columnIndex + 1} 格`
-                        + `“${String(cell).slice(0, 60)}”）：${reason}`
+                        + `“${String(displayed).slice(0, 60)}”）：${reason}`
                     );
                 }
             }

@@ -5,6 +5,9 @@ const { normalizedId, SCORING_RUBRIC_VERSION } = require('../utils.js');
 
 function resetReaderForSelectedReanalysis(paper) {
     const next = structuredClone(paper);
+    // 先登记序号完成证明被本次重做接替，再删 Reader 阶段；否则下一次初始化会
+    // 把“阶段被清掉”误判成手工删标记，无法重新生成全文。
+    require('./reader-target-ordinal-patch').supersedeOrdinalCompletionBeforeReset(next);
     const manifest = next.analysisManifest;
     if (manifest?.stages) {
         delete manifest.stages.apiReaderArticle;

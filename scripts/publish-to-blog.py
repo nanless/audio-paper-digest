@@ -7438,7 +7438,7 @@ _READER_TEX_SYMBOLS = {
     'uparrow': '↑', 'downarrow': '↓', 'rightarrow': '→', 'leftarrow': '←', 'leftrightarrow': '↔',
     'times': '×', 'pm': '±', 'cdot': '·', 'approx': '≈', 'geq': '≥', 'leq': '≤', 'neq': '≠', 'sim': '∼',
     'sigma': 'σ', 'lambda': 'λ', 'tau': 'τ', 'beta': 'β', 'alpha': 'α', 'mu': 'μ', 'pi': 'π',
-    'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ',
+    'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ', 'dagger': '†',
 }
 _READER_TEX_STYLE_NAMES = re.compile(
     r'\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|'
@@ -7830,8 +7830,8 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
     cells = [(0, column, str(value)) for column, value in enumerate(rendered['header'])]
     cells.extend((row + 1, column, str(value)) for row, values in enumerate(rendered['rows'])
                  for column, value in enumerate(values))
-    marker = re.compile(r'(?:×|\\times|\{\\times\})\s*10')
-    if not any(marker.search(unicodedata.normalize('NFKC', value)) for _, _, value in cells):
+    marker = re.compile(r'(?:×|\\times|\{\\times\})\s*10(?!\d)')
+    if not any(marker.search(value) or marker.search(unicodedata.normalize('NFKC', value)) for _, _, value in cells):
         return {'tokens': old_tokens, 'failures': [], 'proofs': []}
     # Preserve the existing whole-Markdown lexical meaning. Only equivalent
     # cell boundaries can be projected; cross-cell token changes fail closed.
@@ -7847,7 +7847,8 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
     # unit conversion, precision rounding or coefficient/exponent recombination.
     atom = (r'(?P<coefficient>' + coefficient + r')\s*(?:'
             r'×10(?P<sup>[⁺⁻]?[' + superscripts + r']+)'
-            r'|(?:\\times|\{\\times\}|×)\s*10\^\{(?P<tex>' + signed_exponent + r')\})'
+            r'|(?:\\times|\{\\times\}|×)\s*10\^\{(?P<tex>' + signed_exponent + r')\}'
+            r'|(?:\\times|\{\\times\}|×)\s*10(?P<plain>[+−-][0-9]+))'
             r'(?P<unit>\s*' + unit + r')?')
     line_atom = re.compile(r'\s*' + atom + r'\s*')
     # Exact positive/negative coefficients must repeat literally in the two
@@ -7880,8 +7881,16 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
             else:
                 single = line_atom.fullmatch(line)
                 if not single:
+                    # HTML/LaTeXML often prints a coefficient-one quantity as a
+                    # bare 10^-4. It is the same complete atom as 1×10^-4, not
+                    # a licence to borrow another coefficient. Only scan this
+                    # line when it has no explicit coefficient atom.
+                    bare = re.compile(r'(?<![A-Za-z0-9_])10([+−-][0-9]+)(?:\s*(kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%))?(?![A-Za-z0-9_])')
+                    for match in bare.finditer(line):
+                        bare_key = ('1', exponent_key(match.group(1)), (match.group(2) or '').strip().lower())
+                        source_atoms.setdefault(bare_key, (quote_index, line_index))
                     continue
-                key = quantity_key(single, single['sup'] or single['tex'])
+                key = quantity_key(single, single['sup'] or single['tex'] or single['plain'])
             source_atoms.setdefault(key, (quote_index, line_index))
 
     glyph_schedule = {}
@@ -7900,7 +7909,7 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
                 parsed = line_atom.fullmatch(value.strip()) or baseline.fullmatch(value.strip())
                 if parsed is None:
                     break
-                exponent = parsed.groupdict().get('sup') or parsed.groupdict().get('tex') or parsed.groupdict().get('base')
+                exponent = parsed.groupdict().get('sup') or parsed.groupdict().get('tex') or parsed.groupdict().get('plain') or parsed.groupdict().get('base')
                 atom = atoms[role]
                 source_key = (atom['coefficient'].replace('−', '-').lstrip('+'), exponent_key(atom['signedExponent']), atom['unit'])
                 if quantity_key(parsed, exponent) != source_key:
@@ -7911,7 +7920,7 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
 
     failures, proofs, tokens = [], [], set()
     for row, column, value in cells:
-        if not marker.search(unicodedata.normalize('NFKC', value)):
+        if not (marker.search(value) or marker.search(unicodedata.normalize('NFKC', value))):
             tokens.update(_api_reader_numeric_tokens(value))
             continue
         # Publication currently needs whole-cell quantities only. Requiring a
@@ -7932,7 +7941,7 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientifi
                              'reason': 'scientific_quantity_not_complete_or_supported'})
             tokens.update(_api_reader_numeric_tokens(value))
             continue
-        key = quantity_key(match, match['sup'] or match['tex'])
+        key = quantity_key(match, match['sup'] or match['tex'] or match['plain'])
         if key not in source_atoms:
             failures.append({'row': row, 'column': column, 'value': value,
                              'reason': 'scientific_quantity_missing_exact_bound_quote'})
@@ -8040,6 +8049,29 @@ def _api_reader_numeric_tokens(value):
             tokens.append(_normalize_api_reader_numeric_token(
                 f'{match.group(1)} {match.group(2)}'))
     return tokens
+
+
+_READER_CITATION_GROUP = re.compile(r'\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]')
+
+
+def _reader_citation_only_numeric_tokens(table):
+    """表格方法名里的 [37]、[12, 37] 是参考文献编号，不是测量值。
+
+    只有同一数字在方括号之外也以数值形式出现时，才仍按测量值要求原文引文；
+    方括号里的编号本身仍由单元格的 DOM/SHA 证据绑定。
+    """
+    texts = [str(value or '') for value in table.get('header') or []]
+    for row in table.get('rows') or []:
+        texts.extend(str(value or '') for value in row)
+    outside = set()
+    citations = set()
+    for text in texts:
+        outside.update(_api_reader_numeric_tokens(
+            _READER_CITATION_GROUP.sub(' ', text)
+        ))
+        for group in _READER_CITATION_GROUP.findall(text):
+            citations.update(_api_reader_numeric_tokens(group))
+    return citations - outside
 
 
 # 与 Node 一致：所有展示公式都须携带可重放来源 SHA 的完整结构化内容。
@@ -9473,6 +9505,9 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                     f"{scientific_projection['failures']}"
                 )
             missing = scientific_projection['tokens'] - quote_tokens
+            # 参考文献编号（如 Orig. CFM [37]）不是测量值，不要求数值引文证据；
+            # 同一数字若在方括号之外出现，仍按测量值要求证据。
+            missing -= _reader_citation_only_numeric_tokens(rendered)
             if index in publication_tables:
                 missing -= set(publication_tables[index]['numericTokens'])
             if missing:

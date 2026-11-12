@@ -13,6 +13,7 @@ const {
     assessReaderCompleteTableEligibility,
     renderReaderTableSelection,
     renderReaderCompleteTable,
+    findReaderTablePasteDuplication,
 } = require('../scripts/lib/reader-tables.js');
 
 const sha = 'a'.repeat(64);
@@ -67,6 +68,59 @@ test('选择与完整表对同一原表输出同一显示字节，且行内没�
     assert.doesNotMatch(selected.markdown, /\\[A-Za-z]+/);
     // 表格原字节不被改写；投影只发生在显示视图。
     assert.equal(table.matrix[0][1], 'FDPANNs\\mathrm{\\textbf{FD}_{\\textbf{PANNs}}}↓');
+});
+
+test('完整表资格按同一显示投影判定：可投影的双写通过，裸数字粘连仍拒绝', () => {
+    const projectable = sourceTable([
+        ['FmaxF_{\\mathrm{max}} (MHz)', 'Area×\\timesDelay'],
+        ['A', '2.62×𝟏𝟎𝟔\\mathbf{2.62\\times 10^{6}}'],
+        ['B', '1.0'],
+    ]);
+    assert.equal(assessReaderCompleteTableEligibility(projectable).eligible, true);
+    const rendered = renderReaderCompleteTable({
+        tableIndex: 1, completeTable: { sourceTableOrdinal: 1 },
+    }, { tables: [projectable] });
+    assert.match(rendered.markdown, /\| Fmax \(MHz\) \| Area×Delay \|/);
+    assert.doesNotMatch(rendered.markdown, /\\[A-Za-z]+/);
+    // 裸数字粘连没有同值 TeX 注解，不能借“重复形状”删减；守卫仍要求核对。
+    const glued = sourceTable([
+        ['Method', 'Value'],
+        ['A', '5.15.1 %'],
+        ['B', '1.0'],
+    ]);
+    const eligibility = assessReaderCompleteTableEligibility(glued);
+    assert.equal(eligibility.eligible, false);
+    assert.ok(eligibility.reasonCodes.includes('source_display_cleanup_required'));
+    assert.ok(findReaderTablePasteDuplication('5.15.1 %'));
+});
+
+test('已逐格绑定原表的同义 TeX 双写格按投影通过粘连守卫，原字节与旧稿不被改写', () => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const build = (headerCell) => {
+        const article = [
+            '### 结果如何比较？', '',
+            `| Method | ${headerCell} |`,
+            '| --- | --- |',
+            '| A | 1.0 |',
+            '| B | 2.0 |',
+        ].join('\n');
+        const binding = {
+            tableIndex: 1, sourceType: 'artifact_table', sourceTableOrdinal: 1,
+            cellBindings: [0, 1, 2].flatMap(row => [0, 1].map(column => ({
+                renderedRow: row, renderedColumn: column,
+                sourceRow: row, sourceColumn: column, sourceText: `cell ${row}:${column}`,
+            }))),
+        };
+        return { article, binding };
+    };
+    const duel = build('N=50†N{=}50^{\\dagger}');
+    assert.equal(duel.article.includes('N=50†N{=}50^{\\dagger}'), true);
+    assert.doesNotThrow(() => deep.validateApiReaderTablePasteDuplication(
+        duel.article, { tableBindings: [duel.binding] }));
+    // 裸数字粘连仍拒绝，且不因投影把半值猜成 5.1。
+    const glued = build('5.15.1 %');
+    assert.throws(() => deep.validateApiReaderTablePasteDuplication(
+        glued.article, { tableBindings: [glued.binding] }), /粘连复写/);
 });
 
 test('未知 TeX 命令在 selection 资格与渲染阶段都被拒绝，与完整表一致', () => {

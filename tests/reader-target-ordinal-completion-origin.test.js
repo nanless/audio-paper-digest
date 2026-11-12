@@ -28,6 +28,7 @@ const REAL_RUN = path.join(REAL_ROOT, RUN_ID);
 const REAL_ATTEMPTS = path.join(REAL_RUN, 'reader-attempts');
 const REAL_CANDIDATE = path.join(REAL_ATTEMPTS, 'ef4e4ef23ad439975487596be2f890378cb79333148765b3ca34e9fad8adf956.json');
 const ordinal = require('../scripts/lib/reader-target-ordinal-patch');
+const deep = require('../scripts/deep-analyzer');
 
 test('superseded ordinal chain history is recorded without any completion marker', () => {
     const stage = { status: 'complete', articleSha256: 'a'.repeat(64), planSha256: 'b'.repeat(64) };
@@ -46,6 +47,47 @@ test('superseded ordinal chain history is recorded without any completion marker
     assert.equal(stage.ordinalCompletionProof, undefined);
     assert.equal(ordinal.recordSupersededOrdinalChain(stage, []), false);
     assert.equal(ordinal.recordSupersededOrdinalChain(null, records), false);
+});
+
+test('重分析清阶段前把序号完成证明登记为接替历史，不再误报 completion index/marker removed', () => {
+    const stage = { status: 'complete', articleSha256: 'a'.repeat(64), planSha256: 'b'.repeat(64),
+        ordinalPatchCompilations: [{ contract: ordinal.COMPILATION_CONTRACT, requestId: '5ec2344f-e3e1-4f7c-8ab2-aa374781cc1c' }],
+        ordinalCompletionProof: { path: '/tmp/ordinal-completions/2611.11507-00000001.json', sha256: 'c'.repeat(64) } };
+    const paper = { arxivId: PAPER_ID, freshRewriteProvenance: {}, analysisManifest: { stages: { apiReaderArticle: stage } } };
+    assert.equal(ordinal.supersedeOrdinalCompletionBeforeReset(paper), true);
+    const history = paper.readerRevisionHistory;
+    assert.equal(history.contract, 'daily-reader-revision-history-v1');
+    assert.equal(history.reason, 'stage-invalidated');
+    assert.deepEqual(history.completionProof, stage.ordinalCompletionProof);
+    assert.equal(history.previousArticleSha256, stage.articleSha256);
+    assert.equal(history.previousPlanSha256, stage.planSha256);
+    assert.deepEqual(history.previousOrdinalPatchCompilations, stage.ordinalPatchCompilations);
+    // 重复调用保持同一指针，不增加新历史。
+    const snapshot = JSON.stringify(paper.readerRevisionHistory);
+    assert.equal(ordinal.supersedeOrdinalCompletionBeforeReset(paper), true);
+    assert.equal(JSON.stringify(paper.readerRevisionHistory), snapshot);
+});
+
+test('resetReaderForSelectedReanalysis 先登记接替历史再清 Reader 阶段', () => {
+    const reset = require('../scripts/lib/reanalysis-helpers');
+    const stage = { status: 'complete', articleSha256: 'a'.repeat(64), planSha256: 'b'.repeat(64),
+        ordinalCompletionProof: { path: '/tmp/ordinal-completions/2611.11507-00000001.json', sha256: 'c'.repeat(64) } };
+    const next = reset.resetReaderForSelectedReanalysis({
+        arxivId: PAPER_ID, freshRewriteProvenance: {},
+        analysisManifest: { stages: { apiReaderArticle: stage }, contracts: {} },
+    });
+    assert.equal(next.analysisManifest.stages.apiReaderArticle, undefined);
+    assert.equal(next.readerRevisionHistory.completionProof.sha256, 'c'.repeat(64));
+    assert.equal(next.readerRevisionHistory.previousArticleSha256, 'a'.repeat(64));
+});
+
+test('完成来源缺失/不一致在生成后处理中保持可重试的内容级错误', () => {
+    for (const code of ['READER_ORDINAL_ORIGIN_MISSING', 'READER_ORDINAL_ORIGIN_MISMATCH']) {
+        const error = Object.assign(new Error('Reader ordinal patch refused: completion index/marker removed'), { code });
+        const kept = deep.preserveReaderPostProcessingRetryability(error);
+        assert.equal(kept.retryable, true, code);
+        assert.equal(kept.scope, undefined, code);
+    }
 });
 
 test('a result with compilations but no completion origin is a determinate content failure', () => {

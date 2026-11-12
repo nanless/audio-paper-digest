@@ -506,3 +506,21 @@ test('2026-11-09 真实稿的闭合否定与将来存档计划不再被判成作
         '原文也没有声称代码已开源，不过本文代码当前可用。'
     ]) assert.ok(issues(text).length > 0, text);
 });
+
+test('“不构成/不等于已发布”是否定状态，不当作作者资源可用声明', () => {
+    const source = 'The paper reports a controlled measurement and explicitly does not release the dataset.';
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(source), resources: [] };
+    const identity = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const issues = text => deep.readerResourceClaimIssues({ sections: [
+        { kind: 'experiment_setup', body: text }
+    ] }, identity, source);
+    for (const text of [
+        '手稿本身不构成已发布数据集。',
+        '当前材料并不构成已开源代码。',
+        '该链接不等于已开源的数据集。',
+        '本文数据、代码、模型均尚未发布、当前无法获取。'
+    ]) assert.deepEqual(issues(text), [], text);
+    for (const text of ['本文数据集已发布。', '手稿本身构成已发布数据集。']) {
+        assert.ok(issues(text).length > 0, text);
+    }
+});

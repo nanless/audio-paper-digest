@@ -1470,7 +1470,13 @@ function collectDraftIssues(draft, parserError, options = {}) {
                             message: `原始输出 ${location} 包含额外字段：${unknown.join('、')}；只能含 ${allowed.join('、')}。解释、表格和标记应写入允许的正文或来源字段，不能另造字段；按论文证据核对后修正，不要直接丢弃内容。` });
                     };
                     let rootFields = ROOT_FIELDS;
-                    try { rootFields = require('./reader-record-format').draftFields(value); } catch { /* Invalid metadata is reported separately. */ }
+                    try { rootFields = require('./reader-record-format').draftFields(value); } catch {
+                        // 当前格式头若存在但未登记/指纹不完整，主错误已经单独报告
+                        // “格式头未登记或字段混用”。此时不能把 contract、
+                        // schemaFingerprint 再误报成“额外字段”，否则修复反馈会同时
+                        // 要求保留当前头和删除当前头，模型只能二选一猜。
+                        rootFields = [...ROOT_FIELDS, 'contract', 'schemaFingerprint'];
+                    }
                     addUnknownFields(value, rootFields, '根对象');
                     if (Array.isArray(value.sections)) {
                         if (value.sections.length < READER_LIMITS.minimumSections

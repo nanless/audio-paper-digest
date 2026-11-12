@@ -56,6 +56,14 @@ test('没有来源、错误名称、未来计划、作者归属与当前肯定�
     ]) assert.ok(claims(text, source).length > 0, text);
 });
 
+test('来源明确写公开教师检查点时不当作作者模型发布，作者自称仍拒绝', () => {
+    const source = 'All experiments use public checkpoints and change only the sampler. No distilled token-conditioned decoder has public weights, so the experiments run the public teachers with few Euler steps.';
+    const teacher = '实验运行的是各解码器已公开的教师检查点的少步采样，没有公开蒸馏后的标记条件学生权重，所以蒸馏学生上的效果留待未来验证。';
+    assert.deepEqual(claims(teacher, source), []);
+    assert.ok(claims('本文模型权重已经公开。' + teacher, source).length > 0);
+    assert.ok(claims(teacher, 'The paper reports released checkpoints from prior work.').length > 0);
+});
+
 const axis = '读图说明：该图横轴是每类 1、10、20 3 个预算，纵轴是准确率，每组内三根柱从左到右依次是 DM、AVDD、X-AVDD，适合一眼看出本文方法在 VGGSound 上的领先幅度是否随预算变化。';
 test('明确横轴预算整数枚举不当作准确率值，项数必须与计数吻合', () => {
     assert.deepEqual(editorial.findMissingComparisonUnits(axis), []);

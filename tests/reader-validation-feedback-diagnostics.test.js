@@ -57,3 +57,14 @@ test('pdfSourceQuoteFailure 返回真实失败原因而不是静默的布尔值'
     assert.equal(repair.pdfSourceQuoteFailure({ sourceType: 'source_quotes' }),
         '引文必须是 12–4000 字符的非空字符串数组');
 });
+
+test('格式头无效时不再把 contract/schemaFingerprint 误报成额外字段', () => {
+    const raw = JSON.stringify({
+        contract: 'reader-draft', schemaFingerprint: 'beea2525truncated', readerTitle: '标题',
+        oneSentenceThesis: '论点', conceptBridges: [], figurePlacements: [], tableBindings: [],
+        formulaBindings: [], sections: []
+    });
+    const issues = repair.collectDraftIssues(null, new Error('读者文章格式头未登记或字段混用'), { rawDraft: raw });
+    assert.ok(issues.some(issue => /格式头未登记或字段混用/.test(issue.message)));
+    assert.ok(!issues.some(issue => /包含额外字段/.test(issue.message)));
+});

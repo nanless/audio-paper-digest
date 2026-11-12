@@ -202,5 +202,20 @@ class ReaderScientificQuoteProjectionTest(unittest.TestCase):
         self.assertFalse(missing)
 
 
+    def test_plain_visible_quantity_and_dimension_multiplier(self):
+        quantity, _ = self.project(self.table('1 × 10−4'), ['1×10−4'])
+        self.assertFalse(quantity['failures'])
+        self.assertEqual([(proof['coefficient'], proof['signedExponent']) for proof in quantity['proofs']],
+                         [('1', '-4')])
+        dimension, _ = self.project(self.table('1024×1024 px'), ['1024×1024 px'])
+        self.assertFalse(dimension['failures'])
+        self.assertFalse(dimension['proofs'])
+        bare, _ = self.project(self.table('1 × 10−4'),
+                               ['The model is optimised with AdamW (lr = 10−4, weight decay = 10−4).'])
+        self.assertFalse(bare['failures'])
+        self.assertEqual([(proof['coefficient'], proof['signedExponent']) for proof in bare['proofs']],
+                         [('1', '-4')])
+
+
 if __name__ == '__main__':
     unittest.main()
