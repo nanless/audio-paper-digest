@@ -7494,50 +7494,89 @@ def _reader_tex_align_tail(plain, canonical_prefix):
     return None
 
 
+def _reader_cell_leading_decoration(canonical):
+    """把前缀开头的装饰符（+、·、「 等）剥掉，返回剩余部分。"""
+    return re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical)
+
+
 def _fold_reader_tex_cell_duplicate(value):
+    r"""把一个单元格里的「可见值 + 同值 TeX 副本」折叠成可见值。
+
+    统一按「前缀 V + 含 TeX 的后缀 T」切分，再用 `_reader_tex_plain(T)` 得到
+    副本的纯文字 P，按五种关系判定是否同一个值的两种写法：
+
+    1. P 与 V 相同（≥10\geq 10）；
+    2. V 以 P 结尾（Voc. ↑\uparrow）；
+    3. V 去掉开头装饰后是 P 的前缀，剩余部分从分隔符或连接符开始
+       （+ n∼𝒰0,1 n\sim\mathcal{U}_{0,1} + REPA）；
+    4. V 很短（1–2 个符号）且是 P 的前缀（Δ\DeltaIC → ΔIC）；
+    5. 后缀是 `{}_{...}^{...}` 上下标副本，且副本字符都已在 V 里出现
+       （vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{\varnothing\mathrm{CFG}}）。
+
+    只有 P 能完整解释成纯文字（不含残留 TeX 命令）时才折叠，绝不猜值。
+    """
     text = str(value or '')
-    # 可见文字后面又跟一段 `{}_{...}^{...}` 上下标副本时，只要副本里的字符
-    # 全部已在可见部分出现，就丢弃副本（vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{...}）。
+    if '\\' not in text and '{}' not in text and '_{' not in text:
+        return text
     dual = re.fullmatch(r'(.*?)\{\}_\{(.+)\}\^\{(.+)\}', text, re.S)
     if dual:
         plain = _reader_tex_plain(dual.group(2) + dual.group(3))
         if plain and '\\' not in plain and all(ch in dual.group(1) for ch in plain):
             return dual.group(1)
-    for split in range(1, len(text)):
-        if '\\' not in text[split:]:
+    # 从右侧最长的后缀开始切：先折掉尾部的重复注解，再折前面的，
+    # 外层按轮次重复，最终两种写法会收敛到同一形态。
+    for split in range(len(text) - 1, 0, -1):
+        suffix = text[split:]
+        if '\\' not in suffix:
             continue
-        prefix, suffix = text[:split], text[split:]
+        prefix = text[:split]
         plain = _reader_tex_plain(suffix)
         if not plain or '\\' in plain:
             continue
         canonical_prefix = _reader_tex_cell_canonical(prefix)
         canonical_plain = _reader_tex_cell_canonical(plain)
-        if not canonical_plain or len(canonical_prefix) < 2:
+        if not canonical_plain:
             continue
-        # 前缀可能带「+ 」「· 「」这类装饰符号，TeX 副本只复制了实体部分；
-        # 去掉开头非字母数字后再比一次（n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
-        stripped_prefix = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical_prefix)
-        if stripped_prefix and stripped_prefix != canonical_prefix \
-                and canonical_plain.startswith(stripped_prefix):
-            tail = _reader_tex_align_tail(plain, stripped_prefix)
-            if tail is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°+\-]', tail):
-                return prefix + tail
+        # 1) 完全相同的同值双写。
         if canonical_plain == canonical_prefix:
             return prefix
-        if len(canonical_prefix) > len(canonical_plain) and canonical_prefix.endswith(canonical_plain):
+        # 2) 可见值以副本结尾（Voc. ↑\uparrow）。
+        if len(canonical_prefix) > len(canonical_plain) \
+                and canonical_prefix.endswith(canonical_plain):
             return prefix
-        if canonical_plain.startswith(canonical_prefix):
-            remainder = _reader_tex_align_tail(plain, canonical_prefix)
-            # 只有 TeX 注解之后是独立正文或尾符号时才保留；注解自己的下标/内容
-            # （FD\mathrm{FD_{norm}} 的 norm）不是独立正文，不能当重复删一半。
-            if remainder is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°]', remainder):
-                return prefix + remainder
-        # 注解只重复可见值开头的一个符号（CRESiST 的 τ、w/o L→ 的箭头），
-        # 保留可见副本来替换整个注解；剩余文字里的独立副本仍由下一轮折叠加守。
+        # 3a) 可见值就是副本前缀，余下从分隔符开始（−𝟗𝟎\mathbf{-90} / 2.3）。
+        if len(canonical_prefix) >= 2 and canonical_plain.startswith(canonical_prefix):
+            tail = _reader_tex_align_tail(plain, canonical_prefix)
+            if tail is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°+\-/]', tail):
+                return prefix + tail
+        # 3b) 前缀去掉装饰后是副本前缀，剩余部分是独立文字。
+        stripped = _reader_cell_leading_decoration(canonical_prefix)
+        if stripped and stripped != canonical_prefix \
+                and canonical_plain.startswith(stripped):
+            tail = _reader_tex_align_tail(plain, stripped)
+            if tail is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°+\-]', tail):
+                return prefix + tail
+        # 4) 短符号前缀 + 副本继续给出余下文字（Δ\DeltaIC）。
+        if len(canonical_prefix) == 1 and len(canonical_plain) > len(canonical_prefix) \
+                and canonical_plain.startswith(canonical_prefix):
+            tail = _reader_tex_align_tail(plain, canonical_prefix)
+            if tail is not None and re.match(r'[A-Za-z0-9\u4e00-\u9fff\s(（\[,:：;；]', tail):
+                return prefix + tail
+        # 5) 前缀里的独立符号被副本重复（CRESiST 的 τ、w/o L→ 的箭头）。
         if re.match(r'[\\{^_]', suffix) and len(canonical_plain) > 1 \
-                and len(canonical_prefix) > 1 and canonical_prefix.endswith(canonical_plain[0]):
-            return prefix + plain[1:]
+                and len(canonical_prefix) > 1 \
+                and canonical_prefix.endswith(canonical_plain[0]):
+            rest = _reader_tex_align_tail(plain, canonical_plain[:1])
+            if rest is not None:
+                return prefix + rest
     return text
+
+
+def _reader_tex_align_tail(plain, canonical_prefix):
+    for index in range(len(plain) + 1):
+        if _reader_tex_cell_canonical(plain[:index]) == canonical_prefix:
+            return plain[index:]
+    return None
 
 
 def _project_reader_cell_tex_display(value):
@@ -9476,7 +9515,11 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                             if index in pdf_values or not paper.get('freshRewriteProvenance')
                             else (index, rendered_row, rendered_column) in html_blank_span_keys)) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
-                    raise PublishDataValidationError(f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。')
+                    raise PublishDataValidationError(
+                        f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。'
+                        f'（{binding.get("tableIndex")} 行 {rendered_row} 列 {rendered_column}'
+                        f' 渲染={canonical_comparison_text!r} 显示={display_source_text!r}'
+                        f' 来源={cell.get("sourceText")!r}）。')
                 seen.add(key)
             if len(seen) != expected_cells:
                 raise PublishDataValidationError(f'第 {index} 个表格仍有单元格缺少来源记录。')
