@@ -4922,7 +4922,10 @@ def _validate_experiment_table_evidence_depth(
         r'(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|'
         r'\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
         r'\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
-        r'(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)',
+        r'(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)|'
+        # 「工具失败时怎样」「Nothing fails silently」「fails if 条件」是程序行为描述，
+        # 不是论文报告的实验负面结果；JS 侧靠按句过滤，这里按短语排除。
+        r'\b(?:nothing\s+fails|fails?\s+(?:silently|if|when|to))\b',
         ' ', source_text, flags=re.I
     )
     source_has_negative = re.search(
@@ -4988,7 +4991,7 @@ def _validate_experiment_table_evidence_depth(
         r'未显著|不显著|无显著(?:差异)?|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|净下降|'
         r'(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|'
-        r'未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|损失|回退|'
+        r'未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|损失(?!函数|项|权重|率)|回退|'
         r'不单调(?:性|改进)?|非单调(?:性|响应|作答|情况|变化)?|不保证单调(?:改进|提升)',
         results,
         re.I,

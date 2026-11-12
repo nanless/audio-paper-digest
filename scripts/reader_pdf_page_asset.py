@@ -49,7 +49,20 @@ def _pdf_caption_text(value):
     # Exact PDF typography only: preserve every hyphen, word and quantity.
     value = value.translate(str.maketrans({'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl',
                                          'ﬃ': 'ffi', 'ﬄ': 'ffl', 'ﬅ': 'st', 'ﬆ': 'st'}))
-    return norm(re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '-', value))
+    text = norm(re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '-', value))
+    # 印刷版把标签写成「Fig. 1:」，HTML/LaTeXML 写成「Figure 1:」。两者是同一个
+    # 标签的排版差异，比对前统一成 Figure；图注正文仍逐字保留。
+    return re.sub(r'^Fig\.\s*(\d+)\s*[:.]\s*', r'Figure \1: ', text)
+
+
+def _caption_skeleton(value):
+    """图注的文字骨架：只保留字母、数字与汉字，去掉数学排版差异。
+
+    印刷版把公式渲染成字形（ˆXn），HTML 图注里是 LaTeX（\\hat{\\mathbf{X}}_{n}）。
+    两者是同一段文字的不同排版；骨架相同才接受，词语、数字与顺序仍须逐字一致。
+    """
+    text = re.sub(r'\\[A-Za-z]+', '', str(value))
+    return re.sub(r'[^0-9A-Za-z\u4e00-\u9fff]', '', text).lower()
 
 
 def _declarations(element):
@@ -405,8 +418,9 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
     # LaTeXML inserts a colon after an otherwise identical printed PDF label.
     # Accept its absence only at the complete caption's opening label.
     colonless_caption = re.sub(r'^((?:Figure|Fig\.?)\s+\d+)\s*:\s*', r'\1 ', displayed_caption, flags=re.I)
-    numbered = re.match(r'^(?:Figure|Fig\.?)\s+(\d+)\s*[:.]\s*\S', caption, re.I)
-    label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(\d+)\s*[:.]?', norm(figure.get('label', '')), re.I)
+    # 图号允许子编号（Figure 7.1），比较时用完整编号，身份里仍记整数部分。
+    numbered = re.match(r'^(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)\s*[:.]\s*\S', caption, re.I)
+    label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)\s*[:.]?', norm(figure.get('label', '')), re.I)
     # 封存来源本身没有图注时（例如 LaTeXML 只抽到空 caption），仍可按原图号
     # 定位唯一整页，但必须显式记为「图注未完整抽取」，不能冒完整图注。
     caption_limited = not caption
@@ -418,7 +432,8 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
         need(numbered is not None and label is not None and numbered[1] == label[1]
              and type(figure.get('ordinal')) is int and figure['ordinal'] > 0,
              'pdf_page_figure_number_or_caption_invalid')
-        figure_number = int(numbered[1])
+        figure_label = numbered[1]
+        figure_number = int(figure_label.split('.')[0])
     renderer = {'contract': 'pymupdf-full-media-box-png-v1', 'dpi': DPI,
                 'backend': 'pymupdf', 'version': fitz.version[0],
                 'helperSha256': sha(Path(__file__).read_bytes()),
@@ -444,13 +459,21 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
              'pdf_page_document_not_supported')
         matches, numbers = [], []
         for page in document:
-            for block in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT):
+            page_blocks = page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT)
+            # 整页文字骨架：PyMuPDF 可能把一条长图注拆进多个 block，逐块比对会
+            # 只剩前半句；这里用整页拼接做「完整图注是否在这一页」的判定。
+            page_skeleton = _caption_skeleton(' '.join(block[4] for block in page_blocks))
+            for block in page_blocks:
                 text = _pdf_caption_text(block[4])
-                if re.match(r'^(?:Figure|Fig\.?)\s+' + str(figure_number) + r'(?!\d)(?:\s*[:.]|\s+\S)', text, re.I):
-                    numbers.append(page.number + 1)
-                    if caption_limited:
-                        matches.append((page.number, text))
+                # 编号后面允许句点，但不能是更长编号（1 → 10、7.1 → 7.10）。
+                if not re.match(r'^(?:Figure|Fig\.?)\s+' + re.escape(figure_label)
+                                + r'(?!\d)(?!\.\d)(?:\s*[:.]|\s+\S)', text, re.I):
+                    # 只有以本图图号开头的 block 才可能是图注；正文段落、
+                    # 图内标注文字都不能当图注候选。
+                    continue
+                numbers.append(page.number + 1)
                 if caption_limited:
+                    matches.append((page.number, text))
                     continue
                 if text in {displayed_caption, colonless_caption}:
                     matches.append((page.number, block[4]))
@@ -461,8 +484,21 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     wrapped = re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '', block[4])
                     wrapped = _pdf_caption_text(wrapped)
                     wrapped = re.sub(r'^(?:Fig\.|Figure)\s+(\d+)\.\s*', r'Figure \1: ', wrapped, flags=re.I)
-                    if wrapped == displayed_caption:
-                        matches.append((page.number, block[4]))
+                    # 公式排版差异（LaTeX vs 印刷字形）用文字骨架兜底：词语、数字
+                    # 与顺序仍须完全一致，只有纯排版符号被忽略。
+                    block_skeleton = _caption_skeleton(wrapped)
+                    caption_skeleton = _caption_skeleton(displayed_caption)
+                    # 图注被拆到下一页时整页拼接也装不下完整图注；此时要求本块
+                    # 已经逐字覆盖图注前 120 个字（骨架），后文可续在下一页。
+                    long_prefix = (len(block_skeleton) >= 120
+                                   and caption_skeleton.startswith(block_skeleton[:120]))
+                    if (wrapped == displayed_caption
+                            or block_skeleton == caption_skeleton
+                            or caption_skeleton in page_skeleton
+                            or long_prefix):
+                        # 同一页可能有多个 block 命中（长图注被拆分），只记一次。
+                        if not any(item[0] == page.number for item in matches):
+                            matches.append((page.number, block[4]))
         if caption_limited:
             # 无图注时只要求「图号在全文唯一对应一页」；正文里以 Figure N 开头的
             # 引用句与图注同页时不算冲突，但仍不能跨页。

@@ -7152,6 +7152,10 @@ _MATHJAX_DOUBLE_WRITE_RULES = (
     (re.compile(r'([A-Za-z])\^\\hat\{\1\}'), r'\\hat{\1}'),
     # −7.39-7.39 → −7.39（Unicode 负号与 ASCII 负号重复同一数值）
     (re.compile(r'(?<![\d.])([−-])(\d+(?:\.\d+)?)-\2(?![\d.])'), r'\1\2'),
+    # 可见文字后面又跟了一段 `{}_{...}^{...}` 的 TeX 上下标副本时丢掉副本：
+    # vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{\varnothing\mathrm{CFG}} → vv-MF∅CFGmSTFT
+    (re.compile(r'^(?P<visible>[^{}]+?)\s*\{\}_\{(?P<sub>(?:[^{}]|\{[^{}]*\})+)\}\^\{(?P<sup>(?:[^{}]|\{[^{}]*\})+)\}\s*$'),
+     r'\g<visible>'),
 )
 
 
@@ -7439,6 +7443,7 @@ _READER_TEX_SYMBOLS = {
     'times': '×', 'pm': '±', 'cdot': '·', 'approx': '≈', 'geq': '≥', 'leq': '≤', 'neq': '≠', 'sim': '∼',
     'sigma': 'σ', 'lambda': 'λ', 'tau': 'τ', 'beta': 'β', 'alpha': 'α', 'mu': 'μ', 'pi': 'π',
     'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ', 'dagger': '†',
+    'varnothing': '∅', 'emptyset': '∅', 'circ': '∘', 'star': '⋆', 'bullet': '•', 'prime': '′',
 }
 _READER_TEX_STYLE_NAMES = re.compile(
     r'\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|'
@@ -7491,6 +7496,13 @@ def _reader_tex_align_tail(plain, canonical_prefix):
 
 def _fold_reader_tex_cell_duplicate(value):
     text = str(value or '')
+    # 可见文字后面又跟一段 `{}_{...}^{...}` 上下标副本时，只要副本里的字符
+    # 全部已在可见部分出现，就丢弃副本（vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{...}）。
+    dual = re.fullmatch(r'(.*?)\{\}_\{(.+)\}\^\{(.+)\}', text, re.S)
+    if dual:
+        plain = _reader_tex_plain(dual.group(2) + dual.group(3))
+        if plain and '\\' not in plain and all(ch in dual.group(1) for ch in plain):
+            return dual.group(1)
     for split in range(1, len(text)):
         if '\\' not in text[split:]:
             continue
@@ -8317,15 +8329,26 @@ def _reader_pdf_page_asset(paper, figure, resource, original_pixels):
     originals = [item for item in runtime['structuredArtifacts']['figures']
                  if item.get('ordinal') == figure['ordinal']
                  and item.get('sourceDomSha256') == figure['sourceDomSha256']]
-    if (len(originals) != 1 or originals[0].get('images') != [resource]
-            or re.sub(r'\s+', ' ', originals[0].get('caption', '')).strip() != figure['caption']):
-        raise PublishDataValidationError('PDF 图片的原 SVG、图号或完整图注与封存来源不一致。')
+    sealed_caption = re.sub(r'\s+', ' ', originals[0].get('caption', '')).strip() if len(originals) == 1 else ''
+    figure_caption = re.sub(r'\s+', ' ', figure.get('caption', '')).strip()
+    # 模型偶尔把长图注截短；只要它是封存图注的逐字前缀，就用封存原文派生并
+    # 显示完整图注，避免半截图注泄漏到页面。其余不一致仍拒绝。
+    caption_matches = bool(sealed_caption) and (
+        sealed_caption == figure_caption or sealed_caption.startswith(figure_caption))
+    if (len(originals) != 1 or originals[0].get('images') != [resource] or not caption_matches):
+        raise PublishDataValidationError(
+            f'PDF 图片的原 SVG、图号或完整图注与封存来源不一致（{paper_id} 图 {figure.get("ordinal")}）。'
+        )
+    if sealed_caption != figure_caption:
+        figure = {**figure, 'caption': sealed_caption}
     try:
         return derive_page_asset(paper_id=paper_id, figure=figure, resource=resource,
             old_pixels=original_pixels, pdf_bytes=sources['source.pdf'],
             source_files={name: hashlib.sha256(raw).hexdigest() for name, raw in sources.items()})
     except (ValueError, RuntimeError) as exc:
-        raise PublishDataValidationError(f'PDF 整页派生图片无法严格重验：{exc}') from exc
+        raise PublishDataValidationError(
+            f'PDF 整页派生图片无法严格重验（{paper_id} 图 {figure.get("ordinal")}）：{exc}'
+        ) from exc
 
 
 def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, source_sha):
