@@ -140,7 +140,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
-主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 取 `minimal`/`low`/`medium`/`high`/`xhigh`（`max`、`highest`、`maximum` 视作 `xhigh`），写错的值不发送、由 `npm run config:check` 拦截，本机固定 `xhigh`。推理 token 与可见输出共用 `max_output_tokens`，上表的输出预算已按 `xhigh` 留出推理开销；改预算会改变阶段指纹。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
+主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 取 `minimal`/`low`/`medium`/`high`/`xhigh`（`max`、`highest`、`maximum` 视作 `xhigh`），写错的值不发送、由 `npm run config:check` 拦截，本机固定 `xhigh`。推理 token 与可见输出共用 `max_output_tokens`，上表的输出预算已按 `xhigh` 留出推理开销；改预算会改变阶段指纹。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 
 ## 恢复原则
 

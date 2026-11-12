@@ -1700,7 +1700,8 @@ function parseLlmRequestBody(bytes, protocol) {
         if (!Number.isSafeInteger(body.max_output_tokens) || body.max_output_tokens < 1
             || !Number.isFinite(body.temperature)) fail('OpenAI Responses 请求的 limits 格式不正确');
         if (body.reasoning !== undefined
-            && (!isPlainObject(body.reasoning) || !['low', 'medium', 'high'].includes(body.reasoning.effort)
+            && (!isPlainObject(body.reasoning)
+                || !require('../utils.js').REASONING_EFFORTS.includes(body.reasoning.effort)
                 || Object.keys(body.reasoning).length !== 1)) fail('OpenAI Responses 的 reasoning 选项格式不正确');
         if (body.stream !== undefined && body.stream !== true) fail('OpenAI Responses 的 stream 选项格式不正确');
     } else if (protocol === 'anthropic-messages') {

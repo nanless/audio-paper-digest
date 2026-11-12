@@ -81,7 +81,7 @@ describe('config', () => {
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.deepEqual(Config.FILTER_CONFIG.decisionContractProfile, require('../scripts/lib/filter-decision').FILTER_DECISION_PROFILE);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceTimeoutMs, 60000);
-        assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxTokens, 4000);
+        assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxTokens, 1200);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceMaxResponseBytes, 2 * 1024 * 1024);
         assert.strictEqual(Config.FILTER_CONFIG.conferenceTemperature, 0);
         assert.strictEqual(Config.ARXIV_CONFIG.maxResultsPerCategory, 100);

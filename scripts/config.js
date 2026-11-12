@@ -83,12 +83,13 @@ const FILTER_CONFIG = {
     batchSize: 5,
     delayBetweenBatchesMs: 2000,
     temperature: 0.3,
-    // Responses 的推理 token 也算在 max_output_tokens 里；1000 在 xhigh 下会被推理吃光。
-    maxTokens: 4000,
+    // 注意：这两个值参与 FILTER_CONFIG_BINDING 的指纹，历史窗口复现会核对它，
+    // 改动会让已登记的旧窗口无法重放（截断时的重试路径会升到 4096）。
+    maxTokens: 1000,
     decisionContractProfile: require('./lib/filter-decision.js').FILTER_DECISION_PROFILE,
     keywordPrefilterEnabled: true,
     conferenceTimeoutMs: 60000,
-    conferenceMaxTokens: 4000,
+    conferenceMaxTokens: 1200,
     conferenceMaxResponseBytes: 2 * 1024 * 1024,
     conferenceTemperature: 0,
     conferenceRetryBackoffMs: 5 * 60 * 1000
