@@ -201,6 +201,8 @@ function projectReaderCellTexDisplay(value) {
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     // 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = output.replace(/([+−])(?:[+−-])(?=[\d.])/g, '$1');
+    // 行内公式的定界符 \( \) 只是排版包裹，单元格比较时去掉。
+    output = output.split('\\(').join('').split('\\)').join('');
     // 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace(/{,}/g, ',');
     output = output.replace(/(\d{1,3}(?:,\d{3})+)\1(?![\d,])/g, '$1');
@@ -233,7 +235,8 @@ function projectReaderCellTexDisplay(value) {
         if (folded === output) break;
         output = folded;
     }
-    return output;
+    // 简单指数写法 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
+    return output.replace(/(\d)\^\{([-−+]\d+)\}/g, '$1$2');
 }
 
 function normalizeReaderSourceDisplayArtifacts(value) {

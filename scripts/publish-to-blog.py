@@ -7567,6 +7567,8 @@ def _project_reader_cell_tex_display(value):
         output = _project_reader_anon_macro(output)
     # 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = re.sub(r'([+−])(?:[+−-])(?=[\d.])', r'\1', output)
+    # 行内公式的定界符 \( \) 只是排版包裹，单元格比较时去掉。
+    output = output.replace('\\(', '').replace('\\)', '')
     # 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace('{,}', ',')
     # 带千位分隔的重复（55,00855,008）前面紧贴数字，不能用先行断言挡；
@@ -7607,7 +7609,8 @@ def _project_reader_cell_tex_display(value):
         if folded == output:
             break
         output = folded
-    return output
+    # 简单指数写法 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
+    return re.sub(r'(\d)\^\{([-−+]\d+)\}', r'\1\2', output)
 
 
 _TRAILING_DIRECTION_RUN = re.compile(r'([↑↓→←↔])\1+')
