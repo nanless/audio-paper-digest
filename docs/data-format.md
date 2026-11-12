@@ -236,6 +236,8 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 裸重复数、错方向、不同精度及多余数字或单位继续拒绝。以上处理是去掉已证明同值的显示副本，不是通用 TeX 清洗。
 
+页面显示另有一层完整的单元格投影，由 Node 的 `projectReaderCellTexDisplay()` 与 Python 的 `_project_reader_cell_tex_display()` 共用。它只在完整格值上折叠相邻重复数值（`3232`、`55,00855,008`）、`{,}` 千位写法、重复符号、简单指数和整格纯上下标；匿名宏 `\anon[匿名写法]真名` 只保留匿名称谓，行内公式定界符 `\(...\)` 只作排版包裹、投影时去掉；单个数值、`19xx`/`20xx` 年份和不同值不折叠。投影结果不写回来源绑定、保存的 Reader 或数字来源核验，不能据此把裸重复当作已核实数值。两侧共用 [`tests/fixtures/reader-cell-tex-display.json`](../tests/fixtures/reader-cell-tex-display.json)，修改一侧时必须同步另一侧和语料。
+
 这些显示处理不改来源字节。对启用新形式的实际日更 DOM 路径，保存及出版冷核重读本篇真实运行与四份来源，核对完整结构化内容、整表行列、每格原文、坐标、唯一归属及 DOM SHA；删除格标记或载荷不能代替真实来源。旧普通选择表和认证 PDF 仍走各自原核验路径。这个组件不独立授予来源能力；缺失或伪造日更运行身份仍由完整来源计划和出版门拒绝。
 
 当前 Reader 不设固定宽表数量或五列门槛。普通表数下限由 `readerRequirements()` 根据可用表数量在 2–4 张内确定；受来源能力策略约束的分支使用正常入口核验后的要求，不能由调用方自报数量。表格按真实原表列数和比较问题呈现，不凑列、不删必要条件；数值、单位和逐格来源检查仍执行。
@@ -385,7 +387,7 @@ npm run digest:status -- --date YYYY-MM-DD
 | `visuals.gateComplete` | 长图完成门是否通过；不生图记录有效时也可为 `true`。 |
 | `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读或对应计数字段缺失时为 `null`，摘要显示 `?`。登记不生图时状态为 `waived`，计数仍按清单实际内容返回。 |
 | `cover.status` | 按实际封面检查结果确定，检查失败不返回 `complete`。 |
-| `visuals.status` | 通过资产与发布绑定检查时为 `complete`；不生图记录有效时为 `waived`；原 `pending`/`partial_failed` 保留；检查不通过为 `incomplete`，清单不存在为 `missing`。 |
+| `visuals.status` | 通过资产与发布绑定检查时为 `complete`；不生图记录有效时为 `waived`；原 `pending`/`partial_failed` 保留；检查不通过为 `incomplete`，清单不存在为 `missing`。文本摘要和 Markdown 日报把 `waived` 显示为「已豁免」，不会显示成「未完成」。 |
 | `visuals.waived` / `cover.waived` | 当前发布的不生图记录是否有效，以及是否同时替代长图和汇总封面的完成条件。 |
 | `fetch.rawCandidateCount` | 候选快照可读且为空才是 `0`；不可读为 `null`，摘要显示 `?`。 |
 | `readProblems` | 文件存在但无法读取的项目：`invalid-json` 或 `unreadable`，后者带实际错误 `code`；封存来源跳过记录读取失败另记 `daily-source-skip`。尚未生成的缺失文件不进入此数组。 |

@@ -105,7 +105,7 @@ Python 发布冷核也须重放这条完整网格规则：先核当篇四份封�
 
 ## Reader 专项修改的核对边界
 
-完整表格格值的符号副本投影由 `lib/reader-source-display.js` 和 Python 发布器同步执行。`✓\checkmark`、`×\times` 仅在完整格且显式同值时合并，保留原 DOM、数字、精度、单位和来源 SHA；错配符号、运算续式及裸重复必须仍被拒绝。回归须包含完整真实矩阵与丢格、坐标、单位篡改，不能只测字符串替换。
+完整表格格值的符号副本投影由 `lib/reader-source-display.js` 和 Python 发布器同步执行。`✓\checkmark`、`×\times` 仅在完整格且显式同值时合并，保留原 DOM、数字、精度、单位和来源 SHA；错配符号、运算续式及来源证明路径中的裸重复必须仍被拒绝。当前共享投影还处理匿名宏 `\anon[匿名写法]真名`、行内公式定界符 `\(...\)`、`{,}` 千位写法、完整相邻数值重复、重复符号、简单指数和整格纯上下标；它只改显示副本。两侧共用 `tests/fixtures/reader-cell-tex-display.json`，改一侧必须同步另一侧和语料。回归须包含完整真实矩阵与丢格、坐标、单位篡改，不能只测字符串替换。
 
 Reader-only 完成判据必须重放真实父子反馈组合，不能把已通过的原签名按子包单独重算。只读完成作用域禁止写盘和模型请求；旧父恢复须在调用分析前核验主检查点，并在每次保存前拒绝 Reader 之外的上游变化（图片下载阶段、图片清单与图片叙述合同除外）。错误路径应完整还原内存及保存回调，回归同时覆盖原对象和不同的传入检查点。真实旧包、四来源、原稿和负例都要验证，详见[事实反馈恢复](reader-explicit-retry.md#已完成主文的独立-reader-事实反馈)。
 
@@ -119,7 +119,7 @@ Reader-only 完成判据必须重放真实父子反馈组合，不能把已通�
 
 无法重新核对完整输入时，不得推定旧清洗没有影响输入：没有新版标记的旧 direct 会议暂存即使元数据是普通中文，也可能因缺少完整原文而拒绝复用；缺少可重新读取并核验的封存来源引用的明确 API Reader v2/v3 文件不得直接重新生成或续推。Manual、已发布页面只读和旧成功结构保持原规则。本次代码升级不自动调用模型或改写旧博客；有完整已核验来源且不含受影响输入的旧记录保留复用资格。
 
-Reader 的数字来源核验保留完整数值，不能把 `130130`、无 TeX 依据的粘连小数或重复符号猜成半值。只有明确 TeX 结构且两侧数值、单位相同的显示副本允许清理。Node 恢复和 Python 发布会重核旧表格绑定；依赖旧半值别名或不对应原始单元格的旧记录将拒绝复用，须按原来源修复并重新审查，不自动改写旧正文。原文同段同时包含完整值与合法半值时，仅凭两数同时出现无法认定旧半值错误，仍须核对其对应实验与表格位置。反馈须保留原文的百分数、比率或无量纲口径，不能自行补百分号或删掉重复数字。
+Reader 的数字来源核验保留完整数值，不能把 `130130`、无 TeX 依据的粘连小数或重复符号猜成半值。数字来源核验中，只有明确 TeX 结构且两侧数值、单位相同的显示副本允许清理。独立的表格单元格显示投影按完整格值折叠同值相邻重复（`3232`、`55,00855,008`）和重复符号，但它不改变数字来源核验、原来源或已付费正文。Node 恢复和 Python 发布会重核旧表格绑定；依赖旧半值别名或不对应原始单元格的旧记录将拒绝复用，须按原来源修复并重新审查，不自动改写旧正文。原文同段同时包含完整值与合法半值时，仅凭两数同时出现无法认定旧半值错误，仍须核对其对应实验与表格位置。反馈须保留原文的百分数、比率或无量纲口径，不能自行补百分号或删掉重复数字。
 
 新增字段前说明它的用途和核验方式：
 
@@ -218,7 +218,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 发布后网页核验与收尾
 
 - `npm run blog:push -- --date DATE --dry-run`：只列出审查凭证允许的精确文件清单，不 commit/push。
-- `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-paper-digest-blog`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
+- `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--workflow-source] [--wait] [--allow-degraded] [--allow-partial]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-paper-digest-blog`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
 
   `--wait` 默认最多等待 120 秒，默认每 10000 毫秒轮询；可用 `--wait-seconds N` 与 `--poll-interval-ms N` 调整。无 gh、部署仍在进行或部署证据不可得时，默认不能完成验收。`--json` 在等待时输出 JSONL（部署快照行、summary、最终结果）。现用保存文件使用 `contract` 和 `schemaFingerprint` 声明格式，并记录 `createdAt`、`partial`、`deploy`、`generationManifestSha256` 和 `publicationOid`。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
 

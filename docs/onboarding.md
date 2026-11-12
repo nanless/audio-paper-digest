@@ -46,10 +46,10 @@ npm run digest:status -- --date YYYY-MM-DD --watch
 
 ### 推送后继续核验网页
 
-1. 确认对应提交的 GitHub Pages 构建和部署成功。
-2. 核验全部目标页面的正式地址、HTTP 200 和准确标题；工具的有限检查不能替代实际要求，见[网页核验说明](maintenance.md#发布后网页核验与收尾)。
-3. 确认本次发布的不生图记录有效。日更默认不生图，论文原图仍正常展示与审查；只有用户另行明确改变要求，才执行对应图片任务。
-4. 重新读取 `npm run digest:status -- --date YYYY-MM-DD`。
+1. 确认对应提交的 GitHub Pages 构建和部署成功。用 `gh run view <run-id> --json jobs` 核对 `unit`、`build`、`deploy` 三个 job 及固定 step 均为成功；`npm run verify:web -- --date DATE --deploy OID --workflow-source` 会查询同一证据并写入记录。只看到 run 成功，不能代替这三个 job 的证据。
+2. 核验全部目标页面的正式地址、HTTP 200 和准确标题。逐页用 `curl -sS -L -o /dev/null -w '%{http_code} %{url_effective}' <url>` 确认状态码，再请求同一地址读取 `<title>` 与发布文件声明的标题比对；`verify:web` 的自动标题检查不能代替准确标题核对，见[网页核验说明](maintenance.md#发布后网页核验与收尾)。
+3. 确认本次发布的不生图记录有效。日更默认不生图，论文原图仍正常展示与审查；只有用户另行明确改变要求，才执行对应图片任务。需要登记时运行 `npm run digest:waive-visuals -- --date DATE --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"`，`--reason` 去掉首尾空白后至少 10 个字符，否则命令直接报错。
+4. 最后重新读取 `npm run digest:status -- --date YYYY-MM-DD`。
 
 Git 推送、站点部署和网页可读是不同结果。只有它们都核验通过，并保存相应记录，才能报告日更已经完成。
 
@@ -113,6 +113,6 @@ npm run digest:prepare -- YYYY-MM-DD --allow-empty-daily
 
 ### 推送后的部署与网页
 
-用 `npm run verify:web -- --date DATE --deploy OID` 检查本次发布。`npm run publish:finish -- --date DATE` 仅打印后续清单，执行者仍须按清单完成真实检查。
+用 `npm run verify:web -- --date DATE --deploy OID --workflow-source` 检查本次发布，核对 `unit`、`build`、`deploy` 三个 job、逐页 HTTP 200、正式地址和标题；完成后重新读取 `npm run digest:status -- --date DATE`。`npm run publish:finish -- --date DATE` 仅打印后续清单，执行者仍须按清单完成真实检查。
 
 已有任务的持续付费授权覆盖必要后续窗口，无需逐轮重新询问；每个窗口仍保留真实来源、限额、旧次数和全部费用。日更不生图同样已获持续授权，但登记仍须绑定当前发布。完整执行限制见[操作手册](../SKILL.md)和[AGENTS.md](../AGENTS.md)。

@@ -51,7 +51,7 @@ flowchart LR
 | 不可变文件与页面暂存 | `lib/publication-file-primitives.js`、`lib/paper-page-staging.js` | inode/单链接/目录、严格 UTF-8、SHA 回读和精确路径守卫 |
 | 发布与审查 | `publish-to-blog.py`、`publish_common.py`、流程发布适配器 | 内容 SHA 审查复用、事务锁、精确文件清单、远端 OID、部署与网页核验 |
 
-`lib/reader-*` 分成来源、表格、修复和恢复等模块是职责拆分；它们仍由公共引擎调用，不能因文件多而删掉守卫。
+`lib/reader-*` 分成来源、表格、修复和恢复等模块是职责拆分；它们仍由公共引擎调用，不能因文件多而删掉守卫。表格单元格显示投影是其中的共享显示层：`lib/reader-source-display.js` 与 `publish-to-blog.py` 使用同一规则和 `tests/fixtures/reader-cell-tex-display.json`；它只改页面显示，不改来源、已保存 Reader 或数字来源核验。
 
 ### 关键词预筛的召回检查
 

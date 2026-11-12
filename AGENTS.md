@@ -134,8 +134,8 @@ npm run digest:prepare -- YYYY-MM-DD
 | 核心摘要修补输出 | 40000 tokens | `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` |
 | 局部修复输出 | 24000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
-| API Reader 输出 | 64000 tokens | `PD_API_READER_MAX_TOKENS` |
-| Reader 局部补丁输出 | 16000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
+| API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
+| Reader 局部补丁输出 | 8000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |

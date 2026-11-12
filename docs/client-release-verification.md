@@ -7,20 +7,46 @@
 | 标签 | `v1.4.5`（附注标签），指向发行提交 `f9241190` |
 | 发布时间 | 2026-11-12 03:35（北京时间） |
 | 发行页 | https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.5 |
+| 版本、构建号 | 两端均为 1.4.5、21（Android `versionName` 1.4.5、`versionCode` 21） |
 | 附件 | 12 件：Mac 6 件（ZIP、DMG、`build-info.json`、`RELEASE_NOTES.md`、`release-manifest.json`、`SHA256SUMS`），Android 6 件（APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`） |
-| 匿名下载 | Mac ZIP 未登录请求返回 200 |
+| 匿名下载 | 发行页与 12 件附件未登录请求均返回 HTTP 200（2026-11-13 复核） |
 | Android 签名 | 沿用 1.4.4 签名库，证书 SHA-256 `6a0c3138…`；1.4.4 用户可直接覆盖升级，1.4.3 用户仍需备份后卸载重装 |
 | 人工验收 | 未重新执行 84/86 项人工矩阵；受影响项（Mac `APP-03`、`DATA-01`、`DATA-05`、`DATA-11`，Android `DATA-05`、`DATA-13`，两端 `APP-01`、`APP-09`、`REL-01`、`REL-02`、`REL-05`）只完成自动测试与包体层面覆盖 |
 
 1.4.5 的改动与验证范围见 [1.4.5 记录](workbench-1.4.5-review.md)。
 
-# 1.4.4 发行核验
+## 1.4.5 的十二件附件
+
+以下字节与 SHA-256 于 2026-11-13 从公开 Release API 读取，并逐件下载复核；按 `SHA256SUMS` 与 `ANDROID-SHA256SUMS` 对照，下载得到的摘要与下表一致。两份校验表都不包含自身，`release-manifest.json` 与 `android-release-manifest.json` 也不在对应校验表中，核对时以表内条目为准。
+
+| 平台 | 附件 | 字节 | SHA-256 |
+|---|---|---:|---|
+| Mac | `PaperDigest-macOS-1.4.5-arm64.dmg` | 57307256 | `27919a5016fafea3bf2c6f53f265a239c48711459708e3fbab1067fa90060985` |
+| Mac | `PaperDigest-macOS-1.4.5-arm64.zip` | 48829736 | `a3f6eebd0b00706c2f7ef3e86069119ef33fe7845765bab9741a51f30aaeeb09` |
+| Mac | `RELEASE_NOTES.md` | 2344 | `14e4f8ed85e0b6b1feabd5fc9c955810d291b0e33bdd2582e0fbd491b790c688` |
+| Mac | `SHA256SUMS` | 453 | `3c5bb1acecc5555e85a5f9566675f6832edf3f6585d75374471b413d6253ae2c` |
+| Mac | `build-info.json` | 1528 | `a28849ffde39a0a3d9eacca96f29dde3f83d1a4197a4c8acd70181b0c3ed3fab` |
+| Mac | `release-manifest.json` | 687 | `68924ea789615d6618b00d59769e82c21bde070350d943874edf8200fcdcda5c` |
+| Android | `paperdigest-android-1.4.5-21-universal.apk` | 75855430 | `a4e0573730b7dd10c868408bd70d69a7ff93258a08a726fa6b90812f7f620401` |
+| Android | `ANDROID-SHA256SUMS` | 389 | `edf7e77cf48e5d62b0899d83605310bebcc2e61d3016f8f30f819443cb5ece02` |
+| Android | `android-build-info.json` | 346102 | `a386749140fc709118d66ec9e4b7c64cd19a47cebd9dee6d4f6cb60a916a08f7` |
+| Android | `android-source-inputs.json` | 194923 | `4cab650c464c8635efd2bbc2caf53493ce08e6277fd702f131075f5bf70f488b` |
+| Android | `android-runtime-materials.json` | 31654 | `b22576b093c870d36e4f0d9b95eab83073a0f6a982dc845aa3591f1dd4b8160b` |
+| Android | `android-release-manifest.json` | 591 | `eaec499d397337724d8e0bd272551d7babd89ef7579b03e50433b0d0d8bdcbb3` |
+
+## 1.4.5 的签名
+
+Mac 包使用本地 ad-hoc 签名，未经过 Apple 公证；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `f9241190cad0fdcf68a043263ae6268e7cf1c1c6`，版本 1.4.5、构建号 21、arm64，最低系统 macOS 15.0。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
+
+公开 APK 沿用 1.4.4 的发布签名库。`android-build-info.json` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，`versionName` 1.4.5、`versionCode` 21、minSdk 28、targetSdk 37，应用标识 `com.nanless.paperdigest`，四种 ABI 齐全。签名方案与验证结果以该记录的 `signature` 字段和发行机器上 `apksigner verify` 的输出为准。已安装 1.4.4 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9…`，仍需先导出完整备份、卸载旧版再安装。
+
+# 1.4.4 发行核验（历史存档）
 
 本文记录 1.4.4 公开发行后的签名、附件和下载核验结果；1.4.3 的结论保留在“上一版”一节，供下一次发行对照。两版的附件、签名和证书分别登记，不能互相替代。发行操作本身见 [Mac 构建与发行](mac-app-release.md)，性能改动见[客户端性能](client-performance.md)。
 
-## 当前版本
+## 存档说明
 
-当前源码版本为 1.4.5（构建号 21），改动与验证范围见 [1.4.4 记录](workbench-1.4.4-review.md)。下文先登记 1.4.4 的公开结果、签名与附件，再保留 1.4.3 的签名对照、附件表和校验表；1.4.4 的包只能对照 1.4.4 的表，不能用 1.4.3 的字节或证书核验。
+本节起为 1.4.4 与 1.4.3 的历史发行记录，当前版本 1.4.5 的结果见上文。下文先登记 1.4.4 的公开结果、签名与附件，再保留 1.4.3 的签名对照、附件表和校验表；1.4.4 的包只能对照 1.4.4 的表，不能用 1.4.3 的字节或证书核验。
 
 1.4.4 重新生成了 Android 发布签名库（1.4.3 使用的签名库不在本机，也没有可用备份），因此 1.4.4 的签名证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，与 1.4.3 的 `d7c680d9…` 不同。已安装 1.4.3 的 Android 用户不能覆盖升级，需要先导出完整备份、卸载旧版，再安装 1.4.4、恢复资料并重新配置设备凭据。签名库在仓库外以 `0600` 权限单独保存，口令保存在本机登录钥匙串的服务条目 `com.nanless.PaperDigest.android-release-signing.v1` 中；签名库、私钥和证书都需要单独备份。公开的 `android-build-info.json` 记录的证书 SHA-256 也是 `6a0c3138…`。
 

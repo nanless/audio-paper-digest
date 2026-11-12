@@ -12,7 +12,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 | Item | Supported configuration |
 |---|---|
-| Version | 1.4.3, build 19; published on 5 November 2026 |
+| Version | 1.4.5, build 21; published on 12 November 2026 |
 | Operating system | macOS 15 or later |
 | Processor | Apple Silicon, arm64; the current package does not contain both Intel and Apple Silicon architectures |
 | Signing | Local ad-hoc signing; not notarized by Apple |
@@ -20,7 +20,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 Mac and Android packages and checksums are available on the same [GitHub Releases page](https://github.com/nanless/audio-paper-digest/releases). Drag the extracted `论文速递工作台.app`, or the application inside the DMG, into Applications. If macOS blocks the first launch, verify the download source and published checksum, then use the appropriate Privacy & Security action to allow the application to open.
 
-Version 1.3.0 adds site-wide hierarchical classification, reorganizes desktop navigation, and aligns query rules with Android. See the [implementation and acceptance record (Chinese)](../../docs/workbench-1.3.0-review.md). Version 1.4.3 moves the large catalog into a background load, uses a compact browsing projection, and reduces repeated work when opening explanations and uploading cloud backups. See the [1.4.3 record (Chinese)](../../docs/workbench-1.4.3-review.md#发行状态) for automated tests, the manual acceptance not repeated, and the release state, and [client performance](../../docs/client-performance.md) for measured changes. The published package is 1.4.3; signing and asset checks are in [client release verification](../../docs/client-release-verification.md).
+Version 1.3.0 adds site-wide hierarchical classification, reorganizes desktop navigation, and aligns query rules with Android. See the [implementation and acceptance record (Chinese)](../../docs/workbench-1.3.0-review.md). Version 1.4.3 moves the large catalog into a background load, uses a compact browsing projection, and reduces repeated work when opening explanations and uploading cloud backups. See the [1.4.3 record (Chinese)](../../docs/workbench-1.4.3-review.md#发行状态) for automated tests, the manual acceptance not repeated, and the release state, and [client performance](../../docs/client-performance.md) for measured changes. The published package is 1.4.5; it fixes a macOS crash on corrupt catalog JSON and an Android foreground synchronization loop, with changes and tested scope in the [1.4.5 record (Chinese)](../../docs/workbench-1.4.5-review.md). Signing and asset checks are in [client release verification](../../docs/client-release-verification.md).
 
 Save edits and quit the old application normally before upgrading. Applications with the old name are not removed automatically. Old and new packages share the existing data directory and Keychain service, so do not run them simultaneously. Removing the application package leaves your personal research data in place. Export a backup before separately clearing that data.
 

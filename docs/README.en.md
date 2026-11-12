@@ -25,6 +25,8 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
+Version 1.4.5 fixes repeated full-catalog synchronization when the Android app returns to the foreground, a macOS crash when the saved catalog JSON is corrupt, and `apps/macos/test.sh` exiting early without running the remaining suites. Both platforms are at version 1.4.5, build 21, published on 12 November 2026. See the [1.4.5 record](workbench-1.4.5-review.md) for the actual changes and tested scope.
+
 Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also adds to the repository the public-paper PDF and three figure crops that the macOS tests read, and closes gaps in the macOS suite. macOS client tests still run locally through `bash apps/macos/test.sh` and are not part of CI; Android puts only its Gradle unit tests in a separate job. See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
 
 Version 1.4.3 performance work (compact catalog projection, background startup decoding, reused explanation and aggregate parsing, offline index, merged bridge calls) is recorded in the [1.4.3 record](workbench-1.4.3-review.md).
