@@ -205,16 +205,6 @@ function projectReaderCellTexDisplay(value) {
     output = output.split('\\(').join('').split('\\)').join('');
     // 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace(/{,}/g, ',');
-    output = output.replace(/(\d{1,3}(?:,\d{3})+)\1(?![\d,])/g, '$1');
-    if (!/^(?:19|20)\d{2}$/.test(output.trim())) {
-        output = output.replace(/(?<![\d,])(\d{2,})\1(?![\d,])/g, '$1');
-    }
-    // 纯数字被原样写了两遍（3232 → 32、100100 → 100）；一位数重复与年份不动。
-    const whole = output.trim();
-    if (whole.length >= 4 && !/^(?:19|20)\d{2}$/.test(whole)) {
-        const doubled = /^(\d{2,})\1$/.exec(whole);
-        if (doubled) return doubled[1];
-    }
     if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
@@ -235,8 +225,7 @@ function projectReaderCellTexDisplay(value) {
         if (folded === output) break;
         output = folded;
     }
-    // 简单指数写法 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
-    return output.replace(/(\d)\^\{([-−+]\d+)\}/g, '$1$2');
+    return output;
 }
 
 function normalizeReaderSourceDisplayArtifacts(value) {
