@@ -64,6 +64,11 @@ class ReaderCellTexDisplayTest(unittest.TestCase):
             publish._assert_rendered_tables_have_no_bare_tex(
                 '| Model | value |\n| --- | --- |\n| A | 22.9\\tau |\n')
 
+    def test_single_digit_and_year_cells_are_not_folded_as_duplicates(self):
+        """55、99 是正常数值，2020 是年份，都不能当成「重复写了两遍」折叠。"""
+        for value in ('55', '99', '22', '2020', '2021', '6464', '100100'):
+            self.assertEqual(publish._project_reader_cell_tex_display(value), value)
+
 
 if __name__ == '__main__':
     unittest.main()

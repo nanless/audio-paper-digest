@@ -8398,7 +8398,8 @@ def dedupe_image_alts(text):
         count = seen.get(alt, 0) + 1
         seen[alt] = count
         if count > 1:
-            alt = f"{alt} - 图 {count}"
+            # 「- 图 N」会被误读成论文图号；这里只是同说明配图在页面里的序号。
+            alt = f"{alt}（页面第 {count} 张同说明配图）"
         return f"![{alt}]({url})"
 
     return re.sub(r'!\[([^\]]*)\]\(([^)\n]+)\)', repl, text)

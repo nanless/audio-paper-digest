@@ -175,8 +175,15 @@ function foldReaderTexCellDuplicate(value) {
     }
     return text;
 }
+function projectReaderAnonMacro(value) {
+    // 匿名投稿的自定义宏 `\\anon[匿名写法]{真名}` 在扁平文本里只剩 `\\anon[匿名写法]真名`。
+    // 可见输出是方括号里的匿名写法；只在紧跟一段字母数字短词时替换。
+    return value.replace(/\\anon\[([^\]]*)\][A-Za-z0-9-]*(?![A-Za-z0-9])/g, '$1');
+}
+
 function projectReaderCellTexDisplay(value) {
     let output = String(value ?? '');
+    if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     if (!output.includes('\\')) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。

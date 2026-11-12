@@ -1673,7 +1673,7 @@ primary_method_tag: #基准测试
         fixed = dedupe_image_alts(fix_empty_markdown_links(text))
         self.assertIn('![图](image_not_available)', fixed)
         self.assertIn('![same](a.png)', fixed)
-        self.assertIn('![same - 图 2](b.png)', fixed)
+        self.assertIn('![same（页面第 2 张同说明配图）](b.png)', fixed)
         self.assertIn('空', fixed)
         self.assertNotIn('[空]()', fixed)
 
@@ -1781,7 +1781,7 @@ primary_method_tag: #基准测试
         upstream = text
         fixed = sanitize_markdown_for_publish(text)
         self.assertNotIn('<u>', fixed)
-        self.assertIn('![same - 图 2](b.png)', fixed)
+        self.assertIn('![same（页面第 2 张同说明配图）](b.png)', fixed)
         self.assertNotIn('[empty]()', fixed)
         self.assertIn('title: "Bad"', fixed)
         self.assertIn('配置', fixed)
