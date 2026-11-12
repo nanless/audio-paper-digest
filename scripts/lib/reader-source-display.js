@@ -124,9 +124,14 @@ function readerTexCellCanonical(value) {
 }
 function readerTexPlain(value) {
     let output = String(value ?? '');
-    if (!output.includes('\\') && !/[_^]\{/.test(output) && !output.includes('{,}')) return output;
+    if (!output.includes('\\') && !/[_^]\{/.test(output) && !output.includes('{,}')
+        && !/(\d{2,})\1/.test(output.trim())) return output;
     output = output.replace(/\\[,;:!]/g, '');
     output = output.replace(/{,}/g, ',');
+    output = output.replace(/(\d{1,3}(?:,\d{3})+)\1(?![\d,])/g, '$1');
+    if (!/^(?:19|20)\d{2}$/.test(output.trim())) {
+        output = output.replace(/(?<![\d,])(\d{2,})\1(?![\d,])/g, '$1');
+    }
     for (let round = 0; round < 10; round++) {
         const before = output;
         output = output
@@ -205,6 +210,10 @@ function projectReaderCellTexDisplay(value) {
     output = output.split('\\(').join('').split('\\)').join('');
     // 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace(/{,}/g, ',');
+    output = output.replace(/(\d{1,3}(?:,\d{3})+)\1(?![\d,])/g, '$1');
+    if (!/^(?:19|20)\d{2}$/.test(output.trim())) {
+        output = output.replace(/(?<![\d,])(\d{2,})\1(?![\d,])/g, '$1');
+    }
     if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
@@ -225,6 +234,8 @@ function projectReaderCellTexDisplay(value) {
         if (folded === output) break;
         output = folded;
     }
+    // 简单指数 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
+    output = output.replace(/(\d)\^\{([-−+]\d+)\}/g, '$1$2');
     // 整格就是一小段纯上下标 TeX（d_{z}）时，按可见形式投影成 dz。
     const strippedCell = output.trim();
     if (strippedCell.length <= 40 && !strippedCell.includes('\\') && /[_^]\{/.test(strippedCell)) {

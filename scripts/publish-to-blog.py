@@ -7571,7 +7571,12 @@ def _project_reader_cell_tex_display(value):
     output = output.replace('\\(', '').replace('\\)', '')
     # 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
     output = output.replace('{,}', ',')
-    if '\\' not in output and not re.search(r'[_^]\{', output):
+    output = re.sub(r'(\d{1,3}(?:,\d{3})+)\1(?![\d,])', r'\1', output)
+    whole_cell = output.strip()
+    if len(whole_cell) >= 4 and not re.fullmatch(r'(?:19|20)\d{2}', whole_cell):
+        output = re.sub(r'(?<![\d,])(\d{2,})\1(?![\d,])', r'\1', output)
+    if '\\' not in output and not re.search(r'[_^]\{', output) \
+            and not re.search(r'(\d{2,})\1', output.strip()):
         return output
     output = re.sub(r'\\[,;:]', '', output)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
@@ -7597,6 +7602,8 @@ def _project_reader_cell_tex_display(value):
         if folded == output:
             break
         output = folded
+    # 简单指数 10^{-4} 与来源的可见写法 10−4 等价，投影成同一形态。
+    output = re.sub(r'(\d)\^\{([-−+]\d+)\}', r'\1\2', output)
     # 整格就是一小段纯上下标 TeX（d_{z}）时，按可见形式投影成 dz。
     stripped_cell = output.strip()
     if len(stripped_cell) <= 40 and '\\' not in stripped_cell and re.search(r'[_^]\{', stripped_cell):
