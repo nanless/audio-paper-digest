@@ -117,8 +117,8 @@ test('new revision and structure versions retain their actual full-output reques
   }
  }
  // Other stage policies do not inherit the full-output allowance.
- for(const[stage,version,expected]of [['revision','analysis-prompt-text-v2',16000],['tableRepair','analysis-prompt-text-v2',16000],
-  ['methodRepair','analysis-prompt-text-v3',16000],['coreSummaryRepair','analysis-prompt-text-v7',32000]]){
+ for(const[stage,version,expected]of [['revision','analysis-prompt-text-v2',24000],['tableRepair','analysis-prompt-text-v2',24000],
+  ['methodRepair','analysis-prompt-text-v3',24000],['coreSummaryRepair','analysis-prompt-text-v7',32000]]){
   checked._budgetCaptures.length=0;checked.buildTextStageFingerprint(stage,analysis,'evidence',version,{});
   assert.equal(checked._budgetCaptures[0],expected,stage+version);
  }

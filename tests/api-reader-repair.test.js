@@ -452,7 +452,8 @@ test('生产续跑只请求补丁，合并后正文不完整仍然拒绝', async
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '完整论文证据', {
         ...base, readerMaxAttempts: 2, readerCallModel: async (messages, budget, options) => {
             calls++;
-            assert.ok(budget <= 16000);
+            // 补丁额度按推理型模型抬到 24000，升级上限 32000。
+            assert.ok(budget <= 32000);
             assert.equal(options.usageContext.stage, 'apiReaderRepair');
             const prompt = messages[0].content[0].text;
             assert.ok(prompt.includes(require('../scripts/lib/reader-source-diagnostics.js').readerNumericSpellingGuidance()));

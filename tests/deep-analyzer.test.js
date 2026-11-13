@@ -61,7 +61,8 @@ describe('标签规则的运行时分析集成', () => {
             }
         );
         assert.strictEqual(prompts.length, 2);
-        assert.deepStrictEqual(budgets, [8000, 8000]);
+        // 标签核验的预算按 deepseek 的 max 推理抬到 24000（推理 token 也算在额度里）。
+        assert.deepStrictEqual(budgets, [24000, 24000]);
         assert.match(prompts[1], /标签修复结果中的概念 ID、数量、重复项或主任务与主方法的选择不符合要求/);
         assert.strictEqual(
             deep.maskClassificationFields(repaired),

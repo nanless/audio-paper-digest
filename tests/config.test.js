@@ -50,7 +50,7 @@ describe('config', () => {
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.repairMaxTokens,
-            (16000)
+            (24000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.revisionMaxTokens,
@@ -62,7 +62,7 @@ describe('config', () => {
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens,
-            (8000)
+            (24000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs,
@@ -281,7 +281,7 @@ describe('config', () => {
             withProjectEnv(`PD_API_READER_CONCURRENCY=${requested}`, configured => {
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderConcurrency, expected);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderMaxTokens, 48000);
-                assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderRepairMaxTokens, 8000);
+                assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderRepairMaxTokens, 24000);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.maxRetries, 2);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiMaxRetries, 3);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs, 2400000);

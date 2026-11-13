@@ -232,7 +232,7 @@ function resolveApiReaderRepairRetryMaxTokens(
     // 局部补丁被截断后可以重试，但最多用正常 Reader 预算 48000 token 的三分之一，
     // 并且不超过通用的 16000 token 修复上限。普通补丁身份仍是 8000，已有的付费
     // 候选项可以顺着实现 SHA 那条路迁移过来。
-    const boundedRetry = Math.min(16000, Math.max(base, Math.floor(full / 3)));
+    const boundedRetry = Math.min(32000, Math.max(base, Math.floor(full / 3)));
     return Math.min(full, boundedRetry);
 }
 
@@ -1058,7 +1058,7 @@ function savedScoringAuditFirstRequestBody(stage, input, evidence) {
     const prompt = renderScoringAuditPrompt(promptPath, prepareScoringAuditAnalysis(input), evidence,
         '这是第一次输出，没有上一次校验错误。');
     return buildConfiguredModelRequestBody(sanitizeModelMessages([{ role: 'user', content: [{ type: 'text', text: prompt }] }]),
-        16000, { ...DEEP_CONFIG, temperature: SCORING_AUDIT_TEMPERATURE,
+        SCORING_AUDIT_MAX_TOKENS, { ...DEEP_CONFIG, temperature: SCORING_AUDIT_TEMPERATURE,
             usageContext: { stage: 'scoringAudit', contentAttempt: 1 } },
         detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model));
 }
@@ -1088,7 +1088,7 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
         const request = options.callModelFn || callModel;
         const raw = await request(
             [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-            16000,
+            SCORING_AUDIT_MAX_TOKENS,
             { temperature: SCORING_AUDIT_TEMPERATURE,
                 usageContext: { stage: 'scoringAudit', contentAttempt: attempt } }
         );
@@ -1120,7 +1120,7 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
                 model: DEEP_CONFIG.model,
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
                 endpointSha256: crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex'),
-                maxTokens: 16000,
+                maxTokens: SCORING_AUDIT_MAX_TOKENS,
                 maxResponseBytes: API_MAX_RESPONSE_BYTES,
                 temperature: SCORING_AUDIT_TEMPERATURE,
                 promptTemplateSha256,
@@ -12394,9 +12394,19 @@ function modelFingerprint(config, temperature = API_TEMPERATURE, maxTokens = API
     };
 }
 
+// 开源扫描与标签核验都是长输入、短输出，但推理 token 也吃额度；
+// 该上限同时用于请求和恢复指纹，改它会改变对应阶段的指纹。
+const OPEN_SOURCE_SCAN_MAX_TOKENS = 24000;
+
+// 评分审计、开源扫描、标签核验都是长输入短输出，但推理 token 与输出共用额度；
+// deepseek 开 max 推理后原来的 16000/8000 会被推理吃光。
+const SCORING_AUDIT_MAX_TOKENS = 24000;
+
 const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
     openSourceScan: {
-        maxTokens: 8000,
+        // deepseek-v4.1-flash 开 max 推理时，推理 token 也算在这个上限里；
+        // 8000 会被推理吃光，78k 字符输入的扫描直接截断。放开到 24000。
+        maxTokens: 24000,
         evidenceMaxChars: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
         patterns: OPEN_SOURCE_EVIDENCE_PATTERNS,
         taskLabel: 'OPEN_SOURCE',
@@ -12439,7 +12449,8 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         typeAware: true
     },
     tagSelection: {
-        maxTokens: 8000,
+        // 同上：标签核验也是长输入短输出，但推理占额度，8000 不够。
+        maxTokens: 24000,
         evidenceMaxChars: 30000,
         patterns: BROAD_EVIDENCE_PATTERNS,
         taskLabel: '标签核验与修复',
@@ -18054,7 +18065,7 @@ function savedScoringAuditFingerprintChanged(paper, analysisManifest, scoringSta
         || scoringStage.model !== DEEP_CONFIG.model
         || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
         || scoringStage.endpointSha256 !== crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex')
-        || scoringStage.maxTokens !== 16000
+        || scoringStage.maxTokens !== SCORING_AUDIT_MAX_TOKENS
         || scoringStage.maxResponseBytes !== API_MAX_RESPONSE_BYTES
         || scoringStage.temperature !== SCORING_AUDIT_TEMPERATURE
         || scoringStage.promptTemplateSha256 !== currentPromptTemplateSha256
@@ -20194,7 +20205,9 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
         textForAnalysis: evidence
     }), 'openSourceScan', paper);
     try {
-        return await callModel([{ role: 'user', content: prompt }], 8000,
+        // 上限必须容得下推理：deepseek 开 max 时推理 token 与可见输出共用额度，
+        // 8000 会让 78k 字符的扫描在 59 秒就截断，整篇判失败。
+        return await callModel([{ role: 'user', content: prompt }], OPEN_SOURCE_SCAN_MAX_TOKENS,
             { usageContext: { stage: 'openSourceScan' } });
     } catch (error) {
         // 明确的结构化拒答不再重复请求；这一节只从原文逐字提取资源 URL。
@@ -21024,6 +21037,10 @@ async function repairCoreSummarySection(
     let feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     let candidateSummary = existingSummary;
     const repairCallModel = options.callModelFn || callModel;
+    // 推理型模型可能把额度耗在推理上。被截断说明「额度不够」而不是「内容不合格」：
+    // 升一档额度重试同一处修复（最多一次），不占用三次内容修复机会，也不改记录身份。
+    let coreRepairBudget = TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;
+    let truncationEscalated = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
         const retryTargets = [];
         const lengthIssue = feedback.match(/中文字符(过多|不足): (\d+)\/(\d+)/);
@@ -21098,13 +21115,13 @@ async function repairCoreSummarySection(
         const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
             identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,
             sourceText, evidenceText: evidenceContext, candidateSummary,
-            maxTokens: TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+            maxTokens: coreRepairBudget,
             repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null
         });
         let rawResponse;
         try {
             rawResponse = String(await repairCallModel([{ role: 'user', content: prompt }],
-                TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+                coreRepairBudget,
                 { usageContext: { stage: 'coreSummaryRepair' },
                     ...(resolveRepairRequestPolicy('coreSummaryRepair')
                         ? { repairThinkingMode: resolveRepairRequestPolicy('coreSummaryRepair').thinkingMode } : {}) }) || '');
@@ -21112,6 +21129,13 @@ async function repairCoreSummarySection(
             diagnosticApi.saveCoreSummaryDisposition(diagnostic, {
                 status: 'request_failed', error: { code: error.code || null, message: error.message }
             });
+            if (error.code === 'MODEL_OUTPUT_TRUNCATED' && !truncationEscalated) {
+                truncationEscalated = true;
+                coreRepairBudget = Math.min(64000, coreRepairBudget * 2);
+                attempt -= 1;
+                console.warn(`    [deep] ⚠️  核心摘要修复被截断，额度升到 ${coreRepairBudget} 后重试同一处修复`);
+                continue;
+            }
             throw error;
         }
         diagnosticApi.saveCoreSummaryResponse(diagnostic, rawResponse);
