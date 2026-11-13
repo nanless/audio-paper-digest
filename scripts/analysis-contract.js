@@ -184,7 +184,9 @@ const CORE_SUMMARY_CONTRACT_VERSION = coreSummaryFormat.originalTag;
 const CORE_SUMMARY_MIN_CHINESE_CHARS = 320;
 const CORE_SUMMARY_MAX_CHINESE_CHARS = 600;
 const CORE_SUMMARY_MIN_SENTENCES = 6;
-const CORE_SUMMARY_MAX_SENTENCES = 9;
+// 用户 2026-11-14 要求调整判定口径：推理型模型稳定落在 10–12 句，
+// 上限从 9 放宽到 12（下限与字数不变，仍要求 320–600 字）。
+const CORE_SUMMARY_MAX_SENTENCES = 12;
 const CORE_SUMMARY_RESULT_UNAVAILABLE = '原文未提供可核对的关键定量结果';
 const CORE_SUMMARY_COST_UNAVAILABLE = '原文未披露训练、推理或部署成本';
 const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])/g;

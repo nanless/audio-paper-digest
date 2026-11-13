@@ -47,17 +47,21 @@ test('已合格摘要直接返回原字节且不请求模型',async()=>{
 });
 
 test('句数过多与量化错误并存时第二次请求明确允许合并非保护说明句', async () => {
+    // 句数上限已从 9 放宽到 12，这里补足到明显超限（14 句以上）再验证反馈。
     const candidate = good.replace(resultSentence, '结果更好。')
-        + '任务还有一个额外难点需要根据实际输入说明。方法还需解释前后步骤的衔接。过程应说明每个模块的职责。研究还需交代输出如何被评估。';
+        + '任务还有一个额外难点需要根据实际输入说明。方法还需解释前后步骤的衔接。过程应说明每个模块的职责。'
+        + '研究还需交代输出如何被评估。数据来源需要说明采集条件。评测指标需要说明口径。'
+        + '对比方法需要交代设置。训练成本需要交代硬件。推理延迟需要交代测量方式。'
+        + '适用范围需要交代边界条件。';
     const firstIssue = contract.validateCoreSummarySemanticContract(replace(candidate), { sourceText: source });
-    assert.match(firstIssue, /句数必须为 6–9/);
+    assert.match(firstIssue, /句数必须为 6–12/);
     assert.match(firstIssue, /定量|量化|指标/);
     let calls = 0;
     const repaired = await deep.repairCoreSummarySection(paper, replace('摘要待修复。'), source, source, {
         callModelFn: async messages => {
             calls += 1;
             if (calls === 1) return `## 核心摘要\n${candidate}`;
-            assert.match(messages[0].content, /当前摘要为 \d+ 句，须为 6–9 句/);
+            assert.match(messages[0].content, /当前摘要为 \d+ 句，须为 6–12 句/);
             assert.match(messages[0].content, /关键差异可接在方法句内，用分号衔接，不必另起一句/);
             assert.match(messages[0].content, /所有事实和条件保留/);
             assert.match(messages[0].content, /任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);

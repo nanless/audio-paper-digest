@@ -68,7 +68,7 @@ test('每次摘要修复请求使用当前候选真实字数与剩余空间，�
             assert.ok(prompt.includes('距 600 个上限只剩 ' + (600 - actualCount) + ' 个'));
             assert.match(prompt, /420–520/);
             assert.match(prompt, /320–600/);
-            assert.match(prompt, /6–9/);
+            assert.match(prompt, /6–12/);
             assert.match(prompt, /修正缺项应替换原有不完整或重复句/);
             assert.match(prompt, /反馈明确要求逐字保留的句子必须原样保留/);
             assert.match(prompt, /数值可以位于不同方法行/);

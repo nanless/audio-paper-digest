@@ -151,16 +151,19 @@ test('空表头、没有数据行及数字重复的表格在选择前被拒绝�
 });
 
 test('需要清理的数值或未处理的 TeX 不能直接选用，合法数值和单位保持原样', () => {
+    // 用户 2026-11-14 要求调整判定口径：可用性按显示投影后的文本判定。
+    // 纯显示双写（22.96 ±\pm 0.08、3232 这类）投影后已无重复，可选；
+    // 真正的数值错误（2.222.22）和未处理 TeX（k=\tilde{k}）仍然拒绝。
     const { artifacts } = artifactsFixture();
-    for (const text of ['2.222.22', '3.093.09', '22.96 ±\\pm 0.08', 'k=\\tilde{k}']) {
+    for (const text of ['2.222.22', '3.093.09', 'k=\\tilde{k}']) {
         const table = structuredClone(artifacts.tables[1]);
         table.matrix[1][1] = text;
         const result = assessReaderTableSelectionEligibility(table);
         assert.equal(result.eligible, false, text);
         assert.ok(result.reasonCodes.some(code => ['source_display_cleanup_required', 'unresolved_source_tex'].includes(code)));
     }
-    // 同值双写只影响“已合格原表”的显示投影，不放宽选择资格；投影本身在
-    // reader-source-display 的共享语料里逐条锁定。
+    // 纯显示双写由投影折成最终展示形态，投影本身在 reader-source-display 的
+    // 共享语料里逐条锁定。
     assert.equal(require('../scripts/lib/reader-source-display')
         .normalizeReaderSourceDisplayArtifacts('22.96 ±\\pm 0.08'), '22.96 ± 0.08');
     for (const text of ['2.22', '3.09', '2.22 dB', '3.09 ms', '2025']) {

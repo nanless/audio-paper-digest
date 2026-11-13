@@ -4835,7 +4835,7 @@ has_dataset: 否
             .some(issue => issue.startsWith('核心摘要内容不足')), false);
     });
 
-    it('核心摘要详细程度检查同时要求 320–600 中文字符和 6–9 句', () => {
+    it('核心摘要详细程度检查同时要求 320–600 中文字符和 6–12 句', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withSummary = summary => validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -4869,7 +4869,7 @@ has_dataset: 否
             withSummary(explicitObservationSetting), { sourceText: source }
         ), null);
         assert.match(getCoreSummaryDetailIssue(withSummary(detailed.replace(/。/g, '，')), { sourceText: source }), /当前 0/);
-        assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'补充说明。'.repeat(3)}`), { sourceText: source }), /当前 10/);
+        assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'补充说明。'.repeat(8)}`), { sourceText: source }), /当前 15/);
         assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'扩展证据'.repeat(100)}`), { sourceText: source }), /中文字符过多/);
 
         const unavailable = detailed.replace(

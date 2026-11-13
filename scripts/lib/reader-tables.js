@@ -560,9 +560,13 @@ function assessReaderTableSelectionEligibility(table) {
         for (const [row, cells] of matrix.entries()) {
             const headerRow = (effectiveReaderTableRows(table).headerRows || []).includes(row);
             for (const [column, text] of cells.entries()) {
-                if (!(headerRow && readerVisibleWithTex(text)) && findReaderTablePasteDuplication(text, {
+                // 判定口径（用户 2026-11-14 要求调整）：按显示投影后的文本检查重复。
+                // 投影会把「可见值 + TeX 副本」折成最终展示形态，不会改变任何数值；
+                // 按原始单元格判会让这类表永远不可选。
+                const displayCell = require('./reader-source-display').projectReaderCellTexDisplay(text);
+                if (!(headerRow && readerVisibleWithTex(text)) && findReaderTablePasteDuplication(displayCell, {
                     header: matrix[0], row: cells, rowIndex: row, columnIndex: column,
-                    sourceTexts: [text]
+                    sourceTexts: [displayCell]
                 })) add('source_display_cleanup_required', { row, column });
                 if (!(headerRow && readerVisibleWithTex(text)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(text))) add('unresolved_source_tex', { row, column });
                 if (unsafeMarkdownCell(projectReaderMathSymbols(text))) add('unsafe_markdown_cell', { row, column });

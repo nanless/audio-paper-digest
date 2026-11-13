@@ -21114,11 +21114,22 @@ async function repairCoreSummarySection(
                + `上次校验错误：${feedback}`;
         const candidateChineseChars = (candidateSummary.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
         const remainingChineseChars = CORE_SUMMARY_MAX_CHINESE_CHARS - candidateChineseChars;
+        const currentSentenceCount = (String(candidateSummary || '').match(/[。！？!?]/gu) || []).length;
+        const numberedSentences = currentSentenceCount > 9
+            ? String(candidateSummary || '').split(/(?<=[。！？!?])/u).map(part => part.trim()).filter(Boolean)
+                .map((part, index) => `${index + 1}. ${part}`).join('\n')
+            : '';
+        const sentenceOverflow = currentSentenceCount > 12
+            ? `当前 ${currentSentenceCount} 句，已超出 12 句上限：必须删掉或合并其中 ${currentSentenceCount - 12} 句重复、并列或可合并的说明，`
+                + '不要靠压缩其他句子来腾出句数，也不要新增任何句子。当前句子逐条编号如下，请直接指定保留与合并方式后再输出：\n'
+                + numberedSentences
+            : '';
         const lengthBudget = `当前摘要实际含 ${candidateChineseChars} 个汉字与中文标点，`
             + (remainingChineseChars >= 0
                 ? `距 600 个上限只剩 ${remainingChineseChars} 个。`
                 : `已超过 600 个上限 ${-remainingChineseChars} 个。`)
-            + '本次完整输出仍以 420–520 个为目标，须为 320–600 个、6–9 句。'
+            + '本次完整输出仍以 420–520 个为目标，须为 320–600 个、6–12 句。'
+            + sentenceOverflow
             + '修正缺项应替换原有不完整或重复句，不在保留全部原句后另行追加说明。'
             + '压缩表达不删改正确事实、比较条件、数字、单位、方向、边界或成本；'
             + '反馈明确要求逐字保留的句子必须原样保留。';
@@ -21130,7 +21141,7 @@ async function repairCoreSummarySection(
             textForAnalysis: evidenceContext
         }) + '\n\n【输出前自检，必须逐条满足】\n'
             + '1. 只输出 `## 核心摘要` 一节，不放其他标题或说明。\n'
-            + '2. 正文必须是 6–9 句；句数以中文句号、问号、感叹号计。当前稿句数不对时，先删或合并重复说明句，再补缺项，绝不能靠追加句子解决。\n'
+            + '2. 正文必须是 6–12 句；句数以中文句号、问号、感叹号计。当前稿句数不对时，先删或合并重复说明句，再补缺项，绝不能靠追加句子解决。\n'
             + '3. 正文汉字与中文标点合计 320–600 个。\n'
             + '4. 必须有一句同时写清：评测设置或数据集、原文的指标名、两个数值、以及高低或变化方向；指标名不能用“性能”“效果”“分数”代替。\n'
             + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。';

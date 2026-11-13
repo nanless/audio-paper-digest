@@ -71,6 +71,7 @@ test('方法动作和 gAP 不改变长度、句数或边界要求', () => {
     assert.match(pythonIssue(noBoundary), /缺少结论适用边界/u);
     assert.match(nodeIssue(base + '字'.repeat(650)), /中文字符过多/u);
     assert.match(pythonIssue(base + '字'.repeat(650)), /中文字符必须为/u);
-    assert.match(nodeIssue(base + '补充一句。'.repeat(5)), /句数必须/u);
+    // 句数上限已放宽到 12，补足 10 句才会超限。
+    assert.match(nodeIssue(base + '补充一句。'.repeat(10)), /句数必须/u);
     assert.match(pythonIssue(base + '补充一句。'.repeat(5)), /句数必须/u);
 });
