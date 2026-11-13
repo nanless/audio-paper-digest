@@ -62,7 +62,7 @@ describe('标签规则的运行时分析集成', () => {
         );
         assert.strictEqual(prompts.length, 2);
         // 标签核验的预算按 deepseek 的 max 推理抬到 24000（推理 token 也算在额度里）。
-        assert.deepStrictEqual(budgets, [24000, 24000]);
+        assert.deepStrictEqual(budgets, [96000, 96000]);
         assert.match(prompts[1], /标签修复结果中的概念 ID、数量、重复项或主任务与主方法的选择不符合要求/);
         assert.strictEqual(
             deep.maskClassificationFields(repaired),
@@ -5986,7 +5986,8 @@ has_dataset: 否
         assert.match(prompt, /不要把 `0\.85` 写成 `85\.00`/);
         assert.match(prompt, /也不要增删末尾的零、舍入、把百分数与小数互换、换算单位或自己算差值/);
         assert.match(prompt, /摘要和引言里的概括值不能和表格里的基线值拼成一组比较/);
-        assert.strictEqual(maxTokens, 32000);
+        // 核心摘要新请求直接给足额度。
+        assert.strictEqual(maxTokens, 192000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
@@ -6049,7 +6050,8 @@ has_dataset: 否
                 return `## 核心摘要\n${existingSummary}`;
             } }
         ), /原文无可核定量结果/);
-        assert.strictEqual(prompts.length, 3);
+        // 核心摘要修复机会已从 3 提到 5（推理型模型收敛更慢）。
+        assert.strictEqual(prompts.length, 5);
         assert.match(prompts[1], /删除不能由原文核对的实验数值断言/);
         assert.match(prompts[1], /原文未提供可核对的关键定量结果/);
         assert.match(prompts[1], /不得同时保留或新增实验数字/);
@@ -6118,11 +6120,12 @@ has_dataset: 否
     it('Reader patch 截断重试预算受完整 Reader 预算和 16000 上限共同约束', () => {
         const { resolveApiReaderRepairRetryMaxTokens,
             shouldEscalateApiReaderRepairBudget } = require('../scripts/deep-analyzer.js');
+        // 升级上限按推理型模型抬到 32000（deepseek max 会把 16000 吃光）。
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(48000, 8000), 16000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(24000, 8000), 8000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(12000, 8000), 8000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(6000, 8000), 6000);
-        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(96000, 12000), 16000);
+        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(96000, 12000), 32000);
         assert.throws(() => resolveApiReaderRepairRetryMaxTokens(0, 8000), /positive safe integer/);
         const finalBaseTruncation = { attempts: 7, fullAttempts: 2,
             lastContentError: { code: 'MODEL_OUTPUT_TRUNCATED', requestKind: 'patch',

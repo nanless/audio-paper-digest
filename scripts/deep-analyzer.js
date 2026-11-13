@@ -232,7 +232,7 @@ function resolveApiReaderRepairRetryMaxTokens(
     // 局部补丁被截断后可以重试，但最多用正常 Reader 预算 48000 token 的三分之一，
     // 并且不超过通用的 16000 token 修复上限。普通补丁身份仍是 8000，已有的付费
     // 候选项可以顺着实现 SHA 那条路迁移过来。
-    const boundedRetry = Math.min(32000, Math.max(base, Math.floor(full / 3)));
+    const boundedRetry = Math.min(128000, Math.max(base, Math.floor(full / 3)));
     return Math.min(full, boundedRetry);
 }
 
@@ -12396,11 +12396,14 @@ function modelFingerprint(config, temperature = API_TEMPERATURE, maxTokens = API
 
 // 开源扫描与标签核验都是长输入、短输出，但推理 token 也吃额度；
 // 该上限同时用于请求和恢复指纹，改它会改变对应阶段的指纹。
-const OPEN_SOURCE_SCAN_MAX_TOKENS = 24000;
+const OPEN_SOURCE_SCAN_MAX_TOKENS = 96000;
 
 // 评分审计、开源扫描、标签核验都是长输入短输出，但推理 token 与输出共用额度；
 // deepseek 开 max 推理后原来的 16000/8000 会被推理吃光。
-const SCORING_AUDIT_MAX_TOKENS = 24000;
+// 核心摘要新请求的额度：直接给足，不等截断再升。
+const CORE_SUMMARY_REPAIR_FRESH_MAX_TOKENS = 192000;
+
+const SCORING_AUDIT_MAX_TOKENS = 96000;
 
 const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
     openSourceScan: {
@@ -12449,8 +12452,8 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         typeAware: true
     },
     tagSelection: {
-        // 同上：标签核验也是长输入短输出，但推理占额度，8000 不够。
-        maxTokens: 24000,
+        // 同上：标签核验也是长输入短输出，但推理占额度，额度给足。
+        maxTokens: 96000,
         evidenceMaxChars: 30000,
         patterns: BROAD_EVIDENCE_PATTERNS,
         taskLabel: '标签核验与修复',
@@ -14862,6 +14865,12 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
             throw makeModelHttpError(response.statusCode, safeMessage, config);
         }
         const terminationError = getModelOutputTerminationError(apiType, response.body, maxTokens);
+        // 截断信息带上阶段与输入规模：并发跑多篇时只看「额度 N 截断」无法定位是谁。
+        if (terminationError) {
+            terminationError.message += ` | stage=${config.usageContext?.stage || 'unknown'}`
+                + ` | input_chars=${String(bodyObj?.input ? JSON.stringify(bodyObj.input).length : '?')}`;
+            terminationError.stage = config.usageContext?.stage || null;
+        }
         if (terminationError) throw terminationError;
         const content = parseResponseText(apiType, response.body);
         if (content !== null) {
@@ -21039,9 +21048,17 @@ async function repairCoreSummarySection(
     const repairCallModel = options.callModelFn || callModel;
     // 推理型模型可能把额度耗在推理上。被截断说明「额度不够」而不是「内容不合格」：
     // 升一档额度重试同一处修复（最多一次），不占用三次内容修复机会，也不改记录身份。
-    let coreRepairBudget = TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;
+    // 新请求按大额度发（用户 2026-11-13：直接设大，不必等截断）；
+    // 但重放已付费诊断时必须沿用记录里的额度，否则请求身份对不上原记录。
+    const coreSummaryReplay = options.coreSummaryDiagnosticId !== undefined
+        || options.replayLatestCoreSummaryDiagnostic === true
+        || options.paidCoreLiteralCorrection !== undefined;
+    let coreRepairBudget = coreSummaryReplay
+        ? TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens
+        : CORE_SUMMARY_REPAIR_FRESH_MAX_TOKENS;
     let truncationEscalated = false;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // 推理型模型对严格格式的收敛更慢，多给两次修复机会（每次仍带同一校验反馈）。
+    for (let attempt = 1; attempt <= 5; attempt++) {
         const retryTargets = [];
         const lengthIssue = feedback.match(/中文字符(过多|不足): (\d+)\/(\d+)/);
         if (lengthIssue) {
@@ -21073,7 +21090,10 @@ async function repairCoreSummarySection(
         } else if (/(?:定量|量化|比较对象|评测设置|指标名称|指标口径|数值|比较方向)/.test(feedback)) {
             retryTargets.push('在同一句中说明比较对象、评测设置或数据集、指标、数值与方向。'
                 + '使用相同指标的原文数值明确比较，不跨指标比较。句首和要素顺序可以按内容安排，'
-                + '不必重复指标名；不能只写“最高”“最优”“最低”或“达到”而不说明比较对象与方向');
+                + '不必重复指标名；不能只写“最高”“最优”“最低”或“达到”而不说明比较对象与方向。'
+                + '直接写出一句形如「在〈数据集或评测条件〉上，本文方法的〈指标名〉为〈数值〉，'
+                + '〈高于/低于〉〈基线名或对照条件〉的〈数值〉」的完整比较句；'
+                + '指标名用原文自己的指标（例如 WER、ACC、MOS、F1、PESQ），不能用“性能”“效果”“分数”代替');
         }
         if (/方法链/.test(feedback)) {
             retryTargets.push('解释 2–4 个方法步骤的输入、职责和输出，以及前一步输出怎样进入后一步。'
@@ -21131,7 +21151,7 @@ async function repairCoreSummarySection(
             });
             if (error.code === 'MODEL_OUTPUT_TRUNCATED' && !truncationEscalated) {
                 truncationEscalated = true;
-                coreRepairBudget = Math.min(64000, coreRepairBudget * 2);
+                coreRepairBudget = Math.min(128000, coreRepairBudget * 4);
                 attempt -= 1;
                 console.warn(`    [deep] ⚠️  核心摘要修复被截断，额度升到 ${coreRepairBudget} 后重试同一处修复`);
                 continue;

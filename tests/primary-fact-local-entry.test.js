@@ -118,5 +118,5 @@ test('正常主分析入口发送局部JSON并保存新证明，完整审校不�
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /PUBLIC_LOCAL_PRIMARY_CHECKPOINT_AND_VALIDATION_CONFIRMED/);
     assert.equal(bodies.length, 2);
-    assert.equal(bodies[0].max_tokens, 24000);
+    assert.equal(bodies[0].max_tokens, 96000);
 });

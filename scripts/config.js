@@ -107,31 +107,33 @@ const ANALYSIS_CONFIG = {
     manualHandoffMinRounds: 3,
     manualHandoffNoProgressRounds: 3,
     retryDelayMs: 3000,
-    apiOverallTimeoutMs: 20 * 60 * 1000,  // 20 分钟
+    // 额度翻倍后单次调用更久，整体超时要同步放大，否则会先被超时打断。
+    // Max 推理本来就慢，宁可多等：整体超时放宽到 120 分钟。
+    apiOverallTimeoutMs: 120 * 60 * 1000,  // 120 分钟
     apiReaderOverallTimeoutMs: 40 * 60 * 1000,
     apiReaderConcurrency: 5,
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
-    apiMaxTokens: 64000,
+    apiMaxTokens: 192000,
     // 模型 JSON 或 SSE 响应的总字节上限；超过后停止读取，不解析截断内容。
     apiMaxResponseBytes: 16 * 1024 * 1024,
     // 局部检查和修复使用较小的输出上限，与主分析和 Reader 长文分别设置。
     // 局部修复也要容下推理：deepseek 开 max 时 16000 会截断。
-    repairMaxTokens: 24000,
+    repairMaxTokens: 96000,
     // 审校会重写完整分析，输出容量单独设置，避免误用局部修复上限。
-    revisionMaxTokens: 64000,
+    revisionMaxTokens: 192000,
     // 完整结构修复同样输出全部章节，不能使用局部修复容量。
-    structureMaxTokens: 64000,
+    structureMaxTokens: 192000,
     // 单节核心摘要保留严格长度约束，为模型推理留足独立输出容量。
     coreSummaryRepairMaxTokens: 32000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
-    apiReaderMaxTokens: 48000,
+    apiReaderMaxTokens: 128000,
     apiReaderThinkingMode: 'disabled',
     repairThinkingMode: 'disabled',
     primaryThinkingMode: 'disabled',
     auxiliaryThinkingMode: 'disabled',
     // Reader 补丁也要容下推理：deepseek 开 max 时 8000 会被推理吃光。
-    apiReaderRepairMaxTokens: 24000,
+    apiReaderRepairMaxTokens: 96000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,
