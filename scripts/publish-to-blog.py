@@ -7444,7 +7444,7 @@ _READER_TEX_SYMBOLS = {
     'sigma': 'σ', 'lambda': 'λ', 'tau': 'τ', 'beta': 'β', 'alpha': 'α', 'mu': 'μ', 'pi': 'π',
     'delta': 'δ', 'eta': 'η', 'theta': 'θ', 'kappa': 'κ', 'rho': 'ρ', 'phi': 'φ', 'chi': 'χ',
     'psi': 'ψ', 'zeta': 'ζ', 'nu': 'ν', 'xi': 'ξ', 'epsilon': 'ε', 'varepsilon': 'ε',
-    'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ', 'dagger': '†',
+    'Delta': 'Δ', 'omega': 'ω', 'gamma': 'γ', 'checkmark': '✓', 'infty': '∞', 'ell': 'ℓ', 'dagger': '†', 'ddagger': '‡',
     'varnothing': '∅', 'emptyset': '∅', 'circ': '∘', 'star': '⋆', 'bullet': '•', 'prime': '′',
 }
 _READER_TEX_STYLE_NAMES = re.compile(
@@ -7532,6 +7532,21 @@ def _fold_reader_tex_cell_duplicate(value):
                 return prefix + tail
         if len(canonical_prefix) < 2:
             continue
+        # 副本只重复「紧邻的那个词元」时也折叠：整格开头还有正文
+        #（Aligned temporal granularity (†:f×8{}^{\dagger}\!:{f}\times 8）。
+        # 纯文本还原会在符号与数字之间插入空格（‡:f× 4），比较时统一去空白。
+        squeeze = lambda value: re.sub(r'\s+', '', str(value or ''))
+        trailing_match = re.search(r'[)）】\],.;；]+$', plain)
+        trailing = trailing_match.group(0) if trailing_match else ''
+        core = plain[:len(plain) - len(trailing)] if trailing else plain
+        squeezed_core = squeeze(core)
+        if len(canonical_plain) >= 2 and squeezed_core and squeeze(prefix).endswith(squeezed_core):
+            head = prefix.rstrip()
+            last = core.strip()[-1:]
+            at = head.rfind(last) if last else -1
+            before = head[:at] if at > 0 else ''
+            if not before or not re.search(r'[A-Za-z0-9\u4e00-\u9fff]$', before):
+                return prefix + trailing
         # 前缀可能带「+ 」「· 「」这类装饰符号，TeX 副本只复制了实体部分；
         # 去掉开头非字母数字后再比一次（n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
         stripped_prefix = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical_prefix)
@@ -7617,6 +7632,12 @@ def _project_reader_cell_tex_display(value):
                     lambda match: match.group(1) + '\u0302'
                     if match.group(1) == match.group(2) else match.group(0), output)
     output = re.sub(r'\\hat\{([A-Za-z])\}', lambda match: match.group(1) + '\u0302', output)
+    # 一个单元格里可能有多组「可见值 + TeX 副本」，用分号隔开；先分段折叠再拼回，
+    # 否则第一组后面的全部内容会被当成同一个副本而不匹配（JS 侧同规则）。
+    if re.search(r'[;；]', output) and '\\' in output:
+        parts = re.split(r'([;；])', output)
+        output = ''.join(part if re.fullmatch(r'[;；]', part or '') else _project_reader_cell_tex_display(part)
+                         for part in parts)
     output = re.sub(r'([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}',
                     lambda match: match.group(1) + '\u0304'
                     if match.group(1) == match.group(2) else match.group(0), output)

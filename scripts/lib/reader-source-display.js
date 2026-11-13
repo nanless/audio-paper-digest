@@ -114,7 +114,7 @@ const READER_TEX_SYMBOLS = Object.freeze({
     times: '×', pm: '±', cdot: '·', approx: '≈', geq: '≥', leq: '≤', neq: '≠', sim: '∼',
     sigma: 'σ', lambda: 'λ', tau: 'τ', beta: 'β', alpha: 'α', mu: 'μ', pi: 'π',
     delta: 'δ', eta: 'η', theta: 'θ', kappa: 'κ', rho: 'ρ', phi: 'φ', chi: 'χ', psi: 'ψ', zeta: 'ζ', nu: 'ν', xi: 'ξ', epsilon: 'ε', varepsilon: 'ε',
-    Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ', dagger: '†',
+    Delta: 'Δ', omega: 'ω', gamma: 'γ', checkmark: '✓', infty: '∞', ell: 'ℓ', dagger: '†', ddagger: '‡',
     varnothing: '∅', emptyset: '∅', circ: '∘', star: '⋆', bullet: '•', prime: '′',
 });
 const READER_TEX_STYLE_NAMES = /\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|widehat|overline|underline|tilde|hat|bar)/g;
@@ -190,6 +190,23 @@ function foldReaderTexCellDuplicate(value) {
             if (symbolTail !== null && /^[A-Za-z0-9\u4e00-\u9fff\s(（\[,:：;；]/u.test(symbolTail)) return prefix + symbolTail;
         }
         if (canonicalPrefix.length < 2) continue;
+        // 副本只重复「紧邻的那个词元」时也折叠：整格开头还有正文
+        //（Aligned temporal granularity (†:f×8{}^{\dagger}\!:{f}\times 8）。
+        if (canonicalPlain.length >= 2) {
+            // 副本后面可能紧跟右括号或句读，比较时先剥离再补回。
+            const trailingMatch = /[)）】\],.;；]+$/u.exec(plain);
+            const trailing = trailingMatch ? trailingMatch[0] : '';
+            const core = trailing ? plain.slice(0, plain.length - trailing.length) : plain;
+            // 纯文本还原会在符号与数字之间插入空格（‡:f× 4），比较时统一去空白。
+            const squeeze = value => String(value || '').replace(/\s+/gu, '');
+            const squeezedCore = squeeze(core);
+            if (squeezedCore && squeeze(prefix).endsWith(squeezedCore)) {
+                const head = prefix.replace(/\s+$/u, '');
+                const at = head.lastIndexOf(core.trim().slice(-1));
+                const before = at > 0 ? head.slice(0, at) : '';
+                if (!before || !/[A-Za-z0-9\u4e00-\u9fff]$/u.test(before)) return prefix + trailing;
+            }
+        }
         if (canonicalPlain === canonicalPrefix) return prefix;
         if (canonicalPrefix.length > canonicalPlain.length && canonicalPrefix.endsWith(canonicalPlain)) return prefix;
         if (canonicalPlain.startsWith(canonicalPrefix)) {
@@ -245,6 +262,11 @@ function projectReaderCellTexDisplay(value) {
     output = output.replace(/([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}/g,
         (whole, visible, name) => visible === name ? visible + '\u0304' : whole);
     output = output.replace(/\\overline\{([A-Za-z])\}/g, (_whole, name) => name + '\u0304');
+    // 一个单元格里可能有多组「可见值 + TeX 副本」，用分号隔开；先分段折叠再拼回，
+    // 否则第一组后面的全部内容会被当成同一个副本而不匹配。
+    if (/[;；]/.test(output) && /\\/.test(output)) {
+        output = output.split(/([;；])/u).map(part => (/[;；]/u.test(part) ? part : projectReaderCellTexDisplay(part))).join('');
+    }
     for (let round = 0; round < 6 && (output.includes('\\') || /[_^]\{/.test(output)); round++) {
         const folded = foldReaderTexCellDuplicate(output);
         if (folded === output) break;

@@ -428,6 +428,10 @@
     {
       "input": "∅\\circ",
       "expected": "∅\\circ"
+    },
+    {
+      "input": "Aligned temporal granularity (†:f×8{}^{\\dagger}\\!:{f}\\times 8; ‡:f×4{}^{\\ddagger}\\!:{f}\\times 4)",
+      "expected": "Aligned temporal granularity (†:f×8; ‡:f×4)"
     }
   ]
 }
