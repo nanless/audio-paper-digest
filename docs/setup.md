@@ -157,7 +157,7 @@ npm run validate:data -- --allow-empty
 
 当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理强度，取值 `minimal`、`low`、`medium`、`high`、`xhigh`，写 `max`/`highest`/`maximum` 视作 `xhigh`；不设置时不发送 `reasoning` 字段，写错的值不会生效（`npm run config:check` 会直接报错）。当前本机配置为 `xhigh`。两项配置不作用于 Chat Completions 请求。
 
-推理 token 与可见输出共用 `max_output_tokens`，因此高强度档位下各阶段的输出预算要留出推理开销：局部修复 24000、核心摘要修补 40000、主分析与完整重写 64000、Reader 长文与 Reader 局部补丁保持原值。筛选批次与会议筛选的 `maxTokens` 参与 `FILTER_CONFIG_BINDING` 指纹，改动会让已登记的历史窗口无法重放，所以维持原值，截断时由重试路径升到 4096。改这些预算会改变阶段指纹，下一轮分析会重新执行对应阶段。
+推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下留给可见输出的额度会比低档位少一些。各阶段上限本身还会进入阶段指纹与已付费诊断身份（例如筛选的 `maxTokens` 参与 `FILTER_CONFIG_BINDING`），改动会让原记录无法重放，因此维持原值；真的被截断时走既有重试路径（筛选升到 4096，Reader 局部补丁按 8000→16000 递进）。改这些预算会改变阶段指纹，下一轮分析会重新执行对应阶段。
 
 日更开始时的原文和 PDF 封存下载保留独立的八路上限。未显式指定下载并发时，使用整篇分析并发与 8 中较小的值；因此把模型分析设为 10 路不会阻止来源下载，也不会把模型分析自动降为 8 路。程序显式传入下载并发时仍须为 1–8 的整数。
 

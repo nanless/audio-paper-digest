@@ -50,7 +50,7 @@ describe('config', () => {
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.repairMaxTokens,
-            (24000)
+            (16000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.revisionMaxTokens,

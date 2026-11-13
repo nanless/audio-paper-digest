@@ -5985,7 +5985,7 @@ has_dataset: 否
         assert.match(prompt, /不要把 `0\.85` 写成 `85\.00`/);
         assert.match(prompt, /也不要增删末尾的零、舍入、把百分数与小数互换、换算单位或自己算差值/);
         assert.match(prompt, /摘要和引言里的概括值不能和表格里的基线值拼成一组比较/);
-        assert.strictEqual(maxTokens, 40000);
+        assert.strictEqual(maxTokens, 32000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
