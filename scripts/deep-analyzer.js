@@ -12400,6 +12400,9 @@ const OPEN_SOURCE_SCAN_MAX_TOKENS = 96000;
 
 // 评分审计、开源扫描、标签核验都是长输入短输出，但推理 token 与输出共用额度；
 // deepseek 开 max 推理后原来的 16000/8000 会被推理吃光。
+// 核心摘要的内容修复机会（3 → 5，推理型模型收敛更慢）。
+const CORE_SUMMARY_REPAIR_MAX_ATTEMPTS = 5;
+
 const SCORING_AUDIT_MAX_TOKENS = 96000;
 
 const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
@@ -21050,7 +21053,7 @@ async function repairCoreSummarySection(
     let coreRepairBudget = TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;
     let truncationEscalated = false;
     // 推理型模型对严格格式的收敛更慢，多给两次修复机会（每次仍带同一校验反馈）。
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    for (let attempt = 1; attempt <= CORE_SUMMARY_REPAIR_MAX_ATTEMPTS; attempt++) {
         const retryTargets = [];
         const lengthIssue = feedback.match(/中文字符(过多|不足): (\d+)\/(\d+)/);
         if (lengthIssue) {
@@ -21183,7 +21186,7 @@ async function repairCoreSummarySection(
             candidateSummarySha256: crypto.createHash('sha256').update(candidateSummary).digest('hex')
         });
         if (!issue) return updated;
-        console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/3）：${issue}`);
+        console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/${CORE_SUMMARY_REPAIR_MAX_ATTEMPTS}）：${issue}`);
         feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     }
     const exhausted = contractRejectedError(`核心摘要局部修复失败：${feedback}`);
