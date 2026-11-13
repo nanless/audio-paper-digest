@@ -6825,9 +6825,12 @@ def detect_publish_api_type(endpoint, model):
     """检测发布脚本使用的 LLM API 协议，与 Node utils.js 保持一致。"""
     ep = (endpoint or '').rstrip('/').lower()
     m = (model or '').lower()
-    if 'deepseek.com' in ep or 'deepseek' in m:
+    # 只按端点判断：DeepSeek 官方端点走 Chat Completions；OpenCode Go 网关上
+    # deepseek-v4.1-flash 与 muse-spark 一样按 Responses 调用。
+    if 'deepseek.com' in ep:
         return 'openai'
-    if ep.endswith('/responses') or m.startswith('muse-spark-'):
+    if (ep.endswith('/responses') or m.startswith('muse-spark-')
+            or m.startswith('deepseek-v4.1-flash')):
         return 'openai_responses'
     is_token_plan = 'token-plan' in ep or 'coding' in ep
     is_mimo = 'xiaomimimo.com' in ep or 'mimo' in m
@@ -6981,7 +6984,7 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
             'input': [{'role': 'user', 'content': content}],
         }
         reasoning_effort = normalize_reasoning_effort(
-            os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT', '')
+            os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT', ''), model
         )
         if reasoning_effort:
             payload['reasoning'] = {'effort': reasoning_effort}
@@ -7030,18 +7033,31 @@ def _publish_llm_requires_proxy(endpoint, model):
 _PUBLISH_OPENCODE_SESSION_ID = None
 
 
-# Responses 推理强度档位：minimal 最省、xhigh 最强。网关对未知值不报错而是静默降级，
-# 所以按白名单规范化，写错的值一律不发送（而不是被悄悄当成默认档）。
-REASONING_EFFORTS = ('minimal', 'low', 'medium', 'high', 'xhigh')
+# 推理强度档位随模型不同（网关 /v1/models 的 capabilities.reasoning.effort 是权威名单）：
+# muse-spark 系列是 minimal/low/medium/high/xhigh，deepseek-v4.1-flash 是 low/high/max。
+# 网关对不认识的档位不报错而是静默降级，所以按模型各自的白名单规范化，写错的值不发送。
+REASONING_EFFORTS_BY_MODEL = {
+    'muse-spark': ('minimal', 'low', 'medium', 'high', 'xhigh'),
+    'deepseek': ('low', 'high', 'max'),
+}
+REASONING_EFFORTS = tuple(dict.fromkeys(
+    effort for efforts in REASONING_EFFORTS_BY_MODEL.values() for effort in efforts))
 
 
-REASONING_EFFORT_ALIASES = {'max': 'xhigh', 'highest': 'xhigh', 'maximum': 'xhigh'}
+def reasoning_efforts_for(model):
+    name = str(model or '').lower()
+    for family, efforts in REASONING_EFFORTS_BY_MODEL.items():
+        if family in name:
+            return efforts
+    return REASONING_EFFORTS
 
 
-def normalize_reasoning_effort(value):
+def normalize_reasoning_effort(value, model=None):
+    allowed = REASONING_EFFORTS if model is None else reasoning_efforts_for(model)
     effort = str(value or '').strip().lower()
-    effort = REASONING_EFFORT_ALIASES.get(effort, effort)
-    return effort if effort in REASONING_EFFORTS else ''
+    if effort == 'max' and 'xhigh' in allowed and 'max' not in allowed:
+        effort = 'xhigh'
+    return effort if effort in allowed else ''
 
 
 def _publish_opencode_session_id():

@@ -448,14 +448,16 @@ function detectApiType(endpoint, model) {
     const ep = (endpoint || '').replace(/\/+$/, '').toLowerCase();
     const m = (model || '').toLowerCase();
 
-    // DeepSeek 强制 OpenAI 协议（优先级最高）
-    if (ep.includes('deepseek.com') || m.includes('deepseek')) {
+    // 官方 DeepSeek 端点走 Chat Completions。注意只按端点判断：DeepSeek 的模型在
+    // OpenCode Go 网关上同时提供 Responses（推理强度、图片都按 Responses 形态工作）。
+    if (ep.includes('deepseek.com')) {
         return 'openai';
     }
 
-    // OpenCode Go 上的 Muse Spark Contributor 只提供 OpenAI Responses API。
-    // 同时允许用户直接配置完整 /responses 端点。
-    if (ep.endsWith('/responses') || m.startsWith('muse-spark-')) {
+    // OpenCode Go 上这两个模型的 Responses 面可用（推理强度与图片都按 Responses 形态工作），
+    // 发布链与分析链统一走 Responses。其余 DeepSeek 型号仍按上面的 Chat Completions。
+    if (ep.endsWith('/responses') || m.startsWith('muse-spark-')
+        || m.startsWith('deepseek-v4.1-flash')) {
         return 'openai_responses';
     }
 
@@ -619,15 +621,31 @@ function normalizeOpenAIContent(content) {
     return kept;
 }
 
-// Responses 的推理强度档位：minimal 最省、xhigh 最强。网关对未知值不报错而是静默
-// 降级，所以这里按白名单规范化，写错的值一律不发送（而不是被悄悄当成默认档）。
-const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-const REASONING_EFFORT_ALIASES = { max: 'xhigh', highest: 'xhigh', maximum: 'xhigh' };
+// 推理强度档位随模型不同（网关 /v1/models 的 capabilities.reasoning.effort 就是权威名单）：
+// muse-spark 系列是 minimal/low/medium/high/xhigh，deepseek-v4.1-flash 是 low/high/max。
+// 网关对不认识的档位不报错而是静默降级，所以按模型各自的白名单规范化，写错的值不发送。
+const REASONING_EFFORTS_BY_MODEL = Object.freeze({
+    'muse-spark': ['minimal', 'low', 'medium', 'high', 'xhigh'],
+    'deepseek': ['low', 'high', 'max']
+});
+const REASONING_EFFORTS = Object.freeze([
+    ...new Set(Object.values(REASONING_EFFORTS_BY_MODEL).flat())
+]);
 
-function normalizeReasoningEffort(value) {
+function reasoningEffortsFor(model) {
+    const name = String(model || '').toLowerCase();
+    for (const [family, efforts] of Object.entries(REASONING_EFFORTS_BY_MODEL)) {
+        if (name.includes(family)) return efforts;
+    }
+    return REASONING_EFFORTS;
+}
+
+function normalizeReasoningEffort(value, model) {
+    const allowed = model === undefined ? REASONING_EFFORTS : reasoningEffortsFor(model);
     const raw = String(value || '').trim().toLowerCase();
-    const effort = REASONING_EFFORT_ALIASES[raw] || raw;
-    return REASONING_EFFORTS.includes(effort) ? effort : '';
+    const effort = raw === 'max' && allowed.includes('xhigh') && !allowed.includes('max')
+        ? 'xhigh' : raw;
+    return allowed.includes(effort) ? effort : '';
 }
 
 function normalizeResponsesContent(content) {
@@ -716,7 +734,7 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         };
         if (Number.isFinite(temperature)) body.temperature = temperature;
         const reasoningEffort = normalizeReasoningEffort(
-            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT
+            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT, model
         );
         if (reasoningEffort) {
             body.reasoning = { effort: reasoningEffort };
@@ -2127,7 +2145,9 @@ function loadPrompt(mdPath, vars = {}, { originalFileSha256 = null } = {}) {
 
 module.exports = {
     normalizeReasoningEffort,
+    reasoningEffortsFor,
     REASONING_EFFORTS,
+    REASONING_EFFORTS_BY_MODEL,
     writeFileAtomic,
     readJsonSafe,
     ensureDir,

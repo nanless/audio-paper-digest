@@ -57,8 +57,8 @@ npm run digest:prepare -- YYYY-MM-DD
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    npm 中的 Python 命令还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，加载器会将文件权限收紧为 `0600`。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，主、副模型配置均须核对；实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 与其他备用账号配置会合并成同一路由的等权账号池，顺序不代表优先级，不能代替副模型配置。
-4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败，当前统一使用的 `muse-spark-1.3-contributor` 必须走该代理。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户 2026-11-13 起指定论文 LLM 使用 `deepseek-v4.1-flash`（此前为 `muse-spark-1.3-contributor`），主、副模型配置均须核对；受支持型号清单在 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`，实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 与其他备用账号配置会合并成同一路由的等权账号池，顺序不代表优先级，不能代替副模型配置。
+4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败（`deepseek-v4.1-flash` 在 OpenCode Go 网关上直连与走代理都可用）。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
 所有项目脚本、测试、语法检查和数据校验必须在沙箱外执行。脚本会在业务逻辑、日志、网络和写入前拒绝可靠的 `CODEX_SANDBOX` 标志；工作区角色由 npm 包装层（`scripts/workspace-role.js exec daily|history -- …`）核验。直接入口只有部分模块自查：JS 调用 `requireExternalRuntime()`、Python 调用 `require_external_runtime()` 时，按脚本是否被直接执行和命令名角色表推断并核验；`generate-blog.py`、`review-blog.py`、`push-blog.py`、`publish-to-blog.py` 属于这一类。`full-fetch.js`、`batch-analyze.js`、`deep-analysis-only.js`、`reanalyze.js`、`refresh-api-reader.js` 完全不调用该守卫，直接 `node scripts/…` 裸跑会跳过角色检查，因此这些命令只许经 npm 入口运行。不得绕过检查或伪造结果。
@@ -140,7 +140,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
-主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 取 `minimal`/`low`/`medium`/`high`/`xhigh`（`max`、`highest`、`maximum` 视作 `xhigh`），写错的值不发送、由 `npm run config:check` 拦截，本机固定 `xhigh`。推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下可见输出会略少于低档位；这些上限本身还会进入阶段指纹和已付费诊断身份，改动会让原记录无法重放，因此维持原值，截断仍由既有重试路径处理。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
+主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 的档位随模型不同：`muse-spark-*` 是 `minimal`/`low`/`medium`/`high`/`xhigh`（`max` 视作 `xhigh`），`deepseek-v4.1-flash` 是 `low`/`high`/`max`；写错的值不发送、由 `npm run config:check` 拦截，本机固定 `max`。推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下可见输出会略少于低档位；这些上限本身还会进入阶段指纹和已付费诊断身份，改动会让原记录无法重放，因此维持原值，截断仍由既有重试路径处理。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 
 ## 恢复原则
 

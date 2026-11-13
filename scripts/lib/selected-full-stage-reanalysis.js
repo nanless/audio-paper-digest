@@ -8,7 +8,15 @@ const path = require('node:path');
 require('../config');
 const scope = new AsyncLocalStorage();
 const originalPromptScopes = new WeakMap();
+// 这个入口把整篇重跑绑定到「当次使用的论文模型」：记录里存的是实际型号，
+// 复现时要求与记录一致。2026-11-13 起项目型号改为 deepseek-v4.1-flash，
+// 旧记录仍按记录里的 muse 型号校验。
+const SUPPORTED_MODELS = require('./env-schema').SUPPORTED_MODELS;
 const MODEL = 'muse-spark-1.3-contributor';
+function configuredModel() {
+    const model = String(process.env.PAPER_ANALYZER_MODEL || '');
+    return SUPPORTED_MODELS.includes(model) ? model : '';
+}
 const protocol = require('./protocol-codec');
 const promptContracts = require('./prompt-contracts');
 const CONTRACT = protocol.contract('selected-muse-full-stage-reanalysis');
@@ -81,8 +89,11 @@ function bindings() {
     return result;
 }
 function assertConfiguration(value) {
-    if (process.env.PAPER_ANALYZER_MODEL !== MODEL
-        || process.env.PAPER_ANALYZER_SECONDARY_MODEL !== MODEL) fail('全阶段重跑主副模型必须均为 Muse 1.3');
+    const primary = configuredModel();
+    if (!primary || process.env.PAPER_ANALYZER_SECONDARY_MODEL !== primary) {
+        fail(`全阶段重跑要求主副模型一致且受支持（当前 ${process.env.PAPER_ANALYZER_MODEL || '未设置'} / `
+            + `${process.env.PAPER_ANALYZER_SECONDARY_MODEL || '未设置'}）`);
+    }
     if (JSON.stringify(bindings()) !== JSON.stringify(value.promptBindings)) fail('全阶段重跑期间提示词变化');
 }
 function withSelectedFullStageReanalysis(options, callback) {
@@ -92,7 +103,7 @@ function withSelectedFullStageReanalysis(options, callback) {
         || options.paperIds.some(id => !/^\d{4}\.\d{4,5}$/.test(id))
         || new Set(options.paperIds).size !== options.paperIds.length) fail('全阶段重跑需要明确且不重复的 ID、本次运行和封存来源运行');
     const value = protocol.record('selected-muse-full-stage-reanalysis', { runId: options.runId, sourceRunId: options.sourceRunId,
-        paperIds: [...options.paperIds], model: MODEL, promptBindings: bindings(), prepared: new Map(),
+        paperIds: [...options.paperIds], model: configuredModel() || MODEL, promptBindings: bindings(), prepared: new Map(),
         originalFeedbacks: options.originalFeedbacks || {} });
     assertConfiguration(value);
     return scope.run(value, callback);
@@ -109,7 +120,7 @@ function fingerprintFields(paper) {
     const original = paper.fullStageReanalysisHistory?.find(item => item.runId === record.runId);
     const { originalPaper, ...archivedRecord } = original || {};
     assertRecordHeader(record);
-    if (record.model !== MODEL || !originalPaper
+    if (!SUPPORTED_MODELS.includes(record.model) || !originalPaper
         || sha(originalPaper) !== record.originalPaperSha256
         || JSON.stringify(archivedRecord) !== JSON.stringify(record)) fail('全阶段重跑持久身份或原费用档不一致');
     return { fullStageReanalysis: structuredClone(record) };
@@ -127,7 +138,8 @@ function assertPrepared(paper) {
         !== sha(require('./daily-fact-review').current(idOf(paper))?.proof || null))
         fail('同轮重生成的当前反馈身份变化');
     if (!record || !protocol.isContract(record.contract, 'selected-muse-full-stage-reanalysis') || record.runId !== value.runId
-        || record.sourceRunId !== value.sourceRunId || record.model !== MODEL
+        || record.sourceRunId !== value.sourceRunId
+        || record.model !== (value.model || MODEL)
         || !originalBudgetsRemainConfigured(record.promptBindings)
         || !original || sha(original.originalPaper) !== original.originalPaperSha256
         || original.originalPaperSha256 !== record.originalPaperSha256) fail('全阶段重跑缺少当前锁内旧稿及费用原档');
@@ -197,7 +209,7 @@ function preparePaperLocked(paper) {
     const originalPaper = structuredClone(paper);
     const originalPaperSha256 = sha(originalPaper);
     const record = protocol.record('selected-muse-full-stage-reanalysis', { runId: value.runId, sourceRunId: value.sourceRunId,
-        model: MODEL, promptBindings: structuredClone(value.promptBindings), originalPaperSha256,
+        model: value.model || MODEL, promptBindings: structuredClone(value.promptBindings), originalPaperSha256,
         inheritedFeedbacks, currentFeedbackProof: review ? structuredClone(review.proof) : null,
         startedAt: new Date().toISOString() });
     next.fullStageReanalysisHistory = [...(paper.fullStageReanalysisHistory || []), { ...record, originalPaper }];

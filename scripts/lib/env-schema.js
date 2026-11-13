@@ -2,7 +2,13 @@
 // .env 的集中 schema：供 config:check 与 doctor 共用，避免两边各写一套必填/范围判断。
 // 只描述配置，不读取文件、不写文件、不打印密钥值。
 
-const EXPECTED_MODEL = 'muse-spark-1.3-contributor';
+// 允许的论文模型：muse-spark 与 deepseek-v4.1-flash 都按 OpenAI Responses 调用，
+// 推理强度档位不同（前者 minimal…xhigh，后者 low/high/max）。新增模型时在这里登记。
+const SUPPORTED_MODELS = Object.freeze([
+    'muse-spark-1.3-contributor',
+    'deepseek-v4.1-flash'
+]);
+const EXPECTED_MODEL = SUPPORTED_MODELS[0];
 
 const SECRET_NAMES = new Set([
     'PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_FALLBACK_API_KEYS',
@@ -19,11 +25,11 @@ function secret(name) {
 // type: string | url | proxy | int | bool | csv | path | model
 const SCHEMA = Object.freeze([
     { name: 'PAPER_ANALYZER_API_KEY', required: true, type: 'string', secret: true, hint: '在 .env 填写主账号 key；同池所有 key 等权' },
-    { name: 'PAPER_ANALYZER_MODEL', required: true, type: 'model', hint: `应为 ${EXPECTED_MODEL}` },
+    { name: 'PAPER_ANALYZER_MODEL', required: true, type: 'model', hint: `可选：${SUPPORTED_MODELS.join(' / ')}` },
     { name: 'PAPER_ANALYZER_ENDPOINT', required: true, type: 'url', hint: 'Muse 端点，例如 https://opencode.ai/zen/go/v1' },
     { name: 'PAPER_ANALYZER_FALLBACK_API_KEYS', required: false, type: 'csv', secret: true, hint: '同池更多 key，逗号分隔，顺序不代表优先级' },
     { name: 'PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY', required: false, type: 'csv', secret: true, hint: '同池更多 key（与 fallback 列表合并）' },
-    { name: 'PAPER_ANALYZER_SECONDARY_MODEL', required: false, type: 'model', hint: `未设置型号时不启用副模型；如配置应为 ${EXPECTED_MODEL}` },
+    { name: 'PAPER_ANALYZER_SECONDARY_MODEL', required: false, type: 'model', hint: `未设置型号时不启用副模型；可选：${SUPPORTED_MODELS.join(' / ')}` },
     { name: 'PAPER_ANALYZER_SECONDARY_ENDPOINT', required: false, type: 'url' },
     { name: 'PAPER_ANALYZER_SECONDARY_API_KEY', required: false, type: 'string', secret: true },
     { name: 'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS', required: false, type: 'csv', secret: true },
@@ -202,9 +208,10 @@ function validateValue(item, rawValue) {
             ? { ok: 'ok', detail: 'HTTP CONNECT 代理地址合法' }
             : { ok: 'fail', detail: '不是合法 HTTP(S) 代理地址', hint: '例如 http://127.0.0.1:7897' };
     case 'model':
-        return value === EXPECTED_MODEL
-            ? { ok: 'ok', detail: EXPECTED_MODEL }
-            : { ok: 'fail', detail: `当前 ${value}，预期 ${EXPECTED_MODEL}`, hint: `把模型改为 ${EXPECTED_MODEL}` };
+        return SUPPORTED_MODELS.includes(value)
+            ? { ok: 'ok', detail: value }
+            : { ok: 'fail', detail: `当前 ${value} 不在受支持的模型清单里`,
+                hint: `可选：${SUPPORTED_MODELS.join(' / ')}` };
     case 'csv':
         return { ok: 'ok', detail: `逗号分隔 ${value.split(',').filter(Boolean).length} 项（值不显示）` };
     case 'path':
@@ -256,7 +263,7 @@ function summarize(items) {
 }
 
 module.exports = {
-    EXPECTED_MODEL, SECRET_NAMES, SCHEMA, SCHEMA_BY_NAME, KNOWN_NAMES, SPELLING_PREFIX,
+    EXPECTED_MODEL, SUPPORTED_MODELS, SECRET_NAMES, SCHEMA, SCHEMA_BY_NAME, KNOWN_NAMES, SPELLING_PREFIX,
     parseEnvText, levenshtein, spellingCandidates, classifyUnknown,
     validateEntries, validateValue, summarize, secret
 };

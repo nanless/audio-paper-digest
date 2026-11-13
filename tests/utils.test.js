@@ -551,6 +551,9 @@ describe('detectApiType', () => {
         const endpoint = 'https://opencode.ai/zen/go/v1';
         assert.strictEqual(detectApiType(endpoint, 'deepseek-v4-flash'), 'openai');
         assert.strictEqual(detectApiType(endpoint, 'mimo-v2.5'), 'openai');
+        // 论文链改用 deepseek-v4.1-flash：该型号在网关上提供 Responses 面
+        // （推理强度与图片按 Responses 形态工作），所以单独走 Responses。
+        assert.strictEqual(detectApiType(endpoint, 'deepseek-v4.1-flash'), 'openai_responses');
     });
 
     it('OpenCode Go Muse Spark Contributor 走 OpenAI Responses API', () => {

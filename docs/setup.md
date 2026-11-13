@@ -33,9 +33,9 @@ PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
+PAPER_ANALYZER_MODEL=deepseek-v4.1-flash
 # 需要旧版插图副模型时，型号也统一使用 Muse 1.3
-PAPER_ANALYZER_SECONDARY_MODEL=muse-spark-1.3-contributor
+PAPER_ANALYZER_SECONDARY_MODEL=deepseek-v4.1-flash
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -47,7 +47,7 @@ PAPER_DIGEST_BLOG_REPO_RUN=<owner>/<repo>
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
-用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，通过 OpenAI Responses 请求，基础 `/v1` 端点由公共封装转为 `/v1/responses`，并强制使用项目 HTTP CONNECT 代理。主、副模型均须核对。兼容的 `mimo-v2.6-flash` 仍支持 OpenAI Chat Completions。实际模型由项目配置决定。公开服务端点必须使用 HTTPS，只有本机回环测试服务允许 HTTP。
+用户 2026-11-13 起指定论文 LLM 使用 `deepseek-v4.1-flash`（此前为 `muse-spark-1.3-contributor`），通过 OpenAI Responses 请求，基础 `/v1` 端点由公共封装转为 `/v1/responses`。受支持型号登记在 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`，主、副模型均须核对；`muse-spark-*` 强制使用项目 HTTP CONNECT 代理，`deepseek-v4.1-flash` 在 OpenCode Go 网关上直连与走代理都可用。兼容的 `mimo-v2.6-flash` 仍支持 OpenAI Chat Completions。实际模型由项目配置决定。公开服务端点必须使用 HTTPS，只有本机回环测试服务允许 HTTP。
 
 `PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只供历史 ICLR 2026 会议来源收集使用，须指向已保留的本地官方录用论文信息与 PDF。未配置时使用 `~/code/github_repos/iclr2026-paper-scraper`。日更抓取和 arXiv 写作都不读它，设置它也不会触发下载。
 
@@ -167,7 +167,7 @@ Reader 的一次逻辑请求最多进行2次传输尝试；筛选默认最多5�
 
 ## 可选副模型
 
-API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前统一的 `muse-spark-1.3-contributor` 通过 Responses 接收图片，兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
+API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `deepseek-v4.1-flash` 与 `muse-spark-1.3-contributor` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
 `PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（未传参数时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`，默认 5；可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 

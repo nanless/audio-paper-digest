@@ -2141,8 +2141,9 @@ primary_method_tag: #基准测试
     def test_responses_reasoning_effort_accepts_xhigh_and_aliases(self):
         previous = os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT')
         try:
+            # mute 系列：max 视作 xhigh（网关最高档叫 xhigh）。
             for value, expected in (('xhigh', 'xhigh'), ('MAX', 'xhigh'),
-                                    ('  Minimal ', 'minimal'), ('highest', 'xhigh')):
+                                    ('  Minimal ', 'minimal'), ('xhigh ', 'xhigh')):
                 with mock.patch.dict(os.environ, {
                         'PD_OPENAI_RESPONSES_REASONING_EFFORT': value}, clear=False):
                     payload = build_publish_payload(
@@ -2165,11 +2166,16 @@ primary_method_tag: #基准测试
 
     def test_normalize_reasoning_effort_whitelist(self):
         from publish_common import normalize_reasoning_effort as normalize
+        # 不指定模型时用两侧并集，原样返回。
         self.assertEqual(normalize('xhigh'), 'xhigh')
-        self.assertEqual(normalize('max'), 'xhigh')
+        self.assertEqual(normalize('max'), 'max')
         self.assertEqual(normalize(' HIGH '), 'high')
         self.assertEqual(normalize('ultra'), '')
         self.assertEqual(normalize(None), '')
+        # 指定模型后按各自档位：deepseek-v4.1-flash 的最高档就是 max。
+        self.assertEqual(normalize('max', 'deepseek-v4.1-flash'), 'max')
+        self.assertEqual(normalize('xhigh', 'deepseek-v4.1-flash'), '')
+        self.assertEqual(normalize('max', 'muse-spark-1.3-contributor'), 'xhigh')
 
     def test_muse_responses_api_uses_project_proxy(self):
         response = mock.Mock()

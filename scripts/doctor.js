@@ -43,6 +43,8 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ENV_FILE_NAME = '.env';
 const REQUIRED_NODE_RANGE = '>=20.18.1 <21 || >=22.3.0';
 // 模型名与必填项都由 env-schema 决定，doctor 不再维护第二份清单。
+// 模型清单以 env-schema 的 SUPPORTED_MODELS 为准（2026-11-13 起论文模型换成 deepseek-v4.1-flash）。
+const SUPPORTED_MODELS = require('./lib/env-schema.js').SUPPORTED_MODELS;
 const REQUIRED_MODEL = ENV_SCHEMA_EXPECTED_MODEL;
 const PRIMARY_REQUIRED_KEYS = Object.freeze(
     ENV_SCHEMA.filter(item => item.required && item.name.startsWith('PAPER_ANALYZER_')).map(item => item.name)
@@ -487,9 +489,9 @@ function evaluatePrimaryModel(env) {
         return makeCheck('warn', '主模型配置', `模型 ${model}；ENDPOINT 不是合法 HTTP(S) URL${fallback}`,
             '检查 .env 的 PAPER_ANALYZER_ENDPOINT');
     }
-    if (model !== REQUIRED_MODEL) {
-        return makeCheck('fail', '主模型配置', `模型 ${model}，要求 ${REQUIRED_MODEL}（endpoint ${endpoint}${fallback}；API Key 已配置，值不显示）`,
-            `把 .env 的 PAPER_ANALYZER_MODEL 设为 ${REQUIRED_MODEL}`);
+    if (!SUPPORTED_MODELS.includes(model)) {
+        return makeCheck('fail', '主模型配置', `模型 ${model} 不在受支持清单（可选 ${SUPPORTED_MODELS.join(' / ')}；endpoint ${endpoint}${fallback}；API Key 已配置，值不显示）`,
+            `把 .env 的 PAPER_ANALYZER_MODEL 设为 ${SUPPORTED_MODELS.join(' 或 ')}`);
     }
     return makeCheck('ok', '主模型配置', `模型 ${model}（endpoint ${endpoint}${fallback}；API Key 已配置，值不显示）`);
 }
@@ -512,8 +514,8 @@ function evaluateSecondaryModel(env) {
         return makeCheck('warn', '副模型配置', `模型 ${model}；ENDPOINT 不是合法 HTTP(S) URL`,
             '检查 .env 的 PAPER_ANALYZER_SECONDARY_ENDPOINT');
     }
-    if (model !== REQUIRED_MODEL) {
-        return makeCheck('fail', '副模型配置', `副模型 ${model}，要求 ${REQUIRED_MODEL}（endpoint ${endpoint}；API Key 已配置，值不显示）`,
+    if (!SUPPORTED_MODELS.includes(model)) {
+        return makeCheck('fail', '副模型配置', `副模型 ${model} 不在受支持清单（可选 ${SUPPORTED_MODELS.join(' / ')}；endpoint ${endpoint}；API Key 已配置，值不显示）`,
             `把 .env 的 PAPER_ANALYZER_SECONDARY_MODEL 设为 ${REQUIRED_MODEL}`);
     }
     return makeCheck('ok', '副模型配置', `副模型 ${model}（endpoint ${endpoint}；API Key 已配置，值不显示）`);
