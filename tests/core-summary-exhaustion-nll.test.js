@@ -41,11 +41,12 @@ test('核心三次内容修复耗尽不再触发整篇自动重试，原稿与�
             callModelFn: async () => { responses += 1; return '## 核心摘要\n仍是过短的摘要。'; }
         }) });
     assert.equal(result.success, false);
-    assert.equal(responses, 3);
+    assert.equal(responses, 5);
     assert.equal(result.result.latestAnalysisAttemptRetryable, false);
     const directory = path.join(temporary, '2610.90019', 'request-diagnostics');
     const files = fs.readdirSync(directory);
-    assert.equal(files.filter(file => file.endsWith('.response.json')).length, 3);
+    // 核心摘要修复机会已从 3 提到 5。
+    assert.equal(files.filter(file => file.endsWith('.response.json')).length, 5);
     for (const filename of files.filter(file => file.endsWith('.request.json'))) {
         assert.equal(JSON.parse(fs.readFileSync(path.join(directory, filename))).inputAnalysis, original);
     }
@@ -65,6 +66,7 @@ test('核心请求传输失败仍沿正常整篇重试，不冒充三次内容�
         })
     });
     assert.equal(result.success, false);
+    // 传输失败走整篇重试（maxRetries 2 → 3 次），不随内容修复次数变化。
     assert.equal(requests, 3);
     assert.equal(result.result.latestAnalysisAttemptRetryable, true);
 });

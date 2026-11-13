@@ -92,9 +92,9 @@ test('三个不合格真实原文全部保留且不授成功，原合格摘要�
             return rawResponse;
         }
     }), /核心摘要局部修复失败/);
-    assert.equal(calls, 3);
+    assert.equal(calls, 5);
     const records = readRecords(root);
-    assert.equal(records.length, 3);
+    assert.equal(records.length, 5);
     for (const record of records) {
         assert.equal(record.response.rawResponse, rawResponse);
         assert.equal(record.disposition.status, 'rejected');

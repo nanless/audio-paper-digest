@@ -12400,9 +12400,6 @@ const OPEN_SOURCE_SCAN_MAX_TOKENS = 96000;
 
 // 评分审计、开源扫描、标签核验都是长输入短输出，但推理 token 与输出共用额度；
 // deepseek 开 max 推理后原来的 16000/8000 会被推理吃光。
-// 核心摘要新请求的额度：直接给足，不等截断再升。
-const CORE_SUMMARY_REPAIR_FRESH_MAX_TOKENS = 192000;
-
 const SCORING_AUDIT_MAX_TOKENS = 96000;
 
 const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
@@ -21048,14 +21045,9 @@ async function repairCoreSummarySection(
     const repairCallModel = options.callModelFn || callModel;
     // 推理型模型可能把额度耗在推理上。被截断说明「额度不够」而不是「内容不合格」：
     // 升一档额度重试同一处修复（最多一次），不占用三次内容修复机会，也不改记录身份。
-    // 新请求按大额度发（用户 2026-11-13：直接设大，不必等截断）；
-    // 但重放已付费诊断时必须沿用记录里的额度，否则请求身份对不上原记录。
-    const coreSummaryReplay = options.coreSummaryDiagnosticId !== undefined
-        || options.replayLatestCoreSummaryDiagnostic === true
-        || options.paidCoreLiteralCorrection !== undefined;
-    let coreRepairBudget = coreSummaryReplay
-        ? TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens
-        : CORE_SUMMARY_REPAIR_FRESH_MAX_TOKENS;
+    // 额度与阶段指纹、已付费诊断身份必须一致，因此固定取 stage 预算；
+    // 真被截断时下面会临时升档重试（不写进身份，也不改指纹）。
+    let coreRepairBudget = TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;
     let truncationEscalated = false;
     // 推理型模型对严格格式的收敛更慢，多给两次修复机会（每次仍带同一校验反馈）。
     for (let attempt = 1; attempt <= 5; attempt++) {
@@ -21130,7 +21122,12 @@ async function repairCoreSummarySection(
             summaryIssue: `${summaryIssue}\n当前篇幅预算：${lengthBudget}`,
             existingSummary: candidateSummary,
             textForAnalysis: evidenceContext
-        });
+        }) + '\n\n【输出前自检，必须逐条满足】\n'
+            + '1. 只输出 `## 核心摘要` 一节，不放其他标题或说明。\n'
+            + '2. 正文必须是 6–9 句；句数以中文句号、问号、感叹号计。当前稿句数不对时，先删或合并重复说明句，再补缺项，绝不能靠追加句子解决。\n'
+            + '3. 正文汉字与中文标点合计 320–600 个。\n'
+            + '4. 必须有一句同时写清：评测设置或数据集、原文的指标名、两个数值、以及高低或变化方向；指标名不能用“性能”“效果”“分数”代替。\n'
+            + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。';
         const diagnosticApi = require('./lib/reader-request-diagnostics');
         const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
             identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,
