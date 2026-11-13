@@ -546,12 +546,12 @@ describe('arXiv HTML 全文健康检查', () => {
         // NFKC 会把这些字符映射成普通数字；Node 侧按等长字符纳入，保证与 Python 的
         // `_api_reader_numeric_tokens` 给出同一组词元（双方各自已有断言）。
         assert.deepStrictEqual(readerNumericTokens('𝟏𝟐'), ['12']);
-        assert.deepStrictEqual(readerNumericTokens('12²'), ['122']);
-        assert.deepStrictEqual(readerNumericTokens('¹⁰'), ['10']);
-        assert.deepStrictEqual(readerNumericTokens('10⁻⁴'), ['10', '4']);
         assert.deepStrictEqual(readerNumericTokens('１２'), ['12']);
-        // ½ 这类会展开成多字符的分数在两侧都不当数字（避免切片错位），
-        // 所以 1½ 在 Node 侧只取到 1，Python 侧另有一份口径，属于已知差异。
+        // 上下标数字不进字符类：否则 10⁻⁴ 会多出词元 4，让表格里任意一个 4
+        // 都被当成“引文覆盖”，把科学量的来源核查架空。
+        assert.deepStrictEqual(readerNumericTokens('10⁻⁴'), ['10']);
+        assert.deepStrictEqual(readerNumericTokens('12²'), ['12']);
+        // ½ 这类会展开成多字符的分数同样不当数字（避免 match.index 与切片错位）。
         assert.deepStrictEqual(readerNumericTokens('½'), []);
     });
 
