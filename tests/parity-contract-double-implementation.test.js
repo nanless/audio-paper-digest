@@ -34,7 +34,10 @@ function pythonResults() {
             cwd: ROOT,
             encoding: 'utf8',
             input: JSON.stringify({ tasks: corpus.TASKS }),
-            maxBuffer: 32 * 1024 * 1024
+            maxBuffer: 32 * 1024 * 1024,
+            // 探针只在并发跑满时偶发卡住（等 Python 解释器启动），给一个明确上限，
+            // 别让它把整个分片挂死；超时会走下面同一条失败断言。
+            timeout: 180000
         });
     assert.equal(result.status, 0,
         `Python 对照探针执行失败（退出码 ${result.status}）: `
