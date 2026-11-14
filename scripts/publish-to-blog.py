@@ -768,7 +768,9 @@ def get_blog_review_max_tokens():
         value = int(raw)
     except ValueError:
         value = 4000
-    return min(16000, max(1000, value))
+    # 推理型模型的隐藏推理与可见输出共用 max_tokens；16K 仍可能被推理耗尽，
+    # 这里放宽到 32K，让结构化审查响应能拿到足够预算。
+    return min(32000, max(1000, value))
 
 
 def call_llm_api(
@@ -777,13 +779,23 @@ def call_llm_api(
     temperature=0.1,
     required=False,
     context="LLM review",
-    timeout=120,
+    timeout=None,
     images=None,
     use_secondary=False,
     max_retries=5,
     structured_output=False,
 ):
-    """调用发布阶段公共 LLM API client。"""
+    """调用发布阶段公共 LLM API client。
+
+    单个页面审查的读超时默认 120 秒；推理型模型在长提示下经常接近甚至超过这个
+    上限，表现为整页 `PublishLLMUnavailable`。可用 PD_BLOG_REVIEW_TIMEOUT 放宽。
+    """
+    if timeout is None:
+        try:
+            timeout = int(os.environ.get("PD_BLOG_REVIEW_TIMEOUT", "120").strip())
+        except (TypeError, ValueError):
+            timeout = 120
+        timeout = min(600, max(30, timeout))
     return call_publish_llm_api(
         prompt,
         max_tokens=max_tokens,
@@ -947,10 +959,30 @@ def validate_publish_target(blog_repo=None, content_dir=None):
     return repo, target
 
 
+def _split_frontmatter_block(content):
+    """把开头的 YAML frontmatter 作为一个整体切出来。
+
+    分块上限小于 frontmatter 长度时，按行边界硬切会让某个分块只看到半个
+    frontmatter（缺少结束的 `---`），审查模型会误报「缺少结束分隔符」。
+    """
+    if not content.startswith('---\n'):
+        return '', content
+    end = content.find('\n---', 3)
+    if end < 0:
+        return '', content
+    end += len('\n---')
+    if content[end:end + 1] == '\n':
+        end += 1
+    return content[:end], content[end:]
+
+
 def split_review_content(content, limit=4000):
     """在 Markdown 块边界处切分，不切断围栏、表格和链接。"""
     if not content:
         return ['']
+    frontmatter, content = _split_frontmatter_block(content)
+    if not content:
+        return [frontmatter]
     lines = content.splitlines(keepends=True)
     blocks = []
     block = []
@@ -1016,6 +1048,7 @@ def split_review_content(content, limit=4000):
             current += block
     if current or not chunks:
         chunks.append(current)
+    chunks[0] = frontmatter + chunks[0]
     return chunks
 
 
@@ -1610,10 +1643,22 @@ def _validate_public_image_url(url):
         addresses = {item[4][0] for item in socket.getaddrinfo(hostname, None)}
     except socket.gaierror as exc:
         raise PublishDataValidationError(f'图片域名无法解析: {hostname}') from exc
+    # 本机代理（Clash/Surge 等）常以 fake-IP 模式返回 198.18.0.0/15 的合成地址，
+    # 真正的域名解析发生在上游代理侧。配置了项目 HTTP CONNECT 代理时，这类合成
+    # 地址仍然走代理下载，并由下载后的实际 peer 校验兜底；其它非公网地址一律拒绝。
+    # IPv4 与 IPv6 各有一个 benchmark 保留段，代理 fake-IP 模式两者都会用到。
+    fake_ip_ranges = (ipaddress.ip_network('198.18.0.0/15'),
+                      ipaddress.ip_network('2001:2::/48'))
+    proxy_configured = bool(
+        os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+        or os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy'))
     for address in addresses:
         ip = ipaddress.ip_address(address)
-        if not ip.is_global:
-            raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {address}')
+        if ip.is_global:
+            continue
+        if proxy_configured and any(ip in network for network in fake_ip_ranges):
+            continue
+        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {address}')
     return {str(ipaddress.ip_address(address)) for address in addresses}
 
 

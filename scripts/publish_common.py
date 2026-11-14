@@ -8933,6 +8933,9 @@ def sanitize_markdown_for_publish(text):
     text = text.replace('\ufffd\ufffd\ufffd', '。')
     text = text.replace('\ufffd\ufffd', '。')
     text = text.replace('\ufffd', '')
+    # 零宽字符不会显示却会污染表格表头与引用比对（文字里出现看不见的分隔符），
+    # 发布前统一去除：零宽空格/连接符、词连接符、BOM。
+    text = re.sub('[\u200b\u200c\u200d\u2060\ufeff]', '', text)
     frontmatter_match = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
     latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
     latex_body = text[len(latex_prefix):]
