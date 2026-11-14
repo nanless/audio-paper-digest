@@ -877,6 +877,8 @@ function updateJsonFileLocked(filePath, updater, options = {}) {
         lock_wait_ms: 0, read_parse_ms: 0, serialize_ms: 0, write_ms: 0,
         bytes: 0, generation: null, result: 'failed' } : null;
     try {
+        // 结果文件锁与论文锁用同一套回收策略：本机进程确认死亡后立即回收，
+        // 否则一次异常的批次会留下 2 小时不可用的锁（staleMs 默认值）。
         return withFileLockSync(filePath, () => {
             if (timing) timing.lock_wait_ms = elapsed(started);
             const readStarted = timing ? process.hrtime.bigint() : null;
@@ -914,7 +916,7 @@ function updateJsonFileLocked(filePath, updater, options = {}) {
                 timing.result = 'saved';
             }
             return next;
-        }, options);
+        }, { recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY, ...options });
     } finally {
         if (timing) {
             timing.total_ms = elapsed(started);

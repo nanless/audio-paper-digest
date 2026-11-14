@@ -432,6 +432,18 @@
     {
       "input": "Aligned temporal granularity (†:f×8{}^{\\dagger}\\!:{f}\\times 8; ‡:f×4{}^{\\ddagger}\\!:{f}\\times 4)",
       "expected": "Aligned temporal granularity (†:f×8; ‡:f×4)"
+    },
+    {
+      "input": "ESP32-S3 (I2{}^{\\text{2}}S)",
+      "expected": "ESP32-S3 (I2S)"
+    },
+    {
+      "input": "EER↓\\downarrow",
+      "expected": "EER↓"
+    },
+    {
+      "input": "ACC↑\\uparrow",
+      "expected": "ACC↑"
     }
   ]
 }

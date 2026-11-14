@@ -164,6 +164,16 @@ function foldReaderTexCellDuplicate(value) {
             return dual[1];
         }
     }
+    // 可见符号后跟同义命令的重复副本（EER↓\downarrow、ACC↑\uparrow）：命令的符号
+    // 必须与可见部分最后一个字符完全相同，且命令后面不是字母数字续写。
+    const symbolCopy = /^\\([A-Za-z]+)([\s\S]*)$/u.exec(text);
+    if (symbolCopy) {
+        const symbol = Object.hasOwn(READER_TEX_SYMBOLS, symbolCopy[1]) ? READER_TEX_SYMBOLS[symbolCopy[1]] : null;
+        if (symbol && symbolCopy[2] && !/^[A-Za-z0-9]/u.test(symbolCopy[2])) {
+            const head = text.slice(0, text.length - symbolCopy[0].length);
+            if (head && head.endsWith(symbol)) return head + symbolCopy[2];
+        }
+    }
     for (let split = 1; split < text.length; split++) {
         const tailProbe = text.slice(split);
         if (!tailProbe.includes('\\') && !/[_^]\{/.test(tailProbe) && !tailProbe.includes('{,}')) continue;
@@ -185,7 +195,9 @@ function foldReaderTexCellDuplicate(value) {
             if (strippedTail !== null && /^[\s(（\[,:：;；↑↓→←↔±×%°+\-]/.test(strippedTail)) return prefix + strippedTail;
         }
         // 单字符符号前缀 + 副本继续给出余下文字（Δ\DeltaIC → ΔIC）。
-        if (canonicalPrefix.length === 1 && canonicalPlain.length > 1 && canonicalPlain.startsWith(canonicalPrefix)) {
+        // 副本必须以 TeX 构造开始；否则普通单词（EER↓\downarrow 的 E + ER…）会被误折。
+        if (canonicalPrefix.length === 1 && canonicalPlain.length > 1 && canonicalPlain.startsWith(canonicalPrefix)
+            && /^[\\{^_]/u.test(suffix)) {
             const symbolTail = readerTexAlignTail(plain, canonicalPrefix);
             if (symbolTail !== null && /^[A-Za-z0-9\u4e00-\u9fff\s(（\[,:：;；]/u.test(symbolTail)) return prefix + symbolTail;
         }
@@ -256,6 +268,10 @@ function projectReaderCellTexDisplay(value) {
             const projected = Object.hasOwn(READER_TEX_SYMBOLS, value) ? READER_TEX_SYMBOLS[value] : value;
             return readerTexCellCanonical(visible) === readerTexCellCanonical(projected) ? visible : whole;
         });
+    // 文本模式下重复可见字符的上标副本（I2{}^{\text{2}}S → I2S）：可见字符已在前面，
+    // 副本只是把同一个数字/字母排成上标，去掉不改变任何数值或单位。
+    output = output.replace(/([A-Za-z0-9])\{\}\^\{\\text\{([A-Za-z0-9]{1,3})\}\}/g,
+        (whole, visible, copy) => (visible === copy ? visible : whole));
     output = output.replace(/([A-Za-z])\^\\(?:hat|widehat)\{([A-Za-z]+)\}/g,
         (whole, visible, name) => visible === name ? visible + '\u0302' : whole);
     output = output.replace(/\\hat\{([A-Za-z])\}/g, (_whole, name) => name + '\u0302');

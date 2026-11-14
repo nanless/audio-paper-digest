@@ -7505,6 +7505,15 @@ def _fold_reader_tex_cell_duplicate(value):
         plain = _reader_tex_plain(dual.group(2) + dual.group(3))
         if plain and '\\' not in plain and all(ch in dual.group(1) for ch in plain):
             return dual.group(1)
+    # 可见符号后跟同义命令的重复副本（EER↓\\downarrow），与 JS 侧同一规则。
+    symbol_copy = re.fullmatch(r'\\([A-Za-z]+)([\s\S]*)', text)
+    if symbol_copy:
+        symbol = _READER_TEX_SYMBOLS.get(symbol_copy.group(1))
+        tail = symbol_copy.group(2)
+        if symbol and tail and not re.match(r'[A-Za-z0-9]', tail):
+            head = text[:len(text) - len(symbol_copy.group(0))]
+            if head and head.endswith(symbol):
+                return head + tail
     for split in range(1, len(text)):
         suffix_probe = text[split:]
         if '\\' not in suffix_probe and not re.search(r'[_^]\{', suffix_probe) and '{,}' not in suffix_probe:
@@ -7526,7 +7535,8 @@ def _fold_reader_tex_cell_duplicate(value):
             return prefix
         # 单字符符号前缀 + 副本继续给出余下文字（Δ\DeltaIC → ΔIC）。
         if len(canonical_prefix) == 1 and len(canonical_plain) > 1 \
-                and canonical_plain.startswith(canonical_prefix):
+                and canonical_plain.startswith(canonical_prefix) \
+                and re.match(r'[\\{^_]', suffix):
             tail = _reader_tex_align_tail(plain, canonical_prefix)
             if tail is not None and re.match(r'[A-Za-z0-9\u4e00-\u9fff\s(（\[,:：;；]', tail):
                 return prefix + tail
@@ -7628,6 +7638,9 @@ def _project_reader_cell_tex_display(value):
         return visible if _reader_tex_cell_canonical(visible) == _reader_tex_cell_canonical(projected) else match.group(0)
 
     output = re.sub(r'([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}', bold, output)
+    # 文本模式下重复可见字符的上标副本（I2{}^{\text{2}}S → I2S），同 JS 侧规则。
+    output = re.sub(r'([A-Za-z0-9])\{\}\^\{\\text\{([A-Za-z0-9]{1,3})\}\}',
+                    lambda m: m.group(1) if m.group(1) == m.group(2) else m.group(0), output)
     output = re.sub(r'([A-Za-z])\^\\(?:hat|widehat)\{([A-Za-z]+)\}',
                     lambda match: match.group(1) + '\u0302'
                     if match.group(1) == match.group(2) else match.group(0), output)
