@@ -11903,6 +11903,8 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     );
     const signedFigures = directContext.getDirectRewriteAnalysisContext()
         ? materialized.map(directContext.stripEphemeralFigureFields) : materialized;
+    const previousArticleSha256 = crypto.createHash('sha256').update(String(paper.apiReaderArticle || '')).digest('hex');
+    const previousPlanSha256 = stableFingerprint(paper.apiReaderPlan);
     const prunedArticle = pruneUnmaterializedApiReaderFigureBlocks(
         paper.apiReaderArticle,
         figures,
@@ -11932,6 +11934,17 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
     stage.structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256 || '';
     stage.refreshedAt = getBeijingISOString();
+    // 图片刷新会改写 apiReaderPlan / 正文，旧的序号完成证明只对旧稿成立。
+    // sealCompletion 依赖内存 origin、无法事后补签，所以这里必须按既有设计把
+    // 旧证明登记为“被本次重做接替”，并清掉阶段上的序号标记；否则该篇会被
+    // 永久楔死：generate 报资源宣称核验失败、refresh 报 ordinal differs。
+    if (articleSha256 !== previousArticleSha256
+        || paper.apiReaderPlanSha256 !== previousPlanSha256) {
+        require('./lib/reader-target-ordinal-patch').supersedeOrdinalCompletionBeforeReset(paper);
+        for (const key of ['ordinalPatchContract', 'ordinalPatchSchemaFingerprint',
+            'ordinalPatchCompilations', 'ordinalCompletionProof']) delete stage[key];
+        if (manifest.contracts) delete manifest.contracts.readerTargetOrdinalPatch;
+    }
     manifest.stages.imageSupplement = {
         status: 'skipped',
         reason: 'api_reader_v3_official_figures_bound',
