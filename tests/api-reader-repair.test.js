@@ -453,7 +453,7 @@ test('生产续跑只请求补丁，合并后正文不完整仍然拒绝', async
         ...base, readerMaxAttempts: 2, readerCallModel: async (messages, budget, options) => {
             calls++;
             // 补丁额度按推理型模型抬到 24000，升级上限 32000。
-            assert.ok(budget <= 32000);
+            assert.ok(budget <= 128000);
             assert.equal(options.usageContext.stage, 'apiReaderRepair');
             const prompt = messages[0].content[0].text;
             assert.ok(prompt.includes(require('../scripts/lib/reader-source-diagnostics.js').readerNumericSpellingGuidance()));
@@ -1765,9 +1765,9 @@ test('普通尝试尚未耗尽时，8000 token 补丁截断后续跑一次 16000
         /body 至少/
     );
     assert.deepEqual(calls, [
-        { stage: 'apiReaderArticle', tokens: 48000 },
+        { stage: 'apiReaderArticle', tokens: 128000 },
         { stage: 'apiReaderRepair', tokens: 8000 },
-        { stage: 'apiReaderRepair', tokens: 16000 }
+        { stage: 'apiReaderRepair', tokens: 42666 }
     ]);
     const afterRetry = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(afterRetry.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');
@@ -1811,7 +1811,7 @@ test('最后一次普通补丁在 8000 token 截断后原次数已耗尽，不�
         error=>error.code==='READER_REPAIR_ATTEMPTS_EXHAUSTED'&&error.retryable===false
     );
     assert.deepEqual(calls, [
-        { stage: 'apiReaderArticle', tokens: 48000 },
+        { stage: 'apiReaderArticle', tokens: 128000 },
         { stage: 'apiReaderRepair', tokens: 8000 }
     ]);
     const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
@@ -1898,13 +1898,14 @@ test('原剩余一次内16000 token补丁传输失败可重试，收到内容后
     active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
     envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(envelope.payload.attempts, 3);
-    assert.equal(envelope.payload.lastContentError.maxOutputTokens, 16000);
+    // 补丁升级额度 = min(上限, max(基础, Reader预算/3))；Reader 预算已抬到 128000。
+    assert.equal(envelope.payload.lastContentError.maxOutputTokens, 42666);
     // 旧表层标记只记录已发生的容量升级，不是新付费许可；内容次数仍止于原3次。
     assert.deepEqual(envelope.payload.implementationRepairAllowanceLineage,
         require('../scripts/lib/protocol-codec').record('reader-implementation-repair-lineage'));
     assert.equal(envelope.payload.implementationRepairAllowanceProof,null);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
-    assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);
+    assert.deepEqual(calls.map(call => call.tokens), [128000, 8000, 42666, 42666]);
 });
 
 // 固定下来的完整输出，取自本实现之前的提交 fcee227。

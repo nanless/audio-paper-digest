@@ -21083,6 +21083,15 @@ async function repairCoreSummarySection(
             retryTargets.push(`删除不能由原文核对的实验数值断言，并原样写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”；`
                 + '不得同时保留或新增实验数字');
         } else if (/(?:定量|量化|比较对象|评测设置|指标名称|指标口径|数值|比较方向)/.test(feedback)) {
+            // 直接告诉模型本篇原文里到底有哪些指标名，避免它继续用“效果/分数”这类泛词。
+            const metricCandidates = ['WER', 'CER', 'SER', 'MOS', 'PESQ', 'STOI', 'SDR', 'SI-SDR', 'SNR', 'F1', 'BLEU',
+                'ROUGE', 'ACC', 'UAR', 'EER', 'FAD', 'FVD', 'CLAP', 'DNSMOS', 'MCD', '准确率', '错误率', '相似度', '评分']
+                .filter(name => new RegExp(`(?:^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:[^A-Za-z0-9_]|$)`, 'i')
+                    .test(String(sourceText || '')));
+            if (metricCandidates.length) {
+                retryTargets.push(`本篇原文报告的结果指标是 ${metricCandidates.slice(0, 5).join('、')}，`
+                    + '那句完整比较必须直接用其中之一，不能改写成本篇没出现过的指标名');
+            }
             retryTargets.push('在同一句中说明比较对象、评测设置或数据集、指标、数值与方向。'
                 + '使用相同指标的原文数值明确比较，不跨指标比较。句首和要素顺序可以按内容安排，'
                 + '不必重复指标名；不能只写“最高”“最优”“最低”或“达到”而不说明比较对象与方向。'
