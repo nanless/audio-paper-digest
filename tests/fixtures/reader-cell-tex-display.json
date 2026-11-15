@@ -444,6 +444,14 @@
     {
       "input": "ACC↑\\uparrow",
       "expected": "ACC↑"
+    },
+    {
+      "input": "2{}^{\\text{2}}",
+      "expected": "2{}^{\\text{2}}"
+    },
+    {
+      "input": "10{}^{\\text{2}}",
+      "expected": "10{}^{\\text{2}}"
     }
   ]
 }

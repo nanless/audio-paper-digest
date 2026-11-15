@@ -6213,6 +6213,20 @@ primary_method_tag: #Transformer
         self.assertLessEqual(max(len(chunk) for chunk in chunks), 6000)
         self.assertEqual(''.join(chunks), content)
 
+    def test_review_split_frontmatter_handles_crlf_and_dashes(self):
+        # CRLF 换行、以及正文里的 `----` 行都不能被当成结束分隔符。
+        body = '正文。\n\n' * 200
+        for content in (
+            '---\r\ntitle: "x"\r\n---\r\n' + body,
+            '---\ntitle: "x"\n----\nstill yaml\n---\n' + body,
+        ):
+            chunks = publish_to_blog.split_review_content(content, limit=6000)
+            self.assertEqual(''.join(chunks), content)
+            self.assertTrue(chunks[0].startswith('---'))
+            # frontmatter 必须完整落在同一块里（含结束行）
+            first_end = content.find('\n---\n')
+            self.assertGreaterEqual(len(chunks[0]), first_end)
+
     def test_review_split_without_frontmatter_still_bounded(self):
         content = '普通正文。\n\n' * 400
         chunks = publish_to_blog.split_review_content(content, limit=6000)

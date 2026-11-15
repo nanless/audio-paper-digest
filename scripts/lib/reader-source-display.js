@@ -269,8 +269,10 @@ function projectReaderCellTexDisplay(value) {
             return readerTexCellCanonical(visible) === readerTexCellCanonical(projected) ? visible : whole;
         });
     // 文本模式下重复可见字符的上标副本（I2{}^{\text{2}}S → I2S）：可见字符已在前面，
-    // 副本只是把同一个数字/字母排成上标，去掉不改变任何数值或单位。
-    output = output.replace(/([A-Za-z0-9])\{\}\^\{\\text\{([A-Za-z0-9]{1,3})\}\}/g,
+    // 副本只是把同一个字符排成上标。**必须紧跟字母/数字续写**才算词内副本；
+    // 若副本出现在词尾（2{}^{\text{2}}、m2{}^{\text{2}}），那是真指数，保留原文，
+    // 让「残留 TeX」检查去要求改写，不能静默把 ^2 折掉。
+    output = output.replace(/([A-Za-z0-9])\{\}\^\{\\text\{([A-Za-z0-9]{1,3})\}\}(?=[A-Za-z0-9])/g,
         (whole, visible, copy) => (visible === copy ? visible : whole));
     output = output.replace(/([A-Za-z])\^\\(?:hat|widehat)\{([A-Za-z]+)\}/g,
         (whole, visible, name) => visible === name ? visible + '\u0302' : whole);

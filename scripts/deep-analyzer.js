@@ -11921,30 +11921,29 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         figurePlacements: (paper.apiReaderPlan?.figurePlacements || [])
             .filter(item => materializedOrdinals.has(item?.figureOrdinal))
     };
-    paper.apiReaderArticle = rewrittenArticle;
-    paper.apiReaderArticleSha256 = articleSha256;
-    paper.apiReaderPlan = readerPlan;
-    paper.apiReaderPlanSha256 = stableFingerprint(readerPlan);
-    paper.apiReaderFigures = signedFigures;
-    paper.apiReaderAuthors = readerAuthors;
-    stage.articleSha256 = articleSha256;
-    stage.planSha256 = paper.apiReaderPlanSha256;
-    stage.figureCount = materialized.length;
-    stage.figuresSha256 = stableFingerprint(signedFigures);
-    stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
-    stage.structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256 || '';
-    stage.refreshedAt = getBeijingISOString();
-    // 图片刷新会改写 apiReaderPlan / 正文，旧的序号完成证明只对旧稿成立。
-    // sealCompletion 依赖内存 origin、无法事后补签，所以这里必须按既有设计把
-    // 旧证明登记为“被本次重做接替”，并清掉阶段上的序号标记；否则该篇会被
-    // 永久楔死：generate 报资源宣称核验失败、refresh 报 ordinal differs。
-    if (articleSha256 !== previousArticleSha256
-        || paper.apiReaderPlanSha256 !== previousPlanSha256) {
+    // 先登记旧证明作废、再覆盖正文与阶段 SHA：supersede 会用 stage 上的
+    // `articleSha256/planSha256` 记录「上一版」身份，若先赋值就会把新值写进
+    // 重做历史，导致后续 verifyRevisionPointer 与原始完成证明对不上（run 级失败）。
+    const nextPlanSha256 = stableFingerprint(readerPlan);
+    if (articleSha256 !== previousArticleSha256 || nextPlanSha256 !== previousPlanSha256) {
         require('./lib/reader-target-ordinal-patch').supersedeOrdinalCompletionBeforeReset(paper);
         for (const key of ['ordinalPatchContract', 'ordinalPatchSchemaFingerprint',
             'ordinalPatchCompilations', 'ordinalCompletionProof']) delete stage[key];
         if (manifest.contracts) delete manifest.contracts.readerTargetOrdinalPatch;
     }
+    paper.apiReaderArticle = rewrittenArticle;
+    paper.apiReaderArticleSha256 = articleSha256;
+    paper.apiReaderPlan = readerPlan;
+    paper.apiReaderPlanSha256 = nextPlanSha256;
+    paper.apiReaderFigures = signedFigures;
+    paper.apiReaderAuthors = readerAuthors;
+    stage.articleSha256 = articleSha256;
+    stage.planSha256 = nextPlanSha256;
+    stage.figureCount = materialized.length;
+    stage.figuresSha256 = stableFingerprint(signedFigures);
+    stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
+    stage.structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256 || '';
+    stage.refreshedAt = getBeijingISOString();
     manifest.stages.imageSupplement = {
         status: 'skipped',
         reason: 'api_reader_v3_official_figures_bound',

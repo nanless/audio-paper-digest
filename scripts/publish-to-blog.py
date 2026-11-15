@@ -964,16 +964,20 @@ def _split_frontmatter_block(content):
 
     分块上限小于 frontmatter 长度时，按行边界硬切会让某个分块只看到半个
     frontmatter（缺少结束的 `---`），审查模型会误报「缺少结束分隔符」。
+
+    结束分隔符必须是**独占一行**的 `---`（允许行尾空白与 CRLF）；
+    `----` 这类更长的横线行、以及正文里出现的 `---` 片段都不算结束。
     """
-    if not content.startswith('---\n'):
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != '---':
         return '', content
-    end = content.find('\n---', 3)
-    if end < 0:
-        return '', content
-    end += len('\n---')
-    if content[end:end + 1] == '\n':
-        end += 1
-    return content[:end], content[end:]
+    consumed = len(lines[0])
+    for index in range(1, len(lines)):
+        if lines[index].rstrip('\r\n').strip() == '---':
+            consumed += len(lines[index])
+            return content[:consumed], content[consumed:]
+        consumed += len(lines[index])
+    return '', content
 
 
 def split_review_content(content, limit=4000):
@@ -1655,13 +1659,17 @@ def _validate_public_image_url(url):
     proxy_configured = bool(
         os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
         or os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy'))
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
+    parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
+    # fake-IP 只在**整组解析结果都落在保留段**时成立；混入真实私网地址仍拒绝，
+    # 避免代理模式下把所有域名解析成合成地址后私网拦截整体失效。
+    all_fake_ip = bool(parsed_addresses) and all(
+        any(ip in network for network in fake_ip_ranges) for ip in parsed_addresses)
+    for ip in parsed_addresses:
         if ip.is_global:
             continue
-        if proxy_configured and any(ip in network for network in fake_ip_ranges):
+        if proxy_configured and all_fake_ip:
             continue
-        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {address}')
+        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {ip}')
     return {str(ipaddress.ip_address(address)) for address in addresses}
 
 
@@ -7686,8 +7694,9 @@ def _project_reader_cell_tex_display(value):
         return visible if _reader_tex_cell_canonical(visible) == _reader_tex_cell_canonical(projected) else match.group(0)
 
     output = re.sub(r'([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}', bold, output)
-    # 文本模式下重复可见字符的上标副本（I2{}^{\text{2}}S → I2S），同 JS 侧规则。
-    output = re.sub(r'([A-Za-z0-9])\{\}\^\{\\text\{([A-Za-z0-9]{1,3})\}\}',
+    # 文本模式下重复可见字符的上标副本（I2{}^{\text{2}}S → I2S），同 JS 侧规则：
+    # 只在副本后面紧跟字母/数字（词内副本）时折叠，词尾的属真指数须保留。
+    output = re.sub(r'([A-Za-z0-9])\{\}\^\{\\text\{([A-Za-z0-9]{1,3})\}\}(?=[A-Za-z0-9])',
                     lambda m: m.group(1) if m.group(1) == m.group(2) else m.group(0), output)
     output = re.sub(r'([A-Za-z])\^\\(?:hat|widehat)\{([A-Za-z]+)\}',
                     lambda match: match.group(1) + '\u0302'
