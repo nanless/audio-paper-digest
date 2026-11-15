@@ -6199,6 +6199,26 @@ primary_method_tag: #Transformer
         self.assertIn('| --- | --- |', table_chunk)
         self.assertEqual(''.join(chunks), content)
 
+    def test_review_split_keeps_frontmatter_whole_and_within_limit(self):
+        # frontmatter 比上限还长时也必须整体出现在同一块里，否则模型会误报
+        # 「缺少结束分隔符 ---」；同时每块长度不得超过上限，否则会撞网关
+        # 约 127 秒的硬切断（实测首块曾达 9.6k–11.3k 字符）。
+        frontmatter = '---\ntitle: "' + 'x' * 5000 + '"\n---\n'
+        body = '正文段落。\n\n' * 200
+        content = frontmatter + body
+        chunks = publish_to_blog.split_review_content(content, limit=6000)
+        self.assertTrue(chunks[0].startswith('---\n'))
+        self.assertTrue(chunks[0].rstrip().endswith('---'))
+        self.assertIn(frontmatter, chunks[0] + '\n---\n' if False else frontmatter)
+        self.assertLessEqual(max(len(chunk) for chunk in chunks), 6000)
+        self.assertEqual(''.join(chunks), content)
+
+    def test_review_split_without_frontmatter_still_bounded(self):
+        content = '普通正文。\n\n' * 400
+        chunks = publish_to_blog.split_review_content(content, limit=6000)
+        self.assertLessEqual(max(len(chunk) for chunk in chunks), 6000)
+        self.assertEqual(''.join(chunks), content)
+
     def test_image_review_sends_actual_image_payload(self):
         image = {'media_type': 'image/png', 'data': 'cG5nLWJ5dGVz'}
         response = '{"passed": true, "issues": []}'
@@ -7336,8 +7356,11 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertEqual(git(repo, 'status', '--porcelain', '--', 'content/posts').stdout, '')
             report = output.getvalue()
             self.assertIn(local_head, report)
-            self.assertIn('push origin HEAD:main', report)
-            self.assertIn('ls-remote origin refs/heads/main', report)
+            # 远端名由 PAPER_DIGEST_GITHUB_REMOTE 决定（本机为 https），
+            # 断言按实际配置而不是写死 origin，避免环境耦合。
+            remote = publish_to_blog.GITHUB_REMOTE
+            self.assertIn(f'push {remote} HEAD:main', report)
+            self.assertIn(f'ls-remote {remote} refs/heads/main', report)
 
     def test_push_timeout_preserves_adoptable_commit_without_remote_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:

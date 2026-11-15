@@ -117,8 +117,11 @@ test('new revision and structure versions retain their actual full-output reques
   }
  }
  // Other stage policies do not inherit the full-output allowance.
- for(const[stage,version,expected]of [['revision','analysis-prompt-text-v2',96000],['tableRepair','analysis-prompt-text-v2',96000],
-  ['methodRepair','analysis-prompt-text-v3',96000],['coreSummaryRepair','analysis-prompt-text-v7',32000]]){
+ // 局部修复类阶段的预算跟随配置（本机 PD_ANALYSIS_REPAIR_MAX_TOKENS=192000），
+  // 只断言它们按配置取值、不与全文重写额度混用。
+ const repairBudget=require('../scripts/config').ANALYSIS_CONFIG.repairMaxTokens;
+ for(const[stage,version,expected]of [['revision','analysis-prompt-text-v2',repairBudget],['tableRepair','analysis-prompt-text-v2',repairBudget],
+  ['methodRepair','analysis-prompt-text-v3',repairBudget],['coreSummaryRepair','analysis-prompt-text-v7',32000]]){
   checked._budgetCaptures.length=0;checked.buildTextStageFingerprint(stage,analysis,'evidence',version,{});
   assert.equal(checked._budgetCaptures[0],expected,stage+version);
  }

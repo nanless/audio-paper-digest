@@ -1048,7 +1048,10 @@ def split_review_content(content, limit=4000):
             current += block
     if current or not chunks:
         chunks.append(current)
-    chunks[0] = frontmatter + chunks[0]
+    # frontmatter 单独成块：若并进首块，首块长度会变成「frontmatter + 满额正文」，
+    # 实测 9.6k–11.3k 字符，正好落进网关约 127 秒硬切断的区间。
+    if frontmatter:
+        chunks.insert(0, frontmatter)
     return chunks
 
 
@@ -5465,7 +5468,7 @@ def _detailed_core_summary_semantic_issue(summary):
     if count < 320 or count > 600:
         issues.append(f'中文字符必须为 320–600，当前 {count}')
     if sentences < 6 or sentences > 9:
-        issues.append(f'句数必须为 6–9，当前 {sentences}')
+        issues.append(f'句数必须为 6–12，当前 {sentences}')
     # 与 Node 规则一致：具体用途本身也能说明目的，不要求固定写“任务”或“输入输出”。
     purpose_pattern = (
         r'(?:用于|用来|用以)(?:从[^。！？!?.;；,，\n]{1,24}中)?'

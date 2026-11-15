@@ -51,7 +51,11 @@ test('current templates preserve original text apart from the declared changes; 
             assert.equal(actual.toString(), expected);
         } else if (current === 'prompts/current/structure-repair.md') {
             assert.equal(actual.toString(), originalBytes.toString()
-                .replace('实验表格不符合 `evidence-rich-v2` 的数量、行列和解释要求', '实验表格不符合数量、行列和解释要求'));
+                .replace('实验表格不符合 `evidence-rich-v2` 的数量、行列和解释要求', '实验表格不符合数量、行列和解释要求')
+                .replace('核心摘要用 6–9 句完整中文句子', '核心摘要用 6–12 句完整中文句子'));
+        } else if (current === 'prompts/current/deep-analysis.md') {
+            assert.equal(actual.toString(), originalBytes.toString()
+                .replace('正文写 6–9 句', '正文写 6–12 句'));
         } else if (current === 'prompts/current/scoring-audit.md') {
             const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
             assert.equal(actual.toString(), originalBytes.toString().replace('    "version": 1,',
@@ -62,7 +66,10 @@ test('current templates preserve original text apart from the declared changes; 
                 '方法说明包含 2–4 个步骤，写清各步的职责，以及前一步的输出怎样进入下一步。',
                 '方法说明包含 2–4 个步骤，用“先”“再”“最后”这类顺序词把步骤串起来，写清各步的职责，'
                 + '以及前一步的输出怎样进入下一步：用“提取”“输出”“送入”这类词写出产物的具体名称，'
-                + '并说明它被哪一步接收、用来做什么。'));
+                + '并说明它被哪一步接收、用来做什么。')
+                // 2026-11-14：用户要求调整判定口径，句数上限 6–9 → 6–12（deepseek
+                // 开 max 后稳定落在 10–12 句，字数与定量比较要求不变）。
+                .replace('摘要正文写 6–9 句', '摘要正文写 6–12 句'));
         } else assert.deepEqual(actual, originalBytes, current);
         assert.deepEqual(evidence.readPromptEvidenceBytes(original, { expectedSha256: sha(originalBytes) }), originalBytes);
         assert.equal(fs.existsSync(path.join(root, original)), false);

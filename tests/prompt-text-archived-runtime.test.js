@@ -66,5 +66,6 @@ test('正式评分入口实际构造的新请求使用 v5 白话并保留工程�
     assert.match(text,/仅用文字描述工程上的价值，或只给出间接指标/);
     assert.match(text,/只声称有工程上的价值、没有测量结果或可复用的研究材料时，工程\/实践价值最高 1\.0/);
     assert.doesNotMatch(text,/只有工程叙述或间接指标/);
-    assert.equal(capturedRequest.max_tokens ?? capturedRequest.max_output_tokens,16000);
+    // 评分审计预算随推理型模型上调（SCORING_AUDIT_MAX_TOKENS），从 16000 抬到 96000。
+    assert.equal(capturedRequest.max_tokens ?? capturedRequest.max_output_tokens,96000);
 });
