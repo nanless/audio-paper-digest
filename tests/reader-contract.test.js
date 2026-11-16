@@ -114,3 +114,21 @@ test('Reader 编辑质量集成保留带小节定位的警告，不改动正文'
     assert.equal(metrics.warningCodes.reader_cross_section_near_duplicate, 1);
     assert.equal(metrics.sectionWarnings[0].right.section, 'sections[1]');
 });
+
+test('同一结果数值跨过多小节重复时报出复用，超参数与整数不计入', () => {
+    const { findReaderCrossSectionMetricReuse } = require('../scripts/lib/reader-contract');
+    const metric = '在 LibriSpeech test-clean 上词错误率为 2.1%，比基线低 0.7 个百分点。';
+    const sections = Array.from({ length: 6 }, (_, index) =>
+        `### 第${index}节要回答什么\n\n${metric}`);
+    const findings = findReaderCrossSectionMetricReuse(sections.join('\n\n'));
+    assert.ok(findings.length >= 1);
+    const headline = findings.find(finding => finding.token === '2.1%');
+    assert.ok(headline);
+    assert.equal(headline.code, 'reader_metric_repeated_across_sections');
+    assert.equal(headline.sectionCount, 6);
+    // 只有四节、或只有整数与超参数时不算重复。
+    assert.deepEqual(findReaderCrossSectionMetricReuse(
+        Array.from({ length: 4 }, (_, index) => `### 第${index}节\n\n${metric}`).join('\n\n')), []);
+    assert.deepEqual(findReaderCrossSectionMetricReuse(
+        Array.from({ length: 8 }, (_, index) => `### 第${index}节\n\n学习率为 256，批量大小为 100。`).join('\n\n')), []);
+});

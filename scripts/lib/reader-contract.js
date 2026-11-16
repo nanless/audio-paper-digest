@@ -55,6 +55,43 @@ function buildReaderContractNotice(options = {}) {
     ].join('\n');
 }
 
+// 同一篇里同一个结果数值在过多小节反复出现，是读者最直观的「啰嗦感」来源：
+// 实测 2026-11-13 批次里最严重的一篇把 84.0% 写进 8 个小节。这里只统计
+// 带小数点或百分号的量（排除 100、256 这类超参数与整数量），最多报 3 条。
+function findReaderCrossSectionMetricReuse(article, sections = []) {
+    const headings = [...String(article || '').matchAll(/^###\s+([^\n]+)\n/gm)];
+    const usage = new Map();
+    for (let index = 0; index < headings.length; index++) {
+        const heading = headings[index];
+        const body = String(article).slice(heading.index + heading[0].length,
+            headings[index + 1]?.index ?? String(article).length);
+        const prose = body.split('\n').filter(line => {
+            const text = line.trim();
+            if (!text) return false;
+            if (text.startsWith('|') || text.startsWith('![')) return false;
+            if (text.startsWith('> **看图路径')) return false;
+            if (/^\*论文图/.test(text)) return false;
+            if (/^\*\*[^*]+ × [^*]+：\*\*/.test(text)) return false;
+            return true;
+        }).join(' ');
+        for (const match of prose.matchAll(/\d+\.\d+%?|\d+%/g)) {
+            const token = match[0];
+            if (!usage.has(token)) usage.set(token, new Map());
+            usage.get(token).set(`sections[${index}]`, heading[1].trim());
+        }
+    }
+    const findings = [];
+    for (const [token, sectionsUsed] of usage.entries()) {
+        if (sectionsUsed.size <= 5) continue;
+        findings.push({ code: 'reader_metric_repeated_across_sections', severity: 'warning',
+            message: `结果数值 ${token} 在 ${sectionsUsed.size} 个小节里重复出现；`
+                + '请只在结果所在小节给数值，其余小节讲条件、机制或行动，不要复述同一个数字。',
+            token, sectionCount: sectionsUsed.size,
+            sections: [...sectionsUsed.entries()].map(([section, heading]) => ({ section, heading })) });
+    }
+    return findings.sort((left, right) => right.sectionCount - left.sectionCount).slice(0, 3);
+}
+
 // 每个真实的 Reader 分节都要保持独立，包括 component 这类重复出现的类型。
 // 仅数字相近永远不算重复发现。
 function findReaderSectionNearDuplicates(article, sections = []) {
@@ -104,5 +141,6 @@ function findReaderSectionNearDuplicates(article, sections = []) {
 }
 
 module.exports = { READER_MECHANICAL_CONTRACT, READER_SECTION_QUALITY_CONTRACT, READER_LIMITS,
+    findReaderCrossSectionMetricReuse,
     readerRequirements, buildReaderContractNotice,
     findReaderSectionNearDuplicates };

@@ -1944,6 +1944,9 @@ function buildApiReaderQualityMetrics(quality, article, evidence = null) {
         warningCodes: countCodes(warnings),
         ...(warnings.some(item => item.code === 'reader_cross_section_near_duplicate') ? {
             sectionWarnings: warnings.filter(item => item.code === 'reader_cross_section_near_duplicate')
+        } : {}),
+        ...(warnings.some(item => item.code === 'reader_metric_repeated_across_sections') ? {
+            metricReuseWarnings: warnings.filter(item => item.code === 'reader_metric_repeated_across_sections')
         } : {})
     };
 }
@@ -6810,7 +6813,9 @@ function validateReaderEditorialQuality(article, sections) {
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
     });
     const sectionWarnings = findReaderSectionNearDuplicates(article, sections);
-    return { ...quality, warnings: [...quality.warnings, ...sectionWarnings] };
+    // 同一结果数值跨过多小节重复，是读者最直观的啰嗦感来源。
+    const metricReuseWarnings = require('./lib/reader-contract').findReaderCrossSectionMetricReuse(article, sections);
+    return { ...quality, warnings: [...quality.warnings, ...sectionWarnings, ...metricReuseWarnings] };
 }
 
 function normalizeReaderStructuralLineBreaks(body, declaredMarker) {
