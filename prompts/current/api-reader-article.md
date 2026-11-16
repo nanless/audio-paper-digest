@@ -172,11 +172,11 @@ arXiv ID：{arxivId}
   ]
 }
 
-`sections` 必须包含 12–18 个小节，起草时建议安排 14–16 节。输出 JSON 前实际数一次数组项数；少于 12 节或超过 18 节都不能输出。`kind` 可以重复，但重复项也计入小节总数，总数不得超过 18。同类组件、结果读数或消融条件过多时，把它们合并为同一小节中的自然段；不得为压缩节数删掉证据、数字、单位、比较条件、来源记录或结果限制。不要把表格读数和结果解释机械拆成两个小节。`kind` 只能按需要从以下集合中选择，整体按列表顺序展开：
+`sections` 的节数以本次代码要求为准（见 `{mechanicalContract}`）。先看这篇论文实际有哪些阶段值得展开：只有一个方法、一组结果、没有训练过程的论文，就不要为了凑节数把同一个组件拆成两节，也不要为每张表单独开一节。`kind` 可以重复，但重复项也计入小节总数，总数不得超过 18。同类组件、结果读数或消融条件过多时，把它们合并为同一小节中的自然段；不得为压缩节数删掉证据、数字、单位、比较条件、来源记录或结果限制。不要把表格读数和结果解释机械拆成两个小节。`kind` 只能按需要从以下集合中选择，整体按列表顺序展开：
 
 background / related_work / problem / method_overview / component / training / experiment_setup / result / ablation / limitation / reproduction / synthesis
 
-必须覆盖 `background`、`related_work`、`method_overview`、`training`、`experiment_setup`、`result`、`limitation`、`reproduction` 和 `synthesis`。`training` 不代表一定有神经网络训练。没有训练时，在该节明确说明，并讲清 PCA/SVD、优化器、规则、检索、仿真或已有模型推理的实际计算过程。理论、综述和数据集论文可以解释各自的构造、证明、检索或标注流程。
+必须覆盖 `problem`、`method_overview`、`result`、`limitation` 和 `synthesis` 五个阶段。其余阶段按论文证据取舍：`background` 只在读者确实缺少必要背景时写，`related_work` 只在原文有实质对比时写，`training` 只在有训练或构造过程时写（没有训练就不开这一节，不要用一节来说明「本文没有训练」），`experiment_setup` 与 `reproduction` 只在原文交代了协议或复现信息时写，`ablation` 只在有消融或负结果时写。开了某一节就要讲满，不要留 200 字的空壳小节。`training` 不代表一定有神经网络训练，有 PCA/SVD、优化器、规则、检索、仿真或已有模型推理的实际计算过程。理论、综述和数据集论文可以解释各自的构造、证明、检索或标注流程。
 
 `conceptBridges` 数量按本次代码要求，每项 `terms` 2–4 个不同的真实论文术语。`marker` 按数组顺序写成 `[[CONCEPT_BRIDGE_1]]`、`[[CONCEPT_BRIDGE_2]]` 等，在对应 `sectionKind` 的正文里独占一段。`explanation` 里全部术语都要出现，说明各自分工、为什么搭配、组合起来多了什么意义，不能只写“二者结合效果更好”。代码会在占位符处显示这段解释。
 

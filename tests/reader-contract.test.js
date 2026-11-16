@@ -8,7 +8,7 @@ const { readerRequirements, buildReaderContractNotice, findReaderSectionNearDupl
 test('Reader 提示词告知与解析器共用同一组阈值，并按每次请求的证据给表格要求', () => {
     const requirements = readerRequirements({ availableTableCount: 9 });
     assert.deepEqual([requirements.minimumSections, requirements.maximumSections, requirements.minimumChineseChars,
-        requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [12, 18, 5000, 18000, 4, 10]);
+        requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [8, 18, 5000, 18000, 4, 10]);
     assert.equal(requirements.minimumTables, 4);
     assert.equal(requirements.minimumWideTables, 0);
     assert.equal(readerRequirements({ availableTableCount: 0 }).minimumTables, 2);

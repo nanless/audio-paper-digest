@@ -41,7 +41,20 @@ test('current templates preserve original text apart from the declared changes; 
                     + '出现在超过五个小节，读者会直接跳过后面几节。\n\n比较先说明双方为何可以放在一起：')
                 .replace('段落数不固定，也不用逐行复述。',
                     '段落数不固定，也不用逐行复述。不要用「表中可见」「由表可知」这类套话开头，也不要按行把单元格数字再念一遍；'
-                    + '表后只说这张表支撑了哪个判断、在什么条件下不成立、以及读者应当拿它和哪一组结果对照。');
+                    + '表后只说这张表支撑了哪个判断、在什么条件下不成立、以及读者应当拿它和哪一组结果对照。')
+                .replace('`sections` 必须包含 12–18 个小节，起草时建议安排 14–16 节。输出 JSON 前实际数一次数组项数；'
+                    + '少于 12 节或超过 18 节都不能输出。',
+                    '`sections` 的节数以本次代码要求为准（见 `{mechanicalContract}`）。先看这篇论文实际有哪些阶段值得展开：'
+                    + '只有一个方法、一组结果、没有训练过程的论文，就不要为了凑节数把同一个组件拆成两节，也不要为每张表单独开一节。')
+                .replace('必须覆盖 `background`、`related_work`、`method_overview`、`training`、`experiment_setup`、'
+                    + '`result`、`limitation`、`reproduction` 和 `synthesis`。`training` 不代表一定有神经网络训练。'
+                    + '没有训练时，在该节明确说明，并讲清 PCA/SVD、优化器、规则、检索、仿真或已有模型推理的实际计算过程。',
+                    '必须覆盖 `problem`、`method_overview`、`result`、`limitation` 和 `synthesis` 五个阶段。'
+                    + '其余阶段按论文证据取舍：`background` 只在读者确实缺少必要背景时写，`related_work` 只在原文有实质对比时写，'
+                    + '`training` 只在有训练或构造过程时写（没有训练就不开这一节，不要用一节来说明「本文没有训练」），'
+                    + '`experiment_setup` 与 `reproduction` 只在原文交代了协议或复现信息时写，`ablation` 只在有消融或负结果时写。'
+                    + '开了某一节就要讲满，不要留 200 字的空壳小节。`training` 不代表一定有神经网络训练，有 PCA/SVD、优化器、'
+                    + '规则、检索、仿真或已有模型推理的实际计算过程。');
             assert.notEqual(expected, originalBytes.toString());
             assert.equal(actual.toString(), expected);
         } else if (['prompts/current/api-reader-fact-local.md', 'prompts/current/api-reader-concept-terms.md'].includes(current)) {

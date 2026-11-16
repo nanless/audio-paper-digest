@@ -6,7 +6,7 @@ const { header: readerRoleHeader } = require('./reader-stage-protocols');
 const READER_MECHANICAL_CONTRACT = readerRoleHeader('mechanical', false).contract;
 const READER_SECTION_QUALITY_CONTRACT = readerRoleHeader('sectionQuality', false).contract;
 const READER_LIMITS = Object.freeze({
-    minimumSections: 12, maximumSections: 18, minimumChineseChars: 5000, maximumChineseChars: 18000,
+    minimumSections: 8, maximumSections: 18, minimumChineseChars: 5000, maximumChineseChars: 18000,
     // 散文汉字下限：总量可用术语块、表格单元格和图注凑满，读者看到的却是
     // 「术语小词典 + 极薄小节」。这里另设一道只统计散文的门槛。
     minimumProseChineseChars: 4500,

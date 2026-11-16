@@ -1184,8 +1184,7 @@ const { READER_SECTION_KINDS: API_READER_KINDS, locateReaderDraftTables,
     pruneUniquelyUnboundReaderMarkdownTables, normalizeReaderDraftOrder,
     draftOrderHeader, originalDraftOrderDomain } = require('./lib/reader-draft-order.js');
 const API_READER_REQUIRED_KINDS = Object.freeze([
-    'background', 'related_work', 'method_overview', 'training',
-    'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis'
+    'problem', 'method_overview', 'result', 'limitation', 'synthesis'
 ]);
 
 // 只有同一原文条件和完整数量元组都明确时，保留对应位置的自然中文写法。
