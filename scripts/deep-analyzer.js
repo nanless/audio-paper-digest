@@ -6090,18 +6090,6 @@ function readerFigureAlt(figure, target = null) {
     return truncateReaderFigureCaption(`原论文 ${label}：${caption}`, 112);
 }
 
-function insertMarkdownBeforeNextReaderHeading(article, heading, markdown) {
-    const marker = `### ${heading}`;
-    const start = article.indexOf(marker);
-    if (start < 0) return { article, inserted: false };
-    const contentStart = start + marker.length;
-    const next = article.indexOf('\n### ', contentStart);
-    const end = next >= 0 ? next : article.length;
-    const before = article.slice(0, end).trimEnd();
-    const after = article.slice(end);
-    return { article: `${before}\n\n${markdown.trim()}\n${after}`, inserted: true };
-}
-
 function replaceReaderFigureMarker(article, heading, marker, markdown) {
     const headingMarker = `### ${heading}`;
     const sectionStart = article.indexOf(headingMarker);
@@ -6187,6 +6175,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         throw new Error('读者正文收到了论文原图像素，但 figurePlacements 为空：'
             + '请为每张要展示的图声明小节、标记、导读与观察动作；确实一张都不用时，也要说明理由后再交。');
     }
+    // 到这里 placements 必然非空（空计划已在上面报错），每个 placement 也必须
+    // 命中一张实际原图，否则末尾的数量检查会拒绝；因此旧实现里「按
+    // figure.ordinal 猜小节」和「没有 placement 时插到下一个标题前」两个分支
+    // 都不可达，已删除。图片只能放进模型声明的小节和标记位置，程序不再猜。
     const plannedFigures = placements.map(placement => ({
         figure: figures.find(item => item.ordinal === placement.figureOrdinal),
         placement
@@ -6196,25 +6188,14 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             skipped.push(`Figure ${figure.ordinal}: 正文已有同 URL 链接`);
             continue;
         }
-        const preferredKinds = placement
-            ? [placement.targetKind]
-            : figure.ordinal === 1
-                ? ['component', 'method_overview']
-                : figure.ordinal >= 3
-                    ? ['ablation', 'result', 'limitation']
-                    : ['result', 'experiment_setup'];
-        const target = preferredKinds.flatMap(
-            kind => sections.filter(section => section.kind === kind)
-        ).find(section => (
-            !placement
-            || readerSectionContainsMarker(article, section.heading, placement.marker)
-        ));
+        const target = sections.find(section => section.kind === placement.targetKind
+            && readerSectionContainsMarker(article, section.heading, placement.marker));
         if (!target) {
-            skipped.push(`Figure ${figure.ordinal}: ${placement?.marker || '无 marker'} 未匹配 ${preferredKinds.join('/')} 小节标题`);
+            skipped.push(`Figure ${figure.ordinal}: ${placement.marker} 未匹配 ${placement.targetKind} 小节标题`);
             continue;
         }
         const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
-        const focusBlock = placement?.focusPoints?.length
+        const focusBlock = placement.focusPoints?.length
             ? `> **看图路径：** ${placement.focusPoints.map(
                 (item, index) => `${index + 1}. ${item}`
             ).join('；')}`
@@ -6224,16 +6205,14 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             `![${alt}](${figure.url})`,
             `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`
         ].filter(Boolean).join('\n\n');
-        const inserted = placement
-            ? replaceReaderFigureMarker(
-                article,
-                target.heading,
-                placement.marker,
-                block
-            )
-            : insertMarkdownBeforeNextReaderHeading(article, target.heading, block);
+        const inserted = replaceReaderFigureMarker(
+            article,
+            target.heading,
+            placement.marker,
+            block
+        );
         if (!inserted.inserted) {
-            skipped.push(`Figure ${figure.ordinal}: ${placement?.marker || '无 marker'} 在“${target.heading}”中缺失或重复`);
+            skipped.push(`Figure ${figure.ordinal}: ${placement.marker} 在“${target.heading}”中缺失或重复`);
             continue;
         }
         article = inserted.article;
@@ -6241,10 +6220,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             ...figure,
             targetKind: target.kind,
             targetHeading: target.heading,
-            marker: placement?.marker || null,
-            leadQuote: placement?.leadQuote || null,
-            explanationQuote: placement?.explanationQuote || null,
-            ...(Array.isArray(placement?.focusPoints)
+            marker: placement.marker,
+            leadQuote: placement.leadQuote || null,
+            explanationQuote: placement.explanationQuote || null,
+            ...(Array.isArray(placement.focusPoints)
                 ? { focusPoints: placement.focusPoints }
                 : {})
         });
@@ -7566,13 +7545,14 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     value.sections = compiledTables.sections;
     value.tableBindings = compiledTables.tableBindings;
     const seenHeadings = new Set();
-    let previousRank = -1;
     for (const [index, section] of value.sections.entries()) {
         assertExactObjectKeys(section, ['kind', 'heading', 'body'], `读者文章 sections[${index}]`);
-        const rank = API_READER_KINDS.indexOf(section.kind);
-        if (rank < 0) throw new Error(`读者文章 sections[${index}].kind 非法`);
-        if (rank < previousRank) throw new Error('读者文章小节未按学习依赖顺序递进');
-        previousRank = rank;
+        // 小节顺序已由上面的 normalizeReaderDraftOrder 按 READER_SECTION_KINDS
+        // 归一化并重排，这里只核验类型合法，不再重复做永远不可能失败的
+        // 「未按学习依赖顺序递进」检查。
+        if (!API_READER_KINDS.includes(section.kind)) {
+            throw new Error(`读者文章 sections[${index}].kind 非法`);
+        }
         let heading = makeReaderHeadingSpecific(
             section.kind, String(section.heading || '').trim(), value.readerTitle
         );
@@ -7857,6 +7837,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     // 新稿的引导放在机械合同里（buildReaderContractNotice），失败仍由总字数与内容检查兜底。
     if (proseChineseChars < minimumProseChineseChars) {
         proseChineseCharsBelowMinimum = { actual: proseChineseChars, minimum: minimumProseChineseChars };
+        // 只提示不阻断，但必须留下可观察的痕迹：否则「提示」等同于不存在。
+        console.log(`    [deep] ℹ️ 散文汉字偏少：${proseChineseChars} < ${minimumProseChineseChars}`
+            + '（不含表格、图注与术语组合块；不阻断，仅提示补充实质讲解）');
     }
     const minimumChineseChars = requirements.minimumChineseChars;
     const maximumChineseChars = requirements.maximumChineseChars;

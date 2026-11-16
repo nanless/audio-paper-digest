@@ -277,3 +277,9 @@ test('工作区盘点读取实际新版完成凭证，仍不声明已经发布',
     assert.deepEqual(fs.readFileSync(path.join(directory, 'state.json')), stateBytes);
     assert.deepEqual(fs.readFileSync(path.join(directory, 'completion-receipt.json')), receiptBytes);
 });
+
+test('命令行只接受无参数调用，未使用的 --json 开关已删除', () => {
+    assert.deepStrictEqual(workspace.parseArgs([]), {});
+    assert.throws(() => workspace.parseArgs(['--json']), /只读诊断.*JSON/);
+    assert.throws(() => workspace.parseArgs(['--other']), /只读诊断/);
+});

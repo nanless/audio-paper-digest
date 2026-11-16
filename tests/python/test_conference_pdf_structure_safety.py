@@ -5,9 +5,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from conference_extractor import _caption_candidate, load_pypdf_backend
+from conference_extractor import (
+    ConferencePdfExtractionError,
+    _caption_candidate,
+    load_pypdf_backend,
+)
 import fitz
 
 
@@ -75,6 +80,25 @@ class PdfStructureSafetyTest(unittest.TestCase):
                     self.assertEqual(center, (255, 0, 0) if ":2:" in figure["sourceRef"] else (0, 0, 255))
                 audit = backend.extract_visual_audit(pdf)
                 self.assertEqual([c["number"] for c in audit["figureCandidates"]].count(2), 1)
+
+    def test_known_geometry_error_degrades_to_empty_structures(self):
+        # 已知几何异常（这里是 PyMuPDF 对裁切矩形报的 ValueError）只说明
+        # 结构矩形不可用，可以退化成空结构。
+        backend = load_pypdf_backend()
+        pdf = layout_pdf()
+
+        def geometry_failure(*args, **kwargs):
+            raise ValueError("invalid crop rectangle")
+
+        with mock.patch.object(fitz.Page, "get_pixmap", geometry_failure):
+            structures = backend.extract_structures(pdf, backend.extract_pages(pdf))
+        self.assertEqual(structures, {"tables": [], "formulas": [], "figures": []})
+
+    def test_corrupt_pdf_structure_extraction_raises_instead_of_empty_structures(self):
+        # 真正的解析崩溃不能被吞成“论文没有表格/公式”，必须抛 PDF 抽取失败。
+        backend = load_pypdf_backend()
+        with self.assertRaises(ConferencePdfExtractionError):
+            backend.extract_structures(b"%PDF-1.4\nnot a real PDF\n%%EOF\n", ["text"])
 
     def test_tables_and_formulas_remain_candidates_with_literal_cells(self):
         backend = load_pypdf_backend()

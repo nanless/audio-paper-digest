@@ -87,6 +87,10 @@ BJ_TZ = timezone(timedelta(hours=8))
 BEIJING_TIMESTAMP_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$'
 )
+# 发布视图统一剔除的零宽字符集合（零宽空格/非连接符/连接符、词连接符、BOM）。
+# publish-to-blog 的来源单元格比较必须复用同一集合，否则封存 DOM 里夹带的
+# 200C/200D/2060/FEFF 会让同一单元格在两侧被判定为不同。
+PUBLISH_ZERO_WIDTH_CHARACTERS = '\u200b\u200c\u200d\u2060\ufeff'
 
 
 class PublishLLMUnavailable(RuntimeError):
@@ -8934,8 +8938,9 @@ def sanitize_markdown_for_publish(text):
     text = text.replace('\ufffd\ufffd', '。')
     text = text.replace('\ufffd', '')
     # 零宽字符不会显示却会污染表格表头与引用比对（文字里出现看不见的分隔符），
-    # 发布前统一去除：零宽空格/连接符、词连接符、BOM。
-    text = re.sub('[\u200b\u200c\u200d\u2060\ufeff]', '', text)
+    # 发布前统一去除：零宽空格/连接符、词连接符、BOM。这里与来源单元格比较
+    # 共用 PUBLISH_ZERO_WIDTH_CHARACTERS，避免两处集合漂移。
+    text = re.sub('[' + PUBLISH_ZERO_WIDTH_CHARACTERS + ']', '', text)
     frontmatter_match = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
     latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
     latex_body = text[len(latex_prefix):]

@@ -77,7 +77,6 @@ internal class WebsiteLibraryIndex(val taxonomy:WebsiteTaxonomy?,private val sou
     // Compatibility helpers for the previously shipped single-node display tests.
     fun matches(id:String,category:String)=when(category){""->true;"unclassified"->paths[id].isNullOrEmpty();else->paths[id].orEmpty().any{path->path.any{it.id==category}}}
     fun matchesCriteria(paper:Paper,category:String,source:String,minimum:String,query:String,personalSearchHit:Boolean)=select(listOf(paper),WebsiteLibraryCriteria(source=source,minimum=minimum,query=query,personalHits=if(personalSearchHit)setOf(paper.id)else emptySet()),WebsiteDirection(ids=if(category !in setOf("","unclassified"))setOf(category)else emptySet(),unclassified=category=="unclassified")).papers.isNotEmpty()
-    fun label(category:String)=when(category){""->"全部网站分类";"unclassified"->"网站分类未就绪";else->taxonomy?.nodes?.get(category)?.label?:"全部网站分类"}
     fun explanation(paper:Paper):String=when(guides[paper.id]?.firstOrNull()?.status){"withheld"->"网站暂缓展示该论文分类";"legacy"->"网站未提供已核验的多级分类";"unknown-version","unbound-version"->"缺少对应分类词表，请同步网站资料";"invalid-roles","invalid"->"网站分类暂不可验证，请同步后查看";else->"本机缺少网站分类资料，请同步已发布内容"}
 }
 internal typealias WebsiteFavoriteIndex = WebsiteLibraryIndex

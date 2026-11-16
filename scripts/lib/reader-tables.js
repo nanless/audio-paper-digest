@@ -2,10 +2,11 @@
 
 const codec = require('./protocol-codec');
 
-// Source tables often carry arXiv HTML <math> text as LaTeX. A bounded, lossless
-// projection of known symbol commands keeps the visible table readable without
-// reinterpreting subscripts, superscripts, numbers or units. Unknown commands
-// stay untouched and still block the table.
+// 仅供校验/标记使用：把已知的 TeX 符号命令做有界投影，用来判断原格是否
+// 能安全渲染、是否残留未解析 TeX。主显示路径已经迁到
+// reader-source-display.js（projectReaderCellTexDisplay /
+// normalizeReaderSourceDisplayArtifacts），这里的 READER_TABLE_SYMBOLS 和
+// projectReaderMathSymbols 不再生成正文；未知命令保持原样并继续阻断表格。
 const READER_TABLE_SYMBOLS = {
     uparrow: '↑', downarrow: '↓', Uparrow: '⇑', Ddownarrow: '⇓',
     dagger: '†', ddagger: '‡', times: '×', pm: '±', mp: '∓',

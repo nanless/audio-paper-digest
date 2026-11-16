@@ -1265,10 +1265,26 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
                                 "recoveryStatus": "complete", "asset": asset})
         return records[:64]
 
+    # PyMuPDF 在矩形、裁切框等几何参数不可用时抛 Python 的 ValueError/TypeError，
+    # 或底层的 FzErrorArgument。只有这些已知几何异常可以退化成“这份 PDF 没有可
+    # 恢复的表格/公式/插图”；其它异常（解析崩溃、代码缺陷、资源错误）不能被当成
+    # 空结构，否则崩溃会被伪装成“论文没有表格/公式”。
+    structure_geometry_errors: tuple[type[BaseException], ...] = (ValueError, TypeError)
+    fz_error_argument = getattr(getattr(pymupdf, "mupdf", None), "FzErrorArgument", None)
+    if isinstance(fz_error_argument, type) and issubclass(fz_error_argument, BaseException):
+        structure_geometry_errors += (fz_error_argument,)
+
     def _extract_structures(pdf_bytes: bytes, pages: list[str],
                             visual_audit: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
         try:
             pdf_document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        except Exception as exc:
+            # 打不开 PDF 是真正的解析失败，和“几何不可用”不是一回事；不能
+            # 退化成空结构，否则损坏文档会被记成没有表格/公式。
+            raise ConferencePdfExtractionError(
+                f"PyMuPDF could not open the PDF for structured extraction ({type(exc).__name__})"
+            ) from exc
+        try:
             # 调用方没有提供经认证的原页审计，就无法说明含表格的版面可以安全
             # 作为可重新核验的单元格或公式裁切图使用。这些区域一律只留作视觉审计
             # 候选；生产抽取会先显式传入已封存的审计，再启用更完整的 FULL
@@ -1304,12 +1320,21 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
                 formula_bytes += size
             formulas = retained_formulas
             figures = figure_records(pdf_document)
-            pdf_document.close()
             return _json_safe_deep({"tables": tables, "formulas": formulas, "figures": figures})
         except ConferenceExtractionError:
             raise
-        except Exception:
+        except structure_geometry_errors:
+            # 已知几何异常只说明候选矩形不可用，按“没有可恢复结构”处理；
+            # 不要在这里吞掉其它异常。
             return {"tables": [], "formulas": [], "figures": []}
+        except Exception as exc:
+            # 其它异常必须显式变成 PDF 抽取失败，交给 run_extraction 标成
+            # blocked，而不是返回空结构让上游误以为论文没有表格/公式。
+            raise ConferencePdfExtractionError(
+                f"PyMuPDF structured extraction failed ({type(exc).__name__})"
+            ) from exc
+        finally:
+            pdf_document.close()
 
     def extract_structures(pdf_bytes: bytes, pages: list[str],
                            visual_audit: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
@@ -1510,29 +1535,46 @@ def run_extraction(
                         status = "blocked"
                         blocked_reason = {"code": blocked_reason["code"], "message": blocked_reason["message"]}
                     else:
+                        structure_error: ConferencePdfExtractionError | None = None
                         if active_backend.extract_structures is not None:
-                            structures = active_backend.extract_structures(pdf_bytes, pages, visual_audit)
-                        minimum_text_characters = options["minimumTextCharacters"]
-                        short = non_whitespace < minimum_text_characters
-                        status = "blocked" if short else "ready"
-                        blocked_reason = ({"code": "TEXT_TOO_SHORT", "message":
-                            f"extracted non-whitespace text is below {minimum_text_characters} characters: actual {non_whitespace}"}
-                            if short else None)
-                        artifact = {
-                            **_header_for_request(request, "conference-structured-artifacts", "replayable-layout"),
-                            "profile": _marker_for_request(request, "conference-pdf-replayable-layout", "replayable-layout"),
-                            "offsetUnit": OFFSET_UNIT,
-                            "flattenedTextSha256": sha256_bytes(text_bytes),
-                            "pages": ranges,
-                            "tables": structures.get("tables", []),
-                            "formulas": structures.get("formulas", []),
-                            "figures": structures.get("figures", []),
-                            "visualAudit": visual_audit,
-                        }
-                        artifact["payloadSha256"] = sha256_bytes(_compact_json_bytes(artifact))
-                        artifact_bytes = _json_bytes(artifact)
-                        if len(artifact_bytes) > MAX_DERIVED_BYTES:
-                            raise _fail(f"structured artifact exceeds the derived artifact limit: {len(artifact_bytes)} > {MAX_DERIVED_BYTES}")
+                            try:
+                                structures = active_backend.extract_structures(pdf_bytes, pages, visual_audit)
+                            except ConferencePdfExtractionError as exc:
+                                structure_error = exc
+                        if structure_error is not None:
+                            # 结构化抽取失败说明表格/公式/插图这一路没有完成，
+                            # 不能把空结构当成“论文没有表格/公式”。整次抽取标成
+                            # blocked 并只落一份回执，交给重跑，不产出可暂存的
+                            # 文本或结构产物。
+                            extraction_error = structure_error
+                            text_bytes = None
+                            status = "blocked"
+                            blocked_reason = {
+                                "code": "PDF_EXTRACTION_FAILED",
+                                "message": f"structured extraction failed: {structure_error}",
+                            }
+                        else:
+                            minimum_text_characters = options["minimumTextCharacters"]
+                            short = non_whitespace < minimum_text_characters
+                            status = "blocked" if short else "ready"
+                            blocked_reason = ({"code": "TEXT_TOO_SHORT", "message":
+                                f"extracted non-whitespace text is below {minimum_text_characters} characters: actual {non_whitespace}"}
+                                if short else None)
+                            artifact = {
+                                **_header_for_request(request, "conference-structured-artifacts", "replayable-layout"),
+                                "profile": _marker_for_request(request, "conference-pdf-replayable-layout", "replayable-layout"),
+                                "offsetUnit": OFFSET_UNIT,
+                                "flattenedTextSha256": sha256_bytes(text_bytes),
+                                "pages": ranges,
+                                "tables": structures.get("tables", []),
+                                "formulas": structures.get("formulas", []),
+                                "figures": structures.get("figures", []),
+                                "visualAudit": visual_audit,
+                            }
+                            artifact["payloadSha256"] = sha256_bytes(_compact_json_bytes(artifact))
+                            artifact_bytes = _json_bytes(artifact)
+                            if len(artifact_bytes) > MAX_DERIVED_BYTES:
+                                raise _fail(f"structured artifact exceeds the derived artifact limit: {len(artifact_bytes)} > {MAX_DERIVED_BYTES}")
         if pages is None or extraction_error is not None and artifact_bytes is None:
             status = "blocked"
             blocked_reason = blocked_reason or {

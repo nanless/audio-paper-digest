@@ -25,6 +25,7 @@ from conference_extractor import (  # noqa: E402
     REQUEST_CONTRACT,
     ConferenceExtractionDependencyError,
     ConferenceExtractionIntegrityError,
+    ConferencePdfExtractionError,
     load_pypdf_backend,
     _formula_layout_candidates,
     _normalize_page_text,
@@ -340,6 +341,38 @@ class ConferenceExtractorTest(unittest.TestCase):
         self.assertEqual(receipt["blockedReason"]["code"], "PDF_EXTRACTION_FAILED")
         self.assertIsNone(receipt["text"])
         self.assertIsNone(receipt["artifacts"])
+
+    def test_structure_extraction_failure_blocks_instead_of_ready_with_empty_structures(self):
+        # 结构化抽取崩溃不能被记成“论文没有表格/公式”。这里让后端在结构
+        # 阶段抛 ConferencePdfExtractionError，抽取状态必须是 blocked，
+        # 且只写回执，不产出可暂存的文本或结构产物。
+        lines = ["structure-crash-" + "s" * 48 for _ in range(90)]
+        manifest, request = self.write_request(build_pdf([lines]))
+        backend = mock.Mock()
+        backend.name = "fixture"
+        backend.version = "0"
+        backend.extract_pages.return_value = ["\n".join(lines)]
+        backend.extract_visual_audit.return_value = {"pages": []}
+        backend.extract_structures.side_effect = ConferencePdfExtractionError("candidate geometry crashed")
+        result = run_extraction(manifest, apply=True, source_root=self.root, backend=backend)
+        self.assertEqual(result["status"], "blocked")
+        self.assertFalse(result["textReplayable"])
+        self.assertFalse(result["structuredReplayable"])
+        self.assertEqual(result["outputs"], [request["outputs"]["receiptFile"]])
+        receipt = json.loads((self.root / request["outputs"]["receiptFile"]).read_text())
+        self.assertEqual(receipt["blockedReason"]["code"], "PDF_EXTRACTION_FAILED")
+        self.assertIn("structured extraction failed", receipt["blockedReason"]["message"])
+        self.assertIsNone(receipt["text"])
+        self.assertIsNone(receipt["artifacts"])
+        self.assertFalse((self.root / request["outputs"]["textFile"]).exists())
+        self.assertFalse((self.root / request["outputs"]["artifactsFile"]).exists())
+        # 失败回执仍然可以通过受控的 blocked 重放核对，不会被升格成暂存凭证。
+        with mock.patch("conference_extractor.load_pypdf_backend", return_value=backend):
+            verified = verify_blocked_extraction(manifest, source_root=self.root)
+        self.assertEqual(verified["status"], "verified-blocked")
+        self.assertEqual(verified["blockedReason"]["code"], "PDF_EXTRACTION_FAILED")
+        self.assertIsNone(verified["textSha256"])
+        self.assertIsNone(verified["artifactsSha256"])
 
     def test_blocked_receipt_replays_without_becoming_staging_ready(self):
         manifest, request = self.write_request(b"%PDF-1.4\nnot a valid PDF\n%%EOF\n")

@@ -2608,6 +2608,24 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 publish_to_blog.PublishDataValidationError, '内部绑定失败占位说明'):
             publish_to_blog._validate_api_reader_source_bindings(paper)
 
+    def test_api_reader_source_cell_strips_publish_zero_width_character_set(self):
+        # 来源单元格比较必须与 sanitize_markdown_for_publish 共用同一组零宽
+        # 字符（200B/200C/200D/2060/FEFF）；只删 200B 会让封存 DOM 里夹带
+        # 连接符、词连接符或 BOM 的同一单元格被判定为与渲染文本不同。
+        clean = publish_to_blog._normalize_api_reader_source_cell('0.93 dB')
+        for zero_width in ('\u200b', '\u200c', '\u200d', '\u2060', '\ufeff'):
+            with self.subTest(code=hex(ord(zero_width))):
+                dirty = f'0.9{zero_width}3{zero_width} dB'
+                self.assertEqual(
+                    publish_to_blog._normalize_api_reader_source_cell(dirty),
+                    clean,
+                )
+        # 2061（不可见函数应用符）不在发布清洗集合里，不能顺手放宽比较口径。
+        self.assertNotEqual(
+            publish_to_blog._normalize_api_reader_source_cell('0.9\u20613 dB'),
+            clean,
+        )
+
     def test_api_reader_display_formula_count_ignores_escaped_reference_in_image_alt(self):
         paper = llm_api_publication_fixture()
         formula = r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_1\]'
@@ -6212,6 +6230,20 @@ primary_method_tag: #Transformer
         self.assertIn(frontmatter, chunks[0] + '\n---\n' if False else frontmatter)
         self.assertLessEqual(max(len(chunk) for chunk in chunks), 6000)
         self.assertEqual(''.join(chunks), content)
+
+    def test_review_split_oversized_frontmatter_is_sent_as_one_oversized_chunk(self):
+        # 已知边界：真实博客出现过 28 个页面 frontmatter 超过 6000 字符
+        # （最大 13801）。当前设计让它单独成块且不切分，因此这一块会超过
+        # 软上限；换来的是每个分块都能看到完整 frontmatter。若以后要按行
+        # 二次切分，必须同时修改逐块审查协议，并保持 join(chunks) == content。
+        frontmatter = '---\ntitle: "' + 'x' * 8000 + '"\n---\n'
+        body = '正文段落。\n\n' * 200
+        content = frontmatter + body
+        chunks = publish_to_blog.split_review_content(content, limit=6000)
+        self.assertEqual(chunks[0], frontmatter)
+        self.assertGreater(len(chunks[0]), 6000)
+        self.assertEqual(''.join(chunks), content)
+        self.assertLessEqual(max(len(chunk) for chunk in chunks[1:]), 6000)
 
     def test_review_split_frontmatter_handles_crlf_and_dashes(self):
         # CRLF 换行、以及正文里的 `----` 行都不能被当成结束分隔符。

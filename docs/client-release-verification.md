@@ -17,7 +17,7 @@
 
 ## 1.4.5 的十二件附件
 
-以下字节与 SHA-256 于 2026-11-13 从公开 Release API 读取，并逐件下载复核；按 `SHA256SUMS` 与 `ANDROID-SHA256SUMS` 对照，下载得到的摘要与下表一致。两份校验表都不包含自身，`release-manifest.json` 与 `android-release-manifest.json` 也不在对应校验表中，核对时以表内条目为准。
+以下字节与 SHA-256 于 2026-11-13 从公开 Release API 读取，并逐件下载复核；按 `SHA256SUMS` 与 `ANDROID-SHA256SUMS` 对照，下载得到的摘要与下表一致。两份校验表都不包含自身；`SHA256SUMS` 覆盖其余五件 Mac 资产（含 `release-manifest.json`），`ANDROID-SHA256SUMS` 覆盖 APK 与三份 Android 构建记录，不包含 `android-release-manifest.json`，核对时以表内条目为准。
 
 | 平台 | 附件 | 字节 | SHA-256 |
 |---|---|---:|---|

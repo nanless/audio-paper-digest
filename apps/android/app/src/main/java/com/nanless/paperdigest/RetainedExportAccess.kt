@@ -69,7 +69,6 @@ internal class RetainedExportAccess(
     }
     fun release(attemptID: String) { deliveries.remove(attemptID) }
     fun hasDelivery(): Boolean = deliveries.isNotEmpty()
-    fun writerFor(operationID: String): List<String> = deliveries.values.filter { it.delivery.operationID == operationID }.mapNotNull { it.writerJobID }
     fun retireAll() {
         var failed: Throwable? = null
         try {

@@ -10,7 +10,9 @@ const {
     convertDailyPaper,
     convertPaper,
     buildCurlArgs,
-    fetchWithCurl
+    fetchWithCurl,
+    describeHuggingFaceFetchWindow,
+    runDirectProbe
 } = require('../scripts/fetch-huggingface-papers.js');
 
 describe('HuggingFace curl 的代理隔离', () => {
@@ -306,5 +308,48 @@ describe('HuggingFace 抓取健康状态', () => {
         });
         assert.strictEqual(result._sourceHealth.coverage.papersComplete, true);
         assert.strictEqual(urls.filter(url => url.includes('/api/papers')).length, 2);
+    });
+});
+
+describe('直接运行入口默认 dry-run', () => {
+    it('默认只打印将抓取的窗口，不调用抓取函数', async () => {
+        let called = false;
+        const result = await runDirectProbe([], {
+            fetchHuggingFacePapers: async () => { called = true; return []; }
+        });
+        assert.strictEqual(called, false);
+        assert.strictEqual(result.probe, false);
+        assert.strictEqual(result.papers, null);
+        assert.strictEqual(result.plan.days, 7);
+        assert.match(result.plan.cutoffDate, /^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('只有 --probe 才真正调用抓取', async () => {
+        const calls = [];
+        const result = await runDirectProbe(['--probe'], {
+            fetchHuggingFacePapers: async (existingIds, options) => {
+                calls.push({ existingIds, options });
+                return [];
+            }
+        });
+        assert.strictEqual(calls.length, 1);
+        assert.strictEqual(calls[0].options.days, 7);
+        assert.ok(calls[0].existingIds instanceof Set);
+        assert.strictEqual(result.probe, true);
+        assert.deepStrictEqual(result.papers, []);
+    });
+
+    it('未知参数直接报错，不能把拼错的值当成 dry-run', async () => {
+        await assert.rejects(runDirectProbe(['--probe=false'], {}), /未知参数: --probe=false/);
+    });
+
+    it('窗口描述包含来源、分页与 upvotes 门槛', () => {
+        const plan = describeHuggingFaceFetchWindow({ days: 3, cutoffDate: '2026-11-13' });
+        assert.strictEqual(plan.days, 3);
+        assert.strictEqual(plan.cutoffDate, '2026-11-13');
+        assert.deepStrictEqual(plan.sources, ['daily_papers', 'papers']);
+        assert.ok(plan.pageLimit > 0);
+        assert.ok(plan.maxPages > 0);
+        assert.strictEqual(typeof plan.minUpvotes, 'number');
     });
 });

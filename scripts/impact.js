@@ -6,7 +6,9 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 
 const MAP = [
-    { match: /(?:^|\/)scripts\/lib\/reader-|scripts\/deep-analyzer\.js|scripts\/analysis-contract\.js/, entries: ['deep', 'batch', 'reanalyze', 'api:reader:refresh'], scope: 'Reader/表格校验；历史已签稿需按当前规则重验，相关缓存不可直接复用', tests: ['tests/reader-*', 'tests/deep-analyzer*'] },
+    // Reader 库同时服务于日更、会议和历史三条流程；通配入口表示这些流程的
+    // 各阶段都可能读取同一套 Reader/表格校验，而不是只有四个主命令。
+    { match: /(?:^|\/)scripts\/lib\/reader-|scripts\/deep-analyzer\.js|scripts\/analysis-contract\.js/, entries: ['deep', 'batch', 'reanalyze', 'reanalyze:selected', 'api:reader:refresh', 'digest:prepare', 'digest:api', 'conference:*', 'history:*'], scope: 'Reader/表格校验；历史已签稿需按当前规则重验，相关缓存不可直接复用', tests: ['tests/reader-*', 'tests/deep-analyzer*'] },
     { match: /(?:^|\/)scripts\/publish_common\.py|scripts\/publish-to-blog\.py/, entries: ['blog:generate', 'blog:review', 'blog:push', 'conference:publish:*', 'history:publication'], scope: '发布渲染/校验；页面需重新生成并按内容 SHA 重审', tests: ['tests/python/test_publish_*', 'tests/documentation.test.js'] },
     { match: /(?:^|\/)scripts\/llm-account-pool\.js|scripts\/llm_account_pool\.py|scripts\/utils\.js/, entries: ['deep', 'batch', 'reanalyze', 'api:reader:refresh', 'blog:review', 'blog:push'], scope: '所有 ND 模型请求；账号池冷却/轮转状态保留，不需重分析', tests: ['tests/llm-account-pool*', 'tests/python/test_llm_account_pool.py'] },
     { match: /(?:^|\/)scripts\/log-setup\.js|scripts\/log_setup\.py|scripts\/lib\/error-guidance/, entries: ['*'], scope: '日志/错误展示；不改变业务数据与已通过结果', tests: ['tests/log-setup*', 'tests/error-guidance*'] },

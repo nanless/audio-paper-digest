@@ -1794,6 +1794,13 @@ primary_method_tag: #基准测试
         self.assertIn('[A_METHOD]', upstream)
         self.assertIn('[SCORING_SOURCE_RESULTS]', upstream)
 
+    def test_sanitize_removes_the_full_publish_zero_width_character_set(self):
+        # 200B/200C/200D/2060/FEFF 是发布清洗统一剔除的零宽字符集合。
+        # publish-to-blog 的来源单元格比较必须复用同一集合，否则封存 DOM
+        # 里夹带连接符、词连接符或 BOM 的单元格永远无法与渲染文本比对成功。
+        dirty = '0.9' + ''.join('\u200b\u200c\u200d\u2060\ufeff') + '3 dB'
+        self.assertEqual(sanitize_markdown_for_publish(dirty), '0.93 dB')
+
     def test_publish_04173_cost_table_keeps_currency_cells_exact(self):
         table = (
             '| 尝试次数 | 1000 例翻译成本 | 1000 例验证成本 | 单接受例成本 | 平均规则数 |\n'

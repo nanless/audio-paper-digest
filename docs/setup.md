@@ -33,9 +33,9 @@ PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=deepseek-v4.1-flash
+PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
 # 需要旧版插图副模型时，型号也统一使用 Muse 1.3
-PAPER_ANALYZER_SECONDARY_MODEL=deepseek-v4.1-flash
+PAPER_ANALYZER_SECONDARY_MODEL=muse-spark-1.3-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -122,20 +122,21 @@ npm run validate:data -- --allow-empty
 | `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` | 人工建议最多5篇，范围0–5；0关闭建议 |
 | `PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS` | 每项至少失败3轮，范围3–10 |
 | `PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS` | 无语义进展观察3轮，范围3–10；更多总轮时可提前结束自动轮 |
-| `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
-| `PD_ANALYSIS_REVISION_MAX_TOKENS` | 64000；完整13章正文审校重写 |
-| `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` | 64000；完整13章结构重写 |
+| `PD_ANALYSIS_API_MAX_TOKENS` | 192000 |
+| `PD_ANALYSIS_REVISION_MAX_TOKENS` | 192000；完整13章正文审校重写 |
+| `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` | 192000；完整13章结构重写 |
 | `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` | 32000；核心摘要修补，摘要长度要求不变 |
-| `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
-| `PD_API_READER_MAX_TOKENS` | 48000 |
+| `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 96000 |
+| `PD_API_READER_MAX_TOKENS` | 128000 |
 | `PD_ANALYSIS_PRIMARY_THINKING_MODE` | `disabled`；仅精确 `mimo-v2.6-flash` 的 OpenAI Chat 主分析，可设 `enabled` |
 | `PD_ANALYSIS_AUXILIARY_THINKING_MODE` | `disabled`；同一路由的开源检查、正文审校、评分和标签处理，可设 `enabled` |
 | `PD_API_READER_THINKING_MODE` | `disabled`；仅 MiMo-V2.6-Flash 的长文、修复及图像探测，可设 `enabled` |
-| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
+| `PD_API_READER_REPAIR_MAX_TOKENS` | 基础值取 min(Reader 正文预算, 配置补丁预算)，默认 96000；后续有界续跑的上限按正文预算重算，不自动等于主分析局部修复上限 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
 | `PD_API_READER_CONCURRENCY` | 默认 5 个进程内解读生成任务，可显式设置 1–60 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 日更独立页面审查默认 16，范围 1–32；会议页面审查最多 5 路，汇总优先派发 |
+| `PD_BLOG_REVIEW_TIMEOUT` | 单页审查读超时（秒），默认 120，范围 30–600；不进审查协议指纹 |
 
 这些环境变量写入项目 `.env`。Reader 刷新另可用 `--rounds N` 覆写本次总轮数，范围 1–10；会议和历史分析使用公共配置，没有新增同名参数。总轮数、同时处理的论文数和单阶段/Reader预算各自独立；改变批次轮数不重开已耗尽的候选额度。会议还受原单篇3次尝试窗口约束，历史保持首次选定范围；人工建议不会发请求或将失败改成通过，见 [三流程批次规则](three-workflows.md#全批轮次与失败集合)。
 
@@ -157,17 +158,17 @@ npm run validate:data -- --allow-empty
 
 当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理强度，取值 `minimal`、`low`、`medium`、`high`、`xhigh`，写 `max`/`highest`/`maximum` 视作 `xhigh`；不设置时不发送 `reasoning` 字段，写错的值不会生效（`npm run config:check` 会直接报错）。当前本机配置为 `xhigh`。两项配置不作用于 Chat Completions 请求。
 
-推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下留给可见输出的额度会比低档位少一些。各阶段上限本身还会进入阶段指纹与已付费诊断身份（例如筛选的 `maxTokens` 参与 `FILTER_CONFIG_BINDING`），改动会让原记录无法重放，因此维持原值；真的被截断时走既有重试路径（筛选升到 4096，Reader 局部补丁按 8000→16000 递进）。改这些预算会改变阶段指纹，下一轮分析会重新执行对应阶段。
+推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下留给可见输出的额度会比低档位少一些。各阶段上限本身还会进入阶段指纹与已付费诊断身份（例如筛选的 `maxTokens` 参与 `FILTER_CONFIG_BINDING`），改动会让原记录无法重放，因此维持原值；真的被截断时走既有重试路径（筛选升到 4096；Reader 局部补丁的基础值取正文预算与配置补丁预算的较小值，默认 96000，截断后的续跑上限按正文预算重算，默认同样为 96000）。改这些预算会改变阶段指纹，下一轮分析会重新执行对应阶段。
 
 日更开始时的原文和 PDF 封存下载保留独立的八路上限。未显式指定下载并发时，使用整篇分析并发与 8 中较小的值；因此把模型分析设为 10 路不会阻止来源下载，也不会把模型分析自动降为 8 路。程序显式传入下载并发时仍须为 1–8 的整数。
 
 Reader 的一次逻辑请求最多进行2次传输尝试；筛选默认最多5次尝试，分别由 Reader 固定实现及 `FILTER_CONFIG.maxRetries` 控制，不继承主分析的3次上限。传输尝试、收到的内容响应、完整长文次数与批次轮数各自记账，不能相互补额度。
 
-解读正文的局部修复默认最多输出 8000 tokens，实际可由 `PD_API_READER_REPAIR_MAX_TOKENS` 覆写。如果一次局部修复恰好在基础上限截断，程序保留失败稿；正常显式续跑还须通过原候选、原窗口和剩余请求额度检查，才可能提升局部输出上限。提升后的默认上限为 16000，按正文预算和基础修复预算计算，最高为 16000，且不超过 `PD_API_READER_MAX_TOKENS`。这项容量策略不安装新的实现升级许可，不增加内容响应、全文或批次额度，也不能叠加已消费的旧恢复机会。模型返回内容即正常记账，纯网络失败也保留传输记录。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查；旧许可只按原证明和历史核验，见[Reader 恢复](reader-explicit-retry.md)。
+解读正文的局部修复基础输出上限取 `PD_API_READER_MAX_TOKENS`（正文预算，默认 128000）与 `PD_API_READER_REPAIR_MAX_TOKENS`（配置补丁预算，默认 96000）的较小值，默认 96000 tokens。如果一次局部修复恰好在基础上限截断，程序保留失败稿；正常显式续跑还须通过原候选、原窗口和剩余请求额度检查，才可能提升局部输出上限。提升后的上限按正文预算重算且不超过正文预算，当前默认下与基础上限同为 96000。这项容量策略不安装新的实现升级许可，不增加内容响应、全文或批次额度，也不能叠加已消费的旧恢复机会。模型返回内容即正常记账，纯网络失败也保留传输记录。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查；旧许可只按原证明和历史核验，见[Reader 恢复](reader-explicit-retry.md)。
 
 ## 可选副模型
 
-API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `deepseek-v4.1-flash` 与 `muse-spark-1.3-contributor` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
+API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `muse-spark-1.3-contributor` 与此前的 `deepseek-v4.1-flash` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
 `PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（未传参数时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`，默认 5；可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 

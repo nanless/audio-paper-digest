@@ -60,6 +60,7 @@ from publish_common import (
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
     sanitize_markdown_for_publish, strip_internal_scoring_anchors,
+    PUBLISH_ZERO_WIDTH_CHARACTERS,
     call_publish_llm_api, PublishLLMUnavailable, run_bounded_llm_tasks,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
     classify_review_failure, unchanged_content_rejection_blocks_retry,
@@ -981,7 +982,16 @@ def _split_frontmatter_block(content):
 
 
 def split_review_content(content, limit=4000):
-    """在 Markdown 块边界处切分，不切断围栏、表格和链接。"""
+    """在 Markdown 块边界处切分，不切断围栏、表格和链接。
+
+    已知边界：开头的 YAML frontmatter 始终单独成块、不按行切分。真实博客中
+    曾出现 28 个页面的 frontmatter 超过 6000 字符（最大 13801），这些页面会把
+    整个 frontmatter 作为一块发送，单块长度会超过 limit。代价是审查请求更长、
+    更慢，极端情况下可能触发网关的时长上限；换来的是每个分块都看到完整的
+    frontmatter，模型不会因为只看到半个 frontmatter 而误报“缺少结束分隔符”。
+    要按行二次切分 frontmatter，必须同时修改逐块审查协议，让各块共享同一个
+    frontmatter 上下文；在那之前保持现状，也不要把 frontmatter 并进正文首块。
+    """
     if not content:
         return ['']
     frontmatter, content = _split_frontmatter_block(content)
@@ -1652,7 +1662,9 @@ def _validate_public_image_url(url):
         raise PublishDataValidationError(f'图片域名无法解析: {hostname}') from exc
     # 本机代理（Clash/Surge 等）常以 fake-IP 模式返回 198.18.0.0/15 的合成地址，
     # 真正的域名解析发生在上游代理侧。配置了项目 HTTP CONNECT 代理时，这类合成
-    # 地址仍然走代理下载，并由下载后的实际 peer 校验兜底；其它非公网地址一律拒绝。
+    # 地址仍然走代理下载；但下载后的 peer 校验只能证明连接到了已配置的代理
+    # （通常是 127.0.0.1），不能证明远端图片主机的 IP。远端主机身份由代理隧道
+    # 与 TLS 主机名/证书校验约束；其它非公网地址一律拒绝。
     # IPv4 与 IPv6 各有一个 benchmark 保留段，代理 fake-IP 模式两者都会用到。
     fake_ip_ranges = (ipaddress.ip_network('198.18.0.0/15'),
                       ipaddress.ip_network('2001:2::/48'))
@@ -1695,10 +1707,6 @@ def _response_peer_ip(response):
         except (AttributeError, OSError, TypeError, ValueError):
             continue
     raise PublishDataValidationError('无法验证图片 HTTPS 连接的实际 peer IP')
-
-
-def _validate_response_peer(response, resolved_addresses):
-    return _validate_response_peer_with_transport(response, resolved_addresses)
 
 
 def _resolve_proxy_addresses(proxy):
@@ -1831,6 +1839,12 @@ def _read_pinned_review_image(
 
 
 def _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses=None):
+    """校验传输层对端；代理地址必须由调用方显式传入。
+
+    仓库里只保留这一个 peer 校验入口。此前另有一个不接收 proxy_addresses 的
+    同名包装，误用时会把配置的代理 peer 当成远端主机而拒绝合法的代理连接；
+    它没有生产调用，已删除，避免后续误用。
+    """
     peer = _response_peer_ip(response)
     # 使用显式 HTTP CONNECT 代理时，socket 对端是配置的代理
     # （通常是 127.0.0.1），不是远端图片主机。每一跳之前仍然会做 DNS 检查；
@@ -7833,7 +7847,13 @@ def _normalize_api_reader_source_cell(value):
     # ``lr=2e−4lr=2e^{-4}``）。裸数字或符号重复不据此认作注解。
     # Reader 后处理器执行同样范围的显示清理；
     # 发布侧的等价性检查要和这个清理保持一致。
-    value = value.replace('\u200b', '')
+    # 零宽字符集合与 publish_common.PUBLISH_ZERO_WIDTH_CHARACTERS 保持一致；
+    # 这里写成字面量而不是导入常量，是因为该函数会被测试按 AST 单独抽出执行，
+    # 模块级名字在那时不可见。两处一致性由 test_reader_zero_width_set_matches 守卫。
+
+    # 200B/200C/200D/2060/FEFF；只删零宽空格会让封存 DOM 里夹带词连接符
+    # 或 BOM 的同一单元格永远无法与渲染文本比对成功。
+    value = re.sub('[\u200b\u200c\u200d\u2060\ufeff]', '', value)
     scalar = r'[+−-]?\d+(?:\.\d+)?'
     value = re.sub(
         rf'(?<![A-Za-z0-9])({scalar})\s*\[\s*({scalar})\s*,\s*({scalar})\s*\]'

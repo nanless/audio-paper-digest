@@ -28,6 +28,7 @@ const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const readerRepair = require('./lib/reader-repair.js');
 const {
+    parseReanalyzeCliArgs,
     parseReanalyzeConcurrency,
     resetReaderForForcedReanalysis
 } = require('./lib/reanalysis-helpers.js');
@@ -49,21 +50,16 @@ if (missingEnvVars.length > 0) {
     process.exit(1);
 }
 
-// 解析命令行参数
+// 解析命令行参数：严格白名单，未知 --flag（例如少了 s 的
+// --retry-failed-reader）直接报用法并退出非零，不能静默退化成普通重分析。
 const args = process.argv.slice(2);
 let dataFileArg = null;
 let concurrencyArg = null;
-for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--concurrency') {
-        if (i + 1 >= args.length || args[i + 1].startsWith('--')) {
-            console.error('[reanalyze] 错误: --concurrency 缺少整数值，用法: npm run reanalyze -- [--concurrency N] [数据文件]');
-            process.exit(1);
-        }
-        concurrencyArg = args[i + 1];
-        i++;
-    } else if (!args[i].startsWith('--')) {
-        dataFileArg = args[i];
-    }
+try {
+    ({ dataFile: dataFileArg, concurrency: concurrencyArg } = parseReanalyzeCliArgs(args));
+} catch (error) {
+    console.error(`[reanalyze] 错误: ${error.message}`);
+    process.exit(1);
 }
 
 const DEFAULT_CURRENT_FILE = Config.FILES.deepAnalysisResult;

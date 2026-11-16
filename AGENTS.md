@@ -128,19 +128,19 @@ npm run digest:prepare -- YYYY-MM-DD
 | Reader 单次逻辑请求的传输尝试 | 2；与内容响应、完整长文及批次轮数分别计数 | 实现固定值 |
 | 人工建议的失败集合上限 | 5，范围 0–5；0关闭建议 | `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` |
 | 人工建议最低失败轮 / 无进展观察轮 | 3 / 3，各范围 3–10 | `PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS` / `PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS` |
-| 主分析输出 | 64000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` |
-| 完整正文审校重写输出 | 64000 tokens | `PD_ANALYSIS_REVISION_MAX_TOKENS` |
-| 完整正文结构重写输出 | 64000 tokens | `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` |
+| 主分析输出 | 192000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` |
+| 完整正文审校重写输出 | 192000 tokens | `PD_ANALYSIS_REVISION_MAX_TOKENS` |
+| 完整正文结构重写输出 | 192000 tokens | `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` |
 | 核心摘要修补输出 | 32000 tokens | `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` |
-| 局部修复输出 | 16000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
+| 局部修复输出 | 96000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
-| API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
-| Reader 局部补丁输出 | 8000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
+| API Reader 输出 | 128000 tokens | `PD_API_READER_MAX_TOKENS` |
+| Reader 局部补丁输出 | 基础值取 min(正文预算, 配置补丁预算)，默认 96000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
-主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 的档位随模型不同：`muse-spark-*` 是 `minimal`/`low`/`medium`/`high`/`xhigh`（`max` 视作 `xhigh`），`deepseek-v4.1-flash` 是 `low`/`high`/`max`；写错的值不发送、由 `npm run config:check` 拦截，本机固定 `max`。推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下可见输出会略少于低档位；这些上限本身还会进入阶段指纹和已付费诊断身份，改动会让原记录无法重放，因此维持原值，截断仍由既有重试路径处理。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
+主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 的档位随模型不同：`muse-spark-*` 是 `minimal`/`low`/`medium`/`high`/`xhigh`（`max` 视作 `xhigh`），`deepseek-v4.1-flash` 是 `low`/`high`/`max`；写错的值不发送、由 `npm run config:check` 拦截，本机固定 `xhigh`。推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下可见输出会略少于低档位；这些上限本身还会进入阶段指纹和已付费诊断身份，改动会让原记录无法重放，因此维持原值，截断仍由既有重试路径处理。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 
 ## 恢复原则
 
@@ -311,7 +311,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 默认 API 正式分析正文的 13 个一级标题用于机器解析。最终博客正文来自 `beginner-researcher` API Reader；表格与公式的来源另由 `api-reader-source-bindings` 记录和核验：
 
-- 文章包含 8–18 节（必须覆盖 problem、method_overview、result、limitation、synthesis 五个阶段，其余按证据取舍）、5000–18000 中文字（其中散文汉字至少 4500，不含表格、图注与术语组合块）和 4–10 组术语组合解释。
+- 文章包含 8–18 节（必须覆盖 problem、method_overview、result、limitation、synthesis 五个阶段，其余按证据取舍）、5000–18000 中文字（其中散文汉字建议不少于 4500，不阻断，不含表格、图注与术语组合块）和 4–10 组术语组合解释。
 - 首次出现的术语须用白话解释；介绍组合机制时须说明各部分的分工、搭配原因和新增作用。
 - 表格前须说明比较问题，表格后须解释结果及其限制。原文证据充足时，应覆盖数据协议、主结果、消融/失败条件和训练/部署成本。
 - 表格必须保留可理解的条件、方法、指标和单位；不能把任意引文里的数字、参考文献年份或页码拼成“来源句／量化值一”占位结果表，也不能凭少量相同数字选择原表。列数随真实来源，不为满足固定宽表数量添加解释性伪列。缺少可核验表格时交回正常 Reader 修复，不用程序造表满足门槛。

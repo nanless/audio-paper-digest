@@ -736,6 +736,57 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
     return Array.from(merged.values());
 }
 
+// 直接运行入口的预览：只计算默认抓取窗口，不联网。
+function describeHuggingFaceFetchWindow(options = {}) {
+    const days = options.days === undefined ? HUGGINGFACE_CONFIG.defaultDays : options.days;
+    return {
+        days,
+        cutoffDate: options.cutoffDate || getBeijingDateString(days),
+        minUpvotes: HUGGINGFACE_CONFIG.defaultMinUpvotes,
+        pageLimit: HUGGINGFACE_CONFIG.pageLimit,
+        maxPages: HUGGINGFACE_CONFIG.maxPages,
+        pageDelayMs: HUGGINGFACE_CONFIG.pageDelayMs,
+        sources: ['daily_papers', 'papers']
+    };
+}
+
+// 这个脚本没有生产调用者，require.main 分支以前会直接抓取 7 天数据。
+// 现在默认 dry-run 只打印将抓取的窗口和门槛；确需探测时显式加 --probe。
+async function runDirectProbe(argv = process.argv.slice(2), dependencies = {}) {
+    const unknown = argv.filter(argument => argument !== '--probe');
+    if (unknown.length) {
+        throw new Error(`未知参数: ${unknown.join(', ')}`
+            + '\n用法: node scripts/fetch-huggingface-papers.js [--probe]（默认只打印抓取窗口，不联网）');
+    }
+    const plan = describeHuggingFaceFetchWindow();
+    if (!argv.includes('--probe')) {
+        console.log('=== HuggingFace Papers 抓取窗口（dry-run，不联网）===');
+        console.log(`  窗口: 最近 ${plan.days} 天，截止日期 >= ${plan.cutoffDate}（北京时间）`);
+        console.log(`  来源: ${plan.sources.join(' / ')}，pageLimit=${plan.pageLimit}，maxPages=${plan.maxPages}`);
+        console.log(`  upvotes 门槛: ${plan.minUpvotes}`);
+        console.log('  需要真实抓取时显式加 --probe。');
+        return { probe: false, plan, papers: null };
+    }
+
+    console.log('=== HuggingFace Papers 抓取测试 ===\n');
+    const fetchPapers = dependencies.fetchHuggingFacePapers || fetchHuggingFacePapers;
+    const papers = await fetchPapers(new Set(), { days: plan.days });
+
+    console.log('\n=== 前 10 篇热门论文 ===');
+    for (const paper of papers.slice(0, 10)) {
+        console.log(`\n📄 ${paper.title}`);
+        console.log(`   ID: ${paper.paper_id}`);
+        console.log(`   日期: ${paper.published.split('T')[0]}`);
+        console.log(`   Upvotes: ${paper.hf_upvotes}`);
+        console.log(`   作者: ${paper.authors.slice(0, 3).join(', ')}`);
+        if (paper.hf_github_repo) console.log(`   GitHub: ${paper.hf_github_repo}`);
+        if (paper.hf_ai_summary) console.log(`   AI摘要: ${paper.hf_ai_summary.substring(0, 80)}...`);
+    }
+
+    console.log(`\n总计: ${papers.length} 篇论文`);
+    return { probe: true, plan, papers };
+}
+
 // 导出
 module.exports = {
     fetchHuggingFacePapers,
@@ -745,27 +796,15 @@ module.exports = {
     redactProxySecrets,
     mergeAndDeduplicate,
     convertDailyPaper,
-    convertPaper
+    convertPaper,
+    describeHuggingFaceFetchWindow,
+    runDirectProbe
 };
 
-// 直接运行时执行测试
+// 直接运行时默认只预览窗口，--probe 才真正抓取。
 if (require.main === module) {
-    (async () => {
-        console.log('=== HuggingFace Papers 抓取测试 ===\n');
-
-        const papers = await fetchHuggingFacePapers(new Set(), { days: 7 });
-
-        console.log('\n=== 前 10 篇热门论文 ===');
-        for (const paper of papers.slice(0, 10)) {
-            console.log(`\n📄 ${paper.title}`);
-            console.log(`   ID: ${paper.paper_id}`);
-            console.log(`   日期: ${paper.published.split('T')[0]}`);
-            console.log(`   Upvotes: ${paper.hf_upvotes}`);
-            console.log(`   作者: ${paper.authors.slice(0, 3).join(', ')}`);
-            if (paper.hf_github_repo) console.log(`   GitHub: ${paper.hf_github_repo}`);
-            if (paper.hf_ai_summary) console.log(`   AI摘要: ${paper.hf_ai_summary.substring(0, 80)}...`);
-        }
-
-        console.log(`\n总计: ${papers.length} 篇论文`);
-    })();
+    runDirectProbe().catch(error => {
+        console.error(`[fetch-huggingface-papers] ${error.message}`);
+        process.exitCode = 1;
+    });
 }

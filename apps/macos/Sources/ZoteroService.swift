@@ -128,7 +128,6 @@ actor ZoteroService {
     private var authorizationDenied = false
     private var authorizationState = "unknown"
     private var operationInProgress = false
-    private static let keychainService = "com.nanless.PaperDigest.zotero"
 
     init(dataDirectory: URL, session: URLSession? = nil, credentialStore: any ZoteroCredentialStore = ZoteroKeychainCredentialStore()) {
         self.credentialStore = credentialStore

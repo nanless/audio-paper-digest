@@ -11,8 +11,9 @@ const READER_LIMITS = Object.freeze({
     // 「术语小词典 + 极薄小节」。这里另设一道只统计散文的门槛。
     minimumProseChineseChars: 4500,
     minimumConceptBridges: 4, maximumConceptBridges: 10,
-    // Kept for routing archived width diagnostics; column count is not a publication gate.
-    minimumWideColumns: 5, maximumRequiredWideTables: 0,
+    // 仅保留给 reader-repair.js 的旧窄表诊断路由使用；列数不是发布门槛。
+    // 同组的 maximumRequiredWideTables 全仓已无使用，已删除。
+    minimumWideColumns: 5,
     tableLeadChineseChars: 15, tableExplanationChineseChars: 25,
     figureLeadChars: 30, figureExplanationChars: 45,
     maximumFigures: 4, minimumFocusPoints: 2, maximumFocusPoints: 4,

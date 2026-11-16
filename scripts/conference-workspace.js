@@ -500,8 +500,10 @@ function diagnose(options = {}) {
 }
 
 function parseArgs(argv = process.argv.slice(2)) {
-    if (argv.length === 0 || argv.length === 1 && argv[0] === '--json') return { json: true };
-    throw new Error('Use: conference-workspace.js [--json]（只读诊断）');
+    // 这个命令本来就只有 JSON 一种输出，旧的 --json 开关解析后从未被使用，
+    // 已删除；任何参数都直接报用法，避免误以为存在其它输出模式。
+    if (argv.length === 0) return {};
+    throw new Error('Use: conference-workspace.js（只读诊断，直接输出 JSON）');
 }
 
 function main(argv = process.argv.slice(2)) {

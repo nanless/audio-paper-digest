@@ -249,7 +249,7 @@ PDF 表格的来源适配不改变这项原则。正常生成、候选恢复和�
 
 ## 共享内容与 Prompt
 
-三条流程共用 `analysis-engine.js`、`deep-analyzer.js`、当前Prompt登记、Reader/评分/标签与来源守卫。正式分析13个一级标题用于机器解析；Reader使用 `beginner-researcher` 与 `api-reader-source-bindings`，要求8–18节（必须覆盖 problem/method_overview/result/limitation/synthesis）、5000–18000中文字（散文汉字至少4500）、4–10组机制术语解释。
+三条流程共用 `analysis-engine.js`、`deep-analyzer.js`、当前Prompt登记、Reader/评分/标签与来源守卫。正式分析13个一级标题用于机器解析；Reader使用 `beginner-researcher` 与 `api-reader-source-bindings`，要求8–18节（必须覆盖 problem/method_overview/result/limitation/synthesis）、5000–18000中文字（散文汉字建议不少于4500，不阻断）、4–10组机制术语解释。
 
 标签从新版目录的386项九维词表选择。总目录保留完整；每篇只展示所选项及父级导航，不加入兄弟方向或空分面，祖先不写入直接标签。三种页面生成器使用同一多级展示函数，旧分类仅按真实归档原SHA重放。会议与历史发布先核验站点成对版本目录及本次快照，首次同步和旧记录兼容见[标签规则](docs/tag-display-policy.md#三条流程共用的目录与呈现)。
 

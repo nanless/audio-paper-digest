@@ -10,6 +10,21 @@ function papersFromAnalysisData(data) {
     return Array.isArray(data?.papers) ? data.papers : [];
 }
 
+// reanalyze 入口只接受 --concurrency 和一个可选数据文件。未知 --flag 必须
+// 直接报错：例如少了 s 的 --retry-failed-reader 以前会被静默忽略，实际跑的
+// 却是普通全量重分析。
+function parseReanalyzeCliArgs(argv = []) {
+    const usage = 'npm run reanalyze -- [--concurrency N] [数据文件]';
+    const positionals = require('./cli-arguments').assertKnownCliArguments(argv, {
+        valueFlags: ['--concurrency'], allowPositional: 1, usage
+    });
+    const concurrencyIndex = argv.indexOf('--concurrency');
+    return {
+        concurrency: concurrencyIndex < 0 ? undefined : argv[concurrencyIndex + 1],
+        dataFile: positionals[0]
+    };
+}
+
 // --concurrency 与 PD_REANALYZE_CONCURRENCY 都只接受十进制正整数。以前
 // parseInt 会把 2.5 截成 2、把无效环境变量静默换成配置默认值；这里提前拒绝，
 // 不让一个写错的并发配置在运行中变成另一种行为。
@@ -105,6 +120,7 @@ function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, 
 
 module.exports = {
     papersFromAnalysisData,
+    parseReanalyzeCliArgs,
     parseReanalyzeConcurrency,
     resetReaderForSelectedReanalysis,
     resetReaderForForcedReanalysis,

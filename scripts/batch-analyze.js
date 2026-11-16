@@ -37,6 +37,21 @@ const RESULT_FILE = Config.FILES.deepAnalysisResult;
 const RETRY_FAILED_READERS = process.argv.slice(2).includes('--retry-failed-readers');
 const readerExplicitRound = require('./lib/explicit-reader-retry-round');
 const REFRESH_READER_DIAGNOSTICS = process.argv.slice(2).includes('--refresh-reader-diagnostics');
+const { assertKnownCliArguments } = require('./lib/cli-arguments.js');
+
+// 严格参数白名单：未知 --flag（例如少写 s 的 --retry-failed-reader）直接
+// 报用法，不能静默忽略后退化成普通批量分析。
+function assertKnownBatchAnalyzeArguments(argv = process.argv.slice(2)) {
+    return assertKnownCliArguments(argv, {
+        booleanFlags: ['--retry-failed-readers', '--refresh-reader-diagnostics'],
+        valueFlags: ['--fact-feedback-file', '--reader-operator-corrections',
+            '--reader-signed-corrections', '--reader-retry-manifest'],
+        repeatableValueFlags: ['--fact-feedback-file'],
+        usage: 'npm run batch -- [--retry-failed-readers --reader-retry-manifest FILE] '
+            + '[--refresh-reader-diagnostics] [--fact-feedback-file FILE ...] '
+            + '[--reader-operator-corrections FILE] [--reader-signed-corrections FILE]'
+    });
+}
 
 function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
     const files = [];
@@ -125,6 +140,7 @@ async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks
 }
 
 async function main(options = {}) {
+    assertKnownBatchAnalyzeArguments();
     if (options.readerFactLocalRevision !== undefined && typeof options.readerFactLocalRevision !== 'boolean')
         throw new Error('Reader事实局部模式必须为布尔值');
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean') {
@@ -469,4 +485,6 @@ if (require.main === module) {
     });
 }
 
-module.exports = { reconcileCompletedFailureMarkers, hasCompletedBoundFactFeedback, getBatchAnalysisRunSummary, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };
+module.exports = { reconcileCompletedFailureMarkers, hasCompletedBoundFactFeedback,
+    getBatchAnalysisRunSummary, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState,
+    assertKnownBatchAnalyzeArguments };
