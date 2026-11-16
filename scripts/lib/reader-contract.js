@@ -7,6 +7,9 @@ const READER_MECHANICAL_CONTRACT = readerRoleHeader('mechanical', false).contrac
 const READER_SECTION_QUALITY_CONTRACT = readerRoleHeader('sectionQuality', false).contract;
 const READER_LIMITS = Object.freeze({
     minimumSections: 12, maximumSections: 18, minimumChineseChars: 5000, maximumChineseChars: 18000,
+    // 散文汉字下限：总量可用术语块、表格单元格和图注凑满，读者看到的却是
+    // 「术语小词典 + 极薄小节」。这里另设一道只统计散文的门槛。
+    minimumProseChineseChars: 4500,
     minimumConceptBridges: 4, maximumConceptBridges: 10,
     // Kept for routing archived width diagnostics; column count is not a publication gate.
     minimumWideColumns: 5, maximumRequiredWideTables: 0,
@@ -66,9 +69,11 @@ function findReaderSectionNearDuplicates(article, sections = []) {
             const text = block.trim();
             if (!text || /^(?:\||#|>|[-*+]\s|\d+[.)]\s|\[\[|!\[|\\\[|```|~~~)/.test(text)) continue;
             const normalized = text.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
-            if (normalized.length < 100) continue;
-            const grams = new Set(Array.from({ length: Math.max(0, normalized.length - 3) },
-                (_, offset) => normalized.slice(offset, offset + 4)));
+            // 60 字起判、3-gram：4-gram + 0.86 只能抓到近乎逐字抄写，
+            // 「换词不换意」的重复完全漏掉，而后者才是读者真正的重复感来源。
+            if (normalized.length < 60) continue;
+            const grams = new Set(Array.from({ length: Math.max(0, normalized.length - 2) },
+                (_, offset) => normalized.slice(offset, offset + 3)));
             paragraphs.push({ sectionId, kind: sections[index]?.kind || '', heading: heading[1].trim(),
                 paragraphIndex, normalized, grams });
         }
@@ -82,7 +87,7 @@ function findReaderSectionNearDuplicates(article, sections = []) {
             const shared = [...a.grams].filter(gram => b.grams.has(gram)).length;
             const similarity = shared / (a.grams.size + b.grams.size - shared || 1);
             const lengthRatio = Math.min(a.normalized.length, b.normalized.length) / Math.max(a.normalized.length, b.normalized.length);
-            if (similarity < 0.86 || lengthRatio < 0.8) continue;
+            if (similarity < 0.55 || lengthRatio < 0.6) continue;
             findings.push({ code: 'reader_cross_section_near_duplicate', severity: 'warning',
                 message: '不同 Reader 小节的长段落高度相似；检查后续段是否增加了新机制、比较条件或解释。',
                 similarity: Number(similarity.toFixed(3)),

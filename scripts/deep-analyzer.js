@@ -6178,12 +6178,17 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         : [];
     const used = [];
     const skipped = [];
-    const plannedFigures = placements.length > 0
-        ? placements.map(placement => ({
-            figure: figures.find(item => item.ordinal === placement.figureOrdinal),
-            placement
-        })).filter(item => item.figure)
-        : figures.map(figure => ({ figure, placement: null }));
+    // 收到像素却没声明 figurePlacements 时不能再按序号猜小节裸插图片：
+    // 那样会绕开「图前导读 + 图后解释 + focusPoints」的整套要求，读者看到的
+    // 只是一张没有说明的图。改为内容级报错，交给模型重写。
+    if (placements.length === 0 && figures.length > 0) {
+        throw new Error('读者正文收到了论文原图像素，但 figurePlacements 为空：'
+            + '请为每张要展示的图声明小节、标记、导读与观察动作；确实一张都不用时，也要说明理由后再交。');
+    }
+    const plannedFigures = placements.map(placement => ({
+        figure: figures.find(item => item.ordinal === placement.figureOrdinal),
+        placement
+    })).filter(item => item.figure);
     for (const { figure, placement } of plannedFigures) {
         if (article.includes(`](${figure.url})`)) {
             skipped.push(`Figure ${figure.ordinal}: 正文已有同 URL 链接`);
@@ -7826,6 +7831,26 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         article = article.replace(token, bridgeParagraph);
     }
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
+    // 散文汉字：去掉表格行、图片块、图注、看图路径与术语组合块后统计，
+    // 避免用术语卡和表格单元格把字数凑满。
+    const proseSurface = String(article).split('\n').filter(line => {
+        const text = line.trim();
+        if (!text) return false;
+        if (text.startsWith('|')) return false;
+        if (text.startsWith('![')) return false;
+        if (text.startsWith('> **看图路径')) return false;
+        if (/^\*论文图/.test(text)) return false;
+        if (/^\*\*[^*]+ × [^*]+：\*\*/.test(text)) return false;
+        return true;
+    }).join('\n');
+    const proseChineseChars = (proseSurface.match(/[\u3400-\u9fff]/g) || []).length;
+    // 散文下限按总字数下限的九成计算：正常档 5000 → 4500，精简档 2800 → 2520。
+    const minimumProseChineseChars = Math.max(1200,
+        Math.min(requirements.minimumProseChineseChars, Math.round(requirements.minimumChineseChars * 0.9)));
+    if (proseChineseChars < minimumProseChineseChars) {
+        throw new Error(`读者文章散文汉字必须为 ${minimumProseChineseChars}-${requirements.maximumChineseChars}，`
+            + `当前 ${proseChineseChars}（已排除表格、图片、图注与术语组合块）；请补充实质讲解，不要用术语卡或表格凑字数。`);
+    }
     const minimumChineseChars = requirements.minimumChineseChars;
     const maximumChineseChars = requirements.maximumChineseChars;
     if (chineseChars < minimumChineseChars || chineseChars > maximumChineseChars) {

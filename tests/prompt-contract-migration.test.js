@@ -27,7 +27,17 @@ test('current templates preserve original text apart from the declared changes; 
             const header = require('../scripts/lib/protocol-codec').record('reader-draft');
             const expected = originalBytes.toString().replace('"version": 3,',
                 '"contract": "' + header.contract + '",\n  "schemaFingerprint": "' + header.schemaFingerprint + '",')
-                .replace('（`reader-complete-table-declaration-v1`）', '');
+                .replace('（`reader-complete-table-declaration-v1`）', '')
+                .replace('原文没说明的梯度路径不要猜。',
+                    '原文没说明的梯度路径不要猜。凡是写「原文没有报告/未说明」的地方，同一段里必须补上这个缺口影响哪一步、'
+                    + '读者可以用什么替代做法绕过（例如改用相邻表中已报告的量、按已披露的超参数自行补做、或先验证哪一个前提）；'
+                    + '只写「没有报告」，读者就会恰好停在最需要继续的地方。')
+                .replace('介绍组合机制时，紧接着说清每个术语各指什么、怎么分工、为什么搭配、组合后多了什么作用。',
+                    '介绍组合机制时，紧接着说清每个术语各指什么、怎么分工、为什么搭配、组合后多了什么作用。'
+                    + '相邻段落刚刚解释过的术语，组合说明只用一句话接住它在这个组合里的额外作用，不要把同一层定义再写一遍。')
+                .replace('段落数不固定，也不用逐行复述。',
+                    '段落数不固定，也不用逐行复述。不要用「表中可见」「由表可知」这类套话开头，也不要按行把单元格数字再念一遍；'
+                    + '表后只说这张表支撑了哪个判断、在什么条件下不成立、以及读者应当拿它和哪一组结果对照。');
             assert.notEqual(expected, originalBytes.toString());
             assert.equal(actual.toString(), expected);
         } else if (['prompts/current/api-reader-fact-local.md', 'prompts/current/api-reader-concept-terms.md'].includes(current)) {
