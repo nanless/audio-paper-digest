@@ -28,7 +28,7 @@ function normalizeExplicitReaderSymbolProjection(value) {
                 if (atoms.some(atom => !atom)) continue;
                 const projection = atoms.map(atom => (atom[1] || '') + atom[2] + atom[3]).join('+');
                 const visible = body.slice(0, split).normalize('NFKC')
-                    .replace(/[\u200b\u200c\u200d\ufeff \t]/g, '');
+                    .replace(/[\u200b\u200c\u200d\u2060\ufeff \t]/g, '');
                 if (visible === projection) matches.add(body.slice(0, split).trimEnd());
             }
             return matches.size === 1 ? boundary + space + [...matches][0] + trailing : whole;
@@ -74,7 +74,7 @@ function normalizeExplicitReaderSymbolProjection(value) {
         return styled ? styled[1] : /^[A-Za-z]{1,24}$/.test(base) ? base : null;
     };
     const atom = /^(?:\\boldsymbol\{\\Delta_\{\\mathrm\{([A-Za-z]{1,24})\}\}\}|(\\mathcal\{[A-Za-z]\}|\\mathrm\{[A-Za-z]{1,24}\}|\\Delta|[A-Za-z]{1,24})_\{\\(?:mathrm|text)\{([A-Za-z]{1,24})\}\}(?:\(\\(tau|alpha|beta|gamma|lambda|omega)\))?|\\(Delta|alpha|beta|gamma|tau|lambda|omega))(?:\\(uparrow|downarrow))?(?![\p{L}\p{N}_^\\({])/u;
-    const canonical = text => text.normalize('NFKC').replace(/[\u200b\u200c\u200d\ufeff]/g, '');
+    const canonical = text => text.normalize('NFKC').replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, '');
     // 逐起点识别完整受限原子，避免贪婪地把可见副本当成 TeX 的字母基底。
     for (let index = output.length - 1; index >= 0; index--) {
         const match = atom.exec(output.slice(index, index + 160));
@@ -120,7 +120,7 @@ const READER_TEX_SYMBOLS = Object.freeze({
 const READER_TEX_STYLE_NAMES = /\\(?:textnormal|textbf|text|mathrm|mathbf|mathit|mathcal|boldsymbol|mbox|operatorname|widehat|overline|underline|tilde|hat|bar)/g;
 function readerTexCellCanonical(value) {
     return String(value ?? '').normalize('NFKC')
-        .replace(/[\u200b\u200c\u200d\ufeff\u2061\u2062]/g, '')
+        .replace(/[\u200b\u200c\u200d\u2060\ufeff\u2061\u2062]/g, '')
         .replace(/−/g, '-').replace(/\s+/g, '').trim();
 }
 function readerTexPlain(value) {
@@ -393,7 +393,7 @@ function normalizeReaderSourceDisplayArtifacts(value) {
         }
     );
     output = output.replace(
-        /l[\u200b\u200c\u200d\ufeff]*r\s*=\s*([0-9]+(?:\.[0-9]+)?)[\u200b\u200c\u200d\ufeff]*e[−-](\d+)\s*lr\s*=\s*\1e\^\{[-−]\2\}/gi,
+        /l[\u200b\u200c\u200d\u2060\ufeff]*r\s*=\s*([0-9]+(?:\.[0-9]+)?)[\u200b\u200c\u200d\u2060\ufeff]*e[−-](\d+)\s*lr\s*=\s*\1e\^\{[-−]\2\}/gi,
         (_whole, base, exponent) => `lr=${base}e-${exponent}`
     );
     return output;
