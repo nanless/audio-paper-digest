@@ -1355,9 +1355,11 @@ function parseFullFetchArgs(argv = []) {
     const options = {};
     for (let index = 0; index < argv.length; index += 2) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (['--require-previously-fetched', '--official-oai-recovery', '--allow-empty-daily'].includes(flag)) {
+        if (['--require-previously-fetched', '--official-oai-recovery', '--allow-empty-daily',
+            '--allow-previous-day-date'].includes(flag)) {
             const key = flag === '--require-previously-fetched' ? 'requirePreviouslyFetched'
-                : flag === '--official-oai-recovery' ? 'officialOaiRecovery' : 'allowEmptyDaily';
+                : flag === '--official-oai-recovery' ? 'officialOaiRecovery'
+                    : flag === '--allow-previous-day-date' ? 'allowPreviousDayDate' : 'allowEmptyDaily';
             if (options[key]) throw new Error(`参数不得重复：${flag}`);
             options[key] = true; index -= 1; continue;
         }
@@ -1611,6 +1613,28 @@ function validateFailedAnnouncementRound(checkpoint, raw, today, previous, finge
         huggingface: checkpoint.huggingface?.status ?? 'absent', staleAnnouncements };
 }
 
+// 跨零点后仍要跑「上一个自然日」的日更时，批次日期必须显式声明，不能靠时钟漂移。
+// 只允许北京时间 0–8 点这一段宽限窗口，且只允许上一自然日；其它情况一律拒绝。
+const PREVIOUS_DAY_GRACE_END_HOUR = 8;
+
+function resolveBatchDateOverride({ requested, now = new Date(), allowPreviousDayDate = false } = {}) {
+    const currentDate = getBeijingDateString();
+    const previousDate = (() => {
+        const shifted = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(shifted);
+    })();
+    const currentHour = Number(new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Shanghai', hour: '2-digit', hourCycle: 'h23'
+    }).format(now));
+    if (requested === currentDate) return { date: currentDate, overridden: false };
+    if (allowPreviousDayDate === true && requested === previousDate
+        && currentHour < PREVIOUS_DAY_GRACE_END_HOUR) {
+        return { date: requested, overridden: true };
+    }
+    return { error: `抓取启动日期已变化：请求 ${requested}，锁内启动时北京时间日期为 ${currentDate}；`
+        + '跨零点补跑上一自然日必须显式加 --allow-previous-day-date，且只在北京时间 0–8 点之间生效' };
+}
+
 async function runFullFetchBody(options = {}, auditContext = {}) {
     const refilterRequest = validateRefilterOptions(options);
     validateAnnouncementRestartOptions(options);
@@ -1618,8 +1642,13 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     let batchDate = batchStartedAt.slice(0, 10);
     if (options.date !== undefined) {
         const requested = parseFullFetchArgs(['--date', options.date]).date;
-        if (requested !== batchDate) {
-            throw new Error(`抓取启动日期已变化：请求 ${requested}，锁内启动时北京时间日期为 ${batchDate}；未开始归档或抓取`);
+        const resolved = resolveBatchDateOverride({
+            requested, now: new Date(batchStartedAt), allowPreviousDayDate: options.allowPreviousDayDate === true
+        });
+        if (resolved.error) throw new Error(`${resolved.error}；未开始归档或抓取`);
+        batchDate = resolved.date;
+        if (resolved.overridden) {
+            console.log(`[batch-date] 跨零点补跑：批次日期固定为 ${batchDate}（显式授权，宽限窗口 0–8 点）`);
         }
     }
     const today = batchDate;
@@ -2572,6 +2601,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+    resolveBatchDateOverride,
     fullFetch,
     parseFullFetchArgs,
     verifyRefilterRawFromCheckpoint,

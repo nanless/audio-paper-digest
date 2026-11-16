@@ -73,6 +73,7 @@ shift
 start_stage="fetch"
 no_visuals_option_seen=0
 allow_empty_daily=0
+previous_day_batch=0
 official_oai_recovery=0
 official_announcement_cutoff=""
 fetch_witness_recovery_manifest=""
@@ -107,6 +108,14 @@ while [ "$#" -gt 0 ]; do
         exit 2
       fi
       allow_empty_daily=1
+      shift
+      ;;
+    --previous-day-batch)
+      if [ "$previous_day_batch" -eq 1 ]; then
+        echo "--previous-day-batch 不能重复使用" >&2
+        exit 2
+      fi
+      previous_day_batch=1
       shift
       ;;
     --official-oai-recovery)
@@ -182,7 +191,15 @@ fi
 # 历史日批次只允许从现有生成或发布阶段恢复；重写走 history 流程。
 if [ "$start_index" -eq 1 ]; then
   beijing_today="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
-  if [ "$target_date" != "$beijing_today" ]; then
+  if [ "$previous_day_batch" -eq 1 ]; then
+    # 跨零点补跑：只允许北京时间 0–8 点之间补上一自然日，日期必须精确等于昨天。
+    beijing_yesterday="$(TZ=Asia/Shanghai date -v-1d +%Y-%m-%d 2>/dev/null || TZ=Asia/Shanghai date -d 'yesterday' +%Y-%m-%d)"
+    beijing_hour="$(TZ=Asia/Shanghai date +%H)"
+    if [ "$target_date" != "$beijing_yesterday" ] || [ "$beijing_hour" -ge 8 ]; then
+      echo "--previous-day-batch 只允许在北京时间 0–8 点补跑上一自然日（今天 ${beijing_today}，昨天 ${beijing_yesterday}，当前 ${beijing_hour} 点，请求 ${target_date}）。" >&2
+      exit 2
+    fi
+  elif [ "$target_date" != "$beijing_today" ]; then
     echo "抓取阶段只允许北京时间当天（今天 ${beijing_today}，请求 ${target_date}）。" >&2
     echo "历史批次只能使用 --from generate|review|push|visual 续跑，重写使用 history:run。" >&2
     exit 2
@@ -214,6 +231,7 @@ run_stage() {
 if [ "$start_index" -eq 1 ]; then
   fetch_options=(--require-previously-fetched)
   if [ "$allow_empty_daily" -eq 1 ]; then fetch_options+=(--allow-empty-daily); fi
+  if [ "$previous_day_batch" -eq 1 ]; then fetch_options+=(--allow-previous-day-date); fi
   if [ "$official_oai_recovery" -eq 1 ]; then fetch_options+=(--official-oai-recovery); fi
   if [ -n "$official_announcement_cutoff" ]; then fetch_options+=(--official-announcement-cutoff "$official_announcement_cutoff"); fi
   if [ -n "$fetch_witness_recovery_manifest" ]; then
