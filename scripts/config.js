@@ -472,6 +472,13 @@ function applyEnvOverrides() {
     if (filterBatchSize) {
         FILTER_CONFIG.batchSize = filterBatchSize;
     }
+    // 推理模型（muse xhigh）的推理 token 与可见输出共用 max_output_tokens，
+    // 1000/1200 的筛选预算对长列表不够；这里允许按环境抬高，便于不缩小批次就跑通。
+    const filterMaxTokens = readPositiveInt('PD_FILTER_MAX_TOKENS');
+    if (filterMaxTokens !== undefined) {
+        FILTER_CONFIG.maxTokens = filterMaxTokens;
+        FILTER_CONFIG.conferenceMaxTokens = filterMaxTokens;
+    }
     if (process.env.PD_KEYWORD_PREFILTER_ENABLED !== undefined) {
         FILTER_CONFIG.keywordPrefilterEnabled = !['0', 'false', 'no', 'off']
             .includes(String(process.env.PD_KEYWORD_PREFILTER_ENABLED).trim().toLowerCase());
