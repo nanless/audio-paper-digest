@@ -25,7 +25,7 @@ test('原始20节输出同时指出所有多余字段和超量图片，不成为
     for (const value of ['20 节', 'body2', 'formula', 'tables', 'tableIntro', 'marker_note', '5 项']) assert.ok(text.includes(value), value);
     assert.ok(issues.slice(1).every(issue => issue.path === null && issue.diagnosticOnly === true));
     assert.equal(JSON.stringify(draft), raw);
-    assert.throws(() => parseApiReaderArticleResult(raw), /12-18/);
+    assert.throws(() => parseApiReaderArticleResult(raw), /8-18/);
     const fewerSections = structuredClone(draft);
     fewerSections.sections = fewerSections.sections.slice(0, 12);
     fewerSections.figurePlacements = [];

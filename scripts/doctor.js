@@ -43,9 +43,14 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ENV_FILE_NAME = '.env';
 const REQUIRED_NODE_RANGE = '>=20.18.1 <21 || >=22.3.0';
 // 模型名与必填项都由 env-schema 决定，doctor 不再维护第二份清单。
-// 模型清单以 env-schema 的 SUPPORTED_MODELS 为准（2026-11-13 起论文模型换成 deepseek-v4.1-flash）。
+// 模型清单以 env-schema 的 SUPPORTED_MODELS 为准（2026-11-16 起论文模型为 muse-spark-1.3-contributor + xhigh）。
 const SUPPORTED_MODELS = require('./lib/env-schema.js').SUPPORTED_MODELS;
-const REQUIRED_MODEL = ENV_SCHEMA_EXPECTED_MODEL;
+// 建议值取当前配置的主模型；不再固定取支持清单第一项（那会让副模型缺失时
+// 建议回一个可能已不是当前口径的历史型号）。
+const CONFIGURED_PRIMARY_MODEL = String(process.env.PAPER_ANALYZER_MODEL || '').trim()
+    || ENV_SCHEMA_EXPECTED_MODEL;
+const REQUIRED_MODEL = SUPPORTED_MODELS.includes(CONFIGURED_PRIMARY_MODEL)
+    ? CONFIGURED_PRIMARY_MODEL : ENV_SCHEMA_EXPECTED_MODEL;
 const PRIMARY_REQUIRED_KEYS = Object.freeze(
     ENV_SCHEMA.filter(item => item.required && item.name.startsWith('PAPER_ANALYZER_')).map(item => item.name)
 );

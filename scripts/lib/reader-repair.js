@@ -778,11 +778,11 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
         return [
             '本轮只返回原小节索引和原字段引用的分组计划，不重写正文或来源。',
             readerLanguageGuidance,
-            `论文：${title} arXiv：${arxivId}，当前${count}节，必须合组为12–18节。`,
+            `论文：${title} arXiv：${arxivId}，当前${count}节，必须合组为${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}节。`,
             '每组只能含sectionIndexes、heading、fieldOrders。sectionIndexes从0起连续完整覆盖全部原小节，不遗漏、不重复、不重排，只能合并同kind相邻小节；kind从原小节派生。',
             'fieldOrders按本组sectionIndexes顺序，逐小节声明sectionIndex与fields。fields指定该原小节body与唯一body2/body_after字符串的拼接次序；原字段每项恰好一次，包括空串。不能跨小节搬段，不能提交新字段/正文/值，不能省略任何图表公式标记。',
             '程序按所选顺序保留全部原字符串字节、原标题与kind，以及全部root来源绑定。请选择符合原段导读、原图标记和图后解释关系的布局；本次真实图片和最终全部来源、数字、单位、质量校验仍必须通过。其他问题只供下一轮，不能为它们重吐超量小节。',
-            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context, true)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部12–18组；有body2的小节fields须包含body2。`,
+            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context, true)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}组；有body2的小节fields须包含body2。`,
             '唯一授权原小节及SHA：'+JSON.stringify({targets:context.targets,atomicOperation:operation}),
             '其他只读反馈：'+reviewFeedback,mechanicalContract,numericSpellingGuidance,
             '封存证据：'+context.evidence,indexExamples
@@ -793,12 +793,12 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
             '本轮只重组小节，输出局部补丁 JSON 的索引分组计划，不重写正文或来源记录。',
             readerLanguageGuidance,
             `论文：${title}\narXiv：${arxivId}`,
-            `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节。建议重组为 16 节；允许 12–18 节。请按教学连贯性选择同kind的相邻内容合组，不能原样返回 ${count} 组。`,
+            `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节；允许 ${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections} 节。请按教学连贯性选择同kind的相邻内容合组，不能原样返回 ${count} 组。`,
             '每组只输出sectionIndexes与heading。索引从0开始，组内及组间必须按原顺序完整覆盖0到最后一节，不能遗漏、重复、跳号或重排；只能合并同kind连续小节。新标题应概括本组内容，不能新增事实。',
             '程序会保留每段原body全部字节，保留原标题作正文子标题，kind从原小节派生；最终小节仍只含kind、heading、body 三个字段。不要回传body、kind、完整sections或其他根字段。所有图表公式、术语标记与绑定原样保留，不需要模型再抄一遍。',
             `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。原kind不能改变。`,
             requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。已有类型全部保留，缺少的教学阶段属于下一轮修复，本轮不新增类型或正文。` : '',
-            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部12–18组。`,
+            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}组。`,
             '其他已发现问题仅供后续检查，本轮只解决节数与同类内容组织；事实、表格模式、字数与来源问题留下一轮，不要为了它们重吐原来的超量小节。最终完整质量及来源校验全部保留。',
             mechanicalContract, numericSpellingGuidance,
             '来源绑定的外部反馈（不能授权本轮改正文）：\n' + reviewFeedback,
@@ -812,11 +812,11 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
         '本轮只重组小节，输出局部补丁 JSON，不输出整篇文章或其他字段。',
         readerLanguageGuidance,
         `论文：${title}\narXiv：${arxivId}`,
-        `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节。建议重组为 16 节；允许 12–18 节，不能仍输出 ${count} 节。先规划合并后的标题与类型，再写完整数组。`,
+        `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节；允许 ${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections} 节，不能仍输出 ${count} 节。先规划合并后的标题与类型，再写完整数组。`,
         '相邻内容可以合并为自然段，原标题可作为正文子标题；不能为了凑节数删掉正确事实、数字、单位、比较条件、限制或图表公式。原额外字段中有依据的内容应放回对应正文，不能自动丢弃。',
         '每个新小节只能有 kind、heading、body 三个字段。不要添加 marker、table_note、figure_note、kind_note 或其他字段；标记须放在 body 中，保留原有顺序及其对应的小节类型。',
         `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。`,
-        requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。training说明实际训练、优化或推理过程，不能因没有神经网络训练而遗漏该节；其他必需内容也不能为了合并而删掉。` : '',
+        requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。` + (requiredKinds.includes('training') ? 'training 说明实际训练、优化或推理过程，不能因没有神经网络训练而遗漏该节；' : '') + '其他必需内容也不能为了合并而删掉。' : '',
         `只输出局部补丁 JSON：协议头为 ${JSON.stringify(require('./protocol-codec').recordHeader('reader-node-patch', 'reader-node-patch'))}，draftSha256 为 ${context.draftSha256}；replacements 只含一项，path 为 /sections，oldSha256 为 ${context.targets[0].oldSha256}，value 为完整新数组。其他全部顶层字段及来源记录由程序保留，不提交它们，也不修改它们。`,
         '本轮只解决小节数量与已授权小节结构。现有术语组合不足、表格缺少或来源记录错误不会授权修改其他数组，不能为满足它们而原样返回超量小节；这些问题留到下一轮重新定位、授权和核验。整篇最终检查仍全部执行；以下数量、长度及来源要求不是额外的修改授权：',
         mechanicalContract, numericSpellingGuidance,
@@ -1116,7 +1116,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if (!Array.isArray(sections) || sections.length < READER_LIMITS.minimumSections
             || sections.length > READER_LIMITS.maximumSections) {
-            throw new Error(`小节重排返回 ${Array.isArray(sections) ? sections.length : '非数组'} 节，必须是12–18节；建议16节，不能原样返回过多小节。`);
+            throw new Error(`小节重排返回 ${Array.isArray(sections) ? sections.length : '非数组'} 节，必须是${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}节；不能原样返回过多小节。`);
         }
         for (const [index, section] of sections.entries()) {
             if (!section || Array.isArray(section) || typeof section !== 'object') {
@@ -2450,7 +2450,7 @@ function buildRepairTargets(draft, issues, options = {}) {
     }));
     if (sectionReorganizationOperation(draft)) return [{ path: '/sections',
         oldSha256: hashDraft(draft.sections), value: draft.sections,
-        repairInstruction: '只将过多小节重组为12–18节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
+        repairInstruction: '只将过多小节重组为' + READER_LIMITS.minimumSections + '–' + READER_LIMITS.maximumSections + '节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
     // 缺少某类小节时，只改 body 永远无法补上 kind。允许模型按原文改写相邻的
     // 可替代小节，保留唯一必需小节和全部已有图表/公式/术语绑定。
     const missingKindsIssue = issues.find(issue => issue?.diagnosticOnly !== true && issue?.code === 'reader_missing_required_kinds')

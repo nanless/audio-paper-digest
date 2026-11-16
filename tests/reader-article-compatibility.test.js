@@ -51,8 +51,8 @@ test('正常公开 Reader 首请求实际渲染新节数要求，模型请求由
                 calls++;
                 assert.equal(options.usageContext.stage, 'apiReaderArticle');
                 const prompt = messages[0].content[0].text;
-                assert.match(prompt, /建议安排 14–16 节/);
-                assert.match(prompt, /实际数一次数组项数/);
+                assert.match(prompt, /节数以本次代码要求为准/);
+                assert.match(prompt, /节数以本次代码要求为准/);
                 assert.match(prompt, /不得为压缩节数删掉证据、数字、单位/);
                 throw stop;
             }

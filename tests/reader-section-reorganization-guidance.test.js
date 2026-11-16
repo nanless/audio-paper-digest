@@ -17,9 +17,8 @@ test('重排专用请求给出实际节数与真实许可，不把其他诊断�
     const context = repair.buildRepairContext(sample, [{ path: '/tableBindings/0',
         message: '必须同步修改 tableBindings 并删除原表' }], '原文逐字证据：0.99。', '原文逐字证据：0.99。');
     const prompt = repair.buildSectionReorganizationPrompt({ context,
-        mechanicalContract: '最终5000–18000中文字，12–18节', reviewFeedback: '原文结果0.99须保留。' });
+        mechanicalContract: '最终5000–18000中文字，8–18节', reviewFeedback: '原文结果0.99须保留。' });
     assert.match(prompt, /当前有 21 节，至少需要减少 3 节/);
-    assert.match(prompt, /建议重组为 16 节/);
     assert.match(prompt, /kind、heading、body 三个字段/);
     assert.ok(prompt.includes(context.draftSha256));
     assert.ok(prompt.includes(context.targets[0].oldSha256));
@@ -82,7 +81,7 @@ test('真实生成入口在下一次请求使用专用重排指导而非其他�
     assert.match(text, /当前有 21 节，至少需要减少 3 节/);
     assert.match(text, /本轮只重组小节，输出局部补丁 JSON/);
     assert.match(text, /kind 只能使用：background, related_work, problem, method_overview, component, training, experiment_setup, result, ablation, limitation, reproduction, synthesis/);
-    assert.match(text, /必须覆盖：background, related_work, method_overview, training, experiment_setup, result, limitation, reproduction, synthesis/);
+    assert.match(text, /必须覆盖：problem, method_overview, result, limitation, synthesis/);
     assert.ok(text.includes('保留论文原文中已正确的比较条件。'));
     assert.ok(!text.includes('必须执行以下修复：先按正文顺序核对实际 Markdown 表'));
 });

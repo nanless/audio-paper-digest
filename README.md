@@ -48,7 +48,7 @@ Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本�
 
 1. 展开并核对 `$HOME/code/github_repos/audio-paper-digest` 的真实目录，执行 `npm run workspace:role -- status`。三条流程都在这里运行，工作区角色保持 `daily`；历史入口使用已经配置的跨角色开关。
 2. 按[安装与配置](docs/setup.md)准备 Node、Python 和项目依赖，填写项目 `.env`，确认它指向真实 Hugo 博客仓库。
-3. 主模型及启用的副模型统一使用项目指定的 `deepseek-v4.1-flash`（2026-11-13 起）。arXiv 抓取必须经过项目配置的 HTTP CONNECT 代理。
+3. 主模型及启用的副模型统一使用项目指定的 `muse-spark-1.3-contributor`（2026-11-16 起；2026-11-13 到 11-15 为 deepseek-v4.1-flash）。arXiv 抓取必须经过项目配置的 HTTP CONNECT 代理。
 4. 确认没有其他任务同时生成、审查或推送博客，目标页面也没有人工修改冲突，然后选择本次流程。
 
 [AGENTS.md](AGENTS.md)列出必须保留的执行限制，[操作手册](SKILL.md)说明正常顺序与失败恢复。[新人上手](docs/onboarding.md)解释各步骤的输入、结果和继续方法。

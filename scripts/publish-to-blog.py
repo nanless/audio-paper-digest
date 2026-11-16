@@ -5475,7 +5475,7 @@ def _detailed_core_summary_semantic_issue(summary):
     issues = []
     if count < 320 or count > 600:
         issues.append(f'中文字符必须为 320–600，当前 {count}')
-    if sentences < 6 or sentences > 9:
+    if sentences < 6 or sentences > 12:
         issues.append(f'句数必须为 6–12，当前 {sentences}')
     # 与 Node 规则一致：具体用途本身也能说明目的，不要求固定写“任务”或“输入输出”。
     purpose_pattern = (
@@ -10565,9 +10565,10 @@ def _api_reader_payload_uncached(paper):
         'training', 'experiment_setup', 'result', 'ablation', 'limitation',
         'reproduction', 'synthesis',
     )
+    # 与 Node 的 API_READER_REQUIRED_KINDS 保持一致：只强制五个教学阶段，
+    # 其余阶段由论文证据决定是否展开。
     required_kinds = ({
-        'background', 'related_work', 'method_overview', 'training',
-        'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis',
+        'problem', 'method_overview', 'result', 'limitation', 'synthesis',
     } if reader_formats.is_structured_contract(reader_contract) else {
         'background', 'related_work', 'method_overview', 'experiment_setup',
         'result', 'limitation', 'synthesis',

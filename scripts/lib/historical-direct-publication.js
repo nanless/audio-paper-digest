@@ -638,7 +638,7 @@ function semanticReviewProtocol() {
         textReview: format.textReview,
         imageReview: format.imageReview,
         budgets: {
-            chunkChars: Math.min(16000, Math.max(4000, Number.parseInt(process.env.PD_BLOG_REVIEW_CHUNK_CHARS || '8000', 10) || 8000)),
+            chunkChars: Math.min(32000, Math.max(4000, Number.parseInt(process.env.PD_BLOG_REVIEW_CHUNK_CHARS || '8000', 10) || 8000)),
             maxTokens: Math.min(16000, Math.max(1000, Number.parseInt(process.env.PD_BLOG_REVIEW_MAX_TOKENS || '4000', 10) || 4000)),
             timeoutSeconds: 120, maxRetries: 5, temperature: 0.1, imageMaxBytes: 8 * 1024 * 1024,
             pageConcurrency: historicalReviewConcurrency()

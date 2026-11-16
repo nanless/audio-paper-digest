@@ -27,7 +27,7 @@ test('超节数与少术语组合同时存在时先授权小节重排，其他�
     assert.equal(next.atomicOperation.kind, 'complete_existing_concept_bridges_v1');
     assert.throws(() => repair.applyReaderPatch(draft, patch, ['/sections']), /明确授权/);
     patch.replacements[0].value = draft.sections;
-    assert.throws(() => repair.applyReaderPatch(draft, patch, ['/sections'], { atomicOperation: context.atomicOperation }), /12–18/);
+    assert.throws(() => repair.applyReaderPatch(draft, patch, ['/sections'], { atomicOperation: context.atomicOperation }), /8–18/);
 });
 test('正常生成的复合失败稿第二次仍为小节补丁，提示不要求同轮修未授权表和术语记录', async t => {
     const fs = require('fs');
@@ -112,7 +112,7 @@ test('旧实现迁移的超节数少术语复合稿仍走受限重排，不退�
             resumedCalls += 1;
             assert.equal(requestOptions.usageContext.stage, 'apiReaderRepair');
             assert.match(messages[0].content[0].text, /reorganize_existing_sections_v1/);
-            assert.ok(budget <= 16000);
+            assert.ok(budget <= 128000);
             throw new Error('已核验迁移补丁请求');
         }
     })), /已核验迁移补丁请求/);

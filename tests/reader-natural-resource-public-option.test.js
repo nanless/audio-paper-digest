@@ -156,7 +156,7 @@ test('公共签名修订经真实生成器采用自然资源输入和实际提�
     });
     requestBoundaryHandler = async (_url, _endpoint, _model, body) => {
         requestBoundaries++;
-        assert.ok(body.max_output_tokens <= 48000);
+        assert.ok(body.max_output_tokens <= 128000);
         const prompt = body.input[0].content.find(part => part.type === 'input_text').text;
         const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, '按原文修正当前表达，保留其余事实。');
         const display = require('../scripts/lib/signed-reader-recovery-draft').minimalDisplay(seed);
@@ -228,7 +228,7 @@ test('公共新正文经真实生成器采用自然资源输入，不借旧签�
     });
     requestBoundaryHandler = async (_url, _endpoint, _model, body) => {
         requestBoundaries++;
-        assert.ok(body.max_output_tokens <= 48000);
+        assert.ok(body.max_output_tokens <= 128000);
         const prompt = body.input[0].content.find(part => part.type === 'input_text').text;
         assert.match(prompt, /代码、模型权重与完整系统的公开情况尚无法确认/);
         assert.doesNotMatch(prompt, /NONE: 未发现来源绑定/);

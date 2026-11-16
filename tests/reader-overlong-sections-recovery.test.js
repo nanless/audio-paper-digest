@@ -37,7 +37,7 @@ test('19至64节的完整失败稿可定位恢复，最终仍拒绝超过18节',
         assert.deepEqual(context.targets.map(target => target.path), ['/sections']);
         assert.equal(context.atomicOperation.kind, 'reorganize_existing_sections_v1');
         assert.equal(context.targets[0].oldSha256, repair.hashDraft(draft.sections));
-        assert.throws(() => deep.parseApiReaderArticleResult(original, { requiredVersion: 3 }), /12-18/);
+        assert.throws(() => deep.parseApiReaderArticleResult(original, { requiredVersion: 3 }), /8-18/);
     }
 });
 test('缺根、65节、异常对象和正文类型不完整仍不能作为恢复输入', () => {
@@ -69,8 +69,8 @@ test('专用小节数组修复保护全部其他记录，缺授权与错误SHA�
     const wrongNode = structuredClone(patch);
     wrongNode.replacements[0].oldSha256 = '0'.repeat(64);
     assert.throws(() => repair.applyReaderPatch(draft, wrongNode, ['/sections'], { atomicOperation: context.atomicOperation }), /stale node/);
-    for (const count of [11, 19, 65]) {
-        assert.throws(() => repair.applyReaderPatch(draft, createSectionsPatch(draft, createReaderDraftSample(count).sections), ['/sections'], { atomicOperation: context.atomicOperation }), /12–18/);
+    for (const count of [7, 19, 65]) {
+        assert.throws(() => repair.applyReaderPatch(draft, createSectionsPatch(draft, createReaderDraftSample(count).sections), ['/sections'], { atomicOperation: context.atomicOperation }), /8–18/);
     }
     const forged = { ...context.atomicOperation, maximumSections: 64 };
     assert.throws(() => repair.applyReaderPatch(draft, patch, ['/sections'], { atomicOperation: forged }), /本轮已授权/);

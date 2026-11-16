@@ -33,8 +33,10 @@ def is_known_contract(raw):
 def publication_layout(plan):
     profile = stored_plan_format(plan)
     if profile == INTEGRATED:
+        # 2026-11-16：与 JS 侧 READER_LIMITS 对齐，节数下限从 12 降到 8；
+        # 放宽后新稿（8–11 节）不会在发布阶段被旧的 12 节门槛整批拒掉。
         return dict(integrated=True, structured=True, rich=True,
-                    minimumSections=12, maximumSections=18,
+                    minimumSections=8, maximumSections=18,
                     minimumBridges=4, maximumBridges=10)
     # The two compact layouts are distinct historical wire shapes. This
     # relationship is read from the original record, never guessed by a tag.

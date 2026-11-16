@@ -42,20 +42,21 @@ test('十九节明确列出至少减少一节及重复类型但不要求一类�
     assert.match(JSON.stringify(feedback), /实际 19 节/);
 });
 
-test('十一节要求补足实质解释且不能空拆凑数', () => {
-    const error = parserFailure(draft(11));
-    assert.match(error.message, /实际 11 节/);
+test('七节要求补足实质解释且不能空拆凑数', () => {
+    // 2026-11-16 起节数下限是 8，7 节才触发数量闸门。
+    const error = parserFailure(draft(7));
+    assert.match(error.message, /实际 7 节/);
     assert.match(error.message, /至少增加 1 节/);
     assert.match(error.message, /不得拆成空节或重复段落凑数/);
 });
 
-test('十二与十八节通过数量闸门但仍受其余正文校验约束，非数组拒绝保持', () => {
-    for (const sectionCount of [12, 18]) {
+test('八与十八节通过数量闸门但仍受其余正文校验约束，非数组拒绝保持', () => {
+    for (const sectionCount of [8, 18]) {
         const error = parserFailure(draft(sectionCount));
         assert.doesNotMatch(error.message, /sections 必须包含/);
     }
-    const invalidSections = draft(12);
+    const invalidSections = draft(8);
     invalidSections.sections = null;
     assert.equal(parserFailure(invalidSections).message,
-        '读者文章 sections 必须包含 12-18 个小节');
+        '读者文章 sections 必须包含 8-18 个小节');
 });

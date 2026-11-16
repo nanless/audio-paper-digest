@@ -42,6 +42,11 @@ test('current templates preserve original text apart from the declared changes; 
                 .replace('段落数不固定，也不用逐行复述。',
                     '段落数不固定，也不用逐行复述。不要用「表中可见」「由表可知」这类套话开头，也不要按行把单元格数字再念一遍；'
                     + '表后只说这张表支撑了哪个判断、在什么条件下不成立、以及读者应当拿它和哪一组结果对照。')
+                .replace('最多 4 张，也可以一张都不选。',
+                    '最多 4 张。本次确实收到像素、又存在可装配的原图时至少要声明一张；'
+                    + '只有完全没有可装配原图时才允许 `figurePlacements` 为空，空数组会被代码直接拒绝。')
+                .replace('`figurePlacements` 可以为空，最多 4 项。',
+                    '`figurePlacements` 最多 4 项；收到像素且存在可装配原图时不能为空。')
                 .replace('`sections` 必须包含 12–18 个小节，起草时建议安排 14–16 节。输出 JSON 前实际数一次数组项数；'
                     + '少于 12 节或超过 18 节都不能输出。',
                     '`sections` 的节数以本次代码要求为准（见 `{mechanicalContract}`）。先看这篇论文实际有哪些阶段值得展开：'

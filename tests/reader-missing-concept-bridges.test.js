@@ -159,7 +159,7 @@ test('实际旧候选实现迁移仍请求受限术语补丁，不因少于四�
             resumedCalls += 1;
             assert.equal(requestOptions.usageContext.stage, 'apiReaderRepair');
             assert.match(messages[0].content[0].text, /complete_existing_concept_bridges_v1/);
-            assert.ok(budget <= 16000);
+            assert.ok(budget <= 128000);
             throw new Error('已核验迁移补丁请求');
         }
     })), /已核验迁移补丁请求/);

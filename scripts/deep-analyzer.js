@@ -7834,6 +7834,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         }
         article = article.replace(token, bridgeParagraph);
     }
+    let proseChineseCharsBelowMinimum = null;
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
     // 散文汉字：去掉表格行、图片块、图注、看图路径与术语组合块后统计，
     // 避免用术语卡和表格单元格把字数凑满。
@@ -7851,9 +7852,11 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     // 散文下限按总字数下限的九成计算：正常档 5000 → 4500，精简档 2800 → 2520。
     const minimumProseChineseChars = Math.max(1200,
         Math.min(requirements.minimumProseChineseChars, Math.round(requirements.minimumChineseChars * 0.9)));
+    // 散文下限只作提示，不阻断：2026-11-16 实测有 36 篇已发布存档（散文 4239–4494）
+    // 在硬门槛下会被判失败，签名修正、诊断重放与会议冷重放都会被无故阻断。
+    // 新稿的引导放在机械合同里（buildReaderContractNotice），失败仍由总字数与内容检查兜底。
     if (proseChineseChars < minimumProseChineseChars) {
-        throw new Error(`读者文章散文汉字必须为 ${minimumProseChineseChars}-${requirements.maximumChineseChars}，`
-            + `当前 ${proseChineseChars}（已排除表格、图片、图注与术语组合块）；请补充实质讲解，不要用术语卡或表格凑字数。`);
+        proseChineseCharsBelowMinimum = { actual: proseChineseChars, minimum: minimumProseChineseChars };
     }
     const minimumChineseChars = requirements.minimumChineseChars;
     const maximumChineseChars = requirements.maximumChineseChars;

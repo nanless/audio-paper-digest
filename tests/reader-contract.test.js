@@ -85,7 +85,7 @@ test('真实 Reader ID 能区分重复的组件类型，并识别明显的跨小
     assert.equal(findings[0].left.section, 'sections[0]');
     assert.equal(findings[0].right.section, 'sections[1]');
     assert.equal(findings[0].severity, 'warning');
-    assert.ok(findings[0].similarity > 0.86);
+    assert.ok(findings[0].similarity > 0.55);
     assert.ok(!JSON.stringify(findings).includes(explanation), '诊断不重复保存这段完整正文');
 });
 

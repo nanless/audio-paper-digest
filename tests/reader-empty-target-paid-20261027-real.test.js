@@ -246,7 +246,7 @@ test('有效资源正文目标仍到达原局部请求，真实签名起点与fu
         sample.sourceDetails.text, resourceOptions(sample, dir, async (messages, budget, request) => {
             calls++;
             assert.equal(request.usageContext.stage, 'apiReaderRepair');
-            assert.ok(budget <= 16000);
+            assert.ok(budget <= 128000);
             const prompt = messages[0].content[0].text;
             const authorization = JSON.parse(prompt.split('\n').find(line => line.startsWith('{"draftSha256":')));
             assert.ok(authorization.targets.length > 0);

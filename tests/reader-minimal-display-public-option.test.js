@@ -155,7 +155,7 @@ test('公共刷新经真实分析器与生成器使用精简显示到模型前�
     });
     requestBoundaryHandler = async (_url, _endpoint, _model, body) => {
         requestBoundaries++;
-        assert.ok(body.max_output_tokens <= 48000);
+        assert.ok(body.max_output_tokens <= 128000);
         const prompt = body.input[0].content.find(part => part.type === 'input_text').text;
         const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, '按原文修正当前表达，保留其余事实。');
         const display = require('../scripts/lib/signed-reader-recovery-draft').minimalDisplay(seed);

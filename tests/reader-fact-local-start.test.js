@@ -341,7 +341,7 @@ test('正常生成器只发一次有界正文补丁，不发全文并记真实�
                 ...options,
                 readerCallModel: async (_messages, tokens, request) => {
                     calls++;
-                    assert.ok(tokens <= 16000);
+                    assert.ok(tokens <= 128000);
                     assert.equal(request.usageContext.stage, 'apiReaderRepair');
                     return JSON.stringify({
                         ...require('../scripts/lib/protocol-codec').record('reader-fact-sentence-patch'),
@@ -665,7 +665,7 @@ test('真实公共刷新进入新解释补丁提示，未覆盖引文中的错�
                     readerCallModel: async (messages, tokens, request) => {
                         calls++;
                         assert.equal(request.usageContext.stage, 'apiReaderRepair');
-                        assert.ok(tokens <= 16000);
+                        assert.ok(tokens <= 128000);
                         const prompt = typeof messages[0].content === 'string' ? messages[0].content
                             : messages[0].content.filter(item => item.type === 'text').map(item => item.text).join('\n');
                         assert.ok(prompt.includes('/conceptBridges/0/explanation'));

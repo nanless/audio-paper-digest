@@ -47,7 +47,7 @@ PAPER_DIGEST_BLOG_REPO_RUN=<owner>/<repo>
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
-用户 2026-11-13 起指定论文 LLM 使用 `deepseek-v4.1-flash`（此前为 `muse-spark-1.3-contributor`），通过 OpenAI Responses 请求，基础 `/v1` 端点由公共封装转为 `/v1/responses`。受支持型号登记在 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`，主、副模型均须核对；`muse-spark-*` 强制使用项目 HTTP CONNECT 代理，`deepseek-v4.1-flash` 在 OpenCode Go 网关上直连与走代理都可用。兼容的 `mimo-v2.6-flash` 仍支持 OpenAI Chat Completions。实际模型由项目配置决定。公开服务端点必须使用 HTTPS，只有本机回环测试服务允许 HTTP。
+用户 2026-11-16 起指定论文 LLM 使用 `muse-spark-1.3-contributor`（推理档 `xhigh`）；2026-11-13 到 11-15 为 `deepseek-v4.1-flash`，通过 OpenAI Responses 请求，基础 `/v1` 端点由公共封装转为 `/v1/responses`。受支持型号登记在 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`，主、副模型均须核对；`muse-spark-*` 强制使用项目 HTTP CONNECT 代理，`deepseek-v4.1-flash` 在 OpenCode Go 网关上直连与走代理都可用。兼容的 `mimo-v2.6-flash` 仍支持 OpenAI Chat Completions。实际模型由项目配置决定。公开服务端点必须使用 HTTPS，只有本机回环测试服务允许 HTTP。
 
 `PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只供历史 ICLR 2026 会议来源收集使用，须指向已保留的本地官方录用论文信息与 PDF。未配置时使用 `~/code/github_repos/iclr2026-paper-scraper`。日更抓取和 arXiv 写作都不读它，设置它也不会触发下载。
 

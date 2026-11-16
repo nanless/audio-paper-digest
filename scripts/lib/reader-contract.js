@@ -45,6 +45,8 @@ function buildReaderContractNotice(options = {}) {
     const rules = readerRequirements(options);
     return [
         `本次文章检查要求（${READER_MECHANICAL_CONTRACT}）：`,
+        `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.round(rules.minimumChineseChars * 0.9)} 个；`
+            + '靠术语卡和表格单元格凑满总字数不算实质讲解。',
         `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`,
         `文章至少应包含 ${rules.minimumTables} 张表。表格列数遵循真实原表和比较问题，不设置固定宽表数量或五列门槛，不为凑列添加无来源的解释列、占位值或参考文献数字。每张表都要说明比较问题，并解释结果及其限制；原始条件、结果数字和单位必须保留并通过正常来源绑定。`,
         ...(options.minimumResultTables > 0 ? [

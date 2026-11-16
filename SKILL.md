@@ -25,7 +25,7 @@
 Reader 指面向初学研究者的解读长文；内部主分析、来源和发布凭证分别核验。常见术语见[写作约定](docs/writing-guide.md#术语先解释再统一称呼)。下列检查未通过时，先停止，不用生产任务测试配置。
 
 1. 先跑只读体检 `npm run doctor -- --offline`（需要探测 arXiv 时用 `--network`），再核对 `pwd`，将 `$HOME/code/github_repos/audio-paper-digest` 展开为真实绝对路径并确认当前工作区一致，执行 `npm run workspace:role -- status`；角色保持 `daily`。历史操作通过已配置跨角色开关运行，不进入废弃工作区。
-2. Node、Python 和依赖有效，项目 `.env` 权限为 `0600`。主模型及启用的副模型按项目配置统一为 `deepseek-v4.1-flash`（2026-11-13 起；`muse-spark-1.3-contributor` 仅存于历史记录）；arXiv 抓取强制使用项目 HTTP CONNECT 代理。
+2. Node、Python 和依赖有效，项目 `.env` 权限为 `0600`。主模型及启用的副模型按项目配置统一为 `muse-spark-1.3-contributor`（2026-11-16 起，推理档 `xhigh`；2026-11-13 到 11-15 曾用 `deepseek-v4.1-flash`）；arXiv 抓取强制使用项目 HTTP CONNECT 代理。
 3. 确认真实博客仓库与目标页面没有人工修改冲突，检查其他生成、审查与发布进程，三流程错峰运行。
 4. 所有脚本、检查和测试在沙箱外执行，不绕过环境、角色或来源检查，不把 `data/`、日志、缓存、密钥纳入 Git。
 
@@ -249,7 +249,7 @@ PDF 表格的来源适配不改变这项原则。正常生成、候选恢复和�
 
 ## 共享内容与 Prompt
 
-三条流程共用 `analysis-engine.js`、`deep-analyzer.js`、当前Prompt登记、Reader/评分/标签与来源守卫。正式分析13个一级标题用于机器解析；Reader使用 `beginner-researcher` 与 `api-reader-source-bindings`，要求12–18节、5000–18000中文字、4–10组机制术语解释。
+三条流程共用 `analysis-engine.js`、`deep-analyzer.js`、当前Prompt登记、Reader/评分/标签与来源守卫。正式分析13个一级标题用于机器解析；Reader使用 `beginner-researcher` 与 `api-reader-source-bindings`，要求8–18节（必须覆盖 problem/method_overview/result/limitation/synthesis）、5000–18000中文字（散文汉字至少4500）、4–10组机制术语解释。
 
 标签从新版目录的386项九维词表选择。总目录保留完整；每篇只展示所选项及父级导航，不加入兄弟方向或空分面，祖先不写入直接标签。三种页面生成器使用同一多级展示函数，旧分类仅按真实归档原SHA重放。会议与历史发布先核验站点成对版本目录及本次快照，首次同步和旧记录兼容见[标签规则](docs/tag-display-policy.md#三条流程共用的目录与呈现)。
 

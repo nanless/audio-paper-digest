@@ -174,7 +174,7 @@ npm run conference:filter -- apply --filter UUID --decision DECISION.json --owne
 
 来源证据缺失、摘要定位规则不匹配或候选集合不完整时，须重新准备该会议的配置，再发起模型请求。
 
-`spec` 自动读取项目配置中的模型、协议和端点，当前新请求统一使用 `.env` 里的主模型（现为 `deepseek-v4.1-flash`）、OpenAI Responses 和项目 HTTP CONNECT 代理。运行时用 `spec` 生成实际配置。
+`spec` 自动读取项目配置中的模型、协议和端点，当前新请求统一使用 `.env` 里的主模型（现为 `muse-spark-1.3-contributor`）、OpenAI Responses 和项目 HTTP CONNECT 代理。运行时用 `spec` 生成实际配置。
 
 `endpointIdentitySha256` 由 `endpointIdentitySha256(endpoint, model)` 对公共路由规范化后的 API URL 的 UTF-8 字节计算，不含 API key。
 

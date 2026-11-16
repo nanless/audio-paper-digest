@@ -57,6 +57,23 @@ function main(argv = process.argv.slice(2)) {
     const text = fs.readFileSync(options.envFile, 'utf8');
     const entries = parseLikeRuntime(text);
     const { items, unknown, spelling } = validateEntries(entries);
+    // 推理档位按模型分别校验：schema 里登记的是两模型的并集，直接放行会让
+    // 「muse 写 max」「deepseek 写 xhigh」这类组合静默降级。
+    const effortItem = items.find(item => item.name === 'PD_OPENAI_RESPONSES_REASONING_EFFORT');
+    const effort = String(entries.PD_OPENAI_RESPONSES_REASONING_EFFORT || '').trim().toLowerCase();
+    const configuredModel = String(entries.PAPER_ANALYZER_MODEL || '').trim();
+    if (effortItem && effort && configuredModel) {
+        const { reasoningEffortsFor } = require('./utils');
+        const ladders = require('./lib/env-schema').SUPPORTED_MODELS.reduce((acc, model) => {
+            acc[model] = reasoningEffortsFor(model);
+            return acc;
+        }, {});
+        const ladder = ladders[configuredModel];
+        if (Array.isArray(ladder) && ladder.length > 0 && !ladder.includes(effort)) {
+            effortItem.ok = 'fail';
+            effortItem.detail = `模型 ${configuredModel} 支持的推理档位是 ${ladder.join('/')}，当前写的是 ${effort}`;
+        }
+    }
     const counts = items.reduce((acc, item) => ({ ...acc, [item.ok]: (acc[item.ok] || 0) + 1 }), {});
     const result = {
         envFile: options.envFile,

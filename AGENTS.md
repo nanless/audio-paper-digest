@@ -57,7 +57,7 @@ npm run digest:prepare -- YYYY-MM-DD
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    npm 中的 Python 命令还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，加载器会将文件权限收紧为 `0600`。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户 2026-11-13 起指定论文 LLM 使用 `deepseek-v4.1-flash`（此前为 `muse-spark-1.3-contributor`），主、副模型配置均须核对；受支持型号清单在 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`，实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 与其他备用账号配置会合并成同一路由的等权账号池，顺序不代表优先级，不能代替副模型配置。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户 2026-11-16 起指定论文 LLM 使用 `muse-spark-1.3-contributor` 且推理档 `xhigh`（2026-11-13 到 11-15 为 `deepseek-v4.1-flash`），主、副模型配置均须核对；受支持型号清单在 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`，实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 与其他备用账号配置会合并成同一路由的等权账号池，顺序不代表优先级，不能代替副模型配置。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败（`deepseek-v4.1-flash` 在 OpenCode Go 网关上直连与走代理都可用）。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
@@ -311,7 +311,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 默认 API 正式分析正文的 13 个一级标题用于机器解析。最终博客正文来自 `beginner-researcher` API Reader；表格与公式的来源另由 `api-reader-source-bindings` 记录和核验：
 
-- 文章包含 12–18 节、5000–18000 中文字和 4–10 组术语组合解释。
+- 文章包含 8–18 节（必须覆盖 problem、method_overview、result、limitation、synthesis 五个阶段，其余按证据取舍）、5000–18000 中文字（其中散文汉字至少 4500，不含表格、图注与术语组合块）和 4–10 组术语组合解释。
 - 首次出现的术语须用白话解释；介绍组合机制时须说明各部分的分工、搭配原因和新增作用。
 - 表格前须说明比较问题，表格后须解释结果及其限制。原文证据充足时，应覆盖数据协议、主结果、消融/失败条件和训练/部署成本。
 - 表格必须保留可理解的条件、方法、指标和单位；不能把任意引文里的数字、参考文献年份或页码拼成“来源句／量化值一”占位结果表，也不能凭少量相同数字选择原表。列数随真实来源，不为满足固定宽表数量添加解释性伪列。缺少可核验表格时交回正常 Reader 修复，不用程序造表满足门槛。

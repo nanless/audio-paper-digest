@@ -42,7 +42,7 @@ Reading the website or using an application does not require the production proj
 
 1. Resolve and verify the actual path of `$HOME/code/github_repos/audio-paper-digest`, then run `npm run workspace:role -- status`. All three workflows use this directory with the `daily` role. Historical commands use the configured cross-role switch.
 2. Follow [installation and configuration](docs/setup.md), in Chinese, to prepare Node, Python, and dependencies, configure the project `.env`, and identify the real Hugo blog repository.
-3. The primary model and any enabled secondary model must use the project-selected `deepseek-v4.1-flash` (since 2026-11-13). arXiv requests must use the project's HTTP CONNECT proxy.
+3. The primary model and any enabled secondary model must use the project-selected `muse-spark-1.3-contributor` (since 2026-11-16; deepseek-v4.1-flash during 2026-11-13..11-15). arXiv requests must use the project's HTTP CONNECT proxy.
 4. Check that no other task is generating, reviewing, or pushing blog content and that the target pages do not have conflicting manual edits. Then select the workflow.
 
 [AGENTS.md](AGENTS.md) states the execution constraints. The [operating manual](SKILL.md) gives the normal sequence and recovery rules. The [onboarding guide](docs/onboarding.md) explains inputs, results, and how to continue. These detailed guides are in Chinese.
