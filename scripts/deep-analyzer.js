@@ -6596,7 +6596,9 @@ function separateApiReaderTableBlocks(article) {
     return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function validateApiReaderTableNarratives(article, minimumTables = 2) {
+function validateApiReaderTableNarratives(article, minimumTables = 0) {
+    // 表数下限必须由调用方按本次证据里的真实原表数传入（readerRequirements 派生）。
+    // 缺省 0 表示「没有可核验原表就不要求配表」，避免直接调用时凭空要求 2 张表。
     const blocks = String(article || '').split(/\n\s*\n/).map(value => value.trim());
     const tableIndexes = blocks.map((block, index) => (
         /^\|.+\|$/m.test(block) ? index : -1

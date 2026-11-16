@@ -11,7 +11,11 @@ test('Reader 提示词告知与解析器共用同一组阈值，并按每次请�
         requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [8, 18, 5000, 18000, 4, 10]);
     assert.equal(requirements.minimumTables, 4);
     assert.equal(requirements.minimumWideTables, 0);
-    assert.equal(readerRequirements({ availableTableCount: 0 }).minimumTables, 2);
+    // 2026-11-16：表数下限跟随真实原表数。0 张原表不再要求配表——否则只能靠
+    // 拼接引文数字造占位结果表，违反来源绑定规则。
+    assert.equal(readerRequirements({ availableTableCount: 0 }).minimumTables, 0);
+    assert.equal(readerRequirements({ availableTableCount: 1 }).minimumTables, 1);
+    assert.equal(readerRequirements({ availableTableCount: 2 }).minimumTables, 2);
     assert.equal(readerRequirements({ version: 2 }).minimumSections, 10);
     const notice = buildReaderContractNotice({ minimumIntegratedTables: 3 });
     assert.match(notice, /至少应包含 3 张表/);

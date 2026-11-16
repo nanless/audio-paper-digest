@@ -25,8 +25,11 @@ function readerRequirements(options = {}) {
     const profile = format.profileForOptions(options);
     let minimumTables = options.minimumIntegratedTables;
     if (minimumTables === undefined) {
+        // 表数下限跟随本次证据里真实可核验的原表：0 张原表就不要求配表，
+        // 否则只能靠拼接引文数字造占位结果表，违反来源绑定规则。
+        // 上限仍夹在 4（展示上限）；availableTableCount 缺省时才回退到 2。
         minimumTables = options.availableTableCount === undefined ? 2
-            : Math.min(4, Math.max(2, options.availableTableCount));
+            : Math.min(4, Math.max(0, options.availableTableCount));
     }
     if (!Number.isInteger(minimumTables) || minimumTables < 0 || minimumTables > 4) {
         throw new Error('Reader minimumIntegratedTables must be an integer from 0 to 4');
@@ -49,7 +52,9 @@ function buildReaderContractNotice(options = {}) {
         `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.round(rules.minimumChineseChars * 0.9)} 个；`
             + '靠术语卡和表格单元格凑满总字数不算实质讲解。',
         `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`,
-        `文章至少应包含 ${rules.minimumTables} 张表。表格列数遵循真实原表和比较问题，不设置固定宽表数量或五列门槛，不为凑列添加无来源的解释列、占位值或参考文献数字。每张表都要说明比较问题，并解释结果及其限制；原始条件、结果数字和单位必须保留并通过正常来源绑定。`,
+        rules.minimumTables > 0
+            ? `文章至少应包含 ${rules.minimumTables} 张表。表格列数遵循真实原表和比较问题，不设置固定宽表数量或五列门槛，不为凑列添加无来源的解释列、占位值或参考文献数字。每张表都要说明比较问题，并解释结果及其限制；原始条件、结果数字和单位必须保留并通过正常来源绑定。`
+            : '本次来源证据里没有可核验的原表，因此不要求配表；不要用引文数字、参考文献年份或页码拼占位结果表。若正文确实呈现了原表，仍须满足表前说明段与表后解释段的要求。',
         ...(options.minimumResultTables > 0 ? [
             `原文包含定量结果表，result 或 ablation 小节须呈现至少 ${options.minimumResultTables} 张带数字的结果表，并保留必要的基线和实际可运行策略。仅展示数据集表或配置表不满足要求。`
         ] : []),

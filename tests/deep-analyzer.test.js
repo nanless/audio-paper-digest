@@ -2514,9 +2514,16 @@ primary_task_tag: #音视频生成
             '相比基线的差距支持模块在同一口径下有效，也给出了可以核对的净收益；但失败条件与训练方差尚未覆盖，因此不能把当前差距外推到所有数据、语言和部署场景。'
         ].join('\n\n');
         assert.doesNotThrow(() => validateApiReaderTableNarratives(integratedTables));
+        // 2026-11-16 起默认不再凭空要求 2 张表：表数下限由调用方按真实原表数传入。
+        // 这里显式传 2，专门覆盖「有下限时数量不足要报错」这条规则。
         assert.throws(
-            () => validateApiReaderTableNarratives('| 方法 | 值 |\n|---|---:|\n| A | 1 |'),
+            () => validateApiReaderTableNarratives('| 方法 | 值 |\n|---|---:|\n| A | 1 |', 2),
             /至少需要 2 张/
+        );
+        // 下限为 0 时不再要求配表，但已出现的表仍要满足表前说明/表后解释。
+        assert.throws(
+            () => validateApiReaderTableNarratives('| 方法 | 值 |\n|---|---:|\n| A | 1 |', 0),
+            /前缺少独立说明段/
         );
 
         payload.sections[0].body += '\n\n论文比较 spoken prompt 的声学条件，这是研究对象而非内部流程。';
