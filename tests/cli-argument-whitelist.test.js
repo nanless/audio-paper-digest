@@ -42,11 +42,26 @@ test('batch 拒绝拼错的 Reader 重试开关，同时保留既有合法参数
 });
 
 test('batch main 在读取结果文件前拒绝未知参数', async () => {
-    const originalArgv = [...process.argv];
-    process.argv.push('--retry-failed-reader');
+    // 显式传 argv，避免直接改 process.argv；同时监视 fs.readFileSync，
+    // 证明拒绝发生在打开 data/current 里的生产账本之前（旧版只断言错误文案，
+    // 守卫一旦前移/移除就会真的去读 12MB 的 deep-analysis-result.json）。
+    const fs = require('node:fs');
+    const opened = [];
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = function tracked(file, ...rest) {
+        opened.push(String(file));
+        return originalRead.call(this, file, ...rest);
+    };
     try {
-        await assert.rejects(batchAnalyze.main(), /未知参数: --retry-failed-reader/);
+        process.argv.push('--retry-failed-reader');
+        await assert.rejects(
+            batchAnalyze.main({}),
+            /未知参数: --retry-failed-reader/
+        );
+        assert.deepEqual(opened.filter(item => item.includes('deep-analysis-result')), []);
     } finally {
-        process.argv.splice(0, process.argv.length, ...originalArgv);
+        fs.readFileSync = originalRead;
+        const index = process.argv.indexOf('--retry-failed-reader');
+        if (index >= 0) process.argv.splice(index, 1);
     }
 });

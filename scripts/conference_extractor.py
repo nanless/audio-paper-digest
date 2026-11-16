@@ -1274,6 +1274,15 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
     if isinstance(fz_error_argument, type) and issubclass(fz_error_argument, BaseException):
         structure_geometry_errors += (fz_error_argument,)
 
+    def _geometry_or_empty(call, default):
+        # 只把 MuPDF 的几何失败当作「这一页没有可恢复结构」；项目自身代码抛出的
+        # ValueError/TypeError 不属于几何失败，必须继续上抛，否则代码缺陷会被
+        # 伪装成「论文没有表格/公式」。
+        try:
+            return call()
+        except structure_geometry_errors:
+            return default
+
     def _extract_structures(pdf_bytes: bytes, pages: list[str],
                             visual_audit: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
         try:
@@ -1292,7 +1301,9 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
             # 变成来源结构。
             conservative_visual_only = False
             if visual_audit is None:
-                audit_probe = _build_visual_audit(pdf_document, format_reference)
+                # 视觉审计探针同样依赖 MuPDF 渲染，几何失败时按「没有候选」处理。
+                audit_probe = _geometry_or_empty(
+                    lambda: _build_visual_audit(pdf_document, format_reference), {})
                 conservative_visual_only = any(
                     isinstance(candidate, dict) and (
                         candidate.get("rows", 0) > 0 or "rawCells" in candidate)
@@ -1301,14 +1312,18 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
             formulas: list[dict[str, Any]] = []
             if not conservative_visual_only:
                 for page_number in range(pdf_document.page_count):
-                    page_tables, _ = table_records(pdf_document[page_number], page_number + 1, len(tables) + 1)
+                    page_tables, _ = _geometry_or_empty(
+                        lambda page_number=page_number: table_records(
+                            pdf_document[page_number], page_number + 1, len(tables) + 1),
+                        ([], None))
                     tables.extend(page_tables)
                     audit_page = next((item for item in (visual_audit or {}).get("pages", [])
                                        if item.get("page") == page_number + 1), None)
-                    page_formulas, _ = formula_records(
-                        pdf_document, page_number + 1, len(formulas) + 1,
-                        str(audit_page["sha256"]) if audit_page else None,
-                    )
+                    page_formulas, _ = _geometry_or_empty(
+                        lambda page_number=page_number, audit_page=audit_page: formula_records(
+                            pdf_document, page_number + 1, len(formulas) + 1,
+                            str(audit_page["sha256"]) if audit_page else None),
+                        ([], None))
                     formulas.extend(page_formulas)
             retained_formulas = []
             formula_bytes = 0
@@ -1319,14 +1334,10 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
                 retained_formulas.append(formula)
                 formula_bytes += size
             formulas = retained_formulas
-            figures = figure_records(pdf_document)
+            figures = _geometry_or_empty(lambda: figure_records(pdf_document), [])
             return _json_safe_deep({"tables": tables, "formulas": formulas, "figures": figures})
         except ConferenceExtractionError:
             raise
-        except structure_geometry_errors:
-            # 已知几何异常只说明候选矩形不可用，按“没有可恢复结构”处理；
-            # 不要在这里吞掉其它异常。
-            return {"tables": [], "formulas": [], "figures": []}
         except Exception as exc:
             # 其它异常必须显式变成 PDF 抽取失败，交给 run_extraction 标成
             # blocked，而不是返回空结构让上游误以为论文没有表格/公式。
