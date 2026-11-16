@@ -104,13 +104,26 @@ function remoteIdentity(repo, name) {
 }
 function verifyPublication(repo, observed, manifestRecord, receiptRecord) {
     const m = manifestRecord.value, r = receiptRecord.value, date = observed.date;
-    if (!sourceBoundGeneration(m) || !strictReceipt(r) || [m, r].some(v => v.date !== date || v.publicationScope)
-        || r.strictReview !== true || r.hugoGate !== 'hugo' || r.baseHead !== m.baseHead
-        || r.generationManifestSha256 !== manifestRecord.sha256 || !SHA.test(r.reviewProtocolFingerprint || '')
-        || !matchesSnapshotReceipt(m, r)
-        || !OID.test(r.publicationCommit || '') || r.remoteVerifiedOid !== r.publicationCommit
-        || r.remoteName !== 'origin' || !r.remoteVerifiedAt
-        || r.remoteIdentitySha256 !== remoteIdentity(repo, 'origin')) fail('原生成/审查/远端发布身份不一致');
+    // 逐项检查而不是一串 ||：出错时能直接看出是哪一条不满足，不必再猜。
+    const checks = [
+        ['来源绑定生成', sourceBoundGeneration(m)],
+        ['严格审查凭证', strictReceipt(r)],
+        ['日期一致', m.date === date && r.date === date],
+        ['无发布范围声明', !m.publicationScope && !r.publicationScope],
+        ['严格审查标记', r.strictReview === true],
+        ['Hugo 门禁', r.hugoGate === 'hugo'],
+        ['基线提交一致', r.baseHead === m.baseHead],
+        ['生成清单 SHA 一致', r.generationManifestSha256 === manifestRecord.sha256],
+        ['审查协议指纹格式', SHA.test(r.reviewProtocolFingerprint || '')],
+        ['快照凭证绑定', matchesSnapshotReceipt(m, r)],
+        ['发布提交格式', OID.test(r.publicationCommit || '')],
+        ['远端 OID 复核', r.remoteVerifiedOid === r.publicationCommit],
+        ['远端名', typeof r.remoteName === 'string' && r.remoteName.trim().length > 0],
+        ['远端复核时间', Boolean(r.remoteVerifiedAt)],
+        ['远端身份', r.remoteIdentitySha256 === remoteIdentity(repo, r.remoteName)]
+    ];
+    const failed = checks.find(([, ok]) => !ok);
+    if (failed) fail(`原生成/审查/远端发布身份不一致（${failed[0]}）`);
     const bindings = { generationInputFingerprint: 'inputFingerprint', publishedPapersFingerprint: 'publishedPapersFingerprint',
         generationInputSourceReference: 'inputSourceReference', publicationMode: 'publicationMode',
         llmApiProductionFingerprint: 'llmApiProductionFingerprint', manualV6ProductionFingerprint: 'manualV6ProductionFingerprint' };
@@ -231,6 +244,20 @@ function buildContinuity(state, header = codec.recordHeader(CONTINUITY, CONTINUI
     return { ...require('./daily-fetch-boundary').deriveContinuity(prior, m.sourceCheckpointDate, header),
         sourceCheckpointDate: m.sourceCheckpointDate, recovery: reference };
 }
+// 跨零点补跑时，抓取时刻（until）落在批次日期次日凌晨；恢复清单按批次日期登记，
+// 因此除同日外还要接受「批次日期次日 + 北京时间 0–8 点」这一段宽限。
+function withinBoundaryDateGrace(until, batchDate) {
+    const untilDate = new Date(until).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+    if (untilDate === batchDate) return true;
+    const next = new Date(`${batchDate}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    if (untilDate !== next.toISOString().slice(0, 10)) return false;
+    const hour = Number(new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Shanghai', hour: '2-digit', hourCycle: 'h23'
+    }).format(new Date(until)));
+    return hour < 8;
+}
+
 function verifyBoundary(boundary) {
     const boundaryHeader = readHeader(boundary, BOUNDARY);
     if (!keys(boundary, [...Object.keys(boundaryHeader), 'lastDigestDate', 'since', 'until', 'continuity', 'provenance', 'identitySha256'])
@@ -245,7 +272,7 @@ function verifyBoundary(boundary) {
     if (!keys(c, [...Object.keys(continuityHeader), 'required', 'originalSince', 'archiveCheckpointSha256', 'witnesses', 'overlapCutoffDate',
         'sourceCheckpointDate', 'recovery']) || Boolean(continuityHeader.schemaFingerprint) !== Boolean(boundaryHeader.schemaFingerprint)) fail('独立连续性合同非法');
     const state = replay(c.recovery), m = state.manifest;
-    if (boundary.lastDigestDate !== m.latestDate || dateOf(boundary.until) !== m.date
+    if (boundary.lastDigestDate !== m.latestDate || !withinBoundaryDateGrace(boundary.until, m.date)
         || c.sourceCheckpointDate !== m.sourceCheckpointDate || !equal(c, buildContinuity(state, continuityHeader))
         || boundary.since !== require('./daily-fetch-boundary').overlapStart(c)
         || !equal(boundary.provenance, { blogHead: m.blogHead, indexPath: m.latest.indexPath,
@@ -260,7 +287,7 @@ function verifyBoundary(boundary) {
 function resolveBoundary({ blogRepo, dataRoot, until, manifestPath, latest, replayBoundary = null }) {
     const reference = referenceFor(manifestPath), state = replay(reference), m = state.manifest;
     if (path.resolve(blogRepo) !== m.blogRepo || path.resolve(dataRoot) !== m.dataRoot || !equal(latest, m.latest)
-        || dateOf(until) !== m.date) fail('恢复清单不属于当前实际远端、目录或目标日期');
+        || !withinBoundaryDateGrace(until, m.date)) fail('恢复清单不属于当前实际远端、目录或目标日期');
     const header = replayBoundary ? readHeader(replayBoundary, BOUNDARY) : codec.recordHeader(BOUNDARY, BOUNDARY);
     const c = buildContinuity(state, replayBoundary?.continuity ? readHeader(replayBoundary.continuity, CONTINUITY) : undefined);
     const body = { ...header,
