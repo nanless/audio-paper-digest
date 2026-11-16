@@ -31,8 +31,12 @@ function swiftSuiteNames() {
 }
 
 function suiteLoop() {
+    // 2026-11-16 起套件清单写成数组变量（便于覆盖预检复用同一份名单），
+    // 循环变成 `for suite in "${swift_suites[@]}"`。两种写法都要支持。
+    const arrayMatch = /swift_suites=\(([\s\S]*?)\)/.exec(script);
+    if (arrayMatch) return arrayMatch[1].trim().split(/\s+/).filter(Boolean);
     const match = /for suite in ([\s\S]*?); do/.exec(script);
-    assert.ok(match, 'apps/macos/test.sh 缺少 `for suite in ...; do` 套件循环');
+    assert.ok(match, 'apps/macos/test.sh 缺少套件清单（swift_suites 数组或 for 循环）');
     return match[1].trim().split(/\s+/).filter(Boolean);
 }
 
