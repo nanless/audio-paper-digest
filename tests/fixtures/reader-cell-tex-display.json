@@ -452,6 +452,18 @@
     {
       "input": "10{}^{\\text{2}}",
       "expected": "10{}^{\\text{2}}"
+    },
+    {
+      "input": "≈250⁠\\approx 250",
+      "expected": "≈250"
+    },
+    {
+      "input": "Δ⁠SI\\Delta_{\\mathrm{SI}}",
+      "expected": "Δ⁠SI"
+    },
+    {
+      "input": "0.93⁠ dB",
+      "expected": "0.93⁠ dB"
     }
   ]
 }

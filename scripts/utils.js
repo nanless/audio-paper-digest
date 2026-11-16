@@ -643,8 +643,13 @@ function reasoningEffortsFor(model) {
 function normalizeReasoningEffort(value, model) {
     const allowed = model === undefined ? REASONING_EFFORTS : reasoningEffortsFor(model);
     const raw = String(value || '').trim().toLowerCase();
-    const effort = raw === 'max' && allowed.includes('xhigh') && !allowed.includes('max')
-        ? 'xhigh' : raw;
+    // 文档长期把 max / highest / maximum 描述成「最高档的别名」。对只到 xhigh 的模型
+    // （muse-spark-*）三者都映射到 xhigh；deepseek 自身就支持 max，写别名也落到 max。
+    // 2026-11-16 之前只有 max 会被映射，highest/maximum 静默变成空串、整段 reasoning 不发送。
+    const alias = ['max', 'highest', 'maximum'].includes(raw)
+        ? (allowed.includes('max') ? 'max' : allowed.includes('xhigh') ? 'xhigh' : raw)
+        : raw;
+    const effort = alias;
     return allowed.includes(effort) ? effort : '';
 }
 

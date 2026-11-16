@@ -92,7 +92,8 @@ const SCHEMA = Object.freeze([
     { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
     // Responses 推理强度；max/highest/maximum 视作 xhigh（网关支持的最高档）。
     // 取值按模型分表：muse-spark-* 最高 xhigh，deepseek-v4.1-flash 只有 low/high/max。
-    // 这里登记并集，具体模型是否支持由 normalizeReasoningEffortForModel 与配置检查拦截。
+    // 这里登记并集；max/highest/maximum 是「最高档」的别名，运行时由 normalizeReasoningEffort
+    // 按模型落到 xhigh 或 max，配置检查用同一规则归一化后再比对。
     { name: 'PD_OPENAI_RESPONSES_REASONING_EFFORT', required: false, type: 'string',
         allowed: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'highest', 'maximum'] },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },

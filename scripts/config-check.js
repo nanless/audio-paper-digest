@@ -69,7 +69,11 @@ function main(argv = process.argv.slice(2)) {
             return acc;
         }, {});
         const ladder = ladders[configuredModel];
-        if (Array.isArray(ladder) && ladder.length > 0 && !ladder.includes(effort)) {
+        // 先按运行时的同一规则归一化：max / highest / maximum 会落到该模型的最高档，
+        // 不能因为写的是别名就判错（文档明确把三者写成别名）。
+        const { normalizeReasoningEffort } = require('./utils');
+        const normalized = normalizeReasoningEffort(effort, configuredModel) || effort;
+        if (Array.isArray(ladder) && ladder.length > 0 && !ladder.includes(normalized)) {
             effortItem.ok = 'fail';
             effortItem.detail = `模型 ${configuredModel} 支持的推理档位是 ${ladder.join('/')}，当前写的是 ${effort}`;
         }

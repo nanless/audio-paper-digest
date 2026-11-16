@@ -229,9 +229,9 @@ function resolveApiReaderRepairRetryMaxTokens(
         throw new Error('Reader full output token budget must be a positive safe integer');
     }
     const base = resolveApiReaderBaseRepairMaxTokens(full, baseRepairMaxTokens);
-    // 局部补丁被截断后可以重试，但最多用正常 Reader 预算 48000 token 的三分之一，
-    // 并且不超过通用的 16000 token 修复上限。普通补丁身份仍是 8000，已有的付费
-    // 候选项可以顺着实现 SHA 那条路迁移过来。
+    // 局部补丁被截断后可以重试：上限取「正常 Reader 正文预算的三分之一」与
+    // 「本次基础补丁预算」的较大者，再被正文预算与 128000 夹住（默认 128000/96000
+    // 下结果就是 96000）。早期注释里的 48000/16000/8000 是上一套预算，已不适用。
     const boundedRetry = Math.min(128000, Math.max(base, Math.floor(full / 3)));
     return Math.min(full, boundedRetry);
 }

@@ -135,7 +135,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | 局部修复输出 | 96000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
 | API Reader 输出 | 128000 tokens | `PD_API_READER_MAX_TOKENS` |
-| Reader 局部补丁输出 | 基础值取 min(正文预算, 配置补丁预算)，默认 96000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
+| Reader 局部补丁输出 | 基础值取 min(正文预算, 配置补丁预算)，默认 96000 tokens；与主分析局部修复是两个独立配置项（当前数值相同） | `PD_API_READER_REPAIR_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
