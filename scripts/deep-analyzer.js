@@ -14779,12 +14779,22 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
             throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
         lastError.attempts = maxRetries;
-        if (['network', 'request', 'api_error', 'response_parse', 'response_terminal',
-            'stream_terminal', 'http_transient', 'state_contention'].includes(lastError.category)) {
-            // The current logical request has already exhausted its transport
-            // retries. A service outage must not restart for every next paper.
-            lastError.scope = 'run';
-            lastError.retryable = false;
+        const transportish = ['network', 'request', 'api_error', 'response_parse', 'response_terminal',
+            'stream_terminal', 'http_transient', 'state_contention'].includes(lastError.category);
+        if (transportish) {
+            // 区分「服务整体不可用」与「这一条长请求被对端掐断」：
+            // 单篇连接被重置只影响这一篇，归 run 级会把整批在途论文一起 abort；
+            // 但短时间内多篇同时出现传输失败，才按服务不可用停止新派发。
+            recentTransportFailures.push(Date.now());
+            const cutoff = Date.now() - 120000;
+            while (recentTransportFailures.length && recentTransportFailures[0] < cutoff) recentTransportFailures.shift();
+            if (recentTransportFailures.length >= 8) {
+                lastError.scope = 'run';
+                lastError.retryable = false;
+            } else {
+                lastError.scope = 'paper';
+                lastError.retryable = true;
+            }
         }
         throw lastError;
     } finally {
@@ -14807,6 +14817,9 @@ function createOverallTimeoutError(
     return error;
 }
 
+
+// 近两分钟内的传输失败时间戳，用于区分单篇抖动与服务整体不可用。
+const recentTransportFailures = [];
 
 function getActiveRemainingTimeoutMs(totalMs, elapsedMs) {
     const remaining = Math.floor(totalMs - elapsedMs);

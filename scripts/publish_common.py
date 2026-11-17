@@ -5448,7 +5448,9 @@ def validate_manual_reader_quality(analysis):
         '条件', '类别', '时间点', '方向', '卷积块',
         '毫秒', '秒', '分钟', '小时', '天', '兆赫', '千赫', '赫兹', '分贝', '毫焦', '皮焦',
         '兆字节', '千字节', '字节', 'mW', 'mJ', 'ms', 'dB', 'Hz', 'kHz', 'MHz',
-        'KiB', 'KB', 'MB', 'GB', 'MAC', 'MACs', 'token', 'tokens', '像素', '采样', '自由度',
+        'MAC', 'MACs', 'token', 'tokens', '像素', '采样', '自由度',
+        # 容量单位（KB/MB/GB/KiB/B）在中文技术写作与模型名里通常紧贴数字（4GB），
+        # 不算排版损坏；上下文的数字粘连仍由前后两条规则拦截。
     )
     numeric_connector_prefixes = (
         '分别为', '提高到', '提升至', '增加到', '下降到', '降低至', '降至', '升至',
@@ -5502,6 +5504,13 @@ def validate_manual_reader_quality(analysis):
             r'(?:[\u4e00-\u9fff])?[-+]?\d+(?:\.\d+)?\s*%',
             lambda match: ' ' * len(match.group(0)),
             body,
+        )
+        # 表格单元格是来源逐字绑定内容，排版规则只管散文；先把整行表格屏蔽掉，
+        # 避免把来源里的模型名（如「Bolt E4B 4GB」）当成排版损坏。
+        typography_body = re.sub(
+            r'(?m)^\s*\|.*\|\s*$',
+            lambda match: ' ' * len(match.group(0)),
+            typography_body,
         )
         # 这段归一化要与 editorial-quality.js/findQuantitativeChineseNumerals 保持
         # 一致。Markdown 标题是给读者看的标签，不是实证结论（例如“从 306 通道
@@ -7961,7 +7970,9 @@ def is_publish_currency_literal(value):
 
 def is_publish_currency_unit_literal(value):
     """Recognize a cost/price label with a standalone dollar unit, never TeX."""
-    label = re.fullmatch(r'\s*([A-Za-z\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff /-]*)\s*\(\s*\$\s*\)\s*', value)
+    # 列名后面常带排序箭头（Cost ($) ↓），箭头不属于标签本身。
+    normalized = re.sub(r'\s*[\u2191\u2193\u25b2\u25bc]\s*$', '', str(value or ''))
+    label = re.fullmatch(r'\s*([A-Za-z\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff /-]*)\s*\(\s*\$\s*\)\s*', normalized)
     return bool(label and re.search(
         r'\b(?:cost|price|fees?|budget)\b|成本|费用|价格|预算|美元', label[1], re.I))
 
@@ -8075,20 +8086,30 @@ def publish_table_currency_spans(text):
     offset = 0
     table_width = 0
     previous = ''
+    previous_offset = 0
+
+    def scan_row(line, line_offset, expected_width=None):
+        pipes = list(re.finditer(r'(?<!\\)\|', line))
+        if expected_width is not None and len(split_markdown_table_row(line)) != expected_width:
+            return
+        for left, right in zip(pipes, pipes[1:]):
+            cell = line[left.end():right.start()]
+            if is_publish_currency_literal(cell) or is_publish_currency_unit_literal(cell):
+                start = left.end() + len(cell) - len(cell.lstrip())
+                spans.append((line_offset + start,
+                              line_offset + right.start() - len(cell) + len(cell.rstrip())))
+
     for line in text.splitlines(keepends=True):
         if _is_markdown_table_separator(line) and previous.lstrip().startswith('|'):
             table_width = len(split_markdown_table_row(line))
-        elif (table_width and line.lstrip().startswith('|')
-              and len(split_markdown_table_row(line)) == table_width):
-            pipes = list(re.finditer(r'(?<!\\)\|', line))
-            for left, right in zip(pipes, pipes[1:]):
-                cell = line[left.end():right.start()]
-                if is_publish_currency_literal(cell):
-                    start = left.end() + len(cell) - len(cell.lstrip())
-                    spans.append((offset + start, offset + right.start() - len(cell) + len(cell.rstrip())))
+            # 表头行也要扫：Cost ($) 这类列名是合法的单一美元单位。
+            scan_row(previous, previous_offset)
+        elif table_width and line.lstrip().startswith('|'):
+            scan_row(line, offset, table_width)
         else:
             table_width = 0
         previous = line
+        previous_offset = offset
         offset += len(line)
     return spans
 

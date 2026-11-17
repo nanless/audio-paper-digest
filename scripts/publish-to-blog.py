@@ -7236,9 +7236,20 @@ def _collapse_mathjax_double_write(text):
     """
     if not isinstance(text, str) or not text:
         return text
+    # Markdown 链接目标里也可能出现「-2-2」这种片段（图片文件名 figure-2-2ae…），
+    # 它是路径不是公式；先占位保护，规则只作用于正文。
+    protected = []
+
+    def mask(match):
+        protected.append(match.group(0))
+        return f'\x00PDURL{len(protected) - 1}\x00'
+
+    masked = re.sub(r'\]\([^)\s]+\)', mask, text)
     for pattern, replacement in _MATHJAX_DOUBLE_WRITE_RULES:
-        text = pattern.sub(replacement, text)
-    return text
+        masked = pattern.sub(replacement, masked)
+    for index, original in enumerate(protected):
+        masked = masked.replace(f'\x00PDURL{index}\x00', original)
+    return masked
 
 
 def _project_source_quoted_codec_display(article, paper):
@@ -7776,6 +7787,16 @@ def _project_reader_cell_tex_display(value):
     output = _READER_SYMBOL_COMMAND_COPY.sub(_fold_symbol_command, output)
     # 渲染侧可能已经先把命令换成符号，留下两个相同关系符：`≈≈`。
     output = _READER_SYMBOL_RUN.sub('\\1', output)
+    # 「标签=数值」整体重复（r¯=0.643r̄=0.643）：可见副本与 TeX 副本各写一遍。
+    # 只在含 = 的单元格里做，并先把长音符两种写法统一，避免影响裸 \\overline 规则。
+    if '=' in output:
+        # 上划线可能带下标：\overline{R_{\sigma}} → Rσ¯，先投影再折叠重复。
+        output = re.sub(r'\\overline\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}',
+                        lambda m: _reader_tex_plain(m.group(1)) + '\u0304', output)
+        output = output.replace('\u00af', '\u0304')
+        output = re.sub(r'([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])', r'\1', output)
+    # 变量+下标整体重复（T1T_{1} → T1T1 → T1）：可见副本与 TeX 副本各一遍。
+    output = re.sub(r'([A-Za-z]+)(\d+)\1\2(?![A-Za-z0-9])', r'\1\2', output)
     return output
 
 

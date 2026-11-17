@@ -315,6 +315,17 @@ function projectReaderCellTexDisplay(value) {
     // 同一符号连写没有实际语义，按一个处理，保证与原始 TeX 副本折后一致。
     output = output.replace(/([≥≤≈≠×·∼])\1/g, '$1');
 
+    // 「标签=数值」整体重复（r¯=0.643r̄=0.643）：可见副本与 TeX 副本各写一遍。
+    // 只在含 = 的单元格里做，并先把长音符两种写法统一，避免影响裸 \overline 规则。
+    if (output.includes('=')) {
+        // 上划线可能带下标：\overline{R_{\sigma}} → Rσ̄，先投影再折叠重复。
+        output = output.replace(/\\overline\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g,
+            (whole, inner) => `${readerTexPlain(inner)}\u0304`);
+        output = output.replace(/\u00af/g, '\u0304');
+        output = output.replace(/([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])/g, '$1');
+    }
+    // 变量+下标整体重复（T1T_{1} → T1T1 → T1）：可见副本与 TeX 副本各一遍。
+    output = output.replace(/([A-Za-z]+)(\d+)\1\2(?![A-Za-z0-9])/g, '$1$2');
     return output;
 }
 
