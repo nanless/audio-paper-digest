@@ -85,6 +85,7 @@ const SCHEMA = Object.freeze([
         hint: '单页审查分块字符数，默认 8000；网关约 127 秒硬切断长请求，块越小越稳' },
     { name: 'PD_BLOG_REVIEW_MAX_TOKENS', required: false, type: 'int', min: 1000, max: 32000,
         hint: '单页审查输出上限，默认 4000；推理型模型需更大预算' },
+
     { name: 'PD_FILTER_MAX_TOKENS', required: false, type: 'int', min: 1000, max: 64000,
         hint: '筛选单次响应预算；推理 token 与可见输出共用它，推理档高时需要抬高' },
     { name: 'PD_BLOG_REVIEW_TIMEOUT', required: false, type: 'int', min: 30, max: 600,

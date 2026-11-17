@@ -7500,6 +7500,20 @@ def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
     # 这里只合并同一行标题文字和冒号完全相同的重复部分，不跨段落；
     # 仅标题定界符内外的横向空白属于排版，后面的解释正文保持不变。
     from paper_reader_presentation import normalize_repeated_bold_prefixes
+    # 正文里 LaTeXML 会把同一数值写两遍（0.9520.952、65.8%65.8\\%）。
+    # 放在最后折叠，避免提前改动文本影响前面已有的分式/占比规则；
+    # `{,}` 形态只在整段确实重复时改写，不重复的负数例保持原样。
+    if '{,}' in value or '\\' in value or re.search(r'(\d+\.\d+)\1', value):
+        value = re.sub(r'(\d+(?:\.\d+)?)%\1\\?%', r'\1%', value)
+        # 只折叠无歧义的形态：一位整数位、至少三位小数整体重复（0.9520.952）。
+        # 19.119.1 这类可以拆成 19.11+9.1，不能猜。
+        value = re.sub(r'(?<![\d.])(\d\.\d{3,})\1(?![\d.])', r'\1', value)
+
+        def fold_comma_copy(match):
+            whole, first, head, tail = match.group(0), match.group(1), match.group(2), match.group(3)
+            return first if first == head + ',' + tail else whole
+
+        value = re.sub(r'(\d{1,3}(?:,\d{3})+)(\d)\{,\}(\d{3})(?![\d,])', fold_comma_copy, value)
     return normalize_repeated_bold_prefixes(value)
 
 
@@ -7680,8 +7694,16 @@ def _fold_reader_duplicate_digits(match):
     return match.group(1)
 
 
+_READER_IDENTIFIER_SYMBOL_COPY = re.compile(
+    r'([A-Za-z0-9])([≥≤≈≠±×·∼→←↑↓↔])\1\\([A-Za-z]+)')
+
+_READER_SYMBOL_COMMAND_COPY = re.compile(r'([≥≤≈≠±×·∼])\\([A-Za-z]+)')
+_READER_SYMBOL_RUN = re.compile(r'([≥≤≈≠×·∼])\1')
+
 def _project_reader_cell_tex_display(value):
     output = str(value or '')
+    # 页面渲染会把单元格里的 < > 转成 HTML 实体，比较前先还原成字面尖括号。
+    output = output.replace('&lt;', '<').replace('&gt;', '>')
     if '\\anon[' in output:
         output = _project_reader_anon_macro(output)
     # 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
@@ -7740,6 +7762,20 @@ def _project_reader_cell_tex_display(value):
     stripped_cell = output.strip()
     if len(stripped_cell) <= 40 and '\\' not in stripped_cell and re.search(r'[_^]\{', stripped_cell):
         output = _reader_tex_plain(stripped_cell)
+    # LaTeXML 在正文型单元格里会把「标识符 + 符号」整体重复一遍，例如
+    # `r≥r\geq`；只在命令与可见符号确实是同一符号时合并，未知命令保持原样。
+    # 与 JS reader-source-display.js 的同名规则保持同步。
+    def _fold_symbol_copy(match):
+        head, symbol, command = match.group(1), match.group(2), match.group(3)
+        return f'{head}{symbol}' if _READER_TEX_SYMBOLS.get(command) == symbol else match.group(0)
+    output = _READER_IDENTIFIER_SYMBOL_COPY.sub(_fold_symbol_copy, output)
+    # 同一形态还可能是「符号 + 它自己的命令」，没有重复标识符：`≈\approx`。
+    def _fold_symbol_command(match):
+        symbol, command = match.group(1), match.group(2)
+        return symbol if _READER_TEX_SYMBOLS.get(command) == symbol else match.group(0)
+    output = _READER_SYMBOL_COMMAND_COPY.sub(_fold_symbol_command, output)
+    # 渲染侧可能已经先把命令换成符号，留下两个相同关系符：`≈≈`。
+    output = _READER_SYMBOL_RUN.sub('\\1', output)
     return output
 
 

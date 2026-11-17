@@ -192,7 +192,13 @@ function getFetchSourcesSha256(checkpoint) {
 }
 
 function pinPapersToBatch(papers, batchStartedAt) {
-    for (const paper of papers || []) paper.fetchedAt = batchStartedAt;
+    // 批次日期与抓取时刻必须分开记：跨零点补跑时 fetchedAt 已经是次日，
+    // 发布端若按 fetchedAt 推批次日期就会把整批判成「没有本批论文」。
+    const batchDate = String(batchStartedAt).slice(0, 10);
+    for (const paper of papers || []) {
+        paper.fetchedAt = batchStartedAt;
+        paper.fetchBatchDate = batchDate;
+    }
     return papers;
 }
 

@@ -103,7 +103,12 @@ function normalizeExplicitReaderSymbolProjection(value) {
                 || visible !== (command === 'uparrow' ? '↑' : '↓')) return whole;
             return visible;
         })
-        .replace(/([+/])\\;\1\\;/g, '$1');
+        .replace(/([+/])\\;\1\\;/g, '$1')
+        // LaTeXML 也会把「标识符 + 符号」整体重复一遍：`r≥r\geq`。
+        // 只在命令与可见符号确实是同一符号时折叠，未知命令保持原样交给后续检查。
+        .replace(/([A-Za-z0-9])([≥≤≈≠±×·∼→←↑↓↔])\1\\([A-Za-z]+)/g,
+            (whole, head, symbol, command) => (
+                READER_TEX_SYMBOLS[command] === symbol ? `${head}${symbol}` : whole));
 }
 
 // 表格单元格里 LaTeXML 会把同一个值输出两遍：一次可见副本、一次同义 TeX 注解。
@@ -246,6 +251,8 @@ function projectReaderAnonMacro(value) {
 
 function projectReaderCellTexDisplay(value) {
     let output = String(value ?? '');
+    // 页面渲染会把单元格里的 < > 转成 HTML 实体，比较前先还原成字面尖括号。
+    output = output.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     // 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = output.replace(/([+−])(?:[+−-])(?=[\d.])/g, '$1');
@@ -297,6 +304,17 @@ function projectReaderCellTexDisplay(value) {
     if (strippedCell.length <= 40 && !strippedCell.includes('\\') && /[_^]\{/.test(strippedCell)) {
         output = readerTexPlain(strippedCell);
     }
+    // LaTeXML 在正文型单元格里会把「标识符 + 符号」整体重复一遍，例如
+    // `r≥r\geq`；只在命令与可见符号确实是同一符号时合并，未知命令保持原样。
+    output = output.replace(/([A-Za-z0-9])([≥≤≈≠±×·∼→←↑↓↔])\1\\([A-Za-z]+)/g,
+        (whole, head, symbol, command) => (READER_TEX_SYMBOLS[command] === symbol ? `${head}${symbol}` : whole));
+    // 同一形态还可能是「符号 + 它自己的命令」，没有重复标识符：`≈\approx`。
+    output = output.replace(/([≥≤≈≠±×·∼])\\([A-Za-z]+)/g,
+        (whole, symbol, command) => (READER_TEX_SYMBOLS[command] === symbol ? symbol : whole));
+    // 渲染侧可能已经先把命令换成符号，留下两个相同关系符：`≈≈`。
+    // 同一符号连写没有实际语义，按一个处理，保证与原始 TeX 副本折后一致。
+    output = output.replace(/([≥≤≈≠×·∼])\1/g, '$1');
+
     return output;
 }
 

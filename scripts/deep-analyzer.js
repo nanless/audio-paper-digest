@@ -8868,6 +8868,13 @@ function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
 
 function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options = {}) {
     if (!String(reviewFeedback || '').trim()) return null;
+    // 评分刷新会先把新评分存成检查点，并在当期对象上写入「原反馈Reader尚未完成」。
+    // 这个标记说的是新评分状态，定向修订要核验的仍是检查点里保存的父稿；
+    // 不切换就会把「刚开始刷新」误判成「没有完整读者文章」。
+    if (paper?.dailyScoringRefreshCheckpoint?.parentPaper
+        && paper.latestAnalysisAttemptError === '新评分已保存，原反馈Reader尚未正常完成') {
+        paper = { ...paper.dailyScoringRefreshCheckpoint.parentPaper };
+    }
     // 复用生产环境的字节和溯源校验器，不要相信一个 complete 标志，也不要把新传进来的
     // 草稿当成已有的 Reader 接受。
     const { hasValidIntegratedApiReaderRecords } = require('./analysis-engine.js');
