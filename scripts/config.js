@@ -475,7 +475,9 @@ function applyEnvOverrides() {
     // 推理模型（muse xhigh）的推理 token 与可见输出共用 max_output_tokens，
     // 1000/1200 的筛选预算对长列表不够；这里允许按环境抬高，便于不缩小批次就跑通。
     const filterMaxTokens = readPositiveInt('PD_FILTER_MAX_TOKENS');
-    if (filterMaxTokens !== undefined) {
+    // readPositiveInt 未设置时返回 null；不能拿 undefined 判空，否则干净检出会
+    // 把 maxTokens/conferenceMaxTokens 置成 null，整条筛选链在发请求前就报错。
+    if (filterMaxTokens) {
         FILTER_CONFIG.maxTokens = filterMaxTokens;
         FILTER_CONFIG.conferenceMaxTokens = filterMaxTokens;
     }

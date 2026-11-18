@@ -14745,9 +14745,10 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const timeoutMs = getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs());
-                return await _callModelOnce(safeMessages, maxTokens, {
+                const result = await _callModelOnce(safeMessages, maxTokens, {
                     ...cfg, usageContext: { ...cfg.usageContext, transportAttempt: attempt }
                 }, budget, apiType, timeoutMs);
+                return result;
             } catch (err) {
                 const classified = classifyModelRequestError(err, cfg);
                 lastError = classified;
@@ -14779,22 +14780,11 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
             throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
         lastError.attempts = maxRetries;
-        const transportish = ['network', 'request', 'api_error', 'response_parse', 'response_terminal',
-            'stream_terminal', 'http_transient', 'state_contention'].includes(lastError.category);
-        if (transportish) {
-            // 区分「服务整体不可用」与「这一条长请求被对端掐断」：
-            // 单篇连接被重置只影响这一篇，归 run 级会把整批在途论文一起 abort；
-            // 但短时间内多篇同时出现传输失败，才按服务不可用停止新派发。
-            recentTransportFailures.push(Date.now());
-            const cutoff = Date.now() - 120000;
-            while (recentTransportFailures.length && recentTransportFailures[0] < cutoff) recentTransportFailures.shift();
-            if (recentTransportFailures.length >= 8) {
-                lastError.scope = 'run';
-                lastError.retryable = false;
-            } else {
-                lastError.scope = 'paper';
-                lastError.retryable = true;
-            }
+        if (['network', 'request', 'api_error', 'response_parse', 'response_terminal',
+            'stream_terminal', 'http_transient', 'state_contention'].includes(lastError.category)) {
+            // 当前逻辑请求的传输重试已耗尽：服务级故障不能对每篇论文重新开始。
+            lastError.scope = 'run';
+            lastError.retryable = false;
         }
         throw lastError;
     } finally {
@@ -14819,7 +14809,6 @@ function createOverallTimeoutError(
 
 
 // 近两分钟内的传输失败时间戳，用于区分单篇抖动与服务整体不可用。
-const recentTransportFailures = [];
 
 function getActiveRemainingTimeoutMs(totalMs, elapsedMs) {
     const remaining = Math.floor(totalMs - elapsedMs);

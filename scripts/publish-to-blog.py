@@ -4683,8 +4683,9 @@ def plain_title_for_publish(title):
     title = re.sub(r'(?<![\w$])\\?\$\d+(?:,\d{3})*(?:\.\d+)?(?![\w.$])', protect_currency, title)
     title = re.sub(r'\$?\s*\^\s*2\s*\$?', '²', title)
     title = re.sub(r'\\underline\s*\{([^{}]+)\}', r'\1', title)
+    # 只替换「数值 ^ \circ」本身，不吞掉两侧空格（否则 “by 360^\circ and” 会粘成 “by360°and”）。
     title = re.sub(
-        r'\$?\s*(\d+(?:\.\d+)?)\s*\^\s*\\circ\s*\$?',
+        r'(\d+(?:\.\d+)?)\s*\^\s*\\circ',
         lambda match: f'{match.group(1)}°',
         title,
     )
@@ -4701,9 +4702,13 @@ def markdown_title_for_publish(title):
 
 
 def yaml_title_for_publish(title):
-    # Currency in an already-normalized title is metadata, not a math delimiter.
+    # 入参是 `plain_title_for_publish()` 的显示态：引号已经是 `\"`、反斜杠是单个。
+    # 先保护已有的 `\"`，否则 yaml_escape 会把反斜杠再翻一倍，标题渲染后出现多余反斜杠；
+    # 单个 LaTeX 反斜杠仍要在这一步补成 `\\`，否则 YAML 双引号会把它解释成转义字符。
     marker = '\x00TITLE_LITERAL_DOLLAR\x00'
-    return yaml_escape(str(title or '').replace('$', marker)).replace(marker, '$')
+    quote = '\x00TITLE_ESCAPED_QUOTE\x00'
+    text = str(title or '').replace('\\"', quote).replace('$', marker)
+    return yaml_escape(text).replace(marker, '$').replace(quote, '\\"')
 
 
 def compact_title_for_ranking(title, max_length=55):
@@ -7714,7 +7719,8 @@ _READER_SYMBOL_RUN = re.compile(r'([≥≤≈≠×·∼])\1')
 def _project_reader_cell_tex_display(value):
     output = str(value or '')
     # LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
-    output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+', r'\1', output)
+    output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+(?![\d.])', r'\1', output)
+    output = re.sub(r'\s*\(\s*\)', '', output)
     # 页面渲染会把单元格里的 < > 转成 HTML 实体，比较前先还原成字面尖括号。
     output = output.replace('&lt;', '<').replace('&gt;', '>')
     if '\\anon[' in output:
@@ -7731,7 +7737,7 @@ def _project_reader_cell_tex_display(value):
     # 四位年份 2020 与一位数 55/99 也不能折叠。
     output = re.sub(r'(?<![\d,.])(\d{2,})\1(?![\d,.])', _fold_reader_duplicate_digits, output)
     if '\\' not in output and not re.search(r'[_^]\{', output) \
-            and not re.search(r'(?<![\d,.])(\d{2,})\1(?![\d,.])', output.strip()):
+            and not re.search(r'([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])', output):
         return output
     output = re.sub(r'\\[,;:]', '', output)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
@@ -7789,15 +7795,18 @@ def _project_reader_cell_tex_display(value):
     output = _READER_SYMBOL_COMMAND_COPY.sub(_fold_symbol_command, output)
     # 渲染侧可能已经先把命令换成符号，留下两个相同关系符：`≈≈`。
     output = _READER_SYMBOL_RUN.sub('\\1', output)
-    # LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a。
-    output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+', r'\1', output)
     # 「标签=数值」整体重复（r¯=0.643r̄=0.643）：可见副本与 TeX 副本各写一遍。
     # 只在含 = 的单元格里做，并先把长音符两种写法统一，避免影响裸 \\overline 规则。
     if '=' in output:
-        # 上划线可能带下标：\overline{R_{\sigma}} → Rσ¯，先投影再折叠重复。
-        output = re.sub(r'\\overline\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}',
-                        lambda m: _reader_tex_plain(m.group(1)) + '\u0304', output)
+        # 上划线可能带下标：\overline{R_{\sigma}} → Rσ̄，先投影再折叠重复。
+        # 但只有正文里已经存在同一个可见副本时才投影；否则 \overline{ACC} 会被
+        # 改写成 ACC̄、\overline{1-\alpha} 会把长音符挂到最后一个字符上，静默改语义。
         output = output.replace('\u00af', '\u0304')
+        def project_overline(match):
+            visible = _reader_tex_plain(match.group(1)) + '\u0304'
+            return visible if visible in output else match.group(0)
+
+        output = re.sub(r'\\overline\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', project_overline, output)
         output = re.sub(r'([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])', r'\1', output)
     # 变量+下标整体重复（T1T_{1} → T1T1 → T1）：可见副本与 TeX 副本各一遍。
     output = re.sub(r'([A-Za-z]+)(\d+)\1\2(?![A-Za-z0-9])', r'\1\2', output)
@@ -11469,7 +11478,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
     reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_first else display_title)
     workbench_marker = _researcher_workbench_frontmatter(workbench_bundle)
     md = f"""---
-title: "{display_title}"
+title: "{yaml_title_for_publish(display_title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in tags])}]

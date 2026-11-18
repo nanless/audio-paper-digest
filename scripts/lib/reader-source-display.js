@@ -252,7 +252,8 @@ function projectReaderAnonMacro(value) {
 function projectReaderCellTexDisplay(value) {
     let output = String(value ?? '');
     // LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
-    output = output.replace(/(\S*?)\s*11footnotemark:\s*\d+/g, '$1');
+    output = output.replace(/(\S*?)\s*11footnotemark:\s*\d+(?![\d.])/g, '$1');
+    output = output.replace(/\s*\(\s*\)/g, '');
     // 页面渲染会把单元格里的 < > 转成 HTML 实体，比较前先还原成字面尖括号。
     output = output.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
@@ -268,7 +269,8 @@ function projectReaderCellTexDisplay(value) {
     // 四位年份 2020 与一位数 55/99 也不能折叠。
     output = output.replace(/(?<![\d,.])(\d{2,})\1(?![\d,.])/g,
         (whole) => (/^(?:19|20)\d{2}$/.test(whole) ? whole : whole.slice(0, whole.length / 2)));
-    if (!output.includes('\\') && !/[_^]\{/.test(output)) return output;
+    if (!output.includes('\\') && !/[_^]\{/.test(output)
+        && !/([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     output = output.replace(/([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}/gu,
@@ -321,9 +323,14 @@ function projectReaderCellTexDisplay(value) {
     // 只在含 = 的单元格里做，并先把长音符两种写法统一，避免影响裸 \overline 规则。
     if (output.includes('=')) {
         // 上划线可能带下标：\overline{R_{\sigma}} → Rσ̄，先投影再折叠重复。
-        output = output.replace(/\\overline\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g,
-            (whole, inner) => `${readerTexPlain(inner)}\u0304`);
         output = output.replace(/\u00af/g, '\u0304');
+        // 只有正文里已经存在同一个可见副本时才投影，避免把 \overline{ACC} 改写成
+        // ACC̄、把 \overline{1-\alpha} 的长音符挂到最后一个字符上。
+        output = output.replace(/\\overline\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g,
+            (whole, inner) => {
+                const visible = `${readerTexPlain(inner)}\u0304`;
+                return output.includes(visible) ? visible : whole;
+            });
         output = output.replace(/([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])/g, '$1');
     }
     // 变量+下标整体重复（T1T_{1} → T1T1 → T1）：可见副本与 TeX 副本各一遍。

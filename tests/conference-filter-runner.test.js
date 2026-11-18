@@ -1,5 +1,9 @@
 'use strict';
 
+// 固定筛选预算，避免本机 .env 的 PD_FILTER_MAX_TOKENS 让断言里的
+// 1000/4096 与策略指纹随环境漂移（CI 与干净检出按默认值跑）。
+process.env.PD_FILTER_MAX_TOKENS = '1000';
+
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -13,6 +17,9 @@ const evidenceApi = require('../scripts/lib/conference-filter-evidence.js');
 const ledger = require('../scripts/lib/conference-source-ledger.js');
 const runner = require('../scripts/conference-filter-run.js');
 const Config = require('../scripts/config.js');
+// 本机 .env 可能把筛选预算调高；这里固定成默认值，让断言与策略指纹不随环境漂移。
+Config.FILTER_CONFIG.maxTokens = 1000;
+Config.FILTER_CONFIG.conferenceMaxTokens = 1000;
 const paperIdentity = require('../scripts/lib/paper-identity.js');
 const { loadLegacyFilter } = require('./helpers/conference-filter-evidence-fixture.js');
 const utils = require('../scripts/utils.js');

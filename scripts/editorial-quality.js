@@ -131,7 +131,9 @@ const READER_SPACED_QUANTIFIERS = Object.freeze([
     '类别', '时间点', '方向', '卷积块',
     '毫秒', '秒', '分钟', '小时', '天', '兆赫', '千赫', '赫兹', '分贝', '毫焦', '皮焦',
     '兆字节', '千字节', '字节', 'mW', 'mJ', 'ms', 'dB', 'Hz', 'kHz', 'MHz',
-    'KiB', 'KB', 'MB', 'GB', 'MAC', 'MACs', 'token', 'tokens', '像素', '采样', '自由度'
+    // 容量单位（KB/MB/GB/KiB）紧贴数字是中文技术写作与模型名的常见写法，
+    // 不算排版损坏；数字与中文粘连仍由前后两条规则拦截（与 Python 侧一致）。
+    'MAC', 'MACs', 'token', 'tokens', '像素', '采样', '自由度'
 ]);
 const NUMERIC_CONNECTOR_PREFIXES = Object.freeze([
     '分别为', '提高到', '提升至', '增加到', '下降到', '降低至', '降至', '升至',

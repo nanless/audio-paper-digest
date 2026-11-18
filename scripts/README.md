@@ -500,6 +500,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 
 ### 环境、文件、日志与验证
 
+| `lib/cli-arguments.js` | Node 库：解析脚本的命令行参数白名单，未知或不完整的 `--flag` 直接报用法，避免参数拼错后静默退化。 |
 | 文件 | 类型与职责 |
 |---|---|
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |

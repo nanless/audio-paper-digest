@@ -4994,7 +4994,6 @@ def _validate_experiment_table_evidence_depth(
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|无显著(?:差异)?|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|净下降|反而[^。；\n]{0,10}(?:下降|变差|降低|退化)|低于(?:基线|对照|原方法|原方案)|'
-        r'(?:结果|表现|性能|得分|指标|系统|方法|模型)[^。；\n]{0,12}低于[^。；\n]{0,12}(?:系统|模型|方法|基线|对照)|'
         r'(?:未|没有|并未|不曾|未能)(?:带来|产生|有)?(?:改善|提升|改进|增益)|'
         r'未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|损失(?!函数|项|权重|率)|回退|'
         r'(?:例外|反例)(?![^。；\n]{0,80}(?:耗时|成本|时间|速度|内存|显存))'
@@ -5504,13 +5503,6 @@ def validate_manual_reader_quality(analysis):
             r'(?:[\u4e00-\u9fff])?[-+]?\d+(?:\.\d+)?\s*%',
             lambda match: ' ' * len(match.group(0)),
             body,
-        )
-        # 表格单元格是来源逐字绑定内容，排版规则只管散文；先把整行表格屏蔽掉，
-        # 避免把来源里的模型名（如「Bolt E4B 4GB」）当成排版损坏。
-        typography_body = re.sub(
-            r'(?m)^\s*\|.*\|\s*$',
-            lambda match: ' ' * len(match.group(0)),
-            typography_body,
         )
         # 这段归一化要与 editorial-quality.js/findQuantitativeChineseNumerals 保持
         # 一致。Markdown 标题是给读者看的标签，不是实证结论（例如“从 306 通道
@@ -8252,10 +8244,20 @@ def escape_html_like_tags(text):
     r"""转义论文中可能被 Hugo 解析为 HTML 的标记。"""
     if not text:
         return text
-    # 幂等：先把自己上次产出的实体还原成字面尖括号，再统一重新转义。
-    # 否则同一段正文在「渲染一次再 sanitize」的路径里会被转义两遍
-    # （`&lt;<` → `&lt;&lt;`），与保存稿比较时判成渲染结果不一致。
-    text = text.replace('&lt;', '<').replace('&gt;', '>')
+    # 幂等：只把自己上次产出的、且会被下方规则重新转义的实体还原成字面尖括号
+    # （含空白的迷你记号、形如 <EOT> 的控制记号）。比较用的 &lt;1 这类实体保持原样，
+    # 否则二次调用会把它变成裸 <，与保存稿比较时判成渲染结果不一致。
+    # 行内代码段里的实体不还原：那里本来就按字面显示，还原后会被代码段保护起来、
+    # 不再转义，二次调用就会丢实体。
+    def _decode_outside_code(segment):
+        # 只还原「含空白的迷你记号」（<1 2>、<a b c>）；&lt;details&gt;、&lt;EOT&gt;
+        # 这类词形记号保持实体，否则会把用户写的转义文本提升成真实 HTML 标签。
+        return re.sub(r'&lt;([^>\n]*\s[^>\n]*)&gt;', r'<\1>', segment)
+
+    text = ''.join(
+        part if part.startswith('`') and part.endswith('`') else _decode_outside_code(part)
+        for part in re.split(r'(`[^`\n]*`)', text)
+    )
     # 读者正文里常引用 ``<1 2>``、``<a b c>`` 这类迷你语言记号。它们不是标签，
     # 但 CommonMark 仍会交给 HTML 解析器；不匹配的记号或带属性的记号会破坏
     # 渲染出来的嵌套结构。只转义含空白的尖括号片段，普通 URL 和显式标签

@@ -191,13 +191,15 @@ function getFetchSourcesSha256(checkpoint) {
     });
 }
 
-function pinPapersToBatch(papers, batchStartedAt) {
+function pinPapersToBatch(papers, batchStartedAt, batchDate) {
     // 批次日期与抓取时刻必须分开记：跨零点补跑时 fetchedAt 已经是次日，
     // 发布端若按 fetchedAt 推批次日期就会把整批判成「没有本批论文」。
-    const batchDate = String(batchStartedAt).slice(0, 10);
+    // 批次日期必须由调用方给出真实 batchDate；拿抓取边界的瞬时日期会在
+    // 凌晨补跑时写成次日（那正是 fetchedAt 的日期），等于没修。
+    const pinnedDate = String(batchDate || '').trim() || String(batchStartedAt).slice(0, 10);
     for (const paper of papers || []) {
         paper.fetchedAt = batchStartedAt;
-        paper.fetchBatchDate = batchDate;
+        paper.fetchBatchDate = pinnedDate;
     }
     return papers;
 }
@@ -1427,7 +1429,7 @@ function verifyRefilterRawFromCheckpoint(raw, expected, checkpoint = loadFetchCh
         }
     }
     const reconstructed = pinPapersToBatch(mergeAndDeduplicate([...arxivById.values()],
-        structuredClone(checkpoint.huggingface.papers)), raw.timestamp)
+        structuredClone(checkpoint.huggingface.papers)), raw.timestamp, raw.batchDate)
         .filter(paper => !historical.has(normalizedId(paper)));
     const sorted = papers => [...papers].sort((left, right) => {
         const leftId = normalizedId(left); const rightId = normalizedId(right);
@@ -1624,7 +1626,9 @@ function validateFailedAnnouncementRound(checkpoint, raw, today, previous, finge
 const PREVIOUS_DAY_GRACE_END_HOUR = 8;
 
 function resolveBatchDateOverride({ requested, now = new Date(), allowPreviousDayDate = false } = {}) {
-    const currentDate = getBeijingDateString();
+    // 一律按传入的 now 推当前北京日期：用真实时钟会让补跑授权在测试和跨零点
+    // 复算时前后不一致（同一次调用里 now 与 currentDate 来自两个时间源）。
+    const currentDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(now);
     const previousDate = (() => {
         const shifted = new Date(now.getTime() - 24 * 60 * 60 * 1000);
         return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(shifted);
@@ -1949,7 +1953,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                             batchId, crypto.randomUUID(), category.id)
                     }
                 );
-                pinPapersToBatch(papers, batchStartedAt);
+                pinPapersToBatch(papers, batchStartedAt, batchDate);
                 categoryFetchHealth = papers._sourceHealth || null;
                 if (!hasCoveredFetchBoundary(categoryFetchHealth, fetchBoundary, false, papers, category.id, historicalDedupIds)) {
                     throw new Error('arXiv 抓取未证明覆盖上次日更至本批开始的完整时间范围');
@@ -2035,7 +2039,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             if (!hasCoveredFetchBoundary(hfPapers._sourceHealth, fetchBoundary, true)) {
                 throw new Error('HuggingFace 抓取未证明完整补更日期范围');
             }
-            pinPapersToBatch(hfPapers, batchStartedAt);
+            pinPapersToBatch(hfPapers, batchStartedAt, batchDate);
             sourceHealth.huggingface = {
                 ...(hfPapers._sourceHealth || {}),
                 ok: true,
@@ -2067,7 +2071,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         // ========== 第三步：合并去重 ==========
         console.log('\n🔄 第三步：合并去重（arxiv + HuggingFace）');
         allPapers = mergeAndDeduplicate(arxivPapers, hfPapers);
-        pinPapersToBatch(allPapers, batchStartedAt);
+        pinPapersToBatch(allPapers, batchStartedAt, batchDate);
         console.log(`合并后: ${allPapers.length} 篇`);
         sourceHealth = buildSourceHealth(sourceHealth, arxivPapers, hfPapers);
         const fatalSourceFailures = getFatalEmptyCandidateSourceFailures(sourceHealth);

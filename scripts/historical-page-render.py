@@ -216,7 +216,7 @@ def render_packet(packet):
         )
         summary = presentation['summary']
         frontmatter = [
-            '---', f'title: {json.dumps(title, ensure_ascii=False)}', f'date: {date}',
+            '---', f'title: "{publisher.yaml_title_for_publish(title)}"', f'date: {date}',
             'draft: false', f'tags: {json.dumps(tags, ensure_ascii=False)}',
             'categories: [论文速递]', 'paper_digest_pipeline_owned: true',
             'paper_digest_page_type: paper', f'paper_digest_direct_paper_id: {json.dumps(projected["directPaperId"], ensure_ascii=False)}',
