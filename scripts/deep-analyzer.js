@@ -15735,13 +15735,20 @@ async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
     require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
     const requestImpl = options.requestImpl || requestPinnedPublicHttps;
     const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
+    const detectProxyImpl = options.detectProxyImpl || resolveHttpConnectProxyUrl;
+    const proxyEnabled = options.proxyEnabled !== undefined
+        ? Boolean(options.proxyEnabled)
+        : isValidHttpConnectProxyUrl(detectProxyImpl());
     let currentUrl = String(rawUrl || '');
     const redirects = [];
     for (let count = 0; count <= 3; count++) {
         let parsed;
         try {
-            parsed = await validateUrlImpl(currentUrl);
+            parsed = await validateUrlImpl(currentUrl, { proxyEnabled });
         } catch (error) {
+            if (error?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(error)) {
+                throw error;
+            }
             if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|必须使用 HTTPS/i
                 .test(String(error?.message || ''))) throw error;
             return {
@@ -15767,9 +15774,14 @@ async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
                 method: 'GET',
                 responseBodyMode: 'headers_only',
                 timeoutMs: Math.min(15000, remainingMs)
+            }, {
+                validateUrlImpl,
+                detectProxyImpl: options.proxyEnabled === false ? () => null : detectProxyImpl
             });
         } catch (error) {
-            if (error?.code === 'PROXY_CONFIG_ERROR') throw error;
+            if (error?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(error)) {
+                throw error;
+            }
             return {
                 originalUrl: rawUrl, finalUrl: currentUrl, redirects,
                 status: null, availability: 'temporarily_unreachable', retryable: true,
@@ -15981,6 +15993,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                 verifiedByUrl.set(candidate.url, verified);
             }
         } catch (error) {
+            if (error?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(error)) {
+                throw error;
+            }
             if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|必须使用 HTTPS|资源重定向缺少目标地址，或超过允许的三次重定向|检查资源地址后，仍未取得最终访问结果/i
                 .test(String(error?.message || ''))) {
                 console.warn(`    [deep] 资源地址未通过安全检查，或未取得有效的重定向及访问结果，已跳过：${candidate.url}`);
@@ -16003,7 +16018,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                             ? inspected : null
                     );
                 } catch (error) {
-                    if (error?.code === 'PROXY_CONFIG_ERROR') throw error;
+                    if (error?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(error)) {
+                        throw error;
+                    }
                     console.warn(`    [deep] 本次未能检查仓库文档：${candidate.url}；原因：${error.message}`);
                     documentationByUrl.set(candidate.url, null);
                 }
@@ -16702,14 +16719,15 @@ async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {})
         throw new Error(`公网资源响应模式不受支持: ${responseBodyMode}`);
     }
     const validateUrlImpl = dependencies.validateUrlImpl || validatePublicHttpUrl;
-    const detectProxyImpl = dependencies.detectProxyImpl || detectHttpConnectProxyUrl;
+    const detectProxyImpl = dependencies.detectProxyImpl || resolveHttpConnectProxyUrl;
     const createAgentImpl = dependencies.createAgentImpl || createProxyAgent;
     const requestImpl = dependencies.requestImpl || https.request;
-    const parsedUrl = await validateUrlImpl(rawUrl);
+    const rawProxyUrl = detectProxyImpl();
+    const proxyUrl = isValidHttpConnectProxyUrl(rawProxyUrl) ? rawProxyUrl : null;
+    const parsedUrl = await validateUrlImpl(rawUrl, { proxyEnabled: Boolean(proxyUrl) });
     if (parsedUrl.protocol !== 'https:') {
         throw new Error(`任意公网资源只允许 HTTPS，收到: ${parsedUrl.protocol}`);
     }
-    const proxyUrl = detectProxyImpl();
     if (!proxyUrl) {
         const error = new Error('公网图片与 Demo 页面必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 代理');
         error.code = 'PROXY_CONFIG_ERROR';
@@ -16810,8 +16828,9 @@ async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {})
 
 async function fetchPublicImageResponse(imageUrl, maxRedirects = 5, requestImpl = requestPinnedPublicHttps) {
     let currentUrl = String(imageUrl || '');
+    const proxyEnabled = hasHttpConnectProxy();
     for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
-        await validatePublicHttpUrl(currentUrl);
+        await validatePublicHttpUrl(currentUrl, { proxyEnabled });
         const response = await requestImpl(currentUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)' },
             timeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS,
@@ -16948,7 +16967,7 @@ async function downloadImageBase64Uncached(imageUrl, maxRetries = 5, maxBytes = 
                 cacheHit: false
             };
         } catch (e) {
-            if (e.code === 'PROXY_CONFIG_ERROR') throw e;
+            if (e.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(e)) throw e;
             lastError = e.message;
             if (/exceeds limit/i.test(e.message)) {
                 console.log(`    [deep] 跳过图片 ${fileName}: ${e.message}`);
@@ -17030,7 +17049,7 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTota
                 outcomes.push({ url, status: image?.failureType || 'transient_failure', reason: image?.reason || 'unknown_error' });
             }
         } catch (e) {
-            if (e.code === 'PROXY_CONFIG_ERROR') throw e;
+            if (e.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(e)) throw e;
             // 历史直接运行会提供一个临时下载器，它那套受信任的 arXiv 字节校验器遇到
             // 永久性失败就抛错（比如声明是 JPEG，文件头却是 PNG）。这种明确报错停止的
             // 拒绝要保留成候选项的终态结果；传输错误仍可重试，属于临时问题。
@@ -20394,29 +20413,36 @@ function isMetadataResourceDiscoveryLink(paper, rawUrl) {
 /**
  * 访问 demo 页面，检查是否包含开源链接
  */
-async function checkDemoPageForOpensource(demoUrl) {
+async function checkDemoPageForOpensource(demoUrl, options = {}) {
     const openSourcePatterns = [
         /github\.com\/[\w\-]+\/[\w\-]+/gi,
         /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
         /modelscope\.cn\/(?:models|datasets)\/[\w\-]+\/[\w\-]+/gi,
         /gitlab\.com\/[\w\-]+\/[\w\-]+/gi,
     ];
+    const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
+    const requestImpl = options.requestImpl || requestPinnedPublicHttps;
+    const detectProxyImpl = options.detectProxyImpl || resolveHttpConnectProxyUrl;
     
     try {
         console.log(`    [deep] 🔍 检查 demo 页面: ${demoUrl}`);
         let currentUrl = demoUrl;
         let response;
+        const proxyEnabled = isValidHttpConnectProxyUrl(detectProxyImpl());
         for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
-            const parsedUrl = await validatePublicHttpUrl(currentUrl);
+            const parsedUrl = await validateUrlImpl(currentUrl, { proxyEnabled });
 
             // CONNECT 固定到本次校验得到的公网 IP；Host 与 TLS SNI 仍使用原始域名。
-            const pageResponse = await requestPinnedPublicHttps(currentUrl, {
+            const pageResponse = await requestImpl(currentUrl, {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 },
                 timeoutMs: 15000,
                 maxBytes: 1024 * 1024
+            }, {
+                validateUrlImpl,
+                detectProxyImpl
             });
             const contentType = String(pageResponse.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
             const data = Buffer.from(await pageResponse.arrayBuffer()).toString('utf8');
@@ -20464,7 +20490,11 @@ async function checkDemoPageForOpensource(demoUrl) {
         return [...new Set(foundLinks)];
     } catch (err) {
         console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
-        if (err.code === 'DEMO_TRANSIENT_FAILURE') throw err;
+        if (err.code === 'DEMO_TRANSIENT_FAILURE'
+            || err.code === 'PROXY_CONFIG_ERROR'
+            || isPublicNetworkPolicyConfigError(err)) {
+            throw err;
+        }
         if (err.code === 'RESPONSE_TOO_LARGE') {
             console.log('    [deep] ℹ️  Demo 页面超过 1MB 安全上限，按确定性跳过处理');
             return [];
@@ -20479,71 +20509,37 @@ async function checkDemoPageForOpensource(demoUrl) {
     }
 }
 
-const NON_GLOBAL_IPV4_CIDRS = Object.freeze([
-    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
-    ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
-    ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
-    ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]
-]);
-const NON_GLOBAL_IPV6_CIDRS = Object.freeze([
-    ['2001::', 23],
-    ['2001:db8::', 32],
-    ['2002::', 16],
-    ['3fff::', 20]
-]);
+const {
+    canonicalizeIp: canonicalizePublicPolicyIp,
+    hasHttpConnectProxy,
+    isGloballyRoutableIp,
+    isIpLiteral: isPublicPolicyIpLiteral,
+    isValidHttpConnectProxyUrl,
+    resolveHttpConnectProxyUrl,
+    selectValidatedPublicIp
+} = require('./lib/public-network-policy.js');
 
-function ipv4ToBigInt(address) {
-    return address.split('.').reduce((value, part) => (value << 8n) | BigInt(Number(part)), 0n);
-}
-
-function ipv6ToBigInt(address) {
-    let normalized = String(address || '').toLowerCase();
-    const dottedTail = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/)?.[1];
-    if (dottedTail) {
-        const ipv4 = Number(ipv4ToBigInt(dottedTail));
-        normalized = normalized.slice(0, -dottedTail.length) +
-            `${((ipv4 >>> 16) & 0xffff).toString(16)}:${(ipv4 & 0xffff).toString(16)}`;
-    }
-    const halves = normalized.split('::');
-    const head = halves[0] ? halves[0].split(':').filter(Boolean) : [];
-    const tail = halves.length > 1 && halves[1] ? halves[1].split(':').filter(Boolean) : [];
-    const fillCount = 8 - head.length - tail.length;
-    const parts = halves.length > 1
-        ? [...head, ...Array(fillCount).fill('0'), ...tail]
-        : head;
-    return parts.reduce((value, part) => (value << 16n) | BigInt(Number.parseInt(part, 16)), 0n);
-}
-
-function addressInCidr(value, network, prefixLength, totalBits) {
-    const shift = BigInt(totalBits - prefixLength);
-    return (value >> shift) === (network >> shift);
+function isPublicNetworkPolicyConfigError(error) {
+    return String(error?.code || '').startsWith('PUBLIC_NETWORK_POLICY_');
 }
 
 function isGloballyRoutableIpAddress(address) {
-    const ipType = net.isIP(address);
-    if (ipType === 4) {
-        const value = ipv4ToBigInt(address);
-        return !NON_GLOBAL_IPV4_CIDRS.some(([network, prefix]) =>
-            addressInCidr(value, ipv4ToBigInt(network), prefix, 32)
-        );
-    }
-    if (ipType === 6) {
-        const value = ipv6ToBigInt(address);
-        if (!addressInCidr(value, ipv6ToBigInt('2000::'), 3, 128)) return false;
-        return !NON_GLOBAL_IPV6_CIDRS.some(([network, prefix]) =>
-            addressInCidr(value, ipv6ToBigInt(network), prefix, 128)
-        );
-    }
-    return false;
+    return isGloballyRoutableIp(address);
 }
 
 function isPrivateIpAddress(address) {
     return !isGloballyRoutableIpAddress(address);
 }
 
-async function validatePublicHttpUrl(rawUrl) {
+async function validatePublicHttpUrl(rawUrl, options = {}) {
     require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
     require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
+    const proxyEnabled = options?.proxyEnabled === true;
+    const lookupImpl = options?.lookupImpl || dns.lookup;
+    const policyOptions = {
+        ...(options?.policy ? { policy: options.policy } : {}),
+        ...(options?.policyPath ? { policyPath: options.policyPath } : {})
+    };
     const url = new URL(rawUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         throw new Error(`不支持的公网 URL 协议: ${url.protocol}`);
@@ -20552,26 +20548,33 @@ async function validatePublicHttpUrl(rawUrl) {
         throw new Error('公网 URL 不允许包含用户名或密码');
     }
     const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+    const normalizedHostname = hostname.replace(/\.+$/, '');
+    if (normalizedHostname === 'localhost'
+        || normalizedHostname.endsWith('.localhost')
+        || normalizedHostname.endsWith('.local')) {
         throw new Error('公网 URL 指向 localhost');
     }
-    if (net.isIP(hostname)) {
-        if (isPrivateIpAddress(hostname)) throw new Error(`URL 指向非公网 IP: ${hostname}`);
-        url.validatedHostname = hostname;
-        url.validatedAddress = hostname;
+    if (net.isIP(hostname) || isPublicPolicyIpLiteral(hostname) || hostname.includes('%')) {
+        if (!isGloballyRoutableIp(hostname, policyOptions)) {
+            throw new Error(`URL 指向非公网 IP: ${hostname}`);
+        }
+        const canonical = canonicalizePublicPolicyIp(hostname);
+        url.validatedHostname = canonical;
+        url.validatedAddress = canonical;
+        url.validationMode = 'global';
         return url;
     }
-    const records = await dns.lookup(hostname, { all: true, verbatim: false });
-    if (!records || records.length === 0) {
+    const records = await lookupImpl(hostname, { all: true, verbatim: false });
+    if (!Array.isArray(records) || records.length === 0) {
         throw new Error(`公网 URL DNS 解析为空: ${hostname}`);
     }
-    for (const record of records) {
-        if (isPrivateIpAddress(record.address)) {
-            throw new Error(`公网 URL DNS 解析到非公网 IP: ${record.address}`);
-        }
-    }
+    const selected = selectValidatedPublicIp(
+        records.map(record => (typeof record === 'string' ? record : record?.address)),
+        { proxyEnabled, ...policyOptions }
+    );
     url.validatedHostname = hostname;
-    url.validatedAddress = records[0].address;
+    url.validatedAddress = selected.address;
+    url.validationMode = selected.mode;
     return url;
 }
 

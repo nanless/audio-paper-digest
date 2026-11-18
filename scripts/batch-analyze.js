@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+const { requireExternalRuntime } = require('./env-loader.js');
+if (require.main === module) {
+    requireExternalRuntime('batch-analyze.js', { enforceWorkspaceRole: true });
+}
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
 const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
 
@@ -471,6 +475,7 @@ async function main(options = {}) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('batch-analyze.js', { enforceWorkspaceRole: true });
     main().then(result => {
         process.exitCode = result.exitCode;
     }).catch(err => {

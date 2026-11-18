@@ -11,6 +11,7 @@ const {
     isScriptsEntrypoint,
     loadProjectEnv,
     requireExternalRuntime,
+    requiredWorkspaceRoleForCommand,
     resolveEnvFile
 } = require('../scripts/env-loader.js');
 
@@ -86,11 +87,21 @@ describe('env-loader', () => {
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, 'env-loader.test.js')), false);
     });
 
-    it('在 Codex 沙箱中拒绝实际脚本入口', () => {
+    it('在 Codex 沙箱中拒绝实际脚本入口，并将 6 个日更核心 Node 入口映射为 daily', () => {
         const original = process.env.CODEX_SANDBOX;
         try {
             process.env.CODEX_SANDBOX = 'seatbelt';
-            assert.throws(() => requireExternalRuntime('full-fetch.js'), /必须在沙箱外运行/);
+            for (const script of [
+                'full-fetch.js',
+                'batch-analyze.js',
+                'deep-analysis-only.js',
+                'reanalyze.js',
+                'refresh-api-reader.js',
+                'reanalyze-selected.js'
+            ]) {
+                assert.strictEqual(requiredWorkspaceRoleForCommand(script), 'daily', script);
+                assert.throws(() => requireExternalRuntime(script), /必须在沙箱外运行/, script);
+            }
         } finally {
             if (original === undefined) delete process.env.CODEX_SANDBOX;
             else process.env.CODEX_SANDBOX = original;

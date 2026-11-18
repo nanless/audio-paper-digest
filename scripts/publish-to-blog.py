@@ -48,6 +48,14 @@ from urllib.parse import quote, unquote, urlparse, urlsplit
 SHARED_SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
+from public_network_policy import (
+    PublicNetworkPolicyError,
+    canonicalize_ip,
+    has_http_connect_proxy,
+    is_globally_routable_ip,
+    is_ip_literal,
+    select_validated_public_ip,
+)
 MANUAL_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'manual' / 'scripts'
 if str(MANUAL_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(MANUAL_SCRIPTS_DIR))
@@ -1653,35 +1661,33 @@ def _validate_public_image_url(url):
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
         raise PublishDataValidationError('图片 review 只允许无认证信息的 HTTPS URL')
     hostname = parsed.hostname.lower().rstrip('.')
-    if hostname == 'localhost' or hostname.endswith('.local'):
+    if hostname == 'localhost' or hostname.endswith('.localhost') or hostname.endswith('.local'):
         raise PublishDataValidationError('图片 review 拒绝本地主机 URL')
     try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, None)}
+        if is_ip_literal(hostname) or '%' in hostname:
+            if not is_globally_routable_ip(hostname):
+                raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {hostname}')
+            return {canonicalize_ip(hostname)}
+    except PublicNetworkPolicyError as exc:
+        if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
+            raise PublishDataValidationError(f'公网安全策略异常: {exc}') from exc
+        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {hostname}') from exc
+    try:
+        addresses = [item[4][0] for item in socket.getaddrinfo(hostname, None)]
     except socket.gaierror as exc:
         raise PublishDataValidationError(f'图片域名无法解析: {hostname}') from exc
-    # 本机代理（Clash/Surge 等）常以 fake-IP 模式返回 198.18.0.0/15 的合成地址，
-    # 真正的域名解析发生在上游代理侧。配置了项目 HTTP CONNECT 代理时，这类合成
-    # 地址仍然走代理下载；但下载后的 peer 校验只能证明连接到了已配置的代理
-    # （通常是 127.0.0.1），不能证明远端图片主机的 IP。远端主机身份由代理隧道
-    # 与 TLS 主机名/证书校验约束；其它非公网地址一律拒绝。
-    # IPv4 与 IPv6 各有一个 benchmark 保留段，代理 fake-IP 模式两者都会用到。
-    fake_ip_ranges = (ipaddress.ip_network('198.18.0.0/15'),
-                      ipaddress.ip_network('2001:2::/48'))
-    proxy_configured = bool(
-        os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
-        or os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy'))
-    parsed_addresses = [ipaddress.ip_address(address) for address in addresses]
-    # fake-IP 只在**整组解析结果都落在保留段**时成立；混入真实私网地址仍拒绝，
-    # 避免代理模式下把所有域名解析成合成地址后私网拦截整体失效。
-    all_fake_ip = bool(parsed_addresses) and all(
-        any(ip in network for network in fake_ip_ranges) for ip in parsed_addresses)
-    for ip in parsed_addresses:
-        if ip.is_global:
-            continue
-        if proxy_configured and all_fake_ip:
-            continue
-        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {ip}')
-    return {str(ipaddress.ip_address(address)) for address in addresses}
+    # 与 Node `lib/public-network-policy.js` 共用 `config/public-network-policy.json`：
+    # 仅在配置了合法 HTTP(S) CONNECT 代理且整组解析记录都落在保留 Fake-IP 段时放行合成地址；
+    # 混入任何真实私网地址或公网与 Fake-IP 混杂均立即拒绝。
+    proxy_enabled = has_http_connect_proxy()
+    try:
+        selected = select_validated_public_ip(addresses, proxy_enabled=proxy_enabled)
+    except PublicNetworkPolicyError as exc:
+        if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
+            raise PublishDataValidationError(f'公网安全策略异常: {exc}') from exc
+        detail = exc.offending_ip or hostname
+        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {detail}') from exc
+    return set(selected['addresses'])
 
 
 def _response_peer_ip(response):
@@ -1854,13 +1860,19 @@ def _validate_response_peer_with_transport(response, resolved_addresses, proxy_a
                 f'图片 HTTPS 连接未命中已配置代理 peer: {peer}'
             )
         return peer
-    if not ipaddress.ip_address(peer).is_global:
-        raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}')
-    if peer not in resolved_addresses:
+    try:
+        if not is_globally_routable_ip(peer):
+            raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}')
+        canonical_peer = canonicalize_ip(peer)
+    except PublicNetworkPolicyError as exc:
+        if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
+            raise PublishDataValidationError(f'公网安全策略异常: {exc}') from exc
+        raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}') from exc
+    if canonical_peer not in resolved_addresses:
         raise PublishDataValidationError(
-            f'图片 HTTPS peer {peer} 不在预先验证的 DNS 解析结果中，疑似 DNS rebinding'
+            f'图片 HTTPS peer {canonical_peer} 不在预先验证的 DNS 解析结果中，疑似 DNS rebinding'
         )
-    return peer
+    return canonical_peer
 
 
 _RASTER_RECOVERY_SOURCE_READ = object()

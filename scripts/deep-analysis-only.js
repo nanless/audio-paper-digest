@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+const { requireExternalRuntime } = require('./env-loader.js');
+if (require.main === module) {
+    requireExternalRuntime('deep-analysis-only.js', { enforceWorkspaceRole: true });
+}
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
 const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
 
@@ -364,6 +368,7 @@ async function runDeepAnalysis(options = {}) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('deep-analysis-only.js', { enforceWorkspaceRole: true });
     runDeepAnalysis().then(result => {
         process.exitCode = result.exitCode;
     }).catch(err => {

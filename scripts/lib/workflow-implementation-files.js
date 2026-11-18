@@ -106,6 +106,10 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
         if (['scripts/lib/original-file-evidence.js', 'scripts/original_file_evidence.py'].includes(filename)) {
             add('config/original-file-evidence.json', true);
         }
+        if (filename === 'scripts/lib/public-network-policy' + '.js'
+            || filename === 'scripts/public_network_policy' + '.py') {
+            add('config/public-network-policy.json', true);
+        }
         if (!CODE.test(filename)) continue;
         const text = fs.readFileSync(path.join(base, filename), 'utf8');
         for (const match of text.matchAll(JS_IMPORT)) resolveImport(match[2], filename);

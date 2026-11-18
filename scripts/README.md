@@ -565,6 +565,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity` 身份与 SHA，用共享测试向量核对；旧 `paper-identity-v1` 记录仍按原格式只读核验。 |
 | `path_config.py` | 定义 Python 共享路径、日期与原子写入配置。 |
 | `project_env.py` | 加载 Python 项目环境、最小子进程环境和代理设置。 |
+| `lib/public-network-policy.js`、`public_network_policy.py` | Node 与 Python 共用 `config/public-network-policy.json` 单一事实源，以 `O_NOFOLLOW`/禁符号链接读取公网 CIDR 与代理 Fake-IP 策略，提供同构的 `isGloballyRoutableIp` 与整组 DNS 校验 `selectValidatedPublicIp`。 |
 | `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |

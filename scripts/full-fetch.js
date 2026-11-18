@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+const { requireExternalRuntime } = require('./env-loader.js');
+if (require.main === module) {
+    requireExternalRuntime('full-fetch.js', { enforceWorkspaceRole: true });
+}
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
 const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
 const sourceAcquisitionPolicy = require('./lib/source-acquisition-policy.js');
@@ -2595,6 +2599,7 @@ async function fullFetch(options = {}) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('full-fetch.js', { enforceWorkspaceRole: true });
     Promise.resolve().then(() => fullFetch(parseFullFetchArgs(process.argv.slice(2)))).then(result => {
         process.exitCode = result.exitCode;
     }).catch(err => {

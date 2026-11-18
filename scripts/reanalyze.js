@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+const { requireExternalRuntime } = require('./env-loader.js');
+if (require.main === module) {
+    requireExternalRuntime('reanalyze.js', { enforceWorkspaceRole: true });
+}
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
 const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
 
@@ -301,6 +305,7 @@ async function reanalyzeAll(options = {}) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('reanalyze.js', { enforceWorkspaceRole: true });
     reanalyzeAll().then(result => {
         if (result.status === 'complete') {
             console.log('\n[reanalyze] 文本重新分析已完成，可以继续生成、审查和发布博客');

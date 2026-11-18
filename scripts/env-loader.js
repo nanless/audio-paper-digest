@@ -82,7 +82,7 @@ function requiredWorkspaceRoleForCommand(commandName) {
             'conference-publication-author-replay-cli.js']).has(name);
     if (newConferenceDaily) return 'daily';
     if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
-        'refresh-api-reader.js', 'official-conference-acquire.js', 'conference-queue.js',
+        'refresh-api-reader.js', 'reanalyze-selected.js', 'official-conference-acquire.js', 'conference-queue.js',
         'daily-scoring-refresh-checkpoint-cli.js',
         'conference-workspace.js', 'migrate-conference-process.js',
         'conference-complete-stage-worker.js',

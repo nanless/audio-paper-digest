@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+const { requireExternalRuntime } = require('./env-loader.js');
+if (require.main === module) {
+    requireExternalRuntime('reanalyze-selected.js', { enforceWorkspaceRole: true });
+}
 const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 const fs = require('fs');
@@ -538,6 +542,7 @@ async function reanalyzeSelected(ids, options = {}) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('reanalyze-selected.js', { enforceWorkspaceRole: true });
     const ids = process.argv.slice(2);
     if (ids.length === 0) {
         console.error('❌ 用法: node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...');

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
+const { requireExternalRuntime } = require('./env-loader.js');
+if (require.main === module) {
+    requireExternalRuntime('refresh-api-reader.js', { enforceWorkspaceRole: true });
+}
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { writeStageSummary } = require('./log-setup');
@@ -797,6 +801,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('refresh-api-reader.js', { enforceWorkspaceRole: true });
     let refreshStageStartedAt = Date.now();
     let refreshBatchDate = null;
     try {

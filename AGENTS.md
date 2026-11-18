@@ -61,7 +61,7 @@ npm run digest:prepare -- YYYY-MM-DD
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败（`deepseek-v4.1-flash` 在 OpenCode Go 网关上直连与走代理都可用）。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
-所有项目脚本、测试、语法检查和数据校验必须在沙箱外执行。脚本会在业务逻辑、日志、网络和写入前拒绝可靠的 `CODEX_SANDBOX` 标志；工作区角色由 npm 包装层（`scripts/workspace-role.js exec daily|history -- …`）核验。直接入口只有部分模块自查：JS 调用 `requireExternalRuntime()`、Python 调用 `require_external_runtime()` 时，按脚本是否被直接执行和命令名角色表推断并核验；`generate-blog.py`、`review-blog.py`、`push-blog.py`、`publish-to-blog.py` 属于这一类。`full-fetch.js`、`batch-analyze.js`、`deep-analysis-only.js`、`reanalyze.js`、`refresh-api-reader.js` 完全不调用该守卫，直接 `node scripts/…` 裸跑会跳过角色检查，因此这些命令只许经 npm 入口运行。不得绕过检查或伪造结果。
+所有项目脚本、测试、语法检查和数据校验必须在沙箱外执行。脚本会在业务逻辑、日志、网络和写入前拒绝可靠的 `CODEX_SANDBOX` 标志；工作区角色由 npm 包装层（`scripts/workspace-role.js exec daily|history -- …`）核验。直接入口在被直接执行时同样按命令名角色表自查：JS 调用 `requireExternalRuntime()`、Python 调用 `require_external_runtime()` 推断并核验工作区角色；`full-fetch.js`、`batch-analyze.js`、`deep-analysis-only.js`、`reanalyze.js`、`reanalyze-selected.js`、`refresh-api-reader.js` 与 `generate-blog.py`、`review-blog.py`、`push-blog.py`、`publish-to-blog.py` 均已接入 `daily` 角色自查（模块被测试导入纯函数时不强制工作区标记）。生产命令仍统一经 npm 入口运行，不得绕过检查或伪造结果。
 
 ## 权威来源
 

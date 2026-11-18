@@ -694,6 +694,7 @@ Independent manual v4 separates semantic articles from `machineAssets`, while th
 | `paper_identity.py` | Python `paper-identity`, cross-checked against Node with shared vectors; old `paper-identity-v1` records stay read-only in their original format. |
 | `path_config.py` | Shared Python paths, dates, and atomic writes. |
 | `project_env.py` | Python project-environment loading, minimal child environments, and proxy settings. |
+| `lib/public-network-policy.js`, `public_network_policy.py` | Shared Node/Python public-network CIDR and proxy Fake-IP policy reading `config/public-network-policy.json` with `O_NOFOLLOW`/symlink rejection, providing isomorphic `isGloballyRoutableIp` and whole-record-set `selectValidatedPublicIp`. |
 | `runtime-storage.js` | Read-only runtime size counts/reference-aware cache/log cleanup preview. Deletion requires explicit `--apply`. |
 | `runtime_guard.py` | Rejects Python project entry points inside the sandbox. |
 | `test-api-key.js` | Real model-request diagnostic for primary/secondary protocol routing, proxy, and responses. |
