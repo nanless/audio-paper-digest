@@ -585,6 +585,8 @@ Normal parsing/engine save remain required. Preview registers no obligation; app
 | File | Role and limits |
 |---|---|
 | `blog_entry_loader.py` | Fixed-path Python loader for the hyphenated `publish-to-blog.py` module. |
+| `blog_git_publication.py` | Internal Python library for Git publish state snapshots/rollback, minimal-env `git cat-file --batch` index/commit exact blob verification, and remote `refs/heads/main` OID checks, decoupled from generation template fingerprints. |
+| `blog_review_image_loader.py` | Internal Python library for multimodal review public/proxy-fake-IP pinned downloads, networkless JS-disabled Playwright SVG rasterization, and `O_NOFOLLOW` controlled local image loading, decoupled from generation template fingerprints. |
 | `daily_hugo_capture.py` | Preserves input observations, machine mappings, and primary HTML from the same normal daily-review Hugo run in immutable records referenced/replayed by a new receipt. Does not establish a full input snapshot, scientific qualification, or successful deployment; see [observation limits](../docs/three-workflows.md#日更审查的同次-html-观察记录). |
 | `daily_html_projection.py` | Pure limited static-HTML parser. Fixed v1 retains no-whitespace formulas; fixed v2 also permits isolated internal single spaces. Preserves word boundaries/code/formula literals without interpreting TeX, executing HTML, or fetching resources. Results grant no source/publication authority. |
 | `github_pages_deployment.py` | Bounded mechanical observation of controlled GitHub repository workflow/run-attempt/job/deployment metadata through fixed anonymous HTTPS, rechecking newer records. Webpages/public assets/artifact consumption remain unverified; no publication/source eligibility. |

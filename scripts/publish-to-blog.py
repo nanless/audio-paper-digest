@@ -39,7 +39,9 @@ import errno
 import html
 import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
 import concurrent.futures
+import threading
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +50,39 @@ from urllib.parse import quote, unquote, urlparse, urlsplit
 SHARED_SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
+import blog_git_publication
+import blog_review_image_loader
+
+
+def _resolve_publisher_submodule(module_name):
+    """统一收口子模块定位：兼容顶层常规导入与未预先注入 scripts/ 到 sys.path 的 AST 隔离测试。"""
+    existing = globals().get(module_name)
+    if existing is not None:
+        return existing
+    import importlib.util as _ilu
+    import sys as _sys
+    from pathlib import Path as _Path
+    loaded = _sys.modules.get(module_name)
+    if loaded is not None:
+        globals()[module_name] = loaded
+        return loaded
+    roots = [_Path.cwd(), *(_Path(entry) for entry in _sys.path if entry)]
+    for base in roots:
+        for candidate in (base, *base.parents):
+            scripts_dir = candidate / 'scripts'
+            target = scripts_dir / f'{module_name}.py'
+            if target.is_file():
+                if str(scripts_dir) not in _sys.path:
+                    _sys.path.insert(0, str(scripts_dir))
+                spec = _ilu.spec_from_file_location(module_name, target)
+                loaded = _ilu.module_from_spec(spec)
+                _sys.modules[module_name] = loaded
+                spec.loader.exec_module(loaded)
+                globals()[module_name] = loaded
+                return loaded
+    loaded = __import__(module_name)
+    globals()[module_name] = loaded
+    return loaded
 from public_network_policy import (
     PublicNetworkPolicyError,
     canonicalize_ip,
@@ -125,6 +160,7 @@ from tag_catalog import (
     LEGACY_TAG_FLAT_COMPAT_CONTRACT,
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
+    _parse_tag_catalog_bytes,
     load_tag_catalog,
     is_strict_append_only_catalog,
     resolve_compatible_proof_catalog,
@@ -167,6 +203,13 @@ BLOG_REPO = os.path.expanduser(
 )
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
 BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
+BLOG_BASE_PATH = BASE_PATH
+_INITIAL_BLOG_BASE_PATH = BASE_PATH
+BLOG_URL = os.environ.get(
+    "PAPER_DIGEST_BLOG_URL",
+    "https://nanless.github.io/audio-paper-digest-blog/posts",
+)
+_INITIAL_BLOG_URL = BLOG_URL
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
 BEIJING_TIMESTAMP_RE = re.compile(
     r'^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$'
@@ -247,7 +290,16 @@ SITE_TAG_CATALOG_VERSIONS_CONTRACT = public_protocols.historical_contract(
     'paper-tag-catalog-versions', 'sha-keyed-snapshot-set')
 TAG_PRESENTATION_POLICY_CONTRACT = public_protocols.contract('paper-tag-presentation-policy')
 LEGACY_TAG_PRESENTATION_POLICY_CONTRACT = public_protocols.historical_contract('paper-tag-presentation-policy','legacy-display-catalog')
+TAG_CATALOG_PATH = PROJECT_ROOT / 'config' / 'tag-catalog.json'
+TAG_CATALOG_HISTORY_DIR = PROJECT_ROOT / 'config' / 'tag-catalog-history'
 TAG_DISPLAY_POLICY_PATH = PROJECT_ROOT / 'config' / 'tag-display-policy.json'
+_INITIAL_PAGE_TAG_CATALOG_SHA256 = _PAGE_TAG_CATALOG['registrySha256']
+_INITIAL_PAGE_TAG_CATALOG_MEM_SHA256 = hashlib.sha256(
+    json.dumps(_PAGE_TAG_CATALOG, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+).hexdigest()
+TAG_CATALOG_SERIALIZATION_CACHE_MAX = 4
+_TAG_CATALOG_SERIALIZATION_CACHE = OrderedDict()
+_TAG_CATALOG_SERIALIZATION_CACHE_LOCK = threading.Lock()
 # Hugo 只把 ``data/`` 当模板输入，不会发布到 ``public/``；浏览器端搜索因此
 # 还需要一份字节完全相同的静态副本。
 TAG_CATALOG_SNAPSHOT_RELATIVE = Path('data') / 'tag-catalog-snapshot.json'
@@ -256,6 +308,10 @@ RESEARCHER_SIDECAR_FILENAMES = (
     'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
 )
 RESEARCHER_SIDECAR_MAX_BYTES = 256 * 1024
+WORKBENCH_SIDECARS_SERIALIZATION_CACHE_MAX = 256
+_WORKBENCH_SIDECARS_SERIALIZATION_CACHE = OrderedDict()
+_WORKBENCH_SIDECAR_RECORDS_CACHE = OrderedDict()
+_WORKBENCH_SIDECARS_SERIALIZATION_CACHE_LOCK = threading.Lock()
 
 # 单篇论文灰度发布时，把生成、审查、推送凭证与同一天已经完成远端核验的批次凭证并列存放，
 # 不覆盖后者。
@@ -1641,91 +1697,35 @@ def llm_review_post(content, title="", required=False, *, paper=None):
     return passed, all_issues, fixed_content
 
 
-REVIEW_IMAGE_MIME_TYPES = {
-    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
-}
-REVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
-REVIEW_IMAGE_MAX_EDGE = 4096
-REVIEW_IMAGE_MAX_PIXELS = 16 * 1024 * 1024
-REVIEW_IMAGE_DEADLINE_SECONDS = 120
+REVIEW_IMAGE_MIME_TYPES = set(blog_review_image_loader.REVIEW_IMAGE_MIME_TYPES)
+REVIEW_IMAGE_MAX_BYTES = blog_review_image_loader.REVIEW_IMAGE_MAX_BYTES
+REVIEW_IMAGE_MAX_EDGE = blog_review_image_loader.REVIEW_IMAGE_MAX_EDGE
+REVIEW_IMAGE_MAX_PIXELS = blog_review_image_loader.REVIEW_IMAGE_MAX_PIXELS
+REVIEW_IMAGE_DEADLINE_SECONDS = blog_review_image_loader.REVIEW_IMAGE_DEADLINE_SECONDS
 HUGO_GATE_TIMEOUT_SECONDS = 300
 HUGO_GATE_OUTPUT_TAIL_BYTES = 128 * 1024
 SUBPROCESS_SEMANTIC_OUTPUT_MAX_BYTES = 32 * 1024 * 1024
 GIT_LOCAL_TIMEOUT_SECONDS = 30
 GIT_COMMIT_TIMEOUT_SECONDS = 180
 GIT_NETWORK_TIMEOUT_SECONDS = 180
+_RASTER_RECOVERY_SOURCE_READ = blog_review_image_loader._RASTER_RECOVERY_SOURCE_READ
+_RASTER_RECOVERY_SOURCE_BYTES = {}
+_IMAGE_REPO_SUFFIX_MIME = dict(blog_review_image_loader._IMAGE_REPO_SUFFIX_MIME)
 
 
 def _validate_public_image_url(url):
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
-        raise PublishDataValidationError('图片 review 只允许无认证信息的 HTTPS URL')
-    hostname = parsed.hostname.lower().rstrip('.')
-    if hostname == 'localhost' or hostname.endswith('.localhost') or hostname.endswith('.local'):
-        raise PublishDataValidationError('图片 review 拒绝本地主机 URL')
-    try:
-        if is_ip_literal(hostname) or '%' in hostname:
-            if not is_globally_routable_ip(hostname):
-                raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {hostname}')
-            return {canonicalize_ip(hostname)}
-    except PublicNetworkPolicyError as exc:
-        if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
-            raise PublishDataValidationError(f'公网安全策略异常: {exc}') from exc
-        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {hostname}') from exc
-    try:
-        addresses = [item[4][0] for item in socket.getaddrinfo(hostname, None)]
-    except socket.gaierror as exc:
-        raise PublishDataValidationError(f'图片域名无法解析: {hostname}') from exc
-    # 与 Node `lib/public-network-policy.js` 共用 `config/public-network-policy.json`：
-    # 仅在配置了合法 HTTP(S) CONNECT 代理且整组解析记录都落在保留 Fake-IP 段时放行合成地址；
-    # 混入任何真实私网地址或公网与 Fake-IP 混杂均立即拒绝。
-    proxy_enabled = has_http_connect_proxy()
-    try:
-        selected = select_validated_public_ip(addresses, proxy_enabled=proxy_enabled)
-    except PublicNetworkPolicyError as exc:
-        if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
-            raise PublishDataValidationError(f'公网安全策略异常: {exc}') from exc
-        detail = exc.offending_ip or hostname
-        raise PublishDataValidationError(f'图片 URL 解析到非公网地址: {detail}') from exc
-    return set(selected['addresses'])
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.validate_public_image_url(url, hooks=globals())
 
 
 def _response_peer_ip(response):
-    """从 requests/urllib3 取出已连接的对端，不再重复依赖 DNS 结果。"""
-    raw = getattr(response, 'raw', None)
-    candidates = [
-        getattr(getattr(response, '_connection', None), 'sock', None),
-        getattr(getattr(response, 'connection', None), 'sock', None),
-        getattr(getattr(raw, '_connection', None), 'sock', None),
-        getattr(getattr(raw, 'connection', None), 'sock', None),
-    ]
-    original = getattr(raw, '_original_response', None)
-    try:
-        candidates.append(original.fp.raw._sock)
-    except AttributeError:
-        pass
-    for sock in candidates:
-        if sock is None:
-            continue
-        try:
-            return str(ipaddress.ip_address(sock.getpeername()[0].split('%', 1)[0]))
-        except (AttributeError, OSError, TypeError, ValueError):
-            continue
-    raise PublishDataValidationError('无法验证图片 HTTPS 连接的实际 peer IP')
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.response_peer_ip(response, hooks=globals())
 
 
 def _resolve_proxy_addresses(proxy):
-    """解析显式配置的 CONNECT 代理，它是受信任的传输跳点。"""
-    parsed = urlparse(proxy)
-    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
-        raise PublishDataValidationError('图片 review 代理必须是 HTTP CONNECT 地址')
-    try:
-        return {
-            str(ipaddress.ip_address(item[4][0].split('%', 1)[0]))
-            for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443)
-        }
-    except socket.gaierror as exc:
-        raise PublishDataValidationError(f'图片 review 代理无法解析: {parsed.hostname}') from exc
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.resolve_proxy_addresses(proxy, hooks=globals())
 
 
 def _bounded_positive_seconds(env_name, default, minimum, maximum):
@@ -1738,558 +1738,176 @@ def _bounded_positive_seconds(env_name, default, minimum, maximum):
 
 
 def _remaining_deadline_seconds(deadline, label):
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise PublishDataValidationError(f'{label}超过绝对截止时间')
-    return remaining
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.remaining_deadline_seconds(deadline, label, hooks=globals())
 
 
 def _pinned_https_url(parsed, address):
-    """只替换传输层 authority；Host 和 TLS SNI 保持原样。"""
-    normalized = str(ipaddress.ip_address(address))
-    host = f'[{normalized}]' if ':' in normalized else normalized
-    if parsed.port and parsed.port != 443:
-        host = f'{host}:{parsed.port}'
-    return parsed._replace(netloc=host).geturl()
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.pinned_https_url(parsed, address)
 
 
 def _read_pinned_review_image(
     current, resolved_addresses, proxy, proxy_addresses, deadline, target_address=None,
 ):
-    """经 CONNECT 取一跳 HTTPS，并固定到预先校验过的公网 IP。"""
-    import urllib3
-
-    parsed = urlparse(current)
-    target_address = target_address or sorted(
-        resolved_addresses,
-        key=lambda value: (ipaddress.ip_address(value).version, value),
-    )[0]
-    pinned_url = _pinned_https_url(parsed, target_address)
-    hostname = parsed.hostname.lower().rstrip('.')
-    manager = urllib3.ProxyManager(
-        proxy,
-        cert_reqs='CERT_REQUIRED',
-        assert_hostname=hostname,
-        server_hostname=hostname,
-        retries=False,
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.read_pinned_review_image(
+        current, resolved_addresses, proxy, proxy_addresses, deadline,
+        target_address=target_address, hooks=globals(),
     )
-    response = None
-    try:
-        remaining = _remaining_deadline_seconds(deadline, '图片下载')
-        response = manager.request(
-            'GET',
-            pinned_url,
-            headers={
-                'Host': parsed.netloc,
-                'User-Agent': 'audio-paper-digest/1.0',
-            },
-            redirect=False,
-            preload_content=False,
-            retries=False,
-            timeout=urllib3.Timeout(connect=min(30.0, remaining), read=min(30.0, remaining)),
-        )
-        _validate_response_peer_with_transport(
-            response, resolved_addresses, proxy_addresses,
-        )
-        status = int(response.status or 0)
-        headers = response.headers
-        if status in {301, 302, 303, 307, 308}:
-            return {
-                'status': status,
-                'location': headers.get('Location'),
-                'media_type': '',
-                'raw': b'',
-                'pinned_address': target_address,
-            }
-        if status < 200 or status >= 300:
-            raise PublishDataValidationError(f'图片下载 HTTP {status}')
-        media_type = str(headers.get('Content-Type') or '').split(';', 1)[0].lower()
-        if media_type not in REVIEW_IMAGE_MIME_TYPES:
-            raise PublishDataValidationError(f'图片 MIME 不受支持: {media_type or "unknown"}')
-        declared_size = headers.get('Content-Length')
-        if declared_size:
-            try:
-                if int(declared_size) > REVIEW_IMAGE_MAX_BYTES:
-                    raise PublishDataValidationError('图片超过 8 MiB review 上限')
-            except ValueError as exc:
-                raise PublishDataValidationError('图片 Content-Length 非法') from exc
-        chunks = []
-        size = 0
-        while True:
-            remaining = _remaining_deadline_seconds(deadline, '图片下载')
-            connection = getattr(response, 'connection', None) \
-                or getattr(response, '_connection', None)
-            sock = getattr(connection, 'sock', None)
-            if sock is not None:
-                sock.settimeout(min(30.0, remaining))
-            chunk = response.read(65536)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > REVIEW_IMAGE_MAX_BYTES:
-                raise PublishDataValidationError('图片超过 8 MiB review 上限')
-            chunks.append(chunk)
-        return {
-            'status': status,
-            'location': None,
-            'media_type': media_type,
-            'raw': b''.join(chunks),
-            'pinned_address': target_address,
-        }
-    finally:
-        if response is not None:
-            response.close()
-            response.release_conn()
-        manager.clear()
 
 
 def _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses=None):
-    """校验传输层对端；代理地址必须由调用方显式传入。
-
-    仓库里只保留这一个 peer 校验入口。此前另有一个不接收 proxy_addresses 的
-    同名包装，误用时会把配置的代理 peer 当成远端主机而拒绝合法的代理连接；
-    它没有生产调用，已删除，避免后续误用。
-    """
-    peer = _response_peer_ip(response)
-    # 使用显式 HTTP CONNECT 代理时，socket 对端是配置的代理
-    # （通常是 127.0.0.1），不是远端图片主机。每一跳之前仍然会做 DNS 检查；
-    # 这里要对照配置的代理校验传输层对端。
-    if proxy_addresses is not None:
-        if peer not in proxy_addresses:
-            raise PublishDataValidationError(
-                f'图片 HTTPS 连接未命中已配置代理 peer: {peer}'
-            )
-        return peer
-    try:
-        if not is_globally_routable_ip(peer):
-            raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}')
-        canonical_peer = canonicalize_ip(peer)
-    except PublicNetworkPolicyError as exc:
-        if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
-            raise PublishDataValidationError(f'公网安全策略异常: {exc}') from exc
-        raise PublishDataValidationError(f'图片 HTTPS 连接命中非公网 peer: {peer}') from exc
-    if canonical_peer not in resolved_addresses:
-        raise PublishDataValidationError(
-            f'图片 HTTPS peer {canonical_peer} 不在预先验证的 DNS 解析结果中，疑似 DNS rebinding'
-        )
-    return canonical_peer
-
-
-_RASTER_RECOVERY_SOURCE_READ = object()
-_RASTER_RECOVERY_SOURCE_BYTES = {}
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.validate_response_peer_with_transport(
+        response, resolved_addresses, proxy_addresses, hooks=globals(),
+    )
 
 
 def _download_review_image(url, *, _recovery_source_read=None):
-    """经 CONNECT 下载，并固定到本地预先校验过的公网 IP。"""
-    proxy = get_required_fetch_proxy()
-    proxy_addresses = _resolve_proxy_addresses(proxy)
-    deadline_seconds = _bounded_positive_seconds(
-        'PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS',
-        REVIEW_IMAGE_DEADLINE_SECONDS, 10, 300,
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.download_review_image(
+        url, _recovery_source_read=_recovery_source_read, hooks=globals(),
     )
-    deadline = time.monotonic() + deadline_seconds
-    try:
-        current = url
-        for _redirect in range(4):
-            resolved_addresses = _validate_public_image_url(current)
-            result = None
-            transient_error = None
-            candidate_addresses = sorted(
-                resolved_addresses,
-                key=lambda value: (ipaddress.ip_address(value).version, value),
-            )
-            for target_address in candidate_addresses:
-                for transport_attempt in range(4):
-                    try:
-                        result = _read_pinned_review_image(
-                            current, resolved_addresses, proxy, proxy_addresses, deadline,
-                            target_address=target_address,
-                        )
-                        break
-                    except Exception as exc:
-                        # 只有传输层失败才可以重试同一个
-                        # 已经通过 DNS 校验的地址，或者换到另一个
-                        # 通过校验的地址。内容与安全类失败
-                        # 一律报错停止，不跳过内容或安全检查。
-                        import urllib3
-                        if isinstance(exc, (OSError, urllib3.exceptions.HTTPError)):
-                            transient_error = exc
-                            if transport_attempt < 3 and time.monotonic() < deadline:
-                                time.sleep(0.5 * (transport_attempt + 1))
-                                continue
-                            break
-                        raise
-                if result is not None:
-                    break
-            if result is None:
-                if transient_error is not None:
-                    raise transient_error
-                raise PublishDataValidationError('图片下载没有可用的已校验地址')
-            if result['status'] in {301, 302, 303, 307, 308}:
-                location = result['location']
-                if not location:
-                    raise PublishDataValidationError('图片重定向缺少 Location')
-                from urllib.parse import urljoin
-                current = urljoin(current, location)
-                continue
-            raw = result['raw']
-            media_type = result['media_type']
-            _validate_image_signature(media_type, raw)
-            if _recovery_source_read is _RASTER_RECOVERY_SOURCE_READ:
-                if media_type != 'image/png':
-                    raise PublishDataValidationError('显式坏 PNG 恢复只接受原 PNG MIME。')
-                return {'media_type': media_type, 'raw': raw}
-            if media_type == 'image/svg+xml':
-                raw = _rasterize_svg_for_review(raw)
-                media_type = 'image/png'
-            media_type, raw = _prepare_raster_for_review(media_type, raw)
-            return {
-                'media_type': media_type,
-                'data': base64.b64encode(raw).decode('ascii'),
-            }
-        raise PublishDataValidationError('图片重定向次数过多')
-    except PublishDataValidationError:
-        raise
-    except (OSError, ValueError) as exc:
-        raise PublishDataValidationError(f'图片下载失败: {exc}') from exc
 
 
 def _validate_image_signature(media_type, raw):
-    svg_signature = False
-    if media_type == 'image/svg+xml' and raw:
-        try:
-            import xml.etree.ElementTree as element_tree
-            root = element_tree.fromstring(_sanitize_svg_xml_for_review(raw))
-            svg_signature = root.tag.rsplit('}', 1)[-1].lower() == 'svg'
-        except (UnicodeDecodeError, element_tree.ParseError):
-            svg_signature = False
-    signatures = {
-        'image/jpeg': raw.startswith(b'\xff\xd8\xff'),
-        'image/png': raw.startswith(b'\x89PNG\r\n\x1a\n'),
-        'image/gif': raw.startswith((b'GIF87a', b'GIF89a')),
-        'image/webp': len(raw) >= 12 and raw.startswith(b'RIFF') and raw[8:12] == b'WEBP',
-        'image/svg+xml': svg_signature,
-    }
-    if not raw:
-        raise PublishDataValidationError('图片内容为空')
-    if not signatures.get(media_type, False):
-        raise PublishDataValidationError(f'图片内容与 MIME 签名不一致: {media_type}')
+    mod = globals().get('blog_review_image_loader')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_review_image_loader')
+        else:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_review_image_loader' + '.py')).is_file()
+                ),
+                None,
+            )
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_review_image_loader.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_review_image_loader')
+            globals()['blog_review_image_loader'] = mod
+    return mod.validate_image_signature(media_type, raw, hooks=globals())
 
 
 def _sanitize_svg_xml_for_review(raw):
-    """只从可信的 arXiv SVG 里删掉 XML 非法的字符引用。
-
-    arXiv 偶尔会输出指向控制字符的数字引用。这些引用
-    在 XML 里渲染不出来，但因此拒掉整张图就和
-    Node 清理器不一致，也会白白挡掉一张本来安全的论文图。
-    活动内容仍然由下面的 ``_rasterize_svg_for_review`` 拒绝。
-    """
-    try:
-        text = raw.decode('utf-8-sig')
-    except UnicodeDecodeError:
-        raise
-
-    def replace_reference(match):
-        token = match.group(1)
-        try:
-            codepoint = int(token[1:], 16) if token[:1].lower() == 'x' else int(token)
-        except ValueError:
-            return ''
-        valid = (
-            codepoint in (0x9, 0xA, 0xD)
-            or 0x20 <= codepoint <= 0xD7FF
-            or 0xE000 <= codepoint <= 0xFFFD
-            or 0x10000 <= codepoint <= 0x10FFFF
-        )
-        return match.group(0) if valid else ''
-
-    text = re.sub(r'&#(x[0-9A-Fa-f]+|[0-9]+);', replace_reference, text)
-    return text.encode('utf-8')
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.sanitize_svg_xml_for_review(raw)
 
 
 def _prepare_raster_for_review(media_type, raw):
-    """在把字节发给审查方之前，先限制解码后的位图尺寸。"""
-    if media_type == 'image/svg+xml':
-        return media_type, raw
-    try:
-        from PIL import Image, ImageOps
-        with Image.open(io.BytesIO(raw)) as source:
-            width, height = source.size
-            if width <= 0 or height <= 0:
-                raise PublishDataValidationError('图片像素尺寸非法')
-            if (max(width, height) <= REVIEW_IMAGE_MAX_EDGE
-                    and width * height <= REVIEW_IMAGE_MAX_PIXELS):
-                rgba = source.convert('RGBA')
-                if rgba.getchannel('A').getextrema()[0] == 255:
-                    return media_type, raw
-                # 用和读者页面相同的白色底来审查。否则一张带黑字的
-                # 透明 PNG，在模型把透明通道解码成黑色时
-                # 会看起来是一片空白。
-                background = Image.new('RGB', rgba.size, 'white')
-                background.paste(rgba, mask=rgba.getchannel('A'))
-                output = io.BytesIO()
-                background.save(output, format='PNG')
-                prepared = output.getvalue()
-                if len(prepared) <= REVIEW_IMAGE_MAX_BYTES:
-                    _validate_image_signature('image/png', prepared)
-                    return 'image/png', prepared
-            scale = min(
-                REVIEW_IMAGE_MAX_EDGE / width,
-                REVIEW_IMAGE_MAX_EDGE / height,
-                math.sqrt(REVIEW_IMAGE_MAX_PIXELS / (width * height)),
+    mod = globals().get('blog_review_image_loader')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_review_image_loader')
+        else:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_review_image_loader' + '.py')).is_file()
+                ),
+                None,
             )
-            target = (
-                max(1, int(width * scale)),
-                max(1, int(height * scale)),
-            )
-            image = ImageOps.exif_transpose(source).convert('RGBA')
-            image.thumbnail(target, Image.Resampling.LANCZOS)
-            background = Image.new('RGB', image.size, 'white')
-            background.paste(image, mask=image.getchannel('A'))
-            for quality in (90, 82, 74):
-                output = io.BytesIO()
-                background.save(
-                    output, format='JPEG', quality=quality,
-                    optimize=True, progressive=True,
-                )
-                prepared = output.getvalue()
-                if len(prepared) <= REVIEW_IMAGE_MAX_BYTES:
-                    _validate_image_signature('image/jpeg', prepared)
-                    return 'image/jpeg', prepared
-    except PublishDataValidationError:
-        raise
-    except Exception as exc:
-        raise PublishDataValidationError(f'图片审查降采样失败: {exc}') from exc
-    raise PublishDataValidationError('图片审查降采样结果超过 8 MiB')
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_review_image_loader.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_review_image_loader')
+            globals()['blog_review_image_loader'] = mod
+    return mod.prepare_raster_for_review(media_type, raw, hooks=globals())
 
 
 def _rasterize_svg_for_review(raw):
-    """在隔离且禁网的浏览器页面里栅格化不受信任的 SVG。"""
-    if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
-        raise PublishDataValidationError('SVG 为空或超过 8 MiB review 上限')
-    raw = _sanitize_svg_xml_for_review(raw)
-    _validate_image_signature('image/svg+xml', raw)
-    try:
-        text = raw.decode('utf-8-sig')
-    except UnicodeDecodeError as exc:
-        raise PublishDataValidationError('SVG 不是 UTF-8') from exc
-    if re.search(r'<!DOCTYPE|<!ENTITY|<\s*(?:script|foreignObject|iframe|object|embed)\b',
-                 text, flags=re.IGNORECASE) \
-            or re.search(r'\bon[a-z]+\s*=', text, flags=re.IGNORECASE) \
-            or re.search(r'(?:href|src)\s*=\s*["\']\s*(?:https?:|file:|//)',
-                         text, flags=re.IGNORECASE) \
-            or re.search(r'url\(\s*["\']?\s*(?:https?:|file:|//)',
-                         text, flags=re.IGNORECASE):
-        raise PublishDataValidationError('SVG 含脚本、实体、嵌入对象或外部资源')
-    encoded_svg = base64.b64encode(raw).decode('ascii')
-    html = (
-        '<!doctype html><meta charset="utf-8">'
-        '<style>html,body{margin:0;background:#fff}body{display:flex;align-items:flex-start;'
-        'justify-content:flex-start}#figure{display:block;max-width:1600px;max-height:1200px}</style>'
-        f'<img id="figure" alt="review figure" src="data:image/svg+xml;base64,{encoded_svg}">'
-    )
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as playwright:
-            launch_options = {'headless': True}
-            expected_executable = Path(playwright.chromium.executable_path)
-            if not expected_executable.is_file():
-                cache_roots = [
-                    Path.home() / 'Library' / 'Caches' / 'ms-playwright',
-                    Path.home() / '.cache' / 'ms-playwright',
-                ]
-                candidates = []
-                for cache_root in cache_roots:
-                    if cache_root.is_symlink() or not cache_root.is_dir():
-                        continue
-                    for pattern in (
-                            'chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell',
-                            'chromium_headless_shell-*/chrome-headless-shell-*/headless_shell'):
-                        for candidate in cache_root.glob(pattern):
-                            resolved = candidate.resolve()
-                            try:
-                                resolved.relative_to(cache_root.resolve())
-                            except ValueError:
-                                continue
-                            if candidate.is_symlink() or not resolved.is_file() \
-                                    or not os.access(resolved, os.X_OK):
-                                continue
-                            candidates.append(resolved)
-                if candidates:
-                    launch_options['executable_path'] = str(sorted(candidates)[-1])
-            browser = playwright.chromium.launch(**launch_options)
-            try:
-                context = browser.new_context(
-                    viewport={'width': 1600, 'height': 1200},
-                    java_script_enabled=False,
-                )
-                page = context.new_page()
-                page.route('**/*', lambda route: route.abort())
-                page.set_content(html, wait_until='load', timeout=30_000)
-                png = page.locator('#figure').screenshot(
-                    type='png', animations='disabled', timeout=30_000,
-                )
-            finally:
-                browser.close()
-    except Exception as exc:
-        raise PublishDataValidationError(f'SVG 安全栅格化失败: {exc}') from exc
-    if not png or len(png) > REVIEW_IMAGE_MAX_BYTES:
-        raise PublishDataValidationError('SVG 栅格化结果为空或超过 8 MiB')
-    _validate_image_signature('image/png', png)
-    return png
-
-
-_IMAGE_REPO_SUFFIX_MIME = {
-    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
-}
+    mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    return mod.rasterize_svg_for_review(raw, hooks=globals())
 
 
 def _open_review_image_under_directory(image_repo, relative):
-    """沿已打开的目录逐层读取；内部目录被换成链接时不跟随该链接。"""
-    directories = []
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
-    try:
-        directories.append(os.open(image_repo, directory_flags))
-        for component in relative.split('/')[:-1]:
-            directories.append(os.open(component, directory_flags, dir_fd=directories[-1]))
-        return os.open(relative.split('/')[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
-                       dir_fd=directories[-1])
-    finally:
-        for descriptor in reversed(directories):
-            os.close(descriptor)
+    mod = globals().get('blog_review_image_loader')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_review_image_loader')
+        else:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_review_image_loader' + '.py')).is_file()
+                ),
+                None,
+            )
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_review_image_loader.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_review_image_loader')
+            globals()['blog_review_image_loader'] = mod
+    return mod.open_review_image_under_directory(image_repo, relative, hooks=globals())
 
 
 def _load_review_image_from_local_repo(url, *, expected_source_sha256=None):
-    """从本地工作树里读取我们自己推送前的图片仓库 URL。
-
-    会议审查发生在推送之前：生成阶段把图片字节放进
-    图片仓库工作树但不提交，而渲染出的 Markdown
-    已经引用规范的 raw.githubusercontent main URL。
-    在本地解析这个确切路径，能让两个仓库的审查都保持只读，
-    也让之后的推送恰好提交通过审查的那批字节。
-    图片仓库之外的路径（或本地未暂存的路径）返回
-    None，调用方据此回退到固定 IP 的远端下载。
-    """
-    image_base_url = os.environ.get(
-        'PAPER_DIGEST_IMAGE_BASE_URL',
-        'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main',
-    ).rstrip('/')
-    if not re.fullmatch(
-            r'https://raw\.githubusercontent\.com/[^/?#]+/[^/?#]+/main',
-            image_base_url):
-        return None
-    prefix = image_base_url + '/'
-    if not url.startswith(prefix):
-        return None
-    relative = url[len(prefix):]
-    if not relative or '?' in relative or '#' in relative:
-        return None
-    image_repo = Path(
-        os.environ.get('PAPER_DIGEST_IMAGE_REPO',
-                       str(Path.home() / 'code' / 'github_repos' / 'audio-paper-digest-images'))
-    ).expanduser().resolve()
-    target = image_repo / relative
-    if any(part in ('', '.', '..') for part in relative.split('/')):
-        return None
-    node = target
-    while node != image_repo:
-        if node.is_symlink():
-            return None
-        node = node.parent
-    if not target.is_file():
-        return None
-    media_type = _IMAGE_REPO_SUFFIX_MIME.get(target.suffix.lower())
-    if media_type not in REVIEW_IMAGE_MIME_TYPES:
-        return None
-    try:
-        descriptor = _open_review_image_under_directory(image_repo, relative)
-    except OSError:
-        return None
-    with os.fdopen(descriptor, 'rb') as source:
-        info = os.fstat(source.fileno())
-        if not stat.S_ISREG(info.st_mode):
-            return None
-        if info.st_size > REVIEW_IMAGE_MAX_BYTES:
-            raise PublishDataValidationError('本地图片仓图片为空或超过 8 MiB review 上限')
-        raw = source.read(REVIEW_IMAGE_MAX_BYTES + 1)
-    if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
-        raise PublishDataValidationError('本地图片仓图片为空或超过 8 MiB review 上限')
-    if expected_source_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_source_sha256:
-        raise PublishDataValidationError('受控出版展示 PNG 与真实 Node 重放的像素 SHA 不一致')
-    _validate_image_signature(media_type, raw)
-    if media_type == 'image/svg+xml':
-        raw = _rasterize_svg_for_review(raw)
-        media_type = 'image/png'
-    media_type, raw = _prepare_raster_for_review(media_type, raw)
-    return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
+    mod = globals().get('blog_review_image_loader')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_review_image_loader')
+        else:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_review_image_loader' + '.py')).is_file()
+                ),
+                None,
+            )
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_review_image_loader.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_review_image_loader')
+            globals()['blog_review_image_loader'] = mod
+    return mod.load_review_image_from_local_repo(
+        url, expected_source_sha256=expected_source_sha256, hooks=globals(),
+    )
 
 
 def _load_review_image(url, *, expected_source_sha256=None):
-    if expected_source_sha256 is not None:
-        if not re.fullmatch(r'[a-f0-9]{64}', str(expected_source_sha256)) or not url.startswith('https://'):
-            raise PublishDataValidationError('受控出版展示只允许已绑定的规范 HTTPS 图床资产')
-        payload = _load_review_image_from_local_repo(url, expected_source_sha256=expected_source_sha256)
-        if payload is None:
-            raise PublishDataValidationError('受控出版展示缺少本地真实资产，拒绝回退到旧远端像素')
-        return payload
-    if url.startswith('data:'):
-        match = re.fullmatch(r'data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)', url)
-        if not match:
-            raise PublishDataValidationError('图片 data URI 必须是合法 base64')
-        media_type = match.group(1).lower()
-        if media_type not in REVIEW_IMAGE_MIME_TYPES:
-            raise PublishDataValidationError(f'图片 MIME 不受支持: {media_type}')
-        try:
-            encoded = re.sub(r'\s+', '', match.group(2))
-            raw = base64.b64decode(encoded, validate=True)
-        except ValueError as exc:
-            raise PublishDataValidationError('图片 data URI base64 非法') from exc
-        if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
-            raise PublishDataValidationError('图片 data URI 为空或超过 8 MiB')
-        _validate_image_signature(media_type, raw)
-        if media_type == 'image/svg+xml':
-            raw = _rasterize_svg_for_review(raw)
-            media_type = 'image/png'
-        media_type, raw = _prepare_raster_for_review(media_type, raw)
-        return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
-    if url.startswith('https://'):
-        local_payload = _load_review_image_from_local_repo(url)
-        if local_payload is not None:
-            return local_payload
-        return _download_review_image(url)
-    base = BASE_PATH.rstrip('/')
-    allowed_prefixes = (
-        f'{base}/images/visual-summaries/',
-        f'{base}/images/digest-covers/',
-        f'{base}/images/papers/',
+    mod = globals().get('blog_review_image_loader')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_review_image_loader')
+        else:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_review_image_loader' + '.py')).is_file()
+                ),
+                None,
+            )
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_review_image_loader.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_review_image_loader')
+            globals()['blog_review_image_loader'] = mod
+    return mod.load_review_image(
+        url, expected_source_sha256=expected_source_sha256, hooks=globals(),
     )
-    if url.startswith(allowed_prefixes):
-        parsed = urlparse(url)
-        if parsed.query or parsed.fragment or parsed.netloc or parsed.scheme:
-            raise PublishDataValidationError('本地视觉摘要 URL 不允许参数、片段或 authority')
-        relative_public = parsed.path[len(base) + 1:]
-        repo = Path(BLOG_REPO).expanduser().resolve()
-        target = (repo / 'static' / relative_public).resolve()
-        _path, relative = _manifest_record(target, repo)
-        if not relative.startswith((
-                'static/images/visual-summaries/', 'static/images/digest-covers/',
-                'static/images/papers/')):
-            raise PublishDataValidationError('本地图片不属于受控视觉资产目录')
-        try:
-            raw = target.read_bytes()
-        except OSError as exc:
-            raise PublishDataValidationError('本地受控图片不可读') from exc
-        if len(raw) > REVIEW_IMAGE_MAX_BYTES:
-            raise PublishDataValidationError('本地受控图片超过 8 MiB review 上限')
-        media_type = 'image/svg+xml' if target.suffix.lower() == '.svg' else 'image/png'
-        _validate_image_signature(media_type, raw)
-        if media_type == 'image/svg+xml':
-            raw = _rasterize_svg_for_review(raw)
-            media_type = 'image/png'
-        media_type, raw = _prepare_raster_for_review(media_type, raw)
-        return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
-    raise PublishDataValidationError('图片 review 只允许 data URI、HTTPS 或受控本地图片 URL')
 
 
 def _digest_cover_review_expectation(url):
@@ -3377,11 +2995,27 @@ def _researcher_sidecar_relative_root(date_str, base_id, *, context_contract=RES
     return _sidecar_root_for_context(context_contract) / validated_date / safe_id
 
 
+def _effective_blog_base_path():
+    base_val = globals().get('BASE_PATH', '/audio-paper-digest-blog')
+    alias_val = globals().get('BLOG_BASE_PATH', base_val)
+    init_val = globals().get('_INITIAL_BLOG_BASE_PATH', '/audio-paper-digest-blog')
+    if base_val != init_val:
+        return base_val
+    if alias_val != init_val:
+        return alias_val
+    return base_val
+
+
 def _researcher_public_url(relative):
     relative = Path(relative)
     if relative.is_absolute() or relative.parts[:1] != ('static',) or '..' in relative.parts:
         raise PublishDataValidationError(f'researcher sidecar URL 路径非法: {relative}')
-    base_path = str(BASE_PATH or '').rstrip('/')
+    effective_base = (
+        _effective_blog_base_path()
+        if callable(globals().get('_effective_blog_base_path'))
+        else globals().get('BASE_PATH', '/audio-paper-digest-blog')
+    )
+    base_path = str(effective_base or '').rstrip('/')
     if not re.fullmatch(r'/[A-Za-z0-9._~!$&\'()*+,;=:@%/-]*', base_path) \
             or '//' in base_path or '/./' in f'{base_path}/' or '/../' in f'{base_path}/':
         raise PublishDataValidationError('PAPER_DIGEST_BLOG_BASE_PATH 不是安全站内路径')
@@ -3708,8 +3342,11 @@ def _read_tag_catalog_file(repo, relative):
         target.resolve().relative_to(repo)
     except ValueError as exc:
         raise PublishDataValidationError('标签词表文件的路径超出了博客仓库。') from exc
-    if target.is_symlink():
-        raise PublishDataValidationError('标签词表文件不得是符号链接。')
+    for parent in [target, *target.parents]:
+        if parent == repo:
+            break
+        if parent.is_symlink():
+            raise PublishDataValidationError('标签词表文件不得是符号链接。')
     if not target.exists():
         return None
     if not target.is_file():
@@ -3737,14 +3374,103 @@ def _build_tag_catalog_display_snapshot(issued_snapshot, *, target_header=None):
 
 
 def _read_approved_tag_display_policy():
-    path = Path(TAG_DISPLAY_POLICY_PATH)
-    if path.is_symlink():
-        raise PublishDataValidationError('批准的标签展示策略不得是符号链接。')
-    if not path.exists():
+    import os as _os
+    import stat as _stat
+    path = Path(TAG_DISPLAY_POLICY_PATH).expanduser()
+    proj_root = globals().get('PROJECT_ROOT')
+    if proj_root is not None:
+        proj_abs = Path(_os.path.abspath(_os.fspath(Path(proj_root).expanduser())))
+        path_abs = Path(_os.path.abspath(_os.fspath(path)))
+        try:
+            rel_parts = path_abs.parent.relative_to(proj_abs).parts
+        except ValueError:
+            rel_parts = None
+        if rel_parts is not None:
+            try:
+                root_st = _os.lstat(proj_abs)
+            except OSError as exc:
+                raise PublishDataValidationError('批准的标签展示策略父目录无法安全读取。') from exc
+            if _stat.S_ISLNK(root_st.st_mode) or not _stat.S_ISDIR(root_st.st_mode):
+                raise PublishDataValidationError('批准的标签展示策略不得是符号链接。')
+            root_real = Path(_os.path.realpath(proj_abs))
+            cur = proj_abs
+            for idx, part in enumerate(rel_parts):
+                cur = cur / part
+                try:
+                    dir_st = _os.lstat(cur)
+                except FileNotFoundError:
+                    return None
+                except OSError as exc:
+                    raise PublishDataValidationError('批准的标签展示策略父目录无法安全读取。') from exc
+                if _stat.S_ISLNK(dir_st.st_mode) or not _stat.S_ISDIR(dir_st.st_mode):
+                    raise PublishDataValidationError('批准的标签展示策略不得是符号链接。')
+                if Path(_os.path.realpath(cur)) != root_real.joinpath(*rel_parts[:idx + 1]):
+                    raise PublishDataValidationError('批准的标签展示策略不得是符号链接。')
+    try:
+        parent_st = _os.lstat(path.parent)
+    except FileNotFoundError:
         return None
-    if not path.is_file() or path.stat().st_nlink != 1:
+    except OSError as exc:
+        raise PublishDataValidationError('批准的标签展示策略父目录无法安全读取。') from exc
+    if _stat.S_ISLNK(parent_st.st_mode) or not _stat.S_ISDIR(parent_st.st_mode):
+        raise PublishDataValidationError('批准的标签展示策略不得是符号链接。')
+    try:
+        st_before = _os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PublishDataValidationError('批准的标签展示策略内容无法读取或未通过校验。') from exc
+    if _stat.S_ISLNK(st_before.st_mode):
+        raise PublishDataValidationError('批准的标签展示策略不得是符号链接。')
+    if not _stat.S_ISREG(st_before.st_mode) or (_os.name != 'nt' and st_before.st_nlink != 1):
         raise PublishDataValidationError('批准的标签展示策略必须是只有一个硬链接的普通文件。')
-    raw = path.read_bytes()
+    if st_before.st_size > 2 * 1024 * 1024:
+        raise PublishDataValidationError('批准的标签展示策略内容无法读取或未通过校验。')
+    flags = _os.O_RDONLY | getattr(_os, 'O_NOFOLLOW', 0) | getattr(_os, 'O_NONBLOCK', 0)
+    try:
+        fd = _os.open(path, flags)
+    except OSError as exc:
+        raise PublishDataValidationError('批准的标签展示策略不得是符号链接。') from exc
+    try:
+        st_open = _os.fstat(fd)
+        sig_before = (
+            st_before.st_dev, st_before.st_ino, st_before.st_size,
+            st_before.st_mtime_ns, st_before.st_ctime_ns, int(st_before.st_nlink),
+        )
+        sig_open = (
+            st_open.st_dev, st_open.st_ino, st_open.st_size,
+            st_open.st_mtime_ns, st_open.st_ctime_ns, int(st_open.st_nlink),
+        )
+        if (not _stat.S_ISREG(st_open.st_mode)
+                or (_os.name != 'nt' and st_open.st_nlink != 1)
+                or sig_open != sig_before):
+            raise PublishDataValidationError('批准的标签展示策略必须是只有一个硬链接的普通文件。')
+        chunks = []
+        remaining = st_open.st_size + 1
+        while remaining > 0:
+            chunk = _os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b''.join(chunks)
+        st_after = _os.fstat(fd)
+    finally:
+        _os.close(fd)
+    try:
+        st_post = _os.lstat(path)
+    except OSError as exc:
+        raise PublishDataValidationError('批准的标签展示策略内容无法读取或未通过校验。') from exc
+    sig_after = (
+        st_after.st_dev, st_after.st_ino, st_after.st_size,
+        st_after.st_mtime_ns, st_after.st_ctime_ns, int(st_after.st_nlink),
+    )
+    sig_post = (
+        st_post.st_dev, st_post.st_ino, st_post.st_size,
+        st_post.st_mtime_ns, st_post.st_ctime_ns, int(st_post.st_nlink),
+    )
+    if len(raw) != st_after.st_size or sig_after != sig_before or sig_post != sig_before:
+        raise PublishDataValidationError('批准的标签展示策略内容无法读取或未通过校验。')
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
@@ -3761,11 +3487,325 @@ def _read_approved_tag_display_policy():
     return raw
 
 
+def _file_stat_signature(st):
+    return (
+        st.st_dev,
+        st.st_ino,
+        st.st_size,
+        st.st_mtime_ns,
+        st.st_ctime_ns,
+        int(st.st_nlink),
+    )
+
+
+def _verify_intermediate_dirs_nofollow(root_dir, target_dir):
+    """对从 root_dir 到 target_dir 的每一级中间目录显式执行 os.lstat 与 realpath 包含核验。"""
+    root_abs = Path(os.path.abspath(os.fspath(Path(root_dir).expanduser())))
+    target_abs = Path(os.path.abspath(os.fspath(Path(target_dir).expanduser())))
+    try:
+        rel_parts = target_abs.relative_to(root_abs).parts
+    except ValueError:
+        return False
+    if any(part in ('', '.', '..') for part in rel_parts):
+        return False
+    try:
+        st_root = os.lstat(root_abs)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st_root.st_mode) or not stat.S_ISDIR(st_root.st_mode):
+        return False
+    root_real = Path(os.path.realpath(root_abs))
+    cur = root_abs
+    for idx, part in enumerate(rel_parts):
+        cur = cur / part
+        try:
+            st_dir = os.lstat(cur)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if stat.S_ISLNK(st_dir.st_mode) or not stat.S_ISDIR(st_dir.st_mode):
+            return False
+        cur_real = Path(os.path.realpath(cur))
+        try:
+            cur_real.relative_to(root_real)
+        except ValueError:
+            return False
+        if cur_real != root_real.joinpath(*rel_parts[:idx + 1]):
+            return False
+    return True
+
+
+def _verify_config_target_dirs_nofollow(target_path, *, target_is_dir=False):
+    target_expanded = Path(target_path).expanduser()
+    proj_root = Path(PROJECT_ROOT).expanduser().resolve()
+    proj_abs = Path(os.path.abspath(os.fspath(proj_root)))
+    check_dir = target_expanded if target_is_dir else target_expanded.parent
+    check_abs = Path(os.path.abspath(os.fspath(check_dir)))
+    try:
+        check_abs.relative_to(proj_abs)
+        under_proj = True
+    except ValueError:
+        under_proj = False
+    if under_proj:
+        return _verify_intermediate_dirs_nofollow(proj_root, check_dir), proj_root
+    try:
+        st_parent = os.lstat(target_expanded.parent)
+    except FileNotFoundError:
+        return (True, target_expanded.parent) if target_is_dir else (False, target_expanded.parent)
+    except OSError:
+        return False, target_expanded.parent
+    if stat.S_ISLNK(st_parent.st_mode) or not stat.S_ISDIR(st_parent.st_mode):
+        return False, target_expanded.parent
+    parent_real = Path(os.path.realpath(target_expanded.parent))
+    if target_is_dir:
+        try:
+            st_self = os.lstat(target_expanded)
+        except FileNotFoundError:
+            return True, parent_real
+        except OSError:
+            return False, parent_real
+        if stat.S_ISLNK(st_self.st_mode) or not stat.S_ISDIR(st_self.st_mode):
+            return False, parent_real
+        if Path(os.path.realpath(target_expanded)) != parent_real / target_expanded.name:
+            return False, parent_real
+        return True, Path(os.path.realpath(target_expanded))
+    return True, parent_real
+
+
+def _read_nofollow_regular_sha256(target, stop_dir, *, max_bytes=8 * 1024 * 1024):
+    """三段 O_NOFOLLOW + 打开前后 lstat/fstat 全签名核验读取，防符号链接、硬链接与 os.replace TOCTOU。"""
+    target = Path(target).expanduser()
+    if stop_dir is not None:
+        if not _verify_intermediate_dirs_nofollow(stop_dir, target.parent):
+            return None
+        stop_real = Path(os.path.realpath(Path(stop_dir).expanduser()))
+    else:
+        stop_real = None
+    try:
+        st_before = os.lstat(target)
+    except FileNotFoundError:
+        return ('ABSENT', None, None)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st_before.st_mode) or not stat.S_ISREG(st_before.st_mode):
+        return None
+    if (os.name != 'nt' and st_before.st_nlink != 1) or st_before.st_size < 0 or st_before.st_size > max_bytes:
+        return None
+    if stop_real is not None:
+        try:
+            Path(os.path.realpath(target)).relative_to(stop_real)
+        except ValueError:
+            return None
+    sig_before = _file_stat_signature(st_before)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    try:
+        fd = os.open(target, flags)
+    except OSError:
+        return None
+    try:
+        st_open = os.fstat(fd)
+        if (not stat.S_ISREG(st_open.st_mode)
+                or (os.name != 'nt' and st_open.st_nlink != 1)
+                or _file_stat_signature(st_open) != sig_before):
+            return None
+        chunks = []
+        remaining = st_open.st_size + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b''.join(chunks)
+        st_after = os.fstat(fd)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    try:
+        st_post = os.lstat(target)
+    except OSError:
+        return None
+    if (len(raw) != st_after.st_size
+            or _file_stat_signature(st_after) != sig_before
+            or _file_stat_signature(st_post) != sig_before):
+        return None
+    return ('FILE', hashlib.sha256(raw).hexdigest(), raw)
+
+
+def _probe_tag_catalog_serialization_key(repo, approved_raw):
+    """每次真实 O_NOFOLLOW 读取磁盘词表、历史归档与博客仓库副本的完整原始字节 SHA。"""
+    mem_sha = hashlib.sha256(
+        json.dumps(_PAGE_TAG_CATALOG, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    ).hexdigest()
+    catalog_path = Path(TAG_CATALOG_PATH).expanduser()
+    cat_dirs_ok, cat_root = _verify_config_target_dirs_nofollow(catalog_path, target_is_dir=False)
+    catalog_probe = (
+        _read_nofollow_regular_sha256(catalog_path, cat_root, max_bytes=2 * 1024 * 1024)
+        if cat_dirs_ok else None
+    )
+    if mem_sha == _INITIAL_PAGE_TAG_CATALOG_MEM_SHA256:
+        if catalog_probe is None or catalog_probe[0] != 'FILE':
+            if cat_dirs_ok:
+                try:
+                    st_cat = os.lstat(catalog_path)
+                except OSError:
+                    st_cat = None
+                if (st_cat is not None and not stat.S_ISLNK(st_cat.st_mode)
+                        and stat.S_ISREG(st_cat.st_mode) and os.name != 'nt' and st_cat.st_nlink != 1):
+                    raise PublishDataValidationError('当前标签词表文件必须是只有一个硬链接的普通文件。')
+            raise PublishDataValidationError('当前标签词表文件无法安全读取或包含符号链接。')
+        _, catalog_sha, catalog_raw = catalog_probe
+        if catalog_sha != _INITIAL_PAGE_TAG_CATALOG_SHA256:
+            try:
+                active_catalog = _parse_tag_catalog_bytes(catalog_raw, uses_default_catalog=True)
+            except (OSError, ValueError, UnicodeError) as exc:
+                raise PublishDataValidationError(f'当前标签词表文件未通过校验：{exc}') from exc
+        else:
+            active_catalog = _PAGE_TAG_CATALOG
+        catalog_key = ('disk', catalog_sha)
+    else:
+        active_catalog = _PAGE_TAG_CATALOG
+        catalog_key = (
+            'memory', mem_sha,
+            None if catalog_probe is None else (catalog_probe[0], catalog_probe[1]),
+        )
+
+    policy_dirs_ok, _ = _verify_config_target_dirs_nofollow(
+        Path(TAG_DISPLAY_POLICY_PATH).expanduser(), target_is_dir=False,
+    )
+    if not policy_dirs_ok:
+        return None, active_catalog
+    if approved_raw is None:
+        policy_key = ('ABSENT', None)
+    elif isinstance(approved_raw, (bytes, bytearray)):
+        policy_key = ('RAW', hashlib.sha256(bytes(approved_raw)).hexdigest())
+    else:
+        return None, active_catalog
+
+    history_dir = Path(TAG_CATALOG_HISTORY_DIR).expanduser()
+    hist_dirs_ok, hist_root = _verify_config_target_dirs_nofollow(history_dir, target_is_dir=True)
+    if not hist_dirs_ok:
+        return None, active_catalog
+    history_entries = []
+    try:
+        st_hist = os.lstat(history_dir)
+    except FileNotFoundError:
+        st_hist = None
+    except OSError:
+        return None, active_catalog
+    if st_hist is not None:
+        if stat.S_ISLNK(st_hist.st_mode) or not stat.S_ISDIR(st_hist.st_mode):
+            return None, active_catalog
+        for child in sorted(history_dir.iterdir(), key=lambda item: item.name):
+            if not re.fullmatch(r'[a-f0-9]{64}\.json', child.name):
+                return None, active_catalog
+            probe = _read_nofollow_regular_sha256(child, hist_root, max_bytes=2 * 1024 * 1024)
+            if probe is None or probe[0] != 'FILE':
+                return None, active_catalog
+            history_entries.append((child.name, probe[1]))
+
+    for sub in (
+        'data', 'data/taxonomy-snapshots', 'data/tag-catalog-history',
+        'static', 'static/data', 'static/data/taxonomy-snapshots', 'static/data/tag-catalog-history',
+    ):
+        if not _verify_intermediate_dirs_nofollow(repo, repo / sub):
+            return None, active_catalog
+
+    repo_files = []
+    fixed_names = (
+        'taxonomy-catalog.json', 'tag-catalog-versions.json',
+        'taxonomy-registry.json', 'tag-catalog-snapshot.json',
+        'taxonomy-presentation-policy.json', 'tag-presentation-policy.json',
+    )
+    for prefix in ('data', 'static/data'):
+        for name in fixed_names:
+            rel = f'{prefix}/{name}'
+            probe = _read_nofollow_regular_sha256(repo / rel, repo)
+            if probe is None:
+                return None, active_catalog
+            repo_files.append((rel, probe[0], probe[1]))
+        for archive_name in ('taxonomy-snapshots', 'tag-catalog-history'):
+            archive_rel = f'{prefix}/{archive_name}'
+            archive_dir = repo / archive_rel
+            try:
+                st_arch = os.lstat(archive_dir)
+            except FileNotFoundError:
+                repo_files.append((archive_rel, 'DIR_ABSENT', None))
+                continue
+            except OSError:
+                return None, active_catalog
+            if stat.S_ISLNK(st_arch.st_mode) or not stat.S_ISDIR(st_arch.st_mode):
+                return None, active_catalog
+            repo_files.append((archive_rel, 'DIR_PRESENT', None))
+            for child in sorted(archive_dir.iterdir(), key=lambda item: item.name):
+                if not re.fullmatch(r'[a-f0-9]{64}\.json', child.name):
+                    return None, active_catalog
+                child_rel = f'{archive_rel}/{child.name}'
+                probe = _read_nofollow_regular_sha256(child, repo)
+                if probe is None or probe[0] != 'FILE':
+                    return None, active_catalog
+                repo_files.append((child_rel, 'FILE', probe[1]))
+
+    key_payload = (
+        str(repo),
+        TAG_CATALOG_SNAPSHOT_CONTRACT,
+        SITE_TAG_CATALOG_SNAPSHOT_CONTRACT,
+        LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT,
+        TAG_CATALOG_VERSIONS_CONTRACT,
+        SITE_TAG_CATALOG_VERSIONS_CONTRACT,
+        LEGACY_TAG_CATALOG_VERSIONS_CONTRACT,
+        TAG_PRESENTATION_POLICY_CONTRACT,
+        LEGACY_TAG_PRESENTATION_POLICY_CONTRACT,
+        public_protocols.record_header(SITE_TAG_CATALOG_SNAPSHOT_CONTRACT, 'paper-tag-catalog-snapshot'),
+        public_protocols.record_header(TAG_CATALOG_SNAPSHOT_CONTRACT, 'paper-tag-catalog-snapshot'),
+        public_protocols.record_header(SITE_TAG_CATALOG_VERSIONS_CONTRACT, 'paper-tag-catalog-versions'),
+        public_protocols.record_header(TAG_CATALOG_VERSIONS_CONTRACT, 'paper-tag-catalog-versions'),
+        public_protocols.record_header(TAG_PRESENTATION_POLICY_CONTRACT, 'paper-tag-presentation-policy'),
+        catalog_key,
+        policy_key,
+        tuple(history_entries),
+        tuple(repo_files),
+    )
+    digest = hashlib.sha256(
+        json.dumps(key_payload, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+    ).hexdigest()
+    return digest, active_catalog
+
+
 def tag_catalog_file_contents(blog_repo=None):
     """准备新版显示文件和词表归档，保留原快照对象及旧文件的字节。"""
-    repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
+    default_repo = globals().get('BLOG_REPO', '.')
+    repo = Path(default_repo if blog_repo is None else blog_repo).expanduser().resolve()
+    cache = globals().get('_TAG_CATALOG_SERIALIZATION_CACHE')
+    cache_lock = globals().get('_TAG_CATALOG_SERIALIZATION_CACHE_LOCK')
+    max_entries = globals().get('TAG_CATALOG_SERIALIZATION_CACHE_MAX', 4)
+    probe_fn = globals().get('_probe_tag_catalog_serialization_key')
+    cache_key = None
+    active_catalog = None
+    approved_raw_preloaded = False
+    approved_raw = None
+    if cache is not None and cache_lock is not None and callable(probe_fn):
+        approved_raw = _read_approved_tag_display_policy()
+        approved_raw_preloaded = True
+        cache_key, active_catalog = probe_fn(repo, approved_raw)
+        if not isinstance(max_entries, int) or max_entries <= 0:
+            with cache_lock:
+                cache.clear()
+        elif cache_key is not None:
+            with cache_lock:
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    cache.move_to_end(cache_key)
+                    return {relative: bytes(raw) for relative, raw in cached.items()}
     current = _validate_tag_catalog_snapshot(
-        build_tag_catalog_snapshot(snapshot_contract=SITE_TAG_CATALOG_SNAPSHOT_CONTRACT))
+        build_tag_catalog_snapshot(
+            active_catalog, snapshot_contract=SITE_TAG_CATALOG_SNAPSHOT_CONTRACT,
+        ) if active_catalog is not None else build_tag_catalog_snapshot(
+            snapshot_contract=SITE_TAG_CATALOG_SNAPSHOT_CONTRACT,
+        )
+    )
     versions = {}
     archive_bytes = {}
     new_archive_paths = [repo / prefix / 'tag-catalog-history'
@@ -3809,7 +3849,7 @@ def tag_catalog_file_contents(blog_repo=None):
             retain(old_display)
         for archive_name in ('taxonomy-snapshots', 'tag-catalog-history'):
             archive = repo / prefix / archive_name
-            if archive.exists() or archive_name == 'tag-catalog-history' and archive.is_symlink():
+            if archive.exists() or archive.is_symlink():
                 if archive.is_symlink() or not archive.is_dir():
                     raise PublishDataValidationError('标签词表归档路径必须是目录，且不得是符号链接。')
                 for target in sorted(archive.iterdir()):
@@ -3842,7 +3882,9 @@ def tag_catalog_file_contents(blog_repo=None):
                 raise PublishDataValidationError('新版标签显示快照与保存的原快照或版本目录不一致。')
     retain(current)
     display, policy_assets = _select_tag_display_version(
-        repo, current, versions, approved_raw=_read_approved_tag_display_policy())
+        repo, current, versions,
+        approved_raw=approved_raw if approved_raw_preloaded else _read_approved_tag_display_policy(),
+    )
     catalog = {**public_protocols.record_header(SITE_TAG_CATALOG_VERSIONS_CONTRACT,'paper-tag-catalog-versions'),
                'currentSha256': display['registrySha256'],
                'snapshots': [versions[sha] for sha in sorted(versions)]}
@@ -3856,6 +3898,18 @@ def tag_catalog_file_contents(blog_repo=None):
         for sha, snapshot in sorted(versions.items()):
             relative = f'{prefix}/tag-catalog-history/{sha}.json'
             assets[relative] = archive_bytes.get(relative, tag_catalog_snapshot_bytes(snapshot))
+    if cache is not None and cache_lock is not None and cache_key is not None:
+        max_entries = globals().get('TAG_CATALOG_SERIALIZATION_CACHE_MAX', 4)
+        frozen_assets = {relative: bytes(raw) for relative, raw in assets.items()}
+        with cache_lock:
+            if not isinstance(max_entries, int) or max_entries <= 0:
+                cache.clear()
+                return frozen_assets
+            cache[cache_key] = frozen_assets
+            cache.move_to_end(cache_key)
+            while len(cache) > max_entries:
+                cache.popitem(last=False)
+            return {relative: bytes(raw) for relative, raw in cache[cache_key].items()}
     return assets
 
 
@@ -4134,10 +4188,95 @@ def build_flat_tag_compat_metadata(
     }
 
 
+def _has_only_strict_str_dict_keys(value):
+    """递归校验缓存键载荷仅含原生 JSON 标量/列表/元组且所有 dict 键满足 type(k) is str，防键碰撞与 NaN。"""
+    if value is None or type(value) is str or isinstance(value, bool):
+        return True
+    if type(value) is int:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    if isinstance(value, (list, tuple)):
+        return all(_has_only_strict_str_dict_keys(item) for item in value)
+    if type(value) is dict:
+        return all(
+            type(key) is str and _has_only_strict_str_dict_keys(item)
+            for key, item in value.items()
+        )
+    return False
+
+
 def _serialize_verified_workbench_sidecars(*, original_title, authors, citation_id,
                                           identity, citation, context, root,
                                           source_kind='arxiv'):
     """One export implementation for verified arXiv and conference identities."""
+    cache = globals().get('_WORKBENCH_SIDECARS_SERIALIZATION_CACHE')
+    cache_lock = globals().get('_WORKBENCH_SIDECARS_SERIALIZATION_CACHE_LOCK')
+    max_entries = globals().get('WORKBENCH_SIDECARS_SERIALIZATION_CACHE_MAX', 256)
+    strict_keys_fn = globals().get('_has_only_strict_str_dict_keys')
+    effective_base_fn = globals().get('_effective_blog_base_path')
+    pp = globals().get('public_protocols')
+    sidecar_contract = globals().get('RESEARCHER_SIDECAR_CONTRACT')
+    ctx_contract = globals().get('RESEARCH_CONTEXT_CONTRACT')
+    legacy_ctx_contract = globals().get('LEGACY_RESEARCH_CONTEXT_CONTRACT')
+    cache_key = None
+    root_path = Path(root)
+    if cache is not None and cache_lock is not None:
+        if not isinstance(max_entries, int) or max_entries <= 0:
+            with cache_lock:
+                cache.clear()
+        else:
+            try:
+                effective_base = (
+                    effective_base_fn()
+                    if callable(effective_base_fn)
+                    else str(globals().get('BLOG_BASE_PATH') or globals().get('BASE_PATH') or '')
+                )
+                sidecars_header = (
+                    pp.record_header(sidecar_contract, 'researcher-sidecars')
+                    if pp is not None and sidecar_contract is not None else None
+                )
+                context_header = (
+                    pp.record_header(ctx_contract, 'paper-research-context')
+                    if pp is not None and ctx_contract is not None else None
+                )
+                key_payload = {
+                    'sourceKind': source_kind,
+                    'root': root_path.as_posix(),
+                    'originalTitle': original_title,
+                    'authors': authors,
+                    'citationId': citation_id,
+                    'identity': identity,
+                    'citation': citation,
+                    'context': context,
+                    'blogUrl': globals().get('BLOG_URL'),
+                    'blogBasePath': effective_base,
+                    'basePath': globals().get('BASE_PATH'),
+                    'rawBlogBasePath': globals().get('BLOG_BASE_PATH'),
+                    'maxBytes': globals().get('RESEARCHER_SIDECAR_MAX_BYTES'),
+                    'researchContextContract': ctx_contract,
+                    'legacyResearchContextContract': legacy_ctx_contract,
+                    'sidecarsHeader': sidecars_header,
+                    'contextHeader': context_header,
+                }
+                if callable(strict_keys_fn) and not strict_keys_fn(key_payload):
+                    cache_key = None
+                else:
+                    cache_key = hashlib.sha256(
+                        json.dumps(
+                            key_payload, ensure_ascii=False, sort_keys=True,
+                            allow_nan=False, separators=(',', ':'),
+                        ).encode('utf-8')
+                    ).hexdigest()
+            except (TypeError, ValueError, UnicodeEncodeError):
+                cache_key = None
+            if cache_key is not None:
+                with cache_lock:
+                    cached = cache.get(cache_key)
+                    if cached is not None:
+                        cache.move_to_end(cache_key)
+                        return {Path(rel_posix): bytes(raw) for rel_posix, raw in cached}
+
     author_bibtex = ' and '.join(
         '{' + _bibtex_escape(author['name'], 'BibTeX author') + '}'
         for author in authors
@@ -4174,23 +4313,106 @@ def _serialize_verified_workbench_sidecars(*, original_title, authors, citation_
     if pdf_url:
         ris_lines.append(f'L1  - {pdf_url}')
     ris_lines.extend(['ER  - ', ''])
-    return {
-        root / 'citation.json': _json_sidecar_bytes(citation),
-        root / 'citation.bib': bibtex,
-        root / 'citation.ris': '\n'.join(ris_lines).encode('utf-8'),
-        root / 'rethink-context.json': _json_sidecar_bytes(context),
+    serialized = {
+        root_path / 'citation.json': _json_sidecar_bytes(citation),
+        root_path / 'citation.bib': bibtex,
+        root_path / 'citation.ris': '\n'.join(ris_lines).encode('utf-8'),
+        root_path / 'rethink-context.json': _json_sidecar_bytes(context),
     }
+    if cache is not None and cache_lock is not None and cache_key is not None:
+        max_entries = globals().get('WORKBENCH_SIDECARS_SERIALIZATION_CACHE_MAX', 256)
+        frozen = tuple((rel.as_posix(), bytes(raw)) for rel, raw in serialized.items())
+        with cache_lock:
+            if not isinstance(max_entries, int) or max_entries <= 0:
+                cache.clear()
+                return {Path(rel_posix): bytes(raw) for rel_posix, raw in frozen}
+            cache[cache_key] = frozen
+            cache.move_to_end(cache_key)
+            while len(cache) > max_entries:
+                cache.popitem(last=False)
+            return {Path(rel_posix): bytes(raw) for rel_posix, raw in frozen}
+    return serialized
 
 
 def _workbench_sidecar_records(sidecars, *, expected_context_header):
     """Validate and describe the same four serialized files for both identities."""
-    if len(sidecars) != len(RESEARCHER_SIDECAR_FILENAMES) or {
-            relative.name for relative in sidecars} != set(RESEARCHER_SIDECAR_FILENAMES):
+    filenames = globals().get(
+        'RESEARCHER_SIDECAR_FILENAMES',
+        ('citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json'),
+    )
+    if len(sidecars) != len(filenames) or {
+            relative.name for relative in sidecars} != set(filenames):
         raise PublishDataValidationError('researcher sidecar 四文件集合不完整。')
+    max_sidecar_bytes = globals().get('RESEARCHER_SIDECAR_MAX_BYTES', 256 * 1024)
+    records_cache = globals().get('_WORKBENCH_SIDECAR_RECORDS_CACHE')
+    cache_lock = globals().get('_WORKBENCH_SIDECARS_SERIALIZATION_CACHE_LOCK')
+    max_entries = globals().get('WORKBENCH_SIDECARS_SERIALIZATION_CACHE_MAX', 256)
+    strict_keys_fn = globals().get('_has_only_strict_str_dict_keys')
+    effective_base_fn = globals().get('_effective_blog_base_path')
+    copy_mod = globals().get('copy') or __import__('copy')
+    pp = globals().get('public_protocols')
+    sidecar_contract = globals().get('RESEARCHER_SIDECAR_CONTRACT')
+    ctx_contract = globals().get('RESEARCH_CONTEXT_CONTRACT')
+    legacy_ctx_contract = globals().get('LEGACY_RESEARCH_CONTEXT_CONTRACT')
+    records_key = None
+    if (records_cache is not None and cache_lock is not None
+            and all(isinstance(raw, bytes) for raw in sidecars.values())):
+        if not isinstance(max_entries, int) or max_entries <= 0:
+            with cache_lock:
+                records_cache.clear()
+        else:
+            try:
+                effective_base = (
+                    effective_base_fn()
+                    if callable(effective_base_fn)
+                    else str(globals().get('BLOG_BASE_PATH') or globals().get('BASE_PATH') or '')
+                )
+                sidecars_header = (
+                    pp.record_header(sidecar_contract, 'researcher-sidecars')
+                    if pp is not None and sidecar_contract is not None else None
+                )
+                current_ctx_header = (
+                    pp.record_header(ctx_contract, 'paper-research-context')
+                    if pp is not None and ctx_contract is not None else None
+                )
+                sidecar_shas = tuple(
+                    (Path(rel).as_posix(), hashlib.sha256(raw).hexdigest(), len(raw))
+                    for rel, raw in sorted(sidecars.items(), key=lambda kv: Path(kv[0]).as_posix())
+                )
+                records_payload = {
+                    'sidecarShas': sidecar_shas,
+                    'expectedContextHeader': expected_context_header,
+                    'blogUrl': globals().get('BLOG_URL'),
+                    'blogBasePath': effective_base,
+                    'basePath': globals().get('BASE_PATH'),
+                    'rawBlogBasePath': globals().get('BLOG_BASE_PATH'),
+                    'maxBytes': max_sidecar_bytes,
+                    'researchContextContract': ctx_contract,
+                    'legacyResearchContextContract': legacy_ctx_contract,
+                    'sidecarsHeader': sidecars_header,
+                    'contextHeader': current_ctx_header,
+                }
+                if callable(strict_keys_fn) and not strict_keys_fn(records_payload):
+                    records_key = None
+                else:
+                    records_key = hashlib.sha256(
+                        json.dumps(
+                            records_payload, ensure_ascii=False, sort_keys=True,
+                            allow_nan=False, separators=(',', ':'),
+                        ).encode('utf-8')
+                    ).hexdigest()
+            except (TypeError, ValueError, UnicodeEncodeError):
+                records_key = None
+            if records_key is not None:
+                with cache_lock:
+                    cached_rec = records_cache.get(records_key)
+                    if cached_rec is not None:
+                        records_cache.move_to_end(records_key)
+                        return copy_mod.deepcopy(cached_rec)
     records = {}
     for relative, raw in sidecars.items():
         if not isinstance(raw, bytes) or not raw or b'\r' in raw \
-                or not raw.endswith(b'\n') or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
+                or not raw.endswith(b'\n') or len(raw) > max_sidecar_bytes:
             raise PublishDataValidationError(f'researcher sidecar 非规范: {relative}')
         try:
             raw.decode('utf-8')
@@ -4208,6 +4430,18 @@ def _workbench_sidecar_records(sidecars, *, expected_context_header):
         raise PublishDataValidationError('上下文附属文件的原格式头或结构指纹不符。')
     if public_protocols.format(context['contract'], family, context.get('schemaFingerprint')) != 'legacy-inline-abstract':
         records['rethink-context.json'].update(context_header)
+    if records_cache is not None and cache_lock is not None and records_key is not None:
+        max_entries = globals().get('WORKBENCH_SIDECARS_SERIALIZATION_CACHE_MAX', 256)
+        frozen_rec = copy_mod.deepcopy(records)
+        with cache_lock:
+            if not isinstance(max_entries, int) or max_entries <= 0:
+                records_cache.clear()
+                return copy_mod.deepcopy(frozen_rec)
+            records_cache[records_key] = frozen_rec
+            records_cache.move_to_end(records_key)
+            while len(records_cache) > max_entries:
+                records_cache.popitem(last=False)
+            return copy_mod.deepcopy(frozen_rec)
     return records
 
 
@@ -14460,20 +14694,8 @@ def _run_git(args, *, text=False, check=False, timeout_kind='local'):
 
 def validate_git_publish_branch():
     """只有博客仓库的 main 分支才允许正式发布。"""
-    branch = _run_git(
-        ['symbolic-ref', '--quiet', '--short', 'HEAD'], text=True,
-    )
-    current = branch.stdout.strip() if branch.returncode == 0 else '<detached HEAD>'
-    if current != 'main':
-        raise PublishDataValidationError(
-            f'正式发布要求博客仓库当前分支为 main，当前为 {current}'
-        )
-    head = _run_git(
-        ['rev-parse', '--verify', 'HEAD'], text=True, check=True,
-    ).stdout.strip()
-    if not re.fullmatch(r'[0-9a-fA-F]{40,64}', head):
-        raise PublishDataValidationError(f'无法验证博客仓库 HEAD: {head!r}')
-    return head.lower()
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.validate_git_publish_branch(hooks=globals())
 
 
 def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=None):
@@ -14577,302 +14799,89 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
 
 def capture_git_publish_state(paths):
     """记录安装前的 Git、索引和工作树状态，供 add 与 commit 回滚。"""
-    manifest = _git_relative_manifest(paths)
-    head = validate_git_publish_branch()
-    index_tree = _run_git(
-        ['write-tree'], text=True, check=True,
-    ).stdout.strip()
-    snapshots = {}
-    repo = Path(BLOG_REPO).expanduser().resolve()
-    for item in manifest:
-        path = repo / item
-        snapshots[path] = (
-            {'content': path.read_bytes(), 'mode': path.stat().st_mode & 0o777}
-            if path.exists() else None
-        )
-    return {
-        'head': head,
-        'index_tree': index_tree,
-        'snapshots': snapshots,
-    }
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.capture_git_publish_state(paths, hooks=globals())
 
 
 def restore_git_publish_state(state):
     """按需恢复 HEAD、完整索引，以及清单涉及的工作树文件。"""
-    if not state:
-        return
-    current = _run_git(
-        ['rev-parse', '--verify', 'HEAD'], text=True, check=True,
-    ).stdout.strip().lower()
-    original = state['head'].lower()
-    if current != original:
-        _run_git(
-            ['update-ref', 'refs/heads/main', original, current], check=True,
-        )
-    _run_git(
-        ['read-tree', state['index_tree']], check=True,
-    )
-    for path, snapshot in state['snapshots'].items():
-        if snapshot is None:
-            path.unlink(missing_ok=True)
+    mod = globals().get('blog_git_publication')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_git_publication')
         else:
-            _atomic_write_bytes(path, snapshot['content'], mode=snapshot['mode'])
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_git_publication' + '.py')).is_file()
+                ),
+                None,
+            )
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_git_publication.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_git_publication')
+            globals()['blog_git_publication'] = mod
+    return mod.restore_git_publish_state(state, hooks=globals())
 
 
 def validate_git_index(paths):
-    allowed = set(_git_relative_manifest(paths))
-    result = _run_git(
-        ['diff', '--cached', '--name-only', '-z'], check=True,
-    )
-    staged = {item.decode('utf-8') for item in result.stdout.split(b'\0') if item}
-    unrelated = sorted(staged - allowed)
-    if unrelated:
-        raise PublishDataValidationError(
-            f'博客仓库已有无关 staged 文件，拒绝提交: {", ".join(unrelated)}'
-        )
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.validate_git_index(paths, hooks=globals())
 
 
 def validate_single_publication_worktree(paths):
     """要求只有一篇论文页和它绑定的图片、伴随文件处于改动状态。"""
-    allowed = set(_git_relative_manifest(paths))
-    pages = {item for item in allowed if item.startswith('content/posts/') and item.endswith('.md')}
-    assets = {
-        item for item in allowed
-        if item.startswith(('static/images/papers/', 'static/data/papers/', 'static/client/papers/'))
-    }
-    if len(pages) != 1 or len(pages) + len(assets) != len(allowed):
-        raise PublishDataValidationError('单篇灰度发布必须绑定一个论文页及其受控正文图/sidecar')
-    result = _run_git(
-        ['status', '--porcelain=v1', '-z', '--untracked-files=all'], check=True,
-    )
-    unrelated = []
-    for raw in (item for item in result.stdout.split(b'\0') if item):
-        entry = raw.decode('utf-8', errors='replace')
-        # 改名和复制记录会带上第二个以 NUL 分隔的路径，
-        # 这种形状永远不能用来替换已经审查过的页面。
-        if len(entry) < 4 or entry[2] != ' ':
-            unrelated.append(entry)
-            continue
-        relative = entry[3:]
-        if entry[:2] in {'R ', ' R', 'C ', ' C'} or relative not in allowed:
-            unrelated.append(entry)
-    if unrelated:
-        raise PublishDataValidationError(
-            '单篇灰度发布检测到清单外 Git 修改，拒绝夹带提交: '
-            + ', '.join(unrelated)
-        )
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.validate_single_publication_worktree(paths, hooks=globals())
 
 
 def _git_batch_blob_bytes(rev, relatives):
-    """用一次 ``git cat-file --batch`` 读取 ``rev:path`` 的全部 blob。
-
-    返回按相对路径索引的字节或 ``None``（路径在该修订里不存在）。只读取
-    本地对象库，不改变索引、工作树或任何引用；输出按输入顺序解析，二进制
-    内容按头部声明的字节数读取，不会被内容里的换行截断。
-    """
-    relatives = list(relatives)
-    if not relatives:
-        return {}
-    request = ''.join(f'{rev}:{relative}\n' for relative in relatives).encode('utf-8')
-    timeout_seconds = _bounded_positive_seconds(
-        'PD_GIT_LOCAL_TIMEOUT_SECONDS', GIT_LOCAL_TIMEOUT_SECONDS, 5, 300,
-    )
-    try:
-        process = subprocess.run(
-            ['git', 'cat-file', '--batch'],
-            cwd=str(Path(BLOG_REPO).expanduser().resolve()),
-            env=_git_env(),
-            input=request,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired:
-        raise subprocess.TimeoutExpired(['git', 'cat-file', '--batch'], timeout_seconds)
-    if process.returncode != 0:
-        detail = process.stderr.decode('utf-8', errors='replace').strip()
-        raise PublishDataValidationError(f'批量读取 Git 对象失败：{detail[-500:]}')
-    output = process.stdout
-    if len(output) > 512 * 1024 * 1024:
-        raise PublishDataValidationError('批量读取 Git 对象的输出超过安全上限')
-    result = {}
-    cursor = 0
-    for relative in relatives:
-        newline = output.find(b'\n', cursor)
-        if newline < 0:
-            raise PublishDataValidationError('批量读取 Git 对象的输出不完整')
-        header = output[cursor:newline]
-        cursor = newline + 1
-        if header.endswith(b' missing'):
-            result[relative] = None
-            continue
-        parts = header.split(b' ')
-        if len(parts) != 3 or not parts[2].isdigit():
-            raise PublishDataValidationError('批量读取 Git 对象的响应格式无效')
-        size = int(parts[2])
-        if parts[1] != b'blob':
-            raise PublishDataValidationError(f'发布路径不是普通文件对象: {relative}')
-        raw = output[cursor:cursor + size]
-        if len(raw) != size:
-            raise PublishDataValidationError('批量读取 Git 对象的字节数不完整')
-        result[relative] = raw
-        cursor += size
-        if output[cursor:cursor + 1] == b'\n':
-            cursor += 1
-    return result
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.git_batch_blob_bytes(rev, relatives, hooks=globals())
 
 
 def validate_git_index_against_review_receipt(receipt, paths):
     """校验已暂存的二进制对象和删除记录与已签名审查凭证完全一致。"""
-    manifest = set(_git_relative_manifest(paths))
-    records = receipt.get('files') if isinstance(receipt, dict) else None
-    if not isinstance(records, list):
-        raise PublishDataValidationError('审查凭证缺少可校验的文件记录')
-    by_path = {
-        record.get('path'): record
-        for record in records
-        if isinstance(record, dict) and isinstance(record.get('path'), str)
-    }
-    if set(by_path) != manifest or len(by_path) != len(records):
-        raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
-
-    # 一次批量读取代替 374 次 git show；逐项校验与错误文案保持不变。
-    staged_blobs = _git_batch_blob_bytes('', sorted(manifest))
-    for relative in sorted(manifest):
-        record = by_path[relative]
-        staged = staged_blobs.get(relative)
-        if record.get('deleted') is True:
-            if staged is not None:
-                raise PublishDataValidationError(
-                    f'审查凭证要求删除，但 index 仍包含文件: {relative}'
-                )
-            continue
-        expected = str(record.get('sha256') or '')
-        if not re.fullmatch(r'[0-9a-f]{64}', expected):
-            raise PublishDataValidationError(f'审查凭证文件哈希非法: {relative}')
-        if staged is None:
-            raise PublishDataValidationError(f'index 缺少已审查文件: {relative}')
-        actual = hashlib.sha256(staged).hexdigest()
-        if actual != expected:
-            raise PublishDataValidationError(
-                f'index 中的文件字节与 review 凭证不一致: {relative}'
-            )
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.validate_git_index_against_review_receipt(
+        receipt, paths, hooks=globals(),
+    )
 
 
 def _expected_commit_delta_paths(receipt, base_head):
     """对照不可变的审查基线，算出确切的已审查差异。"""
-    records = [record for record in receipt.get('files') or []
-               if isinstance(record, dict) and isinstance(record.get('path'), str)]
-    baselines = _git_batch_blob_bytes(
-        base_head, sorted({record['path'] for record in records}),
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.expected_commit_delta_paths(
+        receipt, base_head, hooks=globals(),
     )
-    expected = set()
-    for record in records:
-        relative = record['path']
-        baseline = baselines.get(relative)
-        if record.get('deleted') is True:
-            if baseline is not None:
-                expected.add(relative)
-            continue
-        reviewed_sha = str(record.get('sha256') or '')
-        baseline_sha = hashlib.sha256(baseline).hexdigest() if baseline is not None else None
-        if baseline_sha != reviewed_sha:
-            expected.add(relative)
-    return expected
 
 
 def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
     """校验父提交、确切差异和不可变二进制对象，堵住所有钩子与竞态窗口。"""
-    manifest = set(_git_relative_manifest(paths))
-    records = receipt.get('files') if isinstance(receipt, dict) else None
-    if not isinstance(records, list):
-        raise PublishDataValidationError('审查凭证缺少可校验的文件记录')
-    by_path = {
-        record.get('path'): record
-        for record in records
-        if isinstance(record, dict) and isinstance(record.get('path'), str)
-    }
-    if set(by_path) != manifest or len(by_path) != len(records):
-        raise PublishDataValidationError('审查凭证与待提交路径集合不一致')
-    base_head = str(receipt.get('baseHead') or '').lower()
-    parents = _run_git(
-        ['rev-list', '--parents', '-n', '1', commit], text=True, check=True,
-    ).stdout.strip().lower().split()
-    if len(parents) != 2 or parents[1] != base_head:
-        raise PublishDataValidationError('发布提交必须是 review 基线的唯一单父提交')
-    actual_delta = set(filter(None, _run_git(
-        ['diff-tree', '--no-commit-id', '--name-only', '-r', commit],
-        text=True, check=True,
-    ).stdout.splitlines()))
-    expected_delta = _expected_commit_delta_paths(receipt, base_head)
-    if actual_delta != expected_delta:
-        unexpected = sorted(actual_delta - expected_delta)
-        missing = sorted(expected_delta - actual_delta)
-        raise PublishDataValidationError(
-            f'发布提交完整变更集与审查凭证不一致；额外={unexpected}，缺失={missing}'
-        )
-    # 一次批量读取代替 374 次 git show；逐项校验与错误文案保持不变。
-    committed_blobs = _git_batch_blob_bytes(commit, sorted(manifest))
-    for relative in sorted(manifest):
-        record = by_path[relative]
-        committed = committed_blobs.get(relative)
-        if record.get('deleted') is True:
-            if committed is not None:
-                raise PublishDataValidationError(
-                    f'审查凭证要求删除，但提交仍包含文件: {relative}'
-                )
-            continue
-        expected = str(record.get('sha256') or '')
-        if committed is None or hashlib.sha256(committed).hexdigest() != expected:
-            raise PublishDataValidationError(
-                f'提交中的文件字节与 review 凭证不一致: {relative}'
-            )
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.validate_git_commit_against_review_receipt(
+        receipt, paths, commit, hooks=globals(),
+    )
 
 
 def _remote_main_oid():
-    result = _run_git(
-        ['ls-remote', '--exit-code', GITHUB_REMOTE, 'refs/heads/main'],
-        text=True, timeout_kind='network',
-    )
-    if result.returncode != 0:
-        if result.timed_out:
-            return None, '查询远端 main OID 超时，子进程组已终止'
-        return None, (result.stderr or result.stdout or '').strip()
-    first_line = (result.stdout or '').splitlines()[0] if result.stdout else ''
-    oid = first_line.split(None, 1)[0].lower() if first_line else ''
-    if not re.fullmatch(r'[0-9a-f]{40,64}', oid):
-        return None, f'远端返回不可验证的 OID: {oid!r}'
-    return oid, ''
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.remote_main_oid(hooks=globals())
 
 
 def _remote_identity_sha256():
-    """把一次已验证的发布绑定到配置远端确切的推送 URL。
-
-    不保存 URL 本身，因为里面可能带凭据。对远端名
-    和 Git 解析出的确切推送 URL 求哈希，仍然能让
-    把 ``origin`` 换成一个无关仓库的操作作废旧发布证据。
-    """
-    result = _run_git(
-        ['remote', 'get-url', '--push', GITHUB_REMOTE], text=True,
-    )
-    if result.returncode != 0:
-        return None, f'无法解析当前 Git remote {GITHUB_REMOTE!r} 的 push URL'
-    push_url = (result.stdout or '').strip()
-    if not push_url or '\n' in push_url or '\x00' in push_url:
-        return None, f'当前 Git remote {GITHUB_REMOTE!r} 的 push URL 非法'
-    return _stable_json_sha256({
-        'remote': GITHUB_REMOTE,
-        'pushUrl': push_url,
-    }), ''
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.remote_identity_sha256(hooks=globals())
 
 
 def _report_push_retry(local_head, detail):
-    print(f'  ❌ Push/远端验证失败，本地提交 {local_head} 已保留，远端发布尚未确认')
-    if detail:
-        print(f'  原因: {detail}')
-    print(f'  可重试: git -C {BLOG_REPO} push {GITHUB_REMOTE} HEAD:main')
-    print(f'  可验证: git -C {BLOG_REPO} ls-remote {GITHUB_REMOTE} refs/heads/main')
-    print(f'  预期远端 OID: {local_head}')
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.report_push_retry(local_head, detail, hooks=globals())
 
 
 def _load_push_receipt(date_str):
@@ -14888,15 +14897,7 @@ def _load_push_receipt(date_str):
 
 
 def _validate_push_generation_input_integrity(date_str):
-    """在推送改动 Git 之前，重放 schema-v3 的生成输入证明。
-
-    ``load_verified_review_receipt`` 会完成整套凭证检查，但
-    ``git_push`` 也会被恢复和维护入口直接调用。在这里保留这段
-    小范围重放，那些调用方就没法通过替换或打桩凭证加载
-    来绕过来源输入契约。较早的清单
-    有意保留原有的旧行为；
-    它们的凭证检查不变。
-    """
+    """在推送改动 Git 之前，重放 schema-v3 的生成输入证明。"""
     import time
     started = time.monotonic()
     manifest_path = generation_manifest_path(date_str)
@@ -14918,204 +14919,36 @@ def _validate_push_generation_input_integrity(date_str):
 
 
 def _git_tracks_path(relative_path):
-    result = subprocess.run(
-        ['git', 'ls-files', '--error-unmatch', '--', relative_path],
-        cwd=str(Path(BLOG_REPO).expanduser().resolve()),
-        capture_output=True, text=True,
-    )
-    return result.returncode == 0
+    mod = globals().get('blog_git_publication') or _resolve_publisher_submodule('blog_git_publication')
+    return mod.git_tracks_path(relative_path, hooks=globals())
 
 
 def git_push(date_str, publish_paths, rollback_state=None):
     """提交，把 HEAD 显式推送到 main，并核验远端对象 ID。"""
-    import time
-    manifest = _git_relative_manifest(publish_paths)
-    state = rollback_state
-    try:
-        verified_paths, _verified_receipt_path = load_verified_review_receipt(date_str)
-        # 这段必须留在 validate_git_publish_branch、索引抓取、
-        # add、commit、凭证采纳以及任何远端操作之前。凭证校验
-        # 在下面有意重复一次，
-        # 作为它自己的不可变证据契约的一部分。
-        _validate_push_generation_input_integrity(date_str)
-        if _git_relative_manifest(verified_paths) != manifest:
-            raise PublishDataValidationError('git push 路径与已验证审查凭证不一致')
-        receipt, receipt_path, base_head = _load_push_receipt(date_str)
-        current_head = validate_git_publish_branch()
-        if _ACTIVE_PUBLICATION_INCLUDE_ID is not None:
-            validate_single_publication_worktree(publish_paths)
-        validate_git_index(publish_paths)
-        publication_commit = str(receipt.get('publicationCommit') or '').lower()
-        verified_remote_oid = str(receipt.get('remoteVerifiedOid') or '').lower()
-        if verified_remote_oid:
-            if verified_remote_oid != publication_commit:
-                raise PublishDataValidationError(
-                    '已发布凭证的 remoteVerifiedOid 与 publicationCommit 不一致'
-                )
-            stored_remote_identity = str(
-                receipt.get('remoteIdentitySha256') or ''
-            ).lower()
-            if (
-                current_head != publication_commit
-                or receipt.get('remoteName') != GITHUB_REMOTE
-                or not re.fullmatch(r'[0-9a-f]{64}', stored_remote_identity)
-            ):
-                raise PublishDataValidationError(
-                    '已发布凭证与当前 HEAD 或 Git remote 身份不一致，拒绝向其他远端重放'
-                )
-            current_remote_identity, identity_error = _remote_identity_sha256()
-            current_remote_oid, _remote_error = _remote_main_oid()
-            if (
-                current_remote_identity != stored_remote_identity
-                or current_remote_oid != publication_commit
-            ):
-                detail = identity_error or (
-                    '无法实时查询当前远端 main OID'
-                    if current_remote_oid is None
-                    else f'当前远端 main={current_remote_oid}'
-                )
-                raise PublishDataValidationError(
-                    '已发布凭证实时远端复核失败，拒绝覆盖或重放：' + detail
-                )
-            validate_git_commit_against_review_receipt(
-                receipt, publish_paths, publication_commit,
-            )
-            validate_manifest_clean_against_head(publish_paths)
-            print(
-                f'  ✅ 已发布提交 {publication_commit} 的 remote 身份和远端 main OID '
-                '实时复核通过，无需再次 push'
-            )
-            return True
-        retrying_existing_commit = publication_commit and current_head == publication_commit
-        if retrying_existing_commit:
-            parent = _run_git(
-                ['rev-parse', 'HEAD^'], text=True, check=True,
-            ).stdout.strip().lower()
-            if parent != base_head:
-                raise PublishDataValidationError('待重试发布提交的父提交与 review 基线不一致，拒绝推送')
-            validate_git_commit_against_review_receipt(receipt, publish_paths, current_head)
-        # 恢复 commit 成功、receipt 原子写入前崩溃的窗口。只有单父、
-        # exact delta 和所有 blob 都严格匹配旧 receipt 时才收养该提交。
-        if not retrying_existing_commit and not publication_commit and current_head != base_head:
-            validate_git_commit_against_review_receipt(receipt, publish_paths, current_head)
-            receipt['publicationCommit'] = current_head
-            atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
-            publication_commit = current_head
-            retrying_existing_commit = True
-        if not retrying_existing_commit and current_head != base_head:
-            raise PublishDataValidationError('博客 HEAD 已偏离 review 时基线，拒绝推送未审查的本地提交；请重新生成并 review')
-        if state is None:
-            capture_started = time.monotonic()
-            state = capture_git_publish_state(publish_paths)
-            print(f'  ⏱ capture state: {time.monotonic() - capture_started:.2f}s')
-        if manifest and not retrying_existing_commit:
-            # 已删除且从未提交过的派生资产（例如本次重新生成时被移除的图）
-            # 既不在工作树也不在索引里，git add 会以 128 失败；这类路径本来
-            # 就没有差异可提交，跳过即可，其余路径仍逐个精确暂存。
-            blog_root = Path(BLOG_REPO).expanduser().resolve()
-            addable = [item for item in manifest
-                       if (blog_root / item).exists() or _git_tracks_path(item)]
-            if addable:
-                add_started = time.monotonic()
-                _run_git(
-                    ['add', '--', *addable], check=True,
-                )
-                print(f'  ⏱ git add ({len(addable)} 路径): '
-                      f'{time.monotonic() - add_started:.2f}s')
-            validate_git_index(publish_paths)
-            validate_git_index_against_review_receipt(receipt, publish_paths)
-        staged = _run_git(
-            ['diff', '--cached', '--quiet', '--', *manifest],
-        ) if manifest else None
-        if retrying_existing_commit:
-            local_head = current_head
-        elif staged is not None and staged.returncode == 1:
-            # 把这段紧贴在 commit 旁边，这样工作树与索引之间的竞态
-            # 就没法把已经审查过的路径集合变成未审查的字节。
-            validate_git_index(publish_paths)
-            validate_git_index_against_review_receipt(receipt, publish_paths)
-            review_description = (
-                '提交已通过逐论文独立人工语义、逐图像素事实与 Hugo gate 审查；'
-                if receipt.get('reviewMode') == MANUAL_REVIEW_MODE
-                else '提交已通过严格 LLM、多模态图片与 Hugo gate 审查；'
-            )
-            commit_started = time.monotonic()
-            _run_git(
-                [
-                    'commit',
-                    '-m', f'content: 发布 {date_str} 论文速递并同步评分与审查结果',
-                    '-m', review_description
-                          + '推送前已逐文件校验审查凭证 SHA-256，本步不重新生成或 review。',
-                ],
-                check=True, timeout_kind='commit',
-            )
-            print(f'  ⏱ git commit: {time.monotonic() - commit_started:.2f}s')
-            local_head = validate_git_publish_branch()
-            validate_git_commit_against_review_receipt(receipt, publish_paths, local_head)
-            receipt['publicationCommit'] = local_head
-            atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
-        elif staged is not None and staged.returncode > 1:
-            raise subprocess.CalledProcessError(staged.returncode, staged.args)
+    mod = globals().get('blog_git_publication')
+    if mod is None:
+        resolver = globals().get('_resolve_publisher_submodule')
+        if callable(resolver):
+            mod = resolver('blog_git_publication')
         else:
-            raise PublishDataValidationError('审查文件相对基线没有可提交差异，拒绝推送任意已有本地提交')
-    except (
-        subprocess.CalledProcessError, subprocess.TimeoutExpired,
-        PublishDataValidationError, OSError, UnicodeError,
-    ) as exc:
-        try:
-            restore_git_publish_state(state)
-            print(f"  ❌ Git add/commit 失败，已恢复发布前 index 与工作树: {exc}")
-        except Exception as restore_exc:
-            print(f"  ❌ Git add/commit 失败，且自动恢复失败: {exc}; 恢复错误: {restore_exc}")
-        return False
-
-    push_started = time.monotonic()
-    remote_identity_before, identity_error = _remote_identity_sha256()
-    if remote_identity_before is None:
-        print(f'  ⏱ remote identity: {time.monotonic() - push_started:.2f}s')
-        _report_push_retry(local_head, identity_error)
-        return False
-    result = _run_git(
-        ['push', GITHUB_REMOTE, 'HEAD:main'],
-        text=True, timeout_kind='network',
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts = next(
+                (
+                    c / 'scripts' for b in (_Path.cwd(), *(_Path(x) for x in _sys.path if x))
+                    for c in (b, *b.parents) if (c / 'scripts' / ('blog_git_publication' + '.py')).is_file()
+                ),
+                None,
+            )
+            if _scripts is None:
+                raise ImportError('无法定位 scripts/blog_git_publication.py')
+            if str(_scripts) not in _sys.path:
+                _sys.path.insert(0, str(_scripts))
+            mod = __import__('blog_git_publication')
+            globals()['blog_git_publication'] = mod
+    return mod.execute_git_push(
+        date_str, publish_paths, rollback_state=rollback_state, hooks=globals(),
     )
-    remote_oid, verify_error = _remote_main_oid()
-    remote_identity_after, identity_error = _remote_identity_sha256()
-    if (
-        remote_oid == local_head
-        and remote_identity_after is not None
-        and remote_identity_after == remote_identity_before
-    ):
-        if result.returncode != 0:
-            print('  ℹ️ git push 返回非零，但远端 main 已与本地 HEAD 一致，以 OID 验证结果为准')
-        print(f'  ⏱ 远端推送与核验: {time.monotonic() - push_started:.2f}s')
-        print(f"  ✅ 已推送并验证远端 main={remote_oid}，自动部署中...")
-        receipt['remoteVerifiedOid'] = remote_oid
-        receipt['remoteVerifiedAt'] = datetime.datetime.now(
-            datetime.timezone(datetime.timedelta(hours=8))
-        ).isoformat()
-        receipt['remoteName'] = GITHUB_REMOTE
-        receipt['remoteIdentitySha256'] = remote_identity_after
-        atomic_write_json(receipt_path, receipt, ensure_ascii=False, indent=2)
-        blog_url = os.environ.get('PAPER_DIGEST_BLOG_URL', 'https://nanless.github.io/audio-paper-digest-blog/posts')
-        if blog_url:
-            print(f"  🌐 {blog_url}/{date_str}/")
-        return True
-
-    print(f'  ⏱ 远端推送与核验（失败）: {time.monotonic() - push_started:.2f}s')
-    detail = verify_error or identity_error
-    if remote_identity_after is not None and remote_identity_after != remote_identity_before:
-        detail = 'Git remote 在 push 与远端 OID 校验之间发生变化'
-    push_detail = (
-        'git push 超时，已终止完整进程组'
-        if result.timed_out else (result.stderr or result.stdout or '').strip()
-    )
-    if push_detail:
-        detail = f'{push_detail}; {detail}' if detail else push_detail
-    elif remote_oid:
-        detail = f'远端 main={remote_oid}，与本地 HEAD 不一致'
-    _report_push_retry(local_head, detail)
-    return False
 
 
 def review_receipt_path(date_str):

@@ -468,6 +468,8 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | 文件 | 类型与职责 |
 |---|---|
 | `blog_entry_loader.py` | Python 桥：以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
+| `blog_git_publication.py` | Python 内部库：封装发布状态快照捕获与无痕回滚、最小子进程环境 `git cat-file --batch` 暂存区/提交树精确字节校验、远端推送身份与 `refs/heads/main` OID 核验，与生成模板指纹解耦。 |
+| `blog_review_image_loader.py` | Python 内部库：封装多模态审查的公网/代理 Fake-IP 固定对端下载、无网络无 JS Playwright SVG 光栅化与受控目录 `O_NOFOLLOW` 图片加载，与生成模板指纹解耦。 |
 | `daily_hugo_capture.py` | Python 内部库：保留正常日更审查中同次 Hugo 的输入观察、机器页面映射和主 HTML，以不可覆盖记录供新审查凭证引用及冷核；不授予完整输入快照、科学资格或部署通过，见[观察记录边界](../docs/three-workflows.md#日更审查的同次-html-观察记录)。 |
 | `daily_html_projection.py` | Python 纯库：固定 v1 保留公式无空白规则，固定 v2 另允许内部孤立单空格，共用有限静态 HTML 解析；保留词界、代码和公式原字面，不解释 TeX、执行 HTML 或请求资源。普通返回值不授予来源或出版资格。 |
 | `github_pages_deployment.py` | Python 机械观察库：用固定匿名 HTTPS 读取受控仓库的工作流、精确运行轮次、任务和部署状态元数据；有界分页并复核较新记录，始终保留网页、公开资源和产物消费链未核验的边界，不授予发布或来源资格。 |
