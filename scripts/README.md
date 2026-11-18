@@ -511,7 +511,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 汇总已保存的失败、事实义务和审查问题，按错误码建议入口；默认只读。记录完整性与实际来源、完整失败集合、正式恢复权限分别核验；`--execute --yes` 仍受原入口检查约束，见[恢复工具](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 准备每篇 1–8 个既有节点的修正记录和清单，计算 SHA/UUID。默认 dry-run，`--write` 才写 `data/runtime`；正式采纳另核完整当前输入、原付费链、真实来源与整篇质量，见[清单准备范围](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
-| `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
+| `impact.js` | Node 入口：`npm run impact -- <file-or-dir...> [--git] [--json] [--run-tests]` 基于全仓静态反向传递依赖图与五类协议/阶段指纹闭包，列出改动影响的入口、精确 JS/Python 测试文件与重验范围；默认只读，`--git` 无锁读取工作区改动，`--run-tests` 隔离串行运行受影响单测（不替代提交前 `npm run verify`）。 |
 | `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json。完整条件见本表后的同名说明。 |
 | `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印正式状态、网页核验及当前发布不生图登记的收尾步骤；登记缺失时提示重建清单后豁免，不引导图片准备，不自动登记或调用图像 API。 |
 | `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对页面 SHA、逐字问题与误报解释。退出判断使用 `currentMatchVerdict`；旧 `overriddenFailedPages` 等字段只作兼容投影。诊断不修改审查结果或授予发布资格，完整范围见[误报记录](../docs/maintenance.md#发布后网页核验与收尾)。 |

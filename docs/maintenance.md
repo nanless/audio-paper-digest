@@ -212,7 +212,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 表格与影响面预检
 
 - `npm run table:check -- --draft FILE [--format json|markdown]`：离线检查表格粘连复写、列数与单位声明，不写数据、不替代正式发布校验。显式格式优先；未指定时 `.md`/`.markdown` 按 Markdown，其余按 JSON，坏 JSON 不回退。JSON 支持正文字符串、Reader 的 `sections[].body`、`markdown` 或 `article`；局部空段可保留，错误正文类型或整正文空白退出 2。围栏按打开的字符与长度关闭，代码样例不因短围栏或混用字符被当作正文表格；这不是完整 Markdown 解析器。
-- `npm run impact -- <file-or-dir>`：静态列出改动影响的入口、测试与重验范围，避免改一处规则却漏跑相关流程。
+- `npm run impact -- <file-or-dir>... [--json] [--run-tests]` 或 `npm run impact -- --git [--json] [--run-tests]`：结合受控源码的静态反向传递依赖图与 `package.json` 入口映射，列出改动波及的命令、精确关联的 JavaScript/Python 单测（`exactTests`）以及五类实现与协议指纹闭包（页面渲染 `paperPageRenderer`、博客审查协议 `blogReviewProtocol`、会议处理 `conferenceProcess`、历史直改 `historicalDirectRewrite`、客户端协议 `clientProtocols`）。扫描严格跳过符号链接、工作区越界路径与运行数据目录。`--git` 在最小子环境中以 `--no-optional-locks` 无锁只读解析 `git status --porcelain=v1 -z` 的已修改及重命名文件，工作区干净时返回 0；`--run-tests` 以 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1` 按套件隔离串行执行全部受影响 JS/Python 单测后再汇总退出码，未知、空白或冲突参数退出 2。定向测试通过不代替提交前完整 `npm run verify`。
 - 审查误报记录使用 `scripts/lib/review-overrides.js` 的严格 schema（页面 SHA、发布提交、逐字证据、复核人），只把匹配的 error 注释为 warn，不放宽真实错误；是否采用由调用方显式决定。
 
 ## 发布后网页核验与收尾
