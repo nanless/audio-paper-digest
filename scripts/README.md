@@ -105,6 +105,9 @@ npm run test:compat
 | `lib/daily-arxiv-oai-source.js`、`lib/daily-arxiv-announcement-source.js` | 日更显式 `--official-oai-recovery` 的官方元数据恢复与公告核验。仅同一类别、同一固定窗口内日期查询和类别列表均真实 HTTP 429 时启用；封存两种 OAI 格式的完整 XML 分页及目标日 RSS，按共同身份核对完整集合，版本时间以 Raw 为准，标题、摘要及有序作者以结构化格式为准。恢复、数据校验和下一日边界均重读原字节重建实际候选，保留原批次、已完成来源和原失败，见[补抓边界](../docs/daily-fetch-boundary.md#两条-atom-查询均限流时的官方-oai-恢复)。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `deep-analyzer.js` | Node 核心：按各流程来源适配读取单篇全文，执行多阶段分析、评分审计、API Reader 写作和论文图规划。日更恢复读取本批封存来源，不重新抓取。结构修复后，只用原文证据核验详细核心摘要；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
+| `lib/public-resource-probe.js` | Node 库：封装公网/代理 Fake-IP 固定对端 HTTPS 传输、GitHub README 复现文档实测探测及外部开源资源与 Demo 页面可达性核验，策略异常全链路 Fail-Closed 透传并遵守受控运行网络禁令。 |
+| `lib/scoring-audit-contract.js` | Node 库：封装 8 维类型感知评分审计规则、防跨维度双重扣分检查、实测证据硬上限裁剪与开源锚点校准。 |
+| `lib/reader-repair-evidence-slice.js` | Node 库：在 Reader 普通局部节点补丁请求（1–8 既有节点）满足可证明原表/引文完整覆盖、兼容顺延目标且无坏表/全文扩写阻断时，构造 UTF-16 码点安全的紧凑证据切片；任一条件不满足即零风险回退原全量证据，候选固定身份与补丁后整稿冷核保持不变。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
