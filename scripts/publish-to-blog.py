@@ -52,6 +52,7 @@ if str(SHARED_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
 import blog_git_publication
 import blog_review_image_loader
+import publish_node_replay_client
 
 
 def _resolve_publisher_submodule(module_name):
@@ -5987,13 +5988,23 @@ def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
     source_correction = paper.get('conferenceSourceCorrection')
     from conference_source_correction_format import locator_family
     source_correction_stage = stage_replay and bool(locator_family(source_correction))
-    with tempfile.NamedTemporaryFile(mode='w+b') as source_file:
-        source_file.write(payload); source_file.flush(); source_file.seek(0)
-        result = _run_bounded_subprocess([node, str(cli), str(source_file.fileno())],
-            cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180 if source_correction_stage else 30,
-            max_output_bytes=64 * 1024, pass_fds=(source_file.fileno(),))
+    replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_timeout = 180 if source_correction_stage else 30
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=replay_timeout,
+            max_output_bytes=64 * 1024, use_named_temp=True,
+        )
+    else:
+        with tempfile.NamedTemporaryFile(mode='w+b') as source_file:
+            source_file.write(payload); source_file.flush(); source_file.seek(0)
+            result = _run_bounded_subprocess([node, str(cli), str(source_file.fileno())],
+                cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=replay_timeout,
+                max_output_bytes=64 * 1024, pass_fds=(source_file.fileno(),))
     from publication_local_replay import checked_replay_response
     response = checked_replay_response(result, worker='core-summary-semantic-replay-cli.js',
                                       timeout_seconds=180 if source_correction_stage else 30,
@@ -9040,15 +9051,24 @@ def _reader_html_blank_span_keys(paper, article, rendered_tables):
         'sealedBundleRoot': str(DAILY_FRESH_SOURCE_RUNS_DIR / str(proof.get('runId')) / 'sources')})
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('HTML 合并分类行来源重放输入超过上限')
-    with tempfile.TemporaryFile() as source_file:
-        source_file.write(payload)
-        source_file.flush()
-        source_file.seek(0)
-        result = _run_bounded_subprocess(
-            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-dom-span-replay-cli.js'), str(source_file.fileno())],
-            cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-dom-span-replay-cli.js'
+    replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=30, max_output_bytes=1024 * 1024,
+        )
+    else:
+        with tempfile.TemporaryFile() as source_file:
+            source_file.write(payload)
+            source_file.flush()
+            source_file.seek(0)
+            result = _run_bounded_subprocess(
+                [node, str(cli), str(source_file.fileno())],
+                cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
     if result.returncode != 0 or result.timed_out or result.output_truncated:
         return set()
     try:
@@ -9263,13 +9283,23 @@ def _replay_reader_sealed_pdf_grid(paper, marked, source_dir):
                 raise PublishDataValidationError('PDF 选择投影冷核需要正常 Node 运行时。')
             encoded = json.dumps({'artifacts': artifacts, 'binding': binding, 'proof': saved},
                                  ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-            with tempfile.NamedTemporaryFile(prefix='pd-reader-pdf-selection-', suffix='.json') as selection_input:
-                selection_input.write(encoded); selection_input.flush(); selection_input.seek(0)
-                replay = _run_bounded_subprocess(
-                    [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-pdf-selection-replay-cli.js'),
-                     str(selection_input.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
-                    env=build_child_process_env(), timeout_seconds=30,
-                    max_output_bytes=1024 * 1024, pass_fds=(selection_input.fileno(),))
+            selection_cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-pdf-selection-replay-cli.js'
+            selection_env = build_child_process_env()
+            replay_runner = globals().get('_run_node_replay_cli')
+            if replay_runner is not None:
+                replay = replay_runner(
+                    selection_cli, encoded, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+                    env=selection_env, timeout_seconds=30, max_output_bytes=1024 * 1024,
+                    use_named_temp=True, temp_prefix='pd-reader-pdf-selection-', temp_suffix='.json',
+                )
+            else:
+                with tempfile.NamedTemporaryFile(prefix='pd-reader-pdf-selection-', suffix='.json') as selection_input:
+                    selection_input.write(encoded); selection_input.flush(); selection_input.seek(0)
+                    replay = _run_bounded_subprocess(
+                        [node, str(selection_cli), str(selection_input.fileno())],
+                        cwd=str(SHARED_SCRIPTS_DIR.parent),
+                        env=selection_env, timeout_seconds=30,
+                        max_output_bytes=1024 * 1024, pass_fds=(selection_input.fileno(),))
             try:
                 accepted = json.loads(replay.stdout)
             except (ValueError, TypeError):
@@ -9805,12 +9835,21 @@ def _replay_authenticated_pdf_table_bindings(paper):
     payload = _daily_fresh_compact_json_bytes({'paper': paper, 'authenticatedPdfTables': True})
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('PDF 表格原来源冷重放输入超过上限。')
-    with tempfile.TemporaryFile() as source:
-        source.write(payload); source.flush(); source.seek(0)
-        result = _run_bounded_subprocess([node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'),
-            str(source.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'
+    replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=180, max_output_bytes=1024 * 1024,
+        )
+    else:
+        with tempfile.TemporaryFile() as source:
+            source.write(payload); source.flush(); source.seek(0)
+            result = _run_bounded_subprocess([node, str(cli),
+                str(source.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
     response = checked_replay_response(result, worker='reader-resource-claims-replay-cli.js', timeout_seconds=180)
     if response.get('verified') is not True \
             or not isinstance(response.get('tableEvidence'), dict):
@@ -10462,13 +10501,22 @@ def _validate_authenticated_pdf_resource_identity_replay(paper):
     payload = _daily_fresh_compact_json_bytes({'paper': paper, 'authenticatedPdfResources': True})
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('认证 PDF 资源重放输入超过上限。')
-    with tempfile.TemporaryFile() as source_file:
-        source_file.write(payload); source_file.flush(); source_file.seek(0)
-        result = _run_bounded_subprocess(
-            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'), str(source_file.fileno())],
-            cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'
+    replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=180, max_output_bytes=1024 * 1024,
+        )
+    else:
+        with tempfile.TemporaryFile() as source_file:
+            source_file.write(payload); source_file.flush(); source_file.seek(0)
+            result = _run_bounded_subprocess(
+                [node, str(cli), str(source_file.fileno())],
+                cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
     response = checked_replay_response(result, worker='reader-resource-claims-replay-cli.js', timeout_seconds=180)
     if response.get('verified') is not True:
         reason = response.get('message', '') if isinstance(response, dict) else '响应必须为对象'
@@ -12903,18 +12951,27 @@ def _run_reader_author_source_replay(payload, paper_ids):
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('作者来源重放需要 Node.js')
-    with tempfile.TemporaryFile() as source_file:
-        source_file.write(payload)
-        source_file.flush()
-        source_file.seek(0)
-        result = _run_bounded_subprocess(
-            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-author-replay-cli.js'), str(source_file.fileno())],
-            cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items()
-                 if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=30, max_output_bytes=1024 * 1024,
-            pass_fds=(source_file.fileno(),),
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-author-replay-cli.js'
+    replay_env = {key: value for key, value in os.environ.items()
+                  if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=30, max_output_bytes=1024 * 1024,
         )
+    else:
+        with tempfile.TemporaryFile() as source_file:
+            source_file.write(payload)
+            source_file.flush()
+            source_file.seek(0)
+            result = _run_bounded_subprocess(
+                [node, str(cli), str(source_file.fileno())],
+                cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=30, max_output_bytes=1024 * 1024,
+                pass_fds=(source_file.fileno(),),
+            )
     if result.returncode != 0 or result.timed_out or result.output_truncated \
             or result.stdout.strip() != '{"verified":true}':
         raise PublishDataValidationError(
@@ -13031,13 +13088,23 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     payload = _daily_fresh_compact_json_bytes({'paper': paper, 'sourceText': source_text})
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('资源宣称规则重放输入超过上限。')
-    with tempfile.TemporaryFile() as source_file:
-        source_file.write(payload); source_file.flush(); source_file.seek(0)
-        result = _run_bounded_subprocess(
-            [node, str(cli), str(source_file.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180 if authenticated_footnotes or bound_patch_completion else 30,
-            max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_timeout = 180 if authenticated_footnotes or bound_patch_completion else 30
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=replay_timeout,
+            max_output_bytes=1024 * 1024,
+        )
+    else:
+        with tempfile.TemporaryFile() as source_file:
+            source_file.write(payload); source_file.flush(); source_file.seek(0)
+            result = _run_bounded_subprocess(
+                [node, str(cli), str(source_file.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=replay_timeout,
+                max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
     accepted_response = result.stdout.strip() == '{"verified":true}'
     if authenticated_footnotes:
         try:
@@ -13137,13 +13204,22 @@ def _assert_no_pending_daily_scoring_refresh(papers):
     })
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('日更评分保存稿冷核输入超过上限')
-    with tempfile.TemporaryFile() as source_file:
-        source_file.write(payload); source_file.flush(); source_file.seek(0)
-        response = _run_bounded_subprocess(
-            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'daily-scoring-refresh-checkpoint-cli.js'), str(source_file.fileno())],
-            cwd=str(SHARED_SCRIPTS_DIR.parent),
-            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'daily-scoring-refresh-checkpoint-cli.js'
+    replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_runner = globals().get('_run_node_replay_cli')
+    if replay_runner is not None:
+        response = replay_runner(
+            cli, payload, node=node, cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env=replay_env, timeout_seconds=180, max_output_bytes=1024 * 1024,
+        )
+    else:
+        with tempfile.TemporaryFile() as source_file:
+            source_file.write(payload); source_file.flush(); source_file.seek(0)
+            response = _run_bounded_subprocess(
+                [node, str(cli), str(source_file.fileno())],
+                cwd=str(SHARED_SCRIPTS_DIR.parent),
+                env=replay_env,
+                timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
     if response.returncode != 0 or response.timed_out or response.output_truncated \
             or response.stdout.strip() != '{"verified":true}':
         raise PublishDataValidationError(
@@ -14361,6 +14437,73 @@ def _run_bounded_subprocess(
                 return_code, command, output=stdout, stderr=stderr,
             )
         return result
+
+
+_DEFAULT_RUN_BOUNDED_SUBPROCESS = _run_bounded_subprocess
+_DEFAULT_SHUTIL_WHICH = shutil.which
+
+
+def _run_node_replay_cli(
+    cli_path,
+    payload,
+    *,
+    cwd,
+    env,
+    timeout_seconds,
+    max_output_bytes,
+    node=None,
+    missing_node_message='规则重放需要 Node.js。',
+    use_named_temp=False,
+    temp_prefix=None,
+    temp_suffix=None,
+):
+    """通过持久禁网 Node JSON-RPC 工作进程池执行只读重放；测试桩或显式禁用时无损回退原 FD 子进程。"""
+    resolved_node = node if node is not None else shutil.which('node')
+    if not resolved_node:
+        raise PublishDataValidationError(missing_node_message)
+    client_mod = globals().get('publish_node_replay_client') or _resolve_publisher_submodule('publish_node_replay_client')
+    use_subprocess_fallback = (
+        _run_bounded_subprocess is not _DEFAULT_RUN_BOUNDED_SUBPROCESS
+        or shutil.which is not _DEFAULT_SHUTIL_WHICH
+        or os.environ.get('PD_DISABLE_NODE_REPLAY_WORKER') == '1'
+        or (isinstance(env, dict) and ('NODE_OPTIONS' in env or 'NODE_PATH' in env))
+        or not client_mod.can_handle_replay_cli(cli_path)
+    )
+    if use_subprocess_fallback:
+        requires_single_link = use_named_temp or Path(cli_path).name in {
+            'core-summary-semantic-replay-cli.js',
+            'reader-pdf-selection-replay-cli.js',
+        }
+        if requires_single_link:
+            named_kwargs = {'mode': 'w+b'}
+            if temp_prefix is not None:
+                named_kwargs['prefix'] = temp_prefix
+            if temp_suffix is not None:
+                named_kwargs['suffix'] = temp_suffix
+            temp_cm = tempfile.NamedTemporaryFile(**named_kwargs)
+        else:
+            temp_cm = tempfile.TemporaryFile()
+        with temp_cm as source_file:
+            source_file.write(payload)
+            source_file.flush()
+            source_file.seek(0)
+            return _run_bounded_subprocess(
+                [resolved_node, str(cli_path), str(source_file.fileno())],
+                cwd=str(cwd),
+                env=env,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+                pass_fds=(source_file.fileno(),),
+            )
+    return client_mod.run_node_replay_request(
+        node=resolved_node,
+        cli_path=cli_path,
+        payload=payload,
+        cwd=str(cwd),
+        env=env,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def _is_pipeline_owned_paper(path, date_str):
@@ -15893,8 +16036,12 @@ def generation_template_fingerprint():
         'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
         'publication_local_replay.py': script_dir / 'publication_local_replay.py',
         'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
+        'publish_node_replay_client.py': script_dir / 'publish_node_replay_client.py',
+        'lib/publish-node-replay-worker.js': script_dir / 'lib' / 'publish-node-replay-worker.js',
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
         'lib/reader-pdf-selection-replay-cli.js': script_dir / 'lib' / 'reader-pdf-selection-replay-cli.js',
+        'lib/reader-dom-span-replay-cli.js': script_dir / 'lib' / 'reader-dom-span-replay-cli.js',
+        'lib/daily-scoring-refresh-checkpoint-cli.js': script_dir / 'lib' / 'daily-scoring-refresh-checkpoint-cli.js',
         'lib/reader-tables.js': script_dir / 'lib' / 'reader-tables.js',
         'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
         'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',

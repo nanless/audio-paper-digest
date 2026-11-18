@@ -1,30 +1,42 @@
 'use strict';
 // Replay the shared analysis contract against source bytes already authenticated
 // by the publisher. The only input channel is an inherited private descriptor.
-process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const fs = require('node:fs');
 const crypto = require('node:crypto');
-// Importing the analysis module installs human log timestamps. Keep the private
-// replay response on its original machine-readable stream.
-const writeOutput = value => fs.writeSync(1, value);
-process.stdout.write = process.stderr.write.bind(process.stderr);
-const deny = () => { throw new Error('Resource claim replay forbids network access'); };
-require('node:net').Socket.prototype.connect = deny;
-require('node:tls').connect = deny;
-for (const name of ['node:http', 'node:https']) {
-    require(name).request = deny; require(name).get = deny;
+
+function formatReplayError(error) {
+    return {
+        exitCode: 1,
+        stdout: JSON.stringify({
+            verified: false,
+            code: (error && error.code) || 'READER_RESOURCE_REPLAY_FAILED',
+            issues: error && Array.isArray(error.readerIssues) ? error.readerIssues : [],
+            message: error && typeof error.message === 'string' ? error.message : String(error)
+        })
+    };
 }
-require('node:http2').connect = deny;
-globalThis.fetch = deny;
-(async () => { try {
+
+function installNetworkDenial() {
+    const deny = () => { throw new Error('Resource claim replay forbids network access'); };
+    require('node:net').Socket.prototype.connect = deny;
+    require('node:tls').connect = deny;
+    for (const name of ['node:http', 'node:https']) {
+        require(name).request = deny; require(name).get = deny;
+    }
+    require('node:http2').connect = deny;
+    globalThis.fetch = deny;
+}
+
+async function executeResourceClaimsReplay(raw, argCount = 3) {
     require('../env-loader').requireExternalRuntime('reader-resource-claims-replay-cli.js');
-    const raw = process.argv[2];
     const fd = Number(raw);
-    if (process.argv.length !== 3 || !/^\d+$/.test(raw || '') || !Number.isSafeInteger(fd) || fd < 3) {
+    if (argCount !== 3 || !/^\d+$/.test(raw || '') || !Number.isSafeInteger(fd) || fd < 3) {
         throw new Error('Private input descriptor is required');
     }
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || ![0, 1].includes(stat.nlink) || (stat.mode & 0o777) !== 0o600
+    const uidOk = typeof process.getuid === 'function' && stat.uid !== undefined
+        ? stat.uid === process.getuid() : true;
+    if (!stat.isFile() || ![0, 1].includes(stat.nlink) || !uidOk || (stat.mode & 0o777) !== 0o600
         || stat.size < 2 || stat.size > 128 * 1024 * 1024) throw new Error('Unsafe replay input');
     const inputBytes = fs.readFileSync(fd);
     const input = JSON.parse(inputBytes.toString('utf8'));
@@ -44,6 +56,7 @@ globalThis.fetch = deny;
     }
     const local = require('./conference-source-resource-correction');
     const presentedPaper = input.paper;
+    let serializedResponse;
     await local.withSavedPublicationPaper(presentedPaper, async canonicalPaper => {
     input.paper = canonicalPaper;
     const authenticated = (input.paper.apiReaderPlan?.tableBindings || [])
@@ -134,10 +147,37 @@ globalThis.fetch = deny;
             'publication-one-invocation-source-replay', 'publication-one-invocation-source-replay'),
             inputSha256: crypto.createHash('sha256').update(inputBytes).digest('hex') };
     }
-    writeOutput(JSON.stringify(response));
+    serializedResponse = JSON.stringify(response);
     });
+    return serializedResponse;
+}
+
+async function runReplayFd(fd) {
+    try {
+        const stdout = await executeResourceClaimsReplay(String(fd), 3);
+        return { exitCode: 0, stdout };
+    } catch (error) {
+        return formatReplayError(error);
+    }
+}
+
+if (typeof module === 'object' && module && module.exports) {
+    module.exports = { runReplayFd, formatReplayError };
+}
+
+const _autoRunCli = typeof module === 'undefined'
+    || (typeof require === 'function' && require.main === module)
+    || /(?:^|[\\/])reader-resource-claims-replay-cli\.js$/.test(String((process.argv && process.argv[1]) || ''));
+
+if (_autoRunCli) (async () => { try {
+    process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
+    // Importing the analysis module installs human log timestamps. Keep the private
+    // replay response on its original machine-readable stream.
+    const writeOutput = value => fs.writeSync(1, value);
+    process.stdout.write = process.stderr.write.bind(process.stderr);
+    installNetworkDenial();
+    writeOutput(await executeResourceClaimsReplay(process.argv[2], process.argv.length));
 } catch (error) {
-    writeOutput(JSON.stringify({ verified: false, code: error.code || 'READER_RESOURCE_REPLAY_FAILED',
-        issues: Array.isArray(error.readerIssues) ? error.readerIssues : [], message: error.message }));
+    fs.writeSync(1, formatReplayError(error).stdout);
     process.exitCode = 1;
 } })();

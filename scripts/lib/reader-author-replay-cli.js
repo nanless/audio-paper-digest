@@ -5,19 +5,25 @@ const { isFreshSourceProvenance } = require('./daily-source-format');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const denyNetwork = () => { throw new Error('作者来源重放只允许本地读取'); };
-require('node:net').Socket.prototype.connect = denyNetwork;
-require('node:net').connect = denyNetwork;
-require('node:net').createConnection = denyNetwork;
-require('node:tls').connect = denyNetwork;
-for (const module of ['node:http', 'node:https']) {
-    require(module).request = denyNetwork; require(module).get = denyNetwork;
-}
-globalThis.fetch = denyNetwork;
 const { readerAuthorIdentityMatchesSource } = require('./reader-author-parser.js');
 const codec = require('./protocol-codec');
 const BATCH = 'reader-author-replay-batch';
 const MAX_INPUT_BYTES = 128 * 1024 * 1024;
+
+function installNetworkDenial() {
+    const denyNetwork = () => { throw new Error('作者来源重放只允许本地读取'); };
+    require('node:net').Socket.prototype.connect = denyNetwork;
+    require('node:net').connect = denyNetwork;
+    require('node:net').createConnection = denyNetwork;
+    require('node:tls').connect = denyNetwork;
+    for (const name of ['node:http', 'node:https']) {
+        require(name).request = denyNetwork;
+        require(name).get = denyNetwork;
+    }
+    require('node:http2').connect = denyNetwork;
+    globalThis.fetch = denyNetwork;
+}
+
 function verifyInput(input) {
     let verified;
     if (input.sealedBundleRoot === undefined) {
@@ -62,34 +68,60 @@ function verifyInput(input) {
     }
     return verified;
 }
-try {
-    const raw = process.argv[2];
-    if (!/^\d+$/.test(raw || '') || Number(raw) < 3) throw new Error('必须提供私有文件描述符');
-    const descriptor = Number(raw);
-    const stat = fs.fstatSync(descriptor);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size < 2 || stat.size > MAX_INPUT_BYTES) throw new Error('必须提供大小受限的私有普通文件');
-    const input = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
-    let verified;
-    if (input && Object.hasOwn(input, 'contract')) {
-        if (!codec.hasValidHeader(input, BATCH)) throw new Error('Invalid bounded author batch format');
-        const header = codec.recordHeader(input.contract, BATCH, input.schemaFingerprint);
-        if (Object.keys(input).sort().join(',') !== [...Object.keys(header), 'items'].sort().join(',')
-            || stat.size > 32 * 1024 * 1024 || !Array.isArray(input.items)
-            || input.items.length < 1 || input.items.length > 8) throw new Error('Invalid bounded author batch');
-        verified = true;
-        for (const item of input.items) {
-            try {
-                const keys = Object.keys(item || {}).sort().join(',');
-                if (keys !== 'paper,sealedBundleRoot,sourceDetails'
-                    || typeof item.sealedBundleRoot !== 'string' || verifyInput(item) !== true) verified = false;
-            } catch (_) { verified = false; }
+
+function formatReplayError() {
+    return { exitCode: 1, stdout: '{"verified":false}' };
+}
+
+function runReplayFd(descriptor) {
+    try {
+        require('../env-loader').requireExternalRuntime('reader-author-replay-cli.js');
+        if (!Number.isSafeInteger(descriptor) || descriptor < 3) throw new Error('必须提供私有文件描述符');
+        const stat = fs.fstatSync(descriptor);
+        const uidOk = typeof process.getuid === 'function' ? stat.uid === process.getuid() : true;
+        if (!stat.isFile() || (stat.mode & 0o077) !== 0 || !uidOk || stat.size < 2 || stat.size > MAX_INPUT_BYTES) {
+            throw new Error('必须提供大小受限的私有普通文件');
         }
-        if (!verified) process.exitCode = 1;
-    } else {
-        verified = verifyInput(input);
+        const input = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+        let verified;
+        let exitCode = 0;
+        if (input && Object.hasOwn(input, 'contract')) {
+            if (!codec.hasValidHeader(input, BATCH)) throw new Error('Invalid bounded author batch format');
+            const header = codec.recordHeader(input.contract, BATCH, input.schemaFingerprint);
+            if (Object.keys(input).sort().join(',') !== [...Object.keys(header), 'items'].sort().join(',')
+                || stat.size > 32 * 1024 * 1024 || !Array.isArray(input.items)
+                || input.items.length < 1 || input.items.length > 8) throw new Error('Invalid bounded author batch');
+            verified = true;
+            for (const item of input.items) {
+                try {
+                    const keys = Object.keys(item || {}).sort().join(',');
+                    if (keys !== 'paper,sealedBundleRoot,sourceDetails'
+                        || typeof item.sealedBundleRoot !== 'string' || verifyInput(item) !== true) verified = false;
+                } catch (_) { verified = false; }
+            }
+            if (!verified) exitCode = 1;
+        } else {
+            verified = verifyInput(input);
+        }
+        return { exitCode, stdout: JSON.stringify({ verified }) };
+    } catch (_) {
+        return formatReplayError();
     }
-    process.stdout.write(JSON.stringify({ verified }));
-} catch (_) {
-    process.stdout.write('{"verified":false}');
-    process.exitCode = 1;
+}
+
+module.exports = { runReplayFd, formatReplayError };
+
+if (require.main === module || path.basename(process.argv[1] || '') === 'reader-author-replay-cli.js') {
+    installNetworkDenial();
+    try {
+        const raw = process.argv[2];
+        if (!/^\d+$/.test(raw || '') || Number(raw) < 3) throw new Error('必须提供私有文件描述符');
+        const outcome = runReplayFd(Number(raw));
+        process.stdout.write(outcome.stdout);
+        if (outcome.exitCode) process.exitCode = outcome.exitCode;
+    } catch (_) {
+        const outcome = formatReplayError();
+        process.stdout.write(outcome.stdout);
+        process.exitCode = outcome.exitCode;
+    }
 }

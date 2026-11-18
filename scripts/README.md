@@ -551,6 +551,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/paper-source-authority.js` | Node 库：核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源、且只能由实际核验过程生成的引用对象。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程持有实际核验生成的计划引用对象。 |
 | `lib/python-json-packet-bridge.js` | 会议与历史单篇渲染共用的私有 Python 输入文件传输；独占创建 `0600` 临时文件，限制输入、输出与期限并清理；固定会议、历史及汇总按 `publication_replay_policy.json` 的实际角色预算加15秒清理余量；未知入口仍60秒。私有FD只传真实固定程序的失败状态，packet 身份、JSON 和正文资格仍由调用方核验。 |
 | `publication_local_replay.py`、`publication_replay_policy.json` | 会议/历史固定页面进程的共同期限、子进程清理和真实来源合并重放；私有 ContextVar 只绑定同一次同步 render 的原论文、封存全文及正常 Node 返回值，退出即销毁，不提供模型、来源或完成许可。 |
+| `publish_node_replay_client.py`、`lib/publish-node-replay-worker.js` | Python 发布校验调用只读 Node 重放脚本时的常驻禁网 JSON-RPC 工作进程池与客户端：省去每次调用重复启动 V8 和解析加载共享模块，每次请求仍通过 `0600` 单硬链接 `O_NOFOLLOW` 私有临时文件传入输入并从磁盘重新读取封存原文件，不跨请求缓存结果或来源句柄；超时、输出截断或中断时终止整个工作进程组；`PD_DISABLE_NODE_REPLAY_WORKER=1` 或测试替换 `_run_bounded_subprocess` 时回退独立子进程。 |
 | `lib/llm-response-recovery.js` | Node费用保存故障时保全真实返回正文和安全事件元数据；与 Python `llm_usage.py` 对应，仅故障时写受保护私有目录，没有自动重放或授予资格入口。 |
 | `lib/reanalysis-helpers.js` | Node 库：供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `lib/source-classification-failures.js` | Node 库：只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |

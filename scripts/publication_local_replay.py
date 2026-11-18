@@ -198,13 +198,23 @@ def publication_replay_scope(paper, source_text, publication_evidence=None, *, p
     if len(payload) > 128 * 1024 * 1024:
         raise ValueError('同次出版重放输入超过上限')
     worker = 'reader-resource-claims-replay-cli.js'
-    with tempfile.TemporaryFile() as source:
-        source.write(payload); source.flush(); source.seek(0)
-        result = publisher._run_bounded_subprocess(
-            [node, str(ROOT / 'lib' / worker), str(source.fileno())], cwd=str(ROOT.parent),
-            env={k: v for k, v in os.environ.items() if k not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=SOURCE_REPLAY_SECONDS, max_output_bytes=1024 * 1024,
-            pass_fds=(source.fileno(),))
+    cli = ROOT / 'lib' / worker
+    replay_env = {k: v for k, v in os.environ.items() if k not in {'NODE_OPTIONS', 'NODE_PATH'}}
+    replay_runner = getattr(publisher, '_run_node_replay_cli', None)
+    if replay_runner is not None:
+        result = replay_runner(
+            cli, payload, node=node, cwd=str(ROOT.parent),
+            env=replay_env, timeout_seconds=SOURCE_REPLAY_SECONDS,
+            max_output_bytes=1024 * 1024,
+        )
+    else:
+        with tempfile.TemporaryFile() as source:
+            source.write(payload); source.flush(); source.seek(0)
+            result = publisher._run_bounded_subprocess(
+                [node, str(cli), str(source.fileno())], cwd=str(ROOT.parent),
+                env=replay_env,
+                timeout_seconds=SOURCE_REPLAY_SECONDS, max_output_bytes=1024 * 1024,
+                pass_fds=(source.fileno(),))
     response = checked_replay_response(result, worker=worker, timeout_seconds=SOURCE_REPLAY_SECONDS)
     if response.get('verified') is not True or not isinstance(response.get('resources'), list) \
             or 'coreSummaryIssue' not in response \

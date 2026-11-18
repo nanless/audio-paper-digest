@@ -172,18 +172,28 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
         raise ValueError('资源展示的来源重放输入超过上限。')
     value = publication_replay_result(paper, source_text, publication_evidence)
     if value is None:
-        with tempfile.TemporaryFile() as source:
-            source.write(payload); source.flush(); source.seek(0)
-            timeout_seconds = 180 if publication_evidence is not None or authenticated_pdf or declared_source_correction else 30
-            result = publisher._run_bounded_subprocess(
-                [node, str(root / 'scripts/lib/reader-resource-claims-replay-cli.js'), str(source.fileno())],
-                cwd=str(root), env={key: value for key, value in os.environ.items()
-                                   if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-                # Declared source corrections also replay their original canonical
-                # source, even without table/footnote markers. Node still verifies
-                # the complete chain; this declaration only selects its time bound.
-                timeout_seconds=timeout_seconds,
-                max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
+        cli = root / 'scripts/lib/reader-resource-claims-replay-cli.js'
+        replay_env = {key: value for key, value in os.environ.items()
+                      if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
+        # Declared source corrections also replay their original canonical
+        # source, even without table/footnote markers. Node still verifies
+        # the complete chain; this declaration only selects its time bound.
+        timeout_seconds = 180 if publication_evidence is not None or authenticated_pdf or declared_source_correction else 30
+        replay_runner = getattr(publisher, '_run_node_replay_cli', None)
+        if replay_runner is not None:
+            result = replay_runner(
+                cli, payload, node=node, cwd=str(root),
+                env=replay_env, timeout_seconds=timeout_seconds,
+                max_output_bytes=1024 * 1024,
+            )
+        else:
+            with tempfile.TemporaryFile() as source:
+                source.write(payload); source.flush(); source.seek(0)
+                result = publisher._run_bounded_subprocess(
+                    [node, str(cli), str(source.fileno())],
+                    cwd=str(root), env=replay_env,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
         value = checked_replay_response(result, worker='reader-resource-claims-replay-cli.js',
                                        timeout_seconds=timeout_seconds)
     if value.get('verified') is not True or not isinstance(value.get('resources'), list):
