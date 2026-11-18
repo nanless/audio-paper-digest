@@ -215,6 +215,7 @@ class CloudService(
         commit(original, plan)
         JSONObject().put("favorites", plan.personal.getJSONArray("favorites").length())
             .put("conflicts", plan.conflicts)
+            .put("noteConflicts", JSONArray(plan.noteConflicts.map { it.json() }))
     }
 
     internal suspend fun syncFull(

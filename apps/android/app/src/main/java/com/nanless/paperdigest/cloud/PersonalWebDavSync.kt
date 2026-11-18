@@ -24,7 +24,12 @@ internal object PersonalWebDavSync {
     private val sets = fields.take(2)
     private val maps = fields.drop(2)
 
-    data class Plan(val personal: JSONObject, val upload: ByteArray?, val conflicts: Int)
+    data class Plan(
+        val personal: JSONObject,
+        val upload: ByteArray?,
+        val conflicts: Int,
+        val noteConflicts: List<NoteConflictItem> = emptyList(),
+    )
 
     fun validDevice(id: String) = runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)
     private fun validPaper(id: String) = id.isNotEmpty() && id.length <= 2048 && !id.startsWith("local:")
@@ -73,6 +78,7 @@ internal object PersonalWebDavSync {
     }
 
     private data class Edit(val device: String, val revision: Long, val seen: JSONObject, val value: Any)
+    private fun noteText(value: Any?): String = if (value is JSONObject) value.optString("text") else ""
 
     fun plan(local: JSONObject, device: String, remote: Map<String, ByteArray>): Plan {
         require(validDevice(device) && remote.size <= 24)
@@ -177,6 +183,7 @@ internal object PersonalWebDavSync {
         }
         val merged = JSONObject()
         var conflicts = 0
+        val noteConflicts = mutableListOf<NoteConflictItem>()
         for (field in fields) {
             val byPaper = mutableMapOf<String, MutableList<Edit>>()
             for ((owner, document) in combined) {
@@ -187,14 +194,45 @@ internal object PersonalWebDavSync {
                 }
             }
             val result = JSONObject()
-            for ((id, edits) in byPaper) {
+            for ((id, edits) in byPaper.entries.sortedBy { it.key }) {
                 val heads = edits.filter { a -> edits.none { b -> b.seen.optLong(a.device) >= a.revision } }
                 require(heads.isNotEmpty()) { "云端同步记录存在循环引用" }
                 val value = if (field in listOf("notes", "annotations") && heads.map { edit ->
                     if (field == "notes" && edit.value is JSONObject) canonical(edit.value.getString("text")) else canonical(edit.value)
                 }.toSet().size > 1) {
                     conflicts++
-                    projection.getJSONObject(field).opt(id) ?: JSONObject.NULL
+                    val localCurrent = projection.getJSONObject(field).opt(id) ?: JSONObject.NULL
+                    if (field == "notes") {
+                        val localText = noteText(localCurrent)
+                        val sortedRemoteHeads = heads
+                            .filter { edit -> edit.device != device && noteText(edit.value) != localText }
+                            .sortedWith(compareByDescending<Edit> { it.revision }.thenByDescending { it.device })
+                        val distinctRemotes = LinkedHashMap<String, RemoteNoteCandidate>()
+                        for (edit in sortedRemoteHeads) {
+                            val remoteText = noteText(edit.value)
+                            distinctRemotes.putIfAbsent(
+                                remoteText,
+                                RemoteNoteCandidate(
+                                    remoteNote = remoteText,
+                                    remoteDeviceId = edit.device,
+                                    remoteRevision = edit.revision,
+                                )
+                            )
+                        }
+                        val candidates = distinctRemotes.values.toList()
+                        if (candidates.isNotEmpty()) {
+                            val primary = candidates.first()
+                            noteConflicts += NoteConflictItem(
+                                paperId = id,
+                                localNote = localText,
+                                remoteNote = primary.remoteNote,
+                                remoteDeviceId = primary.remoteDeviceId,
+                                remoteRevision = primary.remoteRevision,
+                                additionalRemotes = candidates.drop(1),
+                            )
+                        }
+                    }
+                    localCurrent
                 } else if (field in sets && heads.any { it.value == JSONObject.NULL }) JSONObject.NULL
                 else if (field == "favorites") {
                     heads.map { it.value as JSONObject }.minWith(compareBy<JSONObject> {
@@ -252,7 +290,7 @@ internal object PersonalWebDavSync {
         result.put(BASELINE, JSONObject().put("device", device).put("observed", observedNext).put("digests", digests).put("hashes", hashes(project(result))))
         PersonalStore.validate(result)
         require(result.toString().toByteArray().size <= PersonalStore.MAX_BYTES)
-        return Plan(result, upload, conflicts)
+        return Plan(result, upload, conflicts, noteConflicts.toList())
     }
 
     fun unchanged(before: JSONObject, after: JSONObject): Boolean =

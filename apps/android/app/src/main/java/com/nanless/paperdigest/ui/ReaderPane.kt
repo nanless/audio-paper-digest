@@ -195,6 +195,7 @@ import org.json.JSONObject
 internal data class ReaderSourceNotice(val title:String,val text:String,val tone:String)
 internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):List<ReaderSourceNotice> = buildList {
  if(pdfError!=null)add(ReaderSourceNotice("操作未完成",pdfError,"error"))
+ if(state.noteConflicts.any{it.paperId==paperID})add(ReaderSourceNotice("云端笔记冲突","检测到其他设备的并发异文笔记，本机版本已保留；可在「笔记」页选择保留本机、采用云端或双版合并。","warning"))
  if(paperID in state.catalogSummary.ids("missingFromLatest"))add(ReaderSourceNotice("目录范围","本机保留的先前资料，未列入最新网站快照；这不等于论文撤稿。","info"))
  if(state.pdfMode){
   if(state.pdfReceipt.optBoolean("isStale"))add(ReaderSourceNotice("原件尚待核对","此 PDF 为已保存的旧版本，未核对当前版本。","warning"))
@@ -256,14 +257,62 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun NotesPane(state:UiState,controller:AppController,action:Action){
  val id=state.selectedPaperId.orEmpty();val note=state.personal.optJSONObject("notes")?.optJSONObject(id)?:JSONObject()
+ val noteConflict=state.noteConflicts.firstOrNull{it.paperId==id}
+ var showConflictDiff by remember(id,noteConflict?.remoteDeviceId,noteConflict?.remoteRevision){mutableStateOf(false)}
  var draft by rememberSaveable(id){mutableStateOf(note.optString("text"))};var revision by rememberSaveable(id){mutableIntStateOf(note.optInt("revision"))};var dirty by rememberSaveable(id){mutableStateOf(false)}
  LaunchedEffect(note.toString()){if(!dirty){draft=note.optString("text");revision=note.optInt("revision")}}
  var reloadNote by remember{mutableStateOf(false)};var edit by remember{mutableStateOf<JSONObject?>(null)};var editText by remember{mutableStateOf("")};var removeCount by remember{mutableIntStateOf(1)};var remove by remember{mutableStateOf<JSONObject?>(null)};var saving by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)};val saveScope=rememberCoroutineScope()
  var annotationError by remember{mutableStateOf<String?>(null)}
+ fun resolveConflict(strategy:String){
+  val base=revision;saving=true
+  saveScope.launch{try{
+   val result=controller.execute("cloud.noteConflict.resolve",obj("paperID" to id,"strategy" to strategy,"baseRevision" to base))
+   draft=result.optString("text",draft);revision=result.optInt("revision",base+1);dirty=false;error=null
+  }catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}
+ }
  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
  Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
   Text("阅读笔记",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f))
   PaperLabel(if(dirty)"有未保存更改" else if(note.has("text"))"已保存内容" else "尚无笔记")
+ }
+ if(noteConflict!=null){
+  val remoteCandidates=noteConflict.allRemoteCandidates()
+  OutlinedCard(Modifier.fillMaxWidth()){
+   Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+    Text("云端并发笔记冲突",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.tertiary)
+    Text(
+     if(remoteCandidates.size>1)"检测到 ${remoteCandidates.size} 台云端设备存在互异并发笔记，本机版本已安全保留。建议使用「双版合并」无损保留全部 ${remoteCandidates.size+1} 份版本；「采用云端」仅采用最高版本远端头（设备 ${noteConflict.remoteDeviceId.take(8)} · 版本 ${noteConflict.remoteRevision}）。"
+     else "检测到设备 ${noteConflict.remoteDeviceId.take(8)}（同步版本 ${noteConflict.remoteRevision}）并发编辑了不同笔记，本机版本已安全保留。",
+     style=MaterialTheme.typography.bodySmall
+    )
+    TextButton({showConflictDiff=!showConflictDiff}){Text(if(showConflictDiff)"收起本机与云端异文对比" else "查看本机与云端异文对比")}
+    if(showConflictDiff){
+     SelectionContainer{
+      Column(verticalArrangement=Arrangement.spacedBy(6.dp)){
+       Text("本机当前版本",style=MaterialTheme.typography.labelMedium)
+       Text(noteConflict.localNote.ifEmpty{"（空笔记）"},style=MaterialTheme.typography.bodySmall)
+       remoteCandidates.forEachIndexed{index,candidate->
+        HorizontalDivider()
+        Text(
+         "云端并发版本${if(remoteCandidates.size>1)" #${index+1}"else""}（设备 ${candidate.remoteDeviceId.take(8)} · 版本 ${candidate.remoteRevision}${if(index==0&&remoteCandidates.size>1)" · 最高版本头"else""}）",
+         style=MaterialTheme.typography.labelMedium
+        )
+        Text(candidate.remoteNote.ifEmpty{"（空笔记）"},style=MaterialTheme.typography.bodySmall)
+       }
+      }
+     }
+    }
+    if(dirty){
+     Text("当前编辑器有未保存草稿；点击下方「保存笔记」将以当前草稿为准保存并结束本次冲突，或先读取已保存版本后再执行快捷合并。",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.error)
+     TextButton({reloadNote=true},enabled=!saving&&!state.busy){Text("读取已保存版本…")}
+    }
+    FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+     OutlinedButton({resolveConflict("KEEP_LOCAL")},enabled=!dirty&&!saving&&!state.busy){Text("保留本机")}
+     OutlinedButton({resolveConflict("ADOPT_REMOTE")},enabled=!dirty&&!saving&&!state.busy){Text(if(remoteCandidates.size>1)"采用云端（最高版本头）" else "采用云端")}
+     Button({resolveConflict("MERGE_BOTH")},enabled=!dirty&&!saving&&!state.busy){Text("双版合并")}
+    }
+   }
+  }
  }
  OutlinedTextField(draft,{draft=it;dirty=true},Modifier.fillMaxWidth().heightIn(min=200.dp),shape=MaterialTheme.shapes.medium,label={Text("你的想法、疑问与结论")})
  error?.let{Text(it,color=MaterialTheme.colorScheme.error);TextButton({reloadNote=true}){Text("查看并重新读取已保存版本…")}}

@@ -78,28 +78,7 @@ class PersonalStore(val directory: File) {
         return bytes
     }
     /** Count only changed field bytes, never stringify a second full answer/library tree. */
-    private fun startupDelta(replacement: JSONObject): Long {
-        fun delta(record: JSONObject, key: String, text: String): Long {
-            fun fieldBytes(value: Any): Long = JSONObject().put(key, value).toString().toByteArray(Charsets.UTF_8).size.toLong() - 2
-            val next = fieldBytes(text)
-            return if (record.has(key)) next - fieldBytes(record.get(key)) else next + if (record.length() > 0) 1L else 0L
-        }
-        var total = 0L
-        replacement.getJSONArray("jobs").objects().forEach { record ->
-            if (record.optString("status") in listOf("running", "queued")) {
-                total += delta(record, "status", "interrupted")
-                total += delta(record, "message", "上次运行中断；请核对保存结果。付费分析不会自动重发。")
-            }
-        }
-        replacement.getJSONArray("sessions").objects().forEach { record ->
-            if (record.optString("status") == "pending") {
-                total += delta(record, "status", "interrupted")
-                total += delta(record, "charge", "unknown")
-                total += delta(record, "error", "请求可能已经产生费用，不会自动重发")
-            }
-        }
-        return total
-    }
+    private fun startupDelta(replacement: JSONObject): Long = companionStartupDelta(replacement)
     private fun capacityError() = AppFailure("capacity", "个人记录超过 32 MiB 保存上限；此次更改未保存，原资料仍保留。请先导出完整备份，再整理记录。")
     @Synchronized fun updateSettings(changes: JSONObject) = mutate { replacement ->
         val allowed = setOf("appearance", "font", "reduceMotion", "syncHours", "httpProxy", "endpoint", "model", "protocol", "responsesStream", "reasoningEffort", "maxTokens", "timeoutMs", "dailyRequests", "lastSettingPane", "offlineMode")
@@ -107,7 +86,8 @@ class PersonalStore(val directory: File) {
     }
     @Synchronized fun note(id: String): JSONObject = value.getJSONObject("notes").optJSONObject(id)?.copy() ?: JSONObject().put("text", "").put("revision", 0)
     @Synchronized fun saveNote(id: String, text: String, baseRevision: Int): JSONObject {
-        require(id.isNotEmpty() && text.toByteArray().size <= 2 * 1024 * 1024) { "笔记身份缺失或内容过长" }
+        require(id.isNotEmpty() && text.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "笔记身份缺失或内容过长" }
+        require(baseRevision in 0 until Int.MAX_VALUE) { "笔记版本号无效或已达上限" }
         val previous = note(id)
         if (previous.getInt("revision") != baseRevision) throw AppFailure("conflict", "笔记已在其他视图修改，保留当前草稿；请先读取新版本。")
         val note = JSONObject().put("text", text).put("revision", baseRevision + 1).put("updatedAt", now())
@@ -167,6 +147,32 @@ class PersonalStore(val directory: File) {
     companion object {
         const val MAX_BYTES: Long = 32L * 1024 * 1024
         private const val family="paperdigest-personal-library"
+        internal fun exceedsWriteCapacity(replacement: JSONObject): Boolean {
+            val bytes = replacement.toString().toByteArray(Charsets.UTF_8).size.toLong()
+            return bytes > MAX_BYTES || bytes + companionStartupDelta(replacement) > MAX_BYTES
+        }
+        private fun companionStartupDelta(replacement: JSONObject): Long {
+            fun delta(record: JSONObject, key: String, text: String): Long {
+                fun fieldBytes(value: Any): Long = JSONObject().put(key, value).toString().toByteArray(Charsets.UTF_8).size.toLong() - 2
+                val next = fieldBytes(text)
+                return if (record.has(key)) next - fieldBytes(record.get(key)) else next + if (record.length() > 0) 1L else 0L
+            }
+            var total = 0L
+            replacement.optJSONArray("jobs")?.objects()?.forEach { record ->
+                if (record.optString("status") in listOf("running", "queued")) {
+                    total += delta(record, "status", "interrupted")
+                    total += delta(record, "message", "上次运行中断；请核对保存结果。付费分析不会自动重发。")
+                }
+            }
+            replacement.optJSONArray("sessions")?.objects()?.forEach { record ->
+                if (record.optString("status") == "pending") {
+                    total += delta(record, "status", "interrupted")
+                    total += delta(record, "charge", "unknown")
+                    total += delta(record, "error", "请求可能已经产生费用，不会自动重发")
+                }
+            }
+            return total
+        }
         fun validPersonalHeader(value:JSONObject)=ClientProtocols.hasValidHeader(value,family,if(value.has("schema")) "schema" else "contract")
         fun initial() = ClientProtocols.record(family).put("notes", JSONObject()).put("favorites", JSONArray()).put("reading", JSONArray())
             .put("readingState", JSONObject()).put("annotations", JSONObject()).put("sessions", JSONArray()).put("jobs", JSONArray())

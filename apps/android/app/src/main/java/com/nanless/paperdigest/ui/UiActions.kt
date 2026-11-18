@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.ui
 
+import com.nanless.paperdigest.cloud.NoteConflictItem
 import com.nanless.paperdigest.data.Article
 import com.nanless.paperdigest.data.Paper
 import com.nanless.paperdigest.data.AggregateBrowseState
@@ -46,6 +47,7 @@ data class UiState(
     val storageWarning: String? = null,
     val aggregate: AggregateBrowseState = AggregateBrowseState(),
     val workspaceEpoch: String? = null,
+    val noteConflicts: List<NoteConflictItem> = emptyList(),
 )
 
 enum class SecretKind { MODEL, ZOTERO, ZOTERO_DAV, CLOUD }
