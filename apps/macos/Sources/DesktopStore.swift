@@ -147,8 +147,14 @@ enum DesktopKeychain {
     func noteConflict(for paperID:String)->NoteConflictSnapshot? {
         pendingNoteConflicts[paperID]
     }
+    func noteConflictDictionary(for conflict:NoteConflictSnapshot)->[String:Any] {
+        var result=conflict.dictionary
+        let stored=(value["notes"] as? [String:[String:Any]])?[conflict.paperID]
+        result["baseRevision"]=(stored?["revision"] as? Int) ?? 0
+        return result
+    }
     func noteConflictDictionaries()->[[String:Any]] {
-        noteConflicts().map(\.dictionary)
+        noteConflicts().map { noteConflictDictionary(for:$0) }
     }
     func recordNoteConflicts(_ conflicts:[NoteConflictSnapshot]) {
         for conflict in conflicts {
@@ -165,9 +171,12 @@ enum DesktopKeychain {
     func clearNoteConflict(paperID:String) {
         pendingNoteConflicts.removeValue(forKey:paperID)
     }
-    func resolveNoteConflict(paperID:String,strategy:NoteConflictMerger.Strategy,baseRevision:Int) throws -> [String:Any] {
+    func resolveNoteConflict(paperID:String,strategy:NoteConflictMerger.Strategy,baseRevision:Int,expectedLocalNote:String?=nil) throws -> [String:Any] {
         guard let conflict=pendingNoteConflicts[paperID] else {
             throw DesktopError.message("未找到该文献的待处理笔记冲突，原笔记保持不变")
+        }
+        if let expectedLocalNote,expectedLocalNote != conflict.localNote {
+            throw DesktopError.message("笔记冲突基线已变化，请先核对最新本机与远端冲突内容后再处理")
         }
         return try NoteConflictMerger.resolve(conflict,strategy:strategy,baseRevision:baseRevision,store:self)
     }

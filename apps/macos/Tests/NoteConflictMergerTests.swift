@@ -425,7 +425,13 @@ import WebKit
             NoteConflictSnapshot(paperID: paperB, localNote: "本机版本 B", remoteNote: "云端版本 B", remoteDeviceID: android, remoteRevision: 6)
         ])
         let listed = try await app.dispatch("personal.noteConflicts", payload: [:])
-        check("bridge personal.noteConflicts lists sorted conflicts", (listed["conflicts"] as? [[String: Any]])?.count == 2)
+        let listedConflicts = listed["conflicts"] as? [[String: Any]] ?? []
+        check("bridge personal.noteConflicts lists sorted conflicts", listedConflicts.count == 2)
+        check("bridge personal.noteConflicts enriches baseRevision from stored note",
+              listedConflicts.first?["baseRevision"] as? Int == 1 && listedConflicts.last?["baseRevision"] as? Int == 1)
+        let singleListed = try await app.dispatch("personal.noteConflicts", payload: ["paperID": paperA])
+        check("bridge single-paper personal.noteConflicts enriches baseRevision",
+              ((singleListed["conflicts"] as? [[String: Any]])?.first?["baseRevision"] as? Int) == 1)
         await expectsThrowAsync("bridge rejects unknown strategy") {
             _ = try await app.dispatch("personal.resolveNoteConflict", payload: ["paperID": paperA, "strategy": "truncate", "baseRevision": 1])
         }
@@ -455,6 +461,38 @@ import WebKit
         let emittedEvents = (try? await probeWeb.evaluateJavaScript("window.__events")) as? [String] ?? []
         check("bridge emits personal.synced and never emits workspace-resetting personal.changed",
               emittedEvents == ["personal.synced", "personal.synced"] && !emittedEvents.contains("personal.changed"))
+
+        // Dual-CAS WebView payload contract: { paperID, strategy, expectedRevision, expectedLocalNote }
+        app.store.recordNoteConflicts([
+            NoteConflictSnapshot(paperID: paperA, localNote: "云端版本 A", remoteNote: "再次并发远端 A", remoteDeviceID: tablet, remoteRevision: 7)
+        ])
+        await expectsThrowAsync("bridge rejects boolean expectedRevision") {
+            let badExpectedRev = try JSONSerialization.jsonObject(
+                with: Data("{\"paperID\":\"\(paperA)\",\"strategy\":\"merge_both\",\"expectedRevision\":true,\"expectedLocalNote\":\"云端版本 A\"}".utf8)
+            ) as! [String: Any]
+            _ = try await app.dispatch("personal.resolveNoteConflict", payload: badExpectedRev)
+        }
+        await expectsThrowAsync("bridge rejects non-string expectedLocalNote") {
+            let badExpectedLocal = try JSONSerialization.jsonObject(
+                with: Data("{\"paperID\":\"\(paperA)\",\"strategy\":\"merge_both\",\"expectedRevision\":2,\"expectedLocalNote\":123}".utf8)
+            ) as! [String: Any]
+            _ = try await app.dispatch("personal.resolveNoteConflict", payload: badExpectedLocal)
+        }
+        await expectsThrowAsync("bridge rejects mismatched expectedLocalNote without clearing conflict") {
+            _ = try await app.dispatch(
+                "personal.resolveNoteConflict",
+                payload: ["paperID": paperA, "strategy": "merge_both", "expectedRevision": 2, "expectedLocalNote": "过期的旧基线文本"]
+            )
+        }
+        check("mismatched expectedLocalNote preserves pending conflict", app.store.noteConflict(for: paperA) != nil)
+        let dualCASReply = try await app.dispatch(
+            "personal.resolveNoteConflict",
+            payload: ["paperID": paperA, "strategy": "merge_both", "expectedRevision": 2, "expectedLocalNote": "云端版本 A"]
+        )
+        check("bridge dual-CAS merge_both saves merged note at revision 3 and clears conflict",
+              (dualCASReply["note"] as? [String: Any])?["revision"] as? Int == 3 &&
+              ((dualCASReply["note"] as? [String: Any])?["text"] as? String)?.contains("再次并发远端 A") == true &&
+              (dualCASReply["conflicts"] as? [[String: Any]])?.isEmpty == true)
 
         // 7. 32 MiB personal.json total capacity guard (rolls back memory & preserves disk file).
         let capDir = tempRoot.appendingPathComponent("store-32mib", isDirectory: true)

@@ -60,7 +60,7 @@ for version in minimums:
  if parts[:3]>(15,0,0):raise SystemExit('Node最低系统版本'+version+'高于应用声明的macOS15，未打包。')
 PYNODE
 [[ -f "$app_root/node_modules/katex/dist/katex.min.js" ]] || { echo "请先在 apps/macos 安装锁定的前端依赖。" >&2; exit 1; }
-for required in index.html native.js styles.css library-ui.js zotero-ui.js; do
+for required in index.html native.js styles.css library-ui.js zotero-ui.js note-conflicts-ui.js; do
   [[ -f "$app_root/Resources/$required" ]] || { echo "界面源文件尚未准备好：$required" >&2; exit 1; }
 done
 icon_source="$app_root/Assets/AppIcon.png"

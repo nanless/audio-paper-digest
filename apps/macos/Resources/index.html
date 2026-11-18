@@ -101,7 +101,7 @@
               aria-selected="false"
               data-mode="note"
             >
-              研究笔记
+              研究笔记<span id="tab-note-conflict-badge" class="tab-conflict-badge" hidden aria-hidden="true"></span>
             </button>
           </div>
           <div class="toolbar-actions">
@@ -226,6 +226,13 @@
                     <i data-lucide="quote"></i>插入论文引用
                   </button>
                 </div>
+                <section
+                  id="note-conflict-card"
+                  class="note-conflict-card"
+                  role="region"
+                  aria-label="笔记同步冲突"
+                  hidden
+                ></section>
                 <label for="note-editor" class="sr-only">研究笔记正文</label
                 ><textarea
                   id="note-editor"

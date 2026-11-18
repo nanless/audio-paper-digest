@@ -29,6 +29,7 @@ private final class LibraryAXScheme:NSObject,WKURLSchemeHandler {
  case "library.status":replyHandler(summary,nil)
  case "library.list":replyHandler(fixture,nil)
  case "personal.snapshot":replyHandler(personal,nil)
+ case "personal.noteConflicts":replyHandler(["conflicts":[]],nil)
  case "personal.annotations":replyHandler(["annotations":[]],nil)
  case "library.article":replyHandler(["paperID":"qa:0","html":"<h2>Explicit isolated reader body</h2><p>Not scientific output or source eligibility.</p>","markdown":"","revisionSHA256":String(repeating:"a",count:64),"completeOffline":false,"notices":[]],nil)
  case "library.search","personal.search":replyHandler(["ids":[]],nil)

@@ -273,19 +273,43 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "personal.note":return try store.saveNote(id:payload["paperID"] as? String ?? currentPaperID,text:payload["text"] as? String ?? "",baseRevision:payload["baseRevision"] as? Int ?? 0)
         case "personal.noteConflicts":
             if let id=payload["paperID"] as? String,!id.isEmpty {
-                return ["conflicts":store.noteConflict(for:id).map{[$0.dictionary]} ?? []]
+                return ["conflicts":store.noteConflict(for:id).map{[store.noteConflictDictionary(for:$0)]} ?? []]
             }
             return ["conflicts":store.noteConflictDictionaries()]
         case "personal.resolveNoteConflict":
+            func parseNonNegativeInt(_ raw:Any?)->Int? {
+                guard let number=raw as? NSNumber,
+                      CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      let value=number as? Int,value>=0 else { return nil }
+                return value
+            }
+            let hasExpectedRev=payload["expectedRevision"] != nil
+            let hasBaseRev=payload["baseRevision"] != nil
+            let parsedExpectedRev=parseNonNegativeInt(payload["expectedRevision"])
+            let parsedBaseRev=parseNonNegativeInt(payload["baseRevision"])
+            let resolvedBaseRevision:Int?={
+                if hasExpectedRev && hasBaseRev {
+                    guard let e=parsedExpectedRev,let b=parsedBaseRev,e==b else { return nil }
+                    return e
+                }
+                return hasExpectedRev ? parsedExpectedRev : parsedBaseRev
+            }()
+            let expectedLocalNote:String?
+            if let rawExpectedLocal=payload["expectedLocalNote"] {
+                guard let text=rawExpectedLocal as? String else {
+                    throw DesktopError.message("笔记冲突处理参数无效，原笔记与冲突副本均保留")
+                }
+                expectedLocalNote=text
+            } else {
+                expectedLocalNote=nil
+            }
             guard let id=payload["paperID"] as? String,!id.isEmpty,
                   let rawStrategy=payload["strategy"] as? String,
                   let strategy=NoteConflictMerger.Strategy.parse(rawStrategy),
-                  let rawRevision=payload["baseRevision"] as? NSNumber,
-                  CFGetTypeID(rawRevision) != CFBooleanGetTypeID(),
-                  let baseRevision=rawRevision as? Int,baseRevision>=0 else {
+                  let baseRevision=resolvedBaseRevision else {
                 throw DesktopError.message("笔记冲突处理参数无效，原笔记与冲突副本均保留")
             }
-            let saved=try store.resolveNoteConflict(paperID:id,strategy:strategy,baseRevision:baseRevision)
+            let saved=try store.resolveNoteConflict(paperID:id,strategy:strategy,baseRevision:baseRevision,expectedLocalNote:expectedLocalNote)
             if nativeNotesRequestedVisible { nativeNotesController?.reload() }
             emit("personal.synced")
             return ["note":saved,"conflicts":store.noteConflictDictionaries()]

@@ -40,7 +40,7 @@ async function installFixture(page, initial={}) {
   await page.addInitScript(f=>{
     if (window.top!==window) return;
     const copy=x=>structuredClone(x);
-    window.__calls=[];window.__unimplemented=[];window.__bridge=[];window.__fixtureDepth=0;window.__fixture={...f,personal:copy(f.initialPersonal||{favorites:[],reading:[],notes:{},sessions:[],readingState:{},annotations:{}}),selected:null,pendingReadings:[],pendingAnnotations:[],failSettings:false,failNote:false,holdArticle:false,releaseArticle:null};
+    window.__calls=[];window.__unimplemented=[];window.__bridge=[];window.__fixtureDepth=0;window.__fixture={...f,personal:copy(f.initialPersonal||{favorites:[],reading:[],notes:{},sessions:[],readingState:{},annotations:{}}),noteConflicts:copy(f.initialNoteConflicts||[]),selected:null,pendingReadings:[],pendingAnnotations:[],pendingNotes:[],pendingConflictResolves:[],failSettings:false,failNote:false,holdNote:false,omitConflictBaseRevision:false,failResolveConflict:false,holdResolveConflict:false,holdArticle:false,releaseArticle:null};
     window.webkit={messageHandlers:{desktop:{postMessage:async({command,payload={}})=>{
       const b=window.__fixture;window.__calls.push({command,payload:copy(payload)});
       if(!window.__fixtureDepth)window.__bridge.push(command);
@@ -60,7 +60,41 @@ async function installFixture(page, initial={}) {
         case 'pdf.highlight':b.annotations=[{id:'fixture-annotation',page:5,text:'Explicit PDF selection fixture',pdfSHA:'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c'}];return {};
         case 'pdf.removeAnnotation':b.annotations=[];return {};
         case 'personal.snapshot':return copy(b.personal);
-        case 'personal.note':if(b.failNote)throw Error('Fixture note disk failure');if(b.strictNoteRevision&&payload.baseRevision!==(b.personal.notes[payload.paperID]?.revision||0))throw Error('Fixture note changed');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};return copy(b.personal.notes[payload.paperID]);
+        case 'personal.note':if(b.holdNote)await new Promise(r=>(b.pendingNotes??=[]).push(r));if(b.failNote)throw Error('Fixture note disk failure');if(b.strictNoteRevision&&payload.baseRevision!==(b.personal.notes[payload.paperID]?.revision||0))throw Error('Fixture note changed');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};b.noteConflicts=(b.noteConflicts||[]).filter(c=>(c.paperID||c.paperId)!==payload.paperID);return copy(b.personal.notes[payload.paperID]);
+        case 'personal.noteConflicts':{const all=(b.noteConflicts||[]).map(c=>b.omitConflictBaseRevision?copy(c):({...copy(c),baseRevision:Number.isSafeInteger(c.baseRevision)?c.baseRevision:(b.personal.notes?.[c.paperID]?.revision||0)}));return {conflicts:payload.paperID?all.filter(c=>c.paperID===payload.paperID):all};}
+        case 'personal.resolveNoteConflict':{
+          if(b.holdResolveConflict)await new Promise(r=>(b.pendingConflictResolves??=[]).push(r));
+          if(b.failResolveConflict)throw Error(typeof b.failResolveConflict==='string'?b.failResolveConflict:'Fixture conflict resolution failure');
+          const id=payload.paperID,conflict=(b.noteConflicts||[]).find(c=>c.paperID===id);
+          if(!conflict)throw Error('未找到该文献的待处理笔记冲突，原笔记保持不变');
+          const currentNote=b.personal.notes?.[id],currentRev=currentNote?.revision||0,currentText=currentNote?.text||'';
+          const expectedRev=payload.expectedRevision??payload.baseRevision;
+          if(!Number.isSafeInteger(expectedRev)||expectedRev!==currentRev)throw Error('笔记已在其他视图更新，当前编辑仍保留；请先载入新版本或导出你的草稿');
+          if(payload.expectedLocalNote!==undefined&&payload.expectedLocalNote!==conflict.localNote)throw Error('笔记冲突基线已变化，请先核对最新本机与远端冲突内容后再处理');
+          if(currentText!==conflict.localNote)throw Error('本机笔记原稿已变化，拒绝用旧冲突快照覆盖当前内容；请重新同步或核对最新笔记');
+          let merged;
+          if(payload.strategy==='keep_local'||payload.strategy==='keepLocal')merged=conflict.localNote;
+          else if(payload.strategy==='adopt_remote'||payload.strategy==='adoptRemote')merged=conflict.remoteNote;
+          else if(payload.strategy==='merge_both'||payload.strategy==='mergeBoth'){
+            const remotes=[{remoteNote:conflict.remoteNote,remoteDeviceID:conflict.remoteDeviceID,remoteRevision:conflict.remoteRevision},...(conflict.additionalRemotes||[])];
+            const seen=new Set([conflict.localNote]);
+            const unique=remotes.filter(r=>r.remoteNote&&!seen.has(r.remoteNote)&&seen.add(r.remoteNote));
+            if(!unique.length)merged=conflict.localNote;
+            else if(!conflict.localNote&&unique.length===1)merged=unique[0].remoteNote;
+            else{
+              merged=conflict.localNote;
+              for(const r of unique){
+                const section=`--- 云端并发版本（设备 ${r.remoteDeviceID} · 版本 ${r.remoteRevision}）---\n${r.remoteNote}`;
+                merged=merged?`${merged}\n\n${section}`:section;
+              }
+            }
+          }else throw Error('笔记冲突处理参数无效，原笔记与冲突副本均保留');
+          const saved={text:merged,revision:currentRev+1,updatedAt:new Date().toISOString()};
+          b.personal.notes[id]=saved;
+          b.noteConflicts=(b.noteConflicts||[]).filter(c=>c.paperID!==id);
+          queueMicrotask(()=>window.dispatchEvent(new Event('personal.synced')));
+          return copy({note:saved,conflicts:b.noteConflicts.map(c=>({...c,baseRevision:b.personal.notes?.[c.paperID]?.revision||0}))});
+        }
         case 'personal.reading':{const owner=payload.paperID||b.selected.id,snapshot=copy(payload);if(b.holdReadingFor===owner)await new Promise(resolve=>b.pendingReadings.push(resolve));b.personal.readingState[owner]={...snapshot,updatedAt:new Date().toISOString()};return {};}
         // Batched personal write: real bridge counts one request, fixture records the
         // decomposed commands so callers keep seeing the same per-item protocol.

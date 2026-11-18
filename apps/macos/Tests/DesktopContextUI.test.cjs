@@ -47,6 +47,7 @@ async function installFixture(page) {
         case 'pdf.removeAnnotation':b.annotations=[];return {};
         case 'personal.snapshot':return copy(b.personal);
         case 'personal.note':if(b.failNote)throw Error('Fixture note disk failure');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};return copy(b.personal.notes[payload.paperID]);
+        case 'personal.noteConflicts':return {conflicts:[]};
         case 'personal.reading':b.personal.readingState[payload.paperID]=copy(payload);return {};
         case 'personal.list.edit':{if(b.holdFavorite)await new Promise(resolve=>b.releaseFavorite=resolve);if(b.failFavorite)throw Error('Fixture favorite disk failure');const set=new Set(b.personal[payload.key]||[]);payload.ids.forEach(id=>payload.action==='remove'?set.delete(id):set.add(id));b.personal[payload.key]=[...set];return copy(b.personal);}
         case 'personal.setList':b.personal[payload.key]=payload.ids;return copy(b.personal);
