@@ -38,7 +38,7 @@ private actor FixtureTransport {
 @main @MainActor struct NativeAggregateHostTests {
     static var passed = 0, failed = 0
     static func check(_ value: @autoclosure () throws -> Bool, _ reason: String) throws { if try !value() { throw Failure(text: reason) } }
-    static func run(_ label: String, _ body: () async throws -> Void) async { do { try await body(); passed += 1; print("PASS " + label) } catch { failed += 1; print("FAIL " + label + ": " + ((error as? Failure)?.text ?? String(describing: type(of: error)))) } }
+    static func run(_ label: String, _ body: @MainActor () async throws -> Void) async { do { try await body(); passed += 1; print("PASS " + label) } catch { failed += 1; print("FAIL " + label + ": " + ((error as? Failure)?.text ?? String(describing: type(of: error)))) } }
     static func rejects(_ action: () throws -> Void) throws { do { try action() } catch is Failure { throw Failure(text: "assertion in rejection") } catch { return }; throw Failure(text: "expected rejection") }
     static func main() async throws {
         setbuf(stdout, nil)
@@ -277,10 +277,10 @@ private actor FixtureTransport {
         await run("native layer palette follows explicit and inherited effective appearance without replacing body or focus") {
             let h=app.aggregateNativeHost!,body=try await readyBody(h),before=await transport.requests,url=body.url
             window.makeFirstResponder(app.web);let responder=window.firstResponder
-            func resolved()->NSColor{var result=NSColor.clear;h.view.effectiveAppearance.performAsCurrentDrawingAppearance{result=NSColor.windowBackgroundColor.usingColorSpace(.sRGB)!};return result}
-            func layerColor()->NSColor{NSColor(cgColor:h.view.layer!.backgroundColor!)!.usingColorSpace(.sRGB)!}
+            @MainActor func resolved()->NSColor{var result=NSColor.clear;h.view.effectiveAppearance.performAsCurrentDrawingAppearance{result=NSColor.windowBackgroundColor.usingColorSpace(.sRGB)!};return result}
+            @MainActor func layerColor()->NSColor{NSColor(cgColor:h.view.layer!.backgroundColor!)!.usingColorSpace(.sRGB)!}
             func equal(_ a:NSColor,_ b:NSColor)->Bool{zip([a.redComponent,a.greenComponent,a.blueComponent,a.alphaComponent],[b.redComponent,b.greenComponent,b.blueComponent,b.alphaComponent]).allSatisfy{abs($0-$1)<0.000001}}
-            func settled(_ name:NSAppearance.Name)async throws{let deadline=Date().addingTimeInterval(2);while Date()<deadline{if h.view.effectiveAppearance.bestMatch(from:[.aqua,.darkAqua])==name{return};try await Task.sleep(nanoseconds:10_000_000)};throw Failure(text:"owned effective appearance did not settle")}
+            @MainActor func settled(_ name:NSAppearance.Name)async throws{let deadline=Date().addingTimeInterval(2);while Date()<deadline{if h.view.effectiveAppearance.bestMatch(from:[.aqua,.darkAqua])==name{return};try await Task.sleep(nanoseconds:10_000_000)};throw Failure(text:"owned effective appearance did not settle")}
             window.appearance=NSAppearance(named:.aqua);h.updateAppearance(.init(scheme:"light",font:18));try await settled(.aqua)
             let light=layerColor(),lightCorrect=equal(light,resolved())
             h.updateAppearance(.init(scheme:"dark",font:18));try await settled(.darkAqua)
@@ -466,6 +466,18 @@ private actor FixtureTransport {
                 try await Task.sleep(nanoseconds: 10_000_000)
             }
             try check(restored && next !== host, "new native host lost saved same-revision position")
+            // Outline jump inside the 1s initial-scroll window must cancel ResizeObserver pull-back.
+            let nextBody = try await readyBody(next), outline = next.view.subviews.compactMap { $0 as? NSPopUpButton }.first!
+            outline.selectItem(withTag: 2); _ = NSApp.sendAction(outline.action!, to: outline.target, from: outline)
+            let outlineDeadline = Date().addingTimeInterval(5)
+            var jumped = 0.0
+            while Date() < outlineDeadline {
+                if let y = await next.scrollPosition(), y > before + 200 { jumped = y; break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            _ = try await nextBody.callAsyncJavaScript("const spacer=document.createElement('div');spacer.style.height='120px';document.body.appendChild(spacer);return new Promise(r=>setTimeout(()=>r(true),80))", arguments: [:], in: nil, contentWorld: .defaultClient)
+            let afterResize = await next.scrollPosition() ?? 0
+            try check(jumped > before + 200 && abs(afterResize - before) > 150, "initial scroll observer pulled outline jump back to saved y")
         }
         await run("native refresh button requests explicit website refresh") {
             let document = app.aggregateSession!.document!

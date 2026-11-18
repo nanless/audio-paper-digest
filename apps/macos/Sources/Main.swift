@@ -227,7 +227,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func dispatch(_ command:String,payload:[String:Any]) async throws->[String:Any] {
         let readingCommands:Set<String>=["app.setPaper","library.article","pdf.open","pdf.close","pdf.page","pdf.fit","pdf.zoom","pdf.locate","pdf.highlight","pdf.removeAnnotation","storage.open","storage.prepare","model.run","archive.materials","zotero.archive","storage.cleanupPlan","storage.cleanup","app.openLocal","app.restore","app.export","app.backup","app.diagnostics","app.findQuery","model.preview","pdf.selection","pdf.outline","pdf.find","pdf.openExternal"]
         if readingCommands.contains(command){try requireMainContextAvailable()}
-        let savingCommands:Set<String>=["personal.note","personal.reading","personal.annotationNote","personal.flush","settings.save","pdf.frame","personal.snapshot"]
+        let savingCommands:Set<String>=["personal.note","personal.noteConflicts","personal.resolveNoteConflict","personal.reading","personal.annotationNote","personal.flush","settings.save","pdf.frame","personal.snapshot"]
         if maintenanceBusy {guard ["pdf.frame","cloud.state","cloud.revealTransfers"].contains(command) else{throw DesktopError.message("正在整理资料，请稍后再操作")}}
         if terminationPending {
             guard savingCommands.contains(command) else{throw DesktopError.message("正在保存并退出或整理资料，请稍后再操作")}
@@ -271,6 +271,24 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "personal.favorite.edit":try store.editFavorites(payload);return store.browserSnapshot()
         case "personal.setList":guard let key=payload["key"] as? String,let ids=payload["ids"] as? [String] else{throw DesktopError.message("资料清单无效")};try store.setList(key,ids:ids);return store.browserSnapshot()
         case "personal.note":return try store.saveNote(id:payload["paperID"] as? String ?? currentPaperID,text:payload["text"] as? String ?? "",baseRevision:payload["baseRevision"] as? Int ?? 0)
+        case "personal.noteConflicts":
+            if let id=payload["paperID"] as? String,!id.isEmpty {
+                return ["conflicts":store.noteConflict(for:id).map{[$0.dictionary]} ?? []]
+            }
+            return ["conflicts":store.noteConflictDictionaries()]
+        case "personal.resolveNoteConflict":
+            guard let id=payload["paperID"] as? String,!id.isEmpty,
+                  let rawStrategy=payload["strategy"] as? String,
+                  let strategy=NoteConflictMerger.Strategy.parse(rawStrategy),
+                  let rawRevision=payload["baseRevision"] as? NSNumber,
+                  CFGetTypeID(rawRevision) != CFBooleanGetTypeID(),
+                  let baseRevision=rawRevision as? Int,baseRevision>=0 else {
+                throw DesktopError.message("笔记冲突处理参数无效，原笔记与冲突副本均保留")
+            }
+            let saved=try store.resolveNoteConflict(paperID:id,strategy:strategy,baseRevision:baseRevision)
+            if nativeNotesRequestedVisible { nativeNotesController?.reload() }
+            emit("personal.synced")
+            return ["note":saved,"conflicts":store.noteConflictDictionaries()]
         case "personal.reading":guard let owner=payload["paperID"] as? String,!owner.isEmpty,owner==currentPaperID || (store.value["personalPapers"] as? [String:[String:Any]])?[owner] != nil else{throw DesktopError.message("阅读身份缺失，未覆盖其他文献状态")};try store.saveReading(id:owner,state:payload);return [:]
         case "personal.flush":
             // One round trip for the note/annotation/reading writes a single tick asks for.

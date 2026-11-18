@@ -96,8 +96,9 @@ struct AggregateReadingAppearance:Equatable {
         configuration.setURLSchemeHandler(scheme, forURLScheme: "paperapp")
         let initialAppearance=String(data:try JSONSerialization.data(withJSONObject:["scheme":appearance.scheme,"font":Double(appearance.font)]),encoding:.utf8)!
         configuration.userContentController.addUserScript(WKUserScript(source: "window.__nativeAggregateNonce='" + nonce + "';window.__nativeAggregateInitialAppearance="+initialAppearance+";\n" + katex + "\n" + renderer, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
-        if let y = initialScrollY, y.isFinite, y >= 0 {
-            configuration.userContentController.addUserScript(WKUserScript(source: "const restore=()=>window.scrollTo(0," + String(y) + ");if(document.readyState==='complete')restore();else window.addEventListener('load',restore,{once:true});", injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+        if let y = initialScrollY, y.isFinite, y > 0 {
+            let restoreScript = "(()=>{const target=" + String(y) + ";let stopped=false,ro=null,timer=null;const events=['wheel','touchstart','keydown','mousedown'];const onClick=evt=>{if(evt.target&&evt.target.closest&&evt.target.closest('a'))stop();};const apply=()=>{if(!stopped&&Math.abs(window.scrollY-target)>=1)window.scrollTo(0,target);};function settle(){if(stopped)return;for(const i of document.images)if(i.loading==='lazy')i.loading='eager';apply();ro=new ResizeObserver(()=>apply());if(document.body)ro.observe(document.body);timer=setTimeout(stop,1000);}function stop(){if(stopped)return;stopped=true;if(ro){ro.disconnect();ro=null;}if(timer!==null){clearTimeout(timer);timer=null;}for(const e of events)window.removeEventListener(e,stop);document.removeEventListener('click',onClick,true);window.removeEventListener('load',settle);}window.__nativeAggregateCancelInitialScroll=stop;for(const e of events)window.addEventListener(e,stop,{passive:true});if(typeof window.__nativeAggregateScrollHeading==='function'){const orig=window.__nativeAggregateScrollHeading;window.__nativeAggregateScrollHeading=(t,i)=>{stop();return orig(t,i);};}document.addEventListener('click',onClick,true);if(document.readyState==='complete')settle();else window.addEventListener('load',settle,{once:true});})();"
+            configuration.userContentController.addUserScript(WKUserScript(source: restoreScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
         }
         web = WKWebView(frame: .zero, configuration: configuration)
         container = AggregateContainerView(frame: .zero); view = container
@@ -297,6 +298,9 @@ struct AggregateReadingAppearance:Equatable {
         try Task.checkCancellation()
         guard bodyFocusAvailable,eventNonce==lease,!query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,query.count<=4096 else {throw CancellationError()}
         findSequence+=1;let sequence=findSequence
+        _=try? await web.callAsyncJavaScript("window.__nativeAggregateCancelInitialScroll?.();return true",arguments:[:],in:nil,contentWorld:.defaultClient)
+        try Task.checkCancellation()
+        guard bodyFocusAvailable,eventNonce==lease,sequence==findSequence else {throw CancellationError()}
         let configuration=WKFindConfiguration();configuration.caseSensitive=false;configuration.wraps=true
         do {
             let result=try await web.find(query,configuration:configuration)
@@ -321,7 +325,7 @@ struct AggregateReadingAppearance:Equatable {
         let index=outline.selectedItem?.tag ?? -1;outline.selectItem(at:0)
         guard bodyFocusAvailable,let lease=eventNonce,index>=0,index<min(headings.count,2048) else{return}
         _=focusBody()
-        Task{[weak self] in guard let self,!retired,current(),eventNonce==lease else{return};_=try? await web.callAsyncJavaScript("return window.__nativeAggregateScrollHeading?.(nonce,index) ?? false",arguments:["nonce":nonce,"index":index],in:nil,contentWorld:.defaultClient)}
+        Task{[weak self] in guard let self,!retired,current(),eventNonce==lease else{return};_=try? await web.callAsyncJavaScript("window.__nativeAggregateCancelInitialScroll?.();return window.__nativeAggregateScrollHeading?.(nonce,index) ?? false",arguments:["nonce":nonce,"index":index],in:nil,contentWorld:.defaultClient)}
     }
     private func presentationFailed(){guard !retired else{return};bodyFailurePending=true;ready=false;readBody.isEnabled=false;outline.isEnabled=false;status.stringValue="正文未能显示，请返回后重新打开";if current(){failed()}}
     private func action(_ body: @escaping () async throws -> Void) {guard let lease=eventNonce else{return};Task { do { guard !retired, current(),eventNonce==lease else { return }; try await body() } catch { if !retired, current() { status.stringValue = "本次操作未完成，请重新打开页面" } } } }
@@ -343,6 +347,7 @@ struct AggregateReadingAppearance:Equatable {
             let result = try await link(number.intValue)
             guard !retired, current(),eventNonce==lease else { throw CancellationError() }
             if let kind = result["kind"] as? String, ["paper", "aggregate"].contains(kind), let id = result["id"] as? String { try await navigate(kind, id) }
+            else if result["kind"] as? String == "anchor" { _ = try? await web.callAsyncJavaScript("window.__nativeAggregateCancelInitialScroll?.();return true", arguments: [:], in: nil, contentWorld: .defaultClient) }
             replyHandler(result, nil)
         } catch { replyHandler(nil, "链接已失效") } }
     }

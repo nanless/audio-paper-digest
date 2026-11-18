@@ -38,14 +38,20 @@ enum DesktopKeychain {
 }
 
 @MainActor final class DesktopStore {
+    static let maxNoteBytes = NoteConflictMerger.maxNoteBytes
+    static let maxPersonalBytes = NoteConflictMerger.maxPersonalBytes
     let directory:URL
     private(set) var value:[String:Any]
+    private var pendingNoteConflicts:[String:NoteConflictSnapshot]=[:]
     private let file:URL
     init(directory:URL) throws {
         self.directory=directory; file=directory.appendingPathComponent("personal.json")
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
         if FileManager.default.fileExists(atPath:file.path) {
+            let size=(try? file.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0
+            guard size<=Self.maxPersonalBytes else { throw DesktopError.message("个人资料超过 32 MiB 读取上限，原文件已保留") }
             let data=try Data(contentsOf:file)
+            guard data.count<=Self.maxPersonalBytes else { throw DesktopError.message("个人资料超过 32 MiB 读取上限，原文件已保留") }
             guard let object=try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw DesktopError.message("个人资料格式损坏，原文件已保留") }
             try Self.validate(object);value=object
         } else { value=try ClientProtocols.record(Self.personalFamily,fields:["notes":[:],"favorites":[],"reading":[],"readingState":[:],"annotations":[:],"sessions":[],"jobs":[],"settings":["appearance":"system","font":18,"syncHours":12]]) }
@@ -82,6 +88,7 @@ enum DesktopKeychain {
     }
     func save() throws {
         let data=try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])
+        guard data.count<=Self.maxPersonalBytes else { throw DesktopError.message("个人资料超过 32 MiB 保存上限，原文件已保留") }
         try data.write(to:file,options:[.atomic]); try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:file.path)
     }
     func snapshot()->[String:Any] { value }
@@ -122,13 +129,47 @@ enum DesktopKeychain {
         try persist(FavoriteCollections.edit(value,payload:payload,now:now))
     }
     func saveNote(id:String,text:String,baseRevision:Int) throws -> [String:Any] {
-        guard !id.isEmpty,text.utf8.count<=2*1024*1024 else { throw DesktopError.message("笔记过长或文献身份缺失") }
+        guard !id.isEmpty,text.utf8.count<=Self.maxNoteBytes else { throw DesktopError.message("笔记过长或文献身份缺失") }
         var notes=value["notes"] as? [String:[String:Any]] ?? [:]
         let previous=notes[id] ?? [:], revision=previous["revision"] as? Int ?? 0
         guard revision==baseRevision else { throw DesktopError.message("笔记已在其他视图更新，当前编辑仍保留；请先载入新版本或导出你的草稿") }
         let note:[String:Any]=["text":text,"revision":revision+1,"updatedAt":ISO8601DateFormatter().string(from:Date())]
         notes[id]=note; let old=value; value["notes"]=notes
-        do { try save(); return note } catch { value=old; throw error }
+        do {
+            try save()
+            pendingNoteConflicts.removeValue(forKey:id)
+            return note
+        } catch { value=old; throw error }
+    }
+    func noteConflicts()->[NoteConflictSnapshot] {
+        pendingNoteConflicts.values.sorted { $0.paperID < $1.paperID }
+    }
+    func noteConflict(for paperID:String)->NoteConflictSnapshot? {
+        pendingNoteConflicts[paperID]
+    }
+    func noteConflictDictionaries()->[[String:Any]] {
+        noteConflicts().map(\.dictionary)
+    }
+    func recordNoteConflicts(_ conflicts:[NoteConflictSnapshot]) {
+        for conflict in conflicts {
+            pendingNoteConflicts[conflict.paperID]=conflict
+        }
+    }
+    func reconcileSyncedNoteConflicts(_ conflicts:[NoteConflictSnapshot]) {
+        var reconciled:[String:NoteConflictSnapshot]=[:]
+        for conflict in conflicts {
+            reconciled[conflict.paperID]=conflict
+        }
+        pendingNoteConflicts=reconciled
+    }
+    func clearNoteConflict(paperID:String) {
+        pendingNoteConflicts.removeValue(forKey:paperID)
+    }
+    func resolveNoteConflict(paperID:String,strategy:NoteConflictMerger.Strategy,baseRevision:Int) throws -> [String:Any] {
+        guard let conflict=pendingNoteConflicts[paperID] else {
+            throw DesktopError.message("未找到该文献的待处理笔记冲突，原笔记保持不变")
+        }
+        return try NoteConflictMerger.resolve(conflict,strategy:strategy,baseRevision:baseRevision,store:self)
     }
     func saveReading(id:String,state:[String:Any]) throws {
         var reading=value["readingState"] as? [String:[String:Any]] ?? [:]
@@ -169,7 +210,15 @@ enum DesktopKeychain {
     func session(_ id:String)->[String:Any]? { (value["sessions"] as? [[String:Any]])?.last{$0["id"] as? String==id} }
     func restorePersonal(_ object:[String:Any]) throws {
         guard Self.validPersonalHeader(object),object["notes"] is [String:Any],object["settings"] is [String:Any] else { throw DesktopError.message("备份个人资料合同不符") }
-        try Self.validate(object);let old=value; value=object; do { try save() } catch { value=old; throw error }
+        try Self.validate(object);let old=value; value=object
+        do {
+            try save()
+            let restoredNotes=value["notes"] as? [String:[String:Any]] ?? [:]
+            pendingNoteConflicts=pendingNoteConflicts.filter { paperID, conflict in
+                let text=restoredNotes[paperID]?["text"] as? String ?? ""
+                return text==conflict.localNote
+            }
+        } catch { value=old; throw error }
     }
 }
 

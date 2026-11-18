@@ -4,7 +4,7 @@ set -euo pipefail
 app_root="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$app_root/../.." && pwd)"
 cd "$repo_root"
-swift_suites=(ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollections BackupCodec ReleaseBootstrap ReleaseEmptyLibrary PersonalWebDavSync FullWebDavSync SyncedArchiveHistory CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService NativeLibraryAccessibility WebsiteClassification LibraryCatalogPaging CatalogScheduling LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePreload AggregateReadScope AggregateImageReadScope AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeAggregateHost NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment)
+swift_suites=(ClientProtocols PublicProtocolEndpoints DesktopStore FavoriteCollections BackupCodec ReleaseBootstrap ReleaseEmptyLibrary PersonalWebDavSync NoteConflictMerger FullWebDavSync SyncedArchiveHistory CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService NativeLibraryAccessibility WebsiteClassification LibraryCatalogPaging CatalogScheduling LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePreload AggregateReadScope AggregateImageReadScope AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeAggregateHost NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment)
 cjs_suites=(ModelService)
 # 清单是手写的：Tests/ 下每个 *Tests.swift 都必须接入，否则新增套件会静默漏跑。
 # ModelServiceTests 由 ModelWorker.test.cjs 显式编译并 spawn，因此只登记为 CJS 例外。
@@ -33,18 +33,62 @@ for known in "${cjs_suites[@]}"; do
 done
 bash "$repo_root/scripts/python-runtime.sh" "$repo_root/apps/generate-client-protocols.py" --check
 test_work="$(mktemp -d "${TMPDIR:-/tmp}/paperdigest-tests.XXXXXX")"
-trap 'rm -rf "$test_work"' EXIT
-mkdir "$test_work/Sources"
+compile_pids=()
+cleanup_test_work() {
+  if [[ "${#compile_pids[@]}" -gt 0 ]]; then
+    for pid in "${compile_pids[@]}"; do
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    done
+  fi
+  rm -rf "$test_work"
+}
+trap cleanup_test_work EXIT
+mkdir -p "$test_work/Sources" "$test_work/Modules" "$test_work/Tests"
 cp "$app_root"/Sources/*.swift "$test_work/Sources/"
 sources=("$test_work"/Sources/*.swift)
 swift_executed=0
 swift_skipped=0
 cjs_executed=0
 optional_skipped=0
-echo "套件覆盖预检通过：Tests/*Tests.swift 共 ${suite_total} 个，Swift 循环 ${#swift_suites[@]} 个，CJS 例外 ${#cjs_suites[@]} 个；开始逐套件核验。"
+if [[ "$suite_total" -ne 59 || "${#swift_suites[@]}" -ne 58 || "${#cjs_suites[@]}" -ne 1 ]]; then
+  echo "套件声明数量不符：期望 Tests/*Tests.swift 共 59 个（Swift 循环 58 + CJS 例外 1），实际为 ${suite_total}（${#swift_suites[@]} + ${#cjs_suites[@]}）。" >&2
+  exit 1
+fi
+echo "套件覆盖预检通过：Tests/*Tests.swift 共 ${suite_total} 个，Swift 循环 ${#swift_suites[@]} 个，CJS 例外 ${#cjs_suites[@]} 个；开始预编译共享核心测试模块。"
+xcrun swiftc -module-name PaperDigestTestableHost -enable-testing -parse-as-library -D PAPER_DIGEST_TESTS \
+  -emit-module -emit-module-path "$test_work/Modules/PaperDigestTestableHost.swiftmodule" \
+  -emit-library -static "${sources[@]}" -o "$test_work/libPaperDigestTestableHost.a"
+echo "共享核心测试模块编译完成，开始并行链接 ${#swift_suites[@]} 个测试可执行文件…"
+escaped_app_root="$(/usr/bin/python3 -c 'import sys; b, q = chr(92), chr(34); m = {b: b+b, q: b+q, chr(10): b+"n", chr(13): b+"r", chr(9): b+"t"}; print("".join(m.get(c, b+"u{"+format(ord(c), "x")+"}" if ord(c) < 32 or ord(c) == 127 else c) for c in sys.argv[1]))' "$app_root")"
+for suite in "${swift_suites[@]}"; do
+  suite_source="$app_root/Tests/${suite}Tests.swift"
+  wrapper_source="$test_work/Tests/${suite}TestsWrapper.swift"
+  escaped_source="${escaped_app_root}/Tests/${suite}Tests.swift"
+  {
+    printf '@testable import PaperDigestTestableHost\n#sourceLocation(file: "%s", line: 1)\n' "$escaped_source"
+    cat "$suite_source"
+  } > "$wrapper_source"
+  xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS \
+    -I "$test_work/Modules" -L "$test_work" -lPaperDigestTestableHost -Xlinker -ObjC \
+    "$wrapper_source" -o "$test_work/$suite" &
+  compile_pids+=("$!")
+  if [[ "${#compile_pids[@]}" -ge 8 ]]; then
+    for pid in "${compile_pids[@]}"; do
+      wait "$pid"
+    done
+    compile_pids=()
+  fi
+done
+if [[ "${#compile_pids[@]}" -gt 0 ]]; then
+  for pid in "${compile_pids[@]}"; do
+    wait "$pid"
+  done
+  compile_pids=()
+fi
+echo "全部 ${#swift_suites[@]} 个 Swift 测试可执行文件链接完成，开始逐套件隔离核验。"
 for suite in "${swift_suites[@]}"; do
   echo "正在核验 ${suite}（隔离临时资料，不访问用户文库或付费服务）"
-  xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
   if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
     "$test_work/$suite" "$(command -v node)"
     swift_executed=$((swift_executed + 1))

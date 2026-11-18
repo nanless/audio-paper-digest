@@ -170,9 +170,9 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     let longView=try await sourceSheet(longNotices)
     guard let ownWindow=app.storageDetailWindow else{throw DesktopError.message("Missing own long notice window")}
     ownWindow.setFrame(NSRect(origin:ownWindow.frame.origin,size:ownWindow.minSize),display:true)
-    try await wait{(try? await longView.evaluateJavaScript("document.documentElement.scrollHeight>innerHeight")) as? Bool==true}
+    try await wait{(try? await longView.evaluateJavaScript("innerWidth===640&&innerHeight===300&&document.documentElement.scrollHeight>innerHeight")) as? Bool==true}
     _=try await longView.evaluateJavaScript("document.querySelector('.native-source-notice-text:last-child').scrollIntoView({block:'end'});true")
-    let endVisible=try await longView.evaluateJavaScript("(()=>{const last=document.querySelector('.native-source-notice-text:last-child'),r=last.getBoundingClientRect(),b=document.querySelector('#details-close').getBoundingClientRect();return scrollY>0&&last.textContent==='可滚动到达的最后一条来源说明。'&&r.top>=0&&r.bottom<=innerHeight&&b.top>=0&&b.bottom<=innerHeight&&document.documentElement.scrollWidth<=innerWidth})()") as? Bool==true
+    let endVisible=try await longView.evaluateJavaScript("(()=>{const last=document.querySelector('.native-source-notice-text:last-child'),r=last.getBoundingClientRect(),b=document.querySelector('#details-close').getBoundingClientRect();return scrollY>0&&last.textContent==='可滚动到达的最后一条来源说明。'&&r.top>=0&&Math.floor(r.bottom)<=innerHeight&&b.top>=0&&Math.floor(b.bottom)<=innerHeight&&document.documentElement.scrollWidth<=innerWidth})()") as? Bool==true
     try check(endVisible,"long source notices scroll to the real last text at native minimum size while the actual completion button stays reachable")
     try await snapshot(longView,"long-source-notices-end")
     _=try await longView.evaluateJavaScript("document.querySelector('#details-close').click();true")

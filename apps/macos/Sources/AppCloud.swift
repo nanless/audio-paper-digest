@@ -311,9 +311,10 @@ struct CloudRestoreSelection {
                     }
                     let merged = PersonalWebDavSync.apply(plan, to: current)
                     try self.store.restorePersonal(merged)
+                    self.store.reconcileSyncedNoteConflicts(plan.noteConflicts)
                     if self.nativeNotesRequestedVisible { self.nativeNotesController?.reload() }
                     self.emit("personal.synced")
-                    return ["favorites": (merged["favorites"] as? [String] ?? []).count, "conflicts": plan.conflicts]
+                    return ["favorites": (merged["favorites"] as? [String] ?? []).count, "conflicts": plan.conflicts, "noteConflicts": self.store.noteConflictDictionaries()]
                 }
             }
             if command == "cloud.check" {

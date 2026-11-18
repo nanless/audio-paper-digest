@@ -1,6 +1,5 @@
 import Foundation
 import CryptoKit
-import Darwin
 import PDFKit
 
 /// Published-site data and disposable caches. Personal notes and credentials never enter this store.
@@ -136,8 +135,8 @@ actor LibraryService {
             try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]))
         }
     }
-    private struct StoredSnapshot: Codable, Sendable {
-        static let family="paperdigest-published-library"
+    struct StoredSnapshot: Codable, Sendable {
+        static let family = "paperdigest-published-library"
         var format: String?
         var contract: String?
         var schemaFingerprint: String?
@@ -148,27 +147,27 @@ actor LibraryService {
         var websiteTaxonomy: JSONValue?
         var websiteTaxonomyNotice: String?
 
-        init(summary:Summary,papers:[Paper]) {
-            contract=ClientProtocols.contract(Self.family)
-            schemaFingerprint=ClientProtocols.schemaFingerprint(Self.family)
-            self.summary=summary
-            self.papers=papers
+        init(summary: Summary, papers: [Paper]) {
+            contract = ClientProtocols.contract(Self.family)
+            schemaFingerprint = ClientProtocols.schemaFingerprint(Self.family)
+            self.summary = summary
+            self.papers = papers
         }
-        private enum CodingKeys:String,CodingKey {
-            case format,contract,schemaFingerprint,summary,papers,retiredPapers,validationEpoch,websiteTaxonomy,websiteTaxonomyNotice
+        private enum CodingKeys: String, CodingKey {
+            case format, contract, schemaFingerprint, summary, papers, retiredPapers, validationEpoch, websiteTaxonomy, websiteTaxonomyNotice
         }
-        init(from decoder:Decoder)throws {
-            let fields=try decoder.container(keyedBy:CodingKeys.self)
-            let legacy=fields.contains(.format)
-            let header=try ClientProtocols.decodeHeader(decoder,Self.family,field:legacy ? "format" : "contract")
-            if legacy { format=header.raw } else { contract=header.raw }
-            schemaFingerprint=header.fingerprint
-            summary=try fields.decode(Summary.self,forKey:.summary)
-            papers=try fields.decode([Paper].self,forKey:.papers)
-            retiredPapers=try fields.decodeIfPresent([Paper].self,forKey:.retiredPapers)
-            validationEpoch=try fields.decodeIfPresent(String.self,forKey:.validationEpoch)
-            websiteTaxonomy=try fields.decodeIfPresent(JSONValue.self,forKey:.websiteTaxonomy)
-            websiteTaxonomyNotice=try fields.decodeIfPresent(String.self,forKey:.websiteTaxonomyNotice)
+        init(from decoder: Decoder) throws {
+            let fields = try decoder.container(keyedBy: CodingKeys.self)
+            let legacy = fields.contains(.format)
+            let header = try ClientProtocols.decodeHeader(decoder, Self.family, field: legacy ? "format" : "contract")
+            if legacy { format = header.raw } else { contract = header.raw }
+            schemaFingerprint = header.fingerprint
+            summary = try fields.decode(Summary.self, forKey: .summary)
+            papers = try fields.decode([Paper].self, forKey: .papers)
+            retiredPapers = try fields.decodeIfPresent([Paper].self, forKey: .retiredPapers)
+            validationEpoch = try fields.decodeIfPresent(String.self, forKey: .validationEpoch)
+            websiteTaxonomy = try fields.decodeIfPresent(JSONValue.self, forKey: .websiteTaxonomy)
+            websiteTaxonomyNotice = try fields.decodeIfPresent(String.self, forKey: .websiteTaxonomyNotice)
         }
     }
     private struct Shard: Decodable, Sendable {
@@ -193,56 +192,25 @@ actor LibraryService {
     /// megabytes, so a larger one stays pending until `ensureReady()` waits for the background
     /// decode. Commands never treat that pending state as an empty library.
     private enum LoadPhase: Equatable { case loading, ready, failed(String) }
-    private let directory: URL
+    let directory: URL
     private let privateDirectory: URL
-    private let siteBaseURL: URL
-    private let transport: Transport?
-    private let session: URLSession
-    private var snapshot: StoredSnapshot
+    let siteBaseURL: URL
+    let transport: Transport?
+    let session: URLSession
+    var snapshot: StoredSnapshot
     private var loadPhase: LoadPhase = .loading
     private var loadTask: Task<LoadedLibrary, Error>?
     private var loadID: UUID?
     private var syncTask: Task<Summary, Error>?
     private var syncID: UUID?
-    private var httpProxy: URL?
-    private var activeTransfers: [UUID: Process] = [:]
+    var httpProxy: URL?
+    var activeTransfers: [UUID: Process] = [:]
     private var fullTextIndex: [String: String] = [:]
     private let seedDirectory: URL?
     private static let maxTotal = 64 * 1024 * 1024
     /// Small catalogs are decoded by the initializer exactly as before: a restart is immediate and
     /// a malformed local file is reported at launch. Only the large published catalog is deferred.
     private static let eagerDecodeLimit = 8 * 1024 * 1024
-    private static let approvedHosts: Set<String> = ["arxiv.org", "export.arxiv.org", "www.isca-archive.org", "isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org"]
-    // These are published image layouts, not a grant to arbitrary GitHub content.
-    // Keep owner/repository/branch and every path component exact; each redirect
-    // passes the same policy again before DNS validation and fixed-IP transfer.
-    static func isOwnedPublishedImage(_ url:URL)->Bool {
-        guard url.scheme=="https",url.user==nil,url.password==nil,url.query==nil,url.fragment==nil,
-              url.port==nil || url.port==443,let components=URLComponents(url:url,resolvingAgainstBaseURL:false),
-              !components.percentEncodedPath.contains("%"),!components.percentEncodedPath.contains("\\"),!components.percentEncodedPath.contains("//") else{return false}
-        let path=components.percentEncodedPath
-        if url.host?.lowercased()=="raw.githubusercontent.com" {
-            let parts=path.split(separator:"/",omittingEmptySubsequences:false)
-            let conferences:Set<String>=["interspeech-2026","dafx-2026","acl-2026","eusipco-2026","cvpr-2026","nime-2026","speechprosody-2026","aaai-2026","odyssey-2026","icmc-2026","jep-2026","eacl-2026","iwslt-2026","chime-2026","uai-2026","aistats-2026"]
-            guard parts.count==7,parts[0].isEmpty,parts[1]=="nanless",parts[2]=="audio-paper-digest-images",parts[3]=="main",conferences.contains(String(parts[4])) else{return false}
-            return parts[5].range(of:#"\A[a-f0-9]{12}\z"#,options:.regularExpression) != nil && parts[6].range(of:#"\Afigure-[1-9][0-9]*\.png\z"#,options:.regularExpression) != nil
-        }
-        if url.host?.lowercased()=="nanless.github.io" {
-            let parts=path.split(separator:"/",omittingEmptySubsequences:false)
-            guard parts.count==5,parts[0].isEmpty,parts[1]=="audio-paper-digest-images",["icassp-2026","iclr-2026"].contains(parts[2]),parts[3].range(of:#"\A2026-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])\z"#,options:.regularExpression) != nil else{return false}
-            let pattern=parts[2]=="icassp-2026" ? #"\A[0-9]{8}-[0-9]+\.(?:png|jpg)\z"# : #"\A[A-Za-z0-9]{10}-[0-9]+\.(?:png|jpg)\z"#
-            return parts[4].range(of:pattern,options:.regularExpression) != nil
-        }
-        return false
-    }
-    static func isApprovedExternalResource(_ url:URL)->Bool {
-        guard url.scheme=="https",let host=url.host?.lowercased(),url.user==nil,url.password==nil,url.port==nil || url.port==443 else{return false}
-        return approvedHosts.contains(host) || isOwnedPublishedImage(url)
-    }
-    static func externalResourceProxy(_ url:URL,configured:URL?)->URL? {
-        let host=url.host?.lowercased()
-        return host=="arxiv.org" || host=="export.arxiv.org" || isOwnedPublishedImage(url) ? configured:nil
-    }
 
     init(dataDirectory: URL, siteBaseURL: URL = URL(string: "https://nanless.github.io/audio-paper-digest-blog/")!, seedDirectory: URL? = nil, transport: Transport? = nil, sessionConfiguration: URLSessionConfiguration? = nil) throws {
         guard siteBaseURL.scheme == "https", siteBaseURL.host != nil, siteBaseURL.user == nil,
@@ -300,7 +268,7 @@ actor LibraryService {
             let authors = (row["authors"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
             let source = row["absUrl"] as? String, pdf = row["pdfUrl"] as? String
             let version = source.flatMap(URL.init(string:))?.lastPathComponent
-            guard let citation = try? ClientProtocols.record("paper-citation-source", fields: ["paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]) else {return nil}
+            guard let citation = try? ClientProtocols.record("paper-citation-source", fields: ["paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]) else { return nil }
             return Paper(id: "arxiv:" + identifier, title: title, titleZh: row["titleZh"] as? String ?? title, authors: authors, date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]), task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [], sourceKind: "arxiv", identityStatus: "verified", pageType: "paper", blogURL: blog, sourceURL: source, pdfURL: pdf, sourceVersion: version, appearances: [blog], citation: (try? JSONValue.from(citation)) ?? .null)
         }
         return StoredSnapshot(summary: Summary(paperCount: papers.count, recordCount: rows.count, shardCount: 0, snapshotID: Self.sha256(bytes), syncedAt: nil, source: "应用内已发布样稿（尚未全站同步）", syncing: false, missingFromLatest: []), papers: papers)
@@ -402,69 +370,6 @@ actor LibraryService {
         }
     }
 
-    private func matchingPapers(query:String,source:String?,minimumScore:Double?,sort:Sort,includeRetained:Bool=false)->[Paper] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        var catalog=snapshot.papers
-        if includeRetained{let current=Set(catalog.map(\.id));catalog.append(contentsOf:(snapshot.retiredPapers ?? []).filter{!current.contains($0.id)})}
-        let filtered = catalog.filter { p in
-            (source == nil || source == "all" || p.sourceKind == source) &&
-            (minimumScore == nil || (p.score ?? -.infinity) >= minimumScore!) &&
-            (needle.isEmpty || ([p.id, p.title, p.titleZh, p.task, p.method] + p.authors + p.tags).joined(separator: " ").folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains(needle))
-        }.sorted { a, b in
-            switch sort {
-            case .score: if a.score != b.score { return (a.score ?? -.infinity) > (b.score ?? -.infinity) }
-            case .title: if a.title != b.title { return a.title.localizedStandardCompare(b.title) == .orderedAscending }
-            case .date: if a.date != b.date { return a.date > b.date }
-            }
-            return a.id < b.id
-        }
-        return filtered
-    }
-
-    /// Synchronous current-source read. Command entry points await `ensureReady()` first; the only
-    /// in-app synchronous callers are reached from an already gated aggregate command.
-    func list(query: String = "", source: String? = nil, minimumScore: Double? = nil, sort: Sort = .date, offset: Int = 0, limit: Int = 200) -> [Paper] {
-        Array(matchingPapers(query:query,source:source,minimumScore:minimumScore,sort:sort).dropFirst(max(0,offset)).prefix(max(0,min(limit,10000))))
-    }
-
-    /// One paper exactly as the published row states it: full citation and every published guide
-    /// record. The browsing list omits them, so a detail view asks by identity instead.
-    private func paperDetail(id: String) throws -> [String: Any] {
-        let currentIDs = Set(snapshot.papers.map(\.id))
-        guard let paper = snapshot.papers.first(where: { $0.id == id }) ?? (snapshot.retiredPapers ?? []).first(where: { $0.id == id }) else {
-            throw ServiceError.invalid("资料库中没有这篇论文。")
-        }
-        return ["paper": Self.listRow(paper, retained: !currentIDs.contains(paper.id), compact: false), "snapshotID": snapshot.summary.snapshotID]
-    }
-
-    /// Per-guide browsing evidence for every paper the list can show. The app asks once per
-    /// snapshot and keeps the answer, so a personal-only refresh never resends it.
-    private func tagIndex() -> [String: Any] {
-        var papersByID: [String: Paper] = [:]
-        for paper in snapshot.papers { papersByID[paper.id] = paper }
-        for paper in snapshot.retiredPapers ?? [] where papersByID[paper.id] == nil { papersByID[paper.id] = paper }
-        var records: [String: [Any]] = [:]
-        for (id, paper) in papersByID {
-            guard let values = paper.websiteTagRecords, !values.isEmpty else { continue }
-            records[id] = values.map { Self.compactTagRecord($0, paper: paper) }
-        }
-        var result: [String: Any] = ["papers": records, "count": records.count, "snapshotID": snapshot.summary.snapshotID,
-                                     "websiteTaxonomyIdentity": Self.taxonomyIdentity(snapshot.websiteTaxonomy)]
-        result["websiteTaxonomy"] = snapshot.websiteTaxonomy.map { Self.jsonObject($0) } ?? NSNull()
-        return result
-    }
-
-    /// Identity of the published display assets, so the app reuses a cached copy only while the
-    /// published taxonomy itself is unchanged.
-    private static func taxonomyIdentity(_ assets: JSONValue?) -> Any {
-        guard case .object(let fields)? = assets else { return NSNull() }
-        var identity: [String: Any] = [:]
-        for key in ["snapshotContentSHA256", "versionsContentSHA256"] {
-            if case .string(let value)? = fields[key] { identity[key] = value }
-        }
-        return identity.isEmpty ? NSNull() : identity
-    }
-
     func sync(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Summary {
         // A full published sync replaces the local catalog, so it is also a repair path for a
         // failed startup decode: rejecting it at the ready gate would leave the app stuck on the
@@ -495,7 +400,7 @@ actor LibraryService {
         var indexURL = siteBaseURL.appendingPathComponent("client/index.json")
         let index: Data
         do { index = try await read(indexURL, limit: Self.maxTotal) }
-        catch ServiceError.httpStatus(let status) where [404,410].contains(status) {
+        catch ServiceError.httpStatus(let status) where [404, 410].contains(status) {
             indexURL = siteBaseURL.appendingPathComponent("index.json")
             index = try await read(indexURL, limit: Self.maxTotal)
         }
@@ -512,12 +417,12 @@ actor LibraryService {
             records = legacy
         } else {
             let manifest = try JSONDecoder().decode(Manifest.self, from: index)
-            let family="paper-search-index-manifest"
-            let expectedContract=indexURL.path==siteBaseURL.appendingPathComponent("client/index.json").path
+            let family = "paper-search-index-manifest"
+            let expectedContract = indexURL.path == siteBaseURL.appendingPathComponent("client/index.json").path
                 ? ClientProtocols.contract(family)
-                : try ClientProtocols.historicalContract(family,variant:"sha-bound-ordered-shards")
-            guard let header = raw as? [String:Any], ClientProtocols.hasValidHeader(header,family),
-                  manifest.contract==expectedContract, !manifest.shards.isEmpty,
+                : try ClientProtocols.historicalContract(family, variant: "sha-bound-ordered-shards")
+            guard let header = raw as? [String: Any], ClientProtocols.hasValidHeader(header, family),
+                  manifest.contract == expectedContract, !manifest.shards.isEmpty,
                   manifest.shards.count <= 128, manifest.recordCount > 0,
                   manifest.totalBytes > 0, manifest.totalBytes <= Self.maxTotal else { throw ServiceError.invalid("网站目录协议或大小不受支持。") }
             var urls = Set<String>()
@@ -536,7 +441,7 @@ actor LibraryService {
                 let file = cacheURL("index", key: shard.sha256, extension: "json")
                 var data = try? Data(contentsOf: file)
                 if data?.count != shard.bytes || data.map(Self.sha256) != shard.sha256 {
-                    data = try await read(try sameSite(URL(string:shard.url,relativeTo:indexURL)!.absoluteURL.absoluteString), limit: 1024 * 1024)
+                    data = try await read(try sameSite(URL(string: shard.url, relativeTo: indexURL)!.absoluteURL.absoluteString), limit: 1024 * 1024)
                     guard data!.count == shard.bytes, Self.sha256(data!) == shard.sha256 else { throw ServiceError.invalid("网站分片内容与清单不符，保留上一份资料库。") }
                     try atomicWrite(data!, to: file)
                 }
@@ -556,7 +461,7 @@ actor LibraryService {
             guard let paper = try parsePaper(record) else { continue }
             if var old = papersByID[paper.id] {
                 let appearances = Array(Set(old.appearances + paper.appearances)).sorted()
-                let tagRecords=(old.websiteTagRecords ?? [])+(paper.websiteTagRecords ?? [])
+                let tagRecords = (old.websiteTagRecords ?? []) + (paper.websiteTagRecords ?? [])
                 if paper.date > old.date { old = paper }
                 old.appearances = appearances
                 old.websiteTagRecords = tagRecords
@@ -569,22 +474,22 @@ actor LibraryService {
         let missing = Set(snapshot.summary.missingFromLatest).union(previousIDs.subtracting(currentIDs)).subtracting(currentIDs)
         let summary = Summary(paperCount: papersByID.count, recordCount: records.count, shardCount: shardCount, snapshotID: Self.sha256(index), syncedAt: Self.now(), source: siteBaseURL.absoluteString, syncing: false, missingFromLatest: missing.sorted())
         var replacement = StoredSnapshot(summary: summary, papers: papersByID.values.sorted { $0.id < $1.id })
-        if records.contains(where:{($0["tagConcepts"] as? [Any])?.isEmpty==false || ($0["taxonomyConcepts"] as? [Any])?.isEmpty==false}) {
-            do { replacement.websiteTaxonomy=try await readWebsiteTaxonomy() }
+        if records.contains(where: { ($0["tagConcepts"] as? [Any])?.isEmpty == false || ($0["taxonomyConcepts"] as? [Any])?.isEmpty == false }) {
+            do { replacement.websiteTaxonomy = try await readWebsiteTaxonomy() }
             catch is CancellationError { throw CancellationError() }
-            catch { replacement.websiteTaxonomy=snapshot.websiteTaxonomy;replacement.websiteTaxonomyNotice=snapshot.websiteTaxonomy == nil ? "网页分类词表暂不可读；论文目录已保留，未借用其他版本分类。" : "分类资源更新未完成，当前使用上次可核对的词表；不在该词表版本中的分类暂不可核验。" }
-        } else { replacement.websiteTaxonomyNotice="网站目录未提供可核对的多级分类。" }
+            catch { replacement.websiteTaxonomy = snapshot.websiteTaxonomy; replacement.websiteTaxonomyNotice = snapshot.websiteTaxonomy == nil ? "网页分类词表暂不可读；论文目录已保留，未借用其他版本分类。" : "分类资源更新未完成，当前使用上次可核对的词表；不在该词表版本中的分类暂不可核验。" }
+        } else { replacement.websiteTaxonomyNotice = "网站目录未提供可核对的多级分类。" }
         replacement.validationEpoch = UUID().uuidString
         replacement.retiredPapers = Dictionary((snapshot.papers + (snapshot.retiredPapers ?? [])).filter { !currentIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }).values.sorted { $0.id < $1.id }
         try Task.checkCancellation()
         guard syncID == identifier else { throw CancellationError() }
         let encoded = try JSONEncoder().encode(replacement)
         guard encoded.count <= Self.maxTotal else { throw ServiceError.invalid("合并后的本地目录超过大小限制。") }
-        if shardCount>0 {
+        if shardCount > 0 {
             // 保留全部分片会在 manifest 之外再占一份总字节；超过 16MiB 时回落到逐片读取路径。
             let reusableShards = preparedBytes <= 16 * 1024 * 1024 ? preparedShards : nil
-            _ = try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).stage(manifest:index,validationEpoch:replacement.validationEpoch!,preparedShards:reusableShards)
-            try Task.checkCancellation();guard syncID==identifier else{throw CancellationError()}
+            _ = try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).stage(manifest: index, validationEpoch: replacement.validationEpoch!, preparedShards: reusableShards)
+            try Task.checkCancellation(); guard syncID == identifier else { throw CancellationError() }
         }
         try atomicWrite(encoded, to: directory.appendingPathComponent("current.json"))
         snapshot = replacement
@@ -597,38 +502,38 @@ actor LibraryService {
         return summary
     }
 
-    func aggregateCatalog()throws->PublishedAggregateCatalog? {
-        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch)
+    func aggregateCatalog() throws -> PublishedAggregateCatalog? {
+        try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).load(activeSnapshotSHA256: snapshot.summary.snapshotID, validationEpoch: snapshot.validationEpoch)
     }
     /// A synchronous current-source operation; neither the scoped store nor its
     /// qualification may escape the closure or cross a network await.
-    func withCurrentAggregateReadScope<T>(_ body:(PublishedAggregateStore,PublishedAggregateCatalog)throws->T)throws->T {
-        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
-            guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch) else{throw AggregateFailure.invalid("当前汇总目录未核验")}
-            return try body(store,catalog)
+    func withCurrentAggregateReadScope<T>(_ body: (PublishedAggregateStore, PublishedAggregateCatalog) throws -> T) throws -> T {
+        try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog = try store.load(activeSnapshotSHA256: snapshot.summary.snapshotID, validationEpoch: snapshot.validationEpoch) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
+            return try body(store, catalog)
         }
     }
-    func aggregateOriginalRow(id:String)throws->Data {
-        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
-            guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
-            return try store.originalRow(for:descriptor)
+    func aggregateOriginalRow(id: String) throws -> Data {
+        try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog = try store.load(activeSnapshotSHA256: snapshot.summary.snapshotID, validationEpoch: snapshot.validationEpoch), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在") }
+            return try store.originalRow(for: descriptor)
         }
     }
 
-    func aggregateDocument(id:String) async throws->AggregateDocument {
-        guard let catalog=try aggregateCatalog(),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
-        let epoch=snapshot.validationEpoch,sourceSnapshot=snapshot.summary.snapshotID
-        let url=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
-        let raw=try await read(url,limit:16*1024*1024)
+    func aggregateDocument(id: String) async throws -> AggregateDocument {
+        guard let catalog = try aggregateCatalog(), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在") }
+        let epoch = snapshot.validationEpoch, sourceSnapshot = snapshot.summary.snapshotID
+        let url = try PublishedAggregateReader.pageURL(descriptor.sourceURL, siteBase: siteBaseURL)
+        let raw = try await read(url, limit: 16 * 1024 * 1024)
         try Task.checkCancellation()
-        guard snapshot.validationEpoch==epoch,snapshot.summary.snapshotID==sourceSnapshot else{throw AggregateFailure.invalid("读取期间目录验证代已变化，未拼接新目录与旧网页")}
+        guard snapshot.validationEpoch == epoch, snapshot.summary.snapshotID == sourceSnapshot else { throw AggregateFailure.invalid("读取期间目录验证代已变化，未拼接新目录与旧网页") }
         // Production read() accepts only HTTP200 with the actual response URL equal to this same-site URL.
-        return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).cacheDocument(raw,descriptor:descriptor,responseURL:url,fetchedAt:Self.now())
+        return try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).cacheDocument(raw, descriptor: descriptor, responseURL: url, fetchedAt: Self.now())
     }
-    func aggregateCachedDocument(id:String,rawHTMLSHA256:String)throws->AggregateDocument {
-        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
-            guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("当前汇总目录未核验")}
-            return try store.cachedDocument(descriptor:descriptor,rawHTMLSHA256:rawHTMLSHA256)
+    func aggregateCachedDocument(id: String, rawHTMLSHA256: String) throws -> AggregateDocument {
+        try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog = try store.load(activeSnapshotSHA256: snapshot.summary.snapshotID, validationEpoch: snapshot.validationEpoch), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
+            return try store.cachedDocument(descriptor: descriptor, rawHTMLSHA256: rawHTMLSHA256)
         }
     }
 
@@ -654,57 +559,39 @@ actor LibraryService {
                      authors: citation["authors"] as? [String] ?? [], date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]),
                      task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [],
                      sourceKind: kind, identityStatus: status, pageType: pageType, blogURL: blog.absoluteString, sourceURL: source, pdfURL: pdf,
-                     sourceVersion: version?.isEmpty == false ? version : nil, appearances: [blog.absoluteString], citation: try JSONValue.from(citation), websiteTagRecords:[try JSONValue.from(Self.websiteTagRecord(row))], pdfSHA256: try Self.publishedPDFHash(row, citation: citation))
+                     sourceVersion: version?.isEmpty == false ? version : nil, appearances: [blog.absoluteString], citation: try JSONValue.from(citation), websiteTagRecords: [try JSONValue.from(Self.websiteTagRecord(row))], pdfSHA256: try Self.publishedPDFHash(row, citation: citation))
     }
 
-    private static func websiteTagRecord(_ row:[String:Any])->[String:Any] {
-        let keys:Set<String>=["pageType","permalink","paperId","arxivId","identityStatus","sourceKind","title","titleZh","originalTitle","summary","date","score","citation","task","method","tags","categories","primaryTaskId","primaryMethodId","researchType","domainScope","primaryResearchRole","primaryScientificTopicId","primaryScientificTopicLabel","methodNotApplicable","methodNotApplicableReason"]
-        return row.filter{keys.contains($0.key)||$0.key.hasPrefix("tag")||$0.key.hasPrefix("taxonomy")}
-    }
-    private func readWebsiteTaxonomy()async throws->JSONValue {
-        var snapshotURL=try sameSite("client/data/tag-catalog-snapshot.json"),versionsURL=try sameSite("client/data/tag-catalog-versions.json")
-        func optional404(_ url:URL,_ limit:Int)async throws->Data? {
-            do { return try await read(url,limit:limit) }
+    private func readWebsiteTaxonomy() async throws -> JSONValue {
+        var snapshotURL = try sameSite("client/data/tag-catalog-snapshot.json"), versionsURL = try sameSite("client/data/tag-catalog-versions.json")
+        func optional404(_ url: URL, _ limit: Int) async throws -> Data? {
+            do { return try await read(url, limit: limit) }
             catch ServiceError.httpStatus(404) { return nil }
         }
-        let firstSnapshot=try await optional404(snapshotURL,2*1024*1024),firstVersions=try await optional404(versionsURL,8*1024*1024)
-        let snapshotBytes:Data,versionsBytes:Data
+        let firstSnapshot = try await optional404(snapshotURL, 2 * 1024 * 1024), firstVersions = try await optional404(versionsURL, 8 * 1024 * 1024)
+        let snapshotBytes: Data, versionsBytes: Data
         if firstSnapshot == nil && firstVersions == nil {
-            snapshotURL=try sameSite("data/tag-catalog-snapshot.json");versionsURL=try sameSite("data/tag-catalog-versions.json")
-            snapshotBytes=try await read(snapshotURL,limit:2*1024*1024);versionsBytes=try await read(versionsURL,limit:8*1024*1024)
+            snapshotURL = try sameSite("data/tag-catalog-snapshot.json"); versionsURL = try sameSite("data/tag-catalog-versions.json")
+            snapshotBytes = try await read(snapshotURL, limit: 2 * 1024 * 1024); versionsBytes = try await read(versionsURL, limit: 8 * 1024 * 1024)
         } else {
-            guard let firstSnapshot,let firstVersions else { throw ServiceError.invalid("新网页分类资源不成对，未改用另一份来源。") }
-            snapshotBytes=firstSnapshot;versionsBytes=firstVersions
+            guard let firstSnapshot, let firstVersions else { throw ServiceError.invalid("新网页分类资源不成对，未改用另一份来源。") }
+            snapshotBytes = firstSnapshot; versionsBytes = firstVersions
         }
-        let snapshotFamily="paper-tag-catalog-snapshot",versionsFamily="paper-tag-catalog-versions"
-        let legacy=firstSnapshot==nil
-        let snapshotContract=legacy ? try ClientProtocols.historicalContract(snapshotFamily,variant:"public-concept-hierarchy") : ClientProtocols.contract(snapshotFamily)
-        let versionsContract=legacy ? try ClientProtocols.historicalContract(versionsFamily,variant:"sha-keyed-snapshot-set") : ClientProtocols.contract(versionsFamily)
-        guard let current=try JSONSerialization.jsonObject(with:snapshotBytes) as? [String:Any],
-              let versions=try JSONSerialization.jsonObject(with:versionsBytes) as? [String:Any],
-              ClientProtocols.hasValidHeader(current,snapshotFamily),ClientProtocols.hasValidHeader(versions,versionsFamily),
-              current["contract"] as? String==snapshotContract,versions["contract"] as? String==versionsContract,
-              let hash=current["registrySha256"] as? String,hash.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,
-              versions["currentSha256"] as? String==hash,current["concepts"] is [[String:Any]],versions["snapshots"] is [[String:Any]] else {
+        let snapshotFamily = "paper-tag-catalog-snapshot", versionsFamily = "paper-tag-catalog-versions"
+        let legacy = firstSnapshot == nil
+        let snapshotContract = legacy ? try ClientProtocols.historicalContract(snapshotFamily, variant: "public-concept-hierarchy") : ClientProtocols.contract(snapshotFamily)
+        let versionsContract = legacy ? try ClientProtocols.historicalContract(versionsFamily, variant: "sha-keyed-snapshot-set") : ClientProtocols.contract(versionsFamily)
+        guard let current = try JSONSerialization.jsonObject(with: snapshotBytes) as? [String: Any],
+              let versions = try JSONSerialization.jsonObject(with: versionsBytes) as? [String: Any],
+              ClientProtocols.hasValidHeader(current, snapshotFamily), ClientProtocols.hasValidHeader(versions, versionsFamily),
+              current["contract"] as? String == snapshotContract, versions["contract"] as? String == versionsContract,
+              let hash = current["registrySha256"] as? String, hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              versions["currentSha256"] as? String == hash, current["concepts"] is [[String: Any]], versions["snapshots"] is [[String: Any]] else {
             throw ServiceError.invalid("网页分类显示资源缺失或当前词表不一致。")
         }
-        let snapshotHash=Self.sha256(snapshotBytes),versionsHash=Self.sha256(versionsBytes)
-        try atomicWrite(snapshotBytes,to:cacheURL("taxonomy",key:snapshotHash,extension:"json"));try atomicWrite(versionsBytes,to:cacheURL("taxonomy",key:versionsHash,extension:"json"))
-        return try JSONValue.from(["snapshot":current,"versions":versions,"snapshotSourceURL":snapshotURL.absoluteString,"versionsSourceURL":versionsURL.absoluteString,"snapshotContentSHA256":snapshotHash,"versionsContentSHA256":versionsHash])
-    }
-
-    /// Hugo publishes the structured score as a decimal string; older indexes may use a JSON number.
-    /// Only this declared field is read. Body prose, dimension totals and citation numbers are not scores.
-    private static func publishedScore(_ value:Any?) -> Double? {
-        let score:Double?
-        if let number=value as? NSNumber {
-            guard CFGetTypeID(number) != CFBooleanGetTypeID() else{return nil}
-            score=number.doubleValue
-        }else if let text=value as? String {
-            score=Double(text.trimmingCharacters(in:.whitespacesAndNewlines))
-        }else{return nil}
-        guard let score,score.isFinite,(0...10).contains(score) else{return nil}
-        return score
+        let snapshotHash = Self.sha256(snapshotBytes), versionsHash = Self.sha256(versionsBytes)
+        try atomicWrite(snapshotBytes, to: cacheURL("taxonomy", key: snapshotHash, extension: "json")); try atomicWrite(versionsBytes, to: cacheURL("taxonomy", key: versionsHash, extension: "json"))
+        return try JSONValue.from(["snapshot": current, "versions": versions, "snapshotSourceURL": snapshotURL.absoluteString, "versionsSourceURL": versionsURL.absoluteString, "snapshotContentSHA256": snapshotHash, "versionsContentSHA256": versionsHash])
     }
 
     func article(for paperID: String, refresh: Bool = false, downloadImages: Bool = true, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Article {
@@ -714,10 +601,10 @@ actor LibraryService {
         var previous: Article?
         if let data = try? Data(contentsOf: cache), let cached = try? JSONDecoder().decode(Article.self, from: data), cached.paperID == paperID { previous = cached }
         if !refresh, var cached = previous {
-            if cached.markdown==nil,!ClientProtocols.isContract(cached.mathMLContract,"published-html-mathml"){cached.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
+            if cached.markdown == nil, !ClientProtocols.isContract(cached.mathMLContract, "published-html-mathml") { cached.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。") }
             let missing = !resourcesVerified(cached)
             if missing { cached.completeOffline = false }
-            let parserCurrent=cached.markdown != nil || ClientProtocols.isContract(cached.mathMLContract,"published-html-mathml")
+            let parserCurrent = cached.markdown != nil || ClientProtocols.isContract(cached.mathMLContract, "published-html-mathml")
             let current = parserCurrent && Self.sourceMatches(cached, paper: paper) && cached.catalogEpoch == snapshot.validationEpoch && Self.age(cached.fetchedAt) <= 6 * 3600
             if current && (!downloadImages || !missing), cached.isStale != true { return Self.presentSourceWarning(cached) }
             if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return Self.presentSourceWarning(cached) }
@@ -733,7 +620,7 @@ actor LibraryService {
             guard var old = previous ?? (try? seedArticle(paper)) else { throw error }
             old.isStale = true; old.cacheStatus = "stale"; old.validationAttemptedAt = Self.now(); old.expectedSourceVersion = paper.sourceVersion; old.catalogEpoch = snapshot.validationEpoch
             old.completeOffline = old.completeOffline && resourcesVerified(old)
-            if old.markdown==nil,!ClientProtocols.isContract(old.mathMLContract,"published-html-mathml"){old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
+            if old.markdown == nil, !ClientProtocols.isContract(old.mathMLContract, "published-html-mathml") { old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。") }
             old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(error.localizedDescription)"])).sorted()
             if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
             return Self.presentSourceWarning(old)
@@ -747,20 +634,20 @@ actor LibraryService {
         var article = try Self.extractArticle(html, paper: paper, pageURL: URL(string: paper.blogURL)!)
         var notices = article.notices
         let metadataDocument = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
-        let citationFiles = try publishedSidecarLinks(metadataDocument,paper:paper,allowLegacySiblings:true)
-        if let address=citationFiles.urls["citation.json"] {
-            article.citationFiles=citationFiles.urls
-            article.citationFileSHA256=citationFiles.hashes.isEmpty ? nil:citationFiles.hashes
+        let citationFiles = try publishedSidecarLinks(metadataDocument, paper: paper, allowLegacySiblings: true)
+        if let address = citationFiles.urls["citation.json"] {
+            article.citationFiles = citationFiles.urls
+            article.citationFileSHA256 = citationFiles.hashes.isEmpty ? nil : citationFiles.hashes
             do {
                 let data = try await read(try sameSite(address), limit: 1024 * 1024)
-                if let expected=citationFiles.hashes["citation.json"],Self.sha256(data) != expected {throw ServiceError.invalid("引用文件与已读取页面中的SHA不符。 ")}
+                if let expected = citationFiles.hashes["citation.json"], Self.sha256(data) != expected { throw ServiceError.invalid("引用文件与已读取页面中的SHA不符。 ") }
                 article.citationSidecar = try Self.validatedSidecar(data, paper: paper, context: false)
             } catch is CancellationError { throw CancellationError() }
             catch { notices.append("引用附加文件尚未读取，保留页面已核验字段。") }
-            if let contextAddress=citationFiles.urls["rethink-context.json"] {
+            if let contextAddress = citationFiles.urls["rethink-context.json"] {
                 do {
                     let data = try await read(try sameSite(contextAddress), limit: 1024 * 1024)
-                    if let expected=citationFiles.hashes["rethink-context.json"],Self.sha256(data) != expected {throw ServiceError.invalid("上下文文件与已读取页面中的SHA不符。 ")}
+                    if let expected = citationFiles.hashes["rethink-context.json"], Self.sha256(data) != expected { throw ServiceError.invalid("上下文文件与已读取页面中的SHA不符。 ") }
                     article.researchContext = try Self.validatedSidecar(data, paper: paper, context: true)
                 } catch is CancellationError { throw CancellationError() }
                 catch { notices.append("研究上下文附加文件缺失或尚不可读。") }
@@ -808,24 +695,13 @@ actor LibraryService {
         let file = directory.appendingPathComponent("article-revisions/" + key).appendingPathComponent(revision + ".json")
         if !FileManager.default.fileExists(atPath: file.path) { try atomicWrite(bytes, to: file) }
     }
-    static func presentSourceWarning(_ article:Article, blogURL:String?=nil)->Article {
-        guard case .object(let fields)=article.citation else{return article}
-        var citation:[String:Any]=[:]
-        for key in ["contract","schemaFingerprint","version","schemaVersion","policyVersion","verified","identityStatus","paperKey","paperId","pageUrl","sourceUrl","url","pdfUrl","sourceKind","arxivId","sourceVersionWarning"] {
-            guard let field=fields[key] else{continue}
-            switch field {case .string(let value):citation[key]=value;case .bool(let value):citation[key]=value;default:citation[key]=NSNull()}
-        }
-        var result=article
-        result.notices=PublishedSourceWarning.merge(article.notices,citation:citation,material:.init(paperID:article.paperID,blogURL:article.blogURL ?? blogURL,sourceURL:article.sourceURL,pdfURL:article.pdfURL,sourceVersion:article.sourceVersion))
-        return result
-    }
     private static func sourceMatches(_ article: Article, paper: Paper) -> Bool {
         article.paperID == paper.id && article.blogURL == paper.blogURL && article.sourceURL == (paper.sourceURL ?? paper.blogURL) && article.pdfURL == paper.pdfURL && article.sourceVersion == paper.sourceVersion
     }
     private static func age(_ value: String?) -> TimeInterval {
         guard let value, let date = ISO8601DateFormatter().date(from: value) else { return .infinity }
         let interval = Date().timeIntervalSince(date)
-        return interval < -300 ? .infinity:max(0, interval)
+        return interval < -300 ? .infinity : max(0, interval)
     }
     private func resourcesVerified(_ article: Article) -> Bool {
         article.resources.allSatisfy { resource in
@@ -879,418 +755,104 @@ actor LibraryService {
         if let citation = object["citation"] as? [String: Any] {
             result.citationSidecar = try Self.validatedSidecar(JSONSerialization.data(withJSONObject: citation), paper: paper, context: false)
         }
-        let context = try ClientProtocols.record("desktop-bundled-research-context",fields:[ "origin": "bundled-published-sample", "sampleOnly": true,
-                                      "sourceContract": object["contract"] ?? NSNull(), "paperID": paper.id, "sourceURL": paper.sourceURL ?? paper.blogURL,
-                                      "blogURL": paper.blogURL, "sourceVersion": paper.sourceVersion ?? "", "originalTitle": paper.title, "readerTitle": paper.titleZh,
-                                      "authors": primary["authors"] ?? [], "abstract": object["abstract"] ?? NSNull(),
-                                      "oneSentenceThesis": primary["summary"] ?? NSNull(), "assessment": ["score": primary["score"] ?? NSNull(), "primaryTask": primary["task"] ?? "", "primaryMethod": primary["method"] ?? "", "tags": primary["tags"] ?? []]])
+        let context = try ClientProtocols.record("desktop-bundled-research-context", fields: [
+            "origin": "bundled-published-sample", "sampleOnly": true,
+            "sourceContract": object["contract"] ?? NSNull(), "paperID": paper.id, "sourceURL": paper.sourceURL ?? paper.blogURL,
+            "blogURL": paper.blogURL, "sourceVersion": paper.sourceVersion ?? "", "originalTitle": paper.title, "readerTitle": paper.titleZh,
+            "authors": primary["authors"] ?? [], "abstract": object["abstract"] ?? NSNull(),
+            "oneSentenceThesis": primary["summary"] ?? NSNull(), "assessment": ["score": primary["score"] ?? NSNull(), "primaryTask": primary["task"] ?? "", "primaryMethod": primary["method"] ?? "", "tags": primary["tags"] ?? []]
+        ])
         result.researchContext = try JSONValue.from(context)
         return result
     }
 
-    // Foundation HTML tidy removes unknown HTML5/MathML tags, including their
-    // TeX annotation. Protect only complete, independently validated MathML;
-    // the surrounding HTML still passes through the original HTML sanitizer.
-    private static func htmlDocumentPreservingMath(_ raw:String)throws->XMLDocument {
-        let bytes=Array(raw.utf8)
-        guard bytes.count<=16*1024*1024 else{throw ServiceError.invalid("公式保真读取的页面超过16 MiB。")}
-        guard !raw.localizedCaseInsensitiveContains("<!ENTITY") else{throw ServiceError.invalid("文章包含不允许的实体声明。")}
-        struct Tag {let end:Int;let name:String;let closing:Bool;let empty:Bool}
-        func starts(_ text:String,at index:Int)->Bool {
-            let expected=Array(text.utf8);guard index+expected.count<=bytes.count else{return false}
-            return expected.indices.allSatisfy{offset in let value=bytes[index+offset];return (65...90).contains(value) ? value+32==expected[offset]:value==expected[offset]}
-        }
-        func endOf(_ delimiter:String,from start:Int)throws->Int {
-            let expected=Array(delimiter.utf8);var index=start
-            while index+expected.count<=bytes.count {if bytes[index..<(index+expected.count)].elementsEqual(expected){return index+expected.count};index+=1}
-            throw ServiceError.invalid("文章中的注释或CDATA没有完整闭合，未猜测公式边界。")
-        }
-        func tag(at start:Int)throws->Tag? {
-            guard bytes[start]==60 else{return nil}
-            var index=start+1,closing=false
-            if index<bytes.count,bytes[index]==47{closing=true;index+=1}
-            let nameStart=index
-            while index<bytes.count,((65...90).contains(bytes[index]) || (97...122).contains(bytes[index]) || (48...57).contains(bytes[index]) || bytes[index]==45 || bytes[index]==58){index+=1}
-            guard index>nameStart else{return nil}
-            let name=String(decoding:bytes[nameStart..<index],as:UTF8.self).lowercased()
-            var quote:UInt8?=nil
-            while index<bytes.count,index-start<=65536 {
-                let value=bytes[index]
-                if let active=quote {if value==active{quote=nil}}
-                else if value==34 || value==39{quote=value}
-                else if value==62 {var previous=index-1;while previous>start,[9,10,13,32].contains(bytes[previous]){previous-=1};return Tag(end:index+1,name:name,closing:closing,empty:bytes[previous]==47)}
-                index+=1
-            }
-            throw ServiceError.invalid("文章标签不完整或超过64 KiB，未猜测公式边界。")
-        }
-        func declarationEnd(at start:Int)throws->Int {
-            var index=start+2,quote:UInt8?=nil
-            while index<bytes.count,index-start<=65536 {
-                let value=bytes[index]
-                if let active=quote{if value==active{quote=nil}}
-                else if value==34 || value==39{quote=value}
-                else if value==62{return index+1}
-                index+=1
-            }
-            throw ServiceError.invalid("文章声明不完整，未交给外部实体解析器。")
-        }
-        let nonce="paperdigest-math-"+UUID().uuidString.lowercased()+"-"
-        guard !raw.contains(nonce) else{throw ServiceError.invalid("公式保真标记发生冲突。")}
-        var position=0,last=0,output=Data(),rawText:String?=nil,formulas:[(String,XMLElement)]=[],formulaBytes=0
-        while position<bytes.count {
-            if let rawName=rawText {
-                // Raw text follows HTML closing-tag rules, not JavaScript/string
-                // quoting. Do not tokenize apparent formulas inside this text.
-                if bytes[position]==60,starts("</"+rawName,at:position),let token=try tag(at:position),token.closing,token.name==rawName{rawText=nil;position=token.end}else{position+=1}
-                continue
-            }
-            guard bytes[position]==60 else{position+=1;continue}
-            if starts("<!--",at:position){position=try endOf("-->",from:position+4);continue}
-            if starts("<![cdata[",at:position){position=try endOf("]]>",from:position+9);continue}
-            if starts("<!",at:position){
-                let end=try declarationEnd(at:position),declaration=String(decoding:bytes[position..<end],as:UTF8.self)
-                guard declaration.range(of:#"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#,options:[.regularExpression,.caseInsensitive]) != nil else{throw ServiceError.invalid("文章包含不支持的DOCTYPE或实体声明。")}
-                position=end;continue
-            }
-            guard let token=try tag(at:position) else{position+=1;continue}
-            if token.name.hasSuffix(":math"){throw ServiceError.invalid("暂不支持带前缀的MathML根节点，未静默丢弃公式。")}
-            if !token.closing,token.name=="plaintext"{position=bytes.count;continue}
-            if !token.closing,["script","style","textarea","title","xmp","iframe","noembed","noframes"].contains(token.name){rawText=token.name;position=token.end;continue}
-            if token.name=="math",token.closing{throw ServiceError.invalid("文章包含没有对应起点的MathML结束标签。")}
-            guard token.name=="math" else{position=token.end;continue}
-            let beginning=position;var end=token.end,depth=token.empty ? 0:1
-            while depth>0 {
-                guard end<bytes.count,end-beginning<=256*1024 else{throw ServiceError.invalid("单个MathML超过256 KiB或未完整闭合。")}
-                if bytes[end] != 60 {end+=1;continue}
-                if starts("<!--",at:end){end=try endOf("-->",from:end+4);continue}
-                if starts("<![cdata[",at:end){end=try endOf("]]>",from:end+9);continue}
-                guard !starts("<!",at:end) else{throw ServiceError.invalid("MathML中不允许DOCTYPE或实体声明。")}
-                if let child=try tag(at:end){if child.name=="math"{if child.closing{depth-=1}else if !child.empty{depth+=1}};end=child.end}else{end+=1}
-            }
-            guard end-beginning<=256*1024,formulas.count<512,formulaBytes+end-beginning<=2*1024*1024 else{throw ServiceError.invalid("MathML数量或总大小超过保真读取上限。")}
-            let source=String(decoding:bytes[beginning..<end],as:UTF8.self)
-            let parsed=try XMLDocument(xmlString:source,options:[.nodePreserveWhitespace,.nodeLoadExternalEntitiesNever])
-            guard let math=parsed.rootElement(),math.name?.lowercased()=="math" else{throw ServiceError.invalid("MathML必须是独立且完整的math节点。")}
-            var count=0;try sanitizeMathML(math,depth:0,count:&count)
-            // In HTML, an unqualified <math> enters the MathML namespace even
-            // without an explicit xmlns. Pin it before inserting into XHTML.
-            if math.uri==nil{math.addNamespace(XMLNode.namespace(withName:"",stringValue:"http://www.w3.org/1998/Math/MathML") as! XMLNode)}
-            let marker=nonce+String(formulas.count)
-            output.append(contentsOf:bytes[last..<beginning]);output.append(contentsOf:"<span id=\"\(marker)\"></span>".utf8)
-            formulas.append((marker,math.copy() as! XMLElement));formulaBytes+=end-beginning;last=end;position=end
-        }
-        output.append(contentsOf:bytes[last..<bytes.count])
-        let doc=try XMLDocument(xmlString:String(decoding:output,as:UTF8.self),options:[.documentTidyHTML,.nodeLoadExternalEntitiesNever])
-        for (marker,math) in formulas {
-            let matches=try doc.nodes(forXPath:"//*[@id='\(marker)']")
-            guard matches.count==1,let slot=matches.first as? XMLElement,slot.name?.lowercased()=="span",slot.childCount==0,let parent=slot.parent as? XMLElement else{throw ServiceError.invalid("HTML解析改变了公式占位，未静默丢弃或异位恢复公式。")}
-            parent.replaceChild(at:slot.index,with:math)
-        }
-        guard !doc.xmlString.contains(nonce) else{throw ServiceError.invalid("公式保真占位没有完全恢复。")}
-        return doc
-    }
-    private static func sanitizeMathML(_ element:XMLElement,depth:Int,count:inout Int)throws {
-        count+=1;guard depth<=64,count<=8192 else{throw ServiceError.invalid("MathML层级或节点数量超过保真上限。")}
-        let tags:Set<String>=["math","semantics","annotation","mrow","mi","mn","mo","mtext","ms","mspace","mfrac","msqrt","mroot","msup","msub","msubsup","mover","munder","munderover","mtable","mtr","mlabeledtr","mtd","mstyle","mpadded","mphantom","menclose","mmultiscripts","mprescripts","none","merror"]
-        let attributes:Set<String>=["display","mathvariant","encoding","stretchy","fence","separator","accent","accentunder","symmetric","movablelimits","largeop","lspace","rspace","width","height","depth","voffset","minsize","maxsize","mathsize","mathcolor","mathbackground","displaystyle","scriptlevel","columnalign","rowalign","columnspacing","rowspacing","columnlines","rowlines","columnspan","rowspan","equalrows","equalcolumns","frame","framespacing","notation","linethickness","numalign","denomalign","bevelled","form","dir","id","class","title"]
-        guard let rawName=element.name,!rawName.contains(":"),tags.contains(rawName.lowercased()),element.uri==nil || element.uri=="http://www.w3.org/1998/Math/MathML" else{throw ServiceError.invalid("MathML包含不支持的外来或活动节点。")}
-        element.name=rawName.lowercased()
-        for namespace in element.namespaces ?? [] {guard namespace.stringValue=="http://www.w3.org/1998/Math/MathML" else{throw ServiceError.invalid("MathML包含不支持的命名空间。")}}
-        for attribute in element.attributes ?? [] {
-            let rawName=attribute.name ?? "",name=rawName.lowercased(),value=attribute.stringValue ?? ""
-            if name.hasPrefix("on") || ["href","src","xlink:href","style"].contains(name){element.removeAttribute(forName:rawName);continue}
-            guard attributes.contains(name),!rawName.contains(":"),value.utf8.count<=4096,!value.localizedCaseInsensitiveContains("url("),!value.localizedCaseInsensitiveContains("javascript:") else{throw ServiceError.invalid("MathML包含不支持的属性，未猜测公式结构。")}
-            attribute.name=name
-        }
-        if element.name=="annotation" {
-            guard ["application/x-tex","application/x-latex","text/plain"].contains(element.attribute(forName:"encoding")?.stringValue ?? ""),!(element.children ?? []).contains(where:{$0 is XMLElement}) else{throw ServiceError.invalid("MathML annotation必须是受支持编码的纯文本，未将嵌套结构猜为TeX。")}
-        }
-        for child in element.children ?? [] {
-            if let nested=child as? XMLElement {try sanitizeMathML(nested,depth:depth+1,count:&count)}
-            else {
-                count+=1;guard count<=8192 else{throw ServiceError.invalid("MathML节点数量超过保真上限。")}
-                if child.kind == .text {element.replaceChild(at:child.index,with:XMLNode.text(withStringValue:child.stringValue ?? "") as! XMLNode)}else{child.detach()}
-            }
-        }
-    }
-    private static func articlePlainText(_ body:XMLElement)throws->String {
-        let copy=body.copy() as! XMLElement
-        let roots=try copy.nodes(forXPath:".//*[local-name()='math' and not(ancestor::*[local-name()='math'])]")
-        for case let math as XMLElement in roots {
-            let annotations=try math.nodes(forXPath:"./*[local-name()='semantics']/*[local-name()='annotation' and @encoding='application/x-tex']")
-            guard annotations.count<=1 else{throw ServiceError.invalid("同一公式有多个TeX annotation，未猜测应采用哪个。")}
-            let annotation=annotations.first?.stringValue
-            let block=math.attribute(forName:"display")?.stringValue=="block"
-            let text:String
-            if let annotation,!annotation.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
-                text=block ? "\n\\["+annotation+"\\]\n":"\\("+annotation+"\\)"
-            } else {
-                // Annotation is not visible MathML content. Empty/missing TeX
-                // does not authorize synthesizing a replacement formula.
-                let visible=math.copy() as! XMLElement
-                for node in try visible.nodes(forXPath:".//*[local-name()='annotation']"){node.detach()}
-                let value=visible.stringValue ?? "";text=block ? "\n"+value+"\n":value
-            }
-            guard let parent=math.parent as? XMLElement else{throw ServiceError.invalid("公式文本投影失去原文位置。")}
-            parent.replaceChild(at:math.index,with:XMLNode.text(withStringValue:text) as! XMLNode)
-        }
-        return copy.stringValue ?? ""
-    }
-    /// Website aggregates have their own descriptor/body contract and never pass through Paper extraction.
-    static func extractAggregateHTML(_ bytes:Data,descriptor:PublishedAggregate,responseURL:URL,fetchedAt:String,siteBaseURL:URL=PublishedAggregateReader.site,format:AggregateDocumentFormat?=nil)throws->AggregateDocument {
-        guard bytes.count>0,bytes.count<=16*1024*1024,let raw=String(data:bytes,encoding:.utf8),(ISO8601DateFormatter().date(from:fetchedAt) != nil || {let format=ISO8601DateFormatter();format.formatOptions=[.withInternetDateTime,.withFractionalSeconds];return format.date(from:fetchedAt) != nil}()) else{throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效")}
-        let expected=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
-        try PublishedAggregateReader.require(responseURL.absoluteString==expected.absoluteString,"汇总实际响应地址不一致")
-        // Preserve ordinary HTML5 grouping in Foundation tidy; this changes only tag names, never attributes or boundaries.
-        let containers=try NSRegularExpression(pattern:"(?i)<(/?)(section|article|main)(?=[\\s/>])")
-        let adapted=containers.stringByReplacingMatches(in:raw,range:NSRange(raw.startIndex..<raw.endIndex,in:raw),withTemplate:"<$1div")
-        let doc=try htmlDocumentPreservingMath(adapted)
-        let canonical=try doc.nodes(forXPath:"//link[translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='canonical']")
-        try PublishedAggregateReader.require(canonical.count<=1,"汇总网页声明多个规范地址")
-        if let element=canonical.first as? XMLElement {
-            guard let value=element.attribute(forName:"href")?.stringValue else{throw AggregateFailure.invalid("汇总规范地址缺失")}
-            try PublishedAggregateReader.require(try PublishedAggregateReader.pageURL(value,siteBase:siteBaseURL)==expected,"汇总规范地址与目录不一致")
-        }
-        let selector:String
-        switch descriptor.kind {
-        case .daily,.conference: selector="//div[@id='article-body' and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"
-        case .page:
-            if expected.absoluteString == siteBaseURL.appendingPathComponent("conferences",isDirectory:true).absoluteString {selector="//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]"}
-            else {selector="//div[contains(concat(' ',normalize-space(@class),' '),' reader-guide-content ') and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"}
-        }
-        let nodes=try doc.nodes(forXPath:selector)
-        guard nodes.count==1,let body=nodes.first as? XMLElement else{throw AggregateFailure.invalid("汇总正文结构缺失或重复，未读取导航/首页代替")}
-        for hidden in try body.nodes(forXPath:".//*[@hidden]"){hidden.detach()}
-        let originalImages=try body.nodes(forXPath:".//img").compactMap{($0 as? XMLElement)?.attribute(forName:"src")?.stringValue}
-        try sanitize(body,pageURL:expected)
-        var resources:[AggregateDocument.Resource]=[]
-        for source in originalImages {
-            if let url=URL(string:source,relativeTo:expected)?.absoluteURL,url.scheme=="https",url.user==nil,url.password==nil {
-                resources.append(.init(sourceURL:url.absoluteString,kind:"image",missingReason:"尚未保存该图片；没有声称完整离线"))
-            }else{resources.append(.init(sourceURL:source,kind:"image",missingReason:"原图片地址不受本入口支持，未下载或隐藏缺项"))}
-        }
-        for node in try body.nodes(forXPath:".//img") {(node as? XMLElement)?.removeAttribute(forName:"src")}
-        try PublishedAggregateReader.require(resources.count<=128,"汇总图片数量超过本入口上限")
-        let plain=try articlePlainText(body)
-        try PublishedAggregateReader.require(!plain.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,"汇总没有连续可读正文")
-        let html=(body.children ?? []).map{$0.xmlString(options:[.nodePreserveWhitespace])}.joined()
-        let selected=try format ?? AggregateDocumentFormat.current(.macos)
-        return AggregateDocument(contract:selected.contract,schemaFingerprint:selected.schemaFingerprint,descriptor:descriptor,responseURL:responseURL.absoluteString,fetchedAt:fetchedAt,rawHTMLSHA256:PublishedAggregateReader.sha(bytes),rawHTMLBytes:bytes.count,sanitizedBodySHA256:PublishedAggregateReader.sha(Data(html.utf8)),bodyHTML:html,plainText:plain,parserContract:selected.parser,resources:resources,completeOffline:false,notices:["网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。"]+(resources.isEmpty ? []:["部分图片尚未保存，不能称为完整离线页面。"]))
-    }
-
-    static func aggregateImagePlan(_ source:AggregateDocument,rawHTML:Data,siteBaseURL:URL=PublishedAggregateReader.site)throws->AggregateImagePlan {
-        try PublishedAggregateReader.require(PublishedAggregateReader.sha(rawHTML)==source.rawHTMLSHA256,"图片原HTML身份不符")
-        let bytes=rawHTML,descriptor=source.descriptor,fetchedAt=source.fetchedAt
-        guard let responseURL=URL(string:source.responseURL) else{throw AggregateFailure.invalid("图片原响应地址无效")}
-        guard bytes.count>0,bytes.count<=16*1024*1024,let raw=String(data:bytes,encoding:.utf8),(ISO8601DateFormatter().date(from:fetchedAt) != nil || {let format=ISO8601DateFormatter();format.formatOptions=[.withInternetDateTime,.withFractionalSeconds];return format.date(from:fetchedAt) != nil}()) else{throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效")}
-        let expected=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
-        try PublishedAggregateReader.require(responseURL.absoluteString==expected.absoluteString,"汇总实际响应地址不一致")
-        // Independent resource-body derivation retains figure/caption boundaries; the v1 extractor above is unchanged.
-        let marker="data-aggregate-tag-"+UUID().uuidString.lowercased()
-        let figures=try NSRegularExpression(pattern:"(?i)<(figure|figcaption)(?=[\\s/>])")
-        let figureBody=figures.stringByReplacingMatches(in:raw,range:NSRange(raw.startIndex..<raw.endIndex,in:raw),withTemplate:"<div "+marker+"=\"$1\"")
-        let closes=try NSRegularExpression(pattern:"(?i)</(?:figure|figcaption)\\s*>")
-        let grouped=closes.stringByReplacingMatches(in:figureBody,range:NSRange(figureBody.startIndex..<figureBody.endIndex,in:figureBody),withTemplate:"</div>")
-        let containers=try NSRegularExpression(pattern:"(?i)<(/?)(section|article|main)(?=[\\s/>])")
-        let adapted=containers.stringByReplacingMatches(in:grouped,range:NSRange(grouped.startIndex..<grouped.endIndex,in:grouped),withTemplate:"<$1div")
-        let doc=try htmlDocumentPreservingMath(adapted);defer{withExtendedLifetime(doc){}}
-        let canonical=try doc.nodes(forXPath:"//link[translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='canonical']")
-        try PublishedAggregateReader.require(canonical.count<=1,"汇总网页声明多个规范地址")
-        if let element=canonical.first as? XMLElement {
-            guard let value=element.attribute(forName:"href")?.stringValue else{throw AggregateFailure.invalid("汇总规范地址缺失")}
-            try PublishedAggregateReader.require(try PublishedAggregateReader.pageURL(value,siteBase:siteBaseURL)==expected,"汇总规范地址与目录不一致")
-        }
-        let selector:String
-        switch descriptor.kind {
-        case .daily,.conference: selector="//div[@id='article-body' and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"
-        case .page:
-            if expected.absoluteString == siteBaseURL.appendingPathComponent("conferences",isDirectory:true).absoluteString {selector="//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]"}
-            else {selector="//div[contains(concat(' ',normalize-space(@class),' '),' reader-guide-content ') and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"}
-        }
-        let nodes=try doc.nodes(forXPath:selector)
-        guard nodes.count==1,let body=nodes.first as? XMLElement else{throw AggregateFailure.invalid("汇总正文结构缺失或重复，未读取导航/首页代替")}
-        for hidden in try body.nodes(forXPath:".//*[@hidden]"){hidden.detach()}
-        let groups=try body.nodes(forXPath:".//div[@"+marker+"]").compactMap{node -> (XMLElement,String)? in
-            guard let element=node as? XMLElement,let tag=element.attribute(forName:marker)?.stringValue?.lowercased(),["figure","figcaption"].contains(tag) else{return nil};return(element,tag)
-        }
-        try sanitize(body,pageURL:expected)
-        for (element,tag) in groups{element.name=tag}
-        return try AggregateResources.plan(source:source,sanitizedBody:body)
-    }
-    static func aggregateImageMIME(_ bytes:Data)->String? {
-        guard !bytes.isEmpty,let ext=try? imageExtension(bytes,url:PublishedAggregateReader.site) else{return nil}
-        return imageMIME(ext)
-    }
     /// The same normal network/type guards as paper images, without a paper or model capability.
-    private func aggregateImageData(_ slot:AggregateImageSlot,limit:Int) async throws->Data {
-        guard let address=slot.sourceURL,let url=URL(string:address),url.scheme=="https",url.user==nil,url.password==nil,url.port==nil || url.port==443,url.fragment==nil else{throw AggregateFailure.invalid("原图片地址不受支持")}
-        if url.host?.lowercased()==siteBaseURL.host?.lowercased(),!Self.isOwnedPublishedImage(url){_=try sameSite(address)}
-        else{guard Self.isApprovedExternalResource(url) else{throw AggregateFailure.invalid("原图片不在已支持的官方来源")}}
-        return try await read(url,limit:limit)
+    private func aggregateImageData(_ slot: AggregateImageSlot, limit: Int) async throws -> Data {
+        guard let address = slot.sourceURL, let url = URL(string: address), url.scheme == "https", url.user == nil, url.password == nil, url.port == nil || url.port == 443, url.fragment == nil else { throw AggregateFailure.invalid("原图片地址不受支持") }
+        if url.host?.lowercased() == siteBaseURL.host?.lowercased(), !Self.isOwnedPublishedImage(url) { _ = try sameSite(address) }
+        else { guard Self.isApprovedExternalResource(url) else { throw AggregateFailure.invalid("原图片不在已支持的官方来源") } }
+        return try await read(url, limit: limit)
     }
-    func aggregatePresentationImages(_ source:AggregateDocument,allowNetwork:Bool) async throws->AggregateResourceRender? {
-        let store=PublishedAggregateStore(directory:directory,siteBase:siteBaseURL)
-        let cached=try store.withVerifiedReadScope { scoped in
-            try scoped.latestResourceRendering(source:source) ?? scoped.importAndroidResourceRendering(source)
+    func aggregatePresentationImages(_ source: AggregateDocument, allowNetwork: Bool) async throws -> AggregateResourceRender? {
+        let store = PublishedAggregateStore(directory: directory, siteBase: siteBaseURL)
+        let cached = try store.withVerifiedReadScope { scoped in
+            try scoped.latestResourceRendering(source: source) ?? scoped.importAndroidResourceRendering(source)
         }
-        if !allowNetwork{return cached}
-        if let cached,cached.manifest.images.allSatisfy({$0.sha256 != nil}){return cached}
+        if !allowNetwork { return cached }
+        if let cached, cached.manifest.images.allSatisfy({ $0.sha256 != nil }) { return cached }
         return try await aggregateResourceRendering(source)
     }
-    func aggregateResourceRendering(_ source:AggregateDocument) async throws->AggregateResourceRender {
-        let store=PublishedAggregateStore(directory:directory,siteBase:siteBaseURL)
-        let epoch=snapshot.validationEpoch,snapshotID=snapshot.summary.snapshotID
+    func aggregateResourceRendering(_ source: AggregateDocument) async throws -> AggregateResourceRender {
+        let store = PublishedAggregateStore(directory: directory, siteBase: siteBaseURL)
+        let epoch = snapshot.validationEpoch, snapshotID = snapshot.summary.snapshotID
         // One synchronous admission replays the complete source catalog once.
         // The scope ends before the first transport await and is never retained.
-        let (plan,cached)=try store.withVerifiedReadScope { scoped in
-            guard try scoped.load(activeSnapshotSHA256:snapshotID,validationEpoch:epoch)?.records.contains(source.descriptor)==true else{throw AggregateFailure.invalid("图片原目录已变化")}
-            let current=try scoped.cachedDocument(descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256)
-            try PublishedAggregateReader.require(current==source,"图片必须绑定已核验的原网页修订")
-            let plan=try scoped.imagePlan(source)
-            let cached=try scoped.latestResourceRendering(source:source) ?? scoped.importAndroidResourceRendering(source)
-            if let cached{try PublishedAggregateReader.require(cached.manifest.plan==plan.replayHeader(of:cached.manifest.plan),"已存图片与当前网页位置不符")}
-            return (plan,cached)
+        let (plan, cached) = try store.withVerifiedReadScope { scoped in
+            guard try scoped.load(activeSnapshotSHA256: snapshotID, validationEpoch: epoch)?.records.contains(source.descriptor) == true else { throw AggregateFailure.invalid("图片原目录已变化") }
+            let current = try scoped.cachedDocument(descriptor: source.descriptor, rawHTMLSHA256: source.rawHTMLSHA256)
+            try PublishedAggregateReader.require(current == source, "图片必须绑定已核验的原网页修订")
+            let plan = try scoped.imagePlan(source)
+            let cached = try scoped.latestResourceRendering(source: source) ?? scoped.importAndroidResourceRendering(source)
+            if let cached { try PublishedAggregateReader.require(cached.manifest.plan == plan.replayHeader(of: cached.manifest.plan), "已存图片与当前网页位置不符") }
+            return (plan, cached)
         }
-        let retained=Dictionary(uniqueKeysWithValues:(cached?.manifest.images ?? []).filter{$0.sha256 != nil}.map{($0.slot.index,$0)})
-        let retainedByURL=plan.slots.reduce(into:[String:AggregateImageRecord]()){result,slot in
-            if let address=slot.sourceURL,let record=retained[slot.index],result[address]==nil{result[address]=record}
+        let retained = Dictionary(uniqueKeysWithValues: (cached?.manifest.images ?? []).filter { $0.sha256 != nil }.map { ($0.slot.index, $0) })
+        let retainedByURL = plan.slots.reduce(into: [String: AggregateImageRecord]()) { result, slot in
+            if let address = slot.sourceURL, let record = retained[slot.index], result[address] == nil { result[address] = record }
         }
-        let retainedBytes=retained.values.reduce(0){$0+($1.bytes ?? 0)}
-        try PublishedAggregateReader.require(retainedBytes<=AggregateResources.maxReferencedBytes,"已有图片引用累计超过64 MiB")
-        var assets:[Int:AggregateImageBytes]=[:],missing:[Int:String]=[:],downloaded:[String:AggregateImageBytes]=[:],total=0,referencedBytes=retainedBytes
+        let retainedBytes = retained.values.reduce(0) { $0 + ($1.bytes ?? 0) }
+        try PublishedAggregateReader.require(retainedBytes <= AggregateResources.maxReferencedBytes, "已有图片引用累计超过64 MiB")
+        var assets: [Int: AggregateImageBytes] = [:], missing: [Int: String] = [:], downloaded: [String: AggregateImageBytes] = [:], total = 0, referencedBytes = retainedBytes
         for slot in plan.slots {
             try Task.checkCancellation()
-            if let record=retained[slot.index]{
-                try PublishedAggregateReader.require(record.slot==slot,"已存图片位置不符")
-                let asset=try store.retainedResourceBytes(record,legacy:cached?.manifest.schemaFingerprint==nil);assets[slot.index]=asset
-                if let address=slot.sourceURL{downloaded[address]=asset}
+            if let record = retained[slot.index] {
+                try PublishedAggregateReader.require(record.slot == slot, "已存图片位置不符")
+                let asset = try store.retainedResourceBytes(record, legacy: cached?.manifest.schemaFingerprint == nil); assets[slot.index] = asset
+                if let address = slot.sourceURL { downloaded[address] = asset }
                 continue
             }
             do {
-                guard referencedBytes<AggregateResources.maxReferencedBytes else{throw AggregateFailure.invalid("页面图片引用预算已耗尽")}
-                let asset:AggregateImageBytes
-                if let address=slot.sourceURL,let cached=downloaded[address]{asset=cached}
-                else if let address=slot.sourceURL,let record=retainedByURL[address]{
-                    asset=try store.retainedResourceBytes(record,legacy:cached?.manifest.schemaFingerprint==nil);downloaded[address]=asset
+                guard referencedBytes < AggregateResources.maxReferencedBytes else { throw AggregateFailure.invalid("页面图片引用预算已耗尽") }
+                let asset: AggregateImageBytes
+                if let address = slot.sourceURL, let cached = downloaded[address] { asset = cached }
+                else if let address = slot.sourceURL, let record = retainedByURL[address] {
+                    asset = try store.retainedResourceBytes(record, legacy: cached?.manifest.schemaFingerprint == nil); downloaded[address] = asset
                 }
-                else{
-                    guard total<AggregateResources.maxTotalBytes else{throw AggregateFailure.invalid("页面图片累计或保守传输预算已耗尽")}
-                    let bytes:Data
-                    do{bytes=try await aggregateImageData(slot,limit:min(AggregateResources.maxImageBytes,AggregateResources.maxTotalBytes-total,AggregateResources.maxReferencedBytes-referencedBytes))}
-                    catch is CancellationError{throw CancellationError()}
-                    catch{if !(error is AggregateFailure){total=AggregateResources.maxTotalBytes};throw error}
-                    total+=bytes.count
-                    guard let mime=Self.aggregateImageMIME(bytes) else{throw AggregateFailure.invalid("原图片字节类型不受支持")}
-                    asset = .init(data:bytes,mime:mime)
-                    if let address=slot.sourceURL{downloaded[address]=asset}
+                else {
+                    guard total < AggregateResources.maxTotalBytes else { throw AggregateFailure.invalid("页面图片累计或保守传输预算已耗尽") }
+                    let bytes: Data
+                    do { bytes = try await aggregateImageData(slot, limit: min(AggregateResources.maxImageBytes, AggregateResources.maxTotalBytes - total, AggregateResources.maxReferencedBytes - referencedBytes)) }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { if !(error is AggregateFailure) { total = AggregateResources.maxTotalBytes }; throw error }
+                    total += bytes.count
+                    guard let mime = Self.aggregateImageMIME(bytes) else { throw AggregateFailure.invalid("原图片字节类型不受支持") }
+                    asset = .init(data: bytes, mime: mime)
+                    if let address = slot.sourceURL { downloaded[address] = asset }
                 }
-                guard asset.data.count<=AggregateResources.maxReferencedBytes-referencedBytes else{throw AggregateFailure.invalid("页面图片引用累计超过64 MiB")}
-                referencedBytes+=asset.data.count
-                assets[slot.index]=asset
-            }catch is CancellationError{throw CancellationError()}
-            catch{missing[slot.index]="该图片未保存；原地址不可用、类型不支持或超出安全限额"}
+                guard asset.data.count <= AggregateResources.maxReferencedBytes - referencedBytes else { throw AggregateFailure.invalid("页面图片引用累计超过64 MiB") }
+                referencedBytes += asset.data.count
+                assets[slot.index] = asset
+            } catch is CancellationError { throw CancellationError() }
+            catch { missing[slot.index] = "该图片未保存；原地址不可用、类型不支持或超出安全限额" }
         }
         try Task.checkCancellation()
-        guard snapshot.validationEpoch==epoch,snapshot.summary.snapshotID==snapshotID else{throw AggregateFailure.invalid("保存图片期间目录已变化")}
+        guard snapshot.validationEpoch == epoch, snapshot.summary.snapshotID == snapshotID else { throw AggregateFailure.invalid("保存图片期间目录已变化") }
         // Start a fresh complete scope after transport. A changed catalog or
         // source still rejects; no pre-network qualification crosses the await.
         return try store.withVerifiedReadScope { scoped in
-            guard try scoped.load(activeSnapshotSHA256:snapshotID,validationEpoch:epoch)?.records.contains(source.descriptor)==true else{throw AggregateFailure.invalid("保存图片时原目录已变化")}
-            return try scoped.cacheResourceRendering(source:source,plan:plan,images:assets,missing:missing,observedAt:Self.now())
+            guard try scoped.load(activeSnapshotSHA256: snapshotID, validationEpoch: epoch)?.records.contains(source.descriptor) == true else { throw AggregateFailure.invalid("保存图片时原目录已变化") }
+            return try scoped.cacheResourceRendering(source: source, plan: plan, images: assets, missing: missing, observedAt: Self.now())
         }
-    }
-
-    // 真实已发布页面的身份校验：正文唯一、citation 记录与目录一致。引用导出也走这里，
-    // 不能因为只取 sidecar 就跳过页面身份检查。
-    private static func validatePublishedPageIdentity(_ doc: XMLDocument, paper: Paper) throws {
-        // Foundation's HTML tidy removes HTML5 <article>/<section> wrappers on macOS;
-        // the published body's exact id + class survive and must match uniquely.
-        let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
-        guard nodes.count == 1, nodes.first is XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
-        let citationNode = try doc.nodes(forXPath: "//script[@type='application/json' and contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__citation-record ')]").first
-        let attributeNode = try doc.nodes(forXPath: "//*[@data-citation-record]").first as? XMLElement
-        guard let rawCitation = (citationNode?.stringValue ?? attributeNode?.attribute(forName: "data-citation-record")?.stringValue)?.data(using: .utf8),
-              let value = try? JSONDecoder().decode(JSONValue.self, from: rawCitation),
-              case .object(let fields) = value else { return }
-        if case .string(let key) = fields["paperKey"], paper.identityStatus == "verified", !key.isEmpty, key != paper.id {
-            throw ServiceError.invalid("页面论文身份与目录不一致，未把其他论文的正文合并进来。")
-        }
-        if paper.identityStatus == "verified", paper.sourceKind == "arxiv" {
-            if case .string(let version) = fields["arxivId"], version.range(of: #"v[1-9][0-9]*$"#, options: .regularExpression) != nil, let expected = paper.sourceVersion, version != expected { throw ServiceError.invalid("页面原文版本与目录不同，未将旧稿标为当前版本。") }
-            for (field, expected) in [("sourceUrl", paper.sourceURL), ("pdfUrl", paper.pdfURL)] {
-                if case .string(let address) = fields[field], !address.isEmpty, let expected, address != expected { throw ServiceError.invalid("页面来源地址与当前目录不一致，未授予当前版本身份。") }
-            }
-        }
-    }
-
-    static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
-        let doc = try htmlDocumentPreservingMath(raw)
-        try Self.validatePublishedPageIdentity(doc, paper: paper)
-        let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
-        guard let body = nodes.first as? XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
-        var citation = paper.citation
-        let citationNode = try doc.nodes(forXPath: "//script[@type='application/json' and contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__citation-record ')]").first
-        let attributeNode = try doc.nodes(forXPath: "//*[@data-citation-record]").first as? XMLElement
-        if let rawCitation = (citationNode?.stringValue ?? attributeNode?.attribute(forName: "data-citation-record")?.stringValue)?.data(using: .utf8),
-           let value = try? JSONDecoder().decode(JSONValue.self, from: rawCitation) {
-            citation = value
-        }
-        try sanitize(body, pageURL: pageURL)
-        let images = try body.nodes(forXPath: ".//img").compactMap { n -> Resource? in
-            guard let element = n as? XMLElement, let source = element.attribute(forName: "src")?.stringValue else { return nil }
-            return Resource(sourceURL: source, kind: "image", localPath: nil, sha256: nil, missingReason: nil)
-        }
-        guard images.count <= 32 else { throw ServiceError.invalid("单篇图片超过32张，未开始批量下载。") }
-        let html = (body.children ?? []).map { $0.xmlString(options: [.nodePreserveWhitespace]) }.joined()
-        return presentSourceWarning(Article(paperID: paper.id, html: html, markdown: nil, plainText: try articlePlainText(body), citation: citation,
-                       resources: images, sourceURL: paper.sourceURL ?? paper.blogURL, pdfURL: paper.pdfURL, sourceVersion: paper.sourceVersion,
-                       fetchedAt: now(), revisionSHA256: sha256(Data(html.utf8)), completeOffline: false,
-                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"],mathMLContract:"published-html-mathml"),blogURL:pageURL.absoluteString)
-    }
-
-    private static func sanitize(_ root: XMLElement, pageURL: URL) throws {
-        let allowed: Set<String> = ["div", "p", "span", "a", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "img", "figure", "figcaption", "strong", "b", "em", "i", "u", "s", "sup", "sub", "br", "hr", "details", "summary", "dl", "dt", "dd", "math", "mrow", "mi", "mo", "mn", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot", "mtext", "mtable", "mtr", "mtd", "mover", "munder", "munderover", "semantics", "annotation"]
-        let attributes: Set<String> = ["id", "class", "title", "alt", "width", "height", "colspan", "rowspan", "scope", "display", "mathvariant", "xmlns", "encoding"]
-        for child in root.children ?? [] {
-            guard let element = child as? XMLElement else { if child.kind != .text { child.detach() }; continue }
-            let tag = (element.name ?? "").lowercased()
-            guard allowed.contains(tag) else { element.detach(); continue }
-            if tag=="math"{var count=0;try sanitizeMathML(element,depth:0,count:&count);continue}
-            for attr in element.attributes ?? [] {
-                let name = (attr.name ?? "").lowercased()
-                if name == "href" && tag == "a" {
-                    let raw = attr.stringValue ?? ""
-                    if raw.hasPrefix("#") { continue }
-                    if let url = URL(string: raw, relativeTo: pageURL)?.absoluteURL, url.scheme == "https", url.user == nil, url.password == nil {
-                        attr.stringValue = url.absoluteString
-                    } else { element.removeAttribute(forName: attr.name ?? "") }
-                } else if name == "src" && tag == "img" {
-                    if let url = URL(string: attr.stringValue ?? "", relativeTo: pageURL)?.absoluteURL, url.scheme == "https", url.user == nil, url.password == nil { attr.stringValue = url.absoluteString }
-                    else { element.removeAttribute(forName: attr.name ?? "") }
-                } else if !attributes.contains(name) { element.removeAttribute(forName: attr.name ?? "") }
-            }
-            if tag == "a" { element.addAttribute(XMLNode.attribute(withName: "rel", stringValue: "noopener noreferrer") as! XMLNode) }
-            try sanitize(element, pageURL: pageURL)
-        }
-    }
-    private static func localizeImages(_ fragment: String, replacements: [String: String]) throws -> String {
-        let doc = try htmlDocumentPreservingMath("<html><body>\(fragment)</body></html>")
-        for node in try doc.nodes(forXPath: "//img") {
-            guard let image = node as? XMLElement, let source = image.attribute(forName: "src")?.stringValue else { continue }
-            if let local = replacements[source] { image.attribute(forName: "src")?.stringValue = local }
-            else { image.removeAttribute(forName: "src"); image.addAttribute(XMLNode.attribute(withName: "data-source-url", stringValue: source) as! XMLNode) }
-        }
-        return try doc.nodes(forXPath: "//body").first?.children?.map { $0.xmlString }.joined() ?? ""
     }
 
     func downloadPDF(for paperID: String, refresh: Bool = false, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> PDFDownload {
         try await ensureReady()
         guard let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }), paper.identityStatus == "verified", let address = paper.pdfURL, let url = URL(string: address) else { throw ServiceError.unavailable("此记录没有经过核验的原文PDF链接。") }
-        let sourceURL=paper.sourceURL.flatMap(URL.init(string:))
-        let pdfVersion=(url.path.hasPrefix("/pdf/") ? String(url.path.dropFirst("/pdf/".count)):url.lastPathComponent).replacingOccurrences(of: #"\.pdf$"#, with: "", options: .regularExpression)
-        let absVersion=sourceURL.map{$0.path.hasPrefix("/abs/") ? String($0.path.dropFirst("/abs/".count)):$0.lastPathComponent}
+        let sourceURL = paper.sourceURL.flatMap(URL.init(string:))
+        let pdfVersion = (url.path.hasPrefix("/pdf/") ? String(url.path.dropFirst("/pdf/".count)) : url.lastPathComponent).replacingOccurrences(of: #"\.pdf$"#, with: "", options: .regularExpression)
+        let absVersion = sourceURL.map { $0.path.hasPrefix("/abs/") ? String($0.path.dropFirst("/abs/".count)) : $0.lastPathComponent }
         let versionMatches = paper.sourceVersion?.range(of: #"v[1-9][0-9]*$"#, options: .regularExpression) != nil && paper.sourceVersion?.replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression) == String(paperID.dropFirst("arxiv:".count)) && pdfVersion == paper.sourceVersion && absVersion == paper.sourceVersion
-        let immutable = paper.sourceKind == "arxiv" && versionMatches && ["arxiv.org","export.arxiv.org"].contains(url.host?.lowercased() ?? "") && ["arxiv.org","export.arxiv.org"].contains(sourceURL?.host?.lowercased() ?? "")
+        let immutable = paper.sourceKind == "arxiv" && versionMatches && ["arxiv.org", "export.arxiv.org"].contains(url.host?.lowercased() ?? "") && ["arxiv.org", "export.arxiv.org"].contains(sourceURL?.host?.lowercased() ?? "")
         if paper.sourceKind == "arxiv", !versionMatches { throw ServiceError.unavailable("该记录没有一致且明确的arXiv原文版本，不能静默下载或标记最新版。") }
         let pointer = cacheURL("pdf-pointers", key: Self.sha256(Data(address.utf8)), extension: "json")
         var previous: PDFDownload?
@@ -1305,8 +867,8 @@ actor LibraryService {
             let witnessed = immutable || paper.pdfSHA256 == existing.sha256
             let withinWindow = existing.catalogEpoch == snapshot.validationEpoch && Self.age(existing.validatedAt ?? existing.fetchedAt) <= 6 * 3600
             if !refresh && publishedMatches && (witnessed || withinWindow), existing.isStale != true || witnessed {
-                existing.isStale = false; existing.cacheStatus = "current"; existing.publicSHA256 = paper.pdfSHA256; existing.notices=nil
-                existing.currentness = paper.pdfSHA256 != nil ? "published-sha256":immutable ? "immutable-arxiv-version":"bounded-revalidation"
+                existing.isStale = false; existing.cacheStatus = "current"; existing.publicSHA256 = paper.pdfSHA256; existing.notices = nil
+                existing.currentness = paper.pdfSHA256 != nil ? "published-sha256" : immutable ? "immutable-arxiv-version" : "bounded-revalidation"
                 return existing // Relocation alone never rewrites original receipt/pointer bytes.
             }
             if !refresh, existing.isStale == true, existing.catalogEpoch == snapshot.validationEpoch, existing.publicSHA256 == paper.pdfSHA256, Self.age(existing.validationAttemptedAt) < 300 { return existing }
@@ -1319,14 +881,14 @@ actor LibraryService {
             let local = cacheURL("pdf", key: expected, extension: "pdf")
             try atomicWrite(bytes, to: local)
             var result = PDFDownload(filePath: local.path, sha256: expected, version: paper.sourceVersion, sourceURL: address, bytes: bytes.count)
-            result.paperID=paperID;result.fetchedAt=Self.now();result.validatedAt=result.fetchedAt;result.catalogEpoch=snapshot.validationEpoch;result.cacheStatus="current";result.isStale=false;result.publicSHA256=paper.pdfSHA256;result.currentness="immutable-arxiv-version"
+            result.paperID = paperID; result.fetchedAt = Self.now(); result.validatedAt = result.fetchedAt; result.catalogEpoch = snapshot.validationEpoch; result.cacheStatus = "current"; result.isStale = false; result.publicSHA256 = paper.pdfSHA256; result.currentness = "immutable-arxiv-version"
             try preservePDFReceipt(result, paperID: paperID)
             try atomicWrite(try JSONEncoder().encode(result), to: pointer)
             return result
         }
-        let epoch=snapshot.validationEpoch
+        let epoch = snapshot.validationEpoch
         do {
-            progress(Progress(phase: "pdf", message: previous == nil ? "正在下载原始PDF并核对字节":"正在复核当前网站原文PDF，保留旧SHA副本", completed: 0, total: 0))
+            progress(Progress(phase: "pdf", message: previous == nil ? "正在下载原始PDF并核对字节" : "正在复核当前网站原文PDF，保留旧SHA副本", completed: 0, total: 0))
             let bytes = try await read(url, limit: 100 * 1024 * 1024)
             guard bytes.starts(with: Data("%PDF-".utf8)), let document = PDFDocument(data: bytes), document.pageCount > 0 else { throw ServiceError.invalid("原文链接未返回完整可读取PDF，没有缓存错误页面。") }
             let sha = Self.sha256(bytes), file = cacheURL("pdf", key: sha, extension: "pdf")
@@ -1334,11 +896,11 @@ actor LibraryService {
             try Task.checkCancellation()
             try atomicWrite(bytes, to: file)
             var result = PDFDownload(filePath: file.path, sha256: sha, version: paper.sourceVersion, sourceURL: address, bytes: bytes.count)
-            result.paperID=paperID;result.fetchedAt=previous?.sha256 == sha ? previous?.fetchedAt ?? Self.now():Self.now();result.validatedAt=Self.now();result.validationAttemptedAt=result.validatedAt;result.catalogEpoch=epoch;result.cacheStatus=previous == nil ? "current":"revalidated";result.isStale=false;result.publicSHA256=paper.pdfSHA256
-            result.currentness=paper.pdfSHA256 != nil ? "published-sha256":immutable ? "immutable-arxiv-version":"bounded-revalidation"
-            let latest=(snapshot.papers + (snapshot.retiredPapers ?? [])).first{$0.id==paperID}
-            let sourceChanged=latest?.pdfURL != paper.pdfURL || latest?.sourceURL != paper.sourceURL || latest?.sourceVersion != paper.sourceVersion || latest?.pdfSHA256 != paper.pdfSHA256
-            if epoch != snapshot.validationEpoch && (!immutable || sourceChanged) { result.isStale=true;result.cacheStatus="stale";result.notices=["读取期间网站目录已更新；这份PDF保留原SHA与版本，请再次复核当前来源。"] }
+            result.paperID = paperID; result.fetchedAt = previous?.sha256 == sha ? previous?.fetchedAt ?? Self.now() : Self.now(); result.validatedAt = Self.now(); result.validationAttemptedAt = result.validatedAt; result.catalogEpoch = epoch; result.cacheStatus = previous == nil ? "current" : "revalidated"; result.isStale = false; result.publicSHA256 = paper.pdfSHA256
+            result.currentness = paper.pdfSHA256 != nil ? "published-sha256" : immutable ? "immutable-arxiv-version" : "bounded-revalidation"
+            let latest = (snapshot.papers + (snapshot.retiredPapers ?? [])).first { $0.id == paperID }
+            let sourceChanged = latest?.pdfURL != paper.pdfURL || latest?.sourceURL != paper.sourceURL || latest?.sourceVersion != paper.sourceVersion || latest?.pdfSHA256 != paper.pdfSHA256
+            if epoch != snapshot.validationEpoch && (!immutable || sourceChanged) { result.isStale = true; result.cacheStatus = "stale"; result.notices = ["读取期间网站目录已更新；这份PDF保留原SHA与版本，请再次复核当前来源。"] }
             if let previous { try preservePDFReceipt(previous, paperID: paperID) }
             try preservePDFReceipt(result, paperID: paperID)
             try atomicWrite(try JSONEncoder().encode(result), to: pointer)
@@ -1346,37 +908,24 @@ actor LibraryService {
             return result
         } catch {
             if Task.isCancelled || error is CancellationError { throw CancellationError() }
-            guard var old=previous else{throw error}
-            try preservePDFReceipt(old,paperID:paperID)
-            old.isStale=true;old.cacheStatus="stale";old.validationAttemptedAt=Self.now();old.catalogEpoch=epoch;old.publicSHA256=paper.pdfSHA256
-            old.notices=Array(Set((old.notices ?? [])+["当前PDF复核失败，正在读取先前保存的旧SHA副本（\(old.sha256)，核对时间\(old.validatedAt ?? old.fetchedAt ?? "未知")），不代表网站当前原文。\(error.localizedDescription)"])).sorted()
-            try atomicWrite(try JSONEncoder().encode(old),to:pointer)
+            guard var old = previous else { throw error }
+            try preservePDFReceipt(old, paperID: paperID)
+            old.isStale = true; old.cacheStatus = "stale"; old.validationAttemptedAt = Self.now(); old.catalogEpoch = epoch; old.publicSHA256 = paper.pdfSHA256
+            old.notices = Array(Set((old.notices ?? []) + ["当前PDF复核失败，正在读取先前保存的旧SHA副本（\(old.sha256)，核对时间\(old.validatedAt ?? old.fetchedAt ?? "未知")），不代表网站当前原文。\(error.localizedDescription)"])).sorted()
+            try atomicWrite(try JSONEncoder().encode(old), to: pointer)
             return old
         }
     }
-    private func preservePDFReceipt(_ value:PDFDownload,paperID:String)throws {
-        let file=directory.appendingPathComponent("pdf-receipts/"+Self.sha256(Data(paperID.utf8))).appendingPathComponent(value.sha256+".json")
-        if !FileManager.default.fileExists(atPath:file.path) {try atomicWrite(try JSONEncoder().encode(value),to:file)}
-    }
-    private static func publishedPDFHash(_ row:[String:Any],citation:[String:Any])throws->String? {
-        let values=[row["pdfSha256"],row["pdfSHA256"],citation["pdfSha256"],citation["pdfSHA256"]].compactMap{$0}.filter{!($0 is NSNull) && ($0 as? String) != ""}
-        var hashes=Set<String>()
-        for value in values {guard let text=value as? String,text.range(of:#"^[a-f0-9]{64}$"#,options:.regularExpression) != nil else{throw ServiceError.invalid("已发布PDF SHA字段无效。")};hashes.insert(text)}
-        guard hashes.count<=1 else{throw ServiceError.invalid("已发布PDF SHA字段相互矛盾。")}
-        return hashes.first
-    }
-
-    func configureNetwork(httpProxy: String?) throws {
-        guard let value = httpProxy?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { self.httpProxy = nil; return }
-        guard let url = URL(string: value), url.scheme == "http", url.host != nil, url.port != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, url.path.isEmpty || url.path == "/" else { throw ServiceError.invalid("代理请输入不含凭据的HTTP CONNECT地址，例如 http://127.0.0.1:7890。") }
-        self.httpProxy = url
+    private func preservePDFReceipt(_ value: PDFDownload, paperID: String) throws {
+        let file = directory.appendingPathComponent("pdf-receipts/" + Self.sha256(Data(paperID.utf8))).appendingPathComponent(value.sha256 + ".json")
+        if !FileManager.default.fileExists(atPath: file.path) { try atomicWrite(try JSONEncoder().encode(value), to: file) }
     }
 
     func citationFile(for paperID: String, format: String) async throws -> [String: Any] {
         try await ensureReady()
         let names = ["bib": "citation.bib", "ris": "citation.ris", "json": "citation.json"]
         guard let name = names[format], let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) else { throw ServiceError.invalid("未选择可导出引用的论文或格式。") }
-        var addresses: [String: String] = [:],hashes:[String:String]=[:]
+        var addresses: [String: String] = [:], hashes: [String: String] = [:]
         let cache = cacheURL("articles", key: Self.sha256(Data(paper.blogURL.utf8)), extension: "json")
         if let data = try? Data(contentsOf: cache), let article = try? JSONDecoder().decode(Article.self, from: data), article.paperID == paperID { addresses = article.citationFiles ?? [:]; hashes = article.citationFileSHA256 ?? [:] }
         if addresses[name] == nil {
@@ -1385,12 +934,12 @@ actor LibraryService {
             guard let html = String(data: data, encoding: .utf8) else { throw ServiceError.invalid("引用来源页面不是UTF-8。") }
             let doc = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
             try Self.validatePublishedPageIdentity(doc, paper: paper)
-            let declared = try publishedSidecarLinks(doc,paper:paper)
-            addresses=declared.urls;hashes=declared.hashes
+            let declared = try publishedSidecarLinks(doc, paper: paper)
+            addresses = declared.urls; hashes = declared.hashes
         }
         guard let address = addresses[name] else { throw ServiceError.unavailable("该已发布页面没有此格式的真实引用文件，未现场生成替代引用。") }
         let data = try await read(try sameSite(address), limit: 1024 * 1024)
-        if let expected=hashes[name],Self.sha256(data) != expected {throw ServiceError.invalid("引用原件与该阅读版本保存的页面声明SHA不符。 ")}
+        if let expected = hashes[name], Self.sha256(data) != expected { throw ServiceError.invalid("引用原件与该阅读版本保存的页面声明SHA不符。 ") }
         guard let text = String(data: data, encoding: .utf8), !text.isEmpty, !text.localizedCaseInsensitiveContains("<html") else { throw ServiceError.invalid("引用文件为空或返回了错误页面。") }
         if format == "bib" { guard text.range(of: #"(?m)^\s*@[A-Za-z]+\s*\{"#, options: .regularExpression) != nil else { throw ServiceError.invalid("已发布BibTeX文件格式无效。") } }
         if format == "ris" { guard text.hasPrefix("TY  - "), text.contains("ER  -") else { throw ServiceError.invalid("已发布RIS文件格式无效。") } }
@@ -1398,57 +947,57 @@ actor LibraryService {
         return ["filename": name, "text": text, "sha256": Self.sha256(data), "sourceURL": address]
     }
 
-    private func publishedSidecarLinks(_ document:XMLDocument,paper:Paper,allowLegacySiblings:Bool=false)throws->(urls:[String:String],hashes:[String:String]) {
-        let declarations=try document.nodes(forXPath:"//script[contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__client-sidecars ')]")
-        let names:Set<String>=["citation.json","citation.bib","citation.ris","rethink-context.json"]
+    private func publishedSidecarLinks(_ document: XMLDocument, paper: Paper, allowLegacySiblings: Bool = false) throws -> (urls: [String: String], hashes: [String: String]) {
+        let declarations = try document.nodes(forXPath: "//script[contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__client-sidecars ')]")
+        let names: Set<String> = ["citation.json", "citation.bib", "citation.ris", "rethink-context.json"]
         if !declarations.isEmpty {
-            guard declarations.count==1,let text=declarations[0].stringValue,
-                  let bytes=text.data(using:.utf8),bytes.count<=8192,
-                  let descriptors=try JSONSerialization.jsonObject(with:bytes) as? [String:[String:Any]],Set(descriptors.keys)==names else { throw ServiceError.invalid("当前引用文件声明不完整，未改读另一份材料。") }
-            guard paper.identityStatus=="verified",String(paper.date.prefix(10)).range(of:"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",options:.regularExpression) != nil else {throw ServiceError.invalid("当前引用声明没有明确的已发布论文身份或日期。")}
-            let identifier = paper.sourceKind=="arxiv" ? String(paper.id.dropFirst("arxiv:".count)).replacingOccurrences(of:".",with:"-").replacingOccurrences(of:"/",with:"-") : "conference-"+String(Self.sha256(Data(paper.id.utf8)).prefix(24))
-            let ownerRoot=siteBaseURL.appendingPathComponent("client/papers/"+String(paper.date.prefix(10))+"/"+identifier+"/")
-            var result:[String:String]=[:],hashes:[String:String]=[:]
-            for (name,record) in descriptors {
-                guard let address=record["url"] as? String,let hash=record["sha256"] as? String,
-                      hash.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil else { throw ServiceError.invalid("当前引用文件缺少真实地址或SHA。") }
-                let url=try sameSite(address)
-                guard url.deletingLastPathComponent().path==(ownerRoot.path.hasSuffix("/") ? String(ownerRoot.path.dropLast()):ownerRoot.path),url.lastPathComponent==name else { throw ServiceError.invalid("当前引用文件超出已发布资料目录。") }
-                if name=="rethink-context.json" {
+            guard declarations.count == 1, let text = declarations[0].stringValue,
+                  let bytes = text.data(using: .utf8), bytes.count <= 8192,
+                  let descriptors = try JSONSerialization.jsonObject(with: bytes) as? [String: [String: Any]], Set(descriptors.keys) == names else { throw ServiceError.invalid("当前引用文件声明不完整，未改读另一份材料。") }
+            guard paper.identityStatus == "verified", String(paper.date.prefix(10)).range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil else { throw ServiceError.invalid("当前引用声明没有明确的已发布论文身份或日期。") }
+            let identifier = paper.sourceKind == "arxiv" ? String(paper.id.dropFirst("arxiv:".count)).replacingOccurrences(of: ".", with: "-").replacingOccurrences(of: "/", with: "-") : "conference-" + String(Self.sha256(Data(paper.id.utf8)).prefix(24))
+            let ownerRoot = siteBaseURL.appendingPathComponent("client/papers/" + String(paper.date.prefix(10)) + "/" + identifier + "/")
+            var result: [String: String] = [:], hashes: [String: String] = [:]
+            for (name, record) in descriptors {
+                guard let address = record["url"] as? String, let hash = record["sha256"] as? String,
+                      hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw ServiceError.invalid("当前引用文件缺少真实地址或SHA。") }
+                let url = try sameSite(address)
+                guard url.deletingLastPathComponent().path == (ownerRoot.path.hasSuffix("/") ? String(ownerRoot.path.dropLast()) : ownerRoot.path), url.lastPathComponent == name else { throw ServiceError.invalid("当前引用文件超出已发布资料目录。") }
+                if name == "rethink-context.json" {
                     // 2026-11-03 与 11-04 的页面曾把 schemaFingerprint 写成小写
                     // schemafingerprint（Hugo 参数键小写化）。这里只接受这一个已知别名，
                     // 归一化后仍走严格头校验，不放开其他键或历史格式。
-                    var context=record
-                    if let legacyValue=context["schemafingerprint"] {
-                        guard let legacy=legacyValue as? String else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
-                        if let currentValue=context["schemaFingerprint"] {
-                            guard let current=currentValue as? String,current==legacy else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
-                        } else { context["schemaFingerprint"]=legacy }
-                        context.removeValue(forKey:"schemafingerprint")
+                    var context = record
+                    if let legacyValue = context["schemafingerprint"] {
+                        guard let legacy = legacyValue as? String else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                        if let currentValue = context["schemaFingerprint"] {
+                            guard let current = currentValue as? String, current == legacy else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                        } else { context["schemaFingerprint"] = legacy }
+                        context.removeValue(forKey: "schemafingerprint")
                     }
-                    guard ClientProtocols.hasValidHeader(context,"paper-research-context"),context["contract"] as? String==ClientProtocols.contract("paper-research-context") else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
+                    guard ClientProtocols.hasValidHeader(context, "paper-research-context"), context["contract"] as? String == ClientProtocols.contract("paper-research-context") else { throw ServiceError.invalid("当前上下文文件的结构声明无效。") }
                 }
-                result[name]=url.absoluteString;hashes[name]=hash
+                result[name] = url.absoluteString; hashes[name] = hash
             }
-            guard Set(result.values.compactMap{URL(string:$0)?.deletingLastPathComponent().absoluteString}).count==1 else { throw ServiceError.invalid("当前引用文件混用了不同目录。") }
-            return (result,hashes)
+            guard Set(result.values.compactMap { URL(string: $0)?.deletingLastPathComponent().absoluteString }).count == 1 else { throw ServiceError.invalid("当前引用文件混用了不同目录。") }
+            return (result, hashes)
         }
-        let links=try document.nodes(forXPath:"//a[@href]").compactMap{($0 as? XMLElement)?.attribute(forName:"href")?.stringValue}
-        var result:[String:String]=[:]
+        let links = try document.nodes(forXPath: "//a[@href]").compactMap { ($0 as? XMLElement)?.attribute(forName: "href")?.stringValue }
+        var result: [String: String] = [:]
         for name in names {
-            if let address=links.first(where:{$0.hasSuffix("/"+name)}),let url=try? sameSite(address) { result[name]=url.absoluteString }
+            if let address = links.first(where: { $0.hasSuffix("/" + name) }), let url = try? sameSite(address) { result[name] = url.absoluteString }
         }
-        if allowLegacySiblings,let address=result["citation.json"],let url=URL(string:address) {
+        if allowLegacySiblings, let address = result["citation.json"], let url = URL(string: address) {
             // Keep the old article-reader behavior; explicit export still needs its actual link.
-            let root=url.deletingLastPathComponent()
-            for name in names where result[name]==nil {result[name]=root.appendingPathComponent(name).absoluteString}
+            let root = url.deletingLastPathComponent()
+            for name in names where result[name] == nil { result[name] = root.appendingPathComponent(name).absoluteString }
         }
-        return (result,[:])
+        return (result, [:])
     }
 
     private static func validatedSidecar(_ data: Data, paper: Paper, context: Bool) throws -> JSONValue {
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              ClientProtocols.hasValidHeader(value,context ? "paper-research-context" : "researcher-sidecars") else { throw ServiceError.invalid("引用附加文件合同不受支持。") }
+              ClientProtocols.hasValidHeader(value, context ? "paper-research-context" : "researcher-sidecars") else { throw ServiceError.invalid("引用附加文件合同不受支持。") }
         if paper.identityStatus == "verified" {
             if paper.sourceKind == "arxiv" {
                 let id = (value["arxivId"] as? String ?? value["id"] as? String ?? "").replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
@@ -1479,33 +1028,10 @@ actor LibraryService {
         let notify: @Sendable (Progress) -> Void = { progress($0.json) }
         switch command {
         case "library.sync": return try Self.dictionary(try await sync(progress: notify))
-        case "library.list":
-            let query = payload["query"] as? String ?? "", source = payload["source"] as? String
-            let score = payload["minimumScore"] as? Double
-            let sort = Sort(rawValue: payload["sort"] as? String ?? "date") ?? .date
-            let matches = matchingPapers(query:query,source:source,minimumScore:score,sort:sort,includeRetained:true)
-            let currentIDs=Set(snapshot.papers.map(\.id))
-            let papers = Array(matches.dropFirst(max(0, payload["offset"] as? Int ?? 0)).prefix(max(0, min(10000, payload["limit"] as? Int ?? 200))))
-            // `compact` is the browsing projection: neither the per-guide records nor the full
-            // citation repeat in every list refresh. `library.tagIndex` and `library.paperDetail`
-            // return them when the app needs them; the default keeps the published row contract.
-            let compact = payload["compact"] as? Bool ?? false
-            let rows = papers.map { Self.listRow($0, retained: !currentIDs.contains($0.id), compact: compact) }
-            var response:[String:Any] = ["papers": rows, "count": rows.count, "total": matches.count, "totalInLibrary": snapshot.papers.count,"snapshotID":snapshot.summary.snapshotID,"retainedCount":(snapshot.retiredPapers ?? []).count, "offset": max(0, payload["offset"] as? Int ?? 0)]
-            if (payload["offset"] as? Int ?? 0)==0 {
-                response["websiteTaxonomyNotice"] = snapshot.websiteTaxonomyNotice ?? (snapshot.websiteTaxonomy == nil ? "旧版目录缓存尚未保存网页分类；同步网站目录后可显示。" : "")
-                if compact {
-                    // The display assets travel with the guide evidence. Only their identity is
-                    // repeated here so a cached copy is reused solely while they are unchanged.
-                    response["websiteTaxonomyIdentity"] = Self.taxonomyIdentity(snapshot.websiteTaxonomy)
-                } else if let assets=snapshot.websiteTaxonomy {
-                    response["websiteTaxonomy"]=Self.jsonObject(assets)
-                } else { response["websiteTaxonomy"]=NSNull() }
-            }
-            return response
+        case "library.list": return listResponse(payload: payload)
         case "library.search":
-            let hits=searchCachedText(payload["query"] as? String ?? "")
-            return ["ids":hits,"cachedTextIDs":hits,"scope":"仅本机已读取导读正文，不检索PDF原文"]
+            let hits = searchCachedText(payload["query"] as? String ?? "")
+            return ["ids": hits, "cachedTextIDs": hits, "scope": "仅本机已读取导读正文，不检索PDF原文"]
         case "library.retryLoad":
             try await retryLoad()
             return try Self.dictionary(await status())
@@ -1529,151 +1055,6 @@ actor LibraryService {
         }
     }
 
-    func sameSite(_ value: String) throws -> URL {
-        guard !value.isEmpty, let url = URL(string: value, relativeTo: siteBaseURL)?.absoluteURL,
-              url.scheme == "https", url.host?.lowercased() == siteBaseURL.host?.lowercased(), url.port == siteBaseURL.port,
-              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-              url.path.hasPrefix(siteBaseURL.path + "/"), !url.pathComponents.contains(".."), !url.path.contains("\\") else { throw ServiceError.invalid("资料地址超出可信站点目录。") }
-        return url
-    }
-    private func cleanHTTPS(_ value: String?) -> String? {
-        guard let value, let url = URL(string: value), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil else { return nil }
-        return url.absoluteString
-    }
-    private func read(_ url: URL, limit: Int) async throws -> Data {
-        try Task.checkCancellation()
-        if let transport {
-            let bytes = try await transport(url, limit)
-            try Task.checkCancellation()
-            guard bytes.count <= limit else { throw ServiceError.invalid("资料响应超过大小上限。") }
-            return bytes
-        }
-        if url.host?.lowercased() == siteBaseURL.host?.lowercased(),!Self.isOwnedPublishedImage(url) {
-            _ = try sameSite(url.absoluteString)
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            let cancellation = LibraryTransferCancellation()
-            return try await withTaskCancellationHandler(operation: {
-                let (bytes, response) = try await session.bytes(for: request, delegate: LibraryRedirectBlocker())
-                cancellation.install(bytes.task)
-                defer { bytes.task.cancel() }
-                try Task.checkCancellation()
-                guard let http = response as? HTTPURLResponse, http.url == url else { throw ServiceError.network("网站响应地址不一致，未覆盖已保存版本。") }
-                guard http.statusCode == 200 else { throw ServiceError.httpStatus(http.statusCode) }
-                guard response.expectedContentLength <= Int64(limit) else { throw ServiceError.invalid("资料响应超过大小上限。") }
-                var data = Data()
-                for try await byte in bytes {
-                    guard data.count < limit else { throw ServiceError.invalid("资料响应超过大小上限。") }
-                    data.append(byte)
-                    if data.count % 8192 == 0 { try Task.checkCancellation() }
-                }
-                try Task.checkCancellation()
-                return data
-            }, onCancel: { cancellation.cancel() })
-        }
-        return try await externalBytes(url, limit: limit)
-    }
-    private func externalBytes(_ initial: URL, limit: Int) async throws -> Data {
-        var url = initial
-        for _ in 0..<6 {
-            try Task.checkCancellation()
-            guard Self.isApprovedExternalResource(url),let host=url.host?.lowercased() else { throw ServiceError.invalid("外部资源不在已支持的官方HTTPS来源中。") }
-            let arxiv = host == "arxiv.org" || host == "export.arxiv.org"
-            if arxiv && httpProxy == nil { throw ServiceError.unavailable("arXiv 原文与图片需要配置HTTP CONNECT代理；已有导读仍可阅读。") }
-            let address = try Self.publicAddress(host)
-            let temporary = directory.appendingPathComponent("transfer-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            let output = temporary.appendingPathComponent("body"), headers = temporary.appendingPathComponent("headers"), status = temporary.appendingPathComponent("status"), diagnostic = temporary.appendingPathComponent("diagnostic")
-            FileManager.default.createFile(atPath: status.path, contents: nil)
-            FileManager.default.createFile(atPath: diagnostic.path, contents: nil)
-            let stdout = try FileHandle(forWritingTo: status), stderr = try FileHandle(forWritingTo: diagnostic)
-            defer { try? stdout.close(); try? stderr.close() }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-            let target = address.contains(":") ? "[\(address)]" : address
-            process.arguments = ["-q", "--globoff", "--silent", "--show-error", "--max-time", "120", "--connect-timeout", "30", "--max-filesize", String(limit), "--proto", "=https", "--max-redirs", "0", "--connect-to", "\(host):443:\(target):443", "--proxy", Self.externalResourceProxy(url,configured:httpProxy)?.absoluteString ?? "", "--noproxy", "", "--dump-header", headers.path, "--output", output.path, "--write-out", "%{http_code}", "--url", url.absoluteString]
-            process.environment = ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"]
-            process.standardOutput = stdout; process.standardError = stderr
-            let transferID = UUID()
-            activeTransfers[transferID] = process
-            defer { activeTransfers.removeValue(forKey: transferID) }
-            try await Self.run(process)
-            let code = Int((try String(contentsOf: status, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-            if [301, 302, 303, 307, 308].contains(code) {
-                let text = try String(contentsOf: headers, encoding: .utf8)
-                let locations = text.components(separatedBy: .newlines).filter { $0.lowercased().hasPrefix("location:") }
-                guard let value = locations.last?.dropFirst(9).trimmingCharacters(in: .whitespacesAndNewlines), let next = URL(string: value, relativeTo: url)?.absoluteURL else { throw ServiceError.network("资源重定向缺少有效地址。") }
-                url = next; continue
-            }
-            guard code == 200 else { throw ServiceError.network("官方资源返回HTTP \(code)，没有缓存错误页面。") }
-            let data = try Data(contentsOf: output)
-            guard data.count <= limit else { throw ServiceError.invalid("资源超过大小上限。") }
-            return data
-        }
-        throw ServiceError.network("官方资源重定向过多。")
-    }
-    private static func run(_ process: Process) async throws {
-        try Task.checkCancellation()
-        let cancellation = LibraryTransferCancellation()
-        try await withTaskCancellationHandler(operation: {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                process.terminationHandler = { finished in
-                    if finished.terminationReason == .uncaughtSignal { continuation.resume(throwing: CancellationError()) }
-                    else if finished.terminationStatus != 0 { continuation.resume(throwing: ServiceError.network("资源下载失败或超过限额；未保存不完整文件。")) }
-                    else { continuation.resume() }
-                }
-                do { try cancellation.start(process) } catch { continuation.resume(throwing: error) }
-            }
-        }, onCancel: { cancellation.cancel() })
-        try Task.checkCancellation()
-    }
-    private static func publicAddress(_ host: String) throws -> String {
-        var hints = addrinfo()
-        hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_ADDRCONFIG
-        var list: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, "443", &hints, &list) == 0, let first = list else { throw ServiceError.network("官方资源DNS暂不可用。") }
-        defer { freeaddrinfo(first) }
-        var cursor: UnsafeMutablePointer<addrinfo>? = first
-        var found: [String] = []
-        while let node = cursor {
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(node.pointee.ai_addr, node.pointee.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
-                let ip = String(cString: buffer)
-                guard isPublicAddress(ip) else { throw ServiceError.invalid("官方资源解析到私网或保留地址，已停止下载。") }
-                found.append(ip)
-            }
-            cursor = node.pointee.ai_next
-        }
-        guard let result = found.first(where: { !$0.contains(":") }) ?? found.first else { throw ServiceError.network("官方资源没有可用公网地址。") }
-        return result
-    }
-    static func isPublicAddress(_ address: String) -> Bool {
-        var ipv4 = in_addr()
-        if inet_pton(AF_INET, address, &ipv4) == 1 {
-            let n = UInt32(bigEndian: ipv4.s_addr), a = n >> 24, b = (n >> 16) & 255, c = (n >> 8) & 255
-            return !(a == 0 || a == 10 || a == 127 || a >= 224 || (a == 100 && b >= 64 && b <= 127) || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && (b == 168 || (b == 0 && (c == 0 || c == 2)) || (b == 88 && c == 99))) || (a == 198 && (b == 18 || b == 19 || (b == 51 && c == 100))) || (a == 203 && b == 0 && c == 113))
-        }
-        var ipv6 = in6_addr()
-        guard inet_pton(AF_INET6, address, &ipv6) == 1 else { return false }
-        let bytes = withUnsafeBytes(of: &ipv6) { Array($0) }
-        // Accept ordinary global-unicast IPv6 only; reject documentation, mapped IPv4 and special ranges.
-        return bytes[0] & 0xe0 == 0x20 && !(bytes[0] == 0x20 && bytes[1] == 0x01 && (bytes[2] < 2 || (bytes[2] == 0x0d && bytes[3] == 0xb8))) && !(bytes[0] == 0x20 && bytes[1] == 0x02) && !(bytes[0] == 0x3f && bytes[1] == 0xff && bytes[2] < 16)
-    }
-    private static func imageExtension(_ data: Data, url: URL) throws -> String {
-        if data.starts(with: [0x89, 0x50, 0x4e, 0x47]) { return "png" }
-        if data.starts(with: [0xff, 0xd8, 0xff]) { return "jpg" }
-        if data.starts(with: Data("GIF8".utf8)) { return "gif" }
-        if data.count > 12, data.prefix(4) == Data("RIFF".utf8), data[8..<12] == Data("WEBP".utf8) { return "webp" }
-        if let text = String(data: data, encoding: .utf8), text.contains("<svg"),
-           !text.localizedCaseInsensitiveContains("<!ENTITY"), !text.localizedCaseInsensitiveContains("<script"),
-           !text.localizedCaseInsensitiveContains("foreignObject"), !text.localizedCaseInsensitiveContains("javascript:"),
-           text.range(of: #"\bon[a-z]+\s*=|(?:href|src)\s*=\s*[\"'](?!#)|url\(\s*(?!#)"#, options: [.regularExpression, .caseInsensitive]) == nil { return "svg" }
-        throw ServiceError.invalid("图片内容不受支持或包含外部执行/引用。")
-    }
-    private static func imageMIME(_ ext: String) -> String {
-        ["png": "image/png", "jpg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"][ext] ?? "application/octet-stream"
-    }
     private func cacheURL(_ name: String, key: String, extension ext: String) -> URL {
         directory.appendingPathComponent(name, isDirectory: true).appendingPathComponent("\(key).\(ext)")
     }
@@ -1681,134 +1062,12 @@ actor LibraryService {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: [.atomic])
     }
-    private static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
-    private static func now() -> String { ISO8601DateFormatter().string(from: Date()) }
-    /// For one small response value. List rows are built as dictionaries below so a page of papers
-    /// is never encoded and decoded again per row.
-    private static func dictionary<T: Encodable>(_ value: T) throws -> [String: Any] {
-        try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any] ?? [:]
-    }
-    /// The browsing row. `compact` leaves out the full citation and the published guide records;
-    /// both stay available through `library.paperDetail` and `library.tagIndex`.
-    private static func listRow(_ paper: Paper, retained: Bool, compact: Bool) -> [String: Any] {
-        var row: [String: Any] = [
-            "id": paper.id, "paperID": paper.id, "title": paper.title, "titleZh": paper.titleZh,
-            "authors": paper.authors, "date": paper.date, "task": paper.task, "method": paper.method,
-            "tags": paper.tags, "sourceKind": paper.sourceKind, "identityStatus": paper.identityStatus,
-            "pageType": paper.pageType, "blogURL": paper.blogURL, "appearances": paper.appearances,
-            "pdfURL": paper.pdfURL ?? NSNull(), "localRetained": retained
-        ]
-        if let score = paper.score { row["score"] = score }
-        if let sourceURL = paper.sourceURL { row["sourceURL"] = sourceURL }
-        if let sourceVersion = paper.sourceVersion { row["sourceVersion"] = sourceVersion }
-        if let pdfSHA256 = paper.pdfSHA256 { row["pdfSHA256"] = pdfSHA256 }
-        if !compact {
-            row["citation"] = Self.jsonObject(paper.citation)
-            if let records = paper.websiteTagRecords { row["websiteTagRecords"] = records.map { Self.jsonObject($0) } }
-        }
-        return row
-    }
-    /// Guide values the list row already carries verbatim. The web layer restores them from the
-    /// row, so a title, task or tag list is not repeated for every published guide.
-    private static func inheritedTagValue(_ key: String, paper: Paper) -> Any? {
-        switch key {
-        case "pageType": return paper.pageType
-        case "sourceKind": return paper.sourceKind
-        case "identityStatus": return paper.identityStatus
-        case "title": return paper.title
-        case "titleZh": return paper.titleZh
-        case "task": return paper.task
-        case "method": return paper.method
-        case "tags": return paper.tags
-        case "arxivId":
-            guard let version = paper.sourceVersion else { return nil }
-            return version
-        case "paperId": return paper.id
-        default: return nil
-        }
-    }
-    /// One published guide record without the values its row repeats. The `citation` object keeps
-    /// only the author names the browsing index searches; `library.paperDetail` returns the whole
-    /// published record. `inherit` names every field the web layer takes back from the row.
-    private static func compactTagRecord(_ record: JSONValue, paper: Paper) -> Any {
-        guard case .object(let fields) = record else { return Self.jsonObject(record) }
-        var compact: [String: Any] = [:]
-        var inherited: [String] = []
-        for (key, value) in fields {
-            if key == "citation" {
-                var authors: [Any] = []
-                if case .object(let citation) = value, case .array(let names)? = citation["authors"] { authors = names.map { Self.jsonObject($0) } }
-                compact["citation"] = ["authors": authors]
-                continue
-            }
-            if let rowValue = Self.inheritedTagValue(key, paper: paper), Self.sameJSON(value, rowValue) {
-                inherited.append(key)
-                continue
-            }
-            compact[key] = Self.jsonObject(value)
-        }
-        if !inherited.isEmpty { compact["inherit"] = inherited.sorted() }
-        return compact
-    }
-    /// A decoded JSON value as the bridge expects it, without a JSON round trip.
-    private static func jsonObject(_ value: JSONValue) -> Any {
-        switch value {
-        case .object(let fields): return fields.mapValues { Self.jsonObject($0) }
-        case .array(let values): return values.map { Self.jsonObject($0) }
-        case .string(let text): return text
-        case .number(let number): return number
-        case .bool(let flag): return flag
-        case .null: return NSNull()
-        }
-    }
-    /// Only the inherited value shapes matter here: strings and string lists.
-    private static func sameJSON(_ value: JSONValue, _ other: Any) -> Bool {
-        switch value {
-        case .string(let text): return (other as? String) == text
-        case .array(let values):
-            guard let other = other as? [String], values.count == other.count else { return false }
-            return zip(values, other).allSatisfy { inner, text in
-                if case .string(let value) = inner { return value == text }
-                return false
-            }
-        default: return false
-        }
-    }
-}
+    static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    static func now() -> String { ISO8601DateFormatter().string(from: Date()) }
 
-private final class LibraryRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-}
-
-/// Per-operation cancellation: cancelling one task cannot terminate another transfer.
-private final class LibraryTransferCancellation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-    private var task: URLSessionTask?
-    private var process: Process?
-    func install(_ value: URLSessionTask) {
-        lock.lock(); defer { lock.unlock() }
-        task = value
-        if cancelled { value.cancel() }
-    }
-    func start(_ value: Process) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard !cancelled else { throw CancellationError() }
-        process = value
-        try value.run()
-    }
-    func cancel() {
-        lock.lock(); defer { lock.unlock() }
-        cancelled = true; task?.cancel()
-        if let process, process.isRunning { process.terminate() }
-    }
-}
-
-
-extension LibraryService {
     func aggregateLatestVerifiedDocument(id: String) throws -> AggregateDocument? {
-        try PublishedAggregateStore(directory: directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
-            guard let catalog = try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
+        try PublishedAggregateStore(directory: directory, siteBase: siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog = try store.load(activeSnapshotSHA256: snapshot.summary.snapshotID, validationEpoch: snapshot.validationEpoch), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
             return try store.latestVerifiedDocument(for: descriptor)
         }
     }

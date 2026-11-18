@@ -21,6 +21,14 @@ enum PersonalWebDavSync {
         let personal: Object
         let upload: Data?
         let conflicts: Int
+        let noteConflicts: [NoteConflictSnapshot]
+
+        init(personal: Object, upload: Data?, conflicts: Int, noteConflicts: [NoteConflictSnapshot] = []) {
+            self.personal = personal
+            self.upload = upload
+            self.conflicts = conflicts
+            self.noteConflicts = noteConflicts
+        }
     }
     struct RemoteRevision {
         let device: String
@@ -77,6 +85,9 @@ enum PersonalWebDavSync {
     }
     private static func encoded(_ value: Any) throws -> Data {
         try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
+    }
+    private static func noteText(_ value: Any?) -> String {
+        (value as? Object)?["text"] as? String ?? ""
     }
 
     private static func project(_ personal: Object) throws -> Projection {
@@ -213,6 +224,7 @@ enum PersonalWebDavSync {
         }
         var merged: Projection = [:]
         var conflicts = 0
+        var detectedNoteConflicts: [NoteConflictSnapshot] = []
         for field in fields {
             var byPaper: [String: [Edit]] = [:]
             for (owner, document) in documents {
@@ -229,11 +241,44 @@ enum PersonalWebDavSync {
                 let value: Any
                 if ["notes", "annotations"].contains(field),
                    try Set(heads.map { edit in
-                       let text = field == "notes" ? (edit.value as? Object)?["text"] : nil
-                       return try encoded(text ?? edit.value)
+                       if field == "notes" { return try encoded(noteText(edit.value)) }
+                       return try encoded(edit.value)
                    }).count > 1 {
                     conflicts += 1
                     value = projection[field]?[id] ?? NSNull()
+                    if field == "notes" {
+                        let localText = noteText(projection["notes"]?[id])
+                        let differing = heads
+                            .filter { noteText($0.value) != localText }
+                            .sorted {
+                                (($0.device != device ? 1 : 0), $0.revision, $0.device) >
+                                (($1.device != device ? 1 : 0), $1.revision, $1.device)
+                            }
+                        var distinctRemotes: [Edit] = []
+                        var seenTexts: Set<String> = [localText]
+                        for edit in differing {
+                            if seenTexts.insert(noteText(edit.value)).inserted {
+                                distinctRemotes.append(edit)
+                            }
+                        }
+                        if let primary = distinctRemotes.first {
+                            let extras = distinctRemotes.dropFirst().map {
+                                NoteConflictMerger.RemoteNoteVersion(
+                                    text: noteText($0.value),
+                                    deviceID: $0.device,
+                                    revision: $0.revision
+                                )
+                            }
+                            detectedNoteConflicts.append(NoteConflictSnapshot(
+                                paperID: id,
+                                localNote: localText,
+                                remoteNote: noteText(primary.value),
+                                remoteDeviceID: primary.device,
+                                remoteRevision: primary.revision,
+                                additionalRemotes: extras
+                            ))
+                        }
+                    }
                 } else if sets.contains(field), heads.contains(where: { $0.value is NSNull }) {
                     value = NSNull()
                 } else if field == "favorites" {
@@ -293,7 +338,11 @@ enum PersonalWebDavSync {
         result[baselineKey] = ["device": device, "observed": documents.mapValues { $0["revision"] as! Int },
                                "digests": digests, "hashes": try hashes(project(result))]
         try DesktopStore.validate(result)
-        return Plan(personal: result, upload: upload, conflicts: conflicts)
+        guard try encoded(result).count <= DesktopStore.maxPersonalBytes else {
+            throw DesktopError.message("合并后的个人资料超过 32 MiB 上限，已保留本机资料")
+        }
+        return Plan(personal: result, upload: upload, conflicts: conflicts,
+                    noteConflicts: detectedNoteConflicts.sorted { $0.paperID < $1.paperID })
     }
 
     static func unchanged(_ before: Object, _ after: Object) throws -> Bool {

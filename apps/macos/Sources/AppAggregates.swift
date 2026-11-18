@@ -207,7 +207,7 @@ extension PaperDigestApp {
                 value["sessionID"] = session.id
                 return value
             }
-            session.resumeScrollY = position
+            session.resumeScrollY = position ?? session.resumeScrollY
             session.document = document
             session.readyNonce = UUID().uuidString.lowercased()
             session.readyDisplaySHA = PublishedAggregateReader.sha(Data(document.displayHTML.utf8))
