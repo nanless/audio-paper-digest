@@ -82,6 +82,9 @@ def bind_route_test_ledger(ledger):
 
 class HistoricalPageScanTest(unittest.TestCase):
     def setUp(self):
+        env_patcher = mock.patch.dict(os.environ, {"PAPER_DIGEST_GITHUB_REMOTE": "origin"})
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name).resolve()
         self.repo = self.root / "blog"

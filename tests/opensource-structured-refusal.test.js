@@ -44,18 +44,23 @@ function scanFixture(error) {
     // Exercise the production scan's catch with a local call double. This does
     // not create a source capability or record a successful production stage.
     const code = fs.readFileSync(require.resolve('../scripts/deep-analyzer'), 'utf8');
+    const budgetMatch = code.match(/^const OPEN_SOURCE_SCAN_MAX_TOKENS = (\d+);$/m);
+    assert.ok(budgetMatch);
+    const expectedMaxTokens = Number(budgetMatch[1]);
     const start = code.indexOf('async function scanOpensource(');
     const end = code.indexOf('\nfunction buildDeterministicOpenSourceScan(', start);
     assert.ok(start >= 0 && end > start);
     let calls = 0;
+    let observedMaxTokens = null;
     const scan = vm.runInNewContext(code.slice(start, end) + '\nscanOpensource', {
+        OPEN_SOURCE_SCAN_MAX_TOKENS: expectedMaxTokens,
         appendPrimaryFactReviewPrompt: value => value, loadPrompt: () => 'offline fixture',
         currentTextStagePromptPath: () => 'offline fixture', getPaperArxivId: paper => paper.arxivId,
-        callModel: async () => { calls++; throw error; },
+        callModel: async (_messages, maxTokens) => { calls++; observedMaxTokens = maxTokens; throw error; },
         buildDeterministicOpenSourceScan: deep.buildDeterministicOpenSourceScan,
         console: { warn() {} }
     });
-    return { scan, calls: () => calls };
+    return { scan, calls: () => calls, maxTokens: () => observedMaxTokens, expectedMaxTokens };
 }
 
 test('only the resource scan uses literal source URLs after an explicit refusal', async () => {
@@ -68,6 +73,7 @@ test('only the resource scan uses literal source URLs after an explicit refusal'
     assert.match(output, /模型权重：论文中未提及/);
     assert.doesNotMatch(output, /可访问|已验证|partial answer/);
     assert.equal(f.calls(), 1);
+    assert.equal(f.maxTokens(), f.expectedMaxTokens);
 });
 
 test('resource fallback never swallows run failures, truncation or unclassified refusal errors', async () => {
@@ -83,5 +89,6 @@ test('resource fallback never swallows run failures, truncation or unclassified 
         await assert.rejects(f.scan({ arxivId: '2601.90001', title: 'Synthetic fixture' }, 'source', 'evidence'),
             actual => actual === error);
         assert.equal(f.calls(), 1);
+        assert.equal(f.maxTokens(), f.expectedMaxTokens);
     }
 });

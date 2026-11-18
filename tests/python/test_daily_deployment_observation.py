@@ -97,6 +97,7 @@ class DailyDeploymentObservationIntegrationTest(unittest.TestCase):
                 module = actual_load()
             for name, value in (
                     ('BLOG_REPO', str(self.fixture.repo)), ('CONTENT_DIR', str(self.fixture.posts)),
+                    ('GITHUB_REMOTE', 'origin'),
                     ('CURRENT_DIR', self.fixture.current), ('DAILY_FRESH_SOURCE_RUNS_DIR', self.fixture.source_root),
                     ('DAILY_RENDER_OBSERVATIONS_DIR', self.fixture.observation_root),
                     ('TAG_DISPLAY_POLICY_PATH', self.fixture.root / 'absent-policy.json')):

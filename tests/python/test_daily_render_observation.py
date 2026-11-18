@@ -47,8 +47,10 @@ class DailyRenderObservationIntegrationTest(unittest.TestCase):
         self.observation_root = self.root / 'render-observations'
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.dict(os.environ, {'PAPER_DIGEST_GITHUB_REMOTE': 'origin'}))
         for name, value in (
                 ('BLOG_REPO', str(self.repo)), ('CONTENT_DIR', str(self.posts)),
+                ('GITHUB_REMOTE', 'origin'),
                 ('CURRENT_DIR', self.current), ('DAILY_FRESH_SOURCE_RUNS_DIR', self.source_root),
                 ('DAILY_RENDER_OBSERVATIONS_DIR', self.observation_root)):
             self.stack.enter_context(mock.patch.object(publisher, name, value, create=True))

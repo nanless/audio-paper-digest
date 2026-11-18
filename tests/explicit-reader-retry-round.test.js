@@ -939,7 +939,7 @@ test('缺sections父稿的只读完整再生计划绑定原账原因，首次真
         const saved = repair.loadFailedCandidate(directory, identity);
         const receipt = JSON.parse(fs.readFileSync(saved.explicitReaderRetryRound.receiptFile));
         assert.equal(receipt.physicalRequests, 1);
-        assert.equal(receipt.reservedOutputTokens, 48000);
+        assert.equal(receipt.reservedOutputTokens, Config.ANALYSIS_CONFIG.apiReaderMaxTokens);
         assert.equal(receipt.oldAttempts, 1);
         assert.equal(receipt.oldFullAttempts, 1);
         assert.deepEqual(fs.readFileSync(receipt.archivedFile), original);
@@ -948,7 +948,17 @@ test('缺sections父稿的只读完整再生计划绑定原账原因，首次真
 });
 
 test('首个显式轮可明确选择无进展整篇再生，旧稿和旧次数保留且预算仍为80k', async t => {
+    const deepPath = require.resolve('../scripts/deep-analyzer');
+    const cachedDeep = require.cache[deepPath];
+    const originalReaderMaxTokens = Config.ANALYSIS_CONFIG.apiReaderMaxTokens;
+    Config.ANALYSIS_CONFIG.apiReaderMaxTokens = 48000;
+    delete require.cache[deepPath];
     const deep = require('../scripts/deep-analyzer');
+    t.after(() => {
+        Config.ANALYSIS_CONFIG.apiReaderMaxTokens = originalReaderMaxTokens;
+        if (cachedDeep) require.cache[deepPath] = cachedDeep;
+        else delete require.cache[deepPath];
+    });
     const draft = createReaderTestArticle(); draft.readerTitle = '短';
     const issues = [{ path: '/readerTitle', message: '读者标题过短' }];
     const f = setup(t, p => { Object.assign(p, { draft, rawDraft: JSON.stringify(draft), issues,
@@ -1032,7 +1042,7 @@ test('真实连续无进展父稿只准整链内一次完整再生，首次走�
         assert.deepEqual(fs.readFileSync(receipt.archivedFile), oldBytes);
         assert.deepEqual(saved.draft, draft);
         assert.equal(receipt.oldAttempts, 2); assert.equal(receipt.oldFullAttempts, 0);
-        assert.equal(receipt.physicalRequests, 1); assert.equal(receipt.reservedOutputTokens, 48000);
+        assert.equal(receipt.physicalRequests, 1); assert.equal(receipt.reservedOutputTokens, Config.ANALYSIS_CONFIG.apiReaderMaxTokens);
         assert.equal(saved.explicitReaderRetryRound.fullRegenerationReasonSha256, repair.hashDraft(grant.recoveryReason));
         assert.throws(() => retry.validatePersistedRound(directory, identity, { ...saved,
             explicitReaderRetryRound: { ...saved.explicitReaderRetryRound, fullRegenerationReasonSha256: '0'.repeat(64) } }), /再生原因/);

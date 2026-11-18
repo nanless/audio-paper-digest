@@ -644,10 +644,14 @@ class ConferencePublishTests(unittest.TestCase):
                     error = (error_type() if error_type is LlmAccountAuthError
                              else error_type('all test accounts unavailable'))
                     name = f'{stage}-{error.code}'
-                    first = self.record(f'content/posts/{name}-first.md',
-                        b'---\ntitle: first\n---\n![figure](https://example.invalid/a.png)\n')
+                    first_bytes = b'---\ntitle: first\n---\n![figure](https://example.invalid/a.png)\n'
+                    first = self.record(f'content/posts/{name}-first.md', first_bytes)
                     second = self.record(f'content/posts/{name}-second.md')
-                    responses = [error] if stage == 'text' else ['{"passed":true,"issues":[]}', error]
+                    first_chunks = reviewer.split_review_content(
+                        first_bytes.decode('utf-8'), reviewer.get_blog_review_chunk_chars())
+                    self.assertEqual(len(first_chunks), 2)
+                    responses = ([error] if stage == 'text'
+                                 else ['{"passed":true,"issues":[]}'] * len(first_chunks) + [error])
                     with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
                             mock.patch.object(M, 'content_review_protocol', return_value='offline'), \
                             mock.patch.object(reviewer, 'call_publish_llm_api', side_effect=responses) as api, \
@@ -658,7 +662,7 @@ class ConferencePublishTests(unittest.TestCase):
                             M.review_pages(self.repo, [first, second], workers=1)
                         self.assertIs(raised.exception, error)
                         self.assertEqual(raised.exception.scope, 'run')
-                        self.assertEqual(api.call_count, 1 if stage == 'text' else 2)
+                        self.assertEqual(api.call_count, 1 if stage == 'text' else len(first_chunks) + 1)
                         self.assertTrue(all(not call.kwargs['use_secondary'] for call in api.call_args_list))
                         self.assertEqual(pixels.call_count, 0 if stage == 'text' else 1)
                     for record in (first, second):

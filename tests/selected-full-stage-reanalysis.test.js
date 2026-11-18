@@ -296,8 +296,11 @@ test('错误模型、未知或重复 ID、错误封存来源、缺原事实反�
     }
     const oldModel = process.env.PAPER_ANALYZER_MODEL;
     process.env.PAPER_ANALYZER_MODEL = 'mimo-v2.6-flash';
-    assert.throws(() => policy.withSelectedFullStageReanalysis(options(sample), () => {}), /Muse/);
-    process.env.PAPER_ANALYZER_MODEL = oldModel;
+    try {
+        assert.throws(() => policy.withSelectedFullStageReanalysis(options(sample), () => {}), /全阶段重跑要求主副模型一致且受支持/);
+    } finally {
+        process.env.PAPER_ANALYZER_MODEL = oldModel;
+    }
     await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => {
         assert.throws(() => policy.preparePaperLocked(sample.paper), /原受控反馈/);
     }));

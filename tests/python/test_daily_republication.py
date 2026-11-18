@@ -35,7 +35,9 @@ class DailyRepublicationTests(unittest.TestCase):
         subprocess.run(['git', 'init', '--bare', str(remote)], capture_output=True, check=True)
         self.git('remote', 'add', 'origin', str(remote))
         self.stack = contextlib.ExitStack(); self.addCleanup(self.stack.close)
-        for name, value in [('BLOG_REPO', str(self.repo)), ('CURRENT_DIR', self.current),
+        self.stack.enter_context(mock.patch.dict(os.environ, {'PAPER_DIGEST_GITHUB_REMOTE': 'origin'}))
+        for name, value in [('BLOG_REPO', str(self.repo)), ('GITHUB_REMOTE', 'origin'),
+                            ('CURRENT_DIR', self.current),
                             ('DAILY_FRESH_SOURCE_RUNS_DIR', self.root / 'sources')]:
             self.stack.enter_context(mock.patch.object(M, name, value))
         self.stack.enter_context(mock.patch.object(R, 'DAILY_REPUBLICATION_RUNS_DIR', self.runs))

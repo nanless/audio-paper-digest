@@ -127,6 +127,7 @@ class DailyObservedProjectionIntegrationTest(unittest.TestCase):
             fixture = self.fixture
             for name, value in (
                     ('BLOG_REPO', str(fixture.repo)), ('CONTENT_DIR', str(fixture.posts)),
+                    ('GITHUB_REMOTE', 'origin'),
                     ('CURRENT_DIR', fixture.current), ('DAILY_FRESH_SOURCE_RUNS_DIR', fixture.source_root),
                     ('DAILY_RENDER_OBSERVATIONS_DIR', fixture.observation_root),
                     ('TAG_DISPLAY_POLICY_PATH', fixture.root / 'absent-policy.json')):

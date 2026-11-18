@@ -23,10 +23,18 @@ test('摘要与整篇结构修复使用各自容量，截断原错误直接传�
                 calls.push({ messages, requestedBudget, options });
                 throw failure;
             } }), error => error === failure);
-        assert.equal(calls.length, 1);
-        assert.equal(calls[0].requestedBudget, budget);
-        assert.equal(calls[0].options.usageContext.stage, stage);
-        assert.match(calls[0].messages[0].content, /本次受控证据/);
+        if (stage === 'coreSummaryRepair') {
+            assert.equal(calls.length, 2);
+            assert.equal(calls[0].requestedBudget, budget);
+            assert.equal(calls[1].requestedBudget, Math.min(128000, budget * 4));
+        } else {
+            assert.equal(calls.length, 1);
+            assert.equal(calls[0].requestedBudget, budget);
+        }
+        for (const call of calls) {
+            assert.equal(call.options.usageContext.stage, stage);
+            assert.match(call.messages[0].content, /本次受控证据/);
+        }
     }
 });
 

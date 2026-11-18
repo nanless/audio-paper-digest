@@ -1774,7 +1774,8 @@ test('typed核心父与Reader子只从已核子包派生单句local种子，保�
                     requests++;
                     assert.equal(request.usageContext.stage, 'apiReaderRepair');
                     assert.equal(request.usageContext.contentAttempt, 1, '新真实反馈input如实从局部1开始，旧scope计数未重写');
-                    assert.ok(tokens <= 16000);
+                    assert.equal(tokens, Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens);
+                    assert.ok(tokens < Config.ANALYSIS_CONFIG.apiReaderMaxTokens);
                     return JSON.stringify({ ...require('../scripts/lib/protocol-codec').record('reader-fact-sentence-patch'), draftSha256: repair.hashDraft(start.signedRecoveryDraft),
                         sentenceReplacements: repair.factLocalSentenceTargets({ draftSha256: repair.hashDraft(start.signedRecoveryDraft), targets })
                             .map(({ originalSentence, ...identity }) => ({ ...identity,

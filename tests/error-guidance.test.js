@@ -438,6 +438,7 @@ test('入口 refresh-api-reader：失败保留原错误与退出码，摘要脱�
     const printed = [];
     const failure = Object.assign(new Error(`arXiv 429 抓取失败 ${SECRET}`), { status_code: 429 });
     const modules = {
+        './env-loader.js': { requireExternalRuntime: () => {} },
         './log-setup': { writeStageSummary: options => { summaries.push(options); return { line: 'stub', status: options.status }; } },
         './lib/error-guidance.js': require('../scripts/lib/error-guidance.js'),
         './config.js': { FILES: { deepAnalysisResult: 'no-file' } },

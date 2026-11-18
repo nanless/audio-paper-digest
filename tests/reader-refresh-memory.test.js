@@ -57,6 +57,7 @@ async function probe() {
         './lib/analysis-batch-report.js': { writeAnalysisBatchReport: () => 'test-diagnostics' },
         './digest-status.js': {},
         './utils.js': { normalizedId: item => typeof item === 'string' ? item : item.arxivId },
+        './env-loader.js': { requireExternalRuntime: () => {} },
         './lib/analysis-stop-control': stop
     };
     const filename = path.resolve(__dirname, '../scripts/refresh-api-reader.js');

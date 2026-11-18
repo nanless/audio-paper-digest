@@ -102,7 +102,7 @@ module.exports.createScoringReplaySampleStage = function(sample) {
  return {status:'complete', model:DEEP_CONFIG.model,
  protocol:detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
  endpointSha256:crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex'),
- maxTokens:16000,maxResponseBytes:API_MAX_RESPONSE_BYTES,temperature:SCORING_AUDIT_TEMPERATURE,
+ maxTokens:SCORING_AUDIT_MAX_TOKENS,maxResponseBytes:API_MAX_RESPONSE_BYTES,temperature:SCORING_AUDIT_TEMPERATURE,
  promptTextContract:currentPromptTextContract('scoringAudit'),
  promptTemplateSha256:promptTemplateSha256(promptFilePathForContract('scoringAudit',currentPromptTextContract('scoringAudit'))),
  ...modelTextFingerprintFields(input,evidence),

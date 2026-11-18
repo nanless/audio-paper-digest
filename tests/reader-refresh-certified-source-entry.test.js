@@ -44,6 +44,7 @@ function loadRefresh(f, mutateAtLock = () => {}, saveError = null) {
         withDailyFreshPaperSource: (plan, paper, fn) => fn(daily.readDailyFreshSource(plan, paper))
     };
     const modules = {
+        './env-loader.js': { requireExternalRuntime: () => {} },
         './log-setup': { writeStageSummary: () => null },
         './lib/error-guidance.js': require('../scripts/lib/error-guidance.js'),
         './lib/daily-scoring-refresh-checkpoint': require('../scripts/lib/daily-scoring-refresh-checkpoint'),

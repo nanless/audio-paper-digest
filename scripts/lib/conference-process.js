@@ -928,7 +928,9 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     const stateFile = path.join(directory, 'state.json');
     const expected = { authority: context.authority, paperIds: context.members.map(item => item.paperId).sort() };
     // 只有本模块外层持锁回调的私有证明允许首次更新恢复同机已退出进程的内部状态锁。
-    let state = deps.engine.updateJsonFileLocked(stateFile, current => {
+    const updateStateLocked = (updater, lockOptions = {}) => deps.engine.updateJsonFileLocked(
+        stateFile, updater, { recoveryPolicy: null, ...lockOptions });
+    let state = updateStateLocked(current => {
         if (current) { assertState(current, expected); return undefined; }
         return initialState(context.authority, context.members, processId, deps.now());
     }, { allowMissing: true, ...(operationLockProof === PROCESS_OPERATION_LOCK_HELD
@@ -944,7 +946,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     }
     // 在做任何准备或模型工作之前，先升级旧的只含错误的检查点。
     // 失败的分析字节保持原样；调度器元数据只是追加。
-    state = deps.engine.updateJsonFileLocked(stateFile, current => {
+    state = updateStateLocked(current => {
         const next = clone(assertState(current, expected)); let changed = false;
         for (const item of Object.values(next.items)) {
             if (item.status === 'complete') continue;
@@ -1036,7 +1038,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
             throw error;
         }
     };
-    const updateItem = (paperId, expectedStatuses, updater) => saveState(() => deps.engine.updateJsonFileLocked(stateFile, current => {
+    const updateItem = (paperId, expectedStatuses, updater) => saveState(() => updateStateLocked(current => {
         const checked = assertState(current, expected); const currentItem = checked.items[paperId];
         if (!currentItem || !Array.isArray(expectedStatuses) || expectedStatuses.length === 0) {
             throw new Error(`Conference process item CAS is invalid: ${paperId}`);
@@ -1058,7 +1060,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     // Shared preparation has already sealed the complete source set. Bind that
     // set in one locked transaction instead of rereading and hashing the whole
     // batch twice per member. Claims and paid results still persist separately.
-    state = saveState(() => deps.engine.updateJsonFileLocked(stateFile, current => {
+    state = saveState(() => updateStateLocked(current => {
         const checked = assertState(current, expected);
         assertSourceContinuity(checked, shared);
         const next = clone(checked); let changed = false;
@@ -1136,7 +1138,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                             ? { reviewRequired: { ...error.tagReview, classifiedAt: failure.at } }
                             : {}),
                         retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
-                    if (failure.systemic) saveState(() => deps.engine.updateJsonFileLocked(stateFile, current => {
+                    if (failure.systemic) saveState(() => updateStateLocked(current => {
                         const next = clone(assertState(current, expected));
                         // Cancellation is a consequence of the original run
                         // failure. Keep that cause when in-flight workers stop.
@@ -1173,7 +1175,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     state = assertState(JSON.parse(fs.readFileSync(stateFile)), expected);
     let incomplete = Object.values(state.items).filter(item => item.status !== 'complete');
     if (incomplete.length) {
-        state = deps.engine.updateJsonFileLocked(stateFile, current => {
+        state = updateStateLocked(current => {
             const checked = assertState(current, expected);
             if (Object.values(checked.items).every(item => item.status === 'complete')) return undefined;
             const next = clone(checked); next.status = 'partial'; next.aggregate = null;
@@ -1211,7 +1213,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         pagePath: aggregate.manifest.pagePath };
     const receiptBody = completionBodyFor(state, shared.planReceiptSha256, aggregateProof);
     const receipt = { ...receiptBody, receiptSha256: stableHash(receiptBody) };
-    state = deps.engine.updateJsonFileLocked(stateFile, current => {
+    state = updateStateLocked(current => {
         assertRuntimeAuthorityUnchanged(context, deps, 'during final completion transaction');
         const checked = assertState(current, expected);
         if (Object.values(checked.items).some(item => item.status !== 'complete')) {

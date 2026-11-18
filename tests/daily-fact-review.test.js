@@ -138,7 +138,7 @@ test('事实反馈强制正常core模型修复，保护其他章节，模型复�
         assert.equal(result.replace(deep.extractSectionByTitle(result,'核心摘要'),''),original.replace(deep.extractSectionByTitle(original,'核心摘要'),''));
         calls=0;
         await assert.rejects(deep.repairCoreSummarySection(f.paper,original,sourceText,sourceText,{reviewFeedback:review.reviewFeedback('coreSummaryRepair',ID),callModelFn:async()=>{calls++;return `## 核心摘要\n${deep.extractSectionByTitle(original,'核心摘要')}`;}}),/仍包含/);
-        assert.equal(calls,3);
+        assert.equal(calls,5);
         await assert.rejects(deep.repairCoreSummarySection(f.paper,original,sourceText,sourceText,{reviewFeedback:review.reviewFeedback('coreSummaryRepair',ID),callModelFn:async()=>{throw new Error('synthetic request failure');}}),/synthetic request failure/);
         assert.equal(f.paper.analysisCheckpoint,original);
     });
