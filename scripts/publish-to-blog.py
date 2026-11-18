@@ -7713,6 +7713,8 @@ _READER_SYMBOL_RUN = re.compile(r'([≥≤≈≠×·∼])\1')
 
 def _project_reader_cell_tex_display(value):
     output = str(value or '')
+    # LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
+    output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+', r'\1', output)
     # 页面渲染会把单元格里的 < > 转成 HTML 实体，比较前先还原成字面尖括号。
     output = output.replace('&lt;', '<').replace('&gt;', '>')
     if '\\anon[' in output:
@@ -7787,6 +7789,8 @@ def _project_reader_cell_tex_display(value):
     output = _READER_SYMBOL_COMMAND_COPY.sub(_fold_symbol_command, output)
     # 渲染侧可能已经先把命令换成符号，留下两个相同关系符：`≈≈`。
     output = _READER_SYMBOL_RUN.sub('\\1', output)
+    # LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a。
+    output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+', r'\1', output)
     # 「标签=数值」整体重复（r¯=0.643r̄=0.643）：可见副本与 TeX 副本各写一遍。
     # 只在含 = 的单元格里做，并先把长音符两种写法统一，避免影响裸 \\overline 规则。
     if '=' in output:
@@ -11465,7 +11469,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
     reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_first else display_title)
     workbench_marker = _researcher_workbench_frontmatter(workbench_bundle)
     md = f"""---
-title: "{yaml_title_for_publish(display_title)}"
+title: "{display_title}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in tags])}]

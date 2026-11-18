@@ -251,6 +251,8 @@ function projectReaderAnonMacro(value) {
 
 function projectReaderCellTexDisplay(value) {
     let output = String(value ?? '');
+    // LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
+    output = output.replace(/(\S*?)\s*11footnotemark:\s*\d+/g, '$1');
     // 页面渲染会把单元格里的 < > 转成 HTML 实体，比较前先还原成字面尖括号。
     output = output.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
