@@ -959,7 +959,14 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             val text = data.toString(Charsets.UTF_8)
             if (text.startsWith("GIF8")) return "image/gif"
             if (data.size > 12 && text.take(4) == "RIFF" && text.substring(8, 12) == "WEBP") return "image/webp"
-            if (text.contains("<svg") && !Regex("<!ENTITY|<script|foreignObject|javascript:|\\bon[a-z]+\\s*=|(?:href|src)\\s*=\\s*[\"'](?!#)|url\\(\\s*(?!#)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "image/svg+xml"
+            if (text.contains("<svg")) {
+                val svgDanger = Regex(
+                    "<!ENTITY|<script|foreignObject|javascript:|\\bon[a-z]+\\s*=|(?:href|src)\\s*=\\s*[\"'](?!#)|image-set\\s*\\(|url\\s*\\((?!\\s*(?:'\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*'|\"\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*\"|#[A-Za-z_][A-Za-z0-9_.-]*)\\s*\\))",
+                    RegexOption.IGNORE_CASE,
+                )
+                val unescaped = org.jsoup.parser.Parser.unescapeEntities(text, false)
+                if (!svgDanger.containsMatchIn(text) && !svgDanger.containsMatchIn(unescaped)) return "image/svg+xml"
+            }
             throw AppFailure("invalid", "科学图内容不受支持或包含外部执行引用")
         }
         fun extractArticle(raw: String, paper: Paper, epoch: String = ""): Article =

@@ -1206,7 +1206,7 @@ class DesktopDetailsRepository(
         val materializedInlineByElement = IdentityHashMap<Element, ArticleResource>()
         for (img in sanitizedDoc.select("img")) {
             val inlineBytes = sanitized.inlineDataBytesByElement[img] ?: continue
-            CatalogRepository.imageMime(inlineBytes)
+            verifyDesktopImageBytes(inlineBytes)
             inlineAssetBytes += inlineBytes.size
             require(inlineAssetBytes <= MAX_BUNDLED_ARTICLE_ASSETS_BYTES) { "单篇导读内联图片总量超过 64 MiB" }
             val hash = sha256(inlineBytes)
@@ -1311,15 +1311,14 @@ class DesktopDetailsRepository(
                     val assetBytes = strictInt(desc, "bytes", allowZero = false)
                     val assetUrl = requireSafeRelativePath(desc.getString("url"), "bundled-image")
                     val target = checkedChild(libraryDirectory, "assets", assetSha)
-                    val bytes = readOrFetchAsset(target, assetUrl, assetBytes, assetSha, offlineMode)
-                    CatalogRepository.imageMime(bytes)
+                    val bytes = readOrFetchAsset(target, assetUrl, assetBytes, assetSha, offlineMode, ::verifyDesktopImageBytes)
                     Triple(target, assetSha, bytes.size)
                 } else {
                     val cachedPrev = previousImageByUrl[url]?.let { prev ->
                         runCatching {
                             val f = StoragePaths.resolve(prev.localPath!!, personalRoot, prev.sha256!!, MAX_ASSET_BYTES.toLong())
                             val b = JsonFiles.read(f, MAX_ASSET_BYTES.toLong())
-                            CatalogRepository.imageMime(b)
+                            verifyDesktopImageBytes(b)
                             Triple(f, prev.sha256, b.size)
                         }.getOrNull()
                     }
@@ -1328,7 +1327,7 @@ class DesktopDetailsRepository(
                     } else {
                         require(!offlineMode) { "离线模式下未缓存外部图片" }
                         val data = readExternal(url, MAX_ASSET_BYTES)
-                        CatalogRepository.imageMime(data)
+                        verifyDesktopImageBytes(data)
                         val hash = sha256(data)
                         val target = checkedChild(libraryDirectory, "assets", hash)
                         if (Files.exists(target.toPath(), NOFOLLOW_LINKS)) {
@@ -1375,8 +1374,7 @@ class DesktopDetailsRepository(
                         val assetBytes = strictInt(desc, "bytes", allowZero = false)
                         val assetUrl = requireSafeRelativePath(desc.getString("url"), "bundled-image")
                         val target = checkedChild(libraryDirectory, "assets", assetSha)
-                        val bytes = readOrFetchAsset(target, assetUrl, assetBytes, assetSha, offlineMode)
-                        CatalogRepository.imageMime(bytes)
+                        val bytes = readOrFetchAsset(target, assetUrl, assetBytes, assetSha, offlineMode, ::verifyDesktopImageBytes)
                         totalAssetBytes += bytes.size
                         require(totalAssetBytes <= MAX_BUNDLED_ARTICLE_ASSETS_BYTES)
                         resolvedImages += ArticleResource(url, kind = "image", localPath = target.absolutePath, sha256 = assetSha)
@@ -2122,18 +2120,21 @@ class DesktopDetailsRepository(
         expectedBytes: Int,
         expectedSha256: String,
         offlineMode: Boolean,
+        validator: (ByteArray) -> Unit = {},
     ): ByteArray {
         require(expectedBytes in 1..MAX_ASSET_BYTES && SHA256_PATTERN.matches(expectedSha256)) { "捆绑资源描述非法" }
         if (Files.exists(localFile.toPath(), NOFOLLOW_LINKS)) {
             require(Files.isRegularFile(localFile.toPath(), NOFOLLOW_LINKS)) { "本地资源缓存不是普通文件" }
             val cached = JsonFiles.read(localFile, MAX_ASSET_BYTES.toLong())
             require(cached.size == expectedBytes && sha256(cached) == expectedSha256) { "本地捆绑资源长度或 SHA-256 已损坏" }
+            validator(cached)
             return cached
         }
         require(!offlineMode) { "离线模式下缺少未缓存捆绑资源" }
         val fullUrl = CatalogRepository.sameSite(URI(CatalogRepository.SITE).resolve(relativeUrl).toASCIIString())
         val fetched = readSite(fullUrl, MAX_ASSET_BYTES)
         require(fetched.size == expectedBytes && sha256(fetched) == expectedSha256) { "捆绑资源大小或 SHA-256 不符" }
+        validator(fetched)
         JsonFiles.write(localFile, fetched)
         return fetched
     }
@@ -2212,7 +2213,7 @@ class DesktopDetailsRepository(
             "svg", "g", "defs", "symbol", "clippath", "mask", "pattern",
             "lineargradient", "radialgradient", "stop",
             "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
-            "text", "tspan", "title", "desc", "marker", "use",
+            "text", "tspan", "title", "desc", "metadata", "marker", "use",
         )
         private val DATA_IMAGE_HEADER_REGEX = Regex("^data:image/(png|jpeg|gif|webp|svg\\+xml)(?:;charset=utf-8)?(;base64)?$")
         private val ICASSP_PLACEHOLDER_REGEX = Regex("^icassp-img://[A-Za-z0-9._/-]+$")
@@ -2480,6 +2481,21 @@ class DesktopDetailsRepository(
             return out.toByteArray()
         }
 
+        private val SAFE_SVG_FRAGMENT_URL_CALL_REGEX = Regex(
+            "url\\s*\\(\\s*(?:'\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*'|\"\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*\"|#[A-Za-z_][A-Za-z0-9_.-]*)\\s*\\)",
+            RegexOption.IGNORE_CASE,
+        )
+        private const val UNSAFE_SVG_URL_LOOKAHEAD =
+            "url\\s*\\((?!\\s*(?:'\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*'|\"\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*\"|#[A-Za-z_][A-Za-z0-9_.-]*)\\s*\\))"
+
+        internal fun verifyDesktopImageBytes(bytes: ByteArray): String {
+            val mime = CatalogRepository.imageMime(bytes)
+            if (mime == "image/svg+xml") {
+                validateSafeStaticSvgBytes(bytes)
+            }
+            return mime
+        }
+
         private fun validateSafeStaticSvgBytes(bytes: ByteArray) {
             val svgText = PublishedUtf8.decode(bytes)
             require(svgText.none { (it.code < 0x20 && it !in "\t\r\n") || it.code == 0x7F }) { "SVG 含非法控制字符" }
@@ -2487,8 +2503,8 @@ class DesktopDetailsRepository(
                 "SVG 禁止包含注释、XML 声明或 DOCTYPE/ENTITY"
             }
             val unescaped = Parser.unescapeEntities(svgText, false)
-            require(!Regex("<!--|<\\?|<!|\\bon[a-z]+\\s*=|url\\s*\\(\\s*['\"]?\\s*(?!#)", RegexOption.IGNORE_CASE).containsMatchIn(unescaped)) {
-                "SVG 含事件属性、实体混淆或外部 url() 引用"
+            require(!Regex("<!--|<\\?|<!|\\bon[a-z]+\\s*=|image-set\\s*\\(|$UNSAFE_SVG_URL_LOOKAHEAD", RegexOption.IGNORE_CASE).containsMatchIn(unescaped)) {
+                "SVG 含事件属性、实体混淆或外部 url()/image-set() 引用"
             }
 
             val xmlDoc = Jsoup.parse(svgText, "", Parser.xmlParser())
@@ -2509,11 +2525,13 @@ class DesktopDetailsRepository(
                     } else if (key == "xmlns:xlink") {
                         require(valUnescaped == "http://www.w3.org/1999/xlink") { "SVG xmlns:xlink 非法：$valUnescaped" }
                     } else if (key == "href" || key == "xlink:href") {
-                        require(valCompact.startsWith("#") && valCompact.length > 1) { "SVG href 仅允许文档内 #fragment 引用" }
+                        require(valCompact.matches(Regex("^#[A-Za-z_][A-Za-z0-9_.-]*$"))) { "SVG href 仅允许文档内规范 #fragment 引用" }
                     } else if (key == "style") {
+                        // Reject CSS comments outright so quote-vs-comment desynchronization cannot smuggle declarations.
+                        require("/*" !in valUnescaped && "*/" !in valUnescaped) { "SVG style 禁止包含 CSS 注释" }
                         require(
                             !Regex(
-                                "url\\s*\\(\\s*['\"]?\\s*(?!#)|@import|expression\\s*\\(|-moz-binding|(?:javascript|vbscript|data|https?|file|zotero|smb)\\s*:|//|\\\\",
+                                "$UNSAFE_SVG_URL_LOOKAHEAD|image-set\\s*\\(|@import|expression\\s*\\(|-moz-binding|behavior\\s*:|(?:javascript|vbscript|data|https?|file|zotero|smb)\\s*:|//|\\\\",
                                 RegexOption.IGNORE_CASE,
                             ).containsMatchIn(valUnescaped)
                         ) {
@@ -2521,8 +2539,17 @@ class DesktopDetailsRepository(
                         }
                     } else {
                         require(SAFE_SVG_ATTR_NAME_REGEX.matches(key)) { "SVG 含未授权命名空间属性：$key" }
-                        require(!valCompact.startsWith("//") && '\\' !in valCompact && !SCHEME_PREFIX_REGEX.containsMatchIn(valCompact)) {
-                            "SVG 属性禁止包含协议引用：$key"
+                        val cleanedAttr = SAFE_SVG_FRAGMENT_URL_CALL_REGEX.replace(valUnescaped, "none")
+                        val cleanedCompact = cleanedAttr.filter { it.code > 0x20 }
+                        val lowerCompact = cleanedCompact.lowercase()
+                        require(
+                            !lowerCompact.contains("url(") &&
+                                !lowerCompact.contains("image-set(") &&
+                                !cleanedCompact.contains("//") &&
+                                '\\' !in cleanedCompact &&
+                                !SCHEME_PREFIX_REGEX.containsMatchIn(cleanedCompact)
+                        ) {
+                            "SVG 属性禁止包含外部 url() 或协议引用：$key"
                         }
                     }
                 }

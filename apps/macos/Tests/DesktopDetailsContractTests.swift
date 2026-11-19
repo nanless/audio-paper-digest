@@ -1637,15 +1637,19 @@ actor DesktopDetailsFixtureServer {
 
     static func testAdversarialHTML5StateMachineAndAllowlists() throws {
         let pngB64 = tinyPNG.base64EncodedString()
-        let cleanSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><defs><circle id=\"dot\" cx=\"5\" cy=\"5\" r=\"4\"/></defs><use href=\"#dot\"/></svg>"
+        let cleanSVG = "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 10 10\"><metadata>LaTeXML</metadata><defs><clipPath id=\"c1\"><rect width=\"10\" height=\"10\"/></clipPath><circle id=\"dot\" cx=\"5\" cy=\"5\" r=\"4\"/></defs><g style=\"clip-path: url('#c1'); --ltx-stroke-color:#000000\"><use xlink:href=\"#dot\"/></g></svg>"
         let cleanSVGB64 = Data(cleanSVG.utf8).base64EncodedString()
+        let percentEncodedSVG = "data:image/svg+xml,%3Csvg%20id=%22S5.T1.pic1%22%20class=%22ltx_picture%22%20height=%229.84%22%20overflow=%22visible%22%20style=%22vertical-align:2.98px%22%20viewBox=%220%200%2078.74%209.84%22%20width=%2278.74%22%3E%3Cg%20style=%22--ltx-stroke-color:%23000000%22%3E%3Cpath%20style=%22stroke:none%22%20d=%22M0%200V9.84H.87V0z%22/%3E%3C/g%3E%3C/svg%3E"
 
-        // Valid positive fragments that MUST pass
+        // Valid positive fragments that MUST pass (including valid UTF-8 U+FFFD in prose/alt and LaTeXML percent-encoded SVG)
         let validFragments: [(String, String)] = [
             ("table-align", "<table><tr><th style=\"text-align: center;\">Metric</th><td style=\"text-align: right\">98.4</td></tr></table>"),
+            ("prose-valid-utf8-fffd", "<p>历史清洗文本（如表格中的“\u{FFFD}”字符）正常展示。</p><img src=\"https://fixture.example/a.png\" alt=\"字符 \u{FFFD} 示例\" title=\"标题 \u{FFFD}\"/>"),
             ("mailto-link", "<p><a href=\"mailto:author@example.edu\" rel=\"noopener\">Contact</a></p>"),
             ("data-png-img", "<figure><img src=\"data:image/png;base64,\(pngB64)\" alt=\"plot\"/></figure>"),
             ("data-svg-img", "<figure><img src=\"data:image/svg+xml;base64,\(cleanSVGB64)\" alt=\"diagram\"/></figure>"),
+            ("data-svg-charset-b64", "<figure><img src=\"data:image/svg+xml;charset=utf-8;base64,\(cleanSVGB64)\" alt=\"diagram2\"/></figure>"),
+            ("data-svg-percent-latexml", "<p><img src=\"\(percentEncodedSVG)\" alt=\"LaTeXML inline diagram\"/></p>"),
             ("icassp-placeholder-img", "<p><img src=\"icassp-img:fig-1\" alt=\"placeholder\"/></p>"),
             ("srcset-valid", "<img src=\"https://fixture.example/a.png\" srcset=\"https://fixture.example/a.png 1x, https://fixture.example/b.png 2x\" alt=\"x\"/>")
         ]
@@ -1660,10 +1664,26 @@ actor DesktopDetailsFixtureServer {
         let badSVGAnimate = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><animate attributeName=\"x\" values=\"0;10\"/></svg>".utf8).base64EncodedString()
         let badSVGComment = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><!-- hidden --><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>".utf8).base64EncodedString()
         let badSVGExtRef = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><use href=\"https://evil.example/sprite.svg#x\"/></svg>".utf8).base64EncodedString()
+        let badSVGStyleURL = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><g style=\"clip-path:url(https://evil.example/#c)\"><rect width=\"1\" height=\"1\"/></g></svg>".utf8).base64EncodedString()
+        let badSVGCommentDesync = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><g style=\"clip-path: url('#a/*'); background-image: url(https://evil.example/leak.png); --x: ('*/b')\"><rect width=\"1\" height=\"1\"/></g></svg>".utf8).base64EncodedString()
+        let badSVGImageSet = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><g style=\"background-image: image-set('leak.png' 1x)\"><rect width=\"1\" height=\"1\"/></g></svg>".utf8).base64EncodedString()
+        let badSVGPresentationURL = Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><g clip-path=\"url(https://evil.example/sprite.svg#c)\"><rect width=\"1\" height=\"1\"/></g></svg>".utf8).base64EncodedString()
+        let badSVGXlinkNS = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"https://evil.example/ns\"><rect width=\"1\" height=\"1\"/></svg>".utf8).base64EncodedString()
         let badSVGUnquoted = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=0><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg>".utf8).base64EncodedString()
 
         let invalidFragments: [(String, String)] = [
             ("xmp-tag", "<div id=\"article-body\"><xmp><img src=x onerror=alert(1)></xmp></div>"),
+            ("numeric-nul-entity", "<div id=\"article-body\"><p>bad &#0; nul</p></div>"),
+            ("numeric-surrogate-entity", "<div id=\"article-body\"><p>bad &#xd800; surrogate</p></div>"),
+            ("numeric-overflow-attr", "<div id=\"article-body\"><img src=\"https://fixture.example/a.png\" alt=\"&#x110000;\"/></div>"),
+            ("url-literal-fffd", "<div id=\"article-body\"><a href=\"https://fixture.example/\u{FFFD}\">X</a></div>"),
+            ("named-sol-protocol-relative", "<div id=\"article-body\"><a href=\"&sol;&sol;evil.example/path\">X</a></div>"),
+            ("named-bsol-url", "<div id=\"article-body\"><img src=\"&bsol;&bsol;evil.example/a.png\"/></div>"),
+            ("svg-style-external-url", "<div id=\"article-body\"><img src=\"data:image/svg+xml;base64,\(badSVGStyleURL)\"/></div>"),
+            ("svg-style-comment-desync", "<div id=\"article-body\"><img src=\"data:image/svg+xml;base64,\(badSVGCommentDesync)\"/></div>"),
+            ("svg-style-image-set", "<div id=\"article-body\"><img src=\"data:image/svg+xml;base64,\(badSVGImageSet)\"/></div>"),
+            ("svg-presentation-attr-url", "<div id=\"article-body\"><img src=\"data:image/svg+xml;base64,\(badSVGPresentationURL)\"/></div>"),
+            ("svg-bad-xmlns-xlink", "<div id=\"article-body\"><img src=\"data:image/svg+xml;base64,\(badSVGXlinkNS)\"/></div>"),
             ("noscript-tag", "<div id=\"article-body\"><noscript>bad</noscript></div>"),
             ("template-tag", "<div id=\"article-body\"><template><script>alert(1)</script></template></div>"),
             ("inline-svg-tag", "<div id=\"article-body\"><svg><circle cx=\"1\" cy=\"1\" r=\"1\"/></svg></div>"),
@@ -2462,6 +2482,74 @@ actor DesktopDetailsFixtureServer {
         print("PASS 9: portable Android backup cold-verification, local tamper/symlink rejection & strict sidecar/bundled/64MiB gates")
     }
 
+    static func testOptionalRealBlogCorpusSweepIfPresent() async throws {
+        guard let rawDir = ProcessInfo.processInfo.environment["PD_REAL_BLOG_PUBLIC_DIR"], !rawDir.isEmpty else {
+            return
+        }
+        let publicRoot = URL(fileURLWithPath: rawDir, isDirectory: true)
+        let manifestFile = publicRoot.appendingPathComponent("client/details/manifest.json")
+        guard FileManager.default.fileExists(atPath: manifestFile.path) else {
+            throw LibraryService.ServiceError.invalid("PD_REAL_BLOG_PUBLIC_DIR 缺少 client/details/manifest.json: \(rawDir)")
+        }
+
+        let dir = try makeTempDir("desktop-real-blog-corpus")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let realSiteBase = URL(string: "https://nanless.github.io/audio-paper-digest-blog/")!
+
+        let svc = try LibraryService(
+            dataDirectory: dir,
+            siteBaseURL: realSiteBase,
+            seedDirectory: dir.appendingPathComponent("NoSeed", isDirectory: true),
+            transport: { url, limit in
+                let prefix = "/audio-paper-digest-blog/"
+                guard url.host == "nanless.github.io", url.path.hasPrefix(prefix) else {
+                    throw LibraryService.ServiceError.httpStatus(404)
+                }
+                let rel = String(url.path.dropFirst(prefix.count))
+                let local = publicRoot.appendingPathComponent(rel)
+                guard FileManager.default.fileExists(atPath: local.path) else {
+                    throw LibraryService.ServiceError.httpStatus(404)
+                }
+                let bytes = try Data(contentsOf: local)
+                guard bytes.count <= limit else {
+                    throw LibraryService.ServiceError.invalid("Real file exceeds limit: \(rel)")
+                }
+                return bytes
+            }
+        )
+
+        let summary = try await svc.sync()
+        try expect(summary.paperCount > 8000, "real blog sync loaded >8000 deduplicated papers (\(summary.paperCount))")
+
+        // Verify EVERY SINGLE exported HTML fragment & paper detail JSON in the real blog export!
+        let articlesDir = publicRoot.appendingPathComponent("client/details/articles", isDirectory: true)
+        let articleFiles = try FileManager.default.contentsOfDirectory(at: articlesDir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "html" }
+        try expect(articleFiles.count > 8500, "real blog has >8500 content-addressed HTML fragments (\(articleFiles.count))")
+        for file in articleFiles {
+            let bytes = try Data(contentsOf: file)
+            guard let html = String(data: bytes, encoding: .utf8) else {
+                throw LibraryService.ServiceError.invalid("Invalid UTF-8 in real article: \(file.lastPathComponent)")
+            }
+            try LibraryService.verifySafeDesktopArticleHTML(html)
+        }
+
+        // End-to-end article(for:) checks on real edge-case papers (ICML conference w/ U+FFFD prose, percent-encoded SVG, base64 SVG, verified arXiv w/ bundled image & sidecars)
+        let fffdArticle = try await svc.article(for: "conference:icml:2026:openreview-forum-id:aComqAqP6j", downloadImages: false)
+        try expect(fffdArticle.plainText.contains("\u{FFFD}"), "real U+FFFD ICML conference article loads cleanly on macOS")
+
+        let pctSvgArticle = try await svc.article(for: "arxiv:2606.26968", downloadImages: false)
+        try expect(pctSvgArticle.html.contains("data:image/svg+xml,"), "real percent-encoded LaTeXML SVG preserved in macOS reader HTML")
+
+        let b64SvgArticle = try await svc.article(for: "arxiv:2607.00548", downloadImages: false)
+        try expect(b64SvgArticle.html.contains("data:image/svg+xml;base64,"), "real base64 LaTeXML SVG preserved in macOS reader HTML")
+
+        let arxivBundled = try await svc.article(for: "arxiv:2611.19145", downloadImages: true)
+        try expect(arxivBundled.completeOffline && arxivBundled.citationSidecar != nil && arxivBundled.researchContext != nil, "real 2026-11-17 arXiv paper with sidecars & bundled PNG reaches completeOffline")
+
+        print("PASS 10 (REAL BLOG CORPUS): synced \(summary.paperCount) papers and verified all \(articleFiles.count) real HTML fragments")
+    }
+
     static func main() async throws {
         setbuf(stdout, nil)
         try await testEndToEndSyncAndContentAddressedReading()
@@ -2473,6 +2561,7 @@ actor DesktopDetailsFixtureServer {
         try await testErrorPropagationAndExpectedShaAndHistoricalSidecars()
         try await testMainActorConferenceBindingsAndPaperSwitchRace()
         try await testRound3PortableAndroidRestoreLocalTamperAndStrictAssetGates()
+        try await testOptionalRealBlogCorpusSweepIfPresent()
         print("DesktopDetailsContractTests ALL PASS (\(checks) assertions)")
     }
 }

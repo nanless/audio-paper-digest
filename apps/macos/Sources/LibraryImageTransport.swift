@@ -193,7 +193,7 @@ extension LibraryService {
         if let text = String(data: data, encoding: .utf8), text.contains("<svg"),
            !text.localizedCaseInsensitiveContains("<!ENTITY"), !text.localizedCaseInsensitiveContains("<script"),
            !text.localizedCaseInsensitiveContains("foreignObject"), !text.localizedCaseInsensitiveContains("javascript:"),
-           text.range(of: #"\bon[a-z]+\s*=|(?:href|src)\s*=\s*[\"'](?!#)|url\(\s*(?!#)"#, options: [.regularExpression, .caseInsensitive]) == nil { return "svg" }
+           text.range(of: #"\bon[a-z]+\s*=|(?:href|src)\s*=\s*[\"'](?!#)|image-set\s*\(|url\s*\((?!\s*(?:'\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*'|"\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*"|#[A-Za-z_][A-Za-z0-9_.-]*)\s*\))"#, options: [.regularExpression, .caseInsensitive]) == nil { return "svg" }
         throw ServiceError.invalid("图片内容不受支持或包含外部执行/引用。")
     }
 

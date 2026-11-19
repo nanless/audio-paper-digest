@@ -1791,4 +1791,82 @@ class DesktopDetailsRepositoryTest {
             }
         }
     }
+
+    @Test
+    fun `inline SVG allows metadata and quoted internal fragment url in style and optional real blog corpus verifies cleanly`() = runBlocking {
+        // 1. Quoted internal fragment url('#c1') + <metadata> + xmlns:xlink MUST pass both SVG static check and CatalogRepository.imageMime
+        val quotedClipSvg = """<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10"><metadata>LaTeXML</metadata><defs><clipPath id="c1"><rect width="10" height="10"/></clipPath><circle id="dot" cx="5" cy="5" r="4"/></defs><g clip-path="url(#c1)" style="clip-path: url('#c1'); --ltx-stroke-color:#000000"><use xlink:href="#dot"/></g></svg>"""
+        val b64 = java.util.Base64.getEncoder().encodeToString(quotedClipSvg.toByteArray(Charsets.UTF_8))
+        val sanitized = DesktopDetailsRepository.verifyAndSanitizeArticleHtml(
+            "<div class=\"post-content\" id=\"article-body\"><p>字符 \uFFFD 测试</p><img src=\"data:image/svg+xml;base64,$b64\" alt=\"svg\"/></div>".toByteArray(Charsets.UTF_8),
+            site + "posts/2026-11-19-svg-quoted-clip/",
+        )
+        assertEquals(1, sanitized.inlineDataBytesByElement.size)
+
+        // Adversarial SVG vectors (CSS comment-in-string desync, image-set, presentation attr external url, mismatched quote) MUST fail closed!
+        val badSvgs = listOf(
+            """<svg xmlns="http://www.w3.org/2000/svg"><g style="clip-path: url('#a/*'); background-image: url(https://evil.example/leak.png); --x: ('*/b')"><rect width="1" height="1"/></g></svg>""",
+            """<svg xmlns="http://www.w3.org/2000/svg"><g style="background-image: image-set('leak.png' 1x)"><rect width="1" height="1"/></g></svg>""",
+            """<svg xmlns="http://www.w3.org/2000/svg"><g clip-path="url(https://evil.example/sprite.svg#c)"><rect width="1" height="1"/></g></svg>""",
+            """<svg xmlns="http://www.w3.org/2000/svg"><g style="clip-path: url('#c1&quot;)"><rect width="1" height="1"/></g></svg>""",
+        )
+        for (badSvg in badSvgs) {
+            val badB64 = java.util.Base64.getEncoder().encodeToString(badSvg.toByteArray(Charsets.UTF_8))
+            assertTrue(
+                "Adversarial SVG must fail closed: $badSvg",
+                runCatching {
+                    DesktopDetailsRepository.verifyAndSanitizeArticleHtml(
+                        "<div class=\"post-content\" id=\"article-body\"><img src=\"data:image/svg+xml;base64,$badB64\" alt=\"bad\"/></div>".toByteArray(Charsets.UTF_8),
+                        site + "posts/2026-11-19-bad-svg/",
+                    )
+                }.isFailure && runCatching { DesktopDetailsRepository.verifyDesktopImageBytes(badSvg.toByteArray(Charsets.UTF_8)) }.isFailure,
+            )
+        }
+
+        // 2. Optional full real-corpus verification when PD_REAL_BLOG_PUBLIC_DIR is provided
+        val realDirPath = System.getenv("PD_REAL_BLOG_PUBLIC_DIR")?.takeIf { it.isNotBlank() } ?: return@runBlocking
+        val publicRoot = File(realDirPath)
+        assertTrue("PD_REAL_BLOG_PUBLIC_DIR missing client/details/manifest.json", File(publicRoot, "client/details/manifest.json").isFile)
+
+        withWorkspace { _, personal ->
+            val repo = CatalogRepository(null, personal) { url, limit ->
+                require(url.startsWith(site)) { "Unexpected external fetch during real blog sync: $url" }
+                val rel = url.removePrefix(site)
+                val f = File(publicRoot, rel)
+                if (!f.isFile) throw PublishedHttpStatus(404)
+                val bytes = f.readBytes()
+                require(bytes.size <= limit) { "Real file exceeds limit: $rel" }
+                bytes
+            }
+            repo.sync()
+            val papers = repo.papers()
+            assertTrue("Expected >8000 deduplicated papers, got ${papers.size}", papers.size > 8000)
+
+            // Verify EVERY SINGLE exported HTML fragment in public/client/details/articles/
+            val articleFiles = File(publicRoot, "client/details/articles").listFiles().orEmpty().filter { it.extension == "html" }
+            assertTrue("Expected >8500 HTML fragments, got ${articleFiles.size}", articleFiles.size > 8500)
+            for (f in articleFiles) {
+                DesktopDetailsRepository.verifyAndSanitizeArticleHtml(f.readBytes(), site + "posts/real-corpus-check/")
+            }
+
+            // End-to-end article reads + citationOriginal on real edge-case papers
+            val fffdPaper = papers.first { it.id == "conference:icml:2026:openreview-forum-id:aComqAqP6j" }
+            val fffdArt = repo.article(fffdPaper)
+            assertTrue(fffdArt.plainText.contains("\uFFFD"))
+
+            val pctSvgPaper = papers.first { it.id == "arxiv:2606.26968" }
+            val pctSvgArt = repo.article(pctSvgPaper)
+            assertTrue(pctSvgArt.resources.any { it.localPath != null && it.sourceURL.contains("/inline-data/") })
+
+            val b64SvgPaper = papers.first { it.id == "arxiv:2607.00548" }
+            val b64SvgArt = repo.article(b64SvgPaper)
+            assertTrue(b64SvgArt.resources.any { it.localPath != null && it.sourceURL.contains("/inline-data/") })
+
+            val arxivBundledPaper = papers.first { it.id == "arxiv:2611.19145" }
+            val arxivBundledArt = repo.article(arxivBundledPaper)
+            assertTrue(arxivBundledArt.completeOffline)
+            val bib = repo.citationOriginal(arxivBundledPaper, arxivBundledArt, PublishedCitationRepository.Format.BIBTEX)
+            assertTrue(bib.bytes.isNotEmpty())
+        }
+    }
 }

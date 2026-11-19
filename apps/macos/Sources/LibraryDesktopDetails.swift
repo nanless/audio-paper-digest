@@ -3095,7 +3095,7 @@ extension LibraryService {
         "svg", "g", "defs", "symbol", "clippath", "mask", "pattern",
         "lineargradient", "radialgradient", "stop",
         "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
-        "text", "tspan", "title", "desc", "marker", "use"
+        "text", "tspan", "title", "desc", "metadata", "marker", "use"
     ]
 
     private static let svgFragmentRefTags: Set<String> = [
@@ -3228,11 +3228,11 @@ extension LibraryService {
             throw ServiceError.invalid("导读正文片段为空或超过大小限制。")
         }
         guard !html.contains("\0"),
-              !html.contains("\u{FFFD}"),
+              !containsInvalidNumericEntity(html),
               !html.contains("<!--"),
               !html.contains("<?"),
               html.range(of: #"<!DOCTYPE|<!ENTITY"#, options: [.regularExpression, .caseInsensitive]) == nil else {
-            throw ServiceError.invalid("导读正文片段包含禁止的 NUL、替换字符、HTML 注释、处理指令或 DTD/实体声明。")
+            throw ServiceError.invalid("导读正文片段包含禁止的 NUL、非法数值字符实体、HTML 注释、处理指令或 DTD/实体声明。")
         }
 
         let scalars = Array(html.unicodeScalars)
@@ -3284,8 +3284,9 @@ extension LibraryService {
         guard let rawValue = attr.value else {
             return booleanAttrs.contains(name)
         }
+        if containsInvalidNumericEntity(rawValue) { return false }
         let decodedVal = decodeHTMLEntities(rawValue)
-        if decodedVal.contains("\0") || decodedVal.contains("\u{FFFD}") { return false }
+        if decodedVal.contains("\0") { return false }
 
         switch name {
         case "href":
@@ -3298,9 +3299,11 @@ extension LibraryService {
         case "srcset":
             return parseSrcsetCandidates(rawValue) != nil
         case "style":
+            if decodedVal.contains("\u{FFFD}") { return false }
             guard tagName == "td" || tagName == "th" else { return false }
             return decodedVal.range(of: #"\A\s*text-align\s*:\s*(?:left|center|right|justify)\s*;?\s*\z"#, options: [.regularExpression, .caseInsensitive]) != nil
         case "xmlns":
+            if decodedVal.contains("\u{FFFD}") { return false }
             return tagName == "math" && decodedVal.trimmingCharacters(in: .whitespacesAndNewlines) == "http://www.w3.org/1998/Math/MathML"
         default:
             return true
@@ -3328,6 +3331,39 @@ extension LibraryService {
             urls.append(candidateURL)
         }
         return urls.isEmpty ? nil : urls
+    }
+
+    private static func containsInvalidNumericEntity(_ raw: String) -> Bool {
+        guard raw.contains("&#") else { return false }
+        if let hexRegex = try? NSRegularExpression(pattern: #"&#x0*([0-9a-fA-F]+);?"#, options: .caseInsensitive) {
+            for m in hexRegex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
+                guard let r = Range(m.range(at: 1), in: raw) else { return true }
+                let hex = String(raw[r])
+                if hex.count > 6 { return true }
+                guard let code = UInt32(hex, radix: 16),
+                      code != 0,
+                      !(code >= 0xD800 && code <= 0xDFFF),
+                      code <= 0x10FFFF,
+                      UnicodeScalar(code) != nil else {
+                    return true
+                }
+            }
+        }
+        if let decRegex = try? NSRegularExpression(pattern: #"&#0*([0-9]+);?"#) {
+            for m in decRegex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
+                guard let r = Range(m.range(at: 1), in: raw) else { return true }
+                let dec = String(raw[r])
+                if dec.count > 7 { return true }
+                guard let code = UInt32(dec, radix: 10),
+                      code != 0,
+                      !(code >= 0xD800 && code <= 0xDFFF),
+                      code <= 0x10FFFF,
+                      UnicodeScalar(code) != nil else {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private static func safeCodePointString(_ code: UInt32) -> String {
@@ -3372,13 +3408,15 @@ extension LibraryService {
                 }
             }
         }
-        if let namedRegex = try? NSRegularExpression(pattern: #"&(colon|tab|newline|nbsp|amp|lt|gt|quot|apos);?"#, options: .caseInsensitive) {
+        if let namedRegex = try? NSRegularExpression(pattern: #"&(colon|sol|bsol|tab|newline|nbsp|amp|lt|gt|quot|apos);?"#, options: .caseInsensitive) {
             let matches = namedRegex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
             for m in matches {
                 guard let r = Range(m.range(at: 1), in: result),
                       let full = Range(m.range, in: result) else { continue }
                 switch result[r].lowercased() {
                 case "colon": result.replaceSubrange(full, with: ":")
+                case "sol": result.replaceSubrange(full, with: "/")
+                case "bsol": result.replaceSubrange(full, with: "\\")
                 case "tab": result.replaceSubrange(full, with: "\t")
                 case "newline": result.replaceSubrange(full, with: "\n")
                 case "nbsp": result.replaceSubrange(full, with: "\u{00A0}")
@@ -3405,7 +3443,7 @@ extension LibraryService {
             guard let svg = String(trimmed[trimmed.index(after: comma)...]).removingPercentEncoding else { return false }
             return isSafeInlineSVG(svg)
         }
-        if trimmed.range(of: #"\Adata:image/svg\+xml;base64,[A-Za-z0-9+/=\s]+\z"#, options: [.regularExpression, .caseInsensitive]) != nil,
+        if trimmed.range(of: #"\Adata:image/svg\+xml(?:;charset=utf-8)?;base64,[A-Za-z0-9+/=\s]+\z"#, options: [.regularExpression, .caseInsensitive]) != nil,
            let comma = trimmed.firstIndex(of: ",") {
             let b64 = String(trimmed[trimmed.index(after: comma)...]).components(separatedBy: .whitespacesAndNewlines).joined()
             guard let data = Data(base64Encoded: b64), let svg = String(data: data, encoding: .utf8) else { return false }
@@ -3472,19 +3510,37 @@ extension LibraryService {
                         return false
                     }
                 } else if attr.name == "style" {
+                    // Reject CSS comments outright so quote-vs-comment desynchronization can never smuggle declarations.
+                    if val.contains("/*") || val.contains("*/") { return false }
                     var cleanCSS = val
-                    if let commentRegex = try? NSRegularExpression(pattern: #"/\*[\s\S]*?\*/"#) {
-                        cleanCSS = commentRegex.stringByReplacingMatches(in: cleanCSS, range: NSRange(cleanCSS.startIndex..., in: cleanCSS), withTemplate: "")
+                    if let safeURLRegex = try? NSRegularExpression(
+                        pattern: #"url\s*\(\s*(?:'\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*'|"\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*"|#[A-Za-z_][A-Za-z0-9_.-]*)\s*\)"#,
+                        options: .caseInsensitive
+                    ) {
+                        cleanCSS = safeURLRegex.stringByReplacingMatches(in: cleanCSS, range: NSRange(cleanCSS.startIndex..., in: cleanCSS), withTemplate: "none")
                     }
                     let compactCSS = String(String.UnicodeScalarView(cleanCSS.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F })).lowercased()
-                    for token in ["url(", "expression(", "@import", "javascript:", "vbscript:", "-moz-binding", "behavior:"] {
+                    for token in ["url(", "image-set(", "expression(", "@import", "javascript:", "vbscript:", "data:", "http:", "https:", "file:", "zotero:", "smb:", "-moz-binding", "behavior:", "//", "\\"] {
                         if compactCSS.contains(token) { return false }
                     }
                 } else {
-                    let compactAttrVal = String(String.UnicodeScalarView(val.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }))
-                    if compactAttrVal.range(of: #"\A[A-Za-z][A-Za-z0-9+.-]*:"#, options: .regularExpression) != nil,
-                       !(attr.name == "xmlns" && compactAttrVal == "http://www.w3.org/2000/svg") {
+                    var cleanAttrVal = val
+                    if let safeURLRegex = try? NSRegularExpression(
+                        pattern: #"url\s*\(\s*(?:'\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*'|"\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*"|#[A-Za-z_][A-Za-z0-9_.-]*)\s*\)"#,
+                        options: .caseInsensitive
+                    ) {
+                        cleanAttrVal = safeURLRegex.stringByReplacingMatches(in: cleanAttrVal, range: NSRange(cleanAttrVal.startIndex..., in: cleanAttrVal), withTemplate: "none")
+                    }
+                    let compactAttrVal = String(String.UnicodeScalarView(cleanAttrVal.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }))
+                    let lowerCompactAttr = compactAttrVal.lowercased()
+                    if lowerCompactAttr.contains("url(") || lowerCompactAttr.contains("image-set(") || lowerCompactAttr.contains("\\") {
                         return false
+                    }
+                    if !(attr.name == "xmlns" && compactAttrVal == "http://www.w3.org/2000/svg"),
+                       !(attr.name == "xmlns:xlink" && compactAttrVal == "http://www.w3.org/1999/xlink") {
+                        if lowerCompactAttr.contains("//") || compactAttrVal.range(of: #"\A[A-Za-z][A-Za-z0-9+.-]*:"#, options: .regularExpression) != nil {
+                            return false
+                        }
                     }
                 }
             }

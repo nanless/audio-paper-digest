@@ -811,7 +811,12 @@ function runAffectedTests(impactResult, options = {}) {
     const graph = buildDependencyGraph({ ...options, root: baseRoot });
     const runner = options.spawnSync || spawnSync;
     const maxWildcard = options.maxWildcardTests ?? MAX_WILDCARD_TESTS;
+    const rawBatch = Number(options.jsBatchSize ?? 50);
+    const jsBatchSize = Number.isFinite(rawBatch)
+        ? (rawBatch < 0 ? 1 : Math.max(1, Math.trunc(rawBatch) || 50))
+        : 50;
     const testTimeoutMs = options.testTimeoutMs ?? 300000;
+    const maxBufferBytes = 64 * 1024 * 1024;
     const quietStdout = Boolean(options.json);
     const pipeChildOutput = quietStdout || Boolean(options.quiet);
 
@@ -838,7 +843,16 @@ function runAffectedTests(impactResult, options = {}) {
     if (!jsTests.length && !pyTests.length) {
         logLine('[impact] 未定位到需要执行的受影响单元测试。');
         logLine(VERIFY_REMINDER);
-        return { ok: true, exitCode: 0, jsTests: [], pythonTests: [], wildcardNotice, reminder: VERIFY_REMINDER };
+        return {
+            ok: true,
+            jsOk: true,
+            pyOk: true,
+            exitCode: 0,
+            jsTests: [],
+            pythonTests: [],
+            wildcardNotice,
+            reminder: VERIFY_REMINDER
+        };
     }
 
     const pycacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-impact-pycache-'));
@@ -858,21 +872,24 @@ function runAffectedTests(impactResult, options = {}) {
     try {
         if (jsTests.length) {
             logLine(`[impact] 串行执行 JavaScript 受影响单测 (${jsTests.length})...`);
-            const res = runner(process.execPath, ['--test', '--test-concurrency=1', ...jsTests], {
-                cwd: baseRoot,
-                env: childEnv,
-                stdio: pipeChildOutput ? 'pipe' : 'inherit',
-                encoding: 'utf8',
-                timeout: testTimeoutMs,
-                killSignal: 'SIGKILL',
-                maxBuffer: 16 * 1024 * 1024,
-                shell: false
-            });
-            if (quietStdout && !options.quiet) {
-                if (res.stdout) process.stderr.write(String(res.stdout));
-                if (res.stderr) process.stderr.write(String(res.stderr));
+            for (let offset = 0; offset < jsTests.length; offset += jsBatchSize) {
+                const batch = jsTests.slice(offset, offset + jsBatchSize);
+                const res = runner(process.execPath, ['--test', '--test-concurrency=1', ...batch], {
+                    cwd: baseRoot,
+                    env: childEnv,
+                    stdio: pipeChildOutput ? 'pipe' : 'inherit',
+                    encoding: 'utf8',
+                    timeout: testTimeoutMs,
+                    killSignal: 'SIGKILL',
+                    maxBuffer: maxBufferBytes,
+                    shell: false
+                });
+                if (quietStdout && !options.quiet) {
+                    if (res.stdout) process.stderr.write(String(res.stdout));
+                    if (res.stderr) process.stderr.write(String(res.stderr));
+                }
+                if (res.error || res.signal || res.status !== 0) jsOk = false;
             }
-            if (res.error || res.signal || res.status !== 0) jsOk = false;
         }
         if (pyTests.length) {
             logLine(`[impact] 串行执行 Python 受影响单测 (${pyTests.length})...`);
@@ -883,14 +900,15 @@ function runAffectedTests(impactResult, options = {}) {
                     ...childEnv,
                     PYTHONPATH: existingPyPath ? `${absSuiteDir}${path.delimiter}${existingPyPath}` : absSuiteDir
                 };
+                const pyTimeoutMs = options.testTimeoutMs ?? Math.max(300000, group.modules.length * 15000);
                 const res = runner('bash', [pythonRuntime, '-m', 'unittest', ...group.modules], {
                     cwd: baseRoot,
                     env: suiteEnv,
                     stdio: pipeChildOutput ? 'pipe' : 'inherit',
                     encoding: 'utf8',
-                    timeout: testTimeoutMs,
+                    timeout: pyTimeoutMs,
                     killSignal: 'SIGKILL',
-                    maxBuffer: 16 * 1024 * 1024,
+                    maxBuffer: maxBufferBytes,
                     shell: false
                 });
                 if (quietStdout && !options.quiet) {

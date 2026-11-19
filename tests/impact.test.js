@@ -490,7 +490,48 @@ test('Python 双套件同目录 helper 隔离执行（不跨套件污染 sys.mod
         { root: repoDir, maxWildcardTests: 0, json: true, quiet: true }
     );
     assert.strictEqual(capped.ok, true);
+    assert.strictEqual(capped.jsOk, true);
+    assert.strictEqual(capped.pyOk, true);
     assert.match(capped.wildcardNotice, /超过自动执行上限/);
+
+    // 大规模反向闭包 JS 分批串行执行（含浮点/Infinity jsBatchSize 归一化与显式 testTimeoutMs 透传）
+    fs.writeFileSync(path.join(repoDir, 'tests', 'js-ok-second.test.js'),
+        "'use strict';\nrequire('node:test')('ok2', () => {});\n");
+    const jsBatches = [];
+    let pyCapturedTimeout = null;
+    const batchedRes = impact.runAffectedTests(
+        {
+            exactTests: {
+                js: ['tests/js-broken.test.js', 'tests/js-ok-second.test.js'],
+                python: ['tests/python/test_alpha_suite.py']
+            },
+            tests: []
+        },
+        {
+            root: repoDir,
+            jsBatchSize: 1.9,
+            testTimeoutMs: 5000,
+            json: true,
+            quiet: true,
+            spawnSync: (cmd, args, opts) => {
+                if (cmd === 'bash') {
+                    pyCapturedTimeout = opts.timeout;
+                    return { status: 0, stdout: '', stderr: '' };
+                }
+                jsBatches.push({ args, maxBuffer: opts.maxBuffer, timeout: opts.timeout });
+                return { status: args.includes('tests/js-broken.test.js') ? 1 : 0, stdout: '', stderr: '' };
+            }
+        }
+    );
+    assert.strictEqual(batchedRes.jsOk, false);
+    assert.strictEqual(batchedRes.pyOk, true);
+    assert.strictEqual(batchedRes.exitCode, 1);
+    assert.strictEqual(jsBatches.length, 2);
+    assert.deepStrictEqual(jsBatches[0].args, ['--test', '--test-concurrency=1', 'tests/js-broken.test.js']);
+    assert.deepStrictEqual(jsBatches[1].args, ['--test', '--test-concurrency=1', 'tests/js-ok-second.test.js']);
+    assert.strictEqual(jsBatches[0].maxBuffer, 64 * 1024 * 1024);
+    assert.strictEqual(jsBatches[0].timeout, 5000);
+    assert.strictEqual(pyCapturedTimeout, 5000);
 });
 
 test('真实子进程验证 --help --json、--json --run-tests 纯净 JSON stdout 以及非法/空白/冲突参数与沙箱拒绝', t => {
