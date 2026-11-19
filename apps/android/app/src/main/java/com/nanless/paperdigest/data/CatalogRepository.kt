@@ -693,12 +693,12 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             val file = StoragePaths.resolve(path, personal.directory, paper.pdfSHA256 ?: error("本地原文缺少内容指纹"), 200 * 1024 * 1024L)
             pdfReceipts[paper.id] = JSONObject().put("paperID", paper.id).put("filePath", file.absolutePath).put("sha256", paper.pdfSHA256).put("currentness", "local-original").put("isStale", false)
             offlineIds += paper.id
-            return@withContext file to paper.pdfSHA256!!
+            return@withContext file to paper.pdfSHA256
         }
         require(paper.identityStatus == "verified" && !paper.pdfURL.isNullOrEmpty()) { "此论文没有经核验的 PDF 来源" }
         val immutable = immutableArxiv(paper) || (paper.sourceKind == "arxiv" && paper.pdfSHA256 != null)
         if (paper.sourceKind == "arxiv") require(immutable) { "arXiv 原文与摘要必须具有一致的明确版本，不能静默下载最新版" }
-        val pointer = File(directory, "pdf-pointers/${sha256(paper.pdfURL!!.toByteArray())}.json")
+        val pointer = File(directory, "pdf-pointers/${sha256(paper.pdfURL.toByteArray())}.json")
         var previous: JSONObject? = null
         var previousFile: File? = null
         if (pointer.isFile) {
@@ -740,7 +740,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
                         original = File(verified.localPath)
                     } finally { temporary.delete() }
                 }
-            val file = original!!; val hash = com.nanless.paperdigest.cloud.BackupCodec.hash(file)
+            val file = original; val hash = com.nanless.paperdigest.cloud.BackupCodec.hash(file)
             require(paper.pdfSHA256 == null || paper.pdfSHA256 == hash) { "原文与网站公布的内容指纹不符" }
             val receipt = JSONObject().put("filePath", file.absolutePath).put("sha256", hash).put("bytes", file.length()).put("version", paper.sourceVersion ?: JSONObject.NULL)
                 .put("paperID", paper.id).put("sourceURL", paper.pdfURL).put("fetchedAt", if (previous?.optString("sha256") == hash) previous.optString("fetchedAt", now()) else now())
@@ -806,7 +806,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             JsonFiles.write(file, bytes)
             ArticleResource(row.optString("sourceUrl"), localPath = file.absolutePath, sha256 = row.getString("sha256"))
         }
-        val seeded = Article(paper.id, htmlBytes.toString(Charsets.UTF_8), sample.getString("articleMarkdown"), paper.sourceURL!!, paper.blogURL,
+        val seeded = Article(paper.id, htmlBytes.toString(Charsets.UTF_8), sample.getString("articleMarkdown"), paper.sourceURL, paper.blogURL,
             sha256(htmlBytes), now(), paper.sourceVersion, true, listOf("应用内已发布样稿，尚未核对网站当前修订；可联网刷新导读。"), false, paper.citation, resources, "bundled-sample",
             ClientProtocols.record("android-bundled-research-context").put("sampleOnly", true).put("paperID", paper.id).put("abstract", sample.getString("abstract")).put("summary", primary.optString("summary")), pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml")
         return seeded.copy(original = seeded.json().put("citationSidecar", validatedSidecar(sample.getJSONObject("citation"), paper, false)))

@@ -154,12 +154,19 @@ private struct NoNativeCredentials: ZoteroCredentialStore {
             try require((value["text"] as? String ?? "").contains(document.page(at:3)!.string!),"outline keeps actual real page text")
         }
         check("mixed text/blank PDF reports missing physical page instead of complete coverage") {
-            let mixed=PDFDocument();mixed.insert(document.page(at:0)!.copy() as! PDFPage,at:0);mixed.insert(PDFPage(),at:1)
+            guard let staged=PDFDocument(data:original) else{throw NativeTestFailure(message:"Could not clone MiCLA PDF")}
+            while staged.pageCount>1 {staged.removePage(at:staged.pageCount-1)}
+            let blank=PDFPage();blank.setBounds(staged.page(at:0)!.bounds(for:.mediaBox),for:.mediaBox);staged.insert(blank,at:1)
+            guard let mixedData=staged.dataRepresentation(),let mixed=PDFDocument(data:mixedData),mixed.pageCount==2 else{throw NativeTestFailure(message:"Could not serialize two-page mixed PDF")}
+            let expectedPageText=mixed.page(at:0)?.string ?? "",mixedSHA=sha256(mixedData)
+            try require(expectedPageText.count>500 && expectedPageText.contains("MiCLA"),"serialized mixed fixture retains real MiCLA first-page text")
             let old=app.pdfView.document,oldSHA=app.currentPDFSHA;defer{app.pdfView.document=old;app.currentPDFSHA=oldSHA}
-            app.pdfView.document=mixed;app.currentPDFSHA=sha256(mixed.dataRepresentation()!)
+            app.pdfView.document=mixed;app.currentPDFSHA=mixedSHA
             let value=try source("full")
-            try require(value["missingTextPages"] as? [Int]==[2] && value["completeTextCoverage"] as? Bool==false,"missing page explicitly disclosed")
-            try require((value["text"] as? String ?? "").contains(document.page(at:0)!.string!),"real page content retained")
+            try require(value["paperID"] as? String==owner && value["pdfSHA"] as? String==mixedSHA && value["truncated"] as? Bool != true,"mixed source preserves bound paper identity, actual PDF SHA and non-truncated flag")
+            try require(value["pages"] as? [Int]==[1,2] && value["missingTextPages"] as? [Int]==[2] && value["completeTextCoverage"] as? Bool==false,"missing page explicitly disclosed")
+            let extracted=value["text"] as? String ?? ""
+            try require(extracted.contains("[p.1]") && !extracted.contains("[p.2]") && extracted.contains(expectedPageText),"real page content retained")
         }
         check("valid local settings supported without reads/writes") {
             try app.validateSettings(["endpoint":"https://api.example.org/v1","httpProxy":"http://127.0.0.1:7890","font":18,"maxTokens":8192,"syncHours":12,"dailyRequests":50,"appearance":"system","protocol":"responses"])
