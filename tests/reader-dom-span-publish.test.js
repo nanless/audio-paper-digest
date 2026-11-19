@@ -75,3 +75,78 @@ test('Python批量桥拒四文件字节变动或错误来源代次，合法span�
  const wrong=structuredClone(f.paper);wrong.freshRewriteProvenance.sourceGeneration=2;wrong.analysisManifest.freshRewriteProvenance=structuredClone(wrong.freshRewriteProvenance);
  assert.equal(pythonPublisher(f,wrong).verified,false);
 });
+test('Python最终页面投影折叠同义TeX双写后仍通过HTML全幅分类空白投影，篡改投影数字仍拒', async t => {
+ const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-html-span-proj-'));
+ const previous = Config.FILES.dailyFreshSourceRunsDir;
+ Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'runs');
+ t.after(() => { Config.FILES.dailyFreshSourceRunsDir = previous; fs.rmSync(root, { recursive: true, force: true }); });
+ const text = 'The source reports a controlled measurement of 1.0 under the same protocol. '.repeat(100).trim();
+ const s = require('./reader-signed-draft-fixture').fixture({ noFigures: true, sourceText: text });
+ const matrix = [
+  ['Method', 'K≥5K{\\geq}5', 'Delta', 'Gain', 'D', 'E'],
+  Array(6).fill('Conversational'),
+  ['Baseline', '1.0', '83.2 (−-0.1)', '82.4 (↑\\uparrow6.6%)', '1.0', '1.0']
+ ];
+ const table = { ordinal: 1, recoveryStatus: 'complete', sourceDomSha256: 'a'.repeat(64), headerRows: [0], bodyRows: [1, 2], matrix, cells: [] };
+ for (const [r, row] of matrix.entries()) {
+  if (r === 1) table.cells.push({ row: r, column: 0, text: row[0], rowspan: 1, colspan: 6, header: false, sourceDomSha256: 'b'.repeat(64) });
+  else for (const [c, value] of row.entries()) table.cells.push({ row: r, column: c, text: value, rowspan: 1, colspan: 1, header: r === 0, sourceDomSha256: repair.shaText(`proj-cell-${r}:${c}`) });
+ }
+ const { payloadSha256, ...body } = s.sourceDetails.structuredArtifacts;
+ const sort = v => Array.isArray(v) ? v.map(sort) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sort(v[k])])) : v;
+ const artifactBody = sort({ ...body, tables: [table], formulas: [] });
+ const artifacts = { ...artifactBody, payloadSha256: repair.shaText(JSON.stringify(artifactBody)) };
+ const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-11-19', batchId: 'span-tex-proj', papers: [{ arxivId: s.paper.arxivId, title: 'Projected TeX span table' }] });
+ await daily.captureDailyFreshSources(plan, {
+  concurrency: 1,
+  capture: args => require('../scripts/lib/fresh-arxiv-rewrite-source').captureFreshArxivRewriteSource(args, {
+   fetchText: async id => ({ text, structuredArtifacts: artifacts, source: 'html', sourceId: id, url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-11-19T00:00:00.000Z', imageInfos: [], warnings: [] }),
+   fetchPdf: async id => ({ bytes: Buffer.from('%PDF-1.7\n%%EOF\n'), url: `https://arxiv.org/pdf/${id}`, fetchedAt: '2026-11-19T00:00:01.000Z' })
+  })
+ });
+ const source = daily.readDailyFreshSource(plan, s.paper);
+ const draft = s.draft;
+ draft.formulaBindings = [];
+ draft.sections[4].body = draft.sections[4].body.replace(/\s*\[\[FORMULA_1\]\]/g, '');
+ draft.sections[7].body = draft.sections[7].body.replace(/\| 比较条件[\s\S]*?仅支持当前口径 \|/, '[[TABLE_2]]');
+ draft.tableBindings[1] = { tableIndex: 2, completeTable: { sourceTableOrdinal: 1 } };
+ const prepared = order.normalizeReaderDraftOrder(draft, { structuredArtifacts: artifacts }).draft;
+ const parsed = deep.parseApiReaderArticleResult(JSON.stringify(prepared), { requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2, requireSourceBindings: true, allowDeterministicQuoteRepair: true, sourceText: text, structuredArtifacts: artifacts, availableFigureOrdinals: [] });
+ const paper = s.paper;
+ Object.assign(paper, { apiReaderArticle: parsed.article, apiReaderPlan: parsed.plan });
+ daily.withDailyFreshAnalysisContext(plan, () => fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source));
+ paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = artifacts.payloadSha256;
+ const stage = paper.analysisManifest.stages.apiReaderArticle;
+ Object.assign(stage, { formulaBindingCount: 0, structuredArtifactsSha256: artifacts.payloadSha256, qualityMetrics: parsed.qualityMetrics, sourceBindingsSha256: parsed.plan.sourceBindingsSha256, articleSha256: repair.shaText(parsed.article), planSha256: daily.stableHash(parsed.plan) });
+ paper.apiReaderArticleSha256 = stage.articleSha256;
+ paper.apiReaderPlanSha256 = stage.planSha256;
+
+ const project = path.resolve(__dirname, '..');
+ const checkPage = renderedOverride => JSON.parse(execFileSync('bash', [path.join(project, 'scripts/python-runtime.sh'), '-c', `import sys,json
+from pathlib import Path
+sys.path.insert(0,'tests/python')
+from test_publish_to_blog import publish_to_blog as publish
+req=json.load(sys.stdin)
+publish.DAILY_FRESH_SOURCE_RUNS_DIR=Path(req['runs'])
+p=req['paper']
+projected=publish._collapse_mathjax_double_write(publish._project_artifact_table_cell_tex_display(p['apiReaderArticle'],p['apiReaderPlan']))
+rendered=req.get('override') or projected
+try:
+ publish._validate_api_reader_source_bindings(p, rendered)
+ print(json.dumps({'issue':None,'rendered':projected}))
+except Exception as e:
+ print(json.dumps({'issue':str(e),'rendered':projected}))`], {
+  cwd: project,
+  input: JSON.stringify({ paper, runs: path.dirname(plan.runDir), override: renderedOverride || null }),
+  encoding: 'utf8',
+  env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' }
+ }).trim());
+
+ const ok = checkPage(null);
+ assert.equal(ok.issue, null, ok.issue || '');
+ assert(ok.rendered.includes('| Method | K≥5 |'), 'header TeX double-write should fold in rendered view');
+ assert(ok.rendered.includes('83.2 (−0.1)'), 'double minus should fold in rendered view');
+ assert(ok.rendered.includes('82.4 (↑6.6%)'), 'arrow TeX double-write should fold in rendered view');
+ const tampered = checkPage(ok.rendered.replace('82.4 (↑6.6%)', '82.4 (↑9.9%)'));
+ assert.notEqual(tampered.issue, null, 'tampered numeric value in rendered article must be rejected');
+});

@@ -73,6 +73,8 @@ function runReplayFd(fd) {
                 throw new Error('Article table mismatch');
             }
             const span = require('./reader-dom-span-projection'), accepted = [];
+            const { projectReaderCellTexDisplay } = require('./reader-source-display');
+            const { strictSourceCellMathDisplay } = require('./source-cell-math-display');
             bindings.forEach((binding, index) => {
                 if (binding.tableIndex !== index + 1 || sha(saved[index].markdown) !== binding.renderedTableSha256) {
                     throw new Error('Saved article identity mismatch');
@@ -81,9 +83,36 @@ function runReplayFd(fd) {
                 const tables = source.structuredArtifacts.tables.filter(t => t.ordinal === binding.sourceTableOrdinal && t.sourceDomSha256 === binding.sourceTableDomSha256);
                 if (tables.length !== 1) return;
                 const rows = [rendered[index].header, ...rendered[index].rows];
+                const savedRows = [saved[index].header, ...saved[index].rows];
+                if (rows.length !== savedRows.length || rows.some((row, r) => !Array.isArray(savedRows[r]) || row.length !== savedRows[r].length)) {
+                    return;
+                }
+                const byCoord = new Map();
+                for (const item of binding.cellBindings || []) {
+                    if (Number.isSafeInteger(item?.renderedRow) && Number.isSafeInteger(item?.renderedColumn)) {
+                        byCoord.set(`${item.renderedRow}:${item.renderedColumn}`, item);
+                    }
+                }
+                const mapCell = (renderedCell, r, c) => {
+                    const savedCell = savedRows[r][c];
+                    if (renderedCell === savedCell || renderedCell === '' || savedCell === '') return renderedCell;
+                    if (projectReaderCellTexDisplay(savedCell) === renderedCell) return savedCell;
+                    const bound = byCoord.get(`${r}:${c}`);
+                    const mathDisplay = bound ? strictSourceCellMathDisplay(bound.sourceText) : null;
+                    if (mathDisplay && renderedCell === mathDisplay.displayText
+                        && (savedCell === mathDisplay.sourceText || savedCell === mathDisplay.displayText)) {
+                        return mathDisplay.sourceText;
+                    }
+                    return renderedCell;
+                };
+                const canonicalRenderedTable = {
+                    ...rendered[index],
+                    header: rendered[index].header.map((val, c) => mapCell(val, 0, c)),
+                    rows: rendered[index].rows.map((row, r) => row.map((val, c) => mapCell(val, r + 1, c)))
+                };
                 for (const cell of binding.cellBindings || []) {
                     const text = rows[cell.renderedRow]?.[cell.renderedColumn];
-                    if (span.fullWidthLabelBlankMatches(tables[0], binding, cell, text, rendered[index])) {
+                    if (span.fullWidthLabelBlankMatches(tables[0], binding, cell, text, canonicalRenderedTable)) {
                         accepted.push([index + 1, cell.renderedRow, cell.renderedColumn]);
                     }
                 }
