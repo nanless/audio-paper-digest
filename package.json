@@ -73,6 +73,7 @@
     "digest:waive-analysis": "node scripts/waive-analysis-failures.js",
     "storage:status": "node scripts/runtime-storage.js status",
     "storage:pdf-duplicates": "node scripts/runtime-storage.js pdf-duplicates",
+    "storage:pdf-dedupe": "node scripts/runtime-storage.js pdf-dedupe",
     "storage:prune": "node scripts/runtime-storage.js prune",
     "digest:waive-visuals": "node scripts/waive-post-publish-visuals.js",
     "blog:generate": "node scripts/workspace-role.js exec daily -- bash scripts/python-runtime.sh scripts/generate-blog.py",

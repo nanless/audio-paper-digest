@@ -72,6 +72,7 @@ Reader 局部补丁被拒绝后，下一次局部请求仍携带最多3000字符
 | `npm run history:resolve-conflict` | 对 crosswalk 中待处理的 conflict 或 multiple 页面裁定唯一论文身份。 | 显式身份裁定且已有非标题线索时。 | `--apply --crosswalk UUID --page-key page:SHA256 --scheme arxiv --value ID --authority FILE --decision NAME.json --owner OWNER --operation-id UUID`。 |
 | `npm run keyword:recall` | 用人工样例和历史入选记录回归当前关键词预筛。 | 修改关键词规则或预筛实现后。 | 可选位置参数 `ARCHIVE_DIR`；默认读 `data/archive`。 |
 | `npm run digest:waive-analysis` | 记录用户明确接受的本批分析失败豁免。 | 用户已确认当前批可带失败发布时。 | `--date YYYY-MM-DD --paper-id ID [--paper-id ...] --reason TEXT`（理由至少 10 个字符）。 |
+| `npm run storage:pdf-dedupe` | 对 `data/runtime/` 内的重复 PDF 做逐字节 SHA-256 与全文比对，默认只读预览；显式 `--apply` 时在同卷以强制独占写时复制（`COPYFILE_FICLONE_FORCE | COPYFILE_EXCL`，macOS 下经内核 `clonefile(2)` 执行，绝不回退物理拷贝）共享相同 PDF 的底层数据块，保留全部原路径、字节、权限、修改时间及独立单硬链接文件节点。 | 会议、日更或历史来源在 `data/runtime/` 累积重复 PDF，需在不删减任何路径的前提下释放重复物理占用时。 | 默认只读预览；`[--apply] [--json] [--verbose]`，存在存活运行锁、符号链接、残留临时文件、凭证声明的 PDF 缺失或来源凭证哈希不符时拒绝写入。 |
 
 会议、标签、历史和日更的完整条件分别见 [会议流程](../docs/conference-workflow.md)、[标签规则](../docs/tag-display-policy.md)、[历史更新](../docs/history-rewrite.md) 与[三流程](../docs/three-workflows.md)。
 
@@ -572,7 +573,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `path_config.py` | 定义 Python 共享路径、日期与原子写入配置。 |
 | `project_env.py` | 加载 Python 项目环境、最小子进程环境和代理设置。 |
 | `lib/public-network-policy.js`、`public_network_policy.py` | Node 与 Python 共用 `config/public-network-policy.json` 单一事实源，以 `O_NOFOLLOW`/禁符号链接读取公网 CIDR 与代理 Fake-IP 策略，提供同构的 `isGloballyRoutableIp` 与整组 DNS 校验 `selectValidatedPublicIp`。 |
-| `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |
+| `runtime-storage.js` | 运行存储状态与维护入口（`npm run storage:status`、`npm run storage:pdf-duplicates`、`npm run storage:pdf-dedupe`、`npm run storage:prune`）：只读统计目录占用、报告重复 PDF、预览受控缓存与日志清理，或对 `data/runtime/` 内逐字节核验一致的重复 PDF 执行同卷强制写时复制（`COPYFILE_FICLONE_FORCE | COPYFILE_EXCL` 与 macOS `clonefile(2)`）克隆替换；默认均为只读预览，只有显式 `--apply` 才执行清理或克隆替换。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
 | `utils.js` | 提供 Node 原子文件写入、时间、ID、分析解析、提示词、LLM 协议和代理工具；`readTagValidation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
+const childProcess = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { requireExternalRuntime } = require('./env-loader.js');
+const { requireExternalRuntime, buildChildProcessEnv, VCS_CHILD_ENV_KEYS } = require('./env-loader.js');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_RETENTION_DAYS = 30;
@@ -17,6 +18,7 @@ const LEGACY_DEBUG_DIRS = Object.freeze([
 const PATH_KEY_RE = /(?:^|_)(?:cache|asset|file|local|input|output|materialized)?path$/i;
 const PDF_SHA_RE = /^[a-f0-9]{64}$/i;
 const MAX_RECEIPT_BYTES = 4 * 1024 * 1024;
+const MAX_LOCK_OWNER_BYTES = 64 * 1024;
 
 function isInside(candidate, root) {
     const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -168,54 +170,270 @@ function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
     return { value: result, error: null };
 }
 
-function commonRuntimeLockPaths(layout) {
-    const paths = [path.join(layout.current, '.full-fetch-run.lock')];
+function isLockOrReclaimEntryName(name) {
+    return name === '.full-fetch-run.lock'
+        || name.endsWith('.transaction.lock')
+        || name.endsWith('.lock')
+        || /\.lock\.reclaim(?:\b|$)/.test(name)
+        || name.startsWith('.store.lock.');
+}
+
+function collectLockCandidatesFromDir(dirPath, blockers) {
+    let dirStat;
     try {
-        paths.push(...fs.readdirSync(layout.current)
-            .filter(name => name.endsWith('.transaction.lock') || (/\.lock$/.test(name) && !name.startsWith('.full-fetch-run')))
-            .map(name => path.join(layout.current, name)));
-    } catch (_) {
-        // 稍后那次权威扫描会报告读不到的 current 目录。
+        dirStat = fs.lstatSync(dirPath);
+    } catch (error) {
+        if (error?.code === 'ENOENT') return { exists: false, paths: [] };
+        blockers.push({
+            type: 'active_lock_unknown',
+            path: dirPath,
+            message: `无法检查运行锁目录状态: ${error.message}`
+        });
+        return { exists: false, paths: [] };
     }
-    const analysisRoot = path.join(layout.current, '.analysis-runs');
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+        blockers.push({
+            type: dirStat.isSymbolicLink() ? 'symlink' : 'active_lock_unknown',
+            path: dirPath,
+            message: '运行锁所在目录必须是普通目录'
+        });
+        return { exists: false, paths: [] };
+    }
+    let names;
     try {
-        paths.push(...fs.readdirSync(analysisRoot)
-            .filter(name => name.endsWith('.lock'))
-            .map(name => path.join(analysisRoot, name)));
-    } catch (_) {
-        // 分析锁目录不存在是正常情况。
+        names = fs.readdirSync(dirPath);
+    } catch (error) {
+        blockers.push({
+            type: 'active_lock_unknown',
+            path: dirPath,
+            message: `无法读取运行锁目录: ${error.message}`
+        });
+        return { exists: false, paths: [] };
     }
-    return [...new Set(paths.map(item => path.resolve(item)))];
+    return {
+        exists: true,
+        paths: names.filter(isLockOrReclaimEntryName).map(name => path.resolve(dirPath, name))
+    };
+}
+
+function commonRuntimeLockPaths(layout, blockers = []) {
+    const paths = [];
+    const currentScan = collectLockCandidatesFromDir(layout.current, blockers);
+    paths.push(...currentScan.paths);
+    if (currentScan.exists) {
+        paths.push(path.resolve(layout.current, '.full-fetch-run.lock'));
+        const analysisRoot = path.join(layout.current, '.analysis-runs');
+        const analysisScan = collectLockCandidatesFromDir(analysisRoot, blockers);
+        paths.push(...analysisScan.paths);
+    }
+    return [...new Set(paths)];
+}
+
+function readSafeLockOwnerJson(ownerPath) {
+    const named = fs.lstatSync(ownerPath);
+    if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.size > MAX_LOCK_OWNER_BYTES) {
+        throw new Error('owner.json 不是大小受限的单硬链接普通文件');
+    }
+    const fd = fs.openSync(ownerPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0));
+    try {
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino) {
+            throw new Error('owner.json 在读取期间身份发生变化');
+        }
+        const raw = fs.readFileSync(fd, 'utf8');
+        const after = fs.fstatSync(fd);
+        if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
+            throw new Error('owner.json 在读取期间已变化');
+        }
+        return JSON.parse(raw);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
+function inspectLockEntry(lockPath, blockers, options = {}) {
+    let stat;
+    try {
+        stat = fs.lstatSync(lockPath);
+    } catch (error) {
+        if (error?.code === 'ENOENT') return;
+        blockers.push({
+            type: 'active_lock_unknown',
+            path: lockPath,
+            message: `无法检查运行锁状态: ${error.message}`
+        });
+        return;
+    }
+    if (stat.isSymbolicLink()) {
+        blockers.push({ type: 'symlink', path: lockPath, message: '运行锁路径是符号链接' });
+        return;
+    }
+    const base = path.basename(lockPath);
+    if (/\.lock\.reclaim(?:\b|$)/.test(base)) {
+        blockers.push({ type: 'active_lock', path: lockPath, message: '检测到正在回收中的运行锁 (.lock.reclaim)' });
+        return;
+    }
+    if (!stat.isDirectory()) {
+        blockers.push({
+            type: options.regularFileType || 'active_lock_unknown',
+            path: lockPath,
+            message: '运行锁不是普通目录（检测到文件型或特殊运行锁）'
+        });
+        return;
+    }
+    let entries;
+    try {
+        entries = fs.readdirSync(lockPath);
+    } catch (error) {
+        blockers.push({ type: 'active_lock_unknown', path: lockPath, message: `无法读取运行锁目录内容: ${error.message}` });
+        return;
+    }
+    if (entries.includes('.reclaiming.json') || entries.some(name => name.startsWith('.reclaiming'))) {
+        blockers.push({ type: 'active_lock', path: lockPath, message: '运行锁正处于回收状态 (.reclaiming.json)' });
+        return;
+    }
+    let owner;
+    try {
+        owner = readSafeLockOwnerJson(path.join(lockPath, 'owner.json'));
+    } catch (error) {
+        blockers.push({ type: 'active_lock_unknown', path: lockPath, message: `无法可靠读取运行锁: ${error.message}` });
+        return;
+    }
+    const host = owner?.hostname ?? owner?.host;
+    const pid = owner?.pid ?? owner?.ownerPid;
+    if (host !== os.hostname() || !Number.isInteger(pid) || pid <= 0) {
+        blockers.push({ type: 'active_lock_unknown', path: lockPath, message: '运行锁 owner 无法在本机可靠判活' });
+        return;
+    }
+    try {
+        process.kill(pid, 0);
+        blockers.push({ type: 'active_lock', path: lockPath, message: `运行任务 PID ${pid} 仍存活` });
+    } catch (error) {
+        if (error?.code === 'EPERM') {
+            blockers.push({ type: 'active_lock', path: lockPath, message: `运行任务 PID ${pid} 存活但不可探测` });
+        } else if (options.sharedBlog === true) {
+            blockers.push({ type: 'active_lock_unknown', path: lockPath, message: `共享博客锁仍存在（PID ${pid} 未清理）` });
+        }
+        // ESRCH 说明本机普通锁已过期。这里绝不删除它，锁的所有者才有权回收自己的锁。
+    }
 }
 
 function activeRuntimeLockBlockers(layout) {
     const blockers = [];
-    for (const lockPath of commonRuntimeLockPaths(layout)) {
-        if (!fs.existsSync(lockPath)) continue;
-        let owner;
-        try {
-            const stat = fs.lstatSync(lockPath);
-            if (!stat.isDirectory() || stat.isSymbolicLink()) {
-                blockers.push({ type: 'active_lock_unknown', path: lockPath, message: '运行锁不是普通目录' });
-                continue;
-            }
-            owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
-        } catch (error) {
-            blockers.push({ type: 'active_lock_unknown', path: lockPath, message: `无法可靠读取运行锁: ${error.message}` });
-            continue;
+    for (const lockPath of commonRuntimeLockPaths(layout, blockers)) {
+        inspectLockEntry(lockPath, blockers);
+    }
+    return blockers;
+}
+
+function sharedBlogLockBlockers(layout, options = {}) {
+    const blockers = [];
+    const envFile = options.envFile || path.join(layout.projectRoot, '.env');
+    const read = readProjectEnvValue('PAPER_DIGEST_BLOG_REPO', envFile);
+    if (read.error) {
+        blockers.push({
+            type: 'active_lock_unknown',
+            path: read.error.path,
+            message: `无法读取 .env 以核验共享博客锁: ${read.error.code || read.error.message}`
+        });
+        return blockers;
+    }
+    let rawRepo = typeof read.value === 'string' ? read.value.trim() : '';
+    if (!rawRepo) return blockers;
+    if (rawRepo === '~' || rawRepo.startsWith('~/')) {
+        rawRepo = path.join(os.homedir(), rawRepo.slice(2));
+    }
+    let repoReal;
+    try {
+        const candidate = path.resolve(layout.projectRoot, rawRepo);
+        const stat = fs.lstatSync(candidate);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) {
+            blockers.push({ type: 'active_lock_unknown', path: candidate, message: '共享博客仓库路径不是普通目录' });
+            return blockers;
         }
-        if (owner?.hostname !== os.hostname() || !Number.isInteger(owner?.pid) || owner.pid <= 0) {
-            blockers.push({ type: 'active_lock_unknown', path: lockPath, message: '运行锁 owner 无法在本机可靠判活' });
-            continue;
+        repoReal = fs.realpathSync(candidate);
+    } catch (error) {
+        blockers.push({
+            type: 'active_lock_unknown',
+            path: path.resolve(layout.projectRoot, rawRepo),
+            message: `无法访问共享博客仓库以核验锁: ${error.message}`
+        });
+        return blockers;
+    }
+    let commonDir;
+    try {
+        const spawnFn = options.spawnSync || childProcess.spawnSync;
+        const result = spawnFn('git', ['-C', repoReal, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
+            env: buildChildProcessEnv({}, VCS_CHILD_ENV_KEYS),
+            shell: false,
+            encoding: 'utf8',
+            timeout: 3000,
+            maxBuffer: 64 * 1024
+        });
+        if (result.error || result.signal || result.status !== 0) {
+            blockers.push({
+                type: 'active_lock_unknown',
+                path: repoReal,
+                message: '无法通过 git rev-parse 查询共享博客锁公共目录'
+            });
+            return blockers;
         }
-        try {
-            process.kill(owner.pid, 0);
-            blockers.push({ type: 'active_lock', path: lockPath, message: `运行任务 PID ${owner.pid} 仍存活` });
-        } catch (error) {
-            if (error?.code === 'EPERM') {
-                blockers.push({ type: 'active_lock', path: lockPath, message: `运行任务 PID ${owner.pid} 存活但不可探测` });
-            }
-            // ESRCH 说明锁已经过期。这里绝不删除它，锁的所有者才有权回收自己的锁。
+        const rawCommon = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+        if (!rawCommon || !path.isAbsolute(rawCommon) || /[\r\n\0]/.test(rawCommon)) {
+            blockers.push({
+                type: 'active_lock_unknown',
+                path: repoReal,
+                message: '共享博客仓库 git-common-dir 返回值非法'
+            });
+            return blockers;
+        }
+        commonDir = fs.realpathSync(rawCommon);
+        const commonStat = fs.lstatSync(commonDir);
+        if (commonStat.isSymbolicLink() || !commonStat.isDirectory()) {
+            blockers.push({ type: 'active_lock_unknown', path: commonDir, message: 'git-common-dir 不是普通目录' });
+            return blockers;
+        }
+    } catch (error) {
+        blockers.push({
+            type: 'active_lock_unknown',
+            path: repoReal,
+            message: `核验共享博客 git-common-dir 失败: ${error.message}`
+        });
+        return blockers;
+    }
+    const locksDir = path.join(commonDir, '.paper-digest-locks');
+    let locksStat;
+    try {
+        locksStat = fs.lstatSync(locksDir);
+    } catch (error) {
+        if (error?.code === 'ENOENT') return blockers;
+        blockers.push({ type: 'active_lock_unknown', path: locksDir, message: `无法检查共享博客锁目录: ${error.message}` });
+        return blockers;
+    }
+    if (locksStat.isSymbolicLink() || !locksStat.isDirectory()) {
+        blockers.push({
+            type: locksStat.isSymbolicLink() ? 'symlink' : 'active_lock_unknown',
+            path: locksDir,
+            message: '共享博客锁目录不是普通目录'
+        });
+        return blockers;
+    }
+    let entries;
+    try {
+        entries = fs.readdirSync(locksDir, { withFileTypes: true });
+    } catch (error) {
+        blockers.push({ type: 'active_lock_unknown', path: locksDir, message: `无法读取共享博客锁目录: ${error.message}` });
+        return blockers;
+    }
+    for (const entry of entries) {
+        if (entry.name === 'blog-publication.lock'
+            || isLockOrReclaimEntryName(entry.name)
+            || entry.isDirectory()
+            || entry.isSymbolicLink()) {
+            inspectLockEntry(path.join(locksDir, entry.name), blockers, {
+                sharedBlog: true,
+                regularFileType: 'active_lock'
+            });
         }
     }
     return blockers;
@@ -334,13 +552,23 @@ function declaredPdfHash(value) {
     return PDF_SHA_RE.test(String(value || '')) ? String(value).toLowerCase() : null;
 }
 
-function addPdfDeclaration(declarations, blockers, pdfPath, hash, receiptPath, sourceKind, runtimeRoot) {
+function normalizeRuntimePdfPath(pdfPath, runtimeRoot, runtimeReal) {
+    const resolvedRoot = path.resolve(runtimeRoot);
+    const resolvedCandidate = path.resolve(pdfPath);
+    if (isInside(resolvedCandidate, resolvedRoot)) return resolvedCandidate;
+    if (runtimeReal && isInside(resolvedCandidate, runtimeReal)) {
+        return path.resolve(resolvedRoot, path.relative(runtimeReal, resolvedCandidate));
+    }
+    return resolvedCandidate;
+}
+
+function addPdfDeclaration(declarations, blockers, pdfPath, hash, receiptPath, sourceKind, runtimeRoot, runtimeReal = null) {
     const declaredHash = declaredPdfHash(hash);
     if (!declaredHash) {
         blockers.push({ type: 'missing_pdf_hash', path: receiptPath, message: 'receipt 没有合法的 PDF SHA-256' });
         return;
     }
-    const resolvedPdf = path.resolve(pdfPath);
+    const resolvedPdf = normalizeRuntimePdfPath(pdfPath, runtimeRoot, runtimeReal);
     if (!isInside(resolvedPdf, runtimeRoot)) {
         blockers.push({ type: 'path_escape', path: receiptPath, message: 'receipt PDF 路径逃逸 runtime' });
         return;
@@ -350,7 +578,7 @@ function addPdfDeclaration(declarations, blockers, pdfPath, hash, receiptPath, s
     declarations.set(resolvedPdf, existing);
 }
 
-function scanPdfDeclarations(layout, declarations, blockers) {
+function scanPdfDeclarations(layout, declarations, blockers, runtimeReal = null) {
     walk(layout.runtime, (entryPath, stat) => {
         if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.json') return;
         const relative = path.relative(layout.runtime, entryPath).replace(/\\/g, '/');
@@ -360,34 +588,110 @@ function scanPdfDeclarations(layout, declarations, blockers) {
             && parts.includes('receipts');
         const isEvidenceReceipt = base === 'evidence-receipt.json';
         const isExtractionReceipt = /extraction-receipt\.json$/i.test(base);
-        if (!inOfficialReceipts && !isEvidenceReceipt && !isExtractionReceipt) return;
+        const isSourceManifest = (parts[0] === 'daily-fresh-source-runs' || parts[0] === 'fetched-arxiv-sources')
+            && base === 'source-manifest.json';
+        const inConferenceLedgers = parts[0] === 'conference-ledgers'
+            && parts.length === 2
+            && !/\.import-receipt\.json$/i.test(base);
+        const inHistoricalPdfReceipts = (
+            parts[0] === 'historical-openreview-pdf-sources'
+            || parts[0] === 'historical-icml-pdf-sources'
+            || parts[0] === 'historical-icml-alternate-pdf-sources'
+        );
+        if (!inOfficialReceipts
+            && !isEvidenceReceipt
+            && !isExtractionReceipt
+            && !isSourceManifest
+            && !inConferenceLedgers
+            && !inHistoricalPdfReceipts) return;
+
         const value = readJsonObject(entryPath, blockers);
         if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+
         if (inOfficialReceipts && value.pdf) {
             const providerRoot = path.resolve(entryPath, '..', '..');
-            addPdfDeclaration(declarations, blockers,
-                path.join(providerRoot, String(value.pdf.relativePath || '')),
-                value.pdf.sha256, entryPath, 'official-pdf-receipt', layout.runtime);
+            const relPath = typeof value.pdf.relativePath === 'string' ? value.pdf.relativePath.trim() : '';
+            if (!relPath) {
+                blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'official PDF receipt 缺少合法的 relativePath' });
+            } else {
+                addPdfDeclaration(declarations, blockers,
+                    path.join(providerRoot, relPath),
+                    value.pdf.sha256, entryPath, 'official-pdf-receipt', layout.runtime, runtimeReal);
+            }
         }
         if (isEvidenceReceipt && value.discovery) {
             addPdfDeclaration(declarations, blockers, path.join(path.dirname(entryPath), 'paper.pdf'),
-                value.discovery.pdfSha256, entryPath, 'evidence-receipt', layout.runtime);
+                value.discovery.pdfSha256, entryPath, 'evidence-receipt', layout.runtime, runtimeReal);
         }
         if (isExtractionReceipt && value.source?.pdf) {
-            addPdfDeclaration(declarations, blockers,
-                path.join(path.dirname(entryPath), String(value.source.pdf.file || '')),
-                value.source.pdf.sha256, entryPath, 'extraction-receipt', layout.runtime);
+            const relFile = typeof value.source.pdf.file === 'string' ? value.source.pdf.file.trim() : '';
+            if (!relFile) {
+                blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'extraction receipt 缺少合法的 PDF file' });
+            } else {
+                addPdfDeclaration(declarations, blockers,
+                    path.join(path.dirname(entryPath), relFile),
+                    value.source.pdf.sha256, entryPath, 'extraction-receipt', layout.runtime, runtimeReal);
+            }
+        }
+        if (isSourceManifest) {
+            if (!value.pdf
+                || typeof value.pdf !== 'object'
+                || Array.isArray(value.pdf)
+                || typeof value.pdf.filename !== 'string'
+                || !value.pdf.filename.trim()) {
+                blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'source-manifest 的 pdf 字段结构非法或缺失' });
+            } else {
+                addPdfDeclaration(declarations, blockers,
+                    path.join(path.dirname(entryPath), value.pdf.filename.trim()),
+                    value.pdf.responseSha256, entryPath, 'source-manifest', layout.runtime, runtimeReal);
+            }
+        }
+        if (inConferenceLedgers && Array.isArray(value.members)) {
+            const cacheRoot = path.join(layout.runtime, 'conference-sources');
+            for (const member of value.members) {
+                if (!member || typeof member !== 'object') continue;
+                const pdfPresent = member?.availability?.pdf === 'present';
+                if (!pdfPresent && !member.pdfFile && !member.pdfSha256) continue;
+                const pdfRel = typeof member.pdfFile === 'string' ? member.pdfFile.trim() : '';
+                if (!pdfRel) {
+                    blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'conference ledger 成员缺少合法的 pdfFile' });
+                } else {
+                    addPdfDeclaration(declarations, blockers,
+                        path.join(cacheRoot, pdfRel),
+                        member.pdfSha256, entryPath, 'conference-ledger', layout.runtime, runtimeReal);
+                }
+            }
+        }
+        if (inHistoricalPdfReceipts && value.pdf && typeof value.pdf === 'object' && !Array.isArray(value.pdf)) {
+            const rawAbs = typeof value.pdf.absolutePath === 'string' ? value.pdf.absolutePath.trim() : '';
+            const rawRel = typeof value.pdf.relativePath === 'string'
+                ? value.pdf.relativePath.trim()
+                : (typeof value.pdf.file === 'string' ? value.pdf.file.trim() : '');
+            if (!rawAbs && !rawRel) {
+                blockers.push({ type: 'invalid_receipt', path: entryPath, message: '历史 PDF receipt 缺少合法的 PDF 路径字段' });
+            } else {
+                const candidatePdf = rawAbs
+                    ? (path.isAbsolute(rawAbs) ? rawAbs : path.resolve(path.dirname(entryPath), rawAbs))
+                    : path.join(path.dirname(entryPath), rawRel);
+                addPdfDeclaration(declarations, blockers,
+                    candidatePdf,
+                    value.pdf.sha256, entryPath, 'historical-pdf-receipt', layout.runtime, runtimeReal);
+            }
         }
     }, blockers);
 }
 
-function hashFileBytes(filename, expected) {
+function inspectColdPdfBytes(filename, expected) {
     const hash = crypto.createHash('sha256');
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0));
     const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const header = Buffer.alloc(5);
+    let headerFilled = 0;
     const matchesScan = stat => stat.isFile() && !stat.isSymbolicLink()
         && stat.dev === expected.dev && stat.ino === expected.ino
-        && stat.size === expected.size && stat.mtimeMs === expected.mtimeMs;
+        && stat.size === expected.size && stat.mtimeMs === expected.mtimeMs
+        && stat.ctimeMs === expected.ctimeMs
+        && (stat.mode & 0o7777) === (expected.mode & 0o7777);
     try {
         if (!matchesScan(fs.fstatSync(fd))) throw new Error('PDF 文件在目录扫描后已变化，不能核验其字节');
         let totalBytes = 0;
@@ -395,6 +699,11 @@ function hashFileBytes(filename, expected) {
         do {
             bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
             if (bytesRead > 0) {
+                if (headerFilled < 5) {
+                    const take = Math.min(5 - headerFilled, bytesRead);
+                    buffer.copy(header, headerFilled, 0, take);
+                    headerFilled += take;
+                }
                 hash.update(buffer.subarray(0, bytesRead));
                 totalBytes += bytesRead;
             }
@@ -402,8 +711,15 @@ function hashFileBytes(filename, expected) {
         if (totalBytes !== expected.size || !matchesScan(fs.fstatSync(fd)) || !matchesScan(fs.lstatSync(filename))) {
             throw new Error('PDF 文件在读取期间已变化，不能核验其字节');
         }
+        return {
+            sha256: hash.digest('hex'),
+            hasPdfMagic: totalBytes >= 5 && headerFilled === 5 && header.toString('ascii') === '%PDF-'
+        };
     } finally { fs.closeSync(fd); }
-    return hash.digest('hex');
+}
+
+function hashFileBytes(filename, expected) {
+    return inspectColdPdfBytes(filename, expected).sha256;
 }
 
 function getPdfDuplicateReport(options = {}) {
@@ -412,7 +728,11 @@ function getPdfDuplicateReport(options = {}) {
     const blockers = [];
     const declarations = new Map();
     const files = new Map();
-    scanPdfDeclarations(layout, declarations, blockers);
+    let runtimeReal = null;
+    try {
+        if (fs.existsSync(layout.runtime)) runtimeReal = fs.realpathSync(layout.runtime);
+    } catch (_) {}
+    scanPdfDeclarations(layout, declarations, blockers, runtimeReal);
     walk(layout.runtime, (entryPath, stat) => {
         if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.pdf') return;
         files.set(path.resolve(entryPath), { path: path.resolve(entryPath), bytes: stat.size, scannedStat: stat });
@@ -495,6 +815,913 @@ function getPdfDuplicateReport(options = {}) {
         unboundPdfCount: records.filter(item => item.exists && item.receiptClaims.length === 0).length,
         missingDeclaredPdfCount: records.filter(item => !item.exists && item.receiptClaims.length > 0).length,
         blockers
+    };
+}
+
+function defaultCloneFileSync(src, dst, deps = {}) {
+    const constants = deps.constants || fs.constants;
+    const ficloneForce = constants?.COPYFILE_FICLONE_FORCE;
+    const excl = constants?.COPYFILE_EXCL;
+    if (typeof ficloneForce !== 'number' || ficloneForce === 0 || typeof excl !== 'number' || excl === 0) {
+        const error = new Error('当前运行环境不支持 COPYFILE_FICLONE_FORCE | COPYFILE_EXCL 强制写时复制克隆');
+        error.code = 'ENOTSUP';
+        throw error;
+    }
+    const lstatFn = deps.lstatSync || fs.lstatSync;
+    const srcStat = lstatFn(src);
+    if (srcStat.isSymbolicLink()) {
+        const error = new Error(`克隆源文件不能是符号链接: ${src}`);
+        error.code = 'ELOOP';
+        throw error;
+    }
+    if (!srcStat.isFile() || srcStat.nlink !== 1) {
+        const error = new Error(`克隆源文件必须是单硬链接普通文件: ${src}`);
+        error.code = 'EINVAL';
+        throw error;
+    }
+    const dstStat = lstatFn(dst, { throwIfNoEntry: false });
+    if (dstStat) {
+        const error = new Error(`克隆目标路径已存在: ${dst}`);
+        error.code = 'EEXIST';
+        throw error;
+    }
+    const copyFileFn = deps.copyFileSync || fs.copyFileSync;
+    try {
+        copyFileFn(src, dst, ficloneForce | excl);
+        if (!deps.copyFileSync) {
+            const createdStat = lstatFn(dst);
+            if (!createdStat.isFile()
+                || createdStat.isSymbolicLink()
+                || createdStat.nlink !== 1
+                || createdStat.ino === srcStat.ino
+                || createdStat.size !== srcStat.size) {
+                try {
+                    if (createdStat.isFile() || createdStat.isSymbolicLink()) fs.unlinkSync(dst);
+                } catch (_) {}
+                const invalidErr = new Error('写时复制生成的目标文件未通过身份与单硬链接核验');
+                invalidErr.code = createdStat.isSymbolicLink() ? 'ELOOP' : 'EINVAL';
+                throw invalidErr;
+            }
+        }
+    } catch (error) {
+        // Node v22 在 macOS 上打包的 libuv 对 UV_FS_COPYFILE_FICLONE_FORCE 直接返回 UV_ENOSYS；
+        // 仅在 darwin 原生调用命中 ENOSYS 时切换内核 clonefile(2) 独占调用（/bin/cp -R -P -c -n --），绝不回退物理拷贝。
+        const platform = deps.platform || process.platform;
+        if (!deps.copyFileSync && error?.code === 'ENOSYS' && platform === 'darwin') {
+            const cpStat = lstatFn('/bin/cp');
+            if (!cpStat.isFile() || cpStat.isSymbolicLink()) {
+                const cpErr = new Error('/bin/cp 不可信或不存在');
+                cpErr.code = 'ENOTSUP';
+                throw cpErr;
+            }
+            if (lstatFn(dst, { throwIfNoEntry: false })) {
+                const existErr = new Error(`克隆目标路径已存在: ${dst}`);
+                existErr.code = 'EEXIST';
+                throw existErr;
+            }
+            const srcRecheck = lstatFn(src);
+            if (srcRecheck.isSymbolicLink()) {
+                const loopErr = new Error(`克隆源文件不能是符号链接: ${src}`);
+                loopErr.code = 'ELOOP';
+                throw loopErr;
+            }
+            if (!srcRecheck.isFile()
+                || srcRecheck.nlink !== 1
+                || srcRecheck.dev !== srcStat.dev
+                || srcRecheck.ino !== srcStat.ino
+                || srcRecheck.size !== srcStat.size) {
+                const changedErr = new Error(`克隆源文件在执行前发生变化: ${src}`);
+                changedErr.code = 'EINVAL';
+                throw changedErr;
+            }
+            const result = childProcess.spawnSync('/bin/cp', ['-R', '-P', '-c', '-n', '--', src, dst], {
+                env: {},
+                shell: false,
+                stdio: ['ignore', 'ignore', 'pipe'],
+                encoding: 'utf8',
+                timeout: 15000
+            });
+            if (result.error || result.signal || result.status !== 0) {
+                const stderr = String(result.stderr || '').trim();
+                const cloneErr = new Error(stderr || result.error?.message || 'APFS clonefile 克隆失败');
+                if (/not supported/i.test(stderr)) cloneErr.code = 'ENOTSUP';
+                else if (/cross-device/i.test(stderr)) cloneErr.code = 'EXDEV';
+                else if (/exists|not overwritten/i.test(stderr) || lstatFn(dst, { throwIfNoEntry: false })) cloneErr.code = 'EEXIST';
+                else cloneErr.code = result.error?.code || 'ENOTSUP';
+                throw cloneErr;
+            }
+            const createdStat = lstatFn(dst);
+            if (!createdStat.isFile()
+                || createdStat.isSymbolicLink()
+                || createdStat.nlink !== 1
+                || createdStat.ino === srcStat.ino
+                || createdStat.size !== srcStat.size) {
+                try {
+                    if (createdStat.isFile() || createdStat.isSymbolicLink()) fs.unlinkSync(dst);
+                } catch (_) {}
+                const postErr = new Error('clonefile(2) 生成的目标文件未通过普通单硬链接与独立 inode 核验');
+                postErr.code = createdStat.isSymbolicLink() ? 'ELOOP' : 'EINVAL';
+                throw postErr;
+            }
+            return;
+        }
+        throw error;
+    }
+}
+
+function matchesExpectedRegularPdfStat(stat, expected) {
+    return Boolean(stat && expected)
+        && stat.isFile()
+        && !stat.isSymbolicLink()
+        && stat.nlink === 1
+        && stat.dev === expected.dev
+        && stat.ino === expected.ino
+        && stat.size === expected.size
+        && stat.mtimeMs === expected.mtimeMs
+        && stat.ctimeMs === expected.ctimeMs
+        && (stat.mode & 0o7777) === (expected.mode & 0o7777);
+}
+
+function readChunkFully(fd, buffer) {
+    let filled = 0;
+    while (filled < buffer.length) {
+        const count = fs.readSync(fd, buffer, filled, buffer.length - filled, null);
+        if (count === 0) break;
+        filled += count;
+    }
+    return filled;
+}
+
+function filesByteEqual(donorPath, donorExpected, targetPath, targetExpected) {
+    if (!donorExpected || !targetExpected || donorExpected.size !== targetExpected.size || donorExpected.size < 5) {
+        return false;
+    }
+    const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0);
+    const donorFd = fs.openSync(donorPath, openFlags);
+    let targetFd;
+    try {
+        targetFd = fs.openSync(targetPath, openFlags);
+        if (!matchesExpectedRegularPdfStat(fs.fstatSync(donorFd), donorExpected)
+            || !matchesExpectedRegularPdfStat(fs.fstatSync(targetFd), targetExpected)) {
+            throw new Error('PDF 文件在打开比对时身份或元数据已变化');
+        }
+        const donorBuf = Buffer.allocUnsafe(256 * 1024);
+        const targetBuf = Buffer.allocUnsafe(256 * 1024);
+        let totalBytes = 0;
+        for (;;) {
+            const donorRead = readChunkFully(donorFd, donorBuf);
+            const targetRead = readChunkFully(targetFd, targetBuf);
+            if (donorRead !== targetRead) return false;
+            if (donorRead === 0) break;
+            if (!donorBuf.subarray(0, donorRead).equals(targetBuf.subarray(0, targetRead))) return false;
+            totalBytes += donorRead;
+        }
+        if (totalBytes !== donorExpected.size) {
+            throw new Error('PDF 文件在逐字节比对期间长度发生变化');
+        }
+        if (!matchesExpectedRegularPdfStat(fs.fstatSync(donorFd), donorExpected)
+            || !matchesExpectedRegularPdfStat(fs.lstatSync(donorPath), donorExpected)
+            || !matchesExpectedRegularPdfStat(fs.fstatSync(targetFd), targetExpected)
+            || !matchesExpectedRegularPdfStat(fs.lstatSync(targetPath), targetExpected)) {
+            throw new Error('PDF 文件在逐字节比对期间已变化');
+        }
+        return true;
+    } finally {
+        if (targetFd !== undefined) {
+            try { fs.closeSync(targetFd); } catch (_) {}
+        }
+        try { fs.closeSync(donorFd); } catch (_) {}
+    }
+}
+
+function verifyPathStrictlyInsideRuntime(candidatePath, runtimeRoot, runtimeReal) {
+    const resolvedRoot = path.resolve(runtimeRoot);
+    const resolvedCandidate = path.resolve(candidatePath);
+    if (!isInside(resolvedCandidate, resolvedRoot) || resolvedCandidate === resolvedRoot) {
+        const error = new Error('PDF 路径不在 data/runtime 内');
+        error.blockerType = 'path_escape';
+        throw error;
+    }
+    const parentDir = path.dirname(resolvedCandidate);
+    let cursor = parentDir;
+    for (;;) {
+        const dirStat = fs.lstatSync(cursor);
+        if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+            const error = new Error(`父目录不是普通目录: ${cursor}`);
+            error.blockerType = dirStat.isSymbolicLink() ? 'symlink' : 'io';
+            throw error;
+        }
+        if (cursor === resolvedRoot) break;
+        const next = path.dirname(cursor);
+        if (next === cursor) {
+            const error = new Error('父目录回溯超出 data/runtime');
+            error.blockerType = 'path_escape';
+            throw error;
+        }
+        cursor = next;
+    }
+    const parentStat = fs.lstatSync(parentDir);
+    const parentReal = fs.realpathSync(parentDir);
+    const fileReal = fs.realpathSync(resolvedCandidate);
+    if (!isInside(parentReal, runtimeReal)
+        || !isInside(fileReal, runtimeReal)
+        || path.relative(runtimeReal, parentReal) !== path.relative(resolvedRoot, parentDir)
+        || path.relative(runtimeReal, fileReal) !== path.relative(resolvedRoot, resolvedCandidate)) {
+        const error = new Error('PDF 真实路径逃逸 data/runtime 或经过符号链接');
+        error.blockerType = 'path_escape';
+        throw error;
+    }
+    return { parentDir, parentStat, parentReal, fileReal };
+}
+
+function dedupeBlockerList(blockers) {
+    const seen = new Set();
+    const unique = [];
+    for (const item of blockers) {
+        const key = `${item.type}\0${item.path || ''}\0${item.code || ''}\0${item.message || ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(item);
+    }
+    return unique;
+}
+
+function checkAncestorDirectory(dirPath, blockers, options = {}) {
+    let stat;
+    try {
+        stat = fs.lstatSync(dirPath);
+    } catch (error) {
+        if (options.optional && error?.code === 'ENOENT') return null;
+        blockers.push({ type: 'io', path: dirPath, message: error.message });
+        return null;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        blockers.push({
+            type: stat.isSymbolicLink() ? 'symlink' : 'io',
+            path: dirPath,
+            message: `${options.label || dirPath} 必须是普通目录（禁止符号链接）`
+        });
+        return null;
+    }
+    return stat;
+}
+
+function collectPdfDedupeState(options = {}) {
+    const layout = getLayout(options.projectRoot);
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const rawBlockers = [];
+
+    const projectRootStat = checkAncestorDirectory(layout.projectRoot, rawBlockers, { label: 'projectRoot' });
+    const dataDir = path.join(layout.projectRoot, 'data');
+    const dataStat = checkAncestorDirectory(dataDir, rawBlockers, { optional: true, label: 'data' });
+    if (dataStat) {
+        checkAncestorDirectory(layout.current, rawBlockers, { optional: true, label: 'data/current' });
+    }
+
+    rawBlockers.push(...activeRuntimeLockBlockers(layout));
+    rawBlockers.push(...sharedBlogLockBlockers(layout, options));
+
+    const declarations = new Map();
+    const scannedFiles = new Map();
+    let runtimeReal = null;
+    let projectRootReal = null;
+    if (projectRootStat) {
+        try {
+            projectRootReal = fs.realpathSync(layout.projectRoot);
+        } catch (error) {
+            rawBlockers.push({ type: 'io', path: layout.projectRoot, message: error.message });
+        }
+    }
+
+    const runtimeStat = dataStat
+        ? checkAncestorDirectory(layout.runtime, rawBlockers, { optional: true, label: 'data/runtime' })
+        : null;
+
+    if (runtimeStat && projectRootReal !== null) {
+        try {
+            const candidateRuntimeReal = fs.realpathSync(layout.runtime);
+            const expectedRuntimeReal = path.join(projectRootReal, 'data', 'runtime');
+            if (candidateRuntimeReal !== expectedRuntimeReal) {
+                rawBlockers.push({
+                    type: 'symlink',
+                    path: layout.runtime,
+                    message: 'data/runtime 真实路径与项目根路径不一致（祖先目录存在符号链接）'
+                });
+            } else {
+                runtimeReal = candidateRuntimeReal;
+            }
+        } catch (error) {
+            rawBlockers.push({ type: 'io', path: layout.runtime, message: error.message });
+        }
+    }
+
+    if (runtimeReal !== null) {
+        const staleLocksRoot = path.join(layout.runtime, 'stale-locks');
+        scanPdfDeclarations(layout, declarations, rawBlockers, runtimeReal);
+        walk(layout.runtime, (entryPath, stat) => {
+            const resolved = path.resolve(entryPath);
+            const base = path.basename(resolved);
+            if (!stat.isFile() && !stat.isDirectory()) {
+                rawBlockers.push({ type: 'io', path: resolved, message: '检测到非常规文件' });
+                return;
+            }
+            if (/^\.pdf-dedupe-.*\.tmp$/i.test(base) || base.startsWith('.pdf-dedupe-')) {
+                rawBlockers.push({
+                    type: 'leftover_temp',
+                    path: resolved,
+                    message: '检测到残留的 PDF 克隆临时文件'
+                });
+                return;
+            }
+            if (!isInside(resolved, staleLocksRoot) && isLockOrReclaimEntryName(base)) {
+                inspectLockEntry(resolved, rawBlockers, { regularFileType: 'active_lock' });
+                return;
+            }
+            if (!stat.isFile() || path.extname(resolved).toLowerCase() !== '.pdf') return;
+            scannedFiles.set(resolved, { path: resolved, bytes: stat.size, scannedStat: stat });
+        }, rawBlockers);
+    }
+
+    for (const [pdfPath, claims] of declarations.entries()) {
+        const current = scannedFiles.get(pdfPath);
+        if (!current) {
+            scannedFiles.set(pdfPath, { path: pdfPath, bytes: null, scannedStat: null });
+        }
+        scannedFiles.get(pdfPath).claims = claims;
+    }
+
+    const scannedStats = new Map();
+    const records = [...scannedFiles.values()].sort((a, b) => a.path.localeCompare(b.path)).map(record => {
+        const claims = record.claims || [];
+        const declaredHashes = [...new Set(claims.map(item => item.declaredHash))];
+        let actualHash = null;
+        let byteVerified = false;
+        let validPdfMagic = false;
+        let declaredHashMismatch = false;
+        if (record.bytes === null) {
+            if (claims.length > 0) {
+                rawBlockers.push({
+                    type: 'missing_declared_pdf',
+                    path: record.path,
+                    message: '来源凭证或清单声明的 PDF 文件缺失'
+                });
+            }
+        } else if (record.scannedStat) {
+            scannedStats.set(record.path, record.scannedStat);
+            if (record.scannedStat.nlink !== 1) {
+                rawBlockers.push({
+                    type: 'unsafe_pdf',
+                    path: record.path,
+                    message: `PDF 硬链接数必须为 1（实际为 ${record.scannedStat.nlink}）`
+                });
+            }
+            if (record.scannedStat.size < 5) {
+                rawBlockers.push({
+                    type: 'unsafe_pdf',
+                    path: record.path,
+                    message: 'PDF 文件长度不足 5 字节，不是合法 PDF'
+                });
+            }
+            try {
+                const inspected = inspectColdPdfBytes(record.path, record.scannedStat);
+                actualHash = inspected.sha256;
+                byteVerified = true;
+                validPdfMagic = inspected.hasPdfMagic;
+                if (!validPdfMagic) {
+                    rawBlockers.push({
+                        type: 'unsafe_pdf',
+                        path: record.path,
+                        message: 'PDF 文件缺少 %PDF- 头部魔数'
+                    });
+                }
+                declaredHashMismatch = declaredHashes.some(hash => hash !== actualHash);
+                if (declaredHashMismatch) {
+                    rawBlockers.push({
+                        type: 'declared_hash_mismatch',
+                        path: record.path,
+                        message: 'PDF 实际字节 SHA-256 与来源凭证声明不一致'
+                    });
+                }
+            } catch (error) {
+                rawBlockers.push({ type: 'io', path: record.path, message: `PDF SHA 计算失败: ${error.message}` });
+            }
+        }
+        return {
+            path: record.path,
+            relativePath: path.relative(layout.projectRoot, record.path).replace(/\\/g, '/'),
+            bytes: record.bytes,
+            exists: record.bytes !== null,
+            hash: actualHash,
+            hashSource: byteVerified ? 'bytes' : 'none',
+            byteVerified,
+            validPdfMagic,
+            declaredHashMismatch,
+            receiptClaims: claims.map(item => ({
+                receiptPath: item.receiptPath,
+                declaredHash: item.declaredHash,
+                sourceKind: item.sourceKind
+            }))
+        };
+    });
+
+    const groupsByHash = new Map();
+    for (const record of records) {
+        if (!record.exists || !record.byteVerified || !record.validPdfMagic || !record.hash) continue;
+        const group = groupsByHash.get(record.hash) || [];
+        group.push(record);
+        groupsByHash.set(record.hash, group);
+    }
+
+    const duplicateGroups = [...groupsByHash.entries()]
+        .filter(([, group]) => group.length > 1)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([hash, group]) => {
+            const donor = group[0];
+            const donorStat = scannedStats.get(donor.path);
+            let donorValid = false;
+            if (!donorStat || donorStat.isSymbolicLink() || !donorStat.isFile()) {
+                rawBlockers.push({ type: 'symlink', path: donor.path, message: '重复 PDF 基准文件不是普通文件' });
+            } else if (donorStat.nlink !== 1) {
+                rawBlockers.push({ type: 'unsafe_pdf', path: donor.path, message: `重复 PDF 基准文件硬链接数必须为 1（实际为 ${donorStat.nlink}）` });
+            } else if (donorStat.size < 5) {
+                rawBlockers.push({ type: 'unsafe_pdf', path: donor.path, message: '重复 PDF 大小必须至少 5 字节' });
+            } else if (runtimeReal !== null) {
+                try {
+                    verifyPathStrictlyInsideRuntime(donor.path, layout.runtime, runtimeReal);
+                    donorValid = true;
+                } catch (error) {
+                    rawBlockers.push({ type: error.blockerType || 'path_escape', path: donor.path, message: error.message });
+                }
+            }
+
+            for (const target of group.slice(1)) {
+                const targetStat = scannedStats.get(target.path);
+                let targetValid = false;
+                if (!targetStat || targetStat.isSymbolicLink() || !targetStat.isFile()) {
+                    rawBlockers.push({ type: 'symlink', path: target.path, message: '重复 PDF 目标文件不是普通文件' });
+                } else if (targetStat.nlink !== 1) {
+                    rawBlockers.push({ type: 'unsafe_pdf', path: target.path, message: `重复 PDF 目标文件硬链接数必须为 1（实际为 ${targetStat.nlink}）` });
+                } else if (targetStat.size < 5) {
+                    rawBlockers.push({ type: 'unsafe_pdf', path: target.path, message: '重复 PDF 大小必须至少 5 字节' });
+                } else if (runtimeReal !== null) {
+                    try {
+                        verifyPathStrictlyInsideRuntime(target.path, layout.runtime, runtimeReal);
+                        targetValid = true;
+                    } catch (error) {
+                        rawBlockers.push({ type: error.blockerType || 'path_escape', path: target.path, message: error.message });
+                    }
+                }
+                if (!donorStat || !targetStat) continue;
+                if (targetStat.dev !== donorStat.dev) {
+                    rawBlockers.push({ type: 'cross_device', path: target.path, message: '重复 PDF 与基准文件不在同一文件系统设备' });
+                    targetValid = false;
+                }
+                if (targetStat.dev === donorStat.dev && targetStat.ino === donorStat.ino) {
+                    rawBlockers.push({ type: 'unsafe_pdf', path: target.path, message: '重复 PDF 与基准文件共享同一 inode' });
+                    targetValid = false;
+                }
+                if (target.bytes !== donor.bytes || target.hash !== donor.hash || !target.byteVerified || !donor.byteVerified) {
+                    rawBlockers.push({ type: 'byte_mismatch', path: target.path, message: '重复 PDF 大小或 SHA-256 与基准文件不一致' });
+                    targetValid = false;
+                }
+                if (donorValid && targetValid) {
+                    try {
+                        if (!filesByteEqual(donor.path, donorStat, target.path, targetStat)) {
+                            rawBlockers.push({ type: 'byte_mismatch', path: target.path, message: '重复 PDF 逐字节比对与基准文件不一致' });
+                        }
+                    } catch (error) {
+                        rawBlockers.push({ type: 'changed', path: target.path, message: error.message });
+                    }
+                }
+            }
+
+            const unitBytes = donor.bytes || 0;
+            return {
+                hash,
+                bytes: unitBytes,
+                occurrenceCount: group.length,
+                totalBytes: group.reduce((sum, item) => sum + (item.bytes || 0), 0),
+                logicalDuplicateBytes: (group.length - 1) * unitBytes,
+                byteVerified: group.every(item => item.byteVerified),
+                donor: {
+                    path: donor.path,
+                    relativePath: donor.relativePath,
+                    bytes: donor.bytes,
+                    hash: donor.hash
+                },
+                targets: group.slice(1).map(item => ({
+                    path: item.path,
+                    relativePath: item.relativePath,
+                    bytes: item.bytes,
+                    hash: item.hash
+                })),
+                occurrences: group.map(({ validPdfMagic: _magic, ...rest }) => rest)
+            };
+        });
+
+    const blockers = dedupeBlockerList(rawBlockers);
+    const duplicateGroupCount = duplicateGroups.length;
+    const candidateCount = duplicateGroups.reduce((sum, group) => sum + group.targets.length, 0);
+    const logicalDuplicateBytes = duplicateGroups.reduce((sum, group) => sum + group.logicalDuplicateBytes, 0);
+
+    const plan = {
+        contract: 'runtime-storage-pdf-dedupe-v1',
+        mode: 'dry-run',
+        projectRoot: layout.projectRoot,
+        generatedAt: new Date(nowMs).toISOString(),
+        hashMode: 'bytes',
+        byteVerification: true,
+        scannedPdfCount: records.filter(item => item.exists).length,
+        declaredPdfCount: records.filter(item => item.receiptClaims.length > 0).length,
+        unboundPdfCount: records.filter(item => item.exists && item.receiptClaims.length === 0).length,
+        missingDeclaredPdfCount: records.filter(item => !item.exists && item.receiptClaims.length > 0).length,
+        duplicateGroupCount,
+        candidateCount,
+        logicalDuplicateBytes,
+        dedupedFiles: 0,
+        dedupedItems: [],
+        duplicateGroups,
+        blockers
+    };
+
+    return { layout, runtimeReal, scannedStats, records, plan };
+}
+
+function buildPdfDedupePlan(options = {}) {
+    return collectPdfDedupeState(options).plan;
+}
+
+function pdfDedupeStateIdentity(state) {
+    const payload = {
+        scannedPdfCount: state.plan.scannedPdfCount,
+        declaredPdfCount: state.plan.declaredPdfCount,
+        missingDeclaredPdfCount: state.plan.missingDeclaredPdfCount,
+        groups: state.plan.duplicateGroups.map(group => ({
+            hash: group.hash,
+            bytes: group.bytes,
+            members: group.occurrences.map(item => {
+                const stat = state.scannedStats.get(item.path);
+                return [
+                    item.path,
+                    stat ? stat.dev : null,
+                    stat ? stat.ino : null,
+                    stat ? stat.size : null,
+                    stat ? stat.mtimeMs : null,
+                    stat ? stat.ctimeMs : null,
+                    stat ? (stat.mode & 0o7777) : null,
+                    stat ? stat.nlink : null
+                ];
+            })
+        }))
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function pdfDedupeBlockedError(plan, blockers, cause) {
+    const mergedBlockers = dedupeBlockerList(blockers);
+    const detail = mergedBlockers[0]?.message ? `（${mergedBlockers[0].message}）` : '';
+    const error = new Error(`PDF 克隆去重已停止：发现 ${mergedBlockers.length} 个安全阻断项${detail}`);
+    error.code = 'STORAGE_PDF_DEDUPE_BLOCKED';
+    error.plan = { ...plan, blockers: mergedBlockers };
+    if (cause !== undefined) {
+        error.cause = cause;
+        if (cause?.code) error.causeCode = cause.code;
+    }
+    return error;
+}
+
+function hashOpenedTempFile(fd, expectedSize) {
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const header = Buffer.alloc(5);
+    let headerFilled = 0;
+    let totalBytes = 0;
+    let bytesRead;
+    do {
+        bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (bytesRead > 0) {
+            if (headerFilled < 5) {
+                const take = Math.min(5 - headerFilled, bytesRead);
+                buffer.copy(header, headerFilled, 0, take);
+                headerFilled += take;
+            }
+            hash.update(buffer.subarray(0, bytesRead));
+            totalBytes += bytesRead;
+        }
+    } while (bytesRead > 0);
+    if (totalBytes !== expectedSize) {
+        throw new Error(`克隆临时文件长度不匹配（预期 ${expectedSize}，实际 ${totalBytes}）`);
+    }
+    if (totalBytes < 5 || headerFilled < 5 || header.toString('ascii') !== '%PDF-') {
+        throw new Error('克隆临时文件缺少 %PDF- 头部魔数');
+    }
+    return hash.digest('hex');
+}
+
+function cloneSingleDuplicatePdf(group, target, state, cloneFileSync, applyPlan) {
+    const { layout, runtimeReal, scannedStats } = state;
+    const donor = group.donor;
+    const donorExpected = scannedStats.get(donor.path);
+    const targetExpected = scannedStats.get(target.path);
+    if (!donorExpected || !targetExpected || runtimeReal === null) {
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: 'changed',
+            path: target.path,
+            message: '缺少预检文件元数据，拒绝克隆替换'
+        }]);
+    }
+
+    let parentCheck;
+    try {
+        verifyPathStrictlyInsideRuntime(donor.path, layout.runtime, runtimeReal);
+        parentCheck = verifyPathStrictlyInsideRuntime(target.path, layout.runtime, runtimeReal);
+    } catch (error) {
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: error.blockerType || 'path_escape',
+            path: target.path,
+            message: error.message
+        }], error);
+    }
+
+    let donorBefore;
+    let targetBefore;
+    try {
+        donorBefore = fs.lstatSync(donor.path);
+        targetBefore = fs.lstatSync(target.path);
+    } catch (error) {
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: 'io',
+            code: error?.code || null,
+            path: target.path,
+            message: `克隆前复核文件失败: ${error.message}`
+        }], error);
+    }
+
+    if (!matchesExpectedRegularPdfStat(donorBefore, donorExpected)) {
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: 'changed',
+            path: donor.path,
+            message: '基准 PDF 在克隆前已变化'
+        }]);
+    }
+    if (!matchesExpectedRegularPdfStat(targetBefore, targetExpected)) {
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: 'changed',
+            path: target.path,
+            message: '目标 PDF 在克隆前已变化'
+        }]);
+    }
+    if (donorBefore.dev !== targetBefore.dev || donorBefore.ino === targetBefore.ino) {
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: donorBefore.dev !== targetBefore.dev ? 'cross_device' : 'unsafe_pdf',
+            path: target.path,
+            message: '基准与目标 PDF 设备或 inode 状态异常'
+        }]);
+    }
+
+    const tempPath = path.join(parentCheck.parentDir, `.pdf-dedupe-${process.pid}-${crypto.randomUUID()}.tmp`);
+    try {
+        fs.lstatSync(tempPath);
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: 'io',
+            path: tempPath,
+            message: '克隆临时路径已存在，拒绝覆盖'
+        }]);
+    } catch (error) {
+        if (error?.code === 'STORAGE_PDF_DEDUPE_BLOCKED') throw error;
+        if (error?.code !== 'ENOENT') {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'io',
+                code: error?.code || null,
+                path: tempPath,
+                message: error.message
+            }], error);
+        }
+    }
+
+    let tempFd;
+    let tempCreatedStat = null;
+    let renamed = false;
+    try {
+        try {
+            cloneFileSync(donor.path, tempPath);
+        } catch (cloneError) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'clone_failed',
+                code: cloneError?.code || null,
+                path: target.path,
+                message: `CoW 克隆失败${cloneError?.code ? ` [${cloneError.code}]` : ''}: ${cloneError.message}`
+            }], cloneError);
+        }
+
+        tempCreatedStat = fs.lstatSync(tempPath);
+        if (!tempCreatedStat.isFile() || tempCreatedStat.isSymbolicLink() || tempCreatedStat.nlink !== 1) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'unsafe_pdf',
+                path: tempPath,
+                message: '克隆生成的临时文件不是单硬链接普通文件'
+            }]);
+        }
+
+        const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0);
+        tempFd = fs.openSync(tempPath, openFlags);
+        const tempOpened = fs.fstatSync(tempFd);
+        if (!tempOpened.isFile()
+            || tempOpened.isSymbolicLink()
+            || tempOpened.nlink !== 1
+            || tempOpened.dev !== targetBefore.dev
+            || tempOpened.dev !== tempCreatedStat.dev
+            || tempOpened.ino !== tempCreatedStat.ino
+            || tempOpened.ino === donorBefore.ino
+            || tempOpened.ino === targetBefore.ino
+            || tempOpened.size !== group.bytes) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'unsafe_pdf',
+                path: tempPath,
+                message: '克隆临时文件打开后身份、设备、长度或硬链接数不符合安全要求'
+            }]);
+        }
+
+        fs.fchmodSync(tempFd, targetBefore.mode & 0o7777);
+
+        const tempSha = hashOpenedTempFile(tempFd, group.bytes);
+        if (tempSha !== group.hash) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'byte_mismatch',
+                path: tempPath,
+                message: '克隆临时文件字节 SHA-256 与基准 PDF 不一致'
+            }]);
+        }
+
+        fs.futimesSync(tempFd, targetBefore.atimeMs / 1000, targetBefore.mtimeMs / 1000);
+
+        const tempAfterAttr = fs.fstatSync(tempFd);
+        if (tempAfterAttr.dev !== tempOpened.dev
+            || tempAfterAttr.ino !== tempOpened.ino
+            || tempAfterAttr.nlink !== 1
+            || tempAfterAttr.size !== group.bytes
+            || (tempAfterAttr.mode & 0o7777) !== (targetBefore.mode & 0o7777)
+            || Math.abs(tempAfterAttr.mtimeMs - targetBefore.mtimeMs) >= 1) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'changed',
+                path: tempPath,
+                message: '克隆临时文件在恢复属性后核验未通过'
+            }]);
+        }
+        fs.closeSync(tempFd);
+        tempFd = undefined;
+
+        const parentNow = fs.lstatSync(parentCheck.parentDir);
+        if (!parentNow.isDirectory()
+            || parentNow.isSymbolicLink()
+            || parentNow.dev !== parentCheck.parentStat.dev
+            || parentNow.ino !== parentCheck.parentStat.ino
+            || fs.realpathSync(parentCheck.parentDir) !== parentCheck.parentReal) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'changed',
+                path: parentCheck.parentDir,
+                message: '目标父目录在原子替换前已变化'
+            }]);
+        }
+
+        const tempNamedNow = fs.lstatSync(tempPath);
+        if (!tempNamedNow.isFile()
+            || tempNamedNow.isSymbolicLink()
+            || tempNamedNow.nlink !== 1
+            || tempNamedNow.dev !== tempOpened.dev
+            || tempNamedNow.ino !== tempOpened.ino
+            || tempNamedNow.size !== group.bytes
+            || (tempNamedNow.mode & 0o7777) !== (targetBefore.mode & 0o7777)
+            || Math.abs(tempNamedNow.mtimeMs - targetBefore.mtimeMs) >= 1) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'changed',
+                path: tempPath,
+                message: '克隆临时文件在原子替换前已变化'
+            }]);
+        }
+
+        const donorNow = fs.lstatSync(donor.path);
+        const targetNow = fs.lstatSync(target.path);
+        if (!matchesExpectedRegularPdfStat(donorNow, donorExpected)) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'changed',
+                path: donor.path,
+                message: '基准 PDF 在克隆期间已变化，拒绝替换'
+            }]);
+        }
+        if (!matchesExpectedRegularPdfStat(targetNow, targetExpected)) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'changed',
+                path: target.path,
+                message: '目标 PDF 在克隆期间已变化，拒绝替换'
+            }]);
+        }
+
+        fs.renameSync(tempPath, target.path);
+        renamed = true;
+
+        const installed = fs.lstatSync(target.path);
+        if (!installed.isFile()
+            || installed.isSymbolicLink()
+            || installed.nlink !== 1
+            || installed.dev !== tempOpened.dev
+            || installed.ino !== tempOpened.ino
+            || installed.size !== group.bytes
+            || (installed.mode & 0o7777) !== (targetBefore.mode & 0o7777)
+            || Math.abs(installed.mtimeMs - targetBefore.mtimeMs) >= 1) {
+            throw pdfDedupeBlockedError(applyPlan, [{
+                type: 'changed',
+                path: target.path,
+                message: '目标 PDF 在原子替换后核验未通过'
+            }]);
+        }
+    } catch (error) {
+        if (error?.code === 'STORAGE_PDF_DEDUPE_BLOCKED') throw error;
+        throw pdfDedupeBlockedError(applyPlan, [{
+            type: 'io',
+            code: error?.code || null,
+            path: target.path,
+            message: error.message
+        }], error);
+    } finally {
+        if (tempFd !== undefined) {
+            try { fs.closeSync(tempFd); } catch (_) {}
+        }
+        if (!renamed) {
+            try {
+                const parentCurrent = fs.lstatSync(parentCheck.parentDir);
+                if (parentCurrent.isDirectory()
+                    && !parentCurrent.isSymbolicLink()
+                    && parentCurrent.dev === parentCheck.parentStat.dev
+                    && parentCurrent.ino === parentCheck.parentStat.ino) {
+                    const leftover = fs.lstatSync(tempPath);
+                    if ((leftover.isFile() || leftover.isSymbolicLink())
+                        && (!tempCreatedStat || (leftover.dev === tempCreatedStat.dev && leftover.ino === tempCreatedStat.ino))) {
+                        fs.unlinkSync(tempPath);
+                    }
+                }
+            } catch (_) {
+                // ENOENT 或父目录异常时保留主失败原因。
+            }
+        }
+    }
+}
+
+function dedupeRuntimePdfs(options = {}) {
+    const apply = options.apply === true;
+    const cloneFileSync = typeof options.cloneFileSync === 'function' ? options.cloneFileSync : defaultCloneFileSync;
+    const initial = collectPdfDedupeState(options);
+    if (!apply) return initial.plan;
+    if (initial.plan.blockers.length > 0) {
+        throw pdfDedupeBlockedError(
+            { ...initial.plan, mode: 'apply', dedupedFiles: 0, dedupedItems: [] },
+            initial.plan.blockers
+        );
+    }
+    if (typeof options.beforeApply === 'function') {
+        options.beforeApply(initial.plan);
+    }
+
+    const verified = collectPdfDedupeState(options);
+    const verificationBlockers = [...verified.plan.blockers];
+    if (pdfDedupeStateIdentity(initial) !== pdfDedupeStateIdentity(verified)) {
+        verificationBlockers.push({
+            type: 'changed',
+            path: verified.layout.runtime,
+            message: '重复 PDF 或来源凭证在扫描后至 apply 前发生变化'
+        });
+    }
+    if (verificationBlockers.length > 0) {
+        throw pdfDedupeBlockedError(
+            { ...verified.plan, mode: 'apply', dedupedFiles: 0, dedupedItems: [] },
+            verificationBlockers
+        );
+    }
+
+    const dedupedItems = [];
+    for (const group of verified.plan.duplicateGroups) {
+        for (const target of group.targets) {
+            const currentApplyPlan = {
+                ...verified.plan,
+                mode: 'apply',
+                dedupedFiles: dedupedItems.length,
+                dedupedItems: [...dedupedItems]
+            };
+            cloneSingleDuplicatePdf(group, target, verified, cloneFileSync, currentApplyPlan);
+            dedupedItems.push({
+                donorPath: group.donor.path,
+                targetPath: target.path,
+                bytes: group.bytes,
+                hash: group.hash
+            });
+        }
+    }
+
+    return {
+        ...verified.plan,
+        mode: 'apply',
+        dedupedFiles: dedupedItems.length,
+        dedupedItems
     };
 }
 
@@ -813,15 +2040,45 @@ function printPdfDuplicateReport(report) {
     }
 }
 
-function main(argv = process.argv.slice(2)) {
+function printPdfDedupeResult(result, options = {}) {
+    console.log(`PDF 克隆去重（${result.mode === 'apply' ? '执行' : '预览'}）：扫描 ${result.scannedPdfCount} 份 PDF，重复组 ${result.duplicateGroupCount} 组，目标副本 ${result.candidateCount} 份，逻辑重复字节 ${formatBytes(result.logicalDuplicateBytes)}`);
+    const visible = options.verbose ? result.duplicateGroups : result.duplicateGroups.slice(0, 20);
+    for (const group of visible) {
+        console.log(`- ${group.hash} (${group.occurrenceCount} 份；单份 ${formatBytes(group.bytes)}；可共享 ${formatBytes(group.logicalDuplicateBytes)})`);
+        if (options.verbose) {
+            console.log(`  基准: ${group.donor.relativePath}`);
+            for (const target of group.targets) console.log(`  目标: ${target.relativePath}`);
+        }
+    }
+    if (!options.verbose && result.duplicateGroups.length > visible.length) {
+        console.log(`... 省略 ${result.duplicateGroups.length - visible.length} 组；传 --verbose 查看完整清单`);
+    }
+    if (result.blockers.length > 0) {
+        console.log(`阻止克隆去重的问题：${result.blockers.length} 项`);
+        for (const blocker of result.blockers) {
+            console.log(`! ${blocker.type}: ${blocker.path}${blocker.message ? `（${blocker.message}）` : ''}`);
+        }
+    }
+    if (result.mode === 'apply') {
+        if (result.blockers.length > 0) {
+            console.log(`克隆去重执行已中止：本次已完成写时复制克隆替换 ${result.dedupedFiles} 个重复 PDF，发现 ${result.blockers.length} 个阻断项。`);
+        } else {
+            console.log(`已完成写时复制克隆替换 ${result.dedupedFiles} 个重复 PDF，逻辑重复字节 ${formatBytes(result.logicalDuplicateBytes)}`);
+        }
+    } else {
+        console.log('本次只预览（已完成逐字节 SHA-256 与内容比对）；加 --apply 后才会在同卷执行写时复制克隆替换。');
+    }
+}
+
+function main(argv = process.argv.slice(2), options = {}) {
     requireExternalRuntime('runtime-storage.js');
     const command = argv[0] || 'status';
     if (command === 'status') {
         if (argv.length > 1) throw new Error(`status 命令不接受参数: ${argv.slice(1).join(' ')}`);
-        const status = getStorageStatus();
+        const status = getStorageStatus({ projectRoot: options.projectRoot, nowMs: options.nowMs });
         printStatus(status);
         if (status.targets.some(target => target.errors.length > 0)) process.exitCode = 1;
-        return;
+        return status;
     }
     if (command === 'prune') {
         const flags = argv.slice(1);
@@ -832,9 +2089,9 @@ function main(argv = process.argv.slice(2)) {
         if (duplicates.length > 0) throw new Error(`prune 重复参数: ${[...new Set(duplicates)].join(', ')}`);
         const apply = flags.includes('--apply');
         const verbose = flags.includes('--verbose');
-        const result = pruneStorage({ apply });
+        const result = pruneStorage({ apply, projectRoot: options.projectRoot, nowMs: options.nowMs, envFile: options.envFile });
         printPlan(result, { verbose });
-        return;
+        return result;
     }
     if (command === 'pdf-duplicates') {
         const flags = argv.slice(1);
@@ -843,12 +2100,39 @@ function main(argv = process.argv.slice(2)) {
         const duplicates = flags.filter((flag, index) => flags.indexOf(flag) !== index);
         if (unknown.length > 0) throw new Error(`pdf-duplicates 未知参数: ${unknown.join(', ')}`);
         if (duplicates.length > 0) throw new Error(`pdf-duplicates 重复参数: ${[...new Set(duplicates)].join(', ')}`);
-        const report = getPdfDuplicateReport({ hashBytes: flags.includes('--hash-bytes') });
+        const report = getPdfDuplicateReport({
+            hashBytes: flags.includes('--hash-bytes'),
+            projectRoot: options.projectRoot,
+            nowMs: options.nowMs
+        });
         if (flags.includes('--json')) console.log(JSON.stringify(report, null, 2));
         else printPdfDuplicateReport(report);
-        return;
+        return report;
     }
-    throw new Error(`未知命令: ${command}（仅支持 status / prune / pdf-duplicates）`);
+    if (command === 'pdf-dedupe') {
+        const flags = argv.slice(1);
+        const allowed = new Set(['--apply', '--json', '--verbose']);
+        const unknown = flags.filter(flag => !allowed.has(flag));
+        const duplicates = flags.filter((flag, index) => flags.indexOf(flag) !== index);
+        if (unknown.length > 0) throw new Error(`pdf-dedupe 未知参数: ${unknown.join(', ')}`);
+        if (duplicates.length > 0) throw new Error(`pdf-dedupe 重复参数: ${[...new Set(duplicates)].join(', ')}`);
+        const apply = flags.includes('--apply');
+        const json = flags.includes('--json');
+        const verbose = flags.includes('--verbose');
+        const result = dedupeRuntimePdfs({
+            apply,
+            projectRoot: options.projectRoot,
+            nowMs: options.nowMs,
+            envFile: options.envFile,
+            spawnSync: options.spawnSync,
+            cloneFileSync: options.cloneFileSync,
+            beforeApply: options.beforeApply
+        });
+        if (json) console.log(JSON.stringify(result, null, 2));
+        else printPdfDedupeResult(result, { verbose });
+        return result;
+    }
+    throw new Error(`未知命令: ${command}（仅支持 status / prune / pdf-duplicates / pdf-dedupe）`);
 }
 
 module.exports = {
@@ -858,9 +2142,15 @@ module.exports = {
     getStorageStatus,
     treeStats,
     getPdfDuplicateReport,
+    buildPdfDedupePlan,
+    dedupeRuntimePdfs,
+    defaultCloneFileSync,
+    filesByteEqual,
+    printPdfDedupeResult,
     buildPrunePlan,
     pruneStorage,
     activeRuntimeLockBlockers,
+    sharedBlogLockBlockers,
     formatBytes,
     main
 };
@@ -870,7 +2160,12 @@ if (require.main === module) {
         main();
     } catch (error) {
         console.error(error.message);
-        if (error.plan) printPlan(error.plan, { verbose: process.argv.includes('--verbose') });
+        if (error.code === 'STORAGE_PDF_DEDUPE_BLOCKED' && error.plan) {
+            if (process.argv.includes('--json')) console.log(JSON.stringify(error.plan, null, 2));
+            else printPdfDedupeResult(error.plan, { verbose: process.argv.includes('--verbose') });
+        } else if (error.plan) {
+            printPlan(error.plan, { verbose: process.argv.includes('--verbose') });
+        }
         process.exitCode = 1;
     }
 }

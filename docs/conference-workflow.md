@@ -1161,7 +1161,7 @@ npm run conference:process -- --source-upgrade-promote \
 
 `npm run conference:workspace` 只读报告未提交内容、配置重复定义及进程存活信息。旧 JSON 的 running 不代表当前仍有进程；应依据实际 owner 和锁记录判断。
 
-`npm run storage:pdf-duplicates -- --json` 仅按来源记录声明的哈希报告重复候选，不是逐字节核验或删除授权。`--hash-bytes` 才重新读取全部 PDF 计算哈希，大目录可能耗时较长。会议来源及发布记录受保护，不属于自动 prune 范围。
+`npm run storage:pdf-duplicates -- --json` 仅按来源记录声明的哈希报告重复候选，不是逐字节核验或删除授权。`--hash-bytes` 才重新读取全部 PDF 计算哈希，大目录可能耗时较长。会议来源及发布记录受保护，不属于自动 prune 范围；若需在不删除任何路径的前提下回收 `data/runtime/` 内重复 PDF 占用的重复数据块，可先运行 `npm run storage:pdf-dedupe` 执行逐字节 SHA-256 与全文比对只读预览，确认不存在存活运行锁、符号链接、残留临时文件、凭证声明的 PDF 缺失或来源凭证哈希冲突后，再显式传 `--apply` 在同一 APFS 卷内通过强制独占写时复制（`COPYFILE_FICLONE_FORCE | COPYFILE_EXCL`，macOS 下经内核 `clonefile(2)` 执行，不支持写时复制时立即阻断而不回退物理拷贝）克隆替换重复目标，保留各自独立的单硬链接文件节点、原始字节、权限与修改时间。
 
 `npm run conference:recover-locks` 会实际回收符合条件的锁，不是只读查询。它只处理程序判定可回收、owner 确认死亡的 process 操作锁；锁格式损坏、进程存活或存活未知时保留并报告跳过，不批量删除锁文件。
 
