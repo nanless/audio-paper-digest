@@ -1,6 +1,48 @@
-# 客户端发行核验（1.4.5 公开结果；当前源码准备 1.4.6）
+# 客户端发行核验（1.4.6）
 
-当前准备发布的源码版本为 1.4.6（构建号 22），尚未公开发布，改动与验证范围见 [1.4.6 记录](workbench-1.4.6-review.md)；当前已公开发行的安装包仍为下文登记的 1.4.5 / 构建号 21（来源提交 `f9241190`，2026-11-12 发布）。`v1.4.6` 标签、十二件附件摘要与匿名下载核验将在正式公开后补记。
+## 1.4.6 公开结果
+
+| 项 | 值 |
+|---|---|
+| 标签 | `v1.4.6`（附注标签 `29f9e269be981f266bc161a7e070fc4f65d5b132`），指向发行提交 `fcf7e05bf44f06e7c3416636445cdda4391fe695`（`fcf7e05b`） |
+| 发布时间 | 2026-11-20 00:36（北京时间，`2026-11-19T16:36:37Z`） |
+| 发行页 | https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.6（Release ID `451609415`，`draft: false`，`prerelease: false`） |
+| 版本、构建号 | 两端均为 1.4.6、22（Android `versionName` 1.4.6、`versionCode` 22） |
+| 附件 | 12 件：Mac 6 件（ZIP、DMG、`build-info.json`、`RELEASE_NOTES.md`、`release-manifest.json`、`SHA256SUMS`），Android 6 件（APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`） |
+| 匿名下载 | 发行页与 12 件附件未登录请求（无 Cookie、无 `Authorization` 头）均返回 HTTP 200（2026-11-20 复核），下载文件字节数与 SHA-256 均与校验表一致 |
+| Android 签名 | 沿用 1.4.4/1.4.5 发布签名库（`signingOrigin: apksigner-sign`），证书 SHA-256 `6a0c3138…`，APK Signature Scheme v2 + v3；1.4.4 与 1.4.5 用户可直接覆盖升级，1.4.3（`d7c680d9…`）用户仍需备份后卸载重装 |
+| 人工验收 | 未重新执行 84/86 项人工图形与实机验收矩阵；本版改动只完成双端自动测试、打包回读与全站 9225 页导读片段 / 8863 篇去重论文真实导出语料重放覆盖 |
+
+1.4.6 的改动与验证范围见 [1.4.6 记录](workbench-1.4.6-review.md)。
+
+## 1.4.6 的十二件附件
+
+以下字节与 SHA-256 于 2026-11-20 对公开 Release 页面及 12 件附件执行未登录下载复核；按 `SHA256SUMS` 与 `ANDROID-SHA256SUMS` 对照，逐件字节数与 SHA-256 与下表一致。两份校验表都不包含自身；`SHA256SUMS` 覆盖其余五件 Mac 资产（含 `release-manifest.json`），`ANDROID-SHA256SUMS` 覆盖 APK 与三份 Android 构建记录，不包含 `android-release-manifest.json`，核对时以表内条目为准。
+
+| 平台 | 附件 | 字节 | SHA-256 |
+|---|---|---:|---|
+| Mac | `PaperDigest-macOS-1.4.6-arm64.dmg` | 57331482 | `633cd2864aaee2f428448e7fb7e1bb2b59dbfb54cc0456d74e0d1b1bd9090148` |
+| Mac | `PaperDigest-macOS-1.4.6-arm64.zip` | 49302663 | `d56a4b70e3309e70c715a221ac9e4bb3e230e2e7f71c9519005272c3d6c76a3d` |
+| Mac | `RELEASE_NOTES.md` | 2749 | `ed26ca11c47e80d1247e9226e85c82ee69c3d58987b2527c5aabf87f0b017754` |
+| Mac | `SHA256SUMS` | 453 | `e219c59bcac43168914bca29212e49a9a453f094dc10244fe740a4acc9c461d6` |
+| Mac | `build-info.json` | 1528 | `b5b62b45e4c4d1d2dff24d1e65b3e680a9cfbb1720e6920d1659f3721df7d1cb` |
+| Mac | `release-manifest.json` | 687 | `971329e45d5291f03dba158f823a12eaf2b5c002fadd677429408d2cf625d087` |
+| Android | `paperdigest-android-1.4.6-22-universal.apk` | 76183110 | `fbc7b83419e5dc7f585c53166b99b929aa2336970671085c5b8c227b709797e8` |
+| Android | `ANDROID-SHA256SUMS` | 389 | `dcf98c6075ece9cfd2103633f6880df88b2aa8808c2d206cf91a04657a358ea9` |
+| Android | `android-build-info.json` | 346102 | `57807f24f0dc19b3c8f08fcbd12ed82b1f3cc12621c64617af5fb883b3c6c8ce` |
+| Android | `android-source-inputs.json` | 196965 | `68c8f40ddfa2f0aed700176bcd646b28fd9c9c1ec7729d886fe9b23f9939466b` |
+| Android | `android-runtime-materials.json` | 31654 | `b22576c093c870d36e4f0d9b95eab83073a0f6a982dc845aa3591f1dd4b8160b` |
+| Android | `android-release-manifest.json` | 591 | `749d92b8dc242992691d89ff850d9b534eaed011e11e0e71c170b0f9a5f1d628` |
+
+## 1.4.6 的签名
+
+Mac 包使用本地 `ad-hoc; not notarized` 签名，未经过 Apple 公证；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `fcf7e05bf44f06e7c3416636445cdda4391fe695`，版本 1.4.6（构建号 22）、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
+
+公开 APK 沿用 1.4.4/1.4.5 的发布签名库（`signingOrigin: apksigner-sign`）。`android-build-info.json` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，APK Signature Scheme v2 + v3，`versionName` 1.4.6、`versionCode` 22、`minSdk` 28、`targetSdk` 37，应用标识 `com.nanless.paperdigest`，四种 ABI 齐全且原生库符合 16 KiB ELF 对齐。已安装 1.4.4 或 1.4.5 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9…`，仍需先导出完整备份、卸载旧版再安装。
+
+# 1.4.5 发行核验（历史存档）
+
+本节记录上一版 1.4.5 的公开结果、附件与签名；当前公开发行版本 1.4.6 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
 
 ## 1.4.5 公开结果
 
@@ -9,7 +51,7 @@
 | 标签 | `v1.4.5`（附注标签），指向发行提交 `f9241190` |
 | 发布时间 | 2026-11-12 03:35（北京时间） |
 | 发行页 | https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.5 |
-| 版本、构建号 | 两端均为 1.4.5、21（Android `versionName` 1.4.5、`versionCode` 21） |
+| 版本、构建号 | 两端均为 1.4.5 / 21（Android `versionName` 1.4.5、`versionCode` 21） |
 | 附件 | 12 件：Mac 6 件（ZIP、DMG、`build-info.json`、`RELEASE_NOTES.md`、`release-manifest.json`、`SHA256SUMS`），Android 6 件（APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`） |
 | 匿名下载 | 发行页与 12 件附件未登录请求均返回 HTTP 200（2026-11-13 复核） |
 | Android 签名 | 沿用 1.4.4 签名库，证书 SHA-256 `6a0c3138…`；1.4.4 用户可直接覆盖升级，1.4.3 用户仍需备份后卸载重装 |
@@ -48,7 +90,7 @@ Mac 包使用本地 ad-hoc 签名，未经过 Apple 公证；`build-info.json` �
 
 ## 存档说明
 
-本节起为 1.4.4 与 1.4.3 的历史发行记录，当前已公开发行版本 1.4.5 的结果见上文（当前准备发布的源码版本为 1.4.6，构建号 22，尚未公开发布）。下文先登记 1.4.4 的公开结果、签名与附件，再保留 1.4.3 的签名对照、附件表和校验表；1.4.4 的包只能对照 1.4.4 的表，不能用 1.4.3 的字节或证书核验。
+本节起为 1.4.4 与 1.4.3 的历史发行记录，当前公开发行版本 1.4.6 及上一版 1.4.5 的结果见上文。下文先登记 1.4.4 的公开结果、签名与附件，再保留 1.4.3 的签名对照、附件表和校验表；1.4.4 的包只能对照 1.4.4 的表，不能用 1.4.3 的字节或证书核验。
 
 1.4.4 重新生成了 Android 发布签名库（1.4.3 使用的签名库不在本机，也没有可用备份），因此 1.4.4 的签名证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，与 1.4.3 的 `d7c680d9…` 不同。已安装 1.4.3 的 Android 用户不能覆盖升级，需要先导出完整备份、卸载旧版，再安装 1.4.4、恢复资料并重新配置设备凭据。签名库在仓库外以 `0600` 权限单独保存，口令保存在本机登录钥匙串的服务条目 `com.nanless.PaperDigest.android-release-signing.v1` 中；签名库、私钥和证书都需要单独备份。公开的 `android-build-info.json` 记录的证书 SHA-256 也是 `6a0c3138…`。
 

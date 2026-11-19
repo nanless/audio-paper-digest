@@ -6,7 +6,7 @@
 
 当前源码同步时先请求站点前缀下的 `client/details/manifest.json`（上限 64 KiB），核验 `paper-desktop-manifest` 协议头与部署前缀。随后应用按原始字节长度与 SHA-256 校验 `client/details/snapshots/<snapshotId>.json`（`paper-desktop-snapshot`），并在独立暂存区完整验证 `catalog/` 目录分片、`tombstones/` 删除分片及成对的 `tagCatalogs` 分类词表。构建目录时，日更与会议汇总页只进入汇总目录，不进入单篇 `Paper` 列表；同一论文的多页面出现记录会合并，移除、撤稿与恢复事件单独留档。所有文件通过校验后，应用先写入与本轮验证代绑定的 `PublishedLibrary/desktop-details/macos-states/<snapshotId>-<epoch>.json`，再以 `PublishedLibrary/current.json` 作为单一原子提交点切换目录快照，最后清理已淘汰的本端旧状态文件。从跨端备份恢复时，若目录携带 Android 状态见证，Mac 会按原始字节长度与 SHA-256 冷核验已保存的快照、目录分片与删除分片并重建索引。
 
-仅当 `client/details/manifest.json` 明确返回 HTTP 404 或 410（目标站点尚未部署 `client/details/*`）时，客户端才按过渡兼容路径读取 `client/index.json`（若再次返回 404 或 410 则读取原 `index.json`）。一旦 `client/details/manifest.json` 返回 HTTP 200 或 500 等非缺失响应，任何格式损坏、未知结构指纹、字节数或 SHA-256 不符、分片缺失均失败即拒，保留上一份完整快照与本地详情状态，绝不静默回退读取旧入口。已发行的 1.4.3 至 1.4.5 安装包继续使用 `client/index.json` 路径。
+仅当 `client/details/manifest.json` 明确返回 HTTP 404 或 410（目标站点尚未部署 `client/details/*`）时，客户端才按过渡兼容路径读取 `client/index.json`（若再次返回 404 或 410 则读取原 `index.json`）。一旦 `client/details/manifest.json` 返回 HTTP 200 或 500 等非缺失响应，任何格式损坏、未知结构指纹、字节数或 SHA-256 不符、分片缺失均失败即拒，保留上一份完整快照与本地详情状态，绝不静默回退读取旧入口。1.4.6 起已发行的安装包优先读取 `client/details/manifest.json`；已发行的 1.4.3 至 1.4.5 安装包继续使用 `client/index.json` 路径，1.4.2 及更早版本使用原 `index.json`。
 
 分片就是将大目录拆成的若干小文件。应用核对每份文件的字节、大小、条数和 SHA 内容指纹，全部成功后才替换本机目录快照。快照表示某个时点的一份完整目录。取消或失败时，上一份完整目录继续可用，不把已经下载的一部分当作全站结果。新同步保存的本机目录也带结构指纹；已有目录按它实际保存的格式读取。未知或混用格式不能当成空目录重新保存。
 
