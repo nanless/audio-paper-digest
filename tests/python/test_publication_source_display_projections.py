@@ -130,10 +130,16 @@ class PublicationSourceDisplayTests(unittest.TestCase):
             output = blog._index_figure_preview(paper, article, payload)
         self.assertIn('图片来源：原论文 PDF 第 4 页（含图 2）', output)
         self.assertIn(payload['assets'][0]['publicUrl'], output)
-        payload['assets'][0]['derivedAssetProof']['displayLabel'] = '不明来源'
-        with mock.patch.object(blog, '_api_reader_payload', return_value=copy.deepcopy(payload)):
-            with self.assertRaises(blog.PublishDataValidationError):
-                blog._index_figure_preview(paper, article, payload)
+        for good_label in ['原论文 PDF 第 14 页（含图 S1）', '原论文 PDF 第 12 页（含图 A.1）']:
+            payload['assets'][0]['derivedAssetProof'] = {'displayLabel': good_label}
+            with mock.patch.object(blog, '_api_reader_payload', return_value=copy.deepcopy(payload)):
+                supp_output = blog._index_figure_preview(paper, article, payload)
+            self.assertIn(f'图片来源：{good_label}', supp_output)
+        for bad_label in ['不明来源', '原论文 PDF 第 14 页（含图 S0）', '原论文 PDF 第 14 页（含图 s1）', '原论文 PDF 第 1\u0660 页（含图 S1\u0660）']:
+            payload['assets'][0]['derivedAssetProof']['displayLabel'] = bad_label
+            with mock.patch.object(blog, '_api_reader_payload', return_value=copy.deepcopy(payload)):
+                with self.assertRaises(blog.PublishDataValidationError):
+                    blog._index_figure_preview(paper, article, payload)
 
     def test_inline_missing_ambiguous_and_tampered_asset_rejected(self):
         paper, payload, article = self.inline_fixture()

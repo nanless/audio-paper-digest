@@ -52,7 +52,7 @@ def _pdf_caption_text(value):
     text = norm(re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '-', value))
     # 印刷版把标签写成「Fig. 1:」，HTML/LaTeXML 写成「Figure 1:」。两者是同一个
     # 标签的排版差异，比对前统一成 Figure；图注正文仍逐字保留。
-    return re.sub(r'^Fig\.\s*(\d+)\s*[:.]\s*', r'Figure \1: ', text)
+    return re.sub(r'^Fig\.\s*((?:[A-Za-z]\.?)?[1-9][0-9]*(?:\.[0-9]+)*)\s*[:.]\s*', r'Figure \1: ', text, flags=re.I)
 
 
 def _caption_skeleton(value):
@@ -415,25 +415,36 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
          and sha(pdf_bytes) == source_files['source.pdf'], 'pdf_page_pdf_sha_changed')
     caption = norm(figure.get('caption', ''))
     displayed_caption, caption_projection = _caption_display_projection(caption)
+    fig_id_pattern = r'(?:[A-Za-z]\.?)?[1-9][0-9]*(?:\.[0-9]+)*'
     # LaTeXML inserts a colon after an otherwise identical printed PDF label.
     # Accept its absence only at the complete caption's opening label.
-    colonless_caption = re.sub(r'^((?:Figure|Fig\.?)\s+\d+)\s*:\s*', r'\1 ', displayed_caption, flags=re.I)
-    # 图号允许子编号（Figure 7.1），比较时用完整编号，身份里仍记整数部分。
-    numbered = re.match(r'^(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)\s*[:.]\s*\S', caption, re.I)
-    label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)\s*[:.]?', norm(figure.get('label', '')), re.I)
+    colonless_caption = re.sub(
+        r'^((?:Figure|Fig\.?)\s+' + fig_id_pattern + r')\s*:\s*',
+        r'\1 ',
+        displayed_caption,
+        flags=re.I,
+    )
+    # 图号允许附录/补充材料字母前缀（Figure S1、Figure A.1）与子编号（Figure 7.1）；
+    # 纯数字编号仍记 int，带字母前缀编号记规范化大写字符串（如 "S1"、"A.1"）。
+    numbered = re.match(r'^(?:Figure|Fig\.?)\s+(' + fig_id_pattern + r')\s*[:.]\s*\S', caption, re.I)
+    label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(' + fig_id_pattern + r')\s*[:.]?', norm(figure.get('label', '')), re.I)
+    def _canonical_figure_id(raw_id):
+        head = re.match(r'^(?:[A-Za-z]\.?)?[1-9][0-9]*', raw_id).group(0)
+        return int(head) if (head.isascii() and head.isdigit()) else head.upper()
     # 封存来源本身没有图注时（例如 LaTeXML 只抽到空 caption），仍可按原图号
     # 定位唯一整页，但必须显式记为「图注未完整抽取」，不能冒完整图注。
     caption_limited = not caption
     if caption_limited:
         need(label is not None and type(figure.get('ordinal')) is int and figure['ordinal'] > 0,
              'pdf_page_figure_number_or_caption_invalid')
-        figure_number = int(label[1])
+        figure_label = label[1]
+        figure_number = _canonical_figure_id(figure_label)
     else:
-        need(numbered is not None and label is not None and numbered[1] == label[1]
+        need(numbered is not None and label is not None and numbered[1].upper() == label[1].upper()
              and type(figure.get('ordinal')) is int and figure['ordinal'] > 0,
              'pdf_page_figure_number_or_caption_invalid')
         figure_label = numbered[1]
-        figure_number = int(figure_label.split('.')[0])
+        figure_number = _canonical_figure_id(figure_label)
     renderer = {'contract': 'pymupdf-full-media-box-png-v1', 'dpi': DPI,
                 'backend': 'pymupdf', 'version': fitz.version[0],
                 'helperSha256': sha(Path(__file__).read_bytes()),
@@ -465,16 +476,28 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
             page_skeleton = _caption_skeleton(' '.join(block[4] for block in page_blocks))
             for block in page_blocks:
                 text = _pdf_caption_text(block[4])
-                # 编号后面允许句点，但不能是更长编号（1 → 10、7.1 → 7.10）。
-                if not re.match(r'^(?:Figure|Fig\.?)\s+' + re.escape(figure_label)
-                                + r'(?!\d)(?!\.\d)(?:\s*[:.]|\s+\S)', text, re.I):
+                # 编号后面允许句点，但不能是更长编号（1 → 10、7.1 → 7.10、S1 → S10）。
+                delimited_label = bool(re.match(
+                    r'^(?:Figure|Fig\.?)\s+' + re.escape(figure_label)
+                    + r'(?!\d)(?!\.\d)\s*[:.]\s*\S', text, re.I))
+                bare_label = bool(re.match(
+                    r'^(?:Figure|Fig\.?)\s+' + re.escape(figure_label)
+                    + r'(?!\d)(?!\.\d)\s+\S', text, re.I))
+                standalone_label = caption_limited and bool(re.fullmatch(
+                    r'(?:Figure|Fig\.?)\s+' + re.escape(figure_label) + r'\s*[:.]?',
+                    text, re.I))
+                if not (delimited_label or bare_label or standalone_label):
                     # 只有以本图图号开头的 block 才可能是图注；正文段落、
                     # 图内标注文字都不能当图注候选。
                     continue
-                numbers.append(page.number + 1)
                 if caption_limited:
+                    numbers.append(page.number + 1)
                     matches.append((page.number, text))
                     continue
+                # 完整图注已知时，跨页散文引用句（如 "Figure S1 summarizes..."，无冒号/句号分隔
+                # 且不等于冒号省略版完整图注）不是图注头，不计入图注头冲突计数。
+                if delimited_label or text == colonless_caption:
+                    numbers.append(page.number + 1)
                 if text in {displayed_caption, colonless_caption}:
                     matches.append((page.number, block[4]))
                 elif failure['reason'] == 'unmapped_latexml_minipage_layout':
@@ -483,21 +506,42 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     # caption equality after these two exact projections counts.
                     wrapped = re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '', block[4])
                     wrapped = _pdf_caption_text(wrapped)
-                    wrapped = re.sub(r'^(?:Fig\.|Figure)\s+(\d+)\.\s*', r'Figure \1: ', wrapped, flags=re.I)
+                    wrapped = re.sub(
+                        r'^(?:Fig\.|Figure)\s+(' + fig_id_pattern + r')\.\s*',
+                        r'Figure \1: ',
+                        wrapped,
+                        flags=re.I,
+                    )
+                    wrapped = re.sub(
+                        r'^Fig\.\s+(' + fig_id_pattern + r')(?=\s)',
+                        r'Figure \1',
+                        wrapped,
+                        flags=re.I,
+                    )
                     # 公式排版差异（LaTeX vs 印刷字形）用文字骨架兜底：词语、数字
                     # 与顺序仍须完全一致，只有纯排版符号被忽略。
                     block_skeleton = _caption_skeleton(wrapped)
                     caption_skeleton = _caption_skeleton(displayed_caption)
+                    label_only_skeleton = _caption_skeleton(f'Figure {figure_label}')
+                    split_caption_in_page = (
+                        len(block_skeleton) > len(label_only_skeleton)
+                        and caption_skeleton.startswith(block_skeleton)
+                        and caption_skeleton in page_skeleton
+                    )
                     # 图注被拆到下一页时整页拼接也装不下完整图注；此时要求本块
                     # 已经逐字覆盖图注前 120 个字（骨架），后文可续在下一页。
                     long_prefix = (len(block_skeleton) >= 120
                                    and caption_skeleton.startswith(block_skeleton[:120]))
                     if (wrapped == displayed_caption
                             or block_skeleton == caption_skeleton
-                            or caption_skeleton in page_skeleton
+                            or split_caption_in_page
                             or long_prefix):
-                        # 同一页可能有多个 block 命中（长图注被拆分），只记一次。
-                        if not any(item[0] == page.number for item in matches):
+                        if not (delimited_label or text == colonless_caption):
+                            numbers.append(page.number + 1)
+                        # 同一页完整图注被拆进多个 block 时只记一次首块；独立重复的完整图注仍须记冲突。
+                        if wrapped == displayed_caption or block_skeleton == caption_skeleton:
+                            matches.append((page.number, block[4]))
+                        elif not any(item[0] == page.number for item in matches):
                             matches.append((page.number, block[4]))
         if caption_limited:
             # 无图注时只要求「图号在全文唯一对应一页」；正文里以 Figure N 开头的

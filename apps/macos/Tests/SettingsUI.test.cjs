@@ -76,7 +76,7 @@ let browser,passed=0;
     assert.equal(await page.locator('#model-advanced').getAttribute('open'),null);
     for(const id of ['endpoint','model','protocol','set-key','check-model']){assert.equal(await page.locator('#'+id).isVisible(),true);const rect=await page.locator('#'+id).boundingBox();assert(rect.y+rect.height<=610,id+' must be in initial viewport');}
     assert.match(await page.locator('#check-model').innerText(),/可能计费/);assert.match(await page.locator('#model-proxy-status').innerText(),/尚未保存/);
-    await page.locator('[data-focus-setting=httpProxy]').click();assert.equal(await page.evaluate(()=>document.activeElement.id),'httpProxy');assert.equal(await page.locator('#httpProxy').count(),1);
+    await page.locator('[data-focus-setting=httpProxy]').click();assert.equal(await page.evaluate(()=>document.activeElement.id),'httpProxy');await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));assert.equal(await page.evaluate(()=>document.activeElement.id),'httpProxy');assert.equal(await page.locator('#httpProxy').count(),1);
     await page.locator('#httpProxy').fill('http://127.0.0.1:8181');await page.evaluate(()=>window.paperDigestFlushSettings());await page.locator('[data-pane=model]').click();assert.match(await page.locator('#model-proxy-status').innerText(),/已保存代理/);
     assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command.startsWith('model.')).length),0);
   },{...initial,credentialState:'unknown',hasKey:null});

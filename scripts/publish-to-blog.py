@@ -6536,7 +6536,7 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
             proof = asset.get('derivedAssetProof')
             if proof is not None:
                 label = proof.get('displayLabel', '')
-                if not re.fullmatch(r'原论文 PDF 第 [1-9]\d* 页（含图 [1-9]\d*）', label):
+                if not re.fullmatch(r'原论文 PDF 第 [1-9][0-9]* 页（含图 (?:[A-Z]\.?)?[1-9][0-9]*）', label):
                     raise PublishDataValidationError('汇总 PDF 整页图片缺少准确页码说明。')
                 return linked + f'\n\n*图片来源：{label}。完整图注与解读见独立文章。*'
             return linked

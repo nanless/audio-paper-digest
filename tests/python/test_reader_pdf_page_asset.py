@@ -317,6 +317,93 @@ class PdfPageAssetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'number_or_caption'):
             self.derive(figure=bad)
 
+    def test_supplement_letter_figure_label_and_cross_page_prose_reference_disambiguation(self):
+        minipage_body = (
+            '<foreignObject width="120" height="40" style="--ltx-fo-width:8em;--ltx-fo-height:2em;--ltx-fo-depth:0em;font-size:10pt">'
+            '<span xmlns="http://www.w3.org/1999/xhtml" class="ltx_foreignobject_container"><span class="ltx_foreignobject_content">'
+            '<span class="ltx_inline-block ltx_minipage" style="width:4em">A</span>'
+            '<span class="ltx_inline-block ltx_minipage" style="width:4em">B</span>'
+            '<span class="ltx_inline-block ltx_minipage" style="width:4em">C</span>'
+            '</span></span></foreignObject>'
+        )
+        res = svg(minipage_body)
+        caption = 'Figure S1: Supplement rater synthesis workflow across four stages.'
+        fig = {
+            **source_descriptor(res, '2610.90001'),
+            'ordinal': 6,
+            'label': 'Figure S1:',
+            'caption': caption,
+            'sourceDomSha256': 'a' * 64,
+            'assetSha256': sha(self.old),
+        }
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 100), 'Figure S1 summarizes how independent rater spans become the reference.')
+            p2 = doc.new_page(width=612, height=792)
+            p2.insert_text((72, 120), 'Figure S1. Supplement rater synthesis workflow across four stages.')
+            p2.insert_text((72, 200), 'Figure S10. Another unrelated supplement figure.')
+            two_page_pdf = doc.tobytes()
+        raw, proof = self.derive(two_page_pdf, figure=fig, resource=res)
+        self.assertTrue(raw.startswith(b'\x89PNG'))
+        self.assertEqual(proof['page'], 2)
+        self.assertEqual(proof['figureNumber'], 'S1')
+        self.assertEqual(proof['displayLabel'], '原论文 PDF 第 2 页（含图 S1）')
+        # Duplicate delimited caption header on another page must still fail.
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 100), 'Figure S1: Competing duplicate caption header.')
+            p2 = doc.new_page(width=612, height=792)
+            p2.insert_text((72, 120), 'Figure S1. Supplement rater synthesis workflow across four stages.')
+            dup_pdf = doc.tobytes()
+        with self.assertRaisesRegex(ValueError, 'not_unique'):
+            self.derive(dup_pdf, figure=fig, resource=res)
+        # Same-page prose reference above the real caption must NOT hijack rawCaptionSha256/pdfCaptionTypography.
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 80), 'Figure S1 summarizes how independent rater spans become the reference.')
+            p1.insert_text((72, 300), 'Figure S1. Supplement rater synthesis workflow across four stages.')
+            same_page_pdf = doc.tobytes()
+        _raw_sp, proof_sp = self.derive(same_page_pdf, figure=fig, resource=res)
+        self.assertEqual(proof_sp['page'], 1)
+        self.assertEqual(
+            proof_sp['pdfCaptionTypography']['text'],
+            'Figure S1. Supplement rater synthesis workflow across four stages.',
+        )
+        # Colonless line-wrapped minipage caption must populate numbers and succeed.
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 120), 'Figure S1 Supplement rater synthe-\nsis workflow across four stages.')
+            colonless_wrapped_pdf = doc.tobytes()
+        _raw_cw, proof_cw = self.derive(colonless_wrapped_pdf, figure=fig, resource=res)
+        self.assertEqual(proof_cw['figureNumber'], 'S1')
+        self.assertEqual(proof_cw['page'], 1)
+        # caption_limited=True (empty sealed caption) exercises figure_label = label[1].
+        limited_fig = {**fig, 'caption': ''}
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 120), 'Figure S1.')
+            limited_pdf = doc.tobytes()
+        _raw_lim, proof_lim = self.derive(limited_pdf, figure=limited_fig, resource=res)
+        self.assertIs(proof_lim['captionLimited'], True)
+        self.assertEqual(proof_lim['figureNumber'], 'S1')
+        self.assertEqual(proof_lim['displayLabel'], '原论文 PDF 第 1 页（含图 S1；图注未完整抽取，以原页为准）')
+        # Dotted appendix prefix Figure A.1:
+        dotted_fig = {
+            **fig,
+            'label': 'Figure A.1:',
+            'caption': 'Figure A.1: Appendix calibration curve across SNR levels.',
+        }
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 120), 'Figure A.1. Appendix calibration curve across SNR levels.')
+            dotted_pdf = doc.tobytes()
+        _raw_dot, proof_dot = self.derive(dotted_pdf, figure=dotted_fig, resource=res)
+        self.assertEqual(proof_dot['figureNumber'], 'A.1')
+        self.assertEqual(proof_dot['displayLabel'], '原论文 PDF 第 1 页（含图 A.1）')
+        for bad_label in ['Figure S2:', 'Figure 1:', 'Figure S0:', 'Figure S1\u0660:']:
+            with self.subTest(label=bad_label), self.assertRaisesRegex(ValueError, 'number_or_caption'):
+                self.derive(two_page_pdf, figure={**fig, 'label': bad_label}, resource=res)
+
     def test_full_pdf_caption_only_typographic_label_ligatures_and_hyphen_wrap(self):
         figure = {**self.figure, 'caption': 'Figure 9: Flow-matching prefix and cross-entropy; rate 0.33.'}
         caption = 'Figure 9 Flow-matching prefix and cross-entropy; rate 0.33.'

@@ -9,6 +9,8 @@ export function revealAccessiblePane(pane,{focus=true,refresh=false}={}){
  }
  if(focus)requestAnimationFrame(()=>{
   if(!visible.isConnected||visible.hidden||visible.closest('[hidden],[inert]'))return;
+  // Do not take focus back after explicit focus has already entered a pane control.
+  if(document.activeElement&&document.activeElement!==document.body&&visible.contains(document.activeElement))return;
   const heading=visible.querySelector('h1,h2,h3');
   if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}
   else visible.querySelector('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled)')?.focus({preventScroll:true});

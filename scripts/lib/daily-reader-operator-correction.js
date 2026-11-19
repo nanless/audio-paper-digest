@@ -270,8 +270,17 @@ function current(paper, identity, readerInputAnalysis) {
         rawDraft:JSON.stringify(record.draft)},baselineDraft:structuredClone(record.original.payload.draft),proof };
 }
 function execution(proof) {
-    return proof ? {executionKind:'operator',operatorProvenance:proof,newReaderApiRequests:0,
-        model:'operator-local',protocol:'local_operator'} : {};
+    if (!proof) return {};
+    const retained = scope.getStore()?.records.get(proof.paperId)?.original?.payload;
+    return {
+        executionKind: 'operator',
+        operatorProvenance: proof,
+        newReaderApiRequests: 0,
+        model: 'operator-local',
+        protocol: 'local_operator',
+        ...(Number.isSafeInteger(retained?.fullAttempts) ? { fullAttempts: retained.fullAttempts } : {}),
+        ...(Number.isSafeInteger(retained?.transportFailures) ? { transportFailures: retained.transportFailures } : {})
+    };
 }
 // A retained paid candidate is an on-disk hint even if a caller strips all
 // operator JSON fields. It never grants completion or another request.

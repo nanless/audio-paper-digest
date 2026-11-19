@@ -299,12 +299,65 @@ test('matchesPaidOrdinalEndpoint 支持多轮累积 draftOrderMappings 与零请
  const postRoundWithOrdinal = {
   ...explicitPayload,
   draftOrderMappings: [],
-  ordinalPatchCompilations: savedBeforeRound.payload.ordinalPatchCompilations
+  ordinalPatchCompilations: savedBeforeRound.payload.ordinalPatchCompilations,
+  transportFailures: 2,
+  lastTransportError: '明确 Reader 新轮实际请求或输出预算耗尽'
  };
  repair.saveFailedCandidate(directory, identity, postRoundWithOrdinal);
  const persistedPostRound = JSON.parse(fs.readFileSync(candFile)).payload;
  assert.deepEqual(persistedPostRound.draftOrderMappings, []);
  assert.equal(persistedPostRound.ordinalPatchCompilations.length, 1);
+ assert.equal(persistedPostRound.transportFailures, 2);
+
+ // 2a. operator.execution(proof) inside withCorrections preserves fullAttempts and transportFailures onto stage.
+ const patchedDraft = structuredClone(canonicalDraft);
+ patchedDraft.sections[0].body += ' 已按原封存文本补充条件边界。';
+ const editRecord = {
+  ...codec.recordHeader('reader-human-source-edit', 'reader-human-source-edit'),
+  notLlmResponse: true,
+  runId: plan.runId,
+  batchDate: plan.batchDate,
+  paperId: '2611.99001',
+  baselineCandidateFile: candFile,
+  baselineCandidateEnvelopeSha256: sha(fs.readFileSync(candFile)),
+  baselineDraftSha256: repair.hashDraft(canonicalDraft),
+  sourceDescriptor: source.freshSourceDescriptor,
+  patch: {
+   version: 1,
+   draftSha256: repair.hashDraft(canonicalDraft),
+   replacements: [{
+    path: '/sections/0/body',
+    oldSha256: repair.hashDraft(canonicalDraft.sections[0].body),
+    value: patchedDraft.sections[0].body
+   }]
+  },
+  draft: patchedDraft
+ };
+ const editFile = path.join(plan.runDir, 'operator-edit-2611.99001.json');
+ const batchManifestFile = path.join(plan.runDir, 'operator-manifest.json');
+ fs.writeFileSync(editFile, JSON.stringify(editRecord), { mode: 0o600 });
+ fs.writeFileSync(
+  batchManifestFile,
+  JSON.stringify({
+   ...codec.recordHeader(operator.CONTRACT, operator.CONTRACT),
+   runId: plan.runId,
+   batchDate: plan.batchDate,
+   authorization: 'Controlled unit test preserving transportFailures and fullAttempts.',
+   correctionFiles: [editFile]
+  }),
+  { mode: 0o600 }
+ );
+ await operator.withCorrections(batchManifestFile, plan, [paper], () =>
+  daily.withDailyFreshAnalysisContext(plan, () =>
+   fresh.withFreshPaperContext(paper, () => {
+    const active = operator.current(paper, identity, paper.analysisCheckpoint);
+    const execFields = operator.execution(active.proof);
+    assert.equal(execFields.executionKind, 'operator');
+    assert.equal(execFields.fullAttempts, 0);
+    assert.equal(execFields.transportFailures, 2);
+   })
+  )
+ );
 
  const snapshots = [];
  assert.equal(
