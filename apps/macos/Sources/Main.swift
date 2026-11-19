@@ -67,7 +67,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var aggregatePreloadID: UUID?
     var contextGeneration=0 {didSet{if oldValue != contextGeneration{nativeWorkspaceContextDidChange()}}}
     var pdfOwner="",pdfVersion=""
-    var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
+    var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPaperCatalogStamp="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
     var selectionSource:[String:Any]=[:], annotationsByID:[String:PDFAnnotation]=[:], jobs:[String:Task<[String:Any],Error>]=[:]
     var schedule:Timer?, lastSyncAttempt=Date.distantPast
     var catalogSyncFlight:(id:UUID,task:Task<[String:Any],Error>)?
@@ -250,9 +250,12 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             if ["library.article", "library.sync", "library.downloadPDF"].contains(command) { cancelAggregatePreload() }
             if command=="library.article",let id=payload["paperID"] as? String {
                 guard currentPaperID==id else{throw DesktopError.message("论文已切换")}
-                let generation=contextGeneration,paper=currentPaper
+                let generation=contextGeneration,stamp=currentPaperCatalogStamp
+                var paper=currentPaper
                 let result=try await runJob(command,payload:payload){notify in try await self.library.handle(command:command,payload:payload,progress:notify)}
                 guard currentPaperID==id,contextGeneration==generation else{throw DesktopError.message("论文已切换，旧正文未覆盖当前论文")}
+                try requireMainContextAvailable()
+                paper = try await refreshBoundPaperIfSameCatalog(id: id, generation: generation, stamp: stamp, fallback: paper)
                 try requireMainContextAvailable()
                 try verifyArticleBinding(result,paper:paper);currentArticle=result;return result
             }
@@ -264,8 +267,16 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "app.setPaper":
             cancelAggregatePreload(); aggregateSession?.cancelImages()
             let next=payload["id"] as? String ?? ""
-            contextGeneration+=1;pdfView.document=nil;pdfView.isHidden=true;currentPDFSHA="";currentPDFPath=nil;pdfOwner="";pdfVersion="";selectionSource=[:];currentArticle=[:];offlinePDF=nil;currentPDFReceipt=[:]
-            try store.rememberPaper(payload);currentPaper=payload;currentPaperID=next;emit("paper.changed");return [:]
+            try store.rememberPaper(payload)
+            contextGeneration+=1
+            let generation=contextGeneration
+            pdfView.document=nil;pdfView.isHidden=true;currentPDFSHA="";currentPDFPath=nil;pdfOwner="";pdfVersion="";selectionSource=[:];currentArticle=[:];offlinePDF=nil;currentPDFReceipt=[:];currentPaperCatalogStamp=""
+            currentPaper=payload;currentPaperID=next;emit("paper.changed")
+            let stamp = await library.currentCatalogStamp()
+            if contextGeneration==generation, currentPaperID==next {
+                currentPaperCatalogStamp = stamp
+            }
+            return [:]
         case "personal.snapshot":return store.browserSnapshot()
         case "personal.list.edit":try store.editList(payload);return store.browserSnapshot()
         case "personal.favorite.edit":try store.editFavorites(payload);return store.browserSnapshot()
@@ -471,13 +482,19 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if let page=pendingPDFPage,let target=pdfView.document?.page(at:max(0,page-1)){pendingPDFPage=nil;pdfView.go(to:target);pdfPageChanged()}
     }
     func openPDF() async throws {
-        let owner=currentPaperID,generation=contextGeneration,paper=currentPaper,article=currentArticle
+        let owner=currentPaperID,generation=contextGeneration,stamp=currentPaperCatalogStamp
+        var paper=currentPaper,article=currentArticle
         let result:[String:Any]
         if owner.hasPrefix("local:"),let raw=currentPaper["localPDFPath"] as? String,let expected=currentPaper["pdfSHA"] as? String {let file=try PrivateStoragePaths.resolve(raw,directory:directory,expectedSHA256:expected);result=["filePath":file.path,"sha256":expected,"version":""]}
         else if currentArticle["offlineMode"] as? Bool==true {guard let identifier=currentPaper["offlinePackageID"] as? String,let saved=try await storage.openPackage(id:identifier)["pdf"] as? [String:Any] else{throw DesktopError.message("这个离线包没有已核验原文 PDF；读取网站当前版本后可下载")};result=saved}
         else {result=try await library.handle(command:"library.downloadPDF",payload:["paperID":owner])}
         guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，旧 PDF 未安装到当前文献")}
         try requireMainContextAvailable()
+        if !owner.hasPrefix("local:"), article["offlineMode"] as? Bool != true {
+            paper = try await refreshBoundPaperIfSameCatalog(id: owner, generation: generation, stamp: stamp, fallback: paper)
+            article = currentArticle
+            try requireMainContextAvailable()
+        }
         if !owner.hasPrefix("local:"){try verifyPDFBinding(result,paper:paper,article:article)}
         guard let path=result["filePath"] as? String else{throw DesktopError.message("原文文件未准备好")}
         let url=URL(fileURLWithPath:path).resolvingSymlinksInPath()

@@ -20,6 +20,24 @@ extension PublishedAggregateReader {
     /// already read and parsed every shard of this manifest during one sync. This only removes the
     /// duplicate local read and JSON parse; the byte identity and every row rule stay identical.
     static func read(manifest raw: Data, siteBase: URL = site, preparedShards: [String: PreparedShard]) throws -> PublishedAggregateCatalog {
+        if isDesktopSnapshotManifest(raw) {
+            let s = try desktopSnapshot(raw), snapshot = sha(raw)
+            let rowEncoding = ClientProtocols.contract("foundation-sorted-keys-json")
+            let basePath = URLComponents(url: siteBase, resolvingAgainstBaseURL: false)!.percentEncodedPath
+            let prefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+            var result: [PublishedAggregate] = [], pages = Set<String>(), rowsSeen = 0
+            for shard in s.catalogShards {
+                try Task.checkCancellation()
+                guard let prepared = preparedShards[shard.url] else { throw AggregateFailure.invalid("汇总桌面分片缺少已核验记录") }
+                let bytes = prepared.bytes
+                try require(bytes.count == shard.bytes && sha(bytes) == shard.sha256 && String(data: bytes, encoding: .utf8) != nil, "汇总桌面分片原件与快照不一致")
+                let rows = prepared.rows
+                guard rows.count == shard.recordCount else { throw AggregateFailure.invalid("汇总桌面分片记录数量无效") }
+                result.append(contentsOf: try parseDesktopAggregateRows(rows, shard: shard, snapshot: snapshot, prefix: prefix, siteBase: siteBase, rowEncoding: rowEncoding, pages: &pages, rowsSeen: &rowsSeen))
+            }
+            try require(rowsSeen == s.recordCount, "汇总桌面目录集合不完整")
+            return PublishedAggregateCatalog(snapshotSHA256: snapshot, sourceRecordCount: rowsSeen, aggregateCount: result.count, records: result.sorted { $0.id < $1.id })
+        }
         let m = try manifest(raw), snapshot = sha(raw)
         let rowEncodingFamily = "foundation-sorted-keys-json"
         let rowEncoding = m.contract == "paper-search-index-manifest" ? ClientProtocols.contract(rowEncodingFamily)
@@ -102,7 +120,7 @@ struct PublishedAggregateStore {
     private func recordScopedOriginal(_ url:URL,limit:Int,bytes:Data) throws {
         guard let scope=readScope else{return};try scope.requireActive()
         let root=try trustedSystemPath(directory).path+"/"
-        guard url.path.hasPrefix(root),let component=url.path.dropFirst(root.count).split(separator:"/").first,["index","aggregate-manifests","aggregate-index","aggregate-activations"].contains(String(component)) else{return}
+        guard url.path.hasPrefix(root),let component=url.path.dropFirst(root.count).split(separator:"/").first,["index","desktop-details","aggregate-manifests","aggregate-index","aggregate-activations"].contains(String(component)) else{return}
         let sha=PublishedAggregateReader.sha(bytes)
         var identity=stat();try PublishedAggregateReader.require(lstat(url.path,&identity)==0 && identity.st_mode & S_IFMT == S_IFREG,"汇总原来源文件身份不可核验")
         if let original=scope.originals[url.path] {
@@ -224,6 +242,12 @@ struct PublishedAggregateStore {
         }
     }
     private func epoch(_ value:String)throws->String {guard let id=UUID(uuidString:value) else{throw AggregateFailure.invalid("汇总目录验证代无效")};return id.uuidString.lowercased()}
+    private func shardFile(url:String, sha256:String)throws->URL {
+        if PublishedAggregateReader.isDesktopSnapshotShard(url, sha256:sha256) {
+            return try child(["desktop-details","catalog",sha256+".json"])
+        }
+        return try child(["index",sha256+".json"])
+    }
     /// A sync that already read and parsed every manifest shard may pass them here: staging then
     /// re-verifies bytes, SHA-256, UTF-8 and row counts instead of reading/parsing the shards again.
     /// Without `preparedShards` the original source-read path is unchanged.
@@ -233,7 +257,7 @@ struct PublishedAggregateStore {
         if let preparedShards {
             catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase,preparedShards:preparedShards)
         } else {
-            catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+            catalog=try PublishedAggregateReader.read(manifest:manifest,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
         }
         try immutable(manifest,to:child(["aggregate-manifests",catalog.snapshotSHA256+".json"]))
         let sidecar=try child(["aggregate-index",catalog.snapshotSHA256+".json"])
@@ -262,7 +286,7 @@ struct PublishedAggregateStore {
         #if PAPER_DIGEST_TESTS
         metrics?.sourceParses += 1
         #endif
-        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
         let actual=try catalogRecord(catalog,original:read(sidecar,limit:8*1024*1024))
         try checkActivation(read(marker,limit:4096),snapshot:activeSnapshotSHA256,epoch:identity,catalogSHA:PublishedAggregateReader.sha(actual))
         readScope?.catalogs[activeSnapshotSHA256]=catalog;readScope?.activations[activationKey]=catalog
@@ -277,12 +301,12 @@ struct PublishedAggregateStore {
         #if PAPER_DIGEST_TESTS
         metrics?.sourceParses += 1
         #endif
-        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
         readScope?.catalogs[snapshot]=catalog;return catalog
     }
     func originalRow(for descriptor:PublishedAggregate)throws->Data {
         guard try sourceCatalog(snapshot:descriptor.source.manifestSHA256).records.contains(descriptor) else{throw AggregateFailure.invalid("汇总原目录身份未核验")}
-        let bytes=try read(try child(["index",descriptor.source.shardSHA256+".json"]),limit:descriptor.source.shardBytes)
+        let bytes=try read(try shardFile(url:descriptor.source.shardURL, sha256:descriptor.source.shardSHA256),limit:descriptor.source.shardBytes)
         guard let rows=try JSONSerialization.jsonObject(with:bytes) as? [[String:Any]],rows.indices.contains(descriptor.source.rowIndex) else{throw AggregateFailure.invalid("汇总原行位置无效")}
         let normalized=try PublishedAggregateReader.normalizedRow(rows[descriptor.source.rowIndex])
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(normalized)==descriptor.source.normalizedRowSHA256,"汇总原行身份不符")

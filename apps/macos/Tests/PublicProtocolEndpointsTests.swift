@@ -41,7 +41,7 @@ private actor EndpointFixture {
         let library=try service(root,fixture)
         let summary=try await library.sync()
         try check(summary.paperCount==1,"new endpoint must load the actual new-directory shard")
-        try check(await fixture.paths()==["/blog/client/index.json","/blog/client/"+name],"new index cannot fetch old shards")
+        try check(await fixture.paths()==["/blog/client/details/manifest.json","/blog/client/index.json","/blog/client/"+name],"new index cannot fetch old shards")
         let currentPath=root.appendingPathComponent("PublishedLibrary/current.json")
         let currentBytes=try Data(contentsOf:currentPath)
         var currentJSON=try JSONSerialization.jsonObject(with:currentBytes) as! [String:Any]
@@ -146,16 +146,16 @@ private actor EndpointFixture {
 
         for status in [404,410] {
             let directory=try folder();defer{try? FileManager.default.removeItem(at:directory)}
-            let old=EndpointFixture(["/blog/index.json":original],["/blog/client/index.json":status])
+            let old=EndpointFixture(["/blog/index.json":original],["/blog/client/details/manifest.json":status,"/blog/client/index.json":status])
             _=try await service(directory,old).sync()
-            try check(await old.paths()==["/blog/client/index.json","/blog/index.json"],"explicit missing endpoint must preserve the old array route")
+            try check(await old.paths()==["/blog/client/details/manifest.json","/blog/client/index.json","/blog/index.json"],"explicit missing endpoint must preserve the old array route")
         }
         for invalid in [try bytes(manifest.merging(["schemaFingerprint":String(repeating:"0",count:64)]){_,new in new}),original,Data("{broken".utf8)] {
             let directory=try folder();defer{try? FileManager.default.removeItem(at:directory)}
             let bad=EndpointFixture(["/blog/client/index.json":invalid,"/blog/index.json":original])
             var rejected=false;do{_=try await service(directory,bad).sync()}catch{rejected=true}
             try check(rejected,"new endpoint corruption must reject")
-            try check(await bad.paths()==["/blog/client/index.json"],"corruption cannot request the old endpoint")
+            try check(await bad.paths()==["/blog/client/details/manifest.json","/blog/client/index.json"],"corruption cannot request the old endpoint")
         }
         let oldManifest=manifest.filter{$0.key != "schemaFingerprint"}.merging(["contract":"paper-search-index-manifest-v1"]){_,new in new}
         for (suffix,body,accepted) in [("index.json",manifest,false),("client/index.json",oldManifest,false),("index.json",oldManifest,true)] {
@@ -191,7 +191,7 @@ private actor EndpointFixture {
         let unavailable=EndpointFixture(["/blog/index.json":original],["/blog/client/index.json":500])
         var rejected=false;do{_=try await service(unavailableRoot,unavailable).sync()}catch{rejected=true}
         let unavailablePaths=await unavailable.paths()
-        try check(rejected && unavailablePaths==["/blog/client/index.json"],"HTTP500 cannot become a missing-endpoint fallback")
+        try check(rejected && unavailablePaths==["/blog/client/details/manifest.json","/blog/client/index.json"],"HTTP500 cannot become a missing-endpoint fallback")
         print("PASS public endpoint positive and negative assertions")
     }
 }

@@ -101,6 +101,7 @@ actor LibraryService {
         /// never mistaken for an empty library. Persisted catalogs never carry it.
         var loading: Bool? = nil
         var message: String? = nil
+        var syncProtocol: String? = nil
     }
     struct Progress: Sendable {
         var phase: String
@@ -187,27 +188,29 @@ actor LibraryService {
     private struct LoadedLibrary: Sendable {
         let snapshot: StoredSnapshot
         let fullTextIndex: [String: String]
+        let desktopDetails: DesktopDetailsState?
     }
     /// Startup reads only the small local catalog eagerly. The published catalog can be tens of
     /// megabytes, so a larger one stays pending until `ensureReady()` waits for the background
     /// decode. Commands never treat that pending state as an empty library.
     private enum LoadPhase: Equatable { case loading, ready, failed(String) }
     let directory: URL
-    private let privateDirectory: URL
+    let privateDirectory: URL
     let siteBaseURL: URL
     let transport: Transport?
     let session: URLSession
     var snapshot: StoredSnapshot
+    var desktopDetails: DesktopDetailsState?
     private var loadPhase: LoadPhase = .loading
     private var loadTask: Task<LoadedLibrary, Error>?
     private var loadID: UUID?
     private var syncTask: Task<Summary, Error>?
-    private var syncID: UUID?
+    var syncID: UUID?
     var httpProxy: URL?
     var activeTransfers: [UUID: Process] = [:]
     private var fullTextIndex: [String: String] = [:]
     private let seedDirectory: URL?
-    private static let maxTotal = 64 * 1024 * 1024
+    static let maxTotal = 64 * 1024 * 1024
     /// Small catalogs are decoded by the initializer exactly as before: a restart is immediate and
     /// a malformed local file is reported at launch. Only the large published catalog is deferred.
     private static let eagerDecodeLimit = 8 * 1024 * 1024
@@ -239,7 +242,11 @@ actor LibraryService {
             if size <= Self.eagerDecodeLimit {
                 let bytes = try Data(contentsOf: current)
                 guard bytes.count <= Self.maxTotal else { throw ServiceError.invalid("本地目录超过大小限制，请保留原文件后恢复备份。") }
-                if bytes.count <= Self.eagerDecodeLimit { eagerSnapshot = try JSONDecoder().decode(StoredSnapshot.self, from: bytes) }
+                if bytes.count <= Self.eagerDecodeLimit {
+                    let decoded = try JSONDecoder().decode(StoredSnapshot.self, from: bytes)
+                    eagerSnapshot = decoded
+                    desktopDetails = try Self.loadDesktopDetailsState(directory: directory, snapshot: decoded, siteBaseURL: siteBaseURL)
+                }
             }
         }
         if let eagerSnapshot { snapshot = eagerSnapshot }
@@ -247,9 +254,10 @@ actor LibraryService {
         else { snapshot = Self.emptySnapshot() }
         let libraryDirectory = directory
         let eagerlyLoaded = eagerSnapshot
+        let eagerDetails = desktopDetails
         loadID = UUID()
         loadTask = Task.detached(priority: .utility) {
-            try Self.loadContent(directory: libraryDirectory, seedDirectory: seedDirectory, siteBaseURL: siteBaseURL, eagerlyLoaded: eagerlyLoaded)
+            try Self.loadContent(directory: libraryDirectory, seedDirectory: seedDirectory, siteBaseURL: siteBaseURL, eagerlyLoaded: eagerlyLoaded, eagerlyLoadedDetails: eagerDetails)
         }
     }
 
@@ -275,7 +283,7 @@ actor LibraryService {
     }
     /// Reads the published catalog and the disposable full-text cache away from the calling
     /// thread. A catalog already decoded eagerly by the initializer is reused, not read again.
-    private static func loadContent(directory: URL, seedDirectory: URL?, siteBaseURL: URL, eagerlyLoaded: StoredSnapshot?) throws -> LoadedLibrary {
+    private static func loadContent(directory: URL, seedDirectory: URL?, siteBaseURL: URL, eagerlyLoaded: StoredSnapshot?, eagerlyLoadedDetails: DesktopDetailsState?) throws -> LoadedLibrary {
         var snapshot = eagerlyLoaded
         if snapshot == nil {
             let current = directory.appendingPathComponent("current.json")
@@ -289,10 +297,17 @@ actor LibraryService {
             }
         }
         if let loaded = snapshot, loaded.papers.isEmpty, let seeded = seedSnapshot(seedDirectory: seedDirectory, siteBaseURL: siteBaseURL) { snapshot = seeded }
+        let effectiveSnapshot = snapshot ?? emptySnapshot()
+        let details: DesktopDetailsState?
+        if eagerlyLoaded != nil {
+            details = eagerlyLoadedDetails
+        } else {
+            details = try loadDesktopDetailsState(directory: directory, snapshot: effectiveSnapshot, siteBaseURL: siteBaseURL)
+        }
         var fullTextIndex: [String: String] = [:]
         if let data = try? Data(contentsOf: directory.appendingPathComponent("fulltext.json")), data.count <= 32 * 1024 * 1024,
            let values = try? JSONDecoder().decode([String: String].self, from: data) { fullTextIndex = values }
-        return LoadedLibrary(snapshot: snapshot ?? emptySnapshot(), fullTextIndex: fullTextIndex)
+        return LoadedLibrary(snapshot: effectiveSnapshot, fullTextIndex: fullTextIndex, desktopDetails: details)
     }
 
     /// Every command that reads the published snapshot awaits this gate first. A failed load is
@@ -306,6 +321,9 @@ actor LibraryService {
         loadPhase = .loading
         startLoad()
         try await ensureReady()
+    }
+    func promoteLoadPhaseAfterSync() {
+        if case .failed = loadPhase { loadPhase = .ready }
     }
     private func ensureReady() async throws {
         while true {
@@ -321,6 +339,7 @@ actor LibraryService {
                 guard loadID == identity else { continue }
                 snapshot = loaded.snapshot
                 fullTextIndex = loaded.fullTextIndex
+                desktopDetails = loaded.desktopDetails
                 loadPhase = .ready
                 loadTask = nil
                 loadID = nil
@@ -341,7 +360,7 @@ actor LibraryService {
         loadPhase = .loading
         let directory = self.directory, seedDirectory = self.seedDirectory, siteBaseURL = self.siteBaseURL
         loadTask = Task.detached(priority: .utility) {
-            try Self.loadContent(directory: directory, seedDirectory: seedDirectory, siteBaseURL: siteBaseURL, eagerlyLoaded: nil)
+            try Self.loadContent(directory: directory, seedDirectory: seedDirectory, siteBaseURL: siteBaseURL, eagerlyLoaded: nil, eagerlyLoadedDetails: nil)
         }
     }
 
@@ -397,6 +416,9 @@ actor LibraryService {
 
     private func performSync(identifier: UUID, progress: @escaping @Sendable (Progress) -> Void) async throws -> Summary {
         progress(Progress(phase: "manifest", message: "正在读取网站目录清单", completed: 0, total: 0))
+        if let desktopSummary = try await syncDesktopDetailsIfAvailable(identifier: identifier, progress: progress) {
+            return desktopSummary
+        }
         var indexURL = siteBaseURL.appendingPathComponent("client/index.json")
         let index: Data
         do { index = try await read(indexURL, limit: Self.maxTotal) }
@@ -493,6 +515,8 @@ actor LibraryService {
         }
         try atomicWrite(encoded, to: directory.appendingPathComponent("current.json"))
         snapshot = replacement
+        desktopDetails = nil
+        cleanupDesktopDetailsStateFilesAfterLegacyFallback()
         // The replacement catalog is now both persisted and in memory, so an earlier decode
         // failure no longer describes what this service serves: promote it to ready and the
         // ordinary commands stop rethrowing the old error. Only the failed phase is promoted; a
@@ -600,21 +624,66 @@ actor LibraryService {
         let cache = cacheURL("articles", key: Self.sha256(Data(paper.blogURL.utf8)), extension: "json")
         var previous: Article?
         if let data = try? Data(contentsOf: cache), let cached = try? JSONDecoder().decode(Article.self, from: data), cached.paperID == paperID { previous = cached }
+        if let detailEntry = activeDesktopDetails()?.paperDetails[paperID] {
+            if !refresh, var cached = previous {
+                let fastCheck = try verifyDesktopArticleFastPath(paper: paper, detailEntry: detailEntry, cached: cached)
+                let missing = !fastCheck.allAssetsPresent || !resourcesVerified(cached)
+                if missing { cached.completeOffline = false }
+                let current = fastCheck.verified
+                    && cached.revisionSHA256 == detailEntry.primaryArticleRevisionId
+                    && cached.catalogEpoch == snapshot.validationEpoch
+                    && cached.isStale != true
+                    && (!downloadImages || !missing)
+                if current { return mergeActiveTombstoneNotices(Self.presentSourceWarning(cached), paper: paper) }
+            }
+            do {
+                let fresh = try await fetchDesktopDetailArticle(paper, detailEntry: detailEntry, cache: cache, previous: previous, downloadImages: downloadImages, progress: progress)
+                return mergeActiveTombstoneNotices(fresh, paper: paper)
+            } catch let epochErr as DesktopEpochChangedError {
+                throw ServiceError.invalid(epochErr.localizedDescription)
+            } catch let storageErr as PrivateStoragePaths.StorageError {
+                throw ServiceError.invalid(storageErr.localizedDescription)
+            } catch let svcErr as ServiceError {
+                switch svcErr {
+                case .invalid, .cancelled:
+                    throw svcErr
+                case .httpStatus(let code) where code == 404 || code == 410:
+                    throw svcErr
+                default:
+                    if refresh { throw svcErr }
+                    guard var old = previous ?? (try? seedArticle(paper)) else { throw svcErr }
+                    old.isStale = true; old.cacheStatus = "stale"; old.validationAttemptedAt = Self.now(); old.expectedSourceVersion = paper.sourceVersion; old.catalogEpoch = snapshot.validationEpoch
+                    old.completeOffline = old.completeOffline && resourcesVerified(old)
+                    old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(svcErr.localizedDescription)"])).sorted()
+                    if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
+                    return mergeActiveTombstoneNotices(Self.presentSourceWarning(old), paper: paper)
+                }
+            } catch {
+                if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                if refresh { throw error }
+                guard var old = previous ?? (try? seedArticle(paper)) else { throw error }
+                old.isStale = true; old.cacheStatus = "stale"; old.validationAttemptedAt = Self.now(); old.expectedSourceVersion = paper.sourceVersion; old.catalogEpoch = snapshot.validationEpoch
+                old.completeOffline = old.completeOffline && resourcesVerified(old)
+                old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(error.localizedDescription)"])).sorted()
+                if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
+                return mergeActiveTombstoneNotices(Self.presentSourceWarning(old), paper: paper)
+            }
+        }
         if !refresh, var cached = previous {
             if cached.markdown == nil, !ClientProtocols.isContract(cached.mathMLContract, "published-html-mathml") { cached.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。") }
             let missing = !resourcesVerified(cached)
             if missing { cached.completeOffline = false }
             let parserCurrent = cached.markdown != nil || ClientProtocols.isContract(cached.mathMLContract, "published-html-mathml")
             let current = parserCurrent && Self.sourceMatches(cached, paper: paper) && cached.catalogEpoch == snapshot.validationEpoch && Self.age(cached.fetchedAt) <= 6 * 3600
-            if current && (!downloadImages || !missing), cached.isStale != true { return Self.presentSourceWarning(cached) }
-            if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return Self.presentSourceWarning(cached) }
+            if current && (!downloadImages || !missing), cached.isStale != true { return mergeActiveTombstoneNotices(Self.presentSourceWarning(cached), paper: paper) }
+            if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return mergeActiveTombstoneNotices(Self.presentSourceWarning(cached), paper: paper) }
         }
         if !refresh, snapshot.summary.syncedAt == nil, var seeded = try seedArticle(paper) {
             seeded.blogURL = paper.blogURL; seeded.cacheStatus = "bundled"; seeded.isStale = false
             indexText(seeded); return Self.presentSourceWarning(seeded)
         }
         do {
-            return try await fetchArticle(paper, cache: cache, previous: previous, downloadImages: downloadImages, progress: progress)
+            return mergeActiveTombstoneNotices(try await fetchArticle(paper, cache: cache, previous: previous, downloadImages: downloadImages, progress: progress), paper: paper)
         } catch {
             if Task.isCancelled || error is CancellationError { throw CancellationError() }
             guard var old = previous ?? (try? seedArticle(paper)) else { throw error }
@@ -623,7 +692,7 @@ actor LibraryService {
             if old.markdown == nil, !ClientProtocols.isContract(old.mathMLContract, "published-html-mathml") { old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。") }
             old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(error.localizedDescription)"])).sorted()
             if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
-            return Self.presentSourceWarning(old)
+            return mergeActiveTombstoneNotices(Self.presentSourceWarning(old), paper: paper)
         }
     }
     private func fetchArticle(_ paper: Paper, cache: URL, previous: Article?, downloadImages: Bool, progress: @escaping @Sendable (Progress) -> Void) async throws -> Article {
@@ -687,7 +756,7 @@ actor LibraryService {
         indexText(article)
         return article
     }
-    private func preserveRevision(_ article: Article, blogURL: String) throws {
+    func preserveRevision(_ article: Article, blogURL: String) throws {
         let bytes = try JSONEncoder().encode(article), key = Self.sha256(Data(blogURL.utf8))
         var identity = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
         for transient in ["fetchedAt", "catalogEpoch", "isStale", "cacheStatus", "validationAttemptedAt", "expectedSourceVersion", "notices"] { identity.removeValue(forKey: transient) }
@@ -703,7 +772,7 @@ actor LibraryService {
         let interval = Date().timeIntervalSince(date)
         return interval < -300 ? .infinity : max(0, interval)
     }
-    private func resourcesVerified(_ article: Article) -> Bool {
+    func resourcesVerified(_ article: Article) -> Bool {
         article.resources.allSatisfy { resource in
             guard let path = resource.localPath, let hash = resource.sha256 else { return false }
             let file: URL
@@ -727,7 +796,7 @@ actor LibraryService {
         guard !needle.isEmpty else { return [] }
         return fullTextIndex.filter { $0.value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains(needle) }.map(\.key).sorted()
     }
-    private func indexText(_ article: Article) {
+    func indexText(_ article: Article) {
         let text = String(article.plainText.prefix(1_000_000))
         guard fullTextIndex[article.paperID] != text else { return }
         var updated = fullTextIndex
@@ -847,6 +916,16 @@ actor LibraryService {
 
     func downloadPDF(for paperID: String, refresh: Bool = false, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> PDFDownload {
         try await ensureReady()
+        if let existingPaper = snapshot.papers.first(where: { $0.id == paperID }),
+           existingPaper.identityStatus == "verified",
+           (existingPaper.pdfURL == nil || (existingPaper.sourceKind == "arxiv" && existingPaper.sourceVersion == nil)),
+           activeDesktopDetails()?.paperDetails[paperID] != nil {
+            do {
+                _ = try await resolveDesktopDetailForPaper(paperID)
+            } catch let epochErr as DesktopEpochChangedError {
+                throw ServiceError.invalid(epochErr.localizedDescription)
+            }
+        }
         guard let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }), paper.identityStatus == "verified", let address = paper.pdfURL, let url = URL(string: address) else { throw ServiceError.unavailable("此记录没有经过核验的原文PDF链接。") }
         let sourceURL = paper.sourceURL.flatMap(URL.init(string:))
         let pdfVersion = (url.path.hasPrefix("/pdf/") ? String(url.path.dropFirst("/pdf/".count)) : url.lastPathComponent).replacingOccurrences(of: #"\.pdf$"#, with: "", options: .regularExpression)
@@ -924,26 +1003,44 @@ actor LibraryService {
     func citationFile(for paperID: String, format: String) async throws -> [String: Any] {
         try await ensureReady()
         let names = ["bib": "citation.bib", "ris": "citation.ris", "json": "citation.json"]
-        guard let name = names[format], let paper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) else { throw ServiceError.invalid("未选择可导出引用的论文或格式。") }
-        var addresses: [String: String] = [:], hashes: [String: String] = [:]
-        let cache = cacheURL("articles", key: Self.sha256(Data(paper.blogURL.utf8)), extension: "json")
-        if let data = try? Data(contentsOf: cache), let article = try? JSONDecoder().decode(Article.self, from: data), article.paperID == paperID { addresses = article.citationFiles ?? [:]; hashes = article.citationFileSHA256 ?? [:] }
-        if addresses[name] == nil {
-            // Discover the actual published download link; never synthesize BibTeX/RIS from metadata.
-            let data = try await read(try sameSite(paper.blogURL), limit: 8 * 1024 * 1024)
-            guard let html = String(data: data, encoding: .utf8) else { throw ServiceError.invalid("引用来源页面不是UTF-8。") }
-            let doc = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
-            try Self.validatePublishedPageIdentity(doc, paper: paper)
-            let declared = try publishedSidecarLinks(doc, paper: paper)
-            addresses = declared.urls; hashes = declared.hashes
+        guard let name = names[format], let initialPaper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) else { throw ServiceError.invalid("未选择可导出引用的论文或格式。") }
+        var addresses: [String: String] = [:], hashes: [String: String] = [:], sizes: [String: Int] = [:]
+        if activeDesktopDetails()?.paperDetails[paperID] != nil {
+            do {
+                if let detailSidecars = try await desktopDetailSidecarAddresses(for: initialPaper) {
+                    addresses = detailSidecars.urls
+                    hashes = detailSidecars.hashes
+                    sizes = detailSidecars.sizes
+                }
+            } catch let epochErr as DesktopEpochChangedError {
+                throw ServiceError.invalid(epochErr.localizedDescription)
+            }
+        } else {
+            let cache = cacheURL("articles", key: Self.sha256(Data(initialPaper.blogURL.utf8)), extension: "json")
+            if let data = try? Data(contentsOf: cache), let article = try? JSONDecoder().decode(Article.self, from: data), article.paperID == paperID {
+                addresses = article.citationFiles ?? [:]
+                hashes = article.citationFileSHA256 ?? [:]
+            }
+            if addresses[name] == nil {
+                // Discover the actual published download link; never synthesize BibTeX/RIS from metadata.
+                let data = try await read(try sameSite(initialPaper.blogURL), limit: 8 * 1024 * 1024)
+                guard let html = String(data: data, encoding: .utf8) else { throw ServiceError.invalid("引用来源页面不是UTF-8。") }
+                let doc = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+                try Self.validatePublishedPageIdentity(doc, paper: initialPaper)
+                let declared = try publishedSidecarLinks(doc, paper: initialPaper)
+                addresses = declared.urls; hashes = declared.hashes
+            }
         }
         guard let address = addresses[name] else { throw ServiceError.unavailable("该已发布页面没有此格式的真实引用文件，未现场生成替代引用。") }
-        let data = try await read(try sameSite(address), limit: 1024 * 1024)
+        let readLimit = min(sizes[name] ?? 1024 * 1024, 1024 * 1024)
+        let data = try await read(try sameSite(address), limit: readLimit)
+        if let expectedSize = sizes[name], data.count != expectedSize { throw ServiceError.invalid("引用原件字节长度与已核验详情声明不符。") }
         if let expected = hashes[name], Self.sha256(data) != expected { throw ServiceError.invalid("引用原件与该阅读版本保存的页面声明SHA不符。 ") }
         guard let text = String(data: data, encoding: .utf8), !text.isEmpty, !text.localizedCaseInsensitiveContains("<html") else { throw ServiceError.invalid("引用文件为空或返回了错误页面。") }
         if format == "bib" { guard text.range(of: #"(?m)^\s*@[A-Za-z]+\s*\{"#, options: .regularExpression) != nil else { throw ServiceError.invalid("已发布BibTeX文件格式无效。") } }
         if format == "ris" { guard text.hasPrefix("TY  - "), text.contains("ER  -") else { throw ServiceError.invalid("已发布RIS文件格式无效。") } }
-        if format == "json" { _ = try Self.validatedSidecar(data, paper: paper, context: false) }
+        let latestPaper = (snapshot.papers + (snapshot.retiredPapers ?? [])).first(where: { $0.id == paperID }) ?? initialPaper
+        if format == "json" { _ = try Self.validatedSidecar(data, paper: latestPaper, context: false) }
         return ["filename": name, "text": text, "sha256": Self.sha256(data), "sourceURL": address]
     }
 
@@ -995,7 +1092,7 @@ actor LibraryService {
         return (result, [:])
     }
 
-    private static func validatedSidecar(_ data: Data, paper: Paper, context: Bool) throws -> JSONValue {
+    static func validatedSidecar(_ data: Data, paper: Paper, context: Bool) throws -> JSONValue {
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               ClientProtocols.hasValidHeader(value, context ? "paper-research-context" : "researcher-sidecars") else { throw ServiceError.invalid("引用附加文件合同不受支持。") }
         if paper.identityStatus == "verified" {
@@ -1040,7 +1137,7 @@ actor LibraryService {
             return try await citationFile(for: id, format: payload["format"] as? String ?? "json")
         case "library.paperDetail":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }
-            return try paperDetail(id: id)
+            return try await paperDetailResponse(id: id)
         case "library.tagIndex":
             return tagIndex()
         case "library.article":
@@ -1055,10 +1152,10 @@ actor LibraryService {
         }
     }
 
-    private func cacheURL(_ name: String, key: String, extension ext: String) -> URL {
+    func cacheURL(_ name: String, key: String, extension ext: String) -> URL {
         directory.appendingPathComponent(name, isDirectory: true).appendingPathComponent("\(key).\(ext)")
     }
-    private func atomicWrite(_ data: Data, to url: URL) throws {
+    func atomicWrite(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: [.atomic])
     }

@@ -3,13 +3,18 @@ import WebKit
 
 extension PaperDigestApp {
     func prepareOffline(progress:@escaping @Sendable([String:Any])->Void) async throws->[String:Any] {
-        let owner=currentPaperID,generation=contextGeneration,paper=currentPaper
+        let owner=currentPaperID,generation=contextGeneration,stamp=currentPaperCatalogStamp
+        var paper=currentPaper
         guard !owner.isEmpty,!owner.hasPrefix("local:"),currentArticle["offlineMode"] as? Bool != true else{throw DesktopError.message("请选择网站当前论文；已有离线快照可直接在本机资料中打开")}
         let article=try await library.handle(command:"library.article",payload:["paperID":owner],progress:progress)
-        try verifyArticleBinding(article,paper:paper)
         try Task.checkCancellation()
         guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，未保存其他论文的离线包")}
+        paper=try await refreshBoundPaperIfSameCatalog(id:owner,generation:generation,stamp:stamp,fallback:paper)
+        try verifyArticleBinding(article,paper:paper)
         let pdf=try await library.handle(command:"library.downloadPDF",payload:["paperID":owner],progress:progress)
+        try Task.checkCancellation()
+        guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，原资料缓存保留，请重新选择后保存")}
+        paper=try await refreshBoundPaperIfSameCatalog(id:owner,generation:generation,stamp:stamp,fallback:paper)
         try verifyPDFBinding(pdf,paper:paper,article:article)
         guard pdf["isStale"] as? Bool != true else{throw DesktopError.message("原文当前性复验失败，旧 PDF 仍可阅读，未与新导读混装离线包")}
         try Task.checkCancellation()
@@ -35,7 +40,7 @@ extension PaperDigestApp {
         try Task.checkCancellation()
         guard generation==contextGeneration,!terminationPending,!maintenanceBusy else{throw DesktopError.message("阅读上下文已变化，离线包未安装")}
         if beforeInstall==nil {try requireMainContextAvailable()}
-        contextGeneration+=1;currentPaper=paper;currentPaperID=id;currentArticle=article;offlinePDF=result["pdf"] as? [String:Any]
+        contextGeneration+=1;currentPaper=paper;currentPaperID=id;currentPaperCatalogStamp="";currentArticle=article;offlinePDF=result["pdf"] as? [String:Any]
         pdfView.document=nil;pdfView.isHidden=true;currentPDFSHA="";currentPDFPath=nil;pdfOwner="";pdfVersion="";currentPDFReceipt=[:];pendingPDFPage=nil;selectionSource=[:];annotationsByID=[:]
         // No await between the final CAS, native source installation and close.
         afterInstall?();emit("paper.changed");return result

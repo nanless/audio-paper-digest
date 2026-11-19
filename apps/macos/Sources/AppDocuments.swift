@@ -12,6 +12,19 @@ import UniformTypeIdentifiers
         guard DesktopArxivIdentifier.base(of:version)==base else{throw DesktopError.message("原文版本与论文身份不一致或格式无效，未准备归档")}
         return "arxiv:"+version
     }
+    func refreshBoundPaperIfSameCatalog(id:String,generation:Int,stamp:String,fallback:[String:Any]) async throws -> [String:Any] {
+        guard currentPaperID==id,contextGeneration==generation else{throw DesktopError.message("论文已切换")}
+        guard !stamp.isEmpty else{return fallback}
+        let liveStamp = await library.currentCatalogStamp()
+        guard currentPaperID==id,contextGeneration==generation else{throw DesktopError.message("论文已切换")}
+        guard liveStamp==stamp else{return fallback}
+        let detail = try? await library.paperDetail(id:id)
+        guard currentPaperID==id,contextGeneration==generation else{throw DesktopError.message("论文已切换")}
+        guard let refreshed = detail?["paper"] as? [String:Any] else{return fallback}
+        currentPaper = refreshed
+        try? store.rememberPaper(refreshed)
+        return refreshed
+    }
     func verifyArticleBinding(_ article:[String:Any],paper:[String:Any]) throws {
         guard article["paperID"] as? String==paper["id"] as? String,
               article["sourceURL"] as? String==(paper["sourceURL"] as? String ?? paper["blogURL"] as? String),
@@ -73,7 +86,7 @@ import UniformTypeIdentifiers
         let target=folder.appendingPathComponent(hash+".pdf");try bytes.write(to:target,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path)
         let importedID="local:"+hash
         let imported:[String:Any]=["id":importedID,"localPDFPath":target.path,"pdfSHA":hash,"title":source.deletingPathExtension().lastPathComponent,"titleZh":source.deletingPathExtension().lastPathComponent,"sourceKind":"local","identityStatus":"unverified","authors":[],"tags":[]]
-        try store.rememberPaper(imported);contextGeneration+=1;pdfVersion="";currentPDFReceipt=[:];pendingPDFPage=1;annotationsByID=[:];currentPaperID=importedID;currentPaper=imported;currentArticle=[:];selectionSource=[:];currentPDFSHA=hash;pdfOwner=currentPaperID;currentPDFPath=target;pdfView.document=document
+        try store.rememberPaper(imported);contextGeneration+=1;pdfVersion="";currentPDFReceipt=[:];pendingPDFPage=1;annotationsByID=[:];currentPaperID=importedID;currentPaper=imported;currentPaperCatalogStamp="";currentArticle=[:];selectionSource=[:];currentPDFSHA=hash;pdfOwner=currentPaperID;currentPDFPath=target;pdfView.document=document
         emit("local.opened",["paper":currentPaper,"pdf":pdfStatus()])
     }
     func unlockPDF(_ document:PDFDocument,passwordProvider:(()->String?)?=nil) throws {
@@ -89,13 +102,21 @@ import UniformTypeIdentifiers
     }
     func archiveMaterials(_ payload:[String:Any],includeAnalysis:Bool=true,access:DetailDocumentAccess?=nil) async throws->[String:Any] {
         try requireDocumentContext(access,kinds:[.zotero,.export])
-        let captured=currentPaperID,paper=currentPaper,generation=contextGeneration
+        let captured=currentPaperID,generation=contextGeneration,stamp=currentPaperCatalogStamp
+        var paper=currentPaper
         try await flushEdits()
         try Task.checkCancellation()
         try requireDocumentContext(access,kinds:[.zotero,.export])
         guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("保存期间论文已切换，未准备其他论文的材料")}
         guard !currentPaperID.isEmpty,!currentPaperID.hasPrefix("local:") else{throw DesktopError.message("请先选取已发布论文；本地 PDF 缺少已核验书目，仍可解析及导出个人研究")}
-        if currentArticle["paperID"] as? String != captured {let loaded=try await library.handle(command:"library.article",payload:["paperID":captured]);guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")};try Task.checkCancellation();try requireDocumentContext(access,kinds:[.zotero,.export]);try verifyArticleBinding(loaded,paper:paper);currentArticle=loaded}
+        if currentArticle["paperID"] as? String != captured {
+            let loaded=try await library.handle(command:"library.article",payload:["paperID":captured])
+            guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")}
+            try Task.checkCancellation();try requireDocumentContext(access,kinds:[.zotero,.export])
+            paper=try await refreshBoundPaperIfSameCatalog(id:captured,generation:generation,stamp:stamp,fallback:paper)
+            try requireDocumentContext(access,kinds:[.zotero,.export])
+            try verifyArticleBinding(loaded,paper:paper);currentArticle=loaded
+        }
         let article=currentArticle
         try verifyArticleBinding(article,paper:paper)
         if article["isStale"] as? Bool==true, (article["sourceVersion"] as? String != paper["sourceVersion"] as? String || article["sourceURL"] as? String != paper["sourceURL"] as? String){throw DesktopError.message("当前离线导读属于旧来源版本；请完成新版本读取后归档，旧稿仍可阅读") }
@@ -118,7 +139,27 @@ import UniformTypeIdentifiers
         if captured.hasPrefix("page:"){bibliography["url"]=paper["blogURL"] ?? ""}
         if let doi=citation["doi"] as? String,!doi.isEmpty{bibliography["doi"]=doi}
         var result:[String:Any]=["identity":try Self.archiveIdentity(paperID:captured,sourceVersion:paper["sourceVersion"] as? String),"bibliography":bibliography]
-        do {let pdf:[String:Any];if article["offlineMode"] as? Bool==true{guard let identifier=paper["offlinePackageID"] as? String else{throw DesktopError.message("离线包身份缺失")};let checked=try await storage.openPackage(id:identifier);guard let saved=checked["pdf"] as? [String:Any],saved["sha256"] as? String==offlinePDF?["sha256"] as? String else{throw DesktopError.message("离线包不含已核验的原始 PDF")};pdf=saved}else{pdf=try await library.handle(command:"library.downloadPDF",payload:["paperID":captured])};try verifyPDFBinding(pdf,paper:paper,article:article);guard pdf["isStale"] as? Bool != true else{throw DesktopError.message("原文复验失败，旧缓存未作为当前来源归档")};result["pdfPath"]=pdf["filePath"]}catch{if Task.isCancelled || error is CancellationError{throw CancellationError()};result["pdfNotice"]=error.localizedDescription}
+        do {
+            let pdf:[String:Any]
+            if article["offlineMode"] as? Bool==true {
+                guard let identifier=paper["offlinePackageID"] as? String else{throw DesktopError.message("离线包身份缺失")}
+                let checked=try await storage.openPackage(id:identifier)
+                guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")}
+                guard let saved=checked["pdf"] as? [String:Any],saved["sha256"] as? String==offlinePDF?["sha256"] as? String else{throw DesktopError.message("离线包不含已核验的原始 PDF")}
+                pdf=saved
+            } else {
+                pdf=try await library.handle(command:"library.downloadPDF",payload:["paperID":captured])
+                guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")}
+                paper=try await refreshBoundPaperIfSameCatalog(id:captured,generation:generation,stamp:stamp,fallback:paper)
+            }
+            try verifyPDFBinding(pdf,paper:paper,article:article)
+            guard pdf["isStale"] as? Bool != true else{throw DesktopError.message("原文复验失败，旧缓存未作为当前来源归档")}
+            result["pdfPath"]=pdf["filePath"]
+        } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")}
+            result["pdfNotice"]=error.localizedDescription
+        }
         try Task.checkCancellation()
         try requireDocumentContext(access,kinds:[.zotero,.export])
         let exports=directory.appendingPathComponent("Exports",isDirectory:true);try FileManager.default.createDirectory(at:exports,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])

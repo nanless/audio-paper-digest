@@ -103,10 +103,88 @@ enum AggregateFailure: Error, LocalizedError {
 enum PublishedAggregateReader {
     struct Shard: Codable, Sendable {let url:String;let bytes:Int;let sha256:String;let recordCount:Int}
     struct Manifest: Codable {let contract:String;let recordCount:Int;let totalBytes:Int;let shards:[Shard]}
+    struct DesktopSnapshot: Codable {let contract:String;let recordCount:Int;let paperCount:Int;let appearanceCount:Int;let catalogShards:[Shard]}
     static let site=URL(string:"https://nanless.github.io/audio-paper-digest-blog/")!
     static func sha(_ bytes:Data)->String {SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()}
     static func require(_ condition:Bool,_ reason:String)throws {if !condition{throw AggregateFailure.invalid(reason)}}
     static func validSHA(_ value:String)->Bool {value.range(of:#"\A[a-f0-9]{64}\z"#,options:.regularExpression) != nil}
+    static func isDesktopSnapshotShard(_ url:String, sha256:String)->Bool {
+        validSHA(sha256) && url == "client/details/catalog/\(sha256).json"
+    }
+    static func isDesktopSnapshotManifest(_ raw:Data)->Bool {
+        guard raw.count>0, raw.count<=1024*1024, String(data:raw,encoding:.utf8) != nil,
+              let obj=(try? JSONSerialization.jsonObject(with:raw)) as? [String:Any] else { return false }
+        return obj["contract"] as? String == ClientProtocols.contract("paper-desktop-snapshot")
+            && ClientProtocols.hasValidHeader(obj, "paper-desktop-snapshot")
+    }
+    static func desktopSnapshot(_ raw:Data)throws->DesktopSnapshot {
+        try require(raw.count>0 && raw.count<=1024*1024, "汇总桌面快照大小无效")
+        guard let text=String(data:raw,encoding:.utf8) else { throw AggregateFailure.invalid("汇总桌面快照编码无效") }
+        let selfSHA=sha(raw)
+        try require(!text.localizedCaseInsensitiveContains(selfSHA), "汇总桌面快照不能包含自身SHA")
+        guard let obj=try JSONSerialization.jsonObject(with:raw) as? [String:Any],
+              obj["contract"] as? String == ClientProtocols.contract("paper-desktop-snapshot"),
+              ClientProtocols.hasValidHeader(obj, "paper-desktop-snapshot") else {
+            throw AggregateFailure.invalid("汇总桌面快照合同无效")
+        }
+        let value=try JSONDecoder().decode(DesktopSnapshot.self, from:raw)
+        try require((1...128).contains(value.catalogShards.count) && value.recordCount>0 && value.appearanceCount==value.recordCount && value.paperCount>0 && value.paperCount<=value.recordCount, "汇总桌面快照计数无效")
+        var urls=Set<String>(), totalBytes=0, totalRows=0
+        for shard in value.catalogShards {
+            try require(isDesktopSnapshotShard(shard.url, sha256:shard.sha256) && (1...1024*1024).contains(shard.bytes) && shard.recordCount>0 && urls.insert(shard.url).inserted, "汇总桌面分片描述无效")
+            totalBytes += shard.bytes; totalRows += shard.recordCount
+        }
+        try require(totalBytes>0 && totalBytes<=64*1024*1024 && totalRows==value.recordCount, "汇总桌面快照总字节或条数不一致")
+        return value
+    }
+    static func readDesktopSnapshot(raw:Data, siteBase:URL=site, shardBytes:(Shard)throws->Data)throws->PublishedAggregateCatalog {
+        let s=try desktopSnapshot(raw), snapshot=sha(raw)
+        let rowEncoding=ClientProtocols.contract("foundation-sorted-keys-json")
+        let basePath=URLComponents(url:siteBase,resolvingAgainstBaseURL:false)!.percentEncodedPath
+        let prefix=basePath.hasSuffix("/") ? basePath : basePath+"/"
+        var result:[PublishedAggregate]=[], pages=Set<String>(), rowsSeen=0
+        for shard in s.catalogShards {
+            try Task.checkCancellation()
+            let bytes=try shardBytes(shard)
+            try require(bytes.count==shard.bytes && sha(bytes)==shard.sha256 && String(data:bytes,encoding:.utf8) != nil, "汇总桌面分片原件与快照不一致")
+            guard let rows=try JSONSerialization.jsonObject(with:bytes) as? [[String:Any]], rows.count==shard.recordCount else {
+                throw AggregateFailure.invalid("汇总桌面分片记录数量无效")
+            }
+            result.append(contentsOf: try parseDesktopAggregateRows(rows, shard:shard, snapshot:snapshot, prefix:prefix, siteBase:siteBase, rowEncoding:rowEncoding, pages:&pages, rowsSeen:&rowsSeen))
+        }
+        try require(rowsSeen==s.recordCount, "汇总桌面目录集合不完整")
+        return PublishedAggregateCatalog(snapshotSHA256:snapshot, sourceRecordCount:rowsSeen, aggregateCount:result.count, records:result.sorted{$0.id<$1.id})
+    }
+    static func parseDesktopAggregateRows(_ rows:[[String:Any]], shard:Shard, snapshot:String, prefix:String, siteBase:URL, rowEncoding:String, pages:inout Set<String>, rowsSeen:inout Int)throws->[PublishedAggregate] {
+        var chunk:[PublishedAggregate]=[]
+        for (position,row) in rows.enumerated() {
+            try Task.checkCancellation(); rowsSeen += 1
+            guard let pageType=row["pageType"] as? String,
+                  let appearanceId=row["appearanceId"] as? String,
+                  let pageUrl=row["pageUrl"] as? String,
+                  appearanceId == pageUrl,
+                  appearanceId.range(of:#"\Aposts/[a-z0-9][a-z0-9._-]*/\z"#, options:.regularExpression) != nil else {
+                throw AggregateFailure.invalid("桌面目录缺少有效页面类型或appearanceId")
+            }
+            let url=try pageURL(prefix+pageUrl, siteBase:siteBase)
+            try require(pages.insert(url.absoluteString).inserted, "桌面目录页面地址重复")
+            if pageType=="paper" { continue }
+            try require(row["identityStatus"] as? String == "aggregate-page" && (row["paperId"] == nil || row["paperId"] is NSNull), "桌面汇总记录不能携带单篇论文身份")
+            guard let kind=PublishedAggregate.Kind(rawValue:pageType), kind == .daily || kind == .conference else {
+                throw AggregateFailure.invalid("桌面目录出现不支持的非论文类型")
+            }
+            guard let title=row["title"] as? String, !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+                throw AggregateFailure.invalid("桌面汇总缺少标题")
+            }
+            let rawDate=row["blogPublishedAt"] as? String ?? ""
+            let displayDate=rawDate.isEmpty || rawDate.hasPrefix("0001-01-01") ? nil : rawDate
+            let explicitScope=row["conferenceScope"] as? String
+            try require(explicitScope==nil || (kind == .conference && ["overview","task"].contains(explicitScope!)), "会议范围字段无效")
+            let source=PublishedAggregate.Source(manifestSHA256:snapshot, shardSHA256:shard.sha256, shardBytes:shard.bytes, shardURL:shard.url, rowIndex:position, normalizedRowSHA256:sha(try normalizedRow(row)), normalizedRowAlgorithm:rowEncoding)
+            chunk.append(PublishedAggregate(id:"page:"+URLComponents(url:url,resolvingAgainstBaseURL:false)!.percentEncodedPath, kind:kind, conferenceScope:explicitScope, title:title, titleZh:row["titleZh"] as? String ?? title, summary:row["summary"] as? String ?? "", rawDate:rawDate, displayDate:displayDate, categories:row["categories"] as? [String] ?? [], tags:row["tagConceptIds"] as? [String] ?? [], sourceURL:url.absoluteString, source:source))
+        }
+        return chunk
+    }
     static func pageURL(_ value:String,siteBase:URL=site)throws->URL {
         guard let components=URLComponents(string:value),components.user==nil,components.password==nil,components.query==nil,components.fragment==nil else{throw AggregateFailure.invalid("汇总页面地址无效")}
         let path=components.percentEncodedPath
@@ -132,6 +210,9 @@ enum PublishedAggregateReader {
         return value
     }
     static func read(manifest raw:Data,siteBase:URL=site,shardBytes:(Shard)throws->Data)throws->PublishedAggregateCatalog {
+        if isDesktopSnapshotManifest(raw) {
+            return try readDesktopSnapshot(raw:raw, siteBase:siteBase, shardBytes:shardBytes)
+        }
         let m=try manifest(raw),snapshot=sha(raw)
         let rowEncodingFamily="foundation-sorted-keys-json"
         let rowEncoding=m.contract=="paper-search-index-manifest" ? ClientProtocols.contract(rowEncodingFamily)

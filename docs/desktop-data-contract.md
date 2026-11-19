@@ -1,8 +1,8 @@
-# Mac 客户端静态数据合同
+# 客户端静态数据合同
 
-本文保留“独立论文详情与内容寻址正文”的后续设计，专用详情出口和导出器尚未启用。当前源码已采用 `client/index.json` 目录、`client/papers/` 四份附属文件，以及对原公开入口的精确兼容读取，见[网站数据适配](mac-app-data.md)及[Android 说明](../apps/android/README.md)。这不等于下文的详情、删除事件或快照出口已经实现；1.4.3 至 1.4.5 已随现有目录入口发行，但不包含下文的详情与快照出口。
+本文规定论文速递公开站点的独立论文详情与内容寻址正文出口（`client/details/*`）。`paper-desktop-manifest`、`paper-desktop-snapshot` 与 `paper-desktop-detail` 已在 [`config/protocols/clients.json`](../config/protocols/clients.json) 登记，由 `apps/generate-client-protocols.py` 生成双端校验常量，由博客构建（`scripts/export-desktop-details.js` 与 `scripts/verify-build.js`）导出并全量核验，并在当前源码中由 Mac（[`LibraryDesktopDetails.swift`](../apps/macos/Sources/LibraryDesktopDetails.swift)、[`LibraryService.swift`](../apps/macos/Sources/LibraryService.swift)）与 Android 客户端原生消费，见[网站数据与恢复](mac-app-data.md)及[Android 说明](../apps/android/README.md)。
 
-拟议接口不再用路径编号或合同编号表示结构变化。下文的名称和字段是设计建议，实施时须先登记实际结构，再由共享生成器提供稳定合同名与 `schemaFingerprint`；未登记、未生成的设计字段不能当作可访问地址或已通过检查的记录。
+当目标站点的 `client/details/manifest.json` 返回 HTTP 404 或 410（尚未部署该出口）时，客户端按过渡兼容规则回退读取 `client/index.json` 及原 `index.json`；一旦 `client/details/manifest.json` 返回 HTTP 200 或其他非缺失错误，任何协议头、结构指纹、字节长度或 SHA-256 异常均失败即拒并保留上一份完整快照，绝不静默回退。已发行的 1.4.3 至 1.4.5 安装包继续读取 `client/index.json` 与 `client/papers/` 四份附属文件。接口不以路径编号表示结构变化，所有结构变更均以已登记的稳定合同名与 `schemaFingerprint` 为准。
 
 产品范围与界面见[桌面研究工作台规划](desktop-research-workbench-plan.md)。本合同不修改日更、会议、历史的来源资格、审查、费用或发布凭证。
 
@@ -21,6 +21,7 @@
 | 博客 `assets/js/search-index-loader.js` | 同源目录、UTF-8、字节、SHA、数量检查与旧格式兼容 | Mac 使用自己的下载、事务与缓存实现 |
 | 博客 `content/posts/` | 已发布图文正文、评分解释、来源版本与标签元数据 | 不把未提交工作区、草稿、待审或失败稿当已发布内容 |
 | 博客 `static/client/papers/` 与构建目录中的原地址兼容文件 | `citation.json`、BibTeX、RIS、`rethink-context.json` | 后者是摘要和研究上下文，不包含完整长文 |
+| 博客 `scripts/export-desktop-details.js` 与 `scripts/verify-build.js` | 生成并逐字节校验 `client/details/*` 快照、目录分片、删除分片、论文详情与安全 HTML 片段 | 模型请求数为 0；同时保留 `client/index.json`、`index.json` 与 `client/papers/` 供过渡及已发行客户端读取 |
 | 本项目 `scripts/publish-to-blog.py` | arXiv 与会议共用的四文件序列化及 SHA 记录 | 引用与上下文的旧声明、原字节及公开 URL 保持兼容 |
 
 页面里的 `paper-tools__client-sidecars` 声明必须保留 `schemaFingerprint` 的驼峰写法。Hugo 会把 front matter 参数 map 的嵌套键递归小写，博客模板因此按白名单逐字段重建声明，构建时再校验；2026-11-03 与 11-04 的页面曾输出小写 `schemafingerprint`，客户端只把它当作唯一已知别名，归一化后仍按登记指纹严格校验，不放开其他字段或历史格式。
@@ -37,7 +38,7 @@
 
 ## 3. 文件布局与完整性
 
-这套设计把“从哪里找到最新版本”和“某份内容究竟是什么”分开：入口清单会更新，正文和资源则以实际内容的 SHA 命名。客户端下载入口后，沿描述符逐项取文件并核验，全部目录完整才切换版本。以下布局是拟议接口，不是当前已部署的下载地址。
+这套设计把“从哪里找到最新版本”和“某份内容究竟是什么”分开：入口清单会更新，正文和资源则以实际内容的 SHA 命名。客户端下载入口后，沿描述符逐项取文件并核验，全部目录完整才切换版本。当前源码优先请求以下 `client/details/*` 路径，仅在 `manifest.json` 返回 HTTP 404 或 410 时回退至 `client/index.json`。
 
 路径相对站点部署前缀；当前前缀为 `/audio-paper-digest-blog/`，不能拼接为域名根目录。
 
@@ -45,6 +46,7 @@
 client/details/manifest.json
 client/details/snapshots/<sha256>.json
 client/details/catalog/<sha256>.json
+client/details/tombstones/<sha256>.json
 client/details/papers/<sha256>.json
 client/details/articles/<sha256>.html
 client/details/assets/<sha256>.<ext>
@@ -56,19 +58,19 @@ client/details/assets/<sha256>.<ext>
 
 | 字段 | 类型与含义 |
 |---|---|
-| `contract` | 拟定稳定名 `paper-desktop-manifest`；尚未登记 |
-| `schemaFingerprint` | 完整结构声明的实际 SHA-256；实施时生成，不在设计文档中猜填 |
+| `contract` | 稳定合同名 `paper-desktop-manifest`，已在 [`config/protocols/clients.json`](../config/protocols/clients.json) 登记 |
+| `schemaFingerprint` | 完整结构声明的实际 SHA-256，由 `apps/generate-client-protocols.py` 从登记结构生成并逐端核对 |
 | `snapshotId` | 快照 JSON 原始字节 SHA-256，64 位小写十六进制 |
 | `snapshot` | 文件描述符，指向对应 `snapshots/<snapshotId>.json` |
 | `generatedAt` | 真实构建时间，带时区的 ISO 时间 |
 | `sourceCommit` | 真实博客 Git OID |
 | `basePath` | 站点部署前缀，首尾有 `/` |
 
-快照 JSON 的拟定稳定名为 `paper-desktop-snapshot`，包含 `schemaFingerprint`、`sourceCommit`、`catalogShards`、`recordCount`、`paperCount`、`appearanceCount`、`tombstoneShards`、`tombstoneCount`、`tagCatalogs`。无删除记录时使用空数组和 0，不省略成未知。快照不包含自己的 SHA，避免循环计算。
+快照 JSON 的稳定合同名为 `paper-desktop-snapshot`，包含 `schemaFingerprint`、`sourceCommit`、`catalogShards`、`recordCount`、`paperCount`、`appearanceCount`、`tombstoneShards`、`tombstoneCount`、`tagCatalogs`。无删除记录时使用空数组和 0，不省略成未知。快照不包含自己的 SHA，避免循环计算。
 
 文件描述符固定为 `url`、`bytes`、`sha256`；含记录数组的文件另外有 `recordCount`。URL 必须是协议限定的相对站内路径，不含凭据、查询串、片段或 `..`。所有计数是非负安全整数；实际 UTF-8 JSON、记录数、总数和文件字节必须一致。
 
-拟议首批调度上限：目录单分片 1 MiB、最多 128 个、目录总量 64 MiB，沿用现有搜索协议的量级；完整正文不放进目录。实现还须分别设置详情、正文和资产的文件大小及总下载预算，超限保留旧版本并报告原因，不能自动放宽。未登记的合同名称或结构指纹拒绝切换；新增可选字段也须遵循对应已登记结构的规则，不能忽略完整性所需字段或改变必需字段的含义。
+调度与大小上限：`manifest.json` 上限 64 KiB，快照 JSON 上限 1 MiB，目录与删除记录单分片上限 1 MiB、最多 128 个分片、总量上限 64 MiB，单篇详情 JSON 上限 2 MiB，单篇正文片段上限 16 MiB，单件捆绑资源上限 16 MiB 且单篇捆绑资源总计不超过 64 MiB；完整正文不放进目录。超限保留旧版本并报告原因，不能自动放宽。未登记的合同名称或结构指纹拒绝切换；新增可选字段也须遵循对应已登记结构的规则，不能忽略完整性所需字段或改变必需字段的含义。
 
 SHA 证明字节一致，不证明科学正确，也不能替代 HTTPS 或原发布资格。
 
@@ -101,7 +103,7 @@ arXiv 基础论文身份和 `v1/v2` 来源版本分开；会议继续保留如 `
 
 ## 5. 论文详情、引用完整性与评分
 
-详情 JSON 的拟定稳定名为 `paper-desktop-detail`，包含论文身份、来源版本、出现记录、当前导读修订、引用资料、作者、原摘要及可用出处。详情可以按修订分文件，目录通过文件描述符引用，避免下载时混入后来版本。
+详情 JSON 的稳定合同名为 `paper-desktop-detail`，包含论文身份、来源版本、出现记录、当前导读修订、引用资料、作者、原摘要及可用出处。详情按内容 SHA 独立寻址，目录通过文件描述符引用，避免下载时混入后来版本。
 
 | 字段组 | 必须保留的含义 |
 |---|---|
@@ -167,13 +169,13 @@ CDN 混入不同版本、文件 404、SHA/大小不符、UTF-8/JSON 无效、未
 
 模型请求只在用户主动研究时发生；输入范围、模型、时间、真实用量与结果版本保留在个人层。密钥使用正式应用的系统凭据存储，不进入静态数据包、网页存储或诊断导出。Zotero 连接授权也不属于网站同步协议。
 
-## 10. 首批验收
+## 10. 验收要点
 
 - 日更 arXiv、正式会议、历史未核验页、汇总和特殊版本披露均有真实样本；页面数与去重论文数分别正确。
 - 已发布提交树导出无模型请求，不混入未提交会议修改、生产失败稿或私有运行账。
-- 相同输入产生相同内容对象；manifest 不出现自引用 SHA；目录和详情不能跨快照串稿。
+- 相同输入产生相同内容对象；manifest 与快照均不出现自引用 SHA；目录和详情不能跨快照串稿。
 - 标题、作者顺序、博客/论文日期、分数、分类、版本 PDF 和来源警告与原结果相同，未知字段不补猜。
 - 图文、公式、宽表离线依赖逐项可查；外部图缺失不标完整离线。
 - 新增、更正、移除、正式撤稿、替换和恢复均保留个人内容与旧证据关联。
 - SHA 错误、缺分片、混版本、断网、磁盘失败和重启后只恢复必要步骤，保留上一份完整快照。
-- 未实现的静态出口、真实模型与 Zotero 能力不能借原型的演示状态标为已完成。
+- 尚未上线部署的服务能力、真实模型与 Zotero 操作按实际验证记录范围，不能借原型演示状态标为已完成。

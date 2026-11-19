@@ -1,16 +1,18 @@
 # 论文速递工作台 Mac 版：数据与恢复
 
-客户端读取论文速递公开网站的目录、正文与引用资料。日更、会议和历史文章进入同一资料库，原评分、分类、来源和版本保持不变。数据读取由 [LibraryService](../apps/macos/Sources/LibraryService.swift) 实现；规划中的 [独立论文详情出口](desktop-data-contract.md)尚未部署。
+客户端读取论文速递公开网站的目录、正文与引用资料。日更、会议和历史文章进入同一资料库，原评分、分类、来源和版本保持不变。数据读取由 [LibraryService](../apps/macos/Sources/LibraryService.swift) 与 [LibraryDesktopDetails](../apps/macos/Sources/LibraryDesktopDetails.swift) 实现，优先遵循[静态数据合同](desktop-data-contract.md)消费 `client/details/*` 快照与内容寻址详情。
 
 ## 网站资料与个人研究
 
-当前源码先从站点前缀下的 `client/index.json` 读取目录入口，再取得相对于该入口的搜索分片。只有新入口明确返回 HTTP 404 或 410，才读取原来的 `index.json`。格式损坏、未知结构指纹、服务器错误和普通网络故障均不能改读旧入口。已发行的旧客户端继续使用原入口；1.4.3 起包含这组兼容读取，1.4.4 与 1.4.5 沿用。
+当前源码同步时先请求站点前缀下的 `client/details/manifest.json`（上限 64 KiB），核验 `paper-desktop-manifest` 协议头与部署前缀。随后应用按原始字节长度与 SHA-256 校验 `client/details/snapshots/<snapshotId>.json`（`paper-desktop-snapshot`），并在独立暂存区完整验证 `catalog/` 目录分片、`tombstones/` 删除分片及成对的 `tagCatalogs` 分类词表。构建目录时，日更与会议汇总页只进入汇总目录，不进入单篇 `Paper` 列表；同一论文的多页面出现记录会合并，移除、撤稿与恢复事件单独留档。所有文件通过校验后，应用先写入与本轮验证代绑定的 `PublishedLibrary/desktop-details/macos-states/<snapshotId>-<epoch>.json`，再以 `PublishedLibrary/current.json` 作为单一原子提交点切换目录快照，最后清理已淘汰的本端旧状态文件。从跨端备份恢复时，若目录携带 Android 状态见证，Mac 会按原始字节长度与 SHA-256 冷核验已保存的快照、目录分片与删除分片并重建索引。
+
+仅当 `client/details/manifest.json` 明确返回 HTTP 404 或 410（目标站点尚未部署 `client/details/*`）时，客户端才按过渡兼容路径读取 `client/index.json`（若再次返回 404 或 410 则读取原 `index.json`）。一旦 `client/details/manifest.json` 返回 HTTP 200 或 500 等非缺失响应，任何格式损坏、未知结构指纹、字节数或 SHA-256 不符、分片缺失均失败即拒，保留上一份完整快照与本地详情状态，绝不静默回退读取旧入口。已发行的 1.4.3 至 1.4.5 安装包继续使用 `client/index.json` 路径。
 
 分片就是将大目录拆成的若干小文件。应用核对每份文件的字节、大小、条数和 SHA 内容指纹，全部成功后才替换本机目录快照。快照表示某个时点的一份完整目录。取消或失败时，上一份完整目录继续可用，不把已经下载的一部分当作全站结果。新同步保存的本机目录也带结构指纹；已有目录按它实际保存的格式读取。未知或混用格式不能当成空目录重新保存。
 
-分类资料也成对读取：优先使用 `client/data/tag-catalog-snapshot.json` 和 `client/data/tag-catalog-versions.json`，只有两份新地址都返回 404 时才读取原来的 `data/` 地址。新旧地址各自只接受该地址登记的格式；在错误地址收到另一种已知格式，也不会把它当成可用结果。新旧格式声明集中登记在 [`config/protocols/clients.json`](../config/protocols/clients.json)。当前格式使用稳定名称和 `schemaFingerprint`，后者是完整结构声明的内容指纹；旧格式按照原声明读取，不能因名称相同就替换成当前结构。
+分类资料成对核验：`client/details/*` 快照直接在 `tagCatalogs` 中声明成对描述符与词表版本；走 `client/index.json` 过渡路径时，优先读取 `client/data/tag-catalog-snapshot.json` 和 `client/data/tag-catalog-versions.json`，只有两份新地址都返回 404 时才读取原来的 `data/` 地址。新旧地址各自只接受该地址登记的格式；在错误地址收到另一种已知格式，也不会把它当成可用结果。所有客户端协议声明集中登记在 [`config/protocols/clients.json`](../config/protocols/clients.json)。当前格式使用稳定名称和 `schemaFingerprint`，后者是完整结构声明的内容指纹；旧格式按照原声明读取，不能因名称相同就替换成当前结构。
 
-论文页给新客户端单独声明四份 `client/papers/` 附属文件及其 SHA：引用 JSON、BibTeX、RIS 和研究上下文。读取时核对同一页面、论文身份、日期、文件目录和实际响应字节。网页可见下载链接仍指向构建时生成的原 `data/papers/` 兼容地址，供已发行客户端使用。兼容文件不是新的科学来源证明；生成、审查和发布资格仍由原正常流程核验。
+当目录快照激活 `desktop-details` 时，打开导读、导出引用或下载会议原文 PDF 会按描述符按需读取并缓存 `client/details/papers/<sha256>.json`（`paper-desktop-detail`，上限 2 MiB）与 `client/details/articles/<sha256>.html`（上限 16 MiB）。应用在解析前先核对原始字节长度与 SHA-256，再校验内嵌 `paper-citation-source` 协议头与四份 `client/papers/` 附属文件（`citation.json`、`citation.bib`、`citation.ris`、`rethink-context.json`）的字节数及 SHA。正文片段采用严格的标签、属性与协议正向白名单，禁止 HTML 注释、脚本、嵌入框架、表单、事件属性、未加引号危险字符与非白名单 URL 协议。元数据严格区分 `originalTitle` 与 `readerTitle`，保留 `sourceVersionWarning`、`provenanceDisclosure` 与撤稿证据提示；若必要外部或缺失图片尚未缓存，`completeOffline` 如实记为 `false`。跨快照更新时，SHA 未变的详情与正文直接复用本地文件，不重复下载；读取期间若目录快照切换，应用拒绝混用跨代内容。走过渡路径时，论文页同样声明四份 `client/papers/` 附属文件及 SHA，网页可见下载链接仍保留原 `data/papers/` 兼容地址供已发行客户端使用。兼容文件不是新的科学来源证明；生成、审查和发布资格仍由原正常流程核验。
 
 同一篇论文可能在多个日更或会议页面出现。应用依据明确的论文身份将这些出现记录关联起来，标题相似不作为合并依据；这样既保留各次导读，又避免把私人笔记误归给另一篇论文。
 
@@ -18,7 +20,7 @@
 
 | 资料 | 保存范围 |
 |---|---|
-| 网站缓存 | `PublishedLibrary/` 下的目录、正文修订、图片、指定版本 PDF 与引用记录；Android 的 `PublishedLibrary/offline-index.json` 是启动用派生索引，可重建，不作为发布或阅读资格的权威 |
+| 网站缓存 | `PublishedLibrary/` 下的目录、`desktop-details/` 内容寻址快照/详情/正文与删除记录历史、正文修订、图片、指定版本 PDF 与引用记录；Android 的 `PublishedLibrary/offline-index.json` 是启动用派生索引，可重建，不作为发布或阅读资格的权威 |
 | 个人存储 | 笔记、标注、收藏、待读、阅读状态、任务及模型会话 |
 | 模型材料 | `ModelUsage/` 下的实际输入、响应、来源、用量和恢复记录 |
 | Zotero 记录 | 目标身份、选定材料、逐步结果与续传检查点 |
@@ -75,7 +77,7 @@ PDF 保存实际字节 SHA、来源、版本和物理页数。原链接更新后
 
 下列接口供应用界面向本机服务请求操作，不是网页可以任意调用的公共网络 API：`library.status`、`library.sync`、`library.list`、`library.search`、`library.article`、`library.citationFile`、`library.downloadPDF`、`library.paperDetail`、`library.tagIndex`、`library.retryLoad`、`library.network` 与 `library.cancel`。读取论文、来源与版本时使用明确身份；进度返回实际阶段、完成数与总量。
 
-`library.list` 默认返回完整行；传入 `compact: true` 时省略逐篇完整引用和官网分类记录，只保留浏览所需字段。省略的两部分由 `library.tagIndex` 按目录快照提供，`library.paperDetail` 按论文 id 返回完整行。分类证据按目录 `snapshotID` 与网页词表内容身份（`snapshotContentSHA256`、`versionsContentSHA256`）复用，个人资料变化不会重新发送；`library.paperDetail` 只按 id 取当前或已移除论文的完整行。
+`library.list` 默认返回完整行；传入 `compact: true` 时省略逐篇完整引用和官网分类记录，只保留浏览所需字段。省略的两部分由 `library.tagIndex` 按目录快照提供，`library.paperDetail` 按论文 id 返回完整行，并在当前快照启用 `desktop-details` 时按需核验附带 `desktopDetail` 详情对象及匹配的 `tombstones` 移除/撤稿记录。分类证据按目录 `snapshotID` 与网页词表内容身份（`snapshotContentSHA256`、`versionsContentSHA256`）复用，个人资料变化不会重新发送；`library.paperDetail` 只按 id 取当前或已移除论文的完整行。
 
 启动只在主线程同步解码 8 MiB 以内的小目录；超过 8 MiB 的 `current.json` 与全文索引都在后台任务中载入。就绪前 `library.status` 返回 `loading` 且不带 `snapshotID`，读取命令等待就绪，不会把尚未载入当成空目录。载入失败后由命令级 `library.retryLoad` 显式重试；`library.sync` 也从同一失败状态直接开始整站同步，失败阶段下不调用 `ensureReady`，同步写入后把阶段提升为就绪。其他命令不会因失败反复全量读取。备份恢复在暂存完成和替换完成后都等待目录就绪，替换失败时回滚到原目录。
 

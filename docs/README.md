@@ -56,7 +56,7 @@
 | 客户端性能测量与优化范围 | [客户端性能](client-performance.md) |
 | 客户端发行核验 | [发行核验](client-release-verification.md) |
 | 客户端安全与许可 | [安全说明](client-security-audit.md)、[Android 许可清单说明](../apps/android/licenses.README.md) |
-| 后续静态数据接口设计 | [desktop/v1 数据合同](desktop-data-contract.md)，当前并未部署该接口 |
+| 客户端静态数据合同 | [静态数据合同](desktop-data-contract.md)：`client/details/*` 快照与详情结构、构建导出及双端过渡兼容规则 |
 | 两端共用的测试样稿与显示资源 | [样稿准备与使用边界](../prototypes/macos-research/README.md) |
 
 ## 运行一项内容生产任务

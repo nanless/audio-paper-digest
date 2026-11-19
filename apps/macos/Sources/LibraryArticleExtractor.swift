@@ -158,7 +158,7 @@ extension LibraryService {
         }
     }
 
-    private static func articlePlainText(_ body: XMLElement) throws -> String {
+    static func articlePlainText(_ body: XMLElement) throws -> String {
         let copy = body.copy() as! XMLElement
         let roots = try copy.nodes(forXPath: ".//*[local-name()='math' and not(ancestor::*[local-name()='math'])]")
         for case let math as XMLElement in roots {
@@ -312,7 +312,7 @@ extension LibraryService {
                        notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"], mathMLContract: "published-html-mathml"), blogURL: pageURL.absoluteString)
     }
 
-    private static func sanitize(_ root: XMLElement, pageURL: URL) throws {
+    static func sanitize(_ root: XMLElement, pageURL: URL) throws {
         let allowed: Set<String> = ["div", "p", "span", "a", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "img", "figure", "figcaption", "strong", "b", "em", "i", "u", "s", "sup", "sub", "br", "hr", "details", "summary", "dl", "dt", "dd", "math", "mrow", "mi", "mo", "mn", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot", "mtext", "mtable", "mtr", "mtd", "mover", "munder", "munderover", "semantics", "annotation"]
         let attributes: Set<String> = ["id", "class", "title", "alt", "width", "height", "colspan", "rowspan", "scope", "display", "mathvariant", "xmlns", "encoding"]
         for child in root.children ?? [] {

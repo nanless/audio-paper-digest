@@ -69,7 +69,30 @@ extension LibraryService {
         guard let paper = snapshot.papers.first(where: { $0.id == id }) ?? (snapshot.retiredPapers ?? []).first(where: { $0.id == id }) else {
             throw ServiceError.invalid("资料库中没有这篇论文。")
         }
-        return ["paper": Self.listRow(paper, retained: !currentIDs.contains(paper.id), compact: false), "snapshotID": snapshot.summary.snapshotID]
+        var response: [String: Any] = ["paper": Self.listRow(paper, retained: !currentIDs.contains(paper.id), compact: false), "snapshotID": snapshot.summary.snapshotID]
+        if let state = activeDesktopDetails() {
+            let appearanceURLs = Set(paper.appearances + [paper.blogURL])
+            let matchingTombstones = state.activeTombstones.filter { tomb in
+                if tomb.paperId == paper.id { return true }
+                if let url = try? sameSite(tomb.appearanceId).absoluteString, appearanceURLs.contains(url) { return true }
+                return false
+            }
+            if !matchingTombstones.isEmpty,
+               let tombArray = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(matchingTombstones))) as? [[String: Any]] {
+                response["tombstones"] = tombArray
+            }
+            if let entry = state.paperDetails[id],
+               let hit = try Self.verifiedOptionalLocalFile(
+                   relative: "desktop-details/papers/\(entry.primaryDetail.sha256).json",
+                   directory: directory,
+                   expectedBytes: entry.primaryDetail.bytes,
+                   maxBytes: entry.primaryDetail.bytes,
+                   expectedSHA256: entry.primaryDetail.sha256
+               ) {
+                response["desktopDetail"] = try Self.parseUTF8JSONObject(hit.bytes, label: entry.primaryDetail.url)
+            }
+        }
+        return response
     }
 
     /// Per-guide browsing evidence for every paper the list can show. The app asks once per

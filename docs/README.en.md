@@ -58,7 +58,7 @@ Use the [workbench review and release playbook](workbench-review-playbook.md) fo
 | Client performance measurements and optimization scope | [Client performance](client-performance.md) |
 | Client release verification | [Release verification](client-release-verification.md) |
 | Client security and licensing | [Security record](client-security-audit.md), [Android license inventory](../apps/android/licenses.README.en.md) |
-| Proposed static data interface | [desktop/v1 contract](desktop-data-contract.md); this optional interface is not deployed |
+| Client static data contract | [Static data contract](desktop-data-contract.md): `client/details/*` snapshot and detail schemas, blog build export, and transitional fallback rules |
 | Shared test samples and display resources | [Preparation and use boundaries](../prototypes/macos-research/README.en.md) |
 
 ## Run a production task

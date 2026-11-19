@@ -5,7 +5,7 @@ actor ReleaseCatalogFixture {
     let files:[String:Data]
     var calls=0
     init(_ files:[String:Data]){self.files=files}
-    func read(_ url:URL,_ limit:Int)throws->Data {calls+=1;guard let bytes=files[url.path],bytes.count<=limit else{throw NSError(domain:"fixture",code:1)};return bytes}
+    func read(_ url:URL,_ limit:Int)throws->Data {calls+=1;if url.path=="/blog/client/details/manifest.json"{throw LibraryService.ServiceError.httpStatus(404)};guard let bytes=files[url.path],bytes.count<=limit else{throw NSError(domain:"fixture",code:1)};return bytes}
     func count()->Int{calls}
 }
 @main struct ReleaseEmptyLibraryTests {
@@ -28,7 +28,7 @@ actor ReleaseCatalogFixture {
         let initial=await service.status();try expect(initial.paperCount==0&&initial.syncedAt==nil,"fresh library truly empty unsynced");try expect(initial.source=="尚未同步","honest unsynced source")
         let before=await transport.count();try expect(before==0,"no implicit website/model call")
         let actual=try await service.sync();try expect(actual.paperCount==1&&actual.recordCount==1,"on-demand actual fixture catalog count")
-        let after=await transport.count();try expect(after==2,"exactly manifest and one shard, no model")
+        let after=await transport.count();try expect(after==3,"probe client/details/manifest.json (404), then client/index.json and one shard, no model")
         print("PASS formal empty bootstrap and explicit fixture sync: 6 assertions; no external HTTP/LLM/user data")
     }
 }
