@@ -578,7 +578,165 @@ function addPdfDeclaration(declarations, blockers, pdfPath, hash, receiptPath, s
     declarations.set(resolvedPdf, existing);
 }
 
+function isValidConferenceRelativePdfPath(pdfRel) {
+    if (typeof pdfRel !== 'string' || !pdfRel || pdfRel !== pdfRel.trim()) return false;
+    if (pdfRel.includes('\\') || pdfRel.includes('\0') || path.isAbsolute(pdfRel) || path.win32.isAbsolute(pdfRel)) {
+        return false;
+    }
+    const segments = pdfRel.split('/');
+    return segments.length > 0 && segments.every(part => part.length > 0 && part !== '.' && part !== '..');
+}
+
+function resolveConferenceLedgerSourceRoot(base, value, validPdfMembers, allMembersValid, entryPath, cacheRoot, getConferenceSourcesCache, blockers) {
+    const cacheInfo = getConferenceSourcesCache();
+    if (cacheInfo.status === 'symlink') {
+        blockers.push({ type: 'symlink', path: entryPath, message: 'conference-sources 目录不能是符号链接' });
+        return null;
+    }
+    if (cacheInfo.status === 'invalid' || cacheInfo.status === 'io') {
+        blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'conference ledger 缺少可用的 conference-sources 缓存目录' });
+        return null;
+    }
+    const ledgerImplMatch = base.match(/-([a-f0-9]{12})-ledger\.json$/);
+    if (!ledgerImplMatch) {
+        return { root: cacheRoot, confineTo: cacheRoot };
+    }
+    if (cacheInfo.status !== 'ok') {
+        blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'conference ledger 缺少可用的 conference-sources 缓存目录' });
+        return null;
+    }
+    const impl12 = ledgerImplMatch[1];
+    const matches = cacheInfo.entries.filter(item => item.name.startsWith(`generation-${impl12}`));
+    if (matches.length === 1) {
+        if (matches[0].isSymlink) {
+            blockers.push({ type: 'symlink', path: entryPath, message: `conference ledger 匹配的缓存目录 ${matches[0].name} 是符号链接` });
+            return null;
+        }
+        if (!matches[0].isDirectory) {
+            blockers.push({ type: 'invalid_receipt', path: entryPath, message: `conference ledger 匹配的缓存路径 ${matches[0].name} 不是普通目录` });
+            return null;
+        }
+        return { root: matches[0].fullPath, confineTo: matches[0].fullPath };
+    }
+    if (matches.length > 1) {
+        if (matches.some(item => item.isSymlink)) {
+            blockers.push({ type: 'symlink', path: entryPath, message: `conference ledger 匹配到含符号链接的候选缓存目录 (${impl12})` });
+        } else {
+            blockers.push({ type: 'invalid_receipt', path: entryPath, message: `conference ledger 匹配到多个候选 generation 缓存目录 (${matches.length})` });
+        }
+        return null;
+    }
+    // generation-<impl64> 隔离引入前的旧版纯 v1 文本提取账本（audio-paper-digest-conference-text）直接落在 conference-sources/<conf>-<year>/ 下。
+    const legacyConfDir = (value.conference
+        && typeof value.conference === 'object'
+        && !Array.isArray(value.conference)
+        && typeof value.conference.id === 'string'
+        && /^[a-z0-9][a-z0-9-]*$/.test(value.conference.id)
+        && Number.isInteger(value.conference.year))
+        ? path.resolve(cacheRoot, `${value.conference.id}-${value.conference.year}`)
+        : null;
+    const isPreGenerationTextLedger = allMembersValid
+        && Boolean(legacyConfDir)
+        && value.version === 'conference-source-ledger-v1'
+        && !Object.hasOwn(value, 'contract')
+        && !Object.hasOwn(value, 'schemaFingerprint')
+        && isInside(legacyConfDir, cacheRoot)
+        && legacyConfDir !== path.resolve(cacheRoot)
+        && validPdfMembers.every(({ member, pdfRel }) => {
+            const resolvedMemberPdf = path.resolve(cacheRoot, ...pdfRel.split('/'));
+            return member?.provenance?.text?.extractor === 'audio-paper-digest-conference-text'
+                && member?.provenance?.artifacts?.extractor === 'audio-paper-digest-conference-text'
+                && pdfRel.startsWith(`${value.conference.id}-${value.conference.year}/`)
+                && isInside(resolvedMemberPdf, legacyConfDir)
+                && resolvedMemberPdf !== legacyConfDir;
+        });
+    if (isPreGenerationTextLedger) {
+        try {
+            const legacyStat = fs.lstatSync(legacyConfDir);
+            if (legacyStat.isSymbolicLink()) {
+                blockers.push({ type: 'symlink', path: entryPath, message: `conference ledger 旧版会议目录是符号链接: ${legacyConfDir}` });
+                return null;
+            }
+            if (legacyStat.isDirectory()) {
+                return { root: cacheRoot, confineTo: legacyConfDir };
+            }
+        } catch (_) {
+            // 缺失或无法读取时继续按 invalid_receipt 阻断。
+        }
+    }
+    blockers.push({
+        type: 'invalid_receipt',
+        path: entryPath,
+        message: `conference ledger 未找到唯一匹配的 generation-${impl12}* 缓存目录`
+    });
+    return null;
+}
+
 function scanPdfDeclarations(layout, declarations, blockers, runtimeReal = null) {
+    const conferenceCacheRoot = path.join(layout.runtime, 'conference-sources');
+    let conferenceSourcesCache = null;
+    const conferencePathStatCache = new Map();
+    const cachedLstat = targetPath => {
+        if (conferencePathStatCache.has(targetPath)) {
+            const cached = conferencePathStatCache.get(targetPath);
+            if (cached.error) throw cached.error;
+            return cached.stat;
+        }
+        try {
+            const stat = fs.lstatSync(targetPath);
+            conferencePathStatCache.set(targetPath, { stat, error: null });
+            return stat;
+        } catch (error) {
+            conferencePathStatCache.set(targetPath, { stat: null, error });
+            throw error;
+        }
+    };
+    const getConferenceSourcesCache = () => {
+        if (conferenceSourcesCache !== null) return conferenceSourcesCache;
+        let rootStat;
+        try {
+            rootStat = cachedLstat(conferenceCacheRoot);
+        } catch (error) {
+            conferenceSourcesCache = error?.code === 'ENOENT'
+                ? { status: 'missing', entries: [] }
+                : { status: 'io', message: error.message, entries: [] };
+            return conferenceSourcesCache;
+        }
+        if (rootStat.isSymbolicLink()) {
+            conferenceSourcesCache = { status: 'symlink', entries: [] };
+            return conferenceSourcesCache;
+        }
+        if (!rootStat.isDirectory()) {
+            conferenceSourcesCache = { status: 'invalid', entries: [] };
+            return conferenceSourcesCache;
+        }
+        let names;
+        try {
+            names = fs.readdirSync(conferenceCacheRoot);
+        } catch (error) {
+            conferenceSourcesCache = { status: 'io', message: error.message, entries: [] };
+            return conferenceSourcesCache;
+        }
+        const entries = [];
+        for (const name of names.sort()) {
+            if (!/^generation-[a-f0-9]{64}$/.test(name)) continue;
+            const fullPath = path.join(conferenceCacheRoot, name);
+            try {
+                const entryStat = cachedLstat(fullPath);
+                entries.push({
+                    name,
+                    fullPath,
+                    isSymlink: entryStat.isSymbolicLink(),
+                    isDirectory: entryStat.isDirectory() && !entryStat.isSymbolicLink()
+                });
+            } catch (_) {
+                entries.push({ name, fullPath, isSymlink: false, isDirectory: false });
+            }
+        }
+        conferenceSourcesCache = { status: 'ok', entries };
+        return conferenceSourcesCache;
+    };
+
     walk(layout.runtime, (entryPath, stat) => {
         if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.json') return;
         const relative = path.relative(layout.runtime, entryPath).replace(/\\/g, '/');
@@ -592,7 +750,8 @@ function scanPdfDeclarations(layout, declarations, blockers, runtimeReal = null)
             && base === 'source-manifest.json';
         const inConferenceLedgers = parts[0] === 'conference-ledgers'
             && parts.length === 2
-            && !/\.import-receipt\.json$/i.test(base);
+            && !/\.import-receipt\.json$/i.test(base)
+            && !/-plan(?:\.[^/]+)?\.json$/i.test(base);
         const inHistoricalPdfReceipts = (
             parts[0] === 'historical-openreview-pdf-sources'
             || parts[0] === 'historical-icml-pdf-sources'
@@ -647,18 +806,89 @@ function scanPdfDeclarations(layout, declarations, blockers, runtimeReal = null)
             }
         }
         if (inConferenceLedgers && Array.isArray(value.members)) {
-            const cacheRoot = path.join(layout.runtime, 'conference-sources');
+            const pdfMembers = [];
             for (const member of value.members) {
                 if (!member || typeof member !== 'object') continue;
                 const pdfPresent = member?.availability?.pdf === 'present';
                 if (!pdfPresent && !member.pdfFile && !member.pdfSha256) continue;
-                const pdfRel = typeof member.pdfFile === 'string' ? member.pdfFile.trim() : '';
-                if (!pdfRel) {
-                    blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'conference ledger 成员缺少合法的 pdfFile' });
+                pdfMembers.push(member);
+            }
+            if (pdfMembers.length > 0) {
+                const validPdfMembers = [];
+                for (const member of pdfMembers) {
+                    const pdfRel = typeof member.pdfFile === 'string' ? member.pdfFile.trim() : '';
+                    if (!pdfRel) {
+                        blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'conference ledger 成员缺少合法的 pdfFile' });
+                    } else if (!isValidConferenceRelativePdfPath(pdfRel)) {
+                        blockers.push({ type: 'path_escape', path: entryPath, message: 'conference ledger PDF 路径包含非法段或逃逸片段' });
+                    } else {
+                        validPdfMembers.push({ member, pdfRel });
+                    }
+                }
+                const allMembersValid = validPdfMembers.length === pdfMembers.length;
+                if (validPdfMembers.length === 0) {
+                    const cacheStatus = getConferenceSourcesCache().status;
+                    if (cacheStatus === 'symlink') {
+                        blockers.push({ type: 'symlink', path: entryPath, message: 'conference-sources 目录不能是符号链接' });
+                    } else if (cacheStatus === 'invalid' || cacheStatus === 'io') {
+                        blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'conference ledger 缺少可用的 conference-sources 缓存目录' });
+                    }
                 } else {
-                    addPdfDeclaration(declarations, blockers,
-                        path.join(cacheRoot, pdfRel),
-                        member.pdfSha256, entryPath, 'conference-ledger', layout.runtime, runtimeReal);
+                    const resolvedTarget = resolveConferenceLedgerSourceRoot(
+                        base, value, validPdfMembers, allMembersValid, entryPath, conferenceCacheRoot, getConferenceSourcesCache, blockers
+                    );
+                    if (resolvedTarget) {
+                        const resolvedRootAbs = path.resolve(resolvedTarget.root);
+                        const confineAbs = path.resolve(resolvedTarget.confineTo);
+                        for (const { member, pdfRel } of validPdfMembers) {
+                            const segments = pdfRel.split('/');
+                            const candidatePdf = path.resolve(resolvedRootAbs, ...segments);
+                            if (!isInside(candidatePdf, resolvedRootAbs)
+                                || candidatePdf === resolvedRootAbs
+                                || !isInside(candidatePdf, confineAbs)
+                                || candidatePdf === confineAbs) {
+                                blockers.push({ type: 'path_escape', path: entryPath, message: 'conference ledger PDF 路径逃逸会议来源目录' });
+                                continue;
+                            }
+                            let cursor = resolvedRootAbs;
+                            let segmentBlocked = false;
+                            for (let index = 0; index < segments.length; index += 1) {
+                                cursor = path.join(cursor, segments[index]);
+                                const isLeaf = index === segments.length - 1;
+                                let segStat;
+                                try {
+                                    segStat = cachedLstat(cursor);
+                                } catch (error) {
+                                    if (error?.code === 'ENOENT') break;
+                                    blockers.push({ type: 'io', path: cursor, message: error.message });
+                                    segmentBlocked = true;
+                                    break;
+                                }
+                                if (segStat.isSymbolicLink()) {
+                                    blockers.push({
+                                        type: 'symlink',
+                                        path: entryPath,
+                                        message: `conference ledger PDF 路径包含符号链接段: ${cursor}`
+                                    });
+                                    segmentBlocked = true;
+                                    break;
+                                }
+                                if (!isLeaf && !segStat.isDirectory()) {
+                                    blockers.push({
+                                        type: 'invalid_receipt',
+                                        path: entryPath,
+                                        message: `conference ledger PDF 中间路径不是目录: ${cursor}`
+                                    });
+                                    segmentBlocked = true;
+                                    break;
+                                }
+                            }
+                            if (segmentBlocked) continue;
+                            addPdfDeclaration(declarations, blockers,
+                                candidatePdf,
+                                member.pdfSha256, entryPath, 'conference-ledger', layout.runtime, runtimeReal);
+                        }
+                    }
                 }
             }
         }
@@ -1133,7 +1363,10 @@ function collectPdfDedupeState(options = {}) {
                 });
                 return;
             }
-            if (!isInside(resolved, staleLocksRoot) && isLockOrReclaimEntryName(base)) {
+            // Hugo 预览构建会在站点根留下空标记文件 .hugo_build.lock（与 scripts/locks.js 一致忽略普通文件；符号链接已在 walk 中阻断）。
+            if (!(base === '.hugo_build.lock' && stat.isFile())
+                && !isInside(resolved, staleLocksRoot)
+                && isLockOrReclaimEntryName(base)) {
                 inspectLockEntry(resolved, rawBlockers, { regularFileType: 'active_lock' });
                 return;
             }

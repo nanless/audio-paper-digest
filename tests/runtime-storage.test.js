@@ -1195,4 +1195,423 @@ describe('运行时重复 PDF 写时复制克隆去重 (pdf-dedupe)', () => {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }
     });
+
+    it('新版 -<impl12>-ledger.json 解析 generation-<impl64> 下 PDF（含重复报告、dry-run、--apply、SHA 失配及 0/2 候选阻断）', () => {
+        // 1) 正常唯一匹配 generation-<impl64>（同时存在 *-plan.json、*.import-receipt.json 与旧版 v1 文本提取账本）
+        {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-modern-conference-ledger-payload';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                const impl12 = '692ff151eb4e';
+                const impl64 = `${impl12}31d6277b1d19f26696bca9e34b2eecec14cbdd68b8d953084a8a`;
+                const officialPdf = writeFile(projectRoot, 'data/runtime/official-conference-acquisitions/aaai-2026/pdfs/36960.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/official-conference-acquisitions/aaai-2026/receipts/36960.json',
+                    JSON.stringify({ pdf: { relativePath: 'pdfs/36960.pdf', sha256: sha } }));
+                const genPdf = writeFile(
+                    projectRoot,
+                    `data/runtime/conference-sources/generation-${impl64}/aaai-2026-2026/conference-paper-id--36960/pdf.pdf`,
+                    bytes
+                );
+                const legacyPdf = writeFile(
+                    projectRoot,
+                    'data/runtime/conference-sources/aistats-2026-2026/conference-paper-id--naderi26a/pdf.pdf',
+                    bytes
+                );
+                writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/aaai-2026-24d8bedc0805fbb0-${impl12}-ledger.json`,
+                    JSON.stringify({
+                        version: 'conference-source-ledger-v1',
+                        conference: { id: 'aaai-2026', year: 2026 },
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'aaai-2026-2026/conference-paper-id--36960/pdf.pdf',
+                            pdfSha256: sha,
+                            provenance: {
+                                text: { extractor: 'audio-paper-digest-conference-structured' },
+                                artifacts: { extractor: 'audio-paper-digest-conference-structured' }
+                            }
+                        }]
+                    })
+                );
+                writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/aaai-2026-24d8bedc0805fbb0-${impl12}-ledger.import-receipt.json`,
+                    JSON.stringify({ contract: 'conference-import-receipt-v2' })
+                );
+                writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/aaai-2026-24d8bedc0805fbb0-${impl12}-plan.json`,
+                    JSON.stringify({ contract: 'conference-run-plan-v2', shards: [] })
+                );
+                writeFile(
+                    projectRoot,
+                    'data/runtime/conference-ledgers/aistats-2026-4b721395564a9444-087f1b43b1ad-ledger.json',
+                    JSON.stringify({
+                        version: 'conference-source-ledger-v1',
+                        conference: { id: 'aistats-2026', year: 2026 },
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'aistats-2026-2026/conference-paper-id--naderi26a/pdf.pdf',
+                            pdfSha256: sha,
+                            provenance: {
+                                text: { extractor: 'audio-paper-digest-conference-text' },
+                                artifacts: { extractor: 'audio-paper-digest-conference-text' }
+                            }
+                        }]
+                    })
+                );
+
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.deepStrictEqual(report.blockers, []);
+                assert.strictEqual(report.missingDeclaredPdfCount, 0);
+                assert.strictEqual(report.unboundPdfCount, 0);
+                assert.strictEqual(report.declaredPdfCount, 3);
+                assert.strictEqual(report.duplicateGroups.length, 1);
+                assert.strictEqual(report.duplicateGroups[0].occurrenceCount, 3);
+
+                const dryRun = dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(dryRun.mode, 'dry-run');
+                assert.deepStrictEqual(dryRun.blockers, []);
+                assert.strictEqual(dryRun.missingDeclaredPdfCount, 0);
+                assert.strictEqual(dryRun.duplicateGroupCount, 1);
+                assert.strictEqual(dryRun.candidateCount, 2);
+
+                if (process.platform === 'darwin') {
+                    const applied = dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true });
+                    assert.strictEqual(applied.mode, 'apply');
+                    assert.deepStrictEqual(applied.blockers, []);
+                    assert.strictEqual(applied.dedupedFiles, 2);
+                    for (const p of [officialPdf, genPdf, legacyPdf]) {
+                        assert.strictEqual(fs.lstatSync(p).nlink, 1);
+                        assert.strictEqual(fs.readFileSync(p, 'utf8'), bytes);
+                    }
+                }
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 2) generation-<impl64> 下 PDF 字节与账本声明 SHA-256 不符时触发 declared_hash_mismatch 阻断
+        {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-modern-ledger-sha-mismatch';
+                const impl12 = '815baba0ef85';
+                const impl64 = `${impl12}cbe1c75149e307315ef7697335dfd92a97a8b8fcebbdedf8117a`;
+                writeFile(projectRoot, 'data/runtime/other/donor.pdf', bytes);
+                writeFile(
+                    projectRoot,
+                    `data/runtime/conference-sources/generation-${impl64}/cvpr-2026-2026/p1/pdf.pdf`,
+                    bytes
+                );
+                writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/cvpr-2026-ecf63e8e1b1018bf-${impl12}-ledger.json`,
+                    JSON.stringify({
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'cvpr-2026-2026/p1/pdf.pdf',
+                            pdfSha256: 'd'.repeat(64)
+                        }]
+                    })
+                );
+                assert.throws(
+                    () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                    err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                        && err.plan.blockers.some(item => item.type === 'declared_hash_mismatch')
+                );
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 3) 0 个匹配 generation-* 目录时触发 invalid_receipt 阻断（不静默跳过核验）
+        {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-modern-ledger-zero-gen';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                const impl12 = 'abcdef012345';
+                writeFile(projectRoot, 'data/runtime/a/1.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/b/2.pdf', bytes);
+                const ledgerPath = writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/icml-2026-1111222233334444-${impl12}-ledger.json`,
+                    JSON.stringify({
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'icml-2026-2026/p1/pdf.pdf',
+                            pdfSha256: sha
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'invalid_receipt' && item.path === ledgerPath), true);
+                assert.throws(
+                    () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                    err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                        && err.plan.blockers.some(item => item.type === 'invalid_receipt' && item.path === ledgerPath)
+                );
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 4) 2 个匹配 generation-* 目录时触发 invalid_receipt 阻断
+        {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-modern-ledger-two-gens';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                const impl12 = 'fedcba987654';
+                const genA = `generation-${impl12}${'a'.repeat(52)}`;
+                const genB = `generation-${impl12}${'b'.repeat(52)}`;
+                writeFile(projectRoot, `data/runtime/conference-sources/${genA}/neurips-2026-2026/p1/pdf.pdf`, bytes);
+                writeFile(projectRoot, `data/runtime/conference-sources/${genB}/neurips-2026-2026/p1/pdf.pdf`, bytes);
+                const ledgerPath = writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/neurips-2026-5555666677778888-${impl12}-ledger.json`,
+                    JSON.stringify({
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'neurips-2026-2026/p1/pdf.pdf',
+                            pdfSha256: sha
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'invalid_receipt' && item.path === ledgerPath), true);
+                assert.throws(
+                    () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                    err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                        && err.plan.blockers.some(item => item.type === 'invalid_receipt' && item.path === ledgerPath)
+                );
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 5) 匹配的 generation-* 为符号链接时触发 symlink 阻断
+        if (process.platform !== 'win32') {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-modern-ledger-symlink-gen';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                const impl12 = '012345abcdef';
+                const genSym = `generation-${impl12}${'c'.repeat(52)}`;
+                const realDir = path.join(projectRoot, 'outside-gen');
+                fs.mkdirSync(path.join(realDir, 'iclr-2026-2026/p1'), { recursive: true });
+                fs.writeFileSync(path.join(realDir, 'iclr-2026-2026/p1/pdf.pdf'), bytes);
+                fs.symlinkSync(realDir, path.join(projectRoot, `data/runtime/conference-sources/${genSym}`));
+                const ledgerPath = writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/iclr-2026-9999aaaabbbbcccc-${impl12}-ledger.json`,
+                    JSON.stringify({
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'iclr-2026-2026/p1/pdf.pdf',
+                            pdfSha256: sha
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'symlink' && item.path === ledgerPath), true);
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 6) pdfFile 含 .. 路径逃逸段（'aistats-2026-2026/../other/pdf.pdf' 与 '../../outside.pdf'）均产生 path_escape 并阻断 --apply
+        for (const badPdfFile of ['aistats-2026-2026/../other/pdf.pdf', '../../outside.pdf']) {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-traversal-blocker';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                writeFile(projectRoot, 'data/runtime/a/1.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/b/2.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/conference-sources/aistats-2026-2026/p1/pdf.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/conference-sources/other/pdf.pdf', bytes);
+                const ledgerPath = writeFile(
+                    projectRoot,
+                    'data/runtime/conference-ledgers/aistats-2026-4b721395564a9444-087f1b43b1ad-ledger.json',
+                    JSON.stringify({
+                        version: 'conference-source-ledger-v1',
+                        conference: { id: 'aistats-2026', year: 2026 },
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: badPdfFile,
+                            pdfSha256: sha,
+                            provenance: {
+                                text: { extractor: 'audio-paper-digest-conference-text' },
+                                artifacts: { extractor: 'audio-paper-digest-conference-text' }
+                            }
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'path_escape' && item.path === ledgerPath), true);
+                assert.throws(
+                    () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                    err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                        && err.plan.blockers.some(item => item.type === 'path_escape' && item.path === ledgerPath)
+                );
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 7) 伪造混合头（version: 'conference-source-ledger-v1' + contract: 'conference-source-ledger'）且 0 个 generation-* 时以 invalid_receipt 阻断
+        {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-hybrid-header-blocker';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                writeFile(projectRoot, 'data/runtime/a/1.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/b/2.pdf', bytes);
+                writeFile(projectRoot, 'data/runtime/conference-sources/aistats-2026-2026/p1/pdf.pdf', bytes);
+                const ledgerPath = writeFile(
+                    projectRoot,
+                    'data/runtime/conference-ledgers/aistats-2026-4b721395564a9444-087f1b43b1ad-ledger.json',
+                    JSON.stringify({
+                        version: 'conference-source-ledger-v1',
+                        contract: 'conference-source-ledger',
+                        conference: { id: 'aistats-2026', year: 2026 },
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'aistats-2026-2026/p1/pdf.pdf',
+                            pdfSha256: sha,
+                            provenance: {
+                                text: { extractor: 'audio-paper-digest-conference-text' },
+                                artifacts: { extractor: 'audio-paper-digest-conference-text' }
+                            }
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'invalid_receipt' && item.path === ledgerPath), true);
+                assert.throws(
+                    () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                    err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                        && err.plan.blockers.some(item => item.type === 'invalid_receipt' && item.path === ledgerPath)
+                );
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        }
+
+        // 8) generation-<impl64> 下中间目录为符号链接，或旧版非 -<impl12>-ledger.json 遇到符号链接 conference-sources 时均触发 symlink 阻断
+        if (process.platform !== 'win32') {
+            const projectRoot = makeProject();
+            try {
+                const bytes = '%PDF-1.6-intermediate-symlink-blocker';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                const impl12 = '112233445566';
+                const genDir = `generation-${impl12}${'d'.repeat(52)}`;
+                const outsideSubdir = path.join(projectRoot, 'outside-sub');
+                fs.mkdirSync(outsideSubdir, { recursive: true });
+                fs.writeFileSync(path.join(outsideSubdir, 'pdf.pdf'), bytes);
+                const genConfRoot = path.join(projectRoot, `data/runtime/conference-sources/${genDir}/iclr-2026-2026`);
+                fs.mkdirSync(genConfRoot, { recursive: true });
+                fs.symlinkSync(outsideSubdir, path.join(genConfRoot, 'p1'));
+                const ledgerPath = writeFile(
+                    projectRoot,
+                    `data/runtime/conference-ledgers/iclr-2026-aaaa1111bbbb2222-${impl12}-ledger.json`,
+                    JSON.stringify({
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'iclr-2026-2026/p1/pdf.pdf',
+                            pdfSha256: sha
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'symlink' && item.path === ledgerPath), true);
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+
+            const projectRoot2 = makeProject();
+            try {
+                const bytes = '%PDF-1.6-legacy-cache-root-symlink';
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                const outsideCache = path.join(projectRoot2, 'outside-cache');
+                fs.mkdirSync(path.join(outsideCache, 'iclr-2026/p1'), { recursive: true });
+                fs.writeFileSync(path.join(outsideCache, 'iclr-2026/p1/pdf.pdf'), bytes);
+                const cacheDir = path.join(projectRoot2, 'data/runtime/conference-sources');
+                fs.rmSync(cacheDir, { recursive: true, force: true });
+                fs.symlinkSync(outsideCache, cacheDir);
+                const ledgerPath = writeFile(
+                    projectRoot2,
+                    'data/runtime/conference-ledgers/iclr-2026.json',
+                    JSON.stringify({
+                        members: [{
+                            availability: { pdf: 'present' },
+                            pdfFile: 'iclr-2026/p1/pdf.pdf',
+                            pdfSha256: sha
+                        }]
+                    })
+                );
+                const report = getPdfDuplicateReport({ projectRoot: projectRoot2, nowMs: NOW_MS });
+                assert.strictEqual(report.blockers.some(item => item.type === 'symlink' && item.path === ledgerPath), true);
+            } finally {
+                fs.rmSync(projectRoot2, { recursive: true, force: true });
+            }
+        }
+    });
+
+    it('data/runtime 内普通文件 .hugo_build.lock 不阻断 pdf-dedupe，而其他 foo.lock 普通文件及目录型 .hugo_build.lock 仍阻断', () => {
+        const projectRoot = makeProject();
+        try {
+            const bytes = '%PDF-1.6-hugo-build-lock-marker-check';
+            const donor = writeFile(projectRoot, 'data/runtime/a/1.pdf', bytes);
+            const target = writeFile(projectRoot, 'data/runtime/b/2.pdf', bytes);
+            const hugoLock = writeFile(projectRoot, 'data/runtime/preview-blog/.hugo_build.lock', '');
+
+            const dryRun = dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS });
+            assert.deepStrictEqual(dryRun.blockers, []);
+            assert.strictEqual(dryRun.duplicateGroupCount, 1);
+
+            if (process.platform === 'darwin') {
+                const applied = dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true });
+                assert.strictEqual(applied.mode, 'apply');
+                assert.deepStrictEqual(applied.blockers, []);
+                assert.strictEqual(applied.dedupedFiles, 1);
+                assert.strictEqual(fs.existsSync(hugoLock), true);
+                assert.strictEqual(fs.lstatSync(donor).nlink, 1);
+                assert.strictEqual(fs.lstatSync(target).nlink, 1);
+            }
+
+            const otherLock = writeFile(projectRoot, 'data/runtime/preview-blog/foo.lock', '');
+            assert.throws(
+                () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                    && err.plan.blockers.some(item => item.type === 'active_lock' && item.path === otherLock)
+            );
+
+            fs.unlinkSync(otherLock);
+            // 目录型 .hugo_build.lock 仍进入 inspectLockEntry 检查并阻断 --apply
+            fs.unlinkSync(hugoLock);
+            fs.mkdirSync(hugoLock);
+            assert.throws(
+                () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                    && err.plan.blockers.some(item => (item.type === 'active_lock_unknown' || item.type === 'active_lock')
+                        && item.path === hugoLock)
+            );
+            fs.rmdirSync(hugoLock);
+
+            if (process.platform !== 'win32') {
+                fs.symlinkSync(donor, hugoLock);
+                assert.throws(
+                    () => dedupeRuntimePdfs({ projectRoot, nowMs: NOW_MS, apply: true }),
+                    err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
+                        && err.plan.blockers.some(item => item.type === 'symlink')
+                );
+            }
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
 });
