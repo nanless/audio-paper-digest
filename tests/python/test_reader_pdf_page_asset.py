@@ -400,6 +400,22 @@ class PdfPageAssetTests(unittest.TestCase):
         _raw_dot, proof_dot = self.derive(dotted_pdf, figure=dotted_fig, resource=res)
         self.assertEqual(proof_dot['figureNumber'], 'A.1')
         self.assertEqual(proof_dot['displayLabel'], '原论文 PDF 第 1 页（含图 A.1）')
+        # Abbreviated HTML label "Fig. 3:" with IEEE PDF "Fig. 3:" + prose "Fig. 3 shows..." on same page (exact 2611.23847 shape).
+        ieee_fig = {
+            **fig,
+            'ordinal': 3,
+            'label': 'Fig. 3:',
+            'caption': 'Fig. 3: Proposed reference architecture for agentic audio AI.',
+        }
+        with fitz.open() as doc:
+            p1 = doc.new_page(width=612, height=792)
+            p1.insert_text((72, 80), 'Fig. 3: Proposed reference architecture for agentic audio AI.')
+            p1.insert_text((72, 200), 'Fig. 3 shows the proposed reference architecture.')
+            ieee_pdf = doc.tobytes()
+        _raw_ieee, proof_ieee = self.derive(ieee_pdf, figure=ieee_fig, resource=res)
+        self.assertEqual(proof_ieee['figureNumber'], 3)
+        self.assertIs(proof_ieee['pdfCaptionTypography']['openingLabelColonOmitted'], False)
+        self.assertEqual(proof_ieee['displayLabel'], '原论文 PDF 第 1 页（含图 3）')
         for bad_label in ['Figure S2:', 'Figure 1:', 'Figure S0:', 'Figure S1\u0660:']:
             with self.subTest(label=bad_label), self.assertRaisesRegex(ValueError, 'number_or_caption'):
                 self.derive(two_page_pdf, figure={**fig, 'label': bad_label}, resource=res)

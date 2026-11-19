@@ -416,9 +416,21 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
     caption = norm(figure.get('caption', ''))
     displayed_caption, caption_projection = _caption_display_projection(caption)
     fig_id_pattern = r'(?:[A-Za-z]\.?)?[1-9][0-9]*(?:\.[0-9]+)*'
+    canonical_displayed_caption = re.sub(
+        r'^Fig\.\s*(' + fig_id_pattern + r')\s*:\s*',
+        r'Figure \1: ',
+        displayed_caption,
+        flags=re.I,
+    )
     # LaTeXML inserts a colon after an otherwise identical printed PDF label.
     # Accept its absence only at the complete caption's opening label.
     colonless_caption = re.sub(
+        r'^((?:Figure|Fig\.?)\s+' + fig_id_pattern + r')\s*:\s*',
+        r'\1 ',
+        canonical_displayed_caption,
+        flags=re.I,
+    )
+    raw_colonless_caption = re.sub(
         r'^((?:Figure|Fig\.?)\s+' + fig_id_pattern + r')\s*:\s*',
         r'\1 ',
         displayed_caption,
@@ -473,7 +485,7 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
             page_blocks = page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT)
             # 整页文字骨架：PyMuPDF 可能把一条长图注拆进多个 block，逐块比对会
             # 只剩前半句；这里用整页拼接做「完整图注是否在这一页」的判定。
-            page_skeleton = _caption_skeleton(' '.join(block[4] for block in page_blocks))
+            page_skeleton = _caption_skeleton(' '.join(_pdf_caption_text(block[4]) for block in page_blocks))
             for block in page_blocks:
                 text = _pdf_caption_text(block[4])
                 # 编号后面允许句点，但不能是更长编号（1 → 10、7.1 → 7.10、S1 → S10）。
@@ -496,9 +508,10 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     continue
                 # 完整图注已知时，跨页散文引用句（如 "Figure S1 summarizes..."，无冒号/句号分隔
                 # 且不等于冒号省略版完整图注）不是图注头，不计入图注头冲突计数。
-                if delimited_label or text == colonless_caption:
+                colonless_candidates = {colonless_caption, raw_colonless_caption}
+                if delimited_label or text in colonless_candidates:
                     numbers.append(page.number + 1)
-                if text in {displayed_caption, colonless_caption}:
+                if text in ({displayed_caption, canonical_displayed_caption} | colonless_candidates):
                     matches.append((page.number, block[4]))
                 elif failure['reason'] == 'unmapped_latexml_minipage_layout':
                     # PDF line-wrap hyphens may split a word, and its caption
@@ -521,7 +534,7 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     # 公式排版差异（LaTeX vs 印刷字形）用文字骨架兜底：词语、数字
                     # 与顺序仍须完全一致，只有纯排版符号被忽略。
                     block_skeleton = _caption_skeleton(wrapped)
-                    caption_skeleton = _caption_skeleton(displayed_caption)
+                    caption_skeleton = _caption_skeleton(canonical_displayed_caption)
                     label_only_skeleton = _caption_skeleton(f'Figure {figure_label}')
                     split_caption_in_page = (
                         len(block_skeleton) > len(label_only_skeleton)
@@ -532,14 +545,14 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                     # 已经逐字覆盖图注前 120 个字（骨架），后文可续在下一页。
                     long_prefix = (len(block_skeleton) >= 120
                                    and caption_skeleton.startswith(block_skeleton[:120]))
-                    if (wrapped == displayed_caption
+                    if (wrapped in {displayed_caption, canonical_displayed_caption}
                             or block_skeleton == caption_skeleton
                             or split_caption_in_page
                             or long_prefix):
-                        if not (delimited_label or text == colonless_caption):
+                        if not (delimited_label or text in colonless_candidates):
                             numbers.append(page.number + 1)
                         # 同一页完整图注被拆进多个 block 时只记一次首块；独立重复的完整图注仍须记冲突。
-                        if wrapped == displayed_caption or block_skeleton == caption_skeleton:
+                        if wrapped in {displayed_caption, canonical_displayed_caption} or block_skeleton == caption_skeleton:
                             matches.append((page.number, block[4]))
                         elif not any(item[0] == page.number for item in matches):
                             matches.append((page.number, block[4]))
@@ -570,7 +583,7 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                  'rawCaptionSha256': sha(raw_caption.encode()),
                  'pdfCaptionTypography': {'contract': 'pdf-caption-latin-ligature-line-wrap-v1',
                     'text': _pdf_caption_text(raw_caption),
-                    'openingLabelColonOmitted': _pdf_caption_text(raw_caption) != displayed_caption},
+                    'openingLabelColonOmitted': _pdf_caption_text(raw_caption) not in {displayed_caption, canonical_displayed_caption}},
                  'pageTextSha256': sha(page.get_text('text', flags=fitz.TEXTFLAGS_TEXT).encode()),
                  'assetSha256': sha(pixels), 'assetBytes': len(pixels),
                  'assetWidth': width, 'assetHeight': height,
