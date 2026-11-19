@@ -1613,4 +1613,182 @@ class DesktopDetailsRepositoryTest {
         assertFalse(extracted.html.contains("evil.example"))
         assertTrue(extracted.html.contains("href=\"#sec1\""))
     }
+
+    @Test
+    fun macosPortableBackupWitnessReconstructsAndroidStateAndFailsClosedOnTamper() = runBlocking {
+        withWorkspace { dir, personal ->
+            val mock = MockSite()
+            val paperActive = buildPaperFixture(
+                appearanceId = "posts/2026-11-18-macos-restored-2611-80001/",
+                paperId = "arxiv:2611.80001",
+                sourceVersionId = "arxiv:2611.80001v1",
+                sourceUrl = "https://arxiv.org/abs/2611.80001v1",
+                pdfUrl = "https://arxiv.org/pdf/2611.80001v1.pdf",
+                readerTitle = "从 macOS 跨端备份恢复的论文",
+            )
+            val dailyAgg = buildAggregateRow("posts/2026-11-18/", "daily", "2026-11-18 语音论文速递")
+            val activeTomb = JSONObject()
+                .put("appearanceId", "posts/2026-11-15-macos-removed-2611-80002/")
+                .put("paperId", "arxiv:2611.80002")
+                .put("previousArticleRevisionId", "b".repeat(64))
+                .put("reason", "site-removed")
+                .put("effectiveAt", "2026-11-18T06:00:00Z")
+                .put("sourceCommit", "c".repeat(40))
+                .put("replacementAppearanceId", JSONObject.NULL)
+                .put("evidenceUrl", JSONObject.NULL)
+                .put("note", "macOS 下架记录")
+
+            val sourceCommit = "c".repeat(40)
+            val (snapshotId, _) = publishSnapshotToMock(
+                mock = mock,
+                items = listOf(paperActive),
+                aggregateRows = listOf(dailyAgg),
+                tombstones = listOf(activeTomb),
+                sourceCommit = sourceCommit,
+            )
+
+            // Sync once to build a valid `current.json` + immutable `snapshots/`, `catalog/`, `tombstones/`, then strip Android-specific state files
+            // and install a real macOS `desktop-details/macos-states/<snapshotId>-<epoch>.json` witness!
+            val seedRepo = CatalogRepository(null, personal) { url, limit -> mock.fetch(url, limit) }
+            seedRepo.sync()
+            val epoch = seedRepo.epoch()
+
+            File(dir, "PublishedLibrary/desktop-details/states").deleteRecursively()
+            File(dir, "PublishedLibrary/desktop-details/tombstone-states").deleteRecursively()
+            File(dir, "PublishedLibrary/aggregates").deleteRecursively()
+
+            val macosHistoryEvents = JSONArray()
+                .put(JSONObject()
+                    .put("kind", "removed")
+                    .put("appearanceId", "posts/2026-11-15-macos-removed-2611-80002/")
+                    .put("paperId", "arxiv:2611.80002")
+                    .put("previousArticleRevisionId", "b".repeat(64))
+                    .put("restoredArticleRevisionId", JSONObject.NULL)
+                    .put("reason", "site-removed")
+                    .put("effectiveAt", "2026-11-18T06:00:00Z")
+                    .put("sourceCommit", sourceCommit)
+                    .put("replacementAppearanceId", JSONObject.NULL)
+                    .put("evidenceUrl", JSONObject.NULL)
+                    .put("note", "macOS 下架记录")
+                    .put("observedSnapshotId", snapshotId)
+                    .put("observedAt", "2026-11-18T06:05:00Z")
+                )
+                .put(JSONObject()
+                    .put("kind", "restored")
+                    .put("appearanceId", "posts/2026-11-18-macos-restored-2611-80001/")
+                    .put("paperId", "arxiv:2611.80001")
+                    .put("previousArticleRevisionId", "d".repeat(64))
+                    .put("restoredArticleRevisionId", paperActive.catalogRow.getString("articleRevisionId"))
+                    .put("reason", "site-removed")
+                    .put("effectiveAt", "2026-11-18T07:00:00Z")
+                    .put("sourceCommit", sourceCommit)
+                    .put("replacementAppearanceId", JSONObject.NULL)
+                    .put("evidenceUrl", JSONObject.NULL)
+                    .put("note", JSONObject.NULL)
+                    .put("observedSnapshotId", snapshotId)
+                    .put("observedAt", "2026-11-18T07:05:00Z")
+                )
+
+            val macosWitness = JSONObject()
+                .put("contract", DesktopDetailsRepository.MACOS_STATE_CONTRACT)
+                .put("snapshotID", snapshotId)
+                .put("validationEpoch", epoch)
+                .put("sourceCommit", sourceCommit)
+                .put("generatedAt", "2026-11-18T07:05:00Z")
+                .put("basePath", "/audio-paper-digest-blog/")
+                .put("paperDetails", JSONObject())
+                .put("aggregateDetails", JSONObject())
+                .put("activeTombstones", JSONArray().put(activeTomb))
+                .put("tombstoneHistory", macosHistoryEvents)
+
+            val macosStateFile = File(dir, "PublishedLibrary/desktop-details/macos-states/$snapshotId-$epoch.json")
+            JsonFiles.write(macosStateFile, macosWitness.toString().toByteArray(Charsets.UTF_8))
+
+            // 1. Cold-load CatalogRepository on Android from macOS-restored workspace -> succeeds, opens article, imports tombstoneHistory & aggregates!
+            val restoredRepo = CatalogRepository(null, personal) { url, limit -> mock.fetch(url, limit) }
+            assertEquals(1, restoredRepo.papers().size)
+            assertEquals(1, restoredRepo.aggregateCatalog()!!.records.size)
+            val history = restoredRepo.tombstoneHistory()
+            assertEquals(1, history.getJSONObject("currentTombstones").length())
+            val eventTypes = history.getJSONArray("events").objects().map { it.getString("eventType") }
+            assertEquals(listOf("tombstone", "restored"), eventTypes)
+            val article = restoredRepo.article(restoredRepo.papers().single())
+            assertTrue(article.html.contains("核心导读"))
+
+            // 2. Subsequent Android sync prunes old Android `states/` & `tombstone-states/`, NEVER deleting `macos-states/`!
+            val nextPaper = buildPaperFixture(
+                appearanceId = "posts/2026-11-19-next-sync-2611-80003/",
+                paperId = "arxiv:2611.80003",
+                sourceVersionId = "arxiv:2611.80003v1",
+                sourceUrl = "https://arxiv.org/abs/2611.80003v1",
+                pdfUrl = "https://arxiv.org/pdf/2611.80003v1.pdf",
+            )
+            publishSnapshotToMock(mock, listOf(paperActive, nextPaper), sourceCommit = "e".repeat(40))
+            restoredRepo.sync()
+            assertTrue("pruneSupersededStates must never delete macos-states/", macosStateFile.isFile)
+        }
+
+        // 3. Negative checks: tampered witness, tampered catalog shard, missing tombstone shard, or corrupted Android state file MUST fail closed!
+        for (mode in listOf("bad-witness-commit", "tampered-catalog-shard", "missing-tombstone-shard", "corrupt-android-state")) {
+            withWorkspace { dir, personal ->
+                val mock = MockSite()
+                val p = buildPaperFixture(
+                    appearanceId = "posts/2026-11-18-neg-$mode-2611-80009/",
+                    paperId = "arxiv:2611.80009",
+                    sourceVersionId = "arxiv:2611.80009v1",
+                    sourceUrl = "https://arxiv.org/abs/2611.80009v1",
+                    pdfUrl = "https://arxiv.org/pdf/2611.80009v1.pdf",
+                )
+                val tomb = JSONObject()
+                    .put("appearanceId", "posts/2026-11-14-removed-$mode/")
+                    .put("paperId", "arxiv:2611.89999")
+                    .put("previousArticleRevisionId", "1".repeat(64))
+                    .put("reason", "site-removed")
+                    .put("effectiveAt", "2026-11-18T06:00:00Z")
+                    .put("sourceCommit", "a".repeat(40))
+                    .put("replacementAppearanceId", JSONObject.NULL)
+                    .put("evidenceUrl", JSONObject.NULL)
+                    .put("note", JSONObject.NULL)
+                val (snapId, _) = publishSnapshotToMock(mock, listOf(p), tombstones = listOf(tomb), sourceCommit = "a".repeat(40))
+                val seed = CatalogRepository(null, personal) { url, limit -> mock.fetch(url, limit) }
+                seed.sync()
+                val ep = seed.epoch()
+                File(dir, "PublishedLibrary/desktop-details/states").deleteRecursively()
+                File(dir, "PublishedLibrary/desktop-details/tombstone-states").deleteRecursively()
+
+                val witness = JSONObject()
+                    .put("contract", DesktopDetailsRepository.MACOS_STATE_CONTRACT)
+                    .put("snapshotID", snapId)
+                    .put("validationEpoch", ep)
+                    .put("sourceCommit", if (mode == "bad-witness-commit") "f".repeat(40) else "a".repeat(40))
+                    .put("generatedAt", "2026-11-18T07:05:00Z")
+                    .put("basePath", "/audio-paper-digest-blog/")
+                    .put("tombstoneHistory", JSONArray())
+                JsonFiles.write(
+                    File(dir, "PublishedLibrary/desktop-details/macos-states/$snapId-$ep.json"),
+                    witness.toString().toByteArray(Charsets.UTF_8),
+                )
+
+                when (mode) {
+                    "tampered-catalog-shard" -> {
+                        val shard = File(dir, "PublishedLibrary/desktop-details/catalog").listFiles()!!.single()
+                        shard.writeBytes(shard.readBytes().also { it[0] = ' '.code.toByte() })
+                    }
+                    "missing-tombstone-shard" -> {
+                        File(dir, "PublishedLibrary/desktop-details/tombstones").deleteRecursively()
+                    }
+                    "corrupt-android-state" -> {
+                        val badAndroid = File(dir, "PublishedLibrary/desktop-details/states/$snapId-$ep.json")
+                        badAndroid.parentFile!!.mkdirs()
+                        badAndroid.writeText("{\"corrupt\":1}", Charsets.UTF_8)
+                    }
+                }
+
+                assertTrue(
+                    "macOS witness reconstruction must fail closed on $mode",
+                    runCatching { CatalogRepository(null, personal) { _, _ -> error("No network") } }.isFailure,
+                )
+            }
+        }
+    }
 }

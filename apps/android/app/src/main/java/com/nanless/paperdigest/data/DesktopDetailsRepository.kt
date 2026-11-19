@@ -186,9 +186,403 @@ class DesktopDetailsRepository(
         return checkedChild(root, "tombstone-states", "$snapshotId-$epoch.json")
     }
 
+    private fun macosStateFile(snapshotId: String, epoch: String): File {
+        require(SHA256_PATTERN.matches(snapshotId) && SAFE_EPOCH_PATTERN.matches(epoch)) { "macOS 桌面状态标识非法" }
+        return checkedChild(root, "macos-states", "$snapshotId-$epoch.json")
+    }
+
+    /**
+     * Symmetric cross-platform `.paperdigest` backup restoration (`macOS -> Android`):
+     * When BOTH Android `states/<snapshotId>-<epoch>.json` and `tombstone-states/<snapshotId>-<epoch>.json`
+     * are completely absent (neither regular file nor symlink/directory), check for a portable macOS
+     * witness at `desktop-details/macos-states/<snapshotId>-<epoch>.json`. If present, cold-verify the
+     * witness plus every referenced `snapshots/<snapshotId>.json`, `catalog/<sha256>.json`, and
+     * `tombstones/<sha256>.json` byte-for-byte before materializing the Android state files.
+     * Any corruption, symlink, missing shard, or count/disjointness mismatch fails closed!
+     */
+    private fun reconstructFromMacosWitnessIfPresent(snapshotID: String, epoch: String) {
+        val androidState = stateFile(snapshotID, epoch)
+        val androidTomb = tombstoneStateFile(snapshotID, epoch)
+        // If either Android state file already exists (valid, corrupted, or non-regular), do NOT enter macOS witness path!
+        if (Files.exists(androidState.toPath(), NOFOLLOW_LINKS) || Files.exists(androidTomb.toPath(), NOFOLLOW_LINKS)) {
+            return
+        }
+        val macosFile = macosStateFile(snapshotID, epoch)
+        if (!Files.exists(macosFile.toPath(), NOFOLLOW_LINKS)) {
+            return
+        }
+        require(Files.isRegularFile(macosFile.toPath(), NOFOLLOW_LINKS)) { "macOS 桌面状态见证不是普通文件" }
+        val witnessRaw = JsonFiles.read(macosFile, 32L * 1024 * 1024)
+        val witness = StrictJson.parseObject(witnessRaw, macosFile.name)
+        require(
+            !witness.has("format") &&
+                witness.optString("contract") == MACOS_STATE_CONTRACT &&
+                witness.getString("snapshotID") == snapshotID &&
+                witness.getString("validationEpoch") == epoch
+        ) { "macOS 桌面状态见证协议或验证代不匹配" }
+        val sourceCommit = witness.getString("sourceCommit")
+        require(COMMIT_OID_PATTERN.matches(sourceCommit)) { "macOS 桌面状态见证 sourceCommit 非法" }
+        val expectedBasePath = URI(CatalogRepository.SITE).rawPath
+        val basePath = witness.getString("basePath")
+        require(basePath == expectedBasePath && basePath.startsWith("/") && basePath.endsWith("/")) {
+            "macOS 桌面状态见证 basePath 与当前站点路径不一致：$basePath"
+        }
+        witness.nullableString("generatedAt")?.let { requireIsoTimestampWithTz(it, "macosWitness.generatedAt") }
+
+        // 1. Cold-verify `desktop-details/snapshots/<snapshotID>.json`
+        val snapshotFile = checkedChild(root, "snapshots", "$snapshotID.json")
+        require(Files.isRegularFile(snapshotFile.toPath(), NOFOLLOW_LINKS)) { "恢复目录缺少桌面快照原件：$snapshotID" }
+        val snapshotRaw = JsonFiles.read(snapshotFile, MAX_SNAPSHOT_BYTES.toLong())
+        require(snapshotRaw.size in 1..MAX_SNAPSHOT_BYTES && sha256(snapshotRaw) == snapshotID) {
+            "恢复目录桌面快照原件长度或 SHA-256 校验失败：$snapshotID"
+        }
+        val snapshotText = PublishedUtf8.decode(snapshotRaw)
+        require(!snapshotText.contains(snapshotID)) { "快照 JSON 禁止包含自身 SHA" }
+        val snapshot = StrictJson.parseObjectText(snapshotText, snapshotFile.name)
+        require(ClientProtocols.isCurrentHeader(snapshot, SNAPSHOT_CONTRACT)) { "恢复目录桌面快照协议头不受支持" }
+        val snapshotSchema = ClientProtocols.declaredSchema(
+            snapshot.get("contract"),
+            SNAPSHOT_CONTRACT,
+            snapshot.opt("schemaFingerprint") as? String,
+        )
+        val expectedSnapshotKeys = setOf("contract", "schemaFingerprint") + snapshotSchema.getJSONArray("fields").strings()
+        requireExactKeys(snapshot, expectedSnapshotKeys, SNAPSHOT_CONTRACT)
+        require(snapshot.getString("sourceCommit") == sourceCommit) { "macOS 见证与桌面快照 sourceCommit 不一致" }
+
+        val expectedRecordCount = strictInt(snapshot, "recordCount", allowZero = false)
+        val expectedAppearanceCount = strictInt(snapshot, "appearanceCount", allowZero = false)
+        val expectedPaperCount = strictInt(snapshot, "paperCount", allowZero = false)
+        val expectedTombstoneCount = strictInt(snapshot, "tombstoneCount", allowZero = true)
+        require(expectedAppearanceCount == expectedRecordCount && expectedPaperCount <= expectedAppearanceCount) {
+            "桌面快照计数不闭合"
+        }
+
+        val detailSchema = ClientProtocols.declaredSchema(
+            ClientProtocols.contract(DETAIL_CONTRACT),
+            DETAIL_CONTRACT,
+            ClientProtocols.schemaFingerprint(DETAIL_CONTRACT),
+        )
+        val descriptorFields = detailSchema.getJSONArray("descriptorFields").strings().toSet()
+        val shardFields = snapshotSchema.getJSONArray("shardFields").strings().toSet()
+        val catalogRecordFields = snapshotSchema.getJSONArray("catalogRecordFields").strings().toSet()
+        val tombstoneRecordFields = snapshotSchema.getJSONArray("tombstoneRecordFields").strings().toSet()
+
+        // 2. Cold-verify all `catalogShards` and reconstruct `ActiveDesktopState`
+        val catalogShardJsonList = snapshot.getJSONArray("catalogShards").objects()
+        require(catalogShardJsonList.size in 1..MAX_SHARDS) { "桌面目录分片数量越界" }
+        val seenCatalogUrls = HashSet<String>()
+        var totalCatalogBytes = 0L
+        val catalogShards = catalogShardJsonList.map { s ->
+            requireExactKeys(s, shardFields, "catalogShard")
+            val url = s.getString("url")
+            val sha = s.getString("sha256")
+            val bytes = strictInt(s, "bytes", allowZero = false)
+            val count = strictInt(s, "recordCount", allowZero = false)
+            val match = CATALOG_SHARD_URL_PATTERN.matchEntire(url)
+            require(
+                match != null && SHA256_PATTERN.matches(sha) && match.groupValues[1] == sha &&
+                    seenCatalogUrls.add(url) && bytes <= MAX_SHARD_BYTES
+            ) { "桌面目录分片描述非法：$url" }
+            totalCatalogBytes += bytes
+            require(totalCatalogBytes <= MAX_TOTAL_CATALOG_BYTES) { "桌面目录分片总字节超过 64 MiB 上限" }
+            ShardDescriptor(url, bytes, sha, count)
+        }
+        require(catalogShards.sumOf { it.recordCount } == expectedRecordCount) { "桌面目录分片记录总和与快照声明不符" }
+
+        val activeAppearances = LinkedHashMap<String, JSONObject>()
+        val bindingsByKey = LinkedHashMap<String, AppearanceBinding>()
+        val primaryBindingByPaper = LinkedHashMap<String, AppearanceBinding>()
+        val distinctPaperKeys = HashSet<String>()
+        var actualRecordCount = 0
+
+        for (shard in catalogShards) {
+            val shardFile = checkedChild(root, "catalog", "${shard.sha256}.json")
+            require(Files.isRegularFile(shardFile.toPath(), NOFOLLOW_LINKS)) { "恢复目录缺少目录分片原件：${shard.url}" }
+            val shardRaw = JsonFiles.read(shardFile, MAX_SHARD_BYTES.toLong())
+            require(shardRaw.size == shard.bytes && sha256(shardRaw) == shard.sha256) {
+                "恢复目录分片字节数或 SHA-256 校验失败：${shard.url}"
+            }
+            val rows = StrictJson.parseArray(shardRaw, shard.url)
+            require(rows.length() == shard.recordCount) { "恢复目录分片实际条数与声明不符：${shard.url}" }
+            for (rowIdx in 0 until rows.length()) {
+                val row = rows.optJSONObject(rowIdx) ?: error("桌面目录记录不是对象")
+                requireExactKeys(row, catalogRecordFields, "catalogRecord")
+                val appearanceId = row.getString("appearanceId")
+                val pageUrl = row.getString("pageUrl")
+                require(APPEARANCE_ID_PATTERN.matches(appearanceId) && pageUrl == appearanceId && !activeAppearances.containsKey(appearanceId)) {
+                    "目录记录 appearanceId 非法或重复：$appearanceId"
+                }
+                val blogURL = CatalogRepository.sameSite(pageUrl)
+                val pageType = row.getString("pageType")
+                val publicationStatus = row.getString("publicationStatus")
+                val articleRevisionId = row.getString("articleRevisionId")
+                require(pageType in setOf("paper", "daily", "conference")) { "目录记录 pageType 非法：$pageType" }
+                require(publicationStatus in setOf("active", "retracted")) { "目录记录 publicationStatus 非法：$publicationStatus" }
+                require(SHA256_PATTERN.matches(articleRevisionId)) { "目录记录 articleRevisionId 非法" }
+
+                val detailObj = row.getJSONObject("detail")
+                requireExactKeys(detailObj, descriptorFields, "catalog.detail")
+                val detailUrl = detailObj.getString("url")
+                val detailSha = detailObj.getString("sha256")
+                val detailBytes = strictInt(detailObj, "bytes", allowZero = false)
+                val detailMatch = DETAIL_URL_PATTERN.matchEntire(detailUrl)
+                require(
+                    detailMatch != null && SHA256_PATTERN.matches(detailSha) &&
+                        detailMatch.groupValues[1] == detailSha && detailBytes <= MAX_DETAIL_BYTES
+                ) { "详情描述符非法：$appearanceId" }
+                val detailDesc = FileDescriptor(detailUrl, detailBytes, detailSha)
+
+                val identityStatus = row.getString("identityStatus")
+                val rawPaperId = if (row.isNull("paperId")) null else row.getString("paperId")
+                val rawSourceKind = if (row.isNull("sourceKind")) null else row.getString("sourceKind")
+                val rawSourceVersionId = if (row.isNull("sourceVersionId")) null else row.getString("sourceVersionId")
+                val blogPublishedAt = if (row.isNull("blogPublishedAt")) null else row.getString("blogPublishedAt")
+                val articleUpdatedAt = if (row.isNull("articleUpdatedAt")) null else row.getString("articleUpdatedAt")
+
+                activeAppearances[appearanceId] = row
+                actualRecordCount++
+
+                if (pageType != "paper") {
+                    require(rawPaperId == null && rawSourceVersionId == null && identityStatus == "aggregate-page") {
+                        "汇总页不得伪装为单篇论文身份：$appearanceId"
+                    }
+                    continue
+                }
+                require(identityStatus != "aggregate-page") { "单篇论文页不得使用 aggregate-page 身份：$appearanceId" }
+                val paperKey: String
+                if (identityStatus == "verified") {
+                    require(!rawPaperId.isNullOrBlank() && rawPaperId.length <= 256 && rawSourceKind in setOf("arxiv", "conference")) {
+                        "已核验论文缺少规范 paperId 或 sourceKind：$appearanceId"
+                    }
+                    if (rawSourceKind == "arxiv") {
+                        require(rawPaperId.startsWith("arxiv:") && ARXIV_ID_PATTERN.matches(rawPaperId.removePrefix("arxiv:"))) {
+                            "arXiv paperId 非法：$rawPaperId"
+                        }
+                    } else {
+                        require(CONFERENCE_PAPER_ID_PATTERN.matches(rawPaperId)) { "会议 paperId 非法：$rawPaperId" }
+                    }
+                    paperKey = rawPaperId
+                    distinctPaperKeys += paperKey
+                } else {
+                    require(rawPaperId == null && rawSourceVersionId == null && identityStatus.isNotBlank()) {
+                        "未核验历史论文不得伪造 paperId 或 sourceVersionId：$appearanceId"
+                    }
+                    paperKey = "page:${URI(blogURL).path}"
+                    distinctPaperKeys += "unverified:$appearanceId"
+                }
+
+                val binding = AppearanceBinding(
+                    appearanceId = appearanceId,
+                    pageUrl = pageUrl,
+                    blogURL = blogURL,
+                    paperKey = paperKey,
+                    paperId = rawPaperId,
+                    identityStatus = identityStatus,
+                    sourceKind = rawSourceKind,
+                    sourceVersionId = rawSourceVersionId,
+                    pageType = pageType,
+                    publicationStatus = publicationStatus,
+                    blogPublishedAt = blogPublishedAt,
+                    articleUpdatedAt = articleUpdatedAt,
+                    articleRevisionId = articleRevisionId,
+                    detail = detailDesc,
+                )
+                bindingsByKey[paperKey + "\u0000" + blogURL] = binding
+                val oldPrimary = primaryBindingByPaper[paperKey]
+                if (oldPrimary == null || compareBindingRecency(binding, oldPrimary) >= 0) {
+                    primaryBindingByPaper[paperKey] = binding
+                }
+            }
+        }
+        require(actualRecordCount == expectedRecordCount && distinctPaperKeys.size == expectedPaperCount) {
+            "恢复目录记录总数或论文数与快照声明不符"
+        }
+
+        // 3. Cold-verify all `tombstoneShards` and disjointness against `activeAppearances`
+        val tombstoneShardJsonList = snapshot.getJSONArray("tombstoneShards").objects()
+        require(tombstoneShardJsonList.size <= MAX_SHARDS) { "tombstoneShards 数量越界" }
+        if (expectedTombstoneCount == 0) {
+            require(tombstoneShardJsonList.isEmpty()) { "tombstoneCount 为 0 时 tombstoneShards 必须为空" }
+        } else {
+            require(tombstoneShardJsonList.isNotEmpty()) { "tombstoneCount > 0 时必须包含 tombstoneShards" }
+        }
+        val seenTombstoneUrls = HashSet<String>()
+        val seenTombstoneAppearances = LinkedHashMap<String, JSONObject>()
+        var actualTombstoneCount = 0
+        var totalTombstoneBytes = 0L
+
+        for (s in tombstoneShardJsonList) {
+            requireExactKeys(s, shardFields, "tombstoneShard")
+            val url = s.getString("url")
+            val sha = s.getString("sha256")
+            val bytes = strictInt(s, "bytes", allowZero = false)
+            val count = strictInt(s, "recordCount", allowZero = false)
+            val match = TOMBSTONE_SHARD_URL_PATTERN.matchEntire(url)
+            require(
+                match != null && SHA256_PATTERN.matches(sha) && match.groupValues[1] == sha &&
+                    seenTombstoneUrls.add(url) && bytes <= MAX_SHARD_BYTES
+            ) { "tombstone 分片描述非法：$url" }
+            totalTombstoneBytes += bytes
+            require(totalTombstoneBytes <= MAX_TOTAL_CATALOG_BYTES) { "tombstone 分片总字节超过 64 MiB 上限" }
+
+            val tombFile = checkedChild(root, "tombstones", "$sha.json")
+            require(Files.isRegularFile(tombFile.toPath(), NOFOLLOW_LINKS)) { "恢复目录缺少 tombstone 分片原件：$url" }
+            val shardRaw = JsonFiles.read(tombFile, MAX_SHARD_BYTES.toLong())
+            require(shardRaw.size == bytes && sha256(shardRaw) == sha) { "恢复目录 tombstone 分片 SHA-256 校验失败：$url" }
+            val tombs = StrictJson.parseArray(shardRaw, url)
+            require(tombs.length() == count) { "tombstone 分片条数不符：$url" }
+            for (i in 0 until tombs.length()) {
+                val tomb = tombs.optJSONObject(i) ?: error("tombstone 记录不是对象")
+                requireExactKeys(tomb, tombstoneRecordFields, "tombstone")
+                val appId = tomb.getString("appearanceId")
+                require(APPEARANCE_ID_PATTERN.matches(appId) && !seenTombstoneAppearances.containsKey(appId)) {
+                    "tombstone appearanceId 非法或重复：$appId"
+                }
+                require(!activeAppearances.containsKey(appId)) { "tombstone 与当前活动目录 appearanceId 相交：$appId" }
+                require(SHA256_PATTERN.matches(tomb.getString("previousArticleRevisionId"))) {
+                    "tombstone previousArticleRevisionId 非法：$appId"
+                }
+                val reason = tomb.getString("reason")
+                require(reason in setOf("site-removed", "retracted", "replaced")) { "tombstone reason 非法：$reason" }
+                require(COMMIT_OID_PATTERN.matches(tomb.getString("sourceCommit"))) { "tombstone sourceCommit 非法" }
+                requireIsoTimestampWithTz(tomb.getString("effectiveAt"), "tombstone.effectiveAt")
+                if (reason == "retracted") {
+                    require(isValidHttpsUrl(tomb.nullableString("evidenceUrl")) && !tomb.nullableString("note").isNullOrBlank()) {
+                        "正式撤稿 tombstone 缺少 HTTPS evidenceUrl 或说明：$appId"
+                    }
+                }
+                if (reason == "replaced") {
+                    val replacement = tomb.nullableString("replacementAppearanceId")
+                    require(replacement != null && activeAppearances.containsKey(replacement)) {
+                        "replaced tombstone 的替换页面不在当前有效目录中：$appId"
+                    }
+                }
+                seenTombstoneAppearances[appId] = tomb
+                actualTombstoneCount++
+            }
+        }
+        require(actualTombstoneCount == expectedTombstoneCount) { "tombstone 实际总条数与快照不一致" }
+
+        // 4. Import & validate `tombstoneHistory` from macOS witness
+        require(witness.has("tombstoneHistory") && witness.get("tombstoneHistory") is JSONArray) {
+            "macOS 桌面状态见证缺少合法 tombstoneHistory 数组"
+        }
+        val importedEvents = ArrayList<JSONObject>()
+        val recordedKeys = HashSet<String>()
+        for (ev in witness.getJSONArray("tombstoneHistory").objects()) {
+            val kind = ev.getString("kind")
+            require(kind in setOf("removed", "restored")) { "macOS tombstoneHistory 事件类型非法：$kind" }
+            val appId = ev.getString("appearanceId")
+            require(APPEARANCE_ID_PATTERN.matches(appId)) { "macOS tombstoneHistory appearanceId 非法：$appId" }
+            val evCommit = ev.getString("sourceCommit")
+            require(COMMIT_OID_PATTERN.matches(evCommit)) { "macOS tombstoneHistory sourceCommit 非法" }
+            val obsSnap = ev.getString("observedSnapshotId")
+            require(SHA256_PATTERN.matches(obsSnap)) { "macOS tombstoneHistory observedSnapshotId 非法" }
+            val obsAt = ev.getString("observedAt")
+            requireIsoTimestampWithTz(obsAt, "macosHistory.observedAt")
+            val effAt = ev.getString("effectiveAt")
+            requireIsoTimestampWithTz(effAt, "macosHistory.effectiveAt")
+
+            val paperId = ev.nullableString("paperId")
+            val prevRev = ev.nullableString("previousArticleRevisionId")?.also { require(SHA256_PATTERN.matches(it)) }
+            val restRev = ev.nullableString("restoredArticleRevisionId")?.also { require(SHA256_PATTERN.matches(it)) }
+            val reason = ev.nullableString("reason")?.also { require(it in setOf("site-removed", "retracted", "replaced")) }
+            val replacement = ev.nullableString("replacementAppearanceId")?.also { require(APPEARANCE_ID_PATTERN.matches(it)) }
+            val evidenceUrl = ev.nullableString("evidenceUrl")?.also { require(isValidHttpsUrl(it)) }
+            val note = ev.nullableString("note")
+
+            if (kind == "removed") {
+                require(prevRev != null && reason != null) { "macOS removed 事件缺少 previousArticleRevisionId 或 reason" }
+                val key = listOf("tombstone", appId, reason, evCommit, prevRev, "").joinToString("|")
+                if (recordedKeys.add(key)) {
+                    importedEvents += JSONObject()
+                        .put("eventType", "tombstone")
+                        .put("snapshotId", obsSnap)
+                        .put("appearanceId", appId)
+                        .put("paperId", paperId ?: JSONObject.NULL)
+                        .put("previousArticleRevisionId", prevRev)
+                        .put("reason", reason)
+                        .put("effectiveAt", effAt)
+                        .put("sourceCommit", evCommit)
+                        .put("replacementAppearanceId", replacement ?: JSONObject.NULL)
+                        .put("evidenceUrl", evidenceUrl ?: JSONObject.NULL)
+                        .put("note", note ?: JSONObject.NULL)
+                        .put("observedAt", obsAt)
+                }
+            } else {
+                val resolvedRestRev = restRev ?: activeAppearances[appId]?.getString("articleRevisionId")
+                require(resolvedRestRev != null && SHA256_PATTERN.matches(resolvedRestRev)) { "macOS restored 事件缺少有效修订号" }
+                val key = listOf("restored", appId, "", evCommit, "", resolvedRestRev).joinToString("|")
+                if (recordedKeys.add(key)) {
+                    importedEvents += JSONObject()
+                        .put("eventType", "restored")
+                        .put("snapshotId", obsSnap)
+                        .put("appearanceId", appId)
+                        .put("paperId", paperId ?: JSONObject.NULL)
+                        .put("articleRevisionId", resolvedRestRev)
+                        .put("sourceCommit", evCommit)
+                        .put("observedAt", obsAt)
+                }
+            }
+        }
+
+        val fallbackObservedAt = witness.nullableString("generatedAt") ?: now()
+        for ((appId, tomb) in seenTombstoneAppearances) {
+            val key = listOf(
+                "tombstone",
+                appId,
+                tomb.optString("reason"),
+                tomb.optString("sourceCommit"),
+                tomb.optString("previousArticleRevisionId"),
+                "",
+            ).joinToString("|")
+            if (recordedKeys.add(key)) {
+                importedEvents += tomb.copy()
+                    .put("eventType", "tombstone")
+                    .put("snapshotId", snapshotID)
+                    .put("observedAt", fallbackObservedAt)
+            }
+        }
+
+        val currentTombstonesObj = JSONObject()
+        seenTombstoneAppearances.forEach { (appId, tomb) -> currentTombstonesObj.put(appId, tomb.copy()) }
+        val reconstructedTombstoneHistory = JSONObject()
+            .put("format", TOMBSTONE_HISTORY_FORMAT)
+            .put("version", 1)
+            .put("latestSnapshotId", snapshotID)
+            .put("validationEpoch", epoch)
+            .put("latestSourceCommit", sourceCommit)
+            .put("currentTombstones", currentTombstonesObj)
+            .put("events", JSONArray(importedEvents))
+
+        val reconstructedState = ActiveDesktopState(
+            snapshotId = snapshotID,
+            sourceCommit = sourceCommit,
+            validationEpoch = epoch,
+            byPaperAndBlog = bindingsByKey,
+            primaryByPaper = primaryBindingByPaper,
+        )
+
+        // Ensure aggregate store is also staged for this restored epoch if not yet present
+        val aggStore = PublishedAggregateStore(libraryDirectory)
+        if (aggStore.load(snapshotID, epoch) == null) {
+            aggStore.stage(snapshotRaw, epoch)
+        }
+
+        try {
+            JsonFiles.write(androidTomb, canonical(reconstructedTombstoneHistory).toByteArray(Charsets.UTF_8))
+            JsonFiles.write(androidState, canonical(reconstructedState.json()).toByteArray(Charsets.UTF_8))
+        } catch (err: Throwable) {
+            runCatching { if (androidState.isFile) androidState.delete() }
+            runCatching { if (androidTomb.isFile) androidTomb.delete() }
+            throw err
+        }
+    }
+
     /** Fail-closed read of tombstone history bound to `(snapshotID, epoch)` when `isDesktopSnapshot` is true. */
     fun tombstoneHistoryFor(snapshotID: String, epoch: String, isDesktopSnapshot: Boolean): JSONObject {
         if (!isDesktopSnapshot) return emptyTombstoneHistory()
+        reconstructFromMacosWitnessIfPresent(snapshotID, epoch)
         val file = tombstoneStateFile(snapshotID, epoch)
         require(Files.isRegularFile(file.toPath(), NOFOLLOW_LINKS)) { "当前桌面快照缺少删除历史状态文件" }
         val raw = JsonFiles.read(file, 16L * 1024 * 1024)
@@ -1786,6 +2180,7 @@ class DesktopDetailsRepository(
 
         private const val ACTIVE_STATE_FORMAT = "paperdigest-android-desktop-details-state"
         private const val TOMBSTONE_HISTORY_FORMAT = "paperdigest-android-desktop-tombstone-history"
+        internal const val MACOS_STATE_CONTRACT = "paperdigest-macos-desktop-details-state"
 
         private val SHA256_PATTERN = Regex("^[a-f0-9]{64}$")
         private val COMMIT_OID_PATTERN = Regex("^[a-f0-9]{40}$")
