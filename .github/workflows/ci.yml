@@ -290,7 +290,7 @@ jobs:
         run: test "$VERIFY_RESULT" = success
 
   # 客户端测试不进服务端分片矩阵，独立作业避免拖慢上述十七个检查：
-  # Android 需要 JDK、Gradle 与 SDK，macOS 需要 macos-15 运行器，与 Node/Python 分片没有共享资源，
+  # Android 需要 JDK、Gradle 与 SDK，macOS 需要 macos-15-intel 运行器，与 Node/Python 分片没有共享资源，
   # 两个作业都不并入 test 汇总检查。
   # macOS 的测试固定资产（公开论文 arXiv:2610.27491v1 的 PDF 与三张图）已入库，
   # 干净 checkout 能直接读取；NativeLibraryAccessibility 在无 AX 窗口的环境以 77
@@ -347,7 +347,9 @@ jobs:
 
   client-macos:
     name: client (macos)
-    runs-on: macos-15
+    # macos-15（arm64）托管池常因容量不足在分配运行器前被取消；macos-15-intel 同样满足
+    # macOS 15.0+ 要求且测试按宿主机架构原生编译，正式 arm64 发行包仍按 docs/mac-app-release.md 在本机生成。
+    runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
