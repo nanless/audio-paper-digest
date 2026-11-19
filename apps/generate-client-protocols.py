@@ -20,6 +20,7 @@ PUBLIC_FAMILIES = (
     'paper-tag-catalog-snapshot', 'paper-tag-catalog-versions',
     'researcher-workbench', 'researcher-sidecars', 'paper-research-context',
     'paper-search-index-manifest', 'paper-citation-source',
+    'paper-desktop-manifest', 'paper-desktop-snapshot', 'paper-desktop-detail',
 )
 
 
@@ -48,6 +49,9 @@ def rendered_sources(blog_repo=None):
             'paperdigest-cloud-transfer': {'snapshotFormat': 'paperdigest-cloud-snapshot'},
             'paper-research-context': {'citationFormat': 'researcher-sidecars', 'workbenchFormat': 'researcher-workbench'},
             'paper-tag-flat-tags': {'selectionFormat': 'paper-tag-selection'},
+            'paper-desktop-detail': {'citationFormat': 'paper-citation-source'},
+            'paper-desktop-snapshot': {'detailFormat': 'paper-desktop-detail'},
+            'paper-desktop-manifest': {'snapshotFormat': 'paper-desktop-snapshot'},
             'paperdigest-retained-capture-export-proof': {'historyFormat': 'paperdigest-retained-capture-export-history'},
             'paperdigest-zotero-web': {'planFormat': 'paperdigest-zotero-plan'},
             'android-study-input': {'identityFormat': 'android-study'},

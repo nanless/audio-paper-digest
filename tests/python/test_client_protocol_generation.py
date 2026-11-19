@@ -72,6 +72,33 @@ class ClientProtocolGenerationTest(unittest.TestCase):
             import hashlib
             from protocol_codec import canonical
             self.assertEqual(value['catalogSHA256'],hashlib.sha256(canonical(value['families']).encode('utf-8')).hexdigest())
+            for family in ('paper-desktop-manifest', 'paper-desktop-snapshot', 'paper-desktop-detail'):
+                self.assertIn(family, value['families'])
+
+    def test_desktop_details_protocol_dependency_chain_is_enforced(self):
+        with tempfile.TemporaryDirectory(prefix='client-desktop-protocol-deps-') as temporary:
+            root = Path(temporary)
+            copy_generator_inputs(root)
+            clients_path = root / 'config/protocols/clients.json'
+            catalog = json.loads(clients_path.read_text())
+            by_name = {item['name']: item for item in catalog['protocols']}
+            self.assertEqual(
+                by_name['paper-desktop-manifest']['currentSchema']['snapshotFormat']['schemaFingerprint'],
+                Codec([catalog]).schema_fingerprint('paper-desktop-snapshot'),
+            )
+            self.assertEqual(
+                by_name['paper-desktop-snapshot']['currentSchema']['detailFormat']['schemaFingerprint'],
+                Codec([catalog]).schema_fingerprint('paper-desktop-detail'),
+            )
+            by_name['paper-desktop-manifest']['currentSchema']['snapshotFormat']['schemaFingerprint'] = '0' * 64
+            clients_path.write_text(json.dumps(catalog))
+            prior_root = generator.ROOT
+            try:
+                generator.ROOT = root
+                with self.assertRaisesRegex(ValueError, 'paper-desktop-manifest original schema must bind its exact registered snapshotFormat'):
+                    generator.rendered_sources()
+            finally:
+                generator.ROOT = prior_root
 
     @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('xcrun'),
                          'Swift 读者核验需要本机 Xcode 工具链，CI 的 Linux 环境没有 xcrun。')

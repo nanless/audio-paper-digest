@@ -270,6 +270,141 @@
           "variant": "public-source-identity"
         }
       ]
+    },
+    {
+      "name": "paper-desktop-detail",
+      "currentVariant": "source-and-appearance-bound-detail",
+      "currentSchema": {
+        "fields": [
+          "appearanceId",
+          "paperId",
+          "identityStatus",
+          "sourceKind",
+          "sourceVersion",
+          "appearance",
+          "articleRevision",
+          "titles",
+          "authors",
+          "dates",
+          "bibliographic",
+          "abstract",
+          "oneSentenceThesis",
+          "classification",
+          "assessment",
+          "citation",
+          "sidecars",
+          "resources"
+        ],
+        "descriptorFields": [
+          "url",
+          "bytes",
+          "sha256"
+        ],
+        "maxDetailBytes": 2097152,
+        "maxArticleBytes": 16777216,
+        "maxAssetBytes": 16777216,
+        "maxArticleResources": 512,
+        "maxBundledArticleAssetsBytes": 67108864,
+        "paths": "same-origin-under-site-base-client-details-papers-and-articles-content-sha256",
+        "integrity": "sha256-of-actual-utf8-json-and-html-bytes",
+        "abstractPolicy": "verified-source-abstract-or-null-never-ai-summary",
+        "datePolicy": "paper-published-blog-published-and-article-updated-kept-distinct",
+        "htmlPolicy": "sanitized-article-fragment-no-script-event-frame-form-or-unsafe-url",
+        "citationFormat": {
+          "contract": "paper-citation-source",
+          "schemaFingerprint": "2a3ab286ddb284aa8cb50e1433a470ed62ef0095e7740957acc2ee895c94198a"
+        }
+      },
+      "historical": []
+    },
+    {
+      "name": "paper-desktop-snapshot",
+      "currentVariant": "content-addressed-catalog-snapshot",
+      "currentSchema": {
+        "fields": [
+          "sourceCommit",
+          "catalogShards",
+          "recordCount",
+          "paperCount",
+          "appearanceCount",
+          "tombstoneShards",
+          "tombstoneCount",
+          "tagCatalogs"
+        ],
+        "catalogRecordFields": [
+          "appearanceId",
+          "paperId",
+          "identityStatus",
+          "sourceKind",
+          "sourceVersionId",
+          "pageType",
+          "publicationStatus",
+          "title",
+          "titleZh",
+          "summary",
+          "blogPublishedAt",
+          "articleUpdatedAt",
+          "pageUrl",
+          "score",
+          "tagConceptIds",
+          "articleRevisionId",
+          "detail"
+        ],
+        "tombstoneRecordFields": [
+          "appearanceId",
+          "paperId",
+          "previousArticleRevisionId",
+          "reason",
+          "effectiveAt",
+          "sourceCommit",
+          "replacementAppearanceId",
+          "evidenceUrl",
+          "note"
+        ],
+        "shardFields": [
+          "url",
+          "bytes",
+          "sha256",
+          "recordCount"
+        ],
+        "maxShards": 128,
+        "maxShardBytes": 1048576,
+        "maxTotalCatalogBytes": 67108864,
+        "maxSnapshotBytes": 1048576,
+        "paths": "same-origin-under-site-base-client-details-catalog-and-tombstones-content-sha256-json",
+        "integrity": "sha256-of-actual-utf8-bytes-no-self-sha-in-snapshot",
+        "detailFormat": {
+          "contract": "paper-desktop-detail",
+          "schemaFingerprint": "0e350cb5dc4b2ded2e01e5b97fbc58e14d17f67f056872cf899b6a0f37b63aa5"
+        }
+      },
+      "historical": []
+    },
+    {
+      "name": "paper-desktop-manifest",
+      "currentVariant": "mutable-snapshot-entrypoint",
+      "currentSchema": {
+        "fields": [
+          "snapshotId",
+          "snapshot",
+          "generatedAt",
+          "sourceCommit",
+          "basePath"
+        ],
+        "descriptorFields": [
+          "url",
+          "bytes",
+          "sha256"
+        ],
+        "maxManifestBytes": 65536,
+        "paths": "same-origin-under-site-base-client-details-snapshots-snapshotid-json",
+        "integrity": "snapshot-id-equals-actual-snapshot-file-sha256-no-manifest-self-sha",
+        "snapshotFormat": {
+          "contract": "paper-desktop-snapshot",
+          "schemaFingerprint": "9befbc8f7624beb2b9bd7a683e950748839293ad332ce942f8d94c9d99291e74"
+        }
+      },
+      "historical": []
     }
   ]
 }
