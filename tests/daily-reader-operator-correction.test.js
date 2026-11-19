@@ -99,3 +99,267 @@ test('真实两稿的人工入口只读原源和账，精确重建并拒越权',
  for(const [file,digest]of originals)assert.equal(sha(fs.readFileSync(file)),digest);
  assert.deepEqual(fs.readFileSync(feeFile),feeBytes);
 });
+
+test('matchesPaidOrdinalEndpoint 支持多轮累积 draftOrderMappings 与零请求显式新轮原档回溯，并拒绝非零请求或篡改原档', async t => {
+ const os = require('node:os');
+ const Config = require('../scripts/config');
+ const codec = require('../scripts/lib/protocol-codec');
+ const daily = require('../scripts/lib/daily-fresh-source-plan');
+ const fresh = require('../scripts/lib/fresh-analysis-context');
+ const sourceApi = require('../scripts/lib/fresh-arxiv-rewrite-source');
+ const engine = require('../scripts/analysis-engine');
+ const deep = require('../scripts/deep-analyzer');
+ const repair = require('../scripts/lib/reader-repair');
+ const retry = require('../scripts/lib/explicit-reader-retry-round');
+ const { READER_SECTION_KINDS } = require('../scripts/lib/reader-draft-order');
+
+ const previousRoot = Config.FILES.dailyFreshSourceRunsDir;
+ const fixtureRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'operator-ordinal-endpoint-'));
+ fs.chmodSync(fixtureRoot, 0o700);
+ Config.FILES.dailyFreshSourceRunsDir = path.join(fixtureRoot, 'runs');
+ t.after(() => {
+  Config.FILES.dailyFreshSourceRunsDir = previousRoot;
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+ });
+
+ const paper = {
+  arxivId: '2611.99001v1',
+  title: 'Operator ordinal endpoint fixture',
+  analysisCheckpoint: '原主文正确且完整保留。',
+  analysisManifest: { stages: { apiReaderArticle: { status: 'failed' } } },
+  fullTextAvailable: true
+ };
+ const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-11-19', batchId: 'operator-ordinal-endpoint', papers: [paper] });
+ const text = 'Official controlled source methods and experimental limitations. '.repeat(100);
+ await daily.captureDailyFreshSources(plan, {
+  concurrency: 1,
+  capture: options => sourceApi.captureFreshArxivRewriteSource(options, {
+   fetchText: async id => ({
+    text,
+    source: 'html',
+    sourceId: id,
+    url: `https://arxiv.org/html/${id}`,
+    fetchedAt: '2026-11-19T00:00:00.000Z',
+    imageInfos: [],
+    warnings: []
+   }),
+   fetchPdf: async id => ({
+    bytes: Buffer.from(`%PDF-1.7\n${id}\n%%EOF\n`),
+    url: `https://arxiv.org/pdf/${id}`,
+    fetchedAt: '2026-11-19T00:00:01.000Z'
+   })
+  })
+ });
+ const source = daily.readDailyFreshSource(plan, paper);
+ paper.sourceSha256 = source.freshSourceDescriptor.sourceSha256;
+ const resourceIdentity = {
+  contract: 'api-reader-resource-identity-v1',
+  sourceTextSha256: sha(source.text),
+  resources: []
+ };
+ paper.apiReaderResources = {
+  ...resourceIdentity,
+  identitySha256: require('../scripts/lib/fresh-rewrite-run').stableHash(resourceIdentity)
+ };
+ daily.withDailyFreshAnalysisContext(plan, () => fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source));
+ const sourceIdentity = daily.withDailyFreshAnalysisContext(plan, () => fresh.freshAnalysisIdentity(paper.arxivId));
+
+ const canonicalDraft = {
+  ...codec.recordHeader('reader-draft', 'reader-draft'),
+  readerTitle: '多轮顺序映射与显式新轮端点核验测试',
+  oneSentenceThesis: '验证多轮累积顺序映射及零请求显式新轮归档候选均可精确回放付费 ordinal 终点。',
+  sections: READER_SECTION_KINDS.map((kind, i) => ({
+   kind,
+   heading: `小节 ${i + 1}`,
+   body: i < 4 ? `这是第 ${i + 1} 节正文段落。\n\n[[CONCEPT_BRIDGE_${i + 1}]]` : `这是第 ${i + 1} 节正文段落。`
+  })),
+  conceptBridges: [0, 1, 2, 3].map(i => ({
+   term: `核心概念${i + 1}`,
+   sectionKind: READER_SECTION_KINDS[i],
+   marker: `[[CONCEPT_BRIDGE_${i + 1}]]`,
+   explanation: `核心概念 ${i + 1} 的初学者通俗解释。`
+  })),
+  figurePlacements: [],
+  tableBindings: [],
+  formulaBindings: []
+ };
+ assert.ok(repair.parseRepairableDraft(canonicalDraft), 'synthetic canonical draft must be a valid repairable draft');
+
+ // Construct paid ordinal output `lastPaidAfter` with swapped sections 0 & 1 so
+ // normalizeApiReaderRecoveryDraftForSource deterministically emits 1 changed reader-draft-order mapping M.
+ const lastPaidAfter = structuredClone(canonicalDraft);
+ [lastPaidAfter.sections[0], lastPaidAfter.sections[1]] = [lastPaidAfter.sections[1], lastPaidAfter.sections[0]];
+ const normState = {}, emittedMappings = [];
+ deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(lastPaidAfter), [], {
+  paperId: paper.arxivId,
+  sourceText: source.text,
+  structuredArtifacts: source.structuredArtifacts,
+  pixelFigureOrdinals: [],
+  draftOrderMappings: emittedMappings
+ }, normState);
+ assert.equal(emittedMappings.length, 1);
+ assert.equal(emittedMappings[0].changed, true);
+ assert.deepEqual(normState.draft, canonicalDraft);
+
+ const olderMapping = {
+  ...structuredClone(emittedMappings[0]),
+  inputSha256: '1'.repeat(64),
+  outputSha256: '2'.repeat(64)
+ };
+ const trailingMapping = emittedMappings[0];
+ const identity = {
+  paperId: paper.arxivId,
+  maxAttempts: 6,
+  freshAnalysis: sourceIdentity,
+  sourceSha256: paper.sourceSha256,
+  inputFingerprint: sha(source.text)
+ };
+ const ordinalCompilationStub = [{ requestId: 'req-ordinal-1', identity, pins: { sealSha256: '3'.repeat(64) } }];
+ const basePayload = {
+  status: 'failed',
+  draft: structuredClone(canonicalDraft),
+  rawDraft: JSON.stringify(canonicalDraft),
+  draftOrderMappings: [olderMapping, trailingMapping],
+  ordinalPatchCompilations: ordinalCompilationStub,
+  issues: [{ path: '/sections/0/body', message: 'controlled fixture issue' }],
+  imageEvidence: [],
+  attempts: 6,
+  fullAttempts: 2,
+  noProgress: 3,
+  failureSignature: 'sig-fixture',
+  validationFailureSignature: 'val-sig-fixture',
+  validationFailureStreak: 3,
+  transportFailures: 0,
+  implementationRepairAllowanceProof: null
+ };
+
+ const directory = plan.readerAttemptsDir;
+ repair.saveFailedCandidate(directory, identity, basePayload);
+ const candFile = path.join(directory, `${repair.hashDraft(identity)}.json`);
+ const savedBeforeRound = JSON.parse(fs.readFileSync(candFile));
+ assert.equal(savedBeforeRound.payload.draftOrderMappings.length, 2);
+
+ const record = {
+  baselineCandidateFile: candFile,
+  baselineDraftSha256: repair.hashDraft(canonicalDraft)
+ };
+
+ // 1. Multi-mapping state (draftOrderMappings.length === 2) succeeds, and tampered header on older entry fails.
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, savedBeforeRound.payload, record, paper, source, identity),
+  true
+ );
+ const badHeaderPayload = structuredClone(savedBeforeRound.payload);
+ badHeaderPayload.draftOrderMappings[0].schemaFingerprint = '0'.repeat(64);
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, badHeaderPayload, record, paper, source, identity),
+  false
+ );
+
+ // 2. Explicit round state (draftOrderMappings reset to [] with physicalRequests === 0, backed by .original.json).
+ const sourceDirectory = path.join(plan.sourcesDir, '2611.99001', 'generation-000001');
+ const sourceFiles = Object.fromEntries(
+  ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json'].map(name => [
+   name,
+   sha(fs.readFileSync(path.join(sourceDirectory, name)))
+  ])
+ );
+ const grant = {
+  ...codec.recordHeader(retry.CONTRACT, retry.CONTRACT),
+  batchDate: plan.batchDate,
+  runId: plan.runId,
+  sourceFiles,
+  originalIdentitySha256: repair.hashDraft(identity),
+  paperId: '2611.99001',
+  roundId: crypto.randomUUID(),
+  identitySha256: repair.hashDraft(identity),
+  envelopeSha256: sha(fs.readFileSync(candFile)),
+  payloadSha256: repair.hashDraft(savedBeforeRound.payload),
+  wholeSha256: sha(paper.analysisCheckpoint),
+  maxResponses: 3,
+  maxFullResponses: 1,
+  maxPhysicalRequests: 6,
+  maxReservedOutputTokens: 80000
+ };
+ const locked = callback =>
+  daily.withDailyFreshAnalysisContext(plan, () =>
+   daily.withDailyFreshPaperSource(plan, paper, () => engine.withPaperAnalysisLock(paper, callback))
+  );
+
+ let explicitPayload;
+ await locked(() =>
+  retry.withExplicitRound(paper, grant, () => {
+   explicitPayload = retry.beginExplicitRound(directory, identity, savedBeforeRound.payload, paper);
+  })
+ );
+ assert.equal(explicitPayload.draftOrderMappings ?? undefined, undefined);
+ assert.equal(explicitPayload.attempts, 0);
+
+ // Simulate deep-analyzer saving the post-round candidate preserving ordinalPatchCompilations and resetting draftOrderMappings to [] (exact 2611.24249v1 state), plus test undefined draftOrderMappings.
+ const postRoundWithOrdinal = {
+  ...explicitPayload,
+  draftOrderMappings: [],
+  ordinalPatchCompilations: savedBeforeRound.payload.ordinalPatchCompilations
+ };
+ repair.saveFailedCandidate(directory, identity, postRoundWithOrdinal);
+ const persistedPostRound = JSON.parse(fs.readFileSync(candFile)).payload;
+ assert.deepEqual(persistedPostRound.draftOrderMappings, []);
+ assert.equal(persistedPostRound.ordinalPatchCompilations.length, 1);
+
+ const snapshots = [];
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, persistedPostRound, record, paper, source, identity, snapshots),
+  true
+ );
+ assert.equal(snapshots.length, 2);
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint(
+   { after: lastPaidAfter },
+   { ...explicitPayload, ordinalPatchCompilations: savedBeforeRound.payload.ordinalPatchCompilations },
+   record,
+   paper,
+   source,
+   identity
+  ),
+  true
+ );
+
+ // 3a. Mismatched ordinalPatchCompilations between active payload and archived original fails.
+ const mismatchedOrdinalPayload = structuredClone(persistedPostRound);
+ mismatchedOrdinalPayload.ordinalPatchCompilations = [];
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, mismatchedOrdinalPayload, record, paper, source, identity),
+  false
+ );
+
+ // 3b. Tampered archivedFile bytes fail envelopeSha256 verification.
+ const receiptFile = persistedPostRound.explicitReaderRetryRound.receiptFile;
+ const receiptObj = JSON.parse(fs.readFileSync(receiptFile));
+ const origArchivedBytes = fs.readFileSync(receiptObj.archivedFile);
+ fs.writeFileSync(receiptObj.archivedFile, Buffer.concat([origArchivedBytes, Buffer.from(' ')]), { mode: 0o600 });
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, persistedPostRound, record, paper, source, identity),
+  false
+ );
+ fs.writeFileSync(receiptObj.archivedFile, origArchivedBytes, { mode: 0o600 });
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, persistedPostRound, record, paper, source, identity),
+  true
+ );
+
+ // 3c. Non-empty receipt.requests (physicalRequests > 0) is rejected.
+ await locked(() =>
+  retry.withPhysicalBudget(persistedPostRound.explicitReaderRetryRound, paper, () => {
+   retry.consumePhysicalRequest(
+    { max_output_tokens: 1024 },
+    { usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' } }
+   );
+  })
+ );
+ const receiptAfterReq = JSON.parse(fs.readFileSync(receiptFile));
+ assert.equal(receiptAfterReq.requests.length, 1);
+ assert.equal(
+  operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, persistedPostRound, record, paper, source, identity),
+  false
+ );
+});

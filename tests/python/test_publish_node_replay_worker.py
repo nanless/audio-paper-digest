@@ -281,8 +281,6 @@ module.exports = {{ runReplayFd, formatReplayError }};
         valid_payload = json.dumps({'summary': self.valid_summary, 'sourceText': ''}).encode('utf-8')
         invalid_payload = json.dumps({'summary': '本文很好。', 'sourceText': ''}).encode('utf-8')
 
-        spawned_before = replay_client.total_spawned_workers()
-
         def run_one(idx):
             is_valid = (idx % 2 == 0)
             res = replay_client.run_node_replay_request(
@@ -296,21 +294,26 @@ module.exports = {{ runReplayFd, formatReplayError }};
             )
             return idx, is_valid, res
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            outcomes = list(pool.map(run_one, range(66)))
+        for max_idle, max_workers in ((8, 8), (4, 4)):
+            with self.subTest(max_idle=max_idle, max_workers=max_workers):
+                replay_client.shutdown_all_workers()
+                with mock.patch.object(replay_client, 'MAX_IDLE_WORKERS_PER_KEY', max_idle):
+                    spawned_before = replay_client.total_spawned_workers()
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                        outcomes = list(pool.map(run_one, range(66)))
 
-        spawned_delta = replay_client.total_spawned_workers() - spawned_before
-        self.assertGreaterEqual(spawned_delta, 1)
-        self.assertLessEqual(spawned_delta, 8)
-        self.assertLessEqual(replay_client.idle_worker_count(), replay_client.MAX_IDLE_WORKERS_PER_KEY)
+                    spawned_delta = replay_client.total_spawned_workers() - spawned_before
+                    self.assertGreaterEqual(spawned_delta, 1)
+                    self.assertLessEqual(spawned_delta, max_workers)
+                    self.assertLessEqual(replay_client.idle_worker_count(), max_idle)
 
-        for idx, is_valid, res in outcomes:
-            self.assertEqual(res.returncode, 0, f'item {idx} failed')
-            parsed = json.loads(res.stdout)
-            if is_valid:
-                self.assertIsNone(parsed['issue'])
-            else:
-                self.assertIsInstance(parsed['issue'], str)
+                for idx, is_valid, res in outcomes:
+                    self.assertEqual(res.returncode, 0, f'item {idx} failed')
+                    parsed = json.loads(res.stdout)
+                    if is_valid:
+                        self.assertIsNone(parsed['issue'])
+                    else:
+                        self.assertIsInstance(parsed['issue'], str)
 
     def test_monkeypatch_and_env_disable_passthrough_and_fingerprint_registration(self):
         core_cli = SCRIPTS / 'lib' / 'core-summary-semantic-replay-cli.js'

@@ -328,16 +328,55 @@ function retainedPaidFingerprintInput(paper) {
     validateSavedCompletion(paper);
     return paper.analysisStageCheckpoints.apiReaderArticle;
 }
+function resolveExpectedOrdinalDraftOrderMapping(payload, record, candidateIdentity, snapshots) {
+    const repair = require('./reader-repair');
+    if (Array.isArray(payload.draftOrderMappings) && payload.draftOrderMappings.length >= 1) {
+        if (!payload.draftOrderMappings.every(entry => codec.hasValidHeader(entry, 'reader-draft-order'))) return null;
+        return payload.draftOrderMappings.at(-1);
+    }
+    if ((payload.draftOrderMappings === undefined
+        || (Array.isArray(payload.draftOrderMappings) && payload.draftOrderMappings.length === 0))
+        && payload.explicitReaderRetryRound?.receiptFile
+        && typeof record?.baselineCandidateFile === 'string' && record.baselineCandidateFile) {
+        try {
+            const attemptsDir = path.dirname(path.resolve(record.baselineCandidateFile));
+            within(payload.explicitReaderRetryRound.receiptFile, attemptsDir);
+            const receiptSnap = read(payload.explicitReaderRetryRound.receiptFile), receipt = receiptSnap.value;
+            const identity = candidateIdentity || record.baselineIdentity || read(record.baselineCandidateFile).value?.identity;
+            if (!identity) return null;
+            require('./explicit-reader-retry-round').validatePersistedRound(attemptsDir, identity, payload);
+            within(receipt.archivedFile, attemptsDir);
+            const archivedSnap = read(receipt.archivedFile), archived = archivedSnap.value;
+            const archivedMappings = archived?.payload?.draftOrderMappings;
+            if (archivedSnap.sha256 !== receipt.grant?.envelopeSha256
+                || !Array.isArray(receipt.requests) || receipt.requests.length !== 0
+                || receipt.physicalRequests !== 0 || receipt.reservedOutputTokens !== 0
+                || (payload.attempts || 0) !== 0 || (payload.fullAttempts || 0) !== 0
+                || repair.hashDraft(archived?.payload?.draft) !== record.baselineDraftSha256
+                || !isDeepStrictEqual(archived?.payload?.ordinalPatchCompilations, payload.ordinalPatchCompilations)
+                || !Array.isArray(archivedMappings) || archivedMappings.length < 1
+                || !archivedMappings.every(entry => codec.hasValidHeader(entry, 'reader-draft-order')))
+                return null;
+            unchanged(receiptSnap);
+            unchanged(archivedSnap);
+            if (Array.isArray(snapshots)) snapshots.push(receiptSnap, archivedSnap);
+            return archivedMappings.at(-1);
+        } catch {
+            return null;
+        }
+    }
+    return null;
+}
 // The paid ordinal compiler can leave complete-table declarations which
 // ordinary source normalization expands before the active candidate is saved.
-function matchesPaidOrdinalEndpoint(last, payload, record, paper, source) {
+function matchesPaidOrdinalEndpoint(last, payload, record, paper, source, candidateIdentity = null, snapshots = null) {
     const repair = require('./reader-repair');
     if (!last?.after || repair.hashDraft(payload.draft) !== record.baselineDraftSha256) return false;
     if (isDeepStrictEqual(last.after, payload.draft)) return true;
-    const [mapping] = Array.isArray(payload.draftOrderMappings) ? payload.draftOrderMappings : [];
-    if (payload.draftOrderMappings?.length !== 1 || !codec.hasValidHeader(mapping, 'reader-draft-order')
-        || mapping.changed !== true || mapping.inputSha256 !== repair.hashDraft(last.after)
-        || mapping.outputSha256 !== record.baselineDraftSha256
+    const expectedMapping = resolveExpectedOrdinalDraftOrderMapping(payload, record, candidateIdentity, snapshots);
+    if (!expectedMapping || !codec.hasValidHeader(expectedMapping, 'reader-draft-order')
+        || expectedMapping.changed !== true || expectedMapping.inputSha256 !== repair.hashDraft(last.after)
+        || expectedMapping.outputSha256 !== record.baselineDraftSha256
         || !Array.isArray(payload.imageEvidence)
         || sha(source.text) !== source.freshSourceDescriptor.sourceSha256
         || source.structuredArtifacts?.payloadSha256 !== source.freshSourceDescriptor.structuredArtifactsSha256)
@@ -358,7 +397,7 @@ function matchesPaidOrdinalEndpoint(last, payload, record, paper, source) {
         return false;
     }
     return isDeepStrictEqual(state.draft, payload.draft)
-        && isDeepStrictEqual(draftOrderMappings, payload.draftOrderMappings);
+        && isDeepStrictEqual(draftOrderMappings, [expectedMapping]);
 }
 function validateSavedCompletion(paper) { return validateSavedCompletionUnchecked(paper, false); }
 function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
@@ -437,7 +476,7 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
             for (const entry of records) lastPaid = require('./reader-target-ordinal-patch').replay({ paper, identity: entry.identity,
                 directory: plan.readerAttemptsDir, requestId: entry.requestId, pins: entry.pins });
             const deep = require('../deep-analyzer');
-            if (records.length && !matchesPaidOrdinalEndpoint(lastPaid, payload, record, paper, source))
+            if (records.length && !matchesPaidOrdinalEndpoint(lastPaid, payload, record, paper, source, original.identity, snapshots))
                 fail('last paid compilation differs from the original candidate');
             const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
                 arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
@@ -463,5 +502,5 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     if (daily.stableHash(paper) !== paperSha256) fail('paper/stage changed during read-only replay');
     return true;
 }
-module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,hasActiveSourceOnlyCorrection,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,retainedPaidFingerprintInput,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
+module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,hasActiveSourceOnlyCorrection,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,retainedPaidFingerprintInput,matchesPaidOrdinalEndpoint,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
     inspectDailyOperatorTail,assertCompleteOperatorTail};
