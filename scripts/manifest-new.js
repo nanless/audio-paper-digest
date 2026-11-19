@@ -49,6 +49,91 @@ function validateSpec(spec) {
     }
 }
 
+function currentReaderParserImplementationSha256() {
+    return repair.shaText([
+        fs.readFileSync(path.join(__dirname, 'deep-analyzer.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/scoring-audit-contract.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/public-resource-probe.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-repair-evidence-slice.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/experiment-source-setting-axes.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/llm-usage.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/llm-pending-request.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/llm-response-recovery.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/active-time-budget.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-figure-alias.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/signed-reader-recovery-draft.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-paid-response-replay.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-recovery-revision.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-target-ordinal-patch.js'), 'utf8'),
+        ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
+            'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',
+            'reader-resource-claims-format.js', 'reader-proof-format.js', 'reader-content-mode.js',
+            'protocol-codec.js', 'reader-legacy-records.json'].map(file => fs.readFileSync(path.join(__dirname, 'lib', file), 'utf8')),
+        ...['reader.json', 'reader-retry.json'].map(file => fs.readFileSync(path.join(__dirname, '../config/protocols', file), 'utf8')),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-compatible-candidate-replay.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-transport-continuation.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-fact-pre-request-recovery.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-unsent-empty-candidate.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-malformed-previous-draft-view.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-fact-table-claim-location.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/source-cell-math-display.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-scientific-quote-coverage.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-source-metric-units.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-quote-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-column-units.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-source-table-column-units.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-authenticated-pdf-table-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-authenticated-pdf-footnote-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-extraction-scope.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-source-context.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-pdf-source.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-reader-publication-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-analysis-context.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-reader-recovery-window.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-recovery-grant.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/direct-rewrite-analysis-context.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/historical-direct-rewrite-runner.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/pdf-layout.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'pdf-layout-extract.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_column_units.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_pdf_column_unit_projection.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_literal_column_units.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_quote_evidence.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_pdf_quote_projection.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_authenticated_pdf_hierarchical_table.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_authenticated_pdf_footnote_evidence.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-source-blocked-normalization.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-dom-span-projection.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-parent-upstream-preflight.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-resource-input-admission.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-next-request-plan.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-saved-feedback-input-continuity.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/daily-reader-operator-correction.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/conference-reader-operator-correction.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-cell-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-table-pdf-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-table-evidence.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_table_evidence.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_proof_format.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'protocol_codec.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_pdf_cell_evidence.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'conference_extractor.py'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'python-runtime.sh'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
+    ].join('\0'));
+}
+
 function findCandidate(attemptsDir, paperId, planRunId = null, sourceSha256 = null) {
     if (!/^[a-f0-9]{64}$/.test(sourceSha256 || '')) throw new Error('候选检查需要当前封存来源 sourceSha256');
     const candidates = fs.readdirSync(attemptsDir)
@@ -69,7 +154,15 @@ function findCandidate(attemptsDir, paperId, planRunId = null, sourceSha256 = nu
             matches.push({ absolutePath: candidate.absolutePath, ...envelope });
         }
     }
-    if (matches.length > 1) throw new Error(`${paperId} 存在多个活动候选，当前输入身份未核，不能消除歧义`);
+    if (matches.length > 1) {
+        const currentParserSha = currentReaderParserImplementationSha256();
+        const currentRepairSha = repair.readerRepairImplementationSha256();
+        const narrowed = matches.filter(m =>
+            m.envelope?.identity?.parserImplementationSha256 === currentParserSha
+            && m.envelope?.identity?.repairImplementationSha256 === currentRepairSha);
+        if (narrowed.length === 1) return narrowed[0];
+        throw new Error(`${paperId} 存在多个活动候选，当前输入身份未核，不能消除歧义`);
+    }
     return matches[0] || null;
 }
 
@@ -184,7 +277,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
 }
 
-module.exports = { validateSpec, nodeAt, buildSpecPreview, findCandidate, readOperatorFeedbackFiles, main };
+module.exports = { validateSpec, nodeAt, buildSpecPreview, currentReaderParserImplementationSha256, findCandidate, readOperatorFeedbackFiles, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[manifest-new] ${error.message}`); process.exitCode = 1; }

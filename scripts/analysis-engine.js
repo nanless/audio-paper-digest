@@ -1127,6 +1127,810 @@ function stableSha256(value) {
 }
 
 
+const FORMULA_THEMATIC_BREAK_RE = /^(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+const FORMULA_ATX_HEADING_RE = /^#{1,6}(?:[ \t]|$)/;
+const FORMULA_SETEXT_UNDERLINE_RE = /^(?:=+|-+)[ \t]*$/;
+const FORMULA_HTML_BLOCK_TAG_RE = /^<\/?(?:address|article|aside|blockquote|body|caption|center|col|colgroup|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)(?=[\s/>]|$)/i;
+const FORMULA_HTML_TYPE7_RE = /^<\/?[a-z][\w-]*(?:\s+[^<>]*)?\s*\/?>[ \t]*$/i;
+
+function isFormulaBackslashEscaped(text, index, lowerBound = 0) {
+    let count = 0;
+    for (let pos = index - 1; pos >= lowerBound && text[pos] === '\\'; pos -= 1) count += 1;
+    return count % 2 === 1;
+}
+
+function findMatchingBacktickRunEnd(text, openEnd, tickLength) {
+    for (let index = openEnd; index < text.length;) {
+        if (text[index] !== '`') {
+            index += 1;
+            continue;
+        }
+        let run = 0;
+        while (index + run < text.length && text[index + run] === '`') run += 1;
+        if (run === tickLength) return index + run;
+        index += run;
+    }
+    return -1;
+}
+
+function tryParseInlineHtmlCommentEnd(seg, pos) {
+    if (!seg.startsWith('<!--', pos)) return -1;
+    if (seg.startsWith('<!-->', pos)) return pos + 5;
+    if (seg.startsWith('<!--->', pos)) return pos + 6;
+    const closeIdx = seg.indexOf('-->', pos + 4);
+    return closeIdx >= 0 ? closeIdx + 3 : -1;
+}
+
+function tryParseCommonMarkInlineImageEnd(seg, start) {
+    if (seg[start] !== '!' || seg[start + 1] !== '[') return -1;
+    let pos = start + 2;
+    let depth = 1;
+    while (pos < seg.length) {
+        const ch = seg[pos];
+        if (ch === '\\') {
+            let bRun = 0;
+            while (pos + bRun < seg.length && seg[pos + bRun] === '\\') bRun += 1;
+            if (bRun === 1 && pos + 1 < seg.length && seg[pos + 1] === '[') {
+                const closeMath = seg.indexOf('\\]', pos + 2);
+                pos = closeMath >= 0 ? closeMath + 2 : pos + 2;
+                continue;
+            }
+            pos += (bRun % 2 === 1 && pos + bRun < seg.length) ? bRun + 1 : bRun;
+            continue;
+        }
+        if (ch === '`') {
+            let tickLength = 0;
+            while (pos + tickLength < seg.length && seg[pos + tickLength] === '`') tickLength += 1;
+            const closed = findMatchingBacktickRunEnd(seg, pos + tickLength, tickLength);
+            pos = closed >= 0 ? closed : pos + tickLength;
+            continue;
+        }
+        if (ch === '<') {
+            const commentEnd = tryParseInlineHtmlCommentEnd(seg, pos);
+            if (commentEnd >= 0) {
+                pos = commentEnd;
+                continue;
+            }
+        }
+        if (ch === '[') {
+            depth += 1;
+            pos += 1;
+            continue;
+        }
+        if (ch === ']') {
+            depth -= 1;
+            pos += 1;
+            if (depth === 0) break;
+            continue;
+        }
+        pos += 1;
+    }
+    if (depth !== 0 || pos >= seg.length || seg[pos] !== '(') return -1;
+    pos += 1;
+    while (pos < seg.length && /[ \t\r\n]/.test(seg[pos])) pos += 1;
+    if (pos < seg.length && seg[pos] === ')') return pos + 1;
+    if (pos >= seg.length) return -1;
+    if (seg[pos] === '<') {
+        pos += 1;
+        let closedAngle = false;
+        while (pos < seg.length) {
+            const ch = seg[pos];
+            if (ch === '\\') {
+                let bRun = 0;
+                while (pos + bRun < seg.length && seg[pos + bRun] === '\\') bRun += 1;
+                pos += (bRun % 2 === 1 && pos + bRun < seg.length) ? bRun + 1 : bRun;
+                continue;
+            }
+            if (ch === '\r' || ch === '\n' || ch === '<') return -1;
+            if (ch === '>') { pos += 1; closedAngle = true; break; }
+            pos += 1;
+        }
+        if (!closedAngle) return -1;
+    } else {
+        let parenDepth = 0;
+        while (pos < seg.length) {
+            const ch = seg[pos];
+            if (ch === '\\') {
+                let bRun = 0;
+                while (pos + bRun < seg.length && seg[pos + bRun] === '\\') bRun += 1;
+                pos += (bRun % 2 === 1 && pos + bRun < seg.length) ? bRun + 1 : bRun;
+                continue;
+            }
+            if (/[ \t\r\n]/.test(ch)) break;
+            const code = ch.charCodeAt(0);
+            if (code < 0x20 || code === 0x7f) return -1;
+            if (ch === '(') {
+                parenDepth += 1;
+                if (parenDepth > 32) return -1;
+                pos += 1;
+                continue;
+            }
+            if (ch === ')') {
+                if (parenDepth === 0) return pos + 1;
+                parenDepth -= 1;
+                pos += 1;
+                continue;
+            }
+            pos += 1;
+        }
+        if (parenDepth !== 0) return -1;
+    }
+    if (pos < seg.length && seg[pos] === ')') return pos + 1;
+    const wsStart = pos;
+    while (pos < seg.length && /[ \t\r\n]/.test(seg[pos])) pos += 1;
+    if (pos === wsStart) return -1;
+    if (pos < seg.length && seg[pos] === ')') return pos + 1;
+    if (pos >= seg.length) return -1;
+    const openQuote = seg[pos];
+    if (openQuote !== '"' && openQuote !== '\'' && openQuote !== '(') return -1;
+    const closeQuote = openQuote === '(' ? ')' : openQuote;
+    pos += 1;
+    let closedTitle = false;
+    while (pos < seg.length) {
+        const ch = seg[pos];
+        if (ch === '\\') {
+            let bRun = 0;
+            while (pos + bRun < seg.length && seg[pos + bRun] === '\\') bRun += 1;
+            pos += (bRun % 2 === 1 && pos + bRun < seg.length) ? bRun + 1 : bRun;
+            continue;
+        }
+        if (openQuote === '(' && ch === '(') return -1;
+        if (ch === closeQuote) { pos += 1; closedTitle = true; break; }
+        pos += 1;
+    }
+    if (!closedTitle) return -1;
+    while (pos < seg.length && /[ \t\r\n]/.test(seg[pos])) pos += 1;
+    return (pos < seg.length && seg[pos] === ')') ? pos + 1 : -1;
+}
+
+function scanFormulaIndent(clean, idx, col, containerCol) {
+    let pIdx = idx;
+    let pCol = col;
+    while (pIdx < clean.length) {
+        if (clean[pIdx] === ' ') {
+            pCol += 1;
+            pIdx += 1;
+        } else if (clean[pIdx] === '\t') {
+            pCol += 4 - (pCol % 4);
+            pIdx += 1;
+        } else {
+            break;
+        }
+    }
+    return { nonWsIdx: pIdx, nonWsCol: pCol, relIndent: pCol - containerCol, isBlank: pIdx >= clean.length };
+}
+
+function consumeFormulaColumns(clean, idx, col, targetCol) {
+    let pIdx = idx;
+    let pCol = col;
+    while (pIdx < clean.length) {
+        if (clean[pIdx] === ' ') {
+            if (pCol + 1 > targetCol) break;
+            pCol += 1;
+            pIdx += 1;
+        } else if (clean[pIdx] === '\t') {
+            pCol += 4 - (pCol % 4);
+            pIdx += 1;
+            if (pCol >= targetCol) break;
+        } else {
+            break;
+        }
+    }
+    return { idx: pIdx, col: pCol };
+}
+
+function parseFormulaFenceStart(sub) {
+    const match = /^(`{3,}|~{3,})(.*)$/.exec(sub);
+    if (!match) return null;
+    if (match[1][0] === '`' && match[2].includes('`')) return null;
+    return { char: match[1][0], length: match[1].length };
+}
+
+function parseFormulaHtmlLiteralName(sub) {
+    const match = /^<(pre|code|script|style|textarea)(?=[\s/>]|$)/iu.exec(sub);
+    return match ? match[1].toLowerCase().replace(/ſ/g, 's') : null;
+}
+
+function parseFormulaHtmlTerminator(sub) {
+    if (sub.startsWith('<?')) return '?>';
+    if (sub.startsWith('<![CDATA[')) return ']]>';
+    if (/^<![A-Z]/.test(sub)) return '>';
+    return null;
+}
+
+function advanceRawHtmlCommentState(rawText, isOpen) {
+    let open = Boolean(isOpen);
+    let lastCloseEnd = -1;
+    for (let p = 0; p < rawText.length;) {
+        if (!open) {
+            if (rawText.startsWith('<!-->', p)) {
+                lastCloseEnd = p + 5;
+                p += 5;
+                continue;
+            }
+            if (rawText.startsWith('<!--->', p)) {
+                lastCloseEnd = p + 6;
+                p += 6;
+                continue;
+            }
+            if (rawText.startsWith('<!--', p)) {
+                open = true;
+                p += 4;
+                continue;
+            }
+            p += 1;
+        } else if (rawText.startsWith('-->', p)) {
+            open = false;
+            lastCloseEnd = p + 3;
+            p += 3;
+        } else {
+            p += 1;
+        }
+    }
+    return { open, lastCloseEnd };
+}
+
+function maskFormulaInlineCodeLineProbe(text) {
+    const out = text.split('');
+    let pos = 0;
+    while (pos < text.length) {
+        if (text[pos] === '`' && !isFormulaBackslashEscaped(text, pos, 0)) {
+            let tickLen = 0;
+            while (pos + tickLen < text.length && text[pos + tickLen] === '`') tickLen += 1;
+            const closed = findMatchingBacktickRunEnd(text, pos + tickLen, tickLen);
+            if (closed >= 0) {
+                for (let k = pos; k < closed; k += 1) out[k] = 'x';
+                pos = closed;
+                continue;
+            }
+            pos += tickLen;
+            continue;
+        }
+        pos += 1;
+    }
+    return out.join('');
+}
+
+function parseFormulaListMarker(clean, idx, col, containerCol, interruptsParagraph) {
+    const ind = scanFormulaIndent(clean, idx, col, containerCol);
+    if (ind.isBlank || ind.relIndent > 3) return null;
+    const sub = clean.slice(ind.nonWsIdx);
+    if (FORMULA_THEMATIC_BREAK_RE.test(sub)) return null;
+    const match = /^([-+*]|\d{1,9}[.)])(?=[ \t]|$)/.exec(sub);
+    if (!match) return null;
+    const marker = match[1];
+    const afterIdx = ind.nonWsIdx + marker.length;
+    const afterCol = ind.nonWsCol + marker.length;
+    const afterInd = scanFormulaIndent(clean, afterIdx, afterCol, afterCol);
+    if (interruptsParagraph) {
+        if (afterInd.isBlank) return null;
+        if (marker.length > 1 && !/^1[.)]$/.test(marker)) return null;
+    }
+    const spacesAfter = (afterInd.isBlank || afterInd.relIndent >= 5) ? 1 : afterInd.relIndent;
+    const contentIndent = ind.relIndent + marker.length + spacesAfter;
+    const targetCol = containerCol + contentIndent;
+    const nextPos = afterInd.isBlank
+        ? { idx: afterInd.nonWsIdx, col: afterInd.nonWsCol }
+        : consumeFormulaColumns(clean, afterIdx, afterCol, targetCol);
+    return {
+        contentIndent,
+        targetCol,
+        idx: nextPos.idx,
+        col: nextPos.col,
+        isEmptyLine: afterInd.isBlank
+    };
+}
+
+function splitFormulaGfmTableRowCells(info) {
+    const rest = info.rest;
+    const trimmed = rest.trim();
+    if (!trimmed || trimmed === '|' || !trimmed.includes('|')) return null;
+    let left = 0;
+    while (left < rest.length && (rest[left] === ' ' || rest[left] === '\t')) left += 1;
+    let right = rest.length;
+    while (right > left && (rest[right - 1] === ' ' || rest[right - 1] === '\t')) right -= 1;
+    if (rest[left] === '|') left += 1;
+    if (right > left && rest[right - 1] === '|' && !isFormulaBackslashEscaped(rest, right - 1, left)) right -= 1;
+    const cells = [];
+    let cellStart = left;
+    for (let pos = left; pos < right; pos += 1) {
+        if (rest[pos] === '|' && !isFormulaBackslashEscaped(rest, pos, left)) {
+            cells.push({ start: info.contentStart + cellStart, end: info.contentStart + pos });
+            cellStart = pos + 1;
+        }
+    }
+    cells.push({ start: info.contentStart + cellStart, end: info.contentStart + right });
+    return cells;
+}
+
+function isFormulaGfmDelimiterCells(cells, visible) {
+    return Array.isArray(cells) && cells.length >= 1
+        && cells.every(cell => /^[ \t]*:?-+:?[ \t]*$/.test(visible.slice(cell.start, cell.end)));
+}
+
+function buildFormulaSurfaceAndSegments(original) {
+    const rawLines = original.split('\n');
+    const visibleLines = [];
+    const infos = [];
+    const containers = [];
+    let nextContainerId = 0;
+    let fence = null;
+    let htmlLiteral = null;
+    let htmlTerminator = null;
+    let htmlCommentBlock = null;
+    let htmlBlock = null;
+    let rawDomCommentOpen = false;
+    let inParagraph = false;
+    let offset = 0;
+
+    for (const rawLine of rawLines) {
+        const cr = rawLine.endsWith('\r') ? '\r' : '';
+        const clean = cr ? rawLine.slice(0, -1) : rawLine;
+        const blankLine = ' '.repeat(clean.length) + cr;
+        let idx = 0;
+        let col = 0;
+        let containerCol = 0;
+        let matched = 0;
+
+        while (matched < containers.length) {
+            const container = containers[matched];
+            const ind = scanFormulaIndent(clean, idx, col, containerCol);
+            if (container.type === 'blockquote') {
+                if (!ind.isBlank && ind.relIndent <= 3 && clean[ind.nonWsIdx] === '>') {
+                    idx = ind.nonWsIdx + 1;
+                    col = ind.nonWsCol + 1;
+                    containerCol = col;
+                    if (idx < clean.length && (clean[idx] === ' ' || clean[idx] === '\t')) {
+                        containerCol = col + 1;
+                        ({ idx, col } = consumeFormulaColumns(clean, idx, col, containerCol));
+                    }
+                    matched += 1;
+                } else {
+                    break;
+                }
+            } else if (ind.isBlank) {
+                if (!container.sawContent && container.blankAfterEmpty) break;
+                idx = ind.nonWsIdx;
+                col = ind.nonWsCol;
+                containerCol = col;
+                matched += 1;
+            } else if (ind.relIndent >= container.contentIndent) {
+                const targetCol = containerCol + container.contentIndent;
+                ({ idx, col } = consumeFormulaColumns(clean, idx, col, targetCol));
+                containerCol = targetCol;
+                matched += 1;
+            } else {
+                break;
+            }
+        }
+
+        if (htmlLiteral && htmlLiteral.depth > matched) htmlLiteral = null;
+        if (htmlTerminator && htmlTerminator.depth > matched) htmlTerminator = null;
+        if (htmlCommentBlock && htmlCommentBlock.depth > matched) htmlCommentBlock = null;
+        if (fence && fence.depth > matched) fence = null;
+        if (htmlBlock && htmlBlock.depth > matched) htmlBlock = null;
+
+        const emitProtected = sig => {
+            visibleLines.push(blankLine);
+            infos.push({
+                contentStart: offset + clean.length,
+                lineEnd: offset + rawLine.length,
+                rest: '',
+                relIndent: 0,
+                containerSig: sig,
+                isAtx: false,
+                isSetext: false,
+                isThematic: false,
+                isSingleLineLeaf: false,
+                isLazy: false,
+                isProtected: true
+            });
+            offset += rawLine.length + 1;
+        };
+
+        const emitCommentTail = (sig, commentEndInClean) => {
+            const afterComment = clean.slice(commentEndInClean);
+            if (!afterComment.trim()) {
+                emitProtected(sig);
+                return;
+            }
+            visibleLines.push(' '.repeat(commentEndInClean) + afterComment + cr);
+            infos.push({
+                contentStart: offset + commentEndInClean,
+                lineEnd: offset + rawLine.length,
+                rest: afterComment,
+                relIndent: 0,
+                containerSig: sig,
+                isAtx: false,
+                isSetext: false,
+                isThematic: false,
+                isSingleLineLeaf: true,
+                isLazy: false,
+                isProtected: false
+            });
+            offset += rawLine.length + 1;
+        };
+
+        if (htmlLiteral || htmlTerminator || htmlCommentBlock || fence || htmlBlock) {
+            containers.length = matched;
+            inParagraph = false;
+            const sig = containers.map(c => c.id).join(',');
+            const sub = clean.slice(idx);
+            const ind = scanFormulaIndent(clean, idx, col, containerCol);
+            if (htmlLiteral) {
+                if (new RegExp(`</${htmlLiteral.name}\\s*>`, 'i').test(sub)) htmlLiteral = null;
+                emitProtected(sig);
+                continue;
+            }
+            if (htmlTerminator) {
+                if (sub.includes(htmlTerminator.token)) htmlTerminator = null;
+                emitProtected(sig);
+                continue;
+            }
+            if (htmlCommentBlock) {
+                const state = advanceRawHtmlCommentState(sub, rawDomCommentOpen);
+                rawDomCommentOpen = state.open;
+                if (!state.open) {
+                    htmlCommentBlock = null;
+                    emitCommentTail(sig, idx + state.lastCloseEnd);
+                } else {
+                    emitProtected(sig);
+                }
+                continue;
+            }
+            if (fence) {
+                if (!ind.isBlank && ind.relIndent <= 3) {
+                    const closeRe = new RegExp(`^${fence.char}{${fence.length},}[ \\t]*$`);
+                    if (closeRe.test(clean.slice(ind.nonWsIdx))) fence = null;
+                }
+                emitProtected(sig);
+                continue;
+            }
+            if (htmlBlock) {
+                if (ind.isBlank) {
+                    htmlBlock = null;
+                } else {
+                    rawDomCommentOpen = advanceRawHtmlCommentState(sub, rawDomCommentOpen).open;
+                    emitProtected(sig);
+                    continue;
+                }
+            }
+        }
+
+        let isLazy = false;
+        if (matched < containers.length) {
+            const ind = scanFormulaIndent(clean, idx, col, containerCol);
+            if (inParagraph && !ind.isBlank) {
+                const sub = clean.slice(ind.nonWsIdx);
+                const interrupts = ind.relIndent <= 3 && (
+                    sub.startsWith('>')
+                    || FORMULA_ATX_HEADING_RE.test(sub)
+                    || FORMULA_THEMATIC_BREAK_RE.test(sub)
+                    || Boolean(parseFormulaFenceStart(sub))
+                    || Boolean(parseFormulaListMarker(clean, idx, col, containerCol, containers[matched].type !== 'list'))
+                    || FORMULA_HTML_BLOCK_TAG_RE.test(sub)
+                    || Boolean(parseFormulaHtmlLiteralName(sub))
+                    || Boolean(parseFormulaHtmlTerminator(sub))
+                    || sub.startsWith('<!--')
+                );
+                if (!interrupts) isLazy = true;
+            }
+            if (!isLazy) {
+                containers.length = matched;
+                inParagraph = false;
+            }
+        }
+
+        if (!isLazy) {
+            while (true) {
+                const ind = scanFormulaIndent(clean, idx, col, containerCol);
+                if (ind.isBlank || ind.relIndent > 3) break;
+                const sub = clean.slice(ind.nonWsIdx);
+                if (sub[0] === '>') {
+                    inParagraph = false;
+                    containers.push({ type: 'blockquote', id: ++nextContainerId });
+                    idx = ind.nonWsIdx + 1;
+                    col = ind.nonWsCol + 1;
+                    containerCol = col;
+                    if (idx < clean.length && (clean[idx] === ' ' || clean[idx] === '\t')) {
+                        containerCol = col + 1;
+                        ({ idx, col } = consumeFormulaColumns(clean, idx, col, containerCol));
+                    }
+                    continue;
+                }
+                if (inParagraph && FORMULA_SETEXT_UNDERLINE_RE.test(sub)) break;
+                const listInfo = parseFormulaListMarker(clean, idx, col, containerCol, inParagraph);
+                if (listInfo) {
+                    inParagraph = false;
+                    for (const c of containers) {
+                        if (c.type === 'list') c.sawContent = true;
+                    }
+                    containers.push({
+                        type: 'list',
+                        id: ++nextContainerId,
+                        contentIndent: listInfo.contentIndent,
+                        sawContent: !listInfo.isEmptyLine,
+                        blankAfterEmpty: false
+                    });
+                    idx = listInfo.idx;
+                    col = listInfo.col;
+                    containerCol = listInfo.targetCol;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        const containerSig = containers.map(c => c.id).join(',');
+        const ind = scanFormulaIndent(clean, idx, col, containerCol);
+        if (ind.isBlank) {
+            inParagraph = false;
+            for (const c of containers) {
+                if (c.type === 'list' && !c.sawContent) c.blankAfterEmpty = true;
+            }
+            visibleLines.push(blankLine);
+            infos.push({
+                contentStart: offset + clean.length,
+                lineEnd: offset + rawLine.length,
+                rest: '',
+                relIndent: 0,
+                containerSig,
+                isAtx: false,
+                isSetext: false,
+                isThematic: false,
+                isSingleLineLeaf: false,
+                isLazy: false,
+                isProtected: false
+            });
+            offset += rawLine.length + 1;
+            continue;
+        }
+
+        for (const c of containers) {
+            if (c.type === 'list') c.sawContent = true;
+        }
+
+        if (!isLazy && !inParagraph && ind.relIndent >= 4) {
+            emitProtected(containerSig);
+            continue;
+        }
+
+        const subNonWs = clean.slice(ind.nonWsIdx);
+        if (!isLazy && ind.relIndent <= 3) {
+            const fenceInfo = parseFormulaFenceStart(subNonWs);
+            if (fenceInfo) {
+                inParagraph = false;
+                fence = { char: fenceInfo.char, length: fenceInfo.length, depth: containers.length };
+                emitProtected(containerSig);
+                continue;
+            }
+            if (subNonWs.startsWith('<!--')) {
+                inParagraph = false;
+                const state = advanceRawHtmlCommentState(subNonWs, rawDomCommentOpen);
+                rawDomCommentOpen = state.open;
+                if (state.open) {
+                    htmlCommentBlock = { depth: containers.length };
+                    emitProtected(containerSig);
+                } else {
+                    htmlCommentBlock = null;
+                    emitCommentTail(containerSig, ind.nonWsIdx + state.lastCloseEnd);
+                }
+                continue;
+            }
+            const literalName = parseFormulaHtmlLiteralName(subNonWs);
+            if (literalName) {
+                inParagraph = false;
+                const probe = maskFormulaInlineCodeLineProbe(clean.slice(idx));
+                if (!new RegExp(`</${literalName}\\s*>`, 'i').test(probe)) {
+                    htmlLiteral = { name: literalName, depth: containers.length };
+                }
+                emitProtected(containerSig);
+                continue;
+            }
+            const term = parseFormulaHtmlTerminator(subNonWs);
+            if (term) {
+                inParagraph = false;
+                const probe = maskFormulaInlineCodeLineProbe(clean.slice(idx));
+                if (!probe.includes(term)) {
+                    htmlTerminator = { token: term, depth: containers.length };
+                }
+                emitProtected(containerSig);
+                continue;
+            }
+            const startsHtmlBlock = FORMULA_HTML_BLOCK_TAG_RE.test(subNonWs);
+            if (startsHtmlBlock || (!inParagraph && FORMULA_HTML_TYPE7_RE.test(subNonWs))) {
+                inParagraph = false;
+                rawDomCommentOpen = advanceRawHtmlCommentState(clean.slice(idx), rawDomCommentOpen).open;
+                htmlBlock = { depth: containers.length };
+                emitProtected(containerSig);
+                continue;
+            }
+        }
+
+        const visTail = clean.slice(idx);
+        const visNonWs = clean.slice(ind.nonWsIdx);
+        const isAtx = !isLazy && ind.relIndent <= 3 && FORMULA_ATX_HEADING_RE.test(visNonWs);
+        const isSetext = !isLazy && inParagraph && ind.relIndent <= 3 && FORMULA_SETEXT_UNDERLINE_RE.test(visNonWs);
+        const isThematic = !isLazy && !isSetext && ind.relIndent <= 3 && FORMULA_THEMATIC_BREAK_RE.test(visNonWs);
+        inParagraph = !(isAtx || isSetext || isThematic);
+
+        if (rawDomCommentOpen) {
+            const probe = maskFormulaInlineCodeLineProbe(visTail);
+            let closedAt = -1;
+            for (let p = 0; p < probe.length; p += 1) {
+                if (probe[p] === '<' && !isFormulaBackslashEscaped(probe, p, 0)) {
+                    const end = tryParseInlineHtmlCommentEnd(probe, p);
+                    if (end >= 0) {
+                        closedAt = end;
+                        break;
+                    }
+                }
+            }
+            if (closedAt >= 0) {
+                rawDomCommentOpen = false;
+                emitCommentTail(containerSig, idx + closedAt);
+            } else {
+                emitProtected(containerSig);
+            }
+            continue;
+        }
+
+        visibleLines.push(' '.repeat(idx) + visTail + cr);
+        infos.push({
+            contentStart: offset + idx,
+            lineEnd: offset + rawLine.length,
+            rest: visTail,
+            relIndent: ind.relIndent,
+            containerSig,
+            isAtx,
+            isSetext,
+            isThematic,
+            isSingleLineLeaf: false,
+            isLazy,
+            isProtected: false
+        });
+        offset += rawLine.length + 1;
+    }
+
+    const visible = visibleLines.join('\n');
+    const segments = [];
+    let para = null;
+    const flushParagraph = () => {
+        if (para !== null) {
+            segments.push({ start: para.start, end: para.end });
+            para = null;
+        }
+    };
+
+    for (let index = 0; index < infos.length;) {
+        const info = infos[index];
+        if (info.isProtected || !info.rest.trim()) {
+            flushParagraph();
+            index += 1;
+            continue;
+        }
+        if (para !== null && info.containerSig !== para.containerSig) flushParagraph();
+        if (info.isAtx || info.isSingleLineLeaf) {
+            flushParagraph();
+            segments.push({ start: info.contentStart, end: info.lineEnd });
+            index += 1;
+            continue;
+        }
+        if (info.isSetext || info.isThematic) {
+            flushParagraph();
+            index += 1;
+            continue;
+        }
+        const headerCells = info.relIndent <= 3 ? splitFormulaGfmTableRowCells(info) : null;
+        const nextInfo = index + 1 < infos.length ? infos[index + 1] : null;
+        const delimCells = (headerCells && nextInfo && !nextInfo.isProtected && nextInfo.rest.trim()
+            && nextInfo.containerSig === info.containerSig && nextInfo.relIndent <= 3
+            && !nextInfo.isAtx && !nextInfo.isThematic && !nextInfo.isSingleLineLeaf)
+            ? splitFormulaGfmTableRowCells(nextInfo)
+            : null;
+        if (headerCells && delimCells && headerCells.length === delimCells.length
+            && isFormulaGfmDelimiterCells(delimCells, visible)) {
+            flushParagraph();
+            segments.push(...headerCells);
+            index += 2;
+            while (index < infos.length) {
+                const rowInfo = infos[index];
+                if (rowInfo.isProtected || !rowInfo.rest.trim()
+                    || rowInfo.containerSig !== info.containerSig
+                    || rowInfo.isAtx || rowInfo.isThematic || rowInfo.isSingleLineLeaf) break;
+                const rowCells = splitFormulaGfmTableRowCells(rowInfo)
+                    || [{ start: rowInfo.contentStart, end: rowInfo.lineEnd }];
+                segments.push(...rowCells.slice(0, headerCells.length));
+                index += 1;
+            }
+            continue;
+        }
+        if (para === null) {
+            para = { start: info.contentStart, end: info.lineEnd, containerSig: info.containerSig };
+        } else {
+            para.end = info.lineEnd;
+        }
+        index += 1;
+    }
+    flushParagraph();
+    return { visible, segments };
+}
+
+function extractVisibleDisplayFormulaBlocks(article) {
+    const original = String(article || '');
+    const { visible, segments } = buildFormulaSurfaceAndSegments(original);
+    const blocks = [];
+    for (const segment of segments) {
+        const seg = visible.slice(segment.start, segment.end);
+        let pos = 0;
+        while (pos < seg.length) {
+            const ch = seg[pos];
+            if (ch === '`' && !isFormulaBackslashEscaped(seg, pos, 0)) {
+                let tickLength = 0;
+                while (pos + tickLength < seg.length && seg[pos + tickLength] === '`') tickLength += 1;
+                const closed = findMatchingBacktickRunEnd(seg, pos + tickLength, tickLength);
+                pos = closed >= 0 ? closed : pos + tickLength;
+                continue;
+            }
+            if (ch === '<' && !isFormulaBackslashEscaped(seg, pos, 0)) {
+                const commentEnd = tryParseInlineHtmlCommentEnd(seg, pos);
+                if (commentEnd >= 0) {
+                    pos = commentEnd;
+                    continue;
+                }
+            }
+            if (ch === '!' && seg[pos + 1] === '[' && !isFormulaBackslashEscaped(seg, pos, 0)) {
+                const imgEnd = tryParseCommonMarkInlineImageEnd(seg, pos);
+                pos = imgEnd >= 0 ? imgEnd : pos + 2;
+                continue;
+            }
+            if (ch === '\\') {
+                let run = 0;
+                while (pos + run < seg.length && seg[pos + run] === '\\') run += 1;
+                if (pos + run >= seg.length || seg[pos + run] !== '[') {
+                    pos += (run % 2 === 1 && pos + run < seg.length) ? run + 1 : run;
+                    continue;
+                }
+                if (run === 1) {
+                    const mathEnd = seg.indexOf('\\]', pos + 2);
+                    if (mathEnd >= 0) {
+                        blocks.push(original.slice(segment.start + pos, segment.start + mathEnd + 2));
+                        pos = mathEnd + 2;
+                    } else {
+                        pos += 2;
+                    }
+                    continue;
+                }
+                if (run % 4 === 2 || run % 4 === 3) {
+                    let scan = pos + run + 1;
+                    let closeEnd = seg.length;
+                    while (scan < seg.length) {
+                        if (seg[scan] !== '\\') {
+                            scan += 1;
+                            continue;
+                        }
+                        let cRun = 0;
+                        while (scan + cRun < seg.length && seg[scan + cRun] === '\\') cRun += 1;
+                        if (scan + cRun < seg.length && seg[scan + cRun] === ']'
+                            && cRun >= 2 && (cRun % 4 === 2 || cRun % 4 === 3)) {
+                            closeEnd = scan + cRun + 1;
+                            break;
+                        }
+                        scan += (cRun % 2 === 1 && scan + cRun < seg.length) ? cRun + 1 : cRun;
+                    }
+                    blocks.push(original.slice(segment.start + pos, segment.start + closeEnd));
+                    pos = closeEnd;
+                    continue;
+                }
+                pos += run + 1;
+                continue;
+            }
+            pos += 1;
+        }
+    }
+    return blocks;
+}
+
 function hasValidIntegratedApiReaderRecords(paper, options = {}) {
     try {
         const local = require('./lib/conference-source-resource-correction');
@@ -1328,17 +2132,7 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
         && figures.every(figure => typeof figure?.url === 'string'
             && visibleImages.some(image => image.url === figure.url));
     const renderedTables = extractMarkdownTables(article);
-    // TeX 内部缩进和字符属于原公式，不应按 Markdown 代码或 HTML 重新解释。
-    // 仅用等长探针检查公式边界；后续哈希和来源核验仍使用原始完整 TeX。
-    const formulaProbe = String(article || '').replace(/\\\[([\s\S]*?)\\\]/g,
-        (_block, latex) => `\\[${latex.replace(/[^\r\n]/g, 'x')}\\]`);
-    const visibleFormulaBoundaries = maskInlineMarkdownCodeSpans(
-        maskProtectedMarkdownTableRegions(formulaProbe, { excludeQuotes: false }));
-    const renderedFormulaBlocks = [...String(article || '').matchAll(/\\\[[\s\S]*?\\\]/g)]
-        .filter(match => !visibleImages.some(image => match.index >= image.start && match.index < image.end)
-            && visibleFormulaBoundaries.slice(match.index, match.index + 2) === '\\['
-            && visibleFormulaBoundaries.slice(match.index + match[0].length - 2, match.index + match[0].length) === '\\]')
-        .map(match => match[0]);
+    const renderedFormulaBlocks = extractVisibleDisplayFormulaBlocks(article);
     const sourceBindingsBindArticle = Array.isArray(tableBindings)
         && Array.isArray(formulaBindings)
         && tableBindings.length === renderedTables.length
@@ -2483,6 +3277,7 @@ module.exports = {
     getConferenceReaderRefreshUpstreamReason,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
+    extractVisibleDisplayFormulaBlocks,
     hasValidIntegratedApiReaderRecords,
     getIntegratedApiReaderRecordDiagnostics,
     API_READER_QUALITY_METRICS_CONTRACT,
