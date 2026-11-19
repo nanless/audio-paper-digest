@@ -1,6 +1,6 @@
 const {chromium}=require('playwright'),assert=require('assert/strict'),fs=require('fs');
 const {server,installFixture}=require('./DesktopUI.test.cjs');let browser;
-(async()=>{await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||(fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':undefined)});
+(async()=>{try{await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||(fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':undefined)});
  const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  const papers=Array.from({length:10005},(_,i)=>({id:'synthetic:'+String(i).padStart(5,'0'),title:'Synthetic catalog '+i,titleZh:'明确合成目录 '+i,sourceKind:'arxiv',date:i===10004?'2099-01-01':'2026-10-31',authors:[],localRetained:i===10004}));
  await installFixture(page,{papers,initialPersonal:{favorites:[papers.at(-1).id],reading:[],notes:{},readingState:{},annotations:{},sessions:[]}});
@@ -43,5 +43,5 @@ const {server,installFixture}=require('./DesktopUI.test.cjs');let browser;
  await page.locator('[data-view=favorites]').click();await page.waitForSelector('[data-library-row="synthetic:00002"]');assert.equal(await page.locator('[data-library-row="synthetic:10004"]').count(),0);assert.equal(await page.locator('[data-library-row]').count(),1);
  await page.locator('[data-view=notes]').click();await page.waitForSelector('#notes-view:not([hidden])');assert.match(await page.locator('#all-notes').innerText(),/Explicit isolated restored note/);
  assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>__calls.some(c=>/^(model\.(run|check)$|zotero\.(authorize|checkAuthorization|archive|resume)$)/.test(c.command))),false);
- console.log('PASS catalog consumer: 10005 rows across bounded pages, held progress, retained unopened favorite, current-only daily, stamp/summary refusal keeps prior catalog, explicit retry, saved note CAS/reading draft survive late snapshot, same-stamp restore retires old private flight and keeps new flight/notes/favorites; no paid model/accounts');await browser.close();server.close();
-})().catch(async error=>{console.error(error);await browser?.close();server.close();process.exitCode=1;});
+ console.log('PASS catalog consumer: 10005 rows across bounded pages, held progress, retained unopened favorite, current-only daily, stamp/summary refusal keeps prior catalog, explicit retry, saved note CAS/reading draft survive late snapshot, same-stamp restore retires old private flight and keeps new flight/notes/favorites; no paid model/accounts');
+}catch(error){console.error(error);process.exitCode=1;}finally{try{await browser?.close();}catch{}if(server.listening)await new Promise(r=>server.close(r));}})();
