@@ -13,6 +13,10 @@ import java.io.File
 /** Preserve unknown published metadata without duplicating every raw row in the live 8,000-paper view. */
 class PublishedRecordArchive(private val directory: File) {
     suspend fun read(paper: Paper): JSONObject = withContext(Dispatchers.IO) {
+        val desktopSnapshot = paper.original?.nullableString("desktopSnapshotID")
+        if (desktopSnapshot != null) {
+            return@withContext readDesktopSnapshotRecords(paper, desktopSnapshot)
+        }
         val snapshot = paper.original?.nullableString("publishedSnapshotID")
         if (snapshot == null) {
             val legacy = paper.original?.nullableString("legacyPublishedIndexSHA256")
@@ -67,6 +71,48 @@ class PublishedRecordArchive(private val directory: File) {
         ClientProtocols.record("paperdigest-published-record-archive").put("status", "verified-local-originals")
             .put("snapshotID", snapshot).put("manifestSHA256", snapshot).put("manifestBytes", rawManifest.size)
             .put("manifestRawBase64", java.util.Base64.getEncoder().encodeToString(rawManifest)).put("records", records)
+    }
+    private suspend fun readDesktopSnapshotRecords(paper: Paper, snapshot: String): JSONObject {
+        require(snapshot.matches(Regex("[a-f0-9]{64}"))) { "原始桌面快照身份无效" }
+        val rawSnapshot = JsonFiles.read(DesktopDetailsRepository.checkedChild(directory, "desktop-details", "snapshots", "$snapshot.json"), 1024 * 1024)
+        require(sha256(rawSnapshot) == snapshot) { "原始桌面快照字节已变化" }
+        val snapObj = DesktopDetailsRepository.StrictJson.parseObject(rawSnapshot, "desktop-snapshot")
+        require(ClientProtocols.hasValidHeader(snapObj, "paper-desktop-snapshot")) { "原始桌面快照协议尚不支持" }
+        val shards = snapObj.getJSONArray("catalogShards").objects()
+        require(shards.size in 1..128)
+        val wanted = paper.appearances.toSet().ifEmpty { setOf(paper.blogURL) }
+        require(paper.blogURL in wanted)
+        val records = JSONArray(); val found = mutableSetOf<String>(); val descriptors = mutableSetOf<String>()
+        var count = 0L; var totalBytes = 0L
+        for (shard in shards) {
+            currentCoroutineContext().ensureActive()
+            val hash = shard.getString("sha256"); val url = shard.getString("url")
+            require(hash.matches(Regex("[a-f0-9]{64}")) && url == "client/details/catalog/$hash.json" && descriptors.add(url))
+            val raw = JsonFiles.read(DesktopDetailsRepository.checkedChild(directory, "desktop-details", "catalog", "$hash.json"), 1024 * 1024)
+            require(raw.size == shard.getInt("bytes") && sha256(raw) == hash) { "原始桌面目录分片字节不符" }
+            val rows = DesktopDetailsRepository.StrictJson.parseArray(raw, url)
+            require(rows.length() == shard.getInt("recordCount")) { "原始桌面目录分片记录数不符" }
+            count += rows.length(); totalBytes += raw.size
+            for (index in 0 until rows.length()) {
+                currentCoroutineContext().ensureActive()
+                val row = rows.getJSONObject(index)
+                val page = CatalogRepository.sameSite(row.getString("pageUrl"))
+                if (page !in wanted) continue
+                require(row.getString("pageType") == "paper" && found.add(page)) { "所选原始目录记录不是唯一单篇论文" }
+                val actualId = if (row.getString("identityStatus") == "verified") row.getString("paperId") else "page:${java.net.URI(page).path}"
+                val actualKind = row.nullableString("sourceKind") ?: "unknown"
+                require(actualId == paper.id && actualKind == paper.sourceKind && row.getString("identityStatus") == paper.identityStatus) {
+                    "原始桌面目录记录不属于同一篇论文"
+                }
+                records.put(JSONObject().put("shardSHA256", hash).put("rowIndex", index).put("record", row))
+            }
+        }
+        require(count == snapObj.getLong("recordCount") && totalBytes in 1..67_108_864L && found == wanted) {
+            "原始桌面目录成员、总量或出现记录不完整"
+        }
+        return ClientProtocols.record("paperdigest-published-record-archive").put("status", "verified-local-originals")
+            .put("snapshotID", snapshot).put("manifestSHA256", snapshot).put("manifestBytes", rawSnapshot.size)
+            .put("manifestRawBase64", java.util.Base64.getEncoder().encodeToString(rawSnapshot)).put("records", records)
     }
     companion object {
         private fun decodeUTF8(bytes: ByteArray): String = Charsets.UTF_8.newDecoder()

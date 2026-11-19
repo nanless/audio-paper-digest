@@ -901,12 +901,13 @@ class RootController private constructor(
                         require(offlineReading == null) { "当前正在读取原离线快照，可直接打开；请从网站论文入口另存新版本" }
                         val p = selected()
                         val a = library.article(p)
-                        ReadingSourceBinding.requireArticle(p, a)
-                        val original = library.downloadPDF(p)
-                        ReadingSourceBinding.requirePDF(p, library.pdfReceipt(p.id), original.second)
-                        require(!library.pdfReceipt(p.id).optBoolean("isStale") && !a.isStale) { "原文或导读当前性尚未核验，未混装为当前离线包" }
+                        val boundPaper = library.papers().firstOrNull { it.id == p.id } ?: p
+                        ReadingSourceBinding.requireArticle(boundPaper, a)
+                        val original = library.downloadPDF(boundPaper)
+                        ReadingSourceBinding.requirePDF(boundPaper, library.pdfReceipt(boundPaper.id), original.second)
+                        require(!library.pdfReceipt(boundPaper.id).optBoolean("isStale") && !a.isStale) { "原文或导读当前性尚未核验，未混装为当前离线包" }
                         requireReading(access)
-                        offline.register(p, a, original.first)
+                        offline.register(boundPaper, a, original.first)
                     }
                 }
                 "storage.openPackage" -> pdfAdmission.withLock {
@@ -1102,9 +1103,19 @@ class RootController private constructor(
             } else {
                 val producer = exportScope.launch(start = CoroutineStart.LAZY) {
                     fun publish(article: Article) {
+                        val enriched = library.papers().firstOrNull { it.id == id }
                         _state.update { current ->
                             if (generation.get() != changed || current.selectedPaperId != id) current
-                            else current.copy(article = article, loading = false).let { it.copy(readingMaterialID = readingID(it)) }
+                            else current.copy(
+                                papers = if (enriched != null && enriched.original?.optBoolean("desktopDetailVerified") == true) {
+                                    current.papers.map { if (it.id == id) enriched else it }
+                                } else current.papers,
+                                viewedPaper = if (enriched != null && enriched.original?.optBoolean("desktopDetailVerified") == true) {
+                                    Paper.fromJson(enriched.json())
+                                } else current.viewedPaper,
+                                article = article,
+                                loading = false,
+                            ).let { it.copy(readingMaterialID = readingID(it)) }
                         }
                     }
                     try {
@@ -1142,7 +1153,7 @@ class RootController private constructor(
         }
         ready.await()
         if (captured != generation.get()) return JSONObject().put("status", "not-adopted")
-        return p.json()
+        return (_state.value.viewedPaper?.takeIf { it.id == id } ?: library.papers().firstOrNull { it.id == id } ?: p).json()
     }
 
     private suspend fun currentPDF(p: Paper): Pair<File, String> {

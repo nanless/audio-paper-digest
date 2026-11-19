@@ -171,9 +171,13 @@ class PublishedAggregateStore(private val directory:File) {
             value.keys().asSequence().toSet()==ClientProtocols.recordKeys(value.get("contract"),activationFamily,body.keys,value.opt("schemaFingerprint") as? String)&&
             body.all{(key,expected)->value.opt(key)==expected}){"汇总激活代与原清单不一致"}
     }
+    private fun shardFile(shardURL:String,shardSHA256:String):File =
+        if(shardURL.startsWith("client/details/catalog/"))child("desktop-details","catalog","$shardSHA256.json")
+        else child("index","$shardSHA256.json")
+
     fun stage(rawManifest:ByteArray,validationEpoch:String,check:()->Unit={}):PublishedAggregateCatalog {
         val identity=epoch(validationEpoch)
-        val catalog=PublishedAggregateReader.read(rawManifest,check){read(child("index","${it.sha256}.json"),it.bytes)}
+        val catalog=PublishedAggregateReader.read(rawManifest,check){read(shardFile(it.url,it.sha256),it.bytes)}
         check();immutable(child("aggregate-manifests","${catalog.snapshotSHA256}.json"),rawManifest)
         check();val sidecar=child("aggregate-index","${catalog.snapshotSHA256}.json")
         if(!sidecar.exists())immutable(sidecar,catalogRecord(catalog))
@@ -202,13 +206,13 @@ class PublishedAggregateStore(private val directory:File) {
         require(PublishedAggregateReader.validSHA(snapshot));check()
         ownedSourceReadScope()?.catalogs?.get(snapshot)?.let{saved->return saved.catalog}
         val raw=sourceBytes(child("aggregate-manifests","$snapshot.json"),2*1024*1024);require(PublishedAggregateReader.sha(raw)==snapshot)
-        val catalog=PublishedAggregateReader.read(raw,check){sourceBytes(child("index","${it.sha256}.json"),it.bytes)}
+        val catalog=PublishedAggregateReader.read(raw,check){sourceBytes(shardFile(it.url,it.sha256),it.bytes)}
         ownedSourceReadScope()?.catalogs?.put(snapshot,ParsedSource(catalog,PublishedAggregateReader.sha(OfflineFoundationJSON.encode(catalog.json()))))
         return catalog
     }
     fun originalRow(descriptor:PublishedAggregate):ByteArray {
         require(sourceCatalog(descriptor.source.manifestSHA256).records.contains(descriptor)){"汇总原目录身份未核验"}
-        val raw=read(child("index","${descriptor.source.shardSHA256}.json"),descriptor.source.shardBytes);require(PublishedAggregateReader.sha(raw)==descriptor.source.shardSHA256)
+        val raw=read(shardFile(descriptor.source.shardURL,descriptor.source.shardSHA256),descriptor.source.shardBytes);require(PublishedAggregateReader.sha(raw)==descriptor.source.shardSHA256)
         val rows=JSONArray(PublishedUtf8.decode(raw));require(descriptor.source.rowIndex in 0 until rows.length())
         return PublishedAggregateReader.normalizedRow(rows.getJSONObject(descriptor.source.rowIndex)).also{require(PublishedAggregateReader.sha(it)==descriptor.source.normalizedRowSHA256)}
     }

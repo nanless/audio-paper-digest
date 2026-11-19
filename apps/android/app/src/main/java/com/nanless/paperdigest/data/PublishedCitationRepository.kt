@@ -314,7 +314,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         private fun pageURL(value:String):String=CatalogRepository.sameSite(value).also {require(URI(it).path.startsWith("/audio-paper-digest-blog/posts/")){"引用页面超出已发布论文目录"}}
         private val DECLARED_FILES=listOf("citation.json","citation.bib","citation.ris","rethink-context.json")
 
-        private fun validateBytes(raw:ByteArray,paper:Paper,format:Format) {
+        internal fun validateBytes(raw:ByteArray,paper:Paper,format:Format) {
             require(raw.isNotEmpty()&&raw.size<=MAX_CITATION);val text=PublishedUtf8.decode(raw)
             require(text.isNotBlank()&&!Regex("(?i)<html(?:\\s|>)|<!doctype\\s+html").containsMatchIn(text)){"引用下载返回了空文件或错误网页"}
             when(format){
