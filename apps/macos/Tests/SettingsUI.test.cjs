@@ -128,22 +128,23 @@ let browser,passed=0;
     await page.waitForTimeout(400);assert.equal((await writes(page)).length,1);
   });
   await check('discard restores absent settings to real defaults without writing drafts',async page=>{
-    await edit(page,'endpoint','https://draft.invalid/v1');await page.locator('#discard-settings').click();await page.waitForFunction(()=>document.querySelector('#save-status').textContent==='已恢复最近保存的设置');
+    await page.evaluate(()=>{const el=document.getElementById('endpoint');el.value='https://draft.invalid/v1';el.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('discard-settings').click();});
+    await page.waitForFunction(()=>document.querySelector('#save-status').textContent==='已恢复最近保存的设置');
     assert.equal(await page.locator('#endpoint').inputValue(),'');assert.equal(await page.locator('#model').inputValue(),'');assert.equal((await writes(page)).length,0);
   },{appearance:'system',font:18,syncHours:12,hasKey:false});
   await check('cross-window reload preserves local dirty field and writes only that field',async page=>{
-    await edit(page,'model','local-draft');await page.evaluate(()=>{fixture.settings.font=24;window.dispatchEvent(new CustomEvent('settings.changed'));});
+    await page.evaluate(()=>{const el=document.getElementById('model');el.value='local-draft';el.dispatchEvent(new Event('input',{bubbles:true}));fixture.settings.font=24;window.dispatchEvent(new CustomEvent('settings.changed'));});
     await page.waitForFunction(()=>document.querySelector('#font').value==='24');assert.equal(await page.locator('#model').inputValue(),'local-draft');
     await page.evaluate(()=>window.paperDigestFlushSettings());assert.deepEqual((await writes(page)).map(c=>c.payload),[{model:'local-draft'}]);assert.equal(await page.evaluate(()=>fixture.settings.font),24);
   });
   await check('late bootstrap snapshot cannot undo newer committed UI values',async page=>{
     await page.evaluate(()=>{fixture.holdBootstrap=true;window.dispatchEvent(new CustomEvent('settings.changed'));});await page.waitForFunction(()=>fixture.pendingBootstrap.length===1);
-    await edit(page,'font',20);await page.evaluate(()=>window.paperDigestFlushSettings());await page.waitForFunction(()=>fixture.pendingBootstrap.length===2);
+    await page.evaluate(()=>{const el=document.getElementById('font');el.value=20;el.dispatchEvent(new Event('input',{bubbles:true}));return window.paperDigestFlushSettings();});await page.waitForFunction(()=>fixture.pendingBootstrap.length===2);
     await page.evaluate(()=>{fixture.holdBootstrap=false;for(const r of fixture.pendingBootstrap.splice(0).reverse())r();});
-    await page.waitForTimeout(80);assert.equal(await page.locator('#font').inputValue(),'20');assert.equal(await page.evaluate(()=>fixture.settings.font),20);
+    await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.waitForTimeout(80);assert.equal(await page.locator('#font').inputValue(),'20');assert.equal(await page.evaluate(()=>fixture.settings.font),20);
   });
   await check('failed discard read retains draft and never claims successful discard',async page=>{
-    await edit(page,'model','preserved-on-read-failure');await page.evaluate(()=>fixture.failBootstrap=1);await page.locator('#discard-settings').click();
+    await page.evaluate(()=>{const el=document.getElementById('model');el.value='preserved-on-read-failure';el.dispatchEvent(new Event('input',{bubbles:true}));fixture.failBootstrap=1;document.getElementById('discard-settings').click();});
     await page.waitForFunction(()=>document.querySelector('#save-status').textContent.startsWith('未能放弃编辑：'));assert.equal(await page.locator('#model').inputValue(),'preserved-on-read-failure');assert.equal(await page.locator('#model').isDisabled(),false);assert.equal((await writes(page)).length,0);
     await page.evaluate(()=>window.paperDigestFlushSettings());assert.equal(await page.evaluate(()=>fixture.settings.model),'preserved-on-read-failure');
   });
@@ -169,7 +170,7 @@ let browser,passed=0;
     assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='cloud.state').length),initialReads+3,'exactly one existing controller refresh per explicit Cloud pane click');assert.equal(await page.locator('#cloud-account').inputValue(),'isolated-recovery-draft@example.test');assert.equal(await page.evaluate(()=>Object.entries(originalRecoveryNodes).every(([key,node])=>node===document.querySelector({cloud:'#cloud-account',model:'#model',analysis:'#archive-analysis',zotero:'#zotero-refresh'}[key]))),true);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);assert.equal(await page.locator('#archive-analysis').count(),1);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='settings.save'||/^(cloud\.(?!state)|zotero\.|model\.)/.test(c.command)).length),0);
   });
   await check('late initial bootstrap failure cannot report an obsolete error or remount current successful state',async page=>{
-    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.settings.font=24;dispatchEvent(new Event('settings.changed'));});await mounted(page);await page.waitForFunction(()=>document.querySelector('#font').value==='24');await page.evaluate(()=>{window.recoveredCloud=document.querySelector('#cloud-account');document.querySelector('#toast').textContent='current-independent-notice';fixture.pendingBootstrap.shift()();});await page.waitForTimeout(80);
+    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.settings.font=24;dispatchEvent(new Event('settings.changed'));});await mounted(page);await page.waitForFunction(()=>document.querySelector('#font').value==='24');await page.evaluate(()=>{window.recoveredCloud=document.querySelector('#cloud-account');document.querySelector('#toast').textContent='current-independent-notice';fixture.pendingBootstrap.shift()();});await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.waitForTimeout(80);
     assert.equal(await page.locator('#toast').textContent(),'current-independent-notice');assert.equal(await page.locator('#reload-settings').isHidden(),true);assert.equal(await page.locator('#font').inputValue(),'24');assert.equal(await page.evaluate(()=>document.querySelector('#cloud-account')===recoveredCloud),true);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);
   },initial,{failInitialBootstrap:1,holdInitialBootstrap:true});
   await check('personal changed preserves newer model draft behind an issued write and drains both real saves',async page=>{
@@ -179,11 +180,11 @@ let browser,passed=0;
   await check('failed authoritative discard retires held initial read and offers retry before that read settles',async page=>{
     await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.failBootstrap=1;});await page.locator('#discard-settings').click();await page.waitForFunction(()=>document.querySelector('#save-status').textContent.startsWith('未能放弃编辑：'));await page.evaluate(()=>paperDigestShowSettingsPane('cloud'));
     assert.equal(await page.evaluate(()=>fixture.pendingBootstrap.length),1,'retired first bootstrap must still be unresolved');assert.equal(await page.locator('#reload-settings').isVisible(),true);assert.equal(await page.locator('#reload-settings').isDisabled(),false,'do not wait for retired first read to unlock retry');assert.equal(await page.locator('#discard-settings').isHidden(),true);await page.locator('#reload-settings').click();await mounted(page);assert.equal(await page.evaluate(()=>fixture.pendingBootstrap.length),1);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='app.bootstrap').length),3);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);assert.equal(await page.locator('#reload-settings').isHidden(),true);
-    await page.evaluate(()=>{window.afterDiscardRecovery=document.querySelector('#cloud-account');fixture.pendingBootstrap.shift()();});await page.waitForTimeout(60);assert.equal(await page.evaluate(()=>document.querySelector('#cloud-account')===afterDiscardRecovery),true);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);
+    await page.evaluate(()=>{window.afterDiscardRecovery=document.querySelector('#cloud-account');fixture.pendingBootstrap.shift()();});await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.waitForTimeout(60);assert.equal(await page.evaluate(()=>document.querySelector('#cloud-account')===afterDiscardRecovery),true);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);
   },initial,{holdInitialBootstrap:true});
   await check('retired initial read cannot unlock a newer explicit retry after discard failed',async page=>{
     await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.failBootstrap=1;});await page.locator('#discard-settings').click();await page.waitForFunction(()=>document.querySelector('#save-status').textContent.startsWith('未能放弃编辑：'));assert.equal(await page.locator('#reload-settings').isDisabled(),false);await page.evaluate(()=>fixture.holdBootstrap=true);await page.locator('#reload-settings').click();await page.waitForFunction(()=>fixture.pendingBootstrap.length===2);
-    await page.evaluate(()=>fixture.pendingBootstrap.shift()());await page.waitForTimeout(60);assert.equal(await page.locator('#reload-settings').isDisabled(),true);assert.equal(await page.locator('#cloud-account').count(),0);await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await mounted(page);assert.equal(await page.locator('#reload-settings').isHidden(),true);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);
+    await page.evaluate(()=>fixture.pendingBootstrap.shift()());await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.waitForTimeout(60);assert.equal(await page.locator('#reload-settings').isDisabled(),true);assert.equal(await page.locator('#cloud-account').count(),0);await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await mounted(page);assert.equal(await page.locator('#reload-settings').isHidden(),true);assert.equal(await page.evaluate(()=>fixture.progressListeners),1);
   },initial,{holdInitialBootstrap:true});
   await check('late discarded authoritative read failure cannot replace newer successful state or error notice',async page=>{
     await mounted(page);await page.evaluate(()=>{const model=document.querySelector('#model');model.value='keep-newer-discard-draft';model.dispatchEvent(new Event('input',{bubbles:true}));fixture.failBootstrap=1;fixture.holdBootstrap=true;document.querySelector('#discard-settings').click();});await page.waitForFunction(()=>fixture.pendingBootstrap.length===1);
@@ -234,7 +235,7 @@ let browser,passed=0;
   await check('older held bootstrap cannot restore deleted credential state',async page=>{
     await page.locator('[data-pane=model]').click();await page.evaluate(()=>{fixture.holdBootstrap=true;dispatchEvent(new Event('settings.changed'));});await page.waitForFunction(()=>fixture.pendingBootstrap.length===1);
     await page.locator('#delete-key').click();await page.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));
-    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await page.waitForTimeout(40);
+    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.waitForTimeout(40);
     assert.match(await page.locator('#key-status').textContent(),/尚未保存/);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),0);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.deleteKey').length),1);
   },{...initial,credentialState:'present',hasKey:true});
   await check('late saved-settings receipt cannot restore credential state after explicit delete',async page=>{
@@ -245,7 +246,7 @@ let browser,passed=0;
   await check('successful check retires earlier unknown credential snapshot',async page=>{
     await page.locator('[data-pane=model]').click();await page.evaluate(()=>{fixture.holdBootstrap=true;dispatchEvent(new Event('settings.changed'));});await page.waitForFunction(()=>fixture.pendingBootstrap.length===1);
     await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);
-    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await page.waitForTimeout(40);assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);
+    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.waitForTimeout(40);assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);
   },{...initial,credentialState:'unknown',hasKey:null});
   console.log(`Settings UI: ${passed} passed; real bundled UI with explicit local native fixtures; no remote requests or private profile IO`);
-})().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(browser)await browser.close();server.close();});
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{try{await browser?.close();}catch{}if(server.listening)await new Promise(r=>server.close(r));});

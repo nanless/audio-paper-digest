@@ -157,21 +157,31 @@ async function openPaperInReader(page, id = primary.id) {
         await page.locator('#note-conflict-card details > summary').click();
         assert.equal(await page.locator('#note-conflict-card details').evaluate(d => d.open), true);
 
-        await page.evaluate(() => {
+        // Revert draft before 700ms debounce fires: capture dirty-guard state and click revert in one turn
+        // so slow multi-roundtrip IPC on CI VMs never lets the 700ms auto-save timer fire before revert!
+        const preRevert = await page.evaluate(() => {
           const box = document.getElementById('note-editor');
           box.value = '未保存的手工临时草稿';
           box.dispatchEvent(new Event('input', { bubbles: true }));
+          const guard = document.getElementById('note-conflict-dirty-guard');
+          const snapshot = {
+            dirtyVisible: !guard.hidden && getComputedStyle(guard).display !== 'none',
+            keepDisabled: document.getElementById('note-conflict-keep-local').disabled,
+            adoptDisabled: document.getElementById('note-conflict-adopt-remote').disabled,
+            mergeDisabled: document.getElementById('note-conflict-merge-both').disabled,
+            detailsOpen: document.querySelector('#note-conflict-card details').open,
+            noteCallsBeforeRevert: window.__calls.filter(c => c.command === 'personal.note').length,
+          };
+          document.getElementById('note-conflict-revert-draft').click();
+          return snapshot;
         });
 
-        assert.equal(await dirtyGuard.isVisible(), true);
-        assert.equal(await keepBtn.isDisabled(), true);
-        assert.equal(await adoptBtn.isDisabled(), true);
-        assert.equal(await mergeBtn.isDisabled(), true);
-        assert.equal(await page.locator('#note-conflict-card details').evaluate(d => d.open), true);
-
-        // Revert draft before 700ms debounce fires: must cancel pending auto-save and re-enable resolution!
-        const noteCallsBeforeRevert = await page.evaluate(() => window.__calls.filter(c => c.command === 'personal.note').length);
-        await revertBtn.click();
+        assert.equal(preRevert.dirtyVisible, true);
+        assert.equal(preRevert.keepDisabled, true);
+        assert.equal(preRevert.adoptDisabled, true);
+        assert.equal(preRevert.mergeDisabled, true);
+        assert.equal(preRevert.detailsOpen, true);
+        const noteCallsBeforeRevert = preRevert.noteCallsBeforeRevert;
         assert.equal(await page.locator('#note-editor').inputValue(), '冲突基线本机原稿');
         assert.equal(await dirtyGuard.isVisible(), false);
         assert.equal(await keepBtn.isDisabled(), false);
@@ -249,8 +259,10 @@ async function openPaperInReader(page, id = primary.id) {
           assert.equal(await page.evaluate(id => window.__fixture.personal.notes[id].revision, primary.id), 8);
 
           // Trigger an explicit subsequent personal.synced event and verify conflict stays cleared and text survives!
+          const syncReadsBefore = await page.evaluate(() => window.__calls.filter(c => c.command === 'personal.noteConflicts').length);
           await page.evaluate(() => window.dispatchEvent(new Event('personal.synced')));
-          await page.waitForTimeout(80);
+          await page.waitForFunction(n => window.__calls.filter(c => c.command === 'personal.noteConflicts').length > n, syncReadsBefore);
+          await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
           assert.equal(await page.locator('#note-conflict-card').isVisible(), false);
           assert.equal(await page.locator('#tab-note-conflict-badge').isVisible(), false);
           assert.equal(await page.locator('#note-editor').inputValue(), expectedMergedText);
@@ -360,7 +372,8 @@ async function openPaperInReader(page, id = primary.id) {
           window.__fixture.holdResolveConflict = false;
           window.__fixture.pendingConflictResolves.shift()();
         });
-        await page.waitForTimeout(80);
+        await page.waitForFunction(id => window.__fixture.personal.notes[id]?.text === 'Paper A 远端异文', primary.id);
+        await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
         assert.equal(await page.locator('#note-editor').inputValue(), 'Paper B 独立原稿');
         assert.equal(await page.evaluate(id => window.__fixture.personal.notes[id].text, primary.id), 'Paper A 远端异文');
 

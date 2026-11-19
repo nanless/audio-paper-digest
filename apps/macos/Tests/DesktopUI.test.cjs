@@ -245,8 +245,10 @@ if(require.main===module)(async()=>{
       window.dispatchEvent(new Event('personal.synced'));
     },id);
     await page.waitForFunction(()=>document.querySelector('#note-editor').value==='Remote note before local typing');
-    await page.locator('#note-editor').fill('Local draft waiting for an explicit resolution');
     const result=await page.evaluate(async id=>{
+      const box=document.getElementById('note-editor');
+      box.value='Local draft waiting for an explicit resolution';
+      box.dispatchEvent(new Event('input',{bubbles:true}));
       __fixture.personal.notes[id]={text:'Different remote note',revision:9};
       window.dispatchEvent(new Event('personal.synced'));
       await new Promise(resolve=>setTimeout(resolve,0));
@@ -280,7 +282,7 @@ if(require.main===module)(async()=>{
   async function open(p,id=primary.id){await p.locator('[data-library-open="'+id+'"]').click();await p.waitForFunction(id=>paperDigestArchiveHTML()?.paperID===id,id);}
   await check('older reading save and article await cannot refill another paper draft/body',async()=>{
     const p=await fresh();try{
-      await open(p);await p.locator('#tab-analysis').click();await p.locator('#question').fill('Paper A delayed reading draft');await p.evaluate(()=>__fixture.holdReadingFor=__fixture.primary.id);await p.waitForFunction(()=>__fixture.pendingReadings.length===1);
+      await open(p);await p.locator('#tab-analysis').click();await p.evaluate(()=>__fixture.holdReadingFor=__fixture.primary.id);await p.locator('#question').fill('Paper A delayed reading draft');await p.waitForFunction(()=>__fixture.pendingReadings.length===1);
       await p.locator('#back').click();await p.locator('[data-library-open="'+papers[1].id+'"]').click();await p.waitForFunction(()=>__fixture.pendingReadings.length===2);await p.evaluate(()=>__fixture.pendingReadings.pop()());await p.waitForFunction(id=>paperDigestArchiveHTML()?.paperID===id,papers[1].id);
       await p.locator('#tab-analysis').click();await p.locator('#question').fill('Paper B owns this draft');await p.evaluate(()=>__fixture.pendingReadings.shift()());assert.equal(await p.locator('#question').inputValue(),'Paper B owns this draft');assert.equal(await p.evaluate(()=>__fixture.personal.readingState[__fixture.primary.id].question),'Paper A delayed reading draft');assert.ok(!(await p.frameLocator('#guide-frame').locator('main').innerText()).includes('43.2'));
       await p.locator('#back').click();await p.evaluate(()=>{__fixture.holdReadingFor=null;__fixture.holdArticleFor=__fixture.primary.id;});await p.locator('[data-library-open="'+primary.id+'"]').click();await p.waitForFunction(()=>!!__fixture.releaseArticle);await p.locator('#back').click();await open(p,papers[1].id);await p.evaluate(()=>__fixture.releaseArticle());assert.equal((await p.evaluate(()=>paperDigestArchiveHTML())).paperID,papers[1].id);
@@ -372,6 +374,7 @@ if(require.main===module)(async()=>{
       const throttled=await p.evaluate(()=>__calls.filter(entry=>entry.command==='pdf.frame').length);
       assert.ok(throttled-burst<=8,`约 30 帧连续几何变化后 pdf.frame 应保持在个位数，实际 ${throttled-burst}`);
       await p.waitForTimeout(220);
+      await p.waitForFunction(()=>{const calls=__calls.filter(entry=>entry.command==='pdf.frame'),box=document.getElementById('pdf-scroll').getBoundingClientRect(),last=calls.at(-1)?.payload;return !!last&&Math.abs(last.width-box.width)<1&&Math.abs(last.x-box.x)<1;});
       const settled=await p.evaluate(()=>{const calls=__calls.filter(entry=>entry.command==='pdf.frame'),box=document.getElementById('pdf-scroll').getBoundingClientRect();return {last:calls.at(-1).payload,visible:__pdfFrames.state.pdf,x:box.x,y:box.y,width:box.width,height:box.height};});
       assert.equal(settled.last.visible,settled.visible===true);
       assert.ok(Math.abs(settled.last.x-settled.x)<1&&Math.abs(settled.last.y-settled.y)<1&&Math.abs(settled.last.width-settled.width)<1&&Math.abs(settled.last.height-settled.height)<1,`节流后必须以最新几何收尾 ${JSON.stringify(settled)}`);
