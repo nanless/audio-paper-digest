@@ -112,6 +112,99 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
             renderer.validate_svg(raw)
         self.assertNotIsInstance(raised.exception, renderer.UnsupportedSvgDependency)
 
+    def test_mpadded_admitted_only_inside_math(self):
+        for raw in (
+            svg('<math><mrow><mpadded style="width:0.380em;" width="0.380em"><mi>x</mi></mpadded></mrow></math>'),
+            svg('<math xmlns="http://www.w3.org/1998/Math/MathML">'
+                '<mpadded width="0.5em" depth="0.2em" voffset="-0.1em"><mn>1</mn></mpadded></math>'),
+            ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+             '<math><mpadded width="+2px" voffset=".5ex"><mi>y</mi></mpadded></math></svg>').encode(),
+        ):
+            with self.subTest(raw=raw):
+                projected = renderer.validate_svg(raw)
+                self.assertIn('mpadded', projected)
+        png = renderer.render_svg(
+            svg('<math><mrow><mpadded style="width:0.380em;" width="0.380em"><mi>x</mi></mpadded></mrow></math>'))
+        self.assertEqual(png[:8], b'\x89PNG\r\n\x1a\n')
+
+        for bad in (
+            ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+             '<mpadded width="0.380em"/></svg>').encode(),
+            ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+             '<g><mpadded width="0.380em"/></g></svg>').encode(),
+            svg('<mpadded width="0.380em">x</mpadded>'),
+            svg('<span><mpadded width="0.380em">x</mpadded></span>'),
+            svg('<math><foreignObject width="20" height="20"><mpadded width="0.3em"/></foreignObject></math>'),
+            svg('<math><foreignobject width="20" height="20"><mpadded width="0.3em"/></foreignobject></math>'),
+            svg('<math><div><mpadded width="0.3em"/></div></math>'),
+            svg('<math><MPADDED width="0.380em"><mi>x</mi></MPADDED></math>'),
+            svg('<span depth="0.2em">x</span>'),
+            svg('<math><mrow voffset="0.1em"><mi>x</mi></mrow></math>'),
+            svg('<math><mpadded depth="10rem"><mi>x</mi></mpadded></math>'),
+            svg('<math><mpadded depth="１em"><mi>x</mi></mpadded></math>'),
+            svg('<math><mpadded voffset="1em;url(https://example.invalid)"><mi>x</mi></mpadded></math>'),
+            svg('<math><mpadded Depth="0.2em"><mi>x</mi></mpadded></math>'),
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as raised:
+                renderer.validate_svg(bad)
+            self.assertNotIsInstance(raised.exception, renderer.UnsupportedSvgDependency)
+
+    def test_rowspan_and_colspan_scoped_to_math_mtd_and_latexml_eqn_cell(self):
+        for good in (
+            svg('<span class="ltx_equation ltx_eqn_table"><span class="ltx_eqn_row">'
+                '<span rowspan="1" class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right">(1)</span>'
+                '<span colspan="2" class="ltx_eqn_cell ltx_align_center">x = 1</span>'
+                '</span></span>'),
+            svg('<math display="block"><mtable><mtr>'
+                '<mtd rowspan="2" colspan="3"><mi>a</mi></mtd></mtr></mtable></math>'),
+            ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+             '<math xmlns="http://www.w3.org/1998/Math/MathML"><mtable><mtr>'
+             '<mtd rowspan="1"><mn>42</mn></mtd></mtr></mtable></math></svg>').encode(),
+        ):
+            with self.subTest(good=good):
+                self.assertIsInstance(renderer.validate_svg(good), str)
+
+        latexml_box = (
+            '<svg id="S6.SS3.pic1" width="200" height="100" viewBox="0 0 200 100">'
+            '<foreignObject width="200" height="100" '
+            'style="--ltx-fo-width:12.0em;--ltx-fo-height:4.0em;--ltx-fo-depth:0.0em;font-size:10pt">'
+            '<span class="ltx_foreignobject_container"><span class="ltx_foreignobject_content">'
+            '<cite class="ltx_cite">[1]</cite>'
+            '<span class="ltx_equation ltx_eqn_table"><span class="ltx_eqn_row">'
+            '<span rowspan="1" class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right">(2)</span>'
+            '</span></span>'
+            '</span></span></foreignObject></svg>'
+        ).encode()
+        with self.assertRaises(renderer.UnsupportedSvgDependency) as dep:
+            renderer.validate_svg(latexml_box)
+        self.assertEqual(dep.exception.reason, 'external_latexml_layout_css')
+
+        for bad in (
+            ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+             '<g rowspan="1"/></svg>').encode(),
+            ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+             '<span rowspan="1" class="ltx_eqn_cell">(1)</span></svg>').encode(),
+            svg('<span rowspan="1">(1)</span>'),
+            svg('<span rowspan="1" class="ltx_align_middle">(1)</span>'),
+            svg('<span colspan="2" class="ltx_eqn_cell_fake">(1)</span>'),
+            svg('<math><span rowspan="1" class="ltx_eqn_cell">(1)</span></math>'),
+            svg('<MATH><span rowspan="1" class="ltx_eqn_cell">(1)</span></MATH>'),
+            svg('<svg width="20" height="20" viewBox="0 0 20 20"><span rowspan="1" class="ltx_eqn_cell">(1)</span></svg>'),
+            svg('<math><div><mtd rowspan="1"><mi>x</mi></mtd></div></math>'),
+            svg('<mtd rowspan="1">x</mtd>'),
+            svg('<span rowspan="0" class="ltx_eqn_cell">(1)</span>'),
+            svg('<span rowspan="-1" class="ltx_eqn_cell">(1)</span>'),
+            svg('<span rowspan="1x" class="ltx_eqn_cell">(1)</span>'),
+            svg('<span rowspan="1０" class="ltx_eqn_cell">(1)</span>'),
+            svg('<span rowspan="1000" class="ltx_eqn_cell">(1)</span>'),
+            svg('<span rowspan="1;url(https://example.invalid)" class="ltx_eqn_cell">(1)</span>'),
+            svg('<span RowSpan="1" class="ltx_eqn_cell">(1)</span>'),
+            svg('<math><mtable><mtr><mtd colspan="0"><mi>x</mi></mtd></mtr></mtable></math>'),
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ValueError) as raised:
+                renderer.validate_svg(bad)
+            self.assertNotIsInstance(raised.exception, renderer.UnsupportedSvgDependency)
+
 
 if __name__ == '__main__':
     unittest.main()

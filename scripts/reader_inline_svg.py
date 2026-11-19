@@ -20,7 +20,7 @@ ALLOWED_TAGS = set(('svg g path rect circle ellipse line polyline polygon text t
                     'clipPath mask marker linearGradient radialGradient stop pattern symbol use '
                     'foreignObject span div p br b strong i em sub sup a math semantics annotation '
                     'mrow mi mn mo mtext mspace msup msub msubsup mfrac msqrt mroot mover '
-                    'munder munderover mtable mtr mtd mphantom mstyle').lower().split())
+                    'munder munderover mtable mtr mtd mphantom mstyle mpadded').lower().split())
 ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d points '
                           'width height viewbox preserveaspectratio transform version overflow '
                           'fill fill-rule fill-opacity stroke stroke-width stroke-linecap stroke-linejoin '
@@ -30,6 +30,44 @@ ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d 
                           'stop-color stop-opacity gradientunits gradienttransform patternunits '
                           'patterncontentunits patterntransform href title alt alttext display mathcolor '
                           'mathbackground mathvariant mathsize maxsize minsize lspace rspace columnspacing rowspacing intent encoding rowalign columnalign').split())
+MATHML_CONTAINER_TAGS = {
+    tag
+    for name in (
+        'semantics', 'mrow', 'msup', 'msub', 'msubsup', 'mfrac', 'msqrt', 'mroot',
+        'mover', 'munder', 'munderover', 'mtable', 'mtr', 'mtd', 'mphantom', 'mstyle', 'mpadded'
+    )
+    for tag in (name, '{http://www.w3.org/1998/Math/MathML}' + name)
+}
+FOREIGN_HTML_CONTAINER_TAGS = {
+    tag
+    for name in (
+        'span', 'div', 'p', 'b', 'strong', 'i', 'em', 'sub', 'sup', 'a',
+        'pre', 'cite', 'section', 'h5'
+    )
+    for tag in (name, '{http://www.w3.org/1999/xhtml}' + name)
+}
+
+
+def has_strict_math_ancestor(element, parents):
+    ancestor = parents.get(element)
+    while ancestor is not None:
+        if ancestor.tag.split('}')[-1].lower() in {'math', 'foreignobject', 'svg'}:
+            return ancestor.tag in {'math', '{http://www.w3.org/1998/Math/MathML}math'}
+        if ancestor.tag not in MATHML_CONTAINER_TAGS:
+            return False
+        ancestor = parents.get(ancestor)
+    return False
+
+
+def has_strict_foreign_html_ancestor(element, parents):
+    ancestor = parents.get(element)
+    while ancestor is not None:
+        if ancestor.tag.split('}')[-1].lower() in {'math', 'foreignobject', 'svg'}:
+            return ancestor.tag in {'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}
+        if ancestor.tag not in FOREIGN_HTML_CONTAINER_TAGS:
+            return False
+        ancestor = parents.get(ancestor)
+    return False
 
 
 
@@ -231,13 +269,10 @@ def validate_svg(raw):
         unsupported_dependency = unsupported_dependency or unsaved_icon
         if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS and not static_html:
             raise ValueError('内联 SVG 含不允许的元素')
-        if element.tag.split('}')[-1].lower() in {'mphantom', 'mstyle'}:
-            ancestor = parents.get(element)
-            while ancestor is not None and ancestor.tag not in {'math', '{http://www.w3.org/1998/Math/MathML}math'}:
-                ancestor = parents.get(ancestor)
-            math_tag = element.tag.split('}')[-1]
+        if element.tag.split('}')[-1].lower() in {'mphantom', 'mstyle', 'mpadded'}:
+            math_tag = element.tag.split('}')[-1].lower()
             if (element.tag not in {math_tag, '{http://www.w3.org/1998/Math/MathML}' + math_tag}
-                    or ancestor is None):
+                    or not has_strict_math_ancestor(element, parents)):
                 raise ValueError('内联 SVG 的数学排版元素无效')
         for name, value in element.attrib.items():
             original_name = name
@@ -254,6 +289,27 @@ def validate_svg(raw):
                 if (original_name != name or element.tag not in {allowed_tag, '{http://www.w3.org/1998/Math/MathML}' + allowed_tag}
                         or not in_math or value not in {'true', 'false'}):
                     raise ValueError('内联 SVG 的数学布尔设置无效')
+                continue
+            if name in {'depth', 'voffset'}:
+                if (original_name != name
+                        or element.tag not in {'mpadded', '{http://www.w3.org/1998/Math/MathML}mpadded'}
+                        or not re.fullmatch(r'[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:em|ex|px|pt|%)?', value)):
+                    raise ValueError('内联 SVG 的数学间距设置无效')
+                continue
+            if name in {'rowspan', 'colspan'}:
+                mtd_in_math = (
+                    element.tag in {'mtd', '{http://www.w3.org/1998/Math/MathML}mtd'}
+                    and has_strict_math_ancestor(element, parents)
+                )
+                eqn_span_in_foreign = (
+                    element.tag in {'span', '{http://www.w3.org/1999/xhtml}span'}
+                    and has_strict_foreign_html_ancestor(element, parents)
+                    and 'ltx_eqn_cell' in element.attrib.get('class', '').split()
+                )
+                if (original_name != name
+                        or not re.fullmatch(r'[1-9][0-9]{0,2}', value)
+                        or not (mtd_in_math or eqn_span_in_foreign)):
+                    raise ValueError('内联 SVG 的表格跨行跨列设置无效')
                 continue
             if (unsaved_icon and original_name == 'aria-hidden' and value in {'true', 'false'}):
                 # This path ends in unavailable, never in rendered pixel admission.
