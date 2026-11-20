@@ -92,7 +92,8 @@ const B3_NEGATIVE_CASES = [
     ['[][] \\,', '[][] '],
     ['[][] \\;', '[][] '],
     ['[][] \\(\u200b\\)', '[][] \u200b'],
-    ['[][] (\\,)', '[][] ()'],
+    ['[][] (\\,)', '[][]'],
+    ['[][] (\\,) [][] foo', '[][] [][] foo'],
     ['[][] \\(\\) [][] foo', '[][]  [][] foo'],
     ['foo [][] bar', 'foo [][] bar'],
     ['foo; [][] bar', 'foo; [][] bar'],
@@ -120,7 +121,7 @@ test('B2 带括号有符号标量双写仅在符号与数值精度百分号完�
     assert.equal(collapseParenthesizedSignedDoubleWrite('\\(-1.4\\)(-1.4)'), '\\(-1.4\\)(-1.4)');
 });
 
-test('B3 单元格行首空引用链接前缀仅在剥离后仍含非空可见正文时生效，绝不置空单元格', () => {
+test('B3 单元格行首空引用链接前缀仅在剥离后仍含非空可见正文时生效，绝不置空单元格且二阶幂等', () => {
     for (const [raw, expected] of B3_POSITIVE_CASES) {
         assert.equal(projectReaderCellTexDisplay(raw), expected, `cell project: ${raw}`);
         assert.equal(projectReaderCellTexDisplay(expected), expected, `idempotent: ${raw}`);
@@ -129,6 +130,7 @@ test('B3 单元格行首空引用链接前缀仅在剥离后仍含非空可见�
     for (const [raw, expected] of B3_NEGATIVE_CASES) {
         const actual = projectReaderCellTexDisplay(raw);
         assert.equal(actual, expected, `must preserve guard: ${raw}`);
+        assert.equal(projectReaderCellTexDisplay(actual), actual, `second-order idempotent guard: ${raw}`);
         assert.ok(/[^\s\u200b\u200c\u200d\u2060\ufeff]/.test(actual), `must never blank non-empty cell: ${raw}`);
     }
 });
@@ -177,21 +179,23 @@ out = {
     ],
     'cmpGuards': [
         publish._reader_cell_comparison(raw) == publish._reader_cell_comparison(publish._project_reader_cell_tex_display(raw))
-        for raw in ['[][] \\(\\)', '[][] \\,', '[][] (\u200b)']
+        for raw in payload['b3Guards']
     ],
     'cmpDiff': [
         publish._reader_cell_comparison('46.4 (−1.4)') != publish._reader_cell_comparison('46.4 (−1.4)(-0.8)'),
         publish._reader_cell_comparison('') != publish._reader_cell_comparison('[][]'),
         publish._reader_cell_comparison('') != publish._reader_cell_comparison('[][] \\(\\)'),
         publish._reader_cell_comparison('') != publish._reader_cell_comparison('[][] \\,'),
+        publish._reader_cell_comparison('') != publish._reader_cell_comparison('[][] (\\,)'),
         publish._reader_cell_comparison('OmniVinci+PACD') != publish._reader_cell_comparison('[][] VideoLLaMA2-AV+PACD'),
     ],
 }
 sys.stdout.write(json.dumps(out, ensure_ascii=False))
 `;
+    const b3Guards = B3_NEGATIVE_CASES.map(([raw]) => raw);
     const py = JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', probe, projectRoot], {
         cwd: projectRoot,
-        input: JSON.stringify({ cell: cellInputs, display: displayInputs, pairs }),
+        input: JSON.stringify({ cell: cellInputs, display: displayInputs, pairs, b3Guards }),
         encoding: 'utf8',
         env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
     }));
@@ -201,8 +205,8 @@ sys.stdout.write(json.dumps(out, ensure_ascii=False))
     assert.deepEqual(py.astDisplay, displayInputs.map(v => normalizeReaderSourceDisplayArtifacts(v)));
     assert.deepEqual(py.sourceCell, displayInputs.map(v => deep.normalizeReaderSourceCell(v)));
     assert.deepEqual(py.cmpSame, pairs.map(() => true));
-    assert.deepEqual(py.cmpGuards, [true, true, true]);
-    assert.deepEqual(py.cmpDiff, [true, true, true, true, true]);
+    assert.deepEqual(py.cmpGuards, b3Guards.map(() => true));
+    assert.deepEqual(py.cmpDiff, [true, true, true, true, true, true]);
 });
 
 test('HTML 全幅 colspan 表同时含 [][] 行首前缀与 (±X)(±X) 双写时新旧落盘稿均通过发布重放且拒篡改', async t => {

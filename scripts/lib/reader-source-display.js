@@ -385,15 +385,17 @@ function projectReaderCellTexDisplay(value) {
     output = output.replace(/\s*\(\s*\)/g, '');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     // LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
-    // 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后经后续投影不剩可见字符则回退保留 [][]。
+    // 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后不剩可见字符或非不动点则回退保留 [][]。
     const stripped = stripLeadingEmptyReferenceLinkCellPrefix(output);
     if (stripped !== output) {
         const projected = projectReaderCellTexDisplayBody(stripped);
-        const stabilized = projected.replace(/\s*\(\s*\)/g, '');
-        if (/[^\s\u200b\u200c\u200d\u2060\ufeff]/.test(stabilized)
-            && stripLeadingEmptyReferenceLinkCellPrefix(projected) === projected) {
+        if (/[^\s\u200b\u200c\u200d\u2060\ufeff]/.test(projected)
+            && projectReaderCellTexDisplay(projected) === projected) {
             return projected;
         }
+        const fallback = projectReaderCellTexDisplayBody(output);
+        const fallbackCleaned = fallback.replace(/\s*\(\s*\)/g, '');
+        return /[^\s\u200b\u200c\u200d\u2060\ufeff]/.test(fallbackCleaned) ? fallbackCleaned : fallback;
     }
     return projectReaderCellTexDisplayBody(output);
 }

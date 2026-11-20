@@ -282,7 +282,7 @@ class PublicationSourceDisplayTests(unittest.TestCase):
                 self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
                 self.assertEqual(blog._reader_cell_comparison(raw), blog._reader_cell_comparison(expected))
 
-        for raw, expected in [
+        b3_negatives = [
             ('[][]', '[][]'),
             ('[][]   ', '[][]   '),
             ('[][] \u200b', '[][] \u200b'),
@@ -291,22 +291,43 @@ class PublicationSourceDisplayTests(unittest.TestCase):
             (r'[][] \,', '[][] '),
             (r'[][] \;', '[][] '),
             ('[][] \\(\u200b\\)', '[][] \u200b'),
-            (r'[][] (\,)', '[][] ()'),
+            (r'[][] (\,)', '[][]'),
+            (r'[][] (\,) [][] foo', '[][] [][] foo'),
             (r'[][] \(\) [][] foo', '[][]  [][] foo'),
             ('foo [][] bar', 'foo [][] bar'),
             ('foo; [][] bar', 'foo; [][] bar'),
             (r'foo; [][] bar\uparrow', 'foo; [] bar↑'),
             ('[a][b] foo', '[a][b] foo'),
             ('[x][] foo', '[x][] foo'),
+            ('[][y] foo', '[][y] foo'),
             ('[][] [][] foo', '[][] [][] foo'),
-        ]:
+        ]
+        for raw, expected in b3_negatives:
             with self.subTest(raw=raw):
                 actual = blog._project_reader_cell_tex_display(raw)
                 self.assertEqual(actual, expected)
+                self.assertEqual(blog._project_reader_cell_tex_display(actual), actual)
+                self.assertEqual(blog._reader_cell_comparison(actual), blog._reader_cell_comparison(raw))
                 self.assertTrue(actual.strip('\u200b\u200c\u200d\u2060\ufeff \t\r\n'))
+                guard_article = f'| Col | Val |\n| --- | --- |\n| {raw.strip()} | 1.0 |\n'
+                guard_plan = {
+                    'tableBindings': [{
+                        'tableIndex': 1,
+                        'sourceType': 'artifact_table',
+                        'sourceTableOrdinal': 1,
+                        'cellBindings': [
+                            {'renderedRow': 0, 'renderedColumn': 0, 'sourceText': 'Col'},
+                            {'renderedRow': 0, 'renderedColumn': 1, 'sourceText': 'Val'},
+                            {'renderedRow': 1, 'renderedColumn': 0, 'sourceText': raw},
+                            {'renderedRow': 1, 'renderedColumn': 1, 'sourceText': '1.0'},
+                        ],
+                    }],
+                }
+                blog._project_artifact_table_cell_tex_display(guard_article, guard_plan)
         self.assertNotEqual(blog._reader_cell_comparison('[][]'), blog._reader_cell_comparison(''))
         self.assertNotEqual(blog._reader_cell_comparison(r'[][] \(\)'), blog._reader_cell_comparison(''))
         self.assertNotEqual(blog._reader_cell_comparison(r'[][] \,'), blog._reader_cell_comparison(''))
+        self.assertNotEqual(blog._reader_cell_comparison(r'[][] (\,)'), blog._reader_cell_comparison(''))
 
         article = (
             '### 对比结果\n\n'

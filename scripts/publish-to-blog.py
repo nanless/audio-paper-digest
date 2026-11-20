@@ -9018,14 +9018,16 @@ def _project_reader_cell_tex_display(value):
     if '\\anon[' in output:
         output = _project_reader_anon_macro(output)
     # LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
-    # 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后经后续投影不剩可见字符则回退保留 [][]。
+    # 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后不剩可见字符或非不动点则回退保留 [][]。
     stripped = _strip_leading_empty_link_cell_prefix(output)
     if stripped != output:
         projected = _project_reader_cell_tex_display_body(stripped)
-        stabilized = re.sub(r'\s*\(\s*\)', '', projected)
-        if re.search(r'[^\s\u200b\u200c\u200d\u2060\ufeff]', stabilized) \
-                and _strip_leading_empty_link_cell_prefix(projected) == projected:
+        if re.search(r'[^\s\u200b\u200c\u200d\u2060\ufeff]', projected) \
+                and _project_reader_cell_tex_display(projected) == projected:
             return projected
+        fallback = _project_reader_cell_tex_display_body(output)
+        fallback_cleaned = re.sub(r'\s*\(\s*\)', '', fallback)
+        return fallback_cleaned if re.search(r'[^\s\u200b\u200c\u200d\u2060\ufeff]', fallback_cleaned) else fallback
     return _project_reader_cell_tex_display_body(output)
 
 
