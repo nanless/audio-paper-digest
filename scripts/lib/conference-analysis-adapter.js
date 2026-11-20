@@ -1086,9 +1086,10 @@ function grantedRecoveryMode(failed) {
     const paper = failed.analysis.papers[0];
     const coreSummaryFormat = require('./core-summary-format');
     const rawCoreDecl = paper.analysisManifest?.contracts?.coreSummary;
+    // 没有声明核心摘要协议头的旧记录一律按原契约（320–600 字）核验；当前头只用于新生成稿。
     const summaryHeader = rawCoreDecl !== undefined
         ? coreSummaryFormat.readDeclaration(rawCoreDecl)
-        : coreSummaryFormat.currentHeader();
+        : coreSummaryFormat.legacyHeader();
     const invalidCore = !summaryHeader
         || require('../analysis-contract').validateCoreSummarySemanticContract(paper.analysis,
             { sourceText: failed.source.sourceDetails.text, summaryHeader });

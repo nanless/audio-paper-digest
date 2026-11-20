@@ -916,6 +916,45 @@ function normalizeReaderConceptBridgeTerms(candidate) {
     return changed;
 }
 
+// cohesive-functional-v4 将小节上限收紧为 5–9 节。模型偶尔多写 1–3 节，且多出的内容恰是相邻
+// 同类小节（如连续的 component）。此时确定性地把「合并后正文最短」的相邻同类小节并成一节：
+// 正文按原顺序以空行连接，标记与段落逐字保留；标题取两节标题的功能定位词加两段具体问题。
+// 只在 v4、超上限且超出不超过 3 节、且存在相邻同类小节时触发，其余一律不动，交由原局部修复处理。
+function coalesceExcessCohesiveReaderSections(candidate) {
+    if (!candidate || !Array.isArray(candidate.sections)) return false;
+    let format;
+    try { format = require('./lib/reader-record-format').draftFormat(candidate); } catch { return false; }
+    if (format.editorialProfile !== 'cohesive-functional-v4') return false;
+    const maxSections = require('./lib/reader-contract').readerRequirements(
+        { version: 3, editorialProfile: format.editorialProfile }
+    ).maximumSections;
+    const excess = candidate.sections.length - maxSections;
+    if (excess < 1 || excess > 3) return false;
+    const valid = section => section && typeof section === 'object' && !Array.isArray(section)
+        && Object.keys(section).sort().join(',') === 'body,heading,kind'
+        && typeof section.kind === 'string' && typeof section.heading === 'string'
+        && typeof section.body === 'string' && section.body.trim();
+    if (!candidate.sections.every(valid)) return false;
+    const sections = candidate.sections.map(section => ({ ...section }));
+    while (sections.length > maxSections) {
+        let best = -1, bestLength = Infinity;
+        for (let index = 0; index + 1 < sections.length; index += 1) {
+            if (sections[index].kind !== sections[index + 1].kind) continue;
+            const length = sections[index].body.length + sections[index + 1].body.length;
+            if (length < bestLength) { best = index; bestLength = length; }
+        }
+        if (best < 0) return false;
+        const [first, second] = [sections[best], sections[best + 1]];
+        const title = heading => String(heading).split(/[：:]/u).slice(1).join('：').trim();
+        const combined = title(first.heading) && title(second.heading)
+            ? `${first.heading.split(/[：:]/u)[0]}：${title(first.heading)}；${title(second.heading)}` : first.heading;
+        sections.splice(best, 2, { kind: first.kind, heading: combined,
+            body: `${first.body.trimEnd()}\n\n${second.body.trimStart()}` });
+    }
+    candidate.sections = sections;
+    return true;
+}
+
 // Reader 补丁失败时，会在另一个小节里复制一个已经声明过的 bridge 标记，同时写下
 // 另一段无关的 bridge 解释。如果声明过的那处在自己小节里唯一且独立成块，而多出来的
 // 那处同样独立成块、却在另一种小节里，就只删掉多出来的标记。周围的正文仍是作者写的
@@ -5935,7 +5974,6 @@ function rewriteApiReaderFigureNarratives(article, figures) {
             heading: figure.targetHeading
         };
         const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
-        const narrative = `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`;
         if (/^\([a-z]\)$/i.test(String(figure.caption || '').trim())) {
             rewritten = rewritten.replace(
                 new RegExp(`图\\s*${figure.ordinal}\\s*的左右对比`, 'g'),
@@ -5944,14 +5982,19 @@ function rewriteApiReaderFigureNarratives(article, figures) {
         }
         const pattern = new RegExp(
             `!\\[[^\\n]*\\]\\(${escapeRegExp(url)}\\)\\n\\n`
-            + `\\*[ \\t]*论文图\\s+${figure.ordinal}。[^\\n]*\\*`
+            + `\\*[ \\t]*论文图\\s+${figure.ordinal}[。：:][^\\n]*\\*`
         );
-        if (!pattern.test(rewritten)) {
+        const existing = pattern.exec(rewritten);
+        if (!existing) {
             throw new Error(`论文图 ${figure.ordinal} 的旧叙事块无法精确定位`);
         }
+        // 保持原文章的图注格式：v4 为「论文图 N：…」，旧契约为「论文图 N。…」。
+        const v4Caption = new RegExp(`论文图\\s+${figure.ordinal}[：:]`).test(existing[0]);
+        const narrative = readerFigureCaptionLine(figure, target,
+            v4Caption ? { editorialProfile: 'cohesive-functional-v4' } : {});
         rewritten = rewritten.replace(
             pattern,
-            `![${alt}](${url})\n\n${narrative}`
+            () => `![${alt}](${url})\n\n${narrative}`
         );
     }
     return rewritten;
@@ -8865,6 +8908,7 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
                 normalizeDeclaredReaderMarkerParagraphs(candidate);
                 if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
                     inlineExcessCohesiveReaderConceptBridges(candidate);
+                    coalesceExcessCohesiveReaderSections(candidate);
                 }
                 repairReportedTextSpacing(candidate, normalizationIssues);
                 normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
@@ -18564,12 +18608,16 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     if (!isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')) {
         const isPaidCoreReplayMode = options.coreSummaryDiagnosticId !== undefined
             || options.replayLatestCoreSummaryDiagnostic === true;
-        const activeSummaryHeader = isPaidCoreReplayMode && analysisManifest?.contracts?.coreSummary !== undefined
-            ? (() => {
-                const declared = coreSummaryFormat.readDeclaration(analysisManifest.contracts.coreSummary);
-                if (!declared) throw contractRejectedError('核心摘要已声明的协议头无效。');
-                return declared;
-            })()
+        // 付费核心诊断重放必须沿用该记录自己的契约：已声明按声明，未声明的旧记录按原契约
+        // （320–600 字）核验；只有全新生成才使用当前 executive-abstract-v4 头。
+        const activeSummaryHeader = isPaidCoreReplayMode
+            ? (analysisManifest?.contracts?.coreSummary !== undefined
+                ? (() => {
+                    const declared = coreSummaryFormat.readDeclaration(analysisManifest.contracts.coreSummary);
+                    if (!declared) throw contractRejectedError('核心摘要已声明的协议头无效。');
+                    return declared;
+                })()
+                : coreSummaryFormat.legacyHeader())
             : coreSummaryFormat.currentHeader();
         const useActiveExecutiveSummary = coreSummaryFormat.isExecutiveAbstractHeader(activeSummaryHeader);
         const missingCoreSummary = getMissingRequiredSections(analysis).includes('核心摘要');
@@ -20992,7 +21040,8 @@ module.exports = {
     hasActualAnalysisInputChanged,
     invalidateRecoveryStageIfChanged,
     invalidateApiReaderForResourceCountChange,
-    inlineExcessCohesiveReaderConceptBridges
+    inlineExcessCohesiveReaderConceptBridges,
+    coalesceExcessCohesiveReaderSections
 };
 
 // 直接运行测试

@@ -84,7 +84,10 @@ test('讲解增强保留机器章节、Reader来源声明及普通局部补丁�
         assert.equal(decoded, '段一\n\n段二');
         assert.deepEqual(decoded.split('\n\n'), ['段一', '段二']);
     }
-    assert.equal(require('../scripts/lib/reader-contract').READER_LIMITS.maximumSections, 18);
+    // 当前 cohesive-functional-v4 的小节上限为 9；旧 legacy-integrated 契约仍为 18。
+    assert.equal(require('../scripts/lib/reader-contract').READER_LIMITS.maximumSections, 9);
+    assert.equal(require('../scripts/lib/reader-contract').readerRequirements(
+        { version: 3, editorialProfile: 'legacy-integrated' }).maximumSections, 18);
     assert.equal(require('../scripts/lib/reader-contract').READER_LIMITS.minimumChineseChars, 5000);
 });
 

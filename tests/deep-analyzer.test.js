@@ -5979,7 +5979,7 @@ has_dataset: 否
             sourceText: '原文含同协议 WER 12.4%、9.8% 与移除融合门后的 11.1% 结果。'
         }), null);
         assert.strictEqual(exterior(updated), exterior(original));
-        assert.match(prompt, /2–4 个步骤/);
+        assert.match(prompt, /2–4 个(?:方法)?步骤/);
         assert.match(prompt, /汉字与中文标点合计 320–600 个/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
         const currentCorePrompt = require('../scripts/utils.js').loadPrompt(

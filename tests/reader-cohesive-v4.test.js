@@ -819,3 +819,53 @@ test('cohesive-functional-v4 excess conceptBridges (5-10) recover via parseRecov
     assert.ok(blockedResult, '内联后 updated.draft 与 normalizationInputSha256 一致，sourceBlocked 正常生成恢复记录');
     assert.equal(blockedResult.draft.conceptBridges.length, 4);
 });
+
+test('cohesive-functional-v4 coalesces excess adjacent same-kind sections deterministically and leaves everything else untouched', () => {
+    const { draft } = buildCohesiveV4DraftFixture();
+    const mk = (kind, n) => ({ kind, heading: `${kind === 'component' ? '核心机制' : '问题定位'}：第 ${n} 个具体问题`, body: `正文 ${n}。\n\n补充段 ${n}。` });
+    const kinds = ['problem', 'method_overview', 'component', 'component', 'component', 'result', 'ablation', 'component', 'limitation', 'synthesis'];
+    const ten = structuredClone(draft);
+    ten.sections = kinds.map((kind, index) => mk(kind, index + 1));
+    ten.sections[4].body = '短。';
+    ten.sections[3].body = '短。';
+    assert.equal(ten.sections.length, 10);
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(ten), true);
+    assert.equal(ten.sections.length, 9);
+    const merged = ten.sections.find(section => section.heading.includes('；'));
+    assert.ok(merged, '应产生合并后的标题');
+    assert.equal(merged.kind, 'component');
+    assert.equal(merged.body.split('\n\n').length >= 2, true);
+    // 再次调用不再改动（幂等）
+    const snapshot = JSON.stringify(ten);
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(ten), false);
+    assert.equal(JSON.stringify(ten), snapshot);
+
+    // 没有相邻同类小节：不动
+    const noAdjacent = structuredClone(draft);
+    noAdjacent.sections = ['problem', 'component', 'result', 'component', 'ablation', 'component', 'result', 'component', 'limitation', 'synthesis']
+        .map((kind, index) => mk(kind, index + 1));
+    const before = JSON.stringify(noAdjacent);
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(noAdjacent), false);
+    assert.equal(JSON.stringify(noAdjacent), before);
+
+    // 超出 4 节：不动，交给原局部修复
+    const tooMany = structuredClone(draft);
+    tooMany.sections = Array.from({ length: 13 }, (_, index) => mk(index < 2 ? 'problem' : 'component', index + 1));
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(tooMany), false);
+    assert.equal(tooMany.sections.length, 13);
+
+    // 旧契约（legacy-integrated，上限 18）不受影响
+    const oldHeader = codec.historicalHeader('reader-draft', format.INTEGRATED, format.OLD_DRAFT_FP);
+    const legacy = { ...oldHeader, ...structuredClone(ten) };
+    delete legacy.version;
+    legacy.schemaFingerprint = format.OLD_DRAFT_FP;
+    legacy.sections = kinds.map((kind, index) => mk(kind, index + 1));
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(legacy), false);
+    assert.equal(legacy.sections.length, 10);
+
+    // 含额外字段的小节不合并（不静默丢字段）
+    const extra = structuredClone(draft);
+    extra.sections = kinds.map((kind, index) => mk(kind, index + 1));
+    extra.sections[2].body2 = '额外字段';
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(extra), false);
+});
