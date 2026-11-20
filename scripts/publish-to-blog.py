@@ -8325,6 +8325,20 @@ _MATHJAX_DOUBLE_WRITE_RULES = (
     (re.compile(r'([A-Za-z])\^\\hat\{\1\}'), r'\\hat{\1}'),
     # −7.39-7.39 → −7.39（Unicode 负号与 ASCII 负号重复同一数值）
     (re.compile(r'(?<![\d.])([−-])(\d+(?:\.\d+)?)-\2(?![\d.])'), r'\1\2'),
+    # (−1.4)(-1.4) → (−1.4)、(+0.2)(+0.2) → (+0.2)、(−1.4%)(-1.4%) → (−1.4%)
+    (re.compile(r'(\(([+−-])(\d+(?:\.\d+)?%?)\))\(([+−-])(\d+(?:\.\d+)?%?)\)'),
+     lambda m: m.group(1) if (
+         m.group(3) == m.group(5)
+         and m.group(2).replace('−', '-') == m.group(4).replace('−', '-')
+         and not (m.start() > 0 and (
+             unicodedata.category(m.string[m.start() - 1])[0] in ('L', 'N')
+             or m.string[m.start() - 1] in '_^\\.\])}+−=*×÷-/\x00'))
+         and not (m.end() < len(m.string) and (
+             unicodedata.category(m.string[m.end()])[0] in ('L', 'N')
+             or m.string[m.end()] in '_^\\({%*×÷/\x00'
+             or (m.string[m.end()] == '.' and m.end() + 1 < len(m.string)
+                 and unicodedata.category(m.string[m.end() + 1])[0] == 'N')))
+     ) else m.group(0)),
     # 可见文字后面又跟了一段 `{}_{...}^{...}` 的 TeX 上下标副本时丢掉副本：
     # vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{\varnothing\mathrm{CFG}} → vv-MF∅CFGmSTFT
     (re.compile(r'^(?P<visible>[^{}]+?)\s*\{\}_\{(?P<sub>(?:[^{}]|\{[^{}]*\})+)\}\^\{(?P<sup>(?:[^{}]|\{[^{}]*\})+)\}\s*$'),
@@ -8814,8 +8828,56 @@ _READER_IDENTIFIER_SYMBOL_COPY = re.compile(
 
 _READER_SYMBOL_COMMAND_COPY = re.compile(r'([≥≤≈≠±×·∼])\\([A-Za-z]+)')
 _READER_SYMBOL_RUN = re.compile(r'([≥≤≈≠×·∼])\1')
+_LEADING_EMPTY_LINK_CELL_PREFIX_RE = re.compile(
+    r'^[^\S\r\n]*\[\]\[\][ \t]+(?=[^\s\u200b\u200c\u200d\u2060\ufeff])(?!\[\]\[\])'
+)
+_PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = re.compile(
+    r'(\(([+−-])(\d+(?:\.\d+)?%?)\))\(([+−-])(\d+(?:\.\d+)?%?)\)'
+)
 
-def _project_reader_cell_tex_display(value):
+
+def _collapse_parenthesized_signed_double_write(text):
+    if not isinstance(text, str) or ')(' not in text:
+        return text
+    protected = []
+
+    def _mask(match):
+        protected.append(match.group(0))
+        return f'\x00PDPARENURL{len(protected) - 1}\x00'
+
+    masked = re.sub(r'\]\([^)\s]+\)', _mask, text)
+
+    def _replace(match):
+        first_group, first_sign, first_num, second_sign, second_num = match.groups()
+        if first_num != second_num:
+            return match.group(0)
+        if first_sign.replace('−', '-') != second_sign.replace('−', '-'):
+            return match.group(0)
+        source = match.string
+        start, end = match.start(), match.end()
+        if start > 0:
+            prev = source[start - 1]
+            if unicodedata.category(prev)[0] in ('L', 'N') or prev in '_^\\.\])}+−=*×÷-/\x00':
+                return match.group(0)
+        if end < len(source):
+            nxt = source[end]
+            if unicodedata.category(nxt)[0] in ('L', 'N') or nxt in '_^\\({%*×÷/\x00':
+                return match.group(0)
+            if nxt == '.' and end + 1 < len(source) and unicodedata.category(source[end + 1])[0] == 'N':
+                return match.group(0)
+        return first_group
+
+    collapsed = _PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE.sub(_replace, masked)
+    for index, original in enumerate(protected):
+        collapsed = collapsed.replace(f'\x00PDPARENURL{index}\x00', original)
+    return collapsed
+
+
+def _strip_leading_empty_link_cell_prefix(value):
+    return _LEADING_EMPTY_LINK_CELL_PREFIX_RE.sub('', str(value or ''), count=1)
+
+
+def _project_reader_cell_tex_display_body(value):
     output = str(value or '')
     # LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
     output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+(?![\d.])', r'\1', output)
@@ -8826,6 +8888,8 @@ def _project_reader_cell_tex_display(value):
         output = _project_reader_anon_macro(output)
     # 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = re.sub(r'([+−])(?:[+−-])(?=[\d.])', r'\1', output)
+    # 带括号的有符号标量双写：(−1.4)(-1.4) → (−1.4)、(+0.2)(+0.2) → (+0.2)。
+    output = _collapse_parenthesized_signed_double_write(output)
     # 行内公式的定界符 \( \) 只是排版包裹，单元格比较时去掉。
     output = output.replace('\\(', '').replace('\\)', '')
     # 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
@@ -8859,7 +8923,7 @@ def _project_reader_cell_tex_display(value):
     # 否则第一组后面的全部内容会被当成同一个副本而不匹配（JS 侧同规则）。
     if re.search(r'[;；]', output) and '\\' in output:
         parts = re.split(r'([;；])', output)
-        output = ''.join(part if re.fullmatch(r'[;；]', part or '') else _project_reader_cell_tex_display(part)
+        output = ''.join(part if re.fullmatch(r'[;；]', part or '') else _project_reader_cell_tex_display_body(part)
                          for part in parts)
     output = re.sub(r'([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}',
                     lambda match: match.group(1) + '\u0304'
@@ -8910,6 +8974,18 @@ def _project_reader_cell_tex_display(value):
     # 变量+下标整体重复（T1T_{1} → T1T1 → T1）：可见副本与 TeX 副本各一遍。
     output = re.sub(r'([A-Za-z]+)(\d+)\1\2(?![A-Za-z0-9])', r'\1\2', output)
     return output
+
+
+def _project_reader_cell_tex_display(value):
+    output = str(value or '')
+    output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+(?![\d.])', r'\1', output)
+    output = re.sub(r'\s*\(\s*\)', '', output)
+    if '\\anon[' in output:
+        output = _project_reader_anon_macro(output)
+    # LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
+    # 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；独立 [][] 与格中 [][] 保留。
+    output = _strip_leading_empty_link_cell_prefix(output)
+    return _project_reader_cell_tex_display_body(output)
 
 
 _TRAILING_DIRECTION_RUN = re.compile(r'([↑↓→←↔])\1+')

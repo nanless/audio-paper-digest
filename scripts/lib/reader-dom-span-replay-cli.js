@@ -73,7 +73,7 @@ function runReplayFd(fd) {
                 throw new Error('Article table mismatch');
             }
             const span = require('./reader-dom-span-projection'), accepted = [];
-            const { projectReaderCellTexDisplay } = require('./reader-source-display');
+            const { collapseParenthesizedSignedDoubleWrite, projectReaderCellTexDisplay } = require('./reader-source-display');
             const { strictSourceCellMathDisplay } = require('./source-cell-math-display');
             bindings.forEach((binding, index) => {
                 if (binding.tableIndex !== index + 1 || sha(saved[index].markdown) !== binding.renderedTableSha256) {
@@ -97,12 +97,15 @@ function runReplayFd(fd) {
                 const mapCell = (renderedCell, r, c) => {
                     const savedCell = savedRows[r][c];
                     if (renderedCell === savedCell || renderedCell === '' || savedCell === '') return renderedCell;
-                    const sigMatch = sigStarsCellRe.exec(savedCell);
+                    const projectedSaved = projectReaderCellTexDisplay(savedCell);
+                    if (projectedSaved === renderedCell) return savedCell;
+                    const sigMatch = sigStarsCellRe.exec(projectedSaved);
                     if (sigMatch && renderedCell === sigMatch[1] + sigMatch[2].replace(/\*/g, '\\*')) return savedCell;
-                    if (projectReaderCellTexDisplay(savedCell) === renderedCell) return savedCell;
                     const bound = byCoord.get(`${r}:${c}`);
                     const mathDisplay = bound ? strictSourceCellMathDisplay(bound.sourceText) : null;
-                    if (mathDisplay && renderedCell === mathDisplay.displayText
+                    if (mathDisplay
+                        && (renderedCell === mathDisplay.displayText
+                            || renderedCell === collapseParenthesizedSignedDoubleWrite(mathDisplay.displayText))
                         && (savedCell === mathDisplay.sourceText || savedCell === mathDisplay.displayText)) {
                         return mathDisplay.sourceText;
                     }

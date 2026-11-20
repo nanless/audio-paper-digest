@@ -249,7 +249,46 @@ function projectReaderAnonMacro(value) {
         .replace(/\\anon\[([^\]]*)\][A-Za-z0-9-]*(?![A-Za-z0-9])/g, '$1');
 }
 
-function projectReaderCellTexDisplay(value) {
+const PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = /(\(([+−-])(\d+(?:\.\d+)?%?)\))\(([+−-])(\d+(?:\.\d+)?%?)\)/g;
+const LEADING_EMPTY_LINK_CELL_PREFIX_RE = /^[^\S\r\n]*\[\]\[\][ \t]+(?=[^\s\u200b\u200c\u200d\u2060\ufeff])(?!\[\]\[\])/;
+
+function collapseParenthesizedSignedDoubleWrite(value) {
+    const text = String(value ?? '');
+    if (!text.includes(')(')) return text;
+    const protectedUrls = [];
+    const masked = text.replace(/\]\([^)\s]+\)/g, (match) => {
+        protectedUrls.push(match);
+        return `\x00PDURL${protectedUrls.length - 1}\x00`;
+    });
+    const collapsed = masked.replace(
+        PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE,
+        (whole, firstGroup, firstSign, firstNum, secondSign, secondNum, offset, input) => {
+            if (firstNum !== secondNum) return whole;
+            if ((firstSign === '−' ? '-' : firstSign) !== (secondSign === '−' ? '-' : secondSign)) {
+                return whole;
+            }
+            if (offset > 0 && /[\p{L}\p{N}_^\\.\])}+−=*×÷\-/\x00]/u.test(input[offset - 1])) {
+                return whole;
+            }
+            const tail = input.slice(offset + whole.length);
+            if (tail && (/^[\p{L}\p{N}_^\\({%*×÷/\x00]/u.test(tail) || /^\.\p{N}/u.test(tail))) {
+                return whole;
+            }
+            return firstGroup;
+        }
+    );
+    let restored = collapsed;
+    for (let index = 0; index < protectedUrls.length; index++) {
+        restored = restored.split(`\x00PDURL${index}\x00`).join(protectedUrls[index]);
+    }
+    return restored;
+}
+
+function stripLeadingEmptyReferenceLinkCellPrefix(value) {
+    return String(value ?? '').replace(LEADING_EMPTY_LINK_CELL_PREFIX_RE, '');
+}
+
+function projectReaderCellTexDisplayBody(value) {
     let output = String(value ?? '');
     // LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
     output = output.replace(/(\S*?)\s*11footnotemark:\s*\d+(?![\d.])/g, '$1');
@@ -259,6 +298,8 @@ function projectReaderCellTexDisplay(value) {
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     // 符号重复：++0.0、−-19.6、+-3.2 只留一个符号（后面必须紧跟数字）。
     output = output.replace(/([+−])(?:[+−-])(?=[\d.])/g, '$1');
+    // 带括号的有符号标量双写：(−1.4)(-1.4) → (−1.4)、(+0.2)(+0.2) → (+0.2)。
+    output = collapseParenthesizedSignedDoubleWrite(output);
     // 行内公式的定界符 \( \) 只是排版包裹，单元格比较时去掉。
     output = output.split('\\(').join('').split('\\)').join('');
     // 千位分隔的 TeX 写法与紧邻重复：55{,}00855{,}008 → 55,008。
@@ -294,7 +335,7 @@ function projectReaderCellTexDisplay(value) {
     // 一个单元格里可能有多组「可见值 + TeX 副本」，用分号隔开；先分段折叠再拼回，
     // 否则第一组后面的全部内容会被当成同一个副本而不匹配。
     if (/[;；]/.test(output) && /\\/.test(output)) {
-        output = output.split(/([;；])/u).map(part => (/[;；]/u.test(part) ? part : projectReaderCellTexDisplay(part))).join('');
+        output = output.split(/([;；])/u).map(part => (/[;；]/u.test(part) ? part : projectReaderCellTexDisplayBody(part))).join('');
     }
     for (let round = 0; round < 6 && (output.includes('\\') || /[_^]\{/.test(output)); round++) {
         const folded = foldReaderTexCellDuplicate(output);
@@ -336,6 +377,17 @@ function projectReaderCellTexDisplay(value) {
     // 变量+下标整体重复（T1T_{1} → T1T1 → T1）：可见副本与 TeX 副本各一遍。
     output = output.replace(/([A-Za-z]+)(\d+)\1\2(?![A-Za-z0-9])/g, '$1$2');
     return output;
+}
+
+function projectReaderCellTexDisplay(value) {
+    let output = String(value ?? '');
+    output = output.replace(/(\S*?)\s*11footnotemark:\s*\d+(?![\d.])/g, '$1');
+    output = output.replace(/\s*\(\s*\)/g, '');
+    if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
+    // LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
+    // 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；独立 [][] 与格中 [][] 保留。
+    output = stripLeadingEmptyReferenceLinkCellPrefix(output);
+    return projectReaderCellTexDisplayBody(output);
 }
 
 function normalizeReaderSourceDisplayArtifacts(value) {
@@ -434,7 +486,14 @@ function normalizeReaderSourceDisplayArtifacts(value) {
         /l[\u200b\u200c\u200d\u2060\ufeff]*r\s*=\s*([0-9]+(?:\.[0-9]+)?)[\u200b\u200c\u200d\u2060\ufeff]*e[−-](\d+)\s*lr\s*=\s*\1e\^\{[-−]\2\}/gi,
         (_whole, base, exponent) => `lr=${base}e-${exponent}`
     );
+    output = collapseParenthesizedSignedDoubleWrite(output);
     return output;
 }
 
-module.exports = { normalizeExplicitReaderSymbolProjection, normalizeReaderSourceDisplayArtifacts, projectReaderCellTexDisplay };
+module.exports = {
+    collapseParenthesizedSignedDoubleWrite,
+    normalizeExplicitReaderSymbolProjection,
+    normalizeReaderSourceDisplayArtifacts,
+    projectReaderCellTexDisplay,
+    stripLeadingEmptyReferenceLinkCellPrefix,
+};

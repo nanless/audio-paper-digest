@@ -1,7 +1,11 @@
 import copy
 import hashlib
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_publish_to_blog import publish_to_blog as blog, llm_api_publication_fixture
 
 
@@ -202,6 +206,124 @@ class PublicationSourceDisplayTests(unittest.TestCase):
                          note.replace('0.33', '0.34'))
         other = dict(figure, caption=figure['caption'].replace(r'\!', r'\quad'))
         self.assertEqual(blog._source_bound_figure_math_note(note, other), note)
+
+    def test_parenthesized_signed_scalar_double_write_folds_only_exact_signed_copy(self):
+        positives = [
+            ('46.4 (−1.4)(-1.4)', '46.4 (−1.4)'),
+            ('57.5 (−0.8)(-0.8)', '57.5 (−0.8)'),
+            ('47.9 (+0.2)(+0.2)', '47.9 (+0.2)'),
+            ('(-1.4)(-1.4)', '(-1.4)'),
+            ('(-1.4)(−1.4)', '(-1.4)'),
+            ('(+9.9%)(+9.9%)', '(+9.9%)'),
+            ('(−1.4%)(-1.4%)', '(−1.4%)'),
+            ('Non-native (−15)(-15); background (−30)(-30)', 'Non-native (−15); background (−30)'),
+            ('[fig](https://example.test/fig-2-2.png) 46.4 (−1.4)(-1.4)', '[fig](https://example.test/fig-2-2.png) 46.4 (−1.4)'),
+        ]
+        for raw, expected in positives:
+            with self.subTest(raw=raw):
+                self.assertEqual(blog._collapse_mathjax_double_write(raw), expected)
+                self.assertEqual(blog._collapse_mathjax_double_write(expected), expected)
+                self.assertEqual(blog._project_reader_cell_tex_display(raw), expected)
+                self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
+                self.assertEqual(blog._reader_cell_comparison(raw), blog._reader_cell_comparison(expected))
+                self.assertEqual(blog._normalize_api_reader_source_cell(raw),
+                                 blog._normalize_api_reader_source_cell(expected))
+
+        negatives = [
+            '46.4 (−1.4)(-0.8)',
+            '46.4 (+1.4)(-1.4)',
+            '46.4 (-1.4)(+1.4)',
+            '(1.4)(1.4)',
+            '46.4 (1.4)(1.4)',
+            '(1.40)(-1.4)',
+            '(−1.40)(-1.4)',
+            '(-1.4)(-1.40)',
+            '(−1.4%)(-1.4)',
+            '(−1.4)(-1.4%)',
+            '[text](-1.4)',
+            '[text](-1.4)(-1.4)',
+            '[text](https://example.test/(-1.4)(-1.4))',
+            'https://example.test/(-1.4)(-1.4)',
+            'f(-1.4)(-1.4)',
+            '2(-1.4)(-1.4)',
+            '(-1.4)(-1.4)^2',
+            '(-1.4)(-1.4)_i',
+            '(-1.4)(-1.4)(+0.2)',
+            '1+(-1.4)(-1.4)',
+        ]
+        for raw in negatives:
+            with self.subTest(raw=raw):
+                self.assertEqual(blog._collapse_mathjax_double_write(raw), raw)
+                self.assertEqual(blog._project_reader_cell_tex_display(raw), raw)
+        self.assertEqual(blog._collapse_mathjax_double_write(r'\(-1.4\)(-1.4)'), r'\(-1.4\)(-1.4)')
+
+    def test_leading_empty_reference_link_cell_prefix_projection_and_guards(self):
+        positives = [
+            ('[][] VideoLLaMA2-AV+PACD', 'VideoLLaMA2-AV+PACD'),
+            ('[][] OmniVinci+PACD', 'OmniVinci+PACD'),
+            ('  [][] VideoLLaMA2-AV+PACD', 'VideoLLaMA2-AV+PACD'),
+            ('[][]\tOmniVinci+PACD', 'OmniVinci+PACD'),
+            ('[][] Model (−1.4)(-1.4)', 'Model (−1.4)'),
+        ]
+        for raw, expected in positives:
+            with self.subTest(raw=raw):
+                self.assertEqual(blog._project_reader_cell_tex_display(raw), expected)
+                self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
+                self.assertEqual(blog._reader_cell_comparison(raw), blog._reader_cell_comparison(expected))
+
+        for raw, expected in [
+            ('[][]', '[][]'),
+            ('[][]   ', '[][]   '),
+            ('[][] \u200b', '[][] \u200b'),
+            ('[][] ()', '[][]'),
+            ('foo [][] bar', 'foo [][] bar'),
+            ('foo; [][] bar', 'foo; [][] bar'),
+            (r'foo; [][] bar\uparrow', 'foo; [] bar↑'),
+            ('[a][b] foo', '[a][b] foo'),
+            ('[x][] foo', '[x][] foo'),
+            ('[][] [][] foo', '[][] [][] foo'),
+        ]:
+            with self.subTest(raw=raw):
+                self.assertEqual(blog._project_reader_cell_tex_display(raw), expected)
+                self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
+        self.assertNotEqual(blog._reader_cell_comparison('[][]'), blog._reader_cell_comparison(''))
+
+        article = (
+            '### 对比结果\n\n'
+            '| Model | World | Daily |\n'
+            '| --- | --- | --- |\n'
+            '| [][] VideoLLaMA2-AV+PACD | 46.4 (−1.4)(-1.4) | 47.9 (+0.2)(+0.2) |\n'
+            '| [][] OmniVinci+PACD | 57.5 (−0.8)(-0.8) | 58.1 (−0.2)(-0.2) |\n'
+        )
+        plan = {
+            'tableBindings': [{
+                'tableIndex': 1,
+                'sourceType': 'artifact_table',
+                'sourceTableOrdinal': 4,
+                'cellBindings': [
+                    {'renderedRow': 0, 'renderedColumn': 0, 'sourceText': 'Model'},
+                    {'renderedRow': 0, 'renderedColumn': 1, 'sourceText': 'World'},
+                    {'renderedRow': 0, 'renderedColumn': 2, 'sourceText': 'Daily'},
+                    {'renderedRow': 1, 'renderedColumn': 0, 'sourceText': '[][] VideoLLaMA2-AV+PACD'},
+                    {'renderedRow': 1, 'renderedColumn': 1, 'sourceText': '46.4 (−1.4)(-1.4)'},
+                    {'renderedRow': 1, 'renderedColumn': 2, 'sourceText': '47.9 (+0.2)(+0.2)'},
+                    {'renderedRow': 2, 'renderedColumn': 0, 'sourceText': '[][] OmniVinci+PACD'},
+                    {'renderedRow': 2, 'renderedColumn': 1, 'sourceText': '57.5 (−0.8)(-0.8)'},
+                    {'renderedRow': 2, 'renderedColumn': 2, 'sourceText': '58.1 (−0.2)(-0.2)'},
+                ],
+            }],
+        }
+        plan_before = copy.deepcopy(plan)
+        projected = blog._project_artifact_table_cell_tex_display(article, plan)
+        self.assertEqual(plan, plan_before)
+        self.assertNotIn('[][]', projected)
+        self.assertIn('| VideoLLaMA2-AV+PACD | 46.4 (−1.4) | 47.9 (+0.2) |', projected)
+        self.assertIn('| OmniVinci+PACD | 57.5 (−0.8) | 58.1 (−0.2) |', projected)
+
+        mismatched = copy.deepcopy(plan)
+        mismatched['tableBindings'][0]['cellBindings'][3]['sourceText'] = '[][] OtherModel'
+        with self.assertRaises(blog.PublishDataValidationError):
+            blog._project_artifact_table_cell_tex_display(article, mismatched)
 
 
 if __name__ == '__main__':
