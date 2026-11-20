@@ -8990,11 +8990,14 @@ def _assert_rendered_tables_have_no_bare_tex(article):
 
 
 def _normalize_api_reader_source_cell(value):
-    # Undo only the exact whole-cell CI footnote display escape emitted by
+    # Undo only the exact whole-cell CI / mean±SD footnote display escape emitted by
     # escape_statistical_significance_stars. Other backslashes/TeX stay strict.
     scalar = r'[+−-]?[0-9]+(?:\.[0-9]+)?'
-    if re.fullmatch(r'[ \t]*' + scalar + r'%[ \t]+\[' + scalar + r',[ \t]*'
-                    + scalar + r'\]%[ \t]+(?:\\\*){1,3}[ \t]*', str(value or '')):
+    if re.fullmatch(
+        r'[ \t]*(?:' + scalar + r'%[ \t]+\[' + scalar + r',[ \t]*' + scalar + r'\]%'
+        + r'|' + scalar + r'%?[ \t]*±[ \t]*' + scalar + r'%?)[ \t]+(?:\\\*){1,3}[ \t]*',
+        str(value or ''),
+    ):
         value = value.replace(r'\*', '*')
     value = _normalize_api_reader_explicit_symbol_projection(value)
     # 封存 DOM 里 Unicode 符号与同义 LaTeX 命令被同时抽出（≥10\geq 10、

@@ -93,9 +93,12 @@ function runReplayFd(fd) {
                         byCoord.set(`${item.renderedRow}:${item.renderedColumn}`, item);
                     }
                 }
+                const sigStarsCellRe = /^([+−-]?[0-9]+(?:\.[0-9]+)?%[ \t]+\[[+−-]?[0-9]+(?:\.[0-9]+)?,[ \t]*[+−-]?[0-9]+(?:\.[0-9]+)?\]%[ \t]+|[+−-]?[0-9]+(?:\.[0-9]+)?%?[ \t]*±[ \t]*[+−-]?[0-9]+(?:\.[0-9]+)?%?[ \t]+)(\*{1,3})$/u;
                 const mapCell = (renderedCell, r, c) => {
                     const savedCell = savedRows[r][c];
                     if (renderedCell === savedCell || renderedCell === '' || savedCell === '') return renderedCell;
+                    const sigMatch = sigStarsCellRe.exec(savedCell);
+                    if (sigMatch && renderedCell === sigMatch[1] + sigMatch[2].replace(/\*/g, '\\*')) return savedCell;
                     if (projectReaderCellTexDisplay(savedCell) === renderedCell) return savedCell;
                     const bound = byCoord.get(`${r}:${c}`);
                     const mathDisplay = bound ? strictSourceCellMathDisplay(bound.sourceText) : null;

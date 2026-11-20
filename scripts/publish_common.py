@@ -8765,8 +8765,10 @@ def escape_statistical_significance_stars(text):
                   for line in range(table['start_line'] + 2, table['end_line'] + 1)}
     scalar = r'[+−-]?[0-9]+(?:\.[0-9]+)?'
     interval_stars = re.compile(
-        r'(?<=\|)(?P<prefix>[ \t]*' + scalar + r'%[ \t]+\[' + scalar
-        + r',[ \t]*' + scalar + r'\]%[ \t]+)(?P<stars>\*{1,3})(?=[ \t]*\|)')
+        r'(?<=\|)(?P<prefix>[ \t]*(?:'
+        + scalar + r'%[ \t]+\[' + scalar + r',[ \t]*' + scalar + r'\]%'
+        + r'|' + scalar + r'%?[ \t]*±[ \t]*' + scalar + r'%?'
+        + r')[ \t]+)(?P<stars>\*{1,3})(?=[ \t]*\|)')
     output = []
     fence = None
     for line_index, line in enumerate(str(text or '').splitlines(keepends=True)):

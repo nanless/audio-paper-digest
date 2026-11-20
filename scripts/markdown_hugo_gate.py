@@ -806,8 +806,10 @@ def mask_source_bound_literal_asterisks(rendered, artifact):
         key = ('p', html.unescape(plain))
         expected[key] = expected.get(key, 0) + 1
     scalar = r'[+−-]?[0-9]+(?:\.[0-9]+)?'
-    ci = re.compile(scalar + r'%[ \t]+\[' + scalar + r',[ \t]*' + scalar
-                    + r'\]%[ \t]+(?:\\\*){1,3}')
+    ci = re.compile(
+        r'(?:' + scalar + r'%[ \t]+\[' + scalar + r',[ \t]*' + scalar + r'\]%'
+        + r'|' + scalar + r'%?[ \t]*±[ \t]*' + scalar + r'%?)[ \t]+(?:\\\*){1,3}'
+    )
     for table in extract_markdown_tables(source):
         for row in table['rows']:
             for cell in row:

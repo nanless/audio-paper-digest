@@ -100,10 +100,21 @@ class PublicationLiteralDisplayTest(unittest.TestCase):
         cells = [r[1] for r in extract_markdown_tables(fixed)[0]['rows']]
         rendered = '<table><tbody>' + ''.join('<tr><td>' + c.replace(r'\*', '*') + '</td></tr>' for c in cells) + '</tbody></table>'
         self.assertNotIn('**', mask_source_bound_literal_asterisks(rendered, {'body': fixed}))
+        pm_raw = '| Model | Female F1 |\n| --- | --- |\n| WavLM | 83.12 ± 9.36 *** |\n| RF | 61.16% ± 3.39% ** |\n'
+        pm_fixed = escape_statistical_significance_stars(pm_raw)
+        self.assertEqual(
+            pm_fixed,
+            '| Model | Female F1 |\n| --- | --- |\n| WavLM | 83.12 ± 9.36 \\*\\*\\* |\n| RF | 61.16% ± 3.39% \\*\\* |\n',
+        )
+        self.assertEqual(escape_statistical_significance_stars(pm_fixed), pm_fixed)
+        pm_html = '<table><tbody><tr><td>WavLM</td><td>83.12 ± 9.36 ***</td></tr><tr><td>RF</td><td>61.16% ± 3.39% **</td></tr></tbody></table>'
+        self.assertNotIn('**', mask_source_bound_literal_asterisks(pm_html, {'body': pm_fixed}))
 
     def test_ci_only_complete_real_table_cells(self):
         for text in ['| a | 72.3% [67.2, 77.1]% *** |',
+                     '| a | 83.12 ± 9.36 *** |',
                      '| A | B |\n| --- | --- |\n| a | 72.3% [67.2, 77.1]% **** |',
+                     '| A | B |\n| --- | --- |\n| a | 83.12 ± 9.36 **** |',
                      '| A | B |\n| --- | --- |\n| a | **bold** |',
                      '| A | B |\n| --- | --- |\n| a | 72.3% [67.2, 77.1] *** |',
                      '```text\n' + self.fixture['ci']['excerpt'] + '\n```']:
