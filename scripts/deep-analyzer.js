@@ -1001,6 +1001,48 @@ function normalizeShiftedReaderConceptBridgeMarkers(candidate) {
     return true;
 }
 
+// cohesive-functional-v4 将独立术语桥上限收紧为 4 组，优先把机制分工自然融入正文段落。
+// 当模型仍写出 5–10 组且超出部分的占位标记在目标小节唯一独立成段时，确定性将超出项的
+// explanation 原文直接内联替换回对应占位段（不生成词典卡前缀），既不丢失作者解释，也不耗费整篇重写额度。
+function inlineExcessCohesiveReaderConceptBridges(candidate) {
+    if (!candidate || !Array.isArray(candidate.conceptBridges)
+        || !Array.isArray(candidate.sections)) return false;
+    let format;
+    try { format = require('./lib/reader-record-format').draftFormat(candidate); } catch { return false; }
+    if (format.editorialProfile !== 'cohesive-functional-v4') return false;
+    const maxBridges = require('./lib/reader-contract').readerRequirements(
+        { version: 3, editorialProfile: format.editorialProfile }
+    ).maximumConceptBridges;
+    if (candidate.conceptBridges.length <= maxBridges || candidate.conceptBridges.length > 10) return false;
+    for (let index = 0; index < maxBridges; index += 1) {
+        if (candidate.conceptBridges[index]?.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`) return false;
+    }
+    const plans = [];
+    for (let index = maxBridges; index < candidate.conceptBridges.length; index += 1) {
+        const bridge = candidate.conceptBridges[index];
+        const expectedMarker = `[[CONCEPT_BRIDGE_${index + 1}]]`;
+        const explanation = typeof bridge?.explanation === 'string' ? bridge.explanation.trim() : '';
+        if (!bridge || bridge.marker !== expectedMarker || !explanation
+            || /\[\[(?:FIGURE|TABLE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/.test(explanation)) return false;
+        const matches = [];
+        for (const section of candidate.sections) {
+            if (typeof section?.body !== 'string') return false;
+            const rawCount = section.body.split(expectedMarker).length - 1;
+            if (rawCount === 0) continue;
+            if (countSafeStandaloneReaderMarkers(section.body, expectedMarker) !== 1
+                || readerConceptMarkerIsProtected(section.body, expectedMarker)) return false;
+            matches.push(section);
+        }
+        if (matches.length !== 1 || matches[0].kind !== bridge.sectionKind) return false;
+        plans.push({ section: matches[0], marker: expectedMarker, explanation });
+    }
+    for (const item of plans) {
+        item.section.body = item.section.body.replace(item.marker, () => item.explanation);
+    }
+    candidate.conceptBridges = candidate.conceptBridges.slice(0, maxBridges);
+    return true;
+}
+
 // 只修当前编辑闸门报出的那个技术边界 token。这一步刻意与宽泛的正文归一化分开：原文
 // 引文、代码和编译器生成的表格单元必须保持字节一致，而普通 Reader 段落可以安全地
 // 变成「前缀 数」。
@@ -8820,6 +8862,10 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
                 normalizeReaderConceptBridgeTerms(candidate);
                 normalizeShiftedReaderConceptBridgeMarkers(candidate);
                 normalizeDuplicateReaderConceptBridgeMarkers(candidate);
+                normalizeDeclaredReaderMarkerParagraphs(candidate);
+                if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
+                    inlineExcessCohesiveReaderConceptBridges(candidate);
+                }
                 repairReportedTextSpacing(candidate, normalizationIssues);
                 normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
                 candidate.sections = candidate.sections.map(section => ({
@@ -9480,22 +9526,21 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     ordinalPatchCompilations = !operatorCorrection
         && paper.readerRevisionHistory?.contract === 'daily-reader-revision-history-v1'
         ? [] : (recovered?.ordinalPatchCompilations || []);
-    // 人工修正只改本次解析输入：活动候选仍是原稿，ordinal 来源衔接必须绑原稿，
-    // 否则会拿修正稿去和活动候选比对而被判成来源不符。
-    const savedOrdinalOriginDraft = operatorCorrection?.baselineDraft
-        ? structuredClone(operatorCorrection.baselineDraft)
-        : recovered?.draft ? structuredClone(recovered.draft) : null;
     for (const record of ordinalPatchCompilations) require('./lib/reader-target-ordinal-patch').replay({
         paper, identity: record.identity, directory: candidateDirectory, requestId: record.requestId, pins: record.pins });
     // 保存候选的序号链只有在其最后一笔付费编译仍派生当前草稿时才能作为完成证明。
-    // 之后若有一次非序号补丁改写基线（例如原子表格追加），链就不再派生正文；此时
-    // 由模块按内容级可判定错误拒绝挂载，这里把链登记为被接替历史，按无序号完成继续，
-    // 既不伪造完成证明，也不让整批因单篇证明缺失中止。
+    // 人工修正只改本次解析输入：活动候选仍是原稿，ordinal 来源衔接须绑定原稿；
+    // 普通续跑或同轮后续 attempt 经确定性归一化直接通过时，须先刷写挂起的归一化写回并绑定当前活动 candidate，
+    // 避免捕获循环前为空或未归一化的旧快照而误触发 saved origin is not active candidate。
     const attachSavedOrdinalChain = (result, normalization) => {
         if (!ordinalPatchCompilations.length) return result;
+        if (!operatorCorrection) flushCandidateWriteBack();
+        const originDraft = operatorCorrection?.baselineDraft
+            ? structuredClone(operatorCorrection.baselineDraft)
+            : candidate ? structuredClone(candidate) : null;
         try {
             require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
-                paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations,
+                paper, identity, directory: candidateDirectory, draft: originDraft, records: ordinalPatchCompilations,
                 activeCandidateFile: operatorCorrection?.proof?.originalCandidateFile
             }, result, normalization);
         } catch (error) {
@@ -20946,7 +20991,8 @@ module.exports = {
     buildImageSupplementFingerprint,
     hasActualAnalysisInputChanged,
     invalidateRecoveryStageIfChanged,
-    invalidateApiReaderForResourceCountChange
+    invalidateApiReaderForResourceCountChange,
+    inlineExcessCohesiveReaderConceptBridges
 };
 
 // 直接运行测试

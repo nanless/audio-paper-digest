@@ -693,3 +693,85 @@ test('cohesive-functional-v4 omits PDF-origin boilerplate note on pdfSourceQuote
         });
     });
 });
+
+test('cohesive-functional-v4 excess conceptBridges (5-10) recover via parseRecoveryDraft and inline deterministically into prose', () => {
+    const repair = require('../scripts/lib/reader-repair');
+    const { draft, sourceText } = buildCohesiveV4DraftFixture();
+
+    const fiveBridgeDraft = structuredClone(draft);
+    fiveBridgeDraft.conceptBridges = [
+        {
+            terms: ['跨模态定位', '离散帧移'],
+            sectionKind: 'problem',
+            marker: '[[CONCEPT_BRIDGE_1]]',
+            explanation: '跨模态定位需要在音频流中标出事件起止边界，离散帧移决定时间网格下界，二者共同约束最小可分辨时间差。'
+        },
+        {
+            terms: ['门控注意', '能量掩码'],
+            sectionKind: 'method_overview',
+            marker: '[[CONCEPT_BRIDGE_2]]',
+            explanation: '门控注意聚合跨模态相关性权重，能量掩码抑制静音背景帧响应，二者串联过滤弱相关时间片。'
+        },
+        {
+            terms: ['双流编码', '时间戳头'],
+            sectionKind: 'component',
+            marker: '[[CONCEPT_BRIDGE_3]]',
+            explanation: '双流编码提取对齐后的跨模态隐表示，时间戳头在此基础上直接回归起止偏移量，消除逐帧阈值后处理。'
+        },
+        {
+            terms: ['主表对比', '受控协议'],
+            sectionKind: 'result',
+            marker: '[[CONCEPT_BRIDGE_4]]',
+            explanation: '主表对比展示模型在基准测试集上的整体提升，受控协议保证特征前端与训练轮数一致以排除外生增益。'
+        },
+        {
+            terms: ['帧级精度', '正则项 $L_2$'],
+            sectionKind: 'ablation',
+            marker: '[[CONCEPT_BRIDGE_5]]',
+            explanation: '帧级精度衡量短时事件定位命中率，正则项 $L_2$（含符号 $& 与 $1 字面量安全性校验）约束偏移回归平滑度以抑制抖动。'
+        }
+    ];
+    fiveBridgeDraft.sections[0].body += '\n\n[[CONCEPT_BRIDGE_1]]';
+    fiveBridgeDraft.sections[1].body += '\n\n[[CONCEPT_BRIDGE_2]]';
+    fiveBridgeDraft.sections[2].body += '\n\n[[CONCEPT_BRIDGE_3]]';
+    fiveBridgeDraft.sections[3].body += '\n\n[[CONCEPT_BRIDGE_4]]';
+    fiveBridgeDraft.sections[4].body += '\n\n[[CONCEPT_BRIDGE_5]]';
+
+    // 1. 恢复解析器保留 5 组 conceptBridges 草稿而非置空，超过 10 组仍拒绝
+    const recovered = repair.parseRepairableDraft(JSON.stringify(fiveBridgeDraft));
+    assert.ok(recovered, '5 组 conceptBridges 应可被 parseRepairableDraft 恢复');
+    assert.equal(recovered.conceptBridges.length, 5);
+
+    const elevenBridgeDraft = structuredClone(fiveBridgeDraft);
+    while (elevenBridgeDraft.conceptBridges.length < 11) {
+        const nextIdx = elevenBridgeDraft.conceptBridges.length + 1;
+        elevenBridgeDraft.conceptBridges.push({
+            terms: [`术语A${nextIdx}`, `术语B${nextIdx}`],
+            sectionKind: 'ablation',
+            marker: `[[CONCEPT_BRIDGE_${nextIdx}]]`,
+            explanation: `术语A${nextIdx}与术语B${nextIdx}共同作用于第 ${nextIdx} 组消融实验分析。`
+        });
+    }
+    assert.equal(repair.parseRecoveryDraft(JSON.stringify(elevenBridgeDraft)), null);
+
+    // 2. legacy-integrated 5 组 conceptBridges 不触发内联裁剪
+    const oldHeader = codec.historicalHeader('reader-draft', format.INTEGRATED, format.OLD_DRAFT_FP);
+    const legacyFiveBridges = { ...oldHeader, ...structuredClone(fiveBridgeDraft) };
+    legacyFiveBridges.schemaFingerprint = format.OLD_DRAFT_FP;
+    assert.equal(deep.inlineExcessCohesiveReaderConceptBridges(legacyFiveBridges), false);
+    assert.equal(legacyFiveBridges.conceptBridges.length, 5);
+
+    // 3. cohesive-functional-v4 经 normalizeApiReaderRecoveryDraftForSource 确定性内联第 5 组并截断为 4 组，字面量 $& / $1 无损保留
+    const state = {};
+    deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(fiveBridgeDraft), [], {
+        paperId: '2611.99999v1',
+        sourceText,
+        structuredArtifacts: null,
+        pixelFigureOrdinals: [1],
+        draftOrderMappings: []
+    }, state);
+    assert.equal(state.draft.conceptBridges.length, 4);
+    assert.equal(state.draft.sections[4].body.includes('[[CONCEPT_BRIDGE_5]]'), false);
+    assert.ok(state.draft.sections[4].body.includes('正则项 $L_2$（含符号 $& 与 $1 字面量安全性校验）'));
+    assert.equal(state.draft.sections[4].body.includes('帧级精度 × 正则项'), false);
+});

@@ -232,3 +232,107 @@ test('2026-11-09 saved ordinal candidate: non-terminal chain is refused, termina
         });
     });
 });
+
+test('normalized candidate write-back updates active envelope before attachSavedOrigin and cold completion replay', () => {
+    const RUN_20261120 = '7c002250-94e3-4988-9018-f38ee7733a27';
+    const PAPER_20261120 = '2611.25808v1';
+    const runSrc = path.join(REAL_ROOT, RUN_20261120);
+    const candSrc = path.join(runSrc, 'reader-attempts/dd2a6409d8256d9038e86a7938b9f19e755e9a45cf4182212ec7d533260788a5.json');
+    if (!fs.existsSync(candSrc) || !fs.existsSync(path.join(runSrc, 'run.json'))) return;
+
+    const candidate = JSON.parse(fs.readFileSync(candSrc, 'utf8'));
+    const record = candidate.payload?.ordinalPatchCompilations?.[0];
+    if (!record) return;
+    const diagSrc = path.join(runSrc, 'reader-attempts/request-diagnostics');
+    const usageDir = require('../scripts/config').FILES.llmUsageDir;
+    const sealCheck = JSON.parse(fs.readFileSync(path.join(diagSrc, record.requestId + '.ordinal-seal.json'), 'utf8'));
+    if (!Array.isArray(sealCheck.usageRecords) || !sealCheck.usageRecords.every(ref => fs.existsSync(ref.file)
+        && path.dirname(path.resolve(ref.file)) === path.resolve(usageDir))) return;
+
+    const testApi = require('node:test');
+    const workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ordinal-norm-origin-')));
+    const Config = require('../scripts/config');
+    const fresh = require('../scripts/lib/fresh-analysis-context');
+    const daily = require('../scripts/lib/daily-fresh-source-plan');
+    const engine = require('../scripts/analysis-engine');
+    const repair = require('../scripts/lib/reader-repair');
+    const normWriterMod = require('../scripts/lib/reader-candidate-normalization');
+    const originalRunsDir = Config.FILES.dailyFreshSourceRunsDir;
+    try {
+        const runDir = path.join(workspace, RUN_20261120);
+        const attempts = path.join(runDir, 'reader-attempts');
+        const diagnostics = path.join(attempts, 'request-diagnostics');
+        fs.mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
+        fs.cpSync(path.join(runSrc, 'run.json'), path.join(runDir, 'run.json'));
+        fs.cpSync(path.join(runSrc, 'sources/2611.25808'), path.join(runDir, 'sources/2611.25808'), { recursive: true });
+        for (const name of fs.readdirSync(diagSrc)) {
+            if (name.startsWith(record.requestId)) fs.cpSync(path.join(diagSrc, name), path.join(diagnostics, name));
+        }
+        const sealFile = path.join(diagnostics, record.requestId + '.ordinal-seal.json');
+        const seal = JSON.parse(fs.readFileSync(sealFile, 'utf8'));
+        for (const witness of seal.witnesses) witness.path = path.join(diagnostics, path.basename(witness.path));
+        fs.writeFileSync(sealFile, JSON.stringify(seal, null, 2) + '\n', { mode: 0o600 });
+        record.pins = { ...record.pins, sealSha256: sha(fs.readFileSync(sealFile)) };
+
+        Config.FILES.dailyFreshSourceRunsDir = workspace;
+        const lockMock = testApi.mock.method(engine, 'paperAnalysisLockHeld', () => true);
+        try {
+            const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8'));
+            const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...run, runDir }));
+            const compilation = JSON.parse(fs.readFileSync(path.join(diagnostics, record.requestId + '.ordinal-compiled.json'), 'utf8'));
+
+            // 模拟同轮 attempt=3 序号补丁保存了未归一化 afterDraft，attempt=4 归一化写回后再 attachSavedOrigin
+            const preNormPayload = structuredClone(candidate.payload);
+            preNormPayload.draft = structuredClone(compilation.afterDraft);
+            preNormPayload.rawDraft = JSON.stringify(compilation.afterDraft);
+            preNormPayload.ordinalPatchCompilations = [record];
+            repair.saveFailedCandidate(attempts, candidate.identity, preNormPayload);
+
+            const beforeEnv = repair.readFailedCandidateEnvelope(attempts, candidate.identity);
+            let active = true;
+            const writer = normWriterMod.createWriter({ directory: attempts, identity: candidate.identity, isActive: () => active });
+            daily.withDailyFreshAnalysisContext(plan, () => {
+                const source = fresh.readFreshSource(runDir, { arxivId: PAPER_20261120 }, { runId: RUN_20261120, sourceExpectations: run.sourceExpectations });
+                const paper = {
+                    arxivId: PAPER_20261120,
+                    analysisManifest: { contracts: {}, stages: {} }
+                };
+                fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source);
+                return fresh.withFreshPaperContext(paper, () => {
+                    const pixelFigureOrdinals = (candidate.payload.imageEvidence || [])
+                        .filter(image => image?.kind === 'figure' && image.status === 'ready').map(image => image.ordinal);
+                    const state = {};
+                    deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(compilation.afterDraft), preNormPayload.issues, {
+                        paperId: PAPER_20261120, sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+                        pixelFigureOrdinals, draftOrderMappings: []
+                    }, state);
+                    writer.queue({
+                        expectedEnvelopeSha256: beforeEnv.envelopeSha256,
+                        draft: state.draft,
+                        draftOrderMappings: state.draftOrderMappings,
+                        issues: preNormPayload.issues
+                    });
+                    active = false;
+                    writer.flush();
+
+                    const result = { article: '# 测试正文\n', plan: { sections: [] }, ordinalPatchCompilations: [record] };
+                    ordinal.attachSavedOrigin({
+                        paper, identity: candidate.identity, directory: attempts,
+                        draft: state.draft, records: [record]
+                    }, result, { issues: preNormPayload.issues, pixelFigureOrdinals });
+                    const stage = { status: 'complete', articleSha256: sha(result.article), planSha256: stableSha(result.plan) };
+                    paper.analysisManifest.stages.apiReaderArticle = stage;
+                    paper.apiReaderArticle = result.article;
+                    paper.apiReaderPlan = result.plan;
+                    const ref = ordinal.sealCompletion(paper, result);
+                    assert.ok(fs.existsSync(ref.path));
+                });
+            });
+        } finally {
+            lockMock.mock.restore();
+        }
+    } finally {
+        Config.FILES.dailyFreshSourceRunsDir = originalRunsDir;
+        fs.rmSync(workspace, { recursive: true, force: true });
+    }
+});

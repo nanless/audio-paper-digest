@@ -607,7 +607,9 @@ function parseRecoveryDraft(raw) {
         || value.sections.length < 1 || value.sections.length > MAX_RECOVERY_SECTIONS
         || value.figurePlacements.length > 16) return null;
     const limits = limitsForDraftFormat(value);
-    if (value.conceptBridges.length > limits.maximumConceptBridges) return null;
+    // 超额术语桥（cohesive-functional-v4 超出 4 组但在 10 组以内）保留完整恢复结构，
+    // 由确定性内联归一化或局部修复收口；最终成稿仍由权威解析器严格限制上限。
+    if (value.conceptBridges.length > Math.max(limits.maximumConceptBridges, 10)) return null;
     // 超额图声明只作为完整失败稿的局部恢复输入；最终文章仍由原解析器限制四图。
     if (value.figurePlacements.length > limits.maximumFigures
         && (!value.sections.every(section => section && !Array.isArray(section)
