@@ -869,3 +869,48 @@ test('cohesive-functional-v4 coalesces excess adjacent same-kind sections determ
     extra.sections[2].body2 = '额外字段';
     assert.equal(deep.coalesceExcessCohesiveReaderSections(extra), false);
 });
+
+test('coalescing excess sections never produces an invalid merged heading and normalizes inlined bridges before dangling connectors', () => {
+    const { draft } = buildCohesiveV4DraftFixture();
+    const kinds = ['problem', 'method_overview', 'component', 'component', 'result', 'ablation', 'limitation', 'synthesis', 'component', 'component'];
+    const longA = '核心机制：有限标量量化如何在不依赖码本训练与熵编码条件下压出零点八千比特每秒的离散内容码流';
+    const longB = '核心机制：因果解码器如何在流式缓冲只有两帧前瞻时稳定重建语音并保持说话人音色不漂移的设计';
+    const make = headings => {
+        const d = structuredClone(draft);
+        d.sections = kinds.map((kind, index) => ({ kind, heading: headings[index] || `${kind === 'component' ? '核心机制' : '问题定位'}：第 ${index + 1} 个具体问题`,
+            body: `正文 ${index + 1}。\n\n补充段 ${index + 1}。` }));
+        return d;
+    };
+    // 两个超长合法标题：拼接后超 80 字，必须退回第一节标题，且全部标题仍在 8–80 字内、互不重复
+    const long = make({ 2: longA, 3: longB });
+    long.sections[2].body = '短。'; long.sections[3].body = '短。';
+    assert.ok(`${longA}；${longB.split('：')[1]}`.length > 80);
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(long), true);
+    assert.equal(long.sections.length, 9);
+    assert.equal(long.sections[2].heading, longA);
+    for (const section of long.sections) assert.ok(section.heading.length >= 8 && section.heading.length <= 80);
+    assert.equal(new Set(long.sections.map(section => section.heading)).size, 9);
+
+    // 拼接与第一节标题都不合格（第一节标题已与其他节重复）：整体放弃，草稿保持原样
+    const dup = make({ 2: '没有冒号的重复标题甲乙丙丁' });
+    dup.sections[2].body = '短。'; dup.sections[3].body = '短。';
+    dup.sections[0].heading = '没有冒号的重复标题甲乙丙丁';
+    const before = JSON.stringify(dup);
+    assert.equal(deep.coalesceExcessCohesiveReaderSections(dup), false);
+    assert.equal(JSON.stringify(dup), before);
+
+    // 在线归一化先内联超额术语桥，再剥离悬挂连词：第 5 组解释末尾的悬挂连词不得进入合并稿
+    const bridged = structuredClone(draft);
+    bridged.conceptBridges = [...bridged.conceptBridges];
+    while (bridged.conceptBridges.length < 5) bridged.conceptBridges.push({ terms: ['术语甲', '术语乙'], sectionKind: 'component',
+        marker: `[[CONCEPT_BRIDGE_${bridged.conceptBridges.length + 1}]]`, explanation: '术语甲与术语乙共同限定了该机制的适用条件，但是。' });
+    const target = bridged.sections.find(section => section.kind === 'component');
+    target.body += '\n\n[[CONCEPT_BRIDGE_5]]';
+    const state = {};
+    deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(bridged), [], {
+        paperId: '2611.99997v1', sourceText: '', structuredArtifacts: null, pixelFigureOrdinals: [], draftOrderMappings: []
+    }, state);
+    const merged = state.draft.sections.map(section => section.body).join('\n');
+    assert.equal(merged.includes('但是。'), false);
+    assert.equal(merged.includes('[[CONCEPT_BRIDGE_5]]'), false);
+});

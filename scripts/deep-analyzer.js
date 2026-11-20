@@ -948,7 +948,16 @@ function coalesceExcessCohesiveReaderSections(candidate) {
         const title = heading => String(heading).split(/[：:]/u).slice(1).join('：').trim();
         const combined = title(first.heading) && title(second.heading)
             ? `${first.heading.split(/[：:]/u)[0]}：${title(first.heading)}；${title(second.heading)}` : first.heading;
-        sections.splice(best, 2, { kind: first.kind, heading: combined,
+        // 合并后的标题必须通过与解析器一致的 v4 标题闸门（8–80 字、非泛化、无图表编号、与其余小节不重复）；
+        // 拼接标题不合格就退回第一节标题，仍不合格则整体放弃，把超节草稿原样留给局部重整通道。
+        const others = new Set(sections.filter((_, index) => index !== best && index !== best + 1)
+            .map(section => section.heading.trim()));
+        const headingOk = text => text.length >= 8 && text.length <= 80
+            && !GENERIC_V4_READER_HEADING_RE.test(text) && !READER_HEADING_FIG_TABLE_RE.test(text)
+            && !others.has(text);
+        const chosen = [combined, first.heading].map(text => String(text).trim()).find(headingOk);
+        if (!chosen) return false;
+        sections.splice(best, 2, { kind: first.kind, heading: chosen,
             body: `${first.body.trimEnd()}\n\n${second.body.trimStart()}` });
     }
     candidate.sections = sections;

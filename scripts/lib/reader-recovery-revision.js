@@ -585,6 +585,14 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
     if (updated.draft) {
         const normalizationIssues = updated.issues.filter(issue => issue?.code !== TABLE_COUNT_ISSUE_CODE
             && !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
+        // 与在线归一化（normalizeApiReaderRecoveryDraftForSource）同序：先确定性内联超额术语桥、合并超额小节，
+        // 再处理悬挂连词与中文数词，保证两条路径对同一稿得到逐字节相同的结果。
+        if (!identity.readerFactLocalRevisionContract && !identity.resourceLocalRevisionContract) {
+            const deepAnalyzer = require('../deep-analyzer.js');
+            deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
+            deepAnalyzer.inlineExcessCohesiveReaderConceptBridges(updated.draft);
+            deepAnalyzer.coalesceExcessCohesiveReaderSections(updated.draft);
+        }
         updated.draft.sections = updated.draft.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
@@ -600,12 +608,6 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
                         bridge.explanation, normalizationIssues
                     ) : bridge?.explanation
             }));
-        }
-        if (!identity.readerFactLocalRevisionContract && !identity.resourceLocalRevisionContract) {
-            const deepAnalyzer = require('../deep-analyzer.js');
-            deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
-            deepAnalyzer.inlineExcessCohesiveReaderConceptBridges(updated.draft);
-            deepAnalyzer.coalesceExcessCohesiveReaderSections(updated.draft);
         }
         // 会议 PDF 候选里可能确定性地混有真实 Markdown 表格和选择标记。先修复这个
         // 受限的来源绑定结构，再检查各小节的顺序；否则顺序检查会在
