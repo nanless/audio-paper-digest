@@ -8,7 +8,57 @@ const READER_AFFILIATION_UNBOUND = '机构信息未能在本次解析中与作�
 const recoverySha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const stableFingerprint = value => sha256(JSON.stringify(canonical(value)));
 const MAX_AUTHOR_SOURCE_HTML_BYTES = 8 * 1024 * 1024;
+const AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES = 256;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+
+const htmlAuthorSourceCache = new Map();
+const conferencePdfAuthorCache = new Map();
+const verifiedAuthorMatchCache = new Map();
+const authorCacheCounters = {
+    htmlHits: 0,
+    htmlMisses: 0,
+    conferencePdfHits: 0,
+    conferencePdfMisses: 0,
+    verifiedMatchHits: 0,
+    verifiedMatchMisses: 0
+};
+
+function getBoundedCacheEntry(cache, key) {
+    if (!cache.has(key)) return undefined;
+    const value = cache.get(key);
+    cache.delete(key);
+    cache.set(key, value);
+    return value;
+}
+
+function setBoundedCacheEntry(cache, key, value, maxEntries = AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES) {
+    if (cache.has(key)) cache.delete(key);
+    else if (cache.size >= maxEntries) cache.delete(cache.keys().next().value);
+    cache.set(key, value);
+    return value;
+}
+
+function clearReaderAuthorVerificationCaches() {
+    htmlAuthorSourceCache.clear();
+    conferencePdfAuthorCache.clear();
+    verifiedAuthorMatchCache.clear();
+    authorCacheCounters.htmlHits = 0;
+    authorCacheCounters.htmlMisses = 0;
+    authorCacheCounters.conferencePdfHits = 0;
+    authorCacheCounters.conferencePdfMisses = 0;
+    authorCacheCounters.verifiedMatchHits = 0;
+    authorCacheCounters.verifiedMatchMisses = 0;
+}
+
+function getReaderAuthorVerificationCacheStats() {
+    return Object.freeze({
+        maxEntries: AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES,
+        htmlEntries: htmlAuthorSourceCache.size,
+        conferencePdfEntries: conferencePdfAuthorCache.size,
+        verifiedMatchEntries: verifiedAuthorMatchCache.size,
+        ...authorCacheCounters
+    });
+}
 
 
 function normalizeReaderIdentityText(value) {
@@ -496,8 +546,7 @@ function normalizeConferencePdfAffiliation(value) {
  * 相同的那套上标标记。返回的证据在交给 Reader 之前，会连同完整
  * 来源文本 SHA 和 preamble 的精确 SHA 一起绑定。
  */
-function parseConferencePdfAuthors(text) {
-    const sourceText = String(text || '');
+function parseConferencePdfAuthorsUncached(sourceText) {
     const abstractIndex = sourceText.search(/\n\s*ABSTRACT\b/i);
     const preamble = abstractIndex >= 0 ? sourceText.slice(0, abstractIndex) : sourceText.slice(0, 12000);
     const rawLines = preamble.split(/\n/);
@@ -536,54 +585,116 @@ function parseConferencePdfAuthors(text) {
     }));
     const evidence = preamble.trim();
     const sourceTextSha256 = sha256(Buffer.from(sourceText, 'utf8'));
+    const evidenceSha256 = sha256(Buffer.from(evidence, 'utf8'));
     return {
         contract: 'conference-pdf-author-evidence-v1',
         authors: normalizedAuthors,
         sourceTextSha256,
         sourceEvidence: evidence,
-        sourceEvidenceSha256: sha256(Buffer.from(evidence, 'utf8')),
-        sourceDomSha256: sha256(Buffer.from(evidence, 'utf8'))
+        sourceEvidenceSha256: evidenceSha256,
+        sourceDomSha256: evidenceSha256
     };
+}
+
+function parseConferencePdfAuthors(text) {
+    const sourceText = String(text || '');
+    const cacheKey = `v1:${sha256(Buffer.from(sourceText, 'utf8'))}`;
+    const cached = getBoundedCacheEntry(conferencePdfAuthorCache, cacheKey);
+    if (cached !== undefined) {
+        authorCacheCounters.conferencePdfHits++;
+        return cached === null ? null : structuredClone(cached);
+    }
+    authorCacheCounters.conferencePdfMisses++;
+    const parsed = parseConferencePdfAuthorsUncached(sourceText);
+    setBoundedCacheEntry(conferencePdfAuthorCache, cacheKey, parsed === null ? null : structuredClone(parsed));
+    return parsed === null ? null : structuredClone(parsed);
 }
 
 // 原 HTML 仅供本地身份重放，不是模型证据或图片缓存。
 
 const CONFERENCE_PDF_AUTHOR_LINES_V2 = 'conference-pdf-author-lines-v2';
 function parseConferencePdfAuthorsV2(text) {
-    const original=String(text||''), boundary=original.search(/\n\s*ABSTRACT\b/i);
-    const preamble=boundary>=0?original.slice(0,boundary):original.slice(0,12000);
-    const raw=preamble.split('\n'), projected=[];
-    for(let i=0;i<raw.length;i++) {
-        let line=raw[i];
+    const original = String(text || '');
+    const textSha256 = sha256(Buffer.from(original, 'utf8'));
+    const cacheKey = `v2:${textSha256}`;
+    const cached = getBoundedCacheEntry(conferencePdfAuthorCache, cacheKey);
+    if (cached !== undefined) {
+        authorCacheCounters.conferencePdfHits++;
+        return cached === null ? null : structuredClone(cached);
+    }
+    authorCacheCounters.conferencePdfMisses++;
+    const boundary = original.search(/\n\s*ABSTRACT\b/i);
+    const preamble = boundary >= 0 ? original.slice(0, boundary) : original.slice(0, 12000);
+    const raw = preamble.split('\n'), projected = [];
+    for (let i = 0; i < raw.length; i++) {
+        let line = raw[i];
         // Only an explicitly unfinished labelled institution can own an
         // indented continuation. Never absorb names, emails, another marker,
         // Abstract, acknowledgements or ordinary paper prose.
-        if(/^\s*(?:[1-9]\d{0,2}|[†‡∗⋆*])\s+/.test(line)&&CONFERENCE_PDF_AFFILIATION_HINT.test(line)) {
-            for(let count=0;count<2&&/\b(?:of|and)\s*$/i.test(line)&&i+1<raw.length;count++) {
-                const next=raw[i+1];
-                if(!/^\s{2,}\S/u.test(next)||!/^\s*(?:Technology|Science|Engineering|School|University|Institute|Academy|Department|College|Center|Centre)\b/i.test(next)
-                    ||/[@]|^\s*(?:[1-9]\d{0,2}|[†‡∗⋆*])\s+|\b(?:Abstract|Acknowledg|Introduction|DOI)\b/i.test(next))break;
-                line+=' '+next.trim();i++;
+        if (/^\s*(?:[1-9]\d{0,2}|[†‡∗⋆*])\s+/.test(line) && CONFERENCE_PDF_AFFILIATION_HINT.test(line)) {
+            for (let count = 0; count < 2 && /\b(?:of|and)\s*$/i.test(line) && i + 1 < raw.length; count++) {
+                const next = raw[i + 1];
+                if (!/^\s{2,}\S/u.test(next) || !/^\s*(?:Technology|Science|Engineering|School|University|Institute|Academy|Department|College|Center|Centre)\b/i.test(next)
+                    || /[@]|^\s*(?:[1-9]\d{0,2}|[†‡∗⋆*])\s+|\b(?:Abstract|Acknowledg|Introduction|DOI)\b/i.test(next)) break;
+                line += ' ' + next.trim(); i++;
             }
         }
         projected.push(line);
     }
-    const parsed=parseConferencePdfAuthors(projected.join('\n')+(boundary>=0?original.slice(boundary):''));
-    if(!parsed)return null;
-    const evidence=preamble.trim();
-    return {...parsed,contract:'conference-pdf-author-evidence-v2',sourceTextSha256:sha256(Buffer.from(original,'utf8')),
-        sourceEvidence:evidence,sourceEvidenceSha256:sha256(Buffer.from(evidence,'utf8')),
-        sourceDomSha256:sha256(Buffer.from(evidence,'utf8'))};
+    const parsed = parseConferencePdfAuthorsUncached(projected.join('\n') + (boundary >= 0 ? original.slice(boundary) : ''));
+    if (!parsed) {
+        setBoundedCacheEntry(conferencePdfAuthorCache, cacheKey, null);
+        return null;
+    }
+    const evidence = preamble.trim();
+    const evidenceSha256 = sha256(Buffer.from(evidence, 'utf8'));
+    const result = {
+        ...parsed,
+        contract: 'conference-pdf-author-evidence-v2',
+        sourceTextSha256: textSha256,
+        sourceEvidence: evidence,
+        sourceEvidenceSha256: evidenceSha256,
+        sourceDomSha256: evidenceSha256
+    };
+    setBoundedCacheEntry(conferencePdfAuthorCache, cacheKey, structuredClone(result));
+    return structuredClone(result);
+}
+
+function inspectHtmlAuthorSource(html) {
+    if (typeof html !== 'string' || !html || Buffer.byteLength(html, 'utf8') > MAX_AUTHOR_SOURCE_HTML_BYTES
+        || !/<html\b[^>]*>[\s\S]*<\/html\s*>/iu.test(html)
+        || /data\s*:\s*image\/|<svg\b|<canvas\b/iu.test(html)) {
+        return { htmlSha256: '', retainable: false, readerAuthors: null };
+    }
+    const htmlSha256 = sha256(html);
+    const cached = getBoundedCacheEntry(htmlAuthorSourceCache, htmlSha256);
+    if (cached !== undefined) {
+        authorCacheCounters.htmlHits++;
+        return {
+            htmlSha256,
+            retainable: cached.retainable,
+            readerAuthors: cached.readerAuthors ? structuredClone(cached.readerAuthors) : null
+        };
+    }
+    authorCacheCounters.htmlMisses++;
+    const $ = cheerio.load(html);
+    const retainable = !$('*').toArray().some(node => (
+        Object.values(node.attribs || {}).some(value => /data\s*:\s*image\/|<svg\b|<canvas\b/iu.test(value))
+    ));
+    const parsed = retainable ? parseArxivReaderAuthors($) : null;
+    setBoundedCacheEntry(htmlAuthorSourceCache, htmlSha256, {
+        retainable,
+        readerAuthors: parsed ? structuredClone(parsed) : null
+    });
+    return {
+        htmlSha256,
+        retainable,
+        readerAuthors: parsed ? structuredClone(parsed) : null
+    };
 }
 
 function canRetainAuthorSourceHtml(html) {
-    if (typeof html !== 'string' || !html || Buffer.byteLength(html, 'utf8') > MAX_AUTHOR_SOURCE_HTML_BYTES
-        || !/<html\b[^>]*>[\s\S]*<\/html\s*>/iu.test(html)
-        || /data\s*:\s*image\/|<svg\b|<canvas\b/iu.test(html)) return false;
-    const $ = cheerio.load(html);
-    return !$('*').toArray().some(node => (
-        Object.values(node.attribs || {}).some(value => /data\s*:\s*image\/|<svg\b|<canvas\b/iu.test(value))
-    ));
+    return inspectHtmlAuthorSource(html).retainable;
 }
 
 function retainAuthorSourceHtml(parsed, html) {
@@ -600,12 +711,13 @@ function replayHtmlReaderAuthors(details) {
     const html = details?.readerAuthors?.sourceHtml;
     const artifacts = details?.structuredArtifacts;
     if (details?.source !== 'html' || typeof details.text !== 'string'
-        || !canRetainAuthorSourceHtml(html) || !artifacts || typeof artifacts !== 'object') return null;
+        || !artifacts || typeof artifacts !== 'object') return null;
+    const inspected = inspectHtmlAuthorSource(html);
+    if (!inspected.retainable || inspected.htmlSha256 !== artifacts.sourceHtmlSha256) return null;
     const { payloadSha256, ...body } = artifacts;
-    if (sha256(html) !== artifacts.sourceHtmlSha256
-        || sha256(details.text) !== artifacts.flattenedTextSha256
+    if (sha256(details.text) !== artifacts.flattenedTextSha256
         || ![sha256(JSON.stringify(body)), sha256(JSON.stringify(canonical(body)))].includes(payloadSha256)) return null;
-    return parseArxivReaderAuthors(cheerio.load(html));
+    return inspected.readerAuthors;
 }
 
 function verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion = 1 } = {}) {
@@ -685,29 +797,78 @@ function readerAuthorUnavailableIdentityMatches(paper, { sourceSha256, metadataA
     });
 }
 
+function serializeMetadataAuthorsForKey(authors) {
+    if (!Array.isArray(authors)) return { isArray: false, type: typeof authors, value: authors ?? null };
+    return {
+        isArray: true,
+        items: authors.map(item => (
+            item && typeof item === 'object'
+                ? { type: 'object', value: item }
+                : { type: typeof item, value: item ?? null }
+        ))
+    };
+}
+
 function readerAuthorIdentityMatchesSource(paper, details) {
     if (!paper?.apiReaderAuthors) return false;
     if (!identityFormat.hasIdentity(paper.apiReaderAuthors.identity, 'authors')) return false;
-    if (typeof details?.text !== 'string' || sha256(details.text) !== paper.sourceSha256
+    if (typeof details?.text !== 'string') return false;
+    const sourceTextSha256 = sha256(details.text);
+    if (sourceTextSha256 !== paper.sourceSha256
         || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== paper.sourceSha256) return false;
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
     const artifacts = details.structuredArtifacts;
     if (stage?.structuredArtifactsSha256 !== artifacts?.payloadSha256
         || (paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256
             && paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 !== artifacts?.payloadSha256)) return false;
-    const expected = resolveVerifiedReaderAuthors(paper, details);
+    const savedVersion = paper?.apiReaderAuthors?.identity?.conferencePdfAuthorParser;
+    if (savedVersion !== undefined && savedVersion !== CONFERENCE_PDF_AUTHOR_LINES_V2) {
+        throw new Error('Unknown saved conference author parser');
+    }
+    const version = savedVersion === CONFERENCE_PDF_AUTHOR_LINES_V2 ? 2 : 1;
+    // 每次调用仍先重读并校验原始材料（HTML/全文/结构化提取 SHA，或四份封存文件的磁盘 SHA 与权限），
+    // 仅对物理校验通过后的纯确定性身份比对做有界只读记忆化，避免多轮重复解析与重复打印同一警告。
+    const verifiedDetails = verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion: version });
+    const matchKey = stableFingerprint({
+        version,
+        arxivId: String(paper?.arxivId || ''),
+        source: verifiedDetails?.source ?? null,
+        analysisSource: verifiedDetails?.analysisSource ?? null,
+        sourceTextSha256,
+        verifiedReaderAuthors: verifiedDetails?.readerAuthors ?? null,
+        metadataAuthors: serializeMetadataAuthorsForKey(paper?.authors),
+        paperSourceSha256: paper?.sourceSha256 ?? null,
+        sourceAcquisitionSha256: paper?.analysisManifest?.sourceAcquisition?.sourceSha256 ?? null,
+        savedApiReaderAuthors: paper.apiReaderAuthors,
+        stageReaderAuthorIdentitySha256: stage?.readerAuthorIdentitySha256 ?? null,
+        stageReaderAuthorsSha256: stage?.readerAuthorsSha256 ?? null
+    });
+    const cachedMatch = getBoundedCacheEntry(verifiedAuthorMatchCache, matchKey);
+    if (cachedMatch !== undefined) {
+        authorCacheCounters.verifiedMatchHits++;
+        return cachedMatch;
+    }
+    authorCacheCounters.verifiedMatchMisses++;
+    const expected = resolveApiReaderAuthors(paper, verifiedDetails);
+    if (details?.source === 'conference_pdf_text' && version === 2) {
+        expected.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_LINES_V2;
+        expected.identitySha256 = stableFingerprint(expected.identity);
+    }
     const saved = paper.apiReaderAuthors;
     expected.identity = identityFormat.inSavedHeaderDomain(expected.identity, saved.identity, 'authors');
     expected.identitySha256 = stableFingerprint(expected.identity);
-    if (saved.identitySha256 !== stableFingerprint(saved.identity)
-        || stage?.readerAuthorIdentitySha256 !== saved.identitySha256
-        || stage.readerAuthorsSha256 !== stableFingerprint(saved)) return false;
-    if (stableFingerprint(saved) === stableFingerprint(expected)) return true;
-    // 旧明确不可得提示语可以不同，但姓名全集、逐项绑定及封存 SHA 必须闭合。
-    return saved.identity?.metadataSha256 === expected.identity.metadataSha256
-        && readerAuthorUnavailableIdentityMatches(paper, {
-            sourceSha256: paper.sourceSha256, metadataAuthors: paper.authors
-        });
+    let matched = false;
+    if (saved.identitySha256 === stableFingerprint(saved.identity)
+        && stage?.readerAuthorIdentitySha256 === saved.identitySha256
+        && stage.readerAuthorsSha256 === stableFingerprint(saved)) {
+        // 旧明确不可得提示语可以不同，但姓名全集、逐项绑定及封存 SHA 必须闭合。
+        matched = stableFingerprint(saved) === stableFingerprint(expected)
+            || (saved.identity?.metadataSha256 === expected.identity.metadataSha256
+                && readerAuthorUnavailableIdentityMatches(paper, {
+                    sourceSha256: paper.sourceSha256, metadataAuthors: paper.authors
+                }));
+    }
+    return setBoundedCacheEntry(verifiedAuthorMatchCache, matchKey, matched);
 }
 
 module.exports = {
@@ -715,5 +876,7 @@ module.exports = {
     sanitizeReaderAffiliationValue, isReaderResourceAffiliationLabel, parseArxivReaderAuthors,
     resolveApiReaderAuthors, bindApiReaderAuthorIdentity, parseConferencePdfAuthors, parseConferencePdfAuthorsV2, CONFERENCE_PDF_AUTHOR_LINES_V2,
     verifiedReaderAuthorDetails, resolveVerifiedReaderAuthors, readerAuthorIdentityMatchesSource, readerAuthorUnavailableIdentityMatches,
-    MAX_AUTHOR_SOURCE_HTML_BYTES, canRetainAuthorSourceHtml, retainAuthorSourceHtml, replayHtmlReaderAuthors
+    MAX_AUTHOR_SOURCE_HTML_BYTES, AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES,
+    clearReaderAuthorVerificationCaches, getReaderAuthorVerificationCacheStats,
+    canRetainAuthorSourceHtml, retainAuthorSourceHtml, replayHtmlReaderAuthors
 };

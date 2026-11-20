@@ -5,11 +5,54 @@ import WebKit
 import PDFKit
 import Foundation
 
+final class ActorHoldGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isEntered = false
+    private(set) var didTimeOut = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private let releaseSemaphore = DispatchSemaphore(value: 0)
+    private let timeoutSeconds: TimeInterval
+
+    init(timeoutSeconds: TimeInterval = 10) {
+        self.timeoutSeconds = timeoutSeconds
+    }
+
+    func markEnteredAndWait() {
+        let waiters: [CheckedContinuation<Void, Never>]
+        lock.lock()
+        isEntered = true
+        waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        lock.unlock()
+        for waiter in waiters { waiter.resume() }
+        let result = releaseSemaphore.wait(timeout: .now() + timeoutSeconds)
+        lock.lock()
+        didTimeOut = (result == .timedOut)
+        lock.unlock()
+    }
+
+    func waitUntilEntered() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if isEntered {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                enteredWaiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+
+    func release() {
+        releaseSemaphore.signal()
+    }
+}
 extension DesktopStorage {
-    func isolatedDetailActorDelay(_ entered:@Sendable ()->Void) { entered();Thread.sleep(forTimeInterval:0.3) }
+    func isolatedDetailActorHold(_ gate: ActorHoldGate) { gate.markEnteredAndWait() }
 }
 extension LibraryService {
-    func isolatedStorageArticleDelay(){Thread.sleep(forTimeInterval:0.3)}
+    func isolatedStorageArticleHold(_ gate: ActorHoldGate) { gate.markEnteredAndWait() }
 }
 actor StorageDetailPublishedFixture {
     var entered=false
@@ -40,7 +83,7 @@ actor StorageDetailPublishedFixture {
     app.scheme=BundleScheme(root:repo.appendingPathComponent("apps/macos/Resources"))
     app.window=NSWindow(contentRect:NSRect(x:0,y:0,width:1200,height:800),styleMask:[.titled,.closable],backing:.buffered,defer:false);app.window.alphaValue=0
     app.web=WKWebView(frame:app.window.contentView!.bounds);app.window.contentView=app.web;app.window.delegate=app
-    app.web.loadHTMLString("<html><body><h1>Explicit isolated main reader</h1><script>window.offlineReceipts=[];window.flushReleases=[];window.holdMainFlush=false;window.addEventListener('storage.opened',e=>offlineReceipts.push(e.detail));window.paperDigestFlushPendingNote=async()=>{if(holdMainFlush)await new Promise(resolve=>flushReleases.push(resolve));return {saved:true};};window.paperDigestPauseForDetails=()=>({paused:true});window.handoffEntered=false;window.holdHandoff=false;window.failHandoff=false;window.rollbackCount=0;window.paperDigestInstallOfflineReceipt=async(receipt)=>{handoffEntered=true;if(holdHandoff)await new Promise(resolve=>window.releaseHandoff=resolve);if(failHandoff)throw new Error('Explicit isolated main WK handoff failure');offlineReceipts.push(receipt);return {installed:true,paperID:receipt.paper.id,offlinePackageID:receipt.paper.offlinePackageID};};window.paperDigestCancelOfflineReceipt=(id,current)=>{rollbackCount++;window.rollbackNativeOwner=current.paper.id;return {restored:true};};window.paperDigestFinishOfflineReceipt=()=>{};</script></body></html>",baseURL:nil)
+    app.web.loadHTMLString("<html><body><h1>Explicit isolated main reader</h1><script>window.offlineReceipts=[];window.flushCount=0;window.flushReleases=[];window.holdMainFlush=false;window.addEventListener('storage.opened',e=>offlineReceipts.push(e.detail));window.paperDigestFlushPendingNote=async()=>{window.flushCount++;if(holdMainFlush)await new Promise(resolve=>flushReleases.push(resolve));return {saved:true};};window.paperDigestPauseForDetails=()=>({paused:true});window.handoffEntered=false;window.holdHandoff=false;window.failHandoff=false;window.rollbackCount=0;window.paperDigestInstallOfflineReceipt=async(receipt)=>{handoffEntered=true;if(holdHandoff)await new Promise(resolve=>window.releaseHandoff=resolve);if(failHandoff)throw new Error('Explicit isolated main WK handoff failure');offlineReceipts.push(receipt);return {installed:true,paperID:receipt.paper.id,offlinePackageID:receipt.paper.offlinePackageID};};window.paperDigestCancelOfflineReceipt=(id,current)=>{rollbackCount++;window.rollbackNativeOwner=current.paper.id;return {restored:true};};window.paperDigestFinishOfflineReceipt=()=>{};</script></body></html>",baseURL:nil)
     for _ in 0..<200 {if (try? await app.web.evaluateJavaScript("typeof paperDigestFlushPendingNote==='function'")) as? Bool==true{break};try await Task.sleep(nanoseconds:10_000_000)}
     app.currentPaperID="arxiv:2601.00001";app.currentPaper=["id":app.currentPaperID,"title":"Explicit original reader fixture","sourceKind":"arxiv"];app.contextGeneration=7
     var assertions=0
@@ -69,11 +112,23 @@ actor StorageDetailPublishedFixture {
     try await rejects("old article await cannot install even before offline handoff while sheet active"){_=try await oldArticle.value}
     try expect(app.currentArticle.isEmpty && app.contextGeneration==7,"late old article leaves native source revision and generation unchanged")
     _=app.closeStorageDetails()
-    let libraryDelay=Task{await app.library.isolatedStorageArticleDelay()}
-    try await Task.sleep(nanoseconds:20_000_000)
-    let oldArchive=Task{@MainActor in try await app.archiveMaterials([:])}
-    try await Task.sleep(nanoseconds:30_000_000)
-    try await app.showStorageDetails();_=await libraryDelay.value
+    _=try await app.web.evaluateJavaScript("flushCount=0")
+    let libraryGate=ActorHoldGate()
+    let libraryDelay=Task.detached{await app.library.isolatedStorageArticleHold(libraryGate)}
+    let oldArchive:Task<[String:Any],Error>
+    do {
+        defer{libraryGate.release()}
+        await libraryGate.waitUntilEntered()
+        let pendingArchive=Task{@MainActor in try await app.archiveMaterials([:])}
+        oldArchive=pendingArchive
+        for _ in 0..<2000 {if (try? await app.web.evaluateJavaScript("flushCount")) as? Int==1{break};try await Task.sleep(nanoseconds:5_000_000)}
+        try expect((try await app.web.evaluateJavaScript("flushCount")) as? Int==1,"archive completed main flush before native sheet presentation")
+        await Task.yield()
+        try await app.showStorageDetails()
+        try expect(app.storageDetailsActive,"native sheet active before releasing pending archive article load")
+    }
+    _=await libraryDelay.value
+    try expect(!libraryGate.didTimeOut,"library actor hold released deterministically without timeout")
     try await rejects("archive's own pending article load cannot change source while sheet active"){_=try await oldArchive.value}
     try expect(app.currentArticle.isEmpty,"archive late-load guard protects native revision before assignment")
     _=app.closeStorageDetails()
@@ -192,12 +247,18 @@ actor StorageDetailPublishedFixture {
     try expect(app.currentPaperID=="arxiv:2601.99999" && app.contextGeneration==newerGeneration && app.storageDetailsActive,"failed B handoff never overwrites actual newer native C")
     try expect((try await app.web.evaluateJavaScript("rollbackNativeOwner")) as? String==app.currentPaperID,"main recovery receives only actual current native source C, not stale A or JS source")
     let storage=app.storage!
-    let actorDelay=Task{await storage.isolatedDetailActorDelay({})}
-    try await Task.sleep(nanoseconds:20_000_000)
+    let storageGate=ActorHoldGate()
+    let actorDelay=Task.detached{await storage.isolatedDetailActorHold(storageGate)}
     var late:Task<[String:Any],Error>?
-    await withCheckedContinuation{(started:CheckedContinuation<Void,Never>) in late=Task{@MainActor in started.resume();return try await app.storageDetailCommand("storage.status",payload:["presentationID":next.id],source:nextView)}}
-    _=app.closeStorageDetails()
+    do {
+        defer{storageGate.release()}
+        await storageGate.waitUntilEntered()
+        await withCheckedContinuation{(started:CheckedContinuation<Void,Never>) in late=Task{@MainActor in started.resume();return try await app.storageDetailCommand("storage.status",payload:["presentationID":next.id],source:nextView)}}
+        await Task.yield()
+        _=app.closeStorageDetails()
+    }
     _=await actorDelay.value
+    try expect(!storageGate.didTimeOut,"storage actor hold released deterministically without timeout")
     try await rejects("real capacity reply after closing cannot be adopted by a later session"){_=try await late!.value}
     try expect(!app.storageDetailsActive,"late reply does not recreate native window")
     try expect(app.validateMenuItem(NSMenuItem(title:"Open",action:#selector(PaperDigestApp.openLocal),keyEquivalent:"")),"native main menus restore after final close")
