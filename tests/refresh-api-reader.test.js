@@ -713,4 +713,353 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
         assert.equal(raceCalls, 0, '锁内重读守卫必须在调用 operations.article 前拒绝');
         assert.deepEqual(f.readCanonicalBytes(), expectedMutatedBytes);
     });
+
+    it('未接替序号完成稿（全部 5 个标记字段及磁盘 ordinal-completions）在所有 5 种模式下均 0 请求前置拦截', async t => {
+        const f = await setupDailyGuardFixture(t);
+        const allModes = [
+            {},
+            { reviewFeedback: '修正表述' },
+            { scoringAndReader: true },
+            { scoringAndReader: true, reviewFeedback: '重审评分与正文' },
+            { authorsOnly: true },
+            { figuresOnly: true },
+            { surfaceBindingsOnly: true }
+        ];
+        const markerVariants = [
+            paper => { paper.analysisManifest.contracts.readerTargetOrdinalPatch = 'reader-target-ordinal-patch-v1'; },
+            paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchContract = 'reader-target-ordinal-patch-v1'; },
+            paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchSchemaFingerprint = 'a'.repeat(64); },
+            paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations = []; },
+            paper => {
+                paper.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = {
+                    path: '/tmp/ordinal/completion.json',
+                    sha256: 'b'.repeat(64)
+                };
+            }
+        ];
+
+        for (const applyMarker of markerVariants) {
+            const payload = f.readCanonicalJson();
+            const target = payload.papers.find(item => item.arxivId === f.ordinaryId);
+            delete target.analysisManifest.contracts.readerTargetOrdinalPatch;
+            for (const key of ['ordinalPatchContract', 'ordinalPatchSchemaFingerprint',
+                'ordinalPatchCompilations', 'ordinalCompletionProof']) {
+                delete target.analysisManifest.stages.apiReaderArticle[key];
+            }
+            applyMarker(target);
+            fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+            const beforeBytes = f.readCanonicalBytes();
+            let calls = 0;
+            const spyOps = {
+                article: async () => { calls += 1; throw new Error('不应进入 article'); },
+                scoringAndReader: async (_paper, _source, opts) => {
+                    calls += 1;
+                    if (opts?.onScoringComplete) await opts.onScoringComplete(_paper, {});
+                    throw new Error('不应进入 scoringAndReader');
+                },
+                authors: () => { calls += 1; throw new Error('不应进入 authors'); },
+                figures: async () => { calls += 1; throw new Error('不应进入 figures'); }
+            };
+            for (const mode of allModes) {
+                await assert.rejects(
+                    refreshApiReader(f.ordinaryId, { ...mode, operations: spyOps }),
+                    error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN'
+                        && error.retryable === false
+                        && /序号补丁完成证明/.test(error.message)
+                );
+            }
+            assert.equal(calls, 0);
+            assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
+        }
+
+        // On-disk ordinal-completions/<id>-00000001.json alone (even with all 5 stage markers stripped)
+        // also blocks all 5 modes with 0 calls, until readerRevisionHistory supersedes it!
+        const payload = f.readCanonicalJson();
+        const target = payload.papers.find(item => item.arxivId === f.ordinaryId);
+        delete target.analysisManifest.contracts.readerTargetOrdinalPatch;
+        for (const key of ['ordinalPatchContract', 'ordinalPatchSchemaFingerprint',
+            'ordinalPatchCompilations', 'ordinalCompletionProof']) {
+            delete target.analysisManifest.stages.apiReaderArticle[key];
+        }
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+        const completionsDir = path.join(f.plan.readerAttemptsDir, 'ordinal-completions');
+        fs.mkdirSync(completionsDir, { recursive: true, mode: 0o700 });
+        const completionFile = path.join(completionsDir, `${f.ordinaryId}-00000001.json`);
+        fs.writeFileSync(completionFile, JSON.stringify({ paperId: f.ordinaryId, sequence: 1 }), { mode: 0o600 });
+        const beforeDiskBytes = f.readCanonicalBytes();
+        let diskCalls = 0;
+        for (const mode of allModes) {
+            await assert.rejects(
+                refreshApiReader(f.ordinaryId, {
+                    ...mode,
+                    operations: {
+                        article: async () => { diskCalls += 1; },
+                        scoringAndReader: async () => { diskCalls += 1; },
+                        authors: () => { diskCalls += 1; },
+                        figures: async () => { diskCalls += 1; }
+                    }
+                }),
+                error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN' && error.retryable === false
+            );
+        }
+        assert.equal(diskCalls, 0);
+        assert.deepEqual(f.readCanonicalBytes(), beforeDiskBytes);
+
+        // Positive case: once readerRevisionHistory supersedes the old ordinal completion (and no markers remain),
+        // getDailyOperatorOrRetainedCandidateRefreshBlockReason no longer blocks for ordinal completion.
+        const supersededPaper = structuredClone(target);
+        supersededPaper.readerRevisionHistory = {
+            contract: 'daily-reader-revision-history-v1',
+            reason: 'stage-invalidated',
+            completionProof: { path: completionFile, sha256: 'c'.repeat(64) }
+        };
+        assert.equal(
+            getDailyOperatorOrRetainedCandidateRefreshBlockReason(supersededPaper, f.plan, {}),
+            null
+        );
+    });
+
+    it('受控事实审查绑定记录（factReview / analysisFactReviewObligation / claimLocationCorrection）在无合法活动作用域时前置拦截', async t => {
+        const f = await setupDailyGuardFixture(t);
+        const facts = require('../scripts/lib/daily-fact-review.js');
+        const proof = {
+            contract: facts.CONTRACT,
+            feedbackSha256: 'd'.repeat(64),
+            coreAnalysisSha256: sha(f.ordinaryPaper.analysis)
+        };
+
+        // 1. stage.factReview blocks all non-authorsOnly modes without active scope, allows plain --authors-only
+        const withStageFact = structuredClone(f.ordinaryPaper);
+        withStageFact.analysisManifest.stages.apiReaderArticle.factReview = proof;
+        assert.equal(
+            getDailyOperatorOrRetainedCandidateRefreshBlockReason(withStageFact, f.plan, { authorsOnly: true }),
+            null
+        );
+        for (const mode of [{}, { reviewFeedback: '修订' }, { scoringAndReader: true },
+            { figuresOnly: true }, { surfaceBindingsOnly: true }]) {
+            assert.match(
+                getDailyOperatorOrRetainedCandidateRefreshBlockReason(withStageFact, f.plan, mode),
+                /事实审查/
+            );
+        }
+
+        // 2. analysisFactReviewObligation, apiReaderFactFeedbackCorrection, and factReviewClaimLocationCorrection
+        // block ALL modes (including --authors-only) and reject via refreshApiReader with 0 calls!
+        const obligationVariants = [
+            paper => { paper.analysisFactReviewObligation = proof; },
+            paper => { paper.apiReaderFactFeedbackCorrection = { contract: 'daily-reader-fact-table-claim-location-v1' }; },
+            paper => { paper.analysisManifest.stages.apiReaderArticle.factReviewClaimLocationCorrection = { corrected: true }; }
+        ];
+        for (const applyVariant of obligationVariants) {
+            const payload = f.readCanonicalJson();
+            const target = payload.papers.find(item => item.arxivId === f.ordinaryId);
+            delete target.analysisFactReviewObligation;
+            delete target.apiReaderFactFeedbackCorrection;
+            delete target.analysisManifest.stages.apiReaderArticle.factReviewClaimLocationCorrection;
+            delete target.analysisManifest.stages.apiReaderArticle.factReview;
+            applyVariant(target);
+            fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+            const beforeBytes = f.readCanonicalBytes();
+            let calls = 0;
+            for (const mode of [{}, { reviewFeedback: '修订' }, { authorsOnly: true },
+                { figuresOnly: true }, { surfaceBindingsOnly: true }, { scoringAndReader: true }]) {
+                await assert.rejects(
+                    refreshApiReader(f.ordinaryId, {
+                        ...mode,
+                        operations: {
+                            article: async () => { calls += 1; },
+                            authors: () => { calls += 1; },
+                            figures: async () => { calls += 1; },
+                            scoringAndReader: async () => { calls += 1; }
+                        }
+                    }),
+                    error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN' && error.retryable === false
+                );
+            }
+            assert.equal(calls, 0);
+            assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
+        }
+
+        // 3. Mismatched active daily-fact-review scope is STILL blocked, while matching readerFactLocalRevision scope passes!
+        const sourceDir = path.join(f.plan.sourcesDir, f.ordinaryId, 'generation-000001');
+        const sourceFiles = Object.fromEntries(
+            ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json']
+                .map(name => [name, sha(fs.readFileSync(path.join(sourceDir, name)))])
+        );
+        const source = daily.readDailyFreshSource(f.plan, f.ordinaryPaper);
+        const deep = require('../scripts/deep-analyzer.js');
+        const validFeedback = {
+            contract: facts.CONTRACT,
+            paperId: f.ordinaryId,
+            runId: f.plan.runId,
+            batchDate: f.batchDate,
+            sourceFiles,
+            coreAnalysisSha256: sha(f.ordinaryPaper.analysis),
+            coreSummarySha256: sha(deep.extractSectionByTitle(f.ordinaryPaper.analysis, '核心摘要')),
+            primaryFeedback: '',
+            coreFeedback: '',
+            readerFeedback: '核对受控事实局部修订作用域。',
+            rejectedPrimaryClaims: [],
+            rejectedCoreClaims: [],
+            rejectedReaderClaims: ['当前测试正文中不存在的合成旧错句。'],
+            sourceQuotes: [source.text.slice(0, 70).trim()]
+        };
+        const bound = facts.validateFeedback(validFeedback, f.plan, f.ordinaryPaper);
+        const mismatchedPaper = structuredClone(f.ordinaryPaper);
+        mismatchedPaper.analysisManifest.stages.apiReaderArticle.factReview = {
+            ...bound.proof,
+            feedbackSha256: 'e'.repeat(64)
+        };
+        const matchingPaper = structuredClone(f.ordinaryPaper);
+        matchingPaper.analysisManifest.stages.apiReaderArticle.factReview = structuredClone(bound.proof);
+        await facts.withFactReview(bound, async () => {
+            assert.match(
+                getDailyOperatorOrRetainedCandidateRefreshBlockReason(mismatchedPaper, f.plan, {
+                    readerFactLocalRevision: true,
+                    reviewFeedback: '核对受控事实局部修订作用域。'
+                }),
+                /事实审查/
+            );
+            assert.equal(
+                getDailyOperatorOrRetainedCandidateRefreshBlockReason(matchingPaper, f.plan, {
+                    readerFactLocalRevision: true,
+                    reviewFeedback: '核对受控事实局部修订作用域。'
+                }),
+                null
+            );
+        });
+    });
+
+    it('无 --feedback 的批量多目标与 --all 模式行为一致：显式含受保护项整批拦截，--all --surface-bindings-only 跳过已合格受保护项但拦截失败受保护项', async t => {
+        const f = await setupDailyGuardFixture(t);
+
+        // Give retainedPaper a valid stage.factReview + archived ordinary completion is NOT present here,
+        // so check hasCurrentReaderV3 on each paper first:
+        // Note: operatorPaper without full manifest/correction files has cold hasCurrentReaderV3 === false,
+        // while ordinaryPaper with stage.factReview has cold hasCurrentReaderV3 === true!
+        const factProtectedId = '2611.24249';
+        const payload = f.readCanonicalJson();
+        const factPaper = structuredClone(f.ordinaryPaper);
+        factPaper.arxivId = factProtectedId;
+        factPaper.title = `Title ${factProtectedId}`;
+        factPaper.apiReaderAuthors = require('../scripts/lib/reader-author-parser.js')
+            .resolveVerifiedReaderAuthors(factPaper, daily.readDailyFreshSource(f.plan, factPaper));
+        const identities = require('../scripts/lib/reader-identity-format.js');
+        const deep = require('../scripts/deep-analyzer.js');
+        Object.assign(
+            factPaper.analysisManifest.stages.apiReaderArticle,
+            identities.stageFields(factPaper.apiReaderAuthors, factPaper.apiReaderResources),
+            {
+                readerAuthorsSha256: deep.stableFingerprint(factPaper.apiReaderAuthors),
+                readerAuthorIdentitySha256: factPaper.apiReaderAuthors.identitySha256,
+                factReview: { contract: 'daily-fact-review-v1', feedbackSha256: '9'.repeat(64) }
+            }
+        );
+        assert.equal(hasCurrentReaderV3(factPaper), true);
+
+        // 1. Explicit multi-target refresh WITHOUT --feedback / --feedback-file fails fast up front (0 calls even on ordinaryId)
+        const beforeExplicitBytes = f.readCanonicalBytes();
+        let explicitCalls = 0;
+        for (const mode of [{}, { scoringAndReader: true }, { figuresOnly: true }, { surfaceBindingsOnly: true }]) {
+            await assert.rejects(
+                refreshApiReaders([f.ordinaryId, f.operatorId], {
+                    ...mode,
+                    operations: {
+                        article: async () => { explicitCalls += 1; return f.ordinaryPaper; },
+                        scoringAndReader: async () => { explicitCalls += 1; return f.ordinaryPaper; },
+                        figures: async () => { explicitCalls += 1; return f.ordinaryPaper; }
+                    }
+                }),
+                error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN'
+                    && error.retryable === false
+                    && Array.isArray(error.blockedIds)
+                    && error.blockedIds.includes(f.operatorId)
+            );
+        }
+        assert.equal(explicitCalls, 0, '无 --feedback 的显式多目标批量刷新也必须整批 0 请求拦截');
+        assert.deepEqual(f.readCanonicalBytes(), beforeExplicitBytes);
+
+        // 2. --all --date --surface-bindings-only when protected papers are already valid current_v3:
+        // skips valid protected papers and selects only ordinary unprotected papers!
+        // Remove retainedId's active candidate temporarily and make both protected papers valid current_v3
+        for (const name of fs.readdirSync(f.plan.readerAttemptsDir)) {
+            fs.rmSync(path.join(f.plan.readerAttemptsDir, name), { recursive: true, force: true });
+        }
+        const secondFactPaper = structuredClone(factPaper);
+        secondFactPaper.arxivId = f.retainedId;
+        secondFactPaper.title = `Title ${f.retainedId}`;
+        payload.papers = [f.ordinaryPaper, factPaper, secondFactPaper];
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+
+        const surfaceAllOptions = parseRefreshCliArgs([
+            '--all', '--date', f.batchDate, '--surface-bindings-only'
+        ]);
+        const selectedForSurface = resolveBatchRefreshIds(surfaceAllOptions);
+        assert.deepEqual(selectedForSurface, [f.ordinaryId], '--all --surface-bindings-only 自动跳过已合格的受保护记录');
+
+        // 3. --all --date when a protected paper is FAILED (!hasCurrentReaderV3):
+        // resolveBatchRefreshIds does NOT hide the failure, and refreshApiReaders rejects the batch pre-flight with 0 calls!
+        const failedProtected = structuredClone(factPaper);
+        failedProtected.latestAnalysisAttemptError = '受保护记录存在未完成失败';
+        payload.papers = [f.ordinaryPaper, failedProtected, secondFactPaper];
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+        const beforeFailedAllBytes = f.readCanonicalBytes();
+        const defaultAllOptions = parseRefreshCliArgs(['--all', '--date', f.batchDate]);
+        const pendingIds = resolveBatchRefreshIds(defaultAllOptions);
+        assert.deepEqual(pendingIds, [factProtectedId], '失败的受保护记录不得被 --all 静默跳过');
+        let allCalls = 0;
+        await assert.rejects(
+            refreshApiReaders(pendingIds, {
+                ...defaultAllOptions,
+                operations: { article: async () => { allCalls += 1; return f.ordinaryPaper; } }
+            }),
+            error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN' && error.retryable === false
+        );
+        assert.equal(allCalls, 0);
+        assert.deepEqual(f.readCanonicalBytes(), beforeFailedAllBytes);
+    });
+
+    it('保存前防御核验按冷核态（无 withDailyFreshAnalysisContext）同时校验 Reader 集成资格与整篇 isSuccessfulAnalysisRecord', async t => {
+        const f = await setupDailyGuardFixture(t);
+        const beforeBytes = f.readCanonicalBytes();
+
+        // 1. Cold Reader provenance check: corrupting freshRewriteProvenance on refreshed (which live context
+        // could mask if currentModelInputSource supplied source, whereas cold validate:data rejects!) is caught!
+        let coldProvenanceCalls = 0;
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, {
+                operations: {
+                    article: async paper => {
+                        coldProvenanceCalls += 1;
+                        const drifted = structuredClone(paper);
+                        delete drifted.analysisManifest.freshRewriteProvenance;
+                        return drifted;
+                    }
+                }
+            }),
+            error => error.code === 'REFRESHED_API_READER_RECORD_INVALID' && error.retryable === false
+        );
+        assert.equal(coldProvenanceCalls, 1);
+        assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
+
+        // 2. Cold whole-paper isSuccessfulAnalysisRecord check: Reader remains valid, but upstream analysis is broken!
+        let upstreamBrokenCalls = 0;
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, {
+                operations: {
+                    article: async paper => {
+                        upstreamBrokenCalls += 1;
+                        const brokenUpstream = structuredClone(paper);
+                        brokenUpstream.analysis = '不完整主文，缺少必需章节';
+                        return brokenUpstream;
+                    }
+                }
+            }),
+            error => error.code === 'REFRESHED_API_READER_RECORD_INVALID'
+                && error.retryable === false
+                && /isSuccessfulAnalysisRecord/.test(error.message)
+        );
+        assert.equal(upstreamBrokenCalls, 1);
+        assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
+    });
 });

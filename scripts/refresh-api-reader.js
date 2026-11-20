@@ -228,16 +228,32 @@ function resolveBatchRefreshIds(options) {
     }
     const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
     const selectPending = () => papers.filter(paper => !currentReaderCheck(paper));
-    const pending = options.surfaceBindingsOnly ? papers
-        : options.isCurrentReaderFn ? selectPending()
-            : dailyFreshSources.withDailyFreshAnalysisContext(
-                dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
-                    label: '读者文章全量选择来源'
-                }), selectPending);
+    let skippedProtected = 0;
+    let pending;
+    if (options.isCurrentReaderFn) {
+        pending = options.surfaceBindingsOnly ? papers : selectPending();
+    } else {
+        const entryPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
+            label: '读者文章全量选择来源'
+        });
+        if (options.surfaceBindingsOnly) {
+            pending = papers.filter(paper => {
+                const blocked = getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, entryPlan, options);
+                if (blocked && currentReaderCheck(paper)) {
+                    skippedProtected += 1;
+                    return false;
+                }
+                return true;
+            });
+        } else {
+            pending = dailyFreshSources.withDailyFreshAnalysisContext(entryPlan, selectPending);
+        }
+    }
     console.log(
         `📋 读者文章全量刷新，批次日期为 ${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`
-        + ` | current_v3=${papers.length - pending.length}`
+        + ` | current_v3=${papers.length - pending.length - skippedProtected}`
+        + (skippedProtected > 0 ? ` | skipped_protected=${skippedProtected}` : '')
         + ` | concurrency=${options.concurrency}`
     );
     return pending.map(paper => normalizedId(paper)).filter(Boolean);
@@ -252,7 +268,7 @@ function readRefreshEntryPlan(resultPath, targetIds = null, options = {}) {
     const entryPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
         label: '读者文章批次入口'
     });
-    if (options.reviewFeedbackById || options.reviewFeedback) {
+    if (Array.isArray(targetIds) && targetIds.length > 0) {
         assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, options);
     }
     return entryPlan;
@@ -397,6 +413,35 @@ function canRepairSurfaceBinding(paper) {
         && !paper?.latestAnalysisAttemptError;
 }
 
+function hasValidActiveReaderFactScope(paper, plan, options = {}) {
+    if (options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly || options.scoringAndReader) {
+        return false;
+    }
+    if (paper.apiReaderFactFeedbackCorrection !== undefined
+        || paper.analysisManifest?.stages?.apiReaderArticle?.factReviewClaimLocationCorrection !== undefined) {
+        return false;
+    }
+    const requested = normalizedId(paper);
+    if (!requested) return false;
+    const activeFact = require('./lib/daily-fact-review').current(requested);
+    if (!activeFact || activeFact.scoringOnly || activeFact.coreOnly) {
+        return false;
+    }
+    const activeProof = activeFact.readerBound?.proof || activeFact.proof;
+    if (Object.hasOwn(paper, 'analysisFactReviewObligation')
+        && JSON.stringify(activeProof) !== JSON.stringify(paper.analysisFactReviewObligation)) {
+        return false;
+    }
+    const existingStageFactReview = paper.analysisManifest?.stages?.apiReaderArticle?.factReview;
+    if (existingStageFactReview !== undefined && !activeFact.readerOnly
+        && JSON.stringify(activeProof) !== JSON.stringify(existingStageFactReview)) {
+        return false;
+    }
+    return Boolean(activeFact.readerOnly
+        || options.readerFactLocalRevision === true
+        || canRepairCompletedPrimaryReader(paper, plan, options));
+}
+
 function getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, plan, options = {}) {
     if (!paper || typeof paper !== 'object'
         || !plan || typeof plan.runId !== 'string' || !plan.runId
@@ -409,9 +454,6 @@ function getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, plan, opti
     const hasSignedOperatorHistory = stage?.legacyBatchRoot !== undefined
         || Array.isArray(stage?.operatorHistory)
         || stage?.contentMode === 'reader-source-operator-revision';
-    if (options.authorsOnly && !hasSignedOperatorHistory) {
-        return null;
-    }
     const hasStageOperatorMarker = hasSignedOperatorHistory
         || stage?.executionKind === 'operator'
         || stage?.model === 'operator-local'
@@ -420,41 +462,68 @@ function getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, plan, opti
         || (stage?.operatorProvenance !== undefined
             && (stage.operatorProvenance?.executionKind === 'operator'
                 || require('./lib/daily-reader-operator-correction').hasOperatorProofMarker(stage.operatorProvenance)));
+    const hasOrdinalStageMarker = paper.analysisManifest?.contracts?.readerTargetOrdinalPatch !== undefined
+        || stage?.ordinalPatchContract !== undefined
+        || stage?.ordinalPatchSchemaFingerprint !== undefined
+        || stage?.ordinalPatchCompilations !== undefined
+        || stage?.ordinalCompletionProof !== undefined;
+    const hasBoundReaderFactReview = Object.hasOwn(paper, 'analysisFactReviewObligation')
+        || paper.apiReaderFactFeedbackCorrection !== undefined
+        || stage?.factReviewClaimLocationCorrection !== undefined
+        || (!options.authorsOnly && stage?.factReview !== undefined);
+
     let hasPaidFingerprint = false;
+    let hasOrdinaryOrdinalCompletion = false;
     let hasRetainedOrdinal = false;
-    if (!hasStageOperatorMarker && !options.authorsOnly && fs.existsSync(plan.readerAttemptsDir)) {
-        const operator = require('./lib/daily-reader-operator-correction');
-        hasPaidFingerprint = operator.hasPaidFingerprintCompletion(paper, plan.readerAttemptsDir);
-        if (!hasPaidFingerprint) {
-            const completionsDir = path.join(plan.readerAttemptsDir, 'ordinal-completions');
-            const hasOrdinaryOrdinalCompletion = fs.existsSync(completionsDir)
-                && fs.readdirSync(completionsDir).some(name =>
-                    name.startsWith(`${requested}-`) && /^\d{4}\.\d{4,5}-\d{8}\.json$/.test(name));
-            hasRetainedOrdinal = !hasOrdinaryOrdinalCompletion
-                && operator.hasRetainedOrdinalCandidate(paper, plan.readerAttemptsDir);
+    if (fs.existsSync(plan.readerAttemptsDir)) {
+        const completionsDir = path.join(plan.readerAttemptsDir, 'ordinal-completions');
+        hasOrdinaryOrdinalCompletion = fs.existsSync(completionsDir)
+            && fs.readdirSync(completionsDir).some(name =>
+                name.startsWith(`${requested}-`) && /^\d{4}\.\d{4,5}-\d{8}\.json$/.test(name));
+        if (!hasStageOperatorMarker) {
+            const operator = require('./lib/daily-reader-operator-correction');
+            hasPaidFingerprint = operator.hasPaidFingerprintCompletion(paper, plan.readerAttemptsDir);
+            if (!hasPaidFingerprint && !hasOrdinaryOrdinalCompletion && !options.authorsOnly) {
+                hasRetainedOrdinal = operator.hasRetainedOrdinalCandidate(paper, plan.readerAttemptsDir);
+            }
         }
     }
-    const hasUnsupersededOrdinalRevision = !hasStageOperatorMarker && !hasPaidFingerprint && !hasRetainedOrdinal
-        && !options.authorsOnly && !options.figuresOnly && !options.surfaceBindingsOnly
-        && Boolean(String(options.reviewFeedback || '').trim())
-        && stage?.ordinalCompletionProof !== undefined
+
+    const hasUnsupersededOrdinalCompletion = !hasStageOperatorMarker && !hasPaidFingerprint
+        && (hasOrdinalStageMarker || hasOrdinaryOrdinalCompletion)
         && paper.readerRevisionHistory === undefined;
-    if (!hasStageOperatorMarker && !hasPaidFingerprint && !hasRetainedOrdinal && !hasUnsupersededOrdinalRevision) {
+
+    if (options.authorsOnly
+        && !hasSignedOperatorHistory
+        && !hasPaidFingerprint
+        && !hasUnsupersededOrdinalCompletion
+        && !hasBoundReaderFactReview) {
         return null;
     }
-    const activeFact = require('./lib/daily-fact-review').current(requested);
-    if (!hasStageOperatorMarker && !hasPaidFingerprint && activeFact && !activeFact.scoringOnly && !activeFact.coreOnly) {
-        if (activeFact.readerOnly || options.readerFactLocalRevision === true || canRepairCompletedPrimaryReader(paper, plan, options)) {
-            return null;
-        }
+
+    if (!hasStageOperatorMarker
+        && !hasPaidFingerprint
+        && !hasUnsupersededOrdinalCompletion
+        && !hasRetainedOrdinal
+        && !hasBoundReaderFactReview) {
+        return null;
     }
+
+    if (!hasStageOperatorMarker && !hasPaidFingerprint
+        && hasValidActiveReaderFactScope(paper, plan, options)) {
+        return null;
+    }
+
     if (hasStageOperatorMarker || hasPaidFingerprint) {
         return '已有人工作业完成的 Reader 记录（executionKind=operator / operatorProvenance）';
+    }
+    if (hasUnsupersededOrdinalCompletion) {
+        return '已有未接替的日更序号补丁完成证明（ordinalCompletionProof / ordinal-completions）';
     }
     if (hasRetainedOrdinal) {
         return '存在保留的日更序号补丁候选（retained ordinal candidate）';
     }
-    return '已有日更序号补丁完成证明（ordinalCompletionProof）且未建立受控事实审查接替历史';
+    return '已绑定受控事实审查记录（factReview / analysisFactReviewObligation）且缺少匹配的活动事实审查作用域';
 }
 
 const CONTROLLED_READER_RECOVERY_HINT =
@@ -493,7 +562,7 @@ function assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, 
     if (!blocked.length) return;
     const summary = blocked.map(item => `${item.id}（${item.reason}）`).join('；');
     const error = new Error(
-        `批量反馈刷新包含不能直接通过 api:reader:refresh 覆盖的日更论文：${summary}。`
+        `批量刷新包含不能直接通过 api:reader:refresh 覆盖的日更论文：${summary}。`
         + `直接刷新会丢失事实审查证明与过期快照并导致 validate:data 失败；本次未发起任何模型请求。${CONTROLLED_READER_RECOVERY_HINT}`
     );
     error.code = 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN';
@@ -512,29 +581,39 @@ function hasInjectedRefreshOperation(options = {}) {
     return typeof ops.article === 'function';
 }
 
-function assertRefreshedReaderRecordValidBeforeSave(previous, refreshed, plan, options = {}) {
-    if (typeof hasValidIntegratedApiReaderRecords !== 'function') return;
-    const enforce = !hasInjectedRefreshOperation(options)
-        || dailyFreshSources.withDailyFreshAnalysisContext(plan,
-            () => hasValidIntegratedApiReaderRecords(previous));
-    if (!enforce) return;
-    const valid = dailyFreshSources.withDailyFreshAnalysisContext(plan,
-        () => hasValidIntegratedApiReaderRecords(refreshed));
-    if (valid) return;
-    const diagnostics = typeof getIntegratedApiReaderRecordDiagnostics === 'function'
-        ? dailyFreshSources.withDailyFreshAnalysisContext(plan,
-            () => getIntegratedApiReaderRecordDiagnostics(refreshed))
-        : [];
-    const detail = diagnostics.map(item => item?.message).filter(Boolean).join('；')
-        || 'Reader 的协议、正文、计划、作者、资源或阶段证明未通过核验';
-    const requested = normalizedId(refreshed) || normalizedId(previous) || '未知论文';
-    const error = new Error(
-        `${requested} 刷新后的 Reader 记录未通过完整集成资格核验（${detail}），已拒绝覆盖正式分析文件 deep-analysis-result.json。`
-        + CONTROLLED_READER_RECOVERY_HINT
-    );
-    error.code = 'REFRESHED_API_READER_RECORD_INVALID';
-    error.retryable = false;
-    throw error;
+function assertRefreshedReaderRecordValidBeforeSave(previous, refreshed, _plan, options = {}) {
+    const customOperation = hasInjectedRefreshOperation(options);
+    if (typeof hasValidIntegratedApiReaderRecords === 'function') {
+        const enforceReader = !customOperation || hasValidIntegratedApiReaderRecords(previous);
+        if (enforceReader && !hasValidIntegratedApiReaderRecords(refreshed)) {
+            const diagnostics = typeof getIntegratedApiReaderRecordDiagnostics === 'function'
+                ? getIntegratedApiReaderRecordDiagnostics(refreshed)
+                : [];
+            const detail = diagnostics.map(item => item?.message).filter(Boolean).join('；')
+                || 'Reader 的协议、正文、计划、作者、资源或阶段证明未通过冷核';
+            const requested = normalizedId(refreshed) || normalizedId(previous) || '未知论文';
+            const error = new Error(
+                `${requested} 刷新后的 Reader 记录未通过完整集成资格冷核（${detail}），已拒绝覆盖正式分析文件 deep-analysis-result.json。`
+                + CONTROLLED_READER_RECOVERY_HINT
+            );
+            error.code = 'REFRESHED_API_READER_RECORD_INVALID';
+            error.retryable = false;
+            throw error;
+        }
+    }
+    if (typeof isSuccessfulAnalysisRecord === 'function'
+        && !refreshed?.latestAnalysisAttemptError
+        && (!customOperation || isSuccessfulAnalysisRecord(previous))
+        && !isSuccessfulAnalysisRecord(refreshed)) {
+        const requested = normalizedId(refreshed) || normalizedId(previous) || '未知论文';
+        const error = new Error(
+            `${requested} 刷新后的整篇记录未通过正式成功资格冷核（isSuccessfulAnalysisRecord），已拒绝覆盖正式分析文件 deep-analysis-result.json。`
+            + CONTROLLED_READER_RECOVERY_HINT
+        );
+        error.code = 'REFRESHED_API_READER_RECORD_INVALID';
+        error.retryable = false;
+        throw error;
+    }
 }
 
 function canRepairCompletedPrimaryReader(paper, plan, options = {}) {
