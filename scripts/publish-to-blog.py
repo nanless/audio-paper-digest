@@ -6067,7 +6067,18 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     )
     numeric_named_setting = re.compile(r'(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)', re.IGNORECASE)
 
-    def _candidate_complete(sentence):
+    model_suffix_pattern = r'(?:模型|方法|系统|基线(?![ \t]*[-+]?[0-9])|算法|网络|model\b|method\b|system\b|baseline\b|network\b)'
+
+    def _matches_defined_metric_acronyms(surface_text, defined_acronyms):
+        for acronym in defined_acronyms:
+            if re.search(
+                rf'(?<![A-Za-z0-9_]){re.escape(acronym)}(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?{model_suffix_pattern})',
+                surface_text,
+            ):
+                return True
+        return False
+
+    def _candidate_complete(sentence, defined_acronyms=()):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
         metric_sentence = re.sub(
             r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
@@ -6087,7 +6098,12 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         ) and re.search(
             r'(?:在|于)[^。！？!?\n]{1,160}(?:[1-9][0-9]*|[一二两三四五六七八九十]+)折交叉验证(?:下|中|上)', result_sentence,
         )
-        has_metric = narrow_measured_result or metric.search(metric_sentence) or conference_metric.search(metric_sentence)
+        has_metric = (
+            narrow_measured_result
+            or metric.search(metric_sentence)
+            or conference_metric.search(metric_sentence)
+            or _matches_defined_metric_acronyms(metric_sentence, defined_acronyms)
+        )
         return bool(
             has_metric and has_direction and numbers
             and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence, metric, conference_metric))
@@ -6102,7 +6118,23 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     )
     generic_english_metric_re = re.compile(r'(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])', re.IGNORECASE)
 
-    def _sentence_has_executive_metric_and_number(raw_sentence):
+    def _extract_paragraph_defined_metric_acronyms(paragraph_text, denied_re):
+        found = []
+        def_re = re.compile(
+            r'(?:用|以|通过|采用)[^，,。；\n]{1,28}?(?:误差|差异|距离|偏差|失真|得分|分数|系数|比率|率|度|量|熵)[ \t]*([A-Z][A-Z0-9_-]{2,10})[ \t]*(?:衡量|评估|评测|度量|表征|量化)'
+        )
+        for p_sent in (s.strip() for s in re.split(r'[。！？!?\n]', paragraph_text) if s.strip()):
+            if denied_re.search(p_sent):
+                continue
+            for m_def in def_re.finditer(p_sent):
+                acronym = m_def.group(1)
+                if source_text and not re.search(rf'(?<![A-Za-z0-9_]){re.escape(acronym)}(?![A-Za-z0-9_])', str(source_text)):
+                    continue
+                if acronym not in found:
+                    found.append(acronym)
+        return found
+
+    def _sentence_has_executive_metric_and_number(raw_sentence, defined_acronyms=()):
         cleaned_s = _strip_core_summary_non_result_numerals(raw_sentence.strip())
         if not cleaned_s:
             return False
@@ -6114,7 +6146,11 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
             '', cleaned_s, flags=re.IGNORECASE,
         )
         without_generic = generic_english_metric_re.sub(' ', without_models)
-        return bool(metric.search(without_generic) or conference_metric.search(without_generic))
+        return bool(
+            metric.search(without_generic)
+            or conference_metric.search(without_generic)
+            or _matches_defined_metric_acronyms(without_generic, defined_acronyms)
+        )
 
     has_complete_result = any(_candidate_complete(sentence) for sentence in re.split(r'[。！？!?\n]', content_body))
     if use_executive and not has_complete_result:
@@ -6136,13 +6172,14 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         )
         for paragraph in re.split(r'\n\s*\n', content_body):
             p_sentences = [s.strip() for s in re.split(r'[。！？!?\n]', paragraph) if s.strip()]
-            for win_size in (2, 3):
+            defined_acronyms = _extract_paragraph_defined_metric_acronyms(paragraph, denied_window_re)
+            for win_size in (2, 3, 4):
                 for idx in range(len(p_sentences) - win_size + 1):
                     win = p_sentences[idx:idx + win_size]
                     if any(denied_window_re.search(part) or _has_cross_metric_directional_comparison(part) for part in win):
                         continue
                     if not any(
-                        _sentence_has_executive_metric_and_number(part)
+                        _sentence_has_executive_metric_and_number(part, defined_acronyms)
                         and (comparison.search(part) or baseline_transition.search(part))
                         for part in win
                     ):
@@ -6156,7 +6193,7 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                     non_op_win = metric.sub(lambda m: re.sub(r'\d+(?:\.\d+)?', '', m.group(0)), non_op_win)
                     if len(number.findall(non_op_win)) < 2:
                         continue
-                    if _candidate_complete(combined):
+                    if _candidate_complete(combined, defined_acronyms):
                         has_complete_result = True
                         break
                 if has_complete_result:

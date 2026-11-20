@@ -404,6 +404,28 @@ class ExecutiveAbstractV4Test(unittest.TestCase):
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         self.assertLess(elapsed_ms, 100.0, f'expected <100ms on 10000-digit string, got {elapsed_ms:.2f}ms')
 
+        custom_metric_source = (
+            EXECUTIVE_SOURCE_TEXT + ' '
+            'We evaluate music-to-color prediction on 265 official music videos including 65 from the DEAP dataset. '
+            'Color accuracy is measured by Average Color Bin Difference (ACBD) and temporal consistency by Average Temporal Bin Difference (ATBD). '
+            'Our model achieves ACBD of 3.5161, outperforming non-autoregressive Transformer 3.8853 and static MLP 4.6757, '
+            'with ATBD of 0.8671 versus 1.0068 and 0.9959.'
+        )
+        custom_metric_summary = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**评测基于 265 个完整官方音乐视频与 DEAP 数据集测试划分完成。颜色准确性用平均颜色区间差异 ACBD 衡量，时间变化一致性用平均时间区间差异 ATBD 衡量。对照对象是静态多层感知机和不依赖历史预测的非自回归 Transformer。本文方法平均 ACBD 为 3.5161，低于非自回归基线的 3.8853 和静态基线的 4.6757，平均 ATBD 为 0.8671，低于非自回归基线的 1.0068 和静态基线的 0.9959。代价是自回归推理必须逐帧展开，论文未报告参数量与推理时延的定量对比。',
+            paragraphs[3],
+        ])
+        self.assertIsNone(publisher._detailed_core_summary_semantic_issue(
+            custom_metric_summary, summary_header=new_header, source_text=custom_metric_source,
+        ))
+        self.assertIn('缺少完整关键定量结果', publisher._detailed_core_summary_semantic_issue(
+            custom_metric_summary,
+            summary_header=new_header,
+            source_text=custom_metric_source.replace('ACBD', 'FAKE1').replace('ATBD', 'FAKE2'),
+        ))
+
 
 if __name__ == '__main__':
     unittest.main()

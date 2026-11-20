@@ -774,4 +774,48 @@ test('cohesive-functional-v4 excess conceptBridges (5-10) recover via parseRecov
     assert.equal(state.draft.sections[4].body.includes('[[CONCEPT_BRIDGE_5]]'), false);
     assert.ok(state.draft.sections[4].body.includes('正则项 $L_2$（含符号 $& 与 $1 字面量安全性校验）'));
     assert.equal(state.draft.sections[4].body.includes('帧级精度 × 正则项'), false);
+
+    // 4. 当草稿同时存在 5 组 conceptBridges 与 unrenderable source_table 时，先执行确定性内联再交由 sourceBlocked 捕获，输入 SHA 完全对齐
+    const sourceBlocked = require('../scripts/lib/reader-source-blocked-normalization');
+    const badTableArtifacts = {
+        sourceKind: 'arxiv_html',
+        figures: [],
+        formulas: [],
+        tables: [{
+            ordinal: 1,
+            recoveryStatus: 'complete',
+            sourceDomSha256: 'a'.repeat(64),
+            headerRows: [0],
+            bodyRows: [1],
+            matrix: [['Model', 'Score'], ['Ours', '72.2 | 72.5']],
+            cells: [
+                { row: 0, column: 0, rowspan: 1, colspan: 1, text: 'Model', sourceDomSha256: '1'.repeat(64) },
+                { row: 0, column: 1, rowspan: 1, colspan: 1, text: 'Score', sourceDomSha256: '2'.repeat(64) },
+                { row: 1, column: 0, rowspan: 1, colspan: 1, text: 'Ours', sourceDomSha256: '3'.repeat(64) },
+                { row: 1, column: 1, rowspan: 1, colspan: 1, text: '72.2 | 72.5', sourceDomSha256: '4'.repeat(64) }
+            ]
+        }]
+    };
+    const blockedFiveBridge = structuredClone(fiveBridgeDraft);
+    blockedFiveBridge.sections[3].body = '主结果如表所示。\n\n[[TABLE_1]]\n\n该结果仅在基准划分下成立。';
+    blockedFiveBridge.sections[4].body = '补充分析验证局部改动。\n\n[[CONCEPT_BRIDGE_5]]';
+    blockedFiveBridge.tableBindings = [{ tableIndex: 1, completeTable: { sourceTableOrdinal: 1 } }];
+    deep.normalizeDeclaredReaderMarkerParagraphs(blockedFiveBridge);
+    deep.inlineExcessCohesiveReaderConceptBridges(blockedFiveBridge);
+    let caughtError = null;
+    try {
+        deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(blockedFiveBridge), [], {
+            paperId: '2611.99998v1',
+            sourceText,
+            structuredArtifacts: badTableArtifacts,
+            pixelFigureOrdinals: [],
+            draftOrderMappings: []
+        }, {});
+    } catch (err) {
+        caughtError = err;
+    }
+    assert.ok(caughtError);
+    const blockedResult = sourceBlocked.readSourceTableNormalizationError(caughtError, blockedFiveBridge, badTableArtifacts);
+    assert.ok(blockedResult, '内联后 updated.draft 与 normalizationInputSha256 一致，sourceBlocked 正常生成恢复记录');
+    assert.equal(blockedResult.draft.conceptBridges.length, 4);
 });

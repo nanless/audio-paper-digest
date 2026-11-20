@@ -3688,7 +3688,7 @@ function hasSourceBoundHitCountMetric(sentence, sourceText = '') {
         || /\bwithin\s+[0-9]+(?:\.[0-9]+)?\s*(?:km|m)\b[^.\n]{0,100}\b(?:hit|hits|place[sd]?)\b/iu.test(source);
 }
 
-function coreSummaryQuantitativeResultState(text, sourceText = null) {
+function coreSummaryQuantitativeResultState(text, sourceText = null, definedAcronyms = []) {
     const correctionRates = sourceBoundCorrectionRateObservations(text, sourceText);
     const rawSentences = String(text || '').split(/[。！？!?\n]/);
     const candidates = rawSentences.map((rawSentence, sentenceIndex) => {
@@ -3716,6 +3716,7 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
             CORE_SUMMARY_METRIC_PATTERN.test(admittedMetricText.replace(
                 /(?<![A-Za-z0-9_.-])DNSMOS(?:[ \t]+P\.835)?(?:[ \t]+(?:SIG|BAK|OVL)(?:\/(?:SIG|BAK|OVL))*)?(?![A-Za-z0-9_.-])(?:[ \t]*(?:指标|分数|得分))?/giu, ' '))
             || CORE_SUMMARY_ADDITIONAL_METRIC_PATTERN.test(admittedMetricText)
+            || matchesDefinedMetricAcronyms(admittedMetricText, definedAcronyms)
             || hasSourceDefinedDnsMos(sourceText) && hasAffirmativeDnsMosStatement(
                 rawSentence, CORE_SUMMARY_DNSMOS_PATTERN,
                 rawSentences[sentenceIndex - 1] || '', rawSentences[sentenceIndex + 1] || '')
@@ -4754,7 +4755,31 @@ function findOverlongExecutiveMethodSentence(contentBody) {
     return 0;
 }
 
-function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText) {
+function extractExecutiveParagraphDefinedMetricAcronyms(paragraph, sourceText, deniedWindowSentence) {
+    const found = new Set();
+    const defPattern = /(?:用|以|通过|采用)[^，,。；\n]{1,28}?(?:误差|差异|距离|偏差|失真|得分|分数|系数|比率|率|度|量|熵)[ \t]*([A-Z][A-Z0-9_-]{2,10})[ \t]*(?:衡量|评估|评测|度量|表征|量化)/gu;
+    for (const sentence of String(paragraph || '').split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean)) {
+        if (deniedWindowSentence.test(sentence)) continue;
+        for (const match of sentence.matchAll(defPattern)) {
+            const acronym = match[1];
+            const escaped = acronym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (sourceText && !new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'u').test(String(sourceText))) continue;
+            found.add(acronym);
+        }
+    }
+    return [...found];
+}
+
+function matchesDefinedMetricAcronyms(text, definedAcronyms = []) {
+    for (const acronym of definedAcronyms) {
+        const escaped = acronym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_.-]|[ \\t]*(?:(?:的|为|是|作为|用作)[ \\t]*)?${CORE_SUMMARY_ADDITIONAL_MODEL_SUFFIX})`, 'u');
+        if (re.test(text)) return true;
+    }
+    return false;
+}
+
+function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText, definedAcronyms = []) {
     const cleaned = stripCoreSummaryNonResultNumerals(stripSymbolicPatternRelation(String(rawSentence || '').trim()));
     if (!cleaned) return false;
     const nonOp = cleaned.replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ');
@@ -4766,6 +4791,7 @@ function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText) {
         || CORE_SUMMARY_ADDITIONAL_METRIC_PATTERN.test(withoutGeneric)
         || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(withoutGeneric)
         || CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(withoutGeneric)
+        || matchesDefinedMetricAcronyms(withoutGeneric, definedAcronyms)
         || hasSourceDefinedDnsMos(sourceText) && CORE_SUMMARY_DNSMOS_PATTERN.test(rawSentence)
         || hasCoreSummaryStatisticalResult(withoutModelLabels)
         || hasSourceBoundHitCountMetric(cleaned, sourceText);
@@ -4780,11 +4806,12 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
     const explicitCounterpartPattern = /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较))/iu;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
-        for (const windowSize of [2, 3]) {
+        const definedAcronyms = extractExecutiveParagraphDefinedMetricAcronyms(paragraph, sourceText, deniedWindowSentence);
+        for (const windowSize of [2, 3, 4]) {
             for (let index = 0; index + windowSize <= sentences.length; index++) {
                 const windowParts = sentences.slice(index, index + windowSize);
                 if (windowParts.some(part => deniedWindowSentence.test(part) || hasCrossMetricDirectionalComparison(part))) continue;
-                if (!windowParts.some(part => sentenceHasExecutiveMetricAndResultNumber(part, sourceText)
+                if (!windowParts.some(part => sentenceHasExecutiveMetricAndResultNumber(part, sourceText, definedAcronyms)
                     && CORE_SUMMARY_COMPARISON_PATTERN.test(part))) continue;
                 const combined = windowParts.join('，');
                 if (!explicitCounterpartPattern.test(combined)) continue;
@@ -4794,7 +4821,7 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
                     .replace(new RegExp(CORE_SUMMARY_METRIC_PATTERN.source, 'gi'), match => match.replace(/\d+(?:\.\d+)?/g, ''));
                 const nonOpResultNumbers = nonOpWindow.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
                 if (nonOpResultNumbers.length < 2) continue;
-                const windowState = coreSummaryQuantitativeResultState(combined, sourceText);
+                const windowState = coreSummaryQuantitativeResultState(combined, sourceText, definedAcronyms);
                 if (windowState.complete) return { complete: true, missing: [], candidateIssues: [] };
             }
         }

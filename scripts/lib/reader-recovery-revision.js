@@ -601,6 +601,11 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
                     ) : bridge?.explanation
             }));
         }
+        if (!identity.readerFactLocalRevisionContract && !identity.resourceLocalRevisionContract) {
+            const deepAnalyzer = require('../deep-analyzer.js');
+            deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
+            deepAnalyzer.inlineExcessCohesiveReaderConceptBridges(updated.draft);
+        }
         // 会议 PDF 候选里可能确定性地混有真实 Markdown 表格和选择标记。先修复这个
         // 受限的来源绑定结构，再检查各小节的顺序；否则顺序检查会在
         // deep-analyzer 的会议归一化器有机会证明顺序之前就拒绝候选。

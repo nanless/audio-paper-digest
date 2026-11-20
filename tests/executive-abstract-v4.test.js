@@ -404,4 +404,27 @@ test('LaTeXML 千分位/控制序列/双写拼接、中文邻接模型名、百�
     assert.equal(groundedCheck('词错率 WER 降至 6.15%。', longDigitSource), null);
     const elapsedMs = performance.now() - t0;
     assert.ok(elapsedMs < 100, `expected <100ms on 10000-digit string, got ${elapsedMs.toFixed(2)}ms`);
+
+    // 7. 同段 4 句窗口 + 原文自定义大写指标缩写（如用平均颜色区间差异 ACBD 衡量）：正例通过，原文未出现的缩写或模型后缀负例拒绝
+    const customMetricSource = [
+        EXECUTIVE_SOURCE_TEXT,
+        'We evaluate music-to-color prediction on 265 official music videos including 65 from the DEAP dataset.',
+        'Color accuracy is measured by Average Color Bin Difference (ACBD) and temporal consistency by Average Temporal Bin Difference (ATBD).',
+        'Our model achieves ACBD of 3.5161, outperforming non-autoregressive Transformer 3.8853 and static MLP 4.6757, with ATBD of 0.8671 versus 1.0068 and 0.9959.'
+    ].join(' ');
+    const customMetricSummary = [
+        paragraphs[0],
+        paragraphs[1],
+        '**关键实验与核心代价：**评测基于 265 个完整官方音乐视频与 DEAP 数据集测试划分完成。颜色准确性用平均颜色区间差异 ACBD 衡量，时间变化一致性用平均时间区间差异 ATBD 衡量。对照对象是静态多层感知机和不依赖历史预测的非自回归 Transformer。本文方法平均 ACBD 为 3.5161，低于非自回归基线的 3.8853 和静态基线的 4.6757，平均 ATBD 为 0.8671，低于非自回归基线的 1.0068 和静态基线的 0.9959。代价是自回归推理必须逐帧展开，论文未报告参数量与推理时延的定量对比。',
+        paragraphs[3]
+    ].join('\n\n');
+    assert.equal(contract.validateCoreSummarySemanticContract(withSummary(customMetricSummary), {
+        sourceText: customMetricSource,
+        summaryHeader: newHeader
+    }), null);
+    // 若原文根本不存在该自定义缩写（伪造指标名），必须拒绝
+    assert.match(contract.validateCoreSummarySemanticContract(withSummary(customMetricSummary), {
+        sourceText: customMetricSource.replace(/ACBD/g, 'FAKE1').replace(/ATBD/g, 'FAKE2'),
+        summaryHeader: newHeader
+    }), /已有证据包含关键定量结果/);
 });
