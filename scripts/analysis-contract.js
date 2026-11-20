@@ -444,10 +444,18 @@ function validateAnalysisEditorialLeakageContract(analysis, options = {}) {
     if (leakages.length > 0) {
         return `检测到模型编辑/自检批注泄漏: ${leakages.join('；')}`;
     }
-    return validateCyrillicProseGarbleContract(analysis, options);
+    if (options.enforceCyrillicProseGarble === true) {
+        return validateCyrillicProseGarbleContract(analysis, options);
+    }
+    return null;
 }
 
-const CYRILLIC_CJK_GARBLE_RE = /(?:[\u4e00-\u9fff][0-9.% \t+\-–—，、]*[\u0400-\u04FF]+(?:[0-9.% \t+\-–—，、]*[\u4e00-\u9fff])?|[\u0400-\u04FF]+[0-9.% \t+\-–—，、]*[\u4e00-\u9fff])/gu;
+const CYRILLIC_BRIDGE_CHARS = String.raw`[0-9.% \t+\-–—，、：:；;（()）【\[\]】「」『』“”"']*`;
+const CYRILLIC_CJK_GARBLE_RE = new RegExp(
+    `(?:[\\u4e00-\\u9fff]${CYRILLIC_BRIDGE_CHARS}[\\u0400-\\u04FF]+(?:${CYRILLIC_BRIDGE_CHARS}[\\u4e00-\\u9fff])?`
+    + `|[\\u0400-\\u04FF]+${CYRILLIC_BRIDGE_CHARS}[\\u4e00-\\u9fff])`,
+    'gu'
+);
 const EXPLICIT_SLAVIC_TOPIC_RE = /(?:俄语|俄文|西里尔(?:字母|文)?|斯拉夫|乌克兰语|保加利亚语|塞尔维亚语|白俄罗斯语|\bRussian\b|\bCyrillic\b)/iu;
 
 function maskProseForCyrillicCheck(text) {
@@ -501,6 +509,9 @@ function findCyrillicProseGarbleIssues(text, options = {}) {
     const sourceLower = typeof options.sourceText === 'string' && options.sourceText.trim()
         ? options.sourceText.toLowerCase()
         : '';
+    const documentHasSlavicTopic = EXPLICIT_SLAVIC_TOPIC_RE.test(
+        [original, options.documentText || '', options.contextText || ''].join('\n')
+    );
     const findings = [];
     for (const match of visible.matchAll(CYRILLIC_CJK_GARBLE_RE)) {
         const index = match.index;
@@ -508,6 +519,7 @@ function findCyrillicProseGarbleIssues(text, options = {}) {
         const tokens = [...match[0].matchAll(/[\u0400-\u04FF]+/gu)].map(item => item[0].toLowerCase());
         if (tokens.length === 0) continue;
         if (sourceLower && tokens.every(token => sourceLower.includes(token))) continue;
+        if (documentHasSlavicTopic && tokens.every(token => [...token].length === 1)) continue;
         const sentenceStart = Math.max(
             original.lastIndexOf('。', index),
             original.lastIndexOf('！', index),
@@ -2101,9 +2113,11 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
             return `实验结果第 ${index + 1} 张表后缺少最关键差异、解释与证据边界`;
         }
     }
-    const tableAlignmentIssue = validateTableCommentaryAlignmentContract(results, options);
-    if (tableAlignmentIssue) {
-        return tableAlignmentIssue;
+    if (options.enforceTableCommentaryAlignment === true) {
+        const tableAlignmentIssue = validateTableCommentaryAlignmentContract(results, options);
+        if (tableAlignmentIssue) {
+            return tableAlignmentIssue;
+        }
     }
     if (empirical && tables.length > 0 && numericCells < EXPERIMENT_TABLE_LIMITS.minNumericCells) {
         return `实验表格只有 ${numericCells} 个可核对数字，至少需要 ${EXPERIMENT_TABLE_LIMITS.minNumericCells} 个；纯趋势或结论摘要不能替代结果表`;
@@ -2312,7 +2326,10 @@ function validateManualDepthContract(analysis, options = {}) {
         if (explanationIssue) return explanationIssue;
     }
     if (MANUAL_READER_QUALITY_CONTRACTS.includes(options.manualDepthContractVersion)) {
-        const quality = validateEditorialQuality(analysis);
+        const quality = validateEditorialQuality(analysis, {
+            sourceText,
+            skipTableCommentaryAlignment: true
+        });
         if (!quality.valid) {
             const details = quality.issues.slice(0, 6)
                 .map(item => `${item.code}:${item.section || '-'}:${item.match || item.message}`)
@@ -5978,7 +5995,8 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     const topLevelIssue = validateTopLevelSectionContract(analysis);
     if (topLevelIssue) return `分析结果章节契约无效: ${topLevelIssue}`;
     const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis, {
-        sourceText: options.sourceText
+        sourceText: options.sourceText,
+        enforceCyrillicProseGarble: options.enforceCyrillicProseGarble === true
     });
     if (editorialLeakageIssue) return `分析结果叙事契约无效: ${editorialLeakageIssue}`;
     if (!parsed) return '分析结果无法解析';
@@ -5991,7 +6009,8 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
             contractVersion: options.experimentTableContractVersion
                 || EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
             documentType: parsed?.documentType,
-            sourceText: options.sourceText
+            sourceText: options.sourceText,
+            enforceTableCommentaryAlignment: options.enforceTableCommentaryAlignment === true
         };
         let tableIssue = validateExperimentTableContract(analysis, tableOptions);
         // 损失名称的方向与阶段开关的身份须结合来源判断；仅相应歧义重放
@@ -6050,8 +6069,8 @@ const TABLE_ALIGNMENT_STOPWORDS = new Set([
 
 const GENERIC_TABLE_CJK_LABELS_RE = /^(?:方法|模型|指标|数据集|基准|条件|设置|结果|平均|总体|合计|备注|说明|对比|基线|本文|变化|提升|相对提升|实验|阶段|类别|任务|配置|参数|表现|性能)$/u;
 const TABLE_BLOCK_BOUNDARY_RE = /^(?:#{1,6}\s|\||!\[|>|\[\[(?:TABLE|FIGURE|FORMULA|CONCEPT_BRIDGE)_|\\\[|\$\$|\*论文图|\*\*[^*\n]+ × [^*\n]+：\*\*)/u;
-const CROSS_TABLE_OR_SCOPE_SENTENCE_RE = /(?:上表|下表|前表|后表|另一张表|前一张表|下一张表|主表|第\s*[0-9一二三四五六七八九十]+\s*张表|表\s*[0-9一二三四五六七八九十]+|对照|相比常见|强调与|限制(?:是|在于)|结论(?:只|仅)在|这组实验(?:只|仅)在|(?:未|没有)(?:报告|覆盖|测试|评测))/u;
-const CROSS_TABLE_LEAD_RE = /(?:上表|前表|另一张表|前一张表|主表|与表\s*\d+|跨表)/u;
+const CROSS_TABLE_OR_SCOPE_SENTENCE_RE = /(?:两表|两张表|双表|二表|各表|上述两表|以上两表|同表|上表|下表|前表|后表|另一张表|前一张表|下一张表|主表|第\s*[0-9一二三四五六七八九十]+\s*张表|表\s*[0-9一二三四五六七八九十]+|对照|相比常见|强调与|限制(?:是|在于)|结论(?:只|仅)在|这组实验(?:只|仅)在|(?:未|没有)(?:报告|覆盖|测试|评测))/u;
+const NON_COMMENTARY_TOPIC_SHIFT_RE = /(?:^(?:对比协议|复现输入)|上述输入方式是评测条件)/u;
 
 function cleanTableAlignmentTex(text) {
     return String(text || '')
@@ -6071,12 +6090,32 @@ function extractTableAlignmentIdentifiers(text) {
     return out;
 }
 
-function extractTableAlignmentNumbers(text, { expandRounded = false } = {}) {
-    const cleaned = cleanTableAlignmentTex(text);
+function extractTableRowAcronyms(rows) {
     const out = new Set();
-    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9])(?:\d+\.\d+|\.\d{2,})(?![A-Za-z0-9.])/g)) {
-        const normalized = match[0].startsWith('.') ? `0${match[0]}` : match[0];
-        out.add(match[0]);
+    for (const row of rows) {
+        for (const match of cleanTableAlignmentTex(row[0] || '').matchAll(/\b[A-Z]{2,4}\b/g)) {
+            out.add(match[0]);
+        }
+    }
+    return out;
+}
+
+function extractProseCamelCaseInitials(text) {
+    const out = new Set();
+    for (const match of cleanTableAlignmentTex(text).matchAll(/\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b/g)) {
+        const caps = (match[0].match(/[A-Z]/g) || []).join('');
+        if (caps.length >= 2 && caps.length <= 4) out.add(caps);
+    }
+    return out;
+}
+
+function extractTableAlignmentNumbers(text, { expandRounded = false, tableRows = null } = {}) {
+    const cleaned = cleanTableAlignmentTex(text).replace(/[−–]/g, '-');
+    const out = new Set();
+    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9])[-+]?(?:\d+\.\d+|\.\d{2,})(?![A-Za-z0-9.])/g)) {
+        const unsigned = match[0].replace(/^[-+]/, '');
+        const normalized = unsigned.startsWith('.') ? `0${unsigned}` : unsigned;
+        out.add(unsigned);
         out.add(normalized);
         if (expandRounded) {
             const value = Number(normalized);
@@ -6086,8 +6125,24 @@ function extractTableAlignmentNumbers(text, { expandRounded = false } = {}) {
             }
         }
     }
-    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9.,])\d{2,}(?:,\d{3})*(?![A-Za-z0-9.])/g)) {
-        out.add(match[0].replace(/,/g, ''));
+    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9.,])[-+]?\d+(?:,\d{3})*(?![A-Za-z0-9.])/g)) {
+        out.add(match[0].replace(/^[-+]/, '').replace(/,/g, ''));
+    }
+    if (expandRounded && Array.isArray(tableRows) && tableRows.length >= 2) {
+        const columns = tableRows[0]?.length || 0;
+        for (let col = 0; col < columns; col += 1) {
+            const values = tableRows
+                .map(row => cleanTableAlignmentTex(row[col] || '').match(/(?<![A-Za-z0-9])[-+]?\d+\.\d{2,}(?![A-Za-z0-9.])/)?.[0])
+                .filter(Boolean)
+                .map(Number)
+                .filter(Number.isFinite);
+            for (let left = 0; left < values.length; left += 1) {
+                for (let right = left + 1; right < values.length; right += 1) {
+                    const diff = Math.abs(values[left] - values[right]);
+                    if (diff > 0) out.add(diff.toFixed(2));
+                }
+            }
+        }
     }
     return out;
 }
@@ -6171,8 +6226,9 @@ function findMisalignedTableCommentaryIssues(markdown, options = {}) {
             postParagraph: afterLines.join(' '),
             allIds: extractTableAlignmentIdentifiers(allCells.join(' ')),
             axisIds: extractTableAlignmentIdentifiers(axisCells.join(' ')),
+            rowAcronyms: extractTableRowAcronyms(table.rows),
             cjk: extractTableAlignmentCjkPhrases(allCells),
-            numbers: extractTableAlignmentNumbers(allCells.join(' '), { expandRounded: true })
+            numbers: extractTableAlignmentNumbers(allCells.join(' '), { expandRounded: true, tableRows: table.rows })
         };
     });
 
@@ -6183,29 +6239,33 @@ function findMisalignedTableCommentaryIssues(markdown, options = {}) {
     const findings = [];
     for (let i = 0; i < infos.length; i += 1) {
         const own = infos[i];
-        if (!own.postParagraph) continue;
-        const postIdsAll = extractTableAlignmentIdentifiers(own.postParagraph);
-        const postNumsAll = extractTableAlignmentNumbers(own.postParagraph, { expandRounded: false });
-        const ownNonUbiquitousIds = [...own.allIds].filter(id => !ubiquitousIds.has(id) && postIdsAll.has(id));
-        const ownNums = [...postNumsAll].filter(num => own.numbers.has(num));
-        if (ownNonUbiquitousIds.length > 0 || ownNums.length > 0) continue;
+        if (!own.postParagraph || own.axisIds.size === 0) continue;
+        if (NON_COMMENTARY_TOPIC_SHIFT_RE.test(own.postParagraph) || /另以正文/u.test(own.leadParagraph)) continue;
 
-        const ownCjk = [...own.cjk].filter(phrase => own.postParagraph.includes(phrase));
         const sentences = own.postParagraph
             .split(/[。！？!?]/u)
             .map(sentence => sentence.trim())
             .filter(Boolean);
         if (sentences.length === 0) continue;
-        const opening = (sentences[0].length < 24 && sentences[1] ? sentences.slice(0, 2) : sentences.slice(0, 1))
-            .filter(sentence => !CROSS_TABLE_OR_SCOPE_SENTENCE_RE.test(sentence))
-            .join('。');
+        if (CROSS_TABLE_OR_SCOPE_SENTENCE_RE.test(sentences[0])) continue;
+
+        const postIdsAll = extractTableAlignmentIdentifiers(own.postParagraph);
+        const postNumsAll = extractTableAlignmentNumbers(own.postParagraph, { expandRounded: false });
+        const postInitials = extractProseCamelCaseInitials(own.postParagraph);
+        const ownNonUbiquitousIds = [...own.allIds].filter(id => !ubiquitousIds.has(id) && postIdsAll.has(id));
+        const ownAcronymMatches = [...postInitials].filter(initial => own.rowAcronyms.has(initial));
+        const ownNums = [...postNumsAll].filter(num => own.numbers.has(num));
+        if (ownNonUbiquitousIds.length > 0 || ownAcronymMatches.length > 0 || ownNums.length > 0) continue;
+
+        const ownCjk = [...own.cjk].filter(phrase => own.postParagraph.includes(phrase));
+        const opening = (sentences[0].length < 24 && sentences[1] && !CROSS_TABLE_OR_SCOPE_SENTENCE_RE.test(sentences[1])
+            ? sentences.slice(0, 2)
+            : sentences.slice(0, 1)).join('。');
         if (!opening) continue;
         const openingIds = extractTableAlignmentIdentifiers(opening);
         if (openingIds.size < 2) continue;
 
-        const exemptLeadIds = CROSS_TABLE_LEAD_RE.test(own.leadParagraph)
-            ? extractTableAlignmentIdentifiers(own.leadParagraph)
-            : new Set();
+        const exemptLeadIds = extractTableAlignmentIdentifiers(own.leadParagraph);
 
         let bestRival = null;
         for (let j = 0; j < infos.length; j += 1) {
@@ -6226,20 +6286,27 @@ function findMisalignedTableCommentaryIssues(markdown, options = {}) {
 
         const rival = bestRival.rival;
         const foreignTokens = bestRival.foreignTokens.slice(0, 6);
-        const locationHint = own.sectionIndex !== null
-            ? `（位于 sections[${own.sectionIndex}].body${rival.sectionIndex !== null && rival.sectionIndex !== own.sectionIndex ? `，与 sections[${rival.sectionIndex}].body 中的表格交叉错位` : ''}）`
-            : '';
+        const ownLocator = [
+            own.sectionIndex !== null ? `sections[${own.sectionIndex}].body` : null,
+            `tableBindings[${i}]`
+        ].filter(Boolean).join(', ');
+        const rivalLocator = [
+            rival.sectionIndex !== null ? `sections[${rival.sectionIndex}].body` : null,
+            `tableBindings[${rival.index}]`
+        ].filter(Boolean).join(', ');
         findings.push({
             code: 'table_commentary_misaligned',
             tableIndex: i + 1,
             otherTableIndex: rival.index + 1,
+            bindingIndex: i,
+            otherBindingIndex: rival.index,
             sectionIndex: own.sectionIndex,
             otherSectionIndex: rival.sectionIndex,
             line: own.postStartLine + 1,
             foreignTokens,
             message: options.analysisMode === true
                 ? `实验结果第 ${i + 1} 张表的表后解释未引用本表专有指标或数值，却引用了第 ${rival.index + 1} 张表的专有标识（${foreignTokens.join('、')}），疑似多表与表后评述错位`
-                : `Markdown 表格与其紧邻表后解释错位${locationHint}：表后首段未引用本表专有行列标识或数值，却集中引用了篇内另一张表的专有标识（${foreignTokens.join('、')}）；请核对原表，将各表的摆放位置、tableBindings 顺序及表后解释逐一对齐`
+                : `第 ${i + 1} 张表（${ownLocator}）的表后首段未引用本表专有行列标识或数值，却集中引用了第 ${rival.index + 1} 张表（${rivalLocator}）的专有标识（${foreignTokens.join('、')}），疑似多表与表后评述错位；请核对原表将对应小节正文与表绑定索引逐一对齐`
         });
     }
     return findings;

@@ -171,3 +171,47 @@ test('stable content declarations cannot borrow another stage or unknown SHA', (
     assert.equal(evidence.declaredPromptTemplateEvidence(article, 'f'.repeat(64)), null);
     assert.throws(() => registry.promptFilePathForContract('unknownStage', registry.CURRENT_PROMPT_CONTRACT));
 });
+
+test('pre-edit Reader prompt Git blobs remain resolvable by template and whole-file SHA256', () => {
+    const preEditCases = [
+        {
+            stage: 'apiReaderArticle',
+            relativePath: 'prompts/current/api-reader-article.md',
+            blobOid: 'ac05c8a2fbb62fbfcbfa26975ba8527fdd1c13af',
+            wholeSha256: '8fd01908770424562dc68532725b1568b84b29f0eaefc8e63f97bcb7b7ba320d',
+            templateSha256: '3d987ea345aee21223f30d514588ee9e2b2f5da7e8cb03894db921809de1cf18'
+        },
+        {
+            stage: 'apiReaderRepair',
+            relativePath: 'prompts/current/api-reader-repair.md',
+            blobOid: '689c351b7641287148c3cf8bb8d46218abc1eb46',
+            wholeSha256: '0037cfe5a2efa88683fcc6d2b1b599d680874b2c8d5fcde1acfec25ce2217e04',
+            templateSha256: 'd00b3878979ae2849618cecf4bb8b519fae5292bb154a90281dfac726e3b0598'
+        }
+    ];
+    for (const item of preEditCases) {
+        const expectedBytes = git('cat-file', 'blob', item.blobOid);
+        assert.equal(sha(expectedBytes), item.wholeSha256);
+        assert.equal(history.promptTemplateSha256(expectedBytes.toString('utf8')), item.templateSha256);
+
+        const stageMatch = evidence.declaredStagePromptTemplateEvidence(item.stage, item.templateSha256);
+        assert.ok(stageMatch, `${item.stage} pre-edit template SHA256 must resolve`);
+        assert.equal(stageMatch.path, item.relativePath);
+        assert.equal(stageMatch.fileSha256, item.wholeSha256);
+        assert.equal(stageMatch.templateSha256, item.templateSha256);
+        assert.deepEqual(stageMatch.bytes, expectedBytes);
+
+        assert.deepEqual(
+            evidence.readDeclaredPromptEvidenceBytes(item.relativePath, item.wholeSha256),
+            expectedBytes
+        );
+        assert.deepEqual(
+            history.promptBytesForSha256(item.stage, item.wholeSha256),
+            expectedBytes
+        );
+        assert.deepEqual(
+            history.historicalPromptTemplateBytesForSha256(item.templateSha256),
+            expectedBytes
+        );
+    }
+});

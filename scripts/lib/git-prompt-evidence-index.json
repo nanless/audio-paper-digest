@@ -1987,6 +1987,54 @@
         "prompts/current/tag-repair.md",
         "prompts/tag-repair-v3.md"
       ]
+    },
+    "8fd01908770424562dc68532725b1568b84b29f0eaefc8e63f97bcb7b7ba320d": {
+      "blobOid": "ac05c8a2fbb62fbfcbfa26975ba8527fdd1c13af",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "0037cfe5a2efa88683fcc6d2b1b599d680874b2c8d5fcde1acfec25ce2217e04": {
+      "blobOid": "689c351b7641287148c3cf8bb8d46218abc1eb46",
+      "paths": [
+        "prompts/current/api-reader-repair.md"
+      ]
+    },
+    "da17a800b472db1e07df61e3a1588c2add08c1a88efe2e41e343a0e04fb3dd53": {
+      "blobOid": "68b8b1a77a520897e77cec1658e9f460276ae740",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "1a0486765792f301f3226e0365285be51c1fdbfbf8490e02835c7e412f4dc716": {
+      "blobOid": "9f706e33f1b7251d5e09e22583fa7a254ccb33d0",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "b37262e402eed9c0dd7b1de8d00d870c6191db249184b33531e005a3f50af9f7": {
+      "blobOid": "2bcf60d8917233466762b62f076f0925738c0bde",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "3eaf8b0538be6f43fad93c37307b54fa3dc6180d77bea7a36b3803b14566638f": {
+      "blobOid": "aa61af0f86f6c44f0994aa580c979cf8488874f0",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "5d58ef292efccf2b99f6387d28890d1c181ea2b6838e8295bd973da4f40eb25a": {
+      "blobOid": "a940302d2cc4f28a2d2add369a800c2d8b7c0862",
+      "paths": [
+        "prompts/current/core-summary-repair.md"
+      ]
+    },
+    "078afad46363c01048e3a45310892bedcd3f7febe735433a9058ffe266724766": {
+      "blobOid": "f3674789a7f95e332b04a4ce32464e5ec7fbdf51",
+      "paths": [
+        "prompts/current/table-fill.md"
+      ]
     }
   }
 }

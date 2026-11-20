@@ -1373,13 +1373,20 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
 // 这些独立诊断是权威解析器的补充，不是替代。
 // 只检查模型写给读者的文字。来源引文、原表单元格、公式和记录字段不参与改写。
 // 在组装正文前保存原稿路径，避免一句带“表”的提示触发整篇表格重写。
-function collectReaderLanguageIssues(draft) {
+function collectReaderLanguageIssues(draft, options = {}) {
     if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return [];
     const { findReaderLanguageIssues } = require('../editorial-quality.js');
+    const sourceText = typeof options.sourceText === 'string' ? options.sourceText : '';
+    const documentText = [
+        draft.readerTitle || '',
+        draft.oneSentenceThesis || '',
+        ...(Array.isArray(draft.sections) ? draft.sections.flatMap(section => [section?.heading || '', section?.body || '']) : []),
+        ...(Array.isArray(draft.conceptBridges) ? draft.conceptBridges.map(bridge => bridge?.explanation || '') : [])
+    ].filter(Boolean).join('\n\n');
     const issues = [];
     const check = (text, pointer, contextText = '') => {
         if (typeof text !== 'string') return;
-        for (const finding of findReaderLanguageIssues(text, { contextText })) {
+        for (const finding of findReaderLanguageIssues(text, { contextText, sourceText, documentText })) {
             issues.push({ code: finding.code, path: pointer, match: finding.match,
                 message: `${finding.message} 原句片段：${finding.match}` });
         }
@@ -1447,7 +1454,7 @@ function uniqueWorkflowLeakBodyPath(draft, parserError) {
 
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
-    const languageIssues = collectReaderLanguageIssues(draft);
+    const languageIssues = collectReaderLanguageIssues(draft, options);
     const languageError = parserError?.code === LANGUAGE_ERROR_CODE && languageIssues.length > 0;
     const objectIssue = parserError && typeof parserError === 'object' && !(parserError instanceof Error)
         ? classifyTableBindingOrderIssue(parserError) : null;
@@ -1461,10 +1468,12 @@ function collectDraftIssues(draft, parserError, options = {}) {
             && issue.diagnosticOnly !== true && issue.path === null
             && issue.requiredCount === parserError.requiredCount
             && issue.actualCount === parserError.actualCount);
+    const hasTableMisalignmentIssues = parserError?.code === 'table_commentary_misaligned'
+        && standaloneParserIssues.some(issue => issue?.code === 'table_commentary_misaligned');
     const preciseFactError = parserError?.code === 'READER_VERIFIED_FACT_CLAIM'
         && parserIssues.length > 0 && parserIssues.every(issue =>
             ['reader_verified_fact_claim', 'reader_verified_compiled_table_claim'].includes(issue?.code));
-    if (parserError && !hasSameCountIssue && !languageError && !preciseFactError) {
+    if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
         } else if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
@@ -2709,7 +2718,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         : [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) })));
 
     if (actionableIssues.some(issue => issue.code === 'reader_invalid_source_quotes' && issue.diagnosticOnly !== true)) {
-        const presentLanguage = new Set(collectReaderLanguageIssues(draft)
+        const presentLanguage = new Set(collectReaderLanguageIssues(draft, options)
             .map(issue => JSON.stringify([issue.code, issue.path, issue.match])));
         for (const issue of actionableIssues) {
             if (LANGUAGE_ISSUE_CODES.has(issue.code)
@@ -3006,7 +3015,8 @@ function buildRepairTargets(draft, issues, options = {}) {
     }
     const languageIssueKey = issue => JSON.stringify([issue.code, issue.path, issue.match]);
     const currentLanguageIssues = new Set(actionableIssues.some(issue => LANGUAGE_ISSUE_CODES.has(issue.code))
-        ? collectReaderLanguageIssues(draft).map(languageIssueKey) : []);
+        ? collectReaderLanguageIssues(draft, options).map(languageIssueKey) : []);
+    const deferredMisalignedBindings = [];
     for (const issue of actionableIssues) {
         if (classifyTableBindingOrderIssue(issue).ignoreMessageForRepair) continue;
         if (LANGUAGE_ISSUE_CODES.has(issue.code)) {
@@ -3014,9 +3024,22 @@ function buildRepairTargets(draft, issues, options = {}) {
             if (currentLanguageIssues.has(languageIssueKey(issue))) add(issue.path);
             continue;
         }
+        const message = issue.message || '';
+        if (issue.code === 'table_commentary_misaligned' || /table_commentary_misaligned/.test(message)) {
+            if (issue.path) add(issue.path);
+            if (issue.otherPath) add(issue.otherPath);
+            for (const match of message.matchAll(/sections\[(\d+)\]\.body/g)) {
+                add(`/sections/${match[1]}/body`);
+            }
+            if (issue.bindingPath) deferredMisalignedBindings.push(issue.bindingPath);
+            if (issue.otherBindingPath) deferredMisalignedBindings.push(issue.otherBindingPath);
+            for (const match of message.matchAll(/tableBindings\[(\d+)\]/g)) {
+                deferredMisalignedBindings.push(`/tableBindings/${match[1]}`);
+            }
+            continue;
+        }
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
-        const message = issue.message || '';
         const workflowLeak = /读者文章泄漏了流程或证据元话语：([^\n]+)/.exec(message)?.[1];
         if (workflowLeak) {
             draft.sections.forEach((section, index) => {
@@ -3115,6 +3138,10 @@ function buildRepairTargets(draft, issues, options = {}) {
                 });
             }
         }
+    }
+    for (const bindingPointer of deferredMisalignedBindings) {
+        if (paths.size >= MAX_READER_PATCH_NODES) break;
+        add(bindingPointer);
     }
     // 全局的可读性和篇幅类错误，没法靠正则消息安全地定位到某处。保留所有
     // 正文目标供审查，但每个补丁最多八个节点。
@@ -3448,7 +3475,10 @@ function budgetReaderRepairSourceEvidence(sourceEvidence, supplementalEvidence, 
 }
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
-    const targets = buildRepairTargets(draft, issues, options);
+    const targets = buildRepairTargets(draft, issues, {
+        ...options,
+        sourceText: options.sourceText || sourceText
+    });
     const requestedOperation = observedFigureSelectionOperation(draft, options)
         || unavailableFigureCleanupOperation(draft, options)
         || sectionReorganizationOperation(draft)

@@ -2600,6 +2600,33 @@ async function analyzePaperWithRetry(paper, options = {}) {
 
             if (analyzed && analyzed.analysis) {
                 const parsed = parseAnalysis(analyzed.analysis);
+                let onlineSourceText = typeof options.sourceText === 'string'
+                    ? options.sourceText
+                    : (typeof analyzed.sourceText === 'string' ? analyzed.sourceText : '');
+                if (!onlineSourceText && /[\u0400-\u04FF]/u.test(analyzed.analysis)) {
+                    try {
+                        const fresh = require('./lib/fresh-analysis-context');
+                        const context = fresh.getFreshAnalysisContext();
+                        if (context) {
+                            fresh.assertFreshPaper(analyzed);
+                            onlineSourceText = fresh.readFreshSource(context.runDir, analyzed, context)?.text || '';
+                        } else {
+                            const confSource = readConferenceFinalRejectionSource(analyzed);
+                            if (confSource) {
+                                onlineSourceText = confSource.text || '';
+                            } else {
+                                const daily = require('./lib/daily-fresh-source-plan');
+                                const data = readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
+                                const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
+                                if (daily.isPaperBoundToPlan(analyzed, plan)) {
+                                    onlineSourceText = daily.readDailyFreshSource(plan, analyzed)?.text || '';
+                                }
+                            }
+                        }
+                    } catch (_) {
+                        onlineSourceText = '';
+                    }
+                }
                 const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed, {
                     paper: analyzed,
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
@@ -2610,7 +2637,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     )?.contracts?.experimentTables,
                     enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                         analyzed.analysisManifest || paper.analysisManifest
-                    )
+                    ),
+                    enforceCyrillicProseGarble: true,
+                    sourceText: onlineSourceText
                 });
                 const recoveryReason = getIncompleteAnalysisContentReason(analyzed);
                 // A returned object may omit recovery metadata; the locked

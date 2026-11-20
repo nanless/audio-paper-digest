@@ -48,6 +48,7 @@ const {
     getDuplicateRequiredSections,
     validateTopLevelSectionContract,
     validateAnalysisEditorialLeakageContract,
+    findMisalignedTableCommentaryIssues,
     validateMachineSummaryContract,
     validateTagSectionContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -301,7 +302,9 @@ function readerIssuesRequireFullSourceBindingRetry(
         || conferenceWideTableNeedsFullRetry
         || Boolean(!recovered && candidate && fullAttempts < 2 && !allQuoteIssuesCovered
         && otherBlocking.some(issue => (
-            /source-binding|tableBindings|sourceQuote|selection|TABLE_\d+/.test(
+            issue?.code !== 'table_commentary_misaligned'
+            && !/table_commentary_misaligned/.test(String(issue?.message || ''))
+            && /source-binding|tableBindings|sourceQuote|selection|TABLE_\d+/.test(
                 String(issue?.message || '')
             )
         )));
@@ -6348,9 +6351,32 @@ function rebindApiReaderFigurePlacementQuotes(article, placements) {
     });
 }
 
-function validateReaderEditorialQuality(article, sections) {
+function validateApiReaderTableCommentaryAlignment(article) {
+    const misaligned = findMisalignedTableCommentaryIssues(article);
+    if (misaligned.length === 0) return;
+    const readerIssues = misaligned.map(item => ({
+        code: 'table_commentary_misaligned',
+        path: item.sectionIndex !== null ? `/sections/${item.sectionIndex}/body` : null,
+        otherPath: item.otherSectionIndex !== null ? `/sections/${item.otherSectionIndex}/body` : null,
+        bindingPath: `/tableBindings/${item.bindingIndex}`,
+        otherBindingPath: `/tableBindings/${item.otherBindingIndex}`,
+        tableIndex: item.tableIndex,
+        otherTableIndex: item.otherTableIndex,
+        foreignTokens: item.foreignTokens,
+        message: item.message
+    }));
+    throw Object.assign(
+        new Error(`读者文章多表与表后评述错位: ${misaligned.map(item => item.message).join('；')}`),
+        { code: 'table_commentary_misaligned', readerIssues }
+    );
+}
+
+function validateReaderEditorialQuality(article, sections, options = {}) {
     const quality = validateEditorialQuality({
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
+    }, {
+        sourceText: options.sourceText,
+        skipTableCommentaryAlignment: options.skipTableCommentaryAlignment === true
     });
     const sectionWarnings = findReaderSectionNearDuplicates(article, sections);
     // 同一结果数值跨过多小节重复，是读者最直观的啰嗦感来源。
@@ -7075,7 +7101,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         }
     }
     const readerRepair = require('./lib/reader-repair.js');
-    const languageIssues = readerRepair.collectReaderLanguageIssues(value);
+    const languageIssues = readerRepair.collectReaderLanguageIssues(value, {
+        sourceText: options.sourceText
+    });
     if (languageIssues.length) {
         throw Object.assign(new Error('读者正文含生硬译法或写作检查话术，须按原文改写对应字段'), {
             code: readerRepair.LANGUAGE_ERROR_CODE, readerIssues: languageIssues
@@ -7450,7 +7478,11 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     const qualityView = () => omitReaderSelectedTablesForProseCheck(
         article, compiledTables.selectionTableIndexes
     );
-    let quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
+    const qualityOptions = {
+        sourceText: options.sourceText,
+        skipTableCommentaryAlignment: true
+    };
+    let quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
     // 概念 bridge 的表层是带计划签名的内容，术语必须逐字节保住，最后的 bridge 重新绑定
     // （findReaderBridgeParagraph）才能对上。数字修复由问题触发，却做的是全局模式替换，
     // 因此会改写术语内部的子串——比如「下一位置预测预训练」里的「一位」被换成「1位」，
@@ -7480,12 +7512,12 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     ));
     if (repairableSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, repairableSurfaceIssues);
-        quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
+        quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = removeDuplicateReaderLongSentences(article);
     article = separateApiReaderTableBlocks(article);
-    quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
+    quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
     const finalSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
@@ -7493,13 +7525,13 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     ));
     if (finalSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
-        quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
+        quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
     }
     // 全局数字修复也可能碰到标题里匹配上的短语。最后一次修复做完之后、表格和图绑定去查
     // 这些确切的小节标题之前，把单独归一化过的计划锚点恢复回来。
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = ensureApiReaderTableNarratives(article);
-    quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
+    quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
     // 问题的偏移量描述的是注入之前的样子。注入原始 TeX 会改动后面的偏移，所以那些依赖
     // 上下文的豁免要对着产生诊断的那份确切文本复现，而不是渲染后的公式副本。
     const qualityArticle = qualityView();
@@ -7567,6 +7599,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         validateApiReaderTableNarratives(article, minimumTables);
 
     }
+    validateApiReaderTableCommentaryAlignment(article);
     // 表格和图归一化之后可能只剩下一段很短的引导，而它前面那段普通正文其实正是同一段插图
     // 引导的自然延续。在权威重新绑定之前合并掉，最后的签名引文才是对着文章的真实字节量
     // 出来的。
@@ -11312,6 +11345,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         enforceExperimentTableContract: true,
         experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         enforceMethodDetailContract: true,
+        enforceCyrillicProseGarble: true,
         sourceText
     });
     if (invalidReason) {
@@ -11333,7 +11367,9 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
             const reason = getInvalidAnalysisReason(candidate.analysis, parsed, {
                 enforceExperimentTableContract: true,
                 experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
-                enforceMethodDetailContract: true, sourceText
+                enforceMethodDetailContract: true,
+                enforceCyrillicProseGarble: true,
+                sourceText
             });
             if (reason) throw new Error(`评分稳定性审计未通过最终契约: ${reason}`);
             return Number.parseFloat(parsed?.score);
@@ -11355,6 +11391,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         enforceExperimentTableContract: true,
         experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         enforceMethodDetailContract: true,
+        enforceCyrillicProseGarble: true,
         sourceText
     });
     if (sealedInvalidReason) {
