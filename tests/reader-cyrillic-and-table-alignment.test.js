@@ -98,6 +98,7 @@ test('D1：检测中文正文中混入的西里尔字母乱码词（含中英文
     }
 
     const draft = {
+        version: 3,
         readerTitle: '强化学习奖励设计与轨迹收敛行为分析',
         oneSentenceThesis: '通过分解阶段奖励与终止条件，模型在受控环境下实现更高累积回报并暴露探索方差代价。',
         sections: [

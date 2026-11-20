@@ -2835,7 +2835,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     if (!readerLegacyDatasetClaimsValid(boundArticle, tableBindings)) {
         throw new Error('读者文章的 TidyVoice/validation set 对应关系缺少逐字原文依据；请按原文修复数据集及其表格来源记录');
     }
-    boundArticle = require('./lib/reader-table-pdf-evidence').appendSourceOriginNotes(boundArticle, tableBindings);
+    if (options.editorialProfile !== 'cohesive-functional-v4') {
+        boundArticle = require('./lib/reader-table-pdf-evidence').appendSourceOriginNotes(boundArticle, tableBindings);
+    }
     return {
         article: boundArticle,
         ...(tablePruningDiagnostics.length ? { tablePruningDiagnostics } : {}),
@@ -7666,6 +7668,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 sourceText: options.sourceText,
                 sections: normalizedSections,
                 selectionTableIndexes: compiledTables.selectionTableIndexes,
+                editorialProfile,
                 allowDeterministicQuoteRepair:
                     options.allowDeterministicQuoteRepair === true,
                 allowDeterministicUnsupportedClaimPruning:
@@ -8054,10 +8057,12 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
         return rollbackLegacyImageSupplementForModernReader(paper, analysisManifest);
     }
     const qualityView = restoreApiReaderInjectionMarkers(article, repairedPlan, repairedFigures || []);
-    const quality = validateReaderEditorialQuality(qualityView, repairedPlan.sections);
     const planFormat = require('./lib/reader-record-format');
     const compileFormat = planFormat.storedPlanFormat(repairedPlan) === planFormat.COMPACT
         ? { compileCurrent: false } : planFormat.compilationOptionsForSavedPlan(repairedPlan);
+    const quality = validateReaderEditorialQuality(qualityView, repairedPlan.sections, {
+        editorialProfile: compileFormat.editorialProfile
+    });
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityView, compileFormat);
     if (qualityMetrics.blockingIssueCount > 0) {
         throw new Error('文章文字规范化后仍未通过表达质量检查，不能更新文章与计划的绑定记录。');

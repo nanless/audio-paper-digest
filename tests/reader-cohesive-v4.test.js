@@ -570,3 +570,126 @@ test('signed claim projection, conceptBridge surface inverse, and git-prompt-evi
         assert.equal(found.fileSha256, wholeSha);
     }
 });
+
+test('cohesive-functional-v4 omits PDF-origin boilerplate note on pdfSourceQuotes tables and roundtrips cleanly while legacy keeps it', async t => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { execFileSync } = require('node:child_process');
+    const Config = require('../scripts/config');
+    const daily = require('../scripts/lib/daily-fresh-source-plan');
+    const fresh = require('../scripts/lib/fresh-analysis-context');
+    const sourceApi = require('../scripts/lib/fresh-arxiv-rewrite-source');
+
+    const pdfBytes = execFileSync(
+        'bash',
+        [
+            path.resolve(__dirname, '../scripts/python-runtime.sh'),
+            '-c',
+            'import fitz, sys; doc = fitz.open(); p = doc.new_page(); p.insert_text((72, 72), "The source reports a controlled measurement of 1.0 under the same protocol."); sys.stdout.buffer.write(doc.tobytes())'
+        ]
+    );
+
+    const prevDir = Config.FILES.dailyFreshSourceRunsDir;
+    const tmpRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'cohesive-v4-pdf-quote-'));
+    fs.chmodSync(tmpRoot, 0o700);
+    Config.FILES.dailyFreshSourceRunsDir = path.join(tmpRoot, 'runs');
+    t.after(() => {
+        Config.FILES.dailyFreshSourceRunsDir = prevDir;
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    const { draft, base } = buildCohesiveV4DraftFixture();
+    const paper = structuredClone(base.paper);
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-11-20', batchId: 'v4-pdf-quote-test', papers: [paper] });
+    const htmlText = 'General overview text without the numeric measurement.';
+    await daily.captureDailyFreshSources(plan, {
+        concurrency: 1,
+        capture: opts => sourceApi.captureFreshArxivRewriteSource(opts, {
+            fetchText: async id => ({
+                text: htmlText,
+                source: 'html',
+                sourceId: id,
+                url: `https://arxiv.org/html/${id}`,
+                fetchedAt: '2026-11-20T00:00:00.000Z',
+                imageInfos: [],
+                warnings: []
+            }),
+            fetchPdf: async id => ({
+                bytes: pdfBytes,
+                url: `https://arxiv.org/pdf/${id}`,
+                fetchedAt: '2026-11-20T00:00:01.000Z'
+            })
+        })
+    });
+    const sealed = daily.readDailyFreshSource(plan, paper);
+
+    const pdfDraft = structuredClone(draft);
+    pdfDraft.figurePlacements = [];
+    pdfDraft.formulaBindings = [];
+    pdfDraft.sections[1].body = pdfDraft.sections[1].body.replace('\n\n[[FIGURE_1]]', '');
+    pdfDraft.sections[3].body = pdfDraft.sections[3].body.replace('\n\n[[FORMULA_1]]', '');
+    pdfDraft.sections[0].body += '\n\n' + [
+        '从声学物理表征角度进一步审视，短窗帧移过大会削弱清浊音过渡处的瞬态能量梯度，而帧移过小又会显著抬升实时编码器的每秒乘加运算吞吐负担，因此问题定义阶段必须把帧长、帧移与感受野跨度联动建模。',
+        '与此同时，传统串行后处理管线通常将语音活动检测与细粒度时间戳对齐解耦训练，前级一旦在低信噪比段落漏检微弱起始帧，后级回归头便失去修正入口，这也是端到端协同建模试图消除的结构性瓶颈。',
+        '结合工业界流式语音交互系统的线上观测需求，明确区分因果前向缓冲延迟与模型算子自身推理耗时同样不可或缺，各项指标共同决定了最终交互响应能否稳定落在可感知阈值之内。'
+    ].join('\n\n');
+    pdfDraft.sections[5].body += '\n\n' + [
+        '补充核对流式状态缓存在跨语种说话人切换时的收敛稳定性，明确远场阵列拾音与近讲麦克风拾音在信噪比假设上的本质差异，避免将安静录音室内的定位表现直接外推到强反射走廊或车载免提环境。',
+        '工程复现阶段应先固定前端分帧窗长、重叠步长与最小二乘平滑权重，再逐项验证二维 Mel 频谱归一化统计量与码本初始化种子是否与受控实验完全一致，随后单独记录端到端帧级延迟与显存峰值开销。',
+        '当下游任务需要同时兼顾语音可懂度与事件边界定位时，还应在相同评测协议下补充消融不同帧移分辨率的精度代价曲线，从而为实际线上部署提供清晰的选型依据与失败兜底判据。',
+        '此外，针对极短突发噪声与重叠抢话片段，后续验证应拆解局部能量门控的误触发比例，结合时频掩码稀疏度检查每一帧特征投影在低比特量化下的退化轨迹与恢复速度。',
+        '最后围绕开源代码与评测脚本的可重复性，建议核对音频重采样滤波器阶数、静音裁剪阈值与随机划分索引文件，确保独立实验团队在相同硬件预算下复现一致的主表读数与边界结论。'
+    ].join('\n\n');
+    const pdfQuote = 'The source reports a controlled measurement of 1.0 under the same protocol.';
+    pdfDraft.tableBindings = [
+        { tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [], pdfSourceQuotes: [pdfQuote] },
+        { tableIndex: 2, sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [], pdfSourceQuotes: [pdfQuote] }
+    ];
+
+    await daily.withDailyFreshAnalysisContext(plan, () => {
+        fresh.attachFreshSourceRecord(paper, paper.analysisManifest, sealed);
+        return fresh.withFreshPaperContext(paper, () => {
+            const parseOpts = {
+                arxivId: paper.arxivId,
+                sourceText: sealed.text,
+                structuredArtifacts: sealed.structuredArtifacts,
+                availableFigureOrdinals: [],
+                requireSourceBindings: true,
+                requireIntegratedTables: true,
+                minimumIntegratedTables: 2
+            };
+            // 1. cohesive-functional-v4 下不追加“本表数值与单位依据论文 PDF。”，且再次解析不会触发套话拦截
+            const v4Parsed = deep.parseApiReaderArticleResult(JSON.stringify(pdfDraft), parseOpts);
+            assert.equal(v4Parsed.plan.tableBindings[0].sealedPdfQuoteEvidence.length, 1);
+            assert.equal(v4Parsed.article.includes('本表数值与单位依据论文 PDF'), false);
+
+            // 逆向切回 section body 后带回原 pdfSourceQuotes 重新进入 parseApiReaderArticleResult 100% 往返无阻断
+            const headings = [...v4Parsed.article.matchAll(/^### ([^\n]+)\n\n/gm)];
+            const roundtripDraft = {
+                ...pdfDraft,
+                sections: v4Parsed.plan.sections.map((sec, idx) => {
+                    const start = headings[idx].index + headings[idx][0].length;
+                    const end = idx + 1 < headings.length ? headings[idx + 1].index - 2 : v4Parsed.article.length;
+                    return { kind: sec.kind, heading: sec.heading, body: v4Parsed.article.slice(start, end) };
+                })
+            };
+            const v4Reparsed = deep.parseApiReaderArticleResult(JSON.stringify(roundtripDraft), parseOpts);
+            assert.equal(v4Reparsed.article, v4Parsed.article);
+
+            // 2. 默认/legacy-integrated 路径仍保持追加“本表数值与单位依据论文 PDF。”的原行为
+            const sampleMarkdown = '说明比较口径。\n\n| 指标 | 数值 |\n|---|---:|\n| 报告值 | 1.0 |\n\n该结果仅在受控评测协议与固定数据集口径下成立，未覆盖远场混响部署环境。';
+            const legacyBound = require('../scripts/lib/reader-sealed-pdf-quote-evidence').withArtifacts(
+                sealed.structuredArtifacts,
+                paper.arxivId,
+                () => deep.bindApiReaderSourceEvidence(
+                    sampleMarkdown,
+                    [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [], pdfSourceQuotes: [pdfQuote] }],
+                    [],
+                    { sourceText: sealed.text, structuredArtifacts: sealed.structuredArtifacts, sections: [] }
+                )
+            );
+            assert.match(legacyBound.article, /本表数值与单位依据论文 PDF。/);
+        });
+    });
+});
