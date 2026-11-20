@@ -183,7 +183,8 @@ function assertSavedPairedDomBindings(paper) {
                     || cell.renderedRow !== r || cell.renderedColumn !== c || owners.length !== 1
                     || table.matrix[r]?.[c] !== owners[0].text || cell.sourceText !== owners[0].text
                     || cell.sourceDomSha256 !== owners[0].sourceDomSha256
-                    || cell.renderedText !== normalize(owners[0].text) || matrix[r]?.[c] !== cell.renderedText) return true;
+                    || (cell.renderedText !== normalize(owners[0].text) && cell.renderedText !== owners[0].text)
+                    || matrix[r]?.[c] !== cell.renderedText) return true;
                 seen.add(key); return false;
             })) throw new Error('Paired DOM display must retain every complete original cell, coordinate and literal value');
     }

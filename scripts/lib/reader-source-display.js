@@ -249,7 +249,7 @@ function projectReaderAnonMacro(value) {
         .replace(/\\anon\[([^\]]*)\][A-Za-z0-9-]*(?![A-Za-z0-9])/g, '$1');
 }
 
-const PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = /(\(([+−-])(\d+(?:\.\d+)?%?)\))\(([+−-])(\d+(?:\.\d+)?%?)\)/g;
+const PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = /(\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\))\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\)/g;
 const LEADING_EMPTY_LINK_CELL_PREFIX_RE = /^[^\S\r\n]*\[\]\[\][ \t]+(?=[^\s\u200b\u200c\u200d\u2060\ufeff])(?!\[\]\[\])/;
 
 function collapseParenthesizedSignedDoubleWrite(value) {
@@ -267,7 +267,7 @@ function collapseParenthesizedSignedDoubleWrite(value) {
             if ((firstSign === '−' ? '-' : firstSign) !== (secondSign === '−' ? '-' : secondSign)) {
                 return whole;
             }
-            if (offset > 0 && /[\p{L}\p{N}_^\\.\])}+−=*×÷\-/\x00]/u.test(input[offset - 1])) {
+            if (offset > 0 && /[\p{L}\p{N}_^\\.\])}+−=*×÷\-/\x00]$/u.test(input.slice(0, offset))) {
                 return whole;
             }
             const tail = input.slice(offset + whole.length);
@@ -385,8 +385,16 @@ function projectReaderCellTexDisplay(value) {
     output = output.replace(/\s*\(\s*\)/g, '');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
     // LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
-    // 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；独立 [][] 与格中 [][] 保留。
-    output = stripLeadingEmptyReferenceLinkCellPrefix(output);
+    // 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后经后续投影不剩可见字符则回退保留 [][]。
+    const stripped = stripLeadingEmptyReferenceLinkCellPrefix(output);
+    if (stripped !== output) {
+        const projected = projectReaderCellTexDisplayBody(stripped);
+        const stabilized = projected.replace(/\s*\(\s*\)/g, '');
+        if (/[^\s\u200b\u200c\u200d\u2060\ufeff]/.test(stabilized)
+            && stripLeadingEmptyReferenceLinkCellPrefix(projected) === projected) {
+            return projected;
+        }
+    }
     return projectReaderCellTexDisplayBody(output);
 }
 

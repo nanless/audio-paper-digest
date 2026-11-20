@@ -8326,7 +8326,7 @@ _MATHJAX_DOUBLE_WRITE_RULES = (
     # −7.39-7.39 → −7.39（Unicode 负号与 ASCII 负号重复同一数值）
     (re.compile(r'(?<![\d.])([−-])(\d+(?:\.\d+)?)-\2(?![\d.])'), r'\1\2'),
     # (−1.4)(-1.4) → (−1.4)、(+0.2)(+0.2) → (+0.2)、(−1.4%)(-1.4%) → (−1.4%)
-    (re.compile(r'(\(([+−-])(\d+(?:\.\d+)?%?)\))\(([+−-])(\d+(?:\.\d+)?%?)\)'),
+    (re.compile(r'(\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\))\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\)'),
      lambda m: m.group(1) if (
          m.group(3) == m.group(5)
          and m.group(2).replace('−', '-') == m.group(4).replace('−', '-')
@@ -8643,6 +8643,41 @@ def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
             return first if first == head + ',' + tail else whole
 
         value = re.sub(r'(\d{1,3}(?:,\d{3})+)(\d)\{,\}(\d{3})(?![\d,])', fold_comma_copy, value)
+    if explicit_cells and ')(' in value:
+        protected_urls = []
+
+        def mask_paren_url(match):
+            protected_urls.append(match.group(0))
+            return f'\x00PDPARENURL{len(protected_urls) - 1}\x00'
+
+        masked_value = re.sub(r'\]\([^)\s]+\)', mask_paren_url, value)
+
+        def fold_parenthesized_signed(match):
+            first_group, first_sign, first_num, second_sign, second_num = match.groups()
+            if first_num != second_num or first_sign.replace('−', '-') != second_sign.replace('−', '-'):
+                return match.group(0)
+            src = match.string
+            start, end = match.start(), match.end()
+            if start > 0:
+                prev = src[start - 1]
+                if unicodedata.category(prev)[0] in ('L', 'N') or prev in '_^\\.\])}+−=*×÷-/\x00':
+                    return match.group(0)
+            if end < len(src):
+                nxt = src[end]
+                if unicodedata.category(nxt)[0] in ('L', 'N') or nxt in '_^\\({%*×÷/\x00':
+                    return match.group(0)
+                if nxt == '.' and end + 1 < len(src) and unicodedata.category(src[end + 1])[0] == 'N':
+                    return match.group(0)
+            return first_group
+
+        masked_value = re.sub(
+            r'(\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\))\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\)',
+            fold_parenthesized_signed,
+            masked_value,
+        )
+        for idx, original_url in enumerate(protected_urls):
+            masked_value = masked_value.replace(f'\x00PDPARENURL{idx}\x00', original_url)
+        value = masked_value
     return normalize_repeated_bold_prefixes(value)
 
 
@@ -8832,7 +8867,7 @@ _LEADING_EMPTY_LINK_CELL_PREFIX_RE = re.compile(
     r'^[^\S\r\n]*\[\]\[\][ \t]+(?=[^\s\u200b\u200c\u200d\u2060\ufeff])(?!\[\]\[\])'
 )
 _PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = re.compile(
-    r'(\(([+−-])(\d+(?:\.\d+)?%?)\))\(([+−-])(\d+(?:\.\d+)?%?)\)'
+    r'(\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\))\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\)'
 )
 
 
@@ -8983,8 +9018,14 @@ def _project_reader_cell_tex_display(value):
     if '\\anon[' in output:
         output = _project_reader_anon_macro(output)
     # LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
-    # 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；独立 [][] 与格中 [][] 保留。
-    output = _strip_leading_empty_link_cell_prefix(output)
+    # 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后经后续投影不剩可见字符则回退保留 [][]。
+    stripped = _strip_leading_empty_link_cell_prefix(output)
+    if stripped != output:
+        projected = _project_reader_cell_tex_display_body(stripped)
+        stabilized = re.sub(r'\s*\(\s*\)', '', projected)
+        if re.search(r'[^\s\u200b\u200c\u200d\u2060\ufeff]', stabilized) \
+                and _strip_leading_empty_link_cell_prefix(projected) == projected:
+            return projected
     return _project_reader_cell_tex_display_body(output)
 
 
@@ -10063,7 +10104,7 @@ def _verify_reader_paired_dom_bindings(paper):
             if len(owners) != 1 or cell.get('renderedRow') != r or cell.get('renderedColumn') != c \
                     or table['matrix'][r][c] != owners[0]['text'] or cell.get('sourceText') != owners[0]['text'] \
                     or cell.get('sourceDomSha256') != owners[0]['sourceDomSha256'] \
-                    or cell.get('renderedText') != _normalize_api_reader_display_artifacts(owners[0]['text']) \
+                    or cell.get('renderedText') not in (_normalize_api_reader_display_artifacts(owners[0]['text']), owners[0]['text']) \
                     or matrix[r][c] != cell.get('renderedText'):
                 raise PublishDataValidationError('配对DOM显示的原文、数值单位、坐标或DOM身份不一致。')
             seen.add((r, c))

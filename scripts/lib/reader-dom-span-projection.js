@@ -79,7 +79,8 @@ function fullWidthLabelBlankMatches(table, binding, cell, displayed, renderedTab
         && value.sourceColumn === cell.sourceColumn && value.sourceDomSha256 === cell.sourceDomSha256);
     if (matchingCells.length !== 1) return false;
     const rows = [renderedTable?.header, ...(renderedTable?.rows || [])], row = rows[cell.renderedRow];
-    if (!Array.isArray(row) || row.length < 2 || row.length > width || row[0] !== normalize(original.text)
+    if (!Array.isArray(row) || row.length < 2 || row.length > width
+        || (row[0] !== normalize(original.text) && row[0] !== original.text)
         || row.slice(1).some(value => value !== '')) return false;
     // 选择表可以取原表部分列或将分组行放在首行；由整张逐格绑定派生同一行列投影，
     // 不允许只凭某个空白格放行重复坐标、缺格或其它数值的删除。

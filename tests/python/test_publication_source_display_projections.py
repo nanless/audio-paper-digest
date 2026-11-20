@@ -223,6 +223,8 @@ class PublicationSourceDisplayTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(blog._collapse_mathjax_double_write(raw), expected)
                 self.assertEqual(blog._collapse_mathjax_double_write(expected), expected)
+                self.assertEqual(blog._normalize_api_reader_display_artifacts(raw), expected)
+                self.assertEqual(blog._normalize_api_reader_display_artifacts(expected), expected)
                 self.assertEqual(blog._project_reader_cell_tex_display(raw), expected)
                 self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
                 self.assertEqual(blog._reader_cell_comparison(raw), blog._reader_cell_comparison(expected))
@@ -246,6 +248,13 @@ class PublicationSourceDisplayTests(unittest.TestCase):
             'https://example.test/(-1.4)(-1.4)',
             'f(-1.4)(-1.4)',
             '2(-1.4)(-1.4)',
+            '𝑓(-1.4)(-1.4)',
+            '𝟐(-1.4)(-1.4)',
+            '(-1.4)(-1.4)𝑓',
+            '(-1.4)(-1.4)𝟐',
+            '(-1.4)(-1.4).𝟐',
+            '(−１.４)(-１.４)',
+            '(−١.٤)(-١.٤)',
             '(-1.4)(-1.4)^2',
             '(-1.4)(-1.4)_i',
             '(-1.4)(-1.4)(+0.2)',
@@ -254,8 +263,10 @@ class PublicationSourceDisplayTests(unittest.TestCase):
         for raw in negatives:
             with self.subTest(raw=raw):
                 self.assertEqual(blog._collapse_mathjax_double_write(raw), raw)
+                self.assertEqual(blog._normalize_api_reader_display_artifacts(raw), raw)
                 self.assertEqual(blog._project_reader_cell_tex_display(raw), raw)
         self.assertEqual(blog._collapse_mathjax_double_write(r'\(-1.4\)(-1.4)'), r'\(-1.4\)(-1.4)')
+        self.assertEqual(blog._normalize_api_reader_display_artifacts(r'\(-1.4\)(-1.4)'), r'\(-1.4\)(-1.4)')
 
     def test_leading_empty_reference_link_cell_prefix_projection_and_guards(self):
         positives = [
@@ -276,6 +287,12 @@ class PublicationSourceDisplayTests(unittest.TestCase):
             ('[][]   ', '[][]   '),
             ('[][] \u200b', '[][] \u200b'),
             ('[][] ()', '[][]'),
+            (r'[][] \(\)', '[][] '),
+            (r'[][] \,', '[][] '),
+            (r'[][] \;', '[][] '),
+            ('[][] \\(\u200b\\)', '[][] \u200b'),
+            (r'[][] (\,)', '[][] ()'),
+            (r'[][] \(\) [][] foo', '[][]  [][] foo'),
             ('foo [][] bar', 'foo [][] bar'),
             ('foo; [][] bar', 'foo; [][] bar'),
             (r'foo; [][] bar\uparrow', 'foo; [] bar↑'),
@@ -284,9 +301,12 @@ class PublicationSourceDisplayTests(unittest.TestCase):
             ('[][] [][] foo', '[][] [][] foo'),
         ]:
             with self.subTest(raw=raw):
-                self.assertEqual(blog._project_reader_cell_tex_display(raw), expected)
-                self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
+                actual = blog._project_reader_cell_tex_display(raw)
+                self.assertEqual(actual, expected)
+                self.assertTrue(actual.strip('\u200b\u200c\u200d\u2060\ufeff \t\r\n'))
         self.assertNotEqual(blog._reader_cell_comparison('[][]'), blog._reader_cell_comparison(''))
+        self.assertNotEqual(blog._reader_cell_comparison(r'[][] \(\)'), blog._reader_cell_comparison(''))
+        self.assertNotEqual(blog._reader_cell_comparison(r'[][] \,'), blog._reader_cell_comparison(''))
 
         article = (
             '### 对比结果\n\n'
