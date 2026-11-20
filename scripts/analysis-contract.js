@@ -3726,7 +3726,10 @@ function coreSummaryQuantitativeResultState(text, sourceText = null, definedAcro
             || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult || plannerSelection || correctionRates[sentenceIndex]?.metric
             || hasSourceBoundHitCountMetric(sentence, sourceText)
         ));
-        const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+        const numericSentenceSurface = definedAcronyms.length
+            ? stripDefinedMetricAcronymNumbers(sentence, definedAcronyms)
+            : sentence;
+        const numbers = numericSentenceSurface.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
             && (hasCoreSummaryComparisonDirection(sentence, numbers, sourceText) || plannerSelection || correctionRates[sentenceIndex]?.direction || retrievalComparison));
         // 会议原文常把具体划分写成“AliMeeting远场集”或“VoxAngeles未见语言集”，
@@ -4779,10 +4782,23 @@ function matchesDefinedMetricAcronyms(text, definedAcronyms = []) {
     return false;
 }
 
+function stripDefinedMetricAcronymNumbers(text, definedAcronyms = []) {
+    let out = String(text || '');
+    for (const acronym of definedAcronyms) {
+        const escaped = acronym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'gu');
+        out = out.replace(re, match => match.replace(/[-_.]?\d+(?:\.\d+)?/g, ''));
+    }
+    return out;
+}
+
 function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText, definedAcronyms = []) {
     const cleaned = stripCoreSummaryNonResultNumerals(stripSymbolicPatternRelation(String(rawSentence || '').trim()));
     if (!cleaned) return false;
-    const nonOp = cleaned.replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ');
+    const nonOp = stripDefinedMetricAcronymNumbers(
+        cleaned.replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' '),
+        definedAcronyms
+    );
     const numbers = nonOp.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
     if (numbers.length === 0) return false;
     const withoutModelLabels = cleaned.replace(/(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))/giu, '');
@@ -4807,7 +4823,7 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
         const definedAcronyms = extractExecutiveParagraphDefinedMetricAcronyms(paragraph, sourceText, deniedWindowSentence);
-        for (const windowSize of [2, 3, 4]) {
+        for (const windowSize of [1, 2, 3, 4]) {
             for (let index = 0; index + windowSize <= sentences.length; index++) {
                 const windowParts = sentences.slice(index, index + windowSize);
                 if (windowParts.some(part => deniedWindowSentence.test(part) || hasCrossMetricDirectionalComparison(part))) continue;
@@ -4815,10 +4831,13 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
                     && CORE_SUMMARY_COMPARISON_PATTERN.test(part))) continue;
                 const combined = windowParts.join('，');
                 if (!explicitCounterpartPattern.test(combined)) continue;
-                const nonOpWindow = stripCoreSummaryNonResultNumerals(combined)
-                    .replace(operationalClausePattern, ' ')
-                    .replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ')
-                    .replace(new RegExp(CORE_SUMMARY_METRIC_PATTERN.source, 'gi'), match => match.replace(/\d+(?:\.\d+)?/g, ''));
+                const nonOpWindow = stripDefinedMetricAcronymNumbers(
+                    stripCoreSummaryNonResultNumerals(combined)
+                        .replace(operationalClausePattern, ' ')
+                        .replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ')
+                        .replace(new RegExp(CORE_SUMMARY_METRIC_PATTERN.source, 'gi'), match => match.replace(/\d+(?:\.\d+)?/g, '')),
+                    definedAcronyms
+                );
                 const nonOpResultNumbers = nonOpWindow.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
                 if (nonOpResultNumbers.length < 2) continue;
                 const windowState = coreSummaryQuantitativeResultState(combined, sourceText, definedAcronyms);

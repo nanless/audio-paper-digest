@@ -6088,7 +6088,7 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
             lambda match: re.sub(r'\d+(?:\.\d+)?', '', match.group(0)),
             metric_sentence,
         )
-        numbers = number.findall(numeric_result_sentence)
+        numbers = number.findall(_strip_defined_metric_acronym_numbers(numeric_result_sentence, defined_acronyms))
         has_direction = _has_conditional_metric_delta_direction(result_sentence, metric) or comparison.search(result_sentence) or _has_bound_former_latter_comparison(result_sentence, metric) or _has_bound_disjoint_interval_comparison(result_sentence, metric) or (
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
@@ -6118,6 +6118,16 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     )
     generic_english_metric_re = re.compile(r'(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])', re.IGNORECASE)
 
+    def _strip_defined_metric_acronym_numbers(surface_text, defined_acronyms):
+        out = surface_text
+        for acronym in defined_acronyms or ():
+            out = re.sub(
+                rf'(?<![A-Za-z0-9_]){re.escape(acronym)}(?![A-Za-z0-9_])',
+                lambda m: re.sub(r'[-_.]?\d+(?:\.\d+)?', '', m.group(0)),
+                out,
+            )
+        return out
+
     def _extract_paragraph_defined_metric_acronyms(paragraph_text, denied_re):
         found = []
         def_re = re.compile(
@@ -6138,7 +6148,7 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         cleaned_s = _strip_core_summary_non_result_numerals(raw_sentence.strip())
         if not cleaned_s:
             return False
-        non_op = operational_re.sub(' ', cleaned_s)
+        non_op = _strip_defined_metric_acronym_numbers(operational_re.sub(' ', cleaned_s), defined_acronyms)
         if not number.findall(non_op):
             return False
         without_models = re.sub(
@@ -6173,7 +6183,7 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         for paragraph in re.split(r'\n\s*\n', content_body):
             p_sentences = [s.strip() for s in re.split(r'[。！？!?\n]', paragraph) if s.strip()]
             defined_acronyms = _extract_paragraph_defined_metric_acronyms(paragraph, denied_window_re)
-            for win_size in (2, 3, 4):
+            for win_size in (1, 2, 3, 4):
                 for idx in range(len(p_sentences) - win_size + 1):
                     win = p_sentences[idx:idx + win_size]
                     if any(denied_window_re.search(part) or _has_cross_metric_directional_comparison(part) for part in win):
@@ -6191,6 +6201,7 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                     non_op_win = operational_clause_re.sub(' ', non_op_win)
                     non_op_win = operational_re.sub(' ', non_op_win)
                     non_op_win = metric.sub(lambda m: re.sub(r'\d+(?:\.\d+)?', '', m.group(0)), non_op_win)
+                    non_op_win = _strip_defined_metric_acronym_numbers(non_op_win, defined_acronyms)
                     if len(number.findall(non_op_win)) < 2:
                         continue
                     if _candidate_complete(combined, defined_acronyms):

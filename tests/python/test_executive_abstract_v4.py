@@ -426,6 +426,27 @@ class ExecutiveAbstractV4Test(unittest.TestCase):
             source_text=custom_metric_source.replace('ACBD', 'FAKE1').replace('ATBD', 'FAKE2'),
         ))
 
+        hyphen_source = custom_metric_source.replace('ACBD', 'ACBD-1')
+        zero_number_summary = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**评测基于官方音乐视频与 DEAP 数据集测试划分完成。颜色准确性用平均颜色区间差异 ACBD-1 衡量。对照对象是不依赖历史预测的非自回归基线。本文方法平均 ACBD-1 显著优于非自回归基线。代价是自回归推理必须逐帧展开，论文未报告参数量与推理时延的定量对比。',
+            paragraphs[3],
+        ])
+        self.assertIsNotNone(publisher._detailed_core_summary_semantic_issue(
+            zero_number_summary, summary_header=new_header, source_text=hyphen_source,
+        ))
+
+        single_sentence_with_if = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**在 DEAP 数据集测试划分上颜色准确性用平均颜色区间差异 ACBD 衡量，本文方法的平均 ACBD 为 3.5161，低于非自回归基线的 3.8853。如果移除正交解耦约束则指标明显恶化。代价是自回归推理必须逐帧展开，论文未报告参数量与推理时延的定量对比。',
+            paragraphs[3],
+        ])
+        self.assertIsNone(publisher._detailed_core_summary_semantic_issue(
+            single_sentence_with_if, summary_header=new_header, source_text=custom_metric_source,
+        ))
+
 
 if __name__ == '__main__':
     unittest.main()

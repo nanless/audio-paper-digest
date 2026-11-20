@@ -427,4 +427,29 @@ test('LaTeXML 千分位/控制序列/双写拼接、中文邻接模型名、百�
         sourceText: customMetricSource.replace(/ACBD/g, 'FAKE1').replace(/ATBD/g, 'FAKE2'),
         summaryHeader: newHeader
     }), /已有证据包含关键定量结果/);
+
+    // 8. 带连字符数字的自定义缩写（ACBD-1）里的 -1 不是实验数值：零数值/单侧数值必须拒绝
+    const hyphenSource = `${customMetricSource.replace(/ACBD/g, 'ACBD-1')}`;
+    const zeroNumberSummary = [
+        paragraphs[0],
+        paragraphs[1],
+        '**关键实验与核心代价：**评测基于官方音乐视频与 DEAP 数据集测试划分完成。颜色准确性用平均颜色区间差异 ACBD-1 衡量。对照对象是不依赖历史预测的非自回归基线。本文方法平均 ACBD-1 显著优于非自回归基线。代价是自回归推理必须逐帧展开，论文未报告参数量与推理时延的定量对比。',
+        paragraphs[3]
+    ].join('\n\n');
+    assert.match(contract.validateCoreSummarySemanticContract(withSummary(zeroNumberSummary), {
+        sourceText: hyphenSource,
+        summaryHeader: newHeader
+    }) || '', /已有证据包含关键定量结果|原文无可核定量结果|缺少完整关键定量结果/);
+
+    // 9. 单句已完整写清自定义指标双值对比，相邻消融假设句含“如果”不得牵连误拒
+    const singleSentenceWithIf = [
+        paragraphs[0],
+        paragraphs[1],
+        '**关键实验与核心代价：**在 DEAP 数据集测试划分上颜色准确性用平均颜色区间差异 ACBD 衡量，本文方法的平均 ACBD 为 3.5161，低于非自回归基线的 3.8853。如果移除正交解耦约束则指标明显恶化。代价是自回归推理必须逐帧展开，论文未报告参数量与推理时延的定量对比。',
+        paragraphs[3]
+    ].join('\n\n');
+    assert.equal(contract.validateCoreSummarySemanticContract(withSummary(singleSentenceWithIf), {
+        sourceText: customMetricSource,
+        summaryHeader: newHeader
+    }), null);
 });
