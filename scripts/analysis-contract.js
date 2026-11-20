@@ -439,11 +439,102 @@ function findAnalysisEditorialLeakages(analysis, options = {}) {
     return matches;
 }
 
-function validateAnalysisEditorialLeakageContract(analysis) {
+function validateAnalysisEditorialLeakageContract(analysis, options = {}) {
     const leakages = findAnalysisEditorialLeakages(analysis);
-    return leakages.length > 0
-        ? `检测到模型编辑/自检批注泄漏: ${leakages.join('；')}`
-        : null;
+    if (leakages.length > 0) {
+        return `检测到模型编辑/自检批注泄漏: ${leakages.join('；')}`;
+    }
+    return validateCyrillicProseGarbleContract(analysis, options);
+}
+
+const CYRILLIC_CJK_GARBLE_RE = /(?:[\u4e00-\u9fff][0-9.% \t+\-–—，、]*[\u0400-\u04FF]+(?:[0-9.% \t+\-–—，、]*[\u4e00-\u9fff])?|[\u0400-\u04FF]+[0-9.% \t+\-–—，、]*[\u4e00-\u9fff])/gu;
+const EXPLICIT_SLAVIC_TOPIC_RE = /(?:俄语|俄文|西里尔(?:字母|文)?|斯拉夫|乌克兰语|保加利亚语|塞尔维亚语|白俄罗斯语|\bRussian\b|\bCyrillic\b)/iu;
+
+function maskProseForCyrillicCheck(text) {
+    const original = String(text ?? '');
+    const mask = value => value.replace(/[^\r\n]/g, ' ');
+    let fence = null;
+    let mathEnd = null;
+    let visible = original.split(/(?<=\n)/u).map(line => {
+        const trimmed = line.trim();
+        const marker = trimmed.match(/^(`{3,}|~{3,})/u);
+        if (fence) {
+            if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length
+                && trimmed.slice(marker[1].length).trim() === '') fence = null;
+            return mask(line);
+        }
+        if (marker) {
+            if (trimmed.indexOf(marker[1], marker[1].length) < 0) fence = marker[1];
+            return mask(line);
+        }
+        if (mathEnd) {
+            if (trimmed.includes(mathEnd)) mathEnd = null;
+            return mask(line);
+        }
+        if (/^(?:\$\$|\\\[)/u.test(trimmed)) {
+            const end = trimmed.startsWith('$$') ? '$$' : '\\]';
+            if (!trimmed.slice(2).includes(end)) mathEnd = end;
+            return mask(line);
+        }
+        if (/^(?:>\s?|!\[)/u.test(trimmed)) return mask(line);
+        return line;
+    }).join('')
+        .replace(/(`+)[^`\n]*?\1/gu, mask)
+        .replace(/\$[^$\n]+\$|\\\([^\n]*?\\\)/gu, mask)
+        .replace(/https?:\/\/\S+/gu, mask)
+        .replace(/(?:原文(?:写道|原句|引文|表述)|逐字引文|来源引文)\s*[：:]\s*[“「"'][^”」"'\n]*[”」"']/gu, mask);
+    const tableLines = new Set(extractMarkdownTables(visible)
+        .flatMap(table => Array.from({ length: table.endLine - table.startLine + 1 },
+            (_, index) => table.startLine + index)));
+    if (tableLines.size > 0) {
+        visible = visible.split('\n').map((line, index) => tableLines.has(index)
+            ? mask(line) : line).join('\n');
+    }
+    return visible;
+}
+
+function findCyrillicProseGarbleIssues(text, options = {}) {
+    const original = typeof options.originalText === 'string' ? options.originalText : String(text ?? '');
+    if (!/[\u0400-\u04FF]/u.test(original)) return [];
+    const visible = options.alreadyMasked === true ? String(text ?? '') : maskProseForCyrillicCheck(original);
+    if (!/[\u0400-\u04FF]/u.test(visible)) return [];
+    const sourceLower = typeof options.sourceText === 'string' && options.sourceText.trim()
+        ? options.sourceText.toLowerCase()
+        : '';
+    const findings = [];
+    for (const match of visible.matchAll(CYRILLIC_CJK_GARBLE_RE)) {
+        const index = match.index;
+        const surface = original.slice(index, index + match[0].length);
+        const tokens = [...match[0].matchAll(/[\u0400-\u04FF]+/gu)].map(item => item[0].toLowerCase());
+        if (tokens.length === 0) continue;
+        if (sourceLower && tokens.every(token => sourceLower.includes(token))) continue;
+        const sentenceStart = Math.max(
+            original.lastIndexOf('。', index),
+            original.lastIndexOf('！', index),
+            original.lastIndexOf('？', index),
+            original.lastIndexOf('\n', index)
+        ) + 1;
+        const tailOffset = original.slice(index + match[0].length).search(/[。！？!?\n]/u);
+        const sentenceEnd = tailOffset < 0 ? original.length : index + match[0].length + tailOffset;
+        const sentence = original.slice(sentenceStart, sentenceEnd);
+        if (EXPLICIT_SLAVIC_TOPIC_RE.test(sentence)) continue;
+        findings.push({
+            code: 'cyrillic_prose_garble',
+            match: surface,
+            tokens,
+            index,
+            line: original.slice(0, index).split('\n').length,
+            message: '检测到中文正文中混入西里尔字母乱码词（如俄语词碎片），请对照论文原文改写为准确的自然中文表述，保留原有数值、单位、方法归属与来源证据。'
+        });
+    }
+    return findings;
+}
+
+function validateCyrillicProseGarbleContract(text, options = {}) {
+    const findings = findCyrillicProseGarbleIssues(text, options);
+    if (findings.length === 0) return null;
+    const snippets = [...new Set(findings.map(item => item.match.trim()).filter(Boolean))].slice(0, 5);
+    return `检测到中文正文混入西里尔字母乱码词: ${snippets.join('；')}`;
 }
 
 function maskMarkdownCodeSpanParagraph(text, fill = ' ') {
@@ -2009,6 +2100,10 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         if (!after) {
             return `实验结果第 ${index + 1} 张表后缺少最关键差异、解释与证据边界`;
         }
+    }
+    const tableAlignmentIssue = validateTableCommentaryAlignmentContract(results, options);
+    if (tableAlignmentIssue) {
+        return tableAlignmentIssue;
     }
     if (empirical && tables.length > 0 && numericCells < EXPERIMENT_TABLE_LIMITS.minNumericCells) {
         return `实验表格只有 ${numericCells} 个可核对数字，至少需要 ${EXPERIMENT_TABLE_LIMITS.minNumericCells} 个；纯趋势或结论摘要不能替代结果表`;
@@ -5882,7 +5977,9 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     }
     const topLevelIssue = validateTopLevelSectionContract(analysis);
     if (topLevelIssue) return `分析结果章节契约无效: ${topLevelIssue}`;
-    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis);
+    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis, {
+        sourceText: options.sourceText
+    });
     if (editorialLeakageIssue) return `分析结果叙事契约无效: ${editorialLeakageIssue}`;
     if (!parsed) return '分析结果无法解析';
     const machineSummaryIssue = validateMachineSummaryContract(analysis, parsed);
@@ -5937,6 +6034,222 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     return null;
 }
 
+const TABLE_ALIGNMENT_STOPWORDS = new Set([
+    'method', 'methods', 'model', 'models', 'metric', 'metrics', 'dataset', 'datasets',
+    'baseline', 'baselines', 'system', 'systems', 'overall', 'average', 'mean', 'score', 'scores',
+    'total', 'value', 'values', 'result', 'results', 'setting', 'settings', 'table', 'tables',
+    'ours', 'proposed', 'arrow', 'uparrow', 'downarrow', 'textbf', 'mathrm', 'mathbf', 'mathcal',
+    'text', 'best', 'second', 'input', 'output', 'audio', 'video', 'speech', 'music', 'sound',
+    'time', 'size', 'rate', 'loss', 'train', 'test', 'valid', 'eval', 'task', 'tasks', 'type',
+    'params', 'param', 'speed', 'latency', 'memory', 'cost', 'human', 'large', 'small', 'base',
+    'none', 'full', 'with', 'without', 'from', 'into', 'over', 'under', 'only', 'both', 'each',
+    'stage', 'layer', 'layers', 'block', 'blocks', 'step', 'steps', 'mode', 'modes', 'level',
+    'high', 'low', 'true', 'false', 'zero', 'shot', 'fine', 'tuned', 'free', 'open', 'closed',
+    'track', 'tracks', 'clean', 'other', 'pair', 'pairs', 'approach', 'ratio', 'density'
+]);
+
+const GENERIC_TABLE_CJK_LABELS_RE = /^(?:方法|模型|指标|数据集|基准|条件|设置|结果|平均|总体|合计|备注|说明|对比|基线|本文|变化|提升|相对提升|实验|阶段|类别|任务|配置|参数|表现|性能)$/u;
+const TABLE_BLOCK_BOUNDARY_RE = /^(?:#{1,6}\s|\||!\[|>|\[\[(?:TABLE|FIGURE|FORMULA|CONCEPT_BRIDGE)_|\\\[|\$\$|\*论文图|\*\*[^*\n]+ × [^*\n]+：\*\*)/u;
+const CROSS_TABLE_OR_SCOPE_SENTENCE_RE = /(?:上表|下表|前表|后表|另一张表|前一张表|下一张表|主表|第\s*[0-9一二三四五六七八九十]+\s*张表|表\s*[0-9一二三四五六七八九十]+|对照|相比常见|强调与|限制(?:是|在于)|结论(?:只|仅)在|这组实验(?:只|仅)在|(?:未|没有)(?:报告|覆盖|测试|评测))/u;
+const CROSS_TABLE_LEAD_RE = /(?:上表|前表|另一张表|前一张表|主表|与表\s*\d+|跨表)/u;
+
+function cleanTableAlignmentTex(text) {
+    return String(text || '')
+        .replace(/\\(?:uparrow|downarrow|pm|times|mathbf|mathrm|mathcal|textbf|textit|underline)\b/g, ' ')
+        .replace(/[`*_~]/g, ' ');
+}
+
+function extractTableAlignmentIdentifiers(text) {
+    const cleaned = cleanTableAlignmentTex(text);
+    const out = new Set();
+    for (const match of cleaned.matchAll(/[A-Za-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*/g)) {
+        const raw = match[0].replace(/\.+$/, '');
+        const low = raw.toLowerCase();
+        if (raw.length < 4 || TABLE_ALIGNMENT_STOPWORDS.has(low)) continue;
+        out.add(low);
+    }
+    return out;
+}
+
+function extractTableAlignmentNumbers(text, { expandRounded = false } = {}) {
+    const cleaned = cleanTableAlignmentTex(text);
+    const out = new Set();
+    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9])(?:\d+\.\d+|\.\d{2,})(?![A-Za-z0-9.])/g)) {
+        const normalized = match[0].startsWith('.') ? `0${match[0]}` : match[0];
+        out.add(match[0]);
+        out.add(normalized);
+        if (expandRounded) {
+            const value = Number(normalized);
+            if (Number.isFinite(value)) {
+                out.add(value.toFixed(2));
+                out.add(value.toFixed(1));
+            }
+        }
+    }
+    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9.,])\d{2,}(?:,\d{3})*(?![A-Za-z0-9.])/g)) {
+        out.add(match[0].replace(/,/g, ''));
+    }
+    return out;
+}
+
+function extractTableAlignmentCjkPhrases(cells) {
+    const out = new Set();
+    for (const cell of cells) {
+        for (const match of String(cell || '').matchAll(/[\u4e00-\u9fff]{2,10}/gu)) {
+            if (!GENERIC_TABLE_CJK_LABELS_RE.test(match[0])) {
+                out.add(match[0]);
+            }
+        }
+    }
+    return out;
+}
+
+/**
+ * 检查多表文章中紧邻表格的表后评述是否与相邻表格错位（例如表 A 后的评述完全没有引用表 A 的
+ * 非全局专有标识与数值，却在首句主判断中引用了另一张表 B 的 >=2 个表头/首列专有标识）。
+ */
+function findMisalignedTableCommentaryIssues(markdown, options = {}) {
+    const text = String(markdown ?? '');
+    const tables = extractMarkdownTables(text);
+    if (tables.length < 2) return [];
+    const lines = text.split('\n');
+    const hasReaderSectionHeadings = lines.some(line => /^###\s+\S/.test(line.trim()));
+    const sectionIndexBeforeLine = lineNumber => {
+        if (!hasReaderSectionHeadings) return null;
+        let count = 0;
+        for (let cursor = 0; cursor <= Math.min(lineNumber, lines.length - 1); cursor += 1) {
+            if (/^###\s+\S/.test(lines[cursor].trim())) count += 1;
+        }
+        return count > 0 ? count - 1 : null;
+    };
+
+    const infos = tables.map((table, index) => {
+        const nextTableStart = tables[index + 1]?.startLine ?? lines.length;
+        const afterLines = [];
+        let postStartLine = table.endLine + 1;
+        for (let cursor = table.endLine + 1; cursor < Math.min(lines.length, nextTableStart); cursor += 1) {
+            const trimmed = lines[cursor].trim();
+            if (!trimmed) {
+                if (afterLines.length > 0) break;
+                continue;
+            }
+            if (TABLE_BLOCK_BOUNDARY_RE.test(trimmed)) break;
+            if (afterLines.length === 0) postStartLine = cursor;
+            afterLines.push(trimmed);
+        }
+        if (afterLines.length >= 2 && postStartLine + afterLines.length === nextTableStart) {
+            afterLines.pop();
+        }
+        const prevTableEnd = tables[index - 1]?.endLine ?? -1;
+        const beforeLines = [];
+        let leadEndLine = table.startLine - 1;
+        for (let cursor = table.startLine - 1; cursor > prevTableEnd; cursor -= 1) {
+            const trimmed = lines[cursor].trim();
+            if (!trimmed) {
+                if (beforeLines.length > 0) break;
+                continue;
+            }
+            if (TABLE_BLOCK_BOUNDARY_RE.test(trimmed)) break;
+            if (beforeLines.length === 0) leadEndLine = cursor;
+            beforeLines.unshift(trimmed);
+        }
+        if (beforeLines.length >= 2 && leadEndLine - beforeLines.length + 1 === prevTableEnd + 1) {
+            beforeLines.splice(0, beforeLines.length - 1);
+        }
+        const allCells = [...table.header, ...table.rows.flat()];
+        const axisCells = [
+            ...table.header,
+            ...(table.rows[0] && String(table.rows[0][0] || '').trim() === '' ? table.rows[0] : []),
+            ...table.rows.map(row => row[0] || '')
+        ];
+        return {
+            index,
+            table,
+            sectionIndex: sectionIndexBeforeLine(table.startLine),
+            postStartLine,
+            leadParagraph: beforeLines.join(' '),
+            postParagraph: afterLines.join(' '),
+            allIds: extractTableAlignmentIdentifiers(allCells.join(' ')),
+            axisIds: extractTableAlignmentIdentifiers(axisCells.join(' ')),
+            cjk: extractTableAlignmentCjkPhrases(allCells),
+            numbers: extractTableAlignmentNumbers(allCells.join(' '), { expandRounded: true })
+        };
+    });
+
+    const ubiquitousIds = new Set(
+        [...infos[0].allIds].filter(id => infos.every(info => info.allIds.has(id)))
+    );
+
+    const findings = [];
+    for (let i = 0; i < infos.length; i += 1) {
+        const own = infos[i];
+        if (!own.postParagraph) continue;
+        const postIdsAll = extractTableAlignmentIdentifiers(own.postParagraph);
+        const postNumsAll = extractTableAlignmentNumbers(own.postParagraph, { expandRounded: false });
+        const ownNonUbiquitousIds = [...own.allIds].filter(id => !ubiquitousIds.has(id) && postIdsAll.has(id));
+        const ownNums = [...postNumsAll].filter(num => own.numbers.has(num));
+        if (ownNonUbiquitousIds.length > 0 || ownNums.length > 0) continue;
+
+        const ownCjk = [...own.cjk].filter(phrase => own.postParagraph.includes(phrase));
+        const sentences = own.postParagraph
+            .split(/[。！？!?]/u)
+            .map(sentence => sentence.trim())
+            .filter(Boolean);
+        if (sentences.length === 0) continue;
+        const opening = (sentences[0].length < 24 && sentences[1] ? sentences.slice(0, 2) : sentences.slice(0, 1))
+            .filter(sentence => !CROSS_TABLE_OR_SCOPE_SENTENCE_RE.test(sentence))
+            .join('。');
+        if (!opening) continue;
+        const openingIds = extractTableAlignmentIdentifiers(opening);
+        if (openingIds.size < 2) continue;
+
+        const exemptLeadIds = CROSS_TABLE_LEAD_RE.test(own.leadParagraph)
+            ? extractTableAlignmentIdentifiers(own.leadParagraph)
+            : new Set();
+
+        let bestRival = null;
+        for (let j = 0; j < infos.length; j += 1) {
+            if (i === j) continue;
+            const rival = infos[j];
+            const ownUniqueCjk = ownCjk.filter(phrase => !rival.cjk.has(phrase));
+            if (ownUniqueCjk.length > 0) continue;
+            const foreignTokens = [...openingIds].filter(
+                id => !own.allIds.has(id) && !exemptLeadIds.has(id) && rival.axisIds.has(id)
+            );
+            if (foreignTokens.length >= 2) {
+                if (!bestRival || foreignTokens.length > bestRival.foreignTokens.length) {
+                    bestRival = { rival, foreignTokens };
+                }
+            }
+        }
+        if (!bestRival) continue;
+
+        const rival = bestRival.rival;
+        const foreignTokens = bestRival.foreignTokens.slice(0, 6);
+        const locationHint = own.sectionIndex !== null
+            ? `（位于 sections[${own.sectionIndex}].body${rival.sectionIndex !== null && rival.sectionIndex !== own.sectionIndex ? `，与 sections[${rival.sectionIndex}].body 中的表格交叉错位` : ''}）`
+            : '';
+        findings.push({
+            code: 'table_commentary_misaligned',
+            tableIndex: i + 1,
+            otherTableIndex: rival.index + 1,
+            sectionIndex: own.sectionIndex,
+            otherSectionIndex: rival.sectionIndex,
+            line: own.postStartLine + 1,
+            foreignTokens,
+            message: options.analysisMode === true
+                ? `实验结果第 ${i + 1} 张表的表后解释未引用本表专有指标或数值，却引用了第 ${rival.index + 1} 张表的专有标识（${foreignTokens.join('、')}），疑似多表与表后评述错位`
+                : `Markdown 表格与其紧邻表后解释错位${locationHint}：表后首段未引用本表专有行列标识或数值，却集中引用了篇内另一张表的专有标识（${foreignTokens.join('、')}）；请核对原表，将各表的摆放位置、tableBindings 顺序及表后解释逐一对齐`
+        });
+    }
+    return findings;
+}
+
+function validateTableCommentaryAlignmentContract(markdown, options = {}) {
+    const findings = findMisalignedTableCommentaryIssues(markdown, { ...options, analysisMode: true });
+    return findings.length > 0 ? findings[0].message : null;
+}
+
 module.exports = {
     REQUIRED_ANALYSIS_SECTIONS,
     REQUIRED_MACHINE_SUMMARY_KEYS,
@@ -5949,6 +6262,10 @@ module.exports = {
     validateTopLevelSectionContract,
     findAnalysisEditorialLeakages,
     validateAnalysisEditorialLeakageContract,
+    findCyrillicProseGarbleIssues,
+    validateCyrillicProseGarbleContract,
+    findMisalignedTableCommentaryIssues,
+    validateTableCommentaryAlignmentContract,
     EXPERIMENT_TABLE_CONTRACT_VERSION,
     EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
     EXPERIMENT_TABLE_CONTRACT_VERSIONS,

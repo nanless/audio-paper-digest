@@ -47,6 +47,15 @@ test('current templates preserve original text apart from the declared changes; 
                     + '只有完全没有可装配原图时才允许 `figurePlacements` 为空，空数组会被代码直接拒绝。')
                 .replace('`figurePlacements` 可以为空，最多 4 项。',
                     '`figurePlacements` 最多 4 项；收到像素且存在可装配原图时不能为空。')
+                .replace('先看图例，确认对象、条件和时间范围，分清分布曲线和单样本标记；颜色一样不代表对象一样。',
+                    '先看图例，确认对象、条件和时间范围，分清分布曲线和单样本标记；颜色一样不代表对象一样，'
+                    + '不要把代表测试条件的图例颜色同方法行名混为一谈。描述柱体实心或斜纹填充（如 p <= 0.05 实心与 p > 0.05 斜纹）'
+                    + '以及子图横纵轴、行与列对应关系时，使用“全部”“所有”“只有”“唯一”等排他量词前必须逐组核对无例外。')
+                .replace('把有连续原句支持的时长比较放正文；无证据的SD或数值不能进入表格。',
+                    '把有连续原句支持的时长比较放正文；无证据的SD或数值不能进入表格。构造 source_quotes 表时，'
+                    + '列头若写单位符号（如 %、s、GiB），对应来源行须有逐字单位证据；若原表或原句只写裸数字而未逐行重复单位，'
+                    + '应绑定原表（selection、completeTable 或 artifact_table），或在 source_quotes 列头不加括号单位符号而在表前说明交代量纲，'
+                    + '并保持代码要求的最低表数（可用原表不少于 4 张时至少 4 张），同时确保每张表紧邻的表后解释只对应本表行列与数值。')
                 .replace('`sections` 必须包含 12–18 个小节，起草时建议安排 14–16 节。输出 JSON 前实际数一次数组项数；'
                     + '少于 12 节或超过 18 节都不能输出。',
                     '`sections` 的节数以本次代码要求为准（见 `{mechanicalContract}`）。先看这篇论文实际有哪些阶段值得展开：'
@@ -72,8 +81,16 @@ test('current templates preserve original text apart from the declared changes; 
             assert.equal(actual.toString(), expected);
         } else if (current === 'prompts/current/api-reader-repair.md') {
             const header = require('../scripts/lib/protocol-codec').record('reader-node-patch');
-            const expected = originalBytes.toString().replace('{"version":1,"draftSha256"',
-                JSON.stringify(header).slice(0, -1) + ',"draftSha256"');
+            const expected = originalBytes.toString()
+                .replace('只在已授权正文及绑定节点内按同一原表或完整连续结果句恢复语义行列，缺证据时保留失败，不补造对应关系。',
+                    '只在已授权正文及绑定节点内按同一原表或完整连续结果句恢复语义行列，缺证据时保留失败，不补造对应关系。'
+                    + '构造或修订 source_quotes 表时，列头单位（如 %、s、GiB）须在对应来源行有逐字单位证据；'
+                    + '原文只写裸数字而未逐行重复单位时优先绑定原表，或不在 source_quotes 列头加括号单位符号，'
+                    + '同时守住最低表数要求（可用原表不少于 4 张时至少保留 4 张表），并确保每张表紧邻的表后评述只对应本表行列与数值。'
+                    + '描述图例颜色、柱体实心或斜纹填充（如 p <= 0.05 实心与 p > 0.05 斜纹）及子图行列轴向时，'
+                    + '使用“全部”“所有”“只有”“唯一”前须逐组核对无例外，不把条件图例颜色同方法行名混为一谈。')
+                .replace('{"version":1,"draftSha256"',
+                    JSON.stringify(header).slice(0, -1) + ',"draftSha256"');
             assert.notEqual(expected, originalBytes.toString());
             assert.equal(actual.toString(), expected);
         } else if (current === 'prompts/current/primary-fact-local-repair.md') {

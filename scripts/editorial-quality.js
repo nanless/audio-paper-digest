@@ -617,7 +617,7 @@ function findReaderTemplatePhrases(text) {
 
 // 只诊断已复现的读者语言问题，不替换术语、删句或改动来源证据。
 // 等长遮盖保留原始 index；引用、代码与公式不作为作者自己的解释检查。
-function findReaderLanguageIssues(text, { contextText = '' } = {}) {
+function findReaderLanguageIssues(text, { contextText = '', sourceText = '' } = {}) {
     const original = String(text ?? '');
     const mask = value => value.replace(/[^\r\n]/g, ' ');
     let fence = null;
@@ -747,6 +747,15 @@ function findReaderLanguageIssues(text, { contextText = '' } = {}) {
                 finding.index + finding.match.length), index: finding.index,
                 line: finding.line, message: rule.message });
         }
+    }
+    for (const finding of require('./analysis-contract.js').findCyrillicProseGarbleIssues(original, { sourceText })) {
+        issues.push({
+            code: 'reader_awkward_translation',
+            match: finding.match,
+            index: finding.index,
+            line: finding.line,
+            message: finding.message
+        });
     }
     return issues.sort((left, right) => left.index - right.index);
 }
@@ -2030,6 +2039,9 @@ function validateEditorialQuality(input, options = {}) {
         }
         for (const finding of findNumericTypographyDefects(body)) {
             issues.push(issue('numeric_typography', '阿拉伯数值与量词、单位或连接词之间缺少必要空格，或固定词被数字破坏', { section, ...finding }));
+        }
+        for (const finding of require('./analysis-contract.js').findMisalignedTableCommentaryIssues(body)) {
+            issues.push(issue('table_commentary_misaligned', finding.message, { section, ...finding }));
         }
     }
     for (const duplicate of findDuplicateLongSentences(sections, options.duplicates)) {
