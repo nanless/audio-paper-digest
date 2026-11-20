@@ -14671,15 +14671,15 @@ function isStableArxivHtmlMiss(status) {
 function assessArxivHtmlFullText($, content) {
     const normalized = String(content || '').replace(/\s+/g, ' ').trim();
     const headingText = $('h1, h2, h3, .ltx_title')
-        .map((_, element) => $(element).text().replace(/\s+/g, ' ').trim())
+        .map((_, element) => extractArxivDomText($, element).replace(/\s+/g, ' ').trim())
         .get()
         .join(' ');
     const structureText = `${headingText} ${normalized}`;
     const paragraphCount = $('.ltx_para, article p, .ltx_page_content p, .ltx_page_main p, body p')
-        .filter((_, element) => $(element).text().replace(/\s+/g, ' ').trim().length >= 40)
+        .filter((_, element) => extractArxivDomText($, element).replace(/\s+/g, ' ').trim().length >= 40)
         .length;
     const sectionCount = $('.ltx_section, article section, .ltx_page_content section, h1, h2, h3')
-        .filter((_, element) => $(element).text().replace(/\s+/g, ' ').trim().length >= 3)
+        .filter((_, element) => extractArxivDomText($, element).replace(/\s+/g, ' ').trim().length >= 3)
         .length;
     const markerCount = [
         /\babstract\b/i,
@@ -14758,7 +14758,7 @@ function isRecoverableFigureResourceUrl(url, mediaType = '') {
 function isIllustrationFigure($, element) {
     const wrapper = $(element);
     const classNames = String(wrapper.attr('class') || '');
-    const label = String(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text() || '')
+    const label = String(extractArxivDomText($, wrapper.find('.ltx_tag_figure, .ltx_tag').first()) || '')
         .replace(/\s+/g, ' ').trim();
     if (wrapper.hasClass('ltx_table') || wrapper.find('table').length > 0) return false;
     if (/\bltx_float_(?:algorithm|listing)\b/i.test(classNames)) return false;
@@ -14822,11 +14822,12 @@ function extractArxivFigureResources($, wrapper, htmlId, arxivId, ordinal, state
     // 的形态：有明确的 Figure 标签，ltx_framed 正文里有非图注的可见文字，且没有表格、
     // 列表或算法 DOM。因此源资源缺失的普通图仍然恢复不出来。
     if (resources.size === 0) {
-        const label = String(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text() || '')
+        const label = String(extractArxivDomText($, wrapper.find('.ltx_tag_figure, .ltx_tag').first()) || '')
             .replace(/\s+/g, ' ').trim();
         const framed = wrapper.find('.ltx_framed').first();
         const body = wrapper.clone();
         body.find('figcaption, .ltx_caption').remove();
+        sanitizeArxivDomCloneForText($, body);
         const bodyText = body.text().replace(/\s+/g, ' ').trim();
         const disallowedDom = wrapper.find(
             'table, .ltx_table, .ltx_tabular, .ltx_listing, .ltx_float_algorithm, '
@@ -14882,20 +14883,113 @@ function isArxivTabularDom($, element) {
     return node.is('table') || node.hasClass('ltx_tabular');
 }
 
+const ARXIV_PHANTOM_DOM_SELECTOR = 'mphantom, m\\:mphantom, .ltx_phantom';
+const ARXIV_ANNOTATION_DOM_SELECTOR = 'annotation, m\\:annotation';
+const ARXIV_PHANTOM_OR_ANNOTATION_SELECTOR = `${ARXIV_PHANTOM_DOM_SELECTOR}, ${ARXIV_ANNOTATION_DOM_SELECTOR}`;
+
+// 剔除 LaTeX / LaTeXML 注解中的透明占位命令（\phantom / \hphantom / \vphantom）。
+// 采用线性括号平衡扫描：支持嵌套花括号与转义花括号（\{ / \}），无正则回溯；
+// 括号未闭合或语法残缺时原样保留，绝不吞掉占位符外的真实负号或正文。
+function stripLatexPhantoms(value) {
+    const source = String(value ?? '');
+    if (!source.includes('phantom')) return source;
+    let out = '';
+    let index = 0;
+    const commandRe = /(?:[hv])?phantom(?![A-Za-z])/y;
+    while (index < source.length) {
+        if (source[index] !== '\\') {
+            out += source[index];
+            index += 1;
+            continue;
+        }
+        let slashEnd = index;
+        while (slashEnd < source.length && source[slashEnd] === '\\') {
+            slashEnd += 1;
+        }
+        const slashCount = slashEnd - index;
+        if (slashCount % 2 === 1) {
+            commandRe.lastIndex = slashEnd;
+            const match = commandRe.exec(source);
+            if (match) {
+                let braceStart = slashEnd + match[0].length;
+                while (braceStart < source.length && /[ \t\r\n]/.test(source[braceStart])) {
+                    braceStart += 1;
+                }
+                if (braceStart < source.length && source[braceStart] === '{') {
+                    let cursor = braceStart + 1;
+                    let depth = 1;
+                    while (cursor < source.length && depth > 0) {
+                        if (source[cursor] === '\\') {
+                            cursor += 2;
+                            continue;
+                        }
+                        if (source[cursor] === '{') depth += 1;
+                        else if (source[cursor] === '}') depth -= 1;
+                        cursor += 1;
+                    }
+                    if (depth === 0) {
+                        out += '\\'.repeat(slashCount - 1);
+                        index = cursor;
+                        continue;
+                    }
+                }
+            }
+        }
+        out += source.slice(index, slashEnd);
+        index = slashEnd;
+    }
+    return out;
+}
+
+function sanitizeArxivDomCloneForText($, cloneRoot) {
+    if (!cloneRoot || cloneRoot.length === 0) return cloneRoot;
+    cloneRoot.filter(ARXIV_PHANTOM_DOM_SELECTOR).empty();
+    cloneRoot.find(ARXIV_PHANTOM_DOM_SELECTOR).remove();
+    cloneRoot.filter(ARXIV_ANNOTATION_DOM_SELECTOR)
+        .add(cloneRoot.find(ARXIV_ANNOTATION_DOM_SELECTOR))
+        .each((_, annotationElement) => {
+            const annotation = $(annotationElement);
+            const raw = annotation.text();
+            if (raw.includes('phantom')) {
+                annotation.text(stripLatexPhantoms(raw));
+            }
+        });
+    return cloneRoot;
+}
+
+function extractArxivDomText($, element) {
+    const node = $(element);
+    if (node.length === 0) return '';
+    if (!node.is(ARXIV_PHANTOM_OR_ANNOTATION_SELECTOR)
+        && node.find(ARXIV_PHANTOM_OR_ANNOTATION_SELECTOR).length === 0) {
+        return node.text();
+    }
+    const clone = node.clone();
+    sanitizeArxivDomCloneForText($, clone);
+    return clone.text();
+}
+
 function arxivCaptionText($, element) {
     const caption = $(element).clone();
-    caption.find('math').each((_, mathElement) => {
+    caption.filter(ARXIV_PHANTOM_DOM_SELECTOR).empty();
+    caption.find(ARXIV_PHANTOM_DOM_SELECTOR).remove();
+    caption.find('math, m\\:math').each((_, mathElement) => {
         const math = $(mathElement);
         const annotation = math.find(
             'annotation[encoding="application/x-tex"], '
-            + 'annotation[encoding="application/x-latex"]'
+            + 'annotation[encoding="application/x-latex"], '
+            + 'm\\:annotation[encoding="application/x-tex"], '
+            + 'm\\:annotation[encoding="application/x-latex"]'
         ).first().text();
-        const replacement = String(math.attr('alttext') || annotation || '')
+        const rawReplacement = String(math.attr('alttext') || annotation || '')
             .trim().replace(/^\$|\$$/g, '');
-        if (replacement) math.empty().text(replacement);
-        else math.find('annotation').remove();
+        if (rawReplacement) {
+            math.empty().text(stripLatexPhantoms(rawReplacement).trim());
+        } else {
+            math.find(ARXIV_ANNOTATION_DOM_SELECTOR).remove();
+        }
     });
-    caption.find('annotation').remove();
+    caption.find(ARXIV_ANNOTATION_DOM_SELECTOR).remove();
     return caption.text();
 }
 
@@ -14911,7 +15005,8 @@ function findSplitTableDom($, wrapper, allElements) {
     const caption = arxivCaptionText(
         $, $(wrapper).find('figcaption, .ltx_caption').first()
     ).replace(/\s+/g, ' ').trim();
-    const label = $(wrapper).find('.ltx_tag_table, .ltx_tag').first().text().replace(/\s+/g, ' ').trim();
+    const label = extractArxivDomText($, $(wrapper).find('.ltx_tag_table, .ltx_tag').first())
+        .replace(/\s+/g, ' ').trim();
     if (!caption || !/^(?:table|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(label || caption)) return null;
 
     const wrapperIndex = allElements.indexOf(wrapper);
@@ -14924,12 +15019,13 @@ function findSplitTableDom($, wrapper, allElements) {
     for (const element of allElements.slice(wrapperIndex + 1, tableIndex)) {
         if (isDescendantOf(element, wrapper)) continue;
         const node = $(element);
+        if (node.is(ARXIV_PHANTOM_DOM_SELECTOR) || node.closest(ARXIV_PHANTOM_DOM_SELECTOR).length > 0) continue;
         const tagName = element.tagName?.toLowerCase() || '';
         if (node.hasClass('ltx_table') || tagName === 'figcaption' || node.hasClass('ltx_caption')
             || /^h[1-6]$/.test(tagName)) return null;
         // 这里非空的叶子是真正夹在中间的正文，不是 LaTeXML 的 flex/minipage 渲染
         // 产生的空布局容器。
-        if (node.children().length === 0 && node.text().replace(/\s+/g, '').length > 0) return null;
+        if (node.children().length === 0 && extractArxivDomText($, node).replace(/\s+/g, '').length > 0) return null;
     }
     return followingTable;
 }
@@ -14947,7 +15043,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         `table[${ordinal}].caption`
     );
     const label = compactDomText(
-        wrapper.find('.ltx_tag_table, .ltx_tag').first().text()
+        extractArxivDomText($, wrapper.find('.ltx_tag_table, .ltx_tag').first())
             || caption.match(/^\s*(?:table|表)\s*[^.:：]*/i)?.[0]
             || '',
         256,
@@ -15006,8 +15102,9 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
             const cell = $(cellElement);
             const rowspan = positiveSpan(cell.attr('rowspan'));
             const colspan = positiveSpan(cell.attr('colspan'));
+            const rawCellHtml = $.html(cell);
             const text = compactDomText(
-                cell.text(), STRUCTURED_ARTIFACT_LIMITS.cellChars, state,
+                extractArxivDomText($, cell), STRUCTURED_ARTIFACT_LIMITS.cellChars, state,
                 `table[${ordinal}].cell[${rowIndex},${columnIndex}]`
             );
             const cellRecord = {
@@ -15017,7 +15114,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
                 rowspan,
                 colspan,
                 text,
-                sourceDomSha256: crypto.createHash('sha256').update($.html(cell)).digest('hex')
+                sourceDomSha256: crypto.createHash('sha256').update(rawCellHtml).digest('hex')
             };
             cells.push(cellRecord);
             for (let rowOffset = 0; rowOffset < rowspan; rowOffset++) {
@@ -15111,8 +15208,8 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
             state.issues.push(`formula[${index + 1}].mathml 超过受控上限并被截断`);
             state.truncated = true;
         }
-        const text = compactDomText(wrapper.text(), STRUCTURED_ARTIFACT_LIMITS.formulaChars, state, `formula[${index + 1}].text`);
-        const label = compactDomText(wrapper.find('.ltx_tag_equation, .ltx_tag').first().text(), 256, state, `formula[${index + 1}].label`);
+        const text = compactDomText(extractArxivDomText($, wrapper), STRUCTURED_ARTIFACT_LIMITS.formulaChars, state, `formula[${index + 1}].text`);
+        const label = compactDomText(extractArxivDomText($, wrapper.find('.ltx_tag_equation, .ltx_tag').first()), 256, state, `formula[${index + 1}].label`);
         if (!latex && !mathml && !text) state.issues.push(`formula[${index + 1}] 未恢复出 TeX、MathML 或可见文本`);
         return {
             ordinal: index + 1,
@@ -15138,7 +15235,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         if (images.length === 0) state.issues.push(`figure[${index + 1}] 没有恢复出可审计图像或 DOM 资源`);
         return {
             ordinal: index + 1,
-            label: compactDomText(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text(), 256, state, `figure[${index + 1}].label`),
+            label: compactDomText(extractArxivDomText($, wrapper.find('.ltx_tag_figure, .ltx_tag').first()), 256, state, `figure[${index + 1}].label`),
             caption: compactDomText(
                 arxivCaptionText($, wrapper.find('figcaption, .ltx_caption').first()),
                 STRUCTURED_ARTIFACT_LIMITS.cellChars,
@@ -15159,14 +15256,15 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     }
     const references = referenceElements.slice(0, STRUCTURED_ARTIFACT_LIMITS.references).map((element, index) => {
         const item = $(element);
-        const text = compactDomText(item.text(), STRUCTURED_ARTIFACT_LIMITS.referenceChars, state, `reference[${index + 1}].text`);
+        const rawItemHtml = $.html(item);
+        const text = compactDomText(extractArxivDomText($, item), STRUCTURED_ARTIFACT_LIMITS.referenceChars, state, `reference[${index + 1}].text`);
         if (!text) state.issues.push(`reference[${index + 1}] 没有恢复出可见文本`);
         return {
             ordinal: index + 1,
-            label: compactDomText(item.find('.ltx_tag_bibitem, .ltx_tag').first().text() || item.attr('id') || '', 256, state, `reference[${index + 1}].label`),
+            label: compactDomText(extractArxivDomText($, item.find('.ltx_tag_bibitem, .ltx_tag').first()) || item.attr('id') || '', 256, state, `reference[${index + 1}].label`),
             text,
             hrefs: [...new Set(item.find('a[href]').toArray().map(anchor => String($(anchor).attr('href') || '').trim()).filter(Boolean))],
-            sourceDomSha256: crypto.createHash('sha256').update($.html(item)).digest('hex')
+            sourceDomSha256: crypto.createHash('sha256').update(rawItemHtml).digest('hex')
         };
     });
     if (bibliographyRoots.length > 0 && referenceElements.length === 0) {
@@ -15253,6 +15351,47 @@ const { parseArxivReaderAuthors, resolveApiReaderAuthors, bindApiReaderAuthorIde
     retainAuthorSourceHtml, resolveVerifiedReaderAuthors }
     = require('./lib/reader-author-parser.js');
 
+function prepareArxivHtmlBodyDom($) {
+    // 移除噪音元素
+    $('script, style, nav, header, footer, aside, noscript, iframe').remove();
+    // 移除交互式元素和参考文献列表（保留正文的引用标记，移除完整列表以节省空间）
+    $('.ltx_bibliography, .bibtex, [role="navigation"], .ltx_TOC').remove();
+    sanitizeArxivDomCloneForText($, $.root());
+}
+
+function extractArxivHtmlContentFromPreparedDom($) {
+    // 尝试从内容区域提取文本（按优先级）
+    let content = '';
+    const selectors = [
+        '.ltx_page_content',      // LaTeXML 新版 arXiv
+        '.ltx_page_main',         // LaTeXML 备选
+        'article',                // 通用文章标签
+        '#content',               // 旧版容器
+        '.content',               // 通用内容区
+        'body'                    // 最终备选
+    ];
+
+    for (const sel of selectors) {
+        const el = $(sel);
+        if (el.length > 0) {
+            content = el.text();
+            break;
+        }
+    }
+
+    // 清理空白
+    return content
+        .replace(/\n\s*\n/g, '\n')     // 合并多余空行
+        .replace(/[ \t]+/g, ' ')       // 合并多余空格
+        .trim();
+}
+
+function extractArxivHtmlText(html) {
+    const $ = cheerio.load(String(html || ''));
+    prepareArxivHtmlBodyDom($);
+    return extractArxivHtmlContentFromPreparedDom($);
+}
+
 /**
  * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
  * 带重试机制，避免因并发限流偶发失败
@@ -15302,36 +15441,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                     const structuredArtifacts = parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId);
                     const $ = cheerio.load(html);
                     const readerAuthors = retainAuthorSourceHtml(parseArxivReaderAuthors($), html);
-
-                    // 移除噪音元素
-                    $('script, style, nav, header, footer, aside, noscript, iframe').remove();
-                    // 移除交互式元素和参考文献列表（保留正文的引用标记，移除完整列表以节省空间）
-                    $('.ltx_bibliography, .bibtex, [role="navigation"], .ltx_TOC').remove();
-
-                    // 尝试从内容区域提取文本（按优先级）
-                    let content = '';
-                    const selectors = [
-                        '.ltx_page_content',      // LaTeXML 新版 arXiv
-                        '.ltx_page_main',         // LaTeXML 备选
-                        'article',                // 通用文章标签
-                        '#content',               // 旧版容器
-                        '.content',               // 通用内容区
-                        'body'                    // 最终备选
-                    ];
-
-                    for (const sel of selectors) {
-                        const el = $(sel);
-                        if (el.length > 0) {
-                            content = el.text();
-                            break;
-                        }
-                    }
-
-                    // 清理空白
-                    content = content
-                        .replace(/\n\s*\n/g, '\n')     // 合并多余空行
-                        .replace(/[ \t]+/g, ' ')       // 合并多余空格
-                        .trim();
+                    prepareArxivHtmlBodyDom($);
+                    const content = extractArxivHtmlContentFromPreparedDom($);
                     const boundStructuredArtifacts = bindStructuredArtifactsToText(structuredArtifacts, content);
 
                     const assessment = assessArxivHtmlFullText($, content);
@@ -20239,6 +20350,9 @@ module.exports = {
     fetchArxivImageUrls,
     parseArxivImageInfosFromHtml,
     parseArxivStructuredArtifactsFromHtml,
+    extractArxivHtmlText,
+    arxivCaptionText,
+    stripLatexPhantoms,
     ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION,
     buildUnstructuredTextArtifactSignals,
     bindStructuredArtifactsToText,
