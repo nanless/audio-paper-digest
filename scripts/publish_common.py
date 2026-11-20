@@ -3462,7 +3462,7 @@ def _source_experiment_evidence(source_text):
     """复刻 Node 对实验章节证据的有界选取逻辑。"""
     source = str(source_text or '')
     start = re.search(
-        r'(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?'
+        r'(?:^|\n)\s*(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\s+)?'
         r'(?:experiments?|experimental\s+(?:setup|results?)|evaluation|'
         r'results?(?:\s+and\s+discussion)?)\s*(?:\n|$)',
         source,
@@ -3472,7 +3472,7 @@ def _source_experiment_evidence(source_text):
         return source[:50000]
     tail = source[start.start():start.start() + 60000]
     end = re.search(
-        r'(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?'
+        r'(?:^|\n)\s*(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\s+)?'
         r'(?:conclusions?|limitations?|references?)\s*(?:\n|$)',
         tail,
         re.I,
