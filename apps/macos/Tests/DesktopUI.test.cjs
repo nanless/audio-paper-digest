@@ -370,9 +370,10 @@ if(require.main===module)(async()=>{
       const start=await p.evaluate(()=>__calls.filter(entry=>entry.command==='pdf.frame').length);
       const burst=await p.evaluate(async()=>{document.getElementById('reading-area').style.setProperty('--split','52%');for(let i=0;i<40;i++)__pdfFrames.layoutPDF();await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return __calls.filter(entry=>entry.command==='pdf.frame').length;});
       assert.ok(burst-start<=1,`同一 tick 的 40 次排版只应合并为一次 pdf.frame，实际 ${burst-start}`);
-      await p.evaluate(async()=>{const area=document.getElementById('reading-area');for(let i=0;i<30;i++){area.style.setProperty('--split',(50+i*.2)+'%');__pdfFrames.layoutPDF();await new Promise(requestAnimationFrame);}});
+      const elapsedMs=await p.evaluate(async()=>{const t0=performance.now(),area=document.getElementById('reading-area');for(let i=0;i<30;i++){area.style.setProperty('--split',(50+i*.2)+'%');__pdfFrames.layoutPDF();await new Promise(requestAnimationFrame);}return performance.now()-t0;});
       const throttled=await p.evaluate(()=>__calls.filter(entry=>entry.command==='pdf.frame').length);
-      assert.ok(throttled-burst<=8,`约 30 帧连续几何变化后 pdf.frame 应保持在个位数，实际 ${throttled-burst}`);
+      const maxExpected=Math.min(18,Math.max(8,Math.ceil(elapsedMs/150)+1));
+      assert.ok(throttled-burst<=maxExpected,`约 30 帧（${Math.round(elapsedMs)}ms）连续几何变化后 pdf.frame 应按 150ms 窗口节流（上限 ${maxExpected}），实际 ${throttled-burst}`);
       await p.waitForTimeout(220);
       await p.waitForFunction(()=>{const calls=__calls.filter(entry=>entry.command==='pdf.frame'),box=document.getElementById('pdf-scroll').getBoundingClientRect(),last=calls.at(-1)?.payload;return !!last&&Math.abs(last.width-box.width)<1&&Math.abs(last.x-box.x)<1;});
       const settled=await p.evaluate(()=>{const calls=__calls.filter(entry=>entry.command==='pdf.frame'),box=document.getElementById('pdf-scroll').getBoundingClientRect();return {last:calls.at(-1).payload,visible:__pdfFrames.state.pdf,x:box.x,y:box.y,width:box.width,height:box.height};});

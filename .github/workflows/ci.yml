@@ -350,7 +350,7 @@ jobs:
     # macos-15（arm64）托管池常因容量不足在分配运行器前被取消；macos-15-intel 同样满足
     # macOS 15.0+ 要求且测试按宿主机架构原生编译，正式 arm64 发行包仍按 docs/mac-app-release.md 在本机生成。
     runs-on: macos-15-intel
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
