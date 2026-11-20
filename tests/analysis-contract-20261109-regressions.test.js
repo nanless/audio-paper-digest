@@ -75,7 +75,9 @@ test('明确的失败条件与未验证范围可以充当结论适用边界', ()
             + '换对话域、换模型或更长对话可能失效。',
         '对照外部知识库的核查不在验证范围，跨语言外推也没有在同等条件、同等数据和同等流程上重复。'
     ]) {
-        assert.equal(contract.validateCoreSummarySemanticContract(analysisWithBoundary(sentence)), null, sentence);
+        assert.equal(contract.validateCoreSummarySemanticContract(analysisWithBoundary(sentence), {
+            summaryHeader: { contract: 'core-summary-detailed-v3' }
+        }), null, sentence);
     }
 });
 
@@ -84,7 +86,9 @@ test('否定式的“不会失效”和无范围断言不代替结论边界', ()
         '换对话域、换模型或更长对话也不会失效，因为每个环节都已经在同样的条件、同样的数据和同样的流程上核验过。',
         '该方法在全部条件下都表现稳定，没有发现任何问题。'
     ]) {
-        assert.match(contract.validateCoreSummarySemanticContract(analysisWithBoundary(sentence)),
+        assert.match(contract.validateCoreSummarySemanticContract(analysisWithBoundary(sentence), {
+            summaryHeader: { contract: 'core-summary-detailed-v3' }
+        }),
             /缺少结论适用边界/, sentence);
     }
 });

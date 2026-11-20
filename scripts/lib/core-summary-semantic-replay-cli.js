@@ -46,7 +46,19 @@ function runReplayFd(fd) {
         const contract = require('../analysis-contract');
         let issue;
         if (Object.keys(input).sort().join(',') === 'sourceText,summary' && typeof input.summary === 'string') {
-            issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, { sourceText: input.sourceText });
+            issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, {
+                sourceText: input.sourceText,
+                summaryHeader: null
+            });
+        } else if (Object.keys(input).sort().join(',') === 'coreSummary,sourceText,summary' && typeof input.summary === 'string') {
+            const summaryHeader = require('./core-summary-format').readDeclaration(input.coreSummary);
+            if (!summaryHeader) {
+                throw new Error('Invalid coreSummary declaration in replay input');
+            }
+            issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, {
+                sourceText: input.sourceText,
+                summaryHeader
+            });
         } else if (Object.keys(input).sort().join(',') === 'mode,paper,sourceText'
             && input.mode === 'stage-binding' && input.paper && typeof input.paper === 'object' && !Array.isArray(input.paper)) {
             const local = require('./conference-source-resource-correction');

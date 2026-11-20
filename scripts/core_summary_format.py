@@ -2,7 +2,16 @@
 import protocol_codec as protocols
 
 NAME = 'core-summary'
-ORIGINAL_TAG = protocols.historical_contract(NAME, 'source-bound-detailed-summary')
+LEGACY_SCHEMA_FINGERPRINT = '0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6'
+ORIGINAL_TAG = protocols.historical_header(NAME, 'source-bound-detailed-summary', None)['contract']
+
+
+def current_header():
+    return protocols.record_header(NAME, NAME)
+
+
+def legacy_header():
+    return protocols.historical_header(NAME, 'source-bound-detailed-summary', LEGACY_SCHEMA_FINGERPRINT)
 
 
 def read_declaration(value):
@@ -12,6 +21,14 @@ def read_declaration(value):
             and protocols.has_valid_header(value, NAME)):
         return dict(value)
     return None
+
+
+def is_executive_abstract_header(header):
+    resolved = read_declaration(header) if isinstance(header, str) else header
+    return bool(isinstance(resolved, dict) and protocols.is_current_header(resolved, NAME))
+
+
+isExecutiveAbstractHeader = is_executive_abstract_header
 
 
 def stage_fields(header):

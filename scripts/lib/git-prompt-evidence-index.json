@@ -2035,6 +2035,24 @@
       "paths": [
         "prompts/current/table-fill.md"
       ]
+    },
+    "a566e117ddb836f8255d20cd2684313f0dec192f5036bd532ace33bc376ca860": {
+      "blobOid": "454e47d7d2024c2a111ce791681e5f81386501e2",
+      "paths": [
+        "prompts/current/deep-analysis.md"
+      ]
+    },
+    "51d75fd0bac9bb02179a2fe581b6bea52d5e451109ed5e0451f6dfbf4d6acfbf": {
+      "blobOid": "81d5bdab480ab229d27d4194807346c44eda90aa",
+      "paths": [
+        "prompts/current/core-summary-repair.md"
+      ]
+    },
+    "cabed50a4f88c129770968d0c7abcceabac730027e321386ea4ad24afdf097da": {
+      "blobOid": "3cc147e9ed112683139955f4887f3001ad747f43",
+      "paths": [
+        "prompts/current/structure-repair.md"
+      ]
     }
   }
 }

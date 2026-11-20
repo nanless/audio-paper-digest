@@ -5276,10 +5276,10 @@ def _complete_corpus_curation_summary(summary):
     return False
 
 
-def _has_block_layout_product_chain(summary):
+def _has_block_layout_product_chain(summary, max_sentence_chars=320):
     # 布局、筛出的键块和内核必须真实交接，不把组件罗列当处理链。
     for sentence in re.split(r'[。！？!?；;\n]', str(summary or '')):
-        if len(sentence) > 320 or re.search(
+        if len(sentence) > max_sentence_chars or re.search(
             r'(?:讨论|提及|不实现|尚不|不负责|不参与|不承担|并非|并未|不是|没有|不能|不会|尚未|未曾|假设|设想|如果|若|可能|预计|计划|未来|建议)'
             r'|(?:不|未)(?:曾|实际|直接|真正|会|能)*\s*(?:进入|计算|筛选|补充|恢复)', sentence,
         ):
@@ -5293,10 +5293,10 @@ def _has_block_layout_product_chain(summary):
     return False
 
 
-def _has_posterior_update_product_chain(summary):
+def _has_posterior_update_product_chain(summary, max_sentence_chars=320):
     # 当前模型先产生后验功率，再把同一产物交给参数更新。
     for sentence in re.split(r'[。！？!?；;\n]', str(summary or '')):
-        if len(sentence) > 320 or re.search(
+        if len(sentence) > max_sentence_chars or re.search(
             r'(?:假定|是否|讨论|提及|并非|并未|不是|没有|不能|不会|尚未|未曾|假设|如果|可能|计划|未来)'
             r'|(?:不|未)(?:曾|实际|直接|真正|确实|被)*\s*(?:算出|计算|进入|更新)', sentence,
         ):
@@ -5395,7 +5395,7 @@ def _has_scoped_symbolic_demonstration(summary):
     return bool(scoped and limit)
 
 
-def _has_concrete_product_handoff(summary):
+def _has_concrete_product_handoff(summary, max_sentence_chars=320):
     sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', re.sub(r'（[^）]*）|\([^)]*\)', '', str(summary or ''))) if s.strip()]
     denied = re.compile(r'(?:假设|设想|假定|如果|可能|未来|拟采用|计划|预计|预期|应当|应该|并非|并未|没有|不能|尚未|未曾|另一(?:种|套)|独立方法|讨论|提及|对比|比较|相关工作|先前工作|文献|未(?:实现|执行|实施)|不负责|不用于|不与|未与)|(?:^|[。；，,])\s*建议|(?:不|未)(?:被|曾|直接|实际|真正|会|能|再)*\s*(?:生成|输出|预测|提取|抽取|转成|送入|配对|拼接|作用于|统计|计算|重建|合并)')
     neural_tokens = re.compile(r'解码器[^。；]{0,140}(?:预测|输出|生成)(?:源内容对应的)?(?:离散)?声学令牌[^。；]{0,140}(?:所得|这些|该)(?:声学)?令牌(?:再)?送入(?:神经音频)?编解码器(?:解码器)?(?:重建|解码)(?:为|成)?波形')
@@ -5407,7 +5407,7 @@ def _has_concrete_product_handoff(summary):
     for index in range(len(sentences)):
         for size in (1, 2):
             parts = sentences[index:index + size]
-            if len(parts) != size or any(len(s) > 320 for s in parts):
+            if len(parts) != size or any(len(s) > max_sentence_chars for s in parts):
                 continue
             window = '。'.join(parts)
             if denied.search(window):
@@ -5422,7 +5422,7 @@ def _has_concrete_product_handoff(summary):
     return False
 
 
-def _has_explicit_artifact_handoff(summary):
+def _has_explicit_artifact_handoff(summary, max_sentence_chars=320):
     sentences = [text.strip() for text in re.split(r'[。！？!?；;\n]', re.sub(r'（[^）]*）|\([^)]*\)', '', str(summary or ''))) if text.strip()]
     denied = re.compile(r'(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|讨论|提及|并非|不是|没有|未曾|尚未|独立方法|无关)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:生成|输出|得到|形成|取出|提取|编码|使用|接收|承接|送入|进入|作为|用于|计算|分成|分派)')
     production = re.compile(r'(?:生成|得到|输出|形成|统一为|压缩为|池化得|取出|提取|抽取)')
@@ -5431,7 +5431,7 @@ def _has_explicit_artifact_handoff(summary):
     artifacts = [r'(?:刺激)?语音', r'配对(?:监督)?信号', r'(?:双|两)视图', r'(?:utterance|输入)?嵌入', r'(?:数值|定长|固定维数)?向量']
     for index, first in enumerate(sentences):
         second = sentences[index + 1] if index + 1 < len(sentences) else ''
-        if len(first) > 320 or len(second) > 320:
+        if len(first) > max_sentence_chars or len(second) > max_sentence_chars:
             continue
         if not denied.search(first) and re.search(r'(?:预载|载入)[^。]{1,80}(?:历史|上下文)[^。]{0,60}(?:实时流入|逐帧处理|滚动输入)[^。]{0,50}(?:该|此)阶段产生的[^。]{1,80}(?:、|与|和)[^。]{1,60}直接进入评分', first):
             return True
@@ -5488,11 +5488,11 @@ def _has_conditional_metric_delta_direction(sentence, metric_pattern):
                and not metric_pattern.search(match[1] + match[2]) for match in pattern.finditer(sentence))
 
 
-def _has_generated_input_model_head_chain(summary):
+def _has_generated_input_model_head_chain(summary, max_sentence_chars=320):
     sentences = [text.strip() for text in re.split(r'[。！？!?；;\n]', str(summary or '')) if text.strip()]
     denied = re.compile(r'(?:并非|并未|没有|不能|尚未|未曾|假设|如果|可能|计划|未来|讨论|提及|独立方法|无关|相关工作)|(?:不|未)(?:曾|实际|直接|真正|再|会|能)*(?:送给|送入|生成|形成|作为|输出|预测)')
     for first, second in zip(sentences, sentences[1:]):
-        if len(first) > 320 or len(second) > 320 or denied.search(first) or denied.search(second):
+        if len(first) > max_sentence_chars or len(second) > max_sentence_chars or denied.search(first) or denied.search(second):
             continue
         if not re.search(r'(?:生成|构造|形成)[^。]{1,100}(?:流|序列|样本|查询)[^。]{0,120}(?:特征|表示)[^。]{0,50}作为模型输入', first):
             continue
@@ -5502,12 +5502,12 @@ def _has_generated_input_model_head_chain(summary):
     return False
 
 
-def _has_explicit_edited_vector_handoff(summary):
+def _has_explicit_edited_vector_handoff(summary, max_sentence_chars=320):
     sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
     denied = re.compile(r'(?:并非|并未|不是|不会|不能|尚未|未曾|不再|假设|假想|假定|设想|如果|若|是否|可能|预计|预期|计划|未来|讨论|提及|相关工作|独立方法|无关)|(?:不|未|没有)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:输出|生成|得到|编辑|变换|移动|映射|使用|接收|承接|送入|作为|合成|重合成|重建)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)')
     for i in range(len(sentences) - 2):
         parts = sentences[i:i + 3]
-        if any(len(s) > 320 or denied.search(s) for s in parts):
+        if any(len(s) > max_sentence_chars or denied.search(s) for s in parts):
             continue
         produced = re.search(r'编码器[^，,。；]{0,80}(?:输出|生成|得到)(?:身份|说话人|潜在|特征)?向量\s*([A-Z][A-Z0-9_]{0,7})(?![A-Za-z0-9_′’\x27])', parts[0])
         if not produced:
@@ -5521,18 +5521,18 @@ def _has_explicit_edited_vector_handoff(summary):
     return False
 
 
-def _has_typed_natural_product_handoff(summary):
+def _has_typed_natural_product_handoff(summary, max_sentence_chars=320):
     """Mirror the closed, artifact-owned handoffs used by the analysis guard."""
     sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
     denied = re.compile(r'(?:假设|假想|假定|设想|如果|可能|预计|预期|计划|未来|讨论|提及|相关工作|独立方法|他人|另一(?:个|种|套)(?:模型|方法|系统)|其他(?:模型|方法|系统)|并非|并未|不是|没有|不能|尚未|未曾)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:输出|生成|得到|形成|读取|接收|送入|作为|检索|插入|转写|打分)|(?:丢弃|弃用|忽略)(?:了)?(?:该|此|这些|两种)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)')
     for index, first in enumerate(sentences):
         second = sentences[index + 1] if index + 1 < len(sentences) else ''
         revoked_or_foreign = re.compile(r'(?:否认|否定|反驳|驳斥|引用|引述|转述)|(?:错误|有误|不成立|不正确)(?:的)?(?:说法|表述|观点|判断)|(?:基线|对照|其他|另一个|另一种)(?:的)?(?:自回归)?解码器')
-        if len(first) > 320 or denied.search(first) or revoked_or_foreign.search(first):
+        if len(first) > max_sentence_chars or denied.search(first) or revoked_or_foreign.search(first):
             continue
         if re.search(r'调用头判断[^。；]{1,100}[，,]触发后检索[^，,。；]{1,30}范例并作为引导插入生成序列', first):
             return True
-        if not second or len(second) > 320 or denied.search(second) or revoked_or_foreign.search(second):
+        if not second or len(second) > max_sentence_chars or denied.search(second) or revoked_or_foreign.search(second):
             continue
         memories = set(re.findall(r'([\u4e00-\u9fff]{1,8}记忆)(?:保留|表示|编码)', first))
         if re.search(r'交叉注意力[^。；]{0,120}输出', first) and len(memories) == 2 \
@@ -5547,7 +5547,7 @@ def _has_typed_natural_product_handoff(summary):
     return False
 
 
-def _has_typed_processing_product_chain(summary):
+def _has_typed_processing_product_chain(summary, max_sentence_chars=320):
     """Mirror only the closed, artifact-owned signal/representation paths."""
     denied = re.compile(r'(?:假设|假想|假定|设想|如果|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|先前工作|他人|独立方法|无关|另一|其他(?:模型|方法|系统|病人|数据|信号|样本)|并非|并未|不是|没有|不能|不会|尚未|未曾|不再|否认|否定|反驳|驳斥|引用|引述|转述)|(?:不|未|没)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:统计|计算|形成|生成|输出|送入|进入|作为|使用|采用|处理|池化|注入|承接|给出|锁定|确定|执行|发生|应用|实现|实施|进行|完成)|(?:丢弃|弃用|忽略)|(?:说法|表述|观点|判断|过程|流程)[^。；]{0,20}(?:错误|有误|不成立|不正确|未执行)')
     normalize_notice = lambda value: re.sub(r'^(?:不过|然而|但是|可是|但|实际上)[，,]?\s*', '', str(value or ''))
@@ -5555,7 +5555,7 @@ def _has_typed_processing_product_chain(summary):
     forward_revoked = re.compile(r'^(?:(?:下述|如下|以下|后述)(?:方法|流程|链|步骤|过程)[^。；]{0,50}(?:不成立|没有|并未|未执行|未发生|只是设计|只是示意|仅为示意|尚待实现|有待实现)|(?:对照|基线|先前|相关|其他|另一)(?:系统|模型|方法|工作|研究)[^。；]{0,40}(?:方法|流程|步骤)[^。；]{0,15}(?:如下|所示))')
 
     def safe(parts, object_kind=''):
-        if not all(part and len(part) <= 320 for part in parts):
+        if not all(part and len(part) <= max_sentence_chars for part in parts):
             return False
         text = '。'.join(parts)
         if object_kind == 'candidates':
@@ -5607,22 +5607,22 @@ def _has_typed_processing_product_chain(summary):
     return False
 
 
-def _has_explicit_natural_product_chain(summary):
-    if _has_typed_processing_product_chain(summary):
+def _has_explicit_natural_product_chain(summary, max_sentence_chars=320):
+    if _has_typed_processing_product_chain(summary, max_sentence_chars):
         return True
-    if _has_typed_natural_product_handoff(summary):
+    if _has_typed_natural_product_handoff(summary, max_sentence_chars):
         return True
-    if _has_explicit_edited_vector_handoff(summary):
+    if _has_explicit_edited_vector_handoff(summary, max_sentence_chars):
         return True
-    if _has_generated_input_model_head_chain(summary):
+    if _has_generated_input_model_head_chain(summary, max_sentence_chars):
         return True
-    if _has_explicit_artifact_handoff(summary):
+    if _has_explicit_artifact_handoff(summary, max_sentence_chars):
         return True
-    if _has_concrete_product_handoff(summary):
+    if _has_concrete_product_handoff(summary, max_sentence_chars):
         return True
-    if _has_posterior_update_product_chain(summary):
+    if _has_posterior_update_product_chain(summary, max_sentence_chars):
         return True
-    if _has_block_layout_product_chain(summary):
+    if _has_block_layout_product_chain(summary, max_sentence_chars):
         return True
     # 与 Node 相同：必须有实际产物及下一模块对同一产物的使用。
     sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
@@ -5631,14 +5631,14 @@ def _has_explicit_natural_product_chain(summary):
         r'|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:预测|计算|给出|输出|生成|得到|形成|池化|标准化|送入|拼接|融合)'
     )
     for i, first in enumerate(sentences):
-        if len(first) <= 320 and not denied.search(first) and re.search(
+        if len(first) <= max_sentence_chars and not denied.search(first) and re.search(
             r'编码器[^，,。；]{0,45}帧(?:级)?表示经均值和标准差池化形成定长向量[，,]\s*该向量标准化后送入[^，,。；]{0,30}逻辑回归输出类别', first,
         ):
             return True
         if i + 1 >= len(sentences):
             continue
         second = sentences[i + 1]
-        if len(first) > 320 or len(second) > 320 or denied.search(first) or denied.search(second):
+        if len(first) > max_sentence_chars or len(second) > max_sentence_chars or denied.search(first) or denied.search(second):
             continue
         produced = re.search(r'([\u4e00-\u9fff]{1,8}专家)(?:(?!专家|基线|交给|转交|负责|由)[^，,。；]){0,200}?(?:预测|计算|给出|输出|生成|得到)(?:对应的|单曲的|歌曲的|一个)?质量分', first)
         consumed = re.search(r'^([\u4e00-\u9fff]{1,8}专家)(?:把|将)该质量分与(?:(?!专家|基线|交给|转交|负责|由)[^，,。；]){1,180}?(?:拼接|融合)', second)
@@ -5733,15 +5733,147 @@ def _has_bound_disjoint_interval_comparison(sentence, metric_pattern):
     return left_max < right_min if direction == '更低' else left_min > right_max
 
 
-def _detailed_core_summary_semantic_issue(summary):
-    summary = _core_summary_sentence_view(summary)
+_EXECUTIVE_ABSTRACT_BOLD_LEAD_RE = re.compile(
+    r'^\s*(?:\*\*[^*\n]{2,36}[：:]\*\*[ \t]*|\*\*[^*\n]{2,36}\*\*[ \t]*[：:][ \t]*)'
+)
+
+
+def _strip_executive_abstract_bold_lead_ins(raw_summary):
+    paragraphs = re.split(r'\r?\n[ \t]*\r?\n', str(raw_summary or ''))
+    return '\n\n'.join(
+        _EXECUTIVE_ABSTRACT_BOLD_LEAD_RE.sub('', p.strip()).strip()
+        for p in paragraphs if p.strip()
+    )
+
+
+def _validate_executive_abstract_surface_structure(raw_summary):
+    raw = str(raw_summary or '')
+    issues = []
+    if re.search(r'^\s*#{1,6}\s', raw, flags=re.MULTILINE):
+        issues.append('核心摘要内禁止使用 # 等 Markdown 标题，请改用段首粗体引导词')
+    if re.search(r'^\s*\d+\.\s*\*\*[^*\n]+\*\*\s*$', raw, flags=re.MULTILINE):
+        issues.append('核心摘要内禁止使用独立编号标题行（如 1. **...**），请直接以粗体引导词开启自然段')
+    if re.search(r'^\s*(?:---+|\*\*\*+|___+)\s*$', raw, flags=re.MULTILINE):
+        issues.append('核心摘要内禁止使用水平分隔线')
+    trimmed = raw.strip()
+    if re.search(r'\r?\n(?:[ \t]*\r?\n){2,}', trimmed):
+        issues.append('核心摘要自然段之间只能保留一个空行（\\n\\n）')
+    paragraphs = [p.strip() for p in re.split(r'\r?\n[ \t]*\r?\n', trimmed) if p.strip()] if trimmed else []
+    if len(paragraphs) < 3 or len(paragraphs) > 4:
+        issues.append(f'自然段数必须为 3–4 段（以空行分隔），当前 {len(paragraphs)} 段')
+    else:
+        if any(re.search(r'\r?\n', p) for p in paragraphs):
+            issues.append('核心摘要每个自然段须写成连贯散文段落，段间以空行分隔，段内不拆行或列点')
+        if not all(_EXECUTIVE_ABSTRACT_BOLD_LEAD_RE.search(p) for p in paragraphs):
+            issues.append('核心摘要每个自然段须以粗体引导词开头（如 **问题与瓶颈：**）')
+    return issues
+
+
+def _has_executive_method_architecture(content_body):
+    component_re = re.compile(
+        r'(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|'
+        r'扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|'
+        r'预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|探针|矩阵|子空间|表征|特征|嵌入|'
+        r'隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏)',
+        re.IGNORECASE,
+    )
+    action_re = re.compile(
+        r'(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|'
+        r'路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦)'
+    )
+    denied_re = re.compile(
+        r'(?:假设|假想|假定|设想|如果|预计|预期|可能|未来实验|计划采用|第三方|他人研究|先前工作|相关工作|'
+        r'现有(?:主流|方法|方案|路线|编解码器|模型|系统|工作)|传统(?:方法|方案|路线|指标|编解码器|模型|系统|工作)|'
+        r'以往(?:方法|方案|路线|模型|工作|研究)|主流(?:方法|方案|路线|编解码器|模型)|任务需要将|任务以[^。]{1,48}为输入)'
+    )
+    for paragraph in re.split(r'\n\s*\n', str(content_body or '')):
+        sentences = [s.strip() for s in re.split(r'[。！？!?\n]', paragraph) if s.strip()]
+        valid = [s for s in sentences if len(s) <= 520 and not denied_re.search(s)]
+        if not valid:
+            continue
+        joined = '。'.join(valid)
+        components = {m.group(0).lower() for m in component_re.finditer(joined)}
+        actions = list(action_re.finditer(joined))
+        if len(components) >= 2 and len(actions) >= 3:
+            return True
+    return False
+
+
+def _validate_core_summary_source_grounded_claims(summary, source_text):
+    src_raw = str(source_text or '').strip()
+    if not src_raw:
+        return None
+    normalized_src = re.sub(r',(?=\d{3}(?![0-9]))', '', src_raw)
+    deduped_src = re.sub(r'(?<![0-9])(?<!\d\.)(\d+\.\d+|\.\d+|\d+)\1(?![0-9]|\.\d)', r'\1', normalized_src)
+    exact_tokens = set()
+    percent_tokens = set()
+    non_percent_tokens = set()
+    source_has_percent_context = bool(re.search(r'%|percent|percentage', normalized_src, re.IGNORECASE))
+    for surface in (normalized_src, deduped_src):
+        for match in re.finditer(r'(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))(\s*(?:%|\\%))?(?![0-9]|\.\d)', surface):
+            unsigned = re.sub(r'^[+-]', '', match.group(1))
+            norm = f'0{unsigned}' if unsigned.startswith('.') else unsigned
+            exact_tokens.add(norm)
+            exact_tokens.add(unsigned)
+            if match.group(2):
+                percent_tokens.add(norm)
+            else:
+                non_percent_tokens.add(norm)
+    cleaned = re.sub(r'https?://\S+', ' ', str(summary or ''))
+    cleaned = re.sub(
+        r'\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX|Python|PyTorch|CUDA|IEEE|P|v|ver|version)\s*[-_.]?\d+(?:\.\d+)*',
+        ' ', cleaned, flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*[-_.]\d+(?:\.\d+)*[A-Za-z0-9_.-]*', ' ', cleaned)
+    cleaned = re.sub(r'(?:§|第|图|表|式|公式|章节|附录)\s*\d+(?:\.\d+)*', ' ', cleaned)
+    for match in re.finditer(
+        r'(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|倍|点|分)?(?![A-Za-z0-9]|\.\d))',
+        cleaned,
+    ):
+        full = match.group(0).strip()
+        num = re.sub(r'^[+-]', '', match.group(1))
+        has_pct = bool(match.group(2))
+        has_unit_after = bool(re.match(r'^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB)(?![A-Za-z])', cleaned[match.end():], re.IGNORECASE))
+        is_decimal = '.' in num
+        if not is_decimal and not has_pct and not has_unit_after:
+            continue
+        if num not in exact_tokens:
+            return f'核心摘要数值“{full}”未在原文中以相同精度出现（禁止编造、四舍五入或转换小数与百分数）'
+        if has_pct and num not in percent_tokens and not source_has_percent_context:
+            return f'核心摘要数值“{full}”添加了原文不存在的百分号'
+        if not has_pct and is_decimal and num in percent_tokens and num not in non_percent_tokens:
+            return f'核心摘要数值“{full}”遗漏了原文的百分号'
+    return None
+
+
+def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, source_text=None):
+    raw_summary = str(summary or '')
+    use_executive = (
+        False if summary_header is None
+        else (globals().get('core_summary_formats') or __import__('core_summary_format')).is_executive_abstract_header(summary_header)
+    )
+    summary = _core_summary_sentence_view(raw_summary)
+    content_body = _core_summary_sentence_view(_strip_executive_abstract_bold_lead_ins(raw_summary)) if use_executive else summary
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
     sentences = len(re.findall(r'[。！？!?]', summary))
+    min_chars, max_chars = (700, 1400) if use_executive else (320, 600)
+    min_sentences, max_sentences = (10, 26) if use_executive else (6, 12)
+    max_method_sentence_chars = 520 if use_executive else 320
     issues = []
-    if count < 320 or count > 600:
-        issues.append(f'中文字符必须为 320–600，当前 {count}')
-    if sentences < 6 or sentences > 12:
-        issues.append(f'句数必须为 6–12，当前 {sentences}')
+    if count < min_chars or count > max_chars:
+        issues.append(f'中文字符必须为 {min_chars}–{max_chars}，当前 {count}')
+    if sentences < min_sentences or sentences > max_sentences:
+        issues.append(f'句数必须为 {min_sentences}–{max_sentences}，当前 {sentences}')
+    if use_executive:
+        issues.extend(_validate_executive_abstract_surface_structure(raw_summary))
+        for sentence in re.split(r'[。！？!?\n]', content_body):
+            trimmed_sentence = sentence.strip()
+            if len(trimmed_sentence) > 520 and re.search(
+                r'(?:编码器|解码器|声码器|分词器|量化器|Transformer|Conformer|注意力|网络|主干|模块|分支|前端|后端|表征|特征|嵌入|令牌|token)',
+                trimmed_sentence, re.IGNORECASE,
+            ):
+                issues.append(f'方法机制单句过长（{len(trimmed_sentence)}/520），请按信号流拆分为多句自然表达')
+                break
     # 与 Node 规则一致：具体用途本身也能说明目的，不要求固定写“任务”或“输入输出”。
     purpose_pattern = (
         r'(?:用于|用来|用以)(?:从[^。！？!?.;；,，\n]{1,24}中)?'
@@ -5759,26 +5891,34 @@ def _detailed_core_summary_semantic_issue(summary):
             r'(?:不|未)(?:被|直接|主要|实际|真正|仅|只|也|还|曾|能|会|再|尚)*\s*(?:用于|用来|用以)',
             clause,
         )
-        for clause in re.split(r'[。！？!?.;；,，\n]|而(?:不是|是)|但(?=不能替代)', summary)
+        for clause in re.split(r'[。！？!?.;；,，\n]|而(?:不是|是)|但(?=不能替代)', content_body)
     )
-    if not re.search(r'(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)', summary) and not concrete_purpose:
+    problem_pattern = (
+        r'(?:问题|难点|瓶颈|症结|失效|缺陷|受限|局限|挑战|任务|目标|输入|输出|旨在|针对|解决)'
+        if use_executive else r'(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)'
+    )
+    if not re.search(problem_pattern, content_body) and not concrete_purpose:
         issues.append('缺少任务问题、输入输出或实际难点')
-    chain = re.findall(r'(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)', summary)
-    roles = re.findall(r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|计算|平滑|展平|丢弃)', summary)
+    chain = re.findall(r'(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)', content_body)
+    roles = re.findall(r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|计算|平滑|展平|丢弃)', content_body)
     tier_role_stages = {
         match.group(1).upper()
         for match in re.finditer(
             r'(?<![A-Za-z0-9_])Tier[-‐‑‒–—]([LMH])(?![A-Za-z0-9_])'
             r'[^；。！？!?\n]{0,120}'
             r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|打分|匹配|投票|检索|推理|判决|路由)',
-            summary, flags=re.IGNORECASE,
+            content_body, flags=re.IGNORECASE,
         )
     }
     has_numbered_method_chain = (
-        (len(chain) >= 2 or re.search(r'分(?:\d+|[一二三四五六七八九十]+)步', summary))
+        (len(chain) >= 2 or re.search(r'分(?:\d+|[一二三四五六七八九十]+)步', content_body))
         and len(roles) >= 2
     )
-    if not has_numbered_method_chain and len(tier_role_stages) < 2 and not _has_explicit_natural_product_chain(summary) and not _has_symbolic_geometry_method_chain(summary):
+    if (not has_numbered_method_chain
+            and len(tier_role_stages) < 2
+            and not _has_explicit_natural_product_chain(content_body, max_method_sentence_chars)
+            and not _has_symbolic_geometry_method_chain(content_body)
+            and not (use_executive and _has_executive_method_architecture(content_body))):
         issues.append('缺少 2–4 步方法链的分工与衔接')
     # 这份白名单要和 scripts/analysis-contract.js 保持同步。
     # 发布器在 Node 分析阶段之后按同一份 v3 正文规则再次检查，
@@ -5811,13 +5951,9 @@ def _detailed_core_summary_semantic_issue(summary):
         re.IGNORECASE,
     )
     numeric_named_setting = re.compile(r'(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)', re.IGNORECASE)
-    has_complete_result = False
-    for sentence in re.split(r'[。！？!?\n]', summary):
+
+    def _candidate_complete(sentence):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
-        # R@0.9 或 F1 这样的数值指标限定词是在指明
-        # 指标本身，不是某次实验变化的一个端点。
-        # CLAP 可能是用来对比的模型，而不是被测量的指标；
-        # 这里使用与 Node 正文检查相同的基线/模型排除规则。
         metric_sentence = re.sub(
             r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
             '', result_sentence, flags=re.IGNORECASE,
@@ -5831,64 +5967,117 @@ def _detailed_core_summary_semantic_issue(summary):
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
         narrow_measured_result = _has_recorded_dissonance_comparison(result_sentence) or _has_mean_room_simulation_comparison(result_sentence)
-        # Mirror the existing Node measured cross-validation setting rule.
         measured_cross_validation = not re.search(
             r'(?:假设|假想|如果|若在|预计|预期|可能|计划|未来|并非|不是|未进行|未做|没有)', result_sentence,
         ) and re.search(
             r'(?:在|于)[^。！？!?\n]{1,160}(?:[1-9][0-9]*|[一二两三四五六七八九十]+)折交叉验证(?:下|中|上)', result_sentence,
         )
         has_metric = narrow_measured_result or metric.search(metric_sentence) or conference_metric.search(metric_sentence)
-        if has_metric and has_direction and numbers \
-                and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence, metric, conference_metric)) \
-                and (len(numbers) >= 2 or re.search(
-                    r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
-                )) and not _has_cross_metric_directional_comparison(result_sentence):
-            has_complete_result = True
-            break
-    corpus_result = _complete_corpus_curation_summary(summary)
-    if corpus_result and '原文未提供可核对的关键定量结果' in summary:
+        return bool(
+            has_metric and has_direction and numbers
+            and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence, metric, conference_metric))
+            and (len(numbers) >= 2 or re.search(
+                r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
+            )) and not _has_cross_metric_directional_comparison(result_sentence)
+        )
+
+    operational_re = re.compile(
+        r'(?:\b(?:train(?:ing)?|inference|deployment|hardware|gpu|cpu|tpu|npu|parameter(?:s)?|layers?|hidden(?:\s+units?)?|batch(?:\s+size)?|learning\s+rate|epochs?|steps?|iterations?|sampling\s+rate|window(?:\s+size)?|channels?|dimensions?|memory|vram|flops?|macs?|rtf|latency|throughput|fps|runtime|duration|cost|overhead)\b|训练|推理|部署|硬件|显存|内存|参数量|层数|隐藏单元|批量|学习率|轮次|步数|迭代|采样率|窗口|通道|维度|耗时|延迟|吞吐|实时率|计算量|成本|开销)',
+        re.IGNORECASE,
+    )
+    generic_english_metric_re = re.compile(r'(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])', re.IGNORECASE)
+
+    def _sentence_has_executive_metric_and_number(raw_sentence):
+        cleaned_s = _strip_core_summary_non_result_numerals(raw_sentence.strip())
+        if not cleaned_s:
+            return False
+        non_op = operational_re.sub(' ', cleaned_s)
+        if not number.findall(non_op):
+            return False
+        without_models = re.sub(
+            r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
+            '', cleaned_s, flags=re.IGNORECASE,
+        )
+        without_generic = generic_english_metric_re.sub(' ', without_models)
+        return bool(metric.search(without_generic) or conference_metric.search(without_generic))
+
+    has_complete_result = any(_candidate_complete(sentence) for sentence in re.split(r'[。！？!?\n]', content_body))
+    if use_executive and any(_has_cross_metric_directional_comparison(s) for s in re.split(r'[。！？!?\n]', content_body) if s.strip()):
+        has_complete_result = False
+    elif use_executive and not has_complete_result:
+        denied_window_re = re.compile(r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|并未|不是|未测|未报告|未进行)')
+        for paragraph in re.split(r'\n\s*\n', content_body):
+            p_sentences = [s.strip() for s in re.split(r'[。！？!?\n]', paragraph) if s.strip()]
+            for win_size in (2, 3):
+                for idx in range(len(p_sentences) - win_size + 1):
+                    win = p_sentences[idx:idx + win_size]
+                    if any(denied_window_re.search(part) or _has_cross_metric_directional_comparison(part) for part in win):
+                        continue
+                    if not any(
+                        _sentence_has_executive_metric_and_number(part)
+                        and (comparison.search(part) or baseline_transition.search(part))
+                        for part in win
+                    ):
+                        continue
+                    if _candidate_complete('，'.join(win)):
+                        has_complete_result = True
+                        break
+                if has_complete_result:
+                    break
+            if has_complete_result:
+                break
+    corpus_result = _complete_corpus_curation_summary(content_body)
+    if corpus_result and '原文未提供可核对的关键定量结果' in content_body:
         issues.append('摘要已报告语料清洗质量结果，不能笼统声明没有关键定量结果')
-    if not has_complete_result and not corpus_result and not _has_scoped_symbolic_demonstration(summary) and '原文未提供可核对的关键定量结果' not in summary:
+    if not has_complete_result and not corpus_result and not _has_scoped_symbolic_demonstration(content_body) and '原文未提供可核对的关键定量结果' not in content_body:
         issues.append('缺少完整关键定量结果或明确不可得声明')
-    explicit_boundary = re.search(
-        r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)',
-        summary,
+    if use_executive and source_text:
+        grounded_issue = _validate_core_summary_source_grounded_claims(raw_summary, source_text)
+        if grounded_issue:
+            issues.append(grounded_issue)
+    explicit_boundary = (
+        re.search(r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)', content_body)
+        and not (use_executive and re.search(r'(?:任何场景都适用|所有条件下均成立|不会失效)', content_body))
     )
     separated_unverified_boundary = re.search(
         r'(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)',
-        summary,
+        content_body,
     )
     conditional_failure = re.search(
         r'(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}'
         r'(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?'
         r'(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)',
-        summary,
+        content_body,
     )
     scoped_conclusion_boundary = re.search(
         r'(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于'
         r'[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)',
-        summary,
+        content_body,
     )
     attention_scope_boundary = any(
         not re.search(r'(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变', sentence)
         and re.search(r'(?:结论|研究结果|研究发现)(?<!不)(?<!非)限于(?:视频|音频|图像)(?:自|交叉|跨模态)注意力(?:的)?(?:稀疏化|计算|处理)', sentence)
         and re.search(r'(?:音频|视频|图像)(?:自|交叉|跨模态)注意力[^。！？!?\n]{0,30}保持不变', sentence)
-        for sentence in re.split(r'[。！？!?\n]', summary)
+        for sentence in re.split(r'[。！？!?\n]', content_body)
     )
     observational_causal_boundary = re.search(
         r'(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}'
         r'(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果',
-        summary,
+        content_body,
     )
     uncovered_scope_boundary = any(
         re.search(r'未涵盖[^。！？!?\n]{1,60}(?:语音|语料|数据|场景|条件|设置|样本|任务|攻击|环境|设备|人群|语种|语言|录音)', sentence)
         and not re.search(r'(?:并非|不是|不存在|没有|并不|不能说|不能认为|无法断言)[^，,；;。！？!?\n]{0,20}未涵盖', sentence)
         and not re.search(r'未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)', sentence)
         and not re.search(r'未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)', sentence)
-        for sentence in re.split(r'[。！？!?\n]', summary)
+        for sentence in re.split(r'[。！？!?\n]', content_body)
     )
+    failure_condition_boundary = re.search(r'(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)', content_body)
+    unverified_scope_boundary = re.search(r'(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围', content_body)
     if not any((explicit_boundary, separated_unverified_boundary, conditional_failure,
-                scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary, uncovered_scope_boundary, _has_natural_scoped_boundary(summary))):
+                scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary,
+                uncovered_scope_boundary, failure_condition_boundary, unverified_scope_boundary,
+                _has_natural_scoped_boundary(content_body))):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
     scoped_resource_disclosure = any(
         re.search(r'(?:训练|推理|部署)', sentence)
@@ -5900,15 +6089,20 @@ def _detailed_core_summary_semantic_issue(summary):
             sentence,
             re.IGNORECASE,
         )
-        for sentence in re.split(r'[。！？!?\n]', summary)
+        for sentence in re.split(r'[。！？!?\n]', content_body)
     )
-    cost = _has_concrete_runtime_disclosure(summary) \
-        or '原文未披露训练、推理或部署成本' in summary \
-        or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)', summary) \
-        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', summary) \
-        or scoped_resource_disclosure
+    executive_computation_or_tradeoff = use_executive and bool(re.search(
+        r'(?:取舍|权衡|参数开销|参数量|可训练参数|实时率|RTF|回升|退化|下降|折损|免训练|无需训练|零样本推理|闭式解|解析解|数值求解|统计检验|诊断评测|离线评测|前向计算|未披露[^。！？!?\n]{0,24}(?:成本|开销|延迟|耗时|算力|显存)|未报告[^。！？!?\n]{0,24}(?:成本|开销|延迟|耗时|算力|显存))',
+        content_body, re.IGNORECASE,
+    ))
+    cost = _has_concrete_runtime_disclosure(content_body) \
+        or '原文未披露训练、推理或部署成本' in content_body \
+        or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)', content_body) \
+        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', content_body) \
+        or scoped_resource_disclosure \
+        or executive_computation_or_tradeoff
     if not cost:
-        issues.append('缺少训练、推理或部署成本或未披露声明')
+        issues.append('缺少关键代价、资源开销或实际计算方式说明' if use_executive else '缺少训练、推理或部署成本或未披露声明')
     return '；'.join(issues) if issues else None
 
 
@@ -5918,7 +6112,12 @@ _CORE_SUMMARY_NODE_REPLAY_CACHE = {}
 def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=None):
     """Use the same current semantic rules as analysis for an actual sealed source."""
     proof = paper.get('freshRewriteProvenance') or {}
-    stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('coreSummaryRepair') or {}
+    manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
+    contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
+    has_declaration = 'coreSummary' in contracts
+    declaration = contracts.get('coreSummary') if has_declaration else core_summary_formats.current_header()
+    summary_header = core_summary_formats.read_declaration(declaration)
+    stage = (manifest.get('stages') or {}).get('coreSummaryRepair') or {}
     if ('operatorLiteralCorrection' in stage
             or (stage.get('paidDiagnosticReplay') or {}).get('operatorLiteralCorrectionRequired') is not None) \
             and not is_fresh_source_provenance(proof):
@@ -5936,9 +6135,9 @@ def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=Non
                 or (proof.get('sourceSha256') is not None
                     and proof['sourceSha256'] != paper.get('sourceSha256')):
             raise PublishDataValidationError('核心摘要展示的全文与原论文来源 SHA 不一致。')
-        return _run_core_summary_node_replay(paper, summary, source_text, stage_replay=True)
+        return _run_core_summary_node_replay(paper, summary, source_text, stage_replay=True, core_summary=declaration)
     if not is_fresh_source_provenance(proof):
-        return _detailed_core_summary_semantic_issue(summary)
+        return _detailed_core_summary_semantic_issue(summary, summary_header=summary_header)
     run_id = proof.get('runId')
     if not isinstance(run_id, str) or not re.fullmatch(
             r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id) \
@@ -5956,10 +6155,11 @@ def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=Non
         raise PublishDataValidationError('核心摘要重放原文 SHA 与本篇记录不一致。')
     source_text = source_bytes.decode('utf-8')
     return _run_core_summary_node_replay(paper, summary, source_text,
-        stage_replay='operatorLiteralCorrection' in stage or 'paidDiagnosticReplay' in stage)
+        stage_replay='operatorLiteralCorrection' in stage or 'paidDiagnosticReplay' in stage,
+        core_summary=declaration)
 
 
-def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
+def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay, core_summary=None):
     from publication_local_replay import publication_replay_result
     same_render = publication_replay_result(paper, source_text) if stage_replay else None
     if same_render is not None:
@@ -5969,17 +6169,23 @@ def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
     implementations = (
         _sha256_file(cli),
         _sha256_file(SHARED_SCRIPTS_DIR / 'analysis-contract.js'),
+        _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'core-summary-format.js'),
+        _sha256_file(SHARED_SCRIPTS_DIR.parent / 'config' / 'protocols' / 'summary.json'),
         _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'core-symbolic-source-numerals.js'),
         _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'analysis-section-titles.js'),
     )
-    key = (_javascript_string_sha256(summary), _javascript_string_sha256(source_text), implementations)
+    header_key = json.dumps(core_summary, ensure_ascii=False, sort_keys=True, separators=(',', ':')) if core_summary is not None else ''
+    key = (_javascript_string_sha256(summary), _javascript_string_sha256(source_text), header_key, implementations)
     # An operator replay must re-read its original paid files and authorization
     # every time; a semantic-only cache cannot attest those mutable files.
     if not stage_replay and key in _CORE_SUMMARY_NODE_REPLAY_CACHE:
         return _CORE_SUMMARY_NODE_REPLAY_CACHE[key]
+    semantic_body = {'summary': summary, 'sourceText': source_text}
+    if core_summary is not None:
+        semantic_body['coreSummary'] = core_summary
     payload = _daily_fresh_compact_json_bytes(
         {'mode': 'stage-binding', 'paper': paper, 'sourceText': source_text}
-        if stage_replay else {'summary': summary, 'sourceText': source_text})
+        if stage_replay else semantic_body)
     if len(payload) > 16 * 1024 * 1024:
         raise PublishDataValidationError('核心摘要只读重放输入超过上限。')
     node = shutil.which('node')

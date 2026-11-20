@@ -7,10 +7,25 @@
         "declaration": "analysisManifest.contracts.coreSummary",
         "stageHeader": ["contractVersion", "contractSchemaFingerprint"],
         "boundFields": ["inputAnalysisSha256", "outputAnalysisSha256", "inputSummarySha256", "summarySha256", "inputStructureProjectionSha256", "outputStructureProjectionSha256"],
-        "authority": "original-source-semantics-and-unchanged-exterior"
+        "authority": "original-source-semantics-and-unchanged-exterior",
+        "summaryProfile": "executive-abstract-v4"
       },
       "historical": [
-        {"tag": "core-summary-detailed-v3", "variant": "source-bound-detailed-summary"}
+        {"tag": "core-summary-detailed-v3", "variant": "source-bound-detailed-summary"},
+        {
+          "tag": "core-summary",
+          "variant": "source-bound-detailed-summary",
+          "header": {
+            "contract": "core-summary",
+            "schemaFingerprint": "0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6"
+          },
+          "schema": {
+            "declaration": "analysisManifest.contracts.coreSummary",
+            "stageHeader": ["contractVersion", "contractSchemaFingerprint"],
+            "boundFields": ["inputAnalysisSha256", "outputAnalysisSha256", "inputSummarySha256", "summarySha256", "inputStructureProjectionSha256", "outputStructureProjectionSha256"],
+            "authority": "original-source-semantics-and-unchanged-exterior"
+          }
+        }
       ]
     }
   ]

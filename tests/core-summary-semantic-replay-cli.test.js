@@ -38,7 +38,10 @@ test('私有FD桥逐字复用Node语义结果，合格摘要和明确缺陷均�
     for (const input of [{ summary, sourceText: '' }, { summary: '本文效果很好。', sourceText: '' },
         { summary: summary.replace('在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。', ''),
             sourceText: 'On the public evaluation test set, WER improved from 12.4% to 9.8% compared with the baseline.' }]) {
-        const expected = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, { sourceText: input.sourceText });
+        const expected = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, {
+            sourceText: input.sourceText,
+            summaryHeader: null
+        });
         const result = execute(input); assert.equal(result.status, 0); assert.deepEqual(result.value, { issue: expected });
     }
     assert.equal(execute({ summary, sourceText: '' }).value.issue, null);
@@ -86,7 +89,10 @@ test('真实11篇Python旧语义误拒摘要与当前Node source-bound规则完�
     for (const item of audit) {
         const sourceFile = path.join(sourceRoot, item.paperId.replace(/v\d+$/, ''), 'generation-000001/source.txt');
         const sourceBytes = fs.readFileSync(sourceFile), sourceText = sourceBytes.toString('utf8');
-        const expected = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + item.summary, { sourceText });
+        const expected = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + item.summary, {
+            sourceText,
+            summaryHeader: null
+        });
         const result = execute({ summary: item.summary, sourceText });
         assert.equal(result.status, 0, item.paperId); assert.deepEqual(result.value, { issue: expected }, item.paperId);
         assert.equal(expected, null, item.paperId);
