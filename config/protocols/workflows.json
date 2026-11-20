@@ -6528,7 +6528,7 @@
         },
         "coreSummaryFormat": {
           "contract": "core-summary",
-          "schemaFingerprint": "0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6"
+          "schemaFingerprint": "f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99"
         }
       },
       "historical": [
@@ -6538,6 +6538,37 @@
           "header": {
             "contract": "conference-source-core-correction-batch-v1",
             "version": 1
+          }
+        },
+        {
+          "tag": "conference-source-core-correction-batch",
+          "variant": "complete-stopped-original-source-members",
+          "header": {
+            "contract": "conference-source-core-correction-batch",
+            "schemaFingerprint": "182e1c68189c1afb9c072446d87e502d0456df445d66774d5c5a6a106063e879"
+          },
+          "schema": {
+            "authorization": "actual stopped complete scope; exact bounded source records and zero API",
+            "recordsFormat": {
+              "contract": "conference-source-core-correction",
+              "schemaFingerprint": "34084bac6ac99f2cc325e241c3d497a829806908349882f0369b06ad895a5f4c"
+            },
+            "provenanceFormat": {
+              "contract": "conference-source-core-correction-provenance",
+              "schemaFingerprint": "37bb23b405257dfb9c7c5d3e80de591e6712c1afa13c2884434f14d6aeb24e5c"
+            },
+            "receiptFormat": {
+              "contract": "conference-source-core-correction-receipt",
+              "schemaFingerprint": "a2a05be0e8dac9a46f4e846cd536d052366ecb00fd3360aabbc8c0272ac59805"
+            },
+            "coreStageProvenanceFormat": {
+              "contract": "conference-source-core-correction-summary-proof",
+              "schemaFingerprint": "ae1fcac5b2866cf817584791cb3953e4aed3fdebb4ff967cbae09c3930177ae4"
+            },
+            "coreSummaryFormat": {
+              "contract": "core-summary",
+              "schemaFingerprint": "0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6"
+            }
           }
         }
       ]

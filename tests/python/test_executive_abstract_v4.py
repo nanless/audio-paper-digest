@@ -377,13 +377,32 @@ class ExecutiveAbstractV4Test(unittest.TestCase):
 
         fake_cost = '\n\n'.join([
             paragraphs[0],
-            paragraphs[1],
-            '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。这种双流设计体现了编码码率与表征维度之间的良好权衡。',
+            paragraphs[1].replace('冻结预训练 WavLM 蒸馏引导', '冻结编码器进行特征提取并蒸馏引导'),
+            '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。本文方法并非免训练方案，如果采用闭式求解则会损失细节，这种双流设计体现了编码码率与表征维度之间的良好权衡。',
             paragraphs[3],
         ])
         self.assertIn('缺少关键代价、资源开销或实际计算方式说明', publisher._detailed_core_summary_semantic_issue(
             fake_cost, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
         ))
+
+        valid_frozen_direct_cost = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。推理阶段评估分支仅利用冻结编码器直接推理而无需额外微调。',
+            paragraphs[3],
+        ])
+        self.assertIsNone(publisher._detailed_core_summary_semantic_issue(
+            valid_frozen_direct_cost, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+
+        import time
+        long_digit_source = f"{'9' * 10000}±{'8' * 10000} WER 6.15%."
+        t0 = time.perf_counter()
+        self.assertIsNone(publisher._validate_core_summary_source_grounded_claims(
+            '词错率 WER 降至 6.15%。', long_digit_source,
+        ))
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        self.assertLess(elapsed_ms, 100.0, f'expected <100ms on 10000-digit string, got {elapsed_ms:.2f}ms')
 
 
 if __name__ == '__main__':

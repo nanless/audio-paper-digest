@@ -375,15 +375,33 @@ test('LaTeXML 千分位/控制序列/双写拼接、中文邻接模型名、百�
         summaryHeader: newHeader
     }), /缺少结论适用边界/);
 
-    // 5. 伪代价拦截：仅有“参数量”、“词错率下降”与“权衡”泛词而无真实开销/折损/免训练说明时必须拒绝
+    // 5. 伪代价拦截：仅有“参数量”、“词错率下降”、“权衡”、否定句“并非免训练”或第 2 段“冻结编码器进行特征提取”时必须拒绝，而“冻结编码器直接推理”正例通过
     const fakeCost = [
         paragraphs[0],
-        paragraphs[1],
-        '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。这种双流设计体现了编码码率与表征维度之间的良好权衡。',
+        paragraphs[1].replace('冻结预训练 WavLM 蒸馏引导', '冻结编码器进行特征提取并蒸馏引导'),
+        '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。本文方法并非免训练方案，如果采用闭式求解则会损失细节，这种双流设计体现了编码码率与表征维度之间的良好权衡。',
         paragraphs[3]
     ].join('\n\n');
     assert.match(contract.validateCoreSummarySemanticContract(withSummary(fakeCost), {
         sourceText: EXECUTIVE_SOURCE_TEXT,
         summaryHeader: newHeader
     }), /缺少关键代价、资源开销或实际计算方式说明/);
+
+    const validFrozenDirectCost = [
+        paragraphs[0],
+        paragraphs[1],
+        '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。推理阶段评估分支仅利用冻结编码器直接推理而无需额外微调。',
+        paragraphs[3]
+    ].join('\n\n');
+    assert.equal(contract.validateCoreSummarySemanticContract(withSummary(validFrozenDirectCost), {
+        sourceText: EXECUTIVE_SOURCE_TEXT,
+        summaryHeader: newHeader
+    }), null);
+
+    // 6. ReDoS 防护：10000 位连续数字串在 sandwichSplit/deduped 上耗时必须 < 100ms
+    const longDigitSource = `${'9'.repeat(10000)}±${'8'.repeat(10000)} WER 6.15%.`;
+    const t0 = performance.now();
+    assert.equal(groundedCheck('词错率 WER 降至 6.15%。', longDigitSource), null);
+    const elapsedMs = performance.now() - t0;
+    assert.ok(elapsedMs < 100, `expected <100ms on 10000-digit string, got ${elapsedMs.toFixed(2)}ms`);
 });

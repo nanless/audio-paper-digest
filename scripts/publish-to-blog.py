@@ -5819,11 +5819,11 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
         tex_merged = re.sub(r'\\pm\s*', '±', tex_merged)
         tex_merged = re.sub(r'\\times\s*', '×', tex_merged)
         deduped = re.sub(
-            r'(?<![0-9])(?<!\d\.)((?:\d+\.\d+|\.\d+|\d+)(?:[±×/+-](?:\d+\.\d+|\.\d+|\d+))*)\1(?![0-9]|\.\d)',
+            r'(?<![0-9])(?<!\d\.)((?:\d{1,16}\.\d{1,16}|\.\d{1,16}|\d{1,16})(?:[±×/+-](?:\d{1,16}\.\d{1,16}|\.\d{1,16}|\d{1,16})){0,4})\1(?![0-9]|\.\d)',
             r'\1', tex_merged,
         )
         sandwich_split = re.sub(
-            r'([±+-]?)(\.\d+|\d+\.\d+|\d+)(\d+\.\d+|\.\d+|\d+)(?:\\!|\s)*(?:\\pm|±)(?:\\!|\s)*\2(?![0-9]|\.\d)',
+            r'([±+-]|(?<![0-9]))(\.\d{1,16}|\d{1,16}\.\d{1,16}|\d{1,16})(\d{1,16}\.\d{1,16}|\.\d{1,16}|\d{1,16})(?:\\!|\s)*(?:\\pm|±)(?:\\!|\s)*\2(?![0-9]|\.\d)',
             r'\1\2 \3 ± \2', normalized,
         )
         tex_spaced = re.sub(r'\\[,;!:]', ' ', normalized)
@@ -6184,13 +6184,14 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         for sentence in re.split(r'[。！？!?\n]', cost_body)
     )
     executive_computation_or_tradeoff = use_executive and any(
-        re.search(
+        not re.search(r'(?:并非|并未|不是|不能|不采用|不涉及|假设|如果)', sentence)
+        and re.search(
             r'(?:(?:额外|新增|引入|付出)[^。！？!?\n]{0,24}(?:参数开销|计算开销|内存开销|通信开销|编译开销|延迟|耗时|代价)|'
             r'代价是|作为代价|以[^。！？!?\n]{1,24}为代价|指标折损|'
             r'(?:移除|去掉|消融)[^。！？!?\n]{1,36}(?:回升|恶化|回落|折损)|'
             r'免训练|无需(?:任何)?(?:神经网络)?训练|零样本(?:直接)?推理|'
             r'闭式(?:解|求解|奇异值分解|计算|诊断)|解析解|'
-            r'冻结(?:权重|编码器|骨干|主干)?[^。！？!?\n]{0,20}(?:直接推理|前向计算|特征提取)|'
+            r'冻结(?:权重|编码器|骨干|主干)?[^。！？!?\n]{0,20}(?:直接推理|零样本推理|无需训练)|'
             r'离线统计检验|'
             r'(?:未披露|未报告)[^。！？!?\n]{0,24}(?:训练|推理|部署)?(?:成本|开销|延迟|耗时|算力|显存))',
             sentence, re.IGNORECASE,
