@@ -11346,6 +11346,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         enforceMethodDetailContract: true,
         enforceCyrillicProseGarble: true,
+        enforceTableCommentaryAlignment: true,
         sourceText
     });
     if (invalidReason) {
@@ -11369,6 +11370,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
                 experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
                 enforceMethodDetailContract: true,
                 enforceCyrillicProseGarble: true,
+                enforceTableCommentaryAlignment: true,
                 sourceText
             });
             if (reason) throw new Error(`评分稳定性审计未通过最终契约: ${reason}`);
@@ -11392,6 +11394,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         enforceMethodDetailContract: true,
         enforceCyrillicProseGarble: true,
+        enforceTableCommentaryAlignment: true,
         sourceText
     });
     if (sealedInvalidReason) {
@@ -18121,9 +18124,15 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     );
     analysis = structureRepairStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'structureRepair')) {
-        const preNormalizationIssues = getRepairableAnalysisStructureIssues(analysis, {
-            sourceText: rawTextForAnalysis, requireCurrentEvaluationTitle
-        });
+        const onlineStructureOptions = {
+            sourceText: rawTextForAnalysis,
+            requireCurrentEvaluationTitle,
+            enforceCyrillicProseGarble: true,
+            enforceTableCommentaryAlignment: true
+        };
+        const preNormalizationIssues = getRepairableAnalysisStructureIssues(
+            analysis, onlineStructureOptions
+        );
         const normalizedStructure = normalizeAnalysisStructure(analysis);
         const normalizedChanged = normalizedStructure !== analysis;
         if (normalizedChanged) {
@@ -18131,9 +18140,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             console.log(`    [deep] ✅ 已确定性规范化结构 | categories=${sanitizeLogField(preNormalizationIssues.join('、') || '空白/数值表示', 500)}`);
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         }
-        const structureIssues = getRepairableAnalysisStructureIssues(analysis, {
-            sourceText: rawTextForAnalysis, requireCurrentEvaluationTitle
-        });
+        const structureIssues = getRepairableAnalysisStructureIssues(
+            analysis, onlineStructureOptions
+        );
         try {
             if (structureIssues.length > 0) {
                 console.log(`    [deep] 🔧 检测到分析章节、机器摘要或正文检查问题，执行最终结构修复: ${structureIssues.join('、')}`);
@@ -18142,11 +18151,15 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     analysis,
                     rawTextForAnalysis,
                     structureRepairStage.evidenceContext,
-                    { requireCurrentEvaluationTitle }
+                    {
+                        requireCurrentEvaluationTitle,
+                        enforceCyrillicProseGarble: true,
+                        enforceTableCommentaryAlignment: true
+                    }
                 );
-                const postRepairIssues = getRepairableAnalysisStructureIssues(analysis, {
-                    sourceText: rawTextForAnalysis, requireCurrentEvaluationTitle
-                });
+                const postRepairIssues = getRepairableAnalysisStructureIssues(
+                    analysis, onlineStructureOptions
+                );
                 if (postRepairIssues.length > 0) {
                     const error = new Error(`最终结构修复后的分析仍未通过结构契约: ${postRepairIssues.join('、')}`);
                     error.code = 'CONTRACT_REJECTED';
@@ -18161,7 +18174,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 paper,
                 analysis,
                 rawTextForAnalysis,
-                { requireCurrentEvaluationTitle }
+                {
+                    requireCurrentEvaluationTitle,
+                    enforceCyrillicProseGarble: true,
+                    enforceTableCommentaryAlignment: true
+                }
             );
             analysis = finalization.analysis;
             require('./lib/daily-fact-review').validateRepairedClaims('structureRepair', analysis, arxivId);
@@ -18551,6 +18568,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     enforceExperimentTableContract: true,
                     experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
                     enforceMethodDetailContract: true,
+                    enforceCyrillicProseGarble: true,
+                    enforceTableCommentaryAlignment: true,
                     sourceText: rawTextForAnalysis
                 });
                 if (invalidReason) {
@@ -19162,6 +19181,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     enforceExperimentTableContract: true,
                     experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
                     enforceMethodDetailContract: true,
+                    enforceCyrillicProseGarble: true,
+                    enforceTableCommentaryAlignment: true,
                     sourceText: rawTextForAnalysis
                 }
             );
@@ -20022,9 +20043,14 @@ async function repairCoreSummarySection(
 async function repairMissingAnalysisSections(
     paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}
 ) {
+    const enforceCyrillicProseGarble = options.enforceCyrillicProseGarble !== false;
+    const enforceTableCommentaryAlignment = options.enforceTableCommentaryAlignment !== false;
     let currentAnalysis = normalizeAnalysisStructure(existingAnalysis);
     let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, {
-        sourceText, requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true
+        sourceText,
+        requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true,
+        enforceCyrillicProseGarble,
+        enforceTableCommentaryAlignment
     });
     let validationFeedback = '这是第一次结构修复，没有上一次校验错误。';
     const evidenceContext = typeof preparedEvidence === 'string'
@@ -20048,7 +20074,11 @@ async function repairMissingAnalysisSections(
         const cleaned = cleanGapFillPrefix(repairedText.trim());
         if (cleaned) currentAnalysis = normalizeAnalysisStructure(removeUnapprovedMarkdownImages(cleaned, []));
 
-        structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, { sourceText });
+        structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, {
+            sourceText,
+            enforceCyrillicProseGarble,
+            enforceTableCommentaryAlignment
+        });
         const evaluationIssue = getCurrentPaperEvaluationHeadingIssue(currentAnalysis);
         if (evaluationIssue && !structureIssues.includes(evaluationIssue)) structureIssues.push(evaluationIssue);
         if (structureIssues.length === 0) return currentAnalysis;
@@ -20074,13 +20104,16 @@ function recoveryFailureStatus(error) {
 }
 
 async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, options = {}) {
+    const enforceCyrillicProseGarble = options.enforceCyrillicProseGarble !== false;
+    const enforceTableCommentaryAlignment = options.enforceTableCommentaryAlignment !== false;
     let analysis = capExperimentTableMetricColumns(
         normalizeExperimentTableNumericFormatting(inputAnalysis)
     );
     const tableContractIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parseAnalysis(analysis)?.documentType,
-        sourceText
+        sourceText,
+        enforceTableCommentaryAlignment
     });
     if (tableContractIssue) {
         throw contractRejectedError(
@@ -20117,7 +20150,10 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
     // 仅满足方法节 600 字要求，仍可能新增编辑批注或破坏其他章节；
     // 这些问题未解决时，不能保存为 structureRepair=complete 供后续运行复用。
     const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis, {
-        sourceText, requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true
+        sourceText,
+        requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true,
+        enforceCyrillicProseGarble,
+        enforceTableCommentaryAlignment
     });
     if (finalStructureIssues.length > 0) {
         throw contractRejectedError(
@@ -20139,7 +20175,10 @@ function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     if (duplicate.length > 0) issues.push(`必要章节重复: ${duplicate.join('/')}`);
     const topLevelIssue = validateTopLevelSectionContract(analysis);
     if (topLevelIssue) issues.push(`一级章节: ${topLevelIssue}`);
-    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis);
+    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis, {
+        sourceText: options.sourceText,
+        enforceCyrillicProseGarble: options.enforceCyrillicProseGarble === true
+    });
     if (editorialLeakageIssue) issues.push(`模型编辑/自检批注: ${editorialLeakageIssue}`);
     const parsed = parseAnalysis(analysis);
     const machineIssue = validateMachineSummaryContract(analysis, parsed, { checkScoringConsistency: false });
@@ -20151,7 +20190,8 @@ function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     const tableIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parsed?.documentType,
-        sourceText: options.sourceText
+        sourceText: options.sourceText,
+        enforceTableCommentaryAlignment: options.enforceTableCommentaryAlignment === true
     });
     if (tableIssue) issues.push(`实验表格: ${tableIssue}`);
     // 结构修复必须在评分审计之前兜住最终契约要求的叙事正文长度。
@@ -20325,7 +20365,8 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
     const depthIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parseAnalysis(analysis)?.documentType,
-        sourceText: textForAnalysis
+        sourceText: textForAnalysis,
+        enforceTableCommentaryAlignment: true
     });
     return hasOmission || Boolean(depthIssue) || (!hasTable && hasTableReference && sourceHasTables);
 }

@@ -23,6 +23,7 @@ const {
     parseAnalysis
 } = require('../scripts/utils.js');
 const {
+    validAnalysisText,
     validLegacyApiAnalysisPaper
 } = require('./valid-analysis-fixture.js');
 const {
@@ -491,4 +492,86 @@ test('C2 与 D5：现用 Reader 与局部修复提示词包含列头单位证据
         assert.match(prompt, /“全部”“所有”“只有”“唯一”/);
         assert.match(prompt, /条件.*图例颜色.*方法行名/);
     }
+});
+
+test('主分析在线 getRepairableAnalysisStructureIssues 与补表判定对称开启 D1/D2，默认冷迁移模式保持关闭', async () => {
+    const baseAnalysis = validAnalysisText();
+
+    // 1. 主分析含西里尔乱码词：默认冷迁移模式不报错，在线开启模式精准报错，且 sourceText 含原词时豁免
+    const cyrillicAnalysis = baseAnalysis.replace(
+        '## 细节详述\n',
+        '## 细节详述\n训练中期模型быстро收敛并保持稳定。\n'
+    );
+    assert.deepEqual(
+        deep.getRepairableAnalysisStructureIssues(cyrillicAnalysis, {
+            sourceText: 'The model converges rapidly at mid-training.'
+        }),
+        []
+    );
+    const onlineCyrillicIssues = deep.getRepairableAnalysisStructureIssues(cyrillicAnalysis, {
+        sourceText: 'The model converges rapidly at mid-training.',
+        enforceCyrillicProseGarble: true,
+        enforceTableCommentaryAlignment: true
+    });
+    assert.equal(onlineCyrillicIssues.length, 1);
+    assert.match(onlineCyrillicIssues[0], /西里尔字母乱码词/);
+    assert.deepEqual(
+        deep.getRepairableAnalysisStructureIssues(cyrillicAnalysis, {
+            sourceText: 'We retain token быстро in raw logs.',
+            enforceCyrillicProseGarble: true,
+            enforceTableCommentaryAlignment: true
+        }),
+        []
+    );
+
+    // 2. 主分析实验结果两表评述错位：默认冷迁移模式不报错，在线开启模式与 analysisNeedsExperimentTableRepair 对称报错
+    const permutedResultsSection = [
+        '## 实验结果',
+        '',
+        '第一组消融比较检验均匀与独热简化策略相对完整 PACD 的差异，固定同一主干与融合系数。',
+        '',
+        '| Method | CMM ↑ | AVHBench ↑ | SVHalluc ↑ |',
+        '| --- | --- | --- | --- |',
+        '| Uniform | 85.9 | 73.7 | 52.6 |',
+        '| Argmax | 84.3 | 72.7 | 53.6 |',
+        '| PACD | 87.4 | 78.8 | 63.7 |',
+        '',
+        '该表支撑的判断是，在 VideoLLaMA2-AV 与 OmniVinci 的 OmniVideoBench 与 FutureOmni 上 PACD 相比基线取得提升，但单一泛化幅度受任务长度限制，不能直接推广到开放域生成。',
+        '',
+        '第二组比较检验通用视频推理与未来预测泛化基准上的相对表现，固定同一评测划分。',
+        '',
+        '| Method | OmniVideoBench ↑ | FutureOmni ↑ |',
+        '| --- | --- | --- |',
+        '| VideoLLaMA2-AV | 27.5 | 38.8 |',
+        '| OmniVinci | 32.9 | 52.7 |',
+        '| PACD | 34.8 | 53.5 |',
+        '',
+        '该表支撑的判断是，Uniform 与 Argmax 在 CMM、AVHBench 与 SVHalluc 上均低于 PACD，尤其 Argmax 在音频主导细分类反而下降，证据范围限于判别式问答。'
+    ].join('\n');
+    const permutedAnalysis = baseAnalysis.replace(
+        /## 实验结果\n[\s\S]*?(?=\n## 细节详述)/,
+        permutedResultsSection
+    );
+    const tableSource = 'Table 1 ablation baseline worse than PACD.';
+
+    assert.deepEqual(
+        deep.getRepairableAnalysisStructureIssues(permutedAnalysis, { sourceText: tableSource }),
+        []
+    );
+    const onlineTableIssues = deep.getRepairableAnalysisStructureIssues(permutedAnalysis, {
+        sourceText: tableSource,
+        enforceCyrillicProseGarble: true,
+        enforceTableCommentaryAlignment: true
+    });
+    assert.equal(onlineTableIssues.length, 1);
+    assert.match(onlineTableIssues[0], /疑似多表与表后评述错位/);
+    assert.equal(deep.analysisNeedsExperimentTableRepair(permutedAnalysis, tableSource), true);
+    await assert.rejects(
+        () => deep.finalizeStructureRepairOutput(
+            { arxivId: '2611.22456', title: 'Table Alignment Check' },
+            permutedAnalysis,
+            tableSource
+        ),
+        /疑似多表与表后评述错位/
+    );
 });

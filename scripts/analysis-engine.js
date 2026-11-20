@@ -2639,6 +2639,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         analyzed.analysisManifest || paper.analysisManifest
                     ),
                     enforceCyrillicProseGarble: true,
+                    enforceTableCommentaryAlignment: true,
                     sourceText: onlineSourceText
                 });
                 const recoveryReason = getIncompleteAnalysisContentReason(analyzed);
