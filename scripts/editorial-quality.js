@@ -117,6 +117,13 @@ const READER_TEMPLATE_PATTERNS = Object.freeze([
     /下一段将(?:解释|说明|展示|讨论)/gu,
     /^\s*\d+[.)、]\s*是(?=\S)/gmu
 ]);
+const READER_V4_TEMPLATE_PATTERNS = Object.freeze([
+    /(?:这张图|该图|本图)确实可见/gu,
+    /从像素可见/gu,
+    /比较的?问题是\s*[：:]/gu,
+    /(?:这张表|该表|本表)支撑的判断是/gu,
+    /本表数值与单位依据论文\s*PDF/gu
+]);
 
 const PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
 const DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
@@ -315,10 +322,11 @@ function isDiscourseTaskConditionNumeral(text, index, surface) {
     return !/(?:仅|只|至少|至多|恰好|共有|共计|总共|总计|一共|剩余)/u.test(prefix);
 }
 
-function findQuantitativeChineseNumerals(text) {
+function findQuantitativeChineseNumerals(text, options = {}) {
+    const isCohesiveV4 = options?.editorialProfile === 'cohesive-functional-v4';
     // 下列“一步”都是篇章连接或指代，不是精确的 1 个步骤；用等长空白
     // 屏蔽它们以保持后续 issue index/line 不漂移。
-    const value = normalizeNfkc(text)
+    let value = normalizeNfkc(text)
         // 面向读者的 Markdown 标题是行文标签，不是结果表里的量。
         // 曾把「两种视图如何分账」当成实验计数来检查，
         // 结果生成了「2 种视图」这种别扭标题。
@@ -343,6 +351,19 @@ function findQuantitativeChineseNumerals(text) {
             /(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|二分(?=(?:解释|结构|视角|框架|法))/gu,
             match => ' '.repeat(match.length)
         );
+    if (isCohesiveV4) {
+        value = value
+            .replace(/最小二乘(?:法|估计|解|回归|拟合|问题|损失|误差)?/gu, match => ' '.repeat(match.length))
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一对一|一对多|多对一|多对多|一一对应)/gu, match => ' '.repeat(match.length))
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|五|六|高|低|多|零|分数)阶/gu, match => ' '.repeat(match.length))
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|高|低|多)维(?=[\p{Script=Han}])/gu, match => ' '.repeat(match.length))
+            .replace(/一分不得|一分为二|合二为一|一举两得|独一无二|举一反三|融为一体|一成不变|一概而论|一视同仁|一目了然|一脉相承|一步到位|二者合一|合而为一|万无一失|百里挑一|十拿九稳|一劳永逸|一锤定音|一针见血/gu,
+                match => ' '.repeat(match.length))
+            .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu,
+                match => ' '.repeat(match.length))
+            .replace(/每一\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch)/giu,
+                match => ' '.repeat(match.length));
+    }
     const unitAlternation = EMPIRICAL_COUNT_UNITS
         .slice()
         .sort((a, b) => b.length - a.length)
@@ -371,7 +392,9 @@ function findQuantitativeChineseNumerals(text) {
         [new RegExp(`[${CHINESE_DIGITS}]+\\s*(?:到|至|–|—|-)\\s*\\d+(?=\\s*(?:${unitAlternation}))`, 'giu'), 'mixed_range'],
         [new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:万亿|百万|千万|万|亿)(?=\\s*(?:${scaledArabicUnitAlternation}))`, 'giu'), 'mixed_magnitude'],
         [/(?<![负正零〇一二两三四五六七八九十百千万亿点\d])[一二两三四五六七八九]成?\s*(?:到|至|–|—|-)\s*[一二两三四五六七八九]成(?![零〇一二两三四五六七八九十百千万亿点\d半])/gu, 'exact_fraction_range'],
-        [new RegExp(`(?:至少)?一半|半宽|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))`, 'gu'), 'exact_fraction'],
+        [new RegExp(isCohesiveV4
+            ? `(?:至少)?一半|四分之一(?!宽)|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))`
+            : `(?:至少)?一半|半宽|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))`, 'gu'), 'exact_fraction'],
         [new RegExp(`(?:排名第[${CHINESE_DIGITS}]+|第[${CHINESE_DIGITS}]+名)`, 'gu'), 'exact_rank'],
         [new RegExp(`(?:最高|满分|得分|评分|至少|超过|低于|高于|达到)\\s*[${CHINESE_DIGITS}]+\\s*分|[${CHINESE_DIGITS}]+\\s*分(?:制|量表|以上|以下|满分)|[${CHINESE_DIGITS}]+\\s*分(?=\\s*(?:[，,。；;、]|$))`, 'gu'), 'exact_score'],
         [/[几数]\s*\d+(?=\s*(?:毫秒|秒|分钟|小时|天|Hz|kHz|MHz|MB|GB|KB|mJ|dB|帧|步|倍))/giu, 'vague_arabic_magnitude'],
@@ -606,10 +629,13 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     ), normalized);
 }
 
-function findReaderTemplatePhrases(text) {
+function findReaderTemplatePhrases(text, options = {}) {
     const value = normalizeNfkc(text);
     const findings = [];
-    for (const regex of READER_TEMPLATE_PATTERNS) {
+    const patterns = options?.editorialProfile === 'cohesive-functional-v4'
+        ? [...READER_TEMPLATE_PATTERNS, ...READER_V4_TEMPLATE_PATTERNS]
+        : READER_TEMPLATE_PATTERNS;
+    for (const regex of patterns) {
         findings.push(...collectRegexMatches(value, regex, 'reader_template_phrase'));
     }
     return findings;
@@ -617,7 +643,7 @@ function findReaderTemplatePhrases(text) {
 
 // 只诊断已复现的读者语言问题，不替换术语、删句或改动来源证据。
 // 等长遮盖保留原始 index；引用、代码与公式不作为作者自己的解释检查。
-function findReaderLanguageIssues(text, { contextText = '', sourceText = '', documentText = '' } = {}) {
+function findReaderLanguageIssues(text, { contextText = '', sourceText = '', documentText = '', editorialProfile = '' } = {}) {
     const original = String(text ?? '');
     const mask = value => value.replace(/[^\r\n]/g, ' ');
     let fence = null;
@@ -727,7 +753,24 @@ function findReaderLanguageIssues(text, { contextText = '', sourceText = '', doc
             regex: /补丁距离/gu,
             technicalContext: /FID|Fr[eé]chet|图像块|局部图像|高分辨率细节/iu,
             message: '核对本段是否指 patch FID。若是，保留 patch FID，并解释为在局部图像块上计算的指标，不译成软件补丁的距离；保持原数值、单位、方向和来源。其他数学距离或软件补丁语境不在本规则范围内。'
-        }
+        },
+        ...(editorialProfile === 'cohesive-functional-v4' ? [
+            {
+                code: 'reader_workflow_leakage',
+                regex: /(?:这张图|该图|本图)确实可见|从像素可见|比较的?问题是\s*[：:]|(?:这张表|该表|本表)支撑的判断是|本表数值与单位依据论文\s*PDF/gu,
+                message: '这句使用了生硬的二代校验套话。请改为直接结合论文具体机制、图表要素或实验条件展开自然讲解，保留原数字、单位、方法归属与来源证据。'
+            },
+            {
+                code: 'reader_awkward_translation',
+                regex: /(?<=[\u4e00-\u9fff][ \t]*)(?:alone|over|abstain|abstained|abstaining|withhold|withholding|noisy|surely|certify|certified|without|within|between|through|across|however|therefore)(?=[ \t]*(?:[\u4e00-\u9fff]|[，,。；;！？!?]))/gu,
+                message: '中文句子中夹杂了裸英文普通虚词或动词散词。请改为流畅准确的纯正中文表达，保留必要的模型专名、技术缩写、原数字与来源证据。'
+            },
+            {
+                code: 'reader_awkward_translation',
+                regex: /讨厌参数|讨厌变量/gu,
+                message: '核对原文是否指 nuisance parameter / nuisance variable。若是，请译为“干扰参数”或“无关参数”，不要生硬直译成“讨厌参数”；保留原公式、数值与来源证据。'
+            }
+        ] : [])
     ];
     const paragraphBreaks = [...visible.matchAll(/\r?\n[ \t]*\r?\n/gu)];
     for (const rule of rules) {
@@ -1070,8 +1113,12 @@ function findCrossSectionNumericFactReuse(input, options = {}) {
 }
 
 function findLongParagraphs(input, options = {}) {
-    const warningChars = Number.isInteger(options.warningChars) ? options.warningChars : 180;
-    const errorChars = Number.isInteger(options.errorChars) ? options.errorChars : 260;
+    const isCohesiveV4 = options.editorialProfile === 'cohesive-functional-v4';
+    const warningChars = Number.isInteger(options.warningChars) ? options.warningChars : (isCohesiveV4 ? 340 : 180);
+    const errorChars = Number.isInteger(options.errorChars) ? options.errorChars : (isCohesiveV4 ? 480 : 260);
+    const warningSentences = Number.isInteger(options.warningSentences) ? options.warningSentences : (isCohesiveV4 ? 8 : 5);
+    const errorSentences = Number.isInteger(options.errorSentences) ? options.errorSentences : (isCohesiveV4 ? 11 : 7);
+    const sentenceRegex = options.countSemicolons === false || isCohesiveV4 ? /[。！？!?]/g : /[。！？；!?;]/g;
     // validateEditorialQuality 传进来的是已经整理好的读者小节对象。
     // 若再把它收成六个核心小节，authors/review/scoring/openSource
     // 会被悄悄丢掉——Python 的最终页面镜像没有这个问题。
@@ -1086,14 +1133,14 @@ function findLongParagraphs(input, options = {}) {
                 continue;
             }
             const chars = chineseCharacterCount(paragraph.text);
-            const sentenceMarks = (paragraph.text.match(/[。！？；!?;]/g) || []).length;
-            if (chars <= warningChars && sentenceMarks <= 5) continue;
+            const sentenceMarks = (paragraph.text.match(sentenceRegex) || []).length;
+            if (chars <= warningChars && sentenceMarks <= warningSentences) continue;
             findings.push({
                 section,
                 line: paragraph.line,
                 chars,
                 sentenceMarks,
-                severity: chars > errorChars || sentenceMarks > 7 ? 'error' : 'warning',
+                severity: chars > errorChars || sentenceMarks > errorSentences ? 'error' : 'warning',
                 text: paragraph.text
             });
         }
@@ -2020,13 +2067,15 @@ function validateEditorialQuality(input, options = {}) {
         : QUALITY_SECTION_NAMES.map(name => sections[name] || '').filter(Boolean).join('\n\n');
     for (const section of QUALITY_SECTION_NAMES) {
         const body = sections[section];
-        for (const finding of findReaderLanguageIssues(body, {
+        const languageFindings = findReaderLanguageIssues(body, {
             sourceText: options.sourceText || '',
-            documentText: fullDocumentText
-        })) {
+            documentText: fullDocumentText,
+            editorialProfile: options.editorialProfile || ''
+        });
+        for (const finding of languageFindings) {
             issues.push(issue(finding.code, finding.message, { section, ...finding }));
         }
-        for (const finding of findQuantitativeChineseNumerals(body)) {
+        for (const finding of findQuantitativeChineseNumerals(body, { editorialProfile: options.editorialProfile })) {
             issues.push(issue('quantitative_chinese_numeral', '精确定量信息必须使用阿拉伯数字', { section, ...finding }));
         }
         for (const finding of findDoubleNumbering(body, { implicitList: section === 'innovations' })) {
@@ -2041,7 +2090,8 @@ function validateEditorialQuality(input, options = {}) {
         for (const finding of findMissingComparisonUnits(body)) {
             issues.push(issue('comparison_unit_missing', '比较值的指标单位未就近完整绑定', { section, ...finding }));
         }
-        for (const finding of findReaderTemplatePhrases(body)) {
+        for (const finding of findReaderTemplatePhrases(body, { editorialProfile: options.editorialProfile })) {
+            if (languageFindings.some(item => item.index === finding.index && item.match === finding.match)) continue;
             issues.push(issue('reader_template_phrase', '读者正文仍使用批量模板句式，必须改成论文专属的自然承接', { section, ...finding }));
         }
         for (const finding of findBrokenProse(body)) {
@@ -2065,7 +2115,10 @@ function validateEditorialQuality(input, options = {}) {
     for (const reuse of findCrossSectionNumericFactReuse(sections, options.factReuse)) {
         issues.push(issue('numeric_fact_reused_across_sections', '同一数字事实签名跨过多章节复用', reuse));
     }
-    for (const finding of findLongParagraphs(sections, options.paragraphs)) {
+    const paragraphOptions = options.editorialProfile
+        ? { editorialProfile: options.editorialProfile, ...(options.paragraphs || {}) }
+        : options.paragraphs;
+    for (const finding of findLongParagraphs(sections, paragraphOptions)) {
         const target = finding.severity === 'error' ? issues : warnings;
         target.push((finding.severity === 'error' ? issue : warning)(
             'paragraph_too_long',

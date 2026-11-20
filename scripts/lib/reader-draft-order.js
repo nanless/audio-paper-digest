@@ -62,13 +62,23 @@ function completeSelectionMarkerPermutation(draft, tables) {
 // 已符合规则时，仅在目标小节类型唯一、现有标记格式正确且唯一独立成行的
 // 条件下补入或移动标记。移动只从段落末尾取走 "\n\nMARKER"，
 // 原样放入目标小节，不改其他正文。
+function isCohesiveV4Draft(draft) {
+    try {
+        const format = require('./reader-record-format');
+        return format.draftFormat(draft).editorialProfile === format.COHESIVE_V4;
+    } catch {
+        return false;
+    }
+}
+
 function normalizeConceptBridgeMarkerLocations(draft) {
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const bridges = Array.isArray(draft?.conceptBridges) ? draft.conceptBridges : [];
+    const cohesiveV4 = isCohesiveV4Draft(draft);
     const canonicalSections = sections.every((section, index) => {
         const rank = READER_SECTION_KINDS.indexOf(section?.kind);
         const previousRank = index ? READER_SECTION_KINDS.indexOf(sections[index - 1]?.kind) : -1;
-        return rank >= 0 && rank >= previousRank && typeof section?.body === 'string';
+        return rank >= 0 && (cohesiveV4 || rank >= previousRank) && typeof section?.body === 'string';
     });
     if (!bridges.length || !canonicalSections || bridges.some((bridge, index) => (
         bridge?.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
@@ -749,9 +759,11 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const ranked = sections.map((section, index) => ({ section, index }));
     // 未知或格式错误的小节类型由解析器检查；在它报告错误之前，不要自己
-    // 编一个顺序，也不要改索引。
+    // 编一个顺序，也不要改索引。cohesive-functional-v4 新契约关闭静默跨类重排，
+    // 保留作者的章节过渡关系。
     const sectionsAreKnown = ranked.every(({ section }) => READER_SECTION_KINDS.includes(section?.kind));
-    if (sectionsAreKnown) {
+    const cohesiveV4 = isCohesiveV4Draft(draft);
+    if (sectionsAreKnown && !cohesiveV4) {
         ranked.sort((a, b) => READER_SECTION_KINDS.indexOf(a.section.kind)
             - READER_SECTION_KINDS.indexOf(b.section.kind) || a.index - b.index);
     }

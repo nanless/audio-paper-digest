@@ -35,6 +35,6 @@ function sameDeclaration(left, right) {
 }
 function validForSavedPlan(stage, plan) {
     if (keys.some(key => Object.hasOwn(stage || {}, key))) return modeOf(stage) !== null;
-    return !codec.isCurrentHeader(plan, 'beginner-researcher');
+    return !Object.hasOwn(plan || {}, 'schemaFingerprint');
 }
 module.exports = { fields, originalInputDomain, modeOf, is, sameMode, sameDeclaration, validForSavedPlan, keys };

@@ -7,7 +7,20 @@ const format = require('../scripts/lib/reader-record-format');
 const deep = require('../scripts/deep-analyzer');
 const repair = require('../scripts/lib/reader-repair');
 const header = () => codec.recordHeader(codec.contract('reader-draft'), 'reader-draft');
-const modern = draft => { const { version, ...body } = draft; return { ...header(), ...body }; };
+const oldDraftHeader = () => codec.historicalHeader('reader-draft', format.INTEGRATED, format.OLD_DRAFT_FP);
+const modern = draft => {
+    const { version, ...body } = draft;
+    const mergeInto = { background: 'problem', related_work: 'problem', experiment_setup: 'result', reproduction: 'limitation' };
+    const merged = [];
+    for (const section of body.sections) {
+        const targetKind = mergeInto[section.kind] || section.kind;
+        const existing = merged.find(item => item.kind === targetKind);
+        if (existing) existing.body = `${existing.body}\n\n${section.body}`;
+        else merged.push({ ...section, kind: targetKind });
+    }
+    return { ...header(), ...body, sections: merged };
+};
+const historicalModern = draft => { const { version, ...body } = draft; return { ...oldDraftHeader(), ...body }; };
 
 function sample() {
     const fixture = require('./reader-signed-draft-fixture').fixture({ noFigures: true });
@@ -17,21 +30,27 @@ function sample() {
     return { ...fixture, options };
 }
 
-test('unversioned current draft compiles the same article; original draft remains byte-exact under original compilation', () => {
+test('unversioned current draft compiles cohesive-v4 article; historical fingerprint and v3 drafts remain byte-exact', () => {
     const value = sample(), oldBefore = JSON.stringify(value.draft);
     const original = deep.parseApiReaderArticleResult(oldBefore, value.options);
+    const oldFpDraft = historicalModern(value.draft);
+    const oldFpCompiled = deep.parseApiReaderArticleResult(JSON.stringify(oldFpDraft), value.options);
+    assert.equal(oldFpCompiled.article, original.article);
+    assert.equal(oldFpCompiled.plan.schemaFingerprint, format.OLD_PLAN_FP);
     const currentDraft = modern(value.draft);
     const current = deep.parseApiReaderArticleResult(JSON.stringify(currentDraft), value.options);
-    assert.equal(current.article, original.article);
+    assert.equal(current.plan.sections.length, 8);
     assert.equal(original.plan.version, 3);
-    assert.equal(original.plan.contract, codec.historicalContract('beginner-researcher', format.INTEGRATED));
+    assert.equal(original.plan.contract, codec.historicalHeader('beginner-researcher', format.INTEGRATED, null).contract);
     assert.equal(current.plan.version, undefined);
     assert.equal(codec.isCurrentHeader(current.plan, 'beginner-researcher'), true);
     assert.deepEqual(repair.parseRecoveryDraft(currentDraft), currentDraft);
+    assert.deepEqual(repair.parseRecoveryDraft(oldFpDraft), oldFpDraft);
     assert.deepEqual(repair.parseRecoveryDraft(value.draft), value.draft);
     assert.equal(JSON.stringify(value.draft), oldBefore);
     const observedLegacyResponse = deep.parseApiReaderArticleResult(oldBefore, { ...value.options, compileCurrent: true });
-    assert.equal(codec.isCurrentHeader(observedLegacyResponse.plan, 'beginner-researcher'), true);
+    assert.equal(observedLegacyResponse.plan.contract, 'beginner-researcher');
+    assert.equal(observedLegacyResponse.plan.schemaFingerprint, format.OLD_PLAN_FP);
     assert.equal(observedLegacyResponse.article, original.article);
 });
 

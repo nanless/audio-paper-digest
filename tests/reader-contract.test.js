@@ -8,7 +8,10 @@ const { readerRequirements, buildReaderContractNotice, findReaderSectionNearDupl
 test('Reader 提示词告知与解析器共用同一组阈值，并按每次请求的证据给表格要求', () => {
     const requirements = readerRequirements({ availableTableCount: 9 });
     assert.deepEqual([requirements.minimumSections, requirements.maximumSections, requirements.minimumChineseChars,
-        requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [8, 18, 5000, 18000, 4, 10]);
+        requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [5, 9, 5000, 18000, 0, 4]);
+    const legacyRequirements = readerRequirements({ version: 3, availableTableCount: 9 });
+    assert.deepEqual([legacyRequirements.minimumSections, legacyRequirements.maximumSections, legacyRequirements.minimumChineseChars,
+        legacyRequirements.maximumChineseChars, legacyRequirements.minimumConceptBridges, legacyRequirements.maximumConceptBridges], [8, 18, 5000, 18000, 4, 10]);
     assert.equal(requirements.minimumTables, 4);
     assert.equal(requirements.minimumWideTables, 0);
     // 2026-11-16：表数下限跟随真实原表数。0 张原表不再要求配表——否则只能靠

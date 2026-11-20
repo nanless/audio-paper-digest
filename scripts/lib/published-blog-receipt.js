@@ -17,7 +17,7 @@ const {
     EMPTY_DAILY_BATCH_MODE, emptyDailyBatchMarker
 } = require('./empty-daily-batch');
 const scoringFormats = require('./scoring-record-format');
-const LLM_API_READER_CONTRACT = formats.historicalContract('beginner-researcher', readerFormats.INTEGRATED);
+const LLM_API_READER_CONTRACT = formats.historicalHeader('beginner-researcher', readerFormats.INTEGRATED, null).contract;
 const LLM_API_SCORING_CONTRACT = formats.historicalContract('api-scoring-audit', 'evidence-bound-final-analysis');
 
 function sha256Buffer(value) {

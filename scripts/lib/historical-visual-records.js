@@ -32,7 +32,7 @@ const CRC32_TABLE = (() => {
     }
     return table;
 })();
-const LLM_API_READER_CONTRACT = require('./protocol-codec').historicalContract('beginner-researcher', 'integrated-article');
+const LLM_API_READER_CONTRACT = require('./protocol-codec').historicalHeader('beginner-researcher', 'integrated-article', null).contract;
 const VISUAL_SUMMARY_PROMPT_STAGE = 'visualSummary';
 
 function crc32(buffer) {

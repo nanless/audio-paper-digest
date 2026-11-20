@@ -8,43 +8,92 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY = json.loads(read_regular_bytes(ROOT / 'scripts/lib/reader-legacy-records.json'))
 INTEGRATED = 'integrated-article'
 COMPACT = 'compact-article'
+COHESIVE_V4 = 'cohesive-functional-v4'
+LEGACY_INTEGRATED = 'legacy-integrated'
+OLD_DRAFT_FP = 'beea25256472a7b9cb4550dafd753db7d1231632a85d6dbb7f9c2e620a0628f9'
+OLD_PLAN_FP = 'cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2'
+
+
+def _selector_args(raw):
+    if type(raw) is dict:
+        if not codec.has_valid_header(raw, 'beginner-researcher'):
+            return None, ()
+        return raw.get('contract'), (raw.get('schemaFingerprint'),)
+    return raw, ()
 
 
 def contract_profile(raw):
     """Classify a declared family only; callers still validate the full plan."""
-    try:
-        return codec.format(raw, 'beginner-researcher')
-    except (ValueError, TypeError):
+    tag, selectors = _selector_args(raw)
+    if tag is None:
         return None
+    if selectors:
+        try:
+            return codec.format(tag, 'beginner-researcher', *selectors)
+        except (ValueError, TypeError):
+            return None
+    for variant in (INTEGRATED, COMPACT, 'outline-article'):
+        if codec.is_contract(tag, 'beginner-researcher', variant):
+            return variant
+    return None
 
 
 def is_integrated_contract(raw):
-    return contract_profile(raw) == INTEGRATED
+    tag, selectors = _selector_args(raw)
+    return tag is not None and codec.is_contract(tag, 'beginner-researcher', INTEGRATED, *selectors)
 
 
 def is_structured_contract(raw):
-    return contract_profile(raw) in (INTEGRATED, COMPACT)
+    tag, selectors = _selector_args(raw)
+    return tag is not None and (
+        codec.is_contract(tag, 'beginner-researcher', INTEGRATED, *selectors)
+        or codec.is_contract(tag, 'beginner-researcher', COMPACT, *selectors)
+    )
 
 
 def is_known_contract(raw):
-    return contract_profile(raw) is not None
+    tag, selectors = _selector_args(raw)
+    return tag is not None and codec.is_contract(tag, 'beginner-researcher', None, *selectors)
+
+
+def plan_editorial_profile(plan):
+    header = stored_plan_header(plan)
+    profile = codec.format(header['contract'], 'beginner-researcher', header.get('schemaFingerprint'))
+    if profile != INTEGRATED:
+        return profile
+    if 'schemaFingerprint' in header:
+        schema = codec.declared_schema(header['contract'], 'beginner-researcher', header['schemaFingerprint'])
+        if schema.get('editorialProfile') == COHESIVE_V4:
+            return COHESIVE_V4
+    return LEGACY_INTEGRATED
 
 
 def publication_layout(plan):
     profile = stored_plan_format(plan)
     if profile == INTEGRATED:
-        # 2026-11-16：与 JS 侧 READER_LIMITS 对齐，节数下限从 12 降到 8；
-        # 放宽后新稿（8–11 节）不会在发布阶段被旧的 12 节门槛整批拒掉。
+        editorial_profile = plan_editorial_profile(plan)
+        if editorial_profile == COHESIVE_V4:
+            return dict(integrated=True, structured=True, rich=True,
+                        minimumSections=5, maximumSections=9,
+                        minimumBridges=0, maximumBridges=4,
+                        requiresFocusBlockquote=False,
+                        editorialProfile=COHESIVE_V4)
+        # 历史 integrated-article（含 beginner-researcher-v3 与旧 schemaFingerprint）：
+        # 严格保持 8–18 节、4–10 bridges 与看图路径引用块。
         return dict(integrated=True, structured=True, rich=True,
                     minimumSections=8, maximumSections=18,
-                    minimumBridges=4, maximumBridges=10)
+                    minimumBridges=4, maximumBridges=10,
+                    requiresFocusBlockquote=True,
+                    editorialProfile=LEGACY_INTEGRATED)
     # The two compact layouts are distinct historical wire shapes. This
     # relationship is read from the original record, never guessed by a tag.
     expanded = profile == COMPACT and plan.get('version') == 2
     return dict(integrated=False, structured=profile == COMPACT, rich=expanded,
                 minimumSections=10 if expanded else 8 if profile == COMPACT else 6,
                 maximumSections=14 if expanded else 12,
-                minimumBridges=3, maximumBridges=8)
+                minimumBridges=3, maximumBridges=8,
+                requiresFocusBlockquote=False,
+                editorialProfile=profile)
 
 
 def stored_plan_header(value):

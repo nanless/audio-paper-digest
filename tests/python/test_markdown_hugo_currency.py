@@ -23,7 +23,7 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
     def test_current_reader_frontmatter_cannot_skip_hugo_gate_by_removing_its_fingerprint(self):
         import protocol_codec
         family = 'beginner-researcher'
-        old = protocol_codec.historical_header(family, 'integrated-article')
+        old = protocol_codec.historical_header(family, 'integrated-article', None)
         self.assertTrue(format_gate_is_current_api_reader({'paper_digest_api_reader_contract': old['contract']}))
         current = protocol_codec.record_header(protocol_codec.contract(family), family)
         marker = {'paper_digest_api_reader_contract': current['contract'],

@@ -19,6 +19,19 @@ function identityFields() {
         repair: header()
     }) };
 }
+function isSupportedReaderIdentity(value) {
+    if (!codec.hasValidHeader(value, 'reader-candidate-identity')
+        || codec.format(value.contract, 'reader-candidate-identity', value.schemaFingerprint) !== 'integrated-source-bound'
+        || Object.keys(value).sort().join() !== [...Object.keys(codec.recordHeader(
+            value.contract, 'reader-candidate-identity', value.schemaFingerprint)),
+            'article', 'repair', 'sourceBindings'].sort().join()) return false;
+    const formats = require('./reader-record-format');
+    return formats.isIntegratedPlan(value.article)
+        && Object.hasOwn(value.article || {}, 'schemaFingerprint')
+        && equal(value.article, formats.storedPlanHeader(value.article))
+        && equal(value.sourceBindings, codec.recordHeader(codec.contract('api-reader-source-bindings'), 'api-reader-source-bindings'))
+        && equal(value.repair, header());
+}
 function semanticIdentity(identity) {
     if (!identity || typeof identity !== 'object' || Array.isArray(identity)
         || Object.hasOwn(identity, 'readerIdentityProfile') || Object.hasOwn(identity, 'readerContentModeProfile'))
@@ -38,7 +51,7 @@ function semanticIdentity(identity) {
         Object.hasOwn(identity, key) && identity[key] === legacy.originalIdentityFields[key])
         && !Object.hasOwn(identity, 'readerIdentity');
     const current = !Object.keys(legacy.originalIdentityFields).some(key => Object.hasOwn(identity, key))
-        && equal(identity.readerIdentity, identityFields().readerIdentity);
+        && isSupportedReaderIdentity(identity.readerIdentity);
     if (!old && !current) throw new Error('Reader identity format is not an exact supported encoding');
     result.readerIdentityProfile = 'integrated-source-bound-failed-candidate';
     return result;

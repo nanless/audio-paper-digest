@@ -1968,30 +1968,37 @@ def _review_image_context_regions(content, image_matches):
 
     def prose(index):
         return 0 <= index < len(paragraphs) and index not in paragraph_images \
-            and not re.search(r'(?m)^\s*(?:#{1,6}[ \t]|>\s*\*\*(?:看图路径|图片来源)[：:]\*\*|[ *_]*论文图\s*\d+。)', text(index))
+            and not re.search(r'(?m)^\s*(?:#{1,6}[ \t]|>\s*\*\*(?:看图路径|图片来源)[：:]\*\*|[ *_]*论文图\s*\d+[。：:])', text(index))
 
     clusters = {}
     for index, image in enumerate(image_matches):
         member = memberships[index]
-        if member is None or member < 2 or len(paragraph_images[member]) != 1:
+        if member is None or member < 1 or len(paragraph_images[member]) != 1:
             continue
         image_text = text(member)
         standalone = image_text == image['raw'] or re.fullmatch(
             re.escape('[' + image['raw'] + ']') + r'\(https://[^\s]+\)', image_text,
         )
-        if not standalone or not re.fullmatch(
-                r'>\s*\*\*看图路径[：:]\*\*[\s\S]+', text(member - 1)) \
-                or not prose(member - 2):
+        if not standalone:
+            continue
+        if member >= 2 and re.fullmatch(
+                r'>\s*\*\*看图路径[：:]\*\*[\s\S]+', text(member - 1)):
+            if not prose(member - 2):
+                continue
+            lead_index = member - 2
+        elif prose(member - 1):
+            lead_index = member - 1
+        else:
             continue
         caption = member + 1
         if caption < len(paragraphs) and re.fullmatch(
                 r'>\s*\*\*图片来源[：:]\*\*[\s\S]+', text(caption)):
             caption += 1
         if caption + 1 >= len(paragraphs) or not re.fullmatch(
-                r'[ *_]*论文图\s*\d+。[\s\S]+[ *_]*', text(caption)) \
+                r'[ *_]*论文图\s*\d+[。：:][\s\S]+[ *_]*', text(caption)) \
                 or not prose(caption + 1):
             continue
-        clusters[index] = (paragraphs[member - 2][0], paragraphs[caption + 1][1])
+        clusters[index] = (paragraphs[lead_index][0], paragraphs[caption + 1][1])
     # A preceding explanation may also be the next figure's complete lead.
     # Only that single shared prose paragraph may overlap; structural nodes may not.
     ambiguous = set()
@@ -2541,7 +2548,7 @@ def _remove_api_reader_figure_block(content, exact_url):
             continue
         remove.add(index)
         if index > 0 and re.fullmatch(
-                r'>\s*\*\*看图路径：\*\*[\s\S]+', paragraphs[index - 1].strip()):
+                r'>\s*\*\*看图路径[：:]\*\*[\s\S]+', paragraphs[index - 1].strip()):
             remove.add(index - 1)
         if index + 1 < len(paragraphs) and re.fullmatch(
                 r'[ *_]*论文图\s*\d+[\s\S]*?[ *_]*', paragraphs[index + 1].strip()):
@@ -4562,6 +4569,7 @@ def build_researcher_workbench_bundle(
         identity=identity, citation=citation, context=context, root=root,
     )
     sidecar_records = _workbench_sidecar_records(sidecars, expected_context_header=context_header)
+    reader_sections = _build_workbench_reader_sections(reader_plan)
     return {
         **_workbench_header_for_context(context_contract,context_schema_fingerprint),
         'readerTitle': reader_title,
@@ -4576,6 +4584,7 @@ def build_researcher_workbench_bundle(
         'score': score,
         'rankBucket': rank_bucket,
         'documentType': document_type,
+        **({'readerSections': reader_sections} if reader_sections else {}),
         'sidecars': sidecars,
         'sidecarRecords': sidecar_records,
     }
@@ -4690,12 +4699,53 @@ def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
         original_title=original_title, authors=clean_authors, citation_id=paper_id,
         identity=identity, citation=citation, context=context, root=root, source_kind='conference')
     sidecar_records = _workbench_sidecar_records(sidecars, expected_context_header=context_header)
+    reader_sections = _build_workbench_reader_sections(reader_plan)
     return {**_workbench_header_for_context(context_contract,context_schema_fingerprint), 'readerTitle': reader_title,
             'originalTitle': original_title, 'oneSentenceThesis': one_sentence,
             'abstractSha256': abstract_sha, 'identity': identity, 'authors': clean_authors,
             'primaryTask': primary_task, 'primaryMethod': primary_method, 'tagMetadata': None,
             'score': score, 'rankBucket': rank_bucket, 'documentType': document_type,
+            **({'readerSections': reader_sections} if reader_sections else {}),
             'sidecars': sidecars, 'sidecarRecords': sidecar_records}
+
+
+_READER_SECTION_ROLE_LABELS = {
+    'background': '背景与前置直觉',
+    'related_work': '已有路线与对比',
+    'problem': '问题与瓶颈',
+    'method_overview': '方法全景',
+    'component': '核心机制',
+    'training': '训练与优化',
+    'experiment_setup': '评测协议与设置',
+    'result': '主实验验证',
+    'ablation': '消融与诊断',
+    'limitation': '适用边界',
+    'reproduction': '复现核对',
+    'synthesis': '实践与复现',
+}
+
+
+def _build_workbench_reader_sections(reader_plan):
+    if not isinstance(reader_plan, dict):
+        return None
+    raw_sections = reader_plan.get('sections')
+    if not isinstance(raw_sections, list) or not raw_sections:
+        return None
+    built = []
+    for index, section in enumerate(raw_sections, 1):
+        if not isinstance(section, dict):
+            return None
+        kind = section.get('kind')
+        heading = section.get('heading')
+        if kind not in _READER_SECTION_ROLE_LABELS or not isinstance(heading, str) or not heading.strip():
+            return None
+        built.append({
+            'index': index,
+            'kind': kind,
+            'roleLabel': _READER_SECTION_ROLE_LABELS[kind],
+            'heading': _validated_workbench_text(heading, f'workbench reader section {index}', maximum=500),
+        })
+    return built
 
 
 def _workbench_display_original_title(title):
@@ -4761,6 +4811,12 @@ def _researcher_workbench_frontmatter(bundle):
         )
     abstract_marker = (f'paper_digest_abstract_sha256: {json.dumps(bundle["abstractSha256"])}\n' if conference
                        else f'paper_digest_abstract_sha256: "{bundle["abstractSha256"]}"\n')
+    reader_sections = bundle.get('readerSections')
+    reader_sections_frontmatter = (
+        'paper_digest_reader_sections: '
+        f'{json.dumps(reader_sections, ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
+        if isinstance(reader_sections, list) and reader_sections else ''
+    )
     return (
         f'paper_digest_workbench_contract: "{bundle["contract"]}"\n'
         + (f'paper_digest_workbench_schema_fingerprint: "{bundle["schemaFingerprint"]}"\n' if 'schemaFingerprint' in bundle else '')
@@ -4774,6 +4830,7 @@ def _researcher_workbench_frontmatter(bundle):
         f'paper_digest_rank_bucket: {json.dumps(bundle["rankBucket"], ensure_ascii=False)}\n'
         f'paper_digest_document_type: {json.dumps(bundle["documentType"], ensure_ascii=False)}\n'
         f'paper_digest_one_sentence: {json.dumps(bundle["oneSentenceThesis"], ensure_ascii=False)}\n'
+        f'{reader_sections_frontmatter}'
         f'paper_digest_authors: {authors_json}\n'
         f'{abstract_marker}'
         f'paper_digest_sidecars: {sidecars_json}\n'
@@ -4893,6 +4950,12 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     }
     if 'schemaFingerprint' in bundle:
         expected['paper_digest_workbench_schema_fingerprint'] = bundle['schemaFingerprint']
+    requires_reader_sections = (
+        reader_formats.is_integrated_plan(reader_plan)
+        and reader_formats.plan_editorial_profile(reader_plan) == reader_formats.COHESIVE_V4
+    )
+    if 'paper_digest_reader_sections' in frontmatter or requires_reader_sections:
+        expected['paper_digest_reader_sections'] = bundle.get('readerSections')
     tag_metadata = bundle.get('tagMetadata')
     if tag_metadata:
         expected.update({
@@ -12225,7 +12288,10 @@ def _api_reader_payload_uncached(paper):
     )
     # 与 Node 的 API_READER_REQUIRED_KINDS 保持一致：只强制五个教学阶段，
     # 其余阶段由论文证据决定是否展开。
+    is_cohesive_v4 = layout.get('editorialProfile') == reader_formats.COHESIVE_V4
     required_kinds = ({
+        'problem', 'method_overview', 'result',
+    } if is_cohesive_v4 else {
         'problem', 'method_overview', 'result', 'limitation', 'synthesis',
     } if reader_formats.is_structured_contract(reader_contract) else {
         'background', 'related_work', 'method_overview', 'experiment_setup',
@@ -12249,12 +12315,13 @@ def _api_reader_payload_uncached(paper):
         if kind not in allowed_kinds or not isinstance(heading, str) or not heading.strip():
             raise PublishDataValidationError('编辑计划的小节类型不符合要求，或小节标题不是非空字符串。')
         rank = allowed_kinds.index(kind)
-        if rank < previous_rank:
+        if not is_cohesive_v4 and rank < previous_rank:
             raise PublishDataValidationError('编辑计划中的小节未按规定的学习顺序排列。')
         previous_rank = rank
         kinds.append(kind)
         planned_headings.append(heading.strip())
-    if not required_kinds.issubset(kinds):
+    if not required_kinds.issubset(kinds) or (
+            is_cohesive_v4 and not ({'limitation', 'synthesis'} & set(kinds))):
         raise PublishDataValidationError('编辑计划缺少读者文章必需的小节类型。')
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
@@ -12289,6 +12356,9 @@ def _api_reader_payload_uncached(paper):
                     '术语说明的字段、适用小节或占位标记不符合要求，或说明内容未完整出现在正文中。'
                 )
         seen_placement_ordinals = set()
+        requires_focus_blockquote = layout.get('requiresFocusBlockquote', True)
+        min_focus_points = 2 if requires_focus_blockquote else 0
+        min_focus_chars = 12 if requires_focus_blockquote else 6
         for placement in figure_placements:
             expected_placement_fields = {
                     'figureOrdinal', 'targetKind', 'marker',
@@ -12308,11 +12378,11 @@ def _api_reader_payload_uncached(paper):
                     or len(placement['explanationQuote'].strip()) < 45 \
                     or (integrated and (
                         not isinstance(placement.get('focusPoints'), list)
-                        or not 2 <= len(placement['focusPoints']) <= 4
+                        or not min_focus_points <= len(placement['focusPoints']) <= 4
                         # 原始观察点最多 120 个字符；排版规范化可能在中文与英文之间补空格。
                         # 这里允许带空格的文本扩展至 160 个字符，去除空白后仍不得超过 120。
                         or not all(isinstance(item, str)
-                                   and 12 <= len(item.strip()) <= 160
+                                   and min_focus_chars <= len(item.strip()) <= 160
                                    and len(re.sub(r'\s+', '', item.strip())) <= 120
                                    for item in placement['focusPoints'])
                     )):
@@ -12388,10 +12458,6 @@ def _api_reader_payload_uncached(paper):
                         '图片的目标标题未对应章节计划中同类型的小节。'
                     )
             if integrated:
-                expected_focus = '> **看图路径：** ' + '；'.join(
-                    f'{index}. {value}'
-                    for index, value in enumerate(item['focusPoints'], 1)
-                )
                 image_index = next((
                     index for index, paragraph in enumerate(article_paragraphs)
                     if re.fullmatch(
@@ -12399,18 +12465,36 @@ def _api_reader_payload_uncached(paper):
                         paragraph.strip(),
                     )
                 ), None)
-                if image_index is None or image_index < 2 \
-                        or image_index + 2 >= len(article_paragraphs) \
-                        or article_paragraphs[image_index - 1].strip() != expected_focus \
-                        or item['leadQuote'] not in article_paragraphs[image_index - 2] \
-                        or not re.fullmatch(
-                            rf'[ *_]*论文图\s*{item["ordinal"]}。[\s\S]+[ *_]*',
-                            article_paragraphs[image_index + 1].strip(),
-                        ) \
-                        or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
-                    raise PublishDataValidationError(
-                        'API Reader v3 的论文图未按导读、看图路径、原图、图注和解释的顺序相邻排列，或对应内容与图片计划不一致。'
+                if layout.get('requiresFocusBlockquote', True):
+                    expected_focus = '> **看图路径：** ' + '；'.join(
+                        f'{index}. {value}'
+                        for index, value in enumerate(item['focusPoints'], 1)
                     )
+                    if image_index is None or image_index < 2 \
+                            or image_index + 2 >= len(article_paragraphs) \
+                            or article_paragraphs[image_index - 1].strip() != expected_focus \
+                            or item['leadQuote'] not in article_paragraphs[image_index - 2] \
+                            or not re.fullmatch(
+                                rf'[ *_]*论文图\s*{item["ordinal"]}。[\s\S]+[ *_]*',
+                                article_paragraphs[image_index + 1].strip(),
+                            ) \
+                            or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
+                        raise PublishDataValidationError(
+                            'API Reader v3 的论文图未按导读、看图路径、原图、图注和解释的顺序相邻排列，或对应内容与图片计划不一致。'
+                        )
+                else:
+                    if image_index is None or image_index < 1 \
+                            or image_index + 2 >= len(article_paragraphs) \
+                            or article_paragraphs[image_index - 1].strip().startswith('> **看图路径') \
+                            or item['leadQuote'] not in article_paragraphs[image_index - 1] \
+                            or not re.fullmatch(
+                                rf'[ *_]*论文图\s*{item["ordinal"]}[：:。][\s\S]+[ *_]*',
+                                article_paragraphs[image_index + 1].strip(),
+                            ) \
+                            or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
+                        raise PublishDataValidationError(
+                            'API Reader 的论文图未按导读、原图、图注和解释的紧凑四块顺序相邻排列，或对应内容与图片计划不一致。'
+                        )
             parsed_url = urlparse(item['url'])
             if parsed_url.scheme != 'https' \
                     or parsed_url.hostname not in {'arxiv.org', 'www.arxiv.org'} \
@@ -16820,7 +16904,7 @@ def _llm_api_production_proof_from_checked_bindings(published_papers, bindings, 
              'bindingsFingerprint': _stable_json_sha256(bindings)}
     if profile == 'uniform-original-declarations':
         original = {
-            'readerContract': public_protocols.historical_contract('beginner-researcher', reader_formats.INTEGRATED),
+            'readerContract': public_protocols.historical_header('beginner-researcher', reader_formats.INTEGRATED, None)['contract'],
             'readerSourceBindingsContract': public_protocols.historical_contract('api-reader-source-bindings', 'integrated-source-bound'),
             'readerAuthorIdentityContract': public_protocols.historical_contract('api-reader-author-identity', 'source-bound-identity'),
             'readerResourceIdentityContract': public_protocols.historical_contract('api-reader-resource-identity', 'source-bound-identity'),

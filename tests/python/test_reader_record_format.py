@@ -6,11 +6,21 @@ import protocol_codec as codec
 import reader_record_format as formats
 
 
-def current_paper(original):
+def _upgrade_paper_protocols(original, *, plan_header, cohesive_sections=False):
     paper = copy.deepcopy(original)
     plan = paper['apiReaderPlan']
     del plan['version']
-    plan.update(codec.record_header(codec.contract('beginner-researcher'), 'beginner-researcher'))
+    plan.update(plan_header)
+    if cohesive_sections:
+        dropped_kinds = {'background', 'related_work', 'experiment_setup', 'reproduction'}
+        for section in plan['sections']:
+            if section['kind'] in dropped_kinds:
+                block = (
+                    f"### {section['heading']}\n\n"
+                    "这是围绕本篇论文证据展开的教学段落，说明输入、处理、输出、比较口径与不能外推的边界。\n\n"
+                )
+                paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(block, '', 1)
+        plan['sections'] = [s for s in plan['sections'] if s['kind'] not in dropped_kinds]
     source = codec.record_header(codec.contract('api-reader-source-bindings'), 'api-reader-source-bindings')
     plan['sourceBindingsContract'] = source['contract']
     plan['sourceBindingsSchemaFingerprint'] = source['schemaFingerprint']
@@ -19,10 +29,12 @@ def current_paper(original):
     stage = paper['analysisManifest']['stages']['apiReaderArticle']
     for key in formats.LEGACY['flatStageFields']:
         stage.pop(key, None)
-    stage['readerProtocols'] = codec.record('reader-pipeline', {
+    pipeline_headers = {
         role: codec.record_header(codec.contract(family), family)
         for role, family in formats.LEGACY['pipelineRoles'].items()
-    })
+    }
+    pipeline_headers['article'] = dict(plan_header)
+    stage['readerProtocols'] = codec.record('reader-pipeline', pipeline_headers)
     stage['qualityMetrics'] = {**stage['readerProtocols']['qualityMetrics'], 'blockingIssueCount': 0}
     authors = paper['apiReaderAuthors']
     authors['identity'].pop('contract')
@@ -45,15 +57,35 @@ def current_paper(original):
     return reseal_llm_api_reader_fixture(paper)
 
 
+def historical_fp_paper(original):
+    return _upgrade_paper_protocols(
+        original,
+        plan_header=codec.historical_header('beginner-researcher', formats.INTEGRATED, formats.OLD_PLAN_FP),
+        cohesive_sections=False,
+    )
+
+
+def current_paper(original):
+    return _upgrade_paper_protocols(
+        original,
+        plan_header=codec.record_header(codec.contract('beginner-researcher'), 'beginner-researcher'),
+        cohesive_sections=True,
+    )
+
+
 class ReaderRecordFormatTest(unittest.TestCase):
     def test_original_and_current_full_publication_reader_keep_same_content_and_actual_headers(self):
         old = llm_api_publication_fixture()
         before = copy.deepcopy(old)
         original = pub._api_reader_payload(old)
+        historical_fp = pub._api_reader_payload(historical_fp_paper(old))
         current = pub._api_reader_payload(current_paper(old))
         self.assertEqual(old, before)
-        self.assertEqual(current['article'], original['article'])
-        self.assertEqual(current['renderedArticle'], original['renderedArticle'])
+        self.assertEqual(historical_fp['article'], original['article'])
+        self.assertEqual(historical_fp['renderedArticle'], original['renderedArticle'])
+        self.assertEqual(historical_fp['contract'], codec.contract('beginner-researcher'))
+        self.assertEqual(historical_fp['schemaFingerprint'], formats.OLD_PLAN_FP)
+        self.assertEqual(len(current['plan']['sections']), 8)
         self.assertNotIn('schemaFingerprint', original)
         self.assertNotIn('schemaFingerprint', original['sourceBindingProof'])
         self.assertEqual(current['contract'], codec.contract('beginner-researcher'))

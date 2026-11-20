@@ -6,11 +6,11 @@ const { header: readerRoleHeader } = require('./reader-stage-protocols');
 const READER_MECHANICAL_CONTRACT = readerRoleHeader('mechanical', false).contract;
 const READER_SECTION_QUALITY_CONTRACT = readerRoleHeader('sectionQuality', false).contract;
 const READER_LIMITS = Object.freeze({
-    minimumSections: 8, maximumSections: 18, minimumChineseChars: 5000, maximumChineseChars: 18000,
+    minimumSections: 5, maximumSections: 9, minimumChineseChars: 5000, maximumChineseChars: 18000,
     // 散文汉字下限：总量可用术语块、表格单元格和图注凑满，读者看到的却是
     // 「术语小词典 + 极薄小节」。这里另设一道只统计散文的门槛。
     minimumProseChineseChars: 4500,
-    minimumConceptBridges: 4, maximumConceptBridges: 10,
+    minimumConceptBridges: 0, maximumConceptBridges: 4,
     // 仅保留给 reader-repair.js 的旧窄表诊断路由使用；列数不是发布门槛。
     // 同组的 maximumRequiredWideTables 全仓已无使用，已删除。
     minimumWideColumns: 5,
@@ -19,6 +19,55 @@ const READER_LIMITS = Object.freeze({
     maximumFigures: 4, minimumFocusPoints: 2, maximumFocusPoints: 4,
     maximumSectionWarnings: 12
 });
+const LEGACY_READER_LIMITS = Object.freeze({
+    ...READER_LIMITS,
+    minimumSections: 8, maximumSections: 18,
+    minimumConceptBridges: 4, maximumConceptBridges: 10
+});
+
+function limitsForDraftFormat(input = null) {
+    const format = require('./reader-record-format');
+    let profile = format.INTEGRATED;
+    let editorialProfile = format.COHESIVE_V4;
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+        if (typeof input.profile === 'string' && typeof input.editorialProfile === 'string') {
+            profile = input.profile;
+            editorialProfile = input.editorialProfile;
+        } else if (Object.hasOwn(input, 'contract') || Object.hasOwn(input, 'version')) {
+            try {
+                const resolved = format.draftFormat(input);
+                profile = resolved.profile;
+                editorialProfile = resolved.editorialProfile;
+            } catch {
+                if (input.version !== undefined && input.version !== null) {
+                    profile = format.profileForOptions({ version: input.version });
+                    editorialProfile = profile === format.COMPACT ? format.COMPACT : format.LEGACY_INTEGRATED;
+                }
+            }
+        }
+    }
+    if (profile === format.COMPACT || editorialProfile === format.COMPACT) {
+        return {
+            ...READER_LIMITS,
+            minimumSections: 10, maximumSections: 14, minimumChineseChars: 2800, maximumChineseChars: 14000,
+            minimumConceptBridges: 3, maximumConceptBridges: 8,
+            requiresFocusBlockquote: false,
+            editorialProfile: format.COMPACT
+        };
+    }
+    if (editorialProfile === format.LEGACY_INTEGRATED) {
+        return {
+            ...LEGACY_READER_LIMITS,
+            requiresFocusBlockquote: true,
+            editorialProfile: format.LEGACY_INTEGRATED
+        };
+    }
+    return {
+        ...READER_LIMITS,
+        requiresFocusBlockquote: false,
+        editorialProfile: format.COHESIVE_V4
+    };
+}
 
 function readerRequirements(options = {}) {
     const format = require('./reader-record-format');
@@ -34,12 +83,13 @@ function readerRequirements(options = {}) {
     if (!Number.isInteger(minimumTables) || minimumTables < 0 || minimumTables > 4) {
         throw new Error('Reader minimumIntegratedTables must be an integer from 0 to 4');
     }
+    const editorialProfile = profile === format.COMPACT ? format.COMPACT
+        : (options.editorialProfile
+            || (options.format ? limitsForDraftFormat(options.format).editorialProfile
+                : (options.version !== undefined && options.version !== null
+                    ? format.LEGACY_INTEGRATED : format.COHESIVE_V4)));
     return {
-        ...READER_LIMITS,
-        ...(profile === format.COMPACT ? {
-            minimumSections: 10, maximumSections: 14, minimumChineseChars: 2800, maximumChineseChars: 14000,
-            minimumConceptBridges: 3, maximumConceptBridges: 8
-        } : {}),
+        ...limitsForDraftFormat({ profile, editorialProfile }),
         minimumTables,
         minimumWideTables: 0
     };
@@ -47,19 +97,25 @@ function readerRequirements(options = {}) {
 
 function buildReaderContractNotice(options = {}) {
     const rules = readerRequirements(options);
+    const sectionAndBridgeRule = rules.minimumConceptBridges === 0
+        ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节（推荐 5–7 节，每节标题用“功能定位词：论文具体问题或机制判断”，严禁在标题中写图/表编号），正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认输出空数组 []，将相关概念分工直接自然写进正文段落，不堆砌独立词典卡）。`
+        : `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`;
+    const figureRule = rules.requiresFocusBlockquote === false
+        ? `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符（禁止写“这张图确实可见”“从像素可见”等套话；代码直接渲染原图与图注，不生成看图路径框；focusPoints 可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点）。`
+        : `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`;
     return [
         `本次文章检查要求（${READER_MECHANICAL_CONTRACT}）：`,
         `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.round(rules.minimumChineseChars * 0.9)} 个；`
             + '靠术语卡和表格单元格凑满总字数不算实质讲解。',
-        `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`,
+        sectionAndBridgeRule,
         rules.minimumTables > 0
-            ? `文章至少应包含 ${rules.minimumTables} 张表。表格列数遵循真实原表和比较问题，不设置固定宽表数量或五列门槛，不为凑列添加无来源的解释列、占位值或参考文献数字。每张表都要说明比较问题，并解释结果及其限制；原始条件、结果数字和单位必须保留并通过正常来源绑定。`
+            ? `文章至少应包含 ${rules.minimumTables} 张表。表格列数遵循真实原表和比较问题，不设置固定宽表数量或五列门槛，不为凑列添加无来源的解释列、占位值或参考文献数字。每张表都要自然交代比较条件并解释主要收益、代价与限制（禁止写“比较问题是：”“这张表支撑的判断是”“本表数值与单位依据论文 PDF”等套话）；原始条件、结果数字和单位必须保留并通过正常来源绑定。`
             : '本次来源证据里没有可核验的原表，因此不要求配表；不要用引文数字、参考文献年份或页码拼占位结果表。若正文确实呈现了原表，仍须满足表前说明段与表后解释段的要求。',
         ...(options.minimumResultTables > 0 ? [
             `原文包含定量结果表，result 或 ablation 小节须呈现至少 ${options.minimumResultTables} 张带数字的结果表，并保留必要的基线和实际可运行策略。仅展示数据集表或配置表不满足要求。`
         ] : []),
         `表前的独立说明段至少包含 ${rules.tableLeadChineseChars} 个汉字，表后的独立解释段至少包含 ${rules.tableExplanationChineseChars} 个汉字；说明和解释都应紧邻表格。`,
-        `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`
+        figureRule
     ].join('\n');
 }
 
@@ -148,7 +204,8 @@ function findReaderSectionNearDuplicates(article, sections = []) {
     return [...sectionPairs.values()].slice(0, READER_LIMITS.maximumSectionWarnings);
 }
 
-module.exports = { READER_MECHANICAL_CONTRACT, READER_SECTION_QUALITY_CONTRACT, READER_LIMITS,
+module.exports = { READER_MECHANICAL_CONTRACT, READER_SECTION_QUALITY_CONTRACT, READER_LIMITS, LEGACY_READER_LIMITS,
+    limitsForDraftFormat,
     findReaderCrossSectionMetricReuse,
     readerRequirements, buildReaderContractNotice,
     findReaderSectionNearDuplicates };

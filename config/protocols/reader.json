@@ -4,6 +4,7 @@
       "name": "reader-draft",
       "currentVariant": "integrated-article",
       "currentSchema": {
+        "editorialProfile": "cohesive-functional-v4",
         "header": [
           "contract",
           "schemaFingerprint"
@@ -38,6 +39,35 @@
           "header": {
             "version": 3
           }
+        },
+        {
+          "tag": "reader-draft",
+          "variant": "integrated-article",
+          "header": {
+            "contract": "reader-draft",
+            "schemaFingerprint": "beea25256472a7b9cb4550dafd753db7d1231632a85d6dbb7f9c2e620a0628f9"
+          },
+          "schema": {
+            "header": [
+              "contract",
+              "schemaFingerprint"
+            ],
+            "requiredFields": [
+              "readerTitle",
+              "oneSentenceThesis",
+              "conceptBridges",
+              "figurePlacements",
+              "sections",
+              "tableBindings",
+              "formulaBindings"
+            ],
+            "sectionFields": [
+              "kind",
+              "heading",
+              "body"
+            ],
+            "sourceAuthority": "normal-authenticated-source-required"
+          }
         }
       ]
     },
@@ -45,6 +75,7 @@
       "name": "beginner-researcher",
       "currentVariant": "integrated-article",
       "currentSchema": {
+        "editorialProfile": "cohesive-functional-v4",
         "header": [
           "contract",
           "schemaFingerprint"
@@ -80,6 +111,30 @@
           "variant": "integrated-article",
           "header": {
             "contract": "beginner-researcher-v3"
+          }
+        },
+        {
+          "tag": "beginner-researcher",
+          "variant": "integrated-article",
+          "header": {
+            "contract": "beginner-researcher",
+            "schemaFingerprint": "cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2"
+          },
+          "schema": {
+            "header": [
+              "contract",
+              "schemaFingerprint"
+            ],
+            "fields": [
+              "readerTitle",
+              "oneSentenceThesis",
+              "conceptBridges",
+              "figurePlacements",
+              "sections",
+              "tableBindings",
+              "formulaBindings"
+            ],
+            "sourceAuthority": "normal-authenticated-source-required"
           }
         }
       ]

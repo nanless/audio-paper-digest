@@ -5,7 +5,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { READER_LIMITS } = require('./reader-contract.js');
+const { READER_LIMITS, limitsForDraftFormat } = require('./reader-contract.js');
 const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS } = require('./reader-draft-order.js');
 
@@ -577,9 +577,10 @@ function assertSafeJson(value) {
 
 function parseRepairableDraft(raw) {
     const value = parseRecoveryDraft(raw);
-    if (!value
-        || value.sections.length < READER_LIMITS.minimumSections
-        || (value.conceptBridges.length < READER_LIMITS.minimumConceptBridges
+    if (!value) return null;
+    const limits = limitsForDraftFormat(value);
+    if (value.sections.length < limits.minimumSections
+        || (value.conceptBridges.length < limits.minimumConceptBridges
             && !buildMissingConceptBridgesOperation(value, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }])
             && !sectionReorganizationOperation(value))) return null;
     return value;
@@ -604,16 +605,17 @@ function parseRecoveryDraft(raw) {
         || typeof value.readerTitle !== 'string' || typeof value.oneSentenceThesis !== 'string'
         || ARRAY_FIELDS.some(field => !Array.isArray(value[field]))
         || value.sections.length < 1 || value.sections.length > MAX_RECOVERY_SECTIONS
-        || value.conceptBridges.length > READER_LIMITS.maximumConceptBridges
         || value.figurePlacements.length > 16) return null;
+    const limits = limitsForDraftFormat(value);
+    if (value.conceptBridges.length > limits.maximumConceptBridges) return null;
     // 超额图声明只作为完整失败稿的局部恢复输入；最终文章仍由原解析器限制四图。
-    if (value.figurePlacements.length > READER_LIMITS.maximumFigures
+    if (value.figurePlacements.length > limits.maximumFigures
         && (!value.sections.every(section => section && !Array.isArray(section)
             && ['kind', 'heading', 'body'].every(field => typeof section[field] === 'string' && section[field].trim())
             && Object.entries(section).every(([key, item]) => ['kind', 'heading', 'body'].includes(key)
                 || (/^\[\[(?:FIGURE|TABLE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]$/.test(key) && item === 'placeholder')))
             || Buffer.byteLength(JSON.stringify(value)) > MAX_FILE_BYTES)) return null;
-    if (value.sections.length > READER_LIMITS.maximumSections
+    if (value.sections.length > limits.maximumSections
         && (!value.sections.every(section => section && typeof section === 'object'
             && !Array.isArray(section)
             && ['kind', 'heading', 'body'].every(field => typeof section[field] === 'string'))
@@ -623,17 +625,20 @@ function parseRecoveryDraft(raw) {
 
 function sectionReorganizationOperation(draft) {
     // 术语组数等语义下限由最终解析器检查，不能让另一个待修问题阻断已有小节重排。
-    if (!parseRecoveryDraft(draft) || draft.sections.length <= READER_LIMITS.maximumSections) return null;
+    if (!parseRecoveryDraft(draft)) return null;
+    const limits = limitsForDraftFormat(draft);
+    if (draft.sections.length <= limits.maximumSections) return null;
     return { kind: 'reorganize_existing_sections_v1',
         requiredReplacementPaths: ['/sections'], originalSectionsCount: draft.sections.length,
-        minimumSections: READER_LIMITS.minimumSections, maximumSections: READER_LIMITS.maximumSections };
+        minimumSections: limits.minimumSections, maximumSections: limits.maximumSections };
 }
 
 const sectionGroupExactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
 
 function canUseSectionIndexGroups(draft) {
-    if (!sectionReorganizationOperation(draft)) return false;
+    const operation = sectionReorganizationOperation(draft);
+    if (!operation) return false;
     const sections = draft.sections;
     if (!sections.every(section => sectionGroupExactKeys(section, ['kind', 'heading', 'body'])
         && READER_SECTION_KINDS.includes(section.kind)
@@ -641,7 +646,7 @@ function canUseSectionIndexGroups(draft) {
         && !/[\r\n]/.test(section.heading) && typeof section.body === 'string')) return false;
     const runs = sections.filter((section, index) => index === 0
         || section.kind !== sections[index - 1].kind).length;
-    return runs <= READER_LIMITS.maximumSections;
+    return runs <= operation.maximumSections;
 }
 
 function bodyFieldNames(section) {
@@ -717,6 +722,7 @@ function compileSectionIndexGroupPlan(draft, plan, context) {
 }
 
 function compileStrictSectionIndexGroupPlan(draft, plan, context) {
+    const limits = limitsForDraftFormat(draft);
     if (!sectionFormat.isContext(context)
         || !canUseSectionIndexGroups(draft)
         || context.atomicOperation?.kind !== 'reorganize_existing_sections_v1'
@@ -726,8 +732,8 @@ function compileStrictSectionIndexGroupPlan(draft, plan, context) {
         || !sectionFormat.matches(plan, context)
         || !sectionGroupExactKeys(plan, [...Object.keys(sectionFormat.contextHeader(context)), 'draftSha256', 'sectionsSha256', 'groups'])
         || plan.draftSha256 !== context.draftSha256 || plan.sectionsSha256 !== context.targets[0].oldSha256
-        || !Array.isArray(plan.groups) || plan.groups.length < READER_LIMITS.minimumSections
-        || plan.groups.length > READER_LIMITS.maximumSections) throw new Error('小节索引分组协议、数量或当前SHA不合法');
+        || !Array.isArray(plan.groups) || plan.groups.length < limits.minimumSections
+        || plan.groups.length > limits.maximumSections) throw new Error('小节索引分组协议、数量或当前SHA不合法');
     let cursor = 0;
     const sections = plan.groups.map(group => {
         if (!sectionGroupExactKeys(group, ['sectionIndexes', 'heading']) || !Array.isArray(group.sectionIndexes)
@@ -778,11 +784,11 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
         return [
             '本轮只返回原小节索引和原字段引用的分组计划，不重写正文或来源。',
             readerLanguageGuidance,
-            `论文：${title} arXiv：${arxivId}，当前${count}节，必须合组为${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}节。`,
+            `论文：${title} arXiv：${arxivId}，当前${count}节，必须合组为${operation.minimumSections}–${operation.maximumSections}节。`,
             '每组只能含sectionIndexes、heading、fieldOrders。sectionIndexes从0起连续完整覆盖全部原小节，不遗漏、不重复、不重排，只能合并同kind相邻小节；kind从原小节派生。',
             'fieldOrders按本组sectionIndexes顺序，逐小节声明sectionIndex与fields。fields指定该原小节body与唯一body2/body_after字符串的拼接次序；原字段每项恰好一次，包括空串。不能跨小节搬段，不能提交新字段/正文/值，不能省略任何图表公式标记。',
             '程序按所选顺序保留全部原字符串字节、原标题与kind，以及全部root来源绑定。请选择符合原段导读、原图标记和图后解释关系的布局；本次真实图片和最终全部来源、数字、单位、质量校验仍必须通过。其他问题只供下一轮，不能为它们重吐超量小节。',
-            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context, true)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}组；有body2的小节fields须包含body2。`,
+            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context, true)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部${operation.minimumSections}–${operation.maximumSections}组；有body2的小节fields须包含body2。`,
             '唯一授权原小节及SHA：'+JSON.stringify({targets:context.targets,atomicOperation:operation}),
             '其他只读反馈：'+reviewFeedback,mechanicalContract,numericSpellingGuidance,
             '封存证据：'+context.evidence,indexExamples
@@ -793,12 +799,12 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
             '本轮只重组小节，输出局部补丁 JSON 的索引分组计划，不重写正文或来源记录。',
             readerLanguageGuidance,
             `论文：${title}\narXiv：${arxivId}`,
-            `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节；允许 ${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections} 节。请按教学连贯性选择同kind的相邻内容合组，不能原样返回 ${count} 组。`,
+            `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节；允许 ${operation.minimumSections}–${operation.maximumSections} 节。请按教学连贯性选择同kind的相邻内容合组，不能原样返回 ${count} 组。`,
             '每组只输出sectionIndexes与heading。索引从0开始，组内及组间必须按原顺序完整覆盖0到最后一节，不能遗漏、重复、跳号或重排；只能合并同kind连续小节。新标题应概括本组内容，不能新增事实。',
             '程序会保留每段原body全部字节，保留原标题作正文子标题，kind从原小节派生；最终小节仍只含kind、heading、body 三个字段。不要回传body、kind、完整sections或其他根字段。所有图表公式、术语标记与绑定原样保留，不需要模型再抄一遍。',
             `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。原kind不能改变。`,
             requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。已有类型全部保留，缺少的教学阶段属于下一轮修复，本轮不新增类型或正文。` : '',
-            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}组。`,
+            `只输出JSON：${JSON.stringify(sectionFormat.contextHeader(context)).slice(0, -1)},"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部${operation.minimumSections}–${operation.maximumSections}组。`,
             '其他已发现问题仅供后续检查，本轮只解决节数与同类内容组织；事实、表格模式、字数与来源问题留下一轮，不要为了它们重吐原来的超量小节。最终完整质量及来源校验全部保留。',
             mechanicalContract, numericSpellingGuidance,
             '来源绑定的外部反馈（不能授权本轮改正文）：\n' + reviewFeedback,
@@ -812,7 +818,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
         '本轮只重组小节，输出局部补丁 JSON，不输出整篇文章或其他字段。',
         readerLanguageGuidance,
         `论文：${title}\narXiv：${arxivId}`,
-        `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节；允许 ${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections} 节，不能仍输出 ${count} 节。先规划合并后的标题与类型，再写完整数组。`,
+        `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节；允许 ${operation.minimumSections}–${operation.maximumSections} 节，不能仍输出 ${count} 节。先规划合并后的标题与类型，再写完整数组。`,
         '相邻内容可以合并为自然段，原标题可作为正文子标题；不能为了凑节数删掉正确事实、数字、单位、比较条件、限制或图表公式。原额外字段中有依据的内容应放回对应正文，不能自动丢弃。',
         '每个新小节只能有 kind、heading、body 三个字段。不要添加 marker、table_note、figure_note、kind_note 或其他字段；标记须放在 body 中，保留原有顺序及其对应的小节类型。',
         `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。`,
@@ -1114,9 +1120,9 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || seen.length !== 1 || seen[0] !== '/sections') {
             throw new Error('小节重排只允许本轮已授权的完整 /sections 数组；其他来源记录不能修改');
         }
-        if (!Array.isArray(sections) || sections.length < READER_LIMITS.minimumSections
-            || sections.length > READER_LIMITS.maximumSections) {
-            throw new Error(`小节重排返回 ${Array.isArray(sections) ? sections.length : '非数组'} 节，必须是${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections}节；不能原样返回过多小节。`);
+        if (!Array.isArray(sections) || sections.length < expected.minimumSections
+            || sections.length > expected.maximumSections) {
+            throw new Error(`小节重排返回 ${Array.isArray(sections) ? sections.length : '非数组'} 节，必须是${expected.minimumSections}–${expected.maximumSections}节；不能原样返回过多小节。`);
         }
         for (const [index, section] of sections.entries()) {
             if (!section || Array.isArray(section) || typeof section !== 'object') {
@@ -1377,6 +1383,7 @@ function collectReaderLanguageIssues(draft, options = {}) {
     if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return [];
     const { findReaderLanguageIssues } = require('../editorial-quality.js');
     const sourceText = typeof options.sourceText === 'string' ? options.sourceText : '';
+    const editorialProfile = options.editorialProfile || limitsForDraftFormat(draft).editorialProfile;
     const documentText = [
         draft.readerTitle || '',
         draft.oneSentenceThesis || '',
@@ -1386,7 +1393,7 @@ function collectReaderLanguageIssues(draft, options = {}) {
     const issues = [];
     const check = (text, pointer, contextText = '') => {
         if (typeof text !== 'string') return;
-        for (const finding of findReaderLanguageIssues(text, { contextText, sourceText, documentText })) {
+        for (const finding of findReaderLanguageIssues(text, { contextText, sourceText, documentText, editorialProfile })) {
             issues.push({ code: finding.code, path: pointer, match: finding.match,
                 message: `${finding.message} 原句片段：${finding.match}` });
         }
@@ -1512,10 +1519,11 @@ function collectDraftIssues(draft, parserError, options = {}) {
                     }
                     addUnknownFields(value, rootFields, '根对象');
                     if (Array.isArray(value.sections)) {
-                        if (value.sections.length < READER_LIMITS.minimumSections
-                            || value.sections.length > READER_LIMITS.maximumSections) {
+                        const rawLimits = limitsForDraftFormat(value);
+                        if (value.sections.length < rawLimits.minimumSections
+                            || value.sections.length > rawLimits.maximumSections) {
                             issues.push({ path: null, diagnosticOnly: true,
-                                message: `原始输出 sections 实际 ${value.sections.length} 节，必须为 ${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections} 节；合并同类段落时保留原有事实、数字、单位和来源。` });
+                                message: `原始输出 sections 实际 ${value.sections.length} 节，必须为 ${rawLimits.minimumSections}–${rawLimits.maximumSections} 节；合并同类段落时保留原有事实、数字、单位和来源。` });
                         }
                         value.sections.forEach((section, index) => addUnknownFields(section,
                             ['kind', 'heading', 'body'], `sections[${index}]`));
@@ -2457,9 +2465,10 @@ function buildRepairTargets(draft, issues, options = {}) {
         path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
         repairInstruction: unavailableFigures.requiredPostconditions.join('；')
     }));
-    if (sectionReorganizationOperation(draft)) return [{ path: '/sections',
+    const reorgOperation = sectionReorganizationOperation(draft);
+    if (reorgOperation) return [{ path: '/sections',
         oldSha256: hashDraft(draft.sections), value: draft.sections,
-        repairInstruction: '只将过多小节重组为' + READER_LIMITS.minimumSections + '–' + READER_LIMITS.maximumSections + '节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
+        repairInstruction: '只将过多小节重组为' + reorgOperation.minimumSections + '–' + reorgOperation.maximumSections + '节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
     // 缺少某类小节时，只改 body 永远无法补上 kind。允许模型按原文改写相邻的
     // 可替代小节，保留唯一必需小节和全部已有图表/公式/术语绑定。
     const missingKindsIssue = issues.find(issue => issue?.diagnosticOnly !== true && issue?.code === 'reader_missing_required_kinds')
@@ -3843,9 +3852,10 @@ function buildReaderVersionMetadataRepairContext(raw) {
         const member = members.find(item => item.name === 'version');
         if (raw.slice(member.valueStart, member.valueEnd) !== '4') return null;
         const probe = { ...value, version: 3 };
-        if (!parseRepairableDraft(probe) || probe.sections.length > READER_LIMITS.maximumSections
-            || probe.conceptBridges.length < READER_LIMITS.minimumConceptBridges
-            || probe.figurePlacements.length > READER_LIMITS.maximumFigures
+        const probeLimits = limitsForDraftFormat(probe);
+        if (!parseRepairableDraft(probe) || probe.sections.length > probeLimits.maximumSections
+            || probe.conceptBridges.length < probeLimits.minimumConceptBridges
+            || probe.figurePlacements.length > probeLimits.maximumFigures
             || !probe.sections.every(section => section && typeof section === 'object' && !Array.isArray(section)
                 && Object.keys(section).sort().join(',') === 'body,heading,kind'
                 && READER_SECTION_KINDS.includes(section.kind)

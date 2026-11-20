@@ -1225,11 +1225,11 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
 // selection 表格是编译器输出，字节已经和 PDF DOM 单元绑定，所以归一化周围文章时只
 // 保护这些表格。source-quote 表格仍可编辑，照常走普通归一化流程。
 function normalizeReaderProsePreservingSelectedTables(
-    article, selectionTableIndexes = []
+    article, selectionTableIndexes = [], formatOptions = {}
 ) {
     const selected = new Set((Array.isArray(selectionTableIndexes)
         ? selectionTableIndexes : []).filter(Number.isSafeInteger));
-    if (selected.size === 0) return normalizeReaderProseFormatting(article);
+    if (selected.size === 0) return normalizeReaderProseFormatting(article, [], formatOptions);
     const lines = String(article || '').split('\n');
     const tables = extractMarkdownTables(article);
     const missing = [...selected].filter(index => !tables[index - 1]);
@@ -1244,7 +1244,7 @@ function normalizeReaderProsePreservingSelectedTables(
         lines.splice(table.startLine, table.endLine - table.startLine + 1, token);
         protectedBlocks.push({ token, block });
     }
-    let normalized = normalizeReaderProseFormatting(lines.join('\n'));
+    let normalized = normalizeReaderProseFormatting(lines.join('\n'), [], formatOptions);
     for (const { token, block } of protectedBlocks) {
         if (normalized.split(token).length !== 2) {
             throw new Error('Reader selection table protected token 丢失');
@@ -1469,12 +1469,15 @@ function normalizeReaderFigureMetricUnits(article) {
     return String(article || '');
 }
 
-function isAllowedReaderDefensiveNegationIssue(issue, article) {
+function isAllowedReaderDefensiveNegationIssue(issue, article, options = {}) {
     if (issue?.code !== 'defensive_negation_saturation') return false;
     const count = Number(issue.count);
     if (!Number.isFinite(count)) return false;
     const chineseChars = (String(article || '').match(/[\u3400-\u9fff]/g) || []).length;
-    const readerLimit = Math.max(12, Math.ceil(chineseChars / 300));
+    const isCohesiveV4 = options?.editorialProfile === 'cohesive-functional-v4';
+    const readerLimit = isCohesiveV4
+        ? Math.max(8, Math.ceil(chineseChars / 800))
+        : Math.max(12, Math.ceil(chineseChars / 300));
     return count <= readerLimit;
 }
 
@@ -1483,7 +1486,7 @@ function buildApiReaderQualityMetrics(quality, article, evidence = null) {
     const warnings = Array.isArray(quality?.warnings) ? quality.warnings : [];
     const waivedIssues = rawIssues.filter(issue => (
         isAllowedReaderNarrativeNumeralIssue(issue, article, evidence)
-        || isAllowedReaderDefensiveNegationIssue(issue, article)
+        || isAllowedReaderDefensiveNegationIssue(issue, article, evidence)
         || isReaderHeadingIssue(issue, article)
         || issueFallsWithinReaderBridgeLine(issue, article)
         || issueInProtectedReaderQuote(issue, article)
@@ -2993,9 +2996,12 @@ function restoreReaderSectionHeadings(article, sections) {
 }
 
 const GENERIC_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|相关工作|方法(?:概述|全景|介绍)|核心创新(?:点)?|实验(?:设置|结果|分析)|结果分析|细节详述|局限(?:分析|与问题)?|复现(?:指南|说明)|总结(?:与展望)?|结论)$/;
+const GENERIC_V4_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|问题本质|问题与瓶颈|相关工作|已有路线与对比|方法(?:概述|全景|介绍)|核心(?:机制|创新(?:点)?)|训练(?:与优化|策略|目标)?|实验(?:设置|结果|分析)|主实验(?:验证|结果)?|评测协议与设置|结果分析|消融(?:实验|分析|与诊断)?|细节详述|局限(?:分析|与问题)?|适用边界|复现(?:指南|说明|核对)|实践与复现|总结(?:与展望)?|结论)[：:]?\s*$/u;
+const READER_HEADING_FIG_TABLE_RE = /(?<![A-Za-z0-9])(?:图|Figure|表|Table)\s*\d+\b/iu;
 
-function makeReaderHeadingSpecific(kind, heading, readerTitle) {
+function makeReaderHeadingSpecific(kind, heading, readerTitle, options = {}) {
     const normalizedHeading = String(heading || '').trim();
+    if (options?.editorialProfile === 'cohesive-functional-v4') return normalizedHeading;
     if (normalizedHeading.length >= 8 && normalizedHeading.length <= 80
         && !GENERIC_READER_HEADING_RE.test(normalizedHeading)) return normalizedHeading;
     const title = String(readerTitle || '').trim().replace(/[？?！!。]+$/, '').slice(0, 48);
@@ -3084,23 +3090,37 @@ function relocateExplicitReaderTableExplanations(article) {
     return changed ? blocks.map(block => block.text).join('') : original;
 }
 
-function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseChars = 240) {
+function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseChars = 240, options = {}) {
+    let resolvedOptions = options || {};
+    if (targetChineseChars && typeof targetChineseChars === 'object') {
+        resolvedOptions = targetChineseChars;
+        targetChineseChars = resolvedOptions.targetChineseChars;
+        maxChineseChars = resolvedOptions.maxChineseChars;
+    }
+    const isCohesiveV4 = resolvedOptions?.editorialProfile === 'cohesive-functional-v4';
+    const effectiveTarget = Number.isInteger(targetChineseChars) ? targetChineseChars : (isCohesiveV4 ? 300 : 190);
+    const effectiveMax = Number.isInteger(maxChineseChars) ? maxChineseChars : (isCohesiveV4 ? 440 : 240);
+    const maxSentences = isCohesiveV4 ? 10 : 6;
+    const groupSentenceTarget = isCohesiveV4 ? 6 : 5;
     const chineseCount = value => (String(value || '').match(/[\u3400-\u9fff]/g) || []).length;
     const protectedBlock = value => /^(?:```|~~~|\||[-*+]\s|\d+\.\s|!\[|\$\$|\\\[)/.test(value.trim());
     return String(text || '').trim().split(/\n\s*\n/).flatMap(paragraph => {
         const trimmed = paragraph.trim();
-        const sentenceEndCount = (trimmed.match(/[。！？!?；;]/g) || []).length;
-        if (!trimmed || protectedBlock(trimmed)
-            || (chineseCount(trimmed) <= maxChineseChars && sentenceEndCount <= 6)) {
+        const sentenceEndCount = (trimmed.match(isCohesiveV4 ? /[。！？!?]/g : /[。！？!?；;]/g) || []).length;
+        const chars = chineseCount(trimmed);
+        const withinBudget = isCohesiveV4
+            ? !(chars > effectiveMax && sentenceEndCount > maxSentences) && chars <= 480
+            : (chars <= effectiveMax && sentenceEndCount <= maxSentences);
+        if (!trimmed || protectedBlock(trimmed) || withinBudget) {
             return [trimmed];
         }
-        const sentences = trimmed.match(/[^。！？!?；;]+[。！？!?；;]?/g) || [trimmed];
+        const sentences = trimmed.match(isCohesiveV4 ? /[^。！？!?]+[。！？!?]?/g : /[^。！？!?；;]+[。！？!?；;]?/g) || [trimmed];
         const groups = [];
         let current = '';
         let currentSentences = 0;
         for (const sentence of sentences) {
             const next = `${current}${sentence}`;
-            if (current && (chineseCount(next) > targetChineseChars || currentSentences >= 5)) {
+            if (current && (chineseCount(next) > effectiveTarget || currentSentences >= groupSentenceTarget)) {
                 groups.push(current.trim());
                 current = sentence;
                 currentSentences = 1;
@@ -3114,16 +3134,26 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
     }).filter(Boolean).join('\n\n');
 }
 
-function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
+function normalizeReaderProseFormatting(text, quantitativeIssues = [], options = {}) {
+    const isCohesiveV4 = options?.editorialProfile === 'cohesive-functional-v4';
     const protectedMarkdown = [];
     const protect = value => {
         const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
         protectedMarkdown.push(value);
         return token;
     };
+    const protectedChinese = [];
+    const chineseTokenFor = index => (
+        '\uE000' + [...String(index)].map(d => String.fromCharCode(0xE100 + Number(d))).join('') + '\uE001'
+    );
+    const protectChinese = value => {
+        const token = chineseTokenFor(protectedChinese.length);
+        protectedChinese.push(value);
+        return token;
+    };
     // 字面证据不是编辑正文。每次改写表层之前（包括货币和空格）先保护起来，恢复嵌套片段
     // 时按相反顺序来。
-    const protectedText = String(text || '')
+    let protectedText = String(text || '')
         .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]{0,3}\1[`~]*[ \t]*(?=\n|$)/gm, protect)
         .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/g, protect)
         .replace(/(`+)[^\n]*?\1/g, protect)
@@ -3139,7 +3169,22 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         // 结构上的一对一关系不是量出来的数值。它们在空格处理和过期的数字诊断里都要保护
         // 起来。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
-            () => protect('一对一'));
+            () => (isCohesiveV4 ? protectChinese('一对一') : protect('一对一')));
+    if (isCohesiveV4) {
+        protectedText = protectedText
+            .replace(/最小\s*2\s*乘/gu, '最小二乘')
+            .replace(/每\s*1\s*(?=维|帧|步|个|次|层|段|组|条|路|类)/gu, '每一')
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿.])1\s*对一/gu, '一对一')
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿.])1\s*对多/gu, '一对多')
+            .replace(/多对\s*1(?![\d.%])/gu, '多对一')
+            .replace(/最小二乘(?:法|估计|解|回归|拟合|问题|损失|误差)?/gu, protectChinese)
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一对一|一对多|多对一|多对多|一一对应)/gu, protectChinese)
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|五|六|高|低|多|零|分数)阶/gu, protectChinese)
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|高|低|多)维(?=[\u3400-\u9fff])/gu, protectChinese)
+            .replace(/一分不得|一分为二|合二为一|一举两得|独一无二|举一反三|融为一体|一成不变|一概而论|一视同仁|一目了然|一脉相承|一步到位|二者合一|合而为一|万无一失|百里挑一|十拿九稳|一劳永逸|一锤定音|一针见血/gu, protectChinese)
+            .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu, protectChinese)
+            .replace(/每一(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块)/gu, protectChinese);
+    }
     const adjacentNumeralSurfaces = [];
     let numeralSafeText = protectedText;
     for (const issue of quantitativeIssues) {
@@ -3322,7 +3367,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
                 continue;
             }
         }
-        const widthFractionMatch = match.match(/^([一二两三四五六七八九十百千万亿]+)分之([一二两三四五六七八九十百千万亿]+)宽$/);
+        const widthFractionMatch = !isCohesiveV4 && match.match(/^([一二两三四五六七八九十百千万亿]+)分之([一二两三四五六七八九十百千万亿]+)宽$/);
         if (widthFractionMatch) {
             const denominator = chineseInteger(widthFractionMatch[1]);
             const numerator = chineseInteger(widthFractionMatch[2]);
@@ -3332,7 +3377,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
                 continue;
             }
         }
-        if (match === '一半' || match === '至少一半' || match === '半宽') {
+        if (match === '一半' || match === '至少一半' || (!isCohesiveV4 && match === '半宽')) {
             normalized = normalized.replaceAll(
                 match,
                 match === '半宽' ? '1/2 宽' : match === '至少一半' ? '至少 1/2' : '1/2'
@@ -3386,6 +3431,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             if (/^千\s*/u.test(surface) && /[成上数]$/u.test(before.trimEnd())) return surface;
             // 旧诊断可能把“一致”“一般”“一定”的开头当成参数值；不能破坏自然词。
             if (surface.endsWith('一') && /^[致般定]/u.test(after)) return surface;
+            if (isCohesiveV4 && /[第每上下这那另哪同唯统单最]$/u.test(before.trimEnd())) return surface;
             // 一个问题可能只指出更长数字或分数当中的一个后缀。
             if ((/[零〇一二两三四五六七八九十百千万亿]$|分之$/.test(before.trimEnd())
                     && !/(?:同一|统一|唯一|单一)$/.test(before.trimEnd()))
@@ -3427,11 +3473,15 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         .replace(/([A-Za-z0-9.%+*)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
     // 不要推断缺失的 %，也不要把后面的单位搬到前面的数值上。这些语义由作者和原文校验
     // 决定，不由排版决定。
-    const restored = protectedMarkdown.reduceRight(
+    const restoredMarkdown = protectedMarkdown.reduceRight(
         (value, original, index) => value.replace(
             `__PD_READER_PROTECTED_${index}__`, () => original
         ),
         normalizeReaderCurrencyAmounts(normalized)
+    );
+    const restored = protectedChinese.reduceRight(
+        (value, original, index) => value.split(chineseTokenFor(index)).join(original),
+        restoredMarkdown
     );
     return adjacentNumeralSurfaces.reduce((value, [token, original]) => value.split(token).join(original), restored);
 }
@@ -5620,6 +5670,27 @@ function readerFigureNarrative(figure, target = null) {
         + panelNotice;
 }
 
+function readerFigureCaptionLine(figure, target = null, options = {}) {
+    if (options?.editorialProfile !== 'cohesive-functional-v4') {
+        return `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`;
+    }
+    const cleanLabel = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
+        .replace(/[:：.]+\s*$/u, '').replace(/\s+/g, ' ').trim();
+    const panelSuffix = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
+        ? `；当前资源对应子图 ${String(figure.caption).trim()}，同一编号的其他面板请回原论文核对`
+        : '';
+    const cleanCaption = transformReaderFigureCaptionPreservingMathStars(
+        truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180), value => value
+            .replace(/\*{3}/g, '三个星号')
+            .replace(/\*{2}/g, '两个星号')
+            .replace(/\*/g, '一个星号')
+    ).trim()
+        .replace(/^["“]([\s\S]*?)["”]$/u, '$1')
+        .replace(/[。．.]+\s*$/u, '')
+        .trim();
+    return `*论文图 ${figure.ordinal}：${cleanCaption}（原论文 ${cleanLabel}${panelSuffix}）。*`;
+}
+
 function readerFigureAlt(figure, target = null) {
     if (figure?.url === 'https://arxiv.org/html/2610.01012v1/fig/one_to_many_ver2.png'
         && figure?.assetSha256 === 'a07e5c8f0844b239f2191ca04ef10572b417452b4693219c7fd229b3a28c78bd') {
@@ -5746,6 +5817,12 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         figure: figures.find(item => item.ordinal === placement.figureOrdinal),
         placement
     })).filter(item => item.figure);
+    const readerFormat = require('./lib/reader-record-format');
+    const editorialProfile = (() => {
+        try { return readerFormat.planEditorialProfile(readerResult.plan); }
+        catch { return readerFormat.LEGACY_INTEGRATED; }
+    })();
+    const requiresFocusBlockquote = editorialProfile !== readerFormat.COHESIVE_V4;
     for (const { figure, placement } of plannedFigures) {
         if (article.includes(`](${figure.url})`)) {
             skipped.push(`Figure ${figure.ordinal}: 正文已有同 URL 链接`);
@@ -5758,7 +5835,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             continue;
         }
         const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
-        const focusBlock = placement.focusPoints?.length
+        const focusBlock = requiresFocusBlockquote && placement.focusPoints?.length
             ? `> **看图路径：** ${placement.focusPoints.map(
                 (item, index) => `${index + 1}. ${item}`
             ).join('；')}`
@@ -5766,7 +5843,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         const block = [
             focusBlock,
             `![${alt}](${figure.url})`,
-            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`
+            readerFigureCaptionLine(figure, target, { editorialProfile })
         ].filter(Boolean).join('\n\n');
         const inserted = replaceReaderFigureMarker(
             article,
@@ -5901,11 +5978,11 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
     for (const figure of plannedFigures || []) {
         if (kept.has(`${figure.ordinal}\u0000${figure.url}`)) continue;
         const focusPrefix = Array.isArray(figure.focusPoints) && figure.focusPoints.length > 0
-            ? `> \\*\\*看图路径：\\*\\*[^\\n]*\\n\\n`
+            ? `(?:> \\*\\*看图路径：\\*\\*[^\\n]*\\n\\n)?`
             : '';
         const pattern = new RegExp(
             `^${focusPrefix}!\\[[^\\n]*\\]\\(${escapeRegExp(String(figure.url || ''))}\\)\\n\\n`
-            + `\\*论文图\\s+${Number(figure.ordinal)}。[^\\n]*\\*\\n*`,
+            + `\\*论文图\\s+${Number(figure.ordinal)}[。：:][^\\n]*\\*\\n*`,
             'gm'
         );
         const before = output;
@@ -6376,6 +6453,7 @@ function validateReaderEditorialQuality(article, sections, options = {}) {
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
     }, {
         sourceText: options.sourceText,
+        editorialProfile: options.editorialProfile,
         skipTableCommentaryAlignment: options.skipTableCommentaryAlignment === true
     });
     const sectionWarnings = findReaderSectionNearDuplicates(article, sections);
@@ -7008,10 +7086,13 @@ function parseApiReaderArticleResult(raw, options = {}) {
     let representation;
     try { representation = require('./lib/reader-record-format').draftFormat(JSON.parse(extractJsonObjectText(raw))); }
     catch { return parseApiReaderArticleResultUnchecked(raw, options); }
-    const result = require('./lib/reader-proof-format').withDraftRepresentation(representation, options, () =>
-        require('./lib/reader-table-pdf-evidence').withArtifacts(options.structuredArtifacts,
-        options.arxivId, () => withReaderSourceQuoteEvidence(options.structuredArtifacts,
-            options.arxivId, () => parseApiReaderArticleResultUnchecked(raw, options))));
+    const effectiveOptions = representation.modern && !options.compileCurrent && !options.compiledPlanHeader
+        ? { ...options, compileCurrent: true, compiledPlanHeader: require('./lib/reader-record-format').compiledPlanHeader(representation) }
+        : options;
+    const result = require('./lib/reader-proof-format').withDraftRepresentation(representation, effectiveOptions, () =>
+        require('./lib/reader-table-pdf-evidence').withArtifacts(effectiveOptions.structuredArtifacts,
+        effectiveOptions.arxivId, () => withReaderSourceQuoteEvidence(effectiveOptions.structuredArtifacts,
+            effectiveOptions.arxivId, () => parseApiReaderArticleResultUnchecked(raw, effectiveOptions))));
     const draft = require('./lib/reader-repair').parseRecoveryDraft(raw);
     const current = currentReaderFactDailySource();
     if (current && draft && options.sourceText === current.source.text
@@ -7034,6 +7115,10 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     const format = readerFormat.draftFormat(value);
     readerFormat.assertRequiredProfile(format, options);
     const integrated = format.profile === readerFormat.INTEGRATED;
+    const editorialProfile = readerFormat.effectiveEditorialProfile(format, options);
+    const isCohesiveV4 = editorialProfile === readerFormat.COHESIVE_V4;
+    const modernMetadata = Boolean(format.modern || format.current || options.compileCurrent === true);
+    const proseFormatOptions = { editorialProfile };
     const hasSourceBindings = Object.prototype.hasOwnProperty.call(value, 'tableBindings')
         || Object.prototype.hasOwnProperty.call(value, 'formulaBindings');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(options.readerCapabilityPolicy);
@@ -7042,7 +7127,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         [
             ...Object.keys(format.header), 'readerTitle', 'oneSentenceThesis',
             'conceptBridges', 'figurePlacements', 'sections',
-            ...(hasSourceBindings || options.requireSourceBindings === true || format.current || options.compileCurrent === true
+            ...(hasSourceBindings || options.requireSourceBindings === true || modernMetadata
                 ? ['tableBindings', 'formulaBindings'] : [])
         ],
         '读者文章顶层'
@@ -7057,12 +7142,15 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         || value.readerTitle.trim().length > 80) {
         throw new Error('读者标题必须是 8-80 字符的论文特有标题');
     }
+    if (isCohesiveV4 && READER_HEADING_FIG_TABLE_RE.test(value.readerTitle)) {
+        throw new Error('读者标题不得包含图/表编号');
+    }
     if (typeof value.oneSentenceThesis !== 'string'
         || value.oneSentenceThesis.trim().length < 30
         || value.oneSentenceThesis.trim().length > 260) {
         throw new Error('读者文章 oneSentenceThesis 必须为 30-260 字符');
     }
-    const requirements = readerRequirements({ profile: format.profile,
+    const requirements = readerRequirements({ profile: format.profile, editorialProfile,
         minimumIntegratedTables: options.minimumIntegratedTables });
     const minimumSectionCount = requirements.minimumSections;
     const maximumSectionCount = requirements.maximumSections;
@@ -7102,7 +7190,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     }
     const readerRepair = require('./lib/reader-repair.js');
     const languageIssues = readerRepair.collectReaderLanguageIssues(value, {
-        sourceText: options.sourceText
+        sourceText: options.sourceText,
+        editorialProfile
     });
     if (languageIssues.length) {
         throw Object.assign(new Error('读者正文含生硬译法或写作检查话术，须按原文改写对应字段'), {
@@ -7144,14 +7233,19 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             throw new Error(`读者文章 sections[${index}].kind 非法`);
         }
         let heading = makeReaderHeadingSpecific(
-            section.kind, String(section.heading || '').trim(), value.readerTitle
+            section.kind, String(section.heading || '').trim(), value.readerTitle, proseFormatOptions
         );
         section.heading = heading;
+        const genericHeadingRe = isCohesiveV4 ? GENERIC_V4_READER_HEADING_RE : GENERIC_READER_HEADING_RE;
         if (heading.length < 8 || heading.length > 80
-            || GENERIC_READER_HEADING_RE.test(heading)) {
+            || genericHeadingRe.test(heading)) {
             throw new Error(`读者文章 sections[${index}].heading 必须是论文特有问题或判断`);
         }
+        if (isCohesiveV4 && READER_HEADING_FIG_TABLE_RE.test(heading)) {
+            throw new Error(`读者文章 sections[${index}].heading 不得包含图/表编号: ${heading}`);
+        }
         if (seenHeadings.has(heading)) {
+            if (isCohesiveV4) throw new Error('读者文章小节标题重复');
             const suffix = `（补充判断 ${index + 1}）`;
             heading = `${heading.slice(0, Math.max(8, 80 - suffix.length))}${suffix}`;
             section.heading = heading;
@@ -7161,14 +7255,26 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         if (typeof section.body !== 'string' || section.body.trim().length < 120) {
             throw new Error(`读者文章 sections[${index}].body 至少 120 字符`);
         }
+        if (isCohesiveV4) {
+            for (const subheadingMatch of section.body.matchAll(/^#{1,6}\s+(.+?)\s*$/gmu)) {
+                if (READER_HEADING_FIG_TABLE_RE.test(subheadingMatch[1])) {
+                    throw new Error(`读者文章 sections[${index}].body 子标题不得包含图/表编号: ${subheadingMatch[1]}`);
+                }
+            }
+        }
     }
     const normalizedSections = value.sections.map(section => ({
         ...section,
-        heading: normalizeReaderProseFormatting(section.heading.trim()),
-        body: splitReaderLongParagraphs(demoteReaderBodySectionHeadings(section.body))
+        heading: normalizeReaderProseFormatting(section.heading.trim(), [], proseFormatOptions),
+        body: splitReaderLongParagraphs(demoteReaderBodySectionHeadings(section.body), proseFormatOptions)
     }));
     const kinds = new Set(normalizedSections.map(section => section.kind));
-    const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
+    const missing = isCohesiveV4
+        ? [
+            ...['problem', 'method_overview', 'result'].filter(kind => !kinds.has(kind)),
+            ...(kinds.has('limitation') || kinds.has('synthesis') ? [] : ['limitation'])
+        ]
+        : API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
     if (missing.length > 0) {
         const error = new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
         error.readerIssues = [{ path: null, code: 'reader_missing_required_kinds',
@@ -7229,12 +7335,14 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             ? options.exactSignedBridgeSurfaces[index]
             : null;
         return {
-            terms: bridge.terms.map(term => normalizeReaderProseFormatting(term.trim())),
+            terms: bridge.terms.map(term => normalizeReaderProseFormatting(term.trim(), [], proseFormatOptions)),
             sectionKind: bridge.sectionKind,
             marker,
             explanation: exactBridgeParagraph || collapseRepeatedReaderBridgeHeadings(
                 normalizeReaderProseFormatting(
-                    `**${bridge.terms.map(term => term.trim()).join(' × ')}：** ${explanation}`
+                    `**${bridge.terms.map(term => term.trim()).join(' × ')}：** ${explanation}`,
+                    [],
+                    proseFormatOptions
                 )
             )
         };
@@ -7271,7 +7379,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     ]));
     const figurePlacements = value.figurePlacements.map((placement, index) => {
         const placementKeys = integrated
-            ? ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']
+            ? (isCohesiveV4 && placement && !Object.hasOwn(placement, 'focusPoints')
+                ? ['figureOrdinal', 'targetKind', 'marker']
+                : ['figureOrdinal', 'targetKind', 'marker', 'focusPoints'])
             : ['figureOrdinal', 'targetKind', 'marker'];
         assertExactObjectKeys(
             placement, placementKeys, `读者文章 figurePlacements[${index}]`
@@ -7307,15 +7417,18 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         // 量的是那一段真实文字，不是那个短短的占位 token。
         const leadNarrative = conceptNarrativeByMarker.get(leadQuote) || leadQuote;
         const explanationNarrative = conceptNarrativeByMarker.get(explanationQuote) || explanationQuote;
-        const focusPoints = integrated ? placement.focusPoints : [];
+        const focusPoints = integrated
+            ? (isCohesiveV4 && placement.focusPoints === undefined ? [] : placement.focusPoints)
+            : [];
+        const minFocusCount = isCohesiveV4 ? 0 : READER_LIMITS.minimumFocusPoints;
         if (!candidate || markerIndex <= 0 || markerIndex >= blocks.length - 1
             || leadNarrative.length < API_READER_FIGURE_LEAD_MIN_CHARS
             || explanationNarrative.length < API_READER_FIGURE_EXPLANATION_MIN_CHARS
             || !Array.isArray(focusPoints)
-            || (integrated && (focusPoints.length < READER_LIMITS.minimumFocusPoints
+            || (integrated && (focusPoints.length < minFocusCount
                 || focusPoints.length > READER_LIMITS.maximumFocusPoints))
             || focusPoints.some(item => typeof item !== 'string'
-                || item.trim().length < 12 || item.trim().length > 120)) {
+                || item.trim().length < (isCohesiveV4 ? 6 : 12) || item.trim().length > 120)) {
             throw new Error(
                 `读者文章 figurePlacements[${index}]（Figure ${placement.figureOrdinal}）`
                 + '图片的插入位置、相邻导读与解释段，或观察点不符合要求'
@@ -7327,8 +7440,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}`
                 + (Array.isArray(focusPoints) ? focusPoints.map((item, pointIndex) => {
                     const length = typeof item === 'string' ? item.trim().length : null;
-                    return length === null || length < 12 || length > 120
-                        ? `, focusPoints[${pointIndex}]=${length === null ? '非字符串' : `${length}字`}，须为12–120字` : '';
+                    const minLen = isCohesiveV4 ? 6 : 12;
+                    return length === null || length < minLen || length > 120
+                        ? `, focusPoints[${pointIndex}]=${length === null ? '非字符串' : `${length}字`}，须为${minLen}–120字` : '';
                 }).join('') : '')
                 + '）'
             );
@@ -7337,12 +7451,12 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             figureOrdinal: placement.figureOrdinal,
             targetKind: placement.targetKind,
             marker,
-            leadQuote: normalizeReaderProseFormatting(leadNarrative),
-            explanationQuote: normalizeReaderProseFormatting(explanationNarrative),
+            leadQuote: normalizeReaderProseFormatting(leadNarrative, [], proseFormatOptions),
+            explanationQuote: normalizeReaderProseFormatting(explanationNarrative, [], proseFormatOptions),
             ...(integrated
                 ? {
                     focusPoints: focusPoints.map(
-                        item => normalizeReaderProseFormatting(item.trim())
+                        item => normalizeReaderProseFormatting(item.trim(), [], proseFormatOptions)
                     )
                 }
                 : {})
@@ -7392,7 +7506,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     article = relocateExplicitReaderTableExplanations(ensureApiReaderTableNarratives(
         separateApiReaderTableBlocks(
             normalizeReaderProsePreservingSelectedTables(
-                article, compiledTables.selectionTableIndexes
+                article, compiledTables.selectionTableIndexes, proseFormatOptions
             )
         )
     ));
@@ -7480,6 +7594,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     );
     const qualityOptions = {
         sourceText: options.sourceText,
+        editorialProfile,
         skipTableCommentaryAlignment: true
     };
     let quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
@@ -7500,7 +7615,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             masked = masked.slice(0, at) + token + masked.slice(at + surface.length);
             swaps.push([token, surface]);
         }
-        const repaired = normalizeReaderProseFormatting(masked, issues);
+        const repaired = normalizeReaderProseFormatting(masked, issues, proseFormatOptions);
         let restored = repaired;
         for (const [token, surface] of swaps) restored = restored.split(token).join(surface);
         return restored;
@@ -7560,7 +7675,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle,
-        { ...options, compileCurrent: format.current || options.compileCurrent === true });
+        { ...options, editorialProfile, compileCurrent: modernMetadata });
     // 概念 bridge 表层带计划签名：它们的字节必须留到最后的重新绑定，所以表层修复从不
     // 改写它们（见上面的 withProtectedBridgeSurfaces）。落在这些已签名区段里的风格问题，
     // 因此在这里永远修不了——照现有的叙述数字豁免那样精确豁免掉，不要让流程永远失败。
@@ -7568,7 +7683,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         issueFallsWithinReaderBridgeLine(issue, qualityArticle)
         || issueInProtectedReaderQuote(issue, qualityArticle)
         || isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle, options)
-        || isAllowedReaderDefensiveNegationIssue(issue, qualityArticle)
+        || isAllowedReaderDefensiveNegationIssue(issue, qualityArticle, qualityOptions)
         || isReaderHeadingIssue(issue, qualityArticle)
     ));
     if (blockingQualityIssues.length > 0) {
@@ -7624,8 +7739,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     return {
         plan: {
             ...readerFormat.compiledPlanHeader(format, options),
-            readerTitle: normalizeReaderProseFormatting(value.readerTitle.trim()),
-            oneSentenceThesis: normalizeReaderProseFormatting(value.oneSentenceThesis.trim()),
+            readerTitle: normalizeReaderProseFormatting(value.readerTitle.trim(), [], proseFormatOptions),
+            oneSentenceThesis: normalizeReaderProseFormatting(value.oneSentenceThesis.trim(), [], proseFormatOptions),
             conceptBridges: reboundConceptBridges,
             figurePlacements: reboundFigurePlacements,
             ...(sourceBindingResult ? {
@@ -7633,8 +7748,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 formulaBindings: sourceBindingResult.formulaBindings,
                 ...(sourceBindingResult.structuredSourcePayload
                     ? { structuredSourcePayload: sourceBindingResult.structuredSourcePayload } : {}),
-                sourceBindingsContract: readerProtocol.header('sourceBindings', format.current || options.compileCurrent === true).contract,
-                ...(format.current || options.compileCurrent === true ? {
+                sourceBindingsContract: readerProtocol.header('sourceBindings', modernMetadata).contract,
+                ...(modernMetadata ? {
                     sourceBindingsSchemaFingerprint: readerProtocol.header('sourceBindings').schemaFingerprint
                 } : {}),
                 sourceBindingsSha256: sourceBindingResult.sourceBindingsSha256
@@ -7674,17 +7789,23 @@ function removeDuplicateReaderLongSentences(article) {
 
 function restoreApiReaderInjectionMarkers(article, plan, figures = []) {
     let articleWithMarkers = String(article || '');
+    const readerFormat = require('./lib/reader-record-format');
+    const editorialProfile = (() => {
+        try { return readerFormat.planEditorialProfile(plan); }
+        catch { return readerFormat.LEGACY_INTEGRATED; }
+    })();
+    const requiresFocusBlockquote = editorialProfile !== readerFormat.COHESIVE_V4;
     for (const figure of figures) {
         const placement = (plan.figurePlacements || []).find(item => item.figureOrdinal === figure.ordinal);
         if (!placement || typeof placement.marker !== 'string') {
             throw new Error('Reader 文风统计视图缺少 Figure marker 绑定');
         }
-        const focusBlock = placement.focusPoints?.length
+        const focusBlock = requiresFocusBlockquote && placement.focusPoints?.length
             ? `> **看图路径：** ${placement.focusPoints.map((item, index) => `${index + 1}. ${item}`).join('；')}`
             : null;
         const block = [focusBlock,
             `![${sanitizeMarkdownImageAlt(readerFigureAlt(figure))}](${figure.url})`,
-            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure)}*`
+            readerFigureCaptionLine(figure, null, { editorialProfile })
         ].filter(Boolean).join('\n\n');
         if (articleWithMarkers.split(block).length !== 2) {
             throw new Error(`Reader 文风统计视图无法精确重放 Figure ${figure.ordinal} 注入块`);
@@ -7709,20 +7830,26 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
         return { article: String(article || ''), placements, figures, changed: false };
     }
     if (!Array.isArray(figures) || figures.length !== placements.length) return null;
+    const readerFormat = require('./lib/reader-record-format');
+    const editorialProfile = (() => {
+        try { return readerFormat.planEditorialProfile(plan); }
+        catch { return readerFormat.LEGACY_INTEGRATED; }
+    })();
+    const requiresFocusBlockquote = editorialProfile !== readerFormat.COHESIVE_V4;
     let markerView = String(article || '');
     const renderedBlocks = new Map();
     for (const figure of figures) {
         const placement = placements.find(item => item.figureOrdinal === figure?.ordinal);
         if (!placement || typeof placement.marker !== 'string'
             || renderedBlocks.has(placement.marker)) return null;
-        const focusBlock = placement.focusPoints?.length
+        const focusBlock = requiresFocusBlockquote && placement.focusPoints?.length
             ? `> **看图路径：** ${placement.focusPoints.map(
                 (item, index) => `${index + 1}. ${item}`
             ).join('；')}`
             : null;
         const block = [focusBlock,
             `![${sanitizeMarkdownImageAlt(readerFigureAlt(figure))}](${figure.url})`,
-            `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure)}*`
+            readerFigureCaptionLine(figure, null, { editorialProfile })
         ].filter(Boolean).join('\n\n');
         if (markerView.split(block).length !== 2) return null;
         markerView = markerView.replace(block, placement.marker);
@@ -7834,6 +7961,11 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
         && !repairedFigureBindings) return false;
     if (repairedFigureBindings) article = repairedFigureBindings.article;
     const articleBlocks = article.split(/\n\s*\n/).map(block => block.trim());
+    const savedPlanEditorialProfile = (() => {
+        try { return require('./lib/reader-record-format').planEditorialProfile(plan); }
+        catch { return 'legacy-integrated'; }
+    })();
+    const savedProseFormatOptions = { editorialProfile: savedPlanEditorialProfile };
     let repairedConceptBridges = plan.conceptBridges;
     if (Array.isArray(plan.conceptBridges)) {
         repairedConceptBridges = [];
@@ -7842,7 +7974,7 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                 return false;
             }
             const terms = bridge.terms.map(term => (
-                normalizeReaderProseFormatting(String(term || '').trim())
+                normalizeReaderProseFormatting(String(term || '').trim(), [], savedProseFormatOptions)
             ));
             const paragraph = findReaderBridgeParagraph(articleBlocks, terms);
             if (!paragraph) return false;
@@ -7855,8 +7987,8 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
     }
     const repairedPlan = {
         ...plan,
-        readerTitle: normalizeReaderProseFormatting(plan.readerTitle),
-        oneSentenceThesis: normalizeReaderProseFormatting(plan.oneSentenceThesis),
+        readerTitle: normalizeReaderProseFormatting(plan.readerTitle, [], savedProseFormatOptions),
+        oneSentenceThesis: normalizeReaderProseFormatting(plan.oneSentenceThesis, [], savedProseFormatOptions),
         ...(Array.isArray(repairedConceptBridges)
             ? { conceptBridges: repairedConceptBridges }
             : {}),
@@ -9832,7 +9964,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? repair.buildSectionReorganizationPrompt({ context: repairContext,
                 title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract,
                 reviewFeedback: String(options.reviewFeedback || '').trim(), numericSpellingGuidance, indexExamples,
-                requiredKinds: API_READER_REQUIRED_KINDS })
+                requiredKinds: repairContext.atomicOperation.maximumSections === 9
+                    ? ['problem', 'method_overview', 'result', 'limitation 或 synthesis']
+                    : API_READER_REQUIRED_KINDS })
             : repairContext && options.readerFactLocalRevision === true
             ? loadPrompt(readerRepairPromptPath(options), { title: paper.title || '', arxivId: getPaperArxivId(paper),
                 ...repair.factLocalSentencePromptVariables(repairContext, String(options.reviewFeedback || '').trim(),
@@ -20700,6 +20834,7 @@ module.exports = {
     conferenceReaderResourceClaimIssues,
     enforceConferenceReaderResourceClaims,
     buildApiReaderEvidenceContext,
+    readerFigureCaptionLine,
     injectApiReaderFigures,
     rewriteApiReaderFigureNarratives,
     normalizeReaderFigureCaption,
