@@ -1335,7 +1335,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         paper = llm_api_publication_fixture()
         manifest = paper['analysisManifest']
         stage = manifest['stages']['coreSummaryRepair']
-        header = publish_to_blog.public_protocols.record_header('core-summary', 'core-summary')
+        header = publish_to_blog.core_summary_formats.legacy_header()
         manifest['contracts']['coreSummary'] = header
         fields = publish_to_blog.core_summary_formats.stage_fields(header)
         stage.update(fields)
@@ -1352,6 +1352,19 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertEqual(binding['coreSummarySchemaFingerprint'], header['schemaFingerprint'])
         stage['contractSchemaFingerprint'] = 'a' * 64
         with self.assertRaisesRegex(PublishDataValidationError, '声明与阶段格式不一致'):
+            publish_to_blog._validated_detailed_core_summary(paper, paper['parsed'])
+
+        current_header = publish_to_blog.public_protocols.record_header('core-summary', 'core-summary')
+        manifest['contracts']['coreSummary'] = current_header
+        current_fields = publish_to_blog.core_summary_formats.stage_fields(current_header)
+        stage.update(current_fields)
+        current_fields.update({key: stage[key] for key in (
+            'inputAnalysisSha256', 'outputAnalysisSha256', 'inputSummarySha256',
+            'summarySha256', 'inputStructureProjectionSha256',
+            'outputStructureProjectionSha256',
+        )})
+        stage['bindingSha256'] = publish_to_blog._stable_json_sha256(current_fields)
+        with self.assertRaisesRegex(PublishDataValidationError, '700–1400'):
             publish_to_blog._validated_detailed_core_summary(paper, paper['parsed'])
 
     def test_current_core_summary_replays_tag_stage_upstream(self):
