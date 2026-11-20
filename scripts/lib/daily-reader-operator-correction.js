@@ -502,7 +502,17 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
             const deep = require('../deep-analyzer');
             if (records.length && !matchesPaidOrdinalEndpoint(lastPaid, payload, record, paper, source, original.identity, snapshots))
                 fail('last paid compilation differs from the original candidate');
-            const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
+            // 在线人工修正与普通候选同样先经确定性归一化（含 v4 超额小节合并）再做完整解析；
+            // 冷核必须以同一份原稿问题与可用图号重放这一步，不能只解析未归一化的补丁终点，
+            // 否则需要归一化才能通过的稿件在冷核时被误拒（如 10 节合并为 9 节）。
+            const readyFigureOrdinals = payload.imageEvidence
+                .filter(image => image?.kind === 'figure' && image.status === 'ready').map(image => image.ordinal);
+            const normalizationState = {};
+            deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(draft), payload.issues || [], {
+                paperId: paper.arxivId, sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+                pixelFigureOrdinals: readyFigureOrdinals, draftOrderMappings: []
+            }, normalizationState);
+            const parsed = deep.parseApiReaderArticleResult(JSON.stringify(normalizationState.draft || draft), {
                 arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
                 requireIntegratedTables: true, minimumIntegratedTables: 2,
                 requireSourceBindings: true, allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true,

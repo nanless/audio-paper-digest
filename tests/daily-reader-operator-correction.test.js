@@ -539,3 +539,13 @@ test('replayPaidFingerprint 同时支持历史 OLD_DRAFT_FP 与当前 NEW_DRAFT_
  };
  assert.throws(() => operator.replay(crossRecord, crossCandidate), /not a bounded malformed current header/);
 });
+test('人工修正冷核重放先做与在线一致的确定性归一化再完整解析，避免需合并超额小节的稿被误拒',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/lib/daily-reader-operator-correction.js'),'utf8');
+ const start=source.indexOf('function validateSavedCompletionUnchecked');
+ const body=source.slice(start);
+ const normalizeAt=body.indexOf('normalizeApiReaderRecoveryDraftForSource(structuredClone(draft), payload.issues || []');
+ const parseAt=body.indexOf('deep.parseApiReaderArticleResult(JSON.stringify(normalizationState.draft || draft)');
+ assert(normalizeAt>0,'cold replay must normalize the bounded patch endpoint with the retained original issues');
+ assert(parseAt>normalizeAt,'the full parse must consume the normalized draft, not the raw patch endpoint');
+ assert(body.includes("pixelFigureOrdinals: readyFigureOrdinals"),'normalization must use the paid ready figure ordinals');
+});
