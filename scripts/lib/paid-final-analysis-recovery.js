@@ -86,9 +86,15 @@ async function restorePaidFinalAnalysis(paper, plan, expected) {
         const core = completed.analysisManifest.stages.coreSummaryRepair;
         if (core?.paidDiagnosticReplay?.id !== expected.diagnosticId || sha(original) !== core.inputAnalysisSha256) reject('原付费摘要输入或回执不同');
         const evidence = deep.buildStageEvidenceContext('coreSummaryRepair', original, source.text);
+        const summaryHeader = require('./core-summary-format').readStage(
+            clone.analysisManifest?.contracts?.coreSummary,
+            core
+        );
+        if (!summaryHeader) reject('原付费摘要协议声明与阶段记录不一致');
         const updated = await deep.repairCoreSummarySection(clone, original, source.text, evidence, {
             diagnosticStage: { fingerprint: core.fingerprint, promptTextContract: core.promptTextContract },
-            coreSummaryDiagnosticId: expected.diagnosticId, paidCoreReplay: {}
+            coreSummaryDiagnosticId: expected.diagnosticId, paidCoreReplay: {},
+            summaryHeader
         });
         if (sha(updated) !== core.outputAnalysisSha256) reject('原付费摘要输出正文不同');
         const scoring = completed.analysisManifest.stages.scoringAudit;

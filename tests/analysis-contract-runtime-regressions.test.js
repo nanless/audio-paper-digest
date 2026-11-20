@@ -6,12 +6,8 @@ const crypto = require('node:crypto');
 const { describe, it } = require('node:test');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const {
-    getCoreSummaryDetailIssue: rawGetCoreSummaryDetailIssue
+    getCoreSummaryDetailIssue
 } = require('../scripts/deep-analyzer.js');
-const getCoreSummaryDetailIssue = (analysis, options = {}) => rawGetCoreSummaryDetailIssue(analysis, {
-    summaryHeader: { contract: 'core-summary-detailed-v3' },
-    ...options
-});
 const {
     classifySourceQuantitativeEvidence,
     validateExperimentTableEvidenceDepth

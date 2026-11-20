@@ -141,7 +141,15 @@ function validateStage(paper) {
             || deep.extractSectionByTitle(String(paper.analysis || ''), '核心摘要') !== deep.extractSectionByTitle(updated, '核心摘要')
             || require('../analysis-contract').hashAnalysisWithMaskedCoreSummary(updated)
                 !== require('../analysis-contract').hashAnalysisWithMaskedCoreSummary(checked.saved.request.inputAnalysis)) reject('当前核心或其余十二节无法由原付费字节加唯一literal重放');
-        const issue = deep.getCoreSummaryDetailIssue(updated, { sourceText: checked.source.text });
+        const rawDeclaration = paper?.analysisManifest?.contracts?.coreSummary;
+        const summaryHeader = rawDeclaration === undefined
+            ? null
+            : require('./core-summary-format').readDeclaration(rawDeclaration);
+        if (rawDeclaration !== undefined && !summaryHeader) reject('核心摘要声明、阶段格式或结构指纹不一致');
+        const issue = deep.getCoreSummaryDetailIssue(updated, {
+            sourceText: checked.source.text,
+            summaryHeader
+        });
         if (issue) reject(issue);
         if (checked.feedback.value.rejectedCoreClaims.some(claim => checked.corrected.includes(claim))) reject('已拒核心原句仍在');
         assertUnchanged(checked.snapshots); return null;

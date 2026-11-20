@@ -18351,29 +18351,50 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         rawTextForAnalysis
     );
     analysis = coreSummaryRepairStage.analysis;
-    if (isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')
-        && getCoreSummaryDetailIssue(analysis, { sourceText: rawTextForAnalysis })) {
-        invalidateRecoveryStageIfChanged(
-            paper,
-            analysisManifest,
-            'coreSummaryRepair',
-            `${coreSummaryRepairStage.fingerprint}:invalid-${CORE_SUMMARY_CONTRACT_VERSION}`
+    if (isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')) {
+        const savedSummaryHeader = coreSummaryFormat.readStage(
+            analysisManifest?.contracts?.coreSummary,
+            analysisManifest?.stages?.coreSummaryRepair
         );
-        analysis = paper.analysisCheckpoint || coreSummaryRepairStage.inputAnalysis;
-        coreSummaryRepairStage = prepareTextRecoveryStage(
-            paper,
-            analysisManifest,
-            'coreSummaryRepair',
-            analysis,
-            rawTextForAnalysis
-        );
-        analysis = coreSummaryRepairStage.analysis;
+        if (!savedSummaryHeader || getCoreSummaryDetailIssue(analysis, {
+            sourceText: rawTextForAnalysis,
+            summaryHeader: savedSummaryHeader
+        })) {
+            invalidateRecoveryStageIfChanged(
+                paper,
+                analysisManifest,
+                'coreSummaryRepair',
+                `${coreSummaryRepairStage.fingerprint}:invalid-${CORE_SUMMARY_CONTRACT_VERSION}`
+            );
+            analysis = paper.analysisCheckpoint || coreSummaryRepairStage.inputAnalysis;
+            coreSummaryRepairStage = prepareTextRecoveryStage(
+                paper,
+                analysisManifest,
+                'coreSummaryRepair',
+                analysis,
+                rawTextForAnalysis
+            );
+            analysis = coreSummaryRepairStage.analysis;
+        }
     }
     if (!isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')) {
+        const isPaidCoreReplayMode = options.coreSummaryDiagnosticId !== undefined
+            || options.replayLatestCoreSummaryDiagnostic === true;
+        const activeSummaryHeader = isPaidCoreReplayMode && analysisManifest?.contracts?.coreSummary !== undefined
+            ? (() => {
+                const declared = coreSummaryFormat.readDeclaration(analysisManifest.contracts.coreSummary);
+                if (!declared) throw contractRejectedError('核心摘要已声明的协议头无效。');
+                return declared;
+            })()
+            : coreSummaryFormat.currentHeader();
+        const useActiveExecutiveSummary = coreSummaryFormat.isExecutiveAbstractHeader(activeSummaryHeader);
         const missingCoreSummary = getMissingRequiredSections(analysis).includes('核心摘要');
         const duplicateCoreSummary = getDuplicateRequiredSections(analysis).includes('核心摘要');
         const coreReviewFeedback = require('./lib/daily-fact-review').reviewFeedback('coreSummaryRepair', arxivId);
-        const summaryIssue = [getCoreSummaryDetailIssue(analysis, { sourceText: rawTextForAnalysis }), coreReviewFeedback].filter(Boolean).join('\n');
+        const summaryIssue = [getCoreSummaryDetailIssue(analysis, {
+            sourceText: rawTextForAnalysis,
+            summaryHeader: activeSummaryHeader
+        }), coreReviewFeedback].filter(Boolean).join('\n');
         try {
             if (missingCoreSummary || duplicateCoreSummary) {
                 throw contractRejectedError(
@@ -18392,7 +18413,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     { diagnosticStage: coreSummaryRepairStage, reviewFeedback: coreReviewFeedback,
                         coreSummaryDiagnosticId: options.coreSummaryDiagnosticId,
                         paidCoreLiteralCorrection: options.paidCoreLiteralCorrection,
-                        replayLatestCoreSummaryDiagnostic: options.replayLatestCoreSummaryDiagnostic, paidCoreReplay }
+                        replayLatestCoreSummaryDiagnostic: options.replayLatestCoreSummaryDiagnostic,
+                        paidCoreReplay,
+                        summaryHeader: activeSummaryHeader }
                 );
                 changed = fixed !== analysis;
                 analysis = fixed;
@@ -18400,14 +18423,14 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             }
             const coreSummaryIssue = getCoreSummaryDetailIssue(
                 analysis,
-                { sourceText: rawTextForAnalysis }
+                { sourceText: rawTextForAnalysis, summaryHeader: activeSummaryHeader }
             );
             if (coreSummaryIssue) {
                 throw contractRejectedError(`核心摘要未通过最终检查：${coreSummaryIssue}`);
             }
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
-                coreSummary: coreSummaryFormat.currentHeader()
+                coreSummary: activeSummaryHeader
             };
             const summaryInput = extractSectionByTitle(
                 coreSummaryRepairStage.inputAnalysis, '核心摘要'
@@ -18417,17 +18440,17 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 .filter(([key]) => key !== 'operatorLiteralCorrection')) : null;
             const summaryBinding = {
                 ...buildCoreSummaryBindingBody(
-                    coreSummaryRepairStage.inputAnalysis, analysis),
+                    coreSummaryRepairStage.inputAnalysis, analysis, activeSummaryHeader),
                 ...(paidCoreReplay.operatorLiteralCorrection ? {
                     operatorLiteralCorrection: paidCoreReplay.operatorLiteralCorrection,
                     paidDiagnosticReplay: replayReceipt
                 } : {})
             };
             markRecoveryStage(analysisManifest, 'coreSummaryRepair', changed ? 'complete' : 'not_needed', {
-                targetMinimumChineseChars: CORE_SUMMARY_MIN_CHINESE_CHARS,
-                targetMaximumChineseChars: CORE_SUMMARY_MAX_CHINESE_CHARS,
-                targetMinimumSentences: CORE_SUMMARY_MIN_SENTENCES,
-                targetMaximumSentences: CORE_SUMMARY_MAX_SENTENCES,
+                targetMinimumChineseChars: useActiveExecutiveSummary ? CORE_SUMMARY_MIN_CHINESE_CHARS : 320,
+                targetMaximumChineseChars: useActiveExecutiveSummary ? CORE_SUMMARY_MAX_CHINESE_CHARS : 600,
+                targetMinimumSentences: useActiveExecutiveSummary ? CORE_SUMMARY_MIN_SENTENCES : 6,
+                targetMaximumSentences: useActiveExecutiveSummary ? CORE_SUMMARY_MAX_SENTENCES : 12,
                 evidenceChars: coreSummaryRepairStage.evidenceChars,
                 evidenceSha256: coreSummaryRepairStage.evidenceSha256,
                 inputAnalysisSha256: coreSummaryRepairStage.inputAnalysisSha256,
@@ -19808,7 +19831,25 @@ async function repairCoreSummarySection(
     if (externalFeedback && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))) {
         throw contractRejectedError('核心摘要事实反馈尚未绑定当前日更封存来源与正文');
     }
-    let issue = getCoreSummaryDetailIssue(original, { sourceText });
+    const effectiveSummaryHeader = (() => {
+        if (options && typeof options === 'object' && Object.hasOwn(options, 'summaryHeader')) {
+            if (options.summaryHeader === null || options.summaryHeader === undefined) return null;
+            const resolved = coreSummaryFormat.readDeclaration(options.summaryHeader);
+            if (!resolved) throw contractRejectedError('核心摘要修复协议声明无效');
+            return resolved;
+        }
+        if (paper?.analysisManifest?.contracts?.coreSummary !== undefined) {
+            const resolved = coreSummaryFormat.readDeclaration(paper.analysisManifest.contracts.coreSummary);
+            if (!resolved) throw contractRejectedError('核心摘要已保存的协议声明无效');
+            return resolved;
+        }
+        return null;
+    })();
+    const useExecutiveSummary = coreSummaryFormat.isExecutiveAbstractHeader(effectiveSummaryHeader);
+    const minChineseChars = useExecutiveSummary ? CORE_SUMMARY_MIN_CHINESE_CHARS : 320;
+    const maxChineseChars = useExecutiveSummary ? CORE_SUMMARY_MAX_CHINESE_CHARS : 600;
+    const maxSentenceCount = useExecutiveSummary ? CORE_SUMMARY_MAX_SENTENCES : 12;
+    let issue = getCoreSummaryDetailIssue(original, { sourceText, summaryHeader: effectiveSummaryHeader });
     if (!issue && !externalFeedback && options.coreSummaryDiagnosticId === undefined
         && options.replayLatestCoreSummaryDiagnostic !== true) return original;
     const diagnosticStage = options.diagnosticStage || {};
@@ -19855,7 +19896,7 @@ async function repairCoreSummarySection(
             const updated = mergeSectionByTitle(original, '核心摘要', summary);
             if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior)
                 throw contractRejectedError('原付费摘要响应改变了其他章节');
-            const issue = getCoreSummaryDetailIssue(updated, { sourceText });
+            const issue = getCoreSummaryDetailIssue(updated, { sourceText, summaryHeader: effectiveSummaryHeader });
             if (issue) throw contractRejectedError(`原付费摘要仍未通过当前检查：${issue}`);
             require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', summary, getPaperArxivId(paper));
             if (options.paidCoreReplay) Object.assign(options.paidCoreReplay, {
@@ -19883,9 +19924,12 @@ async function repairCoreSummarySection(
         if (lengthIssue) {
             const lengthAction = lengthIssue[1] === '过多'
                 ? '缩短冗余的任务介绍和方法说明，不再增加总长度'
-                : '补足任务难点和方法衔接的必要解释';
+                : (useExecutiveSummary
+                    ? '按 4 段认知结构补足问题症结、方法机制、主基准对比与工程代价及适用边界的实质说明'
+                    : '补足任务难点和方法衔接的必要解释');
             retryTargets.push(`当前摘要按公共校验统计为 ${lengthIssue[2]} 个汉字与中文标点，`
-                + `必须保持在 ${CORE_SUMMARY_MIN_CHINESE_CHARS}–${CORE_SUMMARY_MAX_CHINESE_CHARS} 个以内；`
+                + `必须保持在 ${minChineseChars}–${maxChineseChars} 个以内`
+                + (useExecutiveSummary ? '（起草目标 850–1150 个）' : '') + '；'
                 + `${lengthAction}。没有被指出问题的量化结果、边界和成本事实及条件仍完整保留；反馈明确要求逐字保留的句子仍原样保留，`
                 + '在其余允许修改的内容中调整长度');
         }
@@ -19899,6 +19943,9 @@ async function repairCoreSummarySection(
             retryTargets.push(`当前摘要为 ${currentCount} 句，须为 ${sentenceCountIssue[1]}–${sentenceCountIssue[2]} 句；`
                 + `${sentenceAction}。没有被指出问题的量化结果、边界和成本事实及条件仍完整保留；反馈明确要求逐字保留的句子仍原样保留，`
                 + '不得为调整句数删去事实或改变数字');
+        }
+        if (useExecutiveSummary && /(?:自然段|粗体引导词|Markdown 标题|独立编号标题行|水平分隔线|空行)/.test(feedback)) {
+            retryTargets.push('将核心摘要组织为 3–4 个以空行（\\n\\n）分隔的连贯自然段，每段直接顶格以 `**问题与瓶颈：**`、`**核心思路与方法架构：**`、`**关键实验与核心代价：**`、`**适用边界与深读导览：**` 等段首粗体引导词开头；段内不拆行或列点，严禁使用 `#` 标题、`1. **...**` 独立编号行或水平分隔线');
         }
         const requiresUnavailableResultStatement = feedback.includes(
             `原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`
@@ -19914,28 +19961,36 @@ async function repairCoreSummarySection(
                     .test(String(sourceText || '')));
             if (metricCandidates.length) {
                 retryTargets.push(`本篇原文报告的结果指标是 ${metricCandidates.slice(0, 5).join('、')}，`
-                    + '那句完整比较必须直接用其中之一，不能改写成本篇没出现过的指标名');
+                    + '完整比较必须直接用其中之一，不能改写成本篇没出现过的指标名');
             }
-            retryTargets.push('在同一句中说明比较对象、评测设置或数据集、指标、数值与方向。'
-                + '使用相同指标的原文数值明确比较，不跨指标比较。句首和要素顺序可以按内容安排，'
-                + '不必重复指标名；不能只写“最高”“最优”“最低”或“达到”而不说明比较对象与方向。'
-                + '直接写出一句形如「在〈数据集或评测条件〉上，本文方法的〈指标名〉为〈数值〉，'
-                + '〈高于/低于〉〈基线名或对照条件〉的〈数值〉」的完整比较句；'
-                + '指标名用原文自己的指标（例如 WER、ACC、MOS、F1、PESQ、胜率），不能用“性能”“效果”“分数”代替。'
-                + '训练/推理/部署成本、平均耗时、调用次数这类运行开销不能充当结果指标，'
-                + '必须改用原文报告的任务效果指标（准确率、胜率、主观评分、MOS 等）；'
-                + '原文只报告运行开销时，按“原文未提供可核对的关键定量结果”处理');
+            retryTargets.push(useExecutiveSummary
+                ? '在“关键实验与核心代价”自然段内（允许跨 1–3 句自然展开）完整写清比较对象（最强可比基线）、评测设置或数据集、原文指标名、双方具体数值与高低或变化方向。使用相同指标的原文数值明确对照，严格保持原文小数精度与百分号，绝不编造或四舍五入；不能用参数量、延迟或运行开销冒充主任务效果指标'
+                : '在同一句中说明比较对象、评测设置或数据集、指标、数值与方向。'
+                    + '使用相同指标的原文数值明确比较，不跨指标比较。句首和要素顺序可以按内容安排，'
+                    + '不必重复指标名；不能只写“最高”“最优”“最低”或“达到”而不说明比较对象与方向。'
+                    + '直接写出一句形如「在〈数据集或评测条件〉上，本文方法的〈指标名〉为〈数值〉，'
+                    + '〈高于/低于〉〈基线名或对照条件〉的〈数值〉」的完整比较句；'
+                    + '指标名用原文自己的指标（例如 WER、ACC、MOS、F1、PESQ、胜率），不能用“性能”“效果”“分数”代替。'
+                    + '训练/推理/部署成本、平均耗时、调用次数这类运行开销不能充当结果指标，'
+                    + '必须改用原文报告的任务效果指标（准确率、胜率、主观评分、MOS 等）；'
+                    + '原文只报告运行开销时，按“原文未提供可核对的关键定量结果”处理');
         }
-        if (/方法链/.test(feedback)) {
-            retryTargets.push('解释 2–4 个方法步骤的输入、职责和输出，以及前一步输出怎样进入后一步。'
-                + '按实际处理过程衔接，不只罗列模块名，也不要求统一的连接词');
+        if (/方法链|方法机制单句过长/.test(feedback)) {
+            retryTargets.push(useExecutiveSummary
+                ? '在“核心思路与方法架构”自然段先用一句话点破核心洞察，再顺着信号或表征流讲清关键模块分工、维度/码率/规模、训练与冻结边界及解决瓶颈的机制；方法机制单句不超过 520 字，跨句自然衔接'
+                : '解释 2–4 个方法步骤的输入、职责和输出，以及前一步输出怎样进入后一步。'
+                    + '按实际处理过程衔接，不只罗列模块名，也不要求统一的连接词');
         }
         if (/(?:结论适用边界|失败条件|未验证范围)/.test(feedback)) {
-            retryTargets.push('说明结论适用的具体条件、可能失败的条件或尚未验证的范围');
+            retryTargets.push(useExecutiveSummary
+                ? '在“适用边界与深读导览”自然段写明本文方法成立的具体条件、可能退化的场景或尚未覆盖的范围，并用一句话指引读者按需查阅下方长文对应章节（严禁直接复制长文 80 字以上段落）'
+                : '说明结论适用的具体条件、可能失败的条件或尚未验证的范围');
         }
-        if (/训练、推理或部署成本/.test(feedback)) {
-            retryTargets.push('原文已披露成本时，说明训练、推理或部署的实际开销与条件，'
-                + '例如计算量、硬件、延迟或吞吐。只有原文确实未披露时，才写“原文未披露训练、推理或部署成本”');
+        if (/训练、推理或部署成本|关键代价、资源开销或实际计算方式/.test(feedback)) {
+            retryTargets.push(useExecutiveSummary
+                ? '交代关键消融发现与本文方法付出的具体工程代价或资源开销（如延迟、实时率 RTF、显存、硬件或指标折损）；纯理论、诊断或免训练工作直接说明闭式求解或冻结推理方式即可，不必套用机械的未披露套话，但凡写出的真实数值须在原文有据可查'
+                : '原文已披露成本时，说明训练、推理或部署的实际开销与条件，'
+                    + '例如计算量、硬件、延迟或吞吐。只有原文确实未披露时，才写“原文未披露训练、推理或部署成本”');
         }
         const summaryIssue = attempt === 1
             ? `${feedback}${retryTargets.length ? `\n允许修复的内容：${retryTargets.join('\n')}` : ''}`
@@ -19946,38 +20001,49 @@ async function repairCoreSummarySection(
                + `${retryTargets.length ? retryTargets.join('\n') : '根据下方校验反馈逐项修正'}。\n`
                + `上次校验错误：${feedback}`;
         const candidateChineseChars = (candidateSummary.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
-        const remainingChineseChars = CORE_SUMMARY_MAX_CHINESE_CHARS - candidateChineseChars;
+        const remainingChineseChars = maxChineseChars - candidateChineseChars;
         const currentSentenceCount = (String(candidateSummary || '').match(/[。！？!?]/gu) || []).length;
-        const numberedSentences = currentSentenceCount > 9
+        const sentenceWarnThreshold = useExecutiveSummary ? 22 : 9;
+        const numberedSentences = currentSentenceCount > sentenceWarnThreshold
             ? String(candidateSummary || '').split(/(?<=[。！？!?])/u).map(part => part.trim()).filter(Boolean)
                 .map((part, index) => `${index + 1}. ${part}`).join('\n')
             : '';
-        const sentenceOverflow = currentSentenceCount > 12
-            ? `当前 ${currentSentenceCount} 句，已超出 12 句上限：必须删掉或合并其中 ${currentSentenceCount - 12} 句重复、并列或可合并的说明，`
+        const sentenceOverflow = currentSentenceCount > maxSentenceCount
+            ? `当前 ${currentSentenceCount} 句，已超出 ${maxSentenceCount} 句上限：必须删掉或合并其中 ${currentSentenceCount - maxSentenceCount} 句重复、并列或可合并的说明，`
                 + '不要靠压缩其他句子来腾出句数，也不要新增任何句子。当前句子逐条编号如下，请直接指定保留与合并方式后再输出：\n'
                 + numberedSentences
             : '';
         const lengthBudget = `当前摘要实际含 ${candidateChineseChars} 个汉字与中文标点，`
             + (remainingChineseChars >= 0
-                ? `距 600 个上限只剩 ${remainingChineseChars} 个。`
-                : `已超过 600 个上限 ${-remainingChineseChars} 个。`)
-            + '本次完整输出仍以 420–520 个为目标，须为 320–600 个、6–12 句。'
+                ? `距 ${maxChineseChars} 个上限只剩 ${remainingChineseChars} 个。`
+                : `已超过 ${maxChineseChars} 个上限 ${-remainingChineseChars} 个。`)
+            + (useExecutiveSummary
+                ? '本次完整输出以 850–1150 个为目标，须为 700–1400 个、10–26 句、3–4 个粗体引导词自然段。'
+                : '本次完整输出仍以 420–520 个为目标，须为 320–600 个、6–12 句。')
             + sentenceOverflow
             + '修正缺项应替换原有不完整或重复句，不在保留全部原句后另行追加说明。'
             + '压缩表达不删改正确事实、比较条件、数字、单位、方向、边界或成本；'
             + '反馈明确要求逐字保留的句子必须原样保留。';
+        const selfCheckChecklist = useExecutiveSummary
+            ? '\n\n【输出前自检，必须逐条满足】\n'
+                + '1. 只输出 `## 核心摘要` 一节，摘要内部严禁出现 `#`/`##`/`###` 等 Markdown 标题、独立编号标题行（如 `1. **...**`）或分隔线。\n'
+                + '2. 正文分成 3–4 个自然段（段间留一个空行，段内不拆行或列点），每段直接顶格以 `**问题与瓶颈：**`、`**核心思路与方法架构：**`、`**关键实验与核心代价：**`、`**适用边界与深读导览：**` 粗体引导词开头。\n'
+                + '3. 正文必须是 10–26 句，汉字与中文标点合计 700–1400 个（目标 850–1150 个）。\n'
+                + '4. 在实验段内（允许同段跨 1–3 句）完整写清评测设置或数据集、最强可比基线、原文指标名、双方具体数值与方向；所有摘要数值精度与百分号严格对齐原文，并如实交代工程代价或免训练计算方式。\n'
+                + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。'
+            : '\n\n【输出前自检，必须逐条满足】\n'
+                + '1. 只输出 `## 核心摘要` 一节，不放其他标题或说明。\n'
+                + '2. 正文必须是 6–12 句；句数以中文句号、问号、感叹号计。当前稿句数不对时，先删或合并重复说明句，再补缺项，绝不能靠追加句子解决。\n'
+                + '3. 正文汉字与中文标点合计 320–600 个。\n'
+                + '4. 必须有一句同时写清：评测设置或数据集、原文的指标名、两个数值、以及高低或变化方向；指标名不能用“性能”“效果”“分数”代替。\n'
+                + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。';
         const prompt = loadPrompt(currentTextStagePromptPath('coreSummaryRepair'), {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
             summaryIssue: `${summaryIssue}\n当前篇幅预算：${lengthBudget}`,
             existingSummary: candidateSummary,
             textForAnalysis: evidenceContext
-        }) + '\n\n【输出前自检，必须逐条满足】\n'
-            + '1. 只输出 `## 核心摘要` 一节，不放其他标题或说明。\n'
-            + '2. 正文必须是 6–12 句；句数以中文句号、问号、感叹号计。当前稿句数不对时，先删或合并重复说明句，再补缺项，绝不能靠追加句子解决。\n'
-            + '3. 正文汉字与中文标点合计 320–600 个。\n'
-            + '4. 必须有一句同时写清：评测设置或数据集、原文的指标名、两个数值、以及高低或变化方向；指标名不能用“性能”“效果”“分数”代替。\n'
-            + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。';
+        }) + selfCheckChecklist;
         const diagnosticApi = require('./lib/reader-request-diagnostics');
         const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
             identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,
@@ -20021,7 +20087,7 @@ async function repairCoreSummarySection(
                 outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex') });
             throw contractRejectedError('核心摘要局部修复改动了其他一级章节的内容。');
         }
-        issue = getCoreSummaryDetailIssue(updated, { sourceText });
+        issue = getCoreSummaryDetailIssue(updated, { sourceText, summaryHeader: effectiveSummaryHeader });
         try { require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', match[1], getPaperArxivId(paper)); }
         catch (error) { issue = error.message; }
         diagnosticApi.saveCoreSummaryDisposition(diagnostic, {

@@ -332,6 +332,59 @@ class ExecutiveAbstractV4Test(unittest.TestCase):
         tampered_index = index_md.replace('6.15%', '6.20%', 1)
         self.assertIsNotNone(publisher._api_reader_index_display_fields_issue(tampered_index, [paper]))
 
+    def test_latexml_grounding_and_window_boundary_cost_hardening(self):
+        new_header = csf.current_header()
+        tricky_source = (
+            'Training uses 1{,}850 ms chunks and 12,400 utterances. '
+            'Latency is \\SI12.5\\milli\\second with relative gain \\uparrow6.6% and variance \\pm0.3. '
+            'MOS reaches ±.04583.9061\\!\\pm\\!.0458 and 4.3099±.05284.3099\\!\\pm\\!.0528 on the test set with 84.5M parameters.'
+        )
+        self.assertIsNone(publisher._validate_core_summary_source_grounded_claims(
+            '基于Qwen2.5编码器与 84.5 M 可训练参数，在 1,850 ms 切片和 12,400 条样本上 MOS 达 3.9061（标准差 0.0458）与 4.3099（标准差 0.0528），相对增益 6.6%（波动 0.3），延迟 12.5 ms。',
+            tricky_source,
+        ))
+
+        citation_decimal_source = 'We apply 10% dropout during training [85]. Test accuracy is 0.85 versus 0.79.'
+        self.assertIn(
+            '添加了原文不存在的百分号',
+            publisher._validate_core_summary_source_grounded_claims('测试集准确率达到 85%。', citation_decimal_source),
+        )
+        percent_table_source = 'Table 1: WER (%) on test-clean: Baseline 9.84, Ours 6.15. Serving holds WER at 1.89 to 1.91%.'
+        self.assertIsNone(publisher._validate_core_summary_source_grounded_claims(
+            '词错率 WER 从 9.84% 降至 6.15%，服务区间保持在 1.89% 至 1.91%。', percent_table_source,
+        ))
+
+        paragraphs = FOUR_PARAGRAPH_EXECUTIVE_SUMMARY.split('\n\n')
+        borrowed_rtf_quant = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的流式评测设置下完成了系统测试，转写词错率 WER 显著降低至 6.15%。单张 GPU 上的流式推理实时率 RTF 为 0.14，前瞻窗口延迟为 28.5 ms。整体系统在低带宽语音通信场景下展现出良好的工程实用性。',
+            paragraphs[3],
+        ])
+        self.assertIn('缺少完整关键定量结果', publisher._detailed_core_summary_semantic_issue(
+            borrowed_rtf_quant, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+
+        fake_boundary = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1].replace('在不额外消耗帧级码率', '明确划分训练与冻结边界并在不额外消耗帧级码率'),
+            paragraphs[2],
+            '**适用边界与深读导览：**读者若希望深入核查正交信息瓶颈的变分互信息上界推导、25 Hz 因果卷积块掩码细节或不同码率档位下的逐层消融曲线，可针对性阅读下方长文的方法推导与实验消融章节。本文全部模块设计与实验流程均已在长文中给出逐节说明。',
+        ])
+        self.assertIn('缺少结论适用边界', publisher._detailed_core_summary_semantic_issue(
+            fake_boundary, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+
+        fake_cost = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。这种双流设计体现了编码码率与表征维度之间的良好权衡。',
+            paragraphs[3],
+        ])
+        self.assertIn('缺少关键代价、资源开销或实际计算方式说明', publisher._detailed_core_summary_semantic_issue(
+            fake_cost, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+
 
 if __name__ == '__main__':
     unittest.main()

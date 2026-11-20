@@ -5803,14 +5803,45 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
     src_raw = str(source_text or '').strip()
     if not src_raw:
         return None
-    normalized_src = re.sub(r',(?=\d{3}(?![0-9]))', '', src_raw)
-    deduped_src = re.sub(r'(?<![0-9])(?<!\d\.)(\d+\.\d+|\.\d+|\d+)\1(?![0-9]|\.\d)', r'\1', normalized_src)
+
+    def _normalize_thousands(text):
+        current = str(text or '')
+        prev = None
+        while current != prev:
+            prev = current
+            current = re.sub(r'(?<=\d)\{,\}(?=\d{3}(?![0-9]))', '', current)
+            current = re.sub(r'(?<=\d),(?=\d{3}(?![0-9]))', '', current)
+        return current
+
+    def _build_surfaces(base_text):
+        normalized = _normalize_thousands(base_text)
+        tex_merged = re.sub(r'\\!', '', normalized)
+        tex_merged = re.sub(r'\\pm\s*', '±', tex_merged)
+        tex_merged = re.sub(r'\\times\s*', '×', tex_merged)
+        deduped = re.sub(
+            r'(?<![0-9])(?<!\d\.)((?:\d+\.\d+|\.\d+|\d+)(?:[±×/+-](?:\d+\.\d+|\.\d+|\d+))*)\1(?![0-9]|\.\d)',
+            r'\1', tex_merged,
+        )
+        sandwich_split = re.sub(
+            r'([±+-]?)(\.\d+|\d+\.\d+|\d+)(\d+\.\d+|\.\d+|\d+)(?:\\!|\s)*(?:\\pm|±)(?:\\!|\s)*\2(?![0-9]|\.\d)',
+            r'\1\2 \3 ± \2', normalized,
+        )
+        tex_spaced = re.sub(r'\\[,;!:]', ' ', normalized)
+        tex_spaced = re.sub(r'\\[A-Za-z]+', ' ', tex_spaced)
+        tex_spaced = re.sub(r'[{}]', ' ', tex_spaced)
+        return (normalized, deduped, sandwich_split, tex_spaced)
+
     exact_tokens = set()
     percent_tokens = set()
     non_percent_tokens = set()
-    source_has_percent_context = bool(re.search(r'%|percent|percentage', normalized_src, re.IGNORECASE))
-    for surface in (normalized_src, deduped_src):
-        for match in re.finditer(r'(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))(\s*(?:%|\\%))?(?![0-9]|\.\d)', surface):
+    non_citation_tokens = set()
+    token_re = re.compile(r'(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))(\s*(?:%|\\%))?(?![0-9]|\.\d)')
+    pct_range_re = re.compile(
+        r'(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))\s*(?:to|and|or|[–—-])\s*[+-]?(?:\d+\.\d+|\.\d+|\d+)\s*\\?%(?![0-9]|\.\d)',
+        re.IGNORECASE,
+    )
+    for surface in _build_surfaces(src_raw):
+        for match in token_re.finditer(surface):
             unsigned = re.sub(r'^[+-]', '', match.group(1))
             norm = f'0{unsigned}' if unsigned.startswith('.') else unsigned
             exact_tokens.add(norm)
@@ -5819,28 +5850,49 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
                 percent_tokens.add(norm)
             else:
                 non_percent_tokens.add(norm)
-    cleaned = re.sub(r'https?://\S+', ' ', str(summary or ''))
+        for match in pct_range_re.finditer(surface):
+            unsigned = re.sub(r'^[+-]', '', match.group(1))
+            percent_tokens.add(f'0{unsigned}' if unsigned.startswith('.') else unsigned)
+    citation_stripped = re.sub(r'\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]', ' ', src_raw)
+    for surface in _build_surfaces(citation_stripped):
+        for match in token_re.finditer(surface):
+            unsigned = re.sub(r'^[+-]', '', match.group(1))
+            norm = f'0{unsigned}' if unsigned.startswith('.') else unsigned
+            non_citation_tokens.add(norm)
+            non_citation_tokens.add(unsigned)
+    normalized_src = _normalize_thousands(src_raw)
+    source_has_percent_table_context = bool(re.search(
+        r'(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|/\s*\\?%(?![0-9A-Za-z])|'
+        r'(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|'
+        r'(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|'
+        r'(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))',
+        normalized_src, re.IGNORECASE,
+    ))
+    cleaned = _normalize_thousands(str(summary or ''))
+    cleaned = re.sub(r'https?://\S+', ' ', cleaned)
     cleaned = re.sub(
-        r'\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX|Python|PyTorch|CUDA|IEEE|P|v|ver|version)\s*[-_.]?\d+(?:\.\d+)*',
+        r'(?<![A-Za-z0-9_])(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX|Python|PyTorch|CUDA|IEEE|P|v|ver|version)\s*[-_.]?\d+(?:\.\d+)*(?:\s*[-_.]?\d+(?:\.\d+)*\s*[BbMmKk](?![A-Za-z0-9_]))?',
         ' ', cleaned, flags=re.IGNORECASE,
     )
     cleaned = re.sub(r'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*[-_.]\d+(?:\.\d+)*[A-Za-z0-9_.-]*', ' ', cleaned)
     cleaned = re.sub(r'(?:§|第|图|表|式|公式|章节|附录)\s*\d+(?:\.\d+)*', ' ', cleaned)
     for match in re.finditer(
-        r'(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|倍|点|分)?(?![A-Za-z0-9]|\.\d))',
+        r'(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB|B|M|K|G|倍|点|分)?(?![A-Za-z0-9]|\.\d))',
         cleaned,
     ):
         full = match.group(0).strip()
         num = re.sub(r'^[+-]', '', match.group(1))
         has_pct = bool(match.group(2))
-        has_unit_after = bool(re.match(r'^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB)(?![A-Za-z])', cleaned[match.end():], re.IGNORECASE))
+        has_unit_after = bool(re.match(r'^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB)(?![A-Za-z])', cleaned[match.end():], re.IGNORECASE))
         is_decimal = '.' in num
         if not is_decimal and not has_pct and not has_unit_after:
             continue
         if num not in exact_tokens:
             return f'核心摘要数值“{full}”未在原文中以相同精度出现（禁止编造、四舍五入或转换小数与百分数）'
-        if has_pct and num not in percent_tokens and not source_has_percent_context:
-            return f'核心摘要数值“{full}”添加了原文不存在的百分号'
+        if has_pct and num not in percent_tokens:
+            scaled_from_unit_decimal = bool(re.fullmatch(r'\d{1,2}', num)) and f'0.{num.zfill(2)}' in non_percent_tokens
+            if not source_has_percent_table_context or num not in non_citation_tokens or scaled_from_unit_decimal:
+                return f'核心摘要数值“{full}”添加了原文不存在的百分号'
         if not has_pct and is_decimal and num in percent_tokens and num not in non_percent_tokens:
             return f'核心摘要数值“{full}”遗漏了原文的百分号'
     return None
@@ -6002,10 +6054,23 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         return bool(metric.search(without_generic) or conference_metric.search(without_generic))
 
     has_complete_result = any(_candidate_complete(sentence) for sentence in re.split(r'[。！？!?\n]', content_body))
-    if use_executive and any(_has_cross_metric_directional_comparison(s) for s in re.split(r'[。！？!?\n]', content_body) if s.strip()):
-        has_complete_result = False
-    elif use_executive and not has_complete_result:
+    if use_executive and not has_complete_result:
         denied_window_re = re.compile(r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|并未|不是|未测|未报告|未进行)')
+        operational_clause_re = re.compile(
+            r'(?:\d+(?:\.\d+)?\s*(?:kbps|bps|kHz|MHz|Hz)(?![A-Za-z0-9_])|'
+            r'(?:训练|推理|部署|单卡|单核|多卡|冷启动|前瞻(?:窗口)?|首次编译|图编译|编译|显存|内存|硬件|参数(?:量|规模|开销)?|'
+            r'实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|延迟|(?<![A-Za-z0-9_])latency(?![A-Za-z0-9_])|'
+            r'吞吐|(?<![A-Za-z0-9_])throughput(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FLOPs?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])MACs?(?![A-Za-z0-9_]))'
+            r'[^，,；;。！？!?\n]{0,36})',
+            re.IGNORECASE,
+        )
+        explicit_counterpart_re = re.compile(
+            r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|'
+            r'(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|'
+            r'(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|'
+            r'与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较))',
+            re.IGNORECASE,
+        )
         for paragraph in re.split(r'\n\s*\n', content_body):
             p_sentences = [s.strip() for s in re.split(r'[。！？!?\n]', paragraph) if s.strip()]
             for win_size in (2, 3):
@@ -6019,7 +6084,16 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                         for part in win
                     ):
                         continue
-                    if _candidate_complete('，'.join(win)):
+                    combined = '，'.join(win)
+                    if not explicit_counterpart_re.search(combined):
+                        continue
+                    non_op_win = _strip_core_summary_non_result_numerals(combined)
+                    non_op_win = operational_clause_re.sub(' ', non_op_win)
+                    non_op_win = operational_re.sub(' ', non_op_win)
+                    non_op_win = metric.sub(lambda m: re.sub(r'\d+(?:\.\d+)?', '', m.group(0)), non_op_win)
+                    if len(number.findall(non_op_win)) < 2:
+                        continue
+                    if _candidate_complete(combined):
                         has_complete_result = True
                         break
                 if has_complete_result:
@@ -6035,50 +6109,68 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         grounded_issue = _validate_core_summary_source_grounded_claims(raw_summary, source_text)
         if grounded_issue:
             issues.append(grounded_issue)
+    prior_method_sentence_re = re.compile(
+        r'(?:现有|已有|传统|以往|先前|主流)(?:主流)?[^。！？!?\n]{0,28}(?:方法|方案|路线|模型|系统|编解码器|指标|代理|工作|研究)'
+    )
+    technical_boundary_compound_re = re.compile(
+        r'(?:训练与冻结|冻结与更新|冻结与微调|训练|冻结|音素|音节|词|字|帧|分块|切分|窗口|时序|频带|声学|决策|分类|判别|模块|层间|梯度|相位|周期|起止|静音|语音活动)边界'
+    )
+    if use_executive:
+        stripped_boundary = technical_boundary_compound_re.sub(' ', content_body)
+        boundary_body = '。'.join(
+            s for s in re.split(r'[。！？!?\n]', stripped_boundary)
+            if s.strip() and not prior_method_sentence_re.search(s)
+        )
+    else:
+        boundary_body = content_body
     explicit_boundary = (
-        re.search(r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)', content_body)
-        and not (use_executive and re.search(r'(?:任何场景都适用|所有条件下均成立|不会失效)', content_body))
+        re.search(r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)', boundary_body)
+        and not (use_executive and re.search(r'(?:任何场景都适用|所有条件下均成立|不会失效|不存在局限|无适用限制)', content_body))
     )
     separated_unverified_boundary = re.search(
         r'(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)',
-        content_body,
+        boundary_body,
     )
     conditional_failure = re.search(
         r'(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}'
         r'(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?'
         r'(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)',
-        content_body,
+        boundary_body,
     )
     scoped_conclusion_boundary = re.search(
         r'(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于'
         r'[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)',
-        content_body,
+        boundary_body,
     )
     attention_scope_boundary = any(
         not re.search(r'(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变', sentence)
         and re.search(r'(?:结论|研究结果|研究发现)(?<!不)(?<!非)限于(?:视频|音频|图像)(?:自|交叉|跨模态)注意力(?:的)?(?:稀疏化|计算|处理)', sentence)
         and re.search(r'(?:音频|视频|图像)(?:自|交叉|跨模态)注意力[^。！？!?\n]{0,30}保持不变', sentence)
-        for sentence in re.split(r'[。！？!?\n]', content_body)
+        for sentence in re.split(r'[。！？!?\n]', boundary_body)
     )
     observational_causal_boundary = re.search(
         r'(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}'
         r'(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果',
-        content_body,
+        boundary_body,
     )
     uncovered_scope_boundary = any(
         re.search(r'未涵盖[^。！？!?\n]{1,60}(?:语音|语料|数据|场景|条件|设置|样本|任务|攻击|环境|设备|人群|语种|语言|录音)', sentence)
         and not re.search(r'(?:并非|不是|不存在|没有|并不|不能说|不能认为|无法断言)[^，,；;。！？!?\n]{0,20}未涵盖', sentence)
         and not re.search(r'未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)', sentence)
         and not re.search(r'未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)', sentence)
-        for sentence in re.split(r'[。！？!?\n]', content_body)
+        for sentence in re.split(r'[。！？!?\n]', boundary_body)
     )
-    failure_condition_boundary = re.search(r'(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)', content_body)
-    unverified_scope_boundary = re.search(r'(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围', content_body)
+    failure_condition_boundary = re.search(r'(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)', boundary_body)
+    unverified_scope_boundary = re.search(r'(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围', boundary_body)
     if not any((explicit_boundary, separated_unverified_boundary, conditional_failure,
                 scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary,
                 uncovered_scope_boundary, failure_condition_boundary, unverified_scope_boundary,
-                _has_natural_scoped_boundary(content_body))):
+                _has_natural_scoped_boundary(boundary_body))):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
+    cost_body = (
+        '。'.join(s for s in re.split(r'[。！？!?\n]', content_body) if s.strip() and not prior_method_sentence_re.search(s))
+        if use_executive else content_body
+    )
     scoped_resource_disclosure = any(
         re.search(r'(?:训练|推理|部署)', sentence)
         and re.search(r'\d', sentence)
@@ -6089,16 +6181,26 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
             sentence,
             re.IGNORECASE,
         )
-        for sentence in re.split(r'[。！？!?\n]', content_body)
+        for sentence in re.split(r'[。！？!?\n]', cost_body)
     )
-    executive_computation_or_tradeoff = use_executive and bool(re.search(
-        r'(?:取舍|权衡|参数开销|参数量|可训练参数|实时率|RTF|回升|退化|下降|折损|免训练|无需训练|零样本推理|闭式解|解析解|数值求解|统计检验|诊断评测|离线评测|前向计算|未披露[^。！？!?\n]{0,24}(?:成本|开销|延迟|耗时|算力|显存)|未报告[^。！？!?\n]{0,24}(?:成本|开销|延迟|耗时|算力|显存))',
-        content_body, re.IGNORECASE,
-    ))
-    cost = _has_concrete_runtime_disclosure(content_body) \
-        or '原文未披露训练、推理或部署成本' in content_body \
-        or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)', content_body) \
-        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', content_body) \
+    executive_computation_or_tradeoff = use_executive and any(
+        re.search(
+            r'(?:(?:额外|新增|引入|付出)[^。！？!?\n]{0,24}(?:参数开销|计算开销|内存开销|通信开销|编译开销|延迟|耗时|代价)|'
+            r'代价是|作为代价|以[^。！？!?\n]{1,24}为代价|指标折损|'
+            r'(?:移除|去掉|消融)[^。！？!?\n]{1,36}(?:回升|恶化|回落|折损)|'
+            r'免训练|无需(?:任何)?(?:神经网络)?训练|零样本(?:直接)?推理|'
+            r'闭式(?:解|求解|奇异值分解|计算|诊断)|解析解|'
+            r'冻结(?:权重|编码器|骨干|主干)?[^。！？!?\n]{0,20}(?:直接推理|前向计算|特征提取)|'
+            r'离线统计检验|'
+            r'(?:未披露|未报告)[^。！？!?\n]{0,24}(?:训练|推理|部署)?(?:成本|开销|延迟|耗时|算力|显存))',
+            sentence, re.IGNORECASE,
+        )
+        for sentence in re.split(r'[。！？!?\n]', cost_body)
+    )
+    cost = _has_concrete_runtime_disclosure(cost_body) \
+        or '原文未披露训练、推理或部署成本' in cost_body \
+        or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|能耗)', cost_body, re.IGNORECASE) \
+        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', cost_body) \
         or scoped_resource_disclosure \
         or executive_computation_or_tradeoff
     if not cost:

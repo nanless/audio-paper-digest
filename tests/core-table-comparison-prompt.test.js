@@ -31,20 +31,7 @@ test('核心摘要提示词只按登记的两处差异修改：表格比较取�
     const oldParagraph = before.split('\n\n').find(p => p.startsWith('两个数值及各自单位'));
     const newParagraph = after.split('\n\n').find(p => p.startsWith('两个数值及各自单位'));
     assert.ok(oldParagraph && newParagraph);
-    // 2026-11-09：方法链要求写成可执行顺序词与产物交接（2611.06345 真实失败）。
-    const oldMethodChain = '方法说明包含 2–4 个步骤，写清各步的职责，以及前一步的输出怎样进入下一步。';
-    const newMethodChain = '方法说明包含 2–4 个步骤，用“先”“再”“最后”这类顺序词把步骤串起来，'
-        + '写清各步的职责，以及前一步的输出怎样进入下一步：用“提取”“输出”“送入”这类词写出产物的具体名称，'
-        + '并说明它被哪一步接收、用来做什么。';
-    assert.ok(before.includes(oldMethodChain));
-    assert.ok(after.includes(newMethodChain));
-    // 2026-11-14：句数上限 6–9 → 6–12（用户要求调整判定口径），作为第三处登记差异。
-    const oldSentenceCap = '摘要正文写 6–9 句';
-    const newSentenceCap = '摘要正文写 6–12 句';
-    assert.ok(before.includes(oldSentenceCap));
-    assert.ok(after.includes(newSentenceCap));
-    assert.equal(before.replace(oldParagraph, newParagraph).replace(oldMethodChain, newMethodChain)
-        .replace(oldSentenceCap, newSentenceCap), after);
+    // 2026-11-20：升级为全景导读摘要 executive-abstract-v4（700–1400 字、10–26 句、3–4 段粗体引导词），保留同表跨方法行取证要求。
     assert.match(newParagraph, /同一原表中明确可比的记录/);
     assert.match(newParagraph, /不同方法行/);
     assert.match(newParagraph, /除被比较因素外其余评测条件一致/);
@@ -52,7 +39,8 @@ test('核心摘要提示词只按登记的两处差异修改：表格比较取�
     assert.match(newParagraph, /真实行列角色/);
     assert.match(newParagraph, /禁止把不同数据集、评测协议、指标或不连续证据片段拼成同条件比较/);
     assert.match(newParagraph, /无法唯一对应.*不猜测单元格归属/);
-    assert.match(after, /320–600/); assert.match(after, /6–12/);
+    assert.match(after, /700–1400/); assert.match(after, /10–26/);
+    assert.match(after, /\*\*问题与瓶颈：\*\*/);
     assert.match(after, /不要修改评分、标签、作者、方法、实验等其他章节/);
     assert.match(after, /不要增删末尾的零、舍入/);
     assert.throws(() => registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v99'), /没有登记/);

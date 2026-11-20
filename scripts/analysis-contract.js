@@ -4456,6 +4456,7 @@ function hasSourceBoundSymbolAndTrajectoryHandoff(summary, sourceText = '', maxS
 }
 
 function hasExplicitNaturalProductChain(summary, sourceText = '', maxSentenceChars = 320) {
+    maxSentenceChars = typeof maxSentenceChars === 'number' && Number.isFinite(maxSentenceChars) ? maxSentenceChars : 320;
     if (hasSourceBoundSymbolAndTrajectoryHandoff(summary, sourceText, Math.max(350, maxSentenceChars))) return true;
     if (hasTypedProcessingProductChain(summary, sourceText, maxSentenceChars)) return true;
     if (hasCachedCausalStateHandoff(summary, maxSentenceChars)) return true;
@@ -4772,16 +4773,11 @@ function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText) {
 
 function executiveSummaryQuantitativeResultState(contentBody, sourceText = null) {
     const direct = coreSummaryQuantitativeResultState(contentBody, sourceText);
-    const allSentences = String(contentBody || '').split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
-    if (allSentences.some(sentence => hasCrossMetricDirectionalComparison(sentence))) {
-        return {
-            complete: false,
-            candidateIssues: direct.candidateIssues || [],
-            missing: ['指标口径一致（方向连接词两侧不能是不同指标）']
-        };
-    }
     if (direct.complete) return direct;
+    const allSentences = String(contentBody || '').split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
     const deniedWindowSentence = /(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|并未|不是|未测|未报告|未进行)/u;
+    const operationalClausePattern = /(?:\d+(?:\.\d+)?\s*(?:kbps|bps|kHz|MHz|Hz)\b|(?:训练|推理|部署|单卡|单核|多卡|冷启动|前瞻(?:窗口)?|首次编译|图编译|编译|显存|内存|硬件|参数(?:量|规模|开销)?|实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|延迟|(?<![A-Za-z0-9_])latency(?![A-Za-z0-9_])|吞吐|(?<![A-Za-z0-9_])throughput(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FLOPs?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])MACs?(?![A-Za-z0-9_]))[^，,；;。！？!?\n]{0,36})/giu;
+    const explicitCounterpartPattern = /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较))/iu;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
         for (const windowSize of [2, 3]) {
@@ -4791,10 +4787,24 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
                 if (!windowParts.some(part => sentenceHasExecutiveMetricAndResultNumber(part, sourceText)
                     && CORE_SUMMARY_COMPARISON_PATTERN.test(part))) continue;
                 const combined = windowParts.join('，');
+                if (!explicitCounterpartPattern.test(combined)) continue;
+                const nonOpWindow = stripCoreSummaryNonResultNumerals(combined)
+                    .replace(operationalClausePattern, ' ')
+                    .replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ')
+                    .replace(new RegExp(CORE_SUMMARY_METRIC_PATTERN.source, 'gi'), match => match.replace(/\d+(?:\.\d+)?/g, ''));
+                const nonOpResultNumbers = nonOpWindow.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+                if (nonOpResultNumbers.length < 2) continue;
                 const windowState = coreSummaryQuantitativeResultState(combined, sourceText);
                 if (windowState.complete) return { complete: true, missing: [], candidateIssues: [] };
             }
         }
+    }
+    if (allSentences.some(sentence => hasCrossMetricDirectionalComparison(sentence))) {
+        return {
+            complete: false,
+            candidateIssues: direct.candidateIssues || [],
+            missing: ['指标口径一致（方向连接词两侧不能是不同指标）']
+        };
     }
     return direct;
 }
@@ -4802,14 +4812,45 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
 function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
     const srcRaw = String(sourceText || '').trim();
     if (!srcRaw) return null;
-    const normalizedSrc = srcRaw.replace(/,(?=\d{3}(?![0-9]))/gu, '');
-    const dedupedSrc = normalizedSrc.replace(/(?<![0-9])(?<!\d\.)(\d+\.\d+|\.\d+|\d+)\1(?![0-9]|\.\d)/gu, '$1');
+    const normalizeThousands = text => {
+        let current = String(text || '');
+        let prev = '';
+        while (current !== prev) {
+            prev = current;
+            current = current
+                .replace(/(?<=\d)\{,\}(?=\d{3}(?![0-9]))/gu, '')
+                .replace(/(?<=\d),(?=\d{3}(?![0-9]))/gu, '');
+        }
+        return current;
+    };
+    const buildSurfaces = baseText => {
+        const normalized = normalizeThousands(baseText);
+        const texMerged = normalized
+            .replace(/\\!/gu, '')
+            .replace(/\\pm\s*/gu, '±')
+            .replace(/\\times\s*/gu, '×');
+        const deduped = texMerged.replace(
+            /(?<![0-9])(?<!\d\.)((?:\d+\.\d+|\.\d+|\d+)(?:[±×/+-](?:\d+\.\d+|\.\d+|\d+))*)\1(?![0-9]|\.\d)/gu,
+            '$1'
+        );
+        const sandwichSplit = normalized.replace(
+            /([±+-]?)(\.\d+|\d+\.\d+|\d+)(\d+\.\d+|\.\d+|\d+)(?:\\!|\s)*(?:\\pm|±)(?:\\!|\s)*\2(?![0-9]|\.\d)/gu,
+            '$1$2 $3 ± $2'
+        );
+        const texSpaced = normalized
+            .replace(/\\[,;!:]/gu, ' ')
+            .replace(/\\[A-Za-z]+/gu, ' ')
+            .replace(/[{}]/gu, ' ');
+        return [normalized, deduped, sandwichSplit, texSpaced];
+    };
     const exactTokens = new Set();
     const percentTokens = new Set();
     const nonPercentTokens = new Set();
-    const sourceHasPercentContext = /%|percent|percentage/iu.test(normalizedSrc);
-    for (const surface of [normalizedSrc, dedupedSrc]) {
-        for (const match of surface.matchAll(/(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))(\s*\\?%)?(?![0-9]|\.\d)/gu)) {
+    const nonCitationTokens = new Set();
+    const tokenRegex = /(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))(\s*\\?%)?(?![0-9]|\.\d)/gu;
+    const percentRangeRegex = /(?<![A-Za-z0-9])(?<![A-Za-z0-9]\.)([+-]?(?:\d+\.\d+|\.\d+|\d+))\s*(?:to|and|or|[–—-])\s*[+-]?(?:\d+\.\d+|\.\d+|\d+)\s*\\?%(?![0-9]|\.\d)/giu;
+    for (const surface of buildSurfaces(srcRaw)) {
+        for (const match of surface.matchAll(tokenRegex)) {
             const unsigned = match[1].replace(/^[+-]/u, '');
             const normalized = unsigned.startsWith('.') ? `0${unsigned}` : unsigned;
             exactTokens.add(normalized);
@@ -4817,24 +4858,42 @@ function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
             if (match[2]) percentTokens.add(normalized);
             else nonPercentTokens.add(normalized);
         }
+        for (const match of surface.matchAll(percentRangeRegex)) {
+            const unsigned = match[1].replace(/^[+-]/u, '');
+            percentTokens.add(unsigned.startsWith('.') ? `0${unsigned}` : unsigned);
+        }
     }
-    const cleaned = String(summary || '')
+    const citationStrippedSrc = srcRaw.replace(/\[\s*\d+(?:\s*[,;–—-]\s*\d+)*\s*\]/gu, ' ');
+    for (const surface of buildSurfaces(citationStrippedSrc)) {
+        for (const match of surface.matchAll(tokenRegex)) {
+            const unsigned = match[1].replace(/^[+-]/u, '');
+            const normalized = unsigned.startsWith('.') ? `0${unsigned}` : unsigned;
+            nonCitationTokens.add(normalized);
+            nonCitationTokens.add(unsigned);
+        }
+    }
+    const normalizedSrc = normalizeThousands(srcRaw);
+    const sourceHasPercentTableContext = /(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|\/\s*\\?%(?![0-9A-Za-z])|(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))/iu.test(normalizedSrc);
+    const cleaned = normalizeThousands(String(summary || ''))
         .replace(/https?:\/\/\S+/gu, ' ')
-        .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX|Python|PyTorch|CUDA|IEEE|P|v|ver|version)\s*[-_.]?\d+(?:\.\d+)*/giu, ' ')
-        .replace(/\b[A-Za-z][A-Za-z0-9_-]*[-_.]\d+(?:\.\d+)*[A-Za-z0-9_.-]*/gu, ' ')
+        .replace(/(?<![A-Za-z0-9_])(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX|Python|PyTorch|CUDA|IEEE|P|v|ver|version)\s*[-_.]?\d+(?:\.\d+)*(?:\s*[-_.]?\d+(?:\.\d+)*\s*[BbMmKk](?![A-Za-z0-9_]))?/giu, ' ')
+        .replace(/(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*[-_.]\d+(?:\.\d+)*[A-Za-z0-9_.-]*/gu, ' ')
         .replace(/(?:§|第|图|表|式|公式|章节|附录)\s*\d+(?:\.\d+)*/gu, ' ');
-    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|倍|点|分)?(?![A-Za-z0-9]|\.\d))/gu)) {
+    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB|B|M|K|G|倍|点|分)?(?![A-Za-z0-9]|\.\d))/gu)) {
         const full = match[0].trim();
         const num = match[1].replace(/^[+-]/u, '');
         const hasPercent = Boolean(match[2]);
-        const hasUnitAfter = /^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB)\b/iu.test(cleaned.slice(match.index + match[0].length));
+        const hasUnitAfter = /^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB)(?![A-Za-z])/iu.test(cleaned.slice(match.index + match[0].length));
         const isDecimal = num.includes('.');
         if (!isDecimal && !hasPercent && !hasUnitAfter) continue;
         if (!exactTokens.has(num)) {
             return `核心摘要数值“${full}”未在原文中以相同精度出现（禁止编造、四舍五入或转换小数与百分数）`;
         }
-        if (hasPercent && !percentTokens.has(num) && !sourceHasPercentContext) {
-            return `核心摘要数值“${full}”添加了原文不存在的百分号`;
+        if (hasPercent && !percentTokens.has(num)) {
+            const scaledFromUnitDecimal = /^\d{1,2}$/u.test(num) && nonPercentTokens.has(`0.${num.padStart(2, '0')}`);
+            if (!sourceHasPercentTableContext || !nonCitationTokens.has(num) || scaledFromUnitDecimal) {
+                return `核心摘要数值“${full}”添加了原文不存在的百分号`;
+            }
         }
         if (!hasPercent && isDecimal && percentTokens.has(num) && !nonPercentTokens.has(num)) {
             return `核心摘要数值“${full}”遗漏了原文的百分号`;
@@ -4845,10 +4904,8 @@ function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
 
 function validateCoreSummarySemanticContract(analysis, options = {}) {
     const sourceText = typeof options === 'string' ? options : String(options?.sourceText || '');
-    const hasExplicitHeader = Boolean(options && typeof options === 'object' && Object.hasOwn(options, 'summaryHeader'));
-    const useExecutiveAbstract = hasExplicitHeader
-        ? coreSummaryFormat.isExecutiveAbstractHeader(options.summaryHeader)
-        : true;
+    const summaryHeader = options && typeof options === 'object' ? options.summaryHeader : null;
+    const useExecutiveAbstract = coreSummaryFormat.isExecutiveAbstractHeader(summaryHeader);
     const rawExtractedSummary = extractSection(String(analysis || ''), '核心摘要');
     const summary = coreSummarySentenceView(rawExtractedSummary, sourceText);
     const contentBody = useExecutiveAbstract
@@ -4960,7 +5017,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
             issues.push('已有软件功能验证证据，但摘要没有按同一来源完整匹配运行环境、全新进程、计划与输出哈希、参数与信号组合、负向用例及包测试的关键定量结果');
         } else {
             issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向'
-            + `（最接近的量化候选缺少：${quantitativeResultState.missing.join('、')}）`
+            + `（最接近的${useExecutiveAbstract ? '' : '同句'}量化候选缺少：${quantitativeResultState.missing.join('、')}）`
             + (!useExecutiveAbstract && quantitativeResultState.candidateIssues.length
                 ? `；含数值的句子还须逐句核对：${quantitativeResultState.candidateIssues.map(candidate =>
                     `第${candidate.sentenceNumber}句缺少${candidate.missing.join('、')}`).join('；')}。这些句子不一定都是结果，不得为运行参数编造指标或结论`
@@ -4977,24 +5034,33 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         const groundedIssue = validateCoreSummarySourceGroundedClaims(rawExtractedSummary, sourceText);
         if (groundedIssue) issues.push(groundedIssue);
     }
-    const explicitBoundary = /(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(contentBody)
-        && !(useExecutiveAbstract && /(?:任何场景都适用|所有条件下均成立|不会失效)/u.test(contentBody));
-    const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(contentBody);
-    const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(contentBody);
-    const conditionalMetricFailure = contentBody.split(/[，,；;。！？!?\n]/u).some(clause =>
+    const priorMethodSentencePattern = /(?:现有|已有|传统|以往|先前|主流)(?:主流)?[^。！？!?\n]{0,28}(?:方法|方案|路线|模型|系统|编解码器|指标|代理|工作|研究)/u;
+    const technicalBoundaryCompoundPattern = /(?:训练与冻结|冻结与更新|冻结与微调|训练|冻结|音素|音节|词|字|帧|分块|切分|窗口|时序|频带|声学|决策|分类|判别|模块|层间|梯度|相位|周期|起止|静音|语音活动)边界/gu;
+    const boundaryBody = useExecutiveAbstract
+        ? contentBody
+            .replace(technicalBoundaryCompoundPattern, ' ')
+            .split(/(?<=[。！？!?\n])/u)
+            .filter(sentence => !priorMethodSentencePattern.test(sentence))
+            .join('')
+        : contentBody;
+    const explicitBoundary = /(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(boundaryBody)
+        && !(useExecutiveAbstract && /(?:任何场景都适用|所有条件下均成立|不会失效|不存在局限|无适用限制)/u.test(contentBody));
+    const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(boundaryBody);
+    const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(boundaryBody);
+    const conditionalMetricFailure = boundaryBody.split(/[，,；;。！？!?\n]/u).some(clause =>
         /^(?:若|如果|当)[^。！？!?\n]{1,100}(?:一致性|准确率|召回率|识别率|辨识率|性能|结果)[^。！？!?\n]{0,30}(?:回落|下降|退化|恶化|失效|受损)/u.test(clause.trim())
         && !/(?:不会|不再|不能|不曾|没有|不意味着|并非|不是|无法|不|未|无须)[^。！？!?\n]{0,20}(?:回落|下降|退化|恶化|失效|受损)/u.test(clause));
-    const singleReferenceBoundary = contentBody.split(/[。！？!?\n]/u).some(sentence =>
+    const singleReferenceBoundary = boundaryBody.split(/[。！？!?\n]/u).some(sentence =>
         !/(?:假设|如果|预计|可能|并非|不是|否认|引用|第三方|他人)/u.test(sentence)
         && /(?:结论|研究结果|研究发现)只在以单一(?:专业)?混音为目标的重建误差下成立/u.test(sentence)
         && hasOwnSourceStatement(sourceText, /reconstruction error against one professional mix does not fully capture mixing quality/iu));
-    const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(contentBody);
-    const attentionScopeBoundary = contentBody.split(/[。！？!?\n]/u).some(sentence =>
+    const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(boundaryBody);
+    const attentionScopeBoundary = boundaryBody.split(/[。！？!?\n]/u).some(sentence =>
         !/(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变/u.test(sentence)
         && /(?:结论|研究结果|研究发现)(?<!不)(?<!非)限于(?:视频|音频|图像)(?:自|交叉|跨模态)注意力(?:的)?(?:稀疏化|计算|处理)/u.test(sentence)
         && /(?:音频|视频|图像)(?:自|交叉|跨模态)注意力[^。！？!?\n]{0,30}保持不变/u.test(sentence));
-    const observationalCausalBoundary = /(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果/.test(contentBody);
-    const uncoveredScopeBoundary = contentBody.split(/[。！？!?\n]/).some(sentence => (
+    const observationalCausalBoundary = /(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果/.test(boundaryBody);
+    const uncoveredScopeBoundary = boundaryBody.split(/[。！？!?\n]/).some(sentence => (
         /未涵盖[^。！？!?\n]{1,60}(?:语音|语料|数据|场景|条件|设置|样本|任务|攻击|环境|设备|人群|语种|语言|录音)/.test(sentence)
         && !/(?:并非|不是|不存在|没有|并不|不能说|不能认为|无法断言)[^，,；;。！？!?\n]{0,20}未涵盖/.test(sentence)
         && !/未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)/.test(sentence)
@@ -5003,27 +5069,33 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     // “换对话域或换模型可能失效”是失败条件，“对照外部知识库核查不在验证范围”是
     // 未验证范围；两者都符合本节要求，只是没有用“局限/适用”这些词。前者必须带
     // 可能性副词，且不能是否定式（“不会失效”不算边界）。
-    const failureConditionBoundary = /(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)/.test(contentBody);
-    const unverifiedScopeBoundary = /(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围/.test(contentBody);
+    const failureConditionBoundary = /(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)/.test(boundaryBody);
+    const unverifiedScopeBoundary = /(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围/.test(boundaryBody);
     // 2026-11-06 曾以“先完成发布”为由整段取消除阻断，但写作提示词（core-summary-repair.md）
     // 和发布端的同名规则仍要求结论适用边界，只关 Node 一侧会让两端判定分叉，并让下面这组
     // 已经按真实保存稿迭代过的边界判据连同回归用例一起失效。因此恢复原判据：
     // 没有可核验的结论适用边界、失败条件或未验证范围时仍然拒绝。
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !failureConditionBoundary && !unverifiedScopeBoundary && !hasNaturalScopedBoundary(contentBody) && !hasSourceBoundDnsMosBoundary(contentBody, sourceText)) {
+        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !failureConditionBoundary && !unverifiedScopeBoundary && !hasNaturalScopedBoundary(boundaryBody) && !hasSourceBoundDnsMosBoundary(boundaryBody, sourceText)) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
-    const scopedResourceDisclosure = contentBody.split(/[。！？!?\n]/).some(sentence => (
+    const costBody = useExecutiveAbstract
+        ? contentBody
+            .split(/(?<=[。！？!?\n])/u)
+            .filter(sentence => !priorMethodSentencePattern.test(sentence))
+            .join('')
+        : contentBody;
+    const scopedResourceDisclosure = costBody.split(/[。！？!?\n]/).some(sentence => (
         /(?:训练|推理|部署)/.test(sentence)
         && /\d/.test(sentence)
         && /(?:计算量|计算复杂度|MACs?|FLOPs?|GPU|CPU|TPU|NPU|RTX|显卡|(?:训练|推理|采样|优化|迭代)步数|\d\s*(?:[kKmMgG]\s*)?\s*(?:步|轮|次))/i.test(sentence)
     ));
-    const executiveComputationOrTradeoff = useExecutiveAbstract && (
-        /(?:取舍|权衡|参数开销|参数量|可训练参数|实时率|RTF|回升|退化|下降|折损|免训练|无需训练|零样本推理|闭式解|解析解|数值求解|统计检验|诊断评测|离线评测|前向计算|未披露[^。！？!?\n]{0,24}(?:成本|开销|延迟|耗时|算力|显存)|未报告[^。！？!?\n]{0,24}(?:成本|开销|延迟|耗时|算力|显存))/iu.test(contentBody)
-    );
-    const cost = hasConcreteRuntimeDisclosure(contentBody) || contentBody.includes(CORE_SUMMARY_COST_UNAVAILABLE)
-        || /(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)/.test(contentBody)
-        || /(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)/.test(contentBody)
+    const executiveComputationOrTradeoff = useExecutiveAbstract && costBody.split(/[。！？!?\n]/u).some(sentence => (
+        /(?:(?:额外|新增|引入|付出)[^。！？!?\n]{0,24}(?:参数开销|计算开销|内存开销|通信开销|编译开销|延迟|耗时|代价)|代价是|作为代价|以[^。！？!?\n]{1,24}为代价|指标折损|(?:移除|去掉|消融)[^。！？!?\n]{1,36}(?:回升|恶化|回落|折损)|免训练|无需(?:任何)?(?:神经网络)?训练|零样本(?:直接)?推理|闭式(?:解|求解|奇异值分解|计算|诊断)|解析解|冻结(?:权重|编码器|骨干|主干)?[^。！？!?\n]{0,20}(?:直接推理|前向计算|特征提取)|离线统计检验|(?:未披露|未报告)[^。！？!?\n]{0,24}(?:训练|推理|部署)?(?:成本|开销|延迟|耗时|算力|显存))/iu.test(sentence)
+    ));
+    const cost = hasConcreteRuntimeDisclosure(costBody) || costBody.includes(CORE_SUMMARY_COST_UNAVAILABLE)
+        || /(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|能耗)/i.test(costBody)
+        || /(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)/.test(costBody)
         || scopedResourceDisclosure
         || executiveComputationOrTradeoff;
     if (!cost) {

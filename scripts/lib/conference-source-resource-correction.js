@@ -371,9 +371,13 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
                 || originalFailed.sourceFileSha256 !== parent.sourceFileSha256
                 || originalFailed.run.sourceSnapshotSha256 !== r.sourceSnapshotSha256) fail('原失败child来源不同');
         } else if (item.status !== 'complete' || r.selectedMainExecutionId !== r.observedStateExecutionId) {
-            const issue = base.policy.kind === 'source_core_correction'
-                ? require('../analysis-contract').validateCoreSummarySemanticContract(main.analysis.papers[0].analysis,
-                    { sourceText: main.source.sourceDetails.text }) : null;
+            const mainPaper = main.analysis.papers[0];
+            const mainSummaryHeader = require('./core-summary-format').readDeclaration(
+                mainPaper?.analysisManifest?.contracts?.coreSummary
+            );
+            const issue = base.policy.kind === 'source_core_correction' && mainSummaryHeader
+                ? require('../analysis-contract').validateCoreSummarySemanticContract(mainPaper.analysis,
+                    { sourceText: main.source.sourceDetails.text, summaryHeader: mainSummaryHeader }) : null;
             // A real complete package may fail current postprocessing without a
             // newer paid child. This is exclusive to an explicitly bound core
             // defect, not a general permission to ignore pending source11 runs.
@@ -649,7 +653,13 @@ function deriveCoreAudit(parent, active) {
     // chain, tag checkpoint and score bindings must already be authentic.
     const bindingIssue = contract.validateCoreSummaryStageBinding(parent, { skipSemantic: true, sourceText: source.text });
     if (bindingIssue) fail('核心原阶段结构链无效：' + bindingIssue);
-    const originalIssue = contract.validateCoreSummarySemanticContract(parent.analysis, { sourceText: source.text });
+    const parentSummaryHeader = require('./core-summary-format').readDeclaration(
+        parent.analysisManifest?.contracts?.coreSummary
+    );
+    const originalIssue = contract.validateCoreSummarySemanticContract(parent.analysis, {
+        sourceText: source.text,
+        summaryHeader: parentSummaryHeader
+    });
     if (!originalIssue || c.originalSemanticIssueSha256 !== sha(originalIssue)) fail('原真实核心问题没有精确绑定');
     const proposal = read(c.proposalFile), v = proposal.value;
     const summary = deep.extractSectionByTitle(parent.analysis, '核心摘要');
@@ -687,7 +697,14 @@ function deriveCoreAudit(parent, active) {
     const outside = contract.hashAnalysisWithMaskedCoreSummary;
     if (!outside(upstream) || outside(coreCheckpoint) !== outside(upstream)
         || outside(coreMain) !== outside(parent.analysis)) fail('核心编辑改变了原12节');
-    const semanticIssue = contract.validateCoreSummarySemanticContract(coreMain, { sourceText: source.text });
+    const targetSummaryHeader = require('./core-summary-format').readDeclaration(
+        active.batch.formats.coreSummaryFormat
+    );
+    if (!targetSummaryHeader) fail('核心目标协议格式无效');
+    const semanticIssue = contract.validateCoreSummarySemanticContract(coreMain, {
+        sourceText: source.text,
+        summaryHeader: targetSummaryHeader
+    });
     if (semanticIssue) fail('新核心仍未通过当前真实source语义：' + semanticIssue);
     // This pure helper must be the same seven-field implementation extracted
     // from the normal deep stage, not a second parser or signing authority.

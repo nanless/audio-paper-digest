@@ -46,10 +46,7 @@ function runReplayFd(fd) {
         const contract = require('../analysis-contract');
         let issue;
         if (Object.keys(input).sort().join(',') === 'sourceText,summary' && typeof input.summary === 'string') {
-            issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, {
-                sourceText: input.sourceText,
-                summaryHeader: null
-            });
+            issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, { sourceText: input.sourceText });
         } else if (Object.keys(input).sort().join(',') === 'coreSummary,sourceText,summary' && typeof input.summary === 'string') {
             const summaryHeader = require('./core-summary-format').readDeclaration(input.coreSummary);
             if (!summaryHeader) {

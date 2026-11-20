@@ -1084,8 +1084,14 @@ function assertGrantedMember(authority, failed) {
 }
 function grantedRecoveryMode(failed) {
     const paper = failed.analysis.papers[0];
-    const invalidCore = require('../analysis-contract').validateCoreSummarySemanticContract(paper.analysis,
-        { sourceText: failed.source.sourceDetails.text });
+    const coreSummaryFormat = require('./core-summary-format');
+    const rawCoreDecl = paper.analysisManifest?.contracts?.coreSummary;
+    const summaryHeader = rawCoreDecl !== undefined
+        ? coreSummaryFormat.readDeclaration(rawCoreDecl)
+        : coreSummaryFormat.currentHeader();
+    const invalidCore = !summaryHeader
+        || require('../analysis-contract').validateCoreSummarySemanticContract(paper.analysis,
+            { sourceText: failed.source.sourceDetails.text, summaryHeader });
     return invalidCore || !require('./model-text-sanitization').canReuseModelTextInputs(paper, failed.source.sourceDetails)
         || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
         || !['complete', 'not_needed'].includes(paper.analysisManifest?.stages?.coreSummaryRepair?.status)
@@ -1124,10 +1130,15 @@ function validateGrantedRecoverySeed(record, failed, authority) {
     if (seed.paidCoreReplay) {
         assertGrantedCoreProtection(paper, failed);
         const stage = paper.analysisManifest?.stages?.coreSummaryRepair, proof = stage?.paidDiagnosticReplay;
+        const seedSummaryHeader = require('./core-summary-format').readStage(
+            paper.analysisManifest?.contracts?.coreSummary,
+            stage
+        );
         if (!proof || !['complete', 'not_needed'].includes(stage.status) || proof.id !== seed.paidCoreReplay
+            || !seedSummaryHeader
             || stage.outputAnalysisSha256 !== sha256(paper.analysisCheckpoint)
             || require('../analysis-contract').validateCoreSummarySemanticContract(paper.analysisCheckpoint,
-                { sourceText: failed.source.sourceDetails.text })) throw recoveryWindowError('原付费核心检查点未通过完整语义或正文绑定');
+                { sourceText: failed.source.sourceDetails.text, summaryHeader: seedSummaryHeader })) throw recoveryWindowError('原付费核心检查点未通过完整语义或正文绑定');
         const directory = path.join(failed.directory, 'analysis-repair-attempts', `conference-${sha256(failed.run.paperId)}`, 'request-diagnostics');
         const records = Object.fromEntries(['request', 'response', 'disposition'].map(kind => {
             const value = readJsonRecord(path.join(directory, `${proof.id}.${kind}.json`));
@@ -1469,8 +1480,14 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                     || savedPaper.analysisManifest?.sourceAcquisition?.sourceSha256 !== savedPaper.sourceSha256) {
                     reason = '子稿与认证封存全文的 SHA 不一致。';
                 } else {
-                    reason = require('../analysis-contract').validateCoreSummarySemanticContract(
-                        savedPaper.analysis, { sourceText });
+                    const savedSummaryHeader = require('./core-summary-format').readStage(
+                        savedPaper.analysisManifest?.contracts?.coreSummary,
+                        savedPaper.analysisManifest?.stages?.coreSummaryRepair
+                    );
+                    reason = !savedSummaryHeader
+                        ? '核心摘要声明、阶段格式或结构指纹不一致。'
+                        : require('../analysis-contract').validateCoreSummarySemanticContract(
+                            savedPaper.analysis, { sourceText, summaryHeader: savedSummaryHeader });
                     if (!reason && !require('./model-text-sanitization').canReuseModelTextInputs(savedPaper, source)) {
                         reason = '旧 Unicode 模型输入需要完整重新分析。';
                     }

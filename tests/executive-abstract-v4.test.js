@@ -146,10 +146,10 @@ test('新 <NEW_SUMMARY_FP> 4 段式 850–1150 字全景导读摘要与 3 段式
     const methodParaSentences = FOUR_PARAGRAPH_EXECUTIVE_SUMMARY.split('\n\n')[1].split('。').filter(Boolean);
     assert.ok(methodParaSentences.some(s => s.length > 120 && s.length <= 520));
 
-    // 默认在线生成（未传旧 summaryHeader）与显式 <NEW_SUMMARY_FP> 均启用 v4 全景导读规则
-    assert.equal(contract.validateCoreSummarySemanticContract(withSummary(FOUR_PARAGRAPH_EXECUTIVE_SUMMARY), {
+    // 未传 summaryHeader 时与 Python 一致默认走 320–600 字旧规则；显式传 <NEW_SUMMARY_FP> 时启用 v4 全景导读规则
+    assert.match(contract.validateCoreSummarySemanticContract(withSummary(FOUR_PARAGRAPH_EXECUTIVE_SUMMARY), {
         sourceText: EXECUTIVE_SOURCE_TEXT
-    }), null);
+    }), /中文字符过多: \d+\/600/);
     assert.equal(contract.validateCoreSummarySemanticContract(withSummary(FOUR_PARAGRAPH_EXECUTIVE_SUMMARY), {
         sourceText: EXECUTIVE_SOURCE_TEXT,
         summaryHeader: coreSummaryFormat.currentHeader()
@@ -322,3 +322,68 @@ test('方法句单句长度上限在新契约下放宽至 520 字（340–480 �
     }), /方法机制单句过长/);
 });
 
+test('LaTeXML 千分位/控制序列/双写拼接、中文邻接模型名、百分号伪造旁路与跨句借数/伪边界/伪代价拦截', () => {
+    const newHeader = coreSummaryFormat.currentHeader();
+    const groundedCheck = contract.validateCoreSummarySemanticContract.validateCoreSummarySourceGroundedClaims;
+
+    // 1. 千分位逗号、\SI 控制序列、LaTeXML 双写粘连 (±.04583.9061\!\pm\!.0458 与 4.3099±.05284.3099\!\pm\!.0528) 与中文紧邻 Qwen2.5
+    const trickyLatexSource = [
+        'Training uses 1{,}850 ms chunks and 12,400 utterances.',
+        'Latency is \\SI12.5\\milli\\second with relative gain \\uparrow6.6% and variance \\pm0.3.',
+        'MOS reaches ±.04583.9061\\!\\pm\\!.0458 and 4.3099±.05284.3099\\!\\pm\\!.0528 on the test set with 84.5M parameters.'
+    ].join(' ');
+    assert.equal(
+        groundedCheck(
+            '基于Qwen2.5编码器与 84.5 M 可训练参数，在 1,850 ms 切片和 12,400 条样本上 MOS 达 3.9061（标准差 0.0458）与 4.3099（标准差 0.0528），相对增益 6.6%（波动 0.3），延迟 12.5 ms。',
+            trickyLatexSource
+        ),
+        null
+    );
+
+    // 2. 百分号伪造旁路：原文有 10% dropout 与引文 [85] 及小数准确率 0.85，严禁篡改为 85%
+    const citationDecimalSource = 'We apply 10% dropout during training [85]. Test accuracy is 0.85 versus 0.79.';
+    assert.match(
+        groundedCheck('测试集准确率达到 85%。', citationDecimalSource),
+        /添加了原文不存在的百分号/
+    );
+    // 真正的 (%) 表头语境或英文区间共享百分号 (1.89 to 1.91%) 允许对应百分数
+    const percentTableSource = 'Table 1: WER (%) on test-clean: Baseline 9.84, Ours 6.15. Serving holds WER at 1.89 to 1.91%.';
+    assert.equal(groundedCheck('词错率 WER 从 9.84% 降至 6.15%，服务区间保持在 1.89% 至 1.91%。', percentTableSource), null);
+
+    // 3. 跨句窗口防借数：单侧结果 (WER 降低至 6.15%) + 无关运行开销 (RTF 为 0.14) 不能拼凑通过
+    const paragraphs = FOUR_PARAGRAPH_EXECUTIVE_SUMMARY.split('\n\n');
+    const borrowedRtfQuant = [
+        paragraphs[0],
+        paragraphs[1],
+        '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的流式评测设置下完成了系统测试，转写词错率 WER 显著降低至 6.15%。单张 GPU 上的流式推理实时率 RTF 为 0.14，前瞻窗口延迟为 28.5 ms。整体系统在低带宽语音通信场景下展现出良好的工程实用性。',
+        paragraphs[3]
+    ].join('\n\n');
+    assert.match(contract.validateCoreSummarySemanticContract(withSummary(borrowedRtfQuant), {
+        sourceText: EXECUTIVE_SOURCE_TEXT,
+        summaryHeader: newHeader
+    }), /已有证据包含关键定量结果/);
+
+    // 4. 伪边界拦截：仅有“训练与冻结边界”技术词和第 1 段“现有主流编解码器受限”，第 4 段未写本文适用边界时必须拒绝
+    const fakeBoundary = [
+        paragraphs[0],
+        paragraphs[1].replace('在不额外消耗帧级码率', '明确划分训练与冻结边界并在不额外消耗帧级码率'),
+        paragraphs[2],
+        '**适用边界与深读导览：**读者若希望深入核查正交信息瓶颈的变分互信息上界推导、25 Hz 因果卷积块掩码细节或不同码率档位下的逐层消融曲线，可针对性阅读下方长文的方法推导与实验消融章节。本文全部模块设计与实验流程均已在长文中给出逐节说明。'
+    ].join('\n\n');
+    assert.match(contract.validateCoreSummarySemanticContract(withSummary(fakeBoundary), {
+        sourceText: EXECUTIVE_SOURCE_TEXT,
+        summaryHeader: newHeader
+    }), /缺少结论适用边界/);
+
+    // 5. 伪代价拦截：仅有“参数量”、“词错率下降”与“权衡”泛词而无真实开销/折损/免训练说明时必须拒绝
+    const fakeCost = [
+        paragraphs[0],
+        paragraphs[1],
+        '**关键实验与核心代价：**作者在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下将本文系统与最强流式基线 Mimi 进行了严格同码率对照。实验结果显示转写词错率 WER 从 9.84% 显著下降至 6.15%，主观自然度预测分 UTMOS 从 3.42 提升至 3.96，说话人余弦相似度 SpkSim 也从 0.763 提升至 0.841。这种双流设计体现了编码码率与表征维度之间的良好权衡。',
+        paragraphs[3]
+    ].join('\n\n');
+    assert.match(contract.validateCoreSummarySemanticContract(withSummary(fakeCost), {
+        sourceText: EXECUTIVE_SOURCE_TEXT,
+        summaryHeader: newHeader
+    }), /缺少关键代价、资源开销或实际计算方式说明/);
+});
