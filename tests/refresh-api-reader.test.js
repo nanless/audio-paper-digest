@@ -6,11 +6,14 @@ const path = require('node:path');
 
 const Config = require('../scripts/config.js');
 const {
+    refreshApiReader,
+    refreshApiReaders,
     parseRefreshCliArgs,
     resolveBatchRefreshIds,
     resolveSavedAnalysisBatchDate,
     hasCurrentReaderV3,
     canRepairScoringBinding,
+    getDailyOperatorOrRetainedCandidateRefreshBlockReason,
     MAX_REFRESH_CONCURRENCY
 } = require('../scripts/refresh-api-reader.js');
 
@@ -218,5 +221,496 @@ describe('逐篇审查反馈批量刷新', () => {
             assert.throws(() => parseRefreshCliArgs(['--date', '2026-09-01', '2611.04122']),
                 /--date 只能与 --all/);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+});
+
+describe('日更人工作业记录与保留序号补丁候选的刷新前置守卫 (C1)', () => {
+    const crypto = require('node:crypto');
+    const daily = require('../scripts/lib/daily-fresh-source-plan.js');
+    const fresh = require('../scripts/lib/fresh-analysis-context.js');
+    const operator = require('../scripts/lib/daily-reader-operator-correction.js');
+    const repair = require('../scripts/lib/reader-repair.js');
+    const codec = require('../scripts/lib/protocol-codec.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
+    const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+
+    async function setupDailyGuardFixture(t) {
+        const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'refresh-c1-guard-'));
+        const configKeys = ['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'papers', 'analysisBatchReportsDir'];
+        const savedFiles = Object.fromEntries(configKeys.map(key => [key, Config.FILES[key]]));
+        Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-runs');
+        Config.FILES.deepAnalysisResult = path.join(root, 'deep-analysis-result.json');
+        Config.FILES.papers = path.join(root, 'papers.json');
+        Config.FILES.analysisBatchReportsDir = path.join(root, 'batch-reports');
+        t.after(() => {
+            Object.assign(Config.FILES, savedFiles);
+            fs.rmSync(root, { recursive: true, force: true });
+        });
+
+        const batchDate = '2026-11-19';
+        const operatorId = '2611.24249';
+        const retainedId = '2611.22704';
+        const ordinaryId = '2611.10001';
+        const ids = [ordinaryId, operatorId, retainedId];
+        const sourceUnit = 'The source reports a controlled measurement of 1.0 under the same protocol.';
+        const sourceText = `${sourceUnit} `.repeat(150);
+        const signed = require('./reader-signed-draft-fixture.js').fixture({
+            noFigures: true,
+            sourceText
+        });
+        // Add resource paragraph requirement so resource claims replay succeeds on fresh daily sources.
+        const resourceParagraph = '\n\n代码、模型权重与完整系统的公开情况尚无法确认，原文未提供可验证的公开仓库地址。';
+        const draftWithResourceClaim = structuredClone(signed.draft);
+        draftWithResourceClaim.sections[10].body += resourceParagraph;
+        const deep = require('../scripts/deep-analyzer.js');
+        const parsedDraft = deep.parseApiReaderArticleResult(JSON.stringify(draftWithResourceClaim), {
+            requiredVersion: 3,
+            requireIntegratedTables: true,
+            minimumIntegratedTables: 2,
+            availableFigureOrdinals: [],
+            requireSourceBindings: true,
+            allowDeterministicQuoteRepair: true,
+            structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+            sourceText
+        });
+        const renderedDraft = deep.injectApiReaderFigures(
+            parsedDraft,
+            signed.sourceDetails.structuredArtifacts,
+            ordinaryId
+        );
+
+        const plan = daily.createDailyFreshSourcePlan({
+            batchDate,
+            batchId: 'c1-guard-batch',
+            papers: ids.map(arxivId => ({ arxivId, title: `Title ${arxivId}` }))
+        });
+        await daily.captureDailyFreshSources(plan, {
+            concurrency: 1,
+            capture: captureOptions => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
+                .captureFreshArxivRewriteSource(captureOptions, {
+                    fetchText: async id => ({
+                        text: sourceText,
+                        source: 'html',
+                        sourceId: `${id}v1`,
+                        url: `https://arxiv.org/html/${id}v1`,
+                        fetchedAt: `${batchDate}T00:00:00.000Z`,
+                        imageInfos: [],
+                        structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+                        htmlAvailability: 'available',
+                        htmlAttempts: 1,
+                        warnings: []
+                    }),
+                    fetchPdf: async id => ({
+                        bytes: Buffer.from(`%PDF-1.7\n${id}\n%%EOF\n`),
+                        url: `https://arxiv.org/pdf/${id}.pdf`,
+                        fetchedAt: `${batchDate}T00:00:01.000Z`
+                    })
+                })
+        });
+
+        const identities = require('../scripts/lib/reader-identity-format.js');
+        const claimsFormat = require('../scripts/lib/reader-resource-claims-format.js');
+        const contentMode = require('../scripts/lib/reader-content-mode.js');
+
+        function buildValidDailyReaderPaper(arxivId) {
+            const base = validAnalysisPaper(arxivId, {
+                title: `Title ${arxivId}`,
+                authors: ['Author One']
+            });
+            const source = daily.readDailyFreshSource(plan, base);
+            const descriptor = source.freshSourceDescriptor;
+            const parsedForPaper = deep.parseApiReaderArticleResult(JSON.stringify(draftWithResourceClaim), {
+                requiredVersion: 3,
+                requireIntegratedTables: true,
+                minimumIntegratedTables: 2,
+                availableFigureOrdinals: [],
+                requireSourceBindings: true,
+                allowDeterministicQuoteRepair: true,
+                structuredArtifacts: source.structuredArtifacts,
+                sourceText: source.text
+            });
+            const renderedForPaper = deep.injectApiReaderFigures(
+                parsedForPaper,
+                source.structuredArtifacts,
+                arxivId
+            );
+            const resourceBody = {
+                ...identities.header('resources'),
+                sourceTextSha256: descriptor.sourceSha256,
+                resources: []
+            };
+            const resources = {
+                ...resourceBody,
+                identitySha256: deep.stableFingerprint(resourceBody)
+            };
+            const paper = {
+                ...base,
+                sourceSha256: descriptor.sourceSha256,
+                apiReaderArticle: renderedForPaper.article,
+                apiReaderPlan: structuredClone(renderedForPaper.plan),
+                apiReaderFigures: [],
+                apiReaderResources: resources
+            };
+            paper.apiReaderAuthors = require('../scripts/lib/reader-author-parser.js')
+                .resolveVerifiedReaderAuthors(paper, source);
+            paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
+            paper.apiReaderPlanSha256 = deep.stableFingerprint(paper.apiReaderPlan);
+            paper.freshRewriteProvenance = {
+                ...require('../scripts/lib/daily-source-format.js').currentHeader('fresh-source-analysis'),
+                runId: plan.runId,
+                sourceGeneration: descriptor.sourceGeneration,
+                sourceManifestSha256: descriptor.sourceManifestSha256,
+                sourceSha256: descriptor.sourceSha256,
+                structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+                sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+                sourceOnly: true,
+                oldGeneratedTextIncluded: false
+            };
+            paper.analysisManifest.freshRewriteProvenance = structuredClone(paper.freshRewriteProvenance);
+            paper.analysisManifest.sourceAcquisition = {
+                sourceSha256: descriptor.sourceSha256,
+                structuredArtifactsSha256: descriptor.structuredArtifactsSha256
+            };
+            Object.assign(paper.analysisManifest.contracts, {
+                apiReaderArticle: paper.apiReaderPlan.contract,
+                apiReaderSourceBindings: paper.apiReaderPlan.sourceBindingsContract,
+                apiReaderAuthorIdentity: paper.apiReaderAuthors.identity.contract,
+                apiReaderResourceIdentity: paper.apiReaderResources.contract,
+                readerResourceClaims: claimsFormat.header().contract
+            });
+            identities.assignOpenSourceBinding(
+                paper.analysisManifest.stages.openSourceScan,
+                paper.apiReaderResources
+            );
+            paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 =
+                paper.apiReaderResources.identitySha256;
+            const stage = {
+                ...structuredClone(signed.paper.analysisManifest.stages.apiReaderArticle),
+                ...contentMode.fields('source-only'),
+                status: 'complete',
+                attempts: 1,
+                fullAttempts: 1,
+                articleSha256: paper.apiReaderArticleSha256,
+                planSha256: paper.apiReaderPlanSha256,
+                figuresSha256: deep.stableFingerprint([]),
+                sourceBindingsSha256: paper.apiReaderPlan.sourceBindingsSha256,
+                sourceBindingsSourceTextSha256: descriptor.sourceSha256,
+                structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+                readerAuthorsSha256: deep.stableFingerprint(paper.apiReaderAuthors),
+                readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
+                resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+                refreshedAt: '2026-11-19T10:00:00.000+08:00'
+            };
+            delete stage.readerAuthorIdentityContractVersion;
+            delete stage.resourceIdentityContractVersion;
+            Object.assign(
+                stage,
+                identities.stageFields(paper.apiReaderAuthors, paper.apiReaderResources),
+                claimsFormat.stageFields()
+            );
+            paper.analysisManifest.stages.apiReaderArticle = stage;
+            assert.equal(
+                daily.withDailyFreshAnalysisContext(plan, () => engine.hasValidIntegratedApiReaderRecords(paper)),
+                true
+            );
+            assert.equal(
+                daily.withDailyFreshAnalysisContext(plan, () => engine.isSuccessfulAnalysisRecord(paper)),
+                true
+            );
+            return paper;
+        }
+
+        const ordinaryPaper = buildValidDailyReaderPaper(ordinaryId);
+        const operatorPaper = buildValidDailyReaderPaper(operatorId);
+        const retainedPaper = buildValidDailyReaderPaper(retainedId);
+
+        // Configure operatorPaper with explicit operator executionKind & operatorProvenance
+        const operatorProof = {
+            ...codec.recordHeader('daily-reader-operator-correction', 'daily-reader-operator-correction'),
+            executionKind: 'operator',
+            newReaderApiRequests: 0,
+            runId: plan.runId,
+            paperId: operatorId,
+            batchDate
+        };
+        assert.equal(operator.hasOperatorProofMarker(operatorProof), true);
+        Object.assign(operatorPaper.analysisManifest.stages.apiReaderArticle, {
+            executionKind: 'operator',
+            model: 'operator-local',
+            protocol: 'local_operator',
+            newReaderApiRequests: 0,
+            operatorProvenance: operatorProof
+        });
+
+        // Configure retainedPaper as an ordinary stage on surface, but with an active
+        // retained source-only ordinal candidate in plan.readerAttemptsDir.
+        const freshIdentity = daily.withDailyFreshAnalysisContext(
+            plan,
+            () => fresh.freshAnalysisIdentity(retainedId)
+        );
+        const retainedIdentity = {
+            paperId: `${retainedId}v1`,
+            ...contentMode.fields('source-only'),
+            maxAttempts: 6,
+            freshAnalysis: freshIdentity,
+            sourceSha256: retainedPaper.sourceSha256,
+            inputFingerprint: sha(sourceText)
+        };
+        repair.saveFailedCandidate(plan.readerAttemptsDir, retainedIdentity, {
+            status: 'failed',
+            draft: structuredClone(draftWithResourceClaim),
+            rawDraft: JSON.stringify(draftWithResourceClaim),
+            draftOrderMappings: [],
+            ordinalPatchCompilations: [{
+                requestId: '11111111-2222-4333-8444-555555555555',
+                identity: retainedIdentity,
+                pins: {
+                    requestSha256: '1'.repeat(64),
+                    responseSha256: '2'.repeat(64),
+                    compilationSha256: '3'.repeat(64),
+                    sealSha256: '4'.repeat(64)
+                }
+            }],
+            issues: [{ path: '/sections/0/body', message: 'retained ordinal candidate fixture' }],
+            imageEvidence: [],
+            attempts: 4,
+            fullAttempts: 2,
+            noProgress: 3,
+            failureSignature: 'sig-retained',
+            validationFailureSignature: 'val-retained',
+            validationFailureStreak: 3,
+            transportFailures: 0,
+            implementationRepairAllowanceProof: null
+        });
+        assert.equal(operator.hasRetainedOrdinalCandidate(retainedPaper, plan.readerAttemptsDir), true);
+        assert.equal(operator.hasRetainedOrdinalCandidate(ordinaryPaper, plan.readerAttemptsDir), false);
+
+        const payload = {
+            batchDate,
+            batchId: plan.batchId,
+            status: 'complete',
+            dailyFreshSourceRun: daily.dailyFreshSourceReference(plan),
+            papers: [ordinaryPaper, operatorPaper, retainedPaper]
+        };
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+        fs.writeFileSync(Config.FILES.papers, JSON.stringify({ generation: 0, papers: {} }), { mode: 0o600 });
+
+        return {
+            root,
+            plan,
+            batchDate,
+            ordinaryId,
+            operatorId,
+            retainedId,
+            ordinaryPaper,
+            operatorPaper,
+            retainedPaper,
+            readCanonicalBytes: () => fs.readFileSync(Config.FILES.deepAnalysisResult),
+            readCanonicalJson: () => JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult, 'utf8'))
+        };
+    }
+
+    it('拒绝直接刷新人工作业完成稿与保留序号补丁候选稿（operations.article 0 次调用且正式文件逐字节不变）', async t => {
+        const f = await setupDailyGuardFixture(t);
+        const beforeBytes = f.readCanonicalBytes();
+        let articleCalls = 0;
+        let scoringCalls = 0;
+        let figureCalls = 0;
+        const spyOperations = {
+            article: async () => { articleCalls += 1; throw new Error('不应进入 article 操作'); },
+            scoringAndReader: async () => { scoringCalls += 1; throw new Error('不应进入 scoringAndReader 操作'); },
+            figures: async () => { figureCalls += 1; throw new Error('不应进入 figures 操作'); }
+        };
+
+        for (const targetId of [f.operatorId, f.retainedId]) {
+            for (const modeOptions of [
+                { reviewFeedback: '修正表述细节', operations: spyOperations },
+                { operations: spyOperations },
+                { scoringAndReader: true, reviewFeedback: '重新核对评分与文章', operations: spyOperations },
+                { figuresOnly: true, operations: spyOperations },
+                { surfaceBindingsOnly: true, operations: spyOperations }
+            ]) {
+                await assert.rejects(
+                    refreshApiReader(targetId, modeOptions),
+                    error => {
+                        assert.equal(error.code, 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN');
+                        assert.equal(error.retryable, false);
+                        assert.match(error.message, /npm run batch -- --fact-feedback-file/);
+                        assert.match(error.message, /--reader-signed-corrections/);
+                        assert.match(error.message, /--reader-operator-corrections/);
+                        return true;
+                    }
+                );
+            }
+        }
+        assert.equal(articleCalls, 0);
+        assert.equal(scoringCalls, 0);
+        assert.equal(figureCalls, 0);
+        assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
+    });
+
+    it('批量 --feedback-file 混入人工作业稿或保留候选稿时整批前置快速拒绝，连普通论文也不发起请求', async t => {
+        const f = await setupDailyGuardFixture(t);
+        const beforeBytes = f.readCanonicalBytes();
+        const feedbackFile = path.join(f.root, 'feedback.json');
+        fs.writeFileSync(feedbackFile, JSON.stringify({
+            [f.ordinaryId]: '普通论文的审校反馈',
+            [f.operatorId]: '人工作业论文的审校反馈',
+            [f.retainedId]: '保留序号补丁候选论文的审校反馈'
+        }), { mode: 0o600 });
+        const cliOptions = parseRefreshCliArgs([
+            f.ordinaryId, f.operatorId, f.retainedId,
+            '--feedback-file', feedbackFile
+        ]);
+
+        let articleCalls = 0;
+        await assert.rejects(
+            refreshApiReaders(cliOptions.ids, {
+                ...cliOptions,
+                operations: {
+                    article: async () => {
+                        articleCalls += 1;
+                        return f.ordinaryPaper;
+                    }
+                }
+            }),
+            error => {
+                assert.equal(error.code, 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN');
+                assert.equal(error.retryable, false);
+                assert.deepEqual(error.blockedIds, [f.operatorId, f.retainedId]);
+                assert.match(error.message, new RegExp(f.operatorId));
+                assert.match(error.message, new RegExp(f.retainedId));
+                assert.match(error.message, /npm run batch -- --fact-feedback-file/);
+                return true;
+            }
+        );
+        assert.equal(articleCalls, 0, '前置整批拦截不得对同批任何论文发起模型调用');
+        assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
+    });
+
+    it('锁内重读再次执行前置守卫，并允许普通 API 完成稿正常刷新且校验保存前集成资格', async t => {
+        const f = await setupDailyGuardFixture(t);
+
+        // 1. Ordinary API-completed daily paper refreshes normally!
+        let ordinaryCalls = 0;
+        const updatedOrdinary = await refreshApiReader(f.ordinaryId, {
+            reviewFeedback: '补充边界条件说明',
+            operations: {
+                article: async paper => {
+                    ordinaryCalls += 1;
+                    const next = structuredClone(paper);
+                    const updatedText = `${next.apiReaderArticle}\n\n补充边界条件：上述结论仅适用于本文控制协议。`;
+                    next.apiReaderArticle = updatedText;
+                    next.apiReaderArticleSha256 = sha(updatedText);
+                    next.analysisManifest.stages.apiReaderArticle.articleSha256 = next.apiReaderArticleSha256;
+                    next.analysisManifest.stages.apiReaderArticle.refreshedAt = '2026-11-19T12:00:00.000+08:00';
+                    return next;
+                }
+            }
+        });
+        assert.equal(ordinaryCalls, 1);
+        assert.match(updatedOrdinary.apiReaderArticle, /补充边界条件：上述结论仅适用于本文控制协议/);
+        assert.equal(
+            daily.withDailyFreshAnalysisContext(f.plan, () => engine.hasValidIntegratedApiReaderRecords(updatedOrdinary)),
+            true
+        );
+
+        // 2. Plain --authors-only remains permitted when no signed operator history exists,
+        // while signed operator revision (operatorHistory) rejects --authors-only too.
+        assert.equal(
+            getDailyOperatorOrRetainedCandidateRefreshBlockReason(f.operatorPaper, f.plan, { authorsOnly: true }),
+            null
+        );
+        const signedOperatorPaper = structuredClone(f.operatorPaper);
+        signedOperatorPaper.analysisManifest.stages.apiReaderArticle.contentMode = 'reader-source-operator-revision';
+        signedOperatorPaper.analysisManifest.stages.apiReaderArticle.operatorHistory = [
+            signedOperatorPaper.analysisManifest.stages.apiReaderArticle.operatorProvenance
+        ];
+        assert.match(
+            getDailyOperatorOrRetainedCandidateRefreshBlockReason(signedOperatorPaper, f.plan, { authorsOnly: true }),
+            /人工作业/
+        );
+
+        // 3. Defense-in-depth post-condition: if a refresh on a valid canonical paper produces
+        // an invalid Reader record (e.g. broken SHA or missing proof), saveCanonical refuses to overwrite!
+        const snapshotBeforeInvalidSave = f.readCanonicalBytes();
+        let invalidCalls = 0;
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, {
+                operations: {
+                    article: async paper => {
+                        invalidCalls += 1;
+                        const broken = structuredClone(paper);
+                        broken.apiReaderArticleSha256 = '0'.repeat(64);
+                        return broken;
+                    }
+                }
+            }),
+            error => {
+                assert.equal(error.code, 'REFRESHED_API_READER_RECORD_INVALID');
+                assert.equal(error.retryable, false);
+                return true;
+            }
+        );
+        assert.equal(invalidCalls, 1);
+        assert.deepEqual(f.readCanonicalBytes(), snapshotBeforeInvalidSave, '保存前防御性核验失败时不得改动正式文件');
+
+        // 4. Paid-fingerprint completion marker & ordinalPatchHistory operator reason also reject pre-flight!
+        const paidFingerprintDir = path.join(f.plan.readerAttemptsDir, 'paid-draft-fingerprint-completions');
+        fs.mkdirSync(paidFingerprintDir, { recursive: true, mode: 0o700 });
+        const paidFingerprintFile = path.join(paidFingerprintDir, `${f.ordinaryId}.json`);
+        fs.writeFileSync(paidFingerprintFile, JSON.stringify({ paperId: f.ordinaryId }), { mode: 0o600 });
+        assert.equal(operator.hasPaidFingerprintCompletion(f.ordinaryPaper, f.plan.readerAttemptsDir), true);
+        let fpCalls = 0;
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, {
+                operations: { article: async () => { fpCalls += 1; return f.ordinaryPaper; } }
+            }),
+            error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN' && error.retryable === false
+        );
+        assert.equal(fpCalls, 0);
+        fs.unlinkSync(paidFingerprintFile);
+
+        // 5. Concurrent race: pre-lock check sees ordinary paper, while another holder mutates
+        // canonical to operator before releasing the paper lock -> in-lock re-read catches it with 0 calls!
+        let releaseHolder;
+        const holderEntered = new Promise(resolve => {
+            engine.withPaperAnalysisLock(f.ordinaryPaper, async () => {
+                resolve();
+                await new Promise(done => { releaseHolder = done; });
+            });
+        });
+        await holderEntered;
+        let raceCalls = 0;
+        const pendingRefresh = refreshApiReader(f.ordinaryId, {
+            reviewFeedback: '并发锁竞争测试',
+            operations: {
+                article: async () => {
+                    raceCalls += 1;
+                    throw new Error('锁内前置守卫应当在此之前拦截');
+                }
+            }
+        });
+        // Give refreshApiReader a tick to finish pre-lock check and wait on withPaperAnalysisLock
+        await new Promise(resolve => setTimeout(resolve, 40));
+        const mutatedPayload = f.readCanonicalJson();
+        const targetPaper = mutatedPayload.papers.find(item => item.arxivId === f.ordinaryId);
+        Object.assign(targetPaper.analysisManifest.stages.apiReaderArticle, {
+            executionKind: 'operator',
+            model: 'operator-local',
+            protocol: 'local_operator',
+            newReaderApiRequests: 0
+        });
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(mutatedPayload, null, 2), { mode: 0o600 });
+        const expectedMutatedBytes = f.readCanonicalBytes();
+        releaseHolder();
+
+        await assert.rejects(
+            pendingRefresh,
+            error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN' && error.retryable === false
+        );
+        assert.equal(raceCalls, 0, '锁内重读守卫必须在调用 operations.article 前拒绝');
+        assert.deepEqual(f.readCanonicalBytes(), expectedMutatedBytes);
     });
 });
