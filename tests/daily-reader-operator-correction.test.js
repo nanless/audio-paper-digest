@@ -164,8 +164,9 @@ test('matchesPaidOrdinalEndpoint 支持多轮累积 draftOrderMappings 与零请
  daily.withDailyFreshAnalysisContext(plan, () => fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source));
  const sourceIdentity = daily.withDailyFreshAnalysisContext(plan, () => fresh.freshAnalysisIdentity(paper.arxivId));
 
+ const readerFormat = require('../scripts/lib/reader-record-format');
  const canonicalDraft = {
-  ...codec.recordHeader('reader-draft', 'reader-draft'),
+  ...codec.historicalHeader('reader-draft', readerFormat.INTEGRATED, readerFormat.OLD_DRAFT_FP),
   readerTitle: '多轮顺序映射与显式新轮端点核验测试',
   oneSentenceThesis: '验证多轮累积顺序映射及零请求显式新轮归档候选均可精确回放付费 ordinal 终点。',
   sections: READER_SECTION_KINDS.map((kind, i) => ({
@@ -186,9 +187,29 @@ test('matchesPaidOrdinalEndpoint 支持多轮累积 draftOrderMappings 与零请
  assert.ok(repair.parseRepairableDraft(canonicalDraft), 'synthetic canonical draft must be a valid repairable draft');
 
  // Construct paid ordinal output `lastPaidAfter` with swapped sections 0 & 1 so
- // normalizeApiReaderRecoveryDraftForSource deterministically emits 1 changed reader-draft-order mapping M.
+ // normalizeApiReaderRecoveryDraftForSource deterministically emits 1 changed reader-draft-order mapping M
+ // for historical legacy-integrated drafts, while cohesive-functional-v4 preserves original section order.
  const lastPaidAfter = structuredClone(canonicalDraft);
  [lastPaidAfter.sections[0], lastPaidAfter.sections[1]] = [lastPaidAfter.sections[1], lastPaidAfter.sections[0]];
+ const v4NoResortDraft = {
+  ...structuredClone(lastPaidAfter),
+  ...codec.recordHeader('reader-draft', 'reader-draft'),
+  sections: lastPaidAfter.sections.slice(0, 6)
+ };
+ const v4NormState = {}, v4EmittedMappings = [];
+ deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(v4NoResortDraft), [], {
+  paperId: paper.arxivId,
+  sourceText: source.text,
+  structuredArtifacts: source.structuredArtifacts,
+  pixelFigureOrdinals: [],
+  draftOrderMappings: v4EmittedMappings
+ }, v4NormState);
+ assert.equal(v4EmittedMappings.length, 0);
+ assert.deepEqual(
+  v4NormState.draft.sections.map(s => s.kind),
+  v4NoResortDraft.sections.map(s => s.kind)
+ );
+
  const normState = {}, emittedMappings = [];
  deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(lastPaidAfter), [], {
   paperId: paper.arxivId,
@@ -415,4 +436,106 @@ test('matchesPaidOrdinalEndpoint 支持多轮累积 draftOrderMappings 与零请
   operator.matchesPaidOrdinalEndpoint({ after: lastPaidAfter }, persistedPostRound, record, paper, source, identity),
   false
  );
+});
+
+test('replayPaidFingerprint 同时支持历史 OLD_DRAFT_FP 与当前 NEW_DRAFT_FP 的已付指纹修正重放，并拒绝跨指纹伪造', t => {
+ const codec = require('../scripts/lib/protocol-codec');
+ const readerFormat = require('../scripts/lib/reader-record-format');
+ const candidateFormat = require('../scripts/lib/reader-candidate-format');
+ const repair = require('../scripts/lib/reader-repair');
+ const diagnostics = require('../scripts/lib/reader-request-diagnostics');
+ t.mock.method(diagnostics, 'validatePaidDraftFingerprintFees', () => true);
+
+ const makeCase = ({ targetDraftHeader, targetPlanHeader, sectionCount }) => {
+  const correctedObj = {
+   ...targetDraftHeader,
+   readerTitle: '已付全稿指纹单字符脱落冷重放验证',
+   oneSentenceThesis: '验证新旧两代 reader-draft 结构指纹均可在严格近邻与费用绑定下精确重放。',
+   sections: Array.from({ length: sectionCount }, (_, i) => ({
+    kind: i === 0 ? 'problem' : i === 1 ? 'method_overview' : i === sectionCount - 1 ? 'limitation' : 'result',
+    heading: `功能定位：第 ${i + 1} 节核心机制判断`,
+    body: `这是第 ${i + 1} 节完整正文段落，包含充足长度以通过可修复草稿结构核验。`
+   })),
+   conceptBridges: targetDraftHeader.schemaFingerprint === readerFormat.OLD_DRAFT_FP
+    ? [0, 1, 2, 3].map(i => ({
+       terms: [`术语A${i}`, `术语B${i}`],
+       sectionKind: 'method_overview',
+       marker: `[[CONCEPT_BRIDGE_${i + 1}]]`,
+       explanation: `术语A${i}与术语B${i}在历史契约下的组合说明。`
+      }))
+    : [],
+   figurePlacements: [],
+   tableBindings: [],
+   formulaBindings: []
+  };
+  const correctedRaw = JSON.stringify(correctedObj);
+  // Drop 1 middle hex char of schemaFingerprint (keeping first/last 16 chars intact) within Levenshtein <= 8
+  const typoFp = targetDraftHeader.schemaFingerprint.slice(0, 32) + targetDraftHeader.schemaFingerprint.slice(33);
+  const rawDraft = correctedRaw.replace(
+   JSON.stringify(targetDraftHeader.schemaFingerprint),
+   JSON.stringify(typoFp)
+  );
+  const baseId = candidateFormat.identityFields();
+  const identity = {
+   paperId: '2611.99002',
+   readerIdentity: { ...baseId.readerIdentity, article: targetPlanHeader }
+  };
+  const candidate = {
+   identity,
+   payload: {
+    status: 'failed',
+    draft: null,
+    rawDraft,
+    attempts: 1,
+    fullAttempts: 1,
+    issues: [{ path: null, message: '读者文章格式头未登记或字段混用' }]
+   }
+  };
+  const record = {
+   ...codec.recordHeader('reader-human-paid-draft-fingerprint-edit', 'reader-human-paid-draft-fingerprint-edit'),
+   notLlmResponse: true,
+   paperId: '2611.99002',
+   runId: '11111111-2222-4333-8444-555555555555',
+   batchDate: '2026-11-19',
+   baselineCandidateFile: `/tmp/${repair.hashDraft(identity)}.json`,
+   baselineCandidateEnvelopeSha256: 'a'.repeat(64),
+   baselineDraftSha256: repair.hashDraft(null),
+   sourceDescriptor: { contract: 'fresh-source-cache-v1' },
+   rawDraftSha256: sha(rawDraft),
+   correctedRawSha256: sha(correctedRaw),
+   wholeSha256: 'b'.repeat(64),
+   currentInputIdentity: identity,
+   feeFiles: [
+    { file: '/tmp/fee1.json', sha256: '1'.repeat(64) },
+    { file: '/tmp/fee2.json', sha256: '2'.repeat(64) },
+    { file: '/tmp/fee3.json', sha256: '3'.repeat(64) }
+   ]
+  };
+  return { correctedObj, candidate, record };
+ };
+
+ // 1. 历史 OLD_DRAFT_FP / OLD_PLAN_FP 重放通过
+ const oldCase = makeCase({
+  targetDraftHeader: codec.historicalHeader('reader-draft', readerFormat.INTEGRATED, readerFormat.OLD_DRAFT_FP),
+  targetPlanHeader: codec.historicalHeader('beginner-researcher', readerFormat.INTEGRATED, readerFormat.OLD_PLAN_FP),
+  sectionCount: 10
+ });
+ assert.deepEqual(operator.replay(oldCase.record, oldCase.candidate), oldCase.correctedObj);
+
+ // 2. 当前 NEW_DRAFT_FP / NEW_PLAN_FP 重放通过
+ const newCase = makeCase({
+  targetDraftHeader: codec.recordHeader('reader-draft', 'reader-draft'),
+  targetPlanHeader: codec.recordHeader('beginner-researcher', 'beginner-researcher'),
+  sectionCount: 6
+ });
+ assert.deepEqual(operator.replay(newCase.record, newCase.candidate), newCase.correctedObj);
+
+ // 3. 若候选身份声明为 NEW_PLAN_FP，不能借用 OLD_DRAFT_FP 的近邻记录跨代重放
+ const crossCandidate = structuredClone(oldCase.candidate);
+ crossCandidate.identity.readerIdentity.article = codec.recordHeader('beginner-researcher', 'beginner-researcher');
+ const crossRecord = {
+  ...oldCase.record,
+  baselineCandidateFile: `/tmp/${repair.hashDraft(crossCandidate.identity)}.json`
+ };
+ assert.throws(() => operator.replay(crossRecord, crossCandidate), /not a bounded malformed current header/);
 });

@@ -447,3 +447,126 @@ test('section reorganization bounds and candidate/content-mode multi-fingerprint
     assert.equal(contentMode.validForSavedPlan(contentMode.fields('source-only'), oldPlanHeader), true);
     assert.equal(contentMode.validForSavedPlan({}, { version: 3, contract: 'beginner-researcher-v3' }), true);
 });
+
+test('PUA Chinese numeral protection preserves Han-ASCII/digit spacing without technical_term_adhesion and supports geometric dimensions', () => {
+    const v4Opts = { editorialProfile: format.COHESIVE_V4 };
+
+    // 覆盖 MLP第一个、二阶Newton、最小二乘L2、最小二乘2范数、3D每一帧
+    const mixedInput = 'MLP第一个隐藏层采用二阶Newton步求解最小二乘2范数与最小二乘L2正则，并对3D每一帧采样。';
+    const mixedIssues = editorial.findQuantitativeChineseNumerals(mixedInput, v4Opts)
+        .map(f => ({ ...f, code: 'quantitative_chinese_numeral' }));
+    assert.equal(mixedIssues.length, 0);
+    const mixedFormatted = deep.normalizeReaderProseFormatting(mixedInput, mixedIssues, v4Opts);
+    assert.equal(
+        mixedFormatted,
+        'MLP 第一个隐藏层采用二阶 Newton 步求解最小二乘 2 范数与最小二乘 L2 正则，并对 3D 每一帧采样。'
+    );
+    assert.equal(deep.normalizeReaderProseFormatting(mixedFormatted, [], v4Opts), mixedFormatted);
+    assert.deepEqual(editorial.findTechnicalTermAdhesions(mixedFormatted), []);
+
+    // 覆盖二维 Mel 频谱、二维Mel频谱、一维 CNN、三维 STFT、每一 token、每一 epoch 对齐
+    const dimInput = '前端提取二维Mel频谱与二维 Mel 频谱，送入一维 CNN 与三维 STFT 分支，并对每一token与每 1 epoch 统计均值。';
+    const dimIssues = editorial.findQuantitativeChineseNumerals(dimInput, v4Opts)
+        .map(f => ({ ...f, code: 'quantitative_chinese_numeral' }));
+    assert.equal(dimIssues.length, 0);
+    const dimFormatted = deep.normalizeReaderProseFormatting(dimInput, dimIssues, v4Opts);
+    assert.equal(
+        dimFormatted,
+        '前端提取二维 Mel 频谱与二维 Mel 频谱，送入一维 CNN 与三维 STFT 分支，并对每一 token 与每一 epoch 统计均值。'
+    );
+    assert.equal(deep.normalizeReaderProseFormatting(dimFormatted, [], v4Opts), dimFormatted);
+    assert.deepEqual(editorial.findTechnicalTermAdhesions(dimFormatted), []);
+
+    // 实测向量维数（五维–百维、128 维）仍按定量数字转换
+    const empiricalDim = '编码器输出压缩到五维子空间与128维瓶颈向量。';
+    const empiricalIssues = editorial.findQuantitativeChineseNumerals(empiricalDim, v4Opts)
+        .map(f => ({ ...f, code: 'quantitative_chinese_numeral' }));
+    assert.deepEqual(empiricalIssues.map(i => i.match), ['五维']);
+    assert.equal(
+        deep.normalizeReaderProseFormatting(empiricalDim, empiricalIssues, v4Opts),
+        '编码器输出压缩到 5 维子空间与 128 维瓶颈向量。'
+    );
+});
+
+test('signed claim projection, conceptBridge surface inverse, and git-prompt-evidence-index support cohesive-v4 and pre-edit blobs', () => {
+    const { normalizeSignedReaderClaim } = require('../scripts/lib/reader-signed-raw-claim-display');
+    const promptEvidence = require('../scripts/lib/prompt-evidence');
+    const promptHistory = require('../scripts/lib/prompt-history');
+
+    // 1. normalizeSignedReaderClaim 透传 cohesive-functional-v4 时保留每一层/二阶/二维 Mel 频谱并正确加中英空格
+    const rawNode = '前文交代输入边界。在编码阶段，MLP每一层采用二阶Newton步更新二维Mel频谱掩码。后文核对实验代价。';
+    const rawClaim = 'MLP每一层采用二阶Newton步更新二维Mel频谱掩码。';
+    const projectedV4 = normalizeSignedReaderClaim(rawClaim, rawNode, { editorialProfile: format.COHESIVE_V4 });
+    assert.equal(projectedV4, 'MLP 每一层采用二阶 Newton 步更新二维 Mel 频谱掩码。');
+
+    // 2. reconstructReaderDraftSurface 在 v4 下含保护中文数词的 conceptBridges 精确往返
+    const { draft, artifacts, options, base } = buildCohesiveV4DraftFixture();
+    const draftWithBridge = structuredClone(draft);
+    draftWithBridge.conceptBridges = [{
+        terms: ['二阶盲辨识', '二维Mel频谱'],
+        sectionKind: 'component',
+        marker: '[[CONCEPT_BRIDGE_1]]',
+        explanation: '二阶盲辨识负责抑制跨通道残差相关性，二维Mel频谱负责保留时频局部结构，二者配合在每一帧维持一对一相位对齐。'
+    }];
+    draftWithBridge.sections[3].body += '\n\n[[CONCEPT_BRIDGE_1]]';
+    const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draftWithBridge), options);
+    assert.deepEqual(parsed.plan.conceptBridges[0].terms, ['二阶盲辨识', '二维 Mel 频谱']);
+    const rendered = deep.injectApiReaderFigures(parsed, artifacts, base.paper.arxivId);
+    const signedPaper = structuredClone(base.paper);
+    const protocols = require('../scripts/lib/reader-stage-protocols');
+    const identities = require('../scripts/lib/reader-identity-format');
+    const { stableHash } = require('../scripts/lib/fresh-rewrite-run');
+    const stage = signedPaper.analysisManifest.stages.apiReaderArticle;
+    signedPaper.apiReaderArticle = rendered.article;
+    signedPaper.apiReaderPlan = rendered.plan;
+    signedPaper.apiReaderFigures = rendered.figures;
+    signedPaper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = artifacts.payloadSha256;
+    stage.structuredArtifactsSha256 = artifacts.payloadSha256;
+    signedPaper.analysisManifest.contracts.apiReaderArticle = rendered.plan.contract;
+    signedPaper.analysisManifest.contracts.apiReaderSourceBindings = rendered.plan.sourceBindingsContract;
+    for (const key of protocols.flatFields) delete stage[key];
+    stage.qualityMetrics = parsed.qualityMetrics;
+    Object.assign(
+        stage,
+        protocols.stageFields(rendered.plan, parsed.qualityMetrics),
+        require('../scripts/lib/reader-content-mode').fields('source-only')
+    );
+    const { contract: _oa, ...authorBody } = signedPaper.apiReaderAuthors.identity;
+    signedPaper.apiReaderAuthors.identity = { ...identities.header('authors'), ...authorBody };
+    signedPaper.apiReaderAuthors.identitySha256 = stableHash(signedPaper.apiReaderAuthors.identity);
+    const { contract: _or, identitySha256: _oi, ...resourceBody } = signedPaper.apiReaderResources;
+    signedPaper.apiReaderResources = { ...identities.header('resources'), ...resourceBody };
+    signedPaper.apiReaderResources.identitySha256 = stableHash(signedPaper.apiReaderResources);
+    signedPaper.analysisManifest.contracts.apiReaderAuthorIdentity = signedPaper.apiReaderAuthors.identity.contract;
+    signedPaper.analysisManifest.contracts.apiReaderResourceIdentity = signedPaper.apiReaderResources.contract;
+    delete stage.readerAuthorIdentityContractVersion;
+    delete stage.resourceIdentityContractVersion;
+    stage.readerAuthorIdentitySha256 = signedPaper.apiReaderAuthors.identitySha256;
+    stage.readerAuthorsSha256 = stableHash(signedPaper.apiReaderAuthors);
+    stage.resourceIdentitySha256 = signedPaper.apiReaderResources.identitySha256;
+    Object.assign(stage, identities.stageFields(signedPaper.apiReaderAuthors, signedPaper.apiReaderResources));
+    const scan = signedPaper.analysisManifest.stages.openSourceScan;
+    delete scan.resourceEvidenceContract;
+    Object.assign(scan, identities.openSourceFields(signedPaper.apiReaderResources));
+    scan.resourceEvidenceSha256 = signedPaper.apiReaderResources.identitySha256;
+    require('./reader-signed-draft-fixture').sign(signedPaper);
+
+    const reconstructed = surface.reconstructReaderDraftSurface({
+        paper: signedPaper,
+        paperId: signedPaper.arxivId
+    });
+    assert.equal(reconstructed.draft.conceptBridges.length, 1);
+    assert.deepEqual(reconstructed.draft.conceptBridges[0].terms, ['二阶盲辨识', '二维 Mel 频谱']);
+
+    // 3. 修改前 main (9505bc7f) 的 api-reader-article.md 与 api-reader-repair.md 已登记进 git-prompt-evidence-index.json
+    for (const [stageName, relPath, wholeSha] of [
+        ['apiReaderArticle', 'prompts/current/api-reader-article.md', '789e3d350a8f769fd6c19b8826c1ce238eece3494071950dde8bd3d565916b62'],
+        ['apiReaderRepair', 'prompts/current/api-reader-repair.md', 'be271f1bde708cf24d4a39409df75a199b5a139d831991ae2bfe353e01d628a3']
+    ]) {
+        const bytes = promptEvidence.historicalPromptEvidenceBytesForSha256(wholeSha, { relativePath: relPath });
+        assert.ok(Buffer.isBuffer(bytes) && bytes.length > 0);
+        const tplSha = promptHistory.promptTemplateSha256(bytes.toString());
+        const found = promptEvidence.declaredStagePromptTemplateEvidence(stageName, tplSha);
+        assert.equal(found.fileSha256, wholeSha);
+    }
+});

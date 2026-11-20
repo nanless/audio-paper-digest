@@ -67,11 +67,26 @@ function replayPaidFingerprint(record, candidate) {
         throw new Error('Operator paid fingerprint original or scope differs');
     const strictJson = require('./publication-file-primitives').strictJson;
     const parsed = strictJson(Buffer.from(raw), 'original paid Reader JSON');
-    const expected = codec.recordHeader('reader-draft', 'reader-draft');
     const member = repair.readTopLevelMembers(raw).find(item => item.name === 'schemaFingerprint');
-    if (!member || parsed.contract !== expected.contract || !nearFingerprint(parsed.schemaFingerprint, expected.schemaFingerprint)
-        || raw.slice(member.valueStart, member.valueEnd) !== JSON.stringify(parsed.schemaFingerprint))
+    if (!member || raw.slice(member.valueStart, member.valueEnd) !== JSON.stringify(parsed.schemaFingerprint))
         throw new Error('Operator paid fingerprint is not a bounded malformed current header');
+    const readerFormats = require('./reader-record-format');
+    const candidateArticle = candidate.identity?.readerIdentity?.article;
+    const candidateHeaders = candidateArticle && Object.hasOwn(candidateArticle, 'schemaFingerprint')
+        ? [readerFormats.draftHeaderForSavedPlan(candidateArticle)]
+        : codec.registeredHeaders('reader-draft').filter(header => Object.hasOwn(header, 'schemaFingerprint'));
+    const nearHeaders = candidateHeaders.filter(header =>
+        parsed.contract === header.contract && nearFingerprint(parsed.schemaFingerprint, header.schemaFingerprint)
+    );
+    if (!nearHeaders.length)
+        throw new Error('Operator paid fingerprint is not a bounded malformed current header');
+    const matchingHeaders = nearHeaders.filter(header =>
+        sha(raw.slice(0, member.valueStart) + JSON.stringify(header.schemaFingerprint) + raw.slice(member.valueEnd))
+            === record.correctedRawSha256
+    );
+    if (matchingHeaders.length !== 1)
+        throw new Error('Operator paid fingerprint replacement changes content or shape');
+    const expected = matchingHeaders[0];
     const corrected = raw.slice(0, member.valueStart) + JSON.stringify(expected.schemaFingerprint) + raw.slice(member.valueEnd);
     const draft = strictJson(Buffer.from(corrected), 'corrected paid Reader JSON');
     if (sha(corrected) !== record.correctedRawSha256 || !repair.parseRepairableDraft(draft)

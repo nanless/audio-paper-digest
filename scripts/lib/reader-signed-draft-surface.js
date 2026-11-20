@@ -13,18 +13,22 @@ function reconstructReaderDraftSurface({paper, paperId}) {
     const plan = paper.apiReaderPlan;
     if (!['sections', 'conceptBridges', 'figurePlacements', 'formulaBindings', 'tableBindings']
         .every(key => Array.isArray(plan[key]))) fail('signed plan lacks inverse schema arrays');
+    const readerFormat = require('./reader-record-format');
+    const proseFormatOptions = readerFormat.isIntegratedPlan(plan)
+        ? { editorialProfile: readerFormat.compilationOptionsForSavedPlan(plan).editorialProfile }
+        : {};
     let articleWithMarkers = restoreApiReaderInjectionMarkers(paper.apiReaderArticle, plan, paper.apiReaderFigures);
     const bridges = plan.conceptBridges.map((bridge, index) => {
         // 解析器先对术语做与拼装后正文相同的表面规范化，再对规范计划签名
         // （例如把阿拉伯数字与中文分开）。从这个规范表面重建精确前缀；
         // 用未规范化的原始术语会让每个本来合法的签名桥接都显得不可逆。
         const formattedTerms = (bridge.terms || []).map(term =>
-            normalizeReaderProseFormatting(String(term || '').trim())
+            normalizeReaderProseFormatting(String(term || '').trim(), [], proseFormatOptions)
         );
         const signedTerms = (bridge.terms || []).map(term => String(term || '').trim());
         const prefixes = [...new Set([signedTerms,formattedTerms].flatMap(terms => {
             const value = `**${terms.join(' × ')}：**`;
-            return [value,normalizeReaderProseFormatting(value)];
+            return [value,normalizeReaderProseFormatting(value, [], proseFormatOptions)];
         }))].filter(prefix => typeof bridge.explanation === 'string' && bridge.explanation.startsWith(prefix));
         if (prefixes.length !== 1) fail(`bridge ${index} lacks an unambiguous signed prefix`);
         const prefix = prefixes[0];

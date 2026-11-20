@@ -356,7 +356,7 @@ function findQuantitativeChineseNumerals(text, options = {}) {
             .replace(/最小二乘(?:法|估计|解|回归|拟合|问题|损失|误差)?/gu, match => ' '.repeat(match.length))
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一对一|一对多|多对一|多对多|一一对应)/gu, match => ' '.repeat(match.length))
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|五|六|高|低|多|零|分数)阶/gu, match => ' '.repeat(match.length))
-            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|高|低|多)维(?=[\p{Script=Han}])/gu, match => ' '.repeat(match.length))
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|高|低|多)维(?=[ \t]*(?:[\p{Script=Han}A-Za-z]))/gu, match => ' '.repeat(match.length))
             .replace(/一分不得|一分为二|合二为一|一举两得|独一无二|举一反三|融为一体|一成不变|一概而论|一视同仁|一目了然|一脉相承|一步到位|二者合一|合而为一|万无一失|百里挑一|十拿九稳|一劳永逸|一锤定音|一针见血/gu,
                 match => ' '.repeat(match.length))
             .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu,

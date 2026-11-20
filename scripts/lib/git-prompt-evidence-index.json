@@ -2053,6 +2053,18 @@
       "paths": [
         "prompts/current/structure-repair.md"
       ]
+    },
+    "789e3d350a8f769fd6c19b8826c1ce238eece3494071950dde8bd3d565916b62": {
+      "blobOid": "284b23e567a151bbf7bc086e30373bcec77f0443",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "be271f1bde708cf24d4a39409df75a199b5a139d831991ae2bfe353e01d628a3": {
+      "blobOid": "6224cab7765bc41c666146870db3654a205855f1",
+      "paths": [
+        "prompts/current/api-reader-repair.md"
+      ]
     }
   }
 }

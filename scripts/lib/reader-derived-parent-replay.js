@@ -80,8 +80,12 @@ function scopedPrunedTables(draft, record, parent, current, source) {
             || now.filter(t => t.markdown === now[index]?.markdown).length !== 1
             || slots.filter(s => s.table?.markdown === slot.table.markdown).length !== 1) continue;
         const rawNode = draft.sections[Number(slot.sectionPath.split('/')[2])]?.body;
+        const readerFormat = require('./reader-record-format');
+        const claimOptions = readerFormat.isIntegratedPlan(parent.apiReaderPlan)
+            ? { editorialProfile: readerFormat.compilationOptionsForSavedPlan(parent.apiReaderPlan).editorialProfile }
+            : {};
         const projected = require('../deep-analyzer').normalizeApiReaderTablePasteArtifacts(
-            require('./reader-signed-raw-claim-display').normalizeSignedReaderClaim(slot.table.markdown, rawNode));
+            require('./reader-signed-raw-claim-display').normalizeSignedReaderClaim(slot.table.markdown, rawNode, claimOptions));
         if (projected !== old[index].markdown || !orderedProjection(old[index], now[index])
             || parent.apiReaderPlan.tableBindings[index]?.renderedTableSha256 !== sha(old[index].markdown)
             || current.plan.tableBindings[index]?.renderedTableSha256 !== sha(now[index].markdown)) continue;

@@ -47,7 +47,12 @@ function applyBoundedFactPatch(original, record, feedback, source, tableProjecti
                 || old.slice(edit.start, edit.end) !== edit.from) fail('替换越出当前逐字rejected claim范围');
             if (edit.rawClaim !== undefined) {
                 const format = require('./reader-signed-raw-claim-display').normalizeSignedReaderClaim;
-                if (format(rawClaim, old) !== claim || !format(old, old).includes(claim)) {
+                const readerFormat = require('./reader-record-format');
+                const parentPlan = record.parentPaper?.apiReaderPlan;
+                const claimOptions = readerFormat.isIntegratedPlan(parentPlan)
+                    ? { editorialProfile: readerFormat.compilationOptionsForSavedPlan(parentPlan).editorialProfile }
+                    : {};
+                if (format(rawClaim, old, claimOptions) !== claim || !format(old, old, claimOptions).includes(claim)) {
                     if (!require('./reader-signed-pruned-table-claim').matchesPrunedTableClaim({
                         handle: tableProjectionHandle, original, record, source, range, edit, claim, rawClaim
                     })) fail('raw/rendered原句不能按实际正常producer精确映射');

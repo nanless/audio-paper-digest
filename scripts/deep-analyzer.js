@@ -3144,7 +3144,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
     };
     const protectedChinese = [];
     const chineseTokenFor = index => (
-        '\uE000' + [...String(index)].map(d => String.fromCharCode(0xE100 + Number(d))).join('') + '\uE001'
+        '\uE200' + [...String(index)].map(d => String.fromCharCode(0xE210 + Number(d))).join('') + '\uE201'
     );
     const protectChinese = value => {
         const token = chineseTokenFor(protectedChinese.length);
@@ -3173,17 +3173,17 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
     if (isCohesiveV4) {
         protectedText = protectedText
             .replace(/最小\s*2\s*乘/gu, '最小二乘')
-            .replace(/每\s*1\s*(?=维|帧|步|个|次|层|段|组|条|路|类)/gu, '每一')
+            .replace(/每\s*1\s*(?=维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch)/giu, '每一')
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿.])1\s*对一/gu, '一对一')
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿.])1\s*对多/gu, '一对多')
             .replace(/多对\s*1(?![\d.%])/gu, '多对一')
             .replace(/最小二乘(?:法|估计|解|回归|拟合|问题|损失|误差)?/gu, protectChinese)
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一对一|一对多|多对一|多对多|一一对应)/gu, protectChinese)
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|五|六|高|低|多|零|分数)阶/gu, protectChinese)
-            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|高|低|多)维(?=[\u3400-\u9fff])/gu, protectChinese)
+            .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|二|三|四|高|低|多)维(?=[ \t]*(?:[\u3400-\u9fffA-Za-z]))/gu, protectChinese)
             .replace(/一分不得|一分为二|合二为一|一举两得|独一无二|举一反三|融为一体|一成不变|一概而论|一视同仁|一目了然|一脉相承|一步到位|二者合一|合而为一|万无一失|百里挑一|十拿九稳|一劳永逸|一锤定音|一针见血/gu, protectChinese)
             .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu, protectChinese)
-            .replace(/每一(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块)/gu, protectChinese);
+            .replace(/每一(?=\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch))/giu, protectChinese);
     }
     const adjacentNumeralSurfaces = [];
     let numeralSafeText = protectedText;
@@ -3202,9 +3202,9 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
     }
     let normalized = numeralSafeText
         .replace(/采样率\s*1\s*般(?=\s*16\s*千赫)/g, '采样率通常为')
-        .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
-        .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
-        .replace(/([A-Za-z0-9.%+*)\]~*_α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2')
+        .replace(/([\u3400-\u9fff\uE201])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
+        .replace(/([\u3400-\u9fff\uE201])([α-ωΑ-Ω])/g, '$1 $2')
+        .replace(/([A-Za-z0-9.%+*)\]~*_α-ωΑ-Ω])([\u3400-\u9fff\uE200])/g, '$1 $2')
         // 论文提示词常把占位符写成 <S> 或 <True/False>。读者文章在发布前若不把它们绑成
         // 行内代码，Hugo 会把这些字节当成裸 HTML。
         .replace(
@@ -3462,15 +3462,15 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
             /(\d+)\s+(?=(?:数据集|模型|系统|方法|基线|语料库|语言|方言|条件|任务|阶段|模块|组件|分支|锚点|图|表)(?:[，。；：、\s]|$))/g,
             '$1 个'
         )
-        .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
+        .replace(/([\u3400-\u9fff\uE201])([-+]\d)/g, '$1 $2')
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:MWh|mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         // 检查器会将②、⑥、上标等数字归一化；排版保留原数字，只补汉字边界空格。
         // 否则它报出的“式2”无法在原稿“式②”中定位，模型会反复修同一处。
-        .replace(/([\p{Script=Han}])(?=\p{N})/gu, '$1 ')
-        .replace(/(\p{N})(?=[\p{Script=Han}])/gu, '$1 ')
+        .replace(/([\p{Script=Han}\uE201])(?=\p{N})/gu, '$1 ')
+        .replace(/(\p{N})(?=[\p{Script=Han}\uE200])/gu, '$1 ')
         // 频率和单位的替换发生在第一遍排版之后（例如 十六千赫兹 -> 16 kHz）。再跑一次
         // 拉丁字母到汉字的边界处理，免得新生成的单位和下一个词粘在一起。
-        .replace(/([A-Za-z0-9.%+*)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
+        .replace(/([A-Za-z0-9.%+*)\]α-ωΑ-Ω])([\u3400-\u9fff\uE200])/g, '$1 $2');
     // 不要推断缺失的 %，也不要把后面的单位搬到前面的数值上。这些语义由作者和原文校验
     // 决定，不由排版决定。
     const restoredMarkdown = protectedMarkdown.reduceRight(

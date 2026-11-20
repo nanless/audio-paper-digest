@@ -1,16 +1,17 @@
 'use strict';
 // Display projection only. Range/CAS authorization remains in the signed patch
 // validator; this helper neither compares numeric values nor edits a draft.
-function normalizeSignedReaderClaim(rawClaim, rawNode) {
+function normalizeSignedReaderClaim(rawClaim, rawNode, options = {}) {
     if (typeof rawClaim !== 'string' || !rawClaim.trim() || typeof rawNode !== 'string'
         || !rawNode.includes(rawClaim)) throw new Error('签名Reader原句须逐字存在于同一真实原节点');
     const start = rawNode.indexOf(rawClaim);
     if (rawNode.lastIndexOf(rawClaim) !== start) throw new Error('签名Reader原句在原节点须唯一，不能借用另一处投影');
     const editorial = require('../editorial-quality');
+    const proseOptions = options?.editorialProfile ? { editorialProfile: options.editorialProfile } : {};
     // The public finding supplies every actual surface. Adding its issue code is
     // the same adapter used by the normal Reader producer for these findings.
     const find = text => {
-        const findings = editorial.findQuantitativeChineseNumerals(text);
+        const findings = editorial.findQuantitativeChineseNumerals(text, proseOptions);
         // The public detector masks/normalizes evidence internally. Its offsets
         // are usable only when the exact original UTF-16 span has that surface.
         if (findings.some(finding => !Number.isSafeInteger(finding.index) || finding.index < 0
@@ -24,7 +25,7 @@ function normalizeSignedReaderClaim(rawClaim, rawNode) {
     const issues = findings.filter(finding => finding.index >= start
         && finding.index + finding.match.length <= start + rawClaim.length).map(issue);
     const project = (text, contextIssues) => require('../deep-analyzer').normalizeReaderProseFormatting(
-        editorial.normalizeIssueBoundReaderQuantitativeNumerals(text, contextIssues), contextIssues
+        editorial.normalizeIssueBoundReaderQuantitativeNumerals(text, contextIssues), contextIssues, proseOptions
     );
     const displayed = project(rawClaim, issues);
     if (rawClaim === rawNode) return displayed;
