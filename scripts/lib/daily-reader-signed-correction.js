@@ -231,6 +231,7 @@ function assertParent(record, paper, plan, feedback) {
         || !require('./saved-fact-feedback').completedReaderUpstream(paper, plan)) fail('父稿须为真实已完成的同源整篇');
 }
 function applyBoundedTextPatch(original, record) {
+    if (record.focusCorrections !== undefined) fail('看图要点范围只允许来源绑定事实修正');
     const replacements = record.patch?.replacements;
     if (!Array.isArray(replacements) || replacements.length < 1 || replacements.length > 8
         || replacements.some(r => !/^\/(?:sections\/\d+\/body|figurePlacements\/\d+)$/.test(r.path))) fail('只接受1–8个既有正文或看图路径节点');
