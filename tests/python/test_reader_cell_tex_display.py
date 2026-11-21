@@ -6,6 +6,7 @@
 3. 渲染后的表格不得残留裸 TeX，\\(...\\)、$...$ 与转义竖线不算残留。
 """
 import json
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -25,6 +26,28 @@ PARITY = json.loads((ROOT / 'tests/fixtures/reader-cell-tex-display.json').read_
 
 
 class ReaderCellTexDisplayTest(unittest.TestCase):
+    def test_page_preserves_final_source_cell_projection_without_normalizing_it_again(self):
+        from test_table_currency_unit_literals import TableCurrencyUnitLiteralTest
+        # The real FLUID source cell contains both minus and ± TeX copies.
+        # Its bound final projection preserves the literal space before ±,
+        # while another general display normalization would insert a new one.
+        publisher, paper, _reseal = TableCurrencyUnitLiteralTest().currency_source_fixture(
+            r'−-0.008 ±\pm0.026')
+        before = copy.deepcopy(paper)
+        payload = publisher._api_reader_payload(paper)
+        self.assertIn('−0.008 ±0.026', payload['renderedArticle'])
+        self.assertNotEqual(publisher._normalize_api_reader_display_artifacts(
+            payload['renderedArticle']), payload['renderedArticle'])
+        content, _slug = publisher.generate_paper_page(paper, '2026-08-31')
+        self.assertIn('−0.008 ±0.026', content)
+        self.assertIsNone(publisher._api_reader_page_binding_issue(content, paper))
+        for changed in ('−0.008 ± 0.026', '−0.009 ±0.026'):
+            with self.subTest(changed=changed):
+                self.assertIn('正式 Reader 正文的渲染结果不一致',
+                              publisher._api_reader_page_binding_issue(
+                                  content.replace('−0.008 ±0.026', changed, 1), paper))
+        self.assertEqual(paper, before)
+
     def test_shared_parity_corpus_matches_python_projection(self):
         self.assertEqual(PARITY['contract'], 'reader-cell-tex-display-parity-v1')
         self.assertGreaterEqual(len(PARITY['cases']), 40)

@@ -8795,13 +8795,20 @@ def escape_statistical_significance_stars(text):
 
 
 def normalize_bold_label_prefix_spacing(text):
-    """Trim delimiter whitespace in leading explanation labels, preserving their words."""
+    """整理行首说明标签的分隔空格，保留原词与代码、公式、链接字节。"""
     label = r'\*\*[ \t]*([^*\r\n`|$\[\]<> \t][^*\r\n`|$\[\]<>]{0,239}[:：])\*\*'
     label_pattern = re.compile(label)
     prefix_pattern = re.compile(r'^([ \t]{0,3}(?:>[ \t]*)?)((?:' + label + r'[ \t]*)+)')
+    protected = markdown_inline_code_ranges(text)
+    protected.extend((match.start(), match.end()) for match in re.finditer(
+        r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|'
+        r'!?\[(?:\\.|[^\]\\])*\]\((?:\\.|[^)\\])*\)', text))
     output = []
     fence = None
+    offset = 0
     for line in text.splitlines(keepends=True):
+        line_start = offset
+        offset += len(line)
         marker = re.match(r'^[ \t]{0,3}(?:>[ \t]*)?(`{3,}|~{3,})', line)
         if marker:
             token = marker[1]
@@ -8813,13 +8820,22 @@ def normalize_bold_label_prefix_spacing(text):
             output.append(line)
             continue
         if fence is None:
+            original_prefix = prefix_pattern.match(line)
+            if original_prefix and any(start < line_start + original_prefix.end()
+                                       and end > line_start for start, end in protected):
+                output.append(line)
+                continue
             # Keep the existing repair for the first label, and additionally
             # repair each explicitly delimited label in a contiguous prefix.
             line = re.sub(r'^([ \t]{0,3}(?:>[ \t]*)?)\*\*[ \t]+(?=\S)', r'\1**', line)
             prefix = prefix_pattern.match(line)
             if prefix:
                 labels = label_pattern.sub(lambda match: '**' + match[1] + '**', prefix[2])
-                line = prefix[1] + labels + line[prefix.end():]
+                tail = line[prefix.end():]
+                if tail and (tail[0].isalnum() or '\u3400' <= tail[0] <= '\u9fff') \
+                        and not labels.endswith((' ', '\t')):
+                    labels += ' '
+                line = prefix[1] + labels + tail
         output.append(line)
     return ''.join(output)
 

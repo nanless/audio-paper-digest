@@ -13129,8 +13129,6 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
         else api_reader_payload['renderedArticle'] if api_reader_payload
         else _manual_reader_article(paper, reader_plan, date_str)
     )
-    if api_reader_payload and reader_formats.is_integrated_contract(api_reader_payload.get('contract')):
-        reader_article = _normalize_api_reader_display_artifacts(reader_article)
     reader_first = reader_plan is not None and reader_article is not None
     api_reader_v2 = bool(
         api_reader_payload
