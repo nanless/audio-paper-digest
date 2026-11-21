@@ -1482,7 +1482,18 @@ function collectDraftIssues(draft, parserError, options = {}) {
     const preciseFactError = parserError?.code === 'READER_VERIFIED_FACT_CLAIM'
         && parserIssues.length > 0 && parserIssues.every(issue =>
             ['reader_verified_fact_claim', 'reader_verified_compiled_table_claim'].includes(issue?.code));
-    if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError) {
+    const preciseSelectionError = parserError?.code === 'READER_SELECTION_EMPTY_HEADER'
+        && parserIssues.length === 1
+        && parserIssues[0]?.code === 'reader_selection_empty_header'
+        && parserIssues[0].message === parserError.message
+        && (() => {
+            const match = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(parserIssues[0].path || '');
+            const index = match ? Number(match[1]) : -1;
+            return index >= 0 && draft?.tableBindings?.[index]?.tableIndex === index + 1
+                && Boolean(draft.tableBindings[index].selection)
+                && parserError.message.startsWith(`读者文章 tableBindings[${index}] selection 渲染表头全为空：`);
+        })();
+    if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError && !preciseSelectionError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
         } else if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
@@ -3076,7 +3087,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         // 绑到今天的节点 SHA 上。
         const stalePatchPath = /Reader patch has stale node SHA: (\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?)/.exec(message)?.[1];
         if (stalePatchPath) add(stalePatchPath);
-        if (/selection[\s\S]*(?:第一行必须是原表头，其余行必须是数据行|行列重复、越界或数量不足)/.test(message)) {
+        if (/selection[\s\S]*(?:第一行必须是原表头，其余行必须是数据行|行列重复、越界或数量不足|渲染表头全为空)/.test(message)) {
             const index = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
             if (Number.isInteger(index)) add(`/tableBindings/${index}`);
             // marker 和它所在的整节，结构上本来就有效。这里再要一整节正文，会让
@@ -3663,6 +3674,9 @@ function readFailedCandidateEnvelope(directory, identity, candidateFilename = nu
         candidateFormat.semanticIdentity(envelope.identity);
         validateImplementationAllowance(envelope.payload, envelope.identity, directory);
         require('./explicit-reader-retry-round').validatePersistedRound(directory, envelope.identity, envelope.payload);
+        if (envelope.payload.completedSourceReaderRecovery) {
+            require('./reader-completed-source-recovery').validateSavedPayload(directory, envelope.identity, envelope.payload);
+        }
         const after = fs.fstatSync(fd);
         const named = fs.lstatSync(filename);
         if (['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'nlink']
@@ -3710,6 +3724,20 @@ function saveFailedCandidate(directory, identity, payload, options = {}) {
     const filename = candidatePath(absolute, identity);
     const previous = loadFailedCandidate(absolute, identity);
     const storedPayload = structuredClone(payload);
+    if (previous?.completedSourceReaderRecovery) {
+        if (Object.hasOwn(storedPayload, 'completedSourceReaderRecovery')
+            && hashDraft(storedPayload.completedSourceReaderRecovery) !== hashDraft(previous.completedSourceReaderRecovery)) {
+            throw new Error('已完成Reader原账派生证明不能替换或删除');
+        }
+        if (storedPayload.attempts < previous.attempts || storedPayload.fullAttempts !== previous.fullAttempts
+            || (storedPayload.transportFailures || 0) < (previous.transportFailures || 0)) {
+            throw new Error('已完成Reader原账调用次数不能减少或增加全文');
+        }
+        storedPayload.completedSourceReaderRecovery = previous.completedSourceReaderRecovery;
+    }
+    if (storedPayload.completedSourceReaderRecovery) {
+        require('./reader-completed-source-recovery').validateSavedPayload(absolute, identity, storedPayload);
+    }
     if (previous?.readerOriginalDraftRestorations) {
         if (storedPayload.readerOriginalDraftRestorations
             && hashDraft(storedPayload.readerOriginalDraftRestorations) !== hashDraft(previous.readerOriginalDraftRestorations)) {

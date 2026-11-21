@@ -832,7 +832,7 @@ function verifiedSupersededCompletionPointer(paper) {
     if (!isDeepStrictEqual(checked, revision.completionProof)) fail('superseded revision pointer is unverified', 'run');
     return checked;
 }
-function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPointer=false){
+function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPointer=false, historicalOrigin=false){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
     const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchSchemaFingerprint!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
     if(!prov){if(marked)fail('completion marker lacks daily source','run');return null;}
@@ -939,11 +939,13 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
         return null;
     }
     if(!marked||!stage)fail('completion index/marker removed','content','READER_ORDINAL_ORIGIN_MISSING');
-    const ref=stage.ordinalCompletionProof;if(!ref||path.resolve(ref.path)!==path.join(dir,files.at(-1)))fail('latest completion not selected','run');
+    const ref=stage.ordinalCompletionProof;
+    const selected=ref&&files.find(name=>path.resolve(ref.path)===path.join(dir,name));
+    if(!ref||!selected||!historicalOrigin&&selected!==files.at(-1))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
     savedSourceScope(paper,saved.identity,attempts);
     if(!format.isCompilation(saved)||saved.kind!=='normal-final-completion'||saved.paperId!==canonical(paper)
-        ||saved.sequence!==files.length||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
+        ||saved.sequence!==Number(selected.slice(-13,-5))||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
         ||!format.matchesStage(stage,paper.analysisManifest,saved)||!isDeepStrictEqual(saved.records,stage.ordinalPatchCompilations)
         ||saved.articleSha256!==sha(paper.apiReaderArticle)||saved.planSha256!==stableSha(paper.apiReaderPlan)
         ||!isDeepStrictEqual(saved.stage,stageCore(stage)))fail('normal final completion/source/stage differs','run');
@@ -1045,5 +1047,9 @@ function adoptOrphanedOrdinalCompletion(paper) {
 module.exports={isCombinedReaderFinalRejection,clearSupersededCompletionMarker,recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     planRoundTargets,roundTargetGuidance,applyRoundTargetBudget,roundTargetLimit,ROUND_TARGETS_MAX_AFTER_INVALID_ACK,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
+    // Historical origin authentication never grants current completion or a
+    // request. It keeps an immutable paid parent readable after a later normal
+    // completion is indexed; all stage/source/patch/usage replay remains intact.
+    authenticateHistoricalCompletion:paper=>Boolean(readVerifiedCompletion(paper,false,false,true)),
     verifiedSupersededCompletionPointer,supersedeOrdinalCompletionBeforeReset,adoptOrphanedOrdinalCompletion,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion,
     recordSupersededOrdinalChain,SUPERSEDED_ORDINAL_CHAIN_REASON};

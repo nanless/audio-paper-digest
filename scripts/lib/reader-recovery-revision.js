@@ -379,6 +379,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
     const unsentEmpty = require('./reader-unsent-empty-candidate');
     const exact = unsentEmpty.suppressExact(directory, identity) ? null : loadFailedCandidate(directory, identity);
     if (exact) {
+        require('./reader-completed-source-recovery').validateSavedPayload(directory, identity, exact);
         if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验不能覆盖现有活动候选');
         verifyPixels(exact);
         // A legitimate migration may have saved its child immediately before
@@ -513,6 +514,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         scannedCandidates.push(checked);
         const { envelope, envelopeSha256 } = checked;
         const payload = envelope.payload;
+        require('./reader-completed-source-recovery').validateSavedPayload(directory, envelope.identity, payload);
         // 只允许从同输入的旧签名模式收紧为资源局部模式，不允许解除已保存的局部限制。
         if (envelope.identity.resourceLocalRevisionContract !== undefined
             && envelope.identity.resourceLocalRevisionContract !== identity.resourceLocalRevisionContract) continue;

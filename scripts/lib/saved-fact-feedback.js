@@ -253,9 +253,28 @@ function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = n
         analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options));
 }
 
+function prepareNormalReaderOrdinalSupersession(paper) {
+    if (!paper?.analysisManifest?.stages?.apiReaderArticle?.ordinalCompletionProof) return false;
+    if (!require('../analysis-engine').paperAnalysisLockHeld(paper)
+        || !require('./fresh-analysis-context').isDailyFreshSourceScope()
+        || facts.current(require('../utils').normalizedId(paper))?.readerOnly) {
+        throw new Error('Normal Reader ordinal recovery requires locked actual daily source without Reader feedback');
+    }
+    const ordinal = require('./reader-target-ordinal-patch');
+    // Re-read the original source, completion index, article/plan and paid patch
+    // chain. Its old completion remains history even when the current parser
+    // correctly rejects the article; do not require that rejected content to
+    // pass again before normal recovery can replace it.
+    if (!ordinal.hasActiveCompletion(paper)) throw new Error('Normal Reader ordinal recovery lacks its authenticated original completion');
+    return ordinal.supersedeOrdinalCompletionBeforeReset(paper);
+}
+
 async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null, parentUpstreamProof = null) {
     const target = structuredClone(paper);
-    require('../deep-analyzer').prepareReaderOrdinalFeedbackSupersession(target);
+    const normalRecovery = feedbackSha256 === null && target.analysisManifest?.stages?.apiReaderArticle?.ordinalCompletionProof
+        ? require('./reader-completed-source-recovery').prepare(target) : null;
+    if (feedbackSha256 === null) prepareNormalReaderOrdinalSupersession(target);
+    else require('../deep-analyzer').prepareReaderOrdinalFeedbackSupersession(target);
     require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
         'apiReaderArticle', feedbackSha256);
     const before = protectedReaderUpstream(target);
@@ -289,16 +308,20 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     const corrected = target[correction.FIELD] !== undefined;
     const recoveryReaderResources = local || corrected ? null : require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(
         target, source, { reviewFeedback });
-    const result = await fresh.withFreshPaperContext(target, () =>
+    if (normalRecovery) require('./reader-completed-source-recovery').bindPreparedParent(normalRecovery, target);
+    const generate = () => fresh.withFreshPaperContext(target, () =>
         require('./llm-usage').withLlmUsageContext({ paperId: require('../utils').normalizedId(paper) }, () =>
             corrected ? correction.replaySavedCorrection(target, source, { reviewFeedback }) :
             require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
                 reviewFeedback,
                 ...(recoveryReaderResources ? { recoveryReaderResources } : {}),
+                ...(normalRecovery ? { completedSourceReaderRecovery: normalRecovery, requireExistingSourceCandidate: true } : {}),
                 ...(local ? { readerFactLocalRevision: true } : { resumeSavedSourceReader: true }),
                 ...(parentUpstreamProof ? { parentUpstreamProof } : {}),
                 naturalResourceProse: options.naturalResourceProse === true
             })));
+    const result = await (normalRecovery
+        ? require('./reader-next-request-plan').withReaderLocalRequestsOnly(generate) : generate());
 
     const after = protectedReaderUpstream(result);
     const stages = result?.analysisManifest?.stages;
@@ -557,4 +580,5 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     return facts.withFactReview(parentBound, refresh);
 }
 module.exports = { recoverArchivedCompletedReader, hasSavedProof, readSavedFeedback, withRecoveredFeedback, coreOnlyFeedback,
-    readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback, protectedReaderUpstream };
+    readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback, protectedReaderUpstream,
+    prepareNormalReaderOrdinalSupersession };

@@ -135,6 +135,7 @@ npm run test:compat
 | `lib/primary-fact-local-repair.js` | Node 库：为来源绑定的主文事实纠错限定唯一原段落，严格核验 JSON 的 from/to、原稿 SHA 和修改范围；未授权正文逐字保留，完整正文与评分检查仍由正常分析入口执行。 |
 | `lib/primary-local-validation-replay.js` | Node 库：在真实日更来源与原主文反馈内重放旧局部验证的双输入链，核对原付费、快照及必要操作标记；原阶段、失败、费用与事实义务保留，不授予模型额度或整篇成功。正常冷核对无记录输入保留原有失败判断。 |
 | `lib/saved-fact-feedback.js` | Node 库：deep 与 batch 共用原反馈恢复，显式新反馈优先，核对各阶段证明；整篇和摘要采用不同说明时分别恢复。Reader 旧父恢复先核真实主检查点，保存前保护原对象与传入对象的所有非 Reader 上游，错误还原内存和回调；保留原稿、失败与费用。 |
+| `lib/reader-completed-source-recovery.js` | Node 库：普通日更 Reader 的原完成稿被当前解析器拒绝时，核验原序号完成证明、唯一退休付费档案、四份来源与当前父稿，只在原局部余额内派生续跑候选。原档案不改，保留全部次数与费用；缺来源、输入变化或无法安全定位时拒绝，不授予全文或新增额度。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库：精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/saved-scoring-audit-replay.js` | Node 库：持真实日更论文锁读取完整原包与唯一首评分费用，提供私有待验候选；正常资源重探、原完整评分指纹和请求体重放全通过后才恢复原检查点，不新增请求或额度。 |
 | `lib/daily-scoring-refresh-checkpoint.js` | Node 库：日更评分刷新在Reader前持锁保存新评分，按原四源、完整评分指纹、反馈与父稿冷核后只续Reader；待完成记录阻发布，漂移不重付评分。 |

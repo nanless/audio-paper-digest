@@ -814,10 +814,15 @@ function renderReaderTableSelection(binding, artifacts) {
     // 渲染表头全空会让读者看不到任何列名（例如把全幅分组标题行当作唯一表头、而该行在所选列里无文字）。
     // 这种表在发布端的逐格核对中也无法与原表对应；必须选到真正带列名的原表头行。
     if (matrix[0].every(cell => String(cell ?? '').trim() === '')) {
-        throw new Error(`${label} 渲染表头全为空：所选首行在所选列中没有任何列名文字。`
+        const message = `${label} 渲染表头全为空：所选首行在所选列中没有任何列名文字。`
             + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(headerRows)}，当前选择行=${JSON.stringify(requestedSourceRows)}，`
             + `当前选择列=${JSON.stringify(sourceColumns)}。优先只修正本 binding：把真正写有列名的原表头行放在 sourceRows 首位，`
-            + '全幅分组标题（如 Baselines）不能充当唯一表头；不得改写原表，也不得手写单元格。');
+            + '全幅分组标题（如 Baselines）不能充当唯一表头；可改用通过完整来源检查的 completeTable，不得改写原表，也不得手写单元格。';
+        throw Object.assign(new Error(message), {
+            code: 'READER_SELECTION_EMPTY_HEADER',
+            readerIssues: [{ code: 'reader_selection_empty_header',
+                path: `/tableBindings/${binding.tableIndex - 1}`, message }]
+        });
     }
     const row = cells => `| ${cells.join(' | ')} |`;
     const rendered = {

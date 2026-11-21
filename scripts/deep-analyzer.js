@@ -9547,6 +9547,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const modelImagePreflightEvidenceSha256 = repair.hashDraft(ephemeralImageEvidence);
     const recoveryOptions = useEphemeralFigureEvidence
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
+    if (!inputProofOnly && options.completedSourceReaderRecovery) {
+        require('./lib/reader-completed-source-recovery').install(options.completedSourceReaderRecovery,
+            paper, identity, modelImagePreflightEvidenceSha256);
+    }
     recovered = inputProofOnly ? null : operatorCorrection?.payload || require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, { ...recoveryOptions,
             allowNewImplementationAllowance: false,
@@ -9768,6 +9772,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         patchOnlyAtFullLimit: fullAttempts === 2 && boundedRecoveryAllowance === 0 && !explicitRound
     });
     const revalidatedPatchOnly = changedValidationWithinOriginalBudget && fullAttempts === 2;
+    const completedSourcePatchOnly = Boolean(options.completedSourceReaderRecovery || recovered?.completedSourceReaderRecovery);
     if (completedAttempts >= attemptLimit
         || !changedValidationWithinOriginalBudget
             && (noProgress >= 2 || validationFailureStreak >= 2)) {
@@ -9879,7 +9884,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const emptyRepairSourceBlocked = emptyRepairContext && currentIssues.some(issue =>
             repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
             || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true);
-        if (emptyRepairContext && !emptyRepairSourceBlocked && !revalidatedPatchOnly
+        if (emptyRepairContext && !emptyRepairSourceBlocked && !revalidatedPatchOnly && !completedSourcePatchOnly
             && options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
             repairContext = null;
             sourceBindingNeedsFullRetry = true;
@@ -9898,7 +9903,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 ...latestFailure,
-                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt - 1, fullAttempts, transportFailures,
                 noProgress, failureSignature: previousFailureSignature,
                 validationFailureSignature: previousValidationFailureSignature, validationFailureStreak,
@@ -9952,7 +9957,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...requestPlanState(), phase: 'dispatch_ready' });
             console.log(`    [reader-next-request-plan] ${JSON.stringify(finalPlan)}`);
         }
-        if (revalidatedPatchOnly && !repair.isSafeExistingReaderPatchContext(
+        if ((revalidatedPatchOnly || completedSourcePatchOnly) && !repair.isSafeExistingReaderPatchContext(
             candidate, repairContext, sourceBindingNeedsFullRetry, currentIssues
         )) {
             throw readerRepairStopped('READER_PATCH_ONLY_NO_SAFE_TARGET',
@@ -10139,7 +10144,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             : activeImageInputs;
         let selectedOrdinals = selectedInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
         // Recheck the final redirected context immediately before the request boundary.
-        if (revalidatedPatchOnly && !repair.isSafeExistingReaderPatchContext(
+        if ((revalidatedPatchOnly || completedSourcePatchOnly) && !repair.isSafeExistingReaderPatchContext(
             candidate, repairContext, sourceBindingNeedsFullRetry, currentIssues
         )) {
             throw readerRepairStopped('READER_PATCH_ONLY_NO_SAFE_TARGET',
@@ -10280,7 +10285,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     try { repair.saveFailedCandidate(candidateDirectory, identity, {
                         status: 'failed', draft: paidCandidate,
                         rawDraft: repairContext ? previousDraft : paidRaw,
-                        draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
+                        draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                         attempts: attempt, fullAttempts, noProgress,
                         failureSignature: previousFailureSignature, validationFailureStreak,
                         validationFailureSignature: previousValidationFailureSignature,
@@ -10317,7 +10322,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 noProgress = failureSignature === previousFailureSignature ? noProgress + 1 : 0;
                 previousFailureSignature = failureSignature;
                 repair.saveFailedCandidate(candidateDirectory, identity, {
-                    status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                    status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                     issues: currentIssues, attempts: attempt, fullAttempts, noProgress,
                     failureSignature, validationFailureSignature: previousValidationFailureSignature,
                     validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
@@ -10334,7 +10339,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             // 上限；这次调用到此为止，之后重跑可以接着来。
             transportFailures += 1;
             repair.saveFailedCandidate(candidateDirectory, identity, {
-                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt - 1, fullAttempts,
                 noProgress, failureSignature: previousFailureSignature,
                 validationFailureSignature: previousValidationFailureSignature,
@@ -10452,7 +10457,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const acceptedRecoveryPayload = {
                 ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}),
                 status: 'failed', draft: candidate, rawDraft: JSON.stringify(candidate),
-                draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 ...(supersededOrdinalPatchCompilations ? { supersededOrdinalPatchCompilations } : {}), issues: [],
                 attempts: attempt, fullAttempts, noProgress: 0, failureSignature: '', imageEvidence,
                 providerImageExclusions,
@@ -10471,7 +10476,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } catch (error) {
             if (error?.code === 'READER_VERSION_METADATA_EVIDENCE_INVALID') {
                 repair.saveFailedCandidate(candidateDirectory, identity, { status: 'failed', draft: null, rawDraft: previousDraft,
-                    draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: [{ path: null, message: error.message }],
+                    draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: [{ path: null, message: error.message }],
                     attempts: attempt, fullAttempts, transportFailures, noProgress,
                     failureSignature: previousFailureSignature, validationFailureStreak, validationFailureSignature: previousValidationFailureSignature,
                     imageEvidence, providerImageExclusions, implementationRepairAllowanceProof: null,
@@ -10489,7 +10494,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     ...(preservedPayload || {}),
                     status: 'failed', draft: candidate,
                     rawDraft: candidate ? JSON.stringify(candidate) : originalPaidResponse,
-                    draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
+                    draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                     attempts: attempt, fullAttempts, transportFailures, noProgress,
                     failureSignature: previousFailureSignature, validationFailureStreak,
                     validationFailureSignature: previousValidationFailureSignature,
@@ -10522,7 +10527,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 repair.saveFailedCandidate(candidateDirectory, identity, {
                     status: 'failed', draft: candidate,
                     rawDraft: repairContext ? candidate ? JSON.stringify(candidate) : previousDraft : raw,
-                    draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
+                    draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                     attempts: attempt, fullAttempts, transportFailures, noProgress,
                     failureSignature: previousFailureSignature, validationFailureStreak,
                     validationFailureSignature: previousValidationFailureSignature,
@@ -10564,7 +10569,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ? validationFailureStreak + 1 : 1;
             previousValidationFailureSignature = normalizedFailureSignature;
             repair.saveFailedCandidate(candidateDirectory, identity, {
-                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt, fullAttempts, noProgress, failureSignature, imageEvidence,
                 providerImageExclusions,
                 // 补丁拒绝原文必须随失败候选落盘：进程中断后续跑时 savedPatchRejectionFeedback
@@ -10781,6 +10786,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             ...(options[READER_SAVED_REQUEST_INPUT_PROOF] ? { [READER_SAVED_REQUEST_INPUT_PROOF]: true } : {}),
             reviewFeedback,
             ...(requireExistingSourceCandidate ? { requireExistingSourceCandidate: true } : {}),
+            ...(options.completedSourceReaderRecovery ? { completedSourceReaderRecovery: options.completedSourceReaderRecovery } : {}),
             naturalResourceProse,
             resourceLocalRevision: options.resourceLocalRevision === true,
             readerFactLocalRevision: options.readerFactLocalRevision === true,

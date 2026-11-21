@@ -35,3 +35,29 @@ test('以全幅分组标题行作唯一表头且所选列无文字时拒绝，�
     const rendered = renderReaderTableSelection(good, artifacts);
     assert.match(rendered.markdown, /^\| System \| 2-way \| 3-way \|/);
 });
+
+test('空表头的完整诊断定位原绑定，全文预算耗尽后仍只授权该节点', () => {
+    const repair = require('../scripts/lib/reader-repair');
+    const artifacts = { tables: [table()] };
+    const binding = { tableIndex: 1, selection: { sourceTableOrdinal: 3, sourceRows: [1, 2, 3], sourceColumns: [1, 2, 3] } };
+    const draft = { sections: [{ kind: 'result', heading: '实验结果的比较条件', body: '比较原论文在相同测试条件下的不同基线，逐项检查方法与数据范围。'.repeat(3)
+        + '\n\n[[TABLE_1]]\n\n' + '解释实际结果与适用条件，保留作者报告的指标与比较设置。'.repeat(3) }],
+        conceptBridges: [], figurePlacements: [], formulaBindings: [], tableBindings: [binding] };
+    let error;
+    try { renderReaderTableSelection(binding, artifacts); } catch (cause) { error = cause; }
+    assert.equal(error.code, 'READER_SELECTION_EMPTY_HEADER');
+    assert.equal(error.readerIssues[0].path, '/tableBindings/0');
+    const issues = repair.collectDraftIssues(draft, error, { structuredArtifacts: artifacts });
+    const blocking = issues.filter(issue => !issue.diagnosticOnly);
+    assert.ok(blocking.length > 0);
+    assert.ok(blocking.every(issue => issue.path === '/tableBindings/0'), JSON.stringify(blocking));
+    const context = repair.buildRepairContext(draft, issues, '', '', { structuredArtifacts: artifacts });
+    assert.deepEqual(context.targets.map(target => target.path), ['/tableBindings/0']);
+    assert.equal(repair.isSafeExistingReaderPatchContext(draft, context, false, issues), true);
+    assert.equal(repair.isSafeExistingReaderPatchContext(draft, context, false,
+        [...issues, { path: null, message: '另一个无法定位的真实问题' }]), false);
+    const bad = Object.assign(new Error(error.message), { code: error.code,
+        readerIssues: [{ ...error.readerIssues[0], path: '/tableBindings/1' }] });
+    assert.ok(repair.collectDraftIssues(draft, bad, { structuredArtifacts: artifacts })
+        .some(issue => issue.path === null && !issue.diagnosticOnly));
+});
