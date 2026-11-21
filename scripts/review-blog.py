@@ -430,7 +430,8 @@ def main():
         date_str, include_id = parse_options(module)
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
         with scope_context(include_id):
-            with module.blog_publication_lock(date_str):
+            with module.blog_publication_lock(date_str), \
+                    getattr(module, '_daily_publication_replay_scope', nullcontext)():
                 receipt = _run_review(module, date_str)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:
         print(f'\n❌ 审查失败，未生成本次审查凭证: {exc}')

@@ -51,6 +51,7 @@ class PublicationPatchCache(unittest.TestCase):
             '_stable_json_sha256': stable, '_javascript_string_sha256': lambda text: hashlib.sha256(text.encode()).hexdigest(),
             '_sha256_file': lambda path: hashlib.sha256(path.read_bytes()).hexdigest(),
             '_daily_fresh_compact_json_bytes': lambda value: json.dumps(value).encode(), '_run_bounded_subprocess': fake_replay}
+        self.namespace['_daily_publication_canonical_replay_paper'] = lambda paper: paper
         tree = ast.parse(SOURCE.read_text())
         names = {'_daily_fresh_read_private_file', '_has_source_bound_reader_patch_completion',
                  '_validate_reader_resource_claim_source_replay'}

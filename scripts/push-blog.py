@@ -206,7 +206,8 @@ def main():
         dry_run = _dry_run_requested()
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
         with scope_context(include_id):
-            with module.blog_publication_lock(date_str):
+            with module.blog_publication_lock(date_str), \
+                    getattr(module, '_daily_publication_replay_scope', nullcontext)():
                 paths, receipt = module.load_verified_review_receipt(date_str)
                 module.preflight_production_publication(
                     date_str, require_production_receipt=require_production_receipt,

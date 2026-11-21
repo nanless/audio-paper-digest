@@ -247,5 +247,120 @@ class DailyPublicationTableSourceTest(unittest.TestCase):
             self.assertEqual(publisher.validate_generation_input_source_reference(manifest, payload['batchDate']), str(data.resolve()))
 
 
+class DailyPublicationCanonicalReplayTest(unittest.TestCase):
+    @staticmethod
+    def prepare(payload):
+        from test_publish_common import complete_paper
+        original = payload['papers'][0]
+        valid = complete_paper()
+        original['analysis'] = valid['analysis']
+        original['parsed'] = valid['parsed']
+        original['scoringRubricVersion'] = valid['scoringRubricVersion']
+        original['parsed']['summary'] = 'Old saved non-scoring projection.'
+
+    def view(self, original):
+        view = copy.deepcopy(original)
+        view['parsed'] = publisher.resolve_publish_parsed(original)
+        view['normalizedArxivId'] = original['arxivId']
+        return view
+
+    def test_actual_owner_recovers_only_normal_view_and_expires_after_invocation(self):
+        with verified_input(prepare=self.prepare) as (_, data, payload):
+            original = payload['papers'][0]
+            view = self.view(original)
+            self.assertNotEqual(view['parsed'], original['parsed'])
+            self.assertIs(publisher._daily_publication_canonical_replay_paper(view), view)
+            with publisher._daily_publication_replay_scope():
+                owner = publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+                with publisher._daily_publication_table_source_scope(owner):
+                    pass
+                recovered = publisher._daily_publication_canonical_replay_paper(view)
+                self.assertEqual(recovered, original)
+                recovered['parsed']['summary'] = 'Cannot mutate owner'
+                self.assertEqual(publisher._daily_publication_canonical_replay_paper(view), original)
+                self.assertIn(owner, publisher._DAILY_PUBLICATION_SOURCE_OPERATIONS)
+            self.assertNotIn(owner, publisher._DAILY_PUBLICATION_SOURCE_OPERATIONS)
+            self.assertIs(publisher._daily_publication_canonical_replay_paper(view), view)
+            with self.assertRaises(PublishDataValidationError):
+                publisher._daily_publication_operation_state(owner)
+
+    def test_arbitrary_parsed_or_any_other_member_change_is_rejected(self):
+        with verified_input(prepare=self.prepare) as (_, data, payload):
+            view = self.view(payload['papers'][0])
+            with publisher._daily_publication_replay_scope():
+                publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+                mutations = [
+                    lambda p: p['parsed'].update(summary='forged'),
+                    lambda p: p.update(title='forged'),
+                    lambda p: p.update(authors=['forged']),
+                    lambda p: p.update(apiReaderArticle='forged'),
+                    lambda p: p.update(apiReaderPlan={}),
+                    lambda p: p.update(analysis=p['analysis'] + '\nchanged'),
+                    lambda p: p['analysisManifest'].update(stages={}),
+                    lambda p: p.pop('parsed'),
+                    lambda p: p.update(canonicalPaper=payload['papers'][0]),
+                    lambda p: p.update(normalizedArxivId='2609.99999'),
+                ]
+                for mutate in mutations:
+                    candidate = copy.deepcopy(view); mutate(candidate)
+                    with self.subTest(mutation=mutate), self.assertRaises(PublishDataValidationError):
+                        publisher._daily_publication_canonical_replay_paper(candidate)
+
+    def test_original_input_run_and_each_source_are_rechecked(self):
+        with verified_input(prepare=self.prepare) as (root, data, payload):
+            view = self.view(payload['papers'][0])
+            with publisher._daily_publication_replay_scope():
+                publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+                directory = source_directory(root, payload)
+                files = [data, root / payload['dailyFreshSourceRun']['runId'] / 'run.json']
+                files += [directory / name for name in ('source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json')]
+                for file in files:
+                    before = file.read_bytes()
+                    try:
+                        file.write_bytes(before + b' ')
+                        with self.subTest(file=file.name), self.assertRaises(PublishDataValidationError):
+                            publisher._daily_publication_canonical_replay_paper(view)
+                    finally:
+                        file.write_bytes(before)
+                self.assertEqual(publisher._daily_publication_canonical_replay_paper(view), payload['papers'][0])
+
+    def test_nested_scope_reuses_owner_and_success_or_error_clears_context(self):
+        with verified_input(prepare=self.prepare) as (_, data, payload):
+            with self.assertRaisesRegex(RuntimeError, 'original failure'):
+                with publisher._daily_publication_replay_scope():
+                    owner = publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+                    state = publisher._DAILY_PUBLICATION_REPLAY_SCOPE.get()
+                    with publisher._daily_publication_replay_scope():
+                        self.assertIs(publisher._DAILY_PUBLICATION_REPLAY_SCOPE.get(), state)
+                        self.assertEqual(publisher._daily_publication_canonical_replay_paper(self.view(payload['papers'][0])), payload['papers'][0])
+                    self.assertIs(publisher._DAILY_PUBLICATION_REPLAY_SCOPE.get(), state)
+                    raise RuntimeError('original failure')
+            self.assertIsNone(publisher._DAILY_PUBLICATION_REPLAY_SCOPE.get())
+            self.assertNotIn(owner, publisher._DAILY_PUBLICATION_SOURCE_OPERATIONS)
+
+    def test_fake_or_closed_operation_cannot_mint_canonical_paper(self):
+        view = {'parsed': {'summary': 'fake'}, 'canonicalPaper': {'parsed': {}}}
+        for fake in ({'records': [view]}, publisher._DailyPublicationTableSourceOperation()):
+            token = publisher._DAILY_PUBLICATION_REPLAY_SCOPE.set({'operations': [fake], 'sources': {}})
+            try:
+                with self.assertRaises(PublishDataValidationError):
+                    publisher._daily_publication_canonical_replay_paper(view)
+            finally:
+                publisher._DAILY_PUBLICATION_REPLAY_SCOPE.reset(token)
+
+    def test_review_push_reference_cache_reuses_only_current_owner(self):
+        with verified_input(prepare=self.prepare) as (_, data, payload):
+            manifest = {'inputSourceReference': publisher.build_generation_input_source_reference(data)}
+            with mock.patch.object(publisher, 'validate_daily_fresh_sources_for_publish',
+                                   wraps=publisher.validate_daily_fresh_sources_for_publish) as gate:
+                for invocation in range(2):
+                    with publisher._daily_publication_replay_scope():
+                        for _ in range(6):
+                            publisher.validate_generation_input_source_reference(manifest, payload['batchDate'])
+                        self.assertEqual(gate.call_count, invocation + 1)
+                        self.assertEqual(publisher._daily_publication_canonical_replay_paper(self.view(payload['papers'][0])), payload['papers'][0])
+                self.assertIsNone(publisher._DAILY_PUBLICATION_REPLAY_SCOPE.get())
+
+
 if __name__ == '__main__':
     unittest.main()

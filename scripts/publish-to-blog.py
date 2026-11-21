@@ -13941,7 +13941,14 @@ def validate_generation_input_source_reference(manifest, target_date, *, fresh=F
     if run_stamp is not None:
         replay_key = (str(source), reference['sha256'], int(reference['bytes']),
                       str(target_date), run_stamp)
-    if not fresh and replay_key is not None and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE:
+    replay_scope = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    scope_has_source = replay_scope is None or (
+        str(source.resolve()), reference['sha256']) in replay_scope['sources']
+    if not fresh and replay_key is not None and replay_key in _SOURCE_REFERENCE_REPLAY_CACHE \
+            and scope_has_source:
+        if replay_scope is not None:
+            operation = replay_scope['sources'][(str(source.resolve()), reference['sha256'])]
+            _daily_publication_operation_state(operation)[0]()
         return str(source)
     validate_daily_fresh_sources_for_publish(str(source), target_date)
     if replay_key is not None:
@@ -14594,6 +14601,7 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     source_text = source_details.get('text')
     if not isinstance(source_text, str) or _javascript_string_sha256(source_text) != paper.get('sourceSha256'):
         raise PublishDataValidationError(f'{paper_id} 资源宣称重放缺少对应的封存全文。')
+    replay_paper = _daily_publication_canonical_replay_paper(paper)
     cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'
     authenticated_footnotes = any(isinstance(resource, dict) and 'authenticatedPdfFootnoteEvidence' in resource
                                   for resource in (paper.get('apiReaderResources') or {}).get('resources', []))
@@ -14608,7 +14616,7 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('资源宣称规则重放需要 Node.js。')
-    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'sourceText': source_text})
+    payload = _daily_fresh_compact_json_bytes({'paper': replay_paper, 'sourceText': source_text})
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('资源宣称规则重放输入超过上限。')
     replay_env = {key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}}
@@ -14660,6 +14668,40 @@ def _reject_unbound_api_generation_input(papers):
 
 
 _DAILY_PUBLICATION_SOURCE_OPERATIONS = weakref.WeakKeyDictionary()
+_DAILY_PUBLICATION_REPLAY_SCOPE = contextvars.ContextVar('daily_publication_replay_scope', default=None)
+
+
+@contextmanager
+def _daily_publication_replay_scope():
+    """Keep only this locked invocation's authenticated owners for producer views."""
+    if _DAILY_PUBLICATION_REPLAY_SCOPE.get() is not None:
+        yield
+        return
+    state = {'sources': {}, 'operations': []}
+    token = _DAILY_PUBLICATION_REPLAY_SCOPE.set(state)
+    try:
+        yield
+        for operation in state['operations']:
+            _daily_publication_operation_state(operation)[0]()
+    finally:
+        _DAILY_PUBLICATION_REPLAY_SCOPE.reset(token)
+        for operation in state['operations']:
+            _DAILY_PUBLICATION_SOURCE_OPERATIONS.pop(operation, None)
+
+
+def _with_daily_publication_replay_scope(function):
+    @functools.wraps(function)
+    def replayed(*args, **kwargs):
+        with _daily_publication_replay_scope():
+            return function(*args, **kwargs)
+    return replayed
+
+
+def _daily_publication_canonical_replay_paper(paper):
+    state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    if state is None or not state['operations']:
+        return paper  # Outside an actual saved-input scope, keep the strict old path.
+    return _daily_publication_operation_state(state['operations'][-1])[1](paper, canonical=True)
 
 
 class _DailyPublicationTableSourceOperation:
@@ -14784,7 +14826,7 @@ def _mint_daily_publication_table_operation(source_path, source_bytes, run_file,
         # Return the actual just-read TXT, rather than any saved/caller-supplied text.
         return seen[record['source']['files'][0][0]].decode('utf-8') if record is not None else None
 
-    def source_text(paper):
+    def source_text(paper, *, canonical=False):
         require_active()
         paper_id = _daily_fresh_normalized_paper_id(paper)
         record = records.get(paper_id)
@@ -14805,7 +14847,8 @@ def _mint_daily_publication_table_operation(source_path, source_bytes, run_file,
             expected = apply_publish_image_exclusions([expected], exclusions=exclusions)[0]
             if _daily_publication_paper_bytes(paper) != _daily_publication_paper_bytes(expected):
                 raise PublishDataValidationError('daily table image-exclusion view is not the original normal projection')
-        return assert_unchanged(paper_id)
+        text = assert_unchanged(paper_id)
+        return copy.deepcopy(original) if canonical else text
 
     _DAILY_PUBLICATION_SOURCE_OPERATIONS[operation] = (assert_unchanged, source_text)
     return operation
@@ -14823,7 +14866,9 @@ def _daily_publication_table_source_scope(operation):
             yield capability
             assert_unchanged()
     finally:
-        _DAILY_PUBLICATION_SOURCE_OPERATIONS.pop(operation, None)
+        state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+        if state is None or operation not in state['operations']:
+            _DAILY_PUBLICATION_SOURCE_OPERATIONS.pop(operation, None)
 
 
 @_with_reader_author_replay_batch
@@ -14956,6 +15001,10 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     except BaseException:
         del _DAILY_PUBLICATION_SOURCE_OPERATIONS[operation]
         raise
+    state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    if state is not None:
+        state['operations'].append(operation)
+        state['sources'][(str(source_path.resolve()), _daily_fresh_sha256(source_bytes))] = operation
     return operation
 
 
@@ -18422,6 +18471,7 @@ def preflight_production_publication(date_str, *, require_production_receipt=Fal
     return False
 
 
+@_with_daily_publication_replay_scope
 def validate_generation_visual_contract(manifest, date_str, repo=None):
     """确保发布后的视觉产物不会混进博客发布提交。"""
     if manifest.get('visualSummaryRequired') is not False:
@@ -20504,6 +20554,7 @@ def is_empty_daily_batch_generation(manifest):
     )
 
 
+@_with_daily_publication_replay_scope
 def generate_main(options=None):
     from log_setup import setup_script_logging
     setup_script_logging(__file__)
