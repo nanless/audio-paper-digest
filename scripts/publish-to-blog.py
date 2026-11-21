@@ -5011,6 +5011,14 @@ def markdown_title_for_publish(title):
     return re.sub(r'(\\*)([$*])', lambda match: match[1] + ('' if len(match[1]) % 2 else '\\') + match[2], str(title or ''))
 
 
+def digest_index_reader_title(title):
+    """只整理汇总链接标签的中英文边界，保留型号内部字符及原签名标题。"""
+    value = str(title or '').strip()
+    value = re.sub(r'([一-鿿])(?=[A-Za-z][A-Za-z0-9.+-])', r'\1 ', value)
+    value = re.sub(r'([A-Za-z][A-Za-z0-9.+-]{1,})(?=[一-鿿])', r'\1 ', value)
+    return markdown_title_for_publish(value)
+
+
 def yaml_title_for_publish(title):
     # 入参是 `plain_title_for_publish()` 的显示态：引号已经是 `\"`、反斜杠是单个。
     # 先保护已有的 `\"`，否则 yaml_escape 会把反斜杠再翻一倍，标题渲染后出现多余反斜杠；
@@ -7145,7 +7153,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         else:
             reader_plan = _manual_reader_editorial_plan(p)
             reader_article = _manual_reader_article(p, reader_plan, date_str)
-        reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_article else title)
+        reader_title = digest_index_reader_title(reader_plan['readerTitle'] if reader_article else title)
         blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
             md += f"### {m} [{reader_title}]({blog_url})\n\n"
@@ -7213,7 +7221,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         else:
             reader_plan = _manual_reader_editorial_plan(p)
             reader_article = _manual_reader_article(p, reader_plan)
-        reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_article else title)
+        reader_title = digest_index_reader_title(reader_plan['readerTitle'] if reader_article else title)
         blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
             md += f"### {len(scored)+i+1}. [{reader_title}]({blog_url})\n\n"
