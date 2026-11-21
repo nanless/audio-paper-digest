@@ -518,6 +518,29 @@ function verifyRoundtrip(record, paper, source, checked, plan, feedback) {
     replayOptions.set(parsed, options);
     return parsed;
 }
+function authenticateCurrentBatchCorrectionParent(record, parent, plan, feedback) {
+    const saved = require('./saved-fact-feedback');
+    const old = saved.readSavedFeedback(parent, plan);
+    if (!old) {
+        // A malformed or missing declared packet is not an ordinary parent.
+        // The original batch Reader can also have completed without any fact
+        // feedback; authenticate that exact parent without inventing a packet.
+        const declared = saved.hasSavedProof(parent)
+            || Object.hasOwn(parent, 'analysisFactReviewObligation')
+            || Object.values(parent?.analysisManifest?.stages || {}).some(stage => stage
+                && ['factReview', 'scoringFactReview'].some(key => Object.hasOwn(stage, key)))
+            || parent.fullStageReanalysis && Object.hasOwn(parent.fullStageReanalysis, 'currentFeedbackProof');
+        if (declared) fail('当前批次原父稿的事实反馈声明缺失或损坏');
+        if (facts.current(require('../utils').normalizedId(parent)))
+            return facts.withReadOnlyOrdinaryReaderParent(parent, () => assertParent(record, parent, plan, feedback));
+        return require('./analysis-stop-control').withModelRequestsForbidden(
+            () => assertParent(record, parent, plan, feedback));
+    }
+    if (old.readerFeedback || old.coreFeedback || !saved.coreOnlyFeedback(old.feedback))
+        fail('当前批次原父稿缺少单一已保存核心反馈');
+    return facts.withReadOnlySavedFactReview(facts.validateFeedback(old.feedback, plan, old.paper),
+        () => assertParent(record, parent, plan, feedback));
+}
 function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
     const stage = paper?.analysisManifest?.stages?.apiReaderArticle, proof = stage?.operatorProvenance;
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
@@ -556,11 +579,7 @@ function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
     const feedback = readPacket();
     if (!feedback || !isDeepStrictEqual(facts.proofFor(feedback), stage.factReview)) fail('当前签名事实包不存在');
     facts.validateFeedback(feedback, plan, parent);
-    const old = require('./saved-fact-feedback').readSavedFeedback(parent, plan);
-    if (!old || old.readerFeedback || old.coreFeedback || !require('./saved-fact-feedback').coreOnlyFeedback(old.feedback))
-        fail('当前批次原父稿缺少单一已保存核心反馈');
-    facts.withReadOnlySavedFactReview(facts.validateFeedback(old.feedback, plan, old.paper),
-        () => assertParent(record, parent, plan, feedback));
+    authenticateCurrentBatchCorrectionParent(record, parent, plan, feedback);
     const fresh = require('./fresh-analysis-context'), source = daily.readDailyFreshSource(plan, paper);
     require('./analysis-stop-control').withModelRequestsForbidden(() => daily.withDailyFreshAnalysisContext(plan,
         () => fresh.withFreshPaperContext(paper, () => {
@@ -747,6 +766,7 @@ async function finalize(handle, paper, persist) {
 const apply = (handle, paper) => finalize(handle, paper, true);
 const preview = (handle, paper) => finalize(handle, paper, false);
 module.exports = { CONTRACT, FACT_CONTRACT, prepare, apply, preview, applyBoundedTextPatch,
+    authenticateCurrentBatchCorrectionParent,
     readOnlyPreviewFeedback, isCurrentBatchRoot, validateSavedCurrentBatchCorrection,
     applyBoundedFactPatch: factPatch.applyBoundedFactPatch, verifyRoundtrip, authenticatedTableProjection,
     validateNormalProducerProof: normalProducerOptions };

@@ -4974,19 +4974,29 @@ def _validate_experiment_table_evidence_depth(
     # 同一四分类 Score 表同时保留本文与更高的已发表对照时，
     # 按原文明确的任务、方法和数值核对，不套用二分类的结论。
     source_rank_regression = False
-    source_rank = re.search(
-        r'On the 4-class task[\s\S]{0,400}?SoftFiLM\s+64\.11%[\s\S]{0,900}?leading 4-class-only\s+methods[\s\S]{0,120}?Dong et al\.[\s\S]{0,40}?67\.55%',
-        complete_source_text or '', re.I)
-    if source_rank:
+    # A reported higher 4-class-only comparator is itself a negative result,
+    # even when the authors do not use words such as "worse" in Experiments.
+    # Detect the comparison independently of its exact reference value: a
+    # changed source value must not disable the obligation to retain it.
+    rank_comparison = re.search(
+        r'On the 4-class task[\s\S]{0,400}?SoftFiLM\s+([0-9]+(?:\.[0-9]+)?)%'
+        r'[\s\S]{0,900}?leading 4-class-only\s+methods[\s\S]{0,120}?'
+        r'Dong et al\.[\s\S]{0,40}?([0-9]+(?:\.[0-9]+)?)%',
+        source_text, re.I)
+    observed_rank_comparison = bool(rank_comparison and _own_observed_source_scope(
+        source_text[max(0, rank_comparison.start() - 200):rank_comparison.end()])
+        and float(rank_comparison[2]) > float(rank_comparison[1]))
+    if observed_rank_comparison:
+        source_has_negative = True
         for table in tables:
             for column, header in enumerate(table['header']):
                 if not re.search(r'4\s*类.*Score.*↑', header, re.I):
                     continue
                 rows = table['rows']
                 own = any('SoftFiLM' in ' '.join(row) and column < len(row)
-                          and row[column].strip() == '64.11' for row in rows)
+                          and row[column].strip() == rank_comparison[1] for row in rows)
                 reference = any(re.search(r'Dong\s+et\s+al\.', ' '.join(row), re.I)
-                                and column < len(row) and row[column].strip() == '67.55' for row in rows)
+                                and column < len(row) and row[column].strip() == rank_comparison[2] for row in rows)
                 if own and reference:
                     source_rank_regression = True
     result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or source_rank_regression or re.search(

@@ -139,6 +139,30 @@ function withReadOnlySavedFactReview(bound, callback) {
     if (daily.stableHash(readFeedback(file)) !== bound.proof.feedbackSha256) fail('原反馈文件不同');
     return require('./analysis-stop-control').withModelRequestsForbidden(() => scope.run(bound, callback));
 }
+function withReadOnlyOrdinaryReaderParent(paper, callback) {
+    const active = current(normalizedId(paper));
+    const context = active?.readerBound && validatedContexts.get(active.readerBound);
+    const declared = require('./saved-fact-feedback').hasSavedProof(paper)
+        || Object.hasOwn(paper, 'analysisFactReviewObligation')
+        || Object.values(paper?.analysisManifest?.stages || {}).some(stage => stage
+            && ['factReview', 'scoringFactReview'].some(key => Object.hasOwn(stage, key)))
+        || paper.fullStageReanalysis && Object.hasOwn(paper.fullStageReanalysis, 'currentFeedbackProof');
+    if (!active?.readerOnly || !accepted.has(active.readerBound) || !context || declared
+        || !require('../analysis-engine').paperAnalysisLockHeld(paper)
+        || !require('./fresh-analysis-context').isDailyFreshSourceScope()
+        || typeof callback !== 'function' || callback.constructor.name === 'AsyncFunction')
+        fail('普通Reader父稿只读核验须有真实日更锁、子反馈和无原事实声明的同步范围');
+    const actual = daily.readDailyFreshSource(context.plan, paper);
+    const scoped = require('./model-text-sanitization').currentModelInputSource(paper);
+    if (!scoped || sha(actual.text) !== sha(scoped.text)
+        || daily.stableHash(actual.freshSourceDescriptor) !== daily.stableHash(scoped.freshSourceDescriptor))
+        fail('普通Reader父稿只读核验的真实四源与当前作用域不同');
+    return require('./analysis-stop-control').withModelRequestsForbidden(() => scope.run(null, () => {
+        const result = callback();
+        if (result && typeof result.then === 'function') fail('普通Reader父稿只读核验不能跨异步边界');
+        return result;
+    }));
+}
 function withFactReview(bound, callback) {
     if (!accepted.has(bound)) fail('反馈尚未在锁内核验');
     const context = validatedContexts.get(bound);
@@ -505,4 +529,4 @@ function validateRepairedClaims(stage, text, paperId) {
     if ([...checkedClaims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
-    withReadOnlySavedFactReview, withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withOriginalCoreContext, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };
+    withReadOnlySavedFactReview, withReadOnlyOrdinaryReaderParent, withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withOriginalCoreContext, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

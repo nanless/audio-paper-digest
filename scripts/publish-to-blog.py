@@ -1163,6 +1163,43 @@ def markdown_table_shapes_are_valid(content):
     return True
 
 
+def _registered_author_fingerprint_shape_false_positive(content, issue):
+    """只排除已登记作者格式指纹的纯字符形状误报，不判断来源或语义。"""
+    field = 'paper_digest_api_reader_author_identity_schema_fingerprint'
+    description = str(issue.get('description', ''))
+    claim = description + '\n' + str(issue.get('fix_instruction', ''))
+    if str(issue.get('type', '')).lower() != 'yaml' \
+            or set(re.findall(r'\bpaper_digest_[a-z0-9_]+\b', claim)) != {field}:
+        return False
+    # Use a closed vocabulary: any extra claim about authors, sources, versions,
+    # titles, figures or content stays a blocking issue for normal review.
+    remainder = claim.replace(field, '')
+    remainder = re.sub(r'''[`"“”‘’'][0-9a-fA-F ]{8,}[`"“”‘’']''', '', remainder)
+    if not re.search(r'长度|[0-9]+\s*位|[0-9]+\s*字符|空格|十六进制|hex', remainder, re.IGNORECASE):
+        return False
+    vocabulary = (
+        'frontmatter', '十六进制', '连续', '重复', '片段', '中间', '存在',
+        '导致', '指纹', '长度', '格式', '异常', '字符', '字段', '包含',
+        '空格', '而非', '不是', '应为', '必须', '非法', '无效', '不足',
+        '超过', '多了', '少了', '断开', '哈希', '错误', '规范',
+        '更正', '删除', 'YAML', 'SHA', 'hex', '值', '为', '位', '个', '有',
+        '的', '不', '和', '与', '将', '即',
+    )
+    remainder = re.sub('|'.join(re.escape(word) for word in vocabulary), '', remainder,
+                       flags=re.IGNORECASE)
+    if re.sub(r'[\W_0-9]+', '', remainder, flags=re.UNICODE):
+        return False
+    header, _body = _split_frontmatter_block(str(content or ''))
+    if not header:
+        return False
+    definitions = re.findall(rf'''^\s*(?:{field}|["']{field}["'])\s*:''',
+                             header, flags=re.MULTILINE)
+    values = re.findall(rf'^{field}:\s*"([0-9a-f]{{64}})"\s*$',
+                        header, flags=re.MULTILINE)
+    return len(definitions) == len(values) == 1 \
+        and values[0] == public_protocols.schema_fingerprint('api-reader-author-identity')
+
+
 def filter_false_positive_review_issues(content, issues):
     """过滤可由代码确定为误报的 LLM review 问题。"""
     if not issues:
@@ -1214,6 +1251,8 @@ def filter_false_positive_review_issues(content, issues):
         table_shape_claim = re.search(r'表格|表头|table', desc, re.IGNORECASE) \
             and re.search(r'列数|分隔行|separator|column', desc, re.IGNORECASE)
         if table_shape_claim and markdown_table_shapes_are_valid(content):
+            continue
+        if _registered_author_fingerprint_shape_false_positive(content, issue):
             continue
         sha_fields = set(re.findall(r'\b(paper_digest_[a-z0-9_]*sha256)\b', desc))
         sha_shape_claim = sha_fields and re.search(
@@ -2801,6 +2840,77 @@ def _validated_workbench_text(
 _API_READER_AUTHOR_METADATA_SEPARATORS = frozenset({':', '：', ';', '；', ',', '，', '、'})
 
 
+def _author_contact_tail_prefix(name, affiliation, source_text, first_page):
+    """只接受同页上标、独立机构行和完整邮箱组共同确认的展示前缀。"""
+    match = re.fullmatch(
+        r"(?P<institution>[A-Za-z][A-Za-z .&'’()-]{2,199})"
+        r'(?P<tail>\{(?:[a-z][a-z0-9_.-]*,\s*){3,})', affiliation)
+    if not match or len(match['tail']) > 512 or not re.search(
+            r'\b(?:University|Institute|College|Laboratory|Research)\b', match['institution']):
+        return affiliation
+    institution = match['institution'].strip()
+    compact = lambda text: re.sub(r'\s+', ' ', text).strip()
+    if [compact(line) for line in source_text.splitlines()].count(
+            'Affiliation: ' + compact(affiliation)) != 1:
+        return affiliation
+    lines = [compact(line) for line in first_page.splitlines() if compact(line)]
+    abstract = next((i for i, line in enumerate(lines) if line.casefold() == 'abstract'), None)
+    if abstract is None:
+        return affiliation
+    lines = lines[:abstract]
+    markers = [m[1] for line in lines
+               if (m := re.fullmatch(re.escape(name) + r'\s*([1-9][0-9]{0,2})[†‡*]*', line))]
+    if len(markers) != 1:
+        return affiliation
+    institutions = [i for i, line in enumerate(lines)
+                    if re.sub(r'^([1-9][0-9]{0,2})\s+', r'\1', line) == markers[0] + institution]
+    if len(institutions) != 1:
+        return affiliation
+    index = institutions[0]
+    if index + 2 >= len(lines) or lines[index + 1] != compact(match['tail']):
+        return affiliation
+    if not re.match(r'\{[a-z0-9_.,\s-]+\}@[a-z0-9.-]+\.[a-z]{2,}(?=\s|$)',
+                    ' '.join(lines[index + 1:index + 4])):
+        return affiliation
+    return institution
+
+
+def _source_bound_author_contact_display(paper, author, bound, affiliation, affiliation_binding):
+    """在原作者身份核验之后，只从认证四源派生机构的显示文字。"""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z .&'’()-]{2,199}\{(?:[a-z][a-z0-9_.-]*,\s*){3,}", affiliation):
+        return affiliation
+    raw = paper['apiReaderAuthors']
+    source_dom = raw.get('sourceDomSha256')
+    proof = paper.get('freshRewriteProvenance')
+    if (not isinstance(proof, dict) or not re.fullmatch(r'[a-f0-9-]{36}', str(proof.get('runId') or ''))
+            or bound['nameBinding'] != {'sourceKind': 'html_dom', 'sourceValue': author['name'],
+                                       'sourceDomSha256': source_dom}
+            or affiliation_binding != {'sourceKind': 'html_dom', 'association': 'direct_author',
+                                       'sourceValue': affiliation, 'sourceDomSha256': source_dom}):
+        return affiliation
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    files, source = _daily_fresh_read_bundle_source_identity(
+        Path(DAILY_FRESH_SOURCE_RUNS_DIR).resolve() / proof['runId'], paper_id, proof, paper)
+    parsed = source.get('readerAuthors') or {}
+    matches = [a for a in parsed.get('authors', []) if a.get('name') == author['name']]
+    if (parsed.get('sourceDomSha256') != source_dom or len(matches) != 1
+            or matches[0].get('affiliations', []).count(affiliation) != 1):
+        return affiliation
+    path, size, digest, maximum = files['files'][1]
+    pdf = _daily_fresh_read_private_file(path, 'author display source PDF', maximum)
+    if len(pdf) != size or _daily_fresh_sha256(pdf) != digest:
+        raise PublishDataValidationError('作者显示投影的封存 PDF 字节发生变化')
+    if len(pdf) > 64 * 1024 * 1024:
+        return affiliation
+    from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document
+    document = extract_pdf_quote_document(pdf)
+    if not document.get('available') or document.get('pdfSha256') != digest:
+        return affiliation
+    first = document['pageRanges'][0]
+    page_text = document['rawFullText'][first['rawStartCodePoint']:first['rawEndCodePoint']]
+    return _author_contact_tail_prefix(author['name'], affiliation, source['text'], page_text)
+
+
 def _api_reader_author_display(paper, api_reader):
     """Project verified authors for display without replacing the raw proof."""
     raw = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
@@ -2835,6 +2945,8 @@ def _api_reader_author_display(paper, api_reader):
             footnote_text = 'Equal contribution, Core contributors, Work done while at Meta'
             for position, (affiliation, affiliation_binding) in enumerate(zip(
                     author['affiliations'], bound['affiliationBindings'])):
+                displayed['affiliations'][position] = _source_bound_author_contact_display(
+                    paper, author, bound, affiliation, affiliation_binding)
                 if (affiliation.endswith(footnote_text)
                         and affiliation_binding.get('sourceKind') == 'html_dom'
                         and isinstance(paper.get('freshRewriteProvenance'), dict)):
