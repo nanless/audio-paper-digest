@@ -973,3 +973,43 @@ test('F-P2-16: repairCoreSummarySection 旧核心摘要模式加载历史旧提�
     assert.match(seenPrompts[0], /320–600/);
     assert.doesNotMatch(seenPrompts[0], /700–1400/);
 });
+
+test('saved-fact-feedback: 强制重分析已完成新 scoringAudit 时忽略原旧 apiReaderArticle 遗留 factReview 证明', () => {
+    const crypto = require('node:crypto');
+    const saved = require('../scripts/lib/saved-fact-feedback');
+    const sha = s => crypto.createHash('sha256').update(s).digest('hex');
+    const oldAnalysis = '旧分析正文（6.4 分）';
+    const newScoring = '强制重分析新评分正文（8.0 分）';
+    const oldProof = {
+        contract: 'daily-bound-fact-review-v1',
+        paperId: '2611.26409',
+        coreAnalysisSha256: sha(oldAnalysis),
+        feedbackSha256: 'a'.repeat(64)
+    };
+    const reanalyzedPaper = {
+        arxivId: '2611.26409v1',
+        analysis: oldAnalysis,
+        analysisStageCheckpoints: { scoringAudit: newScoring },
+        analysisManifest: {
+            stages: {
+                primaryAnalysis: { status: 'complete' },
+                scoringAudit: { status: 'complete' },
+                apiReaderArticle: { status: 'complete', factReview: oldProof }
+            }
+        }
+    };
+    assert.equal(saved.hasSavedProof(reanalyzedPaper), false, '被新 scoringAudit 替代的旧 Reader factReview 不得阻断重分析尾修');
+
+    // 负例 1：scoringAudit 仍对应同一旧正文时必须保留证明
+    const sameParent = structuredClone(reanalyzedPaper);
+    sameParent.analysisStageCheckpoints.scoringAudit = oldAnalysis;
+    assert.equal(saved.hasSavedProof(sameParent), true);
+
+    // 负例 2：上游阶段带有 factReview 或存在待完成 obligation 时必须保留证明
+    const upstreamFact = structuredClone(reanalyzedPaper);
+    upstreamFact.analysisManifest.stages.primaryAnalysis.factReview = oldProof;
+    assert.equal(saved.hasSavedProof(upstreamFact), true);
+    const withObligation = structuredClone(reanalyzedPaper);
+    withObligation.analysisFactReviewObligation = { feedbackSha256: 'b'.repeat(64) };
+    assert.equal(saved.hasSavedProof(withObligation), true);
+});

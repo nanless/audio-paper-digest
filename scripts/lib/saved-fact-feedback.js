@@ -3,10 +3,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const facts = require('./daily-fact-review');
 const daily = require('./daily-fresh-source-plan');
+function hasSupersededPreReanalysisReaderProof(paper, proofs) {
+    const stages = paper?.analysisManifest?.stages || {};
+    const readerProof = stages.apiReaderArticle?.factReview;
+    if (!readerProof || !proofs.length || paper?.fullStageReanalysis || Object.hasOwn(paper || {}, 'analysisFactReviewObligation')) return false;
+    if (Object.entries(stages).some(([name, value]) =>
+        (!['apiReaderArticle', 'apiReaderTableAudit'].includes(name) && value?.factReview) || value?.scoringFactReview)) {
+        return false;
+    }
+    const newScoring = paper?.analysisStageCheckpoints?.scoringAudit;
+    return stages.scoringAudit?.status === 'complete'
+        && typeof newScoring === 'string' && newScoring.trim().length > 0
+        && newScoring !== paper.analysis
+        && facts.sha(newScoring) !== readerProof.coreAnalysisSha256;
+}
 function savedProofs(paper) {
-    return [...Object.values(paper?.analysisManifest?.stages || {}).flatMap(stage =>
+    const proofs = [...Object.values(paper?.analysisManifest?.stages || {}).flatMap(stage =>
         [stage?.factReview, stage?.scoringFactReview].filter(Boolean)),
         ...(paper?.fullStageReanalysis?.currentFeedbackProof ? [paper.fullStageReanalysis.currentFeedbackProof] : [])];
+    return hasSupersededPreReanalysisReaderProof(paper, proofs) ? [] : proofs;
 }
 function hasSavedProof(paper) { return savedProofs(paper).length > 0; }
 function readReaderPacket(filename, proof) {
