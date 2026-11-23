@@ -507,6 +507,24 @@ function completionFiles(dir,paper){
     return fs.readdirSync(dir).filter(name=>name.startsWith(id+'-')&&/^\d{4}\.\d{4,5}-\d{8}\.json$/.test(name)).sort();
 }
 function stageCore(stage){return Object.fromEntries(Object.entries(stage||{}).filter(([key])=>key!=='ordinalCompletionProof'));}
+function stageCoreWithoutAuthorRefresh(stage){
+    return Object.fromEntries(Object.entries(stage||{}).filter(([key])=>(
+        key!=='ordinalCompletionProof'
+        &&key!=='readerAuthorsSha256'
+        &&key!=='readerAuthorIdentitySha256'
+        &&key!=='readerIdentityProtocols'
+        &&key!=='refreshedAt'
+    )));
+}
+function stageMatchesSavedOrdinalCompletion(paper,stage,savedStage,source){
+    if(isDeepStrictEqual(savedStage,stageCore(stage)))return true;
+    if(typeof stage?.refreshedAt!=='string'||!Number.isFinite(Date.parse(stage.refreshedAt)))return false;
+    if(!isDeepStrictEqual(stageCoreWithoutAuthorRefresh(savedStage),stageCoreWithoutAuthorRefresh(stage)))return false;
+    if(savedStage?.readerIdentityProtocols!==undefined||stage?.readerIdentityProtocols!==undefined){
+        if(!isDeepStrictEqual(savedStage?.readerIdentityProtocols?.resources,stage?.readerIdentityProtocols?.resources))return false;
+    }
+    return require('./reader-author-parser').readerAuthorIdentityMatchesSource(paper,source);
+}
 // 完成证明只承认同一 result 对象上、由本进程实际编译/封签的能力挂载的 origin，
 // 且 origin 快照必须与最终数组逐字一致。两种失败分开报：没有 origin（本次内存
 // 完成/恢复/人工修正都没有真正绑定）与快照后数组被追加（origin 已被改写）。
@@ -943,12 +961,12 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
     const selected=ref&&files.find(name=>path.resolve(ref.path)===path.join(dir,name));
     if(!ref||!selected||!historicalOrigin&&selected!==files.at(-1))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
-    savedSourceScope(paper,saved.identity,attempts);
+    const initialSource=savedSourceScope(paper,saved.identity,attempts);
     if(!format.isCompilation(saved)||saved.kind!=='normal-final-completion'||saved.paperId!==canonical(paper)
         ||saved.sequence!==Number(selected.slice(-13,-5))||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
         ||!format.matchesStage(stage,paper.analysisManifest,saved)||!isDeepStrictEqual(saved.records,stage.ordinalPatchCompilations)
         ||saved.articleSha256!==sha(paper.apiReaderArticle)||saved.planSha256!==stableSha(paper.apiReaderPlan)
-        ||!isDeepStrictEqual(saved.stage,stageCore(stage)))fail('normal final completion/source/stage differs','run');
+        ||!stageMatchesSavedOrdinalCompletion(paper,stage,saved.stage,initialSource))fail('normal final completion/source/stage differs','run');
     let last;
     for(const record of saved.records)last=replay({paper,identity:record.identity,directory:attempts,requestId:record.requestId,pins:record.pins});
     const source=savedSourceScope(paper,saved.identity,attempts);

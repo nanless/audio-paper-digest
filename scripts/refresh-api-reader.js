@@ -493,10 +493,13 @@ function getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, plan, opti
         && (hasOrdinalStageMarker || hasOrdinaryOrdinalCompletion)
         && paper.readerRevisionHistory === undefined;
 
+    const hasCompleteOrdinalProofForAuthorsOnly = hasUnsupersededOrdinalCompletion
+        && Boolean(stage?.ordinalCompletionProof?.path && stage?.ordinalCompletionProof?.sha256);
+
     if (options.authorsOnly
         && !hasSignedOperatorHistory
         && !hasPaidFingerprint
-        && !hasUnsupersededOrdinalCompletion
+        && (!hasUnsupersededOrdinalCompletion || hasCompleteOrdinalProofForAuthorsOnly)
         && !hasBoundReaderFactReview) {
         return null;
     }

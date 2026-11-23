@@ -3153,6 +3153,12 @@ function readerAuthorIdentityMatchesSource(paper, details) {
     // 每次调用仍先重读并校验原始材料（HTML/全文/结构化提取 SHA，或四份封存文件的磁盘 SHA 与权限），
     // 仅对物理校验通过后的纯确定性身份比对做有界只读记忆化，避免多轮重复解析与重复打印同一警告。
     const verifiedDetails = verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion: version });
+    const hasDerivedLegacyPdfFallback = !details?.readerAuthors?.pdfPage1Authors
+        && details?.readerAuthors?.contract !== PDF_PAGE1_AUTHOR_CONTRACT
+        && Boolean(
+            verifiedDetails?.readerAuthors?.pdfPage1Authors
+            || verifiedDetails?.readerAuthors?.contract === PDF_PAGE1_AUTHOR_CONTRACT
+        );
     const matchKey = stableFingerprint({
         version,
         arxivId: String(paper?.arxivId || ''),
@@ -3160,6 +3166,7 @@ function readerAuthorIdentityMatchesSource(paper, details) {
         analysisSource: verifiedDetails?.analysisSource ?? null,
         sourceTextSha256,
         verifiedReaderAuthors: verifiedDetails?.readerAuthors ?? null,
+        hasDerivedLegacyPdfFallback,
         metadataAuthors: serializeMetadataAuthorsForKey(paper?.authors),
         paperSourceSha256: paper?.sourceSha256 ?? null,
         sourceAcquisitionSha256: paper?.analysisManifest?.sourceAcquisition?.sourceSha256 ?? null,
@@ -3173,14 +3180,18 @@ function readerAuthorIdentityMatchesSource(paper, details) {
         return cachedMatch;
     }
     authorCacheCounters.verifiedMatchMisses++;
-    const expected = resolveApiReaderAuthors(paper, verifiedDetails);
-    if (details?.source === 'conference_pdf_text' && version === 2) {
-        expected.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_LINES_V2;
-        expected.identitySha256 = stableFingerprint(expected.identity);
-    }
     const saved = paper.apiReaderAuthors;
-    expected.identity = identityFormat.inSavedHeaderDomain(expected.identity, saved.identity, 'authors');
-    expected.identitySha256 = stableFingerprint(expected.identity);
+    const resolveExpectedFor = candidateDetails => {
+        const expected = resolveApiReaderAuthors(paper, candidateDetails);
+        if (details?.source === 'conference_pdf_text' && version === 2) {
+            expected.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_LINES_V2;
+            expected.identitySha256 = stableFingerprint(expected.identity);
+        }
+        expected.identity = identityFormat.inSavedHeaderDomain(expected.identity, saved.identity, 'authors');
+        expected.identitySha256 = stableFingerprint(expected.identity);
+        return expected;
+    };
+    const expected = resolveExpectedFor(verifiedDetails);
     let matched = false;
     if (saved.identitySha256 === stableFingerprint(saved.identity)
         && stage?.readerAuthorIdentitySha256 === saved.identitySha256
@@ -3191,6 +3202,18 @@ function readerAuthorIdentityMatchesSource(paper, details) {
                 && readerAuthorUnavailableIdentityMatches(paper, {
                     sourceSha256: paper.sourceSha256, metadataAuthors: paper.authors
                 }));
+        if (!matched && hasDerivedLegacyPdfFallback) {
+            // 兼容尚未刷新作者的旧封存批次（原 runtime.readerAuthors 未写入 pdfPage1Authors，可能保存了旧 HTML 部分绑定）。
+            const legacyReaderAuthors = verifiedDetails.readerAuthors?.contract === PDF_PAGE1_AUTHOR_CONTRACT
+                ? null
+                : (() => {
+                    const clone = { ...verifiedDetails.readerAuthors };
+                    delete clone.pdfPage1Authors;
+                    return clone;
+                })();
+            const legacyExpected = resolveExpectedFor({ ...verifiedDetails, readerAuthors: legacyReaderAuthors });
+            matched = stableFingerprint(saved) === stableFingerprint(legacyExpected);
+        }
     }
     return setBoundedCacheEntry(verifiedAuthorMatchCache, matchKey, matched);
 }

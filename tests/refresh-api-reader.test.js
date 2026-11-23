@@ -714,31 +714,34 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
         assert.deepEqual(f.readCanonicalBytes(), expectedMutatedBytes);
     });
 
-    it('未接替序号完成稿（全部 5 个标记字段及磁盘 ordinal-completions）在所有 5 种模式下均 0 请求前置拦截', async t => {
+    it('未接替序号完成稿（全部 5 个标记字段及磁盘 ordinal-completions）在正文/图/评分/绑定模式下均 0 请求前置拦截，仅完整 ordinalCompletionProof 允许零请求 --authors-only', async t => {
         const f = await setupDailyGuardFixture(t);
-        const allModes = [
+        const contentModes = [
             {},
             { reviewFeedback: '修正表述' },
             { scoringAndReader: true },
             { scoringAndReader: true, reviewFeedback: '重审评分与正文' },
-            { authorsOnly: true },
             { figuresOnly: true },
             { surfaceBindingsOnly: true }
         ];
+        const allModes = [...contentModes, { authorsOnly: true }];
         const markerVariants = [
-            paper => { paper.analysisManifest.contracts.readerTargetOrdinalPatch = 'reader-target-ordinal-patch-v1'; },
-            paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchContract = 'reader-target-ordinal-patch-v1'; },
-            paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchSchemaFingerprint = 'a'.repeat(64); },
-            paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations = []; },
-            paper => {
-                paper.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = {
-                    path: '/tmp/ordinal/completion.json',
-                    sha256: 'b'.repeat(64)
-                };
+            { apply: paper => { paper.analysisManifest.contracts.readerTargetOrdinalPatch = 'reader-target-ordinal-patch-v1'; }, allowAuthorsOnly: false },
+            { apply: paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchContract = 'reader-target-ordinal-patch-v1'; }, allowAuthorsOnly: false },
+            { apply: paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchSchemaFingerprint = 'a'.repeat(64); }, allowAuthorsOnly: false },
+            { apply: paper => { paper.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations = []; }, allowAuthorsOnly: false },
+            {
+                apply: paper => {
+                    paper.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = {
+                        path: '/tmp/ordinal/completion.json',
+                        sha256: 'b'.repeat(64)
+                    };
+                },
+                allowAuthorsOnly: true
             }
         ];
 
-        for (const applyMarker of markerVariants) {
+        for (const variant of markerVariants) {
             const payload = f.readCanonicalJson();
             const target = payload.papers.find(item => item.arxivId === f.ordinaryId);
             delete target.analysisManifest.contracts.readerTargetOrdinalPatch;
@@ -746,7 +749,7 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
                 'ordinalPatchCompilations', 'ordinalCompletionProof']) {
                 delete target.analysisManifest.stages.apiReaderArticle[key];
             }
-            applyMarker(target);
+            variant.apply(target);
             fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
             const beforeBytes = f.readCanonicalBytes();
             let calls = 0;
@@ -760,12 +763,19 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
                 authors: () => { calls += 1; throw new Error('不应进入 authors'); },
                 figures: async () => { calls += 1; throw new Error('不应进入 figures'); }
             };
-            for (const mode of allModes) {
+            const blockedModes = variant.allowAuthorsOnly ? contentModes : allModes;
+            for (const mode of blockedModes) {
                 await assert.rejects(
                     refreshApiReader(f.ordinaryId, { ...mode, operations: spyOps }),
                     error => error.code === 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN'
                         && error.retryable === false
                         && /序号补丁完成证明/.test(error.message)
+                );
+            }
+            if (variant.allowAuthorsOnly) {
+                assert.equal(
+                    getDailyOperatorOrRetainedCandidateRefreshBlockReason(target, f.plan, { authorsOnly: true }),
+                    null
                 );
             }
             assert.equal(calls, 0);

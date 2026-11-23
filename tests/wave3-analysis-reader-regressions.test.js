@@ -1076,3 +1076,102 @@ test('invalidateRecoveryStageIfChanged: 接替旧序号完成证明时同步移�
     assert.equal(tampered.readerRevisionHistory, undefined);
     assert.equal(tampered.analysisManifest.contracts.readerTargetOrdinalPatch, 'reader-target-ordinal-patch');
 });
+
+test('readerAuthorIdentityMatchesSource: 旧封存包自动重放 source.pdf 首页作者，同时兼容未刷新旧绑定并拒绝篡改', () => {
+    const crypto = require('node:crypto');
+    const parser = require('../scripts/lib/reader-author-parser');
+    const readerIdentityFormat = require('../scripts/lib/reader-identity-format');
+    const sha = v => crypto.createHash('sha256').update(v).digest('hex');
+
+    const sourceText = 'Title\nAlice Smith, Bob Lee\nAbstract\nBody text.';
+    const sourceSha = sha(sourceText);
+    const pdfSha = 'd'.repeat(64);
+    const sourceEvidence = 'Alice Smith, Bob Lee\nTsinghua University';
+    const sourceEvidenceSha256 = sha(sourceEvidence);
+    const pdfDomSha = sha(`${pdfSha}:${sourceEvidenceSha256}`);
+    const htmlDomSha = 'f'.repeat(64);
+    const structuredArtifacts = { payloadSha256: '1'.repeat(64), flattenedTextSha256: sourceSha, sourceHtmlSha256: '2'.repeat(64) };
+
+    const pdfFallback = {
+        contract: parser.PDF_PAGE1_AUTHOR_CONTRACT,
+        mode: 'single_institution',
+        pdfSha256: pdfSha,
+        sourceEvidence,
+        sourceEvidenceSha256,
+        sourceDomSha256: pdfDomSha,
+        authors: [
+            { name: 'Alice Smith', affiliations: ['Tsinghua University'] },
+            { name: 'Bob Lee', affiliations: ['Tsinghua University'] }
+        ]
+    };
+    const legacyHtmlAuthors = {
+        sourceDomSha256: htmlDomSha,
+        authors: [
+            { name: 'Alice Smith', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] },
+            { name: 'Bob Lee', affiliations: ['Tsinghua University'] }
+        ]
+    };
+    const basePaper = {
+        arxivId: '2611.99905v1',
+        authors: ['Alice Smith', 'Bob Lee'],
+        sourceSha256: sourceSha,
+        apiReaderResources: {
+            ...readerIdentityFormat.header('resources'),
+            sourceTextSha256: sourceSha,
+            resources: [],
+            identitySha256: '3'.repeat(64)
+        },
+        analysisManifest: {
+            sourceAcquisition: { sourceSha256: sourceSha, structuredArtifactsSha256: structuredArtifacts.payloadSha256 },
+            contracts: {},
+            stages: {
+                apiReaderArticle: { status: 'complete', structuredArtifactsSha256: structuredArtifacts.payloadSha256 }
+            }
+        }
+    };
+
+    const detailsWithDerivedPdf = {
+        source: 'html',
+        text: sourceText,
+        structuredArtifacts,
+        readerAuthors: legacyHtmlAuthors
+    };
+    const freshCtx = require('../scripts/lib/fresh-analysis-context');
+    const origRead = freshCtx.readVerifiedBundleReaderAuthors;
+    freshCtx.readVerifiedBundleReaderAuthors = () => ({ ...structuredClone(legacyHtmlAuthors), pdfPage1Authors: structuredClone(pdfFallback) });
+    try {
+        parser.clearReaderAuthorVerificationCaches();
+        const resolvedNew = parser.resolveVerifiedReaderAuthors(basePaper, detailsWithDerivedPdf);
+        assert.deepEqual(resolvedNew.authors.map(a => a.affiliations), [['Tsinghua University'], ['Tsinghua University']]);
+
+        const makeSavedPaper = resolved => {
+            const p = structuredClone(basePaper);
+            p.apiReaderAuthors = resolved;
+            p.analysisManifest.contracts.apiReaderAuthorIdentity = resolved.identity.contract;
+            p.analysisManifest.stages.apiReaderArticle.readerAuthorIdentitySha256 = resolved.identitySha256;
+            p.analysisManifest.stages.apiReaderArticle.readerAuthorsSha256 = sha(JSON.stringify(
+                JSON.parse(JSON.stringify(resolved), (_, v) => (v && typeof v === 'object' && !Array.isArray(v)
+                    ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v))
+            ));
+            return p;
+        };
+
+        // 1. 新刷新的 PDF 首页 100% 绑定记录通过校验
+        const newPaper = makeSavedPaper(resolvedNew);
+        assert.equal(parser.readerAuthorIdentityMatchesSource(newPaper, detailsWithDerivedPdf), true);
+
+        // 2. 尚未刷新的旧 HTML 部分绑定记录仍向后兼容通过校验
+        const legacyResolved = parser.resolveApiReaderAuthors(basePaper, { ...detailsWithDerivedPdf, readerAuthors: legacyHtmlAuthors });
+        const legacyPaper = makeSavedPaper(legacyResolved);
+        assert.equal(parser.readerAuthorIdentityMatchesSource(legacyPaper, detailsWithDerivedPdf), true);
+
+        // 3. 篡改机构名必须被拒绝
+        const forgedPaper = structuredClone(newPaper);
+        forgedPaper.apiReaderAuthors.authors[0].affiliations = ['Forged Lab'];
+        forgedPaper.apiReaderAuthors.identity.authors[0].affiliations = ['Forged Lab'];
+        assert.equal(parser.readerAuthorIdentityMatchesSource(forgedPaper, detailsWithDerivedPdf), false);
+    } finally {
+        freshCtx.readVerifiedBundleReaderAuthors = origRead;
+        parser.clearReaderAuthorVerificationCaches();
+    }
+});
