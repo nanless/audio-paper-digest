@@ -213,6 +213,158 @@ class PdfFigureTableExtractTests(unittest.TestCase):
         unesc = esc_pipe.replace("\\|", "|")
         self.assertIn(unesc, (pub._normalize_api_reader_display_artifacts(raw_pipe), raw_pipe))
 
+    def test_booktabs_preserves_divider_rows_and_broadcasts_superheaders(self):
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 95), "Table 1. Late fusion across disjoint splits", fontsize=10)
+        page.draw_line((72, 105), (500, 105), width=0.8)
+        # Super-header row 0 (centered over column pairs) + sub-header row 1
+        page.insert_text((75, 118), "Features", fontsize=9)
+        page.insert_text((240, 118), "Rec.-disjoint", fontsize=9)
+        page.insert_text((395, 118), "Spk.-disjoint", fontsize=9)
+        page.insert_text((225, 132), "LR", fontsize=9)
+        page.insert_text((285, 132), "GB", fontsize=9)
+        page.insert_text((380, 132), "LR", fontsize=9)
+        page.insert_text((440, 132), "GB", fontsize=9)
+        page.draw_line((72, 138), (500, 138), width=0.6)
+        # 1-span divider row + data rows + second 1-span divider row + data rows
+        page.insert_text((75, 152), "Recording-disjoint", fontsize=9)
+        page.insert_text((75, 166), "Timing only", fontsize=9)
+        page.insert_text((225, 166), ".644", fontsize=9)
+        page.insert_text((285, 166), ".652", fontsize=9)
+        page.insert_text((380, 166), ".622", fontsize=9)
+        page.insert_text((440, 166), ".615", fontsize=9)
+        page.insert_text((75, 180), "Speaker-disjoint", fontsize=9)
+        page.insert_text((75, 194), "Timing + text", fontsize=9)
+        page.insert_text((225, 194), ".673", fontsize=9)
+        page.insert_text((285, 194), ".682", fontsize=9)
+        page.insert_text((380, 194), ".631", fontsize=9)
+        page.insert_text((440, 194), ".630", fontsize=9)
+        page.draw_line((72, 202), (500, 202), width=0.8)
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        res = ext.extract_pdf_figures_and_tables(pdf_bytes, "2611.99998")
+        self.assertEqual(len(res["tables"]), 1)
+        matrix = res["tables"][0]["matrix"]
+        self.assertEqual(
+            matrix[0],
+            ["Features", "Rec.-disjoint LR", "Rec.-disjoint GB", "Spk.-disjoint LR", "Spk.-disjoint GB"],
+        )
+        self.assertIn(["Recording-disjoint", "", "", "", ""], matrix)
+        self.assertIn(["Speaker-disjoint", "", "", "", ""], matrix)
+
+    def test_booktabs_does_not_corrupt_wrapped_single_col_headers_or_multi_key_cols(self):
+        # R2-C1 (a): Normal 2-line wrapped header ("Training\nHours") must NOT broadcast across "WER (%)"
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 95), "Table 1. Training hours and WER comparison", fontsize=10)
+        page.draw_line((72, 105), (420, 105), width=0.8)
+        page.insert_text((215, 118), "Training", fontsize=9)
+        page.insert_text((75, 132), "Model", fontsize=9)
+        page.insert_text((220, 132), "Hours", fontsize=9)
+        page.insert_text((340, 132), "WER (%)", fontsize=9)
+        page.draw_line((72, 138), (420, 138), width=0.6)
+        page.insert_text((75, 152), "Baseline", fontsize=9)
+        page.insert_text((222, 152), "960", fontsize=9)
+        page.insert_text((345, 152), "5.40", fontsize=9)
+        page.insert_text((75, 166), "Proposed", fontsize=9)
+        page.insert_text((222, 166), "480", fontsize=9)
+        page.insert_text((345, 166), "3.85", fontsize=9)
+        page.draw_line((72, 174), (420, 174), width=0.8)
+        pdf_wrapped = doc.tobytes()
+        doc.close()
+
+        res_wrapped = ext.extract_pdf_figures_and_tables(pdf_wrapped, "2611.99997")
+        self.assertEqual(len(res_wrapped["tables"]), 1)
+        self.assertEqual(res_wrapped["tables"][0]["matrix"][0], ["Model", "Training Hours", "WER (%)"])
+
+        # R2-C1 (b): Multi-key-column + single super-header must NOT overwrite col 1 ("Params") or trailing col 4 ("Avg")
+        doc2 = fitz.open()
+        page2 = doc2.new_page(width=595, height=842)
+        page2.insert_text((72, 95), "Table 2. Multi-key column super-header table", fontsize=10)
+        page2.draw_line((72, 105), (510, 105), width=0.8)
+        page2.insert_text((75, 118), "Model", fontsize=9)
+        page2.insert_text((165, 118), "Params", fontsize=9)
+        page2.insert_text((275, 118), "LibriSpeech", fontsize=9)
+        page2.insert_text((170, 132), "(M)", fontsize=9)
+        page2.insert_text((260, 132), "clean", fontsize=9)
+        page2.insert_text((325, 132), "other", fontsize=9)
+        page2.insert_text((440, 132), "Avg", fontsize=9)
+        page2.draw_line((72, 138), (510, 138), width=0.6)
+        page2.insert_text((75, 152), "CodecA", fontsize=9)
+        page2.insert_text((170, 152), "42.0", fontsize=9)
+        page2.insert_text((260, 152), "3.10", fontsize=9)
+        page2.insert_text((325, 152), "6.40", fontsize=9)
+        page2.insert_text((440, 152), "4.75", fontsize=9)
+        page2.insert_text((75, 166), "CodecB", fontsize=9)
+        page2.insert_text((170, 166), "28.5", fontsize=9)
+        page2.insert_text((260, 166), "2.80", fontsize=9)
+        page2.insert_text((325, 166), "5.90", fontsize=9)
+        page2.insert_text((440, 166), "4.35", fontsize=9)
+        page2.draw_line((72, 174), (510, 174), width=0.8)
+        pdf_multi = doc2.tobytes()
+        doc2.close()
+
+        res_multi = ext.extract_pdf_figures_and_tables(pdf_multi, "2611.99996")
+        self.assertEqual(len(res_multi["tables"]), 1)
+        self.assertEqual(
+            res_multi["tables"][0]["matrix"][0],
+            ["Model", "Params (M)", "LibriSpeech clean", "LibriSpeech other", "Avg"],
+        )
+
+        # R3-H1 (a): Compact IEEE/Interspeech flush-left wrapped header (7pt gap) must NOT broadcast across col 2
+        doc3 = fitz.open()
+        page3 = doc3.new_page(width=595, height=842)
+        page3.insert_text((72, 95), "Table 3. Compact left-aligned wrapped header", fontsize=10)
+        page3.draw_line((72, 105), (340, 105), width=0.8)
+        page3.insert_text((220, 118), "Training", fontsize=9)
+        page3.insert_text((75, 132), "Model", fontsize=9)
+        page3.insert_text((220, 132), "Hours", fontsize=9)
+        page3.insert_text((260, 132), "WER (%)", fontsize=9)
+        page3.draw_line((72, 138), (340, 138), width=0.6)
+        page3.insert_text((75, 152), "Baseline", fontsize=9)
+        page3.insert_text((220, 152), "960", fontsize=9)
+        page3.insert_text((260, 152), "5.40", fontsize=9)
+        page3.insert_text((75, 166), "Proposed", fontsize=9)
+        page3.insert_text((220, 166), "100", fontsize=9)
+        page3.insert_text((260, 166), "3.85", fontsize=9)
+        page3.draw_line((72, 174), (340, 174), width=0.8)
+        pdf_compact = doc3.tobytes()
+        doc3.close()
+        res_compact = ext.extract_pdf_figures_and_tables(pdf_compact, "2611.99995")
+        self.assertEqual(res_compact["tables"][0]["matrix"][0], ["Model", "Training Hours", "WER (%)"])
+
+        # R3-H1 (b): 3-col repeated sub-headers with row-0 col-0 "Features" + compact "F1"/"AUC" super-headers
+        doc4 = fitz.open()
+        page4 = doc4.new_page(width=595, height=842)
+        page4.insert_text((72, 95), "Table 4. Three-column repeated sub-header groups", fontsize=10)
+        page4.draw_line((72, 105), (540, 105), width=0.8)
+        page4.insert_text((75, 118), "Features", fontsize=9)
+        page4.insert_text((237, 118), "F1", fontsize=9)
+        page4.insert_text((435, 118), "AUC", fontsize=9)
+        page4.insert_text((170, 132), "200ms", fontsize=9)
+        page4.insert_text((230, 132), "500ms", fontsize=9)
+        page4.insert_text((290, 132), "1000ms", fontsize=9)
+        page4.insert_text((370, 132), "200ms", fontsize=9)
+        page4.insert_text((430, 132), "500ms", fontsize=9)
+        page4.insert_text((490, 132), "1000ms", fontsize=9)
+        page4.draw_line((72, 138), (540, 138), width=0.6)
+        page4.insert_text((75, 152), "Text", fontsize=9)
+        for x, v in [(170, ".61"), (230, ".64"), (290, ".67"), (370, ".72"), (430, ".75"), (490, ".78")]:
+            page4.insert_text((x, 152), v, fontsize=9)
+        page4.insert_text((75, 166), "Audio", fontsize=9)
+        for x, v in [(170, ".63"), (230, ".66"), (290, ".69"), (370, ".74"), (430, ".77"), (490, ".80")]:
+            page4.insert_text((x, 166), v, fontsize=9)
+        page4.draw_line((72, 174), (540, 174), width=0.8)
+        pdf_rep3 = doc4.tobytes()
+        doc4.close()
+        res_rep3 = ext.extract_pdf_figures_and_tables(pdf_rep3, "2611.99994")
+        self.assertEqual(
+            res_rep3["tables"][0]["matrix"][0],
+            ["Features", "F1 200ms", "F1 500ms", "F1 1000ms", "AUC 200ms", "AUC 500ms", "AUC 1000ms"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

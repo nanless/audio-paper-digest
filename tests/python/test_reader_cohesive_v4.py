@@ -22,7 +22,8 @@ def build_cohesive_v4_publication_paper():
     paper = copy.deepcopy(llm_api_publication_fixture())
     plan = paper['apiReaderPlan']
     plan.pop('version', None)
-    plan.update(codec.record_header(codec.contract('beginner-researcher'), 'beginner-researcher'))
+    v4_plan_header = codec.historical_header('beginner-researcher', formats.INTEGRATED, formats.V4_PLAN_FP)
+    plan.update(v4_plan_header)
 
     # 6 节模块化骨架（含跨 kind 顺序 training -> component，以及单收束节 limitation，0 个术语桥）
     sections = [
@@ -119,7 +120,7 @@ def build_cohesive_v4_publication_paper():
         role: codec.record_header(codec.contract(family), family)
         for role, family in formats.LEGACY['pipelineRoles'].items()
     }
-    pipeline_headers['article'] = codec.record_header(codec.contract('beginner-researcher'), 'beginner-researcher')
+    pipeline_headers['article'] = v4_plan_header
     stage['readerProtocols'] = codec.record('reader-pipeline', pipeline_headers)
     stage['qualityMetrics'] = {**stage['readerProtocols']['qualityMetrics'], 'blockingIssueCount': 0}
     stage['structuredArtifactsSha256'] = payload_sha
@@ -153,12 +154,13 @@ def build_cohesive_v4_publication_paper():
 class ReaderCohesiveV4PythonTests(unittest.TestCase):
     def test_reader_record_format_multi_fingerprint_contracts_and_layouts(self):
         current_plan = codec.record_header(codec.contract('beginner-researcher'), 'beginner-researcher')
+        v4_plan = codec.historical_header('beginner-researcher', formats.INTEGRATED, formats.V4_PLAN_FP)
         old_plan = codec.historical_header('beginner-researcher', formats.INTEGRATED, formats.OLD_PLAN_FP)
         v3_plan = {'version': 3, 'contract': 'beginner-researcher-v3'}
         v2_plan = {'version': 2, 'contract': 'beginner-researcher-v2'}
 
         # Trap 3: 无 selector 字符串及带 schemaFingerprint 的 dict 均不抛 ValueError
-        for raw in ('beginner-researcher', 'beginner-researcher-v3', current_plan, old_plan):
+        for raw in ('beginner-researcher', 'beginner-researcher-v3', current_plan, v4_plan, old_plan):
             self.assertTrue(formats.is_integrated_contract(raw))
             self.assertTrue(formats.is_structured_contract(raw))
             self.assertTrue(formats.is_known_contract(raw))
@@ -168,7 +170,15 @@ class ReaderCohesiveV4PythonTests(unittest.TestCase):
         self.assertFalse(formats.is_known_contract('unregistered-contract'))
         self.assertFalse(formats.is_integrated_contract({'contract': 'beginner-researcher', 'schemaFingerprint': 'f' * 64}))
 
-        v4_layout = formats.publication_layout(current_plan)
+        v5_layout = formats.publication_layout(current_plan)
+        self.assertEqual(v5_layout['minimumSections'], 5)
+        self.assertEqual(v5_layout['maximumSections'], 9)
+        self.assertEqual(v5_layout['minimumBridges'], 0)
+        self.assertEqual(v5_layout['maximumBridges'], 4)
+        self.assertFalse(v5_layout['requiresFocusBlockquote'])
+        self.assertEqual(v5_layout['editorialProfile'], formats.STRUCTURED_V5)
+
+        v4_layout = formats.publication_layout(v4_plan)
         self.assertEqual(v4_layout['minimumSections'], 5)
         self.assertEqual(v4_layout['maximumSections'], 9)
         self.assertEqual(v4_layout['minimumBridges'], 0)

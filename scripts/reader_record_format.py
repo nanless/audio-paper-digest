@@ -8,10 +8,25 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY = json.loads(read_regular_bytes(ROOT / 'scripts/lib/reader-legacy-records.json'))
 INTEGRATED = 'integrated-article'
 COMPACT = 'compact-article'
+STRUCTURED_V5 = 'structured-pipeline-v5'
 COHESIVE_V4 = 'cohesive-functional-v4'
 LEGACY_INTEGRATED = 'legacy-integrated'
 OLD_DRAFT_FP = 'beea25256472a7b9cb4550dafd753db7d1231632a85d6dbb7f9c2e620a0628f9'
 OLD_PLAN_FP = 'cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2'
+V4_DRAFT_FP = '70509d972ac881cc32bdc6cd182ec830ac3676b01fb0c81375849cd3ff429733'
+V4_PLAN_FP = '7c0300b9342334b864b6a304dcf02a96fb8dbbe8f4061b6dbc0ddfdd249ceceb'
+IMPLEMENTATION_SPEC_KEYS = (
+    'trainingData', 'computeHardware', 'keyHyperparams',
+    'inferenceCost', 'openSourceArtifacts', 'appendixHighlights',
+)
+
+
+def is_structured_v5(profile):
+    return profile == STRUCTURED_V5
+
+
+def is_modern_editorial_profile(profile):
+    return profile in {COHESIVE_V4, STRUCTURED_V5}
 
 
 def _selector_args(raw):
@@ -63,6 +78,8 @@ def plan_editorial_profile(plan):
         return profile
     if 'schemaFingerprint' in header:
         schema = codec.declared_schema(header['contract'], 'beginner-researcher', header['schemaFingerprint'])
+        if schema.get('editorialProfile') == STRUCTURED_V5:
+            return STRUCTURED_V5
         if schema.get('editorialProfile') == COHESIVE_V4:
             return COHESIVE_V4
     return LEGACY_INTEGRATED
@@ -72,12 +89,12 @@ def publication_layout(plan):
     profile = stored_plan_format(plan)
     if profile == INTEGRATED:
         editorial_profile = plan_editorial_profile(plan)
-        if editorial_profile == COHESIVE_V4:
+        if is_modern_editorial_profile(editorial_profile):
             return dict(integrated=True, structured=True, rich=True,
                         minimumSections=5, maximumSections=9,
                         minimumBridges=0, maximumBridges=4,
                         requiresFocusBlockquote=False,
-                        editorialProfile=COHESIVE_V4)
+                        editorialProfile=editorial_profile)
         # 历史 integrated-article（含 beginner-researcher-v3 与旧 schemaFingerprint）：
         # 严格保持 8–18 节、4–10 bridges 与看图路径引用块。
         return dict(integrated=True, structured=True, rich=True,

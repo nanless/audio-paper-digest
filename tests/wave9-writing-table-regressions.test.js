@@ -39,13 +39,15 @@ function makeTableArtifact({ ordinal = 1, matrix, headerRows = [0], bodyRows = n
     };
 }
 
-test('Wave 9: fresh Reader mechanicalContract resolves COHESIVE_V4 (5–9 节, conceptBridges 0–4) instead of LEGACY_INTEGRATED', () => {
+test('Wave 9: fresh Reader mechanicalContract resolves STRUCTURED_V5 (5–9 节, conceptBridges 0–4) while historical v4/legacy replays stay exact', () => {
     const fresh = deep.buildApiReaderMechanicalContract({ availableTableCount: 3 });
-    assert.equal(fresh.editorialProfile, readerFormat.COHESIVE_V4);
+    assert.equal(fresh.editorialProfile, readerFormat.STRUCTURED_V5);
     assert.equal(fresh.minimumIntegratedTables, 3);
     assert.match(fresh.mechanicalContract, /sections 应包含 5–9 个职责清晰的小节/);
-    assert.match(fresh.mechanicalContract, /conceptBridges 允许 0–4 组（默认输出空数组 \[\]/);
+    assert.match(fresh.mechanicalContract, /conceptBridges 允许 0–4 组（默认 \[\]/);
     assert.match(fresh.mechanicalContract, /focusPoints 可填 \[\] 或 2–4 项观察要点/);
+    assert.match(fresh.mechanicalContract, /chineseCaption/);
+    assert.match(fresh.mechanicalContract, /implementationSpecs/);
     assert.doesNotMatch(fresh.mechanicalContract, /8–18 个小节/);
     assert.doesNotMatch(fresh.mechanicalContract, /conceptBridges 应解释 4–10 组/);
 
@@ -83,7 +85,7 @@ test('Wave 9: fresh Reader mechanicalContract resolves COHESIVE_V4 (5–9 节, c
     );
     assert.equal(
         deep.resolveApiReaderTargetEditorialProfile({ signedRecoveryDraft: currentHeader }),
-        readerFormat.COHESIVE_V4
+        readerFormat.STRUCTURED_V5
     );
 
     // Repair candidate draft profile overrides default during local repair
@@ -657,14 +659,14 @@ test('Wave 9: upgraded writing prompts preserve exact guardrails across Reader a
 
     assert.match(readerArticle, /严禁使用“记住这个顺序”“务必记住”“不要忘记”/);
     assert.match(readerArticle, /贯穿全文的具体输入样本/);
-    assert.match(readerArticle, /并紧跟每条公式用三层讲透/);
-    assert.match(readerArticle, /同一原表（相同 `sourceTableOrdinal`）不得重复展示相同完整表或相同行列子集/);
+    assert.match(readerArticle, /并在紧随其后的自然段中有机讲透三个实质问题/);
+    assert.match(readerArticle, /同一原表（相同 `sourceTableOrdinal`）不得重复展示相同完整表或数据格重合 >= 50% 的重叠子集/);
     assert.match(readerArticle, /中文与英文或阿拉伯数字之间留一个半角空格/);
     assert.match(readerArticle, /35B-A3B/);
 
     assert.match(readerRepair, /严禁使用“记住这个顺序”“务必记住”“不要忘记”/);
-    assert.match(readerRepair, /用三层讲透物理\/几何直觉/);
-    assert.match(readerRepair, /同一原表（相同 `sourceTableOrdinal`）不得重复展示相同完整表或相同行列子集/);
+    assert.match(readerRepair, /公式背后的数学动机\/极端取值行为\/下游作用/);
+    assert.match(readerRepair, /同一原表（相同 `sourceTableOrdinal`）不得重复展示相同完整表或数据格重合 >= 50% 的重叠子集/);
 
     assert.match(deepAnalysis, /直指现有主流路线在物理、统计或架构上的根本失效因果/);
     assert.match(deepAnalysis, /35B-A3B/);

@@ -88,7 +88,10 @@ function reconstructReaderDraftSurface({paper, paperId}) {
     });
     const draft = { ...require('./reader-record-format').draftHeaderForSavedPlan(plan), ...pick(plan, ['readerTitle', 'oneSentenceThesis']), sections,
         conceptBridges: bridges,
-        figurePlacements: plan.figurePlacements.map(value => pick(value, ['figureOrdinal', 'targetKind', 'marker', 'focusPoints'])),
+        figurePlacements: plan.figurePlacements.map(value => ({
+            ...pick(value, ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']),
+            ...(value.chineseCaption !== undefined ? { chineseCaption: value.chineseCaption } : {})
+        })),
         formulaBindings: plan.formulaBindings.map(value => pick(value, ['formulaOrdinal', 'targetKind', 'marker'])),
         tableBindings: plan.tableBindings.map(value => ({
             ...pick(value, ['tableIndex', 'sourceType', 'sourceTableOrdinal']),
@@ -97,7 +100,8 @@ function reconstructReaderDraftSurface({paper, paperId}) {
                 if (sha(quote.quote) !== quote.sourceQuoteSha256) fail('table quote SHA differs');
                 return quote.quote;
             })
-        })) };
+        })),
+        ...(plan.implementationSpecs !== undefined ? { implementationSpecs: plan.implementationSpecs } : {}) };
     return { draft: structuredClone(draft), articleSha256: sha(paper.apiReaderArticle),
         planSha256: stableHash(plan), figuresSha256: stableHash(paper.apiReaderFigures),
         draftSha256: sha(JSON.stringify(draft)) };

@@ -5,12 +5,27 @@
 const codec = require('./protocol-codec');
 const INTEGRATED = 'integrated-article';
 const COMPACT = 'compact-article';
+const STRUCTURED_V5 = 'structured-pipeline-v5';
 const COHESIVE_V4 = 'cohesive-functional-v4';
 const LEGACY_INTEGRATED = 'legacy-integrated';
 const OLD_DRAFT_FP = 'beea25256472a7b9cb4550dafd753db7d1231632a85d6dbb7f9c2e620a0628f9';
 const OLD_PLAN_FP = 'cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2';
+const V4_DRAFT_FP = '70509d972ac881cc32bdc6cd182ec830ac3676b01fb0c81375849cd3ff429733';
+const V4_PLAN_FP = '7c0300b9342334b864b6a304dcf02a96fb8dbbe8f4061b6dbc0ddfdd249ceceb';
 const DRAFT_FIELDS = Object.freeze(['readerTitle', 'oneSentenceThesis', 'sections',
     'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']);
+const V5_OPTIONAL_DRAFT_FIELDS = Object.freeze(['implementationSpecs']);
+const IMPLEMENTATION_SPEC_KEYS = Object.freeze([
+    'trainingData', 'computeHardware', 'keyHyperparams',
+    'inferenceCost', 'openSourceArtifacts', 'appendixHighlights'
+]);
+function isStructuredV5(profile) { return profile === STRUCTURED_V5; }
+function isModernEditorialProfile(profile) { return profile === COHESIVE_V4 || profile === STRUCTURED_V5; }
+function resolveSchemaEditorialProfile(schema) {
+    if (schema?.editorialProfile === STRUCTURED_V5) return STRUCTURED_V5;
+    if (schema?.editorialProfile === COHESIVE_V4) return COHESIVE_V4;
+    return LEGACY_INTEGRATED;
+}
 function draftFormat(value) {
     const tagField = value && Object.hasOwn(value, 'contract') ? 'contract' : 'version';
     if (!codec.hasValidHeader(value, 'reader-draft', tagField)) throw new Error('读者文章格式头未登记或字段混用');
@@ -20,14 +35,18 @@ function draftFormat(value) {
     const current = codec.isCurrentHeader(value, 'reader-draft', tagField);
     const modern = Object.hasOwn(header, 'schemaFingerprint');
     const schema = modern ? codec.declaredSchema(raw, 'reader-draft', value.schemaFingerprint) : null;
-    const editorialProfile = profile !== INTEGRATED ? profile
-        : (schema?.editorialProfile === COHESIVE_V4 ? COHESIVE_V4 : LEGACY_INTEGRATED);
+    const editorialProfile = profile !== INTEGRATED ? profile : resolveSchemaEditorialProfile(schema);
     return { raw, header, profile, current, modern, editorialProfile };
 }
 function isIntegratedDraft(value) {
     try { return draftFormat(value).profile === INTEGRATED; } catch { return false; }
 }
-function draftFields(value) { return [...Object.keys(draftFormat(value).header), ...DRAFT_FIELDS]; }
+function draftFields(value) {
+    const fmt = draftFormat(value);
+    return [...Object.keys(fmt.header), ...DRAFT_FIELDS,
+        ...(fmt.editorialProfile === STRUCTURED_V5 && value && Object.hasOwn(value, 'implementationSpecs')
+            ? V5_OPTIONAL_DRAFT_FIELDS : [])];
+}
 function profileForOptions(options = {}) {
     if (options.version !== undefined && options.version !== null) return codec.format(options.version, 'reader-draft');
     const profile = options.profile ?? INTEGRATED;
@@ -48,6 +67,9 @@ function compiledPlanHeader(format, { compileCurrent = false, compiledPlanHeader
     if (format.current) {
         if (format.profile !== INTEGRATED) throw new Error('旧简版文章不能转换为当前完整文章');
         return codec.recordHeader(codec.contract('beginner-researcher'), 'beginner-researcher');
+    }
+    if (format.header?.contract === 'reader-draft' && format.header?.schemaFingerprint === V4_DRAFT_FP) {
+        return codec.historicalHeader('beginner-researcher', INTEGRATED, V4_PLAN_FP);
     }
     if (format.header?.contract === 'reader-draft' && format.header?.schemaFingerprint === OLD_DRAFT_FP) {
         return codec.historicalHeader('beginner-researcher', INTEGRATED, OLD_PLAN_FP);
@@ -78,13 +100,13 @@ function planEditorialProfile(value) {
     if (profile !== INTEGRATED) return profile;
     if (Object.hasOwn(header, 'schemaFingerprint')) {
         const schema = codec.declaredSchema(header.contract, 'beginner-researcher', header.schemaFingerprint);
-        if (schema?.editorialProfile === COHESIVE_V4) return COHESIVE_V4;
+        return resolveSchemaEditorialProfile(schema);
     }
     return LEGACY_INTEGRATED;
 }
 function effectiveEditorialProfile(format, options = {}) {
     if (options?.editorialProfile) return options.editorialProfile;
-    return format?.editorialProfile || COHESIVE_V4;
+    return format?.editorialProfile || STRUCTURED_V5;
 }
 function isIntegratedPlan(value) { try { return storedPlanFormat(value) === INTEGRATED; } catch { return false; } }
 function isStructuredContract(raw) {
@@ -105,6 +127,9 @@ function compilationOptionsForSavedPlan(plan) {
         return { requiredProfile: INTEGRATED, compileCurrent: false, editorialProfile: LEGACY_INTEGRATED };
     }
     if (codec.isCurrentHeader(header, 'beginner-researcher')) {
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_V5, compiledPlanHeader: header };
+    }
+    if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V4_PLAN_FP) {
         return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: COHESIVE_V4, compiledPlanHeader: header };
     }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === OLD_PLAN_FP) {
@@ -119,12 +144,17 @@ function draftHeaderForSavedPlan(plan) {
     if (codec.isCurrentHeader(header, 'beginner-researcher')) {
         return codec.recordHeader(codec.contract('reader-draft'), 'reader-draft');
     }
+    if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V4_PLAN_FP) {
+        return codec.historicalHeader('reader-draft', INTEGRATED, V4_DRAFT_FP);
+    }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === OLD_PLAN_FP) {
         return codec.historicalHeader('reader-draft', INTEGRATED, OLD_DRAFT_FP);
     }
     throw new Error('原稳定格式尚无对应冷重放编译器');
 }
-module.exports = { INTEGRATED, COMPACT, COHESIVE_V4, LEGACY_INTEGRATED, OLD_DRAFT_FP, OLD_PLAN_FP, DRAFT_FIELDS,
+module.exports = { INTEGRATED, COMPACT, STRUCTURED_V5, COHESIVE_V4, LEGACY_INTEGRATED,
+    OLD_DRAFT_FP, OLD_PLAN_FP, V4_DRAFT_FP, V4_PLAN_FP, DRAFT_FIELDS, V5_OPTIONAL_DRAFT_FIELDS,
+    IMPLEMENTATION_SPEC_KEYS, isStructuredV5, isModernEditorialProfile,
     draftFormat, isIntegratedDraft, draftFields, profileForOptions, assertRequiredProfile, compiledPlanHeader,
     storedPlanFormat, storedPlanHeader, planEditorialProfile, effectiveEditorialProfile, isIntegratedPlan,
     isStructuredContract, compilationOptionsForSavedPlan, draftHeaderForSavedPlan };

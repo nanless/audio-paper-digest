@@ -11,7 +11,7 @@ const surface = require('../scripts/lib/reader-signed-draft-surface');
 
 function buildCohesiveV4DraftFixture() {
     const base = require('./reader-signed-draft-fixture').fixture();
-    const header = codec.recordHeader(codec.contract('reader-draft'), 'reader-draft');
+    const header = codec.historicalHeader('reader-draft', format.INTEGRATED, format.V4_DRAFT_FP);
     const ordinals = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
     const aspects = [
         ['输入窗边界与重叠步长', '时频局部能量包络', '跨块相位连续性'],
@@ -118,13 +118,20 @@ function buildCohesiveV4DraftFixture() {
     return { base, draft, artifacts, options };
 }
 
-test('reader.json registers historical fingerprints and cohesive-functional-v4 current schema cleanly', () => {
+test('reader.json registers historical fingerprints and cohesive-functional-v4 / structured-pipeline-v5 schemas cleanly', () => {
     const currentDraft = codec.recordHeader(codec.contract('reader-draft'), 'reader-draft');
     const currentPlan = codec.recordHeader(codec.contract('beginner-researcher'), 'beginner-researcher');
     assert.notEqual(currentDraft.schemaFingerprint, format.OLD_DRAFT_FP);
     assert.notEqual(currentPlan.schemaFingerprint, format.OLD_PLAN_FP);
-    assert.equal(format.draftFormat(currentDraft).editorialProfile, format.COHESIVE_V4);
-    assert.equal(format.planEditorialProfile(currentPlan), format.COHESIVE_V4);
+    assert.notEqual(currentDraft.schemaFingerprint, format.V4_DRAFT_FP);
+    assert.notEqual(currentPlan.schemaFingerprint, format.V4_PLAN_FP);
+    assert.equal(format.draftFormat(currentDraft).editorialProfile, format.STRUCTURED_V5);
+    assert.equal(format.planEditorialProfile(currentPlan), format.STRUCTURED_V5);
+
+    const v4Draft = codec.historicalHeader('reader-draft', format.INTEGRATED, format.V4_DRAFT_FP);
+    const v4Plan = codec.historicalHeader('beginner-researcher', format.INTEGRATED, format.V4_PLAN_FP);
+    assert.equal(format.draftFormat(v4Draft).editorialProfile, format.COHESIVE_V4);
+    assert.equal(format.planEditorialProfile(v4Plan), format.COHESIVE_V4);
 
     const oldDraft = codec.historicalHeader('reader-draft', format.INTEGRATED, format.OLD_DRAFT_FP);
     const oldPlan = codec.historicalHeader('beginner-researcher', format.INTEGRATED, format.OLD_PLAN_FP);
@@ -143,10 +150,17 @@ test('reader.json registers historical fingerprints and cohesive-functional-v4 c
         compiledPlanHeader: oldPlan
     });
     assert.deepEqual(format.draftHeaderForSavedPlan(oldPlan), oldDraft);
-    assert.deepEqual(format.compilationOptionsForSavedPlan(currentPlan), {
+    assert.deepEqual(format.compilationOptionsForSavedPlan(v4Plan), {
         requiredProfile: format.INTEGRATED,
         compileCurrent: true,
         editorialProfile: format.COHESIVE_V4,
+        compiledPlanHeader: v4Plan
+    });
+    assert.deepEqual(format.draftHeaderForSavedPlan(v4Plan), v4Draft);
+    assert.deepEqual(format.compilationOptionsForSavedPlan(currentPlan), {
+        requiredProfile: format.INTEGRATED,
+        compileCurrent: true,
+        editorialProfile: format.STRUCTURED_V5,
         compiledPlanHeader: currentPlan
     });
     assert.deepEqual(format.draftHeaderForSavedPlan(currentPlan), currentDraft);
@@ -787,12 +801,12 @@ test('cohesive-functional-v4 excess conceptBridges (5-10) recover via parseRecov
             sourceDomSha256: 'a'.repeat(64),
             headerRows: [0],
             bodyRows: [1],
-            matrix: [['Model', 'Score'], ['Ours', '72.2 | 72.5']],
+            matrix: [['Model', 'Score'], ['Ours', '72.2\n72.5']],
             cells: [
                 { row: 0, column: 0, rowspan: 1, colspan: 1, text: 'Model', sourceDomSha256: '1'.repeat(64) },
                 { row: 0, column: 1, rowspan: 1, colspan: 1, text: 'Score', sourceDomSha256: '2'.repeat(64) },
                 { row: 1, column: 0, rowspan: 1, colspan: 1, text: 'Ours', sourceDomSha256: '3'.repeat(64) },
-                { row: 1, column: 1, rowspan: 1, colspan: 1, text: '72.2 | 72.5', sourceDomSha256: '4'.repeat(64) }
+                { row: 1, column: 1, rowspan: 1, colspan: 1, text: '72.2\n72.5', sourceDomSha256: '4'.repeat(64) }
             ]
         }]
     };

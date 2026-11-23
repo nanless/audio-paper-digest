@@ -65,7 +65,7 @@ function completeSelectionMarkerPermutation(draft, tables) {
 function isCohesiveV4Draft(draft) {
     try {
         const format = require('./reader-record-format');
-        return format.draftFormat(draft).editorialProfile === format.COHESIVE_V4;
+        return format.isModernEditorialProfile(format.draftFormat(draft).editorialProfile);
     } catch {
         return false;
     }
@@ -634,16 +634,18 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
             if (dom.length !== 1) fail(`来源坐标 row=${row},column=${column} 对应 ${dom.length} 个原始单元格`);
             if (seen.has(key) || typeof text !== 'string'
                 || !validSha(dom[0].sourceDomSha256) || dom[0].text !== text
-                || /[|\r\n]|\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
+                || /[\r\n]|\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
                 || /^\s*:?-{3,}:?\s*$/.test(text)) fail();
             seen.add(key);
         }
         const nodes = locateReaderDraftTables(draft);
         const position = nodes.findIndex(node => node.marker === marker);
         if (position !== index || nodes.filter(node => node.marker === marker).length !== 1) fail();
+        const { escapeMarkdownTableCell } = require('./reader-tables');
+        const normalizeDisplay = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
         const line = cells => `| ${cells.join(' | ')} |`;
         const displayMatrix = require('./reader-table-pdf-evidence').displayMatrix(source)
-            .map(row => row.map(require('./reader-source-display').normalizeReaderSourceDisplayArtifacts));
+            .map(row => row.map(cell => escapeMarkdownTableCell(normalizeDisplay(cell))));
         const markdown = [line(displayMatrix[0]), line(displayMatrix[0].map(() => '---')),
             ...displayMatrix.slice(1).map(line)].join('\n');
         const parsed = extractMarkdownTables(markdown);

@@ -4,7 +4,7 @@
       "name": "reader-draft",
       "currentVariant": "integrated-article",
       "currentSchema": {
-        "editorialProfile": "cohesive-functional-v4",
+        "editorialProfile": "structured-pipeline-v5",
         "header": [
           "contract",
           "schemaFingerprint"
@@ -17,6 +17,12 @@
           "sections",
           "tableBindings",
           "formulaBindings"
+        ],
+        "optionalFields": [
+          "implementationSpecs"
+        ],
+        "figureOptionalFields": [
+          "chineseCaption"
         ],
         "sectionFields": [
           "kind",
@@ -68,6 +74,36 @@
             ],
             "sourceAuthority": "normal-authenticated-source-required"
           }
+        },
+        {
+          "tag": "reader-draft",
+          "variant": "integrated-article",
+          "header": {
+            "contract": "reader-draft",
+            "schemaFingerprint": "70509d972ac881cc32bdc6cd182ec830ac3676b01fb0c81375849cd3ff429733"
+          },
+          "schema": {
+            "editorialProfile": "cohesive-functional-v4",
+            "header": [
+              "contract",
+              "schemaFingerprint"
+            ],
+            "requiredFields": [
+              "readerTitle",
+              "oneSentenceThesis",
+              "conceptBridges",
+              "figurePlacements",
+              "sections",
+              "tableBindings",
+              "formulaBindings"
+            ],
+            "sectionFields": [
+              "kind",
+              "heading",
+              "body"
+            ],
+            "sourceAuthority": "normal-authenticated-source-required"
+          }
         }
       ]
     },
@@ -75,7 +111,7 @@
       "name": "beginner-researcher",
       "currentVariant": "integrated-article",
       "currentSchema": {
-        "editorialProfile": "cohesive-functional-v4",
+        "editorialProfile": "structured-pipeline-v5",
         "header": [
           "contract",
           "schemaFingerprint"
@@ -88,6 +124,12 @@
           "sections",
           "tableBindings",
           "formulaBindings"
+        ],
+        "optionalFields": [
+          "implementationSpecs"
+        ],
+        "figureOptionalFields": [
+          "chineseCaption"
         ],
         "sourceAuthority": "normal-authenticated-source-required"
       },
@@ -121,6 +163,31 @@
             "schemaFingerprint": "cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2"
           },
           "schema": {
+            "header": [
+              "contract",
+              "schemaFingerprint"
+            ],
+            "fields": [
+              "readerTitle",
+              "oneSentenceThesis",
+              "conceptBridges",
+              "figurePlacements",
+              "sections",
+              "tableBindings",
+              "formulaBindings"
+            ],
+            "sourceAuthority": "normal-authenticated-source-required"
+          }
+        },
+        {
+          "tag": "beginner-researcher",
+          "variant": "integrated-article",
+          "header": {
+            "contract": "beginner-researcher",
+            "schemaFingerprint": "7c0300b9342334b864b6a304dcf02a96fb8dbbe8f4061b6dbc0ddfdd249ceceb"
+          },
+          "schema": {
+            "editorialProfile": "cohesive-functional-v4",
             "header": [
               "contract",
               "schemaFingerprint"

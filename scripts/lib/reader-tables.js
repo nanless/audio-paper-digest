@@ -972,8 +972,49 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
     const seenCompleteOrdinals = new Map();
     const seenSelectionTuples = new Map();
     const seenCellSignatures = new Map();
+    const seenOrdinalDataCells = new Map();
     const seenTableIndexes = new Set();
     const seenPlainNodes = new Set();
+    const isStructuredV5 = options?.editorialProfile === require('./reader-record-format').STRUCTURED_V5;
+    const extractOrdinalDataCellCoords = (ordinal, cellBindings) => {
+        if (!Number.isInteger(ordinal) || !Array.isArray(cellBindings) || cellBindings.length === 0) return null;
+        const sourceTable = (artifacts?.tables || []).find(t => t?.ordinal === ordinal);
+        const headerSet = new Set(Array.isArray(sourceTable?.headerRows) && sourceTable.headerRows.length
+            ? sourceTable.headerRows : [0]);
+        const dataCoords = new Set();
+        const allCoords = new Set();
+        for (const cell of cellBindings) {
+            if (!cell || !Number.isInteger(cell.sourceRow) || !Number.isInteger(cell.sourceColumn)) return null;
+            const key = `${cell.sourceRow}:${cell.sourceColumn}`;
+            allCoords.add(key);
+            if (!headerSet.has(cell.sourceRow)) dataCoords.add(key);
+        }
+        return dataCoords.size > 0 ? dataCoords : allCoords;
+    };
+    const findOverlappingOrdinalTable = (ordinal, coordsSet) => {
+        if (!isStructuredV5 || !Number.isInteger(ordinal) || !coordsSet || coordsSet.size === 0) return null;
+        const priorList = seenOrdinalDataCells.get(ordinal);
+        if (!priorList || priorList.length === 0) return null;
+        for (const prev of priorList) {
+            let intersection = 0;
+            for (const key of coordsSet) {
+                if (prev.coords.has(key)) intersection += 1;
+            }
+            if (intersection === 0) continue;
+            const minSize = Math.min(coordsSet.size, prev.coords.size);
+            // Reject any subset (covers completeTable + selection in either order, or narrower column slice)
+            // OR >50% data-cell overlap on the same sourceTableOrdinal.
+            if (intersection === minSize || (intersection / minSize) > 0.5) {
+                return prev.tableIndex;
+            }
+        }
+        return null;
+    };
+    const recordOrdinalDataCells = (ordinal, tableIndex, coordsSet) => {
+        if (!Number.isInteger(ordinal) || !coordsSet || coordsSet.size === 0) return;
+        if (!seenOrdinalDataCells.has(ordinal)) seenOrdinalDataCells.set(ordinal, []);
+        seenOrdinalDataCells.get(ordinal).push({ tableIndex, coords: coordsSet });
+    };
     const normalizeTableCellForDup = value => {
         let text = String(value ?? '').replace(/[ \t]+/g, ' ').trim();
         for (let pass = 0; pass < 3; pass += 1) {
@@ -1058,9 +1099,9 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
         const marker = `[[TABLE_${binding.tableIndex}]]`;
         const originalIndex = bindings.indexOf(declaredBinding);
         const targetIndex = originalIndex >= 0 ? originalIndex : index;
-        const message = `读者文章 tableBindings[${targetIndex}]（${marker}）与第 ${dupTableIndex} 张表完全重复（相同原表与相同行列）；`
-            + '同一张实验或消融表不得在文章中重复展示两次。请改选另一张未展示的合格原表、选择不同的对比行列子集，'
-            + '或用 source_quotes 整理主实验定量表；如无需第二张表，则合并讨论并在获准范围内同步移除重复标记。';
+        const message = `读者文章 tableBindings[${targetIndex}]（${marker}）与第 ${dupTableIndex} 张表完全重复或高度重叠（指向同一原表且数据格重合）；`
+            + '同一张实验或消融表不得在文章中重复展示或拆出高度重叠的子集。请改选另一张未展示的合格原表，'
+            + '或当主实验原表 DOM 不可直接编译时用 source_quotes 逐字引文整理主实验定量表；如无需第二张表，则合并讨论并在获准范围内同步移除重复标记。';
         return Object.assign(new Error(message), {
             code: 'READER_DUPLICATE_TABLE',
             readerIssues: [{ code: 'reader_duplicate_table', path: `/tableBindings/${targetIndex}`,
@@ -1069,9 +1110,13 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
                 duplicateOfTableIndex: dupTableIndex, message }]
         });
     };
+    const originalIndexByTableIndex = new Map();
     const tableBindings = orderedBindings.map((declaredBinding, index) => {
         const originalIndex = bindings.indexOf(declaredBinding);
         const targetIndex = originalIndex >= 0 ? originalIndex : index;
+        if (declaredBinding && Number.isInteger(declaredBinding.tableIndex)) {
+            originalIndexByTableIndex.set(declaredBinding.tableIndex, targetIndex);
+        }
         const binding = repairUniqueReaderTableSelectionHeader(declaredBinding, artifacts);
         const complete = binding && Object.prototype.hasOwnProperty.call(binding, 'completeTable');
         if (!binding || (!complete && !Object.prototype.hasOwnProperty.call(binding, 'selection'))) {
@@ -1082,6 +1127,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
                 const isArtifact = binding.sourceType === 'artifact_table' && Number.isInteger(binding.sourceTableOrdinal);
                 const curOrdinal = isArtifact ? binding.sourceTableOrdinal : null;
                 const cellSig = isArtifact ? artifactCellSignature(binding.sourceTableOrdinal, binding.cellBindings) : null;
+                const dataCellCoords = isArtifact ? extractOrdinalDataCellCoords(binding.sourceTableOrdinal, binding.cellBindings) : null;
                 const { node, globalMdKey, ordinalMdKey } = locatedTableNodeAndMdKeys(declaredBinding);
                 const prevGlobal = globalMdKey !== null ? seenGlobalRendered.get(globalMdKey) : null;
                 const globalDupIdx = prevGlobal && (
@@ -1090,6 +1136,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
                 ) ? prevGlobal.tableIndex : null;
                 const dupTableIndex = (cellSig !== null && seenCellSignatures.has(cellSig)
                     ? seenCellSignatures.get(cellSig) : null)
+                    ?? (dataCellCoords !== null ? findOverlappingOrdinalTable(curOrdinal, dataCellCoords) : null)
                     ?? (ordinalMdKey !== null && seenOrdinalRendered.has(ordinalMdKey)
                         ? seenOrdinalRendered.get(ordinalMdKey) : null)
                     ?? globalDupIdx;
@@ -1101,6 +1148,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
                     });
                 }
                 if (cellSig !== null) seenCellSignatures.set(cellSig, binding.tableIndex);
+                if (dataCellCoords !== null) recordOrdinalDataCells(curOrdinal, binding.tableIndex, dataCellCoords);
                 if (ordinalMdKey !== null) seenOrdinalRendered.set(ordinalMdKey, binding.tableIndex);
                 if (globalMdKey !== null && !seenGlobalRendered.has(globalMdKey)) {
                     seenGlobalRendered.set(globalMdKey, { tableIndex: binding.tableIndex, sourceTableOrdinal: curOrdinal });
@@ -1158,6 +1206,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
                 ])
                 : null;
             const cellSig = artifactCellSignature(sourceOrdinal, rendered.binding?.cellBindings);
+            const dataCellCoords = extractOrdinalDataCellCoords(sourceOrdinal, rendered.binding?.cellBindings);
             const prevGlobal = seenGlobalRendered.get(globalMdKey);
             const globalDupIdx = prevGlobal && (
                 prevGlobal.sourceTableOrdinal === sourceOrdinal
@@ -1169,6 +1218,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
                     ? seenSelectionTuples.get(selectionKey) : null)
                 ?? (cellSig !== null && seenCellSignatures.has(cellSig)
                     ? seenCellSignatures.get(cellSig) : null)
+                ?? (dataCellCoords !== null ? findOverlappingOrdinalTable(sourceOrdinal, dataCellCoords) : null)
                 ?? (seenOrdinalRendered.has(ordinalMdKey) ? seenOrdinalRendered.get(ordinalMdKey) : null)
                 ?? globalDupIdx;
             if (dupTableIndex !== null) {
@@ -1181,6 +1231,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
             if (completeOrd !== null) seenCompleteOrdinals.set(completeOrd, binding.tableIndex);
             if (selectionKey !== null) seenSelectionTuples.set(selectionKey, binding.tableIndex);
             if (cellSig !== null) seenCellSignatures.set(cellSig, binding.tableIndex);
+            if (dataCellCoords !== null) recordOrdinalDataCells(sourceOrdinal, binding.tableIndex, dataCellCoords);
             seenOrdinalRendered.set(ordinalMdKey, binding.tableIndex);
             if (!seenGlobalRendered.has(globalMdKey)) {
                 seenGlobalRendered.set(globalMdKey, { tableIndex: binding.tableIndex, sourceTableOrdinal: sourceOrdinal });
@@ -1192,6 +1243,75 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
     });
     if (copiedSections.some(section => /\[\[TABLE_[^\]]*\]\]/.test(String(section.body || '')))) {
         throw new Error('读者文章存在未绑定的 TABLE marker');
+    }
+    if (checkDuplicates && isStructuredV5 && Array.isArray(artifacts?.tables) && artifacts.tables.length >= 2) {
+        const isPureAblationTable = table => {
+            const cap = String(table?.caption || '');
+            return /\b(?:ablation|ablations)\b|消融/i.test(cap)
+                && !/\b(?:main\s+results?|overall\s+(?:results?|performance|comparison)|benchmark\s+comparison)\b/i.test(cap);
+        };
+        const isNonResultMetaCaption = cap => /\b(?:dataset(?:s)?\s+(?:statistics|summary|overview|comparison|details|splits?)|corpus\s+(?:statistics|overview|comparison)|hyperparameters?|model\s+(?:configuration|architecture|specs|specifications|parameters?)|notation|symbols?|list\s+of|prompt\s+template)\b|数据集统计|数据集对比|超参数|模型配置|符号说明/i.test(cap);
+        const hasNumericBodyCells = table => {
+            const matrix = Array.isArray(table?.matrix) ? table.matrix : [];
+            const hdrSet = new Set(Array.isArray(table?.headerRows) ? table.headerRows : []);
+            let numericCells = 0;
+            for (let r = 0; r < matrix.length; r++) {
+                if (hdrSet.has(r)) continue;
+                const row = Array.isArray(matrix[r]) ? matrix[r] : [];
+                for (let c = 1; c < row.length; c++) {
+                    if (/\d/.test(String(row[c] || ''))) numericCells++;
+                    if (numericCells >= 2) return true;
+                }
+            }
+            return false;
+        };
+        const isMainResultCandidate = table => {
+            if (!table || isPureAblationTable(table)) return false;
+            const cap = String(table.caption || '');
+            if (isNonResultMetaCaption(cap)) return false;
+            if (!hasNumericBodyCells(table)) return false;
+            return /\b(?:results?|evaluation|comparison|performance|benchmark|baseline|test[- ]?(?:set|clean|other)|objective|subjective)\b|实验结果|主结果|性能对比/i.test(cap);
+        };
+        const mainCandidates = artifacts.tables.filter(isMainResultCandidate);
+        if (mainCandidates.length >= 1) {
+            const locatedAfter = require('./reader-draft-order.js').locateReaderDraftTables({ sections: copiedSections });
+            const resultSectionSet = new Set(
+                copiedSections
+                    .map((s, idx) => ({ s, idx }))
+                    .filter(({ s }) => s?.kind === 'result')
+                    .map(({ idx }) => idx)
+            );
+            const resultTables = locatedAfter.filter(item => resultSectionSet.has(item.sectionIndex));
+            if (resultTables.length >= 1) {
+                const resolvedResultEntries = resultTables.map(item => {
+                    const b = tableBindings.find(entry => entry?.tableIndex === item.tableIndex) || null;
+                    const boundSrc = (b?.sourceType === 'artifact_table' && Number.isInteger(b.sourceTableOrdinal))
+                        ? (artifacts.tables.find(t => t?.ordinal === b.sourceTableOrdinal) || null)
+                        : null;
+                    return { item, b, boundSrc };
+                });
+                const allResultTablesArePureAblation = resolvedResultEntries.every(
+                    ({ boundSrc }) => Boolean(boundSrc && isPureAblationTable(boundSrc))
+                );
+                if (allResultTablesArePureAblation) {
+                    const first = resolvedResultEntries[0];
+                    const targetIdx = originalIndexByTableIndex.get(first.b.tableIndex);
+                    const mainOrds = mainCandidates.map(t => `Table ${t.ordinal}`).join(' / ');
+                    const message = `读者文章 sections[${first.item.sectionIndex}]（result 主实验小节）仅绑定了消融原表 Table ${first.boundSrc.ordinal}，`
+                        + `未展示论文的主实验对比表（如 ${mainOrds}）；请不要把消融表冒充主结果表放在 result 小节。`
+                        + '请改用合格的主结果原表，若主结果原表因 DOM 结构不可直接编译，则用封存全文逐字引文（source_quotes）完整整理主实验结果表，并把消融表保留在 ablation 小节。';
+                    throw Object.assign(new Error(message), {
+                        code: 'READER_RESULT_ABLATION_MISPLACEMENT',
+                        readerIssues: [{
+                            code: 'reader_result_ablation_misplacement',
+                            path: `/tableBindings/${Number.isInteger(targetIdx) ? targetIdx : 0}`,
+                            sectionPath: `/sections/${first.item.sectionIndex}/body`,
+                            message
+                        }]
+                    });
+                }
+            }
+        }
     }
     return { sections: copiedSections, tableBindings, selectionTableIndexes };
 }
@@ -1205,5 +1325,5 @@ module.exports = { READER_TABLE_SELECTION_CONTRACT, originalTableSelectionDomain
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, putReaderTableHeaderFirst,
     renderReaderTableSelection, readCompiledReaderTableSelection, repairUniqueReaderTableSelectionHeader,
-    projectReaderCellForValidation, escapeMarkdownTableCell, unescapeMarkdownTableCell,
+    readerTableCellDisplay, projectReaderCellForValidation, escapeMarkdownTableCell, unescapeMarkdownTableCell,
     compileReaderTableSelections };

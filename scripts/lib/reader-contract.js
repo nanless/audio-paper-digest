@@ -28,8 +28,12 @@ const LEGACY_READER_LIMITS = Object.freeze({
 function limitsForDraftFormat(input = null) {
     const format = require('./reader-record-format');
     let profile = format.INTEGRATED;
-    let editorialProfile = format.COHESIVE_V4;
+    let editorialProfile = format.STRUCTURED_V5;
+    let sourceTextChars = null;
     if (input && typeof input === 'object' && !Array.isArray(input)) {
+        if (Number.isInteger(input.sourceTextChars) && input.sourceTextChars > 0) {
+            sourceTextChars = input.sourceTextChars;
+        }
         if (typeof input.profile === 'string' && typeof input.editorialProfile === 'string') {
             profile = input.profile;
             editorialProfile = input.editorialProfile;
@@ -62,10 +66,24 @@ function limitsForDraftFormat(input = null) {
             editorialProfile: format.LEGACY_INTEGRATED
         };
     }
+    if (editorialProfile === format.COHESIVE_V4) {
+        return {
+            ...READER_LIMITS,
+            requiresFocusBlockquote: false,
+            editorialProfile: format.COHESIVE_V4
+        };
+    }
+    const isVeryShortSource = Number.isInteger(sourceTextChars) && sourceTextChars >= 2500 && sourceTextChars < 18000;
+    const isCompactSource = Number.isInteger(sourceTextChars) && sourceTextChars >= 18000 && sourceTextChars < 45000;
     return {
         ...READER_LIMITS,
+        ...(isVeryShortSource
+            ? { minimumChineseChars: 3200, minimumProseChineseChars: 2800 }
+            : isCompactSource
+                ? { minimumChineseChars: 3800, minimumProseChineseChars: 3400 }
+                : {}),
         requiresFocusBlockquote: false,
-        editorialProfile: format.COHESIVE_V4
+        editorialProfile: format.STRUCTURED_V5
     };
 }
 
@@ -87,22 +105,32 @@ function readerRequirements(options = {}) {
         : (options.editorialProfile
             || (options.format ? limitsForDraftFormat(options.format).editorialProfile
                 : (options.version !== undefined && options.version !== null
-                    ? format.LEGACY_INTEGRATED : format.COHESIVE_V4)));
+                    ? format.LEGACY_INTEGRATED : format.STRUCTURED_V5)));
+    const sourceTextChars = Number.isInteger(options.sourceTextChars)
+        ? options.sourceTextChars
+        : (typeof options.sourceText === 'string' && options.sourceText.trim().length >= 2500
+            ? options.sourceText.trim().length : undefined);
     return {
-        ...limitsForDraftFormat({ profile, editorialProfile }),
+        ...limitsForDraftFormat({ profile, editorialProfile, sourceTextChars }),
         minimumTables,
         minimumWideTables: 0
     };
 }
 
 function buildReaderContractNotice(options = {}) {
+    const format = require('./reader-record-format');
     const rules = readerRequirements(options);
-    const sectionAndBridgeRule = rules.minimumConceptBridges === 0
-        ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节（推荐 5–7 节，每节标题用“功能定位词：论文具体问题或机制判断”，严禁在标题中写图/表编号），正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认输出空数组 []，将相关概念分工直接自然写进正文段落，不堆砌独立词典卡）。`
-        : `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`;
-    const figureRule = rules.requiresFocusBlockquote === false
-        ? `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符（禁止写“这张图确实可见”“从像素可见”等套话；代码直接渲染原图与图注，不生成看图路径框；focusPoints 可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点）。`
-        : `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`;
+    const isV5 = rules.editorialProfile === format.STRUCTURED_V5;
+    const sectionAndBridgeRule = isV5
+        ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节（推荐 5–7 节），每节标题直接承载论文具体机制、模块名或实验结论（严禁连续 3 节套用“问题本质：/方法全景：/核心机制：/主实验验证：”等模板化前缀，严禁在标题与子标题中写图/表编号）；正文中文字数 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 字，单段 120–320 汉字（硬上限 420），散文超过 950 汉字的小节必须使用 #### 子标题或结构化列表组织层次；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认 []，把术语关系自然融入正文）。`
+        : rules.minimumConceptBridges === 0
+            ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节（推荐 5–7 节，每节标题用“功能定位词：论文具体问题或机制判断”，严禁在标题中写图/表编号），正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认输出空数组 []，将相关概念分工直接自然写进正文段落，不堆砌独立词典卡）。`
+            : `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`;
+    const figureRule = isV5
+        ? `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号；没有收到像素时 figurePlacements 必须为空。每条 figurePlacement 须附带自然中文图注 chineseCaption（12–120 字，不含“图 1/Figure 1”前缀），并遵守语义就位（架构/流程图放 method_overview/component/training，定量曲线/消融图放 result/ablation）。图前导读至少 ${rules.figureLeadChars} 字，图后解释至少 ${rules.figureExplanationChars} 字（禁止“这张图确实可见”“从像素可见”等套话；不生成看图路径框；focusPoints 可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点）。`
+        : rules.requiresFocusBlockquote === false
+            ? `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符（禁止写“这张图确实可见”“从像素可见”等套话；代码直接渲染原图与图注，不生成看图路径框；focusPoints 可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点）。`
+            : `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`;
     return [
         `本次文章检查要求（${READER_MECHANICAL_CONTRACT}）：`,
         `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.round(rules.minimumChineseChars * 0.9)} 个；`
@@ -115,7 +143,10 @@ function buildReaderContractNotice(options = {}) {
             `原文包含定量结果表，result 或 ablation 小节须呈现至少 ${options.minimumResultTables} 张带数字的结果表，并保留必要的基线和实际可运行策略。仅展示数据集表或配置表不满足要求。`
         ] : []),
         `表前的独立说明段至少包含 ${rules.tableLeadChineseChars} 个汉字，表后的独立解释段至少包含 ${rules.tableExplanationChineseChars} 个汉字；说明和解释都应紧邻表格。`,
-        figureRule
+        figureRule,
+        ...(isV5 ? [
+            '顶层请输出 implementationSpecs 对象，精确包含 trainingData、computeHardware、keyHyperparams、inferenceCost、openSourceArtifacts、appendixHighlights 六项来源核实摘要；原文未提及的项如实写“原文未披露”，不得编造。'
+        ] : [])
     ].join('\n');
 }
 
@@ -158,7 +189,9 @@ function findReaderCrossSectionMetricReuse(article, sections = []) {
 
 // 每个真实的 Reader 分节都要保持独立，包括 component 这类重复出现的类型。
 // 仅数字相近永远不算重复发现。
-function findReaderSectionNearDuplicates(article, sections = []) {
+function findReaderSectionNearDuplicates(article, sections = [], options = {}) {
+    const format = require('./reader-record-format');
+    const checkIntraSection = format.isStructuredV5(options?.editorialProfile);
     const headings = [...String(article || '').matchAll(/^###\s+([^\n]+)\n/gm)];
     const paragraphs = [];
     for (let index = 0; index < headings.length; index++) {
@@ -168,7 +201,7 @@ function findReaderSectionNearDuplicates(article, sections = []) {
         const sectionId = `sections[${index}]`;
         for (const [paragraphIndex, block] of body.split(/\n\s*\n/).entries()) {
             const text = block.trim();
-            if (!text || /^(?:\||#|>|[-*+]\s|\d+[.)]\s|\[\[|!\[|\\\[|```|~~~)/.test(text)) continue;
+            if (!text || /^(?:\||#|>|[-*+]\s|\d+[.)、]\s|\[\[|!\[|\$\$|\\\[|```|~~~)/.test(text)) continue;
             const normalized = text.normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
             // 60 字起判、3-gram：4-gram + 0.86 只能抓到近乎逐字抄写，
             // 「换词不换意」的重复完全漏掉，而后者才是读者真正的重复感来源。
@@ -184,16 +217,24 @@ function findReaderSectionNearDuplicates(article, sections = []) {
         for (let right = left + 1; right < paragraphs.length; right++) {
             const a = paragraphs[left];
             const b = paragraphs[right];
-            if (a.sectionId === b.sectionId) continue;
+            const sameSection = a.sectionId === b.sectionId;
+            if (sameSection && !checkIntraSection) continue;
             const shared = [...a.grams].filter(gram => b.grams.has(gram)).length;
             const similarity = shared / (a.grams.size + b.grams.size - shared || 1);
             const lengthRatio = Math.min(a.normalized.length, b.normalized.length) / Math.max(a.normalized.length, b.normalized.length);
-            if (similarity < 0.55 || lengthRatio < 0.6) continue;
-            findings.push({ code: 'reader_cross_section_near_duplicate', severity: 'warning',
-                message: '不同 Reader 小节的长段落高度相似；检查后续段是否增加了新机制、比较条件或解释。',
+            const minSim = sameSection ? 0.62 : 0.55;
+            const minRatio = sameSection ? 0.65 : 0.6;
+            if (similarity < minSim || lengthRatio < minRatio) continue;
+            findings.push({
+                code: sameSection ? 'reader_intra_section_near_duplicate' : 'reader_cross_section_near_duplicate',
+                severity: 'warning',
+                message: sameSection
+                    ? '同一 Reader 小节内的两段正文高度相似；请合并重复论证并保留新增机制、条件或实验细节。'
+                    : '不同 Reader 小节的长段落高度相似；检查后续段是否增加了新机制、比较条件或解释。',
                 similarity: Number(similarity.toFixed(3)),
                 left: { section: a.sectionId, kind: a.kind, heading: a.heading, paragraphIndex: a.paragraphIndex },
-                right: { section: b.sectionId, kind: b.kind, heading: b.heading, paragraphIndex: b.paragraphIndex } });
+                right: { section: b.sectionId, kind: b.kind, heading: b.heading, paragraphIndex: b.paragraphIndex }
+            });
         }
     }
     const sectionPairs = new Map();

@@ -613,14 +613,129 @@ def _extract_booktabs_table_from_rules(
     matrix: list[list[str]] = []
     # Check if header has 2 distinct rows (e.g., super-header + sub-header) vs single wrapped header
     hdr_rows_raw = [_assign_spans_to_cols(line_spans[i][1]) for i in hdr_indices]
-    # If all header lines together fill column headers (some columns only on line 1, some on line 2), merge into 1 header row!
+    # Broadcast row-0 spans ONLY when they genuinely act as multi-column super-headers
+    # (never corrupt normal 2-line wrapped single-column headers or multi-key-column labels).
     if len(hdr_rows_raw) == 2:
+        r0_spans = line_spans[hdr_indices[0]][1]
         r0_nonempty = [i for i, v in enumerate(hdr_rows_raw[0]) if v]
         r1_nonempty = [i for i, v in enumerate(hdr_rows_raw[1]) if v]
         if len(r0_nonempty) < len(col_bands) and len(r1_nonempty) >= 2:
-            # Check if it's a super-header (few spans above sub-headers) -> merge vertically by column
+            broadcast_r0 = list(hdr_rows_raw[0])
+            if 1 <= len(r0_spans) < len(col_bands):
+                sorted_r0 = sorted(r0_spans, key=lambda sp: sp[0])
+                # Widen each body-derived column band with its assigned row-1 sub-header span
+                # so narrow numeric body values never underestimate header column widths.
+                eff_bands = [list(b) for b in col_bands]
+                for spx0, spx1, _sptxt in line_spans[hdr_indices[1]][1]:
+                    sp_mid = (spx0 + spx1) / 2.0
+                    best_c = -1
+                    best_ov = -1.0
+                    for ci, (bx0, bx1) in enumerate(col_bands):
+                        ov = min(spx1, bx1) - max(spx0, bx0)
+                        if ov > best_ov:
+                            best_ov = ov
+                            best_c = ci
+                    if best_ov <= 0:
+                        best_c = min(
+                            range(len(col_bands)),
+                            key=lambda ci: abs(sp_mid - (col_bands[ci][0] + col_bands[ci][1]) / 2.0),
+                        )
+                    eff_bands[best_c][0] = min(eff_bands[best_c][0], spx0)
+                    eff_bands[best_c][1] = max(eff_bands[best_c][1], spx1)
+
+                # Map each row-0 span to the exact effective column bands it physically overlaps (>=0.5pt)
+                span_overlaps = [
+                    [
+                        ci for ci, (bx0, bx1) in enumerate(eff_bands)
+                        if min(sp[1], bx1) - max(sp[0], bx0) > 0.5
+                    ]
+                    for sp in sorted_r0
+                ]
+                # Standalone single-column row-0 labels (e.g. "Model", "Params", or wrapped "Training\nHours")
+                # own ONLY their single overlapped column and must never be treated as super-headers.
+                direct_groups: list[tuple[tuple[float, float, str], list[int]]] = []
+                standalone_cols: set[int] = {
+                    ci for ci in range(len(col_bands)) if not hdr_rows_raw[1][ci]
+                }
+                gap_groups: list[tuple[tuple[float, float, str], list[int]]] = []
+                for sp, ov_cols in zip(sorted_r0, span_overlaps):
+                    r1_ov = [ci for ci in ov_cols if hdr_rows_raw[1][ci]]
+                    if len(r1_ov) >= 2:
+                        direct_groups.append((sp, r1_ov))
+                        continue
+                    sp_mid = (sp[0] + sp[1]) / 2.0
+                    # Check if a super-header sits centered in the gap between two adjacent
+                    # non-empty sub-header columns (e.g., "LibriSpeech" or "LS" centered between
+                    # "clean" and "other"). A flush-left span aligned with col c's left edge
+                    # (sp[0] <= eff_bands[c][0] + 2.0) is a wrapped single-column header, never a super-header.
+                    gap_pair = None
+                    if len(r1_ov) <= 1:
+                        for c in range(len(eff_bands) - 1):
+                            if (
+                                eff_bands[c][1] - 1.0 <= sp_mid <= eff_bands[c + 1][0] + 1.0
+                                and sp[0] > eff_bands[c][0] + 2.0
+                                and sp[1] <= eff_bands[c + 1][1] + 4.0
+                                and hdr_rows_raw[1][c]
+                                and hdr_rows_raw[1][c + 1]
+                            ):
+                                gap_pair = [c, c + 1]
+                                break
+                    if gap_pair is not None:
+                        gap_groups.append((sp, gap_pair))
+                    elif len(ov_cols) == 1:
+                        standalone_cols.add(ov_cols[0])
+
+                # Apply direct multi-column overlap and gap-straddling super-headers strictly to their covered columns
+                for sp, target_cols in direct_groups + gap_groups:
+                    text_clean = _clean_cell_text(sp[2])
+                    for ci in target_cols:
+                        if ci not in standalone_cols:
+                            broadcast_r0[ci] = text_clean
+
+                # Fallback for compact super-headers centered over repeated sub-header groups of size >= 3
+                # (e.g. "F1" over [200ms, 500ms, 1000ms] and "AUC" over [200ms, 500ms, 1000ms]),
+                # where each short label physically overlaps only the middle column of its group.
+                if not direct_groups and not gap_groups and len(sorted_r0) >= 2:
+                    # Skip leading left-hand standalone columns (e.g. "Features", "Model", "Params")
+                    candidate_r0 = [
+                        sp for sp in sorted_r0
+                        if any(
+                            min(sp[1], bx1) - max(sp[0], bx0) > 0.5 and hdr_rows_raw[1][ci]
+                            for ci, (bx0, bx1) in enumerate(eff_bands)
+                        )
+                    ]
+                    if len(candidate_r0) >= 2:
+                        first_cand_x0 = candidate_r0[0][0]
+                        k = len(candidate_r0)
+                        for start_col in range(0, len(eff_bands) - k * 2 + 1):
+                            rem_cols = [c for c in range(start_col, len(eff_bands)) if hdr_rows_raw[1][c]]
+                            if len(rem_cols) != len(eff_bands) - start_col:
+                                continue
+                            if len(rem_cols) % k != 0 or len(rem_cols) // k < 2:
+                                continue
+                            # Ensure all skipped leading columns sit strictly to the left of candidate_r0[0]
+                            if start_col > 0 and eff_bands[start_col - 1][1] >= first_cand_x0 - 2.0:
+                                continue
+                            grp_sz = len(rem_cols) // k
+                            chunks = [rem_cols[g * grp_sz:(g + 1) * grp_sz] for g in range(k)]
+                            tuples = [tuple(hdr_rows_raw[1][c].lower() for c in ch) for ch in chunks]
+                            if len(set(tuples)) != 1:
+                                continue
+                            # Verify each candidate super-header center sits inside its corresponding chunk x-range
+                            aligned = True
+                            for sp, ch in zip(candidate_r0, chunks):
+                                sp_mid = (sp[0] + sp[1]) / 2.0
+                                if not (eff_bands[ch[0]][0] - 4.0 <= sp_mid <= eff_bands[ch[-1]][1] + 4.0):
+                                    aligned = False
+                                    break
+                            if aligned:
+                                for sp, ch in zip(candidate_r0, chunks):
+                                    text_clean = _clean_cell_text(sp[2])
+                                    for ci in ch:
+                                        broadcast_r0[ci] = text_clean
+                                break
             merged_hdr = [
-                _clean_cell_text(f"{hdr_rows_raw[0][c]} {hdr_rows_raw[1][c]}")
+                _clean_cell_text(f"{broadcast_r0[c]} {hdr_rows_raw[1][c]}")
                 for c in range(len(col_bands))
             ]
             matrix.append(merged_hdr)
@@ -639,9 +754,12 @@ def _extract_booktabs_table_from_rules(
     header_rows = list(range(len(matrix)))
     for bi in body_indices:
         spans = line_spans[bi][1]
-        # Skip pure 1-span divider rows (e.g. "Recording-disjoint") OR merge as clean first-col label?
-        # Keep non-empty rows; if single-span divider has no digits, skip so selection rows stay crisp data rows!
+        # Preserve semantic 1-span divider rows (e.g. "Recording-disjoint", "Speaker-disjoint")
+        # as clean full-width section-label rows [label, "", ...] so split groups stay unambiguous!
         if len(spans) == 1 and not re.search(r"\d", spans[0][2]):
+            divider_label = _clean_cell_text(spans[0][2])
+            if 2 <= len(divider_label) <= 80:
+                matrix.append([divider_label] + [""] * (len(col_bands) - 1))
             continue
         row = _assign_spans_to_cols(spans)
         if any(row):

@@ -123,14 +123,15 @@ function isPureTableIssue(issue) {
     const path = issue.path;
     const message = String(issue.message || '');
     if (issueIndicatesLengthShortfall(issue)) return false;
-    if (/方法推导|推导缺失|核心步骤|跨节|散文扩写|formulaBindings|figurePlacements|\[\[FIGURE_|\[\[FORMULA_|开源|resource|至少需要\s*\d+\s*张\s*Markdown\s*表|主结果表覆盖不足|与第\s*\d+\s*张表完全重复|同一张实验或消融表不得在文章中重复展示两次/i.test(message)) {
+    if (/方法推导|推导缺失|核心步骤|跨节|散文扩写|formulaBindings|figurePlacements|\[\[FIGURE_|\[\[FORMULA_|开源|resource|至少需要\s*\d+\s*张\s*Markdown\s*表|主结果表覆盖不足|与第\s*\d+\s*张表(?:完全重复|重复或高度重叠)|同一张实验或消融表不得在文章中重复展示|冒充主结果表/i.test(message)) {
         return false;
     }
     if (code === 'reader_invalid_source_quotes'
         || code === 'reader_source_table_unrenderable'
         || code === 'reader_table_count_insufficient'
         || code === 'reader_result_table_missing'
-        || code === 'reader_duplicate_table') {
+        || code === 'reader_duplicate_table'
+        || code === 'reader_result_ablation_misplacement') {
         return false;
     }
     if (typeof path === 'string' && /^\/tableBindings\/(?:0|[1-9]\d*)(?:\/|$)/.test(path)) {
@@ -508,7 +509,8 @@ function selectProvableRepairSourceEvidence({
             || issue?.code === 'reader_table_count_insufficient'
             || issue?.code === 'reader_result_table_missing'
             || issue?.code === 'reader_duplicate_table'
-            || /至少需要\s*\d+\s*张\s*Markdown\s*表|主结果表覆盖不足|与第\s*\d+\s*张表完全重复|同一张实验或消融表不得在文章中重复展示两次/.test(message)) {
+            || issue?.code === 'reader_result_ablation_misplacement'
+            || /至少需要\s*\d+\s*张\s*Markdown\s*表|主结果表覆盖不足|与第\s*\d+\s*张表(?:完全重复|重复或高度重叠)|同一张实验或消融表不得在文章中重复展示|冒充主结果表/.test(message)) {
             return fallback();
         }
     }

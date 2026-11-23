@@ -938,7 +938,7 @@ function coalesceExcessCohesiveReaderSections(candidate) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     let format;
     try { format = require('./lib/reader-record-format').draftFormat(candidate); } catch { return false; }
-    if (format.editorialProfile !== 'cohesive-functional-v4') return false;
+    if (!require('./lib/reader-record-format').isModernEditorialProfile(format.editorialProfile)) return false;
     const maxSections = require('./lib/reader-contract').readerRequirements(
         { version: 3, editorialProfile: format.editorialProfile }
     ).maximumSections;
@@ -1071,7 +1071,7 @@ function inlineExcessCohesiveReaderConceptBridges(candidate) {
         || !Array.isArray(candidate.sections)) return false;
     let format;
     try { format = require('./lib/reader-record-format').draftFormat(candidate); } catch { return false; }
-    if (format.editorialProfile !== 'cohesive-functional-v4') return false;
+    if (!require('./lib/reader-record-format').isModernEditorialProfile(format.editorialProfile)) return false;
     const maxBridges = require('./lib/reader-contract').readerRequirements(
         { version: 3, editorialProfile: format.editorialProfile }
     ).maximumConceptBridges;
@@ -1580,7 +1580,7 @@ function isAllowedReaderDefensiveNegationIssue(issue, article, options = {}) {
     const count = Number(issue.count);
     if (!Number.isFinite(count)) return false;
     const chineseChars = (String(article || '').match(/[\u3400-\u9fff]/g) || []).length;
-    const isCohesiveV4 = options?.editorialProfile === 'cohesive-functional-v4';
+    const isCohesiveV4 = require('./lib/reader-record-format').isModernEditorialProfile(options?.editorialProfile);
     const readerLimit = isCohesiveV4
         ? Math.max(8, Math.ceil(chineseChars / 800))
         : Math.max(12, Math.ceil(chineseChars / 300));
@@ -2941,7 +2941,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     if (!readerLegacyDatasetClaimsValid(boundArticle, tableBindings)) {
         throw new Error('读者文章的 TidyVoice/validation set 对应关系缺少逐字原文依据；请按原文修复数据集及其表格来源记录');
     }
-    if (options.editorialProfile !== 'cohesive-functional-v4') {
+    if (!require('./lib/reader-record-format').isModernEditorialProfile(options.editorialProfile)) {
         boundArticle = require('./lib/reader-table-pdf-evidence').appendSourceOriginNotes(boundArticle, tableBindings);
     }
     return {
@@ -3109,7 +3109,7 @@ const READER_HEADING_FIG_TABLE_RE = /(?<![A-Za-z0-9])(?:图|Figure|表|Table)\s*
 
 function makeReaderHeadingSpecific(kind, heading, readerTitle, options = {}) {
     const normalizedHeading = String(heading || '').trim();
-    if (options?.editorialProfile === 'cohesive-functional-v4') return normalizedHeading;
+    if (require('./lib/reader-record-format').isModernEditorialProfile(options?.editorialProfile)) return normalizedHeading;
     if (normalizedHeading.length >= 8 && normalizedHeading.length <= 80
         && !GENERIC_READER_HEADING_RE.test(normalizedHeading)) return normalizedHeading;
     const title = String(readerTitle || '').trim().replace(/[？?！!。]+$/, '').slice(0, 48);
@@ -3205,24 +3205,31 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
         targetChineseChars = resolvedOptions.targetChineseChars;
         maxChineseChars = resolvedOptions.maxChineseChars;
     }
-    const isCohesiveV4 = resolvedOptions?.editorialProfile === 'cohesive-functional-v4';
-    const effectiveTarget = Number.isInteger(targetChineseChars) ? targetChineseChars : (isCohesiveV4 ? 300 : 190);
-    const effectiveMax = Number.isInteger(maxChineseChars) ? maxChineseChars : (isCohesiveV4 ? 440 : 240);
-    const maxSentences = isCohesiveV4 ? 10 : 6;
-    const groupSentenceTarget = isCohesiveV4 ? 6 : 5;
+    const readerFormat = require('./lib/reader-record-format');
+    const isStructuredV5 = readerFormat.isStructuredV5(resolvedOptions?.editorialProfile);
+    const isModernEditorial = readerFormat.isModernEditorialProfile(resolvedOptions?.editorialProfile);
+    const effectiveTarget = Number.isInteger(targetChineseChars)
+        ? targetChineseChars : (isStructuredV5 ? 260 : isModernEditorial ? 300 : 190);
+    const effectiveMax = Number.isInteger(maxChineseChars)
+        ? maxChineseChars : (isStructuredV5 ? 380 : isModernEditorial ? 440 : 240);
+    const hardCapChars = isStructuredV5 ? 420 : 480;
+    const maxSentences = isStructuredV5 ? 9 : isModernEditorial ? 10 : 6;
+    const groupSentenceTarget = isStructuredV5 ? 5 : isModernEditorial ? 6 : 5;
     const chineseCount = value => (String(value || '').match(/[\u3400-\u9fff]/g) || []).length;
-    const protectedBlock = value => /^(?:```|~~~|\||[-*+]\s|\d+\.\s|!\[|\$\$|\\\[)/.test(value.trim());
+    const protectedBlock = value => /^(?:```|~~~|#{1,6}\s|>|\||[-*+]\s|\d+[.)、]\s|!\[|\$\$|\\\[)/.test(value.trim());
     return String(text || '').trim().split(/\n\s*\n/).flatMap(paragraph => {
         const trimmed = paragraph.trim();
-        const sentenceEndCount = (trimmed.match(isCohesiveV4 ? /[。！？!?]/g : /[。！？!?；;]/g) || []).length;
+        const sentenceEndCount = (trimmed.match(isModernEditorial ? /[。！？!?]/g : /[。！？!?；;]/g) || []).length;
         const chars = chineseCount(trimmed);
-        const withinBudget = isCohesiveV4
-            ? !(chars > effectiveMax && sentenceEndCount > maxSentences) && chars <= 480
-            : (chars <= effectiveMax && sentenceEndCount <= maxSentences);
+        const withinBudget = isStructuredV5
+            ? !(chars > effectiveMax && sentenceEndCount > maxSentences) && chars <= hardCapChars && sentenceEndCount <= maxSentences + 1
+            : isModernEditorial
+                ? !(chars > effectiveMax && sentenceEndCount > maxSentences) && chars <= hardCapChars
+                : (chars <= effectiveMax && sentenceEndCount <= maxSentences);
         if (!trimmed || protectedBlock(trimmed) || withinBudget) {
             return [trimmed];
         }
-        const sentences = trimmed.match(isCohesiveV4 ? /[^。！？!?]+[。！？!?]?/g : /[^。！？!?；;]+[。！？!?；;]?/g) || [trimmed];
+        const sentences = trimmed.match(isModernEditorial ? /[^。！？!?]+[。！？!?]?/g : /[^。！？!?；;]+[。！？!?；;]?/g) || [trimmed];
         const groups = [];
         let current = '';
         let currentSentences = 0;
@@ -3243,7 +3250,7 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
 }
 
 function normalizeReaderProseFormatting(text, quantitativeIssues = [], options = {}) {
-    const isCohesiveV4 = options?.editorialProfile === 'cohesive-functional-v4';
+    const isCohesiveV4 = require('./lib/reader-record-format').isModernEditorialProfile(options?.editorialProfile);
     const protectedMarkdown = [];
     const protect = value => {
         const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
@@ -3292,6 +3299,15 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
             .replace(/一分不得|一分为二|合二为一|一举两得|独一无二|举一反三|融为一体|一成不变|一概而论|一视同仁|一目了然|一脉相承|一步到位|二者合一|合而为一|万无一失|百里挑一|十拿九稳|一劳永逸|一锤定音|一针见血/gu, protectChinese)
             .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu, protectChinese)
             .replace(/每一(?=\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch))/giu, protectChinese);
+        if (require('./lib/reader-record-format').isStructuredV5(options?.editorialProfile)) {
+            protectedText = protectedText
+                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:单|两|三|四|多)阶段/gu, protectChinese)
+                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:单|双|两|三|多)段式/gu, protectChinese)
+                .replace(/(?:哪一|任何一|某一)(?:个|帧|步|类|层|路|项|组|条|种|级)/gu, protectChinese)
+                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:两|二)者/gu, protectChinese)
+                .replace(/(?:查|做|跑|执行|输出|发起|触发|完成)一次/gu, protectChinese)
+                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])一次(?:判定|输出|调用|前向|推理|更新|评估|预测|回答|检索|采样)/gu, protectChinese);
+        }
     }
     const adjacentNumeralSurfaces = [];
     let numeralSafeText = protectedText;
@@ -4080,7 +4096,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         })) : []),
         ...(Array.isArray(draft?.conceptBridges) ? draft.conceptBridges.map((bridge, index) => ({
             path: `/conceptBridges/${index}`, text: bridge?.explanation, kind: 'concept_bridge'
-        })) : [])
+        })) : []),
+        ...(draft?.implementationSpecs && typeof draft.implementationSpecs === 'object' && !Array.isArray(draft.implementationSpecs)
+            ? Object.entries(draft.implementationSpecs).map(([specKey, specText]) => ({
+                path: '/implementationSpecs', text: specText, kind: specKey === 'openSourceArtifacts' ? 'reproduction' : 'implementation_spec'
+            })) : [])
     ];
     const affirmative = /(?:已经|已|现已|目前已|当前已|正式)(?:经)?(?:开源|公开|发布|提供|开放|上线|可用)|(?<![不未许])可(?:访问|下载|获取|用)(?!性|状态|于)|(?:为|是|属于)(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|(?:代码|源代码|代码仓库|仓库|模型权重|权重|检查点|数据集|语料库|在线演示|演示页面|复现材料)(?:为|是|属于)?(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|开源地址|公开仓库|\b(?:public|open[- ]source(?:d)?)\b|\b(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|publicly\s+)?(?:available|released|open[- ]sourced|accessible|downloadable)\b|\b(?:we|the\s+authors?)\s+(?:release|provide|publish)\b/i;
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
@@ -5671,6 +5691,8 @@ function readerResourceClaimDraftFromArticle(plan, article) {
     }
     return { readerTitle: plan.readerTitle, oneSentenceThesis: plan.oneSentenceThesis,
         conceptBridges: plan.conceptBridges,
+        ...(plan.implementationSpecs && typeof plan.implementationSpecs === 'object' && !Array.isArray(plan.implementationSpecs)
+            ? { implementationSpecs: plan.implementationSpecs } : {}),
         sections: plan.sections.map((section, index) => ({ kind: section.kind,
             heading: headings[index][1],
             body: String(article).slice(headings[index].index + headings[index][0].length,
@@ -5844,7 +5866,7 @@ function readerFigureNarrative(figure, target = null) {
 }
 
 function readerFigureCaptionLine(figure, target = null, options = {}) {
-    if (options?.editorialProfile !== 'cohesive-functional-v4') {
+    if (!require('./lib/reader-record-format').isModernEditorialProfile(options?.editorialProfile)) {
         return `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure, target)}*`;
     }
     const cleanLabel = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
@@ -5852,8 +5874,13 @@ function readerFigureCaptionLine(figure, target = null, options = {}) {
     const panelSuffix = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
         ? `；当前资源对应子图 ${String(figure.caption).trim()}，同一编号的其他面板请回原论文核对`
         : '';
+    const customChineseCaption = typeof options?.chineseCaption === 'string' && options.chineseCaption.trim()
+        ? options.chineseCaption.trim()
+        : (typeof figure?.chineseCaption === 'string' && figure.chineseCaption.trim()
+            ? figure.chineseCaption.trim() : '');
+    const rawCaption = customChineseCaption || truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180);
     const cleanCaption = transformReaderFigureCaptionPreservingMathStars(
-        truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180), value => value
+        rawCaption, value => value
             .replace(/\*{3}/g, '三个星号')
             .replace(/\*{2}/g, '两个星号')
             .replace(/\*/g, '一个星号')
@@ -5995,7 +6022,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         try { return readerFormat.planEditorialProfile(readerResult.plan); }
         catch { return readerFormat.LEGACY_INTEGRATED; }
     })();
-    const requiresFocusBlockquote = editorialProfile !== readerFormat.COHESIVE_V4;
+    const requiresFocusBlockquote = !readerFormat.isModernEditorialProfile(editorialProfile);
     for (const { figure, placement } of plannedFigures) {
         if (article.includes(`](${figure.url})`)) {
             skipped.push(`Figure ${figure.ordinal}: 正文已有同 URL 链接`);
@@ -6016,7 +6043,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         const block = [
             focusBlock,
             `![${alt}](${figure.url})`,
-            readerFigureCaptionLine(figure, target, { editorialProfile })
+            readerFigureCaptionLine(figure, target, {
+                editorialProfile,
+                ...(placement.chineseCaption ? { chineseCaption: placement.chineseCaption } : {})
+            })
         ].filter(Boolean).join('\n\n');
         const inserted = replaceReaderFigureMarker(
             article,
@@ -6038,6 +6068,9 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             explanationQuote: placement.explanationQuote || null,
             ...(Array.isArray(placement.focusPoints)
                 ? { focusPoints: placement.focusPoints }
+                : {}),
+            ...(typeof placement.chineseCaption === 'string' && placement.chineseCaption.trim()
+                ? { chineseCaption: placement.chineseCaption }
                 : {})
         });
     }
@@ -6078,10 +6111,15 @@ function rewriteApiReaderFigureNarratives(article, figures) {
         if (!existing) {
             throw new Error(`论文图 ${figure.ordinal} 的旧叙事块无法精确定位`);
         }
-        // 保持原文章的图注格式：v4 为「论文图 N：…」，旧契约为「论文图 N。…」。
+        // 保持原文章的图注格式：v4/v5 为「论文图 N：…」，旧契约为「论文图 N。…」。
         const v4Caption = new RegExp(`论文图\\s+${figure.ordinal}[：:]`).test(existing[0]);
         const narrative = readerFigureCaptionLine(figure, target,
-            v4Caption ? { editorialProfile: 'cohesive-functional-v4' } : {});
+            v4Caption
+                ? {
+                    editorialProfile: figure.chineseCaption ? 'structured-pipeline-v5' : 'cohesive-functional-v4',
+                    ...(figure.chineseCaption ? { chineseCaption: figure.chineseCaption } : {})
+                }
+                : {});
         rewritten = rewritten.replace(
             pattern,
             () => `![${alt}](${url})\n\n${narrative}`
@@ -6633,7 +6671,9 @@ function validateReaderEditorialQuality(article, sections, options = {}) {
         editorialProfile: options.editorialProfile,
         skipTableCommentaryAlignment: options.skipTableCommentaryAlignment === true
     });
-    const sectionWarnings = findReaderSectionNearDuplicates(article, sections);
+    const sectionWarnings = findReaderSectionNearDuplicates(article, sections, {
+        editorialProfile: options.editorialProfile
+    });
     // 同一结果数值跨过多小节重复，是读者最直观的啰嗦感来源。
     const metricReuseWarnings = require('./lib/reader-contract').findReaderCrossSectionMetricReuse(article, sections);
     return { ...quality, warnings: [...quality.warnings, ...sectionWarnings, ...metricReuseWarnings] };
@@ -7259,6 +7299,114 @@ function readParsedReaderFactContext(parsed, draft) {
         paperId: current.context.paperId, sourceSha256: current.context.sourceSha256,
         sourceSnapshotSha256: current.context.sourceSnapshotSha256 };
 }
+const V5_FIG_ARCH_CUES_RE = /(?:\b(?:system\s+architecture|model\s+architecture|network\s+architecture|architecture\s+(?:diagram|overview)|overall\s+(?:architecture|framework|pipeline|workflow|system)|block\s+diagram|schematic\s+(?:diagram|overview|illustration)|workflow\s+(?:diagram|overview)|dataflow\s+(?:diagram|overview)|pipeline\s+(?:diagram|overview)|framework\s+(?:diagram|overview)|model\s+structure|training\s+pipeline|distillation\s+pipeline|inference\s+pipeline)\b|^(?:Figure|Fig\.?)\s*\d+[:.\s]+(?:The\s+)?(?:overall\s+)?(?:architecture|overview|framework|pipeline|workflow|diagram|schematic)\s+of\b(?!\s+(?:the\s+)?(?:experimental|evaluation|benchmark|quantitative|ablation)\s+results?))/i;
+// Broad result/metric context used only to avoid false-positive architecture rejections in result/ablation sections.
+const V5_FIG_RESULT_CONTEXT_RE = /\b(?:ablation(?:\s+(?:study|results?|analysis))?|bar\s+(?:chart|plot)|box\s*plot|scatter\s*plot|confusion\s+matrix|roc\s+curve|precision[- ]recall|pareto|vs\.?\s+(?:bitrate|latency|parameter|epoch|step|snr|noise|size)|learning\s+curve|loss\s+curve|scaling\s+law|trade[- ]?off(?:\s+curve)?|t-?sne|umap|heatmap\s+of\s+(?:error|accuracy|wer|mos)|(?:wer|cer|mos|pesq|stoi|visqol|fid|fvd|f1|accuracy|precision|recall|auc|ap|brier|ece|latency|rtf|throughput|benchmark|evaluation\s+results?|experimental\s+results?|performance\s+comparison|error\s+rate|human\s+preference|elo))\b/i;
+// Strict pure quantitative plot/ablation cues used to keep evaluation plots out of method/problem sections
+// without blocking legitimate method/training diagrams (e.g. low-latency architecture, training loss curves).
+const V5_FIG_PURE_QUANT_PLOT_RE = /\b(?:ablation(?:\s+(?:study|results?|analysis))?|bar\s+(?:chart|plot)|box\s*plot|scatter\s*plot|confusion\s+matrix|roc\s+curve|precision[- ]recall\s+curve|pareto\s+(?:front|frontier|curve)|vs\.?\s+(?:bitrate|latency|parameter|epoch|step|snr|noise|size)|scaling\s+law|trade[- ]?off\s+curve|t-?sne|umap|heatmap\s+of\s+(?:error|accuracy|wer|mos)|(?:evaluation|experimental|benchmark|quantitative)\s+results?|performance\s+comparison)\b/i;
+const V5_FIG_QUAL_OR_TEASER_CUES_RE = /\b(?:spectrogram|waveform|mel[- ]spectrogram|attention\s+map|qualitative|visualization|case\s+study|example\s+output|(?:audio|generated|output|qualitative)\s+samples?|teaser|comparison\s+of\s+(?:generated|reconstructed|synthesized))\b/i;
+
+function validateStructuredV5FigurePlacement(placement, index, structuredArtifacts) {
+    const figures = Array.isArray(structuredArtifacts?.figures) ? structuredArtifacts.figures : [];
+    const figure = figures.find(item => Number(item?.ordinal) === placement.figureOrdinal);
+    if (!figure) return;
+    const caption = String(figure.caption || '').trim();
+    if (!caption || V5_FIG_QUAL_OR_TEASER_CUES_RE.test(caption)) return;
+    const isArch = V5_FIG_ARCH_CUES_RE.test(caption);
+    const isResultContext = V5_FIG_RESULT_CONTEXT_RE.test(caption);
+    const isPureQuant = V5_FIG_PURE_QUANT_PLOT_RE.test(caption);
+    if (isPureQuant && !isArch && ['problem', 'background', 'related_work', 'method_overview', 'component', 'training'].includes(placement.targetKind)) {
+        const message = `读者文章 figurePlacements[${index}]（Figure ${figure.ordinal}）的官方图注对应定量结果/消融曲线图，不宜放在 ${placement.targetKind} 小节；请移至 result 或 ablation 小节，并在原位重写过渡正文。`;
+        throw Object.assign(new Error(message), {
+            code: 'READER_FIGURE_SEMANTIC_MISPLACEMENT',
+            readerIssues: [{
+                code: 'reader_figure_semantic_misplacement',
+                path: `/figurePlacements/${index}`,
+                figureIndex: index,
+                recommendedTargetKinds: ['result', 'ablation'],
+                message
+            }]
+        });
+    }
+    if (isArch && !isResultContext && ['result', 'ablation', 'limitation', 'synthesis'].includes(placement.targetKind)) {
+        const message = `读者文章 figurePlacements[${index}]（Figure ${figure.ordinal}）的官方图注对应架构/流程示意图，不宜放在 ${placement.targetKind} 小节；请移至 method_overview、component 或 training 小节，并在原位重写过渡正文。`;
+        throw Object.assign(new Error(message), {
+            code: 'READER_FIGURE_SEMANTIC_MISPLACEMENT',
+            readerIssues: [{
+                code: 'reader_figure_semantic_misplacement',
+                path: `/figurePlacements/${index}`,
+                figureIndex: index,
+                recommendedTargetKinds: ['method_overview', 'component', 'training'],
+                message
+            }]
+        });
+    }
+}
+
+const V5_SPEC_FORBIDDEN_HTML_TAGS = new Set([
+    'a', 'audio', 'b', 'blockquote', 'body', 'br', 'button', 'canvas', 'code', 'details', 'div',
+    'embed', 'form', 'frame', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'html', 'i',
+    'iframe', 'img', 'input', 'li', 'link', 'math', 'meta', 'object', 'ol', 'p', 'pre', 's',
+    'script', 'section', 'select', 'source', 'span', 'strong', 'style', 'summary', 'svg',
+    'table', 'tbody', 'td', 'textarea', 'th', 'thead', 'title', 'tr', 'u', 'ul', 'video'
+]);
+const V5_SPEC_WORKFLOW_LEAK_RE = /(?:evidence\s*id|manual_complete|证据块|代码校验反馈|(?:本|上述|当前|这个)\s*prompt|可写(?:作者)?(?:演示|代码|模型|数据|资源)|本次核验返回\s*\d+|本次未收到可核验|资源清单未标明)/i;
+
+function hasForbiddenSpecHtmlOrMarkdown(text) {
+    if (/[\r\n]/.test(text)) return true;
+    if (/^\s*(?:#{1,6}\s|\||>|```|~~~|[-*+]\s|\d+[.)、]\s|---+$|===+$)/.test(text)) return true;
+    if (/(?:``|\\`|~~~|!\[[^\]]*\]\()/.test(text)) return true;
+    if (((text.match(/`/g) || []).length % 2) !== 0) return true;
+    // Strip single-backtick inline code spans before inspecting raw angle-bracket HTML tags.
+    const outsideCode = text.replace(/`[^`]*`/g, ' ');
+    for (const match of outsideCode.matchAll(/<([!/A-Za-z][^>]*)>/g)) {
+        const inner = match[1].trim();
+        const isSafeToken = /^[A-Za-z][A-Za-z0-9_.-]{0,24}$/.test(inner)
+            && !V5_SPEC_FORBIDDEN_HTML_TAGS.has(inner.toLowerCase());
+        if (!isSafeToken) return true;
+    }
+    return false;
+}
+
+function validateStructuredV5ImplementationSpecs(rawSpecs, proseFormatOptions) {
+    const readerFormat = require('./lib/reader-record-format');
+    const fail = message => {
+        throw Object.assign(new Error(message), {
+            code: 'READER_INVALID_IMPLEMENTATION_SPECS',
+            readerIssues: [{ code: 'reader_invalid_implementation_specs', path: '/implementationSpecs', message }]
+        });
+    };
+    if (!rawSpecs || typeof rawSpecs !== 'object' || Array.isArray(rawSpecs)) {
+        fail('读者文章 implementationSpecs 必须是包含 6 个规定字段的对象');
+    }
+    try {
+        assertExactObjectKeys(rawSpecs, readerFormat.IMPLEMENTATION_SPEC_KEYS, '读者文章 implementationSpecs');
+    } catch (error) {
+        fail(error.message);
+    }
+    const normalized = {};
+    for (const key of readerFormat.IMPLEMENTATION_SPEC_KEYS) {
+        const rawValue = rawSpecs[key];
+        if (typeof rawValue !== 'string' || !rawValue.trim()) {
+            fail(`读者文章 implementationSpecs.${key} 必须是 4–550 非空字符的单行纯文本摘要（原文未提及请写“原文未披露”）`);
+        }
+        if (hasForbiddenSpecHtmlOrMarkdown(rawValue)) {
+            fail(`读者文章 implementationSpecs.${key} 必须为单行纯文本，不得包含换行、Markdown 块结构或原始 HTML 标签`);
+        }
+        if (V5_SPEC_WORKFLOW_LEAK_RE.test(rawValue)) {
+            fail(`读者文章 implementationSpecs.${key} 泄漏了内部核验或提示词流程元话语`);
+        }
+        const formatted = normalizeReaderProseFormatting(rawValue.trim(), [], proseFormatOptions);
+        const nonWsLen = formatted.replace(/\s+/g, '').length;
+        if (formatted.length < 4 || formatted.length > 650 || nonWsLen > 550) {
+            fail(`读者文章 implementationSpecs.${key} 规范化后须为 4–650 字符（非空白不超过 550 字；原文未提及请写“原文未披露”）`);
+        }
+        normalized[key] = formatted;
+    }
+    return normalized;
+}
+
 function parseApiReaderArticleResult(raw, options = {}) {
     let representation;
     try { representation = require('./lib/reader-record-format').draftFormat(JSON.parse(extractJsonObjectText(raw))); }
@@ -7293,11 +7441,13 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     readerFormat.assertRequiredProfile(format, options);
     const integrated = format.profile === readerFormat.INTEGRATED;
     const editorialProfile = readerFormat.effectiveEditorialProfile(format, options);
-    const isCohesiveV4 = editorialProfile === readerFormat.COHESIVE_V4;
+    const isStructuredV5 = readerFormat.isStructuredV5(editorialProfile);
+    const isCohesiveV4 = readerFormat.isModernEditorialProfile(editorialProfile);
     const modernMetadata = Boolean(format.modern || format.current || options.compileCurrent === true);
     const proseFormatOptions = { editorialProfile };
     const hasSourceBindings = Object.prototype.hasOwnProperty.call(value, 'tableBindings')
         || Object.prototype.hasOwnProperty.call(value, 'formulaBindings');
+    const hasImplementationSpecs = Object.prototype.hasOwnProperty.call(value, 'implementationSpecs');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(options.readerCapabilityPolicy);
     assertExactObjectKeys(
         value,
@@ -7305,10 +7455,14 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             ...Object.keys(format.header), 'readerTitle', 'oneSentenceThesis',
             'conceptBridges', 'figurePlacements', 'sections',
             ...(hasSourceBindings || options.requireSourceBindings === true || modernMetadata
-                ? ['tableBindings', 'formulaBindings'] : [])
+                ? ['tableBindings', 'formulaBindings'] : []),
+            ...(isStructuredV5 && hasImplementationSpecs ? ['implementationSpecs'] : [])
         ],
         '读者文章顶层'
     );
+    const implementationSpecs = isStructuredV5 && hasImplementationSpecs
+        ? validateStructuredV5ImplementationSpecs(value.implementationSpecs, proseFormatOptions)
+        : null;
     if (readerCapabilityPolicy
         && (!Array.isArray(value.tableBindings) || value.tableBindings.length !== 0
             || !Array.isArray(value.formulaBindings) || value.formulaBindings.length !== 0
@@ -7327,8 +7481,13 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         || value.oneSentenceThesis.trim().length > 260) {
         throw new Error('读者文章 oneSentenceThesis 必须为 30-260 字符');
     }
-    const requirements = readerRequirements({ profile: format.profile, editorialProfile,
-        minimumIntegratedTables: options.minimumIntegratedTables });
+    const requirements = readerRequirements({
+        profile: format.profile,
+        editorialProfile,
+        minimumIntegratedTables: options.minimumIntegratedTables,
+        sourceText: options.sourceText,
+        sourceTextChars: options.sourceTextChars
+    });
     const minimumSectionCount = requirements.minimumSections;
     const maximumSectionCount = requirements.maximumSections;
     if (!Array.isArray(value.sections)
@@ -7397,7 +7556,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     removeOrphanReaderTableMarkers(value);
     const compiledTables = compileReaderTableSelections(
         value.sections, value.tableBindings, options.structuredArtifacts,
-        { checkDuplicates: isCohesiveV4 }
+        { checkDuplicates: isCohesiveV4, editorialProfile }
     );
     value.sections = compiledTables.sections;
     value.tableBindings = compiledTables.tableBindings;
@@ -7446,6 +7605,16 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         heading: normalizeReaderProseFormatting(section.heading.trim(), [], proseFormatOptions),
         body: splitReaderLongParagraphs(demoteReaderBodySectionHeadings(section.body), proseFormatOptions)
     }));
+    const v5SectionDiagnostics = isStructuredV5
+        ? require('./editorial-quality').findStructuredV5SectionIssues(normalizedSections)
+        : { issues: [], warnings: [] };
+    if (v5SectionDiagnostics.issues.length > 0) {
+        const message = `读者文章分节或标题结构未通过 structured-pipeline-v5 要求：${v5SectionDiagnostics.issues.map(item => item.message).join('；')}`;
+        throw Object.assign(new Error(message), {
+            code: 'READER_V5_SECTION_STRUCTURE',
+            readerIssues: v5SectionDiagnostics.issues
+        });
+    }
     const kinds = new Set(normalizedSections.map(section => section.kind));
     const missing = isCohesiveV4
         ? [
@@ -7556,10 +7725,14 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         bridge.marker, bridge.explanation
     ]));
     const figurePlacements = value.figurePlacements.map((placement, index) => {
+        const hasChineseCaption = isStructuredV5 && placement && Object.hasOwn(placement, 'chineseCaption');
         const placementKeys = integrated
-            ? (isCohesiveV4 && placement && !Object.hasOwn(placement, 'focusPoints')
-                ? ['figureOrdinal', 'targetKind', 'marker']
-                : ['figureOrdinal', 'targetKind', 'marker', 'focusPoints'])
+            ? [
+                ...(isCohesiveV4 && placement && !Object.hasOwn(placement, 'focusPoints')
+                    ? ['figureOrdinal', 'targetKind', 'marker']
+                    : ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']),
+                ...(hasChineseCaption ? ['chineseCaption'] : [])
+            ]
             : ['figureOrdinal', 'targetKind', 'marker'];
         assertExactObjectKeys(
             placement, placementKeys, `读者文章 figurePlacements[${index}]`
@@ -7572,6 +7745,28 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         seenFigureOrdinals.add(placement.figureOrdinal);
         if (!API_READER_KINDS.includes(placement.targetKind)) {
             throw new Error(`读者文章 figurePlacements[${index}].targetKind 非法`);
+        }
+        let normalizedChineseCaption = null;
+        if (hasChineseCaption) {
+            const rawCaptionStr = typeof placement.chineseCaption === 'string' ? placement.chineseCaption : '';
+            const hasNewline = /[\r\n]/.test(rawCaptionStr);
+            const collapsed = rawCaptionStr.replace(/\s+/g, ' ').trim();
+            const candidateCaption = collapsed ? normalizeReaderProseFormatting(collapsed, [], proseFormatOptions) : '';
+            const nonWsLen = candidateCaption.replace(/\s+/g, '').length;
+            if (hasNewline || !candidateCaption || candidateCaption.length < 12 || candidateCaption.length > 160
+                || nonWsLen > 130
+                || !/[\u3400-\u9fff]/.test(candidateCaption)
+                || /^(?:论文)?(?:图|Figure|Fig\.?)\s*\d+/iu.test(candidateCaption)) {
+                const message = `读者文章 figurePlacements[${index}].chineseCaption 须为 12–130 非空白字符（总长不超过 160 字符）的单行自然中文图注，且不得以“图 N / Figure N”开头`;
+                throw Object.assign(new Error(message), {
+                    code: 'READER_INVALID_CHINESE_CAPTION',
+                    readerIssues: [{ code: 'reader_invalid_chinese_caption', path: `/figurePlacements/${index}`, figureIndex: index, message }]
+                });
+            }
+            normalizedChineseCaption = candidateCaption;
+        }
+        if (isStructuredV5 && options.structuredArtifacts) {
+            validateStructuredV5FigurePlacement(placement, index, options.structuredArtifacts);
         }
         const marker = String(placement.marker || '').trim();
         if (marker !== `[[FIGURE_${placement.figureOrdinal}]]`) {
@@ -7637,7 +7832,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                         item => normalizeReaderProseFormatting(item.trim(), [], proseFormatOptions)
                     )
                 }
-                : {})
+                : {}),
+            ...(normalizedChineseCaption ? { chineseCaption: normalizedChineseCaption } : {})
         };
     });
     const declaredConceptMarkers = new Set(conceptBridges.map(bridge => bridge.marker));
@@ -7757,9 +7953,12 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 || binding.cellBindings.length !== rows.length * rows[0].length
                 || binding.cellBindings.some(cell => cell.sourceRow !== cell.renderedRow
                     || cell.sourceColumn !== cell.renderedColumn)
-                || rows.some((row, ri) => row.some((value, ci) => (
-                    value !== original.matrix[ri][ci] && value !== confirmed.displayCell(original, ri, ci)
-                ))))) {
+                || rows.some((row, ri) => row.some((value, ci) => {
+                    const unescaped = require('./lib/reader-tables').unescapeMarkdownTableCell(value);
+                    const rawCell = original.matrix[ri][ci];
+                    const dispCell = confirmed.displayCell(original, ri, ci);
+                    return value !== rawCell && unescaped !== rawCell && value !== dispCell && unescaped !== dispCell;
+                })))) {
                 throw new Error('PDF逐格显示校正只接受原表双写或已确认的完整值，不能修补模型错值或改变坐标');
             }
         }
@@ -7853,6 +8052,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         )
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
+    if (v5SectionDiagnostics.warnings.length > 0) {
+        quality = { ...quality, warnings: [...(quality.warnings || []), ...v5SectionDiagnostics.warnings] };
+    }
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle,
         { ...options, editorialProfile, compileCurrent: modernMetadata });
     // 概念 bridge 表层带计划签名：它们的字节必须留到最后的重新绑定，所以表层修复从不
@@ -7922,6 +8124,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             oneSentenceThesis: normalizeReaderProseFormatting(value.oneSentenceThesis.trim(), [], proseFormatOptions),
             conceptBridges: reboundConceptBridges,
             figurePlacements: reboundFigurePlacements,
+            ...(implementationSpecs ? { implementationSpecs } : {}),
             ...(sourceBindingResult ? {
                 tableBindings: sourceBindingResult.tableBindings,
                 formulaBindings: sourceBindingResult.formulaBindings,
@@ -7973,7 +8176,7 @@ function restoreApiReaderInjectionMarkers(article, plan, figures = []) {
         try { return readerFormat.planEditorialProfile(plan); }
         catch { return readerFormat.LEGACY_INTEGRATED; }
     })();
-    const requiresFocusBlockquote = editorialProfile !== readerFormat.COHESIVE_V4;
+    const requiresFocusBlockquote = !readerFormat.isModernEditorialProfile(editorialProfile);
     for (const figure of figures) {
         const placement = (plan.figurePlacements || []).find(item => item.figureOrdinal === figure.ordinal);
         if (!placement || typeof placement.marker !== 'string') {
@@ -7982,9 +8185,13 @@ function restoreApiReaderInjectionMarkers(article, plan, figures = []) {
         const focusBlock = requiresFocusBlockquote && placement.focusPoints?.length
             ? `> **看图路径：** ${placement.focusPoints.map((item, index) => `${index + 1}. ${item}`).join('；')}`
             : null;
+        const chineseCaption = placement.chineseCaption || figure.chineseCaption;
         const block = [focusBlock,
             `![${sanitizeMarkdownImageAlt(readerFigureAlt(figure))}](${figure.url})`,
-            readerFigureCaptionLine(figure, null, { editorialProfile })
+            readerFigureCaptionLine(figure, null, {
+                editorialProfile,
+                ...(chineseCaption ? { chineseCaption } : {})
+            })
         ].filter(Boolean).join('\n\n');
         if (articleWithMarkers.split(block).length !== 2) {
             throw new Error(`Reader 文风统计视图无法精确重放 Figure ${figure.ordinal} 注入块`);
@@ -8014,7 +8221,7 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
         try { return readerFormat.planEditorialProfile(plan); }
         catch { return readerFormat.LEGACY_INTEGRATED; }
     })();
-    const requiresFocusBlockquote = editorialProfile !== readerFormat.COHESIVE_V4;
+    const requiresFocusBlockquote = !readerFormat.isModernEditorialProfile(editorialProfile);
     let markerView = String(article || '');
     const renderedBlocks = new Map();
     for (const figure of figures) {
@@ -8026,9 +8233,13 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
                 (item, index) => `${index + 1}. ${item}`
             ).join('；')}`
             : null;
+        const chineseCaption = placement.chineseCaption || figure.chineseCaption;
         const block = [focusBlock,
             `![${sanitizeMarkdownImageAlt(readerFigureAlt(figure))}](${figure.url})`,
-            readerFigureCaptionLine(figure, null, { editorialProfile })
+            readerFigureCaptionLine(figure, null, {
+                editorialProfile,
+                ...(chineseCaption ? { chineseCaption } : {})
+            })
         ].filter(Boolean).join('\n\n');
         if (markerView.split(block).length !== 2) return null;
         markerView = markerView.replace(block, placement.marker);
@@ -9104,16 +9315,20 @@ function resolveApiReaderTargetEditorialProfile({ paidPromptReplay = null, signe
         if (replayedSha) {
             const currentPromptPath = currentTextStagePromptPath('apiReaderArticle');
             if (replayedSha === promptTemplateSha256(currentPromptPath)) {
-                return readerFormat.COHESIVE_V4;
+                return readerFormat.STRUCTURED_V5;
             }
             try {
                 const bytes = require('./lib/prompt-history').historicalPromptTemplateBytesForSha256(replayedSha);
+                const text = bytes ? bytes.toString('utf8') : '';
                 const codec = require('./lib/protocol-codec');
                 const currentDraftFp = codec.recordHeader(codec.contract('reader-draft'), 'reader-draft').schemaFingerprint;
-                if (bytes && bytes.toString('utf8').includes(currentDraftFp)) {
+                if (text.includes(currentDraftFp)) {
+                    return readerFormat.STRUCTURED_V5;
+                }
+                if (text.includes(readerFormat.V4_DRAFT_FP)) {
                     return readerFormat.COHESIVE_V4;
                 }
-            } catch { /* 历史非 v4 模板回退旧版集成契约 */ }
+            } catch { /* 历史非 v4/v5 模板回退旧版集成契约 */ }
         }
         return readerFormat.LEGACY_INTEGRATED;
     }
@@ -9121,7 +9336,7 @@ function resolveApiReaderTargetEditorialProfile({ paidPromptReplay = null, signe
         try { return readerFormat.draftFormat(signedRecoveryDraft).editorialProfile; }
         catch { return readerFormat.LEGACY_INTEGRATED; }
     }
-    return readerFormat.COHESIVE_V4;
+    return readerFormat.STRUCTURED_V5;
 }
 
 function buildApiReaderMechanicalContract({
@@ -9131,6 +9346,7 @@ function buildApiReaderMechanicalContract({
     readerCapabilityPolicy = null,
     availableTableCount = 0,
     structuredArtifacts = null,
+    sourceText = '',
     capabilityNotice = '',
     completeFigureBindingNotice = ''
 } = {}) {
@@ -9146,7 +9362,8 @@ function buildApiReaderMechanicalContract({
         : readerRequirements({
             profile: readerFormat.INTEGRATED,
             editorialProfile,
-            availableTableCount
+            availableTableCount,
+            sourceText
         }).minimumTables;
     const mechanicalContract = [
         buildReaderContractNotice({
@@ -9154,6 +9371,7 @@ function buildApiReaderMechanicalContract({
             editorialProfile,
             minimumIntegratedTables,
             availableTableCount,
+            sourceText,
             ...readerResultTableRequirement(structuredArtifacts)
         }),
         capabilityNotice,
@@ -9613,6 +9831,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         readerCapabilityPolicy,
         availableTableCount,
         structuredArtifacts: options.structuredArtifacts,
+        sourceText: options.sourceText,
         capabilityNotice,
         completeFigureBindingNotice
     };
@@ -15594,8 +15813,9 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         for (const cellElement of directCells) {
             while (matrix[rowIndex][columnIndex] !== undefined) columnIndex++;
             const cell = $(cellElement);
-            const rowspan = positiveSpan(cell.attr('rowspan'));
-            const colspan = positiveSpan(cell.attr('colspan'));
+            const cellClass = String(cell.attr('class') || '');
+            const rowspan = positiveSpan(cell.attr('rowspan') || cellClass.match(/\bltx_rowspan_(\d+)\b/)?.[1]);
+            const colspan = positiveSpan(cell.attr('colspan') || cellClass.match(/\bltx_colspan_(\d+)\b/)?.[1]);
             const rawCellHtml = $.html(cell);
             const text = compactDomText(
                 extractArxivDomText($, cell), STRUCTURED_ARTIFACT_LIMITS.cellChars, state,
@@ -15695,10 +15915,35 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
                 && row1ValidHeader;
             if ((row0Dense || row0SparseSuperHeader) && hasLaterData) {
                 const inferred = row0SparseSuperHeader ? [nextRowIdx] : [firstNonEmptyRow];
-                if (row0Dense && row1ValidHeader
-                    && (row0Cells.some(cell => Number(cell.colspan || 1) > 1)
-                        || row0Cells.some(cell => Number(cell.rowspan || 1) > 1))) {
-                    inferred.push(nextRowIdx);
+                // Propagate multi-row header spans declared via DOM rowspan/colspan (including LaTeXML
+                // ltx_rowspan_N / ltx_colspan_N on <span class="ltx_tabular"> tables) up to the deepest
+                // spanned header row, stopping before any numeric measurement row.
+                const hasNumericMeasurement = text => /^\s*[+\-\u2212]?(?:\d+\.\d+|\.\d+)(?:\s*(?:\(|±|\+\/-|%|×))/.test(String(text || '').trim());
+                let maxHeaderSpanRow = firstNonEmptyRow;
+                for (const cell of row0Cells) {
+                    const spanEnd = cell.row + Number(cell.rowspan || 1) - 1;
+                    if (spanEnd > maxHeaderSpanRow) maxHeaderSpanRow = spanEnd;
+                }
+                const hasRow0Span = row0Cells.some(cell => Number(cell.colspan || 1) > 1 || Number(cell.rowspan || 1) > 1);
+                if (row0Dense && hasRow0Span) {
+                    for (let r = nextRowIdx; r < normalizedMatrix.length - 1; r++) {
+                        const rowVals = normalizedMatrix[r];
+                        const rowNonEmpty = rowVals.filter(text => String(text || '').trim().length > 0);
+                        const withinSpan = r <= maxHeaderSpanRow;
+                        const rowEligible = rowNonEmpty.length >= Math.max(2, Math.ceil(width * 0.5))
+                            && rowVals.every(text => !pureFloat(text) && !hasNumericMeasurement(text))
+                            && normalizedMatrix.slice(r + 1).some(later => later.some(text => /\d/.test(String(text || ''))))
+                            && (withinSpan || rowNonEmpty.filter(hasAlpha).length >= Math.max(1, Math.ceil(rowNonEmpty.length * 0.5)));
+                        if (!rowEligible) break;
+                        inferred.push(r);
+                        for (const cell of cells.filter(c => c.row === r)) {
+                            const spanEnd = cell.row + Number(cell.rowspan || 1) - 1;
+                            if (spanEnd > maxHeaderSpanRow && spanEnd < normalizedMatrix.length - 1) {
+                                maxHeaderSpanRow = spanEnd;
+                            }
+                        }
+                        if (r >= maxHeaderSpanRow && r >= nextRowIdx) break;
+                    }
                 }
                 for (const hRow of inferred) {
                     headerRows.add(hRow);

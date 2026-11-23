@@ -5305,6 +5305,7 @@ def _manual_editorial_prose_paragraphs(value):
     """
     paragraphs = []
     pending = []
+    fenced_end = None
 
     def flush():
         if not pending:
@@ -5316,12 +5317,35 @@ def _manual_editorial_prose_paragraphs(value):
 
     for raw_line in str(value or '').splitlines():
         line = raw_line.strip()
+        if fenced_end is not None:
+            if fenced_end.search(line):
+                fenced_end = None
+            continue
         if not line:
             flush()
+            continue
+        code_fence = re.match(r'^(```|~~~)', line)
+        if code_fence:
+            flush()
+            marker = code_fence.group(1)
+            if line.find(marker, len(marker)) < 0:
+                fenced_end = re.compile(rf'^{re.escape(marker)}')
+            continue
+        if line.startswith('$$'):
+            flush()
+            if line.find('$$', 2) < 0:
+                fenced_end = re.compile(r'\$\$\s*$')
+            continue
+        if line.startswith('\\['):
+            flush()
+            if not re.search(r'\\\]\s*$', line):
+                fenced_end = re.compile(r'\\\]\s*$')
             continue
         if re.match(r'^(?:#{1,6}\s|\||!\[|---+$|\[←)', line):
             flush()
             continue
+        if re.match(r'^(?:[-*+]\s+|\d+[.)、]\s+)', line):
+            flush()
         line = re.sub(r'^[-*+]\s+', '', line)
         line = re.sub(r'^\d+[.)、]\s+', '', line)
         pending.append(line)

@@ -5076,7 +5076,9 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         expected['paper_digest_workbench_schema_fingerprint'] = bundle['schemaFingerprint']
     requires_reader_sections = (
         reader_formats.is_integrated_plan(reader_plan)
-        and reader_formats.plan_editorial_profile(reader_plan) == reader_formats.COHESIVE_V4
+        and reader_formats.is_modern_editorial_profile(
+            reader_formats.plan_editorial_profile(reader_plan)
+        )
     )
     if 'paper_digest_reader_sections' in frontmatter or requires_reader_sections:
         expected['paper_digest_reader_sections'] = bundle.get('readerSections')
@@ -6953,6 +6955,176 @@ def _paper_header_resource_display_label(paper, resource):
     return '论文首页资源'
 
 
+IMPLEMENTATION_SPEC_LABELS = (
+    ('trainingData', '训练与评测数据'),
+    ('computeHardware', '算力与训练耗时'),
+    ('keyHyperparams', '核心超参数与配置'),
+    ('inferenceCost', '推理速度与部署开销'),
+    ('openSourceArtifacts', '开源产物与协议状态'),
+    ('appendixHighlights', '附录与补充材料要点'),
+)
+
+
+def _paper_uses_structured_v5(paper):
+    plan = paper.get('apiReaderPlan') if isinstance(paper, dict) else None
+    if not isinstance(plan, dict) or not reader_formats.is_integrated_plan(plan):
+        return False
+    try:
+        return reader_formats.is_structured_v5(reader_formats.plan_editorial_profile(plan))
+    except (ValueError, TypeError):
+        return False
+
+
+_V5_SPEC_FORBIDDEN_HTML_TAGS = frozenset({
+    'a', 'audio', 'b', 'blockquote', 'body', 'br', 'button', 'canvas', 'code', 'details', 'div',
+    'embed', 'form', 'frame', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'html', 'i',
+    'iframe', 'img', 'input', 'li', 'link', 'math', 'meta', 'object', 'ol', 'p', 'pre', 's',
+    'script', 'section', 'select', 'source', 'span', 'strong', 'style', 'summary', 'svg',
+    'table', 'tbody', 'td', 'textarea', 'th', 'thead', 'title', 'tr', 'u', 'ul', 'video',
+})
+_V5_SPEC_WORKFLOW_LEAK_RE = re.compile(
+    r'(?:evidence\s*id|manual_complete|证据块|代码校验反馈|(?:本|上述|当前|这个)\s*prompt'
+    r'|可写(?:作者)?(?:演示|代码|模型|数据|资源)|本次核验返回\s*\d+|本次未收到可核验|资源清单未标明)',
+    flags=re.IGNORECASE,
+)
+
+
+def _has_forbidden_spec_html_or_markdown(text):
+    if not isinstance(text, str):
+        return True
+    if '\n' in text or '\r' in text:
+        return True
+    if re.search(r'^\s*(?:#{1,6}\s|\||>|```|~~~|[-*+]\s|\d+[.)、]\s|---+$|===+$)', text):
+        return True
+    if re.search(r'(?:``|\\`|~~~|!\[[^\]]*\]\()', text):
+        return True
+    if text.count('`') % 2 != 0:
+        return True
+    outside_code = re.sub(r'`[^`]*`', ' ', text)
+    for match in re.finditer(r'<([!/A-Za-z][^>]*)>', outside_code):
+        inner = match.group(1).strip()
+        is_safe_token = bool(re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,24}', inner)) \
+            and inner.lower() not in _V5_SPEC_FORBIDDEN_HTML_TAGS
+        if not is_safe_token:
+            return True
+    return False
+
+
+def _split_commonmark_code_spans(text):
+    """Split text into [(is_code_span, segment), ...] using CommonMark matched-backtick rules."""
+    s = str(text or '')
+    n = len(s)
+    segments = []
+    buf = []
+    i = 0
+    while i < n:
+        if s[i] == '\\' and i + 1 < n and s[i + 1] in ('\\', '`'):
+            buf.append(s[i:i + 2])
+            i += 2
+            continue
+        if s[i] == '`':
+            j = i
+            while j < n and s[j] == '`':
+                j += 1
+            tick_len = j - i
+            # Search for matching closing run of exact length tick_len
+            k = j
+            close_pos = -1
+            while k < n:
+                if s[k] == '`':
+                    m = k
+                    while m < n and s[m] == '`':
+                        m += 1
+                    if m - k == tick_len:
+                        close_pos = m
+                        break
+                    k = m
+                else:
+                    k += 1
+            if close_pos != -1:
+                if buf:
+                    segments.append((False, ''.join(buf)))
+                    buf = []
+                segments.append((True, s[i:close_pos]))
+                i = close_pos
+            else:
+                buf.append(s[i:j])
+                i = j
+        else:
+            buf.append(s[i])
+            i += 1
+    if buf:
+        segments.append((False, ''.join(buf)))
+    return segments
+
+
+def _sanitize_implementation_spec_text(text):
+    """Wrap benign technical angle-bracket tokens in inline code and entity-escape any other raw HTML."""
+    out = []
+    for is_code, part in _split_commonmark_code_spans(str(text or '').strip()):
+        if is_code:
+            out.append(part)
+            continue
+        def _replace_tag(match):
+            inner = match.group(1).strip()
+            if re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,24}', inner) \
+                    and inner.lower() not in _V5_SPEC_FORBIDDEN_HTML_TAGS:
+                return f'`<{inner}>`'
+            return match.group(0).replace('<', '&lt;').replace('>', '&gt;')
+        safe = re.sub(r'<([^<>]+)>', _replace_tag, part)
+        # Neutralize any remaining unmatched angle brackets outside newly created single-backtick tokens.
+        re_parts = []
+        for sub_is_code, sub_part in _split_commonmark_code_spans(safe):
+            if sub_is_code:
+                re_parts.append(sub_part)
+            else:
+                re_parts.append(sub_part.replace('<', '&lt;').replace('>', '&gt;'))
+        out.append(''.join(re_parts))
+    return ''.join(out)
+
+
+def _format_expected_v5_chinese_caption(raw_caption):
+    """Mirror deep-analyzer.js readerFigureCaptionLine star/quote/period normalization."""
+    original = str(raw_caption or '')
+    placeholder_prefix = '\uE000PD_FIGURE_MATH_STAR_'
+    while placeholder_prefix in original:
+        placeholder_prefix += '\uE000'
+    protected_stars = []
+    def _protect(match):
+        token = f'{placeholder_prefix}{len(protected_stars)}\uE001'
+        protected_stars.append((token, match.group(0)))
+        return token
+    protected = re.sub(r'\^\{\\?\*+\}|\^\*+', _protect, original)
+    output = re.sub(r'\*{3}', '三个星号', protected)
+    output = re.sub(r'\*{2}', '两个星号', output)
+    output = output.replace('*', '一个星号')
+    for token, notation in protected_stars:
+        output = output.replace(token, notation)
+    output = output.strip()
+    output = re.sub(r'^["“]([\s\S]*?)["”]$', r'\1', output)
+    output = re.sub(r'[。．.]+\s*$', '', output)
+    return output.strip()
+
+
+def _render_api_reader_implementation_specs(plan):
+    if not isinstance(plan, dict) or not reader_formats.is_integrated_plan(plan):
+        return ''
+    try:
+        if not reader_formats.is_structured_v5(reader_formats.plan_editorial_profile(plan)):
+            return ''
+    except (ValueError, TypeError):
+        return ''
+    specs = plan.get('implementationSpecs')
+    if not isinstance(specs, dict):
+        return ''
+    lines = []
+    for key, label in IMPLEMENTATION_SPEC_LABELS:
+        val = str(specs.get(key) or '').strip()
+        if val:
+            lines.append(f'- **{label}**：{_sanitize_implementation_spec_text(val)}')
+    return '\n'.join(lines)
+
+
 def render_verified_reader_resources(resources, *, paper=None):
     """Render verified resource records without changing their evidence or count."""
     if not isinstance(resources, list):
@@ -6983,9 +7155,28 @@ def render_verified_reader_resources(resources, *, paper=None):
         if resource['status'] is not None:
             status += f'（HTTP {resource["status"]}）'
         documentation = resource.get('documentationEvidence')
-        if isinstance(documentation, dict) \
-                and documentation.get('completeness') == 'complete':
-            status += '；README 已验证包含安装、推理与微调文档'
+        if isinstance(documentation, dict):
+            if documentation.get('completeness') == 'complete':
+                status += '；README 已验证包含安装、推理与微调文档'
+            elif documentation.get('completeness') == 'partial' and _paper_uses_structured_v5(paper):
+                caps = documentation.get('capabilities') if isinstance(documentation.get('capabilities'), dict) else {}
+                present = [
+                    label for key, label in (
+                        ('installation', '安装'),
+                        ('inference', '推理'),
+                        ('fineTuning', '微调'),
+                    ) if caps.get(key) is True
+                ]
+                missing = [
+                    label for key, label in (
+                        ('installation', '安装'),
+                        ('inference', '推理'),
+                        ('fineTuning', '微调'),
+                    ) if caps.get(key) is False
+                ]
+                if present:
+                    missing_note = f'（未见{"、".join(missing)}文档）' if missing else ''
+                    status += f'；README 已验证包含{"、".join(present)}文档{missing_note}'
         label = (_paper_header_resource_display_label(paper, resource) if paper else None) or labels[resource['type']]
         lines.append(f'- {label}：{url_text} — {status}')
     if not lines:
@@ -12817,7 +13008,26 @@ def _api_reader_payload_uncached(paper):
     )
     # 与 Node 的 API_READER_REQUIRED_KINDS 保持一致：只强制五个教学阶段，
     # 其余阶段由论文证据决定是否展开。
-    is_cohesive_v4 = layout.get('editorialProfile') == reader_formats.COHESIVE_V4
+    editorial_profile = layout.get('editorialProfile')
+    is_cohesive_v4 = reader_formats.is_modern_editorial_profile(editorial_profile)
+    is_structured_v5 = reader_formats.is_structured_v5(editorial_profile)
+    if 'implementationSpecs' in plan:
+        if not is_structured_v5:
+            raise PublishDataValidationError('非 structured-pipeline-v5 编辑计划不得包含 implementationSpecs。')
+        specs = plan.get('implementationSpecs')
+        if not isinstance(specs, dict) \
+                or set(specs) != set(reader_formats.IMPLEMENTATION_SPEC_KEYS) \
+                or any(
+                    not isinstance(specs.get(key), str)
+                    or not 4 <= len(specs[key].strip()) <= 650
+                    or len(re.sub(r'\s+', '', specs[key].strip())) > 550
+                    or _has_forbidden_spec_html_or_markdown(specs[key])
+                    or bool(_V5_SPEC_WORKFLOW_LEAK_RE.search(specs[key]))
+                    for key in reader_formats.IMPLEMENTATION_SPEC_KEYS
+                ):
+            raise PublishDataValidationError(
+                '编辑计划中的 implementationSpecs 缺少必要字段、字段内容超限、含非法 HTML/Markdown 块或泄漏流程元话语。'
+            )
     required_kinds = ({
         'problem', 'method_overview', 'result',
     } if is_cohesive_v4 else {
@@ -12894,8 +13104,22 @@ def _api_reader_payload_uncached(paper):
                     'leadQuote', 'explanationQuote'}
             if integrated:
                 expected_placement_fields.add('focusPoints')
+            if is_structured_v5 and isinstance(placement, dict) and 'chineseCaption' in placement:
+                expected_placement_fields.add('chineseCaption')
+            chinese_caption = placement.get('chineseCaption') if isinstance(placement, dict) else None
+            invalid_chinese_caption = (
+                is_structured_v5 and isinstance(placement, dict) and 'chineseCaption' in placement and (
+                    not isinstance(chinese_caption, str)
+                    or '\n' in chinese_caption or '\r' in chinese_caption
+                    or not 12 <= len(chinese_caption.strip()) <= 160
+                    or len(re.sub(r'\s+', '', chinese_caption.strip())) > 130
+                    or not re.search(r'[\u3400-\u9fff]', chinese_caption)
+                    or bool(re.match(r'^(?:论文)?(?:图|Figure|Fig\.?)\s*\d+', chinese_caption.strip(), flags=re.IGNORECASE))
+                )
+            )
             if not isinstance(placement, dict) \
                     or set(placement) != expected_placement_fields \
+                    or invalid_chinese_caption \
                     or not isinstance(placement.get('figureOrdinal'), int) \
                     or placement['figureOrdinal'] in seen_placement_ordinals \
                     or placement.get('targetKind') not in allowed_kinds \
@@ -12969,6 +13193,10 @@ def _api_reader_payload_uncached(paper):
                 })
             if integrated:
                 expected_figure_fields.add('focusPoints')
+            if is_structured_v5 and isinstance(item, dict) and 'chineseCaption' in item:
+                if not isinstance(item.get('chineseCaption'), str):
+                    raise PublishDataValidationError('读者文章的图片记录中 chineseCaption 必须为字符串。')
+                expected_figure_fields.add('chineseCaption')
             if not isinstance(item, dict) or set(item) != expected_figure_fields:
                 raise PublishDataValidationError('读者文章的图片记录格式无效、缺少必要字段，或含有不允许的字段。')
             if layout['rich']:
@@ -12977,10 +13205,12 @@ def _api_reader_payload_uncached(paper):
                 binding_keys = (
                     'marker', 'leadQuote', 'explanationQuote', 'targetKind',
                     *(() if not integrated else ('focusPoints',)),
+                    *(() if not is_structured_v5 else ('chineseCaption',)),
                 )
                 if placement is None or any(
                         item.get(key) != placement.get(key)
-                        for key in binding_keys):
+                        for key in binding_keys) \
+                        or (is_structured_v5 and (('chineseCaption' in item) != ('chineseCaption' in placement))):
                     raise PublishDataValidationError(
                         '图片记录缺少对应的位置计划，或图片内容字段与计划不一致。'
                     )
@@ -13018,14 +13248,17 @@ def _api_reader_payload_uncached(paper):
                             'API Reader v3 的论文图未按导读、看图路径、原图、图注和解释的顺序相邻排列，或对应内容与图片计划不一致。'
                         )
                 else:
+                    caption_para = article_paragraphs[image_index + 1].strip() if (image_index is not None and image_index + 1 < len(article_paragraphs)) else ''
+                    expected_zh_caption = _format_expected_v5_chinese_caption(item.get('chineseCaption')) if (is_structured_v5 and isinstance(item.get('chineseCaption'), str)) else None
                     if image_index is None or image_index < 1 \
                             or image_index + 2 >= len(article_paragraphs) \
                             or article_paragraphs[image_index - 1].strip().startswith('> **看图路径') \
                             or item['leadQuote'] not in article_paragraphs[image_index - 1] \
                             or not re.fullmatch(
                                 rf'[ *_]*论文图\s*{item["ordinal"]}[：:。][\s\S]+[ *_]*',
-                                article_paragraphs[image_index + 1].strip(),
+                                caption_para,
                             ) \
+                            or (expected_zh_caption is not None and expected_zh_caption not in caption_para) \
                             or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
                         raise PublishDataValidationError(
                             'API Reader 的论文图未按导读、原图、图注和解释的紧凑四块顺序相邻排列，或对应内容与图片计划不一致。'
@@ -13391,13 +13624,39 @@ def _api_reader_page_binding_issue(content, paper):
             'model': r'(?:模型|权重)[^\n]{0,18}(?:已公开|已经公开|可以访问|可直接下载|权重可用)',
             'dataset': r'数据集[^\n]{0,18}(?:已公开|已经公开|可以访问|可直接下载|数据可用)',
         }
+        specs_positive_claims = {
+            'code': r'代码[^\n，,。；;：:]{0,18}(?:已开源|已经开源|可以访问|可直接下载|仓库可用)',
+            'model': r'(?:模型|权重)[^\n，,。；;：:]{0,18}(?:已公开|已经公开|可以访问|可直接下载|权重可用)',
+            'dataset': r'数据集[^\n，,。；;：:]{0,18}(?:已公开|已经公开|可以访问|可直接下载|数据可用)',
+        }
+        specs_negation_re = re.compile(
+            r'(?:未|尚无|尚未|没有|无|不|非|未能|无法|不可|禁止|不得|不能|并非|不代表|不能确认|声称|称|拟|计划|将在|待)'
+        )
         available_types = set(resource_proof['availableTypes'])
+        actual_specs_section = h2_section('⚙️ 关键实现与复现规格') or ''
+        open_source_spec_lines = [
+            line for line in actual_specs_section.splitlines()
+            if re.match(r'^\s*-\s*\*\*开源产物与协议状态\*\*[：:]', line)
+        ]
+        open_source_spec_text = '\n'.join(open_source_spec_lines)
         for resource_type, pattern in positive_claims.items():
-            if resource_type not in available_types \
-                    and re.search(pattern, actual_resources, flags=re.IGNORECASE):
-                raise PublishDataValidationError(
-                    f'最终页面把 {resource_type} 的 temporary/unavailable 资源写成可用'
-                )
+            if resource_type not in available_types:
+                if re.search(pattern, actual_resources, flags=re.IGNORECASE):
+                    raise PublishDataValidationError(
+                        f'最终页面把 {resource_type} 的 temporary/unavailable 资源写成可用'
+                    )
+                if open_source_spec_text:
+                    specs_pattern = specs_positive_claims[resource_type]
+                    for match in re.finditer(specs_pattern, open_source_spec_text, flags=re.IGNORECASE):
+                        clause_prefix = re.split(
+                            r'[\n，,。；;：:]',
+                            open_source_spec_text[max(0, match.start() - 32):match.start()],
+                        )[-1]
+                        if not specs_negation_re.search(clause_prefix) \
+                                and not specs_negation_re.search(match.group(0)):
+                            raise PublishDataValidationError(
+                                f'最终页面关键实现与复现规格把 {resource_type} 的未核验/不可用资源写成可用'
+                            )
         heading_span = _find_outside_fence_heading(content, r'##\s+🧭\s*深度解读\s*')
         if heading_span is None:
             raise PublishDataValidationError('最终页面缺少读者文章的深度解读部分。')
@@ -13421,6 +13680,11 @@ def _api_reader_page_binding_issue(content, paper):
         aurl = _visible_arxiv_source_url(paper)
         date_str = frontmatter_value('date', r'(\d{4}-\d{2}-\d{2})')
         expected_tail_parts = []
+        implementation_specs_block = _render_api_reader_implementation_specs(payload.get('plan'))
+        if implementation_specs_block:
+            expected_tail_parts.append(
+                f'## ⚙️ 关键实现与复现规格\n\n{implementation_specs_block}'
+            )
         if parsed_analysis:
             metadata_line = (build_index_context_line(parsed_analysis, aurl) or '').strip()
             expected_tail_parts.append(
@@ -13871,6 +14135,12 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         # 补充信息放到最后面
         if supplementary:
             md += f'\n{"##" if api_reader_v2 else "###"} 📎 补充信息\n\n{supplementary}\n'
+        implementation_specs_block = (
+            _render_api_reader_implementation_specs(api_reader_payload.get('plan'))
+            if api_reader_payload is not None else ''
+        )
+        if reader_display_fields is not None and implementation_specs_block:
+            md += f'\n## ⚙️ 关键实现与复现规格\n\n{implementation_specs_block}\n'
         if reader_first and metadata_block:
             md += f'\n<details>\n<summary>📎 论文与评分元数据</summary>\n\n{metadata_block.strip()}\n\n</details>\n'
         if reader_display_fields is not None:

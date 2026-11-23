@@ -23,7 +23,7 @@ const modern = draft => {
                 '| 评测协议 | 固定设置 | 原始集合 | 越高越好 | 1.0 | 仅支持评测口径 |');
         }
         const existing = merged.find(item => item.kind === targetKind);
-        if (existing) existing.body = `${existing.body}\n\n${sectionBody}`;
+        if (existing) existing.body = `${existing.body}\n\n#### ${section.heading}\n\n${sectionBody}`;
         else merged.push({ ...section, kind: targetKind, body: sectionBody });
     }
     return { ...header(), ...body, sections: merged };

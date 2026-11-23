@@ -4560,9 +4560,13 @@ def render_packet(packet):
              tag_presentation.rstrip(), '', f'评分：{complete_score}', '',
              f'排名：{rank_bucket} | 文档类型：{document_type}', '', '## 👥 作者与机构', '']
     lines.extend([presentation['authorBlock']])
+    implementation_specs_block = publisher._render_api_reader_implementation_specs(paper.get('apiReaderPlan'))
+    specs_lines = (['## ⚙️ 关键实现与复现规格', '', implementation_specs_block, '']
+                   if implementation_specs_block else [])
     lines.extend(['', '## 📌 核心摘要', '', presentation['summary'], '', '## 🔗 开源与复现资源', '',
                   presentation['resourceBlock'], '', '## 🧭 深度解读', '', article.strip(), '',
                   *formula_lines,
+                  *specs_lines,
                   '## ⚖️ 评分明细', '', presentation['scoringBlock'], ''])
     lines.extend(['---', '', f'[← 返回 {conference["id"]} 论文汇总]({packet["aggregateUrl"]})', ''])
     lines[-1:] = [hide_arxiv_links(line) for line in lines[-1:]]
