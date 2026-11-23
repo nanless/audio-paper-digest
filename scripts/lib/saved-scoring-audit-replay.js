@@ -86,7 +86,7 @@ function protectedPaper(paper) {
     const result = clone(paper);
     // parsed 是评分阶段会重写的派生视图（含总分与分档）；原稿停在评分前、
     // 当前稿已是评分后，直接比较必然不等。正文本身仍由 analysis 逐字保护。
-    for (const key of ['analysisCheckpoint', 'apiReaderResources', 'error',
+    for (const key of ['analysisCheckpoint', 'apiReaderResources', 'error', 'scoringRubricVersion',
         'latestAnalysisAttemptAt', 'latestAnalysisAttemptError', 'latestAnalysisAttemptErrorCategory',
         'latestAnalysisAttemptErrorCode']) delete result[key];
     // parsed 里的总分、分档与评分维度由评分阶段改写；其余字段仍是正文派生的
@@ -95,7 +95,7 @@ function protectedPaper(paper) {
         // 评分阶段会把总分、分档、机器摘要、置信度、文档类型与八维分数写回正文，
         // 再由此重新解析出 parsed；这些字段在两次记录间必然不同，逐项剔除。
         for (const key of ['score', 'rankBucket', 'machineSummary', 'confidence', 'documentType',
-            'scoreValidation', 'dimensions']) delete result.parsed[key];
+            'scoringRubricVersion', 'scoringReason', 'scoreValidation', 'dimensions']) delete result.parsed[key];
         for (const key of Object.keys(result.parsed)) if (/Score$/.test(key)) delete result.parsed[key];
     }
     delete result.analysisStageCheckpoints?.scoringAudit;

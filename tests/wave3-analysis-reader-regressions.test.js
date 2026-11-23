@@ -860,7 +860,10 @@ test('F-P0-4, F-P1-6, F-P1-7: v4 缺节修复保护唯一 problem，focusPoints 
 
 test('F-P1-8: scoring-audit-contract 先校验 ablationStatus 合法枚举再归约，合法值仍归约为 not_applicable', () => {
     const { parseScoringAuditResult } = require('../scripts/lib/scoring-audit-contract');
-    const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
+    const header = {
+        contract: 'scoring-evidence-profile',
+        schemaFingerprint: 'cd86b88de878f041f2dab1c8153fdac9e98272cc1ff3ba90161a79f1349e6d9f'
+    };
     const makeAudit = ablationStatus => ({
         documentType: '理论研究',
         confidence: '高',
@@ -925,9 +928,9 @@ test('F-P0-1 & F-P1-8/9/10 & F-P3-17: 7 份提示词契约对齐检查', () => {
     assert.match(readerPrompt, /`focusPoints` 可输出 `\[\]` 或 2–4 个针对这张图的简短观察要点（每项 6–120 字）/);
 
     const scoringPrompt = readPrompt('scoring-audit.md');
-    assert.match(scoringPrompt, /总分不得超过 9\.0/);
-    assert.match(scoringPrompt, /总分不得超过 8\.5/);
-    assert.match(scoringPrompt, /至少 20 个字符/);
+    assert.match(scoringPrompt, /总分不得超过 `8\.4`/);
+    assert.match(scoringPrompt, /总分不得超过 `7\.2`/);
+    assert.match(scoringPrompt, /至少 20 个字/);
 
     for (const file of ['deep-analysis.md', 'gap-fill.md', 'tag-repair.md']) {
         assert.match(readPrompt(file), /最多 3 个/, `${file} 必须声明任务标签最多 3 个`);

@@ -24,7 +24,10 @@ function makeAudit(overrides = {}) {
         score: overrides[key] ?? score,
         reason: '[A_METHOD] 本项依据对应证据和实验结果给出评价，不重复跨维度扣分。'
     }]));
-    const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
+    const header = {
+        contract: 'scoring-evidence-profile',
+        schemaFingerprint: 'cd86b88de878f041f2dab1c8153fdac9e98272cc1ff3ba90161a79f1349e6d9f'
+    };
     return scoring.parseScoringAuditResult(JSON.stringify({
         documentType: overrides.documentType || '模型报告',
         confidence: '高',

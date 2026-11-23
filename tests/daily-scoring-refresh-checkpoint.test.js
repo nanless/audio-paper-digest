@@ -42,9 +42,11 @@ const response = {
     evidenceProfile: { ...require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader(), multiComponentClaimed: false, ablationStatus: 'not_applicable',
         targetEvaluation: 'public', sampleScaleReported: true, deploymentMeasured: false,
         publicGeneralizationEvaluated: false, engineeringEvidence: 'claim_only',
-        evidenceBoundary: '[A_RESULTS] 公开结果没有实测部署效率。', evidenceIds: ['A_METHOD', 'A_RESULTS'] },
-    dimensions: Object.fromEntries([['innovation', 1], ['technicalRigor', 1], ['experimentalSufficiency', 1],
-        ['clarity', .8], ['impact', .8], ['openSource', 0], ['reproducibility', .3], ['engineering', .8]]
+        evidenceBoundary: '[A_RESULTS] 公开结果没有实测部署效率。', evidenceIds: ['A_METHOD', 'A_RESULTS'],
+        primaryStrengths: ['[A_METHOD] 公开材料交代了完整组件与实验流程。'],
+        primaryDefects: ['[A_RESULTS] 公开结果未报告真实端侧部署效率。'] },
+    dimensions: Object.fromEntries([['innovation', 5.7], ['technicalRigor', 5.7], ['experimentalSufficiency', 5.7],
+        ['clarity', 5.7], ['impact', 5.7], ['openSource', 0], ['reproducibility', 5.7], ['engineering', 5.5]]
         .map(([key, score]) => [key, { score, reason: '[A_METHOD] 方法章节提供组件与实验流程，评分依据公开材料。' }]))
 };
 function installSyntheticReader(paper, source) {

@@ -55,6 +55,8 @@
           "sourceEvidence",
           "resourcePrecheck"
         ],
+        "blindPriorScores": true,
+        "rubricScale": "unified-ten-point",
         "output": "type-aware-audit-json",
         "authority": "authenticated-request-context"
       },
@@ -62,6 +64,24 @@
         {
           "tag": "scoring-request-format-v1",
           "variant": "bounded-json-audit"
+        },
+        {
+          "tag": "scoring-request-format",
+          "variant": "bounded-json-audit",
+          "header": {
+            "contract": "scoring-request-format",
+            "schemaFingerprint": "920cb3a09a834f5dfe5194637b3b18ba7966e1a0c5f67bef46e4491f7f5bb738"
+          },
+          "schema": {
+            "fields": [
+              "paperIdentity",
+              "analysis",
+              "sourceEvidence",
+              "resourcePrecheck"
+            ],
+            "output": "type-aware-audit-json",
+            "authority": "authenticated-request-context"
+          }
         }
       ]
     },
@@ -85,12 +105,25 @@
       "currentVariant": "source-bound-category-caps",
       "currentSchema": {
         "policy": "source-evidence-caps",
+        "rubricScale": "unified-ten-point",
         "authority": "normal-scoring-parser-and-original-evidence"
       },
       "historical": [
         {
           "tag": "evidence-caps-v2",
           "variant": "source-bound-category-caps"
+        },
+        {
+          "tag": "evidence-caps",
+          "variant": "source-bound-category-caps",
+          "header": {
+            "contract": "evidence-caps",
+            "schemaFingerprint": "3147e62cc768f725b1b00a2342cbb3525c110aa08a50f37c65aafe9bc0d63c55"
+          },
+          "schema": {
+            "policy": "source-evidence-caps",
+            "authority": "normal-scoring-parser-and-original-evidence"
+          }
         }
       ]
     },
@@ -107,8 +140,11 @@
           "publicGeneralizationEvaluated",
           "engineeringEvidence",
           "evidenceBoundary",
-          "evidenceIds"
+          "evidenceIds",
+          "primaryStrengths",
+          "primaryDefects"
         ],
+        "rubricScale": "unified-ten-point",
         "authority": "requires-source-bound-evidence-and-deterministic-caps"
       },
       "historical": [
@@ -117,6 +153,28 @@
           "variant": "experimental-and-engineering-evidence",
           "header": {
             "version": 1
+          }
+        },
+        {
+          "tag": "scoring-evidence-profile",
+          "variant": "experimental-and-engineering-evidence",
+          "header": {
+            "contract": "scoring-evidence-profile",
+            "schemaFingerprint": "cd86b88de878f041f2dab1c8153fdac9e98272cc1ff3ba90161a79f1349e6d9f"
+          },
+          "schema": {
+            "fields": [
+              "multiComponentClaimed",
+              "ablationStatus",
+              "targetEvaluation",
+              "sampleScaleReported",
+              "deploymentMeasured",
+              "publicGeneralizationEvaluated",
+              "engineeringEvidence",
+              "evidenceBoundary",
+              "evidenceIds"
+            ],
+            "authority": "requires-source-bound-evidence-and-deterministic-caps"
           }
         }
       ]

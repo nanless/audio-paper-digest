@@ -173,7 +173,10 @@ def run_bounded_llm_tasks(items, worker, max_workers, on_result=None):
     return results
 
 
-SCORING_RUBRIC_VERSION = 'type-aware-v1'
+import scoring_rubric_v2 as _scoring_v2
+SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V1
+CURRENT_SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V2
+SUPPORTED_SCORING_RUBRIC_VERSIONS = _scoring_v2.SUPPORTED_SCORING_RUBRIC_VERSIONS
 ALLOWED_DOCUMENT_TYPES = {
     '方法研究', '系统技术报告', '模型报告', '数据集与基准',
     '综述', '理论研究', '应用研究'
@@ -6387,12 +6390,17 @@ def validate_publish_parsed(
     document_type = normalized.get('documentType')
     if document_type not in ALLOWED_DOCUMENT_TYPES:
         raise PublishDataValidationError(f'{source} 缺少有效 documentType: {document_type!r}')
-    if normalized.get('scoringRubricVersion') != SCORING_RUBRIC_VERSION:
+    rubric_version = normalized.get('scoringRubricVersion')
+    if rubric_version not in SUPPORTED_SCORING_RUBRIC_VERSIONS:
         raise PublishDataValidationError(
-            f'{source} 的 scoringRubricVersion 必须为 {SCORING_RUBRIC_VERSION}'
+            f'{source} 的 scoringRubricVersion 非法: {rubric_version!r}'
         )
+    is_v2 = _scoring_v2.is_v2_rubric(rubric_version)
+    active_dimensions = _scoring_v2.V2_PUBLISH_DIMENSIONS if is_v2 else SCORING_DIMENSIONS
+    active_open_anchors = _scoring_v2.V2_OPEN_SOURCE_ANCHORS if is_v2 else OPEN_SOURCE_SCORE_ANCHORS
 
     dimension_total = 0.0
+    dimension_scores = {}
     scoring_reason = normalized.get('scoringReason', '')
     if require_reason_dimensions:
         score_validation = normalized.get('scoreValidation')
@@ -6400,7 +6408,7 @@ def validate_publish_parsed(
             validation_errors = score_validation.get('errors', []) if isinstance(score_validation, dict) else []
             details = '；'.join(str(error) for error in validation_errors[:3]) or '八维评分格式非法'
             raise PublishDataValidationError(f'{source} 的评分理由契约无效: {details}')
-    for field, label, maximum in SCORING_DIMENSIONS:
+    for field, label, maximum in active_dimensions:
         if field not in normalized or normalized.get(field) in (None, ''):
             raise PublishDataValidationError(f'{source} 缺少评分维度 {field}')
         score = _finite_score(normalized[field], field, source)
@@ -6411,12 +6419,13 @@ def validate_publish_parsed(
         if abs(score * 10 - round(score * 10)) > 1e-9:
             raise PublishDataValidationError(f'{source} 的 {field} 最多只能有一位小数')
         if field == 'openSourceScore' and not any(
-            abs(score - anchor) <= 1e-9 for anchor in OPEN_SOURCE_SCORE_ANCHORS
+            abs(score - anchor) <= 1e-9 for anchor in active_open_anchors
         ):
             raise PublishDataValidationError(
                 f'{source} 的 openSourceScore={score:g} 不在固定锚点集合'
             )
         dimension_total += score
+        dimension_scores[field] = score
         normalized[field] = f'{score:g}'
         if require_reason_dimensions:
             count = _dimension_occurrences(scoring_reason, label)
@@ -6428,10 +6437,13 @@ def validate_publish_parsed(
     total = _finite_score(normalized.get('score'), 'score', source)
     if abs(total * 10 - round(total * 10)) > 1e-9:
         raise PublishDataValidationError(f'{source} 的 score 最多只能有一位小数')
-    expected_total = min(10.0, dimension_total)
+    expected_total = (
+        _scoring_v2.calculate_v2_weighted_total(document_type, dimension_scores)['total']
+        if is_v2 else min(10.0, dimension_total)
+    )
     if abs(total - expected_total) > 0.051:
         raise PublishDataValidationError(
-            f'{source} 总分 {total:g} 与八维合计 {expected_total:g} 不一致'
+            f'{source} 总分 {total:g} 与八维计算结果 {expected_total:g} 不一致'
         )
     normalized['score'] = f'{total:.1f}'
 
@@ -6533,9 +6545,9 @@ def resolve_publish_parsed(paper):
     )
 
     top_version = paper.get('scoringRubricVersion')
-    if top_version != SCORING_RUBRIC_VERSION:
+    if top_version not in SUPPORTED_SCORING_RUBRIC_VERSIONS:
         raise PublishDataValidationError(
-            f'{paper_label} 顶层 scoringRubricVersion 必须为 {SCORING_RUBRIC_VERSION}'
+            f'{paper_label} 顶层 scoringRubricVersion 非法: {top_version!r}'
         )
     if top_version != cached_parsed['scoringRubricVersion']:
         raise PublishDataValidationError(f'{paper_label} 顶层与 parsed 评分版本不一致')

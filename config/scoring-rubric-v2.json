@@ -1,0 +1,178 @@
+{
+  "rubricVersion": "type-aware-v2",
+  "legacyRubricVersion": "type-aware-v1",
+  "scaleMax": 10.0,
+  "coreDimensions": [
+    {
+      "key": "innovation",
+      "parsedField": "innovationScore",
+      "machineKey": "innovation",
+      "label": "创新性",
+      "shortLabel": "创新"
+    },
+    {
+      "key": "technicalRigor",
+      "parsedField": "technicalRigorScore",
+      "machineKey": "technical_rigor",
+      "label": "技术严谨性",
+      "shortLabel": "技术严谨"
+    },
+    {
+      "key": "experimentalSufficiency",
+      "parsedField": "experimentalSufficiencyScore",
+      "machineKey": "experimental_sufficiency",
+      "label": "实验充分性",
+      "shortLabel": "实验充分"
+    },
+    {
+      "key": "clarity",
+      "parsedField": "clarityScore",
+      "machineKey": "clarity",
+      "label": "清晰度",
+      "shortLabel": "清晰度"
+    },
+    {
+      "key": "impact",
+      "parsedField": "impactScore",
+      "machineKey": "impact",
+      "label": "影响力",
+      "shortLabel": "影响力"
+    },
+    {
+      "key": "reproducibility",
+      "parsedField": "reproducibilityScore",
+      "machineKey": "reproducibility",
+      "label": "可复现性",
+      "shortLabel": "可复现"
+    },
+    {
+      "key": "engineering",
+      "parsedField": "engineeringScore",
+      "machineKey": "engineering_score",
+      "label": "工程/实践价值",
+      "shortLabel": "工程/实践"
+    }
+  ],
+  "openSourceDimension": {
+    "key": "openSource",
+    "parsedField": "openSourceScore",
+    "machineKey": "open_source",
+    "label": "开源",
+    "shortLabel": "开源",
+    "anchors": [0.0, 1.5, 3.0, 6.0, 8.0, 10.0],
+    "releasedThreshold": 6.0
+  },
+  "dimensionDisplayOrder": [
+    "innovation",
+    "technicalRigor",
+    "experimentalSufficiency",
+    "clarity",
+    "impact",
+    "openSource",
+    "reproducibility",
+    "engineering"
+  ],
+  "documentTypes": {
+    "方法研究": {
+      "coreWeightPct": {
+        "innovation": 24,
+        "technicalRigor": 18,
+        "experimentalSufficiency": 22,
+        "clarity": 8,
+        "impact": 14,
+        "reproducibility": 7,
+        "engineering": 7
+      },
+      "openSourceMaxBonusTenths": 5
+    },
+    "系统技术报告": {
+      "coreWeightPct": {
+        "innovation": 16,
+        "technicalRigor": 14,
+        "experimentalSufficiency": 20,
+        "clarity": 8,
+        "impact": 16,
+        "reproducibility": 6,
+        "engineering": 20
+      },
+      "openSourceMaxBonusTenths": 6
+    },
+    "模型报告": {
+      "coreWeightPct": {
+        "innovation": 18,
+        "technicalRigor": 14,
+        "experimentalSufficiency": 22,
+        "clarity": 8,
+        "impact": 18,
+        "reproducibility": 6,
+        "engineering": 14
+      },
+      "openSourceMaxBonusTenths": 6
+    },
+    "数据集与基准": {
+      "coreWeightPct": {
+        "innovation": 15,
+        "technicalRigor": 15,
+        "experimentalSufficiency": 18,
+        "clarity": 10,
+        "impact": 20,
+        "reproducibility": 12,
+        "engineering": 10
+      },
+      "openSourceMaxBonusTenths": 8
+    },
+    "综述": {
+      "coreWeightPct": {
+        "innovation": 16,
+        "technicalRigor": 18,
+        "experimentalSufficiency": 14,
+        "clarity": 20,
+        "impact": 22,
+        "reproducibility": 6,
+        "engineering": 4
+      },
+      "openSourceMaxBonusTenths": 3
+    },
+    "理论研究": {
+      "coreWeightPct": {
+        "innovation": 26,
+        "technicalRigor": 30,
+        "experimentalSufficiency": 12,
+        "clarity": 12,
+        "impact": 14,
+        "reproducibility": 6,
+        "engineering": 0
+      },
+      "openSourceMaxBonusTenths": 2
+    },
+    "应用研究": {
+      "coreWeightPct": {
+        "innovation": 15,
+        "technicalRigor": 14,
+        "experimentalSufficiency": 20,
+        "clarity": 10,
+        "impact": 15,
+        "reproducibility": 8,
+        "engineering": 18
+      },
+      "openSourceMaxBonusTenths": 5
+    }
+  },
+  "rankBuckets": [
+    { "minScore": 8.5, "label": "前10%" },
+    { "minScore": 7.5, "label": "前25%" },
+    { "minScore": 6.0, "label": "前50%" },
+    { "minScore": 0.0, "label": "后50%" }
+  ],
+  "evidenceCaps": {
+    "multiComponentWithoutDirectAblationExpMax": 6.5,
+    "multiComponentWithoutDirectAblationReportPublicGenExpMax": 7.5,
+    "multiComponentPartialAblationDefaultExpMax": 7.8,
+    "multiComponentPartialAblationReportPublicGenExpMax": 8.5,
+    "internalEvalWithoutSampleScaleExpMax": 6.0,
+    "engineeringClaimOnlyMax": 5.5,
+    "systemInternalUnmeasuredEngMax": 5.5,
+    "nonHighConfidenceTotalMax": 8.4,
+    "multiComponentNoAblationInternalTotalMax": 7.2
+  }
+}

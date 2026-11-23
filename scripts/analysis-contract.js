@@ -6238,13 +6238,19 @@ function validateMachineSummaryContract(analysis, parsed, options = {}) {
     const block = extractSection(analysis, '机器摘要');
     if (!block) return '机器摘要为空';
 
+    const scoringRubricV2 = require('./lib/scoring-rubric-v2');
     const occurrences = new Map(REQUIRED_MACHINE_SUMMARY_KEYS.map(key => [key, []]));
+    const optionalOccurrences = new Map([['rubric_version', []]]);
     const unknown = [];
     for (const rawLine of block.split('\n')) {
         const line = rawLine.trim();
         if (!line) continue;
         const match = line.match(/^([a-z_]+)\s*[:：]\s*(.*?)$/);
         if (!match) return `机器摘要行格式非法: ${line.slice(0, 60)}`;
+        if (optionalOccurrences.has(match[1])) {
+            optionalOccurrences.get(match[1]).push(match[2].trim());
+            continue;
+        }
         if (!occurrences.has(match[1])) {
             unknown.push(match[1]);
             continue;
@@ -6253,6 +6259,14 @@ function validateMachineSummaryContract(analysis, parsed, options = {}) {
     }
 
     if (unknown.length > 0) return `机器摘要包含额外键: ${[...new Set(unknown)].join('、')}`;
+    const rubricVals = optionalOccurrences.get('rubric_version');
+    if (rubricVals.length > 1) return '机器摘要键重复: rubric_version';
+    const rubricVersion = rubricVals.length === 1 ? rubricVals[0] : scoringRubricV2.SCORING_RUBRIC_V1;
+    if (rubricVals.length === 1 && !scoringRubricV2.SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(rubricVersion)) {
+        return `机器摘要 rubric_version 非法: ${rubricVersion}`;
+    }
+    const isV2 = scoringRubricV2.isV2Rubric(rubricVersion);
+
     const missing = REQUIRED_MACHINE_SUMMARY_KEYS.filter(key => occurrences.get(key).length === 0);
     if (missing.length > 0) return `机器摘要缺少键: ${missing.join('、')}`;
     const duplicate = REQUIRED_MACHINE_SUMMARY_KEYS.filter(key => occurrences.get(key).length > 1);
@@ -6260,14 +6274,18 @@ function validateMachineSummaryContract(analysis, parsed, options = {}) {
     const empty = REQUIRED_MACHINE_SUMMARY_KEYS.filter(key => !occurrences.get(key)[0]);
     if (empty.length > 0) return `机器摘要键为空: ${empty.join('、')}`;
 
-    for (const [key, maximum] of Object.entries(MACHINE_SCORE_MAXIMA)) {
+    const scoreMaxima = isV2
+        ? Object.fromEntries(Object.keys(MACHINE_SCORE_MAXIMA).map(k => [k, 10]))
+        : MACHINE_SCORE_MAXIMA;
+    const openAnchors = isV2 ? scoringRubricV2.V2_OPEN_SOURCE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
+    for (const [key, maximum] of Object.entries(scoreMaxima)) {
         const rawValue = occurrences.get(key)[0];
         if (!/^\d+(?:\.\d)?$/.test(rawValue)) {
             return `机器摘要 ${key} 必须是最多一位小数的非负数`;
         }
         const value = Number(rawValue);
         if (value > maximum) return `机器摘要 ${key} 超出 0-${maximum}`;
-        if (key === 'open_source' && !OPEN_SOURCE_SCORE_ANCHORS.includes(value)) {
+        if (key === 'open_source' && !openAnchors.includes(value)) {
             return '机器摘要 open_source 必须使用固定开源锚点';
         }
     }

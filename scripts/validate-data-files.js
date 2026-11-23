@@ -18,12 +18,15 @@ const {
     isWithinBatchDateGrace,
     DOCUMENT_TYPES,
     SCORING_RUBRIC_VERSION,
+    SUPPORTED_SCORING_RUBRIC_VERSIONS,
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     OPEN_SOURCE_SCORE_ANCHORS,
+    V2_OPEN_SOURCE_SCORE_ANCHORS,
     parseAnalysis,
     readTagValidation
 } = require('./utils.js');
+const scoringRubricV2 = require('./lib/scoring-rubric-v2.js');
 const {
     getInvalidAnalysisReason,
     analysisManifestRequiresExperimentTableContract,
@@ -1078,15 +1081,22 @@ function validatePaperListFile(filePath, options = {}) {
                 if (parsed.documentType && !ALLOWED_DOCUMENT_TYPES.has(parsed.documentType)) {
                     addIssue(issues, filePath, `papers[${index}] parsed.documentType 非法: ${parsed.documentType}`);
                 }
-                if (parsed.scoringRubricVersion && parsed.scoringRubricVersion !== SCORING_RUBRIC_VERSION) {
+                if (parsed.scoringRubricVersion && !SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(parsed.scoringRubricVersion)) {
                     addIssue(issues, filePath, `papers[${index}] parsed.scoringRubricVersion 非法: ${parsed.scoringRubricVersion}`);
                 }
                 if (parsed.scoringRubricVersion && !parsed.documentType) {
                     addIssue(issues, filePath, `papers[${index}] 有评分版本但缺少 parsed.documentType`);
                 }
 
-                const dimensionValues = [];
-                for (const [field, maxScore] of Object.entries(SCORE_DIMENSIONS)) {
+                const parsedRubric = parsed.scoringRubricVersion || SCORING_RUBRIC_VERSION;
+                const isParsedV2 = scoringRubricV2.isV2Rubric(parsedRubric);
+                const effectiveDimensions = isParsedV2
+                    ? Object.fromEntries(Object.keys(SCORE_DIMENSIONS).map(k => [k, 10]))
+                    : SCORE_DIMENSIONS;
+                const effectiveOpenAnchors = isParsedV2 ? V2_OPEN_SOURCE_SCORE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
+                const dimensionValues = {};
+                let validDimCount = 0;
+                for (const [field, maxScore] of Object.entries(effectiveDimensions)) {
                     if (parsed[field] === undefined || parsed[field] === '') {
                         addIssue(issues, filePath, `papers[${index}] 缺少 parsed.${field}`);
                         continue;
@@ -1094,25 +1104,30 @@ function validatePaperListFile(filePath, options = {}) {
                     const value = numericScore(parsed[field]);
                     if (!Number.isFinite(value) || value < 0 || value > maxScore) {
                         addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法: ${parsed[field]}`);
-                    } else if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(value)) {
-                        addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法，必须使用开源状态对应的固定分值 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')}`);
+                    } else if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(value, parsedRubric)) {
+                        addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法，必须使用开源状态对应的固定分值 ${effectiveOpenAnchors.join('/')}`);
                     } else {
-                        dimensionValues.push(normalizeScoreToOneDecimal(value));
+                        dimensionValues[field] = normalizeScoreToOneDecimal(value);
+                        validDimCount += 1;
                     }
                 }
-                if (dimensionValues.length === Object.keys(SCORE_DIMENSIONS).length && Number.isFinite(score)) {
-                    const expected = normalizeScoreToOneDecimal(Math.min(10, dimensionValues.reduce((sum, value) => sum + value, 0)));
+                if (validDimCount === Object.keys(SCORE_DIMENSIONS).length && Number.isFinite(score)) {
+                    const expected = isParsedV2 && parsed.documentType
+                        ? scoringRubricV2.calculateV2WeightedTotal(parsed.documentType, dimensionValues).total
+                        : normalizeScoreToOneDecimal(Math.min(10, Object.values(dimensionValues).reduce((sum, value) => sum + value, 0)));
                     const actual = normalizeScoreToOneDecimal(score);
                     if (actual !== expected) {
-                        addIssue(issues, filePath, `papers[${index}] parsed.score (${actual}) 与八项合计封顶结果 (${expected}) 不一致`);
+                        const label = isParsedV2 && parsed.documentType ? 'type-aware-v2 加权计算结果' : '八项合计封顶结果';
+                        addIssue(issues, filePath, `papers[${index}] parsed.score (${actual}) 与${label} (${expected}) 不一致`);
                     }
                 }
 
                 const openSourceScore = numericScore(parsed.openSourceScore);
                 const hasResource = [parsed.hasCode, parsed.hasModel, parsed.hasDataset]
                     .some(value => value === '是' || value === 'yes');
-                if (parsed.documentType !== '理论研究'
-                    && Number.isFinite(openSourceScore) && openSourceScore >= 1 && !hasResource) {
+                const openReleasedFloor = isParsedV2 ? scoringRubricV2.V2_OPEN_SOURCE_RELEASED_THRESHOLD : 1;
+                if ((parsed.documentType !== '理论研究' || isParsedV2)
+                    && Number.isFinite(openSourceScore) && openSourceScore >= openReleasedFloor && !hasResource) {
                     addIssue(issues, filePath, `papers[${index}] parsed.openSourceScore=${openSourceScore} 但无代码、模型或数据资源`);
                 }
                 if (reparsed) {
@@ -1141,7 +1156,7 @@ function validatePaperListFile(filePath, options = {}) {
                     }
                 }
             }
-            if (paper.scoringRubricVersion && paper.scoringRubricVersion !== SCORING_RUBRIC_VERSION) {
+            if (paper.scoringRubricVersion && !SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(paper.scoringRubricVersion)) {
                 addIssue(issues, filePath, `papers[${index}] scoringRubricVersion 非法: ${paper.scoringRubricVersion}`);
             }
             if (reparsed && paper.scoringRubricVersion !== reparsed.scoringRubricVersion) {

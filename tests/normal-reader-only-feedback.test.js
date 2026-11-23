@@ -220,10 +220,12 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
             targetEvaluation: 'public', sampleScaleReported: true, deploymentMeasured: false,
             publicGeneralizationEvaluated: false, engineeringEvidence: 'claim_only',
             evidenceBoundary: '[A_RESULTS] 同协议受控比较存在，但未报告实际端侧部署测量。',
-            evidenceIds: ['A_METHOD', 'A_RESULTS']
+            evidenceIds: ['A_METHOD', 'A_RESULTS'],
+            primaryStrengths: ['[A_METHOD] 组件与实验流程具备公开可核对证据。'],
+            primaryDefects: ['[A_RESULTS] 未报告实际端侧部署测量。']
         }, dimensions: Object.fromEntries([
-            ['innovation', 1.5], ['technicalRigor', 1.2], ['experimentalSufficiency', 1.1], ['clarity', .8],
-            ['impact', 1], ['openSource', 0], ['reproducibility', .3], ['engineering', 1]
+            ['innovation', 7.1], ['technicalRigor', 7.1], ['experimentalSufficiency', 7.1], ['clarity', 6.8],
+            ['impact', 6.8], ['openSource', 0], ['reproducibility', 6.8], ['engineering', 5.5]
         ].map(([key, score]) => [key, { score, reason: '[A_METHOD] 组件与实验流程有公开说明，本维仅评价这些可核对的研究证据。' }]))
     };
     const requests = [];

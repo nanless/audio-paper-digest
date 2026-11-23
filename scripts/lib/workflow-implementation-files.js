@@ -113,6 +113,10 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
             || filename === 'scripts/public_network_policy' + '.py') {
             add('config/public-network-policy.json', true);
         }
+        if (filename === 'scripts/lib/scoring-rubric-v2' + '.js'
+            || filename === 'scripts/scoring_rubric_v2' + '.py') {
+            add('config/scoring-rubric-v2.json', true);
+        }
         if (filename === 'scripts/publish-to-blog' + '.py') {
             add('config/tag-display-policy.json', true);
             add('config/publish-image-exclusions.json', true);

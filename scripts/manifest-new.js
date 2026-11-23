@@ -57,6 +57,8 @@ function currentReaderParserImplementationSha256() {
     return repair.shaText([
         fs.readFileSync(path.join(__dirname, 'deep-analyzer.js'), 'utf8'),
         fs.readFileSync(path.join(__dirname, 'lib/scoring-audit-contract.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'lib/scoring-rubric-v2.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, '../config/scoring-rubric-v2.json'), 'utf8'),
         fs.readFileSync(path.join(__dirname, 'lib/public-resource-probe.js'), 'utf8'),
         fs.readFileSync(path.join(__dirname, 'lib/reader-repair-evidence-slice.js'), 'utf8'),
         fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),

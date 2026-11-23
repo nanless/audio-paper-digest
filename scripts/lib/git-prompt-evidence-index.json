@@ -2107,6 +2107,24 @@
       "paths": [
         "prompts/current/api-reader-repair.md"
       ]
+    },
+    "0b6252f820d00c5d790be921d665c4e0ee1ed0f6bbdf41e46557258780bc0607": {
+      "blobOid": "cd059e6cf8a7009bdd53b6a5becf08911c878311",
+      "paths": [
+        "prompts/current/scoring-audit.md"
+      ]
+    },
+    "47be861fead2544080a5ceabd4f00c15cc20d49c8357e031630967ed5232fafa": {
+      "blobOid": "badc08f3f7dc36318fcca93bf6e914b9e483293e",
+      "paths": [
+        "prompts/current/deep-analysis.md"
+      ]
+    },
+    "3ca5aafaa4afce6a0bfd8462fb9d2114359c22567a641eca851962b8ad280e0f": {
+      "blobOid": "7d095bc1c18f104e0ec8b14a73e6c1aee04fd6e3",
+      "paths": [
+        "prompts/current/gap-fill.md"
+      ]
     }
   }
 }

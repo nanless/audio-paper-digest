@@ -17,7 +17,7 @@ const path = require('path');
 const {
     getBeijingISOString,
     normalizedId,
-    SCORING_RUBRIC_VERSION
+    SUPPORTED_SCORING_RUBRIC_VERSIONS
 } = require('./utils.js');
 const {
     analyzeBatch,
@@ -270,8 +270,8 @@ async function reanalyzeSelected(ids, options = {}) {
         getBeijingISOString()
     );
     const previousCurrentRubricIds = new Set(papers
-        .filter(p => p.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION
-            || p.scoringRubricVersion === SCORING_RUBRIC_VERSION)
+        .filter(p => SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(p.parsed?.scoringRubricVersion)
+            || SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(p.scoringRubricVersion))
         .map(normalizedId)
         .filter(Boolean));
 

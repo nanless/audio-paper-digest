@@ -31,7 +31,10 @@ const readerIdentityFormat = require('../scripts/lib/reader-identity-format.js')
 const { collectWorkflowImplementationFiles } = require('../scripts/lib/workflow-implementation-files.js');
 
 function buildValidRawScoringAudit(overrides = {}) {
-    const header = scoringFormat.currentEvidenceProfileHeader();
+    const header = {
+        contract: 'scoring-evidence-profile',
+        schemaFingerprint: 'cd86b88de878f041f2dab1c8153fdac9e98272cc1ff3ba90161a79f1349e6d9f'
+    };
     const base = {
         documentType: '方法研究',
         confidence: '高',

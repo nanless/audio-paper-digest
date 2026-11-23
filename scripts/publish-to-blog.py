@@ -5173,10 +5173,13 @@ def format_complete_score_line(parsed):
     """渲染总分和全部八个维度；零是真实评分，不是缺失。"""
     if not isinstance(parsed, dict) or parsed.get('score') is None:
         return ''
-    from paper_reader_presentation import SCORE_DIMENSIONS
+    from paper_reader_presentation import score_dimensions_for_rubric
+    import scoring_rubric_v2 as _scoring_v2
+    is_v2 = _scoring_v2.is_v2_rubric(parsed.get('scoringRubricVersion'))
+    active_dims = score_dimensions_for_rubric(parsed.get('scoringRubricVersion'))
     sub_scores = ' | '.join(
-        f'{label} {parsed[key]}/{maximum}'
-        for key, label, maximum in SCORE_DIMENSIONS
+        f'{label} {float(parsed[key]):.1f}/{maximum}' if is_v2 else f'{label} {parsed[key]}/{maximum}'
+        for key, label, maximum in active_dims
         if parsed.get(key) is not None
     )
     return f"**{parsed['score']}/10**" + (f' | {sub_scores}' if sub_scores else '')
@@ -18110,6 +18113,9 @@ def generation_template_fingerprint():
         'pdf_author_extract_v1.py': script_dir / 'pdf_author_extract_v1.py',
         'pdf_figure_table_extract.py': script_dir / 'pdf_figure_table_extract.py',
         'lib/reader-pdf-figure-crop.js': script_dir / 'lib' / 'reader-pdf-figure-crop.js',
+        'scoring_rubric_v2.py': script_dir / 'scoring_rubric_v2.py',
+        'lib/scoring-rubric-v2.js': script_dir / 'lib' / 'scoring-rubric-v2.js',
+        'config/scoring-rubric-v2.json': script_dir.parent / 'config' / 'scoring-rubric-v2.json',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
         'lib/reader-pdf-extraction-scope.js': script_dir / 'lib' / 'reader-pdf-extraction-scope.js',

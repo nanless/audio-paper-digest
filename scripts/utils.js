@@ -270,7 +270,10 @@ function stripMd(text) {
     return t.trim();
 }
 
-const SCORING_RUBRIC_VERSION = 'type-aware-v1';
+const scoringRubricV2 = require('./lib/scoring-rubric-v2');
+const SCORING_RUBRIC_VERSION = scoringRubricV2.SCORING_RUBRIC_V1;
+const CURRENT_SCORING_RUBRIC_VERSION = scoringRubricV2.SCORING_RUBRIC_V2;
+const SUPPORTED_SCORING_RUBRIC_VERSIONS = scoringRubricV2.SUPPORTED_SCORING_RUBRIC_VERSIONS;
 const DOCUMENT_TYPES = Object.freeze([
     '方法研究',
     '系统技术报告',
@@ -323,6 +326,7 @@ function normalizeDocumentType(value) {
 
 function parseMachineSummary(analysis) {
     const result = {
+        rubricVersion: '',
         documentType: '',
         rankBucket: '',
         innovation: '',
@@ -348,6 +352,7 @@ function parseMachineSummary(analysis) {
     if (!blockMatch) return result;
 
     const keyMap = {
+        rubric_version: 'rubricVersion',
         document_type: 'documentType',
         rank_bucket: 'rankBucket',
         innovation: 'innovation',
@@ -405,6 +410,10 @@ function parseMachineSummary(analysis) {
         const mappedKey = keyMap[m[1]];
             if (mappedKey) {
                 let val = stripMd(m[2]).trim();
+
+                if (mappedKey === 'rubricVersion') {
+                    val = SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(val) ? val : '';
+                }
 
                 if (mappedKey === 'documentType') {
                     val = normalizeDocumentType(val);
@@ -1406,25 +1415,32 @@ const SCORE_DIMENSIONS = Object.freeze({
 });
 
 const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1.0, 1.2, 1.5]);
+const V2_OPEN_SOURCE_SCORE_ANCHORS = scoringRubricV2.V2_OPEN_SOURCE_ANCHORS;
 
 function normalizeScoreToOneDecimal(value) {
     return Math.round((Number(value) + Number.EPSILON) * 10) / 10;
 }
 
-function isOpenSourceScoreAnchor(value) {
+function isOpenSourceScoreAnchor(value, rubricVersion = SCORING_RUBRIC_VERSION) {
+    if (scoringRubricV2.isV2Rubric(rubricVersion)) {
+        return scoringRubricV2.isV2OpenSourceAnchor(value);
+    }
     const normalized = normalizeScoreToOneDecimal(value);
     return OPEN_SOURCE_SCORE_ANCHORS.some(anchor => Math.abs(anchor - normalized) < 1e-9);
 }
 
-function parseScoringDimensions(scoringText) {
-    const occurrences = Object.fromEntries(Object.keys(SCORE_DIMENSIONS).map(field => [field, []]));
+function parseScoringDimensions(scoringText, rubricVersion = SCORING_RUBRIC_VERSION) {
+    const isV2 = scoringRubricV2.isV2Rubric(rubricVersion);
+    const dimDefs = isV2 ? scoringRubricV2.V2_SCORE_DIMENSIONS_BY_PARSED_FIELD : SCORE_DIMENSIONS;
+    const anchors = isV2 ? V2_OPEN_SOURCE_SCORE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
+    const occurrences = Object.fromEntries(Object.keys(dimDefs).map(field => [field, []]));
     const errors = [];
 
     for (const rawLine of String(scoringText || '').split('\n')) {
         const line = rawLine.trim().replace(/^(?:[-*+]\s+|\d+[.)]\s+)/, '').replace(/\*\*/g, '').trim();
         if (!line) continue;
 
-        for (const [field, definition] of Object.entries(SCORE_DIMENSIONS)) {
+        for (const [field, definition] of Object.entries(dimDefs)) {
             const labelPattern = escapeRegExp(definition.label);
             if (!new RegExp(`^${labelPattern}(?=\\s|[（(:：/])`).test(line)) continue;
 
@@ -1478,7 +1494,7 @@ function parseScoringDimensions(scoringText) {
     }
 
     const scores = {};
-    for (const [field, definition] of Object.entries(SCORE_DIMENSIONS)) {
+    for (const [field, definition] of Object.entries(dimDefs)) {
         const found = occurrences[field];
         if (found.length === 0) {
             errors.push(`缺少评分维度“${definition.label}”`);
@@ -1509,8 +1525,8 @@ function parseScoringDimensions(scoringText) {
             continue;
         }
         const normalizedScore = normalizeScoreToOneDecimal(item.score);
-        if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(normalizedScore)) {
-            errors.push(`评分维度“${definition.label}”得分必须为 ${OPEN_SOURCE_SCORE_ANCHORS.map(value => value.toFixed(1)).join('/')}`);
+        if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(normalizedScore, rubricVersion)) {
+            errors.push(`评分维度“${definition.label}”得分必须为 ${anchors.map(value => value.toFixed(1)).join('/')}`);
             continue;
         }
         scores[field] = normalizedScore;
@@ -1685,7 +1701,9 @@ function parseAnalysis(analysis, options = {}) {
     const machineSummary = parseMachineSummary(analysis);
     result.machineSummary = machineSummary;
     result.documentType = machineSummary.documentType;
-    result.scoringRubricVersion = machineSummary.documentType ? SCORING_RUBRIC_VERSION : '';
+    result.scoringRubricVersion = machineSummary.rubricVersion
+        ? (machineSummary.documentType ? machineSummary.rubricVersion : '')
+        : (machineSummary.documentType ? SCORING_RUBRIC_VERSION : '');
     result.rankBucket = machineSummary.rankBucket;
     result.innovationScore = machineSummary.innovation;
     result.technicalRigorScore = machineSummary.technicalRigor;
@@ -1768,12 +1786,19 @@ function parseAnalysis(analysis, options = {}) {
 
     // 只有八维评分完整、唯一且分母/范围合法时才覆盖 LLM 给出的总分。
     const scoringText = result.scoringReason || '';
-    result.scoreValidation = parseScoringDimensions(scoringText);
+    const activeRubricVersion = result.scoringRubricVersion || SCORING_RUBRIC_VERSION;
+    const isV2 = scoringRubricV2.isV2Rubric(activeRubricVersion);
+    result.scoreValidation = parseScoringDimensions(scoringText, activeRubricVersion);
     if (result.scoreValidation.valid) {
             const dimScores = result.scoreValidation.scores;
-            let total = Object.values(dimScores).reduce((a, b) => a + normalizeScoreToOneDecimal(b), 0);
-            total = Math.min(10.0, total);
-            result.score = normalizeScoreToOneDecimal(total).toFixed(1);
+            if (isV2 && result.documentType) {
+                const v2Calc = scoringRubricV2.calculateV2WeightedTotal(result.documentType, dimScores);
+                result.score = v2Calc.total.toFixed(1);
+            } else {
+                let total = Object.values(dimScores).reduce((a, b) => a + normalizeScoreToOneDecimal(b), 0);
+                total = Math.min(10.0, total);
+                result.score = normalizeScoreToOneDecimal(total).toFixed(1);
+            }
 
             // 用评分理由的分项覆盖机器摘要字段，确保与总分一致
             for (const field of Object.keys(SCORE_DIMENSIONS)) {
@@ -1799,28 +1824,31 @@ function parseAnalysis(analysis, options = {}) {
     const hasCodeYes = result.hasCode === '是' || result.hasCode === 'yes';
     const hasModelYes = result.hasModel === '是' || result.hasModel === 'yes';
     const hasDatasetYes = result.hasDataset === '是' || result.hasDataset === 'yes';
-    if (result.scoreValidation.valid && !isTheoryPaper && openScoreVal >= 1.0
+    const releasedOpenThreshold = isV2 ? scoringRubricV2.V2_OPEN_SOURCE_RELEASED_THRESHOLD : 1.0;
+    if (result.scoreValidation.valid && (!isTheoryPaper || isV2) && openScoreVal >= releasedOpenThreshold
         && !hasCodeYes && !hasModelYes && !hasDatasetYes) {
         // 论文没有任何开源链接但得了高分，强制降低
         result.openSourceScore = '0.0';
         if (result.machineSummary) result.machineSummary.openSource = '0.0';
-        // 必须从修正后的八个子项重新求和。不能从已封顶的总分直接减，
+        // 必须从修正后的八个子项重新计算。不能从已封顶的总分直接减，
         // 否则原始子项和超过 10 时会丢失封顶前的分数。
         result.scoreValidation.scores.openSourceScore = 0.0;
-        let total = Object.values(result.scoreValidation.scores)
-            .reduce((sum, value) => sum + normalizeScoreToOneDecimal(value), 0);
-        total = Math.min(10.0, Math.max(0, total));
-        result.score = normalizeScoreToOneDecimal(total).toFixed(1);
+        if (isV2 && result.documentType) {
+            const v2Calc = scoringRubricV2.calculateV2WeightedTotal(result.documentType, result.scoreValidation.scores);
+            result.score = v2Calc.total.toFixed(1);
+        } else {
+            let total = Object.values(result.scoreValidation.scores)
+                .reduce((sum, value) => sum + normalizeScoreToOneDecimal(value), 0);
+            total = Math.min(10.0, Math.max(0, total));
+            result.score = normalizeScoreToOneDecimal(total).toFixed(1);
+        }
     }
 
     // rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
     if (result.score) {
         const s = parseFloat(result.score);
         if (!isNaN(s)) {
-            if (s >= 9.0) result.rankBucket = '前10%';
-            else if (s >= 7.5) result.rankBucket = '前25%';
-            else if (s >= 5.5) result.rankBucket = '前50%';
-            else result.rankBucket = '后50%';
+            result.rankBucket = scoringRubricV2.rankBucketForRubric(s, activeRubricVersion);
             // 同步 machineSummary
             if (result.machineSummary) {
                 result.machineSummary.rankBucket = result.rankBucket;
@@ -2345,11 +2373,14 @@ module.exports = {
     PRIMARY_METHOD_TAGS,
     SCORE_DIMENSIONS,
     OPEN_SOURCE_SCORE_ANCHORS,
+    V2_OPEN_SOURCE_SCORE_ANCHORS,
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     normalizeDocumentType,
     DOCUMENT_TYPES,
     SCORING_RUBRIC_VERSION,
+    CURRENT_SCORING_RUBRIC_VERSION,
+    SUPPORTED_SCORING_RUBRIC_VERSIONS,
     // API 路由
     detectApiType,
     getAnthropicEndpoint,

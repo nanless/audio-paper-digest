@@ -107,7 +107,8 @@ npm run test:compat
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `deep-analyzer.js` | Node 核心：按各流程来源适配读取单篇全文，执行多阶段分析、评分审计、API Reader 写作和论文图规划。日更恢复读取本批封存来源，不重新抓取。结构修复后，只用原文证据核验详细核心摘要；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `lib/public-resource-probe.js` | Node 库：封装公网/代理 Fake-IP 固定对端 HTTPS 传输、GitHub README 复现文档实测探测及外部开源资源与 Demo 页面可达性核验，策略异常全链路 Fail-Closed 透传并遵守受控运行网络禁令。 |
-| `lib/scoring-audit-contract.js` | Node 库：封装 8 维类型感知评分审计规则、防跨维度双重扣分检查、实测证据硬上限裁剪与开源锚点校准。 |
+| `lib/scoring-audit-contract.js` | Node 库：封装 8 维类型感知评分审计规则、真盲审剥离、防跨维度双重扣分检查、实测证据硬上限裁剪与开源锚点校准（兼容 `type-aware-v1` 与 `type-aware-v2`）。 |
+| `lib/scoring-rubric-v2.js`、`scoring_rubric_v2.py` | Node/Python 共用的 `type-aware-v2` 评分规则引擎，加载 `config/scoring-rubric-v2.json`，用精确整数千分位算术计算 7 类核心加权分、有界类型开源加分与分档。 |
 | `lib/reader-repair-evidence-slice.js` | Node 库：在 Reader 普通局部节点补丁请求（1–8 既有节点）满足可证明原表/引文完整覆盖、兼容顺延目标且无坏表/全文扩写阻断时，构造 UTF-16 码点安全的紧凑证据切片；任一条件不满足即零风险回退原全量证据，候选固定身份与补丁后整稿冷核保持不变。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |

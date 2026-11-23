@@ -23,17 +23,19 @@ test(`评分维护按真实输入触发三次共识并保留来源反馈（缓�
             publicGeneralizationEvaluated: false,
             engineeringEvidence: 'claim_only',
             evidenceBoundary: '[A_RESULTS] 公开测试集报告了同协议基线，但没有实测部署效率。',
-            evidenceIds: ['A_METHOD', 'A_RESULTS']
+            evidenceIds: ['A_METHOD', 'A_RESULTS'],
+            primaryStrengths: ['[A_METHOD] 公开方法章节提供完整组件与实验流程。'],
+            primaryDefects: ['[A_RESULTS] 未报告真实部署效率实测。']
         },
         dimensions: Object.fromEntries([
-            ['innovation', 1],
-            ['technicalRigor', 1],
-            ['experimentalSufficiency', 1],
-            ['clarity', .8],
-            ['impact', .8],
+            ['innovation', 5.7],
+            ['technicalRigor', 5.7],
+            ['experimentalSufficiency', 5.7],
+            ['clarity', 5.7],
+            ['impact', 5.7],
             ['openSource', 0],
-            ['reproducibility', .3],
-            ['engineering', .8]
+            ['reproducibility', 5.7],
+            ['engineering', 5.5]
         ].map(([key, score]) => [key, {
             score,
             reason: sampleReason
@@ -45,7 +47,7 @@ test(`评分维护按真实输入触发三次共识并保留来源反馈（缓�
         req.on('end', () => {
             scoringRequests.push(JSON.parse(body));
             const output = structuredClone(sampleScoringResponse);
-            output.dimensions.innovation.score = scoringRequests.length === 1 ? 1 : scoringRequests.length === 2 ? 1.8 : 1.7;
+            output.dimensions.innovation.score = scoringRequests.length === 1 ? 5.7 : scoringRequests.length === 2 ? 8.9 : 8.5;
             res.setHeader('content-type', 'application/json');
             res.end(JSON.stringify({
                 choices: [{

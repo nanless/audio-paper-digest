@@ -17,7 +17,10 @@ from tag_catalog import (LABEL_MODE_LEGACY,
                             prune_ancestors, resolve_label_candidates,
                             _validate_tag_catalog_content)
 
-SCORING_RUBRIC_VERSION = 'type-aware-v1'
+import scoring_rubric_v2 as _scoring_v2
+SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V1
+CURRENT_SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V2
+SUPPORTED_SCORING_RUBRIC_VERSIONS = _scoring_v2.SUPPORTED_SCORING_RUBRIC_VERSIONS
 DOCUMENT_TYPES = (
     '方法研究',
     '系统技术报告',
@@ -76,6 +79,7 @@ def strip_md(t):
 def parse_machine_summary(analysis):
     """解析 机器摘要 块（兼容 ## 和 ### 标题）"""
     result = {
+        'rubricVersion': '',
         'documentType': '',
         'rankBucket': '',
         'innovation': '',
@@ -103,6 +107,7 @@ def parse_machine_summary(analysis):
         return result
 
     key_map = {
+        'rubric_version': 'rubricVersion',
         'document_type': 'documentType',
         'rank_bucket': 'rankBucket',
         'innovation': 'innovation',
@@ -132,6 +137,8 @@ def parse_machine_summary(analysis):
         mapped = key_map.get(km.group(1))
         if mapped:
             val = strip_md(km.group(2))
+            if mapped == 'rubricVersion':
+                val = val if val in SUPPORTED_SCORING_RUBRIC_VERSIONS else ''
             if mapped == 'documentType':
                 val = normalize_document_type(val)
             # 对于数值型字段，只保留数字部分（去除中文括号说明等）
@@ -311,19 +318,25 @@ SCORE_DIMENSIONS = {
 }
 
 OPEN_SOURCE_SCORE_ANCHORS = (0.0, 0.2, 0.5, 1.0, 1.2, 1.5)
+V2_OPEN_SOURCE_SCORE_ANCHORS = _scoring_v2.V2_OPEN_SOURCE_ANCHORS
 
 
 def normalize_score_to_one_decimal(value):
     return float(Decimal(str(value)).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP))
 
 
-def is_open_source_score_anchor(value):
+def is_open_source_score_anchor(value, rubric_version=SCORING_RUBRIC_VERSION):
+    if _scoring_v2.is_v2_rubric(rubric_version):
+        return _scoring_v2.is_v2_open_source_anchor(value)
     normalized = normalize_score_to_one_decimal(value)
     return any(abs(anchor - normalized) < 1e-9 for anchor in OPEN_SOURCE_SCORE_ANCHORS)
 
 
-def parse_scoring_dimensions(scoring_text):
-    occurrences = {field: [] for field in SCORE_DIMENSIONS}
+def parse_scoring_dimensions(scoring_text, rubric_version=SCORING_RUBRIC_VERSION):
+    is_v2 = _scoring_v2.is_v2_rubric(rubric_version)
+    dim_defs = _scoring_v2.V2_SCORE_DIMENSIONS if is_v2 else SCORE_DIMENSIONS
+    open_anchors = V2_OPEN_SOURCE_SCORE_ANCHORS if is_v2 else OPEN_SOURCE_SCORE_ANCHORS
+    occurrences = {field: [] for field in dim_defs}
     errors = []
 
     for raw_line in str(scoring_text or '').splitlines():
@@ -332,7 +345,7 @@ def parse_scoring_dimensions(scoring_text):
         if not line:
             continue
 
-        for field, definition in SCORE_DIMENSIONS.items():
+        for field, definition in dim_defs.items():
             label = definition['label']
             if not re.match(r'^' + re.escape(label) + r'(?=\s|[（(:：/])', line):
                 continue
@@ -385,7 +398,7 @@ def parse_scoring_dimensions(scoring_text):
             break
 
     scores = {}
-    for field, definition in SCORE_DIMENSIONS.items():
+    for field, definition in dim_defs.items():
         found = occurrences[field]
         label = definition['label']
         maximum = definition['max']
@@ -400,21 +413,21 @@ def parse_scoring_dimensions(scoring_text):
         score = item['score']
         denominator = item['denominator']
         if not item['matchedFormat'] or score is None or denominator is None or not math.isfinite(score) or not math.isfinite(denominator):
-            errors.append(f'评分维度“{label}”格式非法，必须写成 得分/{maximum}')
+            errors.append(f'评分维度“{label}”格式非法，必须写成 得分/{maximum:g}')
             continue
         if denominator != maximum or (item['declaredMaximum'] is not None and item['declaredMaximum'] != maximum):
-            errors.append(f'评分维度“{label}”分母必须为 {maximum}')
+            errors.append(f'评分维度“{label}”分母必须为 {maximum:g}')
             continue
         if score < 0 or score > maximum:
-            errors.append(f'评分维度“{label}”得分 {score:g} 超出 0-{maximum}')
+            errors.append(f'评分维度“{label}”得分 {score:g} 超出 0-{maximum:g}')
             continue
         meaningful_reason_chars = re.findall(r'[A-Za-z0-9\u4e00-\u9fff]', item['reason'])
         if len(meaningful_reason_chars) < 4:
             errors.append(f'评分维度“{label}”缺少具体评分理由')
             continue
         normalized_score = normalize_score_to_one_decimal(score)
-        if field == 'openSourceScore' and not is_open_source_score_anchor(normalized_score):
-            anchors = '/'.join(f'{value:.1f}' for value in OPEN_SOURCE_SCORE_ANCHORS)
+        if field == 'openSourceScore' and not is_open_source_score_anchor(normalized_score, rubric_version):
+            anchors = '/'.join(f'{value:.1f}' for value in open_anchors)
             errors.append(f'评分维度“{label}”得分必须为 {anchors}')
             continue
         scores[field] = normalized_score
@@ -524,7 +537,10 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     machine_summary = parse_machine_summary(analysis)
     r['machineSummary'] = machine_summary
     r['documentType'] = machine_summary['documentType']
-    r['scoringRubricVersion'] = SCORING_RUBRIC_VERSION if r['documentType'] else ''
+    r['scoringRubricVersion'] = (
+        machine_summary['rubricVersion'] if (machine_summary['rubricVersion'] and r['documentType'])
+        else (SCORING_RUBRIC_VERSION if r['documentType'] else '')
+    )
     r['rankBucket'] = machine_summary['rankBucket']
     r['innovationScore'] = machine_summary['innovation']
     r['technicalRigorScore'] = machine_summary['technicalRigor']
@@ -609,11 +625,17 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
         if m:
             scoring_text = m.group(1).strip()
 
-    r['scoreValidation'] = parse_scoring_dimensions(scoring_text)
+    active_rubric = r['scoringRubricVersion'] or SCORING_RUBRIC_VERSION
+    is_v2 = _scoring_v2.is_v2_rubric(active_rubric)
+    r['scoreValidation'] = parse_scoring_dimensions(scoring_text, active_rubric)
     if r['scoreValidation']['valid']:
             dim_scores = r['scoreValidation']['scores']
-            total = min(10.0, sum(normalize_score_to_one_decimal(value) for value in dim_scores.values()))
-            r['score'] = f'{normalize_score_to_one_decimal(total):.1f}'
+            if is_v2 and r['documentType']:
+                v2_calc = _scoring_v2.calculate_v2_weighted_total(r['documentType'], dim_scores)
+                r['score'] = f"{v2_calc['total']:.1f}"
+            else:
+                total = min(10.0, sum(normalize_score_to_one_decimal(value) for value in dim_scores.values()))
+                r['score'] = f'{normalize_score_to_one_decimal(total):.1f}'
 
             # 用评分理由的分项覆盖结果字段，确保与总分一致
             for field in SCORE_DIMENSIONS:
@@ -634,30 +656,28 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     has_code_yes = r.get('hasCode') in ('是', 'yes')
     has_model_yes = r.get('hasModel') in ('是', 'yes')
     has_dataset_yes = r.get('hasDataset') in ('是', 'yes')
-    if (r['scoreValidation']['valid'] and not is_theory_paper and open_score_val >= 1.0
+    released_open_threshold = _scoring_v2.V2_OPEN_SOURCE_RELEASED_THRESHOLD if is_v2 else 1.0
+    if (r['scoreValidation']['valid'] and (not is_theory_paper or is_v2) and open_score_val >= released_open_threshold
             and not has_code_yes and not has_model_yes and not has_dataset_yes):
         r['openSourceScore'] = '0.0'
         if r.get('machineSummary'):
             r['machineSummary']['openSource'] = '0.0'
         r['scoreValidation']['scores']['openSourceScore'] = 0.0
-        total = sum(
-            normalize_score_to_one_decimal(value)
-            for value in r['scoreValidation']['scores'].values()
-        )
-        r['score'] = f'{normalize_score_to_one_decimal(min(10.0, max(0.0, total))):.1f}'
+        if is_v2 and r['documentType']:
+            v2_calc = _scoring_v2.calculate_v2_weighted_total(r['documentType'], r['scoreValidation']['scores'])
+            r['score'] = f"{v2_calc['total']:.1f}"
+        else:
+            total = sum(
+                normalize_score_to_one_decimal(value)
+                for value in r['scoreValidation']['scores'].values()
+            )
+            r['score'] = f'{normalize_score_to_one_decimal(min(10.0, max(0.0, total))):.1f}'
 
     # rankBucket 推断：始终基于最终 score 重新计算（覆盖 LLM 原始值）
     if r.get('score'):
         try:
             s = float(r['score'])
-            if s >= 9.0:
-                r['rankBucket'] = '前10%'
-            elif s >= 7.5:
-                r['rankBucket'] = '前25%'
-            elif s >= 5.5:
-                r['rankBucket'] = '前50%'
-            else:
-                r['rankBucket'] = '后50%'
+            r['rankBucket'] = _scoring_v2.rank_bucket_for_rubric(s, active_rubric)
             # 同步 machineSummary
             if r.get('machineSummary'):
                 r['machineSummary']['rankBucket'] = r['rankBucket']

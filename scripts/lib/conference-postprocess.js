@@ -347,13 +347,19 @@ function getConsistentPublicationFields(paper, tagRules) {
         primaryTaskTag: String(value.primaryTaskTag || '').trim(), primaryMethodTag: String(value.primaryMethodTag || '').trim(),
         summary: String(value.summary || '').trim(), score: String(value.score || '').trim(),
         rankBucket: String(value.rankBucket || '').trim(), documentType: String(value.documentType || '').trim(),
+        scoringRubricVersion: String(value.scoringRubricVersion || '').trim(),
         scoringReason: String(value.scoringReason || '').trim(),
         scoreDimensions: Object.fromEntries(SCORE_DIMENSIONS.map(([field]) => [field, String(value[field] ?? '').trim()])) });
     if (!parsed || stableHash(pick(parsed)) !== stableHash(pick(reparsed || {}))) fail('会议论文缓存的标签、摘要或评分字段与重新解析正文得到的结果不一致。');
     const value = pick(parsed); const score = Number(value.score);
+    const scoringRubricV2 = require('./scoring-rubric-v2');
+    const isV2 = scoringRubricV2.isV2Rubric(reparsed?.scoringRubricVersion);
+    const activeDims = isV2
+        ? SCORE_DIMENSIONS.map(([field, label]) => [field, label, 10])
+        : SCORE_DIMENSIONS;
     if (!Number.isFinite(score) || score < 0 || score > 10 || !value.summary || !value.scoringReason
         || !value.rankBucket || !value.documentType
-        || SCORE_DIMENSIONS.some(([field, , maximum]) => {
+        || activeDims.some(([field, , maximum]) => {
             const dimension = Number(value.scoreDimensions[field]);
             return !Number.isFinite(dimension) || dimension < 0 || dimension > maximum;
         }) || reparsed?.scoreValidation?.valid !== true) fail('会议论文的摘要、文档类型、排名、评分理由或八维评分缺失，或评分不符合要求。');

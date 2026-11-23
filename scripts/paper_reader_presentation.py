@@ -26,12 +26,20 @@ SCORE_DIMENSIONS = (
 )
 
 
+def score_dimensions_for_rubric(rubric_version=None):
+    import scoring_rubric_v2 as _scoring_v2
+    if _scoring_v2.is_v2_rubric(rubric_version):
+        return _scoring_v2.V2_PRESENTATION_DIMENSIONS
+    return SCORE_DIMENSIONS
+
+
 def reader_score_line(parsed):
     """Format the same eight-dimensional scale after workflow qualification."""
+    active_dims = score_dimensions_for_rubric((parsed or {}).get('scoringRubricVersion'))
     try:
         score = float(parsed.get('score'))
         dimensions = [(label, float(parsed.get(field)), maximum)
-                      for field, label, maximum in SCORE_DIMENSIONS]
+                      for field, label, maximum in active_dims]
     except (TypeError, ValueError, OverflowError):
         raise ValueError('总分或八个评分维度缺失，或无法转换为数字。') from None
     if not math.isfinite(score) or not 0 <= score <= 10 or any(

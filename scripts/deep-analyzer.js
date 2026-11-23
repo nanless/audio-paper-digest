@@ -620,7 +620,17 @@ function savedScoringAuditFirstRequestBody(stage, input, evidence) {
         || stage.promptTemplateSha256 !== runtimePromptTemplateSha256(promptPath)) {
         throw new Error('已付评分恢复仅支持当前真实提示词的无反馈首响应');
     }
-    const prompt = renderScoringAuditPrompt(promptPath, prepareScoringAuditAnalysis(input), evidence,
+    const reqHeader = scoringFormat.readHeader(stage, 'request');
+    let isBlindRequest = false;
+    if (reqHeader?.schemaFingerprint) {
+        try {
+            const schema = require('./lib/protocol-codec').declaredSchema(
+                reqHeader.contract, 'scoring-request-format', reqHeader.schemaFingerprint
+            );
+            isBlindRequest = schema?.blindPriorScores === true;
+        } catch (_) {}
+    }
+    const prompt = renderScoringAuditPrompt(promptPath, prepareScoringAuditAnalysis(input, { legacyReasonOnly: !isBlindRequest }), evidence,
         '这是第一次输出，没有上一次校验错误。');
     return buildConfiguredModelRequestBody(sanitizeModelMessages([{ role: 'user', content: [{ type: 'text', text: prompt }] }]),
         SCORING_AUDIT_MAX_TOKENS, { ...DEEP_CONFIG, temperature: SCORING_AUDIT_TEMPERATURE,
@@ -9272,6 +9282,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         parserImplementationSha256: repair.shaText([
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/scoring-audit-contract.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/scoring-rubric-v2.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, '../config/scoring-rubric-v2.json'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/public-resource-probe.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-repair-evidence-slice.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
@@ -11862,6 +11874,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     };
     paper.analysis = auditedAnalysis;
     paper.parsed = auditedParsed;
+    paper.scoringRubricVersion = auditedParsed?.scoringRubricVersion || '';
     if (options.onScoringComplete !== undefined) {
         await options.onScoringComplete(paper, { scoringInputAnalysis: analysis,
             scoringEvidenceContext, readerRevisionSeed });
@@ -20167,17 +20180,32 @@ function normalizeAnalysisStructure(analysis) {
         '是否SOTA': 'sota_claim', '是否开源代码': 'has_code',
         '是否开源模型': 'has_model', '是否开源数据': 'has_dataset'
     };
+    const scoringRubricV2 = require('./lib/scoring-rubric-v2');
     const values = {};
+    let declaredRubricVersion = '';
     for (const rawLine of originalMachine.split('\n')) {
-        const match = rawLine.trim().match(/^([^:：]+)\s*[:：]\s*(.*?)$/);
+        const match = rawLine.trim().replace(/^(?:[-*+]\s*)/, '').match(/^([^:：]+?)\s*[:：]\s*(.*?)$/);
         if (!match) continue;
-        const key = aliases[match[1].trim()] || match[1].trim();
+        const rawKey = match[1].trim().replace(/^(?:\*\*|__|`)([\s\S]*?)(?:\*\*|__|`)$/, '$1').trim();
+        const key = aliases[rawKey] || rawKey;
+        if (key === 'rubric_version' && !declaredRubricVersion) {
+            const candidate = match[2].trim();
+            if (scoringRubricV2.SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(candidate)) {
+                declaredRubricVersion = candidate;
+            }
+            continue;
+        }
         if (REQUIRED_MACHINE_SUMMARY_KEYS.includes(key) && values[key] === undefined) {
             values[key] = match[2].trim();
         }
     }
 
     const parsedBefore = parseAnalysis(updated) || {};
+    const effectiveRubricVersion = declaredRubricVersion
+        || (scoringRubricV2.isV2Rubric(parsedBefore.scoringRubricVersion || parsedBefore.machineSummary?.rubricVersion)
+            ? scoringRubricV2.SCORING_RUBRIC_V2
+            : scoringRubricV2.SCORING_RUBRIC_V1);
+    const isV2Rubric = scoringRubricV2.isV2Rubric(effectiveRubricVersion);
     const scoreFallbacks = {
         innovation: parsedBefore.innovationScore,
         technical_rigor: parsedBefore.technicalRigorScore,
@@ -20219,14 +20247,16 @@ function normalizeAnalysisStructure(analysis) {
         ['高', '中', '低'],
         ''
     );
-    const scoreMaxima = {
-        innovation: 2, technical_rigor: 1.5, experimental_sufficiency: 1.5, clarity: 1,
-        impact: 1.5, open_source: 1.5, reproducibility: 0.5, engineering_score: 1.5
-    };
+    const scoreMaxima = isV2Rubric
+        ? { innovation: 10, technical_rigor: 10, experimental_sufficiency: 10, clarity: 10,
+            impact: 10, open_source: 10, reproducibility: 10, engineering_score: 10 }
+        : { innovation: 2, technical_rigor: 1.5, experimental_sufficiency: 1.5, clarity: 1,
+            impact: 1.5, open_source: 1.5, reproducibility: 0.5, engineering_score: 1.5 };
+    const openAnchors = isV2Rubric ? scoringRubricV2.V2_OPEN_SOURCE_ANCHORS : [0, 0.2, 0.5, 1, 1.2, 1.5];
     for (const [key, maximum] of Object.entries(scoreMaxima)) {
         const rawValue = values[key];
         const numeric = Number(rawValue);
-        const anchors = key === 'open_source' ? [0, 0.2, 0.5, 1, 1.2, 1.5] : null;
+        const anchors = key === 'open_source' ? openAnchors : null;
         values[key] = rawValue !== '' && Number.isFinite(numeric) && numeric >= 0 && numeric <= maximum
             && (!anchors || anchors.includes(numeric))
             ? numeric.toFixed(1)
@@ -20260,9 +20290,11 @@ function normalizeAnalysisStructure(analysis) {
             '补充标签: #待选择补充标签'
         ].join('\n'));
     }
-    updated = mergeSectionByTitle(updated, '机器摘要', REQUIRED_MACHINE_SUMMARY_KEYS
-        .map(key => `${key}: ${values[key]}`)
-        .join('\n'));
+    const machineLines = [
+        ...(isV2Rubric ? [`rubric_version: ${scoringRubricV2.SCORING_RUBRIC_V2}`] : []),
+        ...REQUIRED_MACHINE_SUMMARY_KEYS.map(key => `${key}: ${values[key]}`)
+    ];
+    updated = mergeSectionByTitle(updated, '机器摘要', machineLines.join('\n'));
     return updated;
 }
 

@@ -2036,15 +2036,62 @@ primary_task_tag: #音视频生成
                 'engineering_claim_without_measured_or_reusable_evidence'
             ]
         );
-        const current = structuredClone(payload);
-        delete current.evidenceProfile.version;
-        const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
-        Object.assign(current.evidenceProfile, header);
-        const currentAudit = parseScoringAuditResult(JSON.stringify(current), allowed);
-        assert.deepEqual(applyScoringEvidenceCaps(currentAudit).capsApplied, capped.capsApplied);
-        assert.deepEqual(applyScoringEvidenceCaps(currentAudit).dimensions, capped.dimensions);
-        current.evidenceProfile.version = 1;
-        assert.throws(() => parseScoringAuditResult(JSON.stringify(current), allowed), /结构指纹/);
+        const historicalModern = structuredClone(payload);
+        delete historicalModern.evidenceProfile.version;
+        const scoringFormat = require('../scripts/lib/scoring-record-format');
+        const codec = require('../scripts/lib/protocol-codec');
+        const v1Header = codec.historicalHeader(
+            'scoring-evidence-profile',
+            'experimental-and-engineering-evidence',
+            'cd86b88de878f041f2dab1c8153fdac9e98272cc1ff3ba90161a79f1349e6d9f'
+        );
+        Object.assign(historicalModern.evidenceProfile, v1Header);
+        const historicalAudit = parseScoringAuditResult(JSON.stringify(historicalModern), allowed);
+        assert.deepEqual(applyScoringEvidenceCaps(historicalAudit).capsApplied, capped.capsApplied);
+        assert.deepEqual(applyScoringEvidenceCaps(historicalAudit).dimensions, capped.dimensions);
+        const currentV2 = {
+            documentType: '系统技术报告',
+            confidence: '高',
+            evidenceProfile: {
+                ...scoringFormat.currentEvidenceProfileHeader(),
+                multiComponentClaimed: true,
+                ablationStatus: 'none',
+                targetEvaluation: 'internal',
+                sampleScaleReported: false,
+                deploymentMeasured: false,
+                publicGeneralizationEvaluated: false,
+                engineeringEvidence: 'claim_only',
+                evidenceBoundary: '[A_RESULTS] 系统只报告内部评测，未给出样本规模、直接消融或部署效率。',
+                evidenceIds: ['A_METHOD', 'A_RESULTS'],
+                primaryStrengths: ['[A_METHOD] 给出系统管线结构设计。'],
+                primaryDefects: ['[A_RESULTS] 缺少消融与真实部署效率实测。']
+            },
+            dimensions: Object.fromEntries([
+                ['innovation', 7.5],
+                ['technicalRigor', 7.5],
+                ['experimentalSufficiency', 8.0],
+                ['clarity', 7.0],
+                ['impact', 7.0],
+                ['openSource', 3.0],
+                ['reproducibility', 5.0],
+                ['engineering', 8.0]
+            ].map(([key, score]) => [key, { score, reason }]))
+        };
+        const currentAudit = parseScoringAuditResult(JSON.stringify(currentV2), allowed);
+        const cappedV2 = applyScoringEvidenceCaps(currentAudit);
+        assert.strictEqual(cappedV2.dimensions.experimentalSufficiency.score, 6.0);
+        assert.strictEqual(cappedV2.dimensions.engineering.score, 5.5);
+        assert.deepStrictEqual(
+            cappedV2.capsApplied.map(item => item.rule),
+            [
+                'multi_component_without_direct_ablation',
+                'internal_evaluation_without_sample_scale',
+                'engineering_claim_without_measured_or_reusable_evidence'
+            ]
+        );
+        const mixed = structuredClone(currentV2);
+        mixed.evidenceProfile.version = 1;
+        assert.throws(() => parseScoringAuditResult(JSON.stringify(mixed), allowed), /结构指纹/);
         const missingAlias = structuredClone(payload);
         missingAlias.evidenceProfile.ablationStatus = 'missing';
         assert.strictEqual(

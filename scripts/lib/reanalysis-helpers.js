@@ -1,7 +1,7 @@
 'use strict';
 
 // 指定论文重分析时，清理 Reader 状态并更新恢复统计。
-const { normalizedId, SCORING_RUBRIC_VERSION } = require('../utils.js');
+const { normalizedId, SUPPORTED_SCORING_RUBRIC_VERSIONS } = require('../utils.js');
 
 // 数组格式是旧版分析结果；对象格式才是当前正式文件。两种格式都在更新回调里被
 // 支持，所以读取阶段不能只取 data.papers，否则旧格式会被当成 0 篇而静默跳过。
@@ -108,7 +108,7 @@ function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, 
     const recoveredCount = analyzedResults.filter(result => {
         const key = normalizedId(result);
         return key && !previousCurrentRubricIds.has(key)
-            && result.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION;
+            && SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(result.parsed?.scoringRubricVersion);
     }).length;
 
     data.stats = { ...(data.stats || {}) };
