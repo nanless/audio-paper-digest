@@ -243,6 +243,10 @@ function readBundleFreshSource(checked, id, expectation) {
     return source;
 }
 
+function hasVerifiedBundleAuthorSource(details) {
+    return Boolean(verifiedBundleAuthorSources.get(details) || verifiedBundleAuthorScope.getStore());
+}
+
 function readVerifiedBundleReaderAuthors(details, options = {}) {
     const proof = verifiedBundleAuthorSources.get(details) || verifiedBundleAuthorScope.getStore();
     if (!proof) return null;
@@ -257,11 +261,13 @@ function readVerifiedBundleReaderAuthors(details, options = {}) {
     const raw = stored.runtimeDetails.readerAuthors;
     const authorParser = require('./reader-author-parser.js');
     const pdfSha = stored.manifest?.pdf?.responseSha256;
+    const verifyOnly = options?.verifyOnly === true;
     const deriveContract = options?.pdfContract || authorParser.PDF_PAGE1_AUTHOR_CONTRACT;
     if (raw === null) {
         // 旧批次在引入 pdfPage1Authors 前封存的纯 PDF 来源，runtime.readerAuthors 为 null；
         // 直接对同一份已通过 SHA-256 核验的封存 source.pdf 做确定性首页作者重放，不改写磁盘封存文件。
-        if (stored.manifest?.text?.source === 'pdf' && Buffer.isBuffer(stored.pdf) && stored.pdf.length > 0) {
+        // verifyOnly 模式仅校验已保存字段，不执行被丢弃的临时派生。
+        if (!verifyOnly && stored.manifest?.text?.source === 'pdf' && Buffer.isBuffer(stored.pdf) && stored.pdf.length > 0) {
             const derived = authorParser.extractPdfPage1AuthorsSync(stored.pdf, { contract: deriveContract });
             if (derived && authorParser.validatePdfPage1AuthorEvidence(derived, pdfSha)) {
                 return structuredClone(derived);
@@ -290,7 +296,7 @@ function readVerifiedBundleReaderAuthors(details, options = {}) {
         if (!replayed || stable(raw.pdfPage1Authors) !== stable(replayed)) {
             throw fail('封存 HTML 附带的 PDF 首页作者证据与实际封存 source.pdf 重放结果不一致。');
         }
-    } else if (!authorParser.PDF_PAGE1_AUTHOR_CONTRACTS.has(raw.contract)
+    } else if (!verifyOnly && !authorParser.PDF_PAGE1_AUTHOR_CONTRACTS.has(raw.contract)
         && Buffer.isBuffer(stored.pdf) && stored.pdf.length > 0) {
         // 旧批次在引入 pdfPage1Authors 前封存的 HTML 来源，runtime.readerAuthors 未附带 PDF 首页证据；
         // 对同一份已通过 SHA-256 核验的封存 source.pdf 做确定性首页作者重放，作为逐人绑定补齐来源。
@@ -305,7 +311,7 @@ function readVerifiedBundleReaderAuthors(details, options = {}) {
 function withVerifiedBundleReaderAuthorSource(details, callback) {
     const proof = verifiedBundleAuthorSources.get(details);
     if (!proof || typeof callback !== 'function') throw fail('作者来源作用域必须来自已核验的四文件公共读取。');
-    readVerifiedBundleReaderAuthors(details);
+    readVerifiedBundleReaderAuthors(details, { verifyOnly: true });
     return verifiedBundleAuthorScope.run(proof, callback);
 }
 
@@ -494,5 +500,5 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
 module.exports = { CONTRACT, DAILY_SOURCE_RUN_CONTRACT, isBundleDescriptor, isOriginalCacheDescriptor, isDailySourceRun, isFreshSourceProvenance, isBundleExpectation,
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
     getSavedAnalysisRecoveryPermission,
-    readFreshSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, withVerifiedBundleReaderAuthorFiles, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
+    readFreshSource, hasVerifiedBundleAuthorSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, withVerifiedBundleReaderAuthorFiles, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceRecord, freshReaderAttemptsDirectory };

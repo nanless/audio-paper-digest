@@ -1975,21 +1975,39 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
     // Do not automatically select it as evidence for a table count. Genuine
     // parenthetical measurements may still use explicitly declared exact
     // quotations or original DOM cells; neither channel is rewritten here.
-    const sourceMatches = readerNumericTokenMatches(sourceText).filter(match => {
+    const text = String(sourceText);
+    const sourceMatches = readerNumericTokenMatches(text).filter(match => {
         const token = String(match[0] || '').trim();
-        const before = String(sourceText).slice(0, match.index);
-        const after = String(sourceText).slice(match.index + (match.sourceLength || match[0].length));
+        const end = match.index + (match.sourceLength || match[0].length);
         // A numeric prefix of a commit/hash or other identifier is not a scalar.
-        if (/^[A-Za-z0-9_]/u.test(after)) return false;
+        if (end < text.length && /^[A-Za-z0-9_]/u.test(text[end])) return false;
+        // Walk back trailing whitespace in O(1) so `$`-anchored checks never scan 200KB prefixes.
+        let bEnd = match.index;
+        while (bEnd > 0 && /\s/u.test(text[bEnd - 1])) bEnd--;
+        const beforeTail = text.slice(Math.max(0, bEnd - 32), bEnd);
         // Document locators and explicitly named protocol/version values are
         // not automatic evidence for measurements or counts in another table.
         if (/^\d+(?:\.\d+)*$/u.test(token)
-            && /\b(?:Table|Figure|Fig\.|Section|Equation|Eq\.)\s*$/iu.test(before)) return false;
-        if (/^\d+(?:\.\d+)+$/u.test(token)
-            && /(?:\b(?:version|JSON[- ]RPC|protocol)|版本)\s*[:=]?\s*v?\s*$/iu.test(before)) return false;
+            && /\b(?:Table|Figure|Fig\.|Section|Equation|Eq\.)$/iu.test(beforeTail)) return false;
+        if (/^\d+(?:\.\d+)+$/u.test(token)) {
+            let vEnd = bEnd;
+            if (vEnd > 0 && (text[vEnd - 1] === 'v' || text[vEnd - 1] === 'V')) {
+                vEnd--;
+                while (vEnd > 0 && /\s/u.test(text[vEnd - 1])) vEnd--;
+            }
+            if (vEnd > 0 && (text[vEnd - 1] === ':' || text[vEnd - 1] === '=')) {
+                vEnd--;
+                while (vEnd > 0 && /\s/u.test(text[vEnd - 1])) vEnd--;
+            }
+            const versionTail = text.slice(Math.max(0, vEnd - 32), vEnd);
+            if (/(?:\b(?:version|JSON[- ]RPC|protocol)|版本)$/iu.test(versionTail)) return false;
+        }
         if (!/^\d+$/u.test(token)) return true;
-        return !(/\(\s*$/u.test(before) && /^\s*\)/u.test(after)
-            || /\[\s*$/u.test(before) && /^\s*\]/u.test(after));
+        let aStart = end;
+        while (aStart < text.length && /\s/u.test(text[aStart])) aStart++;
+        const prevChar = bEnd > 0 ? text[bEnd - 1] : '';
+        const nextChar = aStart < text.length ? text[aStart] : '';
+        return !((prevChar === '(' && nextChar === ')') || (prevChar === '[' && nextChar === ']'));
     });
     const quotes = [];
     const addDirectUnitQuote = token => {

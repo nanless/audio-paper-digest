@@ -1,6 +1,6 @@
 'use strict';
 // A capability for one complete literal PDF table; it never grants prose units.
-const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const fs = require('node:fs'), path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const formats = require('./protocol-codec');
@@ -33,50 +33,48 @@ function deriveBundle(expectation, view, quotes) {
         const api = require('./fresh-arxiv-rewrite-source'), before = api.readFreshArxivRewriteSource(expectation);
         const files = [domProgram, quoteProgram, literalProgram, geometryProgram], implementation = files.map(file => sha(fs.readFileSync(file)));
         const projectionSha256 = sha(fs.readFileSync(program));
-        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sealed-pdf-column-units-')); fs.chmodSync(directory, 0o700);
-        let fd;
-        try {
-            const filename = path.join(directory, 'input.json');
-            fs.writeFileSync(filename, JSON.stringify({ pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf),
-                tables: source.structuredArtifacts.tables, view, quotes }), { mode: 0o600 });
-            fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            const result = JSON.parse(require('./reader-pdf-extraction-scope').runPdfExtractor(program, fd, files));
-            const after = api.readFreshArxivRewriteSource(expectation);
-            const fields = ['contract', 'schemaFingerprint', 'eligible', ...(result?.eligible === true
-                ? ['originalEvidenceSha256', 'originalProof'] : ['reason'])];
-            if (!formats.isCurrentHeader(result, PROJECTION) || typeof result.eligible !== 'boolean'
-                || !isDeepStrictEqual(Object.keys(result).sort(), fields.sort())
-                || !isDeepStrictEqual(before.manifest, after.manifest)
-                || before.sourceManifestSha256 !== after.sourceManifestSha256
-                || !isDeepStrictEqual(before.runtimeDetails, after.runtimeDetails)
-                || sha(fs.readFileSync(program)) !== projectionSha256
-                || files.some((file,index) => sha(fs.readFileSync(file)) !== implementation[index])) throw new Error('Column unit source or implementation changed');
-            if (!result.eligible) return null;
-            const proof = result.originalProof;
-            if (!/^[a-f0-9]{64}$/.test(result.originalEvidenceSha256 || '')
-                || proof?.evidenceSha256 !== result.originalEvidenceSha256) throw new Error('Original PDF column proof digest differs');
-            if (proof?.contract === LITERAL_CONTRACT) {
-                if (proof.valueOrigin !== 'sealed_pdf' || proof.sourceBasis !== 'independent-complete-pdf-grid'
-                    || proof.pdfSha256 !== sha(before.pdf) || proof.viewSha256 !== stable(view)
-                    || !isDeepStrictEqual(proof.renderedView, view) || proof.sourceTableOrdinal !== undefined
-                    || !Array.isArray(proof.units) || !proof.units.length
-                    || proof.units.some(item => !literalUnitColumnAllowed(proof, view, item) || !Array.isArray(item.values)
-                        || !isDeepStrictEqual(item.values, view.slice(1).map(row => row[item.column]))
-                        || !/^(?:%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)$/.test(item.unit))
-                    || !Array.isArray(proof.rowIdentities) || proof.rowIdentities.length !== view.length - 1
-                    || !isDeepStrictEqual(proof.implementationFiles, files.map((file, index) =>
-                        ({ file: path.basename(file), sha256: implementation[index] })))
-                    || !Array.isArray(proof.quoteEvidence) || proof.quoteEvidence.length !== quotes.length)
-                    throw new Error('Independent sealed PDF column proof/source identity differs');
-                return structuredClone(proof);
-            }
-            const table = source.structuredArtifacts.tables.find(t => t.ordinal === proof.sourceTableOrdinal);
-            if (!table || proof.contract !== CONTRACT || proof.valueOrigin !== 'sealed_pdf'
-                || proof.pdfSha256 !== sha(before.pdf) || proof.sourceTableDomSha256 !== table.sourceDomSha256
-                || proof.sourceTableSha256 !== stable(table)
-                || proof.cells.length !== table.cells.length || !Array.isArray(proof.units)) throw new Error('Column unit proof/source identity differs');
+        const pdfSha256 = sha(before.pdf);
+        const result = JSON.parse(require('./reader-pdf-extraction-scope').runPdfExtractorJson(program, {
+            pdfBuffer: before.pdf,
+            pdfSha256,
+            meta: { pdfSha256, tables: source.structuredArtifacts.tables, view, quotes },
+            tmpPrefix: 'sealed-pdf-column-units-'
+        }, files));
+        const after = api.readFreshArxivRewriteSource(expectation);
+        const fields = ['contract', 'schemaFingerprint', 'eligible', ...(result?.eligible === true
+            ? ['originalEvidenceSha256', 'originalProof'] : ['reason'])];
+        if (!formats.isCurrentHeader(result, PROJECTION) || typeof result.eligible !== 'boolean'
+            || !isDeepStrictEqual(Object.keys(result).sort(), fields.sort())
+            || !isDeepStrictEqual(before.manifest, after.manifest)
+            || before.sourceManifestSha256 !== after.sourceManifestSha256
+            || !isDeepStrictEqual(before.runtimeDetails, after.runtimeDetails)
+            || sha(fs.readFileSync(program)) !== projectionSha256
+            || files.some((file,index) => sha(fs.readFileSync(file)) !== implementation[index])) throw new Error('Column unit source or implementation changed');
+        if (!result.eligible) return null;
+        const proof = result.originalProof;
+        if (!/^[a-f0-9]{64}$/.test(result.originalEvidenceSha256 || '')
+            || proof?.evidenceSha256 !== result.originalEvidenceSha256) throw new Error('Original PDF column proof digest differs');
+        if (proof?.contract === LITERAL_CONTRACT) {
+            if (proof.valueOrigin !== 'sealed_pdf' || proof.sourceBasis !== 'independent-complete-pdf-grid'
+                || proof.pdfSha256 !== pdfSha256 || proof.viewSha256 !== stable(view)
+                || !isDeepStrictEqual(proof.renderedView, view) || proof.sourceTableOrdinal !== undefined
+                || !Array.isArray(proof.units) || !proof.units.length
+                || proof.units.some(item => !literalUnitColumnAllowed(proof, view, item) || !Array.isArray(item.values)
+                    || !isDeepStrictEqual(item.values, view.slice(1).map(row => row[item.column]))
+                    || !/^(?:%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)$/.test(item.unit))
+                || !Array.isArray(proof.rowIdentities) || proof.rowIdentities.length !== view.length - 1
+                || !isDeepStrictEqual(proof.implementationFiles, files.map((file, index) =>
+                    ({ file: path.basename(file), sha256: implementation[index] })))
+                || !Array.isArray(proof.quoteEvidence) || proof.quoteEvidence.length !== quotes.length)
+                throw new Error('Independent sealed PDF column proof/source identity differs');
             return structuredClone(proof);
-        } finally { if (fd !== undefined) fs.closeSync(fd); fs.rmSync(directory, { recursive: true, force: true }); }
+        }
+        const table = source.structuredArtifacts.tables.find(t => t.ordinal === proof.sourceTableOrdinal);
+        if (!table || proof.contract !== CONTRACT || proof.valueOrigin !== 'sealed_pdf'
+            || proof.pdfSha256 !== pdfSha256 || proof.sourceTableDomSha256 !== table.sourceDomSha256
+            || proof.sourceTableSha256 !== stable(table)
+            || proof.cells.length !== table.cells.length || !Array.isArray(proof.units)) throw new Error('Column unit proof/source identity differs');
+        return structuredClone(proof);
     });
 }
 function coverage(table, quotes) {
@@ -85,7 +83,7 @@ function coverage(table, quotes) {
     const pdf = quotes.filter(quoteApi.isQuote);
     if (!pdf.length) return [];
     // Every bound quote is replayed; a model string/boolean cannot claim this capability.
-    pdf.forEach(proof => quoteApi.assertQuoteEvidence(proof));
+    quoteApi.assertQuoteEvidences(pdf);
     const proof = deriveBundle(context.expectation, [table.header, ...table.rows], pdf.map(item => item.quote));
     return proof ? proof.units.flatMap(item => item.values.map((value,index) => ({ row:index+1, column:item.column, value, unit:item.unit }))) : [];
 }

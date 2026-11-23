@@ -5,7 +5,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, spawn } = require('node:child_process');
 const { requireExternalRuntime } = require('./env-loader.js');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -153,7 +153,79 @@ function assertPinnedHugo(options = {}) {
     return output;
 }
 
-function main(args = process.argv.slice(2)) {
+const PARALLEL_SYNTAX_GROUPS = new Set(['JavaScript 语法检查', 'Shell 语法检查']);
+
+function executeStepAsync(step, options = {}) {
+    return new Promise((resolve, reject) => {
+        const child = (options.spawnAsync || spawn)(step.command, step.args, {
+            cwd: options.root || PROJECT_ROOT,
+            env: options.env || process.env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            shell: false
+        });
+        let stderr = '';
+        let truncated = false;
+        const maxBytes = 64 * 1024;
+        if (child.stderr) {
+            child.stderr.setEncoding('utf8');
+            child.stderr.on('data', chunk => {
+                if (truncated) return;
+                if (stderr.length + chunk.length > maxBytes) {
+                    stderr += chunk.slice(0, maxBytes - stderr.length);
+                    truncated = true;
+                } else {
+                    stderr += chunk;
+                }
+            });
+        }
+        // Drain stdout so child cannot block on a full pipe buffer.
+        if (child.stdout) child.stdout.resume();
+        let settled = false;
+        const finishError = detail => {
+            if (settled) return;
+            settled = true;
+            reject(new Error(`${step.group} 失败 (${detail}): ${step.command} ${step.args.join(' ')}\n${stderr.trim()}`));
+        };
+        child.on('error', err => finishError(err?.message || 'spawn error'));
+        child.on('close', (code, signal) => {
+            if (settled) return;
+            if (signal || code !== 0) {
+                finishError(signal || `退出码 ${code}`);
+            } else {
+                settled = true;
+                resolve({ status: 0, stderr });
+            }
+        });
+    });
+}
+
+async function executeSyntaxStepsParallel(steps, options = {}) {
+    const cpuCount = typeof os.availableParallelism === 'function' ? os.availableParallelism() : (os.cpus()?.length || 4);
+    const requested = Number.isInteger(options.concurrency) && options.concurrency > 0
+        ? options.concurrency
+        : Math.min(16, Math.max(2, cpuCount));
+    const concurrency = Math.max(1, Math.min(steps.length, requested));
+    let cursor = 0;
+    let firstError = null;
+    const workers = Array.from({ length: concurrency }, async () => {
+        while (cursor < steps.length && !firstError) {
+            const step = steps[cursor++];
+            try {
+                await executeStepAsync(step, {
+                    ...options,
+                    env: { ...(options.env || process.env), ...(step.env || {}) }
+                });
+            } catch (error) {
+                if (!firstError) firstError = error;
+                break;
+            }
+        }
+    });
+    await Promise.all(workers);
+    if (firstError) throw firstError;
+}
+
+async function main(args = process.argv.slice(2)) {
     requireExternalRuntime('verify-project.js');
     const options = parseOptions(args);
     if (options.help) {
@@ -172,11 +244,22 @@ function main(args = process.argv.slice(2)) {
     try {
         const env = { ...process.env, PYTHONPYCACHEPREFIX: cacheDirectory,
             ...(!options.quick ? { REQUIRE_HUGO_INTEGRATION_TESTS: '1' } : {}) };
+        let index = 0;
         let previousGroup = null;
-        for (const step of plan) {
+        while (index < plan.length) {
+            const step = plan[index];
             if (step.group !== previousGroup) console.log(`[verify] ${step.group}`);
             previousGroup = step.group;
-            executeCommand(step, { env: { ...env, ...(step.env || {}) } });
+            if (PARALLEL_SYNTAX_GROUPS.has(step.group)) {
+                const batch = [];
+                while (index < plan.length && plan[index].group === step.group) {
+                    batch.push(plan[index++]);
+                }
+                await executeSyntaxStepsParallel(batch, { env });
+            } else {
+                executeCommand(step, { env: { ...env, ...(step.env || {}) } });
+                index += 1;
+            }
         }
         console.log(`[verify] ${options.quick ? '快速检查' : partial ? '分套件验证' : '完整验证'}通过。`);
     } finally {
@@ -185,11 +268,10 @@ function main(args = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-    try { main(); }
-    catch (error) {
+    Promise.resolve(main()).catch(error => {
         console.error(`[verify] ${error.message}`);
         process.exitCode = 1;
-    }
+    });
 }
 
-module.exports = { HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, assertPinnedHugo, javascriptShardArguments };
+module.exports = { HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, executeSyntaxStepsParallel, assertPinnedHugo, javascriptShardArguments };

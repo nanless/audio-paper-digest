@@ -1,7 +1,7 @@
 'use strict';
 // Separate PDF quotation origin; it never changes HTML evidence or an input identity.
 const { isFreshSourceProvenance } = require('./daily-source-format');
-const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const fs = require('node:fs'), path = require('node:path');
 const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
@@ -50,38 +50,34 @@ function deriveBundle(expectation, quotes = [], operation = null, requested = fo
         const api = require('./fresh-arxiv-rewrite-source'), before = api.readFreshArxivRewriteSource(expectation);
         const files = extractionInputs(current);
         const implementation = files.map(file => sha(fs.readFileSync(file)));
-        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sealed-pdf-quotes-'));
-        fs.chmodSync(directory, 0o700);
-        const file = path.join(directory, 'private-input.json'); let fd;
-        try {
-            const wireOperation = !operation ? {} : { operation: current ? operation
-                : codec.historicalContract('reader-pdf-scientific-extraction-operation', 'glyph-atoms') };
-            fs.writeFileSync(file, JSON.stringify({ ...wireOperation, pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf), quotes }), { mode: 0o600 });
-            fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            const raw = require('./reader-pdf-extraction-scope').runPdfExtractor(extractor, fd, files.filter(file => file !== extractor));
-            const response = JSON.parse(raw), after = api.readFreshArxivRewriteSource(expectation);
-            if (!isDeepStrictEqual(format.readHeader(response, responseFamily), responseHeader)
-                || !isDeepStrictEqual(format.readHeader(response.document, CONTRACT), header)
-                || response.document.pdfSha256 !== sha(before.pdf) || !Array.isArray(response.results) || response.results.length !== quotes.length
-                || !isDeepStrictEqual(before.manifest, after.manifest) || before.sourceManifestSha256 !== after.sourceManifestSha256
-                || stable(before.runtimeDetails) !== stable(after.runtimeDetails)
-                || !isDeepStrictEqual(extractionInputs(current), files)
-                || files.some((file, index) => sha(fs.readFileSync(file)) !== implementation[index])) throw new Error('PDF quotation source or extraction program changed');
-            if (response.document.available && (sha(response.document.rawFullText) !== response.document.rawFullTextSha256
-                || sha(response.document.normalizedFullText) !== response.document.normalizedFullTextSha256)) throw new Error('PDF text projection hash differs');
-            for (const result of response.results.filter(r => r.eligible)) {
-                const proof = result.evidence;
-                if (!isDeepStrictEqual(format.readHeader(proof, CONTRACT), header) || proof.valueOrigin !== 'sealed_pdf' || proof.pdfSha256 !== response.document.pdfSha256
-                    || proof.rawFullTextSha256 !== response.document.rawFullTextSha256
-                    || proof.normalizedFullTextSha256 !== response.document.normalizedFullTextSha256
-                    || sha(proof.quote) !== proof.quoteSha256 || sha(proof.rawFragment) !== proof.rawFragmentSha256
-                    || !isDeepStrictEqual(proof.extraction, response.document.extraction)) throw new Error('PDF quote evidence identity differs');
-            }
-            return { ...response, sourceDescriptor: source.freshSourceDescriptor };
-        } finally {
-            if (fd !== undefined) fs.closeSync(fd);
-            fs.rmSync(directory, { recursive: true, force: true });
+        const pdfSha256 = sha(before.pdf);
+        const wireOperation = !operation ? {} : { operation: current ? operation
+            : codec.historicalContract('reader-pdf-scientific-extraction-operation', 'glyph-atoms') };
+        const raw = require('./reader-pdf-extraction-scope').runPdfExtractorJson(extractor, {
+            pdfBuffer: before.pdf,
+            pdfSha256,
+            meta: { ...wireOperation, pdfSha256, quotes },
+            tmpPrefix: 'sealed-pdf-quotes-'
+        }, files.filter(file => file !== extractor));
+        const response = JSON.parse(raw), after = api.readFreshArxivRewriteSource(expectation);
+        if (!isDeepStrictEqual(format.readHeader(response, responseFamily), responseHeader)
+            || !isDeepStrictEqual(format.readHeader(response.document, CONTRACT), header)
+            || response.document.pdfSha256 !== pdfSha256 || !Array.isArray(response.results) || response.results.length !== quotes.length
+            || !isDeepStrictEqual(before.manifest, after.manifest) || before.sourceManifestSha256 !== after.sourceManifestSha256
+            || stable(before.runtimeDetails) !== stable(after.runtimeDetails)
+            || !isDeepStrictEqual(extractionInputs(current), files)
+            || files.some((file, index) => sha(fs.readFileSync(file)) !== implementation[index])) throw new Error('PDF quotation source or extraction program changed');
+        if (response.document.available && (sha(response.document.rawFullText) !== response.document.rawFullTextSha256
+            || sha(response.document.normalizedFullText) !== response.document.normalizedFullTextSha256)) throw new Error('PDF text projection hash differs');
+        for (const result of response.results.filter(r => r.eligible)) {
+            const proof = result.evidence;
+            if (!isDeepStrictEqual(format.readHeader(proof, CONTRACT), header) || proof.valueOrigin !== 'sealed_pdf' || proof.pdfSha256 !== response.document.pdfSha256
+                || proof.rawFullTextSha256 !== response.document.rawFullTextSha256
+                || proof.normalizedFullTextSha256 !== response.document.normalizedFullTextSha256
+                || sha(proof.quote) !== proof.quoteSha256 || sha(proof.rawFragment) !== proof.rawFragmentSha256
+                || !isDeepStrictEqual(proof.extraction, response.document.extraction)) throw new Error('PDF quote evidence identity differs');
         }
+        return { ...response, sourceDescriptor: source.freshSourceDescriptor };
     });
 }
 
@@ -130,13 +126,63 @@ function evidenceForQuotes(quotes) {
     return response.results.map(r => structuredClone(r.evidence));
 }
 function quoteEvidence(quote) { return evidenceForQuotes([quote])[0]; }
+function lookupVerifiedProof(active, headerKey, proof) {
+    if (!active?.verifiedProofs || typeof proof?.quote !== 'string') return false;
+    const verified = active.verifiedProofs.get(`${headerKey}\0${proof.quote}`);
+    return Boolean(verified && isDeepStrictEqual(verified, proof));
+}
 function assertQuoteEvidence(proof) {
     const active = scope.getStore();
     const header = format.readHeader(proof, CONTRACT);
     if (!active) throw new Error('PDF quotation requires the actual verified source scope');
+    if (lookupVerifiedProof(active, stable(header), proof)) return true;
     const actual = isDeepStrictEqual(header, active.header) ? quoteEvidence(proof.quote)
         : deriveBundle(active.expectation, [proof.quote], null, header).results[0]?.evidence;
     if (!isDeepStrictEqual(actual, proof)) throw new Error('PDF quotation proof differs from the actual sealed PDF');
+    return true;
+}
+function assertQuoteEvidences(proofs) {
+    if (!Array.isArray(proofs)) throw new Error('Expected array of sealed PDF quote proofs');
+    if (proofs.length === 0) return true;
+    if (proofs.length === 1) return assertQuoteEvidence(proofs[0]);
+    const active = scope.getStore();
+    if (!active) throw new Error('PDF quotation requires the actual verified source scope');
+    const groups = new Map();
+    for (const proof of proofs) {
+        const header = format.readHeader(proof, CONTRACT);
+        const key = stable(header);
+        if (lookupVerifiedProof(active, key, proof)) continue;
+        if (!groups.has(key)) groups.set(key, { header, items: [] });
+        groups.get(key).items.push(proof);
+    }
+    for (const { header, items } of groups.values()) {
+        const sameHeader = isDeepStrictEqual(header, active.header);
+        const uniqueQuotes = [];
+        const seen = new Set();
+        for (const proof of items) {
+            if (typeof proof?.quote !== 'string') throw new Error('PDF quotation proof differs from the actual sealed PDF');
+            if (!seen.has(proof.quote)) {
+                seen.add(proof.quote);
+                uniqueQuotes.push(proof.quote);
+            }
+        }
+        const actualByQuote = new Map();
+        for (let offset = 0; offset < uniqueQuotes.length; offset += 64) {
+            const batch = uniqueQuotes.slice(offset, offset + 64);
+            if (sameHeader) {
+                const evidences = evidenceForQuotes(batch);
+                batch.forEach((quote, idx) => actualByQuote.set(quote, evidences[idx]));
+            } else {
+                const response = deriveBundle(active.expectation, batch, null, header);
+                batch.forEach((quote, idx) => actualByQuote.set(quote, response.results[idx]?.evidence));
+            }
+        }
+        for (const proof of items) {
+            if (!isDeepStrictEqual(actualByQuote.get(proof.quote), proof)) {
+                throw new Error('PDF quotation proof differs from the actual sealed PDF');
+            }
+        }
+    }
     return true;
 }
 
@@ -200,11 +246,13 @@ function withSavedPaper(paper, callback) {
     }
     const response = deriveBundle(expectation, all.map(evidence => evidence.quote), null, header);
     if (response.results.some((entry, index) => !entry.eligible || !isDeepStrictEqual(entry.evidence, all[index]))) throw new Error('Saved PDF quotation cannot be replayed');
-    return scope.run({ artifacts: source.structuredArtifacts, expectation, sourceText: source.text, document: response.document, header }, callback);
+    const headerKey = stable(header);
+    const verifiedProofs = new Map(response.results.map(entry => [`${headerKey}\0${entry.evidence.quote}`, structuredClone(entry.evidence)]));
+    return scope.run({ artifacts: source.structuredArtifacts, expectation, sourceText: source.text, document: response.document, header, verifiedProofs }, callback);
 }
 
 const extractionScope = callback => require('./reader-pdf-extraction-scope').withPdfExtractionScope(callback);
 module.exports = { CONTRACT, isQuote, deriveBundle, withArtifacts: (...args) => extractionScope(() => withArtifacts(...args)),
-    document, originalRequestDocument, evidenceForQuotes, quoteEvidence, assertQuoteEvidence,
+    document, originalRequestDocument, evidenceForQuotes, quoteEvidence, assertQuoteEvidence, assertQuoteEvidences,
     withSavedPaper: (...args) => extractionScope(() => withSavedPaper(...args)), verifiedSourceContext,
     scientificCoverageForQuotes, readScientificCoverage };

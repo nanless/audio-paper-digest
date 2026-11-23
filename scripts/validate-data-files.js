@@ -11,9 +11,12 @@ const Config = require('./config.js');
 const { validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const { KEYWORD_PREFILTER_PROFILE } = require('./lib/keyword-prefilter.js');
 const { originalKeywordMetadata } = require('./lib/workflow-legacy-codec');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
+const { hasScoringAuditFormat } = require('./lib/scoring-record-format.js');
+const { withPdfExtractionScope } = require('./lib/reader-pdf-extraction-scope.js');
 const {
-    readJsonSafe,
+    readJsonSafe: rawReadJsonSafe,
     normalizedId,
     isWithinBatchDateGrace,
     DOCUMENT_TYPES,
@@ -43,11 +46,52 @@ const {
 } = require('./analysis-contract.js');
 const {
     getAnalysisRunSummary,
-    getReadOnlyValidationAnalysisRunSummary,
+    getReadOnlyValidationAnalysisRunSummary: rawGetReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
     scoringStabilityIsResolved,
-    hasValidIntegratedApiReaderRecords
+    hasValidIntegratedApiReaderRecords: rawHasValidIntegratedApiReaderRecords
 } = require('./analysis-engine.js');
+const validationRunCache = new AsyncLocalStorage();
+function readJsonSafe(filePath, fallback = null) {
+    const store = validationRunCache.getStore();
+    if (!store || !filePath) return rawReadJsonSafe(filePath, fallback);
+    const resolved = path.resolve(filePath);
+    const sentinel = Symbol.for('validate-data-files.fallback');
+    if (store.jsonByPath.has(resolved)) {
+        const cached = store.jsonByPath.get(resolved);
+        return cached === sentinel ? fallback : cached;
+    }
+    const parsed = rawReadJsonSafe(filePath, sentinel);
+    store.jsonByPath.set(resolved, parsed);
+    return parsed === sentinel ? fallback : parsed;
+}
+function hasValidIntegratedApiReaderRecords(paper, options) {
+    const store = validationRunCache.getStore();
+    if (!store || options !== undefined || !paper || typeof paper !== 'object') {
+        return rawHasValidIntegratedApiReaderRecords(paper, options);
+    }
+    if (store.validReaderByPaper.has(paper)) return store.validReaderByPaper.get(paper);
+    const valid = rawHasValidIntegratedApiReaderRecords(paper);
+    store.validReaderByPaper.set(paper, valid);
+    return valid;
+}
+function getReadOnlyValidationAnalysisRunSummary(papers) {
+    const store = validationRunCache.getStore();
+    if (!store || !Array.isArray(papers) || papers.length !== 1 || !papers[0] || typeof papers[0] !== 'object') {
+        return rawGetReadOnlyValidationAnalysisRunSummary(papers);
+    }
+    const paper = papers[0];
+    if (store.readOnlySummaryByPaper.has(paper)) return store.readOnlySummaryByPaper.get(paper);
+    const summary = rawGetReadOnlyValidationAnalysisRunSummary(papers);
+    store.readOnlySummaryByPaper.set(paper, summary);
+    // Both isSuccessfulAnalysisRecord (when hasScoringAuditFormat is true) and
+    // isLegacyApiAnalysisSuccessForReadOnlyValidation unconditionally prove
+    // hasValidIntegratedApiReaderRecords(paper) === true inside this read-only run.
+    if (summary.success === 1 && hasScoringAuditFormat(paper.analysisManifest?.stages?.scoringAudit)) {
+        store.validReaderByPaper.set(paper, true);
+    }
+    return summary;
+}
 const {
     MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
     validateManualPaperSourceIdentity
@@ -1951,35 +1995,41 @@ function currentAnalysisWaiverContext(files = Config.FILES) {
 }
 
 function validateCurrentDataFiles(files = Config.FILES) {
-    const filterDecisions = resolveFilterDecisionsPath(files);
-    const companionAnchor = files.rawCandidates || files.filteredPapers || files.filterDecisions
-        || files.deepAnalysisResult || files.papers;
-    const fetchCheckpoint = files.fetchCheckpoint || (
-        companionAnchor ? path.join(path.dirname(companionAnchor), 'fetch-checkpoint.json') : null
-    );
-    const analysisWaiverContext = currentAnalysisWaiverContext(files);
-    return [
-        ...analysisWaiverContext.issues.map(issue => `${path.basename(files.deepAnalysisResult || 'deep-analysis-result.json')}: ${issue}`),
-        ...validatePapersDatabase(files.papers || null),
-        ...validateFetchCheckpointFile(fetchCheckpoint),
-        ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
-        ...validateFilterDecisionsFile(filterDecisions),
-        ...validatePaperListFile(files.filteredPapers, { filtered: true }),
-        ...validatePaperListFile(files.deepAnalysisResult, {
-            deepAnalysis: true,
-            analysisWaiver: analysisWaiverContext.waiver,
-            allowLegacyCoreSummarySuccess: true,
-            dailyFreshSourceRunsDir: files.dailyFreshSourceRunsDir
-        }),
-        ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
-        ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),
-        ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
-        ...validateCompleteFilterCompanionContract(files, filterDecisions, fetchCheckpoint),
-        ...validateRequiredCompanionFiles(files, filterDecisions),
-        ...validateFilteredDeepPapersConsistency(files, {
-            analysisWaiver: analysisWaiverContext.waiver
-        })
-    ];
+    return withPdfExtractionScope(() => validationRunCache.run({
+        jsonByPath: new Map(),
+        validReaderByPaper: new WeakMap(),
+        readOnlySummaryByPaper: new WeakMap()
+    }, () => {
+        const filterDecisions = resolveFilterDecisionsPath(files);
+        const companionAnchor = files.rawCandidates || files.filteredPapers || files.filterDecisions
+            || files.deepAnalysisResult || files.papers;
+        const fetchCheckpoint = files.fetchCheckpoint || (
+            companionAnchor ? path.join(path.dirname(companionAnchor), 'fetch-checkpoint.json') : null
+        );
+        const analysisWaiverContext = currentAnalysisWaiverContext(files);
+        return [
+            ...analysisWaiverContext.issues.map(issue => `${path.basename(files.deepAnalysisResult || 'deep-analysis-result.json')}: ${issue}`),
+            ...validatePapersDatabase(files.papers || null),
+            ...validateFetchCheckpointFile(fetchCheckpoint),
+            ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
+            ...validateFilterDecisionsFile(filterDecisions),
+            ...validatePaperListFile(files.filteredPapers, { filtered: true }),
+            ...validatePaperListFile(files.deepAnalysisResult, {
+                deepAnalysis: true,
+                analysisWaiver: analysisWaiverContext.waiver,
+                allowLegacyCoreSummarySuccess: true,
+                dailyFreshSourceRunsDir: files.dailyFreshSourceRunsDir
+            }),
+            ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
+            ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),
+            ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
+            ...validateCompleteFilterCompanionContract(files, filterDecisions, fetchCheckpoint),
+            ...validateRequiredCompanionFiles(files, filterDecisions),
+            ...validateFilteredDeepPapersConsistency(files, {
+                analysisWaiver: analysisWaiverContext.waiver
+            })
+        ];
+    }));
 }
 
 function hasAnyCurrentDataFiles(files = Config.FILES) {

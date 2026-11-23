@@ -384,7 +384,7 @@ function coverage(rendered, quotes) {
         && /^\(/u.test(String(table?.matrix?.[2]?.[0] || '').trim()));
     if (pdf.length && hasVectorGrid) {
         const quoteApi = require('./reader-sealed-pdf-quote-evidence');
-        pdf.forEach(proof => quoteApi.assertQuoteEvidence(proof));
+        quoteApi.assertQuoteEvidences(pdf);
         const verified = quoteApi.verifiedSourceContext();
         const original = require('./fresh-arxiv-rewrite-source').readFreshArxivRewriteSource(verified.expectation);
         if (!require('node:util').isDeepStrictEqual(original.runtimeDetails.structuredArtifacts, context.artifacts)

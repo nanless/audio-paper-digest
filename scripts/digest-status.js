@@ -107,6 +107,9 @@ async function verifyPapersBackup(backupPath, options = {}) {
             || sha256Buffer(compressed) !== manifest.compressedSha256) {
             throw new Error(`论文库备份的压缩字节与清单不一致: ${resolved}`);
         }
+        if (options.compressedOnly === true) {
+            return { backupPath: resolved, manifestPath, manifest, data: null, sourceSha256: manifest.sourceSha256 };
+        }
         const maxRawBytes = Math.min(
             Number.isInteger(options.maxRawBytes) ? options.maxRawBytes : PAPERS_BACKUP_MAX_RAW_BYTES,
             manifest.sourceBytes + 1
@@ -136,7 +139,7 @@ async function verifyPapersBackup(backupPath, options = {}) {
     };
 }
 
-async function listValidManagedBackupGroups(archiveDir) {
+async function listValidManagedBackupGroups(archiveDir, options = {}) {
     let names = [];
     try {
         names = await fs.promises.readdir(archiveDir);
@@ -144,12 +147,21 @@ async function listValidManagedBackupGroups(archiveDir) {
         if (error.code === 'ENOENT') return [];
         throw error;
     }
+    const preVerified = options.preVerified instanceof Map ? options.preVerified : null;
     const groups = [];
     for (const manifestName of names.filter(name => /^papers-\d{4}-\d{2}-\d{2}\.json\.gz\.manifest\.json$/.test(name))) {
         const manifestPath = path.join(archiveDir, manifestName);
         const backupPath = manifestPath.slice(0, -'.manifest.json'.length);
+        const reused = preVerified?.get(backupPath);
+        if (reused && reused.manifestPath === manifestPath) {
+            groups.push(reused);
+            continue;
+        }
         try {
-            const verified = await verifyPapersBackup(backupPath, { manifestPath });
+            const verified = await verifyPapersBackup(backupPath, {
+                manifestPath,
+                compressedOnly: options.compressedOnly === true
+            });
             groups.push({
                 backupPath,
                 manifestPath,
@@ -163,8 +175,10 @@ async function listValidManagedBackupGroups(archiveDir) {
     return groups.sort((a, b) => b.createdAt - a.createdAt || b.backupPath.localeCompare(a.backupPath));
 }
 
-async function pruneManagedBackupGroups(archiveDir, maxGroups = PAPERS_BACKUP_MAX_GROUPS) {
-    const groups = await listValidManagedBackupGroups(archiveDir);
+async function pruneManagedBackupGroups(archiveDir, maxGroups = PAPERS_BACKUP_MAX_GROUPS, options = {}) {
+    const groups = await listValidManagedBackupGroups(archiveDir, {
+        preVerified: options.preVerified instanceof Map ? options.preVerified : undefined
+    });
     const removed = [];
     for (const group of groups.slice(maxGroups)) {
         await fs.promises.unlink(group.manifestPath);
@@ -195,19 +209,34 @@ async function backupPapersJson(papersFilePath, archiveDir, options = {}) {
         const manifestPath = `${backupPath}.manifest.json`;
         await fs.promises.mkdir(targetDir, { recursive: true });
 
-        const existingGroups = await listValidManagedBackupGroups(targetDir);
+        const existingGroups = await listValidManagedBackupGroups(targetDir, { compressedOnly: true });
+        const invalidBackupPaths = new Set();
         const sameDay = existingGroups.find(group => group.backupPath === backupPath);
         if (sameDay) {
-            return { backedUp: false, backupPath, manifestPath, message: `今日可验证备份已存在: ${backupName}` };
+            try {
+                await verifyPapersBackup(sameDay.backupPath, { manifestPath: sameDay.manifestPath });
+                return { backedUp: false, backupPath, manifestPath, message: `今日可验证备份已存在: ${backupName}` };
+            } catch (_) {
+                // 当日同名备份解压损坏时，不信任该条并继续创建/核验有效备份。
+                invalidBackupPaths.add(sameDay.backupPath);
+            }
         }
-        const duplicate = existingGroups.find(group => group.manifest.sourceSha256 === sourceSha256);
-        if (duplicate) {
-            return {
-                backedUp: false,
-                duplicateOf: duplicate.backupPath,
-                sourceSha256,
-                message: `papers.json 与已验证备份相同，跳过重复压缩: ${path.basename(duplicate.backupPath)}`
-            };
+        for (const duplicate of existingGroups) {
+            if (invalidBackupPaths.has(duplicate.backupPath) || duplicate.manifest.sourceSha256 !== sourceSha256) {
+                continue;
+            }
+            try {
+                await verifyPapersBackup(duplicate.backupPath, { manifestPath: duplicate.manifestPath });
+                return {
+                    backedUp: false,
+                    duplicateOf: duplicate.backupPath,
+                    sourceSha256,
+                    message: `papers.json 与已验证备份相同，跳过重复压缩: ${path.basename(duplicate.backupPath)}`
+                };
+            } catch (_) {
+                // 候选重复备份解压校验失败时，不信任该条也不将其计入有效保留组。
+                invalidBackupPaths.add(duplicate.backupPath);
+            }
         }
 
         const suffix = `${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}`;
@@ -250,12 +279,23 @@ async function backupPapersJson(papersFilePath, archiveDir, options = {}) {
             manifestPublished = true;
             await fsyncDirectory(targetDir);
             await verifyPapersBackup(backupPath, { manifestPath });
-            const removed = await pruneManagedBackupGroups(
-                targetDir,
-                Number.isInteger(options.maxGroups) && options.maxGroups > 0
-                    ? options.maxGroups
-                    : PAPERS_BACKUP_MAX_GROUPS
-            );
+            const effectiveMaxGroups = Number.isInteger(options.maxGroups) && options.maxGroups > 0
+                ? options.maxGroups
+                : PAPERS_BACKUP_MAX_GROUPS;
+            const candidateCount = existingGroups.filter(
+                group => group.backupPath !== backupPath && !invalidBackupPaths.has(group.backupPath)
+            ).length + 1;
+            // 未超过保留上限时无需解压旧组；一旦超过上限，严格走完整解压校验后再统计与清理超额有效组。
+            const removed = candidateCount > effectiveMaxGroups
+                ? await pruneManagedBackupGroups(targetDir, effectiveMaxGroups, {
+                    preVerified: new Map([[backupPath, {
+                        backupPath,
+                        manifestPath,
+                        manifest,
+                        createdAt: Date.parse(manifest.createdAt) || 0
+                    }]])
+                })
+                : [];
             return {
                 backedUp: true,
                 backupPath,

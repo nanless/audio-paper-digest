@@ -1,12 +1,18 @@
 'use strict';
 // Only pure extractor stdout is reused inside one Reader check.
 // Source authentication and every proof/cell comparison stay with the callers.
-const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 const child = require('node:child_process'), { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage(), root = path.resolve(__dirname, '../..');
 const MAX_BYTES = 32 * 1024 * 1024, MAX_ENTRIES = 128;
 const extractors = new Map([
+    [path.join(root, 'scripts/reader_sealed_pdf_table_evidence.py'),
+        [path.join(root, 'scripts/reader_proof_format.py'),
+            path.join(root, 'scripts/protocol_codec.py'), path.join(root, 'scripts/git_file_bytes.py')]],
     [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py'), []],
+    [path.join(root, 'scripts/reader_pdf_quote_projection.py'),
+        [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py'),
+            path.join(root, 'scripts/protocol_codec.py'), path.join(root, 'scripts/git_file_bytes.py')]],
     [path.join(root, 'scripts/reader_sealed_pdf_column_units.py'),
         [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]],
     [path.join(root, 'scripts/reader_pdf_column_unit_projection.py'),
@@ -15,6 +21,27 @@ const extractors = new Map([
         [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]],
     [path.join(root, 'scripts/reader_authenticated_pdf_footnote_evidence.py'), []]
 ]);
+function protocolCatalogFiles() {
+    const catalog = path.join(root, 'config/protocols');
+    return fs.readdirSync(catalog).filter(name => name.endsWith('.json')).sort().map(name => path.join(catalog, name));
+}
+const protocolCatalogExtractors = new Set([
+    path.join(root, 'scripts/reader_sealed_pdf_table_evidence.py'),
+    path.join(root, 'scripts/reader_pdf_quote_projection.py'),
+    path.join(root, 'scripts/reader_pdf_column_unit_projection.py')
+]);
+function extractorDependencyFiles(program, dependencies = []) {
+    return [...new Set([
+        program,
+        ...(extractors.get(program) || []),
+        ...(protocolCatalogExtractors.has(program) ? protocolCatalogFiles() : []),
+        ...dependencies,
+        path.join(root, 'scripts/python-runtime.sh'),
+        path.join(root, 'scripts/runtime_guard.py'),
+        path.join(root, '.paper-digest-workspace-role.json'),
+        path.join(root, '.env')
+    ])];
+}
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const DISTUTILS_STARTUP = "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n";
 function withPdfExtractionScope(callback) {
@@ -137,8 +164,7 @@ function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKno
         if (!count) throw new Error('PDF extractor input changed while reading');
         offset += count;
     }
-    const files = [...new Set([program, ...extractors.get(program), ...dependencies, wrapper, path.join(root, 'scripts/runtime_guard.py'),
-        path.join(root, '.paper-digest-workspace-role.json'), path.join(root, '.env')])];
+    const files = extractorDependencyFiles(program, dependencies);
     const implementations = files.map(file => [file, sha(fs.readFileSync(file))]);
     const key = sha(JSON.stringify({ input: sha(input), implementations, runtime, env }));
     const cached = active.entries.get(key);
@@ -151,5 +177,62 @@ function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKno
     }
     return raw;
 }
-module.exports = { withPdfExtractionScope, runPdfExtractor, runAuthenticatedPdfQuoteExtractor,
+function runPdfExtractorJson(program, { pdfBuffer, pdfSha256, meta, tmpPrefix = 'sealed-pdf-extractor-' }, dependencies = []) {
+    require('../env-loader').requireExternalRuntime('reader-pdf-extraction-scope');
+    require('../workspace-role').requireWorkspaceRole('daily', root);
+    if (!Buffer.isBuffer(pdfBuffer) || typeof pdfSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(pdfSha256)
+        || sha(pdfBuffer) !== pdfSha256) {
+        throw new Error('PDF extractor binary payload SHA mismatch');
+    }
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)
+        || Object.prototype.hasOwnProperty.call(meta, 'pdfBase64')
+        || typeof meta.toJSON === 'function') {
+        throw new Error('Invalid PDF extractor JSON metadata');
+    }
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_SANDBOX: process.env.CODEX_SANDBOX || '' };
+    const wrapper = path.join(root, 'scripts/python-runtime.sh');
+    const active = scope.getStore();
+    let cacheKey = null;
+    if (active?.active && extractors.has(program) && pdfBuffer.length <= 72 * 1024 * 1024) {
+        const runtime = runtimeIdentity();
+        if (runtime) {
+            const files = extractorDependencyFiles(program, dependencies);
+            const implementations = files.map(file => [file, sha(fs.readFileSync(file))]);
+            cacheKey = sha(JSON.stringify({
+                format: 'json-with-pdf-v1',
+                pdfSha256,
+                metaSha256: sha(JSON.stringify(meta)),
+                implementations,
+                runtime,
+                env
+            }));
+            const cached = active.entries.get(cacheKey);
+            if (cached) return Buffer.from(cached);
+        }
+    }
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix));
+    fs.chmodSync(directory, 0o700);
+    const filename = path.join(directory, 'private-input.json');
+    let fd;
+    let raw;
+    try {
+        fs.writeFileSync(filename, JSON.stringify({ ...meta, pdfBase64: pdfBuffer.toString('base64') }), { mode: 0o600 });
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        raw = child.execFileSync('bash', [wrapper, program, '3'], {
+            cwd: root, timeout: 60000, maxBuffer: MAX_BYTES, stdio: ['ignore', 'pipe', 'pipe', fd], env
+        });
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+    if (cacheKey) {
+        // Errors, truncation and malformed JSON never become cached responses.
+        JSON.parse(raw);
+        if (raw.length <= MAX_BYTES && active.entries.size < MAX_ENTRIES && active.bytes + raw.length <= MAX_BYTES) {
+            active.entries.set(cacheKey, Buffer.from(raw)); active.bytes += raw.length;
+        }
+    }
+    return raw;
+}
+module.exports = { withPdfExtractionScope, runPdfExtractor, runPdfExtractorJson, runAuthenticatedPdfQuoteExtractor,
     runAuthenticatedPdfHierarchicalTableExtractor, runAuthenticatedPdfFootnoteExtractor };
