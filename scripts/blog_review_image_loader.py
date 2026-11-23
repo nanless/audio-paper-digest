@@ -685,7 +685,28 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
                 page = context.new_page()
                 page.route('**/*', lambda route: route.abort())
                 page.set_content(html, wait_until='load', timeout=30_000)
-                png = page.locator('#figure').screenshot(
+                locator = page.locator('#figure')
+                box = locator.bounding_box()
+                scale = 1
+                if box and box.get('width', 0) > 0 and box.get('height', 0) > 0:
+                    if max(box['width'], box['height']) < 800:
+                        scale = min(
+                            3,
+                            max(1, int(1600 // box['width'])),
+                            max(1, int(1200 // box['height'])),
+                        )
+                if scale > 1:
+                    context.close()
+                    context = browser.new_context(
+                        viewport={'width': 1600, 'height': 1200},
+                        device_scale_factor=scale,
+                        java_script_enabled=False,
+                    )
+                    page = context.new_page()
+                    page.route('**/*', lambda route: route.abort())
+                    page.set_content(html, wait_until='load', timeout=30_000)
+                    locator = page.locator('#figure')
+                png = locator.screenshot(
                     type='png', animations='disabled', timeout=30_000,
                 )
             finally:

@@ -855,6 +855,28 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(res.stdout.strip(), 'ast-fallback-ok')
 
+    def test_rasterize_svg_for_review_uses_hidpi_for_small_vector_figures(self):
+        import blog_review_image_loader as loader
+        import io
+        from PIL import Image
+
+        small_svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="292" height="160" viewBox="0 0 292 160">'
+            b'<rect width="292" height="160" fill="#fff"/>'
+            b'<circle cx="100" cy="80" r="5" fill="#e55"/></svg>'
+        )
+        png_small = loader.rasterize_svg_for_review(small_svg)
+        with Image.open(io.BytesIO(png_small)) as im:
+            self.assertEqual(im.size, (876, 480))
+
+        large_svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="900" height="400" viewBox="0 0 900 400">'
+            b'<rect width="900" height="400" fill="#fff"/></svg>'
+        )
+        png_large = loader.rasterize_svg_for_review(large_svg)
+        with Image.open(io.BytesIO(png_large)) as im:
+            self.assertEqual(im.size, (900, 400))
+
 
 if __name__ == '__main__':
     unittest.main()
