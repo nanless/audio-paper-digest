@@ -923,6 +923,7 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     const orderedAccountIds = getOrderedAccountIds(identity);
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const excluded = new Set(options.excludeAccountIds || []);
+    const affinityKey = typeof options.affinityKey === 'string' ? options.affinityKey.trim() : '';
     let selection;
     updateState(stateFile, state => {
         const service = ensureService(state, identity);
@@ -932,8 +933,13 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         const group = service.groups[identity.groupId] || { activeAccountId: null, switchedAt: null };
         service.groups[identity.groupId] = group;
         const byId = new Map(keys.map(key => [getAccountId(key), key]));
-        const startIndex = resolveRotationCursor(group, orderedAccountIds);
-        // 从游标开始扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
+        // 论文级等权粘性路由：对同一 affinityKey（如 paperId）用 sha256 均匀映射到
+        // 稳定排序后的等权账号槽位，提高同篇多阶段/重试的 KV 前缀缓存命中率；
+        // 槽位冷却或已排除时按环形顺序平稳降级，全部账号仍严格等权。
+        const startIndex = affinityKey
+            ? (parseInt(sha256(affinityKey).slice(0, 8), 16) % orderedAccountIds.length)
+            : resolveRotationCursor(group, orderedAccountIds);
+        // 从起点扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
         // 仍在冷却中的账号（blockedUntilMs 未到）；冷却到期的账号自然重新
         // 加入轮转。整圈都不可用时按最早恢复时间报错。
         let selectedIndex = -1;
@@ -947,8 +953,16 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         }
         if (selectedIndex < 0) throw buildExhaustedError(service, orderedAccountIds, nowMs);
         const nextId = orderedAccountIds[selectedIndex];
+        if (affinityKey) {
+            // 新建分组首次以 affinityKey 选槽时，显式锚定 rotationCursor=0，
+            // 避免后续非亲和轮转回退到 activeAccountId 所在槽位而漂移。
+            if (!Number.isSafeInteger(group.rotationCursor)) {
+                group.rotationCursor = resolveRotationCursor(group, orderedAccountIds);
+            }
+        } else {
+            group.rotationCursor = (selectedIndex + 1) % orderedAccountIds.length;
+        }
         group.activeAccountId = nextId;
-        group.rotationCursor = (selectedIndex + 1) % orderedAccountIds.length;
         group.lastSelectedAtMs = nowMs;
         group.switchedAt = new Date(nowMs).toISOString();
         if (service.accounts[nextId]?.status === 'quota_blocked') {

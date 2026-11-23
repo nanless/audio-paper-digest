@@ -3,18 +3,7 @@
 ## 提示词内容
 
 ~~~
-请依据论文原文，为这篇论文选择词表中已有的概念 ID，纠正分类标签。只选择标签，不改写论文分析正文。
-
-论文标题：{title}
-arXiv ID：{arxivId}
-
-当前标签校验错误：{validationFeedback}
-
-论文原文证据：
-{textForAnalysis}
-
-当前可用的分类词表：
-{tagPromptText}
+请依据文末 `<paper_input>` 中的论文原文，为这篇论文选择词表中已有的概念 ID，纠正分类标签。只选择标签，不改写论文分析正文。
 
 输出要求
 
@@ -38,5 +27,18 @@ arXiv ID：{arxivId}
 
 应用场景和实验条件（`application`、`setting`）必须有实际研究证据。只在局限或未来工作中出现的场景不选，`setting.real-time` 还须有实测时延或吞吐及测量条件。标题包含 benchmark/corpus/dataset，或正文明确构造基准、语料时，`conceptIds` 必须包含 `artifact.benchmark` 或 `artifact.dataset`，并优先于泛泛的 `setting`、`model_family` 标签。
 
-三个键的值都必须直接从本篇证据和上方分类词表选择；不要复制任何固定论文示例。
+三个键的值都必须直接从本篇证据和下方分类词表选择；不要复制任何固定论文示例。
+
+当前可用的分类词表：
+{tagPromptText}
+
+<paper_input>
+论文标题：{title}
+arXiv ID：{arxivId}
+
+当前标签校验错误：{validationFeedback}
+
+论文原文证据：
+{textForAnalysis}
+</paper_input>
 ~~~

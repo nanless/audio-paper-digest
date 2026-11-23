@@ -23,6 +23,11 @@ const {
     filterPapersByKeywords
 } = require('./lib/keyword-prefilter.js');
 const {
+    DAILY_FILTER_PREFILTER_SHA256,
+    evaluateDailyFilterPrefilter,
+    evaluateScopeBodyAudioAnchor
+} = require('./lib/daily-filter-prefilter.js');
+const {
     getBeijingISOString,
     normalizeToBeijingISOString,
     loadEnvFile,
@@ -557,6 +562,12 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
         console.log(`[filter] 检测到代理: ${redactProxyUrl(proxyUrl)}，${route}`);
     }
 
+    const usageContext = {
+        stage: options.usageStage || 'dailyFilter',
+        ...(options.paperId ? { paperId: options.paperId } : {})
+    };
+    const filterRuntimeTemperature = Number.isFinite(options.temperature) ? options.temperature : 0;
+
     let lastError = null;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         // Muse 的 Responses API 会先消耗隐藏推理 token。首次请求保持原预算；
@@ -567,7 +578,11 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             runtimeConfig.model,
             messages,
             attemptMaxTokens,
-            FILTER_CFG.temperature
+            filterRuntimeTemperature,
+            {
+                usageContext,
+                promptCacheKey: `pd:${usageContext.stage}:${String(runtimeConfig.model || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 24)}`
+            }
         );
         const requestHeaders = buildHeaders(apiType, runtimeConfig.key, JSON.stringify(bodyObj));
 
@@ -583,7 +598,8 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
                         ? Math.max(FILTER_CFG.timeoutMs, 120000)
                         : FILTER_CFG.timeoutMs,
                     apiKeys: runtimeApiKeys,
-                    accountPoolStateFile: Config.FILES.llmAccountPoolState
+                    accountPoolStateFile: Config.FILES.llmAccountPoolState,
+                    usageContext
                 }
             );
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -1801,7 +1817,7 @@ async function getSpeechAudioDecision(paper, options = {}) {
             messages,
             maxTokens,
             options.maxRetries,
-            options
+            { ...options, paperId }
         );
         const response = await request([{ role: 'user', content: prompt }], FILTER_CFG.maxTokens);
         circuitBreaker.recordSuccess();
@@ -1861,7 +1877,7 @@ async function filterPapersWithLLM(papers, options = {}) {
     const keywordDecisions = new Map();
 
     if (useKeywordPreFilter) {
-        const evaluated = papers.map(paper => ({ paper, result: evaluateKeywordPrefilter(paper) }));
+        const evaluated = papers.map(paper => ({ paper, result: evaluateDailyFilterPrefilter(paper) }));
         papersToCheck = evaluated.filter(item => item.result.pass).map(item => item.paper);
         for (const { paper, result } of evaluated) {
             if (result.pass) continue;
@@ -1884,6 +1900,12 @@ async function filterPapersWithLLM(papers, options = {}) {
                 keywordMatchedKeywords: result.matchedKeywords,
                 keywordCategoryFallback: result.categoryFallback,
                 keywordFailOpen: result.failOpen,
+                ...(result.dailyFilterPrefilterRule
+                    ? {
+                        dailyFilterPrefilterRule: result.dailyFilterPrefilterRule,
+                        dailyFilterPrefilterSha256: result.dailyFilterPrefilterSha256
+                    }
+                    : {}),
                 ...decisionMetadata
             });
         }
@@ -1916,12 +1938,37 @@ async function filterPapersWithLLM(papers, options = {}) {
     }
     // 先取得全部不明确多模态论文的官方材料，再开始任何付费筛选。
     const scopeById = new Map();
+    let scopeBodyAnchorRejectedCount = 0;
     for (const paper of papersToCheck) {
         if (!evaluateKeywordPrefilter(paper).requiresScopeEvidence) continue;
         const id = normalizedId(paper);
         try {
             const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
                 decisionOptions.scopeSourceOverrides || {});
+            const bodyAnchor = useKeywordPreFilter
+                ? evaluateScopeBodyAudioAnchor(evidence.text, paper)
+                : { pass: true };
+            if (!bodyAnchor.pass) {
+                decisions.set(id, {
+                    id,
+                    paper_id: paper.paper_id || paper.arxivId || paper.id || id,
+                    title: paper.title || '',
+                    related: false,
+                    reason: '官方全文（References 前正文）未出现语音/音频/音乐锚点，确定性排除',
+                    rawResponse: '',
+                    parseSource: 'scope_body_audio_anchor_prefilter',
+                    error: null,
+                    fallback: false,
+                    retryable: false,
+                    decidedAt: getBeijingISOString(),
+                    filterScopeEvidence: evidence,
+                    inputSha256: buildFilterInputSha256(paper, evidence),
+                    dailyFilterPrefilterSha256: bodyAnchor.dailyFilterPrefilterSha256,
+                    ...decisionMetadata
+                });
+                scopeBodyAnchorRejectedCount += 1;
+                continue;
+            }
             scopeById.set(id, evidence);
         } catch (error) {
             if (error.code !== 'ARXIV_PDF_NOT_FOUND' || error.status !== 404 || error.arxivId !== id) throw error;
@@ -1939,7 +1986,13 @@ async function filterPapersWithLLM(papers, options = {}) {
             console.log(`[filter] 跳过官方 PDF 返回 404 的论文：${id}`);
         }
     }
-    papersToCheck = papersToCheck.filter(paper => decisions.get(normalizedId(paper))?.parseSource !== 'official_pdf_404_skipped');
+    if (scopeBodyAnchorRejectedCount > 0) {
+        console.log(`[filter] 官方全文音频锚点预筛（0 美元）：确定性排除 ${scopeBodyAnchorRejectedCount} 篇无正文音频锚点的多模态候选`);
+    }
+    papersToCheck = papersToCheck.filter(paper => {
+        const ps = decisions.get(normalizedId(paper))?.parseSource;
+        return ps !== 'official_pdf_404_skipped' && ps !== 'scope_body_audio_anchor_prefilter';
+    });
     papersToCheck = papersToCheck.map(paper => scopeById.has(normalizedId(paper))
         ? { ...paper, filterScopeEvidence: scopeById.get(normalizedId(paper)) } : paper);
     for (const paper of papersToCheck) {

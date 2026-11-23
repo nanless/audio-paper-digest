@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { buildFilterInputSha256 } = require('./filter-input-contract.js');
 const sources = require('./fresh-arxiv-rewrite-source.js');
 const { evaluateKeywordPrefilter } = require('./keyword-prefilter.js');
+const { hasPreReferencesAudioAnchor } = require('./daily-filter-prefilter.js');
 
 const codec = require('./protocol-codec');
 const SCOPE_CONTRACT = 'official-modality-scope';
@@ -139,16 +140,26 @@ function validatedDecisionInputSha256(paper, decision, options = {}) {
             fail('官方 PDF 404 跳过记录不完整');
         }
     }
+    const scopeBodyAnchorRejected = decision?.parseSource === 'scope_body_audio_anchor_prefilter';
+    if (scopeBodyAnchorRejected) {
+        if (decision.related !== false || decision.retryable !== false
+            || decision.fallback !== false || decision.rawResponse !== ''
+            || !decision.filterScopeEvidence
+            || !evaluateKeywordPrefilter(paper).requiresScopeEvidence) {
+            fail('正文音频锚点预筛排除记录不完整');
+        }
+    }
     const pendingRecheck = decision?.parseSource === 'explicit_recheck_pending';
     if (pendingRecheck && !(decision.related === null && decision.retryable === true && decision.fallback === true && decision.rawResponse === ''))
         fail('待重筛占位不能声明为正式决定');
-    if (decision?.parseSource !== 'keyword_prefilter' && !pendingRecheck) {
+    if (decision?.parseSource !== 'keyword_prefilter' && !pendingRecheck && !scopeBodyAnchorRejected) {
         if (options.filterModel !== undefined && decision?.filterModel !== options.filterModel) fail('逐篇决定的模型与本批次不一致');
         const acceptedPromptHashes = Array.isArray(options.filterPromptHash) ? options.filterPromptHash : [options.filterPromptHash];
         if (options.filterPromptHash !== undefined && !acceptedPromptHashes.includes(decision?.filterPromptHash)) fail('逐篇决定的提示词与本批次不一致');
     }
     const definitiveModelDecision = typeof decision?.related === 'boolean'
-        && !decision.retryable && !decision.fallback && decision.parseSource !== 'keyword_prefilter' && !pdfUnavailable
+        && !decision.retryable && !decision.fallback && decision.parseSource !== 'keyword_prefilter'
+        && !pdfUnavailable && !scopeBodyAnchorRejected
         && decision.filterModel !== 'manual_offline';
     if (definitiveModelDecision && evaluateKeywordPrefilter(paper).requiresScopeEvidence
         && !decision.filterScopeEvidence) fail('需要官方全文确认模态的正式模型决定缺少来源证明');
@@ -156,6 +167,9 @@ function validatedDecisionInputSha256(paper, decision, options = {}) {
         && decision.batchDate !== options.batchDate) fail('逐篇决定的日期与本批次不一致');
     if (decision?.filterScopeEvidence) assertFilterScopeEvidence(paper, decision.filterScopeEvidence,
         options.batchDate || decision.batchDate || decision.filterScopeEvidence.batchDate);
+    if (scopeBodyAnchorRejected && hasPreReferencesAudioAnchor(decision.filterScopeEvidence.text, paper)) {
+        fail('官方全文 References 前正文含音频锚点，不能由正文锚点预筛直接排除');
+    }
     return buildFilterInputSha256(paper, decision?.filterScopeEvidence);
 }
 function renderFilterScopeEvidence(evidence) {

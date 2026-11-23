@@ -93,6 +93,10 @@ const SCHEMA = Object.freeze([
     { name: 'PD_IMAGE_DOWNLOAD_TIMEOUT_MS', required: false, type: 'int', min: 1,
         hint: '单张图片下载超时（毫秒），默认 60000；大图走代理常需更高' },
     { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
+    { name: 'PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'],
+        hint: '默认开启（1）按阶段注入稳定 prompt_cache_key 以提升前缀缓存命中；设为 0 可关闭' },
+    { name: 'PD_TIERED_REASONING_EFFORT', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'],
+        hint: '默认开启（1）按阶段分级推理强度（核心分析/解读/审校保持配置上限，轻量筛选/发布审查下调）；设为 0 恢复全阶段统一档位' },
     // Responses 推理强度；max/highest/maximum 视作 xhigh（网关支持的最高档）。
     // 取值按模型分表：muse-spark-* 最高 xhigh，deepseek-v4.1-flash 只有 low/high/max。
     // 这里登记并集；max/highest/maximum 是「最高档」的别名，运行时由 normalizeReasoningEffort

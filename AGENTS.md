@@ -112,7 +112,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - Node CONNECT 与 TLS 握手共用 60 秒有效时间预算；长时间系统挂起或同步核验阻塞不按网络等待计时，连续短停顿仍累计。诊断长停顿时结合系统电源记录、进程执行和实际响应，区分系统睡眠与本地核验阻塞。真实超时仍停止新派发并保存结果，不原样反复重启。
 - 请求开始与终态用同一 `eventId` 留账；终态或 Reader 采用记录保存失败停止新派发，保全真实已返回内容，不返还已发次数。私有异常响应目录受保护；完全无法保存时须明确报告，不能声称恢复材料已落盘，见[费用故障](docs/troubleshooting.md#费用记录保存失败)。
 - 兼容的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，按直连处理，不复用上面的代理设置。
-- OpenCode Go 账号池：同一池内所有 key 同权，不再区分主账号与 fallback。选择按账号 ID 的稳定排序做轮转（round-robin），跳过已排除账号和当前冷却未到期的账号；冷却到期后自动重新加入轮转。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才允许在同一逻辑请求内切换账号并保存冷却状态，同一逻辑请求内每个账号至多尝试一次。普通认证 401 会停止本次运行，不切换账号；普通 429、5xx、网络错误、输出截断和正文校验失败也不得切换。全部账号不可用时保存断点并停止新请求，避免整批论文反复遭遇同一服务故障。
+- OpenCode Go 账号池：同一池内所有 key 同权，不再区分主账号与 fallback。未提供 `affinityKey` 时按账号 ID 稳定排序做轮转（round-robin）；提供 `affinityKey`（如论文 `paperId`）时按稳定哈希映射到同一等权槽位以提升前缀缓存命中，跨账号配额切换仍按排序槽位顺延，跳过已排除账号和当前冷却未到期的账号；冷却到期后自动重新加入可用集合。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才允许在同一逻辑请求内切换账号并保存冷却状态，同一逻辑请求内每个账号至多尝试一次。普通认证 401 会停止本次运行，不切换账号；普通 429、5xx、网络错误、输出截断和正文校验失败也不得切换。全部账号不可用时保存断点并停止新请求，避免整批论文反复遭遇同一服务故障。
 - 认证故障排查须核对完整配置账号池，不能因一个账号的 401 就要求用户更新全部凭据。生产停止后，在独立诊断中逐个账号使用声明的真实路由、模型及代理发送最小请求，每个账号每条路由一次，不在论文请求内自动绕过认证故障。诊断受持续付费授权覆盖，正常记录用量；密钥、认证头及稳定凭据指纹不得展示。区分认证失败、配额耗尽、传输故障与真实成功；HTTP 200 截断只证明请求被接受，选用账号后还须确认完整响应。实际有可用账号就备份原配置、同步主副配置后继续，保留原账号池冷却及历史，不先让用户重新提供密钥。
 - 其他 LLM：默认以 `agent:false` 直连，防止误用 Muse 的代理设置影响 MiMo/Kimi。
 - arXiv 元数据、HTML、PDF、图片：强制项目 HTTP CONNECT。
@@ -140,7 +140,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 日更/历史默认 16，范围 1–32；会议发布器读取后夹取到最多 5 路，默认 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
-主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 的档位随模型不同：`muse-spark-*` 是 `minimal`/`low`/`medium`/`high`/`xhigh`（`max` 视作 `xhigh`），`deepseek-v4.1-flash` 是 `low`/`high`/`max`；写错的值不发送、由 `npm run config:check` 拦截，本机固定 `xhigh`。推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下可见输出会略少于低档位；这些上限本身还会进入阶段指纹和已付费诊断身份，改动会让原记录无法重放，因此维持原值，截断仍由既有重试路径处理。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
+主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE（Node 与 Python 发布审查均支持，并启用 TCP keepalive 与按阶段稳定的 `prompt_cache_key`，后者可用 `PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=0` 关闭）；`PD_OPENAI_RESPONSES_REASONING_EFFORT` 的档位随模型不同：`muse-spark-*` 是 `minimal`/`low`/`medium`/`high`/`xhigh`（`max` 视作 `xhigh`），`deepseek-v4.1-flash` 是 `low`/`high`/`max`；写错的值不发送、由 `npm run config:check` 拦截，本机配置上限为 `xhigh`。按用户 2026-11-24 授权，默认启用按阶段分级推理强度（`PD_TIERED_REASONING_EFFORT=0` 可关闭）：核心分析、评分审校、Reader 长文与局部事实修复保持配置上限 `xhigh`，轻量机械阶段（如日更筛选、开源扫描、标签选择、术语桥和发布文本审查）下调至 `low`，图片与核心摘要/结构/表格/方法局部修补下调至 `medium`，且任何阶段均不超过环境配置上限。推理 token 与可见输出共用 `max_output_tokens`，这些上限本身还会进入阶段指纹和已付费诊断身份，改动会让原记录无法重放，因此维持原值，截断仍由既有重试路径处理。筛选批次的 `maxTokens`/`conferenceMaxTokens` 还参与 `FILTER_CONFIG_BINDING` 指纹，不得随推理强度调整（截断时重试路径会升到 4096）。日更筛选保留底层关键词预筛并叠加只增不删的领域词补捞、零精度噪声消歧及正文参考文献前零成本音频锚点过滤；可用 `npm run digest:scorecard -- --date YYYY-MM-DD` 查看单日各阶段耗时、缓存命中、推理占比与瞬断情况。两项 Responses 配置对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 
 ## 恢复原则
 

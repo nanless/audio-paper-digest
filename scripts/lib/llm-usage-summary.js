@@ -209,7 +209,25 @@ function aggregateRecords(records, date) {
 }
 
 function listJsonNames(directory) {
-    return fs.readdirSync(directory).filter(name => name.endsWith('.json') && !name.startsWith('.'));
+    const entries = fs.readdirSync(directory);
+    const results = [];
+    for (const name of entries) {
+        if (name.startsWith('.')) continue;
+        if (name.endsWith('.json')) {
+            results.push(name);
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(name)) {
+            const subPath = path.join(directory, name);
+            let subStat;
+            try { subStat = fs.lstatSync(subPath); } catch (_) { continue; }
+            if (!subStat.isDirectory() || subStat.isSymbolicLink()) continue;
+            for (const child of fs.readdirSync(subPath)) {
+                if (child.endsWith('.json') && !child.startsWith('.')) {
+                    results.push(path.join(name, child));
+                }
+            }
+        }
+    }
+    return results;
 }
 
 function readRegularFileStat(filePath) {

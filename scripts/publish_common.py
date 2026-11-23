@@ -16,10 +16,12 @@ import threading
 import json
 from protocol_codec import historical_contract as historical_manual_contract
 import hashlib
+import http.client
 import math
 import os
 import random
 import re
+import socket
 import subprocess
 import struct
 import sys
@@ -58,6 +60,7 @@ from llm_account_pool import (
     LlmAccountPoolConfigError,
     LlmAccountPoolStateError,
     classify_opencode_go_quota_response,
+    get_account_id,
     is_opencode_go_endpoint,
     mark_quota_exhausted,
     normalize_opencode_go_service,
@@ -7107,7 +7110,10 @@ def build_publish_headers(api_type, api_key, claude_version=None):
     }
 
 
-def build_publish_payload(api_type, model, prompt, max_tokens, temperature, images=None):
+def build_publish_payload(
+    api_type, model, prompt, max_tokens, temperature, images=None,
+    *, stage=None, prompt_cache_key=None,
+):
     images = images or []
     if api_type == 'anthropic':
         content = []
@@ -7141,11 +7147,18 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
             'temperature': temperature,
             'input': [{'role': 'user', 'content': content}],
         }
-        reasoning_effort = normalize_reasoning_effort(
-            os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT', ''), model
+        reasoning_effort = resolve_stage_reasoning_effort(
+            os.environ.get('PD_OPENAI_RESPONSES_REASONING_EFFORT', ''),
+            model,
+            stage=stage,
         )
         if reasoning_effort:
             payload['reasoning'] = {'effort': reasoning_effort}
+        raw_cache_key = str(prompt_cache_key or '').strip()
+        if raw_cache_key and os.environ.get('PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY', '').strip().lower() not in {'0', 'false', 'no', 'off'}:
+            payload['prompt_cache_key'] = raw_cache_key[:64]
+        if os.environ.get('PD_OPENAI_RESPONSES_STREAM', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+            payload['stream'] = True
         return payload
     content = [{'type': 'text', 'text': prompt}]
     for image in images:
@@ -7244,6 +7257,92 @@ def normalize_reasoning_effort(value, model=None):
     return effort if effort in allowed else ''
 
 
+STAGE_REASONING_EFFORT_TIERS = {
+    'dailyFilter': 'low',
+    'openSourceScan': 'low',
+    'tagSelection': 'low',
+    'apiReaderConceptTerms': 'low',
+    'publish.text': 'low',
+    'publish.review_text': 'low',
+    'publish.index_text': 'low',
+    'repair_review_payload': 'low',
+    'publish.figure': 'medium',
+    'publish.review_figure': 'medium',
+    'coreSummaryRepair': 'medium',
+    'tableRepair': 'medium',
+    'structureRepair': 'medium',
+    'methodRepair': 'medium',
+    'imageSupplement': 'medium',
+}
+
+
+def resolve_stage_reasoning_effort(value, model=None, *, stage=None):
+    base = normalize_reasoning_effort(value, model)
+    if not base:
+        return ''
+    if os.environ.get('PD_TIERED_REASONING_EFFORT', '').strip().lower() in {'0', 'false', 'no', 'off'}:
+        return base
+    normalized_stage = stage.strip() if isinstance(stage, str) else ''
+    requested_tier = STAGE_REASONING_EFFORT_TIERS.get(normalized_stage, '')
+    if not requested_tier:
+        return base
+    allowed = REASONING_EFFORTS if model is None else reasoning_efforts_for(model)
+    mapped_tier = (
+        requested_tier
+        if requested_tier in allowed
+        else ('high' if requested_tier == 'medium' and 'high' in allowed else base)
+    )
+    if base not in allowed or mapped_tier not in allowed:
+        return base
+    return allowed[min(allowed.index(base), allowed.index(mapped_tier))]
+
+
+def parse_publish_sse_response(raw_text):
+    """解析 OpenAI Responses SSE 流，语义与 scripts/utils.js parseSseResponse 对齐。"""
+    deltas = []
+    completed = None
+    terminal_failure = None
+    for block in re.split(r'\r?\n\r?\n', str(raw_text or '')):
+        event_name = ''
+        data_lines = []
+        for line in re.split(r'\r?\n', block):
+            if line.startswith('event:'):
+                event_name = line[6:].strip()
+            elif line.startswith('data:'):
+                data_lines.append(line[5:].lstrip(' \t'))
+        if not data_lines:
+            continue
+        data_text = '\n'.join(data_lines)
+        if not data_text or data_text == '[DONE]':
+            continue
+        try:
+            event = json.loads(data_text)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get('type') or event_name
+        if event_type == 'response.output_text.delta' and isinstance(event.get('delta'), str):
+            deltas.append(event['delta'])
+        elif event_type == 'response.completed' and isinstance(event.get('response'), dict):
+            completed = event['response']
+        elif event_type in {'response.incomplete', 'response.failed', 'response.cancelled'}:
+            if isinstance(event.get('response'), dict):
+                terminal_failure = event['response']
+            else:
+                fallback_status = event_type.split('.', 1)[1]
+                terminal_failure = event if event.get('status') else {**event, 'status': fallback_status}
+    if terminal_failure is not None:
+        return terminal_failure
+    if completed is not None:
+        if not parse_publish_response_text('openai_responses', completed) and deltas:
+            completed = {**completed, 'output_text': ''.join(deltas)}
+        return completed
+    if deltas:
+        raise RuntimeError('OpenAI Responses SSE 缺少 response.completed 终态事件')
+    return None
+
+
 def _publish_opencode_session_id():
     global _PUBLISH_OPENCODE_SESSION_ID
     if _PUBLISH_OPENCODE_SESSION_ID:
@@ -7283,6 +7382,52 @@ class _PublishLLMNoRedirectHandler(urllib.request.HTTPRedirectHandler):
         self.http_error_302(req, fp, code, msg, headers)
 
 
+def _enable_tcp_keepalive(sock):
+    """Enable OS-level TCP keepalive on publish LLM sockets to prevent NAT/proxy idle resets."""
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        return
+    # macOS uses TCP_KEEPALIVE (idle seconds); Linux uses TCP_KEEPIDLE.
+    for attr, value in (
+        ('TCP_KEEPALIVE', 20),
+        ('TCP_KEEPIDLE', 20),
+        ('TCP_KEEPINTVL', 10),
+        ('TCP_KEEPCNT', 6),
+    ):
+        opt = getattr(socket, attr, None)
+        if opt is None:
+            continue
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, opt, value)
+        except OSError:
+            pass
+
+
+class _KeepAliveHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        super().connect()
+        _enable_tcp_keepalive(self.sock)
+
+
+class _KeepAliveHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        _enable_tcp_keepalive(self.sock)
+
+
+class _KeepAliveHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_KeepAliveHTTPConnection, req)
+
+
+class _KeepAliveHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_KeepAliveHTTPSConnection, req, context=self._context)
+
+
 def _read_publish_http_error(exc):
     cached = getattr(exc, '_paper_digest_error_raw', None)
     if isinstance(cached, bytes):
@@ -7316,7 +7461,7 @@ def _sanitize_publish_llm_error(value, api_keys=()):
 
 def _open_publish_json_with_account_pool(
     *, api_url, endpoint, model, api_type, api_keys, payload, opener, timeout,
-    state_file=None, usage_sink=None, usage_directory=None,
+    state_file=None, usage_sink=None, usage_directory=None, affinity_key=None,
 ):
     """已确认的 Go 配额/余额失败才在同一次逻辑请求内切换到下一个账号（每个账号至多一次）。"""
     try:
@@ -7339,6 +7484,15 @@ def _open_publish_json_with_account_pool(
     max_account_attempts = len(api_keys) if len(api_keys) > 1 else 1
     attempted_account_ids = set()
     blocked_until_values = []
+    resolved_affinity = affinity_key.strip() if isinstance(affinity_key, str) else ''
+    if not resolved_affinity:
+        try:
+            import llm_usage as _usage_mod
+            scoped_paper_id = (_usage_mod._SCOPE.get() or {}).get('paperId')
+            if isinstance(scoped_paper_id, str) and scoped_paper_id.strip():
+                resolved_affinity = scoped_paper_id.strip()
+        except Exception:
+            pass
     for _account_attempt in range(max_account_attempts):
         elapsed = time.monotonic() - started
         remaining = max(0.001, float(timeout) - elapsed)
@@ -7348,12 +7502,15 @@ def _open_publish_json_with_account_pool(
             selection = select_api_key(
                 api_keys, endpoint, state_file,
                 exclude_account_ids=attempted_account_ids,
+                affinity_key=resolved_affinity or None,
             )
             selected_key = selection['api_key']
-            attempted_account_ids.add(selection['account_id'])
+            selected_account_id = selection['account_id']
+            attempted_account_ids.add(selected_account_id)
         else:
             selection = None
             selected_key = api_keys[0]
+            selected_account_id = get_account_id(selected_key) if is_opencode_go_endpoint(endpoint) else None
         headers = build_publish_headers(api_type, selected_key)
         if is_opencode_go_endpoint(endpoint):
             headers['User-Agent'] = 'audio-paper-digest/1.0'
@@ -7379,14 +7536,22 @@ def _open_publish_json_with_account_pool(
                 usage_status = status
                 if response.status < 200 or response.status >= 300:
                     raise RuntimeError(f'HTTP {response.status}')
-                response_limit = 2 * 1024 * 1024
+                is_streamed_responses = (api_type == 'openai_responses' and payload.get('stream') is True)
+                response_limit = 16 * 1024 * 1024 if is_streamed_responses else 2 * 1024 * 1024
                 raw_response = response.read(response_limit + 1)
                 usage_raw = raw_response
                 usage_raw_truncated = len(raw_response) > response_limit
                 if len(raw_response) > response_limit:
-                    raise RuntimeError('LLM 响应超过 2 MiB 安全上限')
+                    limit_mib = response_limit // (1024 * 1024)
+                    raise RuntimeError(f'LLM 响应超过 {limit_mib} MiB 安全上限')
                 usage_raw = raw_response.decode('utf-8')
-                usage_body = json.loads(usage_raw)
+                try:
+                    usage_body = json.loads(usage_raw)
+                except ValueError:
+                    streamed = parse_publish_sse_response(usage_raw) if api_type == 'openai_responses' else None
+                    if streamed is None:
+                        raise
+                    usage_body = streamed
                 return status, usage_body
         except urllib.error.HTTPError as exc:
             raw_text, parsed = _read_publish_http_error(exc)
@@ -7430,6 +7595,7 @@ def _open_publish_json_with_account_pool(
                 raw_response=usage_raw,
                 raw_response_truncated=usage_raw_truncated,
                 event_id=pending_usage['eventId'], transport_started=True,
+                account_id=selected_account_id,
             )
     earliest = min(blocked_until_values) if blocked_until_values else None
     suffix = '' if earliest is None else (
@@ -7604,8 +7770,20 @@ def call_publish_llm_api(
                 f'prompt_chars={len(request_prompt)}, images={len(images or [])}, '
                 f'max_tokens={current_max_tokens})'
             )
+            stage_name = (usage_context or {}).get('stage') if isinstance(usage_context, dict) else None
+            if not stage_name:
+                try:
+                    import llm_usage as _usage_mod
+                    stage_name = (_usage_mod._SCOPE.get() or {}).get('stage')
+                except Exception:
+                    stage_name = None
+            cache_key = (
+                f"pd:{stage_name}:{re.sub(r'[^A-Za-z0-9._-]', '', str(model or ''))[:24]}"
+                if stage_name else None
+            )
             payload = build_publish_payload(
-                api_type, model, request_prompt, current_max_tokens, temperature, images=images
+                api_type, model, request_prompt, current_max_tokens, temperature,
+                images=images, stage=stage_name, prompt_cache_key=cache_key,
             )
             # Muse Spark Contributor 有地区限制，必须使用项目 .env 的
             # HTTP CONNECT 代理。其他模型明确直连，避免误用这组代理设置。
@@ -7613,11 +7791,16 @@ def call_publish_llm_api(
                 proxy = get_required_fetch_proxy()
                 opener = urllib.request.build_opener(
                     urllib.request.ProxyHandler({'http': proxy, 'https': proxy}),
+                    _KeepAliveHTTPHandler(),
+                    _KeepAliveHTTPSHandler(),
                     _PublishLLMNoRedirectHandler(),
                 )
             else:
                 opener = urllib.request.build_opener(
-                    urllib.request.ProxyHandler({}), _PublishLLMNoRedirectHandler()
+                    urllib.request.ProxyHandler({}),
+                    _KeepAliveHTTPHandler(),
+                    _KeepAliveHTTPSHandler(),
+                    _PublishLLMNoRedirectHandler(),
                 )
             with with_llm_usage_context({**(usage_context or {}), 'transportAttempt': attempt + 1}):
                 status, data = _open_publish_json_with_account_pool(

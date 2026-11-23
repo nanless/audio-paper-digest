@@ -70,6 +70,7 @@
     "validate:data": "node scripts/validate-data-files.js",
     "keyword:recall": "node scripts/evaluate-keyword-prefilter.js",
     "digest:status": "node scripts/digest-run-report.js",
+    "digest:scorecard": "node scripts/digest-scorecard.js",
     "digest:waive-analysis": "node scripts/waive-analysis-failures.js",
     "storage:status": "node scripts/runtime-storage.js status",
     "storage:pdf-duplicates": "node scripts/runtime-storage.js pdf-duplicates",

@@ -119,8 +119,14 @@ def with_llm_usage_context(context):
 
 def build_llm_usage_event(*, protocol, model, request, response=None, status_code=None,
                           duration_ms=0, error_code=None, output_text=None, context=None,
-                          event_id=None, at=None, transport_started=None):
+                          event_id=None, at=None, transport_started=None, account_id=None):
     context = {**_SCOPE.get(), **(context or {})}
+    raw_account_id = account_id if account_id is not None else context.get('accountId')
+    resolved_account_id = (
+        str(raw_account_id).lower()
+        if isinstance(raw_account_id, str) and re.fullmatch(r'[a-fA-F0-9]{64}', raw_account_id)
+        else None
+    )
     body = response if isinstance(response, dict) else {}
     messages = request.get('input', request.get('messages', []))
     text_chars = len(messages) if isinstance(messages, str) else 0
@@ -171,6 +177,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         'unitId': context.get('unitId') if re.fullmatch(r'[a-f0-9]{64}', str(context.get('unitId') or '')) else None,
         'contentAttempt': _count(context.get('contentAttempt')), 'transportAttempt': _count(context.get('transportAttempt')),
         'protocol': _label(protocol), 'model': _label(model), 'outcome': outcome,
+        **({'accountId': resolved_account_id} if resolved_account_id else {}),
         'statusCode': _count(status_code), 'errorCode': _label(error_code), 'durationMs': _count(round(duration_ms)),
         'inputSha256': _digest(json.dumps(request, ensure_ascii=False, separators=(',', ':'))),
         'outputTextSha256': _digest(output_text) if isinstance(output_text, str) else None,
@@ -232,6 +239,46 @@ def write_llm_usage_event(event, directory=None):
     if not stat.S_ISREG(saved_stat.st_mode) or saved_stat.st_nlink != 1 \
             or stat.S_IMODE(saved_stat.st_mode) != 0o600:
         raise OSError('用量文件保存后的类型、链接或权限不符合要求')
+    # 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
+    if isinstance(event, dict) and isinstance(event.get('at'), str) and event.get('kind'):
+        try:
+            dt = datetime.fromisoformat(event['at'].replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            from datetime import timedelta
+            bj_date = (dt.astimezone(timezone(timedelta(hours=8)))).strftime('%Y-%m-%d')
+            index_dir = target_dir.parent / f'{target_dir.name}-daily'
+            try:
+                index_dir.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            idx_mode = index_dir.lstat().st_mode
+            if stat.S_ISDIR(idx_mode) and not stat.S_ISLNK(idx_mode):
+                try:
+                    os.chmod(index_dir, 0o700)
+                except OSError:
+                    pass
+                daily_file = index_dir / f'{bj_date}.jsonl'
+                append_flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, 'O_NOFOLLOW', 0)
+                append_fd = os.open(daily_file, append_flags, 0o600)
+                try:
+                    file_stat = os.fstat(append_fd)
+                    if stat.S_ISREG(file_stat.st_mode):
+                        try:
+                            os.fchmod(append_fd, 0o600)
+                        except OSError:
+                            pass
+                        payload_bytes = (json.dumps(event, ensure_ascii=False) + '\n').encode('utf-8')
+                        view = memoryview(payload_bytes)
+                        while view:
+                            written = os.write(append_fd, view)
+                            if written <= 0:
+                                break
+                            view = view[written:]
+                finally:
+                    os.close(append_fd)
+        except Exception:
+            pass
     return target
 
 

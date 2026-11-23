@@ -895,12 +895,13 @@ def _resolve_rotation_cursor(group, ordered_account_ids):
 # 单账号配置（len(api_keys) < 2）不会调用本函数：调用方走各自的单账号
 # 直连分支，因此不写账号池状态（既有行为，测试已固化）。
 def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *,
-                   now_ms=None, exclude_account_ids=()):
+                   now_ms=None, exclude_account_ids=(), affinity_key=None):
     keys = normalize_api_keys(api_keys)
     identity = get_pool_identity(keys, endpoint)
     ordered_account_ids = _ordered_account_ids(identity)
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     excluded = set(exclude_account_ids or ())
+    normalized_affinity = affinity_key.strip() if isinstance(affinity_key, str) else ''
     selection = {}
 
     def updater(state):
@@ -916,8 +917,11 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
             }
         service['groups'][identity['group_id']] = group
         keys_by_id = dict(zip(identity['account_ids'], keys))
-        start_index = _resolve_rotation_cursor(group, ordered_account_ids)
-        # 从游标开始扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
+        if normalized_affinity:
+            start_index = int(_sha256(normalized_affinity)[:8], 16) % len(ordered_account_ids)
+        else:
+            start_index = _resolve_rotation_cursor(group, ordered_account_ids)
+        # 从起点扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
         # 仍在冷却中的账号（blockedUntilMs 未到）；冷却到期的账号自然重新
         # 加入轮转。整圈都不可用时按最早恢复时间报错。
         selected_index = None
@@ -933,8 +937,15 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
         if selected_index is None:
             raise _build_exhausted_error(service, ordered_account_ids, now_ms)
         next_id = ordered_account_ids[selected_index]
+        if normalized_affinity:
+            # 新建分组首次以 affinity_key 选槽时，显式锚定 rotationCursor，
+            # 避免后续非亲和轮转回退到 activeAccountId 所在槽位而漂移。
+            stored_cursor = group.get('rotationCursor')
+            if not (type(stored_cursor) is int and 0 <= stored_cursor <= MAX_SAFE_INTEGER):
+                group['rotationCursor'] = _resolve_rotation_cursor(group, ordered_account_ids)
+        else:
+            group['rotationCursor'] = (selected_index + 1) % len(ordered_account_ids)
         group['activeAccountId'] = next_id
-        group['rotationCursor'] = (selected_index + 1) % len(ordered_account_ids)
         group['lastSelectedAtMs'] = now_ms
         group['switchedAt'] = datetime.fromtimestamp(
             now_ms / 1000, tz=timezone.utc

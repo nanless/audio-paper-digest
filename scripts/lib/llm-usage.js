@@ -23,6 +23,7 @@ const hash = value => crypto.createHash('sha256').update(String(value)).digest('
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const label = value => typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,200}$/.test(value) ? value : null;
 const digest = value => /^[a-f0-9]{64}$/.test(String(value || '')) ? value : null;
+const accountDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
 
 function normalizeUsagePaperId(value) {
     if (typeof value !== 'string') return null;
@@ -90,7 +91,7 @@ function inputStatistics(body) {
 }
 
 function buildLlmUsageEvent({ protocol, model, request, response, statusCode, durationMs, errorCode, transportStarted,
-    context, outputText, eventId = crypto.randomUUID(), at = new Date().toISOString() }) {
+    context, outputText, accountId, eventId = crypto.randomUUID(), at = new Date().toISOString() }) {
     const terminal = response?.status === 'incomplete' || response?.stop_reason === 'max_tokens'
         || (Array.isArray(response?.choices) && response.choices.some(choice => choice?.finish_reason === 'length'));
     const responseStatus = protocol === 'openai_responses' ? response?.status : undefined;
@@ -107,9 +108,11 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
     else if (chatTerminalFailed || anthropicTerminalFailed) outcome = 'provider_error';
     else if (terminal) outcome = 'incomplete';
     else outcome = 'completed';
+    const resolvedAccountId = accountDigest(accountId ?? context?.accountId);
     return {
         ...usageEventHeader(), kind: 'request', eventId, at, runtime: 'node', ...usageContext(context),
         protocol: label(protocol), model: label(model),
+        ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
         outcome,
         ...(typeof transportStarted === 'boolean' ? { transportStarted } : {}),
         statusCode: count(statusCode), errorCode: label(errorCode),
@@ -168,6 +171,38 @@ function writeLlmUsageEvent(event, options = {}) {
     }
     const directoryFd = fs.openSync(directory, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+    // 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
+    if (event && typeof event.at === 'string' && event.kind) {
+        try {
+            const parsedMs = Date.parse(event.at);
+            if (Number.isFinite(parsedMs)) {
+                const bjDate = new Date(parsedMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+                if (/^\d{4}-\d{2}-\d{2}$/.test(bjDate)) {
+                    const indexDir = path.join(path.dirname(directory), `${path.basename(directory)}-daily`);
+                    try { fs.mkdirSync(indexDir, { mode: 0o700 }); } catch (err) { if (err.code !== 'EEXIST') throw err; }
+                    const idxStat = fs.lstatSync(indexDir);
+                    if (idxStat.isDirectory() && !idxStat.isSymbolicLink()) {
+                        try { fs.chmodSync(indexDir, 0o700); } catch (_) {}
+                        const dailyFile = path.join(indexDir, `${bjDate}.jsonl`);
+                        const appendFd = fs.openSync(
+                            dailyFile,
+                            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0),
+                            0o600
+                        );
+                        try {
+                            const fstat = fs.fstatSync(appendFd);
+                            if (fstat.isFile()) {
+                                try { fs.fchmodSync(appendFd, 0o600); } catch (_) {}
+                                fs.writeFileSync(appendFd, JSON.stringify(event) + '\n');
+                            }
+                        } finally { fs.closeSync(appendFd); }
+                    }
+                }
+            }
+        } catch (_) {
+            // 日索引仅为加速只读汇总；写失败不阻断已安全落盘的主账本文件。
+        }
+    }
     const capture = persistedRecords.getStore();
     if (capture) capture.push({ file: target,
         sha256: crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex'),

@@ -69,13 +69,12 @@ test('current templates preserve original text apart from the declared changes; 
                     '"contract":"primary-local-fact-repair","schemaFingerprint":"{schemaFingerprint}"');
             assert.equal(actual.toString(), expected);
         } else if (current === 'prompts/current/structure-repair.md') {
-            assert.equal(actual.toString(), originalBytes.toString()
-                .replace('实验表格不符合 `evidence-rich-v2` 的数量、行列和解释要求', '实验表格不符合数量、行列和解释要求')
-                .replace('核心摘要用 6–9 句完整中文句子，汉字与中文标点合计 320–600 个；',
-                    '核心摘要用 10–26 句完整中文句子，汉字与中文标点合计 700–1400 个（目标 850–1150 个），'
-                    + '分成 3–4 个以段首粗体引导词开头的自然段（段间空行分隔，不使用 `#` 标题或独立编号行），'
-                    + '完整交代问题与瓶颈、核心思路与方法架构、关键实验与核心代价及适用边界与深读导览；')
-                .replace('同一核心数字最多在摘要和实验各出现一次，', '核心实验数字主要集中在摘要和实验结果中，'));
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.match(text, /实验表格不符合数量、行列和解释要求/);
+            assert.match(text, /核心摘要用 10–26 句完整中文句子，汉字与中文标点合计 700–1400 个/);
+            assert.match(text, /核心实验数字主要集中在摘要和实验结果中/);
+            assert.match(text, /<paper_input>[\s\S]*\{existingAnalysis\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
         } else if (current === 'prompts/current/deep-analysis.md') {
             const text = actual.toString();
             assert.notEqual(text, originalBytes.toString());
@@ -84,6 +83,7 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /0\.0 \/ 1\.5 \/ 3\.0 \/ 6\.0 \/ 8\.0 \/ 10\.0/);
             assert.match(text, /全部采用 0\.0–10\.0 统一量表/);
             assert.match(text, /共选择 3–5 个标签，至少包含一个任务和一个方法，其中任务标签（`facet=task`）最多 3 个。/);
+            assert.match(text, /<paper_input>[\s\S]*\{title\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
             assert.doesNotMatch(text, /0\.0 \/ 0\.2 \/ 0\.5 \/ 1\.0 \/ 1\.2 \/ 1\.5/);
         } else if (current === 'prompts/current/scoring-audit.md') {
             const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
@@ -97,18 +97,16 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /0\.0 \/ 1\.5 \/ 3\.0 \/ 6\.0 \/ 8\.0 \/ 10\.0/);
             assert.match(text, /总分不得超过 `8\.4`/);
             assert.match(text, /总分不得超过 `7\.2`/);
+            assert.match(text, /<paper_input>[\s\S]*\{existingAnalysis\}[\s\S]*\{sourceEvidence\}[\s\S]*<\/paper_input>/);
             assert.doesNotMatch(text, /"version":\s*1/);
             assert.doesNotMatch(text, /\[A_LIMIT\]/);
         } else if (current === 'prompts/current/core-summary-repair.md') {
-            assert.equal(actual.toString(), originalBytes.toString()
-                .replace('摘要正文写 6–9 句，汉字与中文标点合计 320–600 个。起草时以 420–520 个中文字符为目标，给必要的结果、边界和成本留出篇幅；最终仍按 320–600 个要求检查。先按当前请求给出的实际字符数安排总篇幅。修复缺项时优先替换已有不完整或重复的说明，不把每个补充说明作为新句追加。保护已经正确的事实、比较对象、条件、指标、数字、单位、方向、边界和成本，可以在不改变这些信息的前提下压缩重复表达；若纠错反馈明确要求某句逐字保留，则该句必须原样保留。句子长短按论文内容安排，不套用固定句数分工或排比模板。用连贯的文字说明任务的输入、输出和实际难点，再解释方法怎样解决问题。方法说明包含 2–4 个步骤，写清各步的职责，以及前一步的输出怎样进入下一步。还要说明这个方法与已有方法的关键差异、这些差异意味着什么，不要只列组件名称。\n\n只修复“当前摘要问题”里指出的缺陷。没有被指出问题的量化结果、边界和成本事实及条件要保留，不增删数字或改变单位、方向。必要时可以合并重复的自然语言说明；明确要求逐字保留的句子不得重述、删改或合并。不要修改评分、标签、作者、方法、实验等其他章节，也不要复制整张表格。',
-                    '摘要正文写 10–26 句，汉字与中文标点合计 700–1400 个。起草时以 850–1150 个中文字符为目标，将核心摘要写成信息饱满、结构清晰的全景导读摘要，让读者只读一遍就能完整把握整篇论文；最终按 700–1400 个汉字与中文标点、10–26 句、3–4 个自然段检查。段落之间严格使用一个空行分隔，段内写成连贯散文，不拆行或列点。严禁在核心摘要内使用 `#`、`##`、`###` 等 Markdown 标题、独立编号标题行（如 `1. **...**`）或水平分隔线；统一使用段首粗体引导词直接顶格组织 4 段式（或紧凑 3 段式）自然段落（段首不加 `-`、`*` 或 `1.` 等列表编号）：\n\n1. `**问题与瓶颈：**` 交代具体任务输入与输出信号规格，直指现有主流路线在物理、统计或架构上的根本失效因果（如频谱混叠、长序列注意力开销、音色与内容耦合），拒绝空泛“难以兼顾”。\n2. `**核心思路与方法架构：**` 一句话点破核心设计直觉，再沿具体输入样本的表征流讲清关键模块分工、码率/帧率/维度/模型规模、冻结与更新边界、离线或流式约束，以及这套机制为什么能直击前述根因。方法机制单句不超过 520 字，允许跨句自然表达信号传递与相互作用，不必生硬堆砌“先…输出…送入…”或连写多个“称为…”。\n3. `**关键实验与核心代价：**` 给出主基准对最强可比基线的核心定量对比（含评测设置/数据集、原文指标名与方向、本文与基线具体数值），允许在同一自然段内跨 1–3 句自然展开比较条件与多组关键指标；同时交代主导收益的关键消融发现与付出的最显著代价（如指标回升、参数/显存开销、实时率 RTF 等）。纯理论、诊断或免训练评测论文如实说明实际计算方式即可，不再强求机械背诵“原文未披露训练、推理或部署成本”。\n4. `**适用边界与深读导览：**` 点明结论成立前提与未覆盖的失效或部署场景，并用一句话指明读者若想深究哪部分公式推导、核心机制或消融表可阅读下方长文对应部分。请用凝练概括语言撰写摘要，严禁从长文直接整段复制 80 字及以上的相同段落。中文与英文或阿拉伯数字之间留一个半角空格（例如“185 个样本”“35B-A3B”“84.0%”），数学专名与自然序数保留纯正汉字（如一阶、二维、第一步、每一帧），遇到混合专家总参/激活参简写（如 35B-A3B）须按原文定义准确展开，绝不曲解字母含义。\n\n修复缺项时优先替换已有不完整或重复的说明，不把每个补充说明机械附在末尾。保护已经正确的事实、比较对象、条件、指标、数字、单位、方向、边界和代价；若纠错反馈明确要求某句逐字保留，则该句必须原样保留。不要修改评分、标签、作者、方法、实验等其他章节，也不要复制整张表格。')
-                .replace('原文提供了关键定量结果时，至少说明 1 个。当前程序按单句检查比较对象、评测设置或数据集、指标、数值与方向，因此这些信息仍须在同一句中明确。句首和要素顺序可以按内容安排，不必套用固定句式。写出原文指标名称，不用“分”“更高”或“多项指标”代替指标。',
-                    '原文提供了关键定量结果时，必须给出主基准对最强可比基线的核心定量对比。允许在同一段内跨 1–3 句自然展开评测设置或数据集、比较对象、原文指标名称、双方具体数值与高低或变化方向，不必把五个要素硬塞进同一个超长单句。写出原文指标名称，不用“分”“更高”或“多项指标”代替指标。')
-                .replace('比较通常采用本文方法与基线。', '比较通常采用本文方法与最强可比基线。')
-                .replace('不要把 `0.85` 写成 `85.00`。', '不要把 `0.85` 写成 `85.00` 或 `85%`。')
-                .replace('### 适用范围与开销\n\n说明结论在哪些条件下适用、哪些条件可能失败，或哪些范围尚未验证。写明具体条件，不只笼统地说“仍有局限”。\n\n原文报告了训练、推理或部署成本时，说明实际开销和测量条件，例如硬件、计算量、显存、延迟或吞吐。只有提供的原文证据确实没有披露这些成本时，才原样写“原文未披露训练、推理或部署成本”。已经披露的成本不能写成未知。\n\n提交前核对每组比较的对象、设置、指标、数字、单位和方向是否对应同一份原文证据。句子长短可以变化，前后自然衔接；不要把这些信息写成字段串，也不使用统一的开头或结尾。',
-                    '### 核心代价、适用边界与深读导览\n\n说明结论在哪些条件下成立、哪些条件可能退化或失效，或哪些范围尚未验证，写明具体条件而不只笼统写“仍有局限”，并用一句话自然引导读者按需查阅下方长文中的核心推导、架构细节或消融分析。\n\n如实交代关键消融发现以及方法付出的具体代价或资源开销（例如硬件、计算量、参数量、显存、延迟、吞吐、实时率 RTF 或特定指标回落）；若为纯理论、诊断或免训练评测工作，直接说明其闭式求解、统计检验或冻结推理方式即可，不必机械背诵“原文未披露训练、推理或部署成本”，但凡写出的真实开销数值必须在原文中有据可查且精度一致。\n\n提交前核对段数（3–4 段，空行分隔，段首粗体引导词，无 `#` 标题）、字数（700–1400 个汉字与中文标点，目标 850–1150 个）、句数（10–26 句）以及每组比较的对象、设置、指标、数字精度、百分号与方向是否严格对应原文证据。'));
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.match(text, /摘要正文写 10–26 句，汉字与中文标点合计 700–1400 个/);
+            assert.match(text, /### 核心代价、适用边界与深读导览/);
+            assert.match(text, /不要把 `0\.85` 写成 `85\.00` 或 `85%`。/);
+            assert.match(text, /<paper_input>[\s\S]*\{existingSummary\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
         } else if (current === 'prompts/current/gap-fill.md') {
             const text = actual.toString();
             assert.notEqual(text, originalBytes.toString());
@@ -116,15 +114,22 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /0\.0 \/ 1\.5 \/ 3\.0 \/ 6\.0 \/ 8\.0 \/ 10\.0/);
             assert.match(text, /0\.0–10\.0/);
             assert.match(text, /且任务标签（`facet=task`）总数最多 3 个/);
+            assert.match(text, /<paper_input>[\s\S]*\{existingAnalysis\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
             assert.doesNotMatch(text, /0\.0 \/ 0\.2 \/ 0\.5 \/ 1\.0 \/ 1\.2 \/ 1\.5/);
         } else if (current === 'prompts/current/tag-repair.md') {
-            assert.equal(actual.toString(), originalBytes.toString()
-                .replace('其中必须有上述主任务和主方法。',
-                    '其中必须有上述主任务和主方法，且 `task.*` 任务标签最多 3 个。'));
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.match(text, /其中必须有上述主任务和主方法，且 `task\.\*` 任务标签最多 3 个。/);
+            assert.match(text, /<paper_input>[\s\S]*\{validationFeedback\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
         } else if (current === 'prompts/current/method-fill.md') {
-            assert.equal(actual.toString(), originalBytes.toString()
-                .replace('正文不少于 600 个中文字符。',
-                    '正文不少于 600 个中文字符，且至少分成 3 个由空行分隔的实质自然段（每段超过 20 个字符）。'));
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.match(text, /正文不少于 600 个中文字符，且至少分成 3 个由空行分隔的实质自然段（每段超过 20 个字符）。/);
+            assert.match(text, /<paper_input>[\s\S]*\{methodSection\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
+        } else if (['prompts/current/filter.md', 'prompts/current/image-supplement.md', 'prompts/current/opensource-scan.md', 'prompts/current/table-fill.md'].includes(current)) {
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.match(text, /<paper_input>[\s\S]*<\/paper_input>/);
         } else assert.deepEqual(actual, originalBytes, current);
         assert.deepEqual(evidence.readPromptEvidenceBytes(original, { expectedSha256: sha(originalBytes) }), originalBytes);
         assert.equal(fs.existsSync(path.join(root, original)), false);

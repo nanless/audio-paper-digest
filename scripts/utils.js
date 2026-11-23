@@ -17,6 +17,7 @@ const {
 const { loadProjectEnv } = require('./env-loader.js');
 const {
     normalizeApiKeys,
+    getAccountId,
     LlmAccountPoolExhaustedError,
     LlmAccountAuthError,
     isOpenCodeGoEndpoint,
@@ -721,6 +722,53 @@ function normalizeReasoningEffort(value, model) {
     return allowed.includes(effort) ? effort : '';
 }
 
+// 按阶段分级推理档位（用户于 2026-11-24 明确授权）：
+// 核心分析、盲审评分、Reader 长文与局部事实修复维持完整配置档位（本机 xhigh）；
+// 轻量/机械辅助阶段（筛选、开源扫描、标签修正、发布文本审查等）在不超过配置上限的
+// 前提下降至 low/medium，降低 95%+ 隐式思考 token 浪费。PD_TIERED_REASONING_EFFORT=0 可关闭。
+const STAGE_REASONING_EFFORT_TIERS = Object.freeze({
+    // low tier: 二分类、结构化抽取与轻量文本审查
+    dailyFilter: 'low',
+    openSourceScan: 'low',
+    tagSelection: 'low',
+    apiReaderConceptTerms: 'low',
+    'publish.text': 'low',
+    'publish.review_text': 'low',
+    'publish.index_text': 'low',
+    repair_review_payload: 'low',
+    // medium tier: 局部结构/摘要/图表修复与多模态图审
+    'publish.figure': 'medium',
+    'publish.review_figure': 'medium',
+    coreSummaryRepair: 'medium',
+    tableRepair: 'medium',
+    structureRepair: 'medium',
+    methodRepair: 'medium',
+    imageSupplement: 'medium'
+});
+
+function isEnvFlagDisabled(rawValue) {
+    const normalized = String(rawValue || '').trim().toLowerCase();
+    return normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off';
+}
+
+function resolveStageReasoningEffort(configuredValue, model, stage = '') {
+    const base = normalizeReasoningEffort(configuredValue, model);
+    if (!base) return '';
+    if (isEnvFlagDisabled(process.env.PD_TIERED_REASONING_EFFORT)) return base;
+    const normalizedStage = typeof stage === 'string' ? stage.trim() : '';
+    const requestedTier = normalizedStage ? STAGE_REASONING_EFFORT_TIERS[normalizedStage] : '';
+    if (!requestedTier) return base;
+    const allowed = reasoningEffortsFor(model);
+    const mappedTier = allowed.includes(requestedTier)
+        ? requestedTier
+        : (requestedTier === 'medium' && allowed.includes('high') ? 'high' : base);
+    const baseIdx = allowed.indexOf(base);
+    const tierIdx = allowed.indexOf(mappedTier);
+    if (baseIdx < 0 || tierIdx < 0) return base;
+    // 绝不超过用户配置上限（例如环境配了 low 时全部维持 low）。
+    return allowed[Math.min(baseIdx, tierIdx)];
+}
+
 function normalizeResponsesContent(content) {
     const blocks = Array.isArray(content) ? content : [{ type: 'text', text: String(content || '') }];
     return blocks.filter(block => !isProviderReasoningEnvelope(block)).map(block => {
@@ -806,11 +854,17 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
             max_output_tokens: maxTokens
         };
         if (Number.isFinite(temperature)) body.temperature = temperature;
-        const reasoningEffort = normalizeReasoningEffort(
-            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT, model
+        const reasoningEffort = resolveStageReasoningEffort(
+            process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT,
+            model,
+            options.reasoningStage || options.usageContext?.stage || options.stage || ''
         );
         if (reasoningEffort) {
             body.reasoning = { effort: reasoningEffort };
+        }
+        const rawCacheKey = typeof options.promptCacheKey === 'string' ? options.promptCacheKey.trim() : '';
+        if (rawCacheKey && !isEnvFlagDisabled(process.env.PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY)) {
+            body.prompt_cache_key = rawCacheKey.slice(0, 64);
         }
         if (['1', 'true', 'yes', 'on'].includes(String(
             process.env.PD_OPENAI_RESPONSES_STREAM || ''
@@ -989,8 +1043,13 @@ function parseSseResponse(raw) {
             deltas.push(event.delta);
         } else if (type === 'response.completed' && event.response && typeof event.response === 'object') {
             completed = event.response;
-        } else if (type === 'response.incomplete' || type === 'response.failed') {
-            terminalFailure = event.response || event;
+        } else if (type === 'response.incomplete' || type === 'response.failed' || type === 'response.cancelled') {
+            if (event.response && typeof event.response === 'object') {
+                terminalFailure = event.response;
+            } else {
+                const fallbackStatus = type.split('.')[1];
+                terminalFailure = event.status ? event : { ...event, status: fallbackStatus };
+            }
         }
     }
     if (terminalFailure) return terminalFailure;
@@ -1116,6 +1175,9 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
         }, timeoutMs);
         deadlineTimer.unref?.();
 
+        req.on('socket', socket => {
+            socket?.setKeepAlive?.(true, 20000);
+        });
         req.on('error', error => finish(reject, error));
         req.on('timeout', () => {
             const error = new Error(`连接在 ${timeoutMs}ms 内没有数据传输，已超时`);
@@ -1250,6 +1312,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                     transportStarted,
                     errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null),
                     context: options.usageContext,
+                    ...(options.accountId ? { accountId: options.accountId } : {}),
                     outputText };
                 if (typeof options.usageSink === 'function') {
                     usageEvent = buildLlmUsageEvent(input);
@@ -1337,7 +1400,17 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
 
     const baseHeaders = buildOpenCodeRequestHeaders(endpoint, headers);
     if (apiKeys.length < 2) {
-        const response = await requestLlmOnce(apiUrl, endpoint, model, bodyObj, baseHeaders, options);
+        const singleAccountId = apiKeys.length === 1 && isOpenCodeGoEndpoint(endpoint)
+            ? getAccountId(apiKeys[0])
+            : undefined;
+        const response = await requestLlmOnce(
+            apiUrl,
+            endpoint,
+            model,
+            bodyObj,
+            baseHeaders,
+            singleAccountId ? { ...options, accountId: singleAccountId } : options
+        );
         if (isOpenCodeGoEndpoint(endpoint)) {
             if (classifyOpenCodeGoQuotaResponse(response, { endpoint })) {
                 throw new LlmAccountPoolExhaustedError('OpenCode Go 当前账号额度不足，未配置后续账号');
@@ -1354,6 +1427,10 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     const startedAt = Date.now();
     const blockedUntilValues = [];
     const attemptedAccountIds = new Set();
+    const scopedPaperId = require('./lib/llm-usage.js').usageContext(options.usageContext)?.paperId;
+    const affinityKey = typeof options.affinityKey === 'string' && options.affinityKey.trim()
+        ? options.affinityKey.trim()
+        : (typeof scopedPaperId === 'string' ? scopedPaperId.trim() : '');
     for (let accountAttempt = 0; accountAttempt < apiKeys.length; accountAttempt += 1) {
         require('./lib/analysis-stop-control').assertMayStartRequest();
         const remainingMs = totalTimeoutMs - (Date.now() - startedAt);
@@ -1363,7 +1440,8 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
             throw error;
         }
         const selection = selectApiKey(apiKeys, endpoint, stateFile, {
-            excludeAccountIds: attemptedAccountIds
+            excludeAccountIds: attemptedAccountIds,
+            ...(affinityKey ? { affinityKey } : {})
         });
         attemptedAccountIds.add(selection.accountId);
         const requestHeaders = replaceCredentialHeaders(baseHeaders, selection.apiKey);
@@ -1373,7 +1451,7 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
             model,
             bodyObj,
             requestHeaders,
-            { ...options, timeoutMs: remainingMs }
+            { ...options, timeoutMs: remainingMs, accountId: selection.accountId }
         );
         const quota = classifyOpenCodeGoQuotaResponse(response, { endpoint });
         if (!quota && response?.statusCode === 401) throw new LlmAccountAuthError();
@@ -2051,6 +2129,7 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
         socket = proxy.protocol === 'https:'
             ? tls.connect({ host: proxyHost, port: proxyPort, servername: proxyHost, rejectUnauthorized: true })
             : net.connect({ host: proxyHost, port: proxyPort });
+        socket.setKeepAlive?.(true, 20000);
         pendingSockets.add(socket);
 
         const onPrematureClose = () => {
@@ -2127,6 +2206,8 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
                         servername: normalizedTlsServername,
                         rejectUnauthorized: true
                     }, () => {
+                        rawSocket.setKeepAlive?.(true, 20000);
+                        tlsSocket?.setKeepAlive?.(true, 20000);
                         tlsSocket?.removeListener?.('close', onTlsClose);
                         tlsSocket?.removeListener?.('error', done);
                         done(null, tlsSocket);
@@ -2347,6 +2428,8 @@ function loadPrompt(mdPath, vars = {}, { originalFileSha256 = null } = {}) {
 
 module.exports = {
     normalizeReasoningEffort,
+    resolveStageReasoningEffort,
+    STAGE_REASONING_EFFORT_TIERS,
     reasoningEffortsFor,
     REASONING_EFFORTS,
     REASONING_EFFORTS_BY_MODEL,

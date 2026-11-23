@@ -10620,7 +10620,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...(resolveApiReaderRequestPolicy()
                     ? { readerThinkingMode: resolveApiReaderRequestPolicy().thinkingMode } : {}),
                 temperature: attempt === 1 && !repairContext
-                    ? start.temperature : API_READER_REPAIR_TEMPERATURE,
+                    ? start.temperature
+                    : (conceptTermsContext ? EXTRACTION_REPAIR_TEMPERATURE : API_READER_REPAIR_TEMPERATURE),
+                ...(conceptTermsContext ? { reasoningStage: 'apiReaderConceptTerms' } : {}),
                 ...(ordinalCapability ? { readerTargetOrdinalCapability: ordinalCapability } : {}),
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 maxRetries: API_READER_TRANSPORT_MAX_RETRIES,
@@ -12030,9 +12032,14 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     let scoringDelta = calculateScoringDelta(previousScore, analysis, auditedParsed?.score);
     let finalScore = scoringDelta.finalScore;
     let scoreDelta = scoringDelta.scoreDelta;
+    const consensusRequired = shouldTriggerScoringConsensus({
+        firstScore: finalScore,
+        previousRunScore: scoringDelta.previousRunScore,
+        capsApplied: scoringResult.audit?.capsApplied || []
+    });
     const consensus = await runScoringAuditConsensus({
         firstResult: scoringResult, firstScore: finalScore,
-        requiresConsensus: scoreDelta !== null && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD,
+        requiresConsensus: consensusRequired,
         auditAgain: () => auditTypeAwareScoringDetailed(analysis, sourceText, {
             evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: readerResources,
             declaredStage: scoringRequestDeclaration
@@ -12101,8 +12108,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         previousRunScore: scoringDelta.previousRunScore,
         finalScore: Number.isFinite(finalScore) ? finalScore : null,
         scoreDelta,
-        stabilityWarning: scoreDelta !== null
-            && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD,
+        stabilityWarning: Boolean(consensusRequired),
         stabilityResolution,
         audit: scoringResult.audit,
         auditSha256: stableFingerprint(scoringResult.audit),
@@ -15000,6 +15006,42 @@ function makeModelHttpError(status, message, config = DEEP_CONFIG) {
     }, config);
 }
 
+const EXTRACTION_REPAIR_STAGES = new Set([
+    'openSourceScan', 'tagSelection', 'tableRepair', 'structureRepair',
+    'methodRepair', 'coreSummaryRepair', 'apiReaderConceptTerms'
+]);
+const EXTRACTION_REPAIR_TEMPERATURE = 0.1;
+
+function resolveConfiguredStageTemperature(config) {
+    if (Number.isFinite(config?.temperature)) return config.temperature;
+    const stage = config?.reasoningStage || config?.usageContext?.stage;
+    if (typeof stage === 'string' && EXTRACTION_REPAIR_STAGES.has(stage)) {
+        return EXTRACTION_REPAIR_TEMPERATURE;
+    }
+    return API_TEMPERATURE;
+}
+
+function buildStagePromptCacheKey(config) {
+    const rawStage = config?.reasoningStage || config?.usageContext?.stage;
+    const stage = typeof rawStage === 'string' ? rawStage.trim() : '';
+    if (!stage) return undefined;
+    const modelTag = String(config?.model || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 24);
+    // 同阶段跨论文共享静态提示词前缀；同篇论文多阶段/重试通过 paperId 亲和槽位命中同一账号热缓存。
+    return `pd:${stage}:${modelTag}`;
+}
+
+function shouldTriggerScoringConsensus({ firstScore, previousRunScore = null, capsApplied = [] }) {
+    if (!Number.isFinite(firstScore)) return false;
+    if (firstScore >= 8.0) return true;
+    const tierBoundaries = [6.0, 7.5, 8.5];
+    if (tierBoundaries.some(boundary => Math.abs(firstScore - boundary) <= 0.2 + 1e-9)) return true;
+    if (Array.isArray(capsApplied) && capsApplied.length > 0) return true;
+    if (Number.isFinite(previousRunScore) && Math.abs(firstScore - previousRunScore) > SCORING_STABILITY_THRESHOLD) {
+        return true;
+    }
+    return false;
+}
+
 async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RETRIES, config = null) {
     maxRetries = resolveApiMaxRetries(maxRetries);
     const cfg = config || DEEP_CONFIG;
@@ -15028,7 +15070,7 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
             category: 'endpoint_config'
         }, cfg);
     }
-    const temperature = Number.isFinite(cfg.temperature) ? cfg.temperature : API_TEMPERATURE;
+    const temperature = resolveConfiguredStageTemperature(cfg);
     const input = summarizeModelInput(safeMessages);
     const outputTokenParameter = apiType === 'openai_responses'
         ? 'max_output_tokens'
@@ -15131,9 +15173,11 @@ function getRemainingTimeoutMs(deadline, now = Date.now()) {
  * 单次 API 调用（内部方法）
  */
 function buildConfiguredModelRequestBody(messages, maxTokens, config, apiType) {
-    const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
+    const temperature = resolveConfiguredStageTemperature(config);
     return buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
         { usageContext: config.usageContext,
+            reasoningStage: config.reasoningStage,
+            promptCacheKey: config.promptCacheKey || buildStagePromptCacheKey(config),
             auxiliaryThinkingMode: resolveAuxiliaryRequestPolicy(config.usageContext?.stage, config)?.thinkingMode,
             readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair'].includes(config.usageContext?.stage)
                 ? config.readerResponseFormat : undefined,
@@ -15147,7 +15191,7 @@ function buildConfiguredModelRequestBody(messages, maxTokens, config, apiType) {
 
 async function _callModelOnce(messages, maxTokens, config, budget, apiType, timeoutMs) {
     const apiUrl = buildApiUrl(apiType, config.endpoint);
-    const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
+    const temperature = resolveConfiguredStageTemperature(config);
     const bodyObj = buildConfiguredModelRequestBody(messages, maxTokens, config, apiType);
     if (bodyObj.thinking?.type) {
         const requestLabel = ['coreSummaryRepair', 'structureRepair', 'tableRepair'].includes(config.usageContext?.stage)
@@ -15247,6 +15291,12 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
         primaryThinkingMode: options.primaryThinkingMode,
         readerTargetOrdinalCapability: options.readerTargetOrdinalCapability,
         usageContext: options.usageContext,
+        ...(typeof options.reasoningStage === 'string' && options.reasoningStage.trim()
+            ? { reasoningStage: options.reasoningStage.trim() }
+            : {}),
+        ...(typeof options.promptCacheKey === 'string' && options.promptCacheKey.trim()
+            ? { promptCacheKey: options.promptCacheKey.trim() }
+            : {}),
         usageDirectory: options.usageDirectory,
         usageSink: options.usageSink,
         recordUsage: options.recordUsage,
@@ -19559,10 +19609,14 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             let scoringDelta = calculateScoringDelta(
                 previousScore, scoringInputAnalysis, auditedParsed?.score
             );
+            const consensusRequired = shouldTriggerScoringConsensus({
+                firstScore: scoringDelta.finalScore,
+                previousRunScore: scoringDelta.previousRunScore,
+                capsApplied: scoringResult.audit?.capsApplied || []
+            });
             const consensus = await runScoringAuditConsensus({
                 firstResult: scoringResult, firstScore: scoringDelta.finalScore,
-                requiresConsensus: scoringDelta.scoreDelta !== null
-                    && Math.abs(scoringDelta.scoreDelta) > SCORING_STABILITY_THRESHOLD,
+                requiresConsensus: consensusRequired,
                 auditAgain: () => auditTypeAwareScoringDetailed(scoringInputAnalysis, rawTextForAnalysis, {
                     evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: paper.apiReaderResources,
                     declaredStage: scoringRequestDeclaration
@@ -19570,7 +19624,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 scoreOfResult: candidate => Number(validateScoringOutput(candidate.analysis)?.score),
                 fingerprintAudit: stableFingerprint,
                 onPass: (pass, scores) => console.log(pass === 2
-                    ? `    [deep] ⚠️  评分稳定性告警触发独立二次审计: previous=${scoringDelta.previousScore.toFixed(1)} | first=${scores.firstScore.toFixed(1)}`
+                    ? `    [deep] ⚠️  高分/边界/硬上限条件触发独立二次审计: first=${scores.firstScore.toFixed(1)}${scoringDelta.previousRunScore !== null ? ` | previousRun=${scoringDelta.previousRunScore.toFixed(1)}` : ''}`
                     : `    [deep] ⚠️  前两次评分不一致，开始第三次独立审计: first=${scores.firstScore.toFixed(1)} | second=${scores.secondScore.toFixed(1)}`)
             });
             scoringResult = consensus.result;
@@ -19587,8 +19641,10 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             const finalScore = scoringDelta.finalScore;
             const scoreBeforeAudit = scoringDelta.previousScore;
             const scoreDelta = scoringDelta.scoreDelta;
-            const stabilityWarning = scoreDelta !== null
-                && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD;
+            // 盲审共识仅在 consensusRequired 时执行；stabilityWarning 必须与共识触发条件保持一致，
+            // 否则中档分论文在初稿虚高被盲审纠正 > 0.5 时会出现 stabilityWarning=true 且
+            // stabilityResolution.status='not_required'，导致下游 scoringStabilityIsResolved 误拒。
+            const stabilityWarning = Boolean(consensusRequired);
             markRecoveryStage(analysisManifest, 'scoringAudit', 'complete', {
                 ...scoringFactReview.fingerprintFields('scoringAudit'),
                 ...(resolveAuxiliaryRequestPolicy('scoringAudit')
@@ -21787,6 +21843,9 @@ module.exports = {
     saveAnalysisCheckpoint,
     shouldRetainFullTextCheckpoint,
     calculateScoringDelta,
+    shouldTriggerScoringConsensus,
+    resolveConfiguredStageTemperature,
+    buildStagePromptCacheKey,
     stableFingerprint,
     buildRecoveryFingerprints,
     resolvePrimaryRequestPolicy,

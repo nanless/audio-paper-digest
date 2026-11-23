@@ -12,14 +12,24 @@ function readUsageEvents(directory) {
     const root = fs.lstatSync(directory);
     if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('用量事件目录必须是真实目录，不能是符号链接');
     const events = [];
-    for (const name of fs.readdirSync(directory).sort()) {
-        if (!name.endsWith('.json')) continue;
-        const file = path.join(directory, name);
-        const stat = fs.lstatSync(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32768) throw new Error('用量事件必须是普通文件，不能是符号链接或超过 32 KiB');
-        const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (!isUsageEventFormat(value) || !['request', 'request_started', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：格式声明或 kind 不属于已登记的用量记录');
-        events.push(value);
+    const readDirJsonFiles = (dirPath) => {
+        for (const name of fs.readdirSync(dirPath).sort()) {
+            if (!name.endsWith('.json')) continue;
+            const file = path.join(dirPath, name);
+            const stat = fs.lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32768) throw new Error('用量事件必须是普通文件，不能是符号链接或超过 32 KiB');
+            const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (!isUsageEventFormat(value) || !['request', 'request_started', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：格式声明或 kind 不属于已登记的用量记录');
+            events.push(value);
+        }
+    };
+    readDirJsonFiles(directory);
+    for (const entry of fs.readdirSync(directory).sort()) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(entry)) continue;
+        const sub = path.join(directory, entry);
+        const subStat = fs.lstatSync(sub);
+        if (!subStat.isDirectory() || subStat.isSymbolicLink()) throw new Error('用量日期子目录必须是真实目录，不能是符号链接');
+        readDirJsonFiles(sub);
     }
     return events;
 }

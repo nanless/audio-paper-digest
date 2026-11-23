@@ -26,6 +26,7 @@ const { DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 }
 const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix, verifyFailedAnnouncementSource } = require('./lib/daily-arxiv-prefix-source');
 const { isDailyXmlOperationalError } = require('./lib/daily-xml-file-stdin');
 const { KEYWORD_PREFILTER_PROFILE } = require('./lib/keyword-prefilter.js');
+const { DAILY_FILTER_PREFILTER_SHA256 } = require('./lib/daily-filter-prefilter.js');
 const { FILTER_SCOPE_CONFIGURATION_IDENTITY, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
     createHostTaskScheduler,
@@ -140,6 +141,7 @@ function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
         decisionContractProfile: Config.FILTER_CONFIG.decisionContractProfile,
         keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
         keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
+        dailyFilterPrefilterSha256: DAILY_FILTER_PREFILTER_SHA256,
         scopeEvidenceVersion: FILTER_SCOPE_CONFIGURATION_IDENTITY
     });
 }
@@ -1482,6 +1484,7 @@ function prepareExplicitRefilter(today, expected, request) {
         if (!paper || !isDefinitiveFilterDecision(decision)
             || decision.inputSha256 !== validatedDecisionInputSha256(paper, decision, { batchDate: today })
             || decision.parseSource === 'keyword_prefilter'
+            || decision.parseSource === 'scope_body_audio_anchor_prefilter'
             || decision.parseSource === 'official_pdf_404_skipped') {
             throw new Error(`指定论文 ${id} 必须是当前原始候选中已有有效模型决定的论文；此入口只复核模型决定，未请求模型`);
         }
