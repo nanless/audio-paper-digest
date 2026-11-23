@@ -1013,3 +1013,66 @@ test('saved-fact-feedback: 强制重分析已完成新 scoringAudit 时忽略原
     withObligation.analysisFactReviewObligation = { feedbackSha256: 'b'.repeat(64) };
     assert.equal(saved.hasSavedProof(withObligation), true);
 });
+
+test('invalidateRecoveryStageIfChanged: 接替旧序号完成证明时同步移除 contracts.readerTargetOrdinalPatch，无证明时不移除', () => {
+    const { invalidateRecoveryStageIfChanged } = require('../scripts/deep-analyzer');
+    const paper = {
+        arxivId: '2611.25569v1',
+        apiReaderArticle: '旧正文',
+        apiReaderPlan: { version: 3 },
+        analysisStageCheckpoints: { apiReaderArticle: 'old-checkpoint' },
+        analysisManifest: {
+            stages: {
+                apiReaderArticle: {
+                    status: 'complete',
+                    fingerprint: 'old-fp',
+                    articleSha256: 'a'.repeat(64),
+                    planSha256: 'b'.repeat(64),
+                    ordinalCompletionProof: { path: '/tmp/2611.25569-00000001.json', sha256: 'c'.repeat(64) },
+                    ordinalPatchCompilations: [{ requestId: 'req-1' }]
+                }
+            },
+            contracts: {
+                apiReaderArticle: 'beginner-researcher',
+                readerTargetOrdinalPatch: 'reader-target-ordinal-patch',
+                coreSummary: { contract: 'core-summary' }
+            }
+        }
+    };
+    const changed = invalidateRecoveryStageIfChanged(paper, paper.analysisManifest, 'apiReaderArticle', 'new-fp');
+    assert.equal(changed, true);
+    assert.equal(paper.analysisManifest.stages.apiReaderArticle, undefined);
+    assert.equal(paper.analysisManifest.contracts.apiReaderArticle, undefined);
+    assert.equal(paper.analysisManifest.contracts.readerTargetOrdinalPatch, undefined);
+    assert.deepEqual(paper.analysisManifest.contracts.coreSummary, { contract: 'core-summary' });
+    assert.equal(paper.readerRevisionHistory?.contract, 'daily-reader-revision-history-v1');
+    assert.equal(paper.readerRevisionHistory?.reason, 'stage-invalidated');
+    assert.deepEqual(paper.readerRevisionHistory?.completionProof, {
+        path: '/tmp/2611.25569-00000001.json',
+        sha256: 'c'.repeat(64)
+    });
+
+    // 负例：缺少 ordinalCompletionProof 时不得静默移除 contracts.readerTargetOrdinalPatch（保留篡改拦截）
+    const tampered = {
+        arxivId: '2611.25569v1',
+        apiReaderArticle: '旧正文',
+        apiReaderPlan: { version: 3 },
+        analysisStageCheckpoints: {},
+        analysisManifest: {
+            stages: {
+                apiReaderArticle: {
+                    status: 'complete',
+                    fingerprint: 'old-fp'
+                }
+            },
+            contracts: {
+                apiReaderArticle: 'beginner-researcher',
+                readerTargetOrdinalPatch: 'reader-target-ordinal-patch'
+            }
+        }
+    };
+    const tamperedChanged = invalidateRecoveryStageIfChanged(tampered, tampered.analysisManifest, 'apiReaderArticle', 'new-fp');
+    assert.equal(tamperedChanged, true);
+    assert.equal(tampered.readerRevisionHistory, undefined);
+    assert.equal(tampered.analysisManifest.contracts.readerTargetOrdinalPatch, 'reader-target-ordinal-patch');
+});

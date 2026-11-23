@@ -14062,14 +14062,14 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
 
 
 function supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, recoveryStage) {
-    if (recoveryStage !== 'apiReaderArticle') return;
+    if (recoveryStage !== 'apiReaderArticle') return false;
     const stage = manifest?.stages?.apiReaderArticle;
     const proof = stage?.ordinalCompletionProof;
-    if (!proof?.path || !proof?.sha256) return;
+    if (!proof?.path || !proof?.sha256) return false;
     const previous = paper?.readerRevisionHistory;
     if (previous?.contract === 'daily-reader-revision-history-v1'
         && previous?.completionProof?.path === proof.path
-        && previous?.completionProof?.sha256 === proof.sha256) return;
+        && previous?.completionProof?.sha256 === proof.sha256) return true;
     // 指纹失效会清掉 Reader 阶段，旧完成证明只对旧稿成立；登记重做历史后，
     // 序号完成检查承认它已被接替，新一次 Reader 也不再被旧补丁链拦成“不能切全文”。
     paper.readerRevisionHistory = {
@@ -14081,6 +14081,7 @@ function supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, recoveryS
         previousOrdinalPatchCompilations: structuredClone(stage.ordinalPatchCompilations || []),
         recordedAt: getBeijingISOString()
     };
+    return true;
 }
 
 // Reader-only feedback may replace an ordinary completed Reader. Register the
@@ -14120,9 +14121,8 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint, o
         delete paper.analysisCheckpoint;
     }
     const tagRecord = readTagStageRecord(manifest, checkpoints);
-    if (stagesToDelete.includes('apiReaderArticle')) {
-        supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, 'apiReaderArticle');
-    }
+    const supersededOrdinalCompletion = stagesToDelete.includes('apiReaderArticle')
+        && supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, 'apiReaderArticle');
     for (const recoveryStage of stagesToDelete) {
         const key = recoveryStage === 'tagSelection' ? tagRecord.stageKey : recoveryStage;
         delete manifest.stages[key];
@@ -14152,6 +14152,9 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint, o
         delete paper.apiReaderPlanSha256;
         if (manifest.contracts) {
             delete manifest.contracts.apiReaderArticle;
+            if (supersededOrdinalCompletion) {
+                delete manifest.contracts.readerTargetOrdinalPatch;
+            }
             if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
         }
     }
@@ -19181,10 +19184,13 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             // 按正常 Reader 流程重新生成，而不是把一次内容缺陷升级成无请求的硬失败。
             if (!String(error?.message || '').includes('表格单元格与绑定的原始来源不一致')) throw error;
             console.log('    [deep] ⚠️ 已存读者文章无法与来源逐格对齐，清除该阶段并按正常流程重新生成');
-            supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
+            const supersededOrdinalCompletion = supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
             delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
             delete analysisManifest.contracts.apiReaderArticle;
+            if (supersededOrdinalCompletion) {
+                delete analysisManifest.contracts.readerTargetOrdinalPatch;
+            }
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;
             delete paper.apiReaderFigures;
@@ -19227,10 +19233,13 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     sourceDetails.structuredArtifacts?.payloadSha256,
                     crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'))
             ))) {
-            supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
+            const supersededOrdinalCompletion = supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
             delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
             delete analysisManifest.contracts.apiReaderArticle;
+            if (supersededOrdinalCompletion) {
+                delete analysisManifest.contracts.readerTargetOrdinalPatch;
+            }
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;
             delete paper.apiReaderFigures;
