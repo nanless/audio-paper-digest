@@ -30,8 +30,15 @@ import fitz
 
 from runtime_guard import require_external_runtime
 
-CONTRACT = "pdf-page1-author-evidence-v1"
+CONTRACT_V1 = "pdf-page1-author-evidence-v1"
+CONTRACT_V2 = "pdf-page1-author-evidence-v2"
+CONTRACT = CONTRACT_V2
 MAX_PDF_BYTES = 512 * 1024 * 1024
+
+ICON_FONT_RE = re.compile(
+    r"(?:marvosym|fontawesome|zapfdingbats|dingbats|webdings|wingdings|bbding|academicons|ifsym|wasysym|txsy|msam|msbm)",
+    re.IGNORECASE,
+)
 
 SYMBOL_MARKER_CHARS = "∗*†‡⋆§¶‖∥#◊♠♣♥♦♭♮♯✉•◦⋄+"
 PUA_TO_STAR = {
@@ -65,13 +72,15 @@ _LATEX_PREFIX_CEDILLA_RE = re.compile(r"\u00b8([CcSsTt])")
 _LATEX_GRAVE_ACCENT_RE = re.compile(r"(?:(?<=[A-Za-z])\u0060([AEIOUaeiou])|(?<!\u0060)\u0060([aeiou]))")
 
 AFFILIATION_HINT_RE = re.compile(
-    r"\b(?:univ(?:ersit[yéèêiäöüa-z]*)?|institut(?:e|ion)?|research|school|college|department|dept\.?|division|"
-    r"faculty|laborator(?:y|ies)|laboratoires?|labs?|academy|cent(?:re|er)|hospital|clinic|foundation|"
-    r"corp(?:oration)?\.?|company|co\.?,?\s*ltd\.?|inc(?:\.(?![a-z0-9-])|\b)|ltd(?:\.(?![a-z0-9-])|\b)|gmbh|llc|llp|plc|pbc|"
+    r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|institut(?:e|ion|o)?|research|school|college|department|dept\.?|departamento|dipartimento|division|"
+    r"faculty|laborator(?:y|ies|io)|laboratoires?|labs?|academy|cent(?:re|er|ro)|hospital|clinic|foundation|"
+    r"conservatory|conservatoire|[ée]cole|escola|politecnic[oa]|polytechnique|hochschule|"
+    r"corp(?:oration)?\.?|company|co\.?,?\s*ltd\.?|inc(?:\.(?![a-z0-9-])|\b)|ltd(?:\.(?![a-z0-9-])|\b)|gmbh|llc|llp|plc|pbc|berhad|sdn\.?\s*bhd\.?|"
     r"(?<=\S\s)(?:b\.v\.|s\.a\.(?:s\.)?|a\.g\.|s\.r\.l\.)(?![a-z0-9-])|"
-    r"pte\.?\s*ltd(?:\.(?![a-z0-9-])|\b)|pty\.?\s*ltd(?:\.(?![a-z0-9-])|\b)|technology|technologies|"
+    r"(?:pvt|pte|pty)\.?\s*ltd(?:\.(?![a-z0-9-])|\b)|technology|technologies|"
     r"t[ée]l[ée]com(?:munications?)?|intelligence|platforms?|vision|systems?|solutions?|engineering|"
     r"sciences?|computing|software|networks?|media|communications?|agi\s+lab|ai\s+lab|ai\s+research|"
+    r"fraunhofer|max\s+planck|ubisoft|tether\s+evo|"
     r"tencent|wechat|google|deepmind|meta\s+ai|microsoft|amazon|apple|nvidia|adobe|alibaba|bytedance|"
     r"huawei|baidu|oppo|xiaomi|samsung|sony|ibm|intel|qualcomm|bosch|siemens|kyutai|kaist|inria|"
     r"cnrs|sorbonne|sinica|mit|cmu|uc\s+berkeley|eth\s+zurich|eth\s+zürich|epfl|tsinghua|peking|fudan|sjtu|ustc|cuhk|nus|ntu|snu|"
@@ -80,13 +89,15 @@ AFFILIATION_HINT_RE = re.compile(
 )
 
 NON_PERSON_AFFILIATION_RE = re.compile(
-    r"\b(?:univ(?:ersit[yéèêiäöüa-z]*)?|institut(?:e|ion)?|research|school|college|department|dept\.?|division|"
-    r"faculty|laborator(?:y|ies)|laboratoires?|labs?|academy|cent(?:re|er)|hospital|clinic|foundation|"
-    r"corp(?:oration)?\.?|company|co\.?,?\s*ltd\.?|inc(?:\.(?![a-z0-9-])|\b)|ltd(?:\.(?![a-z0-9-])|\b)|gmbh|llc|llp|plc|pbc|"
+    r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|institut(?:e|ion|o)?|research|school|college|department|dept\.?|departamento|dipartimento|division|"
+    r"faculty|laborator(?:y|ies|io)|laboratoires?|labs?|academy|cent(?:re|er|ro)|hospital|clinic|foundation|"
+    r"conservatory|conservatoire|[ée]cole|escola|politecnic[oa]|polytechnique|hochschule|"
+    r"corp(?:oration)?\.?|company|co\.?,?\s*ltd\.?|inc(?:\.(?![a-z0-9-])|\b)|ltd(?:\.(?![a-z0-9-])|\b)|gmbh|llc|llp|plc|pbc|berhad|sdn\.?\s*bhd\.?|"
     r"(?<=\S\s)(?:b\.v\.|s\.a\.(?:s\.)?|a\.g\.|s\.r\.l\.)(?=\s*(?:[,;)]|$))|"
-    r"pte\.?\s*ltd(?:\.(?![a-z0-9-])|\b)|pty\.?\s*ltd(?:\.(?![a-z0-9-])|\b)|technology|technologies|"
+    r"(?:pvt|pte|pty)\.?\s*ltd(?:\.(?![a-z0-9-])|\b)|technology|technologies|"
     r"t[ée]l[ée]com(?:munications?)?|intelligence|platforms?|vision|systems?|solutions?|engineering|"
     r"sciences?|computing|software|networks?|media|communications?|agi\s+lab|ai\s+lab|ai\s+research|"
+    r"fraunhofer|max\s+planck|ubisoft|tether\s+evo|"
     r"tencent|wechat|google|deepmind|meta\s+ai|microsoft|amazon|nvidia|adobe|alibaba|bytedance|"
     r"huawei|baidu|xiaomi|samsung|ibm|intel|qualcomm|siemens|kyutai|kaist|inria|"
     r"cnrs|sorbonne|sinica|mit|cmu|uc\s+berkeley|eth\s+zurich|eth\s+zürich|epfl|tsinghua|peking|fudan|sjtu|ustc|cuhk|nus|ntu|snu|"
@@ -95,8 +106,9 @@ NON_PERSON_AFFILIATION_RE = re.compile(
 )
 
 ACADEMIC_INST_CORE_RE = re.compile(
-    r"\b(?:univ(?:ersit[yéèêiäöüa-z]*)?|institut(?:e|ion)?|research|school|college|department|dept\.?|division|"
-    r"faculty|laborator(?:y|ies)|laboratoires?|labs?|academy|cent(?:re|er)|hospital|clinic|foundation|"
+    r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|institut(?:e|ion|o)?|research|school|college|department|dept\.?|departamento|dipartimento|division|"
+    r"faculty|laborator(?:y|ies|io)|laboratoires?|labs?|academy|cent(?:re|er|ro)|hospital|clinic|foundation|"
+    r"conservatory|conservatoire|[ée]cole|escola|politecnic[oa]|polytechnique|hochschule|fraunhofer|max\s+planck|"
     r"cnrs|inria|kaist|epfl|mit|cmu|riken|nict|dfki|idiap|sorbonne|sinica)\b",
     re.IGNORECASE,
 )
@@ -125,7 +137,7 @@ NON_AUTHOR_RESOURCE_RE = re.compile(
     r"(?:@|https?://|www\.|github\.com|huggingface\.co|gitlab\.com|^\s*\{[^}]+\}\s*@|^\s*e-?mail\s*:|"
     r"\b(?:project\s+page|hugging\s*face|github|modelscope|demo\s+page|code\s+link)\b|"
     r"^(?:code|dataset|datasets|demo|demos|models?|paper|project|weights?|blog|audio\s+samples?)"
-    r"(?:\s+(?:code|dataset|datasets|demo|demos|models?|paper|project|weights?|blog|audio|samples?))+\b)",
+    r"(?:(?:\s*[·•|/]\s*|\s+)(?:code|dataset|datasets|demo|demos|models?|paper|project|weights?|blog|audio|samples?))+\b)",
     re.IGNORECASE,
 )
 
@@ -136,7 +148,7 @@ RESOURCE_LABEL_ONLY_RE = re.compile(
     r"audio\s+samples|hugging\s*face|github|gitlab|modelscope|home|homepage|website|webpage|"
     r"repository|repo|abstract|introduction|keywords?|index\s+terms)"
     r"(?:\s+(?:page|website|url|link|repo|repository))?|"
-    r"e-?mail|emails?|contact|correspondence)\s*[:：]?\s*$",
+    r"e-?mail|emails?|contact|correspondence|address)\s*[:：]?\s*$",
     re.IGNORECASE,
 )
 
@@ -320,16 +332,22 @@ LOCATION_ONLY_RE = re.compile(
 )
 
 KNOWN_LOCATION_TAIL_FULL_RE = re.compile(
-    r"^(?:United\s+States(?:\s+of\s+America)?|United\s+Kingdom|"
+    r"^(?:United\s+States(?:\s+of\s+America)?|United\s+Kingdom|United\s+Arab\s+Emirates|UAE|"
     r"China|P\.?\s*R\.?\s*China|France|Germany|Japan|Korea|South\s+Korea|Republic\s+of\s+Korea|"
-    r"Canada|Switzerland|Singapore|Australia|India|Italy|Spain|Netherlands|Sweden|Norway|Finland|"
-    r"Denmark|Belgium|Austria|Poland|Israel|Taiwan|Hong\s+Kong|Macau|Brazil|Mexico|Turkey|Türkiye|"
+    r"Canada|Switzerland|Singapore|Australia|India|Italy|Spain|(?:The\s+)?Netherlands|Sweden|Norway|Finland|"
+    r"Denmark|Belgium|Austria|Poland|Israel|Taiwan|R\.?\s*O\.?\s*C\.?|Hong\s+Kong|Macau|Brazil|Mexico|Turkey|Türkiye|"
     r"Greece|Ireland|Portugal|Czech\s+Republic|New\s+Zealand|Russia|Vietnam|Thailand|Malaysia|"
+    r"El\s+Salvador|Nepal|Bangladesh|Uzbekistan|Saudi\s+Arabia|Egypt|Iran|Pakistan|Indonesia|"
+    r"Philippines|Argentina|Chile|Colombia|Peru|South\s+Africa|Nigeria|Kenya|Cameroon|Hungary|Romania|"
+    r"Bulgaria|Croatia|Serbia|Slovakia|Slovenia|Ukraine|Lithuania|Latvia|Estonia|Iceland|"
+    r"Luxembourg|Malta|Cyprus|Qatar|Kuwait|Oman|Jordan|Lebanon|Morocco|Tunisia|Kazakhstan|"
+    r"Belarus|Armenia|Azerbaijan|Mongolia|Cambodia|Myanmar|Sri\s+Lanka|"
     r"California|Massachusetts|Washington|Texas|Illinois|Pennsylvania|Michigan|Virginia|Maryland|"
     r"Georgia|Indiana|Colorado|Oregon|Florida|Arizona|Ohio|Minnesota|Connecticut|Wisconsin|"
     r"Missouri|Tennessee|Utah|New\s+York|New\s+Jersey|North\s+Carolina|South\s+Carolina|"
     r"New\s+Mexico|West\s+Virginia|North\s+Dakota|South\s+Dakota|Rhode\s+Island|New\s+Hampshire|"
     r"District\s+of\s+Columbia|Ontario|Quebec|British\s+Columbia|Nova\s+Scotia|Alberta|Manitoba|"
+    r"Gujarat|Maharashtra|Karnataka|Tamil\s+Nadu|Telangana|Uttar\s+Pradesh|West\s+Bengal|Kerala|Rajasthan|Punjab|Haryana|Andhra\s+Pradesh|"
     r"England|Scotland|Bavaria)$",
     re.IGNORECASE,
 )
@@ -552,7 +570,7 @@ def _looks_like_prose_sentence(text: str) -> bool:
         tok = m_dot.group(1)
         if tok == "]" or (
             len(tok) > 1
-            and tok not in {"Co", "Ltd", "Inc", "Corp", "Dept", "Univ", "Lab", "Labs", "Tech", "Inst", "Prof", "Dr", "St", "No", "Mt", "Ft", "al", "vs"}
+            and tok not in {"Co", "Ltd", "Inc", "Corp", "Dept", "Univ", "Lab", "Labs", "Tech", "Inst", "Prof", "Dr", "St", "No", "Mt", "Ft", "al", "vs", "Pvt", "Pte", "Pty", "Sdn", "Bhd", "Eng", "Sci", "Res", "Nat", "Int", "Adv", "Acad", "Med", "Assoc"}
         ):
             return True
     if PROSE_VERB_RE.search(s) or _is_credit_contribution(s):
@@ -614,8 +632,13 @@ def _is_location_only_line(text: str) -> bool:
         mid_no_zip = re.sub(r"\s+\d{4,6}$", "", mid).strip()
         if not (re.fullmatch(r"\d{4,6}(?:-\d{4})?", mid) or _is_known_location_tail(mid_no_zip)):
             return False
-    # Never classify "Anthropic, USA" / "OpenAI, CA" / "FAIR, USA" / "Pine AI, CA" / "Boston Dynamics, MA" as city-only
-    if _has_affiliation_hint(left) or NON_PERSON_ORG_TOKEN_CS_RE.search(left) or MIXED_CASE_AI_ORG_LINE_RE.fullmatch(left):
+    # Never classify "Anthropic, USA" / "OpenAI, CA" / "Observe.AI, India" / "Armsoftech.air, India" / "Fraunhofer IIS, Germany" as city-only
+    if (
+        _has_affiliation_hint(left)
+        or NON_PERSON_ORG_TOKEN_CS_RE.search(left)
+        or MIXED_CASE_AI_ORG_LINE_RE.fullmatch(left)
+        or re.search(r"\.(?:ai|io|com|org|net|edu|co|air)\b", left, re.IGNORECASE)
+    ):
         return False
     left_key = re.sub(r"[^a-z0-9]", "", left.lower())
     if left_key in KNOWN_NON_CITY_ORG_HEADS:
@@ -625,6 +648,21 @@ def _is_location_only_line(text: str) -> bool:
     if re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]", left):
         return False
     if len(left) >= 2 and left.isupper() and left not in EXEMPT_UPPER_CITIES:
+        return False
+    # Protect non-geographic ALL-CAPS institutional acronyms (e.g. "UNSW Sydney, Australia", "KAIST Daejeon, Korea")
+    _geo_acronyms = {"USA", "UAE", "PRC", "ROC", "NSW", "QLD", "VIC", "ACT", "TAS", "SAR"}
+    if any(re.fullmatch(r"[A-Z]{3,}", tok.strip("()")) and tok.strip("()") not in _geo_acronyms for tok in left.split()):
+        return False
+    # Protect famous university shortnames when paired directly with a country (e.g. "Stanford, USA"),
+    # while still treating state-qualified city lines (e.g. "Stanford, CA" or "Stanford, CA, USA") as pure locations.
+    _univ_shortnames = {"stanford", "caltech", "cornell", "princeton", "harvard", "purdue", "dartmouth", "vanderbilt", "northwestern"}
+    if len(parts) == 2 and left_key in _univ_shortnames and len(right_no_zip) > 2 and right_no_zip.lower() not in {"california", "new york", "new jersey", "massachusetts", "indiana", "illinois", "tennessee", "new hampshire"}:
+        return False
+    # Real city names are 1-2 words (or explicit multi-word locations like "District of Columbia"),
+    # never 3+ word organization names like "Earth Species Project, France".
+    if len(left.split()) >= 3 and not MULTI_WORD_LOCATION_PHRASE_RE.fullmatch(left):
+        return False
+    if re.search(r"\b(?:project|initiative|consortium|association|society|alliance|collective|collaborative)\b", left, re.IGNORECASE):
         return False
     return True
 
@@ -644,7 +682,8 @@ def _parse_marker_string(raw: str) -> list[str]:
     s = _normalize_pua(raw).strip()
     if not s:
         return []
-    # Strip surrounding parens/brackets
+    # Strip surrounding parens/brackets and RevTeX/AIP trailing ')' on markers like "a)" or "a),b)"
+    s = re.sub(r"\b([a-z])\)", r"\1", s)
     s = s.strip("()[]")
     # Reject things that look like ordinary words, years, emails, C++, +x/+y/+z diagram axes, or +1/+86 phones
     if (
@@ -675,8 +714,8 @@ def _is_pure_marker_text(raw: str) -> bool:
     # Reject C++ / ++, +x/+y/+z / a+b diagram labels, and +1/+86/1+2 phone or math prefixes
     if "++" in s or re.search(r"(?:\+[a-z]|[a-z]\+)", s) or re.search(r"\+\d", s):
         return False
-    # Allow combinations of digits (1-20), single lowercase letters, symbol markers, commas, spaces
-    if re.fullmatch(r"[\s,;]*(?:(?:[1-9]\d?|[a-z]|[" + re.escape(SYMBOL_MARKER_CHARS) + r"])[\s,;]*)+", s):
+    # Allow combinations of digits (1-20), single lowercase letters (optionally RevTeX 'a)'), symbol markers, commas, spaces
+    if re.fullmatch(r"[\s,;]*(?:(?:[1-9]\d?|[a-z]\)?|[" + re.escape(SYMBOL_MARKER_CHARS) + r"])[\s,;]*)+", s):
         # Single lowercase 'a' or 'i' only if no surrounding words; reject multi-letter words
         if re.search(r"[a-z]{2,}", s):
             return False
@@ -922,14 +961,22 @@ def _has_strong_unmarked_org_signal(text: str) -> bool:
         or re.sub(r"[^a-z0-9]", "", s.lower()) in KNOWN_NON_CITY_ORG_HEADS
         or any(re.sub(r"[^a-z0-9]", "", t.lower()) in KNOWN_NON_CITY_ORG_HEADS for t in toks)
         or NON_PERSON_ORG_TOKEN_CS_RE.search(s)
+        or bool(re.match(r"^(?:UC|CSU|SUNY|CUNY|UNC|USC|ETH|EPFL|MIT|CMU|NYU|KAIST|UNSW|RWTH|TUM|LMU|KTH|DTU|NTNU|IIT|IIIT|IISc)\b", s))
         or MIXED_CASE_AI_ORG_LINE_RE.fullmatch(s)
     )
 
 
 def _sanitize_affiliation(raw: str, author_names: list[str] | _KnownAuthorIndex | None = None) -> str:
     text = _clean_ws(raw)
-    # Strip leading affiliation labels
+    # Strip leading affiliation labels & academic title prefixes (e.g. "Associate Professor, Middlebury Institute...")
     text = re.sub(r"^(?:affiliations?|institutions?)\s*[:：]\s*", "", text, flags=re.IGNORECASE)
+    m_title_prefix = re.match(
+        r"^(?:(?:Assistant|Associate|Full|Adjunct|Visiting|Emeritus|Distinguished|Research)\s+)?Professor\s*,\s*(.+)$",
+        text,
+        re.IGNORECASE,
+    )
+    if m_title_prefix and _has_affiliation_hint(m_title_prefix.group(1)):
+        text = m_title_prefix.group(1).strip()
     if FOOTNOTE_ROLE_RE.match(text) or DATE_LINE_RE.match(text) or VENUE_OR_STATUS_RE.match(text) or IEEE_MEMBER_ONLY_RE.match(text):
         return ""
     # Strip trailing email/URL/parenthetical email clauses (strictly O(n) guarded & non-nested)
@@ -1148,8 +1195,12 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
                 t = _normalize_pua(s.get("text", ""))
                 if not t:
                     continue
+                font_name = str(s.get("font", ""))
+                is_icon = bool(ICON_FONT_RE.search(font_name) and len(t.strip()) <= 3)
                 spans.append({
-                    "text": t,
+                    "text": "✉" if is_icon else t,
+                    "font": font_name,
+                    "is_icon": is_icon,
                     "size": float(s.get("size", 10.0)),
                     "flags": int(s.get("flags", 0)),
                     "origin_y": float(s.get("origin", (0.0, 0.0))[1]),
@@ -1157,21 +1208,22 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
                 })
             if not spans:
                 continue
-            joined = _clean_ws("".join(s["text"] for s in spans))
+            joined = _clean_ws("".join("" if s.get("is_icon") else s["text"] for s in spans))
             if not joined:
                 continue
             # Skip left-margin arXiv stamp even if horizontal
             if re.match(r"^arXiv:\d{4}\.\d{4,5}", joined, re.IGNORECASE):
                 continue
             bbox = tuple(float(v) for v in line.get("bbox", (0, 0, 0, 0)))
-            max_sz = max(s["size"] for s in spans)
+            non_icon_spans = [s for s in spans if not s.get("is_icon")] or spans
+            max_sz = max(s["size"] for s in non_icon_spans)
             # Dominant (non-marker) font size & baseline
-            word_spans = [s for s in spans if re.search(r"[A-Za-z\u3400-\u9fff]{2,}", s["text"])]
+            word_spans = [s for s in non_icon_spans if re.search(r"[A-Za-z\u3400-\u9fff]{2,}", s["text"])]
             base_sz = max((s["size"] for s in word_spans), default=max_sz)
             base_y = (
                 sorted(s["origin_y"] for s in word_spans)[len(word_spans) // 2]
                 if word_spans
-                else spans[0]["origin_y"]
+                else non_icon_spans[0]["origin_y"]
             )
             all_lines.append({
                 "block": b_idx,
@@ -1187,9 +1239,9 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
                 "base_y": base_y,
             })
 
-    # Find abstract start y (upper bound of header), including split same-row headings like "1" + "Introduction"
-    # Ignore paper titles that start with "Abstract ..." or "Summary ..." in large title font.
-    abstract_y = page_h * 0.50
+    # Find abstract start y (upper bound of header), allowing long affiliation blocks up to 0.78*page_h
+    # when Abstract/Introduction sits below 0.50*page_h (e.g. 12-institution headers).
+    abstract_y: float | None = None
     top_title_sz = max(
         (ln["max_size"] for ln in all_lines if 35 <= ln["y0"] < page_h * 0.35),
         default=12.0,
@@ -1204,7 +1256,7 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
     for row in y_rows:
         row_sorted = sorted(row, key=lambda r: r["x0"])
         row_y = min(r["y0"] for r in row_sorted)
-        if row_y <= 60:
+        if row_y <= 60 or row_y > page_h * 0.78:
             continue
         row_text = _clean_ws(" ".join(r["text"] for r in row_sorted))
         row_max_sz = max(r["max_size"] for r in row_sorted)
@@ -1215,8 +1267,22 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
         if is_title_sized and not is_standalone_abstract_heading and not re.match(r"^(?:i\.|1\.?)\s+introduction\b", row_text, re.IGNORECASE):
             continue
         if ABSTRACT_START_RE.match(row_text) or any(ABSTRACT_START_RE.match(r["text"]) for r in row_sorted):
-            abstract_y = min(abstract_y, row_y)
+            abstract_y = row_y
             break
+    if abstract_y is None:
+        abstract_y = page_h * 0.50
+        # If explicit superscript affiliation lines continue past 0.50*page_h, extend up to 0.72*page_h
+        for row in y_rows:
+            row_y = min(r["y0"] for r in row)
+            if row_y < page_h * 0.50:
+                continue
+            if row_y > page_h * 0.72:
+                break
+            row_text = _clean_ws(" ".join(r["text"] for r in sorted(row, key=lambda r: r["x0"])))
+            if any(_has_affiliation_hint(r["text"]) for r in row) and not _looks_like_prose_sentence(row_text):
+                abstract_y = max(abstract_y, max(r["y1"] for r in row) + 4.0)
+            else:
+                break
 
     # Skip running page headers near the top edge (y < 42 and small font)
     top_candidates = [ln for ln in all_lines if ln["y0"] < abstract_y]
@@ -1246,7 +1312,13 @@ def _strip_title_lines(header_lines: list[dict]) -> list[dict]:
     if not header_lines:
         return []
     ordered = sorted(header_lines, key=lambda r: (r["y0"], r["x0"]))
-    max_sz = max(ln["max_size"] for ln in ordered)
+    # Compute title max_sz only from lines with real alphabetic words (ignoring big KPI stat banners like "7.62M 15.3 MB 48 kHz")
+    alpha_lines = [
+        ln for ln in ordered
+        if len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]{3,}", ln["text"])) >= 2
+        or (len(re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]{3,}", ln["text"])) >= 1 and ln["y0"] < ordered[0]["y0"] + 120.0)
+    ]
+    max_sz = max((ln["max_size"] for ln in (alpha_lines or ordered)), default=12.0)
     first_title_y = None
     last_title_y = None
     title_block = None
@@ -1264,20 +1336,41 @@ def _strip_title_lines(header_lines: list[dict]) -> list[dict]:
         letters = [ch for ch in ln["text"] if ch.isalpha()]
         return len(letters) >= 4 and all(ch.isupper() for ch in letters)
 
+    _title_func_words = {"a", "an", "the", "for", "with", "of", "in", "on", "to", "via", "using", "from", "what", "how", "why", "when", "can", "towards", "toward"}
     for idx, ln in enumerate(ordered):
         has_sup = _line_has_superscript(ln)
         is_allcaps = _line_is_allcaps(ln)
         is_bold = _line_is_bold(ln)
         is_big = ln["max_size"] >= max_sz - 1.2 and max_sz >= 11.5
+        # Large display titles (>= 15pt) may contain mathematical superscripts or title footnote stars (e.g. "A³: ..." or "Title*")
+        is_large_title_with_sup = bool(
+            has_sup
+            and ln["max_size"] >= max_sz - 1.2
+            and max_sz >= 15.0
+            and not _is_likely_author_enumeration(re.sub(r"[" + re.escape(SYMBOL_MARKER_CHARS) + r"\d]", "", ln["text"]).strip())
+            and (":" in ln["text"] or len(ln["text"].split()) >= 4 or any(w.lower() in _title_func_words for w in ln["text"].split()))
+        )
+        # Never let a tiny running masthead (e.g. 10.4pt "REIN PROTOCOL") hijack first_title_y when a much larger title exists below
+        is_allcaps_title = is_allcaps and is_bold and ln["max_size"] >= max_sz - 2.0
+        # Handle plain 12pt single-font papers where the top line is a multi-word title (with function words, not an author name)
+        is_plain_top_title = (
+            first_title_y is None
+            and max_sz <= 12.6
+            and not has_sup
+            and len(ln["text"].split()) >= 5
+            and not _is_likely_author_enumeration(ln["text"])
+            and not _is_valid_author_name(ln["text"])
+            and any(w.lower() in _title_func_words for w in ln["text"].split())
+        )
         if first_title_y is None:
-            if (is_big or (is_allcaps and is_bold)) and not has_sup:
+            if (is_big or is_allcaps_title or is_plain_top_title) and (not has_sup or is_large_title_with_sup):
                 first_title_y = ln["y0"]
                 last_title_y = ln["y1"]
                 title_block = ln["block"]
                 title_is_allcaps = is_allcaps
                 title_is_bold = is_bold
                 title_indices.add(idx)
-            elif ln["y0"] < 65 and ln["max_size"] < max_sz - 2.0:
+            elif ln["y0"] < 95 and (ln["max_size"] < max_sz - 2.0 or DATE_LINE_RE.match(ln["text"])):
                 title_indices.add(idx)
         else:
             # Never absorb author lines (with superscripts, emails, or italic-after-bold-allcaps title)
@@ -1337,7 +1430,27 @@ def _strip_title_lines(header_lines: list[dict]) -> list[dict]:
                 and not next_is_known_org
                 and not EMAIL_OR_URL_LINE_RE.search(next_ln["text"])
             )
-            if is_big or (title_is_allcaps and is_allcaps) or smaller_non_title_fallback or same_block_subtitle:
+            # Immediate bold subtitle directly below a larger bold main title, above a non-bold author line
+            # (e.g. "Why Do Low-Activity Speakers Disappear?" + bold 12pt subtitle + regular 12pt "Fumiaki Yamaguchi").
+            ln_bold_spans = [s for s in (ln.get("spans") or []) if s["text"].strip()]
+            ln_all_bold = bool(ln_bold_spans) and all((s.get("flags", 0) & 16) != 0 for s in ln_bold_spans)
+            next_bold_spans = [s for s in (next_ln.get("spans") or []) if s["text"].strip()] if next_ln is not None else []
+            next_is_bold = bool(next_bold_spans) and all((s.get("flags", 0) & 16) != 0 for s in next_bold_spans)
+            bold_subtitle_below_title = (
+                ln_all_bold
+                and max_sz >= ln["max_size"] + 1.5
+                and len(ln["text"].split()) >= 5
+                and not has_same_row_peer_block
+                and not _is_valid_author_name(ln_no_sym)
+                and not _is_likely_author_enumeration(ln_no_sym)
+                and not _has_affiliation_hint(ln["text"])
+                and not EMAIL_OR_URL_LINE_RE.search(ln["text"])
+                and next_ln is not None
+                and not next_is_bold
+                and not _has_affiliation_hint(next_ln["text"])
+                and not EMAIL_OR_URL_LINE_RE.search(next_ln["text"])
+            )
+            if is_big or (title_is_allcaps and is_allcaps) or smaller_non_title_fallback or same_block_subtitle or bold_subtitle_below_title:
                 if ln["y0"] - last_title_y < 24:
                     last_title_y = max(last_title_y, ln["y1"])
                     title_indices.add(idx)
@@ -1411,7 +1524,9 @@ def _merge_same_row_lines(lines: list[dict], page_w: float) -> tuple[list[dict],
         for idx, part in enumerate(row):
             if idx > 0:
                 gap = part["x0"] - row[idx - 1]["x1"]
-                if gap > 10.0:
+                prev_is_pure_marker = _is_pure_marker_text(row[idx - 1]["text"])
+                gap_thresh = max(7.5, min(10.0, part["base_size"] * 0.92)) if part["base_size"] <= 9.8 else 10.0
+                if not prev_is_pure_marker and gap > gap_thresh:
                     all_spans.append({
                         "text": "   ",
                         "size": part["base_size"],
@@ -1457,6 +1572,8 @@ def _merge_same_row_lines(lines: list[dict], page_w: float) -> tuple[list[dict],
 def _span_is_superscript(span: dict, base_sz: float, base_y: float) -> bool:
     if span.get("is_gap"):
         return False
+    if span.get("is_icon"):
+        return True
     txt = span["text"].strip()
     if not txt:
         return False
@@ -1541,6 +1658,14 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
         if EMAIL_OR_URL_LINE_RE.search(ln["text"]) and not _has_affiliation_hint(ln["text"]) and not starts_with_marker and idx not in confirmed_aff_cont_lines:
             continue
         segments = [seg.strip() for seg in annotated.split("[[GAP]]") if seg.strip()]
+        # Guard against author lines split by [[GAP]] where a superscript falls at the start of seg_idx > 0
+        # (e.g. "Yi Zhao [[GAP]] [[SUP:∗]], Zhi Gong"): only accept seg_idx > 0 leading [[SUP:...]] if
+        # the line itself started with a marker or was a confirmed affiliation continuation.
+        first_seg_starts_marker = bool(segments and (
+            segments[0].startswith("[[SUP:")
+            or (segments[0][0] in SYMBOL_MARKER_CHARS)
+            or re.match(r"^[1-9]\d?(?:\s+(?=[A-Z])|(?=[A-Z](?:[a-z]{2,}|[A-Z])))", segments[0])
+        ))
         for seg_idx, seg in enumerate(segments):
             matches = list(re.finditer(r"\[\[SUP:([^\]]+)\]\]", seg))
             if not matches:
@@ -1549,6 +1674,11 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
                 continue
             if matches[0].start() > 2 and not (seg_idx == 0 and idx in confirmed_aff_cont_lines):
                 continue
+            if seg_idx > 0 and not first_seg_starts_marker and idx not in confirmed_aff_cont_lines:
+                first_seg_plain = _clean_ws(re.sub(r"\[\[SUP:[^\]]+\]\]", " ", segments[0])).strip(" ,;")
+                after_first_sup = seg[matches[0].end():].lstrip()
+                if _is_valid_author_name(first_seg_plain) or after_first_sup.startswith(","):
+                    continue
             for m_i, m in enumerate(matches):
                 markers = _parse_marker_string(m.group(1))
                 start_pos = m.end()
@@ -1570,7 +1700,7 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
                 ):
                     cur_ln = ln
                     next_idx = idx + 1
-                    for _cont_step in range(2):
+                    for _cont_step in range(3):
                         if next_idx >= len(lines):
                             break
                         nxt = lines[next_idx]
@@ -1666,9 +1796,23 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
                             )
                         )
                         merged = False
+                        nxt_is_postal_or_loc_tail = bool(
+                            _is_location_only_line(nxt_lead)
+                            or _is_known_location_tail(nxt_lead)
+                            or (
+                                "," in nxt_lead
+                                and _is_known_location_tail(
+                                    re.sub(r"\s+\d{4,6}(?:-\d{4})?$", "", nxt_lead.rsplit(",", 1)[-1].strip()).strip()
+                                )
+                            )
+                            or (
+                                len(nxt_lead.split()) <= 5
+                                and re.search(r"\b(?:[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}|\d{4,6})\b", nxt_lead)
+                            )
+                        )
                         if (dangling_prep or dangling_comma) and (nxt_lead_not_author or nxt_after_sup_has_aff) and (
                             _has_affiliation_hint(nxt_lead)
-                            or _is_location_only_line(nxt_lead)
+                            or nxt_is_postal_or_loc_tail
                             or (dangling_prep and nxt_same_font and _has_affiliation_hint(f"{body} {nxt_lead}"))
                             or (dangling_comma and nxt_same_font and nxt_ends_before_sup)
                         ):
@@ -1734,13 +1878,19 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
                                     ))
                                 )
                             )
-                            and not re.search(
-                                r"\b(?:university|college|school|institute|institution|corporation|company|inc\.?|ltd\.?|"
-                                r"laboratory|laboratories|lab|labs|center|centre|academy|mit|cmu|kaist|epfl|cnrs|inria|riken|nict|dfki|idiap)\s*$",
-                                body,
-                                re.IGNORECASE,
+                            and (
+                                not re.search(
+                                    r"\b(?:university|college|school|institute|institution|corporation|company|inc\.?|ltd\.?|"
+                                    r"laboratory|laboratories|lab|labs|center|centre|academy|mit|cmu|kaist|epfl|cnrs|inria|riken|nict|dfki|idiap)\s*$",
+                                    body,
+                                    re.IGNORECASE,
+                                )
+                                or (
+                                    re.search(r"\bcollege\s*$", body, re.IGNORECASE)
+                                    and bool(re.match(r"^(?:London|Dublin|Oxford|Cambridge|Edinburgh|Imperial|Cork)\b", nxt_lead))
+                                )
                             )
-                            and (_has_affiliation_hint(nxt_lead) or _is_location_only_line(nxt_lead))
+                            and (_has_affiliation_hint(nxt_lead) or nxt_is_postal_or_loc_tail)
                         ):
                             body = f"{body} {nxt_lead}"
                             merged = True
@@ -1775,10 +1925,10 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
                         cur_ln = nxt
                         next_idx += 1
                 cleaned = _sanitize_affiliation(body, author_names)
-                if cleaned and (
+                if cleaned and not _is_location_only_line(cleaned) and not _is_known_location_tail(cleaned) and (
                     _has_affiliation_hint(cleaned)
                     or re.search(r"[A-Z][a-z]+", cleaned)
-                    or re.fullmatch(r"[A-Z]{2,12}(?:-[A-Z0-9]{1,6})?(?:,\s*[A-Z]{2,12}(?:-[A-Z0-9]{1,6})?)*", cleaned)
+                    or re.fullmatch(r"[A-Z]{2,12}(?:\([A-Z0-9]{1,8}\)|-[A-Z0-9]{1,6})?(?:,\s*[A-Z]{2,12}(?:\([A-Z0-9]{1,8}\)|-[A-Z0-9]{1,6})?)*", cleaned)
                 ):
                     for mk in markers:
                         aff_map.setdefault(mk, cleaned)
@@ -1786,7 +1936,7 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
     # Pass 2: raw non-superscript marker fallback (never pre-empts Pass 1; case-sensitive [1-4]D guard)
     has_explicit_numeric = any(mk.isdigit() for mk in aff_map) or any(mk.isdigit() for mk in role_markers)
     for seg in raw_fallback_segments:
-        if re.match(r"^[1-4]D(?:[A-Z]{2,}|\b)", seg) or re.match(r"^\d+(?:st|nd|rd|th)\b", seg, re.IGNORECASE):
+        if DATE_LINE_RE.match(seg) or re.match(r"^[1-4]D(?:[A-Z]{2,}|\b)", seg) or re.match(r"^\d+(?:st|nd|rd|th)\b", seg, re.IGNORECASE):
             continue
         m_raw = re.match(
             r"^([" + re.escape(SYMBOL_MARKER_CHARS) + r"]|[1-9]\d?(?:\s+(?=[A-Z])|(?=[A-Z](?:[a-z]{2,}|[A-Z]))))\s*(.+)$",
@@ -1946,11 +2096,14 @@ def _parse_authors_from_lines(lines: list[dict], defined_markers: set[str], role
             )
             if not author_annotated_parts or not prev_all_caps:
                 continue
-        # Strip IEEE member grades & Interspeech ORCID 'ID' icon badges (strictly linear non-overlapping alternation)
+        # Strip IEEE member grades, LNCS bracketed ORCIDs, & Interspeech ORCID 'ID' icon badges
         cleaned_ann = IEEE_MEMBER_RE.sub(" ", ann)
+        cleaned_ann = re.sub(r"\s*\[\d{4}-\d{4}-\d{4}-\d{3}[\dX]\]", "", cleaned_ann)
+        # Reattach superscripts separated from the preceding author by a [[GAP]] (e.g. "Young-Joo Suh [[GAP]] [[SUP:5]],[[SUP:6]]")
+        cleaned_ann = re.sub(r"\s*\[\[GAP\]\]\s*(?=\[\[SUP:)", " ", cleaned_ann)
         _sym_esc = re.escape(SYMBOL_MARKER_CHARS)
         cleaned_ann = re.sub(
-            r"(?<=[A-Za-z\u00c0-\u024f\u1e00-\u1eff])((?:[" + _sym_esc + r"]+(?: ?\[\[SUP:[" + _sym_esc + r",\s]+\]\][" + _sym_esc + r"]*)?| ?\[\[SUP:[" + _sym_esc + r",\s]+\]\][" + _sym_esc + r"]*)?)\s+ID(?=\s*(?:[,;]|(?i:\band\b)|&|[" + _sym_esc + r"]|\[\[SUP:|\[\[GAP\]\]|$))",
+            r"(?<=[A-Za-z.\u00c0-\u024f\u1e00-\u1eff])((?:[" + _sym_esc + r"]+(?: ?\[\[SUP:[" + _sym_esc + r",\s]+\]\][" + _sym_esc + r"]*)?| ?\[\[SUP:[" + _sym_esc + r",\s]+\]\][" + _sym_esc + r"]*)?)\s+ID(?=\s*(?:[,;]|(?i:\band\b)|&|[" + _sym_esc + r"]|\[\[SUP:|\[\[GAP\]\]|$))",
             r"\1",
             cleaned_ann,
         )
@@ -2258,6 +2411,7 @@ def _parse_authors_from_lines(lines: list[dict], defined_markers: set[str], role
                     markers.append(mk)
             name_raw = tail_rstripped[:sym_start]
         name = _clean_ws(name_raw).strip(" ,;:")
+        name = re.sub(r"^(?:(?:Assoc|Asst)\.?\s+)?(?:Prof|Dr)\.?\s+", "", name, flags=re.IGNORECASE).strip()
         if not _is_valid_author_name(name):
             continue
         # Filter out pure role markers (like '*' when '*' is NOT an affiliation marker)
@@ -2274,11 +2428,18 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
     """Mode B: Parse IEEEtran Page-1 bottom footnotes ('A, B, and C are with ...')."""
     if not footnote_lines:
         return None
+    # Strip stray section headings (e.g. "I. INTRODUCTION") that occasionally fall near the bottom of Page 1
+    footnote_lines = [
+        ln for ln in footnote_lines
+        if not re.fullmatch(r"(?:[IVX]+\.|[1-9]\.?)\s+(?:INTRODUCTION|ABSTRACT|BACKGROUND|OVERVIEW)", ln["text"].strip(), re.IGNORECASE)
+    ]
+    if not footnote_lines:
+        return None
     # Partition footnote lines into left/right columns BEFORE proximity row-clustering so an unrelated
     # right-column line's y0 can never shift a left-column row's cluster anchor and drop fragments.
     mid_x = page_w * 0.50 if page_w > 0 else 306.0
 
-    def _cluster_column(col_lines: list[dict]) -> list[dict]:
+    def _cluster_column(col_lines: list[dict], single_column: bool = False) -> list[dict]:
         by_y = sorted(col_lines, key=lambda r: (r["y0"], r["x0"]))
         y_rows: list[list[dict]] = []
         for ln in by_y:
@@ -2291,7 +2452,9 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
             row.sort(key=lambda r: r["x0"])
             row_merged: list[dict] = []
             for ln in row:
-                if row_merged and -2.0 <= (ln["x0"] - row_merged[-1]["x1"]) < 12.0:
+                # Inside an already-isolated half-column, justified narrow lines can have wide inter-word gaps (up to 60pt)
+                max_word_gap = 60.0 if single_column else min(26.0, max(12.0, ln.get("base_size", 8.0) * 3.0))
+                if row_merged and -2.0 <= (ln["x0"] - row_merged[-1]["x1"]) < max_word_gap:
                     prev = row_merged[-1]
                     prev["text"] = _clean_ws(f"{prev['text']} {ln['text']}")
                     prev["x1"] = max(prev["x1"], ln["x1"])
@@ -2387,13 +2550,12 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
                     _remove(right_count, old["x0"], row_start)
                 row_start += 1
             if cur["x0"] < mid_x:
-                # Need active right span with x0 in [cur.x1 - 2.0, cur.x1 + 12.0)
-                if _has_value_in_range(right_count, right_min, right_max, cur["x1"] - 2.0, cur["x1"] + 12.0, True, False):
+                # Standard IEEEtran/TPAMI 2-column gutter is ~11.5-12pt; only genuine continuous full-width text (< 6.5pt gap) bridges center.
+                if _has_value_in_range(right_count, right_min, right_max, cur["x1"] - 2.0, cur["x1"] + 6.5, True, False):
                     return True
                 _add(left_count, left_min, left_max, cur["x1"], idx_y)
             else:
-                # Need active left span with x1 in (cur.x0 - 12.0, cur.x0 + 2.0]
-                if _has_value_in_range(left_count, left_min, left_max, cur["x0"] - 12.0, cur["x0"] + 2.0, False, True):
+                if _has_value_in_range(left_count, left_min, left_max, cur["x0"] - 6.5, cur["x0"] + 2.0, False, True):
                     return True
                 _add(right_count, right_min, right_max, cur["x0"], idx_y)
         return False
@@ -2425,8 +2587,8 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
                 has_left = any(ln["x0"] < mid_x - 20.0 for ln in left_col)
                 has_right = bool(right_col)
                 if has_left and has_right and not _bridges_center_same_row(band):
-                    ordered.extend(_cluster_column(left_col))
-                    ordered.extend(_cluster_column(right_col))
+                    ordered.extend(_cluster_column(left_col, single_column=True))
+                    ordered.extend(_cluster_column(right_col, single_column=True))
                 else:
                     ordered.extend(_cluster_column(band))
             if bi < len(fw_rows):
@@ -2446,11 +2608,18 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
         return None
 
     # Split into sentences cleanly (respecting abbreviations like Co., Ltd., Dr., Dept., Univ., Inc., Prof., St., No.)
-    # Replace "(e-mail: ...)" with sentence terminator so following sentences aren't swallowed (strictly O(n) non-nested)
+    # Rejoin hyphenated "e- mail:" artifacts and swallow any trailing "." after "(e-mail: ...)."
+    footnote_text = re.sub(r"\be-\s+mail\b", "e-mail", footnote_text, flags=re.IGNORECASE)
     cleaned_for_split = (
-        re.sub(r"\((?:e-?mail|emails?|corresponding\s+author)[^()]*\)", " . ", footnote_text, flags=re.IGNORECASE)
+        re.sub(r"\((?:e-?mail|emails?|corresponding\s+author)[^()]*\)\s*\.?", " . ", footnote_text, flags=re.IGNORECASE)
         if ("(" in footnote_text and ")" in footnote_text)
         else footnote_text
+    )
+    # Break after bare emails (no trailing period) when immediately followed by a new uppercase author clause
+    cleaned_for_split = re.sub(
+        r"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})\s+(?=[A-ZÀ-ÖØ-Þ])",
+        r"\1 . ",
+        cleaned_for_split,
     )
     abbr_ci_re = re.compile(
         r"\b(?:Co|Ltd|Inc|Corp|Dept|Univ|Lab|Tech|Inst|Prof|Dr|Mr|Ms|Jr|Sr|St|No|Vol|Fig|al|vs|S\.r\.l|B\.V|S\.A\.S|S\.A|A\.G|K\.K)\.$",
@@ -2490,6 +2659,15 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
                     return False
             return True
         if 2 <= len(core) <= 3 and core[0].isupper() and all(c.islower() for c in core[1:]):
+            # Never confuse a 2-3 letter surname ending a complete sentence (e.g. "Corresponding author: Seokjin Lee.")
+            # with a multi-letter given-name abbreviation like "Ch." or "Ph."
+            part_toks = part_text.split()
+            prev_tok = part_toks[-2].strip("([\"'“‘:,;") if len(part_toks) >= 2 else ""
+            if prev_tok and len(prev_tok) >= 3 and prev_tok[0].isupper() and not prev_tok.endswith(".") and re.search(r"[a-z]", prev_tok):
+                if re.search(r"corresponding\s+author|grant|foundation|dissertation|university|work\s+(?:was\s+)?(?:supported|funded)", part_text, re.IGNORECASE):
+                    return False
+                if nxt_part and full_new_author_clause_re.match(nxt_part):
+                    return False
             return (not buf_has_verb) or bool(
                 nxt_part and nxt_part[0].isupper() and surname_before_verb_re.match(nxt_part)
             )
@@ -2705,43 +2883,119 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
         r"is\s+from|are\s+from)\s+(.+)$",
         re.IGNORECASE,
     )
+    elided_with_re = re.compile(
+        r"^(.+?)\s+with\s+(?:the\s+)?(.+)$",
+        re.IGNORECASE,
+    )
+    dual_inst_split_re = re.compile(
+        r",?\s+and\s+(?:(?:is|are|was|were)\s+)?(?:also\s+|now\s+)?(?:with|affiliated\s+with)\s+",
+        re.IGNORECASE,
+    )
+    collective_subject_re = re.compile(r"^(?:the|all)\s+authors$", re.IGNORECASE)
 
-    pending_clauses: list[tuple[str, list[str], str]] = []
+    pending_clauses: list[tuple[str, list[str], list[str]]] = []
     for sent in sentences:
         for clause in _split_thanks_clauses(sent):
-            s = clause.strip(" ;")
+            s = clause.lstrip(" .").strip(" ;")
             if s.endswith(".") and not _has_preserved_abbr_dot(s):
                 s = s.rstrip(".")
-            s = s.strip(" ;")
+            s = s.lstrip(" .").strip(" ;")
             if not s:
                 continue
             m = stmt_re.match(s)
             if not m:
+                m_elided = elided_with_re.match(s)
+                if m_elided and _has_affiliation_hint(m_elided.group(2)):
+                    m = m_elided
+            if not m:
                 continue
             names_part = m.group(1).strip()
             aff_raw = m.group(2).strip()
-            # Strip only leading parenthetical notes (never mid-name nicknames like "John (Toby) Van Der Berg")
-            names_part = re.sub(r"^\([^()]*\)\s*", "", names_part).strip()
-            raw_names = _split_author_subject_tokens(names_part)
-            valid_names = [n for n in raw_names if _is_valid_author_name(n)]
-            if not valid_names or len(valid_names) != len(raw_names):
-                continue
-            pending_clauses.append((s, valid_names, aff_raw))
+            # Handle elided second-author clause inside aff_raw, e.g. "... University, and R. Taupitz with Other Univ"
+            aff_segments: list[str] = []
+            sub_clauses: list[tuple[str, str]] = [(names_part, aff_raw)]
+            m_tail_elided = re.search(
+                r"(?:,\s*|\s+)and\s+([A-ZÀ-ÖØ-Þ][^,;]{1,50}?)\s+with\s+(.+)$",
+                aff_raw,
+            )
+            if m_tail_elided:
+                cand_name = m_tail_elided.group(1).strip()
+                cand_aff = m_tail_elided.group(2).strip()
+                if _is_valid_author_name(cand_name) and _has_affiliation_hint(cand_aff):
+                    first_aff = aff_raw[:m_tail_elided.start()].strip(" ,;")
+                    # Inherit shared parent university suffix ONLY on tight "<Subunit1> and <Name> with <Subunit2>, <SharedUniv>"
+                    # (no ", and " clause break, no comma inside first_aff, explicit academic subunit in both halves,
+                    # and first_aff contains NO standalone org/brand/acronym like "Google Research" or "MIT").
+                    _elided_parent_re = re.compile(
+                        r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|college|academy|polytechnique|politecnic[oa]|corp(?:oration)?|company|inc\.?|ltd\.?|gmbh)\b",
+                        re.IGNORECASE,
+                    )
+                    _elided_subunit_re = re.compile(
+                        r"\b(?:professorship|chair|dept\.?|department|departamento|dipartimento|school|faculty|division|lab|laboratory|center|centre|group|unit)\b",
+                        re.IGNORECASE,
+                    )
+                    _elided_cand_subunit_re = re.compile(
+                        r"\b(?:institute|professorship|chair|dept\.?|department|departamento|dipartimento|school|faculty|division|lab|laboratory|center|centre|group|unit)\b",
+                        re.IGNORECASE,
+                    )
+                    _tight_and = not m_tail_elided.group(0).lstrip().startswith(",")
+                    _first_has_brand_or_acronym = (
+                        any(re.sub(r"[^a-z0-9]", "", tok.lower()) in KNOWN_NON_CITY_ORG_HEADS for tok in first_aff.split())
+                        or any(re.fullmatch(r"[A-Z]{2,8}", tok.strip("()")) for tok in first_aff.split())
+                    )
+                    if (
+                        _tight_and
+                        and first_aff
+                        and "," not in first_aff
+                        and not _elided_parent_re.search(first_aff)
+                        and _elided_subunit_re.search(first_aff)
+                        and not _first_has_brand_or_acronym
+                        and "," in cand_aff
+                    ):
+                        _comma_idx = cand_aff.find(",")
+                        _cand_head = cand_aff[:_comma_idx].strip()
+                        _shared_tail = cand_aff[_comma_idx + 1:].strip()
+                        if _elided_cand_subunit_re.search(_cand_head) and _shared_tail and _elided_parent_re.search(_shared_tail):
+                            first_aff = f"{first_aff}, {_shared_tail}"
+                    sub_clauses = [
+                        (names_part, first_aff),
+                        (cand_name, cand_aff),
+                    ]
+            for sub_names_part, sub_aff_raw in sub_clauses:
+                # Strip only leading parenthetical notes or stray wrapped "mail:" tokens
+                sub_names_part = re.sub(r"^\([^()]*\)\s*", "", sub_names_part).strip()
+                sub_names_part = re.sub(r"^(?:e-?mail|mail)\s*[:：]\s*", "", sub_names_part, flags=re.IGNORECASE).strip()
+                if collective_subject_re.fullmatch(sub_names_part) and header_authors:
+                    valid_names = [ha["name"] for ha in header_authors]
+                else:
+                    raw_names = _split_author_subject_tokens(sub_names_part)
+                    valid_names = [n for n in raw_names if _is_valid_author_name(n)]
+                    if not valid_names or len(valid_names) != len(raw_names):
+                        continue
+                # Split same-subject dual/multi affiliations: "X is with A, and is also with B"
+                aff_parts = [p.strip(" ,;") for p in dual_inst_split_re.split(sub_aff_raw) if p.strip(" ,;")]
+                if aff_parts:
+                    pending_clauses.append((s, valid_names, aff_parts))
 
     all_known_thanks_index = _KnownAuthorIndex(
         [ha["name"] for ha in header_authors] + [nm for _, nms, _ in pending_clauses for nm in nms]
     )
-    for s, valid_names, aff_raw in pending_clauses:
-        aff = _sanitize_affiliation(re.sub(r"^the\s+", "", aff_raw, flags=re.IGNORECASE), all_known_thanks_index)
-        if not aff:
+    for s, valid_names, aff_parts in pending_clauses:
+        cleaned_affs: list[str] = []
+        for ap in aff_parts:
+            aff = _sanitize_affiliation(re.sub(r"^the\s+", "", ap, flags=re.IGNORECASE), all_known_thanks_index)
+            if aff and aff not in cleaned_affs:
+                cleaned_affs.append(aff)
+        if not cleaned_affs:
             continue
         matched_sentences.append(s)
         for nm in valid_names:
             key = _fold_name_key(nm)
             if key not in author_aff_map:
                 author_aff_map[key] = (nm, [])
-            if aff not in author_aff_map[key][1]:
-                author_aff_map[key][1].append(aff)
+            for aff in cleaned_affs:
+                if aff not in author_aff_map[key][1]:
+                    author_aff_map[key][1].append(aff)
 
     if not author_aff_map:
         return None
@@ -2759,6 +3013,30 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
         if len(toks) < 3:
             return []
         return [t for t in toks[1:-1] if len(t) == 1]
+
+    def _initial_surname_key(folded: str) -> tuple[str, str] | None:
+        toks = folded.split()
+        if len(toks) < 2:
+            return None
+        return (toks[0][0], toks[-1])
+
+    def _initial_compatible(header_fold: str, thanks_fold: str) -> bool:
+        ht = header_fold.split()
+        tt = thanks_fold.split()
+        if len(ht) < 2 or len(tt) < 2:
+            return False
+        if ht[-1] != tt[-1]:
+            return False
+        # At least one side uses an initial for given name (e.g. "c wei" vs "chang wei", "n f chen" vs "nancy f chen")
+        if not (len(tt[0]) == 1 or len(ht[0]) == 1):
+            return False
+        if ht[0][0] != tt[0][0]:
+            return False
+        h_mids = [t[0] for t in ht[1:-1] if t]
+        t_mids = [t[0] for t in tt[1:-1] if t]
+        if h_mids and t_mids and h_mids != t_mids:
+            return False
+        return True
 
     result_authors: list[dict] = []
     used_keys: set[str] = set()
@@ -2790,6 +3068,25 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
             if len(candidates) == 1:
                 matched_by_idx[idx] = list(author_aff_map[candidates[0]][1])
                 used_keys.add(candidates[0])
+        # Pass 3: strict 1-to-1 bijective given-initial + surname match (IEEE standard "C. Wei" <-> "Chang Wei")
+        unmatched_header = [
+            (idx, _fold_name_key(ha["name"]))
+            for idx, ha in enumerate(header_authors)
+            if idx not in matched_by_idx
+        ]
+        unmatched_thanks = [k for k in author_aff_map if k not in used_keys and k not in exact_header_keys]
+        if unmatched_header and unmatched_thanks:
+            h_to_t: dict[int, list[str]] = {}
+            t_to_h: dict[str, list[int]] = {}
+            for idx, hkey in unmatched_header:
+                for tk in unmatched_thanks:
+                    if _initial_compatible(hkey, tk):
+                        h_to_t.setdefault(idx, []).append(tk)
+                        t_to_h.setdefault(tk, []).append(idx)
+            for idx, cands in h_to_t.items():
+                if len(cands) == 1 and len(t_to_h.get(cands[0], ())) == 1:
+                    matched_by_idx[idx] = list(author_aff_map[cands[0]][1])
+                    used_keys.add(cands[0])
         if len(matched_by_idx) < len(header_authors):
             return None
         for idx, ha in enumerate(header_authors):
@@ -2804,12 +3101,110 @@ def _try_mode_thanks(header_lines: list[dict], footnote_lines: list[dict], page_
 
 
 def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list[dict], str] | None:
-    """Mode D: Multi-column author cards (e.g. IEEEtran authorblockN + authorblockA)."""
-    # Group lines by PyMuPDF block, then merge vertically-adjacent x-aligned (author-only -> affiliation-only)
-    # split blocks caused by IEEEtran superscript markers (*, †, ✉) raising an author line's y0 by ~2pt.
-    blocks: dict[int, list[dict]] = {}
+    """Mode D: Multi-column or vertically stacked author cards (e.g. IEEEtran authorblockN + authorblockA)."""
+    # Pre-filter tiny teaser-figure diagram labels (< 7.2pt) and cut off teaser/caption blocks below large vertical gaps
+    # (prevents teaser figure labels from triggering >20pt span-gap aborts across valid author cards).
+    filtered_body = [
+        ln for ln in body_lines
+        if ln["base_size"] >= 7.2
+        or (len(ln["text"]) <= 3 and any(ord(c) >= 0x00A0 for c in ln["text"]))
+    ]
+    if not filtered_body:
+        return None
+    filtered_body.sort(key=lambda r: (r["y0"], r["x0"]))
+    trimmed_body: list[dict] = []
+    for ln in filtered_body:
+        if re.match(r"^(?:figure|fig\.|table)\s+\d", ln["text"], re.IGNORECASE):
+            break
+        if trimmed_body and (ln["y0"] - max(r["y1"] for r in trimmed_body)) > 42.0:
+            if not _has_affiliation_hint(ln["text"]) and "@" not in ln["text"] and not _is_valid_author_name(ln["text"]):
+                break
+        trimmed_body.append(ln)
+    body_lines = trimmed_body
+    # Group lines by PyMuPDF block; split any PyMuPDF block that merged two horizontally separated columns (> 25pt gutter)
+    raw_blocks: dict[int, list[dict]] = {}
     for ln in body_lines:
-        blocks.setdefault(ln["block"], []).append(ln)
+        raw_blocks.setdefault(ln["block"], []).append(ln)
+
+    blocks: dict[int, list[dict]] = {}
+    next_bid = (max(raw_blocks.keys()) + 1) if raw_blocks else 0
+    for bid, blines in raw_blocks.items():
+        # Check if lines inside this block cleanly split across a vertical gutter (> 25pt)
+        sub_lines: list[dict] = []
+        split_needed = False
+        for ln in blines:
+            non_empty = [s for s in ln.get("spans", []) if s.get("text", "").strip()]
+            # Split single line into span-chunks if spans have > 25pt horizontal gap
+            if len(non_empty) >= 2 and any(
+                non_empty[si + 1]["bbox"][0] - non_empty[si]["bbox"][2] > 25.0
+                for si in range(len(non_empty) - 1)
+            ):
+                split_needed = True
+                cur_spans = [non_empty[0]]
+                for sp in non_empty[1:]:
+                    if sp["bbox"][0] - cur_spans[-1]["bbox"][2] > 25.0:
+                        txt_c = _clean_ws("".join("" if s.get("is_icon") else s["text"] for s in cur_spans))
+                        if txt_c:
+                            sub_lines.append({
+                                **ln,
+                                "spans": cur_spans,
+                                "text": txt_c,
+                                "x0": min(s["bbox"][0] for s in cur_spans),
+                                "x1": max(s["bbox"][2] for s in cur_spans),
+                                "y0": min(s["bbox"][1] for s in cur_spans),
+                                "y1": max(s["bbox"][3] for s in cur_spans),
+                            })
+                        cur_spans = [sp]
+                    else:
+                        cur_spans.append(sp)
+                txt_c = _clean_ws("".join("" if s.get("is_icon") else s["text"] for s in cur_spans))
+                if txt_c:
+                    sub_lines.append({
+                        **ln,
+                        "spans": cur_spans,
+                        "text": txt_c,
+                        "x0": min(s["bbox"][0] for s in cur_spans),
+                        "x1": max(s["bbox"][2] for s in cur_spans),
+                        "y0": min(s["bbox"][1] for s in cur_spans),
+                        "y1": max(s["bbox"][3] for s in cur_spans),
+                    })
+            else:
+                sub_lines.append(ln)
+        if not split_needed:
+            # Also check if two different lines on same y-row inside same block have > 25pt horizontal gap
+            for ia in range(len(sub_lines)):
+                for ib in range(ia + 1, len(sub_lines)):
+                    if abs(sub_lines[ia]["y0"] - sub_lines[ib]["y0"]) <= 3.5:
+                        lx, rx = (sub_lines[ia], sub_lines[ib]) if sub_lines[ia]["x0"] <= sub_lines[ib]["x0"] else (sub_lines[ib], sub_lines[ia])
+                        if rx["x0"] - lx["x1"] > 25.0:
+                            split_needed = True
+                            break
+                if split_needed:
+                    break
+        if split_needed and len(sub_lines) >= 2:
+            # Find a clean vertical gutter x separating left and right clusters (greedy x-interval union)
+            intervals = sorted((ln["x0"], ln["x1"]) for ln in sub_lines)
+            merged_iv = [list(intervals[0])]
+            for x0, x1 in intervals[1:]:
+                if x0 <= merged_iv[-1][1] + 18.0:
+                    merged_iv[-1][1] = max(merged_iv[-1][1], x1)
+                else:
+                    merged_iv.append([x0, x1])
+            if len(merged_iv) >= 2:
+                col_parts = [
+                    [ln for ln in sub_lines if ln["x0"] >= gx0 - 2.0 and ln["x1"] <= gx1 + 2.0]
+                    for gx0, gx1 in merged_iv
+                ]
+                # Only split a merged block into column cards when every split column looks like a rich multi-line card
+                # (>= 3 lines or contains an email), preventing side-by-side "Author1 Author2 / Org1 Org2" rows from being split.
+                if all(len(cp) >= 3 or any("@" in l["text"] for l in cp) for cp in col_parts):
+                    for iv_idx, col_part in enumerate(col_parts):
+                        if col_part:
+                            blocks[bid if iv_idx == 0 else next_bid] = col_part
+                            if iv_idx > 0:
+                                next_bid += 1
+                    continue
+        blocks[bid] = blines
     if len(blocks) < 2:
         return None
 
@@ -2859,6 +3254,7 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
 
     merged_blocks: dict[int, list[dict]] = {bid: sorted(bl, key=lambda r: (r["y0"], r["x0"])) for bid, bl in blocks.items()}
     consumed_aff_bids: set[int] = set()
+    merged_author_bids: set[int] = set()
     for a_bid in sorted(merged_blocks, key=lambda b: (min(r["y0"] for r in merged_blocks[b]), min(r["x0"] for r in merged_blocks[b]))):
         if a_bid in consumed_aff_bids:
             continue
@@ -2876,7 +3272,7 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
                 continue
             b_y0 = min(r["y0"] for r in b_lines)
             dy = b_y0 - a_y1
-            if dy < -2.0 or dy > 14.0:
+            if dy < -2.0 or dy > 22.0:
                 continue
             b_x0 = min(r["x0"] for r in b_lines)
             b_x1 = max(r["x1"] for r in b_lines)
@@ -2890,6 +3286,7 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
             best_bid = candidates[0][2]
             merged_blocks[a_bid] = sorted(a_lines + merged_blocks[best_bid], key=lambda r: (r["y0"], r["x0"]))
             consumed_aff_bids.add(best_bid)
+            merged_author_bids.add(a_bid)
     for bid in consumed_aff_bids:
         merged_blocks.pop(bid, None)
     blocks = merged_blocks
@@ -2915,6 +3312,9 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
 
     card_authors: list[dict] = []
     card_x_centers: list[float] = []
+    card_y_spans: list[tuple[float, float]] = []
+    card_saw_emails: list[bool] = []
+    card_used_merged = False
     card_blocks_used = 0
     for b_id, blines in sorted(blocks.items(), key=lambda kv: (min(r["y0"] for r in kv[1]), min(r["x0"] for r in kv[1]))):
         blines.sort(key=lambda r: (r["y0"], r["x0"]))
@@ -2974,6 +3374,12 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
         # Look for author name line(s) followed by affiliation line(s) inside this block
         b_names: list[str] = []
         b_affs: list[tuple[str, str]] = []  # (cleaned, raw_line_text)
+        card_email_domains: set[str] = set()
+        for _ln_em in blines:
+            for _dom in re.findall(r"@([a-z0-9.-]+\.[a-z]{2,})", _ln_em["text"], flags=re.IGNORECASE):
+                _root = _dom.lower().split(".")[0]
+                if len(_root) >= 4 and _root not in {"gmail", "yahoo", "hotmail", "outlook", "icloud", "proton", "protonmail", "foxmail", "163", "126", "qq", "live", "mail"}:
+                    card_email_domains.add(_root)
         name_font_size: float | None = None
         name_is_bold: bool | None = None
         name_is_italic: bool | None = None
@@ -2996,9 +3402,6 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
                 continue
             t_no_ieee = IEEE_MEMBER_RE.sub("", t).rstrip(SYMBOL_MARKER_CHARS + "\uf02a").strip(" ,")
             t_no_markers = re.sub(r"[" + re.escape(SYMBOL_MARKER_CHARS) + r"\uf02a]", "", IEEE_MEMBER_RE.sub("", t)).strip(" ,")
-            if _is_likely_author_enumeration(t_no_markers):
-                # Multi-author comma/and line inside a column card cannot be safely skipped while other columns match.
-                return None
             ln_bold, ln_italic = _line_font_style(ln)
             next_non_email_ln = next(
                 (
@@ -3024,6 +3427,14 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
                 name_is_bold is not None
                 and ((name_is_bold and not ln_bold) or (not name_is_italic and ln_italic))
             )
+            if (
+                not is_smaller_than_author
+                and not is_different_style_from_author
+                and not (b_names and "," in t and _is_known_location_tail(t.rsplit(",", 1)[-1].strip()))
+                and _is_likely_author_enumeration(t_no_markers)
+            ):
+                # Multi-author comma/and line inside a column card cannot be safely skipped while other columns match.
+                return None
             has_later_explicit_aff = any(
                 _has_affiliation_hint(blines[j]["text"])
                 for j in range(li + 1, len(blines))
@@ -3065,8 +3476,12 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
                 ):
                     return None
                 cleaned = _sanitize_affiliation(t, b_names)
+                cleaned_slug = re.sub(r"[^a-z0-9]", "", cleaned.lower()) if cleaned else ""
+                is_card_email_brand = bool(cleaned and len(cleaned.split()) <= 2 and len(cleaned_slug) >= 4 and cleaned_slug in card_email_domains)
                 if cleaned and (
                     _has_affiliation_hint(cleaned)
+                    or _has_strong_unmarked_org_signal(cleaned)
+                    or is_card_email_brand
                     or _is_location_only_line(cleaned)
                     or _is_known_location_tail(cleaned)
                     or is_smaller_than_author
@@ -3080,7 +3495,12 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
         if b_names and b_affs:
             aff_texts = [c for c, _ in b_affs]
             has_org_signal = (
-                any(_has_affiliation_hint(a) or _has_strong_unmarked_org_signal(a) for a in aff_texts)
+                any(
+                    _has_affiliation_hint(a)
+                    or _has_strong_unmarked_org_signal(a)
+                    or (len(a.split()) <= 2 and len(re.sub(r"[^a-z0-9]", "", a.lower())) >= 4 and re.sub(r"[^a-z0-9]", "", a.lower()) in card_email_domains)
+                    for a in aff_texts
+                )
                 or (
                     len(aff_texts) >= 2
                     and any(_is_location_only_line(a) or _is_known_location_tail(a) for a in aff_texts)
@@ -3103,6 +3523,8 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
                         combined_parts.append(f", {cleaned_part}")
                     elif re.search(r"(?:\b(?:of|for|and|in|de|la|du)|&)$", prev_clean, re.IGNORECASE):
                         combined_parts.append(f" {cleaned_part}")
+                    elif re.match(r"^(?:of|for|and|in|at|de|la|du)\s+", cleaned_part, re.IGNORECASE):
+                        combined_parts.append(f" {cleaned_part}")
                     elif (
                         not _has_affiliation_hint(prev_clean)
                         and "," not in prev_clean
@@ -3116,17 +3538,123 @@ def _try_mode_column_blocks(body_lines: list[dict], page_w: float) -> tuple[list
                 card_authors.append({"name": nm, "affiliations": [combined_aff]})
             block_x_center = (min(r["x0"] for r in blines) + max(r["x1"] for r in blines)) / 2.0
             card_x_centers.append(block_x_center)
+            card_y_spans.append((min(r["y0"] for r in blines), max(r["y1"] for r in blines)))
+            card_saw_emails.append(saw_email_in_block)
+            if b_id in merged_author_bids:
+                card_used_merged = True
             card_blocks_used += 1
         elif b_names:
             return None
     min_x_sep = max(40.0, page_w * 0.15) if page_w > 0 else 40.0
-    if card_blocks_used >= 2 and len(card_authors) >= 2 and (max(card_x_centers) - min(card_x_centers)) >= min_x_sep:
+    is_multi_col_cards = card_blocks_used >= 2 and len(card_authors) >= 2 and (max(card_x_centers) - min(card_x_centers)) >= min_x_sep
+    # Allow single-column vertically stacked author cards ONLY when each block natively contains
+    # its author + explicit org affiliation + its own email address (strictly disambiguating card boundaries
+    # from stacked unmarked multi-org headers).
+    sorted_ys = sorted(card_y_spans)
+    is_vertical_stack_cards = (
+        card_blocks_used >= 2
+        and not card_used_merged
+        and all(card_saw_emails)
+        and len(card_authors) == card_blocks_used
+        and all(sorted_ys[i][1] <= sorted_ys[i + 1][0] + 2.0 for i in range(len(sorted_ys) - 1))
+        and all(
+            any(_has_affiliation_hint(a) for a in au["affiliations"])
+            for au in card_authors
+        )
+    )
+    if is_multi_col_cards or is_vertical_stack_cards:
         evidence = "\n".join(ln["text"] for ln in body_lines)
         return card_authors, evidence
     return None
 
 
-def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
+def _try_mode_inline_author_aff(merged_lines: list[dict]) -> tuple[list[dict], str] | None:
+    """Mode E: ACM acmart / single-column inline 'AUTHOR NAME[*], Institution, Country' format."""
+    if not merged_lines:
+        return None
+    inline_authors: list[dict] = []
+    used_indices: list[int] = []
+    idx = 0
+    while idx < len(merged_lines):
+        ln = merged_lines[idx]
+        txt = ln["text"].strip()
+        if not txt or ABSTRACT_START_RE.match(txt) or SECTION_META_HEADING_RE.match(txt):
+            if inline_authors:
+                break
+            idx += 1
+            continue
+        if DATE_LINE_RE.match(txt) or VENUE_OR_STATUS_RE.match(txt) or FOOTNOTE_ROLE_RE.match(txt):
+            idx += 1
+            continue
+        if "," in txt and not NON_AUTHOR_RESOURCE_RE.search(txt):
+            left, right = txt.split(",", 1)
+            left_clean = re.sub(r"[" + re.escape(SYMBOL_MARKER_CHARS) + r"\uf02a]", "", left).strip()
+            right_clean = right.strip()
+            # Require ALL-CAPS or Bold author name before comma AND explicit affiliation hint after comma
+            letters = [c for c in left_clean if c.isalpha()]
+            is_allcaps = len(letters) >= 4 and all(c.isupper() for c in letters)
+            left_bold = any(
+                (int(s.get("flags", 0)) & 16) != 0
+                for s in ln.get("spans", [])
+                if s["bbox"][0] <= ln["x0"] + 60.0 and re.search(r"[A-Za-z]", s.get("text", ""))
+            )
+            right_clean_no_sym = re.sub(r"[" + re.escape(SYMBOL_MARKER_CHARS) + r"\uf02a]", "", right_clean).strip(" ,;")
+            right_has_org_start = bool(
+                right_clean
+                and not _is_valid_author_name(right_clean_no_sym)
+                and not _is_likely_author_enumeration(right_clean_no_sym)
+                and (_has_affiliation_hint(right_clean) or _has_strong_unmarked_org_signal(right_clean))
+            )
+            if (is_allcaps or left_bold) and _is_valid_author_name(left_clean) and right_has_org_start:
+                aff_body = right_clean
+                # Absorb 1-2 immediate wrapped continuation lines (smaller or same size, no author before comma)
+                j = idx + 1
+                while j < len(merged_lines) and j <= idx + 2:
+                    nxt = merged_lines[j]
+                    nt = nxt["text"].strip()
+                    if not nt or ABSTRACT_START_RE.match(nt) or FOOTNOTE_ROLE_RE.match(nt) or NON_AUTHOR_RESOURCE_RE.search(nt):
+                        break
+                    if "," in nt:
+                        nl, nr = nt.split(",", 1)
+                        nl_c = re.sub(r"[" + re.escape(SYMBOL_MARKER_CHARS) + r"\uf02a]", "", nl).strip()
+                        if _is_valid_author_name(nl_c) and (_has_affiliation_hint(nr) or _has_strong_unmarked_org_signal(nr)):
+                            break
+                    if (nxt["y0"] - merged_lines[j - 1]["y1"]) > 14.0:
+                        break
+                    if _looks_like_prose_sentence(nt) or DATE_LINE_RE.match(nt) or VENUE_OR_STATUS_RE.match(nt):
+                        break
+                    if _has_affiliation_hint(nt) or _is_location_only_line(nt) or _is_known_location_tail(nt) or aff_body.endswith(","):
+                        aff_body = f"{aff_body} {nt}"
+                        used_indices.append(j)
+                        j += 1
+                    else:
+                        break
+                inline_authors.append({"name": left_clean, "raw_aff": aff_body})
+                used_indices.append(idx)
+                idx = j
+                continue
+        if inline_authors:
+            break
+        idx += 1
+    if len(inline_authors) >= 2:
+        all_names = [a["name"] for a in inline_authors]
+        sanitized_inline: list[dict] = []
+        for a in inline_authors:
+            cleaned_aff = _sanitize_affiliation(a["raw_aff"], all_names)
+            if not (cleaned_aff and (_has_affiliation_hint(cleaned_aff) or _has_strong_unmarked_org_signal(cleaned_aff))):
+                return None
+            sanitized_inline.append({"name": a["name"], "affiliations": [cleaned_aff]})
+        evidence = "\n".join(merged_lines[i]["text"] for i in sorted(set(used_indices)))
+        return sanitized_inline, evidence
+    return None
+
+
+def extract_pdf_page1_authors_v1(pdf_bytes: bytes) -> dict | None:
+    import pdf_author_extract_v1 as _v1
+    return _v1.extract_pdf_page1_authors(pdf_bytes)
+
+
+def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
     if not isinstance(pdf_bytes, (bytes, bytearray)) or len(pdf_bytes) < 5 or len(pdf_bytes) > MAX_PDF_BYTES or not pdf_bytes.startswith(b"%PDF-"):
         return None
     pdf_sha = _sha256_bytes(bytes(pdf_bytes))
@@ -3173,6 +3701,34 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                 and _count_known_author_names(val, parsed_author_index) < 2
                 and not _is_likely_author_enumeration(val)
             }
+            # Shared parent-university recovery: if EVERY marked affiliation is strictly a subunit
+            # (Department/School/Lab/Division/Faculty/Center/Group) lacking a parent University/College/Corp,
+            # and a single unmarked parent-institution line appears right below the marked lines, attach it.
+            _subunit_re = re.compile(r"\b(?:dept\.?|department|school|faculty|division|center|centre|lab|labs|laborator(?:y|ies)|group|chair|program|unit)\b", re.IGNORECASE)
+            _parent_org_re = re.compile(r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|college|academy|institute|institution|polytechnique|politecnic[oa]|corp(?:oration)?|company|inc\.?|ltd\.?|gmbh)\b", re.IGNORECASE)
+            if clean_aff_map and all(_subunit_re.search(v) and not _parent_org_re.search(v) for v in clean_aff_map.values()):
+                last_marked_idx = -1
+                for li, ln in enumerate(merged_lines):
+                    ann_l = _annotate_line_with_markers(ln).lstrip()
+                    if ann_l.startswith("[[SUP:") and any(v[:20] in ln["text"] for v in clean_aff_map.values()):
+                        last_marked_idx = li
+                if last_marked_idx >= 0:
+                    parent_cands: list[str] = []
+                    for li in range(last_marked_idx + 1, min(len(merged_lines), last_marked_idx + 4)):
+                        ptxt = merged_lines[li]["text"].strip()
+                        if not ptxt or ABSTRACT_START_RE.match(ptxt) or NON_AUTHOR_RESOURCE_RE.search(ptxt) or FOOTNOTE_ROLE_RE.match(ptxt):
+                            break
+                        if _annotate_line_with_markers(merged_lines[li]).lstrip().startswith("[[SUP:"):
+                            break
+                        pclean = _sanitize_affiliation(ptxt, parsed_author_index)
+                        if pclean and _parent_org_re.search(pclean) and not _looks_like_prose_sentence(pclean):
+                            parent_cands.append(pclean)
+                    if len(parent_cands) == 1:
+                        parent_org = parent_cands[0]
+                        clean_aff_map = {
+                            mk: (val if parent_org.lower() in val.lower() else f"{val}, {parent_org}")
+                            for mk, val in clean_aff_map.items()
+                        }
             bound_authors = []
             resolved_count = 0
             for au in parsed_authors:
@@ -3187,7 +3743,7 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
             if resolved_count == len(parsed_authors) and resolved_count > 0:
                 ev_sha = _sha256_text(header_evidence)
                 return {
-                    "contract": CONTRACT,
+                    "contract": CONTRACT_V2,
                     "mode": "markers",
                     "pdfSha256": pdf_sha,
                     "sourceEvidence": header_evidence,
@@ -3203,7 +3759,7 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
         full_evidence = f"{header_evidence}\n---\n{thanks_evidence}"
         ev_sha = _sha256_text(full_evidence)
         return {
-            "contract": CONTRACT,
+            "contract": CONTRACT_V2,
             "mode": "thanks",
             "pdfSha256": pdf_sha,
             "sourceEvidence": full_evidence,
@@ -3212,13 +3768,13 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
             "authors": thanks_authors,
         }
 
-    # --- Mode D: Multi-column author cards ---
+    # --- Mode D: Multi-column or vertical author cards ---
     col_res = _try_mode_column_blocks(body_lines, page_w)
     if col_res is not None:
         col_authors, col_evidence = col_res
         ev_sha = _sha256_text(col_evidence)
         return {
-            "contract": CONTRACT,
+            "contract": CONTRACT_V2,
             "mode": "column_blocks",
             "pdfSha256": pdf_sha,
             "sourceEvidence": col_evidence,
@@ -3227,28 +3783,75 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
             "authors": col_authors,
         }
 
+    # --- Mode E: Inline ACM acmart 'AUTHOR NAME, Institution, Country' ---
+    inline_res = _try_mode_inline_author_aff(merged_lines)
+    if inline_res is not None:
+        inline_authors, inline_evidence = inline_res
+        ev_sha = _sha256_text(inline_evidence)
+        return {
+            "contract": CONTRACT_V2,
+            "mode": "inline_author_aff",
+            "pdfSha256": pdf_sha,
+            "sourceEvidence": inline_evidence,
+            "sourceEvidenceSha256": ev_sha,
+            "sourceDomSha256": _sha256_text(f"{pdf_sha}:{ev_sha}"),
+            "authors": inline_authors,
+        }
+
     # --- Mode C: Unmarked single shared institution ---
-    # Only if there are NO defined affiliation markers, NOT a two-column split layout, authors parse cleanly,
-    # zero unmatched markers, no interleaved org lines before max(consumed_indices), and ONE unambiguous institution.
-    if not aff_map and not is_two_col:
-        parsed_authors, consumed_indices = _parse_authors_from_lines(merged_lines, set(), role_markers, is_two_col=False)
+    # Supports standard single-column shared institution AND BMVC 2-column left-authors/right-single-institution.
+    if not aff_map:
+        parsed_authors, consumed_indices = _parse_authors_from_lines(merged_lines, set(), role_markers, is_two_col=is_two_col)
         if parsed_authors:
             author_names = [a["name"] for a in parsed_authors]
             author_index = _KnownAuthorIndex(author_names)
-            # Reject if any author carries any non-role marker (numeric, letter, or symbol)
-            has_unmatched_marker = any(
-                any(mk not in role_markers for mk in a.get("rawMarkers", []))
+            # On multi-author papers, reject ANY unmatched alphanumeric or non-standard symbol marker (#, §, ¶, ◊, +, ⋆, ∥),
+            # AND reject ANY symbol marker (even if classified in role_markers, e.g. "#Work performed at MIT.")
+            # whose bottom footnote mentions an affiliation!
+            _std_role_syms = {"∗", "*", "†", "‡", "✉"}
+            _footnote_aff_syms: set[str] = set()
+            _header_lower = header_evidence.lower()
+            for _fln in (footnote_lines or []):
+                _ftxt = _fln["text"].strip()
+                if not _ftxt:
+                    continue
+                _f0 = _normalize_marker_token(_ftxt[0])
+                _ftxt_no_contact = re.sub(r"\S+@\S+|https?://\S+|www\.\S+", " ", _ftxt[1:])
+                if (_f0 in _std_role_syms or _ftxt[0] in SYMBOL_MARKER_CHARS) and _has_affiliation_hint(_ftxt_no_contact):
+                    # Standard role symbols (*, †, ‡, ✉) saying "Work done during an internship at <same header org>"
+                    # refer to the single shared institution itself; any other org or non-standard symbol (#, §, ...) fails closed.
+                    _m_at = re.search(r"\b(?:at|with)\s+([^.;,]{3,80})", _ftxt_no_contact, re.IGNORECASE)
+                    _same_header_org = bool(
+                        _f0 in _std_role_syms
+                        and _m_at
+                        and _m_at.group(1).strip().lower() in _header_lower
+                    )
+                    if not _same_header_org:
+                        _footnote_aff_syms.add(_f0)
+            has_unmatched_marker = len(author_names) > 1 and any(
+                any(
+                    mk in _footnote_aff_syms
+                    or (mk not in role_markers and mk not in _std_role_syms)
+                    for mk in a.get("rawMarkers", [])
+                )
                 for a in parsed_authors
             )
             if not has_unmatched_marker:
-                inst_lines: list[tuple[str, dict]] = []
+                # Each entry: (text, first_ln, last_ln, first_idx, last_idx)
+                inst_lines: list[tuple[str, dict, dict, int, int]] = []
                 loc_lines: list[str] = []
+                header_email_domains: set[str] = set()
+                for _ml in merged_lines:
+                    for _dom in re.findall(r"@([a-z0-9.-]+\.[a-z]{2,})", _ml["text"], flags=re.IGNORECASE):
+                        _root = _dom.lower().split(".")[0]
+                        if len(_root) >= 4 and _root not in {"gmail", "yahoo", "hotmail", "outlook", "icloud", "proton", "protonmail", "foxmail", "163", "126", "qq", "live", "mail"}:
+                            header_email_domains.add(_root)
                 ambiguous = False
                 pre_unmarked_org_seen = False
                 saw_resource_after_inst = False
                 prev_header_y1: float | None = None
                 start_idx = (max(consumed_indices) + 1) if consumed_indices else 0
-                if consumed_indices:
+                if consumed_indices and not is_two_col:
                     min_c, max_c = min(consumed_indices), max(consumed_indices)
                     for mid_idx in range(min_c + 1, max_c):
                         if mid_idx in consumed_indices:
@@ -3265,6 +3868,101 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                         if cleaned_mid and (_has_affiliation_hint(cleaned_mid) or _is_plausible_unmarked_org_text(cleaned_mid)):
                             ambiguous = True
                             break
+                # Single-author 2-column side-by-side affiliation recovery (e.g. left university column | right lab column):
+                # split lines on wide horizontal gaps (>=20pt) instead of row-concatenating unrelated columns!
+                if len(author_names) == 1 and not ambiguous:
+                    post_author_lines = [
+                        merged_lines[j]
+                        for j in range(start_idx, len(merged_lines))
+                        if not (
+                            ABSTRACT_START_RE.match(merged_lines[j]["text"])
+                            or re.match(r"^(?:figure|table)\s+\d", merged_lines[j]["text"], re.IGNORECASE)
+                        )
+                    ]
+                    gap_rows = [
+                        ln for ln in post_author_lines
+                        if not (
+                            EMAIL_OR_URL_LINE_RE.search(ln["text"])
+                            or NON_AUTHOR_RESOURCE_RE.search(ln["text"])
+                            or DATE_LINE_RE.match(ln["text"])
+                            or VENUE_OR_STATUS_RE.match(ln["text"])
+                            or FOOTNOTE_ROLE_RE.match(ln["text"])
+                            or IEEE_MEMBER_ONLY_RE.match(ln["text"])
+                        )
+                        and any(sp.get("is_gap") and float(sp.get("gap_pt", 0.0)) >= 20.0 for sp in (ln.get("spans") or []))
+                    ]
+                    if gap_rows:
+                        gap_midpoints = [
+                            (sp["bbox"][0] + sp["bbox"][2]) / 2.0
+                            for ln in gap_rows
+                            for sp in (ln.get("spans") or [])
+                            if sp.get("is_gap") and float(sp.get("gap_pt", 0.0)) >= 20.0
+                        ]
+                        col_mid_x = sorted(gap_midpoints)[len(gap_midpoints) // 2] if gap_midpoints else page_w * 0.5
+                        col_buckets: dict[int, list[str]] = {}
+                        col_locs: dict[int, list[str]] = {}
+                        col_valid = True
+                        for ln in post_author_lines:
+                            txt_l = ln["text"]
+                            if ABSTRACT_START_RE.match(txt_l) or re.match(r"^(?:figure|table)\s+\d", txt_l, re.IGNORECASE):
+                                break
+                            if DATE_LINE_RE.match(txt_l) or FOOTNOTE_ROLE_RE.match(txt_l) or VENUE_OR_STATUS_RE.match(txt_l) or IEEE_MEMBER_ONLY_RE.match(txt_l):
+                                continue
+                            # Split spans on wide column gaps (>=20pt), tracking each segment's x-span
+                            seg_items: list[tuple[str, float]] = []
+                            cur_seg: list[str] = []
+                            cur_x0: float | None = None
+                            for sp in (ln.get("spans") or []):
+                                if sp.get("is_gap") and float(sp.get("gap_pt", 0.0)) >= 20.0:
+                                    s_txt = _clean_ws("".join(cur_seg))
+                                    if s_txt:
+                                        seg_items.append((s_txt, cur_x0 if cur_x0 is not None else ln["x0"]))
+                                    cur_seg = []
+                                    cur_x0 = None
+                                else:
+                                    if cur_x0 is None and sp.get("text", "").strip():
+                                        cur_x0 = float(sp["bbox"][0])
+                                    cur_seg.append(sp.get("text", ""))
+                            if cur_seg:
+                                s_txt = _clean_ws("".join(cur_seg))
+                                if s_txt:
+                                    seg_items.append((s_txt, cur_x0 if cur_x0 is not None else ln["x0"]))
+                            if len(seg_items) > 2:
+                                col_valid = False
+                                break
+                            for seg_idx, (seg, seg_x0) in enumerate(seg_items):
+                                if EMAIL_OR_URL_LINE_RE.search(seg) or NON_AUTHOR_RESOURCE_RE.search(seg) or BARE_DOMAIN_FRAGMENT_RE.fullmatch(seg):
+                                    continue
+                                ci = seg_idx if len(seg_items) == 2 else (0 if seg_x0 < col_mid_x else 1)
+                                c_seg = _sanitize_affiliation(seg, author_index)
+                                if not c_seg or BARE_DOMAIN_FRAGMENT_RE.fullmatch(c_seg):
+                                    continue
+                                if _is_location_only_line(c_seg) or _is_known_location_tail(c_seg):
+                                    col_locs.setdefault(ci, []).append(c_seg)
+                                else:
+                                    col_buckets.setdefault(ci, []).append(c_seg)
+                        if col_valid and len(col_buckets) == 2 and all(col_buckets.get(ci) for ci in (0, 1)):
+                            col_affs: list[str] = []
+                            for ci in (0, 1):
+                                parts_c = list(col_buckets[ci])
+                                if col_locs.get(ci) and col_locs[ci][0].lower() not in ", ".join(parts_c).lower():
+                                    parts_c.append(col_locs[ci][0])
+                                joined_c = ", ".join(parts_c)
+                                if joined_c and (_has_affiliation_hint(joined_c) or _has_strong_unmarked_org_signal(joined_c)):
+                                    col_affs.append(joined_c)
+                            if len(col_affs) == 2:
+                                ev_sha = _sha256_text(header_evidence)
+                                return {
+                                    "contract": CONTRACT_V2,
+                                    "mode": "single_institution",
+                                    "pdfSha256": pdf_sha,
+                                    "sourceEvidence": header_evidence,
+                                    "sourceEvidenceSha256": ev_sha,
+                                    "sourceDomSha256": _sha256_text(f"{pdf_sha}:{ev_sha}"),
+                                    "authors": [{"name": author_names[0], "affiliations": col_affs}],
+                                }
+                        # If a single-author paper has wide column gaps that didn't parse into 2 clean columns, fail closed rather than gluing columns!
+                        ambiguous = True
                 for idx in range(start_idx, len(merged_lines)):
                     if ambiguous:
                         break
@@ -3280,14 +3978,11 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                     ):
                         prev_header_y1 = ln["y1"]
                         continue
-                    # Check multi-institution side-by-side rows BEFORE skipping inline-email resource lines
-                    # (e.g. "Stanford University, alice@stanford.edu   MIT, bob@mit.edu")
-                    if _is_multi_institution_unmarked_line(txt, ln["spans"], author_index):
+                    # For multi-author papers, reject multi-institution side-by-side rows; single-author papers have no attribution ambiguity!
+                    if len(author_names) > 1 and _is_multi_institution_unmarked_line(txt, ln["spans"], author_index):
                         ambiguous = True
                         break
                     if NON_AUTHOR_RESOURCE_RE.search(txt):
-                        # Inspect lines combining an institution with an inline email/URL, splitting on [[GAP]],
-                        # wide whitespace, and semicolons first so a left-column email never swallows a right-column org.
                         raw_res_parts: list[str] = []
                         ln_spans = ln.get("spans") or []
                         for si, sp in enumerate(ln_spans):
@@ -3323,10 +4018,20 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                             if c.strip()
                         ] or [txt]
                         line_has_contact = "@" in txt or bool(re.search(r"https?://|www\.", txt, re.IGNORECASE))
+                        line_email_domains = {
+                            dm.lower().split(".")[0]
+                            for dm in re.findall(r"@([a-z0-9.-]+\.[a-z]{2,})", txt, flags=re.IGNORECASE)
+                            if len(dm.lower().split(".")[0]) >= 4
+                        }
                         for res_chunk in res_chunks:
                             cleaned_res = _sanitize_affiliation(res_chunk, author_index)
+                            is_indep_res = bool(cleaned_res and re.fullmatch(r"Independent\s+Researchers?(?:,\s*.+)?", cleaned_res, re.IGNORECASE))
+                            res_slug = re.sub(r"[^a-z0-9]", "", re.sub(r"\s+ai$", "", cleaned_res.lower())) if cleaned_res else ""
+                            matches_line_domain = bool(len(res_slug) >= 4 and res_slug in line_email_domains)
                             if cleaned_res and not _looks_like_prose_sentence(cleaned_res) and (
                                 _has_affiliation_hint(cleaned_res)
+                                or is_indep_res
+                                or matches_line_domain
                                 or (
                                     _is_plausible_unmarked_org_text(cleaned_res)
                                     and (
@@ -3338,13 +4043,13 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                                     )
                                 )
                             ):
-                                if len(inst_lines) == 0 and not _has_affiliation_hint(cleaned_res) and not (
-                                    _has_strong_unmarked_org_signal(cleaned_res) and len(cleaned_res.split()) <= 5
+                                if len(inst_lines) == 0 and not _has_affiliation_hint(cleaned_res) and not is_indep_res and not matches_line_domain and not (
+                                    _has_strong_unmarked_org_signal(cleaned_res) and len(cleaned_res.split()) <= 8
                                     and not MIXED_CASE_AI_ORG_LINE_RE.fullmatch(cleaned_res)
                                 ):
                                     pre_unmarked_org_seen = True
                                 else:
-                                    inst_lines.append((cleaned_res, ln))
+                                    inst_lines.append((cleaned_res, ln, ln, idx, idx))
                                 if line_has_contact:
                                     saw_resource_after_inst = True
                             elif cleaned_res and line_has_contact and _is_location_only_line(cleaned_res):
@@ -3388,8 +4093,6 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                             break
                         prev_header_y1 = ln["y1"]
                         continue
-                    # Stop before teaser-figure diagram labels positioned far below an email/URL block
-                    # when no further header emails or affiliation keywords appear.
                     has_email_ahead = any("@" in merged_lines[j]["text"] for j in range(idx + 1, len(merged_lines)))
                     if (
                         saw_resource_after_inst
@@ -3399,7 +4102,24 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                         and not _has_affiliation_hint(txt)
                     ):
                         break
-                    # Check raw txt for bullets / hyphenated line wraps / prose BEFORE _sanitize_affiliation strips them
+                    # Pre-join explicit hyphenated line wrap (e.g. "University of Tech-" + "nology, Eindhoven ...") BEFORE prose check
+                    if (
+                        txt.rstrip().endswith("-")
+                        and _has_affiliation_hint(txt)
+                        and idx + 1 < len(merged_lines)
+                        and re.match(r"^[a-z]{2,}", merged_lines[idx + 1]["text"].strip())
+                        and (merged_lines[idx + 1]["y0"] - ln["y1"]) < 24.0
+                    ):
+                        combined_hyph = txt.rstrip()[:-1] + merged_lines[idx + 1]["text"].strip()
+                        cleaned_hyph = _sanitize_affiliation(combined_hyph, author_index)
+                        if cleaned_hyph and not _looks_like_prose_sentence(cleaned_hyph):
+                            inst_lines.append((cleaned_hyph, ln, merged_lines[idx + 1], idx, idx + 1))
+                            prev_header_y1 = merged_lines[idx + 1]["y1"]
+                            continue
+                    # Skip the already-consumed second half of a hyphenated institution wrap
+                    if inst_lines and idx == inst_lines[-1][4]:
+                        prev_header_y1 = ln["y1"]
+                        continue
                     if _looks_like_prose_sentence(txt):
                         prev_header_y1 = ln["y1"]
                         continue
@@ -3409,8 +4129,30 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                         continue
                     if _looks_like_prose_sentence(cleaned) or len(cleaned) > 160 or len(cleaned.split()) > 18:
                         continue
-                    if _has_affiliation_hint(cleaned):
-                        inst_lines.append((cleaned, ln))
+                    # Coalesce explicit trailing-comma continuation line into the immediately preceding institution line
+                    if (
+                        inst_lines
+                        and idx == inst_lines[-1][4] + 1
+                        and not saw_resource_after_inst
+                        and inst_lines[-1][2]["text"].rstrip().endswith(",")
+                        and (ln["y0"] - inst_lines[-1][2]["y1"]) < 14.0
+                        and abs(ln["base_size"] - inst_lines[-1][2]["base_size"]) <= 1.2
+                        and (_has_affiliation_hint(cleaned) or _is_location_only_line(cleaned))
+                    ):
+                        prev_str, prev_first_ln, _prev_last_ln, prev_first_idx, _ = inst_lines[-1]
+                        inst_lines[-1] = (f"{prev_str.rstrip(' ,')}, {cleaned}", prev_first_ln, ln, prev_first_idx, idx)
+                        continue
+                    if _has_affiliation_hint(cleaned) or re.fullmatch(r"Independent\s+Researchers?(?:,\s*.+)?", cleaned, re.IGNORECASE):
+                        inst_lines.append((cleaned, ln, ln, idx, idx))
+                    elif (
+                        inst_lines
+                        and _is_valid_author_name(cleaned)
+                        and not MIXED_CASE_AI_ORG_LINE_RE.fullmatch(cleaned)
+                        and not _is_location_only_line(cleaned)
+                    ):
+                        # Another person author appearing after an affiliation line means vertically stacked multi-author blocks
+                        ambiguous = True
+                        break
                     elif _is_location_only_line(cleaned):
                         inst0_tail = (
                             re.sub(r"\s+\d{4,6}$", "", inst_lines[0][0].rsplit(",", 1)[1].strip()).strip()
@@ -3425,47 +4167,106 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                         ):
                             loc_lines.append(cleaned)
                         elif inst_lines:
-                            # Either Inst 1 already carries a location tail (incl. ZIP, e.g. "Stanford University, CA 94305"),
-                            # a location line was already seen, or this "<Name>, <Country>" follows an email block
-                            # (e.g. "alice@stanford.edu\nCartesia, USA\nbob@cartesia.ai"): marks Mode C ambiguous.
                             ambiguous = True
                             break
                         else:
-                            # "<Name>, <Country>" BEFORE Inst 1 (e.g. "Cartesia, USA\nStanford University")
-                            # is a preceding non-keyword organization.
                             pre_unmarked_org_seen = True
                     elif _is_plausible_unmarked_org_text(cleaned):
                         if len(inst_lines) >= 1:
-                            # A second non-location, non-venue organization line makes Mode C ambiguous
-                            # (including lowercase-start brands like xAI/iFLYTEK, parens, middle dots, or Unicode).
-                            inst_lines.append((cleaned, ln))
+                            inst_lines.append((cleaned, ln, ln, idx, idx))
                         elif not saw_resource_after_inst and (
                             not _is_valid_author_name(cleaned) or MIXED_CASE_AI_ORG_LINE_RE.fullmatch(cleaned)
                         ):
-                            # Accept standalone non-keyword 1st org ONLY if it carries an explicit org/brand signal
-                            # (known org head, acronym, CamelCase brand, or org token — never arbitrary section headings/prose).
                             toks = cleaned.split()
+                            cleaned_slug = re.sub(r"[^a-z0-9]", "", cleaned.lower())
+                            is_email_domain_brand = bool(len(toks) <= 2 and len(cleaned_slug) >= 4 and cleaned_slug in header_email_domains)
                             is_known_brand_or_acronym = (
                                 cleaned.isupper()
                                 or bool(re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]", cleaned))
-                                or re.sub(r"[^a-z0-9]", "", cleaned.lower()) in KNOWN_NON_CITY_ORG_HEADS
+                                or cleaned_slug in KNOWN_NON_CITY_ORG_HEADS
                                 or any(re.sub(r"[^a-z0-9]", "", t.lower()) in KNOWN_NON_CITY_ORG_HEADS for t in toks)
                                 or bool(NON_PERSON_ORG_TOKEN_CS_RE.search(cleaned))
+                                or bool(re.search(r"\.(?:ai|io)\b", cleaned, re.IGNORECASE))
+                                or is_email_domain_brand
                             )
-                            if is_known_brand_or_acronym and len(toks) <= 5:
-                                inst_lines.append((cleaned, ln))
+                            if is_known_brand_or_acronym and len(toks) <= 8:
+                                inst_lines.append((cleaned, ln, ln, idx, idx))
                             else:
-                                # Do not adopt an arbitrary unknown heading/word as a sole institution,
-                                # but record it so a subsequent org line (e.g. "Cartesia\nStanford University") marks Mode C ambiguous.
                                 pre_unmarked_org_seen = True
-                # Accept ONLY a single unambiguous institution (optionally + 1 city/country location line)
-                if not ambiguous and not pre_unmarked_org_seen and len(inst_lines) == 1:
-                    affs = [inst_lines[0][0]]
-                    if len(loc_lines) == 1 and loc_lines[0] not in affs[0]:
-                        affs.append(loc_lines[0])
+
+                # Hierarchical 2-line single-institution merge: ONLY when entries are strictly consecutive (no email/resource
+                # separating them: idx2_start == idx1_end + 1), tight vertical gap, similar font size, and clear subunit <-> parent relation
+                # (never merges two peer institutions like "Stanford University" + "Massachusetts Institute of Technology").
+                if not ambiguous and not pre_unmarked_org_seen and len(inst_lines) == 2:
+                    t1, ln1_first, ln1_last, idx1_first, idx1_last = inst_lines[0]
+                    t2, ln2_first, ln2_last, idx2_first, idx2_last = inst_lines[1]
+                    _sub_re = re.compile(r"\b(?:dept\.?|department|departamento|dipartimento|school|faculty|division|center|centre|lab|labs|laborator(?:y|ies)|group|chair|program|unit|research\s+group|institute\s+for)\b", re.IGNORECASE)
+                    _top_re = re.compile(
+                        r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|college|academy|polytechnique|politecnic[oa]|institute\s+of\s+technology|"
+                        r"corp(?:oration)?|company|inc\.?|ltd\.?|gmbh|"
+                        r"mit|cmu|epfl|kaist|cnrs|inria|riken|nict|nii|dfki|idiap|nus|ntu|snu|ustc|sjtu|cuhk|hkust|thu|pku|zju|ucla|ucsd|ucsb|uiuc|nyu|eth|ibm|aws|amd|arm|nec|ntt|unsw|kth|dtu|tum|lmu|rwth|cas|"
+                        r"tencent|bytedance|google|deepmind|meta|microsoft|nvidia|amazon|apple|alibaba|huawei|baidu|openai|anthropic|adobe|sony|samsung|bosch|siemens|intel|qualcomm)\b",
+                        re.IGNORECASE,
+                    )
+                    _known_subunit_acronyms = {
+                        "LIACS", "CSAIL", "CLSP", "LTI", "DEIB", "IRIT", "LIG", "LIMSI",
+                        "ISIR", "CVSSP", "CCRMA", "IDMT", "MIRMI", "DISI", "DIBRIS", "DIETI",
+                    }
+                    _independent_city_lab_re = re.compile(
+                        r"^(?:shanghai|beijing|shenzhen|guangzhou|hangzhou|hong\s+kong|allen|vector|mila|peng\s*cheng|baai)\s+(?:ai\s+|artificial\s+intelligence\s+)?(?:lab|laboratory|institute|academy)\b",
+                        re.IGNORECASE,
+                    )
+                    strictly_consecutive = (
+                        idx2_first == idx1_last + 1
+                        and not NON_AUTHOR_RESOURCE_RE.search(ln1_last["text"])
+                        and not NON_AUTHOR_RESOURCE_RE.search(ln2_first["text"])
+                    )
+                    close_vert = strictly_consecutive and (ln2_first["y0"] - ln1_last["y1"]) < 16.0 and abs(ln2_first["base_size"] - ln1_last["base_size"]) <= 1.6
+                    t1_has_loc = "," in t1 and _is_known_location_tail(re.sub(r"\s+\d{4,6}$", "", t1.rsplit(",", 1)[-1].strip()).strip())
+                    t1_has_brand = any(re.sub(r"[^a-z0-9]", "", tok.lower()) in KNOWN_NON_CITY_ORG_HEADS for tok in t1.split())
+                    t2_has_brand = any(re.sub(r"[^a-z0-9]", "", tok.lower()) in KNOWN_NON_CITY_ORG_HEADS for tok in t2.split())
+                    t1_is_top = bool(_top_re.search(t1) or t1_has_brand or _independent_city_lab_re.match(t1))
+                    t2_is_top = bool(_top_re.search(t2) or t2_has_brand or _independent_city_lab_re.match(t2))
+                    both_are_top_orgs = bool(t1_is_top and t2_is_top)
+                    is_hier_pair = close_vert and not t1_has_loc and not both_are_top_orgs and (
+                        (_sub_re.search(t1) and not t1_is_top and (t2_is_top or _has_affiliation_hint(t2)))
+                        or (t1_is_top and not _sub_re.search(t1) and ((_sub_re.search(t2) and not t2_is_top) or (t2.strip() in _known_subunit_acronyms)))
+                        or (_sub_re.search(t1) and t1_is_top and _sub_re.search(t2) and not t2_is_top)
+                        or (re.search(r"\b(?:of|for|and|in|at|the)\s*$", t1, re.IGNORECASE) is not None)
+                        or (re.match(r"^(?:of|for|and|in|at)\s+", t2, re.IGNORECASE) is not None)
+                    )
+                    if is_hier_pair:
+                        sep = " " if (re.search(r"\b(?:of|for|and|in|at|the)\s*$", t1, re.IGNORECASE) or re.match(r"^(?:of|for|and|in|at)\s+", t2, re.IGNORECASE)) else ", "
+                        inst_lines = [(f"{t1.rstrip(' ,')}{sep}{t2}", ln1_first, ln2_last, idx1_first, idx2_last)]
+
+                # Single-author papers may legitimately list multiple affiliations cleanly without ambiguity
+                if len(author_names) == 1 and not ambiguous and not pre_unmarked_org_seen and len(inst_lines) >= 2:
+                    dedup_affs: list[str] = []
+                    for a_txt, _, _, _, _ in inst_lines:
+                        if a_txt not in dedup_affs:
+                            dedup_affs.append(a_txt)
+                    if len(loc_lines) == 1 and loc_lines[0] not in dedup_affs[-1]:
+                        dedup_affs[-1] = f"{dedup_affs[-1]}, {loc_lines[0]}"
                     ev_sha = _sha256_text(header_evidence)
                     return {
-                        "contract": CONTRACT,
+                        "contract": CONTRACT_V2,
+                        "mode": "single_institution",
+                        "pdfSha256": pdf_sha,
+                        "sourceEvidence": header_evidence,
+                        "sourceEvidenceSha256": ev_sha,
+                        "sourceDomSha256": _sha256_text(f"{pdf_sha}:{ev_sha}"),
+                        "authors": [{"name": author_names[0], "affiliations": dedup_affs}],
+                    }
+
+                # Accept ONLY a single unambiguous institution (joining any trailing city/country onto that affiliation)
+                if not ambiguous and not pre_unmarked_org_seen and len(inst_lines) == 1:
+                    aff0 = inst_lines[0][0]
+                    if len(loc_lines) == 1 and loc_lines[0].lower() not in aff0.lower():
+                        aff0 = f"{aff0}, {loc_lines[0]}"
+                    affs = [aff0]
+                    ev_sha = _sha256_text(header_evidence)
+                    return {
+                        "contract": CONTRACT_V2,
                         "mode": "single_institution",
                         "pdfSha256": pdf_sha,
                         "sourceEvidence": header_evidence,
@@ -3475,6 +4276,14 @@ def extract_pdf_page1_authors(pdf_bytes: bytes) -> dict | None:
                     }
 
     return None
+
+
+def extract_pdf_page1_authors(pdf_bytes: bytes, contract: str = CONTRACT_V2) -> dict | None:
+    if contract in (CONTRACT_V1, "v1"):
+        return extract_pdf_page1_authors_v1(pdf_bytes)
+    if contract in (CONTRACT_V2, "v2", None, ""):
+        return extract_pdf_page1_authors_v2(pdf_bytes)
+    raise ValueError(f"Unsupported PDF page-1 author contract: {contract}")
 
 
 def read_pdf_file(path: Path) -> bytes:
@@ -3503,6 +4312,7 @@ def main() -> None:
     require_external_runtime("pdf_author_extract.py")
     parser = argparse.ArgumentParser(description="从 PDF 首页确定性提取作者与机构绑定")
     parser.add_argument("--pdf", type=Path, help="已封存 PDF 的绝对路径（不传则从 stdin 读取原始 PDF 字节）")
+    parser.add_argument("--contract", default=CONTRACT_V2, choices=[CONTRACT_V1, CONTRACT_V2, "v1", "v2"], help="提取合同版本")
     args = parser.parse_args()
     if args.pdf is not None:
         pdf_bytes = read_pdf_file(args.pdf)
@@ -3510,7 +4320,7 @@ def main() -> None:
         pdf_bytes = sys.stdin.buffer.read(MAX_PDF_BYTES + 1)
         if len(pdf_bytes) > MAX_PDF_BYTES:
             raise SystemExit("pdf_author_extract: stdin PDF 超过体积上限")
-    result = extract_pdf_page1_authors(pdf_bytes)
+    result = extract_pdf_page1_authors(pdf_bytes, contract=args.contract)
     sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 
 

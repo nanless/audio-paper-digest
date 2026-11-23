@@ -1160,7 +1160,10 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
         res_zip = pae.extract_pdf_page1_authors(pdf_zip)
         self.assertIsNotNone(res_zip)
         self.assertEqual(res_zip['mode'], 'single_institution')
-        self.assertEqual(res_zip['authors'][0]['affiliations'], ['Stanford University', 'Stanford, CA 94305'])
+        self.assertEqual(res_zip['authors'][0]['affiliations'], ['Stanford University, Stanford, CA 94305'])
+        res_zip_v1 = pae.extract_pdf_page1_authors_v1(pdf_zip)
+        self.assertIsNotNone(res_zip_v1)
+        self.assertEqual(res_zip_v1['authors'][0]['affiliations'], ['Stanford University', 'Stanford, CA 94305'])
 
         # R6 #5: Oxford-comma 3+-author thanks clause with middle-initial mismatch
         pdf_oxford = make_pdf(lambda p: (
@@ -1911,6 +1914,12 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
             res_cu = pae.extract_pdf_page1_authors(pdf_cu)
             self.assertIsNotNone(res_cu, f"R12 #3 city-university falsely rejected: {inst} / {loc_line}")
             self.assertEqual(res_cu["authors"], [
+                {"name": "Alice Brown", "affiliations": [f"{inst}, {loc_only}"]},
+                {"name": "Bob White", "affiliations": [f"{inst}, {loc_only}"]},
+            ])
+            res_cu_v1 = pae.extract_pdf_page1_authors_v1(pdf_cu)
+            self.assertIsNotNone(res_cu_v1)
+            self.assertEqual(res_cu_v1["authors"], [
                 {"name": "Alice Brown", "affiliations": [inst, loc_only]},
                 {"name": "Bob White", "affiliations": [inst, loc_only]},
             ])

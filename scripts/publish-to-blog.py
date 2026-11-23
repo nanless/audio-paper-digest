@@ -14593,22 +14593,31 @@ def _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper):
         raise PublishDataValidationError(f'{paper_id} source manifest 未闭合 TXT/PDF/runtime SHA')
     artifacts = _daily_fresh_validate_runtime(runtime, manifest, text, paper_id)
     raw_reader_authors = runtime.get('readerAuthors')
+    _supported_pdf_author_contracts = {
+        'pdf-page1-author-evidence-v1',
+        'pdf-page1-author-evidence-v2',
+    }
     if text_manifest['source'] == 'pdf' and raw_reader_authors is not None:
         if (not isinstance(raw_reader_authors, dict)
-                or raw_reader_authors.get('contract') != 'pdf-page1-author-evidence-v1'):
+                or raw_reader_authors.get('contract') not in _supported_pdf_author_contracts):
             raise PublishDataValidationError(
-                f'{paper_id} sealed PDF 来源的非空 readerAuthors 必须声明 pdf-page1-author-evidence-v1'
+                f'{paper_id} sealed PDF 来源的非空 readerAuthors 必须声明 pdf-page1-author-evidence-v1 或 pdf-page1-author-evidence-v2'
             )
     if isinstance(raw_reader_authors, dict) and (
-            raw_reader_authors.get('contract') == 'pdf-page1-author-evidence-v1'
+            raw_reader_authors.get('contract') in _supported_pdf_author_contracts
             or 'pdfPage1Authors' in raw_reader_authors):
         import pdf_author_extract
         pdf_evidence = (
             raw_reader_authors
-            if raw_reader_authors.get('contract') == 'pdf-page1-author-evidence-v1'
+            if raw_reader_authors.get('contract') in _supported_pdf_author_contracts
             else raw_reader_authors.get('pdfPage1Authors')
         )
-        replayed_pdf_evidence = pdf_author_extract.extract_pdf_page1_authors(pdf)
+        ev_contract = pdf_evidence.get('contract') if isinstance(pdf_evidence, dict) else None
+        replayed_pdf_evidence = (
+            pdf_author_extract.extract_pdf_page1_authors(pdf, contract=ev_contract)
+            if ev_contract in _supported_pdf_author_contracts
+            else None
+        )
         if (not isinstance(pdf_evidence, dict)
                 or replayed_pdf_evidence is None
                 or pdf_evidence != replayed_pdf_evidence):
@@ -17937,6 +17946,7 @@ def generation_template_fingerprint():
         'lib/core-symbolic-source-numerals.js': script_dir / 'lib' / 'core-symbolic-source-numerals.js',
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
         'pdf_author_extract.py': script_dir / 'pdf_author_extract.py',
+        'pdf_author_extract_v1.py': script_dir / 'pdf_author_extract_v1.py',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
         'lib/reader-pdf-extraction-scope.js': script_dir / 'lib' / 'reader-pdf-extraction-scope.js',

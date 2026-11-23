@@ -9,8 +9,11 @@ const cheerio = require('cheerio');
 const identityFormat = require('./reader-identity-format');
 // 解析或逐人关联失败不能推断论文没有披露机构；旧提示语仍按原签名只读兼容。
 const READER_AFFILIATION_UNBOUND = '机构信息未能在本次解析中与作者逐人可靠绑定';
-const PDF_PAGE1_AUTHOR_CONTRACT = 'pdf-page1-author-evidence-v1';
-const PDF_PAGE1_AUTHOR_MODES = new Set(['markers', 'thanks', 'column_blocks', 'single_institution']);
+const PDF_PAGE1_AUTHOR_CONTRACT_V1 = 'pdf-page1-author-evidence-v1';
+const PDF_PAGE1_AUTHOR_CONTRACT_V2 = 'pdf-page1-author-evidence-v2';
+const PDF_PAGE1_AUTHOR_CONTRACT = PDF_PAGE1_AUTHOR_CONTRACT_V2;
+const PDF_PAGE1_AUTHOR_CONTRACTS = new Set([PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2]);
+const PDF_PAGE1_AUTHOR_MODES = new Set(['markers', 'thanks', 'column_blocks', 'single_institution', 'inline_author_aff']);
 const MAX_PDF_AUTHOR_BYTES = 512 * 1024 * 1024;
 const METADATA_AUTHOR_SEPARATORS = new Set([':', '：', ';', '；', ',', '，', '、', '·', '|', '/', '•', '—', '–', '-']);
 const recoverySha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
@@ -34,18 +37,74 @@ const authorCacheCounters = {
     verifiedMatchMisses: 0
 };
 
-const READER_ROLE_FOOTNOTE_RE = /^(?:(?:denotes?|indicates?|signifies|represents?)\s+)?(?:the\s+)?(?:equal\s+contribution|contributed\s+equally|authors?\s+contributed\s+equally|joint\s+first\s+authors?|co-?first\s+authors?|equal\s+advising|equal\s+supervision|equal\s+senior|corresponding\s+authors?|author\s+to\s+whom\s+correspondence\s+should\s+be\s+addressed|correspondence\s+(?:to|should\s+be\s+addressed)|correspondence\s*[:：]?$|corresponding\s+to|thanks\s*[:：]|project\s+lead|team\s+lead|core\s+contributors?|work\s+(?:was\s+)?(?:done|performed|conducted|carried\s+out|completed)\s+(?:during|while|at|as)|intern(?:ship)?\s+at|now\s+at|preprint|under\s+review|accepted\s+(?:at|to|by)|published\s+(?:at|in)|to\s+appear\s+in|(?:this\s+)?work\s+(?:was\s+)?(?:funded|supported)\s+by|(?:funded|supported)\s+by|alphabetical\s+order|author\s+order\s+is\s+random|order\s+is\s+random|acknowledg|email|e-?mail|contact(?:\s*[:：]|\b)|project\s+page|code\s+available|demo\s+page)/i;
+const READER_ROLE_FOOTNOTE_RE = /^(?:[∗*†‡⋆§¶‖∥#•◦⋄+]\s*)?(?:(?:denotes?|indicates?|signifies|represents?)\s+)?(?:(?:the|these|all)\s+)?(?:equal\s+contribution|contributed\s+equally|authors?\s+contributed\s+equally|joint\s+first\s+authors?|co-?first\s+authors?|equal\s+advising|equal\s+supervision|equal\s+senior|corresponding\s+authors?|author\s+to\s+whom\s+correspondence\s+should\s+be\s+addressed|correspondence\s+(?:to|should\s+be\s+addressed)|correspondence\s*[:：]?$|corresponding\s+to|thanks\s*[:：]|project\s+lead|team\s+lead|core\s+contributors?|work\s+(?:was\s+)?(?:done|performed|conducted|carried\s+out|completed)\s+(?:during|while|at|as)|intern(?:ship)?\s+at|now\s+at|preprint|under\s+review|accepted\s+(?:at|to|by)|published\s+(?:at|in)|to\s+appear\s+in|(?:this\s+)?work\s+(?:was\s+)?(?:funded|supported)\s+by|(?:funded|supported)\s+by|alphabetical\s+order|author\s+order\s+is\s+random|order\s+is\s+random|acknowledg|email|e-?mail|contact(?:\s*[:：]|\b)|project\s+page|code\s+available|demo\s+page)/i;
 const READER_UNANCHORED_ROLE_SENTENCE_RE = /\b(?:contributed\s+equally|is\s+(?:the\s+)?corresponding\s+author|are\s+(?:the\s+)?corresponding\s+authors?|correspondence\s+should\s+be\s+addressed|author\s+to\s+whom\s+correspondence|work\s+(?:was\s+)?(?:done|performed|conducted|carried\s+out|completed)\s+(?:during|while|at|as))\b/i;
 const READER_CREDIT_STRONG_RE = /\b(?:software\s+design|conceptualization|formal\s+analysis|data\s+curation|writing\s*[–—-]\s*original\s+draft|writing\s*[–—-]\s*review(?:\s+and\s+editing)?|funding\s+acquisition|project\s+administration|manuscript\s+review\s+and\s+editing)\b/i;
 const READER_CREDIT_GENERIC_TERM_RE = /\b(?:conceptualization|methodology|formal\s+analysis|investigation|data\s+curation|visualization|funding\s+acquisition|project\s+administration|supervision|validation|resources|documentation|software\s+design|writing\s*[–—-]\s*original|writing\s*[–—-]\s*review)\b/gi;
-const READER_CORP_DOT_SUFFIX_SRC = '(?<=\\S\\s)(?:b\\.v\\.|s\\.a\\.(?:s\\.)?|a\\.g\\.|s\\.r\\.l\\.)(?![a-z0-9-])|pte\\.?\\s*ltd(?:\\.(?![a-z0-9-])|\\b)|pty\\.?\\s*ltd(?:\\.(?![a-z0-9-])|\\b)';
-const READER_AUTHOR_CORP_DOT_SUFFIX_SRC = '(?<=\\S\\s)(?:b\\.v\\.|s\\.a\\.(?:s\\.)?|a\\.g\\.|s\\.r\\.l\\.)(?=\\s*(?:[,;)]|$))|pte\\.?\\s*ltd(?:\\.(?![a-z0-9-])|\\b)|pty\\.?\\s*ltd(?:\\.(?![a-z0-9-])|\\b)';
+const READER_CORP_DOT_SUFFIX_SRC = '(?<=\\S\\s)(?:b\\.v\\.|s\\.a\\.(?:s\\.)?|a\\.g\\.|s\\.r\\.l\\.)(?![a-z0-9-])|(?:pvt|pte|pty)\\.?\\s*ltd(?:\\.(?![a-z0-9-])|\\b)';
+const READER_AUTHOR_CORP_DOT_SUFFIX_SRC = '(?<=\\S\\s)(?:b\\.v\\.|s\\.a\\.(?:s\\.)?|a\\.g\\.|s\\.r\\.l\\.)(?=\\s*(?:[,;)]|$))|(?:pvt|pte|pty)\\.?\\s*ltd(?:\\.(?![a-z0-9-])|\\b)';
 const READER_UPPERCASE_CORP_SUFFIX_RE = /(?<=\S\s)(?:(?:AG|SE|NV|BV|AB|Oy)\b|K\.K\.(?![A-Za-z0-9-]))/;
 const READER_AUTHOR_UPPERCASE_CORP_SUFFIX_RE = /(?<=\S\s)(?:(?:AG|SE|NV|BV|AB|Oy)\b|K\.K\.(?=\s*(?:[,;)]|$)))/;
-const READER_AFFILIATION_ENTITY_HINT_RE = new RegExp(`\\b(?:univ(?:ersit[yéèêiäöüa-z]*)?|institut(?:e|ion)?|research|school|college|department|dept\\.?|division|faculty|laborator(?:y|ies)|laboratoires?|labs?|academy|cent(?:re|er)|hospital|clinic|foundation|corp(?:oration)?\\.?|company|co\\.?,?\\s*ltd\\.?|inc(?:\\.(?![a-z0-9-])|\\b)|ltd(?:\\.(?![a-z0-9-])|\\b)|gmbh|llc|llp|plc|pbc|${READER_CORP_DOT_SUFFIX_SRC}|technology|technologies|t[ée]l[ée]com(?:munications?)?|intelligence|platforms?|vision|systems?|solutions?|engineering|sciences?|computing|software|networks?|media|communications?|agi\\s+lab|ai\\s+lab|ai\\s+research|tencent|wechat|google|deepmind|meta\\s+ai|microsoft|amazon|apple|nvidia|adobe|alibaba|bytedance|huawei|baidu|oppo|xiaomi|samsung|sony|ibm|intel|qualcomm|bosch|siemens|openai|northwestern|kyutai|kaist|inria|cnrs|sorbonne|sinica|mit|cmu|uc\\s+berkeley|eth\\s+zurich|eth\\s+zürich|epfl|tsinghua|peking|fudan|sjtu|ustc|cuhk|nus|ntu|snu|riken|nict|nii|dfki|idiap|fbk|athena|isir|mila|vector|allen\\s+institute|ntt|team)(?=\\b|[\\s,.;)]|$)`, 'i');
-const READER_NON_PERSON_AFFILIATION_HINT_RE = new RegExp(`\\b(?:univ(?:ersit[yéèêiäöüa-z]*)?|institut(?:e|ion)?|research|school|college|department|dept\\.?|division|faculty|laborator(?:y|ies)|laboratoires?|labs?|academy|cent(?:re|er)|hospital|clinic|foundation|corp(?:oration)?\\.?|company|co\\.?,?\\s*ltd\\.?|inc(?:\\.(?![a-z0-9-])|\\b)|ltd(?:\\.(?![a-z0-9-])|\\b)|gmbh|llc|llp|plc|pbc|${READER_AUTHOR_CORP_DOT_SUFFIX_SRC}|technology|technologies|t[ée]l[ée]com(?:munications?)?|intelligence|platforms?|vision|systems?|solutions?|engineering|sciences?|computing|software|networks?|media|communications?|agi\\s+lab|ai\\s+lab|ai\\s+research|tencent|wechat|google|deepmind|meta\\s+ai|microsoft|amazon|nvidia|adobe|alibaba|bytedance|huawei|baidu|xiaomi|samsung|ibm|intel|qualcomm|siemens|kyutai|kaist|inria|cnrs|sorbonne|sinica|mit|cmu|uc\\s+berkeley|eth\\s+zurich|eth\\s+zürich|epfl|tsinghua|peking|fudan|sjtu|ustc|cuhk|nus|ntu|snu|riken|nict|nii|dfki|idiap|fbk|isir|vector|allen\\s+institute|ntt|team)(?=\\b|[\\s,.;)]|$)`, 'i');
-const READER_RESOURCE_LABEL_ONLY_RE = /^(?:project(?:\s+(?:page|website|webpage|url|link|site))?|(?:code|source\s+code|demo|demos|dataset|datasets|data|model|models|model\s+card|weights|checkpoint|checkpoints|evaluation|benchmark|benchmarks|paper|blog|arxiv|license|samples|audio\s+samples|hugging\s*face|github|gitlab|modelscope|home|homepage|website|webpage|repository|repo|abstract|introduction|keywords?|index\s+terms)(?:\s+(?:page|website|url|link|repo|repository))?|e-?mail|emails?|contact|correspondence)\s*[:：]?\s*$/i;
-const READER_ACADEMIC_INST_CORE_RE = /\b(?:univ(?:ersit[yéèêiäöüa-z]*)?|institut(?:e|ion)?|research|school|college|department|dept\.?|division|faculty|laborator(?:y|ies)|laboratoires?|labs?|academy|cent(?:re|er)|hospital|clinic|foundation|cnrs|inria|kaist|epfl|mit|cmu|riken|nict|dfki|idiap|sorbonne|sinica)\b/i;
+const READER_AFFILIATION_ENTITY_HINT_RE = new RegExp(`\\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|institut(?:e|ion|o)?|research|independent\\s+researcher|school|college|department|dept\\.?|departamento|dipartimento|division|faculty|laborator(?:y|ies|io)|laboratoires?|labs?|academy|cent(?:re|er|ro)|hospital|clinic|foundation|conservatory|conservatoire|[ée]cole|escola|politecnic[oa]|polytechnique|hochschule|corp(?:oration)?\\.?|company|co\\.?,?\\s*ltd\\.?|inc(?:\\.(?![a-z0-9-])|\\b)|ltd(?:\\.(?![a-z0-9-])|\\b)|gmbh|llc|llp|plc|pbc|berhad|sdn\\.?\\s*bhd\\.?|${READER_CORP_DOT_SUFFIX_SRC}|technology|technologies|t[ée]l[ée]com(?:munications?)?|intelligence|platforms?|vision|systems?|solutions?|engineering|sciences?|computing|software|networks?|media|communications?|agi\\s+lab|ai\\s+lab|ai\\s+research|fraunhofer|max\\s+planck|ubisoft|tether\\s+evo|tencent|wechat|google|deepmind|meta\\s+ai|microsoft|amazon|apple|nvidia|adobe|alibaba|bytedance|huawei|baidu|oppo|xiaomi|samsung|sony|ibm|intel|qualcomm|bosch|siemens|openai|northwestern|kyutai|kaist|inria|cnrs|sorbonne|sinica|mit|cmu|uc\\s+berkeley|eth\\s+zurich|eth\\s+zürich|epfl|tsinghua|peking|fudan|sjtu|ustc|cuhk|nus|ntu|snu|riken|nict|nii|dfki|idiap|fbk|athena|isir|mila|vector|allen\\s+institute|ntt|team)(?=\\b|[\\s,.;)]|$)`, 'i');
+const READER_NON_PERSON_AFFILIATION_HINT_RE = new RegExp(`\\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|institut(?:e|ion|o)?|research|school|college|department|dept\\.?|departamento|dipartimento|division|faculty|laborator(?:y|ies|io)|laboratoires?|labs?|academy|cent(?:re|er|ro)|hospital|clinic|foundation|conservatory|conservatoire|[ée]cole|escola|politecnic[oa]|polytechnique|hochschule|corp(?:oration)?\\.?|company|co\\.?,?\\s*ltd\\.?|inc(?:\\.(?![a-z0-9-])|\\b)|ltd(?:\\.(?![a-z0-9-])|\\b)|gmbh|llc|llp|plc|pbc|berhad|sdn\\.?\\s*bhd\\.?|${READER_AUTHOR_CORP_DOT_SUFFIX_SRC}|technology|technologies|t[ée]l[ée]com(?:munications?)?|intelligence|platforms?|vision|systems?|solutions?|engineering|sciences?|computing|software|networks?|media|communications?|agi\\s+lab|ai\\s+lab|ai\\s+research|fraunhofer|max\\s+planck|ubisoft|tether\\s+evo|tencent|wechat|google|deepmind|meta\\s+ai|microsoft|amazon|nvidia|adobe|alibaba|bytedance|huawei|baidu|xiaomi|samsung|ibm|intel|qualcomm|siemens|kyutai|kaist|inria|cnrs|sorbonne|sinica|mit|cmu|uc\\s+berkeley|eth\\s+zurich|eth\\s+zürich|epfl|tsinghua|peking|fudan|sjtu|ustc|cuhk|nus|ntu|snu|riken|nict|nii|dfki|idiap|fbk|isir|vector|allen\\s+institute|ntt|team)(?=\\b|[\\s,.;)]|$)`, 'i');
+const READER_RESOURCE_LABEL_ONLY_RE = /^(?:project(?:\s+(?:page|website|webpage|url|link|site))?|(?:code|source\s+code|demo|demos|dataset|datasets|data|model|models|model\s+card|weights|checkpoint|checkpoints|evaluation|benchmark|benchmarks|paper|blog|arxiv|license|samples|audio\s+samples|hugging\s*face|github|gitlab|modelscope|home|homepage|website|webpage|repository|repo|abstract|introduction|keywords?|index\s+terms)(?:\s+(?:page|website|url|link|repo|repository))?|e-?mail|emails?|contact|correspondence|address)\s*[:：]?\s*$/i;
+const READER_ACADEMIC_INST_CORE_RE = /\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|institut(?:e|ion|o)?|research|school|college|department|dept\.?|departamento|dipartimento|division|faculty|laborator(?:y|ies|io)|laboratoires?|labs?|academy|cent(?:re|er|ro)|hospital|clinic|foundation|conservatory|conservatoire|[ée]cole|escola|politecnic[oa]|polytechnique|hochschule|fraunhofer|max\s+planck|cnrs|inria|kaist|epfl|mit|cmu|riken|nict|dfki|idiap|sorbonne|sinica)\b/i;
+const READER_PURE_LOCATION_COUNTRY_RE = /^(?:United\s+States(?:\s+of\s+America)?|U\.?S\.?A\.?|United\s+Kingdom|U\.?K\.?|China|P\.?\s*R\.?\s*China|France|Germany|Japan|Korea|South\s+Korea|Republic\s+of\s+Korea|Canada|Switzerland|Singapore|Australia|India|Italy|Spain|(?:The\s+)?Netherlands|Sweden|Norway|Finland|Denmark|Belgium|Austria|Poland|Israel|Taiwan|R\.?O\.?C\.?|Hong\s+Kong|Macau|Brazil|Mexico|Turkey|Türkiye|Greece|Ireland|Portugal|Czech\s+Republic|New\s+Zealand|Russia|Vietnam|Thailand|Malaysia|Nepal|Uzbekistan|Bangladesh|El\s+Salvador|United\s+Arab\s+Emirates|UAE|Saudi\s+Arabia|Egypt|Iran|Pakistan|Indonesia|Philippines|Argentina|Chile|Colombia|Peru|South\s+Africa|Nigeria|Kenya|Cameroon|Hungary|Romania)$/i;
+const READER_PURE_LOCATION_STATE_OR_REGION_RE = /^(?:California|Massachusetts|Washington|Texas|Illinois|Pennsylvania|Michigan|Virginia|Maryland|Georgia|Indiana|Colorado|Oregon|Florida|Arizona|Ohio|Minnesota|Connecticut|Wisconsin|Missouri|Tennessee|Utah|New\s+York|New\s+Jersey|North\s+Carolina|South\s+Carolina|New\s+Mexico|West\s+Virginia|North\s+Dakota|South\s+Dakota|Rhode\s+Island|New\s+Hampshire|District\s+of\s+Columbia|Ontario|Quebec|British\s+Columbia|Nova\s+Scotia|Alberta|Manitoba|Gujarat|Maharashtra|Karnataka|Tamil\s+Nadu|Telangana|Uttar\s+Pradesh|West\s+Bengal|Kerala|Rajasthan|Punjab|Haryana|Andhra\s+Pradesh|England|Scotland|Bavaria|CA|NY|MA|WA|TX|PA|IL|NJ|MD|VA|GA|NC|SC|NM|WV|ND|SD|RI|NH|OH|MI|MN|CO|OR|CT|DC|FL|AZ|UT|IN|WI|MO|TN|ON|QC|BC|AB|NS|NSW|VIC)$/i;
+const READER_KNOWN_NON_CITY_ORG_HEADS = new Set([
+    'openai', 'anthropic', 'google', 'deepmind', 'meta', 'fair', 'apple', 'amazon', 'microsoft',
+    'tencent', 'alibaba', 'bytedance', 'huawei', 'baidu', 'nvidia', 'adobe', 'sony', 'mistral',
+    'cohere', 'zyphra', 'kyutai', 'suno', 'udio', 'stability', 'runway', 'databricks', 'snowflake',
+    'palantir', 'stripe', 'uber', 'airbnb', 'netflix', 'spotify', 'zoom', 'cisco', 'oracle',
+    'salesforce', 'qualcomm', 'intel', 'siemens', 'bosch', 'samsung', 'toyota', 'honda', 'panasonic',
+    'toshiba', 'hitachi', 'fujitsu', 'nec', 'ntt', 'naver', 'kakao', 'coupang', 'grab', 'shopee',
+    'tiktok', 'xiaomi', 'oppo', 'vivo', 'lenovo', 'sensetime', 'megvii', 'zhipu', 'moonshot',
+    'stepfun', 'baichuan', 'deepseek', 'qwen', 'minimax', 'elevenlabs', 'xai', 'iflytek', 'kaist',
+    'inria', 'cnrs', 'epfl', 'riken', 'nict', 'dfki', 'idiap', 'mila', 'cartesia', 'sesame',
+    'telefonica', 'telefónica', 'innovacion', 'innovación', 'digital', 'ubisoft', 'tether', 'manifestro', 'arm'
+]);
+let legacyReplayPreservePureLocationDepth = 0;
+function withLegacyPureLocationPreservation(fn) {
+    legacyReplayPreservePureLocationDepth++;
+    try {
+        return fn();
+    } finally {
+        legacyReplayPreservePureLocationDepth--;
+    }
+}
+function isReaderPureLocationOnly(text) {
+    const s = String(text || '').trim();
+    if (!s || READER_AFFILIATION_ENTITY_HINT_RE.test(s) || READER_UPPERCASE_CORP_SUFFIX_RE.test(s)) return false;
+    if (READER_PURE_LOCATION_COUNTRY_RE.test(s)) return true;
+    const parts = s.split(',').map(p => p.trim()).filter(Boolean);
+    if (parts.length !== 2 && parts.length !== 3) return false;
+    const left = parts[0];
+    const right = parts[parts.length - 1].replace(/\s+\d{4,6}$/, '').trim();
+    if (!READER_PURE_LOCATION_COUNTRY_RE.test(right)) return false;
+    if (parts.length === 3) {
+        // Mirror Python _is_location_only_line: 3-part pure location must have a state/province/region
+        // or postal code in the middle (never "<Company>, <City>, <Country>" like "Arm, Cambridge, United Kingdom").
+        const mid = parts[1].replace(/\s+\d{4,6}$/, '').trim();
+        const midIsStateOrZip = /^\d{4,6}(?:-\d{4})?$/.test(parts[1])
+            || READER_PURE_LOCATION_STATE_OR_REGION_RE.test(mid)
+            || READER_PURE_LOCATION_COUNTRY_RE.test(mid);
+        if (!midIsStateOrZip) return false;
+    }
+    const leftKey = left.toLowerCase().replace(/[^a-z0-9\u00c0-\u024f]/g, '');
+    if (READER_KNOWN_NON_CITY_ORG_HEADS.has(leftKey)) return false;
+    if (left.split(/\s+/).some(tok => READER_KNOWN_NON_CITY_ORG_HEADS.has(tok.toLowerCase().replace(/[^a-z0-9\u00c0-\u024f]/g, '')))) return false;
+    if (/[a-z][A-Z]/.test(left) || /\.(?:ai|io|com|org|edu|air)\b/i.test(left)) return false;
+    if (/^[A-Z]{2,}$/.test(left) && !['DC', 'LA', 'NY', 'SF', 'UK', 'US'].includes(left)) return false;
+    // Protect non-geographic ALL-CAPS institutional acronyms (e.g. "UNSW Sydney, Australia", "KAIST Daejeon, Korea")
+    const geoAcronyms = new Set(['USA', 'UAE', 'PRC', 'ROC', 'NSW', 'QLD', 'VIC', 'ACT', 'TAS', 'SAR']);
+    if (left.split(/\s+/).some(tok => { const t = tok.replace(/[()]/g, ''); return /^[A-Z]{3,}$/.test(t) && !geoAcronyms.has(t); })) return false;
+    // Protect famous university shortnames paired directly with a country (e.g. "Stanford, USA"), while keeping "Stanford, CA" / "Stanford, CA, USA" location-only.
+    const univShortnames = new Set(['stanford', 'caltech', 'cornell', 'princeton', 'harvard', 'purdue', 'dartmouth', 'vanderbilt', 'northwestern']);
+    const usStateNames = new Set(['california', 'new york', 'new jersey', 'massachusetts', 'indiana', 'illinois', 'tennessee', 'new hampshire']);
+    if (parts.length === 2 && univShortnames.has(leftKey) && right.length > 2 && !usStateNames.has(right.toLowerCase())) return false;
+    // Only single-word or 2-word city names (e.g. "Hangzhou", "New York", "San Francisco"); never 3+ word org names
+    return /^[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+)?$/.test(left);
+}
 const READER_SECTION_META_HEADING_RE = /^(?:(?:paper\s+)?author(?:\s+(?:roles?|contributions?|affiliations?|information|notes?|biograph(?:y|ies)|details?)|s\b)|highlights|overview|title|contents|table\s+of\s+contents|acknowledg(?:e)?ments?|declarations?|conflict\s+of\s+interest|ethics\s+statement|data\s+availability|code\s+availability|supplementary\s+material)\b/i;
 const READER_BARE_DOMAIN_FRAGMENT_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|edu|cn|net|io|ai|gov|mil|de|uk|fr|jp|kr|ca|ch|sg|au|nl|eu|ac\.[a-z]{2}|co\.[a-z]{2}|edu\.[a-z]{2})$/i;
 const READER_IEEE_MEMBER_ONLY_RE = /^(?:(?:Life\s+)?(?:(?:Graduate\s+)?Student\s+|Senior\s+|Associate\s+)?(?:Member|Fellow)\s*,\s*IEEE\.?)(?:(?:[\s,;]+|,\s*and\s+|\s+and\s+)(?:(?:Life\s+)?(?:(?:Graduate\s+)?Student\s+|Senior\s+|Associate\s+)?(?:Member|Fellow)\s*,\s*IEEE\.?))*$/i;
@@ -599,14 +658,17 @@ function stripNonAbbreviationTrailingDot(value) {
 function sanitizeReaderAffiliationValue(value, authorNames = []) {
     let cleaned = normalizeReaderIdentityText(value)
         .replace(/^(?:affiliations?|institutions?)\s*[:：]\s*/i, '');
-    // Strip leaked raw LaTeX macros / key-value metadata fragments (strictly O(n) non-nested)
+    // Strip leaked raw LaTeX macros / key-value metadata fragments (strictly O(n) non-nested; (?![A-Za-z]) prevents mangling \institute / \correspondence)
     if (cleaned.includes('\\')) {
         cleaned = cleaned
-            .replace(/\\(?:institution|affiliation|authorblockA|authorrefmark|IEEEauthorrefmark|inst|email|thanks)\b(?:\{[^}{]*\})?\s*/gi, ' ')
+            .replace(/\\(?:institution|affiliation|authorblockA|authorrefmark|IEEEauthorrefmark|inst|email|thanks|sthanks|corresponding|corr|reinorcid)(?![A-Za-z])(?:\{[^}{]*\}|\d{4}-\d{4}-\d{4}-\d{3}[\dX]|\d{1,2})?\s*/gi, ' ')
             .replace(/\s+/g, ' ').trim();
     }
     if (cleaned.includes('=')) {
-        cleaned = cleaned.replace(/\borganization\s*=\s*\{?([^},;]+)\}?/gi, '$1');
+        cleaned = cleaned
+            .replace(/\b(?:organization|addressline|city|state|country)\s*=\s*\{?([^},;]+)\}?/gi, '$1')
+            .replace(/,?\s*\bpostcode\s*=\s*\{?[^},;]+\}?/gi, '')
+            .replace(/\s+/g, ' ').trim();
     }
     // Strip parenthetical / inline email & URL clauses before tail-windowed role stripping (strictly O(n))
     const braceDomainPat = '(?:@|[a-z0-9.-]+\\.(?:edu|com|org|cn|net|io|ai|gov|de|uk|fr|jp|kr|ca|ch|sg|au|nl|eu|ac\\.[a-z]{2}|co\\.[a-z]{2}|edu\\.[a-z]{2})\\b)';
@@ -691,6 +753,7 @@ function sanitizeReaderAffiliationValue(value, authorNames = []) {
         || matchesInitialedKnownAuthorName(text, authorNames)
         || (colonPrefixRaw && matchesInitialedKnownAuthorName(colonPrefixRaw, authorNames))
         || countKnownAuthorNames(text, authorNames) >= 2
+        || (legacyReplayPreservePureLocationDepth === 0 && isReaderPureLocationOnly(text))
         || isLikelyAuthorEnumeration(text)) {
         return '';
     }
@@ -792,13 +855,15 @@ function cleanReaderAffiliationNode($, node, authorNames = []) {
                 return 'skip';
             }
         }
-        if (tag === 'br') {
-            parts.push(' ');
-            return 'skip';
+        if (tag === 'br' || tag === 'p' || tag === 'div') {
+            if (parts.length > 0 && !/\s$/.test(parts[parts.length - 1])) parts.push(' ');
+            if (tag === 'br') return 'skip';
         }
         return 'descend';
     });
-    return sanitizeReaderAffiliationValue(rawText, authorNames);
+    // Separate CamelCase element-boundary gluing like "SciencesCorresponding author" or "AutomationChinese Academy"
+    const spacedRaw = rawText.replace(/([a-z])((?:Corresponding|Equal|Project|University|Chinese|Institute|Department|School|Faculty|College|Center|Centre|Laboratory|Academy|National|State)\b)/g, '$1 $2');
+    return sanitizeReaderAffiliationValue(spacedRaw, authorNames);
 }
 
 function cleanReaderAuthorNameNode($, node) {
@@ -814,9 +879,9 @@ function cleanReaderAuthorNameNode($, node) {
     });
     let cleaned = stripTrailingFootnoteMark(normalizeReaderIdentityText(rawText));
     if (cleaned.includes('\\')) {
-        cleaned = cleaned.replace(/\\(?:authorblockN|authorrefmark|IEEEauthorrefmark|inst)\b(?:\{[^}{]*\})?/gi, ' ');
+        cleaned = cleaned.replace(/\\(?:authorblockN|authorrefmark|IEEEauthorrefmark|inst|sthanks|corresponding|corr|reinorcid)(?![A-Za-z])(?:\{[^}{]*\}|\d{4}-\d{4}-\d{4}-\d{3}[\dX]|\d{1,2})?/gi, ' ');
     }
-    cleaned = cleaned.replace(/\s+/g, ' ');
+    cleaned = cleaned.replace(/\s+/g, ' ').replace(/^(?:and|&)\s+/i, '');
     cleaned = stripInlineAtEmailsLinear(
         cleaned.replace(/,?\s?\b(?:Life\s+)?(?:Student\s+|Graduate\s+Student\s+|Senior\s+|Associate\s+)?(?:Member|Fellow)\s*,\s*IEEE\b/gi, '')
     );
@@ -1029,11 +1094,11 @@ function parseReaderThanksAffiliations($, knownAuthorNames = []) {
         seenNodes.add(node);
         sourceNodes.push($.html(node));
         const note = $(node).clone();
-        note.find('.ltx_note_name, .ltx_note_mark, .ltx_tag, sup').remove();
+        note.find('.ltx_note_name, .ltx_note_mark, .ltx_note_type, .ltx_tag, sup').remove();
         // Replace parenthetical email / corresponding clauses with sentence breaks BEFORE splitting sentences (strictly O(n) non-nested)
         const normNoteText = normalizeReaderIdentityText(note.text());
         const rawText = (normNoteText.includes('(') && normNoteText.includes(')'))
-            ? normNoteText.replace(/\((?:e-?mail|emails?|corresponding\s+author)[^()]*\)/gi, ' . ')
+            ? normNoteText.replace(/\((?:e-?mail|emails?|corresponding\s+author)[^()]*\)\s*\.?/gi, ' . ')
             : normNoteText;
         // Sentence split respecting abbreviations and Unicode/multi-letter initials, while breaking before new funding/venue sentences
         const abbrCiRe = /\b(?:Co|Ltd|Inc|Corp|Dept|Univ|Lab|Tech|Inst|Prof|Dr|Mr|Ms|Jr|Sr|St|No|Vol|Fig|al|vs|S\.r\.l|B\.V|S\.A\.S|S\.A|A\.G|K\.K)\.$/i;
@@ -1885,17 +1950,29 @@ function canonicalAuthorFoldKey(value) {
         .trim();
 }
 
+function canonicalAuthorUmlautDigraphKey(value) {
+    const raw = normalizeReaderIdentityText(normalizeReaderMetadataDisplayName(value))
+        .replace(/ä/g, 'ae').replace(/Ä/g, 'Ae')
+        .replace(/ö/g, 'oe').replace(/Ö/g, 'Oe')
+        .replace(/ü/g, 'ue').replace(/Ü/g, 'Ue');
+    return canonicalAuthorFoldKey(raw);
+}
+
 function canonicalAuthorTier3Profile(value) {
     const raw = normalizeReaderMetadataDisplayName(value);
     const fold = canonicalAuthorFoldKey(raw);
     const keys = new Set();
     if (fold) keys.add(fold);
+    const umlautKey = canonicalAuthorUmlautDigraphKey(raw);
+    if (umlautKey) keys.add(umlautKey);
     const nickMatches = [...raw.matchAll(/(?:\(([^)]{1,24})\)|["“]([^"”]{1,24})["”])/g)]
         .map(m => canonicalAuthorFoldKey(m[1] || m[2] || '')).filter(Boolean);
     const nick = nickMatches.length ? nickMatches.join(' ') : null;
     const noNick = raw.replace(/\s*(?:\([^)]{1,24}\)|["“][^"”]{1,24}["”])\s*/g, ' ').replace(/\s+/g, ' ').trim();
     const noNickFold = canonicalAuthorFoldKey(noNick);
     if (noNickFold) keys.add(noNickFold);
+    const noNickUmlaut = canonicalAuthorUmlautDigraphKey(noNick);
+    if (noNickUmlaut) keys.add(noNickUmlaut);
     // "Last, First" -> "First Last"
     let normalizedOrder = noNickFold;
     if (noNick.includes(',')) {
@@ -1919,6 +1996,10 @@ function canonicalAuthorTier3Profile(value) {
         keys.add(coreTokens.join(' '));
         if (coreTokens.length === 2) {
             keys.add(`${coreTokens[1]} ${coreTokens[0]}`);
+        } else if (coreTokens.length >= 3 && coreTokens.slice(0, -1).every(tok => tok.length >= 2)) {
+            // Reordered multi-given names with identical surname (e.g. "Michael Barasa Murunga" <-> "Barasa Michael Murunga")
+            const sortedGiven = [...coreTokens.slice(0, -1)].sort().join(' ');
+            keys.add(`${sortedGiven} ${coreTokens[coreTokens.length - 1]}`);
         }
     }
     return { fold, nick, middleInitials, keys };
@@ -2063,6 +2144,35 @@ function alignAuthorNames1to1(metadataNames, parsedAuthors) {
         commitUniqueTier(metaToCandidates, parsedToCandidates);
     }
 
+    // Tier 4: controlled 1-remaining-author alignment for anglicized/native given-name variants
+    // (e.g. "George Fazekas" <-> "György Fazekas") ONLY when N >= 2, N - 1 authors already matched
+    // strictly 1-to-1, and the sole remaining pair has identical folded surname AND identical given initial.
+    if (realMetaIndices.length >= 2 && matchedParsedByMetaIdx.size === realMetaIndices.length - 1) {
+        const remMeta = realMetaIndices.find(mIdx => !matchedParsedByMetaIdx.has(mIdx));
+        let remParsed = -1;
+        for (let pIdx = 0; pIdx < parsedAuthors.length; pIdx++) {
+            if (!usedParsedIndices.has(pIdx)) {
+                remParsed = pIdx;
+                break;
+            }
+        }
+        if (remMeta !== undefined && remParsed >= 0) {
+            const mp = canonicalAuthorTier3Profile(metadataNames[remMeta]);
+            const pp = canonicalAuthorTier3Profile(parsedDisplayNames[remParsed]);
+            const conflictingMiddle = mp.middleInitials.length > 0 && pp.middleInitials.length > 0
+                && mp.middleInitials.join(' ') !== pp.middleInitials.join(' ');
+            const conflictingNick = Boolean(mp.nick && pp.nick && mp.nick !== pp.nick);
+            const mt = canonicalAuthorFoldKey(metadataNames[remMeta]).split(' ').filter(Boolean);
+            const pt = canonicalAuthorFoldKey(parsedDisplayNames[remParsed]).split(' ').filter(Boolean);
+            if (!conflictingMiddle && !conflictingNick
+                && mt.length >= 2 && pt.length >= 2
+                && mt[mt.length - 1] === pt[pt.length - 1] && mt[0][0] === pt[0][0]) {
+                matchedParsedByMetaIdx.set(remMeta, parsedAuthors[remParsed]);
+                usedParsedIndices.add(remParsed);
+            }
+        }
+    }
+
     if (matchedParsedByMetaIdx.size !== realMetaIndices.length) return null;
     return matchedParsedByMetaIdx;
 }
@@ -2071,8 +2181,9 @@ function validatePdfPage1AuthorEvidence(evidence, expectedPdfSha256 = null) {
     if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return false;
     const expectedKeys = ['authors', 'contract', 'mode', 'pdfSha256', 'sourceDomSha256', 'sourceEvidence', 'sourceEvidenceSha256'];
     if (JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify(expectedKeys)) return false;
-    if (evidence.contract !== PDF_PAGE1_AUTHOR_CONTRACT) return false;
+    if (!PDF_PAGE1_AUTHOR_CONTRACTS.has(evidence.contract)) return false;
     if (!PDF_PAGE1_AUTHOR_MODES.has(evidence.mode)) return false;
+    if (evidence.mode === 'inline_author_aff' && evidence.contract !== PDF_PAGE1_AUTHOR_CONTRACT_V2) return false;
     if (!recoverySha256(evidence.pdfSha256)) return false;
     if (expectedPdfSha256 && evidence.pdfSha256 !== expectedPdfSha256) return false;
     if (typeof evidence.sourceEvidence !== 'string' || !evidence.sourceEvidence.trim()) return false;
@@ -2090,13 +2201,18 @@ function validatePdfPage1AuthorEvidence(evidence, expectedPdfSha256 = null) {
     ));
 }
 
-function extractPdfPage1AuthorsSync(pdfBytes) {
+function extractPdfPage1AuthorsSync(pdfBytes, options = {}) {
+    const requestedContract = options?.contract || PDF_PAGE1_AUTHOR_CONTRACT;
+    if (!PDF_PAGE1_AUTHOR_CONTRACTS.has(requestedContract)) {
+        throw new Error(`Unsupported PDF page-1 author contract: ${requestedContract}`);
+    }
     const payload = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes || []);
     // Real arXiv PDFs are at least a few KiB; tiny synthetic unit-test stubs (e.g. 25 bytes) skip subprocess overhead.
     if (payload.length < 256 || payload.length > MAX_PDF_AUTHOR_BYTES
         || payload.subarray(0, 5).toString('ascii') !== '%PDF-') return null;
     const pdfSha = sha256(payload);
-    const cached = getBoundedCacheEntry(pdfPage1AuthorCache, pdfSha);
+    const cacheKey = `${requestedContract}:${pdfSha}`;
+    const cached = getBoundedCacheEntry(pdfPage1AuthorCache, cacheKey);
     if (cached !== undefined) {
         authorCacheCounters.pdfPage1Hits++;
         return cached === null ? null : structuredClone(cached);
@@ -2116,7 +2232,7 @@ function extractPdfPage1AuthorsSync(pdfBytes) {
         fs.chmodSync(tmpDir, 0o700);
         const tmpPdf = path.join(tmpDir, 'source.pdf');
         fs.writeFileSync(tmpPdf, payload, { mode: 0o600 });
-        result = spawnSync('bash', [runner, script, '--pdf', tmpPdf], {
+        result = spawnSync('bash', [runner, script, '--pdf', tmpPdf, '--contract', requestedContract], {
             cwd: rootDir,
             env: childEnv,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -2132,12 +2248,41 @@ function extractPdfPage1AuthorsSync(pdfBytes) {
     }
     try {
         const parsed = JSON.parse(result.stdout);
-        const valid = validatePdfPage1AuthorEvidence(parsed, pdfSha) ? parsed : null;
-        setBoundedCacheEntry(pdfPage1AuthorCache, pdfSha, valid ? structuredClone(valid) : null);
+        const valid = validatePdfPage1AuthorEvidence(parsed, pdfSha) && parsed.contract === requestedContract ? parsed : null;
+        setBoundedCacheEntry(pdfPage1AuthorCache, cacheKey, valid ? structuredClone(valid) : null);
         return valid ? structuredClone(valid) : null;
     } catch (_) {
         return null;
     }
+}
+
+function scoreAlignedAffiliationQuality(names, alignment, knownAuthorNames) {
+    if (!alignment) return -1e9;
+    const knownIndex = knownAuthorNames && knownAuthorNames.__knownAuthorIndex
+        ? knownAuthorNames
+        : buildKnownAuthorIndex(knownAuthorNames);
+    let score = 0;
+    for (let i = 0; i < names.length; i++) {
+        const matched = alignment.get(i);
+        if (!matched || !Array.isArray(matched.affiliations)) continue;
+        const clean = matched.affiliations
+            .map(v => sanitizeReaderAffiliationValue(v, knownIndex))
+            .filter(v => v && !/^机构信息未/.test(v));
+        if (!clean.length) continue;
+        score += 10;
+        // Reward clean multi-affiliations (up to 3 per author)
+        score += Math.min(2, clean.length - 1) * 3;
+        for (const aff of clean) {
+            if (READER_AFFILIATION_ENTITY_HINT_RE.test(aff) || READER_UPPERCASE_CORP_SUFFIX_RE.test(aff)) score += 2;
+            if (/\b(?:univ|college|academy|institute|corp|inc\.?|ltd\.?|gmbh|lab|research|google|meta|microsoft|tencent|alibaba|bytedance|huawei|nvidia|amazon|apple|kyutai|kaist|inria|cnrs|sorbonne|sinica)\b/i.test(aff)) score += 1;
+            // Penalize concatenated CamelCase artifacts, raw LaTeX/KV leakage, dangling punctuation, or very short fragments
+            if (/[a-z][A-Z][a-z]{3,}/.test(aff) && !/(?:DeepMind|OpenAI|ByteDance|MetaAI|HuggingFace|ModelScope|SpeechBrain|YouTube|WeChat|MacOS|PyTorch|TensorFlow|iFLYTEK|SenseTime|MiniMax|StepFun|DeepSeek|ElevenLabs|BandLab|OmniBuds|EchoNova|VinUniversity|SoundHound|McGill|McMaster|DePaul|LaTeX)/i.test(aff)) score -= 4;
+            if (/\\|=/.test(aff)) score -= 8;
+            if (/,\s*(?:of|for|and|in)\s+/i.test(aff)) score -= 4;
+            if (aff.length < 5) score -= 2;
+        }
+    }
+    return score;
 }
 
 function countAlignedBoundAuthors(names, alignment, knownAuthorNames) {
@@ -2179,8 +2324,12 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
             : new Map(pdfFallback.authors.map((a, idx) => [idx, a]));
         const knownIndex = buildKnownAuthorIndex([...primaryNames, ...(parsed?.authors || []).map(a => a?.name), ...pdfFallback.authors.map(a => a?.name)]);
         const primaryBound = primaryAlign ? countAlignedBoundAuthors(primaryNames, primaryAlign, knownIndex) : -1;
-        const pdfBound = pdfAlign ? countAlignedBoundAuthors(names.length > 0 ? names : pdfFallback.authors.map(a => a.name), pdfAlign, knownIndex) : -1;
-        if (pdfBound > primaryBound && pdfBound > 0) {
+        const pdfTargetNames = names.length > 0 ? names : pdfFallback.authors.map(a => a.name);
+        const pdfBound = pdfAlign ? countAlignedBoundAuthors(pdfTargetNames, pdfAlign, knownIndex) : -1;
+        const pdfWinsTieByQuality = pdfBound > 0 && pdfBound === primaryBound
+            && scoreAlignedAffiliationQuality(pdfTargetNames, pdfAlign, knownIndex)
+                > scoreAlignedAffiliationQuality(primaryNames, primaryAlign, knownIndex) + 2;
+        if ((pdfBound > primaryBound && pdfBound > 0) || pdfWinsTieByQuality) {
             activeDetails = { ...sourceDetails, readerAuthors: pdfFallback };
             parsed = pdfFallback;
         }
@@ -2254,7 +2403,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
         ? sourceDetails.readerAuthors.authors : [];
     const sourceDomSha256 = sourceDetails?.readerAuthors?.sourceDomSha256;
     const isConferencePdf = sourceDetails?.source === 'conference_pdf_text';
-    const isPdfPage1 = sourceDetails?.readerAuthors?.contract === PDF_PAGE1_AUTHOR_CONTRACT;
+    const isPdfPage1 = PDF_PAGE1_AUTHOR_CONTRACTS.has(sourceDetails?.readerAuthors?.contract);
     const isPdfSource = isConferencePdf || isPdfPage1;
     if (isConferencePdf && sourceDetails?.readerAuthors) {
         const evidence = sourceDetails.readerAuthors;
@@ -2902,7 +3051,8 @@ function inspectHtmlAuthorSource(html) {
         return { htmlSha256: '', retainable: false, readerAuthors: null };
     }
     const htmlSha256 = sha256(html);
-    const cached = getBoundedCacheEntry(htmlAuthorSourceCache, htmlSha256);
+    const cacheKey = legacyReplayPreservePureLocationDepth > 0 ? `legacy:${htmlSha256}` : htmlSha256;
+    const cached = getBoundedCacheEntry(htmlAuthorSourceCache, cacheKey);
     if (cached !== undefined) {
         authorCacheCounters.htmlHits++;
         return {
@@ -2917,7 +3067,7 @@ function inspectHtmlAuthorSource(html) {
         Object.values(node.attribs || {}).some(value => /data\s*:\s*image\/|<svg\b|<canvas\b/iu.test(value))
     ));
     const parsed = retainable ? parseArxivReaderAuthors($) : null;
-    setBoundedCacheEntry(htmlAuthorSourceCache, htmlSha256, {
+    setBoundedCacheEntry(htmlAuthorSourceCache, cacheKey, {
         retainable,
         readerAuthors: parsed ? structuredClone(parsed) : null
     });
@@ -3045,10 +3195,10 @@ function verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion
         // Plain JSON and caller-supplied details never acquire this source capability.
         const bundleAuthors = require('./fresh-analysis-context.js').readVerifiedBundleReaderAuthors(details);
         if (!readerAuthors && bundleAuthors
-            && (details.source !== 'pdf' || bundleAuthors.contract === PDF_PAGE1_AUTHOR_CONTRACT)) {
+            && (details.source !== 'pdf' || PDF_PAGE1_AUTHOR_CONTRACTS.has(bundleAuthors.contract))) {
             readerAuthors = bundleAuthors;
             if (details.source === 'html' && !details.readerAuthors?.sourceHtml && !details.readerAuthors?.sourceHeaderHtml
-                && readerAuthors.contract !== PDF_PAGE1_AUTHOR_CONTRACT) {
+                && !PDF_PAGE1_AUTHOR_CONTRACTS.has(readerAuthors.contract)) {
                 const preamble = String(details.text || '').split(/\nAbstract\n/i)[0];
                 const lines = preamble.split(/\r?\n/);
                 const names = readerAuthors.authors || [];
@@ -3154,10 +3304,10 @@ function readerAuthorIdentityMatchesSource(paper, details) {
     // 仅对物理校验通过后的纯确定性身份比对做有界只读记忆化，避免多轮重复解析与重复打印同一警告。
     const verifiedDetails = verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion: version });
     const hasDerivedLegacyPdfFallback = !details?.readerAuthors?.pdfPage1Authors
-        && details?.readerAuthors?.contract !== PDF_PAGE1_AUTHOR_CONTRACT
+        && !PDF_PAGE1_AUTHOR_CONTRACTS.has(details?.readerAuthors?.contract)
         && Boolean(
             verifiedDetails?.readerAuthors?.pdfPage1Authors
-            || verifiedDetails?.readerAuthors?.contract === PDF_PAGE1_AUTHOR_CONTRACT
+            || PDF_PAGE1_AUTHOR_CONTRACTS.has(verifiedDetails?.readerAuthors?.contract)
         );
     const matchKey = stableFingerprint({
         version,
@@ -3202,17 +3352,53 @@ function readerAuthorIdentityMatchesSource(paper, details) {
                 && readerAuthorUnavailableIdentityMatches(paper, {
                     sourceSha256: paper.sourceSha256, metadataAuthors: paper.authors
                 }));
-        if (!matched && hasDerivedLegacyPdfFallback) {
-            // 兼容尚未刷新作者的旧封存批次（原 runtime.readerAuthors 未写入 pdfPage1Authors，可能保存了旧 HTML 部分绑定）。
-            const legacyReaderAuthors = verifiedDetails.readerAuthors?.contract === PDF_PAGE1_AUTHOR_CONTRACT
-                ? null
-                : (() => {
-                    const clone = { ...verifiedDetails.readerAuthors };
+        if (!matched && (details?.source === 'html' || details?.source === 'pdf')
+            && details?.readerAuthors?.contract !== PDF_PAGE1_AUTHOR_CONTRACT_V2
+            && details?.readerAuthors?.pdfPage1Authors?.contract !== PDF_PAGE1_AUTHOR_CONTRACT_V2) {
+            // 兼容旧封存批次（含 2026-11-20 与 2026-11-17 历史已发布记录）：
+            // 允许只读重放旧 v1 PDF 首页证据以及旧版保留城市尾的 HTML/PDF 绑定；
+            // 新写入的 v2 批次不进入此历史回放路径。
+            const v1BundleAuthors = require('./fresh-analysis-context.js').readVerifiedBundleReaderAuthors(details, {
+                pdfContract: PDF_PAGE1_AUTHOR_CONTRACT_V1
+            });
+            const tryCandidate = (candidateDetails, preserveLegacyLocations = false) => {
+                const exec = () => {
+                    const candidateExpected = resolveExpectedFor(candidateDetails);
+                    return stableFingerprint(saved) === stableFingerprint(candidateExpected);
+                };
+                return preserveLegacyLocations ? withLegacyPureLocationPreservation(exec) : exec();
+            };
+            const legacyHtmlDetails = withLegacyPureLocationPreservation(() => (
+                details?.source === 'html'
+                    ? verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion: version })
+                    : verifiedDetails
+            ));
+            if (v1BundleAuthors) {
+                const buildV1Details = baseDetails => {
+                    const v1ReaderAuthors = PDF_PAGE1_AUTHOR_CONTRACTS.has(v1BundleAuthors.contract)
+                        ? v1BundleAuthors
+                        : (v1BundleAuthors.pdfPage1Authors
+                            ? (baseDetails.readerAuthors
+                                ? { ...baseDetails.readerAuthors, pdfPage1Authors: v1BundleAuthors.pdfPage1Authors }
+                                : v1BundleAuthors)
+                            : (baseDetails.readerAuthors || v1BundleAuthors));
+                    return { ...baseDetails, readerAuthors: v1ReaderAuthors };
+                };
+                matched = tryCandidate(buildV1Details(verifiedDetails), false)
+                    || tryCandidate(buildV1Details(legacyHtmlDetails), true);
+            }
+            if (!matched) {
+                const stripPdfPage1 = baseDetails => {
+                    if (!baseDetails.readerAuthors || PDF_PAGE1_AUTHOR_CONTRACTS.has(baseDetails.readerAuthors.contract)) {
+                        return { ...baseDetails, readerAuthors: null };
+                    }
+                    const clone = { ...baseDetails.readerAuthors };
                     delete clone.pdfPage1Authors;
-                    return clone;
-                })();
-            const legacyExpected = resolveExpectedFor({ ...verifiedDetails, readerAuthors: legacyReaderAuthors });
-            matched = stableFingerprint(saved) === stableFingerprint(legacyExpected);
+                    return { ...baseDetails, readerAuthors: clone };
+                };
+                matched = (hasDerivedLegacyPdfFallback && tryCandidate(stripPdfPage1(verifiedDetails), false))
+                    || tryCandidate(stripPdfPage1(legacyHtmlDetails), true);
+            }
         }
     }
     return setBoundedCacheEntry(verifiedAuthorMatchCache, matchKey, matched);
@@ -3224,7 +3410,9 @@ module.exports = {
     sanitizeReaderAffiliationValue, isReaderResourceAffiliationLabel, parseArxivReaderAuthors,
     resolveApiReaderAuthors, bindApiReaderAuthorIdentity, parseConferencePdfAuthors, parseConferencePdfAuthorsV2, CONFERENCE_PDF_AUTHOR_LINES_V2,
     verifiedReaderAuthorDetails, resolveVerifiedReaderAuthors, readerAuthorIdentityMatchesSource, readerAuthorUnavailableIdentityMatches,
-    MAX_AUTHOR_SOURCE_HTML_BYTES, AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES, PDF_PAGE1_AUTHOR_CONTRACT, METADATA_AUTHOR_SEPARATORS,
+    MAX_AUTHOR_SOURCE_HTML_BYTES, AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES,
+    PDF_PAGE1_AUTHOR_CONTRACT, PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2, PDF_PAGE1_AUTHOR_CONTRACTS,
+    METADATA_AUTHOR_SEPARATORS,
     clearReaderAuthorVerificationCaches, getReaderAuthorVerificationCacheStats,
     canRetainAuthorSourceHtml, retainAuthorSourceHtml, extractAuthorHeaderHtml, retainAuthorSourceHeaderHtml, replayHtmlReaderAuthors,
     validatePdfPage1AuthorEvidence, extractPdfPage1AuthorsSync

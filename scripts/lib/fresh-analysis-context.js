@@ -243,7 +243,7 @@ function readBundleFreshSource(checked, id, expectation) {
     return source;
 }
 
-function readVerifiedBundleReaderAuthors(details) {
+function readVerifiedBundleReaderAuthors(details, options = {}) {
     const proof = verifiedBundleAuthorSources.get(details) || verifiedBundleAuthorScope.getStore();
     if (!proof) return null;
     if (stable(details) !== proof.detailsSha256) throw fail('已核验的作者来源详情被修改。');
@@ -257,11 +257,12 @@ function readVerifiedBundleReaderAuthors(details) {
     const raw = stored.runtimeDetails.readerAuthors;
     const authorParser = require('./reader-author-parser.js');
     const pdfSha = stored.manifest?.pdf?.responseSha256;
+    const deriveContract = options?.pdfContract || authorParser.PDF_PAGE1_AUTHOR_CONTRACT;
     if (raw === null) {
         // 旧批次在引入 pdfPage1Authors 前封存的纯 PDF 来源，runtime.readerAuthors 为 null；
         // 直接对同一份已通过 SHA-256 核验的封存 source.pdf 做确定性首页作者重放，不改写磁盘封存文件。
         if (stored.manifest?.text?.source === 'pdf' && Buffer.isBuffer(stored.pdf) && stored.pdf.length > 0) {
-            const derived = authorParser.extractPdfPage1AuthorsSync(stored.pdf);
+            const derived = authorParser.extractPdfPage1AuthorsSync(stored.pdf, { contract: deriveContract });
             if (derived && authorParser.validatePdfPage1AuthorEvidence(derived, pdfSha)) {
                 return structuredClone(derived);
             }
@@ -269,14 +270,14 @@ function readVerifiedBundleReaderAuthors(details) {
         return null;
     }
     if (stored.manifest?.text?.source === 'pdf'
-        && (!raw || typeof raw !== 'object' || raw.contract !== authorParser.PDF_PAGE1_AUTHOR_CONTRACT)) {
-        throw fail('封存 PDF 来源的非空作者记录必须符合 pdf-page1-author-evidence-v1 协议。');
+        && (!raw || typeof raw !== 'object' || !authorParser.PDF_PAGE1_AUTHOR_CONTRACTS.has(raw.contract))) {
+        throw fail('封存 PDF 来源的非空作者记录必须符合 pdf-page1-author-evidence-v1 或 pdf-page1-author-evidence-v2 协议。');
     }
-    if (raw.contract === authorParser.PDF_PAGE1_AUTHOR_CONTRACT) {
+    if (authorParser.PDF_PAGE1_AUTHOR_CONTRACTS.has(raw.contract)) {
         if (!authorParser.validatePdfPage1AuthorEvidence(raw, pdfSha)) {
             throw fail('封存 PDF 首页作者证据与来源清单的 PDF 哈希不一致。');
         }
-        const replayed = authorParser.extractPdfPage1AuthorsSync(stored.pdf);
+        const replayed = authorParser.extractPdfPage1AuthorsSync(stored.pdf, { contract: raw.contract });
         if (!replayed || stable(raw) !== stable(replayed)) {
             throw fail('封存 PDF 首页作者证据与实际封存 source.pdf 重放结果不一致。');
         }
@@ -285,15 +286,15 @@ function readVerifiedBundleReaderAuthors(details) {
         if (!authorParser.validatePdfPage1AuthorEvidence(raw.pdfPage1Authors, pdfSha)) {
             throw fail('封存 HTML 附带的 PDF 首页作者证据与来源清单的 PDF 哈希不一致。');
         }
-        const replayed = authorParser.extractPdfPage1AuthorsSync(stored.pdf);
+        const replayed = authorParser.extractPdfPage1AuthorsSync(stored.pdf, { contract: raw.pdfPage1Authors.contract });
         if (!replayed || stable(raw.pdfPage1Authors) !== stable(replayed)) {
             throw fail('封存 HTML 附带的 PDF 首页作者证据与实际封存 source.pdf 重放结果不一致。');
         }
-    } else if (raw.contract !== authorParser.PDF_PAGE1_AUTHOR_CONTRACT
+    } else if (!authorParser.PDF_PAGE1_AUTHOR_CONTRACTS.has(raw.contract)
         && Buffer.isBuffer(stored.pdf) && stored.pdf.length > 0) {
         // 旧批次在引入 pdfPage1Authors 前封存的 HTML 来源，runtime.readerAuthors 未附带 PDF 首页证据；
         // 对同一份已通过 SHA-256 核验的封存 source.pdf 做确定性首页作者重放，作为逐人绑定补齐来源。
-        const derived = authorParser.extractPdfPage1AuthorsSync(stored.pdf);
+        const derived = authorParser.extractPdfPage1AuthorsSync(stored.pdf, { contract: deriveContract });
         if (derived && authorParser.validatePdfPage1AuthorEvidence(derived, pdfSha)) {
             return { ...structuredClone(raw), pdfPage1Authors: derived };
         }

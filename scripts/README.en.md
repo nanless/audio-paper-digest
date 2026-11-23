@@ -496,6 +496,8 @@ Strict kind/heading/body-only overlong drafts may use same-kind contiguous group
 | `lib/reader-table-pdf-evidence.js` | Separates old PDF rules from independent new PDF evidence. Normal compilation and saved checks reread controlled sources, keeping DOM and PDF display evidence distinct. |
 | `lib/reader-tables.js` | Expands TABLE markers and original row/column selections into Markdown with cell-source records, retaining header mapping and rejecting misalignment/out-of-bounds indices. |
 | `pdf-layout-extract.py` | Extracts PDF layout, text positions, and cell evidence from controlled PDFs. |
+| `pdf_author_extract.py` | Deterministically extracts and binds author-affiliation evidence from controlled PDF page-1 font/superscript geometry (`pdf-page1-author-evidence-v2`, with `--contract v1` historical replay). |
+| `pdf_author_extract_v1.py` | Frozen `pdf-page1-author-evidence-v1` page-1 PDF author extractor retained exclusively for bit-exact historical sealed-bundle replay. |
 | `reader_inline_svg.py` | Validates inline SVG elements/attributes/local references and renders PNG with script/network disabled, shared by reading and publication. |
 | `reader_inline_svg_pixel_replay.py` | After current SVG safety checks, replays renderers only from trusted Git history of current HEAD. Generated pixels must exactly match the original model-pixel SHA before normal staging. |
 | `reader_pdf_page_asset.py` | Only when a sealed SVG lacks drawing dependencies or has cyclic ones, derives a whole original PDF page by the unique figure number/full caption within the same daily sources. Keeps old Reader pixel SHA and separate source proof for generation/review/push. |
