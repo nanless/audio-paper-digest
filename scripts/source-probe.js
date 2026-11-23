@@ -9,14 +9,39 @@ const { parseEnvText } = require('./lib/env-schema');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ENV_FILE = path.join(PROJECT_ROOT, '.env');
 
+function assertValidCalendarDate(value, flagName) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        throw new Error(`${flagName} 必须是有效的 YYYY-MM-DD 日期`);
+    }
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+        throw new Error(`${flagName} 必须是真实有效的日历日期`);
+    }
+    return value;
+}
+
 function parseArgs(argv) {
     const options = { date: null, json: false, timeoutMs: undefined };
+    if (argv.includes('--help') || argv.includes('-h')) {
+        options.help = true;
+        return options;
+    }
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
-        if (value === '--date') options.date = argv[++index] || null;
+        if (value === '--date') {
+            const next = argv[++index];
+            if (!next || next.startsWith('--')) throw new Error('--date 缺少 YYYY-MM-DD 参数');
+            options.date = assertValidCalendarDate(next, '--date');
+        }
         else if (value === '--json') options.json = true;
-        else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]);
-        else if (value === '--help') options.help = true;
+        else if (value === '--timeout-ms') {
+            const raw = argv[++index];
+            const ms = raw && /^\d+$/.test(raw) ? Number(raw) : NaN;
+            if (!raw || raw.startsWith('--') || !Number.isSafeInteger(ms) || ms <= 0 || ms > 2147483647) {
+                throw new Error('--timeout-ms 必须是 1..2147483647 范围内的正整数毫秒值');
+            }
+            options.timeoutMs = ms;
+        }
         else throw new Error(`未知参数：${value}`);
     }
     return options;

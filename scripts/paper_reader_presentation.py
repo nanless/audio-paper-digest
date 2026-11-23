@@ -262,10 +262,11 @@ def build_reader_presentation(paper, *, plan, resources, authors,
                          else copy.deepcopy(resources))
     excluded = False
     if exclude_resource_url is not None:
+        before_count = len(visible_resources)
         visible_resources = [resource for resource in visible_resources
                              if not exclude_resource_url(resource.get('originalUrl'))
                              and not exclude_resource_url(resource.get('finalUrl'))]
-        excluded = len(visible_resources) != len(resources)
+        excluded = len(visible_resources) != before_count
     decision = resolve_reader_decision_display(
         publisher, paper, plan=plan, resources=visible_resources, parsed=parsed, source_text=source_text)
     resource_block = decision['resourceBlock']

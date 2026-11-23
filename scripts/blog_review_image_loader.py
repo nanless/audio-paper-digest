@@ -15,6 +15,7 @@ if __name__ == '__main__':
 
 import base64
 import hashlib
+import http.client
 import io
 import ipaddress
 import math
@@ -39,6 +40,7 @@ from public_network_policy import (  # noqa: E402
     has_http_connect_proxy,
     is_globally_routable_ip,
     is_ip_literal,
+    normalize_strict_url_hostname,
     select_validated_public_ip,
 )
 from publish_common import PublishDataValidationError  # noqa: E402
@@ -63,6 +65,32 @@ def _hook(hooks: Mapping | None, name: str, default=None):
     return default
 
 
+def _is_noncanonical_ipv4_literal(hostname: str) -> bool:
+    """识别会被底层 resolver 解释为 IPv4 的非规范字面量（hex/octal/整数/简写）。"""
+    if not hostname:
+        return False
+    try:
+        socket.inet_aton(hostname)
+        return True
+    except OSError:
+        pass
+    parts = hostname.split('.')
+    if 1 <= len(parts) <= 4 and all(
+        re.fullmatch(r'(?:0[xX][0-9a-fA-F]+|0[0-7]*|\d+)', part)
+        for part in parts
+    ):
+        return True
+    return False
+
+
+def _normalize_idna_hostname(raw_hostname: str, err_cls) -> str:
+    """将域名/IPv6 严格规范化为纯 ASCII，禁止 %、IDNA2003 非 STD3 字符与非法标签。"""
+    hostname = normalize_strict_url_hostname(raw_hostname)
+    if not hostname:
+        raise err_cls(f'图片 URL 主机名非法: {raw_hostname}')
+    return hostname
+
+
 def validate_public_image_url(url: str, *, hooks: Mapping | None = None) -> set[str]:
     err_cls = _hook(hooks, 'PublishDataValidationError', PublishDataValidationError)
     ip_literal_fn = _hook(hooks, 'is_ip_literal', is_ip_literal)
@@ -72,17 +100,36 @@ def validate_public_image_url(url: str, *, hooks: Mapping | None = None) -> set[
     select_ip_fn = _hook(hooks, 'select_validated_public_ip', select_validated_public_ip)
     sock_mod = _hook(hooks, 'socket', socket)
 
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+    if not isinstance(url, str) or not url or re.search(r'[\x00-\x20\x7f\\]', url):
+        raise err_cls('图片 review 只允许无认证信息的合法 HTTPS URL')
+    try:
+        parsed = urlparse(url)
+        raw_hostname = parsed.hostname
+        port = parsed.port
+        username = parsed.username
+        password = parsed.password
+    except ValueError as exc:
+        raise err_cls('图片 URL 格式或端口非法') from exc
+    if (
+        parsed.scheme != 'https'
+        or not raw_hostname
+        or username is not None
+        or password is not None
+        or '@' in (parsed.netloc or '')
+    ):
         raise err_cls('图片 review 只允许无认证信息的 HTTPS URL')
-    hostname = parsed.hostname.lower().rstrip('.')
+    if port is not None and not (1 <= port <= 65535):
+        raise err_cls('图片 URL 端口非法')
+    hostname = _normalize_idna_hostname(raw_hostname, err_cls)
     if hostname == 'localhost' or hostname.endswith('.localhost') or hostname.endswith('.local'):
         raise err_cls('图片 review 拒绝本地主机 URL')
     try:
-        if ip_literal_fn(hostname) or '%' in hostname:
+        if ip_literal_fn(hostname) or ':' in hostname or '%' in hostname:
             if not routable_fn(hostname):
                 raise err_cls(f'图片 URL 解析到非公网地址: {hostname}')
             return {canonical_fn(hostname)}
+        if _is_noncanonical_ipv4_literal(hostname):
+            raise err_cls(f'图片 URL 解析到非公网地址（拒绝非规范 IPv4 字面量）: {hostname}')
     except PublicNetworkPolicyError as exc:
         if str(getattr(exc, 'code', '')).startswith('PUBLIC_NETWORK_POLICY_'):
             raise err_cls(f'公网安全策略异常: {exc}') from exc
@@ -134,16 +181,27 @@ def resolve_proxy_addresses(proxy: str, *, hooks: Mapping | None = None) -> set[
     """解析显式配置的 CONNECT 代理，它是受信任的传输跳点。"""
     err_cls = _hook(hooks, 'PublishDataValidationError', PublishDataValidationError)
     sock_mod = _hook(hooks, 'socket', socket)
-    parsed = urlparse(proxy)
-    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+    if not isinstance(proxy, str) or not proxy or re.search(r'[\x00-\x20\x7f\\]', proxy):
         raise err_cls('图片 review 代理必须是 HTTP CONNECT 地址')
+    if not re.match(r'^https?://[^/?#]', proxy, re.IGNORECASE):
+        raise err_cls('图片 review 代理必须是 HTTP CONNECT 地址')
+    try:
+        parsed = urlparse(proxy)
+        port = parsed.port
+    except ValueError as exc:
+        raise err_cls('图片 review 代理必须是合法的 HTTP CONNECT 地址') from exc
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname or (port is not None and not (1 <= port <= 65535)):
+        raise err_cls('图片 review 代理必须是 HTTP CONNECT 地址')
+    hostname = normalize_strict_url_hostname(parsed.hostname)
+    if not hostname:
+        raise err_cls(f'图片 review 代理主机名非法: {parsed.hostname}')
     try:
         return {
             str(ipaddress.ip_address(item[4][0].split('%', 1)[0]))
-            for item in sock_mod.getaddrinfo(parsed.hostname, parsed.port or 443)
+            for item in sock_mod.getaddrinfo(hostname, port or (443 if parsed.scheme == 'https' else 80))
         }
     except sock_mod.gaierror as exc:
-        raise err_cls(f'图片 review 代理无法解析: {parsed.hostname}') from exc
+        raise err_cls(f'图片 review 代理无法解析: {hostname}') from exc
 
 
 def bounded_positive_seconds(
@@ -210,7 +268,13 @@ def read_pinned_review_image(
         key=lambda value: (ipaddress.ip_address(value).version, value),
     )[0]
     pinned_url = pinned_url_fn(parsed, target_address)
-    hostname = parsed.hostname.lower().rstrip('.')
+    raw_hostname = parsed.hostname or ''
+    hostname = _normalize_idna_hostname(raw_hostname, err_cls)
+    host_header = parsed.netloc
+    if not host_header.isascii():
+        host_header = f'[{hostname}]' if ':' in hostname else hostname
+        if parsed.port is not None:
+            host_header = f'{host_header}:{parsed.port}'
     manager = urllib3.ProxyManager(
         proxy,
         cert_reqs='CERT_REQUIRED',
@@ -225,7 +289,7 @@ def read_pinned_review_image(
             'GET',
             pinned_url,
             headers={
-                'Host': parsed.netloc,
+                'Host': host_header,
                 'User-Agent': 'audio-paper-digest/1.0',
             },
             redirect=False,
@@ -248,7 +312,7 @@ def read_pinned_review_image(
             }
         if status < 200 or status >= 300:
             raise err_cls(f'图片下载 HTTP {status}')
-        media_type = str(headers.get('Content-Type') or '').split(';', 1)[0].lower()
+        media_type = str(headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
         if media_type not in mime_types:
             raise err_cls(f'图片 MIME 不受支持: {media_type or "unknown"}')
         declared_size = headers.get('Content-Length')
@@ -389,7 +453,7 @@ def download_review_image(
                         break
                     except Exception as exc:
                         import urllib3
-                        if isinstance(exc, (OSError, urllib3.exceptions.HTTPError)):
+                        if isinstance(exc, (OSError, http.client.HTTPException, urllib3.exceptions.HTTPError)):
                             transient_error = exc
                             if transport_attempt < 3 and time_mod.monotonic() < deadline:
                                 time_mod.sleep(0.5 * (transport_attempt + 1))
@@ -426,8 +490,15 @@ def download_review_image(
         raise err_cls('图片重定向次数过多')
     except err_cls:
         raise
-    except (OSError, ValueError) as exc:
-        raise err_cls(f'图片下载失败: {exc}') from exc
+    except Exception as exc:
+        try:
+            import urllib3.exceptions as _urllib3_exc
+            is_urllib3_http_error = isinstance(exc, _urllib3_exc.HTTPError)
+        except ImportError:
+            is_urllib3_http_error = False
+        if isinstance(exc, (OSError, ValueError, http.client.HTTPException)) or is_urllib3_http_error:
+            raise err_cls(f'图片下载失败: {exc}') from exc
+        raise
 
 
 def sanitize_svg_xml_for_review(raw: bytes) -> bytes:

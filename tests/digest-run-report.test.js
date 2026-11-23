@@ -1398,4 +1398,58 @@ describe('digest:status 显式零候选空日', () => {
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
+
+    it('拒绝跨 batchId 借用封存来源跳过记录，并拒绝全跳过的空分析结果', () => {
+        const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'digest-skip-bind-'));
+        const prevRunsDir = Config.FILES.dailyFreshSourceRunsDir;
+        try {
+            withDigestPaths(dir, ({ current }) => {
+                Config.FILES.dailyFreshSourceRunsDir = path.join(dir, 'daily-runs');
+                const daily = require('../scripts/lib/daily-fresh-source-plan.js');
+                const skip = require('../scripts/lib/daily-source-skip.js');
+                const date = '2026-10-19';
+                const planA = daily.createDailyFreshSourcePlan({
+                    batchDate: date, batchId: 'a'.repeat(16),
+                    papers: [{ arxivId: '2610.00001' }, { arxivId: '2610.00002' }]
+                });
+                skip.writeDailySourceSkips(planA, [{
+                    arxivId: '2610.00002', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404,
+                    message: 'arXiv PDF 2610.00002 download failed: HTTP 404'
+                }], { limit: 3 });
+                // filtered.batchId 与 planA.batchId 不一致，不能扣除 planA 的跳过记录
+                fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({
+                    batchDate: date, batchId: 'b'.repeat(16), status: 'complete',
+                    papers: [
+                        { arxivId: '2610.00001', fetchBatchDate: date },
+                        { arxivId: '2610.00002', fetchBatchDate: date }
+                    ]
+                }));
+                fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({
+                    batchDate: date, batchId: 'a'.repeat(16),
+                    dailyFreshSourceRun: daily.dailyFreshSourceReference(planA),
+                    papers: [{ arxivId: '2610.00001', fetchBatchDate: date }]
+                }));
+                const badReport = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(badReport.analysis.complete, false);
+                assert.strictEqual(badReport.analysis.skipped, 0);
+                assert.strictEqual(badReport.analysis.expected, 2);
+
+                // 同 batchId 下，limit=3 的合法跳过记录被正常识别并扣除（即使默认上限为 2）
+                fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({
+                    batchDate: date, batchId: 'a'.repeat(16), status: 'complete',
+                    papers: [
+                        { arxivId: '2610.00001', fetchBatchDate: date },
+                        { arxivId: '2610.00002', fetchBatchDate: date }
+                    ]
+                }));
+                const okSkipReport = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(okSkipReport.analysis.skipped, 1);
+                assert.strictEqual(okSkipReport.analysis.expected, 1);
+                assert.strictEqual(okSkipReport.analysis.missing, 0);
+            });
+        } finally {
+            Config.FILES.dailyFreshSourceRunsDir = prevRunsDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
 });

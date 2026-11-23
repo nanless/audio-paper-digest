@@ -1750,6 +1750,7 @@ GIT_COMMIT_TIMEOUT_SECONDS = 180
 GIT_NETWORK_TIMEOUT_SECONDS = 180
 _RASTER_RECOVERY_SOURCE_READ = blog_review_image_loader._RASTER_RECOVERY_SOURCE_READ
 _RASTER_RECOVERY_SOURCE_BYTES = {}
+_RASTER_RECOVERY_SOURCE_BYTES_LOCK = threading.Lock()
 _IMAGE_REPO_SUFFIX_MIME = dict(blog_review_image_loader._IMAGE_REPO_SUFFIX_MIME)
 
 
@@ -2837,7 +2838,9 @@ def _validated_workbench_text(
 
 
 
-_API_READER_AUTHOR_METADATA_SEPARATORS = frozenset({':', '：', ';', '；', ',', '，', '、'})
+_API_READER_AUTHOR_METADATA_SEPARATORS = frozenset({
+    ':', '：', ';', '；', ',', '，', '、', '·', '|', '/', '•', '—', '–', '-'
+})
 
 
 def _author_contact_tail_prefix(name, affiliation, source_text, first_page):
@@ -6044,13 +6047,71 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
             non_citation_tokens.add(norm)
             non_citation_tokens.add(unsigned)
     normalized_src = _normalize_thousands(src_raw)
-    source_has_percent_table_context = bool(re.search(
+    percent_table_context_re = re.compile(
         r'(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|/\s*\\?%(?![0-9A-Za-z])|'
         r'(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|'
         r'(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|'
         r'(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))',
-        normalized_src, re.IGNORECASE,
-    ))
+        re.IGNORECASE,
+    )
+    source_has_percent_table_context = bool(percent_table_context_re.search(normalized_src))
+    p_value_re = re.compile(
+        r'(?<![A-Za-z0-9_])(?:p(?:-?values?)?|q(?:-?values?)?|α|alpha)\s*'
+        r'(?:<=|>=|<|>|=|≤|≥|(?:\\leq|\\le|\\geq|\\ge|\\ll|\\lt|\\gt)(?![A-Za-z]))\s*0?\.\d+',
+        re.IGNORECASE,
+    )
+
+    def _strip_p_values(text):
+        current = str(text or '')
+        for _ in range(4):
+            nxt = p_value_re.sub(' ', current)
+            if nxt == current:
+                break
+            current = nxt
+        return current
+
+    p_value_stripped_src = _strip_p_values(citation_stripped)
+    unit_decimal_tokens = set()
+    for surface in _build_surfaces(p_value_stripped_src):
+        for match in token_re.finditer(_strip_p_values(surface)):
+            if match.group(2):
+                continue
+            unsigned = re.sub(r'^[+-]', '', match.group(1))
+            norm = f'0{unsigned}' if unsigned.startswith('.') else unsigned
+            if re.fullmatch(r'0\.\d{2}', norm):
+                unit_decimal_tokens.add(norm)
+    non_percent_unit_after_re = re.compile(
+        r'^\s*(?:epochs?|layers?|steps?|speakers?|samples?|hours?|hrs?|minutes?|mins?|seconds?|secs?|'
+        r'ms|Hz|kHz|MHz|GHz|dB|GiB|GB|MB|KB|TB|params?|parameters?|blocks?|heads?|dims?|dimensions?|'
+        r'channels?|frames?|tokens?|utterances?|files?|clips?|sentences?|words?|classes?|models?|'
+        r'datasets?|runs?|seeds?|folds?|GPUs?|CPUs?)(?![A-Za-z0-9_])',
+        re.IGNORECASE,
+    )
+    non_percent_prefix_before_re = re.compile(
+        r'(?:(?<![A-Za-z0-9_])(?:batch[\s_-]*size|bsz|mini-?batch|top|table|tab\.?|fig(?:ure)?\.?|'
+        r'sec(?:tion)?\.?|eq(?:uation)?\.?|alg(?:orithm)?\.?|appendix|step|layer|epoch|seed|fold|'
+        r'beam|head|dim(?:ension)?|channel|block|stage|rank|order|num(?:ber)?(?:\s+of)?|size|length|'
+        r'width|height|depth|stride|kernel|window)\s*[-:=]?\s*|(?<![A-Za-z0-9_])(?:k|n|m|d|r|b)\s*[-:=]\s*|#)\s*$',
+        re.IGNORECASE,
+    )
+    percent_table_nearby_tokens = set()
+    if source_has_percent_table_context:
+        normalized_citation_stripped_src = _normalize_thousands(citation_stripped)
+        for ctx_match in percent_table_context_re.finditer(normalized_citation_stripped_src):
+            win_start = max(0, ctx_match.start() - 1500)
+            win_end = min(len(normalized_citation_stripped_src), ctx_match.start() + 2500)
+            window_text = normalized_citation_stripped_src[win_start:win_end]
+            for m in token_re.finditer(window_text):
+                unsigned = re.sub(r'^[+-]', '', m.group(1))
+                if not re.fullmatch(r'\d{1,2}', unsigned):
+                    continue
+                before = window_text[max(0, m.start() - 28):m.start()]
+                if non_percent_prefix_before_re.search(before):
+                    continue
+                after = window_text[m.end():]
+                if non_percent_unit_after_re.search(after):
+                    continue
+                percent_table_nearby_tokens.add(unsigned)
     cleaned = _normalize_thousands(str(summary or ''))
     cleaned = re.sub(r'https?://\S+', ' ', cleaned)
     cleaned = re.sub(
@@ -6060,20 +6121,25 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
     cleaned = re.sub(r'(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*[-_.]\d+(?:\.\d+)*[A-Za-z0-9_.-]*', ' ', cleaned)
     cleaned = re.sub(r'(?:§|第|图|表|式|公式|章节|附录)\s*\d+(?:\.\d+)*', ' ', cleaned)
     for match in re.finditer(
-        r'(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB|B|M|K|G|倍|点|分)?(?![A-Za-z0-9]|\.\d))',
+        r'(?<![A-Za-z0-9._])(?<!(?<![0-9A-Za-z])[+-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|GHz|kbps|bps|fps|GiB|GB|MB|KB|TB|B|M|K|G|倍|点|分)?(?![A-Za-z0-9]|\.\d))',
         cleaned,
+        re.IGNORECASE,
     ):
         full = match.group(0).strip()
         num = re.sub(r'^[+-]', '', match.group(1))
         has_pct = bool(match.group(2))
-        has_unit_after = bool(re.match(r'^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB)(?![A-Za-z])', cleaned[match.end():], re.IGNORECASE))
+        has_unit_after = bool(re.match(r'^\s*(?:dB|ms|Hz|kHz|MHz|GHz|kbps|bps|fps|GiB|GB|MB|KB|TB)(?![A-Za-z])', cleaned[match.end():], re.IGNORECASE))
         is_decimal = '.' in num
         if not is_decimal and not has_pct and not has_unit_after:
             continue
         if num not in exact_tokens:
             return f'核心摘要数值“{full}”未在原文中以相同精度出现（禁止编造、四舍五入或转换小数与百分数）'
         if has_pct and num not in percent_tokens:
-            scaled_from_unit_decimal = bool(re.fullmatch(r'\d{1,2}', num)) and f'0.{num.zfill(2)}' in non_percent_tokens
+            scaled_from_unit_decimal = (
+                bool(re.fullmatch(r'\d{1,2}', num))
+                and f'0.{num.zfill(2)}' in unit_decimal_tokens
+                and num not in percent_table_nearby_tokens
+            )
             if not source_has_percent_table_context or num not in non_citation_tokens or scaled_from_unit_decimal:
                 return f'核心摘要数值“{full}”添加了原文不存在的百分号'
         if not has_pct and is_decimal and num in percent_tokens and num not in non_percent_tokens:
@@ -6156,19 +6222,122 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
             and not (use_executive and _has_executive_method_architecture(content_body))):
         issues.append('缺少 2–4 步方法链的分工与衔接')
     # 这份白名单要和 scripts/analysis-contract.js 保持同步。
-    # 发布器在 Node 分析阶段之后按同一份 v3 正文规则再次检查，
+    # 发布器在 Node 分析阶段之后按同一份 v3/v4 正文规则再次检查，
     # 所以上游已经接受的指标，不能仅仅因为它用了
-    # 更新的别名（例如 PPL 或压缩率）就在这里被拒。
+    # 更新的别名（例如 PPL、CA-SDRi 或压缩率）就在这里被拒。
+    from publish_common import (
+        _has_adjacent_affirmative_evidence_withdrawal,
+        _own_observed_source_scope,
+    )
+    ascii_model_words = r'(?:model|method|system|baseline|network)(?![A-Za-z0-9_])'
     metric = re.compile(
-        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|DAP|DLP|AMLt|F-?[Mm]easure|Fmeter|MV2H[45]|OMR-NED|MSS|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)',
-        re.IGNORECASE,
+        rf'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|CCC(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|{ascii_model_words}))|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|一致性相关系数(?![ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|{ascii_model_words}))|字错率|评估损失(?:终值)?(?=[^。；\n]{{0,90}}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)',
+        re.IGNORECASE | re.ASCII,
+    )
+    additional_metric_name = r'(?:DAP|DLP|AMLt|F-measure|F-Measure|Fmeasure|Fmeter|MV2H[45]|OMR-NED|R(?:²|\^2)(?:_[VA])?|MSS|决定系数(?:[ \t]*R(?:²|\^2)(?:_[VA])?)?|(?:目标字|字符|音节|音素|单词)时长(?:均值|平均值)|自然度平均意见分)'
+    model_suffix_pattern = rf'(?:模型|方法|系统|基线(?![ \t]*[-+]?[0-9])|算法|网络|{ascii_model_words})'
+    additional_metric = re.compile(
+        rf'(?<![A-Za-z0-9_]){additional_metric_name}(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?{model_suffix_pattern})',
+        re.IGNORECASE | re.ASCII,
+    )
+    additional_mention_re = re.compile(
+        rf'(?<![A-Za-z0-9_]){additional_metric_name}(?![A-Za-z0-9_.-])(?:[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?({model_suffix_pattern}))?(?:[ \t]*(?:指标|分数|得分))?',
+        re.IGNORECASE | re.ASCII,
+    )
+    additional_denied_re = re.compile(
+        r'\b(?:if|suppose|assuming|hypothetical|(?:future|planned|proposed)\s+experiments?|not\s+(?:observed|reported)|(?:previous|prior|related|other)\s+(?:work|stud(?:y|ies)|research)|third[- ]party|quoted|retracted)\b|'
+        r'(?:假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|(?:未来|后续)(?:计划|实验|评测|测量)|计划(?:比较|评估|测量|报告)|讨论|提及|引用|引述|转述|他人|第三方|其他研究|先前(?:工作|研究)|旧(?:工作|研究)|既有(?:工作|研究)|相关(?:工作|研究)|并非|并未|不是|没有|不能|尚未|否认|撤回|不成立|未报告|未观察)',
+        re.IGNORECASE | re.ASCII,
+    )
+    ccc_denied_re = re.compile(
+        r'\b(?:if|suppose|assuming|hypothetical|(?:future|planned|proposed)\s+experiments?|not\s+(?:observed|reported)|third[- ]party|quoted|retracted)\b|'
+        r'(?:假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|(?:未来|后续)(?:计划|实验|评测|测量)|计划(?:比较|评估|测量|报告)|讨论|提及|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|不能|尚未|否认|撤回|不成立|未报告|未观察|(?:未|没有|不)(?:能|曾|实际|真正)?(?:测量|报告|观察到|观察|检验|比较))',
+        re.IGNORECASE | re.ASCII,
+    )
+    vertex_gesture_denied_re = re.compile(
+        r'(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|'
+        r'\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b',
+        re.IGNORECASE | re.ASCII,
     )
     conference_metric = re.compile(
         r'包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))'
     )
+    vertex_gesture_metric = re.compile(
+        rf'(?<![A-Za-z0-9_])(?:LVE|MVE|Lip[ -]+Vertex[ -]+Error|Mean[ -]+Vertex[ -]+Error|Fr[eé]chet[ -]+Gesture[ -]+Distance|Beat[ -]+Consistency)(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作|这个|这一|那个|这种|一种|一个|该)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|{ascii_model_words}))|(?:平均)?(?:唇顶点误差|全脸顶点误差)(?![ \t]*(?:的|这个|这一|那个|这种|一种|一个|该)?(?:模型|方法|系统|基线|算法|网络))',
+        re.IGNORECASE | re.ASCII,
+    )
+    dnsmos_metric = re.compile(
+        rf'(?<![A-Za-z0-9_.-])DNSMOS(?:[ \t]+P\.835)?[ \t]+(?:SIG|BAK|OVL)(?:\/(?:SIG|BAK|OVL))*(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|{ascii_model_words}))',
+        re.IGNORECASE | re.ASCII,
+    )
+    dnsmos_strip_re = re.compile(
+        r'(?<![A-Za-z0-9_.-])DNSMOS(?:[ \t]+P\.835)?(?:[ \t]+(?:SIG|BAK|OVL)(?:\/(?:SIG|BAK|OVL))*)?(?![A-Za-z0-9_.-])(?:[ \t]*(?:指标|分数|得分))?',
+        re.IGNORECASE | re.ASCII,
+    )
+    dnsmos_denied = re.compile(
+        r'假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|计划|未来实验|后续实验|建议|讨论|提及|引用|引述|转述|他人|第三方|外部团队|其他研究|先前(?:工作|研究)|相关(?:工作|研究)|并非|并未|不是|没有|不能|尚未|否认|否定|撤回|不成立|不正确|错误|有误|未报告|未观察|\b(?:if|suppose|assuming|hypothetical|planned|quoted|retracted|withdrawn|third[- ]party|external team|(?:previous|prior|related|other)\s+(?:work|stud(?:y|ies)|research)|not\s+(?:observed|reported|used))\b',
+        re.IGNORECASE | re.ASCII,
+    )
+    dnsmos_withdrawal_subject = r'(?:上述|以上|前述|该|此|这一)(?:DNSMOS)?(?:指标|测量|评测|结果|结论|边界|说法|表述)'
+
+    def _has_affirmative_dnsmos_statement(raw_text, pattern, preceding='', following=''):
+        raw = str(raw_text or '')
+        parts = re.split(r'[。！？!?\n]', raw)
+        offset = 0
+        for part in parts:
+            start = offset
+            offset += len(part) + 1
+            prior_parts = re.split(r'[。！？!?\n]', raw[:start].rstrip())
+            previous = prior_parts[-1] if prior_parts and prior_parts[-1] else preceding
+            heading = (
+                previous
+                if (re.search(r'[:：]$|^\s*(?:#{1,6}\s|\*\*|__)', previous)
+                    or (len(previous) <= 100 and dnsmos_denied.search(previous)))
+                else ''
+            )
+            if (pattern.search(part)
+                    and not dnsmos_denied.search(heading + part)
+                    and _own_observed_source_scope(heading + part)
+                    and not _has_adjacent_affirmative_evidence_withdrawal(
+                        raw + '。' + following, start + len(part), dnsmos_withdrawal_subject)):
+                return True
+        return False
+
+    source_defined_dnsmos = any(
+        re.search(r'\bwe use the reference-free DNSMOS P\.835 \(SIG/BAK/OVL\)', line, re.IGNORECASE | re.ASCII)
+        and not dnsmos_denied.search(((lines[idx - 1] if idx > 0 else '') + '\n' + line))
+        and _own_observed_source_scope(line)
+        and not re.search(r'\b(?:withdrawn|revoked|false statement|not used)\b|撤回|不成立|有误', lines[idx + 1] if idx + 1 < len(lines) else '', re.IGNORECASE | re.ASCII)
+        for lines in [str(source_text or '').splitlines()]
+        for idx, line in enumerate(lines)
+    )
+
+    def _has_statistical_result(sentence):
+        stat_metric = r'(?<![A-Za-z0-9_])(?:rate|odds|risk)\s+ratio(?![A-Za-z0-9_])|率比|几率比|比值比|优势比|风险比'
+        if not re.search(stat_metric, sentence, re.IGNORECASE | re.ASCII) or re.search(
+            r'\b(?:prior|hyperparameters?|hypothetical|illustrative|formula|defined?|assum(?:e|ed)|previous\s+stud(?:y|ies)|cited|references?)\b|先验|超参数|假设值|示意|公式|定义|文献引用|既有研究',
+            sentence, re.IGNORECASE | re.ASCII,
+        ):
+            return False
+        return bool(
+            re.search(rf'(?:{stat_metric})\s*(?:\((?:IRR|RR|OR)\)\s*)?(?:of|=|:|为|是)?\s*[-+]?\d+(?:\.\d+)?', sentence, re.IGNORECASE | re.ASCII)
+            and re.search(r'(?:(?<![A-Za-z0-9_])(?:confidence\s+interval|CI)(?![A-Za-z0-9_])|置信区间)[^。！？!?\n]{0,20}\d+(?:\.\d+)?\s*(?:[-–—至]|(?<![A-Za-z0-9_])to(?![A-Za-z0-9_]))\s*\d+(?:\.\d+)?', sentence, re.IGNORECASE | re.ASCII)
+            and re.search(r'\b(?:adjusted|estimated|observed|reported|interaction|association)\b|调整后|经[^。！？!?\n]{0,20}调整|估计|观测|实测|交互项|组别效应', sentence, re.IGNORECASE | re.ASCII)
+        )
+
+    def _has_source_bound_hit_count_metric(sentence):
+        if not re.search(r'(?:按|以|用)[^，,。；]{0,24}?命中(?:地点|位置|片段|录音|包|时刻|窗口|流|单元)(?:数|比例|率)?', sentence):
+            return False
+        if re.search(r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|讨论|提及|并非|不是|没有|未|不能|他人|第三方|先前(?:研究|工作)|相关工作|引用|引述|转述)', sentence):
+            return False
+        src = str(source_text or '')
+        return bool(
+            re.search(r'\b(?:hit|hits|place[sd]?|clips?|packets?)\b[^.\n]{0,100}\bwithin\s+[0-9]+(?:\.[0-9]+)?\s*(?:km|m)\b', src, re.IGNORECASE | re.ASCII)
+            or re.search(r'\bwithin\s+[0-9]+(?:\.[0-9]+)?\s*(?:km|m)\b[^.\n]{0,100}\b(?:hit|hits|place[sd]?)\b', src, re.IGNORECASE | re.ASCII)
+        )
     comparison = re.compile(
         r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|(?:由|从)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)',
-        re.IGNORECASE,
+        re.IGNORECASE | re.ASCII,
     )
     baseline_transition = re.compile(
         r'(?:基线|对照|原方法|已有方法|先前方法)'
@@ -6178,16 +6347,14 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
     # 处理紧挨中文的英文设置项标签时，要和 JavaScript 一致：
     # Python 把汉字当作 `\w`，而 JS 的 `\b` 不这么认为。
-    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|(?<![A-Za-z0-9_])(?:on|test|benchmark|evaluation)(?![A-Za-z0-9_]))', re.IGNORECASE)
+    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|(?<![A-Za-z0-9_])(?:on|test|benchmark|evaluation)(?![A-Za-z0-9_]))', re.IGNORECASE | re.ASCII)
     named_setting = re.compile(
         r'(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)'
         r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下])'
         r'|(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下))',
-        re.IGNORECASE,
+        re.IGNORECASE | re.ASCII,
     )
-    numeric_named_setting = re.compile(r'(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)', re.IGNORECASE)
-
-    model_suffix_pattern = r'(?:模型|方法|系统|基线(?![ \t]*[-+]?[0-9])|算法|网络|model\b|method\b|system\b|baseline\b|network\b)'
+    numeric_named_setting = re.compile(r'(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)', re.IGNORECASE | re.ASCII)
 
     def _matches_defined_metric_acronyms(surface_text, defined_acronyms):
         for acronym in defined_acronyms:
@@ -6198,12 +6365,28 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                 return True
         return False
 
-    def _candidate_complete(sentence, defined_acronyms=()):
-        result_sentence = _strip_core_summary_non_result_numerals(sentence)
+    def _admitted_metric_surface(result_sentence):
         metric_sentence = re.sub(
-            r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
-            '', result_sentence, flags=re.IGNORECASE,
+            r'(?:\bCLAP\s*(?:基线|模型|(?:baseline|model)(?![A-Za-z0-9_]))|\bNLL\s*(?:基线|模型|方法|(?:baseline|model|method)(?![A-Za-z0-9_]))|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|(?:baseline|model|method)(?![A-Za-z0-9_])))',
+            '', result_sentence, flags=re.IGNORECASE | re.ASCII,
         )
+        additional_denied = bool(additional_denied_re.search(result_sentence))
+        measured_metric_text = additional_mention_re.sub(
+            lambda m: ' ' if (additional_denied or m.group(1)) else m.group(0),
+            metric_sentence,
+        )
+        if ccc_denied_re.search(result_sentence):
+            admitted_metric_text = re.sub(
+                r'(?<![A-Za-z0-9_])CCC(?![A-Za-z0-9_])|一致性相关系数',
+                ' ', measured_metric_text, flags=re.IGNORECASE | re.ASCII,
+            )
+        else:
+            admitted_metric_text = measured_metric_text
+        return metric_sentence, admitted_metric_text
+
+    def _candidate_complete(sentence, defined_acronyms=(), preceding='', following=''):
+        result_sentence = _strip_core_summary_non_result_numerals(sentence)
+        metric_sentence, admitted_metric_text = _admitted_metric_surface(result_sentence)
         numeric_result_sentence = metric.sub(
             lambda match: re.sub(r'\d+(?:\.\d+)?', '', match.group(0)),
             metric_sentence,
@@ -6218,12 +6401,17 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
         ) and re.search(
             r'(?:在|于)[^。！？!?\n]{1,160}(?:[1-9][0-9]*|[一二两三四五六七八九十]+)折交叉验证(?:下|中|上)', result_sentence,
         )
-        has_metric = (
+        has_metric = bool(result_sentence and (
             narrow_measured_result
-            or metric.search(metric_sentence)
-            or conference_metric.search(metric_sentence)
-            or _matches_defined_metric_acronyms(metric_sentence, defined_acronyms)
-        )
+            or metric.search(dnsmos_strip_re.sub(' ', admitted_metric_text))
+            or additional_metric.search(admitted_metric_text)
+            or conference_metric.search(admitted_metric_text)
+            or (not vertex_gesture_denied_re.search(result_sentence) and vertex_gesture_metric.search(result_sentence))
+            or _matches_defined_metric_acronyms(admitted_metric_text, defined_acronyms)
+            or (source_defined_dnsmos and _has_affirmative_dnsmos_statement(sentence, dnsmos_metric, preceding, following))
+            or _has_statistical_result(metric_sentence)
+            or _has_source_bound_hit_count_metric(result_sentence)
+        ))
         return bool(
             has_metric and has_direction and numbers
             and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence, metric, conference_metric))
@@ -6234,9 +6422,9 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
 
     operational_re = re.compile(
         r'(?:\b(?:train(?:ing)?|inference|deployment|hardware|gpu|cpu|tpu|npu|parameter(?:s)?|layers?|hidden(?:\s+units?)?|batch(?:\s+size)?|learning\s+rate|epochs?|steps?|iterations?|sampling\s+rate|window(?:\s+size)?|channels?|dimensions?|memory|vram|flops?|macs?|rtf|latency|throughput|fps|runtime|duration|cost|overhead)\b|训练|推理|部署|硬件|显存|内存|参数量|层数|隐藏单元|批量|学习率|轮次|步数|迭代|采样率|窗口|通道|维度|耗时|延迟|吞吐|实时率|计算量|成本|开销)',
-        re.IGNORECASE,
+        re.IGNORECASE | re.ASCII,
     )
-    generic_english_metric_re = re.compile(r'(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])', re.IGNORECASE)
+    generic_english_metric_re = re.compile(r'(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])', re.IGNORECASE | re.ASCII)
 
     def _strip_defined_metric_acronym_numbers(surface_text, defined_acronyms):
         out = surface_text
@@ -6264,25 +6452,35 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                     found.append(acronym)
         return found
 
-    def _sentence_has_executive_metric_and_number(raw_sentence, defined_acronyms=()):
+    def _sentence_has_executive_metric_and_number(raw_sentence, defined_acronyms=(), preceding='', following=''):
         cleaned_s = _strip_core_summary_non_result_numerals(raw_sentence.strip())
         if not cleaned_s:
             return False
         non_op = _strip_defined_metric_acronym_numbers(operational_re.sub(' ', cleaned_s), defined_acronyms)
         if not number.findall(non_op):
             return False
-        without_models = re.sub(
-            r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
-            '', cleaned_s, flags=re.IGNORECASE,
-        )
-        without_generic = generic_english_metric_re.sub(' ', without_models)
+        without_models, admitted_surface = _admitted_metric_surface(cleaned_s)
+        without_generic = generic_english_metric_re.sub(' ', admitted_surface)
         return bool(
-            metric.search(without_generic)
+            metric.search(dnsmos_strip_re.sub(' ', without_generic))
+            or additional_metric.search(without_generic)
             or conference_metric.search(without_generic)
+            or (not vertex_gesture_denied_re.search(cleaned_s) and vertex_gesture_metric.search(cleaned_s))
             or _matches_defined_metric_acronyms(without_generic, defined_acronyms)
+            or (source_defined_dnsmos and _has_affirmative_dnsmos_statement(raw_sentence, dnsmos_metric, preceding, following))
+            or _has_statistical_result(without_models)
+            or _has_source_bound_hit_count_metric(cleaned_s)
         )
 
-    has_complete_result = any(_candidate_complete(sentence) for sentence in re.split(r'[。！？!?\n]', content_body))
+    raw_body_sentences = re.split(r'[。！？!?\n]', content_body)
+    has_complete_result = any(
+        _candidate_complete(
+            sentence,
+            preceding=raw_body_sentences[idx - 1] if idx > 0 else '',
+            following=raw_body_sentences[idx + 1] if idx + 1 < len(raw_body_sentences) else '',
+        )
+        for idx, sentence in enumerate(raw_body_sentences)
+    )
     if use_executive and not has_complete_result:
         denied_window_re = re.compile(r'(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|并未|不是|未测|未报告|未进行)')
         operational_clause_re = re.compile(
@@ -7076,7 +7274,11 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
             proof = asset.get('derivedAssetProof')
             if proof is not None:
                 label = proof.get('displayLabel', '')
-                if not re.fullmatch(r'原论文 PDF 第 [1-9][0-9]* 页（含图 (?:[A-Z]\.?)?[1-9][0-9]*）', label):
+                if not re.fullmatch(
+                    r'原论文 PDF 第 [1-9][0-9]* 页（含图 (?:[A-Z]\.?)?[1-9][0-9]*'
+                    r'(?:；(?:图注未完整抽取，以原页为准|原官方 PNG 文件截断，独立出版展示))?）',
+                    label,
+                ):
                     raise PublishDataValidationError('汇总 PDF 整页图片缺少准确页码说明。')
                 return linked + f'\n\n*图片来源：{label}。完整图注与解读见独立文章。*'
             return linked
@@ -9292,15 +9494,6 @@ def _fold_reader_tex_cell_duplicate(value):
         plain = _reader_tex_plain(dual.group(2) + dual.group(3))
         if plain and '\\' not in plain and all(ch in dual.group(1) for ch in plain):
             return dual.group(1)
-    # 可见符号后跟同义命令的重复副本（EER↓\\downarrow），与 JS 侧同一规则。
-    symbol_copy = re.fullmatch(r'\\([A-Za-z]+)([\s\S]*)', text)
-    if symbol_copy:
-        symbol = _READER_TEX_SYMBOLS.get(symbol_copy.group(1))
-        tail = symbol_copy.group(2)
-        if symbol and tail and not re.match(r'[A-Za-z0-9]', tail):
-            head = text[:len(text) - len(symbol_copy.group(0))]
-            if head and head.endswith(symbol):
-                return head + tail
     for split in range(1, len(text)):
         suffix_probe = text[split:]
         if '\\' not in suffix_probe and not re.search(r'[_^]\{', suffix_probe) and '{,}' not in suffix_probe:
@@ -10328,11 +10521,16 @@ def _reader_damaged_raster_pdf_page_asset(paper, figure, recovery):
         raise PublishDataValidationError('坏 PNG 原资源、DOM、图号或完整图注未绑定唯一封存来源。')
     target = recovery['value']['targets'][0]
     cache_key = (recovery['sha256'], figure['url'], figure['assetSha256'])
-    if cache_key not in _RASTER_RECOVERY_SOURCE_BYTES:
+    with _RASTER_RECOVERY_SOURCE_BYTES_LOCK:
+        original = _RASTER_RECOVERY_SOURCE_BYTES.get(cache_key)
+    if original is None:
         observed = _download_review_image(figure['url'], _recovery_source_read=_RASTER_RECOVERY_SOURCE_READ)
-        _RASTER_RECOVERY_SOURCE_BYTES.clear()
-        _RASTER_RECOVERY_SOURCE_BYTES[cache_key] = observed['raw']
-    original = _RASTER_RECOVERY_SOURCE_BYTES[cache_key]
+        raw_bytes = observed['raw']
+        with _RASTER_RECOVERY_SOURCE_BYTES_LOCK:
+            if cache_key not in _RASTER_RECOVERY_SOURCE_BYTES:
+                _RASTER_RECOVERY_SOURCE_BYTES.clear()
+                _RASTER_RECOVERY_SOURCE_BYTES[cache_key] = raw_bytes
+            original = _RASTER_RECOVERY_SOURCE_BYTES[cache_key]
     try:
         result = derive_page_asset(paper_id=paper_id, figure=figure, target=target,
             old_pixels=original, pdf_bytes=sources['source.pdf'], source_files=files,
@@ -11738,11 +11936,11 @@ def _validate_api_reader_author_identity(paper):
         if not isinstance(name_binding, dict) \
                 or name_binding.get('sourceValue') != author['name']:
             raise PublishDataValidationError(f'第 {index + 1} 位作者缺少姓名来源记录，或记录中的姓名不一致。')
-        if name_binding.get('sourceKind') == 'html_dom':
+        if name_binding.get('sourceKind') in {'html_dom', 'pdf_text'}:
             if set(name_binding) != {'sourceKind', 'sourceValue', 'sourceDomSha256'} \
                     or not source_dom_sha \
                     or name_binding.get('sourceDomSha256') != source_dom_sha:
-                raise PublishDataValidationError(f'第 {index + 1} 位作者的 HTML 姓名来源字段或 DOM SHA 不符合要求。')
+                raise PublishDataValidationError(f'第 {index + 1} 位作者的来源姓名字段或来源 SHA 不符合要求。')
         elif name_binding.get('sourceKind') == 'paper_metadata':
             if set(name_binding) != {'sourceKind', 'sourceValue', 'metadataSha256'} \
                     or name_binding.get('metadataSha256') != metadata_sha:
@@ -11759,14 +11957,14 @@ def _validate_api_reader_author_identity(paper):
                 raise PublishDataValidationError(
                     f'第 {index + 1} 位作者的第 {affiliation_index + 1} 个机构缺少来源记录，或机构名称不一致。'
                 )
-            if binding.get('sourceKind') == 'html_dom':
+            if binding.get('sourceKind') in {'html_dom', 'pdf_text'}:
                 if set(binding) != {
                         'sourceKind', 'association', 'sourceValue', 'sourceDomSha256'} \
                         or binding.get('association') not in {
                             'direct_author', 'single_global_affiliation'} \
                         or not source_dom_sha \
                         or binding.get('sourceDomSha256') != source_dom_sha:
-                    raise PublishDataValidationError('作者机构的 HTML 来源字段、对应关系或 DOM SHA 不符合要求。')
+                    raise PublishDataValidationError('作者机构的来源字段、对应关系或来源 SHA 不符合要求。')
             elif binding.get('sourceKind') == 'explicit_unavailable':
                 if set(binding) != {
                         'sourceKind', 'sourceValue', 'sourceTextSha256'} \
@@ -12183,17 +12381,26 @@ def _source_bound_figure_math_note(paragraph, figure):
             normalized = (prefix[:boundary] if boundary >= 48 else prefix).strip() + '…'
     legacy = normalized.replace('***', '三个星号').replace('**', '两个星号').replace('*', '一个星号')
     label = re.sub(r'\s+', ' ', str(figure.get('label') or f'Figure {figure.get("ordinal", "")}')).strip()
-    expected = f'*论文图 {figure["ordinal"]}。原论文 {label}：“{legacy}”。*'
-    if paragraph != expected:
+    clean_label = re.sub(r'[:：.]+\s*$', '', label).strip()
+    v4_body = re.sub(r'[。．.]+\s*$', '', re.sub(r'^["“]([\s\S]*?)["”]$', r'\1', legacy.strip())).strip()
+    legacy_expected = f'*论文图 {figure["ordinal"]}。原论文 {label}：“{legacy}”。*'
+    v4_expected = f'*论文图 {figure["ordinal"]}：{v4_body}（原论文 {clean_label}）。*'
+    if paragraph == legacy_expected:
+        source_val = legacy
+        wrap = lambda text: f'*论文图 {figure["ordinal"]}。原论文 {label}：“{text}”。*'
+    elif paragraph == v4_expected:
+        source_val = v4_body
+        wrap = lambda text: f'*论文图 {figure["ordinal"]}：{text}（原论文 {clean_label}）。*'
+    else:
         return paragraph
-    projected = legacy
+    projected = source_val
     for atom in atoms:
         bare = re.sub(r'[{}]', '', unicodedata.normalize('NFKC', atom))
         damaged = bare.replace('***', '三个星号').replace('**', '两个星号').replace('*', '一个星号')
         if damaged in projected:
             # Original source TeX is literal, not a new display-formula binding.
             projected = projected.replace(damaged, f'`{atom}`')
-    return f'*论文图 {figure["ordinal"]}。原论文 {label}：“{projected}”。*'
+    return wrap(projected)
 
 
 def _source_bound_figure_literal_tokens(image, note, figure):
@@ -12207,14 +12414,23 @@ def _source_bound_figure_literal_tokens(image, note, figure):
     if not tokens:
         return image, note
     label = re.sub(r'\s+', ' ', str(figure.get('label') or f'Figure {figure.get("ordinal", "")}')).strip()
-    prefix = f'*论文图 {figure["ordinal"]}。原论文 {label}：“'
-    suffix = '”。*'
-    if not note.startswith(prefix) or not note.endswith(suffix):
+    clean_label = re.sub(r'[:：.]+\s*$', '', label).strip()
+    legacy_prefix = f'*论文图 {figure["ordinal"]}。原论文 {label}：“'
+    legacy_suffix = '”。*'
+    v4_prefix = f'*论文图 {figure["ordinal"]}：'
+    v4_suffix = f'（原论文 {clean_label}）。*'
+    if note.startswith(legacy_prefix) and note.endswith(legacy_suffix):
+        prefix, suffix = legacy_prefix, legacy_suffix
+        expected_original = original
+    elif note.startswith(v4_prefix) and note.endswith(v4_suffix):
+        prefix, suffix = v4_prefix, v4_suffix
+        expected_original = re.sub(r'[。．.]+\s*$', '', re.sub(r'^["“]([\s\S]*?)["”]$', r'\1', original.strip())).strip()
+    else:
         return image, note
     raw = note[len(prefix):-len(suffix)]
     for token in tokens:
         raw = raw.replace('`' + token + '`', token)
-    if raw != original:
+    if raw != expected_original:
         return image, note
 
     def quote_tokens(value):
@@ -12846,6 +13062,32 @@ def _api_reader_payload_uncached(paper):
     }
 
 
+def _find_outside_fence_heading(text, pattern):
+    fence = None
+    for line_match in re.finditer(r'[^\r\n]*(?:\r\n|\n|\r|$)', text):
+        raw_line = line_match.group(0)
+        if not raw_line:
+            continue
+        cursor = line_match.start()
+        stripped = raw_line.rstrip('\r\n')
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})', stripped)
+        if marker:
+            tok = marker.group(1)
+            rest = stripped[marker.end():]
+            if fence is None:
+                if tok[0] == '`' and '`' in rest:
+                    pass
+                else:
+                    fence = (tok[0], len(tok))
+                    continue
+            elif tok[0] == fence[0] and len(tok) >= fence[1] and not rest.strip(' \t'):
+                fence = None
+                continue
+        if fence is None and re.fullmatch(pattern, stripped):
+            return cursor, cursor + len(stripped)
+    return None
+
+
 def _api_reader_page_binding_issue(content, paper):
     """核对最终页面的来源标记及显示内容，并重新检查表格和公式的来源记录。"""
     if not isinstance(paper, dict):
@@ -12992,20 +13234,44 @@ def _api_reader_page_binding_issue(content, paper):
                 raise PublishDataValidationError(
                     f'最终页面把 {resource_type} 的 temporary/unavailable 资源写成可用'
                 )
-        heading = re.search(r'^##\s+🧭\s*深度解读\s*$', content, flags=re.MULTILINE)
-        if heading is None:
+        heading_span = _find_outside_fence_heading(content, r'##\s+🧭\s*深度解读\s*')
+        if heading_span is None:
             raise PublishDataValidationError('最终页面缺少读者文章的深度解读部分。')
-        article_start = heading.end()
-        if content[article_start:article_start + 2] == '\n\n':
+        article_start = heading_span[1]
+        if content[article_start:article_start + 4] == '\r\n\r\n':
+            article_start += 4
+        elif content[article_start:article_start + 2] == '\n\n':
             article_start += 2
         else:
-            article_start += len(content[article_start:]) - len(content[article_start:].lstrip('\n'))
+            article_start += len(content[article_start:]) - len(content[article_start:].lstrip('\r\n'))
         expected_article = sanitize_markdown_for_publish(_nest_reader_headings(
             payload['renderedArticle'].strip(), minimum_level=3,
         )).strip()
         page_article = content[article_start:article_start + len(expected_article)]
         if page_article != expected_article:
             raise PublishDataValidationError('页面深度解读与正式 Reader 正文的渲染结果不一致。')
+        after_article = content[article_start + len(expected_article):]
+        if after_article and not after_article.startswith(('\n', '\r\n', '\r')):
+            raise PublishDataValidationError('页面深度解读末尾混入了未绑定的额外文本。')
+        parsed_analysis = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
+        aurl = _visible_arxiv_source_url(paper)
+        date_str = frontmatter_value('date', r'(\d{4}-\d{2}-\d{2})')
+        expected_tail_parts = []
+        if parsed_analysis:
+            metadata_line = (build_index_context_line(parsed_analysis, aurl) or '').strip()
+            expected_tail_parts.append(
+                f'<details>\n<summary>📎 论文与评分元数据</summary>\n\n{metadata_line}\n\n</details>'
+            )
+        expected_tail_parts.append(
+            f'## ⚖️ 评分明细\n\n{reader_display_fields["scoringReason"]}'
+        )
+        if date_str:
+            expected_tail_parts.append(
+                f'---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)'
+            )
+        expected_tail = sanitize_markdown_for_publish('\n\n'.join(expected_tail_parts)).strip()
+        if after_article.strip() != expected_tail:
+            raise PublishDataValidationError('页面深度解读章节末尾存在未经核验的额外内容或篡改元数据/尾注。')
         page_proof = _validate_api_reader_source_bindings(paper, article=page_article)
         if page_proof != proof:
             raise PublishDataValidationError('最终页面表格或公式的来源核验结果与保存记录不一致。')
@@ -13423,7 +13689,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 # 绑定的原始内容，生成最终页面时必须原样保留。
                 if key != 'readerArticle':
                     content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
-                content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
+                    content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 if key == 'scoringReason':
                     if reader_first:
                         # Reader 优先的页面把评分放在开头，
@@ -14326,6 +14592,29 @@ def _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper):
     ):
         raise PublishDataValidationError(f'{paper_id} source manifest 未闭合 TXT/PDF/runtime SHA')
     artifacts = _daily_fresh_validate_runtime(runtime, manifest, text, paper_id)
+    raw_reader_authors = runtime.get('readerAuthors')
+    if text_manifest['source'] == 'pdf' and raw_reader_authors is not None:
+        if (not isinstance(raw_reader_authors, dict)
+                or raw_reader_authors.get('contract') != 'pdf-page1-author-evidence-v1'):
+            raise PublishDataValidationError(
+                f'{paper_id} sealed PDF 来源的非空 readerAuthors 必须声明 pdf-page1-author-evidence-v1'
+            )
+    if isinstance(raw_reader_authors, dict) and (
+            raw_reader_authors.get('contract') == 'pdf-page1-author-evidence-v1'
+            or 'pdfPage1Authors' in raw_reader_authors):
+        import pdf_author_extract
+        pdf_evidence = (
+            raw_reader_authors
+            if raw_reader_authors.get('contract') == 'pdf-page1-author-evidence-v1'
+            else raw_reader_authors.get('pdfPage1Authors')
+        )
+        replayed_pdf_evidence = pdf_author_extract.extract_pdf_page1_authors(pdf)
+        if (not isinstance(pdf_evidence, dict)
+                or replayed_pdf_evidence is None
+                or pdf_evidence != replayed_pdf_evidence):
+            raise PublishDataValidationError(
+                f'{paper_id} sealed PDF 首页作者证据与 source.pdf 重放结果不一致'
+            )
     _daily_fresh_official_url(
         text_manifest.get('url'), 'pdf' if text_manifest['source'] == 'pdf' else 'html',
         paper_id, text_manifest['sourceId'],
@@ -17647,6 +17936,7 @@ def generation_template_fingerprint():
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
         'lib/core-symbolic-source-numerals.js': script_dir / 'lib' / 'core-symbolic-source-numerals.js',
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
+        'pdf_author_extract.py': script_dir / 'pdf_author_extract.py',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
         'lib/reader-pdf-extraction-scope.js': script_dir / 'lib' / 'reader-pdf-extraction-scope.js',
@@ -20321,6 +20611,8 @@ def parse_generation_args(argv=None):
     parser.add_argument('--all', action='count', default=0)
     parser.add_argument('--republish', action='append', metavar='UUID',
                         help='显式归档已发布完整日批的旧凭证，保持原分析并重新生成；中断用同一 UUID 恢复')
+    parser.add_argument('--republish-reanalyzed', action='count', default=0,
+                        help='配合 --republish UUID 使用：归档旧凭证后以同论文集的新重分析结果重新生成')
     parser.add_argument('--skip-push', action='count', default=0,
                         help='兼容旧调用；生成入口本身从不 push')
     parser.add_argument('--push', action='count', default=0,
@@ -20344,6 +20636,10 @@ def parse_generation_args(argv=None):
         parser.error('--include-id 只能指定一次')
     if args.include_id and (args.exclude_id or args.all):
         parser.error('--include-id 与 --exclude-id/--all 互斥')
+    if args.republish_reanalyzed > 1:
+        parser.error('--republish-reanalyzed 只能指定一次')
+    if args.republish_reanalyzed and not args.republish:
+        parser.error('--republish-reanalyzed 必须与 --republish UUID 同时使用')
     if args.republish:
         from daily_republication import validate_id
         if len(args.republish) != 1:
@@ -20363,6 +20659,7 @@ def parse_generation_args(argv=None):
         'include_id': args.include_id[0] if args.include_id else None,
         'legacy_v5_maintenance': bool(args.legacy_v5_maintenance),
         'republish_id': args.republish[0] if args.republish else None,
+        'republish_reanalyzed': bool(args.republish_reanalyzed),
     }
 
 
@@ -20660,8 +20957,11 @@ def generate_main(options=None):
         from daily_republication import activate as activate_daily_republication
         from types import SimpleNamespace
         try:
-            activate_daily_republication(SimpleNamespace(**globals()), today, options['republish_id'],
-                input_fingerprint, template_fingerprint)
+            activate_daily_republication(
+                SimpleNamespace(**globals()), today, options['republish_id'],
+                input_fingerprint, template_fingerprint,
+                allow_reanalyzed=bool(options.get('republish_reanalyzed')),
+            )
         except (ValueError, OSError) as error:
             raise PublishDataValidationError(str(error)) from error
     published_reusable = reusable_verified_publication_generation(

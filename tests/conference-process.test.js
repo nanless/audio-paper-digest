@@ -2759,3 +2759,23 @@ test('会议保存完成状态失败时停止派发，并等待已经开始的�
         });
     }
 });
+
+test('deepExecutionConfigIdentity 按 primaryModel 规范化 Responses reasoningEffort', () => {
+    const muse = executionIdentity({
+        env: {
+            PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+            PAPER_ANALYZER_ENDPOINT: 'https://opencode.ai/zen/go/v1',
+            PD_OPENAI_RESPONSES_REASONING_EFFORT: 'max'
+        }
+    });
+    assert.equal(muse.audit.responses.reasoningEffort, 'xhigh');
+
+    const deepseek = executionIdentity({
+        env: {
+            PAPER_ANALYZER_MODEL: 'deepseek-v4.1-flash',
+            PAPER_ANALYZER_ENDPOINT: 'https://opencode.ai/zen/go/v1',
+            PD_OPENAI_RESPONSES_REASONING_EFFORT: 'max'
+        }
+    });
+    assert.equal(deepseek.audit.responses.reasoningEffort, 'max');
+});

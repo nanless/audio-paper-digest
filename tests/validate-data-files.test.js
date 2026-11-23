@@ -1676,4 +1676,89 @@ describe('显式数据路径与 v7 缺少候选的诊断', () => {
             fs.rmSync(folder, { recursive: true, force: true });
         }
     });
+
+    it('filtered 与 deep 跨文件一致性校验会扣除已核验的 daily-source-skip 404 跳过论文，且拒绝跳过论文残留在 deep 中', () => {
+        const folder = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'validator-source-skip-'));
+        const runsDir = path.join(folder, 'daily-runs');
+        try {
+            const daily = require('../scripts/lib/daily-fresh-source-plan.js');
+            const skip = require('../scripts/lib/daily-source-skip.js');
+            const batchDate = '2026-10-19';
+            const batchId = 'a'.repeat(16);
+            const plan = daily.createDailyFreshSourcePlan({
+                batchDate, batchId, rootDir: runsDir,
+                papers: [{ arxivId: '2610.00001' }, { arxivId: '2610.00002' }, { arxivId: '2610.00003' }, { arxivId: '2610.00004' }]
+            });
+            // 使用 limit=3（高于默认 2）验证历史只读校验以 MAX_LIMIT 放行合法记录，且通过 files.dailyFreshSourceRunsDir 隔离读取。
+            skip.writeDailySourceSkips(plan, [
+                { arxivId: '2610.00002', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.00002 download failed: HTTP 404' },
+                { arxivId: '2610.00003', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.00003 download failed: HTTP 404' },
+                { arxivId: '2610.00004', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.00004 download failed: HTTP 404' }
+            ], { limit: 3 });
+            const ref = daily.dailyFreshSourceReference(plan);
+            const filteredPath = path.join(folder, 'filtered-papers.json');
+            const deepPath = path.join(folder, 'deep-analysis-result.json');
+            const filesArg = { filteredPapers: filteredPath, deepAnalysisResult: deepPath, dailyFreshSourceRunsDir: runsDir };
+            fs.writeFileSync(filteredPath, JSON.stringify({
+                batchDate, batchId, status: 'complete',
+                papers: [{ arxivId: '2610.00001' }, { arxivId: '2610.00002' }, { arxivId: '2610.00003' }, { arxivId: '2610.00004' }]
+            }));
+            fs.writeFileSync(deepPath, JSON.stringify({
+                batchDate, batchId, dailyFreshSourceRun: ref,
+                papers: [{ arxivId: '2610.00001' }]
+            }));
+            const { validateFilteredDeepPapersConsistency } = require('../scripts/validate-data-files.js');
+            const okIssues = validateFilteredDeepPapersConsistency(filesArg);
+            assert.deepStrictEqual(okIssues, []);
+
+            // 若被跳过论文仍出现在 deep 中，必须报错。
+            fs.writeFileSync(deepPath, JSON.stringify({
+                batchDate, batchId, dailyFreshSourceRun: ref,
+                papers: [{ arxivId: '2610.00001' }, { arxivId: '2610.00002' }]
+            }));
+            const badIssues = validateFilteredDeepPapersConsistency(filesArg);
+            assert.ok(badIssues.some(msg => msg.includes('不得出现在 deep-analysis-result.json')), badIssues.join('\n'));
+
+            // 跨 batchId 借用同日其他运行的 skip 记录必须被拒绝。
+            fs.writeFileSync(deepPath, JSON.stringify({
+                batchDate, batchId: 'b'.repeat(16), dailyFreshSourceRun: ref,
+                papers: [{ arxivId: '2610.00001' }]
+            }));
+            const crossBatchIssues = validateFilteredDeepPapersConsistency(filesArg);
+            assert.ok(crossBatchIssues.some(msg => msg.includes('batchId')), crossBatchIssues.join('\n'));
+
+            // 全部入选论文被跳过（expectedDeep 为空）必须被拒绝。
+            const allSkipPlan = daily.createDailyFreshSourcePlan({
+                batchDate, batchId: 'c'.repeat(16), rootDir: runsDir,
+                papers: [{ arxivId: '2610.00009' }]
+            });
+            skip.writeDailySourceSkips(allSkipPlan, [
+                { arxivId: '2610.00009', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.00009 download failed: HTTP 404' }
+            ]);
+            fs.writeFileSync(filteredPath, JSON.stringify({
+                batchDate, batchId: 'c'.repeat(16), status: 'complete',
+                papers: [{ arxivId: '2610.00009' }]
+            }));
+            fs.writeFileSync(deepPath, JSON.stringify({
+                batchDate, batchId: 'c'.repeat(16), dailyFreshSourceRun: daily.dailyFreshSourceReference(allSkipPlan),
+                papers: []
+            }));
+            const allSkipIssues = validateFilteredDeepPapersConsistency(filesArg);
+            assert.ok(allSkipIssues.some(msg => msg.includes('全部被来源跳过')), allSkipIssues.join('\n'));
+
+            // 独立调用时，filtered 或 deep 包含重复归一化 ID 必须报错。
+            fs.writeFileSync(filteredPath, JSON.stringify({
+                batchDate, batchId, status: 'complete',
+                papers: [{ arxivId: '2610.00001v1' }, { arxivId: '2610.00001v2' }]
+            }));
+            fs.writeFileSync(deepPath, JSON.stringify({
+                batchDate, batchId,
+                papers: [{ arxivId: '2610.00001' }]
+            }));
+            const dupIssues = validateFilteredDeepPapersConsistency(filesArg);
+            assert.ok(dupIssues.some(msg => msg.includes('重复的归一化论文 ID')), dupIssues.join('\n'));
+        } finally {
+            fs.rmSync(folder, { recursive: true, force: true });
+        }
+    });
 });

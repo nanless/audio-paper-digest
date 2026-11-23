@@ -17,10 +17,8 @@ const {
     requestLlmJson
 } = require('./utils.js');
 const {
-    resolveApiKeyPool,
     resolvePrimaryApiKeyPool,
-    normalizeOpenCodeGoService,
-    LlmAccountPoolConfigError
+    resolveSecondaryApiKeys
 } = require('./llm-account-pool.js');
 const { FILES } = require('./config.js');
 
@@ -33,15 +31,16 @@ function parseArgs(argv) {
 function resolveApiKeyTestConfig(env, secondary) {
     const primaryEndpoint = String(env.PAPER_ANALYZER_ENDPOINT || '');
     const primaryKey = String(env.PAPER_ANALYZER_API_KEY || '').trim();
+    const primaryApiKeys = resolvePrimaryApiKeyPool(
+        primaryKey,
+        env.PAPER_ANALYZER_FALLBACK_API_KEYS || '',
+        env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || ''
+    );
     if (!secondary) {
         return {
             endpoint: primaryEndpoint,
             key: primaryKey,
-            apiKeys: resolvePrimaryApiKeyPool(
-                primaryKey,
-                env.PAPER_ANALYZER_FALLBACK_API_KEYS || '',
-                env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || ''
-            ),
+            apiKeys: primaryApiKeys,
             model: env.PAPER_ANALYZER_MODEL || ''
         };
     }
@@ -50,46 +49,20 @@ function resolveApiKeyTestConfig(env, secondary) {
     const explicitSecondaryKey = String(env.PAPER_ANALYZER_SECONDARY_API_KEY || '').trim();
     const key = explicitSecondaryKey || primaryKey;
     const model = env.PAPER_ANALYZER_SECONDARY_MODEL || '';
-    if (!String(model).trim()) {
-        return { endpoint, key, apiKeys: [key].filter(Boolean), model };
-    }
-    const explicitSecondaryFallback = env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || '';
-    const primaryService = normalizeOpenCodeGoService(primaryEndpoint);
-    const secondaryService = normalizeOpenCodeGoService(endpoint);
-    const sameOpenCodeGoService = Boolean(
-        primaryService && secondaryService && primaryService === secondaryService
-    );
-    const canonicalRoute = value => {
-        const goService = normalizeOpenCodeGoService(value);
-        if (goService) return goService;
-        try {
-            const parsed = new URL(String(value || ''));
-            const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
-            return `${parsed.protocol}//${parsed.host}${pathname}`;
-        } catch (_) {
-            return String(value || '').trim().replace(/\/+$/, '');
-        }
-    };
-    if (!explicitSecondaryKey && canonicalRoute(primaryEndpoint) !== canonicalRoute(endpoint)) {
-        throw new LlmAccountPoolConfigError(
-            '副模型 endpoint 与主模型不属于同一 canonical 服务时，必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
-        );
-    }
-    let fallbackKeys = '';
-    if (explicitSecondaryFallback) {
-        if (!explicitSecondaryKey && !sameOpenCodeGoService) {
-            throw new LlmAccountPoolConfigError(
-                '副模型显式配置 fallback API keys 时，非同一 OpenCode Go 服务必须同时显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
-            );
-        }
-        fallbackKeys = explicitSecondaryFallback;
-    } else if (!explicitSecondaryKey && sameOpenCodeGoService) {
-        fallbackKeys = env.PAPER_ANALYZER_FALLBACK_API_KEYS || '';
-    }
+    const apiKeys = resolveSecondaryApiKeys({
+        primaryEndpoint,
+        secondaryEndpoint: endpoint,
+        primaryKey,
+        secondaryKey: explicitSecondaryKey,
+        primaryApiKeys,
+        secondaryModel: model,
+        secondaryFallbackApiKeys: env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || '',
+        secondaryTertiaryFallbackApiKey: env.PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY || ''
+    });
     return {
         endpoint,
         key,
-        apiKeys: resolveApiKeyPool(key, fallbackKeys),
+        apiKeys,
         model
     };
 }
@@ -103,6 +76,7 @@ async function main(argv = process.argv.slice(2)) {
         'PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY',
         'PAPER_ANALYZER_SECONDARY_ENDPOINT', 'PAPER_ANALYZER_SECONDARY_API_KEY',
         'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS',
+        'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY',
         'PAPER_ANALYZER_SECONDARY_MODEL'
     ]) {
         delete process.env[key];

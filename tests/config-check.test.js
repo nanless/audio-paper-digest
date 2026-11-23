@@ -118,3 +118,22 @@ test('export/行内注释按运行时时序解析（不剥离行内注释、不�
         { PD_ANALYSIS_CONCURRENCY: '5 # five', 'export KEY': 'value' }
     );
 });
+
+test('--env 缺少参数报错，且副模型 Responses 推理档不匹配时判 fail', () => {
+    assert.throws(() => configCheck.parseArgs(['--env']), /缺少文件路径参数/);
+    assert.throws(() => configCheck.parseArgs(['--env', '--json']), /缺少文件路径参数/);
+    const envWithMismatchSecondary = [
+        VALID_ENV,
+        'PD_OPENAI_RESPONSES_REASONING_EFFORT=xhigh',
+        'PAPER_ANALYZER_SECONDARY_MODEL=deepseek-v4.1-flash',
+        'PAPER_ANALYZER_SECONDARY_ENDPOINT=https://opencode.ai/zen/go/v1',
+        'PAPER_ANALYZER_SECONDARY_API_KEY=sec-secret'
+    ].join('\n');
+    withEnv(envWithMismatchSecondary, file => {
+        const { code, parsed } = runJson(['--env', file, '--json']);
+        assert.strictEqual(code, 1);
+        const effortItem = parsed.items.find(item => item.name === 'PD_OPENAI_RESPONSES_REASONING_EFFORT');
+        assert.strictEqual(effortItem.ok, 'fail');
+        assert.match(effortItem.detail, /副模型 deepseek-v4\.1-flash/);
+    });
+});

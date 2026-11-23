@@ -454,10 +454,15 @@ def validate_git_commit_against_review_receipt(
     ).stdout.strip().lower().split()
     if len(parents) != 2 or parents[1] != base_head:
         raise err_cls('发布提交必须是 review 基线的唯一单父提交')
-    actual_delta = set(filter(None, git_runner(
-        ['diff-tree', '--no-commit-id', '--name-only', '-r', commit],
-        text=True, check=True,
-    ).stdout.splitlines()))
+    raw_delta = git_runner(
+        ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', commit],
+        text=False, check=True,
+    ).stdout
+    if isinstance(raw_delta, bytes):
+        actual_delta = {entry.decode('utf-8') for entry in raw_delta.split(b'\x00') if entry}
+    else:
+        entries = raw_delta.split('\x00') if '\x00' in raw_delta else raw_delta.splitlines()
+        actual_delta = {entry for entry in entries if entry}
     expected_delta = delta_fn(receipt, base_head)
     if actual_delta != expected_delta:
         unexpected = sorted(actual_delta - expected_delta)

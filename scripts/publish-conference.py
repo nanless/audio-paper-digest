@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -231,7 +232,7 @@ def rewrite_unpublished_receipt(filename, data, label, invariant):
         f'{filename.stem}.superseded-{sha_bytes(previous_bytes)[:12]}{filename.suffix}'
     )
     write_exact(archive, previous_bytes)
-    replace_exact(filename, data)
+    replace_exact(filename, data, mode=0o600)
     return True
 
 
@@ -889,14 +890,15 @@ def target_bytes(repo, record):
     return read_bytes(under(repo, record['path'], '博客目标'))
 
 
-def replace_exact(filename, data, *, expected_sha256=None):
-    """原地替换一个已存在、且已核实为普通单链接文件的博客目标，并绑 0644。
+def replace_exact(filename, data, *, expected_sha256=None, mode=0o644):
+    """原地替换一个已存在、且已核实为普通单链接文件的目标，并绑定显式权限位。
 
     这段写入不能改成公共的「临时文件 + rename」helper，它有独有的前置契约：
     - 目标必须已存在、是普通文件、不是符号链接、硬链接数为 1。`os.replace`
       作用于路径本身：目标是符号链接时替换掉的是链接，不是它指向的文件；
       公共 helper 没有这层校验，直接套用会改错文件。
-    - 目标权限固定 0644，不继承目标原权限位（公共 helper 默认继承）。
+    - 目标权限由调用方显式指定（博客目标默认 0644，内部凭证为 0600），
+      不继承目标原权限位（公共 helper 默认继承）。
     - 写完后先 fsync 文件再 fsync 目录，保证替换后的目录项落盘。
     """
     filename = Path(filename)
@@ -911,17 +913,19 @@ def replace_exact(filename, data, *, expected_sha256=None):
         current = filename.lstat()
         fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_nlink', 'st_mode')
         if any(getattr(current, key) != getattr(info, key) for key in fields) \
-                or stat.S_IMODE(current.st_mode) != 0o644 \
+                or stat.S_IMODE(current.st_mode) != mode \
                 or sha_bytes(read_bytes(filename)) != expected_sha256:
             raise ConferencePublicationError(f'原子替换目标身份或原SHA漂移: {filename}')
     assert_expected_target()
-    temporary = filename.with_name(f'.{filename.name}.{os.getpid()}.conference.tmp')
+    temporary = filename.with_name(f'.{filename.name}.{os.getpid()}.{secrets.token_hex(6)}.conference.tmp')
     if temporary.exists():
         raise ConferencePublicationError(f'博客目标临时文件已存在: {temporary}')
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
-    fd = os.open(temporary, flags, 0o644)
-    temporary_info = os.fstat(fd)
+    fd = os.open(temporary, flags, mode)
+    temporary_info = None
     try:
+        temporary_info = os.fstat(fd)
+        os.fchmod(fd, mode)
         written = 0
         while written < len(data):
             count = os.write(fd, data[written:])
@@ -929,16 +933,20 @@ def replace_exact(filename, data, *, expected_sha256=None):
                 raise ConferencePublicationError(f'博客目标短写: {filename}')
             written += count
         os.fsync(fd)
-    finally:
         os.close(fd)
-    try:
+        fd = -1
         assert_expected_target()
         os.replace(temporary, filename)
     finally:
-        if temporary.exists():
-            leftover = temporary.lstat()
-            if (leftover.st_dev, leftover.st_ino) == (temporary_info.st_dev, temporary_info.st_ino):
-                temporary.unlink()
+        if fd >= 0:
+            os.close(fd)
+        if temporary_info is not None:
+            try:
+                leftover = temporary.lstat()
+                if (leftover.st_dev, leftover.st_ino) == (temporary_info.st_dev, temporary_info.st_ino):
+                    temporary.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
     directory_fd = os.open(filename.parent, os.O_RDONLY)
     try:
         os.fsync(directory_fd)

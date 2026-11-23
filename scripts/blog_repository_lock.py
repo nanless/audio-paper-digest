@@ -4,6 +4,7 @@
 import errno
 import hashlib
 import json
+import math
 import os
 import socket
 import stat
@@ -28,6 +29,11 @@ class BlogRepositoryLockError(RuntimeError):
     pass
 
 
+class _LockSnapshotChangedError(BlogRepositoryLockError):
+    """表示并发持有方已经更新或释放锁，而不是符号链接/篡改违规。"""
+    pass
+
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat(timespec='microseconds')
 
@@ -49,8 +55,16 @@ def _strict_json(data, label):
                 raise BlogRepositoryLockError(f'{label} 里有重复的 JSON 键：{key}')
             result[key] = value
         return result
+
+    def reject_constant(token):
+        raise BlogRepositoryLockError(f'{label} 含有非标准 JSON 常量：{token}')
+
     try:
-        return json.loads(data.decode('utf-8'), object_pairs_hook=pairs)
+        return json.loads(
+            data.decode('utf-8'),
+            object_pairs_hook=pairs,
+            parse_constant=reject_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BlogRepositoryLockError(f'{label} 不是严格的 UTF-8 JSON') from exc
 
@@ -117,12 +131,14 @@ def _validate_owner(data):
         raise BlogRepositoryLockError('博客锁 owner 记录的字段集合不对')
     body = dict(value)
     declared = body.pop('ownerSha256')
-    if value['contract'] != CONTRACT or value['version'] != 1 \
+    if value['contract'] != CONTRACT or type(value['version']) is not int or value['version'] != 1 \
             or not isinstance(value['owner'], str) or not value['owner'] \
-            or not isinstance(value['pid'], int) or value['pid'] < 1 \
+            or type(value['pid']) is not int or value['pid'] < 1 \
             or not isinstance(value['hostname'], str) or not value['hostname'] \
             or not isinstance(value['token'], str) or not value['token'] \
+            or isinstance(value['leaseSeconds'], bool) \
             or not isinstance(value['leaseSeconds'], (int, float)) \
+            or not math.isfinite(value['leaseSeconds']) \
             or value['leaseSeconds'] <= 0 or value['leaseSeconds'] > 24 * 60 * 60 \
             or declared != _sha(_stable_bytes(body)):
         raise BlogRepositoryLockError('博客锁 owner 记录的身份字段或自校验哈希不对')
@@ -185,8 +201,11 @@ def _snapshot(lock_path, *, allow_invalid_owner=False):
     directory_fd = os.open(lock_path, flags)
     try:
         opened = os.fstat(directory_fd)
+        if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.getuid() \
+                or stat.S_IMODE(opened.st_mode) != 0o700:
+            raise BlogRepositoryLockError(f'博客锁目录必须是本人拥有的真实目录、权限 0700：{lock_path}')
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-            raise BlogRepositoryLockError(f'打开博客锁目录时 inode 变了：{lock_path}')
+            raise _LockSnapshotChangedError(f'打开博客锁目录时 inode 变了：{lock_path}')
         entries = sorted(os.listdir(directory_fd))
         if entries not in ([], ['owner.json']):
             raise BlogRepositoryLockError(f'博客锁目录里有预期之外的文件：{entries}')
@@ -259,19 +278,19 @@ def _reclaimable(snapshot, configured_lease, now=None):
 def _remove_exact(snapshot):
     current = _snapshot(snapshot['path'], allow_invalid_owner=True)
     if not _same_snapshot(snapshot, current):
-        raise BlogRepositoryLockError('删除前发现博客锁已变化')
+        raise _LockSnapshotChangedError('删除前发现博客锁已变化')
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
     directory_fd = os.open(snapshot['path'], flags)
     try:
         opened = os.fstat(directory_fd)
         if (opened.st_dev, opened.st_ino) != snapshot['directoryIdentity']:
-            raise BlogRepositoryLockError('删除前发现博客锁目录 inode 变了')
+            raise _LockSnapshotChangedError('删除前发现博客锁目录 inode 变了')
         if snapshot['entries']:
             owner = _read_owner_raw_at(directory_fd)
             expected = snapshot['owner']
             if expected is None or any(owner[field] != expected[field]
                                        for field in ('identity', 'size', 'mtimeNs', 'bytesSha256')):
-                raise BlogRepositoryLockError('删除前发现博客锁 owner 文件变了')
+                raise _LockSnapshotChangedError('删除前发现博客锁 owner 文件变了')
             os.unlink('owner.json', dir_fd=directory_fd)
         os.fsync(directory_fd)
     finally:
@@ -293,9 +312,10 @@ def _rmdir_exact(directory, expected_identity):
                         | getattr(os, 'O_NOFOLLOW', 0))
     try:
         named = os.stat(directory.name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat.S_ISDIR(named.st_mode) \
-                or (named.st_dev, named.st_ino) != expected_identity:
-            raise BlogRepositoryLockError('rmdir 前发现博客锁目录 inode 变了')
+        if not stat.S_ISDIR(named.st_mode):
+            raise BlogRepositoryLockError('rmdir 前发现博客锁路径已不是普通目录')
+        if (named.st_dev, named.st_ino) != expected_identity:
+            raise _LockSnapshotChangedError('rmdir 前发现博客锁目录 inode 变了')
         os.rmdir(directory.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
     finally:
@@ -414,9 +434,24 @@ def _acquire(lock_path, owner, timeout_seconds, stale_seconds):
             orphan_reclaim = _snapshot(reclaim_path, allow_invalid_owner=True)
         except FileNotFoundError:
             orphan_reclaim = None
+        except _LockSnapshotChangedError:
+            if time.monotonic() - started >= timeout_seconds:
+                raise TimeoutError(f'等待共享博客仓库回收锁超时: {reclaim_path}')
+            time.sleep(0.05)
+            continue
         if orphan_reclaim is not None:
             if _reclaimable(orphan_reclaim, stale_seconds):
-                _remove_exact(orphan_reclaim)
+                removed_orphan = False
+                try:
+                    _remove_exact(orphan_reclaim)
+                    removed_orphan = True
+                except (FileNotFoundError, _LockSnapshotChangedError):
+                    pass
+                if time.monotonic() - started >= timeout_seconds:
+                    raise TimeoutError(f'等待共享博客仓库回收锁超时: {reclaim_path}')
+                if removed_orphan:
+                    continue
+                time.sleep(0.05)
                 continue
             if time.monotonic() - started >= timeout_seconds:
                 raise TimeoutError(f'等待共享博客仓库回收锁超时: {reclaim_path}')
@@ -428,16 +463,26 @@ def _acquire(lock_path, owner, timeout_seconds, stale_seconds):
             pass
         try:
             stale = _snapshot(lock_path, allow_invalid_owner=True)
-        except FileNotFoundError:
+        except (FileNotFoundError, _LockSnapshotChangedError):
+            if time.monotonic() - started >= timeout_seconds:
+                raise TimeoutError(f'等待共享博客仓库锁超时: {lock_path}')
             continue
         if _reclaimable(stale, stale_seconds):
             marker = None
+            reclaimed = False
             try:
                 marker = _create_lock_directory(reclaim_path, f'{owner}:reclaimer', stale_seconds)
-                current = _snapshot(lock_path, allow_invalid_owner=True)
-                if not _same_snapshot(stale, current) or not _reclaimable(current, stale_seconds):
-                    raise BlogRepositoryLockError('回收过期博客锁的过程中锁被改过')
-                _remove_exact(current)
+                try:
+                    current = _snapshot(lock_path, allow_invalid_owner=True)
+                except (FileNotFoundError, _LockSnapshotChangedError):
+                    current = None
+                if current is not None and _same_snapshot(stale, current) \
+                        and _reclaimable(current, stale_seconds):
+                    try:
+                        _remove_exact(current)
+                        reclaimed = True
+                    except (FileNotFoundError, _LockSnapshotChangedError):
+                        pass
             except FileExistsError:
                 pass
             finally:
@@ -446,6 +491,11 @@ def _acquire(lock_path, owner, timeout_seconds, stale_seconds):
                         _remove_exact(marker)
                     except (FileNotFoundError, BlogRepositoryLockError):
                         pass
+            if time.monotonic() - started >= timeout_seconds:
+                raise TimeoutError(f'等待共享博客仓库锁超时: {lock_path}')
+            if reclaimed:
+                continue
+            time.sleep(0.05)
             continue
         if time.monotonic() - started >= timeout_seconds:
             raise TimeoutError(f'等待共享博客仓库锁超时: {lock_path}')

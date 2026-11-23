@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import sys
 import tempfile
@@ -56,19 +57,44 @@ def atomic_json(path, value, *, dir_mode=0o700):
 
     dir_mode 默认 0700，仅用于新建的直接父目录，并受 umask 限制；
     缺失的更高层父目录使用默认创建权限，已有目录不改权限。
-    这里保留专用保存函数：检查点文件固定为 0600，临时文件须独占创建，
+    这里保留专用保存函数：检查点文件固定以 0600 独占创建，
     不直接沿用 path_config.atomic_write_json 的文件权限处理。
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True, mode=dir_mode)
     raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode()
-    temporary = target.with_name(f'.{target.name}.{os.getpid()}.tmp')
-    with temporary.open('xb') as handle:
-        os.chmod(temporary, 0o600)
-        handle.write(raw)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
+    temporary = target.with_name(f'.{target.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp')
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(temporary, flags, 0o600)
+    temporary_info = None
+    try:
+        temporary_info = os.fstat(fd)
+        os.fchmod(fd, 0o600)
+        written = 0
+        while written < len(raw):
+            count = os.write(fd, raw[written:])
+            if count <= 0:
+                raise OSError(f'短写检查点文件：{target}')
+            written += count
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(temporary, target)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temporary_info is not None:
+            try:
+                leftover = temporary.lstat()
+                if (leftover.st_dev, leftover.st_ino) == (temporary_info.st_dev, temporary_info.st_ino):
+                    temporary.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
+    directory_fd = os.open(target.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def blocking(issues):
@@ -173,8 +199,9 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
 
 def review_page(module, page, staged_repo, checkpoint_root, protocol):
     relative = page['path']
-    target = (staged_repo / relative).resolve()
-    if not str(target).startswith(str(staged_repo) + os.sep):
+    staged_root = Path(staged_repo).resolve()
+    target = (staged_root / relative).resolve()
+    if target == staged_root or not target.is_relative_to(staged_root):
         raise ValueError('待审页面路径超出临时博客目录')
     raw = target.read_bytes()
     actual_sha = hashlib.sha256(raw).hexdigest()
@@ -335,13 +362,18 @@ def run(request_path, output_path, checkpoint_root, concurrency):
         shutil.copytree(blog_repo, staged, ignore=shutil.ignore_patterns('.git', 'public', 'resources'))
         staged = staged.resolve(strict=True)
         for item in request['files']:
-            source = (bundle_root / item['path']).resolve(strict=True)
+            rel_path = Path(item['path'])
+            if rel_path.is_absolute() or '..' in rel_path.parts:
+                raise ValueError('待审文件路径必须为包内相对路径')
+            source = (bundle_root / rel_path).resolve(strict=True)
             if not str(source).startswith(str(bundle_root) + os.sep):
                 raise ValueError('待审文件路径超出本次页面生成目录')
             raw = source.read_bytes()
             if hashlib.sha256(raw).hexdigest() != item['sha256']:
                 raise ValueError(f'待审文件 SHA 与请求记录不同： {item["path"]}')
-            target = staged / item['path']
+            target = (staged / rel_path).resolve()
+            if not str(target).startswith(str(staged) + os.sep):
+                raise ValueError('待审目标路径超出本次暂存站点目录')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
         module = load_publish_to_blog()

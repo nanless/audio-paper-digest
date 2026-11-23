@@ -188,7 +188,7 @@ function addPythonFromImportEdges(mod, rawNames, dir, files, addEdge, fromFile) 
         }
     } else {
         const relMod = mod.replace(/\./g, '/');
-        for (const prefix of [dir, 'scripts', 'manual/scripts', 'tests/python', 'manual/tests/python', '']) {
+        for (const prefix of [dir, 'scripts', 'manual/scripts', 'tests/python', 'tests/helpers', 'manual/tests/python', 'manual/tests/helpers', '']) {
             const cand = path.posix.normalize(prefix ? `${prefix}/${relMod}.py` : `${relMod}.py`);
             if (!isOutsideRelative(cand) && files.has(cand)) addEdge(fromFile, cand);
             for (const name of cleanedNames) {
@@ -231,7 +231,9 @@ function buildDependencyGraph(options = {}) {
     walkControlled('config', rel => /\.json$/.test(rel), true);
     walkControlled('prompts/current', rel => /\.md$/.test(rel), true);
     walkControlled('tests', (_rel, name) => /\.(?:js|cjs|mjs)$/.test(name), false);
+    walkControlled('tests/helpers', (_rel, name) => /\.(?:js|cjs|mjs|py)$/.test(name), true);
     walkControlled('manual/tests', (_rel, name) => /\.(?:js|cjs|mjs)$/.test(name), false);
+    walkControlled('manual/tests/helpers', (_rel, name) => /\.(?:js|cjs|mjs|py)$/.test(name), true);
     walkControlled('tests/python', (_rel, name) => /\.py$/.test(name), false);
     walkControlled('manual/tests/python', (_rel, name) => /\.py$/.test(name), false);
 
@@ -295,7 +297,7 @@ function buildDependencyGraph(options = {}) {
                     const mod = part.trim().split(/\s+as\s+/)[0].trim();
                     if (!mod || !/^[A-Za-z_][\w.]*$/.test(mod)) continue;
                     const relMod = mod.replace(/\./g, '/');
-                    for (const prefix of [dir, 'scripts', 'manual/scripts', 'tests/python', 'manual/tests/python', '']) {
+                    for (const prefix of [dir, 'scripts', 'manual/scripts', 'tests/python', 'tests/helpers', 'manual/tests/python', 'manual/tests/helpers', '']) {
                         const cand = path.posix.normalize(prefix ? `${prefix}/${relMod}.py` : `${relMod}.py`);
                         if (!isOutsideRelative(cand) && files.has(cand)) addEdge(file, cand);
                     }

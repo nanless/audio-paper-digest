@@ -131,6 +131,93 @@ class SharedBlogRepositoryLockTest(unittest.TestCase):
                     os.replace(replacement, owner_path)
             self.assertTrue((root / LOCK_NAME).is_dir())
 
+    def test_validate_owner_rejects_booleans_and_non_finite_json_constants(self):
+        from blog_repository_lock import _owner_record, _sha, _stable_bytes, _validate_owner
+
+        base = _owner_record('owner', 'tok', 60)
+        base.pop('ownerSha256')
+        for field, bad_value in (('pid', True), ('version', True), ('leaseSeconds', True)):
+            mutated = {**base, field: bad_value}
+            mutated['ownerSha256'] = _sha(_stable_bytes(mutated))
+            with self.assertRaises(BlogRepositoryLockError, msg=f'{field}={bad_value}'):
+                _validate_owner(_stable_bytes(mutated))
+
+        raw_nan = b'{"contract":"paper-digest-blog-repository-lock-v1","version":1,"leaseSeconds":NaN}'
+        with self.assertRaises(BlogRepositoryLockError):
+            _validate_owner(raw_nan)
+
+    def test_acquire_survives_concurrent_reclaim_disappearance_and_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(tmp)
+            root = shared_lock_root(repo)
+            lock_path = root / LOCK_NAME
+            lock_path.mkdir(mode=0o700)
+            old = time.time() - 3600
+            os.utime(lock_path, (old, old))
+
+            import blog_repository_lock as mod
+            real_snapshot = mod._snapshot
+            calls = {'count': 0}
+
+            def racing_snapshot(path, *, allow_invalid_owner=False):
+                calls['count'] += 1
+                if path == lock_path and calls['count'] == 2:
+                    # 模拟另一并发者在创建 .reclaim 之后、二次检查前释放了旧锁
+                    try:
+                        lock_path.rmdir()
+                    except FileNotFoundError:
+                        pass
+                    raise FileNotFoundError(str(lock_path))
+                return real_snapshot(path, allow_invalid_owner=allow_invalid_owner)
+
+            with patch.object(mod, '_snapshot', side_effect=racing_snapshot):
+                with shared_blog_repository_lock(repo, owner='winner', timeout_seconds=1, stale_seconds=0.05) as acquired:
+                    self.assertEqual(acquired, lock_path)
+            self.assertFalse(lock_path.exists())
+
+    def test_snapshot_inode_swap_retries_and_respects_timeout_while_tampering_fails_closed(self):
+        import blog_repository_lock as mod
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(tmp)
+            root = shared_lock_root(repo)
+            lock_path = root / LOCK_NAME
+
+            # 1) Benign concurrent inode swap during _snapshot retries cleanly and acquires
+            lock_path.mkdir(mode=0o700)
+            old = time.time() - 3600
+            os.utime(lock_path, (old, old))
+            real_snapshot = mod._snapshot
+            swap_once = {'done': False}
+
+            def swapping_snapshot(path, *, allow_invalid_owner=False):
+                if path == lock_path and not swap_once['done']:
+                    swap_once['done'] = True
+                    raise mod._LockSnapshotChangedError('simulated concurrent inode swap')
+                return real_snapshot(path, allow_invalid_owner=allow_invalid_owner)
+
+            with patch.object(mod, '_snapshot', side_effect=swapping_snapshot):
+                with shared_blog_repository_lock(repo, owner='retry-ok', timeout_seconds=1, stale_seconds=0.05) as acquired:
+                    self.assertEqual(acquired, lock_path)
+            self.assertFalse(lock_path.exists())
+
+            # 2) Persistent inode churn respects timeout_seconds
+            lock_path.mkdir(mode=0o700)
+            with patch.object(mod, '_snapshot', side_effect=mod._LockSnapshotChangedError('churn')):
+                with self.assertRaises(TimeoutError):
+                    with shared_blog_repository_lock(repo, owner='churn-timeout', timeout_seconds=0.05, stale_seconds=60):
+                        pass
+            lock_path.rmdir()
+
+            # 3) Symlink/mode tampering still fails closed with BlogRepositoryLockError (not retried as changed)
+            lock_path.mkdir(mode=0o755)
+            try:
+                with self.assertRaises(BlogRepositoryLockError) as raised:
+                    with shared_blog_repository_lock(repo, owner='tamper', timeout_seconds=0.5, stale_seconds=60):
+                        pass
+                self.assertNotIsInstance(raised.exception, mod._LockSnapshotChangedError)
+            finally:
+                lock_path.rmdir()
+
 
 if __name__ == '__main__':
     unittest.main()

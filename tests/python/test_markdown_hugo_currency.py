@@ -76,6 +76,14 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
         self.assertEqual(fixed, '均值项目成本为113.54 美元，高于中位数成本93.80 美元。')
         self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
 
+    def test_explicit_chinese_price_context_integer_dollar_is_rendered_as_currency(self):
+        text = '而树莓派 5 4 GB 裸板即标价 $110 且仍需另配这些部件。'
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertEqual(fixed, '而树莓派 5 4 GB 裸板即标价 110 美元且仍需另配这些部件。')
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
+        self.assertEqual(fix_latex_delimiters('标价 $5 + 2'), '标价 $5 + 2')
+        self.assertEqual(fix_latex_delimiters('$20, $30 and $40'), '$20, $30 and $40')
+
     def test_math_like_dollar_expressions_still_fail_closed(self):
         self.assertEqual(fix_latex_delimiters('$5 + 2'), '$5 + 2')
 

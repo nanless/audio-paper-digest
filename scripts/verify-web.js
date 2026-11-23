@@ -198,11 +198,22 @@ function parseDeployRuns(runs, oid, options = {}) {
         if (event && !['push', 'workflow_dispatch', 'dynamic'].includes(event)) return false;
         return true;
     });
-    const match = pagesRuns.find(run => String(run?.headSha || run?.head_sha || '') === String(oid));
-    if (!match) {
+    const matches = pagesRuns.filter(run => String(run?.headSha || run?.head_sha || '') === String(oid));
+    if (matches.length === 0) {
         return { available: true, oid, message: `未找到 oid=${oid} 的 Pages 部署记录（可能尚未触发或需要 --wait）。` };
     }
-    return { ...normalizeDeployRun(match), repository: options.repository || null };
+    if (matches.length > 1) {
+        return {
+            available: true,
+            oid,
+            ambiguous: true,
+            code: 'run_ambiguous',
+            matchedRunIds: matches.map(run => run?.databaseId ?? run?.id ?? null).filter(id => id !== null),
+            message: `提交 ${oid} 对应 ${matches.length} 个 Pages workflow run，无法确定唯一部署记录。`,
+            repository: options.repository || null
+        };
+    }
+    return { ...normalizeDeployRun(matches[0]), repository: options.repository || null };
 }
 
 // 固定 Pages workflow 画像。workflow 文件改变时这里必须显式更新，不能放宽成“看起来像就通过”；
@@ -471,6 +482,13 @@ function verifyWorkflowSource(oid, options = {}) {
     const runGh = options.spawnSync || defaultSpawnSync;
     const spawnOptions = { encoding: 'utf8', timeout: 30000 };
 
+    if (options.run && (options.run.ambiguous || options.run.code === 'run_ambiguous')) {
+        return workflowFailure(
+            'run_ambiguous',
+            options.run.message || `提交 ${oid} 对应多个 workflow run，无法确定唯一部署记录。`,
+            '到 GitHub Actions 手动确认本次发布对应的 run，并清理重复触发后再核验。'
+        );
+    }
     let run = options.run && options.run.runId ? {
         runId: options.run.runId,
         oid: options.run.oid || oid,
@@ -638,7 +656,7 @@ async function waitForDeploy(oid, options = {}) {
     const deadline = Date.now() + waitMs;
     let deploy = deployStatus(oid, options);
     const snapshots = [deploy];
-    while (Date.now() < deadline && deploy && deploy.available && deploy.status !== 'completed') {
+    while (Date.now() < deadline && deploy && deploy.available && !deploy.ambiguous && deploy.status !== 'completed') {
         await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
         deploy = deployStatus(oid, options);
         snapshots.push(deploy);
@@ -650,6 +668,7 @@ function deployExitCode(deploy, options = {}) {
     if (!deploy) return options.workflowSource ? 1 : 0;
     // 显式要求 workflow 源核验时，--allow-degraded 也不能把缺失/不符的证据升级成通过。
     if (options.workflowSource && deploy.workflowSourceVerified !== true) return 1;
+    if (deploy.ambiguous || deploy.code === 'run_ambiguous') return 1;
     if (!deploy.available) return options.allowDegraded ? 0 : 1;
     if (deploy.status === 'completed') {
         if (deploy.conclusion !== 'success') return 1;

@@ -168,7 +168,22 @@ function plan(failures) {
     const byCommand = new Map();
     for (const failure of failures) {
         const key = failure.command;
-        if (!byCommand.has(key)) byCommand.set(key, { command: key, code: failure.code, label: failure.label, retryable: failure.retryable, items: [] });
+        if (!byCommand.has(key)) {
+            byCommand.set(key, {
+                command: key,
+                code: failure.code,
+                codes: [failure.code],
+                label: failure.label,
+                labels: [failure.label],
+                retryable: Boolean(failure.retryable),
+                items: []
+            });
+        } else {
+            const group = byCommand.get(key);
+            if (!group.codes.includes(failure.code)) group.codes.push(failure.code);
+            if (!group.labels.includes(failure.label)) group.labels.push(failure.label);
+            group.retryable = Boolean(group.retryable && failure.retryable);
+        }
         byCommand.get(key).items.push(failure);
     }
     return [...byCommand.values()].sort((left, right) => left.command.localeCompare(right.command));
@@ -181,8 +196,10 @@ function render(date, failures, groups, snapshot = null) {
         for (const blocker of snapshot.blockers) lines.push(`输入：${blocker.kind} ${blocker.state}${blocker.detail ? `（${blocker.detail}）` : ''}`);
     }
     for (const group of groups) {
+        const labelDisplay = Array.isArray(group.labels) && group.labels.length > 1 ? group.labels.join(' / ') : group.label;
+        const codeDisplay = Array.isArray(group.codes) && group.codes.length > 1 ? group.codes.join(', ') : group.code;
         lines.push(`\n建议入口：${group.command}`);
-        lines.push(`  类型：${group.label}（${group.code}，${group.retryable ? '可重试' : '需检查后再试'}）`);
+        lines.push(`  类型：${labelDisplay}（${codeDisplay}，${group.retryable ? '可重试' : '需检查后再试'}）`);
         for (const item of group.items.slice(0, 8)) {
             lines.push(`  - ${item.source === 'review' ? `页面 ${item.page || '?'}` : `论文 ${item.paperId || '?'}`}：${item.message}`);
         }
@@ -236,7 +253,8 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
         if (!group.command.startsWith('npm run ')) { skipped += 1; console.log(`\n跳过非 npm 命令（请手工执行）：${group.command}`); continue; }
         const args = buildExecutionArgs(group.command, date);
         if (!args) { skipped += 1; console.log(`\n需手工执行（含占位符或自指）：${group.command}`); continue; }
-        console.log(`\n执行：npm ${args.join(' ')}（来自 ${group.code}）`);
+        const groupCodes = Array.isArray(group.codes) && group.codes.length ? group.codes.join(', ') : group.code;
+        console.log(`\n执行：npm ${args.join(' ')}（来自 ${groupCodes}）`);
         const result = (dependencies.spawnSync || spawnSync)('npm', args, { stdio: 'inherit', cwd: ROOT });
         if (result.status !== 0) return result.status || 1;
     }

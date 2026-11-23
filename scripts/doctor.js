@@ -30,6 +30,11 @@ const { spawnSync } = require('node:child_process');
 const {
     hasAccountPoolHeader
 } = require('./llm-account-pool.js');
+const {
+    isIpLiteral,
+    isGloballyRoutableIp,
+    isValidHttpConnectProxyUrl
+} = require('./lib/public-network-policy.js');
 // 复用 config:check 的集中 .env schema：必填项、模型名、密钥识别与运行时一致的解析。
 const {
     EXPECTED_MODEL: ENV_SCHEMA_EXPECTED_MODEL,
@@ -520,8 +525,10 @@ function evaluateSecondaryModel(env) {
             '检查 .env 的 PAPER_ANALYZER_SECONDARY_ENDPOINT');
     }
     if (!SUPPORTED_MODELS.includes(model)) {
+        const primaryConfigured = String(env.PAPER_ANALYZER_MODEL || '').trim();
+        const suggestedModel = SUPPORTED_MODELS.includes(primaryConfigured) ? primaryConfigured : REQUIRED_MODEL;
         return makeCheck('fail', '副模型配置', `副模型 ${model} 不在受支持清单（可选 ${SUPPORTED_MODELS.join(' / ')}；endpoint ${endpoint}；API Key 已配置，值不显示）`,
-            `把 .env 的 PAPER_ANALYZER_SECONDARY_MODEL 设为 ${REQUIRED_MODEL}`);
+            `把 .env 的 PAPER_ANALYZER_SECONDARY_MODEL 设为 ${suggestedModel}`);
     }
     return makeCheck('ok', '副模型配置', `副模型 ${model}（endpoint ${endpoint}；API Key 已配置，值不显示）`);
 }
@@ -569,17 +576,42 @@ function evaluateCredentialIsolation(env) {
 }
 
 function resolveHttpConnectProxy(env) {
+    // 与 public-network-policy / project_env.py / utils.js 保持一致：
+    // 只检查首个非空代理变量（含纯空白值也视为显式配置并 fail-closed），非法时不向低优先级穿透。
     const candidates = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'];
-    let invalid = null;
-    for (const key of candidates) {
-        if (!hasEnvValue(env, key)) continue;
-        const value = String(env[key]).trim();
+    const firstKey = candidates.find(key => isPlainObject(env) && typeof env[key] === 'string' && env[key].length > 0);
+    if (firstKey) {
+        const value = env[firstKey];
+        if (/[\u0000-\u0020\u007f\\]/.test(value)) {
+            return {
+                url: null,
+                source: firstKey,
+                error: `${firstKey} 包含空白、控制字符或反斜杠；需要 http:// 或 https:// 的 HTTP CONNECT 地址`
+            };
+        }
         try {
-            const protocol = new URL(value).protocol;
-            if (protocol === 'http:' || protocol === 'https:') return { url: value, source: key, error: null };
-            if (!invalid) invalid = { key, protocol };
+            const parsed = new URL(value);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                return {
+                    url: null,
+                    source: firstKey,
+                    error: `${firstKey} 的协议为 ${parsed.protocol}；需要 http: 或 https: 的 HTTP CONNECT 地址`
+                };
+            }
+            if (isValidHttpConnectProxyUrl(value)) {
+                return { url: value, source: firstKey, error: null };
+            }
+            return {
+                url: null,
+                source: firstKey,
+                error: `${firstKey} 缺少合法主机名或端口（禁止端口 0）；需要 http:// 或 https:// 的 HTTP CONNECT 地址`
+            };
         } catch (_error) {
-            if (!invalid) invalid = { key, protocol: '非法 URL' };
+            return {
+                url: null,
+                source: firstKey,
+                error: `${firstKey} 的协议为 非法 URL；需要 http: 或 https: 的 HTTP CONNECT 地址`
+            };
         }
     }
     for (const key of ['all_proxy', 'ALL_PROXY']) {
@@ -587,9 +619,6 @@ function resolveHttpConnectProxy(env) {
         let protocol = '未知协议';
         try { protocol = new URL(String(env[key])).protocol; } catch (_error) { /* 保持未知 */ }
         return { url: null, source: key, error: `只配置了 ${key}（${protocol}）；muse-spark 与 arXiv 需要 HTTP(S) CONNECT 代理` };
-    }
-    if (invalid) {
-        return { url: null, source: invalid.key, error: `${invalid.key} 的协议为 ${invalid.protocol}；需要 http: 或 https: 的 HTTP CONNECT 地址` };
     }
     return { url: null, source: null, error: '未配置 HTTPS_PROXY/HTTP_PROXY' };
 }
@@ -1233,59 +1262,50 @@ function evaluateRssProbe(probe, targetDate, options = {}) {
 const MAX_PROBE_REDIRECTS = 3;
 
 function isPrivateOrReservedHost(hostname) {
-    const host = String(hostname == null ? '' : hostname).trim().toLowerCase().replace(/^\[|\]$/g, '');
+    const host = String(hostname == null ? '' : hostname)
+        .trim()
+        .toLowerCase()
+        .replace(/^\[|\]$/g, '')
+        .replace(/\.+$/, '');
     if (!host) return true;
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
-    if (host.includes(':')) {
-        if (host === '::' || host === '::1') return true;
-        if (/^f[cd]/.test(host)) return true; // fc00::/7 ULA
-        if (/^fe[89ab]/.test(host)) return true; // fe80::/10 link-local
-        if (/^ff/.test(host)) return true; // ff00::/8 multicast
-        if (/^64:ff9b::/.test(host)) return true; // NAT64
-        if (/^2002:/.test(host)) return true; // 6to4
-        if (host.startsWith('::ffff:')) {
-            // WHATWG URL 会把 IPv4-mapped 写成十六进制（如 ::ffff:7f00:1），
-            // 先还原为点分 IPv4 再走同一套私网判断；无法还原时按保留处理。
-            const tail = host.slice(7);
-            const groups = tail.split(':').filter(Boolean);
-            if (groups.length === 2 && groups.every(g => /^[0-9a-f]{1,4}$/.test(g))) {
-                const hi = parseInt(groups[0], 16), lo = parseInt(groups[1], 16);
-                const ipv4 = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
-                return isPrivateOrReservedHost(ipv4);
-            }
-            return true;
-        }
-        return false;
+    if (host.includes(':') || host.includes('%')) {
+        return !isGloballyRoutableIp(host);
     }
-    const octets = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (!octets) return false; // 普通域名交给代理/DNS 解析
-    const numbers = octets.slice(1).map(Number);
-    if (numbers.some(value => value > 255)) return true;
-    const [a, b] = numbers;
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true; // link-local
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-    if (a === 192 && b === 0) return true; // 192.0.0/24、192.0.2/24
-    if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
-    if (a === 198 && b === 51) return true; // 198.51.100/24
-    if (a === 203 && b === 0) return true; // 203.0.113/24
-    if (a >= 224) return true; // multicast / reserved
+    if (isIpLiteral(host)) {
+        return !isGloballyRoutableIp(host);
+    }
+    if (/^(?:0x[0-9a-f]+|0[0-7]*|\d+)(?:\.(?:0x[0-9a-f]+|0[0-7]*|\d+)){0,3}$/.test(host)) {
+        return true;
+    }
     return false;
 }
 
 function assertAllowedProbeUrl(rawUrl) {
+    const raw = String(rawUrl == null ? '' : rawUrl);
+    if (!raw || /[\u0000-\u0020\u007f\\]/.test(raw)) {
+        throw Object.assign(new Error(`探测 URL 非法: ${truncatedText(rawUrl, 80)}`), { code: 'PROBE_URL_INVALID' });
+    }
+    const authorityMatch = raw.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]+)/);
+    if (!authorityMatch) {
+        throw Object.assign(new Error(`探测 URL 非法: ${truncatedText(rawUrl, 80)}`), { code: 'PROBE_URL_INVALID' });
+    }
     let parsed;
     try {
-        parsed = new URL(String(rawUrl));
+        parsed = new URL(raw);
     } catch (_error) {
         throw Object.assign(new Error(`探测 URL 非法: ${truncatedText(rawUrl, 80)}`), { code: 'PROBE_URL_INVALID' });
+    }
+    if (parsed.username || parsed.password || authorityMatch[1].includes('@')) {
+        throw Object.assign(new Error('探测 URL 禁止包含认证信息'), { code: 'PROBE_URL_INVALID' });
+    }
+    if (parsed.port === '0') {
+        throw Object.assign(new Error('探测 URL 端口非法'), { code: 'PROBE_URL_INVALID' });
     }
     if (parsed.protocol !== 'https:') {
         throw Object.assign(new Error(`探测只允许 HTTPS: ${parsed.protocol}//${parsed.hostname}`), { code: 'PROBE_URL_INSECURE' });
     }
-    const normalizedHost = String(parsed.hostname || '').replace(/\.$/, '');
+    const normalizedHost = String(parsed.hostname || '').replace(/\.+$/, '');
     if (isPrivateOrReservedHost(normalizedHost)) {
         throw Object.assign(new Error(`探测拒绝私网/保留地址: ${parsed.hostname}`), { code: 'PROBE_URL_PRIVATE' });
     }
@@ -1532,7 +1552,7 @@ async function runDoctor(options = {}) {
         }));
     }
     checks.push(...safeCollect('HTTP 代理', () => (envUsable ? evaluateProxy(env) : notEvaluated('HTTP 代理'))));
-    checks.push(...safeCollect('运行环境', () => evaluateSandbox(env)));
+    checks.push(...safeCollect('运行环境', () => evaluateSandbox(options.processEnv || process.env)));
     checks.push(...safeCollect('工作区角色', () => evaluateWorkspaceRole(deps.readWorkspaceRole())));
     checks.push(...safeCollect('磁盘占用', () => checkDiskUsage(deps.measureDisk())));
     checks.push(...safeCollect('博客仓库', () => evaluateBlogRepo({

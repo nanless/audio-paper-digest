@@ -609,13 +609,16 @@ def _build_visual_audit(document: Any, format_reference: dict[str, Any] | None =
     figure_candidates: list[dict[str, Any]] = []
     embedded_images: list[dict[str, Any]] = []
     visual_bytes = 0
+    encoded_visual_bytes = 0
     for page_number, page in enumerate(document, start=1):
         pixmap = page.get_pixmap(matrix=None, dpi=VISUAL_RENDER_DPI, alpha=False)
         png_bytes = pixmap.tobytes("png")
+        encoded_png = base64.b64encode(png_bytes).decode("ascii")
         visual_bytes += len(png_bytes)
-        if visual_bytes > MAX_VISUAL_AUDIT_BYTES:
+        encoded_visual_bytes += len(encoded_png)
+        if visual_bytes > MAX_VISUAL_AUDIT_BYTES or encoded_visual_bytes > MAX_DERIVED_BYTES:
             raise ConferencePdfExtractionError(
-                f"visual audit exceeds the derived artifact limit ({MAX_VISUAL_AUDIT_BYTES} bytes): actual {visual_bytes}"
+                f"visual audit exceeds the derived artifact limit ({MAX_VISUAL_AUDIT_BYTES} raw / {MAX_DERIVED_BYTES} encoded bytes): actual {visual_bytes} raw / {encoded_visual_bytes} encoded"
             )
         render_sha = sha256_bytes(png_bytes)
         pages.append({
@@ -626,7 +629,7 @@ def _build_visual_audit(document: Any, format_reference: dict[str, Any] | None =
             "height": int(pixmap.height),
             "sha256": render_sha,
             "bytes": len(png_bytes),
-            "pngBase64": base64.b64encode(png_bytes).decode("ascii"),
+            "pngBase64": encoded_png,
         })
 
         for candidate in _formula_layout_candidates(page, format_reference):
@@ -763,19 +766,21 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
         try:
             with _quiet_pymupdf_output():
                 document = fitz.open(stream=pdf_bytes, filetype="pdf")
-                if document.needs_pass:
-                    raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
-                if len(document) > MAX_PAGES:
-                    raise ConferencePdfExtractionError(f"PDF page count exceeds {MAX_PAGES}: actual {len(document)}")
-                pages = []
-                extracted_bytes = 0
-                for page in document:
-                    text = _normalize_page_text(page.get_text("text", sort=True))
-                    extracted_bytes += len(text.encode("utf-8")) + len(PAGE_SEPARATOR.encode("utf-8"))
-                    if extracted_bytes > MAX_DERIVED_BYTES:
-                        raise ConferencePdfExtractionError(f"extracted text exceeds the derived artifact limit: {extracted_bytes} > {MAX_DERIVED_BYTES}")
-                    pages.append(text)
-                document.close()
+                try:
+                    if document.needs_pass:
+                        raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
+                    if len(document) > MAX_PAGES:
+                        raise ConferencePdfExtractionError(f"PDF page count exceeds {MAX_PAGES}: actual {len(document)}")
+                    pages = []
+                    extracted_bytes = 0
+                    for page in document:
+                        text = _normalize_page_text(page.get_text("text", sort=True))
+                        extracted_bytes += len(text.encode("utf-8")) + len(PAGE_SEPARATOR.encode("utf-8"))
+                        if extracted_bytes > MAX_DERIVED_BYTES:
+                            raise ConferencePdfExtractionError(f"extracted text exceeds the derived artifact limit: {extracted_bytes} > {MAX_DERIVED_BYTES}")
+                        pages.append(text)
+                finally:
+                    document.close()
         except ConferencePdfExtractionError:
             raise
         except Exception as exc:  # PyMuPDF 的解析异常因版本而异。
@@ -1356,13 +1361,15 @@ def load_pypdf_backend(format_reference: dict[str, Any] | None = None) -> Extrac
         try:
             with _quiet_pymupdf_output():
                 document = fitz.open(stream=pdf_bytes, filetype="pdf")
-                if document.needs_pass:
-                    raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
-                result = _build_visual_audit(document, format_reference)
-                result["backend"] = {"name": "pymupdf", "version": version}
-                result.pop("auditSha256", None)
-                result["auditSha256"] = _stable_hash(result)
-                document.close()
+                try:
+                    if document.needs_pass:
+                        raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
+                    result = _build_visual_audit(document, format_reference)
+                    result["backend"] = {"name": "pymupdf", "version": version}
+                    result.pop("auditSha256", None)
+                    result["auditSha256"] = _stable_hash(result)
+                finally:
+                    document.close()
             return result
         except ConferencePdfExtractionError:
             raise

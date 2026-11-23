@@ -105,4 +105,22 @@ describe('test-api-key 备用账号边界', () => {
         assert.strictEqual(config.model, '');
         assert.deepStrictEqual(config.apiKeys, ['primary-key']);
     });
+
+    it('副模型继承主 Go 池包含第三凭据，独立副池也支持副第三凭据', () => {
+        const inherited = resolveApiKeyTestConfig({
+            ...primaryGo,
+            PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY: 'primary-third-key',
+            PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://opencode.ai/zen/go/v1'
+        }, true);
+        assert.deepStrictEqual(inherited.apiKeys, ['primary-key', 'primary-fallback-key', 'primary-third-key']);
+
+        const explicit = resolveApiKeyTestConfig({
+            ...primaryGo,
+            PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://opencode.ai/zen/go/v1',
+            PAPER_ANALYZER_SECONDARY_API_KEY: 'secondary-key',
+            PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: 'secondary-fallback-key',
+            PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY: 'secondary-third-key'
+        }, true);
+        assert.deepStrictEqual(explicit.apiKeys, ['secondary-key', 'secondary-fallback-key', 'secondary-third-key']);
+    });
 });

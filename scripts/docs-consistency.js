@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const ROOT_DOCS = ['README.md', 'README.en.md', 'AGENTS.md', 'scripts/README.md'];
+const ROOT_DOCS = ['README.md', 'README.en.md', 'AGENTS.md', 'SKILL.md', 'scripts/README.md', 'scripts/README.en.md', 'manual/README.md', 'manual/README.en.md'];
 const MARKDOWN_DIRS = ['docs', 'skills'];
 const COMMAND = /npm run ([a-z][a-z0-9:_-]*)/g;
 const VERSION_CLAIMS = [
@@ -193,9 +193,9 @@ function checkForbidden(files, root = ROOT) {
     return issues;
 }
 
-// 文档提到的 PD_* 环境变量必须真的被代码读取。
+// 文档提到的 PD_* 环境变量必须真的被代码读取（移除已不存在的 apps/src）。
 const ENV_NAME = /\bPD_[A-Z0-9_]+\b/g;
-const ENV_DIRS = ['scripts', 'apps/macos', 'apps/android', 'apps/src', 'tests'];
+const ENV_DIRS = ['scripts', 'apps/macos', 'apps/android', 'tests'];
 
 function collectEnvNames(root = ROOT) {
     const names = new Set();

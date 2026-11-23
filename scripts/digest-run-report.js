@@ -656,12 +656,41 @@ function buildDigestRunReport(targetDate, options = {}) {
         && filterSnapshotsComplete
     );
     // 官方 PDF 全部候选地址 404 的论文按规则少量跳过；跳过记录保存在封存来源运行目录里。
+    const dailySourceIssues = [];
     let sourceSkipRecord = null;
     if (deep && !Array.isArray(deep) && deep.dailyFreshSourceRun) {
         try {
             const plan = require('./lib/daily-fresh-source-plan.js')
                 .readDailyFreshSourcePlan(deep.dailyFreshSourceRun);
-            sourceSkipRecord = require('./lib/daily-source-skip.js').readDailySourceSkips(plan);
+            let planBindingOk = true;
+            if (plan.batchDate !== targetDate) {
+                dailySourceIssues.push(`dailyFreshSourceRun.batchDate (${plan.batchDate}) 必须等于目标日期 (${targetDate})`);
+                planBindingOk = false;
+            }
+            if (filtered && filtered.batchId !== undefined && plan.batchId !== filtered.batchId) {
+                dailySourceIssues.push(`dailyFreshSourceRun.batchId (${plan.batchId}) 必须等于 filtered-papers.json (${filtered.batchId})`);
+                planBindingOk = false;
+            }
+            if (deep.batchId !== undefined && plan.batchId !== deep.batchId) {
+                dailySourceIssues.push(`dailyFreshSourceRun.batchId (${plan.batchId}) 必须等于 deep batchId (${deep.batchId})`);
+                planBindingOk = false;
+            }
+            if (filtered && filtered.status === 'complete') {
+                const filteredIds = filteredBatch.map(normalizedId).filter(Boolean);
+                const sortedFilteredIds = [...new Set(filteredIds)].sort();
+                const sortedPlanIds = [...plan.paperIds].sort();
+                if (filteredIds.length !== filteredBatch.length
+                    || sortedFilteredIds.length !== filteredIds.length
+                    || sortedPlanIds.length !== sortedFilteredIds.length
+                    || !sortedPlanIds.every((id, index) => id === sortedFilteredIds[index])) {
+                    dailySourceIssues.push('dailyFreshSourceRun.paperIds 与 complete filtered-papers.json 不一致');
+                    planBindingOk = false;
+                }
+            }
+            if (planBindingOk) {
+                const dailySourceSkip = require('./lib/daily-source-skip.js');
+                sourceSkipRecord = dailySourceSkip.readDailySourceSkips(plan, { limit: dailySourceSkip.MAX_LIMIT });
+            }
         } catch (error) {
             readProblems.push({ path: Config.FILES.deepAnalysisResult,
                 kind: 'daily-source-skip', message: error.message });
@@ -671,6 +700,9 @@ function buildDigestRunReport(targetDate, options = {}) {
     const skippedOutsideFiltered = [...sourceSkippedIds].filter(id =>
         !filteredBatch.some(paper => normalizedId(paper) === id));
     const analysisBatch = filteredBatch.filter(paper => !sourceSkippedIds.has(normalizedId(paper)));
+    if (filtered && filteredBatch.length > 0 && analysisBatch.length === 0) {
+        dailySourceIssues.push('本批入选论文全部被来源跳过，没有可分析论文');
+    }
     // total 统计实际分析记录，expected 和 missing 另行表示入选集合并扣除已跳过的论文。
     const deepIds = new Set(deepBatch.map(normalizedId).filter(Boolean));
     const analysisExpected = filtered ? analysisBatch.length : null;
@@ -685,7 +717,6 @@ function buildDigestRunReport(targetDate, options = {}) {
     // 至少有一篇可发布的分析；豁免不会把全失败批次变成空内容发布。
     const llmApiComplete = requiredAnalysis.length > 0
         && requiredAnalysis.every(llmApiPaperComplete);
-    const dailySourceIssues = [];
     if (deep && !Array.isArray(deep)) {
         validateDailyFreshSourceRun(deepSnapshot.path || Config.FILES.deepAnalysisResult, deep, deepBatch, dailySourceIssues);
     }

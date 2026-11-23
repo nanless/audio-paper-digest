@@ -283,4 +283,56 @@ class DailyRepublicationTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.activate()
         self.assertTrue(self.receipt_path.exists())
 
+    def test_republish_reanalyzed_cli_and_retirement_invariants(self):
+        valid = M.parse_generation_args(['--date', DATE, '--republish', RUN, '--republish-reanalyzed'])
+        self.assertEqual(valid['republish_id'], RUN)
+        self.assertTrue(valid['republish_reanalyzed'])
+        for argv in [
+            ['--date', DATE, '--republish-reanalyzed'],
+            ['--date', DATE, '--republish', RUN, '--republish-reanalyzed', '--republish-reanalyzed'],
+        ]:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(__import__('io').StringIO()):
+                with self.assertRaises(SystemExit):
+                    M.parse_generation_args(argv)
+
+        # Simulate a re-analyzed formal file with the same date & paperIds but changed analysis bytes
+        old_ref = json.loads(self.manifest_path.read_bytes())['inputSourceReference']
+        reanalyzed = json.loads(self.formal.read_bytes())
+        reanalyzed['reanalyzedMarker'] = 'wave9-updated'
+        self.formal.write_bytes(R.encoded(reanalyzed))
+
+        # Default (same-input) mode MUST still reject changed formal analysis bytes
+        with self.assertRaisesRegex(ValueError, '原发布输入不是当前完整正式分析字节'):
+            self.activate()
+
+        # Reanalyzed mode rejects mismatched paperIds
+        mismatch = copy.deepcopy(reanalyzed)
+        mismatch['papers'][0]['arxivId'] = '2609.99999'
+        self.formal.write_bytes(R.encoded(mismatch))
+        with self.assertRaises(Exception):
+            R.activate(M, DATE, RUN, 'b' * 64, 'c' * 64, allow_reanalyzed=True)
+        self.formal.write_bytes(R.encoded(reanalyzed))
+
+        # Reanalyzed mode rejects drifted blog page
+        page = self.repo / f'content/posts/{DATE}.md'
+        before_page = page.read_bytes()
+        page.write_bytes(b'drifted page')
+        with self.assertRaisesRegex(ValueError, '漂移'):
+            R.activate(M, DATE, RUN, 'b' * 64, 'c' * 64, allow_reanalyzed=True)
+        page.write_bytes(before_page)
+
+        # Reanalyzed mode succeeds with valid new formal analysis & unchanged published git commit
+        result = R.activate(M, DATE, RUN, 'b' * 64, 'c' * 64, allow_reanalyzed=True)
+        self.assertEqual(result['status'], 'activated')
+        R.assert_no_pending(self.current, DATE)
+        self.assertFalse(self.manifest_path.exists())
+        self.assertFalse(self.receipt_path.exists())
+        intent = R.load_json(self.runs / RUN / 'intent.json')
+        self.assertTrue(intent['reanalyzed'])
+        self.assertEqual(intent['previousInputSourceReference'], old_ref)
+
+        # Same UUID cannot switch back to non-reanalyzed mode
+        with self.assertRaisesRegex(ValueError, '不能切换重分析模式'):
+            R.activate(M, DATE, RUN, 'b' * 64, 'c' * 64, allow_reanalyzed=False)
+
 if __name__ == '__main__': unittest.main()

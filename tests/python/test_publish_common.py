@@ -4572,6 +4572,222 @@ ZETA 与 MusicMagus 的 ΔBPM 数值与两个全局适配系统分成两组，�
         self.assertIn('#音频事件检测 | #可解释性', compound)
         self.assertNotIn('#音频事件检测 #可解释性', compound)
 
+    def test_reasoning_effort_aliases_response_parsing_url_case_and_secondary_tertiary_key(self):
+        import math
+        from publish_common import (
+            build_publish_api_url,
+            normalize_reasoning_effort,
+            parse_publish_response_text,
+        )
+        # reasoning effort aliases
+        for alias in ('max', 'highest', 'maximum', 'MAX', 'HIGHEST'):
+            self.assertEqual(normalize_reasoning_effort(alias, 'muse-spark-1.3-contributor'), 'xhigh')
+            self.assertEqual(normalize_reasoning_effort(alias, 'deepseek-v4.1-flash'), 'max')
+        self.assertEqual(normalize_reasoning_effort('xhigh', 'deepseek-v4.1-flash'), '')
+
+        # parse_publish_response_text defensive handling & multi-block Anthropic join
+        self.assertEqual(parse_publish_response_text('openai', {'choices': []}), '')
+        self.assertEqual(parse_publish_response_text('openai', {'choices': [None]}), '')
+        self.assertEqual(parse_publish_response_text('openai', {'choices': [{'message': None}]}), '')
+        self.assertEqual(parse_publish_response_text('openai', None), '')
+        self.assertEqual(parse_publish_response_text('openai_responses', {'output': 123}), '')
+        self.assertEqual(parse_publish_response_text('openai_responses', {'output': [{'content': 456}]}), '')
+        self.assertEqual(
+            parse_publish_response_text('anthropic', {'content': [
+                {'type': 'thinking', 'thinking': 'hidden'},
+                'malformed-entry',
+                {'type': 'text', 'text': 'first'},
+                {'type': 'text', 'text': 'second'},
+            ]}),
+            'first\nsecond',
+        )
+
+        # validate_publish_api_endpoint_url rejects port 0, whitespace, WHATWG bypasses
+        from publish_common import validate_publish_api_endpoint_url
+        for bad_endpoint in (
+            'https://opencode.ai:0/zen/go/v1',
+            ' https://opencode.ai/zen/go/v1 ',
+            'https://opencode.ai/zen/go/v1\n',
+            'https:///@opencode.ai/zen/go/v1',
+            'https:\\\\@opencode.ai/zen/go/v1',
+            'https://@opencode.ai/zen/go/v1',
+        ):
+            with self.assertRaises(ValueError, msg=bad_endpoint):
+                validate_publish_api_endpoint_url(bad_endpoint)
+
+        # blog_review_image_loader IDNA dot SSRF, pure-dot host, malformed IPv6, control chars, Content-Type trim, HTTPException, redirect to noncanonical IPv4
+        import http.client
+        import time
+        from blog_review_image_loader import (
+            download_review_image,
+            read_pinned_review_image,
+            resolve_proxy_addresses,
+            validate_public_image_url,
+        )
+        fake_proxy_hooks = {
+            'has_http_connect_proxy': lambda: True,
+            'socket': mock.Mock(
+                getaddrinfo=lambda host, port: [(2, 1, 6, '', ('198.18.0.1', 0))],
+                gaierror=OSError,
+            ),
+        }
+        for bad_img in (
+            'https://198。18。0。1/fig.png',
+            'https://１９８.１８.０.１/fig.png',
+            'https://0xc6120001。/fig.png',
+            'https://localhost。/fig.png',
+            'https://localhost../fig.png',
+            'https://.../fig.png',
+            'https://./fig.png',
+            'https://[::ffff:0xc6120001]/fig.png',
+            'https://[not-an-ip]/fig.png',
+            ' https://example.org/fig.png',
+            'https://example.org\r\nX-Test:1/fig.png',
+            'https://\xa0198.18.0.1/fig.png',
+            'https://localhost\xa0/fig.png',
+            'https://\u3000198.18.0.1/fig.png',
+            'https://example.com\uff3c/fig.png',
+            'https://198.18.0.1\uff3b/fig.png',
+            'https://198.18.0.1\uff3d/fig.png',
+        ):
+            with self.assertRaises(PublishDataValidationError, msg=bad_img):
+                validate_public_image_url(bad_img, hooks=fake_proxy_hooks)
+
+        for bad_proxy in (
+            'http://127.0.0.1:0',
+            'http://[bad/',
+            'http://[::1:xyz]/',
+            'http://proxy\xa0.local:7897',
+            'http://proxy\u3000.local:7897',
+            'http://proxy\uff3c.local:7897',
+            'http://proxy\uff3b\uff3d.local:7897',
+            'http://-proxy.local:7897',
+            'http://proxy..local:7897',
+            'http://proxy.local%20:7897',
+            'http://[::1%25eth0]:7897',
+        ):
+            with self.assertRaises(PublishDataValidationError, msg=bad_proxy):
+                resolve_proxy_addresses(bad_proxy)
+
+        from blog_review_image_loader import _normalize_idna_hostname
+        for bad_direct_host in ('evil%20\xa0.com', 'evil%0d%0a.com', 'evil:\u3000'):
+            with self.assertRaises(PublishDataValidationError, msg=bad_direct_host):
+                _normalize_idna_hostname(bad_direct_host, PublishDataValidationError)
+
+        # Redirect landing on noncanonical IPv4 literal must be rejected on second hop
+        redirect_hooks = {
+            '_validate_public_image_url': lambda u: validate_public_image_url(u, hooks=fake_proxy_hooks),
+            'get_required_fetch_proxy': lambda: 'http://127.0.0.1:7897',
+            '_resolve_proxy_addresses': lambda p: {'127.0.0.1'},
+            '_read_pinned_review_image': lambda *a, **kw: {'status': 302, 'location': 'https://0xc6120001/fig.png'},
+        }
+        with self.assertRaises(PublishDataValidationError):
+            download_review_image('https://example.org/a.png', hooks=redirect_hooks)
+
+        # http.client.RemoteDisconnected must be wrapped into PublishDataValidationError
+        def raise_remote_disconnected(*a, **kw):
+            raise http.client.RemoteDisconnected('remote closed')
+
+        http_exc_hooks = {
+            '_validate_public_image_url': lambda u: {'93.184.216.34'},
+            'get_required_fetch_proxy': lambda: 'http://127.0.0.1:7897',
+            '_resolve_proxy_addresses': lambda p: {'127.0.0.1'},
+            '_read_pinned_review_image': raise_remote_disconnected,
+            'time': mock.Mock(monotonic=mock.Mock(side_effect=[0.0, 999.0, 999.0, 999.0]), sleep=lambda _s: None),
+        }
+        with self.assertRaises(PublishDataValidationError):
+            download_review_image('https://example.org/a.png', hooks=http_exc_hooks)
+
+        # Content-Type with leading/trailing whitespace is accepted after strip
+        fake_resp = mock.MagicMock()
+        fake_resp.status = 200
+        fake_resp.headers = {'Content-Type': '  image/png ; charset=binary '}
+        fake_resp.read.side_effect = [b'\x89PNG\r\n\x1a\n', b'']
+        fake_mgr = mock.MagicMock()
+        fake_mgr.request.return_value = fake_resp
+        with mock.patch('urllib3.ProxyManager', return_value=fake_mgr):
+            res = read_pinned_review_image(
+                'https://example.org/a.png',
+                {'93.184.216.34'},
+                'http://127.0.0.1:7897',
+                {'127.0.0.1'},
+                time.monotonic() + 30,
+                hooks={'_validate_response_peer_with_transport': lambda *a, **kw: None},
+            )
+            self.assertEqual(res['media_type'], 'image/png')
+
+        # build_publish_api_url case-insensitive host & suffix
+        self.assertEqual(
+            build_publish_api_url('anthropic', 'https://TOKEN-PLAN-CN.XIAOMIMIMO.COM/V1'),
+            'https://TOKEN-PLAN-CN.XIAOMIMIMO.COM/anthropic/v1/messages',
+        )
+        self.assertEqual(
+            build_publish_api_url('anthropic', 'https://API.KIMI.COM/CODING'),
+            'https://API.KIMI.COM/coding/v1/messages',
+        )
+        self.assertEqual(
+            build_publish_api_url('openai_responses', 'https://OPENCODE.AI/ZEN/GO/V1/RESPONSES'),
+            'https://OPENCODE.AI/ZEN/GO/V1/RESPONSES',
+        )
+        self.assertEqual(
+            build_publish_api_url('openai', 'https://EXAMPLE.COM/ANTHROPIC'),
+            'https://EXAMPLE.COM/v1/chat/completions',
+        )
+
+        # secondary tertiary fallback key merged into secondary pool
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            seen_auths = []
+
+            def fake_open(req, timeout=None):
+                seen_auths.append(req.get_header('Authorization'))
+                resp = mock.MagicMock()
+                resp.__enter__.return_value = resp
+                resp.status = 200
+                resp.read.return_value = b'{"output_text":"ok","status":"completed"}'
+                return resp
+
+            opener = mock.Mock()
+            opener.open.side_effect = fake_open
+            env = {
+                'PAPER_ANALYZER_API_KEY': 'p-key',
+                'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+                'PAPER_ANALYZER_MODEL': 'muse-spark-1.3-contributor',
+                'PAPER_ANALYZER_SECONDARY_API_KEY': 's-key-1',
+                'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY': 's-key-3',
+                'PAPER_ANALYZER_SECONDARY_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+                'PAPER_ANALYZER_SECONDARY_MODEL': 'muse-spark-1.3-contributor',
+                'HTTPS_PROXY': 'http://127.0.0.1:7897',
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', state_file), \
+                    mock.patch('urllib.request.build_opener', return_value=opener):
+                self.assertEqual(call_publish_llm_api('hi', required=True, use_secondary=True), 'ok')
+                self.assertEqual(call_publish_llm_api('hi2', required=True, use_secondary=True), 'ok')
+            self.assertEqual(set(seen_auths), {'Bearer s-key-1', 'Bearer s-key-3'})
+
+        # Retry-After with None headers / NaN / negative does not crash or pass NaN to sleep
+        for headers in (None, {'Retry-After': 'NaN'}, {'Retry-After': '-10'}, {'Retry-After': 'inf'}):
+            err = urllib.error.HTTPError('https://api.example.com/v1', 503, 'Service Unavailable', headers, None)
+            ok_resp = mock.MagicMock()
+            ok_resp.__enter__.return_value = ok_resp
+            ok_resp.status = 200
+            ok_resp.read.return_value = b'{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}'
+            opener = mock.Mock()
+            opener.open.side_effect = [err, ok_resp]
+            env = {
+                'PAPER_ANALYZER_API_KEY': 'k1',
+                'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+                'PAPER_ANALYZER_MODEL': 'mimo-v2.6-flash',
+            }
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch('urllib.request.build_opener', return_value=opener), \
+                    mock.patch('publish_common.time.sleep') as sleep_mock:
+                self.assertEqual(call_publish_llm_api('hi', required=True, max_retries=2), 'ok')
+                self.assertEqual(sleep_mock.call_count, 1)
+                delay = sleep_mock.call_args.args[0]
+                self.assertTrue(math.isfinite(delay) and 0.0 <= delay <= 61.0)
+
 
 if __name__ == '__main__':
     unittest.main()

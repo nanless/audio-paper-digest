@@ -71,7 +71,13 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
     }
     for (const entry of entryFiles) add(entry, true);
     // The collector itself controls the closure and is therefore fingerprinted.
-    add('scripts/lib/workflow-implementation-files.js');
+    // Keep stems separate from extensions across all rules below so scanning
+    // this file's own literals never promotes optional owners into global roots.
+    add('scripts/lib/workflow-implementation-files' + '.js');
+    const LITERAL_SCAN_SKIP = new Set([
+        'scripts/env-loader' + '.js',
+        'scripts/runtime_guard' + '.py'
+    ]);
     while (pending.length) {
         const filename = pending.shift();
         if (filename === 'scripts/lib/workflow-legacy-codec' + '.js') {
@@ -82,33 +88,41 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
         }
         if (filename === 'scripts/lib/official-conference-acquisition' + '.js') {
             add('package-lock.json', true);
-            add('scripts/icmc-proceedings.py', true);
+            add('scripts/icmc-proceedings' + '.py', true);
         }
         if (filename === 'scripts/lib/protocol-codec' + '.js' || filename === 'scripts/protocol_codec' + '.py') {
             addProtocolCatalogs();
         }
-        // This Python matcher reads rule data through a dynamic Path expression.
-        // Keep its stem separate from the extension: this collector scans its
-        // own literals, and a full code filename here would create a new root.
         if (filename === 'scripts/reader_grouped_vector_column_units' + '.py') {
             add('scripts/lib/validation-rules.json', true);
         }
-        if (['scripts/lib/prompt-evidence.js', 'scripts/prompt_evidence.py'].includes(filename)) {
+        if (['scripts/lib/prompt-evidence' + '.js', 'scripts/prompt_evidence' + '.py'].includes(filename)) {
             add('scripts/lib/git-prompt-evidence-index.json', true);
         }
-        if (filename === 'scripts/prompt_evidence.py') {
+        if (filename === 'scripts/prompt_evidence' + '.py') {
             add('scripts/lib/prompt-current-records.json', true);
             add('scripts/lib/prompt-legacy-records.json', true);
         }
-        if (filename === 'scripts/reader_record_format.py') {
+        if (filename === 'scripts/reader_record_format' + '.py') {
             add('scripts/lib/reader-legacy-records.json', true);
         }
-        if (['scripts/lib/original-file-evidence.js', 'scripts/original_file_evidence.py'].includes(filename)) {
+        if (['scripts/lib/original-file-evidence' + '.js', 'scripts/original_file_evidence' + '.py'].includes(filename)) {
             add('config/original-file-evidence.json', true);
         }
         if (filename === 'scripts/lib/public-network-policy' + '.js'
             || filename === 'scripts/public_network_policy' + '.py') {
             add('config/public-network-policy.json', true);
+        }
+        if (filename === 'scripts/publish-to-blog' + '.py') {
+            add('config/tag-display-policy.json', true);
+            add('config/publish-image-exclusions.json', true);
+            add('config/tag-catalog.json', true);
+        }
+        if (filename === 'scripts/tag_paths' + '.py' || filename === 'scripts/lib/tag-rules' + '.js') {
+            add('config/tag-catalog.json', true);
+        }
+        if (filename === 'scripts/publication_local_replay' + '.py') {
+            add('scripts/publication_replay_policy.json', true);
         }
         if (!CODE.test(filename)) continue;
         const text = fs.readFileSync(path.join(base, filename), 'utf8');
@@ -118,6 +132,7 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
             add(path.join(path.dirname(filename), module + '.py'));
             add('scripts/' + module + '.py');
         }
+        if (LITERAL_SCAN_SKIP.has(filename)) continue;
         for (const match of text.matchAll(LOCAL_LITERAL)) {
             const literal = match[1];
             for (const directory of [path.dirname(filename), '.', 'scripts', 'scripts/lib',

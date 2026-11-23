@@ -802,7 +802,7 @@ function repairCaptionQuotedGlossLinks(markdown) {
             else if (marker[1][0] === fence.char && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
             return line;
         }
-        if (fence || !/^\*论文图\s+\d+。[^\n]*\*$/.test(text)) return line;
+        if (fence || !/^\*论文图\s+\d+[。：:][^\n]*\*$/.test(text)) return line;
         // 新增的修复刻意只处理纯文本的生成图注。
         // 已有的修复各自照旧生效；这里不解析 Markdown 与 TeX 混写的内容。
         const caption = text.slice(1, -1);

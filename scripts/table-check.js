@@ -60,14 +60,38 @@ const CAPTION = /^\s*(?:Table|表)\s*\d+(?:[.:：]|\s|$)/i;
 const SEPARATOR_CELL = /^:?-{1,}:?$/;
 const MEAN_DELTA_LABEL = /^Mean\s*[Δ∆]$/i;
 
-function findGluedDuplicate(text) {
+const VERSION_TOKEN_PATTERN = /(?:^|[^A-Za-z0-9])(v\d+(?:\.\d+)+)(?![A-Za-z0-9]|\.[A-Za-z0-9])/gi;
+
+function findGluedDuplicates(text) {
     const value = normalizeText(text);
-    for (const pattern of GLUED_PATTERNS) {
-        pattern.lastIndex = 0;
-        const match = pattern.exec(value);
-        if (match) return match[0];
+    const versionSpans = [];
+    VERSION_TOKEN_PATTERN.lastIndex = 0;
+    let verMatch;
+    while ((verMatch = VERSION_TOKEN_PATTERN.exec(value)) !== null) {
+        const token = verMatch[1];
+        const start = verMatch.index + (verMatch[0].length - token.length);
+        versionSpans.push([start, start + token.length]);
     }
-    return null;
+    const matches = [];
+    for (let patternIndex = 0; patternIndex < GLUED_PATTERNS.length; patternIndex += 1) {
+        const pattern = GLUED_PATTERNS[patternIndex];
+        pattern.lastIndex = 0;
+        let match;
+        while ((match = pattern.exec(value)) !== null) {
+            const start = match.index;
+            const end = start + match[0].length;
+            const inVersionToken = patternIndex === 1 && versionSpans.some(([vStart, vEnd]) => start > vStart && end <= vEnd);
+            matches.push({ text: match[0], index: start, inVersionToken });
+        }
+    }
+    return matches;
+}
+
+function findGluedDuplicate(text) {
+    const matches = findGluedDuplicates(text);
+    if (!matches.length) return null;
+    const errorMatch = matches.find(item => !item.inVersionToken);
+    return (errorMatch || matches[0]).text;
 }
 
 function hasUnescapedPipe(line) {
@@ -217,13 +241,14 @@ function checkTable(lines) {
             });
         }
         cells.forEach((cell, column) => {
-            const glued = findGluedDuplicate(cell);
-            if (glued) {
-                const numericVersionLike = /^v?\d+\.\d+/.test(glued);
+            const gluedMatches = findGluedDuplicates(cell);
+            if (gluedMatches.length) {
+                const errorMatch = gluedMatches.find(item => !item.inVersionToken);
+                const chosen = errorMatch || gluedMatches[0];
                 issues.push({
-                    severity: numericVersionLike ? 'warn' : 'error',
+                    severity: errorMatch ? 'error' : 'warn',
                     code: 'table-glued-duplicate',
-                    message: `第 ${rowIndex + 2} 行第 ${column + 1} 格疑似粘连复写：${glued}`,
+                    message: `第 ${rowIndex + 2} 行第 ${column + 1} 格疑似粘连复写：${chosen.text}`,
                     howToFix: '核对封存原表的完整单元格值；不要只按重复形状删数字。'
                 });
             }

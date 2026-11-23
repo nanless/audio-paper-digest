@@ -200,6 +200,1068 @@ def markdown_tables(body):
     return tables
 
 
+_HTML_BLOCK_TYPE6_TAGS = (
+    r'address|article|aside|base|basefont|blockquote|body|'
+    r'caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|'
+    r'footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|'
+    r'menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|'
+    r'tfoot|th|thead|title|tr|track|ul'
+)
+
+_COMMONMARK_AUTOLINK_OR_RAW_HTML_RE = re.compile(
+    r'<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20\x7f<>]*>'
+    r"|<[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*>"
+    r'|<!--(?:>|->|[\s\S]*?-->)'
+    r'|<\?[\s\S]*?\?>'
+    r'|<![A-Za-z][^>]*>'
+    r'|<!\[CDATA\[[\s\S]*?\]\]>'
+    r'|</[A-Za-z][A-Za-z0-9-]*[ \t\r\n]*>'
+    r'|<[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t\r\n]*=[ \t\r\n]*(?:[^ \t\r\n"\'=<>`]+|\'[^\']*\'|"[^"]*"))?)*[ \t\r\n]*/?>'
+)
+
+_HTML_BLOCK_TYPE1_START_RE = re.compile(r' {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)', re.IGNORECASE)
+_HTML_BLOCK_TYPE1_END_RE = re.compile(r'</(?:pre|script|style|textarea)>', re.IGNORECASE)
+_HTML_BLOCK_TYPE2_START_RE = re.compile(r' {0,3}<!--')
+_HTML_BLOCK_TYPE2_END_RE = re.compile(r'-->')
+_HTML_BLOCK_TYPE3_START_RE = re.compile(r' {0,3}<\?')
+_HTML_BLOCK_TYPE3_END_RE = re.compile(r'\?>')
+_HTML_BLOCK_TYPE4_START_RE = re.compile(r' {0,3}<![A-Za-z]')
+_HTML_BLOCK_TYPE4_END_RE = re.compile(r'>')
+_HTML_BLOCK_TYPE5_START_RE = re.compile(r' {0,3}<!\[CDATA\[')
+_HTML_BLOCK_TYPE5_END_RE = re.compile(r'\]\]>')
+_HTML_BLOCK_TYPE6_START_RE = re.compile(
+    r' {0,3}</?(?:' + _HTML_BLOCK_TYPE6_TAGS + r')(?:[ \t>]|/>|$)',
+    re.IGNORECASE,
+)
+_HTML_BLOCK_TYPE7_START_RE = re.compile(
+    r' {0,3}(?:'
+    r'<(?!/?(?:pre|script|style|textarea)(?:[ \t/>]|$))[A-Za-z][A-Za-z0-9-]*'
+    r'(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t\r\n"\'=<>`]+|\'[^\'\r\n]*\'|"[^"\r\n]*"))?)*'
+    r'[ \t]*/?>'
+    r'|</[A-Za-z][A-Za-z0-9-]*[ \t]*>'
+    r')[ \t]*$',
+    re.IGNORECASE,
+)
+_THEMATIC_BREAK_RE = re.compile(
+    r' {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})[ \t]*$'
+)
+_ATX_HEADING_RE = re.compile(r' {0,3}#{1,6}(?:[ \t]|$)')
+_ATX_OR_THEMATIC_LINE_RE = re.compile(
+    r' {0,3}(?:#{1,6}(?:[ \t]|$)|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})[ \t]*$)'
+)
+_SETEXT_UNDERLINE_RE = re.compile(r' {0,3}(?:=+|-+)[ \t]*$')
+_LIST_TOKEN_RE = re.compile(r'([-+*]|\d{1,9}[.)])(?=[ \t]|$)')
+
+
+def _commonmark_line_bounds(content, pos):
+    total = len(content)
+    nl = content.find('\n', pos)
+    cr = content.find('\r', pos)
+    if cr >= 0 and (nl < 0 or cr < nl):
+        return cr, (cr + 2 if cr + 1 < total and content[cr + 1] == '\n' else cr + 1)
+    if nl >= 0:
+        return nl, nl + 1
+    return total, total
+
+
+def _cm_peek_ws_cols(raw_line, idx, col, pending_sp):
+    """Measure leading ASCII space/tab visual width from exact line column `col` (4-col tab stops, §2.2)."""
+    cols = pending_sp
+    c = col + pending_sp
+    i = idx
+    n = len(raw_line)
+    while i < n:
+        ch = raw_line[i]
+        if ch == ' ':
+            cols += 1
+            c += 1
+            i += 1
+        elif ch == '\t':
+            step = 4 - (c % 4)
+            cols += step
+            c += step
+            i += 1
+        else:
+            break
+    return cols
+
+
+def _cm_advance_cols(raw_line, idx, col, pending_sp, target_cols):
+    """Consume up to `target_cols` columns of leading ASCII whitespace while tracking exact column & tab remainder."""
+    if target_cols <= 0:
+        return idx, col, pending_sp
+    if target_cols <= pending_sp:
+        return idx, col + target_cols, pending_sp - target_cols
+    rem = target_cols - pending_sp
+    col += pending_sp
+    pending_sp = 0
+    n = len(raw_line)
+    while rem > 0 and idx < n:
+        ch = raw_line[idx]
+        if ch == ' ':
+            idx += 1
+            col += 1
+            rem -= 1
+        elif ch == '\t':
+            step = 4 - (col % 4)
+            idx += 1
+            if step <= rem:
+                col += step
+                rem -= step
+            else:
+                col += rem
+                pending_sp = step - rem
+                rem = 0
+        else:
+            break
+    return idx, col, pending_sp
+
+
+def _cm_effective_with_leading_tabs(raw_line, idx, col, pending_sp):
+    """Return remaining text with leading whitespace expanded to exact visual spaces (for `^ {0,3}` regexes)."""
+    ws_cols = _cm_peek_ws_cols(raw_line, idx, col, pending_sp)
+    n_idx, _n_col, n_pend = _cm_advance_cols(raw_line, idx, col, pending_sp, ws_cols)
+    # n_pend is 0 because all leading ws was consumed
+    return (' ' * ws_cols) + raw_line[n_idx:]
+
+
+def _cm_is_blank(raw_line, idx, pending_sp):
+    return not raw_line[idx:].strip(' \t')
+
+
+def _cm_try_strip_bq(raw_line, idx, col, pending_sp):
+    """Try to consume one CommonMark §5.1 blockquote marker (` {0,3}> ?`) with exact 4-col tab stops."""
+    ws_cols = _cm_peek_ws_cols(raw_line, idx, col, pending_sp)
+    if ws_cols > 3:
+        return None
+    m_idx, m_col, m_pend = _cm_advance_cols(raw_line, idx, col, pending_sp, ws_cols)
+    if m_idx >= len(raw_line) or raw_line[m_idx] != '>':
+        return None
+    # Consume '>'
+    n_idx = m_idx + 1
+    n_col = m_col + 1
+    n_pend = 0
+    # Consume optional single space or 1 column of a tab following '>' (§5.1)
+    if n_idx < len(raw_line):
+        if raw_line[n_idx] == ' ':
+            n_idx += 1
+            n_col += 1
+        elif raw_line[n_idx] == '\t':
+            step = 4 - (n_col % 4)
+            n_idx += 1
+            n_col += 1
+            n_pend = step - 1
+    return n_idx, n_col, n_pend
+
+
+def _cm_try_match_list_marker(raw_line, idx, col, pending_sp):
+    """Match CommonMark §5.2 list marker at cursor.
+    Returns (kind, is_one, req_cols, (n_idx, n_col, n_pend), rest_is_blank) or None.
+    """
+    ws_cols = _cm_peek_ws_cols(raw_line, idx, col, pending_sp)
+    if ws_cols > 3:
+        return None
+    eff = _cm_effective_with_leading_tabs(raw_line, idx, col, pending_sp)
+    # Thematic break (`- - -` or `* * *`) takes precedence over bullet list marker (§4.1/§5.2).
+    if _THEMATIC_BREAK_RE.match(eff):
+        return None
+    m_idx, m_col, _m_pend = _cm_advance_cols(raw_line, idx, col, pending_sp, ws_cols)
+    m = _LIST_TOKEN_RE.match(raw_line, m_idx)
+    if not m:
+        return None
+    marker = m.group(1)
+    kind = 'ol' if marker[0].isdigit() else 'ul'
+    is_one = bool(kind == 'ol' and re.fullmatch(r'0{0,8}1[.)]', marker))
+    after_idx = m.end()
+    after_col = m_col + len(marker)
+    if _cm_is_blank(raw_line, after_idx, 0):
+        req_cols = ws_cols + len(marker) + 1
+        if after_idx < len(raw_line):
+            nxt_cur = _cm_advance_cols(raw_line, after_idx, after_col, 0, 1)
+        else:
+            nxt_cur = (after_idx, after_col, 0)
+        return kind, is_one, req_cols, nxt_cur, True
+    post_ws = _cm_peek_ws_cols(raw_line, after_idx, after_col, 0)
+    if post_ws >= 5:
+        req_cols = ws_cols + len(marker) + 1
+        nxt_cur = _cm_advance_cols(raw_line, after_idx, after_col, 0, 1)
+    else:
+        req_cols = ws_cols + len(marker) + post_ws
+        nxt_cur = _cm_advance_cols(raw_line, after_idx, after_col, 0, post_ws)
+    return kind, is_one, req_cols, nxt_cur, False
+
+
+def _cm_match_containers(raw_line, stack):
+    """Match active container stack (interleaved ['bq'] and ['list', req_cols, kind, empty_first]) on raw_line.
+    Returns (matched_count, (idx, col, pending_sp)).
+    """
+    cur = (0, 0, 0)
+    matched = 0
+    for frame in stack:
+        if frame[0] == 'bq':
+            nxt = _cm_try_strip_bq(raw_line, *cur)
+            if nxt is None:
+                break
+            cur = nxt
+            matched += 1
+        else:
+            if _cm_is_blank(raw_line, cur[0], cur[2]):
+                # CommonMark §5.2 Example 278: an empty list item ends on the first blank line.
+                if frame[3]:
+                    break
+                matched += 1
+            else:
+                ws_cols = _cm_peek_ws_cols(raw_line, *cur)
+                if ws_cols < frame[1]:
+                    break
+                cur = _cm_advance_cols(raw_line, *cur, frame[1])
+                matched += 1
+    return matched, cur
+
+
+def _cm_line_interrupts_paragraph(raw_line, cur, stack, matched):
+    """Return True if the remainder at `cur` starts a CommonMark block that interrupts a paragraph."""
+    if _cm_is_blank(raw_line, cur[0], cur[2]):
+        return True
+    if _cm_try_strip_bq(raw_line, *cur) is not None:
+        return True
+    ws_cols = _cm_peek_ws_cols(raw_line, *cur)
+    if ws_cols >= 4:
+        return False
+    eff = _cm_effective_with_leading_tabs(raw_line, *cur)
+    if _ATX_OR_THEMATIC_LINE_RE.match(eff):
+        return True
+    opened = re.match(r'^ {0,3}(`{3,}|~{3,})([^\r\n]*)', eff)
+    if opened and not (opened.group(1)[0] == '`' and '`' in opened.group(2)):
+        return True
+    if (
+        _HTML_BLOCK_TYPE1_START_RE.match(eff)
+        or _HTML_BLOCK_TYPE2_START_RE.match(eff)
+        or _HTML_BLOCK_TYPE3_START_RE.match(eff)
+        or _HTML_BLOCK_TYPE4_START_RE.match(eff)
+        or _HTML_BLOCK_TYPE5_START_RE.match(eff)
+        or _HTML_BLOCK_TYPE6_START_RE.match(eff)
+    ):
+        return True
+    lm = _cm_try_match_list_marker(raw_line, *cur)
+    if lm is not None:
+        l_kind, is_one, _req_cols, _nxt_cur, rest_is_blank = lm
+        if matched < len(stack):
+            return True
+        if not rest_is_blank and (l_kind == 'ul' or is_one):
+            return True
+    return False
+
+
+def _normalize_cm_link_label(raw_label):
+    """CommonMark 0.31.2 §4.7 link label normalization: strip ASCII WS, collapse internal WS runs, Unicode casefold."""
+    stripped = str(raw_label).strip(' \t\r\n')
+    if not stripped:
+        return ''
+    return re.sub(r'[ \t\r\n]+', ' ', stripped).casefold()
+
+
+def _is_valid_cm_label_text(raw_label):
+    """CommonMark 0.31.2 §4.7/§6.3: link label has <=999 chars, non-blank, no unescaped `[` or `]`."""
+    if not raw_label or len(raw_label) > 999 or not raw_label.strip(' \t\r\n'):
+        return False
+    ascii_punctuation = set(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
+    idx = 0
+    length = len(raw_label)
+    while idx < length:
+        ch = raw_label[idx]
+        if ch == '\\' and idx + 1 < length and raw_label[idx + 1] in ascii_punctuation:
+            idx += 2
+            continue
+        if ch in '[]':
+            return False
+        idx += 1
+    return True
+
+
+def _parse_cm_ref_label(buf, start_pos, limit):
+    """Parse CommonMark §6.3 bracketed reference label `[...]` (including empty `[]`) starting at `start_pos`.
+    Returns `(close_idx, raw_inside)` if syntactically valid `[...]` (<=999 chars, no unescaped `[`), else `None`.
+    """
+    if start_pos >= limit or buf[start_pos] != '[':
+        return None
+    ascii_punctuation = set(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
+    idx = start_pos + 1
+    chars = []
+    while idx < limit:
+        ch = buf[idx]
+        if ch == '\\' and idx + 1 < limit and buf[idx + 1] in ascii_punctuation:
+            chars.append(ch)
+            chars.append(buf[idx + 1])
+            idx += 2
+        elif ch == '[':
+            return None
+        elif ch == ']':
+            return idx, ''.join(chars)
+        else:
+            chars.append(ch)
+            idx += 1
+        if len(chars) > 999:
+            return None
+    return None
+
+
+def _parse_link_ref_def(content, first_inner, first_next, stack):
+    """Parse CommonMark §4.7 link reference definition starting with already-stripped `first_inner`.
+    Continuation lines allow §4.7/§5.1 lazy continuation (stopping at blank lines, paragraph-interrupting blocks,
+    or exact-depth Setext heading underlines per §4.3).
+    Returns `(end_pos, norm_label, dest_url)` if valid, else `None`.
+    """
+    total = len(content)
+    ascii_punctuation = set(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
+
+    def read_cont_line(pos):
+        l_end, l_next = _commonmark_line_bounds(content, pos)
+        raw = content[pos:l_end]
+        matched, cur = _cm_match_containers(raw, stack)
+        if _cm_is_blank(raw, cur[0], cur[2]):
+            return None
+        if _cm_line_interrupts_paragraph(raw, cur, stack, matched):
+            return None
+        inner = _cm_effective_with_leading_tabs(raw, *cur)
+        if matched == len(stack) and _cm_peek_ws_cols(raw, *cur) <= 3 and _SETEXT_UNDERLINE_RE.match(inner):
+            return None
+        return inner, l_next
+
+    m_open = re.match(r'^ {0,3}\[', first_inner)
+    if not m_open:
+        return None
+
+    # Accumulate lines belonging to the label until `]:`
+    lines = [(first_inner, first_next)]
+    idx = m_open.end()
+    line_i = 0
+    label_chars = []
+    escaped = False
+    found_colon = False
+    while True:
+        cur_line, cur_next = lines[line_i]
+        while idx < len(cur_line):
+            ch = cur_line[idx]
+            if escaped:
+                label_chars.append(ch)
+                escaped = False
+                idx += 1
+            elif ch == '\\' and idx + 1 < len(cur_line) and cur_line[idx + 1] in ascii_punctuation:
+                label_chars.append(ch)
+                escaped = True
+                idx += 1
+            elif ch == '[':
+                return None
+            elif ch == ']':
+                if idx + 1 < len(cur_line) and cur_line[idx + 1] == ':':
+                    idx += 2
+                    found_colon = True
+                    break
+                return None
+            else:
+                label_chars.append(ch)
+                idx += 1
+            if len(label_chars) > 999:
+                return None
+        if found_colon:
+            break
+        if cur_next >= total:
+            return None
+        nxt = read_cont_line(cur_next)
+        if nxt is None:
+            return None
+        lines.append(nxt)
+        line_i += 1
+        idx = 0
+        label_chars.append('\n')
+        if len(label_chars) > 999:
+            return None
+
+    norm_label = _normalize_cm_link_label(''.join(label_chars))
+    if not norm_label:
+        return None
+
+    # Optional whitespace + at most one line ending before destination
+    cur_line, cur_next = lines[line_i]
+    while idx < len(cur_line) and cur_line[idx] in ' \t':
+        idx += 1
+    if idx == len(cur_line):
+        if cur_next >= total:
+            return None
+        nxt = read_cont_line(cur_next)
+        if nxt is None:
+            return None
+        lines.append(nxt)
+        line_i += 1
+        cur_line, cur_next = nxt
+        idx = 0
+        while idx < len(cur_line) and cur_line[idx] in ' \t':
+            idx += 1
+
+    # Parse destination on cur_line
+    if idx >= len(cur_line):
+        return None
+    if cur_line[idx] == '<':
+        dest_start = idx + 1
+        idx += 1
+        esc = False
+        closed = False
+        while idx < len(cur_line):
+            ch = cur_line[idx]
+            if esc:
+                esc = False
+            elif ch == '\\' and idx + 1 < len(cur_line) and cur_line[idx + 1] in ascii_punctuation:
+                esc = True
+            elif ch == '>':
+                dest_url = cur_line[dest_start:idx].strip()
+                idx += 1
+                closed = True
+                break
+            elif ch == '<':
+                return None
+            idx += 1
+        if not closed:
+            return None
+    else:
+        dest_start = idx
+        p_depth = 0
+        esc = False
+        while idx < len(cur_line):
+            ch = cur_line[idx]
+            if ch in ' \t':
+                break
+            if ord(ch) < 0x20 or ord(ch) == 0x7f:
+                return None
+            if esc:
+                esc = False
+            elif ch == '\\' and idx + 1 < len(cur_line) and cur_line[idx + 1] in ascii_punctuation:
+                esc = True
+            elif ch == '(':
+                p_depth += 1
+            elif ch == ')':
+                if p_depth == 0:
+                    return None
+                p_depth -= 1
+            idx += 1
+        if idx == dest_start or p_depth != 0 or esc:
+            return None
+        dest_url = cur_line[dest_start:idx]
+
+    dest_line_next = cur_next
+    had_same_line_ws = False
+    while idx < len(cur_line) and cur_line[idx] in ' \t':
+        had_same_line_ws = True
+        idx += 1
+    dest_line_clean_eol = (idx == len(cur_line))
+
+    def try_parse_title(t_line, t_next, t_idx):
+        if t_idx >= len(t_line) or t_line[t_idx] not in '"\'(':
+            return None
+        delim = t_line[t_idx]
+        end_delim = ')' if delim == '(' else delim
+        t_idx += 1
+        esc = False
+        while True:
+            while t_idx < len(t_line):
+                ch = t_line[t_idx]
+                if esc:
+                    esc = False
+                elif ch == '\\' and t_idx + 1 < len(t_line) and t_line[t_idx + 1] in ascii_punctuation:
+                    esc = True
+                elif delim == '(' and ch == '(':
+                    return None
+                elif ch == end_delim:
+                    if not t_line[t_idx + 1:].strip(' \t'):
+                        return t_next
+                    return None
+                t_idx += 1
+            if t_next >= total:
+                return None
+            nxt_t = read_cont_line(t_next)
+            if nxt_t is None:
+                return None
+            t_line, t_next = nxt_t
+            t_idx = 0
+
+    if not dest_line_clean_eol:
+        if not had_same_line_ws:
+            return None
+        title_end = try_parse_title(cur_line, cur_next, idx)
+        if title_end is None:
+            return None
+        return title_end, norm_label, dest_url
+
+    # Destination ended cleanly at EOL; optionally consume a title on the next line if it ends cleanly.
+    if dest_line_next < total:
+        nxt_after = read_cont_line(dest_line_next)
+        if nxt_after is not None:
+            t_line, t_next = nxt_after
+            t_idx = 0
+            while t_idx < len(t_line) and t_line[t_idx] in ' \t':
+                t_idx += 1
+            title_end = try_parse_title(t_line, t_next, t_idx)
+            if title_end is not None:
+                return title_end, norm_label, dest_url
+    return dest_line_next, norm_label, dest_url
+
+
+def _scan_commonmark_structure(content, *, include_ref_defs=False):
+    """Unified single-pass CommonMark 0.31.2 block scanner with exact 4-column tab stops and
+    interleaved blockquote/list container stack.
+
+    Returns (ignored_blocks, inline_regions) — or (ignored_blocks, inline_regions, ref_defs)
+    when `include_ref_defs=True` — where:
+      - ignored_blocks: sorted list of (start, end, kind) for fence/html/code/link_ref_def blocks
+      - inline_regions: sorted list of regions, each a non-empty list of (slice_start, slice_end)
+        byte ranges into `content` representing one paragraph or ATX/Setext heading with all
+        enclosing blockquote/list container prefixes stripped per line.
+      - ref_defs: dict mapping normalized §4.7 link label -> destination URL (first definition wins).
+    """
+    total = len(content)
+    blocks = []
+    inline_regions = []
+    ref_defs = {}
+    cur_para_slices = []
+    pos = 0
+    in_paragraph = False
+    stack = []  # interleaved ['bq'] and ['list', req_cols, kind, empty_first_line]
+
+    def flush_paragraph():
+        nonlocal cur_para_slices, in_paragraph
+        if cur_para_slices:
+            inline_regions.append(cur_para_slices)
+            cur_para_slices = []
+        in_paragraph = False
+
+    def mark_non_empty_lists():
+        for frame in stack:
+            if frame[0] == 'list' and frame[3]:
+                frame[3] = False
+
+    def read_at_exact_stack(cur_pos, req_stack):
+        c_end, c_next = _commonmark_line_bounds(content, cur_pos)
+        c_raw = content[cur_pos:c_end]
+        c_matched, c_cur = _cm_match_containers(c_raw, req_stack)
+        if c_matched < len(req_stack):
+            return None, c_next, False, None
+        c_blank = _cm_is_blank(c_raw, c_cur[0], c_cur[2])
+        c_inner = _cm_effective_with_leading_tabs(c_raw, *c_cur)
+        return c_inner, c_next, c_blank, c_cur
+
+    while pos < total:
+        l_end, next_pos = _commonmark_line_bounds(content, pos)
+        raw_line = content[pos:l_end]
+        matched, cur = _cm_match_containers(raw_line, stack)
+
+        # Blank line after matching active containers
+        if _cm_is_blank(raw_line, cur[0], cur[2]):
+            flush_paragraph()
+            stack = stack[:matched]
+            pos = next_pos
+            continue
+
+        # Check lazy paragraph continuation (§5.1/§5.2) when fewer than all containers matched
+        if in_paragraph and matched < len(stack):
+            if not _cm_line_interrupts_paragraph(raw_line, cur, stack, matched):
+                mark_non_empty_lists()
+                cur_para_slices.append((pos + cur[0], l_end))
+                pos = next_pos
+                continue
+
+        # Unwrap any new containers (interleaved blockquotes and list markers) at `cur`.
+        opened_new_container = False
+        work_stack = list(stack[:matched])
+        while True:
+            nxt_bq = _cm_try_strip_bq(raw_line, *cur)
+            if nxt_bq is not None:
+                if not opened_new_container:
+                    flush_paragraph()
+                    stack = work_stack
+                mark_non_empty_lists()
+                stack.append(['bq'])
+                cur = nxt_bq
+                opened_new_container = True
+                if _cm_is_blank(raw_line, cur[0], cur[2]):
+                    break
+                continue
+            lm = _cm_try_match_list_marker(raw_line, *cur)
+            if lm is not None:
+                l_kind, is_one, req_cols, nxt_cur, rest_is_blank = lm
+                if not in_paragraph or opened_new_container or matched < len(stack):
+                    can_start = True
+                elif not rest_is_blank and (l_kind == 'ul' or is_one):
+                    can_start = True
+                else:
+                    can_start = False
+                if can_start:
+                    if not opened_new_container:
+                        flush_paragraph()
+                        stack = work_stack
+                    mark_non_empty_lists()
+                    stack.append(['list', req_cols, l_kind, rest_is_blank])
+                    cur = nxt_cur
+                    opened_new_container = True
+                    if rest_is_blank:
+                        break
+                    continue
+            break
+
+        if opened_new_container and _cm_is_blank(raw_line, cur[0], cur[2]):
+            in_paragraph = False
+            pos = next_pos
+            continue
+
+        ws_cols = _cm_peek_ws_cols(raw_line, *cur)
+        inner = _cm_effective_with_leading_tabs(raw_line, *cur)
+
+        # §4.5 Fenced code block
+        opened = re.match(r'^ {0,3}(`{3,}|~{3,})([^\r\n]*)', inner) if ws_cols <= 3 else None
+        if opened and not (opened.group(1)[0] == '`' and '`' in opened.group(2)):
+            flush_paragraph()
+            if not opened_new_container:
+                stack = work_stack
+            mark_non_empty_lists()
+            fence_char = opened.group(1)[0]
+            fence_len = len(opened.group(1))
+            close_re = re.compile(r' {0,3}' + re.escape(fence_char) + '{' + str(fence_len) + r',}[ \t]*$')
+            cur_p = next_pos
+            blk_end = total
+            while cur_p < total:
+                c_inner, c_next, _c_blank, _c_cur = read_at_exact_stack(cur_p, stack)
+                if c_inner is None:
+                    blk_end = cur_p
+                    break
+                if close_re.fullmatch(c_inner):
+                    blk_end = c_next
+                    break
+                cur_p = c_next
+            blocks.append((pos, blk_end, 'fence'))
+            in_paragraph = False
+            pos = blk_end
+            continue
+
+        # §4.6 HTML block Types 1–5
+        end_re = None
+        if ws_cols <= 3:
+            if _HTML_BLOCK_TYPE1_START_RE.match(inner):
+                end_re = _HTML_BLOCK_TYPE1_END_RE
+            elif _HTML_BLOCK_TYPE2_START_RE.match(inner):
+                end_re = _HTML_BLOCK_TYPE2_END_RE
+            elif _HTML_BLOCK_TYPE3_START_RE.match(inner):
+                end_re = _HTML_BLOCK_TYPE3_END_RE
+            elif _HTML_BLOCK_TYPE4_START_RE.match(inner):
+                end_re = _HTML_BLOCK_TYPE4_END_RE
+            elif _HTML_BLOCK_TYPE5_START_RE.match(inner):
+                end_re = _HTML_BLOCK_TYPE5_END_RE
+        if end_re is not None:
+            flush_paragraph()
+            if not opened_new_container:
+                stack = work_stack
+            mark_non_empty_lists()
+            if end_re.search(inner):
+                blk_end = next_pos
+            else:
+                cur_p = next_pos
+                blk_end = total
+                while cur_p < total:
+                    c_inner, c_next, _c_blank, _c_cur = read_at_exact_stack(cur_p, stack)
+                    if c_inner is None:
+                        blk_end = cur_p
+                        break
+                    if end_re.search(c_inner):
+                        blk_end = c_next
+                        break
+                    cur_p = c_next
+            blocks.append((pos, blk_end, 'html'))
+            in_paragraph = False
+            pos = blk_end
+            continue
+
+        # §4.6 HTML block Types 6–7
+        if ws_cols <= 3 and (
+            _HTML_BLOCK_TYPE6_START_RE.match(inner)
+            or (not in_paragraph and _HTML_BLOCK_TYPE7_START_RE.match(inner))
+        ):
+            flush_paragraph()
+            if not opened_new_container:
+                stack = work_stack
+            mark_non_empty_lists()
+            cur_p = next_pos
+            blk_end = total
+            while cur_p < total:
+                c_inner, c_next, c_blank, _c_cur = read_at_exact_stack(cur_p, stack)
+                if c_inner is None:
+                    blk_end = cur_p
+                    break
+                if c_blank:
+                    blk_end = c_next
+                    break
+                cur_p = c_next
+            blocks.append((pos, blk_end, 'html'))
+            in_paragraph = False
+            pos = blk_end
+            continue
+
+        # §4.4 Indented code block (4+ visual columns at exact tab stops)
+        if not in_paragraph and ws_cols >= 4:
+            flush_paragraph()
+            if not opened_new_container:
+                stack = work_stack
+            mark_non_empty_lists()
+            last_code_end = next_pos
+            cur_p = next_pos
+            while cur_p < total:
+                c_end, c_next = _commonmark_line_bounds(content, cur_p)
+                c_raw = content[cur_p:c_end]
+                c_matched, c_cur = _cm_match_containers(c_raw, stack)
+                if c_matched < len(stack):
+                    break
+                if _cm_is_blank(c_raw, c_cur[0], c_cur[2]):
+                    cur_p = c_next
+                    continue
+                if _cm_peek_ws_cols(c_raw, *c_cur) < 4:
+                    break
+                last_code_end = c_next
+                cur_p = c_next
+            blocks.append((pos, last_code_end, 'code'))
+            in_paragraph = False
+            pos = last_code_end
+            continue
+
+        # §4.7 Link reference definition
+        if not in_paragraph and ws_cols <= 3 and re.match(r'^ {0,3}\[', inner):
+            cand_stack = stack if opened_new_container else work_stack
+            parsed_def = _parse_link_ref_def(content, inner, next_pos, cand_stack)
+            if parsed_def is not None:
+                def_end, norm_label, dest_url = parsed_def
+                flush_paragraph()
+                if not opened_new_container:
+                    stack = work_stack
+                mark_non_empty_lists()
+                if norm_label not in ref_defs:
+                    ref_defs[norm_label] = dest_url
+                blocks.append((pos, def_end, 'link_ref_def'))
+                in_paragraph = False
+                pos = def_end
+                continue
+
+        # §4.1 Thematic break
+        if ws_cols <= 3 and _THEMATIC_BREAK_RE.match(inner):
+            flush_paragraph()
+            if not opened_new_container:
+                stack = work_stack
+            mark_non_empty_lists()
+            pos = next_pos
+            continue
+
+        # §4.2 ATX heading (standalone single-line inline region)
+        if ws_cols <= 3 and _ATX_HEADING_RE.match(inner):
+            flush_paragraph()
+            if not opened_new_container:
+                stack = work_stack
+            mark_non_empty_lists()
+            inline_regions.append([(pos + cur[0], l_end)])
+            pos = next_pos
+            continue
+
+        # §4.3 Setext heading underline (only when matching exact container depth of active paragraph)
+        if in_paragraph and matched == len(stack) and not opened_new_container \
+                and ws_cols <= 3 and _SETEXT_UNDERLINE_RE.match(inner):
+            flush_paragraph()
+            pos = next_pos
+            continue
+
+        # Ordinary paragraph line
+        if not in_paragraph:
+            if not opened_new_container:
+                stack = work_stack
+            in_paragraph = True
+        mark_non_empty_lists()
+        cur_para_slices.append((pos + cur[0], l_end))
+        pos = next_pos
+
+    flush_paragraph()
+    if include_ref_defs:
+        return blocks, inline_regions, ref_defs
+    return blocks, inline_regions
+
+
+def _scan_commonmark_ignored_blocks(content):
+    """Single-pass CommonMark §4.4/§4.5/§4.6/§4.7 block scanner (returns sorted (start, end, kind))."""
+    blocks, _regions = _scan_commonmark_structure(content)
+    return blocks
+
+
+def _iter_markdown_images(text):
+    """按 CommonMark 0.31.2 规则（与 publish_common.parse_markdown_images 一致）扫描行内与引用图片，
+    基于统一块/容器扫描器 `_scan_commonmark_structure` 逐段落/标题剥离引用块与列表容器前缀，
+    完整支持引用块内多行标题/原始 HTML 与 §4.7/§6.3/§6.4 完整/折叠/快捷引用链接及图片解析，
+    校验 `![` 反斜杠转义与 `depth == 0` 闭合，返回 (start, end, url)。
+    """
+    content = str(text)
+    _ignored_blocks, inline_regions, ref_defs = _scan_commonmark_structure(content, include_ref_defs=True)
+    autolink_or_raw_html_re = _COMMONMARK_AUTOLINK_OR_RAW_HTML_RE
+    ascii_punctuation = set(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
+
+    def skip_ws_with_one_nl(buf, pos, limit):
+        while pos < limit and buf[pos] in ' \t':
+            pos += 1
+        if pos < limit and buf[pos] in '\r\n':
+            if buf[pos] == '\r' and pos + 1 < limit and buf[pos + 1] == '\n':
+                pos += 2
+            else:
+                pos += 1
+            while pos < limit and buf[pos] in ' \t':
+                pos += 1
+        return pos
+
+    def parse_inline_title(buf, start_pos, limit):
+        """Parse CommonMark §6.3 link title delimited by \"...\", '...', or (...)."""
+        delim = buf[start_pos]
+        end_delim = ')' if delim == '(' else delim
+        pos = start_pos + 1
+        escaped = False
+        while pos < limit:
+            char = buf[pos]
+            if escaped:
+                escaped = False
+            elif char == '\\' and pos + 1 < limit and buf[pos + 1] in ascii_punctuation:
+                escaped = True
+            elif delim == '(' and char == '(':
+                return None
+            elif char == end_delim:
+                return pos + 1
+            pos += 1
+        return None
+
+    def parse_inline_dest(buf, start_paren, limit, *, allow_empty_dest=False):
+        """Strict CommonMark §6.3 inline destination + optional title parser."""
+        if start_paren >= limit or buf[start_paren] != '(':
+            return None
+        pos = skip_ws_with_one_nl(buf, start_paren + 1, limit)
+        if pos >= limit:
+            return None
+        if buf[pos] == ')':
+            return (pos, '') if allow_empty_dest else None
+        is_angle = False
+        if buf[pos] == '<':
+            is_angle = True
+            dest_start = pos + 1
+            pos += 1
+            escaped = False
+            closed_angle = False
+            while pos < limit:
+                char = buf[pos]
+                if char in ('\r', '\n'):
+                    return None
+                if escaped:
+                    escaped = False
+                elif char == '\\' and pos + 1 < limit and buf[pos + 1] in ascii_punctuation:
+                    escaped = True
+                elif char == '>':
+                    closed_angle = True
+                    break
+                elif char == '<':
+                    return None
+                pos += 1
+            if not closed_angle:
+                return None
+            url = buf[dest_start:pos].strip()
+            pos += 1
+        else:
+            dest_start = pos
+            paren_depth = 0
+            escaped = False
+            while pos < limit:
+                char = buf[pos]
+                if char in ' \t\r\n':
+                    break
+                if ord(char) < 0x20 or ord(char) == 0x7f:
+                    return None
+                if escaped:
+                    escaped = False
+                elif char == '\\' and pos + 1 < limit and buf[pos + 1] in ascii_punctuation:
+                    escaped = True
+                elif char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    if paren_depth == 0:
+                        break
+                    paren_depth -= 1
+                pos += 1
+            if paren_depth != 0 or escaped:
+                return None
+            url = buf[dest_start:pos]
+            if not url:
+                return None
+        if not url and not (allow_empty_dest and is_angle):
+            return None
+        ws_start = pos
+        pos = skip_ws_with_one_nl(buf, pos, limit)
+        if pos >= limit:
+            return None
+        if buf[pos] == ')':
+            return pos, url
+        if pos > ws_start and buf[pos] in ('"', "'", '('):
+            title_end = parse_inline_title(buf, pos, limit)
+            if title_end is None:
+                return None
+            pos = skip_ws_with_one_nl(buf, title_end, limit)
+            if pos < limit and buf[pos] == ')':
+                return pos, url
+        return None
+
+    # CommonMark §6.3/§6.4 单遍内联定界栈（逐容器剥离后的段落/标题扫描）：
+    # 每行剥离 `>` 与列表前缀后保留精确原字符偏移映射 `orig_offsets`，
+    # 保证引用块内多行标题/原始 HTML 与顶层段落遵循完全一致的内联解析语义。
+    for region in inline_regions:
+        buf_parts = []
+        orig_offsets = []
+        for r_idx, (s_off, e_off) in enumerate(region):
+            if r_idx > 0:
+                buf_parts.append('\n')
+                orig_offsets.append(region[r_idx - 1][1])
+            buf_parts.append(content[s_off:e_off])
+            orig_offsets.extend(range(s_off, e_off))
+        buf = ''.join(buf_parts)
+        p_end = len(buf)
+        delim_stack = []
+        matched_images = []
+        all_image_spans = []
+        pos = 0
+        while pos < p_end:
+            char = buf[pos]
+            if char == '\\' and pos + 1 < p_end and buf[pos + 1] in ascii_punctuation:
+                pos += 2
+                continue
+            if char == '`':
+                tick_end = pos + 1
+                while tick_end < p_end and buf[tick_end] == '`':
+                    tick_end += 1
+                closing = re.search(
+                    r'(?<!`)`{' + str(tick_end - pos) + r'}(?!`)',
+                    buf[tick_end:p_end],
+                )
+                if closing:
+                    pos = tick_end + closing.end()
+                    continue
+                pos = tick_end
+                continue
+            if char == '<':
+                raw_match = autolink_or_raw_html_re.match(buf, pos, p_end)
+                if raw_match:
+                    pos = raw_match.end()
+                    continue
+            if char == '!' and pos + 1 < p_end and buf[pos + 1] == '[':
+                delim_stack.append(['img', pos, True])
+                pos += 2
+                continue
+            if char == '[':
+                delim_stack.append(['link', pos, True])
+                pos += 1
+                continue
+            if char == ']':
+                if not delim_stack:
+                    pos += 1
+                    continue
+                kind, open_pos, active = delim_stack.pop()
+                if not active:
+                    pos += 1
+                    continue
+                if pos + 1 < p_end and buf[pos + 1] == '(':
+                    parsed_dest = parse_inline_dest(buf, pos + 1, p_end, allow_empty_dest=True)
+                    if parsed_dest is not None:
+                        end_paren, url = parsed_dest
+                        orig_start = orig_offsets[open_pos]
+                        orig_end = orig_offsets[end_paren] + 1
+                        if kind == 'img':
+                            all_image_spans.append((orig_start, orig_end))
+                            if url:
+                                matched_images.append((orig_start, orig_end, url))
+                        else:
+                            for entry in delim_stack:
+                                if entry[0] == 'link':
+                                    entry[2] = False
+                        pos = end_paren + 1
+                        continue
+                if ref_defs:
+                    open_end = open_pos + (2 if kind == 'img' else 1)
+                    ref_url = None
+                    ref_end_idx = pos
+                    shortcut_blocked = False
+                    if pos + 1 < p_end and buf[pos + 1] == '[':
+                        parsed_ref = _parse_cm_ref_label(buf, pos + 1, p_end)
+                        if parsed_ref is not None:
+                            ref_close, ref_raw = parsed_ref
+                            shortcut_blocked = (ref_raw == '' or bool(_normalize_cm_link_label(ref_raw)))
+                            if ref_raw == '':
+                                inner_raw = buf[open_end:pos]
+                                if _is_valid_cm_label_text(inner_raw):
+                                    norm_key = _normalize_cm_link_label(inner_raw)
+                                    if norm_key in ref_defs:
+                                        ref_url = ref_defs[norm_key]
+                                        ref_end_idx = ref_close
+                            else:
+                                norm_key = _normalize_cm_link_label(ref_raw)
+                                if norm_key and norm_key in ref_defs:
+                                    ref_url = ref_defs[norm_key]
+                                    ref_end_idx = ref_close
+                    if ref_url is None and not shortcut_blocked:
+                        inner_raw = buf[open_end:pos]
+                        if _is_valid_cm_label_text(inner_raw):
+                            norm_key = _normalize_cm_link_label(inner_raw)
+                            if norm_key in ref_defs:
+                                ref_url = ref_defs[norm_key]
+                                ref_end_idx = pos
+                    if ref_url is not None:
+                        orig_start = orig_offsets[open_pos]
+                        orig_end = orig_offsets[ref_end_idx] + 1
+                        if kind == 'img':
+                            all_image_spans.append((orig_start, orig_end))
+                            if ref_url:
+                                matched_images.append((orig_start, orig_end, ref_url))
+                        else:
+                            for entry in delim_stack:
+                                if entry[0] == 'link':
+                                    entry[2] = False
+                        pos = ref_end_idx + 1
+                        continue
+                pos += 1
+                continue
+            pos += 1
+        top_level = [
+            (s, e, url)
+            for s, e, url in matched_images
+            if not any(os <= s and e <= oe and (os, oe) != (s, e) for os, oe in all_image_spans)
+        ]
+        top_level.sort(key=lambda item: item[0])
+        for item in top_level:
+            yield item
+
+
+def _dest_needs_angle_brackets(dest):
+    if not dest or dest.startswith('<') or any(ord(c) <= 0x20 or ord(c) == 0x7f for c in dest):
+        return True
+    ascii_punctuation = set(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
+    depth = 0
+    idx = 0
+    length = len(dest)
+    while idx < length:
+        ch = dest[idx]
+        if ch == '\\' and idx + 1 < length and dest[idx + 1] in ascii_punctuation:
+            idx += 2
+            continue
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            if depth == 0:
+                return True
+            depth -= 1
+        idx += 1
+    return depth != 0
+
+
 def mask_markdown_image_alts(text):
     r"""在数学与格式扫描前遮住图片标签里的字节。
 
@@ -207,8 +1269,17 @@ def mask_markdown_image_alts(text):
     Markdown 才能正确解析图片；但正文里并没有这些公式，Hugo 也不会把
     这段文字渲染成 post-content 文本节点。
     """
-    image = re.compile(r'!\[([^\n]*?)\]\(([^)\n]+)\)')
-    return image.sub(lambda match: f'![]({match.group(2)})', str(text))
+    source = str(text)
+    out = []
+    cursor = 0
+    for start, end, dest in _iter_markdown_images(source):
+        out.append(source[cursor:start])
+        pad = ' ' if dest.endswith('\\') else ''
+        formatted_dest = f'<{dest}{pad}>' if _dest_needs_angle_brackets(dest) else f'{dest}{pad}'
+        out.append(f'![]({formatted_dest})')
+        cursor = end
+    out.append(source[cursor:])
+    return ''.join(out)
 
 
 def mask_rendered_currency_dollars(text):
@@ -234,9 +1305,10 @@ def inspect_html(markdown, rendered, image_records, image_base):
                                     mask_source_bound_figure_caption_dollars)
 
     page = Page(rendered)
+    body = markdown
     if markdown.startswith('---\n'):
         from markdown_hugo_gate import parse_frontmatter_content
-        frontmatter, _ = parse_frontmatter_content('conference-page.md', markdown)
+        frontmatter, body = parse_frontmatter_content('conference-page.md', markdown)
         tag_prefixes = [prefix for prefix in ('paper_digest_tags_', 'paper_digest_taxonomy_')
                         if any(key.startswith(prefix) for key in frontmatter)]
         if len(tag_prefixes) > 1:
@@ -267,7 +1339,6 @@ def inspect_html(markdown, rendered, image_records, image_base):
     if len(page.canonicals) != 1:
         raise ValueError(f'HTML canonical URL 不唯一：实际 {len(page.canonicals)} 个')
     url = public_url(page.canonicals[0])
-    body = markdown.split('---', 2)[-1] if markdown.startswith('---\n') else markdown
     body_for_format = mask_markdown_image_alts(body)
     # 走共用的确定性数学检查，这里不会真正执行 MathJax。
     text = ''.join(page.text)
@@ -287,9 +1358,9 @@ def inspect_html(markdown, rendered, image_records, image_base):
             raise ValueError(f'HTML 公式内容丢失/被 Markdown 改写：{formula}')
     if formulas and not page.math_runtime:
         raise ValueError('HTML 公式缺少数学渲染运行时；仅完成静态检查')
-    # 图的替代文本里可能有转义的 Markdown 方括号，例如 ``\[b\]``。
-    # 别把转义的右括号当成替代文本的结尾。
-    expected = re.findall(r'!\[[^\n]*?\]\(([^)\s]+)(?:\s+[^)]*)?\)', body)
+    # 图的替代文本里可能有转义或配对的 Markdown 方括号，例如 ``\[b\]`` 或 ``[a]``。
+    # 用 CommonMark 扫描器提取已去空白、去尖括号、去可选标题的真实 URL。
+    expected = [dest for _start, _end, dest in _iter_markdown_images(body)]
     if page.images != expected:
         raise ValueError(f'HTML 图片 URL/顺序与 Markdown 不一致：Markdown 期望 {expected}，HTML 实际 {page.images}')
     assets = {f'{image_base}/{r["path"]}': r for r in image_records}

@@ -254,10 +254,7 @@ def mask_closed_code_for_format_gate(text, *, rendered_html=False):
             def __init__(self):
                 super().__init__(convert_charrefs=False)
                 self.stack, self.nodes = [], []
-                self.starts, total = [], 0
-                for line in text.splitlines(keepends=True):
-                    self.starts.append(total); total += len(line)
-                if not self.starts:self.starts=[0]
+                self.starts = _html_line_offsets(text)
             def position_offset(self):
                 line,column=self.getpos();return self.starts[line-1]+column
             def invalidate(self):

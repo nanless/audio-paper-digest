@@ -9,15 +9,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ENV_FILE = path.join(PROJECT_ROOT, '.env');
 
 function parseLikeRuntime(text) {
-    const os = require('node:os');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-check-'));
-    const temp = path.join(dir, '.env');
-    try {
-        fs.writeFileSync(temp, text, { mode: 0o600 });
-        return require('./env-loader').parseEnvFile(temp);
-    } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-    }
+    return require('./env-loader').parseEnvContent(text);
 }
 
 function parseArgs(argv) {
@@ -25,7 +17,14 @@ function parseArgs(argv) {
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--json') options.json = true;
-        else if (value === '--env') { options.envFile = path.resolve(argv[++index] || ''); }
+        else if (value === '--env') {
+            const next = argv[index + 1];
+            if (!next || next.startsWith('--')) {
+                throw new Error('--env 缺少文件路径参数');
+            }
+            options.envFile = path.resolve(next);
+            index += 1;
+        }
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
@@ -57,25 +56,44 @@ function main(argv = process.argv.slice(2)) {
     const text = fs.readFileSync(options.envFile, 'utf8');
     const entries = parseLikeRuntime(text);
     const { items, unknown, spelling } = validateEntries(entries);
-    // 推理档位按模型分别校验：schema 里登记的是两模型的并集，直接放行会让
+    // 推理档位按主/副模型分别校验：schema 里登记的是两模型的并集，直接放行会让
     // 「muse 写 max」「deepseek 写 xhigh」这类组合静默降级。
     const effortItem = items.find(item => item.name === 'PD_OPENAI_RESPONSES_REASONING_EFFORT');
     const effort = String(entries.PD_OPENAI_RESPONSES_REASONING_EFFORT || '').trim().toLowerCase();
-    const configuredModel = String(entries.PAPER_ANALYZER_MODEL || '').trim();
-    if (effortItem && effort && configuredModel) {
-        const { reasoningEffortsFor } = require('./utils');
+    if (effortItem && effort) {
+        const { detectApiType, reasoningEffortsFor, normalizeReasoningEffort } = require('./utils');
         const ladders = require('./lib/env-schema').SUPPORTED_MODELS.reduce((acc, model) => {
             acc[model] = reasoningEffortsFor(model);
             return acc;
         }, {});
-        const ladder = ladders[configuredModel];
-        // 先按运行时的同一规则归一化：max / highest / maximum 会落到该模型的最高档，
-        // 不能因为写的是别名就判错（文档明确把三者写成别名）。
-        const { normalizeReasoningEffort } = require('./utils');
-        const normalized = normalizeReasoningEffort(effort, configuredModel) || effort;
-        if (Array.isArray(ladder) && ladder.length > 0 && !ladder.includes(normalized)) {
+        const primaryEndpoint = String(entries.PAPER_ANALYZER_ENDPOINT || '').trim();
+        const modelChecks = [
+            {
+                label: '主模型',
+                model: String(entries.PAPER_ANALYZER_MODEL || '').trim(),
+                endpoint: primaryEndpoint
+            },
+            {
+                label: '副模型',
+                model: String(entries.PAPER_ANALYZER_SECONDARY_MODEL || '').trim(),
+                endpoint: String(entries.PAPER_ANALYZER_SECONDARY_ENDPOINT || '').trim() || primaryEndpoint
+            }
+        ];
+        const mismatches = [];
+        for (const entry of modelChecks) {
+            if (!entry.model) continue;
+            if (detectApiType(entry.endpoint, entry.model) !== 'openai_responses') continue;
+            const ladder = ladders[entry.model];
+            // 先按运行时的同一规则归一化：max / highest / maximum 会落到该模型的最高档，
+            // 不能因为写的是别名就判错（文档明确把三者写成别名）。
+            const normalized = normalizeReasoningEffort(effort, entry.model) || effort;
+            if (Array.isArray(ladder) && ladder.length > 0 && !ladder.includes(normalized)) {
+                mismatches.push(`${entry.label} ${entry.model} 支持的推理档位是 ${ladder.join('/')}，当前写的是 ${effort}`);
+            }
+        }
+        if (mismatches.length > 0) {
             effortItem.ok = 'fail';
-            effortItem.detail = `模型 ${configuredModel} 支持的推理档位是 ${ladder.join('/')}，当前写的是 ${effort}`;
+            effortItem.detail = mismatches.join('；');
         }
     }
     const counts = items.reduce((acc, item) => ({ ...acc, [item.ok]: (acc[item.ok] || 0) + 1 }), {});

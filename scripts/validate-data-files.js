@@ -15,6 +15,7 @@ const { isDeepStrictEqual } = require('node:util');
 const {
     readJsonSafe,
     normalizedId,
+    isWithinBatchDateGrace,
     DOCUMENT_TYPES,
     SCORING_RUBRIC_VERSION,
     normalizeScoreToOneDecimal,
@@ -148,8 +149,8 @@ function validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifac
         validateFingerprint(filePath, field, data[field], issues);
     }
     if (filterArtifact) validateFingerprint(filePath, 'filterConfigFingerprint', data.filterConfigFingerprint, issues);
-    if (typeof data.batchDate !== 'string' || data.batchDate !== getBeijingBatchDate(data.timestamp)) {
-        addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期');
+    if (typeof data.batchDate !== 'string' || !isWithinBatchDateGrace(data.timestamp, data.batchDate)) {
+        addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期（或在跨零点 0–8 点宽限内）');
     }
     validateFingerprint(filePath, 'batchId', data.batchId, issues);
     for (const field of ['rawPapersSha256', 'fetchSourcesSha256']) {
@@ -280,7 +281,7 @@ function validateSourceHealth(filePath, sourceHealth, issues) {
     }
 }
 
-function hasCoveredFetchBoundary(health, boundary, huggingface = false, expectedPapers, expectedCategoryId, expectedExistingIds) {
+function hasCoveredFetchBoundary(health, boundary, huggingface = false, expectedPapers, expectedCategoryId, expectedExistingIds, expectedBatchDate) {
     try { require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary); } catch { return false; }
     return Boolean(boundary && /^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
         && health?.provider?.boundaryIdentity === boundary.identitySha256
@@ -291,7 +292,7 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false, expected
         && (huggingface || ((expectedCategoryId === undefined
                 || ((health?.categoryId === undefined || health.categoryId === expectedCategoryId)
                     && (health?.id === undefined || health.id === expectedCategoryId)))
-            && require('./lib/daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId, true, expectedPapers, expectedExistingIds)))
+            && require('./lib/daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId, true, expectedPapers, expectedExistingIds, expectedBatchDate)))
         && (!huggingface || (health.provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && health.provider.dailyCovered === true
                 && health.provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
@@ -318,7 +319,7 @@ function validateFetchBoundary(filePath, data, issues) {
         addIssue(issues, filePath, 'v7 抓取范围必须绑定上次日更、合法起止时间和完整身份 SHA');
     }
     for (const [id, entry] of Object.entries(data.arxiv || {})) {
-        if (entry?.status === 'complete' && !hasCoveredFetchBoundary(entry.health, boundary, false, entry.papers, id, data.historicalDedupIds)) {
+        if (entry?.status === 'complete' && !hasCoveredFetchBoundary(entry.health, boundary, false, entry.papers, id, data.historicalDedupIds, data.batchDate)) {
             addIssue(issues, filePath, `arxiv.${id} 未证明完整补更范围`);
         }
     }
@@ -340,8 +341,8 @@ function validateFetchCheckpointFile(filePath = DEFAULT_FETCH_CHECKPOINT_FILE) {
     for (const field of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         validateFingerprint(filePath, field, data[field], issues);
     }
-    if (typeof data.batchDate !== 'string' || data.batchDate !== getBeijingBatchDate(data.timestamp)) {
-        addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期');
+    if (typeof data.batchDate !== 'string' || !isWithinBatchDateGrace(data.timestamp, data.batchDate)) {
+        addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期（或在跨零点 0–8 点宽限内）');
     }
     validateFingerprint(filePath, 'batchId', data.batchId, issues);
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
@@ -568,7 +569,7 @@ function validateAnalysisSourceRecordShape(filePath, source, prefix, issues) {
     }
 }
 
-function validateDailyFreshSourceRun(filePath, data, papers, issues) {
+function validateDailyFreshSourceRun(filePath, data, papers, issues, options = {}) {
     // Per-call evidence only. Never return a partial batch's source text.
     const sourceTexts = new Map();
     const initialIssueCount = issues.length;
@@ -582,13 +583,19 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
         return sourceTexts;
     }
     let plan;
-    try { plan = dailyFreshSources.readDailyFreshSourcePlan(reference); }
-    catch (error) {
+    try {
+        plan = dailyFreshSources.readDailyFreshSourcePlan(reference, {
+            rootDir: options.dailyFreshSourceRunsDir || Config.FILES.dailyFreshSourceRunsDir
+        });
+    } catch (error) {
         addIssue(issues, filePath, `dailyFreshSourceRun 对应的封存来源计划未通过读取或核验: ${error.message}`);
         return sourceTexts;
     }
     if (data.batchDate !== plan.batchDate) {
         addIssue(issues, filePath, `dailyFreshSourceRun.batchDate (${plan.batchDate}) 必须等于 deep batchDate (${data.batchDate})`);
+    }
+    if (data.batchId !== undefined && data.batchId !== plan.batchId) {
+        addIssue(issues, filePath, `dailyFreshSourceRun.batchId (${plan.batchId}) 必须等于 deep batchId (${data.batchId})`);
     }
     const dailyPaperId = paper => String(paper?.arxivId || paper?.paper_id || '').trim().replace(/v\d+$/i, '')
         || normalizedId(paper);
@@ -597,13 +604,17 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
     // 取不到官方来源而被跳过的论文属于本次来源运行，但不应出现在分析结果里。
     let skippedIds = new Set();
     try {
-        const skipRecord = dailySourceSkip.readDailySourceSkips(plan);
+        const skipRecord = dailySourceSkip.readDailySourceSkips(plan, { limit: dailySourceSkip.MAX_LIMIT });
         skippedIds = dailySourceSkip.skippedPaperIds(skipRecord);
     } catch (error) {
         addIssue(issues, filePath, `每日来源跳过记录未通过核验: ${error.message}`);
         return sourceTexts;
     }
     const expectedAnalysisIds = plan.paperIds.filter(id => !skippedIds.has(id)).sort();
+    if (plan.paperIds.length > 0 && expectedAnalysisIds.length === 0) {
+        addIssue(issues, filePath, '本批入选论文全部被来源跳过，没有可分析论文');
+        return sourceTexts;
+    }
     if (paperIds.some(id => !id || skippedIds.has(id)) || new Set(paperIds).size !== paperIds.length
         || sortedPaperIds.length !== expectedAnalysisIds.length
         || !sortedPaperIds.every((id, index) => id === expectedAnalysisIds[index])) {
@@ -996,7 +1007,7 @@ function validatePaperListFile(filePath, options = {}) {
             validateDeepAnalysisMetadata(filePath, data, papers, issues, options);
         }
     }
-    if (options.deepAnalysis) dailySourceTexts = validateDailyFreshSourceRun(filePath, data, papers, issues);
+    if (options.deepAnalysis) dailySourceTexts = validateDailyFreshSourceRun(filePath, data, papers, issues, options);
 
     const seenPaperIds = new Map();
     papers.forEach((paper, index) => {
@@ -1591,12 +1602,18 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     }
 
     const datedArtifacts = [[fetchPath, checkpoint], ...artifacts]
-        .map(([artifactPath, artifact]) => [artifactPath, getBeijingBatchDate(artifact.timestamp)])
+        .map(([artifactPath, artifact]) => [artifactPath, getBeijingBatchDate(artifact.timestamp), artifact.timestamp])
         .filter(([, date]) => date);
     if (datedArtifacts.length > 1) {
         const expectedDate = datedArtifacts[0][1];
-        for (const [artifactPath, date] of datedArtifacts.slice(1)) {
-            if (date !== expectedDate) addIssue(issues, artifactPath, `timestamp 日期必须与同批次 fetch-checkpoint.json 一致 (${expectedDate})`);
+        const batchDate = typeof checkpoint.batchDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(checkpoint.batchDate)
+            ? checkpoint.batchDate : null;
+        for (const [artifactPath, date, rawTimestamp] of datedArtifacts.slice(1)) {
+            const withinGrace = batchDate && isWithinBatchDateGrace(checkpoint.timestamp, batchDate)
+                && isWithinBatchDateGrace(rawTimestamp, batchDate);
+            if (date !== expectedDate && !withinGrace) {
+                addIssue(issues, artifactPath, `timestamp 日期必须与同批次 fetch-checkpoint.json 一致 (${expectedDate})`);
+            }
         }
     }
 
@@ -1764,8 +1781,74 @@ function validateFilteredDeepPapersConsistency(files = Config.FILES, options = {
         const deepIds = deep.papers.map(normalizedId).filter(Boolean);
         const filteredIdSet = new Set(filteredIds);
         const deepIdSet = new Set(deepIds);
-        const missing = [...filteredIdSet].filter(id => !deepIdSet.has(id));
-        const unexpected = [...deepIdSet].filter(id => !filteredIdSet.has(id));
+        let filteredIdsClean = true;
+        if (filteredIds.length !== filtered.papers.length || filteredIdSet.size !== filteredIds.length) {
+            addIssue(issues, filteredPath, 'filtered-papers.json 包含空或重复的归一化论文 ID');
+            filteredIdsClean = false;
+        }
+        if (deepIds.length !== deep.papers.length || deepIdSet.size !== deepIds.length) {
+            addIssue(issues, deepPath, 'deep-analysis-result.json 包含空或重复的归一化论文 ID');
+        }
+        let skippedIds = new Set();
+        if (deep.dailyFreshSourceRun !== undefined) {
+            try {
+                const plan = dailyFreshSources.readDailyFreshSourcePlan(deep.dailyFreshSourceRun, {
+                    rootDir: files.dailyFreshSourceRunsDir || Config.FILES.dailyFreshSourceRunsDir
+                });
+                let planBindingOk = filteredIdsClean;
+                if (filteredBatchDate && plan.batchDate !== filteredBatchDate) {
+                    addIssue(issues, deepPath, `dailyFreshSourceRun.batchDate (${plan.batchDate}) 必须等于 filtered-papers.json (${filteredBatchDate})`);
+                    planBindingOk = false;
+                }
+                if (deepBatchDate && plan.batchDate !== deepBatchDate) {
+                    addIssue(issues, deepPath, `dailyFreshSourceRun.batchDate (${plan.batchDate}) 必须等于 deep batchDate (${deepBatchDate})`);
+                    planBindingOk = false;
+                }
+                if (filtered.batchId !== undefined && plan.batchId !== filtered.batchId) {
+                    addIssue(issues, deepPath, `dailyFreshSourceRun.batchId (${plan.batchId}) 必须等于 filtered-papers.json (${filtered.batchId})`);
+                    planBindingOk = false;
+                }
+                if (deep.batchId !== undefined && plan.batchId !== deep.batchId) {
+                    addIssue(issues, deepPath, `dailyFreshSourceRun.batchId (${plan.batchId}) 必须等于 deep batchId (${deep.batchId})`);
+                    planBindingOk = false;
+                }
+                const sortedPlanIds = [...plan.paperIds].sort();
+                const sortedFilteredIds = [...filteredIdSet].sort();
+                if (sortedPlanIds.length !== sortedFilteredIds.length
+                    || !sortedPlanIds.every((id, index) => id === sortedFilteredIds[index])) {
+                    addIssue(issues, deepPath, 'dailyFreshSourceRun.paperIds 与 complete filtered-papers.json 不一致');
+                    planBindingOk = false;
+                }
+                if (planBindingOk) {
+                    const skipRecord = dailySourceSkip.readDailySourceSkips(plan, { limit: dailySourceSkip.MAX_LIMIT });
+                    skippedIds = dailySourceSkip.skippedPaperIds(skipRecord);
+                }
+            } catch (error) {
+                addIssue(issues, deepPath, `核验封存来源跳过记录失败: ${error.message}`);
+            }
+        }
+        const skippedOutsideFiltered = [...skippedIds].filter(id => !filteredIdSet.has(id));
+        const skippedPresentInDeep = [...skippedIds].filter(id => deepIdSet.has(id));
+        if (skippedOutsideFiltered.length > 0) {
+            addIssue(
+                issues,
+                deepPath,
+                `每日来源跳过记录包含不在 filtered-papers.json 中的论文 ID: ${skippedOutsideFiltered.join(', ')}`
+            );
+        }
+        if (skippedPresentInDeep.length > 0) {
+            addIssue(
+                issues,
+                deepPath,
+                `每日来源跳过记录中的论文不得出现在 deep-analysis-result.json: ${skippedPresentInDeep.join(', ')}`
+            );
+        }
+        const expectedDeepIdSet = new Set([...filteredIdSet].filter(id => !skippedIds.has(id)));
+        if (filteredIdSet.size > 0 && expectedDeepIdSet.size === 0) {
+            addIssue(issues, deepPath, '本批入选论文全部被来源跳过，没有可分析论文');
+        }
+        const missing = [...expectedDeepIdSet].filter(id => !deepIdSet.has(id));
+        const unexpected = [...deepIdSet].filter(id => !expectedDeepIdSet.has(id));
         if (missing.length > 0 || unexpected.length > 0) {
             addIssue(
                 issues,
@@ -1870,7 +1953,8 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validatePaperListFile(files.deepAnalysisResult, {
             deepAnalysis: true,
             analysisWaiver: analysisWaiverContext.waiver,
-            allowLegacyCoreSummarySuccess: true
+            allowLegacyCoreSummarySuccess: true,
+            dailyFreshSourceRunsDir: files.dailyFreshSourceRunsDir
         }),
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
         ...validateRawCandidateFilterConsistency(files.rawCandidates, filterDecisions, files.filteredPapers),

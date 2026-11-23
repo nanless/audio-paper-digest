@@ -3510,6 +3510,96 @@ def _source_scope_observed_experiment_claim(text):
         r'并非|不是|未报告|尚未报告|未观察到|没有观察到|否认)'), str(text), re.I)
 
 
+def _observed_source_negative_evidence(source_text):
+    """对齐 analysis-contract.js observedSourceNegativeEvidence：仅保留论文实际观测的负面陈述。"""
+    # 与 JS /iu 保持一致：使用 _source_evidence_pattern + re.I | re.A，避免中文字符被 Python
+    # 视为 \w 破坏词边界，并避免土耳其语 ı/İ 被 Python re.I 误折叠为 i 导致 fail-open 漏检。
+    scope_excluded = re.compile(
+        _source_evidence_pattern(
+            r'\b(?:if|suppos(?:e|ing)|hypothetical)\b|'
+            r'\b(?:future|planned|proposed)\s+(?:experiments?|work|evaluation|validation)\b|'
+            r'\b(?:should|must|needs?\s+to)\s+(?:compare|report|score|require|validate)\b|'
+            r'\b(?:previous|related|other)\s+(?:work|stud(?:y|ies)|models?|systems?)\b|'
+            r'\b(?:does|do|did)\s+not\s+(?:identify|explain)\s+why\b|'
+            r'\b(?:not|never)\s+(?:observed|reported|obtained)\b|'
+            r'(?:如果|假设|假想|计划|未来实验|后续实验|相关工作|先前研究|其他模型|他人|错误说法|'
+            r'并非|不是|未报告|尚未报告|未观察到|没有观察到|否认)'
+        ),
+        re.I | re.A,
+    )
+    split_re = re.compile(
+        _source_evidence_pattern(
+            r'(?<=[.!?])\s+(?=[A-Z])|[。；\n]|;\s*|,\s*(?=(?:but|however|yet)\b)|'
+            r'[，,]\s*(?=(?:但|然而|实测|测试显示|实验显示))'
+        ),
+        re.A,
+    )
+    exec_failure_re = re.compile(
+        _source_evidence_pattern(
+            r'\b(?:agent execution|execution fail(?:ure|s)|failures? return|'
+            r'failure feedback|in the case of failure|when execution fails)\b'
+        ),
+        re.I | re.A,
+    )
+    exec_observed_re = re.compile(
+        _source_evidence_pattern(
+            r'\b(?:observed|measured|experiment|evaluation|test results?|failure rate)\b|\d+(?:\.\d+)?%'
+        ),
+        re.I | re.A,
+    )
+    measured_en_re = re.compile(
+        _source_evidence_pattern(
+            r'^\s*(?:(?:the|our)\s+)?(?:experiments?|tests?|measurements?|results?)\s+'
+            r'(?:show|demonstrate|confirm|reveal|indicate)\s+(?:that\s+)?[^;\n]{0,180}?'
+            r'\b(?:fails?|failed|degrades?|degraded|worse\s+than)\b[^;\n]{0,100}\bif\b'
+        ),
+        re.I | re.A,
+    )
+    measured_zh_re = re.compile(
+        _source_evidence_pattern(
+            r'^\s*(?:本次)?(?:实测|实验|测试)(?:结果)?(?:显示|表明|发现)[^。；\n]{0,180}(?:失败|退化|不显著)'
+        ),
+        re.A,
+    )
+    measured_excluded_re = re.compile(
+        _source_evidence_pattern(
+            r'(?:hypothetical|suppose|planned|future experiment|previous work|other model|'
+            r'not observed|not reported)|'
+            r'(?:假设|假想|假定|计划|未来实验|先前研究|其他模型|他人|并非|未观察到|没有观察到)'
+        ),
+        re.I | re.A,
+    )
+    propositions = split_re.split(str(source_text or ''))
+    kept = []
+    for proposition in propositions:
+        if exec_failure_re.search(proposition) and not exec_observed_re.search(proposition):
+            continue
+        if not scope_excluded.search(proposition):
+            kept.append(proposition)
+            continue
+        measured_condition = bool(
+            measured_en_re.search(proposition)
+            or (measured_zh_re.search(proposition) and re.search(r'(?:若|如果|当)', proposition))
+        )
+        if measured_condition and not measured_excluded_re.search(proposition):
+            kept.append(proposition)
+    return '\n'.join(kept)
+
+
+def _has_affirmed_overfitting_evidence(text):
+    """对齐 analysis-contract.js hasAffirmedOverfittingEvidence：确认正向报告过拟合负面证据。"""
+    positive_pattern = re.compile(
+        r'(?:出现|发生|呈现|表现出|暴露出|导致|造成)(?:了)?[^，,：:\n未无不没]{0,12}(?:域)?过拟合',
+        re.I,
+    )
+    for clause in re.split(r'[。；！？!?\n]', str(text or '')):
+        for match in positive_pattern.finditer(clause):
+            prefix = clause[max(0, match.start() - 12):match.start()]
+            if not re.search(r'(?:未|没有|无|不曾|并未)[^，,：:\n]{0,10}$', prefix):
+                return True
+    return False
+
+
 def _own_observed_source_scope(text):
     return _source_scope_observed_experiment_claim(text) and not re.search(
         _source_evidence_pattern(r'\b(?:hypothes(?:is|izes?|ized)|hypothetical|illustrative|proposed only|not our experiment|'
@@ -4880,17 +4970,24 @@ def _validate_experiment_table_evidence_depth(
     ) or _has_reported_experiment_phrase(results, r'将[^。；\n]{2,60}(?:排序|模型|系统|方法|结果)与[^。；\n]{2,80}(?:排序|模型|系统|方法|结果)[^。；\n]{0,20}比较')
     if empirical and source_has_comparison and not result_has_comparison:
         return '全文包含基线或对照比较，但实验结果没有保留比较对象'
-    source_has_ablation = re.search(
-        r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
-        r'消融|移除|去掉',
-        source_text,
-        re.I,
-    )
-    source_placement_evidence = source_text if _source_evidence_extra_i(source_text) else re.sub(
-        _source_evidence_pattern(r'\bno\s+(?:component\s+)?ablations?\b(?:\s+[^.?!\n]{0,40})?|'
+    ablation_negation_pattern = _source_evidence_pattern(
+        r'\bno\s+(?:component\s+)?ablations?\b(?:\s+[^.?!\n]{0,40})?|'
         r'\b(?:controlled\s+)?ablations?\s+(?:were|was)\s+not\s+(?:conducted|performed)\b|'
-        r'\babsence\s+of\s+(?:component\s+)?ablations?\b'), ' ', source_text, flags=re.I)
-    result_has_ablation = _has_source_backed_placement_control(results, source_placement_evidence) or _has_source_backed_presence_comparison(results, tables, source_text) or _has_source_backed_training_stage_ablation(tables, source_text) or _has_source_backed_zero_correction_ablation(results, source_text) or re.search(
+        r'\babsence\s+of\s+(?:component\s+)?ablations?\b'
+    )
+    source_ablation_evidence = re.sub(
+        ablation_negation_pattern, ' ', source_text, flags=re.I | re.A,
+    )
+    source_has_ablation = re.search(
+        _source_evidence_pattern(
+            r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
+            r'消融|移除|去掉'
+        ),
+        source_ablation_evidence,
+        re.I | re.A,
+    )
+    source_placement_evidence = source_text if _source_evidence_extra_i(source_text) else source_ablation_evidence
+    result_has_ablation = _has_source_backed_placement_control(results, source_placement_evidence) or _has_source_backed_presence_comparison(results, tables, source_placement_evidence) or _has_source_backed_training_stage_ablation(tables, source_placement_evidence) or _has_source_backed_zero_correction_ablation(results, source_placement_evidence) or re.search(
         r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
         r'消融|移除|去掉|不含|排除|无外推',
         results,
@@ -4917,20 +5014,21 @@ def _validate_experiment_table_evidence_depth(
         results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
         r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
 
-    reported_reward_ablation = _has_source_backed_reward_switch_ablation(results, tables, source_text)
-    component_switch_ablation = _has_source_backed_component_switch_ablation(results, source_text)
+    reported_reward_ablation = _has_source_backed_reward_switch_ablation(results, tables, source_placement_evidence)
+    component_switch_ablation = _has_source_backed_component_switch_ablation(results, source_placement_evidence)
     if empirical and source_has_ablation and not result_has_ablation and not reported_reward_ablation and not component_switch_ablation:
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照'
     source_negative_evidence = re.sub(
-        r'\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+'
-        r'(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|'
-        r'\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
-        r'\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
-        r'(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)|'
-        # 「工具失败时怎样」「Nothing fails silently」「fails if 条件」是程序行为描述，
-        # 不是论文报告的实验负面结果；JS 侧靠按句过滤，这里按短语排除。
-        r'\b(?:nothing\s+fails|fails?\s+(?:silently|if|when|to))\b',
-        ' ', source_text, flags=re.I
+        _source_evidence_pattern(
+            r'\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+'
+            r'(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|'
+            r'\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
+            r'\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
+            r'(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)|'
+            # "平台拒绝计为攻击失败"只是评测口径定义，不是论文报告的退化或失败结果。
+            r'\b(?:count(?:s|ed|ing)?|treated|recorded|considered|scored|classif(?:y|ied))\s+as\s+(?:an?\s+)?(?:[A-Za-z-]+\s+){0,3}fail(?:ure|ures)\b'
+        ),
+        ' ', _observed_source_negative_evidence(source_text), flags=re.I | re.A
     )
     source_has_negative = re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
@@ -4999,7 +5097,7 @@ def _validate_experiment_table_evidence_depth(
                                 and column < len(row) and row[column].strip() == rank_comparison[2] for row in rows)
                 if own and reference:
                     source_rank_regression = True
-    result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or source_rank_regression or re.search(
+    result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or source_rank_regression or _has_affirmed_overfitting_evidence(results) or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|无显著(?:差异)?|退化|恶化|失败|未能完成|失效|崩溃|接近随机|低于随机|'
@@ -6870,11 +6968,16 @@ def _is_publish_loopback_hostname(hostname):
 
 def validate_publish_api_endpoint_url(endpoint):
     """只允许 HTTPS；明文 HTTP 仅供 loopback 本地测试服务。"""
+    if not isinstance(endpoint, str) or not endpoint or re.search(r'[\x00-\x20\x7f\\]', endpoint):
+        raise ValueError('LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）')
+    authority_match = re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://([^/?#]+)', endpoint)
+    if not authority_match:
+        raise ValueError('LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）')
     try:
         parsed = urllib.parse.urlsplit(endpoint)
         # 访问这些属性同时会拒绝格式错误的方括号和端口。
         hostname = parsed.hostname
-        _ = parsed.port
+        port = parsed.port
         username = parsed.username
         password = parsed.password
     except (AttributeError, TypeError, ValueError) as exc:
@@ -6884,8 +6987,10 @@ def validate_publish_api_endpoint_url(endpoint):
 
     if not parsed.scheme or not hostname:
         raise ValueError('LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）')
-    if username is not None or password is not None:
+    if username is not None or password is not None or '@' in (parsed.netloc or '') or '@' in authority_match.group(1):
         raise ValueError('LLM endpoint 禁止包含 URL userinfo 凭据')
+    if port is not None and not (1 <= port <= 65535):
+        raise ValueError('LLM endpoint 端口非法')
 
     protocol = parsed.scheme.lower()
     if protocol == 'https':
@@ -6902,17 +7007,18 @@ def build_publish_api_url(api_type, endpoint):
     """根据协议构造最终 LLM 请求 URL。"""
     validate_publish_api_endpoint_url(endpoint)
     base = (endpoint or '').rstrip('/')
+    base_lower = base.lower()
     if api_type == 'anthropic':
-        if 'xiaomimimo.com' in base:
-            base = re.sub(r'/v1/?$', '/anthropic', base)
+        if 'xiaomimimo.com' in base_lower:
+            base = re.sub(r'/v1/?$', '/anthropic', base, flags=re.IGNORECASE)
             return f'{base}/v1/messages'
-        if 'kimi.com' in base:
+        if 'kimi.com' in base_lower:
             base = re.sub(r'/coding(?:/v1)?$', '/coding/v1', base, flags=re.IGNORECASE)
             return f'{base}/messages'
         return f'{base}/messages'
     if api_type == 'openai_responses':
-        return base if base.endswith('/responses') else f'{base}/responses'
-    base = re.sub(r'/anthropic/?$', '/v1', base)
+        return base if base_lower.endswith('/responses') else f'{base}/responses'
+    base = re.sub(r'/anthropic/?$', '/v1', base, flags=re.IGNORECASE)
     return f'{base}/chat/completions'
 
 
@@ -7021,25 +7127,49 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
 
 
 def parse_publish_response_text(api_type, data):
+    if not isinstance(data, dict):
+        return ''
     if api_type == 'anthropic':
-        if isinstance(data.get('content'), list):
-            for block in data['content']:
-                if block.get('type') == 'text':
-                    return (block.get('text') or '').strip()
+        blocks = data.get('content')
+        if isinstance(blocks, list):
+            parts = [
+                block['text']
+                for block in blocks
+                if isinstance(block, dict)
+                and block.get('type') == 'text'
+                and isinstance(block.get('text'), str)
+                and block['text']
+            ]
+            return '\n'.join(parts).strip()
         return ''
     if api_type == 'openai_responses':
         if isinstance(data.get('output_text'), str) and data['output_text'].strip():
             return data['output_text'].strip()
         parts = []
-        for item in data.get('output') or []:
-            if not isinstance(item, dict):
-                continue
-            for block in item.get('content') or []:
-                if isinstance(block, dict) and block.get('type') == 'output_text' \
-                        and isinstance(block.get('text'), str):
-                    parts.append(block['text'])
+        outputs = data.get('output')
+        if isinstance(outputs, list):
+            for item in outputs:
+                if not isinstance(item, dict):
+                    continue
+                content_blocks = item.get('content')
+                if not isinstance(content_blocks, list):
+                    continue
+                for block in content_blocks:
+                    if isinstance(block, dict) and block.get('type') == 'output_text' \
+                            and isinstance(block.get('text'), str):
+                        parts.append(block['text'])
         return '\n'.join(part for part in parts if part).strip()
-    return (data.get('choices', [{}])[0].get('message', {}).get('content') or '').strip()
+    choices = data.get('choices')
+    if not isinstance(choices, list) or not choices:
+        return ''
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return ''
+    message = first_choice.get('message')
+    if not isinstance(message, dict):
+        return ''
+    content = message.get('content')
+    return content.strip() if isinstance(content, str) else ''
 
 
 def _publish_llm_requires_proxy(endpoint, model):
@@ -7070,9 +7200,11 @@ def reasoning_efforts_for(model):
 
 def normalize_reasoning_effort(value, model=None):
     allowed = REASONING_EFFORTS if model is None else reasoning_efforts_for(model)
-    effort = str(value or '').strip().lower()
-    if effort == 'max' and 'xhigh' in allowed and 'max' not in allowed:
-        effort = 'xhigh'
+    raw = str(value or '').strip().lower()
+    if raw in ('max', 'highest', 'maximum'):
+        effort = 'max' if 'max' in allowed else ('xhigh' if 'xhigh' in allowed else raw)
+    else:
+        effort = raw
     return effort if effort in allowed else ''
 
 
@@ -7313,6 +7445,15 @@ def call_publish_llm_api(
         secondary_fallback_keys = os.environ.get(
             'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS', ''
         )
+        secondary_tertiary_fallback_key = os.environ.get(
+            'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY', ''
+        )
+        secondary_fallback_list = [
+            value.strip()
+            for raw in (secondary_fallback_keys, secondary_tertiary_fallback_key)
+            for value in str(raw or '').split(',')
+            if value.strip()
+        ]
         if endpoint:
             try:
                 validate_publish_api_endpoint_url(endpoint)
@@ -7337,14 +7478,14 @@ def call_publish_llm_api(
                 )
             except ValueError:
                 same_endpoint_service = False
-            if secondary_fallback_keys:
+            if secondary_fallback_list:
                 if not secondary_key and not same_opencode_service:
                     raise LlmAccountPoolConfigError(
                         '副模型独立账号池跨服务使用时必须显式配置 '
                         'PAPER_ANALYZER_SECONDARY_API_KEY'
                     )
                 api_keys = resolve_api_key_pool(
-                    secondary_key or primary_key, secondary_fallback_keys
+                    secondary_key or primary_key, secondary_fallback_list
                 )
             elif secondary_key:
                 api_keys = [api_key]
@@ -7588,10 +7729,12 @@ def call_publish_llm_api(
 
         if attempt < max_retries - 1 and not retry_immediately:
             retry_after = None
-            if isinstance(last_error, urllib.error.HTTPError):
+            if isinstance(last_error, urllib.error.HTTPError) and last_error.headers is not None:
                 raw_retry_after = last_error.headers.get('Retry-After')
                 try:
-                    retry_after = float(raw_retry_after)
+                    parsed_retry_after = float(raw_retry_after)
+                    if math.isfinite(parsed_retry_after) and parsed_retry_after > 0:
+                        retry_after = parsed_retry_after
                 except (TypeError, ValueError):
                     retry_after = None
             # 格式错误或异常大的 Retry-After 不能把整批审查无限期卡住。正式审查重试
@@ -8205,6 +8348,14 @@ def fix_latex_delimiters(text):
             r'(?<![\\$])\$(\d{2,}(?:,\d{3})*\.\d+)'
             r'(?=\s*(?:[，。；：、,.!?！？)\]]|$|[\u3400-\u9fff]))',
             r'\1 美元',
+            prose,
+        )
+        # 明确中文价格语境下的整数美元（如“标价 $110 且仍需另配这些部件”），
+        # 后面只能跟中文正文或标点，避免把 ``$5 + 2`` 或无语境英文列表误判成货币。
+        prose = re.sub(
+            r'((?:标价|售价|定价|单价|成本|价格|总价|预算|报价|物料(?:总价|成本)?)(?:约|为|约为|约合|高达|低至|仅|仅需|不足|超过|高于|低于)?\s*)'
+            r'(?<![\\$])\$(\d+(?:,\d{3})*)(?=\s*(?:[，。；：、,.!?！？)\]]|$|[\u3400-\u9fff]))',
+            r'\1\2 美元',
             prose,
         )
 
@@ -8861,8 +9012,12 @@ def escape_literal_source_figure_caption_dollars(text, *, _literal_pairs=None):
         return text
     caption = re.compile(
         r'^(?P<prefix>\*论文图 [1-9][0-9]*。原论文 '
-        r'(?P<label>(?:Figure|Fig\.) [1-9][0-9]*):?：“)'
+        r'(?P<label>(?:Figure|Fig\.) (?:[A-Z]\.?)?[1-9][0-9]*)[.:]?：“)'
         r'(?P<value>[^\r\n]*)(?P<suffix>”。\*)(?P<ending>\r?\n)?$')
+    v4_caption = re.compile(
+        r'^(?P<prefix>\*论文图 [1-9][0-9]*：)'
+        r'(?P<value>[^\r\n]*)(?P<suffix>（原论文 '
+        r'(?P<label>(?:Figure|Fig\.) (?:[A-Z]\.?)?[1-9][0-9]*)(?:；[^）\r\n]*)?）。\*)(?P<ending>\r?\n)?$')
     image = re.compile(
         r'^(?P<wrap>\[)?!\[(?P<alt>[^\r\n]*)\]\((?P<url>[^)\r\n]+)\)'
         r'(?(wrap)\]\((?P=url)\))(?P<ending>\r?\n)?$')
@@ -8918,7 +9073,7 @@ def escape_literal_source_figure_caption_dollars(text, *, _literal_pairs=None):
         if not outside[index] or any(start < offsets[index] + len(line) and end > offsets[index]
                                      for start, end in multiline_code):
             continue
-        match = caption.fullmatch(line)
+        match = caption.fullmatch(line) or v4_caption.fullmatch(line)
         if not match:
             continue
         before = index - 1
@@ -8928,7 +9083,7 @@ def escape_literal_source_figure_caption_dollars(text, *, _literal_pairs=None):
         if before >= 0:
             note = source_note.fullmatch(lines[before])
             if note:
-                native_number = re.search(r'[0-9]+$', match['label']).group(0)
+                native_number = re.search(r'(?:[A-Z]\.?)?[0-9]+$', match['label']).group(0)
                 if not outside[before] or (note['crop'] or note['page']) != native_number:
                     continue
                 note_value = '图片来源： ' + note['note'] + '。'
@@ -8938,7 +9093,9 @@ def escape_literal_source_figure_caption_dollars(text, *, _literal_pairs=None):
         if before < 0 or not outside[before]:
             continue
         node = image.fullmatch(lines[before])
-        if node is None or not node['alt'].startswith('原论文 ' + match['label'] + '：'):
+        if node is None or not (
+                node['alt'].startswith('原论文 ' + match['label'] + '：')
+                or node['alt'].startswith('原论文 ' + match['label'] + '.：')):
             continue
         escaped_caption = match['prefix'] + escape_fragment(match['value']) + match['suffix']
         escaped_alt = escape_fragment(node['alt'])

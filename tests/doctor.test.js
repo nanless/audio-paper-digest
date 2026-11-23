@@ -1233,3 +1233,45 @@ test('doctor 复用 env-schema：模型名/必填项/密钥识别/解析同源',
     assert.ok(secrets.includes('xhs-cookie-value'));
     assert.ok(!secrets.includes('muse-spark-1.3-contributor'));
 });
+
+test('doctor 沙箱检查读 processEnv、代理 fail-closed 且探测 URL 拒绝 userinfo 与保留段', async () => {
+    const parsed = doctor.parseArgs(['--offline']);
+    const sandboxResult = await doctor.runDoctor({
+        parsed,
+        projectRoot: '/fake/project',
+        processEnv: { CODEX_SANDBOX: '1' },
+        deps: fakeDeps()
+    });
+    assert.equal(byLabel(sandboxResult.checks, '运行环境').ok, 'warn');
+
+    const failClosed = doctor.evaluateProxy({
+        https_proxy: 'socks5://127.0.0.1:7897',
+        HTTP_PROXY: 'http://127.0.0.1:7897'
+    });
+    assert.equal(failClosed.ok, 'fail');
+    assert.equal(doctor.evaluateProxy({ https_proxy: '   ', HTTP_PROXY: 'http://127.0.0.1:7897' }).ok, 'fail');
+    assert.equal(doctor.evaluateProxy({ HTTPS_PROXY: ' http://127.0.0.1:7897 ' }).ok, 'fail');
+    assert.equal(doctor.evaluateProxy({ HTTPS_PROXY: 'http:///127.0.0.1:7897' }).ok, 'fail');
+    assert.equal(doctor.evaluateProxy({ HTTPS_PROXY: 'http://127.0.0.1:0' }).ok, 'fail');
+
+    assert.equal(doctor.isPrivateOrReservedHost('100::1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('2001:db8::1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('0x7f000001'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('192.168.1.999'), true);
+    for (const trailingDotHost of ['localhost.', 'localhost..', 'sub.localhost.', 'foo.local.', '127.0.0.1.', '0x7f000001.', '127.1.', '198.18.0.1.', '...']) {
+        assert.equal(doctor.isPrivateOrReservedHost(trailingDotHost), true, trailingDotHost);
+    }
+    for (const badProbe of [
+        'https://@export.arxiv.org/api',
+        'https://user:pass@export.arxiv.org/api',
+        'https:///@export.arxiv.org/api',
+        'https:\\\\@export.arxiv.org/api',
+        'https:/\t/@export.arxiv.org/api',
+        '\x01https://@export.arxiv.org/api',
+        'https://export.arxiv.org:0/api',
+        'https://localhost../api',
+        'https://.../api'
+    ]) {
+        assert.throws(() => doctor.assertAllowedProbeUrl(badProbe), Error, badProbe);
+    }
+});

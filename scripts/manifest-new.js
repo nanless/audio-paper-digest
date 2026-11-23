@@ -23,13 +23,16 @@ const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(val
 function nodeAt(draft, pointer) {
     if (['/readerTitle', '/oneSentenceThesis'].includes(pointer)) return draft[pointer.slice(1)];
     if (['/sections', '/tableBindings', '/conceptBridges', '/formulaBindings', '/figurePlacements'].includes(pointer)) return draft[pointer.slice(1)];
-    const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/(?:body|explanation))?$/.exec(pointer);
+    const match = /^\/(?:(sections)\/(0|[1-9]\d*)(\/body)?|(conceptBridges)\/(0|[1-9]\d*)(\/explanation)?|(figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*))$/.exec(pointer);
     if (!match) throw new Error(`不支持的节点路径：${pointer}`);
-    const collection = draft[match[1]];
+    const key = match[1] || match[4] || match[7];
+    const index = Number(match[2] ?? match[5] ?? match[8]);
+    const leaf = match[3] || match[6] || '';
+    const collection = draft[key];
     if (!Array.isArray(collection)) throw new Error(`节点不存在：${pointer}`);
-    const node = collection[Number(match[2])];
+    const node = collection[index];
     if (!node || typeof node !== 'object') throw new Error(`节点不存在：${pointer}`);
-    return match[3] ? node[match[3].slice(1)] : node;
+    return leaf ? node[leaf.slice(1)] : node;
 }
 
 function validateSpec(spec) {
@@ -38,8 +41,9 @@ function validateSpec(spec) {
     if (!Array.isArray(spec.replacements) || spec.replacements.length < MIN_READER_PATCH_NODES
         || spec.replacements.length > MAX_READER_PATCH_NODES) throw new Error('replacements 须为 1–8 项');
     for (const replacement of spec.replacements) {
-        if (!replacement || typeof replacement.path !== 'string' || !/^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/(?:body|explanation))?$/.test(replacement.path)) {
-            throw new Error(`replacement.path 非法：${replacement && replacement.path}`);
+        if (!replacement || typeof replacement.path !== 'string'
+            || !/^\/(?:sections\/(?:0|[1-9]\d*)(?:\/body)?|conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?|(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*))$/.test(replacement.path)) {
+            throw new Error(`replacement.path 非法（not allowed）：${replacement && replacement.path}`);
         }
         if (replacement.path.endsWith('/body') || replacement.path.endsWith('/explanation')) {
             if (typeof replacement.value !== 'string' || !replacement.value.trim()) throw new Error('replacement.value 须为非空字符串');

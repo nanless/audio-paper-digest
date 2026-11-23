@@ -85,7 +85,7 @@ const cases=[
   {
     "source": "*论文图 2。![alt [p](‘beat’) other](https://example.org/image.png)*",
     "nodeExpected": "*论文图 2。![alt [p](‘beat’) other](https://example.org/image.png)*",
-    "pythonExpected": "*论文图 2。![alt \\[p](‘beat’) other](https://example.org/image.png)*",
+    "pythonExpected": "*论文图 2。![alt \\[p\\](‘beat’) other](https://example.org/image.png)*",
     "complexSkip": true
   },
   {

@@ -327,12 +327,15 @@ def build_tag_prompt_text(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONT
          '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。'),
     ]
     current_facet = None
+    js_ws_re = re.compile(f'[{re.escape(_JS_WHITESPACE)}]+')
+
+    def format_prompt_field(value):
+        return js_ws_re.sub(' ', re.sub(r'[\r\n|]+', ' ', str(value or ''))).strip(_JS_WHITESPACE)
+
     for concept in active_concepts:
         if concept['facet'] != current_facet:
             current_facet = concept['facet']
             lines.append(f'[{current_facet}]')
-        format_prompt_field = lambda value: re.sub(
-            r'\s+', ' ', re.sub(r'[\r\n|]+', ' ', str(value or ''))).strip()
         lines.append('|'.join((
             concept['id'], f'#{concept["preferredLabel"]["zh"]}',
             format_prompt_field(concept['definition']), format_prompt_field(concept['scopeNote']),

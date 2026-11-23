@@ -81,6 +81,11 @@ def validate_intent(intent, run_id, date):
         child(Path('.'), item['path'])
         if set(item) != {'path', 'sha256'} or (item['sha256'] is not None and not SHA.fullmatch(str(item['sha256']))):
             raise ValueError('日更重新发布已验文件 CAS 无效')
+    if 'reanalyzed' in intent:
+        if type(intent['reanalyzed']) is not bool:
+            raise ValueError('日更重新发布重分析标记无效')
+        if intent['reanalyzed'] and not isinstance(intent.get('previousInputSourceReference'), dict):
+            raise ValueError('重分析重新发布缺少原发布输入来源引用')
     return intent
 
 
@@ -156,7 +161,8 @@ def _blob(module, commit, relative):
     return result.stdout if result.returncode == 0 else None
 
 
-def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *, expected_head=None):
+def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *,
+                     expected_head=None, allow_reanalyzed=False):
     """当前已签来源与原发布证明分别重放，维护提交不能替换原页面或图片。"""
     manifest, receipt = json.loads(manifest_raw), json.loads(receipt_raw)
     current = Path(module.CURRENT_DIR); repo = Path(module.BLOG_REPO).resolve()
@@ -197,10 +203,14 @@ def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *, 
         raise ValueError('原审查凭证远端验证时间非法') from error
     reference = manifest.get('inputSourceReference')
     current_reference = module.build_generation_input_source_reference(str(formal_path))
-    if reference != current_reference:
-        raise ValueError('原发布输入不是当前完整正式分析字节')
+    if not allow_reanalyzed:
+        if reference != current_reference:
+            raise ValueError('原发布输入不是当前完整正式分析字节')
+    elif not isinstance(reference, dict):
+        raise ValueError('原发布清单缺少输入来源引用，不能执行重分析重新发布')
     module.validate_daily_fresh_sources_for_publish(str(formal_path), date)
-    module._validate_generation_input_integrity(manifest, date)
+    if not allow_reanalyzed:
+        module._validate_generation_input_integrity(manifest, date)
     head = module.validate_git_publish_branch()
     if expected_head is not None and head != expected_head:
         raise ValueError('重新发布归档期间博客 HEAD 变化')
@@ -259,10 +269,14 @@ def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *, 
     published_ids = sorted(module.normalize_publish_arxiv_id(item.get('arxivId')) for item in manifest['publishedPapers'])
     if ids != published_ids or not ids or len(set(ids)) != len(ids) or formal.get('batchDate') != date:
         raise ValueError('原发布与当前封存完整论文集合不一致')
-    return {'blogHead': head, 'publicationCommit': commit, 'remoteIdentitySha256': identity,
-            'canonicalSha256': canonical_sha, 'paperIds': ids, 'catalogMaintenance': maintained,
-            'catalogAvailability': availability,
-            'controlledFiles': [{'path': name, 'sha256': current_files[name]} for name in sorted(current_files)]}
+    result = {'blogHead': head, 'publicationCommit': commit, 'remoteIdentitySha256': identity,
+              'canonicalSha256': canonical_sha, 'paperIds': ids, 'catalogMaintenance': maintained,
+              'catalogAvailability': availability,
+              'controlledFiles': [{'path': name, 'sha256': current_files[name]} for name in sorted(current_files)]}
+    if allow_reanalyzed:
+        result['reanalyzed'] = True
+        result['previousInputSourceReference'] = reference
+    return result
 
 
 def validate_cas(module, current, directory, intent, pending):
@@ -289,7 +303,8 @@ def validate_cas(module, current, directory, intent, pending):
             raise ValueError('重新发布期间归档 CAS 变化')
 
 
-def activate(module, date, run_id, new_input, new_template, *, runs_root=None, after_step=lambda _step: None):
+def activate(module, date, run_id, new_input, new_template, *,
+             runs_root=None, after_step=lambda _step: None, allow_reanalyzed=False):
     """调用方持有仓库锁、日期锁；每个中断窗口均保留来源与原发布证明。"""
     validate_id(run_id)
     current = safe_dir(module.CURRENT_DIR)
@@ -300,6 +315,8 @@ def activate(module, date, run_id, new_input, new_template, *, runs_root=None, a
         intent = validate_intent(load_json(intent_path), run_id, date)
         if (intent['newInputFingerprint'], intent['newTemplateFingerprint']) != (new_input, new_template):
             raise ValueError('同一重新发布 UUID 不能切换生成输入或模板')
+        if bool(intent.get('reanalyzed', False)) != bool(allow_reanalyzed):
+            raise ValueError('同一重新发布 UUID 不能切换重分析模式')
         if (directory / 'completion.json').exists():
             result = verify_completed(current, directory, intent)
             marked = load_json(marker)
@@ -313,7 +330,8 @@ def activate(module, date, run_id, new_input, new_template, *, runs_root=None, a
         manifest_raw = read(current / f'blog-generation-manifest-{date}.json')
         receipt_raw = read(current / f'blog-review-receipt-{date}.json')
         canonical_sha = sha(read(current / 'deep-analysis-result.json'))
-        authority = verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha)
+        authority = verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha,
+                                     allow_reanalyzed=bool(allow_reanalyzed))
         prior = sha(read(marker)) if marker.exists() else None
         intent = {'contract': CONTRACT, 'runId': run_id, 'date': date,
                   'newInputFingerprint': new_input, 'newTemplateFingerprint': new_template,

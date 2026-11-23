@@ -14,23 +14,33 @@ const USAGE = 'node scripts/review-overrides-cli.js --date DATE --file OVERRIDES
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('review-overrides-cli.js'); } catch (error) { console.error(`[review-overrides] ${error.message}`); return 2; }
     // help 优先：后面跟未知参数也只看 help，不报未知参数错误。
-    if (argv.includes('--help')) {
+    if (argv.includes('--help') || argv.includes('-h')) {
         const asJson = argv.includes('--json');
         console.log(asJson ? JSON.stringify({ usage: USAGE }) : `用法: ${USAGE}`);
         return 0;
     }
     let date = null; let file = null; let json = false; let failureFileOption = null; let receiptPath = null;
+    const requireValue = (flag, raw) => {
+        if (typeof raw !== 'string' || !raw.trim() || raw.startsWith('--')) {
+            throw new Error(`${flag} 缺少非空参数值`);
+        }
+        return raw;
+    };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
-        if (value === '--date') date = argv[++index] || null;
-        else if (value === '--file') file = path.resolve(argv[++index] || '');
+        if (value === '--date') date = requireValue('--date', argv[++index]);
+        else if (value === '--file') file = path.resolve(requireValue('--file', argv[++index]));
         else if (value === '--json') json = true;
-        else if (value === '--failure-file') failureFileOption = path.resolve(argv[++index] || '');
-        else if (value === '--receipt') receiptPath = path.resolve(argv[++index] || '');
+        else if (value === '--failure-file') failureFileOption = path.resolve(requireValue('--failure-file', argv[++index]));
+        else if (value === '--receipt') receiptPath = path.resolve(requireValue('--receipt', argv[++index]));
         else throw new Error(`未知参数：${value}`);
     }
     if (!date || !file) throw new Error('需要 --date 与 --file');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('--date 必须是 YYYY-MM-DD');
+    const parsedDate = new Date(`${date}T00:00:00Z`);
+    if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+        throw new Error('--date 必须是真实有效的日历日期');
+    }
     const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (payload.batchDate && date && payload.batchDate !== date) throw new Error(`overrides.batchDate=${payload.batchDate} 与 --date ${date} 不一致`);
     const overrides = validateOverrides(payload);
