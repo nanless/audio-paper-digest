@@ -24,10 +24,24 @@ function readerVisibleWithTex(value) {
 function projectReaderMathSymbols(value) {
     let text = String(value ?? '');
     if (!text.includes('\\')) return text;
-    text = text.replace(/\\([A-Za-z]{2,})\b/g,
+    text = text.replace(/\\([A-Za-z]{2,})(?![A-Za-z])/g,
         (whole, name) => Object.hasOwn(READER_TABLE_SYMBOLS, name) ? READER_TABLE_SYMBOLS[name] : whole);
     text = text.replace(/\\(?:mathrm|text|mathbf|mathit|mathcal)\{([^{}]*)\}/g, '$1');
     return text;
+}
+
+function escapeMarkdownTableCell(value) {
+    const text = String(value ?? '');
+    if (!text.includes('|')) return text;
+    return text.replace(/(\\*)(\|)/g, (_m, slashes, pipe) => (
+        slashes.length % 2 === 1 ? `${slashes}${pipe}` : `${slashes}\\${pipe}`
+    ));
+}
+
+function unescapeMarkdownTableCell(value) {
+    const text = String(value ?? '');
+    if (!text.includes('\\|')) return text;
+    return text.replace(/\\\|/g, '|');
 }
 
 // 选择与完整表共用同一个单元格显示投影：先取原 DOM 的已验证显示视图，
@@ -347,7 +361,9 @@ function findReaderTablePasteDuplication(cell, context = {}) {
 }
 
 function unsafeMarkdownCell(text) {
-    return /[|\r\n]/.test(text) || /\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
+    // Literal '|' in source table cells is escaped safely via escapeMarkdownTableCell ('\\|'),
+    // which splitMarkdownTableRow, publish-to-blog.py, and Hugo Goldmark all parse natively.
+    return /[\r\n]/.test(text) || /\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
         || /^\s*:?-{3,}:?\s*$/.test(text);
 }
 
@@ -358,7 +374,7 @@ function readerResultTableRequirement(artifacts) {
         if (!Number.isInteger(table?.ordinal) || table.ordinal < 1
             || table.recoveryStatus !== 'complete' || !sha256(table.sourceDomSha256)) return false;
         const caption = String(table.caption || '');
-        if (!/\b(?:results?|performance|comparisons?|benchmarks?)\b|实验结果|主结果|性能比较/i.test(caption)
+        if (!/\b(?:results?|performance|comparisons?|benchmarks?|ablations?|evaluations?|accuracy|wer|cer|mos|bleu|rouge|f1|fid|scores?|metrics?|main|overall|zero-shot|cross-lingual|downstream|probing|probe)\b|实验结果|主结果|性能比较|消融|评测|准确率/i.test(caption)
             || /\b(?:authors?|affiliations?|hyperparameters?|configuration|settings|setup)\b|dataset statistics|data statistics|作者|机构|超参数|训练配置/i.test(caption)) return false;
         const rows = Array.isArray(table.matrix) ? table.matrix.filter(Array.isArray) : [];
         const headerRows = Array.isArray(table.headerRows) && table.headerRows.length
@@ -390,9 +406,44 @@ function effectiveReaderTableRows(table) {
     const cells = table?.cells;
     const width = matrix?.[0]?.length;
     const unchanged = { headerRows: declaredHeaders, bodyRows: declaredBodies, inferred: false };
-    if (!Array.isArray(matrix) || matrix.length < 4 || !Number.isInteger(width) || width < 3
+    if (!Array.isArray(matrix) || matrix.length < 2 || !Number.isInteger(width) || width < 2
         || matrix.some(row => !Array.isArray(row) || row.length !== width)
         || !Array.isArray(cells)) return unchanged;
+    // 兼容历史 v4 解析产物里完全没有 <thead>/<th> 的普通 LaTeXML 表格（headerRows: []）：
+    // 仅当首行是非空、无纯小数测量值的明确列头，且后续数据行确实含数值测量时，才安全推断首行为表头。
+    if (declaredHeaders.length === 0 && matrix[0].some(text => String(text || '').trim().length > 0)) {
+        const row0 = matrix[0];
+        const row0Cells = cells.filter(cell => cell?.row === 0);
+        const isSingleDivider = row0Cells.length === 1 && Number(row0Cells[0]?.colspan || 1) === width;
+        const nonEmptyRow0 = row0.filter(text => String(text || '').trim().length > 0);
+        const pureFloat = text => /^[+\-\u2212]?(?:\d+\.\d+|\.\d+)%?$/.test(String(text || '').trim());
+        const hasAlpha = text => /[A-Za-z\u3400-\u9fff]/.test(String(text || ''));
+        const row0LooksHeader = !isSingleDivider
+            && nonEmptyRow0.length === width
+            && row0.every(text => !pureFloat(text))
+            && nonEmptyRow0.filter(hasAlpha).length >= Math.max(1, Math.ceil(width * 0.5));
+        const hasNumericBody = matrix.slice(1).some(row => (
+            row.filter(text => /\d/.test(String(text || ''))).length >= Math.max(1, Math.min(2, width - 1))
+        ));
+        if (row0LooksHeader && hasNumericBody) {
+            const inferredHeaders = [0];
+            if (matrix.length >= 3 && row0Cells.some(cell => Number(cell?.colspan || 1) > 1)) {
+                const row1 = matrix[1];
+                const row1NonEmpty = row1.filter(text => String(text || '').trim().length > 0);
+                if (row1NonEmpty.length === width && row1.every(text => !pureFloat(text))
+                    && matrix.slice(2).some(row => row.filter(text => /\d/.test(String(text || ''))).length >= 1)) {
+                    inferredHeaders.push(1);
+                }
+            }
+            const headerSet = new Set(inferredHeaders);
+            const bodyRows = matrix.map((_row, index) => index).filter(index => !headerSet.has(index));
+            if (bodyRows.length > 0) {
+                return { headerRows: inferredHeaders, bodyRows, inferred: true,
+                    inferenceContract: 'unmarked-latexml-top-header-row-v1' };
+            }
+        }
+    }
+    if (matrix.length < 4 || width < 3) return unchanged;
     // 有些已保存的 LaTeXML 表格把全角分隔线当表头，
     // 而真正彼此不同的列标签却是普通 <td> 单元格。
     // 只有原始 DOM 的跨度能证明这种形态时，才据此推断它们的角色。
@@ -569,8 +620,14 @@ function assessReaderTableSelectionEligibility(table) {
                 add('divider_only_source_headers', { rows: effectiveHeaders.slice(0, 4) });
             }
             for (const row of headers) {
+                const metricColumnsNonEmpty = width >= 2
+                    && matrix[row].slice(1).every(value => String(value || '').trim().length > 0);
                 for (const [column, text] of matrix[row].entries()) {
-                    if (!text.trim()) add('empty_source_header', { row, column });
+                    // 学术表格常见首列左上角留空（如 `| | Stage 1 | Stage 2 |`），只要其余所有指标列
+                    // 都有明确列名且行本身非全空，就不应因左上角留空拒绝整张表进入 selection。
+                    if (!text.trim() && !(column === 0 && metricColumnsNonEmpty)) {
+                        add('empty_source_header', { row, column });
+                    }
                 }
             }
         }
@@ -695,7 +752,7 @@ function renderReaderCompleteTable(binding, artifacts) {
     const eligibility = assessReaderCompleteTableEligibility(table);
     if (!eligibility.eligible) throw readerSourceTableError(binding.tableIndex, table, eligibility);
     const displayMatrix = table.matrix.map((row, rowIndex) => row.map(
-        (_cell, columnIndex) => readerTableCellDisplay(table, rowIndex, columnIndex)));
+        (_cell, columnIndex) => escapeMarkdownTableCell(readerTableCellDisplay(table, rowIndex, columnIndex))));
     const line = cells => `| ${cells.join(' | ')} |`;
     return { markdown: [line(displayMatrix[0]), line(displayMatrix[0].map(() => '---')),
         ...displayMatrix.slice(1).map(line)].join('\n'),
@@ -827,7 +884,7 @@ function renderReaderTableSelection(binding, artifacts) {
         cellBindings.push({ renderedRow, renderedColumn, sourceRow, sourceColumn });
         // 选择与完整表共用同一显示投影；旧签稿的 DOM 字节仍由上面的
         // 原单元格身份检查保护，不按正文回填或手写。
-        return display;
+        return escapeMarkdownTableCell(display);
     }));
     // 渲染表头全空或全幅/跨列单一分组标题行（如 `| STEM/Puzzle |  |  |  |` 或 `| Audio | Audio |`）
     // 会让读者看不到任何区分指标/模型的列名；必须选到真正带列名的原表头行。
@@ -873,7 +930,9 @@ function repairUniqueReaderTableSelectionHeader(binding, artifacts) {
     if (!table || !Array.isArray(selection && selection.sourceRows)) {
         return binding;
     }
-    const effectiveHeaderRows = effectiveReaderTableHeaderRows(table);
+    const effectiveRows = effectiveReaderTableRows(table);
+    const effectiveHeaderRows = effectiveRows.inferred
+        ? effectiveRows.headerRows : effectiveReaderTableHeaderRows(table);
     const selectedHeaders = selection.sourceRows.filter(row => effectiveHeaderRows.includes(row));
     const dataRows = selection.sourceRows.filter(row => !effectiveHeaderRows.includes(row));
     if (dataRows.length === 0 || selectedHeaders.length > 1) return binding;
@@ -1146,5 +1205,5 @@ module.exports = { READER_TABLE_SELECTION_CONTRACT, originalTableSelectionDomain
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, putReaderTableHeaderFirst,
     renderReaderTableSelection, readCompiledReaderTableSelection, repairUniqueReaderTableSelectionHeader,
-    projectReaderCellForValidation,
+    projectReaderCellForValidation, escapeMarkdownTableCell, unescapeMarkdownTableCell,
     compileReaderTableSelections };

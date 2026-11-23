@@ -1066,6 +1066,42 @@ async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
         || require('../deep-analyzer.js').isPermanentApiReaderFigureFailure;
     for (const figure of figures) {
         try {
+            if (String(figure.url || '').includes('#') && dependencies.freshArxivSourceRoot) {
+                const stored = freshArxiv.readFreshArxivRewriteSource({
+                    rootDir: dependencies.freshArxivSourceRoot,
+                    arxivId,
+                    generation: Number.isSafeInteger(dependencies.sourceGeneration) ? dependencies.sourceGeneration : 1
+                });
+                if (dependencies.sourceManifestSha256
+                    && stored.sourceManifestSha256 !== dependencies.sourceManifestSha256) {
+                    fail(`historical sealed source manifest SHA mismatch for ${arxivId}`);
+                }
+                const figuresList = stored.runtimeDetails?.structuredArtifacts?.figures || [];
+                const pdfCrop = require('./reader-pdf-figure-crop.js');
+                if (pdfCrop.isPdfCropFigure(figure)) {
+                    const matches = figuresList.filter(entry =>
+                        entry.ordinal === figure.ordinal && entry.recoveryStatus === 'complete'
+                        && entry.images?.length === 1
+                        && pdfCrop.pdfCropSourceDescriptor(entry.images[0], arxivId)?.url === figure.url);
+                    if (matches.length !== 1) fail(`historical PDF crop Figure ${figure.ordinal} does not match sealed source`);
+                    const descriptor = pdfCrop.pdfCropSourceDescriptor(matches[0].images[0], arxivId);
+                    const rendered = await pdfCrop.renderOfficialPdfFigureCrop(stored.pdf, matches[0].images[0], arxivId);
+                    materialized.push({ ...figure, ...descriptor, sourceDomSha256: matches[0].sourceDomSha256,
+                        rawBytes: rendered.rawBytes, assetSha256: rendered.assetSha256, assetMediaType: rendered.mediaType });
+                    continue;
+                }
+                const svg = require('./reader-inline-svg.js');
+                const matches = figuresList.filter(entry =>
+                    entry.ordinal === figure.ordinal && entry.recoveryStatus === 'complete'
+                    && entry.images?.length === 1
+                    && svg.inlineSvgSourceDescriptor(entry.images[0], arxivId)?.url === figure.url);
+                if (matches.length !== 1) fail(`historical inline SVG Figure ${figure.ordinal} does not match sealed source`);
+                const descriptor = svg.inlineSvgSourceDescriptor(matches[0].images[0], arxivId);
+                const rendered = await svg.renderOfficialInlineSvg(matches[0].images[0]);
+                materialized.push({ ...figure, ...descriptor, sourceDomSha256: matches[0].sourceDomSha256,
+                    rawBytes: rendered.rawBytes, assetSha256: rendered.assetSha256, assetMediaType: rendered.mediaType });
+                continue;
+            }
             const item = await freshArxiv.withEphemeralArxivFigures({ arxivId, figures: [figure],
                 sourceRoot: dependencies.freshArxivSourceRoot,
                 temporaryRoot: dependencies.temporaryRoot,
@@ -1248,8 +1284,13 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
         }
         await runEngine();
     } else {
+        const materializerDeps = item.route.kind === 'arxiv-fresh-fetch'
+            ? { ...dependencies,
+                ...(Number.isSafeInteger(sourceDescriptor?.generation) ? { sourceGeneration: sourceDescriptor.generation } : {}),
+                ...(sourceDescriptor?.sourceManifestSha256 ? { sourceManifestSha256: sourceDescriptor.sourceManifestSha256 } : {}) }
+            : dependencies;
         const materializeReaderFigures = async (figures, id) => item.route.kind === 'arxiv-fresh-fetch'
-            ? ephemeralArxivMaterializer(id, figures, dependencies)
+            ? ephemeralArxivMaterializer(id, figures, materializerDeps)
             : [];
         const downloadPrimaryImage = item.route.kind === 'arxiv-fresh-fetch'
             ? (url => ephemeralArxivPrimaryImageDownloader(item.route.arxivId, url, dependencies)) : undefined;
@@ -2023,6 +2064,10 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             registry = transition(registry, plan, item.paperId, 'analyzing', {}, clock()); persist();
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
+                ...(item.route.kind === 'arxiv-fresh-fetch' ? {
+                    ...(Number.isSafeInteger(descriptor?.generation) ? { sourceGeneration: descriptor.generation } : {}),
+                    ...(descriptor?.sourceManifestSha256 ? { sourceManifestSha256: descriptor.sourceManifestSha256 } : {})
+                } : {}),
                 ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
                 // Normal failure rounds reuse the same candidate and paid
                 // ledger. Attempt counters never authorize a fresh Reader epoch.

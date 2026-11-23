@@ -277,7 +277,8 @@ function parseDraft(draft, paper, source, envelope, options = {}) {
 }
 function sourceFigureFields(figure) {
     return Object.fromEntries(['ordinal', 'label', 'caption', 'url', 'mediaType', 'sourceDomSha256',
-        'sourceLocationUrl', 'inlineSvgSourceSha256', 'inlineSvgRenderContract'].filter(k => figure[k] !== undefined).map(k => [k, figure[k]]));
+        'sourceLocationUrl', 'inlineSvgSourceSha256', 'inlineSvgRenderContract',
+        'pdfCropSourceSha256', 'pdfCropContract'].filter(k => figure[k] !== undefined).map(k => [k, figure[k]]));
 }
 function reuseFigures(figures, paper, envelope) {
     if (figures.length !== paper.apiReaderFigures.length) fail('不得增删原图');

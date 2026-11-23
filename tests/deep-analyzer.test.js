@@ -651,7 +651,7 @@ describe('arXiv HTML 全文健康检查', () => {
         const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.12345v1', '2608.12345v1');
         const resource = artifacts.figures[0].images[0];
         assert.strictEqual(artifacts.health.status, 'complete');
-        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v4');
+        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v5');
         assert.strictEqual(resource.kind, 'inline_svg');
         assert.strictEqual(resource.url, '');
         assert.match(resource.inlineSvg, /^<svg[\s\S]*<\/svg>$/);

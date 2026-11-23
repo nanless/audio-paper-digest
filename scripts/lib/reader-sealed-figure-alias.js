@@ -4,7 +4,10 @@
 const { isDeepStrictEqual } = require('node:util');
 const tickets = new WeakMap();
 const SHA = /^[a-f0-9]{64}$/;
-const TRANSFORM = 'decoded-white-background-fit-jpeg-v1';
+const ALLOWED_TRANSFORMS = new Set([
+    'decoded-white-background-fit-jpeg-v1',
+    'decoded-white-background-fit-v2'
+]);
 const EVIDENCE_KEYS = ['inputId', 'kind', 'ordinal', 'url', 'sha256', 'sourceSha256', 'sourceBytes',
     'sourceWidth', 'sourceHeight', 'modelPayloadSha256', 'modelPayloadBytes', 'modelPayloadWidth',
     'modelPayloadHeight', 'modelPayloadTransform', 'status'].sort();
@@ -17,7 +20,7 @@ function fail(message) {
 const validUrl = value => typeof value === 'string' && value.length > 0 && value.length <= 8192;
 const positive = value => Number.isSafeInteger(value) && value > 0;
 function plannedIdentity(planned) {
-    if (!Array.isArray(planned) || planned.length > 8) fail('planned figures exceed the fixed alias profile');
+    if (!Array.isArray(planned) || planned.length > 16) fail('planned figures exceed the fixed alias profile');
     const ordinals = new Set(), urls = new Set();
     return planned.map(item => {
         if (!positive(item?.ordinal) || !validUrl(item.url) || ordinals.has(item.ordinal) || urls.has(item.url)) {
@@ -27,7 +30,7 @@ function plannedIdentity(planned) {
     });
 }
 function evidenceIdentity(evidence) {
-    if (!Array.isArray(evidence) || evidence.length > 8) fail('image evidence exceeds the fixed alias profile');
+    if (!Array.isArray(evidence) || evidence.length > 16) fail('image evidence exceeds the fixed alias profile');
     const ordinals = new Set(); let bytes = 0, pixels = 0;
     return evidence.map(item => {
         if (!item || typeof item !== 'object' || Array.isArray(item)
@@ -36,7 +39,7 @@ function evidenceIdentity(evidence) {
             || ordinals.has(item.ordinal) || !validUrl(item.url)
             || !SHA.test(item.sourceSha256) || item.sha256 !== item.sourceSha256
             || !SHA.test(item.modelPayloadSha256) || item.inputId !== `figure:${item.ordinal}:${item.sourceSha256}`
-            || item.modelPayloadTransform !== TRANSFORM
+            || !ALLOWED_TRANSFORMS.has(item.modelPayloadTransform)
             || !['sourceBytes', 'sourceWidth', 'sourceHeight', 'modelPayloadBytes', 'modelPayloadWidth', 'modelPayloadHeight']
                 .every(key => positive(item[key]))
             || item.sourceBytes > 16 * 1024 * 1024 || item.modelPayloadBytes > 4 * 1024 * 1024

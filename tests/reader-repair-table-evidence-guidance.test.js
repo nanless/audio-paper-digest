@@ -22,7 +22,7 @@ function packet(guidance) {
 test('合法完整原表及真实能力进入局部反馈，坏格不能冒充可用候选', () => {
     const draft = input({tableIndex: 1, completeTable: {sourceTableOrdinal: 1}});
     const artifacts = {tables: [source([['Method','Score'], ['Alpha','0.10.1']], 1),
-        source([['','PCC','RMSE'], ['A','0.934','5.21']], 2)]};
+        source([['Method','','RMSE'], ['A','0.934','5.21']], 2)]};
     const before = JSON.stringify({draft, artifacts});
     const originalText = 'Alpha measured original result is 0.10.1 exactly, with the duplicated number preserved.';
     const result = repair.repairTableEvidenceGuidance(draft, [issue], targets, originalText, {structuredArtifacts: artifacts});

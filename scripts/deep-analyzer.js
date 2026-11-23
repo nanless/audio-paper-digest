@@ -727,7 +727,7 @@ const API_READER_RESOURCE_CLAIMS_CONTRACT = readerResourceClaimsFormat.header().
 const API_READER_INITIAL_TEMPERATURE = 0.6;
 const API_READER_REPAIR_TEMPERATURE = 0.1;
 const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
-const API_READER_FIGURE_LIMIT = 8;
+const API_READER_FIGURE_LIMIT = 16;
 const API_READER_FIGURE_SELECTION_LIMIT = READER_LIMITS.maximumFigures;
 const API_READER_MODEL_IMAGE_MAX_DIMENSION = 2048;
 const API_READER_MODEL_IMAGE_MAX_PIXELS = 4 * 1024 * 1024;
@@ -735,7 +735,11 @@ const API_READER_MODEL_IMAGE_SOURCE_MAX_PIXELS = 64 * 1024 * 1024;
 const API_READER_MODEL_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 const API_READER_MODEL_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
 const API_READER_MODEL_IMAGE_TOTAL_PIXELS = 16 * 1024 * 1024;
-const API_READER_MODEL_IMAGE_TRANSFORM = 'decoded-white-background-fit-jpeg-v1';
+const API_READER_MODEL_IMAGE_TRANSFORM = 'decoded-white-background-fit-v2';
+const ALLOWED_API_READER_MODEL_IMAGE_TRANSFORMS = new Set([
+    'decoded-white-background-fit-jpeg-v1',
+    API_READER_MODEL_IMAGE_TRANSFORM
+]);
 const API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT = 'api-reader-provider-image-exclusion-v1';
 const { scoringStabilityIsResolved: scoringStabilityResolutionIsValid,
     SCORING_STABILITY_RESOLUTION_CONTRACT
@@ -1454,8 +1458,10 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
                     + `逐格坐标必须与正文 Markdown 表的行列一一对应，并落在原表 DOM 单元格内；`
                     + '不要复用坐标、猜坐标或把别的表/别的原表的坐标抄进来。');
             }
-            mapped.set(key, normalizeReaderSourceDisplayArtifacts(require('./lib/reader-table-pdf-evidence')
-                .displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn)));
+            mapped.set(key, require('./lib/reader-tables').escapeMarkdownTableCell(
+                normalizeReaderSourceDisplayArtifacts(require('./lib/reader-table-pdf-evidence')
+                    .displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn))
+            ));
         }
         const rebuiltRows = rows.map((row, rowIndex) => row.map((_cell, columnIndex) => {
             const key = `${rowIndex}:${columnIndex}`;
@@ -3587,9 +3593,31 @@ function normalizeReaderCurrencyAmounts(value) {
         .replace(/(?<!\\)\$(\d+(?:\.\d+)?)(\s*(?:thousand|million|billion))?/gi, replacement);
 }
 
-function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
+function readerFigurePriorityScore(figure) {
+    const label = String(figure?.label || '');
+    const caption = String(figure?.caption || '');
+    const text = `${label} ${caption}`;
+    const isAppendix = /\b(?:fig(?:ure)?\.?\s*[A-Z]\d*|appendix|supplementary)\b/i.test(text);
+    if (isAppendix) return 10;
+    let score = 50;
+    if (/\b(?:overview|architecture|framework|pipeline|diagram|schematic|workflow|system|model\s+structure|method)\b|框架|架构|流程|总览|结构/i.test(caption)) {
+        score += 40;
+    } else if (/\b(?:comparison|results?|performance|benchmark|pareto|trade-?off|accuracy|scaling|latency|speed|wer|fid|mos)\b|结果|对比|性能/i.test(caption)) {
+        score += 30;
+    } else if (/\b(?:ablation|analysis|attention|t-?sne|distribution|sensitivity|effect\s+of)\b|消融|分析/i.test(caption)) {
+        score += 20;
+    }
+    if (/\b(?:figure|fig\.?)\s*1\b/i.test(label) || figure?.ordinal === 1) score += 15;
+    else if (/\b(?:figure|fig\.?)\s*2\b/i.test(label) || figure?.ordinal === 2) score += 8;
+    return score;
+}
+
+function getApiReaderFigureInventory(structuredArtifacts, arxivId = '', options = {}) {
     const expectedId = String(arxivId || '').trim().toLowerCase().replace(/v\d+$/i, '');
-    const inventory = [];
+    const limit = Number.isInteger(options?.limit) && options.limit > 0
+        ? options.limit
+        : (options?.limit === Infinity ? Infinity : API_READER_FIGURE_LIMIT);
+    const allCandidates = [];
     for (const figure of structuredArtifacts?.figures || []) {
         if (figure?.recoveryStatus !== 'complete'
             || !Number.isInteger(figure.ordinal)
@@ -3607,7 +3635,7 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
                 || !asset || !recoverySha256(asset.sha256)
                 || !/^[A-Za-z0-9+/]+={0,2}$/.test(String(asset.base64 || ''))
                 || !/^image\/(?:png|jpeg|webp|gif)$/i.test(String(asset.mediaType || ''))) continue;
-            inventory.push({
+            allCandidates.push({
                 ordinal: figure.ordinal,
                 label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
                 caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
@@ -3615,18 +3643,29 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
                 sourceDomSha256: figure.sourceDomSha256, asset: structuredClone(asset),
                 assetSha256: asset.sha256
             });
-            if (inventory.length >= API_READER_FIGURE_LIMIT) break;
+            continue;
+        }
+        if (resource?.kind === 'pdf_crop') {
+            const descriptor = require('./lib/reader-pdf-figure-crop.js')
+                .pdfCropSourceDescriptor(resource, expectedId);
+            if (!descriptor) continue;
+            allCandidates.push({
+                ordinal: figure.ordinal,
+                label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
+                caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+                sourceDomSha256: figure.sourceDomSha256,
+                ...descriptor
+            });
             continue;
         }
         if (resource?.kind === 'inline_svg') {
             const descriptor = require('./lib/reader-inline-svg.js')
                 .inlineSvgSourceDescriptor(resource, expectedId);
             if (!descriptor) continue;
-            inventory.push({ ordinal: figure.ordinal,
+            allCandidates.push({ ordinal: figure.ordinal,
                 label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
                 caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
                 sourceDomSha256: figure.sourceDomSha256, ...descriptor });
-            if (inventory.length >= API_READER_FIGURE_LIMIT) break;
             continue;
         }
         if (resource?.kind !== 'external_url') continue;
@@ -3644,7 +3683,7 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
             || (expectedId && pathMatch[1].toLowerCase() !== expectedId)
             || (String(resource.mediaType || '').toLowerCase() !== 'image/svg+xml'
                 && !isSupportedImageUrl(parsed.toString()))) continue;
-        inventory.push({
+        allCandidates.push({
             ordinal: figure.ordinal,
             label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
             caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
@@ -3652,9 +3691,12 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
             mediaType: String(resource.mediaType || '').toLowerCase(),
             sourceDomSha256: figure.sourceDomSha256
         });
-        if (inventory.length >= API_READER_FIGURE_LIMIT) break;
     }
-    return inventory;
+    if (allCandidates.length <= limit) return allCandidates;
+    const prioritized = [...allCandidates].sort((a, b) => (
+        readerFigurePriorityScore(b) - readerFigurePriorityScore(a) || a.ordinal - b.ordinal
+    )).slice(0, limit);
+    return prioritized.sort((a, b) => a.ordinal - b.ordinal);
 }
 
 // 只迁移旧实现曾按 URL 写死的图注；其他论文和正常来源图注不受影响。
@@ -3662,6 +3704,7 @@ const LEGACY_READER_FIGURE_CAPTIONS = {"method.png": "Figure 1: Overview of the 
 const LEGACY_READER_PIXEL_NARRATIVES = ["官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。", "绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。"];
 function readerFigureNeedsSourcePayload(figure, paperId) {
     if (figure?.inlineSvgSourceSha256 !== undefined || figure?.inlineSvgRenderContract !== undefined
+        || figure?.pdfCropSourceSha256 !== undefined || figure?.pdfCropContract !== undefined
         || String(figure?.url || '').includes('#')) return true;
     if (String(paperId || '').trim().toLowerCase().replace(/^arxiv:/, '').replace(/v\d+$/i, '') !== '2609.15067') return false;
     const name = String(figure?.url || '').match(/^https:\/\/(?:www\.)?arxiv\.org\/html\/2609\.15067(?:v\d+)?\/(method\.png|overview\.png)$/i)?.[1]?.toLowerCase();
@@ -3676,12 +3719,15 @@ function readerFigureSourcePayloadValid(paper, structuredSha, sourceSha) {
     if (!affected.length) return true;
     const artifacts = readerSourcePayloadArtifacts(paper?.apiReaderPlan?.structuredSourcePayload, structuredSha, sourceSha);
     if (!artifacts) return false;
-    const inventory = getApiReaderFigureInventory(artifacts, id);
+    const inventory = getApiReaderFigureInventory(artifacts, id, { limit: Infinity });
     return affected.every(figure => {
         const matches = inventory.filter(source => source.url === figure.url);
         return matches.length === 1 && ['ordinal', 'label', 'caption', 'sourceDomSha256'].every(key => matches[0][key] === figure[key])
             && (!matches[0].inlineSvgSourceSha256 || (recoverySha256(figure.assetSha256)
                 && ['inlineSvgSourceSha256', 'inlineSvgRenderContract', 'sourceLocationUrl']
+                    .every(key => matches[0][key] === figure[key])))
+            && (!matches[0].pdfCropSourceSha256 || (recoverySha256(figure.assetSha256)
+                && ['pdfCropSourceSha256', 'pdfCropContract', 'sourceLocationUrl']
                     .every(key => matches[0][key] === figure[key])));
     });
 }
@@ -3742,7 +3788,21 @@ function buildApiReaderArtifactEvidence(
     }
     const allTables = Array.isArray(structuredArtifacts.tables)
         ? structuredArtifacts.tables : [];
-    const tables = allTables.slice(0, 12);
+    const tablePriorityScore = table => {
+        if (table?.recoveryStatus !== 'complete') return -10;
+        let score = 0;
+        if (assessReaderTableSelectionEligibility(table).eligible) score += 50;
+        const cap = String(table?.caption || '');
+        if (/\b(?:results?|performance|comparisons?|benchmarks?|main|overall|evaluation|accuracy|wer|cer|mos|fid|score)\b|实验结果|主结果|性能/i.test(cap)) score += 30;
+        else if (/\b(?:ablation|analysis|efficiency|latency|speed|memory|zero-shot|downstream)\b|消融|分析/i.test(cap)) score += 20;
+        if (/\b(?:hyperparameters?|notations?|symbols?|appendix|prompts?)\b/i.test(cap)) score -= 10;
+        return score;
+    };
+    const tables = allTables.length <= 20
+        ? allTables
+        : [...allTables].sort((a, b) => tablePriorityScore(b) - tablePriorityScore(a) || (a.ordinal || 0) - (b.ordinal || 0))
+            .slice(0, 20)
+            .sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
     const availableTableOrdinals = tables.filter(table => (
         Number.isInteger(table?.ordinal)
         && table.ordinal >= 1
@@ -3758,7 +3818,7 @@ function buildApiReaderArtifactEvidence(
     const availableFormulas = (structuredArtifacts.formulas || []).filter(formula => (
         Number.isInteger(formula?.ordinal)
         && assessReaderFormulaEligibility(formula).eligible
-    )).slice(0, 12);
+    )).slice(0, 20);
     appendLine(
         `FORMULA_ORDINALS_AVAILABLE: ${JSON.stringify(availableFormulas.map(formula => formula.ordinal))}`,
         32
@@ -5893,7 +5953,7 @@ function assertApiReaderFiguresAssembled(article) {
 
 function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '') {
     assertApiReaderConceptsAssembled(readerResult.article);
-    const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId);
+    const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId, { limit: Infinity });
     if (figures.length === 0) {
         assertApiReaderFiguresAssembled(readerResult.article);
         return { ...readerResult, figures: [] };
@@ -8047,10 +8107,12 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                     const renderedText = rows[cell.renderedRow]?.[cell.renderedColumn];
                     const sourceMathDisplay = require('./lib/source-cell-math-display')
                         .strictSourceCellMathDisplay(cell.sourceText);
+                    const unescapedRendered = require('./lib/reader-tables.js').unescapeMarkdownTableCell(renderedText);
                     if (typeof renderedText !== 'string'
                         || ((binding.pdfCellConfirmation || binding.sealedPdfTableEvidence)
                         ? !require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, renderedText)
                         : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText)
+                            && normalizeReaderSourceCell(unescapedRendered) !== normalizeReaderSourceCell(cell.sourceText)
                             && !require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, renderedText)
                             && !require('./lib/reader-dom-span-projection').savedCellMatches(
                                 paper, binding, cell, renderedText, articleTables[index])
@@ -9419,11 +9481,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const inlineSource = figures.length === 1 && figures[0].recoveryStatus === 'complete'
                 && recoverySha256(figures[0].sourceDomSha256) && figures[0].images?.length === 1
                 ? require('./lib/reader-inline-svg').inlineSvgSourceDescriptor(figures[0].images[0], getPaperArxivId(paper)) : null;
-            const validInline = inlineSource && ['url', 'sourceLocationUrl', 'inlineSvgSourceSha256', 'inlineSvgRenderContract']
-                .every(key => image[key] === inlineSource[key])
-                && image.sourceSha256 === image.sha256 && recoverySha256(image.modelPayloadSha256)
+            const pdfCropSource = !inlineSource && figures.length === 1 && figures[0].recoveryStatus === 'complete'
+                && recoverySha256(figures[0].sourceDomSha256) && figures[0].images?.length === 1
+                ? require('./lib/reader-pdf-figure-crop').pdfCropSourceDescriptor(figures[0].images[0], getPaperArxivId(paper)) : null;
+            const validPayloadShape = image.sourceSha256 === image.sha256 && recoverySha256(image.modelPayloadSha256)
                 && image.inputId === `figure:${image.ordinal}:${image.sourceSha256}`
-                && image.modelPayloadTransform === API_READER_MODEL_IMAGE_TRANSFORM
+                && ALLOWED_API_READER_MODEL_IMAGE_TRANSFORMS.has(image.modelPayloadTransform)
                 && ['sourceBytes', 'sourceWidth', 'sourceHeight', 'modelPayloadBytes', 'modelPayloadWidth', 'modelPayloadHeight']
                     .every(key => Number.isSafeInteger(image[key]) && image[key] > 0)
                 && image.sourceBytes <= API_READER_FIGURE_MAX_BYTES
@@ -9432,12 +9495,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 && image.modelPayloadWidth <= Math.min(API_READER_MODEL_IMAGE_MAX_DIMENSION, image.sourceWidth)
                 && image.modelPayloadHeight <= Math.min(API_READER_MODEL_IMAGE_MAX_DIMENSION, image.sourceHeight)
                 && image.modelPayloadWidth * image.modelPayloadHeight <= API_READER_MODEL_IMAGE_MAX_PIXELS;
+            const validInline = inlineSource && ['url', 'sourceLocationUrl', 'inlineSvgSourceSha256', 'inlineSvgRenderContract']
+                .every(key => image[key] === inlineSource[key]) && validPayloadShape;
+            const validPdfCrop = pdfCropSource && ['url', 'sourceLocationUrl', 'pdfCropSourceSha256', 'pdfCropContract']
+                .every(key => image[key] === pdfCropSource[key]) && validPayloadShape;
             if (image?.kind !== 'figure' || !Number.isSafeInteger(image.ordinal) || image.ordinal <= 0 || figures.length !== 1
                 || replayImageOrdinals.has(image.ordinal)
                 || !/^[a-f0-9]{64}$/.test(String(image.sha256 || ''))
-                || !(validInline || (!inlineSource && !image.inlineSvgSourceSha256 && !image.inlineSvgRenderContract
+                || !(validInline || validPdfCrop || (!inlineSource && !pdfCropSource
+                    && !image.inlineSvgSourceSha256 && !image.inlineSvgRenderContract
+                    && !image.pdfCropSourceSha256 && !image.pdfCropContract
                     && !image.sourceLocationUrl && figures[0].images?.some(sourceImage => sourceImage?.kind !== 'inline_svg'
-                        && sourceImage?.url === image.url)))) {
+                        && sourceImage?.kind !== 'pdf_crop' && sourceImage?.url === image.url)))) {
                 throw new Error('Reader付费回放的已见像素未绑定唯一封存原图');
             }
             replayImageOrdinals.add(image.ordinal);
@@ -11879,7 +11948,8 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
     const currentInventory = getApiReaderFigureInventory(
         sourceDetails.structuredArtifacts,
-        getPaperArxivId(paper)
+        getPaperArxivId(paper),
+        { limit: Infinity }
     );
     const allowedUrls = new Set(currentInventory.map(item => item.url));
     const retainedFigures = figures.filter(item => allowedUrls.has(item?.url));
@@ -15107,7 +15177,10 @@ const ARXIV_STRUCTURED_ARTIFACT_VERSION = 1;
 // （`span.ltx_tabular` / `span.ltx_tr` / `span.ltx_td`），以及编号、原生 DOM 的框式
 // 图——这类图本来就没有图片 URL。这些节点直接从 DOM 证据解析；压平后的文字绝不提升成
 // 矩阵或图片。v3 的 SVG 证据行为不变。
-const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v4';
+// v5 根除 LaTeXML `<annotation>` 双写与不可见 MathML 符号（`\u2061-\u2064`），支持多 `<math>` 对齐公式拼接、
+// 含布局 `<table>` 的多面板真插图、外层 `<figure>` 归属图注，以及无 `<thead>/<th>` 表格的确定性表头推断。
+// v4 冷重放（`replayPersistedArxivHtmlDomV4PayloadSha`）保持 100% 不变。
+const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v5';
 const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
     tables: 256,
     rowsPerTable: 512,
@@ -15123,7 +15196,10 @@ const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
 });
 
 function compactDomText(value, maxChars, state, label) {
-    const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+    const normalized = String(value || '')
+        .replace(/[\u2061-\u2064]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
     if (normalized.length <= maxChars) return normalized;
     state.issues.push(`${label} 超过 ${maxChars} 字符，结构化快照被截断`);
     state.truncated = true;
@@ -15158,11 +15234,20 @@ function isRecoverableFigureResourceUrl(url, mediaType = '') {
 function isIllustrationFigure($, element) {
     const wrapper = $(element);
     const classNames = String(wrapper.attr('class') || '');
-    const label = String(extractArxivDomText($, wrapper.find('.ltx_tag_figure, .ltx_tag').first()) || '')
+    const ownTag = wrapper.find('.ltx_tag_figure, .ltx_tag')
+        .filter((_, node) => $(node).closest('figure')[0] === element)
+        .first();
+    const label = String(extractArxivDomText($, ownTag.length ? ownTag : wrapper.find('.ltx_tag_figure, .ltx_tag').first()) || '')
         .replace(/\s+/g, ' ').trim();
-    if (wrapper.hasClass('ltx_table') || wrapper.find('table').length > 0) return false;
+    if (wrapper.hasClass('ltx_table')) return false;
     if (/\bltx_float_(?:algorithm|listing)\b/i.test(classNames)) return false;
     if (/^(?:table|algorithm|listing|procedure)\b/i.test(label)) return false;
+    // LaTeXML 常把多子图插图放在 <figure> 内的布局 <table> 里（如 2611.06010 / 2611.02680）；
+    // 只要它不是 ltx_table/算法且确实含图像/矢量媒体资源，应识别为真插图而不是丢弃。
+    if (wrapper.find('table').length > 0) {
+        const hasMedia = wrapper.find('img[src], svg, object[data], embed[src]').length > 0;
+        if (!hasMedia) return false;
+    }
     return true;
 }
 
@@ -15345,15 +15430,11 @@ function sanitizeArxivDomCloneForText($, cloneRoot) {
     if (!cloneRoot || cloneRoot.length === 0) return cloneRoot;
     cloneRoot.filter(ARXIV_PHANTOM_DOM_SELECTOR).empty();
     cloneRoot.find(ARXIV_PHANTOM_DOM_SELECTOR).remove();
-    cloneRoot.filter(ARXIV_ANNOTATION_DOM_SELECTOR)
-        .add(cloneRoot.find(ARXIV_ANNOTATION_DOM_SELECTOR))
-        .each((_, annotationElement) => {
-            const annotation = $(annotationElement);
-            const raw = annotation.text();
-            if (raw.includes('phantom')) {
-                annotation.text(stripLatexPhantoms(raw));
-            }
-        });
+    // LaTeXML 在每个 <math> 的 <semantics> 里同时保留可见 MathML 与不可见 <annotation encoding="application/x-tex">。
+    // 直接对 DOM 取 .text() 会把两者拼在一起造成全库双写（如 0.400.40、S1S_{1}、11±\pm11）。
+    // 纯文本提取时移除 <annotation>，公式 TeX 仍由 parseArxivStructuredArtifactsFromHtml 直接从原始 DOM 提取。
+    cloneRoot.filter(ARXIV_ANNOTATION_DOM_SELECTOR).empty();
+    cloneRoot.find(ARXIV_ANNOTATION_DOM_SELECTOR).remove();
     return cloneRoot;
 }
 
@@ -15362,11 +15443,11 @@ function extractArxivDomText($, element) {
     if (node.length === 0) return '';
     if (!node.is(ARXIV_PHANTOM_OR_ANNOTATION_SELECTOR)
         && node.find(ARXIV_PHANTOM_OR_ANNOTATION_SELECTOR).length === 0) {
-        return node.text();
+        return node.text().replace(/[\u2061-\u2064]/g, '');
     }
     const clone = node.clone();
     sanitizeArxivDomCloneForText($, clone);
-    return clone.text();
+    return clone.text().replace(/[\u2061-\u2064]/g, '');
 }
 
 function arxivCaptionText($, element) {
@@ -15543,6 +15624,79 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         matrix.reduce((maximum, row) => Math.max(maximum, row.length), 0)
     );
     const normalizedMatrix = matrix.map(row => Array.from({ length: width }, (_, index) => row[index] ?? ''));
+    // LaTeXML 常把表内分组分隔行（\multicolumn{N}{c}{\textbf{...}}）输出成 rowIndex > 0 的单格全幅 <th>，
+    // 这不是列头而是分组标题；若留在 headerRows 会遮蔽真正的第 0 行列头并触发 divider_only_source_headers。
+    if (width >= 2 && headerRows.size > 0) {
+        const dividerHeaderRows = [...headerRows].filter(hRow => {
+            if (hRow <= 0) return false;
+            const rowCells = cells.filter(cell => cell.row === hRow);
+            return rowCells.length === 1
+                && rowCells[0].column === 0
+                && Number(rowCells[0].colspan || 1) >= width
+                && Number(rowCells[0].rowspan || 1) === 1;
+        });
+        if (dividerHeaderRows.length > 0 && dividerHeaderRows.length === headerRows.size) {
+            for (const hRow of dividerHeaderRows) {
+                headerRows.delete(hRow);
+                bodyRows.add(hRow);
+                for (const cell of cells) {
+                    if (cell.row === hRow) cell.header = false;
+                }
+            }
+        }
+    }
+    // LaTeXML 经常用纯 <td>（或 <span class="ltx_td">）渲染 booktabs 表格而不输出 <thead>/<th>，
+    // 导致 headerRows 为空、整张表无法进入 selection。在原 DOM 未声明任何表头行时，
+    // 仅当首个非空行（或双层分组表头）满足严格非纯测量列头条件且后续行含数据值时，确定性推断表头行。
+    if (headerRows.size === 0 && normalizedMatrix.length >= 2 && width >= 2) {
+        const firstNonEmptyRow = normalizedMatrix.findIndex(row => row.some(cell => String(cell || '').trim().length > 0));
+        if (firstNonEmptyRow >= 0 && firstNonEmptyRow < normalizedMatrix.length - 1) {
+            const row0 = normalizedMatrix[firstNonEmptyRow];
+            const row0Cells = cells.filter(cell => cell.row === firstNonEmptyRow);
+            const isSingleDivider = row0Cells.length === 1 && Number(row0Cells[0].colspan || 1) >= width;
+            const pureFloat = text => /^[+\-\u2212]?(?:\d+\.\d+|\.\d+)%?$/.test(String(text || '').trim());
+            const hasAlpha = text => /[A-Za-z\u3400-\u9fff]/.test(String(text || ''));
+            const nonEmptyRow0 = row0.filter(text => String(text || '').trim().length > 0);
+            const hasLaterData = normalizedMatrix.slice(firstNonEmptyRow + 1).some(row => (
+                row.some(text => String(text || '').trim().length > 0)
+            ));
+            const row0Dense = !isSingleDivider
+                && nonEmptyRow0.length >= Math.max(2, Math.ceil(width * 0.5))
+                && row0.every(text => !pureFloat(text))
+                && nonEmptyRow0.filter(hasAlpha).length >= Math.max(1, Math.ceil(nonEmptyRow0.length * 0.5));
+            const nextRowIdx = firstNonEmptyRow + 1;
+            const row1 = nextRowIdx < normalizedMatrix.length - 1 ? normalizedMatrix[nextRowIdx] : null;
+            const row1NonEmpty = row1 ? row1.filter(text => String(text || '').trim().length > 0) : [];
+            const row1ValidHeader = Boolean(
+                row1
+                && row1NonEmpty.length >= Math.max(2, Math.ceil(width * 0.5))
+                && row1.every(text => !pureFloat(text))
+                && row1NonEmpty.filter(hasAlpha).length >= Math.max(1, Math.ceil(row1NonEmpty.length * 0.5))
+                && normalizedMatrix.slice(nextRowIdx + 1).some(row => row.some(text => /\d/.test(String(text || ''))))
+            );
+            const row0SparseSuperHeader = !isSingleDivider
+                && !row0Dense
+                && nonEmptyRow0.length >= 2
+                && row0.every(text => !pureFloat(text))
+                && nonEmptyRow0.filter(hasAlpha).length === nonEmptyRow0.length
+                && row1ValidHeader;
+            if ((row0Dense || row0SparseSuperHeader) && hasLaterData) {
+                const inferred = row0SparseSuperHeader ? [nextRowIdx] : [firstNonEmptyRow];
+                if (row0Dense && row1ValidHeader
+                    && (row0Cells.some(cell => Number(cell.colspan || 1) > 1)
+                        || row0Cells.some(cell => Number(cell.rowspan || 1) > 1))) {
+                    inferred.push(nextRowIdx);
+                }
+                for (const hRow of inferred) {
+                    headerRows.add(hRow);
+                    bodyRows.delete(hRow);
+                    for (const cell of cells) {
+                        if (cell.row === hRow) cell.header = true;
+                    }
+                }
+            }
+        }
+    }
     if (cells.length === 0 || normalizedMatrix.length === 0 || width === 0) {
         state.issues.push(`table[${ordinal}]${label ? ` ${label}` : ''} 未恢复出任何单元格`);
     }
@@ -15551,8 +15705,8 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         label,
         caption,
         sourceDomSha256: crypto.createHash('sha256').update(domHtml).digest('hex'),
-        headerRows: [...headerRows],
-        bodyRows: [...bodyRows],
+        headerRows: [...headerRows].sort((a, b) => a - b),
+        bodyRows: [...bodyRows].sort((a, b) => a - b),
         cells,
         matrix: normalizedMatrix,
         recoveryStatus: cells.length > 0 && width > 0 ? 'complete' : 'unrecovered'
@@ -15565,11 +15719,19 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     const $ = cheerio.load(sourceHtml);
     const state = { issues: [], truncated: false };
     const allElements = $('*').toArray();
-    const rawTableCandidates = $('.ltx_table, table, .ltx_tabular').filter((_, element) => (
-        $(element).parents('.ltx_table, table, .ltx_tabular').length === 0
-        && ($(element).hasClass('ltx_table') || isArxivTabularDom($, element))
-        && $(element).closest('.ltx_equation, .ltx_equationgroup').length === 0
-    )).toArray();
+    const rawTableCandidates = $('.ltx_table, table, .ltx_tabular').filter((_, element) => {
+        const node = $(element);
+        if (node.parents('.ltx_table, table, .ltx_tabular').length > 0) return false;
+        if (!(node.hasClass('ltx_table') || isArxivTabularDom($, element))) return false;
+        if (node.closest('.ltx_equation, .ltx_equationgroup').length > 0) return false;
+        // 排除插图 <figure> 内专用于摆放多子图 <img>/<svg> 的布局表格，避免产生假空表。
+        const parentFigure = node.closest('figure').get(0);
+        if (parentFigure && !node.hasClass('ltx_table') && isIllustrationFigure($, parentFigure)
+            && node.find('img[src], svg, object[data], embed[src]').length > 0) {
+            return false;
+        }
+        return true;
+    }).toArray();
     const consumedSplitTableDoms = new Set();
     const tableCandidates = rawTableCandidates.flatMap(element => {
         if (!$(element).hasClass('ltx_table') || findArxivTabularRoot($, element)) {
@@ -15593,15 +15755,50 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         state.issues.push(`公式候选 ${equationCandidates.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.formulas}`);
         state.truncated = true;
     }
+    const extractMathTex = mathNode => {
+        const math = $(mathNode);
+        const annotation = math.find(
+            'annotation[encoding="application/x-tex"], annotation[encoding="application/x-latex"], '
+            + 'm\\:annotation[encoding="application/x-tex"], m\\:annotation[encoding="application/x-latex"]'
+        ).first().text();
+        return stripLatexPhantoms(String(annotation || math.attr('alttext') || '').trim())
+            .replace(/^\$|\$$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    };
     const formulas = equationCandidates.slice(0, STRUCTURED_ARTIFACT_LIMITS.formulas).map((element, index) => {
         const wrapper = $(element);
-        const math = wrapper.is('math') ? wrapper : wrapper.find('math').first();
-        const annotation = math.find('annotation[encoding="application/x-tex"], annotation[encoding="application/x-latex"]').first();
+        const topLevelMaths = wrapper.is('math, m\\:math')
+            ? wrapper.toArray()
+            : wrapper.find('math, m\\:math').filter((_, m) => $(m).parentsUntil(element, 'math, m\\:math').length === 0).toArray();
+        let rawLatex = '';
+        if (topLevelMaths.length <= 1) {
+            rawLatex = topLevelMaths.length === 1
+                ? extractMathTex(topLevelMaths[0])
+                : stripLatexPhantoms(String(wrapper.attr('alttext') || '').trim());
+        } else {
+            // LaTeXML 把 align / eqnarray / ltx_equationgroup 按列拆成多个 <math>（如左侧变量 + 右侧表达式），
+            // 仅取 .first() 会截断 90% 以上的多列/多行公式。这里按 .ltx_eqn_row / tr 逐行拼接全部顶层 <math>。
+            const rowNodes = wrapper.find('.ltx_eqn_row, tr').filter((_, r) => (
+                $(r).parentsUntil(element, '.ltx_eqn_row, tr').length === 0
+                && $(r).find('math, m\\:math').length > 0
+            )).toArray();
+            if (rowNodes.length > 1) {
+                const rowTexList = rowNodes.map(rowEl => {
+                    const rowMaths = $(rowEl).find('math, m\\:math')
+                        .filter((_, m) => $(m).parentsUntil(rowEl, 'math, m\\:math').length === 0).toArray();
+                    return rowMaths.map(extractMathTex).filter(Boolean).join(' ');
+                }).filter(Boolean);
+                rawLatex = rowTexList.join(' \\\\ ');
+            } else {
+                rawLatex = topLevelMaths.map(extractMathTex).filter(Boolean).join(' ');
+            }
+        }
         const latex = compactDomText(
-            annotation.text() || math.attr('alttext') || wrapper.attr('alttext') || '',
+            rawLatex,
             STRUCTURED_ARTIFACT_LIMITS.formulaChars, state, `formula[${index + 1}].latex`
         );
-        const mathmlRaw = math.length ? $.html(math) : '';
+        const mathmlRaw = topLevelMaths.length ? topLevelMaths.map(m => $.html(m)).join('\n') : '';
         const mathml = mathmlRaw.length <= STRUCTURED_ARTIFACT_LIMITS.formulaChars
             ? mathmlRaw : mathmlRaw.slice(0, STRUCTURED_ARTIFACT_LIMITS.formulaChars);
         if (mathmlRaw.length > STRUCTURED_ARTIFACT_LIMITS.formulaChars) {
@@ -15633,11 +15830,23 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         const wrapper = $(element);
         const images = extractArxivFigureResources($, wrapper, htmlId, arxivId, index + 1, state);
         if (images.length === 0) state.issues.push(`figure[${index + 1}] 没有恢复出可审计图像或 DOM 资源`);
+        // 优先取外层 <figure> 自身的图注与编号，防止嵌套 subfigure 的 "(a) ..." 劫持整图标题。
+        const ownCaptions = wrapper.find('figcaption, .ltx_caption')
+            .filter((_, node) => $(node).closest('figure')[0] === element);
+        const captionNode = ownCaptions.length
+            ? ownCaptions.last()
+            : wrapper.find('figcaption, .ltx_caption').first();
+        const ownTags = wrapper.find('.ltx_tag_figure, .ltx_tag')
+            .filter((_, node) => $(node).closest('figure')[0] === element
+                && !$(node).hasClass('ltx_tag_subfigure'));
+        const tagNode = ownTags.length
+            ? ownTags.last()
+            : wrapper.find('.ltx_tag_figure, .ltx_tag').first();
         return {
             ordinal: index + 1,
-            label: compactDomText(extractArxivDomText($, wrapper.find('.ltx_tag_figure, .ltx_tag').first()), 256, state, `figure[${index + 1}].label`),
+            label: compactDomText(extractArxivDomText($, tagNode), 256, state, `figure[${index + 1}].label`),
             caption: compactDomText(
-                arxivCaptionText($, wrapper.find('figcaption, .ltx_caption').first()),
+                arxivCaptionText($, captionNode),
                 STRUCTURED_ARTIFACT_LIMITS.cellChars,
                 state,
                 `figure[${index + 1}].caption`
@@ -15731,6 +15940,47 @@ function buildUnstructuredTextArtifactSignals(text, sourceKind, visualAudit = nu
                 `${sourceKind} 不保留 MathML/TeX，不能证明公式 inventory 完整`,
                 ...(visualAudit ? [`${sourceKind} 已保留 PyMuPDF 页级视觉审计；公式仍只有页面像素/抽取文本，未恢复原始 TeX`] : []),
                 ...(tableCaptions.length > 0 ? [`检测到 ${tableCaptions.length} 个表格标题但没有恢复矩阵`] : [])
+            ]
+        }
+    };
+    payload.payloadSha256 = stableFingerprint(payload);
+    return payload;
+}
+
+function buildPdfStructuredArtifactsFromBytes(text, pdfBytes, arxivId, visualAudit = null) {
+    const base = buildUnstructuredTextArtifactSignals(text, 'pdf_text', visualAudit);
+    const extracted = require('./lib/reader-pdf-figure-crop.js')
+        .extractPdfStructuredArtifactsSync(pdfBytes, arxivId);
+    const figures = Array.isArray(extracted?.figures) ? extracted.figures : [];
+    const tables = Array.isArray(extracted?.tables) ? extracted.tables : [];
+    if (figures.length === 0 && tables.length === 0) return base;
+    const { payloadSha256: _ignored, ...rest } = base;
+    const payload = {
+        ...rest,
+        parserVersion: 'pdf-layout-dom-v1',
+        sourceKind: 'pdf_text',
+        paperId: String(arxivId || '').replace(/^arxiv:/i, '').replace(/v\d+$/i, '').toLowerCase(),
+        pdfSha256: extracted.pdfSha256,
+        tables,
+        figures,
+        health: {
+            ...base.health,
+            status: 'incomplete',
+            detected: {
+                ...base.health.detected,
+                tables: Math.max(base.health.detected.tables, tables.length),
+                figures: figures.length
+            },
+            recovered: {
+                ...base.health.recovered,
+                tables: tables.filter(item => item.recoveryStatus === 'complete').length,
+                figures: figures.filter(item => item.recoveryStatus === 'complete').length
+            },
+            issues: [
+                ...base.health.issues.filter(msg => (
+                    tables.length === 0 || !/没有恢复矩阵|不能证明表格矩阵完整/.test(msg)
+                )),
+                `pdf_text 已通过 PyMuPDF 确定性恢复 ${figures.length} 张 PDF 裁图描述（无持久化图片字节）与 ${tables.length} 张结构化表格；公式仍无原始 TeX`
             ]
         }
     };
@@ -15969,8 +16219,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
             const layout = await pdfLayout.extractPdfLayoutFromBytes(buffer);
             if (layout?.text) {
                 const rawPdfText = String(layout.text);
-                const structuredArtifacts = buildUnstructuredTextArtifactSignals(
-                    rawPdfText, 'pdf_text', layout.visualAudit
+                const structuredArtifacts = buildPdfStructuredArtifactsFromBytes(
+                    rawPdfText, buffer, pdfId, layout.visualAudit
                 );
                 const text = rawPdfText
                     .replace(/\n\s*\n/g, '\n')
@@ -16030,8 +16280,8 @@ async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options =
     }
     const layout = await pdfLayout.extractPdfLayoutFromBytes(bytes);
     const rawPdfText = String(layout?.text || '');
-    const structuredArtifacts = buildUnstructuredTextArtifactSignals(
-        rawPdfText, 'pdf_text', layout.visualAudit
+    const structuredArtifacts = buildPdfStructuredArtifactsFromBytes(
+        rawPdfText, bytes, normalized, layout.visualAudit
     );
     const text = rawPdfText.replace(/\n\s*\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
     if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
@@ -16819,14 +17069,29 @@ async function prepareApiReaderModelImagePayload(image) {
         Math.sqrt(API_READER_MODEL_IMAGE_MAX_PIXELS / sourcePixels));
     let width = Math.max(1, Math.floor(sourceWidth * scale));
     let height = Math.max(1, Math.floor(sourceHeight * scale));
+    const preferLosslessPng = Boolean(image?.inlineSvgSourceSha256 || image?.pdfCropSourceSha256);
     let encoded = null;
-    for (let pass = 0; pass < 4; pass += 1) {
+    let encodedMime = 'image/jpeg';
+    if (preferLosslessPng) {
         const canvas = createCanvas(width, height); const context = canvas.getContext('2d');
         context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
         context.drawImage(decoded, 0, 0, width, height);
-        encoded = canvas.toBuffer('image/jpeg', Math.max(60, 90 - pass * 10));
-        if (encoded.length <= API_READER_MODEL_IMAGE_MAX_BYTES) break;
-        width = Math.max(1, Math.floor(width * 0.8)); height = Math.max(1, Math.floor(height * 0.8));
+        const pngCandidate = canvas.toBuffer('image/png');
+        if (pngCandidate.length <= API_READER_MODEL_IMAGE_MAX_BYTES) {
+            encoded = pngCandidate;
+            encodedMime = 'image/png';
+        }
+    }
+    if (!encoded) {
+        for (let pass = 0; pass < 4; pass += 1) {
+            const canvas = createCanvas(width, height); const context = canvas.getContext('2d');
+            context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+            context.drawImage(decoded, 0, 0, width, height);
+            encoded = canvas.toBuffer('image/jpeg', Math.max(65, 95 - pass * 10));
+            encodedMime = 'image/jpeg';
+            if (encoded.length <= API_READER_MODEL_IMAGE_MAX_BYTES) break;
+            width = Math.max(1, Math.floor(width * 0.8)); height = Math.max(1, Math.floor(height * 0.8));
+        }
     }
     if (!encoded || encoded.length > API_READER_MODEL_IMAGE_MAX_BYTES) {
         const error = new Error(`Reader 图片规范化后仍超出字节上限: ${encoded?.length || 0}`);
@@ -16842,7 +17107,7 @@ async function prepareApiReaderModelImagePayload(image) {
         throw error;
     }
     const modelPayloadSha256 = crypto.createHash('sha256').update(encoded).digest('hex');
-    return { ...image, base64: encoded.toString('base64'), mime: 'image/jpeg', sha256: sourceSha256,
+    return { ...image, base64: encoded.toString('base64'), mime: encodedMime, sha256: sourceSha256,
         sourceSha256, sourceBytes: source.length, sourceWidth, sourceHeight,
         modelPayloadSha256, modelPayloadBytes: encoded.length, modelPayloadWidth: width,
         modelPayloadHeight: height, modelPayloadTransform: API_READER_MODEL_IMAGE_TRANSFORM,
@@ -16869,6 +17134,8 @@ function modelImageEvidence(image, status = 'ready') {
         ...(image.url ? { url: image.url } : {}),
         ...(image.inlineSvgSourceSha256 ? { inlineSvgSourceSha256: image.inlineSvgSourceSha256,
             inlineSvgRenderContract: image.inlineSvgRenderContract, sourceLocationUrl: image.sourceLocationUrl } : {}),
+        ...(image.pdfCropSourceSha256 ? { pdfCropSourceSha256: image.pdfCropSourceSha256,
+            pdfCropContract: image.pdfCropContract, sourceLocationUrl: image.sourceLocationUrl } : {}),
         sha256: image.sourceSha256, sourceSha256: image.sourceSha256,
         sourceBytes: image.sourceBytes, sourceWidth: image.sourceWidth, sourceHeight: image.sourceHeight,
         modelPayloadSha256: image.modelPayloadSha256, modelPayloadBytes: image.modelPayloadBytes,
@@ -20918,6 +21185,7 @@ module.exports = {
     stripLatexPhantoms,
     ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION,
     buildUnstructuredTextArtifactSignals,
+    buildPdfStructuredArtifactsFromBytes,
     bindStructuredArtifactsToText,
     parseArxivReaderAuthors,
     resolveApiReaderAuthors,

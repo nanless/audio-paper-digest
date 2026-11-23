@@ -49,16 +49,23 @@ function displayMatrix(table) { return (table?.matrix || []).map((row, r) => row
 function displayCellMatches(table, row, column, text, normalize = value => value) {
     // A rendered cell may be either the verified display projection or the raw
     // source cell text; both denote this same DOM cell, so accept either.
+    // Escaped pipes ('\|') produced by Markdown table rendering denote literal '|'.
     const projected = displayCell(table, row, column);
     const raw = String(table?.matrix?.[row]?.[column] ?? '');
-    if (normalize(text) === normalize(projected) || normalize(text) === normalize(raw)) return true;
+    const unescaped = typeof text === 'string' && text.includes('\\|') ? text.replace(/\\\|/g, '|') : text;
+    if (normalize(text) === normalize(projected) || normalize(text) === normalize(raw)
+        || (unescaped !== text && (normalize(unescaped) === normalize(projected) || normalize(unescaped) === normalize(raw)))) {
+        return true;
+    }
     if (sealedEvidence(table)) return false;
     // Original signed bindings keep the old comparison first. A new display
     // may additionally prove exact whole-cell equivalence to this same DOM cell.
-    if (legacy.displayCellMatches(table, row, column, text, normalize)) return true;
+    if (legacy.displayCellMatches(table, row, column, text, normalize)
+        || (unescaped !== text && legacy.displayCellMatches(table, row, column, unescaped, normalize))) return true;
     if (legacy.evidence(table)) return false;
     const proof = sourceMathDisplay(table, row, column);
-    return Boolean(proof && normalize(text) === normalize(proof.displayText));
+    return Boolean(proof && (normalize(text) === normalize(proof.displayText)
+        || (unescaped !== text && normalize(unescaped) === normalize(proof.displayText))));
 }
 function selectionProjection(table, binding, artifacts, proof, projectionHeader = proofFormat.header(SELECTION_FAMILY)) {
     const selection = require('./reader-tables').readCompiledReaderTableSelection(binding, artifacts);
@@ -114,10 +121,16 @@ function compiledSelectionDisplayMatches(table, binding, rows, artifacts) {
     const selection = compiledSelectionEvidence(table, binding, artifacts);
     if (!selection) return false;
     const { sourceRows, sourceColumns } = selection;
+    const unescapePipe = require('./reader-tables').unescapeMarkdownTableCell;
     return Array.isArray(rows) && rows.length === sourceRows.length
         && rows.every((row, r) => Array.isArray(row) && row.length === sourceColumns.length
-            && row.every((text, c) => text === table.matrix[sourceRows[r]][sourceColumns[c]]
-                || text === displayCell(table, sourceRows[r], sourceColumns[c])));
+            && row.every((text, c) => {
+                const raw = unescapePipe(text);
+                return text === table.matrix[sourceRows[r]][sourceColumns[c]]
+                    || raw === table.matrix[sourceRows[r]][sourceColumns[c]]
+                    || text === displayCell(table, sourceRows[r], sourceColumns[c])
+                    || raw === displayCell(table, sourceRows[r], sourceColumns[c]);
+            }));
 }
 function bindingEvidence(table, binding, artifacts) {
     const old = legacy.evidence(table), exact = old ? null : sealedEvidence(table);
@@ -179,11 +192,13 @@ function assertSavedPairedDomBindings(paper) {
                 const r = cell.sourceRow, c = cell.sourceColumn, key = `${r}:${c}`;
                 const owners = table.cells.filter(item => r >= item.row && r < item.row + item.rowspan
                     && c >= item.column && c < item.column + item.colspan);
+                const unescapedRendered = require('./reader-tables').unescapeMarkdownTableCell(cell.renderedText);
                 if (!Number.isSafeInteger(r) || !Number.isSafeInteger(c) || r < 0 || c < 0 || seen.has(key)
                     || cell.renderedRow !== r || cell.renderedColumn !== c || owners.length !== 1
                     || table.matrix[r]?.[c] !== owners[0].text || cell.sourceText !== owners[0].text
                     || cell.sourceDomSha256 !== owners[0].sourceDomSha256
-                    || (cell.renderedText !== normalize(owners[0].text) && cell.renderedText !== owners[0].text)
+                    || (cell.renderedText !== normalize(owners[0].text) && cell.renderedText !== owners[0].text
+                        && unescapedRendered !== normalize(owners[0].text) && unescapedRendered !== owners[0].text)
                     || matrix[r]?.[c] !== cell.renderedText) return true;
                 seen.add(key); return false;
             })) throw new Error('Paired DOM display must retain every complete original cell, coordinate and literal value');
@@ -310,11 +325,13 @@ function savedCellMatches(binding, cell, displayed) {
     if (tables.length !== 1) return false;
     const originals = tables[0].cells.filter(item => item.row === cell.sourceRow && item.column === cell.sourceColumn);
     const selection = binding.sealedPdfTableSelection !== undefined;
+    const normalizeCell = require('../deep-analyzer').normalizeReaderSourceCell;
+    const unescapedDisplayed = require('./reader-tables').unescapeMarkdownTableCell(displayed);
+    const expectedCell = normalizeCell(proof.displayMatrix[cell.sourceRow]?.[cell.sourceColumn]);
     return originals.length === 1 && originals[0].sourceDomSha256 === cell.sourceDomSha256 && originals[0].text === cell.sourceText
         && (selection ? context.selectionBindings.get(binding) === JSON.stringify(binding) && binding.cellBindings.includes(cell)
             : cell.sourceRow === cell.renderedRow && cell.sourceColumn === cell.renderedColumn)
-        && require('../deep-analyzer').normalizeReaderSourceCell(displayed)
-            === require('../deep-analyzer').normalizeReaderSourceCell(proof.displayMatrix[cell.sourceRow]?.[cell.sourceColumn]);
+        && (normalizeCell(displayed) === expectedCell || normalizeCell(unescapedDisplayed) === expectedCell);
 }
 function appendSourceOriginNotes(article, bindings) {
     const lines = String(article).split('\n'), tables = require('../analysis-contract').extractMarkdownTables(article);

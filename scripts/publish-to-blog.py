@@ -1485,8 +1485,8 @@ def _review_source_figure_semantics_note(paper):
             or artifacts.get('payloadSha256') != source.get('structuredArtifactsSha256')
             or artifacts.get('payloadSha256') != stage.get('structuredArtifactsSha256')):
         raise PublishDataValidationError('审查原图编号说明与封存来源 SHA 不一致。')
-    if artifacts.get('parserVersion') != 'arxiv-html-dom-v4':
-        return ''  # PDF/conference/unknown inventories do not claim this DOM numbering convention.
+    if artifacts.get('parserVersion') not in {'arxiv-html-dom-v4', 'arxiv-html-dom-v5', 'pdf-layout-dom-v1'}:
+        return ''  # Conference/unknown inventories do not claim this DOM numbering convention.
     verified_originals = []
     for figure in figures:
         matches = [item for item in artifacts.get('figures', [])
@@ -1511,6 +1511,15 @@ def _review_source_figure_semantics_note(paper):
             if any(figure.get(key) != descriptor[key] for key in (
                     'url', 'inlineSvgSourceSha256', 'inlineSvgRenderContract')):
                 raise PublishDataValidationError('审查原图的内联 SVG 来源身份不一致。')
+        elif images[0].get('kind') == 'pdf_crop':
+            from pdf_figure_table_extract import pdf_crop_source_descriptor
+            try:
+                descriptor = pdf_crop_source_descriptor(images[0], paper_id)
+            except ValueError as exc:
+                raise PublishDataValidationError(f'审查原图的 PDF 裁图来源身份无效：{exc}') from exc
+            if any(figure.get(key) != descriptor[key] for key in (
+                    'url', 'sourceLocationUrl', 'pdfCropSourceSha256', 'pdfCropContract')):
+                raise PublishDataValidationError('审查原图的 PDF 裁图来源身份不一致。')
         elif images[0].get('kind') != 'external_url' or images[0].get('url') != figure.get('url'):
             raise PublishDataValidationError('审查原图 URL 与封存资源不一致。')
         verified_originals.append(original)
@@ -9772,8 +9781,10 @@ def _reader_cell_comparison(value):
 
     来源 DOM 会把同一箭头写成「可见箭头 + LaTeX 命令」两份，折叠后可能剩两个
     相同箭头（↓↓）；比较时按一个处理，显示的仍是折叠后的可见副本。
+    Markdown 表格转义竖线（\\|）还原为字面竖线（|）后再比对原表单元格。
     """
-    projected = _project_reader_cell_tex_display(value)
+    unescaped = str(value or '').replace('\\|', '|')
+    projected = _project_reader_cell_tex_display(unescaped)
     return _normalize_api_reader_source_cell(_TRAILING_DIRECTION_RUN.sub(r'\1', projected))
 
 
@@ -10601,6 +10612,132 @@ def _reader_pdf_page_asset(paper, figure, resource, original_pixels):
         ) from exc
 
 
+def _is_pdf_crop_figure(figure):
+    if not isinstance(figure, dict):
+        return False
+    if 'pdfCropSourceSha256' in figure or 'pdfCropContract' in figure:
+        return True
+    frag = urlparse(str(figure.get('url') or '')).fragment
+    return bool(re.fullmatch(r'pd-pdf-figure-\d+-[0-9a-f]{16}', frag))
+
+
+def _reader_pdf_crop_resource(paper, plan, figure, structured_sha, source_sha):
+    from pdf_figure_table_extract import pdf_crop_source_descriptor
+    artifacts = _reader_source_payload_artifacts(plan.get('structuredSourcePayload'), structured_sha, source_sha)
+    if not artifacts or not isinstance(artifacts.get('figures'), list):
+        raise PublishDataValidationError('PDF 裁切论文图缺少已绑定的原始结构化来源。')
+    paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+    matches = []
+    for source in artifacts['figures']:
+        if (not isinstance(source, dict) or source.get('recoveryStatus') != 'complete'
+                or source.get('ordinal') != figure.get('ordinal')
+                or source.get('sourceDomSha256') != figure.get('sourceDomSha256')):
+            continue
+        images = source.get('images')
+        if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
+            continue
+        res = images[0]
+        try:
+            descriptor = pdf_crop_source_descriptor(res, paper_id)
+        except ValueError:
+            continue
+        if (all(descriptor[key] == figure.get(key) for key in (
+                'url', 'sourceLocationUrl', 'pdfCropSourceSha256', 'pdfCropContract'))
+                and re.sub(r'\s+', ' ', source.get('label') or f"Figure {source['ordinal']}").strip() == figure.get('label')
+                and re.sub(r'\s+', ' ', source.get('caption') or '').strip()[:1200] == figure.get('caption')):
+            matches.append(res)
+    if len(matches) != 1:
+        raise PublishDataValidationError('PDF 裁切论文图与原始来源坐标、图注或位置不一致。')
+    return matches[0]
+
+
+def _read_authenticated_historical_arxiv_pdf_bytes(paper, paper_id, proof):
+    gen = proof.get('sourceGeneration')
+    manifest_sha = proof.get('sourceManifestSha256')
+    source_sha = proof.get('sourceSha256')
+    if (type(gen) is not int or gen < 1
+            or not isinstance(manifest_sha, str) or not re.fullmatch(r'[0-9a-f]{64}', manifest_sha)
+            or not isinstance(source_sha, str) or not re.fullmatch(r'[0-9a-f]{64}', source_sha)):
+        raise PublishDataValidationError('PDF 裁切论文图缺少有效的历史封存来源世代或清单 SHA。')
+    analysis_manifest = paper.get('analysisManifest')
+    if (not isinstance(analysis_manifest, dict)
+            or analysis_manifest.get('freshRewriteProvenance') != proof
+            or paper.get('sourceSha256') != source_sha):
+        raise PublishDataValidationError(f'{paper_id} 历史封存来源证明未闭合到分析清单。')
+    fetched_root = DAILY_FRESH_SOURCE_RUNS_DIR.parent / 'fetched-arxiv-sources'
+    paper_dir = fetched_root / paper_id
+    source_dir = paper_dir / f'generation-{gen:06d}'
+    for directory, label in (
+            (fetched_root, '历史 PDF 裁切来源根目录'),
+            (paper_dir, '历史 PDF 裁切论文目录'),
+            (source_dir, '历史 PDF 裁切世代目录'),
+    ):
+        _daily_fresh_safe_directory(directory, label)
+    entries = sorted(item.name for item in source_dir.iterdir())
+    if entries != ['source-manifest.json', 'source-runtime.json', 'source.pdf', 'source.txt']:
+        raise PublishDataValidationError(f'{paper_id} 历史封存来源目录文件集合不完整或包含多余文件。')
+    manifest_bytes = _daily_fresh_read_private_file(source_dir / 'source-manifest.json', '历史封存来源清单', 1024 * 1024)
+    if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha:
+        raise PublishDataValidationError(f'{paper_id} 历史封存来源清单 SHA 不一致。')
+    try:
+        manifest = json.loads(manifest_bytes.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'{paper_id} 历史封存来源清单 JSON 无效。') from exc
+    if (not isinstance(manifest, dict) or manifest.get('arxivId') != paper_id
+            or manifest.get('generation') != gen):
+        raise PublishDataValidationError(f'{paper_id} 历史封存来源清单与论文或世代不匹配。')
+    text_bytes = _daily_fresh_read_private_file(source_dir / 'source.txt', '历史封存正文', 64 * 1024 * 1024)
+    runtime_bytes = _daily_fresh_read_private_file(source_dir / 'source-runtime.json', '历史封存运行元数据', 64 * 1024 * 1024)
+    pdf_bytes = _daily_fresh_read_private_file(source_dir / 'source.pdf', '历史封存 PDF 原文件', 512 * 1024 * 1024)
+    if (hashlib.sha256(text_bytes).hexdigest() != source_sha
+            or manifest.get('text', {}).get('responseSha256') != source_sha
+            or manifest.get('runtimeMetadata', {}).get('responseSha256') != hashlib.sha256(runtime_bytes).hexdigest()
+            or manifest.get('pdf', {}).get('responseSha256') != hashlib.sha256(pdf_bytes).hexdigest()):
+        raise PublishDataValidationError(f'{paper_id} 历史封存四文件哈希与清单声明不一致。')
+    try:
+        runtime = json.loads(runtime_bytes.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'{paper_id} 历史封存运行元数据 JSON 无效。') from exc
+    expected_art_sha = proof.get('structuredArtifactsSha256')
+    actual_art_sha = (runtime.get('structuredArtifacts') or {}).get('payloadSha256') if isinstance(runtime, dict) else None
+    if expected_art_sha and actual_art_sha != expected_art_sha:
+        raise PublishDataValidationError(f'{paper_id} 历史封存结构化来源 SHA 不一致。')
+    return pdf_bytes
+
+
+def _render_reader_pdf_crop_pixels(paper, resource):
+    from pdf_figure_table_extract import pdf_crop_source_descriptor, render_pdf_figure_crop_png
+    proof = paper.get('freshRewriteProvenance') or {}
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('PDF 裁切论文图缺少本篇封存来源运行标识。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    try:
+        pdf_crop_source_descriptor(resource, paper_id)
+    except ValueError as exc:
+        raise PublishDataValidationError(f'PDF 裁切论文图描述无效：{exc}') from exc
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    if run_dir.is_symlink():
+        raise PublishDataValidationError('PDF 裁切图片来源运行目录不能是符号链接。')
+    if run_dir.exists():
+        _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, 'PDF 裁切图片来源根目录')
+        _daily_fresh_safe_directory(run_dir, 'PDF 裁切图片来源运行目录')
+        _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+        pdf_path = run_dir / 'sources' / paper_id / 'generation-000001' / 'source.pdf'
+        pdf_bytes = _daily_fresh_read_private_file(pdf_path, 'PDF 裁切原文件', 512 * 1024 * 1024)
+    else:
+        pdf_bytes = _read_authenticated_historical_arxiv_pdf_bytes(paper, paper_id, proof)
+    if hashlib.sha256(pdf_bytes).hexdigest() != resource.get('pdfSha256'):
+        raise PublishDataValidationError('封存 PDF 字节 SHA 与 PDF 裁切图来源声明不一致。')
+    try:
+        return render_pdf_figure_crop_png(
+            pdf_bytes, resource['page'], resource['bbox'], dpi=resource['dpi']
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise PublishDataValidationError(f'PDF 裁切论文图渲染失败：{exc}') from exc
+
+
 def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, source_sha):
     paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
     figures = paper.get('apiReaderFigures') or []
@@ -10611,7 +10748,9 @@ def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, 
             and any(text in article for text in _LEGACY_READER_PIXEL_NARRATIVES)):
         raise PublishDataValidationError('旧论文图仍含无像素证据的固定叙述；请根据封存来源重建 Reader。')
     for figure in figures:
-        if isinstance(figure, dict) and ('inlineSvgSourceSha256' in figure or 'inlineSvgRenderContract' in figure
+        if isinstance(figure, dict) and _is_pdf_crop_figure(figure):
+            _reader_pdf_crop_resource(paper, plan, figure, structured_sha, source_sha)
+        elif isinstance(figure, dict) and ('inlineSvgSourceSha256' in figure or 'inlineSvgRenderContract' in figure
                 or urlparse(str(figure.get('url') or '')).fragment):
             _reader_inline_svg_resource(paper, plan, figure, structured_sha, source_sha)
     if paper_id != '2609.15067':
@@ -10841,11 +10980,14 @@ def _verify_reader_paired_dom_bindings(paper):
                 raise PublishDataValidationError('配对DOM显示的原坐标不完整。')
             owners = [item for item in table['cells'] if item['row'] <= r < item['row'] + item['rowspan']
                       and item['column'] <= c < item['column'] + item['colspan']]
+            rendered_text = cell.get('renderedText')
+            unescaped_rendered = str(rendered_text or '').replace('\\|', '|') if isinstance(rendered_text, str) else rendered_text
+            owner_texts = (_normalize_api_reader_display_artifacts(owners[0]['text']), owners[0]['text']) if len(owners) == 1 else ()
             if len(owners) != 1 or cell.get('renderedRow') != r or cell.get('renderedColumn') != c \
                     or table['matrix'][r][c] != owners[0]['text'] or cell.get('sourceText') != owners[0]['text'] \
                     or cell.get('sourceDomSha256') != owners[0]['sourceDomSha256'] \
-                    or cell.get('renderedText') not in (_normalize_api_reader_display_artifacts(owners[0]['text']), owners[0]['text']) \
-                    or matrix[r][c] != cell.get('renderedText'):
+                    or (rendered_text not in owner_texts and unescaped_rendered not in owner_texts) \
+                    or matrix[r][c] != rendered_text:
                 raise PublishDataValidationError('配对DOM显示的原文、数值单位、坐标或DOM身份不一致。')
             seen.add((r, c))
 
@@ -12347,7 +12489,7 @@ def _reader_missing_figure_caption_matches(paper, plan, figure, source_proof):
         inline_figure = '#' in str(figure.get('url') or '')
         if any(isinstance(image, dict) and (
                 (not inline_figure and image.get('url') == figure.get('url'))
-                or (inline_figure and not image.get('url')))
+                or (inline_figure and (not image.get('url') or image.get('url') == figure.get('url'))))
                for image in source.get('images', [])):
             matches.append(source)
     return len(matches) == 1
@@ -12806,7 +12948,13 @@ def _api_reader_payload_uncached(paper):
                 # 历史直接分析可保留临时像素的内容 SHA，作为图片证据；
                 # 此字段不提供可复制的图片文件路径。
                 expected_figure_fields.add('assetSha256')
-            inline_svg = 'inlineSvgSourceSha256' in item or 'inlineSvgRenderContract' in item or bool(urlparse(str(item.get('url') or '')).fragment)
+            pdf_crop = _is_pdf_crop_figure(item)
+            inline_svg = (not pdf_crop) and ('inlineSvgSourceSha256' in item or 'inlineSvgRenderContract' in item or bool(urlparse(str(item.get('url') or '')).fragment))
+            if pdf_crop:
+                expected_figure_fields.update({'pdfCropSourceSha256', 'pdfCropContract', 'sourceLocationUrl'})
+                expected_figure_fields.add('assetSha256')
+                if not ephemeral_figures:
+                    raise PublishDataValidationError('PDF 裁切论文图只能使用当前调用的临时像素记录。')
             if inline_svg:
                 expected_figure_fields.update({'inlineSvgSourceSha256', 'inlineSvgRenderContract', 'sourceLocationUrl'})
                 expected_figure_fields.add('assetSha256')
@@ -12900,7 +13048,7 @@ def _api_reader_payload_uncached(paper):
                         f"（figure ordinal={item.get('ordinal')}）。"
                     )
                 _ephemeral_figure_note(item)
-                raster_recovery = _publication_raster_recovery_target(paper, item) if not inline_svg else None
+                raster_recovery = _publication_raster_recovery_target(paper, item) if (not inline_svg and not pdf_crop) else None
                 if raster_recovery is not None:
                     raw_asset, derived_proof = _reader_damaged_raster_pdf_page_asset(paper, item, raster_recovery)
                     actual_sha = hashlib.sha256(raw_asset).hexdigest()
@@ -12909,6 +13057,19 @@ def _api_reader_payload_uncached(paper):
                         'destination': (Path('static') / 'images' / 'papers' / paper_id / filename).as_posix(),
                         'publicUrl': f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{filename}',
                         'sourceUrl': item['url'], 'sha256': actual_sha, 'derivedAssetProof': derived_proof})
+                if pdf_crop:
+                    resource = _reader_pdf_crop_resource(paper, plan, item,
+                        source_binding_proof['structuredArtifactsSha256'], paper['sourceSha256'])
+                    raw_asset = _render_reader_pdf_crop_pixels(paper, resource)
+                    actual_sha = hashlib.sha256(raw_asset).hexdigest()
+                    if actual_sha != item.get('assetSha256'):
+                        raise PublishDataValidationError('PDF 裁切论文图重新渲染的像素与 Reader 实际输入不一致。')
+                    filename = f"figure-{item['ordinal']}-{actual_sha[:16]}.png"
+                    destination = Path('static') / 'images' / 'papers' / paper_id / filename
+                    figure_assets.append({'generatedBytes': raw_asset,
+                        'destination': destination.as_posix(),
+                        'publicUrl': f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{filename}',
+                        'sourceUrl': item['url'], 'sha256': actual_sha})
                 if inline_svg:
                     from reader_inline_svg_pixel_replay import replay_saved_inline_svg_pixels
                     resource = _reader_inline_svg_resource(paper, plan, item,
@@ -17947,6 +18108,8 @@ def generation_template_fingerprint():
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
         'pdf_author_extract.py': script_dir / 'pdf_author_extract.py',
         'pdf_author_extract_v1.py': script_dir / 'pdf_author_extract_v1.py',
+        'pdf_figure_table_extract.py': script_dir / 'pdf_figure_table_extract.py',
+        'lib/reader-pdf-figure-crop.js': script_dir / 'lib' / 'reader-pdf-figure-crop.js',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
         'lib/reader-pdf-extraction-scope.js': script_dir / 'lib' / 'reader-pdf-extraction-scope.js',

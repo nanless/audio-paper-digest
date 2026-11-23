@@ -395,6 +395,8 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `pdf-layout-extract.py` | 从受控 PDF 提取布局、文本位置和单元格证据。 |
 | `pdf_author_extract.py` | 从受控 PDF 第 1 页字体与上标几何结构确定性提取并绑定作者与机构证据（当前支持 `pdf-page1-author-evidence-v2`，并按 `--contract` 兼容 `v1` 重放）。 |
 | `pdf_author_extract_v1.py` | 冻结保留的 `pdf-page1-author-evidence-v1` PDF 第 1 页作者提取器，仅供历史封存批次位精确重放。 |
+| `pdf_figure_table_extract.py` | 从受控 PDF 按真实图注与 booktabs 横线确定性提取论文图裁切描述（不存图片字节）与结构化表格矩阵，并在需要时按高 DPI 确定性渲染 PNG 裁图。 |
+| `lib/reader-pdf-figure-crop.js` | Node 桥接库：校验 PDF 裁图描述签名、调用 `pdf_figure_table_extract.py` 提取结构化图表元数据并在当前调用内按需渲染 PNG。 |
 | `reader_inline_svg.py` | Python 共享：校验内嵌 SVG 的元素、属性和本地引用，在禁用脚本与网络的浏览器中渲染 PNG，供阅读和发布共用。 |
 | `reader_inline_svg_pixel_replay.py` | Python 库：先执行当前 SVG 安全检查，只从当前 HEAD 的可信 Git 历史重放渲染器；生成图片必须与原模型像素 SHA 完全相同，才供正常发布器暂存。 |
 | `reader_pdf_page_asset.py` | Python 库：仅对缺失或循环绘图依赖的封存 SVG，从同一日更封存 PDF 的唯一图号及完整图注派生完整原页 PNG；保留 Reader 旧像素 SHA，以独立来源证明供发布、审查与推送重验。 |

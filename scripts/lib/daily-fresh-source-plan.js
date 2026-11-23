@@ -496,8 +496,35 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
     const materialized = [];
     for (const figure of figures) {
         try {
-            // 内联图的 URL 是原文定位，不是远程图片下载地址。每次使用前重新核验四件来源。
+            // PDF 裁图描述与内联 SVG 的 URL 都是封存来源定位，不是远程图片下载地址。每次使用前重新核验四件来源。
             if (String(figure.url || '').includes('#')) {
+                const pdfCrop = require('./reader-pdf-figure-crop.js');
+                if (pdfCrop.isPdfCropFigure(figure)) {
+                    const details = readDailyFreshSource(plan, { arxivId });
+                    const matches = (details.structuredArtifacts?.figures || []).filter(item =>
+                        item.ordinal === figure.ordinal && item.recoveryStatus === 'complete'
+                        && item.images?.length === 1
+                        && pdfCrop.pdfCropSourceDescriptor(item.images[0], arxivId)?.url === figure.url);
+                    if (matches.length !== 1) fail(`论文图 ${figure.ordinal} 的 PDF 裁图定位与封存来源不符`);
+                    const sourceFigure = matches[0];
+                    const descriptor = pdfCrop.pdfCropSourceDescriptor(sourceFigure.images[0], arxivId);
+                    // Read authenticated sealed PDF through readFreshArxivRewriteSource (verifying 0600,
+                    // no symlink, and exact source-manifest.json SHA-256).
+                    const stored = arxivSource.readFreshArxivRewriteSource({
+                        rootDir: plan.sourcesDir,
+                        arxivId,
+                        generation: SOURCE_GENERATION
+                    });
+                    if (stored.sourceManifestSha256 !== details.freshSourceDescriptor?.sourceManifestSha256) {
+                        fail(`论文图 ${figure.ordinal} 的封存 PDF 清单签名在读取期间发生变化`);
+                    }
+                    const rendered = await pdfCrop.renderOfficialPdfFigureCrop(stored.pdf, sourceFigure.images[0], arxivId);
+                    materialized.push({ ...figure, ...descriptor,
+                        sourceDomSha256: sourceFigure.sourceDomSha256,
+                        rawBytes: rendered.rawBytes, assetSha256: rendered.assetSha256,
+                        assetMediaType: rendered.mediaType });
+                    continue;
+                }
                 const svg = require('./reader-inline-svg.js');
                 const details = readDailyFreshSource(plan, { arxivId });
                 const matches = (details.structuredArtifacts?.figures || []).filter(item =>

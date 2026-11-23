@@ -17,7 +17,7 @@ function draft(binding = { tableIndex: 1, completeTable: { sourceTableOrdinal: 1
 }
 
 test('空布局列头限制selection但安全完整表保留全部数据和精度，并在正常compiler展开坐标', () => {
-    const table = source([['', 'PCC', 'RMSE'], ['Baseline', '0.934', '5.21'], ['Ours', '0.948', '4.63']]);
+    const table = source([['Method', '', 'RMSE'], ['Baseline', '0.934', '5.21'], ['Ours', '0.948', '4.63']]);
     const input = draft(); const before = JSON.stringify({table, input});
     const selection = tables.assessReaderTableSelectionEligibility(table);
     assert.equal(selection.eligible, false);
@@ -59,7 +59,7 @@ test('明确同值TeX显示副本沿公共规则处理，来源原字节保持�
 
 test('未知TeX、非矩形、丢原格、重复原格与Markdown注入不能声明完整表', () => {
     const variants = [source([['Method', 'Score'], ['Ours', '\\mathrm{score}']]),
-        source([['Method', 'Score'], ['Ours', '3.2|extra']]),
+        source([['Method', 'Score'], ['Ours', '3.2\nextra']]),
         source([['Method', 'Score'], ['Ours', '3.2']]),
         source([['Method', 'Score'], ['Ours', '3.2']])];
     variants[2].cells.pop(); variants[3].cells.push({...variants[3].cells[0]});

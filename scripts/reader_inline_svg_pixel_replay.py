@@ -1,5 +1,6 @@
 """Reproduce saved model pixels using only this checkout's trusted Git renderers."""
 import hashlib
+import inspect
 from pathlib import Path
 import re
 import subprocess
@@ -49,6 +50,9 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256):
     actual = render_svg(raw)
     if hashlib.sha256(actual).hexdigest() == expected_sha256:
         return actual, None
+    hidpi_actual = render_svg(raw, hidpi=True)
+    if hashlib.sha256(hidpi_actual).hexdigest() == expected_sha256:
+        return hidpi_actual, None
     for code, provenance in _trusted_renderers():
         namespace = {'__name__': 'trusted_inline_svg_pixel_replay',
                      '__file__': str(REPOSITORY / RENDERER_PATH)}
@@ -56,16 +60,23 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256):
         producer = namespace.get('render_svg')
         if not callable(producer):
             continue
+        calls = [{}]
         try:
-            candidate = producer(raw)
-        except Exception:
-            # Old renderers can reject newer static markup. They cannot authorize it.
-            continue
-        if (not isinstance(candidate, bytes) or not candidate.startswith(b'\x89PNG\r\n\x1a\n')
-                or len(candidate) > MAX_OUTPUT_BYTES
-                or hashlib.sha256(candidate).hexdigest() != expected_sha256):
-            continue
-        return candidate, {'contract': CONTRACT, **provenance,
-                           'sourceSvgSha256': hashlib.sha256(raw).hexdigest(),
-                           'savedPixelSha256': expected_sha256}
+            if 'hidpi' in inspect.signature(producer).parameters:
+                calls.append({'hidpi': True})
+        except (TypeError, ValueError):
+            pass
+        for kwargs in calls:
+            try:
+                candidate = producer(raw, **kwargs)
+            except Exception:
+                # Old renderers can reject newer static markup. They cannot authorize it.
+                continue
+            if (not isinstance(candidate, bytes) or not candidate.startswith(b'\x89PNG\r\n\x1a\n')
+                    or len(candidate) > MAX_OUTPUT_BYTES
+                    or hashlib.sha256(candidate).hexdigest() != expected_sha256):
+                continue
+            return candidate, {'contract': CONTRACT, **provenance,
+                               'sourceSvgSha256': hashlib.sha256(raw).hexdigest(),
+                               'savedPixelSha256': expected_sha256}
     raise ValueError('No trusted original SVG renderer reproduced the saved model pixels')

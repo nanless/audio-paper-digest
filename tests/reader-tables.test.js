@@ -478,16 +478,30 @@ test('每个表格标记必须唯一、独立成行、顺序正确，并有对�
     assert.throws(() => compileReaderTableSelections([{ body: '| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[[TABLE_1]]' }], [selected()], artifacts), /顺序/);
 });
 
-test('拒绝无法安全写入 Markdown 的原表内容，并检查生成表格的来源 SHA 和单元格内容', () => {
+test('拒绝无法安全写入 Markdown 的原表内容，安全转义管道符，并检查生成表格的来源 SHA 和单元格内容', () => {
     const { artifacts, sourceText } = artifactsFixture();
-    for (const text of ['a | b', 'line\nbreak', '<script>bad</script>', '[link](javascript:bad)', '[[FIGURE_1]]']) {
+    // Literal '|' in source table cells is safely escaped as '\|' and round-trips through binding verification.
+    const deepMod = require('../scripts/deep-analyzer.js');
+    const withPipeBase = structuredClone(artifacts);
+    withPipeBase.tables[0].matrix[2][1] = 'a | b';
+    withPipeBase.tables[0].cells.find(cell => cell.row === 2 && cell.column === 1).text = 'a | b';
+    const withPipe = deepMod.bindStructuredArtifactsToText(withPipeBase, sourceText);
+    const compiledPipe = compileReaderTableSelections([{ body: '[[TABLE_1]]' }], [selected()], withPipe);
+    assert.match(compiledPipe.sections[0].body, /a \\\| b/);
+    const bind = deepMod.bindApiReaderSourceEvidence;
+    const boundPipe = bind(compiledPipe.sections[0].body, compiledPipe.tableBindings, [], {
+        structuredArtifacts: withPipe, sourceText, allowDeterministicQuoteRepair: true,
+        selectionTableIndexes: compiledPipe.selectionTableIndexes
+    });
+    assert.equal(boundPipe.tableBindings.length, 1);
+
+    for (const text of ['line\nbreak', '<script>bad</script>', '[link](javascript:bad)', '[[FIGURE_1]]']) {
         const bad = structuredClone(artifacts);
         bad.tables[0].matrix[2][1] = text;
         bad.tables[0].cells.find(cell => cell.row === 2 && cell.column === 1).text = text;
         assert.throws(() => renderReaderTableSelection(selected(), bad), /Markdown/);
     }
     const compiled = compileReaderTableSelections([{ body: '[[TABLE_1]]' }], [selected()], artifacts);
-    const bind = require('../scripts/deep-analyzer.js').bindApiReaderSourceEvidence;
     assert.throws(() => bind(compiled.sections[0].body, compiled.tableBindings, [], {
         structuredArtifacts: artifacts, sourceText: `${sourceText} changed` }), /SHA/);
     assert.throws(() => bind(compiled.sections[0].body.replace('4.8', '4.9'), compiled.tableBindings, [], {

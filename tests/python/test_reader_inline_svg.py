@@ -205,6 +205,25 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
                 renderer.validate_svg(bad)
             self.assertNotIsInstance(raised.exception, renderer.UnsupportedSvgDependency)
 
+    def test_hidpi_step_down_falls_back_to_1x_without_crashing(self):
+        small_svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80" viewBox="0 0 160 80">'
+            b'<rect x="4" y="4" width="152" height="72" fill="#2266aa" stroke="#111" stroke-width="2"/>'
+            b'<text x="20" y="46" font-size="18" fill="#ffffff">HiDPI</text></svg>'
+        )
+        png_1x = renderer.render_svg(small_svg, hidpi=False)
+        png_hi = renderer.render_svg(small_svg, hidpi=True)
+        self.assertGreater(len(png_hi), len(png_1x))
+        orig_limit = renderer.MAX_OUTPUT_BYTES
+        try:
+            # Force all scales > 1.0 to exceed MAX_OUTPUT_BYTES while 1.0x fits cleanly.
+            renderer.MAX_OUTPUT_BYTES = len(png_1x) + 64
+            fallback_png = renderer.render_svg(small_svg, hidpi=True)
+            self.assertTrue(fallback_png.startswith(b'\x89PNG\r\n\x1a\n'))
+            self.assertLessEqual(len(fallback_png), renderer.MAX_OUTPUT_BYTES)
+        finally:
+            renderer.MAX_OUTPUT_BYTES = orig_limit
+
 
 if __name__ == '__main__':
     unittest.main()

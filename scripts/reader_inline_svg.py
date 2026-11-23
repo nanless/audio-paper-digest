@@ -471,7 +471,23 @@ def _serialize_validated_svg(root):
     return emit(root, is_root=True)
 
 
-def render_svg(raw):
+def _hidpi_scale_factor(width, height):
+    """Choose a deterministic HiDPI scale (1.0..3.0 in 0.5 steps) for small vector SVGs."""
+    long_edge = max(float(width), float(height))
+    if long_edge <= 0 or long_edge >= 1600:
+        return 1.0
+    raw = min(3.0, 2000.0 / long_edge)
+    quantized = max(1.0, math.floor(raw * 2.0) / 2.0)
+    while quantized > 1.0:
+        sw = math.ceil(width * quantized)
+        sh = math.ceil(height * quantized)
+        if sw <= 4096 and sh <= 4096 and sw * sh <= 16_000_000:
+            return quantized
+        quantized = round(quantized - 0.5, 1)
+    return 1.0
+
+
+def render_svg(raw, *, hidpi=False):
     text = validate_svg(raw)
     canonical_markup = _serialize_validated_svg(ET.fromstring(text))
     from playwright.sync_api import sync_playwright
@@ -495,96 +511,123 @@ def render_svg(raw):
             options['executable_path'] = str(sorted(candidates)[-1])
         browser = playwright.chromium.launch(**options)
         try:
-            context = browser.new_context(java_script_enabled=False, offline=True, viewport={'width': 4096, 'height': 4096})
-            page = context.new_page()
-            page.route('**/*', lambda route: route.abort())
-            page.set_content('<!doctype html><meta charset="utf-8">'
-                             '<style>html,body{margin:0;background:white}</style>' + canonical_markup,
-                             wait_until='load', timeout=30_000)
-            figure = page.locator('body > svg')
-            bounds = figure.bounding_box()
-            if (not bounds or not all(math.isfinite(bounds[k]) for k in ('width', 'height'))
-                    or not 0 < bounds['width'] <= 4096 or not 0 < bounds['height'] <= 4096
-                    or bounds['width'] * bounds['height'] > 16_000_000):
-                raise ValueError('内联 SVG 实际显示尺寸超过受控上限')
-            # 原图允许内容超出 viewBox 时，元素截图会裁掉文字和公式。
-            # 在页面内量取真实渲染范围，不猜测字号或改写封存图形。
-            painted = figure.evaluate("""svg => {
-                const boxes = [svg.getBoundingClientRect()];
-                for (const element of [svg, ...svg.querySelectorAll('*')]) {
-                    if (element.closest('defs')) continue;
-                    const style = getComputedStyle(element);
-                    if (style.display === 'none' || style.visibility === 'hidden') continue;
-                    if (['filter', 'boxShadow', 'textShadow'].some(key =>
-                        style[key] && style[key] !== 'none')) {
-                        throw new Error('内联 SVG 不接受无法界定绘制范围的滤镜或阴影');
-                    }
-                    const bounds = element.getBoundingClientRect();
-                    boxes.push(bounds);
-                    const paintedTags = new Set(['path', 'rect', 'circle', 'ellipse',
-                        'line', 'polyline', 'polygon', 'text', 'tspan', 'use']);
-                    if (paintedTags.has(element.localName) && typeof element.getScreenCTM === 'function'
-                        && style.stroke !== 'none' && Number(style.strokeOpacity) !== 0) {
-                        if (!style.strokeWidth.endsWith('px')) {
-                            throw new Error('内联 SVG 描边范围不能从非像素单位推定');
+            def _measure_and_shot(scale_factor, *, probe_hidpi=False):
+                ctx_kwargs = {'java_script_enabled': False, 'offline': True,
+                              'viewport': {'width': 4096, 'height': 4096}}
+                if scale_factor > 1.0:
+                    ctx_kwargs['device_scale_factor'] = scale_factor
+                context = browser.new_context(**ctx_kwargs)
+                try:
+                    page = context.new_page()
+                    page.route('**/*', lambda route: route.abort())
+                    page.set_content('<!doctype html><meta charset="utf-8">'
+                                     '<style>html,body{margin:0;background:white}</style>' + canonical_markup,
+                                     wait_until='load', timeout=30_000)
+                    figure = page.locator('body > svg')
+                    bounds = figure.bounding_box()
+                    if (not bounds or not all(math.isfinite(bounds[k]) for k in ('width', 'height'))
+                            or not 0 < bounds['width'] <= 4096 or not 0 < bounds['height'] <= 4096
+                            or bounds['width'] * bounds['height'] > 16_000_000):
+                        raise ValueError('内联 SVG 实际显示尺寸超过受控上限')
+                    # 原图允许内容超出 viewBox 时，元素截图会裁掉文字和公式。
+                    # 在页面内量取真实渲染范围，不猜测字号或改写封存图形。
+                    painted = figure.evaluate("""svg => {
+                        const boxes = [svg.getBoundingClientRect()];
+                        for (const element of [svg, ...svg.querySelectorAll('*')]) {
+                            if (element.closest('defs')) continue;
+                            const style = getComputedStyle(element);
+                            if (style.display === 'none' || style.visibility === 'hidden') continue;
+                            if (['filter', 'boxShadow', 'textShadow'].some(key =>
+                                style[key] && style[key] !== 'none')) {
+                                throw new Error('内联 SVG 不接受无法界定绘制范围的滤镜或阴影');
+                            }
+                            const bounds = element.getBoundingClientRect();
+                            boxes.push(bounds);
+                            const paintedTags = new Set(['path', 'rect', 'circle', 'ellipse',
+                                'line', 'polyline', 'polygon', 'text', 'tspan', 'use']);
+                            if (paintedTags.has(element.localName) && typeof element.getScreenCTM === 'function'
+                                && style.stroke !== 'none' && Number(style.strokeOpacity) !== 0) {
+                                if (!style.strokeWidth.endsWith('px')) {
+                                    throw new Error('内联 SVG 描边范围不能从非像素单位推定');
+                                }
+                                const stroke = Number(style.strokeWidth.slice(0, -2));
+                                const matrix = element.getScreenCTM();
+                                const miter = style.strokeLinejoin === 'miter'
+                                    ? Math.max(1, Number(style.strokeMiterlimit)) : 1;
+                                const xScale = style.vectorEffect === 'non-scaling-stroke'
+                                    ? 1 : Math.hypot(matrix.a, matrix.c);
+                                const yScale = style.vectorEffect === 'non-scaling-stroke'
+                                    ? 1 : Math.hypot(matrix.b, matrix.d);
+                                // 保守包住尖角描边；实际像素仍来自浏览器，不重绘路径。
+                                const dx = stroke * miter * xScale;
+                                const dy = stroke * miter * yScale;
+                                if (![dx, dy].every(value => Number.isFinite(value) && value >= 0)) {
+                                    throw new Error('内联 SVG 描边范围无效');
+                                }
+                                boxes.push({left: bounds.left - dx, top: bounds.top - dy,
+                                    right: bounds.right + dx, bottom: bounds.bottom + dy});
+                            }
+                            for (const node of element.childNodes) {
+                                if (node.nodeType !== Node.TEXT_NODE || !node.textContent.trim()) continue;
+                                const range = document.createRange();
+                                range.selectNodeContents(node);
+                                boxes.push(...range.getClientRects());
+                            }
                         }
-                        const stroke = Number(style.strokeWidth.slice(0, -2));
-                        const matrix = element.getScreenCTM();
-                        const miter = style.strokeLinejoin === 'miter'
-                            ? Math.max(1, Number(style.strokeMiterlimit)) : 1;
-                        const xScale = style.vectorEffect === 'non-scaling-stroke'
-                            ? 1 : Math.hypot(matrix.a, matrix.c);
-                        const yScale = style.vectorEffect === 'non-scaling-stroke'
-                            ? 1 : Math.hypot(matrix.b, matrix.d);
-                        // 保守包住尖角描边；实际像素仍来自浏览器，不重绘路径。
-                        const dx = stroke * miter * xScale;
-                        const dy = stroke * miter * yScale;
-                        if (![dx, dy].every(value => Number.isFinite(value) && value >= 0)) {
-                            throw new Error('内联 SVG 描边范围无效');
-                        }
-                        boxes.push({left: bounds.left - dx, top: bounds.top - dy,
-                            right: bounds.right + dx, bottom: bounds.bottom + dy});
-                    }
-                    for (const node of element.childNodes) {
-                        if (node.nodeType !== Node.TEXT_NODE || !node.textContent.trim()) continue;
-                        const range = document.createRange();
-                        range.selectNodeContents(node);
-                        boxes.push(...range.getClientRects());
-                    }
-                }
-                return {
-                    left: Math.min(...boxes.map(box => box.left)),
-                    top: Math.min(...boxes.map(box => box.top)),
-                    right: Math.max(...boxes.map(box => box.right)),
-                    bottom: Math.max(...boxes.map(box => box.bottom))
-                };
-            }""")
-            if not all(math.isfinite(painted[k]) for k in ('left', 'top', 'right', 'bottom')):
-                raise ValueError('内联 SVG 实际绘制范围无效')
-            left, top = math.floor(painted['left']), math.floor(painted['top'])
-            width, height = math.ceil(painted['right']) - left, math.ceil(painted['bottom']) - top
-            if not 0 < width <= 4096 or not 0 < height <= 4096 or width * height > 16_000_000:
-                raise ValueError('内联 SVG 实际绘制范围超过受控上限')
-            if left < 0 or top < 0:
-                # 移动整张图给负坐标留出页面空间，图内坐标和布局不变。
-                page.locator('body').evaluate(
-                    '(body, offset) => { body.style.transform = '
-                    '`translate(${offset.x}px, ${offset.y}px)`; }',
-                    {'x': max(0, -left), 'y': max(0, -top)})
-            png = page.screenshot(type='png', animations='disabled', timeout=30_000,
-                                  clip={'x': max(0, left), 'y': max(0, top),
-                                        'width': width, 'height': height})
+                        return {
+                            left: Math.min(...boxes.map(box => box.left)),
+                            top: Math.min(...boxes.map(box => box.top)),
+                            right: Math.max(...boxes.map(box => box.right)),
+                            bottom: Math.max(...boxes.map(box => box.bottom))
+                        };
+                    }""")
+                    if not all(math.isfinite(painted[k]) for k in ('left', 'top', 'right', 'bottom')):
+                        raise ValueError('内联 SVG 实际绘制范围无效')
+                    left, top = math.floor(painted['left']), math.floor(painted['top'])
+                    width, height = math.ceil(painted['right']) - left, math.ceil(painted['bottom']) - top
+                    if not 0 < width <= 4096 or not 0 < height <= 4096 or width * height > 16_000_000:
+                        raise ValueError('内联 SVG 实际绘制范围超过受控上限')
+                    if probe_hidpi and scale_factor == 1.0:
+                        desired = _hidpi_scale_factor(width, height)
+                        if desired > 1.0:
+                            return None, desired
+                    if left < 0 or top < 0:
+                        # 移动整张图给负坐标留出页面空间，图内坐标和布局不变。
+                        page.locator('body').evaluate(
+                            '(body, offset) => { body.style.transform = '
+                            '`translate(${offset.x}px, ${offset.y}px)`; }',
+                            {'x': max(0, -left), 'y': max(0, -top)})
+                    shot = page.screenshot(type='png', animations='disabled', timeout=30_000,
+                                           clip={'x': max(0, left), 'y': max(0, top),
+                                                 'width': width, 'height': height})
+                    return shot, scale_factor
+                finally:
+                    context.close()
+
+            png, desired_scale = _measure_and_shot(1.0, probe_hidpi=hidpi)
+            if png is None and desired_scale > 1.0:
+                scale = desired_scale
+                while scale >= 1.0:
+                    candidate, _ = _measure_and_shot(scale, probe_hidpi=False)
+                    if isinstance(candidate, bytes) and candidate.startswith(b'\x89PNG\r\n\x1a\n') and len(candidate) <= MAX_OUTPUT_BYTES:
+                        png = candidate
+                        break
+                    if scale <= 1.0:
+                        png = candidate
+                        break
+                    scale = max(1.0, round(scale - 0.5, 1))
         finally:
             browser.close()
-    if not png.startswith(b'\x89PNG\r\n\x1a\n') or len(png) > MAX_OUTPUT_BYTES:
+    if not isinstance(png, bytes) or not png.startswith(b'\x89PNG\r\n\x1a\n') or len(png) > MAX_OUTPUT_BYTES:
         raise ValueError('内联 SVG 渲染输出无效或超过受控上限')
     return png
 
 
 if __name__ == '__main__':
     require_external_runtime('render-reader-inline-svg')
+    use_hidpi = '--hidpi' in sys.argv[1:]
     try:
-        sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1)))
+        sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1), hidpi=use_hidpi))
     except UnsupportedSvgDependency as error:
         sys.stderr.write(json.dumps({'contract': 'reader-inline-svg-error-v1',
             'code': 'unsupported_dependency', 'reason': error.reason}, separators=(',', ':')) + '\n')

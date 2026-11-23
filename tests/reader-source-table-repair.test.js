@@ -50,7 +50,7 @@ test('新增来源诊断不能凭同code篡改正文路径或授权安全原表'
 });
 test('生成证据保持原输入字节，正常修复诊断提供最新完整表能力并覆盖旧说明', () => {
     const {sources} = sample();
-    const safe = structuredClone(sources[0]); safe.ordinal = 2; safe.matrix[0][0] = ''; safe.cells[0].text = '';
+    const safe = structuredClone(sources[0]); safe.ordinal = 2; safe.matrix[0][1] = ''; safe.cells[1].text = '';
     safe.matrix[1][1] = '0.1'; safe.cells[3].text = '0.1';
     const evidence = deep.buildApiReaderArtifactEvidence({tables:[sources[0],safe]});
     assert.match(evidence, /^TABLE_ORDINALS_AVAILABLE: \[\]$/m);

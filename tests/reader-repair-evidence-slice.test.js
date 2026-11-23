@@ -891,10 +891,10 @@ test('原表不可渲染（reader_source_table_unrenderable / 双通道 eligible
         fullSourceEvidence
     );
 
-    // 4. 单通道 !selectionEligible && completeTableEligible（空列头但完整 DOM 合法）：纳入全部合格替换原表且透传真实 SELECTION 对象
+    // 4. 单通道 !selectionEligible && completeTableEligible（空指标列头但完整 DOM 合法）：纳入全部合格替换原表且透传真实 SELECTION 对象
     const completeOnlyArtifacts = structuredClone(structuredArtifacts);
-    completeOnlyArtifacts.tables[1].matrix[0][0] = '';
-    completeOnlyArtifacts.tables[1].cells.find(c => c.row === 0 && c.column === 0).text = '';
+    completeOnlyArtifacts.tables[1].matrix[0][1] = '';
+    completeOnlyArtifacts.tables[1].cells.find(c => c.row === 0 && c.column === 1).text = '';
     const expectedProfile = assessReaderTableSelectionEligibility(completeOnlyArtifacts.tables[1]);
     assert.equal(expectedProfile.eligible, false);
     assert.equal(expectedProfile.completeTableEligible, true);

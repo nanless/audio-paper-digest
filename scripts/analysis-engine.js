@@ -2163,6 +2163,8 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
                         const rows = [renderedTables[index].header, ...renderedTables[index].rows];
                         const text = rows[cell?.renderedRow]?.[cell?.renderedColumn];
                         const normalize = require('./deep-analyzer.js').normalizeReaderSourceCell;
+                        const unescapePipe = require('./lib/reader-tables.js').unescapeMarkdownTableCell;
+                        const textUnescaped = unescapePipe(text);
                         return /^[a-f0-9]{64}$/.test(String(cell?.sourceDomSha256 || ''))
                             && typeof text === 'string' && typeof cell.renderedText === 'string'
                             && typeof cell.sourceText === 'string'
@@ -2170,6 +2172,7 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
                             && ((binding.pdfCellConfirmation || binding.sealedPdfTableEvidence)
                                 ? require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, text)
                                 : normalize(text) === normalize(cell.sourceText)
+                                    || normalize(textUnescaped) === normalize(cell.sourceText)
                                     || require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, text)
                                     || require('./lib/reader-dom-span-projection').savedCellMatches(paper, binding, cell, text, renderedTables[index])
                                     || require('./lib/source-cell-math-display').strictSourceCellMathDisplay(cell.sourceText)?.displayText === text);

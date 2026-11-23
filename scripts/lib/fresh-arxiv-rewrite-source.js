@@ -601,10 +601,75 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
             : null;
         if (rawText?.source === 'html' && !sourceVersion) {
             text = validateTextResponse(rawText, id, capturedAt, extractorVersion);
+            let enrichedArtifacts = rawText?.structuredArtifacts ? clone(rawText.structuredArtifacts) : null;
+            if (enrichedArtifacts && Array.isArray(enrichedArtifacts.figures)
+                && enrichedArtifacts.figures.some(item => item?.recoveryStatus === 'unrecovered')
+                && pdf.bytes.length >= 256) {
+                const pdfExtracted = require('./reader-pdf-figure-crop.js')
+                    .extractPdfStructuredArtifactsSync(pdf.bytes, id);
+                const pdfFigByNum = new Map();
+                const numRe = /(?:^|\b)(?:figure|fig\.?|图)\s*([A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})(?!\d|[A-Za-z])/i;
+                const captionStartNumRe = /^\s*(?:figure|fig\.?|图)\s*([A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})(?!\d|[A-Za-z])/i;
+                const bareNumRe = /^\s*([A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})\s*[:.]?\s*$/i;
+                for (const pf of pdfExtracted?.figures || []) {
+                    const m = String(pf?.label || '').match(numRe) || String(pf?.label || '').match(bareNumRe);
+                    if (m) {
+                        const key = m[1].toUpperCase();
+                        if (!pdfFigByNum.has(key)) pdfFigByNum.set(key, pf);
+                    }
+                }
+                const recoveredOrdinals = new Set();
+                const usedPdfNums = new Set();
+                for (const existingFig of enrichedArtifacts.figures) {
+                    if (existingFig?.recoveryStatus !== 'complete') continue;
+                    const existingLabel = String(existingFig?.label || '');
+                    const existingCaption = String(existingFig?.caption || '');
+                    const em = existingLabel.match(numRe) || existingCaption.match(captionStartNumRe) || existingLabel.match(bareNumRe);
+                    if (em) usedPdfNums.add(em[1].toUpperCase());
+                }
+                for (const fig of enrichedArtifacts.figures) {
+                    if (fig?.recoveryStatus !== 'unrecovered') continue;
+                    const labelText = String(fig?.label || '');
+                    const captionText = String(fig?.caption || '');
+                    const m = labelText.match(numRe) || captionText.match(captionStartNumRe) || labelText.match(bareNumRe);
+                    const key = m ? m[1].toUpperCase() : null;
+                    if (!key || usedPdfNums.has(key)) continue;
+                    const match = pdfFigByNum.get(key);
+                    if (!match || !Array.isArray(match.images) || match.images.length !== 1) continue;
+                    usedPdfNums.add(key);
+                    fig.images = clone(match.images);
+                    fig.recoveryStatus = 'complete';
+                    recoveredOrdinals.add(fig.ordinal);
+                }
+                if (recoveredOrdinals.size > 0) {
+                    const { payloadSha256: _oldSha, ...body } = enrichedArtifacts;
+                    const remainingIssues = (body.health?.issues || []).filter(msg => {
+                        const m = String(msg).match(/^figure\[(\d+)\] 没有恢复出可审计图像或 DOM 资源$/);
+                        return !(m && recoveredOrdinals.has(Number(m[1])));
+                    });
+                    body.health = {
+                        ...body.health,
+                        recovered: {
+                            ...body.health?.recovered,
+                            figures: body.figures.filter(item => item?.recoveryStatus === 'complete').length
+                        },
+                        issues: remainingIssues
+                    };
+                    body.health.status = (
+                        remainingIssues.length === 0
+                        && !body.health.truncated
+                        && body.figures.every(item => item?.recoveryStatus === 'complete')
+                    ) ? 'complete' : 'incomplete';
+                    enrichedArtifacts = require('../deep-analyzer.js').bindStructuredArtifactsToText(body, text.bytes.toString('utf8'));
+                }
+            }
+            const nextRuntimeSource = enrichedArtifacts ? { ...rawText, structuredArtifacts: enrichedArtifacts } : rawText;
             if (pdfPage1Authors) {
-                const baseReaderAuthors = rawText?.readerAuthors && typeof rawText.readerAuthors === 'object'
-                    ? clone(rawText.readerAuthors) : { authors: [], sourceDomSha256: '' };
-                runtimeSource = { ...rawText, readerAuthors: { ...baseReaderAuthors, pdfPage1Authors } };
+                const baseReaderAuthors = nextRuntimeSource?.readerAuthors && typeof nextRuntimeSource.readerAuthors === 'object'
+                    ? clone(nextRuntimeSource.readerAuthors) : { authors: [], sourceDomSha256: '' };
+                runtimeSource = { ...nextRuntimeSource, readerAuthors: { ...baseReaderAuthors, pdfPage1Authors } };
+            } else {
+                runtimeSource = nextRuntimeSource;
             }
         } else {
             // fetchText 如果返回 PDF 文本，
@@ -621,16 +686,20 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
                 sourceId: pdf.sourceId
             });
             const versionNotice = sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n\n` : '';
-            text = validateTextResponse({ ...extracted, text: `${versionNotice}${String(extracted?.text || '')}`,
+            const finalPdfText = `${versionNotice}${String(extracted?.text || '')}`;
+            text = validateTextResponse({ ...extracted, text: finalPdfText,
                 source: 'pdf', sourceId: pdf.sourceId,
                 url: pdf.url, fetchedAt: pdf.fetchedAt }, id, capturedAt, extractorVersion);
+            const pdfArtifacts = extracted?.structuredArtifacts
+                ? require('../deep-analyzer.js').bindStructuredArtifactsToText(extracted.structuredArtifacts, finalPdfText)
+                : null;
             // 有匹配的历史版本 HTML 就用它的标题，
             // 不然从去掉警告前缀的 PDF 文本里取。
             // 强制加的警告前缀绝不能变成标题。
             const versionTitle = rawText?.sourceId === pdf.sourceId && rawText?.title
                 ? rawText.title : (extracted?.title || sourceTitle('', extracted?.text));
             runtimeSource = { title: versionTitle, source: 'pdf', sourceId: pdf.sourceId,
-                imageInfos: [], structuredArtifacts: null, readerAuthors: pdfPage1Authors || null,
+                imageInfos: [], structuredArtifacts: pdfArtifacts, readerAuthors: pdfPage1Authors || null,
                 htmlAvailability: rawText?.htmlAvailability || 'unavailable',
                 htmlAttempts: Number.isSafeInteger(rawText?.htmlAttempts) ? rawText.htmlAttempts : 0,
                 warnings: [...(Array.isArray(rawText?.warnings) ? rawText.warnings.map(String) : []),

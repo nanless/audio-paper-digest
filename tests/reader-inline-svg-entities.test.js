@@ -15,9 +15,12 @@ test('官方HTML命名实体及MathML排版在真实公开渲染后仍绑定原S
     assert.equal(descriptor.inlineSvgSourceSha256, source.inlineSvgSha256);
     const rendered = await renderer.renderOfficialInlineSvg(source);
     assert.equal(rendered.inlineSvgSourceSha256, source.inlineSvgSha256);
-    assert.equal(rendered.width, 160);
-    assert.equal(rendered.height, 80);
+    assert.equal(rendered.width, 480);
+    assert.equal(rendered.height, 240);
     assert.equal(rendered.assetSha256, crypto.createHash('sha256').update(rendered.rawBytes).digest('hex'));
+    const native1x = await renderer.renderOfficialInlineSvg(source, { hidpi: false });
+    assert.equal(native1x.width, 160);
+    assert.equal(native1x.height, 80);
 });
 test('未知实体和声明实体不能通过标准HTML实体转换进入渲染', async () => {
     for (const body of ['<text>&unknownPaperEntity;</text>', '<!DOCTYPE svg [<!ENTITY custom "secret">]><text>&custom;</text>']) {
@@ -37,9 +40,12 @@ test('原图可见范围超出画布时完整保留负坐标和边缘内容', as
     source.inlineSvgBytes = bytes.length;
     source.inlineSvgSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
     const rendered = await renderer.renderOfficialInlineSvg(source);
-    assert.equal(rendered.width, 190);
-    assert.equal(rendered.height, 100);
+    assert.equal(rendered.width, 570);
+    assert.equal(rendered.height, 300);
     assert.equal(rendered.inlineSvgSourceSha256, source.inlineSvgSha256);
+    const native1x = await renderer.renderOfficialInlineSvg(source, { hidpi: false });
+    assert.equal(native1x.width, 190);
+    assert.equal(native1x.height, 100);
 });
 test('原始画布较小时仍拒绝超出受控尺寸的实际绘制范围', async () => {
     const source = resource('<rect x="-10" y="0" width="5000" height="10"/>');

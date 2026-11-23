@@ -71,8 +71,10 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
     const projectRoot = path.resolve(__dirname, '../..');
     const bytes = await new Promise((resolve, reject) => {
         const useProcessGroup = process.platform !== 'win32';
-        const child = spawnFn('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'),
-            path.join(projectRoot, 'scripts/reader_inline_svg.py')],
+        const args = [path.join(projectRoot, 'scripts/python-runtime.sh'),
+            path.join(projectRoot, 'scripts/reader_inline_svg.py')];
+        if (deps.hidpi !== false) args.push('--hidpi');
+        const child = spawnFn('bash', args,
         { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup });
         const chunks = []; let size = 0; let stderr = ''; let failure = null; let terminated = false; let exited = false;
         let timeout = null;

@@ -262,8 +262,11 @@ function displayMatrix(table) {
 // 旧完整表的重复展示仍可只读核验；新展示仅折叠DOM证明的全幅文字行。
 function displayCellMatches(table, row, column, text, normalize = value => value) {
     const current = normalize(displayCell(table, row, column));
-    return normalize(text) === current || column > 0 && fullWidthLabelRow(table, row)
-        && normalize(text) === normalize(table.matrix[row][column]);
+    const unescaped = typeof text === 'string' && text.includes('\\|') ? text.replace(/\\\|/g, '|') : text;
+    return normalize(text) === current || (unescaped !== text && normalize(unescaped) === current)
+        || column > 0 && fullWidthLabelRow(table, row)
+        && (normalize(text) === normalize(table.matrix[row][column])
+            || (unescaped !== text && normalize(unescaped) === normalize(table.matrix[row][column])));
 }
 
 function savedMergedCellMatches(paper, binding, cell, displayed) {
