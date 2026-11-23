@@ -415,15 +415,68 @@ function isTransientDemoHttpStatus(status) {
     return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-function hasOpenSourceLinks(analysis) {
-    const patterns = [
-        /github\.com\/[\w\-]+\/[\w\-]+/gi,
-        /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
-        /modelscope\.cn\/[\w\-]+\/[\w\-]+/gi
-    ];
+const RESERVED_REPO_OWNERS = new Set([
+    'user-attachments', 'sponsors', 'features', 'topics', 'settings', 'orgs',
+    'marketplace', 'apps', 'about', 'pricing', 'login', 'join', 'site',
+    'security', 'collections', 'explore', 'enterprise', 'issues', 'pulls',
+    'notifications', 'users', 'gitlab-org', 'help', 'public', 'snippets', 'groups'
+]);
+const PROJECT_PAGE_TEMPLATE_SLUGS = new Set([
+    'nerfies', 'nerfies.github.io', 'academic-project-page-template',
+    'project-page-template', 'bulma', 'fontawesome', 'font-awesome', 'academicons',
+    'mathjax', 'katex', 'jquery', 'bootstrap', 'reveal.js', 'highlight.js', 'jekyll'
+]);
+const GENERIC_MEDIA_PLATFORM_HOSTS = new Set([
+    'ximalaya.com', 'xiaoyuzhoufm.com', 'youtube.com', 'youtu.be', 'bilibili.com',
+    'podcasts.apple.com', 'open.spotify.com', 'spotify.com', 'soundcloud.com',
+    'music.163.com', 'y.qq.com', 'tiktok.com', 'douyin.com'
+]);
 
-    for (const pattern of patterns) {
-        if (pattern.test(analysis)) return true;
+function normalizePublicHost(hostname) {
+    return String(hostname || '').toLowerCase().replace(/^(?:www|m)\./, '');
+}
+
+function isGenericMediaPlatformHost(rawUrl) {
+    try {
+        const parsed = new URL(String(rawUrl || '').trim());
+        const host = normalizePublicHost(parsed.hostname);
+        return GENERIC_MEDIA_PLATFORM_HOSTS.has(host);
+    } catch (_) {
+        return false;
+    }
+}
+
+function isGenericMediaRootHomepage(rawUrl) {
+    try {
+        const parsed = new URL(String(rawUrl || '').trim());
+        const host = normalizePublicHost(parsed.hostname);
+        if (!GENERIC_MEDIA_PLATFORM_HOSTS.has(host)) return false;
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        return segments.length === 0 && !parsed.search;
+    } catch (_) {
+        return false;
+    }
+}
+
+function hasOpenSourceLinks(analysis) {
+    const repoUrlRe = /https?:\/\/(?:www\.)?(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)\/[^\s`<>()\[\]{}"'，。；：！？、（）【】《》“”‘’\u3400-\u9fff]+|(?:^|[\s`(（[【<：:])(?:www\.)?(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?/giu;
+    const section = extractSectionByTitle(analysis, '开源详情');
+    const firstPartyRe = /^\s*(?:[-*+]\s*)?[*_`]*\s*(?:代码|模型权重|数据集|复现材料)\s*[*_`]*\s*[：:]/;
+    const thirdPartyRe = /^\s*(?:[-*+]\s*)?[*_`]*\s*(?:其他资源链接|论文中引用的开源项目|第三方资源|论文所列链接)\s*[*_`]*\s*[：:]/;
+    const lines = String(section || analysis || '').split('\n');
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        if (thirdPartyRe.test(line)) continue;
+        if (section && !firstPartyRe.test(line)) continue;
+        for (const match of line.matchAll(repoUrlRe)) {
+            const rawToken = match[0]
+                .replace(/^[\s`(（[【<：:]+/, '')
+                .replace(/[` ),.;:!?，。；：！？、）》】」』]+$/u, '');
+            let url = /^https?:\/\//i.test(rawToken) ? rawToken : `https://${rawToken}`;
+            url = url.replace(/^http:\/\//i, 'https://').replace(/^https:\/\/www\./i, 'https://');
+            if (classifyRepositoryHostFacets(url)) return true;
+        }
     }
     return false;
 }
@@ -491,13 +544,14 @@ function resolveDemoPageCandidates(paper, analysis) {
     return [...new Set(urls)];
 }
 
-function isMetadataResourceDiscoveryLink(paper, rawUrl) {
+function isMetadataResourceDiscoveryLink(paper, rawUrl, options = {}) {
     if (typeof rawUrl !== 'string' || /[\s\u0000-\u001f\u007f?#\\%]/.test(rawUrl)) return false;
     const schemeMatch = /^https:\/\/([^/]+)(\/.*)?$/i.exec(rawUrl);
     if (!schemeMatch) return false;
     const rawPath = schemeMatch[2] || '';
     if (/(?:^|\/)\.\.?(?:\/|$)/.test(rawPath) || /\/\//.test(rawPath)) return false;
     const repository = resolveMetadataResourceLinks(paper)[0];
+    const allowProjectPageRepos = options?.allowProjectPageRepos === true;
     const validSegment = segment => /^[A-Za-z0-9._-]+$/.test(segment)
         && segment !== '.' && segment !== '..' && !segment.endsWith('.');
     try {
@@ -509,8 +563,26 @@ function isMetadataResourceDiscoveryLink(paper, rawUrl) {
         if (parsed.pathname.replace(/\/$/, '') !== rawPath.replace(/\/$/, '')) return false;
         const normalized = rawUrl.replace(/\/$/, '').replace(/^https:\/\/[^/]+/i, m => m.toLowerCase());
         if (!classifyRepositoryHostFacets(normalized)) return false;
-        if (parsed.hostname === 'github.com') {
-            return Boolean(repository) && normalized === repository;
+        if (parsed.hostname === 'github.com' || parsed.hostname === 'gitlab.com') {
+            if (parsed.hostname === 'github.com' && Boolean(repository) && normalized === repository) {
+                return true;
+            }
+            if (!allowProjectPageRepos || segments.length !== 2 || !segments.every(validSegment)) {
+                return false;
+            }
+            const [owner, repo] = segments.map(s => s.toLowerCase());
+            const repoBase = repo.replace(/\.git$/, '');
+            if (RESERVED_REPO_OWNERS.has(owner)
+                || PROJECT_PAGE_TEMPLATE_SLUGS.has(owner)
+                || PROJECT_PAGE_TEMPLATE_SLUGS.has(repo)
+                || PROJECT_PAGE_TEMPLATE_SLUGS.has(repoBase)
+                || repo.endsWith('.github.io')
+                || repoBase.endsWith('.github.io')
+                || repo.endsWith('.gitlab.io')
+                || repoBase.endsWith('.gitlab.io')) {
+                return false;
+            }
+            return true;
         }
         if (parsed.hostname === 'huggingface.co') {
             if (segments.length === 2) {
@@ -1399,7 +1471,13 @@ function extractApiReaderResourceCandidates(analysis) {
             /https:\/\/[^\s<>()\[\]{}"'，。；：！？、（）【】《》“”‘’\u3400-\u9fff]+/giu
         )) {
             const url = match[0].replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
-            candidates.push({ type: typeByLabel[label], url, line: line.trim() });
+            if (isGenericMediaRootHomepage(url)) continue;
+            let candidateType = typeByLabel[label];
+            if (isGenericMediaPlatformHost(url)
+                && ['code', 'model', 'dataset', 'reproduction'].includes(candidateType)) {
+                candidateType = 'third_party';
+            }
+            candidates.push({ type: candidateType, url, line: line.trim() });
         }
     }
     return [...new Map(candidates.map(item => [`${item.type}:${item.url}`, item])).values()];
@@ -1547,18 +1625,39 @@ async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
     throw new Error('检查资源地址后，仍未取得最终访问结果');
 }
 
-function githubRepositoryReadmeUrl(repositoryUrl) {
+function githubRepositoryReadmeCandidateUrls(repositoryUrl) {
     try {
         const parsed = new URL(repositoryUrl);
         const segments = parsed.pathname.split('/').filter(Boolean);
         if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com'
             || parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash
             || segments.length !== 2
-            || segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment))) return '';
-        return `https://raw.githubusercontent.com/${segments[0]}/${segments[1]}/main/README.md`;
+            || segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment))) return [];
+        const base = `https://raw.githubusercontent.com/${segments[0]}/${segments[1]}`;
+        return [
+            `${base}/main/README.md`,
+            `${base}/master/README.md`,
+            `${base}/main/readme.md`,
+            `${base}/master/readme.md`,
+            `${base}/main/README.rst`,
+            `${base}/master/README.rst`
+        ];
     } catch (_) {
-        return '';
+        return [];
     }
+}
+
+function githubRepositoryReadmeUrl(repositoryUrl) {
+    return githubRepositoryReadmeCandidateUrls(repositoryUrl)[0] || '';
+}
+
+function isPlaceholderComingSoonReadme(readme) {
+    const cleaned = String(readme || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+    if (!cleaned || cleaned.length >= 2500) return false;
+    const hasPlaceholderPhrase = /\b(?:coming\s+soon|will\s+be\s+released|to\s+be\s+released|stay\s+tuned|under\s+construction|code\s+soon|releasing\s+soon|placeholder)\b|即将开源|即将发布|敬请期待/i.test(cleaned);
+    if (!hasPlaceholderPhrase) return false;
+    const hasRunnableCommands = /\b(?:pip|uv\s+pip|npm)\s+install\b|\bconda\s+create\b|\bgit\s+clone\b|\brequirements\.txt\b|\benvironment\.ya?ml\b|\bfrom\s+transformers\b|\bAutoModel\b|\bpython3?\s+\S+\.py\b|\b(?:bash|sh)\s+\S+\.sh\b|\b(?:torchrun|deepspeed|accelerate\s+launch|docker\s+(?:build|pull|run))\b/i.test(cleaned);
+    return !hasRunnableCommands;
 }
 
 function validRepositoryDocumentationEvidence(evidence, repositoryUrl) {
@@ -1574,9 +1673,10 @@ function validRepositoryDocumentationEvidence(evidence, repositoryUrl) {
         || Object.keys(capabilities).sort().join(',') !== capabilityKeys.sort().join(',')
         || capabilityKeys.some(key => typeof capabilities[key] !== 'boolean')) return false;
     const complete = capabilityKeys.every(key => capabilities[key]);
+    const allowedSourceUrls = githubRepositoryReadmeCandidateUrls(repositoryUrl);
     return evidence.contract === REPOSITORY_DOCUMENTATION_EVIDENCE_CONTRACT
         && evidence.repositoryUrl === repositoryUrl
-        && evidence.sourceUrl === githubRepositoryReadmeUrl(repositoryUrl)
+        && allowedSourceUrls.includes(evidence.sourceUrl)
         && evidence.status === 200
         && recoverySha256(evidence.sourceSha256)
         && evidence.completeness === (complete ? 'complete' : 'partial');
@@ -1585,37 +1685,50 @@ function validRepositoryDocumentationEvidence(evidence, repositoryUrl) {
 async function inspectGitHubRepositoryDocumentation(repositoryUrl, options = {}) {
     require('./conference-reader-operator-correction').assertMayAccessNetwork();
     require('./conference-source-resource-correction').assertMayAccessNetwork();
-    const sourceUrl = githubRepositoryReadmeUrl(repositoryUrl);
-    if (!sourceUrl) return null;
+    const candidateUrls = githubRepositoryReadmeCandidateUrls(repositoryUrl);
+    if (!candidateUrls.length) return null;
     const deadlineAt = Number.isFinite(options.deadlineAt)
         ? options.deadlineAt : Date.now() + 15000;
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) return null;
     const requestImpl = options.requestImpl || requestPinnedPublicHttps;
     const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
     const detectProxyImpl = options.detectProxyImpl || resolveHttpConnectProxyUrl;
-    const response = await requestImpl(sourceUrl, {
-        headers: {
-            'User-Agent': 'PaperDigest/1.0',
-            'Accept': 'text/plain,text/markdown;q=0.9,*/*;q=0.1'
-        },
-        timeoutMs: Math.min(15000, remainingMs),
-        maxBytes: 1024 * 1024
-    }, {
-        validateUrlImpl,
-        detectProxyImpl: options.proxyEnabled === false ? () => null : detectProxyImpl
-    });
-    if (response.status !== 200) return null;
+    let response = null;
+    let sourceUrl = '';
+    for (const candidateUrl of candidateUrls) {
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= 0) return null;
+        const attempt = await requestImpl(candidateUrl, {
+            headers: {
+                'User-Agent': 'PaperDigest/1.0',
+                'Accept': 'text/plain,text/markdown;q=0.9,*/*;q=0.1'
+            },
+            timeoutMs: Math.min(15000, remainingMs),
+            maxBytes: 1024 * 1024
+        }, {
+            validateUrlImpl,
+            detectProxyImpl: options.proxyEnabled === false ? () => null : detectProxyImpl
+        });
+        if (attempt.status === 200) {
+            response = attempt;
+            sourceUrl = candidateUrl;
+            break;
+        }
+        if (attempt.status !== 404) return null;
+    }
+    if (!response) return null;
     const contentType = String(response.headers.get('content-type') || '')
         .split(';')[0].trim().toLowerCase();
-    if (contentType && !['text/plain', 'text/markdown', 'application/octet-stream']
+    if (contentType && !['text/plain', 'text/markdown', 'text/x-rst', 'application/octet-stream']
         .includes(contentType)) return null;
     const readme = Buffer.from(await response.arrayBuffer()).toString('utf8');
-    const capabilities = {
-        installation: /(?:^|\n)#{1,4}\s+(?:installation|install|setup|getting\s+started|environment|dependencies|requirements)\b|\b(?:pip|uv\s+pip)\s+install\b|\bconda\s+create\b|\brequirements\.txt\b|\benvironment\.ya?ml\b|\bgit\s+clone\b|\bdocker\s+(?:build|pull|run)\b/i.test(readme),
-        inference: /(?:^|\n)#{1,4}\s+(?:inference|quick\s*start|usage|evaluation|eval|demo|examples?|run(?:ning)?|reproduc(?:tion|ing))\b|\binfer(?:ence)?\.py\b|\beval(?:uate|uation)?\.py\b|\bdemo\.py\b|\bfrom\s+(?:auk|transformers)\b|\bAutoModel\b|\bpython3?\s+(?:[^\n\s]*\/)?(?:infer(?:ence)?|eval(?:uate|uation)?|predict|generate|synthesize|demo|run|test|sample)[^\n\s]*\.py\b/i.test(readme),
-        fineTuning: /(?:^|\n)#{1,4}\s+(?:fine[- ]?tun(?:ing|e)|training|train|pre[- ]?train(?:ing)?|sft|data\s+preparation)\b|\btrain(?:ing)?\.py\b|\bfinetune\.py\b|\b(?:deepspeed|torchrun|accelerate\s+launch)\b/i.test(readme)
-    };
+    const placeholder = isPlaceholderComingSoonReadme(readme);
+    const capabilities = placeholder
+        ? { installation: false, inference: false, fineTuning: false }
+        : {
+            installation: /(?:^|\n)#{1,4}\s+(?:installation|install|setup|getting\s+started|environment|dependencies|requirements)\b|\b(?:pip|uv\s+pip)\s+install\b|\bconda\s+create\b|\brequirements\.txt\b|\benvironment\.ya?ml\b|\bgit\s+clone\b|\bdocker\s+(?:build|pull|run)\b/i.test(readme),
+            inference: /(?:^|\n)#{1,4}\s+(?:inference|quick\s*start|usage|evaluation|eval|demo|examples?|run(?:ning)?|reproduc(?:tion|ing))\b|\binfer(?:ence)?\.py\b|\beval(?:uate|uation)?\.py\b|\bdemo\.py\b|\bfrom\s+(?:auk|transformers)\b|\bAutoModel\b|\bpython3?\s+(?:[^\n\s]*\/)?(?:infer(?:ence)?|eval(?:uate|uation)?|predict|generate|synthesize|demo|run|test|sample)[^\n\s]*\.py\b/i.test(readme),
+            fineTuning: /(?:^|\n)#{1,4}\s+(?:fine[- ]?tun(?:ing|e)|training|train|pre[- ]?train(?:ing)?|sft|data\s+preparation)\b|\btrain(?:ing)?\.py\b|\bfinetune\.py\b|\b(?:deepspeed|torchrun|accelerate\s+launch)\b/i.test(readme)
+        };
     const evidence = {
         contract: REPOSITORY_DOCUMENTATION_EVIDENCE_CONTRACT,
         repositoryUrl,
@@ -1648,9 +1761,25 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         ? conference.conferenceWeakReaderCapabilityPolicy(options.paper, options.structuredArtifacts)
         : null;
     const analysisCandidates = extractApiReaderResourceCandidates(analysis);
-    const sourceCandidates = [...(weakConferencePolicy
-        ? extractWeakConferenceSourceResourceCandidates(sourceText) : []),
-    ...require('./reader-authenticated-pdf-footnote-evidence').deriveCandidates(sourceText)];
+    const includeDailySourceCandidates = !weakConferencePolicy
+        && options.paper?.source !== 'conference'
+        && Boolean(options.paper?.arxivId);
+    const analysisCanonUrls = includeDailySourceCandidates
+        ? new Set(analysisCandidates.map(c => canonicalRepositoryDedupUrl(c.url)))
+        : null;
+    const dailyMissingSourceCandidates = includeDailySourceCandidates
+        ? extractWeakConferenceSourceResourceCandidates(sourceText)
+            .filter(c => c.type !== 'third_party'
+                && !isGenericMediaRootHomepage(c.url)
+                && !(isGenericMediaPlatformHost(c.url)
+                    && ['code', 'model', 'dataset', 'reproduction'].includes(c.type))
+                && !analysisCanonUrls.has(canonicalRepositoryDedupUrl(c.url)))
+        : [];
+    const sourceCandidates = [
+        ...(weakConferencePolicy ? extractWeakConferenceSourceResourceCandidates(sourceText) : []),
+        ...dailyMissingSourceCandidates,
+        ...require('./reader-authenticated-pdf-footnote-evidence').deriveCandidates(sourceText)
+    ];
     const demoHostResourceType = rawUrl => {
         const facets = classifyRepositoryHostFacets(rawUrl);
         return Array.isArray(facets) && facets.length > 0 ? facets[0] : null;
@@ -2102,6 +2231,25 @@ function applyApiReaderResourceAvailability(analysis, identity) {
             );
         }
     }
+    // 清理被 extractApiReaderResourceCandidates 丢弃的泛商业/媒体根域名，保持正文与 resources 一致。
+    // 仅在「开源详情」节按完整 URL token 原子替换，绝不破坏同主机上的完整具体路径（如 /watch?v=...）。
+    const rawOpenSourceSection = extractSectionByTitle(updated, '开源详情');
+    if (rawOpenSourceSection) {
+        const scrubbedSection = rawOpenSourceSection.replace(
+            /https:\/\/[^\s`<>()\[\]{}"'，。；：！？、（）【】《》“”‘’\u3400-\u9fff]+/giu,
+            full => {
+                const trimmed = full.replace(/[),.;:!?，。；：！？、）》】」』]+$/u, '');
+                const suffix = full.slice(trimmed.length);
+                if (isGenericMediaRootHomepage(trimmed) && !acceptedUrls.has(trimmed)) {
+                    return `未找到论文原文或已验证 Demo 中的精确链接${suffix}`;
+                }
+                return full;
+            }
+        );
+        if (scrubbedSection !== rawOpenSourceSection) {
+            updated = mergeSectionByTitle(updated, '开源详情', scrubbedSection);
+        }
+    }
     const availableTypes = new Set((identity?.resources || [])
         .filter(item => item.availability === 'available').map(item => item.type));
     for (const [field, type] of [['has_code', 'code'], ['has_model', 'model'], ['has_dataset', 'dataset']]) {
@@ -2300,6 +2448,8 @@ module.exports = {
     requestPinnedPublicHttps,
     fetchPublicImageResponse,
     isTransientDemoHttpStatus,
+    isGenericMediaPlatformHost,
+    isGenericMediaRootHomepage,
     hasOpenSourceLinks,
     extractDemoUrls,
     resolveMetadataResourceLinks,
@@ -2310,7 +2460,9 @@ module.exports = {
     extractWeakConferenceSourceResourceCandidates,
     exactResourceSourceQuote,
     verifyApiReaderResourceUrl,
+    githubRepositoryReadmeCandidateUrls,
     githubRepositoryReadmeUrl,
+    isPlaceholderComingSoonReadme,
     validRepositoryDocumentationEvidence,
     inspectGitHubRepositoryDocumentation,
     isConferenceReaderResourceUrlShape,

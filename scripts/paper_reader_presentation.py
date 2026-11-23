@@ -225,8 +225,7 @@ def resolve_reader_decision_display(publisher, paper, *, plan, resources, parsed
     no publication eligibility and never replace saved evidence.
     """
     resource_block = publisher.render_verified_reader_resources(resources, paper=paper)
-    if source_text is not None:
-        resource_block = resource_block.replace('- 第三方资源：', '- 论文所列链接：')
+    resource_block = resource_block.replace('- 第三方资源：', '- 论文所列链接：')
     scoring_block = publisher.render_verified_reader_scoring_notes(paper, parsed=parsed)
     summary = (publisher._validated_detailed_core_summary(paper, parsed, source_text=source_text)
                if source_text is not None else publisher._validated_detailed_core_summary(paper, parsed))
@@ -278,9 +277,6 @@ def build_reader_presentation(paper, *, plan, resources, authors,
     decision = resolve_reader_decision_display(
         publisher, paper, plan=plan, resources=visible_resources, parsed=parsed, source_text=source_text)
     resource_block = decision['resourceBlock']
-    if source_text is not None:
-        # A mentioned project URL does not prove third-party ownership or release.
-        resource_block = resource_block.replace('- 第三方资源：', '- 论文所列链接：')
     if excluded:
         resource_block += ('\n\n预印本/扩展版链接未在会议页展示；'
                            '会议版来源见页首官方记录与 PDF。')

@@ -5556,7 +5556,7 @@ def validate_manual_reader_quality(analysis):
         re.compile(rf'[{numeral_chars}]+\d+(?=\s*(?:{large_count_units}))', re.I),
         re.compile(rf'[{numeral_chars}]+\s*(?:到|至|–|—|-)\s*\d+(?=\s*(?:{large_count_units}))', re.I),
         re.compile(r'\d+(?:\.\d+)?\s*[万亿](?=\s*(?:更新|参数|样本|条|次|帧|token|tokens|MAC|MACs))', re.I),
-        re.compile(r'(?:至少)?一半|半宽|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))'),
+        re.compile(r'(?:至少)?一半|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))'),
         re.compile(r'(?:最高|满分|得分|评分|至少|超过|低于|高于|达到)\s*[一二两三四五六七八九]\s*分|[一二两三四五六七八九]\s*分(?:制|量表|以上|以下|满分)|[一二两三四五六七八九]\s*分(?=\s*(?:[，,。；;、]|$))'),
         re.compile(r'[几数]\s*\d+(?=\s*(?:毫秒|秒|分钟|小时|天|Hz|kHz|MHz|MB|GB|KB|mJ|dB|帧|步|倍))', re.I),
         re.compile(
@@ -7133,7 +7133,7 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
             content.append({
                 'type': 'input_image',
                 'image_url': data_uri,
-                'detail': 'low',
+                'detail': 'high',
             })
         payload = {
             'model': model,
@@ -7152,7 +7152,7 @@ def build_publish_payload(api_type, model, prompt, max_tokens, temperature, imag
         data_uri = f"data:{image['media_type']};base64,{image['data']}"
         content.append({
             'type': 'image_url',
-            'image_url': {'url': data_uri, 'detail': 'low'},
+            'image_url': {'url': data_uri, 'detail': 'high'},
         })
     return {
         'model': model,

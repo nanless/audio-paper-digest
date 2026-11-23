@@ -25,6 +25,7 @@ import socket
 import stat
 import sys
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -596,6 +597,13 @@ def prepare_raster_for_review(
             image.thumbnail(target, Image.Resampling.LANCZOS)
             background = Image.new('RGB', image.size, 'white')
             background.paste(image, mask=image.getchannel('A'))
+            # 优先无损 PNG 保留学术图表中的细线与小字标注；仅当超过 8 MiB 上限时降级为渐进式 JPEG。
+            png_output = io.BytesIO()
+            background.save(png_output, format='PNG', optimize=True)
+            prepared_png = png_output.getvalue()
+            if len(prepared_png) <= max_bytes:
+                validate_sig_fn('image/png', prepared_png)
+                return 'image/png', prepared_png
             for quality in (90, 82, 74):
                 output = io.BytesIO()
                 background.save(
@@ -631,7 +639,7 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
         text = raw.decode('utf-8-sig')
     except UnicodeDecodeError as exc:
         raise err_cls('SVG 不是 UTF-8') from exc
-    if re.search(r'<!DOCTYPE|<!ENTITY|<\s*(?:script|foreignObject|iframe|object|embed)\b',
+    if re.search(r'<!DOCTYPE|<!ENTITY|<\s*(?:[A-Za-z_][\w.-]*:)?(?:script|iframe|object|embed)\b',
                  text, flags=re.IGNORECASE) \
             or re.search(r'\bon[a-z]+\s*=', text, flags=re.IGNORECASE) \
             or re.search(r'(?:href|src)\s*=\s*["\']\s*(?:https?:|file:|//)',
@@ -639,13 +647,43 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
             or re.search(r'url\(\s*["\']?\s*(?:https?:|file:|//)',
                          text, flags=re.IGNORECASE):
         raise err_cls('SVG 含脚本、实体、嵌入对象或外部资源')
-    encoded_svg = base64.b64encode(raw).decode('ascii')
-    html = (
-        '<!doctype html><meta charset="utf-8">'
-        '<style>html,body{margin:0;background:#fff}body{display:flex;align-items:flex-start;'
-        'justify-content:flex-start}#figure{display:block;max-width:1600px;max-height:1200px}</style>'
-        f'<img id="figure" alt="review figure" src="data:image/svg+xml;base64,{encoded_svg}">'
-    )
+    try:
+        parsed_svg_root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise err_cls('SVG XML 解析失败') from exc
+    has_foreign_object = False
+    for elem in parsed_svg_root.iter():
+        local_name = elem.tag.split('}')[-1].lower() if isinstance(elem.tag, str) else ''
+        if local_name in {'script', 'iframe', 'object', 'embed'}:
+            raise err_cls('SVG 含脚本、实体、嵌入对象或外部资源')
+        if local_name == 'foreignobject':
+            has_foreign_object = True
+    if has_foreign_object:
+        # 与 reader_inline_svg 统一安全策略：仅放行通过静态白名单校验的 LaTeXML foreignObject，
+        # 并在离线禁脚本 HTML5 文档中内联渲染，避免 <img> XML 解析丢失 XHTML/MathML 命名空间或被 <br> 中断。
+        try:
+            import reader_inline_svg as _inline_svg
+            validated_text = _inline_svg.validate_svg(raw)
+            inline_markup = _inline_svg._serialize_validated_svg(ET.fromstring(validated_text))
+        except Exception as exc:
+            raise err_cls('SVG 含脚本、实体、嵌入对象或外部资源') from exc
+        has_viewbox = any(str(k).lower() == 'viewbox' for k in parsed_svg_root.attrib)
+        svg_height_rule = ';height:auto' if has_viewbox else ''
+        html = (
+            '<!doctype html><meta charset="utf-8">'
+            '<style>html,body{margin:0;background:#fff}body{display:flex;align-items:flex-start;'
+            'justify-content:flex-start}#pd-review-figure{display:inline-block;max-width:1600px;max-height:1200px}'
+            f'#pd-review-figure>svg{{display:block;max-width:1600px;max-height:1200px{svg_height_rule}}}</style>'
+            f'<div id="pd-review-figure">{inline_markup}</div>'
+        )
+    else:
+        encoded_svg = base64.b64encode(raw).decode('ascii')
+        html = (
+            '<!doctype html><meta charset="utf-8">'
+            '<style>html,body{margin:0;background:#fff}body{display:flex;align-items:flex-start;'
+            'justify-content:flex-start}#pd-review-figure{display:block;max-width:1600px;max-height:1200px}</style>'
+            f'<img id="pd-review-figure" alt="review figure" src="data:image/svg+xml;base64,{encoded_svg}">'
+        )
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as playwright:
@@ -681,31 +719,38 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
                 context = browser.new_context(
                     viewport={'width': 1600, 'height': 1200},
                     java_script_enabled=False,
+                    offline=True,
                 )
                 page = context.new_page()
                 page.route('**/*', lambda route: route.abort())
                 page.set_content(html, wait_until='load', timeout=30_000)
-                locator = page.locator('#figure')
+                locator = page.locator('body > #pd-review-figure')
                 box = locator.bounding_box()
                 scale = 1
                 if box and box.get('width', 0) > 0 and box.get('height', 0) > 0:
-                    if max(box['width'], box['height']) < 800:
+                    max_side = max(box['width'], box['height'])
+                    min_side = min(box['width'], box['height'])
+                    if max_side < 800:
                         scale = min(
                             3,
                             max(1, int(1600 // box['width'])),
                             max(1, int(1200 // box['height'])),
                         )
+                    elif min_side < 320 and (max_side / min_side) >= 3.0:
+                        # 极窄长横幅架构图（如 1200x240）用 2x HiDPI 避免小字模糊。
+                        scale = 2
                 if scale > 1:
                     context.close()
                     context = browser.new_context(
                         viewport={'width': 1600, 'height': 1200},
                         device_scale_factor=scale,
                         java_script_enabled=False,
+                        offline=True,
                     )
                     page = context.new_page()
                     page.route('**/*', lambda route: route.abort())
                     page.set_content(html, wait_until='load', timeout=30_000)
-                    locator = page.locator('#figure')
+                    locator = page.locator('body > #pd-review-figure')
                 png = locator.screenshot(
                     type='png', animations='disabled', timeout=30_000,
                 )

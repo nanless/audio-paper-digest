@@ -5310,7 +5310,6 @@ def normalize_digest_index_reader_surface(text):
         value,
     )
     value = re.sub(r'一半', '1/2', value)
-    value = re.sub(r'半宽', '1/2 宽', value)
     value = re.sub(
         r'([一二两三四五六七八九])成',
         lambda match: f'{digits[match.group(1)] * 10}%',
@@ -5355,7 +5354,7 @@ def normalize_digest_index_reader_surface(text):
     )
     for index, original in enumerate(protected_percentages):
         value = value.replace(f'__PD_PERCENT_{index}__', original)
-    value = re.sub(r'([前约近])\s+(\d+(?:\.\d+)?%)', r'\1\2', value)
+    value = re.sub(r'([前后约近])\s+(\d+(?:\.\d+)?%)', r'\1\2', value)
     value = re.sub(r'(\d+(?:\.\d+)?%)\s+([一-鿿])', r'\1\2', value)
     for index, original in enumerate(protected_urls):
         value = value.replace(f'__PD_URL_{index}__', original)
@@ -7604,7 +7603,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
 
 ✅ 筛选入选 {total} 篇 → 🔬 深度分析完成
 
-{'每篇论文保留完整分层分类；热门方向按主任务的最上级方向统计，每篇计入一个方向。排行榜也显示最上级任务。' if tag_metadata else ''}
+{'每篇论文保留完整分层分类；热门方向按主任务的最上级方向统计，每篇仅计入所属主方向。排行榜也显示最上级任务。' if tag_metadata else ''}
 
 ### 🏷️ 热门方向
 
@@ -7614,6 +7613,12 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         bar = '█' * min(cnt, 15)
         label = _root_task_link(tag) if isinstance(tag, dict) else tag
         md += f"| {label} | {cnt} 篇 | {bar} |\n"
+    if tag_metadata and len(tag_metadata['rootPrimaryTasks']) > len(top_tags):
+        remaining_tasks = tag_metadata['rootPrimaryTasks'][len(top_tags):]
+        remaining_count = sum(cnt for _node, cnt in remaining_tasks)
+        if remaining_count > 0:
+            bar = '█' * min(remaining_count, 15)
+            md += f"| 其他方向（共 {len(remaining_tasks)} 个） | {remaining_count} 篇 | {bar} |\n"
 
     md += f"""
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
@@ -12486,15 +12491,18 @@ def _validate_api_reader_resource_identity(paper):
             )
             parsed_repository = urlparse(original_url)
             repository_parts = [part for part in parsed_repository.path.split('/') if part]
-            expected_source = (
-                f'https://raw.githubusercontent.com/{repository_parts[0]}/'
-                f'{repository_parts[1]}/main/README.md'
+            expected_sources = (
+                {
+                    f'https://raw.githubusercontent.com/{repository_parts[0]}/{repository_parts[1]}/{branch}/{filename}'
+                    for branch in ('main', 'master')
+                    for filename in ('README.md', 'readme.md', 'README.rst')
+                }
                 if parsed_repository.hostname == 'github.com'
-                and len(repository_parts) == 2 else None
+                and len(repository_parts) == 2 else set()
             )
-            if source_url != expected_source:
+            if source_url not in expected_sources:
                 raise PublishDataValidationError(
-                    f'资源记录 resources[{index}] 的 README 文档证据地址不是该仓库 main 分支的指定地址。'
+                    f'资源记录 resources[{index}] 的 README 文档证据地址不是该仓库 main/master 分支的指定地址。'
                 )
 
     if any('authenticatedPdfFootnoteEvidence' in resource for resource in resources):

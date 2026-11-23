@@ -12740,8 +12740,8 @@ const SCORING_AUDIT_MAX_TOKENS = 96000;
 
 const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
     openSourceScan: {
-        // deepseek-v4.1-flash 开 max 推理时，推理 token 也算在这个上限里；
-        // 8000 会被推理吃光，78k 字符输入的扫描直接截断。放开到 24000。
+        // 阶段指纹上限保持 24000 以兼容 2026-11-13 以来已封存/保存的 openSourceScan 指纹；
+        // 实际请求仍使用 OPEN_SOURCE_SCAN_MAX_TOKENS (96000) 避免推理吃光输出额度。
         maxTokens: 24000,
         evidenceMaxChars: OPEN_SOURCE_EVIDENCE_MAX_CHARS,
         patterns: OPEN_SOURCE_EVIDENCE_PATTERNS,
@@ -18847,8 +18847,14 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     const allOpenSourceLinks = [...demoFoundLinks];
                     for (const url of demoUrls.slice(0, 3)) { // 最多检查 3 个
                         try {
+                            let allowProjectPageRepos = true;
+                            try {
+                                allowProjectPageRepos = new URL(url).hostname.toLowerCase() !== 'raw.githubusercontent.com';
+                            } catch (_) {
+                                allowProjectPageRepos = false;
+                            }
                             const links = (await checkDemoPageForOpensource(url))
-                                .filter(link => isMetadataResourceDiscoveryLink(paper, link));
+                                .filter(link => isMetadataResourceDiscoveryLink(paper, link, { allowProjectPageRepos }));
                             allOpenSourceLinks.push(...links);
                         } catch (e) {
                             if (e?.code !== 'DEMO_TRANSIENT_FAILURE') throw e;
@@ -20302,9 +20308,17 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
             `- 其他资源链接：${thirdParty.join('；') || '未提及'}（不代表作者资源已开放）`
         ].join('\n');
     }
-    const evidence = typeof preparedEvidence === 'string'
+    const baseEvidence = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('openSourceScan', '', sourceText);
+    let evidence = baseEvidence;
+    if (typeof extractPaperSourceRepositoryCandidates === 'function' && typeof sourceText === 'string' && sourceText) {
+        const preScanned = extractPaperSourceRepositoryCandidates(sourceText);
+        if (preScanned.length > 0) {
+            const summaryLines = preScanned.slice(0, 12).map(item => `- [${item.type}] ${item.url}`);
+            evidence = `【原文确定性 URL 预扫描提示（供核对原文上下文，不可凭空编造）】\n${summaryLines.join('\n')}\n\n${baseEvidence}`;
+        }
+    }
     const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('openSourceScan'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),

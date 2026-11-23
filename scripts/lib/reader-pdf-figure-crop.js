@@ -119,8 +119,17 @@ function extractPdfStructuredArtifactsSync(pdfBytes, arxivId = '') {
             figures: Array.isArray(parsed.figures) ? parsed.figures : [],
             tables: Array.isArray(parsed.tables) ? parsed.tables : []
         };
-    } catch (_error) {
-        return { pdfSha256: sha256(bytes), figures: [], tables: [] };
+    } catch (error) {
+        const detail = String(error?.code || error?.signal || error?.message || error).slice(0, 300);
+        const stderr = String(error?.stderr || '').trim().slice(0, 300);
+        const label = normalizedArxivId(arxivId) || 'pdf';
+        console.warn(`[pdf-figure-crop] ${label} 提取 PDF 图表结构失败（${detail}${stderr ? `: ${stderr}` : ''}）`);
+        return {
+            pdfSha256: sha256(bytes),
+            figures: [],
+            tables: [],
+            extractError: detail
+        };
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }

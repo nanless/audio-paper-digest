@@ -80,9 +80,12 @@ def extract(path: Path) -> dict:
     backend = load_pypdf_backend()
     with contextlib.redirect_stdout(sys.stderr):
         pages = backend.extract_pages(data)
-        audit = backend.extract_visual_audit(data)
+        try:
+            visual = backend.extract_visual_audit(data, include_page_pngs=False)
+        except TypeError:
+            # 兼容外部测试注入的仅接收单参数的 extract_visual_audit double。
+            visual = strip_pixels(backend.extract_visual_audit(data))
     text = "".join(f"{page}{PAGE_SEPARATOR}" for page in pages)
-    visual = strip_pixels(audit)
     return {
         "contract": CONTRACT,
         "version": VERSION,

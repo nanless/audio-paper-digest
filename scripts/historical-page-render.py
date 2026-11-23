@@ -246,7 +246,7 @@ def render_packet(packet):
         if presentation['scoringBlock']:
             frontmatter.extend(['## 📊 评分说明', '', presentation['scoringBlock'], ''])
         frontmatter.extend(['## 🧭 深度解读', '', article, '', '---',
-            f'[← 返回 {date} 语音/音乐/音频论文速递](/posts/{date}/)', ''])
+            f'[← 返回 {date} 语音/音乐/音频论文速递]({publisher.BASE_PATH}/posts/{date}/)', ''])
         return {
             'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)),
             'assets': [{'path': relative.as_posix(),
