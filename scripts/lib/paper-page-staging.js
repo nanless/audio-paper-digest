@@ -16,7 +16,7 @@ const RENDERER_ENTRY_FILES = Object.freeze([
     'scripts/utils.py', 'scripts/analysis_sections.py', 'scripts/tag_stage_record.py',
     'manual/scripts/tutorial_payload_verifier.py', 'scripts/markdown_hugo_gate.py',
     'manual/scripts/sealed_tutorial_preview.py', 'config/tag-catalog.json',
-    'config/publish-image-exclusions.json'
+    'config/tag-display-policy.json', 'config/publish-image-exclusions.json'
 ]);
 function rendererImplementationFiles() {
     return require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({

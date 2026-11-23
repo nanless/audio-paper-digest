@@ -169,16 +169,6 @@ function foldReaderTexCellDuplicate(value) {
             return dual[1];
         }
     }
-    // 可见符号后跟同义命令的重复副本（EER↓\downarrow、ACC↑\uparrow）：命令的符号
-    // 必须与可见部分最后一个字符完全相同，且命令后面不是字母数字续写。
-    const symbolCopy = /^\\([A-Za-z]+)([\s\S]*)$/u.exec(text);
-    if (symbolCopy) {
-        const symbol = Object.hasOwn(READER_TEX_SYMBOLS, symbolCopy[1]) ? READER_TEX_SYMBOLS[symbolCopy[1]] : null;
-        if (symbol && symbolCopy[2] && !/^[A-Za-z0-9]/u.test(symbolCopy[2])) {
-            const head = text.slice(0, text.length - symbolCopy[0].length);
-            if (head && head.endsWith(symbol)) return head + symbolCopy[2];
-        }
-    }
     for (let split = 1; split < text.length; split++) {
         const tailProbe = text.slice(split);
         if (!tailProbe.includes('\\') && !/[_^]\{/.test(tailProbe) && !tailProbe.includes('{,}')) continue;

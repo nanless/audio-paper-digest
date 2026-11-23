@@ -648,7 +648,7 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
             ...displayMatrix.slice(1).map(line)].join('\n');
         const parsed = extractMarkdownTables(markdown);
         if (parsed.length !== 1 || JSON.stringify([parsed[0].header, ...parsed[0].rows]) !== JSON.stringify(displayMatrix)) fail();
-        matching[0].body = matching[0].body.replace(marker, markdown);
+        matching[0].body = matching[0].body.replace(marker, () => markdown);
     }
 }
 

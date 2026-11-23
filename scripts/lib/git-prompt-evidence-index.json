@@ -2065,6 +2065,48 @@
       "paths": [
         "prompts/current/api-reader-repair.md"
       ]
+    },
+    "33c0660ab422ff0111eaaf7104bcb2aec87fb36ee1d5d2d7193b45ae43b7a2da": {
+      "blobOid": "8b1135b3f5847ee384616b9c3e78b29f88b67a92",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
+    "4240010a4ebe63385bae91e9c35d8410d4feff349d24bcb9d379a76e90fc6089": {
+      "blobOid": "e53bb4aca7a140c2b87af1e975ad3b2588375db8",
+      "paths": [
+        "prompts/current/scoring-audit.md"
+      ]
+    },
+    "fbe077aba8cd63e24341f0951941b95187400b053a493bff6cfb446d76c2b356": {
+      "blobOid": "63c2abeddb81e12132d59c39d733a4bea587c210",
+      "paths": [
+        "prompts/current/deep-analysis.md"
+      ]
+    },
+    "a123550a5999e3be25c7622643c5e4ca07eb9ab5d0efbe3477e914afe3dce4b7": {
+      "blobOid": "5fc9f9d395e61ed49fca515b6f81579ad3d6ca72",
+      "paths": [
+        "prompts/current/gap-fill.md"
+      ]
+    },
+    "b92f33baf9fce1816a41fab3d071e73e1167f692827509a98d69e7ce3fdc771b": {
+      "blobOid": "f400057c762b28cc7f57e91c7cd1ff1761cf702a",
+      "paths": [
+        "prompts/current/api-reader-fact-local.md"
+      ]
+    },
+    "bc714f37ec63f4c4e44731d80f612f8d1cc280118c014ba8754c2c80d37b26b7": {
+      "blobOid": "bade528d6286db2f59ba0c6c6f9b2b31b4772eea",
+      "paths": [
+        "prompts/current/core-summary-repair.md"
+      ]
+    },
+    "8b4795e31bd2835c3e988ceb4b85040e5af0d11efafdcc36db28c9a00e7d4655": {
+      "blobOid": "da378bfb2ce8e9d3d5a2f770dafabcdfa1f9a3d4",
+      "paths": [
+        "prompts/current/api-reader-repair.md"
+      ]
     }
   }
 }

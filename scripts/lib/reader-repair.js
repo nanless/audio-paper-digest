@@ -899,6 +899,79 @@ function nodeAt(draft, pointer) {
     return list[index];
 }
 
+function matchesFactLocalClaimsLinear(old, value, claims) {
+    const spans = claims.map(claim => ({ claim, start: typeof claim === 'string' && claim.length ? old.indexOf(claim) : -1 }))
+        .sort((a, b) => a.start - b.start);
+    let cursor = 0;
+    const anchors = [];
+    const groups = [];
+    for (const span of spans) {
+        if (typeof span.claim !== 'string' || !span.claim.length
+            || span.start < cursor || old.split(span.claim).length !== 2) {
+            throw new Error('事实局部补丁原句位置不唯一');
+        }
+        const gap = old.slice(cursor, span.start);
+        if (groups.length === 0) {
+            anchors.push(gap);
+            groups.push({ count: 1 });
+        } else if (gap.length === 0) {
+            groups[groups.length - 1].count += 1;
+        } else {
+            anchors.push(gap);
+            groups.push({ count: 1 });
+        }
+        cursor = span.start + span.claim.length;
+    }
+    anchors.push(old.slice(cursor));
+    const prefix = anchors[0];
+    const suffix = anchors[anchors.length - 1];
+    if (!value.startsWith(prefix) || !value.endsWith(suffix) || value.length < prefix.length + suffix.length) {
+        return false;
+    }
+    const middle = value.slice(prefix.length, value.length - suffix.length);
+    const L = middle.length;
+    const nonWs = new Int32Array(L + 1);
+    const badLeft = new Int32Array(L + 1);
+    for (let i = 0; i < L; i++) {
+        const ch = middle[i];
+        nonWs[i + 1] = nonWs[i] + (/\S/.test(ch) ? 1 : 0);
+        let b = badLeft[i];
+        if (ch === '|') {
+            b = Math.max(b, i + 1);
+        } else if (i >= 1 && ch === '[' && (middle[i - 1] === '[' || middle[i - 1] === '!')) {
+            b = Math.max(b, i);
+        }
+        badLeft[i + 1] = b;
+    }
+    let starts = [0];
+    for (let groupIndex = 0; groupIndex < groups.length - 1; groupIndex++) {
+        const anchor = anchors[groupIndex + 1];
+        const need = groups[groupIndex].count;
+        const nextStarts = [];
+        let ptr = 0;
+        let pos = middle.indexOf(anchor, 0);
+        while (pos !== -1) {
+            const minStart = badLeft[pos];
+            while (ptr < starts.length && starts[ptr] < minStart) ptr++;
+            if (ptr < starts.length && starts[ptr] <= pos
+                && nonWs[pos] - nonWs[starts[ptr]] >= need) {
+                nextStarts.push(pos + anchor.length);
+            }
+            pos = middle.indexOf(anchor, pos + 1);
+        }
+        if (!nextStarts.length) return false;
+        starts = nextStarts;
+    }
+    const lastNeed = groups[groups.length - 1].count;
+    const lastMinStart = badLeft[L];
+    for (let i = 0; i < starts.length; i++) {
+        if (starts[i] >= lastMinStart) {
+            return starts[i] <= L && nonWs[L] - nonWs[starts[i]] >= lastNeed;
+        }
+    }
+    return false;
+}
+
 function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
     assertSafeJson(patch);
     const codec = require('./protocol-codec');
@@ -935,29 +1008,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             const claims = options.readerFactLocalClaims[item.path];
             if (!Array.isArray(claims) || !claims.length || typeof old !== 'string'
                 || typeof item.value !== 'string') throw new Error('事实局部补丁缺少完整错误原句授权');
-            const spans = claims.map(claim => ({ claim, start: old.indexOf(claim) }))
-                .sort((a, b) => a.start - b.start);
-            let cursor = 0;
-            let pattern = '^';
-            const literal = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            for (const span of spans) {
-                if (span.start < cursor || old.split(span.claim).length !== 2) {
-                    throw new Error('事实局部补丁原句位置不唯一');
-                }
-                pattern += literal(old.slice(cursor, span.start)) + '([\\s\\S]*?\\S[\\s\\S]*?)';
-                cursor = span.start + span.claim.length;
-            }
-            pattern += literal(old.slice(cursor)) + '$';
-            const match = new RegExp(pattern).exec(item.value);
-            if (!match || match.slice(1).some(value => !value.trim() || /\[\[|!\[|\|/.test(value))
-                || match.slice(1).some((value, index, values) => {
-                    let adjacent = value;
-                    for (let next = index + 1; next < spans.length
-                        && spans[next].start === spans[next - 1].start + spans[next - 1].claim.length; next++) {
-                        adjacent += values[next];
-                    }
-                    return /\[\[|!\[|\|/.test(adjacent);
-                })) {
+            if (!matchesFactLocalClaimsLinear(old, item.value, claims)) {
                 throw new Error('事实局部补丁改变了错误原句以外正文或引入图表标记');
             }
         }
@@ -1482,17 +1533,30 @@ function collectDraftIssues(draft, parserError, options = {}) {
     const preciseFactError = parserError?.code === 'READER_VERIFIED_FACT_CLAIM'
         && parserIssues.length > 0 && parserIssues.every(issue =>
             ['reader_verified_fact_claim', 'reader_verified_compiled_table_claim'].includes(issue?.code));
-    const preciseSelectionError = parserError?.code === 'READER_SELECTION_EMPTY_HEADER'
+    const preciseSelectionError = (parserError?.code === 'READER_SELECTION_EMPTY_HEADER'
         && parserIssues.length === 1
         && parserIssues[0]?.code === 'reader_selection_empty_header'
         && parserIssues[0].message === parserError.message
         && (() => {
             const match = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(parserIssues[0].path || '');
             const index = match ? Number(match[1]) : -1;
-            return index >= 0 && draft?.tableBindings?.[index]?.tableIndex === index + 1
+            const tableIndex = draft?.tableBindings?.[index]?.tableIndex;
+            return index >= 0 && Number.isInteger(tableIndex) && tableIndex >= 1
                 && Boolean(draft.tableBindings[index].selection)
-                && parserError.message.startsWith(`读者文章 tableBindings[${index}] selection 渲染表头全为空：`);
-        })();
+                && (parserError.message.startsWith(`读者文章 tableBindings[${index}] selection 渲染表头全为空：`)
+                    || parserError.message.startsWith(`读者文章 tableBindings[${index}] selection 渲染表头缺少列名（全幅分组标题行）：`));
+        })())
+        || (parserError?.code === 'READER_DUPLICATE_TABLE'
+            && parserIssues.length === 1
+            && parserIssues[0]?.code === 'reader_duplicate_table'
+            && parserIssues[0].message === parserError.message
+            && (() => {
+                const match = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(parserIssues[0].path || '');
+                const index = match ? Number(match[1]) : -1;
+                const tableIndex = draft?.tableBindings?.[index]?.tableIndex;
+                return index >= 0 && Number.isInteger(tableIndex) && tableIndex >= 1
+                    && parserError.message.startsWith(`读者文章 tableBindings[${index}]（[[TABLE_${tableIndex}]]）与第 `);
+            })());
     if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError && !preciseSelectionError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
@@ -1622,14 +1686,23 @@ function collectDraftIssues(draft, parserError, options = {}) {
         });
     }
     collectTableBindingIssues(draft, { ...options, actionableInvalidSourceQuotes: languageError })
-        .forEach(issue => issues.push(issue));
+        .forEach(issue => {
+            if (issue?.code === 'reader_selection_empty_header'
+                && issues.some(existing => existing?.code === 'reader_selection_empty_header'
+                    && existing.path === issue.path)) {
+                return;
+            }
+            issues.push(issue);
+        });
     require('./reader-source-diagnostics.js').buildReaderSourceDiagnostics({ draft,
         sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts,
         parserError: orderError.ignoreMessageForRepair ? null : parserError
     }).forEach(issue => issues.push(issue));
     try {
         const tables = require('./reader-tables.js');
-        const compiled = tables.compileReaderTableSelections(draft.sections, draft.tableBindings, options.structuredArtifacts);
+        const compiled = tables.compileReaderTableSelections(
+            draft.sections, draft.tableBindings, options.structuredArtifacts, { checkDuplicates: false }
+        );
         tables.validateReaderResultTableCoverage(compiled.sections, options.structuredArtifacts);
     } catch (error) {
         if (error.message.startsWith('读者文章主结果表覆盖不足')) {
@@ -1715,12 +1788,23 @@ function collectTableBindingIssues(draft, options = {}) {
                 catch (error) {
                     const noDomTables = Array.isArray(options.structuredArtifacts.tables)
                         && options.structuredArtifacts.tables.length === 0;
-                    add(index, error.message + (noDomTables
+                    const oldPrefix = `读者文章 tableBindings[${Number(binding?.tableIndex) - 1}] selection`;
+                    const newPrefix = `读者文章 tableBindings[${index}] selection`;
+                    let errMessage = String(error?.message || error);
+                    if (index !== Number(binding?.tableIndex) - 1 && errMessage.startsWith(oldPrefix)) {
+                        errMessage = `${newPrefix}${errMessage.slice(oldPrefix.length)}`;
+                    }
+                    const fullMsg = errMessage + (noDomTables
                         ? '。本次没有 DOM 原表，旧 sourceTableOrdinal 不能重放；不能继续提交 selection 或 completeTable。'
                             + '只有对应来源记录和正文都获本轮授权时，才可改成 source_quotes 与标准 Markdown 表；'
                             + 'sourceTableOrdinal 必须为 null，cellBindings 必须为空数组，'
                             + '每个数字和单位仍须由全文连续原句逐字支持，不能编表格坐标或来源。'
-                        : ''));
+                        : '');
+                    if (error?.code === 'READER_SELECTION_EMPTY_HEADER') {
+                        issues.push({ path: `/tableBindings/${index}`, code: 'reader_selection_empty_header', message: fullMsg });
+                    } else {
+                        add(index, fullMsg);
+                    }
                 }
             }
             const marker = `[[TABLE_${binding.tableIndex}]]`;
@@ -2315,7 +2399,7 @@ function verifiedCompiledReaderTableFactIssues(draft, claims, parsed) {
     try {
         compiled = require('./reader-table-pdf-evidence').withArtifacts(proof.structuredArtifacts,
             proof.paperId.replace(/^arxiv:/, ''), () => require('./reader-tables').compileReaderTableSelections(
-                draft.sections, draft.tableBindings, proof.structuredArtifacts));
+                draft.sections, draft.tableBindings, proof.structuredArtifacts, { checkDuplicates: false }));
     } catch (_) { return []; }
     const rendered = extractMarkdownTables(parsed.article);
     const compiledTables = compiled.sections.flatMap(section => extractMarkdownTables(section.body));
@@ -2393,11 +2477,22 @@ function assertReaderFactLocalCoverage(draft, claims) {
     return issues;
 }
 
-function readerFactLocalSelectionIssues(draft, issues, allowedPaths, claims) {
+function readerFactLocalSelectionIssues(draft, issues, allowedPaths, claims, options = {}) {
     const verified = verifiedReaderFactIssues(draft, claims);
     const allowed = new Set(allowedPaths);
     if (!verified.length || verified.some(issue => !allowed.has(issue.path))) return issues;
     const { findReaderLanguageIssues } = require('../editorial-quality');
+    const sourceText = typeof options.sourceText === 'string' ? options.sourceText : '';
+    const editorialProfile = options.editorialProfile || limitsForDraftFormat(draft).editorialProfile;
+    const documentText = [
+        draft.readerTitle || '',
+        draft.oneSentenceThesis || '',
+        ...(Array.isArray(draft.sections) ? draft.sections.flatMap(section => [section?.heading || '', section?.body || '']) : []),
+        ...(Array.isArray(draft.conceptBridges) ? draft.conceptBridges.map(bridge => bridge?.explanation || '') : [])
+    ].filter(Boolean).join('\n\n');
+    const openingContext = Array.isArray(draft.sections) ? draft.sections
+        .filter(section => ['background', 'problem', 'method_overview'].includes(section?.kind))
+        .map(section => section.body || '').join('\n\n') : '';
     const selected = [];
     for (const issue of issues) {
         if (!LANGUAGE_ISSUE_CODES.has(issue?.code)) {
@@ -2409,8 +2504,11 @@ function readerFactLocalSelectionIssues(draft, issues, allowedPaths, claims) {
             continue;
         }
         const body = nodeAt(draft, issue.path);
-        const findings = typeof body === 'string' ? findReaderLanguageIssues(body)
-            .filter(finding => finding.code === issue.code && finding.match === issue.match) : [];
+        const contextText = ['/readerTitle', '/oneSentenceThesis'].includes(issue.path) ? openingContext : '';
+        const findings = typeof body === 'string'
+            ? findReaderLanguageIssues(body, { contextText, sourceText, documentText, editorialProfile })
+                .filter(finding => finding.code === issue.code && finding.match === issue.match)
+            : [];
         const authorized = verified.filter(fact => fact.path === issue.path);
         const covered = findings.length > 0 && findings.every(finding => authorized.some(fact =>
             finding.index >= fact.index
@@ -2451,7 +2549,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             repairInstruction: '只在这组已有绑定和承载正文中修复已拒表格显示，保留每项正确方法、条件、数字、单位、区间及负面证据；其他表与标记保持。若原DOM字符有错，用同一封存全文或实际PDF连续原文完整支持的source_quotes写实际Markdown并同步绑定；PDF引文仍须正常核验，不能猜重复值的半值、改正负号、删表或换无关原表。' }));
     }
     if (Array.isArray(options.readerFactLocalPaths)) {
-        issues = readerFactLocalSelectionIssues(draft, issues, options.readerFactLocalPaths, options.readerFactLocalClaims || []);
+        issues = readerFactLocalSelectionIssues(draft, issues, options.readerFactLocalPaths, options.readerFactLocalClaims || [], options);
         if (issues.some(issue => issue?.diagnosticOnly !== true
             && issue?.code !== 'reader_verified_fact_claim')) return [];
         const allowed = new Set(options.readerFactLocalPaths);
@@ -2500,8 +2598,16 @@ function buildRepairTargets(draft, issues, options = {}) {
         const ranks = draft.sections.map(section => READER_SECTION_KINDS.indexOf(section?.kind));
         if (ranks.some((value, index) => value < 0 || index > 0 && value < ranks[index - 1])) return [];
         const wanted = missing[0], rank = READER_SECTION_KINDS.indexOf(wanted);
+        const isCohesiveV4 = limitsForDraftFormat(draft).editorialProfile === 'cohesive-functional-v4';
+        const closingCount = (counts.get('limitation') || 0) + (counts.get('synthesis') || 0);
+        const replaceableKinds = isCohesiveV4
+            ? new Set(['background', 'related_work', 'component', 'training', 'experiment_setup', 'ablation', 'reproduction'])
+            : new Set(['component', 'ablation']);
         const targets = draft.sections.flatMap((section, index) => {
-            if (!['problem', 'component', 'ablation'].includes(section.kind) && counts.get(section.kind) < 2) return [];
+            const isClosingReplaceable = isCohesiveV4
+                && ['limitation', 'synthesis'].includes(section.kind)
+                && closingCount >= 2;
+            if (!replaceableKinds.has(section.kind) && !isClosingReplaceable && counts.get(section.kind) < 2) return [];
             if (Object.keys(section).sort().join(',') !== 'body,heading,kind'
                 || typeof section.body !== 'string' || typeof section.heading !== 'string'
                 || /\[\[(?:FIGURE|TABLE|FORMULA|CONCEPT_BRIDGE)_/.test(section.body)) return [];
@@ -2540,19 +2646,23 @@ function buildRepairTargets(draft, issues, options = {}) {
         const blocks = String(section?.body || '').split(/\n\s*\n/).map(block => block.trim());
         const at = blocks.indexOf(marker);
         const points = placement?.focusPoints;
+        const focusLimits = limitsForDraftFormat(draft);
+        const isCohesiveV4 = focusLimits.editorialProfile === 'cohesive-functional-v4';
+        const minFocusCount = isCohesiveV4 ? 0 : focusLimits.minimumFocusPoints;
+        const minFocusChars = isCohesiveV4 ? 6 : 12;
         if (placement && Object.keys(placement).sort().join(',') === 'figureOrdinal,focusPoints,marker,targetKind'
             && Array.isArray(options.availableFigureOrdinals) && options.availableFigureOrdinals.includes(placement.figureOrdinal)
             && marker === `[[FIGURE_${placement.figureOrdinal}]]` && section?.kind === placement.targetKind
             && String(section.body).split(marker).length === 2 && at > 0 && at < blocks.length - 1
-            && blocks[at - 1].length >= READER_LIMITS.figureLeadChars
-            && blocks[at + 1].length >= READER_LIMITS.figureExplanationChars
-            && Array.isArray(points) && points.length >= READER_LIMITS.minimumFocusPoints
-            && points.length <= READER_LIMITS.maximumFocusPoints) {
+            && blocks[at - 1].length >= focusLimits.figureLeadChars
+            && blocks[at + 1].length >= focusLimits.figureExplanationChars
+            && Array.isArray(points) && points.length >= minFocusCount
+            && points.length <= focusLimits.maximumFocusPoints) {
             const invalid = points.flatMap((point, pointIndex) => typeof point !== 'string'
-                || point.trim().length < 12 || point.trim().length > 120 ? [pointIndex] : []);
+                || point.trim().length < minFocusChars || point.trim().length > 120 ? [pointIndex] : []);
             if (invalid.length) return [{ path: `/figurePlacements/${index}`,
                 oldSha256: hashDraft(placement), value: placement,
-                repairInstruction: `只改 focusPoints 中索引为 ${invalid.join('、')} 的观察提示，每项12–120字符。依据本次图片与论文原文精简或补全表达，不增加视觉事实；其余观察提示、图号、类型和标记逐字保留。正文导读和解释已经满足位置及长度要求，本轮不可修改正文。` }];
+                repairInstruction: `只改 focusPoints 中索引为 ${invalid.join('、')} 的观察提示，每项${minFocusChars}–120字符。依据本次图片与论文原文精简或补全表达，不增加视觉事实；其余观察提示、图号、类型和标记逐字保留。正文导读和解释已经满足位置及长度要求，本轮不可修改正文。` }];
         }
     }
     const paths = new Set();
@@ -2694,8 +2804,47 @@ function buildRepairTargets(draft, issues, options = {}) {
         }
         return null;
     };
+    const isSelectionOnlyTableBindingIssue = issue => {
+        const msg = String(issue?.message || '');
+        return issue?.code === 'reader_selection_empty_header'
+            || /selection[\s\S]*(?:第一行必须是原表头，其余行必须是数据行|行列重复、越界或数量不足|渲染表头全为空|渲染表头缺少列名（全幅分组标题行）)/.test(msg);
+    };
+    const matchDraftTablesForBinding = (tables, binding) => {
+        if (!binding || !Number.isInteger(binding.tableIndex) || binding.tableIndex < 1) return [];
+        const isMarkerBinding = Boolean(binding.selection || binding.completeTable);
+        if (isMarkerBinding) {
+            return tables.filter(table => Boolean(table.marker) && table.markerIndex === binding.tableIndex);
+        }
+        const allBindings = Array.isArray(draft.tableBindings) ? draft.tableBindings : [];
+        // Check unbound [[TABLE_N]] markers FIRST so a source_quotes/artifact_table binding that
+        // erroneously wrote a marker in the body pairs with its own marker section rather than
+        // stealing a plain Markdown table belonging to another binding.
+        const ownedMarkerIndexes = new Set(allBindings
+            .filter(item => item && (item.selection || item.completeTable) && Number.isInteger(item.tableIndex))
+            .map(item => item.tableIndex));
+        if (!ownedMarkerIndexes.has(binding.tableIndex)) {
+            const unboundMarkers = tables.filter(table => Boolean(table.marker) && table.markerIndex === binding.tableIndex);
+            if (unboundMarkers.length) return unboundMarkers;
+        }
+        const unboundMarkerIndexes = new Set(tables
+            .filter(table => Boolean(table.marker) && !ownedMarkerIndexes.has(table.markerIndex))
+            .map(table => table.markerIndex));
+        const plainTables = tables.filter(table => !table.marker);
+        const plainBindings = allBindings
+            .filter(item => item && !item.selection && !item.completeTable && !unboundMarkerIndexes.has(item.tableIndex))
+            .sort((a, b) => Number(a.tableIndex) - Number(b.tableIndex));
+        if (plainTables.length > 0 && plainTables.length === plainBindings.length) {
+            const ordinal = plainBindings.indexOf(binding);
+            if (ordinal >= 0 && plainTables[ordinal]) return [plainTables[ordinal]];
+        } else if (plainTables.length > 0 && !tables.some(table => table.marker && table.markerIndex !== table.tableIndex)) {
+            const direct = plainTables.filter(table => table.tableIndex === binding.tableIndex);
+            if (direct.length) return direct;
+        }
+        return [];
+    };
     const multipleTablePairs = () => {
         const indexes = [...new Set(actionableIssues.flatMap(issue => {
+            if (isSelectionOnlyTableBindingIssue(issue)) return [];
             const message = String(issue?.message || '');
             if (!/缺少|单元格|cell|quote|单位/i.test(message)) return [];
             const direct = /^\/tableBindings\/(\d+)$/.exec(issue.path || issue.bindingPath || '');
@@ -2711,7 +2860,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             const binding = draft.tableBindings?.[index];
             if (!binding || !Number.isInteger(binding.tableIndex) || binding.tableIndex < 1
                 || draft.tableBindings.filter(item => item.tableIndex === binding.tableIndex).length !== 1) return [];
-            const matches = tables.filter(table => table.tableIndex === binding.tableIndex);
+            const matches = matchDraftTablesForBinding(tables, binding);
             if (matches.length !== 1) return [];
             const marker = `[[TABLE_${binding.tableIndex}]]`;
             const occurrences = draft.sections.reduce((total, section) => total
@@ -3062,6 +3211,18 @@ function buildRepairTargets(draft, issues, options = {}) {
         }
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
+        if (issue.code === 'reader_duplicate_table') {
+            if (issue.sectionPath) {
+                add(issue.sectionPath);
+            } else {
+                const idxMatch = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(issue.path || '');
+                const binding = idxMatch ? draft.tableBindings?.[Number(idxMatch[1])] : null;
+                for (const table of matchDraftTablesForBinding(locateReaderDraftTables(draft), binding)) {
+                    add(table.path);
+                }
+            }
+            continue;
+        }
         const workflowLeak = /读者文章泄漏了流程或证据元话语：([^\n]+)/.exec(message)?.[1];
         if (workflowLeak) {
             draft.sections.forEach((section, index) => {
@@ -3087,8 +3248,10 @@ function buildRepairTargets(draft, issues, options = {}) {
         // 绑到今天的节点 SHA 上。
         const stalePatchPath = /Reader patch has stale node SHA: (\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?)/.exec(message)?.[1];
         if (stalePatchPath) add(stalePatchPath);
-        if (/selection[\s\S]*(?:第一行必须是原表头，其余行必须是数据行|行列重复、越界或数量不足|渲染表头全为空)/.test(message)) {
-            const index = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
+        if (isSelectionOnlyTableBindingIssue(issue)) {
+            const pathIndex = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(issue.path || '')?.[1];
+            const msgIndex = /tableBindings\[(\d+)\]/.exec(message)?.[1];
+            const index = Number(pathIndex ?? msgIndex);
             if (Number.isInteger(index)) add(`/tableBindings/${index}`);
             // marker 和它所在的整节，结构上本来就有效。这里再要一整节正文，会让
             // 本来只改一个对象的修复变得臃肿，也是修复 JSON 被截断的主要来源。
@@ -3146,13 +3309,41 @@ function buildRepairTargets(draft, issues, options = {}) {
         }
         if (!localizedComparisonUnit && /表|tableBindings|cell|quote/i.test(message)) {
             const boundIndex = /^\/tableBindings\/(\d+)$/.exec(issue.bindingPath || issue.path || '');
-            const wanted = Number(boundIndex ? Number(boundIndex[1]) + 1 : message.match(/第\s*(\d+)\s*张/)?.[1]
-                || (message.match(/tableBindings\[(\d+)\]/) ? Number(message.match(/tableBindings\[(\d+)\]/)[1]) + 1 : 0));
-            for (const table of locateReaderDraftTables(draft)) {
-                if (!wanted || wanted === table.tableIndex) add(table.path);
+            const msgBindingIndex = message.match(/tableBindings\[(\d+)\]/)?.[1];
+            const resolvedBindingIndex = boundIndex ? Number(boundIndex[1])
+                : msgBindingIndex !== undefined ? Number(msgBindingIndex) : null;
+            const boundTableIndex = resolvedBindingIndex !== null
+                && Number.isInteger(draft.tableBindings?.[resolvedBindingIndex]?.tableIndex)
+                && draft.tableBindings[resolvedBindingIndex].tableIndex >= 1
+                ? draft.tableBindings[resolvedBindingIndex].tableIndex : null;
+            const wanted = Number((boundTableIndex
+                ?? (resolvedBindingIndex !== null ? resolvedBindingIndex + 1 : 0))
+                || message.match(/第\s*(\d+)\s*张/)?.[1]
+                || 0);
+            const resolvedBinding = resolvedBindingIndex !== null
+                ? draft.tableBindings?.[resolvedBindingIndex] : null;
+            const matchingBindingsForWanted = !resolvedBinding && wanted > 0 && Array.isArray(draft.tableBindings)
+                ? draft.tableBindings.filter(b => b && b.tableIndex === wanted)
+                : [];
+            const effectiveBinding = resolvedBinding
+                || (matchingBindingsForWanted.length === 1 ? matchingBindingsForWanted[0] : null);
+            const locatedTables = locateReaderDraftTables(draft);
+            if (effectiveBinding) {
+                for (const table of matchDraftTablesForBinding(locatedTables, effectiveBinding)) {
+                    add(table.path);
+                }
+            } else {
+                for (const table of locatedTables) {
+                    const matchedIndex = table.marker ? table.markerIndex : table.tableIndex;
+                    if (!wanted || wanted === matchedIndex) add(table.path);
+                }
             }
-            draft.tableBindings.forEach((_binding, index) => {
-                if (!wanted || wanted === index + 1) add(`/tableBindings/${index}`);
+            draft.tableBindings.forEach((binding, index) => {
+                const bindingTableIndex = Number.isInteger(binding?.tableIndex) && binding.tableIndex >= 1
+                    ? binding.tableIndex : index + 1;
+                if (!wanted || wanted === bindingTableIndex || resolvedBindingIndex === index) {
+                    add(`/tableBindings/${index}`);
+                }
             });
             if (![...paths].some(pointer => pointer.startsWith('/sections/'))) {
                 draft.sections.forEach((section, index) => {

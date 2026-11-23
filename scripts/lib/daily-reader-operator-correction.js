@@ -123,7 +123,7 @@ function replay(record, candidate) {
         || record.patch.replacements.length > MAX_READER_PATCH_NODES)
         throw new Error('Operator correction original draft or bounded patch differs');
     const paths = record.patch.replacements.map(r=>r.path);
-    if (paths.some(p=>!/^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/(?:body|explanation))?$/.test(p)))
+    if (paths.some(p=>!/^\/(?:readerTitle|oneSentenceThesis)$|^\/sections\/(?:0|[1-9]\d*)(?:\/body)?$|^\/conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?$|^\/(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)$/.test(p)))
         throw new Error('Operator correction changes an unauthorized node');
     const result = repair.applyReaderPatch(candidate.payload.draft,record.patch,paths);
     if (!isDeepStrictEqual(result,record.draft) || repair.hashDraft(result) === repair.hashDraft(candidate.payload.draft))
@@ -512,13 +512,18 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
                 paperId: paper.arxivId, sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
                 pixelFigureOrdinals: readyFigureOrdinals, draftOrderMappings: []
             }, normalizationState);
+            const evidence = deep.buildApiReaderEvidenceContext('', source.text, source.structuredArtifacts, paper.arxivId);
+            const minimumIntegratedTables = require('./reader-contract').readerRequirements({
+                version: 3,
+                availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length
+            }).minimumTables;
             const parsed = deep.parseApiReaderArticleResult(JSON.stringify(normalizationState.draft || draft), {
                 arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
-                requireIntegratedTables: true, minimumIntegratedTables: 2,
+                requireIntegratedTables: true, minimumIntegratedTables,
                 requireSourceBindings: true, allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true,
                 enforceResourceAvailabilityClaims: true, verifiedResourceIdentity: paper.apiReaderResources,
                 sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
-                availableFigureOrdinals: payload.imageEvidence.filter(image => image.kind === 'figure' && image.status === 'ready').map(image => image.ordinal)
+                availableFigureOrdinals: readyFigureOrdinals
             });
             for (const figure of paper.apiReaderFigures || []) {
                 const image = payload.imageEvidence.find(item => item.kind === 'figure' && item.status === 'ready' && item.ordinal === figure.ordinal);

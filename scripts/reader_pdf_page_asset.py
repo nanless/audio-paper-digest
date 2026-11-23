@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import re
 import struct
+import threading
 import xml.etree.ElementTree as ET
 from runtime_guard import require_external_runtime
 
@@ -25,6 +26,7 @@ CONTRACT = 'reader-sealed-pdf-page-asset-v1'
 DPI = 144
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 _CACHE = {}
+_CACHE_LOCK = threading.Lock()
 
 
 def need(condition, reason):
@@ -474,8 +476,10 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
         caption_projection['originalReaderCaptionSha256'] = sha(figure['caption'].encode())
         identity['captionDisplayProjection'] = caption_projection
     key = stable(identity)
-    if key in _CACHE:
-        pixels, proof = _CACHE[key]
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key)
+    if cached is not None:
+        pixels, proof = cached
         return pixels, copy.deepcopy(proof)
     with fitz.open(stream=pdf_bytes, filetype='pdf') as document:
         need(not document.needs_pass and 1 <= len(document) <= 2048,
@@ -591,7 +595,8 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                                  if caption_limited else
                                  f'原论文 PDF 第 {index + 1} 页（含图 {figure_number}）')}
     proof['proofSha256'] = stable(proof)
-    if len(_CACHE) >= 4:
-        _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = (pixels, copy.deepcopy(proof))
+    with _CACHE_LOCK:
+        if len(_CACHE) >= 4 and key not in _CACHE:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = (pixels, copy.deepcopy(proof))
     return pixels, proof

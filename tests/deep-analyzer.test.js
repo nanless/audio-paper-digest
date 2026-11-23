@@ -896,7 +896,7 @@ describe('deep-analyzer 的小节辅助函数', () => {
         );
         assert.match(figureFeedback, /前一段至少 30 字/);
         assert.match(figureFeedback, /后一段至少 45 字/);
-        assert.match(figureFeedback, /focusPoints 必须有 2–4 项/);
+        assert.match(figureFeedback, /focusPoints 在新版（cohesive-v4）可填 \[\] 或 2–4 项（每项 6–120 字），旧版须为 2–4 项且每项 12–120 字/);
     });
 
     it('普通模型 HTTP 请求尝试次数默认服从分析配置并允许显式覆写', () => {

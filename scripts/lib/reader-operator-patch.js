@@ -210,7 +210,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
                 alreadyApplied: true, draftSha256: auditEntry.afterDraftSha256, patchFileSha256: requestFile.sha256 };
         }
         const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
-            /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?$/.test(pointer || ''));
+            /^\/(?:readerTitle|oneSentenceThesis)$|^\/sections\/(?:0|[1-9]\d*)(?:\/body)?$|^\/conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?$|^\/(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)$/.test(pointer || ''));
         const draft = repair.applyReaderPatch(payload.draft, request.patch, allowedPaths,
             { availableFigureOrdinals: options.availableFigureOrdinals });
         if (!repair.parseRepairableDraft(draft) || repair.hashDraft(draft) === repair.hashDraft(payload.draft)) {

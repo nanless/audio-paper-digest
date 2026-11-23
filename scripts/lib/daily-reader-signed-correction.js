@@ -249,13 +249,30 @@ function applyBoundedTextPatch(original, record) {
     return result;
 }
 function parseDraft(draft, paper, source, envelope, options = {}) {
-    return require('../deep-analyzer').parseApiReaderArticleResult(JSON.stringify(draft), {
+    const deep = require('../deep-analyzer');
+    const availableFigureOrdinals = envelope.payload.imageEvidence
+        .filter(i => i.status === 'ready' && i.kind === 'figure').map(i => i.ordinal);
+    let effectiveDraft = draft;
+    if (options.normalizeCurrentBatchRoot) {
+        const normalizationState = {};
+        deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(draft), envelope.payload.issues || [], {
+            paperId: paper.arxivId, sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+            pixelFigureOrdinals: availableFigureOrdinals, draftOrderMappings: []
+        }, normalizationState);
+        effectiveDraft = normalizationState.draft || draft;
+    }
+    const evidence = deep.buildApiReaderEvidenceContext('', source.text, source.structuredArtifacts, paper.arxivId);
+    const minimumIntegratedTables = require('./reader-contract').readerRequirements({
+        version: 3,
+        availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length
+    }).minimumTables;
+    return deep.parseApiReaderArticleResult(JSON.stringify(effectiveDraft), {
         arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan), requireIntegratedTables: true,
-        minimumIntegratedTables: 2, requireSourceBindings: true, allowDeterministicQuoteRepair: true,
+        minimumIntegratedTables, requireSourceBindings: true, allowDeterministicQuoteRepair: true,
         sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
         ...(options.prune ? { allowDeterministicUnsupportedClaimPruning: true } : {}),
         verifiedResourceIdentity: paper.apiReaderResources,
-        availableFigureOrdinals: envelope.payload.imageEvidence.filter(i => i.status === 'ready' && i.kind === 'figure').map(i => i.ordinal)
+        availableFigureOrdinals
     });
 }
 function sourceFigureFields(figure) {
@@ -466,7 +483,10 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
                 && isDeepStrictEqual(stage.legacyBatchRoot, record.legacyBatchRoot)
                 : isDeepStrictEqual(stage.originApiStage, base.analysisManifest.stages.apiReaderArticle))))) fail('原API/批次operator根或人工历史终点不真实');
     const options = normalProducerOptions(record.normalProducerProof, checked);
-    if (legacy) options.prune = true; // Authenticated by exact normal root replay, never by an allowance.
+    if (legacy) {
+        options.prune = true; // Authenticated by exact normal root replay, never by an allowance.
+        if (isCurrentBatchRoot(record.legacyBatchRoot)) options.normalizeCurrentBatchRoot = true;
+    }
     let draft = legacy ? legacy.draft : replayPaidDraft(entries[0]?.record || record, base, source, checked, options);
     for (let index = 0; index < entries.length; index++) {
         const entry = entries[index], after = entries[index + 1]?.parent || paper;

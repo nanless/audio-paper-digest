@@ -81,7 +81,7 @@ async function prepareReaderOperatorPatchResultWithHeader({ parent, sourceDetail
 async function prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }, header) {
     const draftRecovery = reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails, runId: run.runId });
     const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
-        /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?$/.test(pointer || ''));
+        /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections\/(?:0|[1-9]\d*)(?:\/body)?|conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?|(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*))$/.test(pointer || ''));
     const draft = repair.applyReaderPatch(draftRecovery.draft, request.patch, allowedPaths,
         { availableFigureOrdinals: parent.apiReaderFigures.map(figure => figure.ordinal) });
     if (repair.hashDraft(draft) === draftRecovery.proof.draftSha256) throw new Error('Signed operator patch must change an existing node');

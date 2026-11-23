@@ -47,9 +47,10 @@ def _fold_line_break_hyphen(value):
 def _folded_projection(value):
     output, mapping, index = [], [], 0
     while index < len(value):
-        if (index > 0 and value[index] == '-' and value[index - 1].isalpha()
+        if (index > 0 and value[index] == '-'
+                and (('A' <= value[index - 1] <= 'Z') or ('a' <= value[index - 1] <= 'z'))
                 and index + 2 < len(value) and value[index + 1] == ' '
-                and value[index + 2].islower()):
+                and ('a' <= value[index + 2] <= 'z')):
             index += 2
             continue
         output.append(value[index])

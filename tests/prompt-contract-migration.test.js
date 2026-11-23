@@ -30,8 +30,13 @@ test('current templates preserve original text apart from the declared changes; 
                 .replace('（`reader-complete-table-declaration-v1`）', '')
                 .replace('- 普通概念用自然中文，写出具体对象、处理过程和统计方式；必要专业术语可保留，首次说明含义。',
                     '- 普通概念用自然中文，写出具体对象、处理过程和统计方式；必要专业术语可保留，首次说明含义。'
-                    + '严禁在中文句内夹杂裸英文普通虚词或动词散词（如 alone、over、abstain、noisy、without 等），'
+                    + '严禁在中文句内夹杂裸英文普通虚词、形容词或动词散词（如 alone、over、abstain、noisy、without、embodied、grounding、scaling、alignment 等，'
+                    + '普通中文如“具身”“对齐”“缩放”已可讲清时一律用自然中文，官方模型、基准与指标专名保持准确），'
+                    + '严禁使用“记住这个顺序”“务必记住”“不要忘记”等说教式指令口吻，'
                     + '也不要生硬直译（如把 nuisance parameter 译成“讨厌参数”，应译为“干扰参数”或“无关参数”）。')
+                .replace('沿一个样本说明完整过程：原始输入怎样表示，一次处理改变了什么，产生什么中间结果，这个结果怎样交给下一步，最终输出如何用于任务。',
+                    '在 `method_overview` 与核心 `component` 中，优先用一个贯穿全文的具体输入样本（严格采用原文实际披露的采样率、帧率、时长或张量维度，绝不编造数字）说明完整过程：'
+                    + '原始输入怎样表示，每一步变换在物理或表征空间里改变了什么，产生什么中间结果，这个结果怎样交给下一步，最终输出如何用于任务。')
                 .replace('每个自然段围绕一个具体问题展开，给出必要的过程、依据或例子；转到另一个步骤、实验条件或推测时另起一段。'
                     + '段落之间留一行空白；在 JSON 的 body 和 explanation 字符串中使用合法的 \\n\\n 转义表达空行，不插入未转义换行。'
                     + '标题、表格、标记和独立说明段之间同样留空行。不要把每一句都拆成一段，也不要给每节套相同的小标题、句数或总结句。',
@@ -58,8 +63,10 @@ test('current templates preserve original text apart from the declared changes; 
                     + '严禁只写“方法概述”这类裸泛词，也严禁在任何标题或四级小标题中出现“图 1”“Figure 1”“表 1”“Table 1”等图表编号。')
                 .replace('原文没说明的梯度路径不要猜。',
                     '原文没说明的梯度路径不要猜。严禁顺着公式符号硬念成文字绕口令（如“1 减去 1 减 a 横杠的 n 次方”）；'
-                    + '行内数学统一使用规范 \\(...\\)，展示公式使用独占段落占位符，并紧跟公式解释每一项代表的物理或统计含义、'
-                    + '为什么采用这种数学形式（如指数衰减、归一化、防坍塌）以及极端取值下的行为。'
+                    + '行内数学统一使用规范 \\(...\\)，展示公式使用独占段落占位符，并紧跟每条公式用三层讲透：'
+                    + '（1）为什么采用这种数学形式（物理、几何或统计直觉，如指数衰减、归一化、防坍塌）；'
+                    + '（2）关键项的含义及极端取值（如趋近 0、极大或高噪条件）下的行为变化；'
+                    + '（3）计算出的结果如何驱动下一步变换或梯度更新。'
                     + '原文未披露某项超参数或实现细节时如实点明即可，不要硬塞“建议采用公开基线默认配置或做网格搜索”这类空泛套话。')
                 .replace('介绍组合机制时，紧接着说清每个术语各指什么、怎么分工、为什么搭配、组合后多了什么作用。',
                     '介绍组合机制时，紧接着说清每个术语各指什么、怎么分工、为什么搭配、组合后多了什么作用。'
@@ -69,13 +76,19 @@ test('current templates preserve original text apart from the declared changes; 
                     + '标注和部署条件下成立，何时值得尝试只写行动顺序，两处都不要把结果数字再念一遍。同一篇里同一个指标数值'
                     + '出现在超过五个小节，读者会直接跳过后面几节。\n\n比较先说明双方为何可以放在一起：')
                 .replace('表前说明比较问题、公平条件和指标方向，表后解释主要收益、具体代价或反例；字数按本次代码要求，段落数不固定，也不用逐行复述。',
-                    '表前自然交代对比口径、公平条件和指标方向，表后聚焦解释核心收益、代价权衡与反例；字数按本次代码要求，段落数不固定，也不用逐行复述。'
+                    '表前自然交代对比口径、公平条件和指标方向，表后聚焦提炼跨行规律、最强收益与最尖锐代价权衡以及反例原因'
+                    + '（例如为什么在某一子集大幅领先却在另一子集回落）；字数按本次代码要求，段落数不固定，也不用逐行复述。'
                     + '严禁使用「表中可见」「由表可知」「比较问题是：」「比较的问题是：」「这张表支撑的判断是」「该表支撑的判断是」'
                     + '「本表数值与单位依据论文 PDF」这类套话，也不要按行把单元格数字再念一遍；把整体适用范围与局限统一收束在 limitation 小节，'
-                    + '不要在每个实验段尾机械加免责句。')
+                    + '不要在每个实验段尾机械加免责句。同一原表（相同 `sourceTableOrdinal`）不得重复展示相同完整表或相同行列子集，'
+                    + '严禁把同一张实验或消融表在全文贴两次；使用 `selection` 时，`sourceRows[0]` 必须是包含具体指标列名的真实表头行，'
+                    + '严禁选取仅含分区标题且其余列为空的分组分隔行（如 `| STEM/Puzzle |  |  |  |`）；'
+                    + '表格必须放入与内容匹配的对应小节（主结果表放 `result`，消融表放 `ablation`，不得把实验表误塞进 `method_overview`）。')
                 .replace('最多 4 张，也可以一张都不选。',
                     '最多 4 张。本次确实收到像素、又存在可装配的原图时至少要声明一张；'
                     + '只有完全没有可装配原图时才允许 `figurePlacements` 为空，空数组会被代码直接拒绝。')
+                .replace('`focusPoints` 给 2–4 个针对这张图的观察动作，段落长度按本次代码要求。',
+                    '`focusPoints` 可输出 `[]` 或 2–4 个针对这张图的简短观察要点（每项 6–120 字），段落长度按本次代码要求。')
                 .replace('先看图例，确认对象、条件和时间范围，分清分布曲线和单样本标记；颜色一样不代表对象一样。',
                     '先看图例，确认对象、条件和时间范围，分清分布曲线和单样本标记；颜色一样不代表对象一样，'
                     + '不要把代表测试条件的图例颜色同方法行名混为一谈。描述柱体实心或斜纹填充（如 p <= 0.05 实心与 p > 0.05 斜纹）'
@@ -84,7 +97,8 @@ test('current templates preserve original text apart from the declared changes; 
                     '图前自然交代与当前论证相关的关键结构或实验现象，图后直接结合图中具体坐标轴、图例、模块连接或曲线趋势解释它怎样支撑方法机制或实验判断，'
                     + '严禁写「这张图确实可见」「该图确实可见」「从像素可见」这类生硬套话。')
                 .replace('叙述数量用阿拉伯数字，数字和拉丁单位之间留一个空格。',
-                    '实测指标、样本规模和超参数用阿拉伯数字，数字和拉丁单位之间留一个空格；数学与统计专名及自然中文序数、逐指词必须保持纯正汉字'
+                    '实测指标、样本规模和超参数用阿拉伯数字，中文与英文或阿拉伯数字之间留一个半角空格（例如“185 个样本”“35B-A3B”“84.0%”），'
+                    + '遇到混合专家总参/激活参简写（如 35B-A3B）须按原文定义准确展开；数学与统计专名及自然中文序数、逐指词必须保持纯正汉字'
                     + '（如最小二乘、一阶/二阶、二维频谱、一对一/一对多、置信区间半宽、第一个/第二步/第三阶段、每一帧/每一维/每一步，'
                     + '绝不写成“最小 2 乘”“2 阶”“1/2 宽”“第 3 个”或“每 1 帧”）。')
                 .replace('  "conceptBridges": [\n    {\n      "terms": ["术语 A", "术语 B"],\n      "sectionKind": "component",\n'
@@ -95,7 +109,7 @@ test('current templates preserve original text apart from the declared changes; 
                     '      "kind": "problem",\n      "heading": "问题本质：流式音频检索在短窗口下如何兼顾语义与声学对齐",')
                 .replace('`sections` 必须包含 12–18 个小节，起草时建议安排 14–16 节。输出 JSON 前实际数一次数组项数；'
                     + '少于 12 节或超过 18 节都不能输出。',
-                    '`sections` 的节数以本次代码要求为准（见 `{mechanicalContract}`，允许 5–9 节，推荐 5–7 节）。先看这篇论文实际有哪些阶段值得展开：'
+                    '`sections` 的节数以本次代码要求为准（见上方「本次代码检查的数量和长度要求」，允许 5–9 节，推荐 5–7 节）。先看这篇论文实际有哪些阶段值得展开：'
                     + '只有一个方法、一组结果、没有训练过程的论文，就不要为了凑节数把同一个组件拆成两节，也不要为每张表单独开一节。')
                 .replace('总数不得超过 18。同类组件、结果读数或消融条件过多时，把它们合并为同一小节中的自然段；',
                     '总数不得超过 9。同类组件、结果读数或消融条件过多时，把它们合并为同一小节中的自然段（或用 `####` 四级小标题拆步）；')
@@ -133,9 +147,15 @@ test('current templates preserve original text apart from the declared changes; 
         } else if (['prompts/current/api-reader-fact-local.md', 'prompts/current/api-reader-concept-terms.md'].includes(current)) {
             const fact = current.endsWith('/api-reader-fact-local.md');
             const header = require('../scripts/lib/protocol-codec').record(fact ? 'reader-fact-sentence-patch' : 'reader-concept-term-patch');
-            const expected = originalBytes.toString().replace('{"version":1,"draftSha256"',
+            let expected = originalBytes.toString().replace('{"version":1,"draftSha256"',
                 JSON.stringify(header).slice(0, -1) + ',"draftSha256"')
                 .replace('# Reader 已核验事实原句修订 v3', '# 已核验事实的原句修订');
+            if (fact) {
+                expected = expected.replace(
+                    '不能返回完整正文、解释标题、Markdown标题、terms标题、换行、图表公式标记、表格或链接。',
+                    '不能返回完整正文、解释标题、Markdown标题、terms标题、换行、图表公式标记、表格、链接、行内反引号 ` 或加粗标记 ** / __。'
+                );
+            }
             assert.notEqual(expected, originalBytes.toString());
             assert.equal(actual.toString(), expected);
         } else if (current === 'prompts/current/api-reader-repair.md') {
@@ -143,12 +163,14 @@ test('current templates preserve original text apart from the declared changes; 
             const expected = originalBytes.toString()
                 .replace('用平和朴实的中文说明具体对象和处理过程，不写宣传语，不生硬直译。',
                     '用平和朴实的中文说明具体对象和处理过程，不写宣传语，不生硬直译（如把 nuisance parameter 译成“讨厌参数”，应译为“干扰参数”或“无关参数”），'
-                    + '严禁在中文句内夹杂裸英文普通虚词或动词散词（如 alone、over、abstain、noisy、without 等），'
+                    + '严禁在中文句内夹杂裸英文普通虚词、形容词或动词散词（如 alone、over、abstain、noisy、without、embodied、grounding、scaling、alignment 等），'
+                    + '严禁使用“记住这个顺序”“务必记住”“不要忘记”等说教式口吻，'
                     + '严禁使用“这张图确实可见”“从像素可见”“比较问题是：”“这张表支撑的判断是”“本表数值与单位依据论文 PDF”等二代校验套话。'
+                    + '中文与英文或阿拉伯数字之间留一个半角空格（例如“185 个样本”“35B-A3B”“84.0%”），'
                     + '数学与统计专名及自然中文序数、逐指词保留纯正汉字（如最小二乘、一阶/二阶、二维频谱、一对一、置信区间半宽、第一个/第二步、每一帧/每一维，'
                     + '绝不写成“最小 2 乘”“1/2 宽”“第 3 个”或“每 1 帧”）。')
                 .replace('公式中的关键运算起什么作用，比较条件和指标含义是什么。以当前错误和原文证据为限，不补造维度、梯度、数值、消融或因果，不改无关正确解释。',
-                    '公式中的关键运算起什么物理或统计作用及极端行为（严禁顺着符号硬念文字绕口令，行内数学用规范 \\(...\\)），比较条件和指标含义是什么。'
+                    '公式中的关键运算用三层讲透物理/几何直觉、极端取值行为与下游去向（严禁顺着符号硬念文字绕口令，行内数学用规范 \\(...\\)），比较条件和指标含义是什么。'
                     + '以当前错误和原文证据为限，不补造维度、梯度、数值、消融或因果，不硬塞“建议做网格搜索”，不改无关正确解释。')
                 .replace('正文或解释目标包含多个自然段时，每段说明一个问题，段间留一行空白，JSON 字符串用合法 \\n\\n 转义。'
                     + '转到新步骤或不同证据再分段，不机械重复句首和总结。术语叶子、原句等窄目标不得借此扩写成段落或越过授权；'
@@ -157,6 +179,10 @@ test('current templates preserve original text apart from the declared changes; 
                     + '保持 200–400 汉字的连贯自然段，段间留一行空白，JSON 字符串用合法 \\n\\n 转义。转到新步骤或不同证据再分段，'
                     + '不要一遇分号或每两三句就碎切，不机械重复句首和段尾免责句。术语叶子、原句等窄目标不得借此扩写成段落或越过授权；'
                     + '任何标题不得包含“图 1/Figure 1/表 1/Table 1”编号；章节、表格、公式和图片的数量及位置只按本轮明确操作协议修改。')
+                .replace('按原表真实列数呈现，不为固定宽度补解释列。',
+                    '按原表真实列数呈现，不为固定宽度补解释列；同一原表（相同 `sourceTableOrdinal`）不得重复展示相同完整表或相同行列子集，'
+                    + '使用 `selection` 时 `sourceRows[0]` 须为含具体指标列名的真实表头行（严禁选取仅含分区标题的空列分隔行），'
+                    + '表后评述须提炼跨行规律与代价权衡而非逐行复述数字。')
                 .replace('只在已授权正文及绑定节点内按同一原表或完整连续结果句恢复语义行列，缺证据时保留失败，不补造对应关系。',
                     '只在已授权正文及绑定节点内按同一原表或完整连续结果句恢复语义行列，缺证据时保留失败，不补造对应关系。'
                     + '构造或修订 source_quotes 表时，列头单位（如 %、s、GiB）须在对应来源行有逐字单位证据；'
@@ -185,16 +211,33 @@ test('current templates preserve original text apart from the declared changes; 
             assert.equal(actual.toString(), originalBytes.toString()
                 .replace('正文使用完整句子和自然段落，句子长短可以变化。核心摘要解释问题、方法、主要结果及限制，方法解释组件与数据流，创新说明与已有方法的差异。实验展开比较，细节说明复现条件，局限集中讨论尚不能成立的结论。同一核心数字最多在摘要和实验各出现一次，不在其他章节换说法重复。',
                     '正文使用完整句子和自然段落，句子长短可以变化。核心摘要作为全景导读摘要完整交代问题瓶颈、方法架构、主基准对比与核心代价及适用边界，方法解释组件与数据流，创新说明与已有方法的差异。实验展开比较，细节说明复现条件，局限集中讨论尚不能成立的结论。核心实验数字主要集中在摘要与实验结果中，不在其他章节换说法反复堆砌。')
+                .replace('必要的正式名称、代码字段与缩写保持准确，中文与英文之间留空格。',
+                    '必要的正式名称、代码字段与缩写保持准确，中文与英文或阿拉伯数字之间留一个半角空格（例如“185 个样本”“35B-A3B”“84.0%”），数学专名与自然序数保留纯正汉字（如一阶、二维、第一步、每一帧）。遇到混合专家总参/激活参简写（如 35B-A3B）、采样率或帧率记号时须按原文定义准确展开，绝不曲解字母含义。')
                 .replace('正文写 6–9 句，汉字与中文标点合计 320–600 个，组成连续段落，说明任务的输入、输出和难点。解释 2–4 个方法步骤各自的职责，以及上一步输出怎样进入下一步，再交代相对已有方法的关键差异和实际意义。\n\n至少说明 1 个原文关键定量结果。在同一句中写清比较对象、评测设置或数据集、指标、数值与方向。不能用模型名、版本号、年份、参数量、样本量或训练超参数代替实验结果。原文确无可核对的定量结果时，原样写“原文未提供可核对的关键定量结果”。\n\n说明结论的适用范围、失败条件或尚未验证的范围，以及原文报告的训练、推理或部署成本。没有披露成本时，原样写“原文未披露训练、推理或部署成本”。这里只选最重要的 1–2 组关键结果；一组比较须保留双方数值、单位、精度和条件，必要的成本数值也要保留，不能为限制数字个数删去比较对象或开销。表格放在实验结果中，不重复整张表。',
-                    '撰写信息饱满、结构清晰的全景导读摘要，让读者只读一遍即可完整把握整篇论文。正文写 10–26 句，汉字与中文标点合计 700–1400 个（起草目标 850–1150 个），分成 3–4 个自然段，段落之间只用一个空行分隔，段内不拆行或列点。严禁在核心摘要内使用 `#`、`##`、`###` 等 Markdown 标题、独立编号粗体标题行（如 `1. **...**`）或水平分隔线；统一采用段首粗体引导词直接顶格开启以下 4 段式（或紧凑 3 段式）自然段落（段首不加 `-`、`*` 或 `1.` 等列表编号）：\n\n- `**问题与瓶颈：**` 说明具体任务的输入与输出信号规格，点明现有主流路线在物理、统计或架构上的真实失效症结，拒绝空泛套话“难以兼顾”。\n- `**核心思路与方法架构：**` 先用一句话点破核心洞察，再顺着信号或表征流自然讲清关键模块分工、码率/帧率/维度/模型规模、训练与冻结边界，以及为什么这样设计能够解决前述瓶颈。方法机制单句不超过 520 字，跨句自然衔接，不要写成生硬的“先…输出…送入…”流水账或连续堆砌“称为…”。\n- `**关键实验与核心代价：**` 给出主基准对最强可比基线的核心定量对比，写清评测数据集或设置、原文指标名称与方向、本文与基线的具体数值——允许在同一自然段内跨 1–3 句自然展开比较条件与多组关键指标，不必把所有要素硬塞进同一个长句；不能用模型名、版本号、年份、参数量、样本量或训练超参数代替实验结果（原文确无可核对的定量结果时，原样写“原文未提供可核对的关键定量结果”）。同时交代关键消融发现及付出的具体代价（如某子集词错率回升、参数开销、实时率 RTF 或推理时延）；若为纯理论、诊断或免训练评测论文，如实说明计算方式即可，无需机械背诵“原文未披露训练、推理或部署成本”。凡写出的实验与成本数值均须在原文有据可查，严格保持原文精度、正负号与百分号，绝不编造或四舍五入。\n- `**适用边界与深读导览：**` 点明结论成立的具体条件或尚未覆盖的场景，并用一句话指明读者若想深究哪部分公式推导、架构细节或消融分析可查阅下方长文对应章节。须用凝练概括语言独立撰写摘要，严禁从长文直接整段复制 80 字及以上的相同文字，也不在摘要中嵌入 Markdown 表格。'));
+                    '撰写信息饱满、结构清晰的全景导读摘要，让读者只读一遍即可完整把握整篇论文。正文写 10–26 句，汉字与中文标点合计 700–1400 个（起草目标 850–1150 个），分成 3–4 个自然段，段落之间只用一个空行分隔，段内不拆行或列点。严禁在核心摘要内使用 `#`、`##`、`###` 等 Markdown 标题、独立编号粗体标题行（如 `1. **...**`）或水平分隔线；统一采用段首粗体引导词直接顶格开启以下 4 段式（或紧凑 3 段式）自然段落（段首不加 `-`、`*` 或 `1.` 等列表编号）：\n\n- `**问题与瓶颈：**` 说明具体任务的输入与输出信号规格，直指现有主流路线在物理、统计或架构上的根本失效因果（如频谱混叠、长序列注意力开销、音色与内容耦合），拒绝空泛套话“难以兼顾”。\n- `**核心思路与方法架构：**` 先用一句话点破核心设计直觉，再沿一个具体输入样本的表征流自然讲清关键模块分工、码率/帧率/维度/模型规模、冻结与更新边界、离线或流式约束，以及这套机制为什么能直击前述根因。方法机制单句不超过 520 字，跨句自然衔接，不要写成生硬的“先…输出…送入…”流水账或连续堆砌“称为…”。\n- `**关键实验与核心代价：**` 给出主基准对最强可比基线的核心定量对比，写清评测数据集或设置、原文指标名称与方向、本文与基线的具体数值——允许在同一自然段内跨 1–3 句自然展开比较条件与多组关键指标，不必把所有要素硬塞进同一个长句；不能用模型名、版本号、年份、参数量、样本量或训练超参数代替实验结果（原文确无可核对的定量结果时，原样写“原文未提供可核对的关键定量结果”）。同时交代主导收益的关键消融发现及付出的最显著代价（如某子集指标回升、参数/显存开销、实时率 RTF 或推理时延）；若为纯理论、诊断或免训练评测论文，如实说明计算方式即可，无需机械背诵“原文未披露训练、推理或部署成本”。凡写出的实验与成本数值均须在原文有据可查，严格保持原文精度、正负号与百分号，绝不编造或四舍五入。\n- `**适用边界与深读导览：**` 点明结论成立的具体前提与尚未覆盖的失效或部署场景，并用一句话指明读者若想深究哪部分公式推导、核心机制或消融表可查阅下方长文对应章节。须用凝练概括语言独立撰写摘要，严禁从长文直接整段复制 80 字及以上的相同文字，也不在摘要中嵌入 Markdown 表格。')
+                .replace('共选择 3–5 个标签，至少包含一个任务和一个方法。',
+                    '共选择 3–5 个标签，至少包含一个任务和一个方法，其中任务标签（`facet=task`）最多 3 个。'));
         } else if (current === 'prompts/current/scoring-audit.md') {
             const header = require('../scripts/lib/scoring-record-format').currentEvidenceProfileHeader();
-            assert.equal(actual.toString(), originalBytes.toString().replace('    "version": 1,',
-                `    "contract": "${header.contract}",\n    "schemaFingerprint": "${header.schemaFingerprint}",`));
+            assert.equal(actual.toString(), originalBytes.toString()
+                .replace('    "version": 1,',
+                    `    "contract": "${header.contract}",\n    "schemaFingerprint": "${header.schemaFingerprint}",`)
+                .replace('其余类型沿用与审校阶段相同的证据要求。',
+                    '其余类型沿用与审校阶段相同的证据要求。各维分数应充分拉开区分度，不可对高质量工作无故压分：创新性（满分 2.0）突破性范式或核心洞察 1.8–2.0、明确架构/算法/系统创新 1.4–1.7、扎实渐进改进 1.0–1.3；技术严谨性（满分 1.5）公开推导与系统逻辑自洽且未见实质漏洞时应给 1.3–1.5，无漏洞不得无故压至 1.0–1.2；实验充分性（满分 1.5）覆盖强基线、关键消融或系统压力测试且公开评测扎实给 1.3–1.5；清晰度（满分 1.0）结构清晰、符号与图表易于核对给 0.8–1.0；影响力（满分 1.5）在核心音频或全模态音视频基准上刷新强基线或贡献重要公开模型、数据、工具给 1.2–1.5；工程/实践价值（满分 1.5）提供完整可复用训练/评测/复现管线、公开权重工具或实测延迟吞吐优化给 1.3–1.5，有清晰参考价值给 0.9–1.2。')
+                .replace('音频只是控制信号、附带模态或次要实验，而核心贡献属于视频、计算机视觉或自然语言处理等其他领域时，影响力通常不得超过 0.5。',
+                    '音频只是控制信号、附带模态或次要实验，而核心贡献属于视频、计算机视觉或自然语言处理等其他领域时，影响力通常不得超过 0.5。但全模态音视频基础模型若在原生音频理解、语音交互或音视频联合基准上系统评测并取得代表性成果，属于音频研究核心方向，应按真实领域影响正常评定（通常 1.0–1.5），不得因同时覆盖视觉或视频模态而机械压低至 0.5。')
+                .replace('`evidenceBoundary` 至少直接引用一个 `[证据编号]`，与 `evidenceIds` 一致。不能从“系统看起来完整”等叙述推断。方法、系统、模型、数据集或应用等实证论文的目标评测不能填 `not_applicable`。',
+                    '`evidenceBoundary` 至少 20 个字符且至少直接引用一个 `[证据编号]`，与 `evidenceIds`（1–12 个不重复账本 ID）一致。不能从“系统看起来完整”等叙述推断。方法、系统、模型、数据集或应用等实证论文的目标评测不能填 `not_applicable`；`multiComponentClaimed=true` 时 `ablationStatus` 不得填 `not_applicable`，`multiComponentClaimed=false` 时 `ablationStatus` 必须填 `not_applicable`。')
+                .replace('只有部分消融时最高 1.3；',
+                    '只有部分消融时方法研究等一般类型最高 1.3，系统技术报告或模型报告在公开/混合评测且完成公开泛化评测时最高 1.4；')
+                .replace('只声称有工程上的价值、没有测量结果或可复用的研究材料时，工程/实践价值最高 1.0。',
+                    '只声称有工程上的价值、没有测量结果或可复用的研究材料时，工程/实践价值最高 1.0。此外还有两条总分硬红线（超限会被代码直接拒绝）：`confidence` 不是“高”时总分不得超过 9.0；`multiComponentClaimed=true` 且 `ablationStatus=none` 且 `targetEvaluation=internal` 时总分不得超过 8.5。')
+                .replace('示例中的“具体理由”只是字段说明，不要复制到结果中。',
+                    '示例中的分数和“具体理由”仅为 JSON 字段格式示意，不是默认目标分值，不要锚定示例分数，也不要复制占位说明。'));
         } else if (current === 'prompts/current/core-summary-repair.md') {
             assert.equal(actual.toString(), originalBytes.toString()
                 .replace('摘要正文写 6–9 句，汉字与中文标点合计 320–600 个。起草时以 420–520 个中文字符为目标，给必要的结果、边界和成本留出篇幅；最终仍按 320–600 个要求检查。先按当前请求给出的实际字符数安排总篇幅。修复缺项时优先替换已有不完整或重复的说明，不把每个补充说明作为新句追加。保护已经正确的事实、比较对象、条件、指标、数字、单位、方向、边界和成本，可以在不改变这些信息的前提下压缩重复表达；若纠错反馈明确要求某句逐字保留，则该句必须原样保留。句子长短按论文内容安排，不套用固定句数分工或排比模板。用连贯的文字说明任务的输入、输出和实际难点，再解释方法怎样解决问题。方法说明包含 2–4 个步骤，写清各步的职责，以及前一步的输出怎样进入下一步。还要说明这个方法与已有方法的关键差异、这些差异意味着什么，不要只列组件名称。\n\n只修复“当前摘要问题”里指出的缺陷。没有被指出问题的量化结果、边界和成本事实及条件要保留，不增删数字或改变单位、方向。必要时可以合并重复的自然语言说明；明确要求逐字保留的句子不得重述、删改或合并。不要修改评分、标签、作者、方法、实验等其他章节，也不要复制整张表格。',
-                    '摘要正文写 10–26 句，汉字与中文标点合计 700–1400 个。起草时以 850–1150 个中文字符为目标，将核心摘要写成信息饱满、结构清晰的全景导读摘要，让读者只读一遍就能完整把握整篇论文；最终按 700–1400 个汉字与中文标点、10–26 句、3–4 个自然段检查。段落之间严格使用一个空行分隔，段内写成连贯散文，不拆行或列点。严禁在核心摘要内使用 `#`、`##`、`###` 等 Markdown 标题、独立编号标题行（如 `1. **...**`）或水平分隔线；统一使用段首粗体引导词直接顶格组织 4 段式（或紧凑 3 段式）自然段落（段首不加 `-`、`*` 或 `1.` 等列表编号）：\n\n1. `**问题与瓶颈：**` 交代具体任务输入与输出信号规格，指出现有主流路线在物理、统计或架构上的真实失效症结，拒绝空泛“难以兼顾”。\n2. `**核心思路与方法架构：**` 一句话点破核心洞察，再顺着信号或表征流讲清关键模块分工、码率/帧率/维度/模型规模、训练与冻结边界，以及为什么这样设计能解决瓶颈。方法机制单句不超过 520 字，允许跨句自然表达信号传递与相互作用，不必生硬堆砌“先…输出…送入…”或连写多个“称为…”。\n3. `**关键实验与核心代价：**` 给出主基准对最强可比基线的核心定量对比（含评测设置/数据集、原文指标名与方向、本文与基线具体数值），允许在同一自然段内跨 1–3 句自然展开比较条件与多组关键指标；同时交代关键消融发现与付出的具体代价（如指标回升、参数开销、实时率 RTF 等）。纯理论、诊断或免训练评测论文如实说明实际计算方式即可，不再强求机械背诵“原文未披露训练、推理或部署成本”。\n4. `**适用边界与深读导览：**` 点明结论成立条件或未覆盖场景，并用一句话指明读者若想深究哪部分公式推导、架构细节或消融分析可阅读下方长文对应部分。请用凝练概括语言撰写摘要，严禁从长文直接整段复制 80 字及以上的相同段落。\n\n修复缺项时优先替换已有不完整或重复的说明，不把每个补充说明机械附在末尾。保护已经正确的事实、比较对象、条件、指标、数字、单位、方向、边界和代价；若纠错反馈明确要求某句逐字保留，则该句必须原样保留。不要修改评分、标签、作者、方法、实验等其他章节，也不要复制整张表格。')
+                    '摘要正文写 10–26 句，汉字与中文标点合计 700–1400 个。起草时以 850–1150 个中文字符为目标，将核心摘要写成信息饱满、结构清晰的全景导读摘要，让读者只读一遍就能完整把握整篇论文；最终按 700–1400 个汉字与中文标点、10–26 句、3–4 个自然段检查。段落之间严格使用一个空行分隔，段内写成连贯散文，不拆行或列点。严禁在核心摘要内使用 `#`、`##`、`###` 等 Markdown 标题、独立编号标题行（如 `1. **...**`）或水平分隔线；统一使用段首粗体引导词直接顶格组织 4 段式（或紧凑 3 段式）自然段落（段首不加 `-`、`*` 或 `1.` 等列表编号）：\n\n1. `**问题与瓶颈：**` 交代具体任务输入与输出信号规格，直指现有主流路线在物理、统计或架构上的根本失效因果（如频谱混叠、长序列注意力开销、音色与内容耦合），拒绝空泛“难以兼顾”。\n2. `**核心思路与方法架构：**` 一句话点破核心设计直觉，再沿具体输入样本的表征流讲清关键模块分工、码率/帧率/维度/模型规模、冻结与更新边界、离线或流式约束，以及这套机制为什么能直击前述根因。方法机制单句不超过 520 字，允许跨句自然表达信号传递与相互作用，不必生硬堆砌“先…输出…送入…”或连写多个“称为…”。\n3. `**关键实验与核心代价：**` 给出主基准对最强可比基线的核心定量对比（含评测设置/数据集、原文指标名与方向、本文与基线具体数值），允许在同一自然段内跨 1–3 句自然展开比较条件与多组关键指标；同时交代主导收益的关键消融发现与付出的最显著代价（如指标回升、参数/显存开销、实时率 RTF 等）。纯理论、诊断或免训练评测论文如实说明实际计算方式即可，不再强求机械背诵“原文未披露训练、推理或部署成本”。\n4. `**适用边界与深读导览：**` 点明结论成立前提与未覆盖的失效或部署场景，并用一句话指明读者若想深究哪部分公式推导、核心机制或消融表可阅读下方长文对应部分。请用凝练概括语言撰写摘要，严禁从长文直接整段复制 80 字及以上的相同段落。中文与英文或阿拉伯数字之间留一个半角空格（例如“185 个样本”“35B-A3B”“84.0%”），数学专名与自然序数保留纯正汉字（如一阶、二维、第一步、每一帧），遇到混合专家总参/激活参简写（如 35B-A3B）须按原文定义准确展开，绝不曲解字母含义。\n\n修复缺项时优先替换已有不完整或重复的说明，不把每个补充说明机械附在末尾。保护已经正确的事实、比较对象、条件、指标、数字、单位、方向、边界和代价；若纠错反馈明确要求某句逐字保留，则该句必须原样保留。不要修改评分、标签、作者、方法、实验等其他章节，也不要复制整张表格。')
                 .replace('原文提供了关键定量结果时，至少说明 1 个。当前程序按单句检查比较对象、评测设置或数据集、指标、数值与方向，因此这些信息仍须在同一句中明确。句首和要素顺序可以按内容安排，不必套用固定句式。写出原文指标名称，不用“分”“更高”或“多项指标”代替指标。',
                     '原文提供了关键定量结果时，必须给出主基准对最强可比基线的核心定量对比。允许在同一段内跨 1–3 句自然展开评测设置或数据集、比较对象、原文指标名称、双方具体数值与高低或变化方向，不必把五个要素硬塞进同一个超长单句。写出原文指标名称，不用“分”“更高”或“多项指标”代替指标。')
                 .replace('比较通常采用本文方法与基线。', '比较通常采用本文方法与最强可比基线。')
@@ -204,7 +247,17 @@ test('current templates preserve original text apart from the declared changes; 
         } else if (current === 'prompts/current/gap-fill.md') {
             assert.equal(actual.toString(), originalBytes.toString()
                 .replace('未提供的信息写“未提及”或“未说明”，不按常见做法补造。',
-                    '未提供的信息写“未提及”或“未说明”，不按常见做法补造。核心摘要须保持全景导读摘要规格（10–26 句，汉字与中文标点 700–1400 个，目标 850–1150 个，3–4 个以段首粗体引导词开头的自然段，段间空行分隔，禁止 `#` 标题或独立编号行），完整覆盖问题与瓶颈、核心思路与方法架构、主基准对比与核心代价（免训练或理论工作如实说明计算方式，无需套用固定未披露套话）以及适用边界与深读导览，不要把长摘要压缩回短单段；所有摘要数值须与原文精度和百分号严格一致。'));
+                    '未提供的信息写“未提及”或“未说明”，不按常见做法补造。核心摘要须保持全景导读摘要规格（10–26 句，汉字与中文标点 700–1400 个，目标 850–1150 个，3–4 个以段首粗体引导词开头的自然段，段间空行分隔，禁止 `#` 标题或独立编号行），完整覆盖问题与瓶颈、核心思路与方法架构、主基准对比与核心代价（免训练或理论工作如实说明计算方式，无需套用固定未披露套话）以及适用边界与深读导览，不要把长摘要压缩回短单段；所有摘要数值须与原文精度和百分号严格一致。')
+                .replace('主任务来自 `facet=task`，选择最具体的适用概念；',
+                    '主任务来自 `facet=task`，选择最具体的适用概念，且任务标签（`facet=task`）总数最多 3 个；'));
+        } else if (current === 'prompts/current/tag-repair.md') {
+            assert.equal(actual.toString(), originalBytes.toString()
+                .replace('其中必须有上述主任务和主方法。',
+                    '其中必须有上述主任务和主方法，且 `task.*` 任务标签最多 3 个。'));
+        } else if (current === 'prompts/current/method-fill.md') {
+            assert.equal(actual.toString(), originalBytes.toString()
+                .replace('正文不少于 600 个中文字符。',
+                    '正文不少于 600 个中文字符，且至少分成 3 个由空行分隔的实质自然段（每段超过 20 个字符）。'));
         } else assert.deepEqual(actual, originalBytes, current);
         assert.deepEqual(evidence.readPromptEvidenceBytes(original, { expectedSha256: sha(originalBytes) }), originalBytes);
         assert.equal(fs.existsSync(path.join(root, original)), false);
@@ -273,6 +326,71 @@ test('pre-edit Reader prompt Git blobs remain resolvable by template and whole-f
             blobOid: '689c351b7641287148c3cf8bb8d46218abc1eb46',
             wholeSha256: '0037cfe5a2efa88683fcc6d2b1b599d680874b2c8d5fcde1acfec25ce2217e04',
             templateSha256: 'd00b3878979ae2849618cecf4bb8b519fae5292bb154a90281dfac726e3b0598'
+        },
+        {
+            stage: 'apiReaderArticle',
+            relativePath: 'prompts/current/api-reader-article.md',
+            blobOid: '8b1135b3f5847ee384616b9c3e78b29f88b67a92',
+            wholeSha256: '33c0660ab422ff0111eaaf7104bcb2aec87fb36ee1d5d2d7193b45ae43b7a2da',
+            templateSha256: 'b97a038f6eb6317b8b25df48c87620acd89f82239b1e84b6d805544bd2f1fb2e'
+        },
+        {
+            stage: 'scoringAudit',
+            relativePath: 'prompts/current/scoring-audit.md',
+            blobOid: 'e53bb4aca7a140c2b87af1e975ad3b2588375db8',
+            wholeSha256: '4240010a4ebe63385bae91e9c35d8410d4feff349d24bcb9d379a76e90fc6089',
+            templateSha256: '3d7d425186d96966d41a6169f3a9daa3d53f1579d34867230c2961d05f82cad5'
+        },
+        {
+            stage: 'primaryAnalysis',
+            relativePath: 'prompts/current/deep-analysis.md',
+            blobOid: '63c2abeddb81e12132d59c39d733a4bea587c210',
+            wholeSha256: 'fbe077aba8cd63e24341f0951941b95187400b053a493bff6cfb446d76c2b356',
+            templateSha256: '53ad7ae690327a4efdcd909a843e1a0a6577482d4ecc312aaaf656fbb65f198c'
+        },
+        {
+            stage: 'revision',
+            relativePath: 'prompts/current/gap-fill.md',
+            blobOid: '5fc9f9d395e61ed49fca515b6f81579ad3d6ca72',
+            wholeSha256: 'a123550a5999e3be25c7622643c5e4ca07eb9ab5d0efbe3477e914afe3dce4b7',
+            templateSha256: '7570b1b356516ef6ffb9e92bf42b331ff1542b0e987a2b4fb2278f7e72665f11'
+        },
+        {
+            stage: 'tagSelection',
+            relativePath: 'prompts/current/tag-repair.md',
+            expectedStagePath: 'prompts/tag-repair-v3.md',
+            blobOid: '35fb7f276c817d037abd60895801c5db0bfa0164',
+            wholeSha256: '6edc21d29a772efb33dbe078416bdf1d7ad7e5f7b59f3f97cf99aeacbd56c462',
+            templateSha256: '9bd48be61c64914f1d2aba0800a55e526388652afb4f569e4b787786cbd707b8'
+        },
+        {
+            stage: 'methodRepair',
+            relativePath: 'prompts/current/method-fill.md',
+            expectedStagePath: 'prompts/method-fill-v3.md',
+            blobOid: '3eac82836a6292d161f6b5a3d099ec778604856f',
+            wholeSha256: '1fb72028192964aa827face9971bb2a5b42ea6d68b8c976b2721fc62faeae70f',
+            templateSha256: '9945188fdef3929ca1b48a4c3c7099e916f93c266442b20510f37608d4113a8b'
+        },
+        {
+            stage: null,
+            relativePath: 'prompts/current/api-reader-fact-local.md',
+            blobOid: 'f400057c762b28cc7f57e91c7cd1ff1761cf702a',
+            wholeSha256: 'b92f33baf9fce1816a41fab3d071e73e1167f692827509a98d69e7ce3fdc771b',
+            templateSha256: '032dc4df69177b237300ffd228aa82c79ee66c43aa977dfb48f9512d363eacb6'
+        },
+        {
+            stage: 'coreSummaryRepair',
+            relativePath: 'prompts/current/core-summary-repair.md',
+            blobOid: 'bade528d6286db2f59ba0c6c6f9b2b31b4772eea',
+            wholeSha256: 'bc714f37ec63f4c4e44731d80f612f8d1cc280118c014ba8754c2c80d37b26b7',
+            templateSha256: 'eb356033d5a26b13ac30613541d5858e7d50f666469583c170b0ce35cf8312ed'
+        },
+        {
+            stage: 'apiReaderRepair',
+            relativePath: 'prompts/current/api-reader-repair.md',
+            blobOid: 'da378bfb2ce8e9d3d5a2f770dafabcdfa1f9a3d4',
+            wholeSha256: '8b4795e31bd2835c3e988ceb4b85040e5af0d11efafdcc36db28c9a00e7d4655',
+            templateSha256: '43b810df3b1e51bc79c94de3b17ae93358bd2b479a882b7f8bf3e0e101304173'
         }
     ];
     for (const item of preEditCases) {
@@ -280,19 +398,25 @@ test('pre-edit Reader prompt Git blobs remain resolvable by template and whole-f
         assert.equal(sha(expectedBytes), item.wholeSha256);
         assert.equal(history.promptTemplateSha256(expectedBytes.toString('utf8')), item.templateSha256);
 
-        const stageMatch = evidence.declaredStagePromptTemplateEvidence(item.stage, item.templateSha256);
-        assert.ok(stageMatch, `${item.stage} pre-edit template SHA256 must resolve`);
-        assert.equal(stageMatch.path, item.relativePath);
-        assert.equal(stageMatch.fileSha256, item.wholeSha256);
-        assert.equal(stageMatch.templateSha256, item.templateSha256);
-        assert.deepEqual(stageMatch.bytes, expectedBytes);
+        if (item.stage) {
+            const stageMatch = evidence.declaredStagePromptTemplateEvidence(item.stage, item.templateSha256);
+            assert.ok(stageMatch, `${item.stage} pre-edit template SHA256 must resolve`);
+            assert.equal(stageMatch.path, item.expectedStagePath || item.relativePath);
+            assert.equal(stageMatch.fileSha256, item.wholeSha256);
+            assert.equal(stageMatch.templateSha256, item.templateSha256);
+            assert.deepEqual(stageMatch.bytes, expectedBytes);
+            assert.deepEqual(
+                history.promptBytesForSha256(item.stage, item.wholeSha256),
+                expectedBytes
+            );
+        }
+        const tplMatch = evidence.declaredPromptTemplateEvidence(item.relativePath, item.templateSha256);
+        assert.ok(tplMatch, `${item.relativePath} pre-edit template SHA256 must resolve`);
+        assert.equal(tplMatch.fileSha256, item.wholeSha256);
+        assert.deepEqual(tplMatch.bytes, expectedBytes);
 
         assert.deepEqual(
             evidence.readDeclaredPromptEvidenceBytes(item.relativePath, item.wholeSha256),
-            expectedBytes
-        );
-        assert.deepEqual(
-            history.promptBytesForSha256(item.stage, item.wholeSha256),
             expectedBytes
         );
         assert.deepEqual(

@@ -182,14 +182,14 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
         if (evidenceProfile.ablationStatus === 'missing') {
             evidenceProfile.ablationStatus = 'none';
         }
-        if (!evidenceProfile.multiComponentClaimed
-            && evidenceProfile.ablationStatus !== 'not_applicable') {
-            evidenceProfile.ablationStatus = 'not_applicable';
-        }
         if (!['direct', 'partial', 'none', 'not_applicable'].includes(evidenceProfile.ablationStatus)) {
             throw new Error(
                 `评分证据画像 ablationStatus 非法: ${JSON.stringify(evidenceProfile.ablationStatus)}`
             );
+        }
+        if (!evidenceProfile.multiComponentClaimed
+            && evidenceProfile.ablationStatus !== 'not_applicable') {
+            evidenceProfile.ablationStatus = 'not_applicable';
         }
         if (!['public', 'internal', 'mixed', 'not_applicable'].includes(evidenceProfile.targetEvaluation)) {
             throw new Error('评分证据画像 targetEvaluation 非法');
@@ -205,10 +205,6 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
         if (evidenceProfile.multiComponentClaimed
             && evidenceProfile.ablationStatus === 'not_applicable') {
             throw new Error('存在多组件因果主张时 ablationStatus 不得为 not_applicable');
-        }
-        if (!evidenceProfile.multiComponentClaimed
-            && evidenceProfile.ablationStatus !== 'not_applicable') {
-            throw new Error('不存在多组件因果主张时 ablationStatus 必须为 not_applicable');
         }
         if (evidenceProfile.targetEvaluation === 'not_applicable'
             && !['理论研究', '综述'].includes(documentType)) {
@@ -305,7 +301,11 @@ function applyScoringEvidenceCaps(audit) {
         cap('experimentalSufficiency', 1.2, 'multi_component_without_direct_ablation', '多组件的因果贡献缺少直接消融支持');
     }
     if (profile.multiComponentClaimed && profile.ablationStatus === 'partial') {
-        cap('experimentalSufficiency', 1.3, 'multi_component_with_partial_ablation', '多组件的因果贡献只有部分消融支持');
+        const isReportWithPublicGen = ['模型报告', '系统技术报告'].includes(updated.documentType)
+            && ['public', 'mixed'].includes(profile.targetEvaluation)
+            && profile.publicGeneralizationEvaluated === true;
+        const partialCap = isReportWithPublicGen ? 1.4 : 1.3;
+        cap('experimentalSufficiency', partialCap, 'multi_component_with_partial_ablation', '多组件的因果贡献只有部分消融支持');
     }
     if (profile.targetEvaluation === 'internal' && !profile.sampleScaleReported) {
         cap('experimentalSufficiency', 1.2, 'internal_evaluation_without_sample_scale', '内部评测未报告样本规模');
@@ -344,17 +344,210 @@ function sourceReleasePromise(sourceEvidence, identity) {
     const source = String(sourceEvidence || '');
     if (!source || !identity || crypto.createHash('sha256').update(source).digest('hex')
         !== identity.sourceTextSha256) return null;
-    const pattern = /\b(?:We will (?:instead )?(?:release|provide)|The accompanying repository will (?:release|provide))\b[^.!?。]{1,600}[.!?。]?/gi;
-    for (const match of source.matchAll(pattern)) {
+    const abbrevLookbehind = '(?:(?<=\\b(?:e\\.g|i\\.e|vs|Secs?|Sects?|Figs?|Tabs?|Eqs?|Apps?|Nos?|Dr|Prof|Vol|cf|incl|approx|Refs?|Ch|Chaps?|Suppl?s?|Algs?))\\.|(?<=\\b(?:etc|al))\\.(?!\\s+[A-Z]))';
+    const nonEndChar = `(?:[^.!?。]|\\.(?=\\d|[a-z])|${abbrevLookbehind})`;
+    const nonEndSameLine = `(?:[^.!?。\\n]|\\.(?=\\d|[a-z])|${abbrevLookbehind})`;
+    const nonEndSameLineNoSemi = `(?:[^.!?。;\\n]|\\.(?=\\d|[a-z])|${abbrevLookbehind})`;
+    const nonArtifactAdj = '(?:(?:qualitative|quantitative|detailed|full|complete|final|summary|ablation|empirical|experimental|additional|supplementary|audio|visual|raw|preliminary|comprehensive|per-utterance|end-to-end|listening|speech|music|human|public|generated|synthetic|inference|training|demonstration|showcase|diagnostic|test|validation|annotation|prompt|labeling|labelling)\\s+){0,3}';
+    const nonArtifactEvalGuard = 'evaluations?(?!\\s+(?:code|scripts?|suite|pipeline)(?!\\s+(?:results?|details?|snippets?|listings?|outputs?|logs?|curves?|reports?|metrics?|scores?|tables?|figures?|examples?|statistics?|overviews?|descriptions?|discussions?|summar(?:y|ies)|analys(?:is|es)|comparisons?|protocols?|documentation)\\b)\\b)';
+    const nonArtifactHead = `(?!(?:[’']s|[’'])?\\s+${nonArtifactAdj}(?:architectures?|designs?|details?|statistics?|setups?|settings?|formulations?|overviews?|analys(?:is|es)|descriptions?|discussions?|summar(?:y|ies)|${nonArtifactEvalGuard}|predictions?|outputs?|results?|performance|behaviors?|comparisons?|examples?|hyperparameters?|splits?|specifications?|configurations?|scores?|metrics?|tasks?|demos?|samples?|clips?|figures?|tables?|diagrams?|reports?|papers?|leaderboards?|snippets?|listings?|documentation|datasheets?|cards?|stud(?:y|ies)|prompts?|templates?|guidelines?|recordings?|transcripts?|visualizations?|ablations?|breakdowns?|logs?|curves?|protocols?|(?:training|inference|construction|collection)\\s+(?:details?|statistics?|setups?|settings?|protocols?|costs?|latenc(?:y|ies)|curves?|logs?))\\b)`;
+    const nonCompoundHyphen = '(?![-–][A-Za-z])';
+    const noPrefixHyphen = '(?<![A-Za-z][-–])';
+    const passiveSubject = `(?:${noPrefixHyphen}source[- ]code${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}code(?:s|[-–]?base)?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}implementation${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}repo(?:sitory)?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}models?(?:[’']s|[’'])?[\\s-]weights?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}models?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}weights?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}checkpoints?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}datasets?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}corpus${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}corpora${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}benchmarks?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}annotations?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}scripts?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}toolkits?${nonCompoundHyphen}${nonArtifactHead}|evaluation\\s+(?:code|scripts?|suite|pipeline)${nonCompoundHyphen}${nonArtifactHead}|reproduction\\s+(?:code|scripts?|pipeline)${nonCompoundHyphen}${nonArtifactHead})`;
+    const activePattern = new RegExp(`\\b(?:(?:Upon\\s+(?:acceptance|publication),\\s+)?We\\s+(?:will|plan\\s+to|intend\\s+to)\\s+(?:instead\\s+|publicly\\s+|openly\\s+)?(?:release|provide|open[- ]source|publish|make\\s+(?:publicly\\s+|openly\\s+)?available)|The\\s+accompanying\\s+repository\\s+will\\s+(?:release|provide))\\b${nonEndChar}{1,600}[.!?。]?`, 'gi');
+    const passivePattern = new RegExp(`\\b(?:(?:Our|The|All)\\s+)?(?:(?:all|full|complete|trained|pre-?trained|training|evaluation|eval|inference|source|reproduction|official|public|accompanying|entire|proposed|curated|annotated|supporting)\\s+){0,3}${passiveSubject}\\b${nonEndSameLineNoSemi}{0,220}\\bwill\\s+be\\s+(?:publicly\\s+|openly\\s+)?(?:released|made\\s+(?:publicly\\s+|openly\\s+)?available|open[- ]sourced)\\b${nonEndChar}{0,320}[.!?。]?`, 'gi');
+    const passivePredRe = /\bwill\s+be\s+(?:publicly\s+|openly\s+)?(?:released|made\s+(?:publicly\s+|openly\s+)?available|open[- ]sourced)\b/gi;
+    const passiveSubjectRe = new RegExp(`\\b(${passiveSubject})\\b`, 'gi');
+    const finiteVerbOrModalRe = /\b(?:is|are|was|were|has|have|had|can|could|may|might|should|must|outperforms?|outperformed|achieves?|achieved|attains?|attained|reaches?|reached|improves?|improved|uses?|evaluates?|trains?|shows?|showed|demonstrates?|demonstrated|produces?|contains?|works?|worked|runs?|ran|requires?|supports?|generates?|yields?|yielded|learns?|covers?|excels?|excelled|synthesizes?|enables?|scales?|scaled|handles?|predicts?|reduces?|operates?|performs?|processes?|captures?|estimates?|extracts?|decodes?|encodes?|beats?|surpasses?|surpassed|matches?|solves?|eliminates?|mitigates?|avoids?|preserves?|retains?|combines?|integrates?|leverages?|utilizes?|adopts?|employs?|incorporates?|introduces?|presents?|proposes?|builds?|extends?|expands?|includes?|consists?|comprises?|provides?|offers?|delivers?|targets?|addresses?|tackles?|focuses?|relies?|depends?|benefits?|differs?|varies?|remains?|becomes?|allows?|facilitates?|accelerates?|simplifies?|stabilizes?|generalizes?|generalized|ranks?|ranked|converges?|converged|scores?|scored|exhibits?|exhibited|suffers?|suffered|degrades?|degraded|fails?|failed|reconstructs?|reconstructed|will\s+be\s+(?:evaluated|tested|trained|used|applied|compared|discussed|described|presented|reported|analyzed|shown))\b/i;
+    const relativeBodyBadStartRe = /^(?:as|in|on|at|for|with|upon|after|before|once|when|if|until|soon|very|also|only|just|still|already|later|eventually|currently|although|though|because|since|unless|whereas|while|provided|assuming|even)\b/i;
+    const reportingVerbPat = '(?:show[ns]?|showed|demonstrat(?:e[sd]?)|present(?:s|ed)?|propos(?:e[sd]?)|claim(?:s|ed)?|stat(?:e[sd]?)|say[s]?|said|mention(?:s|ed)?|report(?:s|ed)?|confirm(?:s|ed)?|promis(?:e[sd]?)|indicat(?:e[sd]?)|suggest(?:s|ed)?|explain(?:s|ed)?|describ(?:e[sd]?)|argu(?:e[sd]?)|assert(?:s|ed)?|believ(?:e[sd]?)|expect(?:s|ed)?|hop(?:e[sd]?)|plan(?:s|ned)?|intend(?:s|ed)?|not(?:e[sd]?)|remark(?:s|ed)?|point(?:s|ed)?\\s+out|clarif(?:y|ies|ied)|emphasiz(?:e[sd]?)|highlight(?:s|ed)?)';
+    const reportingLocPat = '(?:(?:in|on|at)\\s+(?:(?:the\\s+)?(?:appendix|supplement(?:ary)?|paper|section|manuscript|text)|(?:Section|Sec\\.?|Sect\\.?|Appendix|App\\.?|Table|Tab\\.?|Figure|Fig\\.?|Part|Chapter)\\s+[A-Za-z0-9.]{1,16})|above|below|herein|earlier|later)';
+    const parentheticalReportingFrameRe = new RegExp(
+        `^(?:(?:the|our|this)\\s+(?:paper|authors?|work|study|manuscript|section|appendix)|we|they)(?:\\s+${reportingLocPat})?\\s+(?:(?:has|have|had|can|could|may|might|will|would|should|also|already|explicitly|further|briefly|clearly|specifically|recently|previously|earlier|here|later|now)\\s+){0,3}${reportingVerbPat}(?:\\s+${reportingLocPat})?\\s*$`,
+        'i'
+    );
+    const relativeFiniteVerbMorphRe = /^(?:(?:[a-z]{3,}ly|we|it|they|this|these|our\s+[a-z-]+|the\s+[a-z-]+)\s+)?(?!as\b|thus\b|plus\b|this\b|ours\b|hers\b|his\b|its\b|yes\b|less\b|across\b|towards\b|afterwards\b|forwards\b|backwards\b|upwards\b|downwards\b|besides\b|always\b|sometimes\b|nowadays\b|otherwise\b|likewise\b|anyways\b|whereas\b|unless\b|perhaps\b|details\b|results\b|weights\b|models\b|datasets\b|benchmarks\b|samples\b|demos\b|examples\b|metrics\b|scores\b|figures\b|tables\b|scripts\b|checkpoints\b|annotations\b|authors\b|papers\b|studies\b|tasks\b|languages\b|domains\b|hours\b|clips\b|outputs\b|predictions\b|based\b|related\b|shown\b|given\b|notes?\b|noted\b|remarks?\b|remarked\b|clarifies\b|clarified\b|emphasizes\b|emphasized\b|highlights\b|highlighted\b|claims?\b|claimed\b|states?\b|stated\b|says?\b|said\b|mentions?\b|mentioned\b|reports?\b|reported\b|confirms?\b|confirmed\b|promises?\b|promised\b|indicates?\b|indicated\b|suggests?\b|suggested\b|explains?\b|explained\b|describes?\b|described\b|argues?\b|argued\b|asserts?\b|asserted\b|believes?\b|believed\b|expects?\b|expected\b|hopes?\b|hoped\b|plans?\b|planned\b|intends?\b|intended\b)[a-z]{3,}(?:s|ed)\b/i;
+    const hasRelativeFiniteVerb = body => {
+        const b = String(body || '')
+            .replace(/,\s*as\s+(?:(?:is|was|we|they|(?:the|our|this)\s+(?:paper|authors?|work|study))\s+)?(?:show[ns]?|showed|describ(?:e[sd]?)|detail(?:s|ed)?|discuss(?:es|ed)?|not(?:e[sd]?)|report(?:s|ed)?|illustrat(?:e[sd]?)|summariz(?:e[sd]?)|outlin(?:e[sd]?)|present(?:s|ed)?|mention(?:s|ed)?|stat(?:e[sd]?)|claim(?:s|ed)?)\b[^,]{0,80},/gi, ' ')
+            .replace(/,\s*(?:in|on|at|see|cf\.?)\s+(?:Section|Sec\.?|Sect\.?|Appendix|App\.?|Table|Tab\.?|Figure|Fig\.?|Part|Chapter)\s+[A-Za-z0-9.]{1,16}\s*,/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!b || relativeBodyBadStartRe.test(b) || parentheticalReportingFrameRe.test(b)) return false;
+        return finiteVerbOrModalRe.test(b) || relativeFiniteVerbMorphRe.test(b);
+    };
+    const nonArtifactCoordinatedHeadRe = new RegExp(`\\b(?:supplementary|tables?|figures?|reports?|guidelines?|demos?|samples?|clips?|results?|documentation|datasheets?|cards?|scores?|metrics?|outputs?|predictions?|examples?|logs?|curves?|protocols?|statistics?|details?|${nonArtifactEvalGuard}|leaderboards?|analys(?:is|es)|summar(?:y|ies)|comparisons?|templates?|prompts?|recordings?|transcripts?)\\b`, 'i');
+    const prepLeadRe = '(?:of|for|from|between|on|in|at|about|regarding|analyzing|evaluating|comparing|using|with|across|over|via|by|under|into|upon|against|showcasing|illustrating|demonstrating|depicting|showing|featuring|highlighting|visualizing|detailing|explaining|describing|summarizing|presenting|displaying|running|to\\s+(?:showcase|illustrate|demonstrate|show|evaluate|test|train|benchmark|validate|explain|describe|run))';
+    const prepWordToken = "(?:(?!\\band\\b|\\bor\\b)(?:[A-Za-z0-9'’.,/-]+|\\([^()]{1,40}\\)))";
+    const passiveGovPrepRe = new RegExp(`\\b(?:${prepLeadRe}|to)\\s+(?:both\\s+|either\\s+)?(?:${prepWordToken}\\s+){0,10}$`, 'i');
+    const activeGovPrepRe = new RegExp(`\\b${prepLeadRe}\\s+(?:both\\s+|either\\s+)?(?:${prepWordToken}\\s+){0,10}$`, 'i');
+    const prepItemToken = "(?:(?!\\band\\b|\\bor\\b)(?:[A-Za-z0-9'’./-]+|\\([^()]{1,40}\\)))";
+    const prepCommaItem = `(?:${prepItemToken}(?:\\s+${prepItemToken}){0,4})`;
+    const coordinatedInPrepRe = new RegExp(`\\b(?:between\\s+(?:(?:[A-Za-z0-9'’.,/-]+|\\([^()]{1,40}\\))\\s+){1,10}and|${prepLeadRe}\\s+(?:both\\s+(?:${prepItemToken}\\s+){1,8}and|(?:${prepItemToken}\\s+){1,8}(?:and|or)|${prepCommaItem},\\s*(?:${prepCommaItem},\\s*){0,3}${prepCommaItem},?\\s*(?:and|or)))\\s+(?:${prepWordToken}\\s+){0,4}$`, 'i');
+    const containerAdjGuard = '(?!(?:of|for|from|in|on|at|to|by|with|under|between|across|over|via|against|about|regarding|samples?|examples?|demos?|clips?|tests?|analys(?:is|es)|results?|outputs?|predictions?|evaluations?|comparisons?|tables?|figures?|reports?|metrics?|scores?|logs?|curves?|statistics?|summar(?:y|ies)|guidelines?|templates?|prompts?|recordings?|transcripts?|descriptions?|discussions?|details?|overviews?|stud(?:y|ies))\\b)';
+    const allowedContainerPrepRe = new RegExp(`\\b(?:(?:along|together)\\s+with|as\\s+well\\s+as|access\\s+to|(?:code|scripts?|repo(?:sitory)?|implementation|weights?|checkpoints?|(?:full|open|public|curated|complete)\\s+versions?|subsets?|variants?|famil(?:y|ies)|suites?|series|sets?|collections?|packages?|bundles?)\\s+(?:of|for))\\s+(?:${containerAdjGuard}[A-Za-z0-9'’,-]+\\s+){0,6}$`, 'i');
+    const isPureOxfordArtifactList = beforeCommaAnd => {
+        const trimmed = String(beforeCommaAnd || '').trim();
+        if (!trimmed.startsWith(',')) return false;
+        const items = trimmed.slice(1).split(',').map(part => part.trim()).filter(Boolean);
+        if (!items.length) return false;
+        const appositiveOrClauseRe = /^(?:a|an)\s+|^the\s+proposed\b|\b(?:evaluated|trained|tested|compared|measured|applied|derived|obtained|built|developed|fine-?tuned|proposed|described|introduced|presented|shown|denoted)\s+(?:on|in|at|with|under|from|using|by|over|across|as)\b|\d+%/i;
+        return items.every(item => {
+            const words = item.split(/\s+/).filter(Boolean);
+            return words.length >= 1 && words.length <= 6
+                && !finiteVerbOrModalRe.test(item)
+                && !appositiveOrClauseRe.test(item);
+        });
+    };
+    const hasValidPassiveDirectArtifact = text => {
+        const str = String(text || '');
+        for (const pm of str.matchAll(passivePredRe)) {
+            const beforePred = str.slice(Math.max(0, pm.index - 220), pm.index);
+            const cutAt = Math.max(beforePred.lastIndexOf('\n'), beforePred.lastIndexOf(';'), beforePred.lastIndexOf('；'));
+            const clauseWindow = cutAt >= 0 ? beforePred.slice(cutAt + 1) : beforePred;
+            for (const sm of clauseWindow.matchAll(passiveSubjectRe)) {
+                const beforeSm = clauseWindow.slice(0, sm.index);
+                if ((passiveGovPrepRe.test(beforeSm) || coordinatedInPrepRe.test(beforeSm))
+                    && !allowedContainerPrepRe.test(beforeSm)) continue;
+                let midCleaned = clauseWindow.slice(sm.index + sm[0].length)
+                    .replace(/\([^()]*\)/g, ' ')
+                    .replace(/,\s*(?:which|that|who)\b([^,]{1,120}),/gi, (full, body) => (
+                        (/\b(?:that|which|whose)\b/i.test(body) || !hasRelativeFiniteVerb(body)) ? full : ' '
+                    ))
+                    .replace(
+                        /(?<!\b(?:for|on|in|from|with|to|by|at|of|under|via|through|about|into|over|upon|against|across|between|without|toward|towards|behind|within)\s+)\b(?:that|which)\s+((?=\S)(?:(?!,\s*(?:and|but|while|whereas)\b|\b(?:that|which)\b)[^.;]){2,100}\S)\s*$/gi,
+                        (full, body) => {
+                            const b = body.trim();
+                            if (b.split(/\s+/).length < 2 || !hasRelativeFiniteVerb(b)) return full;
+                            return ' ';
+                        }
+                    )
+                    .replace(/\s+/g, ' ');
+                if (/\b(?:that|which|whose)\b/i.test(midCleaned)) continue;
+                if (/\b(?:while|whereas|but|however|yet|although|though|where|so)\b/i.test(midCleaned)) continue;
+                const commaAndMatch = /,\s*and\b/i.exec(midCleaned);
+                if (commaAndMatch) {
+                    const beforeCommaAnd = midCleaned.slice(0, commaAndMatch.index);
+                    const afterCommaAnd = midCleaned.slice(commaAndMatch.index + commaAndMatch[0].length);
+                    const isOxfordSubjectList = isPureOxfordArtifactList(beforeCommaAnd);
+                    if (finiteVerbOrModalRe.test(beforeCommaAnd)
+                        || (!isOxfordSubjectList && nonArtifactCoordinatedHeadRe.test(afterCommaAnd))) {
+                        continue;
+                    }
+                }
+                if (finiteVerbOrModalRe.test(midCleaned)) continue;
+                const trimmedMid = midCleaned.trim();
+                if (trimmedMid && !/^(?:,|and\b|or\b|&|at\b|of\b|for\b|with\b|in\b|from\b|on\b|to\b|under\b|behind\b|used\b|trained\b|developed\b|described\b|introduced\b|proposed\b|presented\b|built\b|created\b|collected\b|generated\b|associated\b|accompanying\b|supporting\b|including\b|needed\b|required\b|necessary\b|evaluated\b|tested\b|along\b|as\s+well\s+as\b|together\b|plus\b|\/|-(?!\w))/i.test(trimmedMid)) {
+                    continue;
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+    const matches = [...source.matchAll(activePattern), ...source.matchAll(passivePattern)]
+        .sort((left, right) => left.index - right.index);
+    const stripPossessiveApostrophes = text => String(text || '')
+        .replace(/([A-Za-z])[’']s\b/g, '$1 s')
+        .replace(/([A-Za-z]s)[’'](?=\s|$)/g, '$1');
+    const artifactNoun = `(?:${noPrefixHyphen}source[- ]code${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}code(?:s|[-–]?base)?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}implementation${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}repo(?:sitory)?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}models?(?:[’']s|[’'])?[\\s-]weights?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}models?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}weights?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}checkpoints?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}datasets?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}corpus${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}corpora${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}benchmarks?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}annotations?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}scripts?${nonCompoundHyphen}${nonArtifactHead}|${noPrefixHyphen}toolkits?${nonCompoundHyphen}${nonArtifactHead}|evaluation\\s+(?:code|scripts?|suite|pipeline)${nonCompoundHyphen}${nonArtifactHead}|reproduction\\s+(?:code|scripts?|pipeline)${nonCompoundHyphen}${nonArtifactHead})`;
+    const releaseVerbRe = /\b(?:release|open[- ]source|make\s+(?:publicly\s+|openly\s+)?available|(?<=The\s+accompanying\s+repository\s+will\s+)provide)\b/gi;
+    const afterVerbClauseRe = new RegExp(`^(${nonEndChar}{0,120})`);
+    const artifactNounRe = new RegExp(`\\b(${artifactNoun})\\b`, 'gi');
+    const nonArtifactRelHeadBase = `\\b(?:samples?|examples?|demos?|demo\\s+pages?|project\\s+pages?|clips?|figures?|tables?|diagrams?|reports?|papers?|results?|outputs?|predictions?|${nonArtifactEvalGuard}|comparisons?|analys(?:is|es)|summar(?:y|ies)|descriptions?|discussions?|details?|overviews?|stud(?:y|ies)|documentation|datasheets?|cards?|guidelines?|templates?|prompts?|recordings?|transcripts?|metrics?|scores?|logs?|curves?|protocols?|statistics?|leaderboards?|videos?|audios?|pages?|websites?|interfaces?|playgrounds?|apps?|applications?|portals?|viewers?|players?|galler(?:y|ies)|showcases?|widgets?|uis?|guis?)\\b(?:[^,.;]{0,60}(?:,\\s*[^,.;]{1,40})?,?\\s*)\\b(?:where|when|while|that|which|whose)\\b`;
+    const nonArtifactRelHeadInBetweenRe = new RegExp(`${nonArtifactRelHeadBase}(?:(?!,\\s*and\\b)[^.;])*$`, 'i');
+    const nonArtifactRelHeadCoordRe = new RegExp(`${nonArtifactRelHeadBase}[^.;]*,\\s*and\\b[^.;]*$`, 'i');
+    const coordRelPreVerbModPat = '(?:v\\d+(?:\\.\\d+)*\\s+)?(?:\\([^()]{1,24}\\)\\s+)?(?:(?:also|both|only|still|just|now|even|always|often|seldom|rarely|usually|typically|frequently|sometimes|directly|automatically|[a-z]{3,}ly)\\s+)*';
+    const coordRelParticipleModRe = /^\s+(?:v\d+(?:\.\d+)*\s+)?(?:\([^()]{1,24}\)\s+)?(?:[a-z]{3,}ly\s+)?(?:hosted|trained|pre-?trained|fine-?tuned|licensed|released|stored|published|shared|provided|located|packaged|maintained|implemented|used|utilized|employed|described|presented|introduced|proposed|developed|designed|built|created|collected|curated|annotated|derived|obtained|adapted|evaluated|tested|validated|benchmarked|measured|compared|applied|associated|accompanying|needed|required|included|contained)\s+(?:on|in|at|under|with|by|from|for|to|via|as|using|over|across|into|within)\b/i;
+    const coordRelPluralBaseVerbRe = new RegExp(`^\\s+${coordRelPreVerbModPat}(?:synthesize|run|generate|produce|convert|process|render|predict|estimate|extract|decode|encode|operate|perform|work|handle|support|take|accept|output|return|play|stream|transform|translate|transcribe|classify|detect|recognize|separate|enhance|reconstruct|align|compute|infer|learn|adapt|respond|interact|achieve|outperform|beat|surpass|improve|reduce|enable|allow|provide|offer|deliver|serve|require|use|utilize|employ|adopt|leverage|combine|integrate|contain|include|consist|comprise|cover|span|vary|differ|remain|become|fail|suffer|degrade|exhibit|converge|generalize|scale|excel)\\b`, 'i');
+    const coordRelFiniteVerbRe = new RegExp(`^\\s+${coordRelPreVerbModPat}(?:is|are|was|were|has|have|can|could|may|might|should|must|will\\s+(?!be\\s+(?:publicly\\s+|openly\\s+)?(?:released|available|open[- ]sourced)\\b)|[a-z]{3,}(?:s|ed))\\b`, 'i');
+    const coordRelModifierNonVerbNouns = new Set([
+        'parameters', 'hours', 'minutes', 'seconds', 'samples', 'examples', 'layers', 'tokens', 'frames',
+        'models', 'datasets', 'weights', 'checkpoints', 'scripts', 'results', 'metrics', 'scores', 'files',
+        'demos', 'clips', 'speakers', 'languages', 'domains', 'channels', 'steps', 'epochs', 'batches',
+        'gpus', 'cpus', 'tpus', 'bytes', 'kilobytes', 'megabytes', 'gigabytes', 'tasks', 'benchmarks',
+        'corpora', 'annotations', 'labels', 'prompts', 'features', 'embeddings', 'audios', 'videos', 'texts',
+        'images', 'voices', 'sounds', 'users', 'authors', 'papers', 'studies', 'details', 'settings', 'configs'
+    ]);
+    const hasCoordRelFollowingFiniteVerb = afterArtifact => {
+        const raw = String(afterArtifact || '');
+        const trimmedLead = raw.replace(/^\s*(?:v\d+(?:\.\d+)*\b\s*)?(?:\([^()]{1,24}\)\s*)?/, ' ');
+        const partMatch = coordRelParticipleModRe.exec(raw);
+        const prepMatch = !partMatch ? /^\s+(?:for|with|on|in|at|from|by|via|under)\b/i.exec(trimmedLead) : null;
+        if (partMatch || prepMatch) {
+            const afterModHead = partMatch
+                ? raw.slice(partMatch.index + partMatch[0].length)
+                : trimmedLead.slice(prepMatch.index + prepMatch[0].length);
+            const stopMatch = /[,.;!?。]|\b(?:upon|and|or)\b/i.exec(afterModHead);
+            const modSlice = stopMatch ? afterModHead.slice(0, stopMatch.index) : afterModHead;
+            // Scan token offsets after 1..8 modifier words to detect a genuine finite verb following the PP/participle phrase.
+            const tokMatches = [...modSlice.matchAll(/\S+/g)];
+            const maxScan = Math.min(tokMatches.length, 8);
+            for (let ti = 1; ti < maxScan; ti += 1) {
+                const candidate = ` ${modSlice.slice(tokMatches[ti].index)}`;
+                const headWord = tokMatches[ti][0].toLowerCase().replace(/[^a-z]/g, '');
+                if (coordRelModifierNonVerbNouns.has(headWord)) continue;
+                if (coordRelFiniteVerbRe.test(candidate) || coordRelPluralBaseVerbRe.test(candidate)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return coordRelFiniteVerbRe.test(raw) || coordRelPluralBaseVerbRe.test(raw);
+    };
+    const coreCodeOrWeightArtifactRe = /^(?:source[- ]code|code(?:s|[-–]?base)?|implementation|models?(?:[’']s|[’'])?[\s-]weights?|weights?|checkpoints?|scripts?)$/i;
+    const isIndependentDirectCoordinatedArtifact = (between, matchedArtifact) => {
+        if (/\b(?:between|both)\b/i.test(between)) return false;
+        const coordHeadMatch = /\band\s+(our|full|complete|source|the\s+(?:full|complete|source|training|inference|official|accompanying|entire))\s+(?:[A-Za-z-]+\s+){0,2}$/i.exec(between);
+        if (!coordHeadMatch) {
+            return false;
+        }
+        if (/\band\s+(?:our|the)?\s*(?:[A-Za-z-]+\s+){0,2}\b(?:baseline|reference|prior|existing|other|original|base|fine-?tuned|quantized|teacher|student|pre-?trained)\b/i.test(between)) {
+            return false;
+        }
+        if (coreCodeOrWeightArtifactRe.test(matchedArtifact)) {
+            return /\b(?:demos?|demo\s+page|project\s+page|samples?|clips?|examples?|results?|performance|metrics?|scores?|figures?|tables?|evaluations?|outputs?)\s+(?:of|for|from|on)\s+/i.test(between);
+        }
+        if (/^(?:datasets?|benchmarks?|corpus|corpora|annotations?)$/i.test(matchedArtifact)) {
+            return /\b(?:results?|evaluations?|scores?|metrics?|performance|comparisons?)\s+on\s+(?:[A-Z][A-Za-z0-9._-]*\s+){1,3}and\s+our\s+$/i.test(between);
+        }
+        return false;
+    };
+    const hasValidStrongDirectArtifact = text => {
+        const str = String(text || '');
+        for (const vm of str.matchAll(releaseVerbRe)) {
+            const afterVerb = str.slice(vm.index + vm[0].length);
+            const clause = afterVerbClauseRe.exec(afterVerb)?.[1] || '';
+            for (const am of clause.matchAll(artifactNounRe)) {
+                const between = clause.slice(0, am.index);
+                if (nonArtifactRelHeadInBetweenRe.test(between)) continue;
+                const afterArtifact = clause.slice(am.index + am[0].length);
+                if (nonArtifactRelHeadCoordRe.test(between) && hasCoordRelFollowingFiniteVerb(afterArtifact)) {
+                    continue;
+                }
+                const governedByPrep = activeGovPrepRe.test(between);
+                const coordinatedInPrep = coordinatedInPrepRe.test(between)
+                    && !isIndependentDirectCoordinatedArtifact(between, am[0]);
+                const allowedPrep = allowedContainerPrepRe.test(between);
+                if ((governedByPrep || coordinatedInPrep) && !allowedPrep) continue;
+                return true;
+            }
+        }
+        return false;
+    };
+    const weakDirectArtifact = new RegExp(`\\b(?:provide|publish)\\s+(?:(?:public|open|free|full)\\s+)?(?:access\\s+to\\s+)?(?:(?:the|our|all|full|complete|trained|pretrained|accompanying|supporting|official|benchmark|evaluation|training|inference|source|analysis|optimization|reproduction|preprocessing|data|model|and)\\s+){0,5}${artifactNoun}\\b`, 'i');
+    const standardAvailabilityHeaderRe = /^(?:\d+(?:\.\d+)*\.?\s+)?(?:justification|code\s+availability|data\s+availability|dataset\s+availability|model\s+availability|artifact\s+availability|resource\s+availability|software\s+availability|(?:code|data|dataset|model|artifact|resource|software)(?:\s+(?:and|&|\/)\s+(?:code|data|dataset|model|artifact|resource|software))*\s+availability|availability(?:\s+statement)?|reproducibility(?:\s+statement)?|open[- ]source(?:\s+(?:statement|release|availability|plan))?|broader\s+impact|ethics(?:\s+statement)?)\s*:\s*$/i;
+    for (const match of matches) {
         const sentence = match[0];
         const before = source.slice(0, match.index);
         const sentencePrefix = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'),
-            before.lastIndexOf('?'), before.lastIndexOf('。'), before.lastIndexOf('\n')) + 1);
+            before.lastIndexOf('?'), before.lastIndexOf('。'), before.lastIndexOf(';'), before.lastIndexOf('；'),
+            before.lastIndexOf('\n')) + 1);
         if (sentencePrefix.trim()) continue;
         const linesBefore = before.split('\n');
         const paragraphPrefix = linesBefore.at(-1);
         const previousLine = linesBefore.slice(0, -1).reverse().find(line => line.trim()) || '';
-        const context = paragraphPrefix + '\n' + previousLine;
+        const context = stripPossessiveApostrophes(paragraphPrefix + '\n' + previousLine);
         const paragraphBoundary = /\n\s*\n/g;
         let paragraphStart = 0;
         let previousParagraphStart = 0;
@@ -366,7 +559,7 @@ function sourceReleasePromise(sourceEvidence, identity) {
         if (/\bwrote\b|\bquot(?:e|ed|es|ing|ation)\b|following statement|(?:authors?|they)\s+(?:state|claim|write|say)|\b(?:authors?|articles?|papers?|they)\b[^\n.!?]{0,60}\bsaid\b|(?:^|\n)[A-Z][a-zA-Z-]+\s+said\b/i.test(paragraphContext)) continue;
 
         if (/related work|quot(?:e|ed|es|ing|ation)|following statement|third[- ]party|unrelated|(?:authors?|they)\s+(?:state|claim|write|wrote|say|said)|(?:previous|prior|another|other|cited)\s+(?:work|studies|papers?|articles?|authors?)|\b(?:wrote|said)\b|et al\.[^\n]*(?:state|claim|write|wrote|say|said)|["“”'‘’`]/i.test(context)) continue;
-        if (!paragraphPrefix.trim() && /:\s*$/.test(previousLine)) continue;
+        if (!paragraphPrefix.trim() && /:\s*$/.test(previousLine) && !standardAvailabilityHeaderRe.test(previousLine.trim())) continue;
         let fence = null;
         for (const line of linesBefore) {
             const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
@@ -375,13 +568,21 @@ function sourceReleasePromise(sourceEvidence, identity) {
             else if (marker[0] === fence) fence = null;
         }
         if (fence || /^\s*>/.test(paragraphPrefix)) continue;
-        if (/\b(?:not|never|no|third[- ]party|unrelated|external|borrowed)\b|developed by|other authors|["“”'‘’`]/i.test(sentence)) continue;
+        const sentenceForChecks = stripPossessiveApostrophes(sentence)
+            .replace(/\b(?:retaining|subject\s+to|with)\s+(?:upstream\s+attribution\s+and\s+)?(?:applicable\s+)?third[- ]party\s+(?:terms|licenses?|notices?)\b/gi, '');
+        if (/\b(?:not|never|no|cannot|can[’']t|won[’']t|don[’']t|doesn[’']t|isn[’']t|aren[’']t|unable\s+to|proprietary|confidential|internal\s+only|third[- ]party|unrelated|external|borrowed)\b|developed by|other authors|["“”'‘’`]/i.test(sentenceForChecks)) continue;
+        const nonReleaseProse = /\b(?:provide\s+(?:more\s+|further\s+|additional\s+)?(?:details?|an?\s+(?:overview|analysis|description|discussion|summary|comprehensive\s+analysis)|examples?|qualitative\s+examples?|proofs?|results?)|publish\s+(?:a|an|the|our)?\s*(?:follow[- ]up\s+)?(?:paper|report|analysis|study|results?)|(?:model|benchmark|dataset)\s+(?:predictions?|outputs?|results?|statistics?)\s+will\s+be)\b/i;
+        if (nonReleaseProse.test(sentence)) continue;
+        const directArtifactObject = hasValidStrongDirectArtifact(sentence)
+            || weakDirectArtifact.test(sentence)
+            || hasValidPassiveDirectArtifact(sentence);
+        if (!directArtifactObject) continue;
         const accompanyingRepository = /^The accompanying repository will/i.test(sentence);
-        const ownsCoreMaterial = /\bour\b[^.!?。]{0,80}\b(?:code|models?|weights|datasets?)\b|\bresulting\s+(?:ASR\s+)?(?:models?|weights)\b/i.test(sentence);
-        if ((!accompanyingRepository && !ownsCoreMaterial)
-            || !/\b(?:code|models?|weights|datasets?)\b/i.test(sentence)) continue;
+        const firstPersonActive = /^(?:Upon\s+(?:acceptance|publication),\s+)?We\s+(?:will|plan\s+to|intend\s+to)\b/i.test(sentence);
+        const passiveRelease = /\bwill\s+be\s+(?:publicly\s+|openly\s+)?(?:released|made\s+(?:publicly\s+|openly\s+)?available|open[- ]sourced)\b/i.test(sentence);
+        if (!accompanyingRepository && !firstPersonActive && !passiveRelease) continue;
         return {
-            conditional: /\bsubject to\b|\bconsent\b|\binstitutional requirements\b/i.test(sentence),
+            conditional: /\bsubject to\b|\bconsent\b|\binstitutional requirements\b|\bupon\s+(?:acceptance|publication)\b/i.test(sentence),
             consentOrInstitution: /\bconsent\b|\binstitutional requirements\b/i.test(sentence)
         };
     }
@@ -469,6 +670,15 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                 resource.documentationEvidence, resource.originalUrl
             )
         ));
+        const hasPartialDocumentation = verifiedResourceIdentity.resources.some(resource => (
+            resource?.type === 'code'
+            && resource?.availability === 'available'
+            && resource?.documentationEvidence?.completeness === 'partial'
+            && Object.values(resource?.documentationEvidence?.capabilities || {}).some(Boolean)
+            && validRepositoryDocumentationEvidence(
+                resource.documentationEvidence, resource.originalUrl
+            )
+        ));
         if (hasCompleteCoreRelease && hasCompleteDocumentation
             && openSource.score !== 1.5) {
             const normalizedAudit = {
@@ -478,6 +688,19 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                     openSource: {
                         score: 1.5,
                         reason: '[A_OPEN] 已验证代码仓库与模型权重当前可用，且官方仓库 README 完整覆盖安装、推理与微调文档，符合核心材料和文档完整开放的 1.5 分标准。'
+                    }
+                }
+            };
+            return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
+        }
+        if (hasCompleteCoreRelease && hasPartialDocumentation && openSource.score < 1.2) {
+            const normalizedAudit = {
+                ...audit,
+                dimensions: {
+                    ...audit.dimensions,
+                    openSource: {
+                        score: 1.2,
+                        reason: '[A_OPEN] 已验证代码仓库与模型权重当前可用，且官方仓库 README 可访问但尚未覆盖全部安装、推理与微调文档，符合核心材料开放但文档不完整的 1.2 分标准。'
                     }
                 }
             };

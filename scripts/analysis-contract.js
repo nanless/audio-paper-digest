@@ -455,12 +455,6 @@ function validateAnalysisEditorialLeakageContract(analysis, options = {}) {
     return null;
 }
 
-const CYRILLIC_BRIDGE_CHARS = String.raw`[0-9.% \t+\-–—，、：:；;（()）【\[\]】「」『』“”"']*`;
-const CYRILLIC_CJK_GARBLE_RE = new RegExp(
-    `(?:[\\u4e00-\\u9fff]${CYRILLIC_BRIDGE_CHARS}[\\u0400-\\u04FF]+(?:${CYRILLIC_BRIDGE_CHARS}[\\u4e00-\\u9fff])?`
-    + `|[\\u0400-\\u04FF]+${CYRILLIC_BRIDGE_CHARS}[\\u4e00-\\u9fff])`,
-    'gu'
-);
 const EXPLICIT_SLAVIC_TOPIC_RE = /(?:俄语|俄文|西里尔(?:字母|文)?|斯拉夫|乌克兰语|保加利亚语|塞尔维亚语|白俄罗斯语|\bRussian\b|\bCyrillic\b)/iu;
 
 function maskProseForCyrillicCheck(text) {
@@ -511,34 +505,45 @@ function findCyrillicProseGarbleIssues(text, options = {}) {
     if (!/[\u0400-\u04FF]/u.test(original)) return [];
     const visible = options.alreadyMasked === true ? String(text ?? '') : maskProseForCyrillicCheck(original);
     if (!/[\u0400-\u04FF]/u.test(visible)) return [];
-    const sourceLower = typeof options.sourceText === 'string' && options.sourceText.trim()
-        ? options.sourceText.toLowerCase()
-        : '';
+    const sourceCyrillicTokens = typeof options.sourceText === 'string' && options.sourceText.trim()
+        ? new Set([...options.sourceText.toLowerCase().matchAll(/[\u0400-\u04FF]+/gu)].map(item => item[0]))
+        : null;
     const documentHasSlavicTopic = EXPLICIT_SLAVIC_TOPIC_RE.test(
         [original, options.documentText || '', options.contextText || ''].join('\n')
     );
     const findings = [];
-    for (const match of visible.matchAll(CYRILLIC_CJK_GARBLE_RE)) {
+    for (const match of visible.matchAll(/[\u0400-\u04FF]+/gu)) {
         const index = match.index;
         const surface = original.slice(index, index + match[0].length);
-        const tokens = [...match[0].matchAll(/[\u0400-\u04FF]+/gu)].map(item => item[0].toLowerCase());
-        if (tokens.length === 0) continue;
-        if (sourceLower && tokens.every(token => sourceLower.includes(token))) continue;
-        if (documentHasSlavicTopic && tokens.every(token => [...token].length === 1)) continue;
+        const token = match[0].toLowerCase();
+        if (sourceCyrillicTokens && sourceCyrillicTokens.has(token)) continue;
+        if (documentHasSlavicTopic && [...token].length === 1) continue;
         const sentenceStart = Math.max(
             original.lastIndexOf('。', index),
             original.lastIndexOf('！', index),
             original.lastIndexOf('？', index),
+            original.lastIndexOf('!', index),
+            original.lastIndexOf('?', index),
             original.lastIndexOf('\n', index)
         ) + 1;
         const tailOffset = original.slice(index + match[0].length).search(/[。！？!?\n]/u);
         const sentenceEnd = tailOffset < 0 ? original.length : index + match[0].length + tailOffset;
+        const visibleSentence = visible.slice(sentenceStart, sentenceEnd);
+        const lineStart = original.lastIndexOf('\n', index) + 1;
+        const lineEndOffset = original.slice(index + match[0].length).indexOf('\n');
+        const lineEnd = lineEndOffset < 0 ? original.length : index + match[0].length + lineEndOffset;
+        const visibleLine = visible.slice(lineStart, lineEnd);
+        const adjacentSentencePunct = (sentenceStart > lineStart && /[。！？!?]/u.test(original[sentenceStart - 1]))
+            || (sentenceEnd < lineEnd && /[。！？!?]/u.test(original[sentenceEnd]));
+        const inChineseProseContext = /[\u4e00-\u9fff]/u.test(visibleSentence)
+            || (adjacentSentencePunct && /[\u4e00-\u9fff]/u.test(visibleLine));
+        if (!inChineseProseContext) continue;
         const sentence = original.slice(sentenceStart, sentenceEnd);
         if (EXPLICIT_SLAVIC_TOPIC_RE.test(sentence)) continue;
         findings.push({
             code: 'cyrillic_prose_garble',
             match: surface,
-            tokens,
+            tokens: [token],
             index,
             line: original.slice(0, index).split('\n').length,
             message: '检测到中文正文中混入西里尔字母乱码词（如俄语词碎片），请对照论文原文改写为准确的自然中文表述，保留原有数值、单位、方法归属与来源证据。'
@@ -4919,24 +4924,68 @@ function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
         }
     }
     const normalizedSrc = normalizeThousands(srcRaw);
-    const sourceHasPercentTableContext = /(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|\/\s*\\?%(?![0-9A-Za-z])|(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))/iu.test(normalizedSrc);
+    const percentTableContextRe = /(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|\/\s*\\?%(?![0-9A-Za-z])|(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))/giu;
+    const sourceHasPercentTableContext = percentTableContextRe.test(normalizedSrc);
+    const pValueRe = /(?<![A-Za-z0-9_])(?:p(?:-?values?)?|q(?:-?values?)?|α|alpha)\s*(?:<=|>=|<|>|=|≤|≥|(?:\\leq|\\le|\\geq|\\ge|\\ll|\\lt|\\gt)(?![A-Za-z]))\s*0?\.\d+/giu;
+    const stripPValues = text => {
+        let current = String(text || '');
+        for (let pass = 0; pass < 4; pass++) {
+            const next = current.replace(pValueRe, ' ');
+            if (next === current) break;
+            current = next;
+        }
+        return current;
+    };
+    const pValueStrippedSrc = stripPValues(citationStrippedSrc);
+    const unitDecimalTokens = new Set();
+    for (const surface of buildSurfaces(pValueStrippedSrc)) {
+        for (const match of stripPValues(surface).matchAll(tokenRegex)) {
+            if (match[2]) continue;
+            const unsigned = match[1].replace(/^[+-]/u, '');
+            const normalized = unsigned.startsWith('.') ? `0${unsigned}` : unsigned;
+            if (/^0\.\d{2}$/u.test(normalized)) unitDecimalTokens.add(normalized);
+        }
+    }
+    const nonPercentUnitAfterRe = /^\s*(?:epochs?|layers?|steps?|speakers?|samples?|hours?|hrs?|minutes?|mins?|seconds?|secs?|ms|Hz|kHz|MHz|GHz|dB|GiB|GB|MB|KB|TB|params?|parameters?|blocks?|heads?|dims?|dimensions?|channels?|frames?|tokens?|utterances?|files?|clips?|sentences?|words?|classes?|models?|datasets?|runs?|seeds?|folds?|GPUs?|CPUs?)(?![A-Za-z0-9_])/iu;
+    const nonPercentPrefixBeforeRe = /(?:(?<![A-Za-z0-9_])(?:batch[\s_-]*size|bsz|mini-?batch|top|table|tab\.?|fig(?:ure)?\.?|sec(?:tion)?\.?|eq(?:uation)?\.?|alg(?:orithm)?\.?|appendix|step|layer|epoch|seed|fold|beam|head|dim(?:ension)?|channel|block|stage|rank|order|num(?:ber)?(?:\s+of)?|size|length|width|height|depth|stride|kernel|window)\s*[-:=]?\s*|(?<![A-Za-z0-9_])(?:k|n|m|d|r|b)\s*[-:=]\s*|#)\s*$/iu;
+    const percentTableNearbyTokens = new Set();
+    if (sourceHasPercentTableContext) {
+        percentTableContextRe.lastIndex = 0;
+        const normalizedCitationStrippedSrc = normalizeThousands(citationStrippedSrc);
+        for (const ctxMatch of normalizedCitationStrippedSrc.matchAll(percentTableContextRe)) {
+            const winStart = Math.max(0, ctxMatch.index - 1500);
+            const winEnd = Math.min(normalizedCitationStrippedSrc.length, ctxMatch.index + 2500);
+            const windowText = normalizedCitationStrippedSrc.slice(winStart, winEnd);
+            for (const m of windowText.matchAll(tokenRegex)) {
+                const unsigned = m[1].replace(/^[+-]/u, '');
+                if (!/^\d{1,2}$/u.test(unsigned)) continue;
+                const before = windowText.slice(Math.max(0, m.index - 28), m.index);
+                if (nonPercentPrefixBeforeRe.test(before)) continue;
+                const after = windowText.slice(m.index + m[0].length);
+                if (nonPercentUnitAfterRe.test(after)) continue;
+                percentTableNearbyTokens.add(unsigned);
+            }
+        }
+    }
     const cleaned = normalizeThousands(String(summary || ''))
         .replace(/https?:\/\/\S+/gu, ' ')
         .replace(/(?<![A-Za-z0-9_])(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX|Python|PyTorch|CUDA|IEEE|P|v|ver|version)\s*[-_.]?\d+(?:\.\d+)*(?:\s*[-_.]?\d+(?:\.\d+)*\s*[BbMmKk](?![A-Za-z0-9_]))?/giu, ' ')
         .replace(/(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_-]*[-_.]\d+(?:\.\d+)*[A-Za-z0-9_.-]*/gu, ' ')
         .replace(/(?:§|第|图|表|式|公式|章节|附录)\s*\d+(?:\.\d+)*/gu, ' ');
-    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9._-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB|B|M|K|G|倍|点|分)?(?![A-Za-z0-9]|\.\d))/gu)) {
+    for (const match of cleaned.matchAll(/(?<![A-Za-z0-9._])(?<!(?<![0-9A-Za-z])[+-])([+-]?(?:\d+\.\d+|\d+))(\s*(?:%|％))?(?=\s*(?:dB|ms|s|Hz|kHz|MHz|GHz|kbps|bps|fps|GiB|GB|MB|KB|TB|B|M|K|G|倍|点|分)?(?![A-Za-z0-9]|\.\d))/giu)) {
         const full = match[0].trim();
         const num = match[1].replace(/^[+-]/u, '');
         const hasPercent = Boolean(match[2]);
-        const hasUnitAfter = /^\s*(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|GiB|GB|MB|KB|TB)(?![A-Za-z])/iu.test(cleaned.slice(match.index + match[0].length));
+        const hasUnitAfter = /^\s*(?:dB|ms|Hz|kHz|MHz|GHz|kbps|bps|fps|GiB|GB|MB|KB|TB)(?![A-Za-z])/iu.test(cleaned.slice(match.index + match[0].length));
         const isDecimal = num.includes('.');
         if (!isDecimal && !hasPercent && !hasUnitAfter) continue;
         if (!exactTokens.has(num)) {
             return `核心摘要数值“${full}”未在原文中以相同精度出现（禁止编造、四舍五入或转换小数与百分数）`;
         }
         if (hasPercent && !percentTokens.has(num)) {
-            const scaledFromUnitDecimal = /^\d{1,2}$/u.test(num) && nonPercentTokens.has(`0.${num.padStart(2, '0')}`);
+            const scaledFromUnitDecimal = /^\d{1,2}$/u.test(num)
+                && unitDecimalTokens.has(`0.${num.padStart(2, '0')}`)
+                && !percentTableNearbyTokens.has(num);
             if (!sourceHasPercentTableContext || !nonCitationTokens.has(num) || scaledFromUnitDecimal) {
                 return `核心摘要数值“${full}”添加了原文不存在的百分号`;
             }
@@ -6499,14 +6548,28 @@ function findMisalignedTableCommentaryIssues(markdown, options = {}) {
     const tables = extractMarkdownTables(text);
     if (tables.length < 2) return [];
     const lines = text.split('\n');
-    const hasReaderSectionHeadings = lines.some(line => /^###\s+\S/.test(line.trim()));
-    const sectionIndexBeforeLine = lineNumber => {
-        if (!hasReaderSectionHeadings) return null;
-        let count = 0;
-        for (let cursor = 0; cursor <= Math.min(lineNumber, lines.length - 1); cursor += 1) {
-            if (/^###\s+\S/.test(lines[cursor].trim())) count += 1;
+    const sectionIndexAtLine = new Array(lines.length).fill(null);
+    let fence = null;
+    let sectionCount = 0;
+    for (let cursor = 0; cursor < lines.length; cursor += 1) {
+        const line = lines[cursor];
+        const openMatch = !fence ? /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line) : null;
+        if (fence) {
+            const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
+            if (closeMatch && closeMatch[1][0] === fence[0] && closeMatch[1].length >= fence.length) {
+                fence = null;
+            }
+        } else if (openMatch && (openMatch[1][0] === '~' || !openMatch[2].includes('`'))) {
+            fence = openMatch[1];
+        } else if (/^###\s+\S/.test(line.trim())) {
+            sectionCount += 1;
         }
-        return count > 0 ? count - 1 : null;
+        sectionIndexAtLine[cursor] = sectionCount > 0 ? sectionCount - 1 : null;
+    }
+    const hasReaderSectionHeadings = sectionCount > 0;
+    const sectionIndexBeforeLine = lineNumber => {
+        if (!hasReaderSectionHeadings || lines.length === 0) return null;
+        return sectionIndexAtLine[Math.min(Math.max(0, lineNumber), lines.length - 1)];
     };
 
     const infos = tables.map((table, index) => {

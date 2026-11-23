@@ -105,7 +105,7 @@ function parentReplayMatches({ draft, record, parent, current, source, allowScop
     let article = current.article;
     for (const { before, current: table } of scoped.values()) {
         if (article.split(table).length !== 2) return false;
-        article = article.replace(table, before);
+        article = article.replace(table, () => before);
     }
     return article === parent.apiReaderArticle
         && planWithDerivedQuotes(draft, parent.apiReaderPlan, current.plan, source.text, scoped);

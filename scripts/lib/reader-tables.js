@@ -8,7 +8,7 @@ const codec = require('./protocol-codec');
 // normalizeReaderSourceDisplayArtifacts），这里的 READER_TABLE_SYMBOLS 和
 // projectReaderMathSymbols 不再生成正文；未知命令保持原样并继续阻断表格。
 const READER_TABLE_SYMBOLS = {
-    uparrow: '↑', downarrow: '↓', Uparrow: '⇑', Ddownarrow: '⇓',
+    uparrow: '↑', downarrow: '↓', Uparrow: '⇑', Downarrow: '⇓',
     dagger: '†', ddagger: '‡', times: '×', pm: '±', mp: '∓',
     leq: '≤', geq: '≥', le: '≤', ge: '≥', approx: '≈', sim: '∼',
     infty: '∞', checkmark: '✓', cdot: '·', ldots: '…', dots: '…',
@@ -534,6 +534,17 @@ function validateReaderResultTableCoverage(sections, artifacts) {
     return { ...requirement, numericResultTables: numericResultTables.length };
 }
 
+function isFullWidthDividerRow(table, rowIndex) {
+    const width = table?.matrix?.[0]?.length;
+    if (!Number.isInteger(width) || width < 2 || !Array.isArray(table?.cells)) return false;
+    const coveringCells = table.cells.filter(cell => Number.isInteger(cell?.row)
+        && rowIndex >= cell.row && rowIndex < cell.row + Number(cell.rowspan || 1));
+    return coveringCells.length === 1 && coveringCells[0].row === rowIndex
+        && coveringCells[0].column === 0
+        && Number(coveringCells[0].colspan || 1) === width
+        && Number(coveringCells[0].rowspan || 1) === 1;
+}
+
 function assessReaderTableSelectionEligibility(table) {
     const reasons = [];
     const add = (code, detail = {}) => reasons.push({ code, ...detail });
@@ -552,6 +563,11 @@ function assessReaderTableSelectionEligibility(table) {
             add('header_identity_unavailable');
         } else {
             if (!matrix.some((_row, index) => !headers.includes(index))) add('no_explicit_data_rows');
+            const effectiveHeaders = effectiveReaderTableRows(table).inferred
+                ? headers : effectiveReaderTableHeaderRows(table);
+            if (effectiveHeaders.length > 0 && effectiveHeaders.every(row => isFullWidthDividerRow(table, row))) {
+                add('divider_only_source_headers', { rows: effectiveHeaders.slice(0, 4) });
+            }
             for (const row of headers) {
                 for (const [column, text] of matrix[row].entries()) {
                     if (!text.trim()) add('empty_source_header', { row, column });
@@ -790,6 +806,7 @@ function renderReaderTableSelection(binding, artifacts) {
             + `当前选择行=${JSON.stringify(requestedSourceRows)}。全幅分组标题不能作为列头或数据行。优先只修正本 binding 的 sourceRows，不得改写原表。若原HTML将数据行标成表头，或列头、单位及分组信息跨行，无法通过选择一行列头无损保留比较条件，不要猜测或篡改行角色：本 binding 已获整项修复授权时，可保留 tableIndex 和 sourceTableOrdinal，改为已有 completeTable 声明，让程序逐原始DOM坐标复制完整原表。不得混入 sourceRows/sourceColumns、手写单元格或删减原表；完整表仍须通过全部来源、数字、单位和正文校验。若另有正文标记或位置错误，仍须在对应授权正文中单独修正，不能据此禁止必要的正文修复。`);
     }
     const cellBindings = [];
+    const selectedHeaderDomCells = [];
     const matrix = sourceRows.map((sourceRow, renderedRow) => sourceColumns.map((sourceColumn, renderedColumn) => {
         const cells = (table.cells || []).filter(cell => Number.isInteger(cell.row) && Number.isInteger(cell.column)
             && sourceRow >= cell.row && sourceRow < cell.row + Number(cell.rowspan || 1)
@@ -800,6 +817,7 @@ function renderReaderTableSelection(binding, artifacts) {
             || (renderedRow === 0 && !headerRows.includes(sourceRow))) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 不能唯一重放到原始 DOM cell`);
         }
+        if (renderedRow === 0) selectedHeaderDomCells.push(cell);
         // 对任意原文标记做转义或改写会改变单元格的身份。
         // 这类表格留在现有的显式绑定路径上。
         const display = readerTableCellDisplay(table, sourceRow, sourceColumn);
@@ -811,13 +829,23 @@ function renderReaderTableSelection(binding, artifacts) {
         // 原单元格身份检查保护，不按正文回填或手写。
         return display;
     }));
-    // 渲染表头全空会让读者看不到任何列名（例如把全幅分组标题行当作唯一表头、而该行在所选列里无文字）。
-    // 这种表在发布端的逐格核对中也无法与原表对应；必须选到真正带列名的原表头行。
-    if (matrix[0].every(cell => String(cell ?? '').trim() === '')) {
-        const message = `${label} 渲染表头全为空：所选首行在所选列中没有任何列名文字。`
+    // 渲染表头全空或全幅/跨列单一分组标题行（如 `| STEM/Puzzle |  |  |  |` 或 `| Audio | Audio |`）
+    // 会让读者看不到任何区分指标/模型的列名；必须选到真正带列名的原表头行。
+    const nonEmptyHeaderCells = matrix[0].filter(cell => String(cell ?? '').trim() !== '').length;
+    const allMetricHeadersBlank = matrix[0].length >= 2
+        && matrix[0].slice(1).every(cell => String(cell ?? '').trim() === '');
+    const spanningHeaderCell = sourceColumns.length >= 2
+        && selectedHeaderDomCells.length === sourceColumns.length
+        && new Set(selectedHeaderDomCells).size < selectedHeaderDomCells.length;
+    const dividerOnlyHeader = isFullWidthDividerRow(table, sourceRows[0]) || allMetricHeadersBlank || spanningHeaderCell;
+    if (nonEmptyHeaderCells === 0 || dividerOnlyHeader) {
+        const reasonLead = nonEmptyHeaderCells === 0
+            ? `${label} 渲染表头全为空：所选首行在所选列中没有任何列名文字。`
+            : `${label} 渲染表头缺少列名（全幅分组标题行）：所选首行仅含单个全幅分组标题，其余指标/模型列全为空。`;
+        const message = reasonLead
             + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(headerRows)}，当前选择行=${JSON.stringify(requestedSourceRows)}，`
             + `当前选择列=${JSON.stringify(sourceColumns)}。优先只修正本 binding：把真正写有列名的原表头行放在 sourceRows 首位，`
-            + '全幅分组标题（如 Baselines）不能充当唯一表头；可改用通过完整来源检查的 completeTable，不得改写原表，也不得手写单元格。';
+            + '全幅分组标题（如 Baselines、STEM/Puzzle）不能充当唯一表头；可改用通过完整来源检查的 completeTable，不得改写原表，也不得手写单元格。';
         throw Object.assign(new Error(message), {
             code: 'READER_SELECTION_EMPTY_HEADER',
             readerIssues: [{ code: 'reader_selection_empty_header',
@@ -865,7 +893,9 @@ function repairUniqueReaderTableSelectionHeader(binding, artifacts) {
     }
 }
 
-function compileReaderTableSelections(sections, bindings, artifacts) {
+function compileReaderTableSelections(sections, bindings, artifacts, options = {}) {
+    const checkDuplicates = options?.checkDuplicates !== false;
+    const checkSourceQuotesDuplicates = options?.checkSourceQuotesDuplicates !== false;
     if (!Array.isArray(sections) || !Array.isArray(bindings)) {
         if (Array.isArray(sections) && sections.some(section => /\[\[TABLE_[^\]]*\]\]/.test(String(section?.body || '')))) {
             throw new Error('读者文章存在未绑定的 TABLE marker');
@@ -878,36 +908,226 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
     // the authority, so sort before the sequential check instead of rejecting.
     const orderedBindings = [...bindings].sort((a, b) =>
         Number(a && a.tableIndex) - Number(b && b.tableIndex));
+    const seenOrdinalRendered = new Map();
+    const seenGlobalRendered = new Map();
+    const seenCompleteOrdinals = new Map();
+    const seenSelectionTuples = new Map();
+    const seenCellSignatures = new Map();
+    const seenTableIndexes = new Set();
+    const seenPlainNodes = new Set();
+    const normalizeTableCellForDup = value => {
+        let text = String(value ?? '').replace(/[ \t]+/g, ' ').trim();
+        for (let pass = 0; pass < 3; pass += 1) {
+            const next = text
+                .replace(/\*\*\*([^*]+)\*\*\*/g, '$1')
+                .replace(/(?<![A-Za-z0-9_])___([^_\s](?:[^\r\n]*?[^_\s])?)___(?![A-Za-z0-9_])/g, '$1')
+                .replace(/\*\*([^*]+)\*\*/g, '$1')
+                .replace(/(?<![A-Za-z0-9_])__([^_\s](?:[^\r\n]*?[^_\s])?)__(?![A-Za-z0-9_])/g, '$1')
+                .replace(/`([^`]+)`/g, '$1')
+                .replace(/\*([^*]+)\*/g, '$1')
+                .replace(/(?<![A-Za-z0-9_])_([^_\s](?:[^\r\n]*?[^_\s])?)_(?![A-Za-z0-9_])/g, '$1')
+                .replace(/[ \t]+/g, ' ')
+                .trim();
+            if (next === text) break;
+            text = next;
+        }
+        return text;
+    };
+    const canonicalTableContentKey = (header, rows) => {
+        if (!Array.isArray(header) || header.length === 0 || !Array.isArray(rows)) return null;
+        const normHeader = header.map(normalizeTableCellForDup);
+        const sortedHeaders = [...normHeader].sort();
+        const canonicalRows = rows.map(row => {
+            const pairs = normHeader.map((h, c) => [h, normalizeTableCellForDup(Array.isArray(row) ? row[c] : '')]);
+            pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0)));
+            return pairs;
+        });
+        canonicalRows.sort((a, b) => {
+            const sa = JSON.stringify(a);
+            const sb = JSON.stringify(b);
+            return sa < sb ? -1 : sa > sb ? 1 : 0;
+        });
+        return JSON.stringify([sortedHeaders, canonicalRows]);
+    };
+    const canonicalMarkdownContentKey = md => {
+        const parsed = require('../analysis-contract.js').extractMarkdownTables(String(md || ''))[0];
+        if (!parsed) return String(md || '').trim().replace(/[ \t]+/g, ' ');
+        return canonicalTableContentKey(parsed.header, parsed.rows);
+    };
+    // Order-invariant canonical source-cell set so row/column permutations of the exact same
+    // source subtable still collide while distinct subsets remain allowed.
+    const artifactCellSignature = (ordinal, cellBindings) => {
+        if (!Number.isInteger(ordinal) || !Array.isArray(cellBindings) || cellBindings.length === 0) return null;
+        const coords = [];
+        for (const cell of cellBindings) {
+            if (!cell || !Number.isInteger(cell.renderedRow) || !Number.isInteger(cell.renderedColumn)
+                || !Number.isInteger(cell.sourceRow) || !Number.isInteger(cell.sourceColumn)) return null;
+            coords.push([cell.sourceRow, cell.sourceColumn]);
+        }
+        coords.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        return JSON.stringify([ordinal, coords]);
+    };
+    // Snapshot initial unmutated located tables ONCE before expanding [[TABLE_N]] markers so freshly
+    // rendered selection/completeTable Markdown tables never masquerade as plain source_quotes tables.
+    const initialLocatedNodes = require('./reader-draft-order.js').locateReaderDraftTables({ sections });
+    const initialPlainNodes = initialLocatedNodes.filter(item => !item.marker && item.table);
+    const hasShiftedMarker = initialLocatedNodes.some(item => item.marker && item.markerIndex !== item.tableIndex);
+    const plainOrderedBindings = orderedBindings.filter(b => b
+        && !Object.prototype.hasOwnProperty.call(b, 'selection')
+        && !Object.prototype.hasOwnProperty.call(b, 'completeTable'));
+    const locatedTableNodeAndMdKeys = binding => {
+        let node = null;
+        if (initialPlainNodes.length > 0 && initialPlainNodes.length === plainOrderedBindings.length) {
+            const plainPos = plainOrderedBindings.indexOf(binding);
+            if (plainPos >= 0) node = initialPlainNodes[plainPos] || null;
+        } else if (initialPlainNodes.length > 0 && !hasShiftedMarker) {
+            const candidate = initialPlainNodes.find(item => item.tableIndex === binding.tableIndex) || null;
+            if (candidate && !seenPlainNodes.has(candidate)) node = candidate;
+        }
+        if (node) seenPlainNodes.add(node);
+        let globalMdKey = null;
+        let ordinalMdKey = null;
+        if (node?.table?.header && Array.isArray(node.table.rows)) {
+            globalMdKey = canonicalTableContentKey(node.table.header, node.table.rows);
+            if (globalMdKey !== null && Number.isInteger(binding.sourceTableOrdinal)) {
+                ordinalMdKey = `${binding.sourceTableOrdinal}:${globalMdKey}`;
+            }
+        }
+        return { node, globalMdKey, ordinalMdKey };
+    };
+    const buildDuplicateError = ({ declaredBinding, index, binding, sectionIndex, dupTableIndex }) => {
+        const marker = `[[TABLE_${binding.tableIndex}]]`;
+        const originalIndex = bindings.indexOf(declaredBinding);
+        const targetIndex = originalIndex >= 0 ? originalIndex : index;
+        const message = `读者文章 tableBindings[${targetIndex}]（${marker}）与第 ${dupTableIndex} 张表完全重复（相同原表与相同行列）；`
+            + '同一张实验或消融表不得在文章中重复展示两次。请改选另一张未展示的合格原表、选择不同的对比行列子集，'
+            + '或用 source_quotes 整理主实验定量表；如无需第二张表，则合并讨论并在获准范围内同步移除重复标记。';
+        return Object.assign(new Error(message), {
+            code: 'READER_DUPLICATE_TABLE',
+            readerIssues: [{ code: 'reader_duplicate_table', path: `/tableBindings/${targetIndex}`,
+                ...(Number.isInteger(sectionIndex) && sectionIndex >= 0
+                    ? { sectionPath: `/sections/${sectionIndex}/body` } : {}),
+                duplicateOfTableIndex: dupTableIndex, message }]
+        });
+    };
     const tableBindings = orderedBindings.map((declaredBinding, index) => {
+        const originalIndex = bindings.indexOf(declaredBinding);
+        const targetIndex = originalIndex >= 0 ? originalIndex : index;
         const binding = repairUniqueReaderTableSelectionHeader(declaredBinding, artifacts);
         const complete = binding && Object.prototype.hasOwnProperty.call(binding, 'completeTable');
-        if (!binding || (!complete && !Object.prototype.hasOwnProperty.call(binding, 'selection'))) return binding;
-        if (binding.tableIndex !== index + 1) throw new Error(`读者文章 tableBindings[${index}] selection tableIndex 必须按正文顺序递增`);
+        if (!binding || (!complete && !Object.prototype.hasOwnProperty.call(binding, 'selection'))) {
+            if (checkDuplicates && binding && Number.isInteger(binding.tableIndex) && binding.tableIndex >= 1
+                && (binding.sourceType === 'artifact_table' || binding.sourceType === 'source_quotes')
+                && !seenTableIndexes.has(binding.tableIndex)) {
+                seenTableIndexes.add(binding.tableIndex);
+                const isArtifact = binding.sourceType === 'artifact_table' && Number.isInteger(binding.sourceTableOrdinal);
+                const curOrdinal = isArtifact ? binding.sourceTableOrdinal : null;
+                const cellSig = isArtifact ? artifactCellSignature(binding.sourceTableOrdinal, binding.cellBindings) : null;
+                const { node, globalMdKey, ordinalMdKey } = locatedTableNodeAndMdKeys(declaredBinding);
+                const prevGlobal = globalMdKey !== null ? seenGlobalRendered.get(globalMdKey) : null;
+                const globalDupIdx = prevGlobal && (
+                    (curOrdinal !== null && prevGlobal.sourceTableOrdinal === curOrdinal)
+                    || (checkSourceQuotesDuplicates && (curOrdinal === null || prevGlobal.sourceTableOrdinal === null))
+                ) ? prevGlobal.tableIndex : null;
+                const dupTableIndex = (cellSig !== null && seenCellSignatures.has(cellSig)
+                    ? seenCellSignatures.get(cellSig) : null)
+                    ?? (ordinalMdKey !== null && seenOrdinalRendered.has(ordinalMdKey)
+                        ? seenOrdinalRendered.get(ordinalMdKey) : null)
+                    ?? globalDupIdx;
+                if (dupTableIndex !== null) {
+                    throw buildDuplicateError({
+                        declaredBinding, index, binding,
+                        sectionIndex: node ? node.sectionIndex : -1,
+                        dupTableIndex
+                    });
+                }
+                if (cellSig !== null) seenCellSignatures.set(cellSig, binding.tableIndex);
+                if (ordinalMdKey !== null) seenOrdinalRendered.set(ordinalMdKey, binding.tableIndex);
+                if (globalMdKey !== null && !seenGlobalRendered.has(globalMdKey)) {
+                    seenGlobalRendered.set(globalMdKey, { tableIndex: binding.tableIndex, sourceTableOrdinal: curOrdinal });
+                }
+            }
+            return binding;
+        }
+        if (binding.tableIndex !== index + 1) throw new Error(`读者文章 tableBindings[${targetIndex}] selection tableIndex 必须按正文顺序递增`);
+        seenTableIndexes.add(binding.tableIndex);
         const marker = `[[TABLE_${binding.tableIndex}]]`;
         const matchingSections = copiedSections.filter(section => typeof section.body === 'string' && section.body.includes(marker));
         if (matchingSections.length !== 1 || matchingSections[0].body.split(marker).length !== 2
             || !matchingSections[0].body.split(/\n\s*\n/).some(block => block.trim() === marker)) {
-            throw new Error(`读者文章 tableBindings[${index}] ${marker} 必须在一个小节中唯一独占一段`);
+            throw new Error(`读者文章 tableBindings[${targetIndex}] ${marker} 必须在一个小节中唯一独占一段`);
         }
         const joinedBody = copiedSections.map(section => section.body || '').join('\n\n');
         const prefix = joinedBody.slice(0, joinedBody.indexOf(marker));
         const priorTables = require('../analysis-contract.js').extractMarkdownTables(prefix).length
             + [...prefix.matchAll(/\[\[TABLE_\d+\]\]/g)].length;
         if (priorTables + 1 !== binding.tableIndex) {
-            throw new Error(`读者文章 tableBindings[${index}] ${marker} 与实际正文表格顺序不一致`);
+            throw new Error(`读者文章 tableBindings[${targetIndex}] ${marker} 与实际正文表格顺序不一致`);
         }
         let rendered;
         try {
             rendered = complete ? renderReaderCompleteTable(binding, artifacts) : renderReaderTableSelection(binding, artifacts);
         } catch (error) {
+            const declaredPrefix = `读者文章 tableBindings[${Number(binding?.tableIndex) - 1}]`;
+            const actualPrefix = `读者文章 tableBindings[${targetIndex}]`;
+            if (targetIndex !== Number(binding?.tableIndex) - 1
+                && typeof error.message === 'string' && error.message.startsWith(declaredPrefix)) {
+                error.message = `${actualPrefix}${error.message.slice(declaredPrefix.length)}`;
+            }
             if (error.code === 'READER_SOURCE_TABLE_UNRENDERABLE') {
                 const sectionIndex = copiedSections.indexOf(matchingSections[0]);
+                error.readerIssues[0] = { ...error.readerIssues[0], path: `/tableBindings/${targetIndex}`, message: error.message };
                 error.readerIssues.push({ ...error.readerIssues[0], path: `/sections/${sectionIndex}/body`,
-                    bindingPath: `/tableBindings/${index}` });
+                    bindingPath: `/tableBindings/${targetIndex}` });
+            } else if (Array.isArray(error.readerIssues) && error.readerIssues[0]) {
+                error.readerIssues[0] = { ...error.readerIssues[0], path: `/tableBindings/${targetIndex}`, message: error.message };
             }
             throw error;
         }
-        matchingSections[0].body = matchingSections[0].body.replace(marker, rendered.markdown);
+        if (checkDuplicates) {
+            const sourceOrdinal = complete
+                ? binding.completeTable.sourceTableOrdinal
+                : binding.selection.sourceTableOrdinal;
+            const globalMdKey = canonicalMarkdownContentKey(rendered.markdown);
+            const ordinalMdKey = `${sourceOrdinal}:${globalMdKey}`;
+            const completeOrd = complete ? sourceOrdinal : null;
+            const selectionKey = !complete
+                ? JSON.stringify([
+                    sourceOrdinal,
+                    [...binding.selection.sourceRows].sort((a, b) => a - b),
+                    [...binding.selection.sourceColumns].sort((a, b) => a - b)
+                ])
+                : null;
+            const cellSig = artifactCellSignature(sourceOrdinal, rendered.binding?.cellBindings);
+            const prevGlobal = seenGlobalRendered.get(globalMdKey);
+            const globalDupIdx = prevGlobal && (
+                prevGlobal.sourceTableOrdinal === sourceOrdinal
+                || (checkSourceQuotesDuplicates && prevGlobal.sourceTableOrdinal === null)
+            ) ? prevGlobal.tableIndex : null;
+            const dupTableIndex = (completeOrd !== null && seenCompleteOrdinals.has(completeOrd)
+                ? seenCompleteOrdinals.get(completeOrd) : null)
+                ?? (selectionKey !== null && seenSelectionTuples.has(selectionKey)
+                    ? seenSelectionTuples.get(selectionKey) : null)
+                ?? (cellSig !== null && seenCellSignatures.has(cellSig)
+                    ? seenCellSignatures.get(cellSig) : null)
+                ?? (seenOrdinalRendered.has(ordinalMdKey) ? seenOrdinalRendered.get(ordinalMdKey) : null)
+                ?? globalDupIdx;
+            if (dupTableIndex !== null) {
+                throw buildDuplicateError({
+                    declaredBinding, index, binding,
+                    sectionIndex: copiedSections.indexOf(matchingSections[0]),
+                    dupTableIndex
+                });
+            }
+            if (completeOrd !== null) seenCompleteOrdinals.set(completeOrd, binding.tableIndex);
+            if (selectionKey !== null) seenSelectionTuples.set(selectionKey, binding.tableIndex);
+            if (cellSig !== null) seenCellSignatures.set(cellSig, binding.tableIndex);
+            seenOrdinalRendered.set(ordinalMdKey, binding.tableIndex);
+            if (!seenGlobalRendered.has(globalMdKey)) {
+                seenGlobalRendered.set(globalMdKey, { tableIndex: binding.tableIndex, sourceTableOrdinal: sourceOrdinal });
+            }
+        }
+        matchingSections[0].body = matchingSections[0].body.replace(marker, () => rendered.markdown);
         selectionTableIndexes.push(binding.tableIndex);
         return rendered.binding;
     });

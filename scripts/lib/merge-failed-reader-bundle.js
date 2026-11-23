@@ -23,9 +23,39 @@ function verifiedSource(existing, incoming) {
         });
     } catch (_) { return false; }
 }
+const isReaderContractKey = key => /^apiReader/.test(key)
+    || key === 'readerTargetOrdinalPatch'
+    || key === 'readerResourceClaims'
+    || key === 'readerVersionMetadataRecovery';
+const isPreservedReaderStageKey = key => /^apiReader/.test(key) || key === 'imageSupplement';
+const isPreservedReaderContractKey = key => isReaderContractKey(key) || key === 'imageNarrative';
+function hasOrdinalOrOperatorReaderMarkers(paper) {
+    const stage = paper?.analysisManifest?.stages?.apiReaderArticle;
+    const contracts = paper?.analysisManifest?.contracts;
+    return Boolean(
+        contracts?.readerTargetOrdinalPatch !== undefined
+        || stage?.ordinalCompletionProof !== undefined
+        || stage?.ordinalPatchContract !== undefined
+        || stage?.ordinalPatchSchemaFingerprint !== undefined
+        || stage?.ordinalPatchCompilations !== undefined
+        || stage?.ordinalPatchHistory !== undefined
+        || stage?.operatorProvenance !== undefined
+    );
+}
 function mergeFailedReaderBundle(existing, incoming) {
     const fields = readerFields(incoming);
-    if (!Object.keys(fields).length && !incoming.analysisManifest?.stages?.apiReaderArticle) return {};
+    const existingHasReaderManifest = Boolean(
+        Object.keys(existing?.analysisManifest?.stages || {}).some(isPreservedReaderStageKey)
+        || Object.keys(existing?.analysisManifest?.contracts || {}).some(isPreservedReaderContractKey)
+    );
+    const incomingHasReaderManifest = Boolean(
+        Object.keys(incoming?.analysisManifest?.stages || {}).some(isPreservedReaderStageKey)
+        || Object.keys(incoming?.analysisManifest?.contracts || {}).some(isPreservedReaderContractKey)
+    );
+    if (!Object.keys(fields).length
+        && !incomingHasReaderManifest
+        && !incoming.readerRevisionHistory
+        && !existingHasReaderManifest) return {};
     const engine = require('../analysis-engine'), daily = require('./daily-fresh-source-plan');
     const candidate = typeof incoming.analysisCheckpoint === 'string'
         ? { ...incoming, analysis: incoming.analysisCheckpoint, parsed: require('../utils').parseAnalysis(incoming.analysisCheckpoint) } : incoming;
@@ -56,27 +86,50 @@ function mergeFailedReaderBundle(existing, incoming) {
     }
     if (verifiedSource(existing, incoming) && engine.hasValidIntegratedApiReaderRecords(candidate)) {
         return { ...Object.fromEntries(Object.keys(readerFields(existing)).map(key => [key, undefined])),
-            ...clone(fields), ...fees, ...histories, analysisManifest: manifest };
+            ...clone(fields), ...fees, ...histories, analysisManifest: manifest,
+            ...(incoming.readerRevisionHistory !== undefined
+                ? { readerRevisionHistory: clone(incoming.readerRevisionHistory) }
+                : { readerRevisionHistory: undefined }) };
     }
     // 失败的真实 Reader 与请求证明独立保留；旧公开正文只对应它自己的原阶段。
     const packetFields = { ...fields }; delete packetFields.apiReaderFailedBundleHistory;
     const packet = { sourceSha256: incoming.sourceSha256, fields: clone(packetFields),
         stages: Object.fromEntries(Object.entries(incoming.analysisManifest?.stages || {}).filter(([key]) => /^apiReader/.test(key))),
-        contracts: Object.fromEntries(Object.entries(incoming.analysisManifest?.contracts || {}).filter(([key]) => /^apiReader/.test(key))) };
+        contracts: Object.fromEntries(Object.entries(incoming.analysisManifest?.contracts || {}).filter(([key]) => isReaderContractKey(key))),
+        ...(incoming.readerRevisionHistory !== undefined ? { readerRevisionHistory: clone(incoming.readerRevisionHistory) } : {}) };
     const history = [...(histories.apiReaderFailedBundleHistory || [])];
-    if (!history.some(saved => daily.stableHash(saved) === daily.stableHash(packet))) history.push(packet);
+    const hasIncomingPacketContent = Object.keys(packetFields).length > 0
+        || Object.keys(packet.stages).length > 0
+        || Object.keys(packet.contracts).length > 0
+        || packet.readerRevisionHistory !== undefined;
+    if (hasIncomingPacketContent && !history.some(saved => daily.stableHash(saved) === daily.stableHash(packet))) {
+        history.push(packet);
+    }
     manifest.stages = { ...(manifest.stages || {}) };
     manifest.contracts = { ...(manifest.contracts || {}) };
-    for (const key of new Set([...Object.keys(manifest.stages), ...Object.keys(existing.analysisManifest?.stages || {})].filter(key => /^apiReader/.test(key)))) {
+    for (const key of new Set([...Object.keys(manifest.stages), ...Object.keys(existing.analysisManifest?.stages || {})].filter(isPreservedReaderStageKey))) {
         delete manifest.stages[key];
         if (existing.analysisManifest?.stages?.[key]) manifest.stages[key] = clone(existing.analysisManifest.stages[key]);
     }
-    for (const key of new Set([...Object.keys(manifest.contracts), ...Object.keys(existing.analysisManifest?.contracts || {})].filter(key => /^apiReader/.test(key)))) {
+    for (const key of new Set([...Object.keys(manifest.contracts), ...Object.keys(existing.analysisManifest?.contracts || {})].filter(isPreservedReaderContractKey))) {
         delete manifest.contracts[key];
         if (existing.analysisManifest?.contracts?.[key]) manifest.contracts[key] = clone(existing.analysisManifest.contracts[key]);
     }
+    if (Object.keys(manifest.contracts).length === 0
+        && !existing.analysisManifest?.contracts && !incoming.analysisManifest?.contracts) {
+        delete manifest.contracts;
+    }
     const recovery = Object.fromEntries(Object.entries(fields).filter(([key]) => /(?:Draft|Candidate|History|Round|Attempt|Retry|Recovery)/.test(key) && key !== 'apiReaderFailedBundleHistory'));
+    const existingRestoredLiveReader = Boolean(
+        existing.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
+        || (typeof existing.apiReaderArticle === 'string' && existing.apiReaderArticle.trim())
+        || hasOrdinalOrOperatorReaderMarkers(existing)
+    );
+    const revisionHistoryPatch = !existingRestoredLiveReader && incoming.readerRevisionHistory !== undefined
+        ? { readerRevisionHistory: clone(incoming.readerRevisionHistory) }
+        : {};
     return { ...clone(readerFields(existing)), ...clone(recovery), ...fees, ...histories,
-        apiReaderFailedBundleHistory: history, analysisManifest: manifest };
+        ...(history.length ? { apiReaderFailedBundleHistory: history } : {}),
+        ...revisionHistoryPatch, analysisManifest: manifest };
 }
-module.exports = { mergeFailedReaderBundle };
+module.exports = { mergeFailedReaderBundle, isReaderContractKey };

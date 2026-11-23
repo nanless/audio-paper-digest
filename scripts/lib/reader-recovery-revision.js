@@ -587,41 +587,49 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
     if (updated.draft) {
         const normalizationIssues = updated.issues.filter(issue => issue?.code !== TABLE_COUNT_ISSUE_CODE
             && !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
-        // 与在线归一化（normalizeApiReaderRecoveryDraftForSource）同序：先确定性内联超额术语桥、合并超额小节，
-        // 再处理悬挂连词与中文数词，保证两条路径对同一稿得到逐字节相同的结果。
-        if (!identity.readerFactLocalRevisionContract && !identity.resourceLocalRevisionContract) {
-            const deepAnalyzer = require('../deep-analyzer.js');
-            deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
-            deepAnalyzer.inlineExcessCohesiveReaderConceptBridges(updated.draft);
-            deepAnalyzer.coalesceExcessCohesiveReaderSections(updated.draft);
+        let normalized;
+        const sourceBlocked = require('./reader-source-blocked-normalization');
+        let currentSource = null;
+        if (typeof options.normalizeReplayDraft === 'function'
+            || require('./fresh-analysis-context').isDailyFreshSourceScope()) {
+            currentSource = require('./model-text-sanitization').currentModelInputSourceForPaperId(identity.paperId);
+            if (currentSource && shaText(currentSource.text) !== identity.sourceSha256) {
+                throw new Error('来源阻塞恢复的当前正文与候选身份不同');
+            }
         }
-        updated.draft.sections = updated.draft.sections.map(section => ({
-            ...section,
-            body: typeof section?.body === 'string'
-                ? normalizeIssueBoundReaderQuantitativeNumerals(
-                    normalizeDanglingReaderConnectors(section.body), normalizationIssues
-                ) : section?.body
-        }));
-        if (Array.isArray(updated.draft.conceptBridges)) {
-            updated.draft.conceptBridges = updated.draft.conceptBridges.map(bridge => ({
-                ...bridge,
-                explanation: typeof bridge?.explanation === 'string'
-                    ? normalizeIssueBoundReaderQuantitativeNumerals(
-                        bridge.explanation, normalizationIssues
-                    ) : bridge?.explanation
-            }));
+        const effectiveSource = currentSource || conference?.sourceDetails || null;
+        const effectiveStructuredArtifacts = effectiveSource?.structuredArtifacts || options.structuredArtifacts || null;
+        // 无论调用方是否提供 normalizeReplayDraft，都先用与在线完全同源的
+        // normalizeApiReaderDraftPreOrder 与会议预归一化把 updated.draft 准备到
+        // normalizeReaderDraftOrder 的确切输入态（所有步骤均幂等），这样当
+        // READER_SOURCE_TABLE_UNRENDERABLE 触发时 updated.draft 的 SHA 与
+        // error.normalizationInputSha256 严格一致，且会议 draftOrderMappings 不丢失。
+        const deepAnalyzer = require('../deep-analyzer.js');
+        const preOrderMappings = [];
+        const pixelFigureOrdinals = Array.isArray(options.pixelFigureOrdinals)
+            ? options.pixelFigureOrdinals
+            : (typeof options.normalizeReplayDraft === 'function'
+                ? (Array.isArray(updated.imageEvidence) ? updated.imageEvidence : [])
+                    .filter(i => i?.kind === 'figure' && i.status === 'ready').map(i => i.ordinal)
+                : undefined);
+        updated.draft = deepAnalyzer.normalizeApiReaderDraftPreOrder(updated.draft, normalizationIssues, {
+            readerFactLocalRevision: Boolean(identity.readerFactLocalRevisionContract),
+            resourceLocalRevision: Boolean(identity.resourceLocalRevisionContract),
+            pixelFigureOrdinals,
+            sourceText: effectiveSource?.text ?? options.sourceText,
+            draftOrderMappings: preOrderMappings
+        });
+        if (preOrderMappings.length) {
+            updated.draftOrderMappings = [...(updated.draftOrderMappings || []), ...preOrderMappings];
         }
-        // 会议 PDF 候选里可能确定性地混有真实 Markdown 表格和选择标记。先修复这个
-        // 受限的来源绑定结构，再检查各小节的顺序；否则顺序检查会在
-        // deep-analyzer 的会议归一化器有机会证明顺序之前就拒绝候选。
-        // 这里用惰性导入，避免恢复库在启动时依赖分析器。
-        if (conference?.sourceDetails?.structuredArtifacts?.sourceKind === 'conference_pdf') {
-            const deepAnalyzer = require('../deep-analyzer.js');
-            deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
+        if (effectiveSource?.structuredArtifacts?.sourceKind === 'conference_pdf') {
             deepAnalyzer.normalizeReaderSourceQuotes(
-                updated.draft, conference.sourceDetails.text || ''
+                updated.draft, effectiveSource.text || ''
             );
-            deepAnalyzer.normalizeReaderSourceQuoteTableMarkers(updated.draft);
+            const sourceQuoteMarkerRepair = deepAnalyzer.normalizeReaderSourceQuoteTableMarkers(updated.draft);
+            if (sourceQuoteMarkerRepair) {
+                updated.draftOrderMappings = [...(updated.draftOrderMappings || []), sourceQuoteMarkerRepair];
+            }
             const prunedUnboundTables = deepAnalyzer.readerPlaceholderResultTableIssues(updated.draft).length ? 0
                 : pruneUniquelyUnboundReaderMarkdownTables(updated.draft);
             if (prunedUnboundTables > 0) {
@@ -637,27 +645,17 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
                 updated.draftOrderMappings = [...(updated.draftOrderMappings || []), mixedTableOrder];
             }
         }
-        let normalized;
-        const sourceBlocked = require('./reader-source-blocked-normalization');
-        let currentSource = null;
-        if (typeof options.normalizeReplayDraft === 'function'
-            || require('./fresh-analysis-context').isDailyFreshSourceScope()) {
-            currentSource = require('./model-text-sanitization').currentModelInputSourceForPaperId(identity.paperId);
-            if (currentSource && shaText(currentSource.text) !== identity.sourceSha256) {
-                throw new Error('来源阻塞恢复的当前正文与候选身份不同');
-            }
-        }
         try {
             normalized = typeof options.normalizeReplayDraft === 'function'
                 ? options.normalizeReplayDraft(structuredClone(updated.draft), structuredClone(updated.issues), structuredClone(updated.imageEvidence || []))
-                : normalizeReaderDraftOrder(updated.draft, { structuredArtifacts: currentSource?.structuredArtifacts });
+                : normalizeReaderDraftOrder(updated.draft, { structuredArtifacts: effectiveStructuredArtifacts });
         } catch (error) {
-            const blocked = sourceBlocked.readSourceTableNormalizationError(error, updated.draft, currentSource?.structuredArtifacts);
+            const blocked = sourceBlocked.readSourceTableNormalizationError(error, updated.draft, effectiveStructuredArtifacts);
             if (blocked) normalized = blocked;
             else if (!readTableBindingOrderError(error)) throw error;
         }
         if (require('./protocol-codec').hasValidHeader(normalized, sourceBlocked.CONTRACT)) {
-            const blocked = sourceBlocked.assertBlockedNormalizationResult(normalized, currentSource?.structuredArtifacts);
+            const blocked = sourceBlocked.assertBlockedNormalizationResult(normalized, effectiveStructuredArtifacts);
             updated.blockedSourceTableNormalization = { ...require('./protocol-codec').recordHeader(sourceBlocked.CONTRACT, sourceBlocked.CONTRACT),
                 inputDraftSha256: hashDraft(updated.draft), outputDraftSha256: blocked.draftSha256,
                 blockingIssuesSha256: hashDraft(blocked.blockingIssues), artifactsSha256: blocked.artifactsSha256 };
@@ -665,7 +663,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
             updated.issues = require('./reader-repair').collectDraftIssues(updated.draft,
                 Object.assign(new Error('来源完整表仍阻塞，交回正常约束修复'), {
                     code: 'READER_SOURCE_TABLE_UNRENDERABLE', readerIssues: blocked.blockingIssues }),
-                { sourceText: currentSource.text, structuredArtifacts: currentSource.structuredArtifacts });
+                { sourceText: effectiveSource?.text ?? options.sourceText ?? '', structuredArtifacts: effectiveStructuredArtifacts });
             updated.status = 'failed';
             normalized = null;
         }

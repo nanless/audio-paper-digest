@@ -196,10 +196,11 @@ function protectedReaderUpstream(paper) {
     for (const key of Object.keys(copy)) if (/^apiReader/.test(key)) delete copy[key];
     for (const key of Object.keys(copy.analysisManifest?.contracts || {}))
         if (/^apiReader/.test(key)) delete copy.analysisManifest.contracts[key];
-    // 资源宣称合同只属于 Reader；完成旧稿的当前来源审校时允许新增该合同。
+    // 资源宣称与版本元数据恢复合同只属于 Reader；完成旧稿的当前来源审校时允许新增。
     if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerResourceClaims;
     if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.imageNarrative;
     if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerTargetOrdinalPatch;
+    if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerVersionMetadataRecovery;
     delete copy.analysisManifest?.stages?.apiReaderArticle;
     delete copy.analysisManifest?.stages?.apiReaderTableAudit;
     delete copy.analysisManifest?.stages?.imageSupplement;
@@ -403,13 +404,14 @@ function recoverArchivedSignedFactRevision(paper, plan, bound) {
     const fields = ['apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan', 'apiReaderPlanSha256',
         'apiReaderResources', 'apiReaderFigures', 'apiReaderAuthors'];
     const currentSha = daily.stableHash(paper);
+    const { isReaderContractKey } = require('./merge-failed-reader-bundle');
     const packets = (paper.apiReaderFailedBundleHistory || []).filter(packet =>
         packet.sourceSha256 === paper.sourceSha256
         && require('node:util').isDeepStrictEqual(packet.stages?.apiReaderArticle?.factReview, bound.proof)
         && Object.keys(packet.stages).length === 1
         && Object.keys(packet.fields || {}).length === fields.length
         && fields.every(field => Object.hasOwn(packet.fields, field))
-        && Object.keys(packet.contracts || {}).every(field => /^apiReader/.test(field)));
+        && Object.keys(packet.contracts || {}).every(isReaderContractKey));
     if (packets.length !== 1) return null;
     const packet = packets[0], candidate = structuredClone(paper);
     const stage = packet.stages.apiReaderArticle;

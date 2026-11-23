@@ -18,7 +18,7 @@ test('合法原表示例保留全部已展示数据行和列，并由公共渲�
     const line = evidence.match(/^TABLE_1_VERIFIED_INDEX_EXAMPLE: (.+?)；/m);
     assert.ok(line);
     const example = JSON.parse(line[1]);
-    assert.deepEqual(example.selection.sourceRows, [0, 2, 3]);
+    assert.deepEqual(example.selection.sourceRows, [1, 2, 3]);
     assert.deepEqual(example.selection.sourceColumns, [0, 1, 2]);
     assert.ok(renderReaderTableSelection(example, artifacts));
     const shifted = structuredClone(artifacts);
@@ -32,7 +32,7 @@ test('合法原表示例保留全部已展示数据行和列，并由公共渲�
         .match(/^TABLE_1_VERIFIED_INDEX_EXAMPLE: (.+?)；/m);
     assert.ok(shiftedLine);
     const shiftedExample = JSON.parse(shiftedLine[1]);
-    assert.deepEqual(shiftedExample.selection.sourceRows, [8, 10, 11]);
+    assert.deepEqual(shiftedExample.selection.sourceRows, [9, 10, 11]);
     assert.ok(renderReaderTableSelection(shiftedExample, shifted));
     assert.match(evidence, /不能替代比较问题、基线与内容覆盖判断/);
 });

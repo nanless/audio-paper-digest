@@ -2,6 +2,7 @@
 """把无外部资源的官方内联 SVG 转成当前调用使用的真实像素。"""
 
 import hashlib
+import html as html_module
 import json
 from html.entities import html5
 from html.parser import HTMLParser
@@ -46,6 +47,10 @@ FOREIGN_HTML_CONTAINER_TAGS = {
     )
     for tag in (name, '{http://www.w3.org/1999/xhtml}' + name)
 }
+FOREIGN_HTML_SVG_INHERITED_CONTAINER_TAGS = FOREIGN_HTML_CONTAINER_TAGS | {
+    '{http://www.w3.org/2000/svg}' + name
+    for name in ('span', 'div', 'p', 'b', 'strong', 'i', 'em', 'sub', 'sup', 'a')
+}
 
 
 def has_strict_math_ancestor(element, parents):
@@ -59,12 +64,13 @@ def has_strict_math_ancestor(element, parents):
     return False
 
 
-def has_strict_foreign_html_ancestor(element, parents):
+def has_strict_foreign_html_ancestor(element, parents, *, allow_svg_inherited=False):
+    allowed = FOREIGN_HTML_SVG_INHERITED_CONTAINER_TAGS if allow_svg_inherited else FOREIGN_HTML_CONTAINER_TAGS
     ancestor = parents.get(element)
     while ancestor is not None:
         if ancestor.tag.split('}')[-1].lower() in {'math', 'foreignobject', 'svg'}:
             return ancestor.tag in {'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}
-        if ancestor.tag not in FOREIGN_HTML_CONTAINER_TAGS:
+        if ancestor.tag not in allowed:
             return False
         ancestor = parents.get(ancestor)
     return False
@@ -227,8 +233,8 @@ def validate_svg(raw):
         raise ValueError('内联 SVG 字节为空或超过受控上限')
     text = normalize_math_alttext_less_than(
         normalize_static_html_breaks(normalize_html_svg_entities(raw.decode('utf-8'))))
-    if re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
-        raise ValueError('内联 SVG 不允许实体或处理指令')
+    if re.search(r'<!|<\?', text, re.I):
+        raise ValueError('内联 SVG 不允许实体、注释、CDATA 或处理指令')
     root = ET.fromstring(text)
     if root.tag.split('}')[-1].lower() != 'svg':
         raise ValueError('内联 SVG 根元素无效')
@@ -248,14 +254,22 @@ def validate_svg(raw):
         # all descendant attributes/resources still pass the same checks below.
         local_tag = element.tag.split('}')[-1].lower()
         static_html = local_tag in {'pre', 'cite', 'section', 'h5'}
+        html_breakout_tag = local_tag in {
+            'span', 'div', 'p', 'br', 'b', 'strong', 'i', 'em', 'sub', 'sup',
+        }
         if static_html:
-            ancestor = parents.get(element)
-            while ancestor is not None and ancestor.tag not in {
-                    'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}:
-                ancestor = parents.get(ancestor)
             if (element.tag not in {local_tag, '{http://www.w3.org/1999/xhtml}' + local_tag}
-                    or ancestor is None):
+                    or not has_strict_foreign_html_ancestor(element, parents)):
                 raise ValueError('内联 SVG 的静态 HTML 元素必须位于 foreignObject 内')
+        elif html_breakout_tag:
+            if (element.tag not in {
+                    local_tag,
+                    '{http://www.w3.org/1999/xhtml}' + local_tag,
+                    '{http://www.w3.org/2000/svg}' + local_tag,
+                }
+                    or not has_strict_foreign_html_ancestor(element, parents, allow_svg_inherited=True)):
+                raise ValueError('内联 SVG 的静态 HTML 元素必须位于 foreignObject 内')
+        if static_html:
             if local_tag in {'section', 'h5'}:
                 classes = set(element.attrib.get('class', '').split())
                 required = {'ltx_paragraph'} if local_tag == 'section' else {'ltx_title', 'ltx_title_paragraph'}
@@ -390,10 +404,13 @@ def source_descriptor(resource, arxiv_id):
     raw = text.encode('utf-8')
     if len(raw) != resource.get('inlineSvgBytes') or hashlib.sha256(raw).hexdigest() != resource.get('inlineSvgSha256'):
         raise ValueError('内联 SVG 的封存原字节不符')
-    if not raw or len(raw) > MAX_SOURCE_BYTES or re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
-        raise ValueError('内联 SVG 不允许实体、处理指令或超限来源')
-    root = ET.fromstring(normalize_math_alttext_less_than(
-        normalize_static_html_breaks(normalize_html_svg_entities(text))))
+    if not raw or len(raw) > MAX_SOURCE_BYTES:
+        raise ValueError('内联 SVG 不允许实体、注释、CDATA、处理指令或超限来源')
+    normalized_text = normalize_math_alttext_less_than(
+        normalize_static_html_breaks(normalize_html_svg_entities(text)))
+    if re.search(r'<!|<\?', normalized_text, re.I):
+        raise ValueError('内联 SVG 不允许实体、注释、CDATA、处理指令或超限来源')
+    root = ET.fromstring(normalized_text)
     element_id = root.attrib.get('id')
     if root.tag.split('}')[-1] != 'svg' or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(element_id or '')):
         raise ValueError('内联 SVG 没有原文元素定位')
@@ -402,8 +419,61 @@ def source_descriptor(resource, arxiv_id):
             'inlineSvgRenderContract': 'reader-official-inline-svg-pixels-v1'}
 
 
+_ALLOWED_RENDER_TAG_NS = {'', 'http://www.w3.org/2000/svg', 'http://www.w3.org/1999/xhtml', 'http://www.w3.org/1998/Math/MathML'}
+_XLINK_NS = 'http://www.w3.org/1999/xlink'
+_HTML_VOID_TAGS = {'br'}
+
+
+def _serialize_validated_svg(root):
+    """把已通过 validate_svg 校验的 ElementTree 序列化为无 XML/HTML5 歧义的规范标记。"""
+    uses_xlink = False
+
+    def split_qname(qname):
+        if qname.startswith('{'):
+            end = qname.find('}')
+            return qname[1:end], qname[end + 1:]
+        return '', qname
+
+    def emit(node, is_root=False):
+        nonlocal uses_xlink
+        ns, local = split_qname(node.tag)
+        if is_root and (ns not in {'', 'http://www.w3.org/2000/svg'} or local.lower() != 'svg'):
+            raise ValueError('内联 SVG 根元素无效')
+        if ns not in _ALLOWED_RENDER_TAG_NS:
+            raise ValueError('内联 SVG 含未允许的元素命名空间')
+        attrs = []
+        if is_root:
+            attrs.append('xmlns="http://www.w3.org/2000/svg"')
+        for raw_name, raw_value in node.attrib.items():
+            attr_ns, attr_local = split_qname(raw_name)
+            if attr_ns == _XLINK_NS:
+                uses_xlink = True
+                attr_out = f'xlink:{attr_local}'
+            elif attr_ns == '':
+                attr_out = attr_local
+            else:
+                raise ValueError('内联 SVG 含未允许的属性命名空间')
+            attrs.append(f'{attr_out}="{html_module.escape(str(raw_value), quote=True)}"')
+        children_html = []
+        if node.text:
+            children_html.append(html_module.escape(node.text, quote=False))
+        for child in node:
+            children_html.append(emit(child, is_root=False))
+            if child.tail:
+                children_html.append(html_module.escape(child.tail, quote=False))
+        if is_root and uses_xlink:
+            attrs.insert(1, f'xmlns:xlink="{_XLINK_NS}"')
+        attr_str = (' ' + ' '.join(attrs)) if attrs else ''
+        if local.lower() in _HTML_VOID_TAGS and not children_html:
+            return f'<{local}{attr_str}>'
+        return f'<{local}{attr_str}>' + ''.join(children_html) + f'</{local}>'
+
+    return emit(root, is_root=True)
+
+
 def render_svg(raw):
     text = validate_svg(raw)
+    canonical_markup = _serialize_validated_svg(ET.fromstring(text))
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         expected = Path(playwright.chromium.executable_path)
@@ -425,11 +495,11 @@ def render_svg(raw):
             options['executable_path'] = str(sorted(candidates)[-1])
         browser = playwright.chromium.launch(**options)
         try:
-            context = browser.new_context(java_script_enabled=False, viewport={'width': 4096, 'height': 4096})
+            context = browser.new_context(java_script_enabled=False, offline=True, viewport={'width': 4096, 'height': 4096})
             page = context.new_page()
             page.route('**/*', lambda route: route.abort())
             page.set_content('<!doctype html><meta charset="utf-8">'
-                             '<style>html,body{margin:0;background:white}</style>' + text,
+                             '<style>html,body{margin:0;background:white}</style>' + canonical_markup,
                              wait_until='load', timeout=30_000)
             figure = page.locator('body > svg')
             bounds = figure.bounding_box()

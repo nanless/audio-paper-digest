@@ -14,9 +14,17 @@ const modern = draft => {
     const merged = [];
     for (const section of body.sections) {
         const targetKind = mergeInto[section.kind] || section.kind;
+        let sectionBody = section.body;
+        if (section.kind === 'training') {
+            sectionBody = sectionBody.replace('| 统一协议 | 固定设置 | 原始集合 | 越高越好 | 1.0 | 仅支持当前口径 |',
+                '| 训练协议 | 固定设置 | 原始集合 | 越高越好 | 1.0 | 仅支持训练口径 |');
+        } else if (section.kind === 'result') {
+            sectionBody = sectionBody.replace('| 统一协议 | 固定设置 | 原始集合 | 越高越好 | 1.0 | 仅支持当前口径 |',
+                '| 评测协议 | 固定设置 | 原始集合 | 越高越好 | 1.0 | 仅支持评测口径 |');
+        }
         const existing = merged.find(item => item.kind === targetKind);
-        if (existing) existing.body = `${existing.body}\n\n${section.body}`;
-        else merged.push({ ...section, kind: targetKind });
+        if (existing) existing.body = `${existing.body}\n\n${sectionBody}`;
+        else merged.push({ ...section, kind: targetKind, body: sectionBody });
     }
     return { ...header(), ...body, sections: merged };
 };

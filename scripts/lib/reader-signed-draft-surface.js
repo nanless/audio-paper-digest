@@ -40,7 +40,7 @@ function reconstructReaderDraftSurface({paper, paperId}) {
         const hasSingleSpace = remainder.startsWith(' ');
         const body = hasSingleSpace ? remainder.slice(1) : remainder;
         if (!body || /^\s/.test(body)) fail(`bridge ${index} has ambiguous prefix spacing`);
-        articleWithMarkers = articleWithMarkers.replace(bridge.explanation, bridge.marker);
+        articleWithMarkers = articleWithMarkers.replace(bridge.explanation, () => bridge.marker);
         // 拼装器会加一个标题和一个空格。历史上的无空格签名桥接只有保留
         // 它精确的标题才能往返：生产环境现有的重复标题合并随后会保留
         // 原来的末标题边界。不要改写已签名段落，也不要放弃下面
@@ -48,12 +48,38 @@ function reconstructReaderDraftSurface({paper, paperId}) {
         return { ...pick(bridge, ['terms', 'sectionKind', 'marker']),
             explanation: hasSingleSpace ? body : bridge.explanation };
     });
-    const headings = [...articleWithMarkers.matchAll(/^### ([^\n]+)\n\n/gm)];
+    const headings = [];
+    {
+        const lines = articleWithMarkers.split('\n');
+        let fence = null;
+        let offset = 0;
+        for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+            const line = lines[lineIdx];
+            const lineStart = offset;
+            offset += line.length + 1;
+            const openMatch = !fence ? /^ {0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/.exec(line) : null;
+            if (fence) {
+                const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
+                if (closeMatch && closeMatch[1][0] === fence[0] && closeMatch[1].length >= fence.length) {
+                    fence = null;
+                }
+                continue;
+            }
+            if (openMatch && (openMatch[1][0] === '~' || !openMatch[2].includes('`'))) {
+                fence = openMatch[1];
+                continue;
+            }
+            const headingMatch = /^### ([^\n]+)$/.exec(line);
+            if (headingMatch && articleWithMarkers.slice(lineStart + line.length, lineStart + line.length + 2) === '\n\n') {
+                headings.push({ index: lineStart, title: headingMatch[1], length: line.length + 2 });
+            }
+        }
+    }
     if (!Array.isArray(plan.sections) || headings.length !== plan.sections.length || headings[0]?.index !== 0
         || new Set(plan.sections.map(section => section.heading)).size !== plan.sections.length) fail('section headings are not unique/exact');
     const sections = plan.sections.map((section, index) => {
-        if (headings[index][1] !== section.heading) fail(`section ${index} heading differs`);
-        const start = headings[index].index + headings[index][0].length;
+        if (headings[index].title !== section.heading) fail(`section ${index} heading differs`);
+        const start = headings[index].index + headings[index].length;
         const end = index + 1 < headings.length ? headings[index + 1].index - 2 : articleWithMarkers.length;
         if (index + 1 < headings.length && articleWithMarkers.slice(end, end + 2) !== '\n\n') fail('section boundary differs');
         const body = articleWithMarkers.slice(start, end);

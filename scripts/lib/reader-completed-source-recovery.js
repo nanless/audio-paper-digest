@@ -75,19 +75,31 @@ function prepare(paper) {
     if (!payload.draft || payload.fullAttempts !== 2 || payload.attempts >= completion.identity.maxAttempts
         || payload.explicitReaderRetryRound || payload.implementationRepairAllowanceProof) fail('仅支持仍有原局部余额且全文已耗尽的普通稿');
     const deep = require('../deep-analyzer');
+    const evidence = deep.buildApiReaderEvidenceContext('', source.text, source.structuredArtifacts, paper.arxivId);
+    const minimumIntegratedTables = require('./reader-contract').readerRequirements({
+        version: 3,
+        availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length
+    }).minimumTables;
+    const verifiedResourceIdentity = deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources, source.text);
+    const availableFigureOrdinals = payload.ephemeralImageEvidence.imageEvidence
+        .filter(x => x.status === 'ready' && x.kind === 'figure').map(x => x.ordinal);
     let rejection;
     try {
         deep.parseApiReaderArticleResult(JSON.stringify(payload.draft), { arxivId: paper.arxivId,
-            requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+            ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
+            requireIntegratedTables: true, minimumIntegratedTables,
             requireSourceBindings: true, allowDeterministicQuoteRepair: true,
             allowDeterministicUnsupportedClaimPruning: true, enforceResourceAvailabilityClaims: true,
-            verifiedResourceIdentity: paper.apiReaderResources, sourceText: source.text,
+            verifiedResourceIdentity, sourceText: source.text,
             structuredArtifacts: source.structuredArtifacts,
-            availableFigureOrdinals: payload.ephemeralImageEvidence.imageEvidence.filter(x => x.status === 'ready' && x.kind === 'figure').map(x => x.ordinal) });
+            availableFigureOrdinals });
     } catch (error) { rejection = error; }
     if (!rejection) fail('原稿当前解析已通过，不能借此恢复模型请求');
     const issues = repair().collectDraftIssues(payload.draft, rejection, { sourceText: source.text, structuredArtifacts: source.structuredArtifacts });
-    const context = repair().buildRepairContext(payload.draft, issues, source.text, source.text, { structuredArtifacts: source.structuredArtifacts });
+    const context = repair().buildRepairContext(payload.draft, issues, evidence, source.text, {
+        structuredArtifacts: source.structuredArtifacts,
+        availableFigureOrdinals
+    });
     if (!repair().isSafeExistingReaderPatchContext(payload.draft, context, false, issues)
         || context.targets.length < 1 || context.targets.length > 8) fail('当前全部问题没有1–8个安全已有局部节点');
     const body = { kind: 'ordinary-completed-source-recovery', basename: original.name, envelopeSha256: original.sha,

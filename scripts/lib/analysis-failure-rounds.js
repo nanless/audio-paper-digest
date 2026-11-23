@@ -148,6 +148,7 @@ async function runFailureRounds(items, options = {}) {
                 if (index === undefined) return;
                 attempted.push(index);
                 const attempt = ++attempts[index];
+                outcomes[index] = undefined;
                 try {
                     const outcome = await runItem(items[index], { index, round, maxRounds, attempt });
                     if (!outcome || (typeof outcome.success !== 'boolean' && outcome.skipped !== true)) {
@@ -170,14 +171,15 @@ async function runFailureRounds(items, options = {}) {
         for (const result of settled) if (result.status === 'rejected') halt(result.reason);
         if (notification) { try { await notification; } catch (error) { halt(error); } }
         await checkStop();
+        const attemptedSet = new Set(attempted);
         pending = input.filter(index => outcomes[index]?.success === false
             && failureDetails(outcomes[index]).retryable && failureDetails(outcomes[index]).scope !== 'run');
         const record = { round, inputIds: input.map(index => ids[index]), attemptedIds: attempted.map(index => ids[index]),
-            successIds: input.filter(index => outcomes[index]?.success === true).map(index => ids[index]),
-            skippedIds: input.filter(index => outcomes[index]?.skipped === true).map(index => ids[index]),
-            failedIds: input.filter(index => outcomes[index]?.success === false).map(index => ids[index]),
-            retryableFailedIds: pending.map(index => ids[index]),
-            unstartedIds: input.filter(index => !attempted.includes(index)).map(index => ids[index]),
+            successIds: input.filter(index => attemptedSet.has(index) && outcomes[index]?.success === true).map(index => ids[index]),
+            skippedIds: input.filter(index => attemptedSet.has(index) && outcomes[index]?.skipped === true).map(index => ids[index]),
+            failedIds: input.filter(index => attemptedSet.has(index) && outcomes[index]?.success === false).map(index => ids[index]),
+            retryableFailedIds: pending.filter(index => attemptedSet.has(index)).map(index => ids[index]),
+            unstartedIds: input.filter(index => !attemptedSet.has(index)).map(index => ids[index]),
             noProgressById: Object.fromEntries(input.map(index => [ids[index], progress[index].noProgressRounds])),
             durationMs: Date.now() - startedAt, stopped: Boolean(halted) };
         rounds.push(record);

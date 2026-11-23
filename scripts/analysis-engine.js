@@ -2011,23 +2011,37 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
         && authors.authors.length === authorIdentity.authors.length
         && authors.authors.every((author, index) => {
             const identity = authorIdentity.authors[index];
-            return identity?.name === author?.name
-                && JSON.stringify(identity?.affiliations) === JSON.stringify(author?.affiliations)
-                && ['html_dom', 'pdf_text', 'paper_metadata'].includes(identity?.nameBinding?.sourceKind)
+            const exactKeys = (obj, expected) => Boolean(obj && typeof obj === 'object' && !Array.isArray(obj))
+                && JSON.stringify(Object.keys(obj).sort()) === JSON.stringify(expected);
+            return exactKeys(author, ['affiliations', 'name'])
+                && exactKeys(identity, ['affiliationBindings', 'affiliations', 'name', 'nameBinding'])
+                && typeof author.name === 'string' && author.name.trim().length > 0
+                && Array.isArray(author.affiliations) && author.affiliations.length > 0
+                && author.affiliations.every(value => typeof value === 'string' && value.trim().length > 0)
+                && identity.name === author.name
+                && JSON.stringify(identity.affiliations) === JSON.stringify(author.affiliations)
+                && ['html_dom', 'pdf_text', 'paper_metadata'].includes(identity.nameBinding?.sourceKind)
                 && identity.nameBinding.sourceValue === author.name
                 && (['html_dom', 'pdf_text'].includes(identity.nameBinding.sourceKind)
-                    ? identity.nameBinding.sourceDomSha256 === authorIdentity.sourceDomSha256
+                    ? exactKeys(identity.nameBinding, ['sourceDomSha256', 'sourceKind', 'sourceValue'])
+                        && identity.nameBinding.sourceDomSha256 === authorIdentity.sourceDomSha256
                         && /^[a-f0-9]{64}$/.test(String(identity.nameBinding.sourceDomSha256 || ''))
-                    : identity.nameBinding.metadataSha256 === authorIdentity.metadataSha256)
-                && Array.isArray(identity?.affiliationBindings)
+                    : exactKeys(identity.nameBinding, ['metadataSha256', 'sourceKind', 'sourceValue'])
+                        && identity.nameBinding.metadataSha256 === authorIdentity.metadataSha256)
+                && Array.isArray(identity.affiliationBindings)
                 && identity.affiliationBindings.length === author.affiliations.length
                 && identity.affiliationBindings.every((binding, affiliationIndex) => (
                     binding?.sourceValue === author.affiliations[affiliationIndex]
                     && ['html_dom', 'pdf_text', 'explicit_unavailable'].includes(binding?.sourceKind)
-                    && (!['html_dom', 'pdf_text'].includes(binding.sourceKind)
-                        ? binding.sourceTextSha256 === authorIdentity.sourceTextSha256
-                        : binding.sourceDomSha256 === authorIdentity.sourceDomSha256
-                            && /^[a-f0-9]{64}$/.test(String(binding?.sourceDomSha256 || '')))
+                    && (['html_dom', 'pdf_text'].includes(binding.sourceKind)
+                        ? exactKeys(binding, ['association', 'sourceDomSha256', 'sourceKind', 'sourceValue'])
+                            && ['direct_author', 'single_global_affiliation'].includes(binding.association)
+                            && binding.sourceDomSha256 === authorIdentity.sourceDomSha256
+                            && /^[a-f0-9]{64}$/.test(String(binding.sourceDomSha256 || ''))
+                        : exactKeys(binding, ['sourceKind', 'sourceTextSha256', 'sourceValue'])
+                            && (/^机构信息未/.test(String(author.affiliations[affiliationIndex] || ''))
+                                || /^Not disclosed$/i.test(String(author.affiliations[affiliationIndex] || '')))
+                            && binding.sourceTextSha256 === authorIdentity.sourceTextSha256)
                 ));
         });
     const { identitySha256: _resourceIdentitySha256, ...resourceIdentity } = resources;
@@ -2985,7 +2999,8 @@ async function analyzeBatchInternal(papers, options = {}) {
             paper[key] = value;
         }
         if (r.success) for (const key of Object.keys(paper)) {
-            if ((/^latestAnalysisAttempt(?:Error|Retryable|At)/.test(key)
+            if ((key === 'analysisFactReviewObligation'
+                || /^latestAnalysisAttempt(?:Error|Retryable|At)/.test(key)
                 || /^error(?:Code|Category|Status|Scope|Retryable)?$/.test(key))
                 && !Object.hasOwn(r.result, key)) delete paper[key];
         }
@@ -3202,7 +3217,7 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
             if (options.preserveSuccessfulAnalysis
                 && hasValidAnalysisBody(existing)
                 && !isCompleteAnalysisContent(p)) {
-                map.set(key, {
+                const merged = {
                     ...existing,
                     ...(p.analysisManifest ? { analysisManifest: p.analysisManifest } : {}),
                     ...(typeof p.analysisCheckpoint === 'string' ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
@@ -3225,7 +3240,11 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     latestAnalysisAttemptErrorCategory: p.latestAnalysisAttemptErrorCategory ?? p.errorCategory ?? null,
                     latestAnalysisAttemptErrorStatus: p.latestAnalysisAttemptErrorStatus ?? p.errorStatus ?? null,
                     latestAnalysisAttemptErrorScope: p.latestAnalysisAttemptErrorScope ?? p.errorScope ?? null
-                });
+                };
+                if (Object.hasOwn(merged, 'readerRevisionHistory') && merged.readerRevisionHistory === undefined) {
+                    delete merged.readerRevisionHistory;
+                }
+                map.set(key, merged);
                 continue;
             }
             const next = { ...p };

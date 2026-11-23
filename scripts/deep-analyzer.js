@@ -1339,7 +1339,7 @@ function normalizeReaderProsePreservingSelectedTables(
         if (normalized.split(token).length !== 2) {
             throw new Error('Reader selection table protected token 丢失');
         }
-        normalized = normalized.replace(token, block);
+        normalized = normalized.replace(token, () => block);
     }
     return normalized;
 }
@@ -2563,7 +2563,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             throw new Error(`读者文章 formulaBindings[${index}] 原始公式缺少 TeX/DOM SHA`);
         }
         const renderedBlock = `\\[${latex}\\]`;
-        boundArticle = boundArticle.replace(marker, renderedBlock);
+        boundArticle = boundArticle.replace(marker, () => renderedBlock);
         formulaOrdinals.add(binding.formulaOrdinal);
         return {
             formulaOrdinal: binding.formulaOrdinal,
@@ -2619,7 +2619,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                     removedHeaders: renderedTables[index].header.filter(header => !after.header.includes(header)),
                     reason: 'source_quote_unsupported_columns' });
             }
-            boundArticle = boundArticle.replace(renderedTables[index].markdown, pruned);
+            boundArticle = boundArticle.replace(renderedTables[index].markdown, () => pruned);
         }
         renderedTables = extractMarkdownTables(boundArticle);
     }
@@ -3839,12 +3839,23 @@ function readerVerifiedTableIndexExamples(artifacts, actualEvidence, issues, dra
         }
         if (JSON.stringify(shownMatrix) !== JSON.stringify(table.matrix)) continue;
         const rows = effectiveReaderTableRows(table);
-        const example = { tableIndex: 1, selection: {
-            sourceTableOrdinal: ordinal,
-            sourceRows: [rows.headerRows[0], ...rows.bodyRows],
-            sourceColumns: table.matrix[0].map((_cell, column) => column)
-        } };
-        try { renderReaderTableSelection(example, artifacts); } catch (_error) { continue; }
+        const firstBodyRow = rows.bodyRows.length ? Math.min(...rows.bodyRows) : Infinity;
+        const topHeaderRows = rows.headerRows.filter(row => row < firstBodyRow).reverse();
+        const laterHeaderRows = rows.headerRows.filter(row => row >= firstBodyRow);
+        let example = null;
+        for (const headerRow of [...topHeaderRows, ...laterHeaderRows]) {
+            const candidate = { tableIndex: 1, selection: {
+                sourceTableOrdinal: ordinal,
+                sourceRows: [headerRow, ...rows.bodyRows],
+                sourceColumns: table.matrix[0].map((_cell, column) => column)
+            } };
+            try {
+                renderReaderTableSelection(candidate, artifacts);
+                example = candidate;
+                break;
+            } catch (_error) { /* try earlier header row */ }
+        }
+        if (!example) continue;
         const line = `TABLE_${ordinal}_VERIFIED_INDEX_EXAMPLE: ${JSON.stringify(example)}；`
             + 'tableIndex=1仅为格式示意，须对应文章实际表序号。此例保留已展示全部数据行与列，只证明索引合法，不能替代比较问题、基线与内容覆盖判断。';
         if (examples.join('\n').length + line.length + 1 > 2000) break;
@@ -4785,12 +4796,12 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         if (/(?:否定|反驳|证伪)[^。！？!?；;，,]{0,48}$/.test(prefix)) return false;
         // 限定当前肯定词之前的否定作用域；后续转折中的实际发布声明仍要核验。
         const currentAssertionPrefix = prefix.split(/(?:但是|然而|不过|事实上|却|(?<!不)但)/u).at(-1);
-        if (/(?:不能(?:据此)?直接写成|未能(?:直接|可靠|独立|明确)?确认)[^。！？!?；;，,]{0,48}$/u
+        if (/(?:不能(?:据此)?(?:直接)?写成|未能(?:直接|可靠|独立|明确)?确认)[^。！？!?；;，,]{0,48}$/u
             .test(currentAssertionPrefix)) return true;
         if (/(?:无法确认|尚无法确认|未确认|未证明|未报告|不证明|不涉及|不讨论|不等于|不代表|不要(?:把|将|默认|声称|写|表示|推断|断言)|不能(?:据此)?(?:確認|确认|认定|推断|断言|宣告|说)|不能仅凭[^。！？!?；;，,]{1,28}就(?:确认|认定|推断|断言))[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
         // 「原文也没有声称代码模型数据已开源」是闭合否定：否定动词后可以接不带
         // 分隔符的资源名词串（代码模型数据），不构成作者当前的开放声明。
-        if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
+        if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证|分配|设立|建立|开设|公布)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
         if (/需要补(?:充)?(?:的)?(?:验证|检查|步骤)(?:是|包括)?[^。！？!?；;，,]{0,36}$/.test(prefix)) return true;
         if (/(?:先|再|应|需)(?:单独|分别|实际)?(?:验证|核对|确认)[^。！？!?；;，,]{0,16}$/.test(prefix)) return true;
         if (/属于第三方[^。！？!?；;，,]{0,16}$/.test(prefix) && availableTypes.has('third_party')) return true;
@@ -6435,7 +6446,7 @@ function normalizeApiReaderTablePasteArtifacts(article, tableBindings = []) {
             return cleaned;
         }));
         const rebuilt = rebuild(rows);
-        if (rebuilt !== table.markdown) output = output.replace(table.markdown, rebuilt);
+        if (rebuilt !== table.markdown) output = output.replace(table.markdown, () => rebuilt);
     }
     return output;
 }
@@ -6468,7 +6479,7 @@ function normalizeKnownReaderDuplicateRows(article, arxivId = '') {
                 changed = true;
             }
         }
-        if (changed) output = output.replace(table.markdown, rebuild(rows));
+        if (changed) output = output.replace(table.markdown, () => rebuild(rows));
     }
     return output;
 }
@@ -7315,7 +7326,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     normalizeDeclaredReaderMarkerParagraphs(value);
     removeOrphanReaderTableMarkers(value);
     const compiledTables = compileReaderTableSelections(
-        value.sections, value.tableBindings, options.structuredArtifacts
+        value.sections, value.tableBindings, options.structuredArtifacts,
+        { checkDuplicates: isCohesiveV4 }
     );
     value.sections = compiledTables.sections;
     value.tableBindings = compiledTables.tableBindings;
@@ -7584,7 +7596,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         if (!article.includes(bridge.marker)) {
             throw new Error(`读者文章中缺少术语组合解释的占位标记：${bridge.marker}`);
         }
-        article = article.replace(bridge.marker, bridge.explanation);
+        article = article.replace(bridge.marker, () => bridge.explanation);
     }
     assertApiReaderConceptsAssembled(article);
     const exactBridgeParagraphs = Array.isArray(options.exactSignedBridgeSurfaces)
@@ -7612,7 +7624,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         if (article.split(token).length !== 2) {
             throw new Error('signed Reader bridge surface was altered during normalization');
         }
-        article = article.replace(token, bridgeParagraph);
+        article = article.replace(token, () => bridgeParagraph);
     }
     let proseChineseCharsBelowMinimum = null;
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
@@ -7974,7 +7986,7 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
     for (const placement of repairedPlacements) {
         const block = renderedBlocks.get(placement.marker);
         if (!block || repairedArticle.split(placement.marker).length !== 2) return null;
-        repairedArticle = repairedArticle.replace(placement.marker, block);
+        repairedArticle = repairedArticle.replace(placement.marker, () => block);
     }
     const placementByOrdinal = new Map(repairedPlacements.map(item => [
         item.figureOrdinal, item
@@ -8392,13 +8404,13 @@ function buildApiReaderValidationFeedback(error) {
             + `紧邻前一段至少 ${API_READER_FIGURE_LEAD_MIN_CHARS} 字，`
             + `紧邻后一段至少 ${API_READER_FIGURE_EXPLANATION_MIN_CHARS} 字，`
             + '中间不能夹标题、列表、表格或其他 marker；'
-            + 'focusPoints 必须有 2–4 项且每项 12–120 字'
+            + 'focusPoints 在新版（cohesive-v4）可填 [] 或 2–4 项（每项 6–120 字），旧版须为 2–4 项且每项 12–120 字'
         );
     }
     if (/高价值图文绑定少于/.test(message)) {
         fixes.push(
-            '从可用 Figure 清单补足不同 figureOrdinal；每张图都按“35 字以上独立导读段—独占 marker—'
-            + '45 字以上独立解释段”放入匹配的 targetKind 小节，并给出 2–4 个具体观察点'
+            `从可用 Figure 清单补足不同 figureOrdinal；每张图都按“${API_READER_FIGURE_LEAD_MIN_CHARS} 字以上独立导读段—独占 marker—`
+            + `${API_READER_FIGURE_EXPLANATION_MIN_CHARS} 字以上独立解释段”放入匹配的 targetKind 小节，focusPoints 可按当前规范填 [] 或 2–4 个观察要点`
         );
     }
     if (/conceptBridges\[\d+\]/.test(message)) {
@@ -8885,6 +8897,59 @@ function apiReaderSourceOnlyInputFingerprint(paper, sourceEvidence, options = {}
 
 // Pure deterministic transform shared by normal generation and authenticated
 // read-only paid-origin replay. It creates no source or publication capability.
+function normalizeApiReaderDraftPreOrder(candidate, normalizationIssues = [], options = {}) {
+    if (!candidate || typeof candidate !== 'object') return candidate;
+    const repair = require('./lib/reader-repair');
+    const draftOrderMappings = Array.isArray(options.draftOrderMappings) ? options.draftOrderMappings : null;
+    if (Array.isArray(options.pixelFigureOrdinals)) {
+        const noFigureCleanup = repair.normalizeUnavailableReaderFigures(candidate, options.pixelFigureOrdinals);
+        if (noFigureCleanup) {
+            candidate = noFigureCleanup.draft;
+            if (draftOrderMappings) draftOrderMappings.push(noFigureCleanup.mapping);
+            if (typeof options.onNoFigureCleanup === 'function') options.onNoFigureCleanup(noFigureCleanup);
+        }
+    }
+    // 明确只修正文或资源的模式不授权改来源字段，继续由原有完整校验决定。
+    if (options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true
+        && typeof options.sourceText === 'string' && options.sourceText.length > 0) {
+        const quoteWhitespace = normalizeReaderSourceQuoteWhitespace(candidate, options.sourceText);
+        if (quoteWhitespace && draftOrderMappings) draftOrderMappings.push(quoteWhitespace);
+    }
+    normalizeReaderConceptBridgeTerms(candidate);
+    normalizeShiftedReaderConceptBridgeMarkers(candidate);
+    normalizeDuplicateReaderConceptBridgeMarkers(candidate);
+    normalizeDeclaredReaderMarkerParagraphs(candidate);
+    if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
+        inlineExcessCohesiveReaderConceptBridges(candidate);
+        coalesceExcessCohesiveReaderSections(candidate);
+    }
+    repairReportedTextSpacing(candidate, normalizationIssues);
+    normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
+    if (Array.isArray(candidate.sections)) {
+        candidate.sections = candidate.sections.map(section => ({
+            ...section,
+            body: typeof section?.body === 'string'
+                ? normalizeIssueBoundReaderQuantitativeNumerals(
+                    normalizeDanglingReaderConnectors(section.body), normalizationIssues
+                ) : section?.body
+        }));
+    }
+    if (Array.isArray(candidate.conceptBridges)) {
+        candidate.conceptBridges = candidate.conceptBridges.map(bridge => ({
+            ...bridge,
+            explanation: typeof bridge?.explanation === 'string'
+                ? normalizeIssueBoundReaderQuantitativeNumerals(
+                    bridge.explanation, normalizationIssues
+                ) : bridge?.explanation
+        }));
+    }
+    // 模型可能把 TABLE 标记直接贴在正文后面。在会议的表格顺序处理之前，先让已声明的
+    // 标记独立成块；否则一次本来语义上可恢复的标记/表格错位，会被看成绑定有歧义，
+    // 在归一化之前就被拒。
+    normalizeDeclaredReaderMarkerParagraphs(candidate);
+    return candidate;
+}
+
 function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, state = {}) {
     const repair = require('./lib/reader-repair');
     let candidate = draft;
@@ -8898,49 +8963,16 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
             options.structuredArtifacts, options.paperId, () =>
                 withReaderSourceQuoteEvidence(options.structuredArtifacts, options.paperId, () => {
                 if (!candidate) return;
-                const noFigureCleanup = repair.normalizeUnavailableReaderFigures(candidate, pixelFigureOrdinals);
-                if (noFigureCleanup) {
-                    candidate = noFigureCleanup.draft;
-                    draftOrderMappings.push(noFigureCleanup.mapping);
-                    mechanicalNoFigureCleanupChanged = true;
-                }
-                // 明确只修正文或资源的模式不授权改来源字段，继续由原有完整校验决定。
-                if (options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
-                    const quoteWhitespace = normalizeReaderSourceQuoteWhitespace(candidate, options.sourceText);
-                    if (quoteWhitespace) draftOrderMappings.push(quoteWhitespace);
-                }
                 const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE
                     && !repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
-                normalizeReaderConceptBridgeTerms(candidate);
-                normalizeShiftedReaderConceptBridgeMarkers(candidate);
-                normalizeDuplicateReaderConceptBridgeMarkers(candidate);
-                normalizeDeclaredReaderMarkerParagraphs(candidate);
-                if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
-                    inlineExcessCohesiveReaderConceptBridges(candidate);
-                    coalesceExcessCohesiveReaderSections(candidate);
-                }
-                repairReportedTextSpacing(candidate, normalizationIssues);
-                normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
-                candidate.sections = candidate.sections.map(section => ({
-                    ...section,
-                    body: typeof section?.body === 'string'
-                        ? normalizeIssueBoundReaderQuantitativeNumerals(
-                            normalizeDanglingReaderConnectors(section.body), normalizationIssues
-                        ) : section?.body
-                }));
-                if (Array.isArray(candidate.conceptBridges)) {
-                    candidate.conceptBridges = candidate.conceptBridges.map(bridge => ({
-                        ...bridge,
-                        explanation: typeof bridge?.explanation === 'string'
-                            ? normalizeIssueBoundReaderQuantitativeNumerals(
-                                bridge.explanation, normalizationIssues
-                            ) : bridge?.explanation
-                    }));
-                }
-                // 模型可能把 TABLE 标记直接贴在正文后面。在会议的表格顺序处理之前，先让已声明的
-                // 标记独立成块；否则一次本来语义上可恢复的标记/表格错位，会被看成绑定有歧义，
-                // 在归一化之前就被拒。
-                normalizeDeclaredReaderMarkerParagraphs(candidate);
+                candidate = normalizeApiReaderDraftPreOrder(candidate, normalizationIssues, {
+                    pixelFigureOrdinals,
+                    sourceText: options.sourceText,
+                    draftOrderMappings,
+                    onNoFigureCleanup: () => { mechanicalNoFigureCleanupChanged = true; },
+                    readerFactLocalRevision: options.readerFactLocalRevision === true,
+                    resourceLocalRevision: options.resourceLocalRevision === true
+                });
                 if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
                     normalizeReaderSourceQuotes(candidate, options.sourceText);
                     const sourceQuoteMarkerRepair = normalizeReaderSourceQuoteTableMarkers(candidate);
@@ -8989,12 +9021,81 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
     }
 }
 
+function resolveApiReaderTargetEditorialProfile({ paidPromptReplay = null, signedRecoveryDraft = null, candidateDraft = null } = {}) {
+    const readerFormat = require('./lib/reader-record-format');
+    if (candidateDraft) {
+        try { return readerFormat.draftFormat(candidateDraft).editorialProfile; }
+        catch { return readerFormat.LEGACY_INTEGRATED; }
+    }
+    if (paidPromptReplay) {
+        const replayedSha = paidPromptReplay.stageFields?.promptTemplateSha256;
+        if (replayedSha) {
+            const currentPromptPath = currentTextStagePromptPath('apiReaderArticle');
+            if (replayedSha === promptTemplateSha256(currentPromptPath)) {
+                return readerFormat.COHESIVE_V4;
+            }
+            try {
+                const bytes = require('./lib/prompt-history').historicalPromptTemplateBytesForSha256(replayedSha);
+                const codec = require('./lib/protocol-codec');
+                const currentDraftFp = codec.recordHeader(codec.contract('reader-draft'), 'reader-draft').schemaFingerprint;
+                if (bytes && bytes.toString('utf8').includes(currentDraftFp)) {
+                    return readerFormat.COHESIVE_V4;
+                }
+            } catch { /* 历史非 v4 模板回退旧版集成契约 */ }
+        }
+        return readerFormat.LEGACY_INTEGRATED;
+    }
+    if (signedRecoveryDraft) {
+        try { return readerFormat.draftFormat(signedRecoveryDraft).editorialProfile; }
+        catch { return readerFormat.LEGACY_INTEGRATED; }
+    }
+    return readerFormat.COHESIVE_V4;
+}
+
+function buildApiReaderMechanicalContract({
+    paidPromptReplay = null,
+    signedRecoveryDraft = null,
+    candidateDraft = null,
+    readerCapabilityPolicy = null,
+    availableTableCount = 0,
+    structuredArtifacts = null,
+    capabilityNotice = '',
+    completeFigureBindingNotice = ''
+} = {}) {
+    const readerFormat = require('./lib/reader-record-format');
+    const { buildReaderContractNotice, readerRequirements } = require('./lib/reader-contract.js');
+    const editorialProfile = resolveApiReaderTargetEditorialProfile({
+        paidPromptReplay,
+        signedRecoveryDraft,
+        candidateDraft
+    });
+    const minimumIntegratedTables = readerCapabilityPolicy
+        ? readerCapabilityPolicy.minimumIntegratedTables
+        : readerRequirements({
+            profile: readerFormat.INTEGRATED,
+            editorialProfile,
+            availableTableCount
+        }).minimumTables;
+    const mechanicalContract = [
+        buildReaderContractNotice({
+            profile: readerFormat.INTEGRATED,
+            editorialProfile,
+            minimumIntegratedTables,
+            availableTableCount,
+            ...readerResultTableRequirement(structuredArtifacts)
+        }),
+        capabilityNotice,
+        completeFigureBindingNotice,
+        'TABLE、FORMULA、FIGURE、CONCEPT_BRIDGE 装配标记必须放在可见正文中，独占一个空行分隔的段落；不得放入 HTML 注释、代码块、行内代码或引用中。表格、原图、公式和术语解释的示例或隐藏副本不能算作正文展示。'
+    ].filter(Boolean).join('\n');
+    return { editorialProfile, minimumIntegratedTables, mechanicalContract };
+}
+
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     const repair = require('./lib/reader-repair.js');
     const fresh = require('./lib/fresh-analysis-context.js');
     fresh.assertFreshPaper(paper);
     const freshIdentity = fresh.freshAnalysisIdentity(getPaperArxivId(paper));
-    const { buildReaderContractNotice, readerRequirements } = require('./lib/reader-contract.js');
     const { FILES } = require('./config.js');
     const start = buildApiReaderGenerationStart(paper, options);
     if (options.resourceLocalRevision === true && !start.signedRecoveryDraft) {
@@ -9419,19 +9520,25 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         .matchAll(/^TABLE_(\d+):/gm)]
         .map(match => Number.parseInt(match[1], 10))
         .filter(Number.isInteger).length;
-    const minimumIntegratedTables = readerCapabilityPolicy
-        ? readerCapabilityPolicy.minimumIntegratedTables
-        : readerRequirements({ version: 3, availableTableCount }).minimumTables;
     const completeFigureBindingNotice = options.structuredArtifacts?.sourceKind === 'conference_pdf'
         && !readerCapabilityPolicy && availableFigureOrdinals.length > 0
         ? availableFigureOrdinals.length <= API_READER_FIGURE_SELECTION_LIMIT
             ? `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}。figurePlacements 必须逐一记录这些图片，在对应 targetKind 小节中放置占位符，并在紧邻的前后段落分别写导读和解释。不能返回空数组，也不能只记录其中一张。`
             : `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}，最多选择 ${API_READER_FIGURE_SELECTION_LIMIT} 张最有解释价值且不重复的图片。每张所选图片都须在对应 targetKind 小节放置占位符，并在紧邻的前后段落分别写导读和解释。未选择的图片仍会由页面资源层保留，不要为凑数量添加 figurePlacements。`
         : '';
-    const mechanicalContract = [buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount,
-        ...readerResultTableRequirement(options.structuredArtifacts) }), capabilityNotice,
-        completeFigureBindingNotice,
-        'TABLE、FORMULA、FIGURE、CONCEPT_BRIDGE 装配标记必须放在可见正文中，独占一个空行分隔的段落；不得放入 HTML 注释、代码块、行内代码或引用中。表格、原图、公式和术语解释的示例或隐藏副本不能算作正文展示。'].filter(Boolean).join('\n');
+    const mechanicalContractOptions = {
+        paidPromptReplay,
+        signedRecoveryDraft: start.signedRecoveryDraft,
+        readerCapabilityPolicy,
+        availableTableCount,
+        structuredArtifacts: options.structuredArtifacts,
+        capabilityNotice,
+        completeFigureBindingNotice
+    };
+    const {
+        minimumIntegratedTables,
+        mechanicalContract
+    } = buildApiReaderMechanicalContract(mechanicalContractOptions);
     const figureEvidenceEntries = [...String(sourceEvidence || '')
         .matchAll(/^FIGURE_(\d+):\s*([^\n]*)\nFIGURE_\1_URL:\s*([^\s]+)$/gm)]
         .map(match => ({
@@ -9556,6 +9663,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             allowNewImplementationAllowance: false,
             ...(options.savedReaderInputContinuity ? { savedReaderInputContinuity: options.savedReaderInputContinuity, paper } : {}),
             normalizeReplayDraft: (draft, issues) => normalizeReplayDraft(draft, issues, allImageInputs, false),
+            pixelFigureOrdinals: allImageInputs.filter(image => image.kind === 'figure').map(image => image.ordinal),
+            sourceText: options.sourceText,
+            structuredArtifacts: options.structuredArtifacts,
             ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate:options.resolvedReaderCandidate, paper:options.resolvedReaderCandidateParent || paper } : {}),
             ...(options.paidReaderResponseReplay !== undefined
                 ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}) }
@@ -10064,13 +10174,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             // renderPrompt 渲染并登记进能力集合，所以只能作为 feedback 变量进入，
             // 不能在 renderPrompt 之后再拼接，否则诊断绑定与真实输入不再逐字一致。
             const ordinalRejectionTail = readerPatchRejectionPromptTail(patchRejectionFeedback, { ordinal: true });
+            const repairMechanicalContract = repairContext && candidate
+                ? buildApiReaderMechanicalContract({ ...mechanicalContractOptions, candidateDraft: candidate }).mechanicalContract
+                : mechanicalContract;
             const rendered = require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
             ? loadPrompt(conceptTermsContext.promptPath, { title: paper.title || '', arxivId: getPaperArxivId(paper),
                 ...repair.conceptTermsPromptVariables(conceptTermsContext) })
             : repairContext?.atomicOperation?.kind === 'reorganize_existing_sections_v1'
             ? repair.buildSectionReorganizationPrompt({ context: repairContext,
-                title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract,
+                title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract: repairMechanicalContract,
                 reviewFeedback: String(options.reviewFeedback || '').trim(), numericSpellingGuidance, indexExamples,
                 requiredKinds: repairContext.atomicOperation.maximumSections === 9
                     ? ['problem', 'method_overview', 'result', 'limitation 或 synthesis']
@@ -10084,7 +10197,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     numericSpellingGuidance, repairReviewFeedbackPrefix,
                     savedInputContinuity?.validationFeedback, ordinalRejectionTail.trim(),
                     ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
-                evidence: repairContext.evidence, mechanicalContract, naturalResourceProse })
+                evidence: repairContext.evidence, mechanicalContract: repairMechanicalContract, naturalResourceProse })
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
@@ -10095,7 +10208,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...(repairContext.atomicOperation ? { atomicOperation: repairContext.atomicOperation } : {}) }),
             sourceEvidence: repairContext.evidence,
             operationProtocol: repair.repairOperationProtocol(repairContext),
-            mechanicalContract
+            mechanicalContract: repairMechanicalContract
         }) : loadPrompt(currentTextStagePromptPath('apiReaderArticle'), {
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
@@ -10617,7 +10730,7 @@ function normalizeApiReaderFigureMarkdown(article, figures = []) {
         const pattern = new RegExp(
             `(?<!\\!)\\[([^\\]\\n]+)\\]\\(${escapeRegExp(url)}\\)`, 'g'
         );
-        normalized = normalized.replace(pattern, `![$1](${url})`);
+        normalized = normalized.replace(pattern, (_whole, alt) => `![${alt}](${url})`);
     }
     return normalized;
 }
@@ -14353,7 +14466,8 @@ const SECONDARY_CONFIG = {
         secondaryKey: SECONDARY_MODEL_CONFIG.key,
         primaryApiKeys: DEEP_CONFIG.apiKeys,
         secondaryModel: SECONDARY_MODEL_CONFIG.model,
-        secondaryFallbackApiKeys: process.env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || ''
+        secondaryFallbackApiKeys: process.env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || '',
+        secondaryTertiaryFallbackApiKey: process.env.PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY || ''
     }),
     model: SECONDARY_MODEL_CONFIG.model || ''
 };
@@ -15554,6 +15668,9 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         state.issues.push('检测到 bibliography 容器但没有恢复出参考文献条目');
     }
 
+    const authorHeaderHtml = !canRetainAuthorSourceHtml(sourceHtml)
+        ? extractAuthorHeaderHtml(sourceHtml)
+        : '';
     const payload = {
         version: ARXIV_STRUCTURED_ARTIFACT_VERSION,
         parserVersion: ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION,
@@ -15561,6 +15678,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         sourceId: String(htmlId || '').toLowerCase(),
         paperId: String(arxivId || '').replace(/v\d+$/i, '').toLowerCase(),
         sourceHtmlSha256: crypto.createHash('sha256').update(sourceHtml).digest('hex'),
+        ...(authorHeaderHtml ? { authorHeaderHtmlSha256: crypto.createHash('sha256').update(authorHeaderHtml).digest('hex') } : {}),
         tables,
         formulas,
         figures,
@@ -15631,7 +15749,8 @@ function bindStructuredArtifactsToText(structuredArtifacts, text) {
 }
 
 const { parseArxivReaderAuthors, resolveApiReaderAuthors, bindApiReaderAuthorIdentity,
-    retainAuthorSourceHtml, resolveVerifiedReaderAuthors }
+    canRetainAuthorSourceHtml, retainAuthorSourceHtml, extractAuthorHeaderHtml,
+    retainAuthorSourceHeaderHtml, resolveVerifiedReaderAuthors }
     = require('./lib/reader-author-parser.js');
 
 function prepareArxivHtmlBodyDom($) {
@@ -15657,7 +15776,26 @@ function extractArxivHtmlContentFromPreparedDom($) {
     for (const sel of selectors) {
         const el = $(sel);
         if (el.length > 0) {
-            content = el.text();
+            const clone = el.clone();
+            clone.find('a[href]').each((_, anchor) => {
+                const $a = $(anchor);
+                const href = String($a.attr('href') || '').trim();
+                if (!href || href.length > 512 || /[()'`\u0000-\u001f\s<>"]/.test(href)) return;
+                let parsed;
+                try { parsed = new URL(href); } catch (_) { return; }
+                if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return;
+                const host = parsed.hostname.toLowerCase();
+                if (/^(?:www\.)?(?:arxiv\.org|doi\.org|dx\.doi\.org|orcid\.org|creativecommons\.org)$/.test(host)) return;
+                const label = $a.text().replace(/\s+/g, ' ').trim();
+                if (!label || label.includes(href) || /https?:\/\//i.test(label)) return;
+                const isKnownResourceHost = /^(?:www\.)?(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)$/.test(host)
+                    || host.endsWith('.github.io');
+                const isResourceLabel = /\b(?:project\s*page|homepage|demo|demos|audio\s+samples?|github|gitlab|hugging\s*face|modelscope|code|models?|weights?|checkpoints?|datasets?|benchmarks?|repo(?:sitory)?|website)\b/i.test(label);
+                if (isKnownResourceHost || isResourceLabel) {
+                    $a.text(`${label} (${href})`);
+                }
+            });
+            content = clone.text();
             break;
         }
     }
@@ -15723,7 +15861,7 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                     const imageInfos = parseArxivImageInfosFromHtml(html, htmlId, arxivId);
                     const structuredArtifacts = parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId);
                     const $ = cheerio.load(html);
-                    const readerAuthors = retainAuthorSourceHtml(parseArxivReaderAuthors($), html);
+                    const readerAuthors = retainAuthorSourceHeaderHtml(parseArxivReaderAuthors($), html);
                     prepareArxivHtmlBodyDom($);
                     const content = extractArxivHtmlContentFromPreparedDom($);
                     const boundStructuredArtifacts = bindStructuredArtifactsToText(structuredArtifacts, content);
@@ -17935,8 +18073,24 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     saveAnalysisCheckpoint(paper, paper.analysisCheckpoint || '', analysisManifest, imageManifest);
 
     const primaryReviewFeedback = require('./lib/daily-fact-review').reviewFeedback('primaryAnalysis', arxivId);
+    let verifiedAuthorsPromptHint = '';
+    try {
+        if (sourceDetails && (sourceDetails.readerAuthors || sourceDetails.source === 'conference_pdf_text')) {
+            const resolvedForPrompt = resolveVerifiedReaderAuthors(
+                paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 }
+            );
+            const boundLines = (resolvedForPrompt?.authors || [])
+                .filter(a => Array.isArray(a.affiliations) && a.affiliations.some(v => v && !/^机构信息未/.test(v)))
+                .map(a => `- ${a.name}: ${a.affiliations.join('; ')}`);
+            if (boundLines.length > 0) {
+                verifiedAuthorsPromptHint = `\n\n【已从官方来源确定性核验的作者与机构（若提及作者/机构请严格以此为准，切勿张冠李戴）】\n${boundLines.join('\n')}`;
+            }
+        }
+    } catch (_) {
+        verifiedAuthorsPromptHint = '';
+    }
     const prompt = loadPrompt(currentTextStagePromptPath('primaryAnalysis'), {
-        hasFullText: hasFullTextIntro,
+        hasFullText: hasFullTextIntro + verifiedAuthorsPromptHint,
         title: paper.title,
         authors: Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知'),
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
@@ -19865,7 +20019,7 @@ function replaceMachinePrimaryTagFields(analysis, taskTag, methodTag) {
         if (matches.length !== 1) {
             throw contractRejectedError(`修复标签时，机器摘要中的 ${key} 字段必须恰好出现一次。`);
         }
-        body = body.replace(pattern, `${key}: ${value}`);
+        body = body.replace(pattern, () => `${key}: ${value}`);
     }
     return `${analysis.slice(0, bounds.contentStart)}${body}${analysis.slice(bounds.end)}`;
 }
@@ -20284,13 +20438,21 @@ async function repairCoreSummarySection(
                 + '3. 正文汉字与中文标点合计 320–600 个。\n'
                 + '4. 必须有一句同时写清：评测设置或数据集、原文的指标名、两个数值、以及高低或变化方向；指标名不能用“性能”“效果”“分数”代替。\n'
                 + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。';
-        const prompt = loadPrompt(currentTextStagePromptPath('coreSummaryRepair'), {
+        const coreRepairPromptPath = currentTextStagePromptPath('coreSummaryRepair');
+        const originalCorePromptBinding = require('./lib/selected-full-stage-reanalysis')
+            .originalPromptBinding(coreRepairPromptPath);
+        const LEGACY_CORE_SUMMARY_REPAIR_PROMPT_SHA256 = '51d75fd0bac9bb02179a2fe581b6bea52d5e451109ed5e0451f6dfbf4d6acfbf';
+        const promptVars = {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
             summaryIssue: `${summaryIssue}\n当前篇幅预算：${lengthBudget}`,
             existingSummary: candidateSummary,
             textForAnalysis: evidenceContext
-        }) + selfCheckChecklist;
+        };
+        const prompt = (!originalCorePromptBinding && !useExecutiveSummary
+            ? loadRegisteredPrompt(coreRepairPromptPath, promptVars,
+                { originalFileSha256: LEGACY_CORE_SUMMARY_REPAIR_PROMPT_SHA256 })
+            : loadPrompt(coreRepairPromptPath, promptVars)) + selfCheckChecklist;
         const diagnosticApi = require('./lib/reader-request-diagnostics');
         const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
             identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,
@@ -20614,14 +20776,15 @@ async function checkAndFixMethodSection(paper, analysis, sourceText, preparedEvi
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'methodRepair' } });
-    if (!fixedSection || !isMethodSectionDetailed(fixedSection)) {
+    const normalizedFixedSection = normalizeSectionContent('方法概述和架构', fixedSection);
+    if (!normalizedFixedSection || !isMethodSectionDetailed(normalizedFixedSection)) {
         const error = new Error('方法补充输出未达到 600 中文字符、三段结构化说明的要求');
         error.code = 'CONTRACT_REJECTED';
         throw error;
     }
 
     // 将补充的方法概述合并回原分析
-    return mergeSectionByTitle(analysis, '方法概述和架构', fixedSection);
+    return mergeSectionByTitle(analysis, '方法概述和架构', normalizedFixedSection);
 }
 
 /**
@@ -21056,7 +21219,10 @@ module.exports = {
     invalidateRecoveryStageIfChanged,
     invalidateApiReaderForResourceCountChange,
     inlineExcessCohesiveReaderConceptBridges,
-    coalesceExcessCohesiveReaderSections
+    coalesceExcessCohesiveReaderSections,
+    normalizeApiReaderDraftPreOrder,
+    resolveApiReaderTargetEditorialProfile,
+    buildApiReaderMechanicalContract
 };
 
 // 直接运行测试

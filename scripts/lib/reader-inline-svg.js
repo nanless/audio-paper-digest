@@ -37,7 +37,7 @@ function inlineSvgSourceDescriptor(resource, arxivId) {
     const bytes = Buffer.from(resource.inlineSvg, 'utf8');
     if (bytes.length !== resource.inlineSvgBytes || bytes.length > MAX_SOURCE_BYTES
         || sha256(bytes) !== resource.inlineSvgSha256
-        || /<!DOCTYPE|<!ENTITY|<\?/i.test(resource.inlineSvg)) return null;
+        || /<!|<\?/i.test(resource.inlineSvg)) return null;
     let elementId;
     try {
         const $ = require('cheerio').load(resource.inlineSvg, { xmlMode: true });
@@ -52,7 +52,7 @@ function inlineSvgSourceDescriptor(resource, arxivId) {
         inlineSvgRenderContract: CONTRACT, mediaType: 'image/png' };
 }
 
-async function renderOfficialInlineSvg(resource) {
+async function renderOfficialInlineSvg(resource, _deps = {}) {
     if (resource?.kind !== 'inline_svg' || resource.mediaType !== 'image/svg+xml'
         || typeof resource.inlineSvg !== 'string'
         || !/^[a-f0-9]{64}$/.test(String(resource.inlineSvgSha256 || ''))) {
@@ -63,23 +63,46 @@ async function renderOfficialInlineSvg(resource) {
         || source.length !== resource.inlineSvgBytes || sha256(source) !== resource.inlineSvgSha256) {
         fail('原图字节与封存的长度或 SHA 不一致');
     }
+    const deps = (_deps && typeof _deps === 'object') ? _deps : {};
+    const spawnFn = deps.spawn || spawn;
+    const killFn = deps.kill || process.kill;
+    const maxOutputBytes = deps.maxOutputBytes || MAX_OUTPUT_BYTES;
+    const timeoutMs = deps.timeoutMs || 60_000;
     const projectRoot = path.resolve(__dirname, '../..');
     const bytes = await new Promise((resolve, reject) => {
-        const child = spawn('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'),
+        const useProcessGroup = process.platform !== 'win32';
+        const child = spawnFn('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'),
             path.join(projectRoot, 'scripts/reader_inline_svg.py')],
-        { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-        const chunks = []; let size = 0; let stderr = ''; let failure = null;
-        const timeout = setTimeout(() => {
-            failure = new Error('内联 SVG 渲染超过 60 秒'); child.kill('SIGKILL');
-        }, 60_000);
+        { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup });
+        const chunks = []; let size = 0; let stderr = ''; let failure = null; let terminated = false; let exited = false;
+        let timeout = null;
+        child.once('exit', () => { exited = true; });
+        const terminateChild = () => {
+            if (terminated) return;
+            terminated = true;
+            if (timeout) { clearTimeout(timeout); timeout = null; }
+            try { child.stdin.destroy(); } catch (_) {}
+            try { child.stdout.destroy(); } catch (_) {}
+            try { child.stderr.destroy(); } catch (_) {}
+            if (exited || child.exitCode != null || child.signalCode != null) return;
+            if (useProcessGroup && Number.isSafeInteger(child.pid) && child.pid > 0) {
+                try { killFn(-child.pid, 'SIGKILL'); return; } catch (_) {}
+            }
+            try { child.kill('SIGKILL'); } catch (_) {}
+        };
+        timeout = setTimeout(() => {
+            failure ||= new Error('内联 SVG 渲染超过 60 秒');
+            terminateChild();
+        }, timeoutMs);
         child.stdout.on('data', chunk => {
             size += chunk.length;
-            if (size > MAX_OUTPUT_BYTES) {
-                failure = new Error('内联 SVG 像素超过受控上限'); child.kill('SIGKILL');
+            if (size > maxOutputBytes) {
+                failure ||= new Error('内联 SVG 像素超过受控上限');
+                terminateChild();
             } else chunks.push(chunk);
         });
         child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(0, 4000); });
-        child.once('error', error => { clearTimeout(timeout); reject(error); });
+        child.once('error', error => { clearTimeout(timeout); terminateChild(); reject(error); });
         child.stdin.on('error', error => { failure ||= error; });
         child.once('close', code => {
             clearTimeout(timeout);

@@ -55,8 +55,13 @@ function resetReaderForSelectedReanalysis(paper) {
         delete manifest.stages.imageSupplement;
     }
     if (manifest?.contracts) {
-        delete manifest.contracts.apiReaderArticle;
+        for (const key of Object.keys(manifest.contracts)) {
+            if (/^apiReader/.test(key)) delete manifest.contracts[key];
+        }
         delete manifest.contracts.imageNarrative;
+        delete manifest.contracts.readerTargetOrdinalPatch;
+        delete manifest.contracts.readerResourceClaims;
+        delete manifest.contracts.readerVersionMetadataRecovery;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
     if (next.analysisStageCheckpoints) {
@@ -81,8 +86,13 @@ function resetReaderForForcedReanalysis(paper) {
         delete manifest.stages.imageSupplement;
     }
     if (manifest?.contracts) {
-        delete manifest.contracts.apiReaderArticle;
+        for (const key of Object.keys(manifest.contracts)) {
+            if (/^apiReader/.test(key)) delete manifest.contracts[key];
+        }
         delete manifest.contracts.imageNarrative;
+        delete manifest.contracts.readerTargetOrdinalPatch;
+        delete manifest.contracts.readerResourceClaims;
+        delete manifest.contracts.readerVersionMetadataRecovery;
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
     if (next.analysisStageCheckpoints) {
