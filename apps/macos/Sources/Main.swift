@@ -37,8 +37,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var window:NSWindow!, web:WKWebView!, toolbar:NSToolbar!, settingsWindow:NSWindow?
     var pdfObserversInstalled=false
     var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
-    var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
-    var maintenanceBusy=false {didSet{if maintenanceBusy{if !oldValue{emit("library.willChange")};suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
+    var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false);nativeTasksRequestedVisible=false;retireNativeTasks(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");emit("nativeTasks.layout");restoreNativeAggregateLayout()}}}
+    var maintenanceBusy=false {didSet{if maintenanceBusy{if !oldValue{emit("library.willChange")};suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true);nativeTasksRequestedVisible=false;retireNativeTasks(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");emit("nativeTasks.layout");restoreNativeAggregateLayout()}}}
     var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
     var cloudRestoreSelections: [UUID: CloudRestoreSelection] = [:]
     var cloudBusy=false,cloudCredentialState="unknown"
@@ -76,7 +76,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var settingsPaneRequest:String?
     var settingsPaneRequestID=UUID()
     var storageDetailWindow:NSWindow?,storageDetailWeb:WKWebView?
-    var storageDetailSession:StorageDetailSession? {didSet{if storageDetailSession != nil{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue != nil{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
+    var storageDetailSession:StorageDetailSession? {didSet{if storageDetailSession != nil{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true);nativeTasksRequestedVisible=false;retireNativeTasks(restoreFocus:true)}else if oldValue != nil{emit("nativeNotes.layout");emit("nativeTasks.layout");restoreNativeAggregateLayout()}}}
     var storageDetailBusy=false,storageDetailSystemPanel=false
     var storageDetailDocumentAccess:DetailDocumentAccess?
     var storageDetailArchiveMaterials:[String:Any]?
@@ -464,7 +464,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
                 let base=identity.hasPrefix("arxiv:") ? identity.replacingOccurrences(of:"v[1-9][0-9]*$",with:"",options:.regularExpression):identity
                 if (store.value["personalPapers"] as? [String:[String:Any]])?[base] != nil{row["paperID"]=base}
             }
-            row["status"]=(result["status"] as? String=="partial" || result["isStale"] as? Bool==true) ? "partial":"complete";row["message"]=result["readOnly"] as? Bool==true ? (result["warning"] as? String ?? "旧记录账号未绑定，本次仅只读回读，未继续写入") : result["isStale"] as? Bool==true ? "当前来源复验失败，保留可读旧缓存，请核对提示":"操作已结束，请查看实际结果";row["result"]=result.filter{["status","archiveID","parentKey","retryable","reused","sha256","paperCount","recordCount","identity","title","readOnly","warning"].contains($0.key)};row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");return result
+            let localSnapshotOpened = result["localSnapshotOpened"] as? Bool == true
+            row["status"]=(result["status"] as? String=="partial" || (result["isStale"] as? Bool==true && !localSnapshotOpened)) ? "partial":"complete";row["message"]=result["readOnly"] as? Bool==true ? (result["warning"] as? String ?? "旧记录账号未绑定，本次仅只读回读，未继续写入") : localSnapshotOpened ? "已打开本机核验快照" : result["isStale"] as? Bool==true ? "当前来源复验失败，保留可读旧缓存，请核对提示":"操作已结束，请查看实际结果";row["result"]=result.filter{["status","archiveID","parentKey","retryable","reused","sha256","paperCount","recordCount","identity","title","readOnly","warning"].contains($0.key)};row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");return result
         } catch {jobs[identifier]=nil;row=(store.value["jobs"] as? [[String:Any]])?.first{$0["id"] as? String==identifier} ?? row;row["status"]=(task.isCancelled || error is CancellationError || error is DesktopOperationCancelled) ? "cancelled":"failed";row["message"]=error is CancellationError ? "已取消；已完成的步骤和原材料保留。":error.localizedDescription;row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");throw error}
     }
     func recordProgress(id:String,update:[String:Any]) {

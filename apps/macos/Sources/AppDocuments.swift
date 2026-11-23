@@ -42,7 +42,7 @@ import UniformTypeIdentifiers
     func validateSettings(_ value:[String:Any]) throws {
         for key in ["appearance","endpoint","model","protocol","httpProxy"]{if let item=value[key],!(item is String){throw DesktopError.message("设置字段类型无效："+key)}}
         for key in ["reduceMotion","responsesStream"]{if let flag=value[key],!(flag is NSNumber) || CFGetTypeID(flag as CFTypeRef) != CFBooleanGetTypeID(){throw DesktopError.message("布尔设置无效："+key)}}
-        if let effort=value["reasoningEffort"]{guard let text=effort as? String,["default","low","medium","high"].contains(text) else{throw DesktopError.message("Responses 推理强度设置无效")}}
+        if let effort=value["reasoningEffort"]{guard let text=effort as? String,["default","none","minimal","low","medium","high","xhigh"].contains(text) else{throw DesktopError.message("Responses 推理强度设置无效")}}
         if let item=value["protocol"] as? String,!["auto","responses","chat"].contains(item){throw DesktopError.message("请求协议选项无效")}
         for key in ["endpoint","httpProxy"] {if let raw=value[key] as? String,!raw.isEmpty {guard let url=URL(string:raw),url.user==nil,url.password==nil,url.query==nil,url.fragment==nil,url.host != nil else{throw DesktopError.message("端点和代理不得携带凭据、查询参数或片段")};if key=="httpProxy" {guard url.scheme=="http",url.port != nil else{throw DesktopError.message("代理须为带端口的 HTTP CONNECT 地址")}}else{guard url.scheme=="https" || (url.scheme=="http" && ["127.0.0.1","localhost","::1"].contains(url.host!)) else{throw DesktopError.message("模型端点须为 HTTPS，本机服务可用 HTTP")}}}}
         let ranges=["font":16...24,"syncHours":1...168,"maxTokens":256...32768,"dailyRequests":1...1000]

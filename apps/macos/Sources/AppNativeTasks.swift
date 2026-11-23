@@ -17,6 +17,7 @@ extension PaperDigestApp {
         emit("nativeTasks.layout")
     }
     func retireNativeTasks(restoreFocus:Bool){
+        nativeTasksRequestedVisible=false
         nativeTaskCoordinator?.retire()
         if restoreFocus,let root=nativeTaskController?.view,let responder=window?.firstResponder as? NSView,responder===root || responder.isDescendant(of:root){window?.makeFirstResponder(web)}
         nativeTaskController?.retire()

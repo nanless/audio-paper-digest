@@ -25,12 +25,23 @@ import Foundation
         case "ModelUsage":
             let suffixes = ["-input.json", "-response.json", "-usage.json", "-response.raw", "-response.bin"]
             guard parts.count == 2 else { return nil }
-            if let suffix = suffixes.first(where: { parts[1].hasSuffix($0) }) {
-                let id = String(parts[1].dropLast(suffix.count))
-                if UUID(uuidString: id) != nil { return "ModelUsage/" + id }
+            let filename = parts[1]
+            if let suffix = suffixes.first(where: { filename.hasSuffix($0) }) {
+                let id = String(filename.dropLast(suffix.count))
+                if UUID(uuidString: id) != nil { return "ModelUsage/" + id.lowercased() }
             }
-            if parts[1].hasSuffix(".json"), UUID(uuidString: String(parts[1].dropLast(5))) != nil {
-                return "ModelUsage/" + String(parts[1].dropLast(5))
+            if filename.hasSuffix(".json") || filename.hasSuffix(".bin") {
+                let stem = String(filename.dropLast(filename.hasSuffix(".json") ? 5 : 4))
+                if filename.hasSuffix(".json"), UUID(uuidString: stem) != nil {
+                    return "ModelUsage/" + stem.lowercased()
+                }
+                if let marker = stem.range(of: "-response-capture-") {
+                    let sessionID = String(stem[..<marker.lowerBound])
+                    let captureID = String(stem[marker.upperBound...])
+                    if UUID(uuidString: sessionID) != nil, UUID(uuidString: captureID) != nil {
+                        return "ModelUsage/" + sessionID.lowercased()
+                    }
+                }
             }
             return nil
         case "zotero-archives", "ZoteroArchives", "ZoteroDavArchives":
@@ -178,18 +189,25 @@ import Foundation
         if !papers.isEmpty { current["personalPapers"] = papers }
         var sessions = current["sessions"] as? [Object] ?? []
         let ids = sessions.reduce(into: [String: Object]()) { map, row in
-            if let id = row["id"] as? String { map[id] = row }
+            if let id = row["id"] as? String { map[id.lowercased()] = row }
         }
         var seen = Set(ids.keys)
         for row in remote["sessions"] as? [Object] ?? [] {
             guard let id = row["id"] as? String, UUID(uuidString: id) != nil,
                   let state = row["status"] as? String, ["completed", "failed", "complete", "error", "interrupted", "cancelled", "canceled"].contains(state),
-                  !conflicted.contains("ModelUsage/" + id) else { result.conflicts += 1; continue }
+                  !conflicted.contains("ModelUsage/" + id.lowercased()) else { result.conflicts += 1; continue }
+            if let source = row["source"] as? Object, let rawPages = source["pages"] {
+                guard let pages = rawPages as? [Any], pages.allSatisfy({
+                    guard let n = $0 as? Int, CFGetTypeID($0 as CFTypeRef) != CFBooleanGetTypeID() else { return false }
+                    return n > 0
+                }) else { result.conflicts += 1; continue }
+            }
             var history = row
             history["syncedHistory"] = true
-            if let prior = ids[id] {
+            let normalizedID = id.lowercased()
+            if let prior = ids[normalizedID] {
                 if try json(prior) != json(row) && json(prior) != json(history) { result.conflicts += 1 }
-            } else if seen.insert(id).inserted {
+            } else if seen.insert(normalizedID).inserted {
                 sessions.append(history)
             } else { result.conflicts += 1 }
         }

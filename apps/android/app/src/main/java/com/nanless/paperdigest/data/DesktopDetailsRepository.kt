@@ -239,7 +239,7 @@ class DesktopDetailsRepository(
         val snapshotText = PublishedUtf8.decode(snapshotRaw)
         require(!snapshotText.contains(snapshotID)) { "快照 JSON 禁止包含自身 SHA" }
         val snapshot = StrictJson.parseObjectText(snapshotText, snapshotFile.name)
-        require(ClientProtocols.isCurrentHeader(snapshot, SNAPSHOT_CONTRACT)) { "恢复目录桌面快照协议头不受支持" }
+        require(ClientProtocols.hasValidHeader(snapshot, SNAPSHOT_CONTRACT)) { "恢复目录桌面快照协议头不受支持" }
         val snapshotSchema = ClientProtocols.declaredSchema(
             snapshot.get("contract"),
             SNAPSHOT_CONTRACT,
@@ -389,13 +389,20 @@ class DesktopDetailsRepository(
                 )
                 bindingsByKey[paperKey + "\u0000" + blogURL] = binding
                 val oldPrimary = primaryBindingByPaper[paperKey]
-                if (oldPrimary == null || compareBindingRecency(binding, oldPrimary) >= 0) {
+                if (oldPrimary == null || compareBindingRecency(binding, oldPrimary) > 0) {
                     primaryBindingByPaper[paperKey] = binding
                 }
             }
         }
         require(actualRecordCount == expectedRecordCount && distinctPaperKeys.size == expectedPaperCount) {
             "恢复目录记录总数或论文数与快照声明不符"
+        }
+        witness.optJSONObject("paperDetails")?.let { witnessPapers ->
+            for (paperKey in primaryBindingByPaper.keys.toList()) {
+                val expectedAppearance = witnessPapers.optJSONObject(paperKey)?.nullableString("primaryAppearanceId") ?: continue
+                val matched = bindingsByKey.values.firstOrNull { it.paperKey == paperKey && it.appearanceId == expectedAppearance }
+                if (matched != null) primaryBindingByPaper[paperKey] = matched
+            }
         }
 
         // 3. Cold-verify all `tombstoneShards` and disjointness against `activeAppearances`
@@ -2202,11 +2209,10 @@ class DesktopDetailsRepository(
             "script", "style", "iframe", "frame", "frameset", "form", "input", "button",
             "select", "option", "optgroup", "textarea", "object", "embed", "applet",
             "base", "meta", "link", "template", "svg", "foreignobject", "xmp", "noscript",
-            "noembed", "noframes", "plaintext", "title", "annotation-xml", "audio", "video",
-            "source", "picture", "head", "html", "body",
+            "noembed", "noframes", "plaintext", "title", "annotation-xml", "head", "html", "body",
         )
         private val RAW_FORBIDDEN_TAG_REGEX = Regex(
-            "<!--|<\\?|<![a-zA-Z\\[]|<\\s*/?\\s*(?:script|style|iframe|frame|frameset|form|input|button|select|option|optgroup|textarea|object|embed|applet|base|meta|link|template|svg|foreignobject|xmp|noscript|noembed|noframes|plaintext|title|annotation-xml|audio|video|source|picture|html|head|body)\\b",
+            "<!--|<\\?|<![a-zA-Z\\[]|<\\s*/?\\s*(?:script|style|iframe|frame|frameset|form|input|button|select|option|optgroup|textarea|object|embed|applet|base|meta|link|template|svg|foreignobject|xmp|noscript|noembed|noframes|plaintext|title|annotation-xml|html|head|body)\\b",
             RegexOption.IGNORE_CASE,
         )
         private val ALLOWED_SVG_TAGS = setOf(
@@ -2215,7 +2221,7 @@ class DesktopDetailsRepository(
             "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
             "text", "tspan", "title", "desc", "metadata", "marker", "use",
         )
-        private val DATA_IMAGE_HEADER_REGEX = Regex("^data:image/(png|jpeg|gif|webp|svg\\+xml)(?:;charset=utf-8)?(;base64)?$")
+        private val DATA_IMAGE_HEADER_REGEX = Regex("^data:image/(png|jpe?g|gif|webp|svg\\+xml)(?:;charset=utf-8)?(;base64)?$")
         private val ICASSP_PLACEHOLDER_REGEX = Regex("^icassp-img://[A-Za-z0-9._/-]+$")
         private val URL_ATTR_NAMES = setOf("href", "src", "srcset", "action", "formaction", "xlink:href", "poster", "data", "cite")
         private val SCHEME_PREFIX_REGEX = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*):")
@@ -2317,8 +2323,8 @@ class DesktopDetailsRepository(
                 }
             }
 
-            // Unwrap harmless structural wrappers (<section>, <del>, <ins>) before strict allowlist sanitization
-            body.select("section, del, ins").toList().forEach { wrapper -> wrapper.unwrap() }
+            // Unwrap harmless structural wrappers (<section>, <article>, <main>, <del>, <ins>, <picture>) before strict allowlist sanitization
+            body.select("section, article, main, del, ins, picture").toList().forEach { wrapper -> wrapper.unwrap() }
             CatalogRepository.sanitizeHtmlFragment(body, blogURL)
 
             val imgOriginalSources = IdentityHashMap<Element, String>()
@@ -2443,6 +2449,7 @@ class DesktopDetailsRepository(
             val headerMatch = DATA_IMAGE_HEADER_REGEX.matchEntire(header)
                 ?: error("内联 data:image 媒体类型不受支持：$header")
             val subtype = headerMatch.groupValues[1]
+            val normalizedSubtype = if (subtype == "jpg") "jpeg" else subtype
             val isBase64 = headerMatch.groupValues[2] == ";base64"
             val payload = dataUri.substring(comma + 1)
             require(payload.isNotEmpty()) { "内联 data:image 内容为空" }
@@ -2454,11 +2461,11 @@ class DesktopDetailsRepository(
             }
             require(decoded.size in 1..MAX_ASSET_BYTES) { "内联图片解码字节越界" }
 
-            if (subtype == "svg+xml") {
+            if (normalizedSubtype == "svg+xml") {
                 validateSafeStaticSvgBytes(decoded)
             }
             val actualMime = CatalogRepository.imageMime(decoded)
-            require(actualMime == "image/$subtype") { "内联图片实际类型 ($actualMime) 与声明 (image/$subtype) 不符" }
+            require(actualMime == "image/$normalizedSubtype") { "内联图片实际类型 ($actualMime) 与声明 (image/$normalizedSubtype) 不符" }
             return decoded
         }
 
@@ -2496,7 +2503,7 @@ class DesktopDetailsRepository(
             return mime
         }
 
-        private fun validateSafeStaticSvgBytes(bytes: ByteArray) {
+        internal fun validateSafeStaticSvgBytes(bytes: ByteArray) {
             val svgText = PublishedUtf8.decode(bytes)
             require(svgText.none { (it.code < 0x20 && it !in "\t\r\n") || it.code == 0x7F }) { "SVG 含非法控制字符" }
             require(!Regex("<!--|<\\?|<!", RegexOption.IGNORE_CASE).containsMatchIn(svgText)) {

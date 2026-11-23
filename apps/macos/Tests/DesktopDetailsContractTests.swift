@@ -2477,6 +2477,13 @@ actor DesktopDetailsFixtureServer {
             try await expectThrows(">64 MiB cumulative article image bytes fails closed") {
                 _ = try await svc.article(for: "arxiv:2611.00923", downloadImages: true)
             }
+
+            // E-H2: Literal <figure> inside quoted attribute must not cause attribute breakout
+            let attrHtml = #"<div id="article-body" class="post-content"><p title="see <figure> label">Safe prose</p><details open><summary>展开</summary><p>折叠内容</p></details></div>"#
+            try LibraryService.verifySafeDesktopArticleHTML(attrHtml)
+            let rewritten = LibraryService.rewriteHTML5TagsForTidy(attrHtml, tagMarker: "data-m", preserveTags: ["figure", "figcaption", "details", "summary"], containerTags: ["section", "article", "main"])
+            try expect(rewritten.contains(#"title="see <figure> label""#), "E-H2: quoted attribute containing <figure> stays untouched")
+            try expect(rewritten.contains(#"data-m="details""#), "E-H2: real <details> tag tokenized cleanly")
         }
 
         print("PASS 9: portable Android backup cold-verification, local tamper/symlink rejection & strict sidecar/bundled/64MiB gates")

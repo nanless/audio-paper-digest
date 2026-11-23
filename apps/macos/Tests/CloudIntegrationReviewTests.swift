@@ -303,6 +303,15 @@ private actor IntegrationDAV {
         let emptyLocal=try folder("empty-local"),oldRoute=try folder("old-route");_=try DesktopStore(directory:emptyLocal);let oldRouteStore=try DesktopStore(directory:oldRoute);try oldRouteStore.updateSettings(["endpoint":"https://must-not-get-primary.invalid","model":"old-model","dailyRequests":999])
         try RestoreLocalPolicy.apply(stage:oldRoute,current:emptyLocal);let cleaned=try DesktopStore(directory:oldRoute).snapshot()["settings"] as! [String:Any]
         try check(RestoreLocalPolicy.connectionKeys.allSatisfy{cleaned[$0]==nil},"local absence removes old snapshot connection keys rather than sending local primary to old endpoint")
+        // E-M2: Android backup with font 14 or 30 clamps cleanly to macOS 16...24 while keeping untouched receipt
+        for (androidFont, expectedFont) in [(14, 16), (30, 24)] {
+            let androidStage = try folder("android-font-\(androidFont)")
+            let androidStageStore = try DesktopStore(directory: androidStage)
+            try androidStageStore.updateSettings(["font": androidFont])
+            try RestoreLocalPolicy.apply(stage: androidStage, current: emptyLocal)
+            let restoredSettings = try DesktopStore(directory: androidStage).snapshot()["settings"] as! [String: Any]
+            try check(restoredSettings["font"] as? Int == expectedFont, "Android font \(androidFont) clamps to macOS \(expectedFont) on cross-platform restore")
+        }
         for corrupt in ["bad-contract","bad-json","conflict"] {
             let live=try folder("reject-live"),pending=try folder("reject-stage"),l=try DesktopStore(directory:live),s=try DesktopStore(directory:pending)
             try note(l,"protected-live");try note(s,"protected-stage")

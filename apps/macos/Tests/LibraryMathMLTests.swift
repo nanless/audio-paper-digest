@@ -69,6 +69,14 @@ actor MathMLFixtureTransport {
   try expect(try old.nodes(forXPath:"//*[local-name()='math']").isEmpty,"actual former HTML tidy loses all four real formula trees")
   let article=try extract(body),restored=try math(article.html),original=try math(formulas.joined())
   try expect(restored.count==4 && original.count==4,"four complete published-source KaTeX MathML formulas survive extraction")
+  // Finding 7: extractArticle strips hidden Hugo heading anchors & extractAggregateHTML preserves quoted <section> attributes
+  let anchoredArticle = try extract("<h2>标题<a hidden class=\"anchor\" aria-hidden=\"true\" href=\"#%E6%A0%87%E9%A2%98\">#</a></h2><p title=\"see <section> 3\">正文</p>")
+  try expect(!anchoredArticle.html.contains("class=\"anchor\"") && !anchoredArticle.plainText.contains("#"), "extractArticle strips hidden Hugo heading anchors without polluting plainText")
+  let aggURL = URL(string: "https://fixture.example/blog/posts/daily-2026-11-20/")!
+  let aggDesc = PublishedAggregate(id: "daily:2026-11-20", kind: .daily, conferenceScope: nil, title: "Daily", titleZh: "日更", summary: "", rawDate: "2026-11-20", displayDate: "2026-11-20", categories: [], tags: [], sourceURL: aggURL.absoluteString, source: .init(manifestSHA256: String(repeating: "a", count: 64), shardSHA256: String(repeating: "b", count: 64), shardBytes: 128, shardURL: base + "search-index/part-0001.json", rowIndex: 0, normalizedRowSHA256: String(repeating: "c", count: 64), normalizedRowAlgorithm: "sha256"))
+  let aggHTML = Data("<!doctype html><html><head><meta charset=\"utf-8\"></head><body><section><div id=\"article-body\" class=\"post-content\"><p title=\"see <section> 3\">汇总正文</p></div></section></body></html>".utf8)
+  let aggDoc = try LibraryService.extractAggregateHTML(aggHTML, descriptor: aggDesc, responseURL: aggURL, fetchedAt: "2026-11-20T00:00:00Z", siteBaseURL: URL(string: base)!)
+  try expect(aggDoc.bodyHTML.contains("see &lt;section&gt; 3") || aggDoc.bodyHTML.contains("see <section> 3"), "extractAggregateHTML preserves quoted <section> inside attributes without regex corruption")
   for index in 0..<4 {
    try expect(signature(restored[index])==signature(original[index]),"original MathML tree namespace attributes operators and Unicode preserved")
    let annotation=try restored[index].nodes(forXPath:".//*[local-name()='annotation']").first?.stringValue

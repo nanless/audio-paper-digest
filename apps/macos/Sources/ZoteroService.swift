@@ -92,7 +92,6 @@ actor ZoteroService {
     private struct Authorization: Codable { let key: String; let remember: Bool }
     private struct PersonalLibraryBinding: Codable, Equatable { let serverID: String; let userID: Int }
     private enum ArchiveScope { case readOnly, bound(PersonalLibraryBinding) }
-    private var archiveScope: ArchiveScope?
     private struct Journal: Codable {
         let id: String
         let serverID: String
@@ -165,6 +164,8 @@ actor ZoteroService {
     /// requesting a new Zotero API key or changing its library permissions.
     func checkAuthorization() async throws -> Status {
         guard !operationInProgress else { throw ServiceError.invalid("归档进行中，请完成后再检查许可") }
+        operationInProgress = true
+        defer { operationInProgress = false }
         let current = try await status()
         guard current.writesSupported else { throw ServiceError.unsupported }
         try restoreAuthorization(serverID: current.serverID)
@@ -184,6 +185,8 @@ actor ZoteroService {
     /// Call only after the user's explicit Connect action. Zotero itself displays the approval dialog.
     func authorize(appName: String = "论文速递工作台") async throws -> Status {
         guard !operationInProgress else { throw ServiceError.invalid("归档进行中，请完成后再变更授权") }
+        operationInProgress = true
+        defer { operationInProgress = false }
         let current = try await status()
         guard current.writesSupported else { throw ServiceError.unsupported }
         // Reuse an existing persistent grant after a deliberate user action. A
@@ -209,8 +212,12 @@ actor ZoteroService {
     }
 
     func collections() async throws -> [Collection] {
+        try await collections(scope: nil)
+    }
+
+    private func collections(scope: ArchiveScope?) async throws -> [Collection] {
         _ = try await status()
-        let objects = try await readArray("/api/users/0/collections")
+        let objects = try await readArray("/api/users/0/collections", scope: scope)
         return try objects.map { object in
             guard let data = object["data"] as? [String: Any], let key = object["key"] as? String,
                   let name = data["name"] as? String else { throw ServiceError.verification("分类响应格式") }
@@ -223,8 +230,7 @@ actor ZoteroService {
                  progress: @escaping ([String: Any]) -> Void = { _ in }) async throws -> ArchiveResult {
         guard !operationInProgress else { throw ServiceError.invalid("另一归档正在进行") }
         operationInProgress = true
-        defer { archiveScope = nil; operationInProgress = false }
-        archiveScope = .readOnly
+        defer { operationInProgress = false }
         // Decode old ownership before any possible credential load or remote mutation.
         let previous = try resumeID.map { try loadJournal($0) }
         if let previous, previous.personalLibraryBinding == nil {
@@ -247,7 +253,7 @@ actor ZoteroService {
             fingerprint = originalFingerprint
         }
         if let previous, previous.personalLibraryBinding == nil {
-            return try await verifyLegacyReadOnly(previous, materials: materials)
+            return try await verifyLegacyReadOnly(previous, materials: materials, scope: .readOnly)
         }
         let binding: PersonalLibraryBinding
         do { binding = try await personalLibraryBinding(serverID: current.serverID) }
@@ -259,7 +265,7 @@ actor ZoteroService {
         if let saved = previous?.personalLibraryBinding {
             guard saved.serverID == previous!.serverID, saved.userID > 0, saved == binding else { throw ServiceError.accountChanged }
         }
-        archiveScope = .bound(binding)
+        let scope: ArchiveScope = .bound(binding)
         try restoreAuthorization(serverID: current.serverID)
         guard let auth = authorization else { throw ServiceError.authorizationRequired }
         guard auth.remember else { throw ServiceError.persistentAuthorizationRequired }
@@ -278,22 +284,24 @@ actor ZoteroService {
                                 })
             journal.personalLibraryBinding = binding
             journal.materialSHA256 = Dictionary(uniqueKeysWithValues: materials.filter { ["pdf", "guide"].contains($0.role) }.map { ($0.role, $0.sha256) })
-            try saveJournal(journal)
+            try saveJournal(journal, scope: scope)
         }
         do {
-            journal.collectionKey = try await resolveCollection(input, existing: journal.collectionKey)
-            try saveJournal(journal)
-            let parent = try await ensureParent(input, payload: parentPayload, journal: &journal)
-            try saveJournal(journal)
+            journal.collectionKey = try await resolveCollection(input, existing: journal.collectionKey, scope: scope)
+            try saveJournal(journal, scope: scope)
+            let parent = try await ensureParent(input, payload: parentPayload, journal: &journal, scope: scope)
+            try saveJournal(journal, scope: scope)
             progress(["archiveID": journal.id, "role": "bibliography", "state": "verified", "key": parent])
             var stopped = false
             for material in materials where !stopped {
                 do {
-                    try await archiveMaterial(material, parent: parent, journal: &journal)
+                    try await archiveMaterial(material, parent: parent, journal: &journal, scope: scope)
                     progress(["archiveID": journal.id, "role": material.role, "state": "verified"])
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
                     markFailure(material.role, error: error, journal: &journal)
-                    try saveJournal(journal)
+                    try saveJournal(journal, scope: scope)
                     progress(["archiveID": journal.id, "role": material.role, "state": "failed", "message": safe(error)])
                     if isRunFailure(error) { stopped = true; break }
                 }
@@ -301,15 +309,19 @@ actor ZoteroService {
             for (role, html) in [("analysis", input.analysisHTML), ("note", input.noteHTML)] where !stopped {
                 guard let html, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                 do {
-                    try await archiveNote(html, role: role, parent: parent, journal: &journal)
+                    try await archiveNote(html, role: role, parent: parent, journal: &journal, scope: scope)
                     progress(["archiveID": journal.id, "role": role, "state": "verified"])
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
-                    markFailure(role, error: error, journal: &journal); try saveJournal(journal)
+                    markFailure(role, error: error, journal: &journal); try saveJournal(journal, scope: scope)
                     if isRunFailure(error) { break }
                 }
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
-            markFailure("bibliography", error: error, journal: &journal); try saveJournal(journal)
+            markFailure("bibliography", error: error, journal: &journal); try saveJournal(journal, scope: scope)
         }
         return result(journal)
     }
@@ -379,40 +391,450 @@ actor ZoteroService {
         if let expectedSHA256, Self.sha256(bytes) != expectedSHA256 { throw ServiceError.invalid("材料字节与原 SHA256 不符") }
         return bytes
     }
+    private static func trimASCIIWhitespace(_ value: String) -> String {
+        let scalars = Array(value.unicodeScalars)
+        func isASCIIWS(_ s: UnicodeScalar) -> Bool {
+            s == " " || s == "\t" || s == "\n" || s == "\r" || s == "\u{000C}"
+        }
+        var start = 0
+        var end = scalars.count
+        while start < end && isASCIIWS(scalars[start]) { start += 1 }
+        while end > start && isASCIIWS(scalars[end - 1]) { end -= 1 }
+        return String(String.UnicodeScalarView(scalars[start..<end]))
+    }
+
+    private static func decodeZoteroHTMLEntities(_ raw: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"&#[xX]0*([0-9a-fA-F]+);?|&#0*([0-9]+);?|&(amp|AMP|lt|LT|gt|GT|quot|QUOT)(?:;|(?![A-Za-z0-9=]))|&(colon|sol|bsol|Tab|NewLine|apos);"#
+        ) else {
+            return raw
+        }
+        let ns = raw as NSString
+        let matches = regex.matches(in: raw, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return raw }
+        let out = NSMutableString()
+        var cursor = 0
+        for m in matches {
+            if m.range.location > cursor {
+                out.append(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor)))
+            }
+            if m.range(at: 1).location != NSNotFound {
+                let hex = ns.substring(with: m.range(at: 1))
+                if hex.count <= 6, let code = UInt32(hex, radix: 16), code != 0, let scalar = UnicodeScalar(code) {
+                    out.append(String(scalar))
+                } else {
+                    out.append("\u{FFFD}")
+                }
+            } else if m.range(at: 2).location != NSNotFound {
+                let dec = ns.substring(with: m.range(at: 2))
+                if dec.count <= 7, let code = UInt32(dec, radix: 10), code != 0, let scalar = UnicodeScalar(code) {
+                    out.append(String(scalar))
+                } else {
+                    out.append("\u{FFFD}")
+                }
+            } else if m.range(at: 3).location != NSNotFound {
+                switch ns.substring(with: m.range(at: 3)).lowercased() {
+                case "amp": out.append("&")
+                case "lt": out.append("<")
+                case "gt": out.append(">")
+                case "quot": out.append("\"")
+                default: break
+                }
+            } else if m.range(at: 4).location != NSNotFound {
+                switch ns.substring(with: m.range(at: 4)) {
+                case "colon": out.append(":")
+                case "sol": out.append("/")
+                case "bsol": out.append("\\")
+                case "Tab": out.append("\t")
+                case "NewLine": out.append("\n")
+                case "apos": out.append("'")
+                default: break
+                }
+            }
+            cursor = m.range.location + m.range.length
+        }
+        if cursor < ns.length {
+            out.append(ns.substring(from: cursor))
+        }
+        return out as String
+    }
+
+    private static func hasResidualHTMLEntity(_ value: String) -> Bool {
+        value.range(of: #"&[A-Za-z#]"#, options: .regularExpression) != nil
+    }
+
+    private static func validateZoteroDataURI(_ rawValue: String, allowFonts: Bool) throws {
+        let trimmed = trimASCIIWhitespace(rawValue)
+        guard !trimmed.isEmpty,
+              !trimmed.contains("%"),
+              !hasResidualHTMLEntity(trimmed),
+              trimmed.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F || $0 == "\t" || $0 == "\n" || $0 == "\r" }) else {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        guard trimmed.lowercased().hasPrefix("data:"), let comma = trimmed.firstIndex(of: ",") else {
+            throw ServiceError.invalid("HTML 资源必须内嵌，不能依赖远程或本机路径")
+        }
+        let headerStart = trimmed.index(trimmed.startIndex, offsetBy: 5)
+        let header = String(trimmed[headerStart..<comma].unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }).lowercased()
+        let rawPayload = trimmed[trimmed.index(after: comma)...]
+        guard rawPayload.unicodeScalars.allSatisfy({
+            let v = $0.value
+            return (v >= 0x41 && v <= 0x5A) || (v >= 0x61 && v <= 0x7A) || (v >= 0x30 && v <= 0x39)
+                || $0 == "+" || $0 == "/" || $0 == "=" || $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r"
+        }) else {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        let payload = String(rawPayload.unicodeScalars.filter { $0 != " " && $0 != "\t" && $0 != "\n" && $0 != "\r" })
+        let parts = header.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2, let mime = parts.first, !mime.isEmpty, parts.last == "base64" else {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        let allowedParams: Set<String> = ["charset=utf-8", "charset=us-ascii"]
+        for param in parts.dropFirst().dropLast() {
+            guard allowedParams.contains(param) else {
+                throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+            }
+        }
+        guard !payload.isEmpty, let decoded = Data(base64Encoded: payload) else {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        let rasterImages: Set<String> = ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]
+        let fontMimes: Set<String> = [
+            "font/woff2", "font/woff", "font/ttf", "font/otf",
+            "application/font-woff", "application/font-woff2",
+            "application/x-font-woff", "application/x-font-ttf",
+            "application/vnd.ms-fontobject"
+        ]
+        if rasterImages.contains(mime) { return }
+        if allowFonts && fontMimes.contains(mime) { return }
+        if mime == "image/svg+xml" {
+            guard let svg = String(data: decoded, encoding: .utf8),
+                  LibraryService.isSafeInlineSVG(svg) else {
+                throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+            }
+            return
+        }
+        throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+    }
+
+    private static func validateZoteroCSS(_ css: String) throws {
+        if css.contains("\\") || css.contains("/*") || css.contains("*/")
+            || css.contains("<") || hasResidualHTMLEntity(css) {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        let compact = String(css.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }).lowercased()
+        for bad in ["@import", "expression(", "javascript:", "vbscript:", "image-set(", "-moz-binding", "behavior:"] {
+            if compact.contains(bad) { throw ServiceError.invalid("HTML 含脚本或非自包含资源") }
+        }
+        guard let urlRegex = try? NSRegularExpression(
+            pattern: #"(?i)url\([ \t\r\n\f]*+(?:"([^"]*+)"[ \t\r\n\f]*+|'([^']*+)'[ \t\r\n\f]*+|([^ \t\r\n\f"'()][^()]*+))\)"#
+        ) else {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        let ns = css as NSString
+        let matches = urlRegex.matches(in: css, range: NSRange(location: 0, length: ns.length))
+        let stripped = NSMutableString()
+        var cursor = 0
+        for match in matches {
+            if match.range.location > cursor {
+                stripped.append(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+            }
+            let range = (1..<match.numberOfRanges).map { match.range(at: $0) }.first { $0.location != NSNotFound }!
+            let target = trimASCIIWhitespace(ns.substring(with: range))
+            try validateZoteroDataURI(target, allowFonts: true)
+            stripped.append("none")
+            cursor = match.range.location + match.range.length
+        }
+        if cursor < ns.length {
+            stripped.append(ns.substring(from: cursor))
+        }
+        let remainingCompact = String((stripped as String).unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }).lowercased()
+        if remainingCompact.contains("url(") {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+    }
+
+    private static func validateSVGPaintAttr(_ decodedVal: String) throws {
+        if decodedVal.contains("\\") || decodedVal.contains("/*") || decodedVal.contains("*/")
+            || hasResidualHTMLEntity(decodedVal) {
+            throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+        }
+        let compact = String(decodedVal.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }).lowercased()
+        for bad in ["expression(", "javascript:", "vbscript:", "image-set("] {
+            if compact.contains(bad) { throw ServiceError.invalid("HTML 含脚本或非自包含资源") }
+        }
+        if compact.contains("url(") {
+            let trimmed = trimASCIIWhitespace(decodedVal)
+            guard trimmed.range(of: ##"\Aurl\([ \t\r\n\f]*(?:"#[A-Za-z0-9:_-]+"|'#[A-Za-z0-9:_-]+'|#[A-Za-z0-9:_-]+)[ \t\r\n\f]*\)\z"##,
+                                options: [.regularExpression, .caseInsensitive]) != nil else {
+                throw ServiceError.invalid("HTML 含不安全链接或外部 SVG/数学资源")
+            }
+        }
+    }
+
     private func validateHTML(_ html: String, document: Bool) throws {
         guard html.utf8.count <= 40 * 1024 * 1024 else { throw ServiceError.invalid("HTML 超出本地归档大小") }
-        if document && !html.lowercased().contains("<html") { throw ServiceError.invalid("导读须为完整自包含 HTML") }
-        // Inline SVG resource dereferencing is unnecessary: scientific SVG is stored as an
-        // already-contained img data URI. Reject these capabilities before inspecting attrs.
-        let svgResources = #"(?is)<\s*(?:[A-Za-z][A-Za-z0-9_-]*:)?(?:image|use|feImage)\b"#
-        guard html.range(of: svgResources, options: .regularExpression) == nil else { throw ServiceError.invalid("导读不接受内联 SVG 外部资源节点，请使用已内嵌图片") }
-        let forbidden = #"(?is)<\s*(script|iframe|object|embed|link|form|input|button|base)\b|\son\w+\s*=|javascript\s*:|http-equiv\s*=|\bsrcset\s*=|@import\b"#
-        guard html.range(of: forbidden, options: .regularExpression) == nil else { throw ServiceError.invalid("HTML 含脚本或非自包含资源") }
-        let tagRegex = try NSRegularExpression(pattern: #"(?is)<\s*([A-Za-z][A-Za-z0-9:_-]*)\b([^<>]*)>"#)
-        let hrefRegex = try NSRegularExpression(pattern: #"(?is)(?:^|\s)(?:xlink:)?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#)
-        let htmlText = html as NSString
-        for tag in tagRegex.matches(in: html, range: NSRange(location: 0, length: htmlText.length)) {
-            let element = htmlText.substring(with: tag.range(at: 1)).lowercased()
-            let attributes = htmlText.substring(with: tag.range(at: 2)) as NSString
-            for match in hrefRegex.matches(in: attributes as String, range: NSRange(location: 0, length: attributes.length)) {
-                let range = (1..<match.numberOfRanges).map { match.range(at: $0) }.first { $0.location != NSNotFound }!
-                let value = attributes.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-                let internalReference = value.hasPrefix("#")
-                let valid = element == "a" ? internalReference || value.lowercased().hasPrefix("https://") : internalReference || value.lowercased().hasPrefix("data:")
-                guard valid else { throw ServiceError.invalid("HTML 含不安全链接或外部 SVG/数学资源") }
-            }
+        guard !html.unicodeScalars.contains(where: {
+            ($0.value < 0x20 && $0 != "\t" && $0 != "\n" && $0 != "\r" && $0 != "\u{000C}") || $0.value == 0x7F
+        }) else {
+            throw ServiceError.invalid("HTML 含非法控制字符")
         }
-        for pattern in [#"(?is)\b(?:src|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#,
-                        #"(?is)url\s*\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)"#] {
-            let regex = try NSRegularExpression(pattern: pattern)
-            let text = html as NSString
-            for match in regex.matches(in: html, range: NSRange(location: 0, length: text.length)) {
-                let range = (1..<match.numberOfRanges).map { match.range(at: $0) }.first { $0.location != NSNotFound }!
-                let value = text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard value.lowercased().hasPrefix("data:") else { throw ServiceError.invalid("HTML 资源必须内嵌，不能依赖远程或本机路径") }
+        let forbiddenTags: Set<String> = [
+            "script", "iframe", "object", "embed", "link", "form", "input", "button", "base",
+            "textarea", "xmp", "noscript", "noembed", "noframes", "plaintext", "template",
+            "foreignobject", "set", "animate", "animatetransform", "animatemotion", "mpath"
+        ]
+        let forbiddenAttrs: Set<String> = [
+            "srcdoc", "srcset", "http-equiv", "formaction", "ping", "action", "attributionsrc",
+            "data", "codebase", "archive", "manifest", "profile", "longdesc", "dynsrc", "lowsrc"
+        ]
+        let svgPaintAttrs: Set<String> = [
+            "fill", "stroke", "filter", "clip-path", "mask",
+            "marker", "marker-start", "marker-mid", "marker-end", "cursor"
+        ]
+        let svgResourceTags: Set<String> = ["image", "use", "feimage"]
+        let scalars = Array(html.unicodeScalars)
+        let n = scalars.count
+        var i = 0
+        var sawHTMLTag = false
+        var inStyle = false
+        var styleStart = 0
+        var inTitle = false
+        var svgDepth = 0
+        var mathDepth = 0
+        var foreignIntegrationStack: [String] = []
+        let mathTextIntegrationTags: Set<String> = ["mi", "mo", "mn", "ms", "mtext"]
+        let mathIntegrationTags: Set<String> = ["mi", "mo", "mn", "ms", "mtext", "annotation-xml"]
+
+        func isSpace(_ s: UnicodeScalar) -> Bool { s == " " || s == "\t" || s == "\n" || s == "\r" || s == "\u{000C}" }
+        func isNameStart(_ s: UnicodeScalar) -> Bool { (s >= "A" && s <= "Z") || (s >= "a" && s <= "z") }
+        func isNameChar(_ s: UnicodeScalar) -> Bool { isNameStart(s) || (s >= "0" && s <= "9") || s == "-" || s == "_" || s == ":" }
+        func isValidAttrName(_ name: String) -> Bool {
+            let us = Array(name.unicodeScalars)
+            guard let first = us.first, first >= "a" && first <= "z" else { return false }
+            return us.allSatisfy { ($0 >= "a" && $0 <= "z") || ($0 >= "0" && $0 <= "9") || $0 == "-" || $0 == "_" || $0 == ":" }
+        }
+        func startsCI(_ pat: String, at pos: Int) -> Bool {
+            let target = Array(pat.unicodeScalars)
+            guard pos + target.count <= n else { return false }
+            for k in 0..<target.count {
+                let c = scalars[pos + k]
+                let lower = (c >= "A" && c <= "Z") ? UnicodeScalar(c.value + 32)! : c
+                if lower != target[k] { return false }
             }
+            return true
         }
 
+        while i < n {
+            if inStyle {
+                if scalars[i] == "<" {
+                    if startsCI("</style", at: i) {
+                        var j = i + 7
+                        while j < n && isSpace(scalars[j]) { j += 1 }
+                        if j < n && scalars[j] == ">" {
+                            let css = String(String.UnicodeScalarView(scalars[styleStart..<i]))
+                            try Self.validateZoteroCSS(css)
+                            inStyle = false
+                            i = j + 1
+                            continue
+                        }
+                    }
+                    throw ServiceError.invalid("HTML 样式节点不允许包含原始标签字符")
+                }
+                i += 1
+                continue
+            }
+            if inTitle {
+                if scalars[i] == "<" {
+                    if startsCI("</title", at: i) {
+                        var j = i + 7
+                        while j < n && isSpace(scalars[j]) { j += 1 }
+                        if j < n && scalars[j] == ">" {
+                            inTitle = false
+                            i = j + 1
+                            continue
+                        }
+                    }
+                    throw ServiceError.invalid("HTML 标题节点不允许包含原始标签字符")
+                }
+                i += 1
+                continue
+            }
+            guard scalars[i] == "<" else { i += 1; continue }
+            if startsCI("<!--", at: i) {
+                throw ServiceError.invalid("HTML 不允许注释节点")
+            }
+            if startsCI("<![cdata[", at: i) {
+                throw ServiceError.invalid("HTML 不允许 CDATA 节点")
+            }
+            if i + 1 < n && (scalars[i + 1] == "!" || scalars[i + 1] == "?") {
+                var j = i + 2
+                var quote: UnicodeScalar? = nil
+                while j < n {
+                    let c = scalars[j]
+                    if let q = quote { if c == q { quote = nil } }
+                    else if c == "\"" || c == "'" { quote = c }
+                    else if c == ">" { break }
+                    j += 1
+                }
+                guard j < n else { throw ServiceError.invalid("HTML 声明未闭合") }
+                let decl = String(String.UnicodeScalarView(scalars[i...j]))
+                guard decl.range(of: #"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#, options: [.regularExpression, .caseInsensitive]) != nil else {
+                    throw ServiceError.invalid("HTML 含不允许的声明或处理指令")
+                }
+                i = j + 1
+                continue
+            }
+            var j = i + 1
+            var closing = false
+            if j < n && scalars[j] == "/" {
+                closing = true
+                j += 1
+                guard j < n && isNameStart(scalars[j]) else {
+                    throw ServiceError.invalid("HTML 不允许无效闭合标签或伪注释")
+                }
+            } else {
+                guard j < n && isNameStart(scalars[j]) else { i += 1; continue }
+            }
+            let nameStart = j
+            while j < n && isNameChar(scalars[j]) { j += 1 }
+            let rawTag = String(String.UnicodeScalarView(scalars[nameStart..<j])).lowercased()
+            let localTag = rawTag.split(separator: ":").last.map(String.init) ?? rawTag
+            if localTag == "html" && !closing { sawHTMLTag = true }
+            if svgResourceTags.contains(localTag) {
+                throw ServiceError.invalid("导读不接受内联 SVG 外部资源节点，请使用已内嵌图片")
+            }
+            if forbiddenTags.contains(localTag) {
+                throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+            }
+            if localTag == "style" && (svgDepth > 0 || mathDepth > 0) {
+                throw ServiceError.invalid("SVG/MathML 内不允许 style 标签")
+            }
+            var selfClosing = false
+            while j < n {
+                var sawSlash = false
+                while j < n && (isSpace(scalars[j]) || scalars[j] == "/") {
+                    sawSlash = (scalars[j] == "/")
+                    j += 1
+                }
+                guard j < n else { throw ServiceError.invalid("HTML 标签未完整闭合") }
+                if scalars[j] == ">" {
+                    selfClosing = sawSlash
+                    j += 1
+                    break
+                }
+                let attrStart = j
+                while j < n && !isSpace(scalars[j]) && scalars[j] != "=" && scalars[j] != ">" && scalars[j] != "/" { j += 1 }
+                let attrName = String(String.UnicodeScalarView(scalars[attrStart..<j])).lowercased()
+                guard !attrName.isEmpty, isValidAttrName(attrName) else {
+                    throw ServiceError.invalid("HTML 标签属性名无效")
+                }
+                while j < n && isSpace(scalars[j]) { j += 1 }
+                var attrVal = ""
+                if j < n && scalars[j] == "=" {
+                    j += 1
+                    while j < n && isSpace(scalars[j]) { j += 1 }
+                    if j < n && (scalars[j] == "\"" || scalars[j] == "'") {
+                        let q = scalars[j]; j += 1
+                        let vStart = j
+                        while j < n && scalars[j] != q { j += 1 }
+                        guard j < n else { throw ServiceError.invalid("HTML 属性引号未闭合") }
+                        attrVal = String(String.UnicodeScalarView(scalars[vStart..<j]))
+                        j += 1
+                    } else {
+                        let vStart = j
+                        while j < n && !isSpace(scalars[j]) && scalars[j] != ">" {
+                            let c = scalars[j]
+                            if c == "\"" || c == "'" || c == "<" || c == "=" || c == "`" {
+                                throw ServiceError.invalid("HTML 非引号属性值含非法字符")
+                            }
+                            j += 1
+                        }
+                        attrVal = String(String.UnicodeScalarView(scalars[vStart..<j]))
+                    }
+                }
+                if attrName.hasPrefix("on") || forbiddenAttrs.contains(attrName) {
+                    throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+                }
+                let decodedVal = Self.decodeZoteroHTMLEntities(attrVal)
+                let compactVal = String(decodedVal.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }).lowercased()
+                if compactVal.contains("javascript:") || compactVal.contains("vbscript:") {
+                    throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+                }
+                if attrName == "href" || attrName == "xlink:href" {
+                    let trimmed = Self.trimASCIIWhitespace(decodedVal)
+                    let internalRef = trimmed.hasPrefix("#")
+                    if localTag == "a" {
+                        guard internalRef || trimmed.lowercased().hasPrefix("https://") else {
+                            throw ServiceError.invalid("HTML 含不安全链接或外部 SVG/数学资源")
+                        }
+                    } else if !internalRef {
+                        try Self.validateZoteroDataURI(decodedVal, allowFonts: false)
+                    } else if Self.hasResidualHTMLEntity(decodedVal) {
+                        throw ServiceError.invalid("HTML 含脚本或非自包含资源")
+                    }
+                } else if attrName == "src" || attrName == "poster" || attrName == "background" {
+                    try Self.validateZoteroDataURI(decodedVal, allowFonts: false)
+                } else if attrName == "style" {
+                    try Self.validateZoteroCSS(decodedVal)
+                } else if attrName == "charset" {
+                    let rawCharset = Self.trimASCIIWhitespace(attrVal).lowercased()
+                    let decodedCharset = Self.trimASCIIWhitespace(decodedVal).lowercased()
+                    guard !Self.hasResidualHTMLEntity(decodedVal),
+                          (rawCharset == "utf-8" || rawCharset == "utf8"),
+                          decodedCharset == rawCharset else {
+                        throw ServiceError.invalid("HTML 含非 UTF-8 字符集声明")
+                    }
+                } else if svgPaintAttrs.contains(attrName) {
+                    try Self.validateSVGPaintAttr(decodedVal)
+                }
+            }
+            if svgDepth > 0 || mathDepth > 0 {
+                if let activeIntegration = foreignIntegrationStack.last {
+                    if closing {
+                        guard rawTag == activeIntegration else {
+                            throw ServiceError.invalid("SVG/MathML 集成点内标签闭合不匹配")
+                        }
+                        foreignIntegrationStack.removeLast()
+                    } else {
+                        let allowedMathLeaf = mathDepth > 0
+                            && mathTextIntegrationTags.contains(activeIntegration)
+                            && selfClosing
+                            && (rawTag == "mglyph" || rawTag == "malignmark")
+                        if !allowedMathLeaf {
+                            throw ServiceError.invalid("SVG/MathML 集成点内不允许嵌套 HTML 或外部元素")
+                        }
+                    }
+                } else if !closing && !selfClosing {
+                    if svgDepth > 0 && rawTag == "desc" {
+                        foreignIntegrationStack.append("desc")
+                    } else if mathDepth > 0 && mathIntegrationTags.contains(rawTag) {
+                        foreignIntegrationStack.append(rawTag)
+                    } else if rawTag == "svg" {
+                        svgDepth += 1
+                    } else if rawTag == "math" {
+                        mathDepth += 1
+                    }
+                } else if closing {
+                    if rawTag == "svg" && svgDepth > 0 { svgDepth -= 1 }
+                    else if rawTag == "math" && mathDepth > 0 { mathDepth -= 1 }
+                }
+            } else if !closing && !selfClosing {
+                if rawTag == "svg" { svgDepth += 1 }
+                else if rawTag == "math" { mathDepth += 1 }
+            }
+            // HTML5 <style> and <title> are never self-closing void elements.
+            if localTag == "style" && !closing {
+                inStyle = true
+                styleStart = j
+            } else if localTag == "title" && !closing {
+                inTitle = true
+            }
+            i = j
+        }
+        if inStyle { throw ServiceError.invalid("HTML 含未闭合的 style 标签") }
+        if inTitle { throw ServiceError.invalid("HTML 含未闭合的 title 标签") }
+        if document && !sawHTMLTag { throw ServiceError.invalid("导读须为完整自包含 HTML") }
     }
     private func personalLibraryBinding(serverID: String) async throws -> PersonalLibraryBinding {
         let (bytes, response) = try await request("/api/users/0/collections", query: ["limit":"1"])
@@ -441,13 +863,13 @@ actor ZoteroService {
         guard let id = ids.first, id > 0 else { throw ServiceError.accountUnidentified }
         return PersonalLibraryBinding(serverID:serverID,userID:id)
     }
-    private func verifyLegacyReadOnly(_ journal: Journal, materials: [Material]) async throws -> ArchiveResult {
-        guard case .readOnly? = archiveScope, let parent = journal.parentKey, let collection = journal.collectionKey else { throw ServiceError.legacyUnbound }
+    private func verifyLegacyReadOnly(_ journal: Journal, materials: [Material], scope: ArchiveScope) async throws -> ArchiveResult {
+        guard case .readOnly = scope, let parent = journal.parentKey, let collection = journal.collectionKey else { throw ServiceError.legacyUnbound }
         try validateKey(parent); try validateKey(collection)
         for step in journal.steps { guard let key = step.key, step.verified else { throw ServiceError.legacyUnbound }; try validateKey(key) }
-        let collections = try await collections()
+        let collections = try await collections(scope: scope)
         guard collections.contains(where:{$0.key == collection}) else { throw ServiceError.verification("旧目标分类") }
-        let object = try await readObject("/api/users/0/items/\(parent)")
+        let object = try await readObject("/api/users/0/items/\(parent)", scope: scope)
         guard let data = object["data"] as? [String:Any], Self.matchesIdentity(journal.request.identity,data:data),
               (data["collections"] as? [String] ?? []).contains(collection) else { throw ServiceError.verification("旧书目与目标分类（只读）") }
         if let stored = journal.createdParentPayload, let expected = try JSONSerialization.jsonObject(with:stored) as? [String:Any] {
@@ -466,12 +888,12 @@ actor ZoteroService {
         }
         for material in materials {
             guard let key = journal.steps.first(where:{$0.role == material.role})?.key else { throw ServiceError.verification("旧材料缺少角色（只读）") }
-            try await verifyMaterial(material,itemKey:key,parent:parent)
+            try await verifyMaterial(material, itemKey: key, parent: parent, scope: scope)
         }
         for(role,html)in [("analysis",journal.request.analysisHTML),("note",journal.request.noteHTML)] {
             guard let html,!html.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { continue }
             guard let key = journal.steps.first(where:{$0.role == role})?.key else { throw ServiceError.verification("旧笔记缺少角色（只读）") }
-            let object = try await readObject("/api/users/0/items/\(key)")
+            let object = try await readObject("/api/users/0/items/\(key)", scope: scope)
             let marker = "PaperDigest-Note: \(role):\(Self.sha256(Data(html.utf8)))"
             guard let data = object["data"] as? [String:Any],data["parentItem"] as? String == parent,data["itemType"] as? String == "note",
                   (data["note"] as? String ?? "").contains(marker),(data["note"] as? String ?? "").contains(html) else { throw ServiceError.verification("旧笔记正文（只读）") }
@@ -481,8 +903,8 @@ actor ZoteroService {
         value = ArchiveResult(archiveID:value.archiveID,identity:value.identity,title:value.title,parentKey:value.parentKey,status:"partial",steps:value.steps,retryable:false,serverID:value.serverID,readOnly:true,warning:"旧记录未绑定个人账号；本次仅只读核验，未写入或修复，不能证明原账号。")
         return value
     }
-    private func resolveCollection(_ input: ArchiveRequest, existing: String?) async throws -> String {
-        let available = try await collections()
+    private func resolveCollection(_ input: ArchiveRequest, existing: String?, scope: ArchiveScope) async throws -> String {
+        let available = try await collections(scope: scope)
         if let key = existing {
             guard available.contains(where: { $0.key == key }) else { throw ServiceError.invalid("目标分类不存在") }
             return key
@@ -491,8 +913,8 @@ actor ZoteroService {
         guard matches.count <= 1 else { throw ServiceError.invalid("目标分类重名，请选择具体分类") }
         if let match = matches.first { return match.key }
         let name = input.collectionName!.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = try await createObject(["name": name, "parentCollection": false], endpoint: "collections")
-        let check = try await readObject("/api/users/0/collections/\(key)")
+        let key = try await createObject(["name": name, "parentCollection": false], endpoint: "collections", scope: scope)
+        let check = try await readObject("/api/users/0/collections/\(key)", scope: scope)
         guard (check["data"] as? [String: Any])?["name"] as? String == name else { throw ServiceError.verification("目标分类") }
         return key
     }
@@ -543,16 +965,16 @@ actor ZoteroService {
         }
         return data
     }
-    private func ensureParent(_ input: ArchiveRequest, payload: [String: Any], journal: inout Journal) async throws -> String {
+    private func ensureParent(_ input: ArchiveRequest, payload: [String: Any], journal: inout Journal, scope: ArchiveScope) async throws -> String {
         var key = journal.parentKey
         var createdData: [String: Any]?
         if key == nil {
             let identityTag = Self.identityTag(input.identity)
-            var objects = try await readArray("/api/users/0/items", query: ["tag": identityTag])
+            var objects = try await readArray("/api/users/0/items", query: ["tag": identityTag], scope: scope)
             if input.identity.hasPrefix("arxiv:") || input.identity.hasPrefix("doi:") {
                 let query = input.identity.replacingOccurrences(of: "arxiv:", with: "").replacingOccurrences(of: "doi:", with: "")
                 let baseID = query.replacingOccurrences(of: #"v\d+$"#, with: "", options: .regularExpression)
-                let found = try await readArray("/api/users/0/items", query: ["q": baseID, "qmode": "everything"])
+                let found = try await readArray("/api/users/0/items", query: ["q": baseID, "qmode": "everything"], scope: scope)
                 var seen = Set(objects.compactMap { $0["key"] as? String })
                 for object in found { if let key = object["key"] as? String, seen.insert(key).inserted { objects.append(object) } }
             }
@@ -566,13 +988,13 @@ actor ZoteroService {
         if key == nil {
             var data = payload
             data["collections"] = [journal.collectionKey!]
-            key = try await createObject(data)
+            key = try await createObject(data, scope: scope)
             createdData = data
             journal.createdParentPayload = try json(data)
             journal.parentKey = key; setStep("bibliography", key: key, verified: false, journal: &journal)
-            try saveJournal(journal)
+            try saveJournal(journal, scope: scope)
         }
-        let parent = try await readObject("/api/users/0/items/\(key!)")
+        let parent = try await readObject("/api/users/0/items/\(key!)", scope: scope)
         guard let data = parent["data"] as? [String: Any], Self.matchesIdentity(input.identity, data: data) else { throw ServiceError.verification("父条目论文身份") }
         if createdData == nil, let stored = journal.createdParentPayload {
             createdData = try JSONSerialization.jsonObject(with: stored) as? [String: Any]
@@ -599,8 +1021,8 @@ actor ZoteroService {
             guard let version = parent["version"] as? Int else { throw ServiceError.verification("父条目版本") }
             _ = try await request("/api/users/0/items/\(key!)", method: "PATCH",
                                   body: try json(["collections": collections + [journal.collectionKey!], "version": version]),
-                                  authenticated: true, contentType: "application/json")
-            let check = try await readObject("/api/users/0/items/\(key!)")
+                                  authenticated: true, contentType: "application/json", scope: scope)
+            let check = try await readObject("/api/users/0/items/\(key!)", scope: scope)
             guard let membership = (check["data"] as? [String: Any])?["collections"] as? [String], membership.contains(journal.collectionKey!) else { throw ServiceError.verification("分类成员关系") }
         }
         journal.parentKey = key; setStep("bibliography", key: key, verified: true, journal: &journal)
@@ -650,11 +1072,11 @@ actor ZoteroService {
             .replacingOccurrences(of: #"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)"#, with: "", options: .regularExpression)
     }
 
-    private func archiveMaterial(_ material: Material, parent: String, journal: inout Journal) async throws {
+    private func archiveMaterial(_ material: Material, parent: String, journal: inout Journal, scope: ArchiveScope) async throws {
         var key = journal.steps.first { $0.role == material.role }?.key
         if key == nil {
             var createdNow=false
-            let children = try await readArray("/api/users/0/items/\(parent)/children")
+            let children = try await readArray("/api/users/0/items/\(parent)/children", scope: scope)
             let marker = "PaperDigest-Asset: \(material.role):\(material.sha256)"
             let matches = children.filter { (($0["data"] as? [String: Any])?["note"] as? String ?? "").contains(marker) }
             guard matches.count <= 1 else { throw ServiceError.verification("重复应用附件") }
@@ -663,12 +1085,12 @@ actor ZoteroService {
                 key = try await createObject(["itemType": "attachment", "parentItem": parent, "linkMode": "imported_file",
                                               "title": material.role == "pdf" ? "原始论文 PDF" : material.role == "guide" ? "论文速递工作台 · 图文导读" : "论文速递工作台 · 原始书目与网站评估",
                                               "contentType": material.contentType, "filename": material.filename,
-                                              "note": marker, "tags": [["tag": "论文速递"]]])
+                                              "note": marker, "tags": [["tag": "论文速递"]]], scope: scope)
                 createdNow=true
             }
-            setStep(material.role, key: key, verified: false, journal: &journal, unverifiedCreation:createdNow); try saveJournal(journal)
+            setStep(material.role, key: key, verified: false, journal: &journal, unverifiedCreation:createdNow); try saveJournal(journal, scope: scope)
         }
-        let item = try await readObject("/api/users/0/items/\(key!)")
+        let item = try await readObject("/api/users/0/items/\(key!)", scope: scope)
         guard let data = item["data"] as? [String: Any], data["parentItem"] as? String == parent,
               data["linkMode"] as? String == "imported_file" else { throw ServiceError.verification("存储附件归属") }
         let storedMD5 = data["md5"] as? String ?? ""
@@ -679,7 +1101,7 @@ actor ZoteroService {
             let unfinishedOwnedSlot = step?.verified != true && step?.everVerified == false && data["note"] as? String == marker
             // A missing synced hash does not grant permission to replace a real user-edited file.
             do {
-                let (pathData, _) = try await request("/api/users/0/items/\(key!)/file/view/url")
+                let (pathData, _) = try await request("/api/users/0/items/\(key!)/file/view/url", scope: scope)
                 guard let raw = String(data: pathData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                       let file = URL(string: raw), file.isFileURL else { throw ServiceError.verification("已有附件文件位置") }
                 let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
@@ -699,7 +1121,7 @@ actor ZoteroService {
             let form = ["md5": material.md5, "filename": material.filename, "filesize": String(material.data.count),
                         "mtime": String(Int64(Date().timeIntervalSince1970 * 1000))]
             let (authData, _) = try await request("/api/users/0/items/\(key!)/file", method: "POST", body: formData(form), authenticated: true,
-                                                 contentType: "application/x-www-form-urlencoded", headers: precondition)
+                                                 contentType: "application/x-www-form-urlencoded", headers: precondition, scope: scope)
             let upload = try JSONSerialization.jsonObject(with: authData) as? [String: Any] ?? [:]
             if upload["exists"] as? Int != 1 {
                 guard let raw = upload["url"] as? String, let url = URL(string: raw), isLocalUpload(url),
@@ -710,19 +1132,19 @@ actor ZoteroService {
                 // attachment's real MIME in its metadata; transfer exact bytes
                 // as binary regardless of the authorize response's MIME hint.
                 _ = try await request(url.path, method: "POST", body: material.data,
-                                      contentType: "application/octet-stream", upload: true)
+                                      contentType: "application/octet-stream", upload: true, scope: scope)
                 _ = try await request("/api/users/0/items/\(key!)/file", method: "POST", body: formData(["upload": uploadKey]), authenticated: true,
-                                      contentType: "application/x-www-form-urlencoded", headers: precondition)
+                                      contentType: "application/x-www-form-urlencoded", headers: precondition, scope: scope)
             }
         }
-        try await verifyMaterial(material, itemKey: key!, parent: parent)
-        setStep(material.role, key: key, verified: true, journal: &journal); try saveJournal(journal)
+        try await verifyMaterial(material, itemKey: key!, parent: parent, scope: scope)
+        setStep(material.role, key: key, verified: true, journal: &journal); try saveJournal(journal, scope: scope)
     }
-    private func verifyMaterial(_ material: Material, itemKey: String, parent: String) async throws {
-        let object = try await readObject("/api/users/0/items/\(itemKey)")
+    private func verifyMaterial(_ material: Material, itemKey: String, parent: String, scope: ArchiveScope) async throws {
+        let object = try await readObject("/api/users/0/items/\(itemKey)", scope: scope)
         guard let data = object["data"] as? [String: Any], data["parentItem"] as? String == parent,
               data["md5"] as? String == material.md5, data["contentType"] as? String == material.contentType else { throw ServiceError.verification("附件元数据") }
-        let (pathData, _) = try await request("/api/users/0/items/\(itemKey)/file/view/url")
+        let (pathData, _) = try await request("/api/users/0/items/\(itemKey)/file/view/url", scope: scope)
         guard let text = String(data: pathData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               let file = URL(string: text), file.isFileURL else { throw ServiceError.verification("附件本机文件") }
         let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
@@ -742,7 +1164,7 @@ actor ZoteroService {
         return Material(role: "source-metadata", filename: "source-metadata.json", contentType: "application/json",
                         data: try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys, .prettyPrinted]))
     }
-    private func archiveNote(_ html: String, role: String, parent: String, journal: inout Journal) async throws {
+    private func archiveNote(_ html: String, role: String, parent: String, journal: inout Journal, scope: ArchiveScope) async throws {
         let marker = "PaperDigest-Note: \(role):\(Self.sha256(Data(html.utf8)))"
         // Zotero derives a note title from its first visible line. This
         // create-only wrapper stays outside the original, hash-bound HTML.
@@ -755,19 +1177,19 @@ actor ZoteroService {
         let content = "<div><p>\(heading)</p>\(html)<p>\(marker)</p></div>"
         var key = journal.steps.first { $0.role == role }?.key
         if key == nil {
-            let children = try await readArray("/api/users/0/items/\(parent)/children")
+            let children = try await readArray("/api/users/0/items/\(parent)/children", scope: scope)
             let matches = children.filter { (($0["data"] as? [String: Any])?["note"] as? String ?? "").contains(marker) }
             guard matches.count <= 1 else { throw ServiceError.verification("重复个人笔记") }
             key = matches.first?["key"] as? String
-            if key == nil { key = try await createObject(["itemType": "note", "parentItem": parent, "note": content, "tags": [["tag": "论文速递"]]]) }
-            setStep(role, key: key, verified: false, journal: &journal); try saveJournal(journal)
+            if key == nil { key = try await createObject(["itemType": "note", "parentItem": parent, "note": content, "tags": [["tag": "论文速递"]]], scope: scope) }
+            setStep(role, key: key, verified: false, journal: &journal); try saveJournal(journal, scope: scope)
         }
-        let check = try await readObject("/api/users/0/items/\(key!)")
+        let check = try await readObject("/api/users/0/items/\(key!)", scope: scope)
         guard let data = check["data"] as? [String: Any], data["parentItem"] as? String == parent,
               data["itemType"] as? String == "note", (data["note"] as? String ?? "").contains(marker), (data["note"] as? String ?? "").contains(html) else { throw ServiceError.verification("个人笔记正文") }
-        setStep(role, key: key, verified: true, journal: &journal); try saveJournal(journal)
+        setStep(role, key: key, verified: true, journal: &journal); try saveJournal(journal, scope: scope)
     }
-    private func createObject(_ object: [String: Any], endpoint: String = "items") async throws -> String {
+    private func createObject(_ object: [String: Any], endpoint: String = "items", scope: ArchiveScope? = nil) async throws -> String {
         let body: Data
         if endpoint == "items", object["itemType"] as? String == "attachment", let mode = object["linkMode"] as? String {
             // Zotero 10 applies JSON fields in wire order. Its filename setter
@@ -781,23 +1203,23 @@ actor ZoteroService {
             body = ordered
         } else { body = try json([object]) }
         let (data, _) = try await request("/api/users/0/\(endpoint)", method: "POST", body: body,
-                                         authenticated: true, contentType: "application/json", headers: ["Zotero-Write-Token": UUID().uuidString.replacingOccurrences(of: "-", with: "")])
+                                         authenticated: true, contentType: "application/json", headers: ["Zotero-Write-Token": UUID().uuidString.replacingOccurrences(of: "-", with: "")], scope: scope)
         let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         if let failures = result["failed"] as? [String: Any], !failures.isEmpty { throw ServiceError.verification("Zotero 拒绝保存对象") }
         if let key = (result["success"] as? [String: String])?["0"] { return key }
         if let object = (result["successful"] as? [String: [String: Any]])?["0"], let key = object["key"] as? String { return key }
         throw ServiceError.verification("写入回执缺少对象 Key")
     }
-    private func readObject(_ path: String) async throws -> [String: Any] {
-        let (data, _) = try await request(path)
+    private func readObject(_ path: String, scope: ArchiveScope? = nil) async throws -> [String: Any] {
+        let (data, _) = try await request(path, scope: scope)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ServiceError.verification("对象响应") }
         return object
     }
-    private func readArray(_ path: String, query: [String: String] = [:]) async throws -> [[String: Any]] {
+    private func readArray(_ path: String, query: [String: String] = [:], scope: ArchiveScope? = nil) async throws -> [[String: Any]] {
         var output: [[String: Any]] = []; var start = 0
         repeat {
             var page = query; page["limit"] = "100"; page["start"] = String(start)
-            let (data, _) = try await request(path, query: page)
+            let (data, _) = try await request(path, query: page, scope: scope)
             guard let objects = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw ServiceError.verification("列表响应") }
             output.append(contentsOf: objects)
             if objects.count < 100 { return output }
@@ -807,12 +1229,12 @@ actor ZoteroService {
     }
     private func request(_ path: String, method: String = "GET", body: Data? = nil, authenticated: Bool = false,
                          contentType: String? = nil, headers: [String: String] = [:], requireServer: Bool = true,
-                         query: [String: String] = [:], upload: Bool = false) async throws -> (Data, HTTPURLResponse) {
+                         query: [String: String] = [:], upload: Bool = false, scope: ArchiveScope? = nil) async throws -> (Data, HTTPURLResponse) {
         // This firewall runs before header construction, credential use and dispatch.
-        if case .readOnly? = archiveScope, method != "GET" { throw ServiceError.legacyUnbound }
+        if case .readOnly? = scope, method != "GET" { throw ServiceError.legacyUnbound }
         guard path.hasPrefix("/api/"), !path.contains("..") else { throw ServiceError.invalid("本地 API 路径") }
         var scopedPath = path
-        if case .bound(let binding)? = archiveScope, path.hasPrefix("/api/users/") {
+        if case .bound(let binding)? = scope, path.hasPrefix("/api/users/") {
             guard binding.userID > 0, binding.serverID == serverID, path.hasPrefix("/api/users/0/") else { throw ServiceError.accountChanged }
             scopedPath = "/api/users/\(binding.userID)/" + path.dropFirst("/api/users/0/".count)
         }
@@ -832,6 +1254,8 @@ actor ZoteroService {
         for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
         let data: Data; let response: URLResponse
         do { (data, response) = try await session.data(for: request) }
+        catch is CancellationError { throw CancellationError() }
+        catch let urlError as URLError where urlError.code == .cancelled { throw CancellationError() }
         catch { throw ServiceError.unavailable }
         guard let http = response as? HTTPURLResponse else { throw ServiceError.unavailable }
         if requireServer && !upload {
@@ -898,8 +1322,8 @@ actor ZoteroService {
         guard UUID(uuidString: id) != nil else { throw ServiceError.invalid("归档检查点编号") }
         return directory.appendingPathComponent("zotero-archives", isDirectory: true).appendingPathComponent(id + ".json")
     }
-    private func saveJournal(_ journal: Journal) throws {
-        if case .readOnly? = archiveScope { throw ServiceError.legacyUnbound }
+    private func saveJournal(_ journal: Journal, scope: ArchiveScope? = nil) throws {
+        if case .readOnly? = scope { throw ServiceError.legacyUnbound }
         let file = try journalURL(journal.id)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

@@ -166,40 +166,42 @@ class RootController private constructor(
         restoreContext.ensureActive()
         synchronized(workspaceAdmission) { workspacePhase = WorkspacePhase(true) }
         try {
-            exportCoordinator.retireForWorkspaceRestore()
-            pdf.clearSessionPasswords()
-            leaveAggregateView()
-            aggregateBrowser.invalidatePreviews()
-            cloudCredentialBorrowing.workspaceRestored()
-            zoteroCoordinator.workspaceRestored(zotero)
-            cloudCoordinator.clearNoteConflicts()
+            catalogCoordinator.withExclusiveArticleReadDrain {
+                exportCoordinator.retireForWorkspaceRestore()
+                pdf.clearSessionPasswords()
+                leaveAggregateView()
+                aggregateBrowser.invalidatePreviews()
+                cloudCredentialBorrowing.workspaceRestored()
+                zoteroCoordinator.workspaceRestored(zotero)
+                cloudCoordinator.clearNoteConflicts()
 
-            var firstInitialization = true
-            RestorePolicy.install(staged, research, initialize = {
-                val adopting = firstInitialization
-                firstInitialization = false
-                personal.reload()
-                if (adopting) personal.retireRestoredDispatch()
-                library.reload()
-                if (adopting) dispatch.rotate()
-            }, check = { restoreContext.ensureActive() })
-            studyCoordinator.workspaceRestored()
-            catalogCoordinator.workspaceRestored()
-            cloudCoordinator.clearNoteConflicts()
-            offlineReading = null
-            generation.incrementAndGet()
-            _state.update {
-                it.copy(
-                    selectedPaperId = null,
-                    article = null,
-                    pdfDocument = null,
-                    pdfMode = false,
-                    pdfSelection = null,
-                    pdfPage = 1,
-                    noteConflicts = emptyList(),
-                )
+                var firstInitialization = true
+                RestorePolicy.install(staged, research, initialize = {
+                    val adopting = firstInitialization
+                    firstInitialization = false
+                    personal.reload()
+                    if (adopting) personal.retireRestoredDispatch()
+                    library.reload()
+                    if (adopting) dispatch.rotate()
+                }, check = { restoreContext.ensureActive() })
+                studyCoordinator.workspaceRestored()
+                catalogCoordinator.workspaceRestored()
+                cloudCoordinator.clearNoteConflicts()
+                offlineReading = null
+                generation.incrementAndGet()
+                _state.update {
+                    it.copy(
+                        selectedPaperId = null,
+                        article = null,
+                        pdfDocument = null,
+                        pdfMode = false,
+                        pdfSelection = null,
+                        pdfPage = 1,
+                        noteConflicts = emptyList(),
+                    )
+                }
+                refresh(publishingRestore = true)
             }
-            refresh(publishingRestore = true)
         } finally {
             synchronized(workspaceAdmission) { workspacePhase = WorkspacePhase(false) }
         }
@@ -209,24 +211,26 @@ class RootController private constructor(
         override suspend fun capture(output: File): BackupCodec.Captured = maintenance.withLock {
             require(!exportCoordinator.hasBlockingNonCloudTask()) { "请等当前资料任务结束再完整备份" }
             val captureContext = currentCoroutineContext()
-            val snapshot = BackupCodec.capture(research, output) { captureContext.ensureActive() }
-            val id = currentCoroutineContext()[CoroutineName]?.name
-            if (id != null) {
-                personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id }?.let { row ->
-                    personal.upsertJob(
-                        row.copy().put(
-                            "material",
-                            JSONObject()
-                                .put("kind", "完整研究快照")
-                                .put("createdAt", now())
-                                .put("fileCount", snapshot.fileCount)
-                                .put("sha256", snapshot.sha256)
-                                .put("encodedBytes", snapshot.encodedBytes)
+            catalogCoordinator.withExclusiveArticleReadDrain {
+                val snapshot = BackupCodec.capture(research, output) { captureContext.ensureActive() }
+                val id = currentCoroutineContext()[CoroutineName]?.name
+                if (id != null) {
+                    personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id }?.let { row ->
+                        personal.upsertJob(
+                            row.copy().put(
+                                "material",
+                                JSONObject()
+                                    .put("kind", "完整研究快照")
+                                    .put("createdAt", now())
+                                    .put("fileCount", snapshot.fileCount)
+                                    .put("sha256", snapshot.sha256)
+                                    .put("encodedBytes", snapshot.encodedBytes)
+                            )
                         )
-                    )
+                    }
                 }
+                snapshot
             }
-            snapshot
         }
 
         override suspend fun restore(staged: BackupCodec.Staged) = restoreWorkspace(staged) {}
@@ -406,9 +410,9 @@ class RootController private constructor(
                 }
             },
             claimReading = { live ->
-                catalogCoordinator.drainBackground(catalogCoordinator.articleReadJob)
                 pdfAdmission.withLock {
                     if (!live()) false else {
+                        catalogCoordinator.drainArticleReadJobs()
                         pdfCoordinator.stopPdfAcquisition()
                         if (!live()) false else {
                             generation.incrementAndGet()
@@ -434,7 +438,7 @@ class RootController private constructor(
             },
             publish = { value -> _state.update { it.copy(aggregate = value) } },
             commitReading = { live, commit -> pdfAdmission.withLock { live() && commit() } },
-            openLinkedPaper = { paper, live -> openPaper(paper.id, admissionGuard = live) },
+            openLinkedPaper = { paper, live -> openPaper(paper.id, admissionGuard = live, expectedEpoch = dispatch.epoch) },
         )
     }
 
@@ -789,7 +793,7 @@ class RootController private constructor(
                     JSONObject().put("ready", true)
                 }
                 "library.sync" -> catalogCoordinator.executeManualLibrarySync(command)
-                "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"))
+                "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"), expectedEpoch = dispatchAtStart)
                 "pdf.open" -> pdfCoordinator.openCurrentPaperPdf(command, access, dispatchAtStart)
                 "pdf.close" -> pdfAdmission.withLock {
                     pdfCoordinator.stopPdfAcquisition()
@@ -1069,39 +1073,60 @@ class RootController private constructor(
         }
     }
 
-    private suspend fun openPaper(id: String, refresh: Boolean = false, admissionGuard: (() -> Boolean)? = null): JSONObject {
+    private suspend fun openPaper(
+        id: String,
+        refresh: Boolean = false,
+        admissionGuard: (() -> Boolean)? = null,
+        expectedEpoch: String = dispatch.epoch,
+    ): JSONObject {
+        if (dispatch.epoch != expectedEpoch) return JSONObject().put("status", "not-adopted")
         val p = paper(id)
         if (admissionGuard == null) leaveAggregateView()
         val admissionView = catalogCoordinator.aggregateViewRevision.get()
-        catalogCoordinator.drainBackground(catalogCoordinator.articleReadJob)
         val ready = CompletableDeferred<Unit>()
         val captured = pdfAdmission.withLock {
-            if (catalogCoordinator.aggregateViewRevision.get() != admissionView || admissionGuard?.invoke() == false) {
+            if (dispatch.epoch != expectedEpoch
+                || catalogCoordinator.aggregateViewRevision.get() != admissionView
+                || admissionGuard?.invoke() == false
+            ) {
                 return JSONObject().put("status", "not-adopted")
             }
+            catalogCoordinator.drainArticleReadJobs()
             pdfCoordinator.stopPdfAcquisition()
-            if (catalogCoordinator.aggregateViewRevision.get() != admissionView || admissionGuard?.invoke() == false) {
-                return JSONObject().put("status", "not-adopted")
-            }
-            if (admissionGuard != null) leaveAggregateView()
-            val changed = generation.incrementAndGet()
-            offlineReading = null
-            _state.update {
-                it.copy(
-                    selectedPaperId = id,
-                    viewedPaper = Paper.fromJson(p.json()),
-                    article = null,
-                    pdfDocument = null,
-                    pdfMode = false,
-                    pdfSelection = null,
-                    pdfReceipt = JSONObject(),
-                    loading = p.blogURL.isNotEmpty(),
-                )
+            val canCommit: () -> Boolean = {
+                dispatch.epoch == expectedEpoch
+                    && !synchronized(workspaceAdmission) { workspacePhase.installing }
+                    && catalogCoordinator.aggregateViewRevision.get() == admissionView
+                    && admissionGuard?.invoke() != false
             }
             if (p.blogURL.isEmpty()) {
+                val changed = catalogCoordinator.commitArticleReadAdmission(
+                    producer = null,
+                    canCommit = canCommit,
+                ) {
+                    if (admissionGuard != null) leaveAggregateView()
+                    val next = generation.incrementAndGet()
+                    offlineReading = null
+                    _state.update {
+                        it.copy(
+                            selectedPaperId = id,
+                            viewedPaper = Paper.fromJson(p.json()),
+                            article = null,
+                            pdfDocument = null,
+                            pdfMode = false,
+                            pdfSelection = null,
+                            pdfReceipt = JSONObject(),
+                            loading = false,
+                        )
+                    }
+                    next
+                } ?: return JSONObject().put("status", "not-adopted")
                 ready.complete(Unit)
+                changed
             } else {
+                val expectedGeneration = AtomicLong(0L)
                 val producer = exportScope.launch(start = CoroutineStart.LAZY) {
+                    val changed = expectedGeneration.get()
                     fun publish(article: Article) {
                         val enriched = library.papers().firstOrNull { it.id == id }
                         _state.update { current ->
@@ -1121,9 +1146,7 @@ class RootController private constructor(
                     try {
                         ensureActive()
                         if (generation.get() != changed) throw CancellationException("阅读入口已变化")
-                        val article = maintenance.withLock {
-                            library.article(p, refresh, onReadable = { value -> publish(value); ready.complete(Unit) })
-                        }
+                        val article = library.article(p, refresh, onReadable = { value -> publish(value); ready.complete(Unit) })
                         publish(article)
                         ready.complete(Unit)
                     } catch (cancelled: CancellationException) {
@@ -1137,19 +1160,43 @@ class RootController private constructor(
                         }
                     }
                 }
+                val changed = catalogCoordinator.commitArticleReadAdmission(
+                    producer = producer,
+                    canCommit = canCommit,
+                ) {
+                    if (admissionGuard != null) leaveAggregateView()
+                    val next = generation.incrementAndGet()
+                    expectedGeneration.set(next)
+                    offlineReading = null
+                    _state.update {
+                        it.copy(
+                            selectedPaperId = id,
+                            viewedPaper = Paper.fromJson(p.json()),
+                            article = null,
+                            pdfDocument = null,
+                            pdfMode = false,
+                            pdfSelection = null,
+                            pdfReceipt = JSONObject(),
+                            loading = true,
+                        )
+                    }
+                    next
+                } ?: run {
+                    producer.cancel()
+                    ready.complete(Unit)
+                    return JSONObject().put("status", "not-adopted")
+                }
                 producer.invokeOnCompletion { cause ->
                     if (!ready.isCompleted) when (cause) {
                         is CancellationException -> ready.cancel(cause)
                         null -> ready.completeExceptionally(IllegalStateException("尚未取得可读正文，请重新打开导读"))
                         else -> ready.completeExceptionally(cause)
                     }
-                    catalogCoordinator.articleReadJob.compareAndSet(producer, null)
                     _state.update { if (generation.get() == changed && it.selectedPaperId == id) it.copy(loading = false) else it }
                 }
-                catalogCoordinator.articleReadJob.set(producer)
                 producer.start()
+                changed
             }
-            changed
         }
         ready.await()
         if (captured != generation.get()) return JSONObject().put("status", "not-adopted")

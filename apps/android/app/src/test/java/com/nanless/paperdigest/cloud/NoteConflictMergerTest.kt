@@ -190,6 +190,18 @@ class NoteConflictMergerTest {
 
         val sameTextConflict = conflict.copy(remoteNote = conflict.localNote)
         assertEquals(conflict.localNote, NoteConflictMerger.resolve(sameTextConflict, NoteConflictStrategy.MERGE_BOTH))
+
+        // E-M4: Secondary conflict on an already-merged note must NOT double-wrap LOCAL_SECTION_HEADER
+        val secondConflict = NoteConflictItem(
+            paperId = paperA,
+            localNote = merged,
+            remoteNote = "第三段：iPad 补充笔记",
+            remoteDeviceId = ipadDevice,
+            remoteRevision = 9L,
+        )
+        val secondMerged = NoteConflictMerger.resolve(secondConflict, NoteConflictStrategy.MERGE_BOTH)
+        assertEquals(1, secondMerged.split(NoteConflictMerger.LOCAL_SECTION_HEADER).size - 1)
+        assertTrue(secondMerged.contains("第三段：iPad 补充笔记"))
     }
 
     @Test

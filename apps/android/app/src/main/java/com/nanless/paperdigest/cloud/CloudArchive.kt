@@ -115,7 +115,8 @@ fun interface CloudTransport { suspend fun execute(request: Request, limit: Int)
 class NutstoreTransport : CloudTransport {
     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .cookieJar(CookieJar.NO_COOKIES).authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE)
-        .callTimeout(60, TimeUnit.SECONDS).build()
+        .connectTimeout(60, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(300, TimeUnit.SECONDS).build()
     override suspend fun execute(request: Request, limit: Int): CloudHTTP {
         coroutineContext.ensureActive()
         require(request.url.scheme == "https" && request.url.host == "dav.jianguoyun.com" && request.url.port == 443 && request.url.username.isEmpty() && request.url.password.isEmpty() && request.url.query == null && request.url.fragment == null && request.url.encodedPath.startsWith("/dav/"))
@@ -128,10 +129,15 @@ class NutstoreTransport : CloudTransport {
                     response.use { r ->
                         try {
                             if (r.request.url != request.url) throw CloudFailure("redirect")
+                            val headers = r.headers.toMultimap().mapValues { it.value.joinToString(",") }
+                            if (r.code !in 200..299) {
+                                if (continuation.isActive) continuation.resumeWith(Result.success(CloudHTTP(r.code, headers, byteArrayOf())))
+                                return
+                            }
                             val stream = r.body ?: throw CloudFailure("transport"); if (stream.contentLength() > limit) throw CloudFailure("oversizedResponse")
                             val out = ByteArrayOutputStream(minOf(limit, 64 * 1024)); val buffer = ByteArray(64 * 1024)
                             stream.byteStream().use { input -> while (true) { val count = input.read(buffer); if (count < 0) break; if (count > limit - out.size()) throw CloudFailure("oversizedResponse"); out.write(buffer, 0, count) } }
-                            if (continuation.isActive) continuation.resumeWith(Result.success(CloudHTTP(r.code, r.headers.toMultimap().mapValues { it.value.joinToString(",") }, out.toByteArray())))
+                            if (continuation.isActive) continuation.resumeWith(Result.success(CloudHTTP(r.code, headers, out.toByteArray())))
                         } catch (e: Exception) { if (continuation.isActive) continuation.resumeWith(Result.failure(if (e is CloudFailure) e else CloudFailure("transport"))) }
                     }
                 }

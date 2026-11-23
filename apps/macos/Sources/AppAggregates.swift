@@ -243,6 +243,10 @@ extension PaperDigestApp {
                 session.readyDisplaySHA = PublishedAggregateReader.sha(Data(document.displayHTML.utf8))
                 value["documentReadyNonce"] = nonce
                 value["sessionID"] = session.id; value["contextGeneration"] = session.generation
+                if command != "aggregates.refresh", document.isStale,
+                   document.readNotice == "已打开本机核验快照；可重新读取网站获取最新正文" {
+                    value["localSnapshotOpened"] = true
+                }
                 return value
             }
         }

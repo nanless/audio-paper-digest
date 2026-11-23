@@ -203,14 +203,18 @@ class CloudService(
     }
     internal suspend fun syncPersonal(
         capture: suspend () -> JSONObject,
-        commit: suspend (JSONObject, PersonalWebDavSync.Plan) -> Unit
+        commit: suspend (JSONObject, PersonalWebDavSync.Plan) -> Unit,
+        preUploadCheck: suspend (JSONObject, PersonalWebDavSync.Plan) -> Unit = { _, _ -> },
     ): JSONObject = operation {
         val original = capture()
         val service = archive()
         val device = destinationID
         val remote = service.personalDocuments()
         val plan = PersonalWebDavSync.plan(original, device, remote.heads)
-        plan.upload?.let { service.writePersonalDocument(it, remote) }
+        if (plan.upload != null) {
+            preUploadCheck(original, plan)
+            service.writePersonalDocument(plan.upload, remote)
+        }
         coroutineContext.ensureActive()
         commit(original, plan)
         JSONObject().put("favorites", plan.personal.getJSONArray("favorites").length())

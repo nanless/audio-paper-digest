@@ -146,6 +146,7 @@ internal class ZoteroDrainedTransport(private val calls:Call.Factory=ZoteroDavNe
     private suspend fun <T> exchange(request:Request,operation:ZoteroTransportObservation.Operation,read:(Response,()->Unit)->T):T {
         val url=request.url
         require(url.scheme=="https"&&url.username.isEmpty()&&url.password.isEmpty()&&url.fragment==null){"服务地址必须是无凭据的 HTTPS"}
+        try{com.nanless.paperdigest.data.SafeHttp.requireAllowedTargetHost(url.host,localModel=false)}catch(_:UnknownHostException){throw IllegalArgumentException("服务解析到私网或保留地址，已停止连接")}
         val destination=ZoteroTransportObservation.destination(request)
         val context=currentCoroutineContext();context.ensureActive();val drained=CompletableDeferred<Unit>()
         try{return suspendCancellableCoroutine{continuation->

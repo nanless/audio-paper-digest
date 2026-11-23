@@ -28,9 +28,13 @@ internal object FullWorkspaceMerge {
         return path == "personal.json" || path == BackupCodec.ROOTS_FILE || path.substringBefore('/') in roots
     }
 
+    private val nonTerminalSessionStatuses = setOf("prepared", "pending", "running", "queued")
+
     fun capturePersonal(local: JSONObject): JSONObject = PersonalStore.initial()
         .put("personalPapers", local.optJSONObject("personalPapers")?.copy() ?: JSONObject())
-        .put("sessions", JSONArray(local.getJSONArray("sessions").objects().filterNot { it.optBoolean("syncedHistory") }))
+        .put("sessions", JSONArray(local.getJSONArray("sessions").objects().filter {
+            !it.optBoolean("syncedHistory") && it.optString("status") !in nonTerminalSessionStatuses
+        }))
 
     private fun group(path: String): String {
         val root = path.substringBefore('/')
@@ -171,7 +175,8 @@ internal object FullWorkspaceMerge {
             val known = (0 until sessions.length()).associateBy({ sessions.getJSONObject(it).optString("id") }, { sessions.getJSONObject(it) })
             val others = remote.getJSONArray("sessions").objects().groupBy { it.optString("id") }
             for ((id, records) in others) {
-                if (id.isBlank() || records.size != 1 || "ModelUsage/${id.lowercase()}" in rejected) {
+                if (id.isBlank() || records.size != 1 || "ModelUsage/${id.lowercase()}" in rejected ||
+                    records.single().optString("status") in nonTerminalSessionStatuses) {
                     rejected += "session/$id"
                     continue
                 }

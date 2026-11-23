@@ -50,6 +50,7 @@ internal class DavFileBody(private val file:File,private val bytes:Long,private 
 internal class ZoteroDavNetworkTransport internal constructor(private val calls:Call.Factory=hardenedClient()):DavWireTransport {
     override suspend fun exchange(request:Request,limit:Long,reply:DavReplyFile?,check:()->Unit):DavWireReply {
         check();davRequire(request.url.scheme=="https"&&request.url.username.isEmpty()&&request.url.password.isEmpty()&&request.url.fragment==null&&limit in 1..ZoteroDavCodec.MAX_ZIP,"target")
+        try{SafeHttp.requireAllowedTargetHost(request.url.host,localModel=false)}catch(_:java.net.UnknownHostException){throw ZoteroDavFailure("target")}
         val drained=CompletableDeferred<Unit>()
         try {
             return suspendCancellableCoroutine { continuation ->
@@ -80,8 +81,14 @@ internal class ZoteroDavNetworkTransport internal constructor(private val calls:
         }finally{withContext(NonCancellable){drained.await()}}
     }
     companion object {
-        internal fun hardenedClient(dns:Dns=Dns.SYSTEM):OkHttpClient=OkHttpClient.Builder().proxy(Proxy.NO_PROXY).followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+        private val sharedClient:OkHttpClient=OkHttpClient.Builder().proxy(Proxy.NO_PROXY).followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+            .authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE).build()
+        internal fun hardenedClient(dns:Dns=Dns.SYSTEM):OkHttpClient=sharedClient.newBuilder().proxy(Proxy.NO_PROXY).followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
             .authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE)
+            .addInterceptor { chain ->
+                SafeHttp.requireAllowedTargetHost(chain.request().url.host, localModel = false)
+                chain.proceed(chain.request())
+            }
             .dns(SafeHttp.PublicDns(false,dns))
             .connectTimeout(30,TimeUnit.SECONDS).readTimeout(180,TimeUnit.SECONDS).callTimeout(180,TimeUnit.SECONDS).build()
     }

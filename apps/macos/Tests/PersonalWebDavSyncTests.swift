@@ -112,6 +112,15 @@ import Foundation
         precondition(currentFavorites["contract"] is String && currentFavorites["version"] == nil)
         let repeated = try PersonalWebDavSync.plan(local: currentSync.personal, device: mac, remote: [mac:currentSync.upload!])
         precondition(repeated.upload == nil && repeated.personal["favorites"] as? [String] == [a])
+
+        // E-C2: Concurrent local edit during upload -> acknowledgeUpload prevents permanent N+1 deadlock
+        var before = local([a]); before["notes"] = [a: ["revision": 1, "text": "v1"]]
+        let firstPlan = try PersonalWebDavSync.plan(local: before, device: mac, remote: [:])
+        precondition(firstPlan.upload != nil)
+        var editedDuringUpload = local([a]); editedDuringUpload["notes"] = [a: ["revision": 2, "text": "v2 edited in flight"]]
+        let acked = PersonalWebDavSync.acknowledgeUpload(firstPlan, onto: editedDuringUpload)
+        let retryPlan = try PersonalWebDavSync.plan(local: acked, device: mac, remote: [mac: firstPlan.upload!])
+        precondition(retryPlan.upload != nil && (retryPlan.personal["notes"] as? [String: [String: Any]])?[a]?["text"] as? String == "v2 edited in flight")
         print("WebDAV 双端合并、取消收藏、研究资料与冲突测试通过")
     }
 }

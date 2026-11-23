@@ -241,12 +241,27 @@ internal class CloudSyncCoordinator(
                             personal.snapshot()
                         }
                     },
-                    commit = { before, plan ->
+                    preUploadCheck = { before, _ ->
                         maintenance().withLock {
                             currentCoroutineContext().ensureActive()
                             requireCurrentEpoch(workspaceEpoch)
                             val current = personal.snapshot()
                             require(PersonalWebDavSync.unchanged(before, current)) { "同步期间本机资料已编辑，请再同步一次" }
+                        }
+                    },
+                    commit = { before, plan ->
+                        maintenance().withLock {
+                            currentCoroutineContext().ensureActive()
+                            requireCurrentEpoch(workspaceEpoch)
+                            val current = personal.snapshot()
+                            if (!PersonalWebDavSync.unchanged(before, current)) {
+                                if (plan.upload != null) {
+                                    runCatching {
+                                        personal.replaceValidated(PersonalWebDavSync.acknowledgeUpload(current, plan))
+                                    }
+                                }
+                                throw IllegalArgumentException("同步期间本机资料已编辑，请再同步一次")
+                            }
                             personal.replaceValidated(PersonalWebDavSync.apply(current, plan))
                             recordSyncedNoteConflicts(plan.noteConflicts)
                         }

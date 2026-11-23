@@ -376,7 +376,9 @@ class StudyService private constructor(private val store: PersonalStore, private
             val proxy = if (model.lowercase().startsWith("muse-spark-")) raw.optString("httpProxy").trim() else ""
             if (model.lowercase().startsWith("muse-spark-")) require(proxy.isNotEmpty()) { "Muse 模型必须配置 HTTP CONNECT 代理" }
             if (proxy.isNotEmpty()) { val p = URI(proxy); require(p.scheme == "http" && p.host != null && p.port in 1..65535 && p.userInfo == null && p.query == null && p.fragment == null && p.path in listOf("", "/")) { "代理须为不含密码的 HTTP CONNECT 地址" } }
-            return JSONObject().put("endpoint", endpoint).put("model", model).put("protocol", protocol).put("maxTokens", tokens).put("timeoutMs", timeout).put("httpProxy", proxy).put("responsesStream", protocol == "responses" && raw.optBoolean("responsesStream")).put("reasoningEffort", raw.optString("reasoningEffort", "default"))
+            val effort = raw.optString("reasoningEffort", "default")
+            require(effort in listOf("default", "none", "minimal", "low", "medium", "high", "xhigh")) { "Responses 推理强度设置无效" }
+            return JSONObject().put("endpoint", endpoint).put("model", model).put("protocol", protocol).put("maxTokens", tokens).put("timeoutMs", timeout).put("httpProxy", proxy).put("responsesStream", protocol == "responses" && raw.optBoolean("responsesStream")).put("reasoningEffort", effort)
         }
         fun apiURL(config: JSONObject): String {
             val base = config.getString("endpoint").trimEnd('/')

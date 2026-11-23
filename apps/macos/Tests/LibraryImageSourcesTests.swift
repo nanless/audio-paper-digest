@@ -66,7 +66,19 @@ actor PublishedImageFixture {
         try expect(LibraryService.externalResourceProxy(URL(string:rejected[0])!,configured:proxy)==nil,"unapproved GitHub repository receives no proxy capability")
         // These are the same per-hop checks used before every production DNS lookup.
         try expect(approved(images[0]) && !approved(rejected[0]) && !approved("https://169.254.169.254/latest/meta-data/"),"approved first hop does not authorize repository or metadata-service redirect")
-        for address in ["127.0.0.1","10.0.0.1","169.254.169.254","192.168.1.1","::1","fc00::1"]{try expect(!LibraryService.isPublicAddress(address),"existing SSRF public-IP boundary retained")}
+        for address in ["127.0.0.1","10.0.0.1","169.254.169.254","192.168.1.1","::1","fc00::1","198.18.0.15"]{try expect(!LibraryService.isPublicAddress(address),"existing SSRF public-IP boundary retained")}
+        // E-H3: Strict XML allowlist SVG validation rejects namespace script, @import style, and animation tags
+        let badSvgs = [
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:s=\"http://www.w3.org/2000/svg\"><s:script>alert(1)</s:script></svg>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><style>@import \"https://evil.invalid/a.css\";</style></svg>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><set attributeName=\"onload\" to=\"alert(1)\"/></svg>"
+        ]
+        let svgURL = URL(string: "https://arxiv.org/html/2601.00001v1/fig.svg")!
+        for badSvg in badSvgs {
+            let rejectedSvg: Bool = { do { _ = try LibraryService.imageExtension(Data(badSvg.utf8), url: svgURL); return false } catch { return true } }()
+            try expect(rejectedSvg, "strict SVG allowlist rejects active/namespaced/style SVG")
+        }
+        try expect((try LibraryService.imageExtension(Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0\"/></svg>".utf8), url: svgURL)) == "svg", "safe static SVG accepted")
     }
     static func integration()async throws {
         let fm=FileManager.default,folder=fm.temporaryDirectory.appendingPathComponent("PublishedImageSources-"+UUID().uuidString)

@@ -54,11 +54,11 @@ process.stdin.on('end', async () => {
     const model = String(config.model || '').trim(); if (!model) throw new Error('模型名称不能为空');
     if(config.responsesStream!==undefined&&typeof config.responsesStream!=='boolean')throw new Error('Responses 流式设置必须为布尔值');
     const effort=config.reasoningEffort??'default';
-    if(!['default','low','medium','high'].includes(effort))throw new Error('推理强度设置无效');
+    if(!['default','none','minimal','low','medium','high','xhigh'].includes(effort))throw new Error('推理强度设置无效');
     // Only this app's explicit configuration governs Responses parameters. Clear
     // inherited variables even when the worker is invoked outside the native app.
     process.env.PD_OPENAI_RESPONSES_STREAM=config.responsesStream===true?'1':'0';
-    if(effort==='default')delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+    if(effort==='default'||effort==='none')delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
     else process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT=effort;
     // An explicit Responses selection is represented as the full declared route.
     const declared = config.protocol === 'responses' && !endpoint.endsWith('/responses')
@@ -74,7 +74,10 @@ process.stdin.on('end', async () => {
     const maxTokens = Math.max(256, Math.min(32768, Number(config.maxTokens) || 8192));
     const context = {runId:(runID || crypto.randomUUID()).toLowerCase(),paperId:paperID || null,stage:'desktopStudy',unitId:crypto.createHash('sha256').update(String(paperID||'connection-check')).digest('hex'),inputSha256:crypto.createHash('sha256').update(JSON.stringify(messages)).digest('hex')};
     const body = api.buildRequestBody(protocol, model, messages, maxTokens, undefined, {usageContext:context});
-    if (protocol === 'openai_responses') body.store = false;
+    if (protocol === 'openai_responses') {
+      body.store = false;
+      if (effort !== 'default' && !body.reasoning) body.reasoning = { effort };
+    }
     const response = await api.requestLlmJson(api.buildApiUrl(protocol, declared), declared, model, body,
       api.buildHeaders(protocol, config.key, JSON.stringify(body)),
       {timeoutMs:Math.max(10000,Math.min(600000,Number(config.timeoutMs)||180000)),maxResponseBytes:16*1024*1024,

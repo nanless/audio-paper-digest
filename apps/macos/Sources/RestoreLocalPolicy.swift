@@ -92,6 +92,14 @@ enum RequestBudgetContinuity {
         let localSettings = local["settings"] as! [String: Any]
         var restoredSettings = restored["settings"] as! [String: Any]
         for key in connectionKeys { restoredSettings.removeValue(forKey: key); if let value = localSettings[key] { restoredSettings[key] = value } }
+        // Cross-platform compatibility: Android allows font 14...30 whereas macOS validates 16...24.
+        // Preserve untouched original bytes in RestorationReceipts while clamping valid Android font sizes cleanly.
+        if let rawFont = restoredSettings["font"],
+           let fontValue = rawFont as? Int,
+           CFGetTypeID(rawFont as CFTypeRef) != CFBooleanGetTypeID(),
+           (14...30).contains(fontValue), !(16...24).contains(fontValue) {
+            restoredSettings["font"] = min(24, max(16, fontValue))
+        }
         restored["settings"] = restoredSettings
         let requests = try RequestBudgetContinuity.union([
             RequestBudgetContinuity.entries(directory: current), RequestBudgetContinuity.entries(directory: stage),

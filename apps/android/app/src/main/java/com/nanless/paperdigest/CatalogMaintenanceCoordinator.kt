@@ -59,8 +59,60 @@ internal class CatalogMaintenanceCoordinator(
     val aggregateViewRevision = AtomicLong(0)
     val publishedPreload = AtomicReference<Job?>(null)
     val automaticCatalogJob = AtomicReference<Job?>(null)
-    val articleReadJob = AtomicReference<Job?>(null)
     val catalogSyncAdmission = Mutex()
+
+    private val articleReadLock = Any()
+    private var articleReadBlockCount = 0
+    private val activeArticleReadJobs = LinkedHashSet<Job>()
+
+    fun isArticleReadBlocked(): Boolean = synchronized(articleReadLock) { articleReadBlockCount > 0 }
+
+    fun hasActiveArticleReadJobs(): Boolean = synchronized(articleReadLock) {
+        activeArticleReadJobs.any { !it.isCompleted }
+    }
+
+    fun <T> commitArticleReadAdmission(
+        producer: Job?,
+        canCommit: () -> Boolean,
+        commit: () -> T,
+    ): T? {
+        val committed = synchronized(articleReadLock) {
+            if (articleReadBlockCount > 0 || !canCommit()) return null
+            val result = commit()
+            if (producer != null) activeArticleReadJobs.add(producer)
+            result
+        }
+        producer?.invokeOnCompletion {
+            synchronized(articleReadLock) { activeArticleReadJobs.remove(producer) }
+        }
+        return committed
+    }
+
+    suspend fun drainArticleReadJobs() {
+        val current = currentCoroutineContext()[Job]
+        while (true) {
+            val snapshot = synchronized(articleReadLock) {
+                activeArticleReadJobs.filter { it !== current }
+            }
+            if (snapshot.isEmpty()) return
+            for (job in snapshot) {
+                job.cancelAndJoin()
+            }
+            synchronized(articleReadLock) {
+                activeArticleReadJobs.removeAll { it.isCompleted }
+            }
+        }
+    }
+
+    suspend fun <T> withExclusiveArticleReadDrain(block: suspend () -> T): T {
+        synchronized(articleReadLock) { articleReadBlockCount += 1 }
+        try {
+            drainArticleReadJobs()
+            return block()
+        } finally {
+            synchronized(articleReadLock) { articleReadBlockCount -= 1 }
+        }
+    }
 
     private val automaticCatalogPolicy = CatalogRefreshPolicy()
     private val foregroundCatalogIntervalMillis = 60_000L
@@ -118,7 +170,7 @@ internal class CatalogMaintenanceCoordinator(
     suspend fun giveForegroundPriority() {
         drainBackground(automaticCatalogJob)
         drainBackground(publishedPreload)
-        drainBackground(articleReadJob)
+        drainArticleReadJobs()
     }
 
     fun isForegroundCommand(command: String): Boolean =
@@ -161,7 +213,7 @@ internal class CatalogMaintenanceCoordinator(
     fun scheduleAutomaticCatalogCheck() {
         if (!installBackground || foregroundOwners.isEmpty() || foregroundOperations.get() > 0 ||
             hasActiveTasks() || readingViewOwners.isNotEmpty() || hasSelectedAggregate() ||
-            articleReadJob.get()?.isCompleted == false
+            hasActiveArticleReadJobs()
         ) return
         val input = automaticCatalogInputs()
         if (!automaticCatalogPolicy.eligible(input.first, input.second, input.third, currentTimeMillis(), catalogProbeDue())) return
@@ -185,7 +237,7 @@ internal class CatalogMaintenanceCoordinator(
                 if (initialDelayMillis > 0) delay(initialDelayMillis)
                 if (initialDelayMillis > 0 && foregroundOwners.isEmpty()) return@withContext false
                 if (foregroundOwners.isNotEmpty() && (readingViewOwners.isNotEmpty() || hasSelectedAggregate())) return@withContext false
-                if (foregroundOperations.get() > 0 || hasActiveTasks() || articleReadJob.get()?.isCompleted == false) return@withContext false
+                if (foregroundOperations.get() > 0 || hasActiveTasks() || hasActiveArticleReadJobs()) return@withContext false
                 if (!catalogSyncAdmission.tryLock()) return@withContext false
                 admitted = true
                 val input = automaticCatalogInputs()
@@ -203,9 +255,11 @@ internal class CatalogMaintenanceCoordinator(
                 previewsPaused = true
                 runTask("library.sync.automatic") {
                     maintenance().withLock {
-                        currentCoroutineContext().ensureActive()
-                        require(!settings().optBoolean("offlineMode")) { "当前为离线模式" }
-                        library.sync { _, _, message -> onNotice(message) }
+                        withExclusiveArticleReadDrain {
+                            currentCoroutineContext().ensureActive()
+                            require(!settings().optBoolean("offlineMode")) { "当前为离线模式" }
+                            library.sync { _, _, message -> onNotice(message) }
+                        }
                     }
                 }
                 catalogCheckCompleted()
@@ -229,7 +283,9 @@ internal class CatalogMaintenanceCoordinator(
         return try {
             runTask(command) {
                 maintenance().withLock {
-                    library.sync { _, _, message -> onNotice(message) }
+                    withExclusiveArticleReadDrain {
+                        library.sync { _, _, message -> onNotice(message) }
+                    }
                 }
             }.also {
                 catalogCheckCompleted()

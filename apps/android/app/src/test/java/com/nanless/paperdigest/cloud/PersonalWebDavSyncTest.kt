@@ -140,4 +140,30 @@ class PersonalWebDavSyncTest {
         assertEquals(0, adopted.conflicts)
         assertEquals("合并稿", adopted.personal.getJSONObject("notes").getJSONObject(a).getString("text"))
     }
+
+    @Test fun acknowledgeUploadPreventsConcurrentEditDeadlockAndNullVsEmptyHasNoGhostConflict() {
+        // E-C2: Concurrent edit during in-flight upload -> acknowledgeUpload allows clean N+2 retry
+        val before = local(a).also { note(it, "v1") }
+        val firstPlan = PersonalWebDavSync.plan(before, android, emptyMap())
+        assertNotNull(firstPlan.upload)
+        val editedDuringUpload = local(a).also {
+            it.getJSONObject("notes").put(a, JSONObject().put("revision", 2).put("text", "v2 edited in flight"))
+        }
+        val acked = PersonalWebDavSync.acknowledgeUpload(editedDuringUpload, firstPlan)
+        val retryPlan = PersonalWebDavSync.plan(acked, android, mapOf(android to firstPlan.upload!!))
+        assertNotNull(retryPlan.upload)
+        assertEquals("v2 edited in flight", retryPlan.personal.getJSONObject("notes").getJSONObject(a).getString("text"))
+
+        // E-M4: Deleted note (null) vs cleared note ("") produces 0 ghost conflicts
+        val seeded = PersonalWebDavSync.plan(local(a).also { note(it, "seed") }, mac, emptyMap())
+        val baseRemote = mapOf(mac to seeded.upload!!)
+        val androidPulled = PersonalWebDavSync.plan(local(), android, baseRemote)
+        seeded.personal.getJSONObject("notes").remove(a) // mac deleted (null)
+        androidPulled.personal.getJSONObject("notes").put(a, JSONObject().put("revision", 2).put("text", "")) // android cleared ("")
+        val macDel = PersonalWebDavSync.plan(seeded.personal, mac, baseRemote)
+        val andClr = PersonalWebDavSync.plan(androidPulled.personal, android, baseRemote)
+        val merged = PersonalWebDavSync.plan(andClr.personal, android, mapOf(mac to macDel.upload!!, android to andClr.upload!!))
+        assertEquals(0, merged.conflicts)
+        assertTrue(merged.noteConflicts.isEmpty())
+    }
 }

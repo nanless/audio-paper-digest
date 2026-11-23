@@ -6,10 +6,12 @@ import com.nanless.paperdigest.pdf.*
 import com.nanless.paperdigest.ui.UiState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -417,18 +419,26 @@ internal class StudyCoordinator(
         }
         try {
             onRefresh()
-            val result = maintenance().withLock { model.run(id) }
-            personal.upsertJob(
-                studyJob(row, result).put("status", "completed").put("endedAt", now())
-                    .put("message", "研究已完成，原始输入、回答和用量已保存")
-            )
+            val result = model.run(id)
+            withContext(NonCancellable) {
+                maintenance().withLock {
+                    personal.upsertJob(
+                        studyJob(row, result).put("status", "completed").put("endedAt", now())
+                            .put("message", "研究已完成，原始输入、回答和用量已保存")
+                    )
+                }
+            }
         } catch (e: Exception) {
-            personal.upsertJob(
-                studyJob(row, personal.session(id))
-                    .put("status", if (e is CancellationException) "cancelled" else "failed")
-                    .put("endedAt", now())
-                    .put("message", "研究未完成；可能已有实际消费，请检查记录，未自动重发")
-            )
+            withContext(NonCancellable) {
+                maintenance().withLock {
+                    personal.upsertJob(
+                        studyJob(row, personal.session(id))
+                            .put("status", if (e is CancellationException) "cancelled" else "failed")
+                            .put("endedAt", now())
+                            .put("message", "研究未完成；可能已有实际消费，请检查记录，未自动重发")
+                    )
+                }
+            }
             throw e
         } finally {
             active.remove(id)

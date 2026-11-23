@@ -805,4 +805,112 @@ class RootControllerModularizationAndConflictTest {
         assertTrue(clazz.declaredMethods.any { it.returnType == AggregateBrowser::class.java && it.parameterTypes.isEmpty() })
         assertEquals(4, clazz.declaredConstructors.filter { !it.isSynthetic }.size)
     }
+
+    @Test
+    fun atomicArticleReadAdmissionPreventsDrainBeforeCommitAndRejectsStaleEpoch() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val port = object : CatalogMaintenancePort {
+                override fun summary(): JSONObject = JSONObject().put("snapshotID", "s").put("paperCount", 0)
+                override suspend fun hasPublishedCatalogUpdate(): Boolean = false
+                override suspend fun sync(onProgress: (Int, Int, String) -> Unit): JSONObject = JSONObject()
+                override fun aggregateStamp(): AggregateCatalogStamp = AggregateCatalogStamp("a".repeat(64), "e1")
+                override suspend fun aggregateCatalog(): PublishedAggregateCatalog = PublishedAggregateCatalog("a".repeat(64), 0, emptyList())
+                override suspend fun preloadAggregateDocument(
+                    id: String,
+                    expected: AggregateCatalogStamp,
+                    withCommitLock: suspend (() -> Unit) -> Unit,
+                ) {}
+                override fun papers(): List<Paper> = emptyList()
+                override suspend fun preloadArticle(paper: Paper) {}
+            }
+            val coordinator = CatalogMaintenanceCoordinator(
+                scope = { scope },
+                installBackground = false,
+                maintenance = { Mutex() },
+                foregroundOwners = Collections.newSetFromMap(ConcurrentHashMap()),
+                settings = { JSONObject() },
+                library = port,
+                hasActiveTasks = { false },
+                hasSelectedAggregate = { false },
+                readingGeneration = { 1L },
+                pauseAggregatePreviews = {},
+                resumeAggregatePreviews = {},
+                enterAggregateBrowser = {},
+                leaveAggregateBrowser = {},
+                retireAggregateBrowser = {},
+                executeAggregateBrowser = { _, _, _, _ -> JSONObject() },
+                runTask = { _, body -> body() },
+                onCatalogCheckedAt = {},
+                onNotice = {},
+                onRefresh = {},
+                updatePeriodicSchedule = {},
+            )
+
+            // 1. Inside commitArticleReadAdmission, state mutation completes atomically before
+            //    withExclusiveArticleReadDrain can acquire articleReadLock and drain the producer.
+            val enteredCommit = CompletableDeferred<Unit>()
+            val allowCommitFinish = CompletableDeferred<Unit>()
+            val committed = AtomicReference<String?>(null)
+            val observedDuringDrain = AtomicReference<String?>(null)
+            val producer = scope.launch(start = CoroutineStart.LAZY) {
+                delay(10_000)
+            }
+            val commitJob = scope.launch {
+                val result = coordinator.commitArticleReadAdmission(
+                    producer = producer,
+                    canCommit = { true },
+                ) {
+                    enteredCommit.complete(Unit)
+                    runBlocking { allowCommitFinish.await() }
+                    committed.set("paper-committed")
+                    "ok"
+                }
+                assertEquals("ok", result)
+            }
+            enteredCommit.await()
+            val drainJob = scope.launch {
+                coordinator.withExclusiveArticleReadDrain {
+                    // Drain must NOT run until commitArticleReadAdmission finished and registered producer
+                    observedDuringDrain.set(committed.get())
+                    assertTrue(producer.isCancelled)
+                    assertFalse(coordinator.hasActiveArticleReadJobs())
+                    // While drain block is active, new admissions MUST be rejected without invoking commit()
+                    var calledDuringBlock = false
+                    val rejected = coordinator.commitArticleReadAdmission(
+                        producer = null,
+                        canCommit = { true },
+                    ) {
+                        calledDuringBlock = true
+                        "bad"
+                    }
+                    assertNull(rejected)
+                    assertFalse(calledDuringBlock)
+                }
+            }
+            delay(50)
+            assertNull(observedDuringDrain.get())
+            allowCommitFinish.complete(Unit)
+            commitJob.join()
+            drainJob.join()
+            assertEquals("paper-committed", observedDuringDrain.get())
+
+            // 2. Stale epoch (canCommit == false) rejects admission atomically without invoking commit() or adding producer.
+            val staleProducer = scope.launch(start = CoroutineStart.LAZY) { delay(10_000) }
+            var staleCommitted = false
+            val staleResult = coordinator.commitArticleReadAdmission(
+                producer = staleProducer,
+                canCommit = { false },
+            ) {
+                staleCommitted = true
+                "stale"
+            }
+            assertNull(staleResult)
+            assertFalse(staleCommitted)
+            assertFalse(coordinator.hasActiveArticleReadJobs())
+            staleProducer.cancel()
+        } finally {
+            scope.cancel()
+        }
+    }
 }

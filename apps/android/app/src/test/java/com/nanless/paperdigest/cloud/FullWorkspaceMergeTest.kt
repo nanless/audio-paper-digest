@@ -38,4 +38,18 @@ class FullWorkspaceMergeTest {
             assertEquals(archiveDigest, BackupCodec.hash(archive))
         } finally { temporary.deleteRecursively() }
     }
+
+    @Test fun capturePersonalExcludesNonTerminalSessions() {
+        val local = PersonalStore.initial().put(
+            "sessions",
+            org.json.JSONArray()
+                .put(JSONObject().put("id", "00000000-0000-4000-8000-000000000011").put("status", "completed"))
+                .put(JSONObject().put("id", "00000000-0000-4000-8000-000000000012").put("status", "pending"))
+                .put(JSONObject().put("id", "00000000-0000-4000-8000-000000000013").put("status", "running"))
+                .put(JSONObject().put("id", "00000000-0000-4000-8000-000000000014").put("status", "prepared"))
+        )
+        val captured = FullWorkspaceMerge.capturePersonal(local).getJSONArray("sessions")
+        assertEquals(1, captured.length())
+        assertEquals("00000000-0000-4000-8000-000000000011", captured.getJSONObject(0).getString("id"))
+    }
 }

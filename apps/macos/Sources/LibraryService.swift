@@ -207,7 +207,6 @@ actor LibraryService {
     private var syncTask: Task<Summary, Error>?
     var syncID: UUID?
     var httpProxy: URL?
-    var activeTransfers: [UUID: Process] = [:]
     private var fullTextIndex: [String: String] = [:]
     private let seedDirectory: URL?
     static let maxTotal = 64 * 1024 * 1024
@@ -702,7 +701,7 @@ actor LibraryService {
         guard let html = String(data: raw, encoding: .utf8) else { throw ServiceError.invalid("文章不是有效 UTF-8 文本。") }
         var article = try Self.extractArticle(html, paper: paper, pageURL: URL(string: paper.blogURL)!)
         var notices = article.notices
-        let metadataDocument = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+        let metadataDocument = try Self.tidyHTMLDocumentSafely(html)
         let citationFiles = try publishedSidecarLinks(metadataDocument, paper: paper, allowLegacySiblings: true)
         if let address = citationFiles.urls["citation.json"] {
             article.citationFiles = citationFiles.urls
@@ -1025,7 +1024,7 @@ actor LibraryService {
                 // Discover the actual published download link; never synthesize BibTeX/RIS from metadata.
                 let data = try await read(try sameSite(initialPaper.blogURL), limit: 8 * 1024 * 1024)
                 guard let html = String(data: data, encoding: .utf8) else { throw ServiceError.invalid("引用来源页面不是UTF-8。") }
-                let doc = try XMLDocument(xmlString: html, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+                let doc = try Self.tidyHTMLDocumentSafely(html)
                 try Self.validatePublishedPageIdentity(doc, paper: initialPaper)
                 let declared = try publishedSidecarLinks(doc, paper: initialPaper)
                 addresses = declared.urls; hashes = declared.hashes

@@ -29,6 +29,10 @@ internal object PersonalWebDavSync {
         val upload: ByteArray?,
         val conflicts: Int,
         val noteConflicts: List<NoteConflictItem> = emptyList(),
+        val uploadedDevice: String? = null,
+        val uploadedRevision: Long? = null,
+        val uploadedDigest: String? = null,
+        val uploadedBaselineHashes: JSONObject? = null,
     )
 
     fun validDevice(id: String) = runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false)
@@ -198,15 +202,20 @@ internal object PersonalWebDavSync {
                 val heads = edits.filter { a -> edits.none { b -> b.seen.optLong(a.device) >= a.revision } }
                 require(heads.isNotEmpty()) { "云端同步记录存在循环引用" }
                 val value = if (field in listOf("notes", "annotations") && heads.map { edit ->
-                    if (field == "notes" && edit.value is JSONObject) canonical(edit.value.getString("text")) else canonical(edit.value)
+                    if (field == "notes") canonical(noteText(edit.value)) else canonical(edit.value)
                 }.toSet().size > 1) {
                     conflicts++
                     val localCurrent = projection.getJSONObject(field).opt(id) ?: JSONObject.NULL
                     if (field == "notes") {
                         val localText = noteText(localCurrent)
+                        val includeOwnRemote = previous == null && localCurrent == JSONObject.NULL
                         val sortedRemoteHeads = heads
-                            .filter { edit -> edit.device != device && noteText(edit.value) != localText }
-                            .sortedWith(compareByDescending<Edit> { it.revision }.thenByDescending { it.device })
+                            .filter { edit -> (edit.device != device || includeOwnRemote) && noteText(edit.value) != localText }
+                            .sortedWith(
+                                compareByDescending<Edit> { if (it.device != device) 1 else 0 }
+                                    .thenByDescending { it.revision }
+                                    .thenByDescending { it.device }
+                            )
                         val distinctRemotes = LinkedHashMap<String, RemoteNoteCandidate>()
                         for (edit in sortedRemoteHeads) {
                             val remoteText = noteText(edit.value)
@@ -289,8 +298,42 @@ internal object PersonalWebDavSync {
         combined.forEach { (id, doc) -> observedNext.put(id, doc.getLong("revision")) }
         result.put(BASELINE, JSONObject().put("device", device).put("observed", observedNext).put("digests", digests).put("hashes", hashes(project(result))))
         PersonalStore.validate(result)
-        require(result.toString().toByteArray().size <= PersonalStore.MAX_BYTES)
-        return Plan(result, upload, conflicts, noteConflicts.toList())
+        if (PersonalStore.exceedsWriteCapacity(result)) {
+            throw com.nanless.paperdigest.data.AppFailure("capacity", "个人记录超过 32 MiB 保存上限；此次同步未上传或改写原资料。")
+        }
+        return Plan(
+            personal = result,
+            upload = upload,
+            conflicts = conflicts,
+            noteConflicts = noteConflicts.toList(),
+            uploadedDevice = if (upload != null) device else null,
+            uploadedRevision = if (upload != null) next else null,
+            uploadedDigest = if (upload != null) digests.optString(device).takeIf { it.isNotEmpty() } else null,
+            uploadedBaselineHashes = if (upload != null) localHashes.copy() else null,
+        )
+    }
+
+    /** Records only that this device's uploaded revision reached WebDAV when concurrent local edits
+     * prevented applying the full merge plan. Preserves all concurrent local edits untouched and
+     * leaves peer observed revisions unchanged so the next sync cleanly merges peers and emits N+2. */
+    fun acknowledgeUpload(current: JSONObject, plan: Plan): JSONObject {
+        val device = plan.uploadedDevice ?: return current
+        val rev = plan.uploadedRevision ?: return current
+        val digest = plan.uploadedDigest ?: return current
+        val uploadedHashes = plan.uploadedBaselineHashes ?: return current
+        val result = current.copy()
+        val existingBase = result.optJSONObject(BASELINE)?.takeIf { it.optString("device") == device }?.copy()
+            ?: JSONObject().put("device", device).put("observed", JSONObject()).put("digests", JSONObject()).put("hashes", JSONObject())
+        val observed = existingBase.optJSONObject("observed")?.copy() ?: JSONObject()
+        val digests = existingBase.optJSONObject("digests")?.copy() ?: JSONObject()
+        observed.put(device, maxOf(observed.optLong(device, 0L), rev))
+        digests.put(device, digest)
+        existingBase.put("device", device)
+            .put("observed", observed)
+            .put("digests", digests)
+            .put("hashes", uploadedHashes.copy())
+        result.put(BASELINE, existingBase)
+        return result
     }
 
     fun unchanged(before: JSONObject, after: JSONObject): Boolean =

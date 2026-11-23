@@ -82,4 +82,58 @@ class SafeHttpDnsTest {
             assertTrue(callback.await(5, TimeUnit.SECONDS)); assertTrue(escaped.await(5, TimeUnit.SECONDS)); assertTrue(uncaught.get() is IllegalArgumentException)
         } finally { threads.shutdownNow() }
     }
+    @Test fun ipLiteralsAndLocalhostBlockedEvenWithoutDnsWhileExplicitLocalProxyAndApprovedSyntheticHostsWork() {
+        // E-C1: Direct private IP literals, trailing-dot localhost, and non-canonical octal/hex/shorthand IPv4 must reject
+        for (bad in listOf(
+            "127.0.0.1", "127.0.0.1.", "10.0.0.1", "169.254.169.254", "192.168.1.5",
+            "::1", "[fe80::1]", "localhost", "localhost.", "sub.localhost", "sub.localhost.",
+            "012.0.0.1", "0177.0.0.1", "127.1", "169.254.43518", "2130706433", "0x7f000001", "0x7f.0.0.1",
+            "[::ffff:0177.0.0.1]"
+        )) {
+            assertThrows("Private/non-canonical literal or localhost $bad must reject", UnknownHostException::class.java) {
+                SafeHttp.requireAllowedTargetHost(bad, localModel = false)
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            SafeHttp(proxy = "http://0177.0.0.1:7890")
+        }
+        SafeHttp.requireAllowedTargetHost("8.8.8.8", localModel = false)
+        SafeHttp.requireAllowedTargetHost("127.0.0.1", localModel = true)
+        SafeHttp.requireAllowedTargetHost("localhost", localModel = true)
+        SafeHttp.requireAllowedTargetHost("localhost.", localModel = true)
+        // E-C1 proxy side-effect: explicit localhost proxy resolves cleanly when allowedProxyHost matches
+        val loopback = ip(127, 0, 0, 1)
+        val proxyDns = SafeHttp.PublicDns(localModel = false, delegate = answers(loopback), allowedProxyHost = "localhost")
+        assertEquals(listOf(loopback), proxyDns.lookup("localhost"))
+        assertEquals(listOf(loopback), proxyDns.lookup("localhost."))
+        assertThrows(UnknownHostException::class.java) { proxyDns.lookup("evil.example.invalid") }
+        // User Issue #1: approved academic hosts accept Clash/Mihomo 198.18.0.0/15 synthetic TUN Fake-IP while rejecting arbitrary hosts
+        val fakeIp = ip(198, 18, 0, 42)
+        val academicDns = SafeHttp.PublicDns(localModel = false, delegate = answers(fakeIp), approvedSyntheticHosts = SafeHttp.APPROVED_SYNTHETIC_HOSTS)
+        assertEquals(listOf(fakeIp), academicDns.lookup("raw.githubusercontent.com"))
+        assertEquals(listOf(fakeIp), academicDns.lookup("arxiv.org"))
+        assertThrows(UnknownHostException::class.java) { academicDns.lookup("evil.example.invalid") }
+        // Approved resource interceptor must enforce CatalogRepository.approvedResource + GET + credential-free headers
+        val unapprovedResult = runBlocking {
+            runCatching {
+                SafeHttp.approvedResource().execute(
+                    Request.Builder().url("https://raw.githubusercontent.com/other/repo/main/secret.txt").build(),
+                    1024
+                )
+            }
+        }
+        assertTrue(unapprovedResult.isFailure)
+        val credentialResult = runBlocking {
+            runCatching {
+                SafeHttp.approvedResource().execute(
+                    Request.Builder()
+                        .url("https://arxiv.org/pdf/2610.27491v1.pdf")
+                        .header("Authorization", "Bearer leaked")
+                        .build(),
+                    1024
+                )
+            }
+        }
+        assertTrue(credentialResult.isFailure)
+    }
 }

@@ -175,4 +175,13 @@ class StudyServiceTest {
         assertTrue(File(store.directory, "ModelUsage").listFiles().orEmpty().isEmpty())
         assertFalse(File(store.directory, "RequestBudgetContinuity.json").exists())
     }
+    @Test fun invalidReasoningEffortRejectedEagerlyInValidatedConfig() {
+        assertThrows(IllegalArgumentException::class.java) {
+            StudyService.validatedConfig(config("auto").put("reasoningEffort", "ultra-invalid"))
+        }
+        for (effort in listOf("default", "none", "minimal", "low", "medium", "high", "xhigh")) {
+            val validated = StudyService.validatedConfig(config("auto").put("reasoningEffort", effort))
+            assertEquals(effort, validated.getString("reasoningEffort"))
+        }
+    }
 }

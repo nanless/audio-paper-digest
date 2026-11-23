@@ -45,7 +45,7 @@ import Darwin
             try expect(first["inputSHA256"] as? String==sha256(bytes),"saved input bytes bound by SHA")
             let defaultConfig=input["config"] as! [String:Any]
             try expect(defaultConfig["responsesStream"] as? Bool==false && defaultConfig["reasoningEffort"] as? String=="default","absent settings seal explicit app defaults without production environment")
-            for invalid:[String:Any] in [["responsesStream":"true"],["reasoningEffort":"minimal"]] {
+            for invalid:[String:Any] in [["responsesStream":"true"],["reasoningEffort":"turbo"]] {
                 try store.updateSettings(invalid);let before=(store.value["sessions"] as? [[String:Any]] ?? []).count;var rejected=false
                 do{_=try await service.run(id:UUID().uuidString,paperID:"test:invalid-config",question:"不能发送非法配置",evidence:"本机材料",source:source)}catch{rejected=true}
                 try expect(rejected && (store.value["sessions"] as? [[String:Any]] ?? []).count==before,"invalid Responses parameter rejects before request ledger or HTTP")

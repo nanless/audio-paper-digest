@@ -26,8 +26,8 @@ import Darwin
   let app=PaperDigestApp()
   for flag in [false,true]{try app.validateSettings(["responsesStream":flag]);checks+=1}
   for flag:Any in [0,1,"true",NSNull()]{try rejects("stream setting requires actual boolean"){try app.validateSettings(["responsesStream":flag])}}
-  for effort in ["default","low","medium","high"]{try app.validateSettings(["reasoningEffort":effort]);checks+=1}
-  for effort:Any in ["none","minimal","xhigh","LOW","",1,NSNull()]{try rejects("unsupported/invalid effort is not silently accepted"){try app.validateSettings(["reasoningEffort":effort])}}
+  for effort in ["default","none","minimal","low","medium","high","xhigh"]{try app.validateSettings(["reasoningEffort":effort]);checks+=1}
+  for effort:Any in ["turbo","LOW","",1,NSNull()]{try rejects("unsupported/invalid effort is not silently accepted"){try app.validateSettings(["reasoningEffort":effort])}}
   let root=FileManager.default.temporaryDirectory.appendingPathComponent("DesktopArchiveIdentity-"+UUID().uuidString)
   defer{try? FileManager.default.removeItem(at:root)}
   app.directory=root;app.store=try DesktopStore(directory:root)

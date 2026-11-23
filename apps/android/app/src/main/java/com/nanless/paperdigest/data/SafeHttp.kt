@@ -30,21 +30,41 @@ data class HttpBytes(val code: Int, val headers: Map<String, String>, val bytes:
 data class HttpFile(val code: Int, val headers: Map<String, String>, val bytes: Long, val sha256: String?)
 
 /** Redirects are evaluated by the caller; credentials never follow them automatically. */
-class SafeHttp private constructor(private val proxy: String?, private val localModel: Boolean, timeoutMs: Long, private val downloadCalls:Call.Factory?, dns: Dns = Dns.SYSTEM, networkDispatcher: okhttp3.Dispatcher? = null, publisherOnly: Boolean = false) {
+class SafeHttp private constructor(
+    private val proxy: String?,
+    private val localModel: Boolean,
+    timeoutMs: Long,
+    private val downloadCalls: Call.Factory?,
+    dns: Dns = Dns.SYSTEM,
+    networkDispatcher: okhttp3.Dispatcher? = null,
+    publisherOnly: Boolean = false,
+    private val approvedSyntheticHosts: Set<String> = emptySet(),
+) {
     constructor(proxy:String?=null,localModel:Boolean=false,timeoutMs:Long=180000):this(proxy,localModel,timeoutMs,null)
     /** JVM tests can own only a download callback; ordinary/model requests retain the real original client. */
     internal constructor(downloadCalls:Call.Factory):this(null,false,180000,downloadCalls)
     /** Exercise the real asynchronous transport against a deterministic DNS failure, without sockets. */
     internal constructor(dns: Dns, dispatcher: okhttp3.Dispatcher):this(null,false,1000,null,dns,dispatcher)
-    internal class PublicDns(private val localModel: Boolean, private val delegate: Dns = Dns.SYSTEM,
-        private val publisherOnly: Boolean = false
+    internal class PublicDns(
+        private val localModel: Boolean,
+        private val delegate: Dns = Dns.SYSTEM,
+        private val publisherOnly: Boolean = false,
+        private val approvedSyntheticHosts: Set<String> = emptySet(),
+        private val allowedProxyHost: String? = null,
     ): Dns {
         override fun lookup(hostname: String): List<InetAddress> {
+            val normalized = hostname.trim().removePrefix("[").removeSuffix("]").trimEnd('.').lowercase()
             val addresses = try { delegate.lookup(hostname) }
             catch (error: UnknownHostException) { throw error }
             catch (error: RuntimeException) { throw UnknownHostException("网络地址解析未完成").apply { initCause(error) } }
-            if (!(localModel && hostname.lowercase() in setOf("localhost", "127.0.0.1", "::1")) &&
-                (addresses.isEmpty() || !addresses.all { isPublic(it) || allowsPublishedFakeIp(hostname, it) })) {
+            if (allowedProxyHost != null && normalized == allowedProxyHost) {
+                if (addresses.isEmpty() || !addresses.all { !it.isAnyLocalAddress && !it.isLinkLocalAddress && !it.isMulticastAddress }) {
+                    throw UnknownHostException("代理地址解析到无效或链路本地地址，已停止连接")
+                }
+                return addresses
+            }
+            if (!(localModel && normalized in LOOPBACK_HOSTS) &&
+                (addresses.isEmpty() || !addresses.all { isPublic(it) || allowsSyntheticFakeIp(normalized, it) })) {
                 // OkHttp treats unchecked DNS exceptions as programming errors and rethrows them
                 // from its dispatcher. A rejected VPN/fake-IP answer must be a normal IO failure.
                 throw UnknownHostException("服务解析到私网或保留地址，已停止连接")
@@ -52,17 +72,35 @@ class SafeHttp private constructor(private val proxy: String?, private val local
             return addresses
         }
 
-        private fun allowsPublishedFakeIp(hostname: String, address: InetAddress): Boolean {
-            if (!publisherOnly || hostname != "nanless.github.io") return false
-            val bytes = address.address
-            return bytes.size == 4 && (bytes[0].toInt() and 255) == 198 &&
-                bytes[1].toInt() in 18..19
+        private fun allowsSyntheticFakeIp(normalizedHost: String, address: InetAddress): Boolean {
+            if (!isSyntheticFakeIp(address)) return false
+            return (publisherOnly && normalizedHost == "nanless.github.io") || normalizedHost in approvedSyntheticHosts
         }
     }
-    private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
+    private val proxyUri: URI? = if (!proxy.isNullOrBlank()) {
+        val uri = URI(proxy)
+        require(uri.scheme == "http" && uri.host != null && uri.userInfo == null && uri.port in 1..65535 && uri.rawQuery == null && uri.fragment == null && uri.path in listOf("", "/")) { "代理须为不含密码的 HTTP CONNECT 地址" }
+        val normalizedProxyHost = uri.host.trim().removePrefix("[").removeSuffix("]").trimEnd('.').lowercase()
+        require(normalizedProxyHost.isNotEmpty()) { "代理须为不含密码的 HTTP CONNECT 地址" }
+        val proxyLiteral = try {
+            parseIpLiteralOrNull(normalizedProxyHost)
+        } catch (_: UnknownHostException) {
+            throw IllegalArgumentException("代理地址不能使用非规范数字主机地址")
+        }
+        proxyLiteral?.let { addr ->
+            require(!addr.isAnyLocalAddress && !addr.isLinkLocalAddress && !addr.isMulticastAddress) { "代理地址不能指向无效或链路本地地址" }
+        }
+        uri
+    } else null
+    private val client = sharedClient.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .connectTimeout(30, TimeUnit.SECONDS).callTimeout(timeoutMs.coerceIn(1000, 600000), TimeUnit.MILLISECONDS)
         .readTimeout(timeoutMs.coerceIn(1000, 600000), TimeUnit.MILLISECONDS)
-        .dns(PublicDns(localModel, dns, publisherOnly)).apply {
+        .dns(PublicDns(localModel, dns, publisherOnly, approvedSyntheticHosts, proxyUri?.host?.removePrefix("[")?.removeSuffix("]")?.trimEnd('.')?.lowercase())).apply {
+            addInterceptor { chain ->
+                val request = chain.request()
+                requireAllowedTargetHost(request.url.host, localModel)
+                chain.proceed(request)
+            }
             if (publisherOnly) addInterceptor { chain ->
                 val request = chain.request()
                 val isPublisher = runCatching { CatalogRepository.sameSite(request.url.toString()) }.isSuccess
@@ -73,11 +111,22 @@ class SafeHttp private constructor(private val proxy: String?, private val local
                 }
                 chain.proceed(request)
             }
+            if (approvedSyntheticHosts.isNotEmpty()) addInterceptor { chain ->
+                val request = chain.request()
+                val isApproved = runCatching { CatalogRepository.approvedResource(URI(request.url.toString())) }.getOrDefault(false)
+                val publicHeaders = request.headers.names().none {
+                    it.equals("Authorization", ignoreCase = true) ||
+                        it.equals("Proxy-Authorization", ignoreCase = true) ||
+                        it.equals("Cookie", ignoreCase = true)
+                }
+                if (!isApproved || request.method != "GET" || !publicHeaders) {
+                    throw IOException("仅允许匿名读取已核准的官方公开资源")
+                }
+                chain.proceed(request)
+            }
             if (networkDispatcher != null) dispatcher(networkDispatcher)
-            if (!proxy.isNullOrBlank()) {
-                val uri = URI(proxy)
-                require(uri.scheme == "http" && uri.host != null && uri.userInfo == null && uri.port in 1..65535 && uri.rawQuery == null && uri.fragment == null && uri.path in listOf("", "/")) { "代理须为不含密码的 HTTP CONNECT 地址" }
-                proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress(uri.host, uri.port)))
+            if (proxyUri != null) {
+                proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(proxyUri.host, proxyUri.port)))
             } else proxy(Proxy.NO_PROXY)
         }.build()
 
@@ -85,6 +134,9 @@ class SafeHttp private constructor(private val proxy: String?, private val local
         val uri = request.url
         require(uri.scheme == "https" || (localModel && uri.scheme == "http" && uri.host in setOf("localhost", "127.0.0.1", "::1"))) { "服务必须使用 HTTPS" }
         require(uri.username.isEmpty() && uri.password.isEmpty()) { "地址中不能包含密码" }
+        try { requireAllowedTargetHost(uri.host, localModel) } catch (e: UnknownHostException) {
+            continuation.resumeWithException(connectionFailure(e)); return@suspendCancellableCoroutine
+        }
         val call = client.newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object: Callback {
@@ -183,6 +235,7 @@ class SafeHttp private constructor(private val proxy: String?, private val local
         val url = request.url
         require(url.scheme == "https" || (localModel && url.scheme == "http" && url.host in setOf("localhost", "127.0.0.1", "::1")))
         require(url.username.isEmpty() && url.password.isEmpty() && limit > 0)
+        try { requireAllowedTargetHost(url.host, localModel) } catch (e: UnknownHostException) { throw connectionFailure(e) }
         target.parentFile!!.mkdirs()
         val temporary = File(target.parentFile, ".download-${UUID.randomUUID()}")
         val drained = CompletableDeferred<Unit>()
@@ -235,11 +288,87 @@ class SafeHttp private constructor(private val proxy: String?, private val local
     }
 
     companion object {
+        private val sharedClient: OkHttpClient = OkHttpClient.Builder()
+            .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
+        private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "::1")
+        private val NUMERIC_IPV4_LABEL = Regex("^(?:0[xX][0-9a-fA-F]+|[0-9]+)$")
+        private val CANONICAL_IPV4_OCTET = Regex("^(?:0|[1-9]\\d{0,2})$")
+        private val IPV6_CHARS = Regex("^[0-9a-fA-F:.]+$")
+        internal val APPROVED_SYNTHETIC_HOSTS = setOf(
+            "nanless.github.io", "raw.githubusercontent.com",
+            "arxiv.org", "export.arxiv.org",
+            "isca-archive.org", "www.isca-archive.org",
+            "openreview.net", "proceedings.mlr.press",
+            "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org",
+        )
+
         /** The publisher's public HTTPS endpoint may use a synthetic route supplied by the network.
          * TLS authenticates the fixed hostname and redirects remain disabled.
          */
         internal fun publishedSite(): SafeHttp =
             SafeHttp(null, false, 180000, null, publisherOnly = true)
+
+        /** Strictly allowlisted official/academic endpoints may use a synthetic TUN Fake-IP route or user HTTP proxy. */
+        internal fun approvedResource(proxy: String? = null, timeoutMs: Long = 180000): SafeHttp =
+            SafeHttp(proxy, false, timeoutMs, null, approvedSyntheticHosts = APPROVED_SYNTHETIC_HOSTS)
+
+        internal fun isSyntheticFakeIp(address: InetAddress): Boolean {
+            val bytes = address.address
+            return bytes.size == 4 && (bytes[0].toInt() and 255) == 198 && (bytes[1].toInt() and 255) in 18..19
+        }
+
+        /** Purely syntactic IPv4/IPv6 literal parser: never performs a network DNS query.
+         * Rejects octal, hex, shorthand, or integer IPv4 encodings that POSIX inet_aton / proxies may reinterpret.
+         */
+        internal fun parseIpLiteralOrNull(rawHost: String): InetAddress? {
+            val host = rawHost.trim().removePrefix("[").removeSuffix("]").trimEnd('.').lowercase()
+            if (host.isEmpty()) return null
+            if (':' in host) {
+                if ('%' in host || !IPV6_CHARS.matches(host)) {
+                    throw UnknownHostException("服务解析到私网或保留地址，已停止连接")
+                }
+                if ('.' in host) {
+                    val suffix = host.substringAfterLast(':')
+                    val parts = suffix.split('.')
+                    if (parts.size != 4 || parts.any { !CANONICAL_IPV4_OCTET.matches(it) || (it.toIntOrNull() ?: -1) !in 0..255 }) {
+                        throw UnknownHostException("服务解析到非规范数字主机地址，已停止连接")
+                    }
+                }
+                return runCatching { InetAddress.getByName(host) }.getOrNull()
+                    ?: throw UnknownHostException("服务解析到私网或保留地址，已停止连接")
+            }
+            val labels = host.split('.')
+            if (labels.any { it.isEmpty() }) {
+                throw UnknownHostException("服务地址主机名格式无效")
+            }
+            if (NUMERIC_IPV4_LABEL.matches(labels.last())) {
+                if (labels.size != 4 || labels.any { !CANONICAL_IPV4_OCTET.matches(it) }) {
+                    throw UnknownHostException("服务解析到非规范数字主机地址，已停止连接")
+                }
+                val octets = labels.map { it.toIntOrNull() ?: -1 }
+                if (octets.any { it !in 0..255 }) {
+                    throw UnknownHostException("服务解析到非规范数字主机地址，已停止连接")
+                }
+                return InetAddress.getByAddress(octets.map { it.toByte() }.toByteArray())
+            }
+            return null
+        }
+
+        /** Blocks OkHttp's IP-literal and HTTP-proxy SSRF bypasses before any socket connects. */
+        internal fun requireAllowedTargetHost(rawHost: String, localModel: Boolean) {
+            val host = rawHost.trim().removePrefix("[").removeSuffix("]").trimEnd('.').lowercase()
+            if (host.isEmpty()) throw UnknownHostException("服务地址缺少主机名")
+            val literal = parseIpLiteralOrNull(host)
+            if (literal != null) {
+                if (!(localModel && host in LOOPBACK_HOSTS) && !isPublic(literal)) {
+                    throw UnknownHostException("服务解析到私网或保留地址，已停止连接")
+                }
+                return
+            }
+            if ((host in LOOPBACK_HOSTS || host.endsWith(".localhost")) && !localModel) {
+                throw UnknownHostException("服务解析到私网或保留地址，已停止连接")
+            }
+        }
 
         private fun connectionFailure(error: IOException) = if (error is UnknownHostException)
             AppFailure("dns", "网络地址解析未完成，请检查网络或 VPN 的 DNS 设置；已保存内容仍可阅读。")

@@ -687,7 +687,7 @@ class ZoteroService(
     companion object {
         fun validKey(key:String)=key.matches(Regex("[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}"))
         private fun newKey():String {val alphabet="23456789ABCDEFGHIJKLMNPQRSTUVWXYZ";val random=java.security.SecureRandom();return (1..8).map{alphabet[random.nextInt(alphabet.length)]}.joinToString("")}
-        fun safeExternal(url:String){val u=URI(url);require(u.scheme=="https"&&u.host!=null&&u.userInfo==null&&u.fragment==null){"附件地址不安全"}}
+        fun safeExternal(url:String){val u=URI(url);require(u.scheme=="https"&&u.host!=null&&u.userInfo==null&&u.fragment==null){"附件地址不安全"};try{SafeHttp.requireAllowedTargetHost(u.host,localModel=false)}catch(_:java.net.UnknownHostException){throw IllegalArgumentException("附件地址不安全")}}
         private fun hash(file:File,algorithm:String="SHA-256"):String{val md=MessageDigest.getInstance(algorithm);file.inputStream().use{input->val b=ByteArray(65536);while(true){val n=input.read(b);if(n<0)break;md.update(b,0,n)}};return md.digest().joinToString(""){"%02x".format(it.toInt()and 255)}}
         private fun safeMessage(error:Exception)=if(error is AppFailure||error is IllegalArgumentException)error.message?:"存档未完成" else "存档未完成，原件和断点已保留"
     }

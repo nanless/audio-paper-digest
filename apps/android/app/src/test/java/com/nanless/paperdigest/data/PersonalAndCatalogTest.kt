@@ -84,6 +84,31 @@ class PersonalAndCatalogTest {
     @Test fun scientificImageValidationRejectsActiveSvg() {
         assertEquals("image/png", CatalogRepository.imageMime(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1)))
         assertThrows(AppFailure::class.java) { CatalogRepository.imageMime("<svg><script>bad()</script></svg>".toByteArray()) }
+        assertThrows(AppFailure::class.java) { CatalogRepository.imageMime("<svg xmlns='http://www.w3.org/2000/svg' xmlns:s='http://www.w3.org/2000/svg'><s:script>bad()</s:script></svg>".toByteArray()) }
+        assertThrows(AppFailure::class.java) { CatalogRepository.imageMime("<svg xmlns='http://www.w3.org/2000/svg'><style>@import 'https://evil.invalid/x.css';</style></svg>".toByteArray()) }
+        val malformedUtf8Svg = "<svg>".toByteArray() + byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "</svg>".toByteArray()
+        val badUtf8Err = assertThrows(AppFailure::class.java) { CatalogRepository.imageMime(malformedUtf8Svg) }
+        assertEquals("invalid", badUtf8Err.category)
         assertEquals("image/svg+xml", CatalogRepository.imageMime("<svg xmlns='http://www.w3.org/2000/svg'><path d='M0 0'/></svg>".toByteArray()))
+    }
+    @Test fun ownedPublishedConferenceImagesAndMathMLAndTableAlignmentArePreserved() {
+        // E-H7: audio-paper-digest-images parity + case-insensitive host + traversal rejection on externalResourceProxy
+        assertTrue(CatalogRepository.approvedResource(java.net.URI("https://RAW.GITHUBUSERCONTENT.COM/nanless/audio-paper-digest-images/main/interspeech-2026/11ff0ce7b961/figure-1.png")))
+        assertTrue(CatalogRepository.approvedResource(java.net.URI("https://nanless.github.io/audio-paper-digest-images/icassp-2026/2026-04-29/11462137-0.png")))
+        assertFalse(CatalogRepository.approvedResource(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/unknown-2026/11ff0ce7b961/figure-1.png")))
+        assertNull(CatalogRepository.externalResourceProxy(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-blog/main/../../other/repo/file"), "http://127.0.0.1:7890"))
+        assertNull(CatalogRepository.externalResourceProxy(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-blog/main/a?x=1"), "http://127.0.0.1:7890"))
+        assertEquals("http://127.0.0.1:7890", CatalogRepository.externalResourceProxy(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-blog/main/static/x.png"), "http://127.0.0.1:7890"))
+        // E-M3 + User Issue #1: 11 MathML tags + presentation attrs, <details open>, Hugo # anchor removal, td/th text-align class preservation
+        val paper = CatalogRepository.parsePaper(row())!!
+        val html = "<div id='article-body' class='post-content'><h2>标题<a class='anchor' href='#标题'>#</a></h2><details open><summary>展开</summary><p>内容</p></details><math><mstyle displaystyle='true'><mspace width='1em'/><menclose notation='box'><mi>x</mi></menclose></mstyle></math><table><tr><th style='text-align:right'>Score</th><td style='text-align:center'>9.2</td></tr></table></div>"
+        val article = CatalogRepository.extractArticle(html, paper)
+        assertTrue(article.html.contains("<details open>"))
+        assertTrue(article.html.contains("displaystyle=\"true\""))
+        assertTrue(article.html.contains("<mspace width=\"1em\""))
+        assertTrue(article.html.contains("<menclose notation=\"box\""))
+        assertFalse(article.html.contains("class=\"anchor\""))
+        assertTrue(article.html.contains("ta-right"))
+        assertTrue(article.html.contains("ta-center"))
     }
 }

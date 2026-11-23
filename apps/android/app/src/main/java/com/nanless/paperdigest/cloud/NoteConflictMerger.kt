@@ -164,15 +164,17 @@ object NoteConflictMerger {
             }
         }
         if (distinctRemotes.isEmpty()) return conflict.localNote
-        val combinedRemoteTail = distinctRemotes.values.joinToString("\n\n") { candidate ->
+        val remainingSections = distinctRemotes.values.map { candidate ->
             "${remoteSectionHeader(candidate.remoteDeviceId, candidate.remoteRevision)}\n${candidate.remoteNote}"
-        }
-        if (conflict.localNote.startsWith("$LOCAL_SECTION_HEADER\n") && conflict.localNote.endsWith(combinedRemoteTail)) {
-            return conflict.localNote
-        }
+        }.filterNot { section -> conflict.localNote.contains(section) }
+        if (remainingSections.isEmpty()) return conflict.localNote
+        val combinedRemoteTail = remainingSections.joinToString("\n\n")
+        val alreadyWrapped = conflict.localNote.startsWith("$LOCAL_SECTION_HEADER\n")
         return buildString(conflict.localNote.length + combinedRemoteTail.length + 48) {
-            append(LOCAL_SECTION_HEADER)
-            append('\n')
+            if (!alreadyWrapped) {
+                append(LOCAL_SECTION_HEADER)
+                append('\n')
+            }
             append(conflict.localNote)
             if (conflict.localNote.isNotEmpty() && !conflict.localNote.endsWith('\n')) {
                 append('\n')

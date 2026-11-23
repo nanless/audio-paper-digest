@@ -531,7 +531,7 @@ extension LibraryService {
         var activeAppearanceIDs = Set<String>()
         var paperDetails: [String: DesktopPaperDetailEntry] = [:]
         var aggregateDetails: [String: DesktopAppearanceEntry] = [:]
-        var primarySortKeyByPaperID: [String: (String, String)] = [:]
+        var primarySortKeyByPaperID: [String: (String, String, String)] = [:]
 
         for row in allCatalogRows {
             guard Set(row.keys).isSuperset(of: catalogRequiredKeys),
@@ -619,7 +619,7 @@ extension LibraryService {
                 paperID = "page:\(canonicalPath)"
             }
 
-            let sortKey = (blogPublishedAt, articleUpdatedAt ?? "")
+            let sortKey = (blogPublishedAt, articleUpdatedAt ?? "", appEntry.appearanceId)
             if var existingDetail = paperDetails[paperID],
                let prevKey = primarySortKeyByPaperID[paperID] {
                 var allEntries = existingDetail.appearances
@@ -1329,7 +1329,7 @@ extension LibraryService {
         var activeAppearanceIDs = Set<String>()
         var activeRowsByAppearance: [String: (paperId: String?, revisionId: String)] = [:]
         var papersByID: [String: Paper] = [:]
-        var primarySortKeyByPaperID: [String: (String, String)] = [:]
+        var primarySortKeyByPaperID: [String: (String, String, String)] = [:]
         var paperDetails: [String: DesktopPaperDetailEntry] = [:]
         var aggregateDetails: [String: DesktopAppearanceEntry] = [:]
 
@@ -1409,7 +1409,7 @@ extension LibraryService {
                 currentRegistrySHA: currentRegistrySHA
             )
             activeRowsByAppearance[appearanceId] = (parsedPaper.id, articleRevisionId)
-            let sortKey = (blogPublishedAt, articleUpdatedAt ?? "")
+            let sortKey = (blogPublishedAt, articleUpdatedAt ?? "", appearanceEntry.appearanceId)
 
             if var existing = papersByID[parsedPaper.id],
                var existingDetail = paperDetails[parsedPaper.id],
@@ -2792,7 +2792,14 @@ extension LibraryService {
                             articleResources.append(Resource(sourceURL: canonicalURLString, kind: "image", localPath: nil, sha256: nil, missingReason: svcErr.localizedDescription))
                             if res.requiredForOffline { allRequiredGuideMediaCached = false }
                             notices.append("部分图片未离线保存：\(svcErr.localizedDescription)")
-                        case .invalid, .cancelled:
+                        case .invalid:
+                            // Unpinned external image policy/size/DNS failures (e.g. third-party image host) degrade per-image
+                            // instead of blocking the entire paper from opening; pinned/bundled/cumulative limits remain fail-closed.
+                            if res.expectedSha256 != nil { throw svcErr }
+                            articleResources.append(Resource(sourceURL: canonicalURLString, kind: "image", localPath: nil, sha256: nil, missingReason: svcErr.localizedDescription))
+                            if res.requiredForOffline { allRequiredGuideMediaCached = false }
+                            notices.append("部分外部图片未离线保存：\(svcErr.localizedDescription)")
+                        case .cancelled:
                             throw svcErr
                         }
                     } catch {
@@ -3120,7 +3127,9 @@ extension LibraryService {
     }
 
     private static func isASCIIWhitespace(_ ch: UnicodeScalar) -> Bool {
-        ch.value == 0x20 || ch.value == 0x09 || ch.value == 0x0A || ch.value == 0x0D || ch.value == 0x0C
+        // Omit 0x0C (\f) because stripHTMLControlBytesForTidy removes it before libtidy,
+        // so treating \f as whitespace here would diverge from DOM attribute parsing.
+        ch.value == 0x20 || ch.value == 0x09 || ch.value == 0x0A || ch.value == 0x0D
     }
 
     private static func isASCIILetter(_ ch: UnicodeScalar) -> Bool {
@@ -3160,14 +3169,12 @@ extension LibraryService {
                 return ScannedHTMLTag(tagEnd: i, isClosing: isClosing, rawTagName: rawTagName, tagName: tagName, attrs: attrs, selfClosing: selfClosing)
             }
             if scalars[i] == "/" {
-                // SELF_CLOSING_START_TAG
+                // SELF_CLOSING_START_TAG: in libtidy, stray '/' is NOT an attribute separator;
+                // only '/>' at tag end is valid self-closing. Fail closed on '<p hidden/class="x">'.
                 i += 1
-                guard i < n else { return nil }
-                if scalars[i] == ">" {
-                    selfClosing = true
-                    return ScannedHTMLTag(tagEnd: i, isClosing: isClosing, rawTagName: rawTagName, tagName: tagName, attrs: attrs, selfClosing: selfClosing)
-                }
-                continue
+                guard i < n, scalars[i] == ">" else { return nil }
+                selfClosing = true
+                return ScannedHTMLTag(tagEnd: i, isClosing: isClosing, rawTagName: rawTagName, tagName: tagName, attrs: attrs, selfClosing: selfClosing)
             }
 
             // ATTR_NAME ('=' at start of attribute name is part of attribute name in HTML5)
@@ -3176,6 +3183,9 @@ extension LibraryService {
             while i < n && !isASCIIWhitespace(scalars[i]) && scalars[i] != "/" && scalars[i] != ">" && scalars[i] != "=" {
                 i += 1
             }
+            // Live libtidy merges '/' into an unquoted attribute name (e.g. `<p hidden/>` drops `hidden`),
+            // so fail closed whenever an attribute name terminates directly at '/'.
+            if i < n && scalars[i] == "/" { return nil }
             let rawName = String(String.UnicodeScalarView(scalars[attrStart..<i]))
             let name = rawName.lowercased()
 
@@ -3212,7 +3222,7 @@ extension LibraryService {
                 let value = String(String.UnicodeScalarView(slice))
                 let hasUnsafeChar = slice.contains(where: { ch in
                     ch == "\"" || ch == "'" || ch == "=" || ch == "`" || ch == "<" || ch == ">"
-                })
+                }) || (scalars[i] == ">" && slice.last == "/")
                 attrs.append(ScannedHTMLAttribute(rawName: rawName, name: name, value: value, quote: nil, unquotedUnsafe: value.isEmpty || hasUnsafeChar))
                 if scalars[i] == ">" {
                     return ScannedHTMLTag(tagEnd: i, isClosing: isClosing, rawTagName: rawTagName, tagName: tagName, attrs: attrs, selfClosing: selfClosing)
@@ -3227,17 +3237,22 @@ extension LibraryService {
         guard !trimmed.isEmpty, html.utf8.count <= maxDesktopArticleBytes else {
             throw ServiceError.invalid("导读正文片段为空或超过大小限制。")
         }
-        guard !html.contains("\0"),
+        let hasDisallowedControlScalar = html.unicodeScalars.contains { scalar in
+            let v = scalar.value
+            return (v < 0x20 && v != 0x09 && v != 0x0A && v != 0x0D) || v == 0x7F
+        }
+        guard !hasDisallowedControlScalar,
               !containsInvalidNumericEntity(html),
               !html.contains("<!--"),
               !html.contains("<?"),
               html.range(of: #"<!DOCTYPE|<!ENTITY"#, options: [.regularExpression, .caseInsensitive]) == nil else {
-            throw ServiceError.invalid("导读正文片段包含禁止的 NUL、非法数值字符实体、HTML 注释、处理指令或 DTD/实体声明。")
+            throw ServiceError.invalid("导读正文片段包含禁止的控制字符、非法数值字符实体、HTML 注释、处理指令或 DTD/实体声明。")
         }
 
         let scalars = Array(html.unicodeScalars)
         let n = scalars.count
         var cursor = 0
+        var mathDepth = 0
 
         while cursor < n {
             guard let ltOffset = scalars[cursor..<n].firstIndex(of: "<") else { break }
@@ -3247,11 +3262,32 @@ extension LibraryService {
             guard allowedFragmentTags.contains(parsed.tagName) else {
                 throw ServiceError.invalid("导读正文片段包含非白名单或禁止标签 <\(parsed.tagName)>。")
             }
+            let isMathChildTag = mathMLAllowedTags.contains(parsed.tagName) && parsed.tagName != "math"
+            if isMathChildTag {
+                guard mathDepth > 0 else {
+                    throw ServiceError.invalid("导读正文片段不允许在 <math> 外部使用 MathML 子标签 <\(parsed.tagName)>。")
+                }
+            }
             if parsed.isClosing {
                 guard parsed.attrs.isEmpty, !parsed.selfClosing, !htmlVoidTags.contains(parsed.tagName) else {
                     throw ServiceError.invalid("导读正文片段闭合标签 </\(parsed.tagName)> 携带非法属性或自闭合标记。")
                 }
+                if parsed.tagName == "math" {
+                    guard mathDepth > 0 else {
+                        throw ServiceError.invalid("导读正文片段包含没有对应起点的 </math> 闭合标签。")
+                    }
+                    mathDepth -= 1
+                }
             } else {
+                if parsed.selfClosing {
+                    let allowMathSelfClose = parsed.tagName == "math" || (mathDepth > 0 && isMathChildTag)
+                    guard htmlVoidTags.contains(parsed.tagName) || allowMathSelfClose else {
+                        throw ServiceError.invalid("导读正文片段非空元素 <\(parsed.tagName)/> 不允许使用自闭合语法。")
+                    }
+                }
+                if parsed.tagName == "math" && !parsed.selfClosing {
+                    mathDepth += 1
+                }
                 var seenAttrs = Set<String>()
                 for attr in parsed.attrs {
                     guard seenAttrs.insert(attr.name).inserted else {
@@ -3267,12 +3303,16 @@ extension LibraryService {
             }
             cursor = parsed.tagEnd + 1
         }
+        guard mathDepth == 0 else {
+            throw ServiceError.invalid("导读正文片段包含未闭合的 <math> 标签。")
+        }
     }
 
     private static func isAllowedHTMLAttribute(tagName: String, attr: ScannedHTMLAttribute) -> Bool {
         let name = attr.name
         guard name.range(of: #"\A[a-z][a-z0-9:-]*\z"#, options: .regularExpression) != nil else { return false }
         if name.hasPrefix("on") || name == "srcdoc" || name == "ping" { return false }
+        if mathMLAllowedTags.contains(tagName) && name == "hidden" { return false }
 
         let isGlobal = globalAllowedAttrs.contains(name)
             || name.range(of: #"\Aaria-[a-z0-9-]+\z"#, options: .regularExpression) != nil
@@ -3335,10 +3375,13 @@ extension LibraryService {
 
     private static func containsInvalidNumericEntity(_ raw: String) -> Bool {
         guard raw.contains("&#") else { return false }
+        let ns = raw as NSString
+        let fullRange = NSRange(location: 0, length: ns.length)
         if let hexRegex = try? NSRegularExpression(pattern: #"&#x0*([0-9a-fA-F]+);?"#, options: .caseInsensitive) {
-            for m in hexRegex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
-                guard let r = Range(m.range(at: 1), in: raw) else { return true }
-                let hex = String(raw[r])
+            for m in hexRegex.matches(in: raw, range: fullRange) {
+                let cap = m.range(at: 1)
+                guard cap.location != NSNotFound else { return true }
+                let hex = ns.substring(with: cap)
                 if hex.count > 6 { return true }
                 guard let code = UInt32(hex, radix: 16),
                       code != 0,
@@ -3350,9 +3393,10 @@ extension LibraryService {
             }
         }
         if let decRegex = try? NSRegularExpression(pattern: #"&#0*([0-9]+);?"#) {
-            for m in decRegex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
-                guard let r = Range(m.range(at: 1), in: raw) else { return true }
-                let dec = String(raw[r])
+            for m in decRegex.matches(in: raw, range: fullRange) {
+                let cap = m.range(at: 1)
+                guard cap.location != NSNotFound else { return true }
+                let dec = ns.substring(with: cap)
                 if dec.count > 7 { return true }
                 guard let code = UInt32(dec, radix: 10),
                       code != 0,
@@ -3376,57 +3420,64 @@ extension LibraryService {
         return String(scalar)
     }
 
+    private static func replacingRegexMatches(
+        in input: String,
+        pattern: String,
+        options: NSRegularExpression.Options = [],
+        transform: (NSString, NSTextCheckingResult) -> String?
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return input
+        }
+        let ns = input as NSString
+        let matches = regex.matches(in: input, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return input }
+        let out = NSMutableString()
+        var cursor = 0
+        for match in matches {
+            if match.range.location > cursor {
+                out.append(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
+            }
+            if let replacement = transform(ns, match) {
+                out.append(replacement)
+            } else {
+                out.append(ns.substring(with: match.range))
+            }
+            cursor = match.range.location + match.range.length
+        }
+        if cursor < ns.length {
+            out.append(ns.substring(from: cursor))
+        }
+        return out as String
+    }
+
     private static func decodeHTMLEntities(_ raw: String) -> String {
-        var result = raw
-        if let hexRegex = try? NSRegularExpression(pattern: #"&#x0*([0-9a-fA-F]+);?"#, options: .caseInsensitive) {
-            let matches = hexRegex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
-            for m in matches {
-                guard let r = Range(m.range(at: 1), in: result),
-                      let full = Range(m.range, in: result) else { continue }
-                let hex = String(result[r])
-                if hex.count > 6 {
-                    result.replaceSubrange(full, with: "\u{FFFD}")
-                } else if let code = UInt32(hex, radix: 16) {
-                    result.replaceSubrange(full, with: safeCodePointString(code))
-                } else {
-                    result.replaceSubrange(full, with: "\u{FFFD}")
-                }
-            }
+        var result = replacingRegexMatches(in: raw, pattern: #"&#x0*([0-9a-fA-F]+);?"#, options: .caseInsensitive) { ns, m in
+            let hex = ns.substring(with: m.range(at: 1))
+            if hex.count > 6 { return "\u{FFFD}" }
+            if let code = UInt32(hex, radix: 16) { return safeCodePointString(code) }
+            return "\u{FFFD}"
         }
-        if let decRegex = try? NSRegularExpression(pattern: #"&#0*([0-9]+);?"#) {
-            let matches = decRegex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
-            for m in matches {
-                guard let r = Range(m.range(at: 1), in: result),
-                      let full = Range(m.range, in: result) else { continue }
-                let dec = String(result[r])
-                if dec.count > 7 {
-                    result.replaceSubrange(full, with: "\u{FFFD}")
-                } else if let code = UInt32(dec, radix: 10) {
-                    result.replaceSubrange(full, with: safeCodePointString(code))
-                } else {
-                    result.replaceSubrange(full, with: "\u{FFFD}")
-                }
-            }
+        result = replacingRegexMatches(in: result, pattern: #"&#0*([0-9]+);?"#) { ns, m in
+            let dec = ns.substring(with: m.range(at: 1))
+            if dec.count > 7 { return "\u{FFFD}" }
+            if let code = UInt32(dec, radix: 10) { return safeCodePointString(code) }
+            return "\u{FFFD}"
         }
-        if let namedRegex = try? NSRegularExpression(pattern: #"&(colon|sol|bsol|tab|newline|nbsp|amp|lt|gt|quot|apos);?"#, options: .caseInsensitive) {
-            let matches = namedRegex.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
-            for m in matches {
-                guard let r = Range(m.range(at: 1), in: result),
-                      let full = Range(m.range, in: result) else { continue }
-                switch result[r].lowercased() {
-                case "colon": result.replaceSubrange(full, with: ":")
-                case "sol": result.replaceSubrange(full, with: "/")
-                case "bsol": result.replaceSubrange(full, with: "\\")
-                case "tab": result.replaceSubrange(full, with: "\t")
-                case "newline": result.replaceSubrange(full, with: "\n")
-                case "nbsp": result.replaceSubrange(full, with: "\u{00A0}")
-                case "amp": result.replaceSubrange(full, with: "&")
-                case "lt": result.replaceSubrange(full, with: "<")
-                case "gt": result.replaceSubrange(full, with: ">")
-                case "quot": result.replaceSubrange(full, with: "\"")
-                case "apos": result.replaceSubrange(full, with: "'")
-                default: break
-                }
+        result = replacingRegexMatches(in: result, pattern: #"&(colon|sol|bsol|tab|newline|nbsp|amp|lt|gt|quot|apos);?"#, options: .caseInsensitive) { ns, m in
+            switch ns.substring(with: m.range(at: 1)).lowercased() {
+            case "colon": return ":"
+            case "sol": return "/"
+            case "bsol": return "\\"
+            case "tab": return "\t"
+            case "newline": return "\n"
+            case "nbsp": return "\u{00A0}"
+            case "amp": return "&"
+            case "lt": return "<"
+            case "gt": return ">"
+            case "quot": return "\""
+            case "apos": return "'"
+            default: return nil
             }
         }
         return result
@@ -3452,7 +3503,7 @@ extension LibraryService {
         return false
     }
 
-    private static func isSafeInlineSVG(_ svg: String) -> Bool {
+    static func isSafeInlineSVG(_ svg: String) -> Bool {
         guard !svg.isEmpty,
               !svg.contains("\0"),
               !svg.contains("\u{FFFD}"),
@@ -3593,17 +3644,2274 @@ extension LibraryService {
         return false
     }
 
-    private static func parseSanitizedDesktopFragment(
+    /// Strips ASCII C0 control bytes (0x00..0x08, 0x0B, 0x0C, 0x0E..0x1F) and DEL (0x7F)
+    /// identically to Apple's libtidy input pre-filter so both byte scanners and Foundation's
+    /// `.documentTidyHTML` always observe the exact same byte stream.
+    static func stripHTMLControlBytesForTidy(_ raw: String) -> String {
+        let bytes = Array(raw.utf8)
+        var needsStrip = false
+        for b in bytes {
+            if (b < 32 && b != 9 && b != 10 && b != 13) || b == 127 {
+                needsStrip = true
+                break
+            }
+        }
+        guard needsStrip else { return raw }
+        var out = Data()
+        out.reserveCapacity(bytes.count)
+        for b in bytes {
+            if (b < 32 && b != 9 && b != 10 && b != 13) || b == 127 { continue }
+            out.append(b)
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    /// Locale-independent ASCII case-insensitive substring check (immune to Turkish `tr_TR` `i`/`I` folding).
+    static func asciiCaseInsensitiveContains(_ haystack: String, _ needle: String) -> Bool {
+        haystack.range(of: needle, options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX")) != nil
+    }
+
+    /// Detects Hugo's exact JSON sidecar `<script type="application/json" class="<requiredClass>">`
+    /// (without `src`) by byte-parsing real HTML attributes so spoofed text inside another attribute's value,
+    /// hyphen-extended class names, or slash-separated `src` attributes can never promote an arbitrary script.
+    static func isJSONSidecarScriptOpenTag(_ openTagBytes: ArraySlice<UInt8>, requiredClass: String) -> Bool {
+        let bytes = Array(openTagBytes)
+        let n = bytes.count
+        guard n >= 8, bytes[0] == 60, bytes[n - 1] == 62 else { return false }
+        func isWS(_ b: UInt8) -> Bool { b == 9 || b == 10 || b == 13 || b == 32 }
+        func asciiLower(_ slice: ArraySlice<UInt8>) -> String {
+            var out = [UInt8]()
+            out.reserveCapacity(slice.count)
+            for b in slice { out.append((65...90).contains(b) ? b + 32 : b) }
+            return String(decoding: out, as: UTF8.self)
+        }
+        // Must open with `<script` followed by ASCII whitespace (rejects `<script/src=...`, `<script!...`).
+        guard asciiLower(bytes[1..<7]) == "script", isWS(bytes[7]) else { return false }
+        var idx = 7
+        var seenAttrs = Set<String>()
+        var typeValue: String? = nil
+        var classTokens: [String]? = nil
+        while idx < n - 1 {
+            while idx < n - 1 && isWS(bytes[idx]) { idx += 1 }
+            if idx >= n - 1 { break }
+            let lead = bytes[idx]
+            // Fail closed on malformed attribute-start syntax (stray `=`, `"`, `'`, `<`, `/`, `-`) that triggers libtidy recovery.
+            if lead == 61 || lead == 34 || lead == 39 || lead == 60 || lead == 47 || lead == 45 { return false }
+            let attrStart = idx
+            while idx < n - 1 && !isWS(bytes[idx]) && bytes[idx] != 61 {
+                let b = bytes[idx]
+                if b == 60 || b == 34 || b == 39 || b == 47 { return false }
+                if b == 45, idx + 1 < n - 1, (bytes[idx + 1] == 34 || bytes[idx + 1] == 39) { return false }
+                idx += 1
+            }
+            let attrName = asciiLower(bytes[attrStart..<idx])
+            // Fail closed on empty, `src`, or duplicate attributes (libtidy uses keep-last on repeated attrs).
+            guard !attrName.isEmpty, attrName != "src", seenAttrs.insert(attrName).inserted else { return false }
+            while idx < n - 1 && isWS(bytes[idx]) { idx += 1 }
+            // Reject libtidy quote-as-equals recovery (`a "b="` / `a ""`).
+            if idx < n - 1 && (bytes[idx] == 34 || bytes[idx] == 39) { return false }
+            var valBytes: ArraySlice<UInt8> = []
+            if idx < n - 1 && bytes[idx] == 61 {
+                idx += 1
+                while idx < n - 1 && isWS(bytes[idx]) { idx += 1 }
+                // Reject trailing bare `=` (`type=>`, `foo=>`).
+                if idx >= n - 1 { return false }
+                if bytes[idx] == 34 || bytes[idx] == 39 {
+                    let q = bytes[idx]
+                    idx += 1
+                    let vStart = idx
+                    while idx < n - 1 && bytes[idx] != q { idx += 1 }
+                    guard idx < n - 1 && bytes[idx] == q else { return false }
+                    valBytes = bytes[vStart..<idx]
+                    idx += 1
+                    // Require whitespace or tag end after a quoted attribute value.
+                    guard idx == n - 1 || isWS(bytes[idx]) else { return false }
+                } else {
+                    let vStart = idx
+                    while idx < n - 1 && !isWS(bytes[idx]) {
+                        let b = bytes[idx]
+                        if b == 60 || b == 34 || b == 39 { return false }
+                        idx += 1
+                    }
+                    if idx == n - 1 && idx > vStart && bytes[idx - 1] == 47 { return false } // self-closing unquoted value
+                    valBytes = bytes[vStart..<idx]
+                }
+            }
+            if attrName == "type" {
+                typeValue = asciiLower(valBytes).trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n"))
+            } else if attrName == "class" {
+                classTokens = asciiLower(valBytes).split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\r" || $0 == "\n" }).map(String.init)
+            }
+        }
+        return typeValue == "application/json" && (classTokens?.contains(requiredClass) == true)
+    }
+
+    static func isJSONCitationScriptOpenTag(_ openTagBytes: ArraySlice<UInt8>) -> Bool {
+        isJSONSidecarScriptOpenTag(openTagBytes, requiredClass: "paper-tools__citation-record")
+    }
+
+    static func isJSONClientSidecarsScriptOpenTag(_ openTagBytes: ArraySlice<UInt8>) -> Bool {
+        isJSONSidecarScriptOpenTag(openTagBytes, requiredClass: "paper-tools__client-sidecars")
+    }
+
+    enum HTML5ByteTagScanResult {
+        case notATag
+        case bogusComment(end: Int)
+        case unquotedLessThan(end: Int)
+        case unclosedEOF
+        case tooLong
+        case tag(name: String, nameEnd: Int, end: Int, closing: Bool, selfClosing: Bool, hasValidNameDelimiter: Bool)
+    }
+
+    /// Shared O(n) Foundation-Tidy-aligned byte-level tag and bogus-comment scanner.
+    /// Operates on control-byte-stripped UTF-8 and mirrors macOS Foundation `.documentTidyHTML`
+    /// (libtidy) rules for `ParseTagName` non-`IsNamechar` delimiter consumption, bogus end-tags
+    /// (`</ ` vs `</<`), leading `=`/`"`/`'` in `BEFORE_ATTR_NAME`, `/` inside attribute names vs
+    /// true `/>` self-closing, `<` termination, and fail-closed rejection of unquoted `<` values.
+    static func scanHTML5ByteTag(_ bytes: [UInt8], at start: Int, maxLength: Int? = nil) -> HTML5ByteTagScanResult {
+        let n = bytes.count
+        guard start >= 0, start < n, bytes[start] == 60 else { return .notATag }
+        let limit = maxLength.map { min(n, start + $0 + 1) } ?? n
+        func isWS(_ b: UInt8) -> Bool { b == 9 || b == 10 || b == 13 || b == 32 }
+        func isASCIIAlpha(_ b: UInt8) -> Bool { (65...90).contains(b) || (97...122).contains(b) }
+        func isTagNameCont(_ b: UInt8) -> Bool {
+            isASCIIAlpha(b) || (48...57).contains(b) || b == 45 || b == 58 || b == 95 || b == 46
+        }
+        func isNameDelim(_ b: UInt8) -> Bool { isWS(b) || b == 47 || b == 62 }
+        // Decodes a valid UTF-8 scalar at `i` within `limit`, guarding against Apple libtidy's
+        // 8-bit `(tmbchar)cp` truncation in `ParseTagName` / `LEX_ENDTAG` where `(cp & 0xFF)` in
+        // `{0x2F ('/'), 0x3E ('>'), 0xFF (EOF)}` triggers delimiter/EOF parser differentials.
+        func decodeUTF8Scalar(at i: Int) -> (scalar: UInt32, length: Int, truncatedAtLimit: Bool)? {
+            guard i < limit else { return nil }
+            let b0 = bytes[i]
+            if b0 < 0x80 { return (UInt32(b0), 1, false) }
+            let expectedLen: Int
+            var cp: UInt32
+            if b0 >= 0xC2 && b0 <= 0xDF {
+                expectedLen = 2; cp = UInt32(b0 & 0x1F)
+            } else if b0 >= 0xE0 && b0 <= 0xEF {
+                expectedLen = 3; cp = UInt32(b0 & 0x0F)
+            } else if b0 >= 0xF0 && b0 <= 0xF4 {
+                expectedLen = 4; cp = UInt32(b0 & 0x07)
+            } else {
+                return nil
+            }
+            if i + expectedLen > limit {
+                return limit < n ? (0, 0, true) : nil
+            }
+            for k in 1..<expectedLen {
+                let bk = bytes[i + k]
+                guard (bk & 0xC0) == 0x80 else { return nil }
+                cp = (cp << 6) | UInt32(bk & 0x3F)
+            }
+            if (expectedLen == 3 && (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)))
+                || (expectedLen == 4 && (cp < 0x10000 || cp > 0x10FFFF)) {
+                return nil
+            }
+            return (cp, expectedLen, false)
+        }
+        func isLibtidyTruncatedDelimiter(_ cp: UInt32) -> Bool {
+            let lo = cp & 0xFF
+            return lo == 0x2F || lo == 0x3E || lo == 0xFF
+        }
+
+        var idx = start + 1
+        guard idx < n else { return .notATag }
+
+        if bytes[idx] == 47 { // '/' -> End tag open state
+            idx += 1
+            if idx >= n { return .unclosedEOF }
+            if bytes[idx] == 62 { return .bogusComment(end: idx + 1) }
+            if bytes[idx] == 60 {
+                // Live macOS libtidy consumes all 3 bytes `</<` as literal text and resumes scanning at `idx + 1`.
+                return .bogusComment(end: idx + 1)
+            }
+            if !isASCIIAlpha(bytes[idx]) {
+                // For `</ `, `</1`, `</! `, macOS libtidy emits literal `&lt;/...` text and still parses
+                // any following `<tag ...>` live — return `.notATag` so scanning resumes after `<`.
+                return .notATag
+            }
+            let nameStart = idx
+            while idx < limit && isTagNameCont(bytes[idx]) { idx += 1 }
+            if idx >= limit && idx < n { return .tooLong }
+            let nameEnd = idx
+            if idx >= n { return .unclosedEOF }
+            let validDelim = isNameDelim(bytes[idx])
+            let name = String(decoding: bytes[nameStart..<nameEnd], as: UTF8.self).lowercased()
+            // Foundation `.documentTidyHTML` closes alphabetic end tags at the very first '>' without quote toggling,
+            // EXCEPT non-ASCII scalars with `(cp & 0xFF) ∈ {0x2F, 0x3E, 0xFF}` trigger libtidy 8-bit truncation — fail closed.
+            while idx < limit {
+                if bytes[idx] == 62 {
+                    return .tag(name: name, nameEnd: nameEnd, end: idx + 1, closing: true, selfClosing: false, hasValidNameDelimiter: validDelim)
+                }
+                if bytes[idx] >= 0x80 {
+                    guard let decoded = decodeUTF8Scalar(at: idx) else { return .unquotedLessThan(end: idx) }
+                    if decoded.truncatedAtLimit { return .tooLong }
+                    if isLibtidyTruncatedDelimiter(decoded.scalar) { return .unquotedLessThan(end: idx) }
+                    idx += decoded.length
+                    continue
+                }
+                idx += 1
+            }
+            return idx < n ? .tooLong : .unclosedEOF
+        }
+
+        // Start tag open state: live macOS libtidy consumes `<<` as literal text without ungetting
+        // the second `<`; otherwise first byte after '<' must be an ASCII letter.
+        if bytes[idx] == 60 {
+            return .bogusComment(end: idx + 1)
+        }
+        guard isASCIIAlpha(bytes[idx]) else { return .notATag }
+        let nameStart = idx
+        while idx < limit && isTagNameCont(bytes[idx]) { idx += 1 }
+        if idx >= limit && idx < n { return .tooLong }
+        let nameEnd = idx
+        if idx >= n { return .unclosedEOF }
+        let validDelim = isNameDelim(bytes[idx])
+        let name = String(decoding: bytes[nameStart..<nameEnd], as: UTF8.self).lowercased()
+        // Mirror libtidy ParseTagName: any non-IsNamechar delimiter other than WS, '/', '>' (e.g. '!', '<', '中')
+        // is consumed and discarded as a single UTF-8 scalar before attribute parsing begins,
+        // EXCEPT non-ASCII scalars whose low byte collides with '/', '>', or EOF (0xFF), which fail closed.
+        if !validDelim {
+            if bytes[idx] >= 0x80 {
+                guard let decoded = decodeUTF8Scalar(at: idx) else { return .unquotedLessThan(end: idx) }
+                if decoded.truncatedAtLimit { return .tooLong }
+                if isLibtidyTruncatedDelimiter(decoded.scalar) { return .unquotedLessThan(end: idx) }
+                idx += decoded.length
+            } else {
+                idx += 1
+            }
+        }
+
+        // Tidy-aligned attribute state machine:
+        // - Leading `=`, `"`, `'` in BEFORE_ATTR_NAME are skipped (matching libtidy on `<div =="x>`, `<div "="x>`, `<div "a="x>`).
+        // - `/` in BEFORE_ATTR_NAME is self-closing ONLY when immediately followed by `>`; otherwise `/` starts ATTR_NAME.
+        // - `/` inside ATTR_NAME does NOT terminate the attribute name (matching libtidy on `<script a/>`, `<div a/="x>`).
+        // - `<` terminates the tag before `<` in BEFORE_ATTR_NAME, ATTR_NAME, AFTER_ATTR_NAME, and after >=1 char in ATTR_VALUE_UNQUOTED.
+        // - Unquoted attribute values beginning with `<` (`a=<>`, `a=< `) return `.unquotedLessThan` for fail-closed rejection.
+        // - Unquoted attribute values ending in `/>` set `selfClosing = true` EXCEPT for libtidy's 12 URL attributes
+        //   (`TidyAttrIsUrl`), where trailing `/` stays part of the URL value (`<style src=https://example.com/>`).
+        let libtidyURLAttributes: Set<String> = [
+            "background", "cite", "classid", "codebase", "data", "datasrc",
+            "href", "longdesc", "lowsrc", "profile", "src", "usemap"
+        ]
+        func isInlineServerTagAt(_ i: Int) -> Bool {
+            i + 1 < n && (bytes[i + 1] == 63 || bytes[i + 1] == 37 || bytes[i + 1] == 35)
+        }
+        while idx < limit {
+            // BEFORE_ATTR_NAME
+            while idx < limit && (isWS(bytes[idx]) || bytes[idx] == 61 || bytes[idx] == 34 || bytes[idx] == 39) { idx += 1 }
+            if idx >= limit { return idx < n ? .tooLong : .unclosedEOF }
+            if bytes[idx] == 62 {
+                return .tag(name: name, nameEnd: nameEnd, end: idx + 1, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+            }
+            if bytes[idx] == 60 {
+                if isInlineServerTagAt(idx) { return .unquotedLessThan(end: idx) }
+                return .tag(name: name, nameEnd: nameEnd, end: idx, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+            }
+            if bytes[idx] == 47, idx + 1 < limit, bytes[idx + 1] == 62 { // true self-closing `/>`
+                return .tag(name: name, nameEnd: nameEnd, end: idx + 2, closing: false, selfClosing: true, hasValidNameDelimiter: validDelim)
+            }
+            if bytes[idx] == 45, idx + 1 < n, (bytes[idx + 1] == 34 || bytes[idx + 1] == 39) {
+                // Live macOS libtidy terminates the tag immediately after `-` when BEFORE_ATTR_NAME sees `-"'` / `-'`.
+                return .tag(name: name, nameEnd: nameEnd, end: idx + 1, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+            }
+            // ATTR_NAME: first byte is guaranteed non-WS and not in {=, ", ', <, >}; `/` is part of ATTR_NAME
+            let attrNameStart = idx
+            idx += 1
+            while idx < limit && !isWS(bytes[idx]) && bytes[idx] != 62 && bytes[idx] != 61 && bytes[idx] != 60 {
+                if bytes[idx] == 45, idx + 1 < n, (bytes[idx + 1] == 34 || bytes[idx + 1] == 39) {
+                    break
+                }
+                idx += 1
+            }
+            let attrNameEnd = idx
+            if idx < limit, bytes[idx] == 45, idx + 1 < n, (bytes[idx + 1] == 34 || bytes[idx + 1] == 39) {
+                // Live macOS libtidy strips trailing `-` immediately before `"` / `'` inside ATTR_NAME and treats the quote as `=`.
+                idx += 1
+            }
+            if idx < limit && bytes[idx] == 60 {
+                if isInlineServerTagAt(idx) { return .unquotedLessThan(end: idx) }
+                return .tag(name: name, nameEnd: nameEnd, end: idx, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+            }
+            // AFTER_ATTR_NAME
+            while idx < limit && isWS(bytes[idx]) { idx += 1 }
+            if idx >= limit { return idx < n ? .tooLong : .unclosedEOF }
+            if bytes[idx] == 60 {
+                if isInlineServerTagAt(idx) { return .unquotedLessThan(end: idx) }
+                return .tag(name: name, nameEnd: nameEnd, end: idx, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+            }
+            // Live macOS libtidy treats `"` and `'` in AFTER_ATTR_NAME identically to `=` (missing-equals recovery).
+            if bytes[idx] != 61 && bytes[idx] != 34 && bytes[idx] != 39 { // boolean attribute; reconsume current byte in BEFORE_ATTR_NAME
+                continue
+            }
+            // BEFORE_ATTR_VALUE (consume '=')
+            idx += 1
+            while idx < limit && isWS(bytes[idx]) { idx += 1 }
+            if idx >= limit { return idx < n ? .tooLong : .unclosedEOF }
+            if bytes[idx] == 34 || bytes[idx] == 39 {
+                let q = bytes[idx]
+                idx += 1
+                while idx < limit && bytes[idx] != q { idx += 1 }
+                if idx >= limit { return idx < n ? .tooLong : .unclosedEOF }
+                idx += 1 // consume closing quote
+            } else if bytes[idx] == 62 {
+                return .tag(name: name, nameEnd: nameEnd, end: idx + 1, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+            } else if bytes[idx] == 60 {
+                // Unquoted attribute value starting with '<' triggers libtidy ParseValue lookahead differentials (`a=<>`, `a=< `).
+                return .unquotedLessThan(end: idx)
+            } else {
+                // ATTR_VALUE_UNQUOTED: ends at WS, '>', or '<'; trailing '/>' is self-closing in libtidy
+                // unless the attribute is one of libtidy's URL attributes (e.g. `src`, `href`).
+                let valStart = idx
+                idx += 1
+                while idx < limit && !isWS(bytes[idx]) && bytes[idx] != 62 && bytes[idx] != 60 { idx += 1 }
+                if idx >= limit { return idx < n ? .tooLong : .unclosedEOF }
+                if bytes[idx] == 62 {
+                    let attrLower = String(
+                        decoding: bytes[attrNameStart..<attrNameEnd].map { ($0 >= 65 && $0 <= 90) ? ($0 + 32) : $0 },
+                        as: UTF8.self
+                    )
+                    let isSelfClose = idx > valStart && bytes[idx - 1] == 47 && !libtidyURLAttributes.contains(attrLower)
+                    return .tag(name: name, nameEnd: nameEnd, end: idx + 1, closing: false, selfClosing: isSelfClose, hasValidNameDelimiter: validDelim)
+                }
+                if bytes[idx] == 60 {
+                    if isInlineServerTagAt(idx) { return .unquotedLessThan(end: idx) }
+                    return .tag(name: name, nameEnd: nameEnd, end: idx, closing: false, selfClosing: false, hasValidNameDelimiter: validDelim)
+                }
+            }
+        }
+        return idx < n ? .tooLong : .unclosedEOF
+    }
+
+    enum RawTextEndScanResult {
+        case closed(bodyEnd: Int, closeEnd: Int)
+        case unclosed(bodyEnd: Int)
+        case unsafe
+    }
+
+    /// Scans for the matching raw-text/RCDATA closing tag `</rawName...>` starting at `bodyStart`.
+    /// Recognizes any non-`IsNamechar` delimiter after `</rawName` (matching libtidy on `</script!>`, `</script中>`),
+    /// Scans for the matching closing tag of a raw-text/RCDATA element using `scanHTML5ByteTag`,
+    /// mirroring WHATWG HTML5 §13.2.5.17–31 script escaped/double-escaped state for `<script>`
+    /// and propagating fail-closed `.unsafe` on libtidy 8-bit truncation characters (e.g. `</textarea\u{013E}`, `</textarea\u{FEFF}>`).
+    static func scanRawTextElementEnd(
+        _ bytes: [UInt8],
+        rawName: String,
+        from bodyStart: Int,
+        formFeedAfterCleanPos: Set<Int> = []
+    ) -> RawTextEndScanResult {
+        let n = bytes.count
+        let needle = Array(("</" + rawName).utf8)
+        let needleLen = needle.count
+        let isScript = rawName == "script"
+        func isTagNameCont(_ b: UInt8) -> Bool {
+            (65...90).contains(b) || (97...122).contains(b) || (48...57).contains(b) || b == 45 || b == 58 || b == 95 || b == 46
+        }
+        func isScriptDelimByte(_ b: UInt8) -> Bool {
+            b == 9 || b == 10 || b == 12 || b == 13 || b == 32 || b == 47 || b == 62
+        }
+        func isScriptDelimAt(_ endIdx: Int) -> Bool {
+            formFeedAfterCleanPos.contains(endIdx - 1) || (endIdx < n && isScriptDelimByte(bytes[endIdx]))
+        }
+        func matchesCI(_ ascii: [UInt8], at idx: Int) -> Bool {
+            guard idx + ascii.count <= n else { return false }
+            for k in 0..<ascii.count {
+                let b = bytes[idx + k]
+                let lc = (65...90).contains(b) ? b + 32 : b
+                if lc != ascii[k] { return false }
+            }
+            return true
+        }
+        let openScriptPat = Array("<script".utf8)
+        let closeScriptPat = Array("</script".utf8)
+        enum ScriptState { case normal, escaped, doubleEscaped }
+        var scriptState: ScriptState = .normal
+        var pos = bodyStart
+        while pos < n {
+            if isScript {
+                if scriptState == .normal {
+                    if pos + 3 < n && bytes[pos] == 60 && bytes[pos + 1] == 33 && bytes[pos + 2] == 45 && bytes[pos + 3] == 45 {
+                        // WHATWG §13.2.5.20-24: abrupt `<!-->`, `<!--->`, `<!---->` transition immediately back to normal.
+                        var dashEnd = pos + 4
+                        while dashEnd < n && bytes[dashEnd] == 45 { dashEnd += 1 }
+                        if dashEnd < n && bytes[dashEnd] == 62 {
+                            pos = dashEnd + 1
+                            continue
+                        }
+                        scriptState = .escaped
+                        pos += 4
+                        continue
+                    }
+                } else {
+                    if pos + 2 < n && bytes[pos] == 45 && bytes[pos + 1] == 45 && bytes[pos + 2] == 62 {
+                        scriptState = .normal
+                        pos += 3
+                        continue
+                    }
+                    if scriptState == .escaped, pos + openScriptPat.count <= n,
+                       matchesCI(openScriptPat, at: pos), isScriptDelimAt(pos + openScriptPat.count) {
+                        scriptState = .doubleEscaped
+                        pos += openScriptPat.count
+                        continue
+                    }
+                    if scriptState == .doubleEscaped, pos + closeScriptPat.count <= n,
+                       matchesCI(closeScriptPat, at: pos), isScriptDelimAt(pos + closeScriptPat.count) {
+                        scriptState = .escaped
+                        pos += closeScriptPat.count
+                        continue
+                    }
+                }
+            }
+            if bytes[pos] == 60, (!isScript || scriptState != .doubleEscaped), pos + needleLen < n {
+                var matched = true
+                for k in 0..<needleLen {
+                    let b = bytes[pos + k]
+                    let lc = (65...90).contains(b) ? b + 32 : b
+                    if lc != needle[k] { matched = false; break }
+                }
+                if matched {
+                    let ffAfterName = formFeedAfterCleanPos.contains(pos + needleLen - 1)
+                    let after = bytes[pos + needleLen]
+                    if ffAfterName {
+                        // Form-feed (`0x0C`) immediately after `</rawName` is valid WHATWG whitespace delimiter.
+                        var k = pos + needleLen
+                        while k < n && bytes[k] != 62 {
+                            if bytes[k] >= 128 { return .unsafe }
+                            k += 1
+                        }
+                        if k < n { return .closed(bodyEnd: pos, closeEnd: k + 1) }
+                        return .unclosed(bodyEnd: pos)
+                    }
+                    // WHATWG §13.2.5.13 / §13.2.5.15 / §13.2.5.19: ONLY ASCII WS / `/` / `>` closes any RAWTEXT/RCDATA end tag
+                    // (never `</script!>`, `</style!>`, `</textarea!>`, `</iframe!>`, `</xmp!>`, `</noframes!>`, `</noscript!>`).
+                    if isScriptDelimByte(after) {
+                        switch scanHTML5ByteTag(bytes, at: pos) {
+                        case .tag(let name, _, let end, let closing, _, _) where closing && name == rawName:
+                            return .closed(bodyEnd: pos, closeEnd: end)
+                        case .unquotedLessThan:
+                            return .unsafe
+                        case .unclosedEOF, .tooLong:
+                            return .unclosed(bodyEnd: pos)
+                        default:
+                            break
+                        }
+                    } else if after >= 128 {
+                        if case .unquotedLessThan = scanHTML5ByteTag(bytes, at: pos) {
+                            return .unsafe
+                        }
+                    }
+                }
+            }
+            pos += 1
+        }
+        return .unclosed(bodyEnd: n)
+    }
+
+    /// Scans an HTML5 comment starting at `start` (pointing at `<!--`), honoring WHATWG §13.2.5.45–50
+    /// abrupt closers (`<!-->`, `<!--->`) and bang closer (`--!>`). `needsRewrite` is true when `libtidy`
+    /// would fail to close the comment at `end` (abrupt/bang/unclosed).
+    static func scanHTML5CommentEnd(_ bytes: [UInt8], from start: Int) -> (end: Int, closed: Bool, needsRewrite: Bool) {
+        let n = bytes.count
+        var i = start + 4
+        if i < n && bytes[i] == 62 {
+            return (i + 1, true, true) // abrupt `<!-->`
+        }
+        if i + 1 < n && bytes[i] == 45 && bytes[i + 1] == 62 {
+            return (i + 2, true, true) // abrupt `<!--->`
+        }
+        while i < n {
+            if bytes[i] == 45 && i + 1 < n && bytes[i + 1] == 45 {
+                if i + 2 < n && bytes[i + 2] == 62 {
+                    return (i + 3, true, false) // standard `-->`
+                }
+                if i + 3 < n && bytes[i + 2] == 33 && bytes[i + 3] == 62 {
+                    return (i + 4, true, true) // WHATWG `--!>`
+                }
+            }
+            i += 1
+        }
+        return (n, false, true)
+    }
+
+    /// Appends `slice` to `out`, replacing every literal `<` (0x3C) with `replacement` (e.g. `&lt;` or `\u003c`).
+    static func appendEscapingLessThan(_ slice: ArraySlice<UInt8>, replacement: [UInt8], to out: inout Data) {
+        var segStart = slice.startIndex
+        var i = segStart
+        while i < slice.endIndex {
+            if slice[i] == 60 {
+                if i > segStart { out.append(contentsOf: slice[segStart..<i]) }
+                out.append(contentsOf: replacement)
+                segStart = i + 1
+            }
+            i += 1
+        }
+        if segStart < slice.endIndex { out.append(contentsOf: slice[segStart..<slice.endIndex]) }
+    }
+
+    /// HTML5 elements that Apple's HTML4/XHTML1 `libtidy` strips (unwrapping their children and
+    /// dropping `@hidden` before XPath detachment). Flow block elements map to `<div>`; phrasing-allowed
+    /// containers map to `<span>` when visible (preserving `<p><time>...</time></p>`, `<p><picture>...</picture></p>`,
+    /// etc., never prematurely closing `<p>` or `<p hidden>`) and to `<div>` when carrying `@hidden` outside `<p hidden>`.
+    static let html5BlockContainerTags: Set<String> = [
+        "section", "article", "main", "aside", "header", "footer", "nav",
+        "hgroup", "search", "dialog",
+        "figure", "figcaption", "details", "summary"
+    ]
+
+    static let html5InlineContainerTags: Set<String> = [
+        "bdi", "data", "mark", "menuitem", "meter", "output", "progress", "time",
+        "audio", "video", "picture", "svg", "canvas", "datalist", "slot"
+    ]
+
+    /// Native HTML4 block/table/document containers whose `@hidden` attribute is faithfully preserved
+    /// by Apple's `libtidy` without prematurely closing/dropping the wrapper around flow/table children
+    /// (and whose optional HTML5 end tags like `<p>` / `<li>` / `<dd>` must stay native).
+    private static let safeHiddenNativeTags: Set<String> = [
+        "html", "head", "body",
+        "div", "p", "ul", "ol", "li", "dd", "blockquote", "form", "fieldset", "center",
+        "table", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup"
+    ]
+
+    /// Conservative union of WHATWG HTML5 and Apple `libtidy` attribute parsing on a start tag's
+    /// attribute slice (`bytes[t.nameEnd..<t.end]`), detecting `@hidden` across HTML5 `/` separators
+    /// (`<figure/hidden>`, `<p hidden/class="x">`), HTML5 non-equals quotes (`<div a " hidden>`,
+    /// `<div -" hidden>`), and `libtidy` recovery forms (`=hidden`, `"hidden`, `!hidden`,
+    /// `a "x=" hidden`, `a-"x=" hidden`, `a ""x"hidden`) while extracting clean `id` and `class` values.
+    private static func parseHiddenAndIdentityAttrs(_ attrBytes: ArraySlice<UInt8>) -> (hasHidden: Bool, idValue: String?, classValue: String?) {
+        let bytes = Array(attrBytes)
+        let n = bytes.count
+        var i = 0
+        var hasHidden = false
+        var idValue: String? = nil
+        var classValue: String? = nil
+        func isWS(_ b: UInt8) -> Bool { b == 32 || b == 9 || b == 10 || b == 13 || b == 12 }
+        func asciiLower(_ slice: ArraySlice<UInt8>) -> String {
+            var out = [UInt8]()
+            out.reserveCapacity(slice.count)
+            for b in slice { out.append((65...90).contains(b) ? b + 32 : b) }
+            return String(decoding: out, as: UTF8.self)
+        }
+        // Pass 1: Apple libtidy attribute tokenizer (skipping any non-namechar delimiter like `@`, `;`, `!`, CJK)
+        func isAttrNameStartByte(_ b: UInt8) -> Bool {
+            (65...90).contains(b) || (97...122).contains(b) || (48...57).contains(b) || b == 95 || b == 45
+        }
+        while i < n {
+            // BEFORE_ATTR_NAME: skip WS, HTML5 '/' separator, and libtidy discarded non-namechar delimiters
+            while i < n && bytes[i] != 62 && bytes[i] != 60 && !isAttrNameStartByte(bytes[i]) { i += 1 }
+            if i >= n || bytes[i] == 62 || bytes[i] == 60 { break }
+            if bytes[i] == 45, i + 1 < n, (bytes[i + 1] == 34 || bytes[i + 1] == 39) { break }
+            let nameStart = i
+            i += 1
+            while i < n && !isWS(bytes[i]) && bytes[i] != 61 && bytes[i] != 62 && bytes[i] != 47 && bytes[i] != 60 {
+                if bytes[i] == 45, i + 1 < n, (bytes[i + 1] == 34 || bytes[i + 1] == 39) { break }
+                i += 1
+            }
+            let nameEnd = i
+            if i < n, bytes[i] == 45, i + 1 < n, (bytes[i + 1] == 34 || bytes[i + 1] == 39) {
+                i += 1 // mirror libtidy stripping trailing '-' before quote-as-equals
+            }
+            let attrName = asciiLower(bytes[nameStart..<nameEnd])
+            if attrName == "hidden" { hasHidden = true }
+            while i < n && isWS(bytes[i]) { i += 1 }
+            var rawVal: String? = nil
+            if i < n && (bytes[i] == 61 || bytes[i] == 34 || bytes[i] == 39) {
+                i += 1 // consume '=' or libtidy quote-as-equals
+                while i < n && isWS(bytes[i]) { i += 1 }
+                if i < n && (bytes[i] == 34 || bytes[i] == 39) {
+                    let q = bytes[i]
+                    i += 1
+                    let vStart = i
+                    while i < n && bytes[i] != q { i += 1 }
+                    rawVal = String(decoding: bytes[vStart..<i], as: UTF8.self)
+                    if i < n { i += 1 }
+                } else if i < n && bytes[i] != 62 && bytes[i] != 60 {
+                    let vStart = i
+                    while i < n && !isWS(bytes[i]) && bytes[i] != 62 && bytes[i] != 60 { i += 1 }
+                    var vEnd = i
+                    if i < n && bytes[i] == 62 && vEnd > vStart && bytes[vEnd - 1] == 47 {
+                        vEnd -= 1 // strip trailing '/' from unquoted value before '>' (e.g. `id=x/>`)
+                    }
+                    rawVal = String(decoding: bytes[vStart..<vEnd], as: UTF8.self)
+                }
+            }
+            if let val = rawVal {
+                if attrName == "id" { idValue = val }
+                else if attrName == "class" { classValue = val }
+            }
+        }
+        // Pass 2: Strict WHATWG HTML5 §13.2.5.32-38 union check (quotes do NOT act as '=' and '-"' does NOT end the tag).
+        if !hasHidden {
+            var w = 0
+            while w < n {
+                while w < n && (isWS(bytes[w]) || bytes[w] == 47) { w += 1 }
+                if w >= n || bytes[w] == 62 { break }
+                let wnStart = w
+                w += 1
+                while w < n && !isWS(bytes[w]) && bytes[w] != 47 && bytes[w] != 61 && bytes[w] != 62 { w += 1 }
+                let wAttr = asciiLower(bytes[wnStart..<w])
+                if wAttr == "hidden" {
+                    hasHidden = true
+                    break
+                }
+                while w < n && isWS(bytes[w]) { w += 1 }
+                if w < n && bytes[w] == 61 {
+                    w += 1
+                    while w < n && isWS(bytes[w]) { w += 1 }
+                    if w < n && (bytes[w] == 34 || bytes[w] == 39) {
+                        let q = bytes[w]
+                        w += 1
+                        while w < n && bytes[w] != q { w += 1 }
+                        if w < n { w += 1 }
+                    } else {
+                        while w < n && !isWS(bytes[w]) && bytes[w] != 62 { w += 1 }
+                    }
+                }
+            }
+        }
+        return (hasHidden, idValue, classValue)
+    }
+
+    private static func escapeNormalizedAttrValue(_ raw: String) -> String {
+        var out = ""
+        out.reserveCapacity(raw.count)
+        for ch in raw {
+            switch ch {
+            case "&": out += "&amp;"
+            case "\"": out += "&quot;"
+            case "<": out += "&lt;"
+            case ">": out += "&gt;"
+            default: out.append(ch)
+            }
+        }
+        return out
+    }
+
+    /// Compatibility non-throwing wrapper used by unit tests; all production pipelines call `rewriteHTML5TagsForTidyStrict`.
+    static func rewriteHTML5TagsForTidy(
+        _ raw: String,
+        tagMarker: String,
+        preserveTags: Set<String>,
+        containerTags: Set<String>,
+        inlineContainerTags: Set<String> = [],
+        preserveClientSidecarsScript: Bool = false
+    ) -> String {
+        (try? rewriteHTML5TagsForTidyStrict(
+            raw,
+            tagMarker: tagMarker,
+            preserveTags: preserveTags,
+            containerTags: containerTags,
+            inlineContainerTags: inlineContainerTags,
+            preserveClientSidecarsScript: preserveClientSidecarsScript
+        )) ?? stripHTMLControlBytesForTidy(raw)
+    }
+
+    /// Strict fail-closed HTML-tag-aware HTML5 wrapper rewrite + pre-Tidy raw-text/control/@hidden hygiene
+    /// for Foundation's `.documentTidyHTML`, throwing on any parser-differential construct instead of
+    /// silently downgrading to unrewritten bytes.
+    static func rewriteHTML5TagsForTidyStrict(
+        _ raw: String,
+        tagMarker: String,
+        preserveTags: Set<String>,
+        containerTags: Set<String>,
+        inlineContainerTags: Set<String> = [],
+        preserveClientSidecarsScript: Bool = false
+    ) throws -> String {
+        let rawBytes = Array(raw.utf8)
+        guard rawBytes.count <= 16 * 1024 * 1024 else {
+            throw ServiceError.invalid("读取的HTML页面超过16 MiB。")
+        }
+        let hasFormFeedInRaw = rawBytes.contains(12)
+        let cleanedRaw: String
+        let bytes: [UInt8]
+        var rawWSBytes: [UInt8] = []
+        var cleanToRawWS: [Int] = []
+        var rawWSToClean: [Int] = []
+        var ffPrefixCount: [Int] = []
+        var formFeedAfterCleanPos: Set<Int> = []
+        if hasFormFeedInRaw {
+            var cleanedBuf = [UInt8]()
+            cleanedBuf.reserveCapacity(rawBytes.count)
+            rawWSBytes.reserveCapacity(rawBytes.count)
+            cleanToRawWS.reserveCapacity(rawBytes.count)
+            rawWSToClean.reserveCapacity(rawBytes.count + 1)
+            ffPrefixCount.reserveCapacity(rawBytes.count + 1)
+            ffPrefixCount.append(0)
+            var totalFF = 0
+            for b in rawBytes {
+                if b == 12 {
+                    if !cleanedBuf.isEmpty {
+                        formFeedAfterCleanPos.insert(cleanedBuf.count - 1)
+                    }
+                    totalFF += 1
+                    rawWSToClean.append(cleanedBuf.count)
+                    rawWSBytes.append(32) // normalize 0x0C to ASCII space per WHATWG HTML5
+                    ffPrefixCount.append(totalFF)
+                    continue
+                }
+                if (b < 32 && b != 9 && b != 10 && b != 13) || b == 127 { continue }
+                cleanToRawWS.append(rawWSBytes.count)
+                rawWSToClean.append(cleanedBuf.count)
+                cleanedBuf.append(b)
+                rawWSBytes.append(b)
+                ffPrefixCount.append(totalFF)
+            }
+            rawWSToClean.append(cleanedBuf.count)
+            bytes = cleanedBuf
+            cleanedRaw = String(decoding: cleanedBuf, as: UTF8.self)
+        } else {
+            cleanedRaw = stripHTMLControlBytesForTidy(raw)
+            bytes = Array(cleanedRaw.utf8)
+        }
+        let n = bytes.count
+        guard bytes.contains(60) else { return cleanedRaw }
+        try validateHTMLSafetyGuards(cleanedRaw, bytes)
+        var out = Data()
+        out.reserveCapacity(n + 256)
+        var pos = 0
+        var last = 0
+        var mathDepth = 0
+        var templateDepth = 0
+        enum TemplateForeignNS { case svg, math }
+        struct TemplateForeignFrame {
+            let tag: String
+            let ns: TemplateForeignNS
+            let isHtmlIntegration: Bool
+            let isMathTextIntegration: Bool
+            let templateLevel: Int
+        }
+        var templateForeignStack: [TemplateForeignFrame] = []
+        var templateOuterStart = 0
+
+        struct RewrittenEntry {
+            let emittedTag: String // "" == passthrough sentinel for nested visible same-name tag
+            let scopeId: Int // -1 if not tracked on divScopeStack
+            let frameId: Int
+            let dlDepth: Int // dlDtHiddenFrames.count when opened
+        }
+        struct DivScopeItem {
+            let id: Int
+            let origTag: String
+            let isLiteralDiv: Bool
+            let isTableBoundary: Bool
+        }
+        // Strictly O(1) amortized in-place stacks (avoiding Swift CoW copy-on-pop).
+        var rewrittenTagStacks: [String: [RewrittenEntry]] = [:]
+        var divScopeStack: [DivScopeItem] = []
+        var closedScopeIds: Set<Int> = []
+        var nextScopeId = 1
+        var literalDivCountsByTableFrame: [Int] = [0]
+        var scopeBoundaryKinds: [String] = ["root"]
+        var scopeBoundaryFrameIds: [Int] = [0]
+        var nextFrameId = 1
+        var openBoundaryCounts: [String: Int] = [:]
+        var tableCellCountsStack: [[String: Int]] = [[:]]
+        var dlDtHiddenFrames: [(frameId: Int, count: Int)] = []
+        var tableDepth = 0
+        var selectDepth = 0
+        var inHiddenP = false
+        var inBody = false
+        var sawAnyElement = false
+        var firstHtmlInsertOffset: Int? = nil
+        var firstBodyInsertOffset: Int? = nil
+        var leadingDoctypeEndInOut: Int? = nil
+        var htmlAlreadyHidden = false
+        var bodyAlreadyHidden = false
+        var sawLateHiddenHtml = false
+        var sawLateHiddenBody = false
+
+        func startsCI(_ ascii: String, at idx: Int) -> Bool {
+            let pat = Array(ascii.utf8)
+            guard idx + pat.count <= n else { return false }
+            for k in 0..<pat.count {
+                let b = bytes[idx + k]
+                let lc = (65...90).contains(b) ? b + 32 : b
+                if lc != pat[k] { return false }
+            }
+            return true
+        }
+        func startsExact(_ ascii: String, at idx: Int) -> Bool {
+            let pat = Array(ascii.utf8)
+            guard idx + pat.count <= n else { return false }
+            return bytes[idx..<(idx + pat.count)].elementsEqual(pat)
+        }
+        func findDelimiter(_ delim: String, from start: Int) -> Int {
+            let pat = Array(delim.utf8)
+            var idx = start
+            while idx + pat.count <= n {
+                if bytes[idx..<(idx + pat.count)].elementsEqual(pat) { return idx + pat.count }
+                idx += 1
+            }
+            return n
+        }
+        func findFirstGreaterThan(from start: Int) -> Int {
+            var idx = start
+            while idx < n {
+                if bytes[idx] == 62 { return idx + 1 }
+                idx += 1
+            }
+            return n
+        }
+        func appendOpenTagRest(from nameEnd: Int, to tagEnd: Int, stripSelfClosing: Bool = false) {
+            var endIdx = tagEnd
+            var addClose = false
+            if stripSelfClosing && endIdx >= nameEnd + 2 && bytes[endIdx - 2] == 47 && bytes[endIdx - 1] == 62 {
+                endIdx -= 2
+                addClose = true
+            }
+            if nameEnd < endIdx && bytes[nameEnd] == 47 && !(nameEnd + 1 < endIdx && bytes[nameEnd + 1] == 62) {
+                out.append(32)
+                out.append(contentsOf: bytes[(nameEnd + 1)..<endIdx])
+            } else {
+                out.append(contentsOf: bytes[nameEnd..<endIdx])
+            }
+            if addClose { out.append(62) }
+        }
+        func appendRawWSOpenTagRest(from rawNameEnd: Int, to rawEnd: Int, stripSelfClosing: Bool = false) {
+            var endIdx = rawEnd
+            var addClose = false
+            if stripSelfClosing && endIdx >= rawNameEnd + 2 && rawWSBytes[endIdx - 2] == 47 && rawWSBytes[endIdx - 1] == 62 {
+                endIdx -= 2
+                addClose = true
+            }
+            if rawNameEnd < endIdx && rawWSBytes[rawNameEnd] == 47 && !(rawNameEnd + 1 < endIdx && rawWSBytes[rawNameEnd + 1] == 62) {
+                out.append(32)
+                out.append(contentsOf: rawWSBytes[(rawNameEnd + 1)..<endIdx])
+            } else {
+                out.append(contentsOf: rawWSBytes[rawNameEnd..<endIdx])
+            }
+            if addClose { out.append(62) }
+        }
+        func hasFontBreakoutAttr(_ slice: ArraySlice<UInt8>) -> Bool {
+            let lower = String(decoding: slice.map { (65...90).contains($0) ? $0 + 32 : $0 }, as: UTF8.self)
+            return lower.contains("color") || lower.contains("face") || lower.contains("size")
+        }
+        /// WHATWG HTML5 §13.2.6.1: `<annotation-xml>` is an HTML integration point ONLY when
+        /// its `encoding` attribute is `"text/html"` or `"application/xhtml+xml"` (ASCII CI).
+        func hasHtmlAnnotationXmlEncoding(_ slice: ArraySlice<UInt8>) -> Bool {
+            let buf = Array(slice)
+            let m = buf.count
+            func isWS(_ b: UInt8) -> Bool { b == 32 || b == 9 || b == 10 || b == 13 || b == 12 }
+            func asciiLower(_ s: ArraySlice<UInt8>) -> String {
+                String(decoding: s.map { (65...90).contains($0) ? $0 + 32 : $0 }, as: UTF8.self)
+            }
+            var w = 0
+            while w < m {
+                while w < m && (isWS(buf[w]) || buf[w] == 47) { w += 1 }
+                if w >= m || buf[w] == 62 { break }
+                let ns = w
+                w += 1
+                while w < m && !isWS(buf[w]) && buf[w] != 47 && buf[w] != 61 && buf[w] != 62 { w += 1 }
+                let aName = asciiLower(buf[ns..<w])
+                while w < m && isWS(buf[w]) { w += 1 }
+                var aVal: String? = nil
+                if w < m && buf[w] == 61 {
+                    w += 1
+                    while w < m && isWS(buf[w]) { w += 1 }
+                    if w < m && (buf[w] == 34 || buf[w] == 39) {
+                        let q = buf[w]; w += 1
+                        let vs = w
+                        while w < m && buf[w] != q { w += 1 }
+                        aVal = asciiLower(buf[vs..<w])
+                        if w < m { w += 1 }
+                    } else if w < m && buf[w] != 62 {
+                        let vs = w
+                        while w < m && !isWS(buf[w]) && buf[w] != 62 { w += 1 }
+                        aVal = asciiLower(buf[vs..<w])
+                    }
+                }
+                if aName == "encoding", let v = aVal, (v == "text/html" || v == "application/xhtml+xml") {
+                    return true
+                }
+            }
+            return false
+        }
+        /// Strictly O(N) amortized memoized WHATWG HTML5 §13.2.5.32–38 attribute scanner.
+        /// Caches `(end, hasHidden, selfClosing)` at every visited `BEFORE_ATTR_NAME` offset
+        /// plus monotonic non-delimiter span skips so adversarial unclosed tags stay O(N).
+        struct WHATWGScanCache {
+            var memo: [Int: (end: Int, hasHidden: Bool, selfClosing: Bool)] = [:]
+            var lastNameSpan: (start: Int, end: Int) = (-1, -1)
+            var lastUnquotedSpan: (start: Int, end: Int) = (-1, -1)
+            var lastDQuoteSpan: (start: Int, end: Int) = (-1, -1)
+            var lastSQuoteSpan: (start: Int, end: Int) = (-1, -1)
+            let lastGtIndex: Int
+            init(_ buf: [UInt8]) {
+                self.lastGtIndex = buf.lastIndex(of: 62) ?? -1
+            }
+        }
+        var cleanWhatwgCache = WHATWGScanCache(bytes)
+        var rawWhatwgCache = WHATWGScanCache(rawWSBytes)
+        let hiddenBytes: [UInt8] = [104, 105, 100, 100, 101, 110] // "hidden"
+        func scanWHATWGFromBeforeAttr(
+            _ buf: [UInt8],
+            start w0: Int,
+            cache: inout WHATWGScanCache
+        ) -> (end: Int, hasHidden: Bool, selfClosing: Bool) {
+            let m = buf.count
+            if w0 > cache.lastGtIndex {
+                return (m, false, false)
+            }
+            func isWS(_ b: UInt8) -> Bool { b == 32 || b == 9 || b == 10 || b == 13 || b == 12 }
+            var w = w0
+            var trail: [(w: Int, isHidden: Bool)] = []
+            var result: (end: Int, hasHidden: Bool, selfClosing: Bool) = (m, false, false)
+            while w < m {
+                var sawSlashBeforeGt = false
+                while w < m && (isWS(buf[w]) || buf[w] == 47) {
+                    sawSlashBeforeGt = (buf[w] == 47)
+                    w += 1
+                }
+                if w >= m {
+                    result = (m, false, false)
+                    break
+                }
+                if buf[w] == 62 {
+                    result = (w + 1, false, sawSlashBeforeGt)
+                    break
+                }
+                if let cached = cache.memo[w] {
+                    result = cached
+                    break
+                }
+                let attrStart = w
+                var idx = w + 1
+                if idx >= cache.lastNameSpan.start && idx < cache.lastNameSpan.end {
+                    idx = cache.lastNameSpan.end
+                } else {
+                    let s0 = idx
+                    while idx < m && !isWS(buf[idx]) && buf[idx] != 47 && buf[idx] != 61 && buf[idx] != 62 { idx += 1 }
+                    if idx - s0 > 32 && idx > cache.lastNameSpan.end {
+                        cache.lastNameSpan = (s0, idx)
+                    }
+                }
+                var isHidden = false
+                if idx - attrStart == 6 {
+                    var eq = true
+                    for k in 0..<6 {
+                        let b = buf[attrStart + k]
+                        let lc = (65...90).contains(b) ? b + 32 : b
+                        if lc != hiddenBytes[k] { eq = false; break }
+                    }
+                    isHidden = eq
+                }
+                while idx < m && isWS(buf[idx]) { idx += 1 }
+                if idx < m && buf[idx] == 61 {
+                    idx += 1
+                    while idx < m && isWS(buf[idx]) { idx += 1 }
+                    if idx < m && (buf[idx] == 34 || buf[idx] == 39) {
+                        let q = buf[idx]
+                        idx += 1
+                        if q == 34 {
+                            if idx >= cache.lastDQuoteSpan.start && idx < cache.lastDQuoteSpan.end {
+                                idx = cache.lastDQuoteSpan.end
+                            } else {
+                                let qs = idx
+                                while idx < m && buf[idx] != 34 { idx += 1 }
+                                if idx - qs > 32 && idx > cache.lastDQuoteSpan.end {
+                                    cache.lastDQuoteSpan = (qs, idx)
+                                }
+                            }
+                        } else {
+                            if idx >= cache.lastSQuoteSpan.start && idx < cache.lastSQuoteSpan.end {
+                                idx = cache.lastSQuoteSpan.end
+                            } else {
+                                let qs = idx
+                                while idx < m && buf[idx] != 39 { idx += 1 }
+                                if idx - qs > 32 && idx > cache.lastSQuoteSpan.end {
+                                    cache.lastSQuoteSpan = (qs, idx)
+                                }
+                            }
+                        }
+                        if idx < m { idx += 1 }
+                    } else if idx < m && buf[idx] == 62 {
+                        trail.append((attrStart, isHidden))
+                        result = (idx + 1, false, false)
+                        break
+                    } else if idx < m {
+                        if idx >= cache.lastUnquotedSpan.start && idx < cache.lastUnquotedSpan.end {
+                            idx = cache.lastUnquotedSpan.end
+                        } else {
+                            let us = idx
+                            while idx < m && !isWS(buf[idx]) && buf[idx] != 62 { idx += 1 }
+                            if idx - us > 32 && idx > cache.lastUnquotedSpan.end {
+                                cache.lastUnquotedSpan = (us, idx)
+                            }
+                        }
+                    }
+                }
+                trail.append((attrStart, isHidden))
+                w = idx
+            }
+            var accHidden = result.hasHidden
+            for step in trail.reversed() {
+                accHidden = accHidden || step.isHidden
+                cache.memo[step.w] = (result.end, accHidden, result.selfClosing)
+            }
+            return (result.end, accHidden, result.selfClosing)
+        }
+        struct RawFormFeedTagInfo {
+            let name: String
+            let closing: Bool
+            let attrInfo: (hasHidden: Bool, idValue: String?, classValue: String?)
+            let mappedCleanEnd: Int
+            let rawStart: Int
+            let rawNameEnd: Int
+            let rawEnd: Int
+            let selfClosing: Bool
+            let validDelim: Bool
+            let whatwgExtended: Bool
+        }
+        func resolveRawFormFeedTag(at cleanStart: Int) throws -> RawFormFeedTagInfo? {
+            guard hasFormFeedInRaw, cleanStart < cleanToRawWS.count else { return nil }
+            let rawStart = cleanToRawWS[cleanStart]
+            switch scanHTML5ByteTag(rawWSBytes, at: rawStart) {
+            case .tag(let rawName, let rawNameEnd, let rawEnd0, let rawClosing, let rawSelfClosing0, let rawValidDelim):
+                var rawEnd = rawEnd0
+                var rawSelfClosing = rawSelfClosing0
+                var whatwgExtended = false
+                var rawAttrInfo: (hasHidden: Bool, idValue: String?, classValue: String?) = (false, nil, nil)
+                if !rawClosing {
+                    let wScan = scanWHATWGFromBeforeAttr(rawWSBytes, start: rawNameEnd, cache: &rawWhatwgCache)
+                    let wClosed = wScan.end > rawNameEnd && wScan.end <= rawWSBytes.count && rawWSBytes[wScan.end - 1] == 62
+                    if wClosed && wScan.end > rawEnd {
+                        let checkEnd = wScan.end
+                        if checkEnd <= ffPrefixCount.count - 1 && ffPrefixCount[checkEnd] > ffPrefixCount[rawStart] {
+                            rawAttrInfo = parseHiddenAndIdentityAttrs(rawWSBytes[rawNameEnd..<rawEnd])
+                            if wScan.hasHidden {
+                                let wAttr = parseHiddenAndIdentityAttrs(rawWSBytes[rawNameEnd..<checkEnd])
+                                rawAttrInfo = (true, wAttr.idValue ?? rawAttrInfo.idValue, wAttr.classValue ?? rawAttrInfo.classValue)
+                                rawEnd = checkEnd
+                                rawSelfClosing = wScan.selfClosing
+                                whatwgExtended = true
+                            } else if rawName == "template" || rawName == "script" || rawName == "style" || rawName == "server"
+                                || rawName == "noscript" || rawName == "plaintext"
+                                || rawName == "textarea" || rawName == "title" || rawName == "xmp"
+                                || rawName == "iframe" || rawName == "noembed" || rawName == "noframes" {
+                                rawEnd = checkEnd
+                                rawSelfClosing = wScan.selfClosing
+                                whatwgExtended = true
+                            }
+                        } else {
+                            return nil
+                        }
+                    } else {
+                        guard rawEnd <= ffPrefixCount.count - 1, ffPrefixCount[rawEnd] > ffPrefixCount[rawStart] else {
+                            return nil
+                        }
+                        rawAttrInfo = parseHiddenAndIdentityAttrs(rawWSBytes[rawNameEnd..<rawEnd])
+                        if wClosed && wScan.hasHidden {
+                            rawAttrInfo.hasHidden = true
+                        }
+                    }
+                } else {
+                    guard rawEnd <= ffPrefixCount.count - 1, ffPrefixCount[rawEnd] > ffPrefixCount[rawStart] else {
+                        return nil
+                    }
+                }
+                return RawFormFeedTagInfo(
+                    name: rawName,
+                    closing: rawClosing,
+                    attrInfo: rawAttrInfo,
+                    mappedCleanEnd: rawWSToClean[rawEnd],
+                    rawStart: rawStart,
+                    rawNameEnd: rawNameEnd,
+                    rawEnd: rawEnd,
+                    selfClosing: rawSelfClosing,
+                    validDelim: rawValidDelim,
+                    whatwgExtended: whatwgExtended
+                )
+            case .unquotedLessThan:
+                throw ServiceError.invalid("文章标签包含不安全或未加引号的尖括号属性值，未猜测解析边界。")
+            default:
+                return nil
+            }
+        }
+        func popRewrittenThrough(origTag: String, scopeId: Int, frameId: Int) {
+            guard var stack = rewrittenTagStacks[origTag] else { return }
+            while let entry = stack.last, entry.frameId == frameId {
+                stack.removeLast()
+                if entry.scopeId == scopeId { break }
+            }
+            rewrittenTagStacks[origTag] = stack
+        }
+        func pushBoundaryFrame(_ kind: String) {
+            let sid = nextScopeId
+            nextScopeId += 1
+            let fid = nextFrameId
+            nextFrameId += 1
+            divScopeStack.append(DivScopeItem(id: sid, origTag: kind, isLiteralDiv: false, isTableBoundary: true))
+            literalDivCountsByTableFrame.append(0)
+            scopeBoundaryKinds.append(kind)
+            scopeBoundaryFrameIds.append(fid)
+            openBoundaryCounts[kind, default: 0] += 1
+            if kind == "table" {
+                tableCellCountsStack.append([:])
+            } else if kind == "td" || kind == "th" || kind == "caption" {
+                tableCellCountsStack[tableCellCountsStack.count - 1][kind, default: 0] += 1
+            }
+        }
+        @discardableResult
+        func popOneBoundaryFrame() -> Int {
+            guard scopeBoundaryKinds.count > 1 else { return 0 }
+            let poppedKind = scopeBoundaryKinds.removeLast()
+            let poppedFrame = scopeBoundaryFrameIds.removeLast()
+            literalDivCountsByTableFrame.removeLast()
+            inHiddenP = false
+            if let c = openBoundaryCounts[poppedKind], c > 0 {
+                openBoundaryCounts[poppedKind] = c - 1
+            }
+            if poppedKind == "table" {
+                if tableCellCountsStack.count > 1 {
+                    tableCellCountsStack.removeLast()
+                }
+            } else if poppedKind == "td" || poppedKind == "th" || poppedKind == "caption" {
+                let topIdx = tableCellCountsStack.count - 1
+                if let c = tableCellCountsStack[topIdx][poppedKind] {
+                    if c <= 1 {
+                        tableCellCountsStack[topIdx].removeValue(forKey: poppedKind)
+                    } else {
+                        tableCellCountsStack[topIdx][poppedKind] = c - 1
+                    }
+                }
+            }
+            while let topDt = dlDtHiddenFrames.last, topDt.frameId == poppedFrame {
+                dlDtHiddenFrames.removeLast()
+            }
+            var closesToEmit = 0
+            while let top = divScopeStack.last {
+                divScopeStack.removeLast()
+                if top.isTableBoundary { break }
+                if !closedScopeIds.contains(top.id) {
+                    closedScopeIds.insert(top.id)
+                    closesToEmit += 1
+                    if !top.isLiteralDiv {
+                        popRewrittenThrough(origTag: top.origTag, scopeId: top.id, frameId: poppedFrame)
+                    }
+                }
+            }
+            return closesToEmit
+        }
+        func pushRewritten(_ origTag: String, emittedTag: String) {
+            let curFrame = scopeBoundaryFrameIds.last ?? 0
+            let curDlDepth = dlDtHiddenFrames.count
+            if emittedTag == "div" {
+                let sid = nextScopeId
+                nextScopeId += 1
+                divScopeStack.append(DivScopeItem(id: sid, origTag: origTag, isLiteralDiv: false, isTableBoundary: false))
+                rewrittenTagStacks[origTag, default: []].append(RewrittenEntry(emittedTag: emittedTag, scopeId: sid, frameId: curFrame, dlDepth: curDlDepth))
+            } else {
+                rewrittenTagStacks[origTag, default: []].append(RewrittenEntry(emittedTag: emittedTag, scopeId: -1, frameId: curFrame, dlDepth: curDlDepth))
+            }
+        }
+        /// Unwinds `divScopeStack` down to and including `targetScopeId` within the current boundary frame,
+        /// returning the exact number of `</div>` closing tags required so inner unclosed literal `<div>`s
+        /// cannot stay open or leak stale counts into `literalDivCountsByTableFrame`.
+        func unwindDivScopeDownTo(scopeId targetScopeId: Int) -> Int {
+            if closedScopeIds.contains(targetScopeId) { return 0 }
+            let curFrame = scopeBoundaryFrameIds.last ?? 0
+            var closesToEmit = 0
+            while let top = divScopeStack.last {
+                if top.isTableBoundary { break }
+                divScopeStack.removeLast()
+                if closedScopeIds.contains(top.id) { continue }
+                closedScopeIds.insert(top.id)
+                closesToEmit += 1
+                if top.isLiteralDiv {
+                    let lastIdx = literalDivCountsByTableFrame.count - 1
+                    if literalDivCountsByTableFrame[lastIdx] > 0 {
+                        literalDivCountsByTableFrame[lastIdx] -= 1
+                    }
+                } else if top.id != targetScopeId {
+                    popRewrittenThrough(origTag: top.origTag, scopeId: top.id, frameId: curFrame)
+                    if top.origTag == "dt", let lastDt = dlDtHiddenFrames.last,
+                       lastDt.frameId == curFrame, lastDt.count > 0 {
+                        dlDtHiddenFrames[dlDtHiddenFrames.count - 1].count -= 1
+                    }
+                }
+                if top.id == targetScopeId { break }
+            }
+            return closesToEmit
+        }
+        func popPassthroughDtAtCurrentDlDepth() {
+            let curFrame = scopeBoundaryFrameIds.last ?? 0
+            let curDlDepth = dlDtHiddenFrames.count
+            guard var stack = rewrittenTagStacks["dt"] else { return }
+            while let top = stack.last, top.frameId == curFrame, top.emittedTag.isEmpty, top.dlDepth == curDlDepth {
+                stack.removeLast()
+            }
+            rewrittenTagStacks["dt"] = stack
+        }
+        func flushOneDtHiddenInCurrentFrame(before tagPos: Int) {
+            let curFrame = scopeBoundaryFrameIds.last ?? 0
+            popPassthroughDtAtCurrentDlDepth()
+            guard let topFrame = dlDtHiddenFrames.last, topFrame.frameId == curFrame, topFrame.count > 0 else { return }
+            dlDtHiddenFrames[dlDtHiddenFrames.count - 1].count -= 1
+            if let lastEntry = rewrittenTagStacks["dt"]?.last, lastEntry.frameId == curFrame, !lastEntry.emittedTag.isEmpty {
+                let entry = rewrittenTagStacks["dt"]!.removeLast()
+                let closes: Int
+                if entry.scopeId > 0 {
+                    closes = unwindDivScopeDownTo(scopeId: entry.scopeId)
+                } else {
+                    closes = 1
+                }
+                if closes > 0 {
+                    out.append(contentsOf: bytes[last..<tagPos])
+                    for _ in 0..<closes { out.append(contentsOf: "</\(entry.emittedTag)>".utf8) }
+                    last = tagPos
+                }
+            }
+        }
+        func flushAllDtHiddenInCurrentFrame(before tagPos: Int) {
+            let curFrame = scopeBoundaryFrameIds.last ?? 0
+            popPassthroughDtAtCurrentDlDepth()
+            guard let topFrame = dlDtHiddenFrames.last, topFrame.frameId == curFrame else { return }
+            let curDlDepth = dlDtHiddenFrames.count
+            let count = dlDtHiddenFrames.removeLast().count
+            guard count > 0 else { return }
+            out.append(contentsOf: bytes[last..<tagPos])
+            for _ in 0..<count {
+                while let top = rewrittenTagStacks["dt"]?.last, top.frameId == curFrame, top.emittedTag.isEmpty, top.dlDepth == curDlDepth {
+                    _ = rewrittenTagStacks["dt"]!.removeLast()
+                }
+                if let lastEntry = rewrittenTagStacks["dt"]?.last, lastEntry.frameId == curFrame, !lastEntry.emittedTag.isEmpty {
+                    let entry = rewrittenTagStacks["dt"]!.removeLast()
+                    let closes = entry.scopeId > 0 ? unwindDivScopeDownTo(scopeId: entry.scopeId) : 1
+                    for _ in 0..<closes { out.append(contentsOf: "</\(entry.emittedTag)>".utf8) }
+                }
+            }
+            last = tagPos
+        }
+
+        let rcdataElements: Set<String> = ["textarea", "title", "xmp", "iframe", "noembed", "noframes"]
+        // WHATWG HTML5 §13.2.6.5 foreign-content breakout start tags
+        let foreignBreakoutTags: Set<String> = [
+            "b", "big", "blockquote", "body", "br", "center", "code", "dd", "div", "dl", "dt",
+            "em", "embed", "h1", "h2", "h3", "h4", "h5", "h6", "head", "hr", "i", "img", "li",
+            "listing", "menu", "meta", "nobr", "ol", "p", "pre", "ruby", "s", "small", "span",
+            "strong", "strike", "sub", "sup", "table", "tt", "u", "ul", "var"
+        ]
+        // WHATWG HTML5 §13.2.6.5 SVG/MathML integration point tags
+        let svgIntegrationPoints: Set<String> = ["foreignobject", "desc", "title"]
+        let mathMLTextIntegrationPoints: Set<String> = ["mi", "mo", "mn", "ms", "mtext"]
+        // Tags that close an open `<p>` / `<p hidden>` in WHATWG HTML5 §13.2.6.4.7
+        let pClosingBlockTags: Set<String> = [
+            "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir",
+            "dd", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+            "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li", "listing",
+            "main", "menu", "nav", "ol", "p", "plaintext", "pre", "search", "section", "summary",
+            "table", "ul", "xmp"
+        ]
+        // Obsolete/non-HTML5 tags that prematurely close `<p hidden>` / `<div hidden>` in Apple's libtidy
+        let obsoleteQuirksBreakers: Set<String> = ["frameset", "frame", "isindex", "layer", "multicol", "bgsound", "nextid"]
+        let headOnlyTags: Set<String> = ["html", "head", "meta", "link", "base", "title", "style", "script", "noscript"]
+        let tableInnerTags: Set<String> = ["caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"]
+        let tableCellScopeTags: Set<String> = ["td", "th", "caption"]
+        let nonTableScopeBoundaryTags: Set<String> = ["object", "applet", "marquee"]
+        let formFeedAlwaysSplitTags: Set<String> = [
+            "template", "script", "style", "server", "noscript", "plaintext",
+            "textarea", "title", "xmp", "iframe", "noembed", "noframes", "frameset", "frame",
+            "html", "body"
+        ]
+        let formFeedStructuralTags: Set<String> = Set<String>([
+            "select", "option", "optgroup", "object", "applet", "marquee",
+            "svg", "math", "desc", "foreignobject", "mi", "mo", "mn", "ms", "mtext",
+            "annotation-xml", "mglyph", "malignmark", "font"
+        ]).union(foreignBreakoutTags).union(pClosingBlockTags).union(obsoleteQuirksBreakers)
+          .union(tableInnerTags).union(preserveTags).union(containerTags).union(inlineContainerTags)
+        let ltEntity = Array("&lt;".utf8)
+        let ltJSON = Array("\\u003c".utf8)
+        let inertComment = Array("<!-- -->".utf8)
+
+        while pos < n {
+            if bytes[pos] != 60 {
+                if templateDepth == 0 && mathDepth == 0 {
+                    let b = bytes[pos]
+                    if b != 32 && b != 9 && b != 10 && b != 13 && b != 12 {
+                        sawAnyElement = true
+                        inBody = true
+                    }
+                }
+                pos += 1
+                continue
+            }
+            if startsCI("<!--", at: pos) {
+                if mathDepth > 0 && templateDepth == 0 {
+                    pos = findDelimiter("-->", from: pos + 4)
+                } else {
+                    let cScan = scanHTML5CommentEnd(bytes, from: pos)
+                    if templateDepth == 0 && mathDepth == 0 && cScan.needsRewrite {
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = cScan.end
+                    }
+                    pos = cScan.end
+                }
+                continue
+            }
+            if startsExact("<![CDATA[", at: pos) {
+                let inForeignCdata: Bool
+                if templateDepth > 0 {
+                    if let tf = templateForeignStack.last, tf.templateLevel == templateDepth {
+                        inForeignCdata = !tf.isHtmlIntegration && !tf.isMathTextIntegration
+                    } else {
+                        inForeignCdata = false
+                    }
+                } else {
+                    inForeignCdata = mathDepth > 0
+                }
+                if inForeignCdata {
+                    pos = findDelimiter("]]>", from: pos + 9)
+                } else {
+                    // Outside foreign content (SVG/MathML), WHATWG §13.2.5.42 parses `<![CDATA[...>`
+                    // as a bogus comment ending at the first '>'.
+                    let cEnd = findFirstGreaterThan(from: pos + 9)
+                    if templateDepth == 0 && mathDepth == 0 {
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = cEnd
+                    }
+                    pos = cEnd
+                }
+                continue
+            }
+            if pos + 2 < n, bytes[pos + 1] == 33, bytes[pos + 2] == 91 {
+                throw ServiceError.invalid("文章包含不支持的SGML标记段，未交给HTML解析。")
+            }
+            if startsExact("<?php", at: pos) || startsExact("<%", at: pos) || startsExact("<#", at: pos) {
+                throw ServiceError.invalid("文章包含不支持的服务器脚本或模板标签，未交给HTML解析。")
+            }
+            if pos + 1 < n, bytes[pos + 1] == 33 {
+                var idx = pos + 2
+                while idx < n, idx - pos <= 65536 {
+                    if bytes[idx] == 62 { idx += 1; break }
+                    idx += 1
+                }
+                guard idx <= n, idx > pos + 2, bytes[idx - 1] == 62 else {
+                    throw ServiceError.invalid("文章声明不完整，未交给外部实体解析器。")
+                }
+                let declaration = String(decoding: bytes[pos..<idx], as: UTF8.self)
+                guard declaration.range(of: #"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#, options: [.regularExpression, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) != nil else {
+                    throw ServiceError.invalid("文章包含不支持的DOCTYPE或实体声明。")
+                }
+                if templateDepth == 0 && mathDepth == 0 && !sawAnyElement && !inBody {
+                    out.append(contentsOf: bytes[last..<idx])
+                    last = idx
+                    leadingDoctypeEndInOut = out.count
+                }
+                pos = idx
+                continue
+            }
+            if pos + 1 < n, bytes[pos + 1] == 63 {
+                var idx = pos + 2
+                while idx < n {
+                    if bytes[idx] == 62 { idx += 1; break }
+                    idx += 1
+                }
+                pos = idx
+                continue
+            }
+            let t: (name: String, nameEnd: Int, end: Int, closing: Bool, selfClosing: Bool, validDelim: Bool)
+            switch scanHTML5ByteTag(bytes, at: pos) {
+            case .notATag:
+                pos += 1
+                continue
+            case .bogusComment(let end):
+                pos = end
+                continue
+            case .unquotedLessThan:
+                throw ServiceError.invalid("文章标签包含不安全或未加引号的尖括号属性值，未猜测解析边界。")
+            case .unclosedEOF, .tooLong:
+                pos = n
+                continue
+            case .tag(let name, let nameEnd, let end, let closing, let selfClosing, let validDelim):
+                t = (name, nameEnd, end, closing, selfClosing, validDelim)
+            }
+
+            // Resolve form-feed (`0x0C`) full WHATWG tag boundaries & attributes (both opening and closing tags)
+            // when present in raw bytes, keeping libtidy sync on harmless non-structural tags.
+            let ffInfo = hasFormFeedInRaw ? try resolveRawFormFeedTag(at: pos) : nil
+            let curFrameForFF = scopeBoundaryFrameIds.last ?? 0
+            let effectiveName: String
+            let formFeedSplitTag: Bool
+            var effectiveTagEnd = t.end
+            var effectiveSelfClosing = t.selfClosing
+            var whatwgExtendedTag = false
+            if let ff = ffInfo, ff.closing == t.closing,
+               (formFeedAlwaysSplitTags.contains(ff.name)
+                || (!t.closing && ff.attrInfo.hasHidden)
+                || templateDepth > 0
+                || mathDepth > 0
+                || ((t.closing || ff.mappedCleanEnd == t.end)
+                    && (formFeedStructuralTags.contains(ff.name)
+                        || (rewrittenTagStacks[ff.name]?.last?.frameId == curFrameForFF)))) {
+                effectiveName = ff.name
+                formFeedSplitTag = true
+                effectiveTagEnd = max(t.end, ff.mappedCleanEnd)
+                effectiveSelfClosing = ff.selfClosing
+                whatwgExtendedTag = ff.whatwgExtended
+            } else {
+                effectiveName = t.name
+                formFeedSplitTag = false
+            }
+
+            // Apply strict O(N) memoized WHATWG tag boundaries to `<template>`, RAWTEXT, RCDATA, and `<plaintext>`
+            // open tags so `<` / quote-as-equals / `-"'` in attributes cannot truncate the tag early
+            // (preserving libtidy `<p>` interior escaping on unclosed RCDATA/plaintext without quoted `>`, e.g. `<textarea a=b/<p>`).
+            if !t.closing && !formFeedSplitTag,
+               (effectiveName == "template" || effectiveName == "script" || effectiveName == "style"
+                || effectiveName == "server" || effectiveName == "noscript" || effectiveName == "plaintext"
+                || rcdataElements.contains(effectiveName)) {
+                let wScan = scanWHATWGFromBeforeAttr(bytes, start: t.nameEnd, cache: &cleanWhatwgCache)
+                if wScan.end > effectiveTagEnd && wScan.end <= n && bytes[wScan.end - 1] == 62 {
+                    let isRcdataOrPlaintext = effectiveName == "plaintext" || rcdataElements.contains(effectiveName)
+                    if !isRcdataOrPlaintext || wScan.hasHidden || bytes[effectiveTagEnd..<(wScan.end - 1)].contains(62) {
+                        effectiveTagEnd = wScan.end
+                        effectiveSelfClosing = wScan.selfClosing
+                        whatwgExtendedTag = true
+                    }
+                }
+            }
+
+            if templateDepth > 0 {
+                // Inside inert <template>, apply WHATWG HTML5 §13.2.6.1 / §13.2.6.5 foreign-content rules:
+                // HTML/MathML integration points, `<annotation-xml encoding=...>`, `<mglyph>`/`<malignmark>`,
+                // bounded breakout unwinding, namespace-preserving nesting, and `</template>` unwinding.
+                if t.closing && effectiveName == "template" && (t.validDelim || formFeedSplitTag) {
+                    while let top = templateForeignStack.last, top.templateLevel == templateDepth {
+                        templateForeignStack.removeLast()
+                    }
+                    templateDepth -= 1
+                    if templateDepth == 0 {
+                        templateForeignStack.removeAll()
+                        out.append(contentsOf: bytes[last..<templateOuterStart])
+                        out.append(contentsOf: inertComment)
+                        last = effectiveTagEnd
+                    }
+                    pos = effectiveTagEnd
+                    continue
+                }
+                var inCurrentForeign = templateForeignStack.last?.templateLevel == templateDepth
+                if inCurrentForeign {
+                    let topF = templateForeignStack.last!
+                    let inAnyIntegration = topF.isHtmlIntegration || topF.isMathTextIntegration
+                    if t.closing {
+                        if !inAnyIntegration && (effectiveName == "p" || effectiveName == "br") {
+                            // WHATWG §13.2.6.5 breakout end tags pop foreign nodes down to nearest integration point or HTML element.
+                            while let top = templateForeignStack.last, top.templateLevel == templateDepth,
+                                  !top.isHtmlIntegration, !top.isMathTextIntegration {
+                                templateForeignStack.removeLast()
+                            }
+                            pos = effectiveTagEnd
+                            continue
+                        }
+                        if inAnyIntegration {
+                            if effectiveName == topF.tag {
+                                _ = templateForeignStack.popLast()
+                            }
+                            pos = effectiveTagEnd
+                            continue
+                        }
+                        // Non-integration foreign end tag: match any open foreign element at current templateLevel.
+                        if let matchIdx = templateForeignStack.lastIndex(where: { $0.templateLevel == templateDepth && $0.tag == effectiveName }) {
+                            templateForeignStack.removeSubrange(matchIdx..<templateForeignStack.count)
+                        }
+                        pos = effectiveTagEnd
+                        continue
+                    } else {
+                        if !inAnyIntegration {
+                            let attrSlice = (formFeedSplitTag && ffInfo != nil)
+                                ? rawWSBytes[ffInfo!.rawNameEnd..<ffInfo!.rawEnd]
+                                : bytes[t.nameEnd..<effectiveTagEnd]
+                            let isBreakout = foreignBreakoutTags.contains(effectiveName)
+                                || (effectiveName == "font" && hasFontBreakoutAttr(attrSlice))
+                            if isBreakout {
+                                while let top = templateForeignStack.last, top.templateLevel == templateDepth,
+                                      !top.isHtmlIntegration, !top.isMathTextIntegration {
+                                    templateForeignStack.removeLast()
+                                }
+                                inCurrentForeign = templateForeignStack.last?.templateLevel == templateDepth
+                            } else {
+                                if !effectiveSelfClosing {
+                                    if topF.ns == .svg {
+                                        if svgIntegrationPoints.contains(effectiveName) {
+                                            templateForeignStack.append(TemplateForeignFrame(
+                                                tag: effectiveName, ns: .svg, isHtmlIntegration: true, isMathTextIntegration: false, templateLevel: templateDepth
+                                            ))
+                                        } else if effectiveName == "svg" || effectiveName == "math" {
+                                            templateForeignStack.append(TemplateForeignFrame(
+                                                tag: effectiveName, ns: .svg, isHtmlIntegration: false, isMathTextIntegration: false, templateLevel: templateDepth
+                                            ))
+                                        }
+                                    } else {
+                                        if mathMLTextIntegrationPoints.contains(effectiveName) {
+                                            templateForeignStack.append(TemplateForeignFrame(
+                                                tag: effectiveName, ns: .math, isHtmlIntegration: false, isMathTextIntegration: true, templateLevel: templateDepth
+                                            ))
+                                        } else if effectiveName == "annotation-xml" {
+                                            let isHtmlInt = hasHtmlAnnotationXmlEncoding(attrSlice)
+                                            templateForeignStack.append(TemplateForeignFrame(
+                                                tag: effectiveName, ns: .math, isHtmlIntegration: isHtmlInt, isMathTextIntegration: false, templateLevel: templateDepth
+                                            ))
+                                        } else if effectiveName == "math" || effectiveName == "svg" {
+                                            templateForeignStack.append(TemplateForeignFrame(
+                                                tag: effectiveName, ns: .math, isHtmlIntegration: false, isMathTextIntegration: false, templateLevel: templateDepth
+                                            ))
+                                        }
+                                    }
+                                }
+                                pos = effectiveTagEnd
+                                continue
+                            }
+                        } else if topF.isMathTextIntegration && (effectiveName == "mglyph" || effectiveName == "malignmark") {
+                            // WHATWG §13.2.6.1: `<mglyph>`/`<malignmark>` inside MathML text integration points stay in MathML foreign content.
+                            if !effectiveSelfClosing {
+                                templateForeignStack.append(TemplateForeignFrame(
+                                    tag: effectiveName, ns: .math, isHtmlIntegration: false, isMathTextIntegration: false, templateLevel: templateDepth
+                                ))
+                            }
+                            pos = effectiveTagEnd
+                            continue
+                        }
+                    }
+                }
+                if !t.closing, effectiveName == "plaintext" {
+                    pos = n
+                    break
+                }
+                if !t.closing, (effectiveName == "script" || effectiveName == "style" || effectiveName == "server" || effectiveName == "noscript" || rcdataElements.contains(effectiveName)) {
+                    switch scanRawTextElementEnd(bytes, rawName: effectiveName, from: effectiveTagEnd, formFeedAfterCleanPos: formFeedAfterCleanPos) {
+                    case .closed(_, let cEnd):
+                        pos = cEnd
+                    case .unclosed:
+                        pos = n
+                    case .unsafe:
+                        throw ServiceError.invalid("文章原始文本结束标签包含不安全的非ASCII截断字符，未猜测解析边界。")
+                    }
+                    continue
+                }
+                if !t.closing, effectiveName == "math" {
+                    if !effectiveSelfClosing {
+                        templateForeignStack.append(TemplateForeignFrame(
+                            tag: "math", ns: .math, isHtmlIntegration: false, isMathTextIntegration: false, templateLevel: templateDepth
+                        ))
+                    }
+                    pos = effectiveTagEnd
+                    continue
+                }
+                if !t.closing, effectiveName == "svg" {
+                    if !effectiveSelfClosing {
+                        templateForeignStack.append(TemplateForeignFrame(
+                            tag: "svg", ns: .svg, isHtmlIntegration: false, isMathTextIntegration: false, templateLevel: templateDepth
+                        ))
+                    }
+                    pos = effectiveTagEnd
+                    continue
+                }
+                if !t.closing, effectiveName == "template", (t.validDelim || formFeedSplitTag) {
+                    templateDepth += 1
+                }
+                pos = effectiveTagEnd
+                continue
+            }
+            if effectiveName == "math" {
+                if t.closing {
+                    mathDepth = max(0, mathDepth - 1)
+                    if formFeedSplitTag {
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: "</math>".utf8)
+                        last = effectiveTagEnd
+                    }
+                } else {
+                    if !effectiveSelfClosing { mathDepth += 1 }
+                    if formFeedSplitTag, let ff = ffInfo {
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: rawWSBytes[ff.rawStart..<ff.rawEnd])
+                        last = effectiveTagEnd
+                    }
+                }
+                pos = effectiveTagEnd
+                continue
+            }
+            if mathDepth == 0 {
+                let wasInBody = inBody
+                let hadSeenAnyElement = sawAnyElement
+                sawAnyElement = true
+                if !t.closing && !headOnlyTags.contains(effectiveName) && effectiveName != "template" {
+                    inBody = true
+                }
+                if effectiveName == "template", (t.validDelim || formFeedSplitTag) {
+                    if !t.closing {
+                        templateDepth = 1
+                        templateForeignStack.removeAll()
+                        templateOuterStart = pos
+                    }
+                    pos = effectiveTagEnd
+                    continue
+                }
+                if obsoleteQuirksBreakers.contains(effectiveName) || (inHiddenP && effectiveName == "area") {
+                    // Obsolete/quirks tags (`<frameset>`, `<frame>`, `<isindex>`, `<layer>`, `<multicol>`, `<bgsound>`, `<nextid>`,
+                    // and `<area>` inside `<p hidden>`) force-close hidden wrappers or foster out of `<td hidden>` in libtidy.
+                    out.append(contentsOf: bytes[last..<pos])
+                    out.append(contentsOf: inertComment)
+                    last = effectiveTagEnd
+                    pos = effectiveTagEnd
+                    continue
+                }
+                if wasInBody && effectiveName == "head" {
+                    // Per WHATWG HTML5 §13.2.6.4.7, `<head>` / `</head>` in body are parse errors and ignored
+                    // (never allowed to close `<p hidden>` or `<div hidden>` in libtidy).
+                    out.append(contentsOf: bytes[last..<pos])
+                    out.append(contentsOf: inertComment)
+                    last = effectiveTagEnd
+                    pos = effectiveTagEnd
+                    continue
+                }
+                if !t.closing, effectiveName == "plaintext" {
+                    inHiddenP = false
+                    var ptAttr = ffInfo?.attrInfo.hasHidden == true ? ffInfo!.attrInfo : parseHiddenAndIdentityAttrs(bytes[t.nameEnd..<effectiveTagEnd])
+                    if !ptAttr.hasHidden && !formFeedSplitTag {
+                        let wScan = scanWHATWGFromBeforeAttr(bytes, start: t.nameEnd, cache: &cleanWhatwgCache)
+                        if wScan.hasHidden && wScan.end > t.nameEnd && wScan.end <= n && bytes[wScan.end - 1] == 62 {
+                            ptAttr = parseHiddenAndIdentityAttrs(bytes[t.nameEnd..<wScan.end])
+                            ptAttr.hasHidden = true
+                            effectiveTagEnd = max(effectiveTagEnd, wScan.end)
+                        }
+                    }
+                    if ptAttr.hasHidden {
+                        var cleanAttrs = " hidden"
+                        if let idVal = ptAttr.idValue { cleanAttrs += " id=\"\(escapeNormalizedAttrValue(idVal))\"" }
+                        if let clsVal = ptAttr.classValue { cleanAttrs += " class=\"\(escapeNormalizedAttrValue(clsVal))\"" }
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: "<pre\(cleanAttrs)>".utf8)
+                        appendEscapingLessThan(bytes[effectiveTagEnd..<n], replacement: ltEntity, to: &out)
+                        out.append(contentsOf: "</pre>".utf8)
+                    } else if !effectiveSelfClosing {
+                        out.append(contentsOf: bytes[last..<pos])
+                        if formFeedSplitTag || whatwgExtendedTag {
+                            out.append(contentsOf: "<plaintext>".utf8)
+                        } else {
+                            out.append(contentsOf: bytes[pos..<effectiveTagEnd])
+                            if effectiveTagEnd > pos && bytes[effectiveTagEnd - 1] != 62 {
+                                if bytes[effectiveTagEnd - 1] == 47 { out.append(32) }
+                                out.append(62)
+                            }
+                        }
+                        appendEscapingLessThan(bytes[effectiveTagEnd..<n], replacement: ltEntity, to: &out)
+                    } else {
+                        pos = effectiveTagEnd
+                        continue
+                    }
+                    last = n
+                    pos = n
+                    break
+                }
+                if !t.closing, effectiveName == "script" || effectiveName == "style" || effectiveName == "server" {
+                    if effectiveSelfClosing && !formFeedSplitTag && !whatwgExtendedTag {
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = effectiveTagEnd
+                        pos = effectiveTagEnd
+                        continue
+                    }
+                    let bodyEnd: Int
+                    let closeEnd: Int
+                    switch scanRawTextElementEnd(bytes, rawName: effectiveName, from: effectiveTagEnd, formFeedAfterCleanPos: formFeedAfterCleanPos) {
+                    case .closed(let bEnd, let cEnd):
+                        bodyEnd = bEnd; closeEnd = cEnd
+                    case .unclosed(let bEnd):
+                        bodyEnd = bEnd; closeEnd = n
+                    case .unsafe:
+                        throw ServiceError.invalid("文章原始文本结束标签包含不安全的非ASCII截断字符，未猜测解析边界。")
+                    }
+                    out.append(contentsOf: bytes[last..<pos])
+                    if effectiveName == "script", !formFeedSplitTag, !whatwgExtendedTag, isJSONCitationScriptOpenTag(bytes[pos..<effectiveTagEnd]) {
+                        out.append(contentsOf: "<script type=\"application/json\" class=\"paper-tools__citation-record\">".utf8)
+                        appendEscapingLessThan(bytes[effectiveTagEnd..<bodyEnd], replacement: ltJSON, to: &out)
+                        out.append(contentsOf: "</script>".utf8)
+                    } else if preserveClientSidecarsScript, effectiveName == "script", !formFeedSplitTag, !whatwgExtendedTag, isJSONClientSidecarsScriptOpenTag(bytes[pos..<effectiveTagEnd]) {
+                        out.append(contentsOf: "<script type=\"application/json\" class=\"paper-tools__client-sidecars\">".utf8)
+                        appendEscapingLessThan(bytes[effectiveTagEnd..<bodyEnd], replacement: ltJSON, to: &out)
+                        out.append(contentsOf: "</script>".utf8)
+                    } else {
+                        out.append(contentsOf: inertComment)
+                    }
+                    last = closeEnd
+                    pos = closeEnd
+                    continue
+                }
+                if !t.closing, rcdataElements.contains(effectiveName) {
+                    if effectiveName == "xmp" { inHiddenP = false }
+                    var rcAttr = ffInfo?.attrInfo.hasHidden == true ? ffInfo!.attrInfo : parseHiddenAndIdentityAttrs(bytes[t.nameEnd..<effectiveTagEnd])
+                    if !rcAttr.hasHidden && !formFeedSplitTag {
+                        let wScan = scanWHATWGFromBeforeAttr(bytes, start: t.nameEnd, cache: &cleanWhatwgCache)
+                        if wScan.hasHidden && wScan.end > t.nameEnd && wScan.end <= n && bytes[wScan.end - 1] == 62 {
+                            rcAttr = parseHiddenAndIdentityAttrs(bytes[t.nameEnd..<wScan.end])
+                            rcAttr.hasHidden = true
+                            effectiveTagEnd = max(effectiveTagEnd, wScan.end)
+                            whatwgExtendedTag = true
+                        }
+                    }
+                    if effectiveSelfClosing && !rcAttr.hasHidden && !formFeedSplitTag && !whatwgExtendedTag && effectiveName != "noframes" && !(effectiveName == "title" && wasInBody) {
+                        pos = effectiveTagEnd
+                        continue
+                    }
+                    let bodyEnd: Int
+                    let closeEnd: Int
+                    if effectiveSelfClosing && !whatwgExtendedTag && effectiveName != "xmp" {
+                        bodyEnd = effectiveTagEnd; closeEnd = effectiveTagEnd
+                    } else {
+                        switch scanRawTextElementEnd(bytes, rawName: effectiveName, from: effectiveTagEnd, formFeedAfterCleanPos: formFeedAfterCleanPos) {
+                        case .closed(let bEnd, let cEnd):
+                            bodyEnd = bEnd; closeEnd = cEnd
+                        case .unclosed(let bEnd):
+                            bodyEnd = bEnd; closeEnd = n
+                        case .unsafe:
+                            throw ServiceError.invalid("文章原始文本结束标签包含不安全的非ASCII截断字符，未猜测解析边界。")
+                        }
+                    }
+                    if effectiveName == "noframes" || (effectiveName == "title" && wasInBody) {
+                        // <noframes> and in-body <title> force-close hidden wrappers in libtidy; neutralize cleanly.
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = closeEnd
+                        pos = closeEnd
+                        continue
+                    }
+                    if effectiveName == "xmp", rcAttr.hasHidden {
+                        var cleanAttrs = " hidden"
+                        if let idVal = rcAttr.idValue { cleanAttrs += " id=\"\(escapeNormalizedAttrValue(idVal))\"" }
+                        if let clsVal = rcAttr.classValue { cleanAttrs += " class=\"\(escapeNormalizedAttrValue(clsVal))\"" }
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: "<pre\(cleanAttrs)>".utf8)
+                        appendEscapingLessThan(bytes[effectiveTagEnd..<bodyEnd], replacement: ltEntity, to: &out)
+                        out.append(contentsOf: "</pre>".utf8)
+                        last = closeEnd
+                        pos = closeEnd
+                        continue
+                    }
+                    out.append(contentsOf: bytes[last..<pos])
+                    if formFeedSplitTag || whatwgExtendedTag {
+                        out.append(contentsOf: "<\(effectiveName)>".utf8)
+                    } else {
+                        out.append(contentsOf: bytes[pos..<effectiveTagEnd])
+                        if effectiveTagEnd > pos && bytes[effectiveTagEnd - 1] != 62 {
+                            if bytes[effectiveTagEnd - 1] == 47 { out.append(32) }
+                            out.append(62)
+                        }
+                    }
+                    appendEscapingLessThan(bytes[effectiveTagEnd..<bodyEnd], replacement: ltEntity, to: &out)
+                    if closeEnd > bodyEnd {
+                        out.append(contentsOf: "</\(effectiveName)>".utf8)
+                    }
+                    last = closeEnd
+                    pos = closeEnd
+                    continue
+                }
+
+                // Strip stray table-inner tags outside any open <table>, AND ignore `<col>`/`<colgroup>` inside
+                // an open cell (`<td>`/`<th>`/`<caption>` in current table) per WHATWG §13.2.6.4.15 so libtidy
+                // cannot close the cell/row and foster-parent siblings out of `<td hidden>` / `<table hidden>`.
+                if (tableDepth == 0 && tableInnerTags.contains(effectiveName))
+                    || ((effectiveName == "col" || effectiveName == "colgroup")
+                        && !(tableCellCountsStack.last?.isEmpty ?? true)) {
+                    out.append(contentsOf: bytes[last..<pos])
+                    out.append(contentsOf: inertComment)
+                    last = effectiveTagEnd
+                    pos = effectiveTagEnd
+                    continue
+                }
+
+                if t.closing {
+                    let curFrame = scopeBoundaryFrameIds.last ?? 0
+                    if inHiddenP && (effectiveName == "body" || effectiveName == "html") {
+                        // Per WHATWG §13.2.6.4.7, `</body>` / `</html>` never pops an open `<p hidden>` for subsequent text.
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = effectiveTagEnd
+                        pos = effectiveTagEnd
+                        continue
+                    }
+                    if effectiveName == "dl" {
+                        flushAllDtHiddenInCurrentFrame(before: pos)
+                    }
+                    if effectiveName == "select" {
+                        if let entry = rewrittenTagStacks["select"]?.last, entry.frameId == curFrame, !entry.emittedTag.isEmpty {
+                            // Rewritten `<select hidden>` closes via rewrittenTagStacks below.
+                        } else if selectDepth > 0 {
+                            selectDepth = 0
+                        }
+                    }
+                    let tableRowOrSectionTags: Set<String> = ["tr", "tbody", "thead", "tfoot"]
+                    var boundaryCloses = 0
+                    if effectiveName == "table" {
+                        if tableDepth > 0 { tableDepth -= 1 }
+                        if openBoundaryCounts["table", default: 0] > 0 {
+                            // Unwind all implicit open `<td>`/`<th>`/`<caption>` frames up to and including `<table>`.
+                            while scopeBoundaryKinds.count > 1 {
+                                let topKind = scopeBoundaryKinds.last!
+                                boundaryCloses += popOneBoundaryFrame()
+                                if topKind == "table" { break }
+                            }
+                        }
+                    } else if tableRowOrSectionTags.contains(effectiveName) {
+                        if let topKind = scopeBoundaryKinds.last, tableCellScopeTags.contains(topKind) {
+                            boundaryCloses += popOneBoundaryFrame()
+                        }
+                    } else if tableCellScopeTags.contains(effectiveName) {
+                        // O(1) check whether `<td>`/`<th>`/`<caption>` is open in the current `<table>` frame.
+                        if (tableCellCountsStack.last?[effectiveName] ?? 0) > 0 {
+                            while scopeBoundaryKinds.count > 1 {
+                                let topKind = scopeBoundaryKinds.last!
+                                boundaryCloses += popOneBoundaryFrame()
+                                if topKind == effectiveName { break }
+                            }
+                        }
+                    } else if nonTableScopeBoundaryTags.contains(effectiveName) {
+                        // Per WHATWG §13.2.6.4.7, `</object>`/`</applet>`/`</marquee>` aborts on any open special element
+                        // (`<div>`, `<section>`, `<p>`, `<td>`, etc.); never unwind inner hidden wrappers.
+                        if openBoundaryCounts[effectiveName, default: 0] > 0,
+                           let topKind = scopeBoundaryKinds.last, topKind == effectiveName,
+                           divScopeStack.last?.isTableBoundary == true, !inHiddenP {
+                            boundaryCloses += popOneBoundaryFrame()
+                        } else {
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: inertComment)
+                            last = effectiveTagEnd
+                            pos = effectiveTagEnd
+                            continue
+                        }
+                    }
+                    if boundaryCloses > 0 {
+                        out.append(contentsOf: bytes[last..<pos])
+                        for _ in 0..<boundaryCloses { out.append(contentsOf: "</div>".utf8) }
+                        last = pos
+                    }
+                    let activeFrame = scopeBoundaryFrameIds.last ?? 0
+                    var emittedClose = false
+                    if effectiveName == "div" {
+                        if (literalDivCountsByTableFrame.last ?? 0) == 0 {
+                            // Stray </div> with no matching literal <div> in current scope: drop per HTML5
+                            // so it cannot prematurely close a rewritten <div hidden> or foster out of <td hidden>.
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: inertComment)
+                            last = effectiveTagEnd
+                            emittedClose = true
+                        } else {
+                            inHiddenP = false
+                            var closesToEmit = 0
+                            while let top = divScopeStack.last {
+                                if top.isTableBoundary { break }
+                                divScopeStack.removeLast()
+                                if closedScopeIds.contains(top.id) { continue }
+                                closedScopeIds.insert(top.id)
+                                closesToEmit += 1
+                                if top.isLiteralDiv {
+                                    literalDivCountsByTableFrame[literalDivCountsByTableFrame.count - 1] -= 1
+                                    break
+                                } else {
+                                    popRewrittenThrough(origTag: top.origTag, scopeId: top.id, frameId: activeFrame)
+                                    if top.origTag == "dt", let lastDt = dlDtHiddenFrames.last,
+                                       lastDt.frameId == activeFrame, lastDt.count > 0 {
+                                        dlDtHiddenFrames[dlDtHiddenFrames.count - 1].count -= 1
+                                    }
+                                }
+                            }
+                            if closesToEmit > 1 {
+                                out.append(contentsOf: bytes[last..<pos])
+                                for _ in 0..<closesToEmit { out.append(contentsOf: "</div>".utf8) }
+                                last = effectiveTagEnd
+                                emittedClose = true
+                            } else if closesToEmit == 0 {
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: inertComment)
+                                last = effectiveTagEnd
+                                emittedClose = true
+                            }
+                        }
+                    } else if let topEntry = rewrittenTagStacks[effectiveName]?.last, topEntry.frameId == activeFrame {
+                        let entry = rewrittenTagStacks[effectiveName]!.removeLast()
+                        if entry.emittedTag.isEmpty {
+                            // Passthrough sentinel for nested visible same-name tag: leave closing tag raw (or canonical if form-feed split).
+                            if pClosingBlockTags.contains(effectiveName) { inHiddenP = false }
+                        } else {
+                            if entry.emittedTag == "div" || pClosingBlockTags.contains(effectiveName) { inHiddenP = false }
+                            if effectiveName == "dt", let lastDt = dlDtHiddenFrames.last, lastDt.frameId == activeFrame, lastDt.count > 0 {
+                                dlDtHiddenFrames[dlDtHiddenFrames.count - 1].count -= 1
+                            }
+                            if entry.scopeId > 0 {
+                                let closes = unwindDivScopeDownTo(scopeId: entry.scopeId)
+                                out.append(contentsOf: bytes[last..<pos])
+                                if closes > 0 {
+                                    for _ in 0..<closes { out.append(contentsOf: "</\(entry.emittedTag)>".utf8) }
+                                } else {
+                                    out.append(contentsOf: inertComment)
+                                }
+                                last = effectiveTagEnd
+                                emittedClose = true
+                            } else {
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: "</\(entry.emittedTag)>".utf8)
+                                last = effectiveTagEnd
+                                emittedClose = true
+                            }
+                        }
+                    } else if preserveTags.contains(effectiveName) || containerTags.contains(effectiveName) || inlineContainerTags.contains(effectiveName)
+                        || (selectDepth == 0 && (effectiveName == "option" || effectiveName == "optgroup")) {
+                        // Unmatched HTML5 closing tag or stray `</option>`/`</optgroup>` outside `<select>` is a no-op;
+                        // never emit `</div>`/`</span>` or raw `</option>` that would close enclosing containers.
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = effectiveTagEnd
+                        emittedClose = true
+                    } else if pClosingBlockTags.contains(effectiveName) || tableInnerTags.contains(effectiveName) {
+                        inHiddenP = false
+                    }
+                    if !emittedClose && formFeedSplitTag {
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: "</\(effectiveName)>".utf8)
+                        last = effectiveTagEnd
+                    }
+                } else {
+                    if effectiveName == "dl" {
+                        dlDtHiddenFrames.append((frameId: scopeBoundaryFrameIds.last ?? 0, count: 0))
+                    } else if effectiveName == "dt" || effectiveName == "dd" {
+                        flushOneDtHiddenInCurrentFrame(before: pos)
+                    }
+                    if effectiveName == "table" {
+                        tableDepth += 1
+                        pushBoundaryFrame("table")
+                    } else if tableCellScopeTags.contains(effectiveName) {
+                        // HTML5 implicitly closes an open sibling cell (`<td>`/`<th>`/`<caption>`) before opening a new one;
+                        // emit `</div>` for any unclosed `<div>` inside the previous cell so libtidy doesn't synthesize a nested `<table>`.
+                        if let topKind = scopeBoundaryKinds.last, tableCellScopeTags.contains(topKind) {
+                            let cellCloses = popOneBoundaryFrame()
+                            if cellCloses > 0 {
+                                out.append(contentsOf: bytes[last..<pos])
+                                for _ in 0..<cellCloses { out.append(contentsOf: "</div>".utf8) }
+                                last = pos
+                            }
+                        }
+                        pushBoundaryFrame(effectiveName)
+                    } else if effectiveName == "tr" || effectiveName == "tbody" || effectiveName == "thead" || effectiveName == "tfoot" {
+                        if let topKind = scopeBoundaryKinds.last, tableCellScopeTags.contains(topKind) {
+                            let cellCloses = popOneBoundaryFrame()
+                            if cellCloses > 0 {
+                                out.append(contentsOf: bytes[last..<pos])
+                                for _ in 0..<cellCloses { out.append(contentsOf: "</div>".utf8) }
+                                last = pos
+                            }
+                        }
+                    }
+                    if pClosingBlockTags.contains(effectiveName) && effectiveName != "p" {
+                        inHiddenP = false
+                    }
+
+                    // Check @hidden across both libtidy and O(N) memoized WHATWG HTML5 boundaries
+                    // (including `<` in attrs, quote-as-equals `a " b="x>y"`, `-"'`, and `0x0C` split tags).
+                    var attrInfo = parseHiddenAndIdentityAttrs(bytes[t.nameEnd..<effectiveTagEnd])
+                    var effectiveTagName = effectiveName
+                    if !attrInfo.hasHidden, let ff = ffInfo, ff.attrInfo.hasHidden {
+                        attrInfo = ff.attrInfo
+                        effectiveTagName = ff.name
+                    }
+                    if !attrInfo.hasHidden && !formFeedSplitTag {
+                        let wScan = scanWHATWGFromBeforeAttr(bytes, start: t.nameEnd, cache: &cleanWhatwgCache)
+                        if wScan.hasHidden && wScan.end > t.nameEnd && wScan.end <= n && bytes[wScan.end - 1] == 62 {
+                            let wAttr = parseHiddenAndIdentityAttrs(bytes[t.nameEnd..<wScan.end])
+                            attrInfo = (true, wAttr.idValue ?? attrInfo.idValue, wAttr.classValue ?? attrInfo.classValue)
+                            effectiveTagEnd = max(effectiveTagEnd, wScan.end)
+                            effectiveSelfClosing = wScan.selfClosing
+                        }
+                    }
+
+                    if effectiveTagName == "html" {
+                        if firstHtmlInsertOffset == nil && !htmlAlreadyHidden {
+                            if attrInfo.hasHidden {
+                                if hadSeenAnyElement || wasInBody {
+                                    sawLateHiddenHtml = true
+                                    out.append(contentsOf: bytes[last..<pos])
+                                    out.append(contentsOf: inertComment)
+                                    last = effectiveTagEnd
+                                    pos = effectiveTagEnd
+                                    continue
+                                } else {
+                                    htmlAlreadyHidden = true
+                                }
+                            } else if !wasInBody && !hadSeenAnyElement {
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: "<html".utf8)
+                                firstHtmlInsertOffset = out.count
+                                if formFeedSplitTag, let ff = ffInfo {
+                                    appendRawWSOpenTagRest(from: ff.rawNameEnd, to: ff.rawEnd, stripSelfClosing: ff.selfClosing)
+                                } else if t.selfClosing {
+                                    appendOpenTagRest(from: t.nameEnd, to: effectiveTagEnd, stripSelfClosing: true)
+                                } else if !t.validDelim {
+                                    out.append(62)
+                                } else {
+                                    appendOpenTagRest(from: t.nameEnd, to: effectiveTagEnd)
+                                }
+                                last = effectiveTagEnd
+                                pos = effectiveTagEnd
+                                continue
+                            } else {
+                                // Duplicate/late visible `<html>` after content: ignore per HTML5 so libtidy doesn't close `<p hidden>`.
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: inertComment)
+                                last = effectiveTagEnd
+                                pos = effectiveTagEnd
+                                continue
+                            }
+                        } else if attrInfo.hasHidden {
+                            sawLateHiddenHtml = true
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: inertComment)
+                            last = effectiveTagEnd
+                            pos = effectiveTagEnd
+                            continue
+                        } else {
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: inertComment)
+                            last = effectiveTagEnd
+                            pos = effectiveTagEnd
+                            continue
+                        }
+                    } else if effectiveTagName == "body" {
+                        inBody = true
+                        if firstBodyInsertOffset == nil && !bodyAlreadyHidden {
+                            if attrInfo.hasHidden {
+                                if wasInBody {
+                                    // Implicit `<body>` already exists before this late `<body hidden>`: propagate onto root/wrapper.
+                                    sawLateHiddenBody = true
+                                    out.append(contentsOf: bytes[last..<pos])
+                                    out.append(contentsOf: inertComment)
+                                    last = effectiveTagEnd
+                                    pos = effectiveTagEnd
+                                    continue
+                                } else {
+                                    bodyAlreadyHidden = true
+                                }
+                            } else if !wasInBody {
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: "<body".utf8)
+                                firstBodyInsertOffset = out.count
+                                if formFeedSplitTag, let ff = ffInfo {
+                                    appendRawWSOpenTagRest(from: ff.rawNameEnd, to: ff.rawEnd, stripSelfClosing: ff.selfClosing)
+                                } else if t.selfClosing {
+                                    appendOpenTagRest(from: t.nameEnd, to: effectiveTagEnd, stripSelfClosing: true)
+                                } else if !t.validDelim {
+                                    out.append(62)
+                                } else {
+                                    appendOpenTagRest(from: t.nameEnd, to: effectiveTagEnd)
+                                }
+                                last = effectiveTagEnd
+                                pos = effectiveTagEnd
+                                continue
+                            } else {
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: inertComment)
+                                last = effectiveTagEnd
+                                pos = effectiveTagEnd
+                                continue
+                            }
+                        } else if attrInfo.hasHidden {
+                            sawLateHiddenBody = true
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: inertComment)
+                            last = effectiveTagEnd
+                            pos = effectiveTagEnd
+                            continue
+                        } else {
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: inertComment)
+                            last = effectiveTagEnd
+                            pos = effectiveTagEnd
+                            continue
+                        }
+                    }
+
+                    if !attrInfo.hasHidden && selectDepth == 0 && (effectiveTagName == "option" || effectiveTagName == "optgroup") {
+                        // Outside `<select>`, `<option>`/`<optgroup>` (including inside `<datalist>`) force-closes all enclosing
+                        // `<div>`s (truncating `#article-body` or escaping `<div hidden>`) and fosters out of `<td hidden>` in libtidy.
+                        out.append(contentsOf: bytes[last..<pos])
+                        out.append(contentsOf: inertComment)
+                        last = effectiveTagEnd
+                        pos = effectiveTagEnd
+                        continue
+                    }
+
+                    if attrInfo.hasHidden {
+                        var cleanAttrs = " hidden"
+                        if let idVal = attrInfo.idValue {
+                            cleanAttrs += " id=\"\(escapeNormalizedAttrValue(idVal))\""
+                        }
+                        if let clsVal = attrInfo.classValue {
+                            cleanAttrs += " class=\"\(escapeNormalizedAttrValue(clsVal))\""
+                        }
+                        out.append(contentsOf: bytes[last..<pos])
+                        if htmlVoidTags.contains(effectiveTagName) || safeHiddenNativeTags.contains(effectiveTagName) {
+                            if effectiveTagName == "p" { inHiddenP = true }
+                            if effectiveTagName == "div" {
+                                let sid = nextScopeId
+                                nextScopeId += 1
+                                divScopeStack.append(DivScopeItem(id: sid, origTag: "div", isLiteralDiv: true, isTableBoundary: false))
+                                literalDivCountsByTableFrame[literalDivCountsByTableFrame.count - 1] += 1
+                            }
+                            out.append(contentsOf: "<\(effectiveTagName)\(cleanAttrs)>".utf8)
+                        } else if inHiddenP && !pClosingBlockTags.contains(effectiveTagName) {
+                            // Inside an open `<p hidden>`, emit `<span hidden ...>` for phrasing elements
+                            // so `libtidy` does NOT implicitly close `<p hidden>` and leak following siblings.
+                            pushRewritten(effectiveTagName, emittedTag: "span")
+                            out.append(contentsOf: "<span\(cleanAttrs)>".utf8)
+                        } else {
+                            // Rewrite all HTML4/HTML5 content-model-differential, phrasing, unknown, custom,
+                            // or stray non-<math> MathML elements carrying @hidden to a clean `<div hidden ...>`
+                            // (ignoring non-void `/>` per WHATWG HTML5 so children stay inside the hidden wrapper).
+                            pushRewritten(effectiveTagName, emittedTag: "div")
+                            if effectiveTagName == "dt", let lastDt = dlDtHiddenFrames.last,
+                               lastDt.frameId == (scopeBoundaryFrameIds.last ?? 0) {
+                                dlDtHiddenFrames[dlDtHiddenFrames.count - 1].count += 1
+                            }
+                            out.append(contentsOf: "<div\(cleanAttrs)>".utf8)
+                        }
+                        last = effectiveTagEnd
+                        if nonTableScopeBoundaryTags.contains(effectiveTagName) {
+                            pushBoundaryFrame(effectiveTagName)
+                        }
+                    } else {
+                        let curFrame = scopeBoundaryFrameIds.last ?? 0
+                        let isNonVoidSelfClose = effectiveSelfClosing && !htmlVoidTags.contains(effectiveTagName) && effectiveTagName != "svg" && effectiveTagName != "math"
+                        func emitVisibleTagAs(_ emittedName: String, extraPrefix: String = "", stripSelfClose: Bool) {
+                            out.append(contentsOf: bytes[last..<pos])
+                            out.append(contentsOf: "<\(emittedName)\(extraPrefix)".utf8)
+                            if formFeedSplitTag, let ff = ffInfo {
+                                appendRawWSOpenTagRest(from: ff.rawNameEnd, to: ff.rawEnd, stripSelfClosing: stripSelfClose)
+                            } else {
+                                appendOpenTagRest(from: t.nameEnd, to: effectiveTagEnd, stripSelfClosing: stripSelfClose)
+                            }
+                            last = effectiveTagEnd
+                        }
+                        if effectiveTagName == "p" {
+                            inHiddenP = false
+                            if formFeedSplitTag || isNonVoidSelfClose {
+                                emitVisibleTagAs("p", stripSelfClose: isNonVoidSelfClose)
+                            }
+                        } else if effectiveTagName == "div" {
+                            // Track literal `<div>` even when `t.validDelim == false` or `<div/>` (non-void HTML5 ignores `/`).
+                            let sid = nextScopeId
+                            nextScopeId += 1
+                            divScopeStack.append(DivScopeItem(id: sid, origTag: "div", isLiteralDiv: true, isTableBoundary: false))
+                            literalDivCountsByTableFrame[literalDivCountsByTableFrame.count - 1] += 1
+                            if formFeedSplitTag || isNonVoidSelfClose {
+                                emitVisibleTagAs("div", stripSelfClose: isNonVoidSelfClose)
+                            }
+                        } else if effectiveTagName == "select" {
+                            if selectDepth > 0 {
+                                // Per WHATWG §13.2.6.4.16, a nested `<select>` closes the open `<select>`.
+                                selectDepth = 0
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: "</select>".utf8)
+                                last = effectiveTagEnd
+                            } else {
+                                selectDepth = 1
+                                if let topSel = rewrittenTagStacks["select"]?.last, topSel.frameId == curFrame {
+                                    rewrittenTagStacks["select"]!.append(RewrittenEntry(emittedTag: "", scopeId: -1, frameId: curFrame, dlDepth: dlDtHiddenFrames.count))
+                                }
+                                if formFeedSplitTag || isNonVoidSelfClose {
+                                    emitVisibleTagAs("select", stripSelfClose: isNonVoidSelfClose)
+                                }
+                            }
+                        } else if nonTableScopeBoundaryTags.contains(effectiveTagName) {
+                            pushBoundaryFrame(effectiveTagName)
+                            if let topB = rewrittenTagStacks[effectiveTagName]?.last, topB.frameId == curFrame {
+                                rewrittenTagStacks[effectiveTagName]!.append(RewrittenEntry(emittedTag: "", scopeId: -1, frameId: curFrame, dlDepth: dlDtHiddenFrames.count))
+                            }
+                            if formFeedSplitTag || isNonVoidSelfClose {
+                                emitVisibleTagAs(effectiveTagName, stripSelfClose: isNonVoidSelfClose)
+                            }
+                        } else if (t.validDelim || formFeedSplitTag) && preserveTags.contains(effectiveTagName) {
+                            pushRewritten(effectiveTagName, emittedTag: "div")
+                            emitVisibleTagAs("div", extraPrefix: " \(tagMarker)=\"\(effectiveTagName)\"", stripSelfClose: true)
+                        } else if (t.validDelim || formFeedSplitTag) && containerTags.contains(effectiveTagName) {
+                            pushRewritten(effectiveTagName, emittedTag: "div")
+                            emitVisibleTagAs("div", stripSelfClose: true)
+                        } else if (t.validDelim || formFeedSplitTag) && inlineContainerTags.contains(effectiveTagName) {
+                            if effectiveTagName == "svg" && effectiveSelfClosing {
+                                out.append(contentsOf: bytes[last..<pos])
+                                out.append(contentsOf: "<span></span>".utf8)
+                                last = effectiveTagEnd
+                            } else {
+                                pushRewritten(effectiveTagName, emittedTag: "span")
+                                emitVisibleTagAs("span", stripSelfClose: true)
+                            }
+                        } else {
+                            if !htmlVoidTags.contains(effectiveTagName),
+                               let topSame = rewrittenTagStacks[effectiveTagName]?.last, topSame.frameId == curFrame {
+                                // Push passthrough sentinel so nested visible same-name closing tag does not pop outer `@hidden` wrapper.
+                                rewrittenTagStacks[effectiveTagName]!.append(RewrittenEntry(emittedTag: "", scopeId: -1, frameId: curFrame, dlDepth: dlDtHiddenFrames.count))
+                                if formFeedSplitTag || isNonVoidSelfClose {
+                                    emitVisibleTagAs(effectiveTagName, stripSelfClose: isNonVoidSelfClose)
+                                }
+                            } else if formFeedSplitTag {
+                                emitVisibleTagAs(effectiveTagName, stripSelfClose: isNonVoidSelfClose)
+                            }
+                        }
+                    }
+                }
+            }
+            pos = effectiveTagEnd
+        }
+        if templateDepth > 0 {
+            out.append(contentsOf: bytes[last..<templateOuterStart])
+            out.append(contentsOf: inertComment)
+            last = n
+        }
+        out.append(contentsOf: bytes[last..<n])
+        // Propagate WHATWG HTML5 §13.2.6.4.7 duplicate `<body hidden>` / `<html hidden>` onto the live root/body.
+        let needInjectHiddenOnBody = sawLateHiddenBody && !bodyAlreadyHidden
+        let needInjectHiddenOnHtml = sawLateHiddenHtml && !htmlAlreadyHidden
+        if needInjectHiddenOnBody || needInjectHiddenOnHtml {
+            func insertHiddenAttr(at off: Int) {
+                let needsTrailingSpace = off < out.count && out[off] != 62 && out[off] != 32 && out[off] != 9 && out[off] != 10 && out[off] != 13
+                let attrBytes = Array((needsTrailingSpace ? " hidden " : " hidden").utf8)
+                out.insert(contentsOf: attrBytes, at: off)
+            }
+            if needInjectHiddenOnBody, let off = firstBodyInsertOffset {
+                insertHiddenAttr(at: off)
+            } else if needInjectHiddenOnHtml, let off = firstHtmlInsertOffset {
+                insertHiddenAttr(at: off)
+            } else if let off = firstBodyInsertOffset ?? firstHtmlInsertOffset {
+                insertHiddenAttr(at: off)
+            } else {
+                let insertPos = leadingDoctypeEndInOut ?? 0
+                var wrapped = Data()
+                wrapped.reserveCapacity(out.count + 20)
+                if insertPos > 0 {
+                    wrapped.append(out.prefix(insertPos))
+                }
+                wrapped.append(contentsOf: "<div hidden>".utf8)
+                wrapped.append(out.dropFirst(insertPos))
+                wrapped.append(contentsOf: "</div>".utf8)
+                out = wrapped
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    private static let desktopProtectedHTML5Tags: Set<String> = ["figure", "figcaption", "details", "summary"]
+
+    static func parseSanitizedDesktopFragment(
         _ rawFragment: String,
         pageURL: URL
     ) throws -> (html: String, plainText: String, imageURLs: [String]) {
         let marker = "data-desktop-tag-" + UUID().uuidString.lowercased()
-        let figures = try NSRegularExpression(pattern: "(?i)<(figure|figcaption)(?=[\\s/>])")
-        let figureBody = figures.stringByReplacingMatches(in: rawFragment, range: NSRange(rawFragment.startIndex..<rawFragment.endIndex, in: rawFragment), withTemplate: "<div " + marker + "=\"$1\"")
-        let closes = try NSRegularExpression(pattern: "(?i)</(?:figure|figcaption)\\s*>")
-        let grouped = closes.stringByReplacingMatches(in: figureBody, range: NSRange(figureBody.startIndex..<figureBody.endIndex, in: figureBody), withTemplate: "</div>")
-        let containers = try NSRegularExpression(pattern: "(?i)<(/?)(section|article|main)(?=[\\s/>])")
-        let adapted = containers.stringByReplacingMatches(in: grouped, range: NSRange(grouped.startIndex..<grouped.endIndex, in: grouped), withTemplate: "<$1div")
+        let adapted = try rewriteHTML5TagsForTidyStrict(
+            rawFragment,
+            tagMarker: marker,
+            preserveTags: desktopProtectedHTML5Tags,
+            containerTags: html5BlockContainerTags,
+            inlineContainerTags: html5InlineContainerTags
+        )
 
         let doc = try htmlDocumentPreservingMath("<html><body>\(adapted)</body></html>")
         let bodyCandidates = try doc.nodes(forXPath: "//div[@id='article-body']")
@@ -3619,12 +5927,17 @@ extension LibraryService {
             throw ServiceError.invalid("导读正文片段缺少可解析的正文容器。")
         }
 
-        for hidden in try rootElement.nodes(forXPath: ".//*[@hidden]") { hidden.detach() }
-        let groups = try rootElement.nodes(forXPath: ".//div[@" + marker + "]").compactMap { node -> (XMLElement, String)? in
+        if !(try rootElement.nodes(forXPath: "ancestor-or-self::*[@hidden]")).isEmpty {
+            rootElement.setChildren(nil)
+        } else {
+            for hidden in try rootElement.nodes(forXPath: ".//*[@hidden]") { hidden.detach() }
+        }
+        let groups = try rootElement.nodes(forXPath: ".//div[@" + marker + "]").compactMap { node -> (XMLElement, String, Bool)? in
             guard let el = node as? XMLElement,
                   let tag = el.attribute(forName: marker)?.stringValue?.lowercased(),
-                  ["figure", "figcaption"].contains(tag) else { return nil }
-            return (el, tag)
+                  desktopProtectedHTML5Tags.contains(tag) else { return nil }
+            let hadOpen = tag == "details" && el.attribute(forName: "open") != nil
+            return (el, tag, hadOpen)
         }
         let inlineDataImages: [(XMLElement, String)] = try rootElement.nodes(forXPath: ".//img[@src]").compactMap { node in
             guard let el = node as? XMLElement,
@@ -3634,7 +5947,12 @@ extension LibraryService {
             return (el, src)
         }
         try sanitize(rootElement, pageURL: pageURL)
-        for (el, tag) in groups { el.name = tag }
+        for (el, tag, hadOpen) in groups {
+            el.name = tag
+            if hadOpen && el.attribute(forName: "open") == nil {
+                el.addAttribute(XMLNode.attribute(withName: "open", stringValue: "") as! XMLNode)
+            }
+        }
         for (el, safeDataSrc) in inlineDataImages {
             if el.attribute(forName: "src") == nil {
                 el.addAttribute(XMLNode.attribute(withName: "src", stringValue: safeDataSrc) as! XMLNode)
@@ -3648,16 +5966,18 @@ extension LibraryService {
 
     static func localizeImagesPreservingDataURI(_ fragment: String, replacements: [String: String]) throws -> String {
         let marker = "data-desktop-fig-" + UUID().uuidString.lowercased()
-        let figures = try NSRegularExpression(pattern: "(?i)<(figure|figcaption)(?=[\\s/>])")
-        let figureBody = figures.stringByReplacingMatches(in: fragment, range: NSRange(fragment.startIndex..<fragment.endIndex, in: fragment), withTemplate: "<div " + marker + "=\"$1\"")
-        let closes = try NSRegularExpression(pattern: "(?i)</(?:figure|figcaption)\\s*>")
-        let grouped = closes.stringByReplacingMatches(in: figureBody, range: NSRange(figureBody.startIndex..<figureBody.endIndex, in: figureBody), withTemplate: "</div>")
+        let grouped = try rewriteHTML5TagsForTidyStrict(
+            fragment,
+            tagMarker: marker,
+            preserveTags: desktopProtectedHTML5Tags,
+            containerTags: []
+        )
 
         let doc = try htmlDocumentPreservingMath("<html><body>\(grouped)</body></html>")
         for node in try doc.nodes(forXPath: "//div[@" + marker + "]") {
             guard let el = node as? XMLElement,
                   let tag = el.attribute(forName: marker)?.stringValue?.lowercased(),
-                  ["figure", "figcaption"].contains(tag) else { continue }
+                  desktopProtectedHTML5Tags.contains(tag) else { continue }
             el.removeAttribute(forName: marker)
             el.name = tag
         }

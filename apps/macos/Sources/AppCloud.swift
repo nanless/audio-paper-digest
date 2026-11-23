@@ -163,14 +163,20 @@ struct CloudRestoreSelection {
         return try await runJob(command, payload: [:], identifier: identifier, material: material) { _ in try await operation() }
     }
     func dispatchCloud(_ command: String, payload: [String: Any]) async throws -> [String: Any] {
+        try await dispatchCloudInternal(command, payload: payload, holdingBusy: false)
+    }
+
+    private func dispatchCloudInternal(_ command: String, payload: [String: Any], holdingBusy: Bool) async throws -> [String: Any] {
         if command == "cloud.state" { return try cloudState() }
         try requireMainContextAvailable()
         if command == "cloud.syncAll" {
-            guard payload.isEmpty, !cloudBusy else { throw CloudArchiveService.CloudError.busy }
+            guard payload.isEmpty, !cloudBusy, !terminationPending, !maintenanceBusy else { throw CloudArchiveService.CloudError.busy }
+            cloudBusy = true; cloudLastError = nil; emit("cloud.changed")
+            defer { cloudBusy = false; emit("cloud.changed") }
             var results: [String: Any] = [:]
             for (key, operation) in [("workspace", "cloud.syncWorkspace"), ("personal", "cloud.syncPersonal")] {
                 do {
-                    results[key] = try await dispatchCloud(operation, payload: [:])
+                    results[key] = try await dispatchCloudInternal(operation, payload: [:], holdingBusy: true)
                 } catch is CancellationError { throw CancellationError() }
                 catch let cancelled as DesktopOperationCancelled { throw cancelled }
                 catch {
@@ -182,7 +188,7 @@ struct CloudRestoreSelection {
         if command == "cloud.revealTransfers" {
             NSWorkspace.shared.activateFileViewerSelecting([try cloudLocalStore().root]); return ["opened": true]
         }
-        guard !cloudBusy, !terminationPending, !maintenanceBusy else { throw DesktopError.message("已有云端操作或资料整理正在进行，请稍后再操作") }
+        guard (holdingBusy || !cloudBusy), !terminationPending, !maintenanceBusy else { throw DesktopError.message("已有云端操作或资料整理正在进行，请稍后再操作") }
         let local = try cloudLocalStore()
         if ["cloud.setSessionPassword", "cloud.clearSessionPassword"].contains(command), !payload.isEmpty {
             throw DesktopError.message("本次密码只能通过原生安全输入设置，不接受网页传入的密码或目标")
@@ -259,8 +265,11 @@ struct CloudRestoreSelection {
             _ = try local.archivePending(); cloudLastError = nil; return ["retained": true]
         }
         guard ["cloud.check", "cloud.upload", "cloud.list", "cloud.restore", "cloud.syncPersonal", "cloud.syncWorkspace"].contains(command) else { throw DesktopError.message("不支持此云端操作") }
-        cloudBusy = true; cloudLastError = nil; emit("cloud.changed")
-        defer { cloudBusy = false; emit("cloud.changed") }
+        let acquiredBusy = !holdingBusy
+        if acquiredBusy {
+            cloudBusy = true; cloudLastError = nil; emit("cloud.changed")
+        }
+        defer { if acquiredBusy { cloudBusy = false; emit("cloud.changed") } }
         let credentialTarget = CloudSessionCredentials.Target(destination: local.profile.destinationID, account: local.profile.account)
         let credentialGeneration = cloudSessionCredentials.generation
         do {
@@ -291,14 +300,24 @@ struct CloudRestoreSelection {
             let service = try cloudService()
             if command == "cloud.syncPersonal" {
                 guard payload.isEmpty else { throw DesktopError.message("同步入口只使用已保存的 WebDAV 连接") }
-                try await flushEdits()
+                try await flushEdits(syncCommit: true)
                 let device = local.profile.destinationID.uuidString.lowercased()
                 return try await performCloudJob(command) {
                     let before = self.store.snapshot()
                     let remote = try await service.personalDocuments()
+                    try Task.checkCancellation()
+                    try await self.flushEdits(syncCommit: true)
+                    try Task.checkCancellation()
+                    try self.requireMainContextAvailable()
+                    try self.cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)
+                    guard try PersonalWebDavSync.unchanged(before, self.store.snapshot()) else {
+                        throw DesktopError.message("同步期间本机资料已编辑，请再同步一次")
+                    }
                     let plan = try PersonalWebDavSync.plan(local: before, device: device, remote: remote.heads)
+                    var uploaded = false
                     if let bytes = plan.upload {
                         try await service.writePersonalDocument(bytes, observed: remote)
+                        uploaded = true
                     }
                     try Task.checkCancellation()
                     try await self.flushEdits(syncCommit: true)
@@ -307,6 +326,10 @@ struct CloudRestoreSelection {
                     try self.cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)
                     let current = self.store.snapshot()
                     guard try PersonalWebDavSync.unchanged(before, current) else {
+                        if uploaded {
+                            let acknowledged = PersonalWebDavSync.acknowledgeUpload(plan, onto: current)
+                            try? self.store.restorePersonal(acknowledged)
+                        }
                         throw DesktopError.message("同步期间本机资料已编辑，请再同步一次")
                     }
                     let merged = PersonalWebDavSync.apply(plan, to: current)

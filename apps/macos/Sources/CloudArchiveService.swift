@@ -624,7 +624,9 @@ private final class CloudDAVListing: NSObject, XMLParserDelegate {
         stack.removeLast(); text = ""
     }
     private static func read(_ data: Data) throws -> [Member] {
-        guard let source = String(data:data,encoding:.utf8), !source.localizedCaseInsensitiveContains("<!DOCTYPE"), !source.localizedCaseInsensitiveContains("<!ENTITY") else { throw CloudArchiveService.CloudError.incompleteListing }
+        guard let source = String(data:data,encoding:.utf8),
+              source.range(of: "<!DOCTYPE", options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX")) == nil,
+              source.range(of: "<!ENTITY", options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX")) == nil else { throw CloudArchiveService.CloudError.incompleteListing }
         let delegate = CloudDAVListing(), parser = XMLParser(data:data)
         parser.shouldProcessNamespaces = true; parser.shouldResolveExternalEntities = false; parser.delegate = delegate
         guard parser.parse(), !delegate.invalid, delegate.rootSeen, delegate.stack.isEmpty, !delegate.members.isEmpty, delegate.members.count < 750 else { throw CloudArchiveService.CloudError.incompleteListing }

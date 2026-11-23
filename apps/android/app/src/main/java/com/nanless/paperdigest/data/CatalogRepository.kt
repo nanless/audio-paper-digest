@@ -29,8 +29,10 @@ private val ARXIV_VERSION_SUFFIX=Regex("v[1-9][0-9]*$")
 private val ARXIV_ID_PATTERN=Regex("(?:[0-9]{4}\\.[0-9]{4,5}|[a-z-]+(?:\\.[A-Z]{2})?/[0-9]{7})")
 private val SHA256_PATTERN=Regex("^[a-f0-9]{64}$")
 private val SEARCH_SHARD_PATTERN=Regex("^search-index/part-[0-9]{4,}-[a-f0-9]{12}\\.json$")
-internal val HTML_ALLOWED_TAGS=("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s sup sub br hr details summary dl dt dd math mrow mi mo mn msup msub msubsup mfrac msqrt mroot mtext mtable mtr mtd mover munder munderover semantics annotation").split(' ').toSet()
+internal val HTML_MATHML_TAGS=("math mrow mi mo mn msup msub msubsup mfrac msqrt mroot mtext mtable mtr mtd mlabeledtr mover munder munderover mstyle mpadded mphantom menclose mmultiscripts mprescripts none merror ms mspace semantics annotation").split(' ').toSet()
+internal val HTML_ALLOWED_TAGS=("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s sup sub br hr details summary dl dt dd").split(' ').toSet() + HTML_MATHML_TAGS
 internal val HTML_ALLOWED_ATTRS=("id class title alt width height colspan rowspan scope display mathvariant xmlns encoding").split(' ').toSet()
+internal val HTML_MATHML_ALLOWED_ATTRS=("display mathvariant encoding stretchy fence separator accent accentunder symmetric movablelimits largeop lspace rspace width height depth voffset minsize maxsize mathsize mathcolor mathbackground displaystyle scriptlevel columnalign rowalign columnspacing rowspacing columnlines rowlines columnspan rowspan equalrows equalcolumns frame framespacing notation linethickness numalign denomalign bevelled form dir id class title xmlns").split(' ').toSet()
 
 class CatalogRepository(private val context: Context?, private val personal: PersonalStore,
     private val fetchOverride: (suspend (String, Int) -> ByteArray)? = null) {
@@ -585,7 +587,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
                 return@withContext hydrateReading(loaded.article)
             } catch (e: Exception) {
                 coroutineContext.ensureActive()
-                if (previous != null && (offline || e is java.io.IOException)) {
+                if (previous != null && (offline || e is java.io.IOException || (e is AppFailure && e.category in setOf("transport", "dns")))) {
                     return@withContext hydrateReading(previous.copy(
                         isStale = true,
                         completeOffline = resourcesValid(previous),
@@ -764,10 +766,12 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         var url = initial
         repeat(6) {
             val uri = URI(url); require(approvedResource(uri)) { "原文超出已支持的官方 HTTPS 来源" }
-            val arxiv = uri.host.lowercase() in setOf("arxiv.org", "export.arxiv.org")
+            val host = uri.host.lowercase()
+            val arxiv = host in setOf("arxiv.org", "export.arxiv.org")
             val proxy = personal.settings().nullableString("httpProxy")
             if (arxiv) require(!proxy.isNullOrBlank()) { "arXiv 原文需要设置 HTTP CONNECT 代理" }
-            val response = SafeHttp(if (arxiv) proxy else null).download(Request.Builder().url(url).build(), target, limit)
+            val effectiveProxy = externalResourceProxy(uri, proxy)
+            val response = SafeHttp.approvedResource(effectiveProxy).download(Request.Builder().url(url).build(), target, limit)
             if (response.code in listOf(301, 302, 303, 307, 308)) {
                 val location = response.headers.entries.firstOrNull { it.key.equals("Location", true) }?.value ?: error("重定向缺少地址")
                 url = uri.resolve(location).toASCIIString()
@@ -861,10 +865,13 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         repeat(6) {
             val uri = URI(url)
             require(approvedResource(uri)) { "原文或图片超出已支持的官方 HTTPS 来源" }
-            val isArxiv = uri.host.lowercase() in setOf("arxiv.org", "export.arxiv.org")
+            val host = uri.host.lowercase()
+            val isArxiv = host in setOf("arxiv.org", "export.arxiv.org")
             val proxy = personal.settings().nullableString("httpProxy")
             if (isArxiv) require(!proxy.isNullOrBlank()) { "arXiv 原文需要设置 HTTP CONNECT 代理；已有导读仍可阅读" }
-            val http = if (uri.host == "nanless.github.io") publishedHttp else SafeHttp(if (isArxiv) proxy else null)
+            val effectiveProxy = externalResourceProxy(uri, proxy)
+            val http = if (host == "nanless.github.io" && effectiveProxy == null && runCatching { sameSite(url) }.isSuccess) publishedHttp
+                else SafeHttp.approvedResource(effectiveProxy)
             val response = http.execute(Request.Builder().url(url).build(), limit)
             if (response.code in listOf(301, 302, 303, 307, 308)) {
                 val location = response.headers.entries.firstOrNull { it.key.equals("Location", true) }?.value ?: error("重定向缺少地址")
@@ -947,11 +954,61 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             return value.copy()
         }
         private fun cleanHTTPS(value: String?): String? = value?.takeIf { runCatching { URI(it).let { u -> u.scheme == "https" && u.host != null && u.userInfo == null } }.getOrDefault(false) }
+        private val OWNED_RAW_IMAGE_CONFERENCES = setOf(
+            "interspeech-2026", "dafx-2026", "acl-2026", "eusipco-2026", "cvpr-2026", "nime-2026",
+            "speechprosody-2026", "aaai-2026", "odyssey-2026", "icmc-2026", "jep-2026", "eacl-2026",
+            "iwslt-2026", "chime-2026", "uai-2026", "aistats-2026",
+        )
+        private val OWNED_RAW_HASH_DIR = Regex("^[a-f0-9]{12}$")
+        private val OWNED_RAW_FIG_FILE = Regex("^figure-[1-9][0-9]*\\.png$")
+        private val OWNED_PAGES_DATE_DIR = Regex("^2026-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$")
+        private val OWNED_ICASSP_IMG = Regex("^[0-9]{8}-[0-9]+\\.(?:png|jpg)$")
+        private val OWNED_ICLR_IMG = Regex("^[A-Za-z0-9]{10}-[0-9]+\\.(?:png|jpg)$")
+        private val TABLE_TEXT_ALIGN_STYLE = Regex("(?i)(?:^|;)\\s*text-align\\s*:\\s*(left|center|right)\\s*(?:;|$)")
+
+        fun isOwnedPublishedImage(uri: URI): Boolean {
+            if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.query != null || uri.fragment != null) return false
+            val rawPath = uri.rawPath ?: return false
+            if (rawPath.contains('%') || rawPath.contains('\\') || rawPath.contains("//")) return false
+            val host = uri.host.lowercase()
+            val parts = rawPath.split('/')
+            if (host == "raw.githubusercontent.com") {
+                if (parts.size == 7 && parts[0].isEmpty() && parts[1] == "nanless" && parts[2] == "audio-paper-digest-images" && parts[3] == "main" && parts[4] in OWNED_RAW_IMAGE_CONFERENCES) {
+                    return OWNED_RAW_HASH_DIR.matches(parts[5]) && OWNED_RAW_FIG_FILE.matches(parts[6])
+                }
+                return false
+            }
+            if (host == "nanless.github.io") {
+                if (parts.size == 5 && parts[0].isEmpty() && parts[1] == "audio-paper-digest-images" && parts[2] in setOf("icassp-2026", "iclr-2026") && OWNED_PAGES_DATE_DIR.matches(parts[3])) {
+                    return if (parts[2] == "icassp-2026") OWNED_ICASSP_IMG.matches(parts[4]) else OWNED_ICLR_IMG.matches(parts[4])
+                }
+            }
+            return false
+        }
+
+        internal fun isOwnedRawBlog(uri: URI): Boolean {
+            if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.rawQuery != null || uri.fragment != null) return false
+            val host = uri.host.lowercase()
+            if (host != "raw.githubusercontent.com") return false
+            val rawPath = uri.rawPath ?: return false
+            if (rawPath.contains('%') || rawPath.contains('\\') || rawPath.contains("//")) return false
+            if (!rawPath.startsWith("/nanless/audio-paper-digest-blog/main/")) return false
+            return rawPath.split('/').none { it == "." || it == ".." }
+        }
+
+        internal fun externalResourceProxy(uri: URI, configured: String?): String? {
+            val proxy = configured?.takeIf { it.isNotBlank() } ?: return null
+            val host = uri.host?.lowercase() ?: return null
+            return if (host in setOf("arxiv.org", "export.arxiv.org") || isOwnedPublishedImage(uri) || isOwnedRawBlog(uri)) proxy else null
+        }
+
         fun approvedResource(uri: URI): Boolean {
-            if (uri.scheme != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.fragment != null) return false
-            if (uri.host in setOf("arxiv.org", "export.arxiv.org", "isca-archive.org", "www.isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org")) return true
-            if (uri.host == "nanless.github.io") return runCatching { sameSite(uri.toASCIIString()); true }.getOrDefault(false)
-            return uri.host == "raw.githubusercontent.com" && uri.path.startsWith("/nanless/audio-paper-digest-blog/main/") && uri.path.split('/').none { it in listOf("..", ".") } && !uri.rawPath.contains('%') && uri.query == null
+            if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.fragment != null) return false
+            val host = uri.host.lowercase()
+            if (host in setOf("arxiv.org", "export.arxiv.org", "isca-archive.org", "www.isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org")) return true
+            if (isOwnedPublishedImage(uri)) return true
+            if (host == "nanless.github.io") return runCatching { sameSite(uri.toASCIIString()); true }.getOrDefault(false)
+            return isOwnedRawBlog(uri)
         }
         fun imageMime(data: ByteArray): String {
             if (data.size >= 4 && data.copyOfRange(0, 4).contentEquals(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47))) return "image/png"
@@ -959,13 +1016,17 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             val text = data.toString(Charsets.UTF_8)
             if (text.startsWith("GIF8")) return "image/gif"
             if (data.size > 12 && text.take(4) == "RIFF" && text.substring(8, 12) == "WEBP") return "image/webp"
-            if (text.contains("<svg")) {
-                val svgDanger = Regex(
-                    "<!ENTITY|<script|foreignObject|javascript:|\\bon[a-z]+\\s*=|(?:href|src)\\s*=\\s*[\"'](?!#)|image-set\\s*\\(|url\\s*\\((?!\\s*(?:'\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*'|\"\\s*#[A-Za-z_][A-Za-z0-9_.-]*\\s*\"|#[A-Za-z_][A-Za-z0-9_.-]*)\\s*\\))",
-                    RegexOption.IGNORE_CASE,
-                )
-                val unescaped = org.jsoup.parser.Parser.unescapeEntities(text, false)
-                if (!svgDanger.containsMatchIn(text) && !svgDanger.containsMatchIn(unescaped)) return "image/svg+xml"
+            if (text.contains("<svg", ignoreCase = true)) {
+                try {
+                    DesktopDetailsRepository.validateSafeStaticSvgBytes(data)
+                    return "image/svg+xml"
+                } catch (_: IllegalArgumentException) {
+                    throw AppFailure("invalid", "科学图内容不受支持或包含外部执行引用")
+                } catch (_: IllegalStateException) {
+                    throw AppFailure("invalid", "科学图内容不受支持或包含外部执行引用")
+                } catch (_: java.nio.charset.CharacterCodingException) {
+                    throw AppFailure("invalid", "科学图内容不受支持或包含外部执行引用")
+                }
             }
             throw AppFailure("invalid", "科学图内容不受支持或包含外部执行引用")
         }
@@ -1007,10 +1068,14 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             val allowed = HTML_ALLOWED_TAGS
             val attrs = HTML_ALLOWED_ATTRS
             root.children().toList().forEach { child ->
-                if (child.normalName() !in allowed) child.remove() else {
+                val tagName = child.normalName()
+                if (tagName !in allowed) child.remove()
+                else if (tagName == "a" && child.hasClass("anchor") && child.parent()?.normalName() in setOf("h1", "h2", "h3", "h4", "h5", "h6")) child.remove()
+                else {
+                    var preservedAlign: String? = null
                     child.attributes().asList().forEach { attr ->
                         val name = attr.key.lowercase()
-                        if ((name == "href" && child.normalName() == "a") || (name == "src" && child.normalName() == "img")) {
+                        if ((name == "href" && tagName == "a") || (name == "src" && tagName == "img")) {
                             val rawTrim = attr.value.trim()
                             val compact = attr.value.filter { it.code > 0x20 }
                             if (name == "href" && rawTrim.startsWith('#')) {
@@ -1021,9 +1086,20 @@ class CatalogRepository(private val context: Context?, private val personal: Per
                                 val url = runCatching { URI(base).resolve(rawTrim).toASCIIString() }.getOrNull()
                                 if (cleanHTTPS(url) == null) child.removeAttr(attr.key) else child.attr(attr.key, url!!)
                             }
+                        } else if (name == "style" && tagName in setOf("td", "th")) {
+                            preservedAlign = TABLE_TEXT_ALIGN_STYLE.find(attr.value)?.groupValues?.get(1)?.lowercase()
+                            child.removeAttr(attr.key)
+                        } else if (name == "open" && tagName == "details") {
+                            Unit
+                        } else if (tagName in HTML_MATHML_TAGS && name in HTML_MATHML_ALLOWED_ATTRS) {
+                            val v = attr.value
+                            if (v.length > 4096 || v.contains("url(", ignoreCase = true) || v.contains("javascript:", ignoreCase = true)) {
+                                child.removeAttr(attr.key)
+                            }
                         } else if (name !in attrs) child.removeAttr(attr.key)
                     }
-                    if (child.normalName() == "a") child.attr("rel", "noopener noreferrer")
+                    if (preservedAlign != null) child.addClass("ta-$preservedAlign")
+                    if (tagName == "a") child.attr("rel", "noopener noreferrer")
                     sanitize(child, base)
                 }
             }

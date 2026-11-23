@@ -13,6 +13,7 @@ import Darwin
     private var processes:[String:Process]=[:]
     private(set) var responseRecovery:[String:Any]=[:]
     init(directory:URL,store:DesktopStore,keyProvider:@escaping () throws -> String? = {try DesktopKeychain.load("primary")},resourcesDirectory:URL?=nil) {
+        signal(SIGPIPE, SIG_IGN)
         self.directory=directory; self.store=store;self.keyProvider=keyProvider;self.resourcesDirectory=resourcesDirectory
         do {responseRecovery=try recoverSavedResponses()}catch{responseRecovery=["adopted":0,"error":"已保存响应的恢复检查未完成，原文件保留"]}
         do {
@@ -168,7 +169,7 @@ import Darwin
         if let value=config["responsesStream"],CFGetTypeID(value as CFTypeRef) != CFBooleanGetTypeID(){throw DesktopError.message("Responses 流式设置必须为布尔值")}
         config["responsesStream"]=config["responsesStream"] ?? false
         let effort=config["reasoningEffort"] as? String ?? "default"
-        guard ["default","low","medium","high"].contains(effort),config["reasoningEffort"] == nil || config["reasoningEffort"] is String else{throw DesktopError.message("推理强度设置无效")}
+        guard ["default","none","minimal","low","medium","high","xhigh"].contains(effort),config["reasoningEffort"] == nil || config["reasoningEffort"] is String else{throw DesktopError.message("推理强度设置无效")}
         config["reasoningEffort"]=effort
         let fingerprintObject:[String:Any]=["kind":check ? "connection-check":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","responsesStream":config["responsesStream"]!,"reasoningEffort":effort,"question":question,"evidence":evidence,"source":source,"maxTokens":config["maxTokens"] ?? 8192]
         let identityHeader=try Self.identityHeader()
@@ -216,22 +217,66 @@ import Darwin
         process.currentDirectoryURL=directory
         process.environment=["PATH":"/usr/bin:/bin","HOME":FileManager.default.homeDirectoryForCurrentUser.path,"LANG":"en_US.UTF-8"]
         process.standardInput=stdin; process.standardOutput=stdout; process.standardError=stderr
+        let inputBytes = try JSONSerialization.data(withJSONObject:input)
         processes[id]=process
+        let maxWorkerOutputBytes = 20 * 1024 * 1024
         let output:Data
+        var outputExceededLimit = false
         do {
             try Task.checkCancellation()
             try process.run()
-            try stdin.fileHandleForWriting.write(contentsOf:try JSONSerialization.data(withJSONObject:input)); try stdin.fileHandleForWriting.close()
-            // Drain concurrently so a long response cannot fill a pipe and deadlock the child.
-            output=await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos:.userInitiated).async {
-                    let out=stdout.fileHandleForReading.readDataToEndOfFile()
-                    process.waitUntilExit()
-                    continuation.resume(returning:out)
+            let (collected, exceeded) = try await withTaskCancellationHandler(operation: {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, Bool), Error>) in
+                    DispatchQueue.global(qos:.userInitiated).async {
+                        // Write stdin on a background queue so a stalled/crashed worker never blocks @MainActor.
+                        let writeGroup = DispatchGroup()
+                        writeGroup.enter()
+                        DispatchQueue.global(qos:.userInitiated).async {
+                            defer {
+                                try? stdin.fileHandleForWriting.close()
+                                writeGroup.leave()
+                            }
+                            _ = try? stdin.fileHandleForWriting.write(contentsOf: inputBytes)
+                        }
+                        // Bounded chunked read prevents an errant child from exhausting memory.
+                        var buffer = Data()
+                        var tooLarge = false
+                        let reader = stdout.fileHandleForReading
+                        while true {
+                            let chunk = (try? reader.read(upToCount: 65536)) ?? Data()
+                            if chunk.isEmpty { break }
+                            if buffer.count + chunk.count > maxWorkerOutputBytes {
+                                tooLarge = true
+                                if process.isRunning { process.terminate() }
+                                break
+                            }
+                            buffer.append(chunk)
+                        }
+                        try? reader.close()
+                        process.waitUntilExit()
+                        writeGroup.wait()
+                        continuation.resume(returning: (buffer, tooLarge))
+                    }
                 }
-            }
-        } catch { processes[id]=nil; pending["status"]="failed"; pending["error"]="运行组件未能完成"; try store.appendSession(pending); throw error }
+            }, onCancel: {
+                if process.isRunning { process.terminate() }
+            })
+            output = collected
+            outputExceededLimit = exceeded
+        } catch {
+            if process.isRunning { process.terminate() }
+            processes[id]=nil
+            pending["status"]=(error is CancellationError) ? "interrupted" : "failed"
+            pending["error"]=(error is CancellationError) ? "请求已中断，实际消费可能发生；不会自动重发" : "运行组件未能完成"
+            pending["endedAt"]=ISO8601DateFormatter().string(from:Date())
+            try store.appendSession(pending)
+            throw error
+        }
         processes[id]=nil
+        if outputExceededLimit {
+            pending["status"]="failed"; pending["error"]="模型运行组件返回超过大小上限，原费用记录已保留"; pending["endedAt"]=ISO8601DateFormatter().string(from:Date())
+            try store.appendSession(pending); throw DesktopError.message(pending["error"] as! String)
+        }
         if process.terminationReason == .uncaughtSignal || output.isEmpty {
             pending["status"]="interrupted"; pending["error"]="请求已中断，实际消费可能发生；不会自动重发"; pending["endedAt"]=ISO8601DateFormatter().string(from:Date())
             try store.appendSession(pending); throw DesktopError.message(pending["error"] as! String)

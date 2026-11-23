@@ -1823,6 +1823,18 @@ class DesktopDetailsRepositoryTest {
             )
         }
 
+        // 1B. Verify <article>/<main>/<picture> unwrapping, harmless <audio>/<video> stripping, and data:image/jpg parity (E-M3)
+        val tinyJpgBytes = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xe0.toByte(), 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff.toByte(), 0xd9.toByte())
+        val tinyJpgB64 = java.util.Base64.getEncoder().encodeToString(tinyJpgBytes)
+        val wrapperHtml = "<div class=\"post-content\" id=\"article-body\"><article><main><p>结构正文</p><picture><source srcset=\"https://nanless.github.io/audio-paper-digest-blog/a.webp\"><img src=\"data:image/jpg;base64,$tinyJpgB64\" alt=\"图\"></picture><audio controls><source src=\"https://nanless.github.io/audio-paper-digest-blog/a.mp3\"></audio></main></article></div>"
+        val sanitizedWrapper = DesktopDetailsRepository.verifyAndSanitizeArticleHtml(
+            wrapperHtml.toByteArray(Charsets.UTF_8),
+            site + "posts/2026-11-20-wrapper-parity/",
+        )
+        assertTrue(sanitizedWrapper.body.html().contains("结构正文"))
+        assertEquals(1, sanitizedWrapper.inlineDataBytesByElement.size)
+        assertFalse(sanitizedWrapper.body.html().contains("<audio"))
+
         // 2. Optional full real-corpus verification when PD_REAL_BLOG_PUBLIC_DIR is provided
         val realDirPath = System.getenv("PD_REAL_BLOG_PUBLIC_DIR")?.takeIf { it.isNotBlank() } ?: return@runBlocking
         val publicRoot = File(realDirPath)

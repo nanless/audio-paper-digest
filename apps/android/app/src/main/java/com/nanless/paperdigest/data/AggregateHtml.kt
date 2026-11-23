@@ -29,10 +29,10 @@ internal object AggregateDocumentFormat {
 
 /** Independent aggregate-only parse. Actual raw and derived bytes have distinct identities. No resource request occurs. */
 object AggregateHtml {
-    private val allowed=("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s sup sub br hr details summary dl dt dd math mrow mi mo mn msup msub msubsup mfrac msqrt mroot mtext mtable mtr mtd mover munder munderover semantics annotation").split(' ').toSet()
-    private val attrs=("id class title alt width height colspan rowspan scope display mathvariant xmlns encoding").split(' ').toSet()
+    private val allowed = HTML_ALLOWED_TAGS
+    private val attrs = HTML_ALLOWED_ATTRS
     private fun safeURL(raw:String,base:String):String?=runCatching{URI(base).resolve(raw).takeIf{it.scheme=="https"&&it.host!=null&&it.rawUserInfo==null}?.toASCIIString()}.getOrNull()
-    private fun clean(root:Element,base:String,depth:Int=0){require(depth<=128);root.childNodes().toList().forEach{if(it is org.jsoup.nodes.Comment)it.remove()};root.children().toList().forEach{e->val tag=e.normalName();if(tag !in allowed){e.remove();return@forEach};e.attributes().asList().forEach{a->val name=a.key.lowercase();when {name=="href"&&tag=="a"->{if(a.value.startsWith('#'))Unit else{val url=safeURL(a.value,base);if(url==null)e.removeAttr(a.key)else e.attr(a.key,url)}};name=="src"&&tag=="img"->e.removeAttr(a.key);name !in attrs->e.removeAttr(a.key)}};if(tag=="a")e.attr("rel","noopener noreferrer");clean(e,base,depth+1)}}
+    private fun clean(root:Element,base:String,depth:Int=0){require(depth<=128);root.childNodes().toList().forEach{if(it is org.jsoup.nodes.Comment)it.remove()};root.children().toList().forEach{e->val tag=e.normalName();if(tag !in allowed){e.remove();return@forEach};e.attributes().asList().forEach{a->val name=a.key.lowercase();when {name=="href"&&tag=="a"->{if(a.value.startsWith('#'))Unit else{val url=safeURL(a.value,base);if(url==null)e.removeAttr(a.key)else e.attr(a.key,url)}};name=="src"&&tag=="img"->e.removeAttr(a.key);name=="open"&&tag=="details"->Unit;tag in HTML_MATHML_TAGS && name in HTML_MATHML_ALLOWED_ATTRS -> {val v=a.value; if(v.length>4096 || v.contains("url(",ignoreCase=true) || v.contains("javascript:",ignoreCase=true)) e.removeAttr(a.key)};name !in attrs->e.removeAttr(a.key)}};if(tag=="a")e.attr("rel","noopener noreferrer");clean(e,base,depth+1)}}
     /** One derivation feeds the stored document and the image plan; the source DOM is built only once. */
     internal class Parsed(val document:JSONObject,val imageSlots:List<AggregateImageSlot>,val templateBodyHTML:String)
     private fun mathText(math:Element):String {

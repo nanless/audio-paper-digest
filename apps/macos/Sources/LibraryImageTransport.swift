@@ -101,7 +101,7 @@ extension LibraryService {
             guard Self.isApprovedExternalResource(url), let host = url.host?.lowercased() else { throw ServiceError.invalid("外部资源不在已支持的官方HTTPS来源中。") }
             let arxiv = host == "arxiv.org" || host == "export.arxiv.org"
             if arxiv && httpProxy == nil { throw ServiceError.unavailable("arXiv 原文与图片需要配置HTTP CONNECT代理；已有导读仍可阅读。") }
-            let address = try Self.publicAddress(host)
+            let proxyURL = Self.externalResourceProxy(url, configured: httpProxy)
             let temporary = directory.appendingPathComponent("transfer-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: temporary) }
@@ -112,13 +112,24 @@ extension LibraryService {
             defer { try? stdout.close(); try? stderr.close() }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-            let target = address.contains(":") ? "[\(address)]" : address
-            process.arguments = ["-q", "--globoff", "--silent", "--show-error", "--max-time", "120", "--connect-timeout", "30", "--max-filesize", String(limit), "--proto", "=https", "--max-redirs", "0", "--connect-to", "\(host):443:\(target):443", "--proxy", Self.externalResourceProxy(url, configured: httpProxy)?.absoluteString ?? "", "--noproxy", "", "--dump-header", headers.path, "--output", output.path, "--write-out", "%{http_code}", "--url", url.absoluteString]
+            var arguments = ["-q", "--globoff", "--silent", "--show-error", "--max-time", "120", "--connect-timeout", "30", "--max-filesize", String(limit), "--proto", "=https", "--max-redirs", "0"]
+            if let proxyURL {
+                // Approved academic/published hostname is verified above (never an IP literal).
+                // Let the configured HTTP CONNECT proxy resolve DNS remotely instead of pinning
+                // local TUN Fake-IP (198.18.0.0/15) addresses via --connect-to.
+                arguments += ["--proxy", proxyURL.absoluteString, "--noproxy", ""]
+            } else {
+                // Direct fetch to an approved academic domain: pin resolved IP and reject all
+                // private/loopback/link-local/metadata ranges while allowing local TUN Fake-IP
+                // (RFC 2544 198.18.0.0/15) used by VPN clients such as Clash/Mihomo.
+                let address = try Self.publicAddress(host, allowSyntheticTun: true)
+                let target = address.contains(":") ? "[\(address)]" : address
+                arguments += ["--connect-to", "\(host):443:\(target):443", "--proxy", "", "--noproxy", "*"]
+            }
+            arguments += ["--dump-header", headers.path, "--output", output.path, "--write-out", "%{http_code}", "--url", url.absoluteString]
+            process.arguments = arguments
             process.environment = ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"]
             process.standardOutput = stdout; process.standardError = stderr
-            let transferID = UUID()
-            activeTransfers[transferID] = process
-            defer { activeTransfers.removeValue(forKey: transferID) }
             try await Self.run(process)
             let code = Int((try String(contentsOf: status, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
             if [301, 302, 303, 307, 308].contains(code) {
@@ -151,7 +162,7 @@ extension LibraryService {
         try Task.checkCancellation()
     }
 
-    private static func publicAddress(_ host: String) throws -> String {
+    private static func publicAddress(_ host: String, allowSyntheticTun: Bool = false) throws -> String {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_ADDRCONFIG
         var list: UnsafeMutablePointer<addrinfo>?
@@ -163,13 +174,23 @@ extension LibraryService {
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(node.pointee.ai_addr, node.pointee.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
                 let ip = String(cString: buffer)
-                guard isPublicAddress(ip) else { throw ServiceError.invalid("官方资源解析到私网或保留地址，已停止下载。") }
+                guard isPublicAddress(ip) || (allowSyntheticTun && isSyntheticTunFakeIP(ip)) else { throw ServiceError.invalid("官方资源解析到私网或保留地址，已停止下载。") }
                 found.append(ip)
             }
             cursor = node.pointee.ai_next
         }
         guard let result = found.first(where: { !$0.contains(":") }) ?? found.first else { throw ServiceError.network("官方资源没有可用公网地址。") }
         return result
+    }
+
+    /// RFC 2544 benchmark range 198.18.0.0/15 is commonly used by local TUN/VPN clients (Clash/Mihomo)
+    /// as synthetic Fake-IPs. Never treated as public by `isPublicAddress(_:)`, and only permitted
+    /// for direct HTTPS requests to strictly allowlisted academic hostnames where TLS verifies the domain.
+    static func isSyntheticTunFakeIP(_ address: String) -> Bool {
+        var ipv4 = in_addr()
+        guard inet_pton(AF_INET, address, &ipv4) == 1 else { return false }
+        let n = UInt32(bigEndian: ipv4.s_addr), a = n >> 24, b = (n >> 16) & 255
+        return a == 198 && (b == 18 || b == 19)
     }
 
     static func isPublicAddress(_ address: String) -> Bool {
@@ -190,10 +211,7 @@ extension LibraryService {
         if data.starts(with: [0xff, 0xd8, 0xff]) { return "jpg" }
         if data.starts(with: Data("GIF8".utf8)) { return "gif" }
         if data.count > 12, data.prefix(4) == Data("RIFF".utf8), data[8..<12] == Data("WEBP".utf8) { return "webp" }
-        if let text = String(data: data, encoding: .utf8), text.contains("<svg"),
-           !text.localizedCaseInsensitiveContains("<!ENTITY"), !text.localizedCaseInsensitiveContains("<script"),
-           !text.localizedCaseInsensitiveContains("foreignObject"), !text.localizedCaseInsensitiveContains("javascript:"),
-           text.range(of: #"\bon[a-z]+\s*=|(?:href|src)\s*=\s*[\"'](?!#)|image-set\s*\(|url\s*\((?!\s*(?:'\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*'|"\s*#[A-Za-z_][A-Za-z0-9_.-]*\s*"|#[A-Za-z_][A-Za-z0-9_.-]*)\s*\))"#, options: [.regularExpression, .caseInsensitive]) == nil { return "svg" }
+        if let text = String(data: data, encoding: .utf8), Self.isSafeInlineSVG(text) { return "svg" }
         throw ServiceError.invalid("图片内容不受支持或包含外部执行/引用。")
     }
 

@@ -17,17 +17,72 @@ extension LibraryService {
         return result
     }
 
+    static func validateHTMLSafetyGuards(_ text: String, _ textBytes: [UInt8]) throws {
+        guard !asciiCaseInsensitiveContains(text, "<!ENTITY") else { throw ServiceError.invalid("文章包含不允许的实体声明。") }
+        guard !asciiCaseInsensitiveContains(text, "<?xml") else { throw ServiceError.invalid("文章包含不支持的XML声明，未绕过HTML解析。") }
+        let doctypePat = Array("<!doctype".utf8)
+        var di = 0
+        while di + doctypePat.count <= textBytes.count {
+            if textBytes[di] == 60 {
+                var matched = true
+                for k in 0..<doctypePat.count {
+                    let b = textBytes[di + k]
+                    let lc = (65...90).contains(b) ? b + 32 : b
+                    if lc != doctypePat[k] { matched = false; break }
+                }
+                if matched {
+                    var dj = di + doctypePat.count
+                    while dj < textBytes.count, dj - di <= 65536, textBytes[dj] != 62 { dj += 1 }
+                    guard dj < textBytes.count, textBytes[dj] == 62 else { throw ServiceError.invalid("文章声明不完整，未交给外部实体解析器。") }
+                    let decl = String(decoding: textBytes[di...dj], as: UTF8.self)
+                    guard decl.range(of: #"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#, options: [.regularExpression, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) != nil else {
+                        throw ServiceError.invalid("文章包含不支持的DOCTYPE或实体声明。")
+                    }
+                    di = dj + 1
+                    continue
+                }
+            }
+            di += 1
+        }
+    }
+
+    static func tidyHTMLDocumentSafely(_ raw: String) throws -> XMLDocument {
+        let cleaned = stripHTMLControlBytesForTidy(raw)
+        let rawBytes = Array(cleaned.utf8)
+        guard rawBytes.count <= 16 * 1024 * 1024 else { throw ServiceError.invalid("读取的HTML页面超过16 MiB。") }
+        try validateHTMLSafetyGuards(cleaned, rawBytes)
+        let adapted = try rewriteHTML5TagsForTidyStrict(
+            raw,
+            tagMarker: "data-meta-v1-unused",
+            preserveTags: [],
+            containerTags: html5BlockContainerTags,
+            inlineContainerTags: html5InlineContainerTags,
+            preserveClientSidecarsScript: true
+        )
+        return try htmlDocumentPreservingMath(adapted, preserveClientSidecarsScript: true)
+    }
+
     // Foundation HTML tidy removes unknown HTML5/MathML tags, including their
     // TeX annotation. Protect only complete, independently validated MathML;
     // the surrounding HTML still passes through the original HTML sanitizer.
-    static func htmlDocumentPreservingMath(_ raw: String) throws -> XMLDocument {
-        let bytes = Array(raw.utf8)
+    static func htmlDocumentPreservingMath(_ raw: String, preserveClientSidecarsScript: Bool = false) throws -> XMLDocument {
+        let cleanedRaw = stripHTMLControlBytesForTidy(raw)
+        let bytes = Array(cleanedRaw.utf8)
         guard bytes.count <= 16 * 1024 * 1024 else { throw ServiceError.invalid("公式保真读取的页面超过16 MiB。") }
-        guard !raw.localizedCaseInsensitiveContains("<!ENTITY") else { throw ServiceError.invalid("文章包含不允许的实体声明。") }
-        struct Tag { let end: Int; let name: String; let closing: Bool; let empty: Bool }
+        try validateHTMLSafetyGuards(cleanedRaw, bytes)
+        struct Tag { let end: Int; let name: String; let closing: Bool; let empty: Bool; let validDelim: Bool }
+        enum MathScanToken {
+            case notATag
+            case bogusComment(Int)
+            case tag(Tag)
+        }
         func starts(_ text: String, at index: Int) -> Bool {
             let expected = Array(text.utf8); guard index + expected.count <= bytes.count else { return false }
             return expected.indices.allSatisfy { offset in let value = bytes[index + offset]; return (65...90).contains(value) ? value + 32 == expected[offset] : value == expected[offset] }
+        }
+        func startsExact(_ text: String, at index: Int) -> Bool {
+            let expected = Array(text.utf8); guard index + expected.count <= bytes.count else { return false }
+            return bytes[index..<(index + expected.count)].elementsEqual(expected)
         }
         func endOf(_ delimiter: String, from start: Int) throws -> Int {
             let expected = Array(delimiter.utf8); var index = start
@@ -37,63 +92,151 @@ extension LibraryService {
             }
             throw ServiceError.invalid("文章中的注释或CDATA没有完整闭合，未猜测公式边界。")
         }
-        func tag(at start: Int) throws -> Tag? {
-            guard bytes[start] == 60 else { return nil }
-            var index = start + 1, closing = false
-            if index < bytes.count, bytes[index] == 47 { closing = true; index += 1 }
-            let nameStart = index
-            while index < bytes.count, ((65...90).contains(bytes[index]) || (97...122).contains(bytes[index]) || (48...57).contains(bytes[index]) || bytes[index] == 45 || bytes[index] == 58) { index += 1 }
-            guard index > nameStart else { return nil }
-            let name = String(decoding: bytes[nameStart..<index], as: UTF8.self).lowercased()
-            var quote: UInt8? = nil
-            while index < bytes.count, index - start <= 65536 {
-                let value = bytes[index]
-                if let active = quote { if value == active { quote = nil } }
-                else if value == 34 || value == 39 { quote = value }
-                else if value == 62 {
-                    var previous = index - 1
-                    while previous > start, [9, 10, 13, 32].contains(bytes[previous]) { previous -= 1 }
-                    return Tag(end: index + 1, name: name, closing: closing, empty: bytes[previous] == 47)
-                }
-                index += 1
+        func scanToken(at start: Int) throws -> MathScanToken {
+            switch scanHTML5ByteTag(bytes, at: start, maxLength: 65536) {
+            case .notATag:
+                return .notATag
+            case .bogusComment(let end):
+                return .bogusComment(end)
+            case .unquotedLessThan:
+                throw ServiceError.invalid("文章标签包含不安全或未加引号的尖括号属性值，未猜测解析边界。")
+            case .unclosedEOF, .tooLong:
+                throw ServiceError.invalid("文章标签不完整或超过64 KiB，未猜测公式边界。")
+            case .tag(let name, _, let end, let closing, let selfClosing, let validDelim):
+                return .tag(Tag(end: end, name: name, closing: closing, empty: selfClosing, validDelim: validDelim))
             }
-            throw ServiceError.invalid("文章标签不完整或超过64 KiB，未猜测公式边界。")
         }
         func declarationEnd(at start: Int) throws -> Int {
-            var index = start + 2, quote: UInt8? = nil
+            // Non-PHP PI / DOCTYPE: terminates at the first '>' without quote toggling (matches libtidy).
+            var index = start + 2
             while index < bytes.count, index - start <= 65536 {
-                let value = bytes[index]
-                if let active = quote { if value == active { quote = nil } }
-                else if value == 34 || value == 39 { quote = value }
-                else if value == 62 { return index + 1 }
+                if bytes[index] == 62 { return index + 1 }
                 index += 1
             }
             throw ServiceError.invalid("文章声明不完整，未交给外部实体解析器。")
         }
         let nonce = "paperdigest-math-" + UUID().uuidString.lowercased() + "-"
-        guard !raw.contains(nonce) else { throw ServiceError.invalid("公式保真标记发生冲突。") }
-        var position = 0, last = 0, output = Data(), rawText: String? = nil, formulas: [(String, XMLElement)] = [], formulaBytes = 0
+        guard !cleanedRaw.contains(nonce) else { throw ServiceError.invalid("公式保真标记发生冲突。") }
+        let rcdataElements: Set<String> = ["textarea", "title", "xmp", "iframe", "noembed", "noframes"]
+        let ltEntity = Array("&lt;".utf8)
+        let ltJSON = Array("\\u003c".utf8)
+        let inertComment = Array("<!-- -->".utf8)
+        var position = 0, last = 0, output = Data(), formulas: [(String, XMLElement)] = [], formulaBytes = 0
         while position < bytes.count {
-            if let rawName = rawText {
-                // Raw text follows HTML closing-tag rules, not JavaScript/string
-                // quoting. Do not tokenize apparent formulas inside this text.
-                if bytes[position] == 60, starts("</" + rawName, at: position), let token = try tag(at: position), token.closing, token.name == rawName {
-                    rawText = nil; position = token.end
-                } else { position += 1 }
+            guard bytes[position] == 60 else { position += 1; continue }
+            if starts("<!--", at: position) {
+                let cScan = scanHTML5CommentEnd(bytes, from: position)
+                guard cScan.closed else { throw ServiceError.invalid("文章中的注释或CDATA没有完整闭合，未猜测公式边界。") }
+                if cScan.needsRewrite {
+                    output.append(contentsOf: bytes[last..<position])
+                    output.append(contentsOf: inertComment)
+                    last = cScan.end
+                }
+                position = cScan.end
                 continue
             }
-            guard bytes[position] == 60 else { position += 1; continue }
-            if starts("<!--", at: position) { position = try endOf("-->", from: position + 4); continue }
-            if starts("<![cdata[", at: position) { position = try endOf("]]>", from: position + 9); continue }
+            if startsExact("<![CDATA[", at: position) {
+                // Outside foreign content (SVG/MathML), WHATWG §13.2.5.42 parses `<![CDATA[...>` as a bogus comment ending at the first '>'.
+                var cEnd = position + 9
+                while cEnd < bytes.count && bytes[cEnd] != 62 { cEnd += 1 }
+                guard cEnd < bytes.count else { throw ServiceError.invalid("文章中的注释或CDATA没有完整闭合，未猜测公式边界。") }
+                let endAfter = cEnd + 1
+                output.append(contentsOf: bytes[last..<position])
+                output.append(contentsOf: inertComment)
+                last = endAfter
+                position = endAfter
+                continue
+            }
+            if startsExact("<?php", at: position) || startsExact("<%", at: position) || startsExact("<#", at: position) {
+                throw ServiceError.invalid("文章包含不支持的服务器脚本或模板标签，未交给HTML解析。")
+            }
             if starts("<!", at: position) {
                 let end = try declarationEnd(at: position), declaration = String(decoding: bytes[position..<end], as: UTF8.self)
-                guard declaration.range(of: #"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#, options: [.regularExpression, .caseInsensitive]) != nil else { throw ServiceError.invalid("文章包含不支持的DOCTYPE或实体声明。") }
+                guard declaration.range(of: #"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#, options: [.regularExpression, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) != nil else { throw ServiceError.invalid("文章包含不支持的DOCTYPE或实体声明。") }
                 position = end; continue
             }
-            guard let token = try tag(at: position) else { position += 1; continue }
+            if starts("<?", at: position) {
+                position = try declarationEnd(at: position); continue
+            }
+            let token: Tag
+            switch try scanToken(at: position) {
+            case .notATag:
+                position += 1; continue
+            case .bogusComment(let end):
+                position = end; continue
+            case .tag(let parsed):
+                token = parsed
+            }
             if token.name.hasSuffix(":math") { throw ServiceError.invalid("暂不支持带前缀的MathML根节点，未静默丢弃公式。") }
-            if !token.closing, token.name == "plaintext" { position = bytes.count; continue }
-            if !token.closing, ["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes"].contains(token.name) { rawText = token.name; position = token.end; continue }
+            if !token.closing, !token.empty, token.name == "plaintext" {
+                output.append(contentsOf: bytes[last..<token.end])
+                if token.end > position && bytes[token.end - 1] != 62 {
+                    if bytes[token.end - 1] == 47 { output.append(32) }
+                    output.append(62)
+                }
+                appendEscapingLessThan(bytes[token.end..<bytes.count], replacement: ltEntity, to: &output)
+                last = bytes.count
+                position = bytes.count
+                continue
+            }
+            if !token.closing, token.name == "script" || token.name == "style" || token.name == "server" {
+                if token.empty {
+                    output.append(contentsOf: bytes[last..<position])
+                    output.append(contentsOf: inertComment)
+                    last = token.end
+                    position = token.end
+                    continue
+                }
+                let bodyEnd: Int
+                let closeEnd: Int
+                switch scanRawTextElementEnd(bytes, rawName: token.name, from: token.end) {
+                case .closed(let bEnd, let cEnd):
+                    bodyEnd = bEnd; closeEnd = cEnd
+                case .unclosed(let bEnd):
+                    bodyEnd = bEnd; closeEnd = bytes.count
+                case .unsafe:
+                    throw ServiceError.invalid("文章原始文本结束标签包含不安全的非ASCII截断字符，未猜测解析边界。")
+                }
+                output.append(contentsOf: bytes[last..<position])
+                if token.name == "script", isJSONCitationScriptOpenTag(bytes[position..<token.end]) {
+                    output.append(contentsOf: "<script type=\"application/json\" class=\"paper-tools__citation-record\">".utf8)
+                    appendEscapingLessThan(bytes[token.end..<bodyEnd], replacement: ltJSON, to: &output)
+                    output.append(contentsOf: "</script>".utf8)
+                } else if preserveClientSidecarsScript, token.name == "script", isJSONClientSidecarsScriptOpenTag(bytes[position..<token.end]) {
+                    output.append(contentsOf: "<script type=\"application/json\" class=\"paper-tools__client-sidecars\">".utf8)
+                    appendEscapingLessThan(bytes[token.end..<bodyEnd], replacement: ltJSON, to: &output)
+                    output.append(contentsOf: "</script>".utf8)
+                } else {
+                    output.append(contentsOf: inertComment)
+                }
+                last = closeEnd
+                position = closeEnd
+                continue
+            }
+            if !token.closing, !token.empty, rcdataElements.contains(token.name) {
+                let bodyEnd: Int
+                let closeEnd: Int
+                switch scanRawTextElementEnd(bytes, rawName: token.name, from: token.end) {
+                case .closed(let bEnd, let cEnd):
+                    bodyEnd = bEnd; closeEnd = cEnd
+                case .unclosed(let bEnd):
+                    bodyEnd = bEnd; closeEnd = bytes.count
+                case .unsafe:
+                    throw ServiceError.invalid("文章原始文本结束标签包含不安全的非ASCII截断字符，未猜测解析边界。")
+                }
+                output.append(contentsOf: bytes[last..<token.end])
+                if token.end > position && bytes[token.end - 1] != 62 {
+                    if bytes[token.end - 1] == 47 { output.append(32) }
+                    output.append(62)
+                }
+                appendEscapingLessThan(bytes[token.end..<bodyEnd], replacement: ltEntity, to: &output)
+                if closeEnd > bodyEnd {
+                    output.append(contentsOf: "</\(token.name)>".utf8)
+                }
+                last = closeEnd
+                position = closeEnd
+                continue
+            }
             if token.name == "math", token.closing { throw ServiceError.invalid("文章包含没有对应起点的MathML结束标签。") }
             guard token.name == "math" else { position = token.end; continue }
             let beginning = position; var end = token.end, depth = token.empty ? 0 : 1
@@ -101,14 +244,20 @@ extension LibraryService {
                 guard end < bytes.count, end - beginning <= 256 * 1024 else { throw ServiceError.invalid("单个MathML超过256 KiB或未完整闭合。") }
                 if bytes[end] != 60 { end += 1; continue }
                 if starts("<!--", at: end) { end = try endOf("-->", from: end + 4); continue }
-                if starts("<![cdata[", at: end) { end = try endOf("]]>", from: end + 9); continue }
+                if startsExact("<![CDATA[", at: end) { end = try endOf("]]>", from: end + 9); continue }
                 guard !starts("<!", at: end) else { throw ServiceError.invalid("MathML中不允许DOCTYPE或实体声明。") }
-                if let child = try tag(at: end) {
+                guard !starts("<?", at: end) else { throw ServiceError.invalid("MathML中不允许处理指令。") }
+                switch try scanToken(at: end) {
+                case .notATag:
+                    end += 1
+                case .bogusComment(let nextEnd):
+                    end = nextEnd
+                case .tag(let child):
                     if child.name == "math" {
                         if child.closing { depth -= 1 } else if !child.empty { depth += 1 }
                     }
                     end = child.end
-                } else { end += 1 }
+                }
             }
             guard end - beginning <= 256 * 1024, formulas.count < 512, formulaBytes + end - beginning <= 2 * 1024 * 1024 else { throw ServiceError.invalid("MathML数量或总大小超过保真读取上限。") }
             let source = String(decoding: bytes[beginning..<end], as: UTF8.self)
@@ -123,7 +272,9 @@ extension LibraryService {
             formulas.append((marker, math.copy() as! XMLElement)); formulaBytes += end - beginning; last = end; position = end
         }
         output.append(contentsOf: bytes[last..<bytes.count])
-        let doc = try XMLDocument(xmlString: String(decoding: output, as: UTF8.self), options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+        let finalHTML = String(decoding: output, as: UTF8.self)
+        try validateHTMLSafetyGuards(finalHTML, Array(output))
+        let doc = try XMLDocument(xmlString: finalHTML, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
         for (marker, math) in formulas {
             let matches = try doc.nodes(forXPath: "//*[@id='\(marker)']")
             guard matches.count == 1, let slot = matches.first as? XMLElement, slot.name?.lowercased() == "span", slot.childCount == 0, let parent = slot.parent as? XMLElement else { throw ServiceError.invalid("HTML解析改变了公式占位，未静默丢弃或异位恢复公式。") }
@@ -143,7 +294,7 @@ extension LibraryService {
         for attribute in element.attributes ?? [] {
             let rawName = attribute.name ?? "", name = rawName.lowercased(), value = attribute.stringValue ?? ""
             if name.hasPrefix("on") || ["href", "src", "xlink:href", "style"].contains(name) { element.removeAttribute(forName: rawName); continue }
-            guard attributes.contains(name), !rawName.contains(":"), value.utf8.count <= 4096, !value.localizedCaseInsensitiveContains("url("), !value.localizedCaseInsensitiveContains("javascript:") else { throw ServiceError.invalid("MathML包含不支持的属性，未猜测公式结构。") }
+            guard attributes.contains(name), !rawName.contains(":"), value.utf8.count <= 4096, !asciiCaseInsensitiveContains(value, "url("), !asciiCaseInsensitiveContains(value, "javascript:") else { throw ServiceError.invalid("MathML包含不支持的属性，未猜测公式结构。") }
             attribute.name = name
         }
         if element.name == "annotation" {
@@ -187,9 +338,14 @@ extension LibraryService {
         guard bytes.count > 0, bytes.count <= 16 * 1024 * 1024, let raw = String(data: bytes, encoding: .utf8), (ISO8601DateFormatter().date(from: fetchedAt) != nil || { let format = ISO8601DateFormatter(); format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return format.date(from: fetchedAt) != nil }()) else { throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效") }
         let expected = try PublishedAggregateReader.pageURL(descriptor.sourceURL, siteBase: siteBaseURL)
         try PublishedAggregateReader.require(responseURL.absoluteString == expected.absoluteString, "汇总实际响应地址不一致")
-        // Preserve ordinary HTML5 grouping in Foundation tidy; this changes only tag names, never attributes or boundaries.
-        let containers = try NSRegularExpression(pattern: "(?i)<(/?)(section|article|main)(?=[\\s/>])")
-        let adapted = containers.stringByReplacingMatches(in: raw, range: NSRange(raw.startIndex..<raw.endIndex, in: raw), withTemplate: "<$1div")
+        // Preserve ordinary HTML5 grouping in Foundation tidy via tag-aware rewriting (never corrupting attributes/comments/raw text).
+        let adapted = try rewriteHTML5TagsForTidyStrict(
+            raw,
+            tagMarker: "data-aggregate-v1-unused",
+            preserveTags: [],
+            containerTags: html5BlockContainerTags,
+            inlineContainerTags: html5InlineContainerTags
+        )
         let doc = try htmlDocumentPreservingMath(adapted)
         let canonical = try doc.nodes(forXPath: "//link[translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='canonical']")
         try PublishedAggregateReader.require(canonical.count <= 1, "汇总网页声明多个规范地址")
@@ -206,6 +362,7 @@ extension LibraryService {
         }
         let nodes = try doc.nodes(forXPath: selector)
         guard nodes.count == 1, let body = nodes.first as? XMLElement else { throw AggregateFailure.invalid("汇总正文结构缺失或重复，未读取导航/首页代替") }
+        guard (try body.nodes(forXPath: "ancestor-or-self::*[@hidden]")).isEmpty else { throw AggregateFailure.invalid("汇总正文容器或其祖先被标记为隐藏，未读取隐藏正文") }
         for hidden in try body.nodes(forXPath: ".//*[@hidden]") { hidden.detach() }
         let originalImages = try body.nodes(forXPath: ".//img").compactMap { ($0 as? XMLElement)?.attribute(forName: "src")?.stringValue }
         try sanitize(body, pageURL: expected)
@@ -233,12 +390,13 @@ extension LibraryService {
         try PublishedAggregateReader.require(responseURL.absoluteString == expected.absoluteString, "汇总实际响应地址不一致")
         // Independent resource-body derivation retains figure/caption boundaries; the v1 extractor above is unchanged.
         let marker = "data-aggregate-tag-" + UUID().uuidString.lowercased()
-        let figures = try NSRegularExpression(pattern: "(?i)<(figure|figcaption)(?=[\\s/>])")
-        let figureBody = figures.stringByReplacingMatches(in: raw, range: NSRange(raw.startIndex..<raw.endIndex, in: raw), withTemplate: "<div " + marker + "=\"$1\"")
-        let closes = try NSRegularExpression(pattern: "(?i)</(?:figure|figcaption)\\s*>")
-        let grouped = closes.stringByReplacingMatches(in: figureBody, range: NSRange(figureBody.startIndex..<figureBody.endIndex, in: figureBody), withTemplate: "</div>")
-        let containers = try NSRegularExpression(pattern: "(?i)<(/?)(section|article|main)(?=[\\s/>])")
-        let adapted = containers.stringByReplacingMatches(in: grouped, range: NSRange(grouped.startIndex..<grouped.endIndex, in: grouped), withTemplate: "<$1div")
+        let adapted = try rewriteHTML5TagsForTidyStrict(
+            raw,
+            tagMarker: marker,
+            preserveTags: ["figure", "figcaption"],
+            containerTags: html5BlockContainerTags,
+            inlineContainerTags: html5InlineContainerTags
+        )
         let doc = try htmlDocumentPreservingMath(adapted); defer { withExtendedLifetime(doc) {} }
         let canonical = try doc.nodes(forXPath: "//link[translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='canonical']")
         try PublishedAggregateReader.require(canonical.count <= 1, "汇总网页声明多个规范地址")
@@ -255,6 +413,7 @@ extension LibraryService {
         }
         let nodes = try doc.nodes(forXPath: selector)
         guard nodes.count == 1, let body = nodes.first as? XMLElement else { throw AggregateFailure.invalid("汇总正文结构缺失或重复，未读取导航/首页代替") }
+        guard (try body.nodes(forXPath: "ancestor-or-self::*[@hidden]")).isEmpty else { throw AggregateFailure.invalid("汇总正文容器或其祖先被标记为隐藏，未读取隐藏正文") }
         for hidden in try body.nodes(forXPath: ".//*[@hidden]") { hidden.detach() }
         let groups = try body.nodes(forXPath: ".//div[@" + marker + "]").compactMap { node -> (XMLElement, String)? in
             guard let element = node as? XMLElement, let tag = element.attribute(forName: marker)?.stringValue?.lowercased(), ["figure", "figcaption"].contains(tag) else { return nil }; return (element, tag)
@@ -270,7 +429,8 @@ extension LibraryService {
         // Foundation's HTML tidy removes HTML5 <article>/<section> wrappers on macOS;
         // the published body's exact id + class survive and must match uniquely.
         let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
-        guard nodes.count == 1, nodes.first is XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
+        guard nodes.count == 1, let body = nodes.first as? XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
+        guard (try body.nodes(forXPath: "ancestor-or-self::*[@hidden]")).isEmpty else { throw ServiceError.invalid("网站正文容器或其祖先被标记为隐藏，拒绝读取。") }
         let citationNode = try doc.nodes(forXPath: "//script[@type='application/json' and contains(concat(' ', normalize-space(@class), ' '), ' paper-tools__citation-record ')]").first
         let attributeNode = try doc.nodes(forXPath: "//*[@data-citation-record]").first as? XMLElement
         guard let rawCitation = (citationNode?.stringValue ?? attributeNode?.attribute(forName: "data-citation-record")?.stringValue)?.data(using: .utf8),
@@ -288,7 +448,16 @@ extension LibraryService {
     }
 
     static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
-        let doc = try htmlDocumentPreservingMath(raw)
+        let marker = "data-article-tag-" + UUID().uuidString.lowercased()
+        let protectedTags: Set<String> = ["figure", "figcaption", "details", "summary"]
+        let adapted = try rewriteHTML5TagsForTidyStrict(
+            raw,
+            tagMarker: marker,
+            preserveTags: protectedTags,
+            containerTags: html5BlockContainerTags,
+            inlineContainerTags: html5InlineContainerTags
+        )
+        let doc = try htmlDocumentPreservingMath(adapted)
         try Self.validatePublishedPageIdentity(doc, paper: paper)
         let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
         guard let body = nodes.first as? XMLElement else { throw ServiceError.invalid("网站正文结构已变化，未读取导航或用模型补写。请保留旧导读并更新适配器。") }
@@ -299,7 +468,24 @@ extension LibraryService {
            let value = try? JSONDecoder().decode(JSONValue.self, from: rawCitation) {
             citation = value
         }
+        guard (try body.nodes(forXPath: "ancestor-or-self::*[@hidden]")).isEmpty else { throw ServiceError.invalid("网站正文容器或其祖先被标记为隐藏，拒绝读取。") }
+        for hidden in try body.nodes(forXPath: ".//*[@hidden]") { hidden.detach() }
+        for anchor in try body.nodes(forXPath: ".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6]//a[contains(concat(' ', normalize-space(@class), ' '), ' anchor ')]") {
+            anchor.detach()
+        }
+        let groups = try body.nodes(forXPath: ".//div[@" + marker + "]").compactMap { node -> (XMLElement, String, Bool)? in
+            guard let el = node as? XMLElement,
+                  let tag = el.attribute(forName: marker)?.stringValue?.lowercased(),
+                  protectedTags.contains(tag) else { return nil }
+            return (el, tag, tag == "details" && el.attribute(forName: "open") != nil)
+        }
         try sanitize(body, pageURL: pageURL)
+        for (el, tag, hadOpen) in groups {
+            el.name = tag
+            if hadOpen && el.attribute(forName: "open") == nil {
+                el.addAttribute(XMLNode.attribute(withName: "open", stringValue: "") as! XMLNode)
+            }
+        }
         let images = try body.nodes(forXPath: ".//img").compactMap { n -> Resource? in
             guard let element = n as? XMLElement, let source = element.attribute(forName: "src")?.stringValue else { return nil }
             return Resource(sourceURL: source, kind: "image", localPath: nil, sha256: nil, missingReason: nil)
@@ -320,6 +506,7 @@ extension LibraryService {
             let tag = (element.name ?? "").lowercased()
             guard allowed.contains(tag) else { element.detach(); continue }
             if tag == "math" { var count = 0; try sanitizeMathML(element, depth: 0, count: &count); continue }
+            var cellAlignClass: String? = nil
             for attr in element.attributes ?? [] {
                 let name = (attr.name ?? "").lowercased()
                 if name == "href" && tag == "a" {
@@ -331,7 +518,26 @@ extension LibraryService {
                 } else if name == "src" && tag == "img" {
                     if let url = URL(string: attr.stringValue ?? "", relativeTo: pageURL)?.absoluteURL, url.scheme == "https", url.user == nil, url.password == nil { attr.stringValue = url.absoluteString }
                     else { element.removeAttribute(forName: attr.name ?? "") }
+                } else if name == "style" && (tag == "td" || tag == "th") {
+                    let rawStyle = (attr.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if let alignRange = rawStyle.range(of: #"\Atext-align\s*:\s*(left|center|right)\s*;?\z"#, options: .regularExpression) {
+                        let matched = String(rawStyle[alignRange])
+                        if matched.contains("right") { cellAlignClass = "ta-right" }
+                        else if matched.contains("center") { cellAlignClass = "ta-center" }
+                        else if matched.contains("left") { cellAlignClass = "ta-left" }
+                    }
+                    element.removeAttribute(forName: attr.name ?? "")
+                } else if name == "open" && tag == "details" {
+                    continue
                 } else if !attributes.contains(name) { element.removeAttribute(forName: attr.name ?? "") }
+            }
+            if let alignClass = cellAlignClass {
+                let existing = (element.attribute(forName: "class")?.stringValue ?? "").split(whereSeparator: { $0.isWhitespace }).map(String.init)
+                if !existing.contains(alignClass) {
+                    let nextClass = (existing + [alignClass]).joined(separator: " ")
+                    element.removeAttribute(forName: "class")
+                    element.addAttribute(XMLNode.attribute(withName: "class", stringValue: nextClass) as! XMLNode)
+                }
             }
             if tag == "a" { element.addAttribute(XMLNode.attribute(withName: "rel", stringValue: "noopener noreferrer") as! XMLNode) }
             try sanitize(element, pageURL: pageURL)
@@ -339,7 +545,17 @@ extension LibraryService {
     }
 
     static func localizeImages(_ fragment: String, replacements: [String: String]) throws -> String {
-        let doc = try htmlDocumentPreservingMath("<html><body>\(fragment)</body></html>")
+        let marker = "data-loc-tag-" + UUID().uuidString.lowercased()
+        let protectedTags: Set<String> = ["figure", "figcaption", "details", "summary"]
+        let adapted = try rewriteHTML5TagsForTidyStrict(fragment, tagMarker: marker, preserveTags: protectedTags, containerTags: [])
+        let doc = try htmlDocumentPreservingMath("<html><body>\(adapted)</body></html>")
+        for node in try doc.nodes(forXPath: "//div[@" + marker + "]") {
+            guard let el = node as? XMLElement,
+                  let tag = el.attribute(forName: marker)?.stringValue?.lowercased(),
+                  protectedTags.contains(tag) else { continue }
+            el.removeAttribute(forName: marker)
+            el.name = tag
+        }
         for node in try doc.nodes(forXPath: "//img") {
             guard let image = node as? XMLElement, let source = image.attribute(forName: "src")?.stringValue else { continue }
             if let local = replacements[source] { image.attribute(forName: "src")?.stringValue = local }

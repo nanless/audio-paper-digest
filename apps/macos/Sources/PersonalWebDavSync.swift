@@ -22,12 +22,29 @@ enum PersonalWebDavSync {
         let upload: Data?
         let conflicts: Int
         let noteConflicts: [NoteConflictSnapshot]
+        let uploadedDevice: String?
+        let uploadedRevision: Int?
+        let uploadedDigest: String?
+        let uploadedBaselineHashes: [String: [String: String]]?
 
-        init(personal: Object, upload: Data?, conflicts: Int, noteConflicts: [NoteConflictSnapshot] = []) {
+        init(
+            personal: Object,
+            upload: Data?,
+            conflicts: Int,
+            noteConflicts: [NoteConflictSnapshot] = [],
+            uploadedDevice: String? = nil,
+            uploadedRevision: Int? = nil,
+            uploadedDigest: String? = nil,
+            uploadedBaselineHashes: [String: [String: String]]? = nil
+        ) {
             self.personal = personal
             self.upload = upload
             self.conflicts = conflicts
             self.noteConflicts = noteConflicts
+            self.uploadedDevice = uploadedDevice
+            self.uploadedRevision = uploadedRevision
+            self.uploadedDigest = uploadedDigest
+            self.uploadedBaselineHashes = uploadedBaselineHashes
         }
     }
     struct RemoteRevision {
@@ -342,7 +359,34 @@ enum PersonalWebDavSync {
             throw DesktopError.message("合并后的个人资料超过 32 MiB 上限，已保留本机资料")
         }
         return Plan(personal: result, upload: upload, conflicts: conflicts,
-                    noteConflicts: detectedNoteConflicts.sorted { $0.paperID < $1.paperID })
+                    noteConflicts: detectedNoteConflicts.sorted { $0.paperID < $1.paperID },
+                    uploadedDevice: upload != nil ? device : nil,
+                    uploadedRevision: upload != nil ? next : nil,
+                    uploadedDigest: upload != nil ? digests[device] : nil,
+                    uploadedBaselineHashes: upload != nil ? currentHashes : nil)
+    }
+
+    /// Records only that this device's uploaded revision reached WebDAV when concurrent local edits
+    /// prevented applying the full merge plan. Preserves all concurrent local edits untouched and
+    /// leaves peer `observed` revisions unchanged so the next sync cleanly merges peers and emits N+2.
+    static func acknowledgeUpload(_ plan: Plan, onto current: Object) -> Object {
+        guard let device = plan.uploadedDevice,
+              let rev = plan.uploadedRevision,
+              let digest = plan.uploadedDigest,
+              let uploadedHashes = plan.uploadedBaselineHashes else { return current }
+        var result = current
+        var base = (current[baselineKey] as? Object).flatMap { $0["device"] as? String == device ? $0 : nil }
+            ?? ["device": device, "observed": [String: Int](), "digests": [String: String](), "hashes": [String: [String: String]]()]
+        var observed = base["observed"] as? [String: Int] ?? [:]
+        var digests = base["digests"] as? [String: String] ?? [:]
+        observed[device] = max(observed[device] ?? 0, rev)
+        digests[device] = digest
+        base["device"] = device
+        base["observed"] = observed
+        base["digests"] = digests
+        base["hashes"] = uploadedHashes
+        result[baselineKey] = base
+        return result
     }
 
     static func unchanged(_ before: Object, _ after: Object) throws -> Bool {

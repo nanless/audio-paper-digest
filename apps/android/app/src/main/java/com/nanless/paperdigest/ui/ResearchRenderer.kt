@@ -310,7 +310,7 @@ object ResearchRenderer {
                             }
                         }
                     }
-                    val html = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'\"><script>$katex</script><script>try{window.rendered={html:($source).map(x=>katex.renderToString(x.tex,{displayMode:x.display,output:'htmlAndMathml',throwOnError:true,trust:false,maxExpand:1000,maxSize:20}))}}catch(e){window.rendered={error:true}}</script>"
+                    val html = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'\"><script>$katex</script><script>try{window.rendered={html:($source).map(x=>katex.renderToString(x.tex,{displayMode:x.display,output:'htmlAndMathml',throwOnError:false,trust:false,maxExpand:1000,maxSize:20}))}}catch(e){window.rendered={error:true}}</script>"
                     web.loadDataWithBaseURL("https://renderer.invalid/", html, "text/html", "UTF-8", null)
                 }
             } ?: throw IllegalArgumentException("公式渲染超时，原始资料仍保留；请对照 PDF 或导出 Markdown")
