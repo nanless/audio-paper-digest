@@ -247,15 +247,7 @@ function buildContinuity(state, header = codec.recordHeader(CONTINUITY, CONTINUI
 // 跨零点补跑时，抓取时刻（until）落在批次日期次日凌晨；恢复清单按批次日期登记，
 // 因此除同日外还要接受「批次日期次日 + 北京时间 0–8 点」这一段宽限。
 function withinBoundaryDateGrace(until, batchDate) {
-    const untilDate = new Date(until).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-    if (untilDate === batchDate) return true;
-    const next = new Date(`${batchDate}T00:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
-    if (untilDate !== next.toISOString().slice(0, 10)) return false;
-    const hour = Number(new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Asia/Shanghai', hour: '2-digit', hourCycle: 'h23'
-    }).format(new Date(until)));
-    return hour < 8;
+    return require('../utils').isWithinBatchDateGrace(until, batchDate);
 }
 
 function verifyBoundary(boundary) {

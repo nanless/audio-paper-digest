@@ -136,6 +136,21 @@ async function main() {
             original.decisions[ids[0]].parseSource = 'keyword_prefilter';
             fs.writeFileSync(config.FILES.filterDecisions, JSON.stringify(original));
         }
+        if (scenario === 'pdf-404-skipped') {
+            Object.assign(original.decisions[ids[0]], {
+                related: false,
+                retryable: false,
+                fallback: false,
+                rawResponse: '',
+                parseSource: 'official_pdf_404_skipped',
+                errorCode: 'ARXIV_PDF_NOT_FOUND',
+                errorStatus: 404,
+                error: `arXiv PDF ${ids[0]} download failed: HTTP 404`,
+                arxivId: ids[0]
+            });
+            delete original.decisions[ids[0]].filterScopeEvidence;
+            fs.writeFileSync(config.FILES.filterDecisions, JSON.stringify(original));
+        }
         if (scenario === 'input-damaged') {
             original.decisions[ids[0]].inputSha256 = '0'.repeat(64);
             fs.writeFileSync(config.FILES.filterDecisions, JSON.stringify(original));
@@ -175,7 +190,7 @@ async function main() {
         const requestOptions = { ...options, refilterIds: [ids[0]], refilterReason: '按当前规则重新核验' };
         if (scenario === 'missing-reason') delete requestOptions.refilterReason;
         if (scenario === 'unknown-id') requestOptions.refilterIds = ['2610.90099'];
-        const rejected = ['raw-content-damaged', 'keyword', 'input-damaged', 'analysis-started', 'missing-reason', 'unknown-id'].includes(scenario);
+        const rejected = ['raw-content-damaged', 'keyword', 'pdf-404-skipped', 'input-damaged', 'analysis-started', 'missing-reason', 'unknown-id'].includes(scenario);
         const protectedFiles = ['filterDecisions', 'rawCandidates', 'fetchCheckpoint'].map(key => [key, fs.readFileSync(config.FILES[key])]);
         const invocation = pipeline.fullFetch(requestOptions);
         if (rejected) {

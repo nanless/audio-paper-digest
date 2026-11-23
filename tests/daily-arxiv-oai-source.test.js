@@ -746,3 +746,49 @@ test('percent-encoded official query keys cannot disguise a noncanonical cursor 
     } });
     await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), /fields\/encoding/);
 });
+
+test('OAI cold replay accepts pinned fetchedAt + fetchBatchDate (incl. midnight grace) and rejects drifted/mixed fetchBatchDate', async t => {
+    const b = boundary(false, true), opts = setup(t, b);
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    const pinnedSameDay = papers.map(p => ({ ...p, fetchedAt: '2026-10-19T11:00:00.000+08:00', fetchBatchDate: '2026-10-19' }));
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', pinnedSameDay, undefined, '2026-10-19'), true);
+    const wrongBatchDate = papers.map(p => ({ ...p, fetchedAt: '2026-10-19T11:00:00.000+08:00', fetchBatchDate: '2026-10-18' }));
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', wrongBatchDate), false);
+    const invalidDate = papers.map(p => ({ ...p, fetchedAt: '2026-10-19T11:00:00.000+08:00', fetchBatchDate: '2026-02-30' }));
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', invalidDate), false);
+    const origCwd = process.cwd();
+    try {
+        process.chdir(os.tmpdir());
+        assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', pinnedSameDay, undefined, '2026-10-19'), true);
+    } finally {
+        process.chdir(origCwd);
+    }
+
+    // 真实跨零点宽限：boundary.until = 2026-10-19T02:00:00+08:00（2026-10-18T18:00:00.000Z）
+    const midnightBase = {
+        ...codec.recordHeader('daily-fetch-boundary', 'daily-fetch-boundary'),
+        lastDigestDate: '2026-10-18',
+        since: '2026-10-16T14:35:00.000Z',
+        until: '2026-10-18T18:00:00.000Z'
+    };
+    midnightBase.identitySha256 = sha(midnightBase);
+    const midnightOpts = setup(t, midnightBase, x => x, ['2610.23539', '2610.23540']);
+    const midnightPapers = await fetchDailyOaiCategory('eess.AS', midnightBase, [], midnightOpts);
+    assert.equal(midnightPapers.length, 2);
+    const prevDayPinned = midnightPapers.map(p => ({ ...p, fetchedAt: '2026-10-19T02:00:00.000+08:00', fetchBatchDate: '2026-10-18' }));
+    assert.equal(hasVerifiedOaiCoverage(midnightPapers._sourceHealth, midnightBase, 'eess.AS', prevDayPinned, undefined, '2026-10-18'), true);
+    // 同在 02:00 窗口内，但 checkpoint.batchDate 为 2026-10-19 时，必须拒绝漂移为 2026-10-18 的论文。
+    assert.equal(hasVerifiedOaiCoverage(midnightPapers._sourceHealth, midnightBase, 'eess.AS', prevDayPinned, undefined, '2026-10-19'), false);
+    // 同一批论文混用 2026-10-18 与 2026-10-19 必须拒绝。
+    const mixedBatchDates = [
+        { ...midnightPapers[0], fetchedAt: '2026-10-19T02:00:00.000+08:00', fetchBatchDate: '2026-10-18' },
+        { ...midnightPapers[1], fetchedAt: '2026-10-19T02:00:00.000+08:00', fetchBatchDate: '2026-10-19' }
+    ];
+    assert.equal(hasVerifiedOaiCoverage(midnightPapers._sourceHealth, midnightBase, 'eess.AS', mixedBatchDates), false);
+    // 同一批论文里部分携带 fetchBatchDate、部分省略 fetchBatchDate 也必须拒绝。
+    const partialBatchDates = [
+        { ...midnightPapers[0], fetchedAt: '2026-10-19T02:00:00.000+08:00', fetchBatchDate: '2026-10-18' },
+        { ...midnightPapers[1], fetchedAt: '2026-10-19T02:00:00.000+08:00' }
+    ];
+    assert.equal(hasVerifiedOaiCoverage(midnightPapers._sourceHealth, midnightBase, 'eess.AS', partialBatchDates), false);
+});

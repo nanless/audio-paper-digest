@@ -254,7 +254,33 @@ function readVerifiedBundleReaderAuthors(details) {
         || stable(expectedAuthors) !== stable(details.readerAuthors)) {
         throw fail('封存作者元数据与当前来源文件不一致。');
     }
-    return stored.runtimeDetails.readerAuthors === null ? null : structuredClone(stored.runtimeDetails.readerAuthors);
+    const raw = stored.runtimeDetails.readerAuthors;
+    if (raw === null) return null;
+    const authorParser = require('./reader-author-parser.js');
+    if (stored.manifest?.text?.source === 'pdf'
+        && (!raw || typeof raw !== 'object' || raw.contract !== authorParser.PDF_PAGE1_AUTHOR_CONTRACT)) {
+        throw fail('封存 PDF 来源的非空作者记录必须符合 pdf-page1-author-evidence-v1 协议。');
+    }
+    const pdfSha = stored.manifest?.pdf?.responseSha256;
+    if (raw.contract === authorParser.PDF_PAGE1_AUTHOR_CONTRACT) {
+        if (!authorParser.validatePdfPage1AuthorEvidence(raw, pdfSha)) {
+            throw fail('封存 PDF 首页作者证据与来源清单的 PDF 哈希不一致。');
+        }
+        const replayed = authorParser.extractPdfPage1AuthorsSync(stored.pdf);
+        if (!replayed || stable(raw) !== stable(replayed)) {
+            throw fail('封存 PDF 首页作者证据与实际封存 source.pdf 重放结果不一致。');
+        }
+    }
+    if (raw.pdfPage1Authors !== undefined) {
+        if (!authorParser.validatePdfPage1AuthorEvidence(raw.pdfPage1Authors, pdfSha)) {
+            throw fail('封存 HTML 附带的 PDF 首页作者证据与来源清单的 PDF 哈希不一致。');
+        }
+        const replayed = authorParser.extractPdfPage1AuthorsSync(stored.pdf);
+        if (!replayed || stable(raw.pdfPage1Authors) !== stable(replayed)) {
+            throw fail('封存 HTML 附带的 PDF 首页作者证据与实际封存 source.pdf 重放结果不一致。');
+        }
+    }
+    return structuredClone(raw);
 }
 
 function withVerifiedBundleReaderAuthorSource(details, callback) {

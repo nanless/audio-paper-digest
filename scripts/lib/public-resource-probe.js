@@ -15,7 +15,19 @@ const {
     getPaperEvaluationHeadingIssue
 } = require('./analysis-section-titles.js');
 const {
+    RESERVED_HF_PREFIXES,
+    RESOURCE_NOT_RELEASED,
+    THIRD_PARTY_RESOURCE,
+    stripComparativeClosedSourceContrast,
+    demoPlatformForToken,
+    hasFollowingResourceRetraction,
+    hasInlineTailRetraction,
+    hasPrecedingResourceRetractionOrDeferral,
+    hasExplicitThirdPartySourceAttribution,
+    inferContextFacetsForRetraction,
+    classifyRepositoryHostFacets,
     extractPaperSourceRepositoryCandidates,
+    normalizePaperSourceRepositoryToken,
     normalizedSourceUrlBinding,
     paperSourceQuoteBindsOriginalUrl,
     paperSourceResourceFacets,
@@ -418,21 +430,21 @@ function hasOpenSourceLinks(analysis) {
 
 function extractDemoUrls(analysis) {
     const urls = [];
-    const urlSuffix = '[^\\s\\u3000\\uff08\\uff09\\u3010\\u3011\\u300c\\u300d\\u300e\\u300f'
+    const urlSuffix = '[^\\s<>\\u3000\\uff08\\uff09\\u3010\\u3011\\u300c\\u300d\\u300e\\u300f'
         + '\\uff0c\\u3002\\uff1b\\uff1a\\uff01\\uff1f\\u3001\\u300b\\u3009]+';
     const patterns = [
-        new RegExp(`Demo[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
-        new RegExp(`项目主页[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
-        new RegExp(`在线演示[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
-        new RegExp(`Homepage[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
-        new RegExp(`Project[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi'),
-        new RegExp(`页面[：:]\\s*(https?:\\/\\/${urlSuffix})`, 'gi')
+        new RegExp(`Demo[：:]\\s*<?(https?:\\/\\/${urlSuffix})>?`, 'gi'),
+        new RegExp(`项目主页[：:]\\s*<?(https?:\\/\\/${urlSuffix})>?`, 'gi'),
+        new RegExp(`在线演示[：:]\\s*<?(https?:\\/\\/${urlSuffix})>?`, 'gi'),
+        new RegExp(`Homepage[：:]\\s*<?(https?:\\/\\/${urlSuffix})>?`, 'gi'),
+        new RegExp(`Project[：:]\\s*<?(https?:\\/\\/${urlSuffix})>?`, 'gi'),
+        new RegExp(`页面[：:]\\s*<?(https?:\\/\\/${urlSuffix})>?`, 'gi')
     ];
 
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(analysis)) !== null) {
-            const url = match[1].trim().replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
+            const url = match[1].trim().replace(/[>),.;:!?，。；：！？、）》】》」』]+$/u, '');
             if (!url.includes('arxiv.org')
                 && !url.includes('github.com')
                 && !url.includes('huggingface.co')
@@ -448,13 +460,15 @@ function extractDemoUrls(analysis) {
 function resolveMetadataResourceLinks(paper) {
     if (!(paper?.sources || []).includes('huggingface')) return [];
     const raw = String(paper?.hf_github_repo || '').trim();
+    if (!classifyRepositoryHostFacets(raw)) return [];
     try {
         const parsed = new URL(raw);
         const segments = parsed.pathname.split('/').filter(Boolean);
         if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com'
             || parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash
             || segments.length !== 2
-            || segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment))) return [];
+            || segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment)
+                || segment === '.' || segment === '..' || segment.endsWith('.'))) return [];
         return [`https://github.com/${segments.join('/')}`];
     } catch (_) {
         return [];
@@ -478,30 +492,56 @@ function resolveDemoPageCandidates(paper, analysis) {
 }
 
 function isMetadataResourceDiscoveryLink(paper, rawUrl) {
+    if (typeof rawUrl !== 'string' || /[\s\u0000-\u001f\u007f?#\\%]/.test(rawUrl)) return false;
+    const schemeMatch = /^https:\/\/([^/]+)(\/.*)?$/i.exec(rawUrl);
+    if (!schemeMatch) return false;
+    const rawPath = schemeMatch[2] || '';
+    if (/(?:^|\/)\.\.?(?:\/|$)/.test(rawPath) || /\/\//.test(rawPath)) return false;
     const repository = resolveMetadataResourceLinks(paper)[0];
+    const validSegment = segment => /^[A-Za-z0-9._-]+$/.test(segment)
+        && segment !== '.' && segment !== '..' && !segment.endsWith('.');
     try {
         const parsed = new URL(rawUrl);
         const segments = parsed.pathname.split('/').filter(Boolean);
-        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return false;
-        if (parsed.hostname === 'github.com') return rawUrl.replace(/\/$/, '') === repository;
-        if (parsed.hostname === 'huggingface.co') return segments.length === 2
-            && !['spaces', 'datasets'].includes(segments[0].toLowerCase())
-            && segments.every(segment => /^[A-Za-z0-9._-]+$/.test(segment));
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port
+            || parsed.search || parsed.hash) return false;
+        if (schemeMatch[1].toLowerCase() !== parsed.hostname.toLowerCase()) return false;
+        if (parsed.pathname.replace(/\/$/, '') !== rawPath.replace(/\/$/, '')) return false;
+        const normalized = rawUrl.replace(/\/$/, '').replace(/^https:\/\/[^/]+/i, m => m.toLowerCase());
+        if (!classifyRepositoryHostFacets(normalized)) return false;
+        if (parsed.hostname === 'github.com') {
+            return Boolean(repository) && normalized === repository;
+        }
+        if (parsed.hostname === 'huggingface.co') {
+            if (segments.length === 2) {
+                return !RESERVED_HF_PREFIXES.has(segments[0].toLowerCase())
+                    && segments.every(validSegment);
+            }
+            if (segments.length === 3) {
+                return ['collections', 'datasets', 'spaces'].includes(segments[0].toLowerCase())
+                    && segments.slice(1).every(validSegment);
+            }
+            return false;
+        }
         return parsed.hostname === 'modelscope.cn'
             && segments.length === 3
-            && segments[0].toLowerCase() === 'models'
-            && segments.slice(1).every(segment => /^[A-Za-z0-9._-]+$/.test(segment));
+            && ['models', 'datasets', 'studios'].includes(segments[0].toLowerCase())
+            && segments.slice(1).every(validSegment);
     } catch (_) {
         return false;
     }
 }
 
 async function checkDemoPageForOpensource(demoUrl, options = {}) {
+    const seg = '[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?';
+    const lead = '(?<![A-Za-z0-9._~@/\\\\?#&:;%+-])(?:https?:\\/\\/)?(?:www\\.)?';
+    const safeHtmlEnt = '(?:nbsp|lt|gt|quot|apos|mdash|ndash|hellip|middot|bull|copy|reg|#160|#x0*a0|#60|#62|#34|#39);';
+    const tail = `(?:\\/(?![/\\\\\\w?#%~@:.+=$!*|(\\^[\\{\`-]|&(?!${safeHtmlEnt}))|(?![/\\\\\\w?#%~@:+=$!*|(\\^[\\{\`-]|&(?!${safeHtmlEnt})|\\.(?=[/\\\\\\w?#%~@:.+=$!*|(\\^[\\{\`-])))`;
     const openSourcePatterns = [
-        /github\.com\/[\w\-]+\/[\w\-]+/gi,
-        /huggingface\.co\/[\w\-]+\/[\w\-]+/gi,
-        /modelscope\.cn\/(?:models|datasets)\/[\w\-]+\/[\w\-]+/gi,
-        /gitlab\.com\/[\w\-]+\/[\w\-]+/gi
+        new RegExp(`${lead}(github\\.com\\/${seg}\\/${seg})${tail}`, 'gi'),
+        new RegExp(`${lead}(huggingface\\.co\\/(?:(?:collections|datasets|spaces)\\/)?${seg}\\/${seg})${tail}`, 'gi'),
+        new RegExp(`${lead}(modelscope\\.cn\\/(?:models|datasets|studios)\\/${seg}\\/${seg})${tail}`, 'gi'),
+        new RegExp(`${lead}(gitlab\\.com\\/${seg}\\/${seg})${tail}`, 'gi')
     ];
     const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
     const requestImpl = options.requestImpl || requestPinnedPublicHttps;
@@ -561,11 +601,765 @@ async function checkDemoPageForOpensource(demoUrl, options = {}) {
 
         const html = response.data;
         const foundLinks = [];
+        const URL_ATTR_NAMES = new Set([
+            'href', 'xlink:href', 'src', 'action', 'formaction', 'cite', 'poster',
+            'data', 'ping', 'background', 'longdesc', 'data-href', 'data-url', 'data-link'
+        ]);
+        const RAWTEXT_TAGS = new Set([
+            'script', 'style', 'xmp', 'textarea', 'title',
+            'iframe', 'noscript', 'noframes', 'noembed', 'plaintext'
+        ]);
+        // Exact single-pass O(N) HTML start-tag attribute-value, rawtext span, and real tag-end indexer (built lazily on first URL match).
+        let attrSpans = null;
+        let rawTextSpans = null;
+        let tagEndOffsets = null;
+        const buildHtmlSpans = doc => {
+            const spans = [];
+            const rawSpans = [];
+            const tagEnds = [];
+            const len = doc.length;
+            let i = 0;
+            while (i < len) {
+                const lt = doc.indexOf('<', i);
+                if (lt < 0) break;
+                i = lt + 1;
+                if (i >= len) break;
+                const ch = doc[i];
+                if (ch === '!') {
+                    if (doc.startsWith('!--', i)) {
+                        if (doc.startsWith('!-->', i)) {
+                            i += 4;
+                        } else if (doc.startsWith('!--->', i)) {
+                            i += 5;
+                        } else {
+                            const endStd = doc.indexOf('-->', i + 3);
+                            const endBang = doc.indexOf('--!>', i + 3);
+                            if (endStd >= 0 && (endBang < 0 || endStd <= endBang)) {
+                                i = endStd + 3;
+                            } else if (endBang >= 0) {
+                                i = endBang + 4;
+                            } else {
+                                i = len;
+                            }
+                        }
+                    } else {
+                        const end = doc.indexOf('>', i + 1);
+                        i = end < 0 ? len : end + 1;
+                    }
+                    tagEnds.push(i);
+                    continue;
+                }
+                if (ch === '?' || ch === '/') {
+                    const end = doc.indexOf('>', i + 1);
+                    i = end < 0 ? len : end + 1;
+                    tagEnds.push(i);
+                    continue;
+                }
+                if (!/[A-Za-z]/.test(ch)) continue;
+                const nameStart = i;
+                while (i < len && /[A-Za-z0-9:-]/.test(doc[i])) i += 1;
+                // Do not treat autolinks like <https://...> as HTML start tags.
+                if (doc[i - 1] === ':' && doc.startsWith('//', i)) continue;
+                if (i < len && !/[\s/>]/.test(doc[i])) continue;
+                const tagName = doc.slice(nameStart, i).toLowerCase();
+                while (i < len) {
+                    while (i < len && /[\s/]/.test(doc[i])) i += 1;
+                    if (i >= len || doc[i] === '>') {
+                        if (i < len) i += 1;
+                        break;
+                    }
+                    const attrStart = i;
+                    while (i < len && !/[\s=/>"'<]/.test(doc[i])) i += 1;
+                    if (i === attrStart) {
+                        i += 1;
+                        continue;
+                    }
+                    const attrName = doc.slice(attrStart, i).toLowerCase();
+                    while (i < len && /\s/.test(doc[i])) i += 1;
+                    if (i < len && doc[i] === '=') {
+                        i += 1;
+                        while (i < len && /\s/.test(doc[i])) i += 1;
+                        if (i < len && (doc[i] === '"' || doc[i] === "'")) {
+                            const quote = doc[i];
+                            i += 1;
+                            const valueStart = i;
+                            const closeIdx = doc.indexOf(quote, i);
+                            const valueEnd = closeIdx < 0 ? len : closeIdx;
+                            spans.push({ name: attrName, quote, valueStart, valueEnd, jsonValueStrings: undefined });
+                            i = closeIdx < 0 ? len : closeIdx + 1;
+                        } else {
+                            const valueStart = i;
+                            while (i < len && !/[\s>]/.test(doc[i])) i += 1;
+                            const valueEnd = i;
+                            spans.push({ name: attrName, quote: '', valueStart, valueEnd, jsonValueStrings: undefined });
+                        }
+                    }
+                }
+                tagEnds.push(i);
+                // HTML5 RAWTEXT / RCDATA / PLAINTEXT elements never self-close on '/>'.
+                if (RAWTEXT_TAGS.has(tagName)) {
+                    const contentStart = i;
+                    if (tagName === 'plaintext') {
+                        rawSpans.push({ tagName, contentStart, contentEnd: len, scriptStrings: null, jsonValueStrings: undefined });
+                        break;
+                    }
+                    const closeRe = new RegExp(`</${tagName}(?=[\\s/>])`, 'gi');
+                    closeRe.lastIndex = i;
+                    const closeMatch = closeRe.exec(doc);
+                    const contentEnd = closeMatch ? closeMatch.index : len;
+                    rawSpans.push({ tagName, contentStart, contentEnd, scriptStrings: null, jsonValueStrings: undefined });
+                    if (!closeMatch) break;
+                    const closeGt = doc.indexOf('>', closeMatch.index + closeMatch[0].length);
+                    i = closeGt < 0 ? len : closeGt + 1;
+                    tagEnds.push(i);
+                }
+            }
+            return { spans, rawSpans, tagEnds };
+        };
+        const ensureHtmlSpans = () => {
+            if (attrSpans === null) {
+                const built = buildHtmlSpans(html);
+                attrSpans = built.spans;
+                rawTextSpans = built.rawSpans;
+                tagEndOffsets = built.tagEnds;
+            }
+        };
+        const findLastTagEndBefore = pos => {
+            ensureHtmlSpans();
+            let lo = 0;
+            let hi = tagEndOffsets.length - 1;
+            let best = 0;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                if (tagEndOffsets[mid] <= pos) {
+                    best = tagEndOffsets[mid];
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return best;
+        };
+        const findAttrSpanAt = pos => {
+            ensureHtmlSpans();
+            let lo = 0;
+            let hi = attrSpans.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const s = attrSpans[mid];
+                if (pos < s.valueStart) hi = mid - 1;
+                else if (pos >= s.valueEnd) lo = mid + 1;
+                else return s;
+            }
+            return null;
+        };
+        const findRawTextSpanAt = pos => {
+            ensureHtmlSpans();
+            let lo = 0;
+            let hi = rawTextSpans.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const s = rawTextSpans[mid];
+                if (pos < s.contentStart) hi = mid - 1;
+                else if (pos >= s.contentEnd) lo = mid + 1;
+                else return s;
+            }
+            return null;
+        };
+        const scanScriptStringSpans = (doc, start, end) => {
+            const strSpans = [];
+            const regexPrevKinds = new Set(['', 'punct_open', 'punct_sep', 'op', 'kw_expr', 'punct_close_ctrl']);
+            const objOpenPrevKinds = new Set(['', 'punct_open', 'punct_sep', 'op', 'kw_expr']);
+            const exprKeywords = new Set([
+                'return', 'case', 'typeof', 'void', 'delete', 'in', 'of',
+                'throw', 'new', 'yield', 'await', 'else', 'do'
+            ]);
+            const ctrlParenKeywords = new Set(['if', 'while', 'for', 'with']);
+            const lexRange = (startPos, stopAtCloseBrace) => {
+                const tokens = [];
+                const parenStack = [];
+                const braceStack = [];
+                let i = startPos;
+                let lastKind = '';
+                const curObjFrame = () => {
+                    const top = braceStack.length ? braceStack[braceStack.length - 1] : null;
+                    return top && top.isObj ? top : null;
+                };
+                const anyMalformedObj = () => braceStack.some(f => f.isObj && f.malformed);
+                while (i < end) {
+                    const ch = doc[i];
+                    if (ch <= ' ') { i += 1; continue; }
+                    if (ch === '/' && doc[i + 1] === '/') {
+                        const nl = doc.indexOf('\n', i + 2);
+                        i = (nl < 0 || nl >= end) ? end : nl + 1;
+                        continue;
+                    }
+                    if (ch === '/' && doc[i + 1] === '*') {
+                        const close = doc.indexOf('*/', i + 2);
+                        i = (close < 0 || close + 2 > end) ? end : close + 2;
+                        continue;
+                    }
+                    if (ch === '}' && stopAtCloseBrace && braceStack.length === 0) {
+                        return i + 1;
+                    }
+                    if (ch === '"' || ch === "'") {
+                        const quote = ch;
+                        const tokStart = i;
+                        const contentStartPos = i + 1;
+                        i += 1;
+                        let closed = false;
+                        while (i < end) {
+                            const c = doc[i];
+                            if (c === '\\') { i += 2; continue; }
+                            if (c === quote) { closed = true; break; }
+                            if (c === '\n' || c === '\r') break;
+                            i += 1;
+                        }
+                        const contentEndPos = Math.min(i, end);
+                        if (closed) i += 1;
+                        const prevTok = tokens.length ? tokens[tokens.length - 1] : null;
+                        const prevPrevTok = tokens.length >= 2 ? tokens[tokens.length - 2] : null;
+                        const prev3Tok = tokens.length >= 3 ? tokens[tokens.length - 3] : null;
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0) {
+                            if (objF.state === 'after_val') objF.malformed = true;
+                            else if (objF.state === 'expect_key') objF.state = 'after_str_key';
+                            else if (objF.state === 'expect_val') objF.state = 'after_val';
+                        }
+                        strSpans.push({
+                            quote, tokStart, contentStart: contentStartPos, contentEnd: contentEndPos,
+                            closed, gluedToInterp: false, inMalformedObj: anyMalformedObj(),
+                            prevTok, prevPrevTok, prev3Tok
+                        });
+                        tokens.push({ kind: 'str', text: quote, start: tokStart, end: i });
+                        lastKind = 'str';
+                        continue;
+                    }
+                    if (ch === '`') {
+                        const tokStart = i;
+                        i += 1;
+                        let segStart = i;
+                        let isAfterInterp = false;
+                        let templateClosed = false;
+                        const prevTok = tokens.length ? tokens[tokens.length - 1] : null;
+                        const prevPrevTok = tokens.length >= 2 ? tokens[tokens.length - 2] : null;
+                        const prev3Tok = tokens.length >= 3 ? tokens[tokens.length - 3] : null;
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0) {
+                            if (objF.state === 'after_val' || objF.state === 'expect_key') objF.malformed = true;
+                            else if (objF.state === 'expect_val') objF.state = 'after_val';
+                        }
+                        const inBadObj = anyMalformedObj();
+                        while (i < end) {
+                            const c = doc[i];
+                            if (c === '\\') { i += 2; continue; }
+                            if (c === '`') {
+                                strSpans.push({
+                                    quote: '`', tokStart, contentStart: segStart, contentEnd: i,
+                                    closed: true, gluedToInterp: isAfterInterp, inMalformedObj: inBadObj,
+                                    prevTok, prevPrevTok, prev3Tok
+                                });
+                                i += 1;
+                                templateClosed = true;
+                                break;
+                            }
+                            if (c === '$' && doc[i + 1] === '{') {
+                                strSpans.push({
+                                    quote: '`', tokStart, contentStart: segStart, contentEnd: i,
+                                    closed: true, gluedToInterp: isAfterInterp, inMalformedObj: inBadObj,
+                                    prevTok, prevPrevTok, prev3Tok
+                                });
+                                i = lexRange(i + 2, true);
+                                segStart = i;
+                                isAfterInterp = true;
+                                continue;
+                            }
+                            i += 1;
+                        }
+                        if (!templateClosed) {
+                            strSpans.push({
+                                quote: '`', tokStart, contentStart: segStart, contentEnd: end,
+                                closed: false, gluedToInterp: isAfterInterp, inMalformedObj: inBadObj,
+                                prevTok, prevPrevTok, prev3Tok
+                            });
+                        }
+                        tokens.push({ kind: 'str', text: '`', start: tokStart, end: i });
+                        lastKind = 'str';
+                        continue;
+                    }
+                    if (ch === '/' && regexPrevKinds.has(lastKind)) {
+                        const tokStart = i;
+                        i += 1;
+                        let inClass = false;
+                        while (i < end) {
+                            const c = doc[i];
+                            if (c === '\\') { i += 2; continue; }
+                            if (c === '[') inClass = true;
+                            else if (c === ']') inClass = false;
+                            else if (c === '/' && !inClass) { i += 1; break; }
+                            else if (c === '\n' || c === '\r') break;
+                            i += 1;
+                        }
+                        while (i < end && /[a-z]/i.test(doc[i])) i += 1;
+                        tokens.push({ kind: 'regex', text: '/', start: tokStart, end: i });
+                        lastKind = 'regex';
+                        continue;
+                    }
+                    if (/[A-Za-z_$]/.test(ch)) {
+                        const tokStart = i;
+                        while (i < end && /[A-Za-z0-9_$]/.test(doc[i])) i += 1;
+                        const word = doc.slice(tokStart, i);
+                        const kind = ctrlParenKeywords.has(word)
+                            ? 'kw_ctrl'
+                            : (exprKeywords.has(word) ? 'kw_expr' : 'ident');
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0) {
+                            if (objF.state === 'after_val') {
+                                if (!exprKeywords.has(word)) objF.malformed = true;
+                                else objF.state = 'expect_val';
+                            } else if (objF.state === 'expect_key') {
+                                objF.state = 'after_ident_key';
+                            } else if (objF.state === 'expect_val') {
+                                if (exprKeywords.has(word)) objF.state = 'expect_val';
+                                else objF.state = 'after_val';
+                            }
+                        }
+                        tokens.push({ kind, text: word, start: tokStart, end: i });
+                        lastKind = kind;
+                        continue;
+                    }
+                    if (/[0-9]/.test(ch)) {
+                        const tokStart = i;
+                        while (i < end && /[0-9A-Za-z._]/.test(doc[i])) i += 1;
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0) {
+                            if (objF.state === 'after_val') objF.malformed = true;
+                            else if (objF.state === 'expect_key') objF.state = 'after_num_key';
+                            else if (objF.state === 'expect_val') objF.state = 'after_val';
+                        }
+                        tokens.push({ kind: 'num', text: '0', start: tokStart, end: i });
+                        lastKind = 'num';
+                        continue;
+                    }
+                    const tokStart = i;
+                    i += 1;
+                    let kind = 'op';
+                    if (ch === '(') {
+                        kind = 'punct_open';
+                        parenStack.push(lastKind === 'kw_ctrl');
+                        const objF = curObjFrame();
+                        if (objF) {
+                            if (objF.exprDepth > 0) objF.exprDepth += 1;
+                            else if (objF.state === 'after_ident_key') {
+                                objF.state = 'method_params';
+                                objF.exprDepth = 1;
+                            } else if (objF.state === 'expect_val' || objF.state === 'after_val') {
+                                objF.exprDepth = 1;
+                            }
+                        }
+                    } else if (ch === '[') {
+                        kind = 'punct_open';
+                        const objF = curObjFrame();
+                        if (objF) {
+                            if (objF.exprDepth > 0) objF.exprDepth += 1;
+                            else if (objF.state === 'expect_key') {
+                                objF.state = 'computed_key';
+                                objF.exprDepth = 1;
+                            } else if (objF.state === 'expect_val' || objF.state === 'after_val') {
+                                objF.exprDepth = 1;
+                                objF.state = 'after_val';
+                            }
+                        }
+                    } else if (ch === '{') {
+                        kind = 'punct_open';
+                        const objF = curObjFrame();
+                        const isMethodBody = Boolean(objF && objF.exprDepth === 0 && objF.state === 'method_body');
+                        const isObj = !isMethodBody && objOpenPrevKinds.has(lastKind);
+                        if (objF && objF.exprDepth === 0 && (objF.state === 'expect_val' || isMethodBody)) {
+                            objF.state = 'after_val';
+                        }
+                        braceStack.push({ isObj, state: 'expect_key', malformed: false, exprDepth: 0, ternaryDepth: 0 });
+                    } else if (ch === ')') {
+                        const closesCtrl = parenStack.pop() === true;
+                        kind = closesCtrl ? 'punct_close_ctrl' : 'punct_close';
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth > 0) {
+                            objF.exprDepth -= 1;
+                            if (objF.exprDepth === 0) {
+                                if (objF.state === 'method_params') objF.state = 'method_body';
+                                else if (objF.state === 'expect_val') objF.state = 'after_val';
+                            }
+                        }
+                    } else if (ch === ']') {
+                        kind = 'punct_close';
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth > 0) {
+                            objF.exprDepth -= 1;
+                            if (objF.state === 'computed_key' && objF.exprDepth === 0) {
+                                objF.state = 'after_ident_key';
+                            }
+                        }
+                    } else if (ch === '}') {
+                        kind = 'punct_close';
+                        const popped = braceStack.pop();
+                        if (popped && popped.isObj && (popped.state === 'after_str_key' || popped.state === 'after_num_key')) {
+                            popped.malformed = true;
+                        }
+                    } else if (ch === ':') {
+                        kind = 'punct_sep';
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0) {
+                            if (objF.state === 'after_str_key' || objF.state === 'after_ident_key' || objF.state === 'after_num_key') {
+                                objF.state = 'expect_val';
+                            } else if (objF.ternaryDepth > 0) {
+                                objF.ternaryDepth -= 1;
+                                objF.state = 'expect_val';
+                            } else {
+                                objF.malformed = true;
+                            }
+                        }
+                    } else if (ch === ',') {
+                        kind = 'punct_sep';
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0) {
+                            if (objF.state === 'after_str_key' || objF.state === 'after_num_key' || objF.state === 'expect_val') {
+                                objF.malformed = true;
+                            } else {
+                                objF.state = 'expect_key';
+                                objF.ternaryDepth = 0;
+                            }
+                        }
+                    } else if (ch === '?') {
+                        kind = 'op';
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0 && (objF.state === 'expect_val' || objF.state === 'after_val')) {
+                            objF.ternaryDepth += 1;
+                            objF.state = 'expect_val';
+                        }
+                    } else if (ch === ';') {
+                        kind = 'punct_sep';
+                    } else {
+                        const objF = curObjFrame();
+                        if (objF && objF.exprDepth === 0 && objF.state === 'after_val' && /[.+*\-/%&|^!<>=]/.test(ch)) {
+                            objF.state = 'expect_val';
+                        }
+                    }
+                    tokens.push({ kind, text: ch, start: tokStart, end: i });
+                    lastKind = kind;
+                }
+                return i;
+            };
+            lexRange(start, false);
+            return strSpans;
+        };
+        const findScriptStringSpanAt = (rawSpan, pos) => {
+            if (rawSpan.scriptStrings === null) {
+                rawSpan.scriptStrings = scanScriptStringSpans(html, rawSpan.contentStart, rawSpan.contentEnd);
+            }
+            const arr = rawSpan.scriptStrings;
+            let lo = 0;
+            let hi = arr.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const s = arr[mid];
+                if (pos < s.contentStart) hi = mid - 1;
+                else if (pos >= s.contentEnd) lo = mid + 1;
+                else return s;
+            }
+            return null;
+        };
+        // Strictly single-pass O(N) full RFC 8259 JSON validator + value-slot string span indexer.
+        // Returns sorted [{ contentStart, contentEnd }] if the ENTIRE container is valid RFC 8259 JSON, else null.
+        const jsonPrimRe = /(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/y;
+        const indexValidJsonValueStrings = (doc, start, end) => {
+            const valStrings = [];
+            const stack = [];
+            let lastTok = '';
+            let rootClosed = false;
+            let i = start;
+            while (i < end) {
+                const ch = doc[i];
+                if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i += 1; continue; }
+                if (rootClosed) return null;
+                if (ch === '"') {
+                    const top = stack[stack.length - 1];
+                    let role = '';
+                    if (top === '{' && (lastTok === '{' || lastTok === ',')) role = 'key';
+                    else if ((top === '[' && (lastTok === '[' || lastTok === ','))
+                        || (top === '{' && lastTok === ':')) role = 'val';
+                    else return null;
+                    i += 1;
+                    const contentStart = i;
+                    let closed = false;
+                    while (i < end) {
+                        const c = doc[i];
+                        const code = c.charCodeAt(0);
+                        if (code < 0x20) return null;
+                        if (c === '\\') {
+                            if (i + 1 >= end) return null;
+                            const esc = doc[i + 1];
+                            if ('"\\/bfnrt'.includes(esc)) {
+                                i += 2;
+                                continue;
+                            }
+                            if (esc === 'u' && i + 5 < end && /^[0-9a-fA-F]{4}$/.test(doc.slice(i + 2, i + 6))) {
+                                i += 6;
+                                continue;
+                            }
+                            return null;
+                        }
+                        if (c === '"') {
+                            closed = true;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    if (!closed) return null;
+                    if (role === 'val') valStrings.push({ contentStart, contentEnd: i });
+                    i += 1;
+                    lastTok = role === 'key' ? 'key_str' : 'val_str';
+                    continue;
+                }
+                if (ch === '{' || ch === '[') {
+                    if (stack.length === 0) {
+                        if (lastTok !== '') return null;
+                    } else if (lastTok !== '[' && lastTok !== ',' && lastTok !== ':') {
+                        return null;
+                    }
+                    stack.push(ch);
+                    lastTok = ch;
+                    i += 1;
+                    continue;
+                }
+                if (ch === '}' || ch === ']') {
+                    const expected = ch === '}' ? '{' : '[';
+                    if (!stack.length || stack[stack.length - 1] !== expected) return null;
+                    if (lastTok !== expected && lastTok !== 'val_str' && lastTok !== 'val' && lastTok !== 'prim') {
+                        return null;
+                    }
+                    stack.pop();
+                    lastTok = 'val';
+                    if (stack.length === 0) rootClosed = true;
+                    i += 1;
+                    continue;
+                }
+                if (ch === ':') {
+                    if (stack[stack.length - 1] !== '{' || lastTok !== 'key_str') return null;
+                    lastTok = ':';
+                    i += 1;
+                    continue;
+                }
+                if (ch === ',') {
+                    if (!stack.length || (lastTok !== 'val_str' && lastTok !== 'val' && lastTok !== 'prim')) return null;
+                    lastTok = ',';
+                    i += 1;
+                    continue;
+                }
+                if (/[0-9tfn-]/.test(ch)) {
+                    if (!stack.length || (lastTok !== '[' && lastTok !== ',' && lastTok !== ':')) return null;
+                    jsonPrimRe.lastIndex = i;
+                    const prim = jsonPrimRe.exec(doc);
+                    if (!prim || i + prim[0].length > end) return null;
+                    i += prim[0].length;
+                    lastTok = 'prim';
+                    continue;
+                }
+                return null;
+            }
+            return (rootClosed && stack.length === 0) ? valStrings : null;
+        };
+        const matchesIndexedJsonValueString = (valStrings, startPos, endPos) => {
+            if (!Array.isArray(valStrings) || valStrings.length === 0) return false;
+            let lo = 0;
+            let hi = valStrings.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const s = valStrings[mid];
+                if (startPos < s.contentStart) hi = mid - 1;
+                else if (startPos > s.contentStart) lo = mid + 1;
+                else return s.contentEnd === endPos || (s.contentEnd === endPos + 1 && html[endPos] === '/');
+            }
+            return false;
+        };
+        const hasGluedPriorUrlInToken = tok => (
+            /(?:https?:\/\/|(?:^|["'<=])\.{0,2}\/)/i.test(tok)
+        );
+        const SCRIPT_VALUE_END_KINDS = new Set(['punct_close', 'punct_close_ctrl', 'ident', 'str', 'num', 'regex']);
 
         for (const pattern of openSourcePatterns) {
             let match;
             while ((match = pattern.exec(html)) !== null) {
-                foundLinks.push(`https://${match[0]}`);
+                const matchEnd = match.index + match[0].length;
+                const attrSpan = findAttrSpanAt(match.index);
+                if (attrSpan) {
+                    // Reject srcset="..." and HTML5 imagesrcset="..." candidate lists unconditionally
+                    if (attrSpan.name === 'srcset' || attrSpan.name === 'imagesrcset') continue;
+                    if (URL_ATTR_NAMES.has(attrSpan.name)) {
+                        const rawPrefix = html.slice(attrSpan.valueStart, match.index);
+                        const rawSuffix = html.slice(matchEnd, attrSpan.valueEnd);
+                        if (rawPrefix.trim().length > 0) continue;
+                        if (rawSuffix.trim().length > 0) continue;
+                    } else {
+                        const inSingleQuotedAttr = attrSpan.quote === "'";
+                        const inDoubleQuotedAttr = attrSpan.quote === '"';
+                        const shortSuffix = html.slice(matchEnd, Math.min(attrSpan.valueEnd, matchEnd + 32));
+                        if (inDoubleQuotedAttr && /^'/.test(shortSuffix)) continue;
+                        if (!inDoubleQuotedAttr && /^'[A-Za-z0-9._~/@#?&=%+-]/.test(shortSuffix)) continue;
+                        const attrHead = html.slice(attrSpan.valueStart, Math.min(attrSpan.valueEnd, attrSpan.valueStart + 64));
+                        const looksLikeSingleQuotedJson = inSingleQuotedAttr
+                            && /^\s*(?:\{\s*(?:"|\})|\[\s*(?:"|[\d{\[-]|true\b|false\b|null\b|\]))/.test(attrHead);
+                        if (looksLikeSingleQuotedJson) {
+                            if (attrSpan.jsonValueStrings === undefined) {
+                                attrSpan.jsonValueStrings = indexValidJsonValueStrings(html, attrSpan.valueStart, attrSpan.valueEnd);
+                            }
+                            if (!matchesIndexedJsonValueString(attrSpan.jsonValueStrings, match.index, matchEnd)) {
+                                continue;
+                            }
+                        } else {
+                            // Strictly O(len(tok)) linear backward scan to last whitespace (eliminates ReDoS on rawPrefix).
+                            let tIdx = match.index;
+                            while (tIdx > attrSpan.valueStart && !/\s/.test(html[tIdx - 1])) tIdx -= 1;
+                            const tok = html.slice(tIdx, match.index);
+                            const boundedPrefix = html.slice(Math.max(attrSpan.valueStart, match.index - 140), match.index);
+                            const isMarkdownLinkOpen = /(?:^|\s)\[[^\]\r\n<>]{1,120}\]\($/i.test(boundedPrefix);
+                            const eqPrefix = tok.endsWith('=') && /(?:https?:\/\/|[?&#/])/i.test(tok);
+                            const lastCh = tok.length ? tok[tok.length - 1] : '';
+                            const hasSpoofDelim = inSingleQuotedAttr
+                                ? /[!$*|,("'[{\^`\]})<>]/.test(lastCh)
+                                : inDoubleQuotedAttr
+                                    ? /[!$*|,('[{\^`\]})<>]/.test(lastCh)
+                                    : /[!$*|,("'[{\^`\]})<>=]/.test(lastCh);
+                            const spoofedPrefixedUrl = hasSpoofDelim
+                                && /(?:https?:\/\/|^\.{0,2}\/|(?<=[<=])\.{0,2}\/)/i.test(tok);
+                            if (eqPrefix || (!isMarkdownLinkOpen && spoofedPrefixedUrl)) continue;
+                        }
+                    }
+                } else {
+                    const rawTextSpan = findRawTextSpanAt(match.index);
+                    const afterLimit = rawTextSpan
+                        ? Math.min(rawTextSpan.contentEnd, matchEnd + 64)
+                        : Math.min(html.length, matchEnd + 64);
+                    const afterMatch = html.slice(matchEnd, afterLimit);
+                    if (/^'[A-Za-z0-9._~/@#?&=%+-]/.test(afterMatch)) continue;
+
+                    if (rawTextSpan && rawTextSpan.tagName === 'script') {
+                        // If the <script> payload itself starts with { or [, validate & index it ONCE as RFC 8259 JSON.
+                        let firstNonWs = rawTextSpan.contentStart;
+                        while (firstNonWs < rawTextSpan.contentEnd && html[firstNonWs] <= ' ') firstNonWs += 1;
+                        if (firstNonWs < rawTextSpan.contentEnd && (html[firstNonWs] === '{' || html[firstNonWs] === '[')) {
+                            if (rawTextSpan.jsonValueStrings === undefined) {
+                                rawTextSpan.jsonValueStrings = indexValidJsonValueStrings(
+                                    html, firstNonWs, rawTextSpan.contentEnd
+                                );
+                            }
+                            if (!matchesIndexedJsonValueString(rawTextSpan.jsonValueStrings, match.index, matchEnd)) {
+                                continue;
+                            }
+                        } else {
+                            const strSpan = findScriptStringSpanAt(rawTextSpan, match.index);
+                            if (strSpan) {
+                                if (!strSpan.closed || strSpan.inMalformedObj) continue;
+                                if (strSpan.gluedToInterp && strSpan.contentStart === match.index) continue;
+                                if (strSpan.contentStart === match.index) {
+                                    // Standalone JS string literal beginning at match.index:
+                                    // reject computed subscripting (obj["url"], {"a":"b"}["url"]), adjacent strings ("a""url"),
+                                    // and malformed chained colons (: "v" : "url").
+                                    if (strSpan.prevTok?.kind === 'str') continue;
+                                    if (strSpan.prevTok?.text === '['
+                                        && strSpan.prevPrevTok && SCRIPT_VALUE_END_KINDS.has(strSpan.prevPrevTok.kind)) {
+                                        continue;
+                                    }
+                                    if (strSpan.prevTok?.text === ':' && strSpan.prev3Tok?.text === ':') {
+                                        continue;
+                                    }
+                                } else {
+                                    const inStrPrefixStart = Math.max(strSpan.contentStart, match.index - 4096);
+                                    const inStrPrefix = html.slice(inStrPrefixStart, match.index);
+                                    const isMarkdownLinkOpen = /(?:^|\s)\[[^\]\r\n<>]{1,120}\]\($/i.test(inStrPrefix);
+                                    let tIdx = inStrPrefix.length;
+                                    while (tIdx > 0 && !/\s/.test(inStrPrefix[tIdx - 1])) tIdx -= 1;
+                                    const tok = inStrPrefix.slice(tIdx);
+                                    const eqPrefix = tok.endsWith('=') && /(?:https?:\/\/|[?&#/])/i.test(tok);
+                                    if (eqPrefix || (!isMarkdownLinkOpen && hasGluedPriorUrlInToken(tok))) continue;
+                                }
+                            } else {
+                                // Inside JS comment or bare script text: bounded linear token check
+                                const beforeStart = Math.max(rawTextSpan.contentStart, match.index - 4096);
+                                const beforeMatch = html.slice(beforeStart, match.index);
+                                const isMarkdownLinkOpen = /(?:^|\s)\[[^\]\r\n<>]{1,120}\]\($/i.test(beforeMatch);
+                                let tIdx = beforeMatch.length;
+                                while (tIdx > 0 && !/\s/.test(beforeMatch[tIdx - 1])) tIdx -= 1;
+                                const tok = beforeMatch.slice(tIdx);
+                                const eqPrefix = tok.endsWith('=') && /(?:https?:\/\/|[?&#/])/i.test(tok);
+                                if (eqPrefix || (!isMarkdownLinkOpen && hasGluedPriorUrlInToken(tok))) continue;
+                            }
+                        }
+                    } else {
+                        const minBound = rawTextSpan
+                            ? rawTextSpan.contentStart
+                            : findLastTagEndBefore(match.index);
+                        const beforeStart = Math.max(minBound, match.index - 4096);
+                        const beforeMatch = html.slice(beforeStart, match.index);
+                        const isMarkdownLinkOpen = /(?:^|[\s>])\[[^\]\r\n<>]{1,120}\]\($/i.test(beforeMatch);
+                        // Strictly O(1) bounded linear scan of contiguous non-whitespace prefix token (<= 4096 chars).
+                        // Never break on bare literal '<' or '>' in body text (real tag ends are bounded by minBound).
+                        let tIdx = beforeMatch.length;
+                        while (tIdx > 0 && !/\s/.test(beforeMatch[tIdx - 1])) {
+                            tIdx -= 1;
+                        }
+                        const tok = beforeMatch.slice(tIdx);
+                        const eqPrefix = tok.endsWith('=') && /(?:https?:\/\/|[?&#/])/i.test(tok);
+                        let spoofedPrefixedUrl = false;
+                        if (hasGluedPriorUrlInToken(tok)) {
+                            // Only allow glued prior URLs in plain text / rawtext if they are a complete valid RFC 8259 JSON structure
+                            // (e.g. compact `{"a":"https://...","b":"https://github.com/org/repo"}`).
+                            const jsonRelStart = tok.search(/[\[{]/);
+                            let validCompactJson = false;
+                            if (jsonRelStart >= 0) {
+                                const jsonAbsStart = beforeStart + tIdx + jsonRelStart;
+                                const maxJsonEnd = rawTextSpan
+                                    ? Math.min(rawTextSpan.contentEnd, jsonAbsStart + 8192)
+                                    : Math.min(html.length, jsonAbsStart + 8192);
+                                // Single linear pass to find where the root JSON container closes, then validate ONCE.
+                                let depth = 0;
+                                let inStr = false;
+                                let esc = false;
+                                let jsonAbsEnd = -1;
+                                for (let p = jsonAbsStart; p < maxJsonEnd; p += 1) {
+                                    const c = html[p];
+                                    if (inStr) {
+                                        if (esc) { esc = false; continue; }
+                                        if (c === '\\') { esc = true; continue; }
+                                        if (c === '"') inStr = false;
+                                        continue;
+                                    }
+                                    if (c === '"') { inStr = true; continue; }
+                                    if (c === '{' || c === '[') depth += 1;
+                                    else if (c === '}' || c === ']') {
+                                        depth -= 1;
+                                        if (depth === 0) {
+                                            jsonAbsEnd = p + 1;
+                                            break;
+                                        }
+                                        if (depth < 0) break;
+                                    }
+                                }
+                                if (jsonAbsEnd >= matchEnd) {
+                                    const vals = indexValidJsonValueStrings(html, jsonAbsStart, jsonAbsEnd);
+                                    if (vals && matchesIndexedJsonValueString(vals, match.index, matchEnd)) {
+                                        validCompactJson = true;
+                                    }
+                                }
+                            }
+                            spoofedPrefixedUrl = !validCompactJson;
+                        }
+                        if (eqPrefix || (!isMarkdownLinkOpen && spoofedPrefixedUrl)) continue;
+                    }
+                }
+                const candidate = `https://${match[1].replace(/\/$/, '').replace(/^[^/]+/, host => host.toLowerCase())}`;
+                if (classifyRepositoryHostFacets(candidate)) {
+                    foundLinks.push(candidate);
+                }
             }
         }
 
@@ -615,9 +1409,42 @@ function extractWeakConferenceSourceResourceCandidates(sourceText) {
     return extractPaperSourceRepositoryCandidates(sourceText);
 }
 
+function isUrlContinuationAt(source, idx) {
+    const ch = source[idx];
+    if (!ch) return false;
+    if (/[A-Za-z0-9_~%+-]/.test(ch)) return true;
+    if (ch === '.') return Boolean(source[idx + 1] && /[A-Za-z0-9_~%+-]/.test(source[idx + 1]));
+    if (ch === '/') {
+        const next = source[idx + 1];
+        return Boolean(next && (/[A-Za-z0-9_~%+-]/.test(next)
+            || (next === '.' && source[idx + 2] && /[A-Za-z0-9._~%+-]/.test(source[idx + 2]))));
+    }
+    return false;
+}
+
+function isBoundedSourceTokenAt(text, idx, len, tok) {
+    if (idx < 0 || len <= 0) return false;
+    const beforeCh = idx > 0 ? text[idx - 1] : '';
+    const afterBlocked = isUrlContinuationAt(text, idx + len);
+    const beforeBlocked = !/^https?:\/\//i.test(tok) && Boolean(beforeCh && /[A-Za-z0-9._~%+-/]/.test(beforeCh));
+    return !afterBlocked && !beforeBlocked;
+}
+
+function findBoundedSourceToken(source, token, searchFrom = 0) {
+    if (!source || !token) return -1;
+    let pos = searchFrom;
+    while (pos < source.length) {
+        const idx = source.indexOf(token, pos);
+        if (idx < 0) return -1;
+        if (isBoundedSourceTokenAt(source, idx, token.length, token)) return idx;
+        pos = idx + 1;
+    }
+    return -1;
+}
+
 function exactResourceSourceQuote(sourceText, url, maxChars = 1200) {
     const source = String(sourceText || '');
-    const index = source.indexOf(url);
+    const index = findBoundedSourceToken(source, url);
     if (index < 0) return '';
     const lowerBound = Math.max(0, index - Math.floor(maxChars / 2));
     const upperBound = Math.min(source.length, index + url.length + Math.floor(maxChars / 2));
@@ -632,11 +1459,11 @@ function exactResourceSourceQuote(sourceText, url, maxChars = 1200) {
     const end = index + url.length + (afterMatches.length > 0 ? Math.min(...afterMatches) + 1 : after.length);
     let quote = source.slice(start, end).trim();
     if (quote.length > maxChars) {
-        const relative = quote.indexOf(url);
-        const quoteStart = Math.max(0, Math.min(relative, quote.length - maxChars));
+        const relative = findBoundedSourceToken(quote, url);
+        const quoteStart = Math.max(0, Math.min(relative >= 0 ? relative : 0, quote.length - maxChars));
         quote = quote.slice(quoteStart, quoteStart + maxChars).trim();
     }
-    if (!quote.includes(url)) throw new Error('开源资源 exact sourceQuote 截取丢失 URL');
+    if (findBoundedSourceToken(quote, url) < 0) throw new Error('开源资源 exact sourceQuote 截取丢失 URL');
     return quote;
 }
 
@@ -785,9 +1612,9 @@ async function inspectGitHubRepositoryDocumentation(repositoryUrl, options = {})
         .includes(contentType)) return null;
     const readme = Buffer.from(await response.arrayBuffer()).toString('utf8');
     const capabilities = {
-        installation: /(?:^|\n)#{1,4}\s+(?:installation|install|setup)\b|\bpip\s+install\b|\bconda\s+create\b/i.test(readme),
-        inference: /(?:^|\n)#{1,4}\s+(?:inference|quick\s*start|usage)\b|\binfer(?:ence)?\.py\b|\bfrom\s+auk\b/i.test(readme),
-        fineTuning: /(?:^|\n)#{1,4}\s+(?:fine[- ]?tuning|training|train)\b|\btrain(?:ing)?\.py\b|\bdeepspeed\b/i.test(readme)
+        installation: /(?:^|\n)#{1,4}\s+(?:installation|install|setup|getting\s+started|environment|dependencies|requirements)\b|\b(?:pip|uv\s+pip)\s+install\b|\bconda\s+create\b|\brequirements\.txt\b|\benvironment\.ya?ml\b|\bgit\s+clone\b|\bdocker\s+(?:build|pull|run)\b/i.test(readme),
+        inference: /(?:^|\n)#{1,4}\s+(?:inference|quick\s*start|usage|evaluation|eval|demo|examples?|run(?:ning)?|reproduc(?:tion|ing))\b|\binfer(?:ence)?\.py\b|\beval(?:uate|uation)?\.py\b|\bdemo\.py\b|\bfrom\s+(?:auk|transformers)\b|\bAutoModel\b|\bpython3?\s+(?:[^\n\s]*\/)?(?:infer(?:ence)?|eval(?:uate|uation)?|predict|generate|synthesize|demo|run|test|sample)[^\n\s]*\.py\b/i.test(readme),
+        fineTuning: /(?:^|\n)#{1,4}\s+(?:fine[- ]?tun(?:ing|e)|training|train|pre[- ]?train(?:ing)?|sft|data\s+preparation)\b|\btrain(?:ing)?\.py\b|\bfinetune\.py\b|\b(?:deepspeed|torchrun|accelerate\s+launch)\b/i.test(readme)
     };
     const evidence = {
         contract: REPOSITORY_DOCUMENTATION_EVIDENCE_CONTRACT,
@@ -824,64 +1651,322 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     const sourceCandidates = [...(weakConferencePolicy
         ? extractWeakConferenceSourceResourceCandidates(sourceText) : []),
     ...require('./reader-authenticated-pdf-footnote-evidence').deriveCandidates(sourceText)];
-    const demoLinks = new Set(Array.isArray(demoStage?.discoveredLinks)
-        ? demoStage.discoveredLinks : []);
-    const demoCandidates = [...demoLinks].map(url => {
+    const demoHostResourceType = rawUrl => {
+        const facets = classifyRepositoryHostFacets(rawUrl);
+        return Array.isArray(facets) && facets.length > 0 ? facets[0] : null;
+    };
+    const canonicalDedupUrl = url => canonicalRepositoryDedupUrl(url);
+    const canonKeyForSourceLookup = rawUrl => {
+        const s = String(rawUrl || '').trim();
+        if (!s) return '';
+        const noFragQuery = /^https?:\/\/(?:www\.)?(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)\//i.test(s)
+            ? s.replace(/[?#].*$/, '')
+            : s;
+        return canonicalDedupUrl(noFragQuery);
+    };
+    const retractionRepoRootKey = rawUrl => {
+        const folded = String(rawUrl || '').replace(/\r?\n[ \t]*/g, '').trim();
+        if (!folded) return '';
         let parsed;
-        try { parsed = new URL(url); } catch (_) { return null; }
-        const pathname = parsed.pathname.toLowerCase();
-        let type = null;
-        if (['github.com', 'gitlab.com'].includes(parsed.hostname)) type = 'code';
-        else if (['huggingface.co', 'modelscope.cn'].includes(parsed.hostname)) {
-            type = pathname.includes('/datasets/') ? 'dataset' : 'model';
+        try {
+            parsed = new URL(/^https?:\/\//i.test(folded) ? folded : `https://${folded}`);
+        } catch (_) {
+            return '';
         }
-        return type ? { type, url, line: `validated project metadata: ${url}` } : null;
-    }).filter(Boolean);
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        if ((host === 'github.com' || host === 'gitlab.com') && segments.length >= 2) {
+            return `https://${host}/${segments[0].toLowerCase()}/${segments[1].replace(/\.git$/i, '').toLowerCase()}`;
+        }
+        if (host === 'huggingface.co' && segments.length >= 2) {
+            const first = segments[0].toLowerCase();
+            if ((first === 'datasets' || first === 'spaces' || first === 'collections') && segments.length >= 3) {
+                return `https://${host}/${first}/${segments[1].toLowerCase()}/${segments[2].replace(/\.git$/i, '').toLowerCase()}`;
+            }
+            return `https://${host}/${first}/${segments[1].replace(/\.git$/i, '').toLowerCase()}`;
+        }
+        if (host === 'modelscope.cn' && segments.length >= 2) {
+            const first = segments[0].toLowerCase();
+            if ((first === 'models' || first === 'datasets' || first === 'studios') && segments.length >= 3) {
+                return `https://${host}/${first}/${segments[1].toLowerCase()}/${segments[2].replace(/\.git$/i, '').toLowerCase()}`;
+            }
+            return `https://${host}/${first}/${segments[1].replace(/\.git$/i, '').toLowerCase()}`;
+        }
+        return `https://${host}${parsed.pathname.replace(/\/+$/, '').toLowerCase()}`;
+    };
+    const rawSourceTextStr = String(sourceText || '');
+    const isBoundedTokenAt = (text, idx, len, tok) => isBoundedSourceTokenAt(text, idx, len, tok);
+    const hasBoundedExactToken = (text, tok) => findBoundedSourceToken(text, tok) >= 0;
+    const sourceTokensByCanonUrl = new Map();
+    const retractionOccurrencesByRepoRoot = new Map();
+    const recordSourceOccurrence = (rawTok, idx) => {
+        if (!rawTok || idx < 0) return;
+        const normalized = normalizePaperSourceRepositoryToken(rawTok) || rawTok;
+        const canonKey = canonKeyForSourceLookup(normalized);
+        if (canonKey) {
+            let list = sourceTokensByCanonUrl.get(canonKey);
+            if (!list) {
+                list = [];
+                sourceTokensByCanonUrl.set(canonKey, list);
+            }
+            if (!list.some(item => item.index === idx && item.length === rawTok.length)) {
+                list.push({ token: rawTok, index: idx, length: rawTok.length });
+            }
+        }
+        const rootKey = retractionRepoRootKey(rawTok);
+        if (rootKey) {
+            let rlist = retractionOccurrencesByRepoRoot.get(rootKey);
+            if (!rlist) {
+                rlist = [];
+                retractionOccurrencesByRepoRoot.set(rootKey, rlist);
+            }
+            if (!rlist.some(item => item.index === idx && item.length === rawTok.length)) {
+                rlist.push({ token: rawTok, index: idx, length: rawTok.length });
+            }
+        }
+    };
+    for (const m of rawSourceTextStr.matchAll(/https?:\/\/[^\s<>"'\]})>,;]+/gi)) {
+        const rawTok = m[0].replace(/[),.;:!?，。；：！？、）》】」』]+$/u, '');
+        if (rawTok) recordSourceOccurrence(rawTok, m.index);
+    }
+    for (const m of rawSourceTextStr.matchAll(/(?<![A-Za-z0-9._~@/-])(?:https?(?:\r?\n[ \t]*)?:(?:\r?\n[ \t]*)?\/(?:\r?\n[ \t]*)?\/(?:\r?\n[ \t]*)?)?(?:www\.)?(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)(?:\r?\n[ \t]*)?\/(?:\r?\n[ \t]*)?[A-Za-z0-9._~-]+(?:\r?\n[ \t]*)?\/(?:\r?\n[ \t]*)?[A-Za-z0-9._~-]+(?:(?:\r?\n[ \t]*)?\/(?:\r?\n[ \t]*)?[A-Za-z0-9._~-]+)*/giu)) {
+        const rawTok = m[0].replace(/[),.;:!?，。；：！？、）》】」』]+$/u, '');
+        if (rawTok && isBoundedTokenAt(rawSourceTextStr, m.index, rawTok.length, rawTok)) {
+            recordSourceOccurrence(rawTok, m.index);
+        }
+    }
+    for (const cand of sourceCandidates) {
+        const tok = cand?.sourceToken || cand?.url || '';
+        if (!tok) continue;
+        let pos = 0;
+        while (pos < rawSourceTextStr.length) {
+            const idx = rawSourceTextStr.indexOf(tok, pos);
+            if (idx < 0) break;
+            if (isBoundedTokenAt(rawSourceTextStr, idx, tok.length, tok)) {
+                recordSourceOccurrence(tok, idx);
+            }
+            pos = idx + Math.max(1, tok.length);
+        }
+    }
+    const isBindableTokenForUrl = (tok, url) => {
+        if (!tok || !url) return false;
+        if (tok === url) return true;
+        const normalized = normalizePaperSourceRepositoryToken(tok);
+        return Boolean(normalized && canonicalDedupUrl(normalized) === canonicalDedupUrl(url));
+    };
+    const resolveSourceTokenForUrl = (url, explicitToken = '') => {
+        if (explicitToken && hasBoundedExactToken(rawSourceTextStr, explicitToken)
+            && isBindableTokenForUrl(explicitToken, url)) {
+            return explicitToken;
+        }
+        const occurrences = sourceTokensByCanonUrl.get(canonKeyForSourceLookup(url));
+        if (occurrences && occurrences.length > 0) {
+            const exact = occurrences.find(item => item.token === url);
+            if (exact) return exact.token;
+            const bindable = occurrences.find(item => isBindableTokenForUrl(item.token, url));
+            if (bindable) return bindable.token;
+        }
+        if (url && hasBoundedExactToken(rawSourceTextStr, url)) return url;
+        return explicitToken || url;
+    };
+    const demoLinks = new Set((Array.isArray(demoStage?.discoveredLinks) ? demoStage.discoveredLinks : [])
+        .filter(url => Boolean(demoHostResourceType(url))));
+    const demoLinksCanon = new Set([...demoLinks].map(canonicalDedupUrl));
+    const demoCandidates = [...demoLinks].flatMap(url => {
+        const hostType = demoHostResourceType(url);
+        if (!hostType) return [];
+        const resolvedToken = resolveSourceTokenForUrl(url);
+        const hasSourceMention = Boolean(exactResourceSourceQuote(sourceText, resolvedToken));
+        const sourceFacets = hasSourceMention
+            ? paperSourceResourceFacets(sourceText, resolvedToken).filter(facet => facet !== 'third_party')
+            : [];
+        const types = sourceFacets.length > 0 ? sourceFacets : [hostType];
+        return types.map(type => ({
+            type,
+            url: hasSourceMention ? (normalizePaperSourceRepositoryToken(resolvedToken) || url) : url,
+            ...(hasSourceMention && resolvedToken !== url ? { sourceToken: resolvedToken } : {}),
+            line: `validated project metadata: ${url}`
+        }));
+    });
     const candidateByTypeAndUrl = new Map();
     for (const candidate of [...analysisCandidates, ...sourceCandidates, ...demoCandidates]) {
-        const key = `${candidate.type}:${candidate.url}`;
+        const canonUrl = canonicalDedupUrl(candidate.url);
+        const key = `${candidate.type}:${canonUrl}`;
         const previous = candidateByTypeAndUrl.get(key);
+        const preferNonTrailingSlash = previous && previous.url.endsWith('/') && !candidate.url.endsWith('/')
+            && !previous.authenticatedPdfFootnoteEvidence
+            && (Boolean(candidate.sourceToken) || Boolean(exactResourceSourceQuote(sourceText, candidate.url)));
         if (!previous || (candidate.authenticatedPdfFootnoteEvidence && !previous.authenticatedPdfFootnoteEvidence)
+            || preferNonTrailingSlash
             || (candidate.sourceToken && !previous.sourceToken && !previous.authenticatedPdfFootnoteEvidence)) {
             candidateByTypeAndUrl.set(key, candidate);
         }
     }
     const typedUrls = new Set([...candidateByTypeAndUrl.values()]
-        .filter(candidate => candidate.type !== 'third_party').map(candidate => candidate.url));
+        .filter(candidate => candidate.type !== 'third_party').map(candidate => canonicalDedupUrl(candidate.url)));
     const extractedCandidates = [...candidateByTypeAndUrl.values()].filter(candidate => (
-        candidate.type !== 'third_party' || !typedUrls.has(candidate.url)
+        candidate.type !== 'third_party' || !typedUrls.has(canonicalDedupUrl(candidate.url))
     ));
     const deadlineAt = Number.isFinite(options.deadlineAt)
         ? options.deadlineAt : Date.now() + 60000;
-    const boundCandidates = extractedCandidates.map(candidate => {
+    const rawBoundCandidates = extractedCandidates.map(candidate => {
         const footnoteProof = candidate.authenticatedPdfFootnoteEvidence;
         if (footnoteProof) require('./reader-authenticated-pdf-footnote-evidence').assertEvidence({
             origin: 'paper_source', type: candidate.type, originalUrl: candidate.url,
             sourceQuote: footnoteProof.sourceQuote, sourceQuoteSha256: footnoteProof.sourceQuoteSha256,
             authenticatedPdfFootnoteEvidence: footnoteProof
         }, sourceText);
+        const effectiveSourceToken = resolveSourceTokenForUrl(candidate.url, candidate.sourceToken || '');
         const sourceLine = footnoteProof?.sourceQuote || exactResourceSourceQuote(
             sourceText,
-            candidate.sourceToken || candidate.url
+            effectiveSourceToken
         );
-        const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
-            ? 'validated_demo' : null;
+        const resolvedUrl = sourceLine && !footnoteProof && effectiveSourceToken !== candidate.url
+            ? (normalizePaperSourceRepositoryToken(effectiveSourceToken) || candidate.url)
+            : candidate.url;
+        const resolvedSourceToken = sourceLine && !footnoteProof && effectiveSourceToken !== resolvedUrl
+            ? effectiveSourceToken
+            : candidate.sourceToken;
+        const canBindAsPaperSource = Boolean(footnoteProof)
+            || (Boolean(sourceLine) && (effectiveSourceToken === resolvedUrl
+                || normalizePaperSourceRepositoryToken(effectiveSourceToken) === resolvedUrl));
+        let origin = canBindAsPaperSource ? 'paper_source'
+            : (demoLinks.has(candidate.url) || demoLinksCanon.has(canonicalDedupUrl(candidate.url)))
+                ? 'validated_demo' : null;
         const sourceFacets = origin === 'paper_source'
             ? footnoteProof?.pdfFootnote.resourceFacets
-                || paperSourceResourceFacets(sourceText, candidate.sourceToken || candidate.url) : [];
-        const staleAuthorCodeClassification = origin === 'paper_source'
-            && candidate.type === 'third_party' && sourceFacets.includes('code')
+                || paperSourceResourceFacets(sourceText, effectiveSourceToken) : [];
+        const firstPartyFacets = sourceFacets.filter(facet => facet !== 'third_party');
+        const demotedThirdPartyWouldBeStale = origin === 'paper_source'
+            && !sourceFacets.includes(candidate.type)
+            && firstPartyFacets.length > 0
+            && !resourceClassificationIsCurrent({
+                ...candidate,
+                type: 'third_party',
+                origin,
+                originalUrl: resolvedUrl,
+                sourceUrlToken: effectiveSourceToken
+            }, sourceText);
+        const staleFirstPartyClassification = origin === 'paper_source'
+            && candidate.type === 'third_party'
+            && firstPartyFacets.length > 0
             && !resourceClassificationIsCurrent({
                 ...candidate,
                 origin,
-                originalUrl: candidate.url,
-                sourceUrlToken: candidate.sourceToken || candidate.url
+                originalUrl: resolvedUrl,
+                sourceUrlToken: effectiveSourceToken
             }, sourceText);
-        const type = staleAuthorCodeClassification ? 'code'
+        let type = (staleFirstPartyClassification || demotedThirdPartyWouldBeStale)
+            ? firstPartyFacets[0]
             : origin === 'paper_source' && !sourceFacets.includes(candidate.type)
                 ? 'third_party' : candidate.type;
-        return { ...candidate, type, sourceLine, origin };
+        // 论文正文中仅有裸 URL 提及（且多行上下文无否定/第三方归属），且元数据/项目页已验证该官方链接
+        // 且主机类型匹配时，允许使用 validated_demo 印证其官方资源类型，不再被误降为 third_party。
+        const expectedHostType = demoHostResourceType(resolvedUrl);
+        if (origin === 'validated_demo') {
+            if (!expectedHostType) {
+                origin = null;
+            } else {
+                type = expectedHostType;
+            }
+        }
+        const restrictedDomainGuard = '(?!\\s+to\\s+(?:non[- ]?commercial|research|academic|educational|personal|evaluation|scientific|\\d|monophonic|single|clean|short|english|speech|audio|fixed|causal|offline|synthetic|in-domain)\\b)';
+        const RETRACTED_OR_CLOSED_SOURCE = new RegExp(`\\b(?:(?:isn[’']t|aren[’']t|hasn[’']t|haven[’']t|didn[’']t|cannot|can[’']t|won[’']t|don[’']t|doesn[’']t|unable\\s+to)\\s+(?:(?:currently|still|yet)\\s+)*(?:be(?:en)?\\s+)?(?:public(?:ly)?\\s+|openly\\s+)?(?:available|release[d]?|open[- ]source[d]?|publish(?:ed)?|share[d]?|provide[d]?|accessible|(?:made|make)\\s+(?:(?:our|this|the|these|it|them)\\b[^.!?\\n]{0,60}\\s+)?(?:publicly\\s+|openly\\s+)?available)|(?:is|are|remains?|kept|currently|still)\\s+(?:(?:currently|still|strictly|presently)\\s+)*(?:private|withheld|pending(?:\\s+(?:approval|review|release))?|tbd|restricted${restrictedDomainGuard})|closed[- ]source|unreleased|unavailable|proprietary|confidential|internal\\s+only|withheld|to\\s+be\\s+released|pending\\s+(?:approval|review|release)|tbd|under\\s+(?:anonymous\\s+)?review|private\\s+(?:repo(?:sitory)?|codes?|models?|weights?|checkpoints?|datasets?|benchmarks?)|(?:access\\s+(?:is\\s+|to\\s+[^.!?\\n]{0,40}is\\s+)?restricted${restrictedDomainGuard}|restricted\\s+(?:access|repo(?:sitory)?|codes?|models?|weights?|checkpoints?|datasets?)|(?:repo(?:sitory)?|codes?|models?|weights?|checkpoints?|datasets?)\\s+(?:is|are|remains?)\\s+(?:currently\\s+)?restricted${restrictedDomainGuard})|not\\s+(?:(?:yet|currently|still)\\s+)*(?:public(?:ly)?|available|release[d]?|open[- ]source[d]?|shared|accessible))\\b`, 'i');
+        const tokenForWindow = effectiveSourceToken;
+        const rawSourceText = rawSourceTextStr;
+        const tokenMatches = [];
+        const seenMatchSpan = new Set();
+        const addTokenMatch = (index, length) => {
+            const key = `${index}:${length}`;
+            if (index >= 0 && length > 0 && !seenMatchSpan.has(key)) {
+                seenMatchSpan.add(key);
+                tokenMatches.push({ index, length });
+            }
+        };
+        if (origin === 'paper_source' || origin === 'validated_demo') {
+            for (const lookupUrl of [resolvedUrl, candidate.url]) {
+                const indexed = sourceTokensByCanonUrl.get(canonKeyForSourceLookup(lookupUrl)) || [];
+                for (const item of indexed) addTokenMatch(item.index, item.length);
+                const rootIndexed = retractionOccurrencesByRepoRoot.get(retractionRepoRootKey(lookupUrl)) || [];
+                for (const item of rootIndexed) addTokenMatch(item.index, item.length);
+            }
+            if (origin === 'paper_source' && tokenForWindow) {
+                let searchFrom = 0;
+                while (searchFrom < rawSourceText.length) {
+                    const idx = rawSourceText.indexOf(tokenForWindow, searchFrom);
+                    if (idx < 0) break;
+                    if (isBoundedTokenAt(rawSourceText, idx, tokenForWindow.length, tokenForWindow)) {
+                        addTokenMatch(idx, tokenForWindow.length);
+                    }
+                    searchFrom = idx + Math.max(1, tokenForWindow.length);
+                }
+            }
+        }
+        const followRetractionOpts = {
+            demoPlatform: demoPlatformForToken(resolvedUrl),
+            repoHostDemo: Boolean(classifyRepositoryHostFacets(resolvedUrl)?.includes('code'))
+        };
+        const hasBlockingSourceContext = tokenMatches.length > 0
+            ? tokenMatches.some(({ index: idx, length: len }) => {
+                const win = stripComparativeClosedSourceContrast(
+                    rawSourceText.slice(Math.max(0, idx - 240), Math.min(rawSourceText.length, idx + len + 120))
+                );
+                const contextFacets = inferContextFacetsForRetraction(rawSourceText, idx, expectedHostType, idx + len);
+                return RESOURCE_NOT_RELEASED.test(win) || THIRD_PARTY_RESOURCE.test(win)
+                    || RETRACTED_OR_CLOSED_SOURCE.test(win)
+                    || hasExplicitThirdPartySourceAttribution(rawSourceText, idx, idx + len)
+                    || hasFollowingResourceRetraction(rawSourceText, idx + len, contextFacets, followRetractionOpts)
+                    || contextFacets.some(f => hasInlineTailRetraction(rawSourceText, idx + len, f, followRetractionOpts))
+                    || hasPrecedingResourceRetractionOrDeferral(rawSourceText, idx, contextFacets, followRetractionOpts);
+            })
+            : (() => {
+                const cleanedLine = stripComparativeClosedSourceContrast(String(sourceLine || ''));
+                return RESOURCE_NOT_RELEASED.test(cleanedLine) || THIRD_PARTY_RESOURCE.test(cleanedLine)
+                    || RETRACTED_OR_CLOSED_SOURCE.test(cleanedLine);
+            })();
+        if (origin === 'validated_demo' && hasBlockingSourceContext) {
+            origin = null;
+        } else if (origin === 'paper_source' && type === 'third_party'
+            && sourceFacets.every(facet => facet === 'third_party')
+            && expectedHostType && candidate.type === expectedHostType
+            && (demoLinks.has(candidate.url) || demoLinksCanon.has(canonicalDedupUrl(candidate.url)))
+            && !hasBlockingSourceContext) {
+            origin = 'validated_demo';
+            type = expectedHostType;
+        }
+        return {
+            ...candidate,
+            url: resolvedUrl,
+            ...(resolvedSourceToken ? { sourceToken: resolvedSourceToken } : {}),
+            type,
+            sourceLine,
+            origin
+        };
     }).filter(candidate => candidate.origin);
+    // 最终类型归位后再次按 (type, canonicalUrl) 去重，且优先保留已识别的一方类型而非重复 third_party。
+    const finalTypedUrls = new Set(rawBoundCandidates
+        .filter(candidate => candidate.type !== 'third_party')
+        .map(candidate => canonicalDedupUrl(candidate.url)));
+    const boundByKey = new Map();
+    for (const candidate of rawBoundCandidates) {
+        const canonUrl = canonicalDedupUrl(candidate.url);
+        if (candidate.type === 'third_party' && finalTypedUrls.has(canonUrl)) continue;
+        const key = `${candidate.type}:${canonUrl}`;
+        const existing = boundByKey.get(key);
+        const existingPriority = !existing ? -1
+            : existing.authenticatedPdfFootnoteEvidence ? 3
+            : existing.origin === 'paper_source' ? 2 : 1;
+        const candidatePriority = candidate.authenticatedPdfFootnoteEvidence ? 3
+            : candidate.origin === 'paper_source' ? 2 : 1;
+        const preferNonTrailingSlashSameOrigin = existing
+            && candidatePriority === existingPriority
+            && existing.url.endsWith('/') && !candidate.url.endsWith('/')
+            && !existing.authenticatedPdfFootnoteEvidence;
+        if (!existing || candidatePriority > existingPriority || preferNonTrailingSlashSameOrigin) {
+            boundByKey.set(key, candidate);
+        }
+    }
+    const boundCandidates = [...boundByKey.values()];
     const candidates = boundCandidates.slice(0, 12);
     if (boundCandidates.length > candidates.length) {
         console.log(
@@ -920,7 +2005,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
             throw error;
         }
         let documentationEvidence = null;
-        if (candidate.type === 'code' && candidate.url === metadataRepository) {
+        if (candidate.type === 'code' && options.paper && !weakConferencePolicy
+            && (canonicalDedupUrl(candidate.url) === canonicalDedupUrl(metadataRepository)
+                || (verified.availability === 'available' && Boolean(githubRepositoryReadmeUrl(candidate.url))))) {
             if (!documentationByUrl.has(candidate.url)) {
                 try {
                     const inspectDocumentation = options.documentationInspector
@@ -951,6 +2038,7 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                 verified = {
                     ...verifiedWithoutFailure,
                     finalUrl: candidate.url,
+                    redirects: [],
                     status: documentationEvidence.status,
                     availability: 'available',
                     retryable: false
@@ -961,7 +2049,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         const sourceQuote = origin === 'paper_source'
             ? candidate.authenticatedPdfFootnoteEvidence?.sourceQuote
                 || paperSourceResourceQuote(sourceText, candidate.sourceToken || candidate.url)
-            : sourceLine?.trim() || candidate.line;
+            : (sourceLine && sourceLine.includes(candidate.url)
+                ? sourceLine.trim()
+                : `validated project metadata: ${candidate.url}`);
         resources.push({
             type: candidate.type,
             origin,
@@ -985,6 +2075,13 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     return { ...identity, identitySha256: stableFingerprint(identity) };
 }
 
+function canonicalRepositoryDedupUrl(url) {
+    const raw = String(url || '');
+    return classifyRepositoryHostFacets(raw)
+        ? raw.replace(/\/$/, '').replace(/^https:\/\/[^/]+/i, match => match.toLowerCase())
+        : raw;
+}
+
 function applyApiReaderResourceAvailability(analysis, identity) {
     if (!readerIdentityFormat.hasIdentity(identity, 'resources') || !Array.isArray(identity.resources)
         || !recoverySha256(identity.identitySha256)
@@ -995,8 +2092,11 @@ function applyApiReaderResourceAvailability(analysis, identity) {
     let updated = String(analysis || '');
     const acceptedUrls = new Set((identity?.resources || [])
         .map(item => item.originalUrl).filter(Boolean));
+    const acceptedCanonUrls = new Set((identity?.resources || [])
+        .map(item => canonicalRepositoryDedupUrl(item.originalUrl)).filter(Boolean));
     for (const candidate of extractApiReaderResourceCandidates(updated)) {
-        if (!acceptedUrls.has(candidate.url)) {
+        if (!acceptedUrls.has(candidate.url)
+            && !acceptedCanonUrls.has(canonicalRepositoryDedupUrl(candidate.url))) {
             updated = updated.split(candidate.url).join(
                 '未找到论文原文或已验证 Demo 中的精确链接'
             );
@@ -1036,21 +2136,31 @@ function applyApiReaderResourceAvailability(analysis, identity) {
         )).join('；');
     const section = extractSectionByTitle(updated, '开源详情');
     let cleaned = String(section || '').replace(/^[-*]\s*资源可达性验证[：:].*$/gm, '').trim();
+    const thirdPartyEntry = '<https:\\/\\/[^<>\\s]+>（(?:已验证可访问|当前不可用|本次暂时无法确认可达)(?:，HTTP \\d{3})?）';
+    const generatedThirdPartyLineRe = new RegExp(`^- 其他资源链接：${thirdPartyEntry}(?:；${thirdPartyEntry})*（未据此确认作者已开放资源）$`);
     cleaned = cleaned.split('\n').map(line => {
         const candidates = extractApiReaderResourceCandidates(`## 开源详情\n${line}`);
-        const generatedThirdPartyLine = /^- 其他资源链接：<https:\/\/[^<>\s]+>（(?:已验证可访问|当前不可用|本次暂时无法确认可达)(?:，HTTP \d{3})?）（未据此确认作者已开放资源）$/.test(line.trim());
-        if (generatedThirdPartyLine && candidates.length === 1 && candidates.every(candidate => candidate.type === 'third_party'
-            && identity.resources.some(resource => resource.originalUrl === candidate.url
-                && resource.origin === 'paper_source'
-                && (Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')
-                    ? require('./reader-authenticated-pdf-footnote-evidence').assertEvidence(resource)
-                    : resource.type === 'code' && !resourceClassificationIsCurrent({
-                        ...resource, type: 'third_party'
-                    }, resource.sourceQuote))))) {
+        const generatedThirdPartyLine = generatedThirdPartyLineRe.test(line.trim());
+        const urlEntryCount = (line.match(/<https:\/\/[^<>\s]+>/g) || []).length;
+        if (generatedThirdPartyLine && candidates.length >= 1 && candidates.length === urlEntryCount
+            && candidates.every(candidate => candidate.type === 'third_party'
+                && identity.resources.some(resource => canonicalRepositoryDedupUrl(resource.originalUrl) === canonicalRepositoryDedupUrl(candidate.url)
+                    && ((resource.origin === 'paper_source'
+                        && (Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')
+                            ? require('./reader-authenticated-pdf-footnote-evidence').assertEvidence(resource)
+                            : ['code', 'model', 'dataset', 'demo', 'reproduction'].includes(resource.type)
+                                && (paperSourceResourceFacets(
+                                    resource.sourceQuote, resource.sourceUrlToken || resource.originalUrl
+                                ).includes(resource.type)
+                                    || !resourceClassificationIsCurrent({
+                                        ...resource, type: 'third_party'
+                                    }, resource.sourceQuote))))
+                        || (resource.origin === 'validated_demo'
+                            && ['code', 'model', 'dataset', 'demo', 'reproduction'].includes(resource.type)))))) {
             return '';
         }
         return candidates.some(candidate => candidate.type !== 'third_party'
-            && !identity.resources.some(resource => resource.originalUrl === candidate.url
+            && !identity.resources.some(resource => canonicalRepositoryDedupUrl(resource.originalUrl) === canonicalRepositoryDedupUrl(candidate.url)
                 && resource.type === candidate.type))
             ? '- 其他资源链接：来源未确认属于作者已开放的资源；不据此判断技术缺陷。' : line;
     }).join('\n');
@@ -1088,18 +2198,30 @@ function updateOpensourceFromDemoLinks(analysis, foundLinks) {
     let updated = analysis;
 
     let hasCode = false, hasModel = false, hasDataset = false;
+    const linkDescriptions = [];
+    const repoHosts = new Set(['github.com', 'gitlab.com', 'huggingface.co', 'modelscope.cn']);
     for (const link of foundLinks) {
-        const lower = link.toLowerCase();
-        if (lower.includes('github.com')) hasCode = true;
-        if (lower.includes('huggingface.co')) {
-            if (lower.includes('/datasets/')) hasDataset = true;
-            else hasModel = true;
+        const facets = classifyRepositoryHostFacets(link);
+        if (facets) {
+            if (facets.includes('code')) {
+                hasCode = true;
+                linkDescriptions.push(`- **代码仓库**：${link}`);
+            } else if (facets.includes('dataset')) {
+                hasDataset = true;
+                linkDescriptions.push(`- **数据集**：${link}`);
+            } else if (facets.includes('demo')) {
+                linkDescriptions.push(`- **在线演示**：${link}`);
+            } else if (facets.includes('model')) {
+                hasModel = true;
+                linkDescriptions.push(`- **模型权重**：${link}`);
+            }
+            continue;
         }
-        if (lower.includes('modelscope.cn')) {
-            if (lower.includes('/datasets/')) hasDataset = true;
-            else hasModel = true;
+        let host = '';
+        try { host = new URL(link).hostname.toLowerCase(); } catch (_) { host = ''; }
+        if (!repoHosts.has(host)) {
+            linkDescriptions.push(`- **相关链接**：${link}`);
         }
-        if (lower.includes('gitlab.com')) hasCode = true;
     }
 
     if (hasCode) {
@@ -1110,22 +2232,6 @@ function updateOpensourceFromDemoLinks(analysis, foundLinks) {
     }
     if (hasDataset) {
         updated = updated.replace(/(has_dataset\s*[：:]\s*)(否|no|n|无|未说明|unknown|否\b)/i, '$1是');
-    }
-
-    const linkDescriptions = [];
-    for (const link of foundLinks) {
-        const lower = link.toLowerCase();
-        if (lower.includes('github.com') || lower.includes('gitlab.com')) {
-            linkDescriptions.push(`- **代码仓库**：${link}`);
-        } else if (lower.includes('huggingface.co') || lower.includes('modelscope.cn')) {
-            if (lower.includes('/datasets/')) {
-                linkDescriptions.push(`- **数据集**：${link}`);
-            } else {
-                linkDescriptions.push(`- **模型权重**：${link}`);
-            }
-        } else {
-            linkDescriptions.push(`- **相关链接**：${link}`);
-        }
     }
 
     if (linkDescriptions.length > 0) {

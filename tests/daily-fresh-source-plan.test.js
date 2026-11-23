@@ -633,3 +633,40 @@ test('同一批次使用原运行身份，原封存清单与来源引用可按�
     assert.throws(() => daily.readDailyFreshSourcePlan({ ...currentReference, runManifestSha256: sha(historicalBytes) },
         { rootDir: sourceRoot }), /封存运行不匹配/);
 });
+
+test('以较高跳过上限封存的批次在默认环境下仍可正常执行日更恢复计划校验', async t => {
+    fixture(t);
+    const skip = require('../scripts/lib/daily-source-skip.js');
+    const prevLimitEnv = process.env.PD_DAILY_SOURCE_SKIP_MAX;
+    delete process.env.PD_DAILY_SOURCE_SKIP_MAX;
+    t.after(() => {
+        if (prevLimitEnv === undefined) delete process.env.PD_DAILY_SOURCE_SKIP_MAX;
+        else process.env.PD_DAILY_SOURCE_SKIP_MAX = prevLimitEnv;
+    });
+    const batchDate = '2026-10-09';
+    const batchId = 'skip-limit-3-recovery';
+    const papers = [{ arxivId: '2610.83001' }, { arxivId: '2610.83002' }];
+    const plan = daily.createDailyFreshSourcePlan({ batchDate, batchId, papers });
+    const capture = async options => {
+        if (options.arxivId === '2610.83002') {
+            const error = new Error(`arXiv PDF ${options.arxivId} download failed: HTTP 404`);
+            error.code = 'ARXIV_PDF_NOT_FOUND'; error.status = 404; error.arxivId = options.arxivId;
+            throw error;
+        }
+        return require('../scripts/lib/fresh-arxiv-rewrite-source.js').captureFreshArxivRewriteSource(options, {
+            fetchText: async () => sourcePayload(options.arxivId),
+            fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nControlled source\n%%EOF\n'),
+                url: `https://arxiv.org/pdf/${options.arxivId}` })
+        });
+    };
+    const outcome = await daily.captureDailyFreshSources(plan, { capture, concurrency: 1 });
+    skip.writeDailySourceSkips(plan, outcome.skipped, { limit: 3 });
+    const ref = daily.dailyFreshSourceReference(plan);
+    const payload = { batchDate, batchId, dailyFreshSourceRun: ref, papers: [{ arxivId: '2610.83001' }] };
+    const filtered = { batchDate, batchId, status: 'complete', papers };
+    // 默认上限为 2 时，恢复入口必须放行合法 limit=3（<= MAX_LIMIT）的已封存跳过记录。
+    const recoveredPlan = daily.requireDailyFreshSourceRecoveryPlan(payload);
+    assert.equal(recoveredPlan.runId, plan.runId);
+    const prepared = daily.prepareDailyFreshSourceRecoveryPayload({ ...payload, papers: [] }, filtered);
+    assert.deepEqual(prepared.papers.map(p => p.arxivId), ['2610.83001']);
+});

@@ -114,3 +114,62 @@ test('the exact Reader parser fingerprint changes when only the shared budget by
  const before=evaluate(false),after=evaluate(true);assert.ok(before.observed.includes('lib/active-time-budget.js'));assert.deepEqual(after.observed,before.observed);assert.notEqual(before.digest,after.digest);
  assert.match(deep,/allowNewImplementationAllowance: false/);
 });
+
+test('CONNECT fails fast on EOF, enforces exact 64KiB cap, unshifts sticky bytes, handles IPv6, cleans listeners, and fails fast on TLS close',()=>{
+ const hEof=setup(),sEof=hEof.open();
+ sEof.emit('connect');sEof.emit('end');
+ assert.equal(hEof.results.length,1);assert.equal(hEof.results[0].error.code,'PROXY_CONNECT_CLOSED');assert.equal(hEof.clock.pending(),0);
+
+ const hTlsClose=setup(),sTlsClose=hTlsClose.open(),tTlsClose=hTlsClose.tunnel(sTlsClose);
+ tTlsClose.emit('close');
+ assert.equal(hTlsClose.results.length,1);assert.equal(hTlsClose.results[0].error.code,'PROXY_CONNECT_CLOSED');assert.equal(hTlsClose.clock.pending(),0);
+
+ // 65532 header bytes + 4-byte CRLFCRLF = exact 65536 passes; 65533 + 4 = 65537 rejected.
+ const hExact=setup(),sExact=hExact.open();
+ sExact.emit('connect');
+ const prefix='HTTP/1.1 200 OK\r\nX-Pad: ';
+ const exactPad='a'.repeat(65536-4-prefix.length);
+ sExact.emit('data',Buffer.from(prefix+exactPad+'\r\n\r\n'));
+ assert.equal(hExact.tls.length,1);
+ hExact.tls.at(-1).emit('secureConnect');
+ assert.equal(hExact.results.length,1);assert.equal(hExact.results[0].error,null);
+ assert.equal(sExact.listenerCount('error'),0);assert.equal(hExact.tls.at(-1).listenerCount('error'),0);
+
+ const hOver4=setup(),sOver4=hOver4.open();
+ sOver4.emit('connect');
+ sOver4.emit('data',Buffer.from(prefix+exactPad+'a\r\n\r\n'));
+ assert.equal(hOver4.results.length,1);assert.equal(hOver4.results[0].error.code,'PROXY_CONNECT_HEADER_TOO_LARGE');assert.equal(sOver4.destroyed,true);assert.equal(hOver4.clock.pending(),0);
+
+ const hSticky=setup(),sSticky=hSticky.open();
+ const unshifted=[];let paused=false;
+ sSticky.pause=()=>{paused=true;};sSticky.unshift=buf=>unshifted.push(buf);
+ sSticky.emit('connect');
+ sSticky.emit('data',Buffer.from('HTTP/1.1 200 Connection established\r\n\r\n\x16\x03\x01'));
+ assert.equal(paused,true);assert.equal(unshifted.length,1);assert.deepEqual(unshifted[0],Buffer.from('\x16\x03\x01','binary'));
+ hSticky.tls.at(-1).emit('secureConnect');
+ assert.equal(hSticky.results.length,1);assert.equal(hSticky.results[0].error,null);assert.equal(hSticky.clock.pending(),0);
+
+ // IPv6 bracket normalization & strict host/port validation inside VM harness.
+ const tcpV6=[],tlsV6=[];
+ class SocketV6 extends EventEmitter{constructor(){super();this.writes=[];}write(v){this.writes.push(v);}destroy(){}}
+ class AgentV6{destroy(){}}
+ const ctxV6={module:{exports:{}},Date:{now:()=>0},URL,Buffer,Set,Math,setTimeout:()=>({unref(){}}),clearTimeout(){},setInterval:()=>({unref(){}}),clearInterval(){},setImmediate:()=>({unref(){}}),clearImmediate(){},
+  buildProxyAuthorizationHeader:()=>null,
+  require:id=>id==='https'?{Agent:AgentV6}:id==='net'?{connect:o=>{const s=new SocketV6();s.options=o;tcpV6.push(s);return s;}}:id==='tls'?{connect:(o,cb)=>{const s=new SocketV6();s.options=o;if(cb)s.once('secureConnect',cb);tlsV6.push(s);return s;}}:(()=>{throw Error(id);})()};
+ vm.createContext(ctxV6);vm.runInContext(helper,ctxV6);ctxV6.createActiveTimeBudget=ctxV6.module.exports.createActiveTimeBudget;
+ vm.runInContext(body+';module.exports=createProxyAgent;',ctxV6);
+ const makeV6=ctxV6.module.exports;
+ const agentV6=makeV6('http://[::1]:7897','[2001:db8::1]',443,'[2001:db8::1]');
+ agentV6.createConnection({},()=>{});
+ assert.equal(tcpV6[0].options.host,'::1');
+ tcpV6[0].emit('connect');
+ assert.match(tcpV6[0].writes[0],/^CONNECT \[2001:db8::1\]:443 HTTP\/1\.1\r\nHost: \[2001:db8::1\]:443\r\n/);
+ tcpV6[0].emit('data',Buffer.from('HTTP/1.1 200 OK\r\n\r\n'));
+ assert.equal(tlsV6[0].options.servername,'2001:db8::1');
+ for(const badHost of ['[[::1]]','example.com:80','example.com/path','example.com@evil','example.com\x01',123]){
+  assert.throws(()=>makeV6('http://127.0.0.1:7897',badHost,443),/目标主机名非法/);
+ }
+ for(const badPort of [true,false,[443],0,65536,'443abc',null]){
+  assert.throws(()=>makeV6('http://127.0.0.1:7897','example.com',badPort),/目标端口非法/);
+ }
+});

@@ -32,7 +32,7 @@ const {
     getAdaptiveHostCooldownMs
 } = require('./lib/fetch-scheduler.js');
 const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
-const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, readJsonSafe, getRecordDate, normalizedId, loadPrompt, detectApiType } = require('./utils.js');
+const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, isWithinBatchDateGrace, readJsonSafe, getRecordDate, normalizedId, loadPrompt, detectApiType } = require('./utils.js');
 const {
     analyzeBatch,
     mergeAndSaveResults,
@@ -228,7 +228,7 @@ function hasValidFetchSourceIntegrity(entry) {
         && entry.papersSha256 === stableContentSha256(entry.papers);
 }
 
-function hasCoveredFetchBoundary(health, boundary, huggingface = false, expectedPapers, expectedCategoryId, expectedExistingIds) {
+function hasCoveredFetchBoundary(health, boundary, huggingface = false, expectedPapers, expectedCategoryId, expectedExistingIds, expectedBatchDate) {
     try { validateDailyFetchBoundary(boundary); } catch { return false; }
     const provider = health?.provider;
     return Boolean(boundary && /^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
@@ -240,7 +240,7 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false, expected
         && (huggingface || ((expectedCategoryId === undefined
                 || ((health?.categoryId === undefined || health.categoryId === expectedCategoryId)
                     && (health?.id === undefined || health.id === expectedCategoryId)))
-            && hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId, true, expectedPapers, expectedExistingIds)))
+            && hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId, true, expectedPapers, expectedExistingIds, expectedBatchDate)))
         && (!huggingface || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
@@ -250,9 +250,10 @@ function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedI
     if (!hasBoundedFetchSource(checkpoint) || !checkpoint.fetchBoundary) return current;
     try { validateDailyFetchBoundary(checkpoint.fetchBoundary); } catch { return current; }
     const until = checkpoint.fetchBoundary.until;
+    const expectedBatchDate = options.batchDate || getBeijingDateStringForInstant(now);
     if (!Number.isFinite(Date.parse(until)) || Date.parse(until) > Date.parse(now)
-            || getBeijingDateStringForInstant(until) !== getBeijingDateStringForInstant(now)
-            || checkpoint.batchDate !== getBeijingDateStringForInstant(now)
+            || !isWithinBatchDateGrace(until, expectedBatchDate)
+            || checkpoint.batchDate !== expectedBatchDate
             || Date.parse(checkpoint.batchStartedAt) !== Date.parse(until)) return current;
     const pinned = resolveDailyFetchBoundary(blogRepo, { ...options, until, replayBoundary: checkpoint.fetchBoundary });
     const published = publishedIds || readCommittedPublishedPaperIds(blogRepo);
@@ -331,10 +332,10 @@ function buildCandidateFingerprints(historicalExistingIds, publishedIds, fetchBo
 function buildHistoricalDedupBaseline(papersData, today, publishedIds) {
     const ids = new Set(Object.entries(papersData?.papers || {})
         .filter(([, paper]) => shouldUsePaperForFetchDedup(paper))
-        // fetchedAt 表示论文首次进入抓取批次，重分析只会更新 digestStatus.batchDate。
+        // fetchBatchDate / fetchedAt 表示论文首次进入抓取批次，重分析只会更新 digestStatus.batchDate。
         // 因此不能用可变的分析日期判断“是否为本轮自写”，否则今天重分析的历史论文
-        // 会从去重基线消失。旧记录缺 fetchedAt 时才退回 digestStatus.batchDate。
-        .filter(([, paper]) => String(paper.fetchedAt || paper.digestStatus?.batchDate || '').slice(0, 10) !== today)
+        // 会从去重基线消失。旧记录缺 fetchBatchDate 与 fetchedAt 时才退回 digestStatus.batchDate。
+        .filter(([, paper]) => String(paper.fetchBatchDate || paper.fetchedAt || paper.digestStatus?.batchDate || '').slice(0, 10) !== today)
         .map(([id]) => normalizedId(id))
         .filter(Boolean));
     for (const id of publishedIds || []) ids.add(normalizedId(id));
@@ -404,7 +405,7 @@ function hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds = Config.ARX
         && expectedCategoryIds.every(id => checkpoint.arxiv?.[id]?.status === 'complete'
             && checkpoint.arxiv[id].health?.ok === true
             && (!hasBoundedFetchSource(checkpoint) || hasCoveredFetchBoundary(checkpoint.arxiv[id].health, checkpoint.fetchBoundary, false,
-                checkpoint.arxiv[id].papers, id, checkpoint.historicalDedupIds))
+                checkpoint.arxiv[id].papers, id, checkpoint.historicalDedupIds, checkpoint.batchDate))
             && hasValidFetchSourceIntegrity(checkpoint.arxiv[id]))
         && checkpoint.huggingface?.status === 'complete'
         && checkpoint.huggingface.health?.ok === true
@@ -419,7 +420,7 @@ function hasCrossProcessReusableFetchCheckpoint(
 ) {
     return hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds)
         && expectedCategoryIds.every(id => isReusableArxivCheckpoint(checkpoint.arxiv?.[id],
-            hasBoundedFetchSource(checkpoint) ? checkpoint.fetchBoundary : null, id, checkpoint.historicalDedupIds));
+            hasBoundedFetchSource(checkpoint) ? checkpoint.fetchBoundary : null, id, checkpoint.historicalDedupIds, checkpoint.batchDate));
 }
 
 function isDefinitiveFilterDecision(decision) {
@@ -432,23 +433,29 @@ function isDefinitiveFilterDecision(decision) {
 function validateFilterDecisionCoverage(papers, decisions, options = {}) {
     const paperById = new Map((papers || []).map(paper => [normalizedId(paper), paper]).filter(([id]) => Boolean(id)));
     const candidateIds = new Set(paperById.keys());
-    const decisionEntries = Object.entries(decisions || {})
-        .map(([id, decision]) => [normalizedId(id), decision])
-        .filter(([id]) => Boolean(id));
-    const validDecisionIds = new Set(decisionEntries
-        .filter(([id, decision]) => isDefinitiveFilterDecision(decision)
-            && decision.inputSha256 === validatedDecisionInputSha256(paperById.get(id), decision, options))
-        .map(([id]) => id));
-    const retryableIds = decisionEntries
-        .filter(([id, decision]) => !isDefinitiveFilterDecision(decision)
-            || decision.inputSha256 !== validatedDecisionInputSha256(paperById.get(id), decision, options))
-        .map(([id]) => id);
+    const seenDecisionIds = new Set();
+    const validDecisionIds = new Set();
+    const retryableIds = [];
+    const unexpectedIds = [];
+    for (const [rawId, decision] of Object.entries(decisions || {})) {
+        const id = normalizedId(rawId);
+        if (!id || !paperById.has(id) || seenDecisionIds.has(id)) {
+            unexpectedIds.push(id || rawId);
+            continue;
+        }
+        seenDecisionIds.add(id);
+        if (isDefinitiveFilterDecision(decision)
+            && decision.inputSha256 === validatedDecisionInputSha256(paperById.get(id), decision, options)) {
+            validDecisionIds.add(id);
+        } else {
+            retryableIds.push(id);
+        }
+    }
     const missingIds = Array.from(candidateIds).filter(id => !validDecisionIds.has(id));
-    const unexpectedIds = Array.from(validDecisionIds).filter(id => !candidateIds.has(id));
     return {
         complete: missingIds.length === 0 && unexpectedIds.length === 0 && retryableIds.length === 0,
         totalCandidates: candidateIds.size,
-        decided: Array.from(validDecisionIds).filter(id => candidateIds.has(id)).length,
+        decided: validDecisionIds.size,
         missingIds,
         unexpectedIds,
         retryableIds
@@ -608,7 +615,7 @@ function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) 
     for (const paper of papers) {
         if (!isSuccessfulAnalysisRecord(paper)) continue;
         if (today) {
-            const paperDate = (paper.digestStatus?.batchDate || paper.batchDate
+            const paperDate = (paper.digestStatus?.batchDate || paper.batchDate || paper.fetchBatchDate
                 || paper.fetchedAt || paper.timestamp || '').slice(0, 10);
             if (paperDate !== today) continue;
         }
@@ -655,7 +662,7 @@ function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = 
         const analysisStatus = inferredStatus;
         const now = getBeijingISOString();
         const expectedBatchDate = (expectedPapers || [])
-            .map(paper => paper?.digestStatus?.batchDate || paper?.batchDate || String(paper?.fetchedAt || '').slice(0, 10))
+            .map(paper => paper?.digestStatus?.batchDate || paper?.batchDate || paper?.fetchBatchDate || String(paper?.fetchedAt || '').slice(0, 10))
             .find(Boolean);
         const batchDate = stats.batchDate || expectedBatchDate
             || (!Array.isArray(current) && current?.batchDate) || now.slice(0, 10);
@@ -707,6 +714,8 @@ function loadTodayPapersFromDatabase(papersData, today) {
     const papers = [];
     for (const paper of Object.values(papersData?.papers || {})) {
         const recordDate = paper.digestStatus?.batchDate
+            || paper.batchDate
+            || paper.fetchBatchDate
             || (paper.fetchedAt || '').slice(0, 10)
             || getRecordDate(paper);
         if (recordDate === today) {
@@ -779,13 +788,13 @@ function getSourceFetchedCount(sourceHealth, sourceName, fallbackCount = 0) {
     return Number.isFinite(value) ? value : fallbackCount;
 }
 
-function isReusableArxivCheckpoint(entry, fetchBoundary = null, expectedCategoryId, expectedExistingIds) {
+function isReusableArxivCheckpoint(entry, fetchBoundary = null, expectedCategoryId, expectedExistingIds, expectedBatchDate) {
     return entry?.status === 'complete'
         && entry.health?.ok === true
         && Array.isArray(entry.papers)
         // arXiv 新批次在各端点可能分阶段上线。空结果只能证明当次请求成功，
         // 不能跨进程永久证明当天没有新论文；续跑时必须重新确认。
-        && (fetchBoundary ? hasCoveredFetchBoundary(entry.health, fetchBoundary, false, entry.papers, expectedCategoryId, expectedExistingIds) : entry.papers.length > 0);
+        && (fetchBoundary ? hasCoveredFetchBoundary(entry.health, fetchBoundary, false, entry.papers, expectedCategoryId, expectedExistingIds, expectedBatchDate) : entry.papers.length > 0);
 }
 
 function getSourceFailures(sourceHealth) {
@@ -1169,7 +1178,7 @@ function inferLegacyAnalysisArrayBatchDate(papers) {
         if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
             throw new Error('旧分析数组含有无效的论文记录，无法可靠推断批次日期。');
         }
-        const explicitBatchDate = String(paper.digestStatus?.batchDate || paper.batchDate || '');
+        const explicitBatchDate = String(paper.digestStatus?.batchDate || paper.batchDate || paper.fetchBatchDate || '');
         const dateMatch = explicitBatchDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
         const explicitDate = dateMatch
             ? new Date(Date.UTC(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3])))
@@ -1472,7 +1481,8 @@ function prepareExplicitRefilter(today, expected, request) {
         const paper = papersById.get(id); const decision = original.decisions?.[id];
         if (!paper || !isDefinitiveFilterDecision(decision)
             || decision.inputSha256 !== validatedDecisionInputSha256(paper, decision, { batchDate: today })
-            || decision.parseSource === 'keyword_prefilter') {
+            || decision.parseSource === 'keyword_prefilter'
+            || decision.parseSource === 'official_pdf_404_skipped') {
             throw new Error(`指定论文 ${id} 必须是当前原始候选中已有有效模型决定的论文；此入口只复核模型决定，未请求模型`);
         }
     }
@@ -1681,12 +1691,12 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         fetchWitnessRecoveryManifest: options.fetchWitnessRecoveryManifest
     };
     let fetchBoundary = resolvePinnedFetchBoundary(blogRepo, batchStartedAt,
-        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, boundaryOptions);
+        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, { ...boundaryOptions, batchDate: today });
     verifyPreviousFetchWitnessArchive(fetchBoundary);
     let announcementRestart;
     if (options.officialAnnouncementCutoff !== undefined) {
         const previous = fetchBoundary, cutoff = options.officialAnnouncementCutoff;
-        if (getBeijingDateStringForInstant(cutoff) !== today) throw new Error('公告截止必须仍属于同一北京时间日更');
+        if (!isWithinBatchDateGrace(cutoff, today)) throw new Error('公告截止必须仍属于同一北京时间日更（或跨零点 0–8 点宽限内）');
         fetchBoundary = resolveDailyFetchBoundary(blogRepo, { ...boundaryOptions, until: cutoff });
         verifyPreviousFetchWitnessArchive(fetchBoundary);
         const originalFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds, previous);
@@ -1919,7 +1929,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
             const cachedCategory = fetchCheckpoint.arxiv[category.id];
-            if (isReusableArxivCheckpoint(cachedCategory, fetchBoundary, category.id, historicalDedupIds)) {
+            if (isReusableArxivCheckpoint(cachedCategory, fetchBoundary, category.id, historicalDedupIds, batchDate)) {
                 console.log(`  [${i+1}/${shuffledCategories.length}] 复用已有抓取结果：${category.name} (${category.id})，共 ${cachedCategory.papers.length} 篇`);
                 sourceHealth.arxiv.categories.push(cachedCategory.health);
                 for (const p of cachedCategory.papers) {
@@ -1959,7 +1969,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 );
                 pinPapersToBatch(papers, batchStartedAt, batchDate);
                 categoryFetchHealth = papers._sourceHealth || null;
-                if (!hasCoveredFetchBoundary(categoryFetchHealth, fetchBoundary, false, papers, category.id, historicalDedupIds)) {
+                if (!hasCoveredFetchBoundary(categoryFetchHealth, fetchBoundary, false, papers, category.id, historicalDedupIds, batchDate)) {
                     throw new Error('arXiv 抓取未证明覆盖上次日更至本批开始的完整时间范围');
                 }
             } catch (e) {
@@ -2346,7 +2356,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 + skipRecord.papers.map(paper => paper.arxivId).join(', '));
         }
     }
-    const sourceSkipRecord = dailySourcePlan ? dailySourceSkip.readDailySourceSkips(dailySourcePlan) : null;
+    const sourceSkipRecord = dailySourcePlan
+        ? dailySourceSkip.readDailySourceSkips(dailySourcePlan, { limit: dailySourceSkip.MAX_LIMIT })
+        : null;
     const sourceSkippedIds = dailySourceSkip.skippedPaperIds(sourceSkipRecord);
     // 跳过记录是不可变证据：本批曾跳过，但这次重新抓取到了该论文的来源时不能悄悄改口，
     // 必须停下来核对；同样，全部论文都被跳过时没有可发布内容，也不能继续。

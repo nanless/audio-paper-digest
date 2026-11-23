@@ -1167,4 +1167,51 @@ describe('arXiv 代理预检', () => {
             }
         }
     });
+
+    it('httpsRequestWithProxy 在成功、错误与超时结束时都会销毁代理 agent 防止泄漏', async () => {
+        const { EventEmitter } = require('node:events');
+        const { httpsRequestWithProxy } = require('../scripts/fetch-papers.js');
+
+        for (const mode of ['ok', 'error', 'timeout', 'sync_req_throw', 'sync_end_throw', 'premature_close']) {
+            let destroyed = 0;
+            const fakeAgent = { destroy() { destroyed += 1; } };
+            const fakeHttps = {
+                request(_opts, onResp) {
+                    if (mode === 'sync_req_throw') throw new Error('sync request throw');
+                    const req = new EventEmitter();
+                    req.destroy = () => {};
+                    req.end = () => {
+                        if (mode === 'sync_end_throw') throw new Error('sync end throw');
+                        if (mode === 'ok') {
+                            const res = new EventEmitter();
+                            res.statusCode = 200;
+                            res.headers = {};
+                            onResp(res);
+                            res.emit('data', Buffer.from('ok'));
+                            res.emit('end');
+                        } else if (mode === 'premature_close') {
+                            const res = new EventEmitter();
+                            res.statusCode = 200;
+                            res.headers = {};
+                            res.complete = false;
+                            onResp(res);
+                            res.emit('data', Buffer.from('partial'));
+                            res.emit('close');
+                        } else if (mode === 'error') {
+                            setImmediate(() => req.emit('error', new Error('boom')));
+                        }
+                    };
+                    return req;
+                }
+            };
+            const deps = { httpsModule: fakeHttps, proxyAgentFactory: () => fakeAgent };
+            if (mode === 'ok') {
+                const out = await httpsRequestWithProxy('https://export.arxiv.org/api/query', {}, 'http://127.0.0.1:7897', 100, undefined, deps);
+                assert.strictEqual(out.data, 'ok');
+            } else {
+                await assert.rejects(() => httpsRequestWithProxy('https://export.arxiv.org/api/query', {}, 'http://127.0.0.1:7897', 30, undefined, deps));
+            }
+            assert.strictEqual(destroyed, 1, `mode=${mode}`);
+        }
+    });
 });

@@ -669,51 +669,63 @@ function httpsRequestWithProxy(
             if (settled) return;
             settled = true;
             if (deadlineTimer) clearTimeout(deadlineTimer);
+            try { options.agent?.destroy?.(); } catch (_) {}
             handler(value);
         };
-        const req = https.request(options, (res) => {
-            const chunks = [];
-            let responseBytes = 0;
-            res.on('data', chunk => {
-                if (settled) return;
-                const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-                responseBytes += buffer.length;
-                if (responseBytes > maxResponseBytes) {
-                    const error = new Error(`arXiv 响应超过 ${maxResponseBytes} 字节上限`);
-                    error.code = 'ARXIV_RESPONSE_TOO_LARGE';
-                    res.destroy?.(error);
-                    req.destroy(error);
-                    finish(reject, error);
-                    return;
-                }
-                chunks.push(buffer);
-            });
-            res.on('end', () => {
-                finish(resolve, {
-                    status: res.statusCode,
-                    headers: res.headers,
-                    data: Buffer.concat(chunks).toString('utf8')
+        try {
+            const req = https.request(options, (res) => {
+                const chunks = [];
+                let responseBytes = 0;
+                res.on('data', chunk => {
+                    if (settled) return;
+                    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                    responseBytes += buffer.length;
+                    if (responseBytes > maxResponseBytes) {
+                        const error = new Error(`arXiv 响应超过 ${maxResponseBytes} 字节上限`);
+                        error.code = 'ARXIV_RESPONSE_TOO_LARGE';
+                        res.destroy?.(error);
+                        req.destroy(error);
+                        finish(reject, error);
+                        return;
+                    }
+                    chunks.push(buffer);
                 });
+                res.on('end', () => {
+                    finish(resolve, {
+                        status: res.statusCode,
+                        headers: res.headers,
+                        data: Buffer.concat(chunks).toString('utf8')
+                    });
+                });
+                res.on('close', () => {
+                    if (!res.complete) {
+                        const error = new Error('arXiv 响应流提前关闭');
+                        error.code = 'ARXIV_RESPONSE_CLOSED';
+                        finish(reject, error);
+                    }
+                });
+                res.on('error', error => finish(reject, error));
             });
-            res.on('error', error => finish(reject, error));
-        });
 
-        deadlineTimer = setTimeout(() => {
-            const error = new Error(`arXiv 请求超过 ${timeoutMs} 毫秒期限`);
-            error.code = 'ARXIV_REQUEST_DEADLINE_EXCEEDED';
-            req.destroy(error);
+            deadlineTimer = setTimeout(() => {
+                const error = new Error(`arXiv 请求超过 ${timeoutMs} 毫秒期限`);
+                error.code = 'ARXIV_REQUEST_DEADLINE_EXCEEDED';
+                req.destroy(error);
+                finish(reject, error);
+            }, timeoutMs);
+
+            req.on('error', error => finish(reject, error));
+            req.on('timeout', () => {
+                const error = new Error(`arXiv 请求连接在 ${timeoutMs} 毫秒后超时`);
+                error.code = 'ARXIV_REQUEST_SOCKET_TIMEOUT';
+                req.destroy(error);
+                finish(reject, error);
+            });
+
+            req.end();
+        } catch (error) {
             finish(reject, error);
-        }, timeoutMs);
-
-        req.on('error', error => finish(reject, error));
-        req.on('timeout', () => {
-            const error = new Error(`arXiv 请求连接在 ${timeoutMs} 毫秒后超时`);
-            error.code = 'ARXIV_REQUEST_SOCKET_TIMEOUT';
-            req.destroy(error);
-            finish(reject, error);
-        });
-
-        req.end();
+        }
     });
 }
 

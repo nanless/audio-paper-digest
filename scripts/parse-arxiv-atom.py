@@ -11,6 +11,7 @@ from runtime_guard import require_external_runtime
 
 MAX_BYTES = 16 * 1024 * 1024
 ATOM_NAMESPACE = 'http://www.w3.org/2005/Atom'
+ARXIV_NAMESPACE = 'http://arxiv.org/schemas/atom'
 ARXIV_URL = re.compile(
     r'https?://arxiv\.org/abs/((?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[1-9][0-9]*)?)'
 )
@@ -51,17 +52,34 @@ def parse_atom(source, feed_page=False):
         match = ARXIV_URL.fullmatch(identity)
         if not match:
             raise ValueError('Atom 条目不是完整的官方 arXiv 论文地址，不能采用错误条目或截断 ID')
-        records.append({
+        author_elems = entry.findall(f'{prefix}author')
+        author_names = [''.join(name.itertext()).strip()
+                        for author in author_elems
+                        for name in author.findall(f'{prefix}name')]
+        author_affiliations = []
+        has_any_affiliation = False
+        for author in author_elems:
+            name_elems = author.findall(f'{prefix}name')
+            name_val = ''.join(name_elems[0].itertext()).strip() if name_elems else ''
+            affs = [''.join(a.itertext()).replace('\n', ' ').strip()
+                    for a in author.findall(f'{{{ARXIV_NAMESPACE}}}affiliation')
+                    if ''.join(a.itertext()).strip()]
+            if affs:
+                has_any_affiliation = True
+            if name_val:
+                author_affiliations.append({'name': name_val, 'affiliations': affs})
+        record = {
             'arxivId': match[1],
             'title': field('title', required=True),
             'abstract': field('summary', required=True),
-            'authors': [''.join(name.itertext()).strip()
-                        for author in entry.findall(f'{prefix}author')
-                        for name in author.findall(f'{prefix}name')],
+            'authors': author_names,
             'published': field('published'),
             'categories': [category.get('term', '')
                            for category in entry.findall(f'{prefix}category')],
-        })
+        }
+        if has_any_affiliation:
+            record['authorAffiliations'] = author_affiliations
+        records.append(record)
     if not feed_page:
         return records
     namespace = '{http://a9.com/-/spec/opensearch/1.1/}'

@@ -31,10 +31,19 @@ function validOutput(value, kind) {
         const records = kind === 'atom' ? value : value?.entries;
         const fields = ['arxivId', 'title', 'abstract', 'authors', 'published', 'categories'];
         const strings = x => Array.isArray(x) && x.every(item => typeof item === 'string');
-        if (!Array.isArray(records) || !records.every(record => object(record)
-            && JSON.stringify(Object.keys(record).sort()) === JSON.stringify([...fields].sort())
-            && ['arxivId', 'title', 'abstract', 'published'].every(key => typeof record[key] === 'string')
-            && strings(record.authors) && strings(record.categories))) return false;
+        const validAuthorAffiliations = list => Array.isArray(list) && list.every(item => object(item)
+            && JSON.stringify(Object.keys(item).sort()) === JSON.stringify(['affiliations', 'name'])
+            && typeof item.name === 'string' && item.name.trim().length > 0
+            && strings(item.affiliations) && item.affiliations.every(aff => aff.trim().length > 0));
+        if (!Array.isArray(records) || !records.every(record => {
+            if (!object(record)) return false;
+            const hasAffs = Object.hasOwn(record, 'authorAffiliations');
+            const expectedFields = hasAffs ? [...fields, 'authorAffiliations'] : fields;
+            return JSON.stringify(Object.keys(record).sort()) === JSON.stringify([...expectedFields].sort())
+                && ['arxivId', 'title', 'abstract', 'published'].every(key => typeof record[key] === 'string')
+                && strings(record.authors) && strings(record.categories)
+                && (!hasAffs || validAuthorAffiliations(record.authorAffiliations));
+        })) return false;
         return kind === 'atom' || (object(value)
             && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(['entries', 'itemsPerPage', 'startIndex', 'totalResults'])
             && ['itemsPerPage', 'startIndex', 'totalResults'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0));

@@ -479,11 +479,34 @@ function resolvePolicy(options = {}) {
     return loadPublicNetworkPolicy(DEFAULT_POLICY_PATH);
 }
 
+const STRICT_DNS_LABEL_RE = /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/;
+
+function isStrictProxyHostname(rawHostname) {
+    if (typeof rawHostname !== 'string' || !rawHostname || rawHostname.includes('%')) return false;
+    if (rawHostname.startsWith('[') && rawHostname.endsWith(']')) {
+        const inner = rawHostname.slice(1, -1);
+        return Boolean(inner) && !inner.includes('%') && /^[0-9a-fA-F:.]+$/.test(inner) && !inner.includes(':::');
+    }
+    if (rawHostname.includes(':')) return false;
+    const lower = rawHostname.toLowerCase();
+    const host = lower.endsWith('.') ? lower.slice(0, -1) : lower;
+    if (!host || host.length > 253 || /[^a-z0-9._-]/.test(host)) return false;
+    return host.split('.').every(label => STRICT_DNS_LABEL_RE.test(label));
+}
+
 function isValidHttpConnectProxyUrl(rawUrl) {
-    if (typeof rawUrl !== 'string' || rawUrl.length === 0) return false;
+    if (typeof rawUrl !== 'string' || rawUrl.length === 0 || /[\u0000-\u0020\u007f\\]/.test(rawUrl)) return false;
+    const authMatch = /^https?:\/\/([^/?#]+)/i.exec(rawUrl);
+    if (!authMatch) return false;
+    const rawHostPort = authMatch[1].includes('@')
+        ? authMatch[1].slice(authMatch[1].lastIndexOf('@') + 1)
+        : authMatch[1];
+    if (!rawHostPort || rawHostPort.includes('%')) return false;
     try {
         const parsed = new URL(rawUrl);
-        return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
+        return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+            && isStrictProxyHostname(parsed.hostname)
+            && parsed.port !== '0';
     } catch (_) {
         return false;
     }

@@ -17,6 +17,7 @@ balance 才会在同一请求内切到下一个账号并写冷却。普通的 40
 请求（既有行为，见 publish_common.py 的单账号分支），不写账号池状态。
 """
 
+import errno
 import hashlib
 import json
 import math
@@ -28,7 +29,7 @@ import stat
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -144,9 +145,9 @@ def resolve_primary_api_key_pool(primary_key, fallback_value, tertiary_fallback_
 
 def normalize_opencode_go_service(endpoint):
     raw_endpoint = str(endpoint or '')
-    # 反斜杠和编码过的路径分隔符会让路由取决于由哪一层解码，与 Node 侧
+    # 控制字符、空白和反斜杠会让不同解析器产生分歧，与 Node 侧
     # normalizeOpenCodeGoService 保持一致：一律拒绝，不进入 URL 解析。
-    if '\\' in raw_endpoint:
+    if not raw_endpoint or re.search(r'[\x00-\x20\x7f\\]', raw_endpoint):
         return None
     try:
         parsed = urlsplit(raw_endpoint)
@@ -154,12 +155,20 @@ def normalize_opencode_go_service(endpoint):
         port = parsed.port
     except (TypeError, ValueError):
         return None
+    if '@' in (parsed.netloc or ''):
+        return None
     raw_path = parsed.path
+    # 拒绝非法百分号转义和非 UTF-8 字节序列，与 Node decodeURIComponent 保持一致。
+    if re.search(r'%(?![0-9A-Fa-f]{2})', raw_path):
+        return None
     # Python 的 urlsplit 保留点号路径段，而 WHATWG URL 解析器可能把它
     # 归一化掉。推导服务身份之前，原始形式和一次百分号解码后的形式都要
     # 拒绝，这样每个运行时绑定的都是调用方给出的同一条路径，而不依赖
     # 服务端或代理的归一化结果。
-    decoded_path = unquote(raw_path)
+    try:
+        decoded_path = unquote(raw_path, errors='strict')
+    except UnicodeDecodeError:
+        return None
     if any(segment in {'.', '..'} for path_value in (raw_path, decoded_path)
            for segment in path_value.split('/')):
         return None
@@ -205,10 +214,15 @@ def get_pool_identity(api_keys, endpoint):
 def _read_regular_state_text(file_path):
     target = Path(file_path)
     initial = target.lstat()
-    if not stat.S_ISREG(initial.st_mode):
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
         raise LlmAccountPoolStateError(f'LLM 账号池文件必须为普通文件: {target}')
     flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
-    descriptor = os.open(target, flags)
+    try:
+        descriptor = os.open(target, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise LlmAccountPoolStateError(f'LLM 账号池文件禁止使用 symlink: {target}') from exc
+        raise
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise LlmAccountPoolStateError(f'LLM 账号池文件必须为普通文件: {target}')
@@ -218,44 +232,275 @@ def _read_regular_state_text(file_path):
         os.close(descriptor)
 
 
-def _lock_reclaimable(lock_path, stale_seconds):
+def _write_lock_owner_json(lock_path, created_dir_stat, payload):
     lock_path = Path(lock_path)
     owner_path = lock_path / 'owner.json'
-    if lock_path.is_symlink() or owner_path.is_symlink():
-        raise LlmAccountPoolStateError(
-            f'LLM 账号池锁/owner 路径禁止使用 symlink: {lock_path}'
-        )
-    try:
-        mtimes = [lock_path.stat().st_mtime]
-        if owner_path.exists():
-            mtimes.append(owner_path.stat().st_mtime)
-        age = time.time() - max(mtimes)
-    except FileNotFoundError:
-        return True
-    try:
-        owner = json.loads(_read_regular_state_text(lock_path / 'owner.json'))
-        if not isinstance(owner, dict):
-            return age > stale_seconds
-        owner_pid = owner.get('pid')
-        valid_owner_pid = type(owner_pid) is int and owner_pid > 0
-        if owner.get('hostname') == socket.gethostname() and valid_owner_pid:
-            try:
-                os.kill(owner_pid, 0)
-            except ProcessLookupError:
-                return True
-            except PermissionError:
-                return False
+
+    def _same_created_dir():
+        try:
+            current = lock_path.lstat()
+        except FileNotFoundError:
             return False
-        if owner.get('hostname'):
-            return age > stale_seconds
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        pass
-    return age > stale_seconds
+        return (
+            not stat.S_ISLNK(current.st_mode)
+            and stat.S_ISDIR(current.st_mode)
+            and (current.st_dev, current.st_ino) == (
+                created_dir_stat.st_dev, created_dir_stat.st_ino
+            )
+        )
+
+    if not _same_created_dir():
+        return None
+    temp = lock_path / f'.owner.json.{os.getpid()}.{uuid.uuid4().hex}.tmp'
+    open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    fd = None
+    closed = False
+    try:
+        try:
+            fd = os.open(temp, open_flags, 0o600)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池锁临时文件禁止使用 symlink: {temp}'
+                ) from exc
+            raise
+        data = (json.dumps(payload, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        view = memoryview(data)
+        written = 0
+        while written < len(data):
+            written += os.write(fd, view[written:])
+        os.fsync(fd)
+        try:
+            os.close(fd)
+        finally:
+            closed = True
+        if not _same_created_dir():
+            return None
+        try:
+            os.replace(temp, owner_path)
+            os.chmod(owner_path, 0o600)
+        except FileNotFoundError:
+            return None
+        try:
+            dir_fd = os.open(lock_path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+        if not _same_created_dir():
+            return None
+        try:
+            owner_stat = owner_path.lstat()
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(owner_stat.st_mode) or not stat.S_ISREG(owner_stat.st_mode) \
+                or owner_stat.st_nlink != 1:
+            raise LlmAccountPoolStateError(
+                f'LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: {owner_path}'
+            )
+        return owner_stat
+    except Exception:
+        if fd is not None and not closed:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if _same_created_dir():
+            for path_obj in (temp, owner_path):
+                try:
+                    path_obj.unlink()
+                except OSError:
+                    pass
+            try:
+                lock_path.rmdir()
+            except OSError:
+                pass
+        raise
+
+
+def _snapshot_lock(lock_path, stale_seconds):
+    lock_path = Path(lock_path)
+    owner_path = lock_path / 'owner.json'
+    try:
+        lock_stat = lock_path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(lock_stat.st_mode) or not stat.S_ISDIR(lock_stat.st_mode):
+        raise LlmAccountPoolStateError(
+            f'LLM 账号池锁路径禁止使用 symlink 或非目录: {lock_path}'
+        )
+    mtimes = [lock_stat.st_mtime]
+    owner_stat = None
+    try:
+        owner_stat = owner_path.lstat()
+        if stat.S_ISLNK(owner_stat.st_mode) or not stat.S_ISREG(owner_stat.st_mode) \
+                or owner_stat.st_nlink != 1:
+            raise LlmAccountPoolStateError(
+                f'LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: {owner_path}'
+            )
+        mtimes.append(owner_stat.st_mtime)
+    except FileNotFoundError:
+        owner_stat = None
+    age = time.time() - max(mtimes)
+    owner_token = None
+    reclaimable = age > stale_seconds
+    if owner_stat is not None:
+        try:
+            owner = json.loads(_read_regular_state_text(owner_path))
+            if isinstance(owner, dict):
+                raw_token = owner.get('token')
+                owner_token = raw_token if isinstance(raw_token, str) else None
+                owner_pid = owner.get('pid')
+                valid_owner_pid = type(owner_pid) is int and owner_pid > 0
+                if owner.get('hostname') == socket.gethostname() and valid_owner_pid:
+                    try:
+                        os.kill(owner_pid, 0)
+                    except ProcessLookupError:
+                        reclaimable = True
+                    except PermissionError:
+                        reclaimable = False
+                    else:
+                        reclaimable = False
+                elif owner.get('hostname'):
+                    reclaimable = age > stale_seconds
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+    return {
+        'dir_dev': lock_stat.st_dev,
+        'dir_ino': lock_stat.st_ino,
+        'owner_present': owner_stat is not None,
+        'owner_dev': owner_stat.st_dev if owner_stat is not None else None,
+        'owner_ino': owner_stat.st_ino if owner_stat is not None else None,
+        'owner_token': owner_token,
+        'reclaimable': reclaimable,
+    }
+
+
+def _same_lock_snapshot(left, right):
+    if not left or not right:
+        return False
+    if left['dir_dev'] != right['dir_dev'] or left['dir_ino'] != right['dir_ino']:
+        return False
+    if left['owner_present'] != right['owner_present']:
+        return False
+    if left['owner_present']:
+        if left['owner_dev'] != right['owner_dev'] or left['owner_ino'] != right['owner_ino']:
+            return False
+        if left['owner_token'] != right['owner_token']:
+            return False
+    return True
+
+
+def _remove_lock_dir_checked(lock_path, expected_snapshot):
+    if not expected_snapshot:
+        return False
+    lock_path = Path(lock_path)
+    try:
+        current_dir = lock_path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(current_dir.st_mode) or not stat.S_ISDIR(current_dir.st_mode):
+        raise LlmAccountPoolStateError(
+            f'LLM 账号池锁路径禁止使用 symlink 或非目录: {lock_path}'
+        )
+    if (current_dir.st_dev, current_dir.st_ino) != (
+        expected_snapshot['dir_dev'], expected_snapshot['dir_ino']
+    ):
+        return False
+    owner_path = lock_path / 'owner.json'
+    if expected_snapshot['owner_present']:
+        try:
+            current_owner = owner_path.lstat()
+        except FileNotFoundError:
+            current_owner = None
+        if current_owner is not None:
+            if stat.S_ISLNK(current_owner.st_mode) or not stat.S_ISREG(current_owner.st_mode) \
+                    or current_owner.st_nlink != 1:
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: {owner_path}'
+                )
+            if (current_owner.st_dev, current_owner.st_ino) != (
+                expected_snapshot['owner_dev'], expected_snapshot['owner_ino']
+            ):
+                return False
+            try:
+                owner_path.unlink()
+            except FileNotFoundError:
+                pass
+    try:
+        lock_path.rmdir()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+            raise
+        try:
+            verify_dir = lock_path.lstat()
+            if stat.S_ISLNK(verify_dir.st_mode) or not stat.S_ISDIR(verify_dir.st_mode):
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池锁路径禁止使用 symlink 或非目录: {lock_path}'
+                )
+            if (verify_dir.st_dev, verify_dir.st_ino) != (
+                expected_snapshot['dir_dev'], expected_snapshot['dir_ino']
+            ):
+                return False
+            entries = os.listdir(lock_path)
+        except FileNotFoundError:
+            return False
+        has_foreign = any(
+            name != 'owner.json' and not re.fullmatch(r'\.owner\.json\..+\.tmp', name)
+            for name in entries
+        )
+        if has_foreign:
+            raise LlmAccountPoolStateError(
+                f'LLM 账号池锁目录存在预期之外的文件，拒绝静默清理: {lock_path}'
+            )
+        if entries and all(re.fullmatch(r'\.owner\.json\..+\.tmp', name) for name in entries):
+            for name in entries:
+                entry_path = lock_path / name
+                try:
+                    entry_stat = entry_path.lstat()
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISLNK(entry_stat.st_mode) or not stat.S_ISREG(entry_stat.st_mode) \
+                        or entry_stat.st_nlink != 1:
+                    raise LlmAccountPoolStateError(
+                        f'LLM 账号池锁临时文件禁止使用 symlink、非普通文件或硬链接: {entry_path}'
+                    )
+                try:
+                    entry_path.unlink()
+                except FileNotFoundError:
+                    pass
+            try:
+                verify_dir2 = lock_path.lstat()
+                if (verify_dir2.st_dev, verify_dir2.st_ino) != (
+                    expected_snapshot['dir_dev'], expected_snapshot['dir_ino']
+                ):
+                    return False
+                lock_path.rmdir()
+                return True
+            except FileNotFoundError:
+                return False
+            except OSError as retry_exc:
+                if retry_exc.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                    return False
+                raise
+        return False
+
+
+def _lock_reclaimable(lock_path, stale_seconds):
+    snapshot = _snapshot_lock(lock_path, stale_seconds)
+    return True if snapshot is None else snapshot['reclaimable']
 
 
 def _assert_safe_project_state_path(state_file):
-    target = Path(state_file).absolute()
-    project_root = Path(PROJECT_ROOT).absolute()
+    target = Path(os.path.abspath(str(state_file)))
+    project_root = Path(os.path.abspath(str(PROJECT_ROOT)))
     try:
         relative = target.relative_to(project_root)
     except ValueError:
@@ -281,26 +526,64 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
     target.parent.mkdir(parents=True, exist_ok=True)
     lock_path = Path(f'{target}.lock')
     reclaim_path = Path(f'{lock_path}.reclaim')
-    if lock_path.is_symlink():
-        raise LlmAccountPoolStateError(f'LLM 账号池锁路径禁止使用 symlink: {lock_path}')
-    if reclaim_path.is_symlink():
-        raise LlmAccountPoolStateError(
-            f'LLM 账号池回收锁路径禁止使用 symlink: {reclaim_path}'
-        )
+    try:
+        existing_lock = lock_path.lstat()
+        if stat.S_ISLNK(existing_lock.st_mode) or not stat.S_ISDIR(existing_lock.st_mode):
+            raise LlmAccountPoolStateError(
+                f'LLM 账号池锁路径禁止使用 symlink 或非目录: {lock_path}'
+            )
+    except FileNotFoundError:
+        pass
+    try:
+        existing_reclaim = reclaim_path.lstat()
+        if stat.S_ISLNK(existing_reclaim.st_mode) or not stat.S_ISDIR(existing_reclaim.st_mode):
+            raise LlmAccountPoolStateError(
+                f'LLM 账号池回收锁路径禁止使用 symlink 或非目录: {reclaim_path}'
+            )
+    except FileNotFoundError:
+        pass
     token = uuid.uuid4().hex
     started = time.monotonic()
+    owned_snapshot = None
     while True:
-        if reclaim_path.is_symlink():
-            raise LlmAccountPoolStateError(
-                f'LLM 账号池回收锁路径禁止使用 symlink: {reclaim_path}'
-            )
-        if reclaim_path.exists():
-            try:
-                reclaim_age = time.time() - reclaim_path.stat().st_mtime
-            except FileNotFoundError:
-                continue
+        try:
+            reclaim_stat = reclaim_path.lstat()
+        except FileNotFoundError:
+            reclaim_stat = None
+        if reclaim_stat is not None:
+            if stat.S_ISLNK(reclaim_stat.st_mode) or not stat.S_ISDIR(reclaim_stat.st_mode):
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池回收锁路径禁止使用 symlink 或非目录: {reclaim_path}'
+                )
+            reclaim_age = time.time() - reclaim_stat.st_mtime
             if reclaim_age > stale_seconds:
-                shutil.rmtree(reclaim_path, ignore_errors=True)
+                removed_reclaim = False
+                try:
+                    current_reclaim = reclaim_path.lstat()
+                    if stat.S_ISLNK(current_reclaim.st_mode) or not stat.S_ISDIR(current_reclaim.st_mode):
+                        raise LlmAccountPoolStateError(
+                            f'LLM 账号池回收锁路径禁止使用 symlink 或非目录: {reclaim_path}'
+                        )
+                    if (current_reclaim.st_dev, current_reclaim.st_ino) == (
+                        reclaim_stat.st_dev, reclaim_stat.st_ino
+                    ):
+                        reclaim_path.rmdir()
+                        removed_reclaim = True
+                except FileNotFoundError:
+                    removed_reclaim = True
+                except OSError as exc:
+                    if exc.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                        raise LlmAccountPoolStateError(
+                            f'LLM 账号池回收锁目录存在异常内容，无法清理: {reclaim_path}'
+                        ) from exc
+                    raise
+                if not removed_reclaim:
+                    if time.monotonic() - started >= timeout_seconds:
+                        raise LlmAccountPoolLockTimeoutError(
+                            f'等待 LLM 账号池回收锁超时: {reclaim_path}'
+                        )
+                    time.sleep(0.025)
+                    continue
             else:
                 if time.monotonic() - started >= timeout_seconds:
                     raise LlmAccountPoolLockTimeoutError(
@@ -311,29 +594,85 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
         try:
             lock_path.mkdir()
             try:
-                atomic_write_json(lock_path / 'owner.json', {
-                    'pid': os.getpid(),
-                    'hostname': socket.gethostname(),
-                    'token': token,
-                    'acquiredAt': datetime.now(timezone.utc).isoformat(),
-                }, mode=0o600)
-            except Exception:
-                shutil.rmtree(lock_path, ignore_errors=True)
-                raise
+                created_dir_stat = lock_path.lstat()
+            except FileNotFoundError:
+                if time.monotonic() - started >= timeout_seconds:
+                    raise LlmAccountPoolLockTimeoutError(
+                        f'等待 LLM 账号池状态锁超时: {lock_path}'
+                    )
+                time.sleep(0.025)
+                continue
+            if stat.S_ISLNK(created_dir_stat.st_mode) or not stat.S_ISDIR(created_dir_stat.st_mode):
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池锁路径禁止使用 symlink 或非目录: {lock_path}'
+                )
+            created_owner_stat = _write_lock_owner_json(lock_path, created_dir_stat, {
+                'pid': os.getpid(),
+                'hostname': socket.gethostname(),
+                'token': token,
+                'acquiredAt': datetime.now(timezone.utc).isoformat(),
+            })
+            if created_owner_stat is None:
+                if time.monotonic() - started >= timeout_seconds:
+                    raise LlmAccountPoolLockTimeoutError(
+                        f'等待 LLM 账号池状态锁超时: {lock_path}'
+                    )
+                time.sleep(0.025)
+                continue
+            owned_snapshot = {
+                'dir_dev': created_dir_stat.st_dev,
+                'dir_ino': created_dir_stat.st_ino,
+                'owner_present': True,
+                'owner_dev': created_owner_stat.st_dev,
+                'owner_ino': created_owner_stat.st_ino,
+                'owner_token': token,
+            }
             break
         except FileExistsError:
-            if _lock_reclaimable(lock_path, stale_seconds):
-                owns_reclaim = False
+            stale_snapshot = _snapshot_lock(lock_path, stale_seconds)
+            if stale_snapshot is not None and stale_snapshot['reclaimable']:
+                reclaim_created_stat = None
+                reclaimed = False
                 try:
                     reclaim_path.mkdir()
-                    owns_reclaim = True
-                    if _lock_reclaimable(lock_path, stale_seconds):
-                        shutil.rmtree(lock_path, ignore_errors=True)
-                except FileExistsError:
+                    try:
+                        reclaim_created_stat = reclaim_path.lstat()
+                    except FileNotFoundError:
+                        reclaim_created_stat = None
+                    if reclaim_created_stat is not None \
+                            and not stat.S_ISLNK(reclaim_created_stat.st_mode) \
+                            and stat.S_ISDIR(reclaim_created_stat.st_mode):
+                        current_snapshot = _snapshot_lock(lock_path, stale_seconds)
+                        if current_snapshot is not None and current_snapshot['reclaimable'] \
+                                and _same_lock_snapshot(stale_snapshot, current_snapshot):
+                            reclaimed = _remove_lock_dir_checked(lock_path, current_snapshot)
+                except (FileExistsError, FileNotFoundError):
                     pass
                 finally:
-                    if owns_reclaim:
-                        shutil.rmtree(reclaim_path, ignore_errors=True)
+                    if reclaim_created_stat is not None:
+                        try:
+                            current_reclaim = reclaim_path.lstat()
+                            if not stat.S_ISLNK(current_reclaim.st_mode) \
+                                    and stat.S_ISDIR(current_reclaim.st_mode) \
+                                    and (current_reclaim.st_dev, current_reclaim.st_ino) == (
+                                        reclaim_created_stat.st_dev, reclaim_created_stat.st_ino
+                                    ):
+                                reclaim_path.rmdir()
+                        except FileNotFoundError:
+                            pass
+                if time.monotonic() - started >= timeout_seconds:
+                    raise LlmAccountPoolLockTimeoutError(
+                        f'等待 LLM 账号池状态锁超时: {lock_path}'
+                    )
+                if reclaimed:
+                    continue
+                time.sleep(0.025)
+                continue
+            if stale_snapshot is None:
+                if time.monotonic() - started >= timeout_seconds:
+                    raise LlmAccountPoolLockTimeoutError(
+                        f'等待 LLM 账号池状态锁超时: {lock_path}'
+                    )
                 continue
             if time.monotonic() - started >= timeout_seconds:
                 raise LlmAccountPoolLockTimeoutError(
@@ -344,15 +683,25 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
         yield
     finally:
         try:
-            owner_path = lock_path / 'owner.json'
-            if owner_path.is_symlink():
-                raise LlmAccountPoolStateError(
-                    f'LLM 账号池 owner 路径禁止使用 symlink: {owner_path}'
-                )
-            owner = json.loads(_read_regular_state_text(owner_path))
-            if owner.get('token') == token:
-                shutil.rmtree(lock_path, ignore_errors=True)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            current_dir = lock_path.lstat()
+            if stat.S_ISLNK(current_dir.st_mode) or not stat.S_ISDIR(current_dir.st_mode) \
+                    or owned_snapshot is None \
+                    or (current_dir.st_dev, current_dir.st_ino) != (
+                        owned_snapshot['dir_dev'], owned_snapshot['dir_ino']
+                    ):
+                pass
+            else:
+                owner_path = lock_path / 'owner.json'
+                current_owner = owner_path.lstat()
+                if stat.S_ISLNK(current_owner.st_mode) or not stat.S_ISREG(current_owner.st_mode) \
+                        or current_owner.st_nlink != 1:
+                    raise LlmAccountPoolStateError(
+                        f'LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: {owner_path}'
+                    )
+                owner = json.loads(_read_regular_state_text(owner_path))
+                if isinstance(owner, dict) and owner.get('token') == token:
+                    _remove_lock_dir_checked(lock_path, owned_snapshot)
+        except (FileNotFoundError, json.JSONDecodeError):
             pass
 
 
@@ -613,11 +962,13 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
             or not math.isfinite(requested_until):
         requested_until = now_ms + UNKNOWN_QUOTA_BLOCK_MS
     blocked_until_ms = min(now_ms + MAX_BLOCK_MS, max(now_ms + 1000, int(requested_until)))
+    effective_until_box = [blocked_until_ms]
 
     def updater(state):
         service = _ensure_service(state, selection)
         previous = service['accounts'].get(selection['account_id']) or {}
         effective_until = max(int(previous.get('blockedUntilMs') or 0), blocked_until_ms)
+        effective_until_box[0] = effective_until
         service['accounts'][selection['account_id']] = {
             **previous,
             'status': 'quota_blocked',
@@ -635,7 +986,7 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
         return state
 
     _update_state(state_file, updater)
-    return blocked_until_ms
+    return effective_until_box[0]
 
 
 def _header_values(headers, name):
@@ -665,6 +1016,121 @@ def _parse_positive_finite_delay(value):
     return parsed if math.isfinite(parsed) and parsed > 0 else None
 
 
+_HTTP_TZ_OFFSETS_MIN = {
+    'GMT': 0, 'UTC': 0, 'UT': 0,
+    'EST': -300, 'EDT': -240, 'CST': -360, 'CDT': -300,
+    'MST': -420, 'MDT': -360, 'PST': -480, 'PDT': -420,
+}
+_HTTP_MONTH_MAP = {
+    'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
+    'apr': 4, 'april': 4, 'may': 5, 'jun': 6, 'june': 6, 'jul': 7, 'july': 7,
+    'aug': 8, 'august': 8, 'sep': 9, 'september': 9, 'oct': 10, 'october': 10,
+    'nov': 11, 'november': 11, 'dec': 12, 'december': 12,
+}
+_TZ_SUFFIX_SRC = r'(?:GMT|UTC|UT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[+-](?:[01]\d|2[0-3]):?[0-5]\d)'
+_MONTH_SHORT_SRC = r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+_MONTH_FULL_OR_SHORT_SRC = (
+    r'(?:January|February|March|April|May|June|July|August|September|October|November|December'
+    r'|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+)
+_ISO_DATE_RE = re.compile(
+    r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:(Z)|([+-](?:[01]\d|2[0-3]):?[0-5]\d))?$',
+    re.IGNORECASE,
+)
+_IMF_DATE_RE = re.compile(
+    rf'^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+)?(\d{{1,2}})\s+({_MONTH_FULL_OR_SHORT_SRC})\s+(\d{{4}})\s+(\d{{2}}):(\d{{2}})(?::(\d{{2}}))?(?:\s+({_TZ_SUFFIX_SRC}))?$',
+    re.IGNORECASE,
+)
+_RFC850_DATE_RE = re.compile(
+    rf'^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(\d{{1,2}})-({_MONTH_SHORT_SRC})-(\d{{2}}|\d{{4}})\s+(\d{{2}}):(\d{{2}}):(\d{{2}})(?:\s+({_TZ_SUFFIX_SRC}))?$',
+    re.IGNORECASE,
+)
+_ASCTIME_DATE_RE = re.compile(
+    rf'^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+({_MONTH_SHORT_SRC})\s+(\d{{1,2}})\s+(\d{{2}}):(\d{{2}}):(\d{{2}})\s+(\d{{4}})(?:\s+({_TZ_SUFFIX_SRC}))?$',
+    re.IGNORECASE,
+)
+_US_12H_DATE_RE = re.compile(
+    rf'^({_MONTH_FULL_OR_SHORT_SRC})\s+(\d{{1,2}}),\s+(\d{{4}})\s+(\d{{1,2}}):(\d{{2}})(?::(\d{{2}}))?\s+(AM|PM)(?:\s+({_TZ_SUFFIX_SRC}))?$',
+    re.IGNORECASE,
+)
+
+
+def _parse_http_tz_offset_minutes(token):
+    if not token:
+        return 0
+    upper = str(token).strip().upper()
+    if upper in _HTTP_TZ_OFFSETS_MIN:
+        return _HTTP_TZ_OFFSETS_MIN[upper]
+    match = re.fullmatch(r'([+-])([01]\d|2[0-3]):?([0-5]\d)', upper)
+    if not match:
+        return None
+    sign = 1 if match.group(1) == '+' else -1
+    return sign * (int(match.group(2)) * 60 + int(match.group(3)))
+
+
+def _build_strict_utc_ms(year, month, day, hour, minute, second, millisecond, tz_offset_min):
+    if tz_offset_min is None:
+        return None
+    try:
+        tz = timezone(timedelta(minutes=tz_offset_min))
+        dt = datetime(year, month, day, hour, minute, second, millisecond * 1000, tzinfo=tz)
+        return dt.timestamp() * 1000
+    except (ValueError, OverflowError):
+        return None
+
+
+def _parse_http_date_ms(raw):
+    trimmed = str(raw or '').strip()
+    if not trimmed:
+        return None
+    m = _ISO_DATE_RE.match(trimmed)
+    if m:
+        ms = int(m.group(7).ljust(3, '0')[:3]) if m.group(7) else 0
+        tz_offset = _parse_http_tz_offset_minutes(m.group(9)) if m.group(9) else 0
+        return _build_strict_utc_ms(
+            int(m.group(1)), int(m.group(2)), int(m.group(3)),
+            int(m.group(4)), int(m.group(5)), int(m.group(6)) if m.group(6) is not None else 0,
+            ms, tz_offset,
+        )
+    m = _IMF_DATE_RE.match(trimmed)
+    if m:
+        return _build_strict_utc_ms(
+            int(m.group(3)), _HTTP_MONTH_MAP[m.group(2).lower()], int(m.group(1)),
+            int(m.group(4)), int(m.group(5)), int(m.group(6)) if m.group(6) is not None else 0,
+            0, _parse_http_tz_offset_minutes(m.group(7)),
+        )
+    m = _RFC850_DATE_RE.match(trimmed)
+    if m:
+        year = int(m.group(3))
+        if len(m.group(3)) == 2:
+            year = (2000 + year) if year < 50 else (1900 + year)
+        return _build_strict_utc_ms(
+            year, _HTTP_MONTH_MAP[m.group(2).lower()], int(m.group(1)),
+            int(m.group(4)), int(m.group(5)), int(m.group(6)),
+            0, _parse_http_tz_offset_minutes(m.group(7)),
+        )
+    m = _ASCTIME_DATE_RE.match(trimmed)
+    if m:
+        return _build_strict_utc_ms(
+            int(m.group(6)), _HTTP_MONTH_MAP[m.group(1).lower()], int(m.group(2)),
+            int(m.group(3)), int(m.group(4)), int(m.group(5)),
+            0, _parse_http_tz_offset_minutes(m.group(7)),
+        )
+    m = _US_12H_DATE_RE.match(trimmed)
+    if m:
+        raw_hour = int(m.group(4))
+        if raw_hour < 1 or raw_hour > 12:
+            return None
+        is_pm = m.group(7).upper() == 'PM'
+        hour24 = (raw_hour % 12) + (12 if is_pm else 0)
+        return _build_strict_utc_ms(
+            int(m.group(3)), _HTTP_MONTH_MAP[m.group(1).lower()], int(m.group(2)),
+            hour24, int(m.group(5)), int(m.group(6)) if m.group(6) is not None else 0,
+            0, _parse_http_tz_offset_minutes(m.group(8)),
+        )
+    return None
+
+
 def _parse_retry_after_ms_evidence(headers, now_ms):
     evidence = []
     for raw_value in _header_values(headers, 'retry-after-ms'):
@@ -676,22 +1142,17 @@ def _parse_retry_after_ms_evidence(headers, now_ms):
         raw_text = str(raw_value)
         seconds = _parse_positive_finite_delay(raw_text)
         if seconds is not None:
-            evidence.append(min(seconds * 1000, MAX_BLOCK_MS))
+            evidence.append(min(seconds, MAX_BLOCK_MS / 1000) * 1000)
         for part in raw_text.split(','):
             coalesced_seconds = _parse_positive_finite_delay(part)
             if coalesced_seconds is not None:
-                evidence.append(min(coalesced_seconds * 1000, MAX_BLOCK_MS))
+                evidence.append(min(coalesced_seconds, MAX_BLOCK_MS / 1000) * 1000)
         if re.search(r'[A-Za-z]', raw_text):
-            try:
-                from email.utils import parsedate_to_datetime
-                target = parsedate_to_datetime(raw_text)
-                if target.tzinfo is None:
-                    target = target.replace(tzinfo=timezone.utc)
-                delta = target.timestamp() * 1000 - now_ms
+            target_ms = _parse_http_date_ms(raw_text)
+            if target_ms is not None and math.isfinite(target_ms):
+                delta = target_ms - now_ms
                 if math.isfinite(delta) and delta > 0:
                     evidence.append(min(delta, MAX_BLOCK_MS))
-            except (TypeError, ValueError, OverflowError):
-                pass
     return evidence
 
 
@@ -710,9 +1171,9 @@ def _parse_reset_message_ms_evidence(message):
         multiplier = 86400000 if unit.startswith('d') else (
             3600000 if unit.startswith('h') else (60000 if unit.startswith('m') else 1000)
         )
-        delay_ms = amount * multiplier
+        delay_ms = min(amount, MAX_BLOCK_MS / multiplier) * multiplier
         if math.isfinite(delay_ms) and delay_ms > 0:
-            evidence.append(min(delay_ms, MAX_BLOCK_MS))
+            evidence.append(delay_ms)
     return evidence
 
 

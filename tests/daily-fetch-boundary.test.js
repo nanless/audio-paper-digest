@@ -320,3 +320,77 @@ test('旧非流水线损坏页面跳过，声称正式页的损坏YAML仍拒绝'
     f.git('add', '.'); f.git('commit', '-m', 'bad owned'); f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
     assert.throws(() => readCommittedPublishedPaperIds(f.root), /开头的元数据/);
 });
+
+test('上一日存在官方 PDF 404 跳过记录时，次日补更边界校验扣除 skippedIds 后正常续抓', t => {
+    const f = createPublishedBlogRepo(t);
+    const dataRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-skip-data-')));
+    t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
+    const currentShape = resolveDailyFetchBoundary(f.root, { until: '2026-10-03T01:00:00.000Z', dataRoot });
+    const pipeline = require('../scripts/full-fetch.js');
+    const daily = require('../scripts/lib/daily-fresh-source-plan.js');
+    const skip = require('../scripts/lib/daily-source-skip.js');
+    const { mergeAndDeduplicate } = require('../scripts/fetch-huggingface-papers.js');
+    const stable = pipeline.stableContentSha256;
+    const { contract, schemaFingerprint, identitySha256, ...fields } = currentShape;
+    const original = { contract: 'daily-fetch-boundary-v1', ...fields };
+    const old = { ...original, identitySha256: stable(original) };
+    const provider = { boundaryIdentity: old.identitySha256, window: { since: old.since, until: old.until, covered: true } };
+    const sourcePapers = [
+        { arxivId: '2610.00026v1', title: 'published', abstract: 'speech', categories: ['cs.SD'],
+            published: '2026-10-02T12:12:58+08:00', hfSelectedAt: '2026-10-03T08:00:00+08:00' },
+        { arxivId: '2610.09997v1', title: 'skipped404-1', abstract: 'speech', categories: ['cs.SD'],
+            published: '2026-10-02T03:00:00Z', hfSelectedAt: '2026-10-02T08:00:00+08:00' },
+        { arxivId: '2610.09998v1', title: 'skipped404-2', abstract: 'speech', categories: ['cs.SD'],
+            published: '2026-10-02T03:00:00Z', hfSelectedAt: '2026-10-02T08:00:00+08:00' },
+        { arxivId: '2610.09999v1', title: 'skipped404-3', abstract: 'speech', categories: ['cs.SD'],
+            published: '2026-10-02T03:00:00Z', hfSelectedAt: '2026-10-02T08:00:00+08:00' }
+    ];
+    const entry = { status: 'complete', papers: sourcePapers, papersCount: sourcePapers.length, papersSha256: stable(sourcePapers), health: { ok: true, provider } };
+    const cp = { batchDate: '2026-10-03', batchStartedAt: old.until,
+        ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), historicalDedupIds: [],
+        arxiv: Object.fromEntries(['eess.AS','cs.SD','eess.SP','cs.CL','cs.LG','cs.AI','cs.MM'].map(id => [id, entry])),
+        huggingface: { ...entry, health: { ok: true, provider: { ...provider, cutoffDate: old.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } } } };
+    cp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(cp);
+    const papers = mergeAndDeduplicate(sourcePapers, []);
+    const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), batchDate: '2026-10-03', batchId: 'b'.repeat(16), fetchBoundary: old, papers, rawPapersSha256: stable(papers), fetchSourcesSha256: cp.fetchSourcesSha256 };
+    // filtered 包含全部四篇（2610.00026 + limit=3 被 404 跳过的三篇），验证次日默认上限为 2 时仍正常续抓。
+    const filtered = { ...raw, papers, status: 'complete' };
+    const runsDir = path.join(dataRoot, 'runtime', 'daily-fresh-source-runs');
+    const plan = daily.createDailyFreshSourcePlan({
+        batchDate: '2026-10-03', batchId: 'b'.repeat(16), papers, rootDir: runsDir
+    });
+    skip.writeDailySourceSkips(plan, [
+        { arxivId: '2610.09997', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.09997 download failed: HTTP 404' },
+        { arxivId: '2610.09998', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.09998 download failed: HTTP 404' },
+        { arxivId: '2610.09999', errorCode: 'ARXIV_PDF_NOT_FOUND', status: 404, message: 'arXiv PDF 2610.09999 download failed: HTTP 404' }
+    ], { limit: 3 });
+    const deep = {
+        batchDate: '2026-10-03', batchId: 'b'.repeat(16),
+        timestamp: '2026-10-03T12:00:00+08:00',
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(plan),
+        papers: papers.filter(p => String(p.arxivId).replace(/v\d+$/, '') === '2610.00026')
+    };
+    const put = (relative, value) => { const file = path.join(dataRoot, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+    put('archive/2026-10-03/fetch-checkpoint.json', cp);
+    put('archive/2026-10-03/raw-candidates.json', raw);
+    put('archive/2026-10-03/filtered-papers.json', filtered);
+    put('archive/2026-10-03/deep-analysis-result.json', deep);
+    const deepSha = crypto.createHash('sha256').update(JSON.stringify(deep)).digest('hex');
+    put('current/blog-generation-manifest-2026-10-03.json', {
+        schemaVersion: 3, date: '2026-10-03', inputSourceReference: { sha256: deepSha },
+        files: [{ path: old.provenance.indexPath, sha256: old.provenance.indexSha256 },
+            ...old.provenance.papers.map(p => ({ path: p.path, sha256: p.sha256 }))]
+    });
+    const nextBoundary = resolveDailyFetchBoundary(f.root, { until, dataRoot });
+    assert.equal(nextBoundary.since, old.until);
+    assert.equal(nextBoundary.provenance.boundaryBasis, 'verified-previous-fetch-until');
+
+    // filtered.batchId 与 plan.batchId 不一致时拒绝。
+    put('archive/2026-10-03/filtered-papers.json', { ...filtered, batchId: 'c'.repeat(16) });
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot }), /拒绝缩短/);
+    put('archive/2026-10-03/filtered-papers.json', filtered);
+
+    // 移除 skip 记录后，filtered 与 deep 集合不再一致，必须拒绝缩短
+    fs.rmSync(path.join(plan.runDir, skip.FILENAME));
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot }), /拒绝缩短/);
+});

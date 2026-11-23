@@ -215,7 +215,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
             && provider.window?.until === boundary.until && provider.window?.covered === true
             && hasVerifiedFetchContinuity(entry.health, boundary, hf)
             && (hf || require('./daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(entry.health, boundary, categoryId, true,
-                entry.papers, checkpoint.historicalDedupIds))
+                entry.papers, checkpoint.historicalDedupIds, checkpoint.batchDate))
             && (!hf || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt'));
     };
@@ -256,8 +256,38 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
         || !Array.isArray(filtered.papers) || !filtered.papers.every(p => rawIds.includes(normalizedId(p)))) fail();
     const ids = rows => (rows || []).map(normalizedId).sort();
     const expected = papers.map(p => p.arxivId).sort();
-    if (JSON.stringify(ids(filtered.papers)) !== JSON.stringify(expected)
-        || JSON.stringify(ids(deep.papers)) !== JSON.stringify(expected)) fail();
+    const filteredIds = ids(filtered.papers);
+    const deepIds = ids(deep.papers);
+    if (new Set(filteredIds).size !== filteredIds.length || new Set(deepIds).size !== deepIds.length) fail();
+    let skippedIds = new Set();
+    if (deep.dailyFreshSourceRun !== undefined) {
+        let skipRecord;
+        try {
+            const dailyFreshSources = require('./daily-fresh-source-plan');
+            const dailySourceSkip = require('./daily-source-skip');
+            const plan = dailyFreshSources.readDailyFreshSourcePlan(deep.dailyFreshSourceRun, {
+                rootDir: path.join(dataRoot, 'runtime', 'daily-fresh-source-runs')
+            });
+            if (plan.batchDate !== date
+                || (filtered.batchId !== undefined && plan.batchId !== filtered.batchId)
+                || (deep.batchId !== undefined && plan.batchId !== deep.batchId)
+                || JSON.stringify([...plan.paperIds].sort()) !== JSON.stringify(filteredIds)) fail();
+            skipRecord = dailySourceSkip.readDailySourceSkips(plan, { limit: dailySourceSkip.MAX_LIMIT });
+            skippedIds = dailySourceSkip.skippedPaperIds(skipRecord);
+        } catch {
+            fail();
+        }
+        const filteredSet = new Set(filteredIds);
+        const deepSet = new Set(deepIds);
+        const expectedSet = new Set(expected);
+        for (const id of skippedIds) {
+            if (!filteredSet.has(id) || deepSet.has(id) || expectedSet.has(id)) fail();
+        }
+    }
+    const effectiveFilteredIds = filteredIds.filter(id => !skippedIds.has(id));
+    if ((filteredIds.length > 0 && effectiveFilteredIds.length === 0)
+        || JSON.stringify(effectiveFilteredIds) !== JSON.stringify(expected)
+        || JSON.stringify(deepIds) !== JSON.stringify(expected)) fail();
     const manifestPath = path.join(dataRoot, 'current', `blog-generation-manifest-${date}.json`);
     const manifestBytes = fs.readFileSync(manifestPath); const manifest = JSON.parse(manifestBytes);
     if (manifest.date !== date || !sourceBoundGeneration(manifest)

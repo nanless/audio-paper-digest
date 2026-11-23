@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Python 命令统一使用受支持的解释器和 OpenSSL。
-# 优先使用项目内不纳入版本控制的虚拟环境。
-if [[ "${PD_PYTHON_RUNTIME_DISABLE_VENV:-0}" != "1" && -x ".venv/bin/python" ]]; then
-  python_bin=".venv/bin/python"
+# 优先使用项目内不纳入版本控制的虚拟环境（按脚本相对仓库根目录定位，不依赖调用方 cwd）。
+repo_root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${PD_PYTHON_RUNTIME_DISABLE_VENV:-0}" != "1" && -x "${repo_root}/.venv/bin/python" ]]; then
+  python_bin="${repo_root}/.venv/bin/python"
 elif command -v python3.11 >/dev/null 2>&1; then
   python_bin="$(command -v python3.11)"
 elif command -v python3 >/dev/null 2>&1; then

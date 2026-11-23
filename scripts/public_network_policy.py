@@ -423,13 +423,46 @@ def is_proxy_fake_ip(ip, *, policy=None, policy_path: Path | str | None = None) 
     return any(_ip_in_cidr(parsed, cidr) for cidr in compiled.proxy_fake_ip)
 
 
+_STRICT_DNS_LABEL_RE = re.compile(r'^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$')
+
+
+def normalize_strict_url_hostname(raw_hostname) -> str | None:
+    """严格规范化 URL 主机名：禁止 %、校验纯 ASCII IPv6，对域名经 IDNA 后强制执行 STD3 标签白名单。"""
+    if type(raw_hostname) is not str or not raw_hostname or '%' in raw_hostname:
+        return None
+    if ':' in raw_hostname:
+        if not raw_hostname.isascii() or re.search(r'[\x00-\x20\x7f\\]', raw_hostname):
+            return None
+        try:
+            return str(ipaddress.IPv6Address(raw_hostname))
+        except ValueError:
+            return None
+    try:
+        ascii_host = raw_hostname.encode('idna').decode('ascii').lower()
+    except UnicodeError:
+        return None
+    hostname = ascii_host[:-1] if ascii_host.endswith('.') else ascii_host
+    if not hostname or len(hostname) > 253 or re.search(r'[^a-z0-9._-]', hostname):
+        return None
+    if any(not _STRICT_DNS_LABEL_RE.fullmatch(label) for label in hostname.split('.')):
+        return None
+    return hostname
+
+
 def is_valid_http_connect_proxy_url(raw_url) -> bool:
-    if type(raw_url) is not str or not raw_url:
+    if type(raw_url) is not str or not raw_url or re.search(r'[\x00-\x20\x7f\\]', raw_url):
+        return False
+    if not re.match(r'^https?://[^/?#]', raw_url, re.IGNORECASE):
         return False
     try:
         parsed = urlparse(raw_url)
-        _ = parsed.port
-        return parsed.scheme in ('http', 'https') and bool(parsed.hostname)
+        port = parsed.port
+        hostname = normalize_strict_url_hostname(parsed.hostname)
+        return (
+            parsed.scheme in ('http', 'https')
+            and bool(hostname)
+            and (port is None or 1 <= port <= 65535)
+        )
     except ValueError:
         return False
 

@@ -28,8 +28,19 @@ function preserveResponse(event, response, options = {}) {
     const temporary = filename + '.tmp';
     const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
         | (fs.constants.O_NOFOLLOW || 0), 0o600);
-    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(temporary, filename);
+    let closed = false;
+    try {
+        fs.writeFileSync(fd, bytes);
+        fs.fsyncSync(fd);
+        try { fs.closeSync(fd); } finally { closed = true; }
+        fs.renameSync(temporary, filename);
+    } catch (error) {
+        if (!closed) {
+            try { fs.closeSync(fd); } catch (_) {}
+        }
+        try { fs.unlinkSync(temporary); } catch (_) {}
+        throw error;
+    }
     const directoryFd = fs.openSync(directory, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
     const stat = fs.lstatSync(filename);

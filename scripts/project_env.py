@@ -9,8 +9,8 @@
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
+from public_network_policy import is_valid_http_connect_proxy_url
 from runtime_guard import require_external_runtime
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -122,12 +122,7 @@ def get_required_fetch_proxy():
         f'Python 抓取只支持 HTTP CONNECT 代理；请检查 {proxy_key} '
         '是否为包含主机名的 http:// 或 https:// 地址'
     )
-    try:
-        parsed = urlparse(proxy)
-        valid_proxy = parsed.scheme in ('http', 'https') and bool(parsed.hostname)
-    except ValueError:
-        raise RuntimeError(invalid_proxy_message) from None
-    if not valid_proxy:
+    if not is_valid_http_connect_proxy_url(proxy):
         raise RuntimeError(invalid_proxy_message)
     return proxy
 

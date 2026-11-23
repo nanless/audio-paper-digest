@@ -104,15 +104,33 @@ function writePrivateAtomic(filename, value) {
         return;
     }
     const temporary = path.join(directory, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
-    const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
-    finally { fs.closeSync(fd); }
-    try { fs.linkSync(temporary, filename); }
-    catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = readPrivateBytes(filename, '每日来源运行清单');
-        if (!existing.equals(bytes)) throw error;
-    } finally { fs.unlinkSync(temporary); }
+    const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+    let closed = false;
+    let primaryError = null;
+    try {
+        try {
+            fs.writeFileSync(fd, bytes);
+            fs.fsyncSync(fd);
+        } finally {
+            if (!closed) {
+                try { fs.closeSync(fd); } finally { closed = true; }
+            }
+        }
+        try {
+            fs.linkSync(temporary, filename);
+        } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            const existing = readPrivateBytes(filename, '每日来源运行清单');
+            if (!existing.equals(bytes)) throw error;
+        }
+    } catch (error) {
+        primaryError = error;
+        throw error;
+    } finally {
+        try { fs.unlinkSync(temporary); } catch (cleanupErr) {
+            if (cleanupErr.code !== 'ENOENT' && !primaryError) throw cleanupErr;
+        }
+    }
 }
 
 function uuidFromHash(value) {
@@ -365,7 +383,7 @@ function readRecoveryMetadata(payload, { papers = null, label = '日更恢复' }
         fail(`${label} 的 batchDate 与封存的每日来源运行不同`);
     }
     // 取不到官方来源而被跳过的论文不在分析集合里，但它们仍属于本次来源运行。
-    const skipRecord = sourceSkip.readDailySourceSkips(plan);
+    const skipRecord = sourceSkip.readDailySourceSkips(plan, { limit: sourceSkip.MAX_LIMIT });
     const skipped = sourceSkip.skippedPaperIds(skipRecord);
     const expectedIds = plan.paperIds.filter(id => !skipped.has(id));
     const ids = sourceIds(rows);
@@ -440,7 +458,7 @@ function prepareDailyFreshSourceRecoveryPayload(payload, filtered, { label = '�
         || new Set(existingIds).size !== existingIds.length) fail(`${label} 的论文集合不符合完整筛选批次`);
     const existing = new Map(payload.papers.map(paper => [normalizedId(paper), paper]));
     const { mergeStoredAnalysisState } = require('../analysis-engine.js');
-    const skipRecord = sourceSkip.readDailySourceSkips(plan);
+    const skipRecord = sourceSkip.readDailySourceSkips(plan, { limit: sourceSkip.MAX_LIMIT });
     const skipped = sourceSkip.skippedPaperIds(skipRecord);
     const result = { ...payload, batchDate: plan.batchDate, batchId: plan.batchId,
         papers: filtered.papers.filter(paper => !skipped.has(normalizedId(paper)))

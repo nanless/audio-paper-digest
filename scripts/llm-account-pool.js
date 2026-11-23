@@ -135,6 +135,14 @@ function resolveSecondaryApiKeys(options = {}) {
         ? options.primaryApiKeys.map(value => String(value || '').trim()).filter(Boolean)
         : [primaryKey].filter(Boolean);
     const secondaryFallbackApiKeys = options.secondaryFallbackApiKeys || '';
+    const secondaryTertiaryFallbackApiKey = options.secondaryTertiaryFallbackApiKey || '';
+    const rawSecondaryFallbacks = (Array.isArray(secondaryFallbackApiKeys)
+        ? secondaryFallbackApiKeys.map(value => String(value || '').trim())
+        : String(secondaryFallbackApiKeys || '').split(',').map(value => value.trim()))
+        .concat(Array.isArray(secondaryTertiaryFallbackApiKey)
+            ? secondaryTertiaryFallbackApiKey.map(value => String(value || '').trim())
+            : String(secondaryTertiaryFallbackApiKey || '').split(',').map(value => value.trim()))
+        .filter(Boolean);
     if (!secondaryModel) return [secondaryKey || primaryKey].filter(Boolean);
 
     const primaryService = normalizeOpenCodeGoService(primaryEndpoint);
@@ -160,13 +168,13 @@ function resolveSecondaryApiKeys(options = {}) {
         );
     }
 
-    if (secondaryFallbackApiKeys) {
+    if (rawSecondaryFallbacks.length > 0) {
         if (!secondaryKey && !sameOpenCodeGoService) {
             throw new LlmAccountPoolConfigError(
                 '副模型显式配置 fallback API keys 时，非同一 OpenCode Go 服务必须同时显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
             );
         }
-        return resolveApiKeyPool(secondaryKey || primaryKey, secondaryFallbackApiKeys);
+        return resolveApiKeyPool(secondaryKey || primaryKey, rawSecondaryFallbacks);
     }
     if (secondaryKey) return [secondaryKey];
 
@@ -180,14 +188,15 @@ function resolveSecondaryApiKeys(options = {}) {
 
 function normalizeOpenCodeGoService(endpoint) {
     const rawEndpoint = String(endpoint || '');
-    // WHATWG URL 解析会去掉字面写法和百分号编码的点段。先检查调用方传来的路径，
-    // 这样含歧义的路由就不会在校验之前被规范化成受信任的 /zen/go 前缀。
-    if (rawEndpoint.includes('\\')) return null;
+    // WHATWG URL 解析会去掉控制字符/制表符以及字面写法和百分号编码的点段。
+    // 先拒绝空白、控制字符和反斜杠，避免含歧义的路由被规范化成受信任的 /zen/go 前缀。
+    if (!rawEndpoint || /[\u0000-\u0020\u007f]/.test(rawEndpoint) || rawEndpoint.includes('\\')) return null;
     const rawUrlMatch = rawEndpoint.match(
-        /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?(?:[?#]|$)/
+        /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]+)(\/[^?#]*)?(?:[?#]|$)/
     );
     if (!rawUrlMatch) return null;
-    const rawPathname = rawUrlMatch[1] || '/';
+    if (rawUrlMatch[1].includes('@') || rawUrlMatch[1].includes('%') || !/^[\x21-\x7e]+$/.test(rawUrlMatch[1])) return null;
+    const rawPathname = rawUrlMatch[2] || '/';
     let decodedPathname;
     try {
         decodedPathname = decodeURIComponent(rawPathname);
@@ -259,7 +268,15 @@ function readRegularStateText(filePath) {
         throw new LlmAccountPoolStateError(`LLM 账号池文件必须为普通文件: ${filePath}`);
     }
     const flags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0);
-    const fd = fs.openSync(filePath, flags);
+    let fd;
+    try {
+        fd = fs.openSync(filePath, flags);
+    } catch (error) {
+        if (error.code === 'ELOOP') {
+            throw new LlmAccountPoolStateError(`LLM 账号池文件禁止使用 symlink: ${filePath}`);
+        }
+        throw error;
+    }
     try {
         if (!fs.fstatSync(fd).isFile()) {
             throw new LlmAccountPoolStateError(`LLM 账号池文件必须为普通文件: ${filePath}`);
@@ -270,46 +287,264 @@ function readRegularStateText(filePath) {
     }
 }
 
-function lockIsReclaimable(lockPath, staleMs) {
-    let ageMs;
-    try {
-        const lockStat = fs.lstatSync(lockPath);
-        if (lockStat.isSymbolicLink()) {
-            throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink: ${lockPath}`);
-        }
-        const candidates = [lockStat.mtimeMs];
-        const ownerPath = path.join(lockPath, 'owner.json');
+function nowMonotonicMs() {
+    return Number(process.hrtime.bigint() / 1000000n);
+}
+
+function writeLockOwnerJson(lockPath, createdDirStat, value) {
+    const ownerPath = path.join(lockPath, 'owner.json');
+    const sameCreatedDir = () => {
         try {
-            const ownerStat = fs.lstatSync(ownerPath);
-            if (ownerStat.isSymbolicLink()) {
-                throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink: ${ownerPath}`);
-            }
-            candidates.push(ownerStat.mtimeMs);
+            const current = fs.lstatSync(lockPath);
+            return !current.isSymbolicLink()
+                && current.isDirectory()
+                && current.dev === createdDirStat.dev
+                && current.ino === createdDirStat.ino;
         } catch (error) {
-            if (error.code !== 'ENOENT') throw error;
+            if (error.code === 'ENOENT') return false;
+            throw error;
         }
-        ageMs = Date.now() - Math.max(...candidates);
+    };
+    if (!sameCreatedDir()) return null;
+    const temp = path.join(lockPath, `.owner.json.${process.pid}.${crypto.randomUUID()}.tmp`);
+    const openFlags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+        | (fs.constants.O_NOFOLLOW || 0);
+    let fd;
+    let closed = false;
+    try {
+        try {
+            fd = fs.openSync(temp, openFlags, 0o600);
+        } catch (openError) {
+            if (openError.code === 'ENOENT') return null;
+            if (openError.code === 'ELOOP') {
+                throw new LlmAccountPoolStateError(`LLM 账号池锁临时文件禁止使用 symlink: ${temp}`);
+            }
+            throw openError;
+        }
+        fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        fs.fsyncSync(fd);
+        try { fs.closeSync(fd); } finally { closed = true; }
+        if (!sameCreatedDir()) {
+            return null;
+        }
+        try {
+            fs.renameSync(temp, ownerPath);
+            fs.chmodSync(ownerPath, 0o600);
+        } catch (renameError) {
+            if (renameError.code === 'ENOENT') return null;
+            throw renameError;
+        }
+        try {
+            const dirFd = fs.openSync(lockPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+            try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+        } catch (_) {
+            // 有些文件系统不支持对目录 fsync。
+        }
+        if (!sameCreatedDir()) return null;
+        let ownerStat;
+        try {
+            ownerStat = fs.lstatSync(ownerPath);
+        } catch (statError) {
+            if (statError.code === 'ENOENT') return null;
+            throw statError;
+        }
+        if (ownerStat.isSymbolicLink() || !ownerStat.isFile() || ownerStat.nlink !== 1) {
+            throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: ${ownerPath}`);
+        }
+        return ownerStat;
     } catch (error) {
-        if (error.code === 'ENOENT') return true;
+        if (fd !== undefined && !closed) {
+            try { fs.closeSync(fd); } catch (_) {}
+        }
+        if (sameCreatedDir()) {
+            try { fs.unlinkSync(temp); } catch (_) {}
+            try { fs.unlinkSync(ownerPath); } catch (_) {}
+            try { fs.rmdirSync(lockPath); } catch (_) {}
+        }
         throw error;
     }
+}
+
+function snapshotLock(lockPath, staleMs) {
+    let lockStat;
     try {
-        const owner = JSON.parse(readRegularStateText(path.join(lockPath, 'owner.json')));
-        if (owner.hostname === os.hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
-            try {
-                process.kill(owner.pid, 0);
+        lockStat = fs.lstatSync(lockPath);
+    } catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+    }
+    if (lockStat.isSymbolicLink() || !lockStat.isDirectory()) {
+        throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink 或非目录: ${lockPath}`);
+    }
+    const candidates = [lockStat.mtimeMs];
+    const ownerPath = path.join(lockPath, 'owner.json');
+    let ownerStat = null;
+    try {
+        ownerStat = fs.lstatSync(ownerPath);
+        if (ownerStat.isSymbolicLink() || !ownerStat.isFile() || ownerStat.nlink !== 1) {
+            throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: ${ownerPath}`);
+        }
+        candidates.push(ownerStat.mtimeMs);
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    const ageMs = Date.now() - Math.max(...candidates);
+    let ownerToken = null;
+    let reclaimable = ageMs > staleMs;
+    if (ownerStat) {
+        try {
+            const owner = JSON.parse(readRegularStateText(ownerPath));
+            if (owner && typeof owner === 'object' && !Array.isArray(owner)) {
+                ownerToken = typeof owner.token === 'string' ? owner.token : null;
+                if (owner.hostname === os.hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
+                    try {
+                        process.kill(owner.pid, 0);
+                        reclaimable = false;
+                    } catch (error) {
+                        if (error.code === 'ESRCH') reclaimable = true;
+                        else if (error.code === 'EPERM') reclaimable = false;
+                        else throw error;
+                    }
+                } else if (owner.hostname) {
+                    reclaimable = ageMs > staleMs;
+                }
+            }
+        } catch (error) {
+            if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+        }
+    }
+    return {
+        dirDev: lockStat.dev,
+        dirIno: lockStat.ino,
+        ownerPresent: Boolean(ownerStat),
+        ownerDev: ownerStat ? ownerStat.dev : null,
+        ownerIno: ownerStat ? ownerStat.ino : null,
+        ownerToken,
+        reclaimable
+    };
+}
+
+function sameLockSnapshot(left, right) {
+    if (!left || !right) return false;
+    if (left.dirDev !== right.dirDev || left.dirIno !== right.dirIno) return false;
+    if (left.ownerPresent !== right.ownerPresent) return false;
+    if (left.ownerPresent) {
+        if (left.ownerDev !== right.ownerDev || left.ownerIno !== right.ownerIno) return false;
+        if (left.ownerToken !== right.ownerToken) return false;
+    }
+    return true;
+}
+
+function removeLockDirChecked(lockPath, expectedSnapshot) {
+    if (!expectedSnapshot) return false;
+    let currentDir;
+    try {
+        currentDir = fs.lstatSync(lockPath);
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    }
+    if (currentDir.isSymbolicLink() || !currentDir.isDirectory()) {
+        throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink 或非目录: ${lockPath}`);
+    }
+    if (currentDir.dev !== expectedSnapshot.dirDev || currentDir.ino !== expectedSnapshot.dirIno) {
+        return false;
+    }
+    const ownerPath = path.join(lockPath, 'owner.json');
+    if (expectedSnapshot.ownerPresent) {
+        let currentOwner;
+        try {
+            currentOwner = fs.lstatSync(ownerPath);
+        } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+            currentOwner = null;
+        }
+        if (currentOwner) {
+            if (currentOwner.isSymbolicLink() || !currentOwner.isFile() || currentOwner.nlink !== 1) {
+                throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: ${ownerPath}`);
+            }
+            if (currentOwner.dev !== expectedSnapshot.ownerDev || currentOwner.ino !== expectedSnapshot.ownerIno) {
                 return false;
+            }
+            try {
+                fs.unlinkSync(ownerPath);
             } catch (error) {
-                if (error.code === 'ESRCH') return true;
-                if (error.code === 'EPERM') return false;
-                throw error;
+                if (error.code !== 'ENOENT') throw error;
             }
         }
-        if (owner.hostname) return ageMs > staleMs;
-    } catch (error) {
-        if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
     }
-    return ageMs > staleMs;
+    try {
+        fs.rmdirSync(lockPath);
+        return true;
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        if (error.code === 'ENOTEMPTY' || error.code === 'EEXIST') {
+            // 仅清理崩溃遗留的临时 .owner.json.*.tmp；若目录已变更或有新的 owner.json 则不动；
+            // 若存在预期之外的异物文件/子目录则立即 fail-closed，避免上层回收循环死锁。
+            let entries = [];
+            try {
+                const verifyDir = fs.lstatSync(lockPath);
+                if (verifyDir.isSymbolicLink() || !verifyDir.isDirectory()) {
+                    throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink 或非目录: ${lockPath}`);
+                }
+                if (verifyDir.dev !== expectedSnapshot.dirDev || verifyDir.ino !== expectedSnapshot.dirIno) {
+                    return false;
+                }
+                entries = fs.readdirSync(lockPath);
+            } catch (readError) {
+                if (readError.code === 'ENOENT') return false;
+                throw readError;
+            }
+            const hasForeign = entries.some(
+                name => name !== 'owner.json' && !/^\.owner\.json\..+\.tmp$/.test(name)
+            );
+            if (hasForeign) {
+                throw new LlmAccountPoolStateError(
+                    `LLM 账号池锁目录存在预期之外的文件，拒绝静默清理: ${lockPath}`
+                );
+            }
+            if (entries.length > 0 && entries.every(name => /^\.owner\.json\..+\.tmp$/.test(name))) {
+                for (const name of entries) {
+                    const entryPath = path.join(lockPath, name);
+                    let entryStat;
+                    try {
+                        entryStat = fs.lstatSync(entryPath);
+                    } catch (statErr) {
+                        if (statErr.code === 'ENOENT') continue;
+                        throw statErr;
+                    }
+                    if (entryStat.isSymbolicLink() || !entryStat.isFile() || entryStat.nlink !== 1) {
+                        throw new LlmAccountPoolStateError(
+                            `LLM 账号池锁临时文件禁止使用 symlink、非普通文件或硬链接: ${entryPath}`
+                        );
+                    }
+                    try { fs.unlinkSync(entryPath); } catch (unlinkErr) {
+                        if (unlinkErr.code !== 'ENOENT') throw unlinkErr;
+                    }
+                }
+                try {
+                    const verifyDir2 = fs.lstatSync(lockPath);
+                    if (verifyDir2.dev !== expectedSnapshot.dirDev || verifyDir2.ino !== expectedSnapshot.dirIno) {
+                        return false;
+                    }
+                    fs.rmdirSync(lockPath);
+                    return true;
+                } catch (retryErr) {
+                    if (retryErr.code === 'ENOENT' || retryErr.code === 'ENOTEMPTY' || retryErr.code === 'EEXIST') {
+                        return false;
+                    }
+                    throw retryErr;
+                }
+            }
+            return false;
+        }
+        throw error;
+    }
+}
+
+function lockIsReclaimable(lockPath, staleMs) {
+    const snapshot = snapshotLock(lockPath, staleMs);
+    return snapshot === null ? true : snapshot.reclaimable;
 }
 
 function acquireStateLock(stateFile, options = {}) {
@@ -320,29 +555,57 @@ function acquireStateLock(stateFile, options = {}) {
     assertSafeProjectStatePath(stateFile);
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });
     try {
-        if (fs.lstatSync(lockPath).isSymbolicLink()) {
-            throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink: ${lockPath}`);
+        const existingLock = fs.lstatSync(lockPath);
+        if (existingLock.isSymbolicLink() || !existingLock.isDirectory()) {
+            throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink 或非目录: ${lockPath}`);
         }
     } catch (error) {
         if (error.code !== 'ENOENT') throw error;
     }
-    const startedAt = Date.now();
+    const startedAt = nowMonotonicMs();
     const token = crypto.randomUUID();
     while (true) {
         let reclaimStat = null;
         try {
             reclaimStat = fs.lstatSync(reclaimPath);
-            if (reclaimStat.isSymbolicLink()) {
-                throw new LlmAccountPoolStateError(`LLM 账号池回收锁路径禁止使用 symlink: ${reclaimPath}`);
+            if (reclaimStat.isSymbolicLink() || !reclaimStat.isDirectory()) {
+                throw new LlmAccountPoolStateError(`LLM 账号池回收锁路径禁止使用 symlink 或非目录: ${reclaimPath}`);
             }
         } catch (error) {
             if (error.code !== 'ENOENT') throw error;
         }
         if (reclaimStat) {
             if (Date.now() - reclaimStat.mtimeMs > staleMs) {
-                fs.rmSync(reclaimPath, { recursive: true, force: true });
+                let removedReclaim = false;
+                try {
+                    const currentReclaim = fs.lstatSync(reclaimPath);
+                    if (currentReclaim.isSymbolicLink() || !currentReclaim.isDirectory()) {
+                        throw new LlmAccountPoolStateError(`LLM 账号池回收锁路径禁止使用 symlink 或非目录: ${reclaimPath}`);
+                    }
+                    if (currentReclaim.dev === reclaimStat.dev && currentReclaim.ino === reclaimStat.ino) {
+                        fs.rmdirSync(reclaimPath);
+                        removedReclaim = true;
+                    }
+                } catch (reclaimRmErr) {
+                    if (reclaimRmErr.code === 'ENOENT') {
+                        removedReclaim = true;
+                    } else if (reclaimRmErr.code === 'ENOTEMPTY' || reclaimRmErr.code === 'EEXIST') {
+                        throw new LlmAccountPoolStateError(`LLM 账号池回收锁目录存在异常内容，无法清理: ${reclaimPath}`);
+                    } else {
+                        throw reclaimRmErr;
+                    }
+                }
+                if (!removedReclaim) {
+                    if (nowMonotonicMs() - startedAt >= timeoutMs) {
+                        throw new LlmAccountPoolLockTimeoutError(
+                            `等待 LLM 账号池回收锁超时: ${reclaimPath}`
+                        );
+                    }
+                    sleepSync(25);
+                    continue;
+                }
             } else {
-                if (Date.now() - startedAt >= timeoutMs) {
+                if (nowMonotonicMs() - startedAt >= timeoutMs) {
                     throw new LlmAccountPoolLockTimeoutError(
                         `等待 LLM 账号池回收锁超时: ${reclaimPath}`
                     );
@@ -353,52 +616,115 @@ function acquireStateLock(stateFile, options = {}) {
         }
         try {
             fs.mkdirSync(lockPath);
+            let createdDirStat;
             try {
-                writeDurableJson(path.join(lockPath, 'owner.json'), {
-                    pid: process.pid,
-                    hostname: os.hostname(),
-                    token,
-                    acquiredAt: new Date().toISOString()
-                });
-            } catch (error) {
-                fs.rmSync(lockPath, { recursive: true, force: true });
-                throw error;
+                createdDirStat = fs.lstatSync(lockPath);
+            } catch (statError) {
+                if (statError.code === 'ENOENT') {
+                    if (nowMonotonicMs() - startedAt >= timeoutMs) {
+                        throw new LlmAccountPoolLockTimeoutError(`等待 LLM 账号池状态锁超时: ${lockPath}`);
+                    }
+                    sleepSync(25);
+                    continue;
+                }
+                throw statError;
             }
+            if (createdDirStat.isSymbolicLink() || !createdDirStat.isDirectory()) {
+                throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink 或非目录: ${lockPath}`);
+            }
+            const ownerPath = path.join(lockPath, 'owner.json');
+            const createdOwnerStat = writeLockOwnerJson(lockPath, createdDirStat, {
+                pid: process.pid,
+                hostname: os.hostname(),
+                token,
+                acquiredAt: new Date().toISOString()
+            });
+            if (!createdOwnerStat) {
+                if (nowMonotonicMs() - startedAt >= timeoutMs) {
+                    throw new LlmAccountPoolLockTimeoutError(`等待 LLM 账号池状态锁超时: ${lockPath}`);
+                }
+                sleepSync(25);
+                continue;
+            }
+            const ownedSnapshot = {
+                dirDev: createdDirStat.dev,
+                dirIno: createdDirStat.ino,
+                ownerPresent: true,
+                ownerDev: createdOwnerStat.dev,
+                ownerIno: createdOwnerStat.ino,
+                ownerToken: token
+            };
             return () => {
                 try {
-                    const ownerPath = path.join(lockPath, 'owner.json');
-                    if (fs.lstatSync(ownerPath).isSymbolicLink()) {
-                        throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink: ${ownerPath}`);
+                    const currentDir = fs.lstatSync(lockPath);
+                    if (currentDir.isSymbolicLink() || !currentDir.isDirectory()
+                        || currentDir.dev !== ownedSnapshot.dirDev
+                        || currentDir.ino !== ownedSnapshot.dirIno) {
+                        return false;
+                    }
+                    const currentOwner = fs.lstatSync(ownerPath);
+                    if (currentOwner.isSymbolicLink() || !currentOwner.isFile() || currentOwner.nlink !== 1) {
+                        throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink、非普通文件或硬链接: ${ownerPath}`);
                     }
                     const owner = JSON.parse(readRegularStateText(ownerPath));
-                    if (owner.token !== token) return false;
-                    fs.rmSync(lockPath, { recursive: true, force: true });
-                    return true;
+                    if (!owner || owner.token !== token) return false;
+                    return removeLockDirChecked(lockPath, ownedSnapshot);
                 } catch (error) {
-                    if (error.code === 'ENOENT') return false;
+                    if (error.code === 'ENOENT' || error instanceof SyntaxError) return false;
                     throw error;
                 }
             };
         } catch (error) {
             if (error.code !== 'EEXIST') throw error;
-            if (lockIsReclaimable(lockPath, staleMs)) {
-                let ownsReclaim = false;
+            const staleSnapshot = snapshotLock(lockPath, staleMs);
+            if (staleSnapshot && staleSnapshot.reclaimable) {
+                let reclaimCreatedStat = null;
+                let reclaimed = false;
                 try {
                     fs.mkdirSync(reclaimPath);
-                    ownsReclaim = true;
-                    // 持有回收标记期间重新检查，避免新的持有者在
-                    // 过期观察与移除之间插入。
-                    if (lockIsReclaimable(lockPath, staleMs)) {
-                        fs.rmSync(lockPath, { recursive: true, force: true });
+                    try {
+                        reclaimCreatedStat = fs.lstatSync(reclaimPath);
+                    } catch (statErr) {
+                        if (statErr.code !== 'ENOENT') throw statErr;
+                    }
+                    if (reclaimCreatedStat && !reclaimCreatedStat.isSymbolicLink() && reclaimCreatedStat.isDirectory()) {
+                        // 持有回收标记期间做快照 CAS 校验，避免删除已易手的活锁。
+                        const currentSnapshot = snapshotLock(lockPath, staleMs);
+                        if (currentSnapshot && currentSnapshot.reclaimable
+                            && sameLockSnapshot(staleSnapshot, currentSnapshot)) {
+                            reclaimed = removeLockDirChecked(lockPath, currentSnapshot);
+                        }
                     }
                 } catch (reclaimError) {
                     if (reclaimError.code !== 'EEXIST' && reclaimError.code !== 'ENOENT') throw reclaimError;
                 } finally {
-                    if (ownsReclaim) fs.rmSync(reclaimPath, { recursive: true, force: true });
+                    if (reclaimCreatedStat) {
+                        try {
+                            const currentReclaim = fs.lstatSync(reclaimPath);
+                            if (!currentReclaim.isSymbolicLink() && currentReclaim.isDirectory()
+                                && currentReclaim.dev === reclaimCreatedStat.dev
+                                && currentReclaim.ino === reclaimCreatedStat.ino) {
+                                fs.rmdirSync(reclaimPath);
+                            }
+                        } catch (rmErr) {
+                            if (rmErr.code !== 'ENOENT') throw rmErr;
+                        }
+                    }
+                }
+                if (nowMonotonicMs() - startedAt >= timeoutMs) {
+                    throw new LlmAccountPoolLockTimeoutError(`等待 LLM 账号池状态锁超时: ${lockPath}`);
+                }
+                if (reclaimed) continue;
+                sleepSync(25);
+                continue;
+            }
+            if (staleSnapshot === null) {
+                if (nowMonotonicMs() - startedAt >= timeoutMs) {
+                    throw new LlmAccountPoolLockTimeoutError(`等待 LLM 账号池状态锁超时: ${lockPath}`);
                 }
                 continue;
             }
-            if (Date.now() - startedAt >= timeoutMs) {
+            if (nowMonotonicMs() - startedAt >= timeoutMs) {
                 throw new LlmAccountPoolLockTimeoutError(`等待 LLM 账号池状态锁超时: ${lockPath}`);
             }
             sleepSync(25);
@@ -643,16 +969,18 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
         nowMs + MAX_BLOCK_MS,
         Math.max(nowMs + 1000, Number(quota?.blockedUntilMs) || nowMs + UNKNOWN_QUOTA_BLOCK_MS)
     );
+    let effectiveUntilMs = blockedUntilMs;
     updateState(stateFile, state => {
         const service = ensureService(state, selection);
         const previous = service.accounts[selection.accountId] || {};
+        effectiveUntilMs = Math.max(Number(previous.blockedUntilMs) || 0, blockedUntilMs);
         service.accounts[selection.accountId] = {
             ...previous,
             status: 'quota_blocked',
             reason: quota?.type || 'GoUsageLimitError',
             limitName: String(quota?.limitClass || 'unknown'),
-            blockedUntilMs: Math.max(Number(previous.blockedUntilMs) || 0, blockedUntilMs),
-            blockedUntil: new Date(Math.max(Number(previous.blockedUntilMs) || 0, blockedUntilMs)).toISOString(),
+            blockedUntilMs: effectiveUntilMs,
+            blockedUntil: new Date(effectiveUntilMs).toISOString(),
             lastFailureAt: new Date(nowMs).toISOString(),
             lastFailureStatus: quota?.type === 'InsufficientBalanceError' ? 401 : 429
         };
@@ -660,7 +988,7 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
         // 明确排除，下一次选择会从游标继续，冷却到期后自动重新加入轮转。
         return state;
     });
-    return blockedUntilMs;
+    return effectiveUntilMs;
 }
 
 function headerValues(headers, name) {
@@ -687,6 +1015,118 @@ function parsePositiveFiniteDelay(value) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+const HTTP_TZ_OFFSETS_MIN = {
+    GMT: 0, UTC: 0, UT: 0,
+    EST: -300, EDT: -240, CST: -360, CDT: -300,
+    MST: -420, MDT: -360, PST: -480, PDT: -420
+};
+const HTTP_MONTH_MAP = {
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+    apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+    aug: 8, august: 8, sep: 9, september: 9, oct: 10, october: 10,
+    nov: 11, november: 11, dec: 12, december: 12
+};
+const TZ_SUFFIX_SRC = '(?:GMT|UTC|UT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[+-](?:[01]\\d|2[0-3]):?[0-5]\\d)';
+const MONTH_SHORT_SRC = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)';
+const MONTH_FULL_OR_SHORT_SRC = '(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)';
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(?:(Z)|([+-](?:[01]\d|2[0-3]):?[0-5]\d))?$/i;
+const IMF_DATE_RE = new RegExp(
+    `^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\\s+)?(\\d{1,2})\\s+(${MONTH_FULL_OR_SHORT_SRC})\\s+(\\d{4})\\s+(\\d{2}):(\\d{2})(?::(\\d{2}))?(?:\\s+(${TZ_SUFFIX_SRC}))?$`,
+    'i'
+);
+const RFC850_DATE_RE = new RegExp(
+    `^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun),\\s+(\\d{1,2})-(${MONTH_SHORT_SRC})-(\\d{2}|\\d{4})\\s+(\\d{2}):(\\d{2}):(\\d{2})(?:\\s+(${TZ_SUFFIX_SRC}))?$`,
+    'i'
+);
+const ASCTIME_DATE_RE = new RegExp(
+    `^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\\s+(${MONTH_SHORT_SRC})\\s+(\\d{1,2})\\s+(\\d{2}):(\\d{2}):(\\d{2})\\s+(\\d{4})(?:\\s+(${TZ_SUFFIX_SRC}))?$`,
+    'i'
+);
+const US_12H_DATE_RE = new RegExp(
+    `^(${MONTH_FULL_OR_SHORT_SRC})\\s+(\\d{1,2}),\\s+(\\d{4})\\s+(\\d{1,2}):(\\d{2})(?::(\\d{2}))?\\s+(AM|PM)(?:\\s+(${TZ_SUFFIX_SRC}))?$`,
+    'i'
+);
+
+function parseHttpTzOffsetMinutes(token) {
+    if (!token) return 0;
+    const upper = String(token).trim().toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(HTTP_TZ_OFFSETS_MIN, upper)) {
+        return HTTP_TZ_OFFSETS_MIN[upper];
+    }
+    const match = /^([+-])([01]\d|2[0-3]):?([0-5]\d)$/.exec(upper);
+    if (!match) return null;
+    const sign = match[1] === '+' ? 1 : -1;
+    return sign * (Number(match[2]) * 60 + Number(match[3]));
+}
+
+function buildStrictUtcMs(year, month, day, hour, minute, second, millisecond, tzOffsetMin) {
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return NaN;
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || !Number.isInteger(second)) return NaN;
+    if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return NaN;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return NaN;
+    if (tzOffsetMin === null || !Number.isFinite(tzOffsetMin)) return NaN;
+    const probe = new Date(0);
+    probe.setUTCFullYear(year, month - 1, day);
+    probe.setUTCHours(hour, minute, second, millisecond);
+    if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+        return NaN;
+    }
+    return probe.getTime() - tzOffsetMin * 60000;
+}
+
+function parseHttpDateMs(raw) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return NaN;
+    let m = ISO_DATE_RE.exec(trimmed);
+    if (m) {
+        const ms = m[7] ? Number(m[7].padEnd(3, '0').slice(0, 3)) : 0;
+        const tzOffset = m[9] ? parseHttpTzOffsetMinutes(m[9]) : 0;
+        return buildStrictUtcMs(
+            Number(m[1]), Number(m[2]), Number(m[3]),
+            Number(m[4]), Number(m[5]), m[6] !== undefined ? Number(m[6]) : 0, ms, tzOffset
+        );
+    }
+    m = IMF_DATE_RE.exec(trimmed);
+    if (m) {
+        return buildStrictUtcMs(
+            Number(m[3]), HTTP_MONTH_MAP[m[2].toLowerCase()], Number(m[1]),
+            Number(m[4]), Number(m[5]), m[6] !== undefined ? Number(m[6]) : 0, 0,
+            parseHttpTzOffsetMinutes(m[7])
+        );
+    }
+    m = RFC850_DATE_RE.exec(trimmed);
+    if (m) {
+        let year = Number(m[3]);
+        if (m[3].length === 2) year = year < 50 ? 2000 + year : 1900 + year;
+        return buildStrictUtcMs(
+            year, HTTP_MONTH_MAP[m[2].toLowerCase()], Number(m[1]),
+            Number(m[4]), Number(m[5]), Number(m[6]), 0,
+            parseHttpTzOffsetMinutes(m[7])
+        );
+    }
+    m = ASCTIME_DATE_RE.exec(trimmed);
+    if (m) {
+        return buildStrictUtcMs(
+            Number(m[6]), HTTP_MONTH_MAP[m[1].toLowerCase()], Number(m[2]),
+            Number(m[3]), Number(m[4]), Number(m[5]), 0,
+            parseHttpTzOffsetMinutes(m[7])
+        );
+    }
+    m = US_12H_DATE_RE.exec(trimmed);
+    if (m) {
+        const rawHour = Number(m[4]);
+        if (rawHour < 1 || rawHour > 12) return NaN;
+        const isPm = m[7].toUpperCase() === 'PM';
+        const hour24 = (rawHour % 12) + (isPm ? 12 : 0);
+        return buildStrictUtcMs(
+            Number(m[3]), HTTP_MONTH_MAP[m[1].toLowerCase()], Number(m[2]),
+            hour24, Number(m[5]), m[6] !== undefined ? Number(m[6]) : 0, 0,
+            parseHttpTzOffsetMinutes(m[8])
+        );
+    }
+    return NaN;
+}
+
 function parseRetryAfterEvidenceMs(headers, nowMs) {
     const evidence = [];
     for (const raw of headerValues(headers, 'retry-after-ms')) {
@@ -694,23 +1134,27 @@ function parseRetryAfterEvidenceMs(headers, nowMs) {
         // 合并到一起的多个值。
         for (const part of raw.split(',')) {
             const ms = parsePositiveFiniteDelay(part);
-            if (ms !== null) evidence.push(ms);
+            if (ms !== null) evidence.push(Math.min(ms, MAX_BLOCK_MS));
         }
     }
     for (const raw of headerValues(headers, 'retry-after')) {
         const seconds = parsePositiveFiniteDelay(raw);
-        if (seconds !== null) evidence.push(seconds * 1000);
+        if (seconds !== null) evidence.push(Math.min(seconds, MAX_BLOCK_MS / 1000) * 1000);
 
         // 多个数字形式的 Retry-After 可能被逗号合并。
         // 不要一概按逗号拆分日期：IMF-fixdate 本身就含逗号。
         for (const part of raw.split(',')) {
             const coalescedSeconds = parsePositiveFiniteDelay(part);
-            if (coalescedSeconds !== null) evidence.push(coalescedSeconds * 1000);
+            if (coalescedSeconds !== null) {
+                evidence.push(Math.min(coalescedSeconds, MAX_BLOCK_MS / 1000) * 1000);
+            }
         }
 
         if (/[A-Za-z]/.test(raw)) {
-            const dateMs = Date.parse(raw);
-            if (Number.isFinite(dateMs) && dateMs > nowMs) evidence.push(dateMs - nowMs);
+            const dateMs = parseHttpDateMs(raw);
+            if (Number.isFinite(dateMs) && dateMs > nowMs) {
+                evidence.push(Math.min(dateMs - nowMs, MAX_BLOCK_MS));
+            }
         }
     }
     return evidence.filter(value => Number.isFinite(value) && value > 0);
@@ -721,11 +1165,12 @@ function parseResetMessageEvidenceMs(message) {
     const pattern = /resets?\s+in\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b/gi;
     for (const match of String(message || '').matchAll(pattern)) {
         const amount = Number(match[1]);
+        if (!Number.isFinite(amount) || amount <= 0) continue;
         const unit = match[2].toLowerCase();
         const multiplier = unit.startsWith('d') ? 86400000
             : unit.startsWith('h') ? 3600000
                 : unit.startsWith('m') ? 60000 : 1000;
-        const delayMs = amount * multiplier;
+        const delayMs = Math.min(amount, MAX_BLOCK_MS / multiplier) * multiplier;
         if (Number.isFinite(delayMs) && delayMs > 0) evidence.push(delayMs);
     }
     return evidence;

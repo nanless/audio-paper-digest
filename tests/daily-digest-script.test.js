@@ -228,3 +228,12 @@ test('空批次放行仅在显式抓取参数中透传，跳阶段或重复使�
     assert.match(repeated.stderr, /--allow-empty-daily 不能重复使用/);
     assert.equal(fs.readFileSync(log, 'utf8'), '');
 });
+
+test('--previous-day-batch 在 --help 中记录且禁止与非抓取 --from 阶段混用', () => {
+    const help = spawnSync('bash', [scriptPath, '--help'], { encoding: 'utf8' });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /--previous-day-batch/);
+    const badCombo = spawnSync('bash', [scriptPath, '2026-11-16', '--from', 'generate', '--previous-day-batch'], { encoding: 'utf8' });
+    assert.equal(badCombo.status, 2);
+    assert.match(badCombo.stderr, /--previous-day-batch 仅适用于抓取阶段/);
+});

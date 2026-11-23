@@ -51,6 +51,9 @@ function tableCase(rule, name, header, options = {}) {
 function numeralCase(name, text) {
     tasks.push({ rule: 'manual-numeral', case: name, kind: 'manual-numeral', text });
 }
+function coreSummaryCase(name, summary, sourceText) {
+    tasks.push({ rule: 'core-summary-v4', case: name, kind: 'core-summary-v4', summary, sourceText });
+}
 
 // ── 规则 1：实验表格识别列、单元格数字格式与方向标记 ───────────────────────────
 // Node: analysis-contract.js::validateExperimentTableContract
@@ -373,8 +376,60 @@ const RULES = Object.freeze([
         jsEntry: 'scripts/editorial-quality.js::findQuantitativeChineseNumerals',
         pyEntry: 'scripts/publish_common.py::validate_manual_reader_quality',
         pairedRule: 'HARD_MEASUREMENT_UNITS/SCALED_ARABIC_MEASUREMENT_UNITS 等 ↔ simple_count_unit_items 等'
+    },
+    {
+        id: 'core-summary-v4',
+        title: '核心摘要 v4 指标白名单与数值溯源（CA-SDRi / p 值 / 区间右端点 / 缩放防卫）',
+        jsEntry: 'scripts/analysis-contract.js::validateCoreSummarySemanticContract',
+        pyEntry: 'scripts/publish-to-blog.py::_detailed_core_summary_semantic_issue',
+        pairedRule: 'validateCoreSummarySemanticContract ↔ _detailed_core_summary_semantic_issue'
     }
 ]);
+
+const EXEC_SUMMARY_TEMPLATE = expSentence => [
+    '**问题与瓶颈：** 现有流式语音识别与增强系统在严格低延迟约束下难以维持稳定的声学上下文连贯性。固定短窗口切分在跨帧边界处截断长程声学依赖，使模型在高噪声与强混响条件下频繁出现频谱失真与错词。传统离线整句编码器虽能利用全局上下文，但其整段等待缓冲机制无法满足实时语音交互需求。如何在受限前向视窗内同时保住局部细节与跨块语义连贯，成为流式语音建模的核心瓶颈。',
+    '**核心思路与方法架构：** 本文提出一种带缓存门控的流式双路编码解码框架。前端模块将输入波形转换为帧级梅尔频谱特征，并送入因果深度可分离卷积编码器提取局部声学表征。随后，跨块注意力记忆模块通过可学习门控向量将当前块特征与历史压缩状态融合，避免直接拼接全历史序列带来的二次复杂度膨胀。最终，轻量化预测网络与解码器逐帧输出预测结果，整个推理路径严格保持单向因果依赖且无需整句回看。',
+    `**关键实验与核心代价：** ${expSentence} 进一步消融实验表明，移除跨块记忆门控后系统在噪声子集上的性能明显回落，证实状态融合机制是主要收益来源。在工程开销方面，该架构需常驻固定大小的缓存状态显存，并在每帧前向步引入额外的门控投影运算。虽然实时率仍满足常规边缘计算需求，但在内存受限微控制器设备上仍需权衡缓存容量与解码吞吐。`,
+    '**适用边界与深读导览：** 上述结论主要在英文干净及近场语音评测协议下得到验证。远场多说话人严重重叠、极低信噪比以及跨语种低资源场景尚未纳入系统测试，且本文未与超大参数离线模型做等算力对照。工程团队若准备迁移到真实会议拾音设备，仍需补测麦克风阵列前端失配的影响。读者若希望深入核对门控状态更新方程、各子模块消融明细与部署时延剖面，可继续阅读下方深度解读章节。'
+].join('\n\n');
+
+const EXEC_SUMMARY_ISOLATED_TEMPLATE = expSentence => [
+    '**问题与瓶颈：** 现有流式语音编码与声学增强系统在严格实时约束下难以维持稳定的声学上下文连贯性。固定短窗口切分在跨帧边界处截断长程声学依赖，使模型在高噪声与强混响条件下频繁出现频谱失真与听感劣化。传统离线整句编码器虽能利用全局上下文，但其整段等待缓冲机制无法满足实时语音交互需求。如何在受限前向视窗内同时保住局部细节与跨块语义连贯，成为流式语音建模的核心瓶颈。',
+    '**核心思路与方法架构：** 本文提出一种带缓存门控的流式双路编码解码框架。前端模块将输入波形转换为帧级梅尔频谱特征，并送入因果深度可分离卷积编码器提取局部声学表征。随后，跨块注意力记忆模块通过可学习门控向量将当前块特征与历史压缩状态融合，避免直接拼接全历史序列带来的二次复杂度膨胀。最终，轻量化预测网络与解码器逐帧输出重建结果，整个推理路径严格保持单向因果依赖且无需整句回看。',
+    `**关键实验与核心代价：** ${expSentence} 进一步消融实验表明，移除跨块记忆门控后系统在噪声子集上的声学重建结果明显回落，证实状态融合机制是主要收益来源。在工程开销方面，该架构需常驻固定大小的缓存状态显存，并在每帧前向步引入额外的门控投影运算。虽然实时运行仍满足常规边缘计算需求，但在内存受限微控制器设备上仍需权衡缓存容量与解码算力。`,
+    '**适用边界与深读导览：** 上述结论主要在英文干净及近场语音评测协议下得到验证。远场多说话人严重重叠、极低信噪比以及跨语种低资源场景尚未纳入系统测试，且本文未与超大参数离线模型做等算力对照。工程团队若准备迁移到真实会议拾音设备，仍需补测麦克风阵列前端失配的影响。读者若希望深入核对门控状态更新方程、各子模块消融明细与部署剖面，可继续阅读下方深度解读章节。'
+].join('\n\n');
+
+const CORE_SUMMARY_SRC = [
+    'Table 1: Main Results in WER (%) on TestClean:',
+    'Baseline achieves 10 and Ours achieves 5 with statistical significance (p < 0.05).',
+    'On AudioSet, CA-SDRi improves from 11.2 dB to 14.6 dB at 2.4 GHz with latency 8-12 ms.'
+].join('\n');
+coreSummaryCase(
+    'v4-通过-CASDRi唯一指标',
+    EXEC_SUMMARY_ISOLATED_TEMPLATE('在 AudioSet 评测集上，相比强基线模型，本文方法的 CA-SDRi 从 11.2 dB 提升至 14.6 dB。'),
+    'Evaluation results on AudioSet test set: CA-SDRi improves from 11.2 dB to 14.6 dB compared to the baseline.'
+);
+coreSummaryCase(
+    'v4-通过-p值5%与区间单位',
+    EXEC_SUMMARY_TEMPLATE('在 TestClean 评测集上，本文方法词错误率 WER 降至 5%，明显低于强基线 10%，运行于 2.4 GHz、延迟 8-12 ms。'),
+    CORE_SUMMARY_SRC
+);
+coreSummaryCase(
+    'v4-拒绝-连字符区间右端点编造',
+    EXEC_SUMMARY_TEMPLATE('在 TestClean 评测集上，本文方法词错误率 WER 降至 5%，低于基线 10%，实测延迟为 8-12.5 ms。'),
+    CORE_SUMMARY_SRC
+);
+coreSummaryCase(
+    'v4-拒绝-GHz编造',
+    EXEC_SUMMARY_TEMPLATE('在 TestClean 评测集上，本文方法词错误率 WER 降至 5%，低于基线 10%，并运行于 3.6 GHz 平台。'),
+    CORE_SUMMARY_SRC
+);
+coreSummaryCase(
+    'v4-拒绝-batchSize小数转百分号',
+    EXEC_SUMMARY_TEMPLATE('在公开测试集上，本文方法 WER 从 12.3% 降至 10.1%，且 F1 达到 85%。'),
+    'Table 1: WER (%): Baseline 12.3, Ours 10.1. We use batch size 85 and obtain F1 = 0.85.'
+);
 
 const RULE_IDS = new Set(RULES.map(rule => rule.id));
 
@@ -388,6 +443,14 @@ function evaluateJs(task) {
             documentType: task.documentType,
             sourceText: task.sourceText
         });
+    }
+    if (task.kind === 'core-summary-v4') {
+        const summaryHeader = require(path.join(ROOT, 'scripts/lib/core-summary-format.js')).currentHeader();
+        const issue = contract.validateCoreSummarySemanticContract(`## 核心摘要\n${task.summary}\n`, {
+            sourceText: task.sourceText,
+            summaryHeader
+        });
+        return issue ? issue.replace(/^核心摘要未达到 详细摘要规则：/, '') : null;
     }
     throw new Error(`未知对照任务类型: ${task.kind}`);
 }

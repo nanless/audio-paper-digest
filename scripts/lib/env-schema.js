@@ -177,15 +177,21 @@ function classifyUnknown(name) {
 }
 
 function isValidProxy(value) {
-    try {
-        const parsed = new URL(value);
-        return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
-    } catch (_) {
-        return false;
-    }
+    return require('./public-network-policy.js').isValidHttpConnectProxyUrl(value);
 }
 
 function validateValue(item, rawValue) {
+    if (item.type === 'proxy') {
+        const raw = rawValue == null ? '' : String(rawValue);
+        if (!raw) {
+            return item.required
+                ? { ok: 'fail', detail: '缺失（必填）', hint: item.hint }
+                : { ok: 'ok', detail: '未配置（可选）', hint: item.hint };
+        }
+        return isValidProxy(raw)
+            ? { ok: 'ok', detail: 'HTTP CONNECT 代理地址合法' }
+            : { ok: 'fail', detail: '不是合法 HTTP(S) 代理地址', hint: '例如 http://127.0.0.1:7897' };
+    }
     const value = String(rawValue == null ? '' : rawValue).trim();
     if (!value) {
         return item.required
@@ -216,10 +222,6 @@ function validateValue(item, rawValue) {
         } catch (_) {
             return { ok: 'fail', detail: '不是合法 URL', hint: item.hint };
         }
-    case 'proxy':
-        return isValidProxy(value)
-            ? { ok: 'ok', detail: 'HTTP CONNECT 代理地址合法' }
-            : { ok: 'fail', detail: '不是合法 HTTP(S) 代理地址', hint: '例如 http://127.0.0.1:7897' };
     case 'model':
         return SUPPORTED_MODELS.includes(value)
             ? { ok: 'ok', detail: value }
@@ -262,7 +264,7 @@ function validateEntries(entries, options = {}) {
     }
     if (!['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'].some(name => String(source[name] ?? '').trim())) {
         const item = items.find(entry => entry.name === 'HTTPS_PROXY');
-        if (item) { item.ok = 'fail'; item.detail = 'HTTPS_PROXY/HTTP_PROXY 都未配置'; item.hint = 'Muse 与 arXiv 必须走项目 HTTP CONNECT 代理'; }
+        if (item && item.ok !== 'fail') { item.ok = 'fail'; item.detail = 'HTTPS_PROXY/HTTP_PROXY 都未配置'; item.hint = 'Muse 与 arXiv 必须走项目 HTTP CONNECT 代理'; }
     }
     return { items, unknown, spelling };
 }

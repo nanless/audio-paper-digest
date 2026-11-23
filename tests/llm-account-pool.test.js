@@ -1466,3 +1466,190 @@ test('当前账号池拒绝假结构指纹、未知格式和新旧头混用，�
         assert.equal(fs.readFileSync(file, 'utf8'), raw);
     }
 });
+
+test('URL 规范化拒绝控制字符、制表符点段、三斜杠与 Unicode 主机，副池合并第三凭据，Retry-After 双端对拍与 CAS 锁边界', () => {
+    const pool = require('../scripts/llm-account-pool.js');
+    for (const bad of [
+        'https://opencode.ai/zen/go/.\t./v1',
+        'https://@opencode.ai/zen/go/v1',
+        'https:///opencode.ai/zen/go/v1',
+        'https:///@opencode.ai/zen/go/v1',
+        'https://///@opencode.ai/zen/go/v1',
+        'https://opencode.ａｉ/zen/go/v1',
+        'https://opencode。ai/zen/go/v1',
+        'https://opencode%2eai/zen/go/v1',
+        'https://%6fpencode.ai/zen/go/v1',
+        'https://opencode.ai/zen/go/%ZZ',
+        'https://opencode.ai/zen/go/\nv1'
+    ]) {
+        assert.strictEqual(pool.normalizeOpenCodeGoService(bad), null, bad);
+    }
+
+    assert.deepStrictEqual(
+        pool.resolveSecondaryApiKeys({
+            primaryEndpoint: ENDPOINT,
+            primaryKey: 'p-1',
+            primaryApiKeys: ['p-1'],
+            secondaryEndpoint: ENDPOINT,
+            secondaryModel: 'muse-spark-1.3-contributor',
+            secondaryKey: 's-1',
+            secondaryFallbackApiKeys: 's-2',
+            secondaryTertiaryFallbackApiKey: 's-3'
+        }),
+        ['s-1', 's-2', 's-3']
+    );
+
+    const { file } = tempState();
+    const sel = selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 1000 });
+    assert.strictEqual(markQuotaExhausted(sel, { blockedUntilMs: 90000 }, file, { nowMs: 1000 }), 90000);
+    assert.strictEqual(markQuotaExhausted(sel, { blockedUntilMs: 5000 }, file, { nowMs: 2000 }), 90000);
+
+    const nowMs = Date.UTC(2026, 9, 21, 7, 27, 0);
+    const retryCases = [
+        ['Wed, 21 Oct 2026 07:28:00', 60000],
+        ['2026-10-21T07:28:00Z', 60000],
+        ['2026-10-21T07:28:00', 60000],
+        ['2026-10-21T09:28:00+02:00', 60000],
+        ['2026-10-21T07:28:00.500', 60500],
+        ['Wednesday, 21-Oct-26 07:28:00', 60000],
+        ['Oct 21, 2026 07:28:00 AM', 60000],
+        ['Oct 21, 2026 07:28:00 PM GMT', 12 * 3600 * 1000 + 60000],
+        ['Wed, 21 Oct 2026 07:28:00 -0000', 60000],
+        ['Wed, 21 Oct 2026 09:28:00 +02:00', 60000],
+        ['Wed, 21 Oct 2026 08:28:00 CET', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 08:28:00 MUT', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 08:28:00 FOOGMT', 30 * 60 * 1000],
+        ['Oct 21, 2026 07:28:00 AM +99:99', 30 * 60 * 1000],
+        ['Oct 21, 2026 07:28:00 AM -24:00', 30 * 60 * 1000],
+        ['Oct 21, 2026 07:28:00 AM +00:65', 30 * 60 * 1000],
+        ['2026-10-21T07:28:00+00:99', 30 * 60 * 1000],
+        ['2027-02-29T07:28:00Z', 30 * 60 * 1000],
+        ['Tue, 31 Feb 2027 07:28:00 GMT', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 GMT+0200', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 GMT+99:99', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 UTC+2', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 +02:999', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 +02:9', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 -5', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 +1', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 +00000', 30 * 60 * 1000],
+        ['Wed, 21 Oct 2026 07:28:00 +02:00:00', 30 * 60 * 1000],
+        ['2027-02-29 07:28:00 GMT', 30 * 60 * 1000],
+        ['Feb 29 2027 07:28:00 GMT', 30 * 60 * 1000],
+        ['Feb 29 2027 07:28:00 AM', 30 * 60 * 1000],
+        ['2027/02/29 07:28:00 GMT', 30 * 60 * 1000],
+        ['02/29/2027 07:28:00 GMT', 30 * 60 * 1000],
+        ['Wednesday, 21-Oct-50 07:28:00 GMT', 30 * 60 * 1000]
+    ];
+    for (const [header, expectedDelta] of retryCases) {
+        const res = classifyOpenCodeGoQuotaResponse({
+            statusCode: 429,
+            headers: { 'retry-after': header },
+            body: { type: 'GoUsageLimitError' }
+        }, { nowMs });
+        assert.strictEqual(res.blockedUntilMs, nowMs + expectedDelta, header);
+    }
+
+    if (HAS_PYTHON) {
+        const probeUrls = [
+            'https://opencode.ai/zen/go/v1',
+            'https:///opencode.ai/zen/go/v1',
+            'https:///@opencode.ai/zen/go/v1',
+            'https://opencode.ａｉ/zen/go/v1',
+            'https://opencode。ai/zen/go/v1',
+            'https://opencode%2eai/zen/go/v1',
+            'https://%6fpencode.ai/zen/go/v1'
+        ];
+        const pyScript = [
+            'import json, sys',
+            `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
+            'from llm_account_pool import normalize_opencode_go_service, classify_opencode_go_quota_response',
+            'urls = json.loads(sys.argv[1])',
+            'dates = json.loads(sys.argv[2])',
+            'now_ms = int(sys.argv[3])',
+            'out = {"urls": [normalize_opencode_go_service(u) for u in urls], "dates": [classify_opencode_go_quota_response(429, {"Retry-After": d}, {"type": "GoUsageLimitError"}, now_ms=now_ms)["blocked_until_ms"] - now_ms for d in dates]}',
+            'print(json.dumps(out))'
+        ].join('; ');
+        const pyRes = spawnSync(PYTHON_BIN, ['-c', pyScript, JSON.stringify(probeUrls), JSON.stringify(retryCases.map(c => c[0])), String(nowMs)], { encoding: 'utf8' });
+        assert.strictEqual(pyRes.status, 0, pyRes.stderr);
+        const parsed = JSON.parse(pyRes.stdout);
+        assert.deepStrictEqual(parsed.urls, probeUrls.map(u => pool.normalizeOpenCodeGoService(u)));
+        assert.deepStrictEqual(parsed.dates, retryCases.map(c => c[1]));
+    }
+
+    const maxBlockMs = 370 * 24 * 60 * 60 * 1000;
+    const hugeFinite = '9'.repeat(306);
+    const hugeHeader = classifyOpenCodeGoQuotaResponse({
+        statusCode: 429,
+        headers: { 'retry-after': hugeFinite },
+        body: { type: 'GoUsageLimitError' }
+    }, { nowMs: 1000 });
+    assert.strictEqual(hugeHeader.blockedUntilMs, 1000 + maxBlockMs);
+
+    const hugeReset = classifyOpenCodeGoQuotaResponse({
+        statusCode: 429,
+        headers: {},
+        body: { type: 'GoUsageLimitError', message: `resets in ${hugeFinite} days` }
+    }, { nowMs: 1000 });
+    assert.strictEqual(hugeReset.blockedUntilMs, 1000 + maxBlockMs);
+
+    // Node 侧 CAS 锁回收边界：异物文件 / 非空 .reclaim / 非目录 .reclaim / 硬链接 owner.json / .tmp symlink 全部 fail-closed 不死循环，合法 .tmp 可回收
+    {
+        const s1 = tempState();
+        const lockDir = `${s1.file}.lock`;
+        fs.mkdirSync(lockDir);
+        fs.writeFileSync(path.join(lockDir, '.DS_Store'), 'junk');
+        const old = new Date(Date.now() - 3600_000);
+        fs.utimesSync(lockDir, old, old);
+        assert.throws(() => pool.acquireStateLock(s1.file, { timeoutMs: 200, staleMs: 1 }),
+            err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+    }
+    {
+        const s2 = tempState();
+        const reclaimDir = `${s2.file}.lock.reclaim`;
+        fs.mkdirSync(reclaimDir);
+        fs.writeFileSync(path.join(reclaimDir, 'foreign'), 'x');
+        const old = new Date(Date.now() - 3600_000);
+        fs.utimesSync(reclaimDir, old, old);
+        assert.throws(() => pool.acquireStateLock(s2.file, { timeoutMs: 200, staleMs: 1 }),
+            err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+    }
+    {
+        const s3 = tempState();
+        fs.writeFileSync(`${s3.file}.lock.reclaim`, 'not-a-dir');
+        assert.throws(() => pool.acquireStateLock(s3.file, { timeoutMs: 200, staleMs: 1 }),
+            err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+    }
+    {
+        const s4 = tempState();
+        const lockDir = `${s4.file}.lock`;
+        fs.mkdirSync(lockDir);
+        const target = path.join(s4.dir, 'linked.json');
+        fs.writeFileSync(target, '{}');
+        fs.linkSync(target, path.join(lockDir, 'owner.json'));
+        assert.throws(() => pool.acquireStateLock(s4.file, { timeoutMs: 200, staleMs: 1 }),
+            err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+    }
+    {
+        const s5 = tempState();
+        const lockDir = `${s5.file}.lock`;
+        fs.mkdirSync(lockDir);
+        fs.writeFileSync(path.join(lockDir, '.owner.json.1.abc.tmp'), '{}');
+        const old = new Date(Date.now() - 3600_000);
+        fs.utimesSync(lockDir, old, old);
+        const release = pool.acquireStateLock(s5.file, { timeoutMs: 500, staleMs: 1 });
+        assert.strictEqual(release(), true);
+    }
+    {
+        const s6 = tempState();
+        const lockDir = `${s6.file}.lock`;
+        fs.mkdirSync(lockDir);
+        const decoy = path.join(s6.dir, 'decoy');
+        fs.writeFileSync(decoy, 'x');
+        fs.symlinkSync(decoy, path.join(lockDir, '.owner.json.1.sym.tmp'));
+        const old = new Date(Date.now() - 3600_000);
+        fs.utimesSync(lockDir, old, old);
+        assert.throws(() => pool.acquireStateLock(s6.file, { timeoutMs: 200, staleMs: 1 }),
+            err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+    }
+});

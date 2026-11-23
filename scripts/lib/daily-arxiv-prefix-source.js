@@ -60,13 +60,13 @@ function hasVerifiedPrefixRouteTrigger(prefix, boundary, categoryId) {
 // Optional route evidence extends v7 coverage without changing its time window
 // or candidate identity. Both production reuse and the read-only validator use
 // this same check; legacy date-window providers retain their existing rules.
-function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health?.categoryId || health?.id, requireTrigger = true, expectedPapers, expectedExistingIds) {
+function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health?.categoryId || health?.id, requireTrigger = true, expectedPapers, expectedExistingIds, expectedBatchDate) {
     const provider = health?.provider, prefix = provider?.categoryPrefix;
     if (provider?.oai || hasCoverageHeader(provider?.window, boundary, OAI_CONTRACT)) {
         try {
             verifyOaiContinuationAnchor(health, boundary, expectedCategoryId,
                 expectedExistingIds ?? provider.oai?.existingIds);
-            return require('./daily-arxiv-oai-source').hasVerifiedOaiCoverage(health, boundary, expectedCategoryId, expectedPapers, expectedExistingIds);
+            return require('./daily-arxiv-oai-source').hasVerifiedOaiCoverage(health, boundary, expectedCategoryId, expectedPapers, expectedExistingIds, expectedBatchDate);
         } catch (error) {
             if (require('./daily-xml-file-stdin').isDailyXmlOperationalError(error)) throw error;
             return false;

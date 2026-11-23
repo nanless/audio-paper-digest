@@ -841,6 +841,166 @@ class LlmAccountPoolTest(unittest.TestCase):
             )
             self.assertEqual(read_state_strict(state_file)['contract'], ACCOUNT_POOL_CONTRACT)
 
+    def test_url_normalization_rejects_control_chars_empty_userinfo_and_bad_percent(self):
+        for bad in (
+            'https://opencode.ai/zen/go/.\t./v1',
+            'https://opencode.ai/zen/go/%ZZ',
+            'https://opencode.ai/zen/go/%ff',
+            'https://@opencode.ai/zen/go/v1',
+            'https:///opencode.ai/zen/go/v1',
+            'https:///@opencode.ai/zen/go/v1',
+            'https://opencode.ａｉ/zen/go/v1',
+            'https://opencode。ai/zen/go/v1',
+            'https://opencode%2eai/zen/go/v1',
+            'https://%6fpencode.ai/zen/go/v1',
+            'https://opencode.ai/zen/go/\nv1',
+        ):
+            self.assertIsNone(normalize_opencode_go_service(bad), msg=bad)
+
+    def test_retry_after_date_formats_match_node(self):
+        from datetime import datetime, timezone
+        now_ms = int(datetime(2026, 10, 21, 7, 27, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        for header, expected_delta in (
+            ('Wed, 21 Oct 2026 07:28:00', 60000),
+            ('2026-10-21T07:28:00Z', 60000),
+            ('2026-10-21T07:28:00', 60000),
+            ('2026-10-21T09:28:00+02:00', 60000),
+            ('2026-10-21T07:28:00.500', 60500),
+            ('Wednesday, 21-Oct-26 07:28:00', 60000),
+            ('Oct 21, 2026 07:28:00 AM', 60000),
+            ('Oct 21, 2026 07:28:00 PM GMT', 12 * 3600 * 1000 + 60000),
+            ('Wed, 21 Oct 2026 07:28:00 -0000', 60000),
+            ('Wed, 21 Oct 2026 09:28:00 +02:00', 60000),
+            ('Wed, 21 Oct 2026 08:28:00 CET', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 08:28:00 MUT', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 08:28:00 FOOGMT', 30 * 60 * 1000),
+            ('Oct 21, 2026 07:28:00 AM +99:99', 30 * 60 * 1000),
+            ('Oct 21, 2026 07:28:00 AM -24:00', 30 * 60 * 1000),
+            ('Oct 21, 2026 07:28:00 AM +00:65', 30 * 60 * 1000),
+            ('2026-10-21T07:28:00+00:99', 30 * 60 * 1000),
+            ('2027-02-29T07:28:00Z', 30 * 60 * 1000),
+            ('Tue, 31 Feb 2027 07:28:00 GMT', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 GMT+0200', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 GMT+99:99', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 UTC+2', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 +02:999', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 +02:9', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 -5', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 +1', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 +00000', 30 * 60 * 1000),
+            ('Wed, 21 Oct 2026 07:28:00 +02:00:00', 30 * 60 * 1000),
+            ('2027-02-29 07:28:00 GMT', 30 * 60 * 1000),
+            ('Feb 29 2027 07:28:00 GMT', 30 * 60 * 1000),
+            ('Feb 29 2027 07:28:00 AM', 30 * 60 * 1000),
+            ('2027/02/29 07:28:00 GMT', 30 * 60 * 1000),
+            ('02/29/2027 07:28:00 GMT', 30 * 60 * 1000),
+            ('Wednesday, 21-Oct-50 07:28:00 GMT', 30 * 60 * 1000),
+        ):
+            res = classify_opencode_go_quota_response(
+                429, {'Retry-After': header}, {'type': 'GoUsageLimitError'}, now_ms=now_ms,
+            )
+            self.assertEqual(res['blocked_until_ms'], now_ms + expected_delta, msg=header)
+
+    def test_state_lock_rejects_foreign_files_non_dir_reclaim_hardlinks_and_tmp_symlinks(self):
+        import os
+        import time
+        from llm_account_pool import LlmAccountPoolStateError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state1 = Path(tmp) / 's1.json'
+            lock1 = Path(f'{state1}.lock')
+            lock1.mkdir()
+            (lock1 / '.DS_Store').write_text('junk', encoding='utf-8')
+            old = time.time() - 3600
+            os.utime(lock1, (old, old))
+            with self.assertRaises(LlmAccountPoolStateError):
+                with _state_lock(state1, timeout_seconds=0.2, stale_seconds=0.01):
+                    pass
+
+            state2 = Path(tmp) / 's2.json'
+            reclaim2 = Path(f'{state2}.lock.reclaim')
+            reclaim2.mkdir()
+            (reclaim2 / 'foreign').write_text('x', encoding='utf-8')
+            os.utime(reclaim2, (old, old))
+            with self.assertRaises(LlmAccountPoolStateError):
+                with _state_lock(state2, timeout_seconds=0.2, stale_seconds=0.01):
+                    pass
+
+            state3 = Path(tmp) / 's3.json'
+            Path(f'{state3}.lock.reclaim').write_text('not-a-dir', encoding='utf-8')
+            with self.assertRaises(LlmAccountPoolStateError):
+                with _state_lock(state3, timeout_seconds=0.2, stale_seconds=0.01):
+                    pass
+
+            state4 = Path(tmp) / 's4.json'
+            lock4 = Path(f'{state4}.lock')
+            lock4.mkdir()
+            linked = Path(tmp) / 'linked.json'
+            linked.write_text('{}', encoding='utf-8')
+            os.link(linked, lock4 / 'owner.json')
+            with self.assertRaises(LlmAccountPoolStateError):
+                with _state_lock(state4, timeout_seconds=0.2, stale_seconds=0.01):
+                    pass
+
+            state5 = Path(tmp) / 's5.json'
+            lock5 = Path(f'{state5}.lock')
+            lock5.mkdir()
+            decoy = Path(tmp) / 'decoy'
+            decoy.write_text('x', encoding='utf-8')
+            (lock5 / '.owner.json.1.sym.tmp').symlink_to(decoy)
+            os.utime(lock5, (old, old))
+            with self.assertRaises(LlmAccountPoolStateError):
+                with _state_lock(state5, timeout_seconds=0.2, stale_seconds=0.01):
+                    pass
+
+            state6 = Path(tmp) / 's6.json'
+            lock6 = Path(f'{state6}.lock')
+            lock6.mkdir()
+            (lock6 / '.owner.json.1.ok.tmp').write_text('{}', encoding='utf-8')
+            os.utime(lock6, (old, old))
+            with _state_lock(state6, timeout_seconds=0.5, stale_seconds=0.01):
+                self.assertTrue((lock6 / 'owner.json').exists())
+            self.assertFalse(lock6.exists())
+
+    def test_mark_quota_exhausted_returns_merged_cooldown_and_clamps_finite_huge_delays(self):
+        from llm_account_pool import MAX_BLOCK_MS, _parse_retry_after_ms_evidence, _parse_reset_message_ms_evidence
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'state.json'
+            selection = select_api_key(['a', 'b'], ENDPOINT, state_file, now_ms=1000)
+            first_until = mark_quota_exhausted(selection, {'blocked_until_ms': 90000}, state_file, now_ms=1000)
+            second_until = mark_quota_exhausted(selection, {'blocked_until_ms': 5000}, state_file, now_ms=2000)
+            self.assertEqual(first_until, 90000)
+            self.assertEqual(second_until, 90000)
+
+        huge_finite = '9' * 306
+        self.assertEqual(max(_parse_retry_after_ms_evidence({'Retry-After': huge_finite}, 1000)), MAX_BLOCK_MS)
+        self.assertEqual(_parse_reset_message_ms_evidence(f'resets in {huge_finite} days'), [MAX_BLOCK_MS])
+
+    def test_state_lock_cas_reclaim_does_not_delete_freshly_replaced_live_lock(self):
+        import os
+        import socket
+        import time
+        import llm_account_pool as mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'state.json'
+            lock_path = Path(f'{state_file}.lock')
+            lock_path.mkdir()
+            old = time.time() - 3600
+            os.utime(lock_path, (old, old))
+            stale_snap = mod._snapshot_lock(lock_path, 1)
+            self.assertTrue(stale_snap['reclaimable'])
+
+            # 模拟旧锁被另一进程移除并新建了新目录与活 owner.json
+            lock_path.rmdir()
+            lock_path.mkdir()
+            (lock_path / 'owner.json').write_text(json.dumps({
+                'pid': os.getpid(), 'hostname': socket.gethostname(), 'token': 'live-tok',
+            }), encoding='utf-8')
+            self.assertFalse(mod._remove_lock_dir_checked(lock_path, stale_snap))
+            self.assertTrue((lock_path / 'owner.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

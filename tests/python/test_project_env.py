@@ -160,6 +160,20 @@ print(json.dumps({'receivedBeforeBusiness': received, 'invalidManifestRejected':
             os.environ["https_proxy"] = "http://127.0.0.1:7897"
             self.assertEqual(get_required_fetch_proxy(), "http://127.0.0.1:7897")
 
+    def test_fetch_proxy_rejects_invalid_and_zero_ports(self):
+        with project_env_scope():
+            for key in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
+                os.environ.pop(key, None)
+            for bad in (
+                "http://127.0.0.1:0",
+                "http://127.0.0.1:99999",
+                "http://127.0.0.1:abc",
+            ):
+                os.environ["HTTPS_PROXY"] = bad
+                self.assertRaisesRegex(
+                    RuntimeError, "只支持 HTTP CONNECT", get_required_fetch_proxy
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

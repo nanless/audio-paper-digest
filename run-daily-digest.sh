@@ -10,7 +10,7 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--allow-empty-daily] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--allow-empty-daily] [--previous-day-batch] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
 
 运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
 单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
@@ -175,6 +175,10 @@ if [ "$official_oai_recovery" -eq 1 ] && [ "$start_index" -ne 1 ]; then
 fi
 if [ "$allow_empty_daily" -eq 1 ] && [ "$start_index" -ne 1 ]; then
   echo "--allow-empty-daily 仅适用于抓取阶段。" >&2
+  exit 2
+fi
+if [ "$previous_day_batch" -eq 1 ] && [ "$start_index" -ne 1 ]; then
+  echo "--previous-day-batch 仅适用于抓取阶段。" >&2
   exit 2
 fi
 if [ -n "$official_announcement_cutoff" ] && { [ "$start_index" -ne 1 ] || [ "$official_oai_recovery" -ne 1 ] || [ -n "$fetch_witness_recovery_manifest" ]; }; then

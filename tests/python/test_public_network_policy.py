@@ -242,6 +242,57 @@ class PublicNetworkPolicyPythonTest(unittest.TestCase):
                     proxy_addresses=None,
                 )
 
+    def test_validate_public_image_url_rejects_noncanonical_ipv4_empty_userinfo_and_port_zero(self):
+        import blog_review_image_loader
+        os.environ['HTTPS_PROXY'] = 'http://127.0.0.1:7897'
+        self.assertFalse(pnp.is_valid_http_connect_proxy_url('http://127.0.0.1:0'))
+        self.assertFalse(pnp.has_http_connect_proxy({
+            'HTTPS_PROXY': 'http://127.0.0.1:0',
+            'HTTP_PROXY': 'http://127.0.0.1:7897',
+        }))
+        with mock.patch.object(
+            blog_review_image_loader.socket, 'getaddrinfo',
+            side_effect=_mock_getaddrinfo(['198.18.0.1']),
+        ) as mocked_dns:
+            for bad_url in (
+                'https://0xc6120001/fig.png',
+                'https://3323068417/fig.png',
+                'https://0306.022.0.1/fig.png',
+                'https://198.18.1/fig.png',
+                'https://127.1/fig.png',
+                'https://0x7f000001/fig.png',
+            ):
+                with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError,
+                    '非公网地址',
+                    msg=bad_url,
+                ):
+                    blog_review_image_loader.validate_public_image_url(bad_url)
+            mocked_dns.assert_not_called()
+
+        with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '无认证信息'):
+            blog_review_image_loader.validate_public_image_url('https://@example.org/fig.png')
+        with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '端口非法'):
+            blog_review_image_loader.validate_public_image_url('https://example.org:0/fig.png')
+
+    def test_download_review_image_wraps_urllib3_http_error(self):
+        import urllib3.exceptions
+        import blog_review_image_loader
+
+        def raise_urllib3(*_args, **_kwargs):
+            raise urllib3.exceptions.ProtocolError('synthetic disconnect')
+
+        with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '图片下载失败'):
+            blog_review_image_loader.download_review_image(
+                'https://example.org/fig.png',
+                hooks={
+                    'get_required_fetch_proxy': lambda: 'http://127.0.0.1:7897',
+                    '_resolve_proxy_addresses': lambda _proxy: {'127.0.0.1'},
+                    '_validate_public_image_url': lambda _url: {'93.184.216.34'},
+                    '_read_pinned_review_image': raise_urllib3,
+                },
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

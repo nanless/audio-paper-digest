@@ -1181,3 +1181,83 @@ describe('零候选日确认闸门', () => {
         assert.strictEqual(gate.errorMessage, null);
     });
 });
+
+describe('Wave 2 筛选覆盖率与批次索引边界', () => {
+    it('validateFilterDecisionCoverage 先归类候选中不存在的意外 404 跳过决定而不抛 TypeError', () => {
+        const { validateFilterDecisionCoverage } = require('../scripts/full-fetch.js');
+        const coverage = validateFilterDecisionCoverage(
+            [{ arxivId: '2610.00001v1', title: 'Audio', abstract: 'Speech' }],
+            {
+                '2610.99999': {
+                    related: false,
+                    parseSource: 'official_pdf_404_skipped',
+                    inputSha256: 'a'.repeat(64)
+                }
+            },
+            { batchDate: '2026-10-19' }
+        );
+        assert.strictEqual(coverage.complete, false);
+        assert.deepStrictEqual(coverage.unexpectedIds, ['2610.99999']);
+        assert.deepStrictEqual(coverage.missingIds, ['2610.00001']);
+    });
+
+    it('validateFilterDecisionCoverage 拒绝归一化后重复的决定键', () => {
+        const { validateFilterDecisionCoverage } = require('../scripts/full-fetch.js');
+        const { buildFilterInputSha256 } = require('../scripts/fetch-papers.js');
+        const paper = { arxivId: '2610.00001v1', title: 'Audio', abstract: 'Speech' };
+        const sha = buildFilterInputSha256(paper);
+        const coverage = validateFilterDecisionCoverage(
+            [paper],
+            {
+                '2610.00001': { related: true, retryable: false, fallback: false, inputSha256: sha },
+                '2610.00001v1': { related: false, retryable: false, fallback: false, inputSha256: sha }
+            },
+            { batchDate: '2026-10-19' }
+        );
+        assert.strictEqual(coverage.complete, false);
+        assert.deepStrictEqual(coverage.unexpectedIds, ['2610.00001']);
+
+        // 归一化为空字符串的决定键（"" / "   " / "v1"）不得被静默丢弃
+        const badKeyCoverage = validateFilterDecisionCoverage(
+            [paper],
+            {
+                '2610.00001': { related: true, retryable: false, fallback: false, inputSha256: sha },
+                '': { related: false },
+                'v1': { related: false }
+            },
+            { batchDate: '2026-10-19' }
+        );
+        assert.strictEqual(badKeyCoverage.complete, false);
+        assert.deepStrictEqual(badKeyCoverage.unexpectedIds.sort(), ['', 'v1']);
+    });
+
+    it('跨零点 --previous-day-batch 记录优先按 fetchBatchDate 归属批次与去重基线', () => {
+        const { loadTodayPapersFromDatabase, buildHistoricalDedupBaseline, saveFinalAnalysisResults } = require('../scripts/full-fetch.js');
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const path = require('node:path');
+        const paper = {
+            arxivId: '2610.00007v1',
+            title: 'Previous Day Grace',
+            fetchBatchDate: '2026-11-16',
+            fetchedAt: '2026-11-17T00:30:00.000+08:00',
+            status: 'analyzed'
+        };
+        const db = { papers: { '2610.00007': paper } };
+        assert.strictEqual(loadTodayPapersFromDatabase(db, '2026-11-16').length, 1);
+        assert.strictEqual(loadTodayPapersFromDatabase(db, '2026-11-17').length, 0);
+        // 补跑 2026-11-16 时应将其视为本批自写并排除在历史基线外；次日 2026-11-17 应计入历史基线。
+        assert.deepStrictEqual(buildHistoricalDedupBaseline(db, '2026-11-16', []), []);
+        assert.deepStrictEqual(buildHistoricalDedupBaseline(db, '2026-11-17', []), ['2610.00007']);
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ff-save-grace-'));
+        try {
+            const outFile = path.join(tmpDir, 'deep-analysis-result.json');
+            saveFinalAnalysisResults(outFile, [paper], [paper], {});
+            const saved = JSON.parse(fs.readFileSync(outFile, 'utf8'));
+            assert.strictEqual(saved.batchDate, '2026-11-16');
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+});

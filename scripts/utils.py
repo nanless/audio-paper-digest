@@ -182,11 +182,14 @@ PRIMARY_METHOD_TAGS = set(active_preferred_labels(
     _DEFAULT_TAG_CATALOG, ('method',)))
 
 
+_JS_WHITESPACE = '\t\n\x0b\x0c\r \xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
+
+
 def _resolve_analysis_tag(raw, tag_catalog, *, facets=None, legacy_tags=False):
     """查找一个明确写出的标签，返回对应概念及错误说明。"""
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str) or not raw.strip(_JS_WHITESPACE):
         return None, '标签为空'
-    token = raw.strip()
+    token = raw.strip(_JS_WHITESPACE)
     if legacy_tags and facets == ('method',) \
             and token.removeprefix('#') == '端到端':
         candidates = [concept for concept in tag_catalog['concepts']
@@ -232,7 +235,7 @@ def _canonical_tag(concept):
 def _current_tag_concept(tag_catalog, raw, facet=None):
     if not isinstance(raw, str):
         return None
-    token = raw.strip()
+    token = raw.strip(_JS_WHITESPACE)
     matches = [concept for concept in tag_catalog['concepts']
                if concept['status'] == 'active'
                and _canonical_tag(concept) == token

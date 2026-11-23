@@ -87,3 +87,40 @@ test('读取时校验记录格式、上限和运行身份', t => {
     fs.writeFileSync(file, '{}\n');
     assert.throws(() => skip.readDailySourceSkips(plan), /格式声明无效/);
 });
+
+test('writeDailySourceSkips 写入失败时不遗留临时文件', t => {
+    fixture(t);
+    const plan = planFor([{ arxivId: '2610.82301' }]);
+    const origWrite = fs.writeFileSync;
+    fs.writeFileSync = () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); };
+    try {
+        assert.throws(() => skip.writeDailySourceSkips(plan, [skipped('2610.82301')]), /disk full/);
+    } finally {
+        fs.writeFileSync = origWrite;
+    }
+    const leftovers = fs.readdirSync(plan.runDir).filter(name => name.endsWith('.tmp'));
+    assert.deepEqual(leftovers, []);
+});
+
+test('readDailySourceSkips 拒绝符号链接、硬链接和非 0600 权限文件', t => {
+    const root = fixture(t);
+    const plan = planFor([{ arxivId: '2610.82401' }]);
+    skip.writeDailySourceSkips(plan, [skipped('2610.82401')]);
+    const file = path.join(plan.runDir, skip.FILENAME);
+
+    if (process.platform !== 'win32') {
+        fs.chmodSync(file, 0o644);
+        assert.throws(() => skip.readDailySourceSkips(plan), /0600/);
+        fs.chmodSync(file, 0o600);
+    }
+
+    const hardlink = path.join(root, 'hardlink-skip.json');
+    fs.linkSync(file, hardlink);
+    assert.throws(() => skip.readDailySourceSkips(plan), /硬链接/);
+    fs.unlinkSync(hardlink);
+
+    const target = path.join(root, 'real-skip.json');
+    fs.renameSync(file, target);
+    fs.symlinkSync(target, file);
+    assert.throws(() => skip.readDailySourceSkips(plan), /符号链接/);
+});

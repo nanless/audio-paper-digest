@@ -93,7 +93,8 @@ function describeConfigured(env, state, atMs, options = {}) {
         const secondaryKeys = secondaryModel ? pool.resolveSecondaryApiKeys({
             primaryEndpoint, primaryKey, primaryApiKeys: primaryKeys,
             secondaryEndpoint, secondaryKey: env.PAPER_ANALYZER_SECONDARY_API_KEY,
-            secondaryModel, secondaryFallbackApiKeys: env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS
+            secondaryModel, secondaryFallbackApiKeys: env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS,
+            secondaryTertiaryFallbackApiKey: env.PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY
         }) : [];
         const routeInputs = [
             { role: 'primary', endpoint: primaryEndpoint, keys: primaryKeys, model: env.PAPER_ANALYZER_MODEL },
@@ -146,11 +147,25 @@ function describeConfigured(env, state, atMs, options = {}) {
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('llm-accounts-report.js'); } catch (error) { console.error(`[llm-accounts-report] ${error.message}`); return 1; }
 
-    const json = argv.includes('--json');
-    const help = argv.includes('--help');
-    if (help) { console.log('用法: node scripts/llm-accounts-report.js [--json] [--state PATH]'); return 0; }
-    const stateIndex = argv.indexOf('--state');
-    const file = stateIndex >= 0 && argv[stateIndex + 1] ? path.resolve(argv[stateIndex + 1]) : STATE_FILE;
+    if (argv.includes('--help') || argv.includes('-h')) {
+        console.log('用法: node scripts/llm-accounts-report.js [--json] [--state PATH]');
+        return 0;
+    }
+    let json = false;
+    let file = STATE_FILE;
+    for (let index = 0; index < argv.length; index += 1) {
+        const value = argv[index];
+        if (value === '--json') json = true;
+        else if (value === '--state') {
+            const next = argv[++index];
+            if (typeof next !== 'string' || !next.trim() || next.startsWith('--')) {
+                throw new Error('--state 缺少文件路径参数');
+            }
+            file = path.resolve(next);
+        } else {
+            throw new Error(`未知参数：${value}`);
+        }
+    }
     const env = require('./env-loader').loadProjectEnv();
     const { state, error, present } = readState(file);
     const stateOptions = error ? { stateStatus: 'unreadable' }
@@ -172,5 +187,5 @@ function main(argv = process.argv.slice(2)) {
 module.exports = { readState, describe, describeConfigured, main };
 
 if (require.main === module) {
-    try { process.exitCode = main(); } catch (error) { console.error(`[llm-accounts] ${error.message}`); process.exitCode = 1; }
+    try { process.exitCode = main(); } catch (error) { console.error(`[llm-accounts] ${error.message}`); process.exitCode = 2; }
 }

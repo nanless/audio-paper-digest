@@ -1619,3 +1619,154 @@ describe('标签校验缓存的字段读取', () => {
         }
     });
 });
+
+describe('Wave 1 路由、代理与日期边界回归', () => {
+    it('detectHttpConnectProxyUrl 高优先级代理非法或端口为 0 时 fail-closed 不穿透', () => {
+        const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+        const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+        try {
+            for (const key of keys) delete process.env[key];
+            process.env.HTTPS_PROXY = 'socks5://127.0.0.1:7897';
+            process.env.HTTP_PROXY = 'http://127.0.0.1:7897';
+            assert.strictEqual(detectHttpConnectProxyUrl(), null);
+
+            process.env.HTTPS_PROXY = 'http://127.0.0.1:0';
+            assert.strictEqual(detectHttpConnectProxyUrl(), null);
+
+            process.env.HTTPS_PROXY = '   ';
+            assert.strictEqual(detectHttpConnectProxyUrl(), null);
+
+            process.env.HTTPS_PROXY = ' http://127.0.0.1:7897 ';
+            assert.strictEqual(detectHttpConnectProxyUrl(), null);
+
+            process.env.HTTPS_PROXY = 'http:///127.0.0.1:7897';
+            assert.strictEqual(detectHttpConnectProxyUrl(), null);
+
+            delete process.env.HTTPS_PROXY;
+            assert.strictEqual(detectHttpConnectProxyUrl(), 'http://127.0.0.1:7897');
+        } finally {
+            for (const key of keys) {
+                if (original[key] === undefined) delete process.env[key];
+                else process.env[key] = original[key];
+            }
+        }
+        const { createProxyDispatcher, getBeijingDateString } = require('../scripts/utils.js');
+        assert.throws(() => createProxyDispatcher('http://127.0.0.1:0'), /代理/);
+        assert.throws(() => createProxyDispatcher(' http://127.0.0.1:7897 '), /代理/);
+        assert.throws(() => createProxyDispatcher('http:///127.0.0.1:7897'), /代理/);
+        assert.match(getBeijingDateString(0), /^\d{4}-\d{2}-\d{2}$/);
+        assert.match(getBeijingDateString(400), /^\d{4}-\d{2}-\d{2}$/);
+        assert.throws(() => getBeijingDateString(Infinity), RangeError);
+        assert.throws(() => getBeijingDateString(NaN), RangeError);
+        assert.throws(() => getBeijingDateString(1e20), RangeError);
+    });
+
+    it('validateApiEndpointUrl 拒绝 WHATWG 绕过、空 userinfo @ 与端口 0，且 buildApiUrl 大小写不敏感', () => {
+        const { validateApiEndpointUrl, buildApiUrl } = require('../scripts/utils.js');
+        for (const bad of [
+            'https://@opencode.ai/zen/go/v1',
+            'https:///@opencode.ai/zen/go/v1',
+            'https:\\\\@opencode.ai/zen/go/v1',
+            'https:/\t/@opencode.ai/zen/go/v1',
+            '\x01https://@opencode.ai/zen/go/v1',
+            'https://opencode.ai:0/zen/go/v1',
+            '  https://opencode.ai/zen/go/v1  ',
+            'https://opencode.ai/zen/go/v1\n'
+        ]) {
+            assert.throws(() => validateApiEndpointUrl(bad), Error, bad);
+        }
+        assert.strictEqual(
+            buildApiUrl('anthropic', 'https://TOKEN-PLAN-CN.XIAOMIMIMO.COM/V1'),
+            'https://TOKEN-PLAN-CN.XIAOMIMIMO.COM/anthropic/v1/messages'
+        );
+        assert.strictEqual(
+            buildApiUrl('anthropic', 'https://API.KIMI.COM/CODING'),
+            'https://API.KIMI.COM/coding/v1/messages'
+        );
+        assert.strictEqual(
+            buildApiUrl('openai_responses', 'https://OPENCODE.AI/ZEN/GO/V1/RESPONSES'),
+            'https://OPENCODE.AI/ZEN/GO/V1/RESPONSES'
+        );
+        assert.strictEqual(
+            buildApiUrl('openai', 'https://EXAMPLE.COM/ANTHROPIC'),
+            'https://EXAMPLE.COM/v1/chat/completions'
+        );
+    });
+
+    it('createProxyAgent 拒绝非法代理/目标/SNI/端口且正确规范化 IPv6 代理与目标方括号', async () => {
+        for (const badProxy of [
+            'http://127.0.0.1:0',
+            ' http://127.0.0.1:7897 ',
+            'http://127.0.0.1:7897\n',
+            'http:\\\\127.0.0.1:7897',
+            'http:///127.0.0.1:7897'
+        ]) {
+            assert.throws(() => createProxyAgent(badProxy, 'example.com', 443), /代理/, badProxy);
+        }
+        for (const badTarget of ['example.com\r\nX-Inject: 1', 'example.com\r\n', 'example.com\u0085']) {
+            assert.throws(() => createProxyAgent('http://127.0.0.1:7897', badTarget, 443), /目标主机名非法/);
+        }
+        assert.throws(() => createProxyAgent('http://127.0.0.1:7897', 'example.com', 443, 'bad\r\nsni'), /SNI/);
+        for (const badPort of [0, 70000, '443\r\n', true, [443]]) {
+            assert.throws(() => createProxyAgent('http://127.0.0.1:7897', 'example.com', badPort), /目标端口非法/);
+        }
+        const netMod = require('node:net');
+        const origConnect = netMod.connect;
+        let seenHost = null;
+        let sentConnect = '';
+        netMod.connect = (opts) => {
+            seenHost = opts.host;
+            const emitter = new (require('node:events').EventEmitter)();
+            emitter.write = data => { sentConnect += String(data); };
+            emitter.destroy = () => {};
+            setImmediate(() => {
+                emitter.emit('connect');
+                emitter.emit('data', Buffer.from('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+            });
+            return emitter;
+        };
+        try {
+            const agent = createProxyAgent('http://[::1]:7897', '[2001:db8::1]', 443, '[2001:db8::1]');
+            await new Promise((resolve, reject) => {
+                agent.createConnection({}, (err) => {
+                    try {
+                        assert.strictEqual(seenHost, '::1');
+                        assert.match(sentConnect, /^CONNECT \[2001:db8::1\]:443 HTTP\/1\.1\r\n/);
+                        assert.ok(err && err.code === 'PROXY_CONNECT_REJECTED');
+                        agent.destroy();
+                        resolve();
+                    } catch (assertErr) {
+                        agent.destroy();
+                        reject(assertErr);
+                    }
+                });
+            });
+        } finally {
+            netMod.connect = origConnect;
+        }
+    });
+});
+
+describe('isWithinBatchDateGrace 跨零点宽限与非法日历日期拦截', () => {
+    it('接受同日及次日 07:59 前，拒绝次日 08:00 及非法日历日期滚转', () => {
+        const { isWithinBatchDateGrace } = require('../scripts/utils.js');
+        assert.strictEqual(isWithinBatchDateGrace('2026-11-16T23:59:59.999+08:00', '2026-11-16'), true);
+        assert.strictEqual(isWithinBatchDateGrace('2026-11-17T00:00:00.000+08:00', '2026-11-16'), true);
+        assert.strictEqual(isWithinBatchDateGrace('2026-11-17T07:59:59.999+08:00', '2026-11-16'), true);
+        assert.strictEqual(isWithinBatchDateGrace('2026-11-17T08:00:00.000+08:00', '2026-11-16'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-11-15T23:59:59.999+08:00', '2026-11-16'), false);
+        // 非法日历日期、24:00:00、无时区与非 ISO 格式不得依赖 V8 滚转通过
+        assert.strictEqual(isWithinBatchDateGrace('2026-04-31T01:00:00+08:00', '2026-04-30'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-02-30T00:00:00+08:00', '2026-03-02'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-02-29T01:00:00+08:00', '2026-02-28'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-4-31', '2026-05-01'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-4-31', '2026-04-30'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026/02/30', '2026-03-02'), false);
+        assert.strictEqual(isWithinBatchDateGrace('Feb 30 2026', '2026-03-02'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-04-30T24:00:00+08:00', '2026-05-01'), false);
+        assert.strictEqual(isWithinBatchDateGrace('2026-05-01T00:00:00', '2026-05-01'), false);
+        // 前后空白对 T 分隔与空格分隔保持一致行为
+        assert.strictEqual(isWithinBatchDateGrace(' 2026-10-19T12:00:00+08:00 ', '2026-10-19'), true);
+        assert.strictEqual(isWithinBatchDateGrace(' 2026-10-19 12:00:00+08:00 ', '2026-10-19'), true);
+    });
+});

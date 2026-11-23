@@ -6,6 +6,7 @@
 //   - 每批最多跳过 resolveSkipLimit() 篇（默认 2，可用 PD_DAILY_SOURCE_SKIP_MAX 调整，范围 0–5）；
 //   - 跳过记录随封存来源运行目录一起保存，绑定批次日期、运行 ID 与每篇的错误证据；
 //   - 被跳过的论文不进入分析、不生成页面，也不会被计为分析成功。
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const protocols = require('./protocol-codec');
@@ -133,12 +134,38 @@ function skipFile(plan) {
 
 function readDailySourceSkips(plan, options = {}) {
     const file = skipFile(plan);
-    let raw;
+    const MAX_SKIP_FILE_BYTES = 1024 * 1024;
+    const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+    let fd;
     try {
-        raw = fs.readFileSync(file, 'utf8');
+        fd = fs.openSync(file, openFlags);
     } catch (error) {
         if (error.code === 'ENOENT') return null;
-        throw error;
+        if (error.code === 'ELOOP') fail('跳过记录不能是符号链接');
+        fail(`跳过记录无法安全打开：${error.message}`);
+    }
+    let raw;
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) fail('跳过记录必须是普通文件');
+        if (stat.nlink !== 1) fail('跳过记录不能存在硬链接');
+        if (stat.size > MAX_SKIP_FILE_BYTES) fail('跳过记录文件过大');
+        if (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600) {
+            fail('跳过记录权限必须为 0600');
+        }
+        const chunks = [];
+        let totalBytes = 0;
+        const buf = Buffer.allocUnsafe(65536);
+        while (true) {
+            const bytesRead = fs.readSync(fd, buf, 0, buf.length, null);
+            if (bytesRead === 0) break;
+            totalBytes += bytesRead;
+            if (totalBytes > MAX_SKIP_FILE_BYTES) fail('跳过记录文件过大');
+            chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
+        }
+        raw = Buffer.concat(chunks, totalBytes).toString('utf8');
+    } finally {
+        fs.closeSync(fd);
     }
     let record;
     try {
@@ -158,19 +185,31 @@ function writeDailySourceSkips(plan, skipped, options = {}) {
         if (JSON.stringify(existing) !== JSON.stringify(record)) fail('已保存的跳过记录与本次结果不一致');
         return existing;
     }
-    const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-    const descriptor = fs.openSync(temporary, 'wx', 0o600);
+    const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+    const openFlags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0);
+    const descriptor = fs.openSync(temporary, openFlags, 0o600);
+    let closed = false;
     try {
-        fs.writeFileSync(descriptor, bytes);
-        fs.fsyncSync(descriptor);
+        try {
+            fs.writeFileSync(descriptor, bytes);
+            fs.fsyncSync(descriptor);
+        } finally {
+            if (!closed) {
+                try { fs.closeSync(descriptor); } finally { closed = true; }
+            }
+        }
+        try {
+            fs.linkSync(temporary, file);
+        } catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            const raced = readDailySourceSkips(plan, options);
+            if (!raced || JSON.stringify(raced) !== JSON.stringify(record)) {
+                fail('已保存的跳过记录与本次结果不一致');
+            }
+            return raced;
+        }
     } finally {
-        fs.closeSync(descriptor);
-    }
-    try {
-        fs.renameSync(temporary, file);
-    } catch (error) {
         try { fs.unlinkSync(temporary); } catch (_cleanup) { /* 保留原错误 */ }
-        throw error;
     }
     return record;
 }

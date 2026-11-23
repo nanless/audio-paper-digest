@@ -309,6 +309,82 @@ describe('HuggingFace 抓取健康状态', () => {
         assert.strictEqual(result._sourceHealth.coverage.papersComplete, true);
         assert.strictEqual(urls.filter(url => url.includes('/api/papers')).length, 2);
     });
+
+    it('非法 publishedAt 与非法 submittedOnDailyAt 必须被拒绝且不投毒日期单调性检查', async () => {
+        assert.strictEqual(convertDailyPaper({
+            publishedAt: 'not-a-date',
+            paper: { id: '2610.11111', title: 't', summary: 's', authors: [], publishedAt: 'not-a-date' }
+        }), null);
+        assert.strictEqual(convertDailyPaper({
+            publishedAt: '2026-02-30T00:00:00Z',
+            paper: { id: '2610.11112', title: 't', summary: 's', authors: [], publishedAt: '2026-02-30T00:00:00Z' }
+        }), null);
+        assert.strictEqual(convertDailyPaper({
+            publishedAt: '2026-10-19T00:00:00Z',
+            paper: { id: '2610.11113', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19T00:00:00Z', submittedOnDailyAt: 'bad-date' }
+        }), null);
+        // 缺少时区的本地时间与 falsy 非空 submittedOnDailyAt 必须被拒绝
+        assert.strictEqual(convertDailyPaper({
+            publishedAt: '2026-10-19T12:00:00',
+            paper: { id: '2610.11118', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19T12:00:00' }
+        }), null);
+        assert.strictEqual(convertDailyPaper({
+            publishedAt: '2026-10-19T00:00:00Z',
+            paper: { id: '2610.11119', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19T00:00:00Z', submittedOnDailyAt: 0 }
+        }), null);
+        // paper.publishedAt 非法时不能悄悄回退到外层 hfPaper.publishedAt
+        assert.strictEqual(convertDailyPaper({
+            publishedAt: '2026-10-19T00:00:00Z',
+            paper: { id: '2610.11122', title: 't', summary: 's', authors: [], publishedAt: 'bad-paper-date' }
+        }), null);
+        // 中间字段 hfPaper.publishedAt 非法时，不应阻断后续有效 hfPaper.date
+        const recovered = convertDailyPaper({
+            publishedAt: 'bad-intermediate',
+            date: '2026-10-19T04:00:00Z',
+            paper: { id: '2610.11120', title: 't', summary: 's', authors: [], publishedAt: '2026-10-18T00:00:00Z' }
+        });
+        assert.ok(recovered);
+        assert.strictEqual(recovered.hfSelectedAt, '2026-10-19T12:00:00.000+08:00');
+        assert.strictEqual(convertPaper({
+            id: '2610.11114', title: 't', summary: 's', authors: [], publishedAt: 'not-a-date'
+        }), null);
+        assert.strictEqual(convertPaper({
+            id: '2610.11121', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19 12:00:00'
+        }), null);
+
+        const crypto = require('node:crypto');
+        const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+        const body = {
+            contract: 'daily-fetch-boundary-v1',
+            lastDigestDate: '2026-10-18',
+            since: '2026-10-18T00:00:00.000Z',
+            until: '2026-10-19T08:00:00.000Z'
+        };
+        const boundary = {
+            ...body,
+            identitySha256: crypto.createHash('sha256').update(JSON.stringify(stable(body))).digest('hex')
+        };
+        for (const badSelectedAt of ['not-a-date', '2026-10-19T12:00:00', '2026-10-19']) {
+            await assert.rejects(() => fetchHuggingFacePapers(new Set(), {
+                boundary,
+                fetchFn: url => url.includes('daily_papers')
+                    ? { ok: true, data: [{ publishedAt: '2026-10-19T00:00:00Z', paper: { id: '2610.11115', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19T00:00:00Z', submittedOnDailyAt: badSelectedAt } }] }
+                    : { ok: true, data: [] },
+                sleepFn: async () => {}
+            }), /submittedOnDailyAt/);
+        }
+        await assert.rejects(() => fetchHuggingFacePapers(new Set(), {
+            boundary,
+            fetchFn: url => url.includes('daily_papers')
+                ? { ok: true, data: [
+                    { publishedAt: '2026-10-19T00:00:00Z', paper: { id: '2610.11116', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19T00:00:00Z', submittedOnDailyAt: '2026-10-19T02:00:00Z' } },
+                    { publishedAt: '2026-10-19T00:00:00Z', paper: { id: '2610.11117', title: 't', summary: 's', authors: [], publishedAt: '2026-10-19T00:00:00Z', submittedOnDailyAt: '2026-02-30T00:00:00Z' } }
+                ] }
+                : { ok: true, data: [] },
+            sleepFn: async () => {}
+        }), /submittedOnDailyAt/);
+    });
 });
 
 describe('直接运行入口默认 dry-run', () => {

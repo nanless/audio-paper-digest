@@ -18,6 +18,17 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import publish_common  # noqa: E402
+from blog_entry_loader import load_publish_to_blog  # noqa: E402
+import core_summary_format  # noqa: E402
+
+_PUBLISHER = None
+
+
+def _publisher():
+    global _PUBLISHER
+    if _PUBLISHER is None:
+        _PUBLISHER = load_publish_to_blog()
+    return _PUBLISHER
 
 
 def evaluate_task(task):
@@ -34,6 +45,13 @@ def evaluate_task(task):
             task['analysis'],
             contract_version=publish_common.EXPERIMENT_TABLE_CONTRACT_VERSION,
             document_type=task['documentType'],
+            source_text=task['sourceText'],
+        )
+        return issue or None
+    if kind == 'core-summary-v4':
+        issue = _publisher()._detailed_core_summary_semantic_issue(
+            task['summary'],
+            summary_header=core_summary_format.current_header(),
             source_text=task['sourceText'],
         )
         return issue or None

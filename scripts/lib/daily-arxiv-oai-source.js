@@ -76,7 +76,11 @@ function parseOaiXml(xml) {
     require('../env-loader').requireExternalRuntime('daily-arxiv-oai-source');
     const input = Buffer.isBuffer(xml) ? xml : Buffer.from(String(xml), 'utf8');
     if (!input.length || input.length > MAX_BYTES) throw new Error('OAI XML response size invalid');
-    const result = runDailyXmlPython(XML_PARSER, input, { argv: [path.join(__dirname, '..')], outputKind: 'oai' });
+    const result = runDailyXmlPython(XML_PARSER, input, {
+        argv: [path.join(__dirname, '..')],
+        cwd: path.resolve(__dirname, '../..'),
+        outputKind: 'oai'
+    });
     if (result.error || result.status !== 0) throw new Error(`OAI XML parse failed: ${result.error?.message || result.stderr?.trim() || result.status}`);
     return JSON.parse(result.stdout);
 }
@@ -342,7 +346,7 @@ function safeRead(dir, descriptor) {
     } finally { fs.closeSync(fd); }
 }
 
-function replay(health, boundary, categoryId, expectedPapers, expectedExistingIds) {
+function replay(health, boundary, categoryId, expectedPapers, expectedExistingIds, expectedBatchDate) {
     require('../env-loader').requireExternalRuntime('daily-arxiv-oai-source');
     validateBoundary(categoryId, boundary);
     const proof = health?.provider?.oai;
@@ -390,19 +394,36 @@ function replay(health, boundary, categoryId, expectedPapers, expectedExistingId
     if (!announcement.ids.every(id => sets.arXivRaw.has(id) && sets.arXiv.has(id))) {
         throw new Error('OAI complete streams omit current official announcement members');
     }
-    const expected = expectedPapers?.map(({ fetchedAt, ...paper }) => {
-        if (fetchedAt !== undefined && fetchedAt !== require('../utils').normalizeToBeijingISOString(boundary.until)) {
+    const { normalizeToBeijingISOString, isWithinBatchDateGrace } = require('../utils');
+    const seenFetchBatchDates = new Set();
+    let withFetchBatchDate = 0;
+    const expected = expectedPapers?.map(({ fetchedAt, fetchBatchDate, ...paper }) => {
+        if (fetchedAt !== undefined && fetchedAt !== normalizeToBeijingISOString(boundary.until)) {
             throw new Error('OAI fetchedAt differs from original fixed batch instant');
+        }
+        if (fetchBatchDate !== undefined) {
+            if (!isWithinBatchDateGrace(boundary.until, fetchBatchDate)) {
+                throw new Error('OAI fetchBatchDate differs from original boundary batch date');
+            }
+            if (expectedBatchDate !== undefined && fetchBatchDate !== expectedBatchDate) {
+                throw new Error('OAI fetchBatchDate differs from expected checkpoint batch date');
+            }
+            withFetchBatchDate += 1;
+            seenFetchBatchDates.add(fetchBatchDate);
         }
         return paper;
     });
+    if (seenFetchBatchDates.size > 1
+        || (Array.isArray(expectedPapers) && withFetchBatchDate > 0 && withFetchBatchDate < expectedPapers.length)) {
+        throw new Error('OAI fetchBatchDate is inconsistent across papers');
+    }
     if (proof.candidateSha256 !== sha(merged.papers) || !same(proof.witnessEncounter, merged.witnessEncounter)
         || (expected && !same(expected, merged.papers))) throw new Error('OAI reconstructed candidates or witness differ');
     return merged;
 }
 
-function hasVerifiedOaiCoverage(health, boundary, categoryId = health?.categoryId || health?.id, expectedPapers, expectedExistingIds) {
-    try { replay(health, boundary, categoryId, expectedPapers, expectedExistingIds); return true; }
+function hasVerifiedOaiCoverage(health, boundary, categoryId = health?.categoryId || health?.id, expectedPapers, expectedExistingIds, expectedBatchDate) {
+    try { replay(health, boundary, categoryId, expectedPapers, expectedExistingIds, expectedBatchDate); return true; }
     catch (error) { if (isDailyXmlOperationalError(error)) throw error; return false; }
 }
 

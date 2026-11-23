@@ -216,3 +216,20 @@ test('Chat 和 Anthropic 非成功终态保留用量但计入失败调用', () =
     assert.equal(report.unsuccessfulRequests, 12);
     assert.equal(report.usage.inputTokens.sum, 48);
 });
+
+test('writeLlmUsageEvent 与 preserveResponse 写/重命名失败后清理 .tmp 临时文件', t => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usage-tmp-cleanup-')));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const { preserveResponse } = require('../scripts/lib/llm-response-recovery.js');
+    const origRename = fs.renameSync;
+    fs.renameSync = () => { throw new Error('synthetic rename fail'); };
+    try {
+        assert.throws(() => writeLlmUsageEvent({ version: 'llm-usage-v1', kind: 'request' }, { directory: root }), /synthetic rename fail/);
+        assert.deepEqual(fs.readdirSync(root).filter(name => name.endsWith('.tmp')), []);
+        const recDir = path.join(root, 'rec');
+        assert.throws(() => preserveResponse({ eventId: 'e1' }, { statusCode: 200, body: {} }, { recoveryDirectory: recDir }), /synthetic rename fail/);
+        assert.deepEqual(fs.readdirSync(recDir).filter(name => name.endsWith('.tmp')), []);
+    } finally {
+        fs.renameSync = origRename;
+    }
+});

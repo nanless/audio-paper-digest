@@ -231,6 +231,33 @@ function validHuggingFacePaperFields(paper, title, summary) {
         && typeof summary === 'string' && Boolean(summary.trim());
 }
 
+function parseStrictIsoBeijing(rawValue, options = {}) {
+    if (typeof rawValue !== 'string') return '';
+    const trimmed = rawValue.trim();
+    if (!trimmed) return '';
+    const requireTimeZone = options.requireTimeZone === true;
+    const match = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d))?$/i.exec(trimmed);
+    if (!match) return '';
+    if (requireTimeZone && (match[4] === undefined || !match[7])) return '';
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const probe = new Date(Date.UTC(year, month - 1, day));
+    if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+        return '';
+    }
+    if (match[4] !== undefined) {
+        const hour = Number(match[4]);
+        const minute = Number(match[5]);
+        const second = match[6] !== undefined ? Number(match[6]) : 0;
+        if (hour > 23 || minute > 59 || second > 59) return '';
+    }
+    const ms = Date.parse(trimmed);
+    if (!Number.isFinite(ms)) return '';
+    const normalized = normalizeToBeijingISOString(trimmed);
+    return Number.isFinite(Date.parse(normalized)) ? normalized : '';
+}
+
 /**
  * 将 daily_papers 格式转为标准格式
  */
@@ -245,13 +272,31 @@ function convertDailyPaper(hfPaper, options = {}) {
 
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
-    const publishedAt = normalizeToBeijingISOString(paper.publishedAt || hfPaper.publishedAt || '');
-    const selectedAt = normalizeToBeijingISOString(
-        paper.submittedOnDailyAt || hfPaper.publishedAt || hfPaper.date || hfPaper.createdAt || paper.publishedAt || ''
-    );
+    const hasPaperPublishedAt = paper.publishedAt !== undefined
+        && paper.publishedAt !== null
+        && paper.publishedAt !== '';
+    if (hasPaperPublishedAt && !parseStrictIsoBeijing(paper.publishedAt)) {
+        console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: paper.publishedAt 非法`);
+        return null;
+    }
+    const publishedAt = hasPaperPublishedAt
+        ? parseStrictIsoBeijing(paper.publishedAt)
+        : parseStrictIsoBeijing(hfPaper.publishedAt);
     if (!publishedAt) {
         console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: 缺少有效 publishedAt`);
         return null;
+    }
+    const hasSubmittedOnDailyAt = paper.submittedOnDailyAt !== undefined
+        && paper.submittedOnDailyAt !== null
+        && paper.submittedOnDailyAt !== '';
+    if (hasSubmittedOnDailyAt && !parseStrictIsoBeijing(paper.submittedOnDailyAt)) {
+        console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: submittedOnDailyAt 非法`);
+        return null;
+    }
+    let selectedAt = '';
+    for (const candidate of [paper.submittedOnDailyAt, hfPaper.publishedAt, hfPaper.date, hfPaper.createdAt, paper.publishedAt]) {
+        selectedAt = parseStrictIsoBeijing(candidate);
+        if (selectedAt) break;
     }
     return {
         paper_id: arxivId,
@@ -293,7 +338,7 @@ function convertPaper(paper, options = {}) {
 
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
-    const publishedAt = normalizeToBeijingISOString(paper.publishedAt || '');
+    const publishedAt = parseStrictIsoBeijing(paper.publishedAt || '');
     if (!publishedAt) {
         console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: 缺少有效 publishedAt`);
         return null;
@@ -459,7 +504,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
         for (const item of data) {
             if (boundary && (!item || typeof item !== 'object'
-                    || !normalizeToBeijingISOString(item.paper?.submittedOnDailyAt || ''))) {
+                    || !parseStrictIsoBeijing(item.paper?.submittedOnDailyAt, { requireTimeZone: true }))) {
                 throw makeSourceFetchError('每日精选缺少有效的 paper.submittedOnDailyAt 入选时间，无法证明补更范围完整', {
                     ...health, ok: false, provider: provider(false)
                 });
@@ -478,12 +523,17 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             }
 
             const selectedAt = Date.parse(paper.hfSelectedAt);
+            if (boundary && !Number.isFinite(selectedAt)) {
+                throw makeSourceFetchError('每日精选入选时间非法，无法证明补更范围完整', {
+                    ...health, ok: false, provider: provider(false)
+                });
+            }
             if (boundary && previousSelectedAt !== null && selectedAt > previousSelectedAt) {
                 throw makeSourceFetchError('每日精选日期顺序改变，无法证明补更范围完整', {
                     ...health, ok: false, provider: provider(false)
                 });
             }
-            previousSelectedAt = selectedAt;
+            if (Number.isFinite(selectedAt)) previousSelectedAt = selectedAt;
             const key = normalizedId(paper);
             if (continuity && witness.status === 'expected' && key === witness.arxivId) {
                 if (selectedAt !== Date.parse(witness.selectedAt)

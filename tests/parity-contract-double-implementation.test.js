@@ -114,7 +114,7 @@ for (const rule of corpus.RULES) {
 }
 
 test('对照语料自身非退化且覆盖两侧结论', () => {
-    assert.equal(corpus.RULES.length, 6, '对照规则应固定为 6 组');
+    assert.equal(corpus.RULES.length, 7, '对照规则应固定为 7 组');
     for (const rule of corpus.RULES) {
         const ruleTasks = corpus.tasksFor(rule.id);
         const values = ruleTasks.map(task => corpus.evaluateJs(task));
@@ -137,6 +137,7 @@ test('两侧对照入口都存在', () => {
     const editorial = require('../scripts/editorial-quality.js');
     assert.equal(typeof contract.validateExperimentTableContract, 'function');
     assert.equal(typeof contract.EXPERIMENT_TABLE_CONTRACT_VERSION, 'string');
+    assert.equal(typeof contract.validateCoreSummarySemanticContract, 'function');
     assert.equal(typeof editorial.findQuantitativeChineseNumerals, 'function');
     const python = pythonResults();
     assert.equal(python.size, corpus.TASKS.length);

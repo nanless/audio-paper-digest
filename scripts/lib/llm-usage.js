@@ -153,11 +153,19 @@ function writeLlmUsageEvent(event, options = {}) {
     const temp = path.join(directory, `.${id}.tmp`);
     const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
         | (fs.constants.O_NOFOLLOW || 0), 0o600);
+    let closed = false;
     try {
         fs.writeFileSync(fd, JSON.stringify(event) + '\n');
         fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    fs.renameSync(temp, target);
+        try { fs.closeSync(fd); } finally { closed = true; }
+        fs.renameSync(temp, target);
+    } catch (error) {
+        if (!closed) {
+            try { fs.closeSync(fd); } catch (_) {}
+        }
+        try { fs.unlinkSync(temp); } catch (_) {}
+        throw error;
+    }
     const directoryFd = fs.openSync(directory, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
     const capture = persistedRecords.getStore();

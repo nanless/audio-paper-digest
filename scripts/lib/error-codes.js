@@ -26,7 +26,8 @@ const ENTRIES = Object.freeze([
 const BY_ID = new Map(ENTRIES.map(entry => [entry.id, entry]));
 
 const PATTERNS = [
-    { id: 'config-invalid', regex: /config|配置|missing (?:api|model|endpoint)|缺少 PAPER_ANALYZER/i },
+    // 显式全大写机器配置错误码优先匹配，避免被下方包含“账号池/oai/rss”的宽泛文本规则截胡。
+    { id: 'config-invalid', regex: /\b[A-Z0-9_]+_CONFIG_ERROR\b|\bENV_MISSING\b/ },
     { id: 'llm-account-pool', regex: /invalid api key|认证失败|鉴权失败|unauthorized|LLM_ACCOUNT_AUTH_ERROR|gousagelimiterror|insufficient[ _-]?balance|余额不足|账号池/i },
     { id: 'source-sha-mismatch', regex: /sha-?256.*(?:mismatch|不一致)|来源.*(?:sha|哈希).*不一致/i },
     { id: 'blog-repository-dirty', regex: /uncommitted|未提交|清单外.*改动|dirty/i },
@@ -44,7 +45,8 @@ const PATTERNS = [
     { id: 'blog-lock-busy', regex: /共享博客.*锁|blog.*lock|博客仓库.*锁/i },
     { id: 'paper-lock-busy', regex: /\block\b|锁.*(?:占用|超时)|lock timeout|paper lock/i },
     { id: 'generation-snapshot-stale', regex: /清单.*(?:删除|状态|不一致)|manifest.*(?:delete|stale|inconsistent)|生成快照|snapshot/i },
-    { id: 'blog-push-guard', regex: /推送|push|审查凭证|review receipt|hugo|preflight|渲染失败|视觉规划/i }
+    { id: 'blog-push-guard', regex: /推送|push|审查凭证|review receipt|hugo|preflight|渲染失败|视觉规划/i },
+    { id: 'config-invalid', regex: /missing (?:api|model|endpoint|(?:project\s+)?proxy)|missing\s+(?:PAPER_ANALYZER_|PAPER_DIGEST_|HTTPS_PROXY|HTTP_PROXY|PD_[A-Z0-9_]+)|缺少\s*PAPER_ANALYZER|缺少.{0,40}(?:环境变量|配置文件|\.env|代理配置|运行配置|博客配置|PAPER_ANALYZER_|PAPER_DIGEST_|HTTPS_PROXY|HTTP_PROXY|PD_[A-Z0-9_]+)|未配置\s*(?:PAPER_ANALYZER_|PAPER_DIGEST_|HTTPS_PROXY|HTTP_PROXY|PD_[A-Z0-9_]+|环境变量|配置文件|\.env|项目代理|代理地址|API\s*Key|密钥|端点|主模型|副模型|博客仓库)|(?:PAPER_ANALYZER_|PAPER_DIGEST_|HTTPS_PROXY|HTTP_PROXY|PD_[A-Z0-9_]+).{0,32}(?:未配置|缺失|无效|非法|missing|invalid)|(?:环境变量|配置文件|\.env|主模型|副模型|项目代理|代理地址|API\s*Key|密钥|端点|博客仓库)\s*未配置|(?<![\u4e00-\u9fff])(?:代理|模型)\s*未配置|环境变量.{0,40}(?:缺失|无效|非法|错误|不完整|未配置)|(?:配置文件|环境变量|(?:代理|运行|项目|博客|环境|端点|系统)配置|(?<![\u4e00-\u9fff])配置)(?:缺失|无效|非法|损坏|错误|不完整|不安全)|(?:invalid|missing)\s+config(?:uration)?|config(?:uration)?(?:[\s_-]*|\s+is\s+)(?:error|invalid|missing)/iu }
 ];
 
 function classify(text) {

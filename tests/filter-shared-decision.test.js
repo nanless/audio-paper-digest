@@ -69,3 +69,74 @@ test('共享Prompt仅接已准备字段，保留原值转换、单次替换和�
     assert.equal(conference.LLM_FILTER_PROMPT, utils.loadPrompt(LLM_FILTER_PROMPT_PATH,
         { title: '{title}', abstract: '{abstract}', categories: '{categories}' }));
 });
+
+test('筛选解析处理多空白否定、拒绝 Unrelated/Not related 标签反转，并抵抗土耳其 İ 索引漂移', () => {
+    const turkishJson = 'İİİ {"related": false, "reason": "pure vision"}';
+    const parsedTurkish = shared.parseFilterDecisionDetails(turkishJson, 'p-turkish');
+    assert.equal(parsedTurkish.related, false);
+    assert.equal(parsedTurkish.parseSource, 'json');
+
+    for (const multiSpace of [
+        'Conclusion: not  related',
+        'Conclusion: not\trelated',
+        'Conclusion: not-related',
+        'Conclusion: non-related',
+        'Conclusion: un related',
+        'Conclusion: un_related',
+        '{"decision": "not  related", "reason": "off topic"}',
+        '{"decision": "not-related", "reason": "off topic"}',
+        '{"decision": "unrelated", "reason": "off topic"}',
+        'Reason: text only\nnot  related',
+        'Reason: text only\nnot-related'
+    ]) {
+        const res = shared.parseFilterDecisionDetails(multiSpace, 'p-ws');
+        assert.equal(res.related, false, multiSpace);
+    }
+
+    for (const tricky of [
+        'Unrelated: yes',
+        'Not related: yes',
+        'not-related: yes',
+        'Not-Related: yes',
+        'Non-related: yes',
+        'non related: yes',
+        'un-related: yes',
+        'un related: yes',
+        'no related: yes',
+        '不相关结论: 是',
+        '非相关判断: 是',
+        '无关判断: 是',
+        '无关结论: 是',
+        '不相关的结论: 是',
+        '无关的判断: 是'
+    ]) {
+        const res = shared.parseFilterDecisionDetails(tricky, 'p-tricky');
+        assert.notEqual(res.related, true, tricky);
+    }
+
+    for (const multiSpaceNeg of ['Not  related: yes', 'Not\trelated: yes', 'Un  related: yes']) {
+        const res = shared.parseFilterDecisionDetails(multiSpaceNeg, 'p-neg');
+        assert.equal(res.related, null, multiSpaceNeg);
+        assert.equal(res.parseSource, 'keyword_negative_retryable', multiSpaceNeg);
+        assert.equal(res.suggestedRelated, false, multiSpaceNeg);
+    }
+
+    // 否定 lookbehind 不得跨行吞掉上一行末尾的 not/no 导致下一行正常 Conclusion 失效；同时保留冒号后换行的合法多行结论与跨行负值
+    const crossLinePos = shared.parseFilterDecisionDetails('Reason: whether audio-related or not\nConclusion: related', 'p-nl-pos');
+    assert.equal(crossLinePos.related, true);
+    assert.equal(crossLinePos.parseSource, 'conclusion_line');
+    const crossLineNeg = shared.parseFilterDecisionDetails('Reason: yes or no\nConclusion: not related', 'p-nl-neg');
+    assert.equal(crossLineNeg.related, false);
+    assert.equal(crossLineNeg.parseSource, 'conclusion_line');
+    const wrappedNeg = shared.parseFilterDecisionDetails('Conclusion: not\nrelated', 'p-wrap-neg');
+    assert.equal(wrappedNeg.related, false);
+    assert.equal(wrappedNeg.parseSource, 'conclusion_line');
+    const multilinePos = shared.parseFilterDecisionDetails('Conclusion:\nrelated\nReason: speech', 'p-ml-pos');
+    assert.equal(multilinePos.related, true);
+    assert.equal(multilinePos.parseSource, 'conclusion_line');
+    const multilineZh = shared.parseFilterDecisionDetails('结论：\n相关。', 'p-ml-zh');
+    assert.equal(multilineZh.related, true);
+    assert.equal(multilineZh.parseSource, 'conclusion_line');
+    const standaloneNegLine = shared.parseFilterDecisionDetails('Not\nrelated: yes', 'p-standalone-neg');
+    assert.notEqual(standaloneNegLine.related, true);
+});

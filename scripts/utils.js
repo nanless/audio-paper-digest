@@ -141,11 +141,21 @@ function getBeijingISOString() {
 }
 
 function getBeijingDateString(daysAgo = 0) {
-    const d = new Date();
-    if (daysAgo > 0) {
-        d.setDate(d.getDate() - daysAgo);
+    const p = _getBeijingParts(new Date());
+    const offset = Number(daysAgo);
+    if (!Number.isFinite(offset)) {
+        throw new RangeError(`daysAgo 必须是有限数值，收到: ${daysAgo}`);
     }
-    const p = _getBeijingParts(d);
+    if (offset > 0) {
+        const shifted = new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day) - Math.trunc(offset)));
+        if (Number.isNaN(shifted.getTime())) {
+            throw new RangeError(`daysAgo 超出可表示日期范围: ${daysAgo}`);
+        }
+        const year = String(shifted.getUTCFullYear()).padStart(4, '0');
+        const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(shifted.getUTCDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
     return `${p.year}-${p.month}-${p.day}`;
 }
 
@@ -176,9 +186,46 @@ function extractDatePrefix(value) {
     return m ? m[1] : null;
 }
 
+function isValidCalendarDateString(dateStr) {
+    if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const probe = new Date(Date.UTC(year, month - 1, day));
+    return probe.getUTCFullYear() === year
+        && probe.getUTCMonth() === month - 1
+        && probe.getUTCDate() === day;
+}
+
+/**
+ * 跨零点补跑宽限判断：接受北京时间日期等于 batchDate，
+ * 或等于 batchDate 次日且北京时间 00:00–07:59（hour < 8）。
+ */
+function isWithinBatchDateGrace(instant, batchDate) {
+    if (!isValidCalendarDateString(batchDate)) return false;
+    if (typeof instant !== 'string' && !(instant instanceof Date) && typeof instant !== 'number') return false;
+    let normalizedInstant = instant;
+    if (typeof instant === 'string') {
+        normalizedInstant = instant.trim();
+        const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)$/i.exec(normalizedInstant);
+        if (!m || !isValidCalendarDateString(m[1])) return false;
+        const hour = Number(m[2]);
+        const minute = Number(m[3]);
+        const second = m[4] !== undefined ? Number(m[4]) : 0;
+        if (hour > 23 || minute > 59 || second > 59) return false;
+    }
+    const date = normalizedInstant instanceof Date ? normalizedInstant : new Date(normalizedInstant);
+    if (Number.isNaN(date.getTime())) return false;
+    const p = _getBeijingParts(date);
+    const instantDate = `${p.year}-${p.month}-${p.day}`;
+    if (instantDate === batchDate) return true;
+    const [year, month, day] = batchDate.split('-').map(Number);
+    const next = new Date(Date.UTC(year, month - 1, day + 1));
+    const nextDate = `${String(next.getUTCFullYear()).padStart(4, '0')}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
+    return instantDate === nextDate && Number(p.hour) < 8;
+}
+
 function getRecordDate(data) {
     if (!data || typeof data !== 'object') return null;
-    const keys = ['timestamp', 'lastUpdated', 'deepAnalysisCompletedAt', 'previousTimestamp'];
+    const keys = ['batchDate', 'timestamp', 'lastUpdated', 'deepAnalysisCompletedAt', 'previousTimestamp'];
     for (const key of keys) {
         const date = extractDatePrefix(data[key]);
         if (date) return date;
@@ -495,7 +542,7 @@ function resolveRequestProtocol(endpoint, model, options = {}) {
  * 例如：https://token-plan-cn.xiaomimimo.com/v1 → https://token-plan-cn.xiaomimimo.com/anthropic
  */
 function getAnthropicEndpoint(openaiEndpoint) {
-    return (openaiEndpoint || '').replace(/\/v1\/?$/, '/anthropic');
+    return (openaiEndpoint || '').replace(/\/v1\/?$/i, '/anthropic');
 }
 
 function isLoopbackHostname(hostname) {
@@ -511,14 +558,25 @@ function isLoopbackHostname(hostname) {
  * LLM 凭据只允许发送到 HTTPS；明文 HTTP 仅供本机回环地址上的测试服务。
  */
 function validateApiEndpointUrl(endpoint) {
+    const raw = String(endpoint || '');
+    if (!raw || /[\u0000-\u0020\u007f\\]/.test(raw)) {
+        throw new Error('LLM endpoint 必须是完整的 HTTPS 地址（本机回环地址的测试服务可使用 HTTP）');
+    }
+    const authorityMatch = raw.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#]+)/);
+    if (!authorityMatch) {
+        throw new Error('LLM endpoint 必须是完整的 HTTPS 地址（本机回环地址的测试服务可使用 HTTP）');
+    }
     let url;
     try {
-        url = new URL(endpoint);
+        url = new URL(raw);
     } catch {
         throw new Error('LLM endpoint 必须是完整的 HTTPS 地址（本机回环地址的测试服务可使用 HTTP）');
     }
-    if (url.username || url.password) {
+    if (url.username || url.password || authorityMatch[1].includes('@')) {
         throw new Error('LLM endpoint 地址禁止包含用户名或密码');
+    }
+    if (!url.hostname || url.port === '0') {
+        throw new Error('LLM endpoint 必须是完整的 HTTPS 地址（本机回环地址的测试服务可使用 HTTP）');
     }
     if (url.protocol === 'https:') return url;
     if (url.protocol === 'http:' && isLoopbackHostname(url.hostname)) return url;
@@ -536,13 +594,14 @@ function validateApiEndpointUrl(endpoint) {
 function buildApiUrl(apiType, endpoint) {
     validateApiEndpointUrl(endpoint);
     const base = (endpoint || '').replace(/\/+$/, '');
+    const baseLower = base.toLowerCase();
     if (apiType === 'anthropic') {
-        if (base.includes('xiaomimimo.com')) {
+        if (baseLower.includes('xiaomimimo.com')) {
             // MiMo: 需要 /anthropic/v1/messages（必须含 /v1 中间路径）
             const anthropicBase = getAnthropicEndpoint(base);
             return `${anthropicBase}/v1/messages`;
         }
-        if (base.includes('kimi.com')) {
+        if (baseLower.includes('kimi.com')) {
             // Kimi Coding Plan 同时兼容用户配置的 /coding 与 /coding/v1。
             const kimiBase = base.replace(/\/coding(?:\/v1)?$/i, '/coding/v1');
             return `${kimiBase}/messages`;
@@ -551,10 +610,10 @@ function buildApiUrl(apiType, endpoint) {
         return `${base}/messages`;
     }
     if (apiType === 'openai_responses') {
-        return base.endsWith('/responses') ? base : `${base}/responses`;
+        return baseLower.endsWith('/responses') ? base : `${base}/responses`;
     }
     // OpenAI: 标准化路径（如 /anthropic → /v1）
-    const normalized = base.replace(/\/anthropic\/?$/, '/v1');
+    const normalized = base.replace(/\/anthropic\/?$/i, '/v1');
     return `${normalized}/chat/completions`;
 }
 
@@ -1801,19 +1860,13 @@ function detectProxyUrl() {
 /**
  * 仅返回 Node arXiv 抓取可使用的 HTTP(S) CONNECT 代理。
  * ALL_PROXY 可能是 SOCKS，仅供 curl 等原生支持 SOCKS 的调用使用。
+ * 与 public-network-policy / project_env.py 保持一致：只检查首个非空代理变量，非法时不穿透。
  */
 function detectHttpConnectProxyUrl() {
-    for (const envVar of HTTP_CONNECT_PROXY_ENV_VARS) {
-        const value = process.env[envVar];
-        if (!value) continue;
-        try {
-            const protocol = new URL(value).protocol;
-            if (protocol === 'http:' || protocol === 'https:') return value;
-        } catch (_) {
-            // 继续检查下一项；调用方会在没有兼容代理时前置失败。
-        }
-    }
-    return null;
+    const firstKey = HTTP_CONNECT_PROXY_ENV_VARS.find(envVar => Boolean(process.env[envVar]));
+    if (!firstKey) return null;
+    const value = String(process.env[firstKey]);
+    return require('./lib/public-network-policy.js').isValidHttpConnectProxyUrl(value) ? value : null;
 }
 
 function buildProxyAuthorizationHeader(proxy) {
@@ -1825,7 +1878,10 @@ function buildProxyAuthorizationHeader(proxy) {
 }
 
 function normalizeTlsServername(value) {
-    return String(value || '').trim().replace(/^\[|\]$/g, '');
+    const trimmed = String(value || '').trim();
+    return trimmed.startsWith('[') && trimmed.endsWith(']')
+        ? trimmed.slice(1, -1)
+        : trimmed;
 }
 
 /**
@@ -1836,14 +1892,75 @@ function normalizeTlsServername(value) {
  * @param {string} tlsServername - TLS SNI/证书校验主机名（默认与 targetHost 相同）
  */
 function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername = targetHost) {
+    if (typeof proxyUrl !== 'string' || !proxyUrl || /[\u0000-\u0020\u007f\\]/.test(proxyUrl)) {
+        throw new Error('代理地址格式非法');
+    }
     const proxy = new URL(proxyUrl);
     if (!['http:', 'https:'].includes(proxy.protocol)) {
         throw new Error(`当前 Node arXiv 抓取只支持 HTTP CONNECT 代理，收到不兼容协议: ${proxy.protocol}`);
     }
-    const proxyPort = parseInt(proxy.port) || (proxy.protocol === 'https:' ? 443 : 80);
+    const proxyAuthMatch = /^https?:\/\/([^/?#]+)/i.exec(proxyUrl);
+    const rawProxyHostPort = proxyAuthMatch
+        ? (proxyAuthMatch[1].includes('@')
+            ? proxyAuthMatch[1].slice(proxyAuthMatch[1].lastIndexOf('@') + 1)
+            : proxyAuthMatch[1])
+        : '';
+    if (!rawProxyHostPort || rawProxyHostPort.includes('%') || !proxy.hostname) {
+        throw new Error('代理地址缺少主机名');
+    }
+    if (proxy.port === '0') {
+        throw new Error('代理端口不能为 0');
+    }
+    const proxyPort = proxy.port ? Number.parseInt(proxy.port, 10) : (proxy.protocol === 'https:' ? 443 : 80);
+    if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
+        throw new Error(`代理端口非法: ${proxy.port}`);
+    }
     const https = require('https');
     const net = require('net');
     const tls = require('tls');
+    const proxyHost = normalizeTlsServername(proxy.hostname);
+    const validProxyHost = proxy.hostname.startsWith('[') && proxy.hostname.endsWith(']')
+        ? (typeof net.isIPv6 === 'function'
+            ? net.isIPv6(proxyHost)
+            : (/^[0-9a-fA-F:.]+$/.test(proxyHost) && !proxyHost.includes(':::')))
+        : (() => {
+            const lower = proxyHost.toLowerCase();
+            const host = lower.endsWith('.') ? lower.slice(0, -1) : lower;
+            return Boolean(host) && host.length <= 253 && !/[^a-z0-9._-]/.test(host)
+                && host.split('.').every(label => /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/.test(label));
+        })();
+    if (!validProxyHost) {
+        throw new Error('代理地址主机名非法');
+    }
+    if (typeof targetHost !== 'string' || !targetHost || /[^\x21-\x7e]/.test(targetHost)) {
+        throw new Error('代理 CONNECT 目标主机名非法');
+    }
+    const normalizedTargetHost = normalizeTlsServername(targetHost);
+    if (!normalizedTargetHost || /[/?#@[\]\\]/.test(normalizedTargetHost)) {
+        throw new Error('代理 CONNECT 目标主机名非法');
+    }
+    if (normalizedTargetHost.includes(':')) {
+        const validIpv6 = typeof net.isIPv6 === 'function'
+            ? net.isIPv6(normalizedTargetHost)
+            : (/^[0-9a-fA-F:.]+$/.test(normalizedTargetHost) && !normalizedTargetHost.includes(':::'));
+        if (!validIpv6) {
+            throw new Error('代理 CONNECT 目标主机名非法');
+        }
+    }
+    if (typeof tlsServername !== 'string' || !tlsServername || /[^\x21-\x7e]/.test(tlsServername)) {
+        throw new Error('代理 CONNECT TLS SNI 主机名非法');
+    }
+    const normalizedTlsServername = normalizeTlsServername(tlsServername);
+    if (!normalizedTlsServername || /[/?#@[\]\\]/.test(normalizedTlsServername)) {
+        throw new Error('代理 CONNECT TLS SNI 主机名非法');
+    }
+    const validTargetPortInput = typeof targetPort === 'number'
+        || (typeof targetPort === 'string' && /^\d+$/.test(targetPort));
+    const parsedTargetPort = validTargetPortInput ? Number(targetPort) : NaN;
+    if (!Number.isInteger(parsedTargetPort) || parsedTargetPort < 1 || parsedTargetPort > 65535) {
+        throw new Error(`代理 CONNECT 目标端口非法: ${targetPort}`);
+    }
+    const MAX_CONNECT_HEADER_BYTES = 65536;
 
     const agent = new https.Agent({ keepAlive: false });
     const pendingSockets = new Set();
@@ -1904,16 +2021,28 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
         pendingDeadlines.add(cancelDeadline);
         armDeadline();
         socket = proxy.protocol === 'https:'
-            ? tls.connect({ host: proxy.hostname, port: proxyPort, servername: proxy.hostname, rejectUnauthorized: true })
-            : net.connect({ host: proxy.hostname, port: proxyPort });
+            ? tls.connect({ host: proxyHost, port: proxyPort, servername: proxyHost, rejectUnauthorized: true })
+            : net.connect({ host: proxyHost, port: proxyPort });
         pendingSockets.add(socket);
+
+        const onPrematureClose = () => {
+            if (callbackCalled) return;
+            const error = new Error('代理 CONNECT 握手完成前连接已关闭');
+            error.code = 'PROXY_CONNECT_CLOSED';
+            socket?.destroy();
+            done(error);
+        };
+        socket.once('end', onPrematureClose);
+        socket.once('close', onPrematureClose);
 
         socket.once(proxy.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
             if (callbackCalled) return;
             const proxyAuthorization = buildProxyAuthorizationHeader(proxy);
             const authHeader = proxyAuthorization ? `Proxy-Authorization: ${proxyAuthorization}\r\n` : '';
-            const connectHost = targetHost.includes(':') ? `[${targetHost}]` : targetHost;
-            const connectAuthority = `${connectHost}:${targetPort}`;
+            const connectHost = normalizedTargetHost.includes(':')
+                ? `[${normalizedTargetHost}]`
+                : normalizedTargetHost;
+            const connectAuthority = `${connectHost}:${parsedTargetPort}`;
             const connectReq = `CONNECT ${connectAuthority} HTTP/1.1\r\nHost: ${connectAuthority}\r\n${authHeader}Connection: close\r\n\r\n`;
             socket.write(connectReq);
 
@@ -1922,8 +2051,21 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
                 if (callbackCalled) return;
                 buffer += chunk.toString('binary');
                 const headerEnd = buffer.indexOf('\r\n\r\n');
+                if ((headerEnd === -1 && buffer.length > MAX_CONNECT_HEADER_BYTES)
+                    || (headerEnd !== -1 && headerEnd + 4 > MAX_CONNECT_HEADER_BYTES)) {
+                    socket.removeListener('data', onData);
+                    socket.removeListener('end', onPrematureClose);
+                    socket.removeListener('close', onPrematureClose);
+                    socket.destroy();
+                    const error = new Error('代理 CONNECT 响应头超过 64 KiB 上限');
+                    error.code = 'PROXY_CONNECT_HEADER_TOO_LARGE';
+                    done(error);
+                    return;
+                }
                 if (headerEnd !== -1) {
                     socket.removeListener('data', onData);
+                    socket.removeListener('end', onPrematureClose);
+                    socket.removeListener('close', onPrematureClose);
                     const statusLine = buffer.slice(0, buffer.indexOf('\r\n'));
                     if (!/^HTTP\/1\.[01]\s+200(?:\s|$)/.test(statusLine)) {
                         socket.destroy();
@@ -1937,15 +2079,37 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
                         done(error);
                         return;
                     }
-                    const tlsSocket = tls.connect({
-                        socket,
-                        servername: normalizeTlsServername(tlsServername),
+                    const trailing = buffer.slice(headerEnd + 4);
+                    if (trailing.length > 0 && typeof socket.unshift === 'function') {
+                        if (typeof socket.pause === 'function') socket.pause();
+                        socket.unshift(Buffer.from(trailing, 'binary'));
+                    }
+                    const rawSocket = socket;
+                    rawSocket.removeListener?.('error', done);
+                    let tlsSocket = null;
+                    const onTlsClose = () => {
+                        if (callbackCalled) return;
+                        const error = new Error('目标 TLS 握手完成前连接已关闭');
+                        error.code = 'PROXY_CONNECT_CLOSED';
+                        tlsSocket?.destroy();
+                        done(error);
+                    };
+                    tlsSocket = tls.connect({
+                        socket: rawSocket,
+                        servername: normalizedTlsServername,
                         rejectUnauthorized: true
-                    }, () => done(null, tlsSocket));
-                    pendingSockets.delete(socket);
+                    }, () => {
+                        tlsSocket?.removeListener?.('close', onTlsClose);
+                        tlsSocket?.removeListener?.('error', done);
+                        done(null, tlsSocket);
+                    });
+                    pendingSockets.delete(rawSocket);
                     socket = tlsSocket;
                     pendingSockets.add(socket);
-                    tlsSocket.once('error', done);
+                    if (!callbackCalled) {
+                        tlsSocket.once('close', onTlsClose);
+                        tlsSocket.once('error', done);
+                    }
                 }
             };
             socket.on('data', onData);
@@ -1961,11 +2125,16 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
  * 不设置全局 dispatcher，确保 LLM requestJson 继续使用 agent:false 直连。
  */
 function createProxyDispatcher(proxyUrl) {
-    if (!proxyUrl) throw new Error('缺少项目代理配置');
+    if (!proxyUrl || typeof proxyUrl !== 'string' || /[\u0000-\u0020\u007f\\]/.test(proxyUrl)) {
+        throw new Error('缺少或非法项目代理配置');
+    }
     if (proxyDispatcherCache.has(proxyUrl)) return proxyDispatcherCache.get(proxyUrl);
     const proxy = new URL(proxyUrl);
     if (!['http:', 'https:'].includes(proxy.protocol)) {
         throw new Error(`Node fetch 抓取只支持 HTTP(S) 代理；请通过 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 地址，收到: ${proxy.protocol}`);
+    }
+    if (!require('./lib/public-network-policy.js').isValidHttpConnectProxyUrl(proxyUrl)) {
+        throw new Error('Node fetch 代理地址缺少主机名或端口非法');
     }
     const { ProxyAgent } = require('undici');
     const dispatcher = new ProxyAgent(proxyUrl);
@@ -2161,6 +2330,7 @@ module.exports = {
     getBeijingCompactTimestamp,
     getBeijingLocaleString,
     normalizeToBeijingISOString,
+    isWithinBatchDateGrace,
     extractDatePrefix,
     getRecordDate,
     normalizedId,

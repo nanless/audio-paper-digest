@@ -140,6 +140,26 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(events[0]['usage']['inputTokens'], 13)
         self.assertNotIn('PRIVATE_KEY', json.dumps(events))
 
+    def test_normalize_llm_usage_detail_fallback_and_tmp_cleanup(self):
+        # 显式 None 时必须继续向下一级回退，与 Node ?? 语义一致
+        normalized = llm_usage.normalize_llm_usage('openai_responses', {'usage': {
+            'input_tokens': 50,
+            'output_tokens': 10,
+            'input_tokens_details': {'cached_tokens': None},
+            'prompt_tokens_details': {'cached_tokens': 17},
+            'output_tokens_details': {'reasoning_tokens': None},
+            'completion_tokens_details': {'reasoning_tokens': 6},
+        }})
+        self.assertEqual(normalized['cachedInputTokens'], 17)
+        self.assertEqual(normalized['reasoningTokens'], 6)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp).resolve() / 'ledger'
+            with mock.patch('llm_usage.os.replace', side_effect=OSError('synthetic rename failure')):
+                with self.assertRaises(OSError):
+                    llm_usage.write_llm_usage_event(llm_usage.usage_event_header(), directory)
+            self.assertEqual(list(directory.glob('*.tmp')), [])
+
 
 if __name__ == '__main__':
     unittest.main()

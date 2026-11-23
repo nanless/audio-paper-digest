@@ -52,42 +52,43 @@ function parseFilterDecisionDetails(responseText, paperId = '') {
 
     // 1. 优先解析 JSON 格式，便于未来让 prompt 输出机器可读结构
     try {
-        const jsonStart = answer.indexOf('{');
-        const jsonEnd = answer.lastIndexOf('}');
+        const jsonStart = rawText.indexOf('{');
+        const jsonEnd = rawText.lastIndexOf('}');
         if (jsonStart >= 0 && jsonEnd > jsonStart) {
             const parsed = JSON.parse(rawText.slice(jsonStart, jsonEnd + 1));
             const decisionValue = getCaseInsensitiveField(parsed, ['decision', 'related', 'conclusion']);
             if (typeof decisionValue === 'boolean') return makeDecision(decisionValue, 'json');
-            const decision = String(decisionValue ?? '').trim().toLowerCase();
+            const decision = String(decisionValue ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
             if (['related', 'yes', 'y', 'true', '相关', '是'].includes(decision)) return makeDecision(true, 'json');
-            if (['not_related', 'not related', 'no', 'n', 'false', '不相关', '无关', '否'].includes(decision)) return makeDecision(false, 'json');
+            if (['not related', 'non related', 'un related', 'unrelated', 'no', 'n', 'false', '不相关', '非相关', '无关', '否'].includes(decision)) return makeDecision(false, 'json');
         }
     } catch {
         // JSON 解析失败，交给下面的文本解析
     }
 
-    // 2. 优先匹配结构化结论行，先判否定，避免 fallback 中“是否相关”的“否”误伤
-    const conclusionMatch = answer.match(/(?:结论|判断|是否相关|conclusion|judgment|related)\s*[：:]\s*(not\s+related|not_related|unrelated|不相关|无关|否|no|n|related|相关|是|yes|y)(?=\s|$|[。；;，,])/i);
+    // 2. 优先匹配结构化结论行，先判否定，避免 fallback 中“是否相关”的“否”或 “Unrelated/Not-related/Non related/Un related/无关结论: yes” 误伤
+    const conclusionMatch = answer.match(/(?:(?<![不非无])(?<!(?:[不非无]相关|无关)的?)(?:结论|判断)|是否相关|(?<![a-z_-])(?<!\b(?:not|non|no|un)[ \t]+)(?<!(?:^|\n)[ \t]*(?:not|non|no|un)[ \t]*\r?\n[ \t]*)(?:conclusion|judgment|related))[ \t]*[：:]\s*(not[\s_-]+related|non[\s_-]+related|un[\s_-]*related|不相关|非相关|无关|否|no|n|related|相关|是|yes|y)(?=\s|$|[。；;，,])/i);
     if (conclusionMatch) {
-        const v = conclusionMatch[1].toLowerCase();
+        const v = conclusionMatch[1].toLowerCase().replace(/[\s_-]+/g, ' ');
         return makeDecision(
-            !(v === 'not related' || v === 'not_related' || v === 'unrelated' || v === '不相关' || v === '无关' || v === '否' || v === 'no' || v === 'n'),
+            !(v === 'not related' || v === 'non related' || v === 'un related' || v === 'unrelated' || v === '不相关' || v === '非相关' || v === '无关' || v === '否' || v === 'no' || v === 'n'),
             'conclusion_line'
         );
     }
 
     // 3. 检查最后一行
     const lines = answer.split('\n').map(l => l.trim()).filter(l => l);
-    const lastLine = lines[lines.length - 1] || '';
+    const lastLine = (lines[lines.length - 1] || '').replace(/\s+/g, ' ');
+    const lastLineNormalized = lastLine.replace(/[\s_-]+/g, ' ');
     if (lastLine === '相关' || lastLine === '是' || lastLine === 'yes' || lastLine === 'y' || lastLine === 'related') {
         return makeDecision(true, 'last_line');
     }
-    if (lastLine === '不相关' || lastLine === '无关' || lastLine === '否' || lastLine === 'no' || lastLine === 'n' || lastLine === 'not related' || lastLine === 'not_related' || lastLine === 'unrelated') {
+    if (lastLineNormalized === '不相关' || lastLineNormalized === '非相关' || lastLineNormalized === '无关' || lastLineNormalized === '否' || lastLineNormalized === 'no' || lastLineNormalized === 'n' || lastLineNormalized === 'not related' || lastLineNormalized === 'non related' || lastLineNormalized === 'un related' || lastLineNormalized === 'unrelated') {
         return makeDecision(false, 'last_line');
     }
 
     // 非结构化关键词只能作为诊断提示，不能写入正式完成缓存。
-    if (answer.includes('不相关') || answer.includes('无关') || /\b(not related|not_related|unrelated)\b/i.test(answer)) {
+    if (answer.includes('不相关') || answer.includes('非相关') || answer.includes('无关') || /\b(?:(?:not|non)[\s_-]+related|un[\s_-]*related)\b/i.test(answer)) {
         return makeRetryable('keyword_negative_retryable', false);
     }
     if (answer.includes('相关') || /\brelated\b/i.test(answer)) {

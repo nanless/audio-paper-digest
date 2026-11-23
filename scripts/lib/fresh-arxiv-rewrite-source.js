@@ -325,10 +325,16 @@ function runtimeMetadataFromDetails(details, text, arxivId) {
     // 保存的原始 HTML 用于核对作者和机构；不符合保留条件或总元数据超出大小限制时删除这段 HTML，
     // 普通旧缓存解析数组不能替代原文；只有当前公共读取逐一核验四个封存文件后，
     // 才可使用清单绑定的作者元数据。无法取得这项证明时仍明确说明机构不可得。
+    const authorParser = require('./reader-author-parser.js');
     if (metadata.readerAuthors?.sourceHtml
-        && (!require('./reader-author-parser.js').canRetainAuthorSourceHtml(metadata.readerAuthors.sourceHtml)
+        && (!authorParser.canRetainAuthorSourceHtml(metadata.readerAuthors.sourceHtml)
             || Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES)) {
         delete metadata.readerAuthors.sourceHtml;
+    }
+    if (metadata.readerAuthors?.sourceHeaderHtml
+        && (!authorParser.canRetainAuthorSourceHtml(metadata.readerAuthors.sourceHeaderHtml)
+            || Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES)) {
+        delete metadata.readerAuthors.sourceHeaderHtml;
     }
     if (Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES) fail('来源元数据的固定格式 JSON 超过 64 MiB');
     return assertNoPersistentImageBytes(metadata);
@@ -589,8 +595,17 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
         const sourceVersion = historicalVersionIdentity({ arxivId: id,
             textSourceId: pdf.sourceId, pdf });
         let text; let runtimeSource = rawText;
+        const authorParser = require('./reader-author-parser.js');
+        const pdfPage1Authors = pdf.bytes.length >= 256
+            ? authorParser.extractPdfPage1AuthorsSync(pdf.bytes)
+            : null;
         if (rawText?.source === 'html' && !sourceVersion) {
             text = validateTextResponse(rawText, id, capturedAt, extractorVersion);
+            if (pdfPage1Authors) {
+                const baseReaderAuthors = rawText?.readerAuthors && typeof rawText.readerAuthors === 'object'
+                    ? clone(rawText.readerAuthors) : { authors: [], sourceDomSha256: '' };
+                runtimeSource = { ...rawText, readerAuthors: { ...baseReaderAuthors, pdfPage1Authors } };
+            }
         } else {
             // fetchText 如果返回 PDF 文本，
             // 说明适配器丢掉了 PDF 字节，或自己另下了一份。
@@ -615,7 +630,7 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
             const versionTitle = rawText?.sourceId === pdf.sourceId && rawText?.title
                 ? rawText.title : (extracted?.title || sourceTitle('', extracted?.text));
             runtimeSource = { title: versionTitle, source: 'pdf', sourceId: pdf.sourceId,
-                imageInfos: [], structuredArtifacts: null, readerAuthors: null,
+                imageInfos: [], structuredArtifacts: null, readerAuthors: pdfPage1Authors || null,
                 htmlAvailability: rawText?.htmlAvailability || 'unavailable',
                 htmlAttempts: Number.isSafeInteger(rawText?.htmlAttempts) ? rawText.htmlAttempts : 0,
                 warnings: [...(Array.isArray(rawText?.warnings) ? rawText.warnings.map(String) : []),

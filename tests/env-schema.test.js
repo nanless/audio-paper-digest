@@ -236,7 +236,19 @@ test('大小写代理为空白或引号内空白时不能通过必需代理检�
             const parsed = schema.parseEnvText(`${name}="${blank}"`);
             assert.ok(schema.validateEntries({ ...base, ...parsed }).items.some(item => item.ok === 'fail'), name);
         }
-        assert.ok(!schema.validateEntries({ ...base, [name]: '   ', HTTP_PROXY: 'http://127.0.0.1:7890' })
-            .items.some(item => item.ok === 'fail'), '有效其他别名保留');
+        // 空字符串视作未设置，保留其他合法代理别名；纯空白/首尾空白/三斜杠与运行时一致 fail-closed。
+        assert.ok(!schema.validateEntries({ ...base, [name]: '', HTTP_PROXY: 'http://127.0.0.1:7890' })
+            .items.some(item => item.ok === 'fail'), '空串时有效其他别名保留');
+        if (name !== 'HTTP_PROXY') {
+            assert.ok(schema.validateEntries({ ...base, [name]: '   ', HTTP_PROXY: 'http://127.0.0.1:7890' })
+                .items.some(item => item.ok === 'fail'), '纯空白代理应与运行时一致 fail-closed');
+        }
+    }
+    for (const badProxy of [' http://127.0.0.1:7897 ', 'http://127.0.0.1:7897\n', 'http:///127.0.0.1:7897']) {
+        assert.strictEqual(
+            schema.validateEntries({ ...base, HTTPS_PROXY: badProxy }).items.find(i => i.name === 'HTTPS_PROXY').ok,
+            'fail',
+            badProxy
+        );
     }
 });

@@ -103,23 +103,10 @@ function isProjectEnvKey(key) {
     return PROJECT_ENV_KEYS.has(key) || PROJECT_ENV_PREFIXES.some(prefix => key.startsWith(prefix));
 }
 
-function parseEnvFile(envFile) {
-    envFile = resolveEnvFile(envFile);
+function parseEnvContent(envContent) {
     const parsed = {};
-    if (!fs.existsSync(envFile)) return parsed;
-
-    try {
-        // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
-        if (process.platform === 'win32' || (fs.statSync(envFile).mode & 0o777) !== 0o600) {
-            fs.chmodSync(envFile, 0o600);
-        }
-    } catch (error) {
-        if (process.platform !== 'win32') throw error;
-    }
-
-    const envContent = fs.readFileSync(envFile, 'utf8');
     const firstDefinitionLines = new Map();
-    envContent.split('\n').forEach((line, index) => {
+    String(envContent == null ? '' : envContent).split('\n').forEach((line, index) => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) return;
         const eq = trimmed.indexOf('=');
@@ -142,8 +129,24 @@ function parseEnvFile(envFile) {
             parsed[key] = val;
         }
     });
-
     return parsed;
+}
+
+function parseEnvFile(envFile) {
+    envFile = resolveEnvFile(envFile);
+    if (!fs.existsSync(envFile)) return {};
+
+    try {
+        // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
+        if (process.platform === 'win32' || (fs.statSync(envFile).mode & 0o777) !== 0o600) {
+            fs.chmodSync(envFile, 0o600);
+        }
+    } catch (error) {
+        if (process.platform !== 'win32') throw error;
+    }
+
+    const envContent = fs.readFileSync(envFile, 'utf8');
+    return parseEnvContent(envContent);
 }
 
 function buildChildProcessEnv(extra = {}, allowedKeys = []) {
@@ -187,6 +190,7 @@ module.exports = {
     requireExternalRuntime,
     resolveEnvFile,
     isProjectEnvKey,
+    parseEnvContent,
     parseEnvFile,
     loadProjectEnv,
     buildChildProcessEnv

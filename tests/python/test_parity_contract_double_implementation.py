@@ -129,8 +129,11 @@ class ParityContractDoubleImplementationTest(unittest.TestCase):
     def test_parity_manual_numeral(self):
         self.assert_rule_parity('manual-numeral')
 
+    def test_parity_core_summary_v4(self):
+        self.assert_rule_parity('core-summary-v4')
+
     def test_corpus_is_not_degenerate(self):
-        self.assertEqual(len(self.payload['rules']), 6, '对照规则应固定为 6 组')
+        self.assertEqual(len(self.payload['rules']), 7, '对照规则应固定为 7 组')
         for rule in self.payload['rules']:
             rule_id = rule['id']
             tasks = self.tasks_by_rule.get(rule_id) or []
@@ -148,8 +151,10 @@ class ParityContractDoubleImplementationTest(unittest.TestCase):
 
     def test_python_entries_are_callable(self):
         import publish_common
+        from parity_contract_probe import _publisher
         self.assertTrue(callable(publish_common.validate_experiment_table_contract))
         self.assertTrue(callable(publish_common.validate_manual_reader_quality))
+        self.assertTrue(callable(_publisher()._detailed_core_summary_semantic_issue))
         self.assertEqual(len(self.node_results), len(self.payload['tasks']),
                          'Node 结果条数与语料条数不一致')
 

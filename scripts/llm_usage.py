@@ -70,21 +70,39 @@ def normalize_usage_paper_id(value):
         return None
 
 
+def _first_present(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def normalize_llm_usage(protocol, body):
     usage = body.get('usage') if isinstance(body, dict) else None
     usage = usage if isinstance(usage, dict) else {}
     chat = protocol in {'openai', 'openai_chat'}
-    input_details = usage.get('prompt_tokens_details' if chat else 'input_tokens_details') or {}
-    output_details = usage.get('completion_tokens_details' if chat else 'output_tokens_details') or {}
+    input_details = usage.get('input_tokens_details')
     input_details = input_details if isinstance(input_details, dict) else {}
+    prompt_details = usage.get('prompt_tokens_details')
+    prompt_details = prompt_details if isinstance(prompt_details, dict) else {}
+    output_details = usage.get('output_tokens_details')
     output_details = output_details if isinstance(output_details, dict) else {}
+    completion_details = usage.get('completion_tokens_details')
+    completion_details = completion_details if isinstance(completion_details, dict) else {}
     values = {
         'inputTokens': _count(usage.get('prompt_tokens' if chat else 'input_tokens')),
         'outputTokens': _count(usage.get('completion_tokens' if chat else 'output_tokens')),
         'totalTokens': _count(usage.get('total_tokens')),
-        'cachedInputTokens': _count(input_details.get('cached_tokens', usage.get('cache_read_input_tokens'))),
+        'cachedInputTokens': _count(_first_present(
+            input_details.get('cached_tokens'),
+            prompt_details.get('cached_tokens'),
+            usage.get('cache_read_input_tokens'),
+        )),
         'cacheCreationInputTokens': _count(usage.get('cache_creation_input_tokens')),
-        'reasoningTokens': _count(output_details.get('reasoning_tokens')),
+        'reasoningTokens': _count(_first_present(
+            output_details.get('reasoning_tokens'),
+            completion_details.get('reasoning_tokens'),
+        )),
     }
     return {'status': 'reported' if any(value is not None for value in values.values()) else 'unavailable',
             'inputSemantics': 'provider_reported', **values}
@@ -187,12 +205,24 @@ def write_llm_usage_event(event, directory=None):
     temporary = target_dir / f'.{ident}.tmp'
     target = target_dir / f'{ident}.json'
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-        json.dump(event, handle, ensure_ascii=False)
-        handle.write('\n')
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
+    try:
+        try:
+            handle = os.fdopen(fd, 'w', encoding='utf-8')
+        except BaseException:
+            os.close(fd)
+            raise
+        with handle:
+            json.dump(event, handle, ensure_ascii=False)
+            handle.write('\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
     directory_fd = os.open(target_dir, os.O_RDONLY)
     try:
         os.fsync(directory_fd)
