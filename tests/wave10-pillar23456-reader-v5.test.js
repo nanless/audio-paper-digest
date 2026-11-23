@@ -663,12 +663,13 @@ test('R2 fixes: figure placement split, multi-result ablation guard, double-back
     const parsedLtx = deep.parseArxivStructuredArtifactsFromHtml(latexmlHtml, '2611.25569v1', '2611.25569');
     assert.equal(parsedLtx.tables.length, 1);
     const t1 = parsedLtx.tables[0];
-    assert.deepEqual(t1.headerRows, [0, 1, 2, 3]);
-    assert.deepEqual(t1.bodyRows, [4, 5]);
+    assert.deepEqual(t1.headerRows, [0]);
+    assert.deepEqual(t1.bodyRows, [1, 2]);
     assert.equal(t1.matrix[0].length, 7);
-    assert.equal(t1.matrix[4][0], 'DAC');
-    assert.equal(t1.matrix[4][6], '0.022');
-    assert.equal(t1.matrix[5][0], 'UMelCodec');
+    assert.equal(t1.matrix[0][1], 'Quality Metrics test-clean ViSQOL ↑');
+    assert.equal(t1.matrix[1][0], 'DAC');
+    assert.equal(t1.matrix[1][6], '0.022');
+    assert.equal(t1.matrix[2][0], 'UMelCodec');
     assert.equal(readerTables.assessReaderCompleteTableEligibility(t1).eligible, true);
     assert.equal(readerTables.assessReaderTableSelectionEligibility(t1).eligible, true);
 });

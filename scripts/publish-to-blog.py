@@ -1485,7 +1485,10 @@ def _review_source_figure_semantics_note(paper):
             or artifacts.get('payloadSha256') != source.get('structuredArtifactsSha256')
             or artifacts.get('payloadSha256') != stage.get('structuredArtifactsSha256')):
         raise PublishDataValidationError('审查原图编号说明与封存来源 SHA 不一致。')
-    if artifacts.get('parserVersion') not in {'arxiv-html-dom-v4', 'arxiv-html-dom-v5', 'pdf-layout-dom-v1'}:
+    if artifacts.get('parserVersion') not in {
+        'arxiv-html-dom-v4', 'arxiv-html-dom-v5', 'arxiv-html-dom-v6',
+        'pdf-layout-dom-v1', 'pdf-layout-dom-v2',
+    }:
         return ''  # Conference/unknown inventories do not claim this DOM numbering convention.
     verified_originals = []
     for figure in figures:

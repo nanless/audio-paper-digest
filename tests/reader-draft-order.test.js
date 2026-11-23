@@ -89,7 +89,7 @@ test('规范章节归一化完整的选择标记排列，且不改动正文字�
     const originalBody = '先解释部署资源表，保留这段文字和空行。\n\n[[TABLE_2]]\n\n'
         + '再解释识别结果表，正文只能改 marker token。\n\n[[TABLE_1]]\n\n最后收束比较。';
     const input = { sections: [{ kind: 'experiment_setup', heading: 'setup', body: originalBody }],
-        tableBindings: [select(1, 1, [1, 2, 3]), select(2, 2, [0, 1, 2])],
+        tableBindings: [select(1, 1, [0, 1, 2]), select(2, 2, [0, 1, 2])],
         conceptBridges: [], figurePlacements: [], formulaBindings: [] };
     const frozen = JSON.stringify(input);
     const { draft, mapping } = normalizeReaderDraftOrder(input);
@@ -104,7 +104,7 @@ test('规范章节归一化完整的选择标记排列，且不改动正文字�
     const compiled = compileReaderTableSelections(draft.sections, draft.tableBindings, artifacts);
     assert.deepEqual(compiled.tableBindings.map(item => item.sourceTableOrdinal), [2, 1]);
     assert.ok(compiled.sections[0].body.indexOf('| System | Memory | RTF |')
-        < compiled.sections[0].body.indexOf('| System | test-clean | test-other |'));
+        < compiled.sections[0].body.indexOf('| System | WER test-clean | WER test-other |'));
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 

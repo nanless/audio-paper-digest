@@ -58,11 +58,23 @@ test('缺失选择表标记在无关小节错误并存时授权结果正文，�
     const missingData = structuredClone(repaired);
     missingData.tableBindings[0].selection.sourceRows = [0, 0];
     assert.throws(() => tables.compileReaderTableSelections(missingData.sections, missingData.tableBindings, artifacts), /重复|数据行/);
+    const multiHeaderArtifacts = structuredClone(artifacts);
+    const t0 = multiHeaderArtifacts.tables[0];
+    t0.matrix = [['System', 'WER', 'WER'], ['System', 'test-clean', 'test-other'], ...t0.matrix.slice(1)];
+    t0.headerRows = [0, 1];
+    t0.bodyRows = [2, 3];
+    t0.cells = [
+        { row: 0, column: 0, header: true, rowspan: 2, colspan: 1, text: 'System', sourceDomSha256: t0.cells[0].sourceDomSha256 },
+        { row: 0, column: 1, header: true, rowspan: 1, colspan: 2, text: 'WER', sourceDomSha256: t0.cells[1].sourceDomSha256 },
+        { row: 1, column: 1, header: true, rowspan: 1, colspan: 1, text: 'test-clean', sourceDomSha256: t0.cells[1].sourceDomSha256 },
+        { row: 1, column: 2, header: true, rowspan: 1, colspan: 1, text: 'test-other', sourceDomSha256: t0.cells[2].sourceDomSha256 },
+        ...t0.cells.filter(c => c.row >= 1).map(c => ({ ...c, row: c.row + 1 }))
+    ];
     const headersOnly = { tableIndex: 1, selection: {
         sourceTableOrdinal: 1, sourceRows: [0, 1], sourceColumns: [0, 1, 2]
     } };
     let headerError;
-    try { tables.renderReaderTableSelection(headersOnly, artifacts); }
+    try { tables.renderReaderTableSelection(headersOnly, multiHeaderArtifacts); }
     catch (error) { headerError = error; }
     assert.match(headerError.message, /其余行必须是数据行/);
     assert.match(headerError.message, /若另有正文标记或位置错误/);

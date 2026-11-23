@@ -42,7 +42,7 @@ MAX_PIXELS = 12_000_000
 MAX_FIGURES = 64
 MAX_TABLES = 64
 
-_NUM_TOKEN = r"(?:[A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})"
+_NUM_TOKEN = r"(?:[A-Z]\.?\d+(?:\.\d+)*|\d+(?:\.\d+)*|[IVX]{1,5})"
 _PROSE_LEAD_VERBS = {
     "shows", "show", "illustrates", "illustrate", "presents", "present",
     "depicts", "depict", "plots", "plot", "compares", "compare", "reports",
@@ -63,6 +63,10 @@ FIG_CAPTION_STRICT_RE = re.compile(
 FIG_CAPTION_LOOSE_RE = re.compile(
     rf"^\s*(Figure|FIGURE|Fig\.?|FIG\.?)\s+({_NUM_TOKEN})(?!\d)\s+([A-Z0-9(\[\u201c\"].+)",
     re.DOTALL,
+)
+TAB_CAPTION_CONTINUED_RE = re.compile(
+    rf"^\s*(?:Table|Tab\.?)\s+({_NUM_TOKEN})(?!\d)\s*(?:,?\s*\(\s*cont(?:inued(?:\s+from\s+previous\s+page)?|['’]d|\.)?\s*\)|,\s*cont(?:inued|['’]d|\.)?)\s*(?:[:.\u2013\u2014-]\s*)?(.*)",
+    re.IGNORECASE | re.DOTALL,
 )
 TAB_CAPTION_STRICT_RE = re.compile(
     rf"^\s*(?:Table|Tab\.?)\s+({_NUM_TOKEN})(?!\d)\s*[:.\u2013\u2014-]\s*(.+)",
@@ -135,6 +139,13 @@ def _match_caption_header(cleaned: str, kind: str) -> tuple[str, str] | None:
             return num, rest
         return None
 
+    mc = TAB_CAPTION_CONTINUED_RE.match(cleaned)
+    if mc:
+        num, rest = mc.group(1), mc.group(2)
+        first_word = re.match(r"^\s*([A-Za-z]+)", rest)
+        if first_word and first_word.group(1).lower() in _PROSE_LEAD_VERBS:
+            return None
+        return num, rest or "(continued)"
     m = TAB_CAPTION_STRICT_RE.match(cleaned)
     if m:
         num, rest = m.group(1), m.group(2)
@@ -261,6 +272,7 @@ def _collect_page_captions(page: fitz.Page, kind: str) -> list[dict[str, Any]]:
             "caption": full_caption[:1200],
             "bbox": cap_bbox,
             "col_side": col_side,
+            "is_continuation": bool(kind == "table" and TAB_CAPTION_CONTINUED_RE.match(cleaned)),
         })
     return captions
 
@@ -355,7 +367,7 @@ def _extract_figure_crop_bbox(
                 col_x0, col_x1 = 18.0, page_w - 18.0
 
     def _in_col(b: tuple[float, float, float, float]) -> bool:
-        if col_side is None:
+        if col_side is None and col_x0 <= 18.0 and col_x1 >= page_w - 18.0:
             return True
         bx_mid = (b[0] + b[2]) / 2.0
         return col_x0 - 8.0 <= bx_mid <= col_x1 + 8.0
@@ -409,12 +421,70 @@ def _extract_figure_crop_bbox(
             return None
         return out
 
+    def _has_center_crossing_visual_near_cap() -> bool:
+        band_top = max(24.0, cy0 - 260.0)
+        band_bot = min(page_h - 24.0, cy1 + 260.0)
+        for vx0, vy0, vx1, vy1 in visual_rects:
+            if vy1 >= band_top and vy0 <= band_bot and vx0 < page_w * 0.44 and vx1 > page_w * 0.56:
+                return True
+        return False
+
+    def _has_center_crossing_prose_between(ob: list[float]) -> bool:
+        y_lo = min(cy1, ob[3])
+        y_hi = max(cy0, ob[1])
+        if y_hi <= y_lo + 4.0:
+            return False
+        for bx0, by0, bx1, by1, btxt in text_blocks:
+            if by0 >= y_lo - 4.0 and by1 <= y_hi + 4.0 and bx0 < page_w * 0.44 and bx1 > page_w * 0.56:
+                if _is_body_prose_block(btxt, (bx0, by0, bx1, by1), page_w):
+                    return True
+        return False
+
+    cap_has_full_width_visual = _has_center_crossing_visual_near_cap()
+
+    def _captions_vertically_block(ob: list[float], other_col_side: str | None) -> bool:
+        if col_side is not None and other_col_side is not None:
+            return other_col_side == col_side
+        if col_side is None and other_col_side is None:
+            # Side-by-side narrow captions on opposite halves of a page (e.g., landscape figure + table)
+            # do not vertically block each other ONLY when neither spans full width, no full-width visual
+            # belongs to this caption, no full-width body prose separates them, and they sit in a shared band.
+            if cap_has_full_width_visual:
+                return True
+            cap_w = cx1 - cx0
+            ob_w = ob[2] - ob[0]
+            h_overlap = min(cx1, ob[2]) - max(cx0, ob[0])
+            v_dist = abs(((cy0 + cy1) / 2.0) - ((ob[1] + ob[3]) / 2.0))
+            if (
+                h_overlap <= 0.0
+                and cap_w < page_w * 0.50
+                and ob_w < page_w * 0.50
+                and v_dist <= page_h * 0.55
+                and not _has_center_crossing_prose_between(ob)
+            ):
+                if (cx1 <= page_w * 0.52 and ob[0] >= page_w * 0.48) or (ob[2] <= page_w * 0.52 and cx0 >= page_w * 0.48):
+                    return False
+        return True
+
+    # If a side-by-side caption sits strictly on the opposite half when col_side is None,
+    # bound horizontal crop search to our own half so we don't absorb the neighbor's visuals.
+    if col_side is None and not cap_has_full_width_visual:
+        for other in all_captions:
+            if other is cap:
+                continue
+            ob = other["bbox"]
+            if not _captions_vertically_block(ob, other["col_side"]):
+                if cx1 <= page_w * 0.52 and ob[0] >= page_w * 0.48:
+                    col_x1 = min(col_x1, ob[0] - 8.0)
+                elif ob[2] <= page_w * 0.52 and cx0 >= page_w * 0.48:
+                    col_x0 = max(col_x0, ob[2] + 8.0)
+
     upper_y = 32.0
     for other in all_captions:
         ob = other["bbox"]
         if other is cap:
             continue
-        if ob[3] <= cy0 - 4.0 and (col_side is None or other["col_side"] is None or other["col_side"] == col_side):
+        if ob[3] <= cy0 - 4.0 and _captions_vertically_block(ob, other["col_side"]):
             upper_y = max(upper_y, ob[3] + 4.0)
     for bx0, by0, bx1, by1, btxt in text_blocks:
         if by1 <= cy0 - 4.0 and _in_col((bx0, by0, bx1, by1)) and _is_body_prose_block(btxt, (bx0, by0, bx1, by1), page_w):
@@ -429,7 +499,7 @@ def _extract_figure_crop_bbox(
         ob = other["bbox"]
         if other is cap:
             continue
-        if ob[1] >= cy1 + 4.0 and (col_side is None or other["col_side"] is None or other["col_side"] == col_side):
+        if ob[1] >= cy1 + 4.0 and _captions_vertically_block(ob, other["col_side"]):
             lower_y = min(lower_y, ob[1] - 4.0)
     for bx0, by0, bx1, by1, btxt in text_blocks:
         if by0 >= cy1 + 4.0 and _in_col((bx0, by0, bx1, by1)) and _is_body_prose_block(btxt, (bx0, by0, bx1, by1), page_w):
@@ -441,16 +511,22 @@ _NUMERIC_CELL_RE = re.compile(r"^[+\-\u2212]?(?:\d+(?:\.\d+)?|\.\d+)%?(?:\s+[+\-
 _MERGED_FLOATS_RE = re.compile(r"(?:^|\s)[+\-\u2212]?(?:\d+\.\d+|\.\d+)(?:\s+[+\-\u2212]?(?:\d+\.\d+|\.\d+))+")
 
 
-def _is_garbled_table_matrix(matrix: list[list[str]], header_rows: list[int]) -> bool:
+def _is_garbled_table_matrix(
+    matrix: list[list[str]],
+    header_rows: list[int],
+    *,
+    allow_headerless: bool = False,
+) -> bool:
     """Reject corrupted PDF table extractions (numeric headers, column-merged floats, mid-word splits)."""
     if not matrix or not matrix[0] or _has_midword_column_split(matrix):
         return True
     hdr0 = [c.strip() for c in matrix[0] if c.strip()]
     if len(hdr0) < max(2, math.ceil(len(matrix[0]) * 0.5)):
         return True
-    hdr0_numeric = sum(1 for c in hdr0 if _NUMERIC_CELL_RE.match(c) or _MERGED_FLOATS_RE.search(c))
-    if hdr0_numeric >= max(1, math.ceil(len(hdr0) * 0.45)):
-        return True
+    if not allow_headerless:
+        hdr0_numeric = sum(1 for c in hdr0 if _NUMERIC_CELL_RE.match(c) or _MERGED_FLOATS_RE.search(c))
+        if hdr0_numeric >= max(1, math.ceil(len(hdr0) * 0.45)):
+            return True
     body = [matrix[i] for i in range(len(matrix)) if i not in header_rows]
     if not body:
         return True
@@ -494,6 +570,8 @@ def _extract_booktabs_table_from_rules(
     cap: dict[str, Any],
     rule_stacks: list[dict[str, Any]],
     used_stacks: set[int],
+    *,
+    allow_headerless: bool = False,
 ) -> tuple[list[list[str]], list[int], list[float], int] | None:
     """Extract clean academic booktabs table using horizontal rules + phrase-span column clustering."""
     cx0, cy0, cx1, cy1 = cap["bbox"]
@@ -542,13 +620,6 @@ def _extract_booktabs_table_from_rules(
     if len(lines) < 2:
         return None
 
-    # Determine header boundary from first interior horizontal rule (within top 42pt)
-    header_cut_y = None
-    for ry in rules_y[1:-1]:
-        if 8.0 <= (ry - sy0) <= 46.0:
-            header_cut_y = ry
-            break
-
     # 2. Estimate normal inter-word space vs inter-column gap from line word gaps
     # Typical academic table font (7-10pt) has inter-word space ~1.5-3.6pt and column gap >=5.5pt.
     median_h = sorted((w[3] - w[1]) for ln in lines for w in ln)[len(words_sorted) // 2]
@@ -566,6 +637,23 @@ def _extract_booktabs_table_from_rules(
             else:
                 spans.append((wx0, wx1, txt))
         line_spans.append((ymid, spans))
+
+    # Determine header boundary from first interior horizontal rule (within top 72pt for 2-4 line grouped headers).
+    # Guard against mistaking a mid-table section-divider \midrule (e.g. at +60pt when header has no \midrule)
+    # by rejecting any candidate rule that has numeric measurement rows above it after line 0.
+    _num_val_re = re.compile(r"^[+\-\u2212]?(?:\d+\.\d+|\.\d+|\d+%)(?:\s*(?:±|\+/-|\(|%))?$")
+    header_cut_y = None
+    for ry in rules_y[1:-1]:
+        if 8.0 <= (ry - sy0) <= 72.0:
+            above = [spans for ym, spans in line_spans if ym < ry]
+            has_data_above = any(
+                sum(1 for _, _, txt in sp[1:] if _num_val_re.match(txt.strip())) >= max(1, (len(sp) - 1) // 2)
+                for sp in above[1:]
+                if len(sp) >= 2
+            )
+            if not has_data_above:
+                header_cut_y = ry
+            break
 
     # 3. Split header lines vs body lines
     if header_cut_y is not None:
@@ -767,7 +855,7 @@ def _extract_booktabs_table_from_rules(
 
     if len(matrix) <= len(header_rows) or len(matrix) < 2:
         return None
-    if _is_garbled_table_matrix(matrix, header_rows):
+    if _is_garbled_table_matrix(matrix, header_rows, allow_headerless=allow_headerless):
         return None
     # Reject if any column in body is completely empty
     body_only = matrix[len(header_rows):]
@@ -776,11 +864,14 @@ def _extract_booktabs_table_from_rules(
     return matrix, header_rows, [sx0, sy0, sx1, sy1], best_si
 
 
-def _collect_booktabs_rule_stacks(page: fitz.Page, stop_ys: list[float] | None = None) -> list[dict[str, Any]]:
+def _collect_booktabs_rule_stacks(
+    page: fitz.Page,
+    stop_spans: list[tuple[float, float, float]] | None = None,
+) -> list[dict[str, Any]]:
     """Group horizontally aligned horizontal rules into candidate booktabs table stacks."""
     page_w = float(page.rect.width)
     page_h = float(page.rect.height)
-    stop_points = sorted(stop_ys or [])
+    stops = list(stop_spans or [])
     try:
         drawings = page.get_drawings()
     except Exception:
@@ -822,18 +913,25 @@ def _collect_booktabs_rule_stacks(page: fitz.Page, stop_ys: list[float] | None =
             continue
         dedup.append((x0, x1, ym))
 
-    # Booktabs \toprule/\midrule/\bottomrule for the same table share identical [x0, x1] within <=3pt.
-    # Never bridge across a caption, section heading, or body prose paragraph between rules.
+    # Booktabs \toprule/\midrule/\bottomrule for the same table share identical [x0, x1] within <=3.5pt.
+    # Allow tall full-page tables (up to min(85% page height, 680pt)) while never bridging across
+    # a horizontally overlapping caption, section heading, or body prose paragraph (stop_spans).
+    max_rule_gap = min(page_h * 0.85, 680.0)
     stacks: list[dict[str, Any]] = []
     for x0, x1, ym in dedup:
         placed = False
         for st in stacks:
             prev_y = st["ys"][-1]
-            if abs(x0 - st["x0"]) <= 3.5 and abs(x1 - st["x1"]) <= 3.5 and 0 < (ym - prev_y) <= 220.0:
-                if any(prev_y + 2.0 < sy < ym - 2.0 for sy in stop_points):
+            if abs(x0 - st["x0"]) <= 3.5 and abs(x1 - st["x1"]) <= 3.5 and 0 < (ym - prev_y) <= max_rule_gap:
+                st_x0 = min(st["x0"], x0)
+                st_x1 = max(st["x1"], x1)
+                if any(
+                    prev_y + 2.0 < sy < ym - 2.0 and (min(st_x1, sx1) - max(st_x0, sx0)) > 10.0
+                    for sx0, sy, sx1 in stops
+                ):
                     continue
-                st["x0"] = min(st["x0"], x0)
-                st["x1"] = max(st["x1"], x1)
+                st["x0"] = st_x0
+                st["x1"] = st_x1
                 st["ys"].append(ym)
                 placed = True
                 break
@@ -848,152 +946,344 @@ def _collect_booktabs_rule_stacks(page: fitz.Page, stop_ys: list[float] | None =
     return valid
 
 
+def _open_upright_page_view(
+    doc: fitz.Document,
+    page: fitz.Page,
+    explicit_rotate: int | None = None,
+) -> tuple[fitz.Document, fitz.Page]:
+    """Create a temporary upright in-memory page copy whose text/drawing/image coordinates match visual layout.
+
+    - For rotated landscape/inverted pages (`page.rotation != 0`, `explicit_rotate is None`):
+      PyMuPDF's `get_text`/`get_drawings`/`get_image_info` return unrotated MediaBox coords while
+      `page.rect` and `get_pixmap(clip=...)` use visual rotated coords. Resetting rotation temporarily
+      and projecting with `show_pdf_page(..., rotate=-orig_rot)` yields exact visual coordinates
+      aligned 1:1 with `render_pdf_figure_crop_png` on the original unmodified PDF bytes.
+    - For portrait `sidewaystable` pages (`page.rotation == 0`, `explicit_rotate in (90, 270)`):
+      projects the rotated table upright for horizontal text/rule extraction.
+    """
+    temp_doc = fitz.open()
+    try:
+        if explicit_rotate is not None:
+            tp = temp_doc.new_page(width=float(page.rect.height), height=float(page.rect.width))
+            tp.show_pdf_page(tp.rect, doc, page.number, rotate=int(explicit_rotate))
+            return temp_doc, tp
+        orig_rot = int(page.rotation)
+        vis_w, vis_h = float(page.rect.width), float(page.rect.height)
+        page.set_rotation(0)
+        try:
+            tp = temp_doc.new_page(width=vis_w, height=vis_h)
+            tp.show_pdf_page(tp.rect, doc, page.number, rotate=-orig_rot)
+        finally:
+            page.set_rotation(orig_rot)
+        return temp_doc, tp
+    except Exception:
+        temp_doc.close()
+        raise
+
+
+def _detect_sideways_table_rotation(page: fitz.Page) -> int | None:
+    """Detect portrait pages (rotation==0) containing a 90-deg rotated LaTeX sidewaystable.
+
+    Returns the show_pdf_page rotation angle (270 for CCW upward text dir=(0,-1),
+    90 for CW downward text dir=(0,+1)) that brings the table upright, or None.
+    """
+    if page.rotation != 0:
+        return None
+    horiz = 0
+    vert_up = 0
+    vert_down = 0
+    vert_snippets: list[str] = []
+    try:
+        text_dict = page.get_text("dict", flags=fitz.TEXTFLAGS_TEXT)
+    except Exception:
+        return None
+    for blk in text_dict.get("blocks") or ():
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines") or ():
+            dx, dy = ln.get("dir") or (1.0, 0.0)
+            txt = "".join(str(sp.get("text") or "") for sp in ln.get("spans") or ()).strip()
+            if len(txt) < 2:
+                continue
+            if abs(dx) >= 0.9:
+                horiz += 1
+            elif dy <= -0.9:
+                vert_up += 1
+                if len(vert_snippets) < 60:
+                    vert_snippets.append(txt)
+            elif dy >= 0.9:
+                vert_down += 1
+                if len(vert_snippets) < 60:
+                    vert_snippets.append(txt)
+    vert_total = vert_up + vert_down
+    if vert_total < 6 or vert_total <= horiz * 2:
+        return None
+    joined = " ".join(vert_snippets)
+    if not re.search(rf"\b(?:table|tab\.?)\s+{_NUM_TOKEN}\b", joined, re.IGNORECASE):
+        return None
+    return 270 if vert_up >= vert_down else 90
+
+
+def _build_pdf_table_cells_and_sig(
+    *,
+    pdf_sha: str,
+    ordinal: int,
+    pages: list[int],
+    bboxes: list[list[float]],
+    label: str,
+    caption: str,
+    matrix: list[list[str]],
+    header_rows: list[int],
+) -> tuple[list[dict[str, Any]], str]:
+    primary_page = pages[0]
+    cells = []
+    for r_idx, row in enumerate(matrix):
+        is_hdr = r_idx in header_rows
+        for c_idx, txt in enumerate(row):
+            cells.append({
+                "row": r_idx,
+                "column": c_idx,
+                "header": is_hdr,
+                "rowspan": 1,
+                "colspan": 1,
+                "text": txt,
+                "sourceDomSha256": _sha256_text(f"{pdf_sha}:table:{ordinal}:p{primary_page}:r{r_idx}:c{c_idx}:{txt}"),
+            })
+    sig_payload: dict[str, Any] = {
+        "contract": PDF_TABLE_EXTRACT_CONTRACT,
+        "pdfSha256": pdf_sha,
+        "page": primary_page,
+        "bbox": [round(float(v), 2) for v in bboxes[0]],
+        "label": label,
+        "caption": caption,
+        "matrix": matrix,
+    }
+    if len(pages) > 1:
+        sig_payload["continuedPages"] = pages[1:]
+        sig_payload["continuedBboxes"] = [[round(float(v), 2) for v in b] for b in bboxes[1:]]
+    table_sig = _sha256_text(json.dumps(sig_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+    return cells, table_sig
+
+
 def _extract_pdf_tables(doc: fitz.Document, pdf_sha: str) -> list[dict[str, Any]]:
-    """Extract clean structured rectangular tables anchored to printed Table captions."""
+    """Extract clean structured rectangular tables anchored to printed Table captions.
+
+    Supports rotated landscape pages, portrait LaTeX sidewaystable pages, tall tables (>220pt),
+    and deterministic consecutive-page `Table N (continued)` stitching.
+    """
     tables: list[dict[str, Any]] = []
-    seen_numbers: set[str] = set()
+    tables_by_number: dict[str, dict[str, Any]] = {}
     ordinal = 0
 
     for page in doc:
         if len(tables) >= MAX_TABLES:
             break
-        tab_captions = _collect_page_captions(page, "table")
-        if not tab_captions:
-            continue
-
-        page_w = float(page.rect.width)
-        stop_ys: list[float] = []
-        for cap in tab_captions:
-            stop_ys.append((cap["bbox"][1] + cap["bbox"][3]) / 2.0)
-        for blk in page.get_text("blocks", flags=fitz.TEXTFLAGS_TEXT):
-            if blk[6] != 0:
-                continue
-            bx0, by0, bx1, by1, btxt = float(blk[0]), float(blk[1]), float(blk[2]), float(blk[3]), str(blk[4] or "")
-            if _is_body_prose_block(btxt, (bx0, by0, bx1, by1), page_w):
-                stop_ys.append((by0 + by1) / 2.0)
-        rule_stacks = _collect_booktabs_rule_stacks(page, stop_ys=stop_ys)
-        used_stacks: set[int] = set()
-
-        # Also run PyMuPDF strict ruled grid finder (with stdout silenced!) for fully gridded tables only.
-        # Never use non-strict "lines", which invents noisy vertical cuts on borderless booktabs tables.
-        found_grid_tabs = []
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            try:
-                finder = page.find_tables(vertical_strategy="lines_strict", horizontal_strategy="lines_strict")
-                if finder and finder.tables:
-                    found_grid_tabs = list(finder.tables)
-            except Exception:
-                found_grid_tabs = []
-        used_grid_idxs: set[int] = set()
-
-        for cap in tab_captions:
-            if cap["number"] in seen_numbers:
+        page_num = page.number + 1
+        temp_doc: fitz.Document | None = None
+        work_page = page
+        try:
+            if page.rotation != 0:
+                temp_doc, work_page = _open_upright_page_view(doc, page)
+            else:
+                sideways_rot = _detect_sideways_table_rotation(page)
+                if sideways_rot is not None:
+                    temp_doc, work_page = _open_upright_page_view(doc, page, explicit_rotate=sideways_rot)
+            tab_captions = _collect_page_captions(work_page, "table")
+            if not tab_captions:
                 continue
 
-            matrix: list[list[str]] | None = None
-            header_rows: list[int] = [0]
-            tab_bbox: list[float] | None = None
+            page_w = float(work_page.rect.width)
+            fig_captions = _collect_page_captions(work_page, "figure")
+            stop_spans: list[tuple[float, float, float]] = []
+            for cap in tab_captions + fig_captions:
+                cb = cap["bbox"]
+                stop_spans.append((cb[0], (cb[1] + cb[3]) / 2.0, cb[2]))
+            for blk in work_page.get_text("blocks", flags=fitz.TEXTFLAGS_TEXT):
+                if blk[6] != 0:
+                    continue
+                bx0, by0, bx1, by1, btxt = float(blk[0]), float(blk[1]), float(blk[2]), float(blk[3]), str(blk[4] or "")
+                if _is_body_prose_block(btxt, (bx0, by0, bx1, by1), page_w):
+                    stop_spans.append((bx0, (by0 + by1) / 2.0, bx1))
+            rule_stacks = _collect_booktabs_rule_stacks(work_page, stop_spans=stop_spans)
+            used_stacks: set[int] = set()
 
-            # Primary 1: Booktabs horizontal-rule + phrase-span column clustering (best for academic LaTeX tables)
-            if rule_stacks:
-                bt = _extract_booktabs_table_from_rules(page, cap, rule_stacks, used_stacks)
-                if bt is not None:
-                    matrix, header_rows, tab_bbox, si = bt
-                    used_stacks.add(si)
+            # Also run PyMuPDF strict ruled grid finder (with stdout silenced!) for fully gridded tables only.
+            # Never use non-strict "lines", which invents noisy vertical cuts on borderless booktabs tables.
+            found_grid_tabs = []
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                try:
+                    finder = work_page.find_tables(vertical_strategy="lines_strict", horizontal_strategy="lines_strict")
+                    if finder and finder.tables:
+                        found_grid_tabs = list(finder.tables)
+                except Exception:
+                    found_grid_tabs = []
+            used_grid_idxs: set[int] = set()
 
-            # Primary 2: PyMuPDF strict ruled grid table fallback (for boxed/shaded tables without booktabs stacks)
-            if matrix is None:
-                cx0, cy0, cx1, cy1 = cap["bbox"]
-                best_gi = -1
-                best_gdist = 1e9
-                for gi, gtab in enumerate(found_grid_tabs):
-                    if gi in used_grid_idxs:
-                        continue
-                    tx0, ty0, tx1, ty1 = map(float, gtab.bbox)
-                    if min(cx1, tx1) - max(cx0, tx0) < 20.0:
-                        continue
-                    if ty0 >= cy1 - 8.0 and (ty0 - cy1) <= 85.0:
-                        dist = ty0 - cy1
-                    elif cy0 >= ty1 - 8.0 and (cy0 - ty1) <= 85.0:
-                        dist = (cy0 - ty1) + 25.0
-                    else:
-                        continue
-                    if dist < best_gdist:
-                        best_gdist = dist
-                        best_gi = gi
+            for cap in tab_captions:
+                num_key = str(cap["number"]).upper()
+                existing_meta = tables_by_number.get(num_key)
+                can_stitch = (
+                    existing_meta is not None
+                    and page_num == existing_meta["last_page"] + 1
+                )
+                if existing_meta is not None and not can_stitch:
+                    continue
 
-                if best_gi >= 0:
-                    raw_rows = found_grid_tabs[best_gi].extract()
-                    if raw_rows and len(raw_rows) >= 2:
-                        width = max(len(r) for r in raw_rows)
-                        if 2 <= width <= 32 and len(raw_rows) <= 128:
-                            cand = [
-                                [_clean_cell_text(r[c] if c < len(r) else "") for c in range(width)]
-                                for r in raw_rows
-                            ]
-                            cand = [r for r in cand if any(r)]
-                            if len(cand) >= 2:
-                                non_empty = sum(1 for r in cand for c in r if c)
-                                avg_len = sum(len(c) for r in cand for c in r if c) / max(1, non_empty)
-                                cand_hdr = [0]
-                                if len(cand) >= 3:
-                                    r1_num = sum(1 for c in cand[1][1:] if re.search(r"\d", c))
-                                    r2_num = sum(1 for c in cand[2][1:] if re.search(r"\d", c))
-                                    if r1_num == 0 and r2_num >= max(1, (width - 1) // 2) and sum(1 for c in cand[1] if c) >= 2:
-                                        cand_hdr = [0, 1]
-                                if (
-                                    non_empty / max(1, len(cand) * width) >= 0.45
-                                    and avg_len <= 85.0
-                                    and not _is_garbled_table_matrix(cand, cand_hdr)
-                                ):
-                                    matrix = cand
-                                    header_rows = cand_hdr
-                                    tab_bbox = [round(float(v), 2) for v in found_grid_tabs[best_gi].bbox]
-                                    used_grid_idxs.add(best_gi)
+                matrix: list[list[str]] | None = None
+                header_rows: list[int] = [0]
+                tab_bbox: list[float] | None = None
 
-            if matrix is None or tab_bbox is None:
-                continue
+                # Primary 1: Booktabs horizontal-rule + phrase-span column clustering (best for academic LaTeX tables)
+                is_cont_stitch = bool(can_stitch and cap.get("is_continuation"))
+                if rule_stacks:
+                    bt = _extract_booktabs_table_from_rules(
+                        work_page, cap, rule_stacks, used_stacks, allow_headerless=is_cont_stitch
+                    )
+                    if bt is not None:
+                        matrix, header_rows, tab_bbox, si = bt
+                        used_stacks.add(si)
 
-            body_rows = [r_idx for r_idx in range(len(matrix)) if r_idx not in header_rows]
-            if not body_rows:
-                continue
+                # Primary 2: PyMuPDF strict ruled grid table fallback (for boxed/shaded tables without booktabs stacks)
+                if matrix is None:
+                    cx0, cy0, cx1, cy1 = cap["bbox"]
+                    best_gi = -1
+                    best_gdist = 1e9
+                    for gi, gtab in enumerate(found_grid_tabs):
+                        if gi in used_grid_idxs:
+                            continue
+                        tx0, ty0, tx1, ty1 = map(float, gtab.bbox)
+                        if min(cx1, tx1) - max(cx0, tx0) < 20.0:
+                            continue
+                        if ty0 >= cy1 - 8.0 and (ty0 - cy1) <= 85.0:
+                            dist = ty0 - cy1
+                        elif cy0 >= ty1 - 8.0 and (cy0 - ty1) <= 85.0:
+                            dist = (cy0 - ty1) + 25.0
+                        else:
+                            continue
+                        if dist < best_gdist:
+                            best_gdist = dist
+                            best_gi = gi
 
-            seen_numbers.add(cap["number"])
-            ordinal += 1
-            cells = []
-            for r_idx, row in enumerate(matrix):
-                is_hdr = r_idx in header_rows
-                for c_idx, txt in enumerate(row):
-                    cells.append({
-                        "row": r_idx,
-                        "column": c_idx,
-                        "header": is_hdr,
-                        "rowspan": 1,
-                        "colspan": 1,
-                        "text": txt,
-                        "sourceDomSha256": _sha256_text(f"{pdf_sha}:table:{ordinal}:p{page.number + 1}:r{r_idx}:c{c_idx}:{txt}"),
-                    })
-            table_sig = _sha256_text(json.dumps({
-                "contract": PDF_TABLE_EXTRACT_CONTRACT,
-                "pdfSha256": pdf_sha,
-                "page": page.number + 1,
-                "bbox": [round(float(v), 2) for v in tab_bbox],
-                "label": cap["label"],
-                "caption": cap["caption"],
-                "matrix": matrix,
-            }, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
-            tables.append({
-                "ordinal": ordinal,
-                "label": cap["label"],
-                "caption": cap["caption"],
-                "sourceDomSha256": table_sig,
-                "headerRows": header_rows,
-                "bodyRows": body_rows,
-                "cells": cells,
-                "matrix": matrix,
-                "recoveryStatus": "complete",
-            })
+                    if best_gi >= 0:
+                        raw_rows = found_grid_tabs[best_gi].extract()
+                        if raw_rows and len(raw_rows) >= 2:
+                            width = max(len(r) for r in raw_rows)
+                            if 2 <= width <= 32 and len(raw_rows) <= 128:
+                                cand = [
+                                    [_clean_cell_text(r[c] if c < len(r) else "") for c in range(width)]
+                                    for r in raw_rows
+                                ]
+                                cand = [r for r in cand if any(r)]
+                                if len(cand) >= 2:
+                                    non_empty = sum(1 for r in cand for c in r if c)
+                                    avg_len = sum(len(c) for r in cand for c in r if c) / max(1, non_empty)
+                                    cand_hdr = [0]
+                                    if len(cand) >= 3:
+                                        r1_num = sum(1 for c in cand[1][1:] if re.search(r"\d", c))
+                                        r2_num = sum(1 for c in cand[2][1:] if re.search(r"\d", c))
+                                        if r1_num == 0 and r2_num >= max(1, (width - 1) // 2) and sum(1 for c in cand[1] if c) >= 2:
+                                            cand_hdr = [0, 1]
+                                    if (
+                                        non_empty / max(1, len(cand) * width) >= 0.45
+                                        and avg_len <= 85.0
+                                        and not _is_garbled_table_matrix(cand, cand_hdr, allow_headerless=is_cont_stitch)
+                                    ):
+                                        matrix = cand
+                                        header_rows = cand_hdr
+                                        tab_bbox = [round(float(v), 2) for v in found_grid_tabs[best_gi].bbox]
+                                        used_grid_idxs.add(best_gi)
+
+                if matrix is None or tab_bbox is None:
+                    continue
+
+                body_rows = [r_idx for r_idx in range(len(matrix)) if r_idx not in header_rows]
+                if not body_rows:
+                    continue
+
+                if can_stitch and existing_meta is not None:
+                    prev_table = tables[existing_meta["table_idx"]]
+                    prev_matrix = prev_table["matrix"]
+                    same_width = len(matrix[0]) == len(prev_matrix[0])
+                    if same_width:
+                        prev_hdr_norm = [c.strip().lower() for c in prev_matrix[0]]
+                        cur_hdr_norm = [c.strip().lower() for c in matrix[0]]
+                        non_empty_cols = [i for i in range(len(prev_hdr_norm)) if prev_hdr_norm[i] or cur_hdr_norm[i]]
+                        matched_cols = sum(1 for i in non_empty_cols if prev_hdr_norm[i] == cur_hdr_norm[i])
+                        same_header = bool(non_empty_cols) and (matched_cols / len(non_empty_cols) >= 0.75)
+
+                        cont_body: list[list[str]] | None = None
+                        if same_header:
+                            cont_body = [matrix[r_idx] for r_idx in body_rows]
+                        elif cap.get("is_continuation"):
+                            # Continuation page may omit the repeated header so matrix[0] is the first data row.
+                            prev_body = [prev_matrix[r_i] for r_i in prev_table["bodyRows"]]
+                            prev_num_cols = {
+                                c_i for c_i in range(len(prev_hdr_norm))
+                                if sum(1 for row in prev_body if re.search(r"\d", row[c_i])) >= max(1, len(prev_body) // 2)
+                            }
+                            row0_num_hits = sum(1 for c_i in prev_num_cols if re.search(r"\d", matrix[0][c_i]))
+                            if prev_num_cols and row0_num_hits >= max(1, len(prev_num_cols) // 2):
+                                cont_body = list(matrix)
+
+                        if cont_body:
+                            if len(prev_matrix) + len(cont_body) <= 128:
+                                merged_matrix = prev_matrix + cont_body
+                                existing_meta["last_page"] = page_num
+                                existing_meta["pages"].append(page_num)
+                                existing_meta["bboxes"].append(tab_bbox)
+                                merged_hdr = prev_table["headerRows"]
+                                merged_body_rows = [r_i for r_i in range(len(merged_matrix)) if r_i not in merged_hdr]
+                                merged_cells, merged_sig = _build_pdf_table_cells_and_sig(
+                                    pdf_sha=pdf_sha,
+                                    ordinal=prev_table["ordinal"],
+                                    pages=existing_meta["pages"],
+                                    bboxes=existing_meta["bboxes"],
+                                    label=prev_table["label"],
+                                    caption=prev_table["caption"],
+                                    matrix=merged_matrix,
+                                    header_rows=merged_hdr,
+                                )
+                                prev_table["matrix"] = merged_matrix
+                                prev_table["bodyRows"] = merged_body_rows
+                                prev_table["cells"] = merged_cells
+                                prev_table["sourceDomSha256"] = merged_sig
+                            else:
+                                # Honest truncation signal: never claim complete if a continuation overflowed 128 rows.
+                                prev_table["recoveryStatus"] = "unrecovered"
+                    continue
+
+                ordinal += 1
+                cells, table_sig = _build_pdf_table_cells_and_sig(
+                    pdf_sha=pdf_sha,
+                    ordinal=ordinal,
+                    pages=[page_num],
+                    bboxes=[tab_bbox],
+                    label=cap["label"],
+                    caption=cap["caption"],
+                    matrix=matrix,
+                    header_rows=header_rows,
+                )
+                tables.append({
+                    "ordinal": ordinal,
+                    "label": cap["label"],
+                    "caption": cap["caption"],
+                    "sourceDomSha256": table_sig,
+                    "headerRows": header_rows,
+                    "bodyRows": body_rows,
+                    "cells": cells,
+                    "matrix": matrix,
+                    "recoveryStatus": "complete",
+                })
+                tables_by_number[num_key] = {
+                    "table_idx": len(tables) - 1,
+                    "last_page": page_num,
+                    "pages": [page_num],
+                    "bboxes": [tab_bbox],
+                }
+        finally:
+            if temp_doc is not None:
+                temp_doc.close()
     return tables
 
 
@@ -1117,61 +1407,78 @@ def extract_pdf_figures_and_tables(pdf_bytes: bytes, arxiv_id: str = "") -> dict
         for page in doc:
             if len(figures) >= MAX_FIGURES:
                 break
-            if page.rotation != 0:
-                continue
-            fig_caps = _collect_page_captions(page, "figure")
-            if not fig_caps:
-                continue
-            tab_caps = _collect_page_captions(page, "table")
-            all_caps = fig_caps + tab_caps
-            text_blocks = [
-                (float(b[0]), float(b[1]), float(b[2]), float(b[3]), str(b[4] or ""))
-                for b in page.get_text("blocks", flags=fitz.TEXTFLAGS_TEXT)
-                if b[6] == 0
-            ]
-            visual_rects = _collect_visual_rects(page)
-            if not visual_rects:
-                continue
+            temp_doc: fitz.Document | None = None
+            work_page = page
+            offset_x = 0.0
+            offset_y = 0.0
+            try:
+                if page.rotation != 0:
+                    temp_doc, work_page = _open_upright_page_view(doc, page)
+                    offset_x = float(page.rect.x0)
+                    offset_y = float(page.rect.y0)
+                fig_caps = _collect_page_captions(work_page, "figure")
+                if not fig_caps:
+                    continue
+                tab_caps = _collect_page_captions(work_page, "table")
+                all_caps = fig_caps + tab_caps
+                text_blocks = [
+                    (float(b[0]), float(b[1]), float(b[2]), float(b[3]), str(b[4] or ""))
+                    for b in work_page.get_text("blocks", flags=fitz.TEXTFLAGS_TEXT)
+                    if b[6] == 0
+                ]
+                visual_rects = _collect_visual_rects(work_page)
+                if not visual_rects:
+                    continue
 
-            for cap in fig_caps:
-                if cap["number"] in seen_fig_nums:
-                    continue
-                crop_bbox = _extract_figure_crop_bbox(page, cap, all_caps, text_blocks, visual_rects)
-                if crop_bbox is None:
-                    continue
-                seen_fig_nums.add(cap["number"])
-                ordinal += 1
-                page_num = page.number + 1
-                norm_bbox = _canonical_bbox(crop_bbox)
-                crop_sha = _canonical_crop_sha256(pdf_sha, page_num, norm_bbox, DEFAULT_DPI)
-                url_id = clean_id or pdf_sha[:12]
-                canonical_url = f"https://arxiv.org/pdf/{url_id}.pdf#pd-pdf-figure-{ordinal}-{crop_sha[:16]}"
-                fig_dom_sha = _sha256_text(json.dumps({
-                    "kind": "pdf_crop",
-                    "cropSha256": crop_sha,
-                    "label": cap["label"],
-                    "caption": cap["caption"],
-                }, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
-                figures.append({
-                    "ordinal": ordinal,
-                    "label": cap["label"],
-                    "caption": cap["caption"],
-                    "images": [{
+                for cap in fig_caps:
+                    if cap["number"] in seen_fig_nums:
+                        continue
+                    crop_bbox = _extract_figure_crop_bbox(work_page, cap, all_caps, text_blocks, visual_rects)
+                    if crop_bbox is None:
+                        continue
+                    if offset_x != 0.0 or offset_y != 0.0:
+                        crop_bbox = [
+                            round(crop_bbox[0] + offset_x, 2),
+                            round(crop_bbox[1] + offset_y, 2),
+                            round(crop_bbox[2] + offset_x, 2),
+                            round(crop_bbox[3] + offset_y, 2),
+                        ]
+                    seen_fig_nums.add(cap["number"])
+                    ordinal += 1
+                    page_num = page.number + 1
+                    norm_bbox = _canonical_bbox(crop_bbox)
+                    crop_sha = _canonical_crop_sha256(pdf_sha, page_num, norm_bbox, DEFAULT_DPI)
+                    url_id = clean_id or pdf_sha[:12]
+                    canonical_url = f"https://arxiv.org/pdf/{url_id}.pdf#pd-pdf-figure-{ordinal}-{crop_sha[:16]}"
+                    fig_dom_sha = _sha256_text(json.dumps({
                         "kind": "pdf_crop",
-                        "url": canonical_url,
-                        "alt": cap["caption"][:256],
-                        "mediaType": "image/png",
-                        "rasterDownloadEligible": False,
-                        "cropContract": PDF_FIGURE_CROP_CONTRACT,
-                        "pdfSha256": pdf_sha,
-                        "page": page_num,
-                        "bbox": norm_bbox,
-                        "dpi": DEFAULT_DPI,
                         "cropSha256": crop_sha,
-                    }],
-                    "sourceDomSha256": fig_dom_sha,
-                    "recoveryStatus": "complete",
-                })
+                        "label": cap["label"],
+                        "caption": cap["caption"],
+                    }, sort_keys=True, ensure_ascii=False, separators=(",", ":")))
+                    figures.append({
+                        "ordinal": ordinal,
+                        "label": cap["label"],
+                        "caption": cap["caption"],
+                        "images": [{
+                            "kind": "pdf_crop",
+                            "url": canonical_url,
+                            "alt": cap["caption"][:256],
+                            "mediaType": "image/png",
+                            "rasterDownloadEligible": False,
+                            "cropContract": PDF_FIGURE_CROP_CONTRACT,
+                            "pdfSha256": pdf_sha,
+                            "page": page_num,
+                            "bbox": norm_bbox,
+                            "dpi": DEFAULT_DPI,
+                            "cropSha256": crop_sha,
+                        }],
+                        "sourceDomSha256": fig_dom_sha,
+                        "recoveryStatus": "complete",
+                    })
+            finally:
+                if temp_doc is not None:
+                    temp_doc.close()
 
         tables = _extract_pdf_tables(doc, pdf_sha)
         return {

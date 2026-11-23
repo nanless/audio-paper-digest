@@ -15480,7 +15480,7 @@ const ARXIV_STRUCTURED_ARTIFACT_VERSION = 1;
 // v5 根除 LaTeXML `<annotation>` 双写与不可见 MathML 符号（`\u2061-\u2064`），支持多 `<math>` 对齐公式拼接、
 // 含布局 `<table>` 的多面板真插图、外层 `<figure>` 归属图注，以及无 `<thead>/<th>` 表格的确定性表头推断。
 // v4 冷重放（`replayPersistedArxivHtmlDomV4PayloadSha`）保持 100% 不变。
-const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v5';
+const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v6';
 const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
     tables: 256,
     rowsPerTable: 512,
@@ -15750,6 +15750,356 @@ function extractArxivDomText($, element) {
     return clone.text().replace(/[\u2061-\u2064]/g, '');
 }
 
+const TABLE_FOOTNOTE_SUP_RE = /^\d{1,2}$/;
+const TABLE_EXPONENT_PROTECTED_RE = /(?:^|[\s(/·×-])(?:m|cm|mm|km|um|s|ms|ns|us|Hz|kHz|MHz|GHz|g|kg|L|W|V|A|K|N|Pa|J|mol|cd|rad|sr|px|pt|dB|bit|byte|B|R|L1|L2|cos|sin|tan|cot|sec|csc|log|ln|exp|min|max|deg|hr)$/;
+const TABLE_ORDINAL_SUP_RE = /^(?:st|nd|rd|th)$/i;
+
+/**
+ * 表格单元格专用 DOM 文本提取（arxiv-html-dom-v6）：
+ * 1) 剥离单元格内嵌的 `.ltx_note` / `.ltx_note_mark` 脚注容器（防止脚注编号/正文粘连到模型或基准名称，如 Benchmark1 / ODU-Bench6）；
+ * 2) 仅在 `<math>` 外安全剥离末尾孤立的 1–2 位数字 HTML `<sup>` 脚注角标（保留 `*`/`†`/`‡` 显著性标记、`10^6`、`m^2`、`Audio^2Net`、`cos^2(x)`、`O(d_model^2)`、`1st` 及全部 MathML `<msup>`）；
+ * 3) 清理 LaTeXML 对纯数字表格值 `\underline{19.7}` 产生的尾随上划线/下划线修饰符（如 `19.7¯` -> `19.7`），保留代数符号 `\overline{x}` 与下标变量 `x1̄`。
+ */
+function extractArxivTableCellText($, cellElement) {
+    const cell = $(cellElement);
+    if (cell.length === 0) return '';
+    const clone = cell.clone();
+    sanitizeArxivDomCloneForText($, clone);
+    clone.find('.ltx_note, .ltx_note_mark').remove();
+    clone.find('sup').toArray().forEach(supEl => {
+        const sup = $(supEl);
+        if (sup.closest('math, m\\:math').length > 0) return;
+        const supText = sup.text().replace(/\s+/g, '').trim();
+        if (!supText || TABLE_ORDINAL_SUP_RE.test(supText)) return;
+        if (!TABLE_FOOTNOTE_SUP_RE.test(supText)) return;
+        // Must be trailing within its token (never mid-word/math like Audio^2Net or cos^2(x)).
+        let nextText = '';
+        let ncur = supEl.next;
+        while (!nextText && ncur) {
+            nextText = $(ncur).text().trim();
+            ncur = ncur.next;
+        }
+        const parentEl = supEl.parent;
+        if (!nextText && parentEl && parentEl !== clone[0]) {
+            let pnext = parentEl.next;
+            while (!nextText && pnext) {
+                nextText = $(pnext).text().trim();
+                pnext = pnext.next;
+            }
+        }
+        if (nextText && /^[A-Za-z0-9\u3400-\u9fff(\[]/.test(nextText)) return;
+        // Never detach superscripts immediately following a <sub> element (e.g. O(d_{model}^2)).
+        let prevNode = supEl.prev;
+        while (prevNode && prevNode.type === 'text' && !String(prevNode.data || '').trim()) {
+            prevNode = prevNode.prev;
+        }
+        if (prevNode && prevNode.type === 'tag' && String(prevNode.name || '').toLowerCase() === 'sub') return;
+        // Look at preceding visible text inside the same cell to avoid stripping exponents like 10^6, m^2, cos^2.
+        let prevText = '';
+        let cur = supEl.prev;
+        while (!prevText && cur) {
+            prevText = $(cur).text().trim();
+            cur = cur.prev;
+        }
+        if (!prevText && parentEl && parentEl !== clone[0]) {
+            let pcur = parentEl.prev;
+            while (!prevText && pcur) {
+                prevText = $(pcur).text().trim();
+                pcur = pcur.prev;
+            }
+        }
+        if (!prevText) return;
+        // Digits immediately before a numeric superscript are numeric powers (e.g. 10^6, 2^8).
+        if (/\d$/.test(prevText)) return;
+        // Short SI units, math functions, or single-letter variables before numeric exponents (e.g. m^2, R^2, cos^2).
+        if (TABLE_EXPONENT_PROTECTED_RE.test(prevText) || /(?:^|[\s(+\-\u2212×·/])[A-Za-z]$/.test(prevText)) return;
+        // Only detach when anchored to a >=3-character word/name/label (e.g. Benchmark^1, ODU-Bench^6).
+        if (/[A-Za-z\u3400-\u9fff]{3,}[)\]]?$/.test(prevText)) {
+            sup.remove();
+        }
+    });
+    return clone.text()
+        .replace(/[\u2061-\u2064]/g, '')
+        .replace(/(?<=(?:^|[\s(+\-\u2212])[+\-\u2212]?\d[\d.,]*%?)[\u00af\u203e\u0304\u0305\u0332\u0333]+(?=$|\s|[,;)|\]])/g, '');
+}
+
+const TABLE_UNIT_TOKEN_SRC = '(?:%|dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|RTF|Params?|MACs?|FLOPs?|GB|MB|KB|GiB|MiB|hrs?|min)';
+const TABLE_PAREN_UNIT_SRC = '(?:%|dB|ms|s|Hz|kHz|MHz|kbps|bps|fps|RTF|Params?|MACs?|FLOPs?|GB|MB|KB|GiB|MiB|hrs?|h|min|M|B|G|↑|↓)';
+const PURE_UNIT_OR_ARROW_HEADER_CELL_RE = new RegExp(
+    `^(?:[↑↓]+|\\(${TABLE_PAREN_UNIT_SRC}\\)(?:\\s*[↑↓]+)?|[↑↓]\\s*\\(${TABLE_PAREN_UNIT_SRC}\\)|${TABLE_UNIT_TOKEN_SRC})$`
+);
+const EXPLICIT_UNIT_OR_ARROW_SIGNAL_RE = /(?:[↑↓]|%|\b(?:dB|ms|Hz|kHz|MHz|kbps|bps|fps|RTF|Params?|MACs?|FLOPs?|GB|MB|KB|GiB|MiB)\b)/;
+
+function isUnitOrArrowHeaderRow(rowValues, width) {
+    const nonEmpty = rowValues.map(v => String(v || '').trim()).filter(Boolean);
+    if (nonEmpty.length < Math.max(2, Math.ceil(width * 0.4))) return false;
+    return nonEmpty.every(val => !/\d/.test(val) && PURE_UNIT_OR_ARROW_HEADER_CELL_RE.test(val))
+        && nonEmpty.some(val => EXPLICIT_UNIT_OR_ARROW_SIGNAL_RE.test(val));
+}
+
+const TABLE_PURE_FLOAT_RE = /^[+\-\u2212]?(?:\d+\.\d+|\.\d+)%?$/;
+const TABLE_PURE_INT_OR_PCT_RE = /^[+\-\u2212]?\d+%?$/;
+const TABLE_NUM_UNIT_OR_UNCERTAINTY_RE = /^[+\-\u2212]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:±|\+\/-|%|\(|×|(?:k|M|G)?Hz|kbps|bps|ms|s|h|hrs?|min|dB|M|B|G|K|GB|MB|KB|GiB|MiB|fps)(?=$|\s|[,;)|\]])/i;
+const TABLE_HIGHLIGHTED_METHOD_LABEL_RE = /^(?:ours|proposed|this\s+work|baseline|reference|ground\s*truth|oracle)\b/i;
+const TABLE_HEADER_COL0_KEYWORD_RE = /^(?:model|method|system|dataset|corpus|task|metric|split|condition|setting|architecture|encoder|decoder|backbone|variant|config(?:uration)?|speaker|language|benchmark|input|feature|layer|stage|framework|approach|name|type|category|group|item|parameter|hyperparameter)s?$/i;
+
+function isAnchoredHeaderSubrow(rowIndex, cells, theadRows, upperHeaderRows) {
+    if (rowIndex <= 0) return false;
+    const col0Cell = cells.find(c => c.row === rowIndex && c.column === 0);
+    const col0Text = String(col0Cell?.text || '').trim();
+    if (col0Cell && TABLE_HIGHLIGHTED_METHOD_LABEL_RE.test(col0Text)) return false;
+    if (theadRows && theadRows.has(rowIndex)) return true;
+    const coveredByUpperRowspan = cells.some(c => (
+        c.row < rowIndex
+        && rowIndex < c.row + Number(c.rowspan || 1)
+        && (!upperHeaderRows || upperHeaderRows.has(c.row))
+    ));
+    if (coveredByUpperRowspan && !col0Cell) return true;
+    const prevRowHasColspan = cells.some(c => c.row === rowIndex - 1 && Number(c.colspan || 1) > 1);
+    const col0BlankOrKeyword = !col0Cell || !col0Text || TABLE_HEADER_COL0_KEYWORD_RE.test(col0Text);
+    return prevRowHasColspan && col0BlankOrKeyword;
+}
+
+function isTableRowNumericData(rowVals, prevRowVals = null) {
+    if (!Array.isArray(rowVals) || rowVals.length === 0) return false;
+    const isHyphenCont = ci => Boolean(
+        prevRowVals
+        && /[A-Za-z0-9]-$/.test(String(prevRowVals[ci] || '').trim())
+        && /^[A-Za-z0-9]/.test(String(rowVals[ci] || '').trim())
+    );
+    const col0 = String(rowVals[0] || '').trim();
+    if (TABLE_HIGHLIGHTED_METHOD_LABEL_RE.test(col0)
+        && rowVals.slice(1).some((v, idx) => !isHyphenCont(idx + 1) && /\d/.test(String(v || '')))) {
+        return true;
+    }
+    let intCols = 0;
+    for (let ci = 0; ci < rowVals.length; ci += 1) {
+        if (isHyphenCont(ci)) continue;
+        const txt = String(rowVals[ci] || '').trim();
+        if (!txt) continue;
+        if (TABLE_PURE_FLOAT_RE.test(txt) || TABLE_NUM_UNIT_OR_UNCERTAINTY_RE.test(txt)) return true;
+        if (ci > 0 && TABLE_PURE_INT_OR_PCT_RE.test(txt)) intCols += 1;
+    }
+    return intCols >= 2;
+}
+
+function joinHierarchicalHeaderLayers(layers) {
+    const cleaned = [];
+    for (const raw of layers) {
+        const val = String(raw || '').replace(/\s+/g, ' ').trim();
+        if (!val) continue;
+        if (cleaned.length > 0) {
+            const prev = cleaned[cleaned.length - 1];
+            if (prev.toLowerCase() === val.toLowerCase()) continue;
+            // Avoid duplicating a parent label when the child already includes it verbatim as prefix.
+            if (val.length > prev.length && val.toLowerCase().startsWith(prev.toLowerCase())
+                && /^[\s(/:-]/.test(val.slice(prev.length))) {
+                cleaned[cleaned.length - 1] = val;
+                continue;
+            }
+        }
+        cleaned.push(val);
+    }
+    if (cleaned.length === 0) return '';
+    let result = cleaned[0];
+    for (let i = 1; i < cleaned.length; i += 1) {
+        const next = cleaned[i];
+        // Rejoin hyphen-wrapped model/dataset names without inserting a stray space (e.g. "Gemini-3.0-" + "Flash").
+        if (/[A-Za-z0-9]-$/.test(result) && /^[A-Za-z0-9]/.test(next)) {
+            result = `${result}${next}`;
+        } else {
+            result = `${result} ${next}`;
+        }
+    }
+    return result;
+}
+
+/**
+ * 将连续多行层次表头（2–4 行，如 Quality Metrics / test-clean / ViSQOL / ↑ 或换行拆开的模型名）
+ * 确定性折叠为单行复合叶列头，使 completeTable 与 selection 均输出规范 Markdown 表且不再把子表头坠入数据行。
+ */
+function compactMultiRowArxivTableHeaders(normalizedMatrix, cells, headerRows, bodyRows, width, state, ordinal, theadRows = null) {
+    const sortedHeaders = [...headerRows].sort((a, b) => a - b);
+    const H = sortedHeaders.length;
+    if (H < 2 || H > 4 || sortedHeaders[0] !== 0) return null;
+    for (let i = 0; i < H; i += 1) {
+        if (sortedHeaders[i] !== i) return null;
+    }
+    if (normalizedMatrix.length <= H || bodyRows.size < 1) return null;
+
+    const findCovering = (r, c) => cells.filter(cell => (
+        r >= cell.row && r < cell.row + Number(cell.rowspan || 1)
+        && c >= cell.column && c < cell.column + Number(cell.colspan || 1)
+    ));
+
+    // Only compact when headers exhibit genuine multi-row hierarchy: span > 1, blank/repeated super-header,
+    // hyphen-wrapped model names, or unit/arrow sub-header row.
+    const headerCells = cells.filter(cell => cell.row < H);
+    const hasHierarchySpan = headerCells.some(cell => Number(cell.colspan || 1) > 1 || Number(cell.rowspan || 1) > 1);
+    const hasBlankOrUnitSubheader = sortedHeaders.slice(1).some(r => (
+        isUnitOrArrowHeaderRow(normalizedMatrix[r], width)
+        || normalizedMatrix[r].some(v => !String(v || '').trim())
+    ));
+    const hasHyphenWrap = normalizedMatrix[0].some((v, c) => (
+        /[A-Za-z0-9]-$/.test(String(v || '').trim()) && /^[A-Za-z0-9]/.test(String(normalizedMatrix[1]?.[c] || '').trim())
+    ));
+    const hasBlankOrRepeatRow0 = normalizedMatrix[0].some((v, c) => (
+        !String(v || '').trim() || (c > 0 && v && v === normalizedMatrix[0][c - 1])
+    ));
+    if (!hasHierarchySpan && !hasBlankOrUnitSubheader && !hasHyphenWrap && !hasBlankOrRepeatRow0) return null;
+
+    // Ensure no header cell's rowspan bleeds into body rows (>= H), and no unanchored row r >= 1 is a numeric/highlighted data row.
+    if (headerCells.some(cell => cell.row + Number(cell.rowspan || 1) > H)) return null;
+    const headerSet = new Set(sortedHeaders);
+    for (let r = 1; r < H; r += 1) {
+        if (!isAnchoredHeaderSubrow(r, cells, theadRows, headerSet)
+            && isTableRowNumericData(normalizedMatrix[r], normalizedMatrix[r - 1])) {
+            return null;
+        }
+    }
+
+    const scratchState = { issues: [], truncated: false };
+    const compactedHeaderRow = [];
+    const compactedHeaderCells = [];
+    for (let c = 0; c < width; c += 1) {
+        const layers = [];
+        const domShas = [];
+        const seenShas = new Set();
+        for (let r = 0; r < H; r += 1) {
+            const val = normalizedMatrix[r][c];
+            layers.push(val);
+            const cov = findCovering(r, c);
+            if (cov.length !== 1) return null;
+            if (cov[0].sourceDomSha256 && !seenShas.has(cov[0].sourceDomSha256)) {
+                seenShas.add(cov[0].sourceDomSha256);
+                domShas.push(cov[0].sourceDomSha256);
+            }
+        }
+        const mergedText = compactDomText(
+            joinHierarchicalHeaderLayers(layers),
+            STRUCTURED_ARTIFACT_LIMITS.cellChars,
+            scratchState,
+            `table[${ordinal}].header[${c}]`
+        );
+        compactedHeaderRow.push(mergedText);
+        const mergedDomSha = domShas.length === 1
+            ? domShas[0]
+            : crypto.createHash('sha256').update(domShas.join(':')).digest('hex');
+        compactedHeaderCells.push({
+            row: 0,
+            column: c,
+            header: true,
+            rowspan: 1,
+            colspan: 1,
+            text: mergedText,
+            sourceDomSha256: mergedDomSha
+        });
+    }
+    if (compactedHeaderRow.filter(v => String(v || '').trim().length > 0).length < 2) return null;
+
+    const shift = H - 1;
+    const shiftedBodyCells = cells
+        .filter(cell => cell.row >= H)
+        .map(cell => ({ ...cell, row: cell.row - shift }));
+    const compactedMatrix = [compactedHeaderRow, ...normalizedMatrix.slice(H)];
+    const compactedCells = [...compactedHeaderCells, ...shiftedBodyCells];
+
+    // Fail-safe: verify 1-to-1 unique coverage and text identity across the entire compacted grid.
+    for (let r = 0; r < compactedMatrix.length; r += 1) {
+        for (let c = 0; c < width; c += 1) {
+            const cov = compactedCells.filter(cell => (
+                r >= cell.row && r < cell.row + Number(cell.rowspan || 1)
+                && c >= cell.column && c < cell.column + Number(cell.colspan || 1)
+            ));
+            if (cov.length !== 1 || cov[0].text !== compactedMatrix[r][c]) return null;
+        }
+    }
+    if (scratchState.truncated) state.truncated = true;
+    if (scratchState.issues.length > 0) state.issues.push(...scratchState.issues);
+    return {
+        matrix: compactedMatrix,
+        cells: compactedCells,
+        headerRows: [0],
+        bodyRows: Array.from({ length: compactedMatrix.length - 1 }, (_, i) => i + 1)
+    };
+}
+
+const DISPLAY_MATH_ENV_RE = /\\begin\{(?:equation|align|gather|multline|eqnarray|subequations|flalign|alignat)\*?\}/;
+
+/**
+ * 线性扫描顶层（环境深度与花括号深度均为 0）的 `\\` 换行符：仅当多行公式未包裹在对齐/矩阵/分段/显示环境中、
+ * 不含 `\tag`、且 `\left...\right` 未跨越 `\\` 时，自动包裹 `\begin{aligned} ... \end{aligned}`。
+ */
+function wrapMultilineLatexAligned(latex) {
+    const src = String(latex || '').trim();
+    if (!src || !src.includes('\\\\')) return src;
+    if (DISPLAY_MATH_ENV_RE.test(src) || /\\tag(?![A-Za-z])/.test(src)) return src;
+    let envDepth = 0;
+    let braceDepth = 0;
+    let leftRightDepth = 0;
+    let hasTopLevelBreak = false;
+    let i = 0;
+    while (i < src.length) {
+        const ch = src[i];
+        if (ch === '{') {
+            braceDepth += 1;
+            i += 1;
+            continue;
+        }
+        if (ch === '}') {
+            braceDepth = Math.max(0, braceDepth - 1);
+            i += 1;
+            continue;
+        }
+        if (ch !== '\\') {
+            i += 1;
+            continue;
+        }
+        if (src.startsWith('\\begin{', i)) {
+            const close = src.indexOf('}', i + 7);
+            if (close > i + 7) {
+                envDepth += 1;
+                i = close + 1;
+                continue;
+            }
+        } else if (src.startsWith('\\end{', i)) {
+            const close = src.indexOf('}', i + 5);
+            if (close > i + 5) {
+                envDepth = Math.max(0, envDepth - 1);
+                i = close + 1;
+                continue;
+            }
+        } else if (src[i + 1] === '\\') {
+            if (envDepth === 0 && braceDepth === 0) {
+                // Verify non-empty content exists both before and after this line break (stripping optional * / [dim]).
+                const before = src.slice(0, i).trim();
+                const after = src.slice(i + 2).replace(/^\s*\*?\s*(?:\[[^\]]*\])?\s*/, '').trim();
+                if (before && after) {
+                    if (leftRightDepth > 0) return src;
+                    hasTopLevelBreak = true;
+                }
+            }
+            i += 2;
+            continue;
+        } else if (/^\\left(?![A-Za-z])/.test(src.slice(i))) {
+            leftRightDepth += 1;
+            i += 5;
+            continue;
+        } else if (/^\\right(?![A-Za-z])/.test(src.slice(i))) {
+            leftRightDepth = Math.max(0, leftRightDepth - 1);
+            i += 6;
+            continue;
+        } else if (/[A-Za-z]/.test(src[i + 1] || '')) {
+            i += 2;
+            while (i < src.length && /[A-Za-z]/.test(src[i])) i += 1;
+            continue;
+        }
+        i += 2;
+    }
+    if (!hasTopLevelBreak) return src;
+    return `\\begin{aligned} ${src} \\end{aligned}`;
+}
+
 function arxivCaptionText($, element) {
     const caption = $(element).clone();
     caption.filter(ARXIV_PHANTOM_DOM_SELECTOR).empty();
@@ -15850,6 +16200,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
     const cells = [];
     const headerRows = new Set();
     const bodyRows = new Set();
+    const theadRows = new Set();
     const rowElements = table.find('tr, .ltx_tr').filter((_, rowElement) => (
         $(rowElement).parentsUntil(tableElement, 'tr, .ltx_tr').length === 0
     )).toArray();
@@ -15874,7 +16225,9 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         // 数据行里的行标签 <th> 不能把所有数字 <td> 都变成表头。反过来说，LaTeXML 有时
         // 把带 rowspan/colspan 的分组表头第二层输出成 <td>；继承来的跨度作为 DOM 证据
         // 已经够用，可以把那一层留作表头行。
-        const isHeaderRow = row.closest('thead').length > 0
+        const inThead = row.closest('thead').length > 0;
+        if (inThead) theadRows.add(rowIndex);
+        const isHeaderRow = inThead
             || (directCells.length > 0 && directCells.every(explicitHeaderCell))
             || inheritedGroupedHeader;
         (isHeaderRow ? headerRows : bodyRows).add(rowIndex);
@@ -15886,7 +16239,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
             const colspan = positiveSpan(cell.attr('colspan') || cellClass.match(/\bltx_colspan_(\d+)\b/)?.[1]);
             const rawCellHtml = $.html(cell);
             const text = compactDomText(
-                extractArxivDomText($, cell), STRUCTURED_ARTIFACT_LIMITS.cellChars, state,
+                extractArxivTableCellText($, cell), STRUCTURED_ARTIFACT_LIMITS.cellChars, state,
                 `table[${ordinal}].cell[${rowIndex},${columnIndex}]`
             );
             const cellRecord = {
@@ -15936,19 +16289,41 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
                 && Number(rowCells[0].colspan || 1) >= width
                 && Number(rowCells[0].rowspan || 1) === 1;
         });
-        if (dividerHeaderRows.length > 0 && dividerHeaderRows.length === headerRows.size) {
-            for (const hRow of dividerHeaderRows) {
-                headerRows.delete(hRow);
-                bodyRows.add(hRow);
+        if (dividerHeaderRows.length > 0) {
+            // 只要第 0 行不是单格全幅行，任何 rowIndex > 0 的单格全幅 <th>（如分组标题）都应归入 bodyRows。
+            const row0Cells = cells.filter(cell => cell.row === 0);
+            const row0IsDivider = row0Cells.length === 1 && Number(row0Cells[0].colspan || 1) >= width;
+            if (dividerHeaderRows.length === headerRows.size || !row0IsDivider) {
+                for (const hRow of dividerHeaderRows) {
+                    headerRows.delete(hRow);
+                    bodyRows.add(hRow);
+                    for (const cell of cells) {
+                        if (cell.row === hRow) cell.header = false;
+                    }
+                }
+            }
+        }
+    }
+    // 显式表头紧接纯单位/方向箭头续表头行（如 ["", "↑", "(dB) ↓", ...]）时一并纳入表头行。
+    if (headerRows.size > 0 && headerRows.size < 4 && normalizedMatrix.length > headerRows.size + 1) {
+        const sortedExisting = [...headerRows].sort((a, b) => a - b);
+        const lastHdr = sortedExisting[sortedExisting.length - 1];
+        if (sortedExisting[0] === 0 && lastHdr === sortedExisting.length - 1) {
+            const candidateRow = lastHdr + 1;
+            if (candidateRow < normalizedMatrix.length - 1
+                && isUnitOrArrowHeaderRow(normalizedMatrix[candidateRow], width)
+                && normalizedMatrix.slice(candidateRow + 1).some(later => later.some(text => /\d/.test(String(text || ''))))) {
+                headerRows.add(candidateRow);
+                bodyRows.delete(candidateRow);
                 for (const cell of cells) {
-                    if (cell.row === hRow) cell.header = false;
+                    if (cell.row === candidateRow) cell.header = true;
                 }
             }
         }
     }
     // LaTeXML 经常用纯 <td>（或 <span class="ltx_td">）渲染 booktabs 表格而不输出 <thead>/<th>，
     // 导致 headerRows 为空、整张表无法进入 selection。在原 DOM 未声明任何表头行时，
-    // 仅当首个非空行（或双层分组表头）满足严格非纯测量列头条件且后续行含数据值时，确定性推断表头行。
+    // 仅当首个非空行（或双层/多层分组表头）满足严格非纯测量列头条件且后续行含数据值时，确定性推断表头行。
     if (headerRows.size === 0 && normalizedMatrix.length >= 2 && width >= 2) {
         const firstNonEmptyRow = normalizedMatrix.findIndex(row => row.some(cell => String(cell || '').trim().length > 0));
         if (firstNonEmptyRow >= 0 && firstNonEmptyRow < normalizedMatrix.length - 1) {
@@ -15982,36 +16357,48 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
                 && nonEmptyRow0.filter(hasAlpha).length === nonEmptyRow0.length
                 && row1ValidHeader;
             if ((row0Dense || row0SparseSuperHeader) && hasLaterData) {
-                const inferred = row0SparseSuperHeader ? [nextRowIdx] : [firstNonEmptyRow];
+                const inferred = row0SparseSuperHeader ? [firstNonEmptyRow, nextRowIdx] : [firstNonEmptyRow];
                 // Propagate multi-row header spans declared via DOM rowspan/colspan (including LaTeXML
-                // ltx_rowspan_N / ltx_colspan_N on <span class="ltx_tabular"> tables) up to the deepest
-                // spanned header row, stopping before any numeric measurement row.
-                const hasNumericMeasurement = text => /^\s*[+\-\u2212]?(?:\d+\.\d+|\.\d+)(?:\s*(?:\(|±|\+\/-|%|×))/.test(String(text || '').trim());
-                let maxHeaderSpanRow = firstNonEmptyRow;
-                for (const cell of row0Cells) {
-                    const spanEnd = cell.row + Number(cell.rowspan || 1) - 1;
-                    if (spanEnd > maxHeaderSpanRow) maxHeaderSpanRow = spanEnd;
-                }
-                const hasRow0Span = row0Cells.some(cell => Number(cell.colspan || 1) > 1 || Number(cell.rowspan || 1) > 1);
-                if (row0Dense && hasRow0Span) {
-                    for (let r = nextRowIdx; r < normalizedMatrix.length - 1; r++) {
-                        const rowVals = normalizedMatrix[r];
-                        const rowNonEmpty = rowVals.filter(text => String(text || '').trim().length > 0);
-                        const withinSpan = r <= maxHeaderSpanRow;
-                        const rowEligible = rowNonEmpty.length >= Math.max(2, Math.ceil(width * 0.5))
-                            && rowVals.every(text => !pureFloat(text) && !hasNumericMeasurement(text))
-                            && normalizedMatrix.slice(r + 1).some(later => later.some(text => /\d/.test(String(text || ''))))
-                            && (withinSpan || rowNonEmpty.filter(hasAlpha).length >= Math.max(1, Math.ceil(rowNonEmpty.length * 0.5)));
-                        if (!rowEligible) break;
-                        inferred.push(r);
-                        for (const cell of cells.filter(c => c.row === r)) {
-                            const spanEnd = cell.row + Number(cell.rowspan || 1) - 1;
-                            if (spanEnd > maxHeaderSpanRow && spanEnd < normalizedMatrix.length - 1) {
-                                maxHeaderSpanRow = spanEnd;
-                            }
-                        }
-                        if (r >= maxHeaderSpanRow && r >= nextRowIdx) break;
+                // ltx_rowspan_N / ltx_colspan_N on <span class="ltx_tabular"> tables) plus unit/arrow sub-headers
+                // up to 4 header rows, stopping strictly before any numeric/unit data row.
+                let maxHeaderSpanRow = inferred[inferred.length - 1];
+                for (const r of inferred) {
+                    for (const cell of cells.filter(c => c.row === r)) {
+                        const spanEnd = cell.row + Number(cell.rowspan || 1) - 1;
+                        if (spanEnd > maxHeaderSpanRow) maxHeaderSpanRow = spanEnd;
                     }
+                }
+                const startScan = inferred[inferred.length - 1] + 1;
+                for (let r = startScan; r < Math.min(normalizedMatrix.length - 1, firstNonEmptyRow + 4); r++) {
+                    const rowVals = normalizedMatrix[r];
+                    const rowCells = cells.filter(c => c.row === r);
+                    const isDivider = rowCells.length === 1 && Number(rowCells[0].colspan || 1) >= width;
+                    if (isDivider) break;
+                    const rowNonEmpty = rowVals.filter(text => String(text || '').trim().length > 0);
+                    const unitArrowRow = isUnitOrArrowHeaderRow(rowVals, width);
+                    const withinSpan = r <= maxHeaderSpanRow;
+                    const prevHadSpan = cells.some(c => c.row === r - 1 && (Number(c.colspan || 1) > 1 || Number(c.rowspan || 1) > 1));
+                    const prevHyphenWrap = normalizedMatrix[r - 1]?.some((v, ci) => (
+                        /[A-Za-z0-9]-$/.test(String(v || '').trim()) && /^[A-Za-z0-9]/.test(String(rowVals[ci] || '').trim())
+                    ));
+                    const laterHasNumbers = normalizedMatrix.slice(r + 1).some(later => later.some(text => /\d/.test(String(text || ''))));
+                    if (!laterHasNumbers) break;
+                    const anchoredSub = isAnchoredHeaderSubrow(r, cells, theadRows, new Set(inferred));
+                    const rowEligible = unitArrowRow || (
+                        (prevHadSpan || withinSpan || prevHyphenWrap)
+                        && rowNonEmpty.length >= Math.max(2, Math.ceil(width * 0.5))
+                        && (anchoredSub || !isTableRowNumericData(rowVals, normalizedMatrix[r - 1]))
+                        && (anchoredSub || withinSpan || prevHyphenWrap || rowNonEmpty.filter(hasAlpha).length >= Math.max(1, Math.ceil(rowNonEmpty.length * 0.5)))
+                    );
+                    if (!rowEligible) break;
+                    inferred.push(r);
+                    for (const cell of rowCells) {
+                        const spanEnd = cell.row + Number(cell.rowspan || 1) - 1;
+                        if (spanEnd > maxHeaderSpanRow && spanEnd < normalizedMatrix.length - 1) {
+                            maxHeaderSpanRow = spanEnd;
+                        }
+                    }
+                    if (unitArrowRow) break;
                 }
                 for (const hRow of inferred) {
                     headerRows.add(hRow);
@@ -16023,7 +16410,32 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
             }
         }
     }
-    if (cells.length === 0 || normalizedMatrix.length === 0 || width === 0) {
+    // 防止 LaTeXML 用全 <th> 高亮数据行（如加粗的 Ours | 3.1 | 1.2）混入多行表头并被压扁进第 0 行；
+    // 明确位于 <thead> 内或由上层 rowspan/colspan 锚定的参数子表头（如 1.5 kbps / -5 dB / 1|2|4|8）保留在表头。
+    if (headerRows.size >= 2) {
+        const sortedHdr = [...headerRows].sort((a, b) => a - b);
+        for (let idx = sortedHdr.length - 1; idx >= 1; idx -= 1) {
+            const hRow = sortedHdr[idx];
+            if (!isAnchoredHeaderSubrow(hRow, cells, theadRows, headerRows)
+                && isTableRowNumericData(normalizedMatrix[hRow], normalizedMatrix[hRow - 1])) {
+                headerRows.delete(hRow);
+                bodyRows.add(hRow);
+                for (const cell of cells) {
+                    if (cell.row === hRow) cell.header = false;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    const compacted = (cells.length > 0 && normalizedMatrix.length > 0 && width > 0)
+        ? compactMultiRowArxivTableHeaders(normalizedMatrix, cells, headerRows, bodyRows, width, state, ordinal, theadRows)
+        : null;
+    const finalMatrix = compacted ? compacted.matrix : normalizedMatrix;
+    const finalCells = compacted ? compacted.cells : cells;
+    const finalHeaderRows = compacted ? compacted.headerRows : [...headerRows].sort((a, b) => a - b);
+    const finalBodyRows = compacted ? compacted.bodyRows : [...bodyRows].sort((a, b) => a - b);
+    if (finalCells.length === 0 || finalMatrix.length === 0 || width === 0) {
         state.issues.push(`table[${ordinal}]${label ? ` ${label}` : ''} 未恢复出任何单元格`);
     }
     return {
@@ -16031,11 +16443,11 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         label,
         caption,
         sourceDomSha256: crypto.createHash('sha256').update(domHtml).digest('hex'),
-        headerRows: [...headerRows].sort((a, b) => a - b),
-        bodyRows: [...bodyRows].sort((a, b) => a - b),
-        cells,
-        matrix: normalizedMatrix,
-        recoveryStatus: cells.length > 0 && width > 0 ? 'complete' : 'unrecovered'
+        headerRows: finalHeaderRows,
+        bodyRows: finalBodyRows,
+        cells: finalCells,
+        matrix: finalMatrix,
+        recoveryStatus: finalCells.length > 0 && width > 0 ? 'complete' : 'unrecovered'
     };
 }
 
@@ -16121,7 +16533,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
             }
         }
         const latex = compactDomText(
-            rawLatex,
+            wrapMultilineLatexAligned(rawLatex),
             STRUCTURED_ARTIFACT_LIMITS.formulaChars, state, `formula[${index + 1}].latex`
         );
         const mathmlRaw = topLevelMaths.length ? topLevelMaths.map(m => $.html(m)).join('\n') : '';
@@ -16283,7 +16695,7 @@ function buildPdfStructuredArtifactsFromBytes(text, pdfBytes, arxivId, visualAud
     const { payloadSha256: _ignored, ...rest } = base;
     const payload = {
         ...rest,
-        parserVersion: 'pdf-layout-dom-v1',
+        parserVersion: 'pdf-layout-dom-v2',
         sourceKind: 'pdf_text',
         paperId: String(arxivId || '').replace(/^arxiv:/i, '').replace(/v\d+$/i, '').toLowerCase(),
         pdfSha256: extracted.pdfSha256,
@@ -21846,6 +22258,8 @@ module.exports = {
     shouldTriggerScoringConsensus,
     resolveConfiguredStageTemperature,
     buildStagePromptCacheKey,
+    wrapMultilineLatexAligned,
+    joinHierarchicalHeaderLayers,
     stableFingerprint,
     buildRecoveryFingerprints,
     resolvePrimaryRequestPolicy,

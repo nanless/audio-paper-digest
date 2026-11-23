@@ -5,17 +5,17 @@ function fixture(){const html=fs.readFileSync(path.join(__dirname,'fixtures/arxi
 function binding(rows=[0,2],columns=[0,1]){return {tableIndex:1,selection:{sourceTableOrdinal:1,sourceRows:rows,sourceColumns:columns}};}
 test('真实DOM维度的越界、重复、数量不足仍拒绝，反馈指出合法边界且不裁行',()=>{
  const artifacts=fixture(),table=artifacts.tables[0],before=JSON.stringify(artifacts);
- const samples=[[binding([0,2,4]),/sourceRows.*合法范围=0\.\.3.*非法=\[4\]/],[binding([0,2,2]),/重复=\[2\]/],[binding([0,2],[0,3]),/sourceColumns.*合法范围=0\.\.2.*非法=\[3\]/],[binding([0,2],[0]),/sourceColumns 必须是至少2项/]];
+ const samples=[[binding([0,2,4]),/sourceRows.*合法范围=0\.\.2.*非法=\[4\]/],[binding([0,2,2]),/重复=\[2\]/],[binding([0,2],[0,3]),/sourceColumns.*合法范围=0\.\.2.*非法=\[3\]/],[binding([0,2],[0]),/sourceColumns 必须是至少2项/]];
  for(const [b,pattern] of samples){const old=JSON.stringify(b);assert.throws(()=>tables.renderReaderTableSelection(b,artifacts),pattern);assert.equal(JSON.stringify(b),old);}
- assert.equal(JSON.stringify(artifacts),before);assert.ok(tables.renderReaderTableSelection(binding([1,2],[0,1]),artifacts).binding.cellBindings.length>=4);
- const evidence=deep.buildApiReaderArtifactEvidence(artifacts);const rules=JSON.parse(evidence.match(/^TABLE_1_INDEX_RULES: (.+)$/m)[1]);assert.equal(rules.maximumRowIndex,3);assert.equal(rules.maximumColumnIndex,2);assert.equal(rules.minimumSelectedRows,2);assert.equal(rules.distinctIndexesRequired,true);
+ assert.equal(JSON.stringify(artifacts),before);assert.ok(tables.renderReaderTableSelection(binding([0,2],[0,1]),artifacts).binding.cellBindings.length>=4);
+ const evidence=deep.buildApiReaderArtifactEvidence(artifacts);const rules=JSON.parse(evidence.match(/^TABLE_1_INDEX_RULES: (.+)$/m)[1]);assert.equal(rules.maximumRowIndex,2);assert.equal(rules.maximumColumnIndex,2);assert.equal(rules.minimumSelectedRows,2);assert.equal(rules.distinctIndexesRequired,true);
 });
 test('矩阵改值而原始DOM未变时不静默重放，仍拒绝',()=>{
  const artifacts=fixture(),before=JSON.stringify(artifacts),changed=structuredClone(artifacts);
  changed.tables[0].matrix[2][1]='4.9';
- assert.throws(()=>tables.renderReaderTableSelection(binding([1,2],[0,1]),changed),/不能唯一重放到原始 DOM cell/);
+ assert.throws(()=>tables.renderReaderTableSelection(binding([0,2],[0,1]),changed),/不能唯一重放到原始 DOM cell/);
  assert.equal(JSON.stringify(artifacts),before);
- assert.ok(tables.renderReaderTableSelection(binding([1,2],[0,1]),artifacts).binding.cellBindings.length>=4);
+ assert.ok(tables.renderReaderTableSelection(binding([0,2],[0,1]),artifacts).binding.cellBindings.length>=4);
 });
 test('SD裸值借用表头单位仍识别为缺来源，不静默接受',()=>{
  const rendered={header:['方法','duration (s)'],rows:[['A','0.18 (0.33)'],['B','1.91 (2.3)']]};

@@ -31,8 +31,23 @@ function artifactsFixture() {
         '2609.00001v1', '2609.00001v1'), sourceText) };
 }
 const selected = (tableIndex = 1, ordinal = 1) => ({ tableIndex, selection: {
-    sourceTableOrdinal: ordinal, sourceRows: ordinal === 1 ? [1, 2, 3] : [0, 1, 2], sourceColumns: [0, 1, 2]
+    sourceTableOrdinal: ordinal, sourceRows: [0, 1, 2], sourceColumns: [0, 1, 2]
 } });
+function withLegacyTwoRowHeader(artifacts) {
+    const cloned = structuredClone(artifacts);
+    const t0 = cloned.tables[0];
+    t0.matrix = [['System', 'WER', 'WER'], ['System', 'test-clean', 'test-other'], ...t0.matrix.slice(1)];
+    t0.headerRows = [0, 1];
+    t0.bodyRows = [2, 3];
+    t0.cells = [
+        { row: 0, column: 0, header: true, rowspan: 2, colspan: 1, text: 'System', sourceDomSha256: t0.cells[0].sourceDomSha256 },
+        { row: 0, column: 1, header: true, rowspan: 1, colspan: 2, text: 'WER', sourceDomSha256: t0.cells[1].sourceDomSha256 },
+        { row: 1, column: 1, header: true, rowspan: 1, colspan: 1, text: 'test-clean', sourceDomSha256: t0.cells[1].sourceDomSha256 },
+        { row: 1, column: 2, header: true, rowspan: 1, colspan: 1, text: 'test-other', sourceDomSha256: t0.cells[2].sourceDomSha256 },
+        ...t0.cells.filter(c => c.row >= 1).map(c => ({ ...c, row: c.row + 1 }))
+    ];
+    return cloned;
+}
 
 function mixedColumnHeaderExample() {
     const sha = 'b'.repeat(64);
@@ -109,8 +124,8 @@ test('表格来源说明列出原表头、行列数量，并保留未知的表�
     const evidence = require('../scripts/deep-analyzer.js').buildApiReaderArtifactEvidence(artifacts);
     const headerRows = JSON.parse(evidence.match(/^TABLE_1_HEADER_ROWS: (.+)$/m)[1]);
     const shape = JSON.parse(evidence.match(/^TABLE_1_SHAPE: (.+)$/m)[1]);
-    assert.deepEqual(headerRows, [0, 1]);
-    assert.deepEqual(shape, { rows: 4, columns: 3, shownRows: 4, role: 'unknown' });
+    assert.deepEqual(headerRows, [0]);
+    assert.deepEqual(shape, { rows: 3, columns: 3, shownRows: 3, role: 'unknown' });
     assert.ok(headerRows.includes(selected().selection.sourceRows[0]));
     assert.equal(JSON.parse(evidence.match(/^TABLE_1_SELECTION: (.+)$/m)[1]).eligible, true);
     const authors = structuredClone(artifacts);
@@ -366,10 +381,10 @@ test('选择原表行列后保留多级表头、合并单元格的来源对应�
     const before = JSON.stringify({ sections, bindings, artifacts });
     const compiled = compileReaderTableSelections(sections, bindings, artifacts);
     assert.equal(JSON.stringify({ sections, bindings, artifacts }), before, '生成表格时不能改动原表、选取记录和待生成的正文');
-    assert.match(compiled.sections[0].body, /\| System \| test-clean \| test-other \|/);
+    assert.match(compiled.sections[0].body, /\| System \| WER test-clean \| WER test-other \|/);
     assert.match(compiled.sections[0].body, /\| System \| Memory \| RTF \|/);
     assert.equal(compiled.tableBindings[0].cellBindings.length, 9);
-    assert.deepEqual(compiled.tableBindings[0].cellBindings[0], { renderedRow: 0, renderedColumn: 0, sourceRow: 1, sourceColumn: 0 });
+    assert.deepEqual(compiled.tableBindings[0].cellBindings[0], { renderedRow: 0, renderedColumn: 0, sourceRow: 0, sourceColumn: 0 });
     const bound = require('../scripts/deep-analyzer.js').bindApiReaderSourceEvidence(compiled.sections[0].body,
         compiled.tableBindings, [], { structuredArtifacts: artifacts, sourceText, sections: compiled.sections,
             selectionTableIndexes: compiled.selectionTableIndexes });
@@ -382,13 +397,14 @@ test('选择原表行列后保留多级表头、合并单元格的来源对应�
 
 test('按固定规则把唯一的原表头移到或补到第一行，保留所选数据行', () => {
     const { artifacts } = artifactsFixture();
+    const legacyArtifacts = withLegacyTwoRowHeader(artifacts);
     assert.deepEqual(putReaderTableHeaderFirst([2, 1, 3], [0, 1]), [1, 2, 3]);
     assert.deepEqual(putReaderTableHeaderFirst([1, 2], [0]), [0, 1, 2]);
     assert.deepEqual(putReaderTableHeaderFirst([2, 3], [0, 1]), [2, 3],
         '缺少多个可能的表头时，不能自行选择其中一个');
 
     const moved = selected(); moved.selection.sourceRows = [2, 1, 3];
-    const movedResult = renderReaderTableSelection(moved, artifacts);
+    const movedResult = renderReaderTableSelection(moved, legacyArtifacts);
     assert.deepEqual([...new Set(movedResult.binding.cellBindings.map(cell => cell.sourceRow))], [1, 2, 3]);
     const prepended = selected(1, 2); prepended.selection.sourceRows = [1, 2];
     const prependedResult = renderReaderTableSelection(prepended, artifacts);
@@ -397,6 +413,7 @@ test('按固定规则把唯一的原表头移到或补到第一行，保留所�
 
 test('选择拒绝重复或越界坐标、伪造表头、混入引用文本和格式错误的原表矩阵', () => {
     const { artifacts } = artifactsFixture();
+    const legacyArtifacts = withLegacyTwoRowHeader(artifacts);
     for (const mutate of [
         binding => { binding.selection.sourceRows = [1, 2, 2]; },
         binding => { binding.selection.sourceColumns = [0, 3]; },
@@ -407,7 +424,7 @@ test('选择拒绝重复或越界坐标、伪造表头、混入引用文本和�
         binding => { binding.selection.sourceRows = [1, '2']; }
     ]) {
         const binding = selected(); mutate(binding);
-        assert.throws(() => renderReaderTableSelection(binding, artifacts));
+        assert.throws(() => renderReaderTableSelection(binding, legacyArtifacts));
     }
     for (const mutate of [
         table => { table.matrix[1].pop(); },
@@ -458,7 +475,7 @@ test('原表头唯一时可按固定规则补回，无法唯一确认原表头�
             sourceRows: [0, 1, 2], sourceColumns: [0, 1, 2] } }],
         highlightedWinner
     ));
-    const ambiguous = structuredClone(artifacts);
+    const ambiguous = withLegacyTwoRowHeader(artifacts);
     const ambiguousBinding = selected();
     ambiguousBinding.selection.sourceRows = [2, 3];
     assert.throws(() => compileReaderTableSelections(

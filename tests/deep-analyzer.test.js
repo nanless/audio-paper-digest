@@ -239,9 +239,10 @@ describe('arXiv HTML 全文健康检查', () => {
         );
         assert.strictEqual(artifacts.health.status, 'complete');
         assert.strictEqual(artifacts.tables.length, 1);
-        assert.strictEqual(artifacts.tables[0].matrix[2][1], '4.8');
-        assert.ok(artifacts.tables[0].cells.some(cell => cell.rowspan === 2));
-        assert.ok(artifacts.tables[0].cells.some(cell => cell.colspan === 2));
+        assert.deepStrictEqual(artifacts.tables[0].headerRows, [0]);
+        assert.deepStrictEqual(artifacts.tables[0].matrix[0], ['System', 'WER ↓ test-clean', 'WER ↓ test-other']);
+        assert.strictEqual(artifacts.tables[0].matrix[1][1], '4.8');
+        assert.strictEqual(artifacts.tables[0].matrix[2][1], '4.1');
         assert.strictEqual(artifacts.formulas.length, 1);
         assert.match(artifacts.formulas[0].latex, /mathcal\{L\}/);
         assert.match(artifacts.formulas[0].mathml, /<math/);
@@ -275,14 +276,15 @@ describe('arXiv HTML 全文健康检查', () => {
         );
         assert.strictEqual(artifacts.tables.length, 2);
         assert.strictEqual(artifacts.formulas.length, 2);
-        assert.ok(artifacts.tables[0].cells.some(cell => cell.rowspan === 2));
+        assert.deepStrictEqual(artifacts.tables[0].headerRows, [0]);
+        assert.deepStrictEqual(artifacts.tables[0].matrix[0], ['System', 'WER test-clean', 'WER test-other']);
         const article = [
             '### 方法中的两个目标如何配合？',
             '',
             '先看联合目标。', '', '[[FORMULA_1]]', '',
             '再看条件分解。', '', '[[FORMULA_2]]', '',
             '### 结果和成本如何同时比较？', '',
-            '| System | test-clean | test-other |',
+            '| System | WER test-clean | WER test-other |',
             '|---|---:|---:|',
             '| Baseline | 4.8 | 10.2 |',
             '| Proposed | 4.1 | 9.3 |', '',
@@ -295,9 +297,9 @@ describe('arXiv HTML 全文健康检查', () => {
             '| Eval-B | 88.2% | 84.0% |'
         ].join('\n');
         const tableOneCells = [
-            [0, 0, 0, 0], [0, 1, 1, 1], [0, 2, 1, 2],
-            [1, 0, 2, 0], [1, 1, 2, 1], [1, 2, 2, 2],
-            [2, 0, 3, 0], [2, 1, 3, 1], [2, 2, 3, 2]
+            [0, 0, 0, 0], [0, 1, 0, 1], [0, 2, 0, 2],
+            [1, 0, 1, 0], [1, 1, 1, 1], [1, 2, 1, 2],
+            [2, 0, 2, 0], [2, 1, 2, 1], [2, 2, 2, 2]
         ].map(([renderedRow, renderedColumn, sourceRow, sourceColumn]) => ({
             renderedRow, renderedColumn, sourceRow, sourceColumn
         }));
@@ -389,7 +391,7 @@ describe('arXiv HTML 全文健康检查', () => {
             { structuredArtifacts: artifacts, sourceText, sections }
         ), /渲染单元格与原始 cell 不一致/);
         assert.throws(() => bindApiReaderSourceEvidence(
-            article.replace('| System | test-clean | test-other |', '| System | test-other | test-clean |'),
+            article.replace('| System | WER test-clean | WER test-other |', '| System | WER test-other | WER test-clean |'),
             tableBindings, formulaBindings,
             { structuredArtifacts: artifacts, sourceText, sections }
         ), /渲染单元格与原始 cell 不一致/);
@@ -651,7 +653,7 @@ describe('arXiv HTML 全文健康检查', () => {
         const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.12345v1', '2608.12345v1');
         const resource = artifacts.figures[0].images[0];
         assert.strictEqual(artifacts.health.status, 'complete');
-        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v5');
+        assert.strictEqual(artifacts.parserVersion, 'arxiv-html-dom-v6');
         assert.strictEqual(resource.kind, 'inline_svg');
         assert.strictEqual(resource.url, '');
         assert.match(resource.inlineSvg, /^<svg[\s\S]*<\/svg>$/);
@@ -704,13 +706,11 @@ describe('arXiv HTML 全文健康检查', () => {
         const artifacts = parseArxivStructuredArtifactsFromHtml(html, '2608.26431v1', '2608.26431v1');
         assert.strictEqual(artifacts.health.status, 'complete');
         assert.strictEqual(artifacts.health.detected.tables, 1);
+        assert.deepStrictEqual(artifacts.tables[0].headerRows, [0]);
         assert.deepStrictEqual(artifacts.tables[0].matrix, [
-            ['Model', 'WER', 'WER'],
-            ['Model', 'clean', 'other'],
+            ['Model', 'WER clean', 'WER other'],
             ['System A', '2.1', '4.8']
         ]);
-        assert.ok(artifacts.tables[0].cells.some(cell => cell.rowspan === 2));
-        assert.ok(artifacts.tables[0].cells.some(cell => cell.colspan === 2));
         assert.ok(artifacts.tables[0].cells.every(cell => /^[a-f0-9]{64}$/.test(cell.sourceDomSha256)));
     });
 
@@ -728,11 +728,11 @@ describe('arXiv HTML 全文健康检查', () => {
         const table = parseArxivStructuredArtifactsFromHtml(
             html, '2608.00002v1', '2608.00002v1'
         ).tables[0];
-        assert.deepStrictEqual(table.headerRows, [0, 1]);
-        assert.deepStrictEqual(table.bodyRows, [2, 3]);
-        assert.ok(table.cells.find(cell => cell.row === 1 && cell.column === 1).header);
-        assert.equal(table.cells.find(cell => cell.row === 2 && cell.column === 0).header, true);
-        assert.equal(table.cells.find(cell => cell.row === 2 && cell.column === 1).header, false);
+        assert.deepStrictEqual(table.headerRows, [0]);
+        assert.deepStrictEqual(table.bodyRows, [1, 2]);
+        assert.deepStrictEqual(table.matrix[0], ['SLM', 'Smooth 1', 'Smooth 1-2']);
+        assert.equal(table.cells.find(cell => cell.row === 1 && cell.column === 0).header, true);
+        assert.equal(table.cells.find(cell => cell.row === 1 && cell.column === 1).header, false);
 
         const noGroupedSpan = html.replace(' rowspan="2"', '').replace(' colspan="2"', '');
         const conservative = parseArxivStructuredArtifactsFromHtml(

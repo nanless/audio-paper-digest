@@ -17,7 +17,8 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const transportChanges = new Map([
     [pdfPath, ['ff5451ac0c88a4c4784c6731105a99b95d18d952280a41e60eca257ab4f55db2',
         '91fbe48eb3e43ffd902ca0be1b81e1acb9e53252f28a894e98c3d092f87694a8',
-        'a074a66a3561c65017b9dea50fa911d74dd062d122219a4cb915ecdd5d1a4874']],
+        'a074a66a3561c65017b9dea50fa911d74dd062d122219a4cb915ecdd5d1a4874',
+        '7165fe6907186133001a36bcd9c26abc9197e89ef093e9266970e16acee0d73f']],
     [pdfWorkerPath, ['0ed8b2df8869d62e05b97c14ef7fc4a49436898378556428de4292e2cd387da3',
         'b3d42c339796790212d5b64750e93962927ee4c1a417a5c399be8af497c0de23']]
 ]);

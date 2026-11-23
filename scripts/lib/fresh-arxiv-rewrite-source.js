@@ -602,63 +602,135 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
         if (rawText?.source === 'html' && !sourceVersion) {
             text = validateTextResponse(rawText, id, capturedAt, extractorVersion);
             let enrichedArtifacts = rawText?.structuredArtifacts ? clone(rawText.structuredArtifacts) : null;
-            if (enrichedArtifacts && Array.isArray(enrichedArtifacts.figures)
-                && enrichedArtifacts.figures.some(item => item?.recoveryStatus === 'unrecovered')
-                && pdf.bytes.length >= 256) {
+            const hasUnrecoveredFigures = Array.isArray(enrichedArtifacts?.figures)
+                && enrichedArtifacts.figures.some(item => item?.recoveryStatus === 'unrecovered');
+            const hasUnrecoveredTables = Array.isArray(enrichedArtifacts?.tables)
+                && enrichedArtifacts.tables.some(item => item?.recoveryStatus === 'unrecovered' || !Array.isArray(item?.matrix) || item.matrix.length === 0);
+            if (enrichedArtifacts && (hasUnrecoveredFigures || hasUnrecoveredTables) && pdf.bytes.length >= 256) {
                 const pdfExtracted = require('./reader-pdf-figure-crop.js')
                     .extractPdfStructuredArtifactsSync(pdf.bytes, id);
-                const pdfFigByNum = new Map();
-                const numRe = /(?:^|\b)(?:figure|fig\.?|图)\s*([A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})(?!\d|[A-Za-z])/i;
-                const captionStartNumRe = /^\s*(?:figure|fig\.?|图)\s*([A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})(?!\d|[A-Za-z])/i;
-                const bareNumRe = /^\s*([A-Z]?\d+(?:\.\d+)?|[IVX]{1,4})\s*[:.]?\s*$/i;
-                for (const pf of pdfExtracted?.figures || []) {
-                    const m = String(pf?.label || '').match(numRe) || String(pf?.label || '').match(bareNumRe);
-                    if (m) {
-                        const key = m[1].toUpperCase();
-                        if (!pdfFigByNum.has(key)) pdfFigByNum.set(key, pf);
+                const recoveredFigOrdinals = new Set();
+                const recoveredTableOrdinals = new Set();
+                const ROMAN_TO_ARABIC = {
+                    I: '1', II: '2', III: '3', IV: '4', V: '5', VI: '6', VII: '7', VIII: '8', IX: '9', X: '10',
+                    XI: '11', XII: '12', XIII: '13', XIV: '14', XV: '15', XVI: '16', XVII: '17', XVIII: '18', XIX: '19', XX: '20'
+                };
+                const canonicalNumKey = raw => {
+                    const upper = String(raw || '').trim().toUpperCase();
+                    if (!upper) return null;
+                    return ROMAN_TO_ARABIC[upper] || upper;
+                };
+                const numTokenSrc = '(?:[A-Z]\\.?\\d+(?:\\.\\d+)*|\\d+(?:\\.\\d+)*|[IVX]{1,5})';
+                const bareNumRe = new RegExp(`^\\s*(${numTokenSrc})\\s*[:.]?\\s*$`, 'i');
+
+                if (hasUnrecoveredFigures) {
+                    const pdfFigByNum = new Map();
+                    const numRe = new RegExp(`(?:^|\\b)(?:figure|fig\\.?|图)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
+                    const captionStartNumRe = new RegExp(`^\\s*(?:figure|fig\\.?|图)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
+                    for (const pf of pdfExtracted?.figures || []) {
+                        const m = String(pf?.label || '').match(numRe) || String(pf?.label || '').match(bareNumRe);
+                        const key = m ? canonicalNumKey(m[1]) : null;
+                        if (key && !pdfFigByNum.has(key)) pdfFigByNum.set(key, pf);
+                    }
+                    const usedPdfNums = new Set();
+                    for (const existingFig of enrichedArtifacts.figures || []) {
+                        if (existingFig?.recoveryStatus !== 'complete') continue;
+                        const existingLabel = String(existingFig?.label || '');
+                        const existingCaption = String(existingFig?.caption || '');
+                        const em = existingLabel.match(numRe) || existingCaption.match(captionStartNumRe) || existingLabel.match(bareNumRe);
+                        const ek = em ? canonicalNumKey(em[1]) : null;
+                        if (ek) usedPdfNums.add(ek);
+                    }
+                    for (const fig of enrichedArtifacts.figures || []) {
+                        if (fig?.recoveryStatus !== 'unrecovered') continue;
+                        const labelText = String(fig?.label || '');
+                        const captionText = String(fig?.caption || '');
+                        const m = labelText.match(numRe) || captionText.match(captionStartNumRe) || labelText.match(bareNumRe);
+                        const key = m ? canonicalNumKey(m[1]) : null;
+                        if (!key || usedPdfNums.has(key)) continue;
+                        const match = pdfFigByNum.get(key);
+                        if (!match || !Array.isArray(match.images) || match.images.length !== 1) continue;
+                        usedPdfNums.add(key);
+                        fig.images = clone(match.images);
+                        fig.recoveryStatus = 'complete';
+                        recoveredFigOrdinals.add(fig.ordinal);
                     }
                 }
-                const recoveredOrdinals = new Set();
-                const usedPdfNums = new Set();
-                for (const existingFig of enrichedArtifacts.figures) {
-                    if (existingFig?.recoveryStatus !== 'complete') continue;
-                    const existingLabel = String(existingFig?.label || '');
-                    const existingCaption = String(existingFig?.caption || '');
-                    const em = existingLabel.match(numRe) || existingCaption.match(captionStartNumRe) || existingLabel.match(bareNumRe);
-                    if (em) usedPdfNums.add(em[1].toUpperCase());
+
+                if (hasUnrecoveredTables) {
+                    const pdfTabByNum = new Map();
+                    const tabNumRe = new RegExp(`(?:^|\\b)(?:table|tab\\.?|表)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
+                    const tabCaptionStartRe = new RegExp(`^\\s*(?:table|tab\\.?|表)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
+                    const isValidPdfTable = pt => (
+                        pt?.recoveryStatus === 'complete'
+                        && Array.isArray(pt?.matrix) && pt.matrix.length >= 2
+                        && Array.isArray(pt?.cells) && pt.cells.length > 0
+                        && Array.isArray(pt?.headerRows) && pt.headerRows.length > 0
+                        && Array.isArray(pt?.bodyRows) && pt.bodyRows.length > 0
+                        && /^[a-f0-9]{64}$/.test(String(pt?.sourceDomSha256 || ''))
+                    );
+                    for (const pt of pdfExtracted?.tables || []) {
+                        if (!isValidPdfTable(pt)) continue;
+                        const m = String(pt?.label || '').match(tabNumRe) || String(pt?.label || '').match(bareNumRe);
+                        const key = m ? canonicalNumKey(m[1]) : null;
+                        if (key && !pdfTabByNum.has(key)) pdfTabByNum.set(key, pt);
+                    }
+                    const usedPdfTabNums = new Set();
+                    for (const existingTab of enrichedArtifacts.tables || []) {
+                        if (existingTab?.recoveryStatus !== 'complete' || !Array.isArray(existingTab?.matrix) || existingTab.matrix.length === 0) continue;
+                        const existingLabel = String(existingTab?.label || '');
+                        const existingCaption = String(existingTab?.caption || '');
+                        const em = existingLabel.match(tabNumRe) || existingCaption.match(tabCaptionStartRe) || existingLabel.match(bareNumRe);
+                        const ek = em ? canonicalNumKey(em[1]) : null;
+                        if (ek) usedPdfTabNums.add(ek);
+                    }
+                    for (const tab of enrichedArtifacts.tables || []) {
+                        if (tab?.recoveryStatus === 'complete' && Array.isArray(tab?.matrix) && tab.matrix.length > 0) continue;
+                        const labelText = String(tab?.label || '');
+                        const captionText = String(tab?.caption || '');
+                        const m = labelText.match(tabNumRe) || captionText.match(tabCaptionStartRe) || labelText.match(bareNumRe);
+                        const key = m ? canonicalNumKey(m[1]) : null;
+                        if (!key || usedPdfTabNums.has(key)) continue;
+                        const match = pdfTabByNum.get(key);
+                        if (!match) continue;
+                        usedPdfTabNums.add(key);
+                        tab.headerRows = clone(match.headerRows);
+                        tab.bodyRows = clone(match.bodyRows);
+                        tab.cells = clone(match.cells);
+                        tab.matrix = clone(match.matrix);
+                        tab.sourceDomSha256 = match.sourceDomSha256;
+                        tab.recoveryStatus = 'complete';
+                        recoveredTableOrdinals.add(tab.ordinal);
+                    }
                 }
-                for (const fig of enrichedArtifacts.figures) {
-                    if (fig?.recoveryStatus !== 'unrecovered') continue;
-                    const labelText = String(fig?.label || '');
-                    const captionText = String(fig?.caption || '');
-                    const m = labelText.match(numRe) || captionText.match(captionStartNumRe) || labelText.match(bareNumRe);
-                    const key = m ? m[1].toUpperCase() : null;
-                    if (!key || usedPdfNums.has(key)) continue;
-                    const match = pdfFigByNum.get(key);
-                    if (!match || !Array.isArray(match.images) || match.images.length !== 1) continue;
-                    usedPdfNums.add(key);
-                    fig.images = clone(match.images);
-                    fig.recoveryStatus = 'complete';
-                    recoveredOrdinals.add(fig.ordinal);
-                }
-                if (recoveredOrdinals.size > 0) {
+
+                if (recoveredFigOrdinals.size > 0 || recoveredTableOrdinals.size > 0) {
                     const { payloadSha256: _oldSha, ...body } = enrichedArtifacts;
                     const remainingIssues = (body.health?.issues || []).filter(msg => {
-                        const m = String(msg).match(/^figure\[(\d+)\] 没有恢复出可审计图像或 DOM 资源$/);
-                        return !(m && recoveredOrdinals.has(Number(m[1])));
+                        const fm = String(msg).match(/^figure\[(\d+)\] 没有恢复出可审计图像或 DOM 资源$/);
+                        if (fm && recoveredFigOrdinals.has(Number(fm[1]))) return false;
+                        const tm = String(msg).match(/^table\[(\d+)\].*(?:没有可解析 table DOM|未恢复出任何单元格)$/);
+                        if (tm && recoveredTableOrdinals.has(Number(tm[1]))) return false;
+                        return true;
                     });
+                    const bodyFigures = Array.isArray(body.figures) ? body.figures : [];
+                    const bodyTables = Array.isArray(body.tables) ? body.tables : [];
+                    const bodyFormulas = Array.isArray(body.formulas) ? body.formulas : [];
                     body.health = {
                         ...body.health,
                         recovered: {
                             ...body.health?.recovered,
-                            figures: body.figures.filter(item => item?.recoveryStatus === 'complete').length
+                            figures: bodyFigures.filter(item => item?.recoveryStatus === 'complete').length,
+                            tables: bodyTables.filter(item => item?.recoveryStatus === 'complete').length
                         },
                         issues: remainingIssues
                     };
                     body.health.status = (
                         remainingIssues.length === 0
                         && !body.health.truncated
-                        && body.figures.every(item => item?.recoveryStatus === 'complete')
+                        && bodyFigures.every(item => item?.recoveryStatus === 'complete')
+                        && bodyTables.every(item => item?.recoveryStatus === 'complete')
+                        && bodyFormulas.every(item => item?.recoveryStatus === 'complete')
                     ) ? 'complete' : 'incomplete';
                     enrichedArtifacts = require('../deep-analyzer.js').bindStructuredArtifactsToText(body, text.bytes.toString('utf8'));
                 }

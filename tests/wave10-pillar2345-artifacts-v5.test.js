@@ -28,7 +28,7 @@ test('v5 根除 LaTeXML <annotation> 双写与不可见乘号 \\u2062，公式 T
       </figure>
     </article>`;
     const art = deep.parseArxivStructuredArtifactsFromHtml(html, '2611.99001v1', '2611.99001v1');
-    assert.equal(art.parserVersion, 'arxiv-html-dom-v5');
+    assert.equal(art.parserVersion, 'arxiv-html-dom-v6');
     assert.deepEqual(art.tables[0].matrix, [
         ['Model', 'Score', 'Formula'],
         ['Ours', '0.40', 'S1x']
