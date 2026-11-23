@@ -23,7 +23,7 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-1.4.6 两端接入 `client/details/manifest.json` 静态详情快照与跨端见证冷核恢复，补齐 WebDAV 笔记冲突卡片与无损合并，对齐全站真实导出语料（9225 页导读片段、8863 篇去重论文）与 SVG 白名单，并将 `client-macos` 重新接入 CI；两端版本均为 1.4.6（构建号 22），已于 2026-11-20 公开发布（来源提交 `fcf7e05b`），改动与验证范围见[1.4.6 记录](workbench-1.4.6-review.md)。
+当前准备发布的源码版本为 1.4.7（构建号 23），尚未公开发布：修复新版论文博客页无法打开的问题，对齐双端 HTML5 语义片段、内联 SVG 与 MathML 解析兼容（覆盖最新全站 9276 页真实导出语料），并加固网络、WebDAV 同步与 Zotero 路径；改动与验证范围见[1.4.7 记录](workbench-1.4.7-review.md)。当前最新已公开发行的安装包仍为 1.4.6 / 构建号 22（来源提交 `fcf7e05b`，2026-11-20 发布），改动与验证范围见[1.4.6 记录](workbench-1.4.6-review.md)。
 
 1.4.5 修复 Android 回到前台时重复触发整站同步、macOS 目录 JSON 损坏导致启动崩溃，以及 `apps/macos/test.sh` 在套件成功时静默提前退出的问题（2026-11-12 发布，提交 `f9241190`）；见[1.4.5 记录](workbench-1.4.5-review.md)。
 
@@ -116,7 +116,7 @@
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。

@@ -36,7 +36,7 @@
 
 ## 1.4.6 的签名
 
-Mac 包使用本地 `ad-hoc; not notarized` 签名，未经过 Apple 公证；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `fcf7e05bf44f06e7c3416636445cdda4391fe695`，版本 1.4.6（构建号 22）、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
+Mac 包使用本地 `ad-hoc; not notarized` 签名，未经过 Apple 公证；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `fcf7e05bf44f06e7c3416636445cdda4391fe695`，版本 1.4.6 / 构建号 22、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
 
 公开 APK 沿用 1.4.4/1.4.5 的发布签名库（`signingOrigin: apksigner-sign`）。`android-build-info.json` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，APK Signature Scheme v2 + v3，`versionName` 1.4.6、`versionCode` 22、`minSdk` 28、`targetSdk` 37，应用标识 `com.nanless.paperdigest`，四种 ABI 齐全且原生库符合 16 KiB ELF 对齐。已安装 1.4.4 或 1.4.5 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9…`，仍需先导出完整备份、卸载旧版再安装。
 

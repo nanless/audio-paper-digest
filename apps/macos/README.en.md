@@ -12,7 +12,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 | Item | Supported configuration |
 |---|---|
-| Version | 1.4.6, build 22; published on 20 November 2026 (Beijing time, commit `fcf7e05b`) |
+| Version | Source prepared for 1.4.7, build 23 (not yet publicly released); latest published package is 1.4.6 / build 22 (20 November 2026, commit `fcf7e05b`) |
 | Operating system | macOS 15 or later |
 | Processor | Apple Silicon, arm64; the current package does not contain both Intel and Apple Silicon architectures |
 | Signing | Local ad-hoc signing; not notarized by Apple |

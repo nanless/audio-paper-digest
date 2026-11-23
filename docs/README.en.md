@@ -25,7 +25,7 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
-Version 1.4.6 (build 22), published on 20 November 2026 (Beijing time, commit `fcf7e05b`), reads `client/details/manifest.json` static detail snapshots first on both platforms with cross-platform witness cold-replay recovery, adds WebDAV note conflict cards and lossless merge, aligns sanitization and SVG allowlists across the full 9,225-page / 8,863-paper blog corpus, and restores `client-macos` in CI. See the [1.4.6 record](workbench-1.4.6-review.md) for the actual changes and tested scope.
+The source version prepared for release is 1.4.7 (build 23), not yet publicly released: it fixes newer paper blog pages that failed to open, aligns HTML5/SVG/MathML sanitization across the latest 9,276-page blog corpus on both platforms, and hardens networking, WebDAV sync, and Zotero transport; see the [1.4.7 record](workbench-1.4.7-review.md). The latest published package remains 1.4.6 / build 22 (20 November 2026, Beijing time, commit `fcf7e05b`); see the [1.4.6 record](workbench-1.4.6-review.md).
 
 Version 1.4.5 (12 November 2026, commit `f9241190`) fixes repeated full-catalog synchronization when the Android app returns to the foreground, a macOS crash when the saved catalog JSON is corrupt, and `apps/macos/test.sh` exiting early without running the remaining suites; see the [1.4.5 record](workbench-1.4.5-review.md).
 
@@ -118,7 +118,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 
 These records explain the problems, changes, and actual verification at the time. They are not separate current operating procedures.
 
-- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md).
+- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md), [1.4.7](workbench-1.4.7-review.md).
 - Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).

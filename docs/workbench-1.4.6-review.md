@@ -2,7 +2,7 @@
 
 [English](README.en.md) · 返回[文档索引](README.md)
 
-版本 **1.4.6（构建号 22）** 收拢 1.4.5 之后的双端静态详情分片协议、WebDAV 笔记冲突无损合并与全站真实导出语料兼容加固。1.4.6 已于 2026-11-20 00:36（北京时间）公开发布：附注标签 `v1.4.6`（`29f9e269…`）指向发行提交 `fcf7e05b`，[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.6)含 12 件附件；签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
+版本 **1.4.6 / 构建号 22** 收拢 1.4.5 之后的双端静态详情分片协议、WebDAV 笔记冲突无损合并与全站真实导出语料兼容加固。1.4.6 已于 2026-11-20 00:36（北京时间）公开发布：附注标签 `v1.4.6`（`29f9e269…`）指向发行提交 `fcf7e05b`，[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.6)含 12 件附件；签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
 
 ## 1.4.5 之后的客户端改动
 

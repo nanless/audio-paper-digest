@@ -1,20 +1,19 @@
 # 论文速递工作台 Mac 版：构建与发行
 
-本页说明 1.4.6（构建号 22）的本地准备和联合发行操作。1.4.6 已于 2026-11-20 公开发布，附注标签 `v1.4.6` 指向发行提交 `fcf7e05b`，12 件附件见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.6)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。上一版 1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
+本页说明 1.4.7（构建号 23）的本地准备和联合发行操作（尚未公开发布，改动与验证范围见 [1.4.7 记录](workbench-1.4.7-review.md)）。当前最新已公开发行版本仍为 1.4.6 / 构建号 22（2026-11-20 发布，附注标签 `v1.4.6` 指向发行提交 `fcf7e05b`），12 件附件见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.6)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
 
-## 1.4.6 发行范围
+## 1.4.7 发行范围
 
-1.4.6 收拢 1.4.5 之后的双端同步、详情读取与真实语料兼容改动，不改变网站内容生产、来源和发布规则：
+1.4.7 收拢 1.4.6 之后针对新版论文博客页打开兼容、HTML5/SVG/MathML 解析净化与双端网络/WebDAV/Zotero 同步的加固改动，不改变网站内容生产、来源和发布规则：
 
-- 两端优先读取网站的 `client/details/manifest.json` 静态快照与内容寻址详情分片，仅在服务器明确返回 HTTP 404/410 时回退旧入口；损坏响应、结构指纹不符与网络错误不回退并保留本机已核验资料；补齐 Mac 与 Android 便携备份中桌面详情见证的双向冷核恢复。
-- 两端补齐 WebDAV 笔记冲突卡片与无损合并（保留本机、采用远端、合并保存并归档原冲突备份），保存路径带双重 CAS 并发保护；解耦 Mac `LibraryService` 与 Android `RootController`。
-- 对齐全站真实导出语料（9225 页导读片段、8863 篇去重论文）：放行正文中合法 UTF-8 `U+FFFD` 替换符并拒绝非法数值字符实体，收紧内联与外部 SVG 白名单（禁止 CSS 注释与非本页 `#id` 的 `url()`/`image-set()` 引用）；恢复 `client-macos` CI 独立作业。
-- 两端同时升到 1.4.6（构建号 22）；Android 沿用 1.4.4/1.4.5 的发布签名库，已安装 1.4.4 或 1.4.5 的用户可以覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
+- 两端修复新版论文博客页无法打开的问题：对齐 macOS 与 Android 的导读正文提取、HTML5 语义片段、内联 SVG 白名单与 MathML 数学渲染兼容，并在最新全站 9276 页真实导出导读片段语料上完成双端全量重放校验。
+- 两端加固网络（`SafeHttp` DNS 与图片传输）、WebDAV 全工作区同步、笔记冲突合并与 Zotero 传输边界条件，并同步更新双端协议注册表。
+- 两端同时升到 1.4.7（构建号 23）；Android 沿用 1.4.4–1.4.6 的发布签名库，已安装 1.4.4、1.4.5 或 1.4.6 的用户可以覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
 
 | 项目 | 当前发行目标 |
 |---|---|
 | 应用 | 论文速递工作台.app |
-| 版本、构建号 | 1.4.6、22 |
+| 版本、构建号 | 1.4.7、23 |
 | 架构、最低系统 | arm64、macOS 15 |
 | 运行时 | 随包 Node 24.19.0 |
 | 签名 | 本地 ad-hoc 签名，未 Apple 公证 |
@@ -46,17 +45,17 @@ npm --prefix apps/macos run install:app
 apps/macos/release.sh inspect \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.6
+  --version 1.4.7
 
 apps/macos/release.sh prepare \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.6 \
-  --output 'apps/macos/.build/releases/1.4.6-arm64' \
+  --version 1.4.7 \
+  --output 'apps/macos/.build/releases/1.4.7-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.4.6-arm64'
+  --prepared 'apps/macos/.build/releases/1.4.7-arm64'
 ```
 
 `inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。
@@ -65,7 +64,7 @@ apps/macos/release.sh verify \
 
 | 输出 | 核对内容 |
 |---|---|
-| `PaperDigest-macOS-1.4.6-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
+| `PaperDigest-macOS-1.4.7-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
 | 同名 DMG | 应用与指向 `/Applications` 的拖入目标；检查映像并只读挂载回读 |
 | `build-info.json` | 版本、架构、时间、来源身份和相对文件摘要，无本机构建路径 |
 | `RELEASE_NOTES.md` | 按真实范围生成的版本、安装、签名与支持说明 |
@@ -87,7 +86,7 @@ Android 正式包按 `prepare → sign → verify` 单独处理，不修改已�
 
 ```sh
 python3 apps/android/release_tools.py --repo "$PWD" prepare \
-  --output "$ANDROID_PREPARED" --version 1.4.6 --code 22
+  --output "$ANDROID_PREPARED" --version 1.4.7 --code 23
 
 python3 apps/android/release_tools.py --repo "$PWD" sign \
   --prepared "$ANDROID_PREPARED" --output "$ANDROID_SIGNED" \
