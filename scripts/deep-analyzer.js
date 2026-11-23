@@ -303,7 +303,9 @@ function readerIssuesRequireFullSourceBindingRetry(
         || Boolean(!recovered && candidate && fullAttempts < 2 && !allQuoteIssuesCovered
         && otherBlocking.some(issue => (
             issue?.code !== 'table_commentary_misaligned'
-            && !/table_commentary_misaligned/.test(String(issue?.message || ''))
+            && issue?.code !== 'table_extrema_contradiction'
+            && issue?.code !== 'metric_polarity_inverted'
+            && !/table_commentary_misaligned|table_extrema_contradiction|metric_polarity_inverted/.test(String(issue?.message || ''))
             && /source-binding|tableBindings|sourceQuote|selection|TABLE_\d+/.test(
                 String(issue?.message || '')
             )
@@ -6681,6 +6683,42 @@ function validateApiReaderTableCommentaryAlignment(article) {
     );
 }
 
+function validateApiReaderTableExtrema(article, sections = null) {
+    const extremaIssues = require('./lib/table-extrema-verifier.js').findTableExtremaIssues(article, sections);
+    if (extremaIssues.length === 0) return;
+    const readerIssues = extremaIssues.map(item => ({
+        code: item.code,
+        path: Number.isInteger(item.sectionIndex) ? `/sections/${item.sectionIndex}/body` : null,
+        sectionIndex: item.sectionIndex,
+        tableIndex: item.tableIndex,
+        columnHeader: item.columnHeader,
+        message: item.message
+    }));
+    throw Object.assign(
+        new Error(`读者文章表极值或指标方向断言矛盾: ${extremaIssues.map(item => item.message).join('；')}`),
+        { code: 'READER_TABLE_EXTREMA_CONTRADICTION', readerIssues }
+    );
+}
+
+function recordCrossStageConsistencyWarnings(paper, analysis, apiReaderArticle, apiReaderPlan, options = {}) {
+    const issues = require('./lib/cross-stage-consistency.js').checkCrossStageConsistency({
+        analysis,
+        apiReaderArticle,
+        apiReaderPlan
+    });
+    if (issues.length === 0) return issues;
+    const tags = issues.map(issue => `[cross-stage:${issue.code}] ${issue.message}`);
+    for (const tag of tags) {
+        console.warn(`    [deep] ⚠️  ${tag}`);
+    }
+    // Never mutate top-level `paper.warnings` (breaks strict upstream immutability in
+    // daily-reader-signed-correction / operator replays). Record only inside manifest stage when requested.
+    if (options.manifestStage && typeof options.manifestStage === 'object') {
+        options.manifestStage.crossStageWarnings = tags;
+    }
+    return issues;
+}
+
 function validateReaderEditorialQuality(article, sections, options = {}) {
     const quality = validateEditorialQuality({
         summary: '', method: article, innovations: '', results: '', details: '', limits: ''
@@ -8114,6 +8152,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
 
     }
     validateApiReaderTableCommentaryAlignment(article);
+    if (isStructuredV5 && options.skipTableExtremaCheck !== true) {
+        validateApiReaderTableExtrema(article, normalizedSections);
+    }
     // 表格和图归一化之后可能只剩下一段很短的引导，而它前面那段普通正文其实正是同一段插图
     // 引导的自然延续。在权威重新绑定之前合并掉，最后的签名引文才是对着文章的真实字节量
     // 出来的。
@@ -11766,6 +11807,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     paper.apiReaderResources = readerResources;
     paper.apiReaderArticleSha256 = articleSha256;
     paper.apiReaderPlanSha256 = planSha256;
+    recordCrossStageConsistencyWarnings(paper, analysis, readerResult.article, readerResult.plan);
     manifest.contracts = {
         ...(manifest.contracts || {}),
         apiReaderArticle: readerResult.plan.contract,
@@ -20371,6 +20413,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             paper.apiReaderArticleSha256 = crypto.createHash('sha256')
                 .update(readerResult.article).digest('hex');
             paper.apiReaderPlanSha256 = stableFingerprint(readerResult.plan);
+            recordCrossStageConsistencyWarnings(paper, analysis, readerResult.article, readerResult.plan);
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
                 apiReaderArticle: readerResult.plan.contract,
@@ -21925,8 +21968,8 @@ async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence =
         { usageContext: { stage: 'tableRepair' },
                 ...(resolveRepairRequestPolicy('tableRepair')
                     ? { repairThinkingMode: resolveRepairRequestPolicy('tableRepair').thinkingMode } : {}) });
-    if (!fixedSection || fixedSection.length < 200) {
-        return analysis;
+    if (!fixedSection || String(fixedSection).trim().length < 60) {
+        throw new Error('实验表格补充返回内容过短或为空');
     }
 
     // 将补充的实验结果合并回原分析
@@ -22260,6 +22303,8 @@ module.exports = {
     buildStagePromptCacheKey,
     wrapMultilineLatexAligned,
     joinHierarchicalHeaderLayers,
+    validateApiReaderTableExtrema,
+    recordCrossStageConsistencyWarnings,
     stableFingerprint,
     buildRecoveryFingerprints,
     resolvePrimaryRequestPolicy,

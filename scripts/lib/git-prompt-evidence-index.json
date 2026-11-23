@@ -511,6 +511,12 @@
         "prompts/gap-fill-v5.md"
       ]
     },
+    "343a55774e0ac4e010fb1a600aca9d1d97e11906a01ca43c2532b70ecd81b2b0": {
+      "blobOid": "567d250461a8a1e09ec6dfb44b46dfda977887f1",
+      "paths": [
+        "prompts/current/core-summary-repair.md"
+      ]
+    },
     "34ee8aaa9c8d2cc1fc10048a38a7c532debaa9486d3b395f5e1da5d9512f97fe": {
       "blobOid": "23197a28be23f886705830e3306130063c8e3e48",
       "paths": [
@@ -818,6 +824,12 @@
       "blobOid": "19b48b3798062d10d55e0d326fee81aca3109418",
       "paths": [
         "prompts/api-reader-article.md"
+      ]
+    },
+    "53c238645ae1e18756dc14882d05fd4058df87ef40d4a684b126827c4423aa9b": {
+      "blobOid": "77eeca327e632ce6e7025fd2e0554e971805484e",
+      "paths": [
+        "prompts/current/gap-fill.md"
       ]
     },
     "53fd68b85054084203808c87b408ef7ae3bae25f0925e488cc14d958bf2c7a38": {
@@ -1221,6 +1233,12 @@
         "prompts/structure-repair-v2.md"
       ]
     },
+    "84f0f09169362e20e0b547faa3b1bc8d6ad58e403a9d9d9ed71a8b7e1ff0a9d3": {
+      "blobOid": "1648631e70008e19abc763ae8e033cd49dd9759f",
+      "paths": [
+        "prompts/current/method-fill.md"
+      ]
+    },
     "8508cdd4a6ce0c4b7af325a7b305610abe3c45ed5bcd9e18b3a78e0fb20cd3a1": {
       "blobOid": "93c748ee07e3678d7dd9cd43fef9bf88b24e55a0",
       "paths": [
@@ -1351,6 +1369,12 @@
       "blobOid": "1c0e899b4d632e8e5d4aac95ec5dcf9391908e13",
       "paths": [
         "prompts/en/deep-analysis.md"
+      ]
+    },
+    "965a1ebfcc732d9fbcfee63860bde4411c0c00cce8f8500d80bd9665346b8288": {
+      "blobOid": "511289990dd413bf75c08b0d67fa37fbd7d47d84",
+      "paths": [
+        "prompts/current/table-fill.md"
       ]
     },
     "96703b7a5415ff25daeef7d34e829e25d2d5f18c288bc2ec137f08f51c04838b": {
@@ -1516,6 +1540,12 @@
         "prompts/deep-analysis.md"
       ]
     },
+    "a1543942d96b627eb20eaca37133ec8d76c83b587734ea58beece9e1450f6ca5": {
+      "blobOid": "68fd160703eb88efe12ef3ebe5952bf0b98e1e30",
+      "paths": [
+        "prompts/current/image-supplement.md"
+      ]
+    },
     "a1b79390ea05297ed6953c255bcb216020dbcee9515255189ebbb08678b0f669": {
       "blobOid": "32570ccb5af3d30c895904a83d9693c42b99148c",
       "paths": [
@@ -1538,6 +1568,12 @@
       "blobOid": "438939b099a4a0e40ed0a6dfaf27243610224348",
       "paths": [
         "prompts/api-reader-repair-v7.md"
+      ]
+    },
+    "a512236d934ccdeab8a7be917883054446ea4e2e708dcfe9a512ba8a1e985d53": {
+      "blobOid": "e9fda0c92c89be8ce818e4ce74c1e49debf688b7",
+      "paths": [
+        "prompts/current/structure-repair.md"
       ]
     },
     "a566e117ddb836f8255d20cd2684313f0dec192f5036bd532ace33bc376ca860": {
@@ -1593,6 +1629,12 @@
       "blobOid": "57438f7802a7edf39af7e5921448b73222d0086c",
       "paths": [
         "prompts/deep-analysis-v3.md"
+      ]
+    },
+    "ad2cc8455547942bd9ece75dfcf461dd4fac05c395db29ee072e86cf2a60d259": {
+      "blobOid": "0dc103a7c3d5ee820ff4b07c48ab9bdaccfdf375",
+      "paths": [
+        "prompts/current/deep-analysis.md"
       ]
     },
     "ad76cd25bbc44b8a77177e44eae5eab65a388f32c26572719103a75d8506ec11": {
@@ -1739,6 +1781,12 @@
         "prompts/scoring-audit-v3.md"
       ]
     },
+    "bdae9c8f58c047f335b134a9bdb270c42009cbddb3a60a20629d5b51a54b2d9a": {
+      "blobOid": "077d985317aedba5720bd74bb4a794281faa5018",
+      "paths": [
+        "prompts/current/opensource-scan.md"
+      ]
+    },
     "be06bf409adc3dc82904045cae2ac421c508aa038bab25e298b2458d632fb3f2": {
       "blobOid": "604b91e3dcfee8c2d6b0aaa99869f91ba392adeb",
       "paths": [
@@ -1876,6 +1924,12 @@
       "blobOid": "7658cdcc9cb046871b6a8ede37d803016bed3601",
       "paths": [
         "prompts/gap-fill.md"
+      ]
+    },
+    "cdc6ae61a09758425afb153f6d58c9a692d980081d01d82eeb38f28b005fed47": {
+      "blobOid": "9dc145e908a0896de5fa70ea76a319f8d8212625",
+      "paths": [
+        "prompts/current/api-reader-article.md"
       ]
     },
     "ce57c8a98a12de3b6b74efcf9ca7b28ce89c894fe4fbd73d7c04db6101a0c624": {

@@ -1576,7 +1576,8 @@ function collectDraftIssues(draft, parserError, options = {}) {
         'READER_FIGURE_SEMANTIC_MISPLACEMENT',
         'READER_INVALID_IMPLEMENTATION_SPECS',
         'READER_INVALID_CHINESE_CAPTION',
-        'READER_RESULT_ABLATION_MISPLACEMENT'
+        'READER_RESULT_ABLATION_MISPLACEMENT',
+        'READER_TABLE_EXTREMA_CONTRADICTION'
     ]);
     const preciseV5Error = Boolean(parserError && V5_STRUCTURED_ERROR_CODES.has(parserError.code) && parserIssues.length > 0);
     if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError && !preciseSelectionError && !preciseV5Error) {
@@ -3341,9 +3342,19 @@ function buildRepairTargets(draft, issues, options = {}) {
         // never trigger full-article table-binding explosion, and figure moves
         // explicitly authorize candidate destination sections.
         if (issue.code === 'reader_long_section_needs_hierarchy'
-            || issue.code === 'reader_repetitive_template_echo') {
-            if (Number.isInteger(issue.sectionIndex)) add(`/sections/${issue.sectionIndex}/body`);
-            else if (typeof issue.path === 'string' && /^\/sections\/\d+\/body$/.test(issue.path)) add(issue.path);
+            || issue.code === 'reader_repetitive_template_echo'
+            || issue.code === 'table_extrema_contradiction'
+            || issue.code === 'metric_polarity_inverted') {
+            if (Number.isInteger(issue.sectionIndex)) {
+                add(`/sections/${issue.sectionIndex}/body`);
+            } else if (typeof issue.path === 'string' && /^\/sections\/\d+\/body$/.test(issue.path)) {
+                add(issue.path);
+            } else if ((issue.code === 'table_extrema_contradiction' || issue.code === 'metric_polarity_inverted')
+                && Number.isInteger(issue.tableIndex) && issue.tableIndex >= 1) {
+                const located = locateReaderDraftTables(draft);
+                const hit = located[issue.tableIndex - 1];
+                if (hit && Number.isInteger(hit.sectionIndex)) add(`/sections/${hit.sectionIndex}/body`);
+            }
             continue;
         }
         if (issue.code === 'reader_heading_bare_english') {
