@@ -35,7 +35,10 @@ function unchanged(snapshot) {
 }
 function nearFingerprint(before, expected) {
     if (typeof before !== 'string' || !/^[a-f0-9]{56,63}$/.test(before)) return false;
-    if (before.slice(0, 16) !== expected.slice(0, 16) || before.slice(-16) !== expected.slice(-16)) return false;
+    const anchored = (before.slice(0, 16) === expected.slice(0, 16) && before.slice(-16) === expected.slice(-16))
+        || before.slice(0, 32) === expected.slice(0, 32)
+        || before.slice(-32) === expected.slice(-32);
+    if (!anchored) return false;
     let previous = Array.from({ length: expected.length + 1 }, (_, index) => index);
     for (let row = 1; row <= before.length; row++) {
         const current = [row];
@@ -56,7 +59,7 @@ function replayPaidFingerprint(record, candidate) {
         || record.notLlmResponse !== true || payload.status !== 'failed' || payload.draft !== null
         || !Number.isSafeInteger(payload.attempts) || !Number.isSafeInteger(payload.fullAttempts)
         || payload.attempts < payload.fullAttempts || payload.fullAttempts < 1
-        || payload.explicitReaderRetryRound || payload.ordinalPatchCompilations?.length
+        || payload.ordinalPatchCompilations?.length
         || typeof raw !== 'string' || Buffer.byteLength(raw) > 16 * 1024 * 1024
         || sha(raw) !== record.rawDraftSha256
         || record.baselineDraftSha256 !== repair.hashDraft(null)
@@ -65,6 +68,10 @@ function replayPaidFingerprint(record, candidate) {
             && issue.message === '读者文章格式头未登记或字段混用')
         || repair.hashDraft(candidate.identity) !== path.basename(record.baselineCandidateFile,'.json'))
         throw new Error('Operator paid fingerprint original or scope differs');
+    if (payload.explicitReaderRetryRound) {
+        require('./explicit-reader-retry-round').validatePersistedRound(
+            path.dirname(path.resolve(record.baselineCandidateFile)), candidate.identity, payload);
+    }
     const strictJson = require('./publication-file-primitives').strictJson;
     const parsed = strictJson(Buffer.from(raw), 'original paid Reader JSON');
     const member = repair.readTopLevelMembers(raw).find(item => item.name === 'schemaFingerprint');

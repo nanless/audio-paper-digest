@@ -538,6 +538,37 @@ test('replayPaidFingerprint 同时支持历史 OLD_DRAFT_FP 与当前 NEW_DRAFT_
   baselineCandidateFile: `/tmp/${repair.hashDraft(crossCandidate.identity)}.json`
  };
  assert.throws(() => operator.replay(crossRecord, crossCandidate), /not a bounded malformed current header/);
+
+ // 4. 末位缺字（前 32 位精确锚定、编辑距离 1）与首位缺字（后 32 位精确锚定、编辑距离 1）均可通过重放；未锚定远邻仍拒绝
+ const targetDraftHeader = codec.recordHeader('reader-draft', 'reader-draft');
+ const targetPlanHeader = codec.recordHeader('beginner-researcher', 'beginner-researcher');
+ const makeVariant = mutatedFp => {
+  const base = makeCase({ targetDraftHeader, targetPlanHeader, sectionCount: 6 });
+  const correctedRaw = JSON.stringify(base.correctedObj);
+  const rawDraft = correctedRaw.replace(
+   JSON.stringify(targetDraftHeader.schemaFingerprint),
+   JSON.stringify(mutatedFp)
+  );
+  base.candidate.payload.rawDraft = rawDraft;
+  base.record.rawDraftSha256 = sha(rawDraft);
+  return base;
+ };
+ const trailingDrop = makeVariant(targetDraftHeader.schemaFingerprint.slice(0, -1));
+ assert.deepEqual(operator.replay(trailingDrop.record, trailingDrop.candidate), trailingDrop.correctedObj);
+ const leadingDrop = makeVariant(targetDraftHeader.schemaFingerprint.slice(1));
+ assert.deepEqual(operator.replay(leadingDrop.record, leadingDrop.candidate), leadingDrop.correctedObj);
+ const unanchored = makeVariant('f'.repeat(63));
+ assert.throws(() => operator.replay(unanchored.record, unanchored.candidate), /not a bounded malformed current header/);
+
+ // 5. 带 explicitReaderRetryRound 的已付指纹候选：回执核验通过时允许重放，核验失败时拒绝
+ const retryMod = require('../scripts/lib/explicit-reader-retry-round');
+ const withRetry = makeVariant(targetDraftHeader.schemaFingerprint.slice(0, -1));
+ withRetry.candidate.payload.explicitReaderRetryRound = { roundId: '11111111-2222-4333-8444-555555555555' };
+ const validateMock = t.mock.method(retryMod, 'validatePersistedRound', () => true);
+ assert.deepEqual(operator.replay(withRetry.record, withRetry.candidate), withRetry.correctedObj);
+ assert.equal(validateMock.mock.callCount(), 1);
+ validateMock.mock.mockImplementation(() => { throw new Error('round receipt corrupted'); });
+ assert.throws(() => operator.replay(withRetry.record, withRetry.candidate), /round receipt corrupted/);
 });
 test('人工修正冷核重放先做与在线一致的确定性归一化再完整解析，避免需合并超额小节的稿被误拒',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/lib/daily-reader-operator-correction.js'),'utf8');
