@@ -109,6 +109,10 @@ npm run test:compat
 | `lib/public-resource-probe.js` | Node 库：封装公网/代理 Fake-IP 固定对端 HTTPS 传输、GitHub README 复现文档实测探测及外部开源资源与 Demo 页面可达性核验，策略异常全链路 Fail-Closed 透传并遵守受控运行网络禁令。 |
 | `lib/scoring-audit-contract.js` | Node 库：封装 8 维类型感知评分审计规则、真盲审剥离、防跨维度双重扣分检查、实测证据硬上限裁剪与开源锚点校准（兼容 `type-aware-v1` 与 `type-aware-v2`）。 |
 | `lib/scoring-rubric-v2.js`、`scoring_rubric_v2.py` | Node/Python 共用的 `type-aware-v2` 评分规则引擎，加载 `config/scoring-rubric-v2.json`，用精确整数千分位算术计算 7 类核心加权分、有界类型开源加分与分档。 |
+| `calibrate-batch-scores.js` | Node 入口：`npm run digest:calibrate` 批后瑞士轮 Bradley-Terry 相对分校准 CLI；只读读取封存的 `deep-analysis-result.json`，不改写原始 `scoringAudit` 分数，产出可确定性重放的 `score-calibration-v1.json` 伴生文件。支持离线零调用 `--dry-run` / `--replay` 与显式 `--live`（走公共 `requestLlmJson()`）。 |
+| `lib/bradley-terry-calibration.js` | Node 库：批后瑞士轮成对配对、双向位置交换消偏、盲审分数剥离、Bradley-Terry 虚拟锚点最大似然拟合与有界分值映射（`moment_anchored` / `quantile_anchored`），供 `calibrate-batch-scores.js` 调用。 |
+| `lib/cross-stage-consistency.js` | Node 库：确定性跨阶段一致性门控，核对核心摘要、机器摘要、开源详情与 API Reader 长文之间的开源可用性声明、深读导引目标、术语译名与百分比指标量纲（100 倍小数/百分数冲突）是否一致。 |
+| `lib/table-extrema-verifier.js` | Node 库：音频/机器学习指标极性词典与表格极值反幻觉校验器；显式表头箭头（`↑` / `↓`）优先于默认极性，区分大小写缩写并做单位换算（`ms`/`s`、`Hz`/`kHz`、`K`/`M`/`B`/`G`），核验正文评述与原表最优/极值一致。 |
 | `lib/reader-repair-evidence-slice.js` | Node 库：在 Reader 普通局部节点补丁请求（1–8 既有节点）满足可证明原表/引文完整覆盖、兼容顺延目标且无坏表/全文扩写阻断时，构造 UTF-16 码点安全的紧凑证据切片；任一条件不满足即零风险回退原全量证据，候选固定身份与补丁后整稿冷核保持不变。 |
 | `lib/reader-resource-claims.js` | Node 库：封装 Reader 资源证据渲染、已验证资源身份回放、出版资源视图投影、资源可用性声明审计与文章按节重建草稿逻辑，与 `deep-analyzer.js` 导出完全同一引用。 |
 | `lib/arxiv-html-structured-artifacts.js` | Node 库：封装 arXiv LaTeXML HTML 全文健康检查、DOM 图/表/公式/参考文献结构化提取、多级表头合并、`\phantom` 虚影剥离、PDF 结构化投影、HTML 文本与图片清单解析及文本 SHA 绑定。 |
@@ -188,6 +192,7 @@ npm run test:compat
 | `lib/filter-input-contract.js` | Node 库：算出筛选决定对应的输入 SHA；使用官方范围证据时，一并绑定实际交给模型的证据。 |
 | `lib/filter-scope-evidence.js` | Node 库：为仅命中泛多模态词、且未明确声音模态的候选获取同篇官方 TXT、PDF、来源元数据和清单；读取时核验文件，并保存模型所用原文及其 SHA。它不直接判定论文相关。 |
 | `lib/keyword-prefilter.js` | Node 库：音频关键词预筛，追求高召回，按版本管理。 |
+| `lib/daily-filter-prefilter.js` | Node 库：运行在冻结 `lib/keyword-prefilter.js` 之上的日更专用叠层，补充新一代音频/语音模型与基准补捞词、对高噪多义词做零漏召回消歧，并对已封存多模态候选的正文（References 之前）执行零成本音频锚点排除。 |
 | `lib/filter-decision.js` | 日更和会议共用的筛选决定解析、理由及 v3 版本声明；保留无法判定时的原可重试结果，兼容旧抓取入口导出。 |
 | `parse-arxiv-atom.py` | Python 解析入口：经 `python-runtime.sh` 读取有字节上限的标准输入，严格校验 Atom XML、官方论文 ID、标题与摘要，再输出有字节上限的 JSON；拒绝文档类型与实体声明。 |
 
@@ -211,6 +216,7 @@ npm run test:compat
 | `conference-workspace.js` | 检查会议运行所需目录、工作区和受控来源准备状态。 |
 | `export-review-failure-manifest.js` | CLI：只读导出两种无生成器清单的骨架 JSON。`--kind conference-figure-crop` 读取 `page-review-failures` 与原 `generation.json`，按同协议、同页 SHA 导出完整 `imageFailureUniverse`、可推导身份与占位 `members`；`--kind historical-visual-disposition` 从发布计划导出 `planSha256`/`scope`。无法推导的字段留 null 并写入 `_todo`，不写生产数据、不联网、不授予任何审查或发布资格。 |
 | `conference_extractor.py` | 实现会议 PDF 提取：核验文件与 SHA，记录 UTF-8 字节偏移，生成页文本、PNG、图片与版面候选；以 `O_EXCL` 保存，按结构字段报告 blocked/integrity 状态。 |
+| `conference_extractor_v2.py` | Python 增强型会议 PDF 确定性本地抽取器（与冻结 `conference_extractor.py` 隔离）：提供双栏感知文本重排、288 DPI 自适应插图裁切、Booktabs/网格/旋转及跨页表格提取与 `pdf_author_extract.py` 首页作者机构抽取，继承 `O_NOFOLLOW`/`O_EXCL` 安全读写与 `verify_extraction_v2` 逐字节重放。 |
 | `conference_publication_gate.py` | 核验会议身份、来源账本和页面发布资格。 |
 | `icmc-proceedings.py` | 从官方 ICMC 2026 合并 proceedings PDF 的书签和目录提取论文顺序、页范围与作者元数据，并按页范围无栅格化拆分单篇 PDF；不调用模型、不改写原始图表公式。 |
 | `lib/conference-analysis-adapter.js` | Node 库：重新核验完整会议计划与来源后调用公共深度分析引擎。准备记录绑定计划、来源及初始分析 SHA，中断恢复逐项补齐缺失文件，完成后另核结果并保存凭证。旧执行缺少准备记录时须用同一认证计划新建 UUID。完整旧稿恢复保留父包，子运行绑定资源预检、固定模式与预算，复用公共 Reader、评分＋Reader 或完整分析；评分成功即时 CAS 保存，Reader 失败仅续 Reader，原来源与父子链仍须完整重放。 |
@@ -246,6 +252,7 @@ npm run test:compat
 | `lib/conference-source-upgrade.js` | 会议来源能力升级的身份和已有分析绑定检查。 |
 | `lib/conference-staging.js` | Node 库：将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项和身份别名都不能进入。 |
 | `lib/official-conference-acquisition.js` | Node 库：按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
+| `lib/official-conference-acquisition-v2.js` | Node 库：与冻结 `lib/official-conference-acquisition.js` 隔离的官方会议获取伴生扩展，保持同等流式限流、目录边界与不可变凭证约束，新增 EMNLP 2026（ACL Anthology）、ISMIR/DCASE 2026（Zenodo）、NeurIPS 2026（proceedings.neurips.cc）与 WASPAA/ASRU 2025 本地官方清单封存支持。 |
 | `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。完整条件见本表后的同名说明。 |
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
 | `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。完整条件见本表后的同名说明。 |
@@ -510,6 +517,10 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |
 | `push-blog.py` | Python 入口：核验 receipt，提交并推送其允许的改动，核对远端提交；不创建图片任务。 |
 | `review-blog.py` | Python 入口：审查本批最终页面，执行程序检查、模型正文审查、图片审查和 Hugo 构建，通过后生成 receipt。 |
+| `publish-daily-podcast.js` | Node 入口：`npm run podcast:generate` 每日播客端到端流水线 CLI，从正式分析结果生成播客脚本、按最小白名单环境调用 `indextts_synth.py` 合成音频，并生成单集元数据、客户端订阅 feed、Podcasting 2.0 章节 JSON、RSS XML 及可选 GitHub Release 发布（支持 `--dry-run` 与 `--backend silent-mock`）。 |
+| `lib/daily-podcast-script.js` | Node 库：确定性每日音频播客脚本生成器，从已分析论文提取重点精讲与快览片段、清理内部锚点与 HTML/LaTeX 为口语化中文朗读文本、分配主持/嘉宾角色与情绪提示，并按句界分块输出带 SHA-256 绑定的脚本对象。 |
+| `lib/podcast-github-release.js` | Node 库：每日播客 GitHub Release 上传与订阅产物构建库，负责校验日期/标签/音频大小上限（40 MiB）、组装单集元数据、客户端 `paper-daily-podcast-feed` 订阅 JSON、Podcasting 2.0 章节文件与 RSS XML，并通过受控 `gh` CLI 发布资产。 |
+| `indextts_synth.py` | Python 播客语音合成器：支持本地 IndexTTS-2.5/2.0/v1（`indextts2-python`）、远端 HTTP 服务（`indextts-http`，带直连固定公网 IP、IPv4/IPv6 SSRF 拦截与音频魔数校验）及离线测试后端（`silent-mock`），按分块合成、响度归一并输出带字节哈希的音频清单。 |
 
 ### 发布完成与旧成图读取
 
@@ -522,9 +533,10 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 
 ### 环境、文件、日志与验证
 
-| `lib/cli-arguments.js` | Node 库：解析脚本的命令行参数白名单，未知或不完整的 `--flag` 直接报用法，避免参数拼错后静默退化。 |
 | 文件 | 类型与职责 |
 |---|---|
+| `lib/cli-arguments.js` | Node 库：解析脚本的命令行参数白名单，未知或不完整的 `--flag` 直接报用法，避免参数拼错后静默退化。 |
+| `compact-papers-ledger.js` | Node 入口：`npm run papers:compact` 对 `data/current/papers.json` 执行安全无损压缩。默认 `--dry-run` 零写入；显式 `--write` 先在锁外核验归档证明，再持论文库锁校验 schema/豁免/当前批次、写入已核验 gzip 备份与清单、原子压缩并执行零键丢失回读校验与压缩回执记录。 |
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
 | `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
@@ -542,6 +554,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `docs-consistency.js` | Node 入口：`npm run docs:check` 核对根 README、AGENTS、此索引、`docs/` 与 `skills/` 全部 Markdown 中的 npm 脚本名（只匹配首字母小写的命令名）；并核对文档里的“当前版本/构建号”与 `Info.plist`、Android Gradle 实际值一致，两份 docs README 的版本列表都包含当前版本。相对链接只判目标文件存在，不校验 `#锚点`；`docs/` 登记按两份索引拼接后的子串判定（OR 语义）。按最近 `package.json` 解析的命令参数与全仓链接由文档测试另行核对。 |
 | `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥；会警告主池与副模型池共用同一 key 值（只比较值）。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
+| `digest-scorecard.js` | Node 入口：`npm run digest:scorecard -- --date YYYY-MM-DD [--days N] [--json]` 只读 LLM 运行记分卡，按北京日期汇总成功率、传输错误率、KV 前缀缓存命中率、隐式思考 token 占比、各阶段 P50/P95 延迟与匿名化账号负载分布；不写文件、不输出密钥或稳定凭据指纹。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
 | `editorial-quality.js` | Node 共享：检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |

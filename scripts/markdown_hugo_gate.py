@@ -177,29 +177,70 @@ def _html_line_offsets(text):
     return [0, *(match.end() for match in re.finditer('\n', text))]
 
 
+_HTML_VOID_TAGS = frozenset({
+    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+    'link', 'meta', 'param', 'source', 'track', 'wbr',
+})
+_FORBIDDEN_CODE_ANCESTORS = frozenset({
+    'script', 'style', 'textarea', 'template', 'noscript', 'svg', 'math',
+})
+_FORBIDDEN_MATH_ANCESTORS = frozenset({
+    'script', 'style', 'textarea', 'template', 'noscript', 'svg',
+})
+_MATHML_ALLOWED_TAGS = frozenset({
+    'math', 'semantics', 'annotation', 'annotation-xml',
+    'mrow', 'mi', 'mn', 'mo', 'mtext', 'mspace', 'ms',
+    'mfrac', 'msqrt', 'mroot', 'mstyle', 'mpadded', 'mphantom',
+    'mfenced', 'menclose',
+    'msub', 'msup', 'msubsup', 'munder', 'mover', 'munderover',
+    'mmultiscripts', 'mprescripts', 'none',
+    'mtable', 'mtr', 'mlabeledtr', 'mtd', 'maligngroup', 'malignmark',
+    'maction', 'mglyph',
+    'mstack', 'mlongdiv', 'msgroup', 'msrow', 'mscarries', 'mscarry', 'msline',
+})
+_KATEX_SVG_ALLOWED_TAGS = frozenset({
+    'svg', 'path', 'line', 'rect', 'circle', 'ellipse',
+    'polygon', 'polyline', 'g', 'defs', 'use',
+})
+_KATEX_WRAPPER_CLASSES = frozenset({'katex', 'katex-display'})
+_KATEX_PAYLOAD_CLASSES = frozenset({'katex-html', 'katex-mathml'})
+
+
+def _has_katex_error_class(attrs):
+    return any(
+        key == 'class'
+        and any(tok.lower() == 'katex-error' for tok in str(val or '').split())
+        for key, val in attrs
+    )
+
+
 def _rendered_currency_dollar_positions(text):
     """保留 HTML td/th 的父元素身份，不把单元格当正文。
 
     只有真实表格行里的直接纯文本才算数。嵌套标记、注释、公式和多个美元
     符号都不继承货币例外。这里产出的是只读诊断视图，绝不改动渲染字节。
     """
+    if '$' not in text:
+        return set()
     offsets = _html_line_offsets(text)
 
     class CurrencyCells(HTMLParser):
         def __init__(self):
             super().__init__(convert_charrefs=False)
             self.stack = []
+            self.tag_counts = {}
             self.cell = None
             self.positions = set()
 
         def handle_starttag(self, tag, attrs):
             if self.cell is not None:
                 self.cell['valid'] = False
-            if tag in ('td', 'th') and self.stack and self.stack[-1] == 'tr' and 'table' in self.stack:
+            if (tag in ('td', 'th') and self.stack and self.stack[-1] == 'tr'
+                    and self.tag_counts.get('table', 0) > 0):
                 self.cell = {'tag': tag, 'valid': True, 'parts': []}
-            if tag not in ('area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
-                           'link', 'meta', 'param', 'source', 'track', 'wbr'):
+            if tag not in _HTML_VOID_TAGS:
                 self.stack.append(tag)
+                self.tag_counts[tag] = self.tag_counts.get(tag, 0) + 1
 
         def handle_data(self, data):
             if self.cell is not None:
@@ -216,12 +257,25 @@ def _rendered_currency_dollar_positions(text):
                         if '$' in data:
                             self.positions.add(position + data.index('$'))
                 self.cell = None
-            if tag in self.stack:
-                del self.stack[len(self.stack) - 1 - self.stack[::-1].index(tag):]
+            if self.tag_counts.get(tag, 0) > 0:
+                while self.stack:
+                    popped = self.stack.pop()
+                    self.tag_counts[popped] -= 1
+                    if popped == tag:
+                        break
 
         def handle_comment(self, data):
             if self.cell is not None:
                 self.cell['valid'] = False
+
+        def handle_decl(self, decl):
+            self.handle_comment(decl)
+
+        def handle_pi(self, data):
+            self.handle_comment(data)
+
+        def unknown_decl(self, data):
+            self.handle_comment(data)
 
         def handle_entityref(self, name):
             if self.cell is not None:
@@ -237,67 +291,261 @@ def _rendered_currency_dollar_positions(text):
 
 
 def mask_closed_code_for_format_gate(text, *, rendered_html=False):
-    """Mask only actual closed code nodes in a diagnostic copy, never bytes.
+    """Mask only actual closed code/math/KaTeX nodes in a diagnostic copy, never bytes.
 
     Markdown spans reuse the existing Reader CommonMark delimiter/paragraph
-    scanner. HTML requires a truly closed, properly nested code/pre element;
-    escaped markup, attributes elsewhere, unknown tags and unclosed nodes do
-    not acquire a code exemption.
+    scanner (never masking HTML spans or MathML in raw Markdown).
+    Rendered HTML uses a single-pass O(n) parser that masks only truly closed,
+    properly nested `<code>`/`<pre>`, valid MathML `<math>`, and KaTeX SSR
+    `<span class="katex">` / `<span class="katex-display">` subtrees; escaped
+    markup, attributes elsewhere, unclosed tags, error nodes (`<merror>`,
+    `katex-error`), and mismatched nesting never acquire an exemption.
     """
     text = str(text or '')
     if not rendered_html:
         ranges = markdown_inline_code_ranges(text)
     else:
-        class ClosedCode(HTMLParser):
-            void = {'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'}
-            forbidden = {'script','style','textarea','template','noscript','svg','math'}
+        class ClosedFormatNodes(HTMLParser):
             def __init__(self):
                 super().__init__(convert_charrefs=False)
-                self.stack, self.nodes = [], []
+                self.stack = []
+                self.nodes = []
                 self.starts = _html_line_offsets(text)
+                self.code_depth = 0
+                self.math_depth = 0
+                self.katex_depth = 0
+                self.svg_depth = 0
+
             def position_offset(self):
-                line,column=self.getpos();return self.starts[line-1]+column
-            def invalidate(self):
-                for node in self.stack:node['valid']=False
+                line, column = self.getpos()
+                return self.starts[line - 1] + column
+
+            def _invalidate_all(self):
+                if self.stack:
+                    top = self.stack[-1]
+                    top['valid'] = False
+                    top['prop_invalid'] = True
+
+            def _invalidate_code(self):
+                if self.code_depth and self.stack:
+                    top = self.stack[-1]
+                    top['prop_code_invalid'] = True
+                    if top['tag'] in {'code', 'pre'}:
+                        top['code_valid'] = False
+
+            def _invalidate_math(self):
+                if self.math_depth and self.stack:
+                    top = self.stack[-1]
+                    top['prop_math_invalid'] = True
+                    if top['tag'] == 'math':
+                        top['math_valid'] = False
+
+            def _invalidate_katex(self):
+                if self.katex_depth and self.stack:
+                    top = self.stack[-1]
+                    top['prop_katex_invalid'] = True
+                    if top['is_katex_root']:
+                        top['katex_valid'] = False
+
             def handle_starttag(self, tag, attrs):
-                for parent in self.stack:
-                    if parent['tag'] in {'code','pre'} and tag not in {'code','span'}:
-                        parent['valid']=False
-                if tag in self.void:return
-                node={'tag':tag,'start':self.position_offset(),'end':None,'valid':True,
-                      'ancestors':tuple(self.stack)}
-                if len({key for key,_ in attrs})!=len(attrs):node['valid']=False
-                self.nodes.append(node);self.stack.append(node)
+                attr_map = dict(attrs)
+                unique_attrs = len(attr_map) == len(attrs)
+                class_tokens = set(str(attr_map.get('class') or '').split())
+                has_katex_error = _has_katex_error_class(attrs)
+
+                if self.code_depth and tag not in {'code', 'span'}:
+                    self._invalidate_code()
+                if self.math_depth and (
+                        tag not in _MATHML_ALLOWED_TAGS or has_katex_error or not unique_attrs):
+                    self._invalidate_math()
+                if self.katex_depth:
+                    if has_katex_error or not unique_attrs:
+                        self._invalidate_katex()
+                    elif self.math_depth:
+                        if tag not in _MATHML_ALLOWED_TAGS:
+                            self._invalidate_katex()
+                    elif self.svg_depth:
+                        if tag not in _KATEX_SVG_ALLOWED_TAGS:
+                            self._invalidate_katex()
+                    elif tag not in {'span', 'math', 'svg'}:
+                        self._invalidate_katex()
+
+                if tag in _HTML_VOID_TAGS:
+                    return
+
+                is_katex_root = (
+                    tag == 'span' and unique_attrs and not has_katex_error
+                    and bool(class_tokens & _KATEX_WRAPPER_CLASSES)
+                )
+                is_katex_payload = (
+                    tag == 'math'
+                    or (tag == 'span' and unique_attrs and not has_katex_error
+                        and bool(class_tokens & _KATEX_PAYLOAD_CLASSES))
+                )
+                node = {
+                    'idx': len(self.nodes),
+                    'parent': self.stack[-1]['idx'] if self.stack else -1,
+                    'tag': tag,
+                    'start': self.position_offset(),
+                    'end': None,
+                    'valid': unique_attrs,
+                    'code_valid': True,
+                    'math_valid': tag == 'math' and unique_attrs and not has_katex_error,
+                    'katex_valid': is_katex_root,
+                    'is_katex_root': is_katex_root,
+                    'is_katex_payload': is_katex_payload,
+                    'has_katex_payload': False,
+                    'prop_invalid': False,
+                    'prop_code_invalid': False,
+                    'prop_math_invalid': False,
+                    'prop_katex_invalid': False,
+                }
+                self.nodes.append(node)
+                self.stack.append(node)
+                if tag in {'code', 'pre'}:
+                    self.code_depth += 1
+                if tag == 'math':
+                    self.math_depth += 1
+                if is_katex_root:
+                    self.katex_depth += 1
+                if tag == 'svg':
+                    self.svg_depth += 1
+
             def handle_startendtag(self, tag, attrs):
+                attr_map = dict(attrs)
+                unique_attrs = len(attr_map) == len(attrs)
+                has_katex_error = _has_katex_error_class(attrs)
+
                 # HTML nonvoid <code/> is not a genuine closed code element.
-                if tag not in self.void:
-                    for node in self.stack:
-                        if node['tag'] in {'code','pre'}:node['valid']=False
+                if tag not in _HTML_VOID_TAGS:
+                    self._invalidate_code()
+                if self.math_depth and (
+                        tag not in _MATHML_ALLOWED_TAGS or has_katex_error or not unique_attrs):
+                    self._invalidate_math()
+                if self.katex_depth:
+                    allowed_in_foreign = (
+                        (self.math_depth > 0 and tag in _MATHML_ALLOWED_TAGS)
+                        or (self.svg_depth > 0 and tag in _KATEX_SVG_ALLOWED_TAGS)
+                    )
+                    if not allowed_in_foreign or has_katex_error or not unique_attrs:
+                        self._invalidate_katex()
+
             def handle_endtag(self, tag):
-                if not self.stack or self.stack[-1]['tag']!=tag:
-                    self.invalidate();return
-                node=self.stack.pop();start=self.position_offset();end=text.find('>',start)
-                raw=text[start:end+1] if end>=0 else ''
-                if not re.fullmatch(r'</\s*'+re.escape(tag)+r'\s*>',raw,re.I):node['valid']=False
-                node['end']=end+1 if end>=0 else None
+                if not self.stack or self.stack[-1]['tag'] != tag:
+                    self._invalidate_all()
+                    return
+                node = self.stack.pop()
+                if node['tag'] in {'code', 'pre'}:
+                    self.code_depth -= 1
+                if node['tag'] == 'math':
+                    self.math_depth -= 1
+                if node['is_katex_root']:
+                    self.katex_depth -= 1
+                if node['tag'] == 'svg':
+                    self.svg_depth -= 1
+
+                start = self.position_offset()
+                end = text.find('>', start)
+                raw = text[start:end + 1] if end >= 0 else ''
+                if not re.fullmatch(r'</\s*' + re.escape(tag) + r'\s*>', raw, re.I):
+                    node['valid'] = False
+                    node['prop_code_invalid'] = True
+                    node['prop_math_invalid'] = True
+                    node['prop_katex_invalid'] = True
+                node['end'] = end + 1 if end >= 0 else None
+
+                if self.stack:
+                    parent = self.stack[-1]
+                    if node['prop_invalid']:
+                        parent['valid'] = False
+                        parent['prop_invalid'] = True
+                    if node['prop_code_invalid'] and self.code_depth:
+                        parent['prop_code_invalid'] = True
+                        if parent['tag'] in {'code', 'pre'}:
+                            parent['code_valid'] = False
+                    if node['prop_math_invalid'] and self.math_depth:
+                        parent['prop_math_invalid'] = True
+                        if parent['tag'] == 'math':
+                            parent['math_valid'] = False
+                    if node['prop_katex_invalid'] and self.katex_depth:
+                        parent['prop_katex_invalid'] = True
+                        if parent['is_katex_root']:
+                            parent['katex_valid'] = False
+                    if (node['has_katex_payload'] or node['is_katex_payload']) and self.katex_depth:
+                        parent['has_katex_payload'] = True
+
             def handle_comment(self, data):
-                for node in self.stack:
-                    if node['tag'] in {'code','pre'}:node['valid']=False
-        parser=ClosedCode()
-        try:parser.feed(text);parser.close()
-        except Exception:return text
-        ranges=[]
-        for node in parser.nodes:
-            ancestry=(*node['ancestors'],node)
-            if (node['tag'] in {'code','pre'} and node['end'] is not None
-                    and all(parent['valid'] and parent['end'] is not None for parent in ancestry)
-                    and not any(parent['tag'] in parser.forbidden for parent in ancestry)):
-                ranges.append((node['start'],node['end']))
-    if not ranges:return text
-    chars=list(text)
-    for start,end in ranges:
-        for index in range(start,end):
-            if chars[index] not in '\r\n':chars[index]=' '
+                self._invalidate_code()
+                self._invalidate_math()
+                self._invalidate_katex()
+
+            def handle_decl(self, decl):
+                self.handle_comment(decl)
+
+            def handle_pi(self, data):
+                self.handle_comment(data)
+
+            def unknown_decl(self, data):
+                self.handle_comment(data)
+
+        parser = ClosedFormatNodes()
+        try:
+            parser.feed(text)
+            parser.close()
+        except Exception:
+            return text
+        count = len(parser.nodes)
+        ancestry_valid = [False] * count
+        invalid_format_anc = [False] * count
+        forbidden_code_anc = [False] * count
+        forbidden_math_anc = [False] * count
+        forbidden_katex_anc = [False] * count
+        ranges = []
+        for idx, node in enumerate(parser.nodes):
+            parent = node['parent']
+            anc_ok = (
+                node['valid'] and node['end'] is not None
+                and (parent == -1 or ancestry_valid[parent])
+            )
+            ancestry_valid[idx] = anc_ok
+            tag = node['tag']
+            self_format_invalid = (
+                (tag in {'code', 'pre'} and not node['code_valid'])
+                or (tag == 'math' and not node['math_valid'])
+                or (node['is_katex_root'] and not node['katex_valid'])
+            )
+            inv_fmt = self_format_invalid or (parent != -1 and invalid_format_anc[parent])
+            invalid_format_anc[idx] = inv_fmt
+            fc = (tag in _FORBIDDEN_CODE_ANCESTORS) or (parent != -1 and forbidden_code_anc[parent])
+            fm = (tag in _FORBIDDEN_MATH_ANCESTORS) or (parent != -1 and forbidden_math_anc[parent])
+            fk = (tag in _FORBIDDEN_CODE_ANCESTORS) or (parent != -1 and forbidden_katex_anc[parent])
+            forbidden_code_anc[idx] = fc
+            forbidden_math_anc[idx] = fm
+            forbidden_katex_anc[idx] = fk
+            if not anc_ok or inv_fmt:
+                continue
+            if tag in {'code', 'pre'} and node['code_valid'] and not fc:
+                ranges.append((node['start'], node['end']))
+            elif tag == 'math' and node['math_valid'] and not fm:
+                ranges.append((node['start'], node['end']))
+            elif node['is_katex_root'] and node['katex_valid'] and node['has_katex_payload'] and not fk:
+                ranges.append((node['start'], node['end']))
+    if not ranges:
+        return text
+    # Ranges are emitted in pre-order (non-decreasing start); merge nested/overlapping
+    # intervals first so character masking touches every index at most once (strict O(n)).
+    merged = []
+    for start, end in ranges:
+        if merged and start <= merged[-1][1]:
+            if end > merged[-1][1]:
+                merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    chars = list(text)
+    for start, end in merged:
+        for index in range(start, end):
+            if chars[index] not in '\r\n':
+                chars[index] = ' '
     return ''.join(chars)
 
 
@@ -330,11 +578,14 @@ def _mask_literal_markdown_image_alt_brackets(text):
 
 def math_and_emphasis_issues(text, label, *, rendered_html=False):
     """Hugo 可能把语法渲染成破碎的纯文本时，这里按失败处理。"""
-    clean = mask_closed_code_for_format_gate(strip_fenced_code_for_format_gate(text), rendered_html=rendered_html)
+    base = strip_fenced_code_for_format_gate(text)
+    clean = mask_closed_code_for_format_gate(base, rendered_html=rendered_html)
     delimiter_view = text if rendered_html else _mask_literal_markdown_image_alt_brackets(text)
     delimiter_clean = (clean if delimiter_view == text else
                        mask_closed_code_for_format_gate(strip_fenced_code_for_format_gate(delimiter_view)))
     issues = []
+    if rendered_html:
+        issues.extend(_rendered_math_error_issues(text, label))
     for opening, closing, name in (
             (r'\(', r'\)', r'\(…\)'), (r'\[', r'\]', r'\[…\]')):
         # 真正的定界符可能跟在偶数长度的 TeX 转义串后面，例如以 ``\\`` 结尾的
@@ -352,7 +603,7 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
         issues.append(
             f'{label} 包含裸 $$；块级公式必须使用 \\[…\\] 而非 $$…$$'
         )
-    currency_dollars = (_rendered_currency_dollar_positions(clean) if rendered_html
+    currency_dollars = (_rendered_currency_dollar_positions(base) if rendered_html
                         else {start for start, _end in publish_table_currency_spans(clean)})
     if any(match.start() not in currency_dollars
            for match in re.finditer(r'(?<![\\$])\$(?!\$)', clean)):
@@ -1055,6 +1306,62 @@ def rendered_article_fragment(rendered):
     return body.group(1) if body else rendered
 
 
+def _rendered_math_error_issues(text, label):
+    """拒绝 Hugo/KaTeX/MathML 渲染阶段遗留的数学错误节点（<merror> / katex-error）。"""
+    text = str(text or '')
+    lower = text.lower()
+    if 'merror' not in lower and 'katex-error' not in lower:
+        return []
+
+    class MathErrors(HTMLParser):
+        _skip = frozenset({'script', 'style', 'textarea', 'template', 'noscript'})
+
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.skip_stack = []
+            self.skip_counts = {}
+            self.has_merror = False
+            self.has_katex_error = False
+
+        def _inspect(self, tag, attrs):
+            if self.skip_stack:
+                return
+            if tag == 'merror':
+                self.has_merror = True
+            if _has_katex_error_class(attrs):
+                self.has_katex_error = True
+
+        def handle_starttag(self, tag, attrs):
+            self._inspect(tag, attrs)
+            if tag in self._skip:
+                self.skip_stack.append(tag)
+                self.skip_counts[tag] = self.skip_counts.get(tag, 0) + 1
+
+        def handle_startendtag(self, tag, attrs):
+            self._inspect(tag, attrs)
+
+        def handle_endtag(self, tag):
+            if self.skip_counts.get(tag, 0) > 0:
+                while self.skip_stack:
+                    popped = self.skip_stack.pop()
+                    self.skip_counts[popped] -= 1
+                    if popped == tag:
+                        break
+
+    parser = MathErrors()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:
+        return [f'{label} Hugo HTML 数学渲染错误节点解析失败']
+    issues = []
+    if parser.has_merror:
+        issues.append(f'{label} Hugo HTML 数学渲染包含错误: <merror>')
+    if parser.has_katex_error:
+        issues.append(f'{label} Hugo HTML 数学渲染包含错误: katex-error')
+    return issues
+
+
 def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
     """在 Hugo 实际渲染出的 HTML 里校验教程产物。"""
     issues = []
@@ -1081,7 +1388,7 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 mask_source_bound_figure_caption_dollars(reader_html, artifact), artifact), artifact), artifact))
         rendered_label = f'{source_label} -> {rendered_path.name}'
         issues.extend(math_and_emphasis_issues(gate_html, rendered_label, rendered_html=True))
-        if '**' in gate_html:
+        if '**' in mask_closed_code_for_format_gate(gate_html, rendered_html=True):
             issues.append(
                 f'{rendered_label} Hugo HTML 残留 Markdown 加粗标记 **'
             )

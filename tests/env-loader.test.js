@@ -97,7 +97,10 @@ describe('env-loader', () => {
                 'deep-analysis-only.js',
                 'reanalyze.js',
                 'refresh-api-reader.js',
-                'reanalyze-selected.js'
+                'reanalyze-selected.js',
+                'compact-papers-ledger.js',
+                'publish-daily-podcast.js',
+                'calibrate-batch-scores.js'
             ]) {
                 assert.strictEqual(requiredWorkspaceRoleForCommand(script), 'daily', script);
                 assert.throws(() => requireExternalRuntime(script), /必须在沙箱外运行/, script);

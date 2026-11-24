@@ -7,6 +7,16 @@ using exact integer thousandths arithmetic so Python and Node.js agree bit-for-b
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    import sys as _sys
+    from pathlib import Path as _Path
+    _scripts_dir = str(_Path(__file__).resolve().parent)
+    if _scripts_dir not in _sys.path:
+        _sys.path.insert(0, _scripts_dir)
+    from runtime_guard import require_external_runtime
+    require_external_runtime(__file__)
+    raise SystemExit("This pure helper is imported by the normal pipeline, not a direct CLI.")
+
 import json
 import math
 from decimal import Decimal, ROUND_HALF_UP

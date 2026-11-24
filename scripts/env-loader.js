@@ -85,6 +85,8 @@ function requiredWorkspaceRoleForCommand(commandName) {
         'refresh-api-reader.js', 'reanalyze-selected.js', 'official-conference-acquire.js', 'conference-queue.js',
         'daily-scoring-refresh-checkpoint-cli.js',
         'compact-papers-ledger.js',
+        'publish-daily-podcast.js',
+        'calibrate-batch-scores.js',
         'conference-workspace.js', 'migrate-conference-process.js',
         'conference-complete-stage-worker.js',
         'conference-publication-figure-crop-replay-cli.js',

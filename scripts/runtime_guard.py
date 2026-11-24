@@ -64,7 +64,8 @@ def required_workspace_role_for_command(command_name):
         return 'daily'
     if name in {'full-fetch.js', 'generate-blog.py', 'review-blog.py',
                 'push-blog.py', 'publish-to-blog.py',
-                'conference-filter-evidence-extract.py'}:
+                'conference-filter-evidence-extract.py',
+                'indextts_synth.py'}:
         return 'daily'
     if name in {'conference_publication_figure_crop.py', 'conference_publication_figure_view_replay.py'}:
         return 'daily'

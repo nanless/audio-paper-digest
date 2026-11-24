@@ -63,10 +63,44 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
 
     def test_filter_evidence_worker_is_always_daily_role_bound(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(
-                required_workspace_role_for_command('conference-filter-evidence-extract.py'),
-                'daily',
-            )
+            for script_name in (
+                'conference-filter-evidence-extract.py',
+                'indextts_synth.py',
+            ):
+                self.assertEqual(
+                    required_workspace_role_for_command(script_name),
+                    'daily',
+                    script_name,
+                )
+            # Pure offline AST parser worker enforces CODEX_SANDBOX only (no daily/history lock-in).
+            self.assertIsNone(required_workspace_role_for_command('arxiv_tex_extract.py'))
+
+    def test_scoring_rubric_v2_direct_entry_guard_and_pure_import(self):
+        script = SCRIPTS / 'scoring_rubric_v2.py'
+        sandbox_env = dict(os.environ, CODEX_SANDBOX='test-seatbelt')
+        sandbox_run = subprocess.run(
+            [sys.executable, '-S', str(script)],
+            cwd=ROOT, env=sandbox_env, capture_output=True, text=True, timeout=5,
+        )
+        self.assertNotEqual(sandbox_run.returncode, 0)
+        self.assertIn('必须在沙箱外运行', sandbox_run.stdout + sandbox_run.stderr)
+
+        clean_env = {k: v for k, v in os.environ.items() if k != 'CODEX_SANDBOX'}
+        direct_run = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=ROOT, env=clean_env, capture_output=True, text=True, timeout=5,
+        )
+        self.assertNotEqual(direct_run.returncode, 0)
+        self.assertIn('not a direct CLI', direct_run.stdout + direct_run.stderr)
+
+        import_run = subprocess.run(
+            [sys.executable, '-c',
+             f'import sys; sys.path.insert(0, {str(SCRIPTS)!r}); '
+             'import scoring_rubric_v2 as v2; assert v2.SCORING_RUBRIC_V2 == "type-aware-v2"; print("ok")'],
+            cwd=ROOT, env=sandbox_env, capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(import_run.returncode, 0, import_run.stdout + import_run.stderr)
+        self.assertEqual(import_run.stdout.strip(), 'ok')
 
     def test_python_direct_role_gate_replays_private_realpath_marker(self):
         import json
