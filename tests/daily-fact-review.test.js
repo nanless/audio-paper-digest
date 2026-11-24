@@ -964,3 +964,41 @@ test('新检查点存在时同时保留已核反馈原正文与当前恢复进�
     assert.equal(deep.validateStaleAnalysisSnapshot(sample.paper.analysisStaleSnapshots[0]).analysisCheckpoint, original);
     assert.equal(review.validateFeedback(sample.feedback, sample.plan, sample.paper).proof.feedbackSha256, bound.proof.feedbackSha256);
 });
+
+test('已登记且落盘的未完成事实反馈义务在下游阶段中断回退检查点后允许同证明续跑并拒绝其他反馈', async t => {
+    const sample = await fixture(t);
+    const original = sample.paper.analysisCheckpoint || sample.paper.analysis;
+    sample.paper.analysis = original;
+    delete sample.paper.analysisCheckpoint;
+    const scoringFeedback = {
+        ...sample.feedback,
+        coreFeedback: '',
+        rejectedCoreClaims: [],
+        scoringFeedback: '仅修正评分核心优势表述，严格对齐表内基准数。',
+        rejectedScoringClaims: ['六个基准全部变好'],
+    };
+    const bound = review.validateFeedback(scoringFeedback, sample.plan, sample.paper);
+    // 模拟已登记未完成义务并将原始反馈落盘，随后下游阶段尚未写入 scoringFactReview 时检查点回退到上游阶段。
+    review.withFactReview(bound, () => {
+        deep.captureStaleAnalysisSnapshot(sample.paper, sample.paper.analysisManifest,
+            'scoringAudit', bound.proof.feedbackSha256);
+    });
+    sample.paper.analysisFactReviewObligation = structuredClone(bound.proof);
+    sample.paper.analysisCheckpoint = baseline;
+    delete sample.paper.analysisManifest.stages.scoringAudit;
+
+    const resumed = review.validateFeedback(scoringFeedback, sample.plan, sample.paper);
+    assert.equal(resumed.proof.feedbackSha256, bound.proof.feedbackSha256);
+
+    // 负例 1：不同反馈即使存在未完成义务仍必须被拒绝。
+    const otherFeedback = {
+        ...scoringFeedback,
+        scoringFeedback: '换成另一条未经登记的评分反馈。',
+    };
+    assert.throws(() => review.validateFeedback(otherFeedback, sample.plan, sample.paper), /正文绑定已过期/);
+
+    // 负例 2：未真实落盘的伪造内存义务不得解锁快照回退续跑。
+    const savedFile = path.join(daily.factFeedbackDirectory(sample.plan), bound.proof.feedbackSha256 + '.json');
+    fs.rmSync(savedFile);
+    assert.throws(() => review.validateFeedback(scoringFeedback, sample.plan, sample.paper), /正文绑定已过期/);
+});

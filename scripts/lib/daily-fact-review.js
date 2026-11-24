@@ -113,7 +113,13 @@ function validateFeedback(feedback, plan, paper) {
     // 已开始或已完成的同一反馈可续跑，但必须仍有经过SHA校验的原输入快照。
     const scoringReceipt = paper.analysisManifest?.stages?.scoringAudit?.scoringFactReview;
     const sameScoringReceipt = scoringReceipt && daily.stableHash(validateProof(scoringReceipt)) === daily.stableHash(proof);
-    const anySameReceipt = sameReceipt || sameScoringReceipt;
+    const pendingObligation = paper.analysisFactReviewObligation;
+    let samePendingObligation = false;
+    if (pendingObligation && daily.stableHash(validateProof(pendingObligation)) === daily.stableHash(proof)) {
+        const savedFile = require('node:path').join(daily.factFeedbackDirectory(plan), proof.feedbackSha256 + '.json');
+        samePendingObligation = fs.existsSync(savedFile) && daily.stableHash(readFeedback(savedFile)) === proof.feedbackSha256;
+    }
+    const anySameReceipt = sameReceipt || sameScoringReceipt || samePendingObligation;
     const snapshotMatches = anySameReceipt && (paper.analysisStaleSnapshots || []).some(snapshot => {
         const payload = deep.validateStaleAnalysisSnapshot(snapshot);
         return payload && matches(payload.analysisCheckpoint);
