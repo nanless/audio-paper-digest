@@ -10103,6 +10103,8 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
             or normalized.startswith((
                 '---', '#', '|', '-', '*', '>', '```', '~~~', '![', '评分：',
             ))
+            or (normalized.startswith('\\[') and normalized.endswith('\\]'))
+            or (normalized.startswith('$$') and normalized.endswith('$$'))
             or '\n|' in block
             or re.search(r'!\[[^\]]*\]\([^)]+\)', block)
         )
