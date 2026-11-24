@@ -41,7 +41,7 @@ import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
 import concurrent.futures
 import threading
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -192,6 +192,7 @@ from markdown_hugo_gate import (
     validate_hugo_rendered_html_gate as _validate_hugo_rendered_html_gate_impl,
     rendered_page_candidates as _rendered_page_candidates,
     rendered_article_fragment as _rendered_article_fragment,
+    extract_rendered_display_formulas as _extract_rendered_display_formulas,
 )
 
 
@@ -12019,12 +12020,18 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
         )
         if len(candidates) != 1:
             continue  # 共用的 Hugo 页面检查会报告无法找到唯一渲染页面的问题。
-        rendered_fragment = html.unescape(_rendered_article_fragment(candidates[0][1]))
+        raw_article_html = _rendered_article_fragment(candidates[0][1])
+        rendered_fragment = html.unescape(raw_article_html)
+        rendered_display_formulas = _extract_rendered_display_formulas(raw_article_html)
+        if rendered_display_formulas is None:
+            issues.append(f'{label} Hugo HTML 展示公式节点解析失败')
+            continue
+        rendered_display_counts = Counter(rendered_display_formulas)
         for formula_index, block in enumerate(source_blocks, 1):
             # Hugo 在渲染前会还原它写入的字面短代码转义。
             # 比较时就比较这个确切的表层，
             # 同时保留原始来源公式的 SHA 和唯一性检查。
-            rendered_block = re.sub(
+            unescaped_shortcode_block = re.sub(
                 r'\{\{(<|%)/\*(.*?)\*/(>|%)\}\}',
                 lambda match: ('{{' + match[1] + match[2] + match[3] + '}}')
                 if (match[1], match[3]) in {('<', '>'), ('%', '%')}
@@ -12032,11 +12039,21 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 block, flags=re.DOTALL,
             )
             # 发布出去的 TeX 可能含有 HTML 字符引用，这样 Markdown
-            # 就不会把尖括号运算符当成原始 HTML。Hugo 在文章里输出的
-            # 是解码后的文本；把来源块也解码一次之后，
-            # 再比较这个确切的 TeX 表层。
-            rendered_block = html.unescape(rendered_block)
-            if rendered_fragment.count(rendered_block) != 1:
+            # 就不会把尖括号运算符当成原始 HTML。原始 MathJax 透传模式
+            # 下 Hugo 输出解码后的字面 `\[...\]`；KaTeX SSR 模式下
+            # Goldmark passthrough 原样传递 `.Inner` 到 `<annotation
+            # encoding="application/x-tex">` 或块级 `<code class="math-fallback">`。
+            # 两种模式合计计数必须恰好为 1，防止丢失或重复渲染。
+            rendered_block = html.unescape(unescaped_shortcode_block)
+            raw_count = rendered_fragment.count(rendered_block)
+            ssr_count = 0
+            if (unescaped_shortcode_block.startswith(r'\[')
+                    and unescaped_shortcode_block.endswith(r'\]')
+                    and len(unescaped_shortcode_block) >= 4):
+                ssr_count = rendered_display_counts[
+                    unescaped_shortcode_block[2:-2]
+                ]
+            if raw_count + ssr_count != 1:
                 issues.append(
                     f'{label} API reader v4 第 {formula_index} 个展示公式未在 Hugo HTML '
                     '中原样且唯一保留'

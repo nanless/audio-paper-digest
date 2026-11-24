@@ -7136,6 +7136,122 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
             self.assertTrue(any('展示公式' in issue for issue in issues), issues)
 
+    def test_hugo_gate_replays_api_reader_v4_katex_ssr_display_formulas(self):
+        tex_main = r'\mathcal{L}=\lVert y-\hat{y}\rVert_1 + a < b'
+        tex_fallback = r'k^*=\arg\min_k \|p-c_k\|_2.\vskip-5.0pt'
+        artifact = {
+            'path': '/tmp/reader-v4-katex.md',
+            'frontmatter': {
+                'title': 'API reader v4 KaTeX SSR formula',
+                'paper_digest_api_reader_contract': 'beginner-researcher-v3',
+                'paper_digest_api_reader_source_binding_contract': (
+                    'api-reader-source-bindings-v4'
+                ),
+                'paper_digest_api_reader_source_formula_count': 2,
+            },
+            'body': f'## 深度解读\n\n\\[{tex_main}\\]\n\n\\[{tex_fallback}\\]\n',
+        }
+        katex_main = (
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics>'
+            '<mrow><mi>L</mi></mrow>'
+            '<annotation encoding="application/x-tex">'
+            + tex_main.replace('<', '&lt;')
+            + '</annotation></semantics></math></span>'
+            '<span class="katex-html" aria-hidden="true"><span class="base"><span class="mord">L</span></span></span>'
+            '</span></span>'
+        )
+        fallback_block = f'<code class="math-fallback">{tex_fallback}</code>'
+        with tempfile.TemporaryDirectory() as tmp:
+            rendered = Path(tmp) / 'posts' / 'reader-v4-katex' / 'index.html'
+            rendered.parent.mkdir(parents=True)
+            # Valid KaTeX SSR display formula + block math-fallback both pass.
+            rendered.write_text(
+                f'<html><body><div class="post-content"><h2>深度解读</h2>{katex_main}{fallback_block}</div></body></html>',
+                encoding='utf-8',
+            )
+            self.assertEqual(
+                publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact]), [],
+            )
+            # Duplicate SSR display formula must fail closed.
+            rendered.write_text(
+                f'<html><body><div class="post-content"><h2>深度解读</h2>{katex_main}{katex_main}{fallback_block}</div></body></html>',
+                encoding='utf-8',
+            )
+            dup_issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertTrue(any('第 1 个展示公式' in issue for issue in dup_issues), dup_issues)
+            # Raw + SSR duplicate must also fail closed.
+            rendered.write_text(
+                f'<html><body><div class="post-content"><h2>深度解读</h2><p>\\[{tex_main.replace("<", "&lt;")}\\]</p>{katex_main}{fallback_block}</div></body></html>',
+                encoding='utf-8',
+            )
+            mixed_dup = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertTrue(any('第 1 个展示公式' in issue for issue in mixed_dup), mixed_dup)
+            # Inline <span class="katex"> or inline <p><code class="math-fallback"> must NOT satisfy display formula gate.
+            inline_spoof = katex_main.replace('class="katex-display"', 'class="not-display"').replace(' display="block"', '')
+            rendered.write_text(
+                f'<html><body><div class="post-content"><h2>深度解读</h2><p>{inline_spoof}</p><p>{fallback_block}</p></div></body></html>',
+                encoding='utf-8',
+            )
+            spoof_issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertTrue(any('第 1 个展示公式' in issue for issue in spoof_issues), spoof_issues)
+            self.assertTrue(any('第 2 个展示公式' in issue for issue in spoof_issues), spoof_issues)
+            # Altered inner TeX inside <annotation> must fail closed.
+            altered = katex_main.replace(r'\lVert y-\hat{y}\rVert_1', r'\lVert y-\hat{y}\rVert_2')
+            rendered.write_text(
+                f'<html><body><div class="post-content"><h2>深度解读</h2>{altered}{fallback_block}</div></body></html>',
+                encoding='utf-8',
+            )
+            altered_issues = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [artifact])
+            self.assertTrue(any('第 1 个展示公式' in issue for issue in altered_issues), altered_issues)
+            # Entity-encoded TeX, shortcode-escaped TeX, and multi-line display blocks
+            # all match Hugo Goldmark passthrough verbatim; parser failure fails closed.
+            tex_entity = 'a &lt; b + c'
+            tex_shortcode_src = 'x + {{</*think*/>}}'
+            tex_shortcode_out = 'x + {{<think>}}'
+            tex_multiline = '\ny = 1 + 2\n'
+            extra_artifact = {
+                'path': '/tmp/reader-v4-katex-extra.md',
+                'frontmatter': {
+                    'title': 'API reader v4 KaTeX extra',
+                    'paper_digest_api_reader_contract': 'beginner-researcher-v3',
+                    'paper_digest_api_reader_source_binding_contract': 'api-reader-source-bindings-v4',
+                    'paper_digest_api_reader_source_formula_count': 3,
+                },
+                'body': (
+                    '## 深度解读\n\n'
+                    f'\\[{tex_entity}\\]\n\n'
+                    f'\\[{tex_shortcode_src}\\]\n\n'
+                    f'\\[{tex_multiline}\\]\n'
+                ),
+            }
+            extra_page = Path(tmp) / 'posts' / 'reader-v4-katex-extra' / 'index.html'
+            extra_page.parent.mkdir(parents=True)
+            def _make_katex_display(annotation_html):
+                return (
+                    '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+                    '<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics>'
+                    '<mrow><mi>x</mi></mrow>'
+                    f'<annotation encoding="application/x-tex">{annotation_html}</annotation>'
+                    '</semantics></math></span>'
+                    '<span class="katex-html" aria-hidden="true"><span class="base"><span class="mord">x</span></span></span>'
+                    '</span></span>'
+                )
+            extra_page.write_text(
+                '<html><body><div class="post-content"><h2>深度解读</h2>'
+                '<code class="math-fallback">a &amp;lt; b &#43; c</code>'
+                + _make_katex_display(tex_shortcode_out.replace('<', '&lt;').replace('>', '&gt;'))
+                + _make_katex_display(tex_multiline)
+                + '</div></body></html>',
+                encoding='utf-8',
+            )
+            self.assertEqual(
+                publish_to_blog.validate_hugo_rendered_html_gate(tmp, [extra_artifact]), [],
+            )
+            with mock.patch.object(publish_to_blog, '_extract_rendered_display_formulas', return_value=None):
+                parse_fail = publish_to_blog.validate_hugo_rendered_html_gate(tmp, [extra_artifact])
+                self.assertTrue(any('展示公式节点解析失败' in issue for issue in parse_fail), parse_fail)
+
     def test_run_hugo_gate_executes_rendered_html_contract_after_build(self):
         markdown = '''---
 title: "Tutorial page"

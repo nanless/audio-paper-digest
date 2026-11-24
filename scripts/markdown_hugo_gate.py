@@ -202,8 +202,34 @@ _KATEX_SVG_ALLOWED_TAGS = frozenset({
     'svg', 'path', 'line', 'rect', 'circle', 'ellipse',
     'polygon', 'polyline', 'g', 'defs', 'use',
 })
+_KATEX_SVG_VISIBLE_TAGS = frozenset({
+    'path', 'line', 'rect', 'circle', 'ellipse',
+    'polygon', 'polyline', 'use',
+})
 _KATEX_WRAPPER_CLASSES = frozenset({'katex', 'katex-display'})
 _KATEX_PAYLOAD_CLASSES = frozenset({'katex-html', 'katex-mathml'})
+_KATEX_ANY_CLASSES = frozenset({'katex', 'katex-display', 'katex-html', 'katex-mathml'})
+_DISPLAY_ALLOWED_PARENTS = frozenset({
+    'div', 'section', 'article', 'main', 'blockquote', 'li', 'dd', 'details',
+})
+_DISPLAY_ALLOWED_ANCESTORS = frozenset({
+    'div', 'section', 'article', 'main', 'blockquote', 'ul', 'ol', 'li',
+    'dl', 'dd', 'details', 'body', 'html',
+})
+_DISPLAY_BLOCK_SIBLING_TAGS = _DISPLAY_ALLOWED_ANCESTORS | frozenset({
+    'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'table', 'hr',
+    'figure', 'figcaption', 'summary', 'dt', 'header', 'footer',
+    'nav', 'aside', 'address', 'form', 'script', 'style', 'audio', 'video',
+})
+_INLINE_VOID_TAGS = frozenset({'img', 'br', 'wbr', 'input'})
+_RAWTEXT_RCDATA_TAGS = frozenset({
+    'script', 'style', 'textarea', 'title', 'xmp', 'iframe',
+    'noembed', 'noframes', 'plaintext',
+})
+_DISPLAY_BARRIER_TAGS = _RAWTEXT_RCDATA_TAGS | frozenset({
+    'template', 'noscript', 'svg', 'math', 'pre', 'code', 'table',
+    'object', 'marquee', 'applet', 'caption', 'td', 'th',
+})
 
 
 def _has_katex_error_class(attrs):
@@ -212,6 +238,551 @@ def _has_katex_error_class(attrs):
         and any(tok.lower() == 'katex-error' for tok in str(val or '').split())
         for key, val in attrs
     )
+
+
+def _is_hidden_style_or_attr(attrs_map, *, check_aria_hidden=True):
+    if 'hidden' in attrs_map:
+        return True
+    if check_aria_hidden and str(attrs_map.get('aria-hidden') or '').strip().lower() == 'true':
+        return True
+    style = str(attrs_map.get('style') or '')
+    if not style:
+        return False
+    cleaned = re.sub(r'/\*.*?(?:\*/|\Z)', '', style, flags=re.S)
+    return bool(re.search(
+        r'(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|content-visibility\s*:\s*hidden)',
+        cleaned,
+        re.I,
+    ))
+
+
+def extract_rendered_display_formulas(text):
+    """Extract verbatim inner TeX strings from closed KaTeX SSR display formulas.
+
+    Returns a list of decoded inner TeX strings (one per valid display formula)
+    in document order, or None if HTML parsing fails (fail-closed).
+
+    Recognizes only two authentic Hugo/KaTeX SSR block-passthrough forms, both
+    strictly nested inside block containers (never inline/hidden/inert trees):
+      1. Closed `<span class="... katex-display ...">` matching the exact KaTeX
+         display skeleton: a single `<span class="katex">` containing a single
+         `<span class="katex-mathml">` -> `<math display="block">` ->
+         `<semantics>` (with visual MathML child + exactly one
+         `<annotation encoding="application/x-tex">`) AND a single non-empty
+         visible `<span class="katex-html">`, with zero errors or invalid tags.
+      2. Closed block-level `<code class="... math-fallback ...">` emitted by
+         `render_katex_formula.html` when KaTeX rejects an unsupported source
+         TeX macro (e.g. `\\vskip`), containing non-empty plain text only, with
+         no inline sibling text or phrasing elements in its enclosing container.
+    """
+    text = str(text or '')
+    if 'katex-display' not in text and 'math-fallback' not in text:
+        return []
+    offsets = _html_line_offsets(text)
+
+    class DisplayFormulas(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.stack = []
+            self.tag_positions = {}
+            self.barrier_indices = []
+            self.hidden_depth = 0
+            self.disallowed_ancestor_depth = 0
+            self.foreign_depth = 0
+            self.active_display = None
+            self.active_fallback = None
+            self.root_frame = {
+                'run_has_inline': False,
+                'run_pending_fallbacks': [],
+                'confirmed_fallbacks': [],
+            }
+            self.formulas = []
+
+        def position_offset(self):
+            line, column = self.getpos()
+            return offsets[line - 1] + column
+
+        def _current_container(self):
+            return self.stack[-1] if self.stack else self.root_frame
+
+        def _flush_inline_run(self, container):
+            if not container['run_has_inline']:
+                container['confirmed_fallbacks'].extend(container['run_pending_fallbacks'])
+            container['run_pending_fallbacks'].clear()
+            container['run_has_inline'] = False
+
+        def _mark_inline_in_run(self, container):
+            container['run_has_inline'] = True
+            container['run_pending_fallbacks'].clear()
+
+        def _push_frame(self, tag, *, hidden=False, poison=False, class_tokens=frozenset(), inside_active=False):
+            idx = len(self.stack)
+            disallowed = (
+                poison
+                or hidden
+                or tag not in _DISPLAY_ALLOWED_ANCESTORS
+                or (not inside_active and bool(class_tokens & _KATEX_ANY_CLASSES))
+            )
+            is_barrier = bool(hidden or poison or tag in _DISPLAY_BARRIER_TAGS)
+            is_foreign = tag in {'svg', 'math'}
+            frame = {
+                'tag': tag,
+                'hidden': hidden or poison,
+                'disallowed': disallowed,
+                'is_barrier': is_barrier,
+                'is_foreign': is_foreign,
+                'run_has_inline': False,
+                'run_pending_fallbacks': [],
+                'confirmed_fallbacks': [],
+            }
+            self.stack.append(frame)
+            self.tag_positions.setdefault(tag, []).append(idx)
+            if is_barrier:
+                self.barrier_indices.append(idx)
+            if frame['hidden']:
+                self.hidden_depth += 1
+            if frame['disallowed']:
+                self.disallowed_ancestor_depth += 1
+            if is_foreign:
+                self.foreign_depth += 1
+
+        def _pop_frame(self):
+            frame = self.stack.pop()
+            self.tag_positions[frame['tag']].pop()
+            if frame['is_barrier']:
+                self.barrier_indices.pop()
+            if frame['hidden']:
+                self.hidden_depth -= 1
+            if frame['disallowed']:
+                self.disallowed_ancestor_depth -= 1
+            if frame['is_foreign']:
+                self.foreign_depth -= 1
+            return frame
+
+        def _commit_container_fallbacks(self, container):
+            self._flush_inline_run(container)
+            for slot, value in container['confirmed_fallbacks']:
+                self.formulas[slot] = value
+            container['confirmed_fallbacks'].clear()
+
+        def _invalidate_active(self):
+            if self.active_display is not None:
+                self.active_display['valid'] = False
+            if self.active_fallback is not None:
+                self.active_fallback['valid'] = False
+
+        def _clear_active_above(self, depth):
+            if self.active_display is not None:
+                ad = self.active_display
+                if ad['annotation'] is not None and depth <= ad['annotation']['depth']:
+                    ad['valid'] = False
+                    ad['annotation'] = None
+                if ad['semantics'] is not None and depth <= ad['semantics']['depth']:
+                    ad['valid'] = False
+                    ad['semantics'] = None
+                if ad['math_block'] is not None and depth <= ad['math_block']['depth']:
+                    ad['valid'] = False
+                    ad['math_block'] = None
+                if ad['mathml_depth'] is not None and depth <= ad['mathml_depth']:
+                    ad['mathml_depth'] = None
+                if ad['katex_html_depth'] is not None and depth <= ad['katex_html_depth']:
+                    ad['katex_html_depth'] = None
+                if ad['katex_depth'] is not None and depth <= ad['katex_depth']:
+                    ad['katex_depth'] = None
+                if depth <= ad['depth']:
+                    self.active_display = None
+            if self.active_fallback is not None and depth <= self.active_fallback['depth']:
+                self.active_fallback = None
+
+        def handle_starttag(self, tag, attrs):
+            attr_map = dict(attrs)
+            unique_attrs = len(attr_map) == len(attrs)
+            class_tokens = set(str(attr_map.get('class') or '').split())
+            has_katex_error = _has_katex_error_class(attrs)
+
+            if self.active_fallback is not None:
+                self.active_fallback['valid'] = False
+                if tag not in _HTML_VOID_TAGS:
+                    self._push_frame(tag, hidden=False, inside_active=True)
+                return
+
+            if self.active_display is not None:
+                ad = self.active_display
+                in_katex_html = ad['katex_html_depth'] is not None
+                hidden_desc = _is_hidden_style_or_attr(
+                    attr_map, check_aria_hidden=not in_katex_html,
+                )
+                if (not unique_attrs or has_katex_error
+                        or tag in _HTML_VOID_TAGS
+                        or 'katex-display' in class_tokens):
+                    ad['valid'] = False
+                elif ad['annotation'] is not None:
+                    ad['valid'] = False
+                elif ad['math_depth'] > 0:
+                    if (tag not in _MATHML_ALLOWED_TAGS
+                            or tag == 'math'
+                            or hidden_desc):
+                        ad['valid'] = False
+                    elif tag == 'semantics':
+                        if (ad['math_block'] is not None
+                                and len(self.stack) == ad['math_block']['depth'] + 1
+                                and not ad['saw_semantics']):
+                            ad['saw_semantics'] = True
+                            ad['semantics'] = {
+                                'depth': len(self.stack),
+                                'has_visual_child': False,
+                                'saw_tex_annotation': False,
+                            }
+                        else:
+                            ad['valid'] = False
+                    elif tag in {'annotation', 'annotation-xml'}:
+                        if (ad['semantics'] is not None
+                                and len(self.stack) == ad['semantics']['depth'] + 1
+                                and tag == 'annotation'
+                                and attr_map.get('encoding') == 'application/x-tex'
+                                and not ad['semantics']['saw_tex_annotation']):
+                            ad['semantics']['saw_tex_annotation'] = True
+                            ad['annotation'] = {
+                                'depth': len(self.stack),
+                                'parts': [],
+                            }
+                        else:
+                            ad['valid'] = False
+                    elif ad['semantics'] is None:
+                        ad['valid'] = False
+                    elif len(self.stack) == ad['semantics']['depth'] + 1:
+                        ad['semantics']['has_visual_child'] = True
+                elif ad['svg_depth'] > 0:
+                    if (tag not in _KATEX_SVG_ALLOWED_TAGS
+                            or tag == 'svg'
+                            or hidden_desc):
+                        ad['valid'] = False
+                    elif tag in _KATEX_SVG_VISIBLE_TAGS and ad['defs_depth'] == 0:
+                        ad['katex_html_has_content'] = True
+                elif in_katex_html:
+                    if (tag not in {'span', 'svg'}
+                            or bool(class_tokens & _KATEX_ANY_CLASSES)
+                            or hidden_desc):
+                        ad['valid'] = False
+                else:
+                    # Exact structural skeleton:
+                    # katex-display -> katex -> (katex-mathml -> math[display=block], katex-html)
+                    if len(self.stack) == ad['depth'] + 1:
+                        if (tag == 'span' and 'katex' in class_tokens
+                                and 'katex-mathml' not in class_tokens
+                                and 'katex-html' not in class_tokens
+                                and not ad['saw_katex']
+                                and not hidden_desc):
+                            ad['saw_katex'] = True
+                            ad['katex_depth'] = len(self.stack)
+                        else:
+                            ad['valid'] = False
+                    elif (ad['katex_depth'] is not None
+                            and len(self.stack) == ad['katex_depth'] + 1
+                            and tag == 'span'):
+                        if ('katex-mathml' in class_tokens
+                                and 'katex-html' not in class_tokens
+                                and 'katex' not in class_tokens
+                                and not ad['saw_mathml']
+                                and not hidden_desc):
+                            ad['saw_mathml'] = True
+                            ad['mathml_depth'] = len(self.stack)
+                        elif ('katex-html' in class_tokens
+                                and 'katex-mathml' not in class_tokens
+                                and 'katex' not in class_tokens
+                                and not ad['saw_katex_html']
+                                and not _is_hidden_style_or_attr(
+                                    attr_map, check_aria_hidden=False)):
+                            ad['saw_katex_html'] = True
+                            ad['katex_html_depth'] = len(self.stack)
+                        else:
+                            ad['valid'] = False
+                    elif (ad['mathml_depth'] is not None
+                            and len(self.stack) == ad['mathml_depth'] + 1
+                            and tag == 'math'
+                            and str(attr_map.get('display') or '').strip().lower() == 'block'
+                            and not ad['saw_math_block']
+                            and not hidden_desc):
+                        ad['saw_math_block'] = True
+                        ad['math_block'] = {'depth': len(self.stack)}
+                    else:
+                        ad['valid'] = False
+
+                if tag not in _HTML_VOID_TAGS:
+                    self._push_frame(tag, hidden=False, inside_active=True)
+                    if tag == 'math':
+                        ad['math_depth'] += 1
+                    elif tag == 'svg':
+                        ad['svg_depth'] += 1
+                    elif tag == 'defs' and ad['svg_depth'] > 0:
+                        ad['defs_depth'] += 1
+                return
+
+            if tag in _HTML_VOID_TAGS:
+                if tag in _INLINE_VOID_TAGS:
+                    self._mark_inline_in_run(self._current_container())
+                elif tag in {'hr'}:
+                    self._flush_inline_run(self._current_container())
+                return
+
+            hidden = _is_hidden_style_or_attr(attr_map)
+            poison = (
+                has_katex_error
+                or tag == 'merror'
+                or not unique_attrs
+            )
+            parent_ok = (not self.stack or self.stack[-1]['tag'] in _DISPLAY_ALLOWED_PARENTS)
+            is_display_span = (
+                tag == 'span' and 'katex-display' in class_tokens
+                and not poison and not hidden and self.hidden_depth == 0
+                and self.disallowed_ancestor_depth == 0
+                and parent_ok
+            )
+            is_block_fallback = (
+                tag == 'code' and 'math-fallback' in class_tokens
+                and not poison and not hidden and self.hidden_depth == 0
+                and self.disallowed_ancestor_depth == 0
+                and parent_ok
+            )
+            if is_display_span:
+                self.active_display = {
+                    'depth': len(self.stack),
+                    'valid': True,
+                    'saw_katex': False,
+                    'katex_depth': None,
+                    'saw_mathml': False,
+                    'mathml_depth': None,
+                    'saw_katex_html': False,
+                    'katex_html_depth': None,
+                    'katex_html_has_content': False,
+                    'saw_math_block': False,
+                    'math_block': None,
+                    'saw_semantics': False,
+                    'semantics': None,
+                    'annotation': None,
+                    'annotations': [],
+                    'math_depth': 0,
+                    'svg_depth': 0,
+                    'defs_depth': 0,
+                }
+            elif is_block_fallback:
+                self.active_fallback = {
+                    'depth': len(self.stack),
+                    'valid': True,
+                    'parts': [],
+                }
+            elif tag in _DISPLAY_BLOCK_SIBLING_TAGS:
+                self._flush_inline_run(self._current_container())
+            else:
+                self._mark_inline_in_run(self._current_container())
+
+            self._push_frame(
+                tag,
+                hidden=hidden,
+                poison=poison,
+                class_tokens=class_tokens,
+                inside_active=(is_display_span or is_block_fallback),
+            )
+
+        def handle_startendtag(self, tag, attrs):
+            attr_map = dict(attrs)
+            unique_attrs = len(attr_map) == len(attrs)
+            class_tokens = set(str(attr_map.get('class') or '').split())
+            has_katex_error = _has_katex_error_class(attrs)
+            if self.active_fallback is not None:
+                self.active_fallback['valid'] = False
+                return
+            if self.active_display is not None:
+                ad = self.active_display
+                if ad['annotation'] is not None:
+                    ad['valid'] = False
+                    return
+                hidden_desc = _is_hidden_style_or_attr(
+                    attr_map, check_aria_hidden=(ad['katex_html_depth'] is None),
+                )
+                allowed = (
+                    (ad['math_depth'] > 0
+                     and ad['semantics'] is not None
+                     and tag in _MATHML_ALLOWED_TAGS
+                     and tag not in {'math', 'semantics', 'annotation', 'annotation-xml'})
+                    or (ad['svg_depth'] > 0
+                        and tag in _KATEX_SVG_ALLOWED_TAGS
+                        and tag != 'svg')
+                )
+                if not allowed or not unique_attrs or has_katex_error or hidden_desc:
+                    ad['valid'] = False
+                elif ad['svg_depth'] > 0:
+                    if tag in _KATEX_SVG_VISIBLE_TAGS and ad['defs_depth'] == 0:
+                        ad['katex_html_has_content'] = True
+                elif (ad['semantics'] is not None
+                        and len(self.stack) == ad['semantics']['depth'] + 1):
+                    ad['semantics']['has_visual_child'] = True
+                return
+
+            if tag in _HTML_VOID_TAGS:
+                if tag in _INLINE_VOID_TAGS:
+                    self._mark_inline_in_run(self._current_container())
+                elif tag in {'hr'}:
+                    self._flush_inline_run(self._current_container())
+                return
+            if self.foreign_depth > 0:
+                return
+            # In HTML5, trailing '/' on non-void HTML elements does not self-close
+            # them. Push the opened frame (poisoned for rawtext/RCDATA/foreign/formula
+            # tags) without ever activating display/fallback extraction.
+            if tag not in _DISPLAY_BLOCK_SIBLING_TAGS:
+                self._mark_inline_in_run(self._current_container())
+            hidden = _is_hidden_style_or_attr(attr_map)
+            poison = (
+                has_katex_error
+                or tag == 'merror'
+                or not unique_attrs
+                or tag in _RAWTEXT_RCDATA_TAGS
+                or tag in {'svg', 'math'}
+                or 'katex-display' in class_tokens
+                or 'math-fallback' in class_tokens
+            )
+            self._push_frame(tag, hidden=hidden, poison=poison, class_tokens=class_tokens)
+
+        def handle_data(self, data):
+            if self.active_fallback is not None:
+                self.active_fallback['parts'].append(data)
+            elif self.active_display is not None:
+                ad = self.active_display
+                if ad['annotation'] is not None:
+                    ad['annotation']['parts'].append(data)
+                elif ad['svg_depth'] > 0:
+                    if data.strip():
+                        ad['valid'] = False
+                elif ad['katex_html_depth'] is not None:
+                    if data.strip():
+                        ad['katex_html_has_content'] = True
+                elif ad['math_depth'] > 0:
+                    if ad['semantics'] is None and data.strip():
+                        ad['valid'] = False
+                elif data.strip():
+                    ad['valid'] = False
+            elif data.strip():
+                self._mark_inline_in_run(self._current_container())
+
+        def handle_entityref(self, name):
+            self.handle_data(html.unescape(f'&{name};'))
+
+        def handle_charref(self, name):
+            self.handle_data(html.unescape(f'&#{name};'))
+
+        def handle_comment(self, _data):
+            self._invalidate_active()
+
+        def handle_decl(self, _decl):
+            self._invalidate_active()
+
+        def handle_pi(self, _data):
+            self._invalidate_active()
+
+        def unknown_decl(self, _data):
+            self._invalidate_active()
+
+        def handle_endtag(self, tag):
+            if tag in _HTML_VOID_TAGS:
+                return
+            if not self.stack or self.stack[-1]['tag'] != tag:
+                self._invalidate_active()
+                positions = self.tag_positions.get(tag)
+                if not positions:
+                    return
+                target = positions[-1]
+                # Never unwind across hidden/poison/inert/foreign/rawtext barriers.
+                if self.barrier_indices and target < self.barrier_indices[-1]:
+                    return
+                while self.stack:
+                    popped = self._pop_frame()
+                    if self.active_display is not None:
+                        if popped['tag'] == 'math':
+                            self.active_display['math_depth'] = max(
+                                0, self.active_display['math_depth'] - 1)
+                        elif popped['tag'] == 'svg':
+                            self.active_display['svg_depth'] = max(
+                                0, self.active_display['svg_depth'] - 1)
+                        elif popped['tag'] == 'defs':
+                            self.active_display['defs_depth'] = max(
+                                0, self.active_display['defs_depth'] - 1)
+                    self._clear_active_above(len(self.stack))
+                    if popped['tag'] == tag:
+                        break
+                return
+
+            start = self.position_offset()
+            end = text.find('>', start)
+            raw = text[start:end + 1] if end >= 0 else ''
+            valid_close = bool(re.fullmatch(r'</\s*' + re.escape(tag) + r'\s*>', raw, re.I))
+            if not valid_close:
+                self._invalidate_active()
+
+            popped = self._pop_frame()
+            new_depth = len(self.stack)
+
+            if self.active_fallback is not None and new_depth == self.active_fallback['depth']:
+                fb = self.active_fallback
+                self.active_fallback = None
+                if fb['valid'] and valid_close:
+                    value = ''.join(fb['parts'])
+                    if value.strip():
+                        slot = len(self.formulas)
+                        self.formulas.append(None)
+                        self._current_container()['run_pending_fallbacks'].append((slot, value))
+                else:
+                    self._mark_inline_in_run(self._current_container())
+                return
+
+            if self.active_display is not None:
+                ad = self.active_display
+                if popped['tag'] == 'math':
+                    ad['math_depth'] -= 1
+                elif popped['tag'] == 'svg':
+                    ad['svg_depth'] -= 1
+                elif popped['tag'] == 'defs' and ad['defs_depth'] > 0:
+                    ad['defs_depth'] -= 1
+                if ad['annotation'] is not None and new_depth == ad['annotation']['depth']:
+                    if ad['valid'] and valid_close:
+                        ad['annotations'].append(''.join(ad['annotation']['parts']))
+                    ad['annotation'] = None
+                if ad['semantics'] is not None and new_depth == ad['semantics']['depth']:
+                    sem = ad['semantics']
+                    if not (sem['has_visual_child'] and sem['saw_tex_annotation']):
+                        ad['valid'] = False
+                    ad['semantics'] = None
+                if ad['math_block'] is not None and new_depth == ad['math_block']['depth']:
+                    ad['math_block'] = None
+                if ad['mathml_depth'] is not None and new_depth == ad['mathml_depth']:
+                    ad['mathml_depth'] = None
+                if ad['katex_html_depth'] is not None and new_depth == ad['katex_html_depth']:
+                    ad['katex_html_depth'] = None
+                if ad['katex_depth'] is not None and new_depth == ad['katex_depth']:
+                    ad['katex_depth'] = None
+                if new_depth == ad['depth']:
+                    self.active_display = None
+                    if (ad['valid'] and valid_close
+                            and ad['saw_katex_html']
+                            and ad['katex_html_has_content']
+                            and len(ad['annotations']) == 1
+                            and ad['annotations'][0].strip()):
+                        self.formulas.append(ad['annotations'][0])
+                    else:
+                        self._mark_inline_in_run(self._current_container())
+                return
+
+            if valid_close:
+                self._commit_container_fallbacks(popped)
+
+    parser = DisplayFormulas()
+    try:
+        parser.feed(text)
+        parser.close()
+    except Exception:
+        return None
+    parser._commit_container_fallbacks(parser.root_frame)
+    return [item for item in parser.formulas if item is not None]
 
 
 def _rendered_currency_dollar_positions(text):

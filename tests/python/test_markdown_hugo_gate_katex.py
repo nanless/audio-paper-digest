@@ -362,5 +362,190 @@ inline = [['\(', '\)']]
             self.assertTrue(any('包含裸 $' in item for item in issues), issues)
 
 
+class KaTeXDisplayFormulaExtractionTests(unittest.TestCase):
+    def test_extracts_valid_katex_display_and_block_fallback_formulas(self):
+        html_doc = (
+            f'<p>行内 {KATEX_INLINE_DOLLAR} 和行内降级 <code class="math-fallback">inline_only</code>。</p>'
+            f'{KATEX_DISPLAY_DOLLAR_AND_SVG}'
+            '<div><code class="math-fallback">k^* = 1.\\vskip-5.0pt</code></div>'
+            '<blockquote><code class="math-fallback">a &amp;lt; b &#43; c</code></blockquote>'
+            '<details><summary>展开</summary><code class="math-fallback">d = 2</code></details>'
+            # R2 P1 #2: top-level heading anchor span / script / audio in separate block runs
+            # must not falsely drop legitimate block math-fallback formulas.
+            '<span id="paper-title" aria-hidden="true"></span>'
+            '<script>console.log(1)</script>'
+            '<p>正文段落</p><code class="math-fallback">e = 3.\\vskip-5pt</code><audio controls></audio>'
+        )
+        extracted = gate.extract_rendered_display_formulas(html_doc)
+        self.assertEqual(
+            extracted,
+            [
+                r'\frac{\text{\$50}}{x^{**}}',
+                r'k^* = 1.\vskip-5.0pt',
+                'a &lt; b + c',
+                'd = 2',
+                r'e = 3.\vskip-5pt',
+            ],
+        )
+
+    def test_rejects_inline_hidden_malformed_and_spoofed_display_formulas(self):
+        adversarial = [
+            # Inline KaTeX (no katex-display)
+            f'<p>{KATEX_INLINE_DOLLAR}</p>',
+            # katex-display missing display="block" on <math>
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true"><span class="mord">x</span></span>'
+            '</span></span>',
+            # Missing <span class="katex-html">
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span></span></span>',
+            # Hidden katex-html via display:none
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" style="display:none">x</span></span></span>',
+            # <semantics> with annotation only (no visual MathML child)
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true">x</span></span></span>',
+            # Duplicate annotation inside one katex-display
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi>'
+            '<annotation encoding="application/x-tex">x</annotation>'
+            '<annotation encoding="application/x-tex">y</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true">x</span></span></span>',
+            # Nested inside hidden / aria-hidden / script / template / pre / code / katex-error
+            f'<div hidden>{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<div style="display:none">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<div aria-hidden="true">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<script>{KATEX_DISPLAY_DOLLAR_AND_SVG}</script>',
+            f'<template>{KATEX_DISPLAY_DOLLAR_AND_SVG}</template>',
+            f'<pre>{KATEX_DISPLAY_DOLLAR_AND_SVG}</pre>',
+            f'<code>{KATEX_DISPLAY_DOLLAR_AND_SVG}</code>',
+            f'<span class="katex-error">{KATEX_DISPLAY_DOLLAR_AND_SVG}</span>',
+            f'<div class="a" class="b">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            # Nested katex-display inside katex-display
+            f'<span class="katex-display">{KATEX_DISPLAY_DOLLAR_AND_SVG}</span>',
+            # Comment / <merror> / katex-error / forbidden tag / unclosed / bad close inside katex-display
+            KATEX_DISPLAY_DOLLAR_AND_SVG.replace('<semantics>', '<!-- c --><semantics>'),
+            KATEX_DISPLAY_DOLLAR_AND_SVG.replace('<mi>x</mi>', '<merror><mtext>x</mtext></merror>'),
+            KATEX_DISPLAY_DOLLAR_AND_SVG.replace('<span class="mord">$50</span>', '<span class="katex-error">$50</span>'),
+            KATEX_DISPLAY_DOLLAR_AND_SVG.replace('<span class="mord">$50</span>', '<p>$50</p>'),
+            KATEX_DISPLAY_DOLLAR_AND_SVG[:-7],
+            KATEX_DISPLAY_DOLLAR_AND_SVG[:-7] + '</span bad>',
+            # Inline / nested / hidden / malformed math-fallback
+            '<p><code class="math-fallback">x = 1</code></p>',
+            '<table><tr><td><code class="math-fallback">x = 1</code></td></tr></table>',
+            '<h2><code class="math-fallback">x = 1</code></h2>',
+            '<pre><code class="math-fallback">x = 1</code></pre>',
+            '<div hidden><code class="math-fallback">x = 1</code></div>',
+            '<code class="math-fallback"><span>x = 1</span></code>',
+            '<code class="math-fallback"><!-- c -->x = 1</code>',
+            '<code class="math-fallback" class="dup">x = 1</code>',
+            '<code class="math-fallback">x = 1',
+            '<code class="math-fallback">x = 1</code bad>',
+            # R1 P1 #1: self-closing non-void HTML tags cannot bypass ancestor guards
+            f'<div hidden/>{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<div style="display:none"/>{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<template/>{KATEX_DISPLAY_DOLLAR_AND_SVG}</template>',
+            f'<script/>{KATEX_DISPLAY_DOLLAR_AND_SVG}</script>',
+            f'<span class="katex-error"/>{KATEX_DISPLAY_DOLLAR_AND_SVG}</span>',
+            f'<svg/>{KATEX_DISPLAY_DOLLAR_AND_SVG}</svg>',
+            '<p/><code class="math-fallback">x = 1</code></p>',
+            '<span class="katex-display"/>',
+            '<code class="math-fallback"/>',
+            # R1 P1 #2: mismatched end-tag unwinding cannot escape hidden/inert/foreign/rawtext barriers
+            f'<div><template></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</template>',
+            f'<div><noscript></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</noscript>',
+            f'<div><svg></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</svg>',
+            f'<div><math></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</math>',
+            f'<div><pre></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</pre>',
+            f'<div><code></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</code>',
+            f'<div hidden><math><mtext></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</mtext></math>',
+            # R1 P1 #3: inline sibling text/phrasing, empty fallback, disallowed ancestor
+            '<ul><li>see <code class="math-fallback">x = 1</code></li></ul>',
+            '<ul><li><code class="math-fallback">x = 1</code> trailing</li></ul>',
+            '<ul><li><em>note</em><code class="math-fallback">x = 1</code></li></ul>',
+            '<div>see <code class="math-fallback">x = 1</code></div>',
+            '<div><span class="katex">x</span><code class="math-fallback">x = 1</code></div>',
+            '<i><div><code class="math-fallback">x = 1</code></div></i>',
+            '<div><code class="math-fallback"></code></div>',
+            '<div><code class="math-fallback">   </code></div>',
+            # R1 P1 #4: strict KaTeX display skeleton & visibility invariants
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true"></span></span></span>',
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" style="display:none">x</span>'
+            '<span class="katex-html" aria-hidden="true">x</span></span></span>',
+            KATEX_DISPLAY_DOLLAR_AND_SVG.replace('<span class="base">', '<span class="base" style="display:none">'),
+            KATEX_DISPLAY_DOLLAR_AND_SVG.replace('<mi>x</mi>', '<mi hidden>x</mi>'),
+            '<span class="katex-display">SPOOF' + KATEX_DISPLAY_DOLLAR_AND_SVG[len('<span class="katex-display">'):],
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math><math><semantics><mi>y</mi><annotation encoding="application/x-tex">y</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true">x</span></span></span>',
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mrow><mi>x</mi><annotation encoding="application/x-tex">y</annotation></mrow>'
+            '<annotation encoding="application/x-tex">x</annotation></semantics></math></span>'
+            '<span class="katex-html" aria-hidden="true">x</span></span></span>',
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true"><span class="katex">x</span></span>'
+            '</span></span>',
+            # R1 P2 #5: inline containers and inline katex cannot wrap katex-display
+            f'<p>{KATEX_DISPLAY_DOLLAR_AND_SVG}</p>',
+            f'<td>{KATEX_DISPLAY_DOLLAR_AND_SVG}</td>',
+            f'<p><span class="katex">{KATEX_DISPLAY_DOLLAR_AND_SVG}</span></p>',
+            # R1 P2 #6: CSS comments, visibility:collapse, whitespace aria-hidden
+            f'<div style="display/*x*/:none">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<div style="visibility:collapse">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<div style="content-visibility:hidden">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            f'<div aria-hidden=" true ">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>',
+            # R2 P2 #3: HTML5 scope barriers (object/marquee/applet/caption/td/th)
+            f'<div><object data="x"></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</object>',
+            f'<div><marquee></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</marquee>',
+            f'<div><applet></div>{KATEX_DISPLAY_DOLLAR_AND_SVG}</applet>',
+            # R2 P2 #4: empty <svg></svg> or <defs>-only <svg> in katex-html has 0 visible pixels
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true"><svg></svg></span></span></span>',
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true">'
+            '<svg><defs><path d="M0 0 L10 10"/></defs></svg></span></span></span>',
+            # R3 P2 #1: raw text inside <svg> or <svg><defs> renders 0 visible pixels
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true">'
+            '<svg>unrendered</svg></span></span></span>',
+            '<span class="katex-display"><span class="katex"><span class="katex-mathml">'
+            '<math display="block"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation>'
+            '</semantics></math></span><span class="katex-html" aria-hidden="true">'
+            '<svg><defs>unrendered</defs></svg></span></span></span>',
+        ]
+        for snippet in adversarial:
+            with self.subTest(snippet=snippet[:90]):
+                self.assertEqual(gate.extract_rendered_display_formulas(snippet), [], snippet)
+
+    def test_parser_failure_returns_none_and_linear_time_on_50000_tags(self):
+        with mock.patch.object(HTMLParser, 'feed', side_effect=RuntimeError('boom')):
+            self.assertIsNone(gate.extract_rendered_display_formulas(KATEX_DISPLAY_DOLLAR_AND_SVG))
+        stress = '<span class="katex-display">' * 25000 + '</div>' * 25000
+        t0 = time.monotonic()
+        self.assertEqual(gate.extract_rendered_display_formulas(stress), [])
+        self.assertLess(time.monotonic() - t0, 5.0)
+        # R2 P1 #1: unclosed CSS comments inside style= must stay strictly O(n)
+        css_stress = '<div style="' + ('/*a' * 40000) + f'">{KATEX_DISPLAY_DOLLAR_AND_SVG}</div>'
+        t1 = time.monotonic()
+        self.assertEqual(
+            gate.extract_rendered_display_formulas(css_stress),
+            [r'\frac{\text{\$50}}{x^{**}}'],
+        )
+        self.assertLess(time.monotonic() - t1, 2.0)
+
+
 if __name__ == '__main__':
     unittest.main()
