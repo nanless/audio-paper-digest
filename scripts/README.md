@@ -112,6 +112,8 @@ npm run test:compat
 | `lib/reader-repair-evidence-slice.js` | Node 库：在 Reader 普通局部节点补丁请求（1–8 既有节点）满足可证明原表/引文完整覆盖、兼容顺延目标且无坏表/全文扩写阻断时，构造 UTF-16 码点安全的紧凑证据切片；任一条件不满足即零风险回退原全量证据，候选固定身份与补丁后整稿冷核保持不变。 |
 | `lib/reader-resource-claims.js` | Node 库：封装 Reader 资源证据渲染、已验证资源身份回放、出版资源视图投影、资源可用性声明审计与文章按节重建草稿逻辑，与 `deep-analyzer.js` 导出完全同一引用。 |
 | `lib/arxiv-html-structured-artifacts.js` | Node 库：封装 arXiv LaTeXML HTML 全文健康检查、DOM 图/表/公式/参考文献结构化提取、多级表头合并、`\phantom` 虚影剥离、PDF 结构化投影、HTML 文本与图片清单解析及文本 SHA 绑定。 |
+| `lib/arxiv-tex-source.js` | Node 库：经项目 HTTP CONNECT 代理获取 arXiv `/src/<id>` 源码包，调用 `arxiv_tex_extract.py` 产出带 SHA-256 绑定与四文件防污染守卫的 `arxiv-tex-ast-v1` sidecar；PDF-only 稿件平滑降级。 |
+| `arxiv_tex_extract.py` | Python 纯标准库提取器：安全解包 arXiv `.tar.gz`/`.tar`/`.tex`（防 Zip-Slip、软硬链、Gzip 炸弹与 LaTeXpOsEd 注释绕过），输出结构化作者/机构、章节、表格、公式与参考文献 AST。 |
 | `lib/reader-source-evidence-binding.js` | Node 库：封装 Reader 单元格归一化、数值与单位词元覆盖校验、精确来源引文派生、选中原表字节恢复、表格粘贴重复清理、公式与表格来源证据绑定及占位结果表语义拦截。 |
 | `lib/reader-prose-normalization.js` | Node 库：封装 Reader 正文中英数字排版归一化、术语桥与标题规范化、长段切分、表格导读与极值/评述对齐检查、孤儿标记与重复长句清理及质量豁免指标统计。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
