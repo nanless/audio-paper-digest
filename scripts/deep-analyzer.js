@@ -6346,9 +6346,17 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const manifest = paper.analysisManifest, analysis = String(paper.analysis || '');
     const previousReaderStage = structuredClone(manifest.stages.apiReaderArticle);
     const previousOrdinalProof = previousReaderStage?.ordinalCompletionProof;
+    const previousSupersededOrdinalProof = (
+        previousReaderStage?.ordinalPatchHistory?.reason === 'operator-correction-supersedes-ordinal-completion'
+        && previousReaderStage.ordinalPatchHistory.previousCompletionProof
+    ) ? previousReaderStage.ordinalPatchHistory.previousCompletionProof : null;
     const operatorSupersedes = require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance);
-    const previousOperatorCompletionProof = operatorSupersedes && generated.ordinalPatchCompilations?.length
-        ? previousOrdinalProof || require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
+    const previousOperatorCompletionProof = operatorSupersedes
+        ? previousOrdinalProof
+            || previousSupersededOrdinalProof
+            || (generated.ordinalPatchCompilations?.length
+                ? require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
+                : null)
         : previousOrdinalProof;
     const replacesOrdinalCompletion = !generated.ordinalPatchCompilations?.length && previousOrdinalProof;
     if (replacesOrdinalCompletion) {
@@ -6527,8 +6535,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
             manifest.stages.apiReaderArticle, readerResult.supersededOrdinalPatchCompilations);
     }
     if (readerResult.ordinalPatchCompilations?.length
-        || (require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance)
-            && previousOrdinalProof)) {
+        || (operatorSupersedes && previousOperatorCompletionProof)) {
         // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
         // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
         if (operatorSupersedes) {
@@ -13724,10 +13731,17 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             enforceReaderResourceClaims(readerResourceClaimDraftFromArticle(readerResult.plan, readerResult.article),
                 verifiedReaderResources, rawTextForAnalysis);
             const previousOperatorReaderStage = structuredClone(analysisManifest.stages.apiReaderArticle);
+            const previousSupersededOperatorProof = (
+                previousOperatorReaderStage?.ordinalPatchHistory?.reason === 'operator-correction-supersedes-ordinal-completion'
+                && previousOperatorReaderStage.ordinalPatchHistory.previousCompletionProof
+            ) ? previousOperatorReaderStage.ordinalPatchHistory.previousCompletionProof : null;
             const operatorSupersedes = require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof);
-            const previousOperatorCompletionProof = operatorSupersedes && readerResult.ordinalPatchCompilations?.length
+            const previousOperatorCompletionProof = operatorSupersedes
                 ? previousOperatorReaderStage?.ordinalCompletionProof
-                    || require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
+                    || previousSupersededOperatorProof
+                    || (readerResult.ordinalPatchCompilations?.length
+                        ? require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
+                        : null)
                 : null;
             if (require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof)
                 && !readerResult.ordinalPatchCompilations?.length
@@ -13857,15 +13871,16 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 require('./lib/reader-target-ordinal-patch').recordSupersededOrdinalChain(
                     analysisManifest.stages.apiReaderArticle, readerResult.supersededOrdinalPatchCompilations);
             }
-            if (readerResult.ordinalPatchCompilations?.length) {
+            if (readerResult.ordinalPatchCompilations?.length
+                || (operatorSupersedes && previousOperatorCompletionProof)) {
                 // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
                 // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
                 const previous = previousOperatorReaderStage;
-                if (require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof)) {
+                if (operatorSupersedes) {
                     analysisManifest.stages.apiReaderArticle.ordinalPatchHistory = {
                         ...require('./lib/protocol-codec').recordHeader('reader-ordinal-history', 'reader-ordinal-history'),
                         reason: 'operator-correction-supersedes-ordinal-completion',
-                        compilations: structuredClone(readerResult.ordinalPatchCompilations),
+                        compilations: structuredClone(readerResult.ordinalPatchCompilations || []),
                         previousCompletionProof: previousOperatorCompletionProof,
                         previousStage: previous ? {
                             articleSha256: previous.articleSha256,
