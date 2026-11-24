@@ -17,7 +17,8 @@ const {
     findSectionBounds,
     mergeSectionByTitle,
     setMachineSummaryField,
-    validRepositoryDocumentationEvidence
+    validRepositoryDocumentationEvidence,
+    normalizeArtifactProbeUrl
 } = require('./public-resource-probe.js');
 
 const SCORING_DIMENSIONS = Object.freeze([
@@ -70,7 +71,7 @@ const AUDIT_TOP_LEVEL_KEYS = Object.freeze(['documentType', 'confidence', 'dimen
 const AUDIT_TOP_LEVEL_KEYS_V2 = Object.freeze([
     'documentType', 'confidence', 'evidenceProfile', 'dimensions'
 ]);
-const AUDIT_ITEM_KEYS = Object.freeze(['score', 'reason']);
+const AUDIT_ITEM_KEYS = Object.freeze(['reason', 'score']);
 const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
     'multiComponentClaimed', 'ablationStatus', 'targetEvaluation',
     'sampleScaleReported', 'deploymentMeasured', 'publicGeneralizationEvaluated',
@@ -796,9 +797,56 @@ function hasAffirmativeDemoEvidence(sourceText) {
     });
 }
 
-function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceIdentity = null, sourceEvidence = '') {
+function findMatchingArtifactProbe(resource, artifactProbes) {
+    if (!resource || !Array.isArray(artifactProbes) || artifactProbes.length === 0) return null;
+    const targets = new Set(
+        [resource.originalUrl, resource.finalUrl]
+            .map(normalizeArtifactProbeUrl)
+            .filter(Boolean)
+    );
+    if (targets.size === 0) return null;
+    return artifactProbes.find(probe => {
+        if (!probe || typeof probe !== 'object' || probe.ok !== true) return false;
+        const probeUrls = [probe.canonicalUrl, probe.url, probe.originalUrl]
+            .map(normalizeArtifactProbeUrl)
+            .filter(Boolean);
+        return probeUrls.some(u => targets.has(u));
+    }) || null;
+}
+
+function isConfirmedPlaceholderArtifactProbe(probe) {
+    return Boolean(
+        probe
+        && probe.ok === true
+        && probe.placeholderSuspected === true
+        && probe.hasCodeFiles !== true
+        && probe.hasWeightFiles !== true
+        && probe.hasDatasetFiles !== true
+    );
+}
+
+const VERIFIED_TYPE_DENIAL_PATTERNS = Object.freeze({
+    code: /(?:完全闭源|闭源|不开源|未开源|没有开源|代码未提供|源码未提供|(?:未|没有|尚未|缺少)[^.。；;]{0,16}(?:代码|源码|实现代码)|(?:代码|源码|代码仓库)(?:未|没有|尚未)(?:公开|发布|提供|开源))/,
+    model: /(?:完全闭源|闭源|不开源|未开源|没有开源|权重未提供|模型未提供|(?:未|没有|尚未|缺少)[^.。；;]{0,16}(?:模型权重|权重|checkpoint|ckpt)|(?:模型权重|权重)(?:未|没有|尚未)(?:公开|发布|提供))/,
+    dataset: /(?:完全闭源|闭源|不开源|未开源|没有开源|数据集未提供|(?:未|没有|尚未|缺少)[^.。；;]{0,16}(?:数据集|语料)|(?:数据集|语料)(?:未|没有|尚未)(?:公开|发布|提供))/
+});
+
+function reasonDeniesVerifiedAvailableResourceType(reason, verifiedAvailableTypes) {
+    const clauses = String(reason || '').split(/[。！？；;\n]/).map(c => c.trim()).filter(Boolean);
+    for (const type of ['code', 'model', 'dataset']) {
+        if (!verifiedAvailableTypes.has(type)) continue;
+        const pattern = VERIFIED_TYPE_DENIAL_PATTERNS[type];
+        if (clauses.some(clause => !EXPLICIT_NON_DEDUCTION.test(clause) && pattern.test(clause))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceIdentity = null, sourceEvidence = '', options = {}) {
     const current = parseAnalysis(analysis) || {};
     const isV2 = scoringRubricV2.isV2Rubric(audit?.rubricVersion);
+    const artifactProbes = Array.isArray(options?.artifactProbes) ? options.artifactProbes : [];
     const scores = isV2
         ? { complete: 10.0, incompleteDocs: 8.0, partial: 6.0, promise: 3.0, demo: 1.5, closed: 0.0 }
         : { complete: 1.5, incompleteDocs: 1.2, partial: 1.0, promise: 0.5, demo: 0.2, closed: 0.0 };
@@ -869,13 +917,26 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
     }
     if (verifiedAvailableTypes && hasReleasedArtifact) {
         const openSource = audit.dimensions.openSource;
+        const availableCoreResources = verifiedResourceIdentity.resources.filter(
+            item => item?.availability === 'available' && ['code', 'model', 'dataset'].includes(item.type)
+        );
+        const allAvailableCorePlaceholder = artifactProbes.length > 0
+            && availableCoreResources.length > 0
+            && availableCoreResources.every(resource => (
+                isConfirmedPlaceholderArtifactProbe(findMatchingArtifactProbe(resource, artifactProbes))
+            ));
+        if (allAvailableCorePlaceholder && openSource.score <= scores.partial) {
+            return applyScoringEvidenceCaps(audit);
+        }
         const isDatasetPaper = audit.documentType === '数据集与基准';
         const isCodeOnlyType = ['理论研究', '综述'].includes(audit.documentType);
-        const hasCompleteCoreRelease = isV2 && isDatasetPaper
-            ? verifiedAvailableTypes.has('dataset')
-            : (isV2 && isCodeOnlyType
-                ? (verifiedAvailableTypes.has('code') || verifiedAvailableTypes.has('dataset'))
-                : (verifiedAvailableTypes.has('code') && verifiedAvailableTypes.has('model')));
+        const hasCompleteCoreRelease = !allAvailableCorePlaceholder && (
+            isV2 && isDatasetPaper
+                ? verifiedAvailableTypes.has('dataset')
+                : (isV2 && isCodeOnlyType
+                    ? (verifiedAvailableTypes.has('code') || verifiedAvailableTypes.has('dataset'))
+                    : (verifiedAvailableTypes.has('code') && verifiedAvailableTypes.has('model')))
+        );
         const hasCompleteDocumentation = verifiedResourceIdentity.resources.some(resource => (
             (resource?.type === 'code' || (isDatasetPaper && isV2 && resource?.type === 'dataset'))
             && resource?.availability === 'available'
@@ -968,9 +1029,17 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             };
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
-        if (openSource.score < scores.partial
-            || OPEN_SOURCE_DEFICIT.test(String(openSource.reason || ''))
-            || VERIFIED_RESOURCE_DENIAL.test(String(openSource.reason || ''))) {
+        const reasonText = String(openSource.reason || '');
+        const preserveAccurateProbePartialReason = artifactProbes.length > 0
+            && isV2
+            && openSource.score === scores.partial
+            && /\[A_ARTIFACT_PROBE\]/.test(reasonText)
+            && !reasonDeniesVerifiedAvailableResourceType(reasonText, verifiedAvailableTypes);
+        if (!allAvailableCorePlaceholder && !preserveAccurateProbePartialReason && (
+            openSource.score < scores.partial
+            || OPEN_SOURCE_DEFICIT.test(reasonText)
+            || VERIFIED_RESOURCE_DENIAL.test(reasonText)
+        )) {
             const labels = { code: '代码', model: '模型权重', dataset: '数据集' };
             const available = ['code', 'model', 'dataset']
                 .filter(type => verifiedAvailableTypes.has(type))

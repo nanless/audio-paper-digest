@@ -97,7 +97,7 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /0\.0 \/ 1\.5 \/ 3\.0 \/ 6\.0 \/ 8\.0 \/ 10\.0/);
             assert.match(text, /总分不得超过 `8\.4`/);
             assert.match(text, /总分不得超过 `7\.2`/);
-            assert.match(text, /<paper_input>[\s\S]*\{existingAnalysis\}[\s\S]*\{sourceEvidence\}[\s\S]*<\/paper_input>/);
+            assert.match(text, /<paper_input>[\s\S]*\{sourceEvidence\}[\s\S]*\{existingAnalysis\}[\s\S]*<\/paper_input>/);
             assert.doesNotMatch(text, /"version":\s*1/);
             assert.doesNotMatch(text, /\[A_LIMIT\]/);
         } else if (current === 'prompts/current/core-summary-repair.md') {
@@ -298,6 +298,13 @@ test('pre-edit Reader prompt Git blobs remain resolvable by template and whole-f
             blobOid: '8f0eaf39da3a0b1bc5766adbfa4203d11da15829',
             wholeSha256: '73588526060a51256dfc37d4cadad977c88a0b28726f7f0912eb8ae4b8ade5ef',
             templateSha256: '3da6195e0b172e79f86923722e2f6fdc25716700186f865658c7dcaa5b1d6cba'
+        },
+        {
+            stage: 'scoringAudit',
+            relativePath: 'prompts/current/scoring-audit.md',
+            blobOid: '469e7583335c6f12a2250122975a064251ba3107',
+            wholeSha256: '55f7135da08d229754e95a02733674b180cb05b515a4d7ae4405c1e55003c1e0',
+            templateSha256: 'aa0296b058154e729ce2a031350a70f50956e9b43757669c93c288568ba28741'
         }
     ];
     for (const item of preEditCases) {

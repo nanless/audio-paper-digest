@@ -7187,10 +7187,9 @@ def render_verified_reader_resources(resources, *, paper=None):
                 if present:
                     missing_note = f'（未见{"、".join(missing)}文档）' if missing else ''
                     status += f'；README 已验证包含{"、".join(present)}文档{missing_note}'
-        if resource.get('type') == 'demo' and resource.get('availability') == 'available' and _paper_uses_structured_v5(paper):
+        if resource.get('availability') == 'available' and _paper_uses_structured_v5(paper):
             demo_stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('demoLinkScan')
-            probes = demo_stage.get('audioDemoProbes') if isinstance(demo_stage, dict) else None
-            if isinstance(probes, list):
+            if isinstance(demo_stage, dict):
                 def _norm_probe_url(raw_u):
                     txt = str(raw_u or '').strip()
                     if not txt:
@@ -7206,57 +7205,147 @@ def render_verified_reader_resources(resources, *, paper=None):
                     except Exception:
                         return txt.rstrip('/').lower()
 
-                target_urls = {
-                    u for u in (
-                        _norm_probe_url(resource.get('originalUrl')),
-                        _norm_probe_url(resource.get('finalUrl')),
-                    ) if u
-                }
-                matched_probe = next(
-                    (
-                        item for item in probes
-                        if isinstance(item, dict)
-                        and ({
-                            u for u in (
-                                _norm_probe_url(item.get('url')),
-                                _norm_probe_url(item.get('originalUrl')),
-                            ) if u
-                        } & target_urls)
-                    ),
-                    None,
-                )
-                if matched_probe:
-                    demo_notes = []
-                    raw_sample_count = matched_probe.get('audioSampleCount')
-                    sample_count = (
-                        raw_sample_count
-                        if isinstance(raw_sample_count, int)
-                        and not isinstance(raw_sample_count, bool)
-                        and raw_sample_count > 0
-                        else 0
+                probes = demo_stage.get('audioDemoProbes') if resource.get('type') == 'demo' else None
+                if isinstance(probes, list):
+                    target_urls = {
+                        u for u in (
+                            _norm_probe_url(resource.get('originalUrl')),
+                            _norm_probe_url(resource.get('finalUrl')),
+                        ) if u
+                    }
+                    matched_probe = next(
+                        (
+                            item for item in probes
+                            if isinstance(item, dict)
+                            and ({
+                                u for u in (
+                                    _norm_probe_url(item.get('url')),
+                                    _norm_probe_url(item.get('originalUrl')),
+                                ) if u
+                            } & target_urls)
+                        ),
+                        None,
                     )
-                    sample_probe = matched_probe.get('sampleProbe') if isinstance(matched_probe.get('sampleProbe'), dict) else {}
-                    if sample_count > 0:
-                        if sample_probe.get('audioSamplesReachable') is True:
-                            demo_notes.append(f'含 {sample_count} 条试听样本（已验证可访问）')
-                        else:
-                            demo_notes.append(f'检测到 {sample_count} 条试听样本')
-                    if matched_probe.get('hasBaselineComparison') is True:
-                        demo_notes.append('含基线对比表')
-                    space_statuses = matched_probe.get('spaceStatuses') if isinstance(matched_probe.get('spaceStatuses'), list) else []
-                    for sp in space_statuses[:1]:
-                        if isinstance(sp, dict):
-                            raw_stage = str(sp.get('stage') or '').strip().upper()
-                            if raw_stage and re.fullmatch(r'[A-Z0-9_-]{1,48}', raw_stage):
-                                raw_hw = str(sp.get('hardware') or '').strip()
-                                hw = (
-                                    f'（{raw_hw}）'
-                                    if raw_hw and re.fullmatch(r'[A-Za-z0-9._ -]{1,48}', raw_hw)
-                                    else ''
-                                )
-                                demo_notes.append(f'HF Space 状态：{raw_stage}{hw}')
-                    if demo_notes:
-                        status += '；' + '，'.join(demo_notes)
+                    if matched_probe:
+                        demo_notes = []
+                        raw_sample_count = matched_probe.get('audioSampleCount')
+                        sample_count = (
+                            raw_sample_count
+                            if isinstance(raw_sample_count, int)
+                            and not isinstance(raw_sample_count, bool)
+                            and raw_sample_count > 0
+                            else 0
+                        )
+                        sample_probe = matched_probe.get('sampleProbe') if isinstance(matched_probe.get('sampleProbe'), dict) else {}
+                        if sample_count > 0:
+                            if sample_probe.get('audioSamplesReachable') is True:
+                                demo_notes.append(f'含 {sample_count} 条试听样本（已验证可访问）')
+                            else:
+                                demo_notes.append(f'检测到 {sample_count} 条试听样本')
+                        if matched_probe.get('hasBaselineComparison') is True:
+                            demo_notes.append('含基线对比表')
+                        space_statuses = matched_probe.get('spaceStatuses') if isinstance(matched_probe.get('spaceStatuses'), list) else []
+                        for sp in space_statuses[:1]:
+                            if isinstance(sp, dict):
+                                raw_stage = str(sp.get('stage') or '').strip().upper()
+                                if raw_stage and re.fullmatch(r'[A-Z0-9_-]{1,48}', raw_stage):
+                                    raw_hw = str(sp.get('hardware') or '').strip()
+                                    hw = (
+                                        f'（{raw_hw}）'
+                                        if raw_hw and re.fullmatch(r'[A-Za-z0-9._ -]{1,48}', raw_hw)
+                                        else ''
+                                    )
+                                    demo_notes.append(f'HF Space 状态：{raw_stage}{hw}')
+                        if demo_notes:
+                            status += '；' + '，'.join(demo_notes)
+
+                artifact_probes = demo_stage.get('artifactProbes')
+                if resource.get('type') != 'third_party' and isinstance(artifact_probes, list):
+                    def _norm_artifact_url(raw_u):
+                        base = _norm_probe_url(raw_u)
+                        if not base:
+                            return ''
+                        try:
+                            p_url = urlparse(base)
+                            host = (p_url.hostname or '').lower()
+                            path_norm = p_url.path.rstrip('/')
+                            if host in ('doi.org', 'dx.doi.org'):
+                                doi_match = re.fullmatch(r'/10\.5281/zenodo\.(\d{1,16})', path_norm, flags=re.IGNORECASE)
+                                if doi_match:
+                                    return f'https://zenodo.org/records/{doi_match.group(1)}'
+                            elif host == 'github.com':
+                                segs = [s for s in path_norm.split('/') if s]
+                                if len(segs) >= 2:
+                                    owner = segs[0]
+                                    repo = re.sub(r'\.git$', '', segs[1], flags=re.IGNORECASE)
+                                    if len(segs) == 2 or segs[2].lower() in ('tree', 'blob', 'releases'):
+                                        path_norm = f'/{owner}/{repo}'
+                            elif host == 'zenodo.org' and re.fullmatch(r'/record/\d+', path_norm, flags=re.IGNORECASE):
+                                path_norm = '/records/' + path_norm.split('/')[-1]
+                            elif host == 'huggingface.co':
+                                segs = [s for s in path_norm.split('/') if s]
+                                if len(segs) >= 3 and segs[0].lower() == 'models':
+                                    if len(segs) == 3 or segs[3].lower() == 'tree':
+                                        path_norm = f'/{segs[1]}/{segs[2]}'
+                                elif len(segs) >= 3 and segs[0].lower() == 'datasets':
+                                    if len(segs) == 3 or segs[3].lower() == 'tree':
+                                        path_norm = f'/datasets/{segs[1]}/{segs[2]}'
+                                elif len(segs) >= 3 and segs[2].lower() == 'tree':
+                                    path_norm = f'/{segs[0]}/{segs[1]}'
+                            return f'{p_url.scheme.lower()}://{host}{path_norm.lower()}'
+                        except Exception:
+                            return base.lower()
+
+                    target_artifact_urls = {
+                        u for u in (
+                            _norm_artifact_url(resource.get('originalUrl')),
+                            _norm_artifact_url(resource.get('finalUrl')),
+                        ) if u
+                    }
+                    matched_artifact = next(
+                        (
+                            item for item in artifact_probes
+                            if isinstance(item, dict)
+                            and item.get('ok') is True
+                            and ({
+                                u for u in (
+                                    _norm_artifact_url(item.get('url')),
+                                    _norm_artifact_url(item.get('canonicalUrl')),
+                                    _norm_artifact_url(item.get('originalUrl')),
+                                ) if u
+                            } & target_artifact_urls)
+                        ),
+                        None,
+                    )
+                    if matched_artifact:
+                        artifact_notes = []
+                        if matched_artifact.get('hasWeightFiles') is True:
+                            raw_exts = matched_artifact.get('weightExtensions')
+                            valid_exts = []
+                            if isinstance(raw_exts, list):
+                                for ext in raw_exts:
+                                    ext_str = str(ext or '').strip().lower()
+                                    if re.fullmatch(r'\.(?:safetensors|pt|pth|bin|ckpt|onnx|gguf)', ext_str) and ext_str not in valid_exts:
+                                        valid_exts.append(ext_str)
+                                        if len(valid_exts) >= 3:
+                                            break
+                            if valid_exts:
+                                artifact_notes.append(f'含权重文件（{"/".join(valid_exts)}）')
+                            else:
+                                artifact_notes.append('含权重文件')
+                        if (matched_artifact.get('placeholderSuspected') is True
+                                and matched_artifact.get('hasWeightFiles') is not True
+                                and matched_artifact.get('hasCodeFiles') is not True
+                                and matched_artifact.get('hasDatasetFiles') is not True):
+                            artifact_notes.append('仓库仅见文档框架（未检出代码/权重文件）')
+                        if matched_artifact.get('gated') is True:
+                            artifact_notes.append('受控访问（gated）')
+                        raw_lic = str(matched_artifact.get('spdxLicense') or '').strip()
+                        if raw_lic and re.fullmatch(r'[A-Za-z0-9.+-]{1,64}', raw_lic) \
+                                and raw_lic.lower() not in ('noassertion', 'other', 'none', 'unknown'):
+                            artifact_notes.append(f'许可证：{raw_lic}')
+                        if artifact_notes:
+                            status += '；' + '，'.join(artifact_notes)
         label = (_paper_header_resource_display_label(paper, resource) if paper else None) or labels[resource['type']]
         lines.append(f'- {label}：{url_text} — {status}')
     if not lines:
@@ -7267,16 +7356,176 @@ def render_verified_reader_resources(resources, *, paper=None):
 
 def render_verified_reader_scoring_notes(paper, parsed=None):
     """Use the same assessment explanation in all three publication adapters."""
+    import scoring_rubric_v2 as _scoring_v2
     parsed = parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
     scoring_note_lines = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
     stages = (paper.get('analysisManifest') or {}).get('stages') or {}
     scoring = stages.get('scoringAudit') or {}
+    rubric_version = paper.get('scoringRubricVersion') or parsed.get('scoringRubricVersion')
     for label, value in (
-            ('评分规则', paper.get('scoringRubricVersion') or parsed.get('scoringRubricVersion')),
+            ('评分规则', rubric_version),
             ('评分模型', scoring.get('model')), ('评分请求协议', scoring.get('protocol'))):
         if isinstance(value, str) and value.strip():
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
             scoring_note_lines.append(f'- {label}：{safe_value}')
+    if _scoring_v2.is_v2_rubric(rubric_version):
+        audit = scoring.get('audit') if isinstance(scoring.get('audit'), dict) else {}
+        doc_type = audit.get('documentType') or parsed.get('documentType')
+        weights_summary = _scoring_v2.format_document_type_weights_summary(doc_type)
+        if weights_summary and isinstance(doc_type, str) and doc_type.strip():
+            safe_doc_type = html.escape(re.sub(r'\s+', ' ', doc_type.strip()))
+            scoring_note_lines.append(f'- 维度权重（{safe_doc_type}）：{weights_summary}')
+        evidence_profile = audit.get('evidenceProfile') if isinstance(audit.get('evidenceProfile'), dict) else {}
+
+        def _sanitize_scoring_claim(raw_claim):
+            if not isinstance(raw_claim, str):
+                return ''
+            cleaned = strip_internal_scoring_anchors(raw_claim)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            if not cleaned:
+                return ''
+            # Remove fenced-code delimiters before CommonMark inline-code splitting
+            cleaned = re.sub(r'`{3,}|~{3,}', '', cleaned)
+
+            delim_re = re.compile(r'(?<!\\)(?:\\\\)*(\\[()\[\]])')
+            math_span_re = re.compile(
+                r'(?<!\\)(?:\\\\)*\\\([\s\S]*?(?<!\\)(?:\\\\)*\\\)'
+                r'|(?<!\\)(?:\\\\)*\\\[[\s\S]*?(?<!\\)(?:\\\\)*\\\]'
+            )
+            html_in_math_re = re.compile(
+                r'<!--[\s\S]*?-->'
+                r'|<![A-Za-z][^>]*>'
+                r'|<\?[^>]*\?>'
+                r'|</[A-Za-z][A-Za-z0-9-]*[^>]*>'
+                r'|<[A-Za-z]{2,}[A-Za-z0-9-]*(?:[\s/][^>]*)?/?>'
+                r'|<[A-Za-z][\s/][^>]*>'
+            )
+
+            def _neutralize_shortcodes(text):
+                return (
+                    text.replace('{{<', '｛｛＜')
+                    .replace('>}}', '＞｝｝')
+                    .replace('{{%', '｛｛％')
+                    .replace('%}}', '％｝｝')
+                )
+
+            def _strip_unmatched_math_delimiters(text):
+                tokens = [
+                    (m.end() - len(m.group(1)), m.end(), m.group(1))
+                    for m in delim_re.finditer(text)
+                ]
+                paren_stack = []
+                bracket_stack = []
+                unmatched_spans = []
+                for tok_start, tok_end, tok in tokens:
+                    if tok == r'\(':
+                        paren_stack.append((tok_start, tok_end))
+                    elif tok == r'\)':
+                        if paren_stack:
+                            paren_stack.pop()
+                        else:
+                            unmatched_spans.append((tok_start, tok_end))
+                    elif tok == r'\[':
+                        bracket_stack.append((tok_start, tok_end))
+                    elif tok == r'\]':
+                        if bracket_stack:
+                            bracket_stack.pop()
+                        else:
+                            unmatched_spans.append((tok_start, tok_end))
+                unmatched_spans.extend(paren_stack)
+                unmatched_spans.extend(bracket_stack)
+                if not unmatched_spans:
+                    return text
+                unmatched_spans.sort()
+                pieces = []
+                pos = 0
+                for s, e in unmatched_spans:
+                    pieces.append(text[pos:s])
+                    pos = e
+                pieces.append(text[pos:])
+                return ''.join(pieces)
+
+            def _escape_raw_html_only(plain_text):
+                escaped = re.sub(
+                    r'<!--[\s\S]*?-->|<![A-Za-z][^>]*>|<\?[^>]*\?>|</?[A-Za-z][^>]*>',
+                    lambda m: m.group(0).replace('<', '&lt;').replace('>', '&gt;'),
+                    plain_text,
+                )
+                return re.sub(r'<(?=[!/\?A-Za-z])', '&lt;', escaped)
+
+            def _escape_raw_html_in_math(math_text):
+                escaped = html_in_math_re.sub(
+                    lambda m: m.group(0).replace('<', '&lt;').replace('>', '&gt;'),
+                    math_text,
+                )
+                return re.sub(
+                    r'<(?=(?:/?(?:script|style|iframe|object|embed|svg|img|video|audio|form|input|link|meta|base|details|summary|textarea|template|noscript)\b|!|\?))',
+                    '&lt;',
+                    escaped,
+                    flags=re.IGNORECASE,
+                )
+
+            final_chunks = []
+            for is_code, part in _split_commonmark_code_spans(cleaned):
+                if is_code:
+                    m_code = re.match(r'^(`+)([\s\S]*)\1$', part)
+                    if m_code:
+                        fence, inner = m_code.group(1), m_code.group(2)
+                        safe_inner = re.sub(r'\*{2,}', '', _neutralize_shortcodes(inner))
+                        if safe_inner.strip():
+                            if safe_inner.startswith('`') or safe_inner.endswith('`'):
+                                safe_inner = f' {safe_inner} '
+                            final_chunks.append(f'{fence}{safe_inner}{fence}')
+                        else:
+                            # Keep a separator so dropping an empty code span cannot fuse adjacent tokens (e.g. *`**`*)
+                            final_chunks.append(' ')
+                    continue
+                non_code = part
+                for _ in range(4):
+                    prev = non_code
+                    # 1. Strip stray backticks and tilde fences
+                    non_code = re.sub(r'`|~{3,}', '', non_code)
+                    # 2. Unwrap Markdown images and links
+                    non_code = re.sub(r'!\[([^\]]*)\]\([^)]*\)', r'\1', non_code)
+                    non_code = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', non_code)
+                    # 3. Neutralize Hugo shortcodes
+                    non_code = _neutralize_shortcodes(non_code)
+                    # 4. Preserve balanced inline math, then neutralize ALL remaining $ and \$
+                    non_code = fix_latex_delimiters(non_code)
+                    non_code = re.sub(r'(?<!\\)((?:\\\\)*)\\?\$', r'\1＄', non_code)
+                    # 5. Strip unmatched \(/\) and \[/\]
+                    non_code = _strip_unmatched_math_delimiters(non_code)
+                    # 6. Strip ANY consecutive star/underscore runs (escaped, unescaped, or mixed *\*!)
+                    non_code = re.sub(r'(?:\\?\*){2,}', '', non_code)
+                    non_code = re.sub(r'(?:\\?_){2,}', '', non_code)
+                    if non_code == prev:
+                        break
+
+                cursor = 0
+                for m in math_span_re.finditer(non_code):
+                    lead_slashes = len(m.group(0)) - len(m.group(0).lstrip('\\'))
+                    math_start = m.start() + (lead_slashes - 1 if lead_slashes % 2 == 1 else lead_slashes)
+                    final_chunks.append(_escape_raw_html_only(non_code[cursor:math_start]))
+                    final_chunks.append(_escape_raw_html_in_math(non_code[math_start:m.end()]))
+                    cursor = m.end()
+                final_chunks.append(_escape_raw_html_only(non_code[cursor:]))
+
+            return re.sub(r'\s+', ' ', ''.join(final_chunks)).strip()
+
+        for field_name, item_label in (
+                ('primaryStrengths', '核心优势'),
+                ('primaryDefects', '主要短板'),
+        ):
+            raw_items = evidence_profile.get(field_name)
+            if isinstance(raw_items, list):
+                emitted = 0
+                for raw_item in raw_items:
+                    if emitted >= 3:
+                        break
+                    safe_item = _sanitize_scoring_claim(raw_item)
+                    if safe_item:
+                        scoring_note_lines.append(f'- {item_label}：{safe_item}')
+                        emitted += 1
     return '\n\n'.join(scoring_note_lines)
 
 

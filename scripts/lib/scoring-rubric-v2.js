@@ -28,6 +28,34 @@ const V2_CORE_DIMENSIONS = Object.freeze(SPEC.coreDimensions.map(item => ALL_DIM
 const V2_OPEN_SOURCE_ANCHORS = Object.freeze([...SPEC.openSourceDimension.anchors]);
 const V2_OPEN_SOURCE_RELEASED_THRESHOLD = SPEC.openSourceDimension.releasedThreshold;
 const V2_EVIDENCE_CAPS = Object.freeze({ ...SPEC.evidenceCaps });
+const CALIBRATION_PROFILE = typeof SPEC.calibrationProfile === 'string' && SPEC.calibrationProfile.trim()
+    ? SPEC.calibrationProfile.trim()
+    : 'audio-rubric-v2.1';
+const CALIBRATION_ANCHORS = Object.freeze(
+    Array.isArray(SPEC.calibrationAnchors)
+        ? SPEC.calibrationAnchors.map(card => Object.freeze({
+            ...card,
+            keySignals: Object.freeze(Array.isArray(card.keySignals) ? [...card.keySignals] : [])
+        }))
+        : []
+);
+const DOMAIN_RED_LINES = Object.freeze(
+    Array.isArray(SPEC.domainRedLines)
+        ? SPEC.domainRedLines.map(item => Object.freeze({
+            ...item,
+            targetDimensions: Object.freeze(Array.isArray(item.targetDimensions) ? [...item.targetDimensions] : [])
+        }))
+        : []
+);
+const COMPACT_WEIGHT_LABELS = Object.freeze({
+    innovation: '创新',
+    technicalRigor: '严谨',
+    experimentalSufficiency: '实验',
+    clarity: '清晰',
+    impact: '影响',
+    reproducibility: '复现',
+    engineering: '工程'
+});
 const V2_SCORE_DIMENSIONS_BY_PARSED_FIELD = Object.freeze(
     Object.fromEntries(V2_DIMENSIONS.map(item => [item.parsedField, Object.freeze({ label: item.label, max: item.max, shortLabel: item.shortLabel })]))
 );
@@ -71,11 +99,25 @@ function isV2OpenSourceAnchor(value) {
 }
 
 function getDocumentTypePolicy(documentType) {
-    const policy = SPEC.documentTypes[String(documentType || '').trim()];
+    const key = String(documentType || '').trim();
+    const policy = Object.hasOwn(SPEC.documentTypes, key) ? SPEC.documentTypes[key] : null;
     if (!policy) {
         throw new Error(`type-aware-v2 不支持的文档类型: ${String(documentType || '')}`);
     }
     return policy;
+}
+
+function formatDocumentTypeWeightsSummary(documentType) {
+    const key = String(documentType || '').trim();
+    const policy = Object.hasOwn(SPEC.documentTypes, key) ? SPEC.documentTypes[key] : null;
+    if (!policy) return '';
+    const parts = V2_CORE_DIMENSIONS.map(dim => {
+        const label = COMPACT_WEIGHT_LABELS[dim.key] || dim.shortLabel || dim.label;
+        const pct = policy.coreWeightPct[dim.key];
+        return `${label} ${pct}%`;
+    });
+    const bonus = (policy.openSourceMaxBonusTenths / 10).toFixed(1);
+    return `${parts.join(' · ')}（开源上限加分 +${bonus}）`;
 }
 
 /**
@@ -159,11 +201,15 @@ module.exports = {
     V2_OPEN_SOURCE_ANCHORS,
     V2_OPEN_SOURCE_RELEASED_THRESHOLD,
     V2_EVIDENCE_CAPS,
+    CALIBRATION_PROFILE,
+    CALIBRATION_ANCHORS,
+    DOMAIN_RED_LINES,
     V2_SCORE_DIMENSIONS_BY_PARSED_FIELD,
     isV2Rubric,
     normalizeTenths,
     isV2OpenSourceAnchor,
     getDocumentTypePolicy,
+    formatDocumentTypeWeightsSummary,
     calculateV2WeightedTotal,
     rankBucketForV2Score,
     rankBucketForRubric

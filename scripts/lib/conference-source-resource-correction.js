@@ -95,11 +95,14 @@ function deriveLocalAudit(parentPaper, sourceDetails) {
         .deriveCorrectedIdentity(parentPaper.apiReaderResources, sourceDetails.text);
     deep.replayVerifiedReaderResourceIdentity(correction.identity, sourceDetails.text);
     const input = deep.applyApiReaderResourceAvailability(parentPaper.analysis, correction.identity);
-    const evidence = deep.buildTypeAwareSourceContext(input, sourceDetails.text);
+    const demoArtifactProbes = parentPaper.analysisManifest?.stages?.demoLinkScan?.artifactProbes;
+    const scoringEvidenceOpts = Array.isArray(demoArtifactProbes) && demoArtifactProbes.length > 0
+        ? { artifactProbes: demoArtifactProbes } : undefined;
+    const evidence = deep.buildStageEvidenceContext('scoringAudit', input, sourceDetails.text, scoringEvidenceOpts);
     const ids = new Set([...evidence.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
     const approved = approvedReasonAudit(original.audit, evidence, ids);
     const normalized = deep.validateScoringAuditAgainstAnalysis(input,
-        approved.audit, correction.identity, sourceDetails.text);
+        approved.audit, correction.identity, sourceDetails.text, scoringEvidenceOpts);
     const strict = deep.revalidateScoringAudit(normalized, ids);
     const audit = { ...strict,
         ...(Array.isArray(normalized.capsApplied) ? { capsApplied: normalized.capsApplied } : {}) };
@@ -586,7 +589,10 @@ function prepareFinalizerInput(paper) {
             .deriveCorrectedIdentity(parent.apiReaderResources, active.loaded.source.sourceDetails.text);
         const deep = require('../deep-analyzer');
         const scoringInput = deep.applyApiReaderResourceAvailability(parent.analysis, corrected.identity);
-        const evidence = deep.buildTypeAwareSourceContext(scoringInput, active.loaded.source.sourceDetails.text);
+        const parentArtifactProbes = parent.analysisManifest?.stages?.demoLinkScan?.artifactProbes;
+        const parentEvidenceOpts = Array.isArray(parentArtifactProbes) && parentArtifactProbes.length > 0
+            ? { artifactProbes: parentArtifactProbes } : undefined;
+        const evidence = deep.buildStageEvidenceContext('scoringAudit', scoringInput, active.loaded.source.sourceDetails.text, parentEvidenceOpts);
         active.approvedReasonReplacements = readReasonApproval(active, evidence);
         audit = deriveLocalAudit(parent, active.loaded.source.sourceDetails);
     }
@@ -725,15 +731,18 @@ function deriveCoreAudit(parent, active) {
             .map(key => [key, beforeStage[key]])) };
     // No footnote classification or availability update in this policy.
     deep.replayVerifiedReaderResourceIdentity(parent.apiReaderResources, source.text);
-    const evidence = deep.buildTypeAwareSourceContext(coreMain, source.text);
+    const coreArtifactProbes = parent.analysisManifest?.stages?.demoLinkScan?.artifactProbes;
+    const coreEvidenceOpts = Array.isArray(coreArtifactProbes) && coreArtifactProbes.length > 0
+        ? { artifactProbes: coreArtifactProbes } : undefined;
+    const evidence = deep.buildStageEvidenceContext('scoringAudit', coreMain, source.text, coreEvidenceOpts);
     const ids = new Set([...evidence.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
     const restoreCaps = (strict, original) => ({ ...strict,
         ...(Array.isArray(original.capsApplied) ? { capsApplied: clone(original.capsApplied) } : {}) });
     const strictOriginal = restoreCaps(deep.revalidateScoringAudit(clone(oldScore.audit), ids), oldScore.audit);
     const canonical = analysis => {
         const normalized = deep.validateScoringAuditAgainstAnalysis(analysis,
-            clone(oldScore.audit), parent.apiReaderResources, source.text);
-        const context = deep.buildTypeAwareSourceContext(analysis, source.text);
+            clone(oldScore.audit), parent.apiReaderResources, source.text, coreEvidenceOpts);
+        const context = deep.buildStageEvidenceContext('scoringAudit', analysis, source.text, coreEvidenceOpts);
         const contextIds = new Set([...context.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
         return restoreCaps(deep.revalidateScoringAudit(normalized, contextIds), normalized);
     };

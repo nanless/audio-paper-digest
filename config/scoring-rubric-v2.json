@@ -174,5 +174,98 @@
     "systemInternalUnmeasuredEngMax": 5.5,
     "nonHighConfidenceTotalMax": 8.4,
     "multiComponentNoAblationInternalTotalMax": 7.2
-  }
+  },
+  "calibrationProfile": "audio-rubric-v2.1",
+  "calibrationAnchors": [
+    {
+      "score": 5.2,
+      "rankBucket": "后50%",
+      "tierLabel": "存在明显短板",
+      "archetype": "常规商用硬件或现成开源声学模块拼装用于单一窄场景，宣称低功耗/实时却缺少实测、强基线或消融，或表文存在算术口径矛盾。",
+      "typicalDimensionRange": "4.5–5.8",
+      "keySignals": [
+        "核心主张与实验验证脱节",
+        "缺少强基线对比或组件级直接消融",
+        "表文数字口径冲突或窄场景无外溢"
+      ]
+    },
+    {
+      "score": 6.5,
+      "rankBucket": "前50%",
+      "tierLabel": "扎实良好 / 稳健渐进",
+      "archetype": "在主流语音识别、语音增强或音乐分析框架上做合理的损失项或特征前端渐进改进，1–2 个公开集上小幅可核对提升，但泛化与原创幅度有限。",
+      "typicalDimensionRange": "6.0–7.0",
+      "keySignals": [
+        "问题成立且基础实现自洽",
+        "对比基线偏旧或跨噪声/跨语种泛化验证有限",
+        "属常规渐进工作而非范式突破"
+      ]
+    },
+    {
+      "score": 7.5,
+      "rankBucket": "前25%",
+      "tierLabel": "明显优秀 / 细分方向扎实推进",
+      "archetype": "针对流式音频编解码、零样本语音合成、声源分离或声学表征中的明确瓶颈提出清晰可验证的新模块或训练策略，强基线公平对比、直接消融与规范听测或延迟实测扎实。",
+      "typicalDimensionRange": "7.2–8.0",
+      "keySignals": [
+        "明确的架构/算法/训练机制改进",
+        "公平强基线对比与直接组件消融",
+        "规范主观听测或真实部署延迟测量"
+      ]
+    },
+    {
+      "score": 8.5,
+      "rankBucket": "前10%",
+      "tierLabel": "强旗舰 / 顶级水准",
+      "archetype": "全模态音视频基础模型、原生语音交互系统、大规模高质量音频基准或高压缩低延迟编解码，实现显著能力或跨规模效率跃升，评测、消融、硬件实测与开源开放度均扎实。",
+      "typicalDimensionRange": "8.0–9.0",
+      "keySignals": [
+        "多项公开权威基准显著领先或跨规模效率跃升",
+        "严密防泄漏控制、统计检验与硬件实测",
+        "高开放度核心产物可供社区直接复用"
+      ]
+    },
+    {
+      "score": 9.2,
+      "rankBucket": "前10%",
+      "tierLabel": "里程碑 / 范式级突破",
+      "archetype": "开辟语音、音乐或通用音频建模/生成/评测新范式的基础模型、核心算法或决定性基准，广泛公开评测压倒性领先，理论/系统、实测效率与开源生态无明显短板。",
+      "typicalDimensionRange": "8.8–9.6",
+      "keySignals": [
+        "同期同方向前 5% 范式级原创突破",
+        "压倒性且公平的广泛公开评测与完备消融",
+        "端到端实测效率与完整开源复现生态兼备"
+      ]
+    }
+  ],
+  "domainRedLines": [
+    {
+      "id": "subjective_listening_panel_hygiene",
+      "title": "主观听测协议红线（MOS/CMOS/SMOS/ABX）",
+      "targetDimensions": ["experimentalSufficiency"],
+      "rule": "严禁跨不同听测人群或不同论文直接横向比较绝对 MOS 数值；主观音质主张须披露听测人数、样本量、置信区间/方差及盲测听测协议。",
+      "enforcement": "缺失关键听测协议或跨 panel 对比 MOS 时扣减 experimentalSufficiency 并在 primaryDefects 中记录。"
+    },
+    {
+      "id": "proxy_metric_vs_human_perception",
+      "title": "自动代理指标与人类感知区分红线",
+      "targetDimensions": ["experimentalSufficiency"],
+      "rule": "严格区分 UTMOS、DNSMOS、PESQ、小样本偏差敏感的 FAD 及易受转写失真影响的 Whisper-as-a-Judge 与人类主观听测。",
+      "enforcement": "仅凭窄范围自动代理指标宣称人类感知更优而无真人盲测支撑时，在 primaryDefects 标出并在 experimentalSufficiency 扣分。"
+    },
+    {
+      "id": "realtime_streaming_measurement_gap",
+      "title": "实时/流式/因果声明实测红线",
+      "targetDimensions": ["engineering"],
+      "rule": "宣称实时、流式、低延迟或因果架构时，须给出实测 RTF、算法前瞻、帧/块延迟与测试硬件规格。",
+      "enforcement": "缺少真实部署测量时须设 deploymentMeasured=false 且 engineeringEvidence=claim_only（engineering <= 5.5）。"
+    },
+    {
+      "id": "open_source_artifact_probe_mismatch",
+      "title": "开源产物自动探测核验红线",
+      "targetDimensions": ["openSource"],
+      "rule": "[A_ARTIFACT_PROBE] 检出 HTTP 200 占位仓库（无代码/无权重）或受控访问（gated）且无公开许可证的权重时，事实仅反映于 openSource。",
+      "enforcement": "严禁据此跨维度扣减其他七项维度分值。"
+    }
+  ]
 }

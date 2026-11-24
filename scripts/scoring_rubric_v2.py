@@ -43,6 +43,22 @@ V2_PUBLISH_DIMENSIONS: tuple[tuple[str, str, float], ...] = tuple(
 V2_PRESENTATION_DIMENSIONS: tuple[tuple[str, str, str], ...] = tuple(
     (item["parsedField"], item["shortLabel"], "10") for item in V2_DIMENSIONS
 )
+CALIBRATION_PROFILE: str = str(SPEC.get("calibrationProfile") or "audio-rubric-v2.1").strip() or "audio-rubric-v2.1"
+CALIBRATION_ANCHORS: tuple[dict[str, Any], ...] = tuple(
+    dict(card) for card in (SPEC.get("calibrationAnchors") or []) if isinstance(card, dict)
+)
+DOMAIN_RED_LINES: tuple[dict[str, Any], ...] = tuple(
+    dict(item) for item in (SPEC.get("domainRedLines") or []) if isinstance(item, dict)
+)
+_COMPACT_WEIGHT_LABELS: dict[str, str] = {
+    "innovation": "创新",
+    "technicalRigor": "严谨",
+    "experimentalSufficiency": "实验",
+    "clarity": "清晰",
+    "impact": "影响",
+    "reproducibility": "复现",
+    "engineering": "工程",
+}
 
 
 def is_v2_rubric(version: Any) -> bool:
@@ -82,6 +98,19 @@ def get_document_type_policy(document_type: Any) -> dict[str, Any]:
     if not policy:
         raise ValueError(f"type-aware-v2 不支持的文档类型: {key!r}")
     return policy
+
+
+def format_document_type_weights_summary(document_type: Any) -> str:
+    key = str(document_type or "").strip()
+    policy = SPEC["documentTypes"].get(key)
+    if not policy:
+        return ""
+    parts = [
+        f"{_COMPACT_WEIGHT_LABELS.get(dim['key'], dim.get('shortLabel') or dim['label'])} {int(policy['coreWeightPct'][dim['key']])}%"
+        for dim in V2_CORE_DIMENSIONS
+    ]
+    bonus = int(policy["openSourceMaxBonusTenths"]) / 10.0
+    return f"{' · '.join(parts)}（开源上限加分 +{bonus:.1f}）"
 
 
 def rank_bucket_for_v2_score(score: Any) -> str:

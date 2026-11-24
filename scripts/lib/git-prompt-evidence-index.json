@@ -880,6 +880,12 @@
         "prompts/api-reader-repair-v13.md"
       ]
     },
+    "55f7135da08d229754e95a02733674b180cb05b515a4d7ae4405c1e55003c1e0": {
+      "blobOid": "469e7583335c6f12a2250122975a064251ba3107",
+      "paths": [
+        "prompts/current/scoring-audit.md"
+      ]
+    },
     "563c7cc7e2a4b335294f259307844ed137574bf194cac171dc3d1563d41be8a8": {
       "blobOid": "26c7c303d2ea73d75c25210b92f9efffa559c860",
       "paths": [

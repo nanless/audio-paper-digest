@@ -381,6 +381,12 @@ const {
     analyzeDemoPageAudioCapabilities,
     probeAudioSampleUrls,
     probeHuggingFaceSpaceStatus,
+    probeGitHubRepositoryMetadata,
+    probeHuggingFaceResourceMetadata,
+    probeZenodoRecordMetadata,
+    probeRepositoryArtifactsDetailed,
+    extractArtifactProbeCandidateUrls,
+    formatArtifactProbeEvidenceBlock,
     inspectDemoPageDetailed,
     resolveMetadataResourceLinks,
     resolveDemoPageCandidates,
@@ -686,7 +692,10 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
                 analysis,
                 parsedAudit,
                 options.verifiedResourceIdentity,
-                sourceEvidence
+                sourceEvidence,
+                Array.isArray(options.artifactProbes) && options.artifactProbes.length > 0
+                    ? { artifactProbes: options.artifactProbes }
+                    : undefined
             );
             const audit = {
                 ...revalidateScoringAudit(normalizedAudit, allowedEvidenceIds),
@@ -12071,14 +12080,20 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     }
     analysis = applyApiReaderResourceAvailability(analysis, readerResources);
     paper.apiReaderResources = readerResources;
+    const refreshArtifactProbes = manifest?.stages?.demoLinkScan?.artifactProbes;
+    const refreshScoringEvidenceOpts = Array.isArray(refreshArtifactProbes) && refreshArtifactProbes.length > 0
+        ? { artifactProbes: refreshArtifactProbes }
+        : undefined;
     const scoringEvidenceContext = buildStageEvidenceContext(
-        'scoringAudit', analysis, sourceText
+        'scoringAudit', analysis, sourceText,
+        refreshScoringEvidenceOpts
     );
     let scoringResult = await auditTypeAwareScoringDetailed(
         analysis,
         sourceText,
         { evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: readerResources,
-            declaredStage: scoringRequestDeclaration }
+            declaredStage: scoringRequestDeclaration,
+            ...(refreshScoringEvidenceOpts || {}) }
     );
     let auditedAnalysis = scoringResult.analysis;
     let auditedParsed = parseAnalysis(auditedAnalysis);
@@ -12107,7 +12122,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         requiresConsensus: consensusRequired,
         auditAgain: () => auditTypeAwareScoringDetailed(analysis, sourceText, {
             evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: readerResources,
-            declaredStage: scoringRequestDeclaration
+            declaredStage: scoringRequestDeclaration,
+            ...(refreshScoringEvidenceOpts || {})
         }),
         scoreOfResult: candidate => {
             const parsed = parseAnalysis(candidate.analysis);
@@ -12867,15 +12883,19 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
     }
 });
 
-function buildStageEvidenceContext(stage, analysis, sourceText) {
+function buildStageEvidenceContext(stage, analysis, sourceText, options = {}) {
     if (stage === 'scoringAudit') {
-        return buildTypeAwareSourceContext(
+        const baseContext = buildTypeAwareSourceContext(
             analysis,
             sourceText,
             SCORING_EVIDENCE_MAX_CHARS,
             SCORING_EVIDENCE_PATTERNS,
             'SCORING'
         );
+        const artifactBlock = Array.isArray(options?.artifactProbes) && options.artifactProbes.length > 0
+            ? formatArtifactProbeEvidenceBlock(options.artifactProbes)
+            : '';
+        return artifactBlock ? `${baseContext}\n\n${artifactBlock}` : baseContext;
     }
     const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
     if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
@@ -13444,9 +13464,17 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId, manifest = p
         projectPages: demoProjectPages,
         metadataResourceLinks: demoMetadataLinks
     });
-    const demoLinkScanFingerprint = manifest?.stages?.demoLinkScan?.fingerprint === demoScanV4Fingerprint
+    const demoScanV6Fingerprint = stableFingerprint({
+        implementation: 'demo-link-scan-v6-artifact-metadata-probe',
+        projectPages: demoProjectPages,
+        metadataResourceLinks: demoMetadataLinks
+    });
+    const savedDemoFingerprint = manifest?.stages?.demoLinkScan?.fingerprint;
+    const demoLinkScanFingerprint = savedDemoFingerprint === demoScanV4Fingerprint
         ? demoScanV4Fingerprint
-        : demoScanV5Fingerprint;
+        : savedDemoFingerprint === demoScanV5Fingerprint
+            ? demoScanV5Fingerprint
+            : demoScanV6Fingerprint;
     return {
         primaryAnalysis: buildPrimaryAnalysisBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'primaryAnalysis'),
@@ -18685,8 +18713,11 @@ function validateSavedScoringAuditCandidate(paper, analysisManifest, handle, can
     }
     const allowedEvidenceIds = new Set(
         [...scoringEvidenceContext.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
+    const savedDemoArtifactProbes = analysisManifest?.stages?.demoLinkScan?.artifactProbes;
     const audited = validateScoringAuditAgainstAnalysis(scoringInputAnalysis, original.audit,
-        scoringResources, sourceText);
+        scoringResources, sourceText,
+        Array.isArray(savedDemoArtifactProbes) && savedDemoArtifactProbes.length > 0
+            ? { artifactProbes: savedDemoArtifactProbes } : undefined);
     const validated = { ...revalidateScoringAudit(audited, allowedEvidenceIds),
         ...(Array.isArray(audited.capsApplied) ? { capsApplied: audited.capsApplied } : {}) };
     if (stableFingerprint(validated) !== original.auditSha256
@@ -19384,6 +19415,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         let demoScanError = null;
         const demoScanFailures = [];
         const audioDemoProbes = [];
+        const artifactProbes = [];
         try {
             const hasPrimaryOpenSource = hasOpenSourceLinks(analysis);
             const demoUrls = resolveDemoPageCandidates(paper, analysis);
@@ -19484,6 +19516,19 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     spaceStatuses: [status]
                 });
             }
+            const artifactCandidateUrls = extractArtifactProbeCandidateUrls(analysis, demoFoundLinks).slice(0, 4);
+            let githubRateLimited = false;
+            for (const artifactUrl of artifactCandidateUrls) {
+                const isGitHubUrl = /^https:\/\/(?:www\.)?github\.com\//i.test(artifactUrl);
+                if (isGitHubUrl && githubRateLimited) continue;
+                const probeResult = await probeRepositoryArtifactsDetailed(artifactUrl);
+                if (probeResult && probeResult.platform !== 'unsupported') {
+                    if (probeResult.platform === 'github' && probeResult.rateLimited === true) {
+                        githubRateLimited = true;
+                    }
+                    artifactProbes.push(probeResult);
+                }
+            }
         } catch (e) {
             demoScanError = e;
             console.log(`    [deep] ⚠️  检查 demo 页面失败: ${e.message}`);
@@ -19503,6 +19548,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 linksFound: demoFoundLinks.length,
                 discoveredLinks: demoFoundLinks,
                 ...(audioDemoProbes.length > 0 ? { audioDemoProbes } : {}),
+                ...(artifactProbes.length > 0 ? { artifactProbes } : {}),
                 unavailable: demoScanFailures,
                 fingerprint: recoveryFingerprints.demoLinkScan
             });
@@ -20059,11 +20105,15 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
     );
     paper.apiReaderResources = verifiedReaderResources;
+    const demoArtifactProbes = analysisManifest.stages.demoLinkScan?.artifactProbes;
+    const scoringEvidenceOpts = Array.isArray(demoArtifactProbes) && demoArtifactProbes.length > 0
+        ? { artifactProbes: demoArtifactProbes }
+        : undefined;
     const thirdPartyScoringReplay = require('./lib/scoring-third-party-resource-replay').prepareReplay(
         savedScoringCandidate?.paper || paper, previousReaderResources, verifiedReaderResources, structuralAnalysis, rawTextForAnalysis, {
             verify: replayVerifiedReaderResourceIdentity,
             apply: applyApiReaderResourceAvailability,
-            evidence: (input, source) => buildStageEvidenceContext('scoringAudit', input, source)
+            evidence: (input, source) => buildStageEvidenceContext('scoringAudit', input, source, scoringEvidenceOpts)
         }
     );
     const scoringInputAnalysis = thirdPartyScoringReplay?.analysis || applyApiReaderResourceAvailability(
@@ -20090,7 +20140,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const scoringEvidenceContext = buildStageEvidenceContext(
         'scoringAudit',
         scoringInputAnalysis,
-        rawTextForAnalysis
+        rawTextForAnalysis,
+        scoringEvidenceOpts
     );
     if (savedScoringCandidate && !isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         const receipt = validateSavedScoringAuditCandidate(paper, analysisManifest,
@@ -20146,7 +20197,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 scoringInputAnalysis,
                 rawTextForAnalysis,
                 { evidenceContext: scoringEvidenceContext,
-                    verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration }
+                    verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration,
+                    ...(scoringEvidenceOpts || {}) }
             );
             analysis = scoringResult.analysis;
             const validateScoringOutput = candidateAnalysis => {
@@ -20181,7 +20233,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 requiresConsensus: consensusRequired,
                 auditAgain: () => auditTypeAwareScoringDetailed(scoringInputAnalysis, rawTextForAnalysis, {
                     evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: paper.apiReaderResources,
-                    declaredStage: scoringRequestDeclaration
+                    declaredStage: scoringRequestDeclaration,
+                    ...(scoringEvidenceOpts || {})
                 }),
                 scoreOfResult: candidate => Number(validateScoringOutput(candidate.analysis)?.score),
                 fingerprintAudit: stableFingerprint,
@@ -22156,6 +22209,12 @@ module.exports = {
     analyzeDemoPageAudioCapabilities: publicResourceProbe.analyzeDemoPageAudioCapabilities,
     probeAudioSampleUrls: publicResourceProbe.probeAudioSampleUrls,
     probeHuggingFaceSpaceStatus,
+    probeGitHubRepositoryMetadata,
+    probeHuggingFaceResourceMetadata,
+    probeZenodoRecordMetadata,
+    probeRepositoryArtifactsDetailed,
+    extractArtifactProbeCandidateUrls,
+    formatArtifactProbeEvidenceBlock,
     extractHuggingFaceSpaceUrls,
     invalidateSourceBoundImageRecovery,
     discardInvalidImageSupplement,

@@ -1274,6 +1274,827 @@ async function probeHuggingFaceSpaceStatus(spaceUrl, options = {}) {
     }
 }
 
+const ARTIFACT_SPDX_LICENSE_RE = /^[A-Za-z0-9.+-]{1,64}$/;
+const ARTIFACT_WEIGHT_FILE_RE = /\.(?:safetensors|pt|pth|bin|ckpt|onnx|gguf)$/i;
+const ARTIFACT_CODE_FILE_RE = /(?:^|\/)(?:Makefile|CMakeLists\.txt|Dockerfile)$|\.(?:py|ipynb|cpp|cc|c|cu|h|hpp|hxx|m|jl|java|r|swift|kt|scala|lua|rs|go|ts|js|sh|yaml|yml|toml)$/i;
+const ARTIFACT_DATASET_FILE_RE = /\.(?:wav|flac|mp3|ogg|opus|m4a|parquet|jsonl|csv|tsv|tar|gz|tgz|zip|7z|hdf5|h5|arrow|npy|npz|scp|ark)$/i;
+const ARTIFACT_URL_UNSAFE_CHARS_RE = /[\\\s\u0000-\u001f\u007f]/;
+const ALLOWED_ARTIFACT_PLATFORMS = new Set(['github', 'huggingface', 'zenodo']);
+const ALLOWED_HF_RESOURCE_KINDS = new Set(['model', 'dataset']);
+const ARTIFACT_ERROR_CODE_RE = /^[a-z0-9_:-]{1,64}$/i;
+const ARTIFACT_MODE_ALLOW_RE = /^[a-z0-9_-]{1,32}$/i;
+const ARTIFACT_WEIGHT_EXT_ALLOW_RE = /^\.(?:safetensors|pt|pth|bin|ckpt|onnx|gguf)$/i;
+const ARTIFACT_PROBE_TIMEOUT_MS = 10000;
+const ARTIFACT_PROBE_MAX_BYTES = 256 * 1024;
+
+function sanitizeArtifactSpdxLicense(raw) {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    if (/^(?:noassertion|other|none|unknown)$/i.test(value)) return '';
+    return ARTIFACT_SPDX_LICENSE_RE.test(value) ? value : '';
+}
+
+function sanitizeProbeErrorMessage(err, secretToken = '') {
+    let msg = String(err?.message || 'artifact_probe_failed');
+    if (typeof secretToken === 'string' && secretToken.trim()) {
+        msg = msg.split(secretToken.trim()).join('[REDACTED]');
+    }
+    return msg
+        .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+        .replace(/\bgh[pousr]_[A-Za-z0-9_]+/g, '[REDACTED]')
+        .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, '[REDACTED]')
+        .replace(/[\r\n\t]+/g, ' ')
+        .trim()
+        .slice(0, 240);
+}
+
+function collectArtifactFileSignals(filePaths) {
+    let hasWeightFiles = false;
+    let hasCodeFiles = false;
+    let hasDatasetFiles = false;
+    const weightExtSet = new Set();
+    const paths = Array.isArray(filePaths) ? filePaths : [];
+    for (const rawPath of paths) {
+        const p = String(rawPath || '').trim();
+        if (!p) continue;
+        const weightMatch = ARTIFACT_WEIGHT_FILE_RE.exec(p);
+        if (weightMatch) {
+            hasWeightFiles = true;
+            weightExtSet.add(weightMatch[0].toLowerCase());
+        }
+        if (ARTIFACT_CODE_FILE_RE.test(p)) {
+            hasCodeFiles = true;
+        }
+        if (ARTIFACT_DATASET_FILE_RE.test(p)) {
+            hasDatasetFiles = true;
+        }
+    }
+    return {
+        hasWeightFiles,
+        weightExtensions: [...weightExtSet].sort(),
+        hasCodeFiles,
+        hasDatasetFiles,
+        fileCount: paths.length
+    };
+}
+
+function isSafeRepoPathSegment(seg) {
+    return typeof seg === 'string'
+        && /^[A-Za-z0-9._-]+$/.test(seg)
+        && seg !== '.'
+        && seg !== '..'
+        && !seg.endsWith('.');
+}
+
+function parseValidGitHubRepoUrl(rawUrl) {
+    try {
+        const raw = String(rawUrl || '').trim();
+        if (!raw || ARTIFACT_URL_UNSAFE_CHARS_RE.test(raw) || /(?:^|\/)\.\.(?:\/|$|[?#])|%2[ef]|%5c/i.test(raw)) return null;
+        const parsed = new URL(raw);
+        const host = parsed.hostname.toLowerCase();
+        if (parsed.protocol !== 'https:'
+            || (host !== 'github.com' && host !== 'www.github.com')
+            || parsed.username || parsed.password || parsed.port) {
+            return null;
+        }
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        if (segments.length < 2) return null;
+        if (segments.length > 2 && !['tree', 'blob', 'releases'].includes(segments[2].toLowerCase())) {
+            return null;
+        }
+        const owner = segments[0];
+        const repo = segments[1].replace(/\.git$/i, '');
+        if (!isSafeRepoPathSegment(owner) || !isSafeRepoPathSegment(repo)
+            || RESERVED_REPO_OWNERS.has(owner.toLowerCase())) {
+            return null;
+        }
+        return {
+            owner,
+            repo,
+            repoId: `${owner}/${repo}`,
+            canonicalUrl: `https://github.com/${owner}/${repo}`,
+            normalizedHref: parsed.href
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+function parseValidHuggingFaceResourceUrl(rawUrl) {
+    try {
+        const raw = String(rawUrl || '').trim();
+        if (!raw || ARTIFACT_URL_UNSAFE_CHARS_RE.test(raw) || /(?:^|\/)\.\.(?:\/|$|[?#])|%2[ef]|%5c/i.test(raw)) return null;
+        const parsed = new URL(raw);
+        const host = parsed.hostname.toLowerCase();
+        if (parsed.protocol !== 'https:'
+            || (host !== 'huggingface.co' && host !== 'www.huggingface.co')
+            || parsed.username || parsed.password || parsed.port) {
+            return null;
+        }
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        if (segments.length < 2) return null;
+        const firstLower = segments[0].toLowerCase();
+        if (firstLower === 'spaces' || firstLower === 'collections') return null;
+
+        let kind = '';
+        let owner = '';
+        let name = '';
+        if (firstLower === 'datasets' || firstLower === 'models') {
+            if (segments.length === 3 || (segments.length >= 4 && segments[3].toLowerCase() === 'tree')) {
+                kind = firstLower === 'datasets' ? 'dataset' : 'model';
+                owner = segments[1];
+                name = segments[2];
+            } else {
+                return null;
+            }
+        } else if (!RESERVED_HF_PREFIXES.has(firstLower)) {
+            if (segments.length === 2 || (segments.length >= 3 && segments[2].toLowerCase() === 'tree')) {
+                kind = 'model';
+                owner = segments[0];
+                name = segments[1];
+            } else {
+                return null;
+            }
+        } else {
+            return null;
+        }
+
+        if (!isSafeRepoPathSegment(owner) || !isSafeRepoPathSegment(name)) return null;
+        const repoId = `${owner}/${name}`;
+        const canonicalUrl = kind === 'dataset'
+            ? `https://huggingface.co/datasets/${owner}/${name}`
+            : `https://huggingface.co/${owner}/${name}`;
+        const apiUrl = kind === 'dataset'
+            ? `https://huggingface.co/api/datasets/${owner}/${name}`
+            : `https://huggingface.co/api/models/${owner}/${name}`;
+        const allowedPathPrefix = kind === 'dataset' ? '/api/datasets/' : '/api/models/';
+        return { kind, owner, name, repoId, canonicalUrl, apiUrl, allowedPathPrefix, normalizedHref: parsed.href };
+    } catch (_) {
+        return null;
+    }
+}
+
+function parseValidZenodoRecordUrl(rawUrl) {
+    try {
+        const raw = String(rawUrl || '').trim();
+        if (!raw || ARTIFACT_URL_UNSAFE_CHARS_RE.test(raw) || /(?:^|\/)\.\.(?:\/|$|[?#])|%2[ef]|%5c/i.test(raw)) return null;
+        const parsed = new URL(raw);
+        const host = parsed.hostname.toLowerCase();
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) {
+            return null;
+        }
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        let recordId = '';
+        if (host === 'zenodo.org' || host === 'www.zenodo.org') {
+            if (segments.length === 2
+                && (segments[0].toLowerCase() === 'records' || segments[0].toLowerCase() === 'record')
+                && /^\d{1,16}$/.test(segments[1])) {
+                recordId = segments[1];
+            }
+        } else if (host === 'doi.org' || host === 'dx.doi.org') {
+            if (segments.length === 2 && segments[0] === '10.5281') {
+                const m = /^zenodo\.(\d{1,16})$/i.exec(segments[1]);
+                if (m) recordId = m[1];
+            }
+        }
+        if (!recordId) return null;
+        return {
+            recordId,
+            canonicalUrl: `https://zenodo.org/records/${recordId}`,
+            apiUrl: `https://zenodo.org/api/records/${recordId}`,
+            normalizedHref: parsed.href
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+function normalizeArtifactProbeUrl(rawUrl) {
+    const raw = String(rawUrl || '').trim();
+    if (!raw) return '';
+    const upgraded = raw.replace(/^http:\/\//i, 'https://');
+    const parsed = parseValidGitHubRepoUrl(upgraded)
+        || parseValidHuggingFaceResourceUrl(upgraded)
+        || parseValidZenodoRecordUrl(upgraded);
+    if (parsed) return parsed.canonicalUrl.toLowerCase();
+    try {
+        const u = new URL(upgraded);
+        const host = u.hostname.toLowerCase().replace(/^www\./, '');
+        return `${u.protocol.toLowerCase()}//${host}${u.pathname.replace(/\/+$/, '').toLowerCase()}`;
+    } catch (_) {
+        return raw.replace(/\/+$/, '').toLowerCase();
+    }
+}
+
+async function fetchHostLockedJsonApi(apiUrl, config, options = {}) {
+    require('./conference-reader-operator-correction').assertMayAccessNetwork();
+    require('./conference-source-resource-correction').assertMayAccessNetwork();
+
+    const allowedHosts = config.allowedHosts;
+    const allowedPathPrefixes = config.allowedPathPrefixes;
+    const secretToken = typeof config.secretToken === 'string' ? config.secretToken : '';
+    const headers = config.headers || {
+        'User-Agent': 'Mozilla/5.0 (compatible; AudioPaperDigest/1.0)',
+        'Accept': 'application/json'
+    };
+    const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
+    const requestImpl = options.requestImpl || requestPinnedPublicHttps;
+    const detectProxyImpl = options.detectProxyImpl || resolveHttpConnectProxyUrl;
+    const proxyEnabled = isValidHttpConnectProxyUrl(detectProxyImpl());
+
+    let currentUrl = apiUrl;
+    try {
+        for (let hop = 0; hop <= 2; hop += 1) {
+            if (!currentUrl || ARTIFACT_URL_UNSAFE_CHARS_RE.test(currentUrl)) {
+                return { ok: false, status: null, error: 'unexpected_redirect_host' };
+            }
+            const parsedHop = await validateUrlImpl(currentUrl, { proxyEnabled });
+            const hopHost = String(parsedHop?.hostname || '').toLowerCase();
+            if (parsedHop?.protocol !== 'https:'
+                || !allowedHosts.has(hopHost)
+                || parsedHop.username || parsedHop.password || parsedHop.port
+                || !allowedPathPrefixes.some(prefix => String(parsedHop.pathname || '').startsWith(prefix))) {
+                return { ok: false, status: null, error: 'unexpected_redirect_host' };
+            }
+            const res = await requestImpl(currentUrl, {
+                headers,
+                timeoutMs: ARTIFACT_PROBE_TIMEOUT_MS,
+                maxBytes: ARTIFACT_PROBE_MAX_BYTES
+            }, { validateUrlImpl, detectProxyImpl });
+            const status = Number(res?.status || 0);
+            const location = res?.headers?.get ? res.headers.get('location') : null;
+            if (status >= 300 && status < 400) {
+                if (res?.body && typeof res.body.cancel === 'function') {
+                    try { await res.body.cancel(); } catch (_) {}
+                }
+                if (!location) {
+                    return { ok: false, status, error: 'missing_redirect_location' };
+                }
+                if (hop >= 2) {
+                    return { ok: false, status, error: 'too_many_redirects' };
+                }
+                const cleanLocation = String(location).trim();
+                if (!cleanLocation || ARTIFACT_URL_UNSAFE_CHARS_RE.test(cleanLocation)) {
+                    return { ok: false, status, error: 'unexpected_redirect_host' };
+                }
+                let next;
+                try {
+                    next = new URL(cleanLocation, parsedHop);
+                } catch (_) {
+                    return { ok: false, status, error: 'unexpected_redirect_host' };
+                }
+                const nextHost = next.hostname.toLowerCase();
+                if (next.protocol !== 'https:'
+                    || !allowedHosts.has(nextHost)
+                    || next.username || next.password || next.port
+                    || ARTIFACT_URL_UNSAFE_CHARS_RE.test(next.href)
+                    || /(?:^|\/)\.\.(?:\/|$)|%2[ef]|%5c/i.test(next.pathname)
+                    || !allowedPathPrefixes.some(prefix => next.pathname.startsWith(prefix))) {
+                    return { ok: false, status, error: 'unexpected_redirect_host' };
+                }
+                currentUrl = next.href;
+                continue;
+            }
+            if (status === 429) {
+                if (res?.body && typeof res.body.cancel === 'function') {
+                    try { await res.body.cancel(); } catch (_) {}
+                }
+                return { ok: false, status, rateLimited: true, error: 'rate_limited' };
+            }
+            if (status === 403) {
+                if (res?.body && typeof res.body.cancel === 'function') {
+                    try { await res.body.cancel(); } catch (_) {}
+                }
+                const rlRemaining = res?.headers?.get ? res.headers.get('x-ratelimit-remaining') : null;
+                const retryAfter = res?.headers?.get ? res.headers.get('retry-after') : null;
+                const rlStr = rlRemaining === null || rlRemaining === undefined ? '' : String(rlRemaining).trim();
+                const retryStr = retryAfter === null || retryAfter === undefined ? '' : String(retryAfter).trim();
+                const isRateLimited403 = rlStr === '0' || retryStr !== '' || rlStr === '';
+                if (isRateLimited403) {
+                    return { ok: false, status, rateLimited: true, error: 'forbidden_or_rate_limited' };
+                }
+                return { ok: false, status, rateLimited: false, error: 'http_403' };
+            }
+            if (status !== 200) {
+                if (res?.body && typeof res.body.cancel === 'function') {
+                    try { await res.body.cancel(); } catch (_) {}
+                }
+                return { ok: false, status, error: `http_${status}` };
+            }
+            const bodyText = Buffer.from(await res.arrayBuffer()).toString('utf8');
+            let json;
+            try {
+                json = JSON.parse(bodyText);
+            } catch (_) {
+                return { ok: false, status, error: 'invalid_json_response' };
+            }
+            return { ok: true, status, json };
+        }
+        return { ok: false, status: null, error: 'too_many_redirects' };
+    } catch (err) {
+        if (err?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(err)) throw err;
+        return {
+            ok: false,
+            status: null,
+            errorCode: err?.code || '',
+            error: sanitizeProbeErrorMessage(err, secretToken)
+        };
+    }
+}
+
+async function probeGitHubRepositoryMetadata(repoUrl, options = {}) {
+    const parsed = parseValidGitHubRepoUrl(repoUrl);
+    if (!parsed) {
+        return {
+            platform: 'github',
+            url: String(repoUrl || ''),
+            canonicalUrl: '',
+            repoId: '',
+            ok: false,
+            status: null,
+            error: 'invalid_github_url'
+        };
+    }
+    const rawToken = options.githubToken !== undefined ? options.githubToken : process.env.GITHUB_TOKEN;
+    const githubToken = typeof rawToken === 'string' ? rawToken.trim() : '';
+    const headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; AudioPaperDigest/1.0)',
+        'Accept': 'application/vnd.github+json',
+        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {})
+    };
+    const apiConfig = {
+        allowedHosts: new Set(['api.github.com']),
+        allowedPathPrefixes: ['/repos/', '/repositories/'],
+        headers,
+        secretToken: githubToken
+    };
+
+    const metaUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`;
+    const metaRes = await fetchHostLockedJsonApi(metaUrl, apiConfig, options);
+    if (!metaRes.ok) {
+        return {
+            platform: 'github',
+            url: parsed.canonicalUrl,
+            canonicalUrl: parsed.canonicalUrl,
+            repoId: parsed.repoId,
+            ok: false,
+            status: metaRes.status ?? null,
+            ...(metaRes.rateLimited ? { rateLimited: true } : {}),
+            error: metaRes.error || 'github_probe_failed'
+        };
+    }
+
+    const meta = metaRes.json && typeof metaRes.json === 'object' ? metaRes.json : {};
+    const rawBranch = String(meta.default_branch || 'main').trim();
+    const defaultBranch = (/^[A-Za-z0-9._/-]{1,128}$/.test(rawBranch) && !/(?:^|\/)\.\.(?:\/|$)/.test(rawBranch))
+        ? rawBranch
+        : 'main';
+    const spdxLicense = sanitizeArtifactSpdxLicense(meta?.license?.spdx_id || meta?.license?.key);
+    const archived = meta.archived === true;
+    const privateRepo = meta.private === true;
+    const isEmpty = meta.size === 0;
+    const stargazersCount = Number.isInteger(meta.stargazers_count) ? meta.stargazers_count : null;
+    const pushedAt = typeof meta.pushed_at === 'string' ? meta.pushed_at.trim() : '';
+
+    let signals = {
+        hasWeightFiles: false,
+        weightExtensions: [],
+        hasCodeFiles: false,
+        hasDatasetFiles: false,
+        fileCount: 0
+    };
+    let treeTruncated = false;
+    let fileListingStatus = 'complete';
+    let hasRootDirs = false;
+    let placeholderSuspected = false;
+    let treeRateLimited = false;
+
+    if (isEmpty) {
+        fileListingStatus = 'complete';
+        placeholderSuspected = true;
+    } else {
+        const encodedBranch = defaultBranch.split('/').map(encodeURIComponent).join('/');
+        const treeUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/git/trees/${encodedBranch}?recursive=1`;
+        const treeRes = await fetchHostLockedJsonApi(treeUrl, apiConfig, options);
+        let needRootFallback = false;
+
+        if (treeRes.rateLimited) {
+            treeRateLimited = true;
+            treeTruncated = true;
+            fileListingStatus = 'rate_limited';
+        } else if (treeRes.ok && Array.isArray(treeRes.json?.tree)) {
+            const blobPaths = treeRes.json.tree
+                .filter(entry => entry && entry.type === 'blob' && typeof entry.path === 'string')
+                .map(entry => entry.path);
+            treeTruncated = treeRes.json.truncated === true;
+            signals = collectArtifactFileSignals(blobPaths);
+            if (treeTruncated) {
+                fileListingStatus = 'truncated';
+                if (!signals.hasCodeFiles && !signals.hasWeightFiles && !signals.hasDatasetFiles) {
+                    needRootFallback = true;
+                }
+            } else {
+                fileListingStatus = 'complete';
+                placeholderSuspected = !signals.hasCodeFiles && !signals.hasWeightFiles && !signals.hasDatasetFiles;
+            }
+        } else if (treeRes.status === 409) {
+            fileListingStatus = 'complete';
+            placeholderSuspected = true;
+        } else {
+            needRootFallback = true;
+        }
+
+        if (needRootFallback) {
+            const contentsUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/contents`;
+            const contentsRes = await fetchHostLockedJsonApi(contentsUrl, apiConfig, options);
+            if (contentsRes.rateLimited) {
+                treeRateLimited = true;
+                treeTruncated = true;
+                fileListingStatus = 'rate_limited';
+                placeholderSuspected = false;
+            } else if (contentsRes.ok && Array.isArray(contentsRes.json)) {
+                const rootFiles = contentsRes.json
+                    .filter(entry => entry && entry.type === 'file')
+                    .map(entry => String(entry.path || entry.name || ''));
+                hasRootDirs = contentsRes.json.some(entry => entry && entry.type === 'dir');
+                const rootSignals = collectArtifactFileSignals(rootFiles);
+                signals = {
+                    hasWeightFiles: signals.hasWeightFiles || rootSignals.hasWeightFiles,
+                    weightExtensions: [...new Set([...signals.weightExtensions, ...rootSignals.weightExtensions])].sort(),
+                    hasCodeFiles: signals.hasCodeFiles || rootSignals.hasCodeFiles,
+                    hasDatasetFiles: signals.hasDatasetFiles || rootSignals.hasDatasetFiles,
+                    fileCount: Math.max(signals.fileCount, rootSignals.fileCount)
+                };
+                treeTruncated = true;
+                fileListingStatus = 'truncated';
+                placeholderSuspected = !hasRootDirs && !signals.hasCodeFiles && !signals.hasWeightFiles && !signals.hasDatasetFiles;
+            } else {
+                treeTruncated = true;
+                fileListingStatus = treeRes.ok ? 'truncated' : 'failed';
+                placeholderSuspected = false;
+            }
+        }
+    }
+
+    return {
+        platform: 'github',
+        url: parsed.canonicalUrl,
+        canonicalUrl: parsed.canonicalUrl,
+        ...(parsed.normalizedHref !== parsed.canonicalUrl ? { originalUrl: parsed.normalizedHref } : {}),
+        repoId: parsed.repoId,
+        ok: true,
+        status: metaRes.status,
+        defaultBranch,
+        archived,
+        privateRepo,
+        spdxLicense,
+        hasWeightFiles: signals.hasWeightFiles,
+        weightExtensions: signals.weightExtensions,
+        hasCodeFiles: signals.hasCodeFiles,
+        hasDatasetFiles: signals.hasDatasetFiles,
+        fileCount: signals.fileCount,
+        treeTruncated,
+        fileListingStatus,
+        ...(hasRootDirs ? { hasRootDirs: true } : {}),
+        placeholderSuspected,
+        ...(stargazersCount !== null ? { stargazersCount } : {}),
+        ...(pushedAt ? { pushedAt } : {}),
+        ...(treeRateLimited ? { rateLimited: true } : {})
+    };
+}
+
+async function probeHuggingFaceResourceMetadata(hfUrl, options = {}) {
+    const parsed = parseValidHuggingFaceResourceUrl(hfUrl);
+    if (!parsed) {
+        return {
+            platform: 'huggingface',
+            resourceKind: '',
+            url: String(hfUrl || ''),
+            canonicalUrl: '',
+            repoId: '',
+            ok: false,
+            status: null,
+            error: 'invalid_huggingface_resource_url'
+        };
+    }
+    const res = await fetchHostLockedJsonApi(parsed.apiUrl, {
+        allowedHosts: new Set(['huggingface.co', 'www.huggingface.co']),
+        allowedPathPrefixes: [parsed.allowedPathPrefix]
+    }, options);
+    if (!res.ok) {
+        return {
+            platform: 'huggingface',
+            resourceKind: parsed.kind,
+            url: parsed.canonicalUrl,
+            canonicalUrl: parsed.canonicalUrl,
+            repoId: parsed.repoId,
+            ok: false,
+            status: res.status ?? null,
+            ...(res.rateLimited ? { rateLimited: true } : {}),
+            error: res.error || 'huggingface_probe_failed'
+        };
+    }
+
+    const json = res.json && typeof res.json === 'object' ? res.json : {};
+    let gated = false;
+    let gatedMode = '';
+    if (typeof json.gated === 'string') {
+        const gm = json.gated.trim().toLowerCase();
+        if (gm && gm !== 'false') {
+            gated = true;
+            gatedMode = ARTIFACT_MODE_ALLOW_RE.test(gm) ? gm : 'gated';
+        }
+    } else if (json.gated === true) {
+        gated = true;
+        gatedMode = 'true';
+    }
+    const privateRepo = json.private === true;
+
+    let spdxLicense = '';
+    const cardLicense = json?.cardData?.license;
+    if (typeof cardLicense === 'string') {
+        spdxLicense = sanitizeArtifactSpdxLicense(cardLicense);
+    } else if (Array.isArray(cardLicense)) {
+        for (const item of cardLicense) {
+            const candidate = sanitizeArtifactSpdxLicense(item);
+            if (candidate) {
+                spdxLicense = candidate;
+                break;
+            }
+        }
+    }
+    if (!spdxLicense && Array.isArray(json.tags)) {
+        for (const tag of json.tags) {
+            if (typeof tag === 'string' && tag.toLowerCase().startsWith('license:')) {
+                const candidate = sanitizeArtifactSpdxLicense(tag.slice('license:'.length));
+                if (candidate) {
+                    spdxLicense = candidate;
+                    break;
+                }
+            }
+        }
+    }
+
+    const siblingFiles = Array.isArray(json.siblings)
+        ? json.siblings.map(item => String(item?.rfilename || '')).filter(Boolean)
+        : [];
+    const signals = collectArtifactFileSignals(siblingFiles);
+
+    return {
+        platform: 'huggingface',
+        resourceKind: parsed.kind,
+        url: parsed.canonicalUrl,
+        canonicalUrl: parsed.canonicalUrl,
+        ...(parsed.normalizedHref !== parsed.canonicalUrl ? { originalUrl: parsed.normalizedHref } : {}),
+        repoId: parsed.repoId,
+        ok: true,
+        status: res.status,
+        gated,
+        gatedMode,
+        privateRepo,
+        spdxLicense,
+        hasWeightFiles: signals.hasWeightFiles,
+        weightExtensions: signals.weightExtensions,
+        hasCodeFiles: signals.hasCodeFiles,
+        hasDatasetFiles: signals.hasDatasetFiles,
+        fileCount: signals.fileCount
+    };
+}
+
+async function probeZenodoRecordMetadata(zenodoUrl, options = {}) {
+    const parsed = parseValidZenodoRecordUrl(zenodoUrl);
+    if (!parsed) {
+        return {
+            platform: 'zenodo',
+            url: String(zenodoUrl || ''),
+            canonicalUrl: '',
+            recordId: '',
+            ok: false,
+            status: null,
+            error: 'invalid_zenodo_url'
+        };
+    }
+    const res = await fetchHostLockedJsonApi(parsed.apiUrl, {
+        allowedHosts: new Set(['zenodo.org', 'www.zenodo.org']),
+        allowedPathPrefixes: ['/api/records/']
+    }, options);
+    if (!res.ok) {
+        return {
+            platform: 'zenodo',
+            url: parsed.canonicalUrl,
+            canonicalUrl: parsed.canonicalUrl,
+            recordId: parsed.recordId,
+            ok: false,
+            status: res.status ?? null,
+            ...(res.rateLimited ? { rateLimited: true } : {}),
+            error: res.error || 'zenodo_probe_failed'
+        };
+    }
+
+    const json = res.json && typeof res.json === 'object' ? res.json : {};
+    const rawAccess = String(json?.metadata?.access_right || '').trim().toLowerCase();
+    const accessRight = ARTIFACT_MODE_ALLOW_RE.test(rawAccess) ? rawAccess : '';
+    const gated = Boolean(accessRight && accessRight !== 'open');
+    const rawLicense = typeof json?.metadata?.license === 'string'
+        ? json.metadata.license
+        : json?.metadata?.license?.id;
+    const spdxLicense = sanitizeArtifactSpdxLicense(rawLicense);
+    const fileNames = Array.isArray(json.files)
+        ? json.files.map(item => String(item?.key || item?.filename || '')).filter(Boolean)
+        : [];
+    const signals = collectArtifactFileSignals(fileNames);
+
+    return {
+        platform: 'zenodo',
+        url: parsed.canonicalUrl,
+        canonicalUrl: parsed.canonicalUrl,
+        ...(parsed.normalizedHref !== parsed.canonicalUrl ? { originalUrl: parsed.normalizedHref } : {}),
+        recordId: parsed.recordId,
+        ok: true,
+        status: res.status,
+        accessRight,
+        gated,
+        spdxLicense,
+        hasWeightFiles: signals.hasWeightFiles,
+        weightExtensions: signals.weightExtensions,
+        hasCodeFiles: signals.hasCodeFiles,
+        hasDatasetFiles: signals.hasDatasetFiles,
+        fileCount: signals.fileCount
+    };
+}
+
+async function probeRepositoryArtifactsDetailed(url, options = {}) {
+    if (parseValidGitHubRepoUrl(url)) {
+        return probeGitHubRepositoryMetadata(url, options);
+    }
+    if (parseValidHuggingFaceResourceUrl(url)) {
+        return probeHuggingFaceResourceMetadata(url, options);
+    }
+    if (parseValidZenodoRecordUrl(url)) {
+        return probeZenodoRecordMetadata(url, options);
+    }
+    return {
+        platform: 'unsupported',
+        url: String(url || ''),
+        canonicalUrl: '',
+        ok: false,
+        status: null,
+        error: 'unsupported_artifact_host'
+    };
+}
+
+function extractArtifactProbeCandidateUrls(analysis, extraLinks = []) {
+    const seenCanonical = new Set();
+    const candidates = [];
+    const addCandidate = raw => {
+        const cleaned = String(raw || '').trim()
+            .replace(/^[\s`(（[【<：:]+/, '')
+            .replace(/[` ),.;:!?，。；：！？、）》】》」』]+$/u, '');
+        if (!cleaned) return;
+        const normalized = cleaned.replace(/^http:\/\//i, 'https://');
+        const parsed = parseValidGitHubRepoUrl(normalized)
+            || parseValidHuggingFaceResourceUrl(normalized)
+            || parseValidZenodoRecordUrl(normalized);
+        if (!parsed || seenCanonical.has(parsed.canonicalUrl)) return;
+        seenCanonical.add(parsed.canonicalUrl);
+        candidates.push(parsed.normalizedHref);
+    };
+
+    for (const link of (Array.isArray(extraLinks) ? extraLinks : [])) {
+        addCandidate(link);
+    }
+
+    const bounds = findSectionBounds(analysis, '开源详情');
+    const section = bounds ? analysis.slice(bounds.contentStart, bounds.end).trim() : '';
+    if (!section) return candidates;
+
+    const thirdPartyStartRe = /^(?:[-*+]\s*|#{3,6}\s*)?[*_`]*\s*(?:其他资源链接|论文中引用的开源项目|第三方资源|论文所列链接|第三方|基线(?:代码|仓库|模型|资源))\s*[*_`]*\s*(?:[：:]|$)/;
+    const firstPartyStartRe = /^(?:[-*+]\s*|#{3,6}\s*)?[*_`]*\s*(?:代码|模型权重|模型|数据集|复现材料|项目主页|官方(?:仓库|代码|资源)|Demo|在线演示)\s*[*_`]*\s*[：:]/i;
+    const artifactUrlRe = /https?:\/\/(?:www\.)?(?:github\.com|huggingface\.co|zenodo\.org|(?:dx\.)?doi\.org\/10\.5281\/zenodo\.\d+)[^\s`<>()\[\]{}"'，。；：！？、（）【】《》“”‘’\u3400-\u9fff]*/giu;
+    const leadingIndentWidth = rawLine => {
+        let width = 0;
+        for (const ch of rawLine) {
+            if (ch === ' ') width += 1;
+            else if (ch === '\t') width += 4;
+            else break;
+        }
+        return width;
+    };
+    let thirdPartyBlock = null;
+    for (const rawLine of section.split('\n')) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        const indent = leadingIndentWidth(rawLine);
+        const headingMatch = line.match(/^(#{1,6})\s/);
+        const isHeading = Boolean(headingMatch);
+        const headingLevel = headingMatch ? headingMatch[1].length : 0;
+        if (thirdPartyStartRe.test(line)) {
+            thirdPartyBlock = { isHeading, headingLevel, indent };
+            continue;
+        }
+        if (thirdPartyBlock) {
+            if (thirdPartyBlock.isHeading) {
+                if (isHeading && headingLevel <= thirdPartyBlock.headingLevel) {
+                    thirdPartyBlock = null;
+                } else {
+                    continue;
+                }
+            } else if (isHeading || (firstPartyStartRe.test(line) && indent <= thirdPartyBlock.indent)) {
+                thirdPartyBlock = null;
+            } else {
+                continue;
+            }
+        }
+        for (const match of line.matchAll(artifactUrlRe)) {
+            addCandidate(match[0]);
+        }
+    }
+    return candidates;
+}
+
+function formatArtifactProbeEvidenceBlock(artifactProbes) {
+    if (!Array.isArray(artifactProbes) || artifactProbes.length === 0) return '';
+    const lines = [];
+    for (const probe of artifactProbes) {
+        if (!probe || typeof probe !== 'object') continue;
+        const platform = ALLOWED_ARTIFACT_PLATFORMS.has(probe.platform) ? probe.platform : '';
+        if (!platform) continue;
+        const rawUrl = String(probe.canonicalUrl || probe.url || '').trim();
+        if (!rawUrl || !/^https:\/\//i.test(rawUrl) || /[<>[\]\\\s\u0000-\u001f\u007f]/.test(rawUrl)) continue;
+        const displayUrl = rawUrl.slice(0, 200);
+        const resourceKind = platform === 'huggingface' && ALLOWED_HF_RESOURCE_KINDS.has(probe.resourceKind)
+            ? probe.resourceKind
+            : '';
+        const platformLabel = resourceKind ? `huggingface:${resourceKind}` : platform;
+        const safeStatus = Number.isInteger(probe.status) && probe.status >= 100 && probe.status <= 599
+            ? probe.status
+            : null;
+        if (probe.ok !== true) {
+            const rawErr = String(probe.error || '').trim();
+            const safeErr = ARTIFACT_ERROR_CODE_RE.test(rawErr)
+                ? rawErr
+                : (safeStatus !== null ? `http_${safeStatus}` : 'probe_failed');
+            const detail = probe.rateLimited === true
+                ? `HTTP ${safeStatus ?? '限流'}（API 限流，未完成文件探测）`
+                : `探测未成功（${safeErr}）`;
+            lines.push(`- [${platformLabel}] ${displayUrl}：${detail}`);
+            continue;
+        }
+        const notes = [];
+        const fileCount = Number.isInteger(probe.fileCount) && probe.fileCount >= 0 ? probe.fileCount : 0;
+        const listingStatus = typeof probe.fileListingStatus === 'string' ? probe.fileListingStatus.trim() : '';
+        if (listingStatus === 'rate_limited' || (probe.rateLimited === true && fileCount === 0)) {
+            notes.push('文件树未探测（API 限流，仅获取仓库元数据）');
+        } else if (listingStatus === 'failed') {
+            notes.push('文件树探测未完成（仅获取仓库元数据）');
+        } else if (probe.placeholderSuspected === true
+            && probe.hasCodeFiles !== true
+            && probe.hasWeightFiles !== true
+            && probe.hasDatasetFiles !== true) {
+            notes.push('疑似占位仓库（未检出代码、权重或数据文件）');
+        } else if (probe.hasRootDirs === true
+            && probe.hasCodeFiles !== true
+            && probe.hasWeightFiles !== true
+            && probe.hasDatasetFiles !== true) {
+            notes.push('根目录含子目录（文件树截断，未展开子目录）');
+        } else {
+            notes.push(`代码文件=${probe.hasCodeFiles === true ? '检出' : '未检出'}`);
+            if (probe.hasWeightFiles === true) {
+                const exts = Array.isArray(probe.weightExtensions)
+                    ? probe.weightExtensions
+                        .map(ext => String(ext || '').trim().toLowerCase())
+                        .filter(ext => ARTIFACT_WEIGHT_EXT_ALLOW_RE.test(ext))
+                        .slice(0, 3)
+                    : [];
+                notes.push(exts.length > 0 ? `权重文件=检出(${exts.join('/')})` : '权重文件=检出');
+            } else {
+                notes.push('权重文件=未检出');
+            }
+            if (platform === 'zenodo' || resourceKind === 'dataset' || probe.hasDatasetFiles === true) {
+                notes.push(`数据文件=${probe.hasDatasetFiles === true ? '检出' : '未检出'}`);
+            }
+            notes.push(`文件数=${fileCount}${probe.treeTruncated === true ? '(截断)' : ''}`);
+        }
+        if (probe.gated === true) {
+            const rawMode = String(probe.gatedMode || probe.accessRight || '').trim();
+            const safeMode = ARTIFACT_MODE_ALLOW_RE.test(rawMode) ? rawMode : '';
+            notes.push(safeMode ? `受控访问(gated:${safeMode})` : '受控访问(gated)');
+        }
+        if (probe.archived === true) {
+            notes.push('已归档(archived)');
+        }
+        const safeLic = sanitizeArtifactSpdxLicense(probe.spdxLicense);
+        notes.push(safeLic ? `许可证=${safeLic}` : '许可证=未声明');
+        lines.push(`- [${platformLabel}] ${displayUrl}：${notes.join('；')}`);
+    }
+    if (lines.length === 0) return '';
+    return [
+        '[A_ARTIFACT_PROBE] 开源仓库与产物自动探测摘要',
+        ...lines,
+        '说明：以上自动探测事实仅用于核对 openSource 维度，严禁据此跨维度扣减其他七项评分。'
+    ].join('\n');
+}
+
 async function inspectDemoPageDetailed(demoUrl, options = {}) {
     const seg = '[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?';
     const lead = '(?<![A-Za-z0-9._~@/\\\\?#&:;%+-])(?:https?:\\/\\/)?(?:www\\.)?';
@@ -3174,6 +3995,13 @@ module.exports = {
     analyzeDemoPageAudioCapabilities,
     probeAudioSampleUrls,
     probeHuggingFaceSpaceStatus,
+    probeGitHubRepositoryMetadata,
+    probeHuggingFaceResourceMetadata,
+    probeZenodoRecordMetadata,
+    probeRepositoryArtifactsDetailed,
+    normalizeArtifactProbeUrl,
+    extractArtifactProbeCandidateUrls,
+    formatArtifactProbeEvidenceBlock,
     inspectDemoPageDetailed,
     extractCommentResourceUrls,
     resolveMetadataResourceLinks,

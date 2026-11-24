@@ -121,7 +121,13 @@ function verifyScoring(paper, receipt, source) {
         reject('当前完整结构化来源不同');
     if (!require('./completed-reader-upstream').completedReaderUpstream(paper, source))
         reject('当前完整科学上游未通过正常冷核');
-    const evidence = deep.buildStageEvidenceContext('scoringAudit', receipt.inputAnalysis, source.text);
+    const demoArtifactProbes = paper.analysisManifest?.stages?.demoLinkScan?.artifactProbes;
+    const scoringEvidenceOpts = Array.isArray(demoArtifactProbes) && demoArtifactProbes.length > 0
+        ? { artifactProbes: demoArtifactProbes } : undefined;
+    const evidence = deep.buildStageEvidenceContext(
+        'scoringAudit', receipt.inputAnalysis, source.text,
+        scoringEvidenceOpts
+    );
     if (sha(evidence) !== receipt.evidenceSha256) reject('评分证据输入改变');
     const declaration = paper.analysisManifest.stages.primaryAnalysis?.factReview
         ? { factReview: paper.analysisManifest.stages.primaryAnalysis.factReview,
@@ -135,7 +141,7 @@ function verifyScoring(paper, receipt, source) {
         reject('当前模型、提示词、预算、反馈或完整评分指纹改变');
     const allowed = new Set([...evidence.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
     const normalized = deep.validateScoringAuditAgainstAnalysis(receipt.inputAnalysis,
-        stage.audit, paper.apiReaderResources, source.text);
+        stage.audit, paper.apiReaderResources, source.text, scoringEvidenceOpts);
     const audit = { ...deep.revalidateScoringAudit(normalized, allowed),
         ...(Array.isArray(normalized.capsApplied) ? { capsApplied: normalized.capsApplied } : {}) };
     if (stable(audit) !== stage.auditSha256 || deep.applyScoringAuditResult(receipt.inputAnalysis, audit) !== paper.analysis)
