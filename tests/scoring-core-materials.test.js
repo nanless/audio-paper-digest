@@ -190,3 +190,29 @@ test('教师归属含混、否定或双重否定不获得新的比较状态豁�
         assert.throws(() => parse(value), /其他维度.*违规分句/, comparison);
     }
 });
+
+test('基准评测中的闭源与开源分组及成对成本观测不误报跨维度扣分，自身闭源仍拦截', () => {
+    const allowedWithResults = new Set(['A_METHOD', 'A_OPEN', 'A_RESULTS', 'A_SUMMARY']);
+    const parseWithResults = value => parseScoringAuditResult(JSON.stringify(value), allowedWithResults);
+    const positiveCases = [
+        ['experimentalSufficiency', '[A_RESULTS] 在216个共享输入上系统比较9个数字人系统共1944条回复，[A_SUMMARY] 闭源与开源分组排序呈现代表性基线覆盖，实验对照充分可核对。'],
+        ['engineering', '[A_RESULTS] 报告闭源API花费31.93至43.63美元与开源平均4.86秒至23.30秒等代价时间观测，无自有系统端到端部署实测。'],
+        ['experimentalSufficiency', '[A_RESULTS] 评测涵盖闭源与开源两类系统共9个基线，覆盖面充分。']
+    ];
+    for (const [dim, reason] of positiveCases) {
+        const value = payload();
+        value.dimensions[dim].reason = reason;
+        assert.equal(parseWithResults(value).dimensions[dim].reason, reason);
+    }
+    const negativeCases = [
+        ['experimentalSufficiency', '[A_RESULTS] 闭源与开源分组排序完整，但本文未开源，因此降低实验充分性。'],
+        ['experimentalSufficiency', '[A_RESULTS] 本模型闭源与开源基线差距不大，因此降低得分。'],
+        ['engineering', '[A_RESULTS] 仅提供闭源API，因此工程实践价值受限。'],
+        ['engineering', '[A_RESULTS] 报告闭源API花费31.93美元，本文闭源且缺少代码，因此降低工程得分。']
+    ];
+    for (const [dim, reason] of negativeCases) {
+        const value = payload();
+        value.dimensions[dim].reason = reason;
+        assert.throws(() => parseWithResults(value), /其他维度.*违规分句/, `${dim}: ${reason}`);
+    }
+});
