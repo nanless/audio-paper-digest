@@ -921,17 +921,29 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
         if(revision.reason==='stage-invalidated'||readerFeedback){
             if(readerFeedback){
                 const pendingModule=require('./pending-fact-feedback'),feedbackModule=require('./saved-fact-feedback');
-                let bound;
-                if(Object.hasOwn(paper,pendingModule.FIELD))bound=pendingModule.read(paper);
-                else{
+                const readSavedBound=()=>{
                     const daily=require('./daily-fresh-source-plan'),facts=require('./daily-fact-review');
                     const plan=daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({...actualRun,runDir:path.dirname(runFile)}));
                     const recovered=feedbackModule.readSavedFeedback(paper,plan);
                     const feedback=recovered?.readerFeedback||recovered?.feedback;
-                    if(feedback)bound=facts.validateFeedback(feedback,plan,paper);
+                    return feedback?facts.validateFeedback(feedback,plan,paper):null;
+                };
+                const hasPending=Object.hasOwn(paper,pendingModule.FIELD);
+                const bound=hasPending?pendingModule.read(paper):readSavedBound();
+                const matchesStage=Boolean(bound&&feedbackModule.readerOnlyFeedback(bound.feedback)
+                    &&isDeepStrictEqual(bound.proof,stage.factReview));
+                let matchesSuperseded=false;
+                if(!matchesStage&&hasPending&&bound){
+                    // 二次 Reader 事实反馈已在论文上登记新待执行包，而 stage.factReview 仍为
+                    // 上一次已完成修订的证明：核验旧保存包与 stage.factReview 一致且新包完整继承其约束。
+                    const oldBound=readSavedBound();
+                    matchesSuperseded=Boolean(oldBound&&feedbackModule.readerOnlyFeedback(oldBound.feedback)
+                        &&isDeepStrictEqual(oldBound.proof,stage.factReview)
+                        &&String(bound.feedback.readerFeedback||'').includes(oldBound.feedback.readerFeedback)
+                        &&oldBound.feedback.rejectedReaderClaims.every(claim=>(bound.feedback.rejectedReaderClaims||[]).includes(claim))
+                        &&oldBound.feedback.sourceQuotes.every(quote=>(bound.feedback.sourceQuotes||[]).includes(quote)));
                 }
-                if(!bound||!feedbackModule.readerOnlyFeedback(bound.feedback)
-                    ||!isDeepStrictEqual(bound.proof,stage.factReview))fail('revision Reader feedback differs','run');
+                if(!matchesStage&&!matchesSuperseded)fail('revision Reader feedback differs','run');
             }
             if(!isDeepStrictEqual(revision.previousOrdinalPatchCompilations,saved.records))
                 fail('revision completion history differs','run');
