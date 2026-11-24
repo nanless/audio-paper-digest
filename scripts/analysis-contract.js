@@ -198,7 +198,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|CCC(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|一致性相关系数(?![ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|CCC(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|一致性相关系数(?![ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|总分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // These source-native names describe measured quantities, not similarly named models.
 const CORE_SUMMARY_ADDITIONAL_METRIC_NAME = /(?:DAP|DLP|AMLt|F-measure|F-Measure|Fmeasure|Fmeter|MV2H[45]|OMR-NED|R(?:²|\^2)(?:_[VA])?|MSS|决定系数(?:[ \t]*R(?:²|\^2)(?:_[VA])?)?|(?:目标字|字符|音节|音素|单词)时长(?:均值|平均值)|自然度平均意见分)/iu;
 const CORE_SUMMARY_ADDITIONAL_MODEL_SUFFIX = String.raw`(?:模型|方法|系统|基线(?![ \t]*[-+]?[0-9])|算法|网络|model\b|method\b|system\b|baseline\b|network\b)`;
@@ -2167,7 +2167,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || /(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|(?:组件|约束|模块|损失|监督目标|局部配对|竞争归一化)[^。；\n]{0,24}(?:对照|贡献|差异|是否必要|必要性)/i.test(results)
         || /\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+/i.test(results)
         || hasReportedExperimentPhrase(results,
-            /(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)/g);
+            /(?:分离|隔离)[^。；\n]{1,32}(?:贡献|影响|作用)|(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)/g);
     const reportedRewardAblation = hasSourceBackedRewardSwitchAblation(results, tables, sourceAblationEvidence);
     if (empirical && sourceHasAblation && !resultHasAblation && !reportedRewardAblation) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
@@ -4736,7 +4736,7 @@ function validateExecutiveAbstractSurfaceStructure(rawSummary) {
 }
 
 function hasExecutiveMethodArchitecture(contentBody) {
-    const componentPattern = /(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|探针|矩阵|子空间|表征|特征|嵌入|隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏)/giu;
+    const componentPattern = /(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|识别器|合成器|谱均衡|引擎|探针|矩阵|子空间|表征|特征|嵌入|隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏)/giu;
     const actionPattern = /(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦)/giu;
     const deniedSentence = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来实验|计划采用|第三方|他人研究|先前工作|相关工作|现有(?:主流|方法|方案|路线|编解码器|模型|系统|工作)|传统(?:方法|方案|路线|指标|编解码器|模型|系统|工作)|以往(?:方法|方案|路线|模型|工作|研究)|主流(?:方法|方案|路线|编解码器|模型)|任务需要将|任务以[^。]{1,48}为输入)/u;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
@@ -4824,7 +4824,7 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
     const allSentences = String(contentBody || '').split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
     const deniedWindowSentence = /(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|并未|不是|未测|未报告|未进行)/u;
     const operationalClausePattern = /(?:\d+(?:\.\d+)?\s*(?:kbps|bps|kHz|MHz|Hz)\b|(?:训练|推理|部署|单卡|单核|多卡|冷启动|前瞻(?:窗口)?|首次编译|图编译|编译|显存|内存|硬件|参数(?:量|规模|开销)?|实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|延迟|(?<![A-Za-z0-9_])latency(?![A-Za-z0-9_])|吞吐|(?<![A-Za-z0-9_])throughput(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FLOPs?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])MACs?(?![A-Za-z0-9_]))[^，,；;。！？!?\n]{0,36})/giu;
-    const explicitCounterpartPattern = /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较))/iu;
+    const explicitCounterpartPattern = /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|次优|(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较)|比较\s*\d+\s*个(?:系统|模型|方法)|(?:高于|低于|优于|超过|领先)(?:次优|内置|原生|原始|单一|基础|随机|零样本|微调前|基线|对照|同量|同规模)[^，,。；\n]{0,12}的)/iu;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
         const definedAcronyms = extractExecutiveParagraphDefinedMetricAcronyms(paragraph, sourceText, deniedWindowSentence);
@@ -5038,7 +5038,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/(?:不|未)(?:被|直接|主要|实际|真正|仅|只|也|还|曾|能|会|再|尚)*\s*(?:用于|用来|用以)/.test(clause)
     ));
     const problemKeywordPattern = useExecutiveAbstract
-        ? /(?:问题|难点|瓶颈|症结|失效|缺陷|受限|局限|挑战|任务|目标|输入|输出|旨在|针对|解决)/
+        ? /(?:问题|难点|瓶颈|症结|失效|缺陷|受限|局限|挑战|任务|目标|输入|输出|旨在|针对|解决|误选|错分|偏差|风险)/
         : /(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/;
     if (!problemKeywordPattern.test(contentBody) && !concretePurpose && !hasConcreteCompressionPurpose(contentBody) && !hasConcreteAcousticSimulationPurpose(contentBody, sourceText)) {
         issues.push('缺少任务问题、输入输出或实际难点');
@@ -5138,7 +5138,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
             .filter(sentence => !priorMethodSentencePattern.test(sentence))
             .join('')
         : contentBody;
-    const explicitBoundary = /(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(boundaryBody)
+    const explicitBoundary = /(?:边界|局限|适用|失败|尚未|尚不覆盖|未覆盖|未验证|外推|仅限|受限)/.test(boundaryBody)
         && !(useExecutiveAbstract && /(?:任何场景都适用|所有条件下均成立|不会失效|不存在局限|无适用限制)/u.test(contentBody));
     const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(boundaryBody);
     const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(boundaryBody);
@@ -5186,8 +5186,8 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && /(?:计算量|计算复杂度|MACs?|FLOPs?|GPU|CPU|TPU|NPU|RTX|显卡|(?:训练|推理|采样|优化|迭代)步数|\d\s*(?:[kKmMgG]\s*)?\s*(?:步|轮|次))/i.test(sentence)
     ));
     const executiveComputationOrTradeoff = useExecutiveAbstract && costBody.split(/[。！？!?\n]/u).some(sentence => (
-        !/(?:并非|并未|不是|不能|不采用|不涉及|假设|如果)/u.test(sentence)
-        && /(?:(?:额外|新增|引入|付出)[^。！？!?\n]{0,24}(?:参数开销|计算开销|内存开销|通信开销|编译开销|延迟|耗时|代价)|代价是|作为代价|以[^。！？!?\n]{1,24}为代价|指标折损|(?:移除|去掉|消融)[^。！？!?\n]{1,36}(?:回升|恶化|回落|折损)|免训练|无需(?:任何)?(?:神经网络)?训练|零样本(?:直接)?推理|闭式(?:解|求解|奇异值分解|计算|诊断)|解析解|冻结(?:权重|编码器|骨干|主干)?[^。！？!?\n]{0,20}(?:直接推理|零样本推理|无需训练)|离线统计检验|(?:未披露|未报告)[^。！？!?\n]{0,24}(?:训练|推理|部署)?(?:成本|开销|延迟|耗时|算力|显存))/iu.test(sentence)
+        !/(?:并非|并未|不是|不能|不采用|不涉及|假设|如果|未记录)/u.test(sentence)
+        && /(?:(?:额外|新增|引入|付出)[^。！？!?\n]{0,24}(?:参数开销|计算开销|内存开销|通信开销|编译开销|延迟|耗时|代价)|(?:多花\s*\d+(?:\.\d+)?\s*(?:秒|毫秒|ms|s)|(?:多出|额外)(?:的)?[^。！？!?\n]{0,20}(?:渲染时间|生成时间|推理时间))|代价是|作为代价|以[^。！？!?\n]{1,24}为代价|指标折损|(?:移除|去掉|消融)[^。！？!?\n]{1,36}(?:回升|恶化|回落|折损)|免训练|无需(?:任何)?(?:神经网络)?训练|零样本(?:直接)?推理|闭式(?:解|求解|奇异值分解|计算|诊断)|解析解|冻结(?:权重|编码器|骨干|主干)?[^。！？!?\n]{0,20}(?:直接推理|零样本推理|无需训练)|离线统计检验|(?:未披露|未报告)[^。！？!?\n]{0,24}(?:训练|推理|部署)?(?:成本|开销|延迟|耗时|算力|显存))/iu.test(sentence)
     ));
     const cost = hasConcreteRuntimeDisclosure(costBody) || costBody.includes(CORE_SUMMARY_COST_UNAVAILABLE)
         || /(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|能耗)/i.test(costBody)

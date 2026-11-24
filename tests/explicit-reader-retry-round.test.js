@@ -1447,3 +1447,31 @@ for(const [name,change,pattern]of [
         retry.beginExplicitRound(directory,f.identity,f.payload,paper)),pattern));
     assert.deepEqual(fs.readFileSync(f.file),before);
 });
+
+test('首轮全文耗尽接受裸LaTeX转义的完整JSON与320k预算，仍拒绝截断JSON',async t=>{
+    const f=setup(t,p=>{
+        prepareFirstFullStop(t,p);
+        p.rawDraft='{"version":5,"readerTitle":"测试","body":"公式 \\(r=(s, Q)\\) 完成"}';
+        p.issues=[{path:null,message:'读者文章 JSON 无法解析: Bad escaped character in JSON at position 42'}];
+        p.validationFailureSignature=repair.validationFailureSignature(p.issues);
+        paper.latestAnalysisAttemptError='长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。';
+    });
+    const grant320k={...f.grant,maxReservedOutputTokens:320000};
+    await f.locked(()=>retry.withExplicitRound(paper,grant320k,()=>{
+        const next=retry.beginExplicitRound(directory,f.identity,f.payload,paper);
+        assert.equal(next.attempts,0);assert.equal(next.fullAttempts,0);
+        const receipt=JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+        assert.equal(receipt.grant.maxReservedOutputTokens,320000);
+        assert.equal(receipt.oldAttempts,2);assert.equal(receipt.oldFullAttempts,2);
+    }));
+    const trunc=setup(t,p=>{
+        prepareFirstFullStop(t,p);
+        p.rawDraft='{"version":5,"readerTitle":"测试","body":"公式 \\(r=(s, Q)\\) 未闭合';
+        p.issues=[{path:null,message:'读者文章 JSON 无法解析: Bad escaped character in JSON at position 42'}];
+        p.validationFailureSignature=repair.validationFailureSignature(p.issues);
+        paper.latestAnalysisAttemptError='长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。';
+    });
+    await trunc.locked(()=>retry.withExplicitRound(paper,{...trunc.grant,maxReservedOutputTokens:320000},()=>{
+        assert.throws(()=>retry.beginExplicitRound(directory,trunc.identity,trunc.payload,paper),/仍有合法尝试/);
+    }));
+});

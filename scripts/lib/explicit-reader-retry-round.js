@@ -44,9 +44,9 @@ function assertGrant(grant) {
         || ((local || recovery) && (!/^[a-f0-9-]{36}$/.test(grant.parentRoundId || '')
             || !/^[a-f0-9]{64}$/.test(grant.parentReceiptSha256 || '') || grant.parentRoundId === grant.roundId))
         || (!recovery && (local ? (grant.maxResponses !== 1 || grant.maxFullResponses !== 0
-            || grant.maxPhysicalRequests !== 2 || grant.maxReservedOutputTokens !== 32000)
+            || grant.maxPhysicalRequests !== 2 || ![32000, 96000].includes(grant.maxReservedOutputTokens))
             : (grant.maxResponses !== 3 || grant.maxFullResponses !== 1
-                || grant.maxPhysicalRequests !== 6 || grant.maxReservedOutputTokens !== 80000)))) {
+                || grant.maxPhysicalRequests !== 6 || ![80000, 320000].includes(grant.maxReservedOutputTokens))))) {
         throw new Error('Reader 重试许可的内容或预算不符合要求');
     }
     return grant;
@@ -187,13 +187,25 @@ function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
         || paper.latestAnalysisAttemptErrorCategory !== 'reader_recovery'
         || paper.latestAnalysisAttemptErrorScope !== 'paper'
         || paper.latestAnalysisAttemptRetryable !== false
-        || !payload.issues.some(issue => String(paper.latestAnalysisAttemptError || '').includes(issue.message))
+        || (!payload.issues.some(issue => String(paper.latestAnalysisAttemptError || '').includes(issue.message))
+            && String(paper.latestAnalysisAttemptError || '').trim() !== '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。')
         || repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft)
         || repair.buildTopLevelMetadataRepairContext(payload.rawDraft)) return false;
     try {
         const value = JSON.parse(payload.rawDraft);
         return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-    } catch (_) { return false; }
+    } catch (_) {
+        // 完整 JSON 对象里偶发裸 LaTeX 转义（如 \( ... \)）同样属于不可局部修复的
+        // 完整响应耗尽；仍要求首尾闭合且转义裸反斜杠后是完整 JSON 对象，截断响应继续拒绝。
+        const hasBadEscapeIssue = payload.issues.some(issue =>
+            /^读者文章 JSON 无法解析: Bad escaped character in JSON/.test(issue.message || ''));
+        const trimmed = payload.rawDraft.trim();
+        if (!hasBadEscapeIssue || !trimmed.startsWith('{') || !trimmed.endsWith('}')) return false;
+        try {
+            const value = JSON.parse(trimmed.replace(/\\(?!["\\/bfnrtu])/g, '\\\\'));
+            return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+        } catch (__) { return false; }
+    }
 }
 function beginExplicitRound(directory, identity, recovered, paper) {
     const scope = grantScope.getStore();

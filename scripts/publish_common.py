@@ -5017,7 +5017,7 @@ def _validate_experiment_table_evidence_depth(
                 result_has_ablation = True
                 break
     result_has_ablation = result_has_ablation or _has_reported_experiment_phrase(
-        results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
+        results, r'(?:分离|隔离)[^。；\n]{1,32}(?:贡献|影响|作用)|'
         r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
 
     reported_reward_ablation = _has_source_backed_reward_switch_ablation(results, tables, source_placement_evidence)
