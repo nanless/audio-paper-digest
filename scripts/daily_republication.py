@@ -17,8 +17,13 @@ CONTRACT = 'daily-published-batch-republication-v1'
 SHA = re.compile(r'^[a-f0-9]{64}$')
 OID = re.compile(r'^[a-f0-9]{40}(?:[a-f0-9]{24})?$')
 CATALOG_MAINTENANCE_PATHS = frozenset(
-    f'{prefix}/tag-catalog-{name}.json'
-    for prefix in ('data', 'static/data') for name in ('snapshot', 'versions'))
+    f'{prefix}/{name}'
+    for prefix in ('data', 'static/data')
+    for name in (
+        'tag-catalog-snapshot.json',
+        'tag-catalog-versions.json',
+        'tag-presentation-policy.json',
+    ))
 
 
 def validate_id(value):
@@ -237,8 +242,8 @@ def verify_authority(module, date, manifest_raw, receipt_raw, canonical_sha, *,
     for path in paths:
         module._validate_manifest_path_date(path, repo, date)
     module.validate_git_commit_against_review_receipt(receipt, paths, commit=commit)
-    # 只准许四个已经受控维护的目录资源变化；成对资源、完整当前原档和
-    # 当前386概念身份均须独立通过，不能将任意静态文件视为“目录升级”。
+    # 只准许六个已经受控维护的标签目录与展示策略资源变化；成对资源、完整当前原档和
+    # 当前词表概念身份均须独立通过，不能将任意静态文件视为“目录升级”。
     from tag_catalog_publication import validate_published_tag_catalog
     from tag_catalog import tag_catalog_identity
     catalog = module._PAGE_TAG_CATALOG

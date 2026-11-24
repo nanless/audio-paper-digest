@@ -335,4 +335,50 @@ class DailyRepublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '不能切换重分析模式'):
             R.activate(M, DATE, RUN, 'b' * 64, 'c' * 64, allow_reanalyzed=False)
 
+    def test_controlled_presentation_policy_maintenance_accepted_while_unpaired_or_tampered_rejected(self):
+        # Simulate an older publication whose receipt recorded a prior tag-presentation-policy.json
+        # while HEAD now has the current 6-file controlled catalog bundle (e.g. Track 13.1B 400-concept upgrade).
+        old_policy = b'{"legacyPolicyFixture":true}\n'
+        new_policy = b'{"currentControlledPolicyFixture":true}\n'
+        policy_paths = ['data/tag-presentation-policy.json', 'static/data/tag-presentation-policy.json']
+        # Snapshot current base catalog assets before writing fixture policy files
+        base_assets = M.tag_catalog_file_contents(self.repo)
+        # Commit a real prior publication commit whose reviewed files include the old paired policy
+        base = self.git('rev-parse', 'HEAD').strip()
+        manifest = json.loads(self.manifest_path.read_bytes())
+        receipt = json.loads(self.receipt_path.read_bytes())
+        for p in policy_paths:
+            self.write_blog(p, old_policy)
+            manifest['files'].append({'path': p, 'deleted': False, 'sha256': H(old_policy)})
+            receipt['files'].append({'path': p, 'deleted': False, 'sha256': H(old_policy)})
+        self.git('add', '--', *policy_paths)
+        self.git('commit', '-m', 'prior reviewed publication with old presentation policy')
+        prior_commit = self.git('rev-parse', 'HEAD').strip()
+        manifest['baseHead'] = base
+        receipt['baseHead'] = base
+        receipt['publicationCommit'] = prior_commit
+        receipt['remoteVerifiedOid'] = prior_commit
+        manifest_raw = R.encoded(manifest)
+        self.manifest_path.write_bytes(manifest_raw)
+        receipt['generationManifestSha256'] = H(manifest_raw)
+        self.receipt_path.write_bytes(R.encoded(receipt))
+        # Now advance HEAD with the genuine current controlled 6-file bundle
+        for p in policy_paths:
+            self.write_blog(p, new_policy)
+        self.git('add', '--', *policy_paths)
+        self.git('commit', '-m', 'upgrade controlled presentation policy')
+        self.git('push', 'origin', 'HEAD:main')
+        expected_bundle = {**base_assets, **{p: new_policy for p in policy_paths}}
+        with mock.patch.object(M, 'tag_catalog_file_contents', return_value=expected_bundle):
+            # Tampered policy in working tree MUST still reject fail-closed
+            tampered = self.repo / 'data/tag-presentation-policy.json'
+            tampered.write_bytes(new_policy + b' ')
+            with self.assertRaises(ValueError):
+                self.activate()
+            tampered.write_bytes(new_policy)
+            # Clean committed controlled 6-file bundle succeeds and records maintenance metadata
+            self.activate()
+            intent = R.load_json(self.runs / RUN / 'intent.json')
+            self.assertEqual({x['path'] for x in intent['catalogMaintenance']}, set(policy_paths))
+
 if __name__ == '__main__': unittest.main()
