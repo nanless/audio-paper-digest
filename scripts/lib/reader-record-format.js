@@ -19,6 +19,9 @@ const IMPLEMENTATION_SPEC_KEYS = Object.freeze([
     'trainingData', 'computeHardware', 'keyHyperparams',
     'inferenceCost', 'openSourceArtifacts', 'appendixHighlights'
 ]);
+const OPTIONAL_IMPLEMENTATION_SPEC_KEYS = Object.freeze([
+    'audioSignalSpecs'
+]);
 function isStructuredV5(profile) { return profile === STRUCTURED_V5; }
 function isModernEditorialProfile(profile) { return profile === COHESIVE_V4 || profile === STRUCTURED_V5; }
 function resolveSchemaEditorialProfile(schema) {
@@ -154,7 +157,7 @@ function draftHeaderForSavedPlan(plan) {
 }
 module.exports = { INTEGRATED, COMPACT, STRUCTURED_V5, COHESIVE_V4, LEGACY_INTEGRATED,
     OLD_DRAFT_FP, OLD_PLAN_FP, V4_DRAFT_FP, V4_PLAN_FP, DRAFT_FIELDS, V5_OPTIONAL_DRAFT_FIELDS,
-    IMPLEMENTATION_SPEC_KEYS, isStructuredV5, isModernEditorialProfile,
+    IMPLEMENTATION_SPEC_KEYS, OPTIONAL_IMPLEMENTATION_SPEC_KEYS, isStructuredV5, isModernEditorialProfile,
     draftFormat, isIntegratedDraft, draftFields, profileForOptions, assertRequiredProfile, compiledPlanHeader,
     storedPlanFormat, storedPlanHeader, planEditorialProfile, effectiveEditorialProfile, isIntegratedPlan,
     isStructuredContract, compilationOptionsForSavedPlan, draftHeaderForSavedPlan };

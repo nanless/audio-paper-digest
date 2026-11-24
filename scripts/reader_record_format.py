@@ -19,6 +19,9 @@ IMPLEMENTATION_SPEC_KEYS = (
     'trainingData', 'computeHardware', 'keyHyperparams',
     'inferenceCost', 'openSourceArtifacts', 'appendixHighlights',
 )
+OPTIONAL_IMPLEMENTATION_SPEC_KEYS = (
+    'audioSignalSpecs',
+)
 
 
 def is_structured_v5(profile):

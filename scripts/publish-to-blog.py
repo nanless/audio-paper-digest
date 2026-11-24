@@ -6965,6 +6965,7 @@ def _paper_header_resource_display_label(paper, resource):
 
 
 IMPLEMENTATION_SPEC_LABELS = (
+    ('audioSignalSpecs', '音频信号与流式规格'),
     ('trainingData', '训练与评测数据'),
     ('computeHardware', '算力与训练耗时'),
     ('keyHyperparams', '核心超参数与配置'),
@@ -7186,6 +7187,76 @@ def render_verified_reader_resources(resources, *, paper=None):
                 if present:
                     missing_note = f'（未见{"、".join(missing)}文档）' if missing else ''
                     status += f'；README 已验证包含{"、".join(present)}文档{missing_note}'
+        if resource.get('type') == 'demo' and resource.get('availability') == 'available' and _paper_uses_structured_v5(paper):
+            demo_stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('demoLinkScan')
+            probes = demo_stage.get('audioDemoProbes') if isinstance(demo_stage, dict) else None
+            if isinstance(probes, list):
+                def _norm_probe_url(raw_u):
+                    txt = str(raw_u or '').strip()
+                    if not txt:
+                        return ''
+                    try:
+                        p_url = urlparse(txt)
+                        host = (p_url.hostname or '').lower()
+                        if host.startswith('www.'):
+                            host = host[4:]
+                        path_norm = p_url.path.rstrip('/')
+                        query_norm = f'?{p_url.query}' if p_url.query else ''
+                        return f'{p_url.scheme.lower()}://{host}{path_norm}{query_norm}'
+                    except Exception:
+                        return txt.rstrip('/').lower()
+
+                target_urls = {
+                    u for u in (
+                        _norm_probe_url(resource.get('originalUrl')),
+                        _norm_probe_url(resource.get('finalUrl')),
+                    ) if u
+                }
+                matched_probe = next(
+                    (
+                        item for item in probes
+                        if isinstance(item, dict)
+                        and ({
+                            u for u in (
+                                _norm_probe_url(item.get('url')),
+                                _norm_probe_url(item.get('originalUrl')),
+                            ) if u
+                        } & target_urls)
+                    ),
+                    None,
+                )
+                if matched_probe:
+                    demo_notes = []
+                    raw_sample_count = matched_probe.get('audioSampleCount')
+                    sample_count = (
+                        raw_sample_count
+                        if isinstance(raw_sample_count, int)
+                        and not isinstance(raw_sample_count, bool)
+                        and raw_sample_count > 0
+                        else 0
+                    )
+                    sample_probe = matched_probe.get('sampleProbe') if isinstance(matched_probe.get('sampleProbe'), dict) else {}
+                    if sample_count > 0:
+                        if sample_probe.get('audioSamplesReachable') is True:
+                            demo_notes.append(f'含 {sample_count} 条试听样本（已验证可访问）')
+                        else:
+                            demo_notes.append(f'检测到 {sample_count} 条试听样本')
+                    if matched_probe.get('hasBaselineComparison') is True:
+                        demo_notes.append('含基线对比表')
+                    space_statuses = matched_probe.get('spaceStatuses') if isinstance(matched_probe.get('spaceStatuses'), list) else []
+                    for sp in space_statuses[:1]:
+                        if isinstance(sp, dict):
+                            raw_stage = str(sp.get('stage') or '').strip().upper()
+                            if raw_stage and re.fullmatch(r'[A-Z0-9_-]{1,48}', raw_stage):
+                                raw_hw = str(sp.get('hardware') or '').strip()
+                                hw = (
+                                    f'（{raw_hw}）'
+                                    if raw_hw and re.fullmatch(r'[A-Za-z0-9._ -]{1,48}', raw_hw)
+                                    else ''
+                                )
+                                demo_notes.append(f'HF Space 状态：{raw_stage}{hw}')
+                    if demo_notes:
+                        status += '；' + '，'.join(demo_notes)
         label = (_paper_header_resource_display_label(paper, resource) if paper else None) or labels[resource['type']]
         lines.append(f'- {label}：{url_text} — {status}')
     if not lines:
@@ -7559,6 +7630,252 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
     return sanitize_markdown_for_publish(markdown)
 
 
+def _paper_resource_badges(paper, parsed_analysis=None, api_reader=None):
+    """返回论文的紧凑开源/试听徽章集合（💻 代码 · 🤗 模型或数据 · 🔊 试听演示）。"""
+    parsed = parsed_analysis if isinstance(parsed_analysis, dict) else (
+        paper.get('parsed') if isinstance(paper, dict) and isinstance(paper.get('parsed'), dict) else {}
+    )
+    has_code = False
+    has_model_or_data = False
+    has_demo = False
+
+    reader_res = (paper.get('apiReaderResources') if isinstance(paper, dict) else None) or {}
+    resources = reader_res.get('resources') if isinstance(reader_res, dict) else None
+    if isinstance(resources, list):
+        # 现代 API Reader 资源清单（含显式空列表）具有唯一权威性，不回退到未审正文。
+        for item in resources:
+            if not isinstance(item, dict) or item.get('availability') != 'available':
+                continue
+            rtype = item.get('type')
+            if rtype == 'code':
+                has_code = True
+            elif rtype in {'model', 'dataset'}:
+                has_model_or_data = True
+            elif rtype == 'demo':
+                has_demo = True
+    else:
+        if parsed.get('hasCode') == '是':
+            has_code = True
+        if parsed.get('hasModel') == '是' or parsed.get('hasDataset') == '是':
+            has_model_or_data = True
+        if isinstance(paper, dict):
+            demo_stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('demoLinkScan')
+            probes = demo_stage.get('audioDemoProbes') if isinstance(demo_stage, dict) else None
+            if isinstance(probes, list):
+                for pr in probes:
+                    if not isinstance(pr, dict) or not pr.get('reachable'):
+                        continue
+                    has_audio_ev = (
+                        (isinstance(pr.get('audioTagCount'), int) and pr.get('audioTagCount') > 0)
+                        or (isinstance(pr.get('audioSampleCount'), int) and pr.get('audioSampleCount') > 0)
+                        or any(
+                            isinstance(sp, dict) and sp.get('ok')
+                            for sp in (pr.get('spaceStatuses') if isinstance(pr.get('spaceStatuses'), list) else [])
+                        )
+                    )
+                    if has_audio_ev:
+                        has_demo = True
+                        break
+        if not has_demo:
+            os_text = str(parsed.get('opensource') or '')
+            if re.search(r'(?:Demo|在线演示|项目主页)[：:]\s*<?https://|huggingface\.co/spaces/', os_text, re.IGNORECASE):
+                has_demo = True
+
+    badges = []
+    if has_code:
+        badges.append('💻')
+    if has_model_or_data:
+        badges.append('🤗')
+    if has_demo:
+        badges.append('🔊')
+    return {
+        'hasCode': has_code,
+        'hasModelOrData': has_model_or_data,
+        'hasDemo': has_demo,
+        'text': ' '.join(badges) if badges else '-',
+    }
+
+
+def _safe_index_overview_snippet(raw_text, max_chars=96, *, for_link_label=False):
+    """为汇总页概览区生成通过读者文本质量与 Hugo 门禁核验的单行短句；不合规时返回空串。"""
+    from publish_common import validate_manual_reader_quality
+    text = str(raw_text or '').strip()
+    if not text:
+        return ''
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
+    text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r'[*_`#>\r\n\\]+', ' ', text)
+    text = text.replace('|', '／').replace('$', '＄').replace('[', '【').replace(']', '】')
+    if for_link_label:
+        # 导览链接标签去除句末标点，避免单行多篇标题叠加触发段落句数上限。
+        text = re.sub(r'[。！？；!?;]+', '，', text)
+        text = re.sub(r'，{2,}', '，', text).strip(' ，,、；;：:')
+    text = re.sub(r'\s+', ' ', text).strip()
+    if not text:
+        return ''
+    text = re.sub(r'([一-鿿])(?=[A-Za-z][A-Za-z0-9.+-])', r'\1 ', text)
+    text = re.sub(r'([A-Za-z][A-Za-z0-9.+-]{1,})(?=[一-鿿])', r'\1 ', text)
+    if validate_manual_reader_quality('## 核心摘要\n' + text) is not None:
+        text = normalize_digest_index_reader_surface(text).strip()
+    if len(text) > max_chars:
+        cut = text[:max_chars].rstrip(' ，,、；;：:(-【')
+        if not cut:
+            return ''
+        text = cut + '…'
+    if validate_manual_reader_quality('## 核心摘要\n' + text) is not None:
+        return ''
+    return text
+
+
+def _index_paper_display_title(paper, parsed_analysis, date_str, *, max_chars=44):
+    """提取适合概览区展示的论文中文题名（优先 Reader 标题，安全回退到规范化精简英文题名）。"""
+    title = str(paper.get('title') or 'Unknown')
+    api_reader = _api_reader_payload(paper)
+    if api_reader:
+        reader_plan = api_reader['plan']
+        reader_article = api_reader['article']
+    else:
+        reader_plan = _manual_reader_editorial_plan(paper)
+        reader_article = _manual_reader_article(paper, reader_plan, date_str)
+    if reader_article and isinstance(reader_plan, dict) and reader_plan.get('readerTitle'):
+        # 直接传入未转义原始 readerTitle，避免先转义 \* / \$ 再清洗残留反斜杠。
+        safe_zh = _safe_index_overview_snippet(
+            reader_plan['readerTitle'], max_chars=max_chars, for_link_label=True,
+        )
+        if safe_zh:
+            return safe_zh, True
+    safe_en = _safe_index_overview_snippet(
+        compact_title_for_ranking(title), max_chars=max_chars, for_link_label=True,
+    )
+    if safe_en:
+        return safe_en, False
+    arxiv_id = str(paper.get('arxivId') or '').strip()
+    fallback_id = re.sub(r'[^A-Za-z0-9._-]+', '', arxiv_id)
+    return (f'arXiv {fallback_id}' if fallback_id else '本篇论文'), False
+
+
+def _render_daily_thematic_brief(scored, unscored, date_str, paper_slugs, tag_metadata):
+    """生成 60 秒确定性「今日研究脉络」聚类与资源快照简报。"""
+    lines = ['### 🧭 今日研究脉络', '']
+    all_entries = [(score, p, parsed) for score, p, parsed in scored] + [(None, p, (p.get('parsed') or {})) for p in unscored]
+    cluster_bits = []
+    if tag_metadata and tag_metadata.get('rootPrimaryTasks'):
+        by_root = {}
+        for score, p, parsed in all_entries:
+            sel = build_flat_tag_compat_metadata(parsed)
+            if not sel:
+                continue
+            root = _top_level_task_concept(sel['primaryTaskId'])
+            rid = root['id']
+            by_root.setdefault(rid, []).append((score, p, parsed))
+        for root_node, cnt in tag_metadata['rootPrimaryTasks'][:4]:
+            link = _root_task_link(root_node)
+            group = by_root.get(root_node['id'], [])
+            scored_group = [(s, p) for s, p, _ in group if s is not None]
+            if scored_group:
+                top_s = max(s for s, _ in scored_group)
+                cluster_bits.append(f'{link}（{cnt} 篇，最高 {top_s} 分）')
+            else:
+                cluster_bits.append(f'{link}（{cnt} 篇）')
+    if cluster_bits:
+        lines.append(f'- **焦点方向**：{"、".join(cluster_bits)}。')
+
+    tier_must = sum(1 for s, _, _ in scored if s >= 8.0)
+    tier_focus = sum(1 for s, _, _ in scored if 7.0 <= s < 8.0)
+    tier_skim = sum(1 for s, _, _ in scored if s < 7.0)
+    badge_records = [_paper_resource_badges(p, parsed) for _, p, parsed in all_entries]
+    code_cnt = sum(1 for b in badge_records if b['hasCode'])
+    model_cnt = sum(1 for b in badge_records if b['hasModelOrData'])
+    demo_cnt = sum(1 for b in badge_records if b['hasDemo'])
+    if scored:
+        lines.append(
+            f'- **阅读与开源快照**：共 {len(scored)} 篇完成评分（精读必看 {tier_must} 篇 · 重点关注 {tier_focus} 篇 · 速览参考 {tier_skim} 篇）；'
+            f'资源覆盖 💻 代码 {code_cnt} 篇、🤗 模型或数据 {model_cnt} 篇、🔊 试听演示 {demo_cnt} 篇。'
+        )
+    else:
+        lines.append(
+            f'- **资源快照**：本批 {len(all_entries)} 篇论文中，资源覆盖 💻 代码 {code_cnt} 篇、🤗 模型或数据 {model_cnt} 篇、🔊 试听演示 {demo_cnt} 篇。'
+        )
+    return '\n'.join(lines) + '\n\n'
+
+
+def _render_daily_reading_tiers(scored, date_str, paper_slugs):
+    """生成三档阅读分级导读（精读必看 / 重点关注 / 速览参考）。"""
+    if not scored:
+        return ''
+    tiers = (
+        ('🔥 精读必看（8.0 分及以上）', [item for item in scored if item[0] >= 8.0]),
+        ('📌 重点关注（7.0–7.9 分）', [item for item in scored if 7.0 <= item[0] < 8.0]),
+        ('⚡ 速览参考（7.0 分以下）', [item for item in scored if item[0] < 7.0]),
+    )
+    lines = ['### 🎯 三档阅读分级', '']
+    for label, items in tiers:
+        if not items:
+            continue
+        entries = []
+        for score, p, parsed in items:
+            slug = paper_slugs.get(p.get('arxivId', ''), '')
+            disp_title, _ = _index_paper_display_title(p, parsed, date_str, max_chars=36)
+            badges = _paper_resource_badges(p, parsed)['text']
+            badge_str = f' {badges}' if badges != '-' else ''
+            ref = f'[{disp_title}]({BASE_PATH}/posts/{date_str}-{slug})' if slug else disp_title
+            entries.append(f'{ref}（{score} 分{badge_str}）')
+        # 每行最多放 3 篇，避免单段超过 260 汉字上限。
+        for chunk_idx in range(0, len(entries), 3):
+            chunk = entries[chunk_idx:chunk_idx + 3]
+            prefix = f'**{label}**（共 {len(items)} 篇）：' if chunk_idx == 0 else f'**{label}**（续）：'
+            lines.append(f'- {prefix}{"、".join(chunk)}')
+    return '\n'.join(lines) + '\n\n'
+
+
+def _render_daily_spotlight(scored, date_str, paper_slugs):
+    """生成当日最高分论文的页内精选 Spotlight 卡片。"""
+    if not scored:
+        return ''
+    top_score, p, parsed = scored[0]
+    slug = paper_slugs.get(p.get('arxivId', ''), '')
+    disp_title, _ = _index_paper_display_title(p, parsed, date_str, max_chars=48)
+    ref = f'[{disp_title}]({BASE_PATH}/posts/{date_str}-{slug})' if slug else disp_title
+    rank_bucket = parsed.get('rankBucket', '') or ''
+    doc_type = parsed.get('documentType', '') or ''
+    meta_bits = [bit for bit in (rank_bucket, doc_type) if bit]
+    sel = build_flat_tag_compat_metadata(parsed)
+    root_link = _root_task_link(_top_level_task_concept(sel['primaryTaskId'])) if sel else ''
+    if root_link:
+        meta_bits.append(root_link)
+    badges = _paper_resource_badges(p, parsed)['text']
+    badge_tail = f' · 资源 {badges}' if badges != '-' else ''
+    meta_tail = f'（{" · ".join(meta_bits)}）' if meta_bits else ''
+
+    lines = [
+        '### 🌟 今日精选焦点',
+        '',
+        f'> 🥇 **{ref}** · 总分 **{top_score}**/10{meta_tail}{badge_tail}',
+    ]
+    from paper_reader_presentation import score_dimensions_for_rubric
+    import scoring_rubric_v2 as _scoring_v2
+    is_v2 = _scoring_v2.is_v2_rubric(parsed.get('scoringRubricVersion'))
+    active_dims = score_dimensions_for_rubric(parsed.get('scoringRubricVersion'))
+    ranked_dims = []
+    for key, label, maximum in active_dims:
+        raw_val = parsed.get(key)
+        if raw_val is None or not maximum:
+            continue
+        try:
+            num = float(raw_val)
+            ratio = num / float(maximum)
+        except (TypeError, ValueError):
+            continue
+        val_str = f'{num:.1f}/{maximum}' if is_v2 else f'{raw_val}/{maximum}'
+        ranked_dims.append((ratio, float(maximum), f'{label} {val_str}'))
+    ranked_dims.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    highlight_bits = [text for _, _, text in ranked_dims[:3]]
+    if highlight_bits:
+        lines.append('>')
+        lines.append(f'> 突出维度：{" · ".join(highlight_bits)}')
+    return '\n'.join(lines) + '\n\n'
+
+
 def generate_index_page(
         scored, unscored, date_str, paper_slugs, category='论文速递', *,
         empty_batch_confirmed=False):
@@ -7571,6 +7888,10 @@ def generate_index_page(
     if empty_batch_confirmed:
         raise PublishDataValidationError('非空批次不能按零候选空日渲染汇总页')
     papers = [p for _, p, _ in scored] + unscored
+    for p in papers:
+        heading_issue = evaluation_heading_issue(p.get('analysis'))
+        if heading_issue:
+            raise PublishDataValidationError(f'{p.get("arxivId", "未知论文")} {heading_issue}')
     tag_metadata = _current_batch_tag_metadata(papers)
     tag_set = [concept['label'] for concept in tag_metadata['concepts']] if tag_metadata \
         else extract_all_tags(papers, limit=10)
@@ -7615,9 +7936,9 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
 
 {'每篇论文保留完整分层分类；热门方向按主任务的最上级方向统计，每篇仅计入所属主方向。排行榜也显示最上级任务。' if tag_metadata else ''}
 
-### 🏷️ 热门方向
-
 """
+    md += _render_daily_thematic_brief(scored, unscored, date_str, paper_slugs, tag_metadata)
+    md += "### 🏷️ 热门方向\n\n"
     md += "| 方向 | 数量 | 分布 |\n|------|------|------|\n"
     for tag, cnt in top_tags:
         bar = '█' * min(cnt, 15)
@@ -7634,7 +7955,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
 
 """
-    md += "| 排名 | 论文 | 总分 | 分档 | 文档类型 | 最上级任务 |\n|------|------|------|------|----------|--------|\n"
+    md += "| 排名 | 论文 | 中文导览 | 总分 | 分档 | 文档类型 | 最上级任务 | 资源 |\n|------|------|----------|------|------|----------|------------|------|\n"
     for i, (score, p, parsed_analysis) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
@@ -7646,20 +7967,30 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         if selection:
             primary_task = _root_task_link(_top_level_task_concept(selection['primaryTaskId']))
         compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
+        zh_title, has_zh = _index_paper_display_title(p, parsed_analysis, date_str, max_chars=36)
+        zh_cell = zh_title if has_zh else '-'
+        badges = _paper_resource_badges(p, parsed_analysis)['text']
         if slug:
-            md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"
+            md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {zh_cell} | {score} | {rank_bucket} | {document_type} | {primary_task} | {badges} |\n"
         else:
-            md += f"| {m} | {compact_title} | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"
+            md += f"| {m} | {compact_title} | {zh_cell} | {score} | {rank_bucket} | {document_type} | {primary_task} | {badges} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
         compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
+        parsed_u = p.get('parsed') if isinstance(p.get('parsed'), dict) else {}
+        zh_title, has_zh = _index_paper_display_title(p, parsed_u, date_str, max_chars=36)
+        zh_cell = zh_title if has_zh else '-'
+        badges = _paper_resource_badges(p, parsed_u)['text']
         if slug:
-            md += f"| {len(scored)+i+1} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - | - |\n"
+            md += f"| {len(scored)+i+1} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {zh_cell} | N/A | - | - | - | {badges} |\n"
         else:
-            md += f"| {len(scored)+i+1} | {compact_title} | N/A | - | - | - |\n"
+            md += f"| {len(scored)+i+1} | {compact_title} | {zh_cell} | N/A | - | - | - | {badges} |\n"
 
-    md += "\n---\n\n"
+    md += "\n"
+    md += _render_daily_reading_tiers(scored, date_str, paper_slugs)
+    md += _render_daily_spotlight(scored, date_str, paper_slugs)
+    md += "---\n\n"
     md += (
         "## 📋 论文列表\n\n"
         "> 🖼️ 有图的论文会在这里展示首张原论文图；原图链接见对应独立页面。\n\n"
@@ -13033,15 +13364,20 @@ def _api_reader_payload_uncached(paper):
         if not is_structured_v5:
             raise PublishDataValidationError('非 structured-pipeline-v5 编辑计划不得包含 implementationSpecs。')
         specs = plan.get('implementationSpecs')
+        required_spec_keys = set(reader_formats.IMPLEMENTATION_SPEC_KEYS)
+        allowed_spec_keys = required_spec_keys | set(
+            getattr(reader_formats, 'OPTIONAL_IMPLEMENTATION_SPEC_KEYS', ()),
+        )
         if not isinstance(specs, dict) \
-                or set(specs) != set(reader_formats.IMPLEMENTATION_SPEC_KEYS) \
+                or not required_spec_keys.issubset(specs) \
+                or not set(specs).issubset(allowed_spec_keys) \
                 or any(
                     not isinstance(specs.get(key), str)
                     or not 4 <= len(specs[key].strip()) <= 650
                     or len(re.sub(r'\s+', '', specs[key].strip())) > 550
                     or _has_forbidden_spec_html_or_markdown(specs[key])
                     or bool(_V5_SPEC_WORKFLOW_LEAK_RE.search(specs[key]))
-                    for key in reader_formats.IMPLEMENTATION_SPEC_KEYS
+                    for key in specs
                 ):
             raise PublishDataValidationError(
                 '编辑计划中的 implementationSpecs 缺少必要字段、字段内容超限、含非法 HTML/Markdown 块或泄漏流程元话语。'

@@ -54,7 +54,7 @@
 - **独立 PDF 引文（仅限明确授权恢复）**：只有本次实际提供独立官方封存 PDF 原字符全文且明确授权时，`source_quotes` 才可增加 `pdfSourceQuotes` 字符串数组（12–4000 字符、最多 64 条，逐字来自该 PDF，仅合并空白，且 `sourceQuotes` 与 `pdfSourceQuotes` 至少一项非空）；首次普通写作绝不输出 `pdfSourceQuotes` 或 `sealedPdfQuoteEvidence`。
 
 ### 顶层复现规格卡与概念桥（`implementationSpecs` / `conceptBridges`）
-- `implementationSpecs` 精确包含 6 个单行纯文本字符串字段（每项 4–500 字，无换行/Markdown/HTML/内部核验话术）：`trainingData`、`computeHardware`、`keyHyperparams`、`inferenceCost`、`openSourceArtifacts`、`appendixHighlights`。无训练阶段的论文直接写明“无模型训练阶段（纯冻结推理/提示驱动）”及实际推理配置，真正缺失项写“原文未披露”；`openSourceArtifacts` 须与论文真实代码/权重/数据/演示公开状态严格一致。
+- `implementationSpecs` 必填 6 个单行纯文本字符串字段（每项 4–500 字，无换行/Markdown/HTML/内部核验话术）：`trainingData`、`computeHardware`、`keyHyperparams`、`inferenceCost`、`openSourceArtifacts`、`appendixHighlights`，并**强烈建议音频/语音/音乐论文补充可选字段 `audioSignalSpecs`**（采样率、帧率/步长、码率、因果前瞻延迟与 RTF；纯非音频理论论文可省略）。无训练阶段的论文直接写明“无模型训练阶段（纯冻结推理/提示驱动）”及实际推理配置，真正缺失项写“原文未披露”；`openSourceArtifacts` 须与论文真实代码/权重/数据/演示公开状态严格一致。
 - `conceptBridges` 默认输出 `[]`（允许 0–4 组），优先把术语分工自然融入正文；仅确需辨析时声明 1–2 组，含 `terms`（2–4 个不同术语）、`sectionKind`（与占位符所在小节 `kind` 一致）、`marker`（独占一段的 `[[CONCEPT_BRIDGE_1]]`）与 `explanation`（45–320 字，须包含全部声明 `terms` 并说明分工与组合作用）。
 
 ## 四、输出 JSON 结构（只输出单个合法 JSON 对象，无 Markdown 围栏或解释）
@@ -102,6 +102,7 @@
     }
   ],
   "implementationSpecs": {
+    "audioSignalSpecs": "（可选，音频/语音/音乐论文推荐）采样率、帧率/步长、码率、因果前瞻延迟与 RTF（缺失项写“原文未披露”）",
     "trainingData": "训练与评测数据集名称、规模/时长、语种与划分（原文未提及写“原文未披露”）",
     "computeHardware": "GPU/TPU 型号与数量、训练步数/轮数与耗时（无训练阶段写明无模型训练阶段及实际推理硬件）",
     "keyHyperparams": "优化器、学习率、批大小、核心层数/维度/码本、温度/门限或损失权重",

@@ -1640,8 +1640,13 @@ function collectDraftIssues(draft, parserError, options = {}) {
                     }
                     if (isStructuredV5Raw && value.implementationSpecs && typeof value.implementationSpecs === 'object'
                         && !Array.isArray(value.implementationSpecs)) {
+                        const readerFormat = require('./reader-record-format');
                         addUnknownFields(value.implementationSpecs,
-                            require('./reader-record-format').IMPLEMENTATION_SPEC_KEYS, 'implementationSpecs');
+                            [
+                                ...readerFormat.IMPLEMENTATION_SPEC_KEYS,
+                                ...(readerFormat.OPTIONAL_IMPLEMENTATION_SPEC_KEYS || [])
+                            ],
+                            'implementationSpecs');
                     }
                     if (Array.isArray(value.tableBindings)) value.tableBindings.forEach((binding, index) => {
                         const allowed = binding && own(binding, 'selection')

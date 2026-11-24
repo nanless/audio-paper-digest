@@ -2052,6 +2052,12 @@
         "prompts/gap-fill.md"
       ]
     },
+    "ddd0b95bab3e5d94741fc22a16214b2b9cb5ed226d913f073163730a04ea6b12": {
+      "blobOid": "2a7fc890c344fae2da7d032288441e2925850139",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
     "dfd23d8a35b0dbea6415cb5d3fe02423e1e5ded2e485a93f2711044c880d0c23": {
       "blobOid": "95df0c3b6d6e5954b7b136e9b7cee1e0d760b782",
       "paths": [

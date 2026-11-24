@@ -145,7 +145,7 @@ function buildReaderContractNotice(options = {}) {
         `表前的独立说明段至少包含 ${rules.tableLeadChineseChars} 个汉字，表后的独立解释段至少包含 ${rules.tableExplanationChineseChars} 个汉字；说明和解释都应紧邻表格。`,
         figureRule,
         ...(isV5 ? [
-            '顶层请输出 implementationSpecs 对象，精确包含 trainingData、computeHardware、keyHyperparams、inferenceCost、openSourceArtifacts、appendixHighlights 六项来源核实摘要；原文未提及的项如实写“原文未披露”，不得编造。'
+            '顶层请输出 implementationSpecs 对象，必含 trainingData、computeHardware、keyHyperparams、inferenceCost、openSourceArtifacts、appendixHighlights 六项来源核实摘要，音频/语音/音乐论文建议额外补充可选字段 audioSignalSpecs（采样率、帧率/步长、码率、因果前瞻延迟与 RTF）；原文未提及的项如实写“原文未披露”，不得编造。'
         ] : [])
     ].join('\n');
 }

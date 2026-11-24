@@ -604,7 +604,560 @@ function isMetadataResourceDiscoveryLink(paper, rawUrl, options = {}) {
     }
 }
 
-async function checkDemoPageForOpensource(demoUrl, options = {}) {
+const AUDIO_FILE_EXT_RE = /\.(wav|mp3|flac|ogg|opus|m4a)(?:$|[?#])/i;
+const DEMO_METADATA_COLUMN_RE = /^(?:#|no\.?|id|idx|index|sample(?:\s*(?:id|#|no\.?))?|audio|clip|file|text|transcript(?:ion)?|prompt|caption|description|desc|input|source\s*text|reference\s*text|target\s*text|content|utterance|sentence|speaker|language|lang|category|task|condition|setting|metric|notes?|remark|duration|length|emotion|style|snr|pitch|tempo|bitrate|sample\s*rate|gender|age|accent|文本|输入|提示|描述|样本|序号|编号|类别|语言|说话人|任务|时长)$/i;
+
+function decodeSimpleHtmlEntities(value) {
+    return String(value || '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'");
+}
+
+const HF_SPACE_STAGE_ALLOW_RE = /^[A-Z0-9_-]{1,48}$/;
+const HF_SPACE_HARDWARE_ALLOW_RE = /^[A-Za-z0-9._ -]{1,48}$/;
+const SKIP_AUDIO_SCAN_RAWTEXT_TAGS = new Set([
+    'script', 'style', 'noscript', 'textarea', 'iframe', 'xmp', 'title', 'noframes', 'noembed', 'plaintext'
+]);
+const SKIP_AUDIO_SCAN_FOREIGN_TAGS = new Set(['template', 'svg', 'math']);
+
+function parseValidHuggingFaceSpaceUrl(rawUrl) {
+    try {
+        const raw = String(rawUrl || '').trim();
+        if (!raw || /(?:^|\/)\.\.(?:\/|$|[?#])|%2[ef]|%5c/i.test(raw)) return null;
+        const parsed = new URL(raw);
+        const host = parsed.hostname.toLowerCase();
+        if (parsed.protocol !== 'https:' || (host !== 'huggingface.co' && host !== 'www.huggingface.co')
+            || parsed.username || parsed.password || parsed.port) return null;
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        if (segments.length !== 3 || segments[0].toLowerCase() !== 'spaces') return null;
+        const [, owner, space] = segments;
+        const validSeg = s => /^[A-Za-z0-9._-]+$/.test(s) && s !== '.' && s !== '..' && !s.endsWith('.');
+        if (!validSeg(owner) || !validSeg(space)) return null;
+        return {
+            owner,
+            space,
+            spaceId: `${owner}/${space}`,
+            canonicalUrl: `https://huggingface.co/spaces/${owner}/${space}`
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
+function extractHuggingFaceSpaceUrls(analysis) {
+    const urls = [];
+    const section = extractSectionByTitle(analysis, '开源详情');
+    const sourceText = section || String(analysis || '');
+    const thirdPartyRe = /^\s*(?:[-*+]\s*)?[*_`]*\s*(?:其他资源链接|论文中引用的开源项目|第三方资源|论文所列链接)\s*[*_`]*\s*[：:]/;
+    for (const rawLine of sourceText.split('\n')) {
+        const line = rawLine.trim();
+        if (!line || thirdPartyRe.test(line)) continue;
+        for (const match of line.matchAll(/https:\/\/(?:www\.)?huggingface\.co\/spaces\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/gi)) {
+            const cleaned = match[0].replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
+            const parsed = parseValidHuggingFaceSpaceUrl(cleaned);
+            if (parsed) urls.push(parsed.canonicalUrl);
+        }
+    }
+    return [...new Set(urls)];
+}
+
+function analyzeDemoPageAudioCapabilities(html, baseUrl) {
+    const doc = String(html || '');
+    const len = doc.length;
+
+    const resolveSafeHttps = candidate => {
+        const trimmed = decodeSimpleHtmlEntities(String(candidate || '').trim());
+        if (!trimmed || /^(?:javascript|data|blob|mailto|tel):/i.test(trimmed)) return '';
+        try {
+            const resolved = new URL(trimmed, baseUrl);
+            if (resolved.protocol !== 'https:' || resolved.username || resolved.password) return '';
+            return resolved.href;
+        } catch (_) {
+            return '';
+        }
+    };
+
+    const sampleUrlSet = new Set();
+    const formatSet = new Set();
+    const recordSample = candidate => {
+        const href = resolveSafeHttps(candidate);
+        if (!href) return;
+        const extMatch = AUDIO_FILE_EXT_RE.exec(href);
+        if (extMatch) formatSet.add(extMatch[1].toLowerCase());
+        if (sampleUrlSet.size < 12) sampleUrlSet.add(href);
+    };
+
+    const spaceUrlSet = new Set();
+    const baseSpace = parseValidHuggingFaceSpaceUrl(baseUrl);
+    if (baseSpace) spaceUrlSet.add(baseSpace.canonicalUrl);
+    const recordSpacesFromText = text => {
+        if (!text || !text.toLowerCase().includes('huggingface.co/spaces/')) return;
+        for (const m of text.matchAll(/https:\/\/(?:www\.)?huggingface\.co\/spaces\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+/gi)) {
+            const cleaned = m[0].replace(/[),.;:!?，。；：！？、）》】》」』]+$/u, '');
+            const parsed = parseValidHuggingFaceSpaceUrl(cleaned);
+            if (parsed && spaceUrlSet.size < 4) spaceUrlSet.add(parsed.canonicalUrl);
+        }
+    };
+
+    const comparisonSystemSet = new Set();
+    let hasBaselineComparison = false;
+    let audioTagCount = 0;
+    let inAudioDepth = 0;
+    const tableStack = [];
+    let inTh = false;
+    let thChunks = [];
+
+    const flushTh = () => {
+        if (!inTh) return;
+        const top = tableStack.length > 0 ? tableStack[tableStack.length - 1] : null;
+        if (top && top.inTr) {
+            const label = decodeSimpleHtmlEntities(thChunks.join(' '))
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (label) top.trThLabels.push(label);
+        }
+        inTh = false;
+        thChunks = [];
+    };
+
+    const flushTr = tbl => {
+        if (!tbl || !tbl.inTr) return;
+        flushTh();
+        if (tbl.trThLabels.length > 0 && (tbl.inThead || !tbl.trHasTd)) {
+            if (!tbl.lockedHeader || tbl.inThead) {
+                tbl.headerLabels = tbl.trThLabels.slice();
+                if (!tbl.inThead) tbl.lockedHeader = true;
+            }
+        }
+        tbl.inTr = false;
+        tbl.trHasTd = false;
+        tbl.trThLabels = [];
+    };
+
+    const finalizeTable = tbl => {
+        if (!tbl) return;
+        flushTr(tbl);
+        if (!tbl.hasAudio) return;
+        const tableSystems = new Set();
+        for (const label of tbl.headerLabels) {
+            if (!label || label.length > 64 || DEMO_METADATA_COLUMN_RE.test(label)) continue;
+            tableSystems.add(label);
+        }
+        if (tableSystems.size >= 2) {
+            hasBaselineComparison = true;
+            for (const sys of tableSystems) {
+                if (comparisonSystemSet.size < 12) comparisonSystemSet.add(sys);
+            }
+        }
+    };
+
+    // Single-pass O(N) HTML tokenizer: immune to ReDoS and handles HTML5 comments + unclosed RAWTEXT/SVG/MathML safely.
+    let i = 0;
+    while (i < len) {
+        if (doc[i] !== '<') {
+            const nextLt = doc.indexOf('<', i);
+            const end = nextLt < 0 ? len : nextLt;
+            const textSlice = doc.slice(i, end);
+            if (inTh) thChunks.push(textSlice);
+            recordSpacesFromText(textSlice);
+            i = end;
+            continue;
+        }
+        const startLt = i;
+        i += 1;
+        if (i >= len) break;
+        const ch = doc[i];
+
+        if (ch === '!') {
+            if (doc.startsWith('!--', i)) {
+                if (doc.startsWith('!-->', i)) {
+                    i += 4;
+                } else if (doc.startsWith('!--->', i)) {
+                    i += 5;
+                } else {
+                    const endStd = doc.indexOf('-->', i + 3);
+                    const endBang = doc.indexOf('--!>', i + 3);
+                    if (endStd >= 0 && (endBang < 0 || endStd <= endBang)) {
+                        i = endStd + 3;
+                    } else if (endBang >= 0) {
+                        i = endBang + 4;
+                    } else {
+                        // Unclosed HTML comment runs to EOF.
+                        i = len;
+                    }
+                }
+            } else {
+                const end = doc.indexOf('>', i + 1);
+                i = end < 0 ? len : end + 1;
+            }
+            continue;
+        }
+        if (ch === '?') {
+            const end = doc.indexOf('>', i + 1);
+            i = end < 0 ? len : end + 1;
+            continue;
+        }
+        if (ch === '/') {
+            i += 1;
+            const nameStart = i;
+            while (i < len && /[A-Za-z0-9:-]/.test(doc[i])) i += 1;
+            const closeName = doc.slice(nameStart, i).toLowerCase();
+            const gt = doc.indexOf('>', i);
+            i = gt < 0 ? len : gt + 1;
+            if (closeName === 'audio') {
+                if (inAudioDepth > 0) inAudioDepth -= 1;
+            } else if (closeName === 'th') {
+                flushTh();
+            } else if (closeName === 'tr') {
+                if (tableStack.length > 0) flushTr(tableStack[tableStack.length - 1]);
+            } else if (closeName === 'thead') {
+                if (tableStack.length > 0) {
+                    const top = tableStack[tableStack.length - 1];
+                    flushTr(top);
+                    top.inThead = false;
+                }
+            } else if (closeName === 'table') {
+                if (tableStack.length > 0) finalizeTable(tableStack.pop());
+            }
+            continue;
+        }
+        if (!/[A-Za-z]/.test(ch)) {
+            if (inTh) thChunks.push('<');
+            continue;
+        }
+
+        const nameStart = i;
+        while (i < len && /[A-Za-z0-9:-]/.test(doc[i])) i += 1;
+        // Preserve autolinks like <https://...> as text rather than HTML tags.
+        if (doc[i - 1] === ':' && doc.startsWith('//', i)) {
+            const gt = doc.indexOf('>', i);
+            const slice = doc.slice(startLt, gt < 0 ? len : gt + 1);
+            if (inTh) thChunks.push(slice);
+            recordSpacesFromText(slice);
+            i = gt < 0 ? len : gt + 1;
+            continue;
+        }
+        if (i < len && !/[\s/>]/.test(doc[i])) {
+            if (inTh) thChunks.push(doc.slice(startLt, i));
+            continue;
+        }
+        const tagName = doc.slice(nameStart, i).toLowerCase();
+        const attrs = new Map();
+        let selfClosing = false;
+        let closedTag = false;
+        while (i < len) {
+            while (i < len && /\s/.test(doc[i])) i += 1;
+            if (i >= len) break;
+            if (doc[i] === '>') {
+                closedTag = true;
+                i += 1;
+                break;
+            }
+            if (doc[i] === '/') {
+                selfClosing = true;
+                i += 1;
+                continue;
+            }
+            const attrStart = i;
+            while (i < len && !/[\s=/>"'<]/.test(doc[i])) i += 1;
+            if (i === attrStart) {
+                i += 1;
+                continue;
+            }
+            selfClosing = false;
+            const attrName = doc.slice(attrStart, i).toLowerCase();
+            while (i < len && /\s/.test(doc[i])) i += 1;
+            let attrValue = '';
+            if (i < len && doc[i] === '=') {
+                i += 1;
+                while (i < len && /\s/.test(doc[i])) i += 1;
+                if (i < len && (doc[i] === '"' || doc[i] === "'")) {
+                    const quote = doc[i];
+                    i += 1;
+                    const vStart = i;
+                    const closeQ = doc.indexOf(quote, i);
+                    attrValue = doc.slice(vStart, closeQ < 0 ? len : closeQ);
+                    i = closeQ < 0 ? len : closeQ + 1;
+                } else {
+                    const vStart = i;
+                    while (i < len && !/[\s>]/.test(doc[i])) i += 1;
+                    attrValue = doc.slice(vStart, i);
+                }
+            }
+            if (!attrs.has(attrName)) attrs.set(attrName, attrValue);
+        }
+        if (!closedTag) break;
+
+        if (SKIP_AUDIO_SCAN_RAWTEXT_TAGS.has(tagName) || SKIP_AUDIO_SCAN_FOREIGN_TAGS.has(tagName)) {
+            if (tagName === 'plaintext') {
+                i = len;
+                break;
+            }
+            if (SKIP_AUDIO_SCAN_FOREIGN_TAGS.has(tagName)) {
+                if (selfClosing) continue;
+                let depth = 1;
+                const tagBoundaryRe = new RegExp(`<(/?)${tagName}(?=[\\s/>])`, 'gi');
+                tagBoundaryRe.lastIndex = i;
+                while (depth > 0) {
+                    const m = tagBoundaryRe.exec(doc);
+                    if (!m) {
+                        i = len;
+                        break;
+                    }
+                    const gt = doc.indexOf('>', m.index + m[0].length);
+                    if (gt < 0) {
+                        i = len;
+                        break;
+                    }
+                    const isClose = m[1] === '/';
+                    if (isClose) {
+                        depth -= 1;
+                    } else {
+                        const rawTagInner = doc.slice(m.index + m[0].length, gt);
+                        if (!/\/\s*$/.test(rawTagInner)) {
+                            depth += 1;
+                        }
+                    }
+                    i = gt + 1;
+                    tagBoundaryRe.lastIndex = i;
+                }
+                continue;
+            }
+            const closeRe = new RegExp(`</${tagName}(?=[\\s/>])`, 'gi');
+            closeRe.lastIndex = i;
+            const closeMatch = closeRe.exec(doc);
+            if (!closeMatch) {
+                // Unclosed RAWTEXT/script consumes to EOF.
+                i = len;
+                break;
+            }
+            const closeGt = doc.indexOf('>', closeMatch.index + closeMatch[0].length);
+            i = closeGt < 0 ? len : closeGt + 1;
+            continue;
+        }
+
+        const topTable = tableStack.length > 0 ? tableStack[tableStack.length - 1] : null;
+        if (tagName === 'audio') {
+            audioTagCount += 1;
+            if (!selfClosing) inAudioDepth += 1;
+            if (topTable) topTable.hasAudio = true;
+            if (attrs.has('src')) recordSample(attrs.get('src'));
+        } else if (tagName === 'source') {
+            if (inAudioDepth > 0 && attrs.has('src')) {
+                recordSample(attrs.get('src'));
+                if (topTable) topTable.hasAudio = true;
+            }
+        } else if (tagName === 'a') {
+            if (attrs.has('href')) {
+                const rawHref = attrs.get('href');
+                if (AUDIO_FILE_EXT_RE.test(rawHref)) {
+                    recordSample(rawHref);
+                    if (topTable) topTable.hasAudio = true;
+                }
+                recordSpacesFromText(rawHref);
+            }
+        } else if (tagName === 'table') {
+            if (tableStack.length < 16) {
+                tableStack.push({
+                    hasAudio: false,
+                    inThead: false,
+                    inTr: false,
+                    trHasTd: false,
+                    trThLabels: [],
+                    headerLabels: [],
+                    lockedHeader: false
+                });
+            }
+        } else if (tagName === 'thead') {
+            if (topTable) topTable.inThead = true;
+        } else if (tagName === 'tr') {
+            if (topTable) {
+                flushTr(topTable);
+                topTable.inTr = true;
+            }
+        } else if (tagName === 'td') {
+            if (topTable) {
+                flushTh();
+                if (!topTable.inTr) topTable.inTr = true;
+                topTable.trHasTd = true;
+            }
+        } else if (tagName === 'th') {
+            if (topTable) {
+                flushTh();
+                if (!topTable.inTr) topTable.inTr = true;
+                inTh = true;
+                thChunks = [];
+            }
+        }
+    }
+
+    while (tableStack.length > 0) {
+        finalizeTable(tableStack.pop());
+    }
+
+    const sampleUrls = [...sampleUrlSet];
+    const comparisonSystems = [...comparisonSystemSet];
+    return {
+        audioTagCount,
+        audioSampleCount: sampleUrls.length,
+        sampleUrls,
+        audioFormats: [...formatSet].sort(),
+        hasBaselineComparison,
+        comparisonSystems,
+        spaceUrls: [...spaceUrlSet]
+    };
+}
+
+async function probeAudioSampleUrls(sampleUrls, options = {}) {
+    const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
+    const requestImpl = options.requestImpl || requestPinnedPublicHttps;
+    const detectProxyImpl = options.detectProxyImpl || resolveHttpConnectProxyUrl;
+    const maxSamples = Math.max(1, Math.min(4, Number.isInteger(options.maxSamples) ? options.maxSamples : 2));
+    const proxyEnabled = isValidHttpConnectProxyUrl(detectProxyImpl());
+    const urls = (Array.isArray(sampleUrls) ? sampleUrls : []).slice(0, maxSamples);
+    const results = [];
+
+    for (const rawUrl of urls) {
+        let currentUrl = String(rawUrl || '').trim();
+        let entry = { url: currentUrl, status: null, contentType: '', ok: false };
+        try {
+            let response = null;
+            for (const method of ['HEAD', 'GET']) {
+                let targetUrl = currentUrl;
+                let hopRes = null;
+                for (let hop = 0; hop <= 2; hop += 1) {
+                    const parsedUrl = await validateUrlImpl(targetUrl, { proxyEnabled });
+                    if (parsedUrl.protocol !== 'https:') {
+                        throw new Error('任意公网资源只允许 HTTPS');
+                    }
+                    const reqHeaders = {
+                        'User-Agent': 'Mozilla/5.0 (compatible; AudioPaperDigest/1.0)',
+                        ...(method === 'GET' ? { Range: 'bytes=0-63' } : {})
+                    };
+                    const res = await requestImpl(targetUrl, {
+                        method,
+                        headers: reqHeaders,
+                        timeoutMs: 8000,
+                        maxBytes: 4096,
+                        responseBodyMode: 'headers_only'
+                    }, { validateUrlImpl, detectProxyImpl });
+                    const status = Number(res?.status || 0);
+                    const location = res?.headers?.get ? res.headers.get('location') : null;
+                    const ct = String(res?.headers?.get ? (res.headers.get('content-type') || '') : '').split(';')[0].trim().toLowerCase();
+                    if (res?.body && typeof res.body.cancel === 'function') {
+                        try { await res.body.cancel(); } catch (_) {}
+                    }
+                    hopRes = { status, contentType: ct, location };
+                    if (status >= 300 && status < 400 && location && hop < 2) {
+                        targetUrl = new URL(location, parsedUrl).href;
+                        continue;
+                    }
+                    break;
+                }
+                response = hopRes;
+                if (method === 'HEAD' && response && (response.status === 405 || response.status === 501)) continue;
+                break;
+            }
+            if (response) {
+                const isAudioType = !response.contentType
+                    || /^(?:audio\/|application\/octet-stream|binary\/octet-stream|video\/(?:ogg|mp4|webm))/i.test(response.contentType);
+                entry = {
+                    url: currentUrl,
+                    status: response.status,
+                    contentType: response.contentType,
+                    ok: (response.status === 200 || response.status === 206) && isAudioType
+                };
+            }
+        } catch (err) {
+            if (err?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(err)) throw err;
+            entry = { url: currentUrl, status: null, contentType: '', ok: false, error: err?.message || 'probe failed' };
+        }
+        results.push(entry);
+    }
+
+    const reachableCount = results.filter(r => r.ok).length;
+    return {
+        probedCount: results.length,
+        reachableCount,
+        audioSamplesReachable: results.length > 0 ? reachableCount > 0 : null,
+        results
+    };
+}
+
+async function probeHuggingFaceSpaceStatus(spaceUrl, options = {}) {
+    const parsed = parseValidHuggingFaceSpaceUrl(spaceUrl);
+    if (!parsed) {
+        return { spaceUrl: String(spaceUrl || ''), spaceId: '', ok: false, status: null, stage: '', hardware: '', isRunning: false, error: 'invalid_space_url' };
+    }
+    const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
+    const requestImpl = options.requestImpl || requestPinnedPublicHttps;
+    const detectProxyImpl = options.detectProxyImpl || resolveHttpConnectProxyUrl;
+    const proxyEnabled = isValidHttpConnectProxyUrl(detectProxyImpl());
+    const apiUrl = `https://huggingface.co/api/spaces/${parsed.owner}/${parsed.space}`;
+
+    try {
+        let currentUrl = apiUrl;
+        let status = 0;
+        let bodyText = '';
+        for (let hop = 0; hop <= 2; hop += 1) {
+            const parsedHop = await validateUrlImpl(currentUrl, { proxyEnabled });
+            const res = await requestImpl(currentUrl, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; AudioPaperDigest/1.0)',
+                    'Accept': 'application/json'
+                },
+                timeoutMs: 10000,
+                maxBytes: 256 * 1024
+            }, { validateUrlImpl, detectProxyImpl });
+            status = Number(res?.status || 0);
+            const location = res?.headers?.get ? res.headers.get('location') : null;
+            if (status >= 300 && status < 400 && location && hop < 2) {
+                if (res?.body && typeof res.body.cancel === 'function') {
+                    try { await res.body.cancel(); } catch (_) {}
+                }
+                const next = new URL(location, parsedHop);
+                const nextHost = next.hostname.toLowerCase();
+                if (next.protocol !== 'https:'
+                    || (nextHost !== 'huggingface.co' && nextHost !== 'www.huggingface.co')
+                    || next.username || next.password || next.port
+                    || !next.pathname.startsWith('/api/spaces/')) {
+                    return { spaceUrl: parsed.canonicalUrl, spaceId: parsed.spaceId, ok: false, status, stage: '', hardware: '', isRunning: false, error: 'unexpected_redirect_host' };
+                }
+                currentUrl = next.href;
+                continue;
+            }
+            bodyText = Buffer.from(await res.arrayBuffer()).toString('utf8');
+            break;
+        }
+        if (status !== 200) {
+            return { spaceUrl: parsed.canonicalUrl, spaceId: parsed.spaceId, ok: false, status, stage: '', hardware: '', isRunning: false };
+        }
+        const json = JSON.parse(bodyText);
+        const rawStage = String(json?.runtime?.stage || '').trim().toUpperCase();
+        const rawHardware = String(json?.runtime?.hardware?.current || json?.runtime?.hardware?.requested || '').trim();
+        const stage = HF_SPACE_STAGE_ALLOW_RE.test(rawStage) ? rawStage : '';
+        const hardware = HF_SPACE_HARDWARE_ALLOW_RE.test(rawHardware) ? rawHardware : '';
+        const isRunning = stage === 'RUNNING' || stage === 'RUNNING_APP_STARTING';
+        return {
+            spaceUrl: parsed.canonicalUrl,
+            spaceId: parsed.spaceId,
+            ok: Boolean(stage),
+            status,
+            stage,
+            hardware,
+            isRunning
+        };
+    } catch (err) {
+        if (err?.code === 'PROXY_CONFIG_ERROR' || isPublicNetworkPolicyConfigError(err)) throw err;
+        return { spaceUrl: parsed.canonicalUrl, spaceId: parsed.spaceId, ok: false, status: null, stage: '', hardware: '', isRunning: false, error: err?.message || 'space_probe_failed' };
+    }
+}
+
+async function inspectDemoPageDetailed(demoUrl, options = {}) {
     const seg = '[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?';
     const lead = '(?<![A-Za-z0-9._~@/\\\\?#&:;%+-])(?:https?:\\/\\/)?(?:www\\.)?';
     const safeHtmlEnt = '(?:nbsp|lt|gt|quot|apos|mdash|ndash|hellip|middot|bull|copy|reg|#160|#x0*a0|#60|#62|#34|#39);';
@@ -647,7 +1200,7 @@ async function checkDemoPageForOpensource(demoUrl, options = {}) {
             if (response.status >= 300 && response.status < 400 && response.location) {
                 if (redirectCount >= 3) {
                     console.log('    [deep] ⚠️  Demo 页面重定向超过 3 次');
-                    return [];
+                    return { demoUrl, finalUrl: currentUrl, reachable: false, status: response.status, links: [], audioDemo: null };
                 }
                 const nextUrl = new URL(response.location, parsedUrl).href;
                 console.log(`    [deep] ↪ Demo 页面重定向: ${currentUrl} → ${nextUrl}`);
@@ -659,7 +1212,7 @@ async function checkDemoPageForOpensource(demoUrl, options = {}) {
 
         if (response.skipped) {
             console.log(`    [deep] ⚠️  Demo 页面跳过: ${response.skipped}`);
-            return [];
+            return { demoUrl, finalUrl: currentUrl, reachable: false, status: response.status, links: [], audioDemo: null };
         }
         if (response.status !== 200) {
             console.log(`    [deep] ⚠️  Demo 页面返回 ${response.status}`);
@@ -668,7 +1221,7 @@ async function checkDemoPageForOpensource(demoUrl, options = {}) {
                 transientError.code = 'DEMO_TRANSIENT_FAILURE';
                 throw transientError;
             }
-            return [];
+            return { demoUrl, finalUrl: currentUrl, reachable: false, status: response.status, links: [], audioDemo: null };
         }
 
         const html = response.data;
@@ -1435,7 +1988,45 @@ async function checkDemoPageForOpensource(demoUrl, options = {}) {
             }
         }
 
-        return [...new Set(foundLinks)];
+        const links = [...new Set(foundLinks)];
+        const isPlainTextReadme = /raw\.githubusercontent\.com/i.test(currentUrl);
+        let audioDemo = null;
+        if (!isPlainTextReadme && options.analyzeAudioCapabilities !== false) {
+            const capabilities = analyzeDemoPageAudioCapabilities(html, currentUrl);
+            let sampleProbe = null;
+            if (options.probeAudioSamples === true && capabilities.sampleUrls.length > 0) {
+                sampleProbe = await probeAudioSampleUrls(capabilities.sampleUrls, {
+                    validateUrlImpl,
+                    requestImpl,
+                    detectProxyImpl,
+                    maxSamples: options.maxAudioSampleProbes
+                });
+            }
+            const spaceStatuses = [];
+            if (options.probeSpaceStatus === true && capabilities.spaceUrls.length > 0) {
+                for (const spaceUrl of capabilities.spaceUrls.slice(0, 2)) {
+                    spaceStatuses.push(await probeHuggingFaceSpaceStatus(spaceUrl, {
+                        validateUrlImpl,
+                        requestImpl,
+                        detectProxyImpl
+                    }));
+                }
+            }
+            audioDemo = {
+                ...capabilities,
+                ...(sampleProbe ? { sampleProbe } : {}),
+                ...(spaceStatuses.length > 0 ? { spaceStatuses } : {})
+            };
+        }
+
+        return {
+            demoUrl,
+            finalUrl: currentUrl,
+            reachable: true,
+            status: 200,
+            links,
+            audioDemo
+        };
     } catch (err) {
         console.log(`    [deep] ⚠️  访问 demo 页面失败: ${err.message}`);
         if (err.code === 'DEMO_TRANSIENT_FAILURE'
@@ -1445,16 +2036,26 @@ async function checkDemoPageForOpensource(demoUrl, options = {}) {
         }
         if (err.code === 'RESPONSE_TOO_LARGE') {
             console.log('    [deep] ℹ️  Demo 页面超过 1MB 安全上限，按确定性跳过处理');
-            return [];
+            return { demoUrl, finalUrl: demoUrl, reachable: false, status: null, links: [], audioDemo: null };
         }
         if (/非公网|localhost|不支持的公网 URL 协议|任意公网资源只允许 HTTPS|用户名或密码|重定向超过/.test(err.message)) {
-            return [];
+            return { demoUrl, finalUrl: demoUrl, reachable: false, status: null, links: [], audioDemo: null };
         }
         const transientError = new Error(`Demo 页面瞬时访问失败: ${err.message}`);
         transientError.code = 'DEMO_TRANSIENT_FAILURE';
         transientError.cause = err;
         throw transientError;
     }
+}
+
+async function checkDemoPageForOpensource(demoUrl, options = {}) {
+    const detailed = await inspectDemoPageDetailed(demoUrl, {
+        ...options,
+        analyzeAudioCapabilities: false,
+        probeAudioSamples: false,
+        probeSpaceStatus: false
+    });
+    return detailed.links;
 }
 
 function extractApiReaderResourceCandidates(analysis) {
@@ -2452,6 +3053,11 @@ module.exports = {
     isGenericMediaRootHomepage,
     hasOpenSourceLinks,
     extractDemoUrls,
+    extractHuggingFaceSpaceUrls,
+    analyzeDemoPageAudioCapabilities,
+    probeAudioSampleUrls,
+    probeHuggingFaceSpaceStatus,
+    inspectDemoPageDetailed,
     resolveMetadataResourceLinks,
     resolveDemoPageCandidates,
     isMetadataResourceDiscoveryLink,

@@ -377,6 +377,11 @@ const {
     isTransientDemoHttpStatus,
     hasOpenSourceLinks,
     extractDemoUrls,
+    extractHuggingFaceSpaceUrls,
+    analyzeDemoPageAudioCapabilities,
+    probeAudioSampleUrls,
+    probeHuggingFaceSpaceStatus,
+    inspectDemoPageDetailed,
     resolveMetadataResourceLinks,
     resolveDemoPageCandidates,
     isMetadataResourceDiscoveryLink,
@@ -7429,15 +7434,20 @@ function validateStructuredV5ImplementationSpecs(rawSpecs, proseFormatOptions) {
         });
     };
     if (!rawSpecs || typeof rawSpecs !== 'object' || Array.isArray(rawSpecs)) {
-        fail('读者文章 implementationSpecs 必须是包含 6 个规定字段的对象');
+        fail('读者文章 implementationSpecs 必须是包含 6 个必需规定字段（及可选 audioSignalSpecs）的对象');
     }
+    const optionalKeys = Array.isArray(readerFormat.OPTIONAL_IMPLEMENTATION_SPEC_KEYS)
+        ? readerFormat.OPTIONAL_IMPLEMENTATION_SPEC_KEYS
+        : [];
+    const presentOptionalKeys = optionalKeys.filter(key => Object.prototype.hasOwnProperty.call(rawSpecs, key));
+    const expectedKeys = [...readerFormat.IMPLEMENTATION_SPEC_KEYS, ...presentOptionalKeys];
     try {
-        assertExactObjectKeys(rawSpecs, readerFormat.IMPLEMENTATION_SPEC_KEYS, '读者文章 implementationSpecs');
+        assertExactObjectKeys(rawSpecs, expectedKeys, '读者文章 implementationSpecs');
     } catch (error) {
         fail(error.message);
     }
     const normalized = {};
-    for (const key of readerFormat.IMPLEMENTATION_SPEC_KEYS) {
+    for (const key of expectedKeys) {
         const rawValue = rawSpecs[key];
         if (typeof rawValue !== 'string' || !rawValue.trim()) {
             fail(`读者文章 implementationSpecs.${key} 必须是 4–550 非空字符的单行纯文本摘要（原文未提及请写“原文未披露”）`);
@@ -13418,15 +13428,26 @@ function buildApiReaderBaseFingerprint(
 // manifest 必须显式传入：核验旧记录时读的是它，而不是 paper 上可能尚未同步的
 // 副本，否则会按错误的版本重算插图指纹。
 function buildRecoveryFingerprints(paper, textForAnalysis, arxivId, manifest = paper?.analysisManifest) {
+    const demoProjectPages = resolveDemoPageCandidates(paper, '');
+    const demoMetadataLinks = resolveMetadataResourceLinks(paper);
+    const demoScanV4Fingerprint = stableFingerprint({
+        implementation: 'demo-link-scan-v4-huggingface-project-metadata-modelscope',
+        projectPages: demoProjectPages,
+        metadataResourceLinks: demoMetadataLinks
+    });
+    const demoScanV5Fingerprint = stableFingerprint({
+        implementation: 'demo-link-scan-v5-audio-demo-probe',
+        projectPages: demoProjectPages,
+        metadataResourceLinks: demoMetadataLinks
+    });
+    const demoLinkScanFingerprint = manifest?.stages?.demoLinkScan?.fingerprint === demoScanV4Fingerprint
+        ? demoScanV4Fingerprint
+        : demoScanV5Fingerprint;
     return {
         primaryAnalysis: buildPrimaryAnalysisBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'primaryAnalysis'),
             paper, textForAnalysis, arxivId, manifest?.stages?.primaryAnalysis || {}),
-        demoLinkScan: stableFingerprint({
-            implementation: 'demo-link-scan-v4-huggingface-project-metadata-modelscope',
-            projectPages: resolveDemoPageCandidates(paper, ''),
-            metadataResourceLinks: resolveMetadataResourceLinks(paper)
-        }),
+        demoLinkScan: demoLinkScanFingerprint,
         apiReaderArticle: buildApiReaderBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'apiReaderArticle'),
             textStageRepairPromptTextContract(paper, manifest), arxivId,
@@ -19349,44 +19370,112 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         }
     }
 
-    // 先读取元数据中的资源链接；正文尚无开源链接时，再检查演示页、项目页或仓库 README。
+    // 先读取元数据中的资源链接；正文尚无开源链接时检查演示页/项目页/仓库 README 发现开源链接，
+    // 同时对已发现的音频演示页与 HuggingFace Space 执行轻量音频试听能力与运行态探测（demoLinkScan-v5）。
     let demoFoundLinks = resolveMetadataResourceLinks(paper);
     if (!isRecoveryStageComplete(analysisManifest, 'demoLinkScan')) {
         let demoScanError = null;
         const demoScanFailures = [];
+        const audioDemoProbes = [];
         try {
-            if (!hasOpenSourceLinks(analysis)) {
-                const demoUrls = resolveDemoPageCandidates(paper, analysis);
-                if (demoUrls.length > 0) {
-                    console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接...`);
-                    const allOpenSourceLinks = [...demoFoundLinks];
-                    for (const url of demoUrls.slice(0, 3)) { // 最多检查 3 个
+            const hasPrimaryOpenSource = hasOpenSourceLinks(analysis);
+            const demoUrls = resolveDemoPageCandidates(paper, analysis);
+            const hfSpaceUrls = extractHuggingFaceSpaceUrls(analysis);
+            if (!hasPrimaryOpenSource && demoUrls.length > 0) {
+                console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接与音频演示能力...`);
+                const allOpenSourceLinks = [...demoFoundLinks];
+                for (const url of demoUrls.slice(0, 3)) { // 最多检查 3 个
+                    try {
+                        let isRawReadme = false;
                         try {
-                            let allowProjectPageRepos = true;
-                            try {
-                                allowProjectPageRepos = new URL(url).hostname.toLowerCase() !== 'raw.githubusercontent.com';
-                            } catch (_) {
-                                allowProjectPageRepos = false;
-                            }
-                            const links = (await checkDemoPageForOpensource(url))
-                                .filter(link => isMetadataResourceDiscoveryLink(paper, link, { allowProjectPageRepos }));
-                            allOpenSourceLinks.push(...links);
-                        } catch (e) {
-                            if (e?.code !== 'DEMO_TRANSIENT_FAILURE') throw e;
-                            // Demo 是否可用只是补充证据。失败照旧记进阶段清单，但不能
-                            // 因为 demo 挂了，就把一篇本来完整的论文变成永远失败的
-                            // 分析。
-                            demoScanFailures.push({ url, error: e.message });
-                            console.log(`    [deep] ℹ️  Demo 暂不可达，按 unavailable 记录并继续: ${url}`);
+                            isRawReadme = new URL(url).hostname.toLowerCase() === 'raw.githubusercontent.com';
+                        } catch (_) {
+                            isRawReadme = true;
                         }
-                    }
-                    demoFoundLinks = [...new Set(allOpenSourceLinks)];
-                    if (allOpenSourceLinks.length > 0) {
-                        console.log(`    [deep] ✅ 从 demo 页面发现 ${demoFoundLinks.length} 个开源链接`);
-                    } else {
-                        console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
+                        const allowProjectPageRepos = !isRawReadme;
+                        const detail = await inspectDemoPageDetailed(url, {
+                            probeAudioSamples: !isRawReadme,
+                            probeSpaceStatus: !isRawReadme
+                        });
+                        const links = detail.links
+                            .filter(link => isMetadataResourceDiscoveryLink(paper, link, { allowProjectPageRepos }));
+                        allOpenSourceLinks.push(...links);
+                        if (detail.audioDemo && (
+                            detail.audioDemo.audioTagCount > 0
+                            || detail.audioDemo.audioSampleCount > 0
+                            || detail.audioDemo.hasBaselineComparison
+                            || (Array.isArray(detail.audioDemo.spaceStatuses) && detail.audioDemo.spaceStatuses.length > 0)
+                        )) {
+                            audioDemoProbes.push({
+                                url: detail.finalUrl || url,
+                                ...(detail.finalUrl && detail.finalUrl !== url ? { originalUrl: url } : {}),
+                                reachable: detail.reachable,
+                                ...detail.audioDemo
+                            });
+                        }
+                    } catch (e) {
+                        if (e?.code !== 'DEMO_TRANSIENT_FAILURE') throw e;
+                        // Demo 是否可用只是补充证据。失败照旧记进阶段清单，但不能
+                        // 因为 demo 挂了，就把一篇本来完整的论文变成永远失败的
+                        // 分析。
+                        demoScanFailures.push({ url, error: e.message });
+                        console.log(`    [deep] ℹ️  Demo 暂不可达，按 unavailable 记录并继续: ${url}`);
                     }
                 }
+                demoFoundLinks = [...new Set(allOpenSourceLinks)];
+                if (allOpenSourceLinks.length > 0) {
+                    console.log(`    [deep] ✅ 从 demo 页面发现 ${demoFoundLinks.length} 个开源链接`);
+                } else {
+                    console.log(`    [deep] ℹ️  demo 页面未发现开源链接`);
+                }
+            } else if (hasPrimaryOpenSource) {
+                const audioPageCandidates = demoUrls.filter(u => {
+                    try { return new URL(u).hostname.toLowerCase() !== 'raw.githubusercontent.com'; }
+                    catch (_) { return false; }
+                }).slice(0, 2);
+                for (const url of audioPageCandidates) {
+                    try {
+                        const detail = await inspectDemoPageDetailed(url, {
+                            probeAudioSamples: true,
+                            probeSpaceStatus: true
+                        });
+                        if (detail.audioDemo && (
+                            detail.audioDemo.audioTagCount > 0
+                            || detail.audioDemo.audioSampleCount > 0
+                            || detail.audioDemo.hasBaselineComparison
+                            || (Array.isArray(detail.audioDemo.spaceStatuses) && detail.audioDemo.spaceStatuses.length > 0)
+                        )) {
+                            audioDemoProbes.push({
+                                url: detail.finalUrl || url,
+                                ...(detail.finalUrl && detail.finalUrl !== url ? { originalUrl: url } : {}),
+                                reachable: detail.reachable,
+                                ...detail.audioDemo
+                            });
+                        }
+                    } catch (e) {
+                        if (e?.code !== 'DEMO_TRANSIENT_FAILURE') throw e;
+                        demoScanFailures.push({ url, error: e.message });
+                    }
+                }
+            }
+            const alreadyProbedSpaces = new Set(
+                audioDemoProbes.flatMap(p => (p.spaceStatuses || []).map(s => s.spaceUrl))
+            );
+            for (const spaceUrl of hfSpaceUrls.slice(0, 2)) {
+                if (alreadyProbedSpaces.has(spaceUrl)) continue;
+                const status = await probeHuggingFaceSpaceStatus(spaceUrl);
+                audioDemoProbes.push({
+                    url: spaceUrl,
+                    reachable: status.ok,
+                    audioTagCount: 0,
+                    audioSampleCount: 0,
+                    sampleUrls: [],
+                    audioFormats: [],
+                    hasBaselineComparison: false,
+                    comparisonSystems: [],
+                    spaceUrls: [spaceUrl],
+                    spaceStatuses: [status]
+                });
             }
         } catch (e) {
             demoScanError = e;
@@ -19406,6 +19495,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             markRecoveryStage(analysisManifest, 'demoLinkScan', 'complete', {
                 linksFound: demoFoundLinks.length,
                 discoveredLinks: demoFoundLinks,
+                ...(audioDemoProbes.length > 0 ? { audioDemoProbes } : {}),
                 unavailable: demoScanFailures,
                 fingerprint: recoveryFingerprints.demoLinkScan
             });
@@ -22053,6 +22143,11 @@ module.exports = {
     sanitizeLogField,
     cleanGapFillPrefix,
     checkDemoPageForOpensource,
+    inspectDemoPageDetailed,
+    analyzeDemoPageAudioCapabilities: publicResourceProbe.analyzeDemoPageAudioCapabilities,
+    probeAudioSampleUrls: publicResourceProbe.probeAudioSampleUrls,
+    probeHuggingFaceSpaceStatus,
+    extractHuggingFaceSpaceUrls,
     invalidateSourceBoundImageRecovery,
     discardInvalidImageSupplement,
     classifyImageDiscoveryStatus,
