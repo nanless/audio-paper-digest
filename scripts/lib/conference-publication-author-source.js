@@ -125,9 +125,22 @@ function verifyPublicationAuthorSources({ runtimeRoot, state, completion }) {
             || hash(loaded.source.sourceDetails.text) !== sealed.text.sha256) fail(`${paperId} 分析来源快照不一致`);
         const paper = loaded.analysis.papers[0];
         const raw = metadata.authors || metadata.author || [];
-        const names = Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' ? raw.split(/\s*;\s*/).filter(Boolean) : [];
-        if (!names.length || names.some(name => !name.trim()) || !same(paper.authors, names)
-            || !authors.canReuseReaderAuthorInputs(paper, loaded.source.sourceDetails)) fail(`${paperId} 作者未从官方姓名全集与封存全文重放`);
+        const names = Array.isArray(raw)
+            ? raw.map(entry => {
+                if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+                    return typeof entry.name === 'string' ? entry.name.trim() : '';
+                }
+                return typeof entry === 'string' ? entry.trim() : '';
+            })
+            : typeof raw === 'string' ? raw.split(/\s*;\s*/).map(s => s.trim()).filter(Boolean) : [];
+        const officialMetadataAuthors = require('./reader-author-parser.js').extractOfficialConferenceMetadataAuthors(metadata, metadataSha);
+        if (!names.length || names.some(name => !name) || !same(paper.authors, names)
+            || !authors.canReuseReaderAuthorInputs(paper, loaded.source.sourceDetails, {
+                pdfBytes: official.bytes,
+                expectedPdfSha256: sealed.pdf.sha256,
+                officialMetadataAuthors,
+                expectedMetadataSha256: metadataSha
+            })) fail(`${paperId} 作者未从官方姓名全集与封存全文重放`);
         return { paperId, analysisSha256: loaded.analysisFileSha256,
             completionReceiptSha256: loaded.run.completionReceipt.receiptSha256,
             sourceSnapshotSha256: loaded.run.sourceSnapshotSha256, authors: paper.apiReaderAuthors.authors };

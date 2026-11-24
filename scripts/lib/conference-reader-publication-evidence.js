@@ -437,11 +437,24 @@ function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
     };
     assertUnchanged();
     const handle = Object.freeze({});
+    let parsedMetadata = null;
+    try {
+        parsedMetadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(verified.cached.metadata));
+    } catch (_) {
+        parsedMetadata = null;
+    }
+    const officialMetadataAuthors = parsedMetadata
+        ? require('./reader-author-parser.js').extractOfficialConferenceMetadataAuthors(
+            parsedMetadata, verified.bound.metadataSha256)
+        : null;
     canonicalReaderPdfSources.set(handle, { paperId: loaded.run.paperId, sourceText: loaded.source.sourceDetails.text,
         sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
         structuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
         rawStructuredArtifactsSha256: expected.rawStructuredArtifactsSha256,
-        pdfSha256: verified.bound.pdfSha256, pdf: Buffer.from(verified.cached.pdf), sourceIdentity: structuredClone(expected), assertUnchanged });
+        pdfSha256: verified.bound.pdfSha256, pdf: Buffer.from(verified.cached.pdf),
+        metadataSha256: verified.bound.metadataSha256,
+        officialMetadataAuthors,
+        sourceIdentity: structuredClone(expected), assertUnchanged });
     rememberCanonicalPdfSourceBytePins(handle, pinnedFiles, deps.discovery);
     canonicalReaderPdfRawArtifacts.set(handle, { raw: Buffer.from(verified.cached.artifacts),
         artifactsFileSha256: loaded.source.sourceSnapshotBinding.sourceBinding.artifactsFileSha256,

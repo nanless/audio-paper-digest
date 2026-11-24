@@ -12576,9 +12576,25 @@ def _validate_api_reader_author_identity(paper):
         identity_header = reader_formats.identity_header(identity, 'authors')
     except (ValueError, TypeError) as error:
         raise PublishDataValidationError('读者文章的作者来源格式头不符合要求。') from error
-    if not isinstance(identity, dict) or set(identity) != set(identity_header) | {
-            'sourceDomSha256', 'sourceTextSha256', 'metadataSha256', 'authors'}:
+    base_identity_keys = set(identity_header) | {
+        'sourceDomSha256', 'sourceTextSha256', 'metadataSha256', 'authors'}
+    is_conference_paper = not paper.get('arxivId')
+    conference_author_parser = identity.get('conferencePdfAuthorParser') if isinstance(identity, dict) else None
+    allowed_identity_keys = (
+        base_identity_keys | {'conferencePdfAuthorParser'}
+        if (is_conference_paper and conference_author_parser in {
+            'conference-pdf-author-lines-v2',
+            'conference-pdf-author-pdf-page1-v3',
+        })
+        else base_identity_keys
+    )
+    if not isinstance(identity, dict) or set(identity) != allowed_identity_keys:
         raise PublishDataValidationError('读者文章的作者来源记录格式无效、缺少必要字段，或含有不允许的字段。')
+    allowed_dom_source_kinds = (
+        {'html_dom', 'pdf_text', 'official_metadata'}
+        if (is_conference_paper and conference_author_parser == 'conference-pdf-author-pdf-page1-v3')
+        else {'html_dom', 'pdf_text'}
+    )
     identity_sha = _reader_record_sha256(identity, 'API reader 作者来源记录')
     source_sha = paper.get('sourceSha256')
     metadata_sha = _reader_record_sha256(
@@ -12618,7 +12634,7 @@ def _validate_api_reader_author_identity(paper):
         if not isinstance(name_binding, dict) \
                 or name_binding.get('sourceValue') != author['name']:
             raise PublishDataValidationError(f'第 {index + 1} 位作者缺少姓名来源记录，或记录中的姓名不一致。')
-        if name_binding.get('sourceKind') in {'html_dom', 'pdf_text'}:
+        if name_binding.get('sourceKind') in allowed_dom_source_kinds:
             if set(name_binding) != {'sourceKind', 'sourceValue', 'sourceDomSha256'} \
                     or not source_dom_sha \
                     or name_binding.get('sourceDomSha256') != source_dom_sha:
@@ -12639,7 +12655,7 @@ def _validate_api_reader_author_identity(paper):
                 raise PublishDataValidationError(
                     f'第 {index + 1} 位作者的第 {affiliation_index + 1} 个机构缺少来源记录，或机构名称不一致。'
                 )
-            if binding.get('sourceKind') in {'html_dom', 'pdf_text'}:
+            if binding.get('sourceKind') in allowed_dom_source_kinds:
                 if set(binding) != {
                         'sourceKind', 'association', 'sourceValue', 'sourceDomSha256'} \
                         or binding.get('association') not in {

@@ -196,8 +196,17 @@ function normalizedPaper(source, publicationHeader = currentHeader('conference-o
     const title = String(metadata.title || metadata.paper_title || '').trim();
     if (!title) throw new Error('conference source metadata has no title');
     const rawAuthors = metadata.authors || metadata.author || [];
-    const authors = Array.isArray(rawAuthors) ? rawAuthors.map(String)
-        : typeof rawAuthors === 'string' ? rawAuthors.split(/\s*;\s*/).filter(Boolean) : [];
+    const authors = Array.isArray(rawAuthors)
+        ? rawAuthors.map(item => {
+            if (item && typeof item === 'object' && !Array.isArray(item)) {
+                return typeof item.name === 'string' ? item.name.trim() : '';
+            }
+            return typeof item === 'string' ? item.trim() : '';
+        })
+        : typeof rawAuthors === 'string' ? rawAuthors.split(/\s*;\s*/).map(s => s.trim()).filter(Boolean) : [];
+    if (authors.some(name => !name)) {
+        throw new Error('conference source metadata contains an empty or malformed author entry');
+    }
     const optionalUrl = (value, label) => {
         if (value === undefined || value === null || value === '') return null;
         let parsed;
@@ -578,7 +587,27 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
             loaded.analysis.papers[0], loaded.source.sourceDetails)) {
             fail('旧会议模型输入清洗可能损坏 Unicode 字符，必须按已核验来源重新分析后再复用');
         }
-        if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(loaded.analysis.papers[0], loaded.source.sourceDetails)) {
+        const reuseAuthorOptions = {};
+        if (readerPdfSourceHandle) {
+            const pdfSource = contextApi.readerPdfSourceForContext(readerPdfSourceHandle);
+            if (pdfSource?.pdf) reuseAuthorOptions.pdfBytes = pdfSource.pdf;
+            if (pdfSource?.pdfSha256) reuseAuthorOptions.expectedPdfSha256 = pdfSource.pdfSha256;
+            if (pdfSource && Object.hasOwn(pdfSource, 'officialMetadataAuthors')) {
+                reuseAuthorOptions.officialMetadataAuthors = pdfSource.officialMetadataAuthors ?? null;
+            }
+            if (pdfSource?.metadataSha256) {
+                reuseAuthorOptions.expectedMetadataSha256 = pdfSource.metadataSha256;
+            }
+        }
+        const expectedPdfSha = loaded.source?.sourceSnapshotBinding?.sourceBinding?.pdfSha256 || null;
+        if (!reuseAuthorOptions.expectedPdfSha256 && expectedPdfSha) {
+            reuseAuthorOptions.expectedPdfSha256 = expectedPdfSha;
+        }
+        const expectedMetaSha = loaded.source?.sourceSnapshotBinding?.sourceBinding?.metadataSha256 || null;
+        if (!reuseAuthorOptions.expectedMetadataSha256 && expectedMetaSha) {
+            reuseAuthorOptions.expectedMetadataSha256 = expectedMetaSha;
+        }
+        if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(loaded.analysis.papers[0], loaded.source.sourceDetails, reuseAuthorOptions)) {
             fail('旧会议作者来源未通过封存全文重放，请先刷新作者或 Reader 后再复用');
         }
         const run = loaded.run.status === 'complete' && loaded.analysis.stats?.analysisStatus === 'complete'

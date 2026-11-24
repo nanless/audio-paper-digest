@@ -2001,6 +2001,17 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
     const authorsSha256 = stableSha256(authors);
     const authorIdentity = authors.identity;
     const authorIdentitySha256 = stableSha256(authorIdentity);
+    const allowOfficialMetadataAuthorSource = !paper.arxivId
+        && authorIdentity.conferencePdfAuthorParser === 'conference-pdf-author-pdf-page1-v3';
+    const validNameSourceKinds = allowOfficialMetadataAuthorSource
+        ? ['html_dom', 'pdf_text', 'official_metadata', 'paper_metadata']
+        : ['html_dom', 'pdf_text', 'paper_metadata'];
+    const validDomSourceKinds = allowOfficialMetadataAuthorSource
+        ? ['html_dom', 'pdf_text', 'official_metadata']
+        : ['html_dom', 'pdf_text'];
+    const validAffSourceKinds = allowOfficialMetadataAuthorSource
+        ? ['html_dom', 'pdf_text', 'official_metadata', 'explicit_unavailable']
+        : ['html_dom', 'pdf_text', 'explicit_unavailable'];
     const authorIdentityValid = readerIdentityFormat.hasIdentity(authorIdentity, 'authors')
         && authors.identitySha256 === authorIdentitySha256
         && authorIdentity.sourceTextSha256 === paper.sourceSha256
@@ -2020,9 +2031,9 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
                 && author.affiliations.every(value => typeof value === 'string' && value.trim().length > 0)
                 && identity.name === author.name
                 && JSON.stringify(identity.affiliations) === JSON.stringify(author.affiliations)
-                && ['html_dom', 'pdf_text', 'paper_metadata'].includes(identity.nameBinding?.sourceKind)
+                && validNameSourceKinds.includes(identity.nameBinding?.sourceKind)
                 && identity.nameBinding.sourceValue === author.name
-                && (['html_dom', 'pdf_text'].includes(identity.nameBinding.sourceKind)
+                && (validDomSourceKinds.includes(identity.nameBinding.sourceKind)
                     ? exactKeys(identity.nameBinding, ['sourceDomSha256', 'sourceKind', 'sourceValue'])
                         && identity.nameBinding.sourceDomSha256 === authorIdentity.sourceDomSha256
                         && /^[a-f0-9]{64}$/.test(String(identity.nameBinding.sourceDomSha256 || ''))
@@ -2032,8 +2043,8 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
                 && identity.affiliationBindings.length === author.affiliations.length
                 && identity.affiliationBindings.every((binding, affiliationIndex) => (
                     binding?.sourceValue === author.affiliations[affiliationIndex]
-                    && ['html_dom', 'pdf_text', 'explicit_unavailable'].includes(binding?.sourceKind)
-                    && (['html_dom', 'pdf_text'].includes(binding.sourceKind)
+                    && validAffSourceKinds.includes(binding?.sourceKind)
+                    && (validDomSourceKinds.includes(binding.sourceKind)
                         ? exactKeys(binding, ['association', 'sourceDomSha256', 'sourceKind', 'sourceValue'])
                             && ['direct_author', 'single_global_affiliation'].includes(binding.association)
                             && binding.sourceDomSha256 === authorIdentity.sourceDomSha256

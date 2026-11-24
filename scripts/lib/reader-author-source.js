@@ -8,13 +8,13 @@ const {
 } = require('./reader-author-parser.js');
 
 // 当前生产复用资格；每次仍校验原始封存来源后执行有界只读身份核对，不改变旧记录的结构成功、只读页面或历史统计。
-function canReuseReaderAuthorInputs(paper, sourceDetails = null) {
+function canReuseReaderAuthorInputs(paper, sourceDetails = null, options = {}) {
     const readerContract = paper?.analysisManifest?.contracts?.apiReaderArticle;
     if (!require('./reader-record-format').isStructuredContract(readerContract)) return true;
     const details = sourceDetails || require('./model-text-sanitization.js').currentModelInputSource(paper);
     if (!details) return false;
     try {
-        return readerAuthorIdentityMatchesSource(paper, details);
+        return readerAuthorIdentityMatchesSource(paper, details, options);
     } catch (_) {
         return false;
     }

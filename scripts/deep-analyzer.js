@@ -11771,7 +11771,9 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
-    let readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 });
+    let readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, {
+        conferencePdfAuthorParserVersion: preferredConferenceAuthorParserVersion(paper, sourceDetails)
+    });
     // A source correction can combine a new scientific main with a separately
     // authenticated signed Reader. Its author proof belongs to that Reader,
     // rather than the failed Reader stage of the selected scientific main.
@@ -12231,7 +12233,9 @@ function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
         || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
         throw new Error('刷新作者和机构信息所用的全文不能为空，其 SHA 必须同时与论文记录和来源获取记录一致。');
     }
-    const readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 });
+    const readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, {
+        conferencePdfAuthorParserVersion: preferredConferenceAuthorParserVersion(paper, sourceDetails)
+    });
     if (!readerAuthors.authors.length || !recoverySha256(readerAuthors.sourceDomSha256)) {
         throw new Error('未能取得作者列表或格式有效的来源内容 SHA，无法刷新作者和机构信息。');
     }
@@ -16815,7 +16819,8 @@ function bindStructuredArtifactsToText(structuredArtifacts, text) {
 
 const { parseArxivReaderAuthors, resolveApiReaderAuthors, bindApiReaderAuthorIdentity,
     canRetainAuthorSourceHtml, retainAuthorSourceHtml, extractAuthorHeaderHtml,
-    retainAuthorSourceHeaderHtml, resolveVerifiedReaderAuthors }
+    retainAuthorSourceHeaderHtml, resolveVerifiedReaderAuthors,
+    preferredConferenceAuthorParserVersion }
     = require('./lib/reader-author-parser.js');
 
 function prepareArxivHtmlBodyDom($) {
@@ -19159,7 +19164,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     try {
         if (sourceDetails && (sourceDetails.readerAuthors || sourceDetails.source === 'conference_pdf_text')) {
             const resolvedForPrompt = resolveVerifiedReaderAuthors(
-                paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 }
+                paper, sourceDetails, {
+                    conferencePdfAuthorParserVersion: preferredConferenceAuthorParserVersion(paper, sourceDetails)
+                }
             );
             const boundLines = (resolvedForPrompt?.authors || [])
                 .filter(a => Array.isArray(a.affiliations) && a.affiliations.some(v => v && !/^机构信息未/.test(v)))
@@ -20503,7 +20510,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             if (directContext.getDirectRewriteAnalysisContext()) {
                 directContext.assertNoPersistentFigureFields(paper.apiReaderFigures);
             }
-            paper.apiReaderAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 });
+            paper.apiReaderAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, {
+                conferencePdfAuthorParserVersion: preferredConferenceAuthorParserVersion(paper, sourceDetails)
+            });
             if (!paper.apiReaderResources
                 || paper.apiReaderResources.sourceTextSha256 !== paper.sourceSha256) {
                 paper.apiReaderResources = verifiedReaderResources;

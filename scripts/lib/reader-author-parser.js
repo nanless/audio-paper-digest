@@ -14,6 +14,9 @@ const PDF_PAGE1_AUTHOR_CONTRACT_V2 = 'pdf-page1-author-evidence-v2';
 const PDF_PAGE1_AUTHOR_CONTRACT = PDF_PAGE1_AUTHOR_CONTRACT_V2;
 const PDF_PAGE1_AUTHOR_CONTRACTS = new Set([PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2]);
 const PDF_PAGE1_AUTHOR_MODES = new Set(['markers', 'thanks', 'column_blocks', 'single_institution', 'inline_author_aff']);
+const CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3 = 'conference-pdf-author-pdf-page1-v3';
+const CONFERENCE_OFFICIAL_METADATA_AUTHOR_CONTRACT = 'conference-official-metadata-author-evidence-v1';
+const CONFERENCE_METADATA_PLACEHOLDER_AFF_RE = /^(?:n\/?a|none|null|unknown|anonymous|unspecified|[-–—_.]+)$/i;
 const MAX_PDF_AUTHOR_BYTES = 512 * 1024 * 1024;
 const METADATA_AUTHOR_SEPARATORS = new Set([':', '：', ';', '；', ',', '，', '、', '·', '|', '/', '•', '—', '–', '-']);
 const recoverySha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
@@ -2201,6 +2204,143 @@ function validatePdfPage1AuthorEvidence(evidence, expectedPdfSha256 = null) {
     ));
 }
 
+function normalizeOfficialMetadataText(value, maxLen) {
+    if (typeof value !== 'string') return '';
+    return normalizeReaderIdentityText(value.normalize('NFC')).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').slice(0, maxLen).trim();
+}
+
+function cleanOfficialMetadataAffiliations(rawAffs) {
+    const items = typeof rawAffs === 'string' ? [rawAffs] : (Array.isArray(rawAffs) ? rawAffs : []);
+    const out = [];
+    const seen = new Set();
+    for (const item of items) {
+        if (typeof item !== 'string') continue;
+        const val = normalizeOfficialMetadataText(item, 300);
+        if (!val || val.length < 2 || CONFERENCE_METADATA_PLACEHOLDER_AFF_RE.test(val)) continue;
+        const key = val.toLowerCase();
+        if (!seen.has(key)) {
+            seen.add(key);
+            out.push(val);
+        }
+    }
+    return out;
+}
+
+function extractFirstOfficialAffiliations(item, fields) {
+    for (const field of fields) {
+        if (!Object.hasOwn(item, field)) continue;
+        const affs = cleanOfficialMetadataAffiliations(item[field]);
+        if (affs.length > 0) return affs;
+    }
+    return [];
+}
+
+function extractOfficialConferenceMetadataAuthors(metadata, metadataSha256) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
+        || !recoverySha256(metadataSha256)) return null;
+    const pairs = [];
+    const rawAuthors = metadata.authors !== undefined ? metadata.authors : metadata.author;
+
+    if (Array.isArray(rawAuthors) && rawAuthors.some(item => item && typeof item === 'object' && !Array.isArray(item))) {
+        for (const item of rawAuthors) {
+            if (typeof item === 'string') {
+                const name = normalizeOfficialMetadataText(item, 200);
+                if (name) pairs.push({ name, affiliations: [] });
+                continue;
+            }
+            if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+            const name = normalizeOfficialMetadataText(typeof item.name === 'string' ? item.name : '', 200);
+            const affs = extractFirstOfficialAffiliations(item, ['affiliations', 'affiliation', 'institution', 'institutions']);
+            if (name) pairs.push({ name, affiliations: affs });
+        }
+    }
+
+    if (!pairs.some(p => p.affiliations.length > 0) && Object.hasOwn(metadata, 'authorAffiliations')) {
+        pairs.length = 0;
+        const rawMap = metadata.authorAffiliations;
+        if (Array.isArray(rawMap)) {
+            for (const item of rawMap) {
+                if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+                const name = normalizeOfficialMetadataText(typeof item.name === 'string' ? item.name : '', 200);
+                const affs = extractFirstOfficialAffiliations(item, ['affiliations', 'affiliation', 'institution', 'institutions']);
+                if (name) pairs.push({ name, affiliations: affs });
+            }
+        } else if (rawMap && typeof rawMap === 'object' && !Array.isArray(rawMap)) {
+            const normalizedMap = new Map();
+            for (const key of Object.keys(rawMap)) {
+                const normKey = normalizeOfficialMetadataText(key, 200);
+                if (!normKey) continue;
+                const affs = cleanOfficialMetadataAffiliations(rawMap[key]);
+                if (!normalizedMap.has(normKey) || (normalizedMap.get(normKey).length === 0 && affs.length > 0)) {
+                    normalizedMap.set(normKey, affs);
+                }
+            }
+            const orderedNames = [];
+            const addName = candidate => {
+                const nm = normalizeOfficialMetadataText(typeof candidate === 'string' ? candidate : '', 200);
+                if (nm && !orderedNames.includes(nm)) orderedNames.push(nm);
+            };
+            if (Array.isArray(rawAuthors)) {
+                for (const item of rawAuthors) {
+                    addName(typeof item === 'string' ? item : (item && typeof item === 'object' && !Array.isArray(item) ? item.name : ''));
+                }
+            } else if (typeof rawAuthors === 'string') {
+                for (const part of rawAuthors.split(/\s*;\s*/)) addName(part);
+            }
+            for (const key of normalizedMap.keys()) addName(key);
+            for (const nm of orderedNames) {
+                const affs = normalizedMap.get(nm) || [];
+                if (nm) pairs.push({ name: nm, affiliations: affs });
+            }
+        }
+    }
+
+    if (!pairs.some(p => p.affiliations.length > 0) && Array.isArray(rawAuthors) && Array.isArray(metadata.affiliations)
+        && rawAuthors.length > 0 && rawAuthors.length === metadata.affiliations.length) {
+        pairs.length = 0;
+        for (let i = 0; i < rawAuthors.length; i++) {
+            const entry = rawAuthors[i];
+            const name = normalizeOfficialMetadataText(
+                typeof entry === 'string' ? entry : (entry && typeof entry === 'object' && !Array.isArray(entry) ? entry.name : ''),
+                200
+            );
+            const affs = cleanOfficialMetadataAffiliations(metadata.affiliations[i]);
+            if (name) pairs.push({ name, affiliations: affs });
+        }
+    }
+
+    if (!pairs.length || !pairs.some(p => p.affiliations.length > 0)) return null;
+    const body = {
+        contract: CONFERENCE_OFFICIAL_METADATA_AUTHOR_CONTRACT,
+        metadataSha256,
+        authors: pairs
+    };
+    return {
+        ...body,
+        sourceDomSha256: stableFingerprint(body)
+    };
+}
+
+function validateOfficialConferenceMetadataAuthorEvidence(evidence, expectedMetadataSha256 = null) {
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return false;
+    const expectedKeys = ['authors', 'contract', 'metadataSha256', 'sourceDomSha256'];
+    if (JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify(expectedKeys)) return false;
+    if (evidence.contract !== CONFERENCE_OFFICIAL_METADATA_AUTHOR_CONTRACT) return false;
+    if (!recoverySha256(evidence.metadataSha256)) return false;
+    if (expectedMetadataSha256 && evidence.metadataSha256 !== expectedMetadataSha256) return false;
+    if (!Array.isArray(evidence.authors) || !evidence.authors.length) return false;
+    const validAuthors = evidence.authors.every(author => (
+        Boolean(author && typeof author === 'object' && !Array.isArray(author))
+        && JSON.stringify(Object.keys(author).sort()) === JSON.stringify(['affiliations', 'name'])
+        && typeof author.name === 'string' && author.name.trim().length > 0
+        && Array.isArray(author.affiliations)
+        && author.affiliations.every(aff => typeof aff === 'string' && aff.trim().length > 0)
+    ));
+    if (!validAuthors || !evidence.authors.some(author => author.affiliations.length > 0)) return false;
+    const { sourceDomSha256, ...body } = evidence;
+    return recoverySha256(sourceDomSha256) && sourceDomSha256 === stableFingerprint(body);
+}
+
 function extractPdfPage1AuthorsSync(pdfBytes, options = {}) {
     const requestedContract = options?.contract || PDF_PAGE1_AUTHOR_CONTRACT;
     if (!PDF_PAGE1_AUTHOR_CONTRACTS.has(requestedContract)) {
@@ -2311,27 +2451,43 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
         typeof author === 'string' ? author : author?.name
     )).map(normalizeName).filter(Boolean);
 
-    // If a verified PDF Page-1 fallback is attached alongside HTML readerAuthors, prefer it whenever
-    // HTML failed to align with paper metadata OR left authors unbound while PDF Page-1 binds strictly more authors.
-    const pdfFallback = parsed?.pdfPage1Authors && validatePdfPage1AuthorEvidence(parsed.pdfPage1Authors)
-        ? parsed.pdfPage1Authors : null;
-    if (pdfFallback) {
-        const primaryNames = names.length > 0 ? names : (Array.isArray(parsed?.authors) ? parsed.authors.map(a => normalizeName(a?.name)).filter(Boolean) : []);
-        const primaryAlign = Array.isArray(parsed?.authors) && parsed.authors.length > 0
-            ? alignAuthorNames1to1(primaryNames, parsed.authors) : null;
-        const pdfAlign = names.length > 0
-            ? alignAuthorNames1to1(names, pdfFallback.authors)
-            : new Map(pdfFallback.authors.map((a, idx) => [idx, a]));
-        const knownIndex = buildKnownAuthorIndex([...primaryNames, ...(parsed?.authors || []).map(a => a?.name), ...pdfFallback.authors.map(a => a?.name)]);
-        const primaryBound = primaryAlign ? countAlignedBoundAuthors(primaryNames, primaryAlign, knownIndex) : -1;
-        const pdfTargetNames = names.length > 0 ? names : pdfFallback.authors.map(a => a.name);
-        const pdfBound = pdfAlign ? countAlignedBoundAuthors(pdfTargetNames, pdfAlign, knownIndex) : -1;
-        const pdfWinsTieByQuality = pdfBound > 0 && pdfBound === primaryBound
-            && scoreAlignedAffiliationQuality(pdfTargetNames, pdfAlign, knownIndex)
-                > scoreAlignedAffiliationQuality(primaryNames, primaryAlign, knownIndex) + 2;
-        if ((pdfBound > primaryBound && pdfBound > 0) || pdfWinsTieByQuality) {
-            activeDetails = { ...sourceDetails, readerAuthors: pdfFallback };
-            parsed = pdfFallback;
+    // If a verified PDF Page-1 fallback (or conference v3 PDF Page-1 / official metadata candidate) is attached,
+    // prefer whichever candidate binds strictly more authors (or ties with clearly higher affiliation quality).
+    const candidateFallbacks = [];
+    if (parsed?.pdfPage1Authors && validatePdfPage1AuthorEvidence(parsed.pdfPage1Authors)) {
+        candidateFallbacks.push(parsed.pdfPage1Authors);
+    }
+    if (Array.isArray(activeDetails?._verifiedConferenceAuthorCandidates)) {
+        for (const cand of activeDetails._verifiedConferenceAuthorCandidates) {
+            if (!cand || cand === parsed) continue;
+            if (validatePdfPage1AuthorEvidence(cand) || validateOfficialConferenceMetadataAuthorEvidence(cand)) {
+                candidateFallbacks.push(cand);
+            }
+        }
+    }
+    for (const candidate of candidateFallbacks) {
+        const currentNames = names.length > 0
+            ? names
+            : (Array.isArray(parsed?.authors) ? parsed.authors.map(a => normalizeName(a?.name)).filter(Boolean) : []);
+        const currentAlign = Array.isArray(parsed?.authors) && parsed.authors.length > 0
+            ? alignAuthorNames1to1(currentNames, parsed.authors) : null;
+        const candAlign = names.length > 0
+            ? alignAuthorNames1to1(names, candidate.authors)
+            : new Map(candidate.authors.map((a, idx) => [idx, a]));
+        const knownIndex = buildKnownAuthorIndex([
+            ...currentNames,
+            ...(parsed?.authors || []).map(a => a?.name),
+            ...candidate.authors.map(a => a?.name)
+        ]);
+        const currentBound = currentAlign ? countAlignedBoundAuthors(currentNames, currentAlign, knownIndex) : -1;
+        const candTargetNames = names.length > 0 ? names : candidate.authors.map(a => a.name);
+        const candBound = candAlign ? countAlignedBoundAuthors(candTargetNames, candAlign, knownIndex) : -1;
+        const candWinsTieByQuality = candBound > 0 && candBound === currentBound
+            && scoreAlignedAffiliationQuality(candTargetNames, candAlign, knownIndex)
+                > scoreAlignedAffiliationQuality(currentNames, currentAlign, knownIndex) + 2;
+        if ((candBound > currentBound && candBound > 0) || candWinsTieByQuality) {
+            activeDetails = { ...activeDetails, readerAuthors: candidate };
+            parsed = candidate;
         }
     }
 
@@ -2404,8 +2560,11 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
     const sourceDomSha256 = sourceDetails?.readerAuthors?.sourceDomSha256;
     const isConferencePdf = sourceDetails?.source === 'conference_pdf_text';
     const isPdfPage1 = PDF_PAGE1_AUTHOR_CONTRACTS.has(sourceDetails?.readerAuthors?.contract);
+    const isOfficialMetadata = sourceDetails?.readerAuthors?.contract === CONFERENCE_OFFICIAL_METADATA_AUTHOR_CONTRACT;
     const isPdfSource = isConferencePdf || isPdfPage1;
-    if (isConferencePdf && sourceDetails?.readerAuthors) {
+    const expectedConferencePdfSha = isConferencePdf && recoverySha256(sourceDetails?.structuredArtifacts?.sourceHtmlSha256)
+        ? sourceDetails.structuredArtifacts.sourceHtmlSha256 : null;
+    if (isConferencePdf && !isPdfPage1 && !isOfficialMetadata && sourceDetails?.readerAuthors) {
         const evidence = sourceDetails.readerAuthors;
         if (evidence.sourceTextSha256 !== sourceTextSha256
             || typeof evidence.sourceEvidence !== 'string'
@@ -2415,8 +2574,11 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
             throw new Error('会议 PDF 的作者证据与全文哈希不一致，或者引文缺失、格式无效、哈希不一致或没有完整出现在已保存全文中。');
         }
     }
-    if (isPdfPage1 && !validatePdfPage1AuthorEvidence(sourceDetails.readerAuthors)) {
+    if (isPdfPage1 && !validatePdfPage1AuthorEvidence(sourceDetails.readerAuthors, expectedConferencePdfSha)) {
         throw new Error('PDF 首页作者证据的 PDF 哈希、引文哈希或 DOM 哈希无效。');
+    }
+    if (isOfficialMetadata && !validateOfficialConferenceMetadataAuthorEvidence(sourceDetails.readerAuthors)) {
+        throw new Error('会议官方元数据作者证据的元数据哈希或 DOM 哈希无效。');
     }
     const isUnavailable = value => /^机构信息未/.test(String(value || ''));
     const resolvedAuthors = Array.isArray(resolved?.authors) ? resolved.authors : [];
@@ -2455,9 +2617,10 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
             parsed = matches.length === 1 && sameNamedCount === 1
                 && metadataCount <= 1 ? matches[0] : null;
         }
+        const resolvedSourceKind = isOfficialMetadata ? 'official_metadata' : (isPdfSource ? 'pdf_text' : 'html_dom');
         const nameBinding = parsed && recoverySha256(sourceDomSha256)
             ? {
-                sourceKind: isPdfSource ? 'pdf_text' : 'html_dom',
+                sourceKind: resolvedSourceKind,
                 // 来源 DOM 中的作者姓名可能全部大写，而元数据和读者文章使用正常大小写。
                 // 此处保存读者文章中的姓名，同时保留来源 DOM 的 SHA，以便核对同一作者。
                 sourceValue: author.name,
@@ -2478,7 +2641,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
                 throw new Error(`作者 ${author.name} 的机构“${affiliation}”缺少对应的来源机构记录，或来源内容 SHA 格式无效。`);
             }
             return {
-                sourceKind: isPdfSource ? 'pdf_text' : 'html_dom',
+                sourceKind: resolvedSourceKind,
                 association: 'direct_author',
                 sourceValue: affiliation,
                 sourceDomSha256
@@ -3186,10 +3349,131 @@ function replayHtmlReaderAuthors(details) {
     return null;
 }
 
-function verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion = 1, verifyOnlyBundleAuthors = false } = {}) {
-    if (![1,2].includes(conferencePdfAuthorParserVersion)) throw new Error('Unknown conference author parser version');
+function resolveAuthenticatedConferenceSource(details, explicitPdfBytes = null, explicitExpectedPdfSha = null) {
+    const expectedPdfSha = recoverySha256(details?.structuredArtifacts?.sourceHtmlSha256)
+        ? details.structuredArtifacts.sourceHtmlSha256 : null;
+    const callerPdfSha = recoverySha256(explicitExpectedPdfSha) ? explicitExpectedPdfSha : null;
+    let activeProvider = null;
+    try {
+        const activeConf = require('./conference-analysis-context.js').getConferenceAnalysisContext();
+        if (activeConf?.readerPdfSourceHandle) {
+            const provider = require('./conference-source-context.js').readerPdfSourceForContext(
+                activeConf.readerPdfSourceHandle
+            );
+            const expectedArtSha = recoverySha256(details?.structuredArtifacts?.payloadSha256)
+                ? details.structuredArtifacts.payloadSha256 : null;
+            if (provider && provider.paperId === details?.sourceId
+                && provider.sourceText === details?.text
+                && (!expectedArtSha || provider.structuredArtifactsSha256 === expectedArtSha)) {
+                const provPdfSha = recoverySha256(provider.pdfSha256) ? provider.pdfSha256 : null;
+                if (!expectedPdfSha || !provPdfSha || expectedPdfSha === provPdfSha) {
+                    activeProvider = provider;
+                }
+            }
+        }
+    } catch (_) {
+        // Outside authenticated conference context or mock fixture without PDF handle.
+    }
+    const providerPdfSha = recoverySha256(activeProvider?.pdfSha256) ? activeProvider.pdfSha256 : null;
+    const distinctPins = new Set([expectedPdfSha, providerPdfSha, callerPdfSha].filter(Boolean));
+    if (distinctPins.size > 1) {
+        return {
+            pdfBytes: null,
+            expectedPdfSha: null,
+            hasAuthenticatedMetadata: false,
+            metadataSha256: null,
+            officialMetadataAuthors: null
+        };
+    }
+    const pinnedPdfSha = distinctPins.size === 1 ? [...distinctPins][0] : null;
+    let pdfBytes = null;
+    if (Buffer.isBuffer(explicitPdfBytes) && explicitPdfBytes.length >= 256) {
+        if (pinnedPdfSha && sha256(explicitPdfBytes) === pinnedPdfSha) {
+            pdfBytes = explicitPdfBytes;
+        }
+    } else if (activeProvider && Buffer.isBuffer(activeProvider.pdf)
+        && pinnedPdfSha && sha256(activeProvider.pdf) === pinnedPdfSha) {
+        pdfBytes = activeProvider.pdf;
+    }
+    return {
+        pdfBytes,
+        expectedPdfSha: pinnedPdfSha,
+        hasAuthenticatedMetadata: Boolean(activeProvider && recoverySha256(activeProvider.metadataSha256)),
+        metadataSha256: recoverySha256(activeProvider?.metadataSha256) ? activeProvider.metadataSha256 : null,
+        officialMetadataAuthors: activeProvider?.officialMetadataAuthors ?? null
+    };
+}
+
+function resolveAuthenticatedConferencePdfBytes(details, explicitPdfBytes = null, explicitExpectedPdfSha = null) {
+    const resolved = resolveAuthenticatedConferenceSource(details, explicitPdfBytes, explicitExpectedPdfSha);
+    return { pdfBytes: resolved.pdfBytes, expectedPdfSha: resolved.expectedPdfSha };
+}
+
+function resolveAuthenticatedOfficialMetadataAuthors(authSource, options = {}) {
+    const expectedSha = recoverySha256(options?.expectedMetadataSha256)
+        ? options.expectedMetadataSha256
+        : (authSource?.metadataSha256 || null);
+    if (options && Object.hasOwn(options, 'officialMetadataAuthors')) {
+        // Explicit caller-authenticated metadata (e.g. from verified official metadata bytes).
+        // Explicit `null` means verified official metadata has NO affiliations — forbid fallback!
+        const candidate = options.officialMetadataAuthors;
+        if (!candidate || !expectedSha) return null;
+        return validateOfficialConferenceMetadataAuthorEvidence(candidate, expectedSha)
+            ? structuredClone(candidate) : null;
+    }
+    if (authSource?.hasAuthenticatedMetadata && authSource.officialMetadataAuthors && expectedSha) {
+        return validateOfficialConferenceMetadataAuthorEvidence(authSource.officialMetadataAuthors, expectedSha)
+            ? structuredClone(authSource.officialMetadataAuthors) : null;
+    }
+    return null;
+}
+
+function preferredConferenceAuthorParserVersion(paper, details, options = {}) {
+    if (details?.source !== 'conference_pdf_text') return 2;
+    const savedVersion = paper?.apiReaderAuthors?.identity?.conferencePdfAuthorParser;
+    if (savedVersion === CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3) return 3;
+    const authSource = resolveAuthenticatedConferenceSource(
+        details,
+        options.pdfBytes || null,
+        options.expectedPdfSha256 || null
+    );
+    if (authSource.pdfBytes) return 3;
+    if (resolveAuthenticatedOfficialMetadataAuthors(authSource, options)) return 3;
+    return 2;
+}
+
+function verifiedReaderAuthorDetails(details, options = {}) {
+    const {
+        conferencePdfAuthorParserVersion = 1,
+        verifyOnlyBundleAuthors = false,
+        pdfBytes = null,
+        expectedPdfSha256 = null
+    } = options;
+    if (![1, 2, 3].includes(conferencePdfAuthorParserVersion)) {
+        throw new Error('Unknown conference author parser version');
+    }
     let readerAuthors = details?.source === 'conference_pdf_text'
-        ? (conferencePdfAuthorParserVersion===2?parseConferencePdfAuthorsV2(details.text):parseConferencePdfAuthors(details.text)) : replayHtmlReaderAuthors(details);
+        ? (conferencePdfAuthorParserVersion >= 2 ? parseConferencePdfAuthorsV2(details.text) : parseConferencePdfAuthors(details.text))
+        : replayHtmlReaderAuthors(details);
+    let verifiedConferenceCandidates = null;
+    if (details?.source === 'conference_pdf_text' && conferencePdfAuthorParserVersion === 3) {
+        const authSource = resolveAuthenticatedConferenceSource(details, pdfBytes, expectedPdfSha256);
+        let pdfPage1 = null;
+        if (authSource.pdfBytes && authSource.expectedPdfSha) {
+            const extracted = extractPdfPage1AuthorsSync(authSource.pdfBytes, { contract: PDF_PAGE1_AUTHOR_CONTRACT_V2 });
+            if (extracted && validatePdfPage1AuthorEvidence(extracted, authSource.expectedPdfSha)) {
+                pdfPage1 = extracted;
+            }
+        }
+        const officialMeta = resolveAuthenticatedOfficialMetadataAuthors(authSource, options);
+        const candidates = [pdfPage1, officialMeta].filter(Boolean);
+        if (!readerAuthors && candidates.length > 0) {
+            readerAuthors = candidates[0];
+        }
+        if (candidates.length > 0) {
+            verifiedConferenceCandidates = candidates;
+        }
+    }
     if (details?.source === 'html' || details?.source === 'pdf') {
         // Authenticate the unchanged four-file bundle before inspecting its derived/PDF-page1 author proof.
         // Plain JSON and caller-supplied details never acquire this source capability.
@@ -3216,17 +3500,40 @@ function verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion
             readerAuthors = { ...readerAuthors, pdfPage1Authors: bundleAuthors.pdfPage1Authors };
         }
     }
-    return { ...details, readerAuthors: readerAuthors || null };
+    return {
+        ...details,
+        readerAuthors: readerAuthors || null,
+        ...(verifiedConferenceCandidates ? { _verifiedConferenceAuthorCandidates: verifiedConferenceCandidates } : {})
+    };
 }
 
 function resolveVerifiedReaderAuthors(paper, details, options = {}) {
-    const savedVersion=paper?.apiReaderAuthors?.identity?.conferencePdfAuthorParser;
-    if(savedVersion!==undefined&&savedVersion!==CONFERENCE_PDF_AUTHOR_LINES_V2)throw new Error('Unknown saved conference author parser');
-    const version=options.conferencePdfAuthorParserVersion ?? (savedVersion===CONFERENCE_PDF_AUTHOR_LINES_V2?2:1);
-    const resolved=resolveApiReaderAuthors(paper,verifiedReaderAuthorDetails(details,{conferencePdfAuthorParserVersion:version}));
-    if(details?.source==='conference_pdf_text'&&version===2) {
-        resolved.identity.conferencePdfAuthorParser=CONFERENCE_PDF_AUTHOR_LINES_V2;
-        resolved.identitySha256=stableFingerprint(resolved.identity);
+    const savedVersion = paper?.apiReaderAuthors?.identity?.conferencePdfAuthorParser;
+    if (savedVersion !== undefined
+        && savedVersion !== CONFERENCE_PDF_AUTHOR_LINES_V2
+        && savedVersion !== CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3) {
+        throw new Error('Unknown saved conference author parser');
+    }
+    const version = options.conferencePdfAuthorParserVersion
+        ?? (savedVersion === CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3 ? 3
+            : (savedVersion === CONFERENCE_PDF_AUTHOR_LINES_V2 ? 2 : 1));
+    const verifiedOptions = {
+        conferencePdfAuthorParserVersion: version,
+        pdfBytes: options.pdfBytes || null,
+        expectedPdfSha256: options.expectedPdfSha256 || null,
+        expectedMetadataSha256: options.expectedMetadataSha256 || null
+    };
+    if (Object.hasOwn(options, 'officialMetadataAuthors')) {
+        verifiedOptions.officialMetadataAuthors = options.officialMetadataAuthors;
+    }
+    const verifiedDetails = verifiedReaderAuthorDetails(details, verifiedOptions);
+    const resolved = resolveApiReaderAuthors(paper, verifiedDetails);
+    if (details?.source === 'conference_pdf_text' && version === 2) {
+        resolved.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_LINES_V2;
+        resolved.identitySha256 = stableFingerprint(resolved.identity);
+    } else if (details?.source === 'conference_pdf_text' && version === 3) {
+        resolved.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3;
+        resolved.identitySha256 = stableFingerprint(resolved.identity);
     }
     return resolved;
 }
@@ -3286,7 +3593,7 @@ function serializeMetadataAuthorsForKey(authors) {
     };
 }
 
-function readerAuthorIdentityMatchesSource(paper, details) {
+function readerAuthorIdentityMatchesSource(paper, details, options = {}) {
     if (!paper?.apiReaderAuthors) return false;
     if (!identityFormat.hasIdentity(paper.apiReaderAuthors.identity, 'authors')) return false;
     if (typeof details?.text !== 'string') return false;
@@ -3299,15 +3606,21 @@ function readerAuthorIdentityMatchesSource(paper, details) {
         || (paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256
             && paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 !== artifacts?.payloadSha256)) return false;
     const savedVersion = paper?.apiReaderAuthors?.identity?.conferencePdfAuthorParser;
-    if (savedVersion !== undefined && savedVersion !== CONFERENCE_PDF_AUTHOR_LINES_V2) {
+    if (savedVersion !== undefined
+        && savedVersion !== CONFERENCE_PDF_AUTHOR_LINES_V2
+        && savedVersion !== CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3) {
         throw new Error('Unknown saved conference author parser');
     }
-    const version = savedVersion === CONFERENCE_PDF_AUTHOR_LINES_V2 ? 2 : 1;
+    const version = savedVersion === CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3 ? 3
+        : (savedVersion === CONFERENCE_PDF_AUTHOR_LINES_V2 ? 2 : 1);
     const saved = paper.apiReaderAuthors;
     const resolveExpectedFor = candidateDetails => {
         const expected = resolveApiReaderAuthors(paper, candidateDetails);
         if (details?.source === 'conference_pdf_text' && version === 2) {
             expected.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_LINES_V2;
+            expected.identitySha256 = stableFingerprint(expected.identity);
+        } else if (details?.source === 'conference_pdf_text' && version === 3) {
+            expected.identity.conferencePdfAuthorParser = CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3;
             expected.identitySha256 = stableFingerprint(expected.identity);
         }
         expected.identity = identityFormat.inSavedHeaderDomain(expected.identity, saved.identity, 'authors');
@@ -3326,6 +3639,7 @@ function readerAuthorIdentityMatchesSource(paper, details) {
         analysisSource: candidateDetails?.analysisSource ?? null,
         sourceTextSha256,
         verifiedReaderAuthors: candidateDetails?.readerAuthors ?? null,
+        verifiedConferenceAuthorCandidates: candidateDetails?._verifiedConferenceAuthorCandidates ?? null,
         hasDerivedLegacyPdfFallback: derivedLegacyPdfFallback,
         metadataAuthors: serializeMetadataAuthorsForKey(paper?.authors),
         paperSourceSha256: paper?.sourceSha256 ?? null,
@@ -3387,7 +3701,16 @@ function readerAuthorIdentityMatchesSource(paper, details) {
     // 每次调用仍先重读并校验原始材料（HTML/全文/结构化提取 SHA，或四份封存文件的磁盘 SHA 与权限），
     // 仅对物理校验通过后的纯确定性身份比对做有界只读记忆化，避免多轮重复解析与重复打印同一警告。
     if (!verifiedDetails) {
-        verifiedDetails = verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion: version });
+        const verifiedOptions = {
+            conferencePdfAuthorParserVersion: version,
+            pdfBytes: options.pdfBytes || null,
+            expectedPdfSha256: options.expectedPdfSha256 || null,
+            expectedMetadataSha256: options.expectedMetadataSha256 || null
+        };
+        if (Object.hasOwn(options, 'officialMetadataAuthors')) {
+            verifiedOptions.officialMetadataAuthors = options.officialMetadataAuthors;
+        }
+        verifiedDetails = verifiedReaderAuthorDetails(details, verifiedOptions);
     }
     const hasDerivedLegacyPdfFallback = !details?.readerAuthors?.pdfPage1Authors
         && !PDF_PAGE1_AUTHOR_CONTRACTS.has(details?.readerAuthors?.contract)
@@ -3467,7 +3790,9 @@ module.exports = {
     normalizeReaderIdentityText, readerIdentityKey, readerIdentityTokens,
     canonicalAuthorFoldKey, alignAuthorNames1to1,
     sanitizeReaderAffiliationValue, isReaderResourceAffiliationLabel, parseArxivReaderAuthors,
-    resolveApiReaderAuthors, bindApiReaderAuthorIdentity, parseConferencePdfAuthors, parseConferencePdfAuthorsV2, CONFERENCE_PDF_AUTHOR_LINES_V2,
+    resolveApiReaderAuthors, bindApiReaderAuthorIdentity, parseConferencePdfAuthors, parseConferencePdfAuthorsV2,
+    CONFERENCE_PDF_AUTHOR_LINES_V2, CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3, CONFERENCE_OFFICIAL_METADATA_AUTHOR_CONTRACT,
+    preferredConferenceAuthorParserVersion, resolveAuthenticatedConferencePdfBytes, extractOfficialConferenceMetadataAuthors, validateOfficialConferenceMetadataAuthorEvidence,
     verifiedReaderAuthorDetails, resolveVerifiedReaderAuthors, readerAuthorIdentityMatchesSource, readerAuthorUnavailableIdentityMatches,
     MAX_AUTHOR_SOURCE_HTML_BYTES, AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES,
     PDF_PAGE1_AUTHOR_CONTRACT, PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2, PDF_PAGE1_AUTHOR_CONTRACTS,

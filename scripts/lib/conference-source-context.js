@@ -563,11 +563,17 @@ function readerPdfSourceForContext(handle) {
             ['pdfFile', 'pdfSha256', pdfApi.DEFAULT_MAX_PDF_BYTES, 'PDF取证原PDF']
         ]) readBoundBytes(stored.sourceRoot, member[field], member[hashField], limit, label);
     };
+    const officialMetadataAuthors = require('./reader-author-parser.js').extractOfficialConferenceMetadataAuthors(
+        handle.metadata,
+        handle.sourceBinding.metadataSha256
+    );
     return { paperId: handle.paperId, sourceText: handle.text,
         sourceSnapshotSha256: handle.sourceSnapshotSha256,
         structuredArtifactsSha256: effectiveArtifactsSha256,
         rawStructuredArtifactsSha256: handle.structuredArtifacts.payloadSha256,
         pdfSha256: handle.sourceBinding.pdfSha256, pdf: Buffer.from(stored.pdf),
+        metadataSha256: handle.sourceBinding.metadataSha256,
+        officialMetadataAuthors,
         sourceIdentity, assertUnchanged };
 }
 

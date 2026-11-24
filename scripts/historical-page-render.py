@@ -245,7 +245,13 @@ def render_packet(packet):
             frontmatter.extend(['## 🔗 论文资源', '', presentation['resourceBlock'], ''])
         if presentation['scoringBlock']:
             frontmatter.extend(['## 📊 评分说明', '', presentation['scoringBlock'], ''])
-        frontmatter.extend(['## 🧭 深度解读', '', article, '', '---',
+        frontmatter.extend(['## 🧭 深度解读', '', article, ''])
+        implementation_specs_block = publisher._render_api_reader_implementation_specs(
+            projected.get('apiReaderPlan')
+        )
+        if implementation_specs_block:
+            frontmatter.extend(['## ⚙️ 关键实现与复现规格', '', implementation_specs_block, ''])
+        frontmatter.extend(['---',
             f'[← 返回 {date} 语音/音乐/音频论文速递]({publisher.BASE_PATH}/posts/{date}/)', ''])
         return {
             'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)),
