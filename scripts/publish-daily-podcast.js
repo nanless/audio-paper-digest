@@ -1,0 +1,597 @@
+#!/usr/bin/env node
+'use strict';
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const {
+    CHILD_ENV_PASSTHROUGH_KEYS,
+    requireExternalRuntime,
+    loadProjectEnv
+} = require('./env-loader.js');
+const {
+    buildDailyPodcastScript,
+    DEFAULT_MAX_HIGHLIGHTS,
+    DEFAULT_BLOG_BASE_URL
+} = require('./lib/daily-podcast-script.js');
+const {
+    DEFAULT_PODCAST_GITHUB_REPO,
+    DEFAULT_RELEASE_TAG_PREFIX,
+    DEFAULT_TAG_GROUPING,
+    publishPodcastToGitHubRelease,
+    buildPodcastEpisodeMetadata,
+    buildClientPodcastFeedJson,
+    buildPodcast2ChaptersJson,
+    buildPodcastRssXml,
+    validateIsoDate,
+    validateTagPrefix,
+    validateTagGrouping
+} = require('./lib/podcast-github-release.js');
+
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const DEFAULT_ANALYSIS_INPUT = path.join(PROJECT_ROOT, 'data', 'current', 'deep-analysis-result.json');
+const PYTHON_RUNTIME_SH = path.join(__dirname, 'python-runtime.sh');
+const INDEXTTS_SYNTH_PY = path.join(__dirname, 'indextts_synth.py');
+
+const SYNTH_ALLOWED_ENV_KEYS = Object.freeze([
+    'PD_INDEXTTS_MODEL_DIR',
+    'PD_INDEXTTS_CFG_PATH',
+    'PD_INDEXTTS_VOICE_PROMPT',
+    'PD_INDEXTTS_COHOST_VOICE_PROMPT',
+    'PD_INDEXTTS_ENDPOINT',
+    'PD_INDEXTTS_API_KEY',
+    'PD_INDEXTTS_MODEL',
+    'PD_INDEXTTS_ALLOW_LOCAL_ENDPOINT'
+]);
+
+const GH_ALLOWED_ENV_KEYS = Object.freeze([
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_HOST',
+    'GH_CONFIG_DIR',
+    'XDG_CONFIG_HOME',
+    'SSH_AUTH_SOCK',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'NO_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'no_proxy'
+]);
+
+const CHECK_ENV_TIMEOUT_MS = 30000;
+const DEFAULT_SYNTH_TIMEOUT_MS = 1800000; // 30 min for long local GPU/CPU TTS runs
+
+/**
+ * Construct a strictly allowlisted child process environment.
+ * NEVER spreads raw process.env or arbitrary caller env objects.
+ */
+function pickAllowedChildEnv(sourceEnv = process.env, extraAllowedKeys = []) {
+    const out = {};
+    const allowlist = new Set([
+        ...CHILD_ENV_PASSTHROUGH_KEYS,
+        'CODEX_SANDBOX',
+        ...extraAllowedKeys
+    ]);
+    const src = sourceEnv && typeof sourceEnv === 'object' ? sourceEnv : {};
+    for (const key of allowlist) {
+        if (Object.prototype.hasOwnProperty.call(src, key) && src[key] !== undefined) {
+            out[key] = String(src[key]);
+        }
+    }
+    return out;
+}
+
+function writeFileAtomic(targetPath, content) {
+    const resolved = path.resolve(targetPath);
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    const tmp = `${resolved}.tmp.${process.pid}.${Date.now()}`;
+    try {
+        fs.writeFileSync(tmp, content, 'utf8');
+        fs.renameSync(tmp, resolved);
+    } finally {
+        if (fs.existsSync(tmp)) {
+            fs.unlinkSync(tmp);
+        }
+    }
+}
+
+function parseCliArgs(argv) {
+    const opts = {
+        date: null,
+        input: DEFAULT_ANALYSIS_INPUT,
+        outDir: null,
+        metadataOut: null,
+        rssOut: null,
+        clientFeedOut: null,
+        chaptersOut: null,
+        episodesDir: null,
+        cacheDir: null,
+        backend: 'indextts2-python',
+        device: 'auto',
+        modelDir: null,
+        cfgPath: null,
+        voicePrompt: null,
+        cohostVoicePrompt: null,
+        emoAlpha: 0.75,
+        endpoint: null,
+        httpMode: 'auto',
+        httpModel: null,
+        allowLocalEndpoint: false,
+        format: 'mp3',
+        maxHighlights: DEFAULT_MAX_HIGHLIGHTS,
+        includeCohost: true,
+        repo: null,
+        tagPrefix: null,
+        tagGrouping: null,
+        blogBaseUrl: process.env.PAPER_DIGEST_BLOG_URL || DEFAULT_BLOG_BASE_URL,
+        feedUrl: null,
+        chaptersBaseUrl: null,
+        publishedAt: null,
+        mockSecondsPerChunk: null,
+        dryRun: false,
+        localOnly: false,
+        checkEnv: false,
+        help: false
+    };
+
+    const args = Array.from(argv || []);
+    const requireValue = (flag, idx) => {
+        if (idx + 1 >= args.length) {
+            throw new Error(`Missing value for CLI flag ${flag}`);
+        }
+        return args[idx + 1];
+    };
+
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        switch (arg) {
+            case '--help':
+            case '-h':
+                opts.help = true;
+                break;
+            case '--check-env':
+                opts.checkEnv = true;
+                break;
+            case '--dry-run':
+                opts.dryRun = true;
+                break;
+            case '--local-only':
+                opts.localOnly = true;
+                break;
+            case '--allow-local-endpoint':
+                opts.allowLocalEndpoint = true;
+                break;
+            case '--single-host':
+                opts.includeCohost = false;
+                break;
+            case '--date':
+                opts.date = requireValue(arg, i++);
+                break;
+            case '--input':
+                opts.input = requireValue(arg, i++);
+                break;
+            case '--out-dir':
+                opts.outDir = requireValue(arg, i++);
+                break;
+            case '--metadata-out':
+                opts.metadataOut = requireValue(arg, i++);
+                break;
+            case '--rss-out':
+                opts.rssOut = requireValue(arg, i++);
+                break;
+            case '--client-feed-out':
+                opts.clientFeedOut = requireValue(arg, i++);
+                break;
+            case '--chapters-out':
+                opts.chaptersOut = requireValue(arg, i++);
+                break;
+            case '--episodes-dir':
+                opts.episodesDir = requireValue(arg, i++);
+                break;
+            case '--cache-dir':
+                opts.cacheDir = requireValue(arg, i++);
+                break;
+            case '--backend':
+                opts.backend = requireValue(arg, i++);
+                break;
+            case '--device':
+                opts.device = requireValue(arg, i++);
+                break;
+            case '--model-dir':
+                opts.modelDir = requireValue(arg, i++);
+                break;
+            case '--cfg-path':
+                opts.cfgPath = requireValue(arg, i++);
+                break;
+            case '--voice-prompt':
+                opts.voicePrompt = requireValue(arg, i++);
+                break;
+            case '--cohost-voice-prompt':
+                opts.cohostVoicePrompt = requireValue(arg, i++);
+                break;
+            case '--emo-alpha': {
+                const rawVal = requireValue(arg, i++);
+                const parsed = Number.parseFloat(rawVal);
+                if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1.5) {
+                    throw new Error(`Invalid --emo-alpha "${rawVal}"; expected finite number in [0, 1.5]`);
+                }
+                opts.emoAlpha = parsed;
+                break;
+            }
+            case '--endpoint':
+                opts.endpoint = requireValue(arg, i++);
+                break;
+            case '--http-mode':
+                opts.httpMode = requireValue(arg, i++);
+                break;
+            case '--http-model':
+                opts.httpModel = requireValue(arg, i++);
+                break;
+            case '--format':
+                opts.format = requireValue(arg, i++);
+                break;
+            case '--max-highlights': {
+                const rawVal = requireValue(arg, i++);
+                const parsed = Number.parseInt(rawVal, 10);
+                if (!Number.isInteger(parsed) || String(parsed) !== rawVal.trim() || parsed < 1 || parsed > 10) {
+                    throw new Error(`Invalid --max-highlights "${rawVal}"; expected integer in [1, 10]`);
+                }
+                opts.maxHighlights = parsed;
+                break;
+            }
+            case '--repo':
+                opts.repo = requireValue(arg, i++);
+                break;
+            case '--tag-prefix':
+                opts.tagPrefix = requireValue(arg, i++);
+                break;
+            case '--tag-grouping':
+                opts.tagGrouping = requireValue(arg, i++);
+                break;
+            case '--blog-base-url':
+                opts.blogBaseUrl = requireValue(arg, i++);
+                break;
+            case '--feed-url':
+                opts.feedUrl = requireValue(arg, i++);
+                break;
+            case '--chapters-base-url':
+                opts.chaptersBaseUrl = requireValue(arg, i++);
+                break;
+            case '--published-at':
+                opts.publishedAt = requireValue(arg, i++);
+                break;
+            case '--mock-seconds-per-chunk': {
+                const rawVal = requireValue(arg, i++);
+                const parsed = Number.parseFloat(rawVal);
+                if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 60) {
+                    throw new Error(`Invalid --mock-seconds-per-chunk "${rawVal}"; expected finite number in (0, 60]`);
+                }
+                opts.mockSecondsPerChunk = parsed;
+                break;
+            }
+            default:
+                if (arg.startsWith('-')) {
+                    throw new Error(`Unknown CLI flag: ${arg}`);
+                }
+                if (!opts.date && /^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+                    opts.date = arg;
+                } else {
+                    throw new Error(`Unexpected positional argument: ${arg}`);
+                }
+                break;
+        }
+    }
+    return opts;
+}
+
+function formatUsage() {
+    return [
+        'Usage: node scripts/publish-daily-podcast.js [options]',
+        '',
+        'Options:',
+        '  --date YYYY-MM-DD            Target digest date (inferred from input JSON if omitted)',
+        '  --input <path>               Path to deep-analysis-result.json',
+        '  --out-dir <dir>              Directory for generated podcast artifacts',
+        '  --metadata-out <path>        Override path for episode metadata JSON',
+        '  --rss-out <path>             Override path for Podcast 2.0 RSS XML',
+        '  --client-feed-out <path>     Override path for Wave 14.5 client feed JSON (paper-daily-podcast-feed)',
+        '  --episodes-dir <dir>         Optional directory of prior episode JSONs to merge into feeds',
+        '  --backend <mode>             indextts2-python | indextts-http | silent-mock',
+        '  --voice-prompt <wav>         Host reference WAV for IndexTTS-2.5 / 2.0',
+        '  --cohost-voice-prompt <wav>  Optional cohost reference WAV',
+        '  --repo <owner/repo>          GitHub Releases host repo (default: nanless/audio-paper-digest-blog)',
+        '  --tag-prefix <prefix>        Release tag prefix (default: podcast)',
+        '  --tag-grouping <mode>        monthly (podcast-YYYY-MM) | daily (podcast-YYYY-MM-DD)',
+        '  --dry-run                    Synthesize & write metadata/feeds without uploading via gh',
+        '  --local-only                 Local build only (skip GitHub Releases upload)',
+        '  --check-env                  Check Python, PyTorch device, IndexTTS, and ffmpeg',
+        '  --help                       Show this help text'
+    ].join('\n');
+}
+
+function buildSynthCommandArgs({ scriptPath, outputAudioPath, manifestPath, cacheDir, options }) {
+    const emoAlpha = options.emoAlpha === undefined ? 0.75 : Number(options.emoAlpha);
+    if (!Number.isFinite(emoAlpha) || emoAlpha < 0 || emoAlpha > 1.5) {
+        throw new Error(`Invalid emoAlpha: ${options.emoAlpha}`);
+    }
+    const args = [
+        PYTHON_RUNTIME_SH,
+        INDEXTTS_SYNTH_PY,
+        '--script', scriptPath,
+        '--output', outputAudioPath,
+        '--manifest-out', manifestPath,
+        '--backend', options.backend || 'indextts2-python',
+        '--device', options.device || 'auto',
+        '--emo-alpha', String(emoAlpha),
+        '--format', options.format || 'mp3'
+    ];
+    if (cacheDir) args.push('--cache-dir', cacheDir);
+    if (options.modelDir) args.push('--model-dir', options.modelDir);
+    if (options.cfgPath) args.push('--cfg-path', options.cfgPath);
+    if (options.voicePrompt) args.push('--voice-prompt', options.voicePrompt);
+    if (options.cohostVoicePrompt) args.push('--cohost-voice-prompt', options.cohostVoicePrompt);
+    if (options.endpoint) args.push('--endpoint', options.endpoint);
+    if (options.httpMode) args.push('--http-mode', options.httpMode);
+    if (options.httpModel) args.push('--http-model', options.httpModel);
+    if (options.allowLocalEndpoint) args.push('--allow-local-endpoint');
+    if (options.mockSecondsPerChunk !== null && options.mockSecondsPerChunk !== undefined
+        && Number.isFinite(Number(options.mockSecondsPerChunk))) {
+        args.push('--mock-seconds-per-chunk', String(options.mockSecondsPerChunk));
+    }
+    return args;
+}
+
+/**
+ * Load prior episode metadata JSON files from episodesDir, skipping currentDate
+ * and deduplicating by date (deterministic sorted filename order, keeping latest filename per date).
+ */
+function loadExistingEpisodes(episodesDir, currentDate) {
+    if (!episodesDir || !fs.existsSync(episodesDir)) return [];
+    const entries = fs.readdirSync(episodesDir).filter(name => name.endsWith('.json')).sort();
+    const byDate = new Map();
+    for (const name of entries) {
+        const fullPath = path.join(episodesDir, name);
+        try {
+            const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+            if (parsed
+                && parsed.contract === 'daily-podcast-episode-v1'
+                && typeof parsed.date === 'string'
+                && parsed.date !== currentDate) {
+                byDate.set(parsed.date, parsed);
+            }
+        } catch {
+            // Skip unrelated non-episode JSON files in episodesDir
+        }
+    }
+    return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date, 'en'));
+}
+
+function runCheckEnv({ execFileSyncFn = childProcess.execFileSync, env = process.env } = {}) {
+    const childEnv = pickAllowedChildEnv(env, [
+        'PD_INDEXTTS_MODEL_DIR',
+        'PD_INDEXTTS_CFG_PATH',
+        'PD_INDEXTTS_ENDPOINT'
+    ]);
+    const stdout = execFileSyncFn('bash', [PYTHON_RUNTIME_SH, INDEXTTS_SYNTH_PY, '--check-env'], {
+        cwd: PROJECT_ROOT,
+        encoding: 'utf8',
+        shell: false,
+        timeout: CHECK_ENV_TIMEOUT_MS,
+        env: childEnv,
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    return JSON.parse(String(stdout).trim());
+}
+
+/**
+ * End-to-end daily podcast orchestrator (importable for unit & integration tests).
+ */
+function runDailyPodcastPipeline(options = {}, deps = {}) {
+    const execFileSyncFn = deps.execFileSyncFn || childProcess.execFileSync;
+    const ghExecFileSyncFn = deps.ghExecFileSyncFn || execFileSyncFn;
+    const env = deps.env || process.env;
+
+    const inputPath = path.resolve(options.input || DEFAULT_ANALYSIS_INPUT);
+    if (!fs.existsSync(inputPath)) {
+        throw new Error(`Analysis input JSON not found: ${inputPath}`);
+    }
+    const analysisData = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+
+    const script = buildDailyPodcastScript(analysisData, {
+        date: options.date || undefined,
+        maxHighlights: options.maxHighlights ?? DEFAULT_MAX_HIGHLIGHTS,
+        includeCohost: options.includeCohost !== false,
+        blogBaseUrl: options.blogBaseUrl || DEFAULT_BLOG_BASE_URL,
+        roundup: options.roundup
+    });
+
+    const dateStr = validateIsoDate(script.date);
+    const tagPrefix = validateTagPrefix(
+        options.tagPrefix || env.PD_PODCAST_RELEASE_TAG_PREFIX || DEFAULT_RELEASE_TAG_PREFIX
+    );
+    const tagGrouping = validateTagGrouping(
+        options.tagGrouping || env.PD_PODCAST_RELEASE_TAG_GROUPING || DEFAULT_TAG_GROUPING
+    );
+
+    const outDir = path.resolve(
+        options.outDir || path.join(PROJECT_ROOT, 'data', 'runtime', 'daily-podcast', dateStr)
+    );
+    fs.mkdirSync(outDir, { recursive: true });
+
+    const scriptPath = path.join(outDir, `${tagPrefix}-${dateStr}.script.json`);
+    const audioBaseExt = options.format === 'wav' ? 'wav' : 'mp3';
+    const targetAudioPath = path.join(outDir, `${tagPrefix}-${dateStr}.${audioBaseExt}`);
+    const audioManifestPath = path.join(outDir, `${tagPrefix}-${dateStr}.audio-manifest.json`);
+    const cacheDir = options.cacheDir ? path.resolve(options.cacheDir) : path.join(outDir, '.indextts-cache');
+
+    writeFileAtomic(scriptPath, `${JSON.stringify(script, null, 2)}\n`);
+
+    const synthArgs = buildSynthCommandArgs({
+        scriptPath,
+        outputAudioPath: targetAudioPath,
+        manifestPath: audioManifestPath,
+        cacheDir,
+        options
+    });
+    const synthEnv = pickAllowedChildEnv(env, SYNTH_ALLOWED_ENV_KEYS);
+    execFileSyncFn('bash', synthArgs, {
+        cwd: PROJECT_ROOT,
+        encoding: 'utf8',
+        shell: false,
+        timeout: options.synthTimeoutMs || DEFAULT_SYNTH_TIMEOUT_MS,
+        env: synthEnv,
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    if (!fs.existsSync(audioManifestPath)) {
+        throw new Error(`IndexTTS synthesizer did not write audio manifest: ${audioManifestPath}`);
+    }
+    const audioManifest = JSON.parse(fs.readFileSync(audioManifestPath, 'utf8'));
+
+    const ghEnv = pickAllowedChildEnv(env, GH_ALLOWED_ENV_KEYS);
+    const releaseResult = publishPodcastToGitHubRelease({
+        date: dateStr,
+        assetPath: audioManifest.audioPath,
+        expectedSha256: audioManifest.audioSha256,
+        repo: options.repo || env.PD_PODCAST_GITHUB_REPO || DEFAULT_PODCAST_GITHUB_REPO,
+        tagPrefix,
+        tagGrouping,
+        allowWav: audioManifest.format === 'wav',
+        dryRun: options.dryRun === true,
+        localOnly: options.localOnly === true,
+        cwd: PROJECT_ROOT,
+        env,
+        ghEnv,
+        execFileSyncFn: ghExecFileSyncFn
+    });
+
+    const chaptersFileName = `${tagPrefix}-${dateStr}.chapters.json`;
+    const chaptersUrl = options.chaptersBaseUrl
+        ? `${String(options.chaptersBaseUrl).replace(/\/+$/, '')}/${chaptersFileName}`
+        : null;
+
+    const topThemesLabel = (script.topThemes || [])
+        .slice(0, 3)
+        .map(item => `${item.theme}(${item.count})`)
+        .join('、');
+    const description = topThemesLabel
+        ? `${dateStr} 共深度分析 ${script.paperCount} 篇语音/音乐/音频论文，热点方向：${topThemesLabel}。`
+        : `${dateStr} 共深度分析 ${script.paperCount} 篇语音/音乐/音频论文。`;
+
+    const episodeMetadata = buildPodcastEpisodeMetadata({
+        date: dateStr,
+        title: script.title,
+        description,
+        audioUrl: releaseResult.audioUrl,
+        audioBytes: audioManifest.audioBytes,
+        audioSha256: audioManifest.audioSha256,
+        durationSeconds: audioManifest.durationSeconds,
+        mimeType: audioManifest.mimeType,
+        ttsEngine: audioManifest.ttsEngine,
+        chapters: audioManifest.chapters,
+        episodePageUrl: script.digestUrl,
+        chaptersUrl,
+        publishedAt: options.publishedAt || `${dateStr}T08:00:00+08:00`,
+        releaseTag: releaseResult.tag,
+        githubRepo: releaseResult.repo,
+        scriptSha256: script.scriptSha256,
+        publishStatus: releaseResult.published ? 'published' : releaseResult.action
+    });
+
+    const chaptersJson = buildPodcast2ChaptersJson(episodeMetadata);
+    const chaptersPath = path.resolve(options.chaptersOut || path.join(outDir, chaptersFileName));
+    const metadataPath = path.resolve(options.metadataOut || path.join(outDir, `${tagPrefix}-${dateStr}.episode.json`));
+    const rssPath = path.resolve(options.rssOut || path.join(outDir, 'podcast.xml'));
+    const clientFeedPath = path.resolve(options.clientFeedOut || path.join(outDir, 'podcast-feed.json'));
+
+    writeFileAtomic(chaptersPath, `${JSON.stringify(chaptersJson, null, 2)}\n`);
+    writeFileAtomic(metadataPath, `${JSON.stringify(episodeMetadata, null, 2)}\n`);
+
+    const priorEpisodes = loadExistingEpisodes(options.episodesDir, dateStr);
+    const allEpisodes = [episodeMetadata, ...priorEpisodes];
+    const rssXml = buildPodcastRssXml(allEpisodes, {
+        feedUrl: options.feedUrl || 'https://nanless.github.io/audio-paper-digest-blog/podcast.xml',
+        link: String(options.blogBaseUrl || DEFAULT_BLOG_BASE_URL).replace(/\/posts\/?$/, '/')
+    });
+    writeFileAtomic(rssPath, rssXml);
+
+    const clientFeed = buildClientPodcastFeedJson(allEpisodes, {
+        generatedAt: options.generatedAt || episodeMetadata.publishedAt,
+        skipIncompatible: audioManifest.format !== 'mp3'
+    });
+    writeFileAtomic(clientFeedPath, `${JSON.stringify(clientFeed, null, 2)}\n`);
+
+    return {
+        date: dateStr,
+        scriptPath,
+        audioPath: audioManifest.audioPath,
+        audioManifestPath,
+        chaptersPath,
+        metadataPath,
+        rssPath,
+        clientFeedPath,
+        script,
+        audioManifest,
+        releaseResult,
+        episodeMetadata,
+        clientFeed,
+        episodeCountInFeed: allEpisodes.length
+    };
+}
+
+function main(argv = process.argv.slice(2)) {
+    const opts = parseCliArgs(argv);
+    if (opts.help) {
+        console.log(formatUsage());
+        return 0;
+    }
+    if (opts.checkEnv) {
+        const info = runCheckEnv();
+        console.log(JSON.stringify(info, null, 2));
+        return 0;
+    }
+    const result = runDailyPodcastPipeline(opts);
+    console.log(JSON.stringify({
+        date: result.date,
+        scriptSha256: result.script.scriptSha256,
+        audioPath: result.audioPath,
+        audioBytes: result.audioManifest.audioBytes,
+        audioSha256: result.audioManifest.audioSha256,
+        durationSeconds: result.audioManifest.durationSeconds,
+        publishStatus: result.episodeMetadata.publishStatus,
+        releaseTag: result.releaseResult.tag,
+        githubRepo: result.releaseResult.repo,
+        audioUrl: result.episodeMetadata.audioUrl,
+        metadataPath: result.metadataPath,
+        rssPath: result.rssPath,
+        clientFeedPath: result.clientFeedPath,
+        chaptersPath: result.chaptersPath
+    }, null, 2));
+    return 0;
+}
+
+if (require.main === module) {
+    requireExternalRuntime('publish-daily-podcast.js');
+    loadProjectEnv();
+    try {
+        process.exitCode = main();
+    } catch (err) {
+        console.error(`[publish-daily-podcast] ${err.message}`);
+        process.exitCode = 1;
+    }
+}
+
+module.exports = {
+    SYNTH_ALLOWED_ENV_KEYS,
+    GH_ALLOWED_ENV_KEYS,
+    pickAllowedChildEnv,
+    parseCliArgs,
+    formatUsage,
+    buildSynthCommandArgs,
+    loadExistingEpisodes,
+    runCheckEnv,
+    runDailyPodcastPipeline,
+    main
+};
