@@ -423,3 +423,91 @@ test('API 恢复不复用冒称人工筛选的缺来源决定', async t => {
             `单篇 ${field} 与实际批次不符时必须拒绝复用`);
     }
 });
+test('官方全文取证支持有界并发、保持顺序一致并拦截非法并发参数', async t => {
+    fixture(t);
+    const candidates = [1, 2, 3, 4, 5].map(idx => ({
+        ...paper(),
+        arxivId: `2610.9100${idx}`,
+        paper_id: `2610.9100${idx}`,
+        title: `Unified multimodal foundation model ${idx}`,
+        abstract: 'We propose a unified multimodal foundation framework for cross-modal representation learning and benchmark general reasoning across standard datasets.'
+    }));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const baseSources = officialSources({ text: 0, pdf: 0, model: 0 });
+    const delayedSources = {
+        ...baseSources,
+        fetchText: async id => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            await new Promise(resolve => setTimeout(resolve, 25));
+            inFlight -= 1;
+            if (id === '2610.91002') {
+                return {
+                    ...(await baseSources.fetchText(id)),
+                    text: 'Introduction. This purely visual multimodal study only benchmarks static image, document layout, and text retrieval pairs across vision-language datasets. '.repeat(30)
+                };
+            }
+            return baseSources.fetchText(id);
+        },
+        fetchPdf: async (id, opts) => {
+            if (id === '2610.91004') {
+                const err = new Error(`PDF 404 for ${id}`);
+                err.code = 'ARXIV_PDF_NOT_FOUND';
+                err.status = 404;
+                err.arxivId = id;
+                throw err;
+            }
+            return baseSources.fetchPdf(id, opts);
+        }
+    };
+    const seenModelIds = [];
+    const runOptions = {
+        ...options(delayedSources, async item => {
+            seenModelIds.push(item.arxivId);
+            return decision(true);
+        }),
+        scopeConcurrency: 3
+    };
+    const result = await run(candidates, runOptions);
+    assert.ok(maxInFlight >= 2 && maxInFlight <= 3, `期望并发峰值在 2..3，实际 ${maxInFlight}`);
+    assert.deepEqual(result.selected.map(item => item.arxivId), ['2610.91001', '2610.91003', '2610.91005']);
+    assert.equal(result.decisions['2610.91002'].parseSource, 'scope_body_audio_anchor_prefilter');
+    assert.equal(result.decisions['2610.91004'].parseSource, 'official_pdf_404_skipped');
+    assert.deepEqual(seenModelIds, ['2610.91001', '2610.91003', '2610.91005']);
+
+    for (const bad of [0, 9, 1.5, NaN]) {
+        await assert.rejects(
+            () => pipeline.filterPapersWithLLM(candidates, { ...runOptions, scopeConcurrency: bad }),
+            RangeError
+        );
+    }
+});
+test('官方全文并发取证遇到非 404 致命错误立即停止后续派发且不调用筛选模型', async t => {
+    fixture(t);
+    const candidates = [1, 2, 3, 4, 5, 6].map(idx => ({
+        ...paper(),
+        arxivId: `2610.9200${idx}`,
+        paper_id: `2610.9200${idx}`,
+        title: `Unified multimodal model fatal test ${idx}`
+    }));
+    let started = 0;
+    let modelCalls = 0;
+    const baseSources = officialSources({ text: 0, pdf: 0, model: 0 });
+    const failingSources = {
+        ...baseSources,
+        fetchText: async id => {
+            started += 1;
+            if (id === '2610.92001') throw new Error('模拟非 404 网络错误');
+            await new Promise(resolve => setTimeout(resolve, 40));
+            return baseSources.fetchText(id);
+        }
+    };
+    const runOptions = {
+        ...options(failingSources, async () => { modelCalls += 1; return decision(true); }),
+        scopeConcurrency: 2
+    };
+    await assert.rejects(() => pipeline.filterPapersWithLLM(candidates, runOptions), /模拟非 404 网络错误/);
+    assert.equal(modelCalls, 0);
+    assert.ok(started <= 3, `期望遇错后停止派发，实际启动 ${started} 篇`);
+});

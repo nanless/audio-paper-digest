@@ -991,6 +991,7 @@ async function resumeFilterStage({
     let retryableFilterDecisions = {};
     const filtered = await filterPapersWithLLM(allPapersFiltered, {
         batchSize: Config.FILTER_CONFIG.batchSize,
+        scopeConcurrency: Config.FILTER_CONFIG.scopeConcurrency,
         delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
         useKeywordPreFilter: Config.FILTER_CONFIG.keywordPrefilterEnabled,
         initialDecisions: filterDecisions,
@@ -2206,6 +2207,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         let retryableFilterDecisions = {};
         filtered = await filterPapersWithLLM(allPapersFiltered, {
             batchSize: Config.FILTER_CONFIG.batchSize,
+            scopeConcurrency: Config.FILTER_CONFIG.scopeConcurrency,
             delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
             useKeywordPreFilter: Config.FILTER_CONFIG.keywordPrefilterEnabled,
             initialDecisions: filterDecisions,

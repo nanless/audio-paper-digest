@@ -87,6 +87,7 @@ const FILTER_CONFIG = {
     timeoutMs: 60000,
     maxRetries: 5,
     batchSize: 5,
+    scopeConcurrency: 6,
     delayBetweenBatchesMs: 2000,
     temperature: 0.3,
     // 注意：这两个值参与 FILTER_CONFIG_BINDING 的指纹，历史窗口复现会核对它，
@@ -477,6 +478,15 @@ function applyEnvOverrides() {
     const filterBatchSize = readPositiveInt('PD_FILTER_BATCH_SIZE');
     if (filterBatchSize) {
         FILTER_CONFIG.batchSize = filterBatchSize;
+    }
+    // 筛选阶段官方原文取证（filter-scope）并发度，沿用来源下载的 1..8 上限
+    if (process.env.PD_FILTER_SCOPE_CONCURRENCY !== undefined) {
+        const raw = String(process.env.PD_FILTER_SCOPE_CONCURRENCY).trim();
+        const val = Number(raw);
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(val) || val < 1 || val > 8) {
+            throw new RangeError('PD_FILTER_SCOPE_CONCURRENCY 必须是 1..8 的整数');
+        }
+        FILTER_CONFIG.scopeConcurrency = val;
     }
     // 推理模型（muse xhigh）的推理 token 与可见输出共用 max_output_tokens，
     // 1000/1200 的筛选预算对长列表不够；这里允许按环境抬高，便于不缩小批次就跑通。

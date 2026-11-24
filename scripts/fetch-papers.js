@@ -1989,6 +1989,7 @@ function getEffectiveFilterBatchSize(configuredBatchSize, model = FILTER_CONFIG.
 async function filterPapersWithLLM(papers, options = {}) {
     const {
         batchSize = 5,
+        scopeConcurrency = FILTER_CFG.scopeConcurrency ?? 6,
         delayBetweenBatches = 2000,
         useKeywordPreFilter = FILTER_CFG.keywordPrefilterEnabled,
         initialDecisions = null,
@@ -2071,14 +2072,62 @@ async function filterPapersWithLLM(papers, options = {}) {
         }
     }
     // 先取得全部不明确多模态论文的官方材料，再开始任何付费筛选。
+    if (!Number.isInteger(scopeConcurrency) || scopeConcurrency < 1 || scopeConcurrency > 8) {
+        throw new RangeError(`scopeConcurrency 必须是 1..8 的整数（收到 ${scopeConcurrency}）`);
+    }
     const scopeById = new Map();
     let scopeBodyAnchorRejectedCount = 0;
-    for (const paper of papersToCheck) {
-        if (!evaluateKeywordPrefilter(paper).requiresScopeEvidence) continue;
-        const id = normalizedId(paper);
-        try {
-            const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
-                decisionOptions.scopeSourceOverrides || {});
+    const scopeTargets = papersToCheck.filter(paper => evaluateKeywordPrefilter(paper).requiresScopeEvidence);
+    if (scopeTargets.length > 0) {
+        const effectiveScopeConcurrency = Math.min(scopeTargets.length, scopeConcurrency);
+        console.log(`[filter] 开始官方全文取证：${scopeTargets.length} 篇候选（并发=${effectiveScopeConcurrency}）`);
+        const scopeOutcomes = new Array(scopeTargets.length);
+        let cursor = 0;
+        let completed = 0;
+        let fatalError = null;
+        const worker = async () => {
+            while (!fatalError && cursor < scopeTargets.length) {
+                const index = cursor++;
+                const paper = scopeTargets[index];
+                const id = normalizedId(paper);
+                try {
+                    const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
+                        decisionOptions.scopeSourceOverrides || {});
+                    scopeOutcomes[index] = { kind: 'evidence', id, paper, evidence };
+                    completed += 1;
+                    if (completed === scopeTargets.length || completed % 10 === 0) {
+                        console.log(`[filter] 官方全文取证进度: ${completed}/${scopeTargets.length} (并发=${effectiveScopeConcurrency})`);
+                    }
+                } catch (error) {
+                    if (error.code !== 'ARXIV_PDF_NOT_FOUND' || error.status !== 404 || error.arxivId !== id) {
+                        if (!fatalError) fatalError = error;
+                        break;
+                    }
+                    scopeOutcomes[index] = { kind: 'pdf_404', id, paper, error };
+                    completed += 1;
+                    console.log(`[filter] 跳过官方 PDF 返回 404 的论文：${id}`);
+                }
+            }
+        };
+        await Promise.all(Array.from({ length: effectiveScopeConcurrency }, worker));
+        if (fatalError) throw fatalError;
+        for (const outcome of scopeOutcomes) {
+            const { id, paper } = outcome;
+            if (outcome.kind === 'pdf_404') {
+                decisions.set(id, {
+                    id, paper_id: paper.paper_id || paper.arxivId || paper.id || id,
+                    title: paper.title || '', related: false,
+                    reason: '官方 PDF 返回 404，本批跳过，未判断论文是否相关',
+                    rawResponse: '', parseSource: 'official_pdf_404_skipped',
+                    error: outcome.error.message, errorCode: outcome.error.code, errorStatus: 404,
+                    fallback: false, retryable: false, decidedAt: getBeijingISOString(),
+                    inputSha256: buildFilterInputSha256(paper), ...decisionMetadata,
+                    // 结构化跳过身份：与 error 文本中的规范化 arXiv ID 相互印证，供后续核验。
+                    arxivId: id
+                });
+                continue;
+            }
+            const evidence = outcome.evidence;
             const bodyAnchor = useKeywordPreFilter
                 ? evaluateScopeBodyAudioAnchor(evidence.text, paper)
                 : { pass: true };
@@ -2104,20 +2153,6 @@ async function filterPapersWithLLM(papers, options = {}) {
                 continue;
             }
             scopeById.set(id, evidence);
-        } catch (error) {
-            if (error.code !== 'ARXIV_PDF_NOT_FOUND' || error.status !== 404 || error.arxivId !== id) throw error;
-            decisions.set(id, {
-                id, paper_id: paper.paper_id || paper.arxivId || paper.id || id,
-                title: paper.title || '', related: false,
-                reason: '官方 PDF 返回 404，本批跳过，未判断论文是否相关',
-                rawResponse: '', parseSource: 'official_pdf_404_skipped',
-                error: error.message, errorCode: error.code, errorStatus: 404,
-                fallback: false, retryable: false, decidedAt: getBeijingISOString(),
-                inputSha256: buildFilterInputSha256(paper), ...decisionMetadata,
-                // 结构化跳过身份：与 error 文本中的规范化 arXiv ID 相互印证，供后续核验。
-                arxivId: id
-            });
-            console.log(`[filter] 跳过官方 PDF 返回 404 的论文：${id}`);
         }
     }
     if (scopeBodyAnchorRejectedCount > 0) {
