@@ -27,8 +27,12 @@ for _p in (str(SCRIPTS), str(TESTS_PY)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import blog_formula_tex_display  # noqa: E402
 import blog_git_publication  # noqa: E402
+import blog_reader_binding_verifier  # noqa: E402
 import blog_review_image_loader  # noqa: E402
+import blog_review_state  # noqa: E402
+import blog_tag_catalog  # noqa: E402
 import protocol_codec as public_protocols  # noqa: E402
 from project_env_isolation import isolate_module_environment, project_env_scope  # noqa: E402
 
@@ -111,7 +115,14 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
     def test_extracted_modules_reject_codex_sandbox_and_direct_cli_execution(self):
         sandbox_env = dict(os.environ, CODEX_SANDBOX='test-seatbelt')
         clean_env = {k: v for k, v in os.environ.items() if k != 'CODEX_SANDBOX'}
-        for module_name in ('blog_git_publication.py', 'blog_review_image_loader.py'):
+        for module_name in (
+            'blog_git_publication.py',
+            'blog_review_image_loader.py',
+            'blog_tag_catalog.py',
+            'blog_formula_tex_display.py',
+            'blog_reader_binding_verifier.py',
+            'blog_review_state.py',
+        ):
             script_path = SCRIPTS / module_name
             for extra_args in ([], ['-S']):
                 with self.subTest(module=module_name, args=extra_args):
@@ -146,10 +157,18 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
             f'import sys; sys.path.insert(0, {str(SCRIPTS)!r}); '
             'import blog_git_publication as bgp; '
             'import blog_review_image_loader as bril; '
+            'import blog_tag_catalog as btc; '
+            'import blog_formula_tex_display as bftd; '
+            'import blog_reader_binding_verifier as brbv; '
+            'import blog_review_state as brs; '
             'from urllib.parse import urlparse; '
             'assert bril.pinned_https_url(urlparse("https://example.org/a.png"), "93.184.216.34") '
             '== "https://93.184.216.34/a.png"; '
             'assert callable(bgp.validate_git_commit_against_review_receipt); '
+            'assert btc.is_tag_catalog_file_path("data/tag-catalog-snapshot.json"); '
+            'assert bftd.project_reader_cell_tex_display("FDPANNs\\\\mathrm{FD}") == "FDPANNs\\\\mathrm{FD}"; '
+            'assert brbv.normalize_api_reader_numeric_token("1,200.00") == "1200"; '
+            'assert callable(brs.plan_incremental_review); '
             'print("import-ok")'
         )
         res = subprocess.run(
@@ -876,6 +895,310 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
         png_large = loader.rasterize_svg_for_review(large_svg)
         with Image.open(io.BytesIO(png_large)) as im:
             self.assertEqual(im.size, (900, 400))
+
+    def test_wave14_extracted_modules_generation_fingerprint_and_closure(self):
+        publish_to_blog._REVIEW_IMPLEMENTATION_CLOSURE_CACHE.clear()
+        closure = set(publish_to_blog.review_implementation_closure())
+        wave14_modules = (
+            'blog_tag_catalog.py',
+            'blog_formula_tex_display.py',
+            'blog_reader_binding_verifier.py',
+            'blog_review_state.py',
+        )
+        for mod_file in wave14_modules:
+            self.assertIn(f'scripts/{mod_file}', closure)
+
+        real_sha = publish_to_blog._sha256_file
+        baseline = publish_to_blog.generation_template_fingerprint()
+        for mod_file in wave14_modules:
+            target = (SCRIPTS / mod_file).resolve()
+            with self.subTest(module=mod_file), mock.patch.object(
+                publish_to_blog, '_sha256_file',
+                side_effect=lambda p, t=target: 'e' * 64 if Path(p).resolve() == t else real_sha(p),
+            ):
+                self.assertNotEqual(publish_to_blog.generation_template_fingerprint(), baseline)
+        self.assertEqual(publish_to_blog.generation_template_fingerprint(), baseline)
+
+    def test_wave14_extracted_modules_reference_identity_and_ast_pinned_preservation(self):
+        # P1 cache & catalog object identity
+        self.assertIs(
+            publish_to_blog._TAG_CATALOG_SERIALIZATION_CACHE,
+            blog_tag_catalog._TAG_CATALOG_SERIALIZATION_CACHE,
+        )
+        self.assertIs(
+            publish_to_blog._TAG_CATALOG_SERIALIZATION_CACHE_LOCK,
+            blog_tag_catalog._TAG_CATALOG_SERIALIZATION_CACHE_LOCK,
+        )
+        self.assertIs(publish_to_blog._CURRENT_CONTEXT_SCHEMA, blog_tag_catalog._CURRENT_CONTEXT_SCHEMA)
+        self.assertIs(publish_to_blog._PAGE_TAG_CATALOG, blog_tag_catalog._PAGE_TAG_CATALOG)
+        self.assertIs(publish_to_blog._PAGE_ACTIVE_TAGS_BY_ID, blog_tag_catalog._PAGE_ACTIVE_TAGS_BY_ID)
+
+        # P2 pure formula/TeX identity
+        for attr in (
+            '_api_reader_display_formula_blocks',
+            '_build_formula_surface_and_segments',
+            '_project_reader_cell_tex_display',
+            '_project_reader_cell_tex_display_body',
+            '_rendered_table_bare_tex',
+            '_collapse_parenthesized_signed_double_write',
+            '_strip_leading_empty_link_cell_prefix',
+        ):
+            self.assertIs(getattr(publish_to_blog, attr), getattr(blog_formula_tex_display, attr))
+
+        # P3 pure verifier & stateful cache/class identity
+        for attr in (
+            '_normalize_api_reader_numeric_token',
+            '_is_pdf_crop_figure',
+            '_find_outside_fence_heading',
+            '_ReaderScientificPdfQuoteCapability',
+            '_READER_SCIENTIFIC_PDF_QUOTES',
+            '_LEGACY_READER_FIGURE_CAPTIONS',
+            '_LEGACY_READER_PIXEL_NARRATIVES',
+        ):
+            self.assertIs(getattr(publish_to_blog, attr), getattr(blog_reader_binding_verifier, attr))
+
+        # Verify AST-pinned display & core-summary symbols remain defined directly in publish-to-blog.py
+        tree = ast.parse((SCRIPTS / 'publish-to-blog.py').read_text(encoding='utf-8'))
+        top_funcs = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+        top_assigns = {
+            t.id for n in tree.body if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)
+        }
+        self.assertIn('_MATHJAX_DOUBLE_WRITE_RULES', top_assigns)
+        for pinned_fn in (
+            '_collapse_mathjax_double_write',
+            '_normalize_api_reader_explicit_symbol_projection',
+            '_normalize_api_reader_display_artifacts',
+            '_normalize_api_reader_source_cell',
+            '_detailed_core_summary_semantic_issue',
+            '_has_source_bound_reader_patch_completion',
+            '_validate_reader_resource_claim_source_replay',
+        ):
+            self.assertIn(pinned_fn, top_funcs)
+
+    def test_wave14_extracted_modules_behavioral_and_monkeypatch_parity(self):
+        # P1: blog_tag_catalog parity + monkeypatch compatibility + AST single-function isolation
+        self.assertEqual(
+            publish_to_blog.build_tag_catalog_snapshot(),
+            blog_tag_catalog.build_tag_catalog_snapshot(),
+        )
+        with mock.patch.object(publish_to_blog, 'BASE_PATH', '/custom-tag-base'):
+            self.assertEqual(
+                publish_to_blog._root_task_link({'id': 'task.asr', 'label': '语音识别'}),
+                '[语音识别](/custom-tag-base/papers/?concept=task.asr)',
+            )
+        probe_tag = (
+            'import ast, os, sys, tempfile\n'
+            'from pathlib import Path\n'
+            f'src = Path({str(SCRIPTS / "publish-to-blog.py")!r}).read_text(encoding="utf-8")\n'
+            'tree = ast.parse(src)\n'
+            'fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_is_tag_catalog_file_path")\n'
+            'ns = {}\n'
+            'exec(compile(ast.Module(body=[fn], type_ignores=[]), "<ast>", "exec"), ns)\n'
+            'assert ns["_is_tag_catalog_file_path"]("data/tag-catalog-snapshot.json") is True\n'
+            'assert "blog_tag_catalog" in ns\n'
+            'ns2 = {}\n'
+            'exec(compile(ast.Module(body=[fn], type_ignores=[]), "<ast>", "exec"), ns2)\n'
+            'with tempfile.TemporaryDirectory() as td:\n'
+            '    old_cwd, old_path = os.getcwd(), list(sys.path)\n'
+            '    try:\n'
+            '        os.chdir(td); sys.path[:] = [td]; sys.modules.pop("blog_tag_catalog", None)\n'
+            '        try:\n'
+            '            ns2["_is_tag_catalog_file_path"]("data/tag-catalog-snapshot.json")\n'
+            '            raise AssertionError("expected ImportError")\n'
+            '        except ImportError:\n'
+            '            pass\n'
+            '    finally:\n'
+            '        os.chdir(old_cwd); sys.path[:] = old_path\n'
+            'print("tag-ast-ok")\n'
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in {'CODEX_SANDBOX', 'PYTHONPATH'}}
+        res_tag = subprocess.run(
+            [sys.executable, '-c', probe_tag], cwd=ROOT, env=clean_env,
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(res_tag.returncode, 0, res_tag.stdout + res_tag.stderr)
+        self.assertEqual(res_tag.stdout.strip(), 'tag-ast-ok')
+
+        # P2: blog_formula_tex_display parity + monkeypatch compatibility
+        sample_md = '导语：\n\n\\[a = b + c\\]\n\n| Model | WER |\n| --- | --- |\n| Base | 3.2 |\n'
+        self.assertEqual(
+            publish_to_blog._api_reader_display_formula_blocks(sample_md),
+            blog_formula_tex_display._api_reader_display_formula_blocks(sample_md),
+        )
+        self.assertEqual(
+            publish_to_blog._api_reader_markdown_tables(sample_md),
+            blog_formula_tex_display.api_reader_markdown_tables(sample_md),
+        )
+        with mock.patch.object(
+            publish_to_blog, '_rendered_table_bare_tex',
+            return_value=('| A | \\tau |', '\\tau'),
+        ):
+            with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, r'未渲染的 TeX'):
+                publish_to_blog._assert_rendered_tables_have_no_bare_tex('| A | 1 |')
+
+        # P3: blog_reader_binding_verifier parity + monkeypatch + thread-isolated ContextVar hooks
+        self.assertEqual(
+            publish_to_blog._normalize_api_reader_numeric_token('−1,250.00'),
+            '-1250',
+        )
+        self.assertEqual(
+            publish_to_blog._validated_https_identity_url('https://github.com/example/repo', '代码仓库'),
+            'https://github.com/example/repo',
+        )
+        with self.assertRaises(publish_to_blog.PublishDataValidationError):
+            publish_to_blog._validated_https_identity_url('http://insecure.example.com/repo', '代码仓库')
+
+        def check_isolated_hook(idx: int) -> str:
+            sentinel = f'base-{idx}'
+            with blog_reader_binding_verifier._hooks_scope({'BASE_PATH': sentinel}):
+                return blog_reader_binding_verifier._H.BASE_PATH
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            observed = list(pool.map(check_isolated_hook, range(64)))
+        self.assertEqual(observed, [f'base-{i}' for i in range(64)])
+
+        # P4: blog_review_state monkeypatch & behavior parity
+        with tempfile.TemporaryDirectory() as tmp:
+            ckpt_dir = Path(tmp) / 'checkpoints'
+            ckpt_dir.mkdir()
+            (ckpt_dir / 'sample.json').write_text('{}', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'review_page_checkpoint_dir', return_value=ckpt_dir):
+                publish_to_blog.clear_review_page_checkpoints('2026-11-24')
+            self.assertFalse(ckpt_dir.exists())
+
+    def test_wave14_adversarial_regression_guards(self):
+        # 1) P0: load_verified_review_receipt AST single-function isolation (no NameError, ImportError in empty dir)
+        probe_receipt = (
+            'import ast, os, sys, tempfile\n'
+            'from pathlib import Path\n'
+            f'src = Path({str(SCRIPTS / "publish-to-blog.py")!r}).read_text(encoding="utf-8")\n'
+            'tree = ast.parse(src)\n'
+            'fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "load_verified_review_receipt")\n'
+            'class Err(Exception): pass\n'
+            'with tempfile.TemporaryDirectory() as td:\n'
+            '    ns = {\n'
+            '        "PublishDataValidationError": Err,\n'
+            '        "validate_publish_date": lambda d: d,\n'
+            '        "review_receipt_path": lambda d: Path(td) / "missing-receipt.json",\n'
+            '    }\n'
+            '    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<ast>", "exec"), ns)\n'
+            '    try:\n'
+            '        ns["load_verified_review_receipt"]("2026-11-24")\n'
+            '        raise AssertionError("expected Err for missing receipt")\n'
+            '    except Err:\n'
+            '        pass\n'
+            '    assert "blog_review_state" in ns\n'
+            '    ns2 = {"PublishDataValidationError": Err}\n'
+            '    exec(compile(ast.Module(body=[fn], type_ignores=[]), "<ast>", "exec"), ns2)\n'
+            '    old_cwd, old_path = os.getcwd(), list(sys.path)\n'
+            '    try:\n'
+            '        os.chdir(td); sys.path[:] = [td]; sys.modules.pop("blog_review_state", None)\n'
+            '        try:\n'
+            '            ns2["load_verified_review_receipt"]("2026-11-24")\n'
+            '            raise AssertionError("expected ImportError")\n'
+            '        except ImportError:\n'
+            '            pass\n'
+            '    finally:\n'
+            '        os.chdir(old_cwd); sys.path[:] = old_path\n'
+            'print("receipt-ast-ok")\n'
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in {'CODEX_SANDBOX', 'PYTHONPATH'}}
+        res_receipt = subprocess.run(
+            [sys.executable, '-c', probe_receipt], cwd=ROOT, env=clean_env,
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(res_receipt.returncode, 0, res_receipt.stdout + res_receipt.stderr)
+        self.assertEqual(res_receipt.stdout.strip(), 'receipt-ast-ok')
+
+        # 2) P1: explicit None contract arguments must still raise PublishDataValidationError
+        with self.assertRaises(publish_to_blog.PublishDataValidationError):
+            publish_to_blog.build_tag_catalog_snapshot(snapshot_contract=None)
+        with self.assertRaises(blog_tag_catalog.PublishDataValidationError):
+            blog_tag_catalog.build_tag_catalog_snapshot(snapshot_contract=None)
+        with self.assertRaises(publish_to_blog.PublishDataValidationError):
+            publish_to_blog.build_flat_tag_compat_metadata({}, flat_tag_contract=None)
+        with self.assertRaises(blog_tag_catalog.PublishDataValidationError):
+            blog_tag_catalog.build_flat_tag_compat_metadata({}, flat_tag_contract=None)
+
+        # 3) P1: sys.path[0] takes precedence over cwd in both _resolve_publisher_submodule & inline bootstrappers
+        probe_precedence = (
+            'import ast, sys, tempfile\n'
+            'from pathlib import Path\n'
+            f'src = Path({str(SCRIPTS / "publish-to-blog.py")!r}).read_text(encoding="utf-8")\n'
+            'tree = ast.parse(src)\n'
+            'by_name = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}\n'
+            'with tempfile.TemporaryDirectory() as td:\n'
+            '    override = Path(td)\n'
+            '    (override / "blog_tag_catalog.py").write_text("def is_tag_catalog_file_path(r): return \'from-sys-path\'\\n", encoding="utf-8")\n'
+            '    (override / "blog_review_state.py").write_text("def load_verified_review_receipt(d, *, hooks=None): return \'receipt-from-sys-path\'\\n", encoding="utf-8")\n'
+            '    sys.path.insert(0, str(override))\n'
+            '    path_len_before = len(sys.path)\n'
+            '    ns_tag = {}\n'
+            '    exec(compile(ast.Module(body=[by_name["_is_tag_catalog_file_path"]], type_ignores=[]), "<ast>", "exec"), ns_tag)\n'
+            '    assert ns_tag["_is_tag_catalog_file_path"]("x") == "from-sys-path"\n'
+            '    assert len(sys.path) == path_len_before\n'
+            '    ns_rcpt = {}\n'
+            '    exec(compile(ast.Module(body=[by_name["load_verified_review_receipt"]], type_ignores=[]), "<ast>", "exec"), ns_rcpt)\n'
+            '    assert ns_rcpt["load_verified_review_receipt"]("2026-11-24") == "receipt-from-sys-path"\n'
+            '    assert len(sys.path) == path_len_before\n'
+            '    sys.modules.pop("blog_tag_catalog", None)\n'
+            '    ns_res = {}\n'
+            '    exec(compile(ast.Module(body=[by_name["_resolve_publisher_submodule"]], type_ignores=[]), "<ast>", "exec"), ns_res)\n'
+            '    mod = ns_res["_resolve_publisher_submodule"]("blog_tag_catalog")\n'
+            '    assert mod.is_tag_catalog_file_path("x") == "from-sys-path"\n'
+            '    assert len(sys.path) == path_len_before\n'
+            'print("syspath-precedence-ok")\n'
+        )
+        res_prec = subprocess.run(
+            [sys.executable, '-c', probe_precedence], cwd=ROOT, env=clean_env,
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(res_prec.returncode, 0, res_prec.stdout + res_prec.stderr)
+        self.assertEqual(res_prec.stdout.strip(), 'syspath-precedence-ok')
+
+        # 4) P2: blog_formula_tex_display fails closed with RuntimeError when required hooks are absent
+        with self.assertRaisesRegex(RuntimeError, '_normalize_api_reader_source_cell'):
+            blog_formula_tex_display.reader_cell_comparison('1.0')
+        self.assertEqual(
+            blog_formula_tex_display.reader_cell_comparison('1.0', normalize_source_cell=lambda s: s),
+            '1.0',
+        )
+        with self.assertRaisesRegex(RuntimeError, '_javascript_string_sha256'):
+            blog_formula_tex_display.source_quoted_codec_display_cells({}, {}, {'header': [], 'rows': []})
+        with self.assertRaisesRegex(RuntimeError, '_daily_fresh_normalized_paper_id'):
+            blog_formula_tex_display.read_daily_publication_source_text({})
+
+        # 5) P2: blog_review_state imports stdlib subprocess (safe under partial hooks) &
+        #        blog_reader_binding_verifier hooks _api_reader_numeric_tokens and build_child_process_env
+        with tempfile.TemporaryDirectory() as tmp_state:
+            fake_manifest = Path(tmp_state) / 'manifest.json'
+            fake_receipt = Path(tmp_state) / 'receipt.json'
+            fake_manifest.write_text('{}', encoding='utf-8')
+            fake_receipt.write_text('{}', encoding='utf-8')
+            res_partial = blog_review_state.reusable_verified_publication_generation(
+                '2026-11-24', 'a' * 64, 'b' * 64, 'c' * 40,
+                hooks={
+                    'generation_manifest_path': lambda _d: fake_manifest,
+                    'review_receipt_path': lambda _d: fake_receipt,
+                    '_load_json_object': lambda *_: (_ for _ in ()).throw(
+                        subprocess.CalledProcessError(1, ['git'])
+                    ),
+                },
+            )
+            self.assertIsNone(res_partial)
+
+        seen_token_inputs = []
+        with mock.patch.object(
+            publish_to_blog, '_api_reader_numeric_tokens',
+            side_effect=lambda txt: (seen_token_inputs.append(txt), set())[1],
+        ):
+            publish_to_blog._reader_circled_label_numeric_tokens({'header': ['① Method'], 'rows': [['1.2']]})
+            publish_to_blog._reader_citation_only_numeric_tokens({'header': ['Model [12]'], 'rows': [['3.4']]})
+        self.assertGreaterEqual(len(seen_token_inputs), 4)
+
+        verifier_src = (SCRIPTS / 'blog_reader_binding_verifier.py').read_text(encoding='utf-8')
+        self.assertIn('_H.build_child_process_env()', verifier_src)
 
 
 if __name__ == '__main__':

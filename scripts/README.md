@@ -110,6 +110,10 @@ npm run test:compat
 | `lib/scoring-audit-contract.js` | Node 库：封装 8 维类型感知评分审计规则、真盲审剥离、防跨维度双重扣分检查、实测证据硬上限裁剪与开源锚点校准（兼容 `type-aware-v1` 与 `type-aware-v2`）。 |
 | `lib/scoring-rubric-v2.js`、`scoring_rubric_v2.py` | Node/Python 共用的 `type-aware-v2` 评分规则引擎，加载 `config/scoring-rubric-v2.json`，用精确整数千分位算术计算 7 类核心加权分、有界类型开源加分与分档。 |
 | `lib/reader-repair-evidence-slice.js` | Node 库：在 Reader 普通局部节点补丁请求（1–8 既有节点）满足可证明原表/引文完整覆盖、兼容顺延目标且无坏表/全文扩写阻断时，构造 UTF-16 码点安全的紧凑证据切片；任一条件不满足即零风险回退原全量证据，候选固定身份与补丁后整稿冷核保持不变。 |
+| `lib/reader-resource-claims.js` | Node 库：封装 Reader 资源证据渲染、已验证资源身份回放、出版资源视图投影、资源可用性声明审计与文章按节重建草稿逻辑，与 `deep-analyzer.js` 导出完全同一引用。 |
+| `lib/arxiv-html-structured-artifacts.js` | Node 库：封装 arXiv LaTeXML HTML 全文健康检查、DOM 图/表/公式/参考文献结构化提取、多级表头合并、`\phantom` 虚影剥离、PDF 结构化投影、HTML 文本与图片清单解析及文本 SHA 绑定。 |
+| `lib/reader-source-evidence-binding.js` | Node 库：封装 Reader 单元格归一化、数值与单位词元覆盖校验、精确来源引文派生、选中原表字节恢复、表格粘贴重复清理、公式与表格来源证据绑定及占位结果表语义拦截。 |
+| `lib/reader-prose-normalization.js` | Node 库：封装 Reader 正文中英数字排版归一化、术语桥与标题规范化、长段切分、表格导读与极值/评述对齐检查、孤儿标记与重复长句清理及质量豁免指标统计。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
@@ -480,6 +484,10 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `blog_entry_loader.py` | Python 桥：以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `blog_git_publication.py` | Python 内部库：封装发布状态快照捕获与无痕回滚、最小子进程环境 `git cat-file --batch` 暂存区/提交树精确字节校验、远端推送身份与 `refs/heads/main` OID 核验，与生成模板指纹解耦。 |
 | `blog_review_image_loader.py` | Python 内部库：封装多模态审查的公网/代理 Fake-IP 固定对端下载、无网络无 JS Playwright SVG 光栅化与受控目录 `O_NOFOLLOW` 图片加载，与生成模板指纹解耦。 |
+| `blog_tag_catalog.py` | Python 内部库：封装标签词表快照生成/校验、展示策略 `O_NOFOLLOW` 读取、有界确定性序列化缓存与扁平标签兼容元数据，纳入生成模板指纹依赖。 |
+| `blog_formula_tex_display.py` | Python 内部库：封装 CommonMark/GFM 展示公式扫描、来源引文编解码投影与表格单元 TeX 展示/裸 TeX 校验，纳入生成模板指纹依赖。 |
+| `blog_reader_binding_verifier.py` | Python 内部库：封装 Reader 数值/单位/科学 PDF 引文投影、内联 SVG/破损光栅/PDF 页资源解析与 DOM/表格/作者/资源页面绑定核验，纳入生成模板指纹依赖。 |
+| `blog_review_state.py` | Python 内部库：封装生成清单与出版证据复用、审查回执/分页检查点/缓存/失败状态持久化及增量审查规划，纳入生成模板指纹依赖。 |
 | `daily_hugo_capture.py` | Python 内部库：保留正常日更审查中同次 Hugo 的输入观察、机器页面映射和主 HTML，以不可覆盖记录供新审查凭证引用及冷核；不授予完整输入快照、科学资格或部署通过，见[观察记录边界](../docs/three-workflows.md#日更审查的同次-html-观察记录)。 |
 | `daily_html_projection.py` | Python 纯库：固定 v1 保留公式无空白规则，固定 v2 另允许内部孤立单空格，共用有限静态 HTML 解析；保留词界、代码和公式原字面，不解释 TeX、执行 HTML 或请求资源。普通返回值不授予来源或出版资格。 |
 | `github_pages_deployment.py` | Python 机械观察库：用固定匿名 HTTPS 读取受控仓库的工作流、精确运行轮次、任务和部署状态元数据；有界分页并复核较新记录，始终保留网页、公开资源和产物消费链未核验的边界，不授予发布或来源资格。 |
