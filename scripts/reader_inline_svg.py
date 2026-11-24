@@ -43,7 +43,8 @@ FOREIGN_HTML_CONTAINER_TAGS = {
     tag
     for name in (
         'span', 'div', 'p', 'b', 'strong', 'i', 'em', 'sub', 'sup', 'a',
-        'pre', 'cite', 'section', 'h5'
+        'pre', 'cite', 'section', 'h5',
+        'table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th'
     )
     for tag in (name, '{http://www.w3.org/1999/xhtml}' + name)
 }
@@ -253,7 +254,10 @@ def validate_svg(raw):
         # HTML foreignObject. Admit those containers only in that HTML subtree;
         # all descendant attributes/resources still pass the same checks below.
         local_tag = element.tag.split('}')[-1].lower()
-        static_html = local_tag in {'pre', 'cite', 'section', 'h5'}
+        static_html = local_tag in {
+            'pre', 'cite', 'section', 'h5',
+            'table', 'tbody', 'thead', 'tfoot', 'tr', 'td', 'th',
+        }
         html_breakout_tag = local_tag in {
             'span', 'div', 'p', 'br', 'b', 'strong', 'i', 'em', 'sub', 'sup',
         }

@@ -114,6 +114,13 @@ function node(draft, pointer) {
     if (['/readerTitle','/oneSentenceThesis'].includes(pointer)) {
         if (!own(draft, pointer.slice(1))) fail('missing text node'); return draft[pointer.slice(1)];
     }
+    if (pointer === '/implementationSpecs') {
+        if (!own(draft, 'implementationSpecs') || !draft.implementationSpecs
+            || typeof draft.implementationSpecs !== 'object' || Array.isArray(draft.implementationSpecs)) {
+            fail('missing implementationSpecs node');
+        }
+        return draft.implementationSpecs;
+    }
     const m = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/(body|explanation|explanationQuote|leadQuote))?$/.exec(pointer);
     if (!m || (m[3] && !((m[1] === 'sections' && m[4] === 'body')
         || (m[1] === 'conceptBridges' && m[4] === 'explanation')

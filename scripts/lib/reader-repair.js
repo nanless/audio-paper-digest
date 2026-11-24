@@ -383,7 +383,7 @@ function isSafeExistingReaderPatchContext(draft, context, sourceBindingNeedsFull
         && (pointer.startsWith(other + '/') || other.startsWith(pointer + '/'))))) return false;
     return context.targets.every(target => {
         if (!target || typeof target.path !== 'string'
-            || !/^\/(?:readerTitle|oneSentenceThesis|sections\/(?:0|[1-9]\d*)\/body|conceptBridges\/(?:0|[1-9]\d*)\/explanation|figurePlacements\/(?:0|[1-9]\d*)\/(?:explanationQuote|leadQuote)|(?:tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/explanation)?)$/u.test(target.path)) return false;
+            || !/^\/(?:readerTitle|oneSentenceThesis|implementationSpecs|sections\/(?:0|[1-9]\d*)\/body|conceptBridges\/(?:0|[1-9]\d*)\/explanation|figurePlacements\/(?:0|[1-9]\d*)\/(?:explanationQuote|leadQuote)|(?:tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/explanation)?)$/u.test(target.path)) return false;
         try {
             const actual = nodeAt(draft, target.path);
             return target.oldSha256 === hashDraft(actual) && hashDraft(target.value) === hashDraft(actual);

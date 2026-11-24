@@ -224,6 +224,27 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
         finally:
             renderer.MAX_OUTPUT_BYTES = orig_limit
 
+    def test_latexml_foreignobject_table_classifies_as_unsupported_layout_and_bare_table_rejected(self):
+        latexml_table_svg = (
+            b'<svg width="320" height="120" viewBox="0 0 320 120">'
+            b'<foreignObject style="--ltx-fg-color:#595959;--ltx-fo-width:17.72em;--ltx-fo-height:1.45em;--ltx-fo-depth:0.95em;font-size:10pt;" width="245" height="33">'
+            b'<span class="ltx_foreignobject_container"><span class="ltx_foreignobject_content">'
+            b'<table class="ltx_tabular"><tbody class="ltx_tbody">'
+            b'<tr class="ltx_tr"><th class="ltx_th">X-axis:</th><td class="ltx_td">Time</td></tr>'
+            b'</tbody></table></span></span></foreignObject></svg>'
+        )
+        with self.assertRaises(renderer.UnsupportedSvgDependency) as ctx:
+            renderer.validate_svg(latexml_table_svg)
+        self.assertEqual(ctx.exception.reason, 'external_latexml_layout_css')
+
+        bare_table_svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 120 60">'
+            b'<table><tbody><tr><td>outside foreignObject</td></tr></tbody></table></svg>'
+        )
+        with self.assertRaises(ValueError) as bad_ctx:
+            renderer.validate_svg(bare_table_svg)
+        self.assertNotIsInstance(bad_ctx.exception, renderer.UnsupportedSvgDependency)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -148,3 +148,58 @@ test('the ordinal prompt template and contract bytes are unchanged', () => {
     assert.equal(ordinal.CONTRACT, format.wireHeader().contract);
     assert.ok(!format.template().includes('裸 JSON'));
 });
+
+test('/implementationSpecs is admitted as an ordinary existing object node in ordinal patches', () => {
+    const repair = require('../scripts/lib/reader-repair.js');
+    const draft = {
+        readerTitle: '示例标题',
+        oneSentenceThesis: '示例一句话核心。',
+        implementationSpecs: {
+            architectureSummary: '原架构摘要',
+            trainingRecipe: '原训练配方',
+            datasetsAndSplits: '原数据集划分',
+            evaluationProtocol: '原评测协议',
+            computeAndEfficiency: '原算力耗时',
+            openSourceArtifacts: '原开源信息'
+        },
+        sections: [{ kind: 'reproduction', heading: '复现', body: '正文' }],
+        conceptBridges: [],
+        figurePlacements: [],
+        tableBindings: [],
+        formulaBindings: []
+    };
+    const oldSha = repair.hashDraft(draft.implementationSpecs);
+    const updatedSpecs = { ...draft.implementationSpecs, openSourceArtifacts: '原文未披露代码与权重公开链接' };
+    const req = {
+        ...format.wireHeader(),
+        templateSha256: ordinal.TEMPLATE_SHA,
+        requestSalt: 'a'.repeat(32),
+        identitySha256: 'b'.repeat(64),
+        candidateEnvelopeSha256: 'c'.repeat(64),
+        draftSha256: repair.hashDraft(draft),
+        targets: [{ targetOrdinal: 1, path: '/implementationSpecs', oldSha256: oldSha, valueType: 'object' }]
+    };
+    req.requestToken = require('crypto').createHash('sha256').update(JSON.stringify({
+        domain: format.tokenDomain(req),
+        requestSalt: req.requestSalt,
+        identitySha256: req.identitySha256,
+        candidateEnvelopeSha256: req.candidateEnvelopeSha256,
+        draftSha256: req.draftSha256,
+        orderedTargetsSha256: repair.hashDraft(req.targets)
+    })).digest('hex').slice(0, 16);
+    const rawAck = JSON.stringify({
+        ...format.wireHeader(),
+        requestToken: req.requestToken,
+        replacements: [{ targetOrdinal: 1, value: updatedSpecs }]
+    });
+    const compiled = ordinal.compileReaderTargetOrdinalPatch(draft, req, rawAck);
+    assert.deepEqual(compiled.after.implementationSpecs, updatedSpecs);
+    assert.throws(
+        () => ordinal.compileReaderTargetOrdinalPatch(draft, req, JSON.stringify({
+            ...format.wireHeader(),
+            requestToken: req.requestToken,
+            replacements: [{ targetOrdinal: 1, value: JSON.stringify(updatedSpecs) }]
+        })),
+        /replacement type mismatch: targetOrdinal 1 \(\/implementationSpecs\) is object, but the ACK value is string/
+    );
+});

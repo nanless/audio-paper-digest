@@ -21,7 +21,7 @@ const correction = require('./lib/daily-reader-operator-correction.js');
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 function nodeAt(draft, pointer) {
-    if (['/readerTitle', '/oneSentenceThesis'].includes(pointer)) return draft[pointer.slice(1)];
+    if (['/readerTitle', '/oneSentenceThesis', '/implementationSpecs'].includes(pointer)) return draft[pointer.slice(1)];
     if (['/sections', '/tableBindings', '/conceptBridges', '/formulaBindings', '/figurePlacements'].includes(pointer)) return draft[pointer.slice(1)];
     const match = /^\/(?:(sections)\/(0|[1-9]\d*)(\/body)?|(conceptBridges)\/(0|[1-9]\d*)(\/explanation)?|(figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*))$/.exec(pointer);
     if (!match) throw new Error(`不支持的节点路径：${pointer}`);
@@ -42,7 +42,7 @@ function validateSpec(spec) {
         || spec.replacements.length > MAX_READER_PATCH_NODES) throw new Error('replacements 须为 1–8 项');
     for (const replacement of spec.replacements) {
         if (!replacement || typeof replacement.path !== 'string'
-            || !/^\/(?:sections\/(?:0|[1-9]\d*)(?:\/body)?|conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?|(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*))$/.test(replacement.path)) {
+            || !/^\/(?:implementationSpecs|sections\/(?:0|[1-9]\d*)(?:\/body)?|conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?|(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*))$/.test(replacement.path)) {
             throw new Error(`replacement.path 非法（not allowed）：${replacement && replacement.path}`);
         }
         if (replacement.path.endsWith('/body') || replacement.path.endsWith('/explanation')) {

@@ -524,3 +524,29 @@ test('“不构成/不等于已发布”是否定状态，不当作作者资源�
         assert.ok(issues(text).length > 0, text);
     }
 });
+
+test('2026-11-24 真实稿“未披露/公开状态未披露/尚无可验证/未随文公开为”闭合否定不误报，双重否定与转折肯定仍拒绝', () => {
+    const source = 'The paper does not disclose public code repositories or downloadable model weights.';
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(source), resources: [] };
+    const identity = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const issues = text => deep.readerResourceClaimIssues({
+        sections: [{ kind: 'reproduction', body: text }]
+    }, identity, source);
+    for (const text of [
+        '资源身份方面原文未披露自有仓库与可下载权重，100 档馆藏已声明 cannot release；',
+        '原文未披露代码与权重公开链接，基准需向各数据集提供方申请后获取，未提及演示页。',
+        '代码与权重公开状态原文未披露，训练与评测硬件仅提及算力分配。',
+        '自有代码权重公开信息同样空缺。',
+        '代码层面原文写明即将公开，当前尚无可验证的公开仓库，不应视为已开源。',
+        '原文写明代码即将公开，当前尚无可验证的公开仓库与可下载权重，不应视为已开源；',
+        '代码、权重与数据均未随文公开为可下载版本，研究配置脚本可向作者索取，当前不可写为已开源或可运行。'
+    ]) assert.deepEqual(issues(text), [], text);
+    for (const text of [
+        '并非未披露自有仓库与可下载权重。',
+        '不是尚无可验证的公开仓库。',
+        '代码与权重并非未随文公开为可下载版本。',
+        '原文未披露数据集，但本文代码已开源。',
+        '代码未随文公开，但模型权重已公开。',
+        '代码与权重公开状态已确认可用。'
+    ]) assert.ok(issues(text).length > 0, text);
+});

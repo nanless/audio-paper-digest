@@ -956,22 +956,26 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         }
         return false;
     };
-    const isScopedResourceNonClaim = (segment, matchIndex, type) => {
+    const isScopedResourceNonClaim = (segment, matchIndex, matchEnd, type) => {
         const prefix = segment.slice(Math.max(0, matchIndex - 56), matchIndex);
         if (/(?:否定|反驳|证伪)[^。！？!?；;，,]{0,48}$/.test(prefix)) return false;
         // 限定当前肯定词之前的否定作用域；后续转折中的实际发布声明仍要核验。
         const currentAssertionPrefix = prefix.split(/(?:但是|然而|不过|事实上|却|(?<!不)但)/u).at(-1);
+        const hasDoubleNegation = /(?:并非|不是|并不是|否认|否定|反驳|证伪)[^。！？!?；;，,]{0,16}(?:未|没有|未曾|尚未|尚无|并无|暂无|未见|不存在)/u.test(currentAssertionPrefix);
         if (/(?:不能(?:据此)?(?:直接)?写成|未能(?:直接|可靠|独立|明确)?确认)[^。！？!?；;，,]{0,48}$/u
             .test(currentAssertionPrefix)) return true;
         if (/(?:无法确认|尚无法确认|未确认|未证明|未报告|不证明|不涉及|不讨论|不等于|不代表|不要(?:把|将|默认|声称|写|表示|推断|断言)|不能(?:据此)?(?:確認|确认|认定|推断|断言|宣告|说)|不能仅凭[^。！？!?；;，,]{1,28}就(?:确认|认定|推断|断言))[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
-        // 「原文也没有声称代码模型数据已开源」是闭合否定：否定动词后可以接不带
-        // 分隔符的资源名词串（代码模型数据），不构成作者当前的开放声明。
-        if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证|分配|设立|建立|开设|公布)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
+        // 「原文也没有声称代码模型数据已开源」「原文未披露自有仓库与可下载权重」
+        // 「均未随文公开为可下载版本」「当前尚无可验证的公开仓库」是闭合否定：
+        // 否定动词或存在否定后接资源名词串不构成作者当前的开放声明，且受转折和双重否定守卫约束。
+        if (!hasDoubleNegation && /(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证|分配|设立|建立|开设|公布|披露)[^。！？!?；;，,]{0,48}$/.test(currentAssertionPrefix)) return true;
+        if (!hasDoubleNegation && /(?:未|没有|未曾|尚未)随文(?:公开|发布|开放)(?:为)?[^。！？!?；;，,]{0,24}$/.test(currentAssertionPrefix)) return true;
+        if (!hasDoubleNegation && /(?:尚无|并无|暂无|未见|不存在)(?:任何)?(?:可验证|可核验|经验证|已验证)(?:的)?[^。！？!?；;，,]{0,36}$/.test(currentAssertionPrefix)) return true;
         if (/需要补(?:充)?(?:的)?(?:验证|检查|步骤)(?:是|包括)?[^。！？!?；;，,]{0,36}$/.test(prefix)) return true;
         if (/(?:先|再|应|需)(?:单独|分别|实际)?(?:验证|核对|确认)[^。！？!?；;，,]{0,16}$/.test(prefix)) return true;
         if (/属于第三方[^。！？!?；;，,]{0,16}$/.test(prefix) && availableTypes.has('third_party')) return true;
-        if (/^(?:的)?(?:情况|状况|状态)[^。！？!?；;，,]{0,20}(?:尚无法确认|无法确认|未确认)/
-            .test(segment.slice(matchIndex + 2))) return true;
+        if (/^(?:的)?(?:情况|状况|状态|信息)(?![^。！？!?；;，,]{0,20}(?:但|然而|不过|已|现已|确认可用))[^。！？!?；;，,]{0,20}(?:尚无法确认|无法确认|未确认|未披露|未提及|未说明|空缺)/
+            .test(segment.slice(matchEnd))) return true;
         if (type === 'model' && /(?:权重方差|注意力权重|目标权重|损失权重)[^。！？!?；;]{0,64}(?:开放问题|公开讨论)/.test(segment)) return true;
         if (type === 'dataset' && /(?:数据集|语料库)(?:中|内|里|上)[^。！？!?；;]{0,32}(?:标签|真值|标注|样本)/.test(segment)
             && !/(?:本文|本论文|作者团队)[^。！？!?；;]{0,32}(?:数据集|语料库)[^。！？!?；;]{0,16}(?:已|现已|已经)(?:公开|发布|开放)/.test(segment)) return true;
@@ -1557,7 +1561,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             // “不能否认作者已开源/代码可下载”是肯定；省略归属者也不能
             // 由后面的普通否定或概念守卫吞掉，明确的缺失否定仍保留。
             const assertionPrefix = segment.slice(0, localMatchIndex);
-            if (/(?:不是|并非|并不是)(?:不能(?:证明|说明|确认)|不是)[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)) return true;
+            if (/(?:不是|并非|并不是)(?:不能(?:证明|说明|确认)|不是|(?:未|尚未|并未|没有|尚无)(?:随文)?(?:公开|发布|开放|披露|可验证))[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:否认|否定)[^。！？!?；;，,]{0,16}(?:作者|本文|本论文|本研究|本工作)?[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;
@@ -1586,7 +1590,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 )
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
                 || isBoundedResourceDeclarationDenial(value, match.index, match.index + match[0].length)
-                || isScopedResourceNonClaim(segment, localMatchIndex, type)
+                || isScopedResourceNonClaim(segment, localMatchIndex, localMatchEnd, type)
                 || isFutureResourceArchivePlan(segment, localMatchIndex)
                 || isReportedReleaseWithCurrentQualification(value, type, match.index, match.index + match[0].length)
                 || isSourceBackedDependencyUseOrPriorDatasetAccess(value, type, match.index)
