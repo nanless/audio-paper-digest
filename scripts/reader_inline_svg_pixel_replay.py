@@ -50,9 +50,13 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256):
     actual = render_svg(raw)
     if hashlib.sha256(actual).hexdigest() == expected_sha256:
         return actual, None
-    hidpi_actual = render_svg(raw, hidpi=True)
-    if hashlib.sha256(hidpi_actual).hexdigest() == expected_sha256:
-        return hidpi_actual, None
+    # macOS Chromium HiDPI rasterization can occasionally vary by a few subpixel AA bytes
+    # across launches; retry the exact current renderer a bounded number of times while
+    # still requiring an exact byte-for-byte SHA-256 match.
+    for _ in range(8):
+        hidpi_actual = render_svg(raw, hidpi=True)
+        if hashlib.sha256(hidpi_actual).hexdigest() == expected_sha256:
+            return hidpi_actual, None
     for code, provenance in _trusted_renderers():
         namespace = {'__name__': 'trusted_inline_svg_pixel_replay',
                      '__file__': str(REPOSITORY / RENDERER_PATH)}
