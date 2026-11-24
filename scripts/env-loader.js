@@ -84,6 +84,7 @@ function requiredWorkspaceRoleForCommand(commandName) {
     if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
         'refresh-api-reader.js', 'reanalyze-selected.js', 'official-conference-acquire.js', 'conference-queue.js',
         'daily-scoring-refresh-checkpoint-cli.js',
+        'compact-papers-ledger.js',
         'conference-workspace.js', 'migrate-conference-process.js',
         'conference-complete-stage-worker.js',
         'conference-publication-figure-crop-replay-cli.js',

@@ -60,7 +60,8 @@ const {
     loadPapersDatabase,
     updateAnalysisDigestStatuses,
     synchronizeCompletedAnalysisDigestStatuses,
-    backupPapersJson
+    backupPapersJson,
+    stripPapersLedgerEphemeralFields
 } = require('./digest-status.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const dailySourceSkip = require('./lib/daily-source-skip.js');
@@ -113,6 +114,10 @@ const FULL_FETCH_RUN_LOCK = path.join(Config.CURRENT_DIR, '.full-fetch-run');
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;
     return status !== 'pending_analysis' && status !== 'analysis_failed';
+}
+
+function normalizePaperForLedger(existingPaper, incomingPaper) {
+    return stripPapersLedgerEphemeralFields({ ...(existingPaper || {}), ...(incomingPaper || {}) });
 }
 
 // 日更路径用 __TITLE__ 等固定替代文本渲染首块，再取前 16 位。固定文本不同，算出的哈希和会议路径
@@ -2329,7 +2334,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         const status = successfulAnalysisIds.has(normId) ? 'analyzed' : (filteredNewIds.has(normId) ? 'pending_analysis' : 'seen');
         const decision = filterDecisions[normId];
         const nextPaper = markPaperDigestStatus(
-            { ...(papersData.papers[normId] || {}), ...paper },
+            normalizePaperForLedger(papersData.papers[normId], paper),
             status,
             {
                 batchDate: today,
@@ -2703,6 +2708,7 @@ module.exports = {
     migrateLegacyAnalysisResultToCurrent,
     cleanOldData,
     shouldUsePaperForFetchDedup,
+    normalizePaperForLedger,
     markPaperDigestStatus,
     getFilterPromptHash,
     getFilterConfigFingerprint,

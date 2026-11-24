@@ -44,9 +44,81 @@ const ANALYSIS_FIELDS = Object.freeze([
     'htmlAttempts',
     'sourceWarnings'
 ]);
+const PAPERS_LEDGER_STRIP_ON_WRITE_FIELDS = Object.freeze([
+    'apiReaderPlan',
+    'apiReaderFailedBundleHistory',
+    'analysisStaleSnapshots',
+    'apiReaderFigures',
+    'apiReaderAuthors',
+    'apiReaderResources',
+    'readerRevisionHistory',
+    'dailyScoringRefreshHistory',
+    'fullStageReanalysis',
+    'apiReaderSourceBindingEvidence',
+    'apiReaderTableEvidence',
+    'apiReaderFormulaEvidence',
+    'manualArtifactIndex',
+    'manualReaderLongform',
+    'manualResultClaims',
+    'manualReadabilityRubric',
+    'manualIngestionCheckpoint'
+]);
 const PAPERS_BACKUP_CONTRACT = 'papers-backup-v1';
 const PAPERS_BACKUP_MAX_GROUPS = 7;
 const PAPERS_BACKUP_MAX_RAW_BYTES = 512 * 1024 * 1024;
+const FAILURE_RECOVERY_FIELDS = Object.freeze([
+    'analysisFactReviewObligation',
+    'analysisRecoveryImageManifest',
+    'analysisCheckpoint',
+    'analysisStageCheckpoints',
+    'latestAnalysisAttemptError',
+    'latestAnalysisAttemptAt'
+]);
+
+function mergeSourcesField(target, first, second) {
+    if (Array.isArray(first?.sources) || Array.isArray(second?.sources)) {
+        target.sources = [...new Set([...(first?.sources || []), ...(second?.sources || [])])];
+    }
+    return target;
+}
+
+function clearFailureRecoveryFields(paper) {
+    for (const field of FAILURE_RECOVERY_FIELDS) {
+        delete paper[field];
+    }
+    return paper;
+}
+
+function isAnalysisFailureRecord(paper) {
+    if (!paper || typeof paper !== 'object') return false;
+    if (paper.digestStatus?.status === 'analysis_failed'
+        || paper.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+        return true;
+    }
+    return Boolean(paper.error)
+        && (paper.digestStatus?.latestAttemptStatus !== 'analyzed'
+            || Boolean(paper.digestStatus?.error));
+}
+
+function stableJsonEqual(a, b) {
+    if (a === b) return true;
+    if (a === undefined || b === undefined) return false;
+    return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function stripPapersLedgerEphemeralFields(paper) {
+    if (!paper || typeof paper !== 'object' || Array.isArray(paper)) return paper;
+    const cleaned = { ...paper };
+    for (const field of PAPERS_LEDGER_STRIP_ON_WRITE_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(cleaned, field)) {
+            delete cleaned[field];
+        }
+    }
+    if (typeof cleaned.summary === 'string' && cleaned.summary === cleaned.abstract) {
+        delete cleaned.summary;
+    }
+    return cleaned;
+}
 
 function serializePapersDatabase(data) {
     return JSON.stringify(data);
@@ -372,14 +444,40 @@ function mergeVersionedPaperRecords(existing, incoming, existingRawKey, incoming
     const incomingIsNewer = paperVersion(incoming, incomingRawKey) >= paperVersion(existing, existingRawKey);
     const older = incomingIsNewer ? existing : incoming;
     const newer = incomingIsNewer ? incoming : existing;
-    const merged = mergeAnalysisDigestPaper(older, newer);
-    if (older.digestStatus?.updatedAt > newer.digestStatus?.updatedAt) {
+    const newerIsFailure = isAnalysisFailureRecord(newer);
+    const newerSucceeded = isSuccessfulAnalysisRecord(newer)
+        || (!newerIsFailure && newer.digestStatus?.status === 'analyzed' && hasValidAnalysisBody(newer));
+
+    let merged;
+    if (newerIsFailure) {
+        merged = mergeAnalysisDigestPaper(older, newer);
+    } else if (newerSucceeded) {
+        merged = { ...older, ...newer };
+        clearFailureRecoveryFields(merged);
+        delete merged.error;
+    } else {
+        // Non-failure version update (e.g. v2 metadata fetched while v1 is already analyzed):
+        // preserve older valid analysis cleanly without synthesizing failure-recovery fields.
+        merged = { ...older, ...newer };
+        if (hasValidAnalysisBody(older)) {
+            preserveAnalysisFields(merged, older);
+            if (older.apiReaderArticle !== undefined && newer.apiReaderArticle === undefined) {
+                merged.apiReaderArticle = older.apiReaderArticle;
+            }
+            if (older.freshRewriteProvenance !== undefined && newer.freshRewriteProvenance === undefined) {
+                merged.freshRewriteProvenance = older.freshRewriteProvenance;
+            }
+        }
+        if (older.digestStatus?.status === 'analyzed'
+            && (!newer.digestStatus?.status || ['pending_analysis', 'seen'].includes(newer.digestStatus?.status))) {
+            merged.digestStatus = older.digestStatus;
+        }
+    }
+    if ((older.digestStatus?.updatedAt || '') > (newer.digestStatus?.updatedAt || '')) {
         merged.digestStatus = older.digestStatus;
     }
-    if (Array.isArray(older.sources) || Array.isArray(newer.sources)) {
-        merged.sources = [...new Set([...(older.sources || []), ...(newer.sources || [])])];
-    }
-    return merged;
+    mergeSourcesField(merged, older, newer);
+    return stripPapersLedgerEphemeralFields(merged);
 }
 
 function normalizePapersMap(rawPapers, options = {}) {
@@ -471,26 +569,85 @@ function mergePapersDatabases(currentData, incomingData) {
         ...current,
         ...incoming,
         generation: Math.max(current.generation, incoming.generation),
-        papers: { ...current.papers }
+        papers: {}
     };
+
+    for (const [key, currentPaper] of Object.entries(current.papers)) {
+        merged.papers[key] = stripPapersLedgerEphemeralFields(currentPaper);
+    }
 
     for (const [key, incomingPaper] of Object.entries(incoming.papers)) {
         const currentPaper = current.papers[key];
         if (!currentPaper) {
-            merged.papers[key] = incomingPaper;
+            merged.papers[key] = stripPapersLedgerEphemeralFields(incomingPaper);
             continue;
         }
 
-        const nextPaper = mergeAnalysisDigestPaper(currentPaper, incomingPaper);
+        const currentStatus = currentPaper.digestStatus?.status;
+        const incomingStatus = incomingPaper.digestStatus?.status;
         const currentUpdatedAt = currentPaper.digestStatus?.updatedAt || '';
         const incomingUpdatedAt = incomingPaper.digestStatus?.updatedAt || '';
-        const wouldDowngradeAnalyzed = currentPaper.digestStatus?.status === 'analyzed'
-            && ['pending_analysis', 'seen'].includes(incomingPaper.digestStatus?.status);
-        if (wouldDowngradeAnalyzed || currentUpdatedAt > incomingUpdatedAt) {
-            nextPaper.digestStatus = currentPaper.digestStatus;
-            if (hasValidAnalysisBody(currentPaper)) preserveAnalysisFields(nextPaper, currentPaper);
+
+        const isUnchangedRecord = currentUpdatedAt === incomingUpdatedAt
+            && currentStatus === incomingStatus
+            && currentPaper.digestStatus?.latestAttemptStatus === incomingPaper.digestStatus?.latestAttemptStatus
+            && currentPaper.error === incomingPaper.error
+            && currentPaper.analysis === incomingPaper.analysis
+            && currentPaper.apiReaderArticle === incomingPaper.apiReaderArticle;
+        const wouldDowngradeAnalyzed = currentStatus === 'analyzed'
+            && (!incomingStatus || ['pending_analysis', 'seen'].includes(incomingStatus));
+
+        if (isUnchangedRecord || wouldDowngradeAnalyzed || currentUpdatedAt > incomingUpdatedAt) {
+            const preserved = mergeSourcesField({ ...currentPaper }, currentPaper, incomingPaper);
+            merged.papers[key] = stripPapersLedgerEphemeralFields(preserved);
+            continue;
         }
-        merged.papers[key] = nextPaper;
+
+        const incomingIsFailure = isAnalysisFailureRecord(incomingPaper);
+        const failureStateChanged = incomingStatus !== currentStatus
+            || incomingPaper.digestStatus?.latestAttemptStatus !== currentPaper.digestStatus?.latestAttemptStatus
+            || incomingPaper.error !== currentPaper.error
+            || incomingPaper.digestStatus?.error !== currentPaper.digestStatus?.error;
+        const isRealFailureUpdate = incomingIsFailure
+            && (incomingUpdatedAt > currentUpdatedAt || failureStateChanged);
+
+        if (isRealFailureUpdate) {
+            const nextPaper = mergeAnalysisDigestPaper(currentPaper, incomingPaper);
+            mergeSourcesField(nextPaper, currentPaper, incomingPaper);
+            merged.papers[key] = stripPapersLedgerEphemeralFields(nextPaper);
+            continue;
+        }
+
+        if (incomingStatus === 'analyzed' && !incomingIsFailure) {
+            const hasUpdatedValidAnalysis = hasValidAnalysisBody(incomingPaper)
+                && (incomingPaper.analysis !== currentPaper.analysis
+                    || incomingPaper.apiReaderArticle !== currentPaper.apiReaderArticle
+                    || !stableJsonEqual(incomingPaper.analysisManifest, currentPaper.analysisManifest)
+                    || isSuccessfulAnalysisRecord(incomingPaper)
+                    || (currentPaper.digestStatus?.latestAttemptStatus === 'analysis_failed'
+                        && incomingPaper.digestStatus?.latestAttemptStatus === 'analyzed'));
+            if (hasUpdatedValidAnalysis) {
+                const updated = mergeSourcesField({ ...currentPaper, ...incomingPaper }, currentPaper, incomingPaper);
+                clearFailureRecoveryFields(updated);
+                delete updated.error;
+                merged.papers[key] = stripPapersLedgerEphemeralFields(updated);
+                continue;
+            }
+            if (currentStatus === 'analyzed') {
+                const preserved = mergeSourcesField(
+                    { ...currentPaper, digestStatus: incomingPaper.digestStatus },
+                    currentPaper,
+                    incomingPaper
+                );
+                if (hasValidAnalysisBody(currentPaper)) preserveAnalysisFields(preserved, currentPaper);
+                merged.papers[key] = stripPapersLedgerEphemeralFields(preserved);
+                continue;
+            }
+        }
+
+        const nextPaper = mergeAnalysisDigestPaper(currentPaper, incomingPaper);
+        mergeSourcesField(nextPaper, currentPaper, incomingPaper);
+        merged.papers[key] = stripPapersLedgerEphemeralFields(nextPaper);
     }
     return merged;
 }
@@ -548,7 +705,7 @@ function mergeQualifiedAnalysisDigestPaper(existing, paper, successful, hadUsabl
         delete merged.latestAnalysisAttemptError;
         delete merged.latestAnalysisAttemptAt;
     }
-    return merged;
+    return stripPapersLedgerEphemeralFields(merged);
 }
 
 function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
@@ -650,6 +807,8 @@ async function synchronizeCompletedAnalysisDigestStatuses(resultPath, entryPlan,
 }
 
 module.exports = {
+    PAPERS_LEDGER_STRIP_ON_WRITE_FIELDS,
+    stripPapersLedgerEphemeralFields,
     normalizeCompatibleBatchDate,
     inferAnalysisBatchDate,
     loadPapersDatabase,
@@ -668,5 +827,6 @@ module.exports = {
     verifyPapersBackup,
     listValidManagedBackupGroups,
     pruneManagedBackupGroups,
-    PAPERS_BACKUP_CONTRACT
+    PAPERS_BACKUP_CONTRACT,
+    PAPERS_BACKUP_MAX_RAW_BYTES
 };
