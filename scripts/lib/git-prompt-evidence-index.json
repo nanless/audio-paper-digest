@@ -291,6 +291,12 @@
         "prompts/filter.md"
       ]
     },
+    "15b811d14d147cae0638f2f3d4001cac02a5cf57832858540505ddd8e416fbd1": {
+      "blobOid": "b9a9478f5207be57a8de073e89cb485e7eda555c",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
     "16b48d6f7ac4fad15284f587def4dca2e565f4eda01f8dd6a9a443beb91955a8": {
       "blobOid": "eeed731147e1be5e875406a84fe553ea031510f1",
       "paths": [
@@ -1369,6 +1375,12 @@
       "blobOid": "1c0e899b4d632e8e5d4aac95ec5dcf9391908e13",
       "paths": [
         "prompts/en/deep-analysis.md"
+      ]
+    },
+    "9556f5dbc385f4a0f86edc0354465df2f720ff7ba61ce7558cfcc227269e9680": {
+      "blobOid": "f67ed19c2ddea4afc8cd8fd9269083606e379cb4",
+      "paths": [
+        "prompts/current/deep-analysis.md"
       ]
     },
     "965a1ebfcc732d9fbcfee63860bde4411c0c00cce8f8500d80bd9665346b8288": {

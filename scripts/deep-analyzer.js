@@ -103,6 +103,7 @@ const {
     validateEditorialQuality,
     findDuplicateLongSentences,
     findQuantitativeChineseNumerals,
+    maskStructuredV5NaturalNumerals,
     normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals,
     SCALED_ARABIC_MEASUREMENT_UNITS
@@ -3320,13 +3321,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
             .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu, protectChinese)
             .replace(/每一(?=\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch))/giu, protectChinese);
         if (require('./lib/reader-record-format').isStructuredV5(options?.editorialProfile)) {
-            protectedText = protectedText
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:单|两|三|四|多)阶段/gu, protectChinese)
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:单|双|两|三|多)段式/gu, protectChinese)
-                .replace(/(?:哪一|任何一|某一)(?:个|帧|步|类|层|路|项|组|条|种|级)/gu, protectChinese)
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:两|二)者/gu, protectChinese)
-                .replace(/(?:查|做|跑|执行|输出|发起|触发|完成)一次/gu, protectChinese)
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])一次(?:判定|输出|调用|前向|推理|更新|评估|预测|回答|检索|采样)/gu, protectChinese);
+            protectedText = maskStructuredV5NaturalNumerals(protectedText, protectChinese);
         }
     }
     const adjacentNumeralSurfaces = [];
@@ -9267,12 +9262,25 @@ function normalizeApiReaderDraftPreOrder(candidate, normalizationIssues = [], op
     }
     repairReportedTextSpacing(candidate, normalizationIssues);
     normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
+    let preOrderEditorialProfile = options.editorialProfile || '';
+    if (!preOrderEditorialProfile) {
+        try {
+            preOrderEditorialProfile = require('./lib/reader-record-format').draftFormat(candidate).editorialProfile || '';
+        } catch {
+            preOrderEditorialProfile = '';
+        }
+    }
+    const numeralNormalizationOptions = preOrderEditorialProfile
+        ? { editorialProfile: preOrderEditorialProfile }
+        : {};
     if (Array.isArray(candidate.sections)) {
         candidate.sections = candidate.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
                 ? normalizeIssueBoundReaderQuantitativeNumerals(
-                    normalizeDanglingReaderConnectors(section.body), normalizationIssues
+                    normalizeDanglingReaderConnectors(section.body),
+                    normalizationIssues,
+                    numeralNormalizationOptions
                 ) : section?.body
         }));
     }
@@ -9281,7 +9289,9 @@ function normalizeApiReaderDraftPreOrder(candidate, normalizationIssues = [], op
             ...bridge,
             explanation: typeof bridge?.explanation === 'string'
                 ? normalizeIssueBoundReaderQuantitativeNumerals(
-                    bridge.explanation, normalizationIssues
+                    bridge.explanation,
+                    normalizationIssues,
+                    numeralNormalizationOptions
                 ) : bridge?.explanation
         }));
     }
@@ -9311,6 +9321,7 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
                     pixelFigureOrdinals,
                     sourceText: options.sourceText,
                     draftOrderMappings,
+                    editorialProfile: options.editorialProfile || '',
                     onNoFigureCleanup: () => { mechanicalNoFigureCleanupChanged = true; },
                     readerFactLocalRevision: options.readerFactLocalRevision === true,
                     resourceLocalRevision: options.resourceLocalRevision === true

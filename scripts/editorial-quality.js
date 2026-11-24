@@ -130,7 +130,15 @@ const READER_V4_TEMPLATE_PATTERNS = Object.freeze([
 ]);
 
 const PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
+const STRUCTURED_V5_PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER|EER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
+const AUDIO_METRIC_WHITELIST = Object.freeze([
+    'UTMOS', 'DNSMOS', 'NISQA', 'ViSQOL', 'STOI', 'ESTOI',
+    'FAD', 'CLAP', 'RTF', 'TTFA', 'EER', 'SI-SDR', 'SI-SDRi',
+    'MCD', 'LSD', 'WV-MOS', 'PESQ', 'MOS', 'WER', 'CER', 'PER',
+    'DER', 'JER', 'SIM', 'SECS', 'SDR', 'SNR'
+]);
 const DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
+const STRUCTURED_V5_DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|升至|降至|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
 const DEFENSIVE_NEGATION_RE = /(?:不能|不应|不足以|不等于|并不代表|并不能|尚不能|不可外推)/g;
 const READER_SPACED_QUANTIFIERS = Object.freeze([
     '个百分点', '个随机种子', '名参与者', '个文件', '个会话', '个模型', '个候选', '个组合',
@@ -375,6 +383,67 @@ function getQuantitativePatterns(isCohesiveV4) {
     return isCohesiveV4 ? cachedQuantitativePatterns.modern : cachedQuantitativePatterns.legacy;
 }
 
+function maskStructuredV5NaturalNumerals(text, replacer) {
+    // 仅作用于 STRUCTURED_V5：保护自然中文单数“一”与常见惯用表达，避免把
+    // “留一会话/这一对比/另一位/最后一次/一次看清/一套/一路/一种/一帧/二次开发”等
+    // 自然中文改写成生硬的“留 1 会话/这 1 对比/1 次”。
+    // 真实定量计数（>=2 如“三个模型/五层/十六千赫兹/百分之八十五”）、小数/分数/比值/乘积
+    // （如“零点一帧/四分之一帧/三比一组/三乘一次”）、物理/位宽测量单位（如“一秒/一毫秒/
+    // 一个百分点/一个小时/一个字节/一个 token/一位量化”）、总计类限定词（“共有/共计/总共/
+    // 总计/一共/恰好/唯独”）以及区间端点（“从一层扩展到四层/从四层降到一层/由一层增至四层”）仍严格拦截。
+    const numLookbehind = '(?<![\\d零〇一二两三四五六七八九十百千万亿点之比乘:：负正])';
+    const physicalUnitAfterGeRe = /^\s*(?:百分点|毫秒|秒|分钟|小时|天|兆赫|千赫|赫兹|分贝|毫焦|皮焦|兆字节|千字节|字节|像素|采样|自由度|随机种子|GPU\s*(?:小时|秒)|(?:GB|MB|KB|mJ|dB|Hz|kHz|MHz|MACs?|tokens?|workers?|episodes?|epochs?)(?![A-Za-z0-9_]))/iu;
+    const totalLimiterBeforeRe = /(?:共有|共计|总共|总计|一共|恰好|唯独)(?:查|做|跑|执行|输出|发起|触发|完成|采用|使用|保留|包含|运行|训练|测试|评估|处理|更新)?\s*$/u;
+    const rangeVerbSrc = '(?:到|至|增至|升至|降至|减至|提高到|提升到|降低到|下降到|扩至|扩展到|增加到|减少到)';
+    const directRangeSepSrc = '(?:到|至|–|—|(?<!\\s)-|\\s+-\\s+)';
+    const isExactCountOrRangeContext = (whole, offset, length, unit) => {
+        const before = whole.slice(Math.max(0, offset - 32), offset);
+        const after = whole.slice(offset + length, offset + length + 36);
+        if (totalLimiterBeforeRe.test(before)) return true;
+        if (!unit) return false;
+        const escUnit = unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // 要求区间两端使用同一量纲/单位，避免将音频流水线叙述（“从一段语音提取到 80 维特征”、
+        // “从 16 kHz 波形下采样到一帧 20 ms 特征”）或负号分贝（“一段 -5 dB 音频”）误判为同量纲区间。
+        const rangeDirectAfterRe = new RegExp(`^\\s*${directRangeSepSrc}\\s*[一二两三四五六七八九十\\d]+\\s*${escUnit}`, 'u');
+        if (rangeDirectAfterRe.test(after)) return true;
+        const rangeAfterStartRe = new RegExp(`^.{0,16}?${rangeVerbSrc}\\s*[一二两三四五六七八九十\\d]+\\s*${escUnit}`, 'u');
+        if (/(?:从|由)\s*$/u.test(before) && rangeAfterStartRe.test(after)) return true;
+        const rangeBeforeEndRe = new RegExp(`(?:从|由)\\s*[一二两三四五六七八九十\\d]+\\s*${escUnit}[^，,。；;！？!?\\n]{0,12}?${rangeVerbSrc}\\s*$`, 'u');
+        if (rangeBeforeEndRe.test(before)) return true;
+        return false;
+    };
+    const nonPhysicalSingularUnits =
+        '个|套|路|类|项|种|位(?!量化|宽|编码|精度|定点|浮点|整数|比特)|场|遍|步|段|组|条|次|帧|层|轮|篇|张|人|名|例|流|分支|阶段|模块|模型|基准|数据集|会话|目录|轨道|模态|通道';
+    const singularOnePattern = new RegExp(
+        `${numLookbehind}一(?:${nonPhysicalSingularUnits}|对(?!\\s*\\d))`,
+        'gu'
+    );
+    const guardMatchWithUnit = explicitUnit => (match, offset, whole) => {
+        if (match.endsWith('一个') && physicalUnitAfterGeRe.test(whole.slice(offset + match.length))) {
+            return match;
+        }
+        const unit = explicitUnit || (match.startsWith('一') ? match.slice(1) : '');
+        if (isExactCountOrRangeContext(whole, offset, match.length, unit)) return match;
+        return replacer(match);
+    };
+    return String(text ?? '')
+        .replace(new RegExp(`${numLookbehind}(?:单|两|三|四|多)阶段`, 'gu'), replacer)
+        .replace(new RegExp(`${numLookbehind}(?:单|双|两|三|多)段式`, 'gu'), replacer)
+        .replace(new RegExp(`${numLookbehind}(?:两|二)者`, 'gu'), replacer)
+        .replace(new RegExp(`${numLookbehind}二次(?:开发|生成|方|型|复杂度|计算|开销|成本|规划|项|函数|插值|采样|重排|检索|利用|封装|训练|微调|校准|过滤|筛选)`, 'gu'), replacer)
+        .replace(new RegExp(`(?<![保预残遗滞截停只仅共\\d零〇一二两三四五六七八九十百千万亿点之比乘:：负正])留一(?:会话|说话人|受试者|参与者|领域|场景|语种|方言|数据集|类别|样本|片段|通道|模态|交叉验证|验证|评估|测试|法)`, 'gu'), replacer)
+        .replace(/(?:这|那|另|上|下|哪|某|任何|最后|再|又|头|逐)一(?:对比|对照|个|帧|步|类|层|路|项|组|条|种|级|位(?!量化|宽|编码|精度|定点|浮点|整数|比特)|次|套|段|轮|场|遍|对(?!\s*\d)|人|名|例|流|篇|张|卡|阶|维|通道|阶段|分支|模型|基准|数据集|会话|目录|轨道|模态|随机种子)/gu, (match, offset, whole) => {
+            if (match.endsWith('一个') && physicalUnitAfterGeRe.test(whole.slice(offset + match.length))) {
+                return match;
+            }
+            return replacer(match);
+        })
+        .replace(new RegExp(`${numLookbehind}(?:一并|一次看清|一次说清|一次讲清|一次读懂|一次搞懂|一次完成|一次通过|一次即可|一次覆盖|一对照|一对比)`, 'gu'), replacer)
+        .replace(/(?:查|做|跑|执行|输出|发起|触发|完成)一次/gu, guardMatchWithUnit('次'))
+        .replace(new RegExp(`${numLookbehind}一次(?:判定|输出|调用|前向|推理|更新|评估|预测|回答|检索|采样|编码|解码|训练|运行|干预|分离|验证|校准|修正|生成|遍历|扫描)`, 'gu'), guardMatchWithUnit('次'))
+        .replace(singularOnePattern, guardMatchWithUnit(''));
+}
+
 function findQuantitativeChineseNumerals(text, options = {}) {
     const isCohesiveV4 = isModernEditorialProfile(options?.editorialProfile);
     // 下列“一步”都是篇章连接或指代，不是精确的 1 个步骤；用等长空白
@@ -417,19 +486,7 @@ function findQuantitativeChineseNumerals(text, options = {}) {
             .replace(/每一\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch)/giu,
                 match => ' '.repeat(match.length));
         if (options?.editorialProfile === STRUCTURED_V5) {
-            value = value
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:单|两|三|四|多)阶段/gu,
-                    match => ' '.repeat(match.length))
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:单|双|两|三|多)段式/gu,
-                    match => ' '.repeat(match.length))
-                .replace(/(?:哪一|任何一|某一)(?:个|帧|步|类|层|路|项|组|条|种|级)/gu,
-                    match => ' '.repeat(match.length))
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:两|二)者/gu,
-                    match => ' '.repeat(match.length))
-                .replace(/(?:查|做|跑|执行|输出|发起|触发|完成)一次/gu,
-                    match => ' '.repeat(match.length))
-                .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])一次(?:判定|输出|调用|前向|推理|更新|评估|预测|回答|检索|采样)/gu,
-                    match => ' '.repeat(match.length));
+            value = maskStructuredV5NaturalNumerals(value, match => ' '.repeat(match.length));
         }
     }
     const patterns = getQuantitativePatterns(isCohesiveV4);
@@ -520,7 +577,7 @@ function findQuantitativeChineseNumerals(text, options = {}) {
 // 这里刻意比通用的排版归一化窄：只处理判断明确、并被问题记录精确绑定的
 // 「N阶段」和带量级的「N万亿 单位」，其余干净正文一概不扫。
 // 引用证据和 Markdown 结构保持逐字节不变。
-function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
+function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = [], options = {}) {
     const source = String(text || '');
     const requested = new Set();
     const requestedSimpleMeasured = new Set();
@@ -595,6 +652,9 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
         .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g, protect)
         .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect)
         .replace(/^(?:原文|原句|逐字引语|口语(?:转录|转写|输出)|输入(?:转录)?|Transcript|Input)\s*[:：][^\n]*/gmi, protect);
+    if (options?.editorialProfile === STRUCTURED_V5) {
+        normalized = maskStructuredV5NaturalNumerals(normalized, protect);
+    }
     const expandDecimalScale = (raw, places) => {
         const sign = /^[+-]/.test(raw) ? raw[0] : '';
         const [integer, fraction = ''] = raw.replace(/^[+-]/, '').split('.');
@@ -827,6 +887,33 @@ function findReaderLanguageIssues(text, { contextText = '', sourceText = '', doc
                     code: 'reader_workflow_leakage',
                     regex: /怎样进入下一步|该式的三层(?:含义|读法|理解)|可分三层理解|三层读法|可写(?:作者)?(?:演示|代码|模型|数据|资源)|本次核验返回\s*\d+|本次未收到可核验|资源清单未标明/gu,
                     message: '这句照搬了提示词模板口癖或内部资源核验指令。请用面向读者的自然技术表达重写，不要复述“该式的三层含义/怎样进入下一步/可写作者/本次核验返回”等流程话术。'
+                },
+                {
+                    code: 'reader_awkward_translation',
+                    regex: /图形处理器|中央处理器|张量处理器|乘加操作(?:数)?|乘加运算次数/gu,
+                    allowAcronymGloss: true,
+                    message: '请保留国际通用的硬件与计算量标准缩写（GPU、CPU、TPU、MACs），不要生硬直译成“图形处理器”“中央处理器”“张量处理器”或“乘加操作”；保留原型号、数值、单位与来源证据。'
+                },
+                {
+                    code: 'reader_awkward_translation',
+                    regex: /虚拟语音质量客观(?:分数|指标|评分|评估|质量|模型|得分|评测|度量|听者)/gu,
+                    message: '不要把标准声学指标缩写 ViSQOL 生硬逐词直译成“虚拟语音质量客观分数/指标”；请保留官方指标名 ViSQOL，并在首次出现时用自然中文括号说明其含义（如“ViSQOL（语音感知质量客观指标）”）。'
+                },
+                {
+                    code: 'reader_awkward_translation',
+                    regex: /(?<![保预残遗滞截停只仅共])留\s*1\s*(?:会话|说话人|受试者|参与者|领域|场景|语种|方言|法|交叉验证)|(?:这|那|另|哪|某)\s*1\s*(?:对比|对照|位|次|帧|套|路|条|轮|场|遍|人)|(?:^|(?<=[，,。；;！？!?（(、与和及比从由到至把将于对较沿按取用]|(?:^|[，,。；;！？!?（(、])以))(?:上|下)\s*1\s*(?:对比|对照|位|次|帧|套|路|条|轮|场|遍|人)|最后\s*1\s*次|(?<![\d.])1\s*次看清/gu,
+                    message: '这句把自然中文指代或固定词机械写成了“1”（如“留 1 会话/这 1 对比/另 1 位/最后 1 次/1 次看清”）。请恢复自然中文汉字“一”，仅对实测数值、物理单位与明确计数保留阿拉伯数字。'
+                },
+                {
+                    code: 'reader_awkward_translation',
+                    regex: /拉通链路|推动落地|赛道红利|能力底座|核心抓手|组合拳|性能天花板|方案兜底|全面赋能|深度赋能|工业默认|直接碾压|画龙点睛|如火如荼|脱颖而出|大放异彩|横空出世|里程碑式的突破|令人瞩目|毋庸置疑|不言而喻|总而言之|综上所述|显而易见|不仅如此|值得一提的是/gu,
+                    message: '这句使用了空泛的 AI 套话或咨询营销黑话。请改写为直接陈述论文具体机制、定量收益、实验前提或适用限制的平实技术表达，不改变原数值与来源证据。'
+                },
+                {
+                    code: 'reader_awkward_translation',
+                    regex: /彻底消除/gu,
+                    allowClauseNegation: true,
+                    message: '“彻底消除”属于未经证实的营销式绝对断言。请改写为写清具体降幅、条件与适用范围的克制技术表述，或明确说明并未完全消除；不改变原数值与来源证据。'
                 }
             ] : [])
         ] : [])
@@ -843,6 +930,14 @@ function findReaderLanguageIssues(text, { contextText = '', sourceText = '', doc
             if (rule.code === 'reader_awkward_translation'
                 && (/(?:不(?:应|宜|能|该)?被?(?:叫|译成|译为|译作)|不要(?:译成|译为|写成)|避免(?:称为|译为))\s*[“「"']?$/u.test(prefix)
                     || /(?:原文(?:所称|称作|称为|记作|写作)|即原文(?:的)?)\s*[“「"']?$/u.test(prefix))) continue;
+            if (rule.allowAcronymGloss) {
+                const glossPrefix = visible.slice(Math.max(start, finding.index - 64), finding.index);
+                if (/\b(?:GPU|CPU|TPU|[GMK]?MACs?)\s*[（(][^）)\n]{0,52}$/i.test(glossPrefix)) continue;
+            }
+            if (rule.allowClauseNegation) {
+                const clausePrefix = visible.slice(start, finding.index).split(/[，,。；;！？!?\n]/u).at(-1);
+                if (/(?:并非|而非|并未|未能|无法|不能|很难|难以|不会|没有|未必|尚未|不足以|不可能)/u.test(clausePrefix)) continue;
+            }
             // 上下文只能帮助解释这个字段的术语，不产生上下文中的检查目标。
             if (rule.technicalContext
                 && !rule.technicalContext.test(paragraph + '\n' + String(contextText))) continue;
@@ -1136,11 +1231,15 @@ function findCrossSectionNearDuplicates(input, options = {}) {
 
 function numericFactSignatures(text, options = {}) {
     const minimumNumbers = Number.isInteger(options.minimumNumbers) ? options.minimumNumbers : 2;
+    const isStructuredV5 = options?.editorialProfile === STRUCTURED_V5;
+    const metricRegex = isStructuredV5
+        ? /(?:\b(?:WER|CER|PER|EER|DER|JER|F-?score|mAP|MAE|RMSE|PESQ|UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|MOS|STOI|ESTOI|FAD|CLAP|RTF|TTFA|SI-SDRi?|MCD|LSD|SRCC)\b|准确率|召回率|错误率|覆盖率|延迟|吞吐|能耗)/gi
+        : /(?:WER|CER|PER|F-?score|mAP|MAE|RMSE|PESQ|SI-SDR|SRCC|准确率|召回率|错误率|覆盖率|延迟|吞吐|能耗)/gi;
     const signatures = [];
     for (const sentence of proseSentences(text)) {
         const numbers = extractNumericTokens(sentence.text);
         if (numbers.length < minimumNumbers) continue;
-        const metrics = (sentence.text.match(/(?:WER|CER|PER|F-?score|mAP|MAE|RMSE|PESQ|SI-SDR|SRCC|准确率|召回率|错误率|覆盖率|延迟|吞吐|能耗)/gi) || [])
+        const metrics = (sentence.text.match(metricRegex) || [])
             .map(item => item.toLowerCase())
             .sort();
         signatures.push({
@@ -1261,12 +1360,13 @@ function findTechnicalTermAdhesions(text) {
         });
 }
 
-function maskBoundMetricDeltaIntervals(text) {
+function maskBoundMetricDeltaIntervals(text, percentMetricsRe = PERCENT_METRICS_RE, options = {}) {
     // Only an immediately bound pp estimate can give its own CI endpoints units.
     // Leave every other number in place for the ordinary missing-unit check.
     const number = '[-+]?\\d+(?:\\.\\d+)?';
     const interval = `(?:[，,]\\s*(?:置信区间|区间)(?:为|是)?\\s*(${number})\\s*(?:到|至|[–—])\\s*(${number})|\\s*\\[\\s*(${number})\\s*[,，]\\s*(${number})\\s*\\])`;
-    const pattern = new RegExp(`(?:${PERCENT_METRICS_RE.source})(?:平均|总体)?(?:提高|提升|增加|降低|减少|下降)(?:了|约)?\\s*(${number})\\s*(?:pp|个百分点|百分比点)(?![A-Za-z])\\s*${interval}(?=\\s*(?:[，,。；;！？!?]|$))`, 'giu');
+    const spaceGap = options?.allowMetricGap ? '\\s*' : '';
+    const pattern = new RegExp(`(?:${percentMetricsRe.source})${spaceGap}(?:平均|总体)?(?:提高|提升|增加|降低|减少|下降)(?:了|约)?\\s*(${number})\\s*(?:pp|个百分点|百分比点)(?![A-Za-z])\\s*${interval}(?=\\s*(?:[，,。；;！？!?]|$))`, 'giu');
     return String(text || '').replace(pattern, (match, estimate, a, b, c, d, index, whole) => {
         const prefix = whole.slice(0, index).split(/[；;。！？!?\n]/u).at(-1);
         if (/(?:假设|如果|预计|预期|可能|计划|未来|并非|不是|不代表|并未|未报告|未测|没有)/u.test(prefix)) return match;
@@ -1329,7 +1429,7 @@ function isFinalCountedPairRate(value, finding) {
     return false;
 }
 
-function maskBoundParameterSweeps(text) {
+function maskBoundParameterSweeps(text, percentMetricsRe = PERCENT_METRICS_RE) {
     // Bind the initialization and sweep to one explicit parameter. Only their
     // numeric tokens are settings; later WER/CER results remain visible.
     const number = '[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w.])';
@@ -1340,7 +1440,7 @@ function maskBoundParameterSweeps(text) {
     for (const match of text.matchAll(sweep)) {
         // A new metric or parameter in the intervening scope changes the
         // target. Do not infer that its following values still belong to α.
-        if (PERCENT_METRICS_RE.test(match.groups.scope)
+        if (percentMetricsRe.test(match.groups.scope)
             || /[αβγδελ]|参数|系数|阈值|另设|改为|换成|结果|测得|得分|[=＝]/u.test(match.groups.scope)) continue;
         for (const key of ['initial', 'lower', 'upper']) spans.push(match.indices.groups[key]);
     }
@@ -1349,7 +1449,10 @@ function maskBoundParameterSweeps(text) {
     return masked;
 }
 
-function findMissingComparisonUnits(text) {
+function findMissingComparisonUnits(text, options = {}) {
+    const isStructuredV5 = options?.editorialProfile === STRUCTURED_V5;
+    const percentMetricsRe = isStructuredV5 ? STRUCTURED_V5_PERCENT_METRICS_RE : PERCENT_METRICS_RE;
+    const directionRe = isStructuredV5 ? STRUCTURED_V5_DIRECTION_RE : DIRECTION_RE;
     const value = stripCodeLinksAndUrls(text)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
@@ -1366,13 +1469,16 @@ function findMissingComparisonUnits(text) {
         const sentenceStart = Math.max(value.lastIndexOf('。', match.index), value.lastIndexOf('；', match.index)) + 1;
         const sentenceEnd = value.slice(end).search(/[。！？!?；;]/u);
         const context = value.slice(sentenceStart, sentenceEnd < 0 ? value.length : end + sentenceEnd);
+        const zeroPairMetricRe = isStructuredV5
+            ? /(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER|EER)\b)/iu
+            : /(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER)\b)/iu;
         if (/对\s*零点$/u.test(match.match)
             && /(?:共轭|极点|鼻音|反共振|滤波器|传递函数)/u.test(context)
-            && !/(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER)\b)/iu.test(context)) continue;
+            && !zeroPairMetricRe.test(context)) continue;
         findings.push(match);
     }
     for (const sentence of proseSentences(value)) {
-        if (!PERCENT_METRICS_RE.test(sentence.text) || !DIRECTION_RE.test(sentence.text)) continue;
+        if (!percentMetricsRe.test(sentence.text) || !directionRe.test(sentence.text)) continue;
         const explicitScoreUnit = new RegExp(
             `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]+(?![${CHINESE_DIGITS}])|[${CHINESE_DIGITS}]+(?!点[${CHINESE_DIGITS}]))\\s*(?:%|个百分点|点|分)`,
             'u'
@@ -1382,9 +1488,9 @@ function findMissingComparisonUnits(text) {
         // 这种声明算作就地绑定，不再要求每个比较数值后面
         // 硬写出一个单位。
         const metricUnitDeclaration = new RegExp(
-            `(?:${PERCENT_METRICS_RE.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲|比率|比例)\\s*[）)]`
-            + `|${PERCENT_METRICS_RE.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲|比率|比例)`
-            + `|${PERCENT_METRICS_RE.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲|比率|比例))`,
+            `(?:${percentMetricsRe.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲|比率|比例)\\s*[）)]`
+            + `|${percentMetricsRe.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲|比率|比例)`
+            + `|${percentMetricsRe.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲|比率|比例))`,
             'iu'
         );
         if (explicitScoreUnit.test(sentence.text)
@@ -1397,7 +1503,10 @@ function findMissingComparisonUnits(text) {
         const parameterRanges = [...sentence.text.matchAll(
             /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
         )];
-        let comparisonText = maskBoundParameterSweeps(maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text)));
+        let comparisonText = maskBoundParameterSweeps(
+            maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text, percentMetricsRe, { allowMetricGap: isStructuredV5 })),
+            percentMetricsRe
+        );
         // NFE 的显式取值集合与同句展开步数 K 是设置条件。
         // 只屏蔽完整表达式，不能把同句裸露的 WER/CER 结果一并当作参数。
         const hasExplicitNfeSettings = /\bNFE\s*(?:∈|in\b|=)\s*\{\s*\d+(?:\s*[,，]\s*\d+)*\s*\}/iu.test(comparisonText);
@@ -1437,7 +1546,7 @@ function findMissingComparisonUnits(text) {
                 match => ' '.repeat(match.length)
             );
         }
-        const numericText = comparisonText
+        let numericText = comparisonText
             // 已明确带频率单位的量是频段条件；逐量屏蔽，不跳过同句指标数。
             // 区间两端都必须自带单位；未知单位、裸端点与指标直接赋值保持原检验。
             .replace(
@@ -1446,7 +1555,7 @@ function findMissingComparisonUnits(text) {
                     const prefix = whole.slice(0, offset).split(/[；;：:\n]/u).at(-1);
                     // 尾单位共享区间交回旧完整范围规则，不能先消费其上端点。
                     if (/(?<![A-Za-z0-9_.])\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*$/u.test(prefix)) return match;
-                    const metricAssignment = new RegExp(`${PERCENT_METRICS_RE.source}[^。！？!?；;：:\\n]{0,160}?(?:从|由|为|是|=|达到|提高|提升|增加|改善|下降|降低|减少|升|降)(?:到|至)?(?:了)?[ \\t，,]*$`, 'iu');
+                    const metricAssignment = new RegExp(`${percentMetricsRe.source}[^。！？!?；;：:\\n]{0,160}?(?:从|由|为|是|=|达到|提高|提升|增加|改善|下降|降低|减少|升|降)(?:到|至)?(?:了)?[ \\t，,]*$`, 'iu');
                     const frequencyTrend = /(?:随|随着)\s*频率\s*(?:提高|提升|增加|下降|降低|减少)[ \t，,]*$/u.test(prefix);
                     return metricAssignment.test(prefix) && !frequencyTrend ? match : ' '.repeat(match.length);
                 }
@@ -1604,6 +1713,47 @@ function findMissingComparisonUnits(text) {
                 /(?:时间步|步数|迭代步|NFE)\s*(?:从|为|在)?\s*\d+(?:\.\d+)?\s*(?:到|至|[-–—])\s*\d+(?:\.\d+)?/giu,
                 match => ' '.repeat(match.length)
             );
+        if (isStructuredV5) {
+            const negateGuard = (match, offset, original) => {
+                const start = Math.max(...['。', '！', '？', '!', '?', '；', ';', '，', ',', '\n']
+                    .map(delimiter => original.lastIndexOf(delimiter, offset - 1)));
+                const prefix = original.slice(start + 1, offset);
+                return /(?:不是|并非|而非|不能|不应|不宜|不要|不代表|不表示|不意味着|非\s*$)/u.test(prefix)
+                    ? match : ' '.repeat(match.length);
+            };
+            const ciTail = '(?:\\s*(?:±|\\+\\/-)\\s*\\d+(?:\\.\\d+)?)?';
+            const mosVal = `(?:[-+]?[0-4](?:\\.\\d+)?|[-+]?5(?:\\.0+)?)${ciTail}`;
+            const audioVal = `[-+]?\\d+(?:\\.\\d+)?${ciTail}(?:\\s*(?:dB|ms|s|分贝|毫秒|秒))?`;
+            const singleVerb = '(?:微升到|提升到|提升至|提高到|提高至|改善到|改善至|增加到|增至|升至|降至|下降到|下降至|降低到|降低至|减少到|减至|达到|为|是|=)';
+            const rangeVerb = '(?:微升到|提升到|提升至|提高到|提高至|改善到|改善至|增加到|增至|升至|降至|下降到|下降至|降低到|降低至|减少到|减至|到|至)';
+            const audioDelim = '(?=\\s*(?:分)?(?:\\s*(?:[，,。；;！？!?、（）()]|与|和|且|而|并)|$))';
+            numericText = numericText
+                // 仅在 STRUCTURED_V5 屏蔽已知非百分比音频指标（1–5 感知打分与声学客观指标）的直接取值/变化区间，
+                // 以及显式带非百分比时延/容量/码率单位的数值；EER 属于百分率指标故不在此屏蔽，且严格保留同句否定归属保护。
+                .replace(
+                    new RegExp(
+                        `(?<![A-Za-z0-9_.-])(?:UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|PESQ|MOS)\\s*(?:反而\\s*)?(?:(?:从|由)\\s*${mosVal}\\s*${rangeVerb}\\s*|${singleVerb}\\s*|[ \\t]+)${mosVal}(?![A-Za-z0-9_.])` + audioDelim,
+                        'giu'
+                    ),
+                    negateGuard
+                )
+                .replace(
+                    new RegExp(
+                        `(?<![A-Za-z0-9_.-])(?:SI-SDRi|SI-SDR|SDR|SNR|STOI|ESTOI|FAD|CLAP|RTF|TTFA|MCD|LSD|SIM|SECS)\\s*(?:反而\\s*)?(?:(?:从|由)\\s*${audioVal}\\s*${rangeVerb}\\s*|${singleVerb}\\s*|[ \\t]+)${audioVal}(?![A-Za-z0-9_.])` + audioDelim,
+                        'giu'
+                    ),
+                    negateGuard
+                )
+                .replace(
+                    /(?<![A-Za-z0-9_.+−-])(?:\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*)?\d+(?:\.\d+)?[ \t]*(?:ms|毫秒|GB|MB|KB|kbps|Mbps)(?:[ \t]*(?:[-–—]|至|到)[ \t]*\d+(?:\.\d+)?[ \t]*(?:ms|毫秒|GB|MB|KB|kbps|Mbps))?(?=$|[^A-Za-z0-9_.])/giu,
+                    (match, offset, whole) => {
+                        const prefix = whole.slice(0, offset).split(/[；;：:\n]/u).at(-1);
+                        if (/(?<![A-Za-z0-9_.])\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*$/u.test(prefix)) return match;
+                        const directMetricAssignment = new RegExp(`${percentMetricsRe.source}[ \\t]*(?:反而[ \\t]*)?(?:从[ \\t]*\\d+(?:\\.\\d+)?[ \\t]*(?:到|至|[-–—])[ \\t]*|由[ \\t]*\\d+(?:\\.\\d+)?[ \\t]*(?:到|至|[-–—])[ \\t]*|(?:从|由|为|是|=|达到|提高|提升|增加|改善|下降|降低|减少|升|降)(?:到|至)?(?:了)?)[ \\t，,]*$`, 'iu');
+                        return directMetricAssignment.test(prefix) ? match : ' '.repeat(match.length);
+                    }
+                );
+        }
         const barePattern = new RegExp(`(?<![A-Za-z0-9_.])${quantity}(?![A-Za-z0-9_.])`, 'gu');
         const bareMatches = [...numericText.matchAll(barePattern)]
             .filter(match => {
@@ -1628,7 +1778,7 @@ function findMissingComparisonUnits(text) {
         const comparisonPattern = new RegExp(`从\\s*(${quantity})\\s*(?:提高到|提升到|增加到|下降到|降低到|减少到|降至|升至|到|至)\\s*(${quantity})`, 'gu');
         for (const comparison of numericText.matchAll(comparisonPattern)) {
             const prefix = numericText.slice(0, comparison.index).split(/[，,；;]/).at(-1);
-            if (!PERCENT_METRICS_RE.test(prefix)) continue;
+            if (!percentMetricsRe.test(prefix)) continue;
             const first = comparison.index + comparison[0].indexOf(comparison[1]);
             const second = comparison.index + comparison[0].lastIndexOf(comparison[2]);
             explicitComparisonValueIndexes.add(first);
@@ -1637,12 +1787,12 @@ function findMissingComparisonUnits(text) {
         const resultPattern = new RegExp(`(?:提高到|提升至|提升到|升至|降低到|下降到|降至)\\s*(${quantity})`, 'gu');
         for (const result of numericText.matchAll(resultPattern)) {
             const prefix = numericText.slice(0, result.index).split(/[，,；;]/).at(-1);
-            if (PERCENT_METRICS_RE.test(prefix)) {
+            if (percentMetricsRe.test(prefix)) {
                 explicitComparisonValueIndexes.add(result.index + result[0].lastIndexOf(result[1]));
             }
         }
         const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(
-            new RegExp(PERCENT_METRICS_RE.source, 'gi')
+            new RegExp(percentMetricsRe.source, 'gi')
         )].some(metricMatch => {
             const start = Math.max(0, metricMatch.index - 12);
             const end = Math.min(
@@ -2152,7 +2302,7 @@ function validateEditorialQuality(input, options = {}) {
         for (const finding of findTechnicalTermAdhesions(body)) {
             issues.push(issue('technical_term_adhesion', '中英文技术词边界缺少空格', { section, ...finding }));
         }
-        for (const finding of findMissingComparisonUnits(body)) {
+        for (const finding of findMissingComparisonUnits(body, { editorialProfile: options.editorialProfile })) {
             issues.push(issue('comparison_unit_missing', '比较值的指标单位未就近完整绑定', { section, ...finding }));
         }
         for (const finding of findReaderTemplatePhrases(body, { editorialProfile: options.editorialProfile })) {
@@ -2177,7 +2327,7 @@ function validateEditorialQuality(input, options = {}) {
     for (const duplicate of findCrossSectionNearDuplicates(sections, options.nearDuplicates)) {
         issues.push(issue('cross_section_near_duplicate', '六个核心章节存在近重复段落', duplicate));
     }
-    for (const reuse of findCrossSectionNumericFactReuse(sections, options.factReuse)) {
+    for (const reuse of findCrossSectionNumericFactReuse(sections, { ...(options.factReuse || {}), editorialProfile: options.editorialProfile })) {
         issues.push(issue('numeric_fact_reused_across_sections', '同一数字事实签名跨过多章节复用', reuse));
     }
     const paragraphOptions = options.editorialProfile
@@ -2387,9 +2537,11 @@ module.exports = {
     CORE_SECTION_NAMES,
     READABILITY_RUBRIC_DIMENSIONS,
     SCALED_ARABIC_MEASUREMENT_UNITS,
+    AUDIO_METRIC_WHITELIST,
     normalizeEvidence,
     coerceCoreSections,
     isDiscourseTaskConditionNumeral,
+    maskStructuredV5NaturalNumerals,
     findQuantitativeChineseNumerals,
     normalizeIssueBoundReaderQuantitativeNumerals,
     findReaderTemplatePhrases,

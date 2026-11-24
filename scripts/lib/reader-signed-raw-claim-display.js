@@ -25,7 +25,7 @@ function normalizeSignedReaderClaim(rawClaim, rawNode, options = {}) {
     const issues = findings.filter(finding => finding.index >= start
         && finding.index + finding.match.length <= start + rawClaim.length).map(issue);
     const project = (text, contextIssues) => require('../deep-analyzer').normalizeReaderProseFormatting(
-        editorial.normalizeIssueBoundReaderQuantitativeNumerals(text, contextIssues), contextIssues, proseOptions
+        editorial.normalizeIssueBoundReaderQuantitativeNumerals(text, contextIssues, proseOptions), contextIssues, proseOptions
     );
     const displayed = project(rawClaim, issues);
     if (rawClaim === rawNode) return displayed;
