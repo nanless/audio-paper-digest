@@ -49,6 +49,7 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
 @Composable private fun LibraryScopePane(state:UiState,controller:AppController,action:Action,importPDF:()->Unit,filter:String,onScope:(String)->Unit,index:WebsiteLibraryIndex?,openDirectory:Boolean,consumeDirectory:()->Unit,searchMemo:CachedGuideSearchMemo){
     var from by rememberSaveable{mutableStateOf("")};var until by rememberSaveable{mutableStateOf("")};var dateTarget by rememberSaveable{mutableStateOf<String?>(null)}
     var source by rememberSaveable{mutableStateOf("")};var minimum by rememberSaveable{mutableStateOf("")};var query by rememberSaveable{mutableStateOf("")}
+    var venue by rememberSaveable{mutableStateOf("")};var resource by rememberSaveable{mutableStateOf("")}
     var sort by rememberSaveable{mutableStateOf(if(filter=="收藏")"收藏时间"else"最新")};var monthly by rememberSaveable{mutableStateOf(false)}
     var selectedDirections by rememberSaveable{mutableStateOf(listOf<String>())};var subtree by rememberSaveable{mutableStateOf(true)};var primary by rememberSaveable{mutableStateOf(false)}
     var domain by rememberSaveable{mutableStateOf("all")};var research by rememberSaveable{mutableStateOf("all")};var unclassified by rememberSaveable{mutableStateOf(false)}
@@ -56,7 +57,16 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
     var directoryOpen by rememberSaveable{mutableStateOf(false)};var showFilters by rememberSaveable{mutableStateOf(false)};var showSearchInfo by rememberSaveable{mutableStateOf(false)}
     var choosing by rememberSaveable{mutableStateOf(false)};var picked by rememberSaveable{mutableStateOf(listOf<String>())};var tools by remember{mutableStateOf(false)}
     var infoPaperID by rememberSaveable{mutableStateOf<String?>(null)}
+    var badgesSyncStamp by rememberSaveable{mutableStateOf<String?>(null)}
     LaunchedEffect(openDirectory){if(openDirectory){directoryOpen=true;consumeDirectory()}}
+    LaunchedEffect(state.nativeResourceBadgesEnabled,state.catalogSyncedAt){
+        if(state.nativeResourceBadgesEnabled){
+            val isPostSyncRefresh=badgesSyncStamp!=null&&badgesSyncStamp!=state.catalogSyncedAt&&!state.settings.optBoolean("offlineMode")
+            badgesSyncStamp=state.catalogSyncedAt?:""
+            runCatching{controller.execute("library.resourceBadges",obj("refresh" to isPostSyncRefresh))}
+        }
+    }
+    LaunchedEffect(query){if(query.isBlank()&&sort=="相关度")sort=if(filter=="收藏")"收藏时间"else"最新"}
     val directoryScroll=rememberLazyListState()
     val changeDirectoryFacet:(String)->Unit={if(it!=directoryFacet){directoryFacet=it;directoryScroll.requestScrollToItem(0)}}
     val changeDirectoryParent:(String)->Unit={if(it!=directoryParent){directoryParent=it;directoryScroll.requestScrollToItem(0)}}
@@ -71,25 +81,48 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
     val personalHits=privateProjection?.takeIf{it.first==query&&it.second===state.personal}?.third.orEmpty()
     val direction=remember(selectedDirections,subtree,primary,domain,research,unclassified){WebsiteDirection(selectedDirections.toSet(),subtree,primary,domain,research,unclassified)}
     val updateDirection:(WebsiteDirection)->Unit={selectedDirections=it.ids.toList();subtree=it.subtree;primary=it.primary;domain=it.domain;research=it.research;unclassified=it.unclassified}
-    val criteria=remember(source,minimum,query,personalHits,cachedSearch.result,from,until){WebsiteLibraryCriteria(source=source,minimum=minimum,query=query,personalHits=personalHits,cachedHits=cachedSearch.result?.paperIDs.orEmpty(),from=from,until=until)}
+    val criteria=remember(source,minimum,query,personalHits,cachedSearch.result,from,until,venue,resource,state.resourceBadges,state.cachedDemoIds){
+        WebsiteLibraryCriteria(
+            source=source,minimum=minimum,query=query,personalHits=personalHits,
+            cachedHits=cachedSearch.result?.paperIDs.orEmpty(),from=from,until=until,
+            venue=venue,resource=resource,resourceBadges=state.resourceBadges,cachedDemoIds=state.cachedDemoIds
+        )
+    }
+    val venueOptions=remember(scoped){collectConferenceVenues(scoped)}
     val request=remember(index,scoped,criteria,direction){LibraryProjectionRequest(index,scoped,criteria,direction)}
     val projection by produceState<LibraryProjection?>(null,request){val captured=request;val current=captured.index;if(current!=null)value=withContext(Dispatchers.Default){LibraryProjection(captured,current.select(captured.papers,captured.criteria,captured.direction))}}
     val ready=projection?.request===request
-    val fallback=query.isBlank()&&source.isBlank()&&minimum.isBlank()&&direction==WebsiteDirection()
+    val fallback=query.isBlank()&&source.isBlank()&&minimum.isBlank()&&venue.isBlank()&&resource.isBlank()&&direction==WebsiteDirection()
     val view=if(ready)projection!!.view else WebsiteLibraryView(if(fallback)scoped else emptyList(),emptyMap(),0)
-    val papers=remember(view.papers,sort){if(sort=="评分")view.papers.sortedByDescending{it.score?:-1.0}else view.papers.sortedByDescending{it.date}}
+    val papers=remember(view.papers,sort,query,index){
+        when {
+            sort=="相关度"&&query.isNotBlank() -> {
+                val queryTokens=tokenizeLibraryQuery(query)
+                val scoreMap=view.papers.associate { p ->
+                    p.id to (index?.relevanceScore(p,query,queryTokens)?:libraryRelevanceScore(p,query,queryTokens))
+                }
+                view.papers.sortedWith(
+                    compareByDescending<Paper>{scoreMap[it.id]?:0}
+                        .thenByDescending{it.score?:-1.0}
+                        .thenByDescending{it.date}
+                )
+            }
+            sort=="评分" -> view.papers.sortedByDescending{it.score?:-1.0}
+            else -> view.papers.sortedByDescending{it.date}
+        }
+    }
     val zone=ZoneId.systemDefault();val today=LocalDate.now(zone)
     val sections=remember(papers,favoriteView,monthly,sort,zone,today){if(filter=="收藏"&&sort=="收藏时间")favoriteLibrarySections(papers,favoriteView,monthly,zone,today)else listOf(FavoriteLibrarySection("all","",papers))}
-    val scroll=rememberLazyListState();val loadingScroll=rememberLazyListState();val key=JSONArray(listOf(query,source,minimum,from,until,sort,monthly.toString(),selectedDirections.sorted().joinToString(),subtree.toString(),primary.toString(),domain,research,unclassified.toString())).toString()
+    val scroll=rememberLazyListState();val loadingScroll=rememberLazyListState();val key=JSONArray(listOf(query,source,minimum,venue,resource,from,until,sort,monthly.toString(),selectedDirections.sorted().joinToString(),subtree.toString(),primary.toString(),domain,research,unclassified.toString())).toString()
     var applied by rememberSaveable{mutableStateOf(key)}
     SideEffect{if(key!=applied){applied=key;scroll.requestScrollToItem(0)}}
     val visibleIDs=remember(papers){papers.mapTo(HashSet()){it.id}};val hiddenPicked=picked.count{it !in visibleIDs};val keyboard=LocalSoftwareKeyboardController.current
-    val active=selectedDirections.size+listOf(source,minimum,from,until).count{it.isNotEmpty()}+(if(domain!="all")1 else 0)+(if(research!="all")1 else 0)+(if(unclassified)1 else 0)
+    val active=selectedDirections.size+listOf(source,minimum,venue,resource,from,until).count{it.isNotEmpty()}+(if(domain!="all")1 else 0)+(if(research!="all")1 else 0)+(if(unclassified)1 else 0)
     val retiredIDs=remember(state.catalogSummary){state.catalogSummary.ids("missingFromLatest").toSet()}
     val unknownCached=remember(state.papers,cachedSearch.result){val catalogIDs=state.papers.mapTo(HashSet()){it.id};cachedSearch.result?.paperIDs?.count{it !in catalogIDs}?:0}
     val localCount=remember(state.papers){state.papers.count{it.sourceKind=="local"}}
     val title=when(filter){"收藏"->"我的收藏";"待读"->"待读清单";"离线"->"本机已保存";else->"论文库"}
-    fun reset(){source="";minimum="";from="";until="";updateDirection(WebsiteDirection())}
+    fun reset(){source="";minimum="";venue="";resource="";from="";until="";updateDirection(WebsiteDirection())}
     NonOccludingViewport{
         val height=maxHeight;val wide=maxWidth>=840.dp
         Row(Modifier.fillMaxSize()){
@@ -116,8 +149,25 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
                         TextButton({showFilters=true}){Icon(Icons.Outlined.Tune,null,Modifier.size(18.dp));Spacer(Modifier.width(4.dp));Text(if(active==0)"筛选与排序 · $sort"else"筛选 $active · $sort",style=MaterialTheme.typography.labelMedium)}
                         Spacer(Modifier.weight(1f));IconButton({showSearchInfo=true}){Icon(Icons.Outlined.Info,"目录与检索范围",Modifier.size(20.dp))}
                     }}
-                    if(source.isNotBlank()||minimum.isNotBlank()||from.isNotBlank()||until.isNotBlank()||domain!="all"||research!="all"||primary||!subtree)item("applied-summary"){
-                        Text(listOfNotNull(source.takeIf{it.isNotBlank()}?.let{librarySourceLabel(it)},minimum.takeIf{it.isNotBlank()}?.let{"最低 $it 分"},if(from.isNotBlank()||until.isNotBlank())"网站发布日期 ${from.ifEmpty{"不限"}} — ${until.ifEmpty{"不限"}}"else null,domain.takeIf{it!="all"}?.let{websiteDomainLabels[it]},research.takeIf{it!="all"}?.let{websiteResearchLabels[it]},if(primary)"仅主要角色"else null,if(!subtree)"仅直接标签"else null).joinToString(" · "),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    item("score-presets"){
+                        LazyRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                            items(SCORE_TIER_PRESETS){(value,label)->
+                                FilterChip(minimum==value,{minimum=value},label={Text(label)})
+                            }
+                        }
+                    }
+                    if(source.isNotBlank()||minimum.isNotBlank()||venue.isNotBlank()||resource.isNotBlank()||from.isNotBlank()||until.isNotBlank()||domain!="all"||research!="all"||primary||!subtree)item("applied-summary"){
+                        Text(listOfNotNull(
+                            source.takeIf{it.isNotBlank()}?.let{librarySourceLabel(it)},
+                            venue.takeIf{it.isNotBlank()}?.let{key->venueOptions.firstOrNull{it.first.key==key}?.first?.label?:key},
+                            resource.takeIf{it.isNotBlank()}?.let{libraryResourceFilterLabel(it)},
+                            minimum.takeIf{it.isNotBlank()}?.let{if(it=="scored")"仅含评分"else"最低 $it 分"},
+                            if(from.isNotBlank()||until.isNotBlank())"网站发布日期 ${from.ifEmpty{"不限"}} — ${until.ifEmpty{"不限"}}"else null,
+                            domain.takeIf{it!="all"}?.let{websiteDomainLabels[it]},
+                            research.takeIf{it!="all"}?.let{websiteResearchLabels[it]},
+                            if(primary)"仅主要角色"else null,
+                            if(!subtree)"仅直接标签"else null
+                        ).joinToString(" · "),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                         if(from.isNotBlank()&&until.isNotBlank()&&from>until)TextButton({showFilters=true}){Text("起始日期晚于结束日期，调整范围",color=MaterialTheme.colorScheme.error)}
                     }
                     if(selectedDirections.isNotEmpty())item("selected-directions"){LazyRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){items(selectedDirections,key={it}){id->InputChip(true,{updateDirection(direction.copy(ids=direction.ids-id))},label={Text(state.websiteTaxonomy?.nodes?.get(id)?.label?:id)},trailingIcon={Icon(Icons.Outlined.Close,"移除方向：${state.websiteTaxonomy?.nodes?.get(id)?.label?:id}",Modifier.size(14.dp))})}}}
@@ -142,7 +192,12 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
                             val matches=view.matchingGuides[paper.id].orEmpty();val otherGuide=matches.isNotEmpty()&&matches.none{it.url==paper.blogURL};val matchedGuide=matches.firstOrNull{it.url==paper.blogURL}?:matches.firstOrNull();val cardAuthors=matchedGuide?.authors?:paper.authors;val cardScore=matchedGuide?.score?:if(otherGuide)null else paper.score
                             Card(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else if(otherGuide)infoPaperID=paper.id else action("paper.open",obj("paperID" to paper.id))},enabled=ready,colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),shape=MaterialTheme.shapes.medium,modifier=Modifier.fillMaxWidth()){
                                 Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-                                    Row(verticalAlignment=Alignment.CenterVertically){if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id});Text(matchedGuide?.date?:paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant);Spacer(Modifier.weight(1f));cardScore?.let{Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=MaterialTheme.shapes.extraSmall){Text("$it 分",Modifier.padding(horizontal=8.dp,vertical=3.dp),style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onPrimaryContainer)}}}
+                                    Row(verticalAlignment=Alignment.CenterVertically){if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id});Text(matchedGuide?.date?:paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant);Spacer(Modifier.weight(1f));cardScore?.let{ScoreTierBadge(it)}}
+                                    val cardVenue=parseConferenceVenue(paper.id)
+                                    val cardResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
+                                    if(cardVenue!=null||cardResources.hasAny){
+                                        PaperMetadataBadgesRow(venue=cardVenue,resources=cardResources)
+                                    }
                                     if(paper.id in retiredIDs)Text("本机保留 · 未列入最新网站快照（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
                                     Text(if(otherGuide)matches.first().title.ifBlank{paper.titleZh}else paper.titleZh,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=TextOverflow.Ellipsis)
                                     if(cardAuthors.isNotEmpty())Text(cardAuthors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -166,8 +221,21 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
         if(showFilters)ModalBottomSheet(onDismissRequest={showFilters=false},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)){
             Column(Modifier.fillMaxWidth().heightIn(max=height).verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
                 Text("筛选与排序",style=MaterialTheme.typography.titleLarge)
-                FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){(if(filter=="收藏")listOf("收藏时间","最新","评分")else listOf("最新","评分")).forEach{choice->FilterChip(sort==choice,{sort=choice},label={Text(choice)})}}
-                LibrarySourceChoice(state.papers.map{it.sourceKind}.distinct().sorted(),source,{source=it});FilterChoice("最低评分",listOf("5","6","7","8","9"),minimum,{minimum=it})
+                val sortChoices=buildList{
+                    if(filter=="收藏")add("收藏时间")
+                    if(query.isNotBlank())add("相关度")
+                    add("最新");add("评分")
+                }
+                FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){sortChoices.forEach{choice->FilterChip(sort==choice,{sort=choice},label={Text(choice)})}}
+                Text("评分档位",style=MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+                    SCORE_TIER_PRESETS.forEach{(value,label)->FilterChip(minimum==value,{minimum=value},label={Text(label)})}
+                }
+                FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                    LibrarySourceChoice(state.papers.map{it.sourceKind}.distinct().sorted(),source,{source=it})
+                    if(venueOptions.isNotEmpty())ConferenceVenueChoice(venueOptions,venue,{venue=it})
+                    LibraryResourceChoice(resource,{resource=it})
+                }
                 Text("网站导读发布日期",style=MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedButton({dateTarget="from"},Modifier.weight(1f)){Text("起始 · ${from.ifEmpty{"不限"}}")};OutlinedButton({dateTarget="until"},Modifier.weight(1f)){Text("结束 · ${until.ifEmpty{"不限"}}")}}
                 if(from.isNotEmpty()&&until.isNotEmpty()&&from>until){Text("起始日期晚于结束日期，请调整范围。",color=MaterialTheme.colorScheme.error);TextButton({val old=from;from=until;until=old}){Text("交换起止日期")}}
@@ -206,5 +274,80 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
     }},confirmButton={TextButton(openDefault){Text("阅读本机默认导读")}},dismissButton={TextButton(close){Text("关闭")}})
 }
 
+internal val SCORE_TIER_PRESETS = listOf(
+    "" to "全部",
+    "8" to "精选 ≥ 8.0",
+    "7" to "高分 ≥ 7.0",
+    "6" to "推荐 ≥ 6.0",
+    "scored" to "仅含评分",
+)
+
+internal fun libraryResourceFilterLabel(filter:String)=when(filter){
+    "open-source","any"->"含开源/资源"
+    "code"->"开源代码"
+    "model"->"模型权重"
+    "dataset"->"数据集/基准"
+    "demo"->"音频 Demo"
+    "project"->"项目主页"
+    else->"全部资源"
+}
+
+@Composable internal fun ScoreTierBadge(score:Double){
+    val tier=scoreTierInfo(score)
+    val bg=when(tier?.key){
+        "featured"->MaterialTheme.colorScheme.tertiaryContainer
+        "high"->MaterialTheme.colorScheme.primaryContainer
+        "recommended"->MaterialTheme.colorScheme.secondaryContainer
+        else->MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val fg=when(tier?.key){
+        "featured"->MaterialTheme.colorScheme.onTertiaryContainer
+        "high"->MaterialTheme.colorScheme.onPrimaryContainer
+        "recommended"->MaterialTheme.colorScheme.onSecondaryContainer
+        else->MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val label=if(tier!=null&&tier.key!="standard")"$score 分 · ${tier.label}" else "$score 分"
+    Surface(color=bg,shape=MaterialTheme.shapes.extraSmall){
+        Text(label,Modifier.padding(horizontal=8.dp,vertical=3.dp),style=MaterialTheme.typography.labelMedium,color=fg)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun PaperMetadataBadgesRow(
+    venue:ConferenceVenue?=null,
+    resources:ResourceBadgeSignals?=null,
+    rankBucket:String?=null,
+    documentType:String?=null,
+){
+    val pills=buildList{
+        if(venue!=null)add(venue.label to true)
+        if(!rankBucket.isNullOrBlank())add(rankBucket to true)
+        if(!documentType.isNullOrBlank())add(documentType to false)
+        if(resources?.hasCode==true)add("开源代码" to false)
+        if(resources?.hasModel==true)add("模型权重" to false)
+        if(resources?.hasDataset==true)add("数据集" to false)
+        if(resources?.hasDemo==true)add("试听 Demo" to true)
+        if(resources?.hasProjectPage==true)add("项目主页" to false)
+    }
+    if(pills.isEmpty())return
+    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
+        pills.forEach{(text,accent)->
+            Surface(
+                color=if(accent)MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape=MaterialTheme.shapes.extraSmall,
+            ){
+                Text(
+                    text,
+                    Modifier.padding(horizontal=6.dp,vertical=2.dp),
+                    style=MaterialTheme.typography.labelSmall,
+                    color=if(accent)MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 internal fun librarySourceLabel(kind:String)=when(kind){"arxiv"->"arXiv";"conference"->"正式会议";"local"->"本机 PDF";"unknown","unverified",""->"待核验来源";else->"其他来源"}
 @Composable private fun LibrarySourceChoice(options:List<String>,value:String,change:(String)->Unit){var open by remember{mutableStateOf(false)};Box{OutlinedButton({open=true}){Text("来源 · "+if(value.isEmpty())"全部"else librarySourceLabel(value));Icon(Icons.Outlined.ExpandMore,null)};DropdownMenu(open,{open=false}){DropdownMenuItem({Text("全部来源")},{change("");open=false});options.forEach{option->DropdownMenuItem({Text(librarySourceLabel(option))},{change(option);open=false})}}}}
+@Composable private fun ConferenceVenueChoice(options:List<Pair<ConferenceVenue,Int>>,value:String,change:(String)->Unit){var open by remember{mutableStateOf(false)};val label=options.firstOrNull{it.first.key==value}?.first?.label?:"全部会议";Box{OutlinedButton({open=true}){Text("会议 · $label");Icon(Icons.Outlined.ExpandMore,null)};DropdownMenu(open,{open=false}){DropdownMenuItem({Text("全部会议")},{change("");open=false});options.forEach{(v,count)->DropdownMenuItem({Text("${v.label} ($count)")},{change(v.key);open=false})}}}}
+@Composable private fun LibraryResourceChoice(value:String,change:(String)->Unit){var open by remember{mutableStateOf(false)};val items=listOf("open-source","code","model","dataset","demo","project");Box{OutlinedButton({open=true}){Text("资源 · "+if(value.isEmpty())"全部"else libraryResourceFilterLabel(value));Icon(Icons.Outlined.ExpandMore,null)};DropdownMenu(open,{open=false}){DropdownMenuItem({Text("全部资源")},{change("");open=false});items.forEach{opt->DropdownMenuItem({Text(libraryResourceFilterLabel(opt))},{change(opt);open=false})}}}}

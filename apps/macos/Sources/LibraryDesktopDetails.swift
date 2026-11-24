@@ -197,6 +197,8 @@ extension LibraryService {
         let arxivVersionedId: String?
         let abstractText: String?
         let oneSentenceThesis: String?
+        let assessmentRankBucket: String?
+        let assessmentDocumentType: String?
         let citationSourceRecord: [String: Any]
         let sidecarsAvailable: Bool
         let sidecarDescriptors: [String: DesktopSidecarDescriptor]
@@ -346,6 +348,9 @@ extension LibraryService {
             }
         }
         try data.write(to: cursor, options: [.atomic])
+        if relative.hasPrefix("desktop-details/articles/") {
+            cachedDemoPaperIDs = nil
+        }
     }
 
     private static func decodeVerifiedMacOSStateBytes(
@@ -2248,6 +2253,31 @@ extension LibraryService {
             oneSentenceThesis = nil
         }
 
+        // Validate optional assessment.rankBucket & assessment.documentType
+        guard let assessmentObj = obj["assessment"] as? [String: Any] else {
+            throw ServiceError.invalid("论文详情缺少 assessment 对象。")
+        }
+        let assessmentRankBucket: String?
+        if let rawBucket = assessmentObj["rankBucket"], !(rawBucket is NSNull) {
+            guard let text = rawBucket as? String else {
+                throw ServiceError.invalid("论文详情 assessment.rankBucket 类型无效。")
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            assessmentRankBucket = trimmed.isEmpty ? nil : trimmed
+        } else {
+            assessmentRankBucket = nil
+        }
+        let assessmentDocumentType: String?
+        if let rawDocType = assessmentObj["documentType"], !(rawDocType is NSNull) {
+            guard let text = rawDocType as? String else {
+                throw ServiceError.invalid("论文详情 assessment.documentType 类型无效。")
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            assessmentDocumentType = trimmed.isEmpty ? nil : trimmed
+        } else {
+            assessmentDocumentType = nil
+        }
+
         // Validate citation & paper-citation-source header
         guard let citationObj = obj["citation"] as? [String: Any],
               let citationSource = citationObj["sourceRecord"] as? [String: Any],
@@ -2408,6 +2438,8 @@ extension LibraryService {
             arxivVersionedId: arxivVersionedId,
             abstractText: abstractText,
             oneSentenceThesis: oneSentenceThesis,
+            assessmentRankBucket: assessmentRankBucket,
+            assessmentDocumentType: assessmentDocumentType,
             citationSourceRecord: citationSource,
             sidecarsAvailable: sidecarsAvailable,
             sidecarDescriptors: sidecarDescriptors,
@@ -2633,8 +2665,33 @@ extension LibraryService {
                 if !fromCache {
                     try atomicWriteChecked(bytes, relative: sideRel)
                 }
+                if detail.assessmentRankBucket != nil || detail.assessmentDocumentType != nil,
+                   case .object(var ctxFields)? = researchContext {
+                    var assessFields: [String: JSONValue]
+                    if case .object(let existing)? = ctxFields["assessment"] {
+                        assessFields = existing
+                    } else {
+                        assessFields = [:]
+                    }
+                    if let bucket = detail.assessmentRankBucket, assessFields["rankBucket"] == nil {
+                        assessFields["rankBucket"] = .string(bucket)
+                    }
+                    if let docType = detail.assessmentDocumentType, assessFields["documentType"] == nil {
+                        assessFields["documentType"] = .string(docType)
+                    }
+                    ctxFields["assessment"] = .object(assessFields)
+                    researchContext = .object(ctxFields)
+                }
             }
-        } else if detail.abstractText != nil || detail.oneSentenceThesis != nil {
+        } else if detail.abstractText != nil || detail.oneSentenceThesis != nil || detail.assessmentRankBucket != nil || detail.assessmentDocumentType != nil {
+            var assessmentDict: [String: Any] = [
+                "score": (paper.score as Any?) ?? NSNull(),
+                "primaryTask": paper.task,
+                "primaryMethod": paper.method,
+                "tags": paper.tags
+            ]
+            if let bucket = detail.assessmentRankBucket { assessmentDict["rankBucket"] = bucket }
+            if let docType = detail.assessmentDocumentType { assessmentDict["documentType"] = docType }
             let syntheticContext = try ClientProtocols.record("desktop-bundled-research-context", fields: [
                 "origin": "desktop-detail-record",
                 "sampleOnly": false,
@@ -2648,12 +2705,7 @@ extension LibraryService {
                 "authors": detail.authorNames,
                 "abstract": detail.abstractText ?? NSNull(),
                 "oneSentenceThesis": detail.oneSentenceThesis ?? NSNull(),
-                "assessment": [
-                    "score": (paper.score as Any?) ?? NSNull(),
-                    "primaryTask": paper.task,
-                    "primaryMethod": paper.method,
-                    "tags": paper.tags
-                ]
+                "assessment": assessmentDict
             ])
             researchContext = try JSONValue.from(syntheticContext)
         }

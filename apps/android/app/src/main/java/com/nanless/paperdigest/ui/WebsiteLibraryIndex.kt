@@ -1,12 +1,231 @@
 package com.nanless.paperdigest.ui
 
 import com.nanless.paperdigest.data.Paper
+import com.nanless.paperdigest.data.ResourceBadgeSignals
 import com.nanless.paperdigest.data.WebsiteTaxonomy
 import org.json.JSONObject
+import java.text.Normalizer
 import java.util.Locale
 
+internal data class ConferenceVenue(val key: String, val label: String)
+internal data class ScoreTierInfo(val key: String, val label: String)
+
+private val CONFERENCE_VENUE_NAMES = mapOf(
+    "interspeech" to "INTERSPEECH",
+    "icassp" to "ICASSP",
+    "iclr" to "ICLR",
+    "icml" to "ICML",
+    "neurips" to "NeurIPS",
+    "acl" to "ACL",
+    "emnlp" to "EMNLP",
+    "naacl" to "NAACL",
+    "eacl" to "EACL",
+    "cvpr" to "CVPR",
+    "aaai" to "AAAI",
+    "dafx" to "DAFx",
+    "eusipco" to "EUSIPCO",
+    "speechprosody" to "SpeechProsody",
+    "nime" to "NIME",
+    "odyssey" to "Odyssey",
+    "icmc" to "ICMC",
+    "jep" to "JEP",
+    "iwslt" to "IWSLT",
+    "chime" to "CHiME",
+    "uai" to "UAI",
+    "aistats" to "AISTATS",
+    "waspaa" to "WASPAA",
+    "asru" to "ASRU",
+    "slt" to "SLT",
+    "ismir" to "ISMIR",
+)
+private val VENUE_TOKEN_REGEX = Regex("^[a-z0-9][a-z0-9._-]{0,63}$")
+private val YEAR_REGEX = Regex("^(19|20)\\d{2}$")
+private val COMBINING_MARKS_REGEX = Regex("\\p{Mn}+")
+private val BARE_ARXIV_ID_REGEX = Regex("^(\\d{4}\\.\\d{4,5})(?:v\\d+)?$", RegexOption.IGNORE_CASE)
+internal const val MAX_SEARCH_TOKENS = 32
+
+/** Resolves exact IDs, sourceVersion matches, or bare/versioned arXiv IDs (e.g. "2611.10001v1") to catalog Paper. */
+internal fun resolvePaperByCanonicalId(papers: List<Paper>, rawId: String): Paper? {
+    val pid = rawId.trim()
+    if (pid.isEmpty()) return null
+    papers.firstOrNull { it.id == pid }?.let { return it }
+    papers.firstOrNull { it.sourceVersion == pid }?.let { return it }
+    val match = BARE_ARXIV_ID_REGEX.matchEntire(pid)
+    if (match != null) {
+        val canonical = "arxiv:${match.groupValues[1]}"
+        papers.firstOrNull { it.id == canonical }?.let { return it }
+    }
+    return null
+}
+
+internal fun parseConferenceVenue(paperId: String): ConferenceVenue? {
+    if (!paperId.startsWith("conference:")) return null
+    val parts = paperId.split(':')
+    if (parts.size < 3) return null
+    val rawVenue = parts[1].trim().lowercase(Locale.ROOT)
+    val rawYear = parts[2].trim()
+    if (!VENUE_TOKEN_REGEX.matches(rawVenue) || !YEAR_REGEX.matches(rawYear)) return null
+    val display = CONFERENCE_VENUE_NAMES[rawVenue] ?: rawVenue.uppercase(Locale.ROOT)
+    return ConferenceVenue(key = "conference:$rawVenue:$rawYear", label = "$display $rawYear")
+}
+
+internal fun scoreTierInfo(score: Double?): ScoreTierInfo? {
+    if (score == null || !score.isFinite()) return null
+    return when {
+        score >= 8.0 -> ScoreTierInfo("featured", "精选")
+        score >= 7.0 -> ScoreTierInfo("high", "高分")
+        score >= 6.0 -> ScoreTierInfo("recommended", "推荐")
+        else -> ScoreTierInfo("standard", "常规")
+    }
+}
+
+internal fun normalizeLibrarySearchText(value: String): String {
+    if (value.isEmpty()) return ""
+    val nfkc = Normalizer.normalize(value, Normalizer.Form.NFKC)
+    val stripped = COMBINING_MARKS_REGEX.replace(Normalizer.normalize(nfkc, Normalizer.Form.NFD), "")
+    return stripped.lowercase(Locale.ROOT)
+}
+
+internal fun tokenizeLibraryQuery(query: String): List<String> =
+    normalizeLibrarySearchText(query)
+        .split(Regex("\\s+"))
+        .asSequence()
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .take(MAX_SEARCH_TOKENS)
+        .toList()
+
+internal fun collectConferenceVenues(papers: List<Paper>): List<Pair<ConferenceVenue, Int>> {
+    val counts = LinkedHashMap<String, Pair<ConferenceVenue, Int>>()
+    for (paper in papers) {
+        val venue = parseConferenceVenue(paper.id) ?: continue
+        val existing = counts[venue.key]
+        counts[venue.key] = if (existing == null) venue to 1 else venue to (existing.second + 1)
+    }
+    return counts.values.sortedWith(
+        compareByDescending<Pair<ConferenceVenue, Int>> { it.first.key.substringAfterLast(':') }
+            .thenBy { it.first.label }
+    )
+}
+
+internal fun paperArtifactConceptIds(paper: Paper): Set<String> {
+    val ids = linkedSetOf<String>()
+    WebsiteTaxonomy.records(paper).forEach { row ->
+        listOf("tagConcepts", "taxonomyConcepts").forEach { key ->
+            val arr = row.optJSONArray(key) ?: return@forEach
+            for (i in 0 until arr.length()) {
+                val id = arr.optJSONObject(i)?.optString("id").orEmpty()
+                if (id.isNotEmpty()) ids.add(id)
+            }
+        }
+        val flatIds = row.optJSONArray("tagConceptIds")
+        if (flatIds != null) {
+            for (i in 0 until flatIds.length()) {
+                val id = flatIds.optString(i)
+                if (id.isNotEmpty()) ids.add(id)
+            }
+        }
+    }
+    return ids
+}
+
+internal fun resolvePaperResources(
+    paper: Paper,
+    resourceBadges: Map<String, ResourceBadgeSignals> = emptyMap(),
+    cachedDemoIds: Set<String> = emptySet(),
+): ResourceBadgeSignals {
+    val conceptIds = paperArtifactConceptIds(paper)
+    val t1Code = conceptIds.any {
+        it == "artifact.open-source-tool" || it == "artifact.software" ||
+            it.startsWith("artifact.open-source-tool.") || it.startsWith("artifact.software.")
+    }
+    val t1Model = conceptIds.any { it == "artifact.model-weights" || it.startsWith("artifact.model-weights.") }
+    val t1Dataset = conceptIds.any {
+        it == "artifact.dataset" || it == "artifact.benchmark" ||
+            it.startsWith("artifact.dataset.") || it.startsWith("artifact.benchmark.")
+    }
+    val t1Demo = paper.id in cachedDemoIds
+    val t2 = resourceBadges[paper.id]
+    return ResourceBadgeSignals(
+        hasCode = t1Code || t2?.hasCode == true,
+        hasModel = t1Model || t2?.hasModel == true,
+        hasDataset = t1Dataset || t2?.hasDataset == true,
+        hasDemo = t1Demo || t2?.hasDemo == true,
+        hasProjectPage = t2?.hasProjectPage == true,
+        codeUrls = t2?.codeUrls.orEmpty(),
+        demoUrls = t2?.demoUrls.orEmpty(),
+        projectUrls = t2?.projectUrls.orEmpty(),
+    )
+}
+
+internal fun matchesResourceFilter(
+    paper: Paper,
+    filter: String,
+    resourceBadges: Map<String, ResourceBadgeSignals> = emptyMap(),
+    cachedDemoIds: Set<String> = emptySet(),
+): Boolean {
+    if (filter.isBlank() || filter == "all") return true
+    val sig = resolvePaperResources(paper, resourceBadges, cachedDemoIds)
+    return when (filter) {
+        "open-source", "any" -> sig.hasAny
+        "code" -> sig.hasCode
+        "model" -> sig.hasModel
+        "dataset" -> sig.hasDataset
+        "demo" -> sig.hasDemo
+        "project" -> sig.hasProjectPage
+        else -> true
+    }
+}
+
+internal fun matchesMinimumScore(score: Double?, minimum: String): Boolean {
+    if (minimum.isBlank()) return true
+    if (minimum == "scored") return score != null
+    val threshold = minimum.toDoubleOrNull() ?: 0.0
+    return (score ?: -1.0) >= threshold
+}
+
+internal fun libraryRelevanceScore(
+    paper: Paper,
+    query: String,
+    tokens: List<String> = tokenizeLibraryQuery(query),
+    taxonomyLabels: List<String> = emptyList(),
+): Int {
+    if (tokens.isEmpty()) return 0
+    val phrase = normalizeLibrarySearchText(query).trim()
+    val titleNorm = normalizeLibrarySearchText("${paper.title} ${paper.titleZh}")
+    val idNorm = normalizeLibrarySearchText("${paper.id} ${paper.sourceVersion.orEmpty()} ${parseConferenceVenue(paper.id)?.label.orEmpty()}")
+    val authorsNorm = normalizeLibrarySearchText(paper.authors.joinToString(" "))
+    val tagsNorm = normalizeLibrarySearchText((listOf(paper.task, paper.method) + paper.tags + taxonomyLabels).joinToString(" "))
+    var score = 0
+    if (phrase.isNotEmpty()) {
+        if (titleNorm.contains(phrase)) score += 100
+        if (idNorm.contains(phrase)) score += 80
+    }
+    for (token in tokens) {
+        if (titleNorm.contains(token)) score += 40
+        if (idNorm.contains(token)) score += 35
+        if (tagsNorm.contains(token)) score += 20
+        if (authorsNorm.contains(token)) score += 18
+    }
+    return score
+}
+
 internal data class WebsiteDirection(val ids:Set<String> = emptySet(),val subtree:Boolean=true,val primary:Boolean=false,val domain:String="all",val research:String="all",val unclassified:Boolean=false)
-internal data class WebsiteLibraryCriteria(val source:String="",val task:String="",val method:String="",val minimum:String="",val query:String="",val personalHits:Set<String> = emptySet(),val cachedHits:Set<String> = emptySet(),val from:String="",val until:String="")
+internal data class WebsiteLibraryCriteria(
+    val source:String="",
+    val task:String="",
+    val method:String="",
+    val minimum:String="",
+    val query:String="",
+    val personalHits:Set<String> = emptySet(),
+    val cachedHits:Set<String> = emptySet(),
+    val from:String="",
+    val until:String="",
+    val venue:String="",
+    val resource:String="",
+    val resourceBadges:Map<String, ResourceBadgeSignals> = emptyMap(),
+    val cachedDemoIds:Set<String> = emptySet(),
+)
 internal data class PublishedGuideLink(val url:String,val title:String,val date:String,val score:Double?=null,val authors:List<String> = emptyList(),val paths:List<String> = emptyList(),val source:String="")
 internal data class WebsiteLibraryView(val papers:List<Paper>,val counts:Map<String,Int>,val unclassified:Int,val facetCounts:Map<String,Int> = emptyMap(),val matchingGuides:Map<String,List<PublishedGuideLink>> = emptyMap(),val countTotal:Int=0)
 
@@ -15,18 +234,18 @@ internal class WebsiteLibraryIndex(val taxonomy:WebsiteTaxonomy?,private val sou
     private data class Guide(val nodes:List<WebsiteTaxonomy.Node>,val primary:Map<String,Set<String>>,val domain:String,val research:String,
         val source:String,val task:String,val method:String,val score:Double?,val search:List<String>,val status:String,val link:PublishedGuideLink?,val date:String,val permalink:String)
     private val recordArrays=sourcePapers.map{it.original?.optJSONArray("websiteTagRecords")}
-    private val guides=sourcePapers.associate {paper->check();paper.id to WebsiteTaxonomy.records(paper).map {row->
+    private val guides=sourcePapers.associate {paper->check();val venueLabel=parseConferenceVenue(paper.id)?.label.orEmpty();paper.id to WebsiteTaxonomy.records(paper).map {row->
         check();val classification=taxonomy?.classify(row);val nodes=classification?.concepts.orEmpty();val direct=nodes.map{it.id}.toSet()
         val primary=linkedMapOf<String,Set<String>>()
         listOf("task" to "primaryTaskId","method" to "primaryMethodId").forEach{(facet,key)->row.optString(key).takeIf{it in direct&&taxonomy?.nodes?.get(it)?.facet==facet}?.let{primary[facet]=setOf(it)}}
         val role=row.optJSONObject("primaryResearchRole")
         val classified=(row.optString("tagClassificationContract").isNotEmpty()||row.optString("taxonomyClassificationContract").isNotEmpty())&&classification?.status=="verified"&&row.optString("researchType").isNotEmpty()&&role!=null&&role.optString("conceptId") in direct
         if(classified)primary[role!!.optString("kind")]=setOf(role.optString("conceptId"))
-        val search=listOf(paper.id)+listOf("title","titleZh","originalTitle","summary","task","method","date","sourceKind","permalink","arxivId").map{row.optString(it)}+
+        val search=listOf(paper.id,venueLabel)+listOf("title","titleZh","originalTitle","summary","task","method","date","sourceKind","permalink","arxivId").map{row.optString(it)}+
             row.optJSONArray("tags")?.let{(0 until it.length()).map(it::optString)}.orEmpty()+row.optJSONObject("citation")?.optJSONArray("authors")?.let{(0 until it.length()).map(it::optString)}.orEmpty()+
             nodes.flatMap{(it.ancestors+it.id).map{node->taxonomy!!.nodes.getValue(node).label}}
         Guide(nodes,primary,if(classified)row.optString("domainScope")else"",if(classified)row.optString("researchType")else"",
-            row.optString("sourceKind",row.optJSONObject("citation")?.optString("sourceKind",paper.sourceKind)?:paper.sourceKind),row.optString("task"),row.optString("method"),Paper.score(row.opt("score")),search.map{it.lowercase(Locale.ROOT)},classification?.status?:"missing",runCatching{com.nanless.paperdigest.data.CatalogRepository.sameSite(row.getString("permalink"))}.getOrNull()?.takeIf{it in paper.appearances||it==paper.blogURL}?.let{PublishedGuideLink(it,row.optString("titleZh",row.optString("title")),row.optString("date"),Paper.score(row.opt("score")),row.optJSONObject("citation")?.optJSONArray("authors")?.let{a->(0 until a.length()).map(a::optString)}.orEmpty(),nodes.map{n->(n.ancestors+n.id).joinToString(" › "){id->taxonomy!!.nodes.getValue(id).label}},row.optString("sourceKind"))},row.optString("date"),row.optString("permalink"))
+            row.optString("sourceKind",row.optJSONObject("citation")?.optString("sourceKind",paper.sourceKind)?:paper.sourceKind),row.optString("task"),row.optString("method"),Paper.score(row.opt("score")),search.filter{it.isNotEmpty()}.map{normalizeLibrarySearchText(it)},classification?.status?:"missing",runCatching{com.nanless.paperdigest.data.CatalogRepository.sameSite(row.getString("permalink"))}.getOrNull()?.takeIf{it in paper.appearances||it==paper.blogURL}?.let{PublishedGuideLink(it,row.optString("titleZh",row.optString("title")),row.optString("date"),Paper.score(row.opt("score")),row.optJSONObject("citation")?.optJSONArray("authors")?.let{a->(0 until a.length()).map(a::optString)}.orEmpty(),nodes.map{n->(n.ancestors+n.id).joinToString(" › "){id->taxonomy!!.nodes.getValue(id).label}},row.optString("sourceKind"))},row.optString("date"),row.optString("permalink"))
     } }
     val tasks=guides.values.flatten().map{it.task}.filter{it.isNotBlank()}.distinct().sorted()
     val methods=guides.values.flatten().map{it.method}.filter{it.isNotBlank()}.distinct().sorted()
@@ -46,20 +265,38 @@ internal class WebsiteLibraryIndex(val taxonomy:WebsiteTaxonomy?,private val sou
             taxonomy?.nodes?.get(target)?.active==true&&ids(guide,facet,direction.primary).any{id->id==target||direction.subtree&&target in taxonomy.nodes.getValue(id).ancestors}
         }}
     }
-    private fun ordinary(guide:Guide,paper:Paper,criteria:WebsiteLibraryCriteria):Boolean =
-        websiteDateMatches(guide.date,criteria.from,criteria.until)&&(criteria.source.isEmpty()||guide.source==criteria.source)&&(criteria.task.isEmpty()||guide.task==criteria.task)&&(criteria.method.isEmpty()||guide.method==criteria.method)&&
-            (criteria.minimum.isEmpty()||(guide.score?:-1.0)>=(criteria.minimum.toDoubleOrNull()?:0.0))&&
-            (criteria.query.isBlank()||paper.id in criteria.personalHits||paper.id in criteria.cachedHits||guide.search.any{it.contains(criteria.query.trim().lowercase(Locale.ROOT))})
+    private fun ordinary(guide:Guide,paper:Paper,criteria:WebsiteLibraryCriteria,tokens:List<String>):Boolean =
+        websiteDateMatches(guide.date,criteria.from,criteria.until)&&
+            (criteria.source.isEmpty()||guide.source==criteria.source)&&
+            (criteria.task.isEmpty()||guide.task==criteria.task)&&
+            (criteria.method.isEmpty()||guide.method==criteria.method)&&
+            (criteria.venue.isEmpty()||parseConferenceVenue(paper.id)?.key==criteria.venue)&&
+            matchesMinimumScore(guide.score,criteria.minimum)&&
+            matchesResourceFilter(paper,criteria.resource,criteria.resourceBadges,criteria.cachedDemoIds)&&
+            (tokens.isEmpty()||paper.id in criteria.personalHits||paper.id in criteria.cachedHits||tokens.all{tok->guide.search.any{it.contains(tok)}})
+
+    fun relevanceScore(paper: Paper, query: String, tokens: List<String> = tokenizeLibraryQuery(query)): Int {
+        val labels = paths[paper.id]?.flatten()?.map { it.label }.orEmpty()
+        return libraryRelevanceScore(paper, query, tokens, labels)
+    }
+
     fun select(papers:List<Paper>,criteria:WebsiteLibraryCriteria,direction:WebsiteDirection,countFiltered:Boolean=false,countSubtree:Boolean=direction.subtree):WebsiteLibraryView {
+        val tokens=tokenizeLibraryQuery(criteria.query)
         val counts=linkedMapOf<String,Int>();val facetCounts=linkedMapOf<String,Int>();val links=linkedMapOf<String,List<PublishedGuideLink>>();val results=ArrayList<Paper>();var unclassified=0;var countTotal=0
         for(paper in papers) {
             val rows=guides[paper.id].orEmpty()
             if(rows.isEmpty()) {
-                val eligible=websiteDateMatches(paper.date,criteria.from,criteria.until)&&(criteria.source.isEmpty()||paper.sourceKind==criteria.source)&&(criteria.task.isEmpty()||paper.task==criteria.task)&&(criteria.method.isEmpty()||paper.method==criteria.method)&&
-                    (criteria.minimum.isEmpty()||(paper.score?:-1.0)>=(criteria.minimum.toDoubleOrNull()?:0.0))&&(paper.id in criteria.personalHits||paper.id in criteria.cachedHits||matchesLibrarySearch(paper,criteria.query,null))
+                val eligible=websiteDateMatches(paper.date,criteria.from,criteria.until)&&
+                    (criteria.source.isEmpty()||paper.sourceKind==criteria.source)&&
+                    (criteria.task.isEmpty()||paper.task==criteria.task)&&
+                    (criteria.method.isEmpty()||paper.method==criteria.method)&&
+                    (criteria.venue.isEmpty()||parseConferenceVenue(paper.id)?.key==criteria.venue)&&
+                    matchesMinimumScore(paper.score,criteria.minimum)&&
+                    matchesResourceFilter(paper,criteria.resource,criteria.resourceBadges,criteria.cachedDemoIds)&&
+                    (tokens.isEmpty()||paper.id in criteria.personalHits||paper.id in criteria.cachedHits||matchesLibrarySearch(paper,criteria.query,null))
                 if(eligible){unclassified++;if(direction.ids.isEmpty()&&direction.domain in setOf("all","unclassified")&&direction.research in setOf("all","unclassified"))results+=paper};continue
             }
-            val eligible=rows.filter{ordinary(it,paper,criteria)}
+            val eligible=rows.filter{ordinary(it,paper,criteria,tokens)}
             if(eligible.isEmpty())continue
             // Counts respond to ordinary conditions and scope/role, not the selected nodes.
             val counted=eligible.filter{directionMatches(it,if(countFiltered)direction else direction.copy(ids=emptySet(),unclassified=false))}
@@ -73,7 +310,10 @@ internal class WebsiteLibraryIndex(val taxonomy:WebsiteTaxonomy?,private val sou
         }
         return WebsiteLibraryView(results,counts,unclassified,facetCounts,links,countTotal)
     }
-    fun matchingPermalinks(paper:Paper,criteria:WebsiteLibraryCriteria,direction:WebsiteDirection):List<String> = guides[paper.id].orEmpty().filter{ordinary(it,paper,criteria)&&directionMatches(it,direction)}.map{it.permalink}.distinct()
+    fun matchingPermalinks(paper:Paper,criteria:WebsiteLibraryCriteria,direction:WebsiteDirection):List<String> {
+        val tokens=tokenizeLibraryQuery(criteria.query)
+        return guides[paper.id].orEmpty().filter{ordinary(it,paper,criteria,tokens)&&directionMatches(it,direction)}.map{it.permalink}.distinct()
+    }
     // Compatibility helpers for the previously shipped single-node display tests.
     fun matches(id:String,category:String)=when(category){""->true;"unclassified"->paths[id].isNullOrEmpty();else->paths[id].orEmpty().any{path->path.any{it.id==category}}}
     fun matchesCriteria(paper:Paper,category:String,source:String,minimum:String,query:String,personalSearchHit:Boolean)=select(listOf(paper),WebsiteLibraryCriteria(source=source,minimum=minimum,query=query,personalHits=if(personalSearchHit)setOf(paper.id)else emptySet()),WebsiteDirection(ids=if(category !in setOf("","unclassified"))setOf(category)else emptySet(),unclassified=category=="unclassified")).papers.isNotEmpty()

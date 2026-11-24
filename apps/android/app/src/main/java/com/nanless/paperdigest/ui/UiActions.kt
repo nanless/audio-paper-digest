@@ -1,9 +1,11 @@
 package com.nanless.paperdigest.ui
 
+import com.nanless.paperdigest.PodcastUiState
 import com.nanless.paperdigest.cloud.NoteConflictItem
 import com.nanless.paperdigest.data.Article
 import com.nanless.paperdigest.data.Paper
 import com.nanless.paperdigest.data.AggregateBrowseState
+import com.nanless.paperdigest.data.ResourceBadgeSignals
 import com.nanless.paperdigest.pdf.PdfOriginalSnapshot
 import com.nanless.paperdigest.pdf.PdfDocumentRef
 import com.nanless.paperdigest.pdf.PdfSelection
@@ -48,6 +50,11 @@ data class UiState(
     val aggregate: AggregateBrowseState = AggregateBrowseState(),
     val workspaceEpoch: String? = null,
     val noteConflicts: List<NoteConflictItem> = emptyList(),
+    val podcast: PodcastUiState = PodcastUiState(),
+    val resourceBadges: Map<String, ResourceBadgeSignals> = emptyMap(),
+    val cachedDemoIds: Set<String> = emptySet(),
+    val nativePodcastEnabled: Boolean = false,
+    val nativeResourceBadgesEnabled: Boolean = false,
 )
 
 enum class SecretKind { MODEL, ZOTERO, ZOTERO_DAV, CLOUD }

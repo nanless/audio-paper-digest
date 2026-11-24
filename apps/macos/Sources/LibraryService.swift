@@ -14,7 +14,7 @@ actor LibraryService {
             }
         }
     }
-    enum Sort: String, Sendable { case date, score, title }
+    enum Sort: String, Sendable { case date, score, title, relevance }
     struct Paper: Codable, Sendable, Identifiable {
         var id: String
         var title: String
@@ -207,6 +207,9 @@ actor LibraryService {
     private var syncTask: Task<Summary, Error>?
     var syncID: UUID?
     var httpProxy: URL?
+    var cachedResourceBadges: [String: [String: Any]]?
+    var resourceBadgesLoaded: Bool = false
+    var cachedDemoPaperIDs: [String]?
     private var fullTextIndex: [String: String] = [:]
     private let seedDirectory: URL?
     static let maxTotal = 64 * 1024 * 1024
@@ -1139,6 +1142,8 @@ actor LibraryService {
             return try await paperDetailResponse(id: id)
         case "library.tagIndex":
             return tagIndex()
+        case "library.resourceBadges":
+            return try await resourceBadgesResponse(forceRefresh: payload["refresh"] as? Bool ?? false)
         case "library.article":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }
             return try Self.dictionary(try await article(for: id, refresh: payload["refresh"] as? Bool ?? false, downloadImages: payload["downloadImages"] as? Bool ?? true, progress: notify))
@@ -1157,6 +1162,9 @@ actor LibraryService {
     func atomicWrite(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try data.write(to: url, options: [.atomic])
+        if url.path.contains("/articles/") {
+            cachedDemoPaperIDs = nil
+        }
     }
     static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     static func now() -> String { ISO8601DateFormatter().string(from: Date()) }

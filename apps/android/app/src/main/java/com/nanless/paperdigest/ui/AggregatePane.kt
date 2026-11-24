@@ -35,7 +35,17 @@ import org.json.JSONObject
     var savedVersions by rememberSaveable(aggregate.selected?.id) { mutableStateOf(false) }
     val listState=rememberLazyListState()
     var readingMenu by rememberSaveable(aggregate.selected?.id){mutableStateOf(false)}
+    var podcastSyncStamp by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(autoLoad){if(autoLoad&&!aggregate.attemptedIndex)action("aggregate.list",JSONObject())}
+    LaunchedEffect(autoLoad,state.nativePodcastEnabled,filter,state.podcast.attemptedFeed,state.catalogSyncedAt){
+        if(autoLoad&&state.nativePodcastEnabled&&filter=="daily"){
+            val postSyncRefresh=podcastSyncStamp!=null&&podcastSyncStamp!=state.catalogSyncedAt&&!state.settings.optBoolean("offlineMode")
+            if(!state.podcast.attemptedFeed||postSyncRefresh){
+                podcastSyncStamp=state.catalogSyncedAt?:""
+                action("podcast.feed",obj("silent" to true,"refresh" to postSyncRefresh))
+            }
+        }
+    }
     LaunchedEffect(state.catalogSummary.optString("snapshotID")){
         if(autoLoad&&aggregate.attemptedIndex&&aggregate.catalogStale&&aggregate.selected==null)action("aggregate.list",JSONObject())
     }
@@ -78,6 +88,13 @@ import org.json.JSONObject
                         }
                         Text("${displayed.size} 个页面匹配",style=MaterialTheme.typography.labelLarge)
                     }
+                }
+                if(filter=="daily"&&state.podcast.available&&state.podcast.episodes.isNotEmpty())item("daily-podcast"){
+                    DailyPodcastCard(
+                        podcast = state.podcast,
+                        offlineMode = state.settings.optBoolean("offlineMode"),
+                        action = action,
+                    )
                 }
                 if(displayed.isEmpty()&&!aggregate.loading)item("empty"){Text(if(aggregate.catalog==null)"同步来源后，即可查看已发布的汇总和网站页面。"else"当前筛选没有匹配的页面。")}
                 items(displayed,key={it.id}){record->OutlinedCard(onClick={action("aggregate.select",obj("id" to record.id))},enabled=!aggregate.loading&&!aggregate.catalogStale,modifier=Modifier.fillMaxWidth()){

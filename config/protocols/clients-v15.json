@@ -1,0 +1,63 @@
+{
+  "protocols": [
+    {
+      "name": "paper-daily-podcast-feed",
+      "currentVariant": "github-release-audio-feed",
+      "currentSchema": {
+        "fields": [
+          "generatedAt",
+          "episodes"
+        ],
+        "episodeFields": [
+          "id",
+          "date",
+          "title",
+          "summary",
+          "audioUrl",
+          "bytes",
+          "sha256",
+          "durationSeconds",
+          "mimeType",
+          "chapters",
+          "paperIds"
+        ],
+        "chapterFields": [
+          "title",
+          "startSeconds",
+          "endSeconds",
+          "paperId"
+        ],
+        "maxFeedBytes": 2097152,
+        "maxAudioBytes": 41943040,
+        "maxEpisodes": 120,
+        "audioHostPolicy": "github-release-https-nanless-audio-paper-digest-or-blog-only",
+        "integrity": "sha256-and-bytes-of-actual-mp3-audio-file"
+      },
+      "historical": []
+    },
+    {
+      "name": "paper-resource-badges-index",
+      "currentVariant": "verified-paper-resource-signals",
+      "currentSchema": {
+        "fields": [
+          "generatedAt",
+          "papers"
+        ],
+        "badgeFields": [
+          "hasCode",
+          "hasModel",
+          "hasDataset",
+          "hasDemo",
+          "hasProjectPage",
+          "codeUrls",
+          "demoUrls",
+          "projectUrls"
+        ],
+        "maxIndexBytes": 8388608,
+        "paths": "same-origin-under-site-base-client-signals-resource-badges-json",
+        "authority": "optional-published-resource-signal-projection-404-tolerant"
+      },
+      "historical": []
+    }
+  ]
+}

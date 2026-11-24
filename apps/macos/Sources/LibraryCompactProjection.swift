@@ -2,26 +2,351 @@ import Foundation
 import CoreFoundation
 
 extension LibraryService {
-    func matchingPapers(query: String, source: String?, minimumScore: Double?, sort: Sort, includeRetained: Bool = false) -> [Paper] {
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    static let maxResourceBadgesBytes = 8 * 1024 * 1024
+
+    private static let conferenceVenueDisplayNames: [String: String] = [
+        "interspeech": "INTERSPEECH",
+        "icassp": "ICASSP",
+        "iclr": "ICLR",
+        "icml": "ICML",
+        "neurips": "NeurIPS",
+        "acl": "ACL",
+        "emnlp": "EMNLP",
+        "naacl": "NAACL",
+        "eacl": "EACL",
+        "cvpr": "CVPR",
+        "aaai": "AAAI",
+        "dafx": "DAFx",
+        "eusipco": "EUSIPCO",
+        "speechprosody": "SpeechProsody",
+        "nime": "NIME",
+        "odyssey": "Odyssey",
+        "icmc": "ICMC",
+        "jep": "JEP",
+        "iwslt": "IWSLT",
+        "chime": "CHiME",
+        "uai": "UAI",
+        "aistats": "AISTATS",
+        "waspaa": "WASPAA",
+        "asru": "ASRU",
+        "slt": "SLT",
+        "ismir": "ISMIR"
+    ]
+
+    /// Offline deterministic parser for `conference:<venue>:<year>...` paper IDs.
+    static func parseConferenceVenue(_ paperID: String) -> (key: String, label: String)? {
+        guard paperID.hasPrefix("conference:") else { return nil }
+        let parts = paperID.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 3 else { return nil }
+        let rawVenue = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rawYear = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawVenue.isEmpty,
+              rawVenue.range(of: #"\A[a-z0-9][a-z0-9._-]{0,63}\z"#, options: .regularExpression) != nil,
+              rawYear.range(of: #"\A(19|20)\d{2}\z"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        let display = conferenceVenueDisplayNames[rawVenue] ?? rawVenue.uppercased()
+        return (key: "conference:\(rawVenue):\(rawYear)", label: "\(display) \(rawYear)")
+    }
+
+    static func normalizedSearchText(_ value: String) -> String {
+        value.precomposedStringWithCompatibilityMapping
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+    }
+
+    static let maxSearchTokens = 32
+
+    static func searchTokens(_ query: String) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for piece in normalizedSearchText(query).split(whereSeparator: { $0.isWhitespace }) {
+            let token = String(piece)
+            if token.isEmpty || !seen.insert(token).inserted { continue }
+            result.append(token)
+            if result.count >= maxSearchTokens { break }
+        }
+        return result
+    }
+
+    static func containsSearchToken(_ haystack: String, _ token: String) -> Bool {
+        guard !token.isEmpty else { return true }
+        let isShortNumber = token.count <= 2 && token.allSatisfy { $0.isASCII && $0.isNumber }
+        if !isShortNumber {
+            return haystack.contains(token)
+        }
+        var searchStart = haystack.startIndex
+        while searchStart < haystack.endIndex,
+              let range = haystack.range(of: token, range: searchStart..<haystack.endIndex) {
+            let beforeOK = range.lowerBound == haystack.startIndex || !haystack[haystack.index(before: range.lowerBound)].isNumber
+            let afterOK = range.upperBound == haystack.endIndex || !haystack[range.upperBound].isNumber
+            if beforeOK && afterOK { return true }
+            searchStart = range.upperBound
+        }
+        return false
+    }
+
+    static func paperConceptIDs(_ paper: Paper) -> Set<String> {
+        var ids = Set<String>()
+        for record in paper.websiteTagRecords ?? [] {
+            guard case .object(let obj) = record else { continue }
+            for key in ["tagConcepts", "taxonomyConcepts"] {
+                guard case .array(let arr)? = obj[key] else { continue }
+                for item in arr {
+                    if case .object(let node) = item, case .string(let id)? = node["id"] {
+                        ids.insert(id)
+                    }
+                }
+            }
+            if case .array(let arr)? = obj["tagConceptIds"] {
+                for item in arr {
+                    if case .string(let id) = item { ids.insert(id) }
+                }
+            }
+        }
+        return ids
+    }
+
+    static func tier1ResourceSignals(for paper: Paper, cachedDemoIDs: Set<String> = []) -> (hasCode: Bool, hasModel: Bool, hasDataset: Bool, hasDemo: Bool) {
+        let conceptIDs = paperConceptIDs(paper)
+        let hasCode = conceptIDs.contains { $0 == "artifact.open-source-tool" || $0 == "artifact.software" || $0.hasPrefix("artifact.open-source-tool.") || $0.hasPrefix("artifact.software.") }
+        let hasModel = conceptIDs.contains { $0 == "artifact.model-weights" || $0.hasPrefix("artifact.model-weights.") }
+        let hasDataset = conceptIDs.contains { $0 == "artifact.dataset" || $0 == "artifact.benchmark" || $0.hasPrefix("artifact.dataset.") || $0.hasPrefix("artifact.benchmark.") }
+        let hasDemo = cachedDemoIDs.contains(paper.id)
+        return (hasCode, hasModel, hasDataset, hasDemo)
+    }
+
+    static func matchesResourceFilter(
+        _ paper: Paper,
+        filter: String?,
+        resourceBadges: [String: [String: Any]] = [:],
+        cachedDemoIDs: Set<String> = []
+    ) -> Bool {
+        guard let filter, !filter.isEmpty, filter != "all" else { return true }
+        let t1 = tier1ResourceSignals(for: paper, cachedDemoIDs: cachedDemoIDs)
+        let t2 = resourceBadges[paper.id]
+        let hasCode = t1.hasCode || (t2?["hasCode"] as? Bool == true)
+        let hasModel = t1.hasModel || (t2?["hasModel"] as? Bool == true)
+        let hasDataset = t1.hasDataset || (t2?["hasDataset"] as? Bool == true)
+        let hasDemo = t1.hasDemo || (t2?["hasDemo"] as? Bool == true)
+        let hasProject = t2?["hasProjectPage"] as? Bool == true
+        switch filter {
+        case "open-source", "any": return hasCode || hasModel || hasDataset || hasDemo || hasProject
+        case "code": return hasCode
+        case "model": return hasModel
+        case "dataset": return hasDataset
+        case "demo": return hasDemo
+        case "project": return hasProject
+        default: return true
+        }
+    }
+
+    static func paperRelevanceScore(_ paper: Paper, query: String, tokens: [String]) -> Int {
+        guard !tokens.isEmpty else { return 0 }
+        let phrase = normalizedSearchText(query).trimmingCharacters(in: .whitespacesAndNewlines)
+        let titleNorm = normalizedSearchText(paper.title + " " + paper.titleZh)
+        let idNorm = normalizedSearchText(paper.id + " " + (paper.sourceVersion ?? "") + " " + (parseConferenceVenue(paper.id)?.label ?? ""))
+        let authorsNorm = normalizedSearchText(paper.authors.joined(separator: " "))
+        let tagsNorm = normalizedSearchText(([paper.task, paper.method] + paper.tags).joined(separator: " "))
+        var score = 0
+        if !phrase.isEmpty {
+            if titleNorm.contains(phrase) { score += 100 }
+            if idNorm.contains(phrase) { score += 80 }
+        }
+        for token in tokens {
+            if titleNorm.contains(token) { score += 40 }
+            if idNorm.contains(token) { score += 35 }
+            if tagsNorm.contains(token) { score += 20 }
+            if authorsNorm.contains(token) { score += 18 }
+        }
+        return score
+    }
+
+    func matchingPapers(
+        query: String,
+        source: String?,
+        minimumScore: Double?,
+        sort: Sort,
+        includeRetained: Bool = false,
+        conferenceVenue: String? = nil,
+        scoredOnly: Bool = false,
+        resourceFilter: String? = nil,
+        resourceBadges: [String: [String: Any]] = [:],
+        cachedDemoIDs: Set<String> = []
+    ) -> [Paper] {
+        let tokens = Self.searchTokens(query)
         var catalog = snapshot.papers
         if includeRetained {
             let current = Set(catalog.map(\.id))
             catalog.append(contentsOf: (snapshot.retiredPapers ?? []).filter { !current.contains($0.id) })
         }
         let filtered = catalog.filter { p in
-            (source == nil || source == "all" || p.sourceKind == source) &&
-            (minimumScore == nil || (p.score ?? -.infinity) >= minimumScore!) &&
-            (needle.isEmpty || ([p.id, p.title, p.titleZh, p.task, p.method] + p.authors + p.tags).joined(separator: " ").folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains(needle))
-        }.sorted { a, b in
+            guard source == nil || source == "all" || source == "" || p.sourceKind == source else { return false }
+            if scoredOnly && p.score == nil { return false }
+            if let minimumScore, (p.score ?? -.infinity) < minimumScore { return false }
+            if let venue = conferenceVenue, !venue.isEmpty, venue != "all" {
+                guard Self.parseConferenceVenue(p.id)?.key == venue else { return false }
+            }
+            guard Self.matchesResourceFilter(p, filter: resourceFilter, resourceBadges: resourceBadges, cachedDemoIDs: cachedDemoIDs) else {
+                return false
+            }
+            if tokens.isEmpty { return true }
+            let venueLabel = Self.parseConferenceVenue(p.id)?.label ?? ""
+            let haystack = Self.normalizedSearchText(([p.id, p.sourceVersion ?? "", venueLabel, p.title, p.titleZh, p.task, p.method] + p.authors + p.tags).joined(separator: " "))
+            return tokens.allSatisfy { Self.containsSearchToken(haystack, $0) }
+        }
+        let relevanceMap: [String: Int] = (sort == .relevance && !tokens.isEmpty)
+            ? Dictionary(uniqueKeysWithValues: filtered.map { ($0.id, Self.paperRelevanceScore($0, query: query, tokens: tokens)) })
+            : [:]
+        return filtered.sorted { a, b in
             switch sort {
+            case .relevance:
+                let ra = relevanceMap[a.id] ?? 0, rb = relevanceMap[b.id] ?? 0
+                if ra != rb { return ra > rb }
+                if a.score != b.score { return (a.score ?? -.infinity) > (b.score ?? -.infinity) }
+                if a.date != b.date { return a.date > b.date }
             case .score: if a.score != b.score { return (a.score ?? -.infinity) > (b.score ?? -.infinity) }
             case .title: if a.title != b.title { return a.title.localizedStandardCompare(b.title) == .orderedAscending }
             case .date: if a.date != b.date { return a.date > b.date }
             }
             return a.id < b.id
         }
-        return filtered
+    }
+
+    private static let allowedBadgeRootKeys: Set<String> = [
+        "contract", "schemaFingerprint", "generatedAt", "papers"
+    ]
+    private static let allowedBadgeEntryKeys: Set<String> = [
+        "hasCode", "hasModel", "hasDataset", "hasDemo", "hasProjectPage",
+        "codeUrls", "demoUrls", "projectUrls"
+    ]
+    private static let dangerousBadgeKeys: Set<String> = [
+        "__proto__", "constructor", "prototype"
+    ]
+
+    static func parseResourceBadgesIndex(_ data: Data) throws -> [String: [String: Any]] {
+        guard data.count <= maxResourceBadgesBytes else {
+            throw ServiceError.invalid("开源与资源信号索引超过 8 MiB 上限。")
+        }
+        guard String(data: data, encoding: .utf8) != nil,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ServiceError.invalid("开源与资源信号索引不是有效 UTF-8 JSON 对象。")
+        }
+        guard ClientProtocols.isCurrentHeader(obj, "paper-resource-badges-index") else {
+            throw ServiceError.invalid("开源与资源信号索引协议头或 schemaFingerprint 无效。")
+        }
+        guard Set(obj.keys).isSubset(of: allowedBadgeRootKeys) else {
+            throw ServiceError.invalid("开源与资源信号索引包含未声明顶层字段。")
+        }
+        guard let generatedAt = obj["generatedAt"] as? String, !generatedAt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let rawPapers = obj["papers"] as? [String: Any] else {
+            throw ServiceError.invalid("开源与资源信号索引缺少有效 papers 映射。")
+        }
+        var sanitized: [String: [String: Any]] = [:]
+        sanitized.reserveCapacity(rawPapers.count)
+        for (paperId, rawEntry) in rawPapers {
+            guard !paperId.isEmpty,
+                  !dangerousBadgeKeys.contains(paperId),
+                  let entry = rawEntry as? [String: Any],
+                  Set(entry.keys).isSubset(of: allowedBadgeEntryKeys) else {
+                throw ServiceError.invalid("开源与资源信号条目格式无效或包含危险/未声明字段：\(paperId)")
+            }
+            func boolField(_ key: String) throws -> Bool {
+                guard let val = entry[key], !(val is NSNull) else { return false }
+                guard let num = val as? NSNumber, CFGetTypeID(num) == CFBooleanGetTypeID() else {
+                    throw ServiceError.invalid("开源与资源信号布尔字段无效：\(paperId).\(key)")
+                }
+                return num.boolValue
+            }
+            func httpsList(_ key: String) throws -> [String] {
+                guard let raw = entry[key], !(raw is NSNull) else { return [] }
+                guard let list = raw as? [Any] else {
+                    throw ServiceError.invalid("开源与资源信号链接列表无效：\(paperId).\(key)")
+                }
+                var out: [String] = []
+                for rawItem in list {
+                    guard let item = rawItem as? String,
+                          let u = URL(string: item), u.scheme == "https", u.host != nil, u.user == nil, u.password == nil else {
+                        throw ServiceError.invalid("开源与资源信号链接必须为不含凭据的 HTTPS：\(paperId).\(key)")
+                    }
+                    out.append(u.absoluteString)
+                }
+                return out
+            }
+            sanitized[paperId] = [
+                "hasCode": try boolField("hasCode"),
+                "hasModel": try boolField("hasModel"),
+                "hasDataset": try boolField("hasDataset"),
+                "hasDemo": try boolField("hasDemo"),
+                "hasProjectPage": try boolField("hasProjectPage"),
+                "codeUrls": try httpsList("codeUrls"),
+                "demoUrls": try httpsList("demoUrls"),
+                "projectUrls": try httpsList("projectUrls")
+            ]
+        }
+        return sanitized
+    }
+
+    func scanCachedAudioDemoPaperIDs(forceRescan: Bool = false) -> [String] {
+        if !forceRescan, let memoized = cachedDemoPaperIDs {
+            return memoized
+        }
+        var hits = Set<String>()
+        let articlesDir = directory.appendingPathComponent("articles", isDirectory: true)
+        if let files = try? FileManager.default.contentsOfDirectory(at: articlesDir, includingPropertiesForKeys: nil) {
+            for file in files where file.pathExtension == "json" {
+                guard let data = try? Data(contentsOf: file), data.count <= 32 * 1024 * 1024,
+                      let raw = String(data: data, encoding: .utf8),
+                      raw.contains("audio-demo-cta-btn"),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let paperID = obj["paperID"] as? String, !paperID.isEmpty else { continue }
+                hits.insert(paperID)
+            }
+        }
+        if let state = activeDesktopDetails() {
+            for (paperID, entry) in state.paperDetails where !hits.contains(paperID) {
+                let rel = "desktop-details/articles/\(entry.primaryArticleRevisionId).html"
+                if let hit = try? Self.verifiedOptionalLocalFile(relative: rel, directory: directory, maxBytes: Self.maxDesktopArticleBytes),
+                   let html = String(data: hit.bytes, encoding: .utf8),
+                   html.contains("audio-demo-cta-btn") {
+                    hits.insert(paperID)
+                }
+            }
+        }
+        let sorted = hits.sorted()
+        cachedDemoPaperIDs = sorted
+        return sorted
+    }
+
+    func resourceBadgesResponse(forceRefresh: Bool = false) async throws -> [String: Any] {
+        let cachedDemoIds = scanCachedAudioDemoPaperIDs(forceRescan: forceRefresh)
+        if !forceRefresh && resourceBadgesLoaded {
+            return [
+                "available": cachedResourceBadges != nil,
+                "papers": cachedResourceBadges ?? [:],
+                "cachedDemoIds": cachedDemoIds
+            ]
+        }
+        let url = try sameSite("client/signals/resource-badges.json")
+        do {
+            let bytes = try await read(url, limit: Self.maxResourceBadgesBytes)
+            let parsed = try Self.parseResourceBadgesIndex(bytes)
+            cachedResourceBadges = parsed
+            resourceBadgesLoaded = true
+            return [
+                "available": true,
+                "papers": parsed,
+                "cachedDemoIds": cachedDemoIds
+            ]
+        } catch ServiceError.httpStatus(404), ServiceError.httpStatus(410) {
+            // Optional Tier 2 endpoint: HTTP 404/410 is silent-graceful.
+            cachedResourceBadges = nil
+            resourceBadgesLoaded = true
+            return [
+                "available": false,
+                "papers": [:],
+                "cachedDemoIds": cachedDemoIds
+            ]
+        }
     }
 
     /// Synchronous current-source read. Command entry points await `ensureReady()` first; the only
@@ -34,7 +359,22 @@ extension LibraryService {
         let query = payload["query"] as? String ?? "", source = payload["source"] as? String
         let score = payload["minimumScore"] as? Double
         let sort = Sort(rawValue: payload["sort"] as? String ?? "date") ?? .date
-        let matches = matchingPapers(query: query, source: source, minimumScore: score, sort: sort, includeRetained: true)
+        let venue = payload["venue"] as? String
+        let scoredOnly = payload["scoredOnly"] as? Bool ?? false
+        let resourceFilter = payload["resource"] as? String
+        let demoIDs: Set<String> = (resourceFilter != nil && !resourceFilter!.isEmpty) ? Set(scanCachedAudioDemoPaperIDs()) : []
+        let matches = matchingPapers(
+            query: query,
+            source: source,
+            minimumScore: score,
+            sort: sort,
+            includeRetained: true,
+            conferenceVenue: venue,
+            scoredOnly: scoredOnly,
+            resourceFilter: resourceFilter,
+            resourceBadges: cachedResourceBadges ?? [:],
+            cachedDemoIDs: demoIDs
+        )
         let currentIDs = Set(snapshot.papers.map(\.id))
         let papers = Array(matches.dropFirst(max(0, payload["offset"] as? Int ?? 0)).prefix(max(0, min(10000, payload["limit"] as? Int ?? 200))))
         // `compact` is the browsing projection: neither the per-guide records nor the full

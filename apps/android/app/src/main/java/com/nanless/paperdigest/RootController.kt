@@ -90,11 +90,29 @@ class RootController private constructor(
     private val generation: AtomicLong = AtomicLong(0)
     private val active: ConcurrentHashMap<String, Job> = ConcurrentHashMap()
     private val restores: ConcurrentHashMap<String, RestorePreparation> = ConcurrentHashMap()
-    private val _state: MutableStateFlow<UiState> = MutableStateFlow(UiState())
+    private val _state: MutableStateFlow<UiState> = MutableStateFlow(
+        UiState(nativePodcastEnabled = true, nativeResourceBadgesEnabled = true)
+    )
     override val state: StateFlow<UiState> = _state
 
     /** Application lifetime work. A screen awaiting a result never owns the producer. */
     private val exportScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val podcastRepository: PodcastRepository by lazy {
+        PodcastRepository(File(context.cacheDir, "podcast-cache"))
+    }
+    private val podcastCoordinator: PodcastCoordinator by lazy {
+        PodcastCoordinator(
+            context = context,
+            repository = podcastRepository,
+            scope = exportScope,
+            offlineMode = { personal.settings().optBoolean("offlineMode") },
+            httpProxy = { personal.settings().nullableString("httpProxy")?.trim()?.ifEmpty { null } },
+            onStateChanged = { next -> _state.update { it.copy(podcast = next) } },
+        )
+    }
+    private val resourceBadgesRepository: ResourceBadgesRepository by lazy {
+        ResourceBadgesRepository(File(research, "PublishedLibrary"))
+    }
     private val pdfAdmission: Mutex = Mutex()
     private val pdfCommittedResults: ConcurrentHashMap<String, JSONObject> = ConcurrentHashMap()
     private val pdfAcquisition: AtomicReference<Deferred<JSONObject>?> = AtomicReference(null)
@@ -168,6 +186,7 @@ class RootController private constructor(
         try {
             catalogCoordinator.withExclusiveArticleReadDrain {
                 exportCoordinator.retireForWorkspaceRestore()
+                podcastCoordinator.release()
                 pdf.clearSessionPasswords()
                 leaveAggregateView()
                 aggregateBrowser.invalidatePreviews()
@@ -572,7 +591,7 @@ class RootController private constructor(
     }
 
     private fun paper(id: String): Paper =
-        library.papers().firstOrNull { it.id == id } ?: throw AppFailure("missing", "论文不在已保存资料库中")
+        resolvePaperByCanonicalId(library.papers(), id) ?: throw AppFailure("missing", "论文不在已保存资料库中")
 
     private fun selected(): Paper =
         offlineReading?.takeIf { it.paper.id == _state.value.selectedPaperId }?.paper
@@ -734,6 +753,68 @@ class RootController private constructor(
             if (prioritized) withContext(Dispatchers.IO) { catalogCoordinator.giveForegroundPriority() }
             if (command == "library.search") {
                 return withContext(Dispatchers.IO) { maintenance.withLock { library.searchCached(payload.getString("query")) } }
+            }
+            if (command == "library.resourceBadges") {
+                return withContext(Dispatchers.IO) {
+                    val force = payload.optBoolean("refresh", false)
+                    val offline = personal.settings().optBoolean("offlineMode")
+                    val loaded = resourceBadgesRepository.load(forceRefresh = force, offlineMode = offline)
+                    _state.update { it.copy(resourceBadges = loaded.papers, cachedDemoIds = loaded.cachedDemoIds) }
+                    JSONObject()
+                        .put("available", loaded.available)
+                        .put("count", loaded.papers.size)
+                        .put("cachedDemoIds", JSONArray(loaded.cachedDemoIds.sorted()))
+                }
+            }
+            if (command.startsWith("podcast.")) {
+                return withContext(Dispatchers.IO) {
+                    when (command) {
+                        "podcast.feed" -> {
+                            val force = payload.optBoolean("refresh", false)
+                            if (payload.optBoolean("silent", false)) {
+                                runCatching { podcastCoordinator.fetchFeed(forceRefresh = force) }
+                                    .getOrElse { _state.value.podcast.json() }
+                            } else {
+                                podcastCoordinator.fetchFeed(forceRefresh = force)
+                            }
+                        }
+                        "podcast.state" -> podcastCoordinator.state().json()
+                        "podcast.play" -> {
+                            val epId = if (payload.has("episodeId") && !payload.isNull("episodeId")) {
+                                val raw = payload.opt("episodeId")
+                                require(raw is String) { "播客节目编号无效。" }
+                                raw.trim().ifEmpty { null }
+                            } else null
+                            val start = if (payload.has("startSeconds") && !payload.isNull("startSeconds")) {
+                                val raw = payload.opt("startSeconds")
+                                require(raw is Number && raw !is Boolean) { "播客起始播放时间无效。" }
+                                val d = raw.toDouble()
+                                require(d.isFinite() && d >= 0.0) { "播客起始播放时间无效。" }
+                                d
+                            } else null
+                            podcastCoordinator.play(epId, start)
+                        }
+                        "podcast.pause" -> podcastCoordinator.pause()
+                        "podcast.seek" -> {
+                            val raw = payload.opt("seconds")
+                            require(raw is Number && raw !is Boolean) { "播客跳转时间无效。" }
+                            podcastCoordinator.seek(raw.toDouble())
+                        }
+                        "podcast.rate" -> {
+                            val raw = payload.opt("rate")
+                            require(raw is Number && raw !is Boolean) { "播客倍速无效。" }
+                            podcastCoordinator.setRate(raw.toDouble().toFloat())
+                        }
+                        "podcast.download" -> {
+                            val raw = if (payload.has("episodeId") && !payload.isNull("episodeId")) payload.opt("episodeId") else null
+                            require(raw is String && raw.trim().isNotEmpty()) { "缺少要下载的播客节目编号。" }
+                            podcastCoordinator.download(raw.trim())
+                        }
+                        "podcast.clearCache" -> podcastCoordinator.clearCache()
+                        "podcast.stop" -> podcastCoordinator.stop()
+                        else -> throw AppFailure("unsupported", "不支持的播客操作：$command")
+                    }
+                }
             }
             val current = _state.value
             val access = ReadingAccess(
@@ -1074,13 +1155,14 @@ class RootController private constructor(
     }
 
     private suspend fun openPaper(
-        id: String,
+        requestedId: String,
         refresh: Boolean = false,
         admissionGuard: (() -> Boolean)? = null,
         expectedEpoch: String = dispatch.epoch,
     ): JSONObject {
         if (dispatch.epoch != expectedEpoch) return JSONObject().put("status", "not-adopted")
-        val p = paper(id)
+        val p = paper(requestedId)
+        val id = p.id
         if (admissionGuard == null) leaveAggregateView()
         val admissionView = catalogCoordinator.aggregateViewRevision.get()
         val ready = CompletableDeferred<Unit>()

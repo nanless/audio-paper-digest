@@ -4,7 +4,7 @@ set -euo pipefail
 app_root="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$app_root/../.." && pwd)"
 cd "$repo_root"
-swift_suites=(ClientProtocols PublicProtocolEndpoints DesktopDetailsContract DesktopStore FavoriteCollections BackupCodec ReleaseBootstrap ReleaseEmptyLibrary PersonalWebDavSync NoteConflictMerger FullWebDavSync SyncedArchiveHistory CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopArchiveIdentity DesktopContextReview DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService NativeLibraryAccessibility WebsiteClassification LibraryCatalogPaging CatalogScheduling LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePreload AggregateReadScope AggregateImageReadScope AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeAggregateHost NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment)
+swift_suites=(ClientProtocols PublicProtocolEndpoints DesktopDetailsContract DesktopStore FavoriteCollections BackupCodec ReleaseBootstrap ReleaseEmptyLibrary PersonalWebDavSync NoteConflictMerger FullWebDavSync SyncedArchiveHistory CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopArchiveIdentity DesktopContextReview DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService NativeLibraryAccessibility WebsiteClassification LibraryCatalogPaging CatalogScheduling LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePreload AggregateReadScope AggregateImageReadScope AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeAggregateHost NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment PodcastPlayerService LibraryFiltersV15)
 cjs_suites=(ModelService)
 # 清单是手写的：Tests/ 下每个 *Tests.swift 都必须接入，否则新增套件会静默漏跑。
 # ModelServiceTests 由 ModelWorker.test.cjs 显式编译并 spawn，因此只登记为 CJS 例外。
@@ -51,8 +51,8 @@ swift_executed=0
 swift_skipped=0
 cjs_executed=0
 optional_skipped=0
-if [[ "$suite_total" -ne 60 || "${#swift_suites[@]}" -ne 59 || "${#cjs_suites[@]}" -ne 1 ]]; then
-  echo "套件声明数量不符：期望 Tests/*Tests.swift 共 60 个（Swift 循环 59 + CJS 例外 1），实际为 ${suite_total}（${#swift_suites[@]} + ${#cjs_suites[@]}）。" >&2
+if [[ "$suite_total" -ne 62 || "${#swift_suites[@]}" -ne 61 || "${#cjs_suites[@]}" -ne 1 ]]; then
+  echo "套件声明数量不符：期望 Tests/*Tests.swift 共 62 个（Swift 循环 61 + CJS 例外 1），实际为 ${suite_total}（${#swift_suites[@]} + ${#cjs_suites[@]}）。" >&2
   exit 1
 fi
 echo "套件覆盖预检通过：Tests/*Tests.swift 共 ${suite_total} 个，Swift 循环 ${#swift_suites[@]} 个，CJS 例外 ${#cjs_suites[@]} 个；开始预编译共享核心测试模块。"
@@ -191,6 +191,7 @@ node "$app_root/Tests/AggregateReadyUI.test.cjs"
 node "$app_root/Tests/NativeAggregateRenderer.test.cjs"
 node "$app_root/Tests/SearchNavigationFocus.test.cjs"
 node "$app_root/Tests/PublishedHeadingMatch.test.cjs"
+node "$app_root/Tests/PodcastUI.test.cjs"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/Branding.test.py"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/FinalizeBuild.test.py"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"

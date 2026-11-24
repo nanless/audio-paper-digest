@@ -39,6 +39,7 @@ class SafeHttp private constructor(
     networkDispatcher: okhttp3.Dispatcher? = null,
     publisherOnly: Boolean = false,
     private val approvedSyntheticHosts: Set<String> = emptySet(),
+    private val podcastReleaseOnly: Boolean = false,
 ) {
     constructor(proxy:String?=null,localModel:Boolean=false,timeoutMs:Long=180000):this(proxy,localModel,timeoutMs,null)
     /** JVM tests can own only a download callback; ordinary/model requests retain the real original client. */
@@ -111,7 +112,25 @@ class SafeHttp private constructor(
                 }
                 chain.proceed(request)
             }
-            if (approvedSyntheticHosts.isNotEmpty()) addInterceptor { chain ->
+            if (podcastReleaseOnly) addInterceptor { chain ->
+                val request = chain.request()
+                val host = request.url.host.lowercase()
+                val publicHeaders = request.headers.names().none {
+                    it.equals("Authorization", ignoreCase = true) ||
+                        it.equals("Proxy-Authorization", ignoreCase = true) ||
+                        it.equals("Cookie", ignoreCase = true)
+                }
+                val validTarget = request.method == "GET" &&
+                    request.url.scheme == "https" &&
+                    host in PODCAST_RELEASE_HOSTS &&
+                    request.url.port == 443 &&
+                    request.url.username.isEmpty() &&
+                    request.url.password.isEmpty()
+                if (!validTarget || !publicHeaders) {
+                    throw IOException("仅允许匿名读取受控 GitHub Release 播客音频")
+                }
+                chain.proceed(request)
+            } else if (approvedSyntheticHosts.isNotEmpty()) addInterceptor { chain ->
                 val request = chain.request()
                 val isApproved = runCatching { CatalogRepository.approvedResource(URI(request.url.toString())) }.getOrDefault(false)
                 val publicHeaders = request.headers.names().none {
@@ -302,6 +321,12 @@ class SafeHttp private constructor(
             "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org",
         )
 
+        internal val PODCAST_RELEASE_HOSTS = setOf(
+            "github.com",
+            "release-assets.githubusercontent.com",
+            "objects.githubusercontent.com",
+        )
+
         /** The publisher's public HTTPS endpoint may use a synthetic route supplied by the network.
          * TLS authenticates the fixed hostname and redirects remain disabled.
          */
@@ -311,6 +336,10 @@ class SafeHttp private constructor(
         /** Strictly allowlisted official/academic endpoints may use a synthetic TUN Fake-IP route or user HTTP proxy. */
         internal fun approvedResource(proxy: String? = null, timeoutMs: Long = 180000): SafeHttp =
             SafeHttp(proxy, false, timeoutMs, null, approvedSyntheticHosts = APPROVED_SYNTHETIC_HOSTS)
+
+        /** Strictly allowlisted GitHub Release hosts for native daily audio podcast downloads (redirects remain disabled). */
+        internal fun podcastRelease(proxy: String? = null, timeoutMs: Long = 180000): SafeHttp =
+            SafeHttp(proxy, false, timeoutMs, null, approvedSyntheticHosts = PODCAST_RELEASE_HOSTS, podcastReleaseOnly = true)
 
         internal fun isSyntheticFakeIp(address: InetAddress): Boolean {
             val bytes = address.address

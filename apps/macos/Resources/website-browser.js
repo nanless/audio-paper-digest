@@ -3,8 +3,176 @@ import {favoriteCollectionsWritable} from './favorites-ui.js';
 import './website-tags/website-tag-core.js';
 const tags = globalThis.ResearchTags;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fold = value => String(value ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+const fold = value => String(value ?? '').normalize('NFKC').normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase();
 const idOf = paper => paper.paperID || paper.id;
+
+const VENUE_LABELS = {
+  interspeech: 'INTERSPEECH', icassp: 'ICASSP', iclr: 'ICLR', icml: 'ICML', neurips: 'NeurIPS',
+  acl: 'ACL', emnlp: 'EMNLP', naacl: 'NAACL', eacl: 'EACL', cvpr: 'CVPR', aaai: 'AAAI',
+  dafx: 'DAFx', eusipco: 'EUSIPCO', speechprosody: 'SpeechProsody', nime: 'NIME', odyssey: 'Odyssey',
+  icmc: 'ICMC', jep: 'JEP', iwslt: 'IWSLT', chime: 'CHiME', uai: 'UAI', aistats: 'AISTATS',
+  waspaa: 'WASPAA', asru: 'ASRU', slt: 'SLT', ismir: 'ISMIR'
+};
+
+export function parseConferenceVenue(paperId) {
+  const raw = String(paperId ?? '');
+  if (!raw.startsWith('conference:')) return null;
+  const parts = raw.split(':');
+  if (parts.length < 3) return null;
+  const venue = parts[1].trim().toLowerCase();
+  const year = parts[2].trim();
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(venue) || !/^(?:19|20)\d{2}$/.test(year)) return null;
+  const display = Object.hasOwn(VENUE_LABELS, venue) ? VENUE_LABELS[venue] : venue.toUpperCase();
+  return {key: `conference:${venue}:${year}`, venue, year: Number(year), label: `${display} ${year}`};
+}
+
+/** Resolves bare/versioned arXiv IDs (e.g. "2611.10001v1", "2611.10001") or canonical IDs against catalog. */
+export function resolvePaperByCanonicalId(catalog, rawId) {
+  const pid = String(rawId ?? '').trim();
+  if (!pid || !Array.isArray(catalog)) return null;
+  const exact = catalog.find(p => idOf(p) === pid);
+  if (exact) return exact;
+  const byVersion = catalog.find(p => p?.sourceVersion === pid);
+  if (byVersion) return byVersion;
+  const bareMatch = /^(\d{4}\.\d{4,5})(?:v\d+)?$/i.exec(pid);
+  if (bareMatch) {
+    const canonical = `arxiv:${bareMatch[1]}`;
+    return catalog.find(p => idOf(p) === canonical) || null;
+  }
+  return null;
+}
+
+export function scoreTierInfo(rawScore) {
+  const value = score(rawScore);
+  if (value === null) return {score: null, tier: 'none', label: ''};
+  if (value >= 8.0) return {score: value, tier: 'featured', label: '精选'};
+  if (value >= 7.0) return {score: value, tier: 'high', label: '高分'};
+  if (value >= 6.0) return {score: value, tier: 'good', label: '推荐'};
+  return {score: value, tier: 'plain', label: ''};
+}
+
+export const MAX_SEARCH_TOKENS = 32;
+
+export function tokenizeQuery(query) {
+  const seen = new Set();
+  const out = [];
+  for (const tok of fold(query).trim().split(/\s+/)) {
+    if (!tok || seen.has(tok)) continue;
+    seen.add(tok);
+    out.push(tok);
+    if (out.length >= MAX_SEARCH_TOKENS) break;
+  }
+  return out;
+}
+
+export function collectConferenceVenues(papers) {
+  const map = new Map();
+  for (const paper of papers || []) {
+    const info = parseConferenceVenue(idOf(paper));
+    if (!info) continue;
+    const prev = map.get(info.key);
+    if (prev) prev.count += 1;
+    else map.set(info.key, {...info, count: 1});
+  }
+  return [...map.values()].sort((a, b) => (b.year - a.year) || (b.count - a.count) || a.label.localeCompare(b.label));
+}
+
+function conceptIdsOfPaper(paper) {
+  const ids = new Set();
+  for (const row of Array.isArray(paper?.websiteTagRecords) ? paper.websiteTagRecords : []) {
+    for (const key of ['tagConcepts', 'taxonomyConcepts']) {
+      if (Array.isArray(row?.[key])) {
+        for (const node of row[key]) if (typeof node?.id === 'string') ids.add(node.id);
+      }
+    }
+    if (Array.isArray(row?.tagConceptIds)) {
+      for (const id of row.tagConceptIds) if (typeof id === 'string') ids.add(id);
+    }
+  }
+  if (Array.isArray(paper?.tagConceptIds)) {
+    for (const id of paper.tagConceptIds) if (typeof id === 'string') ids.add(id);
+  }
+  return ids;
+}
+
+export function resolvePaperResources(paper, {resourceBadges = null, cachedDemoIds = null} = {}) {
+  const id = idOf(paper);
+  const conceptIds = conceptIdsOfPaper(paper);
+  const hasAny = prefixes => [...conceptIds].some(cid => prefixes.some(p => cid === p || cid.startsWith(p + '.')));
+  const tier2 = resourceBadges && typeof resourceBadges === 'object' && Object.hasOwn(resourceBadges, id) ? resourceBadges[id] : null;
+  const demoSet = cachedDemoIds instanceof Set ? cachedDemoIds : new Set(Array.isArray(cachedDemoIds) ? cachedDemoIds : []);
+  const hasCode = hasAny(['artifact.open-source-tool', 'artifact.software']) || tier2?.hasCode === true;
+  const hasModel = hasAny(['artifact.model-weights']) || tier2?.hasModel === true;
+  const hasDataset = hasAny(['artifact.dataset', 'artifact.benchmark']) || tier2?.hasDataset === true;
+  const hasDemo = demoSet.has(id) || tier2?.hasDemo === true;
+  const hasProjectPage = tier2?.hasProjectPage === true;
+  const pills = [];
+  if (hasCode) pills.push({kind: 'code', label: '开源代码'});
+  if (hasModel) pills.push({kind: 'model', label: '模型权重'});
+  if (hasDataset) pills.push({kind: 'dataset', label: '数据集'});
+  if (hasDemo) pills.push({kind: 'demo', label: '音频 Demo'});
+  if (hasProjectPage) pills.push({kind: 'project', label: '项目页'});
+  return {hasCode, hasModel, hasDataset, hasDemo, hasProjectPage, pills};
+}
+
+export function matchesResourceFilter(paper, resourceFilter, options = {}) {
+  if (!resourceFilter || resourceFilter === 'all') return true;
+  const res = resolvePaperResources(paper, options);
+  switch (resourceFilter) {
+    case 'open-source':
+    case 'any': return res.hasCode || res.hasModel || res.hasDataset || res.hasDemo || res.hasProjectPage;
+    case 'code': return res.hasCode;
+    case 'model': return res.hasModel;
+    case 'dataset': return res.hasDataset;
+    case 'demo': return res.hasDemo;
+    case 'project': return res.hasProjectPage;
+    default: return true;
+  }
+}
+
+export function relevanceScore(paper, {query = '', tokens = null, extraIDs = null, graph = null} = {}) {
+  const toks = Array.isArray(tokens) ? tokens : tokenizeQuery(query);
+  if (!toks.length) return 0;
+  const id = idOf(paper);
+  const phrase = fold(query).trim();
+  const venue = parseConferenceVenue(id);
+  const titleText = fold([paper.titleZh, paper.title, paper.originalTitle].filter(Boolean).join(' '));
+  const idText = fold([id, paper.sourceVersion, venue?.label, venue?.key].filter(Boolean).join(' '));
+  const authorsText = fold((paper.authors || []).join(' '));
+  const summaryParts = [paper.summary || ''];
+  const tagParts = [paper.task || '', paper.method || '', ...(paper.tags || [])];
+  for (const row of Array.isArray(paper.websiteTagRecords) ? paper.websiteTagRecords : []) {
+    if (row?.summary) summaryParts.push(row.summary);
+    if (Array.isArray(row?.tags)) tagParts.push(...row.tags);
+  }
+  if (graph) {
+    for (const cid of conceptIdsOfPaper(paper)) {
+      const node = graph.byId?.[cid];
+      if (!node) continue;
+      tagParts.push(node.zh, node.en || '', ...(node.aliases || []));
+      for (const anc of node.ancestorIds || []) {
+        const aNode = graph.byId?.[anc];
+        if (aNode) tagParts.push(aNode.zh, aNode.en || '');
+      }
+    }
+  }
+  const tagsText = fold(tagParts.join(' '));
+  const summaryText = fold(summaryParts.join(' '));
+  let total = 0;
+  if (phrase) {
+    if (titleText.includes(phrase)) total += 100;
+    if (idText.includes(phrase)) total += 80;
+  }
+  for (const tok of toks) {
+    if (titleText.includes(tok)) total += 40;
+    if (idText.includes(tok)) total += 35;
+    if (tagsText.includes(tok)) total += 20;
+    if (authorsText.includes(tok)) total += 18;
+    if (summaryText.includes(tok)) total += 12;
+  }
+  if (extraIDs && extraIDs.has(id)) total += 10;
+  return total;
+}
 const statusLabel = status => ({withheld:'网站暂缓发布分类',legacy:'网站未提供结构化分类','unknown-version':'网站分类版本暂不可核验','unbound-version':'网站分类未绑定词表版本','invalid-roles':'网站分类角色暂不可核验','needs-sync':'旧目录缺少网页分类，请同步',unavailable:'网页分类词表暂不可核验'}[status] || '网站未提供可核验分类');
 function websiteDate(value){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||value.startsWith('0000'))return false;const time=Date.parse(value+'T00:00:00Z');return Number.isFinite(time)&&new Date(time).toISOString().slice(0,10)===value;}
 function score(value) {
@@ -33,21 +201,46 @@ export function createWebsiteIndex(app) {
     }
   }
   function prepare(papers, {query = '', filters = {}, extraIDs = new Set()} = {}) {
-    ensure(); const needle = fold(query); eligibleIDs = new Set(); const byID = new Map();
-    const eligible = (row, id) => {
+    ensure(); const tokens = tokenizeQuery(query); eligibleIDs = new Set(); const byID = new Map();
+    const resourceOptions = {resourceBadges: app.state.resourceBadges || null, cachedDemoIds: app.state.cachedDemoIds || null};
+    const taxonomyTerms = row => {
+      if (!graph) return [];
+      const out = [];
+      for (const key of ['tagConcepts', 'taxonomyConcepts']) {
+        if (!Array.isArray(row?.[key])) continue;
+        for (const item of row[key]) {
+          const node = graph.byId?.[item?.id];
+          if (!node) continue;
+          out.push(node.zh, node.en || '', ...(node.aliases || []));
+          for (const anc of node.ancestorIds || []) {
+            const ancNode = graph.byId?.[anc];
+            if (ancNode) out.push(ancNode.zh, ancNode.en || '');
+          }
+        }
+      }
+      return out;
+    };
+    const eligible = (row, id, paper) => {
       if (filters.task && row.task !== filters.task || filters.method && row.method !== filters.method || filters.source && row.sourceKind !== filters.source) return false;
+      if (filters.venue && parseConferenceVenue(id)?.key !== filters.venue) return false;
+      if (filters.resource && !matchesResourceFilter(paper, filters.resource, resourceOptions)) return false;
       const value = score(row.score);
-      if (filters.score && (value === null || value < Number(filters.score))) return false;
+      if (filters.score === 'scored') {
+        if (value === null) return false;
+      } else if (filters.score && (value === null || value < Number(filters.score))) return false;
       if ((filters.from||filters.until)&&!websiteDate(row.date))return false;
       if (filters.from && row.date < filters.from || filters.until && row.date > filters.until) return false;
-      return !needle || extraIDs.has(id) || fold([id,row.id,row.title,row.titleZh,row.originalTitle,row.summary,row.arxivId,row.paperId,row.task,row.method,...(row.tags || []),...(row.authors || row.citation?.authors || [])].join(' ')).includes(needle);
+      if (!tokens.length || extraIDs.has(id)) return true;
+      const venue = parseConferenceVenue(id);
+      const haystack = fold([id,row.id,venue?.label,venue?.key,row.title,row.titleZh,row.originalTitle,row.summary,row.arxivId,row.paperId,row.task,row.method,...(row.tags || []),...(row.authors || row.citation?.authors || []),...taxonomyTerms(row)].join(' '));
+      return tokens.every(tok => haystack.includes(tok));
     };
     for (const paper of papers) {
       const id = idOf(paper), records = paper.websiteTagRecords;
-      if ((Array.isArray(records) ? records : [paper]).some(row => eligible(row, id))) eligibleIDs.add(id);
+      if ((Array.isArray(records) ? records : [paper]).some(row => eligible(row, id, paper))) eligibleIDs.add(id);
       if (!graph) continue;
       for (const group of groupsByPaper.get(id) || []) {
-        const indices=group.articles.map((row,i)=>eligible(row,id)?i:-1).filter(i=>i>=0),classifications=indices.map(i=>group.classifications[i]),articles=indices.map(i=>group.articles[i]);
+        const indices=group.articles.map((row,i)=>eligible(row,id,paper)?i:-1).filter(i=>i>=0),classifications=indices.map(i=>group.classifications[i]),articles=indices.map(i=>group.articles[i]);
         if (!classifications.length) continue;
         const previous = byID.get(id);
         if (previous){previous.classifications.push(...classifications);previous.articles.push(...articles);}
@@ -186,5 +379,5 @@ export function mountWebsiteBrowser(app, {panelHost, contextHost, onChange, onVi
   $('favorite-grouping').onchange=()=>{grouping=$('favorite-grouping').value;changed();};
   function snapshot(){return {selection:structuredClone(selection),expanded:[...expanded],directoryQuery,currentNode,open,grouping,directoryScroll:$('classification-tree').scrollTop,advancedOpen:$('classification-advanced').open,descriptionOpen:$('classification-description').open};}
   function restore(saved,nextView){selection=saved?.selection?structuredClone(saved.selection):{facets:{},scope:'subtree',role:'any',researchType:'all',domainScope:'all'};expanded=new Set(saved?.expanded||[]);directoryQuery=saved?.directoryQuery||'';currentNode=saved?.currentNode||'';open=saved?.open??nextView==='directions';grouping=saved?.grouping||'relative';$('classification-search').value=directoryQuery;$('classification-advanced').open=saved?.advancedOpen||false;$('classification-description').open=saved?.descriptionOpen||false;treeSignature='';render(nextView);$('classification-tree').scrollTop=saved?.directoryScroll||0;}
-  return {prepare,render,matches:id=>matched.has(id),snapshot,restore,get grouping(){return grouping;},get readOnly(){return !favoriteCollectionsWritable(app.state.personal);},summary:index.summary,paths:index.paths,guides:index.guides};
+  return {prepare,render,matches:id=>matched.has(id),snapshot,restore,get grouping(){return grouping;},get readOnly(){return !favoriteCollectionsWritable(app.state.personal);},get graph(){return index.graph;},summary:index.summary,paths:index.paths,guides:index.guides};
 }

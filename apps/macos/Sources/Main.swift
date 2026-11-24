@@ -36,7 +36,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
 @MainActor final class PaperDigestApp:NSObject,NSApplicationDelegate,WKScriptMessageHandlerWithReply,WKNavigationDelegate,NSWindowDelegate,NSMenuItemValidation {
     var window:NSWindow!, web:WKWebView!, toolbar:NSToolbar!, settingsWindow:NSWindow?
     var pdfObserversInstalled=false
-    var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
+    var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!, podcast:PodcastPlayerService?
     var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false);nativeTasksRequestedVisible=false;retireNativeTasks(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");emit("nativeTasks.layout");restoreNativeAggregateLayout()}}}
     var maintenanceBusy=false {didSet{if maintenanceBusy{if !oldValue{emit("library.willChange")};suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true);nativeTasksRequestedVisible=false;retireNativeTasks(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");emit("nativeTasks.layout");restoreNativeAggregateLayout()}}}
     var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
@@ -89,6 +89,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             zotero=ZoteroService(dataDirectory:directory)
             model=ModelService(directory:directory,store:store)
             storage=DesktopStorage(directory:directory,store:store)
+            configurePodcastService()
             applyApplicationAppearance();buildMenu(); buildWindow(); configureSchedule(); configureCloudSchedule()
             NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(didWake),name:NSWorkspace.didWakeNotification,object:nil)
             NSApp.activate(ignoringOtherApps:true)
@@ -114,6 +115,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         await library?.cancelSync()
         for task in closing{_=try? await task.value}
         await preload?.value; _ = try? await images?.value
+        await cleanupPodcastForTermination()
         cloudSessionCredentials.clear();cloudArchive=nil;cloudAutomaticPausedInMemory=true
     }
     func flushEdits(syncCommit: Bool = false) async throws {
@@ -234,17 +236,19 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         }
         if (aggregateSession != nil || aggregateTransitionPending), Self.aggregateForbids(command){throw DesktopError.message("汇总页面只供阅读，请先打开单篇论文再使用这项研究功能")}
         if command.hasPrefix("aggregates."){try await library.waitUntilReady();return try await dispatchAggregates(command,payload:payload)}
+        if command.hasPrefix("podcast."){return try await dispatchPodcast(command,payload:payload)}
         if command.hasPrefix("cloud."){return try await dispatchCloud(command,payload:payload)}
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
+            await updatePodcastProxy(settings["httpProxy"] as? String)
             // The window is already on screen. A large published catalog is still being decoded in
             // the background, so bootstrap reports that explicitly instead of an empty library and
             // re-reads once the same catalog becomes available.
             let libraryStatus=try await library.handle(command:"library.status",payload:[:])
             // The page's own startup refresh awaits the same ready gate; do not emit a second
             // library.changed here, or it invalidates the in-flight first read and loads twice.
-            return ["personal":store.browserSnapshot(),"settings":settings,"paper":currentPaper,"library":libraryStatus,"version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") ?? "development","initialView":"today","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
+            return ["personal":store.browserSnapshot(),"settings":settings,"paper":currentPaper,"library":libraryStatus,"version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") ?? "development","initialView":"today","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"nativePodcast":true,"nativeResourceBadges":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
         }
         if command.hasPrefix("library.") {
             if ["library.article", "library.sync", "library.downloadPDF"].contains(command) { cancelAggregatePreload() }
@@ -352,6 +356,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             try validateSettings(payload)
             _=try await library.handle(command:"library.network",payload:["httpProxy":payload["httpProxy"] ?? store.setting("httpProxy") ?? ""])
             do{try store.updateSettings(payload)}catch{_=try? await library.handle(command:"library.network",payload:["httpProxy":store.setting("httpProxy") ?? ""]);throw error}
+            await updatePodcastProxy(store.setting("httpProxy") as? String)
             configureSchedule();emit("settings.changed");return model.configuration()
         case "settings.open":
             if let requested=payload["pane"] {

@@ -21,6 +21,7 @@ PUBLIC_FAMILIES = (
     'researcher-workbench', 'researcher-sidecars', 'paper-research-context',
     'paper-search-index-manifest', 'paper-citation-source',
     'paper-desktop-manifest', 'paper-desktop-snapshot', 'paper-desktop-detail',
+    'paper-daily-podcast-feed', 'paper-resource-badges-index',
 )
 
 

@@ -228,7 +228,27 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             val wide=maxWidth>=840.dp
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 if(wide) NavigationRail(containerColor=MaterialTheme.colorScheme.background) { Spacer(Modifier.height(24.dp)); Icon(Icons.Outlined.AutoStories,null,Modifier.padding(20.dp).size(28.dp),tint=MaterialTheme.colorScheme.primary); tabs.forEachIndexed {i,t->NavigationRailItem(tabSelected(t.first),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
-                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar(containerColor=MaterialTheme.colorScheme.surface,tonalElevation=0.dp) { tabs.forEachIndexed{i,t->NavigationBarItem(tabSelected(t.first),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
+                Scaffold(
+                    Modifier.weight(1f),
+                    snackbarHost = { SnackbarHost(snackbar) },
+                    bottomBar = {
+                        Column(Modifier.fillMaxWidth()) {
+                            PodcastPlayerBar(
+                                podcast = state.podcast,
+                                offlineMode = state.settings.optBoolean("offlineMode"),
+                                action = action,
+                                onOpenPaper = { pid -> action("paper.open", obj("paperID" to pid)) },
+                            )
+                            if (!wide) {
+                                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                                    tabs.forEachIndexed { i, t ->
+                                        NavigationBarItem(tabSelected(t.first), { navigate(t.first) }, { Icon(icons[i], t.second) }, label = { Text(t.second) })
+                                    }
+                                }
+                            }
+                        }
+                    },
+                ) { padding ->
                     Column(Modifier.fillMaxSize().padding(padding)) {
                         if(setupReminder&&route in setOf("library","aggregates")&&(state.cloud.optString("account").isBlank()||state.zotero.optString("libraryID").isBlank())) {
                             Surface(color=MaterialTheme.colorScheme.secondaryContainer,modifier=Modifier.fillMaxWidth()) {
@@ -501,12 +521,25 @@ internal fun catalogMessage(summary:JSONObject,localCount:Int):String {
 
 /** Empty-query progress recompositions never stringify the full catalog or private notes. */
 internal fun matchesLibrarySearch(paper:Paper,query:String,notes:JSONObject?):Boolean {
- val needle=query.trim()
- if(needle.isEmpty())return true
- if(paper.id.contains(needle,true)||paper.title.contains(needle,true)||paper.titleZh.contains(needle,true)||paper.task.contains(needle,true)||paper.method.contains(needle,true)||paper.date.contains(needle,true)||paper.sourceKind.contains(needle,true))return true
- if(paper.authors.any{it.contains(needle,true)}||paper.tags.any{it.contains(needle,true)})return true
- if(notes?.optJSONObject(paper.id)?.optString("text").orEmpty().contains(needle,true))return true
- return paper.appearances.any{it.contains(needle,true)}
+ val tokens=tokenizeLibraryQuery(query)
+ if(tokens.isEmpty())return true
+ val venueLabel=parseConferenceVenue(paper.id)?.label
+ val noteText=notes?.optJSONObject(paper.id)?.optString("text")
+ val normalizedFields=ArrayList<String>(10+paper.authors.size+paper.tags.size+paper.appearances.size).apply {
+  add(normalizeLibrarySearchText(paper.id))
+  if(venueLabel!=null)add(normalizeLibrarySearchText(venueLabel))
+  add(normalizeLibrarySearchText(paper.title))
+  if(paper.titleZh.isNotEmpty()&&paper.titleZh!=paper.title)add(normalizeLibrarySearchText(paper.titleZh))
+  if(paper.task.isNotEmpty())add(normalizeLibrarySearchText(paper.task))
+  if(paper.method.isNotEmpty())add(normalizeLibrarySearchText(paper.method))
+  if(paper.date.isNotEmpty())add(normalizeLibrarySearchText(paper.date))
+  if(paper.sourceKind.isNotEmpty())add(normalizeLibrarySearchText(paper.sourceKind))
+  paper.authors.forEach{if(it.isNotEmpty())add(normalizeLibrarySearchText(it))}
+  paper.tags.forEach{if(it.isNotEmpty())add(normalizeLibrarySearchText(it))}
+  if(!noteText.isNullOrEmpty())add(normalizeLibrarySearchText(noteText))
+  paper.appearances.forEach{if(it.isNotEmpty())add(normalizeLibrarySearchText(it))}
+ }
+ return tokens.all { token -> normalizedFields.any { it.contains(token) } }
 }
 
 /** A successful write alone does not prove the destination copy or grant cleanup eligibility. */

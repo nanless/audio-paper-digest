@@ -90,7 +90,10 @@ import org.json.JSONObject
      }
     }else Column(Modifier.weight(1f).clickable(onClickLabel="查看完整论文信息"){showPaperInfo=true}.padding(horizontal=8.dp)){
      Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
-     Text(paperSourceLabel(paper),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+     Row(verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)){
+      Text(paperSourceLabel(paper),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+      paper.score?.let{ScoreTierBadge(it)}
+     }
     }
     TextButton({showPaperInfo=true},Modifier.sizeIn(minWidth=48.dp,minHeight=48.dp),contentPadding=PaddingValues(horizontal=10.dp,vertical=8.dp)){
      Icon(if(sourceTone=="info")Icons.Outlined.Info else Icons.Outlined.Warning,"$sourceLabel，查看完整信息与 ${sourceNotices.size} 项提示",tint=sourceColor)
@@ -132,11 +135,23 @@ import org.json.JSONObject
      }
     }
    }
-   if(!geometry.compactChrome)Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+   if(!geometry.compactChrome){
+    val assessment=state.article?.researchContext?.optJSONObject("assessment")
+    val rankBucket=assessment?.optString("rankBucket")?.takeIf{it.isNotBlank()&&it!="null"}
+    val documentType=assessment?.optString("documentType")?.takeIf{it.isNotBlank()&&it!="null"}
+    val readerVenue=parseConferenceVenue(paper.id)
+    val readerResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
+    if(readerVenue!=null||rankBucket!=null||documentType!=null||readerResources.hasAny){
+     Box(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=2.dp)){
+      PaperMetadataBadgesRow(venue=readerVenue,resources=readerResources,rankBucket=rankBucket,documentType=documentType)
+     }
+    }
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
     listOf("导读","研究","笔记").forEach{value->FilterChip(tab==value&&(!showPDF||split),{chooseMode(value)},label={Text(value)})}
     if(pdfAvailable)FilterChip(showPDF,{chooseMode("PDF")},label={Text("PDF")})
     if(sourceNotices.isNotEmpty())TextButton({showPaperInfo=true}){Text("$sourceLabel · ${sourceNotices.size}",color=sourceColor)}
     if(canSplit)TextButton({showLayout=true}){Text("阅读布局")}
+   }
    }
    }
    if(hingePair!=null&&document!=null)Column(Modifier.offset(x=(hingePair.left.width+hingePair.gap).dp).width(hingePair.right.width.dp).padding(horizontal=12.dp,vertical=8.dp)){
@@ -178,6 +193,15 @@ import org.json.JSONObject
     Text(paper.titleZh,style=MaterialTheme.typography.titleMedium);if(paper.title!=paper.titleZh)Text(paper.title)
     Text(paper.authors.joinToString(" · "))
     Text("目录日期：${paper.date.ifBlank{"未标注"}}\n打开时目录版本：${paper.sourceVersion?:"未标注"}\n当前目录版本：${latestCatalog?.sourceVersion?:"未标注"}\n来源编号：${paper.id}")
+    val infoAssessment=state.article?.researchContext?.optJSONObject("assessment")
+    val infoRankBucket=infoAssessment?.optString("rankBucket")?.takeIf{it.isNotBlank()&&it!="null"}
+    val infoDocType=infoAssessment?.optString("documentType")?.takeIf{it.isNotBlank()&&it!="null"}
+    val infoVenue=parseConferenceVenue(paper.id)
+    val infoResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
+    paper.score?.let{ScoreTierBadge(it)}
+    if(infoVenue!=null||infoRankBucket!=null||infoDocType!=null||infoResources.hasAny){
+     PaperMetadataBadgesRow(venue=infoVenue,resources=infoResources,rankBucket=infoRankBucket,documentType=infoDocType)
+    }
     paper.score?.let{Text("目录原评分：$it / 10（完整量表见原导读）")};paper.citation.optString("doi").takeIf{it.isNotBlank()}?.let{Text("DOI：$it")}
     if(paper.appearances.size>1){Text("全部已发布导读",style=MaterialTheme.typography.titleSmall);paper.appearances.forEach{address->val safe=runCatching{com.nanless.paperdigest.data.CatalogRepository.sameSite(address)}.getOrNull();if(safe!=null)TextButton({try{readerContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(safe)))}catch(_:Exception){pdfError="此设备没有可打开网站的应用。"}}){Text(safe,maxLines=2,overflow=TextOverflow.Ellipsis)}}}
     Text("当前导读版本：${state.article?.sourceVersion?:"未标注"}\n导读修订 SHA：${state.article?.revisionSHA256?:"未标注"}")
