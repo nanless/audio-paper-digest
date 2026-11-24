@@ -5262,7 +5262,13 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
         r'(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))',
         re.IGNORECASE,
     )
-    source_has_percent_table_context = bool(percent_table_context_re.search(normalized_src))
+    paired_rate_table_header_re = re.compile(
+        r'(?<![A-Za-z0-9_])(?:WER|CER|PER|EER)\s*\/\s*(?:WER|CER|PER|EER)(?![A-Za-z0-9_])',
+        re.IGNORECASE,
+    )
+    source_has_percent_table_context = bool(percent_table_context_re.search(normalized_src)) or (
+        bool(percent_tokens) and bool(paired_rate_table_header_re.search(normalized_src))
+    )
     p_value_re = re.compile(
         r'(?<![A-Za-z0-9_])(?:p(?:-?values?)?|q(?:-?values?)?|α|alpha)\s*'
         r'(?:<=|>=|<|>|=|≤|≥|(?:\\leq|\\le|\\geq|\\ge|\\ll|\\lt|\\gt)(?![A-Za-z]))\s*0?\.\d+',

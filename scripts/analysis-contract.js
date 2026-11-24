@@ -4925,7 +4925,9 @@ function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
     }
     const normalizedSrc = normalizeThousands(srcRaw);
     const percentTableContextRe = /(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|\/\s*\\?%(?![0-9A-Za-z])|(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))/giu;
-    const sourceHasPercentTableContext = percentTableContextRe.test(normalizedSrc);
+    const pairedRateTableHeaderRe = /(?<![A-Za-z0-9_])(?:WER|CER|PER|EER)\s*\/\s*(?:WER|CER|PER|EER)(?![A-Za-z0-9_])/giu;
+    const sourceHasPercentTableContext = percentTableContextRe.test(normalizedSrc)
+        || (percentTokens.size > 0 && pairedRateTableHeaderRe.test(normalizedSrc));
     const pValueRe = /(?<![A-Za-z0-9_])(?:p(?:-?values?)?|q(?:-?values?)?|α|alpha)\s*(?:<=|>=|<|>|=|≤|≥|(?:\\leq|\\le|\\geq|\\ge|\\ll|\\lt|\\gt)(?![A-Za-z]))\s*0?\.\d+/giu;
     const stripPValues = text => {
         let current = String(text || '');
