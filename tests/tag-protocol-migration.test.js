@@ -10,11 +10,12 @@ const rules=require('../scripts/lib/tag-rules');
 const records=require('../scripts/lib/tag-stage-record');
 const codec=require('../scripts/lib/protocol-codec');
 
-test('current catalog changes only its declared format and keeps the complete original vocabulary',()=>{
+test('current catalog changes only its declared format and preserves the complete original vocabulary prefix',()=>{
     const current=catalog.loadTagCatalog();
     const old=catalog.loadTagCatalog(path.resolve(__dirname,'../config/tag-catalog-history/cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8.json'));
     assert.deepEqual(current.facets,old.facets);
-    assert.deepEqual(current.concepts,old.concepts);
+    assert.equal(current.concepts.length,400);
+    assert.deepEqual(current.concepts.slice(0,old.concepts.length),old.concepts);
     assert.equal(catalog.tagCatalogIdentity(current),'paper-tag-catalog');
     assert.equal(catalog.tagCatalogIdentity(old),'paper-tag-catalog-v2');
     for(const bad of [{...current,schemaFingerprint:'0'.repeat(64)},

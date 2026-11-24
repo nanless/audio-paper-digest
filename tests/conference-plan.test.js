@@ -89,13 +89,13 @@ test('仅保存旧版计划记录的两个构造函数不再对外提供', () =>
     assert.equal(plan.createPlanReceipt, undefined);
 });
 
-test('旧262项来源计划只读重放原词表，不授予当前386项分类沿用资格或改签原凭证', async t => {
+test('旧262项来源计划只读重放原词表，不授予当前400项分类沿用资格或改签原凭证', async t => {
     for (const planApi of [plan, loadOriginalConferenceApis().plan]) await t.test(planApi.PLAN_CONTRACT, t => {
     const originalSha = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d';
     const originalBytes = fs.readFileSync(path.join(__dirname, '../config/tag-catalog-history', `${originalSha}.json`));
     const currentBytes = fs.readFileSync(path.join(__dirname, '../config/tag-catalog.json'));
     assert.equal(JSON.parse(originalBytes).concepts.length, 262);
-    assert.equal(JSON.parse(currentBytes).concepts.length, 386);
+    assert.equal(JSON.parse(currentBytes).concepts.length, 400);
     const f = productionPlanFixture(t, { tagCatalogBytes: originalBytes, planApi });
     const runFile = path.join(f.roots.runs, 'run.json');
     const receiptFile = path.join(f.roots.runs, 'run.plan-receipt.json');

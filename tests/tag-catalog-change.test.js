@@ -316,21 +316,28 @@ test('快照按字节 SHA 解析，内容对不上就拒绝', () => {
     assert.equal(map.registrySha256, sha);
 });
 
-test('批准的386概念词表只在原262完整对象之后追加，不回退说明修正', () => {
+test('批准的400概念词表只在原262与386完整对象之后追加，不回退说明修正', () => {
     const previousBytes = fs.readFileSync(PRE_DISPLAY_ALIGNMENT);
     assert.equal(crypto.createHash('sha256').update(previousBytes).digest('hex'), PRE_DISPLAY_ALIGNMENT_SHA);
     const previous = tagCatalogApi.loadTagCatalog(PRE_DISPLAY_ALIGNMENT);
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
-    const original=tagCatalogApi.loadTagCatalog(path.join(HISTORY,'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8.json'));
-    assert.equal(original.registrySha256,'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8');
-    assert.deepEqual(current.concepts,original.concepts);
-    assert.deepEqual(current.facets,original.facets);
-    assert.equal(current.concepts.length, 386);
+    const original = tagCatalogApi.loadTagCatalog(path.join(HISTORY, 'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8.json'));
+    const previous386 = tagCatalogApi.loadTagCatalog(path.join(HISTORY, '9673bc0122e1905a5dcfd8b223675400cc2fa4c36095bc0e5f817edf99a0ec5c.json'));
+    assert.equal(original.registrySha256, 'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8');
+    assert.equal(previous386.registrySha256, '9673bc0122e1905a5dcfd8b223675400cc2fa4c36095bc0e5f817edf99a0ec5c');
+    assert.equal(previous386.concepts.length, 386);
+    assert.deepEqual(current.concepts.slice(0, original.concepts.length), original.concepts);
+    assert.deepEqual(current.concepts.slice(0, previous386.concepts.length), previous386.concepts);
+    assert.deepEqual(current.facets, original.facets);
+    assert.equal(current.concepts.length, 400);
     assert.equal(api.isStrictAppendOnlyCatalog(previous, current), true);
+    assert.equal(api.isStrictAppendOnlyCatalog(previous386, current), true);
     assert.deepEqual(current.facets, previous.facets);
     assert.deepEqual(current.concepts.slice(0, previous.concepts.length), previous.concepts);
     assert.equal(api.resolveAppendOnlyProofCatalog(previous.registrySha256, current).registrySha256,
         previous.registrySha256);
+    assert.equal(api.resolveAppendOnlyProofCatalog(previous386.registrySha256, current).registrySha256,
+        previous386.registrySha256);
     assert.equal(fs.readFileSync(PRE_DISPLAY_ALIGNMENT).equals(previousBytes), true);
 });
 

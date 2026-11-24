@@ -40,7 +40,7 @@ Daily and conference filtering share the filter template; each entry point suppl
 | Repair analysis structure | [structure-repair.md](current/structure-repair.md) | Repair only the section boundaries or content problems identified by feedback |
 | Repair specified Reader targets | [api-reader-repair.md](current/api-reader-repair.md) | Return a bounded patch checked against the original draft and target SHAs; no default full rewrite |
 
-Primary analysis and tag repair use the current 386-concept vocabulary and select only direct tags supported by this paper. The existing requirements remain: 3–5 tags, a primary task and method, and the prescribed JSON or four-line text format. The publisher derives parent navigation from the same vocabulary. The model must not output the entire taxonomy or add ancestors to fill the direct-tag count. Directions with zero papers may remain in the directory without being assigned to a paper artificially.
+Primary analysis and tag repair use the current 400-concept vocabulary and select only direct tags supported by this paper. The existing requirements remain: 3–5 tags, a primary task and method, and the prescribed JSON or four-line text format. The publisher derives parent navigation from the same vocabulary. The model must not output the entire taxonomy or add ancestors to fill the direct-tag count. Directions with zero papers may remain in the directory without being assigned to a paper artificially.
 
 ### Original figures and targeted corrections
 

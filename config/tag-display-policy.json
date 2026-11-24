@@ -1,8 +1,9 @@
 {
-  "baseRegistrySha256": "85ed9e5a7cde6f58c3cb97b10d61401641dd2e39592680d2c343137bc7669d3a",
-  "baseSnapshotSha256": "e8cce8c131aec739ed33987d150256ac196a1c455ed4447e9c92d5ab83e60b7b",
-  "contract": "paper-tag-presentation-policy-v2",
-  "preferredProjectionSha256": "eb61a213102f53901a8d8d86a6e5f1c1eef08ab83ae704e4aec20313ebb31fd4",
-  "preferredRegistrySha256": "910a94021b085a190abcd5fd9603af3240160f9417293d5a90158bc4ef900d30",
-  "preferredSnapshotSha256": "4a50d0e785536e3ee3cca46b0c696fb81277cdbab518397ed89d94824d74ba1b"
+  "baseRegistrySha256": "9673bc0122e1905a5dcfd8b223675400cc2fa4c36095bc0e5f817edf99a0ec5c",
+  "baseSnapshotSha256": "1cc2384be119fb051d089a5eb9c34a1592b759dcff0f6bdc6f8104a986f7d682",
+  "contract": "paper-tag-presentation-policy",
+  "preferredProjectionSha256": "25e0f49113b2f37c16f30891b493cb754a8ec095a6131d024dfcaef8de86105f",
+  "preferredRegistrySha256": "cbc73274c47fbd5c437b03f452ad95d0291094f5a9ad2c3685220ebf41c4afcf",
+  "preferredSnapshotSha256": "a18961cca318dec3a2f688e0eb96560071775bc7958f6d5630883aedc3dce174",
+  "schemaFingerprint": "70174eb456fce6a6b82b642ba7180a38da2ca9c439cd393e561c3537823df2bb"
 }

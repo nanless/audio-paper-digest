@@ -16,18 +16,23 @@ import publish_common
 import test_publish_common as fixtures
 
 OLD_SHA = '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7'
+PREV_386_SHA = '9673bc0122e1905a5dcfd8b223675400cc2fa4c36095bc0e5f817edf99a0ec5c'
 
 
 class AppendOnlyProofTest(unittest.TestCase):
     def setUp(self):
         self.old = load_tag_catalog(ROOT / 'config/tag-catalog-history' / f'{OLD_SHA}.json')
+        self.prev386 = load_tag_catalog(ROOT / 'config/tag-catalog-history' / f'{PREV_386_SHA}.json')
         self.current = load_tag_catalog()
 
     def test_real_archive_and_every_full_prefix_field(self):
         self.assertEqual(len(self.old['concepts']), 262)
-        self.assertEqual(len(self.current['concepts']), 386)
+        self.assertEqual(len(self.prev386['concepts']), 386)
+        self.assertEqual(len(self.current['concepts']), 400)
         self.assertTrue(is_strict_append_only_catalog(self.old, self.current))
+        self.assertTrue(is_strict_append_only_catalog(self.prev386, self.current))
         self.assertEqual(resolve_append_only_proof_catalog(OLD_SHA, self.current), self.old)
+        self.assertEqual(resolve_append_only_proof_catalog(PREV_386_SHA, self.current), self.prev386)
         for mutate in (
                 lambda c: c.update(version='paper-taxonomy-v1'),
                 lambda c: c['facets'][0].update(label='新分面'),

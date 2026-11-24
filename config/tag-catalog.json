@@ -5988,6 +5988,252 @@
       "scopeNote": "纳入：经典或约束NMF及有固定/预训练部分基的分解，通过乘性更新或其他明确求解算法恢复非负因子；以数据矩阵分解为真实核心机制。排除：神经网络权重/激活的低秩压缩；低秩适配增量；显式词典规则映射；只提到任意矩阵乘法或非负激活。半监督NMF的已知部分基不自动满足method.semi-supervised的有标签与无标签数据学习定义；稀疏NMF须另有稀疏目标/约束，不能凭低秩推定。与task.nonnegative-matrix-factorization正交：方法用于其它明确任务时仍是method；把分解质量/求解本身作为目标时另审任务，不自动选两者。NMF别名须按method/task分面消歧。",
       "status": "active",
       "replacedBy": null
+    },
+    {
+      "id": "task.speech-to-speech-translation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音到语音翻译",
+        "en": "Speech-to-speech translation"
+      },
+      "aliases": [
+        "S2ST",
+        "直接语音到语音翻译"
+      ],
+      "broaderId": "task.speech-translation",
+      "definition": "将源语言语音直接或联合转换为目标语言语音，并在需要时保留原说话人音色、韵律或情感表达。",
+      "scopeNote": "纳入：端到端或级联语音到语音翻译系统及流式同声语音翻译，输出为目标语言语音波形或离散语音单元。排除：仅输出目标语言文本的语音到文本翻译；单语语音转换或跨语种声音克隆而无翻译语义转换。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.foley-synthesis",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "拟音音效生成",
+        "en": "Foley sound synthesis"
+      },
+      "aliases": [
+        "Foley synthesis",
+        "音效拟音生成"
+      ],
+      "broaderId": "task.video-to-audio",
+      "definition": "面向影视、动画或视频动作事件生成时间精确对齐且声学逼真的环境与物体交互拟音音效。",
+      "scopeNote": "纳入：以视频帧、动作轨迹或时间控制条件驱动的拟音音效生成与DCASE拟音合成任务。排除：与视觉动作无时间对齐需求的纯文本通用音效生成；仅生成人声对白的影视配音。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.text-to-audio",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "文本到音频生成",
+        "en": "Text-to-audio generation"
+      },
+      "aliases": [
+        "TTA generation",
+        "文本生成音效"
+      ],
+      "broaderId": "task.audio-generation",
+      "definition": "根据自然语言文本描述生成对应的环境声、通用音效或非言语声景音频。",
+      "scopeNote": "纳入：以文本提示词为主要条件生成通用环境声与音效的音频生成任务。排除：以文本朗读人声为目标的文本到语音合成；以乐曲编排为唯一目标的音乐生成；以视频画面为主条件的视频到声音生成。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.spatial-audio-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "空间音频生成",
+        "en": "Spatial audio generation"
+      },
+      "aliases": [
+        "双耳音频生成",
+        "Binaural audio generation",
+        "Ambisonic generation"
+      ],
+      "broaderId": "task.audio-generation",
+      "definition": "直接从文本、视频、单声道音频或三维声源轨迹条件生成具有空间方位感的双耳、Ambisonic或多声道三维音频。",
+      "scopeNote": "纳入：端到端或神经生成式双耳音频、一阶/高阶Ambisonic与3D空间音效合成及单声道到双耳上混生成。排除：仅依赖已知干声与HRTF/RIR卷积进行的物理声场渲染；仅估计房间脉冲响应或声源方向而不生成空间音频波形。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.podcast-dialogue-generation",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "多说话人播客与对话生成",
+        "en": "Multi-speaker podcast and dialogue generation"
+      },
+      "aliases": [
+        "Podcast generation",
+        "播客语音生成",
+        "对话语音合成"
+      ],
+      "broaderId": "task.speech-synthesis",
+      "definition": "生成包含多角色轮次交替、自然停顿、笑声或重叠话语的长时多说话人播客与会话语音。",
+      "scopeNote": "纳入：面向长时双人或多人自然对话脚本的端到端播客/对话语音合成，关注角色一致性、副语言反馈与轮次衔接。排除：单句独立朗读的常规文本到语音合成；实时双向用户交互的语音对话系统。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.speech-tokenizer",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "语音离散词元化",
+        "en": "Speech tokenization"
+      },
+      "aliases": [
+        "Speech tokenizer",
+        "音频词元化",
+        "Audio tokenization"
+      ],
+      "broaderId": "task.speech-coding",
+      "definition": "设计、训练或评测将连续语音或音频波形映射为低帧率、语义与声学解耦的离散词元序列以供大模型建模的任务。",
+      "scopeNote": "纳入：面向语音大模型或全模态大模型的语义-声学统一词元器、单码本/超低帧率离散词元设计与重建评测。排除：仅以传统通信码率压缩为唯一目的而未面向离散表示建模的波形编码；仅调用现有词元器做下游任务而未改进词元器本身。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "task.audio-inpainting",
+      "facet": "task",
+      "preferredLabel": {
+        "zh": "音频补全与局部重绘",
+        "en": "Audio inpainting"
+      },
+      "aliases": [
+        "Audio infilling",
+        "音频局部修复"
+      ],
+      "broaderId": "task.audio-restoration",
+      "definition": "利用上下文声学与语义信息补全或重新生成音频中缺失、遮蔽或受损的连续时间片段。",
+      "scopeNote": "纳入：针对语音、音乐或环境声中长短缺失时段的生成式音频补全与上下文一致局部重绘。排除：专用于实时通信丢包补偿的丢包修复；不涉及缺失区间补全的全局降噪或带宽扩展。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.test-time-scaling",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "测试时计算扩展",
+        "en": "Test-time scaling"
+      },
+      "aliases": [
+        "Test-time compute scaling",
+        "推理时扩展"
+      ],
+      "broaderId": null,
+      "definition": "在推理阶段通过增加思维链长度、多候选采样、验证器重排或迭代搜索分配额外算力以提升任务表现。",
+      "scopeNote": "纳入：音频/语音推理链扩展、Best-of-N重排、过程奖励引导搜索或迭代精炼等显式测试时算力换质量方法。排除：仅在测试时更新模型参数的测试时自适应；仅增加训练规模或模型参数量而未扩展推理搜索预算。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.verifiable-reward-rl",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "可验证奖励强化学习",
+        "en": "Reinforcement learning with verifiable rewards"
+      },
+      "aliases": [
+        "RLVR",
+        "GRPO",
+        "Group relative policy optimization"
+      ],
+      "broaderId": "method.reinforcement",
+      "definition": "使用规则、自动评测指标或客观真值构造可验证奖励信号，并结合群组相对策略优化等强化学习算法微调模型。",
+      "scopeNote": "纳入：采用GRPO、RLOO或基于WER/说话人相似度/客观答案匹配等可程序验证奖励的后训练方法。排除：仅依赖人工成对偏好标签的离线DPO偏好优化；未构造可自动核验奖励的常规强化学习控制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.neural-vocoder",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "神经声码器",
+        "en": "Neural vocoder"
+      },
+      "aliases": [
+        "Vocoder",
+        "声码器"
+      ],
+      "broaderId": "method.generative",
+      "definition": "将梅尔频谱、声学特征或离散音频单元直接合成为高保真时域波形的神经网络波形重建方法。",
+      "scopeNote": "纳入：基于GAN、流、扩散、傅里叶幅相预测或滤波源结构的神经声码器架构、判别器与相位建模改进。排除：仅做传统Griffin-Lim迭代相位恢复；仅把现有预训练声码器作为黑盒后处理而无方法贡献。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.masked-generative-modeling",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "掩码生成建模",
+        "en": "Masked generative modeling"
+      },
+      "aliases": [
+        "MaskGIT",
+        "非自回归掩码生成",
+        "Masked token generation"
+      ],
+      "broaderId": "method.generative",
+      "definition": "在离散音频词元空间通过随机掩码预测训练，并在推理阶段按置信度迭代并行解码生成完整音频序列。",
+      "scopeNote": "纳入：类似MaskGIT、SoundStorm或MaskGCT的非自回归迭代掩码离散音频/语音生成方法。排除：仅用于判别式表征预训练而不执行迭代生成的掩码自监督学习；连续噪声空间扩散模型或逐词元严格左到右自回归建模。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.consistency-distillation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "一致性模型与少步蒸馏",
+        "en": "Consistency models and few-step distillation"
+      },
+      "aliases": [
+        "Consistency model",
+        "Shortcut model",
+        "一步生成蒸馏"
+      ],
+      "broaderId": "method.generative",
+      "definition": "通过轨迹自一致性约束、快捷步长建模或分布匹配蒸馏将多步扩散与流匹配生成压缩至一步或极少步采样。",
+      "scopeNote": "纳入：面向语音、音乐或通用音频生成的一致性模型、Rectified Flow蒸馏、MeanFlow与Shortcut少步生成方法。排除：仅压缩分类器或编码器参数量的常规知识蒸馏；仍需数十步以上采样的标准扩散或流匹配。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.omni-multimodal",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "全模态模型",
+        "en": "Omni-modal models"
+      },
+      "aliases": [
+        "Omni model",
+        "原生全模态大模型",
+        "Any-to-any multimodal models"
+      ],
+      "broaderId": "model_family.multimodal",
+      "definition": "在统一架构内原生支持文本、音频/语音、图像与视频等多模态联合理解及跨模态（含语音）输出的通用大模型。",
+      "scopeNote": "纳入：明确同时覆盖音频/语音、视觉与文本理解并具备多模态或实时语音输出能力的原生全模态模型。排除：仅处理视觉与文本而无原生音频输入输出的视觉语言模型；仅覆盖音频与文本的音频大模型。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "model_family.speech-to-speech-llm",
+      "facet": "model_family",
+      "preferredLabel": {
+        "zh": "端到端语音对话大模型",
+        "en": "End-to-end speech-to-speech language models"
+      },
+      "aliases": [
+        "Speech-to-speech LLM",
+        "原生语音对话模型",
+        "S2S LLM"
+      ],
+      "broaderId": "model_family.speech",
+      "definition": "以语音直接作为输入和输出、在同一语言模型骨干内完成声学理解与语音回复生成的原生口语大模型。",
+      "scopeNote": "纳入：不经独立ASR-LLM-TTS级联管线、由统一语音语言模型直接生成回复语音词元或音频流（含双工或半双工）的模型族。排除：传统ASR+文本LLM+TTS松耦合级联系统；仅接收语音输入但只输出文本的音频理解大模型。",
+      "status": "active",
+      "replacedBy": null
     }
   ]
 }

@@ -9829,7 +9829,7 @@ body
         self.assertEqual(
             snapshot['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
-        self.assertEqual(len(snapshot['concepts']), 386)
+        self.assertEqual(len(snapshot['concepts']), 400)
         by_id = {item['id']: item for item in snapshot['concepts']}
         self.assertEqual(by_id['method.lora']['ancestorIds'], ['method.peft'])
         self.assertEqual(by_id['method.peft']['ancestorIds'], [])
@@ -9884,7 +9884,7 @@ body
                     payload['registrySha256'],
                     publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 )
-            self.assertEqual(len(payload['concepts']), 386)
+            self.assertEqual(len(payload['concepts']), 400)
             # 文件内容未变时不重写，避免在博客仓库中产生无关改动。
             with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
                 self.assertEqual(publish_to_blog.export_tag_catalog_files(repo), [])

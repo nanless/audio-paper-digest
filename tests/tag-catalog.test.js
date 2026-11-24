@@ -16,7 +16,13 @@ test('当前词表包含全部九个 facet 和已定义的概念', () => {
     assert.match(r.schemaFingerprint,/^[a-f0-9]{64}$/);
     assert.equal(r.facets.length, 9);
     // 当前生产选择范围与已批准展示的完整目录一致，包含暂时计数为零的方向。
-    assert.equal(r.concepts.length, 386);
+    assert.equal(r.concepts.length, 400);
+    assert.equal(resolveLabel(r, 'S2ST').id, 'task.speech-to-speech-translation');
+    assert.equal(resolveLabel(r, 'RLVR').id, 'method.verifiable-reward-rl');
+    assert.equal(resolveLabel(r, 'GRPO').id, 'method.verifiable-reward-rl');
+    assert.equal(resolveLabel(r, '神经声码器').id, 'method.neural-vocoder');
+    assert.equal(resolveLabel(r, '全模态模型').id, 'model_family.omni-multimodal');
+    assert.equal(resolveLabel(r, '端到端语音对话大模型').id, 'model_family.speech-to-speech-llm');
     assert.equal(r.registrySha256, crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'));
     assert.equal(tagCatalogIdentity(validateTagCatalog(raw())), tagCatalogIdentity(r));
 });
