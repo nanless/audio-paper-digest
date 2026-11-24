@@ -16,6 +16,7 @@ setupScriptLogging(__filename);
 
 const { execFile } = require('child_process');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { buildChildProcessEnv } = require('./env-loader.js');
@@ -74,10 +75,11 @@ function buildCurlArgs(proxyUrl, url, timeout, options = {}) {
     const proxyArgs = options.proxyConfigPath
         ? ['--config', options.proxyConfigPath]
         : ['--proxy', proxyUrl];
+    const followRedirects = options.followRedirects !== false;
     return [
         // curl 只认出现在所有其它选项之前的 -q/--disable。放在最前面，用户级的
         // ~/.curlrc 就没法往这个最小子进程里塞凭证、cookie、代理或输出设置。
-        '-q', '-s', '-f', '-L',
+        '-q', '-s', '-f', ...(followRedirects ? ['-L'] : []),
         ...proxyArgs,
         '--noproxy', '',
         '--max-time', String(timeout),
@@ -89,7 +91,7 @@ function prepareCurlInvocation(proxyUrl, url, timeout, options = {}) {
     const proxy = parseProxyCredentials(proxyUrl);
     if (!proxy.hasCredentials) {
         return {
-            args: buildCurlArgs(proxyUrl, url, timeout),
+            args: buildCurlArgs(proxyUrl, url, timeout, options),
             configPath: null,
             cleanup() {}
         };
@@ -114,7 +116,7 @@ function prepareCurlInvocation(proxyUrl, url, timeout, options = {}) {
         fs.writeFileSync(configPath, config, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
         if (process.platform !== 'win32') fs.chmodSync(configPath, 0o600);
         return {
-            args: buildCurlArgs(proxyUrl, url, timeout, { proxyConfigPath: configPath }),
+            args: buildCurlArgs(proxyUrl, url, timeout, { ...options, proxyConfigPath: configPath }),
             configPath,
             cleanup
         };
@@ -154,6 +156,9 @@ async function fetchWithCurl(url, timeout = 60, options = {}) {
         return { ok: false, data: null, error: 'missing project proxy' };
     }
 
+    const maxBuffer = Number.isInteger(options.maxBufferBytes) && options.maxBufferBytes > 0
+        ? options.maxBufferBytes
+        : 10 * 1024 * 1024;
     let invocation = null;
     try {
         invocation = prepareCurlInvocation(proxyUrl, url, timeout, options);
@@ -161,7 +166,7 @@ async function fetchWithCurl(url, timeout = 60, options = {}) {
             try {
                 execFileFn('curl', invocation.args, {
                     encoding: 'utf8',
-                    maxBuffer: 10 * 1024 * 1024,
+                    maxBuffer,
                     timeout: Math.max(1000, Math.ceil(timeout * 1000) + 5000),
                     killSignal: 'SIGKILL',
                     env: buildChildProcessEnv({
@@ -192,10 +197,12 @@ async function fetchWithCurl(url, timeout = 60, options = {}) {
         const safeMessage = redactProxySecrets(e?.message || String(e), proxyUrl);
         if (Number(e.code) === 22) {
             // curl --fail 遇到 HTTP 错误（4xx、5xx）时退出码为 22
-            console.error(`  HTTP 请求失败 (${url}): ${safeMessage.substring(0, 100)}`);
+            if (!options.quietHttpError) {
+                console.error(`  HTTP 请求失败 (${url}): ${safeMessage.substring(0, 100)}`);
+            }
         } else if (safeMessage.includes('Unexpected token')) {
             console.error(`  JSON 解析失败 (${url}): 响应不是有效的 JSON`);
-        } else {
+        } else if (!options.quietHttpError) {
             console.error(`  请求失败 (${url}): ${safeMessage.substring(0, 100)}`);
         }
         return { ok: false, data: null, error: safeMessage };
@@ -323,6 +330,10 @@ function convertDailyPaper(hfPaper, options = {}) {
         hf_project_page: paper.projectPage || '',
         hf_github_stars: paper.githubStars || 0,
         hf_discussion_id: paper.discussionId || '',
+        ...(() => {
+            const org = String(paper.organization?.name || hfPaper.organization?.name || '').trim();
+            return org ? { hf_organization: org } : {};
+        })(),
         fetchedFrom: 'huggingface',
         fetchedAt: options.fetchedAt || getBeijingISOString(),
         source: 'huggingface'
@@ -362,15 +373,191 @@ function convertPaper(paper, options = {}) {
         // HuggingFace 特有字段
         hf_upvotes: paper.upvotes || 0,
         hf_ai_summary: paper.ai_summary || '',
-        hf_ai_keywords: [],
-        hf_github_repo: '',
-        hf_project_page: '',
-        hf_github_stars: 0,
-        hf_discussion_id: '',
+        hf_ai_keywords: Array.isArray(paper.ai_keywords) ? paper.ai_keywords : [],
+        hf_github_repo: typeof paper.githubRepo === 'string' ? paper.githubRepo : '',
+        hf_project_page: typeof paper.projectPage === 'string' ? paper.projectPage : '',
+        hf_github_stars: Number.isFinite(Number(paper.githubStars)) ? Number(paper.githubStars) : 0,
+        hf_discussion_id: typeof paper.discussionId === 'string' ? paper.discussionId : '',
+        ...(() => {
+            const org = String(paper.organization?.name || '').trim();
+            return org ? { hf_organization: org } : {};
+        })(),
         fetchedFrom: 'huggingface',
         fetchedAt: options.fetchedAt || getBeijingISOString(),
         source: 'huggingface'
     };
+}
+
+function isSafePublicHttpsUrl(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    try {
+        const u = new URL(s);
+        if (u.protocol !== 'https:' || u.username || u.password || u.port) return '';
+        const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+        if (!host || host.endsWith('.') || !host.includes('.')
+            || host.split('.').some(label => !label)
+            || host === 'localhost'
+            || host.endsWith('.localhost') || host.endsWith('.local')
+            || host.endsWith('.internal') || net.isIP(host) !== 0) {
+            return '';
+        }
+        return u.href;
+    } catch (_) {
+        return '';
+    }
+}
+
+/**
+ * 查询单个 arXiv 论文在 HuggingFace Papers API 上的社区热度与仓库/项目页元数据。
+ * 严格校验 arXiv ID 格式，HTTP 404/410 时安静返回 null；默认经项目代理调用 fetchWithCurl。
+ */
+async function fetchHuggingFacePaperDetail(arxivId, options = {}) {
+    const cleanId = normalizedId(arxivId);
+    if (!/^\d{4}\.\d{4,5}$/.test(cleanId)) return null;
+    const fetchFn = options.fetchFn || fetchWithCurl;
+    const proxyUrl = options.proxyUrl || detectProxyUrl();
+    if (fetchFn === fetchWithCurl && !proxyUrl) {
+        const err = new Error('HuggingFace 详情查询必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝直连');
+        err.code = 'PROXY_CONFIG_ERROR';
+        throw err;
+    }
+    const url = `https://huggingface.co/api/papers/${cleanId}`;
+    const timeoutSeconds = Math.max(1, Math.ceil((options.timeoutMs || 15000) / 1000));
+    try {
+        const res = fetchFn === fetchWithCurl
+            ? await fetchFn(url, timeoutSeconds, {
+                proxyUrl,
+                execFileFn: options.execFileFn,
+                tempRoot: options.tempRoot,
+                followRedirects: false,
+                maxBufferBytes: 2 * 1024 * 1024,
+                quietHttpError: true
+            })
+            : await fetchFn(url, timeoutSeconds, options);
+        if (!res || typeof res !== 'object') return null;
+        if (res.status === 404 || res.status === 410) return null;
+        const ok = typeof res.ok === 'boolean' ? res.ok : res.status === 200;
+        if (!ok || !res.data || typeof res.data !== 'object') return null;
+        const d = res.data;
+        const paper = (d.paper && typeof d.paper === 'object') ? d.paper : d;
+        const linkedModels = Array.isArray(d.models) ? d.models : (Array.isArray(paper.models) ? paper.models : []);
+        const linkedDatasets = Array.isArray(d.datasets) ? d.datasets : (Array.isArray(paper.datasets) ? paper.datasets : []);
+        const linkedSpaces = Array.isArray(d.spaces) ? d.spaces : (Array.isArray(paper.spaces) ? paper.spaces : []);
+        return {
+            arxivId: cleanId,
+            hf_upvotes: Number.isFinite(Number(paper.upvotes ?? d.upvotes)) ? Number(paper.upvotes ?? d.upvotes) : 0,
+            hf_github_repo: isSafePublicHttpsUrl(paper.githubRepo || d.githubRepo || ''),
+            hf_project_page: isSafePublicHttpsUrl(paper.projectPage || d.projectPage || ''),
+            hf_github_stars: Number.isFinite(Number(paper.githubStars ?? d.githubStars)) ? Number(paper.githubStars ?? d.githubStars) : 0,
+            hf_ai_summary: typeof (paper.ai_summary || d.ai_summary) === 'string' ? (paper.ai_summary || d.ai_summary) : '',
+            hf_ai_keywords: Array.isArray(paper.ai_keywords || d.ai_keywords) ? (paper.ai_keywords || d.ai_keywords).filter(k => typeof k === 'string') : [],
+            hf_discussion_id: typeof (paper.discussionId || d.discussionId) === 'string' ? (paper.discussionId || d.discussionId) : '',
+            hf_organization: String(paper.organization?.name || d.organization?.name || '').trim(),
+            hf_linked_counts: {
+                models: linkedModels.length,
+                datasets: linkedDatasets.length,
+                spaces: linkedSpaces.length
+            }
+        };
+    } catch (error) {
+        if (error?.code === 'PROXY_CONFIG_ERROR') throw error;
+        return null;
+    }
+}
+
+/**
+ * 为已筛选入选的论文批量补充 HuggingFace Papers 社区元数据（受控并发，fail-open 不阻塞主流程）。
+ */
+async function enrichPapersWithHuggingFaceDetails(papers, options = {}) {
+    const list = Array.isArray(papers) ? papers : [];
+    const concurrency = Math.max(1, Math.min(5, Number.isInteger(options.concurrency) ? options.concurrency : 3));
+    const detailFn = options.detailFn || (id => fetchHuggingFacePaperDetail(id, options));
+    const targets = list.filter(p => p && typeof p === 'object' && !p.hfDetailEnriched && /^\d{4}\.\d{4,5}$/.test(normalizedId(p)));
+    if (targets.length === 0) return { enrichedCount: 0, attemptedCount: 0 };
+
+    let cursor = 0;
+    let enrichedCount = 0;
+    async function worker() {
+        while (cursor < targets.length) {
+            const idx = cursor;
+            cursor += 1;
+            const paper = targets[idx];
+            const nid = normalizedId(paper);
+            const detail = await detailFn(nid);
+            if (!detail) continue;
+            if (detail.hf_upvotes > (Number(paper.hf_upvotes) || 0)) paper.hf_upvotes = detail.hf_upvotes;
+            if (!paper.hf_github_repo && detail.hf_github_repo) paper.hf_github_repo = detail.hf_github_repo;
+            if (!paper.hf_project_page && detail.hf_project_page) paper.hf_project_page = detail.hf_project_page;
+            if (detail.hf_github_stars > (Number(paper.hf_github_stars) || 0)) paper.hf_github_stars = detail.hf_github_stars;
+            if (!paper.hf_ai_summary && detail.hf_ai_summary) paper.hf_ai_summary = detail.hf_ai_summary;
+            if ((!Array.isArray(paper.hf_ai_keywords) || paper.hf_ai_keywords.length === 0) && detail.hf_ai_keywords.length > 0) {
+                paper.hf_ai_keywords = detail.hf_ai_keywords;
+            }
+            if (!paper.hf_discussion_id && detail.hf_discussion_id) paper.hf_discussion_id = detail.hf_discussion_id;
+            if (!paper.hf_organization && detail.hf_organization) paper.hf_organization = detail.hf_organization;
+            if (detail.hf_linked_counts && (detail.hf_linked_counts.models + detail.hf_linked_counts.datasets + detail.hf_linked_counts.spaces) > 0) {
+                paper.hf_linked_counts = detail.hf_linked_counts;
+            }
+            paper.hfDetailEnriched = true;
+            enrichedCount += 1;
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
+    return { enrichedCount, attemptedCount: targets.length };
+}
+
+/**
+ * 为 HF-only（未在本次 arXiv 类别流中抓到且缺少 categories）的论文批量回填真实 arXiv 分类与生命周期元数据。
+ * 必须在保存 checkpoint.huggingface.papersSha256 之前执行以保证复筛重放字节一致；网络异常时 fail-open。
+ */
+async function enrichHfOnlyPapersWithArxivMetadata(hfPapers, existingArxivIds = new Set(), options = {}) {
+    const list = Array.isArray(hfPapers) ? hfPapers : [];
+    const arxivIdSet = existingArxivIds instanceof Set
+        ? existingArxivIds
+        : new Set((Array.isArray(existingArxivIds) ? existingArxivIds : []).map(normalizedId));
+    const missing = list.filter(p => {
+        const nid = normalizedId(p);
+        if (!nid || arxivIdSet.has(nid)) return false;
+        return !Array.isArray(p.categories) || p.categories.length === 0;
+    });
+    if (missing.length === 0) return { enrichedCount: 0, attemptedCount: 0 };
+
+    const fetchBatchFn = options.fetchArxivMetadataBatchByIds
+        || require('./fetch-papers.js').fetchArxivMetadataBatchByIds;
+    try {
+        const byId = await fetchBatchFn(missing.map(normalizedId), options);
+        let enrichedCount = 0;
+        for (const paper of missing) {
+            const meta = byId.get(normalizedId(paper));
+            if (!meta) continue;
+            if (Array.isArray(meta.categories) && meta.categories.length > 0) {
+                paper.categories = [...meta.categories];
+                paper.primaryCategory = meta.categories[0];
+            }
+            if (meta.comment && !paper.comment) paper.comment = meta.comment;
+            if (meta.journalRef) {
+                paper.journalRef = meta.journalRef;
+                if (!paper.journal_ref) paper.journal_ref = meta.journalRef;
+            }
+            if (meta.doi && !paper.doi) paper.doi = meta.doi;
+            if (meta.updated && !paper.updated) paper.updated = meta.updated;
+            if (meta.venueBadge && !paper.venueBadge) paper.venueBadge = meta.venueBadge;
+            if (meta.isWithdrawn === true) paper.isWithdrawn = true;
+            if (Array.isArray(meta.authorAffiliations) && meta.authorAffiliations.length > 0 && !paper.authorAffiliations) {
+                paper.authorAffiliations = meta.authorAffiliations;
+            }
+            enrichedCount += 1;
+        }
+        return { enrichedCount, attemptedCount: missing.length };
+    } catch (error) {
+        if (error?.code === 'PROXY_CONFIG_ERROR'
+            || /HTTP\(S\) CONNECT 代理|missing project proxy/i.test(String(error?.message || ''))) {
+            throw error;
+        }
+        console.warn(`  ⚠️ HF-only 论文 arXiv 分类回填失败（已保留原 HF 记录继续）: ${error.message}`);
+        return { enrichedCount: 0, attemptedCount: missing.length, error: error.message };
+    }
 }
 
 /**
@@ -768,6 +955,24 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
             existing.hf_project_page = paper.hf_project_page;
             existing.hf_github_stars = paper.hf_github_stars;
             existing.hf_discussion_id = paper.hf_discussion_id;
+            if (paper.hf_organization && !existing.hf_organization) {
+                existing.hf_organization = paper.hf_organization;
+            }
+            if (!existing.comment && paper.comment) existing.comment = paper.comment;
+            if (!existing.journalRef && (paper.journalRef || paper.journal_ref)) {
+                existing.journalRef = paper.journalRef || paper.journal_ref;
+            }
+            if (!existing.doi && paper.doi) existing.doi = paper.doi;
+            if (!existing.updated && paper.updated) existing.updated = paper.updated;
+            if (!existing.venueBadge && paper.venueBadge) existing.venueBadge = paper.venueBadge;
+            if (paper.isWithdrawn === true) existing.isWithdrawn = true;
+            if ((!Array.isArray(existing.authorAffiliations) || existing.authorAffiliations.length === 0)
+                && Array.isArray(paper.authorAffiliations) && paper.authorAffiliations.length > 0) {
+                existing.authorAffiliations = paper.authorAffiliations;
+            }
+            if (Array.isArray(paper.categories) && paper.categories.length > 0) {
+                existing.categories = [...new Set([...(Array.isArray(existing.categories) ? existing.categories : []), ...paper.categories])];
+            }
 
             if (!existing.summary && paper.summary) {
                 existing.summary = paper.summary;
@@ -845,6 +1050,9 @@ module.exports = {
     prepareCurlInvocation,
     redactProxySecrets,
     mergeAndDeduplicate,
+    fetchHuggingFacePaperDetail,
+    enrichPapersWithHuggingFaceDetails,
+    enrichHfOnlyPapersWithArxivMetadata,
     convertDailyPaper,
     convertPaper,
     describeHuggingFaceFetchWindow,

@@ -8164,9 +8164,9 @@ def enrich_opensource(parsed_analysis, paper):
         return ''
 
     sources = []
-    for key in ('abstract', 'analysis', 'comments'):
+    for key in ('abstract', 'analysis', 'comment', 'comments'):
         val = paper.get(key, '')
-        if val:
+        if isinstance(val, str) and val:
             sources.append(val)
 
     urls = extract_repo_urls('\n'.join(sources))
@@ -14385,6 +14385,12 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         if score_line:
             metadata_block += f"{score_line}\n\n"
             reader_identity_lines.append(f"评分：{score_line}")
+        raw_venue_badge = str(paper.get('venueBadge') or '').strip()
+        if raw_venue_badge and re.fullmatch(r'[A-Za-z0-9/ ._-]{2,48}', raw_venue_badge):
+            reader_identity_lines.append(f"发表/录用标记：{raw_venue_badge}")
+        raw_doi = str(paper.get('doi') or '').strip()
+        if raw_doi and re.fullmatch(r'10\.\d{4,9}/[A-Za-z0-9._;()/:+-]{2,160}', raw_doi):
+            reader_identity_lines.append(f"DOI：`{raw_doi}`")
 
         meta = build_paper_meta(parsed_analysis, aurl)
         if meta:

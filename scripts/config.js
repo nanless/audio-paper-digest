@@ -34,7 +34,7 @@ function expandHome(p) {
 // arXiv 抓取配置
 // ═══════════════════════════════════════════════════════
 
-const ARXIV_CATEGORIES = [
+const BASE_ARXIV_CATEGORIES = [
     { id: 'eess.AS', name: '音频语音', priority: 'core' },
     { id: 'cs.SD',   name: '声音',     priority: 'core' },
     { id: 'eess.SP', name: '信号处理', priority: 'core' },
@@ -42,6 +42,12 @@ const ARXIV_CATEGORIES = [
     { id: 'cs.LG',   name: '机器学习', priority: 'supplement' },
     { id: 'cs.AI',   name: '人工智能', priority: 'supplement' },
     { id: 'cs.MM',   name: '多媒体',   priority: 'supplement' }
+];
+
+const ARXIV_CATEGORIES = [
+    ...BASE_ARXIV_CATEGORIES,
+    { id: 'cs.CV',   name: '计算机视觉', priority: 'supplement' },
+    { id: 'cs.HC',   name: '人机交互',   priority: 'supplement' }
 ];
 
 const ARXIV_CONFIG = {
@@ -600,6 +606,7 @@ module.exports = {
     ARCHIVE_DIR,
     LOGS_DIR,
 
+    BASE_ARXIV_CATEGORIES,
     ARXIV_CATEGORIES,
     ARXIV_CONFIG,
 

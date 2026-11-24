@@ -19,7 +19,12 @@
 
 const crypto = require('node:crypto');
 const { readRegularBytes } = require('./git-file-bytes.js');
-const { evaluateKeywordPrefilter, CORE_AUDIO_CATEGORIES } = require('./keyword-prefilter.js');
+const {
+    KEYWORD_PREFILTER_PROFILE,
+    PHRASE_GROUPS,
+    evaluateKeywordPrefilter,
+    CORE_AUDIO_CATEGORIES
+} = require('./keyword-prefilter.js');
 
 const DAILY_FILTER_PREFILTER_SHA256 = crypto
     .createHash('sha256')
@@ -64,6 +69,49 @@ const PURE_MEDICAL_OR_VISION_ONLY_RE = /\b(?:CT\s+scan|MRI|fMRI|X-ray|chest\s+ra
 
 const EXPLICIT_AUDIO_CONTEXT_RE = /\b(?:audio|speech|spoken|music|musical|singing|acoustic|acoustics|auditory|sound|sounds|sonic|sonar|hydrophone|voice|speaker|talker|microphone|loudspeaker|vocoder|spectrogram|mel[- ]spectrogram|prosody|phoneme|phonetic|utterance|diari[sz]ation|reverberation|dereverberation|binaural|ambisonic|hearing\s+aid|cochlear|bioacoustic|birdsong|auscultation|stethoscope|whisper|wav2vec|wavlm|hubert|encodec|librispeech|audioset|voxceleb|iemocap|pesq|stoi|visqol|utmos|dnsmos)\b|语音|音频|音乐|声学|听觉|说话人|声纹/i;
 
+// cs.CV / cs.HC 专属音视频与语音交互强锚点（防止纯视觉 video/emotion/SD/VC 洪水进入 LLM/全文下载）。
+const CV_HC_AUDIOVISUAL_ANCHOR_RE = /\b(?:talking\s+(?:head|face|portrait|avatar)|lip[- ]?sync|lip[- ]?reading|dubbing|foley|soundscape|audio[- ]?visual|audiovisual|voice\s+(?:interface|assistant|interaction|agent|command|ui|user\s+interface)|speech\s+(?:interface|interaction|driven|input)|sonification|auditory\s+(?:display|feedback|cue|interface)|screen\s+reader|music\s+video|singing\s+(?:head|face|portrait)|spatial\s+audio|binaural\s+audio)\b|音视频|口型同步|配音|拟音|语音交互|听觉反馈/i;
+
+const AUDIO_OR_MM_CATEGORIES = new Set(['eess.AS', 'cs.SD', 'eess.SP', 'cs.MM']);
+const CV_HC_SUPPLEMENT_CATEGORIES = new Set(['cs.CV', 'cs.HC']);
+
+const NOISY_UNCERTAIN_TOKENS = new Set(PHRASE_GROUPS.uncertain_modalities || []);
+// 仅保留泛情感/情绪类词项为噪声组，排除明确属于听觉发声/辅助沟通的 vocal/AAC 术语。
+const NOISY_AFFECTIVE_TOKENS = new Set([
+    'emotion', 'emotional', 'affect recognition', 'affective computing',
+    'affective state', 'sentiment recognition', 'sentiment analysis',
+    'multimodal sentiment', 'multimodal emotion', 'emotion recognition',
+    'emotion understanding', 'emotion reasoning', 'emotion analysis',
+    'humor detection', 'hesitancy recognition', 'ambivalence recognition'
+]);
+
+function isNoisyOrAmbiguousToken(token) {
+    return AMBIGUOUS_ONLY_TOKENS.has(token)
+        || NOISY_UNCERTAIN_TOKENS.has(token)
+        || NOISY_AFFECTIVE_TOKENS.has(token);
+}
+
+const WITHDRAWN_COMMENT_DECLARATION_RE = /^(?:(?:this|the)\s+(?:paper|article|manuscript|preprint|submission|work|version)\s+(?:has\s+been|was|is)\s+withdrawn|(?:paper|article|manuscript|preprint|submission|work)\s+withdrawn|withdrawn(?:\s+from\s+arxiv\b|\s+by|\s+due|\s+because|\s*:|\s*\.|\s*-|\s*$))|\b(?:(?:this|the)\s+(?:paper|article|manuscript|preprint|submission|work)\s+(?:has\s+been|was|is)\s+withdrawn|(?:the\s+authors|we)\s+(?:have\s+)?withdrawn\s+(?:this|the)\s+(?:paper|article|manuscript|preprint|submission|work))\b/i;
+const WITHDRAWN_COMMENT_NON_ARXIV_GUARD_RE = /\b(?:not|never)\s+withdrawn\b|\b(?:replaces|supersedes|unlike|instead\s+of|previous(?:ly)?)\s+[^.;]{0,40}\bwithdrawn\b/i;
+const WITHDRAWN_WORKSHOP_THEN_ACCEPTED_RE = /\bwithdrawn\s+from\s+(?!arxiv\b)[^\n]{1,100}\b(?:accepted(?:\s+(?:to|at|by|for|in))?|to\s+appear|published\s+(?:in|at))\b/i;
+const WITHDRAWN_ABSTRACT_RE = /^(?:(?:this|the)\s+(?:paper|article|manuscript|preprint|submission|work|version)\s+(?:has\s+been|was|is)\s+withdrawn|(?:the\s+authors|we)\s+(?:have\s+)?withdrawn\s+(?:this|the)\s+(?:paper|article|manuscript|preprint|submission|work)|(?:paper|article|manuscript|preprint|submission)\s+withdrawn|withdrawn(?:\s+from\s+arxiv\b|\s+by|\s+due|\s+because|\s*:|\s*\.|\s*-|$))/i;
+
+function isWithdrawnArxivPaper(paper) {
+    if (paper?.isWithdrawn === true) return true;
+    const comment = normalizeInputText(paper?.comment || paper?.comments || '');
+    if (comment
+        && WITHDRAWN_COMMENT_DECLARATION_RE.test(comment)
+        && !WITHDRAWN_COMMENT_NON_ARXIV_GUARD_RE.test(comment)
+        && !WITHDRAWN_WORKSHOP_THEN_ACCEPTED_RE.test(comment)) {
+        return true;
+    }
+    const abstractText = normalizeInputText(paper?.abstract || paper?.summary || '');
+    if (abstractText && WITHDRAWN_ABSTRACT_RE.test(abstractText)) {
+        return true;
+    }
+    return false;
+}
+
 const MULTIMODAL_AUDIO_RISK_RE = /\b(?:video|audiovisual|audio-visual|omni|any-to-any|omnimodal|omni-modal|dubbing|foley|talking\s+head|talking\s+face|lip[- ]?sync|emotion|sentiment|affective|spiking|neuromorphic|tactile|haptic|web[- ]browsing|agent\s+benchmark|stress\s+test|all\s+modalities)\b/i;
 
 // 官方全文 References 前正文音频锚点（实盘 2,573 篇 0/230 FN）。
@@ -92,8 +140,8 @@ function detectDailyAbstractRejectionRule(paper, baseResult) {
 
     const kws = Array.isArray(baseResult.matchedKeywords) ? baseResult.matchedKeywords : [];
     const groups = Array.isArray(baseResult.matchedGroups) ? baseResult.matchedGroups : [];
-    const allAmbiguous = kws.length > 0 && kws.every(k => AMBIGUOUS_ONLY_TOKENS.has(k));
-    if (allAmbiguous) {
+    const allAmbiguousOrNoisy = kws.length > 0 && kws.every(isNoisyOrAmbiguousToken);
+    if (allAmbiguousOrNoisy) {
         if (kws.includes('vits') && NON_AUDIO_VITS_RE.test(text) && !/\bVITS\b/.test(text)) {
             return {
                 rule: 'non_audio_vits',
@@ -149,10 +197,36 @@ function detectDailyAbstractRejectionRule(paper, baseResult) {
         };
     }
 
+    // cs.CV / cs.HC 精准防洪闸门：不含音频/多媒体主类且无显式音频/音视频交互锚点时，
+    // 拦截仅命中泛多模态/泛情感/多义缩写的纯视觉/UI 论文（保留 AVSR/HRTF/SI-SDR/AAC/laughter 等明确音频词）。
+    const cats = getPaperCategories(paper);
+    const hasCvOrHc = cats.some(c => CV_HC_SUPPLEMENT_CATEGORIES.has(c));
+    const hasAudioOrMmCat = cats.some(c => AUDIO_OR_MM_CATEGORIES.has(c));
+    if (hasCvOrHc && !hasAudioOrMmCat && allAmbiguousOrNoisy && !CV_HC_AUDIOVISUAL_ANCHOR_RE.test(text)) {
+        return {
+            rule: 'non_audio_cv_hc_without_audio_anchor',
+            reason: 'cs.CV/cs.HC 候选仅命中泛多模态/情感/多义词且缺乏显式音频或音视频交互锚点，确定性排除'
+        };
+    }
+
     return null;
 }
 
 function evaluateDailyFilterPrefilter(paper) {
+    if (isWithdrawnArxivPaper(paper)) {
+        return {
+            pass: false,
+            requiresScopeEvidence: false,
+            categoryFallback: false,
+            failOpen: false,
+            matchedGroups: [],
+            matchedKeywords: [],
+            reason: 'arXiv 官方元数据标记论文已撤稿（withdrawn），确定性隔离',
+            dailyFilterPrefilterRule: 'withdrawn_paper',
+            dailyFilterPrefilterSha256: DAILY_FILTER_PREFILTER_SHA256,
+            profile: { ...KEYWORD_PREFILTER_PROFILE }
+        };
+    }
     const base = evaluateKeywordPrefilter(paper);
     const text = normalizeInputText(`${paper?.title || ''} ${paper?.abstract || paper?.summary || ''}`);
 
@@ -264,6 +338,7 @@ function evaluateScopeBodyAudioAnchor(scopeText, paper = null) {
 module.exports = {
     DAILY_FILTER_PREFILTER_SHA256,
     MODERN_AUDIO_TERMS,
+    isWithdrawnArxivPaper,
     evaluateDailyFilterPrefilter,
     detectDailyAbstractRejectionRule,
     stripReferencesFromScopeText,

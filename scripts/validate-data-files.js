@@ -392,18 +392,28 @@ function validateFetchCheckpointFile(filePath = DEFAULT_FETCH_CHECKPOINT_FILE) {
         addIssue(issues, filePath, 'batchDate 必须等于不可变 timestamp 的北京时间日期（或在跨零点 0–8 点宽限内）');
     }
     validateFingerprint(filePath, 'batchId', data.batchId, issues);
-    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const currentIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const baseIds = (Config.BASE_ARXIV_CATEGORIES || Config.ARXIV_CATEGORIES).map(category => category.id);
+    const isValidBatchCategoryIds = ids => {
+        if (!Array.isArray(ids) || new Set(ids).size !== ids.length) return false;
+        const matchesCurrent = ids.length === currentIds.length && ids.every(id => currentIds.includes(id));
+        const matchesBase = ids.length === baseIds.length && ids.every(id => baseIds.includes(id));
+        return matchesCurrent || matchesBase;
+    };
+    const expectedIds = isValidBatchCategoryIds(data.categoryOrder) ? data.categoryOrder : currentIds;
     if (!Array.isArray(data.historicalDedupIds)
             || data.historicalDedupIds.some(id => typeof id !== 'string' || !id)) {
         addIssue(issues, filePath, 'historicalDedupIds 必须是非空字符串数组');
     } else if (new Set(data.historicalDedupIds).size !== data.historicalDedupIds.length) {
         addIssue(issues, filePath, 'historicalDedupIds 不得包含重复 ID');
     }
-    if (!Array.isArray(data.categoryOrder)
-            || data.categoryOrder.length !== expectedIds.length
-            || new Set(data.categoryOrder).size !== expectedIds.length
-            || data.categoryOrder.some(id => !expectedIds.includes(id))) {
-        addIssue(issues, filePath, 'categoryOrder 必须完整且唯一覆盖当前 arXiv 类别');
+    if (!isValidBatchCategoryIds(data.categoryOrder)) {
+        addIssue(issues, filePath, 'categoryOrder 必须完整且唯一覆盖当前（或历史基础）arXiv 类别');
+    } else if (Array.isArray(data.fetchBoundary?.continuity?.witnesses?.arxiv)) {
+        const boundaryIds = data.fetchBoundary.continuity.witnesses.arxiv.map(w => w?.categoryId);
+        if (boundaryIds.length !== data.categoryOrder.length || !boundaryIds.every(id => data.categoryOrder.includes(id))) {
+            addIssue(issues, filePath, 'categoryOrder 必须与 fetchBoundary.continuity.witnesses.arxiv 的类别集合一致');
+        }
     }
     if (!isPlainObject(data.arxiv)) {
         addIssue(issues, filePath, 'arxiv 必须是按类别 ID 索引的对象');
@@ -1685,7 +1695,11 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
         addIssue(issues, rawPath, '候选来源健康状态必须绑定同一 v7 补更范围');
     }
     if (!raw || !hasCompleteSourceHealthForValidation(raw.sourceHealth)) return issues;
-    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const expectedIds = resolveExpectedCategoryIdsForBatch(checkpoint?.categoryOrder);
+    const rawCatIds = (raw.sourceHealth?.arxiv?.categories || []).map(c => c?.id);
+    if (rawCatIds.length !== expectedIds.length || !expectedIds.every(id => rawCatIds.includes(id))) {
+        addIssue(issues, fetchPath, 'raw-candidates.json 的 sourceHealth.arxiv.categories 必须与 fetch-checkpoint.json 的 categoryOrder 类别集合一致');
+    }
     for (const id of expectedIds) {
         const entry = checkpoint.arxiv?.[id];
         if (!hasCompleteFetchSourceContract(entry, id)) {
@@ -1698,12 +1712,30 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     return issues;
 }
 
+function resolveExpectedCategoryIdsForBatch(categoryList) {
+    const currentIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const baseIds = (Config.BASE_ARXIV_CATEGORIES || Config.ARXIV_CATEGORIES).map(category => category.id);
+    if (Array.isArray(categoryList) && new Set(categoryList).size === categoryList.length) {
+        if (categoryList.length === currentIds.length && categoryList.every(id => currentIds.includes(id))) {
+            return currentIds;
+        }
+        if (categoryList.length === baseIds.length && categoryList.every(id => baseIds.includes(id))) {
+            return baseIds;
+        }
+    }
+    return currentIds;
+}
+
 function hasCompleteSourceHealthForValidation(sourceHealth) {
     const categories = sourceHealth?.arxiv?.categories;
     if (!Array.isArray(categories)) return false;
     if (hasBoundedFetchSource(sourceHealth) && (categories.some(category => !hasCoveredFetchBoundary(category, sourceHealth.fetchBoundary))
             || !hasCoveredFetchBoundary(sourceHealth.huggingface, sourceHealth.fetchBoundary, true))) return false;
-    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const observedIds = categories.map(category => category?.id);
+    const boundaryWitnessIds = Array.isArray(sourceHealth?.fetchBoundary?.continuity?.witnesses?.arxiv)
+        ? sourceHealth.fetchBoundary.continuity.witnesses.arxiv.map(w => w?.categoryId)
+        : null;
+    const expectedIds = resolveExpectedCategoryIdsForBatch(boundaryWitnessIds || observedIds);
     const byId = new Map(categories.map(category => [category?.id, category]));
     return categories.length === expectedIds.length
         && byId.size === expectedIds.length
@@ -1744,13 +1776,19 @@ function validateCompleteFilterCompanionContract(files, decisionsPath, fetchPath
         addIssue(issues, files.rawCandidates, 'complete 筛选四件套要求 raw-candidates.json papers 为数组');
     }
     if (!hasCompleteSourceHealthForValidation(raw.sourceHealth)) {
-        addIssue(issues, files.rawCandidates, 'complete filtered-papers.json 要求七个 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true');
+        addIssue(issues, files.rawCandidates, 'complete filtered-papers.json 要求全部配置的 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true');
     }
     if (decisions.stats?.complete !== true) {
         addIssue(issues, decisionsPath, 'complete filtered-papers.json 要求 filter-decisions.json stats.complete=true');
     }
 
-    const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const expectedIds = resolveExpectedCategoryIdsForBatch(checkpoint.categoryOrder);
+    const rawCatIds = Array.isArray(raw.sourceHealth?.arxiv?.categories)
+        ? raw.sourceHealth.arxiv.categories.map(c => c?.id)
+        : [];
+    if (rawCatIds.length !== expectedIds.length || !expectedIds.every(id => rawCatIds.includes(id))) {
+        addIssue(issues, files.rawCandidates, 'complete filtered-papers.json 要求 raw-candidates.json 的 arXiv 类别集合与 fetch-checkpoint.json 一致');
+    }
     for (const id of expectedIds) {
         const entry = checkpoint.arxiv?.[id];
         if (!hasCompleteFetchSourceContract(entry, id)) {

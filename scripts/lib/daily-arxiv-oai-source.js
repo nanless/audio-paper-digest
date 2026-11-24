@@ -13,7 +13,7 @@ const { evidenceHeaderForBoundary, hasEvidenceHeader, coverageHeaderForBoundary,
 const BASE_URL = 'https://oaipmh.arxiv.org/oai';
 const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_PAGES = 10000;
-const SETS = Object.freeze(Object.fromEntries(['eess.AS', 'eess.SP', 'cs.SD', 'cs.LG', 'cs.AI', 'cs.MM', 'cs.CL']
+const SETS = Object.freeze(Object.fromEntries(['eess.AS', 'eess.SP', 'cs.SD', 'cs.LG', 'cs.AI', 'cs.MM', 'cs.CL', 'cs.CV', 'cs.HC']
     .map(category => [category, `${category.split('.')[0]}:${category.replace('.', ':')}`])));
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'

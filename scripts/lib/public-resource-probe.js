@@ -510,32 +510,149 @@ function extractDemoUrls(analysis) {
     return [...new Set(urls)];
 }
 
-function resolveMetadataResourceLinks(paper) {
-    if (!(paper?.sources || []).includes('huggingface')) return [];
-    const raw = String(paper?.hf_github_repo || '').trim();
-    if (!classifyRepositoryHostFacets(raw)) return [];
-    try {
-        const parsed = new URL(raw);
-        const segments = parsed.pathname.split('/').filter(Boolean);
-        if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com'
-            || parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash
-            || segments.length !== 2
-            || segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment)
-                || segment === '.' || segment === '..' || segment.endsWith('.'))) return [];
-        return [`https://github.com/${segments.join('/')}`];
-    } catch (_) {
-        return [];
+function isSafePublicCommentHostname(host) {
+    const clean = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (!clean || clean.endsWith('.') || !clean.includes('.')
+        || clean.split('.').some(label => !label)
+        || clean === 'localhost'
+        || clean.endsWith('.localhost') || clean.endsWith('.local')
+        || clean.endsWith('.internal') || net.isIP(clean) !== 0 || isPublicPolicyIpLiteral(clean)) {
+        return false;
     }
+    return true;
+}
+
+const COMMENT_NON_DEMO_BASE_HOSTS = new Set([
+    'arxiv.org', 'doi.org', 'dx.doi.org', 'orcid.org', 'creativecommons.org',
+    'github.com', 'gitlab.com', 'huggingface.co', 'modelscope.cn', 'bitbucket.org'
+]);
+
+function isExcludedCommentDemoHost(canonicalHost) {
+    for (const base of COMMENT_NON_DEMO_BASE_HOSTS) {
+        if (canonicalHost === base || canonicalHost.endsWith(`.${base}`)) return true;
+    }
+    return false;
+}
+
+function extractCommentResourceUrls(comment) {
+    const text = String(comment || '').trim();
+    if (!text) return { repoUrls: [], demoUrls: [] };
+    const repoUrls = [];
+    const demoUrls = [];
+    const validSeg = segment => /^[A-Za-z0-9._-]+$/.test(segment)
+        && segment !== '.' && segment !== '..' && !segment.endsWith('.');
+    for (const match of text.matchAll(/https?:\/\/[^\s<>"'()[\]{}`]+/gi)) {
+        const raw = match[0].replace(/[),.;:!?`*，。；：！？、）》】」』]+$/u, '');
+        let parsed;
+        try {
+            parsed = new URL(raw);
+        } catch (_) {
+            continue;
+        }
+        if (parsed.username || parsed.password || parsed.port) continue;
+        const host = parsed.hostname.toLowerCase();
+        if (!isSafePublicCommentHostname(host)) continue;
+        // Upgrade http:// only for well-known HTTPS hosts (github.com, huggingface.co, modelscope.cn, *.github.io); otherwise require https:.
+        if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && (
+            host === 'github.com' || host === 'www.github.com'
+            || host === 'huggingface.co' || host === 'www.huggingface.co'
+            || host === 'modelscope.cn' || host === 'www.modelscope.cn'
+            || host.endsWith('.github.io')
+        ))) {
+            continue;
+        }
+        const canonicalHost = host.startsWith('www.') ? host.slice(4) : host;
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        if (canonicalHost === 'github.com' && segments.length >= 2) {
+            const owner = segments[0];
+            const cleanRepo = segments[1].replace(/\.git$/i, '');
+            const allowedSubpath = segments.length === 2
+                || (segments.length >= 3 && ['tree', 'blob'].includes(segments[2].toLowerCase()));
+            if (allowedSubpath && validSeg(owner) && validSeg(cleanRepo)
+                && !RESERVED_REPO_OWNERS.has(owner.toLowerCase())) {
+                repoUrls.push(`https://github.com/${owner}/${cleanRepo}`);
+            }
+            continue;
+        }
+        if (canonicalHost === 'huggingface.co' && segments.length === 3 && segments[0].toLowerCase() === 'spaces'
+            && segments.slice(1).every(validSeg)) {
+            demoUrls.push(`https://huggingface.co/spaces/${segments[1]}/${segments[2]}`);
+            continue;
+        }
+        if (canonicalHost === 'huggingface.co') {
+            if (segments.length === 2 && segments.every(validSeg)
+                && !RESERVED_HF_PREFIXES.has(segments[0].toLowerCase())) {
+                repoUrls.push(`https://huggingface.co/${segments[0]}/${segments[1]}`);
+            } else if (segments.length === 3
+                && ['datasets', 'models', 'collections'].includes(segments[0].toLowerCase())
+                && segments.slice(1).every(validSeg)) {
+                const kind = segments[0].toLowerCase();
+                const prefix = kind === 'models' ? '' : `${kind}/`;
+                repoUrls.push(`https://huggingface.co/${prefix}${segments[1]}/${segments[2]}`);
+            }
+            continue;
+        }
+        if (canonicalHost === 'modelscope.cn' && segments.length === 3
+            && ['models', 'datasets', 'studios'].includes(segments[0].toLowerCase())
+            && segments.slice(1).every(validSeg)) {
+            repoUrls.push(`https://modelscope.cn/${segments[0].toLowerCase()}/${segments[1]}/${segments[2]}`);
+            continue;
+        }
+        if (canonicalHost.endsWith('.github.io') || /\b(?:demo|project|webpage|homepage|website|samples?|audio)\b/i.test(text.slice(Math.max(0, match.index - 48), match.index))) {
+            if (!isExcludedCommentDemoHost(canonicalHost)) {
+                demoUrls.push(`https://${host}${parsed.pathname}${parsed.search}`);
+            }
+        }
+    }
+    return {
+        repoUrls: [...new Set(repoUrls)],
+        demoUrls: [...new Set(demoUrls)]
+    };
+}
+
+function resolveMetadataResourceLinks(paper) {
+    const links = [];
+    const hasVerifiedHfSource = (paper?.sources || []).includes('huggingface') || paper?.hfDetailEnriched === true;
+    if (hasVerifiedHfSource) {
+        const raw = String(paper?.hf_github_repo || '').trim();
+        if (classifyRepositoryHostFacets(raw)) {
+            try {
+                const parsed = new URL(raw);
+                const segments = parsed.pathname.split('/').filter(Boolean);
+                if (parsed.protocol === 'https:' && parsed.hostname === 'github.com'
+                    && !parsed.username && !parsed.password && !parsed.port && !parsed.search && !parsed.hash
+                    && segments.length === 2
+                    && !segments.some(segment => !/^[A-Za-z0-9._-]+$/.test(segment)
+                        || segment === '.' || segment === '..' || segment.endsWith('.'))) {
+                    links.push(`https://github.com/${segments.join('/')}`);
+                }
+            } catch (_) {}
+        }
+    }
+    if (typeof paper?.comment === 'string' && paper.comment.trim()) {
+        const fromComment = extractCommentResourceUrls(paper.comment);
+        for (const repoUrl of fromComment.repoUrls) {
+            if (classifyRepositoryHostFacets(repoUrl)) {
+                links.push(repoUrl);
+            }
+        }
+    }
+    return [...new Set(links)];
 }
 
 function resolveDemoPageCandidates(paper, analysis) {
     const urls = extractDemoUrls(analysis);
     const projectPage = String(paper?.hf_project_page || '').trim();
-    if ((paper?.sources || []).includes('huggingface')
+    const hasVerifiedHfSource = (paper?.sources || []).includes('huggingface') || paper?.hfDetailEnriched === true;
+    if (hasVerifiedHfSource
         && /^https:\/\/[^\s]+$/i.test(projectPage)) {
         urls.push(projectPage);
     }
-    const repository = resolveMetadataResourceLinks(paper)[0];
+    if (typeof paper?.comment === 'string' && paper.comment.trim()) {
+        const fromComment = extractCommentResourceUrls(paper.comment);
+        urls.push(...fromComment.demoUrls);
+    }
+    const repository = resolveMetadataResourceLinks(paper).find(link => link.startsWith('https://github.com/'));
     if (repository) {
         const parsed = new URL(repository);
         const [owner, name] = parsed.pathname.split('/').filter(Boolean);
@@ -550,7 +667,7 @@ function isMetadataResourceDiscoveryLink(paper, rawUrl, options = {}) {
     if (!schemeMatch) return false;
     const rawPath = schemeMatch[2] || '';
     if (/(?:^|\/)\.\.?(?:\/|$)/.test(rawPath) || /\/\//.test(rawPath)) return false;
-    const repository = resolveMetadataResourceLinks(paper)[0];
+    const metadataLinks = new Set(resolveMetadataResourceLinks(paper).map(link => link.replace(/\/$/, '')));
     const allowProjectPageRepos = options?.allowProjectPageRepos === true;
     const validSegment = segment => /^[A-Za-z0-9._-]+$/.test(segment)
         && segment !== '.' && segment !== '..' && !segment.endsWith('.');
@@ -563,10 +680,10 @@ function isMetadataResourceDiscoveryLink(paper, rawUrl, options = {}) {
         if (parsed.pathname.replace(/\/$/, '') !== rawPath.replace(/\/$/, '')) return false;
         const normalized = rawUrl.replace(/\/$/, '').replace(/^https:\/\/[^/]+/i, m => m.toLowerCase());
         if (!classifyRepositoryHostFacets(normalized)) return false;
+        if (metadataLinks.has(normalized)) {
+            return true;
+        }
         if (parsed.hostname === 'github.com' || parsed.hostname === 'gitlab.com') {
-            if (parsed.hostname === 'github.com' && Boolean(repository) && normalized === repository) {
-                return true;
-            }
             if (!allowProjectPageRepos || segments.length !== 2 || !segments.every(validSegment)) {
                 return false;
             }
@@ -2706,7 +2823,7 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     const resources = [];
     const verifiedByUrl = new Map();
     const documentationByUrl = new Map();
-    const metadataRepository = resolveMetadataResourceLinks(options.paper)[0] || '';
+    const metadataRepositories = new Set(resolveMetadataResourceLinks(options.paper).map(canonicalDedupUrl).filter(Boolean));
     for (const candidate of candidates) {
         const { sourceLine, origin } = candidate;
         if (!isConferenceReaderResourceUrlShape(candidate.url)) {
@@ -2736,7 +2853,7 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         }
         let documentationEvidence = null;
         if (candidate.type === 'code' && options.paper && !weakConferencePolicy
-            && (canonicalDedupUrl(candidate.url) === canonicalDedupUrl(metadataRepository)
+            && (metadataRepositories.has(canonicalDedupUrl(candidate.url))
                 || (verified.availability === 'available' && Boolean(githubRepositoryReadmeUrl(candidate.url))))) {
             if (!documentationByUrl.has(candidate.url)) {
                 try {
@@ -3058,6 +3175,7 @@ module.exports = {
     probeAudioSampleUrls,
     probeHuggingFaceSpaceStatus,
     inspectDemoPageDetailed,
+    extractCommentResourceUrls,
     resolveMetadataResourceLinks,
     resolveDemoPageCandidates,
     isMetadataResourceDiscoveryLink,

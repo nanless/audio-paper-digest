@@ -9,7 +9,22 @@ const YAML = require('yaml');
 const codec = require('./protocol-codec');
 const { BOUNDARY: CONTRACT, CONTINUITY: CONTINUITY_CONTRACT, RECOVERY_CONTINUITY: RECOVERY_CONTINUITY_CONTRACT,
     readHeader, isRecoveryContinuity, declaresBoundedFetchSource, hasBoundedFetchSource, hasFetchCoverageStrategy } = require('./daily-fetch-format');
-const CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
+const BASE_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
+const CATEGORIES = [...BASE_CATEGORIES, 'cs.CV', 'cs.HC'];
+const BASE_CATEGORY_SET = new Set(BASE_CATEGORIES);
+const CATEGORY_SET = new Set(CATEGORIES);
+function validTrackedCategories(ids) {
+    if (!Array.isArray(ids)) return false;
+    const unique = new Set(ids);
+    if (unique.size !== ids.length) return false;
+    if (ids.length === BASE_CATEGORIES.length) {
+        return BASE_CATEGORIES.every(id => unique.has(id));
+    }
+    if (ids.length === CATEGORIES.length) {
+        return CATEGORIES.every(id => unique.has(id));
+    }
+    return false;
+}
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function strictInstant(value) {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)
@@ -64,17 +79,24 @@ function validateContinuity(boundary) {
         || !proofNames.every(name => proofs.filter(p => p.file === name && /^[a-f0-9]{64}$/.test(p.sha256 || '')).length === 1)
         || proofs.find(p => p.file === 'fetch-checkpoint.json').sha256 !== c.archiveCheckpointSha256) fail();
     const arxiv = c.witnesses?.arxiv;
-    if (!Array.isArray(arxiv) || arxiv.length !== CATEGORIES.length
-        || !CATEGORIES.every(id => arxiv.filter(w => w?.categoryId === id).length === 1)) fail();
+    const witnessCategories = Array.isArray(arxiv) ? arxiv.map(w => w?.categoryId) : [];
+    if (!Array.isArray(arxiv) || !validTrackedCategories(witnessCategories)) fail();
     const expected = (w, field) => {
         if (!/^\d{4}\.\d{4,5}$/.test(w.arxivId || '')) fail();
         strictInstant(w[field]);
         if (Date.parse(w[field]) > Date.parse(c.originalSince)) fail();
     };
+    const onboardedWitnesses = arxiv.filter(w => !BASE_CATEGORY_SET.has(w.categoryId));
+    const newlyOnboardedCount = onboardedWitnesses.filter(w => w.status === 'not-applicable' && w.reason === 'category-newly-onboarded').length;
+    if (newlyOnboardedCount > 0 && newlyOnboardedCount !== onboardedWitnesses.length) fail();
     for (const w of arxiv) {
         if (w.status === 'expected') expected(w, 'published');
-        else if (w.status !== 'not-applicable' || w.reason !== 'no-previous-records'
-            || w.arxivId !== undefined || w.published !== undefined) fail();
+        else if (w.status === 'not-applicable'
+            && (w.reason === 'no-previous-records'
+                || (w.reason === 'category-newly-onboarded' && !BASE_CATEGORY_SET.has(w.categoryId)))
+            && w.arxivId === undefined && w.published === undefined) {
+            // valid not-applicable witness
+        } else fail();
     }
     const hf = c.witnesses?.huggingface;
     if (hf?.status === 'expected') {
@@ -206,7 +228,15 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     if (isRecoveryContinuity(boundary.continuity)) {
         require('./daily-fetch-witness-recovery').verifyActivation(boundary);
     }
-    const categories = CATEGORIES;
+    const checkpointArxivKeys = Object.keys(checkpoint.arxiv || {});
+    const categories = Array.isArray(checkpoint.categoryOrder) ? checkpoint.categoryOrder : checkpointArxivKeys;
+    const boundaryWitnessCategories = Array.isArray(boundary.continuity?.witnesses?.arxiv)
+        ? boundary.continuity.witnesses.arxiv.map(w => w?.categoryId)
+        : null;
+    if (boundaryWitnessCategories && (categories.length !== boundaryWitnessCategories.length
+        || !boundaryWitnessCategories.every(id => categories.includes(id)))) {
+        fail();
+    }
     const covered = (entry, hf = false, categoryId = null) => {
         const provider = entry?.health?.provider;
         return entry?.status === 'complete' && entry.health?.ok === true && Array.isArray(entry.papers)
@@ -220,6 +250,8 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt'));
     };
     if (checkpoint.batchDate !== date || !hasFetchCoverageStrategy(checkpoint)
+        || !validTrackedCategories(categories)
+        || checkpointArxivKeys.length !== categories.length
         || !categories.every(id => covered(checkpoint.arxiv?.[id], false, id)) || !covered(checkpoint.huggingface, true)
         || Date.parse(checkpoint.batchStartedAt) !== Date.parse(boundary.until)) fail();
     const sources = stableSha({ fetchBoundary: boundary,
@@ -298,8 +330,12 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     return { until: boundary.until, checkpoint,
         archiveProofs: records.map(r => ({ file: path.basename(r.filename), sha256: hash(r.bytes) })) };
 }
-function deriveContinuity(prior, lastDigestDate, header = codec.recordHeader(CONTINUITY_CONTRACT, CONTINUITY_CONTRACT)) {
+function deriveContinuity(prior, lastDigestDate, header = codec.recordHeader(CONTINUITY_CONTRACT, CONTINUITY_CONTRACT), targetCategories = CATEGORIES) {
+    const resolvedTargetCategories = targetCategories == null ? CATEGORIES : targetCategories;
     const cp = prior.checkpoint;
+    if (!validTrackedCategories(resolvedTargetCategories)) {
+        throw new Error('旧获取见证目标类别集合无效');
+    }
     const latest = (rows, field) => rows.map(p => {
         const arxivId = normalizedId(p), timestamp = p[field];
         if (!/^\d{4}\.\d{4,5}$/.test(arxivId) || typeof timestamp !== 'string'
@@ -310,7 +346,13 @@ function deriveContinuity(prior, lastDigestDate, header = codec.recordHeader(CON
         }
         return { arxivId, timestamp: new Date(timestamp).toISOString() };
     }).sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp) || a.arxivId.localeCompare(b.arxivId))[0];
-    const arxiv = CATEGORIES.map(categoryId => {
+    const arxiv = resolvedTargetCategories.map(categoryId => {
+        if (!Object.prototype.hasOwnProperty.call(cp.arxiv || {}, categoryId)) {
+            if (BASE_CATEGORY_SET.has(categoryId)) {
+                throw new Error(`旧抓取检查点缺少基础类别 ${categoryId}`);
+            }
+            return { categoryId, status: 'not-applicable', reason: 'category-newly-onboarded' };
+        }
         const rows = cp.arxiv[categoryId].papers;
         if (!rows.length) return { categoryId, status: 'not-applicable', reason: 'no-previous-records' };
         const witness = latest(rows, 'published');
@@ -348,8 +390,9 @@ function validateDailyFetchContinuityCheckpoint(boundary, checkpointBytes) {
         || !hasBoundedFetchSource(checkpoint) || checkpoint.fetchBoundary?.until !== boundary.continuity.originalSince) {
         throw new Error('旧获取见证绑定了其他批次或结束时间');
     }
+    const targetCategories = boundary.continuity.witnesses.arxiv.map(w => w.categoryId);
     const derived = deriveContinuity({ until: boundary.continuity.originalSince, checkpoint,
-        archiveProofs: boundary.provenance.archiveProofs }, boundary.lastDigestDate, readHeader(boundary.continuity, CONTINUITY_CONTRACT));
+        archiveProofs: boundary.provenance.archiveProofs }, boundary.lastDigestDate, readHeader(boundary.continuity, CONTINUITY_CONTRACT), targetCategories);
     if (stableSha(derived) !== stableSha(boundary.continuity)) {
         throw new Error('旧获取见证与原抓取检查点中的最新论文不一致');
     }
@@ -408,8 +451,11 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
     const prior = previous?.until ? previous : null;
     if (requirePreviouslyFetched && !prior) throw new Error('要求旧获取见证时必须有完整已发布 v7 抓取证明，不能从月首推测旧获取状态');
     const header = replayBoundary ? readHeader(replayBoundary, CONTRACT) : codec.recordHeader(CONTRACT, CONTRACT);
+    const replayCategories = Array.isArray(replayBoundary?.continuity?.witnesses?.arxiv)
+        ? replayBoundary.continuity.witnesses.arxiv.map(w => w?.categoryId)
+        : null;
     const continuity = requirePreviouslyFetched ? deriveContinuity(prior, date, replayBoundary?.continuity
-        ? readHeader(replayBoundary.continuity, CONTINUITY_CONTRACT) : undefined) : null;
+        ? readHeader(replayBoundary.continuity, CONTINUITY_CONTRACT) : undefined, replayCategories) : null;
     const since = continuity ? overlapStart(continuity) : prior ? prior.until : papers.map(p => p.conservativeSubmissionMonthStart).sort()[0];
     const body = { ...header, lastDigestDate: date, since, until,
         ...(continuity ? { continuity } : {}),

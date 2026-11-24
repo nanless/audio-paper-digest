@@ -3283,6 +3283,25 @@ function mergeStoredAnalysisState(paper, storedAnalysisRecord) {
     for (const field of ANALYSIS_RECOVERY_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(storedAnalysisRecord, field)) merged[field] = storedAnalysisRecord[field];
     }
+    if (storedAnalysisRecord.hfDetailEnriched === true) {
+        merged.hfDetailEnriched = true;
+        if ((Number(storedAnalysisRecord.hf_upvotes) || 0) > (Number(merged.hf_upvotes) || 0)) {
+            merged.hf_upvotes = storedAnalysisRecord.hf_upvotes;
+        }
+        if ((Number(storedAnalysisRecord.hf_github_stars) || 0) > (Number(merged.hf_github_stars) || 0)) {
+            merged.hf_github_stars = storedAnalysisRecord.hf_github_stars;
+        }
+        for (const key of ['hf_github_repo', 'hf_project_page', 'hf_ai_summary', 'hf_discussion_id', 'hf_organization']) {
+            if (!merged[key] && storedAnalysisRecord[key]) merged[key] = storedAnalysisRecord[key];
+        }
+        if ((!Array.isArray(merged.hf_ai_keywords) || merged.hf_ai_keywords.length === 0)
+            && Array.isArray(storedAnalysisRecord.hf_ai_keywords) && storedAnalysisRecord.hf_ai_keywords.length > 0) {
+            merged.hf_ai_keywords = storedAnalysisRecord.hf_ai_keywords;
+        }
+        if (!merged.hf_linked_counts && storedAnalysisRecord.hf_linked_counts) {
+            merged.hf_linked_counts = storedAnalysisRecord.hf_linked_counts;
+        }
+    }
     return merged;
 }
 

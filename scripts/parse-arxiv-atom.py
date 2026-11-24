@@ -68,6 +68,17 @@ def parse_atom(source, feed_page=False):
                 has_any_affiliation = True
             if name_val:
                 author_affiliations.append({'name': name_val, 'affiliations': affs})
+        def arxiv_optional_field(name):
+            values = entry.findall(f'{{{ARXIV_NAMESPACE}}}{name}')
+            if not values:
+                return ''
+            parts = []
+            for v in values:
+                cleaned = re.sub(r'\s+', ' ', ''.join(v.itertext())).strip()
+                if cleaned:
+                    parts.append(cleaned)
+            return ' '.join(parts).strip()
+
         record = {
             'arxivId': match[1],
             'title': field('title', required=True),
@@ -77,6 +88,18 @@ def parse_atom(source, feed_page=False):
             'categories': [category.get('term', '')
                            for category in entry.findall(f'{prefix}category')],
         }
+        updated_val = field('updated')
+        if updated_val:
+            record['updated'] = updated_val
+        comment_val = arxiv_optional_field('comment')
+        if comment_val:
+            record['comment'] = comment_val
+        journal_ref_val = arxiv_optional_field('journal_ref')
+        if journal_ref_val:
+            record['journalRef'] = journal_ref_val
+        doi_val = arxiv_optional_field('doi')
+        if doi_val:
+            record['doi'] = doi_val
         if has_any_affiliation:
             record['authorAffiliations'] = author_affiliations
         records.append(record)

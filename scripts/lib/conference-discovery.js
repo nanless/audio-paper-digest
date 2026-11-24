@@ -9,6 +9,11 @@ const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
 const officialAcquisition = require('./official-conference-acquisition.js');
+const officialAcquisitionV2 = require('./official-conference-acquisition-v2.js');
+
+function resolveOfficialAcquisition(providerId) {
+    return officialAcquisitionV2.hasProvider(providerId) ? officialAcquisitionV2 : officialAcquisition;
+}
 const codec = require('./protocol-codec');
 const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
 
@@ -749,41 +754,43 @@ function validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot
     assertSha(binding.metadataSha256, 'acquisitionReceipt.metadataSha256');
     assertSha(binding.paperSetSha256, 'acquisitionReceipt.paperSetSha256');
     assertSha(binding.pdfReceiptSetSha256, 'acquisitionReceipt.pdfReceiptSetSha256');
-    const replayed = officialAcquisition.replayCatalog(binding.providerId, binding.root);
-    const verified = officialAcquisition.verifyAcquisition({ providerId: binding.providerId, outputRoot: binding.root });
+    const acq = resolveOfficialAcquisition(binding.providerId);
+    const replayed = acq.replayCatalog(binding.providerId, binding.root);
+    const verified = acq.verifyAcquisition({ providerId: binding.providerId, outputRoot: binding.root });
     if (!verified.complete || replayed.metadataSha256 !== binding.metadataSha256
         || replayed.receipt.receiptSha256 !== binding.catalogReceiptSha256
-        || officialAcquisition.sha256(fs.readFileSync(binding.catalogReceiptFile)) !== binding.catalogReceiptFileSha256
-        || officialAcquisition.stableHash(replayed.metadata.papers) !== binding.paperSetSha256) {
+        || acq.sha256(fs.readFileSync(binding.catalogReceiptFile)) !== binding.catalogReceiptFileSha256
+        || acq.stableHash(replayed.metadata.papers) !== binding.paperSetSha256) {
         throw fail('候选 manifest 的获取 receipt 无法重放官方 bundle');
     }
     const pdfReceiptSet = replayed.metadata.papers.filter(paper => paper.pdfUrl !== null).map(paper => {
-        const receipt = officialAcquisition.replayPdfReceipt(replayed, paper);
+        const receipt = acq.replayPdfReceipt(replayed, paper);
         return { paperId: paper.id, receiptSha256: receipt.receiptSha256,
-            receiptFileSha256: officialAcquisition.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
+            receiptFileSha256: acq.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
     });
-    if (officialAcquisition.stableHash(pdfReceiptSet) !== binding.pdfReceiptSetSha256) {
+    if (acq.stableHash(pdfReceiptSet) !== binding.pdfReceiptSetSha256) {
         throw fail('候选 manifest 的 PDF receipt 集合已变化');
     }
     return binding;
 }
 
 function officialAcquisitionBindingFromRoot(conference, metadataSnapshot, root) {
-    const replayed = officialAcquisition.replayCatalog(conference.id, root);
-    const verified = officialAcquisition.verifyAcquisition({ providerId: conference.id, outputRoot: root });
+    const acq = resolveOfficialAcquisition(conference.id);
+    const replayed = acq.replayCatalog(conference.id, root);
+    const verified = acq.verifyAcquisition({ providerId: conference.id, outputRoot: root });
     if (!verified.complete) throw fail(`官方获取不完整：${verified.missing.join(', ')}`);
     const receiptFile = path.join(root, 'catalog.receipt.json');
     const pdfReceiptSet = replayed.metadata.papers.filter(paper => paper.pdfUrl !== null).map(paper => {
-        const receipt = officialAcquisition.replayPdfReceipt(replayed, paper);
+        const receipt = acq.replayPdfReceipt(replayed, paper);
         return { paperId: paper.id, receiptSha256: receipt.receiptSha256,
-            receiptFileSha256: officialAcquisition.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
+            receiptFileSha256: acq.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
     });
     const binding = { providerId: conference.id, root, metadataFile: metadataSnapshot.file,
         metadataSha256: metadataSnapshot.sha256, catalogReceiptFile: receiptFile,
         catalogReceiptSha256: replayed.receipt.receiptSha256,
-        catalogReceiptFileSha256: officialAcquisition.sha256(fs.readFileSync(receiptFile)),
-        paperSetSha256: officialAcquisition.stableHash(replayed.metadata.papers),
-        pdfReceiptSetSha256: officialAcquisition.stableHash(pdfReceiptSet) };
+        catalogReceiptFileSha256: acq.sha256(fs.readFileSync(receiptFile)),
+        paperSetSha256: acq.stableHash(replayed.metadata.papers),
+        pdfReceiptSetSha256: acq.stableHash(pdfReceiptSet) };
     validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot, root);
     return binding;
 }

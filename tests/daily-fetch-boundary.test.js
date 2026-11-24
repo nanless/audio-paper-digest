@@ -148,9 +148,14 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
     assert.equal(overlapping.continuity.originalSince, old.until);
     assert.equal(overlapping.since, '2026-10-02T04:12:00.000Z');
     assert.equal(overlapping.continuity.overlapCutoffDate, '2026-10-03');
-    assert.equal(overlapping.continuity.witnesses.arxiv.length, 7);
-    assert.ok(overlapping.continuity.witnesses.arxiv.every(w => w.arxivId === '2610.00026'
+    assert.equal(overlapping.continuity.witnesses.arxiv.length, 9);
+    const baseExpected = overlapping.continuity.witnesses.arxiv.filter(w => !['cs.CV', 'cs.HC'].includes(w.categoryId));
+    const newlyOnboarded = overlapping.continuity.witnesses.arxiv.filter(w => ['cs.CV', 'cs.HC'].includes(w.categoryId));
+    assert.equal(baseExpected.length, 7);
+    assert.ok(baseExpected.every(w => w.arxivId === '2610.00026'
         && w.published === '2026-10-02T04:12:58.000Z'));
+    assert.equal(newlyOnboarded.length, 2);
+    assert.ok(newlyOnboarded.every(w => w.status === 'not-applicable' && w.reason === 'category-newly-onboarded'));
     assert.equal(overlapping.continuity.witnesses.huggingface.selectedAt, '2026-10-03T00:00:00.000Z');
     const originalCpBytes = Buffer.from(JSON.stringify(cp));
     assert.equal(validateDailyFetchContinuityCheckpoint(overlapping, originalCpBytes), true);

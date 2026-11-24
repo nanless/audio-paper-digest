@@ -306,8 +306,20 @@ function resolveDigestRuntimeSnapshot(
 
 function sourceHealthComplete(raw, targetDate, { emptyConfirmed = false } = {}) {
     const categories = raw?.sourceHealth?.arxiv?.categories;
-    const expectedIds = new Set(Config.ARXIV_CATEGORIES.map(item => item.id));
-    const actualIds = new Set(Array.isArray(categories) ? categories.map(item => item?.id) : []);
+    const currentIds = Config.ARXIV_CATEGORIES.map(item => item.id);
+    const baseIds = (Config.BASE_ARXIV_CATEGORIES || Config.ARXIV_CATEGORIES).map(item => item.id);
+    const boundaryIds = Array.isArray(raw?.sourceHealth?.fetchBoundary?.continuity?.witnesses?.arxiv)
+        ? raw.sourceHealth.fetchBoundary.continuity.witnesses.arxiv.map(item => item?.categoryId)
+        : null;
+    const observedIds = Array.isArray(categories) ? categories.map(item => item?.id) : [];
+    const pickExpected = ids => {
+        if (!Array.isArray(ids) || new Set(ids).size !== ids.length) return currentIds;
+        if (ids.length === currentIds.length && ids.every(id => currentIds.includes(id))) return currentIds;
+        if (ids.length === baseIds.length && ids.every(id => baseIds.includes(id))) return baseIds;
+        return currentIds;
+    };
+    const expectedIds = new Set(pickExpected(boundaryIds || observedIds));
+    const actualIds = new Set(observedIds);
     return Boolean(
         raw?.batchDate === targetDate
         && (emptyConfirmed
@@ -315,7 +327,7 @@ function sourceHealthComplete(raw, targetDate, { emptyConfirmed = false } = {}) 
             : papersFrom(raw).length > 0)
         && raw?.sourceHealth?.arxiv?.ok === true
         && Array.isArray(categories)
-        && categories.length === Config.ARXIV_CATEGORIES.length
+        && categories.length === expectedIds.size
         && actualIds.size === expectedIds.size
         && [...expectedIds].every(id => actualIds.has(id))
         && categories.every(item => item?.ok === true)

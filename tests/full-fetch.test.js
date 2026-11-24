@@ -10,7 +10,7 @@ const { buildFilterInputSha256 } = require('../scripts/fetch-papers.js');
 const Config = require('../scripts/config.js');
 
 const execFileAsync = promisify(execFile);
-const EXPECTED_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
+const EXPECTED_CATEGORIES = Config.ARXIV_CATEGORIES.map(category => category.id);
 const completeSourceHealth = () => ({
     arxiv: { categories: EXPECTED_CATEGORIES.map(id => ({ id, ok: true })) },
     huggingface: { ok: true }

@@ -239,9 +239,9 @@ function referenceFor(filename) {
         : codec.historicalHeader(REFERENCE, 'original-sealed-recovery-reference', null);
     return { ...referenceHeader, manifestPath: filename, manifestSha256: r.sha256, manifestBytes: r.bytes.length };
 }
-function buildContinuity(state, header = codec.recordHeader(CONTINUITY, CONTINUITY)) {
+function buildContinuity(state, header = codec.recordHeader(CONTINUITY, CONTINUITY), targetCategories = null) {
     const { manifest: m, prior, reference } = state;
-    return { ...require('./daily-fetch-boundary').deriveContinuity(prior, m.sourceCheckpointDate, header),
+    return { ...require('./daily-fetch-boundary').deriveContinuity(prior, m.sourceCheckpointDate, header, targetCategories),
         sourceCheckpointDate: m.sourceCheckpointDate, recovery: reference };
 }
 // 跨零点补跑时，抓取时刻（until）落在批次日期次日凌晨；恢复清单按批次日期登记，
@@ -264,8 +264,9 @@ function verifyBoundary(boundary) {
     if (!keys(c, [...Object.keys(continuityHeader), 'required', 'originalSince', 'archiveCheckpointSha256', 'witnesses', 'overlapCutoffDate',
         'sourceCheckpointDate', 'recovery']) || Boolean(continuityHeader.schemaFingerprint) !== Boolean(boundaryHeader.schemaFingerprint)) fail('独立连续性合同非法');
     const state = replay(c.recovery), m = state.manifest;
+    const targetCategories = Array.isArray(c.witnesses?.arxiv) ? c.witnesses.arxiv.map(w => w?.categoryId) : null;
     if (boundary.lastDigestDate !== m.latestDate || !withinBoundaryDateGrace(boundary.until, m.date)
-        || c.sourceCheckpointDate !== m.sourceCheckpointDate || !equal(c, buildContinuity(state, continuityHeader))
+        || c.sourceCheckpointDate !== m.sourceCheckpointDate || !equal(c, buildContinuity(state, continuityHeader, targetCategories))
         || boundary.since !== require('./daily-fetch-boundary').overlapStart(c)
         || !equal(boundary.provenance, { blogHead: m.blogHead, indexPath: m.latest.indexPath,
             indexSha256: m.latest.indexSha256, papers: m.latest.papers,
@@ -281,7 +282,10 @@ function resolveBoundary({ blogRepo, dataRoot, until, manifestPath, latest, repl
     if (path.resolve(blogRepo) !== m.blogRepo || path.resolve(dataRoot) !== m.dataRoot || !equal(latest, m.latest)
         || !withinBoundaryDateGrace(until, m.date)) fail('恢复清单不属于当前实际远端、目录或目标日期');
     const header = replayBoundary ? readHeader(replayBoundary, BOUNDARY) : codec.recordHeader(BOUNDARY, BOUNDARY);
-    const c = buildContinuity(state, replayBoundary?.continuity ? readHeader(replayBoundary.continuity, CONTINUITY) : undefined);
+    const replayCategories = Array.isArray(replayBoundary?.continuity?.witnesses?.arxiv)
+        ? replayBoundary.continuity.witnesses.arxiv.map(w => w?.categoryId)
+        : null;
+    const c = buildContinuity(state, replayBoundary?.continuity ? readHeader(replayBoundary.continuity, CONTINUITY) : undefined, replayCategories);
     const body = { ...header,
         lastDigestDate: m.latestDate, since: require('./daily-fetch-boundary').overlapStart(c), until, continuity: c,
         provenance: { blogHead: m.blogHead, indexPath: m.latest.indexPath, indexSha256: m.latest.indexSha256,

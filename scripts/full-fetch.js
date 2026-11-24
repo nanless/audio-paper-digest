@@ -32,7 +32,12 @@ const {
     createHostTaskScheduler,
     getAdaptiveHostCooldownMs
 } = require('./lib/fetch-scheduler.js');
-const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('./fetch-huggingface-papers.js');
+const {
+    fetchHuggingFacePapers,
+    mergeAndDeduplicate,
+    enrichPapersWithHuggingFaceDetails,
+    enrichHfOnlyPapersWithArxivMetadata
+} = require('./fetch-huggingface-papers.js');
 const { writeFileAtomic, getBeijingISOString, getBeijingCompactTimestamp, getBeijingDateString, normalizeToBeijingISOString, isWithinBatchDateGrace, readJsonSafe, getRecordDate, normalizedId, loadPrompt, detectApiType } = require('./utils.js');
 const {
     analyzeBatch,
@@ -216,6 +221,14 @@ function mergePaperCategories(target, incoming) {
         ...(Array.isArray(incoming?.categories) ? incoming.categories : [])
     ].filter(Boolean));
     target.categories = Array.from(categories).sort();
+    for (const field of ['comment', 'journalRef', 'doi', 'updated', 'venueBadge']) {
+        if (!target[field] && incoming?.[field]) target[field] = incoming[field];
+    }
+    if (incoming?.isWithdrawn === true) target.isWithdrawn = true;
+    if ((!Array.isArray(target.authorAffiliations) || target.authorAffiliations.length === 0)
+        && Array.isArray(incoming?.authorAffiliations) && incoming.authorAffiliations.length > 0) {
+        target.authorAffiliations = incoming.authorAffiliations;
+    }
     return target;
 }
 
@@ -2056,6 +2069,13 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             if (!hasCoveredFetchBoundary(hfPapers._sourceHealth, fetchBoundary, true)) {
                 throw new Error('HuggingFace 抓取未证明完整补更日期范围');
             }
+            const arxivFetchedIdSet = new Set(arxivPapers.map(normalizedId).filter(Boolean));
+            const hfBackfill = await enrichHfOnlyPapersWithArxivMetadata(hfPapers, arxivFetchedIdSet, {
+                requestScheduler: arxivRequestScheduler
+            });
+            if (hfBackfill.enrichedCount > 0) {
+                console.log(`  🏷️ 已为 ${hfBackfill.enrichedCount}/${hfBackfill.attemptedCount} 篇 HF-only 论文回填官方 arXiv 分类与生命周期元数据`);
+            }
             pinPapersToBatch(hfPapers, batchStartedAt, batchDate);
             sourceHealth.huggingface = {
                 ...(hfPapers._sourceHealth || {}),
@@ -2381,6 +2401,23 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         const storedAnalysisRecord = mergeStoredAnalysisState(paper, initialStoredById.get(normalizedId(paper)));
         return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(storedAnalysisRecord, dailySourcePlan) : storedAnalysisRecord;
     });
+    const pendingHfEnrich = papersToAnalyze.filter(paper => {
+        const storedAnalysisRecord = initialStoredById.get(normalizedId(paper));
+        const alreadyDone = dailySourcePlan
+            && isSuccessfulAnalysisRecord(storedAnalysisRecord)
+            && dailyFreshSources.isPaperReusableForAnalysis(storedAnalysisRecord, dailySourcePlan);
+        return !alreadyDone && !paper.hfDetailEnriched;
+    });
+    const enrichedHfById = new Map();
+    if (pendingHfEnrich.length > 0) {
+        const hfEnrichResult = await enrichPapersWithHuggingFaceDetails(pendingHfEnrich, { concurrency: 3 });
+        if (hfEnrichResult.enrichedCount > 0) {
+            console.log(`  🤗 已通过 HuggingFace Papers API 为 ${hfEnrichResult.enrichedCount}/${hfEnrichResult.attemptedCount} 篇待分析论文补充社区热度与仓库元数据`);
+        }
+        for (const p of pendingHfEnrich) {
+            if (p.hfDetailEnriched === true) enrichedHfById.set(normalizedId(p), p);
+        }
+    }
     const skippedAlreadyAnalyzed = dailySourcePlan
         ? analysisPapers.filter(paper => {
             const storedAnalysisRecord = initialStoredById.get(normalizedId(paper));
@@ -2403,8 +2440,30 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             ...(!Array.isArray(current) && current ? current : {}),
             batchDate: today, batchId,
             papers: analysisPapers.map(paper => {
-                const stored = currentById.get(normalizedId(paper));
-                const merged = mergeStoredAnalysisState(paper, stored);
+                const nid = normalizedId(paper);
+                const stored = currentById.get(nid);
+                const enriched = enrichedHfById.get(nid);
+                const basePaper = enriched ? { ...paper } : paper;
+                if (enriched) {
+                    basePaper.hfDetailEnriched = true;
+                    if ((Number(enriched.hf_upvotes) || 0) > (Number(basePaper.hf_upvotes) || 0)) {
+                        basePaper.hf_upvotes = enriched.hf_upvotes;
+                    }
+                    if ((Number(enriched.hf_github_stars) || 0) > (Number(basePaper.hf_github_stars) || 0)) {
+                        basePaper.hf_github_stars = enriched.hf_github_stars;
+                    }
+                    for (const key of ['hf_github_repo', 'hf_project_page', 'hf_ai_summary', 'hf_discussion_id', 'hf_organization']) {
+                        if (!basePaper[key] && enriched[key]) basePaper[key] = enriched[key];
+                    }
+                    if ((!Array.isArray(basePaper.hf_ai_keywords) || basePaper.hf_ai_keywords.length === 0)
+                        && Array.isArray(enriched.hf_ai_keywords) && enriched.hf_ai_keywords.length > 0) {
+                        basePaper.hf_ai_keywords = enriched.hf_ai_keywords;
+                    }
+                    if (!basePaper.hf_linked_counts && enriched.hf_linked_counts) {
+                        basePaper.hf_linked_counts = enriched.hf_linked_counts;
+                    }
+                }
+                const merged = mergeStoredAnalysisState(basePaper, stored);
                 return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(merged, dailySourcePlan) : merged;
             }),
             status: 'running',

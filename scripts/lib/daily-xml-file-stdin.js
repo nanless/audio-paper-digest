@@ -30,6 +30,8 @@ function validOutput(value, kind) {
     if (kind === 'atom' || kind === 'atom-feed') {
         const records = kind === 'atom' ? value : value?.entries;
         const fields = ['arxivId', 'title', 'abstract', 'authors', 'published', 'categories'];
+        const optionalStringFields = ['updated', 'comment', 'journalRef', 'doi'];
+        const allowedKeys = new Set([...fields, ...optionalStringFields, 'authorAffiliations']);
         const strings = x => Array.isArray(x) && x.every(item => typeof item === 'string');
         const validAuthorAffiliations = list => Array.isArray(list) && list.every(item => object(item)
             && JSON.stringify(Object.keys(item).sort()) === JSON.stringify(['affiliations', 'name'])
@@ -37,10 +39,13 @@ function validOutput(value, kind) {
             && strings(item.affiliations) && item.affiliations.every(aff => aff.trim().length > 0));
         if (!Array.isArray(records) || !records.every(record => {
             if (!object(record)) return false;
+            const keys = Object.keys(record);
+            if (!fields.every(key => Object.hasOwn(record, key))) return false;
+            if (!keys.every(key => allowedKeys.has(key))) return false;
             const hasAffs = Object.hasOwn(record, 'authorAffiliations');
-            const expectedFields = hasAffs ? [...fields, 'authorAffiliations'] : fields;
-            return JSON.stringify(Object.keys(record).sort()) === JSON.stringify([...expectedFields].sort())
-                && ['arxivId', 'title', 'abstract', 'published'].every(key => typeof record[key] === 'string')
+            return ['arxivId', 'title', 'abstract', 'published'].every(key => typeof record[key] === 'string')
+                && optionalStringFields.every(key => !Object.hasOwn(record, key)
+                    || (typeof record[key] === 'string' && record[key].trim().length > 0))
                 && strings(record.authors) && strings(record.categories)
                 && (!hasAffs || validAuthorAffiliations(record.authorAffiliations));
         })) return false;

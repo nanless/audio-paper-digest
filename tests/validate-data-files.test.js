@@ -1262,7 +1262,7 @@ describe('validate-data-files', () => {
             deepAnalysisResult: path.join(dir, 'missing-analysis.json')
         }).join('\n');
 
-        assert.match(issues, /七个 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true/);
+        assert.match(issues, /全部配置的 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true/);
     });
 
     it('arXiv 来源抓取成功但没有论文时，空检查点仍可通过本批数据一致性检查', () => {

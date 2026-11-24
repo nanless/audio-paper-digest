@@ -24,6 +24,7 @@ const {
 } = require('./lib/keyword-prefilter.js');
 const {
     DAILY_FILTER_PREFILTER_SHA256,
+    isWithdrawnArxivPaper,
     evaluateDailyFilterPrefilter,
     evaluateScopeBodyAudioAnchor
 } = require('./lib/daily-filter-prefilter.js');
@@ -1662,6 +1663,119 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
     }
 }
 
+const ARXIV_VENUE_NAMES = [
+    'ICASSP', 'Interspeech', 'NeurIPS', 'ICML', 'ICLR',
+    'ACL', 'EMNLP', 'NAACL', 'EACL', 'AAAI',
+    'CVPR', 'ICCV', 'ECCV', 'ISMIR', 'DCASE',
+    'WASPAA', 'ASRU', 'SLT', 'EUSIPCO', 'TASLP', 'ACM MM'
+];
+const ARXIV_VENUE_NAME_PATTERN = ARXIV_VENUE_NAMES
+    .map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'))
+    .join('|');
+const ARXIV_VENUE_AFFIRMATIVE_RE = /\b(?:accepted(?:\s+(?:to|at|by|for|in))?|to\s+appear(?:\s+(?:in|at))?|published(?:\s+(?:in|at))?|proceedings\s+of|in\s+proc\.?|camera[- ]ready|oral|spotlight|poster\s+at)\b/i;
+const ARXIV_VENUE_NEGATIVE_RE = /\b(?:submitted\s+to|under\s+review|in\s+submission|preprint|rejected|withdrawn)\b/i;
+const ARXIV_VENUE_COMPARISON_RE = /\b(?:extends?|builds?\s+upon|compared?\s+(?:to|with)|follow[- ]?up\s+to|based\s+on)\b/i;
+const ARXIV_VENUE_MATCH_RE = new RegExp(`\\b(${ARXIV_VENUE_NAME_PATTERN})(?:(?:\\s*[-‐‑–—]?\\s*|\\s*['’])((?:19|20)\\d{2})|(?:\\s*['’]|[-‐‑–—])(\\d{2})(?!\\s*(?:pages?|pp\\.?|figs?|figures?|tables?|\\()))?\\b`, 'i');
+
+function detectWithdrawnArxivPaper(paper = {}) {
+    return isWithdrawnArxivPaper(paper);
+}
+
+function extractVenueBadgeFromArxivMetadata({ comment = '', journalRef = '' } = {}) {
+    const canonicalByLower = new Map(ARXIV_VENUE_NAMES.map(v => [v.toLowerCase(), v]));
+    const normalizeYear = rawYear => {
+        if (!rawYear) return '';
+        if (/^\d{4}$/.test(rawYear)) return rawYear;
+        if (/^\d{2}$/.test(rawYear)) {
+            const num = Number(rawYear);
+            return num <= 49 ? `20${rawYear}` : `19${rawYear}`;
+        }
+        return '';
+    };
+    const formatMatch = m => {
+        if (!m) return '';
+        const canonical = canonicalByLower.get(m[1].replace(/\s+/g, ' ').toLowerCase()) || m[1];
+        const year = normalizeYear(m[2] || m[3] || '');
+        return year ? `${canonical} ${year}` : canonical;
+    };
+    const matchClause = (clause, requireAffirmative) => {
+        const cleaned = String(clause || '').replace(/\s+/g, ' ').trim();
+        if (!cleaned || ARXIV_VENUE_NEGATIVE_RE.test(cleaned) || ARXIV_VENUE_COMPARISON_RE.test(cleaned)) {
+            return '';
+        }
+        if (requireAffirmative && !ARXIV_VENUE_AFFIRMATIVE_RE.test(cleaned)) {
+            return '';
+        }
+        const m = ARXIV_VENUE_MATCH_RE.exec(cleaned);
+        if (!m) return '';
+        // 短缩写（如 ACL/SLT）在医疗/其他领域多义，无年份时仅在紧邻接受措辞时放行
+        const rawVenue = m[1].replace(/\s+/g, ' ').toUpperCase();
+        if ((rawVenue === 'ACL' || rawVenue === 'SLT') && !(m[2] || m[3])) {
+            const before = cleaned.slice(Math.max(0, m.index - 40), m.index);
+            if (!/\b(?:accepted(?:\s+(?:to|at|by|for|in))?|to\s+appear(?:\s+(?:in|at))?|published(?:\s+(?:in|at))?|proceedings\s+of|in\s+proc\.?|findings\s+of|at|in|to)\s*$/i.test(before)) {
+                return '';
+            }
+        }
+        return formatMatch(m);
+    };
+    const jref = String(journalRef || '').trim();
+    if (jref) {
+        for (const clause of jref.split(/[;\n]+/)) {
+            const badge = matchClause(clause, false);
+            if (badge) return badge;
+        }
+    }
+    const cmt = String(comment || '').trim();
+    if (cmt) {
+        for (const clause of cmt.split(/(?<=[.!?])\s+|[;\n]+/)) {
+            const badge = matchClause(clause, true);
+            if (badge) return badge;
+        }
+    }
+    return '';
+}
+
+/**
+ * 通过官方 arXiv Atom API 批量按 id_list 补齐论文分类与生命周期元数据（用于 HF-only 论文分类回填）。
+ */
+async function fetchArxivMetadataBatchByIds(arxivIds, options = {}) {
+    const cleanIds = [...new Set(
+        (Array.isArray(arxivIds) ? arxivIds : [])
+            .map(id => normalizedId(id))
+            .filter(id => /^\d{4}\.\d{4,5}$/.test(id))
+    )];
+    if (cleanIds.length === 0) return new Map();
+    const requestFn = options.requestFn || httpsRequestWithProxy;
+    const proxyUrl = options.proxyUrl || detectHttpConnectProxyUrl();
+    if (requestFn === httpsRequestWithProxy && !proxyUrl) {
+        const err = new Error('arXiv 元数据补抓必须配置 HTTPS_PROXY/HTTP_PROXY 的 HTTP(S) CONNECT 代理，拒绝直连');
+        err.code = 'PROXY_CONFIG_ERROR';
+        throw err;
+    }
+    const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 30000;
+    const maxBytes = Number.isInteger(options.maxBytes) && options.maxBytes > 0 ? options.maxBytes : ARXIV_CONFIG.fetchMaxResponseBytes;
+    const scheduler = options.requestScheduler || null;
+    const chunkSize = Math.max(1, Math.min(50, Number.isInteger(options.chunkSize) ? options.chunkSize : 40));
+    const byId = new Map();
+    for (let offset = 0; offset < cleanIds.length; offset += chunkSize) {
+        const chunk = cleanIds.slice(offset, offset + chunkSize);
+        const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(chunk.join(','))}&max_results=${chunk.length}`;
+        const runRequest = () => requestFn(url, getBrowserHeaders(), proxyUrl, timeoutMs, maxBytes);
+        const res = scheduler
+            ? await scheduler.run('export.arxiv.org', runRequest, { minimumCooldownMs: 3000 })
+            : await runRequest();
+        if (!res || typeof res !== 'object' || res.status !== 200 || typeof res.data !== 'string') {
+            throw new Error(`arXiv id_list 查询返回异常响应（HTTP ${res?.status ?? 'unknown'}）`);
+        }
+        const parsed = parseArxivXML(res.data, 'arxiv-id-list', null, { stopAtConsecutiveExisting: false });
+        for (const paper of parsed) {
+            const nid = normalizedId(paper);
+            if (nid) byId.set(nid, paper);
+        }
+    }
+    return byId;
+}
+
 /**
  * 解析 arXiv API 返回的 XML
  */
@@ -1729,8 +1843,16 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
 
         const { title, abstract, authors, categories } = entry;
         const published = entry.published ? normalizeToBeijingISOString(entry.published) : '';
+        const updated = (entry.updated && Number.isFinite(Date.parse(entry.updated)))
+            ? normalizeToBeijingISOString(entry.updated)
+            : '';
+        const comment = typeof entry.comment === 'string' ? entry.comment.trim() : '';
+        const journalRef = typeof entry.journalRef === 'string' ? entry.journalRef.trim() : '';
+        const doi = typeof entry.doi === 'string' ? entry.doi.trim() : '';
+        const venueBadge = extractVenueBadgeFromArxivMetadata({ comment, journalRef });
+        const isWithdrawn = detectWithdrawnArxivPaper({ comment, abstract });
 
-        papers.push({
+        const record = {
             arxivId,
             title,
             abstract,
@@ -1739,7 +1861,19 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
             categories,
             fetchedFrom: categoryId,
             fetchedAt: getBeijingISOString()
-        });
+        };
+        if (options.metadataProjection !== 'official-arxiv-atom-metadata-v1') {
+            if (updated) record.updated = updated;
+            if (comment) record.comment = comment;
+            if (journalRef) record.journalRef = journalRef;
+            if (doi) record.doi = doi;
+            if (Array.isArray(entry.authorAffiliations) && entry.authorAffiliations.length > 0) {
+                record.authorAffiliations = entry.authorAffiliations;
+            }
+            if (venueBadge) record.venueBadge = venueBadge;
+            if (isWithdrawn) record.isWithdrawn = true;
+        }
+        papers.push(record);
     }
 
     papers._meta = { entryCount, legalEntryCount, stoppedAtConsecutive };
@@ -2200,6 +2334,9 @@ module.exports = {
     parseRecentPageHTML,
     parseSearchPageHTML,
     parseArxivXML,
+    detectWithdrawnArxivPaper,
+    extractVenueBadgeFromArxivMetadata,
+    fetchArxivMetadataBatchByIds,
     filterPapers,
     filterPapersWithLLM,
     parseFilterDecision,

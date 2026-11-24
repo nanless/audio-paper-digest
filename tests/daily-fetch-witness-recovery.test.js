@@ -169,9 +169,11 @@ test('下一日正常v1从已发布恢复批次继续，完整冷重放其原恢
         return { status: 'complete', papers: sourcePapers, papersCount: 2, papersSha256: stable(sourcePapers),
             health: { ok: true, ...(hf ? {} : { categoryId: w.categoryId }), provider: { boundaryIdentity: b.identitySha256, window: { since: b.since, until: b.until, covered: true },
                 ...(hf ? { cutoffDate: b.continuity.overlapCutoffDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } : {}),
-                continuity: { required: true, status: 'verified', expectedId: w.arxivId, [proofField]: w[field],
-                    matchedIds: [w.arxivId], encounterVerified: true } },
-            continuity: { encounters: [{ arxivId: w.arxivId, [field]: w[field] }] } } };
+                continuity: w.status === 'not-applicable'
+                    ? { required: true, status: 'not-applicable', reason: w.reason, matchedIds: [], encounterVerified: false }
+                    : { required: true, status: 'verified', expectedId: w.arxivId, [proofField]: w[field],
+                        matchedIds: [w.arxivId], encounterVerified: true } },
+            continuity: { encounters: w.status === 'not-applicable' ? [] : [{ arxivId: w.arxivId, [field]: w[field] }] } } };
     }
     const cp = { batchDate: '2026-10-05', batchStartedAt: b.until, ...fingerprints,
         historicalDedupIds: [...historical].sort(), arxiv: Object.fromEntries(b.continuity.witnesses.arxiv.map(w => [w.categoryId, entry(w, false)])),
