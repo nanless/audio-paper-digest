@@ -328,6 +328,7 @@ async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {})
                 }, response);
                 return;
             }
+            let endedCleanly = false;
             response.on('data', chunk => {
                 total += chunk.length;
                 if (maxBytes > 0 && total > maxBytes) {
@@ -341,6 +342,7 @@ async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {})
                 chunks.push(chunk);
             });
             response.on('end', () => {
+                endedCleanly = true;
                 const buffer = Buffer.concat(chunks);
                 finish(resolve, {
                     status: response.statusCode || 0,
@@ -349,6 +351,13 @@ async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {})
                     body: null,
                     arrayBuffer: async () => buffer
                 });
+            });
+            response.on('close', () => {
+                if (!endedCleanly) {
+                    const error = new Error('公网资源响应在完整结束前被远端断开');
+                    error.code = 'ECONNRESET';
+                    finish(reject, error);
+                }
             });
         });
         deadline = setTimeout(() => {
@@ -3265,7 +3274,7 @@ async function inspectGitHubRepositoryDocumentation(repositoryUrl, options = {})
         ? { installation: false, inference: false, fineTuning: false }
         : {
             installation: /(?:^|\n)#{1,4}\s+(?:installation|install|setup|getting\s+started|environment|dependencies|requirements)\b|\b(?:pip|uv\s+pip)\s+install\b|\bconda\s+create\b|\brequirements\.txt\b|\benvironment\.ya?ml\b|\bgit\s+clone\b|\bdocker\s+(?:build|pull|run)\b/i.test(readme),
-            inference: /(?:^|\n)#{1,4}\s+(?:inference|quick\s*start|usage|evaluation|eval|demo|examples?|run(?:ning)?|reproduc(?:tion|ing))\b|\binfer(?:ence)?\.py\b|\beval(?:uate|uation)?\.py\b|\bdemo\.py\b|\bfrom\s+(?:auk|transformers)\b|\bAutoModel\b|\bpython3?\s+(?:[^\n\s]*\/)?(?:infer(?:ence)?|eval(?:uate|uation)?|predict|generate|synthesize|demo|run|test|sample)[^\n\s]*\.py\b/i.test(readme),
+            inference: /(?:^|\n)#{1,4}\s+(?:inference|quick\s*start|usage|evaluation|eval|demo|examples?|run(?:ning)?|reproduc(?:tion|ing))\b|\binfer(?:ence)?\.py\b|\beval(?:uate|uation)?\.py\b|\bdemo\.py\b|\bfrom\s+(?:audiocraft|torchaudio|transformers)\b|\bAutoModel\b|\bpython3?\s+(?:[^\n\s]*\/)?(?:infer(?:ence)?|eval(?:uate|uation)?|predict|generate|synthesize|demo|run|test|sample)[^\n\s]*\.py\b/i.test(readme),
             fineTuning: /(?:^|\n)#{1,4}\s+(?:fine[- ]?tun(?:ing|e)|training|train|pre[- ]?train(?:ing)?|sft|data\s+preparation)\b|\btrain(?:ing)?\.py\b|\bfinetune\.py\b|\b(?:deepspeed|torchrun|accelerate\s+launch)\b/i.test(readme)
         };
     const evidence = {

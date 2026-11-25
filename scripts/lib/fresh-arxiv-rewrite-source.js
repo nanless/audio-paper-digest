@@ -655,7 +655,7 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
         let text; let runtimeSource = rawText;
         const authorParser = require('./reader-author-parser.js');
         const pdfPage1Authors = pdf.bytes.length >= 256
-            ? authorParser.extractPdfPage1AuthorsSync(pdf.bytes)
+            ? authorParser.extractPdfPage1AuthorsSync(pdf.bytes, { contract: authorParser.PDF_PAGE1_AUTHOR_CONTRACT_V3 })
             : null;
         if (rawText?.source === 'html' && !sourceVersion) {
             text = validateTextResponse(rawText, id, capturedAt, extractorVersion);
@@ -664,7 +664,31 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
                 && enrichedArtifacts.figures.some(item => item?.recoveryStatus === 'unrecovered');
             const hasUnrecoveredTables = Array.isArray(enrichedArtifacts?.tables)
                 && enrichedArtifacts.tables.some(item => item?.recoveryStatus === 'unrecovered' || !Array.isArray(item?.matrix) || item.matrix.length === 0);
-            if (enrichedArtifacts && (hasUnrecoveredFigures || hasUnrecoveredTables) && pdf.bytes.length >= 256) {
+            const detectArabicNumGap = (items, re) => {
+                const nums = new Set();
+                for (const item of items || []) {
+                    if (item?.recoveryStatus !== 'complete') continue;
+                    const m = String(item?.label || '').match(re) || String(item?.caption || '').match(re);
+                    if (m && /^\d+$/.test(m[1])) {
+                        const n = Number(m[1]);
+                        if (n >= 1 && n <= 40) nums.add(n);
+                    }
+                }
+                if (nums.size === 0) return [];
+                const maxN = Math.max(...nums);
+                const missing = [];
+                for (let k = 1; k <= maxN; k += 1) {
+                    if (!nums.has(k)) missing.push(String(k));
+                }
+                return missing;
+            };
+            const missingFigureNums = enrichedArtifacts
+                ? detectArabicNumGap(enrichedArtifacts.figures, /(?:^|\b)(?:figure|fig\.?|图)\s*(\d+)(?!\d|[A-Za-z])/i)
+                : [];
+            const missingTableNums = enrichedArtifacts
+                ? detectArabicNumGap(enrichedArtifacts.tables, /(?:^|\b)(?:table|tab\.?|表)\s*(\d+)(?!\d|[A-Za-z])/i)
+                : [];
+            if (enrichedArtifacts && (hasUnrecoveredFigures || hasUnrecoveredTables || missingFigureNums.length > 0 || missingTableNums.length > 0) && pdf.bytes.length >= 256) {
                 const pdfExtracted = require('./reader-pdf-figure-crop.js')
                     .extractPdfStructuredArtifactsSync(pdf.bytes, id);
                 const recoveredFigOrdinals = new Set();
@@ -681,7 +705,7 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
                 const numTokenSrc = '(?:[A-Z]\\.?\\d+(?:\\.\\d+)*|\\d+(?:\\.\\d+)*|[IVX]{1,5})';
                 const bareNumRe = new RegExp(`^\\s*(${numTokenSrc})\\s*[:.]?\\s*$`, 'i');
 
-                if (hasUnrecoveredFigures) {
+                if (hasUnrecoveredFigures || missingFigureNums.length > 0) {
                     const pdfFigByNum = new Map();
                     const numRe = new RegExp(`(?:^|\\b)(?:figure|fig\\.?|图)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
                     const captionStartNumRe = new RegExp(`^\\s*(?:figure|fig\\.?|图)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
@@ -713,9 +737,29 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
                         fig.recoveryStatus = 'complete';
                         recoveredFigOrdinals.add(fig.ordinal);
                     }
+                    // 对 HTML DOM 完全丢失的跳号插图（如 minipage 丢弃 Figure 5），从同源 PDF 回填
+                    if (missingFigureNums.length > 0) {
+                        enrichedArtifacts.figures = Array.isArray(enrichedArtifacts.figures) ? enrichedArtifacts.figures : [];
+                        for (const missNum of missingFigureNums) {
+                            if (usedPdfNums.has(missNum)) continue;
+                            const match = pdfFigByNum.get(missNum);
+                            if (!match || !Array.isArray(match.images) || match.images.length !== 1) continue;
+                            usedPdfNums.add(missNum);
+                            const nextOrd = enrichedArtifacts.figures.reduce((m, item) => Math.max(m, Number(item?.ordinal || 0)), 0) + 1;
+                            enrichedArtifacts.figures.push({
+                                ordinal: nextOrd,
+                                label: String(match.label || `Figure ${missNum}`),
+                                caption: String(match.caption || ''),
+                                images: clone(match.images),
+                                sourceDomSha256: match.sourceDomSha256,
+                                recoveryStatus: 'complete'
+                            });
+                            recoveredFigOrdinals.add(nextOrd);
+                        }
+                    }
                 }
 
-                if (hasUnrecoveredTables) {
+                if (hasUnrecoveredTables || missingTableNums.length > 0) {
                     const pdfTabByNum = new Map();
                     const tabNumRe = new RegExp(`(?:^|\\b)(?:table|tab\\.?|表)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
                     const tabCaptionStartRe = new RegExp(`^\\s*(?:table|tab\\.?|表)\\s*(${numTokenSrc})(?!\\d|[A-Za-z])`, 'i');
@@ -759,6 +803,29 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
                         tab.sourceDomSha256 = match.sourceDomSha256;
                         tab.recoveryStatus = 'complete';
                         recoveredTableOrdinals.add(tab.ordinal);
+                    }
+                    // 对 HTML DOM 完全丢失的跳号表格（如 minipage 丢弃 Table 2），从同源 PDF 回填
+                    if (missingTableNums.length > 0) {
+                        enrichedArtifacts.tables = Array.isArray(enrichedArtifacts.tables) ? enrichedArtifacts.tables : [];
+                        for (const missNum of missingTableNums) {
+                            if (usedPdfTabNums.has(missNum)) continue;
+                            const match = pdfTabByNum.get(missNum);
+                            if (!match) continue;
+                            usedPdfTabNums.add(missNum);
+                            const nextOrd = enrichedArtifacts.tables.reduce((m, item) => Math.max(m, Number(item?.ordinal || 0)), 0) + 1;
+                            enrichedArtifacts.tables.push({
+                                ordinal: nextOrd,
+                                label: String(match.label || `Table ${missNum}`),
+                                caption: String(match.caption || ''),
+                                sourceDomSha256: match.sourceDomSha256,
+                                headerRows: clone(match.headerRows),
+                                bodyRows: clone(match.bodyRows),
+                                cells: clone(match.cells),
+                                matrix: clone(match.matrix),
+                                recoveryStatus: 'complete'
+                            });
+                            recoveredTableOrdinals.add(nextOrd);
+                        }
                     }
                 }
 

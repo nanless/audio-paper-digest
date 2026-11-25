@@ -6215,13 +6215,13 @@ primary_method_tag: #Transformer
         self.assertIn('AAAA', prompts)
         self.assertTrue(all(item.kwargs['structured_output'] for item in call.call_args_list))
 
-    def test_review_chunk_budget_defaults_to_8000_and_is_bounded(self):
+    def test_review_chunk_budget_defaults_to_20000_and_is_bounded(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 8000)
+            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 20000)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CHUNK_CHARS': '100'}):
             self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 4000)
         with mock.patch.dict(os.environ, {'PD_BLOG_REVIEW_CHUNK_CHARS': '99999'}):
-            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 16000)
+            self.assertEqual(publish_to_blog.get_blog_review_chunk_chars(), 24000)
 
     def test_review_split_keeps_table_header_with_separator(self):
         content = 'A' * 20 + '\n| 方法 | 得分 |\n| --- | --- |\n| A | 1 |\n'

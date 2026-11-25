@@ -244,15 +244,18 @@ describe('Wave 11 Track 11C: tiered reasoning.effort, prompt_cache_key & stage t
         try {
             delete process.env.PD_TIERED_REASONING_EFFORT;
             assert.equal(STAGE_REASONING_EFFORT_TIERS.dailyFilter, 'low');
+            assert.equal(STAGE_REASONING_EFFORT_TIERS.openSourceScan, 'minimal');
             assert.equal(STAGE_REASONING_EFFORT_TIERS['publish.text'], 'low');
             assert.equal(STAGE_REASONING_EFFORT_TIERS.tableRepair, 'medium');
+            assert.equal(STAGE_REASONING_EFFORT_TIERS.scoringAudit, 'high');
             assert.equal(STAGE_REASONING_EFFORT_TIERS.primaryAnalysis, undefined);
             assert.equal(STAGE_REASONING_EFFORT_TIERS.apiReaderArticle, undefined);
 
+            assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'openSourceScan'), 'minimal');
             assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'dailyFilter'), 'low');
             assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'tableRepair'), 'medium');
+            assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'scoringAudit'), 'high');
             assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'primaryAnalysis'), 'xhigh');
-            assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'scoringAudit'), 'xhigh');
             assert.equal(resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'apiReaderArticle'), 'xhigh');
 
             // Never upgrades above configured ceiling
@@ -296,7 +299,7 @@ describe('Wave 11 Track 11C: tiered reasoning.effort, prompt_cache_key & stage t
                 usageContext: { stage: 'apiReaderRepair', paperId: '2611.00001' },
                 reasoningStage: 'apiReaderConceptTerms'
             });
-            assert.equal(conceptBody.reasoning?.effort, 'low');
+            assert.equal(conceptBody.reasoning?.effort, 'minimal');
 
             // P1-4: Node parseSseResponse handles response.cancelled and synthesizes status on envelope-less response.failed
             const cancelledSse = 'data: {"type":"response.cancelled","response":{"id":"r1","status":"cancelled"}}\n\n';
@@ -371,7 +374,7 @@ describe('Wave 11 Track 11C: tiered reasoning.effort, prompt_cache_key & stage t
         `], { cwd: ROOT, encoding: 'utf8' });
         const jsonLine = out.trim().split('\n').pop();
         assert.deepEqual(JSON.parse(jsonLine), {
-            effort: 'low',
+            effort: 'minimal',
             cacheKey: 'pd:apiReaderConceptTerms:custom',
             temp: 0.1
         });

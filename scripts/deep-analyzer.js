@@ -1022,8 +1022,8 @@ function readerFigureSourcePayloadValid(paper, structuredSha, sourceSha) {
         const matches = inventory.filter(source => source.url === figure.url);
         return matches.length === 1 && ['ordinal', 'label', 'caption', 'sourceDomSha256'].every(key => matches[0][key] === figure[key])
             && (!matches[0].inlineSvgSourceSha256 || (recoverySha256(figure.assetSha256)
-                && ['inlineSvgSourceSha256', 'inlineSvgRenderContract', 'sourceLocationUrl']
-                    .every(key => matches[0][key] === figure[key])))
+                && ['inlineSvgSourceSha256', 'sourceLocationUrl'].every(key => matches[0][key] === figure[key])
+                && require('./lib/reader-inline-svg').ACCEPTED_CONTRACTS.has(figure.inlineSvgRenderContract)))
             && (!matches[0].pdfCropSourceSha256 || (recoverySha256(figure.assetSha256)
                 && ['pdfCropSourceSha256', 'pdfCropContract', 'sourceLocationUrl']
                     .every(key => matches[0][key] === figure[key])));
@@ -2161,6 +2161,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         || Object.prototype.hasOwnProperty.call(value, 'formulaBindings');
     const hasImplementationSpecs = Object.prototype.hasOwnProperty.call(value, 'implementationSpecs');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(options.readerCapabilityPolicy);
+    const requireImplementationSpecs = isStructuredV5 && options.requireImplementationSpecs === true && !readerCapabilityPolicy;
     assertExactObjectKeys(
         value,
         [
@@ -2168,7 +2169,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             'conceptBridges', 'figurePlacements', 'sections',
             ...(hasSourceBindings || options.requireSourceBindings === true || modernMetadata
                 ? ['tableBindings', 'formulaBindings'] : []),
-            ...(isStructuredV5 && hasImplementationSpecs ? ['implementationSpecs'] : [])
+            ...(isStructuredV5 && (hasImplementationSpecs || requireImplementationSpecs) ? ['implementationSpecs'] : [])
         ],
         '读者文章顶层'
     );
@@ -4355,8 +4356,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 && image.modelPayloadWidth <= Math.min(API_READER_MODEL_IMAGE_MAX_DIMENSION, image.sourceWidth)
                 && image.modelPayloadHeight <= Math.min(API_READER_MODEL_IMAGE_MAX_DIMENSION, image.sourceHeight)
                 && image.modelPayloadWidth * image.modelPayloadHeight <= API_READER_MODEL_IMAGE_MAX_PIXELS;
-            const validInline = inlineSource && ['url', 'sourceLocationUrl', 'inlineSvgSourceSha256', 'inlineSvgRenderContract']
-                .every(key => image[key] === inlineSource[key]) && validPayloadShape;
+            const validInline = inlineSource
+                && ['url', 'sourceLocationUrl', 'inlineSvgSourceSha256'].every(key => image[key] === inlineSource[key])
+                && require('./lib/reader-inline-svg').ACCEPTED_CONTRACTS.has(image.inlineSvgRenderContract)
+                && validPayloadShape;
             const validPdfCrop = pdfCropSource && ['url', 'sourceLocationUrl', 'pdfCropSourceSha256', 'pdfCropContract']
                 .every(key => image[key] === pdfCropSource[key]) && validPayloadShape;
             if (image?.kind !== 'figure' || !Number.isSafeInteger(image.ordinal) || image.ordinal <= 0 || figures.length !== 1
@@ -5955,6 +5958,28 @@ async function prepareConferenceReaderSavedRequestInput(paper, sourceDetails,
 }
 
 function buildReaderRequestMessages(prompt, visibilityNotice, imageBlocks) {
+    // 将静态提示与稳定原文证据 + imageBlocks 置于前面以提升 KV 前缀缓存命中，
+    // 把每轮变化的“代码校验反馈 / 上一版完整 JSON 草稿”挪到 imageBlocks 之后。
+    const text = String(prompt || '');
+    const splitMarkers = ['\n代码校验反馈：', '\n上一版完整 JSON 草稿'];
+    let splitIdx = -1;
+    for (const marker of splitMarkers) {
+        const idx = text.indexOf(marker);
+        if (idx > 0 && (splitIdx < 0 || idx < splitIdx)) splitIdx = idx;
+    }
+    if (splitIdx > 0 && Array.isArray(imageBlocks) && imageBlocks.length > 0) {
+        const stablePrefix = text.slice(0, splitIdx);
+        const volatileSuffix = text.slice(splitIdx);
+        return [{
+            role: 'user',
+            content: [
+                { type: 'text', text: stablePrefix },
+                { type: 'text', text: visibilityNotice },
+                ...imageBlocks,
+                { type: 'text', text: volatileSuffix }
+            ]
+        }];
+    }
     return [{ role: 'user', content: [{ type: 'text', text: prompt },
         { type: 'text', text: visibilityNotice }, ...imageBlocks] }];
 }
@@ -6388,7 +6413,9 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     paper.apiReaderResources = readerResources;
     paper.apiReaderArticleSha256 = articleSha256;
     paper.apiReaderPlanSha256 = planSha256;
-    recordCrossStageConsistencyWarnings(paper, analysis, readerResult.article, readerResult.plan);
+    recordCrossStageConsistencyWarnings(paper, analysis, readerResult.article, readerResult.plan, {
+        manifestStage: manifest.stages?.apiReaderArticle
+    });
     manifest.contracts = {
         ...(manifest.contracts || {}),
         apiReaderArticle: readerResult.plan.contract,
@@ -9779,9 +9806,36 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
         lastError.attempts = maxRetries;
         if (['network', 'request', 'api_error', 'response_parse', 'response_terminal',
             'stream_terminal', 'http_transient', 'state_contention'].includes(lastError.category)) {
-            // 当前逻辑请求的传输重试已耗尽：服务级故障不能对每篇论文重新开始。
-            lastError.scope = 'run';
-            lastError.retryable = false;
+            const disconnectCode = String(lastError.code || '').toUpperCase();
+            const isSinglePaperTransientDisconnect = (
+                lastError.category === 'network' || lastError.category === 'stream_terminal'
+            ) && (
+                disconnectCode === 'ECONNRESET'
+                || disconnectCode === 'ETIMEDOUT'
+                || disconnectCode === 'REQUEST_STREAM_IDLE_TIMEOUT'
+                || disconnectCode === 'REQUEST_SOCKET_TIMEOUT'
+                || /socket hang up|ECONNRESET/i.test(String(lastError.message || ''))
+            );
+            if (isSinglePaperTransientDisconnect) {
+                const nowMs = Date.now();
+                const paperTag = String(options?.usageContext?.paperId || options?.affinityKey || `anon:${nowMs}`);
+                while (recentTransientDisconnects.length > 0 && nowMs - recentTransientDisconnects[0].at > 120000) {
+                    recentTransientDisconnects.shift();
+                }
+                recentTransientDisconnects.push({ at: nowMs, paperTag });
+                const distinctPapers = new Set(recentTransientDisconnects.map(item => item.paperTag)).size;
+                if (distinctPapers >= 2) {
+                    lastError.scope = 'run';
+                    lastError.retryable = false;
+                } else {
+                    lastError.scope = 'paper';
+                    lastError.retryable = true;
+                }
+            } else {
+                // 当前逻辑请求的传输重试已耗尽：服务级故障不能对每篇论文重新开始。
+                lastError.scope = 'run';
+                lastError.retryable = false;
+            }
         }
         throw lastError;
     } finally {
@@ -9806,6 +9860,7 @@ function createOverallTimeoutError(
 
 
 // 近两分钟内的传输失败时间戳，用于区分单篇抖动与服务整体不可用。
+const recentTransientDisconnects = [];
 
 function getActiveRemainingTimeoutMs(totalMs, elapsedMs) {
     const remaining = Math.floor(totalMs - elapsedMs);
@@ -10347,28 +10402,35 @@ async function fetchArxivPdfUncached(arxivId, options = {}) {
     const candidates = [...new Set([normalized, preferred, ...getArxivHtmlIds(normalized)].filter(Boolean))];
     const fetchImpl = options.fetchImpl || fetch;
     const pause = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
+    const useGate = !options.fetchImpl;
     let currentPdfStatus = null;
     let retryAvailable = true;
     for (const candidate of candidates) {
         const requestedUrl = `https://arxiv.org/pdf/${candidate}.pdf`;
         const dispatcher = options.dispatcher || getArxivFetchDispatcher();
+        let httpRetriesLeft = 4;
         while (true) {
             let phase = 'request';
             let response, bytes;
             try {
-                response = await fetchImpl(requestedUrl, {
+                const doFetch = () => fetchImpl(requestedUrl, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                     signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
                     dispatcher
                 });
+                response = useGate ? await sharedArxivOriginGate.run(doFetch, pause) : await doFetch();
                 phase = 'response';
                 if (response.ok) {
                     const contentType = String(response.headers.get('content-type') || '').toLowerCase();
                     if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
+                        try { await response.body?.cancel(); } catch (_) {}
                         throw new Error(`arXiv PDF ${candidate} returned unexpected Content-Type ${contentType}`);
                     }
                     phase = 'body';
                     bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
+                } else {
+                    try { await response.body?.cancel(); } catch (_) {}
                 }
             } catch (error) {
                 if (phase === 'response' || error?.code === 'RESPONSE_TOO_LARGE') throw error;
@@ -10382,6 +10444,16 @@ async function fetchArxivPdfUncached(arxivId, options = {}) {
             if (!response.ok) {
                 if (candidate === normalized) currentPdfStatus = response.status;
                 if (response.status === 404) break;
+                if ((response.status === 429 || response.status === 403 || response.status >= 500) && httpRetriesLeft > 0) {
+                    httpRetriesLeft -= 1;
+                    const fallbackWait = Math.min(60000, (5 - httpRetriesLeft) * 6000);
+                    const waitMs = useGate
+                        ? sharedArxivOriginGate.recordRateLimitResponse(response.headers, fallbackWait)
+                        : fallbackWait;
+                    console.log(`    [deep] arXiv PDF ${candidate} 返回 HTTP ${response.status}，冷却 ${(waitMs / 1000).toFixed(1)}s 后重试`);
+                    await pause(waitMs);
+                    continue;
+                }
                 throw new Error(`arXiv PDF ${candidate} download failed: HTTP ${response.status}`);
             }
             if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
@@ -10445,31 +10517,40 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
     const dispatcher = Object.prototype.hasOwnProperty.call(options, 'dispatcher')
         ? options.dispatcher
         : getArxivFetchDispatcher();
+    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
+    const useGate = !options.fetchImpl;
     let lastFailure = '';
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         let shouldRetry = false;
+        let alreadyWaitedRateLimit = false;
         const statuses = [];
         for (const htmlId of getArxivHtmlIds(arxivId)) {
             const url = `https://arxiv.org/html/${htmlId}`;
             try {
-                const response = await fetchImpl(url, {
+                const doFetch = () => fetchImpl(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                     signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
                     dispatcher
                 });
+                const response = useGate ? await sharedArxivOriginGate.run(doFetch) : await doFetch();
 
-                if (response.status === 429) {
+                if (response.status === 429 || response.status === 403) {
+                    try { await response.body?.cancel(); } catch (_) {}
                     shouldRetry = true;
-                    statuses.push(`${htmlId}:429`);
+                    alreadyWaitedRateLimit = true;
+                    statuses.push(`${htmlId}:${response.status}`);
                     const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
                     const jitter = Math.floor(Math.random() * 5000);
-                    const waitTime = baseWait + jitter;
-                    console.log(`    [deep] fetchArxivImageUrls ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
+                    const waitTime = useGate
+                        ? sharedArxivOriginGate.recordRateLimitResponse(response.headers, baseWait + jitter)
+                        : (baseWait + jitter);
+                    console.log(`    [deep] fetchArxivImageUrls ${arxivId} 被限流 (${response.status})，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                     break;
                 }
 
                 if (!response.ok) {
+                    try { await response.body?.cancel(); } catch (_) {}
                     statuses.push(`${htmlId}:${response.status}`);
                     if (!isStableArxivHtmlMiss(response.status)) shouldRetry = true;
                     continue;
@@ -10490,7 +10571,7 @@ async function fetchArxivImageUrls(arxivId, options = {}) {
             console.log(`    [deep] fetchArxivImageUrls ${arxivId} 永久不可用 | attempts=${attempt} | ${statuses.join(', ')}`);
             return [];
         }
-        if (attempt < maxRetries) {
+        if (attempt < maxRetries && !alreadyWaitedRateLimit) {
             const baseDelay = attempt * 3000;
             const jitter = Math.floor(Math.random() * 3000);
             const delay = baseDelay + jitter;
@@ -13687,7 +13768,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             paper.apiReaderArticleSha256 = crypto.createHash('sha256')
                 .update(readerResult.article).digest('hex');
             paper.apiReaderPlanSha256 = stableFingerprint(readerResult.plan);
-            recordCrossStageConsistencyWarnings(paper, analysis, readerResult.article, readerResult.plan);
+            recordCrossStageConsistencyWarnings(paper, analysis, readerResult.article, readerResult.plan, {
+                manifestStage: analysisManifest.stages?.apiReaderArticle
+            });
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
                 apiReaderArticle: readerResult.plan.contract,

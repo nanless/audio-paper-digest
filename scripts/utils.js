@@ -722,20 +722,23 @@ function normalizeReasoningEffort(value, model) {
     return allowed.includes(effort) ? effort : '';
 }
 
-// 按阶段分级推理档位（用户于 2026-11-24 明确授权）：
-// 核心分析、盲审评分、Reader 长文与局部事实修复维持完整配置档位（本机 xhigh）；
-// 轻量/机械辅助阶段（筛选、开源扫描、标签修正、发布文本审查等）在不超过配置上限的
-// 前提下降至 low/medium，降低 95%+ 隐式思考 token 浪费。PD_TIERED_REASONING_EFFORT=0 可关闭。
+// 按阶段分级推理档位（用户于 2026-11-24 / 2026-11-26 明确授权）：
+// primaryAnalysis 与 apiReaderArticle 维持配置上限（本机 xhigh）；
+// scoringAudit、apiReaderRepair、revision 设为 high；
+// 真正机械阶段（openSourceScan、tagSelection、apiReaderConceptTerms、repair_review_payload）降至 minimal；
+// dailyFilter、publish.text 维持 low，publish.figure 及结构/摘要/表格/方法局部修补维持 medium。
+// PD_TIERED_REASONING_EFFORT=0 可关闭。
 const STAGE_REASONING_EFFORT_TIERS = Object.freeze({
-    // low tier: 二分类、结构化抽取与轻量文本审查
+    // minimal tier: 纯机械抽取、标签挑选、术语桥补全与 JSON 载荷修补
+    openSourceScan: 'minimal',
+    tagSelection: 'minimal',
+    apiReaderConceptTerms: 'minimal',
+    repair_review_payload: 'minimal',
+    // low tier: 日更筛选与发布文本审查
     dailyFilter: 'low',
-    openSourceScan: 'low',
-    tagSelection: 'low',
-    apiReaderConceptTerms: 'low',
     'publish.text': 'low',
     'publish.review_text': 'low',
     'publish.index_text': 'low',
-    repair_review_payload: 'low',
     // medium tier: 局部结构/摘要/图表修复与多模态图审
     'publish.figure': 'medium',
     'publish.review_figure': 'medium',
@@ -743,7 +746,11 @@ const STAGE_REASONING_EFFORT_TIERS = Object.freeze({
     tableRepair: 'medium',
     structureRepair: 'medium',
     methodRepair: 'medium',
-    imageSupplement: 'medium'
+    imageSupplement: 'medium',
+    // high tier: 盲审评分、Reader 局部修复与全文审校修订
+    scoringAudit: 'high',
+    apiReaderRepair: 'high',
+    revision: 'high'
 });
 
 function isEnvFlagDisabled(rawValue) {
@@ -761,7 +768,9 @@ function resolveStageReasoningEffort(configuredValue, model, stage = '') {
     const allowed = reasoningEffortsFor(model);
     const mappedTier = allowed.includes(requestedTier)
         ? requestedTier
-        : (requestedTier === 'medium' && allowed.includes('high') ? 'high' : base);
+        : (requestedTier === 'minimal' && allowed.includes('low')
+            ? 'low'
+            : (requestedTier === 'medium' && allowed.includes('high') ? 'high' : base));
     const baseIdx = allowed.indexOf(base);
     const tierIdx = allowed.indexOf(mappedTier);
     if (baseIdx < 0 || tierIdx < 0) return base;
@@ -1091,11 +1100,27 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
     return new Promise((resolve, reject) => {
         let settled = false;
         let deadlineTimer = null;
+        let streamIdleTimer = null;
+        const isStreamedRequest = Boolean(bodyObj && bodyObj.stream === true);
+        const streamIdleMs = isStreamedRequest ? Math.min(timeoutMs, 180000) : 0;
         const finish = (handler, value) => {
             if (settled) return;
             settled = true;
             if (deadlineTimer) clearTimeout(deadlineTimer);
+            if (streamIdleTimer) clearTimeout(streamIdleTimer);
             handler(value);
+        };
+        const resetStreamIdleTimer = (req, res) => {
+            if (!streamIdleMs || settled) return;
+            if (streamIdleTimer) clearTimeout(streamIdleTimer);
+            streamIdleTimer = setTimeout(() => {
+                const error = new Error(`SSE 流在 ${streamIdleMs}ms 内未收到任何分片，已空闲超时`);
+                error.code = 'REQUEST_STREAM_IDLE_TIMEOUT';
+                res?.destroy?.(error);
+                req.destroy(error);
+                finish(reject, error);
+            }, streamIdleMs);
+            streamIdleTimer.unref?.();
         };
         const req = transport.request({
             hostname: url.hostname,
@@ -1108,7 +1133,10 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
         }, (res) => {
             const chunks = [];
             let responseBytes = 0;
+            let endedCleanly = false;
+            resetStreamIdleTimer(req, res);
             res.on('data', chunk => {
+                resetStreamIdleTimer(req, res);
                 responseBytes += chunk.length;
                 if (responseBytes > maxResponseBytes) {
                     const error = new Error(`响应大小超过 ${maxResponseBytes} 字节的上限`);
@@ -1121,6 +1149,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                 chunks.push(chunk);
             });
             res.on('end', () => {
+                endedCleanly = true;
                 if (settled) return;
                 const raw = Buffer.concat(chunks).toString('utf8');
                 const responseFailure = error => {
@@ -1162,6 +1191,13 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                         error.code = 'LLM_RESPONSE_PARSE_ERROR';
                         finish(reject, responseFailure(error));
                     }
+                }
+            });
+            res.on('close', () => {
+                if (!endedCleanly && !settled) {
+                    const error = new Error('连接在响应完整结束前提前关闭');
+                    error.code = 'ECONNRESET';
+                    finish(reject, error);
                 }
             });
             res.on('error', error => finish(reject, error));
@@ -2246,7 +2282,10 @@ function createProxyDispatcher(proxyUrl) {
         throw new Error('Node fetch 代理地址缺少主机名或端口非法');
     }
     const { ProxyAgent } = require('undici');
-    const dispatcher = new ProxyAgent(proxyUrl);
+    const dispatcher = new ProxyAgent({
+        uri: proxyUrl,
+        connectTimeout: 60000
+    });
     proxyDispatcherCache.set(proxyUrl, dispatcher);
     return dispatcher;
 }

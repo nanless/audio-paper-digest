@@ -7258,14 +7258,14 @@ def normalize_reasoning_effort(value, model=None):
 
 
 STAGE_REASONING_EFFORT_TIERS = {
+    'openSourceScan': 'minimal',
+    'tagSelection': 'minimal',
+    'apiReaderConceptTerms': 'minimal',
+    'repair_review_payload': 'minimal',
     'dailyFilter': 'low',
-    'openSourceScan': 'low',
-    'tagSelection': 'low',
-    'apiReaderConceptTerms': 'low',
     'publish.text': 'low',
     'publish.review_text': 'low',
     'publish.index_text': 'low',
-    'repair_review_payload': 'low',
     'publish.figure': 'medium',
     'publish.review_figure': 'medium',
     'coreSummaryRepair': 'medium',
@@ -7273,6 +7273,9 @@ STAGE_REASONING_EFFORT_TIERS = {
     'structureRepair': 'medium',
     'methodRepair': 'medium',
     'imageSupplement': 'medium',
+    'scoringAudit': 'high',
+    'apiReaderRepair': 'high',
+    'revision': 'high',
 }
 
 
@@ -7287,14 +7290,21 @@ def resolve_stage_reasoning_effort(value, model=None, *, stage=None):
     if not requested_tier:
         return base
     allowed = REASONING_EFFORTS if model is None else reasoning_efforts_for(model)
-    mapped_tier = (
-        requested_tier
-        if requested_tier in allowed
-        else ('high' if requested_tier == 'medium' and 'high' in allowed else base)
-    )
+    if requested_tier in allowed:
+        mapped_tier = requested_tier
+    elif requested_tier == 'minimal' and 'low' in allowed:
+        mapped_tier = 'low'
+    elif requested_tier == 'medium' and 'high' in allowed:
+        mapped_tier = 'high'
+    else:
+        mapped_tier = base
     if base not in allowed or mapped_tier not in allowed:
         return base
     return allowed[min(allowed.index(base), allowed.index(mapped_tier))]
+
+
+class PublishSseTerminalEventMissingError(RuntimeError):
+    code = 'SSE_TERMINAL_EVENT_MISSING'
 
 
 def parse_publish_sse_response(raw_text):
@@ -7339,7 +7349,7 @@ def parse_publish_sse_response(raw_text):
             completed = {**completed, 'output_text': ''.join(deltas)}
         return completed
     if deltas:
-        raise RuntimeError('OpenAI Responses SSE 缺少 response.completed 终态事件')
+        raise PublishSseTerminalEventMissingError('OpenAI Responses SSE 缺少 response.completed 终态事件')
     return None
 
 
@@ -7434,7 +7444,7 @@ def _read_publish_http_error(exc):
         raw_bytes = cached
     else:
         try:
-            raw_bytes = exc.read(4096)
+            raw_bytes = exc.read(65536)
         except (OSError, AttributeError):
             raw_bytes = b''
         exc._paper_digest_error_raw = raw_bytes
@@ -7493,6 +7503,9 @@ def _open_publish_json_with_account_pool(
                 resolved_affinity = scoped_paper_id.strip()
         except Exception:
             pass
+    if resolved_affinity:
+        resolved_affinity = re.sub(r'^arxiv:', '', resolved_affinity, flags=re.IGNORECASE)
+        resolved_affinity = re.sub(r'^(\d{4}\.\d{4,5})v\d+$', r'\1', resolved_affinity, flags=re.IGNORECASE)
     for _account_attempt in range(max_account_attempts):
         elapsed = time.monotonic() - started
         remaining = max(0.001, float(timeout) - elapsed)
@@ -7538,7 +7551,24 @@ def _open_publish_json_with_account_pool(
                     raise RuntimeError(f'HTTP {response.status}')
                 is_streamed_responses = (api_type == 'openai_responses' and payload.get('stream') is True)
                 response_limit = 16 * 1024 * 1024 if is_streamed_responses else 2 * 1024 * 1024
-                raw_response = response.read(response_limit + 1)
+                read_deadline = started + float(timeout)
+                if hasattr(response, 'read1') or isinstance(response, __import__('io').IOBase):
+                    chunks = []
+                    total_read = 0
+                    while total_read <= response_limit:
+                        if time.monotonic() > read_deadline:
+                            raise TimeoutError(f'LLM 响应读取超过 {timeout}s 总墙钟上限')
+                        want = min(65536, response_limit + 1 - total_read)
+                        chunk = response.read(want)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        total_read += len(chunk)
+                    raw_response = b''.join(chunks)
+                else:
+                    raw_response = response.read(response_limit + 1)
+                    if time.monotonic() > read_deadline:
+                        raise TimeoutError(f'LLM 响应读取超过 {timeout}s 总墙钟上限')
                 usage_raw = raw_response
                 usage_raw_truncated = len(raw_response) > response_limit
                 if len(raw_response) > response_limit:
@@ -7556,7 +7586,7 @@ def _open_publish_json_with_account_pool(
         except urllib.error.HTTPError as exc:
             raw_text, parsed = _read_publish_http_error(exc)
             usage_raw = getattr(exc, '_paper_digest_error_raw', None) or raw_text
-            usage_raw_truncated = isinstance(usage_raw, bytes) and len(usage_raw) >= 4096
+            usage_raw_truncated = isinstance(usage_raw, bytes) and len(usage_raw) >= 65536
             usage_status, usage_body = exc.code, parsed
             quota = classify_opencode_go_quota_response(
                 exc.code, exc.headers, parsed, raw=raw_text, endpoint=endpoint,
@@ -7925,6 +7955,9 @@ def call_publish_llm_api(
             )
             if isinstance(exc, _PublishLLMRedirectError):
                 # An explicit redirect denial is terminal, not a transport retry.
+                break
+            if exc.code in (400, 422):
+                # Deterministic client payload/schema errors will not succeed on identical retries.
                 break
         except (
             LlmUsagePersistenceError,

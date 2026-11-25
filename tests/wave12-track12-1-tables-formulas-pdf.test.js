@@ -95,7 +95,7 @@ describe('Wave 12 Track 12.1: arxiv-html-dom-v6 multi-row header compaction & ce
         </article>`;
 
         const art = deep.parseArxivStructuredArtifactsFromHtml(html, '2611.25569v1', '2611.25569v1');
-        assert.equal(art.parserVersion, 'arxiv-html-dom-v6');
+        assert.equal(art.parserVersion, 'arxiv-html-dom-v7');
         const tbl = art.tables[0];
         assert.equal(tbl.recoveryStatus, 'complete');
         assert.deepEqual(tbl.headerRows, [0]);

@@ -32,7 +32,9 @@ from runtime_guard import require_external_runtime
 
 CONTRACT_V1 = "pdf-page1-author-evidence-v1"
 CONTRACT_V2 = "pdf-page1-author-evidence-v2"
+CONTRACT_V3 = "pdf-page1-author-evidence-v3"
 CONTRACT = CONTRACT_V2
+_V3_GUARDS_ENABLED = False
 MAX_PDF_BYTES = 512 * 1024 * 1024
 
 ICON_FONT_RE = re.compile(
@@ -1269,6 +1271,10 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
         if ABSTRACT_START_RE.match(row_text) or any(ABSTRACT_START_RE.match(r["text"]) for r in row_sorted):
             abstract_y = row_y
             break
+        # v3: 首页 Teaser Figure 1 图注位于作者/机构区之后、摘要之前，截断以防图内文字与编号框混入机构
+        if _V3_GUARDS_ENABLED and row_y >= page_h * 0.16 and re.match(r"^(?:Figure|Fig\.?)\s*1\s*[:.]", row_text, re.IGNORECASE):
+            abstract_y = row_y
+            break
     if abstract_y is None:
         abstract_y = page_h * 0.50
         # If explicit superscript affiliation lines continue past 0.50*page_h, extend up to 0.72*page_h
@@ -1645,9 +1651,16 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
     def _is_role_body(body: str) -> bool:
         return bool(FOOTNOTE_ROLE_RE.match(body) or UNANCHORED_ROLE_SENTENCE_RE.search(body) or _is_credit_contribution(body))
 
+    STREET_ADDRESS_RE = re.compile(
+        r"^\s*\d{1,5}\s+[A-Za-z0-9.\s'-]{1,40}\b(?:Blvd\.?|Ave\.?|Avenue|St\.?|Street|Rd\.?|Road|Way|Dr\.?|Drive|Pkwy\.?|Parkway|Ln\.?|Lane|Ct\.?|Court|Pl\.?|Place|Cir\.?|Circle|Suite|Ste\.?)\b",
+        re.IGNORECASE,
+    )
+
     # Pass 1: explicit [[SUP:...]] markers
     confirmed_aff_cont_lines: set[int] = set()
     for idx, ln in enumerate(lines):
+        if _V3_GUARDS_ENABLED and STREET_ADDRESS_RE.match(ln["text"].strip()):
+            continue
         annotated = _annotate_line_with_markers(ln)
         stripped_ann = annotated.lstrip()
         starts_with_marker = bool(
@@ -4278,11 +4291,26 @@ def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
     return None
 
 
+def extract_pdf_page1_authors_v3(pdf_bytes: bytes) -> dict | None:
+    global _V3_GUARDS_ENABLED
+    prev = _V3_GUARDS_ENABLED
+    _V3_GUARDS_ENABLED = True
+    try:
+        result = extract_pdf_page1_authors_v2(pdf_bytes)
+    finally:
+        _V3_GUARDS_ENABLED = prev
+    if isinstance(result, dict):
+        return {**result, "contract": CONTRACT_V3}
+    return result
+
+
 def extract_pdf_page1_authors(pdf_bytes: bytes, contract: str = CONTRACT_V2) -> dict | None:
     if contract in (CONTRACT_V1, "v1"):
         return extract_pdf_page1_authors_v1(pdf_bytes)
     if contract in (CONTRACT_V2, "v2", None, ""):
         return extract_pdf_page1_authors_v2(pdf_bytes)
+    if contract in (CONTRACT_V3, "v3"):
+        return extract_pdf_page1_authors_v3(pdf_bytes)
     raise ValueError(f"Unsupported PDF page-1 author contract: {contract}")
 
 
@@ -4312,7 +4340,7 @@ def main() -> None:
     require_external_runtime("pdf_author_extract.py")
     parser = argparse.ArgumentParser(description="从 PDF 首页确定性提取作者与机构绑定")
     parser.add_argument("--pdf", type=Path, help="已封存 PDF 的绝对路径（不传则从 stdin 读取原始 PDF 字节）")
-    parser.add_argument("--contract", default=CONTRACT_V2, choices=[CONTRACT_V1, CONTRACT_V2, "v1", "v2"], help="提取合同版本")
+    parser.add_argument("--contract", default=CONTRACT_V2, choices=[CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, "v1", "v2", "v3"], help="提取合同版本")
     args = parser.parse_args()
     if args.pdf is not None:
         pdf_bytes = read_pdf_file(args.pdf)

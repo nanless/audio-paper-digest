@@ -386,6 +386,10 @@ function buildFenceAwareSectionBounds(lines, sections = null) {
 
 function extractAdjacentParagraphsByLines(lines, startLine, endLine, secStartLine, secEndLine) {
     const adjacent = [];
+    // 包含所属 ### 小节标题与紧邻表前的 #### 四级标题，拦截标题内“十二项基准最优”等与表内数据矛盾的极值断言
+    if (secStartLine >= 0 && secStartLine < lines.length && /^#{3,4}\s+\S/.test(lines[secStartLine].trim())) {
+        adjacent.push(lines[secStartLine].trim().replace(/^#{3,4}\s+/, ''));
+    }
     let i = startLine - 1;
     while (i >= secStartLine && !lines[i].trim()) i -= 1;
     if (i >= secStartLine && !lines[i].trim().startsWith('|') && !lines[i].trim().startsWith('#')) {
@@ -395,6 +399,10 @@ function extractAdjacentParagraphsByLines(lines, startLine, endLine, secStartLin
             i -= 1;
         }
         if (paraLines.length > 0) adjacent.push(paraLines.join(' '));
+        while (i >= secStartLine && !lines[i].trim()) i -= 1;
+    }
+    if (i > secStartLine && /^####\s+\S/.test(lines[i].trim())) {
+        adjacent.push(lines[i].trim().replace(/^####\s+/, ''));
     }
     let j = endLine + 1;
     while (j <= secEndLine && !lines[j].trim()) j += 1;

@@ -4,7 +4,9 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const CONTRACT = 'reader-official-inline-svg-pixels-v1';
+const LEGACY_CONTRACT = 'reader-official-inline-svg-pixels-v1';
+const CONTRACT = 'reader-official-inline-svg-pixels-v2';
+const ACCEPTED_CONTRACTS = Object.freeze(new Set([LEGACY_CONTRACT, CONTRACT]));
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const unsupportedDependencyFailures = new WeakSet();
@@ -12,9 +14,12 @@ const unsupportedDependencyCauses = new WeakMap();
 function isUnsupportedDependencyFailure(error) { return unsupportedDependencyFailures.has(error); }
 function unsupportedDependency(cause) {
     const reason = unsupportedDependencyCauses.get(cause);
-    const error = new Error(reason === 'external_latexml_layout_css'
-        ? '内联论文图不可用：静态文字依赖未封存的 LaTeXML 布局 CSS，无法取得完整像素'
-        : '内联论文图不可用：封存来源含未封存的 CSS 图标依赖，无法取得完整像素', { cause });
+    const messages = {
+        external_latexml_layout_css: '内联论文图不可用：静态文字依赖未封存的 LaTeXML 布局 CSS，无法取得完整像素',
+        raw_latex_leak_in_svg: '内联论文图不可用：SVG 渲染暴露原始 LaTeX 指令，自动回退 PDF 裁切',
+        foreign_object_text_overlap: '内联论文图不可用：SVG 内嵌文字块存在严重重叠，自动回退 PDF 裁切'
+    };
+    const error = new Error(messages[reason] || '内联论文图不可用：封存来源含未封存的 CSS 图标依赖，无法取得完整像素', { cause });
     error.code = 'READER_INLINE_SVG_UNSUPPORTED_DEPENDENCY';
     error.unsupportedDependencyReason = reason;
     error.retryable = false;
@@ -74,6 +79,7 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
         const args = [path.join(projectRoot, 'scripts/python-runtime.sh'),
             path.join(projectRoot, 'scripts/reader_inline_svg.py')];
         if (deps.hidpi !== false) args.push('--hidpi');
+        if (deps.deterministicV2 !== false) args.push('--v2');
         const child = spawnFn('bash', args,
         { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup });
         const chunks = []; let size = 0; let stderr = ''; let failure = null; let terminated = false; let exited = false;
@@ -108,7 +114,12 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
         child.stdin.on('error', error => { failure ||= error; });
         child.once('close', code => {
             clearTimeout(timeout);
-            const reason = ['external_css_icon_glyph', 'external_latexml_layout_css'].find(reason =>
+            const reason = [
+                'external_css_icon_glyph',
+                'external_latexml_layout_css',
+                'raw_latex_leak_in_svg',
+                'foreign_object_text_overlap'
+            ].find(reason =>
                 stderr.trim() === JSON.stringify({ contract: 'reader-inline-svg-error-v1', code: 'unsupported_dependency', reason }));
             if (!failure && size === 0 && code === 65 && reason) {
                 const rejected = new Error(`受控渲染器确认封存来源缺少依赖：${reason}`);
@@ -132,4 +143,11 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
         inlineSvgRenderContract: CONTRACT, width, height };
 }
 
-module.exports = { CONTRACT, inlineSvgSourceDescriptor, renderOfficialInlineSvg, isUnsupportedDependencyFailure };
+module.exports = {
+    CONTRACT,
+    LEGACY_CONTRACT,
+    ACCEPTED_CONTRACTS,
+    inlineSvgSourceDescriptor,
+    renderOfficialInlineSvg,
+    isUnsupportedDependencyFailure
+};

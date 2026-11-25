@@ -983,7 +983,10 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     const orderedAccountIds = getOrderedAccountIds(identity);
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const excluded = new Set(options.excludeAccountIds || []);
-    const affinityKey = typeof options.affinityKey === 'string' ? options.affinityKey.trim() : '';
+    const rawAffinity = typeof options.affinityKey === 'string' ? options.affinityKey.trim() : '';
+    const affinityKey = rawAffinity
+        .replace(/^arxiv:/i, '')
+        .replace(/^(\d{4}\.\d{4,5})v\d+$/i, '$1');
     const byId = new Map(keys.map(key => [getAccountId(key), key]));
 
     // 5 条件只读亲和快路径：affinityKey 不推进 rotationCursor，若现有组已锚定且无需清理旧组、

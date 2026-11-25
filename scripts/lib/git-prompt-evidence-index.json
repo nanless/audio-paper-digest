@@ -444,6 +444,12 @@
         "prompts/history/26c091a711a706fa69dfdd3ad31bb72c766faea111fd6322d4c2202d96eeb8e8.md"
       ]
     },
+    "2768aa929957873342c722b6928021ccf99d1c0449d4f5c4d5c104f6c0b64306": {
+      "blobOid": "399cb86846d0de953740239d55eebb4929df3cca",
+      "paths": [
+        "prompts/current/api-reader-article.md"
+      ]
+    },
     "276cdfb34f0d22f54684712e6b579a7cb1803f6685d108f36667738292ead65d": {
       "blobOid": "2497547babd025b6f18a3ea50cca5274fa545335",
       "paths": [
@@ -960,6 +966,12 @@
         "prompts/core-summary-repair.md"
       ]
     },
+    "6098674214e640fd8f57c6abfa58faae66b0d572e6009eb1c695a37434f75f7c": {
+      "blobOid": "932a628eea100c84d5548639a51add3ec017c5df",
+      "paths": [
+        "prompts/current/gap-fill.md"
+      ]
+    },
     "60f505ce12da2be75fe98f84edead98896dbe48e39e659bd9203a71759f1aca3": {
       "blobOid": "2eaeb61243f8436972d922c288ce6f4e68a67aec",
       "paths": [
@@ -1321,6 +1333,12 @@
       "blobOid": "10d38f04dd39954e4587bee847b3792ab086814b",
       "paths": [
         "prompts/en/opensource-scan.md"
+      ]
+    },
+    "8fcbc6eda9e15f75205e1579c67141aa074cd5922133df3e0d9b462581fe1b7f": {
+      "blobOid": "fb6aa5152de6cef3493a6d9473126a56bc10abc8",
+      "paths": [
+        "prompts/current/api-reader-repair.md"
       ]
     },
     "8fd01908770424562dc68532725b1568b84b29f0eaefc8e63f97bcb7b7ba320d": {

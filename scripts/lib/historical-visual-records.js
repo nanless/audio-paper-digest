@@ -219,7 +219,7 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
             let sealedSource;
             const matchesSealedInlineSvg = figure => {
                 const svg = require('./reader-inline-svg');
-                if (figure.inlineSvgRenderContract !== svg.CONTRACT
+                if (!svg.ACCEPTED_CONTRACTS.has(figure.inlineSvgRenderContract)
                     || !/^[a-f0-9]{64}$/.test(String(figure.inlineSvgSourceSha256 || ''))) return false;
                 if (!sealedSource) {
                     const daily = require('./daily-fresh-source-plan');
@@ -236,7 +236,12 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
                     && item.sourceDomSha256 === figure.sourceDomSha256 && item.images?.length === 1);
                 if (matches.length !== 1) return false;
                 const descriptor = svg.inlineSvgSourceDescriptor(matches[0].images[0], normalizedId(paper));
-                return descriptor !== null && Object.entries(descriptor).every(([key, value]) => figure[key] === value);
+                return descriptor !== null
+                    && Object.entries(descriptor).every(([key, value]) => (
+                        key === 'inlineSvgRenderContract'
+                            ? svg.ACCEPTED_CONTRACTS.has(figure[key])
+                            : figure[key] === value
+                    ));
             };
             const matchesSealedPdfCrop = figure => {
                 const pdfCrop = require('./reader-pdf-figure-crop');

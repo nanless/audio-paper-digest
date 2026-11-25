@@ -11,8 +11,13 @@ const identityFormat = require('./reader-identity-format');
 const READER_AFFILIATION_UNBOUND = '机构信息未能在本次解析中与作者逐人可靠绑定';
 const PDF_PAGE1_AUTHOR_CONTRACT_V1 = 'pdf-page1-author-evidence-v1';
 const PDF_PAGE1_AUTHOR_CONTRACT_V2 = 'pdf-page1-author-evidence-v2';
+const PDF_PAGE1_AUTHOR_CONTRACT_V3 = 'pdf-page1-author-evidence-v3';
 const PDF_PAGE1_AUTHOR_CONTRACT = PDF_PAGE1_AUTHOR_CONTRACT_V2;
-const PDF_PAGE1_AUTHOR_CONTRACTS = new Set([PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2]);
+const PDF_PAGE1_AUTHOR_CONTRACTS = new Set([
+    PDF_PAGE1_AUTHOR_CONTRACT_V1,
+    PDF_PAGE1_AUTHOR_CONTRACT_V2,
+    PDF_PAGE1_AUTHOR_CONTRACT_V3
+]);
 const PDF_PAGE1_AUTHOR_MODES = new Set(['markers', 'thanks', 'column_blocks', 'single_institution', 'inline_author_aff']);
 const CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3 = 'conference-pdf-author-pdf-page1-v3';
 const CONFERENCE_OFFICIAL_METADATA_AUTHOR_CONTRACT = 'conference-official-metadata-author-evidence-v1';
@@ -870,9 +875,14 @@ function cleanReaderAffiliationNode($, node, authorNames = []) {
 }
 
 function cleanReaderAuthorNameNode($, node) {
-    const rawText = domCollectChildrenText(node, el => {
+    const rawText = domCollectChildrenText(node, (el, parts) => {
         const tag = String(el.name || '').toLowerCase();
-        if (tag === 'sup' || tag === 'math' || domHasAnyClass(el, DOM_NAME_SKIP_CLASSES)) return 'skip';
+        if (tag === 'sup' || tag === 'math' || domHasAnyClass(el, DOM_NAME_SKIP_CLASSES)) {
+            if (tag === 'sup' && parts.length > 0 && !/[\s,;]$/.test(parts[parts.length - 1])) {
+                parts.push(' ');
+            }
+            return 'skip';
+        }
         if (tag === 'a') {
             if (domHasAnyClass(el, DOM_URL_CLASS_SET) || isSkippedAnchorHref(el.attribs?.href)) {
                 return 'skip';
@@ -3795,7 +3805,7 @@ module.exports = {
     preferredConferenceAuthorParserVersion, resolveAuthenticatedConferencePdfBytes, extractOfficialConferenceMetadataAuthors, validateOfficialConferenceMetadataAuthorEvidence,
     verifiedReaderAuthorDetails, resolveVerifiedReaderAuthors, readerAuthorIdentityMatchesSource, readerAuthorUnavailableIdentityMatches,
     MAX_AUTHOR_SOURCE_HTML_BYTES, AUTHOR_VERIFICATION_CACHE_MAX_ENTRIES,
-    PDF_PAGE1_AUTHOR_CONTRACT, PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2, PDF_PAGE1_AUTHOR_CONTRACTS,
+    PDF_PAGE1_AUTHOR_CONTRACT, PDF_PAGE1_AUTHOR_CONTRACT_V1, PDF_PAGE1_AUTHOR_CONTRACT_V2, PDF_PAGE1_AUTHOR_CONTRACT_V3, PDF_PAGE1_AUTHOR_CONTRACTS,
     METADATA_AUTHOR_SEPARATORS,
     clearReaderAuthorVerificationCaches, getReaderAuthorVerificationCacheStats,
     canRetainAuthorSourceHtml, retainAuthorSourceHtml, extractAuthorHeaderHtml, retainAuthorSourceHeaderHtml, replayHtmlReaderAuthors,

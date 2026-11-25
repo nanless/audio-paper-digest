@@ -41,12 +41,20 @@ def _trusted_renderers():
                     'rendererSha256': digest}
 
 
-def replay_saved_inline_svg_pixels(raw, expected_sha256):
-    from reader_inline_svg import validate_svg, render_svg, MAX_OUTPUT_BYTES
+def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
+    from reader_inline_svg import validate_svg, render_svg, MAX_OUTPUT_BYTES, CONTRACT as V2_CONTRACT
     if not re.fullmatch(r'[a-f0-9]{64}', str(expected_sha256 or '')):
         raise ValueError('Saved SVG pixel SHA is invalid')
     # The current security validator still gates every historical producer.
     validate_svg(raw)
+    if contract == V2_CONTRACT or contract is None:
+        try:
+            v2_actual = render_svg(raw, hidpi=True, deterministic_v2=True)
+            if hashlib.sha256(v2_actual).hexdigest() == expected_sha256:
+                return v2_actual, None
+        except Exception:
+            if contract == V2_CONTRACT:
+                raise
     actual = render_svg(raw)
     if hashlib.sha256(actual).hexdigest() == expected_sha256:
         return actual, None

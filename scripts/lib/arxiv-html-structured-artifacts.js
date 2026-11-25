@@ -43,7 +43,7 @@ function getArxivHtmlIds(arxivId) {
 }
 
 function isStableArxivHtmlMiss(status) {
-    return status === 400 || status === 403 || status === 404;
+    return status === 400 || status === 404;
 }
 
 function assessArxivHtmlFullText($, content, minChars = DEFAULT_FULL_TEXT_MIN_CHARS_FOR_FULL) {
@@ -88,7 +88,9 @@ const ARXIV_STRUCTURED_ARTIFACT_VERSION = 1;
 // v5 根除 LaTeXML `<annotation>` 双写与不可见 MathML 符号（`\u2061-\u2064`），支持多 `<math>` 对齐公式拼接、
 // 含布局 `<table>` 的多面板真插图、外层 `<figure>` 归属图注，以及无 `<thead>/<th>` 表格的确定性表头推断。
 // v4 冷重放（`replayPersistedArxivHtmlDomV4PayloadSha`）保持 100% 不变。
-const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v6';
+// v7 放开并排 minipage 内嵌独立 `.ltx_table` / `<figure>` 拆解，拒收纯空 `[[""]]` 伪完整表，
+// 并在表格单元格 DOM 提取层剥离 booktabs `.ltx_ERROR`（`\toprule`/`\midrule`/`\bottomrule`）。
+const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v7';
 const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
     tables: 256,
     rowsPerTable: 512,
@@ -374,6 +376,12 @@ function extractArxivTableCellText($, cellElement) {
     const clone = cell.clone();
     sanitizeArxivDomCloneForText($, clone);
     clone.find('.ltx_note, .ltx_note_mark').remove();
+    clone.find('.ltx_ERROR').toArray().forEach(errEl => {
+        const txt = $(errEl).text().trim();
+        if (/^\\(?:toprule|midrule|bottomrule|cmidrule|hline|cline|addlinespace|specialrule)\b/.test(txt)) {
+            $(errEl).remove();
+        }
+    });
     clone.find('sup').toArray().forEach(supEl => {
         const sup = $(supEl);
         if (sup.closest('math, m\\:math').length > 0) return;
@@ -427,6 +435,7 @@ function extractArxivTableCellText($, cellElement) {
         }
     });
     return clone.text()
+        .replace(/\\(?:toprule|midrule|bottomrule|cmidrule(?:\([^)]*\))?(?:\{[^}]*\})?|addlinespace(?:\[[^\]]*\])?)\b\s*/g, '')
         .replace(/[\u2061-\u2064]/g, '')
         .replace(/(?<=(?:^|[\s(+\-\u2212])[+\-\u2212]?\d[\d.,]*%?)[\u00af\u203e\u0304\u0305\u0332\u0333]+(?=$|\s|[,;)|\]])/g, '');
 }
@@ -1043,7 +1052,8 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
     const finalCells = compacted ? compacted.cells : cells;
     const finalHeaderRows = compacted ? compacted.headerRows : [...headerRows].sort((a, b) => a - b);
     const finalBodyRows = compacted ? compacted.bodyRows : [...bodyRows].sort((a, b) => a - b);
-    if (finalCells.length === 0 || finalMatrix.length === 0 || width === 0) {
+    const hasNonEmptyCell = finalCells.some(c => String(c?.text || '').trim().length > 0);
+    if (finalCells.length === 0 || finalMatrix.length === 0 || width === 0 || !hasNonEmptyCell) {
         state.issues.push(`table[${ordinal}]${label ? ` ${label}` : ''} 未恢复出任何单元格`);
     }
     return {
@@ -1055,7 +1065,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         bodyRows: finalBodyRows,
         cells: finalCells,
         matrix: finalMatrix,
-        recoveryStatus: finalCells.length > 0 && width > 0 ? 'complete' : 'unrecovered'
+        recoveryStatus: finalCells.length > 0 && width > 0 && hasNonEmptyCell ? 'complete' : 'unrecovered'
     };
 }
 
@@ -1065,9 +1075,20 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     const $ = cheerio.load(sourceHtml);
     const state = { issues: [], truncated: false };
     const allElements = $('*').toArray();
+    const isMinipageTableContainer = el => {
+        const n = $(el);
+        const nestedTables = n.find('.ltx_table').filter((_, child) => child !== el);
+        if (nestedTables.length === 0) return false;
+        // 外层若本身是一个并排 minipage 容器（内含独立编号 `.ltx_table` 子块），则下沉拆解其内嵌子表。
+        return nestedTables.toArray().some(child => $(child).find('figcaption, .ltx_caption').length > 0);
+    };
     const rawTableCandidates = $('.ltx_table, table, .ltx_tabular').filter((_, element) => {
         const node = $(element);
-        if (node.parents('.ltx_table, table, .ltx_tabular').length > 0) return false;
+        if (isMinipageTableContainer(element)) return false;
+        const tableAncestors = node.parents('.ltx_table, table, .ltx_tabular').toArray();
+        if (tableAncestors.length > 0 && !tableAncestors.every(anc => isMinipageTableContainer(anc))) {
+            return false;
+        }
         if (!(node.hasClass('ltx_table') || isArxivTabularDom($, element))) return false;
         if (node.closest('.ltx_equation, .ltx_equationgroup').length > 0) return false;
         // 排除插图 <figure> 内专用于摆放多子图 <img>/<svg> 的布局表格，避免产生假空表。
@@ -1165,9 +1186,34 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         };
     });
 
-    const figureCandidates = $('figure').filter((_, element) => (
-        $(element).parents('figure').length === 0 && isIllustrationFigure($, element)
-    )).toArray();
+    const isIndependentNumberedChildFigure = el => {
+        const n = $(el);
+        if (n.hasClass('ltx_subfigure') || n.hasClass('ltx_table')) return false;
+        if (!isIllustrationFigure($, el)) return false;
+        const ownCap = n.find('figcaption, .ltx_caption')
+            .filter((_, c) => $(c).closest('figure')[0] === el).last();
+        const capTxt = arxivCaptionText($, ownCap).replace(/\s+/g, ' ').trim();
+        return /^(?:figure|fig\.?|图)\s*(?:[A-Z]?\d+|[IVXLCDM]+)/i.test(capTxt);
+    };
+    const isMinipageFigureWrapper = el => {
+        const n = $(el);
+        const childFigs = n.find('figure').filter((_, child) => child !== el && isIndependentNumberedChildFigure(child));
+        if (childFigs.length === 0) return false;
+        const ownCap = n.find('figcaption, .ltx_caption')
+            .filter((_, c) => $(c).closest('figure')[0] === el);
+        // 外层是无独立主图注的 minipage 容器，或同时包裹了表格与独立编号插图（如 Table 2 + Figure 5）
+        return ownCap.length === 0 || n.find('.ltx_table').length > 0 || childFigs.length >= 2;
+    };
+    const figureCandidates = $('figure').filter((_, element) => {
+        const node = $(element);
+        if (isMinipageFigureWrapper(element)) return false;
+        const figAncestors = node.parents('figure').toArray();
+        if (figAncestors.length > 0) {
+            if (!figAncestors.every(anc => isMinipageFigureWrapper(anc))) return false;
+            return isIndependentNumberedChildFigure(element);
+        }
+        return isIllustrationFigure($, element);
+    }).toArray();
     if (figureCandidates.length > STRUCTURED_ARTIFACT_LIMITS.figures) {
         state.issues.push(`图片候选 ${figureCandidates.length} 超过受控上限 ${STRUCTURED_ARTIFACT_LIMITS.figures}`);
         state.truncated = true;

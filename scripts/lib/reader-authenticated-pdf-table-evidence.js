@@ -19,16 +19,33 @@ const PERCENT_CAPTION = new RegExp('^Table\\s+' + TABLE_NUMBER + '\\s*[:.]\\s*Re
 function numeric(value) {
     const input = compact(value).replace(/−/gu, '-');
     if (/^[-–—]$/u.test(input)) return '-';
-    if (!/^[+-]?\d+(?:\.\d+)?(?:±\d+(?:\.\d+)?)?$/u.test(input)) return null;
+    // 支持显著性 p 值不等式形式（如 <.0001 / <0.001 / <=0.05 / >0.99）
+    const ineq = /^(<=|>=|<|>)([+-]?(?:\d+(?:\.\d+)?|\.\d+))$/u.exec(input);
+    if (ineq) {
+        const rawNum = ineq[2].startsWith('.') ? '0' + ineq[2] : ineq[2];
+        const [integer, decimal = ''] = rawNum.replace(/^\+/u, '').split('.');
+        const fraction = decimal.replace(/0+$/u, '');
+        return ineq[1] + integer.replace(/^(-?)0+(?=\d)/u, '$1') + (fraction ? '.' + fraction : '');
+    }
+    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:±(?:\d+(?:\.\d+)?|\.\d+))?$/u.test(input)) return null;
     return input.split('±').map(part => {
-        const [integer, decimal = ''] = part.replace(/^\+/u, '').split('.');
+        const normalized = part.startsWith('.') ? '0' + part : part;
+        const [integer, decimal = ''] = normalized.replace(/^\+/u, '').split('.');
         const fraction = decimal.replace(/0+$/u, '');
         return integer.replace(/^(-?)0+(?=\d)/u, '$1') + (fraction ? '.' + fraction : '');
     }).join('±');
 }
+const _ZH_SI_UNIT_MAP = Object.freeze({
+    '毫秒': 'ms', '秒': 's', '小时': 'h', '赫兹': 'hz',
+    '千赫兹': 'khz', '兆赫兹': 'mhz', '分贝': 'db', '百分比': '%'
+});
 function declaration(value) {
-    const match = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\])$/iu.exec(text(value));
-    return match ? { metric: compact(match[1]), unit: (match[2] || match[3]).toLowerCase() } : null;
+    const surface = text(value);
+    const match = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\])$/iu.exec(surface);
+    if (match) return { metric: compact(match[1]), unit: (match[2] || match[3]).toLowerCase() };
+    const zhMatch = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比)\s*\)|\[\s*(毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比)\s*\])$/u.exec(surface);
+    if (zhMatch) return { metric: compact(zhMatch[1]), unit: _ZH_SI_UNIT_MAP[zhMatch[2] || zhMatch[3]] };
+    return null;
 }
 function opaqueColumn(value) {
     // Retain every original column position. An unrecognized unit is opaque,
@@ -85,7 +102,12 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
             const sourceColumns = headers.map((header, index) => explicit[index] || captionColumns?.[index] || opaqueColumn(header));
             if (sourceColumns.some(column => !column)) continue;
             const mixedUnits = sourceColumns.some(column => column.unit === null);
-            if (new Set(sourceColumns.map(value => value.metric)).size !== sourceColumns.length) {
+            const metricCounts = new Map();
+            for (const col of sourceColumns) {
+                metricCounts.set(col.metric, (metricCounts.get(col.metric) || 0) + 1);
+            }
+            const duplicatedWanted = wanted.some(w => (metricCounts.get(w.metric) || 0) > 1);
+            if (duplicatedWanted) {
                 reasons.push('原PDF同一表存在重复指标列（例如多个K分组），当前列分组不能唯一逐字映射；保留原分组表头，不猜列位置。');
                 continue;
             }

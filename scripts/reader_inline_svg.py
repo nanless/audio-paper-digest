@@ -398,6 +398,21 @@ def validate_svg(raw):
     return text
 
 
+LEGACY_CONTRACT = 'reader-official-inline-svg-pixels-v1'
+CONTRACT = 'reader-official-inline-svg-pixels-v2'
+ACCEPTED_CONTRACTS = frozenset({LEGACY_CONTRACT, CONTRACT})
+
+_DETERMINISTIC_V2_CHROMIUM_ARGS = (
+    '--disable-gpu',
+    '--disable-gpu-compositing',
+    '--use-gl=angle',
+    '--use-angle=swiftshader',
+    '--font-render-hinting=none',
+    '--disable-lcd-text',
+    '--force-color-profile=srgb',
+)
+
+
 def source_descriptor(resource, arxiv_id):
     identifier = re.sub(r'v\d+$', '', str(arxiv_id or ''))
     if not re.fullmatch(r'\d{4}\.\d{4,5}', identifier) or not isinstance(resource, dict):
@@ -420,7 +435,7 @@ def source_descriptor(resource, arxiv_id):
         raise ValueError('内联 SVG 没有原文元素定位')
     return {'url': f'https://arxiv.org/html/{identifier}#{element_id}',
             'inlineSvgSourceSha256': resource['inlineSvgSha256'],
-            'inlineSvgRenderContract': 'reader-official-inline-svg-pixels-v1'}
+            'inlineSvgRenderContract': CONTRACT}
 
 
 _ALLOWED_RENDER_TAG_NS = {'', 'http://www.w3.org/2000/svg', 'http://www.w3.org/1999/xhtml', 'http://www.w3.org/1998/Math/MathML'}
@@ -491,13 +506,29 @@ def _hidpi_scale_factor(width, height):
     return 1.0
 
 
-def render_svg(raw, *, hidpi=False):
+def _hidpi_scale_factor_v2(width, height):
+    """Choose a deterministic integer HiDPI scale (1, 2, or 3) to avoid fractional subpixel jitter."""
+    long_edge = max(float(width), float(height))
+    if long_edge <= 0 or long_edge >= 1600:
+        return 1
+    for scale in (3, 2):
+        if long_edge * scale <= 2800:
+            sw = math.ceil(width * scale)
+            sh = math.ceil(height * scale)
+            if sw <= 4096 and sh <= 4096 and sw * sh <= 16_000_000:
+                return scale
+    return 1
+
+
+def render_svg(raw, *, hidpi=False, deterministic_v2=False):
     text = validate_svg(raw)
     canonical_markup = _serialize_validated_svg(ET.fromstring(text))
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         expected = Path(playwright.chromium.executable_path)
         options = {'headless': True}
+        if deterministic_v2:
+            options['args'] = list(_DETERMINISTIC_V2_CHROMIUM_ARGS)
         if not expected.is_file():
             candidates = []
             for cache in (Path.home() / 'Library/Caches/ms-playwright', Path.home() / '.cache/ms-playwright'):
@@ -527,12 +558,48 @@ def render_svg(raw, *, hidpi=False):
                     page.set_content('<!doctype html><meta charset="utf-8">'
                                      '<style>html,body{margin:0;background:white}</style>' + canonical_markup,
                                      wait_until='load', timeout=30_000)
+                    if deterministic_v2:
+                        page.evaluate("() => (document.fonts && document.fonts.ready) ? document.fonts.ready.then(() => true) : true")
                     figure = page.locator('body > svg')
                     bounds = figure.bounding_box()
                     if (not bounds or not all(math.isfinite(bounds[k]) for k in ('width', 'height'))
                             or not 0 < bounds['width'] <= 4096 or not 0 < bounds['height'] <= 4096
                             or bounds['width'] * bounds['height'] > 16_000_000):
                         raise ValueError('内联 SVG 实际显示尺寸超过受控上限')
+                    if deterministic_v2 and scale_factor == 1.0:
+                        quality_issue = figure.evaluate("""svg => {
+                            const rawLatexRe = /\\\\(?:scriptsize|textstyle|displaystyle|footnotesize|tiny|normalsize|textbf|textit|mathrm|mathbf)\\b/;
+                            const walker = document.createTreeWalker(svg, NodeFilter.SHOW_TEXT);
+                            let n;
+                            while ((n = walker.nextNode())) {
+                                const parent = n.parentElement;
+                                if (!parent || parent.closest('defs, annotation, style, script')) continue;
+                                if (rawLatexRe.test(n.textContent || '')) return 'raw_latex_leak_in_svg';
+                            }
+                            const foBoxes = [];
+                            for (const fo of svg.querySelectorAll('foreignObject')) {
+                                if (fo.closest('defs')) continue;
+                                const txt = (fo.textContent || '').replace(/\\s+/g, ' ').trim();
+                                if (txt.length < 4) continue;
+                                const rect = fo.getBoundingClientRect();
+                                if (rect.width >= 8 && rect.height >= 8) foBoxes.push(rect);
+                            }
+                            for (let i = 0; i < foBoxes.length; i++) {
+                                for (let j = i + 1; j < foBoxes.length; j++) {
+                                    const a = foBoxes[i], b = foBoxes[j];
+                                    const iw = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+                                    const ih = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+                                    if (iw > 4 && ih > 4) {
+                                        const inter = iw * ih;
+                                        const minArea = Math.min(a.width * a.height, b.width * b.height);
+                                        if (minArea > 0 && inter / minArea > 0.35) return 'foreign_object_text_overlap';
+                                    }
+                                }
+                            }
+                            return null;
+                        }""")
+                        if quality_issue:
+                            raise UnsupportedSvgDependency(quality_issue)
                     # 原图允许内容超出 viewBox 时，元素截图会裁掉文字和公式。
                     # 在页面内量取真实渲染范围，不猜测字号或改写封存图形。
                     painted = figure.evaluate("""svg => {
@@ -592,7 +659,7 @@ def render_svg(raw, *, hidpi=False):
                     if not 0 < width <= 4096 or not 0 < height <= 4096 or width * height > 16_000_000:
                         raise ValueError('内联 SVG 实际绘制范围超过受控上限')
                     if probe_hidpi and scale_factor == 1.0:
-                        desired = _hidpi_scale_factor(width, height)
+                        desired = _hidpi_scale_factor_v2(width, height) if deterministic_v2 else _hidpi_scale_factor(width, height)
                         if desired > 1.0:
                             return None, desired
                     if left < 0 or top < 0:
@@ -611,6 +678,7 @@ def render_svg(raw, *, hidpi=False):
             png, desired_scale = _measure_and_shot(1.0, probe_hidpi=hidpi)
             if png is None and desired_scale > 1.0:
                 scale = desired_scale
+                step = 1.0 if deterministic_v2 else 0.5
                 while scale >= 1.0:
                     candidate, _ = _measure_and_shot(scale, probe_hidpi=False)
                     if isinstance(candidate, bytes) and candidate.startswith(b'\x89PNG\r\n\x1a\n') and len(candidate) <= MAX_OUTPUT_BYTES:
@@ -619,7 +687,7 @@ def render_svg(raw, *, hidpi=False):
                     if scale <= 1.0:
                         png = candidate
                         break
-                    scale = max(1.0, round(scale - 0.5, 1))
+                    scale = max(1.0, round(scale - step, 1))
         finally:
             browser.close()
     if not isinstance(png, bytes) or not png.startswith(b'\x89PNG\r\n\x1a\n') or len(png) > MAX_OUTPUT_BYTES:
@@ -630,8 +698,9 @@ def render_svg(raw, *, hidpi=False):
 if __name__ == '__main__':
     require_external_runtime('render-reader-inline-svg')
     use_hidpi = '--hidpi' in sys.argv[1:]
+    use_v2 = '--v2' in sys.argv[1:]
     try:
-        sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1), hidpi=use_hidpi))
+        sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1), hidpi=use_hidpi, deterministic_v2=use_v2))
     except UnsupportedSvgDependency as error:
         sys.stderr.write(json.dumps({'contract': 'reader-inline-svg-error-v1',
             'code': 'unsupported_dependency', 'reason': error.reason}, separators=(',', ':')) + '\n')

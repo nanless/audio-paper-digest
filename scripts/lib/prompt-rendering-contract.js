@@ -8,7 +8,8 @@ const PROMPT_INPUT_KEYS = Object.freeze([
     'title', 'abstract', 'categories', 'hasFullText', 'authors', 'arxivId', 'textForAnalysis',
     'tagPromptText', 'imageList', 'anchorCatalog', 'primaryAnalysis', 'existingAnalysis',
     'sourceEvidence', 'validationFeedback', 'previousDraft', 'mechanicalContract', 'repairTargets',
-    'missingSections', 'summaryIssue', 'existingSummary', 'methodSection', 'resultsSection'
+    'missingSections', 'summaryIssue', 'existingSummary', 'methodSection', 'resultsSection',
+    'factFeedback', 'termsTargets', 'explanationContext', 'sourceQuotes', 'operationProtocol'
 ]);
 const reservedPlaceholder = new RegExp(`\\{(?:${PROMPT_INPUT_KEYS.join('|')})\\}`);
 

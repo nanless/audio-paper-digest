@@ -295,7 +295,12 @@ def _extract_tar_in_memory(
 
     try:
         tf = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:", encoding="utf-8", errors="strict")
-    except (tarfile.TarError, EOFError, OSError, UnicodeDecodeError, RecursionError, ValueError) as exc:
+    except UnicodeDecodeError:
+        try:
+            tf = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:", encoding="latin-1", errors="strict")
+        except (tarfile.TarError, EOFError, OSError, UnicodeDecodeError, RecursionError, ValueError) as exc:
+            raise ArxivTexExtractError(f"Invalid tar archive: {exc}", code="INVALID_ARCHIVE") from exc
+    except (tarfile.TarError, EOFError, OSError, RecursionError, ValueError) as exc:
         raise ArxivTexExtractError(f"Invalid tar archive: {exc}", code="INVALID_ARCHIVE") from exc
 
     with tf:

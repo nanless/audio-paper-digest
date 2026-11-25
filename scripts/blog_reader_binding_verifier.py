@@ -592,10 +592,11 @@ def _reader_inline_svg_resource(paper, plan, figure, structured_sha, source_sha,
                 descriptor = source_descriptor(images[0], paper_id)
             except ValueError:
                 continue
+            from reader_inline_svg import ACCEPTED_CONTRACTS as _SVG_ACCEPTED_CONTRACTS
             if (descriptor['url'] == figure.get('url')
                     and figure.get('sourceLocationUrl') == descriptor['url']
-                    and all(descriptor[key] == figure.get(key) for key in
-                            ('inlineSvgSourceSha256', 'inlineSvgRenderContract'))
+                    and descriptor['inlineSvgSourceSha256'] == figure.get('inlineSvgSourceSha256')
+                    and figure.get('inlineSvgRenderContract') in _SVG_ACCEPTED_CONTRACTS
                     and re.sub(r'\s+', ' ', source.get('label') or f"Figure {source['ordinal']}").strip() == figure.get('label')
                     and re.sub(r'\s+', ' ', source.get('caption') or '').strip()[:1200] == figure.get('caption')):
                 matches.append(images[0])

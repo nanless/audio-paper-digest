@@ -526,20 +526,38 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
     const surface = value => String(value || '').normalize('NFKC').toLowerCase()
         .replace(/[`*_↑↓]/g, '').replace(/\s+/g, ' ').trim();
     const compact = value => surface(value).replace(/\s+/g, '');
+    const zhSiUnitMap = {
+        '毫秒': 'ms', '秒': 's', '小时': 'h', '赫兹': 'hz',
+        '千赫兹': 'khz', '兆赫兹': 'mhz', '分贝': 'db', '百分比': '%'
+    };
     const failures = [];
     for (let column = 0; column < (table?.header || []).length; column++) {
         const header = surface(table.header[column]);
-        const match = header.match(/^(.*?)(?:\(\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\)|\[\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\]|\s+(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp))$/i);
+        let match = header.match(/^(.*?)(?:\(\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\)|\[\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\]|\s+(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp))$/i);
+        let mappedZhUnit = null;
+        if (!match) {
+            // 仅对含 ASCII 指标名的表头放行括号内中文 SI 单位（如 "Latency (毫秒)"），
+            // 绝不把纯中文译名表头（如 "相对最强基线提升 (百分点)"）误判为未核验单位声明。
+            const zhMatch = header.match(/^(.*?)(?:\(\s*(毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比)\s*\)|\[\s*(毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比)\s*\])$/u);
+            if (zhMatch && /[a-z]/i.test(zhMatch[1])) {
+                mappedZhUnit = zhSiUnitMap[zhMatch[2] || zhMatch[3]];
+                match = zhMatch;
+            }
+        }
         if (!match) continue;
         // “多数模型 -10 dB”给的是列比较条件，不宣称该列的 WER 等数值都用 dB。
         // 必须是独立完整数量；C50、P95 等指标名中的数字不能成为此例外。
         const hasQuantityCondition = /(?:^|\s)[-+−－]?\d+(?:\.\d+)?\s*$/u.test(match[1]);
-        if (hasQuantityCondition && (match[4]
+        if (hasQuantityCondition && (!mappedZhUnit && match[4]
             || /(?:^|\s)[-+−－]\d+(?:\.\d+)?\s*$/u.test(match[1]))) continue;
-        const unit = (match[2] || match[3] || match[4]).toLowerCase();
+        const unit = (mappedZhUnit || match[2] || match[3] || match[4]).toLowerCase();
         const metric = compact(match[1]);
+        const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const declaration = header.replace(/\s*([([])/g, ' $1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
         const declaredUnit = new RegExp(`(?<![a-z0-9_])${declaration}(?![a-z0-9_])`, 'g');
+        const zhAsciiHeaderUnitRe = mappedZhUnit && surface(match[1])
+            ? new RegExp(`(?<![a-z0-9_])${escapeRe(surface(match[1]))}\\s*[(\\[]\\s*${escapeRe(unit)}\\s*[)\\]]`, 'i')
+            : null;
         for (let row = 0; row < (table.rows || []).length; row++) {
             const tokens = readerNumericTokens(table.rows[row]?.[column]);
             for (const token of tokens) {
@@ -547,8 +565,14 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
                 if (!number) continue;
                 const unitConsistent = !number[2] || number[2].toLowerCase() === unit;
                 // 已显式写单位的单元格继续由既有数字引文规则核验；这里不改变其 PDF 拆单位兼容。
-                // 裸值只认可同句中指标单位声明后的第一个数值，不能跨句借另一方法或指标的单位。
-                const covered = unitConsistent && (Boolean(number[2]) || quotes.some(quote => readerAdjacentMetricUnitEvidence(quote, surface(match[1]), number[1], unit)) || (metric && quotes.some(quote => (
+                // 裸值只认可同句中指标单位声明后的第一个数值，不能跨句借另一方法或指标的单位；
+                // 若表头为 ASCII 指标 + 括号中文 SI 单位（如 AvLS (毫秒)），则同时认可同一逐字原表引文中
+                // 显式出现的同指标英文单位表头（如 AvLS (ms)）及其同引文内对应数值。
+                const coveredByZhTableHeader = Boolean(zhAsciiHeaderUnitRe && quotes.some(quote => {
+                    const qSurf = surface(quote);
+                    return zhAsciiHeaderUnitRe.test(qSurf) && readerNumericTokens(qSurf).includes(token);
+                }));
+                const covered = unitConsistent && (Boolean(number[2]) || coveredByZhTableHeader || quotes.some(quote => readerAdjacentMetricUnitEvidence(quote, surface(match[1]), number[1], unit)) || (metric && quotes.some(quote => (
                     String(quote).normalize('NFKC').split(/(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)/).some(sentence => {
                         const text = surface(sentence);
                         return [...text.matchAll(declaredUnit)].some(declared => {

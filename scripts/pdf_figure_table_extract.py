@@ -277,11 +277,76 @@ def _collect_page_captions(page: fitz.Page, kind: str) -> list[dict[str, Any]]:
     return captions
 
 
-def _collect_visual_rects(page: fitz.Page) -> list[tuple[float, float, float, float]]:
+def _collect_table_exclusion_zones(
+    page: fitz.Page,
+    tab_caps: list[dict[str, Any]],
+    all_caps: list[dict[str, Any]],
+    text_blocks: list[tuple[float, float, float, float, str]],
+) -> list[tuple[float, float, float, float]]:
+    """Pre-compute table body + rule-stack exclusion zones before figure cropping so figures never swallow tables."""
+    if not tab_caps:
+        return []
+    page_w = float(page.rect.width)
+    page_h = float(page.rect.height)
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    h_rules: list[tuple[float, float, float, float]] = []
+    for d in drawings:
+        r = d.get("rect")
+        if r is None:
+            continue
+        x0, y0, x1, y1 = float(r.x0), float(r.y0), float(r.x1), float(r.y1)
+        if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+            continue
+        if (y1 - y0) <= 2.4 and (x1 - x0) >= page_w * 0.22:
+            h_rules.append((x0, y0, x1, y1))
+
+    zones: list[tuple[float, float, float, float]] = []
+    for tc in tab_caps:
+        tx0, ty0, tx1, ty1 = tc["bbox"]
+        col_side = tc.get("col_side")
+        zx0 = 18.0 if col_side != "right" else page_w * 0.48
+        zx1 = page_w - 18.0 if col_side != "left" else page_w * 0.52
+        # Locate next caption below this table caption in same column/full-width
+        next_cap_y = page_h - 20.0
+        for other in all_caps:
+            if other is tc:
+                continue
+            oy0 = other["bbox"][1]
+            if oy0 > ty1 + 6.0 and oy0 < next_cap_y:
+                if col_side is None or other.get("col_side") is None or other.get("col_side") == col_side:
+                    next_cap_y = oy0
+        # Find horizontal table rules between table caption and next caption (or above if bottom-captioned)
+        below_rules = [
+            r for r in h_rules
+            if r[1] >= ty1 - 4.0 and r[3] <= min(next_cap_y - 4.0, ty1 + page_h * 0.55)
+            and r[2] > zx0 + 10.0 and r[0] < zx1 - 10.0
+        ]
+        if len(below_rules) >= 2:
+            rx0 = min(r[0] for r in below_rules)
+            rx1 = max(r[2] for r in below_rules)
+            ry1 = max(r[3] for r in below_rules)
+            zones.append((max(0.0, rx0 - 6.0), max(0.0, ty0 - 4.0), min(page_w, rx1 + 6.0), min(page_h, ry1 + 6.0)))
+    return zones
+
+
+def _collect_visual_rects(
+    page: fitz.Page,
+    table_zones: list[tuple[float, float, float, float]] | None = None,
+) -> list[tuple[float, float, float, float]]:
     """Collect bounding boxes of real embedded images, XObjects, and non-rule vector drawings."""
     page_w = float(page.rect.width)
     page_h = float(page.rect.height)
     rects: list[tuple[float, float, float, float]] = []
+    excl = table_zones or []
+
+    def _inside_table_zone(x0: float, y0: float, x1: float, y1: float) -> bool:
+        for zx0, zy0, zx1, zy1 in excl:
+            if x0 >= zx0 - 4.0 and x1 <= zx1 + 4.0 and y0 >= zy0 - 4.0 and y1 <= zy1 + 4.0:
+                return True
+        return False
 
     for info in page.get_image_info(xrefs=True):
         b = info.get("bbox")
@@ -294,6 +359,8 @@ def _collect_visual_rects(page: fitz.Page) -> list[tuple[float, float, float, fl
         if w < 12.0 or h < 12.0:
             continue
         if w > page_w * 0.94 and h > page_h * 0.92:
+            continue
+        if _inside_table_zone(x0, y0, x1, y1):
             continue
         rects.append((max(0.0, x0), max(0.0, y0), min(page_w, x1), min(page_h, y1)))
 
@@ -316,6 +383,9 @@ def _collect_visual_rects(page: fitz.Page) -> list[tuple[float, float, float, fl
         if h < 1.8 and w > page_w * 0.25:
             continue
         if y0 < 22.0 or y1 > page_h - 22.0:
+            continue
+        # 排除位于表格规则区内的细下划线/边框绘制（防 \underline{} 将表格带入相邻插图裁切）
+        if _inside_table_zone(x0, y0, x1, y1):
             continue
         rects.append((max(0.0, x0), max(0.0, y0), min(page_w, x1), min(page_h, y1)))
 
@@ -1426,7 +1496,8 @@ def extract_pdf_figures_and_tables(pdf_bytes: bytes, arxiv_id: str = "") -> dict
                     for b in work_page.get_text("blocks", flags=fitz.TEXTFLAGS_TEXT)
                     if b[6] == 0
                 ]
-                visual_rects = _collect_visual_rects(work_page)
+                table_zones = _collect_table_exclusion_zones(work_page, tab_caps, all_caps, text_blocks)
+                visual_rects = _collect_visual_rects(work_page, table_zones=table_zones)
                 if not visual_rects:
                     continue
 
@@ -1436,6 +1507,20 @@ def extract_pdf_figures_and_tables(pdf_bytes: bytes, arxiv_id: str = "") -> dict
                     crop_bbox = _extract_figure_crop_bbox(work_page, cap, all_caps, text_blocks, visual_rects)
                     if crop_bbox is None:
                         continue
+                    # 裁切后二次核验：若裁切框上/下缘仍侵入表格排除区，收紧边界防止把表格吞进插图
+                    if table_zones:
+                        cx0, cy0, cx1, cy1 = crop_bbox
+                        for zx0, zy0, zx1, zy1 in table_zones:
+                            h_ov = min(cx1, zx1) - max(cx0, zx0)
+                            v_ov = min(cy1, zy1) - max(cy0, zy0)
+                            if h_ov > 20.0 and v_ov > 4.0:
+                                if zy1 < cap["bbox"][1] and zy1 > cy0:
+                                    cy0 = max(cy0, zy1 + 2.0)
+                                elif zy0 > cap["bbox"][3] and zy0 < cy1:
+                                    cy1 = min(cy1, zy0 - 2.0)
+                        if (cx1 - cx0) < 60.0 or (cy1 - cy0) < 40.0:
+                            continue
+                        crop_bbox = [round(cx0, 2), round(cy0, 2), round(cx1, 2), round(cy1, 2)]
                     if offset_x != 0.0 or offset_y != 0.0:
                         crop_bbox = [
                             round(crop_bbox[0] + offset_x, 2),

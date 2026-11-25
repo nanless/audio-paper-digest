@@ -3685,14 +3685,24 @@ function readerLengthShortfall(issue) {
     return estimated ? Math.max(0, Number(estimated[2]) - Number(estimated[1])) : 0;
 }
 
+let _cachedFrozenRepairV11Text = null;
+function readFrozenRepairV11Text() {
+    if (_cachedFrozenRepairV11Text === null) {
+        _cachedFrozenRepairV11Text = require('./prompt-evidence.js')
+            .readPromptEvidenceBytes('prompts/api-reader-repair-v11.md')
+            .toString('utf8');
+    }
+    return _cachedFrozenRepairV11Text;
+}
+
 function repairOperationProtocol(context) {
     if (context.atomicOperation?.kind === READER_VERSION_METADATA_KIND) return '本轮是 replace_reader_version_4_with_3_v1 原子操作，仅把完整旧 JSON 的顶层 version 数字 4 改为 3。'
         + '不得删除、增加或重写任何其他键、正文、标记、表格、图片、公式或来源字段。'
         + '只输出 {"version":1,"rawSha256":"复制 atomicOperation.rawSha256","fromVersion":4,"toVersion":3}。'
         + '不输出完整文章、replacements、deleteFields 或任何额外字段；原文其余字节由程序保留，修复后仍完整核验整篇。';
     if (!context.atomicOperation && context.targets.every(target => /^\/(?:sections\/\d+\/body|conceptBridges\/\d+)$/.test(target.path))) return '本轮不修改表格、公式、图片及其来源声明；已有标记保持原样。';
-    // 复杂结构仍使用冻结的完整来源协议，其正文同时进入实现指纹。
-    const frozen = require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8');
+    // 复杂结构仍使用冻结的完整来源协议，其正文同时进入实现指纹（进程内惰性缓存避免重复 git cat-file）。
+    const frozen = readFrozenRepairV11Text();
     const blocks = frozen.split('~~~');
     const marker = '\n如果本次 `atomicOperation.kind` 明确为 `delete_top_level_program_metadata_v1`';
     if (blocks.length !== 3 || blocks[1].split(marker).length !== 2) throw new Error('局部修复的来源操作协议缺失或边界不唯一');
@@ -4337,7 +4347,7 @@ function readerRepairImplementationSha256() {
     return shaText([fs.readFileSync(__filename, 'utf8'),
         fs.readFileSync(path.join(__dirname, 'reader-target-ordinal-patch.js'), 'utf8'),
         require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
-        require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8'),
+        readFrozenRepairV11Text(),
         fs.readFileSync(require.resolve('./reader-request-diagnostics.js'), 'utf8'),
         ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
             'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',
