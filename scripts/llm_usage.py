@@ -208,9 +208,33 @@ def write_llm_usage_event(event, directory=None):
         if not stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
             raise ValueError('用量目录必须是真实目录，不能是符号链接')
     target_dir.chmod(0o700)
+    write_dir = target_dir
+    bj_date = None
+    if isinstance(event, dict) and isinstance(event.get('at'), str):
+        try:
+            dt = datetime.fromisoformat(event['at'].replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            from datetime import timedelta
+            candidate_date = (dt.astimezone(timezone(timedelta(hours=8)))).strftime('%Y-%m-%d')
+            if re.fullmatch(r'\d{4}-\d{2}-\d{2}', candidate_date):
+                bj_date = candidate_date
+                shard_dir = target_dir / bj_date
+                try:
+                    shard_dir.mkdir(mode=0o700)
+                except FileExistsError:
+                    pass
+                shard_mode = shard_dir.lstat().st_mode
+                if not stat.S_ISDIR(shard_mode) or stat.S_ISLNK(shard_mode):
+                    raise ValueError('用量日期分片目录必须是真实目录，不能是符号链接')
+                shard_dir.chmod(0o700)
+                write_dir = shard_dir
+        except ValueError as exc:
+            if '符号链接' in str(exc) or '真实目录' in str(exc):
+                raise
     ident = str(uuid.uuid4())
-    temporary = target_dir / f'.{ident}.tmp'
-    target = target_dir / f'{ident}.json'
+    temporary = write_dir / f'.{ident}.tmp'
+    target = write_dir / f'{ident}.json'
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
     try:
         try:
@@ -230,7 +254,7 @@ def write_llm_usage_event(event, directory=None):
         except OSError:
             pass
         raise
-    directory_fd = os.open(target_dir, os.O_RDONLY)
+    directory_fd = os.open(write_dir, os.O_RDONLY)
     try:
         os.fsync(directory_fd)
     finally:
@@ -240,13 +264,8 @@ def write_llm_usage_event(event, directory=None):
             or stat.S_IMODE(saved_stat.st_mode) != 0o600:
         raise OSError('用量文件保存后的类型、链接或权限不符合要求')
     # 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
-    if isinstance(event, dict) and isinstance(event.get('at'), str) and event.get('kind'):
+    if bj_date and isinstance(event, dict) and event.get('kind'):
         try:
-            dt = datetime.fromisoformat(event['at'].replace('Z', '+00:00'))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            from datetime import timedelta
-            bj_date = (dt.astimezone(timezone(timedelta(hours=8)))).strftime('%Y-%m-%d')
             index_dir = target_dir.parent / f'{target_dir.name}-daily'
             try:
                 index_dir.mkdir(mode=0o700)

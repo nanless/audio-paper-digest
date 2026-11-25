@@ -15,7 +15,8 @@ else
   exit 1
 fi
 
-"$python_bin" -c '
+if [[ "${PD_PYTHON_RUNTIME_VERIFIED_BIN:-}" != "$python_bin" ]]; then
+  "$python_bin" -c '
 import ssl
 import sys
 
@@ -24,8 +25,10 @@ if sys.version_info < (3, 11):
 if not ssl.OPENSSL_VERSION.startswith("OpenSSL "):
     raise SystemExit(f"Python 需要使用 OpenSSL 提供 TLS，当前为 {ssl.OPENSSL_VERSION}")
 ' || {
-  echo "Python 运行时检查失败；请创建项目 .venv 或安装合规的 python3.11" >&2
-  exit 1
-}
+    echo "Python 运行时检查失败；请创建项目 .venv 或安装合规的 python3.11" >&2
+    exit 1
+  }
+  export PD_PYTHON_RUNTIME_VERIFIED_BIN="$python_bin"
+fi
 
 exec "$python_bin" "$@"

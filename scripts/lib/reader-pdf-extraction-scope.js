@@ -46,13 +46,101 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const DISTUTILS_STARTUP = "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n";
 function withPdfExtractionScope(callback) {
     if (scope.getStore()?.active) return callback();
-    const state = { active: true, entries: new Map(), bytes: 0 };
-    const finish = () => { state.active = false; state.entries.clear(); state.bytes = 0; };
+    const state = {
+        active: true,
+        entries: new Map(),
+        bytes: 0,
+        runtimeIdentityChecked: false,
+        runtimeIdentityValue: null,
+        fileShaCache: new Map(),
+        protocolFilesCache: null
+    };
+    const finish = () => {
+        state.active = false;
+        state.entries.clear();
+        state.fileShaCache.clear();
+        state.protocolFilesCache = null;
+        state.runtimeIdentityValue = null;
+        state.bytes = 0;
+    };
     try {
         const result = scope.run(state, callback);
         if (result && typeof result.then === 'function') return Promise.resolve(result).finally(finish);
         finish(); return result;
     } catch (error) { finish(); throw error; }
+}
+function runtimeIdentityFastSentinel() {
+    const python = path.join(root, '.venv/bin/python');
+    try {
+        fs.accessSync(python, fs.constants.X_OK);
+        const pyStat = fs.lstatSync(python, { bigint: true });
+        const realPy = fs.realpathSync(python);
+        const realPyStat = fs.lstatSync(realPy, { bigint: true });
+        const cfgStat = fs.lstatSync(path.join(root, '.venv/pyvenv.cfg'), { bigint: true });
+        const libs = path.join(root, '.venv/lib');
+        const versions = fs.readdirSync(libs).filter(n => /^python3\.\d+$/.test(n));
+        if (versions.length !== 1) return null;
+        const packages = path.join(libs, versions[0], 'site-packages');
+        const pkgStat = fs.lstatSync(packages, { bigint: true });
+        const fitzStat = fs.lstatSync(path.join(packages, 'fitz'), { bigint: true });
+        const pymupdfStat = fs.lstatSync(path.join(packages, 'pymupdf'), { bigint: true });
+        const rootStat = fs.lstatSync(root, { bigint: true });
+        const scriptsStat = fs.lstatSync(path.join(root, 'scripts'), { bigint: true });
+        const stdlibStat = fs.lstatSync(path.join(path.dirname(path.dirname(realPy)), 'lib', versions[0]), { bigint: true });
+        const pack = s => `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
+        const parts = [
+            realPy, pack(pyStat), pack(realPyStat), pack(cfgStat),
+            pack(pkgStat), pack(fitzStat), pack(pymupdfStat),
+            pack(rootStat), pack(scriptsStat), pack(stdlibStat)
+        ];
+        // Also track distutils-precedence.pth & _distutils_hack files when present so in-place edits bust cache.
+        const pthStat = fs.lstatSync(path.join(packages, 'distutils-precedence.pth'), { bigint: true, throwIfNoEntry: false });
+        if (pthStat) {
+            parts.push('pth:' + pack(pthStat));
+            const hackDir = path.join(packages, '_distutils_hack');
+            const hackStat = fs.lstatSync(hackDir, { bigint: true, throwIfNoEntry: false });
+            if (hackStat && hackStat.isDirectory() && !hackStat.isSymbolicLink()) {
+                parts.push('hack:' + pack(hackStat));
+                for (const name of fs.readdirSync(hackDir).sort()) {
+                    if (name === '__pycache__') continue;
+                    const fStat = fs.lstatSync(path.join(hackDir, name), { bigint: true, throwIfNoEntry: false });
+                    if (fStat) parts.push(`hack/${name}:${pack(fStat)}`);
+                }
+            } else {
+                return null;
+            }
+        }
+        return parts.join('|');
+    } catch (_) {
+        return null;
+    }
+}
+function scopedRuntimeIdentity(active) {
+    if (!active?.active) return runtimeIdentity();
+    const sentinel = runtimeIdentityFastSentinel();
+    if (sentinel && active.runtimeIdentityChecked && active.runtimeIdentitySentinel === sentinel) {
+        return active.runtimeIdentityValue;
+    }
+    const value = runtimeIdentity();
+    active.runtimeIdentitySentinel = sentinel;
+    active.runtimeIdentityValue = value;
+    active.runtimeIdentityChecked = Boolean(sentinel);
+    return value;
+}
+function scopedFileSha(active, filename) {
+    if (!active?.active) return sha(fs.readFileSync(filename));
+    const st = fs.lstatSync(filename, { bigint: true });
+    const statSig = `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+    const prev = active.fileShaCache.get(filename);
+    if (prev && prev.statSig === statSig) return prev.digest;
+    const digest = sha(fs.readFileSync(filename));
+    active.fileShaCache.set(filename, { statSig, digest });
+    return digest;
+}
+function scopedProtocolCatalogFiles(active) {
+    if (!active?.active) return protocolCatalogFiles();
+    if (!active.protocolFilesCache) active.protocolFilesCache = protocolCatalogFiles();
+    return active.protocolFilesCache;
 }
 function metadata(filename) {
     const value = fs.lstatSync(filename, { bigint: true });
@@ -151,7 +239,7 @@ function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKno
     });
     const active = scope.getStore();
     if (!active?.active || !cacheEnvironmentKnown || !extractors.has(program)) return run();
-    const runtime = runtimeIdentity();
+    const runtime = scopedRuntimeIdentity(active);
     if (!runtime) return run();
     const descriptor = fs.fstatSync(fd), size = descriptor.size;
     if (!descriptor.isFile() || (descriptor.mode & 0o077) !== 0
@@ -164,8 +252,17 @@ function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKno
         if (!count) throw new Error('PDF extractor input changed while reading');
         offset += count;
     }
-    const files = extractorDependencyFiles(program, dependencies);
-    const implementations = files.map(file => [file, sha(fs.readFileSync(file))]);
+    const files = [...new Set([
+        program,
+        ...(extractors.get(program) || []),
+        ...(protocolCatalogExtractors.has(program) ? scopedProtocolCatalogFiles(active) : []),
+        ...dependencies,
+        path.join(root, 'scripts/python-runtime.sh'),
+        path.join(root, 'scripts/runtime_guard.py'),
+        path.join(root, '.paper-digest-workspace-role.json'),
+        path.join(root, '.env')
+    ])];
+    const implementations = files.map(file => [file, scopedFileSha(active, file)]);
     const key = sha(JSON.stringify({ input: sha(input), implementations, runtime, env }));
     const cached = active.entries.get(key);
     if (cached) return Buffer.from(cached);
@@ -194,10 +291,19 @@ function runPdfExtractorJson(program, { pdfBuffer, pdfSha256, meta, tmpPrefix = 
     const active = scope.getStore();
     let cacheKey = null;
     if (active?.active && extractors.has(program) && pdfBuffer.length <= 72 * 1024 * 1024) {
-        const runtime = runtimeIdentity();
+        const runtime = scopedRuntimeIdentity(active);
         if (runtime) {
-            const files = extractorDependencyFiles(program, dependencies);
-            const implementations = files.map(file => [file, sha(fs.readFileSync(file))]);
+            const files = [...new Set([
+                program,
+                ...(extractors.get(program) || []),
+                ...(protocolCatalogExtractors.has(program) ? scopedProtocolCatalogFiles(active) : []),
+                ...dependencies,
+                path.join(root, 'scripts/python-runtime.sh'),
+                path.join(root, 'scripts/runtime_guard.py'),
+                path.join(root, '.paper-digest-workspace-role.json'),
+                path.join(root, '.env')
+            ])];
+            const implementations = files.map(file => [file, scopedFileSha(active, file)]);
             cacheKey = sha(JSON.stringify({
                 format: 'json-with-pdf-v1',
                 pdfSha256,

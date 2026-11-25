@@ -316,17 +316,28 @@ async function main(options = {}) {
     currentBatchStageDate = batchDate;
     currentBatchStageStartedAt = Date.now();
     writeStageSummary({ stage: '分析', status: 'start', date: batchDate, message: `批量分析 ${notAnalyzed.length} 篇` });
+    const pendingDigestById = new Map();
+    const flushPendingDigestStatuses = () => {
+        if (pendingDigestById.size === 0) return;
+        const batch = [...pendingDigestById.values()];
+        pendingDigestById.clear();
+        updateAnalysisDigestStatuses(batch, { batchDate });
+    };
+    const baseRetryReporter = require('./digest-run-report').createAnalysisBatchRetryReporter(RESULT_FILE, {
+        workflow: 'daily-batch-recovery', batchDate,
+        sourceReference: dailyFreshSources.dailyFreshSourceReference(dailySourcePlan), papers: notAnalyzed
+    });
     const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: RESULT_FILE,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         maxRounds: Config.ANALYSIS_CONFIG.batchMaxRounds,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
-        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(RESULT_FILE, {
-            workflow: 'daily-batch-recovery', batchDate,
-            sourceReference: dailyFreshSources.dailyFreshSourceReference(dailySourcePlan), papers: notAnalyzed
-        }),
-        saveInterval: 1,
+        onRoundDone: (...args) => {
+            flushPendingDigestStatuses();
+            return baseRetryReporter(...args);
+        },
+        saveInterval: 0,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
             analyze: (paper, sourceOptions) => {
@@ -379,9 +390,7 @@ async function main(options = {}) {
                 status: 'running',
                 stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
             }));
-            updateAnalysisDigestStatuses([attempted], {
-                batchDate
-            });
+            pendingDigestById.set(normalizedId(attempted) || String(attempted.arxivId || ''), attempted);
         },
         onPaperStart: (idx, total, paper) => {
             console.log(`\n--- [${idx + 1}/${total}] 分析: ${paper.arxivId} ---`);
@@ -430,21 +439,33 @@ async function main(options = {}) {
             console.log(`   已更新批次统计到 ${RESULT_FILE}`);
         }
     });
-    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
-        dailySourcePlan, () => operatorManifestPath !== undefined
-            ? require('./lib/daily-reader-operator-correction').withCorrections(
-                operatorManifestPath,dailySourcePlan,papers,runAnalysisFromDailySources,{factFeedbacks:feedbacks})
-            : runAnalysisFromDailySources(), { refreshReaderDiagnostics }
-    );
+    let stats;
+    try {
+        ({ stats } = await require('./lib/reader-proof-read-scope').withReaderProofReadScope(() =>
+            require('./lib/reader-pdf-extraction-scope').withPdfExtractionScope(() =>
+                dailyFreshSources.withDailyFreshAnalysisContext(
+                    dailySourcePlan, () => operatorManifestPath !== undefined
+                        ? require('./lib/daily-reader-operator-correction').withCorrections(
+                            operatorManifestPath, dailySourcePlan, papers, runAnalysisFromDailySources, { factFeedbacks: feedbacks })
+                        : runAnalysisFromDailySources(), { refreshReaderDiagnostics }
+                )
+            )
+        ));
+    } finally {
+        flushPendingDigestStatuses();
+    }
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);
     const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
     if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
+    let finalSummary = null;
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
         dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success: savedAnalysisSuccess, status } = getBatchAnalysisRunSummary(currentPapers, dailySourcePlan, feedbacks);
+        const summary = getBatchAnalysisRunSummary(currentPapers, dailySourcePlan, feedbacks);
+        finalSummary = summary;
+        const { remaining, success: savedAnalysisSuccess, status } = summary;
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: currentPapers,
@@ -463,7 +484,7 @@ async function main(options = {}) {
         return payload;
     });
     await synchronizeCompletedAnalysisDigestStatuses(RESULT_FILE, dailySourcePlan, { batchDate });
-    const { remaining, status } = getBatchAnalysisRunSummary(finalPayload.papers, dailySourcePlan, feedbacks);
+    const { remaining, status } = finalSummary || getBatchAnalysisRunSummary(finalPayload.papers, dailySourcePlan, feedbacks);
     writeStageSummary({
         stage: '分析', status: status === 'complete' ? 'ok' : 'warn', date: batchDate,
         elapsedMs: Date.now() - currentBatchStageStartedAt,

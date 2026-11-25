@@ -440,8 +440,9 @@ function sharedBlogLockBlockers(layout, options = {}) {
     return blockers;
 }
 
-function walk(root, visitor, blockers = []) {
+function walk(root, visitor, blockers = [], options = {}) {
     if (!fs.existsSync(root)) return;
+    const skipDirNames = options.skipDirNames instanceof Set ? options.skipDirNames : null;
     const stack = [path.resolve(root)];
     while (stack.length > 0) {
         const entryPath = stack.pop();
@@ -458,6 +459,9 @@ function walk(root, visitor, blockers = []) {
         }
         visitor(entryPath, stat);
         if (!stat.isDirectory()) continue;
+        if (skipDirNames && entryPath !== path.resolve(root) && skipDirNames.has(path.basename(entryPath))) {
+            continue;
+        }
         let names;
         try {
             names = fs.readdirSync(entryPath);
@@ -910,7 +914,7 @@ function scanPdfDeclarations(layout, declarations, blockers, runtimeReal = null)
                     value.pdf.sha256, entryPath, 'historical-pdf-receipt', layout.runtime, runtimeReal);
             }
         }
-    }, blockers);
+    }, blockers, { skipDirNames: new Set(['llm-usage', 'llm-usage-daily']) });
 }
 
 function inspectColdPdfBytes(filename, expected) {
@@ -968,7 +972,7 @@ function getPdfDuplicateReport(options = {}) {
     walk(layout.runtime, (entryPath, stat) => {
         if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.pdf') return;
         files.set(path.resolve(entryPath), { path: path.resolve(entryPath), bytes: stat.size, scannedStat: stat });
-    }, blockers);
+    }, blockers, { skipDirNames: new Set(['llm-usage', 'llm-usage-daily']) });
 
     for (const [pdfPath, claims] of declarations.entries()) {
         const current = files.get(pdfPath);

@@ -11374,7 +11374,7 @@ def _daily_publication_replay_scope():
     if _DAILY_PUBLICATION_REPLAY_SCOPE.get() is not None:
         yield
         return
-    state = {'sources': {}, 'operations': []}
+    state = {'sources': {}, 'operations': [], 'validated_inputs': {}}
     token = _DAILY_PUBLICATION_REPLAY_SCOPE.set(state)
     try:
         yield
@@ -14085,6 +14085,56 @@ def generation_input_fingerprint(
     return result
 
 
+def _stat_and_sha_for_input_manifest(manifest, date_str):
+    """捕获生成清单与核心输入来源文件的完整 (dev, ino, size, mtime_ns, ctime_ns, sha256) 快照。"""
+    files = []
+    manifest_path = generation_manifest_path(date_str)
+    if manifest_path.is_file():
+        files.append(manifest_path)
+    source_ref = manifest.get('inputSourceReference')
+    if isinstance(source_ref, dict):
+        rel = source_ref.get('relativePath') or source_ref.get('path')
+        if isinstance(rel, str) and rel.strip():
+            candidate = (PROJECT_ROOT / rel).resolve() if not Path(rel).is_absolute() else Path(rel).resolve()
+            if not candidate.is_file():
+                return None
+            files.append(candidate)
+    for paper in manifest.get('publishedPapers') or []:
+        if not isinstance(paper, dict):
+            continue
+        prov = paper.get('freshRewriteProvenance')
+        if isinstance(prov, dict):
+            sdir = prov.get('sourceDir') or prov.get('relativeSourceDir')
+            if isinstance(sdir, str) and sdir.strip():
+                base = (PROJECT_ROOT / sdir).resolve() if not Path(sdir).is_absolute() else Path(sdir).resolve()
+                for fname in ('source-manifest.json', 'source-runtime.json', 'source.txt', 'source.pdf'):
+                    fp = base / fname
+                    if not fp.is_file():
+                        return None
+                    files.append(fp)
+    if not files:
+        return None
+    snapshots = []
+    seen = set()
+    for p in files:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            st = p.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+            return None
+        snapshots.append((
+            key,
+            st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns,
+            _sha256_file(p),
+        ))
+    return tuple(sorted(snapshots))
+
+
 def _validate_generation_input_integrity(
     manifest, date_str, *, fresh=False, checked_derived_figure_assets=None,
 ):
@@ -14094,6 +14144,24 @@ def _validate_generation_input_integrity(
     派生证明的保存入口传入；清单字段与指纹仍在这里核对，其他调用点的独立
     重算边界不变。
     """
+    replay_state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    cache_key = None
+    can_use_replay_cache = (
+        replay_state is not None
+        and not fresh
+        and checked_derived_figure_assets is None
+        and manifest.get('publicationMode') == LLM_API_PRODUCTION_MODE
+    )
+    if can_use_replay_cache:
+        manifest_sig = _stable_json_sha256(manifest)
+        cache_key = (str(date_str), manifest_sig)
+        cached_entry = replay_state.get('validated_inputs', {}).get(cache_key)
+        if cached_entry is not None:
+            cached_snap, cached_expected_input, cached_expected_snapshot = cached_entry
+            current_snap = _stat_and_sha_for_input_manifest(manifest, date_str)
+            if current_snap is not None and current_snap == cached_snap:
+                return cached_expected_input, cached_expected_snapshot
+            replay_state.get('validated_inputs', {}).pop(cache_key, None)
     _validate_post_publication_policy(manifest)
     published_papers = manifest.get('publishedPapers')
     category = manifest.get('category')
@@ -14239,6 +14307,12 @@ def _validate_generation_input_integrity(
         pass
     else:
         raise PublishDataValidationError('生成清单的发布模式缺失或不符合要求。')
+    if replay_state is not None and cache_key is not None:
+        current_snap = _stat_and_sha_for_input_manifest(manifest, date_str)
+        if current_snap is not None:
+            replay_state.setdefault('validated_inputs', {})[cache_key] = (
+                current_snap, expected_input, expected_snapshot,
+            )
     return expected_input, expected_snapshot
 
 

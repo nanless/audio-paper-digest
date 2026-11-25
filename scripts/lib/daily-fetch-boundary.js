@@ -468,19 +468,41 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
     validateDailyFetchBoundary(result); return result;
 }
 function readCommittedPublishedPaperIds(blogRepo) {
-    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
     const head = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').toString().trim();
     git('merge-base', '--is-ancestor', head, 'HEAD');
     const ids = new Set(); let skippedLegacyPages = 0;
-    for (const name of git('ls-tree', '-r', '--name-only', head).toString().split('\n').filter(p => /^content\/posts\/.*\.md$/.test(p))) {
-        const bytes = git('show', `${head}:${name}`);
-        const block = bytes.toString().match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || '';
-        if (!/^paper_digest_pipeline_owned:\s*true(?:\s*#.*)?$/m.test(block)
-            || !/^paper_digest_page_type:\s*(?:paper|"paper"|'paper')(?:\s*#.*)?$/m.test(block)
-            || !/^paper_digest_arxiv_id:/m.test(block)) { skippedLegacyPages++; continue; }
-        const metadata = frontmatter(bytes);
-        if (metadata.paper_digest_pipeline_owned === true && metadata.paper_digest_page_type === 'paper' && metadata.draft === false) {
-            const id = normalizedId(metadata.paper_digest_arxiv_id); if (/^\d{4}\.\d{4,5}$/.test(id)) ids.add(id);
+    const names = git('ls-tree', '-r', '--name-only', head).toString().split('\n').filter(p => /^content\/posts\/.*\.md$/.test(p));
+    // 用单次 git cat-file --batch 替代逐篇 git show（9,000+ 篇文章时省去 9,000+ 次子进程派生）。
+    const BATCH_CHUNK = 1000;
+    for (let start = 0; start < names.length; start += BATCH_CHUNK) {
+        const slice = names.slice(start, start + BATCH_CHUNK);
+        const input = slice.map(name => `${head}:${name}\n`).join('');
+        const raw = execFileSync('git', ['-C', blogRepo, 'cat-file', '--batch'], {
+            input,
+            maxBuffer: 256 * 1024 * 1024,
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        let offset = 0;
+        for (let i = 0; i < slice.length && offset < raw.length; i++) {
+            const nl = raw.indexOf(0x0a, offset);
+            if (nl < 0) break;
+            const header = raw.subarray(offset, nl).toString('utf8');
+            offset = nl + 1;
+            if (header.endsWith(' missing')) continue;
+            const parts = header.split(' ');
+            const size = Number.parseInt(parts[2], 10);
+            if (!Number.isFinite(size) || size < 0) break;
+            const bytes = raw.subarray(offset, offset + size);
+            offset += size + 1; // trailing LF
+            const block = bytes.toString('utf8').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || '';
+            if (!/^paper_digest_pipeline_owned:\s*true(?:\s*#.*)?$/m.test(block)
+                || !/^paper_digest_page_type:\s*(?:paper|"paper"|'paper')(?:\s*#.*)?$/m.test(block)
+                || !/^paper_digest_arxiv_id:/m.test(block)) { skippedLegacyPages++; continue; }
+            const metadata = frontmatter(bytes);
+            if (metadata.paper_digest_pipeline_owned === true && metadata.paper_digest_page_type === 'paper' && metadata.draft === false) {
+                const id = normalizedId(metadata.paper_digest_arxiv_id); if (/^\d{4}\.\d{4,5}$/.test(id)) ids.add(id);
+            }
         }
     }
     Object.defineProperty(ids, 'skippedLegacyPages', { value: skippedLegacyPages });

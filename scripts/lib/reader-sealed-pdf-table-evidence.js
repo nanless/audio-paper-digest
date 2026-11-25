@@ -106,13 +106,18 @@ function withArtifacts(artifacts, paperId, callback) {
     const current = scope.getStore();
     const representation = proofFormat.header(FAMILY);
     if (current?.artifacts === artifacts && isDeepStrictEqual(current.header, representation)) return callback();
-    const entries = deriveCurrent(paperId);
-    const proofs = new Map(entries.filter(entry => entry.eligible).map(entry => [entry.sourceTableOrdinal, entry.evidence]));
-    return scope.run({ artifacts, proofs, header: representation }, callback);
+    // 按引用表懒加载：只有真正查询某个表的 PDF 格证据时才触发 PyMuPDF，
+    // 既避免未引用表触发 20+ 次无用子进程，又完整保留所有防篡改校验。
+    const state = { artifacts, paperId, proofs: null, header: representation };
+    return scope.run(state, callback);
 }
 function evidence(table) {
     const current = scope.getStore();
     if (!current || !current.artifacts.tables.includes(table)) return null;
+    if (current.proofs === null) {
+        const entries = deriveCurrent(current.paperId);
+        current.proofs = new Map(entries.filter(entry => entry.eligible).map(entry => [entry.sourceTableOrdinal, entry.evidence]));
+    }
     const proof = current.proofs.get(table.ordinal);
     return proof && proof.sourceTableDomSha256 === table.sourceDomSha256 && proof.sourceTableSha256 === stable(table)
         ? structuredClone(proof) : null;

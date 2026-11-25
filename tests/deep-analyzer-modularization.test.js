@@ -671,34 +671,34 @@ test('Wave 14.6B-JS: J1–J4 四个 Strangler-Fig 子模块导出符号引用一
     }
 });
 
-test('Wave 14.6B-JS: deep-analyzer.js 与 manifest-new.js 的 parserImplementationSha256 及 buildApiReaderBaseFingerprint 严格锁步并包含 J1–J4 四模块', t => {
+test('Wave 14.6B-JS: deep-analyzer.js 与 manifest-new.js 共用单源 parserImplementationSha256 并按工作流隔离适配器且包含 J1–J4 四模块', t => {
     const scriptsDir = path.join(REPO_ROOT, 'scripts');
     const deepSource = fs.readFileSync(path.join(scriptsDir, 'deep-analyzer.js'), 'utf8');
-    const match = /parserImplementationSha256:\s*(repair\.shaText\(\[[\s\S]*?\]\.join\('\\0'\)\))/.exec(deepSource);
-    assert.ok(match, '应在 scripts/deep-analyzer.js 中定位到 parserImplementationSha256 表达式');
+    assert.match(deepSource, /require\('\.\/lib\/reader-implementation-fingerprint'\)\.currentReaderParserImplementationSha256\(/);
+    const fingerprintMod = require('../scripts/lib/reader-implementation-fingerprint');
 
-    const evaluateDeepParserSha = (mutateRelative = null) => {
+    const evaluateDailyParserSha = (mutateRelative = null) => {
         const observed = [];
-        const sha = vm.runInNewContext(match[1], {
-            __filename: path.join(scriptsDir, 'deep-analyzer.js'),
-            __dirname: scriptsDir,
-            path,
-            fs: {
+        const sha = fingerprintMod.currentReaderParserImplementationSha256({
+            workflow: 'daily',
+            scriptsDir,
+            fsImpl: {
                 readFileSync: (filename, encoding) => {
                     const rel = path.relative(scriptsDir, filename).replace(/\\/g, '/');
                     observed.push(rel);
                     const raw = fs.readFileSync(filename, encoding);
                     return mutateRelative && rel === mutateRelative ? `${raw}\n// synthetic mutation\n` : raw;
                 }
-            },
-            repair: readerRepair
+            }
         });
         return { sha, observed };
     };
 
-    const baseline = evaluateDeepParserSha(null);
+    const baseline = evaluateDailyParserSha(null);
     const manifestSha = manifestNew.currentReaderParserImplementationSha256();
-    assert.equal(baseline.sha, manifestSha, 'deep-analyzer.js 与 manifest-new.js 的 parserImplementationSha256 必须逐字节一致');
+    assert.equal(baseline.sha, manifestSha, 'deep-analyzer.js 与 manifest-new.js 的 daily parserImplementationSha256 必须逐字节一致');
+    assert.equal(baseline.observed.includes('lib/conference-reader-operator-correction.js'), false, 'daily 指纹不应被 conference 适配器污染');
+    assert.equal(baseline.observed.includes('lib/historical-direct-rewrite-runner.js'), false, 'daily 指纹不应被 historical 适配器污染');
 
     const expectedNewFiles = [
         'lib/reader-resource-claims.js',
@@ -710,7 +710,7 @@ test('Wave 14.6B-JS: deep-analyzer.js 与 manifest-new.js 的 parserImplementati
     for (let i = 0; i < expectedNewFiles.length; i++) {
         assert.ok(indices[i] >= 0, `parserImplementationSha256 缺少 ${expectedNewFiles[i]}`);
         if (i > 0) assert.ok(indices[i] > indices[i - 1], `parserImplementationSha256 中 ${expectedNewFiles[i]} 顺序错误`);
-        const mutated = evaluateDeepParserSha(expectedNewFiles[i]);
+        const mutated = evaluateDailyParserSha(expectedNewFiles[i]);
         assert.notEqual(mutated.sha, baseline.sha, `改动 ${expectedNewFiles[i]} 必须改变 parserImplementationSha256`);
     }
 

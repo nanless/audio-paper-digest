@@ -442,12 +442,51 @@ function validateManifest(manifest, arxivId, generation) {
     return manifest;
 }
 
+function statSignatureOfBundleFiles(directory) {
+    const parts = [];
+    for (const name of SOURCE_FILES) {
+        const s = fs.lstatSync(path.join(directory, name), { bigint: true });
+        if (!s.isFile() || s.isSymbolicLink() || s.nlink !== 1n) return null;
+        if (process.platform !== 'win32' && (s.mode & 0o777n) !== 0o600n) return null;
+        parts.push(`${name}:${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`);
+    }
+    return parts.join('|');
+}
+
 function readFreshArxivRewriteSource({ rootDir, arxivId, generation } = {}) {
     const root = safeDirectory(rootDir, false, '来源根目录');
     const id = normalizedArxivId(arxivId); const normalized = normalizedGeneration(generation);
     const directory = sourceDirectory(root, id, normalized);
     safeDirectory(path.join(root, id), false, '论文来源目录');
     safeDirectory(directory, false, '本次来源获取序号对应的目录');
+    const proofScope = require('./reader-proof-read-scope').getActiveProofReadScopeState();
+    if (proofScope && proofScope.sourceBundles) {
+        const cached = proofScope.sourceBundles.get(directory);
+        if (cached) {
+            const entries = fs.readdirSync(directory).sort();
+            const currentSig = entries.join('\0') === SOURCE_FILES.slice().sort().join('\0')
+                ? statSignatureOfBundleFiles(directory) : null;
+            if (currentSig && currentSig === cached.sig) {
+                const afterSig = statSignatureOfBundleFiles(directory);
+                if (afterSig === cached.sig) {
+                    proofScope.hits++;
+                    return {
+                        rootDir: cached.rootDir,
+                        directory: cached.directory,
+                        arxivId: cached.arxivId,
+                        generation: cached.generation,
+                        sourceManifestSha256: cached.sourceManifestSha256,
+                        manifest: clone(cached.manifest),
+                        runtimeDetails: clone(cached.runtimeDetails),
+                        text: cached.text,
+                        textBytes: Buffer.from(cached.textBytes),
+                        pdf: Buffer.from(cached.pdf)
+                    };
+                }
+            }
+            proofScope.sourceBundles.delete(directory);
+        }
+    }
     const entries = fs.readdirSync(directory).sort();
     if (entries.join('\0') !== SOURCE_FILES.slice().sort().join('\0')) fail('本次来源获取目录必须恰好包含四个规定的来源文件');
     const manifestBytes = readPrivateFile(path.join(directory, MANIFEST_NAME), 1024 * 1024, '来源清单');
@@ -480,9 +519,28 @@ function readFreshArxivRewriteSource({ rootDir, arxivId, generation } = {}) {
     const textInfo = { source: manifest.text.source, sourceId: manifest.text.sourceId, bytes: text,
         responseSha256: manifest.text.responseSha256 };
     const runtimeDetails = runtimeDetailsFromMetadata(runtimeMetadata, textInfo, id);
-    return { rootDir: root, directory, arxivId: id, generation: normalized,
+    const result = { rootDir: root, directory, arxivId: id, generation: normalized,
         sourceManifestSha256: sha256(manifestBytes), manifest: clone(manifest), runtimeDetails,
         text: text.toString('utf8'), textBytes: text, pdf: Buffer.from(pdf) };
+    if (proofScope && proofScope.sourceBundles && proofScope.sourceBundles.size < 64) {
+        const sig = statSignatureOfBundleFiles(directory);
+        if (sig) {
+            proofScope.sourceBundles.set(directory, {
+                sig,
+                rootDir: root,
+                directory,
+                arxivId: id,
+                generation: normalized,
+                sourceManifestSha256: result.sourceManifestSha256,
+                manifest: clone(result.manifest),
+                runtimeDetails: clone(result.runtimeDetails),
+                text: result.text,
+                textBytes: Buffer.from(text),
+                pdf: Buffer.from(pdf)
+            });
+        }
+    }
+    return result;
 }
 
 function generationExists(rootDir, arxivId, generation) {

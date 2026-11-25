@@ -16,14 +16,24 @@ const statFields = ['dev', 'ino', 'mode', 'nlink', 'uid', 'gid', 'size', 'mtimeN
 const sameStat = (a, b) => statFields.every(key => a[key] === b[key]);
 function withReaderProofReadScope(callback) {
     if (scopes.getStore()?.active) return callback();
-    const state = { active: true, records: new Map(), bytes: 0, reads: 0, hits: 0 };
-    const finish = () => { state.active = false; state.records.clear(); state.receiptIndexes?.clear(); state.bytes = 0; };
+    const state = { active: true, records: new Map(), sourceBundles: new Map(), bytes: 0, reads: 0, hits: 0 };
+    const finish = () => {
+        state.active = false;
+        state.records.clear();
+        state.sourceBundles.clear();
+        state.receiptIndexes?.clear();
+        state.bytes = 0;
+    };
     try {
         const result = scopes.run(state, callback);
         if (result && typeof result.then === 'function') return Promise.resolve(result).finally(finish);
         finish();
         return result;
     } catch (error) { finish(); throw error; }
+}
+function getActiveProofReadScopeState() {
+    const state = scopes.getStore();
+    return state?.active ? state : null;
 }
 function assertFile(stat, options) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n
@@ -65,8 +75,11 @@ function readReaderProofJson(filename, options = {}) {
     try {
         const before = fs.fstatSync(fd, { bigint: true });
         assertFile(before, options);
-        const { readBoundedFd } = require('./publication-file-primitives.js');
-        const bytes = readBoundedFd(fd, Number(before.size), Number(options.maxBytes || 64 * 1024 * 1024));
+        const maxBytes = Number(options.maxBytes || 64 * 1024 * 1024);
+        const bytes = fs.readFileSync(fd);
+        if (bytes.length > maxBytes) {
+            throw new Error(options.unsafeMessage || 'Reader 证明文件超过大小上限');
+        }
         const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
         assertSha({ sha256 }, options);
         const text = bytes.toString('utf8');
@@ -167,4 +180,4 @@ function withReadOnlyReaderReceiptRetry(callback) {
         }
     }
 }
-module.exports = { ReaderReceiptSnapshotChangedError, withReadOnlyReaderReceiptRetry, withReaderProofReadScope, readReaderProofJson, readerProofReadScopeStats, withReaderReceiptScan, assertReaderReceiptSnapshots, findReaderReceiptSibling };
+module.exports = { ReaderReceiptSnapshotChangedError, withReadOnlyReaderReceiptRetry, withReaderProofReadScope, readReaderProofJson, readerProofReadScopeStats, getActiveProofReadScopeState, withReaderReceiptScan, assertReaderReceiptSnapshots, findReaderReceiptSibling };

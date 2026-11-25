@@ -2035,7 +2035,8 @@ function currentAnalysisWaiverContext(files = Config.FILES) {
 }
 
 function validateCurrentDataFiles(files = Config.FILES) {
-    return withPdfExtractionScope(() => validationRunCache.run({
+    return require('./lib/reader-proof-read-scope').withReaderProofReadScope(() =>
+        withPdfExtractionScope(() => validationRunCache.run({
         jsonByPath: new Map(),
         validReaderByPaper: new WeakMap(),
         readOnlySummaryByPaper: new WeakMap()
@@ -2069,7 +2070,7 @@ function validateCurrentDataFiles(files = Config.FILES) {
                 analysisWaiver: analysisWaiverContext.waiver
             })
         ];
-    }));
+    })));
 }
 
 function hasAnyCurrentDataFiles(files = Config.FILES) {

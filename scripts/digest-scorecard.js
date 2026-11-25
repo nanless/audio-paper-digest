@@ -99,16 +99,51 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
         }
     }
 
-    // --fast 仅对缺少日索引的日期回退扫描主目录；默认模式将日索引与主目录 mtime 窗口去重合并，
-    // 避免上线当天或 best-effort 索引偶发漏写时静默漏计；--canonical 无 mtime 截断全量权威扫描主目录。
-    const scanDates = fast
-        ? targetDates.filter(d => !loadedDatesFromIndex.has(d))
-        : targetDates;
+    // 默认模式优先读每日 JSONL 索引与日期分片子目录（避开 20 万级历史扁平根目录全扫，200x+ 加速）；
+    // 仅当某目标日既无日索引也无日期分片子目录，或显式传 --canonical 时才扫描平铺根目录。
+    const scannedSubdirDates = new Set();
+    if (!canonical && !fast && fs.existsSync(usageDir)) {
+        const rootStatCheck = fs.lstatSync(usageDir);
+        if (!rootStatCheck.isDirectory() || rootStatCheck.isSymbolicLink()) {
+            throw new Error('用量目录必须是真实目录，不能是符号链接');
+        }
+        for (const date of targetDates) {
+            const subDir = path.join(usageDir, date);
+            let subStat;
+            try { subStat = fs.lstatSync(subDir); } catch (_) { continue; }
+            if (!subStat.isDirectory() || subStat.isSymbolicLink()) continue;
+            scannedSubdirDates.add(date);
+            for (const name of fs.readdirSync(subDir)) {
+                if (name.startsWith('.') || !name.endsWith('.json')) continue;
+                const filePath = path.join(subDir, name);
+                let stat;
+                try { stat = fs.lstatSync(filePath); } catch (_) { continue; }
+                if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_EVENT_BYTES) continue;
+                let event;
+                try { event = JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (_) { continue; }
+                if (!isUsageEventFormat(event) || event.kind !== 'request') continue;
+                if (parseEventDate(event.at) !== date) continue;
+                if (event.eventId) {
+                    if (seenEventIds.has(event.eventId)) continue;
+                    seenEventIds.add(event.eventId);
+                }
+                events.push(event);
+            }
+        }
+    }
+
+    const uncoveredDates = targetDates.filter(d => !loadedDatesFromIndex.has(d) && !scannedSubdirDates.has(d));
+    const scanDates = canonical ? targetDates : uncoveredDates;
     if (scanDates.length === 0 || !fs.existsSync(usageDir)) {
+        const filteredEvents = filterEventsByRunAndBatch(events, options);
         return {
-            events,
-            source: loadedDatesFromIndex.size > 0
-                ? (fast ? 'daily-index-fast' : 'daily-index')
+            events: filteredEvents,
+            source: (loadedDatesFromIndex.size > 0 || scannedSubdirDates.size > 0)
+                ? (fast
+                    ? 'daily-index-fast'
+                    : (loadedDatesFromIndex.size > 0 && scannedSubdirDates.size > 0
+                        ? 'daily-index+usage-dir'
+                        : (scannedSubdirDates.size > 0 ? 'date-shard' : 'daily-index')))
                 : 'empty'
         };
     }
@@ -152,11 +187,23 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
     }
     scanDir(usageDir, canonical);
     return {
-        events,
+        events: filterEventsByRunAndBatch(events, options),
         source: canonical
             ? 'canonical-usage-dir'
             : (loadedDatesFromIndex.size > 0 ? (fast ? 'mixed-fast' : 'daily-index+usage-dir') : 'usage-dir-mtime')
     };
+}
+
+function filterEventsByRunAndBatch(events, options = {}) {
+    let out = events;
+    if (options.runId) {
+        out = out.filter(ev => ev && ev.runId === options.runId);
+    }
+    if (options.batchDate) {
+        // 按 batchDate 过滤时兼容显式 batchDate 或按论文 ID/事件日期筛选
+        out = out.filter(ev => ev && (ev.batchDate === options.batchDate || parseEventDate(ev.at) === options.batchDate));
+    }
+    return out;
 }
 
 function percentile(values, p) {
@@ -319,8 +366,19 @@ function parseArgs(argv) {
             options.days = Number(argv[++i]);
         } else if (arg === '--dir' && argv[i + 1]) {
             options.dir = argv[++i];
+        } else if (arg === '--run-id' && argv[i + 1]) {
+            const rid = argv[++i];
+            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rid)) {
+                throw new Error(`--run-id 必须是规范 UUID v4：${rid}`);
+            }
+            options.runId = rid.toLowerCase();
+        } else if (arg === '--batch-date' && argv[i + 1]) {
+            const bd = argv[++i];
+            if (!isValidDate(bd)) throw new Error(`--batch-date 必须是有效的北京日期 YYYY-MM-DD：${bd}`);
+            options.batchDate = bd;
+            if (!options.date) options.date = bd;
         } else {
-            throw new Error('用法：digest:scorecard [--date YYYY-MM-DD] [--days N] [--dir DIR] [--fast|--canonical] [--json]');
+            throw new Error('用法：digest:scorecard [--date YYYY-MM-DD] [--days N] [--run-id UUID] [--batch-date YYYY-MM-DD] [--dir DIR] [--fast|--canonical] [--json]');
         }
     }
     return options;
@@ -332,7 +390,9 @@ function main(argv = process.argv.slice(2)) {
     const usageDir = path.resolve(options.dir || Config.FILES.llmUsageDir);
     const { events, source } = loadEventsForDates(usageDir, dates, {
         canonical: options.canonical,
-        fast: options.fast
+        fast: options.fast,
+        runId: options.runId,
+        batchDate: options.batchDate
     });
     const card = buildScorecard(events, { dates, source });
     if (options.json) {

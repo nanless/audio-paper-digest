@@ -43,9 +43,29 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
         }
         return relative;
     }
+    const entryList = entryFiles.map(item => String(item || '').replace(/\\/g, '/'));
+    const includesConferenceEntry = entryList.some(item => /(?:^|\/)(?:official-)?conference[-_]|publish-conference\.py$/i.test(item));
+    const includesHistoricalEntry = entryList.some(item => /(?:^|\/)(?:historical|direct-rewrite)[-_]/i.test(item));
+    const includesManualEntry = entryList.some(item => item.startsWith('manual/'));
+    const isForeignWorkflowFile = relative => {
+        if (!includesManualEntry && relative.startsWith('manual/')) return true;
+        if (!includesConferenceEntry && (
+            /^scripts\/(?:lib\/)?(?:official-)?conference[-_]/.test(relative)
+            || relative === 'scripts/publish-conference.py'
+            || relative === 'scripts/icmc-proceedings.py'
+            || relative === 'package-lock.json'
+        )) return true;
+        if (!includesHistoricalEntry && (
+            /^scripts\/(?:lib\/)?(?:historical|direct-rewrite)[-_]/.test(relative)
+            || relative === 'config/historical-page-scan-formats.json'
+        )) return true;
+        return false;
+    };
     function add(candidate, required = false) {
         const relative = local(candidate, required);
-        if (relative && !seen.has(relative)) { seen.add(relative); pending.push(relative); }
+        if (!relative) return null;
+        if (!required && isForeignWorkflowFile(relative)) return null;
+        if (!seen.has(relative)) { seen.add(relative); pending.push(relative); }
         return relative;
     }
     function resolveImport(specifier, filename) {
@@ -76,8 +96,24 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
     add('scripts/lib/workflow-implementation-files' + '.js');
     const LITERAL_SCAN_SKIP = new Set([
         'scripts/env-loader' + '.js',
-        'scripts/runtime_guard' + '.py'
+        'scripts/runtime_guard' + '.py',
+        'scripts/workspace-role' + '.js',
+        'scripts/doctor' + '.js',
+        'scripts/config-check' + '.js',
+        'scripts/lib/workflow-implementation-files' + '.js'
     ]);
+    const stripNonExecutableCommentsAndGuards = (sourceText, filePath) => {
+        const isPy = filePath.endsWith('.py') || filePath.endsWith('.sh');
+        const cleanedLines = sourceText.split('\n').map(line => {
+            const trimmed = line.trimStart();
+            if (isPy && trimmed.startsWith('#')) return '';
+            if (!isPy && (trimmed.startsWith('//') || trimmed.startsWith('*'))) return '';
+            return line
+                .replace(/requireExternalRuntime\s*\(\s*['"][^'"]+['"]/g, 'requireExternalRuntime(')
+                .replace(/require_external_runtime\s*\(\s*['"][^'"]+['"]/g, 'require_external_runtime(');
+        });
+        return cleanedLines.join('\n');
+    };
     while (pending.length) {
         const filename = pending.shift();
         if (filename === 'scripts/lib/workflow-legacy-codec' + '.js') {
@@ -137,10 +173,18 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
             add('scripts/' + module + '.py');
         }
         if (LITERAL_SCAN_SKIP.has(filename)) continue;
-        for (const match of text.matchAll(LOCAL_LITERAL)) {
+        const literalDirs = filename.startsWith('manual/')
+            ? [path.dirname(filename), '.', 'scripts', 'scripts/lib', 'manual/scripts', 'manual/prompts', 'manual/docs']
+            : [path.dirname(filename), '.', 'scripts', 'scripts/lib'];
+        const scannableText = stripNonExecutableCommentsAndGuards(text, filename);
+        for (const match of scannableText.matchAll(LOCAL_LITERAL)) {
             const literal = match[1];
-            for (const directory of [path.dirname(filename), '.', 'scripts', 'scripts/lib',
-                'prompts', 'manual/scripts', 'manual/prompts', 'manual/docs']) {
+            if (literal.includes('/') || literal.startsWith('.')) {
+                add(path.join(path.dirname(filename), literal));
+                add(path.join('.', literal));
+                continue;
+            }
+            for (const directory of literalDirs) {
                 add(path.join(directory, literal));
             }
         }

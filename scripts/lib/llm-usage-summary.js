@@ -311,6 +311,16 @@ function missingSummary(date) {
     };
 }
 
+function directoryMtimeSignature(directory, dirStat, date) {
+    let subMtime = 'none';
+    const subPath = path.join(directory, date);
+    try {
+        const subStat = fs.lstatSync(subPath);
+        if (subStat.isDirectory() && !subStat.isSymbolicLink()) subMtime = String(subStat.mtimeMs);
+    } catch (_) {}
+    return `${dirStat.mtimeMs}|${subMtime}`;
+}
+
 function scanForDate({ state, directory, date, slackMs }) {
     let dirStat;
     try {
@@ -321,7 +331,8 @@ function scanForDate({ state, directory, date, slackMs }) {
     }
     if (!dirStat.isDirectory()) return missingSummary(date);
 
-    if (state && state.dirMtimeMs === dirStat.mtimeMs) {
+    const dirSig = directoryMtimeSignature(directory, dirStat, date);
+    if (state && state.dirMtimeMs === dirSig) {
         if (state.days.has(date)) {
             return {
                 state,
@@ -403,7 +414,7 @@ function scanForDate({ state, directory, date, slackMs }) {
         counters.date = date;
         readCandidate(state, directory, name, counters, stat);
     }
-    state.dirMtimeMs = dirStat.mtimeMs;
+    state.dirMtimeMs = dirSig;
     collectForDate(state, directory, date, fromMs, toMs, counters);
     const summary = aggregateRecords(state.records, date);
     state.days.set(date, summary);

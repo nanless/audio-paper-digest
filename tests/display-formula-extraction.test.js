@@ -411,20 +411,12 @@ test('manifest-new.findCandidate: 按当前 parser/repair 实现哈希消歧旧�
     }
 });
 
-test('manifest-new.currentReaderParserImplementationSha256: 与 deep-analyzer.js 的 parserImplementationSha256 文件列表保持同步', () => {
+test('manifest-new.currentReaderParserImplementationSha256: 与 deep-analyzer.js 共用单源 reader-implementation-fingerprint', () => {
     const scriptsDir = path.resolve(__dirname, '../scripts');
-    const deepAnalyzerPath = path.join(scriptsDir, 'deep-analyzer.js');
-    const deepSource = fs.readFileSync(deepAnalyzerPath, 'utf8');
-    const match = /parserImplementationSha256:\s*(repair\.shaText\(\[[\s\S]*?\]\.join\('\\0'\)\))/.exec(deepSource);
-    assert.ok(match, '应在 scripts/deep-analyzer.js 中定位到 parserImplementationSha256 表达式');
-
-    const expectedSha = vm.runInNewContext(match[1], {
-        repair,
-        fs,
-        path,
-        __filename: deepAnalyzerPath,
-        __dirname: scriptsDir
-    });
+    const deepSource = fs.readFileSync(path.join(scriptsDir, 'deep-analyzer.js'), 'utf8');
+    assert.match(deepSource, /require\('\.\/lib\/reader-implementation-fingerprint'\)\.currentReaderParserImplementationSha256\(/);
+    const fingerprintMod = require('../scripts/lib/reader-implementation-fingerprint');
+    const expectedSha = fingerprintMod.currentReaderParserImplementationSha256({ workflow: 'daily' });
     assert.match(expectedSha, /^[a-f0-9]{64}$/);
     assert.equal(manifest.currentReaderParserImplementationSha256(), expectedSha);
 });

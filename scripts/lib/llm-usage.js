@@ -151,9 +151,31 @@ function writeLlmUsageEvent(event, options = {}) {
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('用量目录必须是真实目录，不能是符号链接');
     }
     fs.chmodSync(directory, 0o700);
+    // 按北京日期 YYYY-MM-DD 分片写入新事件（不动任何已钉的历史平铺文件）。
+    // 若合成测试事件不含合法 at 时间戳，回退到根目录保持兼容。
+    let writeDir = directory;
+    let eventBjDate = null;
+    if (event && typeof event.at === 'string') {
+        const parsedMs = Date.parse(event.at);
+        if (Number.isFinite(parsedMs)) {
+            const candidate = new Date(parsedMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
+                eventBjDate = candidate;
+                const shardDir = path.join(directory, candidate);
+                try { fs.mkdirSync(shardDir, { mode: 0o700 }); }
+                catch (error) { if (error.code !== 'EEXIST') throw error; }
+                const shardStat = fs.lstatSync(shardDir);
+                if (!shardStat.isDirectory() || shardStat.isSymbolicLink()) {
+                    throw new Error('用量日期分片目录必须是真实目录，不能是符号链接');
+                }
+                fs.chmodSync(shardDir, 0o700);
+                writeDir = shardDir;
+            }
+        }
+    }
     const id = crypto.randomUUID();
-    const target = path.join(directory, `${id}.json`);
-    const temp = path.join(directory, `.${id}.tmp`);
+    const target = path.join(writeDir, `${id}.json`);
+    const temp = path.join(writeDir, `.${id}.tmp`);
     const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
         | (fs.constants.O_NOFOLLOW || 0), 0o600);
     let closed = false;
@@ -169,34 +191,31 @@ function writeLlmUsageEvent(event, options = {}) {
         try { fs.unlinkSync(temp); } catch (_) {}
         throw error;
     }
-    const directoryFd = fs.openSync(directory, 'r');
+    const directoryFd = fs.openSync(writeDir, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
     // 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
-    if (event && typeof event.at === 'string' && event.kind) {
+    if (eventBjDate && event && event.kind) {
         try {
-            const parsedMs = Date.parse(event.at);
-            if (Number.isFinite(parsedMs)) {
-                const bjDate = new Date(parsedMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-                if (/^\d{4}-\d{2}-\d{2}$/.test(bjDate)) {
-                    const indexDir = path.join(path.dirname(directory), `${path.basename(directory)}-daily`);
-                    try { fs.mkdirSync(indexDir, { mode: 0o700 }); } catch (err) { if (err.code !== 'EEXIST') throw err; }
-                    const idxStat = fs.lstatSync(indexDir);
-                    if (idxStat.isDirectory() && !idxStat.isSymbolicLink()) {
-                        try { fs.chmodSync(indexDir, 0o700); } catch (_) {}
-                        const dailyFile = path.join(indexDir, `${bjDate}.jsonl`);
-                        const appendFd = fs.openSync(
-                            dailyFile,
-                            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0),
-                            0o600
-                        );
-                        try {
-                            const fstat = fs.fstatSync(appendFd);
-                            if (fstat.isFile()) {
-                                try { fs.fchmodSync(appendFd, 0o600); } catch (_) {}
-                                fs.writeFileSync(appendFd, JSON.stringify(event) + '\n');
-                            }
-                        } finally { fs.closeSync(appendFd); }
-                    }
+            const bjDate = eventBjDate;
+            if (/^\d{4}-\d{2}-\d{2}$/.test(bjDate)) {
+                const indexDir = path.join(path.dirname(directory), `${path.basename(directory)}-daily`);
+                try { fs.mkdirSync(indexDir, { mode: 0o700 }); } catch (err) { if (err.code !== 'EEXIST') throw err; }
+                const idxStat = fs.lstatSync(indexDir);
+                if (idxStat.isDirectory() && !idxStat.isSymbolicLink()) {
+                    try { fs.chmodSync(indexDir, 0o700); } catch (_) {}
+                    const dailyFile = path.join(indexDir, `${bjDate}.jsonl`);
+                    const appendFd = fs.openSync(
+                        dailyFile,
+                        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0),
+                        0o600
+                    );
+                    try {
+                        const fstat = fs.fstatSync(appendFd);
+                        if (fstat.isFile()) {
+                            try { fs.fchmodSync(appendFd, 0o600); } catch (_) {}
+                            fs.writeFileSync(appendFd, JSON.stringify(event) + '\n');
+                        }
+                    } finally { fs.closeSync(appendFd); }
                 }
             }
         } catch (_) {
