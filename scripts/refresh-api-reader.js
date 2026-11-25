@@ -68,6 +68,8 @@ function parseRefreshCliArgs(args) {
         reviewFeedback: '',
         reviewFeedbackFile: '',
         reviewFeedbackById: null,
+        factFeedbackFiles: [],
+        naturalResourceProse: false,
         all: false,
         date: null,
         concurrency: Config.ANALYSIS_CONFIG?.apiReaderConcurrency ?? 5,
@@ -75,9 +77,10 @@ function parseRefreshCliArgs(args) {
         ids: []
     };
     const seenFlags = new Set();
+    const repeatableFlags = new Set(['--fact-feedback-file']);
     for (let index = 0; index < args.length; index++) {
         const value = args[index];
-        if (value.startsWith('--')) {
+        if (value.startsWith('--') && !repeatableFlags.has(value)) {
             if (seenFlags.has(value)) throw new Error(`参数 ${value} 不能重复使用。`);
             seenFlags.add(value);
         }
@@ -85,14 +88,16 @@ function parseRefreshCliArgs(args) {
         else if (value === '--scoring-and-reader') options.scoringAndReader = true;
         else if (value === '--figures-only') options.figuresOnly = true;
         else if (value === '--surface-bindings-only') options.surfaceBindingsOnly = true;
+        else if (value === '--natural-resource-prose') options.naturalResourceProse = true;
         else if (value === '--all') options.all = true;
-        else if (value === '--date' || value === '--concurrency' || value === '--rounds' || value === '--feedback' || value === '--feedback-file') {
+        else if (value === '--date' || value === '--concurrency' || value === '--rounds' || value === '--feedback' || value === '--feedback-file' || value === '--fact-feedback-file') {
             const next = args[index + 1];
             if (!next || next.startsWith('--')) throw new Error(`参数 ${value} 缺少对应的值。`);
             index += 1;
             if (value === '--date') options.date = next;
             else if (value === '--feedback') options.reviewFeedback = next.trim();
             else if (value === '--feedback-file') options.reviewFeedbackFile = next;
+            else if (value === '--fact-feedback-file') options.factFeedbackFiles.push(next);
             else {
                 if (!/^\d+$/.test(next)) throw new Error(`${value} 的值必须是整数。`);
                 options[value === '--rounds' ? 'maxRounds' : 'concurrency'] = Number.parseInt(next, 10);
@@ -979,7 +984,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             };
         // 即使只调整正文与计划记录的对应关系，也要使用已核验的日更来源和图片。
         // 修改已保存的结果前，必须核对对应的封存文件，不能改用旧图片或缓存。
-        let refreshed = await dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
+        const executeRefreshWithDailyContext = () => dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
             dailyFreshSources.withDailyFreshPaperSource(
                 lockedDailySourcePlan,
                 storedAnalysisRecord,
@@ -987,6 +992,21 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 options
             ), { refreshReaderDiagnostics: options.refreshReaderDiagnostics }
         );
+        let refreshed;
+        if (Array.isArray(options.factFeedbackFiles) && options.factFeedbackFiles.length > 0) {
+            const factReview = require('./lib/daily-fact-review');
+            const matchedFeedback = options.factFeedbackFiles
+                .map(file => factReview.readFeedback(file))
+                .find(item => normalizedId({ arxivId: item.paperId }) === requested);
+            if (matchedFeedback) {
+                const bound = factReview.validateFeedback(matchedFeedback, lockedDailySourcePlan, storedAnalysisRecord);
+                refreshed = await factReview.withFactReview(bound, executeRefreshWithDailyContext);
+            } else {
+                refreshed = await executeRefreshWithDailyContext();
+            }
+        } else {
+            refreshed = await executeRefreshWithDailyContext();
+        }
         if (completedPrimaryRecoveryInput) {
             refreshed = finishReviewedPrimaryReaderRefresh(completedPrimaryRecoveryInput,
                 refreshed, lockedDailySourcePlan, options);

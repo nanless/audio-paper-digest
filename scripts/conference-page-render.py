@@ -4505,8 +4505,10 @@ def render_packet(packet):
     assets.extend({'path': relative.as_posix(), 'base64': base64.b64encode(raw).decode('ascii')}
                   for relative, raw in workbench['sidecars'].items())
     category = f'{conference["id"]} 论文'
-    lines = ['---', f'title: "{publisher.yaml_escape(title)}"', f'date: {packet["date"]}', 'draft: false',
-             f'description: "{publisher.yaml_escape(one_sentence)}"',
+    plain_title = publisher.plain_title_for_publish(title)
+    plain_one_sentence = publisher.plain_title_for_publish(one_sentence)
+    lines = ['---', f'title: {json.dumps(plain_title, ensure_ascii=False)}', f'date: {packet["date"]}', 'draft: false',
+             f'description: {json.dumps(plain_one_sentence, ensure_ascii=False)}',
              f'tags: {json.dumps(labels, ensure_ascii=False)}', f'categories: {json.dumps([category], ensure_ascii=False)}',
              'paper_digest_pipeline_owned: true', 'paper_digest_page_type: paper',
              publisher._researcher_workbench_frontmatter(workbench).rstrip(),

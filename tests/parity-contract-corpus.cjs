@@ -322,17 +322,7 @@ for (const text of numeralTexts) numeralCase(text, text);
 const IDENTIFIER_MISSING = '实验结果第 1 张表缺少方法、数据集或设置识别列';
 const NEGATIVE_MISSING = '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
 
-const KNOWN_DIVERGENCES = Object.freeze({
-    // 历史登记（2026-11-11 实测），与本轮无关：Python 自 231a2a5f 起故意允许
-    // 自然序数名次，Node 的 exact_rank 未同步；要收敛只能改 Node 或改那两个
-    // Python 回归用例，需另行决定。
-    'manual-numeral/排名第三': {
-        js: true,
-        py: false,
-        note: 'Node exact_rank 命中“排名第/第 N 名”；Python 自 2026-09-01 起'
-            + '故意允许自然序数名次（231a2a5f 与 test_publish_common.py 的两个回归用例）'
-    }
-});
+const KNOWN_DIVERGENCES = Object.freeze({});
 
 const RULES = Object.freeze([
     {

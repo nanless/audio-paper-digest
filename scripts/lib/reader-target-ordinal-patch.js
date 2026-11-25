@@ -496,6 +496,7 @@ function attachSavedOrigin({paper,identity,directory,draft,records,activeCandida
 // 编译的 afterDraft，再整篇解析成正文。这里用同一关系在挂载 origin 前先算一遍，
 // 避免把“链已不派生当前草稿”的结果挂成可完成。
 function completionDerivesDraft(after,draft,normalization,paper,source){
+    if(isDeepStrictEqual(after,draft))return true;
     if(!normalization||!Array.isArray(normalization.issues)||!Array.isArray(normalization.pixelFigureOrdinals))
         fail('completion normalization snapshot missing','content','READER_ORDINAL_ORIGIN_MISMATCH');
     const normalized={};

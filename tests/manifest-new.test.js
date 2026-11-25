@@ -258,7 +258,13 @@ test('typed spec：保持原 1–8 节点、根与路径边界，实际补丁继
     const replacement = { path: '/tableBindings/0', value: { tableIndex: 1 } };
     for (const count of [0, 9]) assert.throws(() => manifest.validateSpec({ paperId: '2610.12345',
         replacements: Array.from({ length: count }, () => replacement) }), /1–8/);
-    for (const pointer of ['/readerTitle', '/oneSentenceThesis', '/sections', '/tableBindings',
+    for (const pointer of ['/readerTitle', '/oneSentenceThesis']) {
+        assert.doesNotThrow(() => manifest.validateSpec({ paperId: '2610.12345',
+            replacements: [{ path: pointer, value: '新的有效标题或一句话结论' }] }));
+        assert.throws(() => manifest.validateSpec({ paperId: '2610.12345',
+            replacements: [{ path: pointer, value: {} }] }), /value/);
+    }
+    for (const pointer of ['/sections', '/tableBindings',
         '/conceptBridges', '/figurePlacements', '/formulaBindings', '/unrelated/0', '/sections/00/body',
         '/sections/-1/body', '/sections/0/heading', '/tableBindings/0/sourceQuotes', '/__proto__/0']) {
         assert.throws(() => manifest.validateSpec({ paperId: '2610.12345',

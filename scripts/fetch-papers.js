@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 const { setupScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
+if (require.main === module && !process.argv.includes('--json')) {
+    setupScriptLogging(__filename);
+}
 
 /**
  * Paper Digest - 论文抓取与筛选模块

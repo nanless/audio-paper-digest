@@ -15,6 +15,7 @@ const { readJsonFileStrict } = require('./analysis-engine.js');
 const daily = require('./lib/daily-fresh-source-plan.js');
 const repair = require('./lib/reader-repair.js');
 const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./lib/reader-patch-limits');
+const { isAuthorizedReaderPatchPath, isStringValuePatchPath } = require('./lib/reader-patch-paths');
 const utils = require('./utils.js');
 const correction = require('./lib/daily-reader-operator-correction.js');
 
@@ -41,11 +42,10 @@ function validateSpec(spec) {
     if (!Array.isArray(spec.replacements) || spec.replacements.length < MIN_READER_PATCH_NODES
         || spec.replacements.length > MAX_READER_PATCH_NODES) throw new Error('replacements 须为 1–8 项');
     for (const replacement of spec.replacements) {
-        if (!replacement || typeof replacement.path !== 'string'
-            || !/^\/(?:implementationSpecs|sections\/(?:0|[1-9]\d*)(?:\/body)?|conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?|(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*))$/.test(replacement.path)) {
+        if (!replacement || !isAuthorizedReaderPatchPath(replacement.path)) {
             throw new Error(`replacement.path 非法（not allowed）：${replacement && replacement.path}`);
         }
-        if (replacement.path.endsWith('/body') || replacement.path.endsWith('/explanation')) {
+        if (isStringValuePatchPath(replacement.path)) {
             if (typeof replacement.value !== 'string' || !replacement.value.trim()) throw new Error('replacement.value 须为非空字符串');
         } else if (!replacement.value || typeof replacement.value !== 'object' || Array.isArray(replacement.value)) {
             throw new Error('replacement.value 须为单个节点对象');
@@ -151,6 +151,7 @@ function findCandidate(attemptsDir, paperId, planRunId = null, sourceSha256 = nu
         .sort().map(name => ({ absolutePath: path.join(attemptsDir, name) }));
     const target = utils.normalizedId({ arxivId: paperId });
     const matches = [];
+    let nullDraftMatched = false;
     for (const candidate of candidates) {
         const envelope = repair.readFailedCandidateEnvelope(attemptsDir, null, candidate.absolutePath);
         if (!envelope) throw new Error(`候选读取期间消失：${candidate.absolutePath}`);
@@ -160,9 +161,15 @@ function findCandidate(attemptsDir, paperId, planRunId = null, sourceSha256 = nu
             && envelope.envelope?.identity?.freshAnalysis?.sourceOnly === true) {
             if (envelope.envelope.identity.sourceSha256 !== sourceSha256)
                 throw new Error(`${paperId} 候选与当前封存来源 sourceSha256 不同`);
-            if (!envelope.envelope.payload.draft) throw new Error(`${paperId} 候选没有可准备修正的草稿 draft`);
+            if (!envelope.envelope.payload.draft) {
+                nullDraftMatched = true;
+                continue;
+            }
             matches.push({ absolutePath: candidate.absolutePath, ...envelope });
         }
+    }
+    if (matches.length === 0 && nullDraftMatched) {
+        throw new Error(`${paperId} 候选没有可准备修正的草稿 draft`);
     }
     if (matches.length > 1) {
         const currentParserSha = currentReaderParserImplementationSha256();

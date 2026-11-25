@@ -968,7 +968,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // 「原文也没有声称代码模型数据已开源」「原文未披露自有仓库与可下载权重」
         // 「均未随文公开为可下载版本」「当前尚无可验证的公开仓库」是闭合否定：
         // 否定动词或存在否定后接资源名词串不构成作者当前的开放声明，且受转折和双重否定守卫约束。
-        if (!hasDoubleNegation && /(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证|分配|设立|建立|开设|公布|披露)[^。！？!?；;，,]{0,48}$/.test(currentAssertionPrefix)) return true;
+        if (!hasDoubleNegation && /(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|声称|绑定|验证|分配|设立|建立|开设|公布|披露|公开|发布|开放)[^。！？!?；;，,]{0,48}$/.test(currentAssertionPrefix)) return true;
         if (!hasDoubleNegation && /(?:未|没有|未曾|尚未)随文(?:公开|发布|开放)(?:为)?[^。！？!?；;，,]{0,24}$/.test(currentAssertionPrefix)) return true;
         if (!hasDoubleNegation && /(?:尚无|并无|暂无|未见|不存在)(?:任何)?(?:可验证|可核验|经验证|已验证)(?:的)?[^。！？!?；;，,]{0,36}$/.test(currentAssertionPrefix)) return true;
         if (/需要补(?:充)?(?:的)?(?:验证|检查|步骤)(?:是|包括)?[^。！？!?；;，,]{0,36}$/.test(prefix)) return true;

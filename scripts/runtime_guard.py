@@ -79,7 +79,7 @@ def _allows_cross_role(actual_role, required_role, root):
 def required_workspace_role_for_command(command_name):
     name = Path(str(command_name or '')).name
     wrapped = os.environ.get('AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE', '').strip()
-    if (name == 'conference-extract.py'
+    if (name in {'conference-extract.py', 'conference-page-render.py'}
             and os.environ.get('AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE') == '1'
             and wrapped == 'daily'):
         return 'daily'

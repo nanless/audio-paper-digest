@@ -2381,6 +2381,8 @@ def apply_llm_fixes(content, issues):
     fixed = content
     fix_count = 0
     for issue in issues:
+        if issue.get("severity") != "error":
+            continue
         if not issue.get("auto_fixable", False):
             continue
         instruction = issue.get("fix_instruction", "")
@@ -2820,7 +2822,7 @@ def paper_slug(title, arxiv_id):
 
 
 def yaml_escape(s):
-    """安全转义 YAML 双引号字符串中的特殊字符，同时避免 f-string 解析问题"""
+    """安全转义 YAML 双引号字符串中的特殊字符。"""
     if not s:
         return ''
     # 标题/描述里的短 LaTeX 片段保留内部文本，避免 Best-of-$N$ 变成 Best-of-。
@@ -2830,9 +2832,7 @@ def yaml_escape(s):
     s = re.sub(r'\$([^\s\$][^$]*?)\$', r'\1', s)
     return (s.replace('\\', '\\\\')
              .replace('"', '\\"')
-             .replace('\n', ' ')
-             .replace('{', '{{')
-             .replace('}', '}}'))
+             .replace('\n', ' '))
 
 
 def _validated_workbench_text(
@@ -3086,9 +3086,45 @@ _BIBTEX_ESCAPE = {
 }
 
 
+_BIBTEX_INLINE_MATH_RE = re.compile(r'(?<!\\)\$(?!\s)((?:[^$\\]|\\.)+?)(?<!\s)\$')
+
+
+def _is_bibtex_inline_math(inner):
+    if not inner or len(inner) > 120:
+        return False
+    # 纯货币/普通英文短语不保留为数学模式
+    if re.fullmatch(r'\d+(?:,\d{3})*(?:\.\d+)?', inner):
+        return False
+    if re.fullmatch(r'[A-Za-z]', inner):
+        return True
+    if not re.search(r'[\^_\\=<>+\-*/{}]', inner):
+        return False
+    # 仅允许大括号配平的短数学片段，避免破坏外层 BibTeX 字段边界
+    depth = 0
+    for ch in inner:
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
 def _bibtex_escape(value, label):
     value = _validated_workbench_text(value, label, maximum=10000)
-    return ''.join(_BIBTEX_ESCAPE.get(character, character) for character in value)
+    parts = []
+    cursor = 0
+    for match in _BIBTEX_INLINE_MATH_RE.finditer(value):
+        if not _is_bibtex_inline_math(match.group(1)):
+            continue
+        if match.start() > cursor:
+            parts.append(''.join(_BIBTEX_ESCAPE.get(ch, ch) for ch in value[cursor:match.start()]))
+        parts.append(match.group(0))
+        cursor = match.end()
+    if cursor < len(value):
+        parts.append(''.join(_BIBTEX_ESCAPE.get(ch, ch) for ch in value[cursor:]))
+    return ''.join(parts)
 
 
 def _json_sidecar_bytes(value):
@@ -4301,6 +4337,14 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     return True
 
 
+_UNICODE_SUPERSCRIPT_MAP = str.maketrans('0123456789+-', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻')
+
+
+def _replace_title_superscript(match):
+    digits = match.group(1) or match.group(2) or ''
+    return digits.translate(_UNICODE_SUPERSCRIPT_MAP)
+
+
 def plain_title_for_publish(title):
     """标题中的短数学标记转成普通文本，避免 Hugo/frontmatter 误解析。"""
     title = str(title or '')
@@ -4312,7 +4356,7 @@ def plain_title_for_publish(title):
         currency.append(value)
         return f'\x00TITLE_CURRENCY_{len(currency) - 1}\x00'
     title = re.sub(r'(?<![\w$])\\?\$\d+(?:,\d{3})*(?:\.\d+)?(?![\w.$])', protect_currency, title)
-    title = re.sub(r'\$?\s*\^\s*2\s*\$?', '²', title)
+    title = re.sub(r'\$?\s*\^\s*(?:\{([0-9+-]+)\}|([0-9]+))\s*\$?', _replace_title_superscript, title)
     title = re.sub(r'\\underline\s*\{([^{}]+)\}', r'\1', title)
     # 只替换「数值 ^ \circ」本身，不吞掉两侧空格（否则 “by 360^\circ and” 会粘成 “by360°and”）。
     title = re.sub(
@@ -4320,8 +4364,12 @@ def plain_title_for_publish(title):
         lambda match: f'{match.group(1)}°',
         title,
     )
-    title = title.replace('$', '')
-    title = yaml_escape(title).replace('\\\\', '\\')
+    # 去掉剩余成对数学定界符并保留内部文本，不再调用 yaml_escape 避免把 \" 或 {{}} 泄漏到正文。
+    title = re.sub(r'\\\(([^)]+)\\\)', r'\1', title)
+    title = re.sub(r'\\\[([^\]]+)\\\]', r'\1', title)
+    title = re.sub(r'\$\$([^$]*?)\$\$', r'\1', title)
+    title = re.sub(r'\$([^\s\$][^$]*?)\$', r'\1', title)
+    title = title.replace('$', '').replace('\n', ' ')
     for index, value in enumerate(currency):
         title = title.replace(f'\x00TITLE_CURRENCY_{index}\x00', value)
     return title
@@ -4341,9 +4389,8 @@ def digest_index_reader_title(title):
 
 
 def yaml_title_for_publish(title):
-    # 入参是 `plain_title_for_publish()` 的显示态：引号已经是 `\"`、反斜杠是单个。
-    # 先保护已有的 `\"`，否则 yaml_escape 会把反斜杠再翻一倍，标题渲染后出现多余反斜杠；
-    # 单个 LaTeX 反斜杠仍要在这一步补成 `\\`，否则 YAML 双引号会把它解释成转义字符。
+    # 入参可能是 `plain_title_for_publish()` 的纯文本显示态，也可能是历史调用方
+    # 传入的含已有 `\"` 字符串；先保护字面 `$` 与已有 `\"`，再做标准 YAML 双引号转义。
     marker = '\x00TITLE_LITERAL_DOLLAR\x00'
     quote = '\x00TITLE_ESCAPED_QUOTE\x00'
     text = str(title or '').replace('\\"', quote).replace('$', marker)
@@ -4775,7 +4822,7 @@ def _has_scoped_symbolic_demonstration(summary):
     if not _has_symbolic_geometry_method_chain(summary):
         return False
     sentences = re.split(r'[。！？!?；;\n]', str(summary or ''))
-    scalar_metric = re.compile('(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\\.\\d+)?|1(?:\\.0+)?)(?![.\\d@])|R@\\d+(?:\\.\\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|总分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)', re.IGNORECASE)
+    scalar_metric = re.compile('(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\\.\\d+)?|1(?:\\.0+)?)(?![.\\d@])|R@\\d+(?:\\.\\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\\.\\d+)?倍|(?:为|是|从)\\s*\\d+(?:\\.\\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|总分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)', re.IGNORECASE)
     for sentence in sentences:
         metric_surface = re.sub(r'(?:\u53d8\u6362)?\u7b49\u4ef7\u7ec4\u89c4\u6a21\u4e3a\u6307\u6807', ' ', sentence)
         if scalar_metric.search(metric_surface) and re.search(r'\d|(?:\u767e\u5206\u4e4b|\u5343\u5206\u4e4b|\u96f6\u70b9)[\u96f6\u4e00\u4e8c\u4e24\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u5343\u4e07\u70b9]+', sentence):
@@ -6873,7 +6920,7 @@ def _root_task_link(concept):
 
 
 def _index_figure_preview(paper, reader_article, api_reader=None):
-    """把第一张与来源绑定的论文图投影成汇总页缩略图。
+    """按确定性优先级挑选一张与来源绑定的论文主图投影成汇总页缩略图。
 
     已签名的 Reader 文章仍然是图片及 arXiv URL 的权威来源。
     汇总仅展示中性缩略图，不把截短的原图注当作独立科学结论；
@@ -6881,7 +6928,8 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
     """
     if not isinstance(reader_article, str):
         return ''
-    for line in reader_article.splitlines():
+    candidates_in_article = []
+    for order_idx, line in enumerate(reader_article.splitlines()):
         stripped = line.strip()
         match = re.fullmatch(
             r'!\[(?:\\.|[^\]\\\n])*\]\((https://[^)\s]+)\)',
@@ -6890,7 +6938,6 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
         if not match:
             continue
         source_url = match.group(1)
-        neutral_image = f'![原论文配图（完整图注与解读见独立文章）]({source_url})'
         figure = next(
             (
                 item for item in (paper.get('apiReaderFigures') or [])
@@ -6898,6 +6945,50 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
             ),
             None,
         )
+        candidates_in_article.append((order_idx, source_url, figure))
+    if not candidates_in_article:
+        return ''
+
+    plan_placements = {}
+    if isinstance(api_reader, dict) and isinstance(api_reader.get('plan'), dict):
+        for placement in (api_reader['plan'].get('figurePlacements') or []):
+            if isinstance(placement, dict) and isinstance(placement.get('figureOrdinal'), int):
+                plan_placements[placement['figureOrdinal']] = str(placement.get('targetKind') or '').lower()
+    _ROLE_RANK = {
+        'method_overview': 0,
+        'overview': 0,
+        'problem': 1,
+        'component': 1,
+        'mechanism': 1,
+        'training': 2,
+        'result': 3,
+        'results': 3,
+        'ablation': 4,
+    }
+
+    def _hero_sort_key(entry):
+        order_idx, source_url, figure = entry
+        label_and_caption = ''
+        is_materialized_inline = False
+        ordinal = None
+        if isinstance(figure, dict):
+            label_and_caption = f"{figure.get('label') or ''} {figure.get('caption') or ''}"
+            ordinal = figure.get('ordinal')
+            is_materialized_inline = (
+                'inlineSvgSourceSha256' in figure
+                or 'inlineSvgRenderContract' in figure
+                or bool(urlparse(source_url).fragment)
+                or _publication_raster_recovery_target(paper, figure) is not None
+            )
+        is_appendix = bool(re.search(r'\b(?:Figure|Fig\.?)\s*[A-Z]\.?\d+\b|(?:\bS\d+\b)', label_and_caption, re.IGNORECASE))
+        role = plan_placements.get(ordinal, '') if isinstance(ordinal, int) else ''
+        role_rank = _ROLE_RANK.get(role, 2 if not is_appendix else 5)
+        is_raw_remote_svg = (not is_materialized_inline) and urlparse(source_url).path.lower().endswith('.svg')
+        return (1 if is_appendix else 0, role_rank, 1 if is_raw_remote_svg else 0, order_idx)
+
+    ordered_candidates = sorted(candidates_in_article, key=_hero_sort_key)
+    for _order_idx, source_url, figure in ordered_candidates:
+        neutral_image = f'![原论文配图（完整图注与解读见独立文章）]({source_url})'
         if isinstance(figure, dict) and (
                 'inlineSvgSourceSha256' in figure or 'inlineSvgRenderContract' in figure
                 or bool(urlparse(source_url).fragment)
@@ -7408,7 +7499,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         if preview:
             md += f"{preview}\n\n"
         if reader_article:
-            rendered_title = markdown_title_for_publish(title)
+            rendered_title = markdown_title_for_publish(plain_title_for_publish(title))
             english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         md += render_paper_tag_hierarchy(parsed_analysis)
@@ -7476,7 +7567,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         if preview:
             md += f"{preview}\n\n"
         if reader_article:
-            rendered_title = markdown_title_for_publish(title)
+            rendered_title = markdown_title_for_publish(plain_title_for_publish(title))
             english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         md += render_paper_tag_hierarchy(parsed_analysis)
@@ -8103,7 +8194,7 @@ _MATHJAX_DOUBLE_WRITE_RULES = (
          and m.group(2).replace('−', '-') == m.group(4).replace('−', '-')
          and not (m.start() > 0 and (
              unicodedata.category(m.string[m.start() - 1])[0] in ('L', 'N')
-             or m.string[m.start() - 1] in '_^\\.\])}+−=*×÷-/\x00'))
+             or m.string[m.start() - 1] in '_^\\.])}+−=*×÷-/\x00'))
          and not (m.end() < len(m.string) and (
              unicodedata.category(m.string[m.end()])[0] in ('L', 'N')
              or m.string[m.end()] in '_^\\({%*×÷/\x00'
@@ -8118,7 +8209,7 @@ _MATHJAX_DOUBLE_WRITE_RULES = (
 
 
 def _collapse_mathjax_double_write(text):
-    """Collapse Unicode/LaTeX double-written symbols in the rendered page only.
+    r"""Collapse Unicode/LaTeX double-written symbols in the rendered page only.
 
     The saved Reader keeps its exact bytes; this projection only removes the
     redundant second copy so the page does not show e.g. "≥10\geq 10".
@@ -8387,7 +8478,7 @@ def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
             start, end = match.start(), match.end()
             if start > 0:
                 prev = src[start - 1]
-                if unicodedata.category(prev)[0] in ('L', 'N') or prev in '_^\\.\])}+−=*×÷-/\x00':
+                if unicodedata.category(prev)[0] in ('L', 'N') or prev in '_^\\.])}+−=*×÷-/\x00':
                     return match.group(0)
             if end < len(src):
                 nxt = src[end]
@@ -14371,6 +14462,7 @@ def blog_runtime_fingerprint(blog_repo=None):
         '.webmanifest', '.xml',
     }
     generated_prefixes = (
+        ('static', 'client', 'papers'),
         ('static', 'data', 'papers'),
         ('static', 'images', 'papers'),
         ('static', 'images', 'visual-summaries'),

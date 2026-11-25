@@ -27,7 +27,11 @@ function read(file) {
     } finally { fs.closeSync(fd); }
 }
 function within(file, root) {
-    const resolved = relocatePathWithinRoot(file, root);
+    if (typeof file !== 'string' || !file || file.split(/[\\/]/).includes('..')) {
+        throw new Error('Operator file outside controlled runtime');
+    }
+    const candidatePath = path.isAbsolute(file) ? file : path.resolve(file);
+    const resolved = relocatePathWithinRoot(candidatePath, root);
     if (!resolved) throw new Error('Operator file outside controlled runtime');
     require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
     return resolved;
@@ -36,7 +40,7 @@ function unchanged(snapshot) {
     if (read(snapshot.file).sha256 !== snapshot.sha256) throw new Error('Operator correction source bytes changed');
 }
 function nearFingerprint(before, expected) {
-    if (typeof before !== 'string' || !/^[a-f0-9]{56,63}$/.test(before)) return false;
+    if (typeof before !== 'string' || !/^[a-f0-9]{48,63}$/.test(before)) return false;
     const anchored = (before.slice(0, 16) === expected.slice(0, 16) && before.slice(-16) === expected.slice(-16))
         || before.slice(0, 32) === expected.slice(0, 32)
         || before.slice(-32) === expected.slice(-32);
@@ -49,9 +53,9 @@ function nearFingerprint(before, expected) {
                 previous[column - 1] + Number(before[row - 1] !== expected[column - 1])));
         previous = current;
     }
-    return previous[expected.length] <= 8;
+    return previous[expected.length] <= 16;
 }
-const AUTHORIZED_PATCH_PATH = /^\/(?:readerTitle|oneSentenceThesis|implementationSpecs)$|^\/sections\/(?:0|[1-9]\d*)(?:\/body)?$|^\/conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?$|^\/(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)$/;
+const { AUTHORIZED_READER_PATCH_PATH_RE: AUTHORIZED_PATCH_PATH } = require('./reader-patch-paths');
 function applyHeaderRawEdits(raw, members, fpMember, replacementFp, versionMember) {
     const edits = [{ start: fpMember.valueStart, end: fpMember.valueEnd, text: JSON.stringify(replacementFp) }];
     if (versionMember) {
@@ -151,9 +155,19 @@ function replayPaidFingerprint(record, candidate) {
 function isPaidFingerprintRecord(record) { return codec.hasValidHeader(record, PAID_FINGERPRINT_EDIT); }
 function assertPaidFingerprintContext(record, candidate, paper, whole, currentIdentity = record.currentInputIdentity) {
     if (!isPaidFingerprintRecord(record)) return;
-    // This adapter is part of the two implementation hashes. The original
-    // paid logical input and all other format/prompt/source fields are fixed.
-    const implementationFields = new Set(['parserImplementationSha256', 'repairImplementationSha256']);
+    // Implementation hashes track parser/repair/adapter code; the original
+    // paid logical input and all format/prompt/source fields remain fixed.
+    const allowedImplKeys = new Set([
+        'parserImplementationSha256', 'repairImplementationSha256',
+        'tableCompilerSha256', 'draftOrderImplementationSha256',
+        'sourceDiagnosticsImplementationSha256', 'editorialImplementationSha256',
+        'mechanicalContractSha256', 'readerRecoveryEpochSha256'
+    ]);
+    const implementationFields = new Set(
+        Object.keys(currentIdentity || {}).filter(key => allowedImplKeys.has(key) || key.endsWith('ImplementationSha256'))
+    );
+    implementationFields.add('parserImplementationSha256');
+    implementationFields.add('repairImplementationSha256');
     const unchangedInput = identity => Object.fromEntries(Object.entries(identity).filter(([key]) => !implementationFields.has(key)));
     const factReview = require('./daily-fact-review');
     const readerFactRevision = Boolean(

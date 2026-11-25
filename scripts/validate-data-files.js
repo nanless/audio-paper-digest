@@ -2,7 +2,9 @@
 const { matchesRunProvenance } = require('./lib/daily-source-format');
 const qualityFormats = require('./lib/analysis-quality-format');
 const { setupScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
+if (require.main === module && !process.argv.includes('--json')) {
+    setupScriptLogging(__filename);
+}
 
 const fs = require('fs');
 const path = require('path');

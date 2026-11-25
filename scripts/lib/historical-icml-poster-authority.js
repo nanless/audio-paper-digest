@@ -299,22 +299,35 @@ function posterIdsInText(text, label) {
 
 function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath }) {
+const DEFAULT_BLOG_BASE_PATHS = Object.freeze(['/audio-research-portal', '/audio-paper-digest-blog']);
+
+function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath = null }) {
     const summary = normalizePage(summaryPage, 'daily-summary', 'frozen daily summary page');
     if (summary.scope.key !== childPage.scope.key) fail('每日汇总页与子页属于不同的 cohort');
     const loaded = readFrozenPage(blogRoot, summary, 'frozen daily summary page', MAX_SUMMARY_BYTES);
     const body = bodyAfterFrontmatter(loaded.text, 'frozen daily summary page');
     const slug = path.basename(childPage.pagePath, path.extname(childPage.pagePath));
-    const childUrl = `${blogBasePath}/posts/${slug}`;
-    const headings = [...body.matchAll(/^###\s+/gmu)]; const matching = [];
-    for (let index = 0; index < headings.length; index += 1) {
-        const start = headings[index].index; const end = headings[index + 1]?.index ?? body.length;
-        const section = body.slice(start, end);
-        // 同一篇子论文也可能出现在汇总排行榜里。只有三级详情标题下的段落才拥有带
-        // poster 的论文小节。
-        const headingLine = section.slice(0, section.indexOf('\n') < 0 ? section.length : section.indexOf('\n'));
-        const childLinks = [...headingLine.matchAll(new RegExp(`\\]\\(${regexEscape(childUrl)}\\)`, 'gu'))];
-        if (childLinks.length) matching.push({ start, end, section, childLinks: childLinks.length });
+    const candidateBasePaths = blogBasePath ? [blogBasePath] : DEFAULT_BLOG_BASE_PATHS;
+    const headings = [...body.matchAll(/^###\s+/gmu)];
+    let matching = [];
+    let childUrl = `${candidateBasePaths[0]}/posts/${slug}`;
+    for (const candidateBase of candidateBasePaths) {
+        const candidateUrl = `${candidateBase}/posts/${slug}`;
+        const found = [];
+        for (let index = 0; index < headings.length; index += 1) {
+            const start = headings[index].index; const end = headings[index + 1]?.index ?? body.length;
+            const section = body.slice(start, end);
+            // 同一篇子论文也可能出现在汇总排行榜里。只有三级详情标题下的段落才拥有带
+            // poster 的论文小节。
+            const headingLine = section.slice(0, section.indexOf('\n') < 0 ? section.length : section.indexOf('\n'));
+            const childLinks = [...headingLine.matchAll(new RegExp(`\\]\\(${regexEscape(candidateUrl)}\\)`, 'gu'))];
+            if (childLinks.length) found.push({ start, end, section, childLinks: childLinks.length });
+        }
+        if (found.length) {
+            matching = found;
+            childUrl = candidateUrl;
+            break;
+        }
     }
     if (matching.length !== 1 || matching[0].childLinks !== 1) {
         fail('daily summary must have exactly one section with exactly one child-page link');
@@ -376,10 +389,11 @@ function bindDailyPage(options = {}) {
     return buildDailyPageBinding(options, protocols.recordHeader(DAILY_BINDING_CONTRACT, DAILY_BINDING_CONTRACT));
 }
 function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = null, expectedAuthoritySha256 = null,
-    blogBasePath = '/audio-paper-digest-blog' } = {}, header) {
+    blogBasePath = null } = {}, header) {
     replayPosterAuthority(authorityHandle);
-    if (typeof blogBasePath !== 'string' || !/^\/[A-Za-z0-9._/-]*[A-Za-z0-9._-]$/u.test(blogBasePath)
-        || blogBasePath.includes('//') || blogBasePath.includes('..')) fail('blogBasePath 非法');
+    if (blogBasePath !== null && (typeof blogBasePath !== 'string'
+        || !/^\/[A-Za-z0-9._/-]*[A-Za-z0-9._-]$/u.test(blogBasePath)
+        || blogBasePath.includes('//') || blogBasePath.includes('..'))) fail('blogBasePath 非法');
     const child = normalizePage(page, 'paper', 'frozen daily child page');
     const loaded = readFrozenPage(blogRoot, child, 'frozen daily child page', MAX_PAGE_BYTES);
     const direct = posterIdsInText(bodyAfterFrontmatter(loaded.text, 'frozen daily child page'), 'daily child page');
@@ -401,7 +415,7 @@ function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = 
 }
 
 function replayDailyPageBinding({ binding, authorityHandle, blogRoot, page, summaryPage = null,
-    blogBasePath = '/audio-paper-digest-blog' } = {}) {
+    blogBasePath = null } = {}) {
     const normalized = normalizeDailyPageBinding(binding);
     const rebuilt = buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage, blogBasePath,
         expectedAuthoritySha256: normalized.poster.authoritySha256 },

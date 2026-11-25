@@ -75,6 +75,8 @@ class Page(HTMLParser):
         self.text = []
         self.body_html = []
         self.math_runtime = False
+        self.math_ssr_css = False
+        self.math_ssr_nodes = False
         self.titles = []
         self.h1s = []
         self.tag_sections = []
@@ -106,6 +108,9 @@ class Page(HTMLParser):
                     self.tag_sections[-1]['direct'].append(attrs['data-classification-concept'])
         if tag == 'link' and 'canonical' in attrs.get('rel', '').split():
             self.canonicals.append(attrs.get('href', ''))
+        if tag == 'link' and 'stylesheet' in attrs.get('rel', '').split() \
+                and re.search(r'katex', attrs.get('href', ''), re.I):
+            self.math_ssr_css = True
         if tag == 'script' and re.search(r'mathjax|katex', attrs.get('src', ''), re.I):
             self.math_runtime = True
         if 'post-content' in attrs.get('class', '').split():
@@ -119,6 +124,8 @@ class Page(HTMLParser):
                 self.tables.append([])
             if tag in {'th', 'td'}:
                 self.cell = []
+            if 'katex' in attrs.get('class', '').split() or tag == 'math':
+                self.math_ssr_nodes = True
             if 'katex-error' in attrs.get('class', '').split() or tag == 'merror':
                 raise ValueError(f"HTML 数学渲染包含错误：{tag}，class={attrs.get('class', '')!r}")
         if tag not in self.VOID:
@@ -159,6 +166,9 @@ class Page(HTMLParser):
             self.body_html.append(html.escape(data, quote=False))
             if self.cell is not None:
                 self.cell.append(data)
+
+    def has_math_rendering(self):
+        return bool(self.math_runtime or (self.math_ssr_css and self.math_ssr_nodes) or self.math_ssr_nodes)
 
     def visible_content_fields(self):
         # 浏览器或压缩工具调整空白，不影响已审内容。
@@ -1356,8 +1366,8 @@ def inspect_html(markdown, rendered, image_records, image_base):
         formula = re.sub(r'\s+', '', html.unescape(display or inline))
         if formula not in re.sub(r'\s+', '', text):
             raise ValueError(f'HTML 公式内容丢失/被 Markdown 改写：{formula}')
-    if formulas and not page.math_runtime:
-        raise ValueError('HTML 公式缺少数学渲染运行时；仅完成静态检查')
+    if formulas and not page.has_math_rendering():
+        raise ValueError('HTML 公式缺少数学渲染运行时或构建期 KaTeX SSR 输出；仅完成静态检查')
     # 图的替代文本里可能有转义或配对的 Markdown 方括号，例如 ``\[b\]`` 或 ``[a]``。
     # 用 CommonMark 扫描器提取已去空白、去尖括号、去可选标题的真实 URL。
     expected = [dest for _start, _end, dest in _iter_markdown_images(body)]
@@ -1514,7 +1524,7 @@ def verify_publication_urls(pages, image_records, image_base):
         page = Page(result['body'].decode('utf-8'))
         visible_content_sha256 = digest(json.dumps(page.visible_content_fields(), ensure_ascii=False, sort_keys=True).encode())
         if visible_content_sha256 != expected['projectionSha256'] or page.canonicals != [expected['url']] \
-                or (expected['formulaCount'] and not page.math_runtime):
+                or (expected['formulaCount'] and not page.has_math_rendering()):
             raise ValueError(f'线上正文/图片/表格/公式未匹配已审 HTML：已审摘要 {expected["projectionSha256"]}，线上摘要 {visible_content_sha256}')
         if 'pageIdentityContract' in expected or 'pageIdentitySha256' in expected:
             identity_sha = digest(json.dumps(page.page_identity_fields(), ensure_ascii=False, sort_keys=True).encode())

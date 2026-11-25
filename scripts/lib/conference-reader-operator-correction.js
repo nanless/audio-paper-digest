@@ -54,9 +54,13 @@ function read(filename, json = true) {
     } finally { fs.closeSync(fd); }
 }
 function inside(file, root) {
-    const rel = path.relative(path.resolve(root), path.resolve(file));
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) fail('记录离开受控目录');
-    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(path.resolve(file)));
+    if (typeof file !== 'string' || !file || file.split(/[\\/]/).includes('..')) fail('记录离开受控目录');
+    const { relocatePathWithinRoot } = require('./repo-rename-path');
+    const candidatePath = path.isAbsolute(file) ? file : path.resolve(file);
+    const resolved = relocatePathWithinRoot(candidatePath, root);
+    if (!resolved) fail('记录离开受控目录');
+    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
+    return resolved;
 }
 function tree(directory) {
     const rows = []; let total = 0;
@@ -785,9 +789,17 @@ function current(paper, identity) {
     return { payload: { ...clone(active.candidate.payload), draft: clone(active.draft), rawDraft: JSON.stringify(active.draft) }, proof: clone(proof) };
 }
 function execution(proof) {
-    if (proof && (!scope.getStore()?.proof || !isDeepStrictEqual(scope.getStore().proof, proof))) fail('非本scope签发的人工来源');
-    return proof ? { executionKind: 'operator', operatorProvenance: clone(proof), newReaderApiRequests: 0,
-        model: 'operator-local', protocol: 'local_operator' } : {};
+    const active = scope.getStore();
+    if (proof && (!active?.proof || !isDeepStrictEqual(active.proof, proof))) fail('非本scope签发的人工来源');
+    if (!proof) return {};
+    const payload = active?.candidate?.payload;
+    const retainedCounts = payload ? {
+        ...(Number.isSafeInteger(payload.attempts) ? { attempts: payload.attempts } : {}),
+        ...(Number.isSafeInteger(payload.fullAttempts) ? { fullAttempts: payload.fullAttempts } : {}),
+        transportFailures: Number.isSafeInteger(payload.transportFailures) ? payload.transportFailures : 0
+    } : {};
+    return { executionKind: 'operator', operatorProvenance: clone(proof), newReaderApiRequests: 0,
+        model: 'operator-local', protocol: 'local_operator', ...retainedCounts };
 }
 // A caller cannot use this scope to request an asset: the normal finalizer must
 // use existing same-SHA local assets/resources. Call at network entry points.

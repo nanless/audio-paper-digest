@@ -480,7 +480,13 @@ def main():
                             elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
         print_error_guidance(exc, 'blog-review')
         raise
-    page_count = len(receipt.get('files', [])) if isinstance(receipt, dict) else 0
+    receipt_data = receipt
+    if not isinstance(receipt_data, dict):
+        try:
+            receipt_data = json.loads(Path(receipt).read_text(encoding='utf-8'))
+        except Exception:
+            receipt_data = {}
+    page_count = len(receipt_data.get('files', [])) if isinstance(receipt_data, dict) else 0
     write_stage_summary('审查', 'ok', f'审查通过 {page_count} 个文件并签发凭证',
                         elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
     print(f'🧾 审查凭证: {receipt}')

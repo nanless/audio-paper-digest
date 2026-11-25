@@ -1943,6 +1943,10 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
         if not current_tutorial and not current_api_reader:
             continue
         source_label = Path(artifact['path']).name
+        title_corruption_re = re.compile(r'\{\{|\}\}|\\\(|\\\)|\\\[|\\\]|\\"')
+        fm_title = str(frontmatter.get('title') or '')
+        if title_corruption_re.search(fm_title):
+            issues.append(f'{source_label} frontmatter title 含疑似双重大括号或转义污染: {fm_title!r}')
         candidates = rendered_page_candidates(
             output_dir, frontmatter.get('title'), artifact.get('path'),
         )
@@ -1953,6 +1957,13 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             )
             continue
         rendered_path, rendered = candidates[0]
+        rendered_title_match = re.search(r'<title[^>]*>([\s\S]*?)</title>', rendered, flags=re.IGNORECASE)
+        if rendered_title_match:
+            rendered_title = html.unescape(rendered_title_match.group(1)).strip()
+            if title_corruption_re.search(rendered_title):
+                issues.append(
+                    f'{source_label} -> {rendered_path.name} Hugo 渲染页 <title> 含疑似双重大括号或转义污染: {rendered_title!r}'
+                )
         reader_html = rendered_article_fragment(rendered)
         gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_literal_asterisks(
             mask_source_bound_author_dollars(mask_source_bound_title_dollars(

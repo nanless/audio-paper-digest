@@ -4,7 +4,9 @@ const qualityFormats = require('./lib/analysis-quality-format');
 const sourceInputFormats = require('./lib/source-input-format');
 const { createActiveTimeBudget } = require('./lib/active-time-budget');
 const { setupScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
+if (require.main === module && !process.argv.includes('--json')) {
+    setupScriptLogging(__filename);
+}
 
 /**
  * 论文深度分析器 - 使用全文+图片的深度阅读理解

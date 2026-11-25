@@ -209,8 +209,9 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
             return { runId: run.runId, paperId: request.paperId, status: 'failed', operatorPatchApplied: true,
                 alreadyApplied: true, draftSha256: auditEntry.afterDraftSha256, patchFileSha256: requestFile.sha256 };
         }
+        const { isAuthorizedReaderPatchPath } = require('./reader-patch-paths');
         const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
-            /^\/(?:readerTitle|oneSentenceThesis)$|^\/sections\/(?:0|[1-9]\d*)(?:\/body)?$|^\/conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?$|^\/(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)$/.test(pointer || ''));
+            isAuthorizedReaderPatchPath(pointer));
         const draft = repair.applyReaderPatch(payload.draft, request.patch, allowedPaths,
             { availableFigureOrdinals: options.availableFigureOrdinals });
         if (!repair.parseRepairableDraft(draft) || repair.hashDraft(draft) === repair.hashDraft(payload.draft)) {

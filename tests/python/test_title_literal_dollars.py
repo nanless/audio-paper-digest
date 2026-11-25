@@ -149,6 +149,43 @@ class TitleLiteralDollarTests(unittest.TestCase):
             output.write_text(rendered.replace('</div>', '<p>$x$</p></div>'))
             self.assertTrue(any('裸 $' in issue for issue in validate_hugo_rendered_html_gate(root / 'public', [self.artifact(body)])))
 
+    def test_sol3_superscript_yaml_bibtex_and_apply_llm_fixes_warning_guard(self):
+        sol3 = 'Sol$^{3}$: "Unified" Audio Model'
+        plain = publish.plain_title_for_publish(sol3)
+        self.assertEqual(plain, 'Sol³: "Unified" Audio Model')
+        self.assertNotIn('{{', plain)
+        self.assertNotIn('\\"', plain)
+        yaml_escaped = publish.yaml_title_for_publish(plain)
+        self.assertEqual(yaml_escaped, 'Sol³: \\"Unified\\" Audio Model')
+        self.assertNotIn('{{', yaml_escaped)
+        bib = publish._bibtex_escape('Sol$^{3}$: Best-of-$N$ on a $5 Chip', 'title')
+        self.assertIn('Sol$^{3}$', bib)
+        self.assertIn('$N$', bib)
+        self.assertIn(r'\$5 Chip', bib)
+        self.assertNotIn(r'\textasciicircum', bib)
+        # Warning issues must never mutate content in apply_llm_fixes
+        original = '这是一段测试正文：保留原文数值 12.3%。'
+        warn_only = [{'severity': 'warning', 'auto_fixable': True, 'fix_instruction': '将 "保留原文数值 12.3%" 改为 "改成别的值"'}]
+        self.assertEqual(publish.apply_llm_fixes(original, warn_only), original)
+        err_fix = [{'severity': 'error', 'auto_fixable': True, 'fix_instruction': '将 "保留原文数值 12.3%" 改为 "保留原文数值 12.4%"'}]
+        self.assertIn('12.4%', publish.apply_llm_fixes(original, err_fix))
+
+    def test_conference_publication_gate_accepts_katex_ssr_and_rejects_katex_error(self):
+        import conference_publication_gate as gate
+        ssr_html = (
+            '<html><head><title>Paper</title>'
+            '<link rel="canonical" href="https://example.com/paper/">'
+            '<link rel="stylesheet" href="/katex.min.css"></head>'
+            '<body><article><div class="post-content">'
+            '<span class="katex"><math><semantics>'
+            '<annotation encoding="application/x-tex">x^2</annotation>'
+            '</semantics></math></span></div></article></body></html>'
+        )
+        page = gate.Page(ssr_html)
+        self.assertTrue(page.has_math_rendering())
+        with self.assertRaises(ValueError):
+            gate.Page(ssr_html.replace('class="katex"', 'class="katex-error"'))
+
 
 if __name__ == '__main__':
     unittest.main()

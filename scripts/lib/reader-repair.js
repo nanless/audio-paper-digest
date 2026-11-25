@@ -1609,27 +1609,50 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         if (unknown.length) issues.push({ path: null, diagnosticOnly: true,
                             message: `原始输出 ${location} 包含额外字段：${unknown.join('、')}；只能含 ${allowed.join('、')}。解释、表格和标记应写入允许的正文或来源字段，不能另造字段；按论文证据核对后修正，不要直接丢弃内容。` });
                     };
+                    const readerFormat = require('./reader-record-format');
+                    const currentDraftHeader = patchCodec.recordHeader(patchCodec.contract('reader-draft'), 'reader-draft');
                     let rootFields = ROOT_FIELDS;
-                    try { rootFields = require('./reader-record-format').draftFields(value); } catch {
+                    let rawEditorialProfile = null;
+                    try {
+                        const fmt = readerFormat.draftFormat(value);
+                        rootFields = readerFormat.draftFields(value);
+                        rawEditorialProfile = fmt.editorialProfile;
+                    } catch {
                         // 当前格式头若存在但未登记/指纹不完整，主错误已经单独报告
-                        // “格式头未登记或字段混用”。此时不能把 contract、
-                        // schemaFingerprint 再误报成“额外字段”，否则修复反馈会同时
-                        // 要求保留当前头和删除当前头，模型只能二选一猜。
-                        rootFields = [...ROOT_FIELDS, 'contract', 'schemaFingerprint'];
+                        // “格式头未登记或字段混用”。绝不能把旧版 version 混进 contract 模式白名单，
+                        // 也不能漏掉 v5 的 implementationSpecs，否则反馈会自毒化诱发模型输出 version:3。
+                        if (own(value, 'contract')) {
+                            rootFields = ['contract', 'schemaFingerprint', 'readerTitle', 'oneSentenceThesis',
+                                ...ARRAY_FIELDS, ...(readerFormat.V5_OPTIONAL_DRAFT_FIELDS || ['implementationSpecs'])];
+                            if (value.contract === currentDraftHeader.contract) {
+                                rawEditorialProfile = readerFormat.STRUCTURED_V5;
+                                if (typeof value.schemaFingerprint !== 'string'
+                                    || value.schemaFingerprint !== currentDraftHeader.schemaFingerprint) {
+                                    issues.push({
+                                        path: null,
+                                        diagnosticOnly: true,
+                                        message: `原始输出 schemaFingerprint 不完整或有误（实际长度 ${typeof value.schemaFingerprint === 'string' ? value.schemaFingerprint.length : 0}，应为 64 位精确值 ${currentDraftHeader.schemaFingerprint}）；保留 contract/schemaFingerprint，禁止添加 version 字段。`
+                                    });
+                                }
+                            }
+                        } else {
+                            rootFields = [...ROOT_FIELDS];
+                        }
                     }
                     addUnknownFields(value, rootFields, '根对象');
+                    const rawFormatLimits = rawEditorialProfile
+                        ? limitsForDraftFormat({ editorialProfile: rawEditorialProfile })
+                        : limitsForDraftFormat(value);
                     if (Array.isArray(value.sections)) {
-                        const rawLimits = limitsForDraftFormat(value);
-                        if (value.sections.length < rawLimits.minimumSections
-                            || value.sections.length > rawLimits.maximumSections) {
+                        if (value.sections.length < rawFormatLimits.minimumSections
+                            || value.sections.length > rawFormatLimits.maximumSections) {
                             issues.push({ path: null, diagnosticOnly: true,
-                                message: `原始输出 sections 实际 ${value.sections.length} 节，必须为 ${rawLimits.minimumSections}–${rawLimits.maximumSections} 节；合并同类段落时保留原有事实、数字、单位和来源。` });
+                                message: `原始输出 sections 实际 ${value.sections.length} 节，必须为 ${rawFormatLimits.minimumSections}–${rawFormatLimits.maximumSections} 节；合并同类段落时保留原有事实、数字、单位和来源。` });
                         }
                         value.sections.forEach((section, index) => addUnknownFields(section,
                             ['kind', 'heading', 'body'], `sections[${index}]`));
                     }
-                    const rawFormatLimits = limitsForDraftFormat(value);
-                    const isStructuredV5Raw = require('./reader-record-format').isStructuredV5(rawFormatLimits.editorialProfile);
+                    const isStructuredV5Raw = readerFormat.isStructuredV5(rawFormatLimits.editorialProfile);
                     for (const [field, allowed] of [
                         ['conceptBridges', ['terms', 'sectionKind', 'marker', 'explanation']],
                         ['figurePlacements', ['figureOrdinal', 'targetKind', 'marker', 'focusPoints', ...(isStructuredV5Raw ? ['chineseCaption'] : [])]],

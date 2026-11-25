@@ -334,7 +334,7 @@ function replayRepair(request, response, payload, source, normalizeReplayDraft, 
         for (const target of request.repairTargets) {
             if (typeof target?.path !== 'string' || seen.some(pointer => target.path === pointer
                 || target.path.startsWith(pointer + '/') || pointer.startsWith(target.path + '/'))) return false;
-            const match = /^\/(readerTitle|oneSentenceThesis|conceptBridges|sections|tableBindings|formulaBindings|figurePlacements)(?:\/(0|[1-9]\d*)(?:\/(body|explanation))?)?$/.exec(target.path);
+            const match = /^\/(readerTitle|oneSentenceThesis|implementationSpecs|conceptBridges|sections|tableBindings|formulaBindings|figurePlacements)(?:\/(0|[1-9]\d*)(?:\/(body|explanation))?)?$/.exec(target.path);
             if (!match || (match[3] && !((match[1] === 'sections' && match[3] === 'body')
                 || (match[1] === 'conceptBridges' && match[3] === 'explanation')))) return false;
             let value = request.draft?.[match[1]];

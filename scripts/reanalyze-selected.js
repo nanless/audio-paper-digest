@@ -4,7 +4,9 @@ if (require.main === module) {
     requireExternalRuntime('reanalyze-selected.js', { enforceWorkspaceRole: true });
 }
 const { setupScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
+if (require.main === module && !process.argv.includes('--json')) {
+    setupScriptLogging(__filename);
+}
 const fs = require('fs');
 const path = require('path');
 
@@ -541,15 +543,51 @@ async function reanalyzeSelected(ids, options = {}) {
     };
 }
 
+function parseSelectedReanalyzeCliArgs(argv) {
+    const ids = [];
+    const options = {};
+    const factFeedbackFiles = [];
+    for (let i = 0; i < argv.length; i++) {
+        const arg = argv[i];
+        if (arg === '--natural-resource-prose') {
+            options.naturalResourceProse = true;
+        } else if (arg === '--fact-feedback-file') {
+            const next = argv[++i];
+            if (!next || next.startsWith('--')) throw new Error('--fact-feedback-file 缺少文件路径');
+            factFeedbackFiles.push(next);
+        } else if (arg === '--reader-fact-feedback-file') {
+            const next = argv[++i];
+            if (!next || next.startsWith('--')) throw new Error('--reader-fact-feedback-file 缺少文件路径');
+            options.readerFactFeedbackFiles = [...(options.readerFactFeedbackFiles || []), next];
+        } else if (arg === '--core-summary-fact-feedback-file') {
+            const next = argv[++i];
+            if (!next || next.startsWith('--')) throw new Error('--core-summary-fact-feedback-file 缺少文件路径');
+            options.coreSummaryFactFeedbackFiles = [...(options.coreSummaryFactFeedbackFiles || []), next];
+        } else if (arg.startsWith('--')) {
+            throw new Error(`无法识别参数: ${arg}`);
+        } else {
+            ids.push(arg);
+        }
+    }
+    if (factFeedbackFiles.length) options.factReviewFeedbackFiles = factFeedbackFiles;
+    return { ids, options };
+}
+
 if (require.main === module) {
     requireExternalRuntime('reanalyze-selected.js', { enforceWorkspaceRole: true });
-    const ids = process.argv.slice(2);
-    if (ids.length === 0) {
-        console.error('❌ 用法: node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...');
+    let parsed;
+    try {
+        parsed = parseSelectedReanalyzeCliArgs(process.argv.slice(2));
+    } catch (err) {
+        console.error(`❌ ${err.message}`);
+        process.exit(1);
+    }
+    if (parsed.ids.length === 0) {
+        console.error('❌ 用法: node scripts/reanalyze-selected.js [--natural-resource-prose] [--fact-feedback-file <path>] <arxivId1> [arxivId2] ...');
         process.exit(1);
     }
 
-    reanalyzeSelected(ids).then(result => {
+    reanalyzeSelected(parsed.ids, parsed.options).then(result => {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error('❌ 错误:', err);
@@ -557,4 +595,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { reanalyzeSelected, updateReanalysisStats, resetReaderForSelectedReanalysis };
+module.exports = { reanalyzeSelected, updateReanalysisStats, resetReaderForSelectedReanalysis, parseSelectedReanalyzeCliArgs };

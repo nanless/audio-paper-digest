@@ -55,7 +55,9 @@ function read(file) {
     } finally { fs.closeSync(fd); }
 }
 function within(file, root) {
-    const resolved = relocatePathWithinRoot(file, root);
+    if (typeof file !== 'string' || !file || file.split(/[\\/]/).includes('..')) fail('文件超出受控运行目录');
+    const candidatePath = path.isAbsolute(file) ? file : path.resolve(file);
+    const resolved = relocatePathWithinRoot(candidatePath, root);
     if (!resolved) fail('文件超出受控运行目录');
     require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
     return resolved;

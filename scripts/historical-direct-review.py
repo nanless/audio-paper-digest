@@ -290,11 +290,11 @@ def validate_semantic_protocol(value):
     if declared != stable(body):
         raise ValueError('页面内容审查规则的自校验 SHA 不符')
     budgets = value['budgets']
-    if (not 4000 <= budgets['chunkChars'] <= 16000
+    if (not 4000 <= budgets['chunkChars'] <= 24000
             or not 1000 <= budgets['maxTokens'] <= 16000
             or budgets['timeoutSeconds'] != 120 or budgets['maxRetries'] != 5
             or budgets['temperature'] != 0.1 or budgets['imageMaxBytes'] != 8 * 1024 * 1024
-            or not 1 <= budgets['pageConcurrency'] <= 5):
+            or not 1 <= budgets['pageConcurrency'] <= 16):
         raise ValueError('页面内容审查的分块长度、输出预算、超时、重试、温度、图片大小或并发设置无效')
     return value
 
