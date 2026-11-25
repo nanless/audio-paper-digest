@@ -52,7 +52,7 @@ function readRegular(filename, maximum = 128 * 1024 * 1024, dependencies = {}) {
         if (!opened.isFile() || opened.nlink !== before.nlink || named.isSymbolicLink() || named.nlink !== before.nlink
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
             || opened.size > BigInt(maximum)) fail(`打开后来源文件不安全：类型、链接数、大小或身份不符合要求：${filename}`);
-        const bytes = fs.readFileSync(fd);
+        const bytes = readBoundedFd(fd, Number(opened.size), maximum);
         const after = fs.fstatSync(fd, { bigint: true }); const namedAfter = fs.lstatSync(filename, { bigint: true });
         if (BigInt(bytes.length) !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
             || after.nlink !== opened.nlink || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs
@@ -80,8 +80,13 @@ function writeExact(filename, bytes) {
 }
 function runGit(blogRepo, args, { text = true, maximum = 128 * 1024 * 1024 } = {}) {
     let result;
+    const { buildChildProcessEnv, VCS_CHILD_ENV_KEYS, TRANSPORT_ENV_KEYS } = require('../env-loader.js');
     try { result = runGitProcess(blogRepo, args, { encoding: text ? 'utf8' : null,
-        env: { ...process.env, LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }, maxBuffer: maximum }); }
+        timeout: 120000,
+        env: buildChildProcessEnv(
+            { LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+            [...VCS_CHILD_ENV_KEYS, ...TRANSPORT_ENV_KEYS]
+        ), maxBuffer: maximum }); }
     catch { fail(`Git 命令 ${args[0]} 执行失败（子进程未完整正常退出）。`); }
     if (result.status !== 0) fail(`Git 命令 ${args[0]} 执行失败（${result.status}）。`);
     return text ? result.stdout.trim() : Buffer.from(result.stdout);

@@ -15,6 +15,8 @@ const PROJECT_ENV_PREFIXES = [
 
 const PROJECT_ENV_KEYS = new Set([
     'KIMI_API_KEY',
+    'MIMO_API_KEY',
+    'DEEPSEEK_API_KEY',
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
     'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'
 ]);
@@ -135,20 +137,58 @@ function parseEnvContent(envContent) {
     return parsed;
 }
 
+function readEnvFileStrict(envFile, { enforcePermissions = false } = {}) {
+    let statBefore;
+    try {
+        statBefore = fs.lstatSync(envFile);
+    } catch (error) {
+        if (error?.code === 'ENOENT') return null;
+        throw error;
+    }
+    if (statBefore.isSymbolicLink() || !statBefore.isFile()
+        || (process.platform !== 'win32' && statBefore.nlink !== 1)) {
+        throw new Error(`项目 .env 必须是无硬链接的普通文件，禁止符号链接: ${envFile}`);
+    }
+    if (enforcePermissions) {
+        try {
+            // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
+            if (process.platform === 'win32' || (statBefore.mode & 0o777) !== 0o600) {
+                fs.chmodSync(envFile, 0o600);
+            }
+        } catch (error) {
+            if (process.platform !== 'win32') throw error;
+        }
+    }
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    const fd = fs.openSync(envFile, flags);
+    try {
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile()
+            || (process.platform !== 'win32' && opened.nlink !== 1)
+            || opened.dev !== statBefore.dev || opened.ino !== statBefore.ino) {
+            throw new Error(`项目 .env 打开后文件身份不一致: ${envFile}`);
+        }
+        const MAX_ENV_BYTES = 2 * 1024 * 1024;
+        if (opened.size > MAX_ENV_BYTES) {
+            throw new Error(`项目 .env 超过大小限制 (${MAX_ENV_BYTES} bytes): ${envFile}`);
+        }
+        const buf = Buffer.alloc(opened.size);
+        let offset = 0;
+        while (offset < opened.size) {
+            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+            if (n <= 0) break;
+            offset += n;
+        }
+        return buf.subarray(0, offset).toString('utf8');
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 function parseEnvFile(envFile) {
     envFile = resolveEnvFile(envFile);
-    if (!fs.existsSync(envFile)) return {};
-
-    try {
-        // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
-        if (process.platform === 'win32' || (fs.statSync(envFile).mode & 0o777) !== 0o600) {
-            fs.chmodSync(envFile, 0o600);
-        }
-    } catch (error) {
-        if (process.platform !== 'win32') throw error;
-    }
-
-    const envContent = fs.readFileSync(envFile, 'utf8');
+    const envContent = readEnvFileStrict(envFile, { enforcePermissions: true });
+    if (envContent === null) return {};
     return parseEnvContent(envContent);
 }
 

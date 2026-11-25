@@ -25,8 +25,29 @@ def _env_file_value(env_file, key):
     """读工作区 .env 里的一个键。开关由本模块自己解析，因为 python 入口
     在 npm 包装层检查时还没有任何脚本读过 .env。"""
     try:
-        raw = env_file.read_text(encoding='utf-8')
-    except OSError:
+        before = env_file.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) \
+                or (os.name != 'nt' and before.st_nlink != 1) or before.st_size > 2 * 1024 * 1024:
+            return ''
+        fd = os.open(env_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) \
+                    or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino) \
+                    or opened.st_size > 2 * 1024 * 1024:
+                return ''
+            chunks = []
+            remaining = opened.st_size + 1
+            while remaining > 0:
+                chunk = os.read(fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b''.join(chunks).decode('utf-8')
+        finally:
+            os.close(fd)
+    except (OSError, UnicodeDecodeError):
         return ''
     value = ''
     for line in raw.splitlines():

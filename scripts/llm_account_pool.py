@@ -26,6 +26,8 @@ import re
 import shutil
 import socket
 import stat
+import subprocess
+import sys
 import time
 import uuid
 from contextlib import contextmanager
@@ -357,14 +359,9 @@ def _snapshot_lock(lock_path, stale_seconds):
                 owner_pid = owner.get('pid')
                 valid_owner_pid = type(owner_pid) is int and owner_pid > 0
                 if owner.get('hostname') == socket.gethostname() and valid_owner_pid:
-                    try:
-                        os.kill(owner_pid, 0)
-                    except ProcessLookupError:
-                        reclaimable = True
-                    except PermissionError:
-                        reclaimable = False
-                    else:
-                        reclaimable = False
+                    alive = _local_lock_owner_alive(owner)
+                    hung_threshold = max(float(stale_seconds) * 3.0, 300.0)
+                    reclaimable = (not alive) or (age > hung_threshold)
                 elif owner.get('hostname'):
                     reclaimable = age > stale_seconds
         except (FileNotFoundError, json.JSONDecodeError):
@@ -493,6 +490,72 @@ def _remove_lock_dir_checked(lock_path, expected_snapshot):
         return False
 
 
+def _boot_time_seconds():
+    if sys.platform == 'darwin':
+        try:
+            res = subprocess.run(['sysctl', '-n', 'kern.boottime'], check=False, capture_output=True, text=True, timeout=2)
+            if res.returncode == 0 and res.stdout:
+                m = re.search(r'sec\s*=\s*(\d+)', res.stdout)
+                if m:
+                    return int(m.group(1))
+        except Exception:
+            pass
+    elif sys.platform.startswith('linux'):
+        try:
+            for line in Path('/proc/stat').read_text(encoding='utf-8').splitlines():
+                if line.startswith('btime '):
+                    return int(line.split()[1])
+        except Exception:
+            pass
+    return None
+
+
+def _pid_start_time(pid):
+    if type(pid) is not int or pid <= 0:
+        return None
+    if sys.platform.startswith('linux'):
+        try:
+            raw = Path(f'/proc/{pid}/stat').read_text(encoding='utf-8')
+            rparen = raw.rfind(')')
+            if rparen > 0:
+                fields = raw[rparen + 2:].split()
+                if len(fields) > 19:
+                    return f'linux:{fields[19]}'
+        except OSError:
+            return None
+    try:
+        res = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], check=False, capture_output=True, text=True, timeout=2)
+        if res.returncode == 0:
+            norm = ' '.join(res.stdout.strip().split())
+            return norm or None
+    except Exception:
+        pass
+    return None
+
+
+_PROCESS_BOOT_TIME_SECONDS = _boot_time_seconds()
+_CURRENT_PID_START_TIME = _pid_start_time(os.getpid())
+
+
+def _local_lock_owner_alive(owner):
+    recorded_boot = owner.get('bootTime')
+    if type(recorded_boot) is int and _PROCESS_BOOT_TIME_SECONDS is not None and recorded_boot != _PROCESS_BOOT_TIME_SECONDS:
+        return False
+    owner_pid = owner.get('pid')
+    try:
+        os.kill(owner_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    recorded_start = owner.get('pidStartTime')
+    if isinstance(recorded_start, str) and recorded_start:
+        actual = _pid_start_time(owner_pid)
+        if actual is not None and actual != recorded_start:
+            return False
+    return True
+
+
 def _lock_reclaimable(lock_path, stale_seconds):
     snapshot = _snapshot_lock(lock_path, stale_seconds)
     return True if snapshot is None else snapshot['reclaimable']
@@ -606,12 +669,17 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
                 raise LlmAccountPoolStateError(
                     f'LLM 账号池锁路径禁止使用 symlink 或非目录: {lock_path}'
                 )
-            created_owner_stat = _write_lock_owner_json(lock_path, created_dir_stat, {
+            owner_payload = {
                 'pid': os.getpid(),
                 'hostname': socket.gethostname(),
                 'token': token,
                 'acquiredAt': datetime.now(timezone.utc).isoformat(),
-            })
+            }
+            if _PROCESS_BOOT_TIME_SECONDS is not None:
+                owner_payload['bootTime'] = _PROCESS_BOOT_TIME_SECONDS
+            if _CURRENT_PID_START_TIME is not None:
+                owner_payload['pidStartTime'] = _CURRENT_PID_START_TIME
+            created_owner_stat = _write_lock_owner_json(lock_path, created_dir_stat, owner_payload)
             if created_owner_stat is None:
                 if time.monotonic() - started >= timeout_seconds:
                     raise LlmAccountPoolLockTimeoutError(
@@ -902,6 +970,50 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     excluded = set(exclude_account_ids or ())
     normalized_affinity = affinity_key.strip() if isinstance(affinity_key, str) else ''
+    keys_by_id = dict(zip(identity['account_ids'], keys))
+
+    # 5 条件只读亲和快路径：与 JS 实现保持一致，减少高并发亲和命中时的同步 fsync。
+    if normalized_affinity:
+        try:
+            state = read_state_strict(state_file)
+            service = (state.get('services') or {}).get(identity['service_id'])
+            groups = (service or {}).get('groups') or {}
+            group = groups.get(identity['group_id'])
+            stored_cursor = group.get('rotationCursor') if isinstance(group, dict) else None
+            stale_prune_needed = len(groups) > 1 and any(
+                gid != identity['group_id']
+                and (now_ms - int((g or {}).get('lastSelectedAtMs') or 0)) > STALE_GROUP_TTL_MS
+                for gid, g in groups.items()
+            )
+            if service and isinstance(group, dict) \
+                    and (type(stored_cursor) is int and 0 <= stored_cursor <= MAX_SAFE_INTEGER) \
+                    and not stale_prune_needed:
+                start_index = int(_sha256(normalized_affinity)[:8], 16) % len(ordered_account_ids)
+                selected_index = None
+                accounts = service.get('accounts') or {}
+                for step in range(len(ordered_account_ids)):
+                    index = (start_index + step) % len(ordered_account_ids)
+                    account_id = ordered_account_ids[index]
+                    if account_id in excluded:
+                        continue
+                    if _account_is_blocked(accounts.get(account_id, {}), now_ms):
+                        continue
+                    selected_index = index
+                    break
+                if selected_index is not None:
+                    next_id = ordered_account_ids[selected_index]
+                    acct_status = (accounts.get(next_id) or {}).get('status')
+                    last_selected = int(group.get('lastSelectedAtMs') or 0)
+                    if acct_status != 'quota_blocked' and last_selected > 0 \
+                            and now_ms >= last_selected and (now_ms - last_selected) < 60_000:
+                        return {
+                            'api_key': keys_by_id[next_id],
+                            'account_id': next_id,
+                            **identity,
+                        }
+        except Exception:
+            pass
+
     selection = {}
 
     def updater(state):
@@ -916,7 +1028,6 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
                 'switchedAt': None,
             }
         service['groups'][identity['group_id']] = group
-        keys_by_id = dict(zip(identity['account_ids'], keys))
         if normalized_affinity:
             start_index = int(_sha256(normalized_affinity)[:8], 16) % len(ordered_account_ids)
         else:

@@ -240,7 +240,8 @@ function readSafeLockOwnerJson(ownerPath) {
         if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino) {
             throw new Error('owner.json 在读取期间身份发生变化');
         }
-        const raw = fs.readFileSync(fd, 'utf8');
+        const { readBoundedFd } = require('./lib/publication-file-primitives.js');
+        const raw = readBoundedFd(fd, opened.size, MAX_LOCK_OWNER_BYTES).toString('utf8');
         const after = fs.fstatSync(fd);
         if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
             throw new Error('owner.json 在读取期间已变化');
@@ -534,7 +535,8 @@ function readJsonObject(filename, blockers) {
                 blockers.push({ type: 'changed_receipt', path: filename, message: '来源记录在读取期间的文件身份已变化' });
                 return null;
             }
-            const raw = fs.readFileSync(fd, 'utf8');
+            const { readBoundedFd } = require('./lib/publication-file-primitives.js');
+            const raw = readBoundedFd(fd, opened.size, MAX_RECEIPT_BYTES).toString('utf8');
             const after = fs.fstatSync(fd);
             if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
                 blockers.push({ type: 'changed_receipt', path: filename, message: '来源记录在读取期间已变化' });

@@ -338,7 +338,23 @@ function readPolicyFileSafe(policyPath) {
                 'PUBLIC_NETWORK_POLICY_TOCTOU'
             );
         }
-        bytes = fs.readFileSync(fd);
+        const expectedSize = statOpened.size;
+        const chunks = [];
+        let readSize = 0;
+        while (true) {
+            const buf = Buffer.alloc(Math.min(65536, expectedSize - readSize + 1));
+            const n = fs.readSync(fd, buf, 0, buf.length, null);
+            if (n === 0) break;
+            if (n > expectedSize - readSize) {
+                throw new PublicNetworkPolicyError(
+                    `公网安全策略文件读取期间超过声明大小: ${target}`,
+                    'PUBLIC_NETWORK_POLICY_TOCTOU'
+                );
+            }
+            chunks.push(buf.subarray(0, n));
+            readSize += n;
+        }
+        bytes = Buffer.concat(chunks, readSize);
         const statAfter = fs.fstatSync(fd);
         const statNamed = fs.lstatSync(target, { throwIfNoEntry: false });
         if (!statNamed

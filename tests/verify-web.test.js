@@ -489,3 +489,28 @@ test('重定向到其它页/站点标题单页/抽样/无部署均不能假通�
     assert.strictEqual(artifact.partial, true);
     assert.strictEqual(artifact.results[0].titleOk, false, '只有站点名的单页标题不算通过');
 });
+
+test('SSRF/路径穿越拒绝与标题大括号/转义污染拦截', async () => {
+    assert.throws(
+        () => verifyWeb.assertSafeVerifyUrl('http://169.254.169.254/latest/meta-data/'),
+        /仅允许 HTTPS|私网|保留/
+    );
+    assert.throws(
+        () => verifyWeb.assertSafeVerifyUrl('https://127.0.0.1/posts/2099-01-01/'),
+        /私网|保留|公网/
+    );
+    assert.throws(
+        () => verifyWeb.pageUrls('2099-01-02', { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' }, {
+            files: [{ path: 'content/posts/../../etc/passwd.md' }]
+        }),
+        /非法|越界|路径/
+    );
+    assert.strictEqual(verifyWeb.titleHasCorruptionArtifacts('Sol^{{{{3}}}}: Speech Model'), true);
+    assert.strictEqual(verifyWeb.titleHasCorruptionArtifacts('Speech \\(x\\) Model'), true);
+    assert.strictEqual(verifyWeb.titleHasCorruptionArtifacts('Speech \\"Quoted\\" Title'), true);
+    assert.strictEqual(verifyWeb.titleHasCorruptionArtifacts('Sol³: Speech Model — 音频论文速递'), false);
+    assert.strictEqual(
+        verifyWeb.titleMatches('Sol^{{{{3}}}} | 语音/音乐/音频论文速递'),
+        false
+    );
+});

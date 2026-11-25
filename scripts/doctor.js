@@ -440,21 +440,36 @@ function parseDotEnvText(raw) {
 function readEnvFileReadOnly(envFile) {
     let stat;
     try {
-        stat = fs.statSync(envFile);
+        stat = fs.lstatSync(envFile);
     } catch (error) {
         if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
             return { exists: false, mode: null, entries: {}, readError: null, error: null };
         }
         return { exists: false, mode: null, entries: {}, readError: null, error: `无法访问 .env: ${error?.code || error?.message || error}` };
     }
-    if (!stat.isFile()) {
-        return { exists: false, mode: null, entries: {}, readError: null, error: '.env 不是普通文件' };
+    if (stat.isSymbolicLink() || !stat.isFile() || (process.platform !== 'win32' && stat.nlink !== 1)) {
+        return { exists: false, mode: null, entries: {}, readError: null, error: '.env 必须是无硬链接的普通文件，禁止符号链接' };
     }
     let raw;
+    let fd;
     try {
-        raw = fs.readFileSync(envFile, 'utf8');
+        fd = fs.openSync(envFile, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size > 2 * 1024 * 1024) {
+            return { exists: true, mode: stat.mode & 0o777, entries: {}, readError: '.env 打开后身份异常或过大', error: null };
+        }
+        const buf = Buffer.alloc(opened.size);
+        let offset = 0;
+        while (offset < opened.size) {
+            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+            if (n <= 0) break;
+            offset += n;
+        }
+        raw = buf.subarray(0, offset).toString('utf8');
     } catch (error) {
         return { exists: true, mode: stat.mode & 0o777, entries: {}, readError: `无法读取 .env: ${error?.code || error?.message || error}`, error: null };
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
     }
     return {
         exists: true,
@@ -1716,7 +1731,8 @@ module.exports = {
 
 if (require.main === module) {
     main().catch(error => {
-        console.error(`[doctor] ${maskTextPaths(error?.stack || error?.message || error)}`);
+        const secrets = collectSecretValues(process.env);
+        console.error(`[doctor] ${redactText(maskTextPaths(error?.stack || error?.message || error), secrets)}`);
         process.exitCode = 2;
     });
 }

@@ -1370,7 +1370,16 @@ function loadAnalyzedIdsFromArchive() {
 
 function refreshCommittedPublishedPaperIds(blogRepo) {
     try {
-        require('node:child_process').execFileSync('git', ['-C', blogRepo, 'fetch', 'origin', 'main'], { stdio: 'pipe' });
+        const { buildChildProcessEnv, VCS_CHILD_ENV_KEYS, TRANSPORT_ENV_KEYS } = require('./env-loader');
+        require('node:child_process').execFileSync('git', ['-C', blogRepo, 'fetch', 'origin', 'main'], {
+            stdio: 'pipe',
+            timeout: 120000,
+            maxBuffer: 16 * 1024 * 1024,
+            env: buildChildProcessEnv(
+                { LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+                [...VCS_CHILD_ENV_KEYS, ...TRANSPORT_ENV_KEYS]
+            )
+        });
     } catch (cause) {
         throw new Error(`无法更新博客远端 main，未开始归档或抓取：${blogRepo}；请检查仓库与 Git 连接（${cause.message}）`, { cause });
     }

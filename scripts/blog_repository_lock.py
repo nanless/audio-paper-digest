@@ -9,6 +9,7 @@ import os
 import socket
 import stat
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -105,29 +106,104 @@ def shared_lock_root(blog_repo, *, create=True):
     return root
 
 
+def _boot_time_seconds():
+    """返回本机最近一次启动的 Unix 秒时间戳；获取不到时返回 None。"""
+    if sys.platform == 'darwin':
+        try:
+            res = subprocess.run(
+                ['sysctl', '-n', 'kern.boottime'],
+                check=False, capture_output=True, text=True, timeout=2,
+            )
+            if res.returncode == 0 and res.stdout:
+                import re
+                match = re.search(r'sec\s*=\s*(\d+)', res.stdout)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            pass
+    elif sys.platform.startswith('linux'):
+        try:
+            for line in Path('/proc/stat').read_text(encoding='utf-8').splitlines():
+                if line.startswith('btime '):
+                    return int(line.split()[1])
+        except Exception:
+            pass
+    return None
+
+
+def _pid_start_time(pid):
+    """返回本机指定 PID 的进程启动标识字符串，用于识别 PID 复用。"""
+    if type(pid) is not int or pid < 1:
+        return None
+    if sys.platform.startswith('linux'):
+        try:
+            stat_text = Path(f'/proc/{pid}/stat').read_text(encoding='utf-8')
+            rparen = stat_text.rfind(')')
+            if rparen > 0:
+                fields = stat_text[rparen + 2:].split()
+                if len(fields) > 19:
+                    return f'linux:{fields[19]}'
+        except OSError:
+            return None
+    try:
+        res = subprocess.run(
+            ['ps', '-p', str(pid), '-o', 'lstart='],
+            check=False, capture_output=True, text=True, timeout=2,
+        )
+        if res.returncode == 0:
+            val = ' '.join(res.stdout.strip().split())
+            return val or None
+    except Exception:
+        pass
+    return None
+
+
+def _awake_uptime_ns():
+    """返回不含 macOS 休眠时间的单调运行纳秒数，防止笔记本合盖休眠误判卡死。"""
+    clock_uptime_raw = getattr(time, 'CLOCK_UPTIME_RAW', 8 if sys.platform == 'darwin' else None)
+    if clock_uptime_raw is not None and hasattr(time, 'clock_gettime_ns'):
+        try:
+            return int(time.clock_gettime_ns(clock_uptime_raw))
+        except OSError:
+            pass
+    return int(time.monotonic_ns())
+
+
 def _owner_record(owner, token, lease_seconds):
     started = _now_iso()
+    pid = os.getpid()
     body = {
         'contract': CONTRACT,
         'version': 1,
         'owner': owner,
-        'pid': os.getpid(),
+        'pid': pid,
         'hostname': socket.gethostname(),
         'token': token,
         'startedAt': started,
         'heartbeatAt': started,
         'leaseSeconds': lease_seconds,
     }
+    boot_time = _boot_time_seconds()
+    if boot_time is not None:
+        body['bootTime'] = boot_time
+    pid_start = _pid_start_time(pid)
+    if pid_start is not None:
+        body['pidStartTime'] = pid_start
+    body['heartbeatUptimeNs'] = _awake_uptime_ns()
     return {**body, 'ownerSha256': _sha(_stable_bytes(body))}
 
 
 def _validate_owner(data):
     value = _strict_json(data, 'blog lock owner')
-    expected = {
+    required = {
         'contract', 'version', 'owner', 'pid', 'hostname', 'token',
         'startedAt', 'heartbeatAt', 'leaseSeconds', 'ownerSha256',
     }
-    if not isinstance(value, dict) or set(value) != expected:
+    optional = {'bootTime', 'pidStartTime', 'heartbeatUptimeNs'}
+    if not isinstance(value, dict):
+        raise BlogRepositoryLockError('博客锁 owner 记录的字段集合不对')
+    keys = set(value)
+    if not required.issubset(keys) or not keys.issubset(required | optional):
         raise BlogRepositoryLockError('博客锁 owner 记录的字段集合不对')
     body = dict(value)
     declared = body.pop('ownerSha256')
@@ -140,6 +216,9 @@ def _validate_owner(data):
             or not isinstance(value['leaseSeconds'], (int, float)) \
             or not math.isfinite(value['leaseSeconds']) \
             or value['leaseSeconds'] <= 0 or value['leaseSeconds'] > 24 * 60 * 60 \
+            or ('bootTime' in value and (type(value['bootTime']) is not int or value['bootTime'] < 0)) \
+            or ('pidStartTime' in value and (not isinstance(value['pidStartTime'], str) or not value['pidStartTime'])) \
+            or ('heartbeatUptimeNs' in value and (type(value['heartbeatUptimeNs']) is not int or value['heartbeatUptimeNs'] < 0)) \
             or declared != _sha(_stable_bytes(body)):
         raise BlogRepositoryLockError('博客锁 owner 记录的身份字段或自校验哈希不对')
     for field in ('startedAt', 'heartbeatAt'):
@@ -174,7 +253,7 @@ def _read_owner_raw_at(directory_fd, name='owner.json'):
         after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != \
                 (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns):
-            raise BlogRepositoryLockError('读博客锁 owner 的过程中文件被改过')
+            raise _LockSnapshotChangedError('读博客锁 owner 的过程中文件被改过')
         return {
             'identity': (opened.st_dev, opened.st_ino),
             'size': opened.st_size,
@@ -192,6 +271,10 @@ def _read_owner_at(directory_fd, name='owner.json'):
     return owner
 
 
+def _is_benign_owner_tmp(name):
+    return isinstance(name, str) and name.startswith('.owner.') and name.endswith('.tmp')
+
+
 def _snapshot(lock_path, *, allow_invalid_owner=False):
     info = lock_path.lstat()
     if lock_path.is_symlink() or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() \
@@ -206,14 +289,17 @@ def _snapshot(lock_path, *, allow_invalid_owner=False):
             raise BlogRepositoryLockError(f'博客锁目录必须是本人拥有的真实目录、权限 0700：{lock_path}')
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
             raise _LockSnapshotChangedError(f'打开博客锁目录时 inode 变了：{lock_path}')
-        entries = sorted(os.listdir(directory_fd))
+        raw_entries = sorted(os.listdir(directory_fd))
+        entries = [name for name in raw_entries if not _is_benign_owner_tmp(name)]
         if entries not in ([], ['owner.json']):
-            raise BlogRepositoryLockError(f'博客锁目录里有预期之外的文件：{entries}')
+            raise BlogRepositoryLockError(f'博客锁目录里有预期之外的文件：{raw_entries}')
         owner = None
         owner_error = None
         if entries:
             try:
                 owner = _read_owner_at(directory_fd)
+            except _LockSnapshotChangedError:
+                raise
             except BlogRepositoryLockError as exc:
                 if not allow_invalid_owner:
                     raise
@@ -245,13 +331,23 @@ def _same_snapshot(left, right):
 def _pid_state(record):
     if record['hostname'] != socket.gethostname():
         return 'remote'
+    recorded_boot = record.get('bootTime')
+    if isinstance(recorded_boot, int):
+        current_boot = _boot_time_seconds()
+        if current_boot is not None and current_boot != recorded_boot:
+            return 'dead'
     try:
         os.kill(record['pid'], 0)
-        return 'alive'
     except ProcessLookupError:
         return 'dead'
     except PermissionError:
         return 'alive'
+    recorded_start = record.get('pidStartTime')
+    if isinstance(recorded_start, str) and recorded_start:
+        actual_start = _pid_start_time(record['pid'])
+        if actual_start is not None and actual_start != recorded_start:
+            return 'dead'
+    return 'alive'
 
 
 def _reclaimable(snapshot, configured_lease, now=None):
@@ -266,10 +362,17 @@ def _reclaimable(snapshot, configured_lease, now=None):
         if owner['record'] is not None:
             pid_state = _pid_state(owner['record'])
             if pid_state == 'alive':
+                # 仅在记录了不含休眠时间的运行单调钟，且清醒运行超期达到
+                # max(lease*3, 600s)（说明心跳线程已长期停摆而非笔记本休眠）时才判定假死。
+                hb_uptime = owner['record'].get('heartbeatUptimeNs')
+                if isinstance(hb_uptime, int) and hb_uptime >= 0:
+                    awake_elapsed = (_awake_uptime_ns() - hb_uptime) / 1_000_000_000
+                    hung_ceiling = max(float(lease) * 3.0, 600.0)
+                    if awake_elapsed > hung_ceiling:
+                        return True
                 return False
-            # 同机器上 PID 已死，比心跳租约更能说明问题：持有进程已经没法
-            # 续租或释放这把锁了。别的机器上的持有者仍按租约判断，因为从
-            # 本机无法安全地查它的 PID。
+            # 同机器上 PID 已死（或机器已重启/PID 被复用），比心跳租约更能说明问题：
+            # 持有进程已经没法续租或释放这把锁了。别的机器上的持有者仍按租约判断。
             if pid_state == 'dead':
                 return True
     return now - newest_ns / 1_000_000_000 > lease
@@ -346,7 +449,8 @@ def _cleanup_created_directory(lock_path, directory_identity, owner_identity):
 
 
 def _create_lock_directory(lock_path, owner, lease_seconds):
-    parent_fd = os.open(lock_path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    parent_fd = os.open(lock_path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                        | getattr(os, 'O_NOFOLLOW', 0))
     created_identity = None
     try:
         os.mkdir(lock_path.name, mode=0o700, dir_fd=parent_fd)
@@ -394,30 +498,50 @@ def _renew(snapshot):
         raise BlogRepositoryLockError('续租前发现博客锁已变化')
     record = dict(current['owner']['record'])
     record['heartbeatAt'] = _now_iso()
+    record['heartbeatUptimeNs'] = _awake_uptime_ns()
     body = dict(record)
     body.pop('ownerSha256')
     record['ownerSha256'] = _sha(_stable_bytes(body))
     data = _stable_bytes(record)
     directory_fd = os.open(lock_path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
                            | getattr(os, 'O_NOFOLLOW', 0))
+    tmp_name = f'.owner.{os.getpid()}.{uuid.uuid4().hex}.tmp'
+    tmp_created = False
     try:
-        fd = os.open('owner.json', os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
-                     | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd)
+        opened_dir = os.fstat(directory_fd)
+        if (opened_dir.st_dev, opened_dir.st_ino) != current['directoryIdentity']:
+            raise BlogRepositoryLockError('续租前发现博客锁目录 inode 变了')
+        named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1 \
+                or stat.S_IMODE(named.st_mode) != 0o600 \
+                or (named.st_dev, named.st_ino) != current['owner']['identity']:
+            raise BlogRepositoryLockError('续租前发现博客锁 owner 的文件类型、权限或 inode 变了')
+        fd = os.open(
+            tmp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
+        tmp_created = True
         try:
-            opened = os.fstat(fd)
-            named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
-            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 \
-                    or stat.S_IMODE(opened.st_mode) != 0o600 \
-                    or (opened.st_dev, opened.st_ino) != current['owner']['identity'] \
-                    or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
-                raise BlogRepositoryLockError('续租前发现博客锁 owner 的文件类型、权限或 inode 变了')
-            os.lseek(fd, 0, os.SEEK_SET)
             _write_all(fd, data)
-            os.ftruncate(fd, len(data))
             os.fsync(fd)
         finally:
             os.close(fd)
+        # 原子替换前再次确认现有 owner.json 仍属于本方且未被外部替换
+        named_again = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
+        if (named_again.st_dev, named_again.st_ino) != current['owner']['identity']:
+            raise BlogRepositoryLockError('续租替换前发现博客锁 owner 已被外部替换')
+        os.replace(tmp_name, 'owner.json', src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        tmp_created = False
         os.fsync(directory_fd)
+    except Exception:
+        if tmp_created:
+            try:
+                os.unlink(tmp_name, dir_fd=directory_fd)
+            except OSError:
+                pass
+        raise
     finally:
         os.close(directory_fd)
     renewed = _snapshot(lock_path)
@@ -502,6 +626,52 @@ def _acquire(lock_path, owner, timeout_seconds, stale_seconds):
         time.sleep(0.05)
 
 
+_ACTIVE_LOCK_HOLDERS = threading.local()
+
+
+def _holder_stack():
+    stack = getattr(_ACTIVE_LOCK_HOLDERS, 'stack', None)
+    if stack is None:
+        stack = []
+        _ACTIVE_LOCK_HOLDERS.stack = stack
+    return stack
+
+
+def assert_blog_lock_held(lock_path=None, *, require_active=False):
+    """关键提交/推送动作前的围栏校验：确认当前线程仍持有未失效的博客仓库锁。"""
+    stack = _holder_stack()
+    if not stack:
+        if require_active:
+            raise BlogRepositoryLockError('当前线程未持有共享博客仓库锁')
+        return None
+    target = None
+    if lock_path is None:
+        target = stack[-1]
+    else:
+        wanted = Path(lock_path)
+        for item in reversed(stack):
+            if item['lock_path'] == wanted:
+                target = item
+                break
+        if target is None:
+            if require_active:
+                raise BlogRepositoryLockError(f'当前线程未持有指定共享博客仓库锁: {wanted}')
+            return None
+    with target['guard']:
+        if target['state']['error'] is not None:
+            raise BlogRepositoryLockError('共享博客锁的续租线程已失败，拒绝继续写操作') from target['state']['error']
+        current = target['state']['snapshot']
+    try:
+        replay = _snapshot(current['path'])
+    except FileNotFoundError as exc:
+        raise BlogRepositoryLockError('共享博客锁已被移除，当前进程已失去所有权') from exc
+    if replay['directoryIdentity'] != current['directoryIdentity'] \
+            or not replay.get('owner') or not replay['owner'].get('record') \
+            or replay['owner']['record']['token'] != current['owner']['record']['token']:
+        raise BlogRepositoryLockError('共享博客锁身份已变更，当前进程已失去所有权')
+    return replay
+
+
 @contextmanager
 def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
                                 timeout_seconds=30, stale_seconds=2 * 60 * 60):
@@ -526,11 +696,20 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
     thread = threading.Thread(target=heartbeat,
                               name=f'blog-lock-heartbeat-{os.getpid()}', daemon=True)
     thread.start()
+    holder = {'lock_path': lock_path, 'state': state, 'guard': guard}
+    _holder_stack().append(holder)
     try:
         yield lock_path
         if state['error'] is not None:
             raise BlogRepositoryLockError('共享博客锁的续租线程失败') from state['error']
+        # 退出临界区前复核锁未被外部篡改/替换（包括未触及心跳间隔的短临界区）。
+        assert_blog_lock_held(lock_path)
     finally:
+        stack = _holder_stack()
+        if stack and stack[-1] is holder:
+            stack.pop()
+        elif holder in stack:
+            stack.remove(holder)
         stop.set()
         thread.join(timeout=max(1.0, interval * 2))
         with guard:
@@ -541,11 +720,11 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
                     and replay['owner']['record']['token'] == current['owner']['record']['token'] \
                     and _same_snapshot(replay, current):
                 _remove_exact(current)
-        except FileNotFoundError:
+        except (FileNotFoundError, BlogRepositoryLockError):
             pass
 
 
 __all__ = [
     'BlogRepositoryLockError', 'CONTRACT', 'LOCK_NAME', 'PRIVATE_DIRNAME',
-    'shared_blog_repository_lock', 'shared_lock_root',
+    'assert_blog_lock_held', 'shared_blog_repository_lock', 'shared_lock_root',
 ]

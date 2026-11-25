@@ -397,14 +397,10 @@ function snapshotLock(lockPath, staleMs) {
             if (owner && typeof owner === 'object' && !Array.isArray(owner)) {
                 ownerToken = typeof owner.token === 'string' ? owner.token : null;
                 if (owner.hostname === os.hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
-                    try {
-                        process.kill(owner.pid, 0);
-                        reclaimable = false;
-                    } catch (error) {
-                        if (error.code === 'ESRCH') reclaimable = true;
-                        else if (error.code === 'EPERM') reclaimable = false;
-                        else throw error;
-                    }
+                    const alive = localLockOwnerIsAlive(owner);
+                    // 账号池锁持有期极短（单次读改写 <50ms）；同机存活进程若超过 max(staleMs*3, 300s) 仍未释放则视为假死可回收
+                    const hungThresholdMs = Math.max(staleMs * 3, 300000);
+                    reclaimable = !alive || (ageMs > hungThresholdMs);
                 } else if (owner.hostname) {
                     reclaimable = ageMs > staleMs;
                 }
@@ -542,6 +538,67 @@ function removeLockDirChecked(lockPath, expectedSnapshot) {
     }
 }
 
+function readSystemBootTimeSeconds() {
+    if (process.platform === 'darwin') {
+        try {
+            const out = require('node:child_process').execFileSync('sysctl', ['-n', 'kern.boottime'], {
+                encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore']
+            });
+            const m = /sec\s*=\s*(\d+)/.exec(out);
+            if (m) return Number.parseInt(m[1], 10);
+        } catch { /* fallback null */ }
+    } else if (process.platform === 'linux') {
+        try {
+            const stat = fs.readFileSync('/proc/stat', 'utf8');
+            const m = /^btime\s+(\d+)/m.exec(stat);
+            if (m) return Number.parseInt(m[1], 10);
+        } catch { /* fallback null */ }
+    }
+    return null;
+}
+
+function readPidStartTime(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    if (process.platform === 'linux') {
+        try {
+            const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+            const rparen = raw.lastIndexOf(')');
+            if (rparen > 0) {
+                const fields = raw.slice(rparen + 2).trim().split(/\s+/);
+                if (fields.length > 19) return `linux:${fields[19]}`;
+            }
+        } catch { return null; }
+    }
+    try {
+        const out = require('node:child_process').execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
+            encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore']
+        });
+        const norm = out.trim().replace(/\s+/g, ' ');
+        return norm || null;
+    } catch { return null; }
+}
+
+const PROCESS_BOOT_TIME_SECONDS = readSystemBootTimeSeconds();
+const CURRENT_PID_START_TIME = readPidStartTime(process.pid);
+
+function localLockOwnerIsAlive(owner) {
+    if (Number.isInteger(owner.bootTime) && PROCESS_BOOT_TIME_SECONDS !== null
+        && owner.bootTime !== PROCESS_BOOT_TIME_SECONDS) {
+        return false;
+    }
+    try {
+        process.kill(owner.pid, 0);
+    } catch (error) {
+        if (error.code === 'ESRCH') return false;
+        if (error.code === 'EPERM') return true;
+        throw error;
+    }
+    if (typeof owner.pidStartTime === 'string' && owner.pidStartTime) {
+        const actualStart = readPidStartTime(owner.pid);
+        if (actualStart && actualStart !== owner.pidStartTime) return false;
+    }
+    return true;
+}
 function lockIsReclaimable(lockPath, staleMs) {
     const snapshot = snapshotLock(lockPath, staleMs);
     return snapshot === null ? true : snapshot.reclaimable;
@@ -633,12 +690,15 @@ function acquireStateLock(stateFile, options = {}) {
                 throw new LlmAccountPoolStateError(`LLM 账号池锁路径禁止使用 symlink 或非目录: ${lockPath}`);
             }
             const ownerPath = path.join(lockPath, 'owner.json');
-            const createdOwnerStat = writeLockOwnerJson(lockPath, createdDirStat, {
+            const ownerPayload = {
                 pid: process.pid,
                 hostname: os.hostname(),
                 token,
                 acquiredAt: new Date().toISOString()
-            });
+            };
+            if (PROCESS_BOOT_TIME_SECONDS !== null) ownerPayload.bootTime = PROCESS_BOOT_TIME_SECONDS;
+            if (CURRENT_PID_START_TIME !== null) ownerPayload.pidStartTime = CURRENT_PID_START_TIME;
+            const createdOwnerStat = writeLockOwnerJson(lockPath, createdDirStat, ownerPayload);
             if (!createdOwnerStat) {
                 if (nowMonotonicMs() - startedAt >= timeoutMs) {
                     throw new LlmAccountPoolLockTimeoutError(`等待 LLM 账号池状态锁超时: ${lockPath}`);
@@ -924,6 +984,44 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const excluded = new Set(options.excludeAccountIds || []);
     const affinityKey = typeof options.affinityKey === 'string' ? options.affinityKey.trim() : '';
+    const byId = new Map(keys.map(key => [getAccountId(key), key]));
+
+    // 5 条件只读亲和快路径：affinityKey 不推进 rotationCursor，若现有组已锚定且无需清理旧组、
+    // 命中账号未冷却且无需状态跃迁、且 60s 内已有活跃时间戳，则免锁免 fsync 直接返回。
+    if (affinityKey && options.forceWrite !== true) {
+        try {
+            const state = readStateStrict(stateFile);
+            const service = state?.services?.[identity.serviceId];
+            const group = service?.groups?.[identity.groupId];
+            const groupCount = service?.groups ? Object.keys(service.groups).length : 0;
+            const stalePruneNeeded = groupCount > 1 && Object.entries(service.groups).some(
+                ([gid, g]) => gid !== identity.groupId && (nowMs - Number(g?.lastSelectedAtMs || 0)) > STALE_GROUP_TTL_MS
+            );
+            if (service && group && Number.isSafeInteger(group.rotationCursor) && !stalePruneNeeded) {
+                const startIndex = parseInt(sha256(affinityKey).slice(0, 8), 16) % orderedAccountIds.length;
+                let selectedIndex = -1;
+                for (let step = 0; step < orderedAccountIds.length; step += 1) {
+                    const index = (startIndex + step) % orderedAccountIds.length;
+                    const accountId = orderedAccountIds[index];
+                    if (excluded.has(accountId)) continue;
+                    if (accountIsBlocked(service.accounts?.[accountId], nowMs)) continue;
+                    selectedIndex = index;
+                    break;
+                }
+                if (selectedIndex >= 0) {
+                    const nextId = orderedAccountIds[selectedIndex];
+                    const acctStatus = service.accounts?.[nextId]?.status;
+                    const lastSelected = Number(group.lastSelectedAtMs || 0);
+                    if (acctStatus !== 'quota_blocked' && lastSelected > 0 && nowMs >= lastSelected && (nowMs - lastSelected) < 60_000) {
+                        return { apiKey: byId.get(nextId), accountId: nextId, ...identity };
+                    }
+                }
+            }
+        } catch {
+            // 任何状态缺失或读取异常均退回受锁完整路径。
+        }
+    }
+
     let selection;
     updateState(stateFile, state => {
         const service = ensureService(state, identity);
@@ -932,7 +1030,6 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         pruneStaleGroups(service, identity.groupId, nowMs);
         const group = service.groups[identity.groupId] || { activeAccountId: null, switchedAt: null };
         service.groups[identity.groupId] = group;
-        const byId = new Map(keys.map(key => [getAccountId(key), key]));
         // 论文级等权粘性路由：对同一 affinityKey（如 paperId）用 sha256 均匀映射到
         // 稳定排序后的等权账号槽位，提高同篇多阶段/重试的 KV 前缀缓存命中率；
         // 槽位冷却或已排除时按环形顺序平稳降级，全部账号仍严格等权。

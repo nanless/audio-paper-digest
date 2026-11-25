@@ -119,11 +119,30 @@ function writeWorkspaceRole(role, options = {}) {
 // 因为 npm 入口由本文件直接检查，此时还没有任何脚本读过 .env。
 function envFileValue(file, key) {
     let raw;
+    let fd;
     try {
-        raw = fs.readFileSync(file, 'utf8');
+        const before = fs.lstatSync(file);
+        if (before.isSymbolicLink() || !before.isFile() || (process.platform !== 'win32' && before.nlink !== 1) || before.size > 2 * 1024 * 1024) {
+            return '';
+        }
+        fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > 2 * 1024 * 1024) {
+            return '';
+        }
+        const buf = Buffer.alloc(opened.size);
+        let offset = 0;
+        while (offset < opened.size) {
+            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+            if (n <= 0) break;
+            offset += n;
+        }
+        raw = buf.subarray(0, offset).toString('utf8');
     } catch {
         // 读不到 .env 就当开关关着，保持原来的拒绝行为。
         return '';
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
     }
     let value = '';
     for (const line of raw.split('\n')) {

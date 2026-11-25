@@ -355,7 +355,8 @@ function readReclaimMarker(filename) {
             const opened = fs.fstatSync(fd);
             if (!opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino
                 || opened.nlink !== 1 || opened.size !== named.size) return null;
-            const bytes = fs.readFileSync(fd);
+            const { readBoundedFd } = require('./lib/publication-file-primitives.js');
+            const bytes = readBoundedFd(fd, opened.size, 4096);
             const after = fs.fstatSync(fd);
             const finalNamed = fs.lstatSync(filename);
             if (opened.dev !== named.dev || opened.ino !== named.ino || opened.nlink !== 1

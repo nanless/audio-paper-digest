@@ -7,6 +7,7 @@
 """
 
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ PROJECT_ENV_PREFIXES = (
 
 PROJECT_ENV_KEYS = {
     "KIMI_API_KEY",
+    "MIMO_API_KEY",
+    "DEEPSEEK_API_KEY",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
 }
@@ -61,27 +64,65 @@ def is_project_env_key(key):
 def parse_env_file(env_file=None):
     parsed = {}
     env_file = resolve_env_file(env_file)
-    if not env_file.exists():
-        return parsed
-
     try:
-        env_file.chmod(0o600)
-    except OSError:
-        if os.name != "nt":
-            raise
+        before = env_file.lstat()
+    except FileNotFoundError:
+        return parsed
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) \
+            or (os.name != "nt" and before.st_nlink != 1):
+        raise RuntimeError(f"项目 .env 必须是无硬链接的普通文件，禁止符号链接: {env_file}")
 
-    with env_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            key, value = stripped.split("=", 1)
-            key = key.strip()
-            value = value.strip()
-            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-                value = value[1:-1]
-            if key:
-                parsed[key] = value
+    if os.name == "nt" or stat.S_IMODE(before.st_mode) != 0o600:
+        try:
+            env_file.chmod(0o600)
+        except OSError:
+            if os.name != "nt":
+                raise
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(env_file, flags)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) \
+                or (os.name != "nt" and opened.st_nlink != 1) \
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise RuntimeError(f"项目 .env 打开后文件身份不一致: {env_file}")
+        max_bytes = 2 * 1024 * 1024
+        if opened.st_size > max_bytes:
+            raise RuntimeError(f"项目 .env 超过大小限制 ({max_bytes} bytes): {env_file}")
+        chunks = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if len(raw) > max_bytes:
+            raise RuntimeError(f"项目 .env 超过大小限制 ({max_bytes} bytes): {env_file}")
+    finally:
+        os.close(fd)
+
+    first_lines = {}
+    for line_no, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        if key:
+            if key in first_lines:
+                print(
+                    f"[project_env] 第 {first_lines[key]} 行和第 {line_no} 行重复定义 {key}；采用后一项的值",
+                    file=sys.stderr,
+                )
+            else:
+                first_lines[key] = line_no
+            parsed[key] = value
 
     return parsed
 

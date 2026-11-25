@@ -218,6 +218,42 @@ class SharedBlogRepositoryLockTest(unittest.TestCase):
             finally:
                 lock_path.rmdir()
 
+    def test_atomic_renew_pid_reuse_and_assert_held_fence(self):
+        import blog_repository_lock as mod
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(tmp)
+            # 1) assert_blog_lock_held(require_active=True) fails when lock is not held, passes when held
+            with self.assertRaises(BlogRepositoryLockError):
+                mod.assert_blog_lock_held(require_active=True)
+            with shared_blog_repository_lock(repo, owner='fence', stale_seconds=60) as lock_path:
+                mod.assert_blog_lock_held(lock_path, require_active=True)
+                snap = mod._snapshot(lock_path)
+                old_inode = snap['owner']['identity']
+                renewed = mod._renew(snap)
+                # Atomic replace produces a fresh inode with the same token and updated heartbeat
+                self.assertNotEqual(renewed['owner']['identity'], old_inode)
+                self.assertEqual(renewed['owner']['record']['token'], snap['owner']['record']['token'])
+                # Keep thread-local state in sync with our direct _renew test call before exiting context
+                mod._holder_stack()[-1]['state']['snapshot'] = renewed
+                mod.assert_blog_lock_held(lock_path, require_active=True)
+
+            # 2) PID reuse (same PID alive, different pidStartTime / bootTime) is reclaimable
+            stale_reused = {
+                'directoryMtimeNs': time.time_ns(),
+                'owner': {
+                    'mtimeNs': time.time_ns(),
+                    'record': {
+                        'hostname': socket.gethostname(),
+                        'pid': os.getpid(),
+                        'leaseSeconds': 7200,
+                        'bootTime': 1000,
+                        'pidStartTime': 'Mon Jan 1 00:00:00 2020',
+                    },
+                },
+            }
+            with patch.object(mod, '_boot_time_seconds', return_value=2000):
+                self.assertTrue(_reclaimable(stale_reused, configured_lease=7200))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -87,10 +87,28 @@ function redactLogText(value) {
 }
 
 function environmentSecrets() {
-    return Object.entries(process.env)
-        .filter(([key, value]) => /(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
-        .flatMap(([, value]) => String(value).split(',').map(item => item.trim()).filter(item => item.length >= 6))
-        .sort((left, right) => right.length - left.length);
+    const secrets = [];
+    for (const [key, value] of Object.entries(process.env)) {
+        const raw = String(value ?? '');
+        if (/(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && raw.length >= 6) {
+            for (const item of raw.split(',').map(v => v.trim()).filter(v => v.length >= 6)) {
+                secrets.push(item);
+            }
+        }
+        if (/^(?:HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)$/i.test(key) && raw.includes('@')) {
+            try {
+                const parsed = new URL(raw);
+                if (parsed.password && parsed.password.length >= 4) {
+                    secrets.push(parsed.password);
+                    try {
+                        const decoded = decodeURIComponent(parsed.password);
+                        if (decoded && decoded !== parsed.password && decoded.length >= 4) secrets.push(decoded);
+                    } catch { /* ignore malformed encoding */ }
+                }
+            } catch { /* ignore unparseable proxy url */ }
+        }
+    }
+    return [...new Set(secrets)].sort((left, right) => right.length - left.length);
 }
 
 function formatErrorSummary(error) {
@@ -178,7 +196,34 @@ function pruneLogFiles(logsDir, options = {}) {
     const problems = [];
     let entries = [];
     try {
-        entries = fs.readdirSync(logsDir, { withFileTypes: true }).flatMap(entry => {
+        const rawDirEntries = fs.readdirSync(logsDir, { withFileTypes: true });
+        for (const entry of rawDirEntries) {
+            if (!entry.isDirectory() || entry.name === 'summaries') continue;
+            const subPath = path.join(logsDir, entry.name);
+            try {
+                const subStat = fs.lstatSync(subPath);
+                if (subStat.isSymbolicLink() || !subStat.isDirectory()) continue;
+                let subBytes = 0;
+                const stack = [subPath];
+                let visited = 0;
+                while (stack.length && visited < 5000) {
+                    const current = stack.pop();
+                    for (const child of fs.readdirSync(current, { withFileTypes: true })) {
+                        visited += 1;
+                        if (visited >= 5000) break;
+                        const childPath = path.join(current, child.name);
+                        const cStat = fs.lstatSync(childPath);
+                        if (cStat.isSymbolicLink()) continue;
+                        if (cStat.isDirectory()) stack.push(childPath);
+                        else if (cStat.isFile()) subBytes += cStat.size;
+                    }
+                }
+                if (subBytes >= 32 * 1024 * 1024) {
+                    console.warn(`[log] 日志目录存在较大子目录 ${entry.name}（约 ${(subBytes / (1024 * 1024)).toFixed(1)} MiB），自动清理不会删除子目录，请按需归档或清理`);
+                }
+            } catch { /* 忽略并发变化 */ }
+        }
+        entries = rawDirEntries.flatMap(entry => {
             if (!entry.isFile() || !entry.name.endsWith('.log')) return [];
             const filePath = path.join(logsDir, entry.name);
             try {

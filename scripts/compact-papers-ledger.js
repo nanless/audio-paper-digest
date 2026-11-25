@@ -1028,7 +1028,7 @@ function compactPapersLedger(options = {}) {
         fullReport.backup = backup;
 
         // Gate 6: Atomic write + zero-key-loss post-check + post-write schema validation + receipt.
-        writeFileAtomic(papersFile, afterSerializedString);
+        writeFileAtomic(papersFile, afterSerializedString, { mode: 0o600 });
 
         const writtenRaw = readRegularFileStrict(papersFile, '压缩后 papers.json');
         const writtenSha256 = sha256Buffer(writtenRaw);

@@ -33,13 +33,53 @@ function defaultBaseUrl(env = {}) {
         || 'https://nanless.github.io/audio-research-portal/posts').replace(/\/+$/, '');
 }
 
-function pageUrls(date, env, manifest) {
+const MAX_PAGE_BYTES = 16 * 1024 * 1024;
+const MAX_REDIRECTS = 5;
+const DEFAULT_VERIFY_CONCURRENCY = 8;
+const DEFAULT_WAIT_SECONDS = 1200;
+const CORRUPTED_TITLE_RE = /\{\{|\}\}|\\\(|\\\)|\\\[|\\\]|\\"/;
+
+function assertSafeVerifyUrl(rawUrl, options = {}) {
+    let parsed;
+    try {
+        parsed = new URL(String(rawUrl || ''));
+    } catch {
+        throw new Error(`网页核验 URL 不合法：${rawUrl}`);
+    }
+    if (parsed.username || parsed.password) {
+        throw new Error(`网页核验 URL 禁止携带凭据：${rawUrl}`);
+    }
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const isTestLoopback = Boolean(options.allowLoopbackHttp)
+        && parsed.protocol === 'http:'
+        && (host === '127.0.0.1' || host === '::1');
+    if (isTestLoopback) return parsed;
+    if (parsed.protocol !== 'https:') {
+        throw new Error(`网页核验仅允许 HTTPS URL：${rawUrl}`);
+    }
+    const policy = require('./lib/public-network-policy');
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')
+        || (policy.isIpLiteral(host) && !policy.isGloballyRoutableIp(host))) {
+        throw new Error(`网页核验拒绝私网或保留主机地址：${host}`);
+    }
+    return parsed;
+}
+
+function pageUrls(date, env, manifest, options = {}) {
     const base = defaultBaseUrl(env);
+    assertSafeVerifyUrl(base, options);
     const files = manifest && Array.isArray(manifest.files) ? manifest.files : [];
     return files
         .filter(file => file && file.deleted !== true)
         .map(file => String(file.path || ''))
         .filter(file => file.startsWith('content/posts/') && file.endsWith('.md'))
+        .filter(file => {
+            const rel = file.slice('content/posts/'.length, -'.md'.length);
+            if (!rel || rel.includes('..') || rel.includes('\\') || /[?#\s@]/.test(rel) || rel.startsWith('/')) {
+                throw new Error(`生成清单包含非法文章路径：${file}`);
+            }
+            return true;
+        })
         .map(file => ({ file, url: `${base}/${file.slice('content/posts/'.length, -'.md'.length)}/` }));
 }
 
@@ -60,18 +100,81 @@ function titleOf(html) {
 
 function titleMatches(title, marker = SITE_TITLE_MARKER) {
     if (!title) return false;
+    if (titleHasCorruptionArtifacts(title)) return false;
     return String(title).includes(marker);
+}
+
+function titleHasCorruptionArtifacts(title) {
+    if (!title) return false;
+    return CORRUPTED_TITLE_RE.test(String(title));
+}
+
+async function readBoundedResponseText(response, maxBytes = MAX_PAGE_BYTES) {
+    const contentLength = response.headers && typeof response.headers.get === 'function'
+        ? Number.parseInt(String(response.headers.get('content-length') || ''), 10)
+        : NaN;
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+        throw new Error(`网页响应体超过大小上限 (${maxBytes} bytes): ${contentLength}`);
+    }
+    if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader();
+        const chunks = [];
+        let total = 0;
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value) {
+                    total += value.byteLength;
+                    if (total > maxBytes) {
+                        try { await reader.cancel(); } catch { /* ignore */ }
+                        throw new Error(`网页响应体超过大小上限 (${maxBytes} bytes)`);
+                    }
+                    chunks.push(Buffer.from(value));
+                }
+            }
+        } finally {
+            try { reader.releaseLock(); } catch { /* ignore */ }
+        }
+        return Buffer.concat(chunks, total).toString('utf8');
+    }
+    const html = await response.text();
+    if (Buffer.byteLength(String(html || ''), 'utf8') > maxBytes) {
+        throw new Error(`网页响应体超过大小上限 (${maxBytes} bytes)`);
+    }
+    return html;
 }
 
 async function fetchPage(url, options = {}) {
     const fetchImpl = options.fetchImpl || globalThis.fetch;
+    const isDefaultFetch = !options.fetchImpl;
     const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 20000;
+    const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : MAX_PAGE_BYTES;
     const signal = options.signal
         || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout
             ? AbortSignal.timeout(timeoutMs) : undefined);
-    const response = await fetchImpl(url, { redirect: 'follow', signal });
-    const html = await response.text();
-    return { status: response.status, title: titleOf(html), finalUrl: response.url || null };
+
+    let currentUrl = assertSafeVerifyUrl(url, options).toString();
+    let response;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+        response = await fetchImpl(currentUrl, { redirect: isDefaultFetch ? 'manual' : 'follow', signal });
+        const status = Number(response?.status || 0);
+        const location = response?.headers && typeof response.headers.get === 'function'
+            ? response.headers.get('location')
+            : null;
+        if (isDefaultFetch && status >= 300 && status < 400 && location) {
+            if (hop === MAX_REDIRECTS) {
+                throw new Error(`网页核验重定向超过上限 (${MAX_REDIRECTS}): ${currentUrl}`);
+            }
+            try { await response.body?.cancel?.(); } catch { /* ignore */ }
+            currentUrl = assertSafeVerifyUrl(new URL(location, currentUrl).toString(), options).toString();
+            continue;
+        }
+        break;
+    }
+    const html = await readBoundedResponseText(response, maxBytes);
+    const finalUrl = response.url || (isDefaultFetch && currentUrl !== String(url) ? currentUrl : null);
+    return { status: response.status, title: titleOf(html), finalUrl };
 }
 
 function atomicWriteJson(targetPath, value) {
@@ -128,27 +231,40 @@ async function verify(date, options = {}) {
     const manifest = JSON.parse(manifestBytes.toString('utf8'));
     if (manifest && manifest.date && manifest.date !== date) throw new Error(`生成清单日期 ${manifest.date} 与 --date ${date} 不一致`);
     const generationManifestSha256 = crypto.createHash('sha256').update(manifestBytes).digest('hex');
-    const allPages = pageUrls(date, env, manifest);
+    const allPages = pageUrls(date, env, manifest, options);
     const expected = allPages.length;
     let pages = allPages;
     if (Number.isInteger(options.limit) && options.limit > 0) pages = pages.slice(0, options.limit);
     const marker = options.siteTitleMarker || SITE_TITLE_MARKER;
-    const results = [];
-    for (const page of pages) {
-        try {
-            const fetched = await fetchPage(page.url, options);
-            const normalize = value => String(value || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
-            const redirectOk = !fetched.finalUrl || normalize(fetched.finalUrl) === normalize(page.url);
-            const slug = path.basename(page.url.replace(/\/$/, ''));
-            const isSummary = /^\d{4}-\d{2}-\d{2}$/.test(slug);
-            const dateInTitle = fetched.title ? fetched.title.includes(date) : false;
-            const titleOk = fetched.status === 200 && titleMatches(fetched.title, marker)
-                && (isSummary ? dateInTitle : String(fetched.title || '').replace(marker, '').trim().length > 4);
-            results.push({ ...page, ...fetched, titleOk, redirectOk, ok: titleOk && redirectOk });
-        } catch (error) {
-            results.push({ ...page, status: null, title: null, titleOk: false, ok: false, error: error.message });
+    const concurrency = Number.isInteger(options.concurrency) && options.concurrency > 0
+        ? Math.min(options.concurrency, 16) : DEFAULT_VERIFY_CONCURRENCY;
+    const results = new Array(pages.length);
+    let cursor = 0;
+    const worker = async () => {
+        while (true) {
+            const idx = cursor;
+            cursor += 1;
+            if (idx >= pages.length) return;
+            const page = pages[idx];
+            try {
+                const fetched = await fetchPage(page.url, options);
+                const normalize = value => String(value || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+                const redirectOk = !fetched.finalUrl || normalize(fetched.finalUrl) === normalize(page.url);
+                const slug = path.basename(page.url.replace(/\/$/, ''));
+                const isSummary = /^\d{4}-\d{2}-\d{2}$/.test(slug);
+                const dateInTitle = fetched.title ? fetched.title.includes(date) : false;
+                const corruptedTitle = titleHasCorruptionArtifacts(fetched.title);
+                const titleOk = fetched.status === 200 && titleMatches(fetched.title, marker)
+                    && !corruptedTitle
+                    && (isSummary ? dateInTitle : String(fetched.title || '').replace(marker, '').trim().length > 4);
+                results[idx] = { ...page, ...fetched, titleOk, redirectOk, ok: titleOk && redirectOk };
+            } catch (error) {
+                results[idx] = { ...page, status: null, title: null, titleOk: false, ok: false, error: error.message };
+            }
         }
-    }
+    };
+    const workers = Array.from({ length: Math.min(concurrency, Math.max(1, pages.length)) }, () => worker());
+    await Promise.all(workers);
     const failed = results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0);
     const ok = results.filter(item => item.ok).length;
     const summary = {
@@ -652,7 +768,7 @@ function validateReceiptBinding({ receipt, manifestSha256, deployOid } = {}) {
 async function waitForDeploy(oid, options = {}) {
     const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const intervalMs = Number.isFinite(options.pollIntervalMs) ? options.pollIntervalMs : 10000;
-    const waitMs = Number.isFinite(options.waitSeconds) ? options.waitSeconds * 1000 : 120000;
+    const waitMs = Number.isFinite(options.waitSeconds) ? options.waitSeconds * 1000 : DEFAULT_WAIT_SECONDS * 1000;
     const deadline = Date.now() + waitMs;
     let deploy = deployStatus(oid, options);
     const snapshots = [deploy];
@@ -689,7 +805,7 @@ function parseVerifyArgs(argv = []) {
         allowPartial: false,
         receipt: null,
         wait: false,
-        waitSeconds: 120,
+        waitSeconds: DEFAULT_WAIT_SECONDS,
         pollIntervalMs: 10000,
         workflowSource: false,
         help: false
@@ -708,7 +824,7 @@ function parseVerifyArgs(argv = []) {
         else if (value === '--wait') options.wait = true;
         else if (value === '--wait-seconds') {
             const seconds = Number(argv[++index]);
-            options.waitSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : 120;
+            options.waitSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_WAIT_SECONDS;
         } else if (value === '--poll-interval-ms') {
             const interval = Number(argv[++index]);
             options.pollIntervalMs = Number.isFinite(interval) && interval >= 0 ? interval : 10000;
@@ -758,10 +874,6 @@ async function runVerifyWebCli(argv = [], deps = {}) {
     let deploy = null;
     try {
         if (options.deploy) {
-            deploy = deployStatus(options.deploy, {
-                spawnSync: spawnSyncImpl,
-                repository: options.repository || deployRepository(env)
-            });
             if (options.wait) {
                 const waited = await waitForDeploy(options.deploy, {
                     spawnSync: spawnSyncImpl,
@@ -777,12 +889,17 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                         print(JSON.stringify({ type: 'deploy', oid: options.deploy, ...snapshot }));
                     }
                 } else {
-                    for (const snapshot of waited.snapshots.slice(1)) {
+                    for (const snapshot of waited.snapshots) {
                         print(`[verify-web] 部署状态：${snapshot.available
                             ? `${snapshot.status} ${snapshot.conclusion || ''}`.trim()
                             : snapshot.message}`);
                     }
                 }
+            } else {
+                deploy = deployStatus(options.deploy, {
+                    spawnSync: spawnSyncImpl,
+                    repository: options.repository || deployRepository(env)
+                });
             }
         }
         // --workflow-source：在 HTTP 核验前确认该提交对应的 Pages run、workflow 源文件与 job/step 序列。
@@ -816,6 +933,8 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                 if (workflow.nextStep) print(`[verify-web] 下一步：${workflow.nextStep}`);
             }
         }
+        const allowLoopbackHttp = options.allowLoopbackHttp === true
+            || (Boolean(process.env.NODE_TEST_CONTEXT) && Boolean(deps.env));
         const summary = await verify(options.date, {
             env,
             currentDir,
@@ -824,6 +943,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             limit: options.limit,
             deploy,
             deployOid: options.deploy,
+            allowLoopbackHttp,
             noWrite: true
         });
         // 自动绑定当前批次的审查凭证（存在时强制），防止旧 OID/旧清单被当成验收证据。
@@ -892,6 +1012,8 @@ module.exports = {
     ARTIFACT_FORMAT,
     hasVerificationArtifactFormat,
     SITE_TITLE_MARKER,
+    assertSafeVerifyUrl,
+    titleHasCorruptionArtifacts,
     pageUrls,
     titleOf,
     titleMatches,

@@ -49,11 +49,43 @@ function main(argv = process.argv.slice(2)) {
         console.log('  --json 输出含 items/unknown/spelling/counts 的机器可读 JSON（不包含任何密钥值）');
         return 0;
     }
-    if (!fs.existsSync(options.envFile)) {
-        console.error(`❌ 找不到 .env：${options.envFile}`);
+    let envStat;
+    try {
+        envStat = fs.lstatSync(options.envFile);
+    } catch (error) {
+        if (error?.code === 'ENOENT') {
+            console.error(`❌ 找不到 .env：${options.envFile}`);
+            return 1;
+        }
+        console.error(`❌ 无法访问 .env：${error.message}`);
         return 1;
     }
-    const text = fs.readFileSync(options.envFile, 'utf8');
+    if (envStat.isSymbolicLink() || !envStat.isFile() || (process.platform !== 'win32' && envStat.nlink !== 1)) {
+        console.error(`❌ .env 必须是无硬链接的普通文件，禁止符号链接：${options.envFile}`);
+        return 1;
+    }
+    if (process.platform !== 'win32' && (envStat.mode & 0o077) !== 0) {
+        console.error(`⚠️ .env 权限过宽（当前 ${((envStat.mode & 0o777).toString(8)).padStart(4, '0')}），建议收紧为 0600`);
+    }
+    let text;
+    const fd = fs.openSync(options.envFile, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== envStat.dev || opened.ino !== envStat.ino || opened.size > 2 * 1024 * 1024) {
+            console.error(`❌ .env 打开后身份异常或过大：${options.envFile}`);
+            return 1;
+        }
+        const buf = Buffer.alloc(opened.size);
+        let offset = 0;
+        while (offset < opened.size) {
+            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+            if (n <= 0) break;
+            offset += n;
+        }
+        text = buf.subarray(0, offset).toString('utf8');
+    } finally {
+        fs.closeSync(fd);
+    }
     const entries = parseLikeRuntime(text);
     const { items, unknown, spelling } = validateEntries(entries);
     // 推理档位按主/副模型分别校验：schema 里登记的是两模型的并集，直接放行会让

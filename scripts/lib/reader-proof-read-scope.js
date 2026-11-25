@@ -65,7 +65,8 @@ function readReaderProofJson(filename, options = {}) {
     try {
         const before = fs.fstatSync(fd, { bigint: true });
         assertFile(before, options);
-        const bytes = fs.readFileSync(fd);
+        const { readBoundedFd } = require('./publication-file-primitives.js');
+        const bytes = readBoundedFd(fd, Number(before.size), Number(options.maxBytes || 64 * 1024 * 1024));
         const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
         assertSha({ sha256 }, options);
         const text = bytes.toString('utf8');

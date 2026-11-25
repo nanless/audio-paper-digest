@@ -697,6 +697,8 @@ def execute_git_push(
                 if (blog_root / item).exists() or tracks_fn(item)
             ]
             if addable:
+                from blog_repository_lock import assert_blog_lock_held
+                assert_blog_lock_held()
                 add_started = time.monotonic()
                 hooks['_run_git'](
                     ['add', '--', *addable], check=True,
@@ -713,8 +715,8 @@ def execute_git_push(
         if retrying_existing_commit:
             local_head = current_head
         elif staged is not None and staged.returncode == 1:
-            hooks['validate_git_index'](publish_paths)
-            hooks['validate_git_index_against_review_receipt'](receipt, publish_paths)
+            from blog_repository_lock import assert_blog_lock_held
+            assert_blog_lock_held()
             manual_mode = _hook(hooks, 'MANUAL_REVIEW_MODE', None, MANUAL_REVIEW_MODE)
             review_description = (
                 '提交已通过逐论文独立人工语义、逐图像素事实与 Hugo gate 审查；'
@@ -751,6 +753,8 @@ def execute_git_push(
             print(f'  ❌ Git add/commit 失败，且自动恢复失败: {exc}; 恢复错误: {restore_exc}')
         return False
 
+    from blog_repository_lock import assert_blog_lock_held
+    assert_blog_lock_held()
     push_started = time.monotonic()
     remote_identity_before, identity_error = hooks['_remote_identity_sha256']()
     if remote_identity_before is None:

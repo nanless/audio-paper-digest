@@ -659,7 +659,7 @@ function savePapersDatabase(data, filePath = Config.FILES.papers) {
         const saved = mergePapersDatabases(current, data);
         saved.lastUpdated = getBeijingISOString();
         saved.generation = current.generation + 1;
-        writeFileAtomic(filePath, serializePapersDatabase(saved));
+        writeFileAtomic(filePath, serializePapersDatabase(saved), { mode: 0o600 });
         Object.assign(data, saved);
         return saved;
     });
@@ -754,7 +754,7 @@ function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
         if (updated > 0) {
             papersData.lastUpdated = options.updatedAt || getBeijingISOString();
             papersData.generation = (papersData.generation || 0) + 1;
-            writeFileAtomic(filePath, serializePapersDatabase(papersData));
+            writeFileAtomic(filePath, serializePapersDatabase(papersData), { mode: 0o600 });
         }
         return { updated, papersData };
     }, { recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
@@ -797,7 +797,7 @@ async function synchronizeCompletedAnalysisDigestStatuses(resultPath, entryPlan,
         if (updated) {
             currentDatabase.lastUpdated = options.updatedAt || getBeijingISOString();
             currentDatabase.generation = (currentDatabase.generation || 0) + 1;
-            writeFileAtomic(filePath, serializePapersDatabase(currentDatabase));
+            writeFileAtomic(filePath, serializePapersDatabase(currentDatabase), { mode: 0o600 });
         }
         return { updated };
     }, { recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
