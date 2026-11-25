@@ -12,13 +12,45 @@ class ExternalRuntimeRequired(RuntimeError):
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-WORKSPACE_ROLE_MARKER = '.paper-digest-workspace-role.json'
+_DEFAULT_ROLE_CONTRACT_SPEC = {
+    'contract': 'paper-digest-workspace-role',
+    'schemaFingerprint': '989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78',
+    'originalContract': 'paper-digest-workspace-role-v1',
+    'roles': ['daily', 'history'],
+    'markerName': '.paper-digest-workspace-role.json',
+    'crossRoleEnv': 'PD_WORKSPACE_ALLOW_CROSS_ROLE',
+    'crossRoleValue': '1',
+    'commands': {
+        'python': {
+            'newConferenceDaily': ['conference-extract.py', 'conference-page-render.py'],
+            'daily': [
+                'full-fetch.js', 'generate-blog.py', 'review-blog.py', 'push-blog.py',
+                'publish-to-blog.py', 'conference-filter-evidence-extract.py', 'indextts_synth.py',
+                'conference_publication_figure_crop.py', 'conference_publication_figure_view_replay.py',
+            ],
+            'historyExact': ['conference-extract.py', 'history-inventory.py'],
+            'historyPrefixes': ['conference-', 'historical-', 'history-'],
+        },
+    },
+}
+_ROLE_CONTRACT_FILE = PROJECT_ROOT / 'config' / 'workspace-roles.json'
+_ROLE_CONTRACT_SPEC = (
+    json.loads(_ROLE_CONTRACT_FILE.read_text(encoding='utf-8'))
+    if _ROLE_CONTRACT_FILE.is_file()
+    else _DEFAULT_ROLE_CONTRACT_SPEC
+)
+WORKSPACE_ROLE_MARKER = _ROLE_CONTRACT_SPEC['markerName']
 # Keep startup checks usable before the project dependencies are loaded.
-WORKSPACE_ROLE_CONTRACT = 'paper-digest-workspace-role'
-WORKSPACE_ROLE_SCHEMA_FINGERPRINT = '989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78'
-ORIGINAL_WORKSPACE_ROLE_CONTRACT = 'paper-digest-workspace-role-v1'
-CROSS_ROLE_ENV = 'PD_WORKSPACE_ALLOW_CROSS_ROLE'
-CROSS_ROLE_VALUE = '1'
+WORKSPACE_ROLE_CONTRACT = _ROLE_CONTRACT_SPEC['contract']
+WORKSPACE_ROLE_SCHEMA_FINGERPRINT = _ROLE_CONTRACT_SPEC['schemaFingerprint']
+ORIGINAL_WORKSPACE_ROLE_CONTRACT = _ROLE_CONTRACT_SPEC['originalContract']
+WORKSPACE_ROLES = tuple(_ROLE_CONTRACT_SPEC['roles'])
+CROSS_ROLE_ENV = _ROLE_CONTRACT_SPEC['crossRoleEnv']
+CROSS_ROLE_VALUE = _ROLE_CONTRACT_SPEC['crossRoleValue']
+_PY_NEW_CONFERENCE_DAILY = frozenset(_ROLE_CONTRACT_SPEC['commands']['python']['newConferenceDaily'])
+_PY_DAILY_COMMANDS = frozenset(_ROLE_CONTRACT_SPEC['commands']['python']['daily'])
+_PY_HISTORY_EXACT_COMMANDS = frozenset(_ROLE_CONTRACT_SPEC['commands']['python']['historyExact'])
+_PY_HISTORY_PREFIXES = tuple(_ROLE_CONTRACT_SPEC['commands']['python']['historyPrefixes'])
 
 
 def _env_file_value(env_file, key):
@@ -79,20 +111,15 @@ def _allows_cross_role(actual_role, required_role, root):
 def required_workspace_role_for_command(command_name):
     name = Path(str(command_name or '')).name
     wrapped = os.environ.get('AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE', '').strip()
-    if (name in {'conference-extract.py', 'conference-page-render.py'}
+    if (name in _PY_NEW_CONFERENCE_DAILY
             and os.environ.get('AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE') == '1'
             and wrapped == 'daily'):
         return 'daily'
-    if name in {'full-fetch.js', 'generate-blog.py', 'review-blog.py',
-                'push-blog.py', 'publish-to-blog.py',
-                'conference-filter-evidence-extract.py',
-                'indextts_synth.py'}:
+    if name in _PY_DAILY_COMMANDS:
         return 'daily'
-    if name in {'conference_publication_figure_crop.py', 'conference_publication_figure_view_replay.py'}:
-        return 'daily'
-    if name in {'conference-extract.py', 'history-inventory.py'}:
+    if name in _PY_HISTORY_EXACT_COMMANDS:
         return 'history'
-    if name.startswith(('conference-', 'historical-', 'history-')):
+    if name.startswith(_PY_HISTORY_PREFIXES):
         return 'history'
     return None
 

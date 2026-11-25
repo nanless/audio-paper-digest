@@ -14,7 +14,7 @@ const {
 test('完整计划让每个套件恰好覆盖一次，绝不默认允许空数据', () => {
     const plan = buildVerificationPlan(parseOptions([]), { javascript: ['a.js'], python: ['b.py'], shell: ['c.sh'] });
     assert.deepEqual(plan.filter(step => step.command === 'npm').map(step => step.args), [['test']]);
-    assert.equal(plan.filter(step => step.args.includes('unittest')).length, 2);
+    assert.equal(plan.filter(step => step.args.includes('unittest')).length, 3);
     assert.deepEqual(plan.at(-1).args, ['scripts/validate-data-files.js']);
     assert.deepEqual(plan.at(-1).env, { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' });
     assert.equal(plan.some(step => /generate|review|push|fetch/.test(step.args.join(' '))), false);
@@ -166,14 +166,14 @@ test('直接验证入口在任何检查之前就拒绝沙箱环境', () => {
     assert.doesNotMatch(result.stdout, /通过|JavaScript 语法检查/);
 });
 
-test('CI 同一入口分套件隔离运行，两Node全覆盖并仅完整汇总可通过', () => {
+test('CI 同一入口分套件隔离运行，三版本Node全覆盖并仅完整汇总可通过', () => {
     const workflow = fs.readFileSync(path.resolve(__dirname, '../.github/workflows/ci.yml'), 'utf8');
     assert.ok(workflow.includes(`HUGO_VERSION: '${HUGO_VERSION}'`));
     assert.match(workflow, /https:\/\/github\.com\/gohugoio\/hugo\/releases\/download\/v\$\{HUGO_VERSION\}/);
     assert.ok(workflow.indexOf('sha256sum --check --strict') < workflow.indexOf('tar -xzf'));
     assert.match(workflow, /hugo_\$\{HUGO_VERSION\}_checksums\.txt/);
     assert.match(workflow, /npm run verify -- "\$\{verify_args\[@\]\}"/);
-    assert.match(workflow, /node-version: \[20\.x, 22\.x\]/);
+    assert.match(workflow, /node-version: \[20\.x, 22\.x, 24\.x\]/);
     for (const shard of ['1/4', '2/4', '3/4', '4/4']) assert.ok(workflow.includes(`shard: '${shard}'`));
     for (const suite of ['python', 'static']) assert.ok(workflow.includes(`suite: ${suite}`));
     assert.match(workflow, /if: always\(\)[\s\S]*needs: verify/);
@@ -192,8 +192,8 @@ test('CI普通推送不自动运行，主动验收和PR保留完整且不重复�
         'node-version': node, partition
     }))).filter(job => !matrix.exclude.some(exclusion =>
         Object.entries(exclusion).every(([key, value]) => require('node:util').isDeepStrictEqual(job[key], value))));
-    assert.equal(jobs.length, 10);
-    for (const node of ['20.x', '22.x']) {
+    assert.equal(jobs.length, 14);
+    for (const node of ['20.x', '22.x', '24.x']) {
         assert.deepEqual(jobs.filter(job => job['node-version'] === node && job.partition.suite === 'javascript')
             .map(job => job.partition.shard).sort(), ['1/4', '2/4', '3/4', '4/4']);
     }
@@ -203,7 +203,9 @@ test('CI普通推送不自动运行，主动验收和PR保留完整且不重复�
     }
     assert.equal(workflow.jobs.test.needs, 'verify');
     assert.equal(workflow.jobs.test.if, 'always()');
-    assert.deepEqual(workflow.jobs.test.strategy.matrix['node-version'], ['20.x', '22.x']);
+    assert.deepEqual(workflow.jobs.test.strategy.matrix['node-version'], ['20.x', '22.x', '24.x']);
+    assert.equal(workflow.jobs['verify-node24'], undefined);
+    assert.equal(workflow.jobs['test-node24'], undefined);
 });
 
 test('分套件并集保持完整计划覆盖，非法分片不能伪装完整验收', () => {
@@ -213,7 +215,7 @@ test('分套件并集保持完整计划覆盖，非法分片不能伪装完整�
     const stat = buildVerificationPlan(parseOptions(['--suite', 'static']), files);
     assert.deepEqual([...stat, ...js, ...py].map(step => JSON.stringify(step)).sort(),
         buildVerificationPlan(parseOptions([]), files).map(step => JSON.stringify(step)).sort());
-    assert.equal(js.length, 1); assert.equal(py.length, 2); assert.equal(stat.length, 4);
+    assert.equal(js.length, 1); assert.equal(py.length, 3); assert.equal(stat.length, 4);
     for (const args of [ ['--shard', '1/4'], ['--suite', 'python', '--shard', '1/4'], ['--suite', 'javascript', '--shard', '0/4'],
         ['--suite', 'javascript', '--shard', '5/4'], ['--suite', 'javascript', '--shard', '1/33'], ['--suite', 'unknown'],
         ['--suite', 'static', '--quick'], ['--suite', 'all', '--suite', 'python'] ]) assert.throws(() => parseOptions(args));

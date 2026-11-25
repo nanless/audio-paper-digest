@@ -646,7 +646,9 @@ function semanticReviewProtocol() {
     return { ...body, protocolSha256: stableHash(body) };
 }
 function defaultHugoVersion() {
-    const result = spawnSync('hugo', ['version'], { encoding: 'utf8', env: { ...process.env, LANG: 'C', LC_ALL: 'C' } });
+    const result = spawnSync('hugo', ['version'], {
+        encoding: 'utf8', timeout: 30_000, env: { ...process.env, LANG: 'C', LC_ALL: 'C' }
+    });
     if (result.error || result.status !== 0) fail('Hugo 程序无法运行');
     return result.stdout.trim();
 }
@@ -721,7 +723,9 @@ function defaultHugoGate({ blogRepo, generation }) {
         // 不读取生产仓库的 Git 元数据，也不修改生产文件。
         const git = (args, label) => {
             const result = spawnSync('git', ['-C', source, ...args], {
-                encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, maxBuffer: 4 * 1024 * 1024
+                encoding: 'utf8', timeout: 60_000,
+                env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' },
+                maxBuffer: 4 * 1024 * 1024
             });
             if (result.error || result.status !== 0) {
                 fail(`临时 Hugo 检查目录的 Git ${label} 操作失败：${String(result.stderr || result.error?.message || '').slice(-1000)}`);
@@ -739,8 +743,10 @@ function defaultHugoGate({ blogRepo, generation }) {
             const target = inside(source, record.path, 'Hugo 暂存目标文件'); fs.mkdirSync(path.dirname(target), { recursive: true });
             fs.writeFileSync(target, readRegular(inside(generation.root, path.posix.join('bundle', record.path), '生成文件集合')).bytes);
         }
-        const result = spawnSync('hugo', ['--source', source, '--destination', path.join(temporary, 'public')],
-            { encoding: 'utf8', env: { ...process.env, LANG: 'C', LC_ALL: 'C' }, maxBuffer: 32 * 1024 * 1024 });
+        const result = spawnSync('hugo', ['--source', source, '--destination', path.join(temporary, 'public')], {
+            encoding: 'utf8', timeout: 300_000,
+            env: { ...process.env, LANG: 'C', LC_ALL: 'C' }, maxBuffer: 32 * 1024 * 1024
+        });
         if (result.error || result.status !== 0) fail(`Hugo 构建检查失败：${String(result.stderr || result.error?.message || '').slice(-2000)}`);
         return { status: 'passed', engine: 'hugo', version: defaultHugoVersion() };
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
@@ -772,7 +778,8 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
         path.resolve(__dirname, '../historical-direct-review.py'), '--request', requestPath,
         '--output', outputPath, '--checkpoint-dir', checkpointDir,
         '--concurrency', String(historicalReviewConcurrency())], {
-        cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env }, maxBuffer: 32 * 1024 * 1024
+        cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env },
+        maxBuffer: 32 * 1024 * 1024, timeout: 7_200_000
     });
     if (result.error || result.signal || result.status !== 0) fail(`页面内容审查子进程失败：${result.error?.message || result.signal || result.status}`);
     const loaded = strictJsonFile(outputPath, '页面内容审查凭证'); const value = loaded.value;

@@ -4,9 +4,8 @@
 这里用 publish_common.py 的同一入口重算，逐条断言两侧结论一致；不一致时打印
 「哪条语料、Node 结果、Python 结果」。
 
-当前 13 条语料两侧不一致，登记在语料库的 KNOWN_DIVERGENCES 中并动态 skip；
-其余 63 条为硬断言。上游实现修好后，已登记语料自然转入普通断言；新增的未登记
-分歧会让本测试失败。
+当前 0 条语料登记在 KNOWN_DIVERGENCES 中，全部语料均为硬断言；
+任何新增的 JS/Python 双实现分歧都会立即让本测试失败。
 
 运行：
     bash scripts/python-runtime.sh -m unittest discover -s tests/python -p "test_parity_*.py"

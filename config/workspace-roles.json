@@ -1,0 +1,83 @@
+{
+  "contract": "paper-digest-workspace-role",
+  "schemaFingerprint": "989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78",
+  "originalContract": "paper-digest-workspace-role-v1",
+  "roles": [
+    "daily",
+    "history"
+  ],
+  "markerName": ".paper-digest-workspace-role.json",
+  "crossRoleEnv": "PD_WORKSPACE_ALLOW_CROSS_ROLE",
+  "crossRoleValue": "1",
+  "commands": {
+    "js": {
+      "newConferenceDaily": [
+        "conference-tools.js",
+        "conference-discover.js",
+        "conference-filter.js",
+        "conference-filter-run.js",
+        "conference-filter-evidence.js",
+        "conference-staging.js",
+        "conference-import.js",
+        "conference-plan.js",
+        "conference-process.js",
+        "conference-reader-publication-evidence.js",
+        "conference-publication-author-replay-cli.js"
+      ],
+      "daily": [
+        "full-fetch.js",
+        "deep-analysis-only.js",
+        "batch-analyze.js",
+        "reanalyze.js",
+        "refresh-api-reader.js",
+        "reanalyze-selected.js",
+        "official-conference-acquire.js",
+        "conference-queue.js",
+        "daily-scoring-refresh-checkpoint-cli.js",
+        "compact-papers-ledger.js",
+        "publish-daily-podcast.js",
+        "calibrate-batch-scores.js",
+        "conference-workspace.js",
+        "migrate-conference-process.js",
+        "conference-complete-stage-worker.js",
+        "conference-publication-figure-crop-replay-cli.js",
+        "recover-conference-process-locks.js"
+      ],
+      "historyExact": [
+        "page-source-crosswalk.js",
+        "arxiv-source-authority.js"
+      ],
+      "historyPrefixes": [
+        "conference-",
+        "historical-",
+        "history-"
+      ]
+    },
+    "python": {
+      "newConferenceDaily": [
+        "conference-extract.py",
+        "conference-page-render.py"
+      ],
+      "daily": [
+        "full-fetch.js",
+        "generate-blog.py",
+        "review-blog.py",
+        "push-blog.py",
+        "publish-to-blog.py",
+        "conference-filter-evidence-extract.py",
+        "indextts_synth.py",
+        "conference_publication_figure_crop.py",
+        "conference_publication_figure_view_replay.py"
+      ],
+      "historyExact": [
+        "conference-extract.py",
+        "history-inventory.py"
+      ],
+      "historyPrefixes": [
+        "conference-",
+        "historical-",
+        "history-"
+      ]
+    }
+  }
+}

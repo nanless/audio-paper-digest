@@ -119,6 +119,11 @@ function buildVerificationPlan(options, files) {
                 'scripts/python-runtime.sh', '-m', 'unittest', 'discover', '-s', directory, '-p', 'test_*.py'
             ] });
         }
+        if (suite === 'all' || suite === 'python') {
+            plan.push({ group: 'Python 测试：tests/reader_pdf_steering_profile_test.py', command: 'bash', args: [
+                'scripts/python-runtime.sh', '-m', 'unittest', 'tests/reader_pdf_steering_profile_test.py'
+            ] });
+        }
     }
     if (staticChecks) plan.push({ group: '只读数据校验', command: process.execPath, args: [
         'scripts/validate-data-files.js', ...(options.allowEmpty ? ['--allow-empty'] : [])

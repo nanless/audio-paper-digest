@@ -74,28 +74,42 @@ function requireExternalRuntime(commandName = path.basename(process.argv[1] || '
     );
 }
 
+const DEFAULT_JS_WORKSPACE_ROLE_COMMANDS = Object.freeze({
+    newConferenceDaily: [
+        'conference-tools.js', 'conference-discover.js', 'conference-filter.js',
+        'conference-filter-run.js', 'conference-filter-evidence.js', 'conference-staging.js', 'conference-import.js',
+        'conference-plan.js', 'conference-process.js', 'conference-reader-publication-evidence.js',
+        'conference-publication-author-replay-cli.js'
+    ],
+    daily: [
+        'full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
+        'refresh-api-reader.js', 'reanalyze-selected.js', 'official-conference-acquire.js', 'conference-queue.js',
+        'daily-scoring-refresh-checkpoint-cli.js', 'compact-papers-ledger.js', 'publish-daily-podcast.js',
+        'calibrate-batch-scores.js', 'conference-workspace.js', 'migrate-conference-process.js',
+        'conference-complete-stage-worker.js', 'conference-publication-figure-crop-replay-cli.js',
+        'recover-conference-process-locks.js'
+    ],
+    historyExact: ['page-source-crosswalk.js', 'arxiv-source-authority.js'],
+    historyPrefixes: ['conference-', 'historical-', 'history-']
+});
+const WORKSPACE_ROLE_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'workspace-roles.json');
+const WORKSPACE_ROLE_JS_COMMANDS = fs.existsSync(WORKSPACE_ROLE_CONFIG_PATH)
+    ? JSON.parse(fs.readFileSync(WORKSPACE_ROLE_CONFIG_PATH, 'utf8')).commands.js
+    : DEFAULT_JS_WORKSPACE_ROLE_COMMANDS;
+const JS_NEW_CONFERENCE_DAILY_COMMANDS = new Set(WORKSPACE_ROLE_JS_COMMANDS.newConferenceDaily);
+const JS_DAILY_COMMANDS = new Set(WORKSPACE_ROLE_JS_COMMANDS.daily);
+const JS_HISTORY_EXACT_COMMANDS = new Set(WORKSPACE_ROLE_JS_COMMANDS.historyExact);
+const JS_HISTORY_PREFIXES = Object.freeze([...WORKSPACE_ROLE_JS_COMMANDS.historyPrefixes]);
+
 function requiredWorkspaceRoleForCommand(commandName) {
     const name = path.basename(String(commandName || ''));
     const wrappedRole = String(process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE || '').trim();
     const newConferenceDaily = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1' && wrappedRole === 'daily'
-        && new Set(['conference-tools.js', 'conference-discover.js', 'conference-filter.js',
-            'conference-filter-run.js', 'conference-filter-evidence.js', 'conference-staging.js', 'conference-import.js',
-            'conference-plan.js', 'conference-process.js', 'conference-reader-publication-evidence.js',
-            'conference-publication-author-replay-cli.js']).has(name);
+        && JS_NEW_CONFERENCE_DAILY_COMMANDS.has(name);
     if (newConferenceDaily) return 'daily';
-    if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
-        'refresh-api-reader.js', 'reanalyze-selected.js', 'official-conference-acquire.js', 'conference-queue.js',
-        'daily-scoring-refresh-checkpoint-cli.js',
-        'compact-papers-ledger.js',
-        'publish-daily-podcast.js',
-        'calibrate-batch-scores.js',
-        'conference-workspace.js', 'migrate-conference-process.js',
-        'conference-complete-stage-worker.js',
-        'conference-publication-figure-crop-replay-cli.js',
-        'recover-conference-process-locks.js'].includes(name)) return 'daily';
-    if (name.startsWith('conference-') || name.startsWith('historical-')
-        || name.startsWith('history-') || name === 'page-source-crosswalk.js'
-        || name === 'arxiv-source-authority.js') return 'history';
+    if (JS_DAILY_COMMANDS.has(name)) return 'daily';
+    if (JS_HISTORY_PREFIXES.some(prefix => name.startsWith(prefix))
+        || JS_HISTORY_EXACT_COMMANDS.has(name)) return 'history';
     return null;
 }
 

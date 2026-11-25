@@ -391,7 +391,7 @@ async function fetchOfficialV2({ provider, url, kind, maxBytes, timeoutMs = REQU
                 signal: controller.signal,
                 headers: {
                     Accept: accept,
-                    'User-Agent': 'audio-paper-digest-official-conference/2.0'
+                    'User-Agent': 'audio-research-workbench-official-conference/2.0'
                 }
             });
             if ([301, 302, 303, 307, 308].includes(response.status)) {

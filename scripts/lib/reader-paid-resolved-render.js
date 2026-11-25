@@ -99,10 +99,14 @@ function validatePaidResolvedInput(paper, source, checked, expectedPaperSha) {
 function legacyCodeFiles(legacyDirectory, repositoryRoot, rendererCommit = OLD_RENDERER_COMMIT) {
     const repo = repositoryRoot || path.resolve(__dirname, '../..');
     const names = child.execFileSync('git', ['ls-tree', '-r', '--name-only', rendererCommit,
-        'scripts', 'manual', 'config', 'prompts'], { cwd: repo, encoding: 'utf8' }).trim().split('\n');
+        'scripts', 'manual', 'config', 'prompts'], {
+        cwd: repo, encoding: 'utf8', timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    }).trim().split('\n');
     const selected = names.filter(name => /\.(js|json|md)$/.test(name));
-    const objects = child.execFileSync('git', ['cat-file', '--batch'], { cwd: repo,
-        input: selected.map(name => `${rendererCommit}:${name}\n`).join(''), maxBuffer: 64 * 1024 * 1024 });
+    const objects = child.execFileSync('git', ['cat-file', '--batch'], {
+        cwd: repo, input: selected.map(name => `${rendererCommit}:${name}\n`).join(''),
+        maxBuffer: 64 * 1024 * 1024, timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     let offset = 0;
     return selected.map(name => {
         const end = objects.indexOf(10, offset);
@@ -151,7 +155,7 @@ function replayLegacyReader(legacyDirectory, input, repositoryRoot, rendererComm
     if (![OLD_RENDERER_COMMIT, CURRENT_SIGNED_RENDERER_COMMIT].includes(rendererCommit)) fail('未知原渲染器');
     const files = legacyCodeFiles(legacyDirectory, repositoryRoot, rendererCommit);
     const output = child.execFileSync(process.execPath, [path.join(__dirname, 'reader-paid-resolved-replay-worker.js'), legacyDirectory], {
-        input: JSON.stringify({ ...input, files }), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+        input: JSON.stringify({ ...input, files }), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 120_000,
         env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_SANDBOX: process.env.CODEX_SANDBOX || '' }
     });
     const marker = 'PAID_REPLAY_RESULT=';

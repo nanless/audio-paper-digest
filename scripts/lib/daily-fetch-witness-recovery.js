@@ -25,7 +25,8 @@ function dateOf(s) { return new Date(Date.parse(s) + 8 * 3600000).toISOString().
 function keys(value, names) { return value && typeof value === 'object' && !Array.isArray(value)
     && equal(Object.keys(value).sort(), [...names].sort()); }
 function git(repo, ...args) { return execFileSync('git', ['-C', repo, ...args], {
-    maxBuffer: 128 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    maxBuffer: 128 * 1024 * 1024, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }); }
 function json(bytes) { return strictJson(bytes, '旧获取见证恢复材料'); }
 function read(filename) { const r = readRegular(filename); return { ...r, value: json(r.bytes) }; }
 function encoded(value) { return Buffer.from(JSON.stringify(value, null, 2) + '\n'); }
@@ -82,7 +83,8 @@ function blob(repo, commit, file) {
 function blobs(repo, commit, names) {
     const output = execFileSync('git', ['-C', repo, 'cat-file', '--batch'], {
         input: names.map(n => `${commit}:${n}\n`).join(''), maxBuffer: 512 * 1024 * 1024,
-        stdio: ['pipe', 'pipe', 'pipe'] });
+        timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
     let offset = 0; const result = new Map();
     for (const name of names) {
         const end = output.indexOf(10, offset);

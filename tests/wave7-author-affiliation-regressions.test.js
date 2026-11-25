@@ -366,46 +366,56 @@ test('RC-11: parse-arxiv-atom.py 可选解析 <arxiv:affiliation> 且在缺失�
     assert.equal(Object.hasOwn(parsed2[0], 'authorAffiliations'), false);
 });
 
-test('2026-11-20 真实封存 16 篇论文 PDF 首页提取与 1-to-1 对齐达到 16/16（跳过条件：本机无该批次封存文件）', (t) => {
+test('当前真实封存日更批次 PDF 首页提取与作者机构对齐无污染（跳过条件：本机无封存批次）', (t) => {
     const analysisPath = path.join(ROOT, 'data/current/deep-analysis-result.json');
     if (!fs.existsSync(analysisPath)) { t.skip('no local analysis file'); return; }
     const analysis = JSON.parse(fs.readFileSync(analysisPath, 'utf8'));
-    if (analysis.batchDate !== '2026-11-20' || !analysis.dailyFreshSourceRun?.runId) {
-        t.skip('current batch is not 2026-11-20');
+    if (!analysis.dailyFreshSourceRun?.runId || !Array.isArray(analysis.papers) || !analysis.papers.length) {
+        t.skip('current batch has no sealed fresh source run');
         return;
     }
     const runId = analysis.dailyFreshSourceRun.runId;
     const sourcesDir = path.join(ROOT, 'data/runtime/daily-fresh-source-runs', runId, 'sources');
     if (!fs.existsSync(sourcesDir)) { t.skip('sealed source dir missing'); return; }
 
-    let boundPapers = 0;
+    let checkedPapers = 0;
     let boundAuthors = 0;
     let totalAuthors = 0;
+    const isExactBatch20261120 = analysis.batchDate === '2026-11-20';
     for (const paper of analysis.papers) {
         const id = String(paper.arxivId).replace(/v\d+$/, '');
         const pdfPath = path.join(sourcesDir, id, 'generation-000001', 'source.pdf');
         const txtPath = path.join(sourcesDir, id, 'generation-000001', 'source.txt');
         if (!fs.existsSync(pdfPath) || !fs.existsSync(txtPath)) { t.skip(`missing sealed source for ${id}`); return; }
         const pdfEvidence = parser.extractPdfPage1AuthorsSync(fs.readFileSync(pdfPath));
-        assert.ok(pdfEvidence, `${id} should extract PDF Page-1 authors`);
+        if (isExactBatch20261120) {
+            assert.ok(pdfEvidence, `${id} should extract PDF Page-1 authors`);
+        }
         const resolved = parser.resolveApiReaderAuthors(paper, {
             source: 'pdf',
             text: fs.readFileSync(txtPath, 'utf8'),
-            readerAuthors: pdfEvidence
+            ...(pdfEvidence ? { readerAuthors: pdfEvidence } : {})
         });
+        assert.equal(resolved.authors.length, paper.authors.length, `${id} author count must stay 1-to-1`);
         totalAuthors += resolved.authors.length;
         const okCount = resolved.authors.filter(a => a.affiliations.every(v => v && !/^机构信息未/.test(v))).length;
         boundAuthors += okCount;
-        assert.equal(okCount, paper.authors.length, `${id} must bind all ${paper.authors.length} authors cleanly`);
+        if (isExactBatch20261120) {
+            assert.equal(okCount, paper.authors.length, `${id} must bind all ${paper.authors.length} authors cleanly`);
+        }
         for (const author of resolved.authors) {
             for (const aff of author.affiliations) {
                 assert.doesNotMatch(aff, /Equal contribution|Corresponding author|\{[a-z0-9_,]+$/i, `${id} affiliation contaminated: ${aff}`);
             }
         }
-        boundPapers++;
+        checkedPapers++;
     }
-    assert.equal(boundPapers, analysis.papers.length);
-    assert.equal(boundAuthors, totalAuthors);
+    assert.equal(checkedPapers, analysis.papers.length);
+    if (isExactBatch20261120) {
+        assert.equal(boundAuthors, totalAuthors);
+    } else {
+        assert.ok(boundAuthors > 0, 'real sealed batch should resolve PDF affiliations for papers with affiliations');
+    }
 });
 
 test('Wave 7 R1 回归：CRITICAL-1/2、HIGH-2、MEDIUM-1 与 LOW-1 全覆盖', () => {

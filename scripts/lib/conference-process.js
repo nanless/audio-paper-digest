@@ -736,7 +736,7 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
     const hadReceipt = fs.existsSync(path.join(root, names.receipt));
     if (!hadReceipt) {
         deps.execFileSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), path.join(__dirname, '..', 'conference-extract.py'),
-            '--apply', '--manifest', names.request], { cwd: path.join(__dirname, '..', '..'), stdio: 'pipe' });
+            '--apply', '--manifest', names.request], { cwd: path.join(__dirname, '..', '..'), stdio: 'pipe', timeout: 300_000 });
     }
     const snapshot = extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(root, names.receipt,
         { replay: !hadReceipt || replayExisting }));

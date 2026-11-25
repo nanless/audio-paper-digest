@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
+const { buildChildProcessEnv } = require('../env-loader.js');
 
 const PDF_FIGURE_CROP_CONTRACT = 'reader-pdf-figure-crop-v1';
 const PDF_TABLE_EXTRACT_CONTRACT = 'reader-pdf-table-extract-v1';
@@ -13,6 +14,24 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+
+function writePrivateTempPdf(tmpDir, bytes) {
+    if (process.platform !== 'win32') {
+        fs.chmodSync(tmpDir, 0o700);
+    }
+    const tmpPdf = path.join(tmpDir, 'source.pdf');
+    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0);
+    const fd = fs.openSync(tmpPdf, flags, 0o600);
+    try {
+        let offset = 0;
+        while (offset < bytes.length) {
+            offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
+        }
+    } finally {
+        fs.closeSync(fd);
+    }
+    return tmpPdf;
+}
 
 function fail(message, cause) {
     const error = new Error(`PDF 论文图处理失败：${message}`, cause ? { cause } : undefined);
@@ -95,9 +114,8 @@ function extractPdfStructuredArtifactsSync(pdfBytes, arxivId = '') {
     }
     const projectRoot = path.resolve(__dirname, '../..');
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-pdf-art-'));
-    const tmpPdf = path.join(tmpDir, 'source.pdf');
     try {
-        fs.writeFileSync(tmpPdf, bytes, { mode: 0o600 });
+        const tmpPdf = writePrivateTempPdf(tmpDir, bytes);
         const args = [
             path.join(projectRoot, 'scripts/python-runtime.sh'),
             path.join(projectRoot, 'scripts/pdf_figure_table_extract.py'),
@@ -108,6 +126,7 @@ function extractPdfStructuredArtifactsSync(pdfBytes, arxivId = '') {
         if (cleanId) args.push('--arxiv-id', cleanId);
         const stdout = execFileSync('bash', args, {
             cwd: projectRoot,
+            env: buildChildProcessEnv(),
             encoding: 'utf8',
             maxBuffer: 32 * 1024 * 1024,
             timeout: 45_000,
@@ -151,9 +170,8 @@ async function renderOfficialPdfFigureCrop(pdfBytes, resource, arxivId = '', _de
     const timeoutMs = deps.timeoutMs || 45_000;
     const projectRoot = path.resolve(__dirname, '../..');
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-pdf-crop-'));
-    const tmpPdf = path.join(tmpDir, 'source.pdf');
     try {
-        fs.writeFileSync(tmpPdf, bytes, { mode: 0o600 });
+        const tmpPdf = writePrivateTempPdf(tmpDir, bytes);
         const cropSpec = `${resource.page}:${resource.bbox.join(',')}`;
         const png = await new Promise((resolve, reject) => {
             const useProcessGroup = process.platform !== 'win32';
@@ -163,7 +181,7 @@ async function renderOfficialPdfFigureCrop(pdfBytes, resource, arxivId = '', _de
                 '--pdf', tmpPdf,
                 '--render-crop', cropSpec,
                 '--dpi', String(resource.dpi || 288)
-            ], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'], detached: useProcessGroup });
+            ], { cwd: projectRoot, env: buildChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: useProcessGroup });
             const chunks = [];
             let size = 0;
             let stderr = '';

@@ -2354,9 +2354,11 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
                 ], {
                     encoding: 'utf8',
                     maxBuffer: 64 * 1024 * 1024,
+                    timeout: 60_000,
                     env: {
                         PATH: process.env.PATH || '/usr/bin:/bin',
-                        LC_ALL: 'C'
+                        LC_ALL: 'C',
+                        GIT_TERMINAL_PROMPT: '0'
                     }
                 });
             } catch (error) {

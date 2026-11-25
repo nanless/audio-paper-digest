@@ -6,13 +6,26 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 // This entry point runs before the project dependencies are loaded.
-const CONTRACT = 'paper-digest-workspace-role';
-const SCHEMA_FINGERPRINT = '989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78';
-const ORIGINAL_CONTRACT = 'paper-digest-workspace-role-v1';
-const ROLES = Object.freeze(['daily', 'history']);
-const MARKER_NAME = '.paper-digest-workspace-role.json';
-const CROSS_ROLE_ENV = 'PD_WORKSPACE_ALLOW_CROSS_ROLE';
-const CROSS_ROLE_VALUE = '1';
+const DEFAULT_ROLE_CONTRACT_SPEC = Object.freeze({
+    contract: 'paper-digest-workspace-role',
+    schemaFingerprint: '989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78',
+    originalContract: 'paper-digest-workspace-role-v1',
+    roles: ['daily', 'history'],
+    markerName: '.paper-digest-workspace-role.json',
+    crossRoleEnv: 'PD_WORKSPACE_ALLOW_CROSS_ROLE',
+    crossRoleValue: '1'
+});
+const ROLE_CONTRACT_FILE = path.resolve(__dirname, '../config/workspace-roles.json');
+const ROLE_CONTRACT_SPEC = fs.existsSync(ROLE_CONTRACT_FILE)
+    ? JSON.parse(fs.readFileSync(ROLE_CONTRACT_FILE, 'utf8'))
+    : DEFAULT_ROLE_CONTRACT_SPEC;
+const CONTRACT = ROLE_CONTRACT_SPEC.contract;
+const SCHEMA_FINGERPRINT = ROLE_CONTRACT_SPEC.schemaFingerprint;
+const ORIGINAL_CONTRACT = ROLE_CONTRACT_SPEC.originalContract;
+const ROLES = Object.freeze([...ROLE_CONTRACT_SPEC.roles]);
+const MARKER_NAME = ROLE_CONTRACT_SPEC.markerName;
+const CROSS_ROLE_ENV = ROLE_CONTRACT_SPEC.crossRoleEnv;
+const CROSS_ROLE_VALUE = ROLE_CONTRACT_SPEC.crossRoleValue;
 
 function workspaceRoot(value) {
     const root = path.resolve(value === undefined ? path.resolve(__dirname, '..') : value);

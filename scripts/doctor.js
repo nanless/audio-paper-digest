@@ -96,7 +96,7 @@ const RSS_CATEGORY = 'eess.AS';
 const ARXIV_ATOM_URL = 'https://export.arxiv.org/api/query?search_query=all:electron&start=0&max_results=1';
 const ARXIV_OAI_URL = 'https://oaipmh.arxiv.org/oai?verb=Identify';
 const ARXIV_RSS_URL = `https://rss.arxiv.org/rss/${RSS_CATEGORY}`;
-const ARXIV_USER_AGENT = 'audio-paper-digest-doctor/1.0';
+const ARXIV_USER_AGENT = 'audio-research-workbench-doctor/1.0';
 
 const STATUS_ICONS = Object.freeze({ ok: '✅', warn: '⚠️', fail: '❌' });
 const STATUS_ORDER = Object.freeze(['ok', 'warn', 'fail']);

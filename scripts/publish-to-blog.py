@@ -6273,16 +6273,12 @@ def _paper_uses_structured_v5(paper):
         return False
 
 
-_V5_SPEC_FORBIDDEN_HTML_TAGS = frozenset({
-    'a', 'audio', 'b', 'blockquote', 'body', 'br', 'button', 'canvas', 'code', 'details', 'div',
-    'embed', 'form', 'frame', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'html', 'i',
-    'iframe', 'img', 'input', 'li', 'link', 'math', 'meta', 'object', 'ol', 'p', 'pre', 's',
-    'script', 'section', 'select', 'source', 'span', 'strong', 'style', 'summary', 'svg',
-    'table', 'tbody', 'td', 'textarea', 'th', 'thead', 'title', 'tr', 'u', 'ul', 'video',
-})
+_WORKFLOW_LEAK_SPEC = json.loads(
+    (PROJECT_ROOT / 'config' / 'workflow-leak-patterns.json').read_text(encoding='utf-8')
+)
+_V5_SPEC_FORBIDDEN_HTML_TAGS = frozenset(_WORKFLOW_LEAK_SPEC['v5SpecForbiddenHtmlTags'])
 _V5_SPEC_WORKFLOW_LEAK_RE = re.compile(
-    r'(?:evidence\s*id|manual_complete|证据块|代码校验反馈|(?:本|上述|当前|这个)\s*prompt'
-    r'|可写(?:作者)?(?:演示|代码|模型|数据|资源)|本次核验返回\s*\d+|本次未收到可核验|资源清单未标明)',
+    _WORKFLOW_LEAK_SPEC['v5SpecWorkflowLeakPattern'],
     flags=re.IGNORECASE,
 )
 
@@ -11424,10 +11420,17 @@ def _daily_publication_replay_scope():
         return
     state = {'sources': {}, 'operations': [], 'validated_inputs': {}}
     token = _DAILY_PUBLICATION_REPLAY_SCOPE.set(state)
+    client_mod = globals().get('publish_node_replay_client')
+    batch_cm = (
+        client_mod.tree_digest_batch_scope()
+        if client_mod is not None and hasattr(client_mod, 'tree_digest_batch_scope')
+        else nullcontext()
+    )
     try:
-        yield
-        for operation in state['operations']:
-            _daily_publication_operation_state(operation)[0]()
+        with batch_cm:
+            yield
+            for operation in state['operations']:
+                _daily_publication_operation_state(operation)[0]()
     finally:
         _DAILY_PUBLICATION_REPLAY_SCOPE.reset(token)
         for operation in state['operations']:
@@ -14507,6 +14510,7 @@ def generation_template_fingerprint():
         'scoring_rubric_v2.py': script_dir / 'scoring_rubric_v2.py',
         'lib/scoring-rubric-v2.js': script_dir / 'lib' / 'scoring-rubric-v2.js',
         'config/scoring-rubric-v2.json': script_dir.parent / 'config' / 'scoring-rubric-v2.json',
+        'config/workflow-leak-patterns.json': script_dir.parent / 'config' / 'workflow-leak-patterns.json',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
         'lib/reader-pdf-extraction-scope.js': script_dir / 'lib' / 'reader-pdf-extraction-scope.js',

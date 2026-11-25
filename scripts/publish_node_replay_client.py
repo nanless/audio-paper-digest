@@ -10,6 +10,8 @@ truncation, interruption, or crash.
 import atexit
 import base64
 import binascii
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import itertools
 import json
@@ -48,9 +50,25 @@ _STAMP_CODE_SUFFIXES = ('.js', '.cjs', '.mjs', '.json')
 
 _POOL_LOCK = threading.Lock()
 _IDLE_WORKERS = {}
+_TREE_DIGEST_CACHE = {}
+_TREE_DIGEST_BATCH_SCOPE = ContextVar('_TREE_DIGEST_BATCH_SCOPE', default=None)
 _REQUEST_ID_COUNTER = itertools.count(1)
 _WORKER_SPAWN_COUNTER = itertools.count(1)
 _TOTAL_SPAWNED_WORKERS = 0
+
+
+@contextmanager
+def tree_digest_batch_scope():
+    """在单次只读批量重放期间按 project_root 缓存已核验代码树摘要，避免每条 RPC 重扫磁盘。"""
+    existing = _TREE_DIGEST_BATCH_SCOPE.get()
+    if existing is not None:
+        yield existing
+        return
+    token = _TREE_DIGEST_BATCH_SCOPE.set({})
+    try:
+        yield _TREE_DIGEST_BATCH_SCOPE.get()
+    finally:
+        _TREE_DIGEST_BATCH_SCOPE.reset(token)
 
 
 def _file_stamp(path):
@@ -61,6 +79,14 @@ def _file_stamp(path):
     return (info.st_mtime_ns, info.st_size, info.st_ino)
 
 
+def _dir_stamp(path):
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_ino)
+
+
 def _project_root_for_worker(worker_realpath):
     worker_path = Path(worker_realpath)
     if len(worker_path.parents) > 2:
@@ -69,9 +95,35 @@ def _project_root_for_worker(worker_realpath):
 
 
 def _tree_code_digest(project_root):
+    root_key = str(project_root)
+    batch = _TREE_DIGEST_BATCH_SCOPE.get()
+    if batch is not None and root_key in batch:
+        return batch[root_key]
+
+    cached = _TREE_DIGEST_CACHE.get(root_key)
+    if cached is not None:
+        dir_stamps, file_stamps, cached_digest = cached
+        unchanged = True
+        for dpath, expected in dir_stamps:
+            if _dir_stamp(dpath) != expected:
+                unchanged = False
+                break
+        if unchanged:
+            for fpath, expected in file_stamps:
+                if _file_stamp(fpath) != expected:
+                    unchanged = False
+                    break
+        if unchanged:
+            if batch is not None:
+                batch[root_key] = cached_digest
+            return cached_digest
+
     entries = []
+    dir_stamps = []
+    file_stamps = []
 
     def scan_dir(abs_dir, rel_prefix):
+        dir_stamps.append((abs_dir, _dir_stamp(abs_dir)))
         try:
             it = os.scandir(abs_dir)
         except OSError:
@@ -86,18 +138,26 @@ def _tree_code_digest(project_root):
                 try:
                     if entry.is_symlink():
                         entries.append((rel, 'symlink'))
+                        file_stamps.append((entry.path, _file_stamp(entry.path)))
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         scan_dir(entry.path, rel)
                     elif name.endswith(_STAMP_CODE_SUFFIXES) and entry.is_file(follow_symlinks=False):
                         st = entry.stat(follow_symlinks=False)
+                        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
                         entries.append((rel, st.st_mtime_ns, st.st_size, st.st_ino))
+                        file_stamps.append((entry.path, stamp))
                 except OSError:
                     entries.append((rel, 'missing'))
+                    file_stamps.append((entry.path, None))
 
     for sub in ('scripts', 'manual/scripts', 'config'):
-        scan_dir(os.path.join(project_root, sub), sub)
-    return hashlib.blake2b(repr(entries).encode('utf-8'), digest_size=32).hexdigest()
+        scan_dir(os.path.join(root_key, sub), sub)
+    digest = hashlib.blake2b(repr(entries).encode('utf-8'), digest_size=32).hexdigest()
+    _TREE_DIGEST_CACHE[root_key] = (tuple(dir_stamps), tuple(file_stamps), digest)
+    if batch is not None:
+        batch[root_key] = digest
+    return digest
 
 
 def _sanitized_worker_env(env):

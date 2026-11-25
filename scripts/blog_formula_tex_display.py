@@ -1344,16 +1344,18 @@ def _project_reader_cell_tex_display_body(value):
                     lambda match: match.group(1) + '\u0302'
                     if match.group(1) == match.group(2) else match.group(0), output)
     output = re.sub(r'\\hat\{([A-Za-z])\}', lambda match: match.group(1) + '\u0302', output)
+    # 与 JS reader-source-display.js 保持同一顺序：先展开 \overline，再按分号分段递归，
+    # 避免分号前含 \overline{x} 且总长 >40 字符时分号后段被二次触发短纯上下标投影。
+    output = re.sub(r'([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}',
+                    lambda match: match.group(1) + '\u0304'
+                    if match.group(1) == match.group(2) else match.group(0), output)
+    output = re.sub(r'\\overline\{([A-Za-z])\}', lambda match: match.group(1) + '\u0304', output)
     # 一个单元格里可能有多组「可见值 + TeX 副本」，用分号隔开；先分段折叠再拼回，
     # 否则第一组后面的全部内容会被当成同一个副本而不匹配（JS 侧同规则）。
     if re.search(r'[;；]', output) and '\\' in output:
         parts = re.split(r'([;；])', output)
         output = ''.join(part if re.fullmatch(r'[;；]', part or '') else _project_reader_cell_tex_display_body(part)
                          for part in parts)
-    output = re.sub(r'([A-Za-z])\u00af\\overline\{([A-Za-z]+)\}',
-                    lambda match: match.group(1) + '\u0304'
-                    if match.group(1) == match.group(2) else match.group(0), output)
-    output = re.sub(r'\\overline\{([A-Za-z])\}', lambda match: match.group(1) + '\u0304', output)
     for _round in range(6):
         if '\\' not in output and not re.search(r'[_^]\{', output):
             break

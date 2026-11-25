@@ -2,6 +2,7 @@
 'use strict';
 
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -86,14 +87,28 @@ function pickAllowedChildEnv(sourceEnv = process.env, extraAllowedKeys = []) {
 function writeFileAtomic(targetPath, content) {
     const resolved = path.resolve(targetPath);
     fs.mkdirSync(path.dirname(resolved), { recursive: true });
-    const tmp = `${resolved}.tmp.${process.pid}.${Date.now()}`;
+    const tmp = `${resolved}.tmp.${process.pid}.${crypto.randomUUID()}`;
+    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0);
+    let fd;
     try {
-        fs.writeFileSync(tmp, content, 'utf8');
+        fd = fs.openSync(tmp, flags, 0o600);
+        const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+        let offset = 0;
+        while (offset < bytes.length) {
+            offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
+        }
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
+        if (process.platform !== 'win32') {
+            fs.chmodSync(tmp, 0o600);
+        }
         fs.renameSync(tmp, resolved);
     } finally {
-        if (fs.existsSync(tmp)) {
-            fs.unlinkSync(tmp);
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch (_) { /* ignore */ }
         }
+        try { fs.unlinkSync(tmp); } catch (err) { if (err?.code !== 'ENOENT') throw err; }
     }
 }
 

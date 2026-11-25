@@ -2051,14 +2051,11 @@ function validateStructuredV5FigurePlacement(placement, index, structuredArtifac
     }
 }
 
-const V5_SPEC_FORBIDDEN_HTML_TAGS = new Set([
-    'a', 'audio', 'b', 'blockquote', 'body', 'br', 'button', 'canvas', 'code', 'details', 'div',
-    'embed', 'form', 'frame', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'html', 'i',
-    'iframe', 'img', 'input', 'li', 'link', 'math', 'meta', 'object', 'ol', 'p', 'pre', 's',
-    'script', 'section', 'select', 'source', 'span', 'strong', 'style', 'summary', 'svg',
-    'table', 'tbody', 'td', 'textarea', 'th', 'thead', 'title', 'tr', 'u', 'ul', 'video'
-]);
-const V5_SPEC_WORKFLOW_LEAK_RE = /(?:evidence\s*id|manual_complete|证据块|代码校验反馈|(?:本|上述|当前|这个)\s*prompt|可写(?:作者)?(?:演示|代码|模型|数据|资源)|本次核验返回\s*\d+|本次未收到可核验|资源清单未标明)/i;
+const WORKFLOW_LEAK_SPEC = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, '../config/workflow-leak-patterns.json'), 'utf8')
+);
+const V5_SPEC_FORBIDDEN_HTML_TAGS = new Set(WORKFLOW_LEAK_SPEC.v5SpecForbiddenHtmlTags);
+const V5_SPEC_WORKFLOW_LEAK_RE = new RegExp(WORKFLOW_LEAK_SPEC.v5SpecWorkflowLeakPattern, 'i');
 
 function hasForbiddenSpecHtmlOrMarkdown(text) {
     if (/[\r\n]/.test(text)) return true;

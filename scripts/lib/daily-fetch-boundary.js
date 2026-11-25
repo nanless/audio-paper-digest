@@ -403,7 +403,10 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
     if (replayBoundary) validateDailyFetchBoundary(replayBoundary);
     if (typeof requirePreviouslyFetched !== 'boolean') throw new TypeError('requirePreviouslyFetched 必须是布尔值');
     strictInstant(until);
-    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], {
+        maxBuffer: 32 * 1024 * 1024, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     let head;
     try { head = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').toString().trim();
         git('merge-base', '--is-ancestor', head, 'HEAD');
@@ -468,7 +471,10 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
     validateDailyFetchBoundary(result); return result;
 }
 function readCommittedPublishedPaperIds(blogRepo) {
-    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], {
+        maxBuffer: 64 * 1024 * 1024, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     const head = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').toString().trim();
     git('merge-base', '--is-ancestor', head, 'HEAD');
     const ids = new Set(); let skippedLegacyPages = 0;
@@ -481,7 +487,9 @@ function readCommittedPublishedPaperIds(blogRepo) {
         const raw = execFileSync('git', ['-C', blogRepo, 'cat-file', '--batch'], {
             input,
             maxBuffer: 256 * 1024 * 1024,
-            stdio: ['pipe', 'pipe', 'pipe']
+            timeout: 120_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
         });
         let offset = 0;
         for (let i = 0; i < slice.length && offset < raw.length; i++) {
@@ -516,8 +524,10 @@ module.exports = { CONTRACT, CONTINUITY_CONTRACT, resolveDailyFetchBoundary, val
 // This observer reads immutable Git objects, never a caller-provided page snapshot.
 function readPublishedDigest(blogRepo, date, head = null) {
     if (!validDate(date)) throw new Error('已发布来源日期非法');
-    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 32 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'] });
+    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], {
+        maxBuffer: 32 * 1024 * 1024, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     head ||= git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').toString().trim();
     if (!/^[a-f0-9]{40}$/.test(head)) throw new Error('已发布 Git 身份非法');
     git('merge-base', '--is-ancestor', head, 'HEAD');

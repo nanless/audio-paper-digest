@@ -146,7 +146,9 @@ function runGit(repo, args) {
     const result = spawnSync('git', ['--no-optional-locks', '-C', repo, ...args], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        maxBuffer: 2 * 1024 * 1024
+        maxBuffer: 2 * 1024 * 1024,
+        timeout: 30_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     });
     return { status: result.status, stdout: result.stdout || '', error: result.error || null };
 }
