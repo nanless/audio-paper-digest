@@ -8116,14 +8116,20 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
                 context,
                 f'issues[{index}].description 必须是非空字符串',
             )
+        inconclusive_pattern = (
+            r'无法判断|不能判断|不确定(?!性)|cannot\s+determine|unable\s+to\s+determine|\buncertain\b|\bindeterminate\b'
+            if (passed is True and severity == 'info')
+            else r'无法判断|不能判断|无法确认|不确定(?!性)|cannot\s+determine|unable\s+to\s+determine|\buncertain\b|\bindeterminate\b'
+        )
         if required and re.search(
-            r'无法判断|不能判断|无法确认|不确定(?!性)|cannot\s+determine|unable\s+to\s+determine|\buncertain\b|\bindeterminate\b',
+            inconclusive_pattern,
             description or '',
             flags=re.IGNORECASE,
         ):
+            snippet = re.sub(r'\s+', ' ', (description or '').strip())[:120]
             return review_protocol_failure(
                 context,
-                f'issues[{index}] 表示无法确定审查结论',
+                f'issues[{index}] 表示无法确定审查结论（{snippet}）',
             )
         if required and 'type' in issue_fields and (
             not isinstance(issue.get('type'), str) or not issue.get('type', '').strip()
