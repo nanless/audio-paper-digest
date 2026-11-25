@@ -75,6 +75,36 @@ test('the original single-core-feedback branch remains authenticated and mixed f
     assert.throws(() => signed.authenticateCurrentBatchCorrectionParent(x.record, x.parent, x.plan, x.feedback), /单一已保存核心反馈/);
 });
 
+test('single saved reader-only parent is authenticated only when child inherits all prior Reader constraints', t => {
+    const x = ordinary();
+    const oldReader = {
+        coreFeedback: '', rejectedCoreClaims: [],
+        readerFeedback: '旧Reader约束。', rejectedReaderClaims: ['旧错句'], sourceQuotes: ['verbatim quote']
+    };
+    const old = { feedback: oldReader, paper: x.parent };
+    t.mock.method(saved, 'readSavedFeedback', () => old);
+    t.mock.method(saved, 'completedReaderUpstream', () => true);
+    t.mock.method(engine, 'isSuccessfulAnalysisRecord', () => true);
+    let reads = 0;
+    t.mock.method(facts, 'validateFeedback', () => old);
+    t.mock.method(facts, 'withReadOnlySavedFactReview', (bound, callback) => { assert.equal(bound, old); reads++; return callback(); });
+
+    // 正例：子反馈完整继承旧Reader反馈、错误句列表和来源引文
+    const inheritedChild = {
+        ...x.feedback,
+        readerFeedback: '旧Reader约束。\n补充修正图1。',
+        rejectedReaderClaims: ['旧错句', '图1是架构图。'],
+        sourceQuotes: ['verbatim quote']
+    };
+    const inheritedRecord = { ...x.record, feedbackSha256: daily.stableHash(inheritedChild) };
+    signed.authenticateCurrentBatchCorrectionParent(inheritedRecord, x.parent, x.plan, inheritedChild);
+    assert.equal(reads, 1);
+
+    // 负例：子反馈遗漏旧Reader约束时必须拒绝
+    assert.throws(() => signed.authenticateCurrentBatchCorrectionParent(x.record, x.parent, x.plan, x.feedback),
+        /新Reader反馈遗漏旧Reader事实约束/);
+});
+
 test('SHA-bound real WeMM correction previews through the full current-batch cold replay without writes',
     { skip: !realFile }, async t => {
         const bytes = fs.readFileSync(realFile);

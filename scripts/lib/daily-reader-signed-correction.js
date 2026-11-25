@@ -558,8 +558,14 @@ function authenticateCurrentBatchCorrectionParent(record, parent, plan, feedback
         return require('./analysis-stop-control').withModelRequestsForbidden(
             () => assertParent(record, parent, plan, feedback));
     }
-    if (old.readerFeedback || old.coreFeedback || !saved.coreOnlyFeedback(old.feedback))
+    if (old.readerFeedback || old.coreFeedback
+        || (!saved.coreOnlyFeedback(old.feedback) && !saved.readerOnlyFeedback(old.feedback)))
         fail('当前批次原父稿缺少单一已保存核心反馈');
+    if (saved.readerOnlyFeedback(old.feedback)
+        && (!feedback.readerFeedback.includes(old.feedback.readerFeedback)
+            || old.feedback.rejectedReaderClaims.some(claim => !feedback.rejectedReaderClaims.includes(claim))
+            || old.feedback.sourceQuotes.some(quote => !feedback.sourceQuotes.includes(quote))))
+        fail('新Reader反馈遗漏旧Reader事实约束');
     return facts.withReadOnlySavedFactReview(facts.validateFeedback(old.feedback, plan, old.paper),
         () => assertParent(record, parent, plan, feedback));
 }
