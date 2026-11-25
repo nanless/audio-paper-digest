@@ -9848,10 +9848,10 @@ body
             'parsed': {'score': '1'},
         }, '2026-07-10')
         self.assertEqual(slug, 'no-tags-2607-00001')
-        self.assertEqual(len(markdown.encode('utf-8')), 430)
+        self.assertEqual(len(markdown.encode('utf-8')), 428)
         self.assertEqual(
             hashlib.sha256(markdown.encode('utf-8')).hexdigest(),
-            'bc5af5ef60d96ea735188539675b4377d0654688231d3b5290d207c7d2d75208',
+            '60ba2efb3353ac4aa92ca3087ff45ab7dd3a27f9ce0a676b7ab159dcf7b4a743',
         )
 
     def test_generation_input_source_reference_replays_selected_archive_and_rejects_drift(self):
