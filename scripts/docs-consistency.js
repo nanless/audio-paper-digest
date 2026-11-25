@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 'use strict';
-// 检查文档里的 npm 命令、客户端版本声明和工作台版本列表是否与仓库现状一致，防止文档漂移。
+// 检查文档里的 npm 命令、客户端版本声明、链接与锚点、双语索引、废弃写法、环境变量、env.example 同步及 AGENTS.md 体积。
 const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const ROOT_DOCS = ['README.md', 'README.en.md', 'AGENTS.md', 'SKILL.md', 'scripts/README.md', 'scripts/README.en.md', 'manual/README.md', 'manual/README.en.md'];
+const ROOT_DOCS = [
+    'README.md', 'README.en.md', 'AGENTS.md', 'SKILL.md',
+    'scripts/README.md', 'scripts/README.en.md', 'scripts/INDEX.md',
+    'manual/README.md', 'manual/README.en.md'
+];
 const MARKDOWN_DIRS = ['docs', 'skills'];
 const COMMAND = /npm run ([a-z][a-z0-9:_-]*)/g;
 const VERSION_CLAIMS = [
@@ -16,15 +20,17 @@ const VERSION_CLAIMS = [
     /(\d+\.\d+\.\d+),\s*build\s*(\d+)/gi
 ];
 // 只写构建号、版本在同句省略的写法，例如「当前构建号为 19」。
-const BUILD_ONLY = /构建号为\s*(\d+)/;
-const CURRENT_MARKER = /当前|目前|现在/;
+const BUILD_ONLY = /(?:构建号为|build\s+is)\s*(\d+)/i;
+const CURRENT_MARKER = /当前|目前|现在|\b(?:current|currently|now)\b/i;
+const HISTORICAL_REVIEW_FILE = /^docs\/(?:workbench|android)-[\d.]+-review\.md$/;
 const VERSION_DOCS = ['docs/README.md', 'docs/README.en.md'];
 const VERSION_LIST = /工作台版本|Workbench versions/;
 const PLIST = 'apps/macos/Info.plist';
 const GRADLE = 'apps/android/app/build.gradle.kts';
+const MAX_AGENTS_BYTES = 20 * 1024;
 
 function markdownFiles(root = ROOT) {
-    const files = ROOT_DOCS.slice();
+    const files = ROOT_DOCS.filter(name => fs.existsSync(path.join(root, name)));
     const walk = directory => {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
             const target = path.join(directory, entry.name);
@@ -68,7 +74,7 @@ function readVersionSources() {
 }
 
 // 历史评审记录保留当时的版本和结论，不参与核对。当前发行线内的“版本（构建号）”
-// 写法，以及同一行明说“当前/目前/现在”的旧版本写法，按当前实际值核对。
+// 写法，以及同一行明说“当前/目前/现在/current/currently/now”的旧版本写法，按当前实际值核对。
 function checkVersionClaims(files, versions) {
     const issues = [];
     const current = versions.mac;
@@ -80,22 +86,25 @@ function checkVersionClaims(files, versions) {
         });
     }
     for (const file of files) {
+        const normalizedFile = String(file).split(path.sep).join('/');
+        if (HISTORICAL_REVIEW_FILE.test(normalizedFile)) continue;
         const text = fs.readFileSync(path.resolve(ROOT, file), 'utf8');
         const lines = text.split('\n');
         for (let index = 0; index < lines.length; index += 1) {
             const claims = VERSION_CLAIMS.flatMap(pattern => [...lines[index].matchAll(pattern)]);
             const currentState = CURRENT_MARKER.test(lines[index]);
             if (!claims.length) {
-                // 「当前构建号为 19」这种只写构建号的写法，同样按当前值核对。
                 const buildOnly = BUILD_ONLY.exec(lines[index]);
                 if (buildOnly && currentState && buildOnly[1] !== current.build) {
                     issues.push({ file, line: index + 1, message: `写的是构建号 ${buildOnly[1]}，实际为 ${current.build}` });
                 }
                 continue;
             }
+            // 同行明确同时列出当前版和上一公开发行版时，只校验本行最高声明或与当前发行线同线的声明。
+            const lineHasCurrent = claims.some(c => c[1] === current.version && c[2] === current.build);
             for (const claim of claims) {
                 const sameLine = claim[1].split('.').slice(0, 2).join('.') === line;
-                if (!sameLine && !currentState) continue;
+                if (!sameLine && (!currentState || lineHasCurrent)) continue;
                 if (claim[1] === current.version && claim[2] === current.build) continue;
                 issues.push({
                     file,
@@ -120,35 +129,103 @@ function checkVersionLists(versions) {
     return issues;
 }
 
-// 文档里的相对链接必须指向真实文件；安装副本（如 ~/.codex/skills）另由
-// tests/documentation.test.js 按 skill 目录范围单独核验。
+function githubSlug(headingText) {
+    return String(headingText || '')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/[`*_~]/g, '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s-]/gu, '')
+        .replace(/\s/g, '-');
+}
+
+function extractAnchors(markdownText) {
+    const anchors = new Set();
+    const slugCounts = new Map();
+    let inFence = null;
+    for (const rawLine of String(markdownText || '').split(/\r?\n/)) {
+        const fence = rawLine.match(/^\s*(`{3,}|~{3,})/);
+        if (fence) {
+            if (!inFence) inFence = fence[1][0];
+            else if (fence[1][0] === inFence) inFence = null;
+            continue;
+        }
+        if (inFence) continue;
+        for (const match of rawLine.matchAll(/<(?:a|h[1-6]|div|span|section)\b[^>]*\b(?:id|name)=["']([^"']+)["']/gi)) {
+            anchors.add(match[1].trim().toLowerCase());
+        }
+        const heading = rawLine.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+        if (heading) {
+            const base = githubSlug(heading[1]);
+            if (!base) continue;
+            const seen = slugCounts.get(base) || 0;
+            slugCounts.set(base, seen + 1);
+            anchors.add(seen === 0 ? base : `${base}-${seen}`);
+        }
+    }
+    return anchors;
+}
+
+// 文档里的相对链接必须指向真实文件，带 #锚点 时同步校验目标 Markdown 的标题或 HTML id 锚点。
 const LINK = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 
 function checkLinks(files, root = ROOT) {
     const issues = [];
+    const anchorCache = new Map();
+    const getAnchors = absPath => {
+        if (!anchorCache.has(absPath)) {
+            anchorCache.set(absPath, extractAnchors(fs.readFileSync(absPath, 'utf8')));
+        }
+        return anchorCache.get(absPath);
+    };
+
     for (const file of files) {
-        const text = fs.readFileSync(path.resolve(root, file), 'utf8');
+        const absFile = path.resolve(root, file);
+        const text = fs.readFileSync(absFile, 'utf8');
+        let inFence = null;
         text.split('\n').forEach((line, index) => {
+            const fence = line.match(/^\s*(`{3,}|~{3,})/);
+            if (fence) {
+                if (!inFence) inFence = fence[1][0];
+                else if (fence[1][0] === inFence) inFence = null;
+                return;
+            }
+            if (inFence) return;
             for (const match of line.matchAll(LINK)) {
                 const raw = match[1].replace(/^<|>$/g, '');
-                const target = raw.split('#')[0].split('?')[0];
-                if (!target || /^(https?:|mailto:|tel:|data:)/i.test(target)) continue;
-                const resolved = target.startsWith('/') ? path.join(root, target) : path.resolve(root, path.dirname(file), target);
-                if (!fs.existsSync(resolved)) issues.push({ file, line: index + 1, message: `链接目标不存在：${match[1]}` });
+                if (/^(https?:|mailto:|tel:|data:)/i.test(raw)) continue;
+                const hashIdx = raw.indexOf('#');
+                const targetWithQuery = hashIdx >= 0 ? raw.slice(0, hashIdx) : raw;
+                const fragment = hashIdx >= 0 ? raw.slice(hashIdx + 1) : '';
+                const target = targetWithQuery.split('?')[0];
+                const resolved = !target
+                    ? absFile
+                    : (target.startsWith('/') ? path.join(root, target) : path.resolve(root, path.dirname(file), target));
+                if (!fs.existsSync(resolved)) {
+                    issues.push({ file, line: index + 1, message: `链接目标不存在：${match[1]}` });
+                    continue;
+                }
+                if (fragment && resolved.endsWith('.md') && fs.statSync(resolved).isFile()) {
+                    let decoded = fragment;
+                    try { decoded = decodeURIComponent(fragment); } catch (_) { /* keep raw */ }
+                    const anchors = getAnchors(resolved);
+                    if (!anchors.has(decoded.toLowerCase())) {
+                        issues.push({ file, line: index + 1, message: `锚点不存在：${match[1]}` });
+                    }
+                }
             }
         });
     }
     return issues;
 }
 
-// docs/ 下每篇文章都要在两份索引里至少出现一次，避免新增文档只有作者知道。
-// 递归子目录：docs/images/README.md 这类说明同样要能被索引找到。
+// docs/ 下每篇文章都必须在中文与英文两份索引（docs/README.md 与 docs/README.en.md）中分别登记。
 function checkRegistration(root = ROOT) {
     const docsDir = path.join(root, 'docs');
     if (!fs.existsSync(docsDir)) return [];
-    const index = ['docs/README.md', 'docs/README.en.md']
+    const indexFiles = ['docs/README.md', 'docs/README.en.md']
         .filter(name => fs.existsSync(path.join(root, name)))
-        .map(name => fs.readFileSync(path.join(root, name), 'utf8')).join('\n');
+        .map(name => ({ name, text: fs.readFileSync(path.join(root, name), 'utf8') }));
     const entries = [];
     const walk = (directory, prefix) => {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -162,7 +239,11 @@ function checkRegistration(root = ROOT) {
     const issues = [];
     for (const entry of entries) {
         if (entry === 'README.md' || entry === 'README.en.md') continue;
-        if (!index.includes(entry)) issues.push({ file: 'docs/README.md', message: `docs/${entry} 未在文档索引中登记` });
+        for (const idx of indexFiles) {
+            if (!idx.text.includes(entry)) {
+                issues.push({ file: idx.name, message: `docs/${entry} 未在 ${idx.name} 中登记` });
+            }
+        }
     }
     return issues;
 }
@@ -173,7 +254,6 @@ const FORBIDDEN = [
     {
         pattern: /audio-paper-digest-rewrite-all/,
         message: '引用了已废弃的旧工作区，当前工作区是 audio-research-workbench',
-        // 明确说明「已废弃」的句子本身是提醒，不是违规引用。
         unless: /废弃|不再|旧工作区/
     }
 ];
@@ -193,11 +273,13 @@ function checkForbidden(files, root = ROOT) {
     return issues;
 }
 
-// 文档提到的 PD_* 环境变量必须真的被代码读取（移除已不存在的 apps/src）。
+// 文档提到的 PD_* 环境变量必须真的被生产代码读取（不含 tests/，避免仅测试残留掩盖已删变量）；
+// 仅面向人工测试验收的清单或明确说明 tests/ 命令的行允许引用 tests/ 中的真实样例夹具变量。
 const ENV_NAME = /\bPD_[A-Z0-9_]+\b/g;
-const ENV_DIRS = ['scripts', 'apps/macos', 'apps/android', 'tests'];
+const ENV_DIRS = ['scripts', 'apps/macos', 'apps/android'];
+const TEST_ENV_DOC_ALLOWLIST = new Set(['docs/manual-acceptance-checklist.md']);
 
-function collectEnvNames(root = ROOT) {
+function collectEnvNamesFromDirs(root, dirs) {
     const names = new Set();
     const walk = directory => {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -208,26 +290,72 @@ function collectEnvNames(root = ROOT) {
             for (const match of fs.readFileSync(target, 'utf8').matchAll(ENV_NAME)) names.add(match[0]);
         }
     };
-    for (const directory of ENV_DIRS) {
+    for (const directory of dirs) {
         const target = path.join(root, directory);
         if (fs.existsSync(target)) walk(target);
     }
     return names;
 }
 
-function checkEnvNames(files, root = ROOT, known = collectEnvNames(root)) {
+function collectEnvNames(root = ROOT) {
+    return collectEnvNamesFromDirs(root, ENV_DIRS);
+}
+
+function checkEnvNames(files, root = ROOT, known = collectEnvNames(root), testKnown = null) {
     const issues = [];
+    let resolvedTestKnown = testKnown;
+    const getTestKnown = () => {
+        if (resolvedTestKnown === null) resolvedTestKnown = collectEnvNamesFromDirs(root, ['tests']);
+        return resolvedTestKnown;
+    };
     for (const file of files) {
+        const normalizedFile = String(file).split(path.sep).join('/');
+        const isTestChecklist = TEST_ENV_DOC_ALLOWLIST.has(normalizedFile);
         const text = fs.readFileSync(path.resolve(root, file), 'utf8');
         text.split('\n').forEach((line, index) => {
+            const allowTestVars = isTestChecklist || /\btests\/[A-Za-z0-9_./-]+\.(?:test\.)?(?:js|py)\b/.test(line);
             for (const match of line.matchAll(ENV_NAME)) {
-                // 表格里的通配写法（如 PD_API_READER_*_MAX_CHARS）只给出前缀，跳过。
                 if (match[0].endsWith('_')) continue;
-                if (!known.has(match[0])) issues.push({ file, line: index + 1, message: `环境变量 ${match[0]} 在代码里不存在` });
+                if (known.has(match[0])) continue;
+                if (allowTestVars && getTestKnown().has(match[0])) continue;
+                issues.push({ file, line: index + 1, message: `环境变量 ${match[0]} 在生产代码里不存在` });
             }
         });
     }
     return issues;
+}
+
+// env.example 里展示的配置项必须在 scripts/lib/env-schema.js 中登记，防止示例和 schema 漂移。
+function checkEnvExampleSync(root = ROOT) {
+    const examplePath = path.join(root, 'env.example');
+    if (!fs.existsSync(examplePath)) return [];
+    const { KNOWN_NAMES } = require('./lib/env-schema.js');
+    const known = new Set(KNOWN_NAMES);
+    const issues = [];
+    const lines = fs.readFileSync(examplePath, 'utf8').split(/\r?\n/);
+    lines.forEach((line, index) => {
+        const match = line.match(/^#?\s*([A-Z][A-Z0-9_]{2,})=/);
+        if (!match) return;
+        const key = match[1];
+        if (!known.has(key)) {
+            issues.push({ file: 'env.example', line: index + 1, message: `env.example 中的 ${key} 未在 scripts/lib/env-schema.js 登记` });
+        }
+    });
+    return issues;
+}
+
+// AGENTS.md 须保持精炼（<= 20 KiB），避免被运行时提示词截断而丢失后半段规则。
+function checkAgentsSize(root = ROOT, maxBytes = MAX_AGENTS_BYTES) {
+    const agentsPath = path.join(root, 'AGENTS.md');
+    if (!fs.existsSync(agentsPath)) return [];
+    const size = fs.statSync(agentsPath).size;
+    if (size > maxBytes) {
+        return [{
+            file: 'AGENTS.md',
+            message: `AGENTS.md 体积为 ${size} bytes，超过上限 ${maxBytes} bytes（20 KiB）；请将低层细则归口到专项文档`
+        }];
+    }
+    return [];
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -243,24 +371,37 @@ function main(argv = process.argv.slice(2)) {
     const registrationIssues = checkRegistration();
     const forbiddenIssues = checkForbidden(files);
     const envIssues = checkEnvNames(files);
+    const envExampleIssues = checkEnvExampleSync();
+    const agentsSizeIssues = checkAgentsSize();
     const total = missing.length + versionIssues.length + linkIssues.length
-        + registrationIssues.length + forbiddenIssues.length + envIssues.length;
-    if (json) console.log(JSON.stringify({ missing, versionIssues, linkIssues, registrationIssues, forbiddenIssues, envIssues }, null, 2));
-    else if (!total) console.log('文档命令、版本、链接、登记、废弃写法与环境变量检查通过。');
-    else {
+        + registrationIssues.length + forbiddenIssues.length + envIssues.length
+        + envExampleIssues.length + agentsSizeIssues.length;
+    if (json) {
+        console.log(JSON.stringify({
+            missing, versionIssues, linkIssues, registrationIssues,
+            forbiddenIssues, envIssues, envExampleIssues, agentsSizeIssues
+        }, null, 2));
+    } else if (!total) {
+        console.log('文档命令、版本、链接与锚点、双语索引、废弃写法、环境变量、env.example 同步与 AGENTS.md 体积检查通过。');
+    } else {
         for (const item of missing) console.log(`❌ ${item.file} 引用了不存在的命令：npm run ${item.command}`);
         for (const item of versionIssues) console.log(`❌ ${item.file}${item.line ? `:${item.line}` : ''} ${item.message}`);
         for (const item of linkIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
         for (const item of registrationIssues) console.log(`❌ ${item.file} ${item.message}`);
         for (const item of forbiddenIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
         for (const item of envIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
+        for (const item of envExampleIssues) console.log(`❌ ${item.file}:${item.line} ${item.message}`);
+        for (const item of agentsSizeIssues) console.log(`❌ ${item.file} ${item.message}`);
     }
     return total ? 1 : 0;
 }
 
 module.exports = {
+    MAX_AGENTS_BYTES,
     checkDocs, checkVersionClaims, checkVersionLists, main, markdownFiles, readVersionSources,
-    checkLinks, checkRegistration, checkForbidden, checkEnvNames, collectEnvNames
+    githubSlug, extractAnchors,
+    checkLinks, checkRegistration, checkForbidden, checkEnvNames, collectEnvNames,
+    checkEnvExampleSync, checkAgentsSize
 };
 
 if (require.main === module) {

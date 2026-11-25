@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="504" viewBox="0 0 960 504" role="img" aria-labelledby="title desc">
+  <title id="title">Daily Digest End-to-End Pipeline</title>
+  <desc id="desc">Six stages in two rows: top row shows boundary fetch and dedup, prefiltering and LLM screening, and four-file source sealing; bottom row shows full analysis and Reader writing, page generation with three-layer review, and remote push, deployment, and live page checks.</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .t-main { font-size: 20px; font-weight: 700; }
+      .t-sub { font-size: 13px; fill: #475569; }
+      .t-row { font-size: 11.5px; font-weight: 700; fill: #64748b; }
+      .t-num { font-size: 12px; font-weight: 700; fill: #ffffff; }
+      .t-card { font-size: 14.5px; font-weight: 700; }
+      .t-body { font-size: 12.4px; fill: #334155; }
+      .t-small { font-size: 11.4px; fill: #475569; }
+      .arr { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#a-slate); }
+      .arr-down { fill: none; stroke: #2563eb; stroke-width: 2; stroke-dasharray: 6 4; marker-end: url(#a-blue); }
+    </style>
+    <marker id="a-slate" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#475569"/>
+    </marker>
+    <marker id="a-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="504" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <text x="32" y="42" class="t-main">How a Daily Digest Moves From arXiv to Live Web Pages</text>
+  <text x="32" y="64" class="t-sub">Entry command: npm run digest:prepare -- YYYY-MM-DD (fresh fetching is allowed only for today's Beijing date)</text>
+
+  <text x="32" y="96" class="t-row">STAGE A · FETCH, FILTER, AND SEAL SOURCES</text>
+
+  <rect x="32" y="108" width="274" height="122" rx="12" fill="#ffffff" stroke="#93c5fd" stroke-width="1.6"/>
+  <rect x="46" y="122" width="28" height="22" rx="6" fill="#2563eb"/>
+  <text x="60" y="137" text-anchor="middle" class="t-num">01</text>
+  <text x="82" y="138" class="t-card">Boundary Fetch &amp; Dedup</text>
+  <text x="46" y="166" class="t-body">Sync blog remote; dedup published only</text>
+  <text x="46" y="186" class="t-body">Fetch arXiv + HuggingFace candidates</text>
+  <text x="46" y="209" class="t-small">Verify prior witness with bounded overlap</text>
+
+  <path d="M310 169 H338" class="arr"/>
+
+  <rect x="342" y="108" width="276" height="122" rx="12" fill="#ffffff" stroke="#93c5fd" stroke-width="1.6"/>
+  <rect x="356" y="122" width="28" height="22" rx="6" fill="#2563eb"/>
+  <text x="370" y="137" text-anchor="middle" class="t-num">02</text>
+  <text x="392" y="138" class="t-card">Prefilter &amp; LLM Screen</text>
+  <text x="356" y="166" class="t-body">High-recall keywords + domain rescue</text>
+  <text x="356" y="186" class="t-body">Batched LLM triage with saved reasons</text>
+  <text x="356" y="209" class="t-small">Writes filter-decisions &amp; filtered-papers</text>
+
+  <path d="M622 169 H650" class="arr"/>
+
+  <rect x="654" y="108" width="274" height="122" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.6"/>
+  <rect x="668" y="122" width="28" height="22" rx="6" fill="#1d4ed8"/>
+  <text x="682" y="137" text-anchor="middle" class="t-num">03</text>
+  <text x="704" y="138" class="t-card">Four-File Source Seal</text>
+  <text x="668" y="166" class="t-body">Re-fetch official HTML text and PDF</text>
+  <text x="668" y="186" class="t-body">Seal txt / pdf / runtime / manifest</text>
+  <text x="668" y="209" class="t-small">All later stages read only this SHA bundle</text>
+
+  <!-- Clean middle connector dropping at x=278 (well right of Stage B label x=32..230) -->
+  <path d="M791 232 V264 H278 V298" class="arr-down"/>
+  <text x="536" y="255" text-anchor="middle" class="t-small" fill="#1d4ed8">Sealed bundle locked · recovery runs reuse the exact same source files</text>
+
+  <text x="32" y="290" class="t-row">STAGE B · ANALYZE &amp; PUBLISH</text>
+
+  <rect x="32" y="302" width="274" height="126" rx="12" fill="#ffffff" stroke="#5eead4" stroke-width="1.6"/>
+  <rect x="46" y="316" width="28" height="22" rx="6" fill="#0f766e"/>
+  <text x="60" y="331" text-anchor="middle" class="t-num">04</text>
+  <text x="82" y="332" class="t-card">Analysis &amp; Reader Guide</text>
+  <text x="46" y="360" class="t-body">13-section analysis, 8-dim score, tags</text>
+  <text x="46" y="380" class="t-body">Long-form Reader + structured specs</text>
+  <text x="46" y="403" class="t-small">Tables, TeX, figures &amp; authors verified</text>
+
+  <path d="M310 365 H338" class="arr"/>
+
+  <rect x="342" y="302" width="276" height="126" rx="12" fill="#ffffff" stroke="#5eead4" stroke-width="1.6"/>
+  <rect x="356" y="316" width="28" height="22" rx="6" fill="#0f766e"/>
+  <text x="370" y="331" text-anchor="middle" class="t-num">05</text>
+  <text x="392" y="332" class="t-card">Generate &amp; 3-Layer Gate</text>
+  <text x="356" y="360" class="t-body">Markdown posts + JSON / BibTeX / RIS</text>
+  <text x="356" y="380" class="t-body">Program + text/figure review + Hugo</text>
+  <text x="356" y="403" class="t-small">Passed pages reuse SHA cache; fails block</text>
+
+  <path d="M622 365 H650" class="arr"/>
+
+  <rect x="654" y="302" width="274" height="126" rx="12" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.6"/>
+  <rect x="668" y="316" width="28" height="22" rx="6" fill="#15803d"/>
+  <text x="682" y="331" text-anchor="middle" class="t-num">06</text>
+  <text x="704" y="332" class="t-card">Push, Deploy &amp; Verify</text>
+  <text x="668" y="360" class="t-body">Push exact diff &amp; verify remote OID</text>
+  <text x="668" y="380" class="t-body">Record no-visuals &amp; check Pages build</text>
+  <text x="668" y="403" class="t-small">Verify live URL, HTTP 200, and title</text>
+
+  <rect x="32" y="446" width="896" height="38" rx="8" fill="#f1f5f9"/>
+  <text x="48" y="469" class="t-small">Resilience: Failures keep checkpoints and cost ledgers so later rounds retry only failed items. Daily posters/covers stay off; original paper figures remain reviewed.</text>
+</svg>

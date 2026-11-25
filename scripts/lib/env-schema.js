@@ -141,6 +141,7 @@ const SCHEMA = Object.freeze([
     { name: 'PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
     { name: 'PD_HUGO_GATE_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
     { name: 'PD_GIT_LOCAL_TIMEOUT_SECONDS', required: false, type: 'int', min: 5, max: 600 },
+    { name: 'PD_GIT_ARCHIVE_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
     { name: 'PD_GIT_COMMIT_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
     { name: 'PD_GIT_NETWORK_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
     { name: 'PD_IMAGE_DOWNLOAD_TIMEOUT_MS', required: false, type: 'int', min: 1,

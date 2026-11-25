@@ -2,7 +2,7 @@
 
 本文面向项目维护者和论文解读的作者。目标是让刚接触项目的读者能找到入口、理解步骤，并知道结论的依据。日更、会议、历史更新及其文档采用同一套表达原则。
 
-操作与来源规则仍以 [操作手册](../SKILL.md)、[执行约束](../AGENTS.md)和各流程实现为准。论文正文的结构、证据与恢复要求见 [Reader 写作](reader-writing.md)；本页解释怎样把内容组织得清楚、自然。通用方法已整理为可复用的 [clear-technical-writing skill](../skills/clear-technical-writing/SKILL.md)，技术解释、审计步骤和例子分别放在其参考文件中。本页继续维护项目特有的来源、评分、图表与流程要求。分工是：通用编辑方法以 skill 为入口；本项目采用哪些来源、怎样取舍，以本页[参考方法与本项目的取舍](#参考方法与本项目的取舍)为权威清单，skill 只保留摘要和指回本页的链接。项目内部术语与设备、平台、发布规则的示例留在本页。
+操作与来源规则仍以 [操作手册](../SKILL.md)、[执行约束](../AGENTS.md)和各流程实现为准。论文正文的结构、证据与恢复要求见 [Reader 写作](reader-writing.md)；本页解释怎样把内容组织得清楚、自然。通用方法已整理为可复用的 [clear-technical-writing skill](../skills/clear-technical-writing/SKILL.md)，技术解释、审计步骤和例子分别放在其参考文件中。本页继续维护项目特有的来源、评分、图表与流程要求。分工是：通用编辑方法以 skill 为入口；本项目采用哪些来源、怎样取舍，以本页[参考方法与本项目的取舍](#参考方法与本项目的取舍)为权威清单，skill 只保留摘要和指回本页的路径（安装副本会脱离仓库目录树，因此 skill 内不写指向仓库文档的相对链接）。项目内部术语与设备、平台、发布规则的示例留在本页。
 
 仓库中的 `skills/` 是权威版本。三份 skill（`clear-technical-writing`、`stateful-workflow-maintenance`、`phone-first-demo-production`）的安装副本都在 `~/.codex/skills/<name>/`。修改仓库版本后，把对应目录同步到安装位置，再用 `diff -r skills/<name> ~/.codex/skills/<name>` 核对；输出为空才算两边一致。安装副本不会因仓库改动自动更新，也不能当作权威来源。同步命令和三份 skill 的适用范围见 [skills/README.md](../skills/README.md)。
 

@@ -40,7 +40,7 @@
 
 这套设计把“从哪里找到最新版本”和“某份内容究竟是什么”分开：入口清单会更新，正文和资源则以实际内容的 SHA 命名。客户端下载入口后，沿描述符逐项取文件并核验，全部目录完整才切换版本。当前源码优先请求以下 `client/details/*` 路径，仅在 `manifest.json` 返回 HTTP 404 或 410 时回退至 `client/index.json`。
 
-路径相对站点部署前缀；当前前缀为 `/audio-paper-digest-blog/`，不能拼接为域名根目录。
+路径相对站点部署前缀；当前前缀为 `/audio-research-portal/`（客户端过渡期同时兼容旧 `/audio-paper-digest-blog/` 备份与路径），不能拼接为域名根目录。
 
 ```text
 client/details/manifest.json

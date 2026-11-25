@@ -44,4 +44,4 @@ Drama 3 整稿试音出现提前结束，正式旁白改由托管接口逐句生
 
 - 视频为 1080×1920，最终节奏版约 82.1 秒。完整解码、字幕与画面顺序核对另于手机播放记录保存。小米 15 Ultra 曾实际查看先前的竖屏版本，按比例播放时顶部与底部可见少量留边。后续版本的解码与抽帧结果单独记录，不能沿用旧手机复验的结论。
 - 本次发现节奏版随附的「文案与分镜」仍带着早期发布文案，随视频复制的旧封面也早于单独交付的三端一体封面。以后用单独的成品清单明确当前视频、字幕、封面和发帖文案。发布稿与分镜分开命名，逐个打开核对。改过口播和剪辑节奏时，用最终时间线校验字幕和分镜标记。
-- 片尾需要读清完整地址。视频和发帖文案可以同时给用户这两个入口。下载方式使用当次发行实际存在的 DMG、APK，并核对系统要求。版本变更后从发行页重新确认。[GitHub 仓库](https://github.com/nanless/audio-paper-digest) · [博客首页](https://nanless.github.io/audio-paper-digest-blog/) · [发行页](https://github.com/nanless/audio-paper-digest/releases/latest)
+- 片尾需要读清完整地址。视频和发帖文案可以同时给用户这两个入口。下载方式使用当次发行实际存在的 DMG、APK，并核对系统要求。版本变更后从发行页重新确认。[GitHub 仓库](https://github.com/nanless/audio-research-workbench) · [博客首页](https://nanless.github.io/audio-research-portal/) · [发行页](https://github.com/nanless/audio-research-workbench/releases/latest)

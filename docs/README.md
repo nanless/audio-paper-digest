@@ -23,7 +23,7 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-1.4.7 修复新版论文博客页无法打开的问题，对齐双端 HTML5 语义片段、内联 SVG 与 MathML 解析兼容（覆盖最新全站 9276 页真实导出语料），并加固网络、WebDAV 同步与 Zotero 路径；两端版本均为 1.4.7（构建号 23），已于 2026-11-23 公开发布（来源提交 `520e93c3`），改动与验证范围见[1.4.7 记录](workbench-1.4.7-review.md)。上一版 1.4.6 / 构建号 22（来源提交 `fcf7e05b`，2026-11-20 发布）见[1.4.6 记录](workbench-1.4.6-review.md)。
+Mac 和 Android 当前源码均为 1.5.0（构建号 24）（待发布，新增原生每日音频播客播放器、离线检索筛选对齐与旧站点路径兼容，见[1.5.0 记录](workbench-1.5.0-review.md)）。最近公开发行版本为 1.4.7（构建号 23），于 2026-11-23 公开发布（来源提交 `520e93c3`），修复新版论文博客页无法打开的问题并加固 HTML5/SVG/MathML 解析净化、网络、WebDAV 与 Zotero 路径，改动与验证范围见[1.4.7 记录](workbench-1.4.7-review.md)。上一版 1.4.6 / 构建号 22（来源提交 `fcf7e05b`，2026-11-20 发布）见[1.4.6 记录](workbench-1.4.6-review.md)。
 
 1.4.5 修复 Android 回到前台时重复触发整站同步、macOS 目录 JSON 损坏导致启动崩溃，以及 `apps/macos/test.sh` 在套件成功时静默提前退出的问题（2026-11-12 发布，提交 `f9241190`）；见[1.4.5 记录](workbench-1.4.5-review.md)。
 

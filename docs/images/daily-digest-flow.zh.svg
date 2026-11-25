@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="504" viewBox="0 0 960 504" role="img" aria-labelledby="title desc">
+  <title id="title">每日论文速递端到端流水线</title>
+  <desc id="desc">六个阶段从左到右分两排展开：上排为抓取去重、筛选入选与四文件来源封存；下排为多阶段分析与长文写作、生成与三层审查、推送部署与逐页网页核验。底部标明失败保留断点与日更默认不生图。</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+      .t-main { font-size: 21px; font-weight: 700; }
+      .t-sub { font-size: 13.5px; fill: #475569; }
+      .t-row { font-size: 12px; font-weight: 700; fill: #64748b; }
+      .t-num { font-size: 12px; font-weight: 700; fill: #ffffff; }
+      .t-card { font-size: 15.5px; font-weight: 700; }
+      .t-body { font-size: 13px; fill: #334155; }
+      .t-small { font-size: 12px; fill: #475569; }
+      .arr { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#a-slate); }
+      .arr-down { fill: none; stroke: #2563eb; stroke-width: 2; stroke-dasharray: 6 4; marker-end: url(#a-blue); }
+    </style>
+    <marker id="a-slate" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#475569"/>
+    </marker>
+    <marker id="a-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="504" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <text x="32" y="42" class="t-main">一次日更怎样从 arXiv 走到可打开的网页</text>
+  <text x="32" y="65" class="t-sub">入口命令：npm run digest:prepare -- YYYY-MM-DD（仅北京时间当天允许从抓取阶段启动）</text>
+
+  <text x="32" y="96" class="t-row">前半段 · 来源准备与封存</text>
+
+  <rect x="32" y="108" width="274" height="122" rx="12" fill="#ffffff" stroke="#93c5fd" stroke-width="1.6"/>
+  <rect x="46" y="122" width="28" height="22" rx="6" fill="#2563eb"/>
+  <text x="60" y="137" text-anchor="middle" class="t-num">01</text>
+  <text x="82" y="138" class="t-card">边界补抓与去重</text>
+  <text x="46" y="166" class="t-body">同步博客远端，只按已发布页去重</text>
+  <text x="46" y="187" class="t-body">抓取 arXiv 与 HuggingFace 候选</text>
+  <text x="46" y="210" class="t-small">核对旧获取见证，受控重叠不漏抓</text>
+
+  <path d="M310 169 H338" class="arr"/>
+
+  <rect x="342" y="108" width="276" height="122" rx="12" fill="#ffffff" stroke="#93c5fd" stroke-width="1.6"/>
+  <rect x="356" y="122" width="28" height="22" rx="6" fill="#2563eb"/>
+  <text x="370" y="137" text-anchor="middle" class="t-num">02</text>
+  <text x="392" y="138" class="t-card">预筛与模型筛选</text>
+  <text x="356" y="166" class="t-body">高召回关键词预筛 + 领域词补捞</text>
+  <text x="356" y="187" class="t-body">LLM 批量复核并保存逐篇决定理由</text>
+  <text x="356" y="210" class="t-small">写入 filter-decisions 与 filtered-papers</text>
+
+  <path d="M622 169 H650" class="arr"/>
+
+  <rect x="654" y="108" width="274" height="122" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.6"/>
+  <rect x="668" y="122" width="28" height="22" rx="6" fill="#1d4ed8"/>
+  <text x="682" y="137" text-anchor="middle" class="t-num">03</text>
+  <text x="704" y="138" class="t-card">四文件来源封存</text>
+  <text x="668" y="166" class="t-body">重拉入选论文官方 HTML 与 PDF</text>
+  <text x="668" y="187" class="t-body">封存 txt / pdf / runtime / manifest</text>
+  <text x="668" y="210" class="t-small">后续分析与冷重放只读这组 SHA 来源</text>
+
+  <!-- Clean middle connector dropping at x=272 (well right of Row 2 label x=32..210) -->
+  <path d="M791 232 V264 H272 V298" class="arr-down"/>
+  <text x="536" y="255" text-anchor="middle" class="t-small" fill="#1d4ed8">封存完成，进入分析与发布（恢复入口复用同一组封存来源）</text>
+
+  <text x="32" y="290" class="t-row">后半段 · 分析写作、审查与上线</text>
+
+  <rect x="32" y="302" width="274" height="126" rx="12" fill="#ffffff" stroke="#5eead4" stroke-width="1.6"/>
+  <rect x="46" y="316" width="28" height="22" rx="6" fill="#0f766e"/>
+  <text x="60" y="331" text-anchor="middle" class="t-num">04</text>
+  <text x="82" y="332" class="t-card">全文分析与 Reader 长文</text>
+  <text x="46" y="360" class="t-body">十三节主分析 + 八维评分 + 九维标签</text>
+  <text x="46" y="381" class="t-body">生成初学者长文与结构化实现规格</text>
+  <text x="46" y="404" class="t-small">表格/公式/原图/作者逐项回查封存来源</text>
+
+  <path d="M310 365 H338" class="arr"/>
+
+  <rect x="342" y="302" width="276" height="126" rx="12" fill="#ffffff" stroke="#5eead4" stroke-width="1.6"/>
+  <rect x="356" y="316" width="28" height="22" rx="6" fill="#0f766e"/>
+  <text x="370" y="331" text-anchor="middle" class="t-num">05</text>
+  <text x="392" y="332" class="t-card">生成页面与三层审查</text>
+  <text x="356" y="360" class="t-body">生成单篇、汇总与引用 JSON/Bib/RIS</text>
+  <text x="356" y="381" class="t-body">程序校验 + 正文/原图审查 + Hugo 构建</text>
+  <text x="356" y="404" class="t-small">通过页按内容 SHA 复用，失败不放行推送</text>
+
+  <path d="M622 365 H650" class="arr"/>
+
+  <rect x="654" y="302" width="274" height="126" rx="12" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.6"/>
+  <rect x="668" y="316" width="28" height="22" rx="6" fill="#15803d"/>
+  <text x="682" y="331" text-anchor="middle" class="t-num">06</text>
+  <text x="704" y="332" class="t-card">推送、部署与逐页验收</text>
+  <text x="668" y="360" class="t-body">按凭证精确推送并核对远端 main OID</text>
+  <text x="668" y="381" class="t-body">登记本次不生图，核验 Pages 部署</text>
+  <text x="668" y="404" class="t-small">逐页核查正式地址、HTTP 200 与标题</text>
+
+  <rect x="32" y="446" width="896" height="38" rx="8" fill="#f1f5f9"/>
+  <text x="48" y="470" class="t-small">失败处理：首轮先跑完本批其余论文，保存检查点与费用账本后再只续可重试失败项；日更默认不生成长图与封面，原论文图照常展示和审查。</text>
+</svg>

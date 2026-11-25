@@ -4,7 +4,7 @@
 
 项目保存的很多 JSON 需要说明“这是什么格式”。新记录不再把 `-v1`、`-v2` 写进格式名，而是写一个稳定的用途名（`contract`）和一份结构声明的内容指纹（`schemaFingerprint`）。名称说明用途，指纹说明实际字段和规则；两者一起才能确定这条记录该按哪种结构读取。
 
-登记集中在 [`config/protocols/`](../config/protocols/)，当前有 36 份 JSON 文件。Node 读取全部登记；Python 的发布与科学身份只读其中非 `clients-*` 的服务端目录，原生客户端专用格式由 [`apps/generate-client-protocols.py`](../apps/generate-client-protocols.py) 读取，两边不是同一份文件清单：
+登记集中在 [`config/protocols/`](../config/protocols/)，当前有 37 份 JSON 文件。Node 读取全部登记；Python 的发布与科学身份只读其中非 `clients-*` 的服务端目录，原生客户端专用格式由 [`apps/generate-client-protocols.py`](../apps/generate-client-protocols.py) 读取，两边不是同一份文件清单：
 
 | 语言 | 入口 | 读取范围 |
 |---|---|---|

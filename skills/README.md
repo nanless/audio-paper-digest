@@ -45,7 +45,7 @@ phone-first-demo-production 的封面和发帖文案只作宣传素材，不用�
    npm run docs:check
    ```
 
-   该检查扫描根文档、`docs/` 和 `skills/` 下的 Markdown，核对 `npm run` 命令名、相对链接的目标是否存在、`docs/` 各篇是否登记在文档索引里、已废弃写法和环境变量名。标题锚点它不核对；`skills/<name>/` 里指向仓库其他位置的相对链接由 `tests/documentation.test.js` 的“skill 的相对链接在安装副本里仍可解析”单独把关。
+   该检查扫描根文档、`docs/` 和 `skills/` 下的 Markdown，核对 `npm run` 命令名、相对链接与标题锚点目标是否存在、`docs/` 各篇是否在中英文索引中同时登记、已废弃写法、环境变量名与 `env.example` 同步情况以及 `AGENTS.md` 体积；`skills/<name>/` 里指向仓库其他位置的相对链接继续由 `tests/documentation.test.js` 的“skill 的相对链接在安装副本里仍可解析”把关。
 5. 如果在安装副本上直接改过，先把改动放回仓库并完成提交，再按上面的步骤同步回去；不要只保留本机改动。
 
 三份 skill 的安装位置都在 `~/.codex/skills/<name>/`。仓库与安装副本不一致时，以仓库版本为准。

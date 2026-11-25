@@ -218,7 +218,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 发布后网页核验与收尾
 
 - `npm run blog:push -- --date DATE --dry-run`：只列出审查凭证允许的精确文件清单，不 commit/push。
-- `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--workflow-source] [--wait] [--allow-degraded] [--allow-partial]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-paper-digest-blog`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
+- `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--workflow-source] [--wait] [--allow-degraded] [--allow-partial]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-research-portal`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
 
   `--wait` 默认最多等待 120 秒，默认每 10000 毫秒轮询；可用 `--wait-seconds N` 与 `--poll-interval-ms N` 调整。无 gh、部署仍在进行或部署证据不可得时，默认不能完成验收。`--json` 在等待时输出 JSONL（部署快照行、summary、最终结果）。现用保存文件使用 `contract` 和 `schemaFingerprint` 声明格式，并记录 `createdAt`、`partial`、`deploy`、`generationManifestSha256` 和 `publicationOid`。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
 
@@ -243,7 +243,18 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`scripts/README.md`、`docs/` 与 `skills/` 下全部 Markdown：`npm run <script>` 是否存在于 `package.json`（正则只匹配首字母小写的命令名，命令名大小写写错时查不到），相对链接的目标文件是否存在（去掉 `#锚点` 和 `?query` 后只判文件存在，不校验锚点），`docs/` 下每篇文档是否在两份索引拼接后的文本里至少出现一次（OR 语义：只在中文或只在英文索引出现都算通过，不要求两份都登记），是否出现带 `-vN` 后缀的协议名或废弃工作区路径，以及代码未读取的 `PD_*` 变量；同一入口还核对文档里写的当前客户端版本（构建号）与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 是否一致，两份文档索引的工作台版本列表是否包含当前版本。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖，根 `SKILL.md`、`manual/` 和原型文档也在其中；参数和已登记配置项由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
+- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`SKILL.md`、`scripts/README.md`、`scripts/README.en.md`、`scripts/INDEX.md`、`manual/README.md`、`manual/README.en.md`、`docs/` 与 `skills/` 下全部 Markdown：核对 `npm run <script>` 是否存在于 `package.json`、相对链接目标文件及 `#锚点` 是否有效、`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` **两份**索引中均已登记、是否出现带 `-vN` 后缀的协议名或废弃工作区路径、`PD_*` 环境变量是否被非测试生产代码实际读取、`env.example` 中的每个配置键是否均已在 `scripts/lib/env-schema.js` 登记、`AGENTS.md` 字节大小是否控制在 `20 KiB` 以内，以及中英文“当前/current”客户端版本（构建号）声明和版本列表是否与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 一致。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖；配置值类型与范围由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
+
+## 可选运维与按需 CLI
+
+以下独立 CLI 按需手动运行，不阻塞默认日更主链：
+
+- `npm run digest:scorecard -- --date YYYY-MM-DD [--run-id ID]`：快速读取当日分片用量日志，统计各阶段耗时、前缀缓存命中、推理占比与瞬断。
+- `npm run papers:compact`：原子压缩 `data/current/papers.json` 账本文件，保留完整记录并将权限收紧为 `0600`。
+- `npm run storage:pdf-dedupe [--apply]`：逐字节核验 `data/runtime/` 重复 PDF；`--apply` 经内核独占写时复制（APFS `clonefile`）回收重复空间而不删减任何路径。
+- `npm run digest:calibrate -- --dry-run|--replay|--live`：基于封存分析结果做瑞士轮 Bradley-Terry 批后相对分校准，输出伴生 `score-calibration-v1.json`，不改写原 `scoringAudit`。
+- `npm run podcast:generate -- --date YYYY-MM-DD [--dry-run]`：基于已分析日批生成每日播客脚本、调用 IndexTTS2 合成音频并可选发布至 GitHub Release；所需 11 个 `PD_PODCAST_*` / `PD_INDEXTTS_*` 环境变量详见 `env.example` 与 `scripts/lib/env-schema.js`。
+- 独立提取器 `scripts/conference_extractor_v2.py` 与 `scripts/lib/arxiv-tex-source.js` / `scripts/arxiv_tex_extract.py` 作为按需模块保留，`scripts/conference_extractor.py` 因历史凭证哈希保持冻结。
 
 ## 存储保留建议
 
@@ -276,7 +287,7 @@ gh workflow run ci.yml --ref main
 
 ### 完整覆盖与并行范围
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 测试（`tests/python` 与 `manual/tests/python` 两处目录）及 `--suite static` 各在 Node 22 环境运行一次。Node 24 另有一条独立通道（`verify-node24` 四个分片 + `test-node24` 汇总），因为 `tests/verify-project.test.js` 仍硬编码 20/22 的矩阵形状；该通道设置 `NODE_OPTIONS=--test-reporter=tap` 以兼容解析 TAP 的测试。共十四个验证分片，加三个汇总检查；不再为相同 Python 和静态任务重复准备第二套运行环境。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22 与 Android SDK，运行根 `npm ci` 后还要在 `apps/macos` 执行 `npm ci`，因为 `:app:testDebugUnitTest` 的任务图包含 `:app:prepareDebugPublishedAssets`，它无条件从 `apps/macos/node_modules/katex` 复制文件；最后在 `apps/android` 执行 `./gradlew :app:testDebugUnitTest --no-daemon`。该作业不运行 `apps/android/test.sh`：除 Gradle 单元测试外，它还会构建、lint 并运行整套发行/签名检查。它不进上述分片矩阵，也不并入 `test` 汇总检查，避免拖慢上述十七个检查。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15-intel`（满足应用最低支持 15.0，避开 GitHub 托管 `macos-15` arm64 池因容量不足未抢到运行器即被取消的问题；隔离测试按宿主机架构原生编译，正式 `arm64` 发行包仍按[Mac 版构建与发行](mac-app-release.md)在本机生成），配置 Node 22 与 Python 3.11，根 `npm ci` 后在 `apps/macos` 执行 `npm ci` 与 `npx playwright install chromium`（`npm ci` 不下载浏览器），最后执行 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh`。虚拟显示器对 820×700 native 详情窗口的尺寸截断，以及 `DesktopNativeTests` 混合文字/空白页 PDF 夹具重序列化后的文本核对均已按 runner 环境适配，不跳过任何测试套件。测试直接读取的公开论文 PDF 与三张图（`prototypes/macos-research/assets/micla-2610.27491v1.pdf`、`figure-1.png`～`figure-3.png`，来源 arXiv:2610.27491v1）已入库，干净 checkout 不再缺资产；`NativeLibraryAccessibility` 需要已解锁桌面与可用的自进程 AXWindow，`test.sh` 只在它明确以 77 号退出时记为跳过，其它非零退出仍终止。两个客户端作业都不并入 `test` 汇总检查。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。主 `verify` 矩阵统一覆盖 Node `20.x`、`22.x`、`24.x` 各四个 `verify --suite javascript --shard I/4 --allow-empty`（Node 24 分片自动附加 `NODE_OPTIONS=--test-reporter=tap`）；Python 测试（`tests/python`、`manual/tests/python` 与 `tests/reader_pdf_steering_profile_test.py` 三步）及 `--suite static` 各在 Node 22 运行一次，且 `static` 分片跳过 Playwright Chromium 与 Noto CJK 安装以节省耗时。共十四个验证分片，加三个 `test (node-version)` 汇总检查。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22、Python 3.11 与 Android SDK，安装根与 `apps/macos` 依赖（含 `katex`）后，运行全部 11 份非设备合约/发行 Python 测试、`apps/android/AssetsChannel.test.mjs` 与 `./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon`。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15-intel`（避开托管 arm64 容量排队，正式 `arm64` 发行包仍按[Mac 版构建与发行](mac-app-release.md)在本机生成），配置 Node 22 与 Python 3.11 后运行 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh`。两个客户端作业都不并入 `test` 汇总检查。
 
 JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)`、`test (24.x)` 才报告完整通过；分支保护应把三者都设为必需；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 

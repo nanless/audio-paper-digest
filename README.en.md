@@ -1,132 +1,129 @@
-# Audio Research Workbench（论文速递工作台）
+# Audio Research Workbench (论文速递工作台)
 
 [中文](README.md) · **English**
 
-Audio Paper Digest turns full research papers into detailed Chinese explanations, eight-dimension assessments, author and affiliation records, resource information, citations, and published blog pages. The explanations help researchers who are new to a topic understand the problem, follow the method, interpret the experiments, and recognize the limits of the findings.
+Keeping up with new speech, music, and audio papers on arXiv every day easily eats an hour or two. This project splits that work in two: a backend pipeline fetches each selected paper's official text and PDF, writes a beginner-friendly Chinese deep-dive (**Reader** in code), an eight-dimension score, nine-facet tags, author affiliations, and citations, and publishes pages only after a three-layer review; a public Hugo site plus native Mac and Android apps let you read quietly, compare the original PDF, take notes, and listen to daily audio briefings.
 
-The reader-facing explanation is called **Reader** in the code. A separate internal analysis supports programmatic checks. Neither replaces the other. Assessments, figures, equations, affiliations, and resource claims must remain traceable to the paper material actually used.
+The internal 13-section analysis used for programmatic checks is stored separately from the reader-facing Reader article, and neither replaces the other. Every table, displayed equation, original paper figure, affiliation, and open-source claim must remain traceable to the exact source files used for that run.
 
-The articles are written in Chinese. This English README explains how to use and maintain the project; it does not imply that an English article collection exists.
+> The published articles are written in Chinese. This README explains how to use and maintain the project in English; it does not imply an English article collection.
 
-## Choose how you want to use the project
+![Audio Research Workbench three-layer architecture: content engine, public Hugo portal, and Mac/Android reading apps](docs/images/workbench-architecture.en.svg)
 
-| Your goal | Start here |
+## Start where you need
+
+| What you want to do | Where to go |
 |---|---|
-| Read published Chinese paper explanations | Visit the [website](https://nanless.github.io/audio-research-portal/); see [reading and downloads](docs/blog-reading-tools.md), in Chinese |
-| Read on Mac, compare the original PDF, take notes, or study a paper | Follow the [Mac guide](apps/macos/README.en.md) |
-| Read on an Android phone, tablet, or foldable window | Follow the [Android guide](apps/android/README.en.md) |
-| Understand how the project works | Read the [project walkthrough](docs/project-guide.md), in Chinese, then choose a task |
-| Maintain the website or run daily, conference, or historical work | Follow the preparation steps below and the [operating manual](SKILL.md), in Chinese |
+| Read published Chinese paper guides in a browser | Open the [web portal](https://nanless.github.io/audio-research-portal/); see [reading & download tools](docs/blog-reading-tools.md) (Chinese) |
+| Read on Mac with side-by-side PDFs, notes, and personal study | Follow the [Mac guide](apps/macos/README.en.md) (Apple silicon, macOS 15+) |
+| Read and listen on Android phones, tablets, or foldables | Follow the [Android guide](apps/android/README.en.md) (4 ABIs) |
+| Learn how the pieces fit together | Read the [project walkthrough](docs/project-guide.md) (Chinese) |
+| Operate daily digests, conferences, or historical rewrites | Follow the setup steps below and the [operating manual](SKILL.md) (Chinese) |
 
-The website and content pipeline are called **论文速递**. The Mac and Android applications are called **论文速递工作台**. The applications read published indexes, explanations, and collections. Opening a paper does not run the production analysis or assessment again.
+## Mac and Android Workbench (1.5.0)
 
-Personal study is a separate application feature. A model service is called only when the user actively starts study or tests a connection. A service configured on the device can still run remotely. Personal responses, usage, costs, and authorization are recorded separately from website production. The [data flow diagram](docs/images/client-data-flow.en.svg) shows these relationships. Restored backups retain their history; additional requests still follow the authorization for the current task.
+The website and production pipeline are called **论文速递**; the Mac and Android apps are called **论文速递工作台**. Both apps fetch published catalogs, guides, digests, and podcasts read-only—opening a paper never triggers model calls and never requires a production `.env`.
 
-The 1.3.0 source adds browsing across the full website classification and revises both interfaces. See the [review record](docs/workbench-1.3.0-review.md), in Chinese, for the actual scope. Android 1.3.2 addresses automatic sync, VPN-related network errors, and slow loading of explanations. Android 1.3.3 adjusts text size and spacing on phones. See the [1.3.2 fixes](docs/android-1.3.2-review.md) and [1.3.3 fixes](docs/android-1.3.3-review.md), both in Chinese. The Mac and Android versions are both 1.4.7 (build 23), fixing newer paper blog pages that failed to open while hardening HTML5/SVG/MathML sanitization, networking, and WebDAV/Zotero sync paths; version 1.4.7 was published on 23 November 2026 (Beijing time), with twelve assets on the [release page](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7), changes and tested scope in the [1.4.7 record](docs/workbench-1.4.7-review.md), and signing, checksums, and anonymous downloads in [client release verification](docs/client-release-verification.md). The previous release 1.4.6 / build 22 (20 November 2026, Beijing time) remains on its [release page](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.6) and [1.4.6 record](docs/workbench-1.4.6-review.md). Version 1.4.5 (12 November 2026, [release page](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.5), [1.4.5 record](docs/workbench-1.4.5-review.md)) fixes repeated foreground catalog sync on Android, a macOS startup crash on corrupt catalog JSON, and early exit in `apps/macos/test.sh`. Version 1.4.4 restores `library.retryLoad` and `library.sync` after a failed catalog load; see the [1.4.4 record](docs/workbench-1.4.4-review.md) and its 5 November 2026 [release page](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.4). The release page, signing, and asset checks for 1.4.3 remain in the same two records. Version 1.4.3 reduces repeated startup, catalog, and explanation work; [client performance](docs/client-performance.md) gives the before-and-after data and retest steps. Version 1.4.2 fixes the context-declaration problem that prevented explanations from opening for the 3 and 4 November 2026 editions. Favorites use the website hierarchy and their recorded favorite dates; see the [favorites guide](docs/favorite-collections.md), in Chinese.
+- **Current source version**: **1.5.0 (build 24)** on both macOS and Android (pending public release; adds the native daily podcast player, aligned offline search/filtering, and legacy portal-path migration support—see the [1.5.0 record](docs/workbench-1.5.0-review.md), in Chinese).
+- **Latest public release**: **1.4.7 / build 23** (published 23 Nov 2026; see [GitHub Release v1.4.7](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7) and [client release verification](docs/client-release-verification.md), in Chinese). Older release records live in [docs/README.en.md](docs/README.en.md).
+- **Platform & upgrade notes**: macOS targets ARM64 Apple silicon on macOS 15+ (locally signed, not Apple-notarized). Android ships four ABIs; users on 1.4.4+ can upgrade in place, while 1.4.3 requires uninstalling first due to the signing key change in 1.4.4.
 
-The Mac application targets ARM64 Apple silicon and requires macOS 15 or later. It uses local signing and has not been notarized by Apple. Android includes native libraries for four processor architectures (ABIs) and keeps the existing application identifier; from 1.4.4 it uses a new signing key, so users on 1.4.3 must uninstall before installing a newer release, while users on 1.4.4 or 1.4.5 can upgrade in place. The public APK certificate SHA-256 and signing scheme are recorded in [client release verification](docs/client-release-verification.md). Installation steps, tested environments, and limitations are described in the application guides and the [client security record](docs/client-security-audit.md), in Chinese.
+![Mac and Android Workbench public feed vs. personal study, Zotero, and WebDAV boundaries](docs/images/client-experience.en.svg)
 
-## How content reaches the website
+Personal study is strictly opt-in: a model service is called only when you explicitly ask a question or test a connection, sending only confirmed extracted text (never raw PDFs or images), with usage and billing completely separate from website production. Restoring a WebDAV backup keeps prior notes and history without firing new requests, and API keys or local integrity keys never leave the device.
 
-Content production calls a language model service through an API by default. There are three workflows: a daily digest for the current Beijing date, official conference processing, and updates to existing historical blog pages. They share analysis, assessment, classification, paper explanation, and page-generation code. Each workflow separately verifies its sources, selected scope, and publication records.
+## How a paper becomes a published page
 
-The workflow preserves the paper material actually used before analysis and writing. Generated pages must pass programmatic checks and text and figure review before they can be pushed to the blog repository. A successful push is followed by deployment and page checks; it does not by itself establish that the website is live.
+Content production uses an LLM/API pipeline by default across three workflows: **daily digests**, **official conferences**, and **historical blog updates**. They share the analysis engine, eight-dimension rubric, 400-concept nine-facet taxonomy, Reader writer, and page renderers, while verifying their own sources, deduplication baselines, and publication receipts independently.
 
-![Paper sources, shared processing, and verified blog publication](docs/images/pipeline-overview.en.svg)
+![Daily digest end-to-end pipeline: boundary fetch, screening, four-file sealing, analysis, three-layer review, and live web checks](docs/images/daily-digest-flow.en.svg)
 
-The arrows show content and source records passing to the next operation. They do not make source credentials interchangeable between workflows. The [project walkthrough](docs/project-guide.md), in Chinese, explains the distinctions.
+Before writing a single word of analysis, the pipeline seals four files per paper (`source.txt`, `source.pdf`, `source-runtime.json`, `source-manifest.json`) with SHA-256 digests. Generation, local repairs, and pre-publication checks all read that exact frozen bundle, and after pushing to Git the workflow still verifies deployment and checks every live URL for HTTP 200 and a valid title.
 
-## First-time setup for production work
+## First-time setup (maintainers)
 
-Reading the website or using an application does not require the production project's `.env`. The steps below are for website maintainers.
+Skip this section if you only read the website or use the Mac/Android apps. To run production tasks:
 
-1. Resolve and verify the actual path of `$HOME/code/github_repos/audio-research-workbench`, then run `npm run workspace:role -- status`. All three workflows use this directory with the `daily` role. Historical commands use the configured cross-role switch.
-2. Follow [installation and configuration](docs/setup.md), in Chinese, to prepare Node, Python, and dependencies, configure the project `.env`, and identify the real Hugo blog repository.
-3. The primary model and any enabled secondary model must use the project-selected `muse-spark-1.3-contributor` (since 2026-11-16; deepseek-v4.1-flash during 2026-11-13..11-15). arXiv requests must use the project's HTTP CONNECT proxy.
-4. Check that no other task is generating, reviewing, or pushing blog content and that the target pages do not have conflicting manual edits. Then select the workflow.
+1. Verify `pwd` resolves to `$HOME/code/github_repos/audio-research-workbench` and run `npm run workspace:role -- status` to confirm role `daily` (historical commands run here via `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` in `.env`).
+2. Follow [setup](docs/setup.md) (Chinese) to install Node (`>=20.18.1 <21 || >=22.3.0`), Python 3.11+, and dependencies, then copy `env.example` to `.env` with your API keys, proxy, and real Hugo blog repo path.
+3. Run read-only checks: `npm run doctor -- --offline` and `npm run config:check`. Both primary and any enabled secondary model use `muse-spark-1.3-contributor` (`xhigh` ceiling with tiered per-stage reasoning enabled by default); arXiv and Muse traffic require the project HTTP CONNECT proxy.
+4. Make sure no other generate/review/push task is active and the target date has no conflicting manual edits in the blog repo.
 
-[AGENTS.md](AGENTS.md) states the execution constraints. The [operating manual](SKILL.md) gives the normal sequence and recovery rules. The [onboarding guide](docs/onboarding.md) explains inputs, results, and how to continue. These detailed guides are in Chinese.
+Execution constraints live in [AGENTS.md](AGENTS.md), and step-by-step guidance lives in [onboarding](docs/onboarding.md) and the [operating manual](SKILL.md) (all in Chinese).
 
-## Choose a maintenance task
+## Common maintenance commands
 
-Replace the example dates, identifiers, and paths with real task materials. Conference and historical operations also require the files and identifiers produced by their preceding steps. Linked detailed instructions in this table are in Chinese.
+Replace example dates, IDs, and paths with real task inputs. Linked guides below are in Chinese unless noted.
 
-| Task | Entry point and instructions |
+| Goal | Command & guide |
 |---|---|
-| Run today's digest | `npm run digest:prepare -- YYYY-MM-DD`; [daily procedure](SKILL.md#1-日更) |
-| Check the environment and configuration | `npm run doctor -- --offline`; add `--network` when an online probe is needed; [diagnostics](docs/maintenance.md#运行前体检运行中状态与错误指引) |
-| Probe sources, inspect account status, or check configuration | `npm run source:probe -- --date YYYY-MM-DD`, `npm run llm:accounts`, `npm run config:check`; [probes and configuration](docs/maintenance.md#抓取前探测与配置检查) |
-| Observe running work | `npm run digest:status -- --date YYYY-MM-DD --watch`; [status instructions](docs/maintenance.md#运行前体检运行中状态与错误指引) |
-| Process an official conference | Acquire official sources, extract evidence, filter, then run `conference:process`; [conference workflow](docs/conference-workflow.md) |
-| Rewrite existing blog pages from original papers while retaining URLs | Fix the page scope and prepare the sources and plan; [historical updates](docs/history-rewrite.md) |
-| Publish completed historical results | The plan, generate, review, publish, and status actions of `history:publication`; [historical publication](docs/history-direct-publication.md) |
-| Update the presentation of a complete published daily batch | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`, followed by review and push; [republication](docs/data-format.md#同来源同分析的日批重发布) |
-| Choose a recovery route | `npm run recover -- --date YYYY-MM-DD`; prepare a correction manifest with `npm run manifest:new -- --spec SPEC.json`; [recovery tools](docs/maintenance.md#恢复决策与清单生成) |
-| Register an earlier checkpoint when original published inputs cannot be read again | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD`; [explicit recovery conditions](docs/daily-fetch-boundary.md#published-input-drift-recovery) |
-| Check a table or the affected code paths | `npm run table:check -- --draft DRAFT.json`, `npm run impact -- scripts/x.js`; [targeted checks](docs/maintenance.md#表格与影响面预检) |
-| Inspect an explanation of a suspected review error | `npm run review:overrides -- --date DATE --file OVERRIDES.json`; [review diagnostics](docs/maintenance.md#发布后网页核验与收尾) |
-| Verify published pages | `npm run verify:web -- --date DATE --deploy OID`; `npm run publish:finish -- --date DATE` only prints remaining actions; [publication follow-up](docs/maintenance.md#发布后网页核验与收尾) |
-| Inspect locks or check documented commands | `npm run locks`, `npm run docs:check`; [locks and documentation](docs/maintenance.md#锁视图与文档一致性) |
-| Inspect storage and cleanup advice | `npm run storage:report`; preview cleanup with `npm run storage:prune`; [retention rules](docs/maintenance.md#存储保留建议) |
-| Run complete verification after code changes | `npm run verify`; [maintenance guide](docs/maintenance.md) |
+| Run today's daily digest | `npm run digest:prepare -- YYYY-MM-DD` (`digest:api` alias); [daily procedure](SKILL.md#1-日更) |
+| Check environment and `.env` | `npm run doctor -- --offline` (`--network` probes arXiv), `npm run config:check` |
+| Probe arXiv/HF & inspect account pool | `npm run source:probe -- --date YYYY-MM-DD`, `npm run llm:accounts` |
+| Watch run progress & stage scorecard | `npm run digest:status -- --date YYYY-MM-DD --watch`, `npm run digest:scorecard -- --date YYYY-MM-DD` |
+| Process an official conference | `conference:acquire` → `conference:discover` → filter → `conference:process`; [conference workflow](docs/conference-workflow.md) |
+| Rewrite historical pages (keep URLs) | Fix scope, then `history:inputs/plan/sources/run/aggregate`; [historical updates](docs/history-rewrite.md) |
+| Publish historical results | `npm run history:publication -- plan\|generate\|review\|publish\|status`; [historical publication](docs/history-direct-publication.md) |
+| Republish a complete daily batch | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`, then `review → push` |
+| Diagnose failures & prepare patches | `npm run recover -- --date YYYY-MM-DD`, `npm run manifest:new -- --spec SPEC.json` |
+| Register earlier fetch witness | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` |
+| Check tables, code impact & overrides | `npm run table:check -- --draft FILE`, `npm run impact -- --git`, `npm run review:overrides -- --date DATE --file F.json` |
+| Verify live site & post-push checklist | `npm run verify:web -- --date DATE --deploy OID`, `npm run publish:finish -- --date DATE` |
+| Inspect locks, docs & data integrity | `npm run locks`, `npm run docs:check`, `npm run validate:data` |
+| Compact ledger, dedupe PDFs & storage | `npm run papers:compact`, `npm run storage:pdf-dedupe`, `npm run storage:report`, `npm run storage:prune` |
+| Optional CLIs: calibration / podcast | `npm run digest:calibrate -- --dry-run`, `npm run podcast:generate -- --date YYYY-MM-DD --dry-run` |
+| Run full local verification | `npm run verify` (pinned Hugo 0.160.1 + syntax + JS/Python suites + data validation) |
 
-For an already completed conference, first check whether its original process has been published. Then choose the appropriate [page-recovery route](docs/conference-workflow.md#已有完整会议只更新页面).
+## Running a daily digest
 
-## Run a daily digest
-
-After setup succeeds, replace the date with the current date in Beijing:
+Use today's Beijing date:
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
 ```
 
-The entry point fetches candidates, removes papers already formally published, filters candidates, and seals the selected papers' official sources. It then performs analysis, assessment, classification, and explanation writing before generating, reviewing, and pushing the blog. `digest:api` is an equivalent alias.
+The command syncs the blog remote, fetches and deduplicates against formally published pages, screens candidates, seals official HTML/PDF sources, runs analysis, scoring, tagging, and Reader writing, generates and reviews pages, pushes the exact approved diff, and records no-visuals. Afterward, confirm GitHub Pages deployment and verify every live URL, HTTP 200 status, and title.
 
-After the push, the entry point records that this publication does not require generated images. The operator then confirms deployment, verifies the addresses, HTTP 200 responses, and titles of every target page, and reads the full status again.
+Key operational boundaries:
 
-Daily digests do not generate paper posters or a collection cover by default. This is the user's standing instruction dated 2026-11-02. There is no need to add `--no-visuals` each time, although the old option remains compatible. After verified publication, the program directly records that no images will be generated, binding the generation manifest, actual review receipt, and verified remote commit. Original paper figures remain displayed and reviewed. If that registration fails, follow the [recovery instructions](docs/troubleshooting.md#11-不生图登记失败).
+- **No daily posters or covers**: Following the standing 2026-11-02 instruction, daily runs skip generated posters/covers (`--no-visuals` kept for compatibility) and record a bound no-visuals attestation after push; original paper figures are still fetched, shown, and reviewed.
+- **Today only for fresh fetch**: Historical dates cannot restart daily fetching; resume from controlled data or use the historical rewrite workflow ([fetch boundaries](docs/daily-fetch-boundary.md)).
+- **Published-only dedup**: Unpublished papers in the local library still remain eligible for catch-up.
 
-Fetching must verify records of previously acquired papers and cover the complete source window. Only formally published pages participate in publication deduplication; papers present in the library but not published remain eligible for catch-up. A historical date cannot restart the daily fetching stage. Use existing controlled sources instead, as described in the [fetch-boundary rules](docs/daily-fetch-boundary.md).
+## Continuing after a failure
 
-## Continue after a failure
-
-Wait for all papers in the current round to finish and save their results. Then continue only papers whose failures remain retryable. A normal invocation uses up to three rounds by default. Verified sources, completed stages, drafts, attempt counts, and costs are retained.
-
-The standing authorization for an existing task covers necessary subsequent paid recovery windows. The operator registers them according to actual progress and cost without asking again for each round. Each window's technical limits still apply, and new usage is recorded separately. Investigate persistent lack of progress. Authentication, quota, configuration, or saving failures stop new dispatch while in-flight results are preserved.
+Let the current round finish and save every paper before retrying only retryable failures. Passing sources, checkpoints, drafts, attempt counts, and cost ledgers are always preserved and never reset.
 
 | Where work stopped | How to continue |
 |---|---|
-| Daily analysis or explanation writing | Use deep, batch, or the explanation-refresh entry point with the same sealed sources; see the [manual](SKILL.md) |
-| Conference processing or checks on old completed results | Continue the original process; follow [migration and recovery](docs/conference-workflow.md#已有完整会议只更新页面), then register [subsequent windows](docs/conference-workflow.md#原额度耗尽后的独立付费恢复) when needed under the standing authorization |
-| Historical preparation or analysis | Continue the same plan, source-acquisition sequence, and `history:run`; resume a paused task through its original control protocol |
-| Rejected blog text or figures | Complete the full review batch first. Use [normal explanation maintenance](docs/conference-workflow.md#博客拒稿后的正常-reader-维护) for text, or a [publication view from the same PDF](docs/conference-workflow.md#认证-pdf-的独立出版视图) for a figure before review; semantic errors still require text correction |
-| A service or saving failure affects the run | Preserve in-flight results, resolve the fault, and resume from the original stage; see [troubleshooting](docs/troubleshooting.md) |
+| Daily analysis or Reader writing | Run `npm run deep`, `npm run batch`, or `npm run api:reader:refresh` on the same sealed sources |
+| Conference processing or migration | Resume `conference:process` / `conference:migrate-process`; see [conference recovery](docs/conference-workflow.md#已有完整会议只更新页面) |
+| Historical prep or analysis | Continue the same plan with `npm run history:run`; resume paused runs with `npm run history:resume` |
+| Blog text or figure review rejection | Finish the review batch first; text goes through Reader maintenance, figures can use a certified PDF publication view before re-review |
+| Auth, quota, config, or storage fault | Stop new dispatches, keep in-flight results, diagnose the full account pool or fault, then resume |
 
-Manual corrections must bind the complete failure set, original draft, genuine sources, and authorized node scope. Interrupted work continues through the same manifest. Figures, tables, footnotes, equations, units, and resource claims remain subject to source checks, full qualification, and final blog review. See [explanation recovery](docs/reader-explicit-retry.md).
+Passed pages reuse their review cache permanently by relative path and content SHA. For a small stubborn tail after automatic rounds, use source-bound operator corrections (1–8 existing nodes per paper, still checked by full qualification and blog review; see [explanation recovery](docs/reader-explicit-retry.md)). Necessary paid follow-up windows are covered by the standing authorization in [AGENTS.md](AGENTS.md#持续授权以效率和效果为准), recorded under separate accounting.
 
-Passed review pages reuse their original valid protocol and cache by relative path and content SHA. A rejected page whose bytes are unchanged can be reviewed again only when both the old and new protocol identities are valid and different. The latest failure and unfinished factual corrections still block completion and publication. Shared validation errors are corrected after production stops, using real saved drafts and positive and negative cases, followed by normal checks. See [publication records](docs/data-format.md) and [execution rules](AGENTS.md).
+Batch Manual authoring and WeChat/Feishu/Xiaohongshu publishing are retired. [manual/README.en.md](manual/README.en.md) covers only legacy record verification and independent manual review (configured with `gpt-6.1-sol/high`).
 
-Batch Manual authoring and WeChat, Feishu, and Xiaohongshu publication are retired. [manual/README.en.md](manual/README.en.md) covers only legacy verification and independent manual review. New independent review uses the actual `gpt-6.1-sol/high` configuration and records the real reviewer identity.
+## What counts as done
 
-## What counts as completion
+A daily digest is complete only when all six items in [AGENTS.md](AGENTS.md#日更完成的六项) hold:
 
-A daily batch is complete when all six items in [AGENTS.md](AGENTS.md#日更完成的六项) hold; this section reuses the same numbering and wording, and AGENTS.md is authoritative:
+1. **Data & sources**: Formal analysis, sealed sources, Reader article, scores, and tags pass current checks.
+2. **Review**: Pages pass programmatic, text, figure, and Hugo checks with receipts covering the full target set.
+3. **Remote push**: Only the receipt-approved diff is pushed, and the remote `main` OID matches.
+4. **Deployment**: Pages `build` and `deploy` succeed for the published commit (or a descendant preserving reviewed bytes).
+5. **Live web check**: Every target page passes HTTP 200, canonical URL, and title verification with saved records.
+6. **No-visuals & final status**: A bound no-visuals record is saved and `npm run digest:status -- --date YYYY-MM-DD` is re-read.
 
-1. Data and sources: formal analysis, sealed sources, the explanation, assessment, and classification pass current checks.
-2. Review: final pages pass programmatic, text, figure, and Hugo review, and the receipt covers the complete target set.
-3. Remote publication: only the exact changes allowed by the receipt are pushed, and the remote `main` commit ID is verified.
-4. Deployment: the corresponding commit, or a descendant preserving the reviewed page bytes, deploys successfully.
-5. Web verification: every target page is checked for HTTP 200, its official address, and title, with records saved.
-6. No-image record and status re-read: a no-image-generation record is bound to the current publication, and status is read again. Image generation is retired; if the user asks for images, restore the implementation through the maintenance flow and approve it separately. Do not start it inside this batch.
-
-`digest:status` describes the state at the time it is read. Deployment and web pages require separate verification. During work, `--watch` refreshes every ten seconds by default, but does not fully verify publication waivers. After a push, image record, or waiver changes, read the ordinary full status again.
+`digest:status` is a snapshot at read time and never replaces live deployment and page checks.
 
 ## Documentation
 
-- [Project walkthrough](docs/project-guide.md), in Chinese: understand sources, generated results, the blog, and reading applications.
-- [Operating manual](SKILL.md), in Chinese: normal execution, recovery, and completion.
-- [Client performance](docs/client-performance.md), in Chinese: the 1.4.3 startup, catalog, explanation, and cloud-upload changes, cache locations, and retest steps.
-- [Client release verification](docs/client-release-verification.md), in Chinese: Mac and Android signing, certificates, the twelve assets, checksum tables, and anonymous-download checks.
-- [Documentation index](docs/README.en.md): find configuration, sources, explanations, classification, and troubleshooting.
-- [Script index](scripts/README.en.md): locate entry points, shared modules, and legacy verification.
-- [Writing skill](skills/clear-technical-writing/SKILL.md) and [project writing rules](docs/writing-guide.md), in Chinese: beginner explanations, paragraphs, terminology, diagrams, and bilingual requirements.
+- [Project walkthrough](docs/project-guide.md) (Chinese): sources, analysis, portal, and reading apps at a glance.
+- [Operating manual](SKILL.md) & [AGENTS.md](AGENTS.md) (Chinese): procedures, recovery rules, and hard constraints.
+- [Documentation index](docs/README.en.md): setup, data contracts, taxonomy, backups, performance, and troubleshooting.
+- [Script guide](scripts/README.en.md) & [full script index](scripts/INDEX.md): entry points, shared core, and compatibility helpers.
+- [Client release verification](docs/client-release-verification.md) (Chinese): macOS/Android signing, certificates, assets, and SHA-256 verification.
+- [Writing skill](skills/clear-technical-writing/SKILL.md) & [project writing guide](docs/writing-guide.md) (Chinese): clarity, terminology, diagrams, and bilingual standards.

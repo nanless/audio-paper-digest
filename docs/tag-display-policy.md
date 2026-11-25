@@ -4,7 +4,7 @@
 
 ## 三条流程共用的目录与呈现
 
-日更、官方会议与历史博客更新使用同一份 `config/tag-catalog.json`。当前可选范围与[新版研究方向目录](https://nanless.github.io/audio-paper-digest-blog/tags/)的 **400 个概念、九个分类维度及父子关系**一致；原有262项与386项概念及已修正的定义原样保留，仅在末尾纯追加新概念，不创建词表外标签。
+日更、官方会议与历史博客更新使用同一份 `config/tag-catalog.json`。当前可选范围与[新版研究方向目录](https://nanless.github.io/audio-research-portal/tags/)的 **400 个概念、九个分类维度及父子关系**一致；原有262项与386项概念及已修正的定义原样保留，仅在末尾纯追加新概念，不创建词表外标签。
 
 总目录保持完整，包括“0 条”方向。每篇仍只选择有本篇证据支持的3–5个直接概念，包含明确主任务和主方法；正文、汇总卡片与单篇分类卡片只呈现这些选项及它们的祖先路径。没有命中的分类维度、兄弟方向及全套目录均不出现在文章分类块中。祖先是导航，不写入 Hugo `tags`、`conceptIds`，也不另计为直接命中。可见路径链接到同一论文库的概念筛选。
 
@@ -34,7 +34,7 @@
 
 旧发布记录中的 `taxonomy-presentation-policy.json` 和 `paper-taxonomy-presentation-selection-v1` 按原格式核验和恢复。它们不是创建新发布文件时应使用的名称，不能把新格式写到旧文件路径，也不能改写旧凭证使新字节通过。
 
-正文与汇总中的概念路径链接保留 `PAPER_DIGEST_BLOG_BASE_PATH` 部署前缀，默认指向 `/audio-paper-digest-blog/papers/`。共享渲染器同时支持站点根目录部署，并拒绝站外地址、路径穿越或查询片段作为部署前缀。
+正文与汇总中的概念路径链接保留 `PAPER_DIGEST_BLOG_BASE_PATH` 部署前缀，默认指向 `/audio-research-portal/papers/`。共享渲染器同时支持站点根目录部署，并拒绝站外地址、路径穿越或查询片段作为部署前缀。
 
 ### Markdown 与网页各保留什么
 

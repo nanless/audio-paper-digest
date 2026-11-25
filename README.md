@@ -4,137 +4,134 @@
 
 <a id="你会得到什么"></a>
 
-论文速递从真实论文全文整理中文解读、八维评分、作者机构、公开资源状态和引用资料，再发布为可阅读、可下载的博客页面。解读面向第一次接触相关方向的研究者，说明论文处理什么问题、方法怎样工作、实验在什么条件下成立，以及还有哪些限制。
+每天刷完语音、音乐和音频方向的 arXiv 新论文往往要花掉一两个小时。这个项目把整件事拆成两半：后台先拿每篇论文的官方正文与 PDF，写成面向初学研究者的中文长文解读（代码中称为 **Reader**）、八维评分、九维分类、作者机构与引用资料，通过三层审查后再发到公开网站；前台提供网页与 Mac / Android 原生应用，用来安静阅读、对照原 PDF、记笔记和收听每日播客。
 
-面向读者的论文解读长文在程序中称为 **Reader**。供程序检查的内部主分析另外保存，两者不能互相代替。评分、图表、公式、作者信息和资源声明，都要能对应实际使用的论文来源。
+内部供程序核验的十三节主分析与面向读者的 Reader 分开保存，互不替代。文章里的每张表、每个展示公式、每张论文原图、作者单位和开源声明，都必须对应本次真实使用的论文来源。
 
-## 先选择你的使用方式
+![论文速递工作台三层架构：内容生产引擎、公开网站与双端阅读应用](docs/images/workbench-architecture.zh.svg)
 
-| 你想做什么 | 从哪里开始 |
+## 先选适合你的入口
+
+| 你想做什么 | 直接从这里开始 |
 |---|---|
-| 阅读已发布的中文论文解读 | 打开[论文速递网站](https://nanless.github.io/audio-research-portal/)；下载方式见[网页阅读说明](docs/blog-reading-tools.md) |
-| 在 Mac 上阅读、对照原始 PDF、记笔记和研究论文 | 查看[Mac 使用说明](apps/macos/README.md) |
-| 在 Android 手机、平板或折叠窗口中阅读 | 查看[Android 使用说明](apps/android/README.md) |
-| 第一次了解项目怎样工作 | 阅读[项目导读](docs/project-guide.md)，再按任务进入详细文档 |
-| 维护网站，执行日更、会议整理或历史更新 | 先看下面的准备步骤，再按[操作手册](SKILL.md)执行 |
+| 浏览器看已发布的中文论文解读 | 打开[论文速递网站](https://nanless.github.io/audio-research-portal/)；下载原论文与引用见[网页阅读说明](docs/blog-reading-tools.md) |
+| 在 Mac 上对照 PDF、做笔记和个人研究 | 查看 [Mac 使用说明](apps/macos/README.md)（Apple 芯片，macOS 15+） |
+| 在 Android 手机或平板上阅读和听播客 | 查看 [Android 使用说明](apps/android/README.md)（4 种 ABI 全覆盖） |
+| 第一次了解项目怎么运作 | 先读[项目导读](docs/project-guide.md)，再按任务查对应手册 |
+| 自己运行日更、会议整理或历史更新 | 先完成下方准备步骤，再按[操作手册](SKILL.md)执行 |
 
-网站与内容生产项目叫“论文速递”，Mac 和 Android 应用叫“论文速递工作台”。应用读取网站已经发布的目录、解读和汇总，不因打开论文而重新分析或评分。
+## Mac 与 Android 工作台（1.5.0）
 
-个人研究是应用中的独立功能。只有用户主动研究或测试连接时，应用才调用自己配置的模型服务；这不代表推理一定在设备上完成。个人回答、实际用量、费用和授权，与网站生产任务分别保存。两部分怎样读取和保存资料，见[客户端数据流图](docs/images/client-data-flow.svg)。恢复备份沿用原记录，新增请求仍按当前任务授权执行。
+网站和内容生产链叫“论文速递”，Mac 和 Android 原生应用叫“论文速递工作台”。应用只读获取网站已经发布的目录、导读、汇总和播客，打开论文不会触发任何模型重算，也不需要配置生产环境的 `.env`。
 
-1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。Mac 和安卓当前源码均为 1.5.0（构建号 24）（待发布，新增原生每日音频播客播放器、Wave 12/Track 13.3 排版与离线检索筛选对齐，改动与验证范围见 [1.5.0 记录](docs/workbench-1.5.0-review.md)）。最近公开发行版本为 1.4.7 / 构建号 23（2026-11-23 发布），修复新版论文博客页无法打开的问题并加固 HTML5/SVG/MathML 解析净化、网络与 WebDAV/Zotero 路径，12 件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7)，改动与验证范围见 [1.4.7 记录](docs/workbench-1.4.7-review.md)，签名、附件与匿名下载核验见[客户端发行核验](docs/client-release-verification.md)。上一版 1.4.6 / 构建号 22（2026-11-20 发布）见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.6)与 [1.4.6 记录](docs/workbench-1.4.6-review.md)。1.4.5 修复 Android 前台重复整站同步、macOS 目录 JSON 损坏导致启动崩溃和 `apps/macos/test.sh` 提前退出的问题，于 2026-11-12 公开发布，见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.5)与 [1.4.5 记录](docs/workbench-1.4.5-review.md)。1.4.4 恢复目录载入失败后的 `library.retryLoad` 与 `library.sync`，改动与验证范围见 [1.4.4 记录](docs/workbench-1.4.4-review.md)；1.4.4 已于 2026-11-05 公开发布，十二件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.4)。上一版 1.4.3 的发行页、签名和附件核验仍保留在同两份记录里。1.4.3 减少启动、目录、导读和云上传的重复工作，改动前后的数据和复测方法见[客户端性能](docs/client-performance.md)。1.4.2 修复了 2026 年 11 月 3 日、4 日导读打不开的上下文声明问题。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。
+- **当前版本**：Mac 与 Android 源码均为 **1.5.0（构建号 24）**（待发布，新增原生每日音频播客播放器、离线检索筛选对齐与跨版本站点路径兼容，详见 [1.5.0 变更记录](docs/workbench-1.5.0-review.md)）。
+- **最近公开发行**：**1.4.7 / 构建号 23**（2026-11-23 发布，见 [GitHub Release v1.4.7](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7) 与[客户端发行核验](docs/client-release-verification.md)）。历史各版记录保留在 [docs/README.md](docs/README.md#阅读历史评审记录)。
+- **安装与升级**：Mac 面向 ARM64 Apple 芯片，本地签名、尚未经过 Apple 公证；Android 1.4.4 及以上可直接覆盖升级，1.4.3 需卸载重装。
 
-Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本地签名，尚未通过 Apple 公证。Android 包含四种处理器架构的原生库（ABI），应用标识不变；1.4.4 起改用新的签名库，1.4.3 用户需卸载后重装，1.4.4 与 1.4.5 用户可直接覆盖升级，证书 SHA-256 与签名方案见[客户端发行核验](docs/client-release-verification.md)。安装方法、实际验证范围和限制分别见两端使用说明与[客户端安全说明](docs/client-security-audit.md)。
+![Mac 与 Android 工作台阅读、播客与个人资料同步边界](docs/images/client-experience.zh.svg)
+
+应用里的个人研究是独立开关：只有你主动提问或测试连接时，才会把确认过的提取文字发给你自己配置的模型服务（不传原 PDF 或图片），账单、问答与网站生产任务彼此隔开。恢复 WebDAV 备份会保留历史笔记与问答，但不会自动重新调用模型，也不会把密钥或本机校验键带到云端。
 
 <a id="默认行为"></a>
 <a id="架构概览"></a>
 
-## 内容怎样生成和发布
+## 内容怎样从论文走到网页
 
-内容生产默认调用语言模型服务（LLM/API），包括当天日更、官方会议整理、历史博客更新三条流程。三条流程共享分析、评分、分类、论文解读和页面生成代码，但各自核对来源、处理范围和发布记录。
+内容生产默认调用语言模型服务（LLM/API），分三条独立流程：**当天日更**、**官方会议整理**和**历史博客更新**。它们共用分析引擎、八维评分、400 项九维分类、Reader 写作和页面渲染代码，但各自独立核验来源、去重基线和发布凭证，来源证明不能跨流程混用。
 
-先保存本次真实使用的论文材料，再分析和写作。生成的页面经过程序检查、正文与图片审查后，才能推送到博客仓库。推送成功还不等于网页已经上线，最后须确认部署和目标页面。
+![每日论文速递端到端流程：边界抓取、筛选、四文件封存、分析写作、三层审查与上线核验](docs/images/daily-digest-flow.zh.svg)
 
-![论文来源、共同处理与博客发布的关系](docs/images/pipeline-overview.zh.svg)
-
-图中的箭头表示内容和来源记录向下一步传递。它不表示三条流程可以交换来源凭证；详细解释见[项目导读](docs/project-guide.md)。
+为什么要先把原文和 PDF 封存成四文件（`source.txt`、`source.pdf`、`source-runtime.json`、`source-manifest.json`）再写作？因为网页链接会变、模型会漏看或误读数字。封存并计算 SHA-256 之后，生成、局部修复和发布前的重新核验都读同一份原始材料，推送后还要确认部署成功并逐页核对 HTTP 200 和标题，避免“推上去了但页面打不开”。
 
 <a id="5-分钟开始"></a>
 <a id="第一次使用"></a>
 
-## 第一次使用：运行生产任务
+## 第一次使用
 
-仅阅读网站或使用应用时，不需要配置内容生产项目的 `.env`。下面的步骤供网站维护者使用。
+如果只是看文章或用 Mac / Android 应用，直接跳过这一节。下面的步骤面向维护网站、运行内容生产任务的人：
 
-1. 展开并核对 `$HOME/code/github_repos/audio-research-workbench` 的真实目录，执行 `npm run workspace:role -- status`。三条流程都在这里运行，工作区角色保持 `daily`；历史入口使用已经配置的跨角色开关。
-2. 按[安装与配置](docs/setup.md)准备 Node、Python 和项目依赖，填写项目 `.env`，确认它指向真实 Hugo 博客仓库。
-3. 主模型及启用的副模型统一使用项目指定的 `muse-spark-1.3-contributor`（2026-11-16 起；2026-11-13 到 11-15 为 deepseek-v4.1-flash）。arXiv 抓取必须经过项目配置的 HTTP CONNECT 代理。
-4. 确认没有其他任务同时生成、审查或推送博客，目标页面也没有人工修改冲突，然后选择本次流程。
+1. 进入工作区 `$HOME/code/github_repos/audio-research-workbench` 并核对 `pwd`，执行 `npm run workspace:role -- status` 确认角色为 `daily`（历史命令通过 `.env` 里的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 跨角色执行）。
+2. 按[安装与配置](docs/setup.md)准备好 Node（`>=20.18.1 <21 || >=22.3.0`）、Python 3.11+ 与依赖，复制 `env.example` 为 `.env` 并填写模型密钥、代理和真实 Hugo 博客仓库路径。
+3. 运行只读体检 `npm run doctor -- --offline` 与 `npm run config:check`。当前项目指定主、副模型为 `muse-spark-1.3-contributor`（推理上限 `xhigh`，默认启用按阶段分级推理），arXiv 抓取和 Muse 请求强制走项目 HTTP CONNECT 代理。
+4. 确认当前没有其他生成、审查或推送任务在跑，且博客仓库目标日期没有人工未提交改动。
 
-[AGENTS.md](AGENTS.md)列出必须保留的执行限制，[操作手册](SKILL.md)说明正常顺序与失败恢复。[新人上手](docs/onboarding.md)解释各步骤的输入、结果和继续方法。
+完整执行约束见 [AGENTS.md](AGENTS.md)，分步骤说明见[新人上手](docs/onboarding.md)与[操作手册](SKILL.md)。
 
 <a id="核心命令"></a>
 
 ## 选择任务
 
-下表用于找到入口，不能把示例中的日期、编号或路径直接当作真实任务材料。会议和历史命令还需要上一步生成的实际文件与编号。
+下表列出常用入口；示例中的日期、编号和路径运行前需替换为当次真实参数。
 
-| 任务 | 入口与说明 |
+| 你要做什么 | 命令与说明 |
 |---|---|
-| 当天日更 | `npm run digest:prepare -- YYYY-MM-DD`；见[日更操作](SKILL.md#1-日更) |
-| 检查环境与配置 | `npm run doctor -- --offline`；需要联网探测时加 `--network`；见[体检](docs/maintenance.md#运行前体检运行中状态与错误指引) |
-| 抓取前探测来源、核对账号或配置 | `npm run source:probe -- --date YYYY-MM-DD`、`npm run llm:accounts`、`npm run config:check`；见[探测与配置](docs/maintenance.md#抓取前探测与配置检查) |
-| 观察运行进度 | `npm run digest:status -- --date YYYY-MM-DD --watch`；见[状态说明](docs/maintenance.md#运行前体检运行中状态与错误指引) |
-| 官方会议整理 | 获取官方来源、提取证据、筛选，再执行 `conference:process`；见[会议流程](docs/conference-workflow.md) |
-| 从原文更新旧博客并保留地址 | 固定页面范围，准备来源与更新计划；见[历史更新](docs/history-rewrite.md) |
-| 发布已完成的历史结果 | `history:publication` 的 plan、generate、review、publish、status；见[历史发布](docs/history-direct-publication.md) |
-| 只更新完整已发布日批的呈现 | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，再审查、推送；见[重发布](docs/data-format.md#同来源同分析的日批重发布) |
-| 失败后选择恢复方法 | `npm run recover -- --date YYYY-MM-DD`；人工清单准备用 `npm run manifest:new -- --spec SPEC.json`；见[恢复工具](docs/maintenance.md#恢复决策与清单生成) |
-| 已发布原输入无法重新读取时，登记更早检查点 | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD`；见[显式恢复条件](docs/daily-fetch-boundary.md#published-input-drift-recovery) |
-| 核对表格或代码影响范围 | `npm run table:check -- --draft DRAFT.json`、`npm run impact -- scripts/x.js`；见[定向检查](docs/maintenance.md#表格与影响面预检) |
-| 核对审查误报解释 | `npm run review:overrides -- --date DATE --file OVERRIDES.json`；见[误报诊断](docs/maintenance.md#发布后网页核验与收尾) |
-| 发布后核验网页 | `npm run verify:web -- --date DATE --deploy OID`；`npm run publish:finish -- --date DATE` 只打印后续清单；见[发布收尾](docs/maintenance.md#发布后网页核验与收尾) |
-| 查看锁和检查文档命令 | `npm run locks`、`npm run docs:check`；见[锁与文档检查](docs/maintenance.md#锁视图与文档一致性) |
-| 查看存储与清理建议 | `npm run storage:report`；清理先用 `npm run storage:prune` 预览；见[保留规则](docs/maintenance.md#存储保留建议) |
-| 修改代码后完整验证 | `npm run verify`；见[维护指南](docs/maintenance.md) |
-
-已有完整会议时，先核对原会议处理任务是否已经发布，再按[会议页面恢复](docs/conference-workflow.md#已有完整会议只更新页面)选择入口。
+| 运行当天日更 | `npm run digest:prepare -- YYYY-MM-DD`（`digest:api` 等价）；见[日更步骤](SKILL.md#1-日更) |
+| 开跑前体检与配置核查 | `npm run doctor -- --offline`（加 `--network` 探测 arXiv）、`npm run config:check` |
+| 抓取前探源与看账号池 | `npm run source:probe -- --date YYYY-MM-DD`、`npm run llm:accounts` |
+| 观察进度与分析耗时记分卡 | `npm run digest:status -- --date YYYY-MM-DD --watch`、`npm run digest:scorecard -- --date YYYY-MM-DD` |
+| 整理官方会议论文 | `conference:acquire` → `conference:discover` → 筛选 → `conference:process`；见[会议流程](docs/conference-workflow.md) |
+| 从原文重写历史博客（保留原 URL） | 固定范围后执行 `history:inputs/plan/sources/run/aggregate`；见[历史更新](docs/history-rewrite.md) |
+| 发布历史更新结果 | `npm run history:publication -- plan\|generate\|review\|publish\|status`；见[历史发布](docs/history-direct-publication.md) |
+| 仅更新已发布完整日批的呈现 | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，随后 `review → push` |
+| 失败诊断与人工清单准备 | `npm run recover -- --date YYYY-MM-DD`、`npm run manifest:new -- --spec SPEC.json` |
+| 旧发布输入丢失时登记早批次见证 | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` |
+| 表格预检、影响面与误报核对 | `npm run table:check -- --draft FILE`、`npm run impact -- --git`、`npm run review:overrides -- --date DATE --file F.json` |
+| 推送后核验网页与收尾清单 | `npm run verify:web -- --date DATE --deploy OID`、`npm run publish:finish -- --date DATE` |
+| 查看运行锁、文档与数据完整性 | `npm run locks`、`npm run docs:check`、`npm run validate:data` |
+| 账本压缩、重复 PDF 去重与存储建议 | `npm run papers:compact`、`npm run storage:pdf-dedupe`、`npm run storage:report`、`npm run storage:prune` |
+| 可选工具：批后分数校准 / 每日播客 | `npm run digest:calibrate -- --dry-run`、`npm run podcast:generate -- --date YYYY-MM-DD --dry-run` |
+| 改代码后完整本地验收 | `npm run verify`（固定 Hugo 0.160.1 + 全仓语法 + JS/Python 单测 + 数据校验） |
 
 ## 运行一次日更
 
-安装与配置通过后，将日期替换为北京时间当天：
+把日期换成北京时间当天：
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
 ```
 
-入口依次抓取候选、去除已经正式发布的论文、筛选，并封存入选论文的官方来源。随后执行分析、评分、标签和解读写作，再生成、审查、推送博客。`digest:api` 是等价别名。
+程序会按顺序同步博客远端、补抓并去除已发布论文、关键词预筛加模型筛选、封存每篇的官方 HTML 与 PDF、完成分析评分与 Reader 长文、生成页面并过三层审查，最后推送博客并登记本次不生图。推动完成后，还需确认 Pages 部署成功并逐页核验正式地址、HTTP 200 与标题。
 
-推送后，入口自动登记本次发布不生图。执行者继续确认部署成功，核验全部目标页面的地址、HTTP 200 和标题，再重新读取完整状态。
+几点边界值得提前记住：
 
-日更默认不生成论文长图和汇总封面，这是用户于 2026-11-02 确定的持续要求。无须每次添加 `--no-visuals`，旧参数仍兼容。程序在真实发布后直接登记不生图，记录绑定生成清单、审查凭证及远端提交。论文原图仍正常展示和审查；登记失败按[恢复说明](docs/troubleshooting.md#11-不生图登记失败)处理。
-
-日更抓取须核验上次已获取论文的记录，并完整覆盖来源窗口。仅正式已发布页面参与去重，库内尚未发布论文仍参加补更。历史日期不能从日更抓取阶段重跑，只能沿用已有受控来源，详见[抓取边界](docs/daily-fetch-boundary.md)。
+- **默认不生图**：按用户 2026-11-02 起的持续要求，日更不再生成论文长图和汇总封面（旧 `--no-visuals` 兼容保留），推送后自动登记不生图记录；论文原图照常获取、展示与审查。登记失败按[排障说明](docs/troubleshooting.md#11-不生图登记失败)恢复。
+- **仅当天可重抓**：日更抓取只针对北京时间当天，历史日期不能从日更抓取阶段重跑，只能沿用已有受控来源或走历史维护流程（详见[抓取边界](docs/daily-fetch-boundary.md)）。
+- **只按已发布页去重**：库里未发布的论文仍会参与补更，不会因为曾进过候选列表就被静默跳过。
 
 ## 失败后从哪里继续
 
-先等本轮全部论文处理和保存结束，再只续可重试的失败论文。每次正常调用默认最多 3 轮；通过检查的来源、阶段结果、草稿、次数和费用保留。
+遇到单篇失败时，先把这一轮其余论文跑完并保存结果，再只续可重试的失败集合。已通过的来源、阶段检查点、草稿、调用次数和费用都会保留，不会推倒重来，也不会清零账本。
 
-已有任务的持续付费授权覆盖必要后续窗口，由执行者按实际进展和成本登记，无需逐轮重新确认。窗口限额仍分别核验，新增消费另记。持续无进展时先查原因；认证、配额、配置或保存故障发生后，先停止新派发并保存在途结果。
-
-| 停在哪里 | 怎样继续 |
+| 停在哪一步 | 怎样继续 |
 |---|---|
-| 日更分析或解读写作 | 选择 deep、batch 或解读刷新入口，继续使用同一组封存来源；见[操作手册](SKILL.md) |
-| 会议处理或旧完成稿检查 | 继续原任务；按[迁移与恢复](docs/conference-workflow.md#已有完整会议只更新页面)处理，耗尽后按持续授权登记[后续窗口](docs/conference-workflow.md#原额度耗尽后的独立付费恢复) |
-| 历史准备或分析 | 继续同一计划、来源获取序号和 `history:run`；暂停任务先按原控制协议恢复 |
-| 博客正文或图片被拒 | 先完成整批审查。正文问题走[正常解读维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)；图片可用[同篇 PDF 出版视图](docs/conference-workflow.md#认证-pdf-的独立出版视图)后重审，语义错误仍须修正文 |
-| 整次运行受到服务或保存故障影响 | 保存在途结果、排除故障，再从原阶段继续；见[故障排查](docs/troubleshooting.md) |
+| 日更分析或 Reader 长文 | 用 `npm run deep`、`npm run batch` 或 `npm run api:reader:refresh`，自动复用同一组封存来源 |
+| 官方会议处理或页面维护 | 续跑原 `conference:process` / `conference:migrate-process`；详见[会议恢复](docs/conference-workflow.md#已有完整会议只更新页面) |
+| 历史准备或分析 | 继续原计划与 `npm run history:run`；暂停任务用 `npm run history:resume` 恢复 |
+| 博客正文或图片审查未通过 | 先跑完整批审查；正文回正常 Reader 维护，图片可先派发同篇认证 PDF 出版视图再重审 |
+| 认证、余额、配置或保存故障 | 先停止新派发、保存在途结果并排除故障（多账号池逐号独立诊断），再从原阶段继续 |
 
-人工修正须对应完整失败集合、原稿、真实来源和明确节点范围；中断后沿同一清单继续。图表、脚注、公式、单位与作者资源声明仍须有对应来源，完整检查和最终博客审查继续执行。详见[解读恢复](docs/reader-explicit-retry.md)。
+通过审查的页面按“相对路径 + 内容 SHA”永久复用；多次自动轮后若只剩少量顽固项，再使用来源绑定的受控人工修正（每篇 1–8 个已有节点，仍须过完整校验与博客审查，详见[解读恢复](docs/reader-explicit-retry.md)）。任务内为提升效率与成稿质量所需的后续付费窗口已获[持续授权](AGENTS.md#持续授权以效率和效果为准)，按实际进度另记账即可。
 
-已通过审查的页面按“相对路径 + 内容 SHA”复用原合法协议与缓存。内容字节相同的拒稿页，只有旧、新协议均合法且确实变化时才能正常重审。最新失败与尚未完成的事实纠错继续阻断完成和发布；共性误报在生产停止后用真实原稿及正反例修复，再正常检查。详见[发布记录](docs/data-format.md)与[执行约束](AGENTS.md)。
-
-整批 Manual 写作与微信、飞书、小红书发布已退役。[manual/README.md](manual/README.md)仅保留旧记录核验及独立人工审查；新独立审查实际使用 `gpt-6.1-sol/high`，并登记真实身份。
+整批 Manual 写作与微信、飞书、小红书发布已退役。[manual/README.md](manual/README.md) 仅保留旧记录核验及独立人工审查（新独立审查使用 `gpt-6.1-sol/high` 并登记真实身份）。
 
 ## 怎样才算完成
 
-日更是否完成，按 [AGENTS.md 的六项完成定义](AGENTS.md#日更完成的六项)逐项核对；下面沿用同一编号和同一口径，权威清单在 AGENTS.md：
+一次日更必须同时满足 [AGENTS.md 的六项完成定义](AGENTS.md#日更完成的六项)才算结束（权威口径在 AGENTS.md）：
 
-1. 数据与来源：正式分析、封存来源、解读长文、评分和标签通过当前检查。
-2. 审查：最终页面通过程序、正文、图片及 Hugo 审查，凭证覆盖完整目标集合。
-3. 远端发布：只推送凭证允许的精确差异，核验远端 `main` 提交 ID。
-4. 部署：对应提交或保留已审页面字节的后续提交部署成功。
-5. 网页核验：逐页核验 HTTP 200、正式地址与标题，并保存记录。
-6. 不生图登记与重读状态：登记与当前发布绑定的不生图记录，最后重新读取状态。生图入口已退役；若用户要求生图，先按维护流程恢复实现并另行审批，不在本批次内临时启动。
+1. **数据与来源**：正式分析、封存来源、Reader 长文、评分与标签全部通过当前检查。
+2. **审查**：最终页面通过程序、正文、原图及 Hugo 构建审查，凭证覆盖完整目标集合。
+3. **远端发布**：只推送凭证允许的精确差异，并核对远端 `main` 提交 OID。
+4. **部署**：对应提交（或保留已审页面字节的后续提交）的 Pages 构建与部署均成功。
+5. **网页核验**：逐页核对汇总与单篇的 HTTP 200、正式地址与准确标题，并保存记录。
+6. **不生图登记与重读状态**：绑定本次发布的不生图记录有效，最后重跑 `npm run digest:status -- --date YYYY-MM-DD` 复核。
 
-`digest:status` 只报告读取时的状态。部署和网页仍须分别验收，不能只凭状态显示完成就宣布上线。运行中用 `--watch` 观察，默认每 10 秒刷新；它不完整核验豁免，最终发布、图片登记或豁免变化后，要重新读取普通完整状态。
+`digest:status` 只反映读取瞬间的本地与发布状态，不能代替第 4、5 项的真实部署和网页核验。
 
 ## 文档导航
 
-- [项目导读](docs/project-guide.md)：先认识来源、处理结果、博客和阅读应用的关系。
-- [操作手册](SKILL.md)：正常顺序、恢复入口和完成要求。
-- [客户端性能](docs/client-performance.md)：1.4.3 的启动、目录、导读和云上传优化，缓存位置与复测方法。
-- [客户端发行核验](docs/client-release-verification.md)：两端签名、证书、十二件附件、校验表和匿名下载核验。
-- [文档索引](docs/README.md)：按读者任务找到配置、来源、解读、分类和故障说明。
-- [脚本索引](scripts/README.md)：查入口、公共模块和旧记录兼容代码。
-- [写作 skill](skills/clear-technical-writing/SKILL.md)与[项目写作约定](docs/writing-guide.md)：初学者解释、段落、术语、图表和双语要求。
+- [项目导读](docs/project-guide.md)：10 分钟看懂来源、分析、网站和客户端之间的关系。
+- [操作手册](SKILL.md)与 [AGENTS.md](AGENTS.md)：完整操作顺序、失败恢复与不可绕过的执行限制。
+- [文档总索引](docs/README.md)：按场景找配置、来源、标签、备份、客户端性能与故障排查。
+- [脚本指南](scripts/README.md)与[完整脚本索引](scripts/INDEX.md)：查入口、核心库与兼容模块。
+- [客户端发行核验](docs/client-release-verification.md)：Mac 与 Android 安装包签名、证书、附件与 SHA-256 校验记录。
+- [写作 skill](skills/clear-technical-writing/SKILL.md)与[项目写作约定](docs/writing-guide.md)：面向初学者的讲解、段落、术语与配图规范。
