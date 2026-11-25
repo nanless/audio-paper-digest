@@ -8117,7 +8117,7 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
                 f'issues[{index}].description 必须是非空字符串',
             )
         if required and re.search(
-            r'无法判断|不能判断|无法确认|不确定|cannot\s+determine|unable\s+to\s+determine|uncertain|indeterminate',
+            r'无法判断|不能判断|无法确认|不确定(?!性)|cannot\s+determine|unable\s+to\s+determine|\buncertain\b|\bindeterminate\b',
             description or '',
             flags=re.IGNORECASE,
         ):

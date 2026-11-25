@@ -578,7 +578,8 @@ function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
         || stage.protocol !== 'local_operator' || stage.newReaderApiRequests !== 0
         || proof.executionKind !== 'operator' || proof.newReaderApiRequests !== 0
         || stage.fingerprint !== daily.stableHash(proof)
-        || !isDeepStrictEqual(stage.operatorHistory, [proof])) fail('当前批次根只支持一次真实签名事实修正');
+        || !Array.isArray(stage.operatorHistory) || !stage.operatorHistory.length || stage.operatorHistory.length > 8
+        || !isDeepStrictEqual(stage.operatorHistory.at(-1), proof)) fail('当前批次根只支持有界链内的真实签名事实修正');
     const before = daily.stableHash(paper);
     const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...actualRun, runDir: path.dirname(runFile) }));
     const take = (file, expected) => {
@@ -594,7 +595,10 @@ function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
         || !Array.isArray(manifest.value.correctionFiles)
         || manifest.value.correctionFiles.filter(file => path.resolve(file) === packet.file).length !== 1
         || !isDeepStrictEqual(record.legacyBatchRoot, stage.legacyBatchRoot)
-        || !isDeepStrictEqual(stage.originBatchOperatorStage, parent?.analysisManifest?.stages?.apiReaderArticle)
+        || (stage.operatorHistory.length === 1
+            ? !isDeepStrictEqual(stage.originBatchOperatorStage, parent?.analysisManifest?.stages?.apiReaderArticle)
+            : (!isDeepStrictEqual(stage.originBatchOperatorStage, parent?.analysisManifest?.stages?.apiReaderArticle?.originBatchOperatorStage)
+                || !isDeepStrictEqual(parent?.analysisManifest?.stages?.apiReaderArticle?.operatorHistory, stage.operatorHistory.slice(0, -1))))
         || proof.parentPaperSha256 !== record.parentPaperSha256 || proof.parentArticleSha256 !== record.parentArticleSha256
         || proof.parentPlanSha256 !== record.parentPlanSha256 || proof.feedbackSha256 !== record.feedbackSha256
         || proof.beforeDraftSha256 !== record.baselineDraftSha256 || proof.afterDraftSha256 !== repair.hashDraft(record.draft)
@@ -612,7 +616,8 @@ function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
     require('./analysis-stop-control').withModelRequestsForbidden(() => daily.withDailyFreshAnalysisContext(plan,
         () => fresh.withFreshPaperContext(paper, () => {
             const checked = readLegacyRoot(record, parent, plan, source);
-            if (!isDeepStrictEqual(stage.ordinalPatchHistory, checked.rootStage.ordinalPatchHistory)
+            if (!isDeepStrictEqual(stage.originBatchOperatorStage, checked.rootStage)
+                || !isDeepStrictEqual(stage.ordinalPatchHistory, checked.rootStage.ordinalPatchHistory)
                 || ['attempts', 'fullAttempts', 'noProgress', 'transportFailures', 'imageEvidenceSha256',
                     'imageEvidenceCount', 'modelImagePreflightEvidenceSha256', 'providerImageExclusions',
                     'providerImageExclusionSha256'].some(key => !isDeepStrictEqual(stage[key], checked.rootStage[key]))
