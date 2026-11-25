@@ -7,6 +7,7 @@ const daily = require('./daily-fresh-source-plan');
 const facts = require('./daily-fact-review');
 const repair = require('./reader-repair');
 const format = require('./daily-reader-signed-correction-format');
+const { matchesRelocatedRepoPath, relocatePathWithinRoot } = require('./repo-rename-path');
 const CONTRACT = format.TERMINOLOGY;
 const factPatch = require('./daily-reader-signed-fact-patch');
 const FACT_CONTRACT = factPatch.CONTRACT;
@@ -54,9 +55,10 @@ function read(file) {
     } finally { fs.closeSync(fd); }
 }
 function within(file, root) {
-    const relative = path.relative(path.resolve(root), path.resolve(file));
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('文件超出受控运行目录');
-    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(path.resolve(file)));
+    const resolved = relocatePathWithinRoot(file, root);
+    if (!resolved) fail('文件超出受控运行目录');
+    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
+    return resolved;
 }
 function unchanged(snapshot) { if (read(snapshot.file).sha256 !== snapshot.sha256) fail('原文件字节改变'); }
 function readerOnly(feedback, paper) {
@@ -109,7 +111,7 @@ function readCurrentBatchRoot(record, paper, plan, source) {
         [proof.correctionFile, proof.correctionSha256],
         [proof.originalCandidateFile, proof.originalCandidateEnvelopeSha256]
     ].map(([file, expected]) => {
-        within(file, root); const snapshot = read(file);
+        const snapshot = read(within(file, root));
         if (snapshot.sha256 !== expected) fail('当前原批次文件摘要不同');
         return snapshot;
     });
@@ -143,8 +145,7 @@ function readLegacyRoot(record, paper, plan, source) {
     if (!Array.isArray(history) || history.length > 8) fail('旧批次根历史不完整');
     if (history.length) {
         const first = history[0];
-        within(first.correctionFile, path.dirname(require('../config').FILES.dailyFreshSourceRunsDir));
-        const snapshot = read(first.correctionFile);
+        const snapshot = read(within(first.correctionFile, path.dirname(require('../config').FILES.dailyFreshSourceRunsDir)));
         if (snapshot.sha256 !== first.correctionSha256 || !format.isFact(snapshot.value)
             || !isDeepStrictEqual(snapshot.value.legacyBatchRoot, record.legacyBatchRoot)
             || daily.stableHash(snapshot.value.parentPaper) !== snapshot.value.parentPaperSha256) fail('旧批次根的首个人工父稿或描述不同');
@@ -175,8 +176,7 @@ function preDispatchRetryParent(record, paper, plan, feedback) {
     const pin = (file, expected) => {
         if (typeof file !== 'string' || !path.isAbsolute(file)
             || !/^[a-f0-9]{64}$/.test(expected || '')) fail('原派发前文件身份无效');
-        within(file, root);
-        const snapshot = read(file);
+        const snapshot = read(within(file, root));
         if (snapshot.sha256 !== expected) fail('原派发前文件SHA不同');
         return snapshot.value;
     };
@@ -423,7 +423,7 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
         || record.historyParents.length !== history.length) fail('人工历史与真实父快照不完整');
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir), snapshots = [];
     const readProof = (file, expected) => {
-        within(file, root); const result = read(file);
+        const result = read(within(file, root));
         if (result.sha256 !== expected) fail('原人工历史文件SHA不一致');
         snapshots.push(result); return result.value;
     };
@@ -583,7 +583,7 @@ function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
     const before = daily.stableHash(paper);
     const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...actualRun, runDir: path.dirname(runFile) }));
     const take = (file, expected) => {
-        within(file, root); const snapshot = read(file);
+        const snapshot = read(within(file, root));
         if (snapshot.sha256 !== expected) fail('当前签名记录摘要不同');
         return snapshot;
     };
@@ -593,7 +593,7 @@ function validateSavedCurrentBatchCorrection(paper, actualRun, runFile) {
         || manifest.value.runId !== plan.runId || manifest.value.batchDate !== plan.batchDate
         || manifest.value.authorization !== proof.authorization || !proof.authorization?.trim()
         || !Array.isArray(manifest.value.correctionFiles)
-        || manifest.value.correctionFiles.filter(file => path.resolve(file) === packet.file).length !== 1
+        || manifest.value.correctionFiles.filter(file => matchesRelocatedRepoPath(file, packet.file)).length !== 1
         || !isDeepStrictEqual(record.legacyBatchRoot, stage.legacyBatchRoot)
         || (stage.operatorHistory.length === 1
             ? !isDeepStrictEqual(stage.originBatchOperatorStage, parent?.analysisManifest?.stages?.apiReaderArticle)
@@ -646,14 +646,14 @@ async function prepare(filename, plan, papers, feedbacks, selectedIds) {
     require('../env-loader').requireExternalRuntime('daily-reader-signed-correction');
     require('../workspace-role').requireWorkspaceRole('daily');
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
-    within(filename, root); const manifest = read(filename), m = manifest.value;
+    const manifest = read(within(filename, root)), m = manifest.value;
     if (!format.header(m) || m.runId !== plan.runId || m.batchDate !== plan.batchDate
         || typeof m.authorization !== 'string' || !m.authorization.trim()
         || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length
         || m.correctionFiles.length > require('./daily-reader-operator-correction').largeBatchCorrectionLimit(plan, papers)) fail('须为完整日批次的小尾部显式清单');
     const records = new Map();
     for (const file of m.correctionFiles) {
-        within(file, root); const snapshot = read(file), record = snapshot.value;
+        const snapshot = read(within(file, root)), record = snapshot.value;
         const paper = papers.find(p => require('../utils').normalizedId(p) === record.paperId);
         const feedback = feedbacks.get(record.paperId);
         if (!paper || !feedback || records.has(record.paperId) || !format.sameFormat(record, m)) fail('目标、事实反馈缺失、重复或合同混用');

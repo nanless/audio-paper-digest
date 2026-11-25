@@ -3940,7 +3940,9 @@ function candidatePath(directory, identity) {
 function readFailedCandidateEnvelope(directory, identity, candidateFilename = null) {
     let absolute;
     try { absolute = assertSafeDirectory(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-    const filename = candidateFilename === null ? candidatePath(absolute, identity) : path.resolve(candidateFilename);
+    const filename = candidateFilename === null
+        ? candidatePath(absolute, identity)
+        : (require('./repo-rename-path').relocatePathWithinRoot(candidateFilename, absolute) || path.resolve(candidateFilename));
     if (path.dirname(filename) !== absolute) {
         throw new Error('Reader 候选路径必须位于当前私有目录');
     }

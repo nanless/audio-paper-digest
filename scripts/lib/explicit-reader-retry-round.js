@@ -445,8 +445,10 @@ function validatePersistedRound(directory, identity, payload) {
             || (proof.maxResponses === 3 && proof.maxFullResponses === 0))
         || payload.attempts > proof.maxResponses || payload.fullAttempts > proof.maxFullResponses) throw new Error('明确 Reader 新轮正文预算或证明不合法');
     const expected = path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.json`);
-    if (path.resolve(proof.receiptFile) !== path.resolve(expected)) throw new Error('Reader 新轮证明路径不合法');
-    for (const file of [expected, path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)]) {
+    const expectedArchived = path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`);
+    const { matchesRelocatedRepoPath } = useModule('./repo-rename-path');
+    if (!matchesRelocatedRepoPath(proof.receiptFile, expected)) throw new Error('Reader 新轮证明路径不合法');
+    for (const file of [expected, expectedArchived]) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Reader 新轮原稿或证明不是安全普通文件');
     }
@@ -454,8 +456,8 @@ function validatePersistedRound(directory, identity, payload) {
     const receipt = scopedReader.readReaderProofJson(expected, { privateFile: false }).value;
     if (!isBaseRound(receipt) || receipt.contract !== proof.contract
         || receipt.schemaFingerprint !== proof.schemaFingerprint) throw new Error('Reader 新轮原证明格式与回执不一致');
-    if (path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)) throw new Error('Reader 新轮原档路径不合法');
-    const originalRecord = scopedReader.readReaderProofJson(receipt.archivedFile, { privateFile: false,
+    if (!matchesRelocatedRepoPath(receipt.archivedFile, expectedArchived)) throw new Error('Reader 新轮原档路径不合法');
+    const originalRecord = scopedReader.readReaderProofJson(expectedArchived, { privateFile: false,
         expectedSha256: receipt.grant.envelopeSha256,
         shaMismatchMessage: 'Reader 新轮原稿或实际请求预算证明不一致' });
     if (originalRecord.sha256 !== receipt.grant.envelopeSha256) throw new Error('Reader 新轮原稿或实际请求预算证明不一致');
@@ -483,11 +485,11 @@ function validatePersistedRound(directory, identity, payload) {
     if (proof.fullRegenerationReasonSha256 !== regenerationReason)
         throw new Error('Reader 完整无进展再生原因与已核验父账不匹配');
     if (!['prepared', 'active'].includes(receipt.status)
-        || path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)
+        || !matchesRelocatedRepoPath(receipt.archivedFile, expectedArchived)
         || receipt.grant.roundId !== proof.roundId
         || (useModule('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
             && !sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt))
-        || hash(fs.readFileSync(receipt.archivedFile)) !== receipt.grant.envelopeSha256
+        || hash(fs.readFileSync(expectedArchived)) !== receipt.grant.envelopeSha256
         || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0 || receipt.physicalRequests > receipt.grant.maxPhysicalRequests
         || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0 || receipt.reservedOutputTokens > receipt.grant.maxReservedOutputTokens) {
         throw new Error('Reader 新轮身份、原稿或实际请求预算证明不一致');
@@ -517,7 +519,7 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
     // 局部子轮或已保存新内容不能借此回到祖先稿；物理请求只证明已预留，不证明收到正文。
     if (receipt.status !== 'active' || !isBaseRound(receipt.grant)
         || !receipt.requests.length || receipt.requests.some(request => request.stage !== 'apiReaderArticle')) return payload;
-    const source = readMigrationEnvelope(receipt.archivedFile);
+    const source = readMigrationEnvelope(paths(directory, payload.explicitReaderRetryRound.roundId).archived);
     const original = source.envelope;
     const allowedFields = useModule('./reader-recovery-revision').ALLOWED_FIELDS;
     const semantic = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !allowedFields.includes(key)));

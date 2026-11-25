@@ -25,10 +25,11 @@ const statFields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'nlink']
 const sameStat = (a, b) => statFields.every(key => a[key] === b[key]);
 
 function readResolvedFile(directory, filename, expectedSha) {
-    require('./fresh-rewrite-run').assertSafeDirectory(directory);
+    const safeDirectory = require('./fresh-rewrite-run').assertSafeDirectory(directory);
+    const resolvedFilename = require('./repo-rename-path').relocatePathWithinRoot(filename, safeDirectory) || path.resolve(filename);
     if (!/^[a-f0-9]{64}$/.test(expectedSha || '')
-        || path.dirname(path.resolve(filename)) !== path.resolve(directory)) fail('须显式指定本运行目录内的档案及完整 SHA');
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        || path.dirname(resolvedFilename) !== path.resolve(directory)) fail('须显式指定本运行目录内的档案及完整 SHA');
+    const fd = fs.openSync(resolvedFilename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const before = fs.fstatSync(fd, { bigint: true });
         if (!before.isFile() || before.nlink !== 1n || (before.mode & 0o777n) !== 0o600n
@@ -37,14 +38,14 @@ function readResolvedFile(directory, filename, expectedSha) {
         if (sha(bytes) !== expectedSha) fail('原档案字节改变');
         const envelope = JSON.parse(bytes.toString('utf8'));
         const identitySha = hash(envelope.identity);
-        if (!new RegExp(`^${identitySha}\\.[a-f0-9-]{36}\\.resolved\\.json$`).test(path.basename(filename))
+        if (!new RegExp(`^${identitySha}\\.[a-f0-9-]{36}\\.resolved\\.json$`).test(path.basename(resolvedFilename))
             || !require('./reader-repair').isCandidateEnvelope(envelope)
             || envelope.payloadSha256 !== hash(envelope.payload)) fail('档案名称、版本或内容证明不一致');
         if (!sameStat(before, fs.fstatSync(fd, { bigint: true }))
-            || !sameStat(before, fs.lstatSync(filename, { bigint: true }))) fail('读取时档案发生变化');
+            || !sameStat(before, fs.lstatSync(resolvedFilename, { bigint: true }))) fail('读取时档案发生变化');
         return { envelope, identitySha, assertUnchanged() {
-            const named = fs.lstatSync(filename, { bigint: true });
-            if (!sameStat(before, named) || sha(fs.readFileSync(filename)) !== expectedSha) fail('保存前原档案发生变化');
+            const named = fs.lstatSync(resolvedFilename, { bigint: true });
+            if (!sameStat(before, named) || sha(fs.readFileSync(resolvedFilename)) !== expectedSha) fail('保存前原档案发生变化');
         } };
     } finally { fs.closeSync(fd); }
 }

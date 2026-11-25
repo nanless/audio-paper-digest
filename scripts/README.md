@@ -440,6 +440,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/reader-signed-table-targets.js` | 签名修正的真实表序与目标来源核验：内联表和独立 TABLE 标记一起定位；原占位表须重放到已签父表，获准新表由正常编译或同一 DOM 的严格逐格行列投影得到，不混拼、猜值或增删表。 |
 | `lib/reader-signed-operator.js` | Node 库：显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时核对先前保存且不再改动的准备记录，其中包含修改请求、父稿、运行、来源和预期输出的 SHA。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/signed-reader-recovery-draft.js` | Node 库：将已核验签名长文恢复为可局部修改的文章数据，保留章节、术语及图表公式对应关系；不接受来源不明的正文。 |
+| `lib/repo-rename-path.js` | Node 库：主仓目录从 `audio-paper-digest` 更名为 `audio-research-workbench` 后的单段历史路径只读兼容辅助；仅在单一路径段从旧目录名精确对应现目录名且无 `..` 越界时返回受控现路径，不放宽任何 SHA、权限或来源校验。 |
 
 ### 标签与多级展示
 

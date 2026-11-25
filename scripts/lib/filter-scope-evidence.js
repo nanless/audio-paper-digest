@@ -99,13 +99,18 @@ function assertFilterScopeEvidence(paper, evidence, batchDate = evidence?.batchD
     const original = evidence.contract === ORIGINAL_SCOPE_HEADER.contract;
     const allowedRoots = original ? [sourceRoot(paper, batchDate, true)]
         : [sourceRoot(paper, batchDate), sourceRoot(paper, batchDate, true)];
+    const { matchesRelocatedRepoPath } = require('./repo-rename-path.js');
     const expectedRoot = allowedRoots.find(root => fs.existsSync(root)
-        && path.resolve(evidence.rootDir || '') === fs.realpathSync(root));
+        && matchesRelocatedRepoPath(evidence.rootDir || '', fs.realpathSync(root)));
     if (!expectedRoot) fail('来源目录不属于本批次论文输入');
     const id = sources.normalizedArxivId(paper.arxivId || paper.paper_id || paper.id);
     if (evidence.arxivId !== id || evidence.generation !== 1) fail('来源论文身份或获取序号不一致');
     const stored = sources.readFreshArxivRewriteSource({ rootDir: expectedRoot, arxivId: id, generation: 1 });
-    if (JSON.stringify(canonical(makeEvidence(paper, batchDate, stored, original))) !== JSON.stringify(canonical(evidence))) {
+    const rebuilt = makeEvidence(paper, batchDate, stored, original);
+    if (rebuilt.rootDir !== evidence.rootDir && matchesRelocatedRepoPath(evidence.rootDir, rebuilt.rootDir)) {
+        rebuilt.rootDir = evidence.rootDir;
+    }
+    if (JSON.stringify(canonical(rebuilt)) !== JSON.stringify(canonical(evidence))) {
         fail('来源四文件、清单或实际模型正文与保存的证明不一致');
     }
     return evidence;

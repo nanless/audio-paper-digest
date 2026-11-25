@@ -79,8 +79,10 @@ function paidProof(paper, receipt, pinned, expectedRequest) {
     const id = require('../utils').normalizedId(paper), runId = paper.freshRewriteProvenance.runId;
     let records;
     if (pinned) records = pinned.map(item => {
-        if (path.dirname(path.resolve(item.file)) !== path.resolve(directory)) fail('付费存证不在正常用量目录');
-        const read = readPhysical(item.file); if (read.physicalSha256 !== item.physicalSha256) fail('原付费用量字节变化'); return read;
+        const usageDir = path.resolve(directory);
+        const usageFile = require('./repo-rename-path').relocatePathWithinRoot(item.file, usageDir) || path.resolve(item.file);
+        if (path.dirname(usageFile) !== usageDir) fail('付费存证不在正常用量目录');
+        const read = readPhysical(usageFile); if (read.physicalSha256 !== item.physicalSha256) fail('原付费用量字节变化'); return read;
     });
     else {
         records = fs.readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.json$/.test(name)).map(name => readPhysical(path.join(directory, name)));

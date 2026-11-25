@@ -9,6 +9,7 @@ const { isDeepStrictEqual } = require('node:util');
 const repair = require('./reader-repair');
 const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const { strictJson } = require('./publication-file-primitives');
+const { matchesRelocatedRepoPath, relocatePathWithinRoot } = require('./repo-rename-path');
 const format = require('./reader-ordinal-format');
 const CONTRACT = format.wireHeader().contract;
 const COMPILATION_CONTRACT = format.compilationHeader().contract;
@@ -396,17 +397,20 @@ function validateSealRecords(seal,expected) {
     if(!format.isRecord(seal,expected.request.readerTargetOrdinalRequest)||seal.id!==expected.requestId||seal.identitySha256!==repair.hashDraft(expected.identity)
         ||seal.requestSha256!==expected.requestSha256||seal.responseSha256!==expected.responseSha256||seal.compilationSha256!==expected.compilationSha256
         ||!Array.isArray(seal.usageRecords)||!Array.isArray(seal.witnesses))fail('seal identity mismatch');
-    const usageDir=path.resolve(require('../config').FILES.llmUsageDir),events=[];
+    const usageDir=path.resolve(require('../config').FILES.llmUsageDir),events=[],usageFiles=new Set();
     for(const ref of seal.usageRecords){
-        if(path.dirname(path.resolve(ref.file))!==usageDir||!/^[a-f0-9-]{36}\.json$/.test(path.basename(ref.file)))fail('usage outside normal ledger');
-        const event=read(ref.file,ref.sha256).value;
+        const usageFile=relocatePathWithinRoot(ref.file,usageDir)||path.resolve(ref.file);
+        if(path.dirname(usageFile)!==usageDir||!/^[a-f0-9-]{36}\.json$/.test(path.basename(usageFile)))fail('usage outside normal ledger');
+        const event=read(usageFile,ref.sha256).value;
         if(event.eventId!==ref.eventId||event.kind!==ref.kind||event.paperId!==expected.identity.paperId||!['apiReaderRepair','apiReaderImageProbe'].includes(event.stage))fail('normal usage identity mismatch');
+        usageFiles.add(usageFile);
         events.push(event);
     }
-    const inputs=[];
+    const expectedDir=path.resolve(expected.directory),inputs=[];
     for(const ref of seal.witnesses){
-        if(path.dirname(path.resolve(ref.path))!==path.resolve(expected.directory))fail('witness outside diagnostic directory');
-        const w=read(ref.path,ref.sha256).value;
+        const witnessFile=relocatePathWithinRoot(ref.path,expectedDir)||path.resolve(ref.path);
+        if(path.dirname(witnessFile)!==expectedDir)fail('witness outside diagnostic directory');
+        const w=read(witnessFile,ref.sha256).value;
         if(!format.isWire(w)||!isDeepStrictEqual(format.readWireHeader(w),format.readWireHeader(expected.request.readerTargetOrdinalRequest))||w.id!==expected.requestId||w.requestSha256!==expected.requestSha256||w.requestToken!==expected.request.readerTargetOrdinalRequest.requestToken
             ||w.promptSha256!==expected.request.promptSha256||w.inputMessagesSha256!==expected.request.inputMessagesSha256
             ||!isDeepStrictEqual(w.images,expected.request.images)||w.containsImagePixels!==false)fail('input witness changed');
@@ -415,7 +419,7 @@ function validateSealRecords(seal,expected) {
     const starts=events.filter(e=>e.kind==='request_started'),ends=events.filter(e=>e.kind==='request'),dispositions=events.filter(e=>e.kind==='disposition');
     if(events.length!==starts.length+ends.length+dispositions.length||starts.length<1||starts.length>2
         ||ends.length!==starts.length||dispositions.length!==1
-        ||new Set(seal.usageRecords.map(r=>r.file)).size!==events.length
+        ||usageFiles.size!==events.length
         ||events.some(e=>!isUsageEventFormat(e)||e.runId!==expected.identity.freshAnalysis.runId
             ||e.paperId!==expected.identity.paperId||e.stage!=='apiReaderRepair'||e.unitId!==sha(expected.requestId)
             ||e.contentAttempt!==expected.request.contentAttempt))fail('normal fee run/stage/attempt chain differs');
@@ -888,8 +892,9 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
         if(marked)fail('operator completion retains ordinary completion markers','run');
         const ref=history?.previousCompletionProof;
         if(files.length){
+            const latestFile=path.join(dir,files.at(-1));
             if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1)||!ref||!ref.path||!ref.sha256
-                ||path.resolve(ref.path)!==path.join(dir,files.at(-1))||!read(ref.path,ref.sha256).value)
+                ||!matchesRelocatedRepoPath(ref.path,latestFile)||!read(latestFile,ref.sha256).value)
                 fail('superseded completion pointer differs','run');
         }else if(ref!==null&&ref!==undefined)fail('operator claims absent ordinary completion','run');
         const signed = require('./daily-reader-signed-correction');
@@ -909,8 +914,9 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
     // 仍指向最新完成文件且字节相符，才承认它已被本次重做接替。
     const revision=paper?.readerRevisionHistory;
     function verifyRevisionPointer(){
-        if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1)))fail('revision completion pointer differs','run');
-        const saved=read(revision.completionProof.path,revision.completionProof.sha256).value;
+        const latestFile=path.join(dir,files.at(-1));
+        if(!matchesRelocatedRepoPath(revision.completionProof.path,latestFile))fail('revision completion pointer differs','run');
+        const saved=read(latestFile,revision.completionProof.sha256).value;
         if(!format.isCompilation(saved)||saved.kind!=='normal-final-completion'
             ||saved.paperId!==canonical(paper)||saved.sequence!==files.length
             ||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
@@ -971,15 +977,16 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
     // 由 operatorProvenance 接替当前冷核。删掉指针或改文件仍按原规则阻断。
     if(!marked&&history?.reason==='operator-correction-supersedes-ordinal-completion'){
         const ref=history.previousCompletionProof;
-        if(!ref||!ref.path||!ref.sha256||path.resolve(ref.path)!==path.join(dir,files.at(-1))
-            ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
+        const latestFile=path.join(dir,files.at(-1));
+        if(!ref||!ref.path||!ref.sha256||!matchesRelocatedRepoPath(ref.path,latestFile)
+            ||!read(latestFile,ref.sha256).value)fail('superseded completion pointer differs','run');
         return null;
     }
     if(!marked||!stage)fail('completion index/marker removed','content','READER_ORDINAL_ORIGIN_MISSING');
     const ref=stage.ordinalCompletionProof;
-    const selected=ref&&files.find(name=>path.resolve(ref.path)===path.join(dir,name));
+    const selected=ref&&files.find(name=>matchesRelocatedRepoPath(ref.path,path.join(dir,name)));
     if(!ref||!selected||!historicalOrigin&&selected!==files.at(-1))fail('latest completion not selected','run');
-    const saved=read(ref.path,ref.sha256).value;
+    const saved=read(path.join(dir,selected),ref.sha256).value;
     const initialSource=savedSourceScope(paper,saved.identity,attempts);
     if(!format.isCompilation(saved)||saved.kind!=='normal-final-completion'||saved.paperId!==canonical(paper)
         ||saved.sequence!==Number(selected.slice(-13,-5))||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)

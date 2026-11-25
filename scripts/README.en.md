@@ -551,6 +551,7 @@ Its restricted table shapes also verify front-end/attack identities, budgets, le
 | `lib/reader-signed-table-targets.js` | Locates true table order across inline tables and TABLE markers. Old placeholders must replay to signed parent tables; approved targets use normal compilation or strict same-DOM cell/row/column mapping. No mixing, guessing, or adding/removing tables. |
 | `lib/reader-signed-operator.js` | Explicitly revises a verified Reader in the same run after checking full parent/article/plan/source SHAs. Reconstructs/parses/normally seals, checking immutable preparation records on recovery with edit/parent/run/source/expected-output SHAs. Writes isolated analysis only and requires fact review; no API calls. |
 | `lib/signed-reader-recovery-draft.js` | Reconstructs a verified signed article as a local-edit draft, preserving sections, terms, and formula/table/figure relations. Rejects untraceable article text. |
+| `lib/repo-rename-path.js` | Read-only single-segment path relocation helper for historical evidence written before the repository directory rename (`audio-paper-digest` to `audio-research-workbench`); rejects traversal and unrelated directories without relaxing SHA, permission, or source checks. |
 
 
 **`lib/daily-reader-operator-correction.js` — full operating conditions**

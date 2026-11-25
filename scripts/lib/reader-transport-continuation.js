@@ -111,7 +111,7 @@ function basis(parentRecord, candidateRecord, directory, rows) {
         fail('parent ledger, original budget, or zero-content counters differ');
     }
     const originalFile = path.join(directory, 'explicit-retry-rounds', parent.grant.roundId + '.original.json');
-    if (path.resolve(parent.archivedFile) !== path.resolve(originalFile)) fail('original archive path differs');
+    if (!require('./repo-rename-path').matchesRelocatedRepoPath(parent.archivedFile, originalFile)) fail('original archive path differs');
     const original = checked(originalFile, parent.grant.envelopeSha256).value;
     if (original.payloadSha256 !== hash(original.payload) || hash(original.identity) !== parent.grant.originalIdentitySha256
         || hash(original.payload) !== parent.grant.payloadSha256
@@ -206,10 +206,14 @@ function paidAnchorFile(directory, roundId) {
 function anchorPaidRows(files, identity, receipt, rawSha256) {
     const root = path.resolve(require('../config').FILES.llmUsageDir);
     if (!Array.isArray(files) || files.length !== 3) fail('consumed paid anchor requires the original three saved fee records');
+    const { matchesRelocatedRepoPath } = require('./repo-rename-path');
     const rows = files.map(file => {
-        if (path.dirname(path.resolve(file.file)) !== root || !uuid.test(path.basename(file.file,'.json'))
+        const base = typeof file?.file === 'string' ? path.basename(file.file) : '';
+        const dir = typeof file?.file === 'string' ? path.dirname(file.file) : '';
+        if (!matchesRelocatedRepoPath(dir, root) || !uuid.test(path.basename(base,'.json'))
+            || path.join(dir, base) !== file.file
             || !hex.test(file.sha256 || '')) fail('consumed paid anchor fee path differs');
-        const record = checked(file.file, file.sha256); return { ...file, event: record.value };
+        const record = checked(path.join(root, base), file.sha256); return { ...file, event: record.value };
     });
     const starts = rows.filter(row => row.event.kind === 'request_started'), terminals = rows.filter(row => row.event.kind === 'request');
     const dispositions = rows.filter(row => row.event.kind === 'disposition');

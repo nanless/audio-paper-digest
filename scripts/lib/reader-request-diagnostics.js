@@ -1,6 +1,7 @@
 'use strict';
 const { isFreshSourceProvenance } = require('./daily-source-format');
 const { isUsageEventFormat } = require('./llm-usage-format');
+const { matchesRelocatedRepoPath, relocatePathWithinRoot } = require('./repo-rename-path');
 
 
 // 只保存真实修复请求与响应，不授予正文或发布资格。
@@ -273,16 +274,18 @@ function vmLogical(identity) {
 function vmFeeFiles(records) {
     const root = path.resolve(require('../config').FILES.llmUsageDir);
     return records.map(record => {
-        vmNeed(path.dirname(path.resolve(record.file)) === root && VM_FILE.test(path.basename(record.file)), 'fee path is not the normal ledger');
-        const read = vmRead(record.file, record.sha256);
-        return { file: path.resolve(record.file), sha256: read.sha256, event: read.value };
+        const file = relocatePathWithinRoot(record.file, root) || path.resolve(record.file);
+        vmNeed(path.dirname(file) === root && VM_FILE.test(path.basename(file)), 'fee path is not the normal ledger');
+        const read = vmRead(file, record.sha256);
+        return { file, sha256: read.sha256, event: read.value };
     });
 }
 function vmPair(records, { identity, stage, contentAttempt, outputSha256, disposition, unitId, inputSha256 }) {
     const rows = vmFeeFiles(records), starts = rows.filter(row => row.event.kind === 'request_started');
     const ends = rows.filter(row => row.event.kind === 'request');
     const dispositions = rows.filter(row => row.event.kind === 'disposition');
-    vmNeed(rows.length === starts.length + ends.length + dispositions.length && starts.length >= 1 && starts.length <= 2
+    vmNeed(new Set(rows.map(row => row.file)).size === rows.length
+        && rows.length === starts.length + ends.length + dispositions.length && starts.length >= 1 && starts.length <= 2
         && ends.length === starts.length && dispositions.length === 1, 'fee starts/terminals/disposition are incomplete or ambiguous');
     const labels = ['runId','paperId','stage','unitId','contentAttempt','transportAttempt','protocol','model','inputSha256'];
     for (const row of starts) {
@@ -478,15 +481,16 @@ function validateReaderVersionMetadataCompletion(paper) {
     }
     const bound = vmSource(paper);
     const index = vmRead(indexFile).value;
+    const completionsDir = vmSubdirectory(attempts, 'version-metadata-completions', false);
+    const filename = relocatePathWithinRoot(index.completion?.file, completionsDir) || path.resolve(index.completion?.file || '');
     vmNeed(validMetadataHeader(index) && index.kind === 'stable_source_paper_completion_index'
         && index.paperId === paper.arxivId && vmHash(index.sourceDescriptor) === vmHash(bound.source.freshSourceDescriptor)
-        && path.dirname(index.completion?.file || '') === vmSubdirectory(attempts, 'version-metadata-completions', false)
+        && path.dirname(filename) === completionsDir
         && /^[a-f0-9]{64}$/.test(index.completion.sha256 || ''), 'stable paper/source index differs');
-    const filename = index.completion.file;
     const registry = vmRead(filename, index.completion.sha256), record = registry.value, locator = stage?.versionMetadataRecoveryProof;
     vmNeed(marker === index.contract && stage?.versionMetadataRecoveryContract === index.contract
         && stage?.versionMetadataRecoverySchemaFingerprint === index.schemaFingerprint
-        && locator?.file === filename && locator.sha256 === registry.sha256, 'completion proof/marker was removed or changed');
+        && matchesRelocatedRepoPath(locator?.file, filename) && locator.sha256 === registry.sha256, 'completion proof/marker was removed or changed');
     vmNeed(vmHash(metadataHeader(record)) === vmHash(metadataHeader(index)) && record.paperId === paper.arxivId
         && path.basename(filename) === vmCanonical(paper.arxivId) + '-' + record.articleSha256 + '.json'
         && vmHash(record.sourceDescriptor) === vmHash(bound.source.freshSourceDescriptor)
@@ -495,8 +499,9 @@ function validateReaderVersionMetadataCompletion(paper) {
         && vmHash(record.stageCore) === vmHash(vmStageCore(stage)), 'normal final source/article/plan/stage differs');
     const pending = record.pending;
     vmNeed(vmHash(metadataHeader(pending)) === vmHash(metadataHeader(index)), 'pending proof format differs from immutable index');
-    vmNeed(pending.origin.file === vmOriginFile(bound.attempts, paper.arxivId, pending.beforeRawSha256), 'cold origin fixed path differs');
-    const origin = vmRead(pending.origin.file, pending.origin.sha256);
+    const expectedOriginFile = vmOriginFile(bound.attempts, paper.arxivId, pending.beforeRawSha256);
+    vmNeed(matchesRelocatedRepoPath(pending.origin.file, expectedOriginFile), 'cold origin fixed path differs');
+    const origin = vmRead(expectedOriginFile, pending.origin.sha256);
     const envelopeBytes = Buffer.from(origin.value.candidateRawBase64, 'base64'), envelope = JSON.parse(envelopeBytes);
     vmNeed(validMetadataHeader(origin.value) && origin.value.kind === 'original_paid_full'
         && sha(envelopeBytes) === origin.value.candidateEnvelopeSha256
@@ -509,11 +514,14 @@ function validateReaderVersionMetadataCompletion(paper) {
         && vmHash(origin.value.logicalIdentity) === vmHash(vmLogical(pending.identity)), 'cold original raw/source identity differs');
     vmPair(origin.value.fees, { identity: envelope.identity, stage: 'apiReaderArticle', contentAttempt: envelope.payload.attempts,
         outputSha256: pending.beforeRawSha256, disposition: 'rejected' });
-    const req = vmRead(pending.request.file, pending.request.sha256), res = vmRead(pending.response.file, pending.response.sha256);
-    vmNeed(path.dirname(pending.request.file) === path.join(bound.attempts, 'request-diagnostics')
-        && path.dirname(pending.response.file) === path.join(bound.attempts, 'request-diagnostics')
-        && path.basename(pending.request.file) === req.value.id + '.request.json'
-        && path.basename(pending.response.file) === req.value.id + '.response.json'
+    const diagnosticsDir = path.join(bound.attempts, 'request-diagnostics');
+    const requestFile = relocatePathWithinRoot(pending.request.file, diagnosticsDir) || path.resolve(pending.request.file);
+    const responseFile = relocatePathWithinRoot(pending.response.file, diagnosticsDir) || path.resolve(pending.response.file);
+    vmNeed(path.dirname(requestFile) === diagnosticsDir
+        && path.dirname(responseFile) === diagnosticsDir, 'cold metadata diagnostic chain differs');
+    const req = vmRead(requestFile, pending.request.sha256), res = vmRead(responseFile, pending.response.sha256);
+    vmNeed(path.basename(requestFile) === req.value.id + '.request.json'
+        && path.basename(responseFile) === req.value.id + '.response.json'
         && require('./reader-diagnostic-format').hasDiagnosticFormat(req.value) && require('./reader-diagnostic-format').sameDiagnosticFormat(req.value, res.value)
         && req.value.contentAttempt === envelope.payload.attempts + 1 && pending.contentAttempt === req.value.contentAttempt
         && stage.attempts === pending.contentAttempt && stage.fullAttempts === envelope.payload.fullAttempts

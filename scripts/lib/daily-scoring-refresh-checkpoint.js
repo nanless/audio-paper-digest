@@ -207,6 +207,21 @@ function recoveryPath(parent) {
     return path.join(require('../config').FILES.dailyScoringRefreshRecoveryDir,
         `${prefix}${stable(parent)}.json`);
 }
+function resolveCompletedArchiveFilename(reference, directory) {
+    if (!reference || typeof reference.filename !== 'string' || !path.isAbsolute(reference.filename)) {
+        reject('历史完整评分材料缺少原私有归档');
+    }
+    const completedDir = path.join(directory, 'completed');
+    const dir = path.dirname(reference.filename);
+    const base = path.basename(reference.filename);
+    if (!base || base === '.' || base === '..' || path.join(dir, base) !== reference.filename) {
+        reject('历史完整评分材料缺少原私有归档');
+    }
+    if (require('./repo-rename-path').matchesRelocatedRepoPath(dir, completedDir)) {
+        return path.join(completedDir, base);
+    }
+    reject('历史完整评分材料缺少原私有归档');
+}
 function preservedCandidates(paper, options) {
     const prefixes = candidateOwnerRuns(paper, options).map(runId => `${runId}-${sha(id(paper))}-`);
     if (!prefixes.length) return [];
@@ -220,9 +235,8 @@ function preservedCandidates(paper, options) {
     for (const item of paper.dailyScoringRefreshHistory || []) {
         if (!codec.hasValidHeader(item, CONTRACT) || item.status !== 'complete') reject('历史评分恢复记录无效');
         const reference = item.archive;
-        if (!reference || path.dirname(reference.filename) !== path.join(directory, 'completed'))
-            reject('历史完整评分材料缺少原私有归档');
-        const bytes = privateRecoveryBytes(reference.filename), archived = JSON.parse(bytes);
+        const archiveFilename = resolveCompletedArchiveFilename(reference, directory);
+        const bytes = privateRecoveryBytes(archiveFilename), archived = JSON.parse(bytes);
         if (sha(bytes) !== reference.sha256 || !matchesAssociatedHeader(archived, archived.receipt, COMPLETED, 'immutable-completed-score-and-reader')
             || codec.isCurrentHeader(item, CONTRACT) !== codec.isCurrentHeader(archived.receipt, CONTRACT)
             || archived.receipt.paperId !== id(paper) || stable(archived.receipt) !== item.receiptSha256

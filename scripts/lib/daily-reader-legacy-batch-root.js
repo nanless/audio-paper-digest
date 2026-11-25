@@ -5,6 +5,7 @@ const operatorCodec = require('./protocol-codec');
 const fs = require('node:fs'), path = require('node:path');
 const { isDeepStrictEqual: equal } = require('node:util');
 const daily = require('./daily-fresh-source-plan'), repair = require('./reader-repair');
+const { relocatePathWithinRoot } = require('./repo-rename-path');
 const sha = require('./daily-fact-review').sha;
 const CONTRACT = 'daily-reader-legacy-batch-root-v1';
 const fail = message => { throw Object.assign(new Error(`旧批次Reader根拒绝：${message}`), { retryable: false }); };
@@ -18,17 +19,17 @@ function assertDescriptor(descriptor) {
         fail('须有真实失败父快照和原用户授权的精确文件SHA');
 }
 function readSnapshot(file, expected, root, json = true) {
-    const relative = path.relative(path.resolve(root), path.resolve(file));
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('文件超出受控运行目录');
-    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(path.resolve(file)));
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const resolved = relocatePathWithinRoot(file, root);
+    if (!resolved) fail('文件超出受控运行目录');
+    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
+    const fd = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size > 32 * 1024 * 1024)
             fail('须为有界0600普通独立文件');
         const bytes = fs.readFileSync(fd), digest = sha(bytes);
         if (!/^[a-f0-9]{64}$/.test(expected || '') || digest !== expected) fail('原文件SHA改变');
-        return { file: path.resolve(file), sha256: digest, value: json ? JSON.parse(bytes) : bytes.toString('utf8') };
+        return { file: resolved, sha256: digest, value: json ? JSON.parse(bytes) : bytes.toString('utf8') };
     } finally { fs.closeSync(fd); }
 }
 function failedParent(value, paper) {

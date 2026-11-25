@@ -5,6 +5,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage();
 const codec = require('./protocol-codec');
+const { relocatePathWithinRoot } = require('./repo-rename-path');
 const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
 const CONTRACT = 'daily-reader-operator-correction-batch';
 const PROOF = 'daily-reader-operator-correction';
@@ -26,9 +27,10 @@ function read(file) {
     } finally { fs.closeSync(fd); }
 }
 function within(file, root) {
-    const relative = path.relative(path.resolve(root), path.resolve(file));
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Operator file outside controlled runtime');
-    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(path.resolve(file)));
+    const resolved = relocatePathWithinRoot(file, root);
+    if (!resolved) throw new Error('Operator file outside controlled runtime');
+    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
+    return resolved;
 }
 function unchanged(snapshot) {
     if (read(snapshot.file).sha256 !== snapshot.sha256) throw new Error('Operator correction source bytes changed');
@@ -69,8 +71,10 @@ function replayPaidFingerprint(record, candidate) {
         || repair.hashDraft(candidate.identity) !== path.basename(record.baselineCandidateFile,'.json'))
         throw new Error('Operator paid fingerprint original or scope differs');
     if (payload.explicitReaderRetryRound) {
+        const runtimeRoot = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
+        const baselineFile = relocatePathWithinRoot(record.baselineCandidateFile, runtimeRoot) || path.resolve(record.baselineCandidateFile);
         require('./explicit-reader-retry-round').validatePersistedRound(
-            path.dirname(path.resolve(record.baselineCandidateFile)), candidate.identity, payload);
+            path.dirname(baselineFile), candidate.identity, payload);
     }
     const strictJson = require('./publication-file-primitives').strictJson;
     const parsed = strictJson(Buffer.from(raw), 'original paid Reader JSON');
@@ -210,7 +214,7 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
     require('../workspace-role').requireWorkspaceRole('daily');
     const tail = inspectDailyOperatorTail(plan, papers, factFeedbacks);
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
-    within(filename,root); const manifest = read(filename), m = manifest.value;
+    const manifest = read(within(filename,root)), m = manifest.value;
     if (!codec.hasValidHeader(m, CONTRACT) || m.runId !== plan.runId || m.batchDate !== plan.batchDate
         || typeof m.authorization !== 'string' || !m.authorization.trim()
         || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length)
@@ -219,17 +223,17 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
         throw new Error('Operator correction exceeds the bounded final failed-set limit');
     const records = new Map();
     for (const filename of m.correctionFiles) {
-        within(filename,root); const file = read(filename), r = file.value, paperId = id(r);
+        const file = read(within(filename,root)), r = file.value, paperId = id(r);
         const paper = papers.find(p=>id(p)===paperId);
         if (!paper || records.has(paperId) || r.runId !== plan.runId || r.batchDate !== plan.batchDate
             || !tail.failedIds.includes(paperId))
             throw new Error('Operator correction must target a distinct failed paper in the actual batch');
-        within(r.baselineCandidateFile,plan.readerAttemptsDir);
-        if (path.dirname(path.resolve(r.baselineCandidateFile)) !== path.resolve(plan.readerAttemptsDir)
-            || !/^[a-f0-9]{64}\.json$/.test(path.basename(r.baselineCandidateFile)))
+        const baselineFile = within(r.baselineCandidateFile,plan.readerAttemptsDir);
+        if (path.dirname(baselineFile) !== path.resolve(plan.readerAttemptsDir)
+            || !/^[a-f0-9]{64}\.json$/.test(path.basename(baselineFile)))
             throw new Error('Operator baseline must be an active candidate in this daily run');
-        const baseline = read(r.baselineCandidateFile), env = require('./reader-repair')
-            .readFailedCandidateEnvelope(plan.readerAttemptsDir,null,r.baselineCandidateFile);
+        const baseline = read(baselineFile), env = require('./reader-repair')
+            .readFailedCandidateEnvelope(plan.readerAttemptsDir,null,baselineFile);
         if (!env || baseline.sha256 !== r.baselineCandidateEnvelopeSha256
             || id(env.envelope.identity)!==paperId || env.envelope.identity.freshAnalysis?.runId!==plan.runId
             || env.envelope.identity.freshAnalysis?.sourceOnly!==true)
@@ -370,14 +374,14 @@ function resolveExpectedOrdinalDraftOrderMapping(payload, record, candidateIdent
         && payload.explicitReaderRetryRound?.receiptFile
         && typeof record?.baselineCandidateFile === 'string' && record.baselineCandidateFile) {
         try {
-            const attemptsDir = path.dirname(path.resolve(record.baselineCandidateFile));
-            within(payload.explicitReaderRetryRound.receiptFile, attemptsDir);
-            const receiptSnap = read(payload.explicitReaderRetryRound.receiptFile), receipt = receiptSnap.value;
-            const identity = candidateIdentity || record.baselineIdentity || read(record.baselineCandidateFile).value?.identity;
+            const runtimeRoot = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
+            const baselineFile = relocatePathWithinRoot(record.baselineCandidateFile, runtimeRoot) || path.resolve(record.baselineCandidateFile);
+            const attemptsDir = path.dirname(baselineFile);
+            const receiptSnap = read(within(payload.explicitReaderRetryRound.receiptFile, attemptsDir)), receipt = receiptSnap.value;
+            const identity = candidateIdentity || record.baselineIdentity || read(baselineFile).value?.identity;
             if (!identity) return null;
             require('./explicit-reader-retry-round').validatePersistedRound(attemptsDir, identity, payload);
-            within(receipt.archivedFile, attemptsDir);
-            const archivedSnap = read(receipt.archivedFile), archived = archivedSnap.value;
+            const archivedSnap = read(within(receipt.archivedFile, attemptsDir)), archived = archivedSnap.value;
             const archivedMappings = archived?.payload?.draftOrderMappings;
             if (archivedSnap.sha256 !== receipt.grant?.envelopeSha256
                 || !Array.isArray(receipt.requests) || receipt.requests.length !== 0
@@ -445,7 +449,7 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(proof.runId || '')) fail('daily run differs');
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
     const snapshots = [];
-    const take = (file, digest) => { within(file, root); const snapshot = read(file);
+    const take = (file, digest) => { const snapshot = read(within(file, root));
         if (snapshot.sha256 !== digest) fail('original file SHA differs'); snapshots.push(snapshot); return snapshot.value; };
     const run = read(path.join(runDir, 'run.json'));
     snapshots.push(run);
@@ -462,11 +466,11 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
         || record.baselineCandidateFile !== proof.originalCandidateFile
         || record.baselineCandidateEnvelopeSha256 !== proof.originalCandidateEnvelopeSha256
         || record.baselineDraftSha256 !== proof.beforeDraftSha256) fail('original manifest/member/patch binding differs');
-    within(record.baselineCandidateFile, plan.readerAttemptsDir);
-    if (path.dirname(path.resolve(record.baselineCandidateFile)) !== path.resolve(plan.readerAttemptsDir)
-        || !/^[a-f0-9]{64}\.json$/.test(path.basename(record.baselineCandidateFile))) fail('original active candidate path differs');
-    const original = take(record.baselineCandidateFile, record.baselineCandidateEnvelopeSha256);
-    const checked = require('./reader-repair').readFailedCandidateEnvelope(plan.readerAttemptsDir, null, record.baselineCandidateFile);
+    const resolvedBaseline = within(record.baselineCandidateFile, plan.readerAttemptsDir);
+    if (path.dirname(resolvedBaseline) !== path.resolve(plan.readerAttemptsDir)
+        || !/^[a-f0-9]{64}\.json$/.test(path.basename(resolvedBaseline))) fail('original active candidate path differs');
+    const original = take(resolvedBaseline, record.baselineCandidateEnvelopeSha256);
+    const checked = require('./reader-repair').readFailedCandidateEnvelope(plan.readerAttemptsDir, null, resolvedBaseline);
     if (!checked || !isDeepStrictEqual(checked.envelope, original)
         || require('./reader-repair').hashDraft(original.identity) !== proof.originalIdentitySha256
         || id(original.identity) !== id(paper) || original.identity.freshAnalysis?.sourceOnly !== true) fail('paid candidate identity differs');

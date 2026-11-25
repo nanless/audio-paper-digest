@@ -626,3 +626,37 @@ test('ordinary reanalysis scopes pending discovery to the current verified daily
     assert(fs.readFileSync(filename).equals(mixedBytes));
     assert(fs.readFileSync(orphan).equals(orphanBytes));
 });
+
+test('completed scoring archive recorded under pre-rename audio-paper-digest path resolves cleanly under audio-research-workbench while rejecting foreign directories', async t => {
+    const f = await setup(t);
+    const parent = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'score-rename-')));
+    t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+    const oldRoot = path.join(parent, 'audio-paper-digest');
+    const newRoot = path.join(parent, 'audio-research-workbench');
+    const oldRecovery = path.join(oldRoot, 'data/runtime/daily-scoring-refresh-recovery');
+    const newRecovery = path.join(newRoot, 'data/runtime/daily-scoring-refresh-recovery');
+    fs.mkdirSync(oldRecovery, { recursive: true });
+    const prevRecovery = Config.FILES.dailyScoringRefreshRecoveryDir;
+    Config.FILES.dailyScoringRefreshRecoveryDir = oldRecovery;
+    t.after(() => { Config.FILES.dailyScoringRefreshRecoveryDir = prevRecovery; });
+
+    offlineDeep.offlineLeaves(
+        async () => JSON.stringify(response),
+        async (paper, source) => installSyntheticReader(paper, source)
+    );
+    const completedPaper = await entry.refreshApiReader(f.id, f.options);
+    assert.equal(completedPaper.dailyScoringRefreshHistory.length, 1);
+    assert(completedPaper.dailyScoringRefreshHistory[0].archive.filename.startsWith(oldRecovery + path.sep));
+
+    fs.renameSync(oldRoot, newRoot);
+    Config.FILES.dailyScoringRefreshRecoveryDir = newRecovery;
+    assert.equal(checkpoint.hasPreservedCheckpoint(completedPaper), false);
+    assert.equal(require('../scripts/analysis-engine').isSuccessfulAnalysisRecord(completedPaper), true);
+
+    const foreignPaper = structuredClone(completedPaper);
+    foreignPaper.dailyScoringRefreshHistory[0].archive.filename = path.join(
+        parent, 'other-repo', 'data/runtime/daily-scoring-refresh-recovery/completed',
+        path.basename(completedPaper.dailyScoringRefreshHistory[0].archive.filename)
+    );
+    assert.throws(() => checkpoint.hasPreservedCheckpoint(foreignPaper), /历史完整评分材料缺少原私有归档/);
+});
