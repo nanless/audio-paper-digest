@@ -1240,6 +1240,15 @@ _READER_SYMBOL_RUN = re.compile(r'([≥≤≈≠×·∼])\1')
 _LEADING_EMPTY_LINK_CELL_PREFIX_RE = re.compile(
     r'^[^\S\r\n]*\[\]\[\][ \t]+(?=[^\s\u200b\u200c\u200d\u2060\ufeff])(?!\[\]\[\])'
 )
+# LaTeXML 未加载 booktabs 宏包时会把 \toprule / \midrule / \bottomrule 原样漏到表格单元格行首：
+# \topruleCodebook → Codebook、\midrule1 → 1、独立 \bottomrule → ''。
+# 仅剥离整格行首单个 booktabs 水平线宏（排除格中、连续叠加、\top/\mid/\bot 数学符号及带 _^{} 参数形式）。
+_STANDALONE_BOOKTABS_RULE_CELL_RE = re.compile(
+    r'^[^\S\r\n]*\\(?:toprule|midrule|bottomrule)[^\S\r\n]*$'
+)
+_LEADING_BOOKTABS_RULE_CELL_PREFIX_RE = re.compile(
+    r'^[^\S\r\n]*\\(?:toprule|midrule|bottomrule)(?!\s*(?:[_^{}]|\\(?:toprule|midrule|bottomrule)))[ \t]*(?=[^\s\u200b\u200c\u200d\u2060\ufeff])'
+)
 _PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = re.compile(
     r'(\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\))\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\)'
 )
@@ -1284,6 +1293,13 @@ def _collapse_parenthesized_signed_double_write(text):
 
 def _strip_leading_empty_link_cell_prefix(value):
     return _LEADING_EMPTY_LINK_CELL_PREFIX_RE.sub('', str(value or ''), count=1)
+
+
+def _strip_leading_booktabs_rule_cell_prefix(value):
+    text = str(value or '')
+    if _STANDALONE_BOOKTABS_RULE_CELL_RE.match(text):
+        return ''
+    return _LEADING_BOOKTABS_RULE_CELL_PREFIX_RE.sub('', text, count=1)
 
 
 def _project_reader_cell_tex_display_body(value):
@@ -1391,6 +1407,17 @@ def _project_reader_cell_tex_display(value):
     output = re.sub(r'\s*\(\s*\)', '', output)
     if '\\anon[' in output:
         output = _project_reader_anon_macro(output)
+    # LaTeXML 未加载 booktabs 宏包时会在行首漏出 \toprule / \midrule / \bottomrule：
+    # 独立规则格投影为空，行首前缀仅在剥离后仍有可见字符且满足不动点时生效，否则保留原文本供校验阻断。
+    if _STANDALONE_BOOKTABS_RULE_CELL_RE.match(output):
+        return ''
+    stripped_booktabs = _LEADING_BOOKTABS_RULE_CELL_PREFIX_RE.sub('', output, count=1)
+    if stripped_booktabs != output:
+        projected = _project_reader_cell_tex_display_body(stripped_booktabs)
+        if re.search(r'[^\s\u200b\u200c\u200d\u2060\ufeff]', projected) \
+                and _project_reader_cell_tex_display(projected) == projected:
+            return projected
+        return output
     # LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
     # 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后不剩可见字符或非不动点则回退保留 [][]。
     stripped = _strip_leading_empty_link_cell_prefix(output)
@@ -1506,6 +1533,7 @@ project_reader_cell_tex_display = _project_reader_cell_tex_display
 project_reader_cell_tex_display_body = _project_reader_cell_tex_display_body
 rendered_table_bare_tex = _rendered_table_bare_tex
 collapse_parenthesized_signed_double_write = _collapse_parenthesized_signed_double_write
+strip_leading_booktabs_rule_cell_prefix = _strip_leading_booktabs_rule_cell_prefix
 strip_leading_empty_link_cell_prefix = _strip_leading_empty_link_cell_prefix
 _api_reader_markdown_tables = api_reader_markdown_tables
 _source_quoted_codec_display_cells = source_quoted_codec_display_cells

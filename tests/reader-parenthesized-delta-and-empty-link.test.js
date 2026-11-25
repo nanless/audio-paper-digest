@@ -558,3 +558,60 @@ except Exception as e:
     assert.throws(() => pdfEvidence.withSavedPaper(tampered, () => true));
     assert.notEqual(checkPaired(tampered).issue, null);
 });
+
+test('LaTeXML booktabs rule cell prefix projection stays symmetric and 2nd-order idempotent across Node and Python', () => {
+    const { projectReaderCellTexDisplay } = require('../scripts/lib/reader-source-display');
+    const positives = [
+        ['\\topruleCodebook', 'Codebook'],
+        ['\\midrule1', '1'],
+        ['\\bottomrule', ''],
+        ['  \\bottomrule  ', ''],
+        ['\\toprule Codebook', 'Codebook'],
+        ['  \\midrule\t1', '1'],
+        ['\\midruleModel (−1.4)(-1.4)', 'Model (−1.4)'],
+    ];
+    const negatives = [
+        'foo \\toprule bar',
+        '\\top x',
+        '\\mid',
+        '\\bot',
+        '\\toprule_1',
+        '\\midrule^2',
+        '\\bottomrule{x}',
+        '\\toprule {x}',
+        '\\toprule\\midrule1',
+        '\\toprule \\midrule 1',
+        '\\bottomrule\\bottomrule',
+        '\\toprule \\,',
+        '\\toprule (\\,)',
+        '\\toprule (\\,) \\toprule foo',
+        '\\toprule \u200b',
+        '\\mathrm{Acc}',
+        '\\hlineCodebook',
+    ];
+    for (const [raw, expected] of positives) {
+        const out = projectReaderCellTexDisplay(raw);
+        assert.equal(out, expected);
+        assert.equal(projectReaderCellTexDisplay(out), out);
+    }
+    for (const raw of negatives) {
+        const out = projectReaderCellTexDisplay(raw);
+        assert.equal(projectReaderCellTexDisplay(out), out);
+        assert(out.includes('\\'), `negative must preserve backslash: ${raw} -> ${out}`);
+    }
+    const allInputs = [...positives.map(([r]) => r), ...negatives];
+    const projectRoot = path.resolve(__dirname, '..');
+    const pyResults = JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
+sys.path.insert(0, 'tests/python')
+from test_publish_to_blog import publish_to_blog as publish
+items = json.load(sys.stdin)
+print(json.dumps([publish._project_reader_cell_tex_display(x) for x in items]))`], {
+        cwd: projectRoot,
+        input: JSON.stringify(allInputs),
+        encoding: 'utf8',
+        env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
+    }).trim());
+    allInputs.forEach((raw, idx) => {
+        assert.equal(projectReaderCellTexDisplay(raw), pyResults[idx], `Node vs Python mismatch for ${JSON.stringify(raw)}`);
+    });
+});

@@ -366,6 +366,94 @@ class PublicationSourceDisplayTests(unittest.TestCase):
         with self.assertRaises(blog.PublishDataValidationError):
             blog._project_artifact_table_cell_tex_display(article, mismatched)
 
+    def test_leading_booktabs_rule_cell_prefix_projection_and_guards(self):
+        positives = [
+            (r'\topruleCodebook', 'Codebook'),
+            (r'\midrule1', '1'),
+            (r'\bottomrule', ''),
+            (r'  \bottomrule  ', ''),
+            (r'\toprule Codebook', 'Codebook'),
+            ('  \\midrule\t1', '1'),
+            (r'\midruleModel (−1.4)(-1.4)', 'Model (−1.4)'),
+        ]
+        for raw, expected in positives:
+            with self.subTest(raw=raw):
+                self.assertEqual(blog._project_reader_cell_tex_display(raw), expected)
+                self.assertEqual(blog._project_reader_cell_tex_display(expected), expected)
+                self.assertEqual(blog._reader_cell_comparison(raw), blog._reader_cell_comparison(expected))
+
+        negatives = [
+            r'foo \toprule bar',
+            r'\top x',
+            r'\mid',
+            r'\bot',
+            r'\toprule_1',
+            r'\midrule^2',
+            r'\bottomrule{x}',
+            r'\toprule {x}',
+            r'\toprule\midrule1',
+            r'\toprule \midrule 1',
+            r'\bottomrule\bottomrule',
+            r'\toprule \,',
+            r'\toprule (\,)',
+            r'\toprule (\,) \toprule foo',
+            '\\toprule \u200b',
+            r'\mathrm{Acc}',
+            r'\hlineCodebook',
+        ]
+        for raw in negatives:
+            with self.subTest(raw=raw):
+                actual = blog._project_reader_cell_tex_display(raw)
+                self.assertEqual(blog._project_reader_cell_tex_display(actual), actual)
+                self.assertEqual(blog._reader_cell_comparison(actual), blog._reader_cell_comparison(raw))
+                self.assertTrue(actual.startswith('\\') or '\\' in actual)
+
+        article = (
+            '#### 性别排他率定位偏置来源\n\n'
+            '| \\topruleCodebook | Total Tokens | Exclusive Tokens | ratio |\n'
+            '| --- | --- | --- |\n'
+            '| \\midrule1 | 858 | 265 | 30.90% |\n'
+            '| 2 | 1,641 | 362 | 22.10% |\n'
+            '| \\bottomrule |  |  |  |\n'
+        ).replace('| --- | --- | --- |', '| --- | --- | --- | --- |')
+        plan = {
+            'tableBindings': [{
+                'tableIndex': 1,
+                'sourceType': 'artifact_table',
+                'sourceTableOrdinal': 3,
+                'cellBindings': [
+                    {'renderedRow': 0, 'renderedColumn': 0, 'sourceText': r'\topruleCodebook'},
+                    {'renderedRow': 0, 'renderedColumn': 1, 'sourceText': 'Total Tokens'},
+                    {'renderedRow': 0, 'renderedColumn': 2, 'sourceText': 'Exclusive Tokens'},
+                    {'renderedRow': 0, 'renderedColumn': 3, 'sourceText': 'ratio'},
+                    {'renderedRow': 1, 'renderedColumn': 0, 'sourceText': r'\midrule1'},
+                    {'renderedRow': 1, 'renderedColumn': 1, 'sourceText': '858'},
+                    {'renderedRow': 1, 'renderedColumn': 2, 'sourceText': '265'},
+                    {'renderedRow': 1, 'renderedColumn': 3, 'sourceText': '30.90%'},
+                    {'renderedRow': 2, 'renderedColumn': 0, 'sourceText': '2'},
+                    {'renderedRow': 2, 'renderedColumn': 1, 'sourceText': '1,641'},
+                    {'renderedRow': 2, 'renderedColumn': 2, 'sourceText': '362'},
+                    {'renderedRow': 2, 'renderedColumn': 3, 'sourceText': '22.10%'},
+                    {'renderedRow': 3, 'renderedColumn': 0, 'sourceText': r'\bottomrule'},
+                    {'renderedRow': 3, 'renderedColumn': 1, 'sourceText': ''},
+                    {'renderedRow': 3, 'renderedColumn': 2, 'sourceText': ''},
+                    {'renderedRow': 3, 'renderedColumn': 3, 'sourceText': ''},
+                ],
+            }],
+        }
+        plan_before = copy.deepcopy(plan)
+        projected = blog._project_artifact_table_cell_tex_display(article, plan)
+        self.assertEqual(plan, plan_before)
+        blog._assert_rendered_tables_have_no_bare_tex(projected)
+        self.assertIn('| Codebook | Total Tokens | Exclusive Tokens | ratio |', projected)
+        self.assertIn('| 1 | 858 | 265 | 30.90% |', projected)
+        self.assertIn('|  |  |  |  |', projected)
+
+        tampered = copy.deepcopy(plan)
+        tampered['tableBindings'][0]['cellBindings'][0]['sourceText'] = r'\topruleOther'
+        with self.assertRaises(blog.PublishDataValidationError):
+            blog._project_artifact_table_cell_tex_display(article, tampered)
+
 
 if __name__ == '__main__':
     unittest.main()

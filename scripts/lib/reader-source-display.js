@@ -241,6 +241,11 @@ function projectReaderAnonMacro(value) {
 
 const PARENTHESIZED_SIGNED_DOUBLE_WRITE_RE = /(\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\))\(([+−-])([0-9]+(?:\.[0-9]+)?%?)\)/g;
 const LEADING_EMPTY_LINK_CELL_PREFIX_RE = /^[^\S\r\n]*\[\]\[\][ \t]+(?=[^\s\u200b\u200c\u200d\u2060\ufeff])(?!\[\]\[\])/;
+// LaTeXML 未加载 booktabs 宏包时会把 \toprule / \midrule / \bottomrule 原样漏到表格单元格行首：
+// \topruleCodebook → Codebook、\midrule1 → 1、独立 \bottomrule → ''。
+// 仅剥离整格行首单个 booktabs 水平线宏（排除格中、连续叠加、\top/\mid/\bot 数学符号及带 _^{} 参数形式）。
+const STANDALONE_BOOKTABS_RULE_CELL_RE = /^[^\S\r\n]*\\(?:toprule|midrule|bottomrule)[^\S\r\n]*$/;
+const LEADING_BOOKTABS_RULE_CELL_PREFIX_RE = /^[^\S\r\n]*\\(?:toprule|midrule|bottomrule)(?!\s*(?:[_^{}]|\\(?:toprule|midrule|bottomrule)))[ \t]*(?=[^\s\u200b\u200c\u200d\u2060\ufeff])/;
 
 function collapseParenthesizedSignedDoubleWrite(value) {
     const text = String(value ?? '');
@@ -276,6 +281,12 @@ function collapseParenthesizedSignedDoubleWrite(value) {
 
 function stripLeadingEmptyReferenceLinkCellPrefix(value) {
     return String(value ?? '').replace(LEADING_EMPTY_LINK_CELL_PREFIX_RE, '');
+}
+
+function stripLeadingBooktabsRuleCellPrefix(value) {
+    const text = String(value ?? '');
+    if (STANDALONE_BOOKTABS_RULE_CELL_RE.test(text)) return '';
+    return text.replace(LEADING_BOOKTABS_RULE_CELL_PREFIX_RE, '');
 }
 
 function projectReaderCellTexDisplayBody(value) {
@@ -374,6 +385,18 @@ function projectReaderCellTexDisplay(value) {
     output = output.replace(/(\S*?)\s*11footnotemark:\s*\d+(?![\d.])/g, '$1');
     output = output.replace(/\s*\(\s*\)/g, '');
     if (output.includes('\\anon[')) output = projectReaderAnonMacro(output);
+    // LaTeXML 未加载 booktabs 宏包时会在行首漏出 \toprule / \midrule / \bottomrule：
+    // 独立规则格投影为空，行首前缀仅在剥离后仍有可见字符且满足不动点时生效，否则保留原文本供校验阻断。
+    if (STANDALONE_BOOKTABS_RULE_CELL_RE.test(output)) return '';
+    const strippedBooktabs = output.replace(LEADING_BOOKTABS_RULE_CELL_PREFIX_RE, '');
+    if (strippedBooktabs !== output) {
+        const projected = projectReaderCellTexDisplayBody(strippedBooktabs);
+        if (/[^\s\u200b\u200c\u200d\u2060\ufeff]/.test(projected)
+            && projectReaderCellTexDisplay(projected) === projected) {
+            return projected;
+        }
+        return output;
+    }
     // LaTeXML 行首空锚点/图标宏残留：[][] VideoLLaMA2-AV+PACD → VideoLLaMA2-AV+PACD。
     // 仅剥离整格开头后跟横向空白与非空可见正文的单个 [][] 前缀；若剥离后不剩可见字符或非不动点则回退保留 [][]。
     const stripped = stripLeadingEmptyReferenceLinkCellPrefix(output);
@@ -495,5 +518,6 @@ module.exports = {
     normalizeExplicitReaderSymbolProjection,
     normalizeReaderSourceDisplayArtifacts,
     projectReaderCellTexDisplay,
+    stripLeadingBooktabsRuleCellPrefix,
     stripLeadingEmptyReferenceLinkCellPrefix,
 };
