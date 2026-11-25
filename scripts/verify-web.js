@@ -30,7 +30,7 @@ function readEnv() {
 
 function defaultBaseUrl(env = {}) {
     return String(env.PAPER_DIGEST_BLOG_URL
-        || 'https://nanless.github.io/audio-paper-digest-blog/posts').replace(/\/+$/, '');
+        || 'https://nanless.github.io/audio-research-portal/posts').replace(/\/+$/, '');
 }
 
 function pageUrls(date, env, manifest) {
@@ -170,7 +170,7 @@ async function verify(date, options = {}) {
 }
 
 function deployRepository(env = {}) {
-    return env.PAPER_DIGEST_BLOG_REPO_RUN || env.GITHUB_REPOSITORY || 'nanless/audio-paper-digest-blog';
+    return env.PAPER_DIGEST_BLOG_REPO_RUN || env.GITHUB_REPOSITORY || 'nanless/audio-research-portal';
 }
 
 function normalizeDeployRun(run) {

@@ -826,9 +826,9 @@ paper_digest_reader_quality: "reader-facing-v3"
 
 ## 📋 论文列表
 
-### 🥇 [论文 A](/audio-paper-digest-blog/posts/2026-09-02-paper-a)
+### 🥇 [论文 A](/audio-research-portal/posts/2026-09-02-paper-a)
 
-> 英文题目：*[Paper A](/audio-paper-digest-blog/posts/2026-09-02-paper-a)*
+> 英文题目：*[Paper A](/audio-research-portal/posts/2026-09-02-paper-a)*
 
 评分：**8.3/10**
 
@@ -863,8 +863,8 @@ paper_digest_reader_quality: "reader-facing-v3"
             with self.subTest(marker=malformed[:200]):
                 self.assertIsNotNone(validate_digest_index_reader_quality(malformed))
         wrong_english = valid.replace(
-            '/audio-paper-digest-blog/posts/2026-09-02-paper-a)*',
-            '/audio-paper-digest-blog/posts/another-paper)*',
+            '/audio-research-portal/posts/2026-09-02-paper-a)*',
+            '/audio-research-portal/posts/another-paper)*',
         )
         self.assertIn(
             '中英文论文标题',
@@ -900,7 +900,7 @@ paper_digest_reader_quality: "reader-facing-v3"
         self.assertGreater(block.count('?concept='), 7, '真实多层路径超过普通散文句标预算')
         prefix = ('---\npaper_digest_page_type: index\npaper_digest_reader_quality: "reader-facing-v3"\n---\n'
                   '# 论文速递\n\n## ⚡ 今日概览\n\n共分析 2 篇论文。\n\n## 📋 论文列表\n\n')
-        cards = ''.join(f'### {index}. [论文 {index}](/audio-paper-digest-blog/posts/paper-{index})\n\n'
+        cards = ''.join(f'### {index}. [论文 {index}](/audio-research-portal/posts/paper-{index})\n\n'
                         + block + f'评分：**8.{index}/10**\n\n' for index in (1, 2))
         original = prefix + cards
         self.assertIsNone(validate_digest_index_reader_quality(original, required=True))

@@ -10,7 +10,7 @@ const licenseManifestSHA='b00a26f828bf9ddbca32caa2078ec75ffc3b1d04b281812dcfd6c0
 const licenseInventorySHA='b112c4d21a03940be8b52b470412ee7e390d1b0c3985c8215e9cb623f8dcecf4';
 const runtimeMaterialSHA='56423d42321b81dc83f6ff384b728d1b29e0ebe326e05faf5a5ec2980c392d3f';
 const runtimeKeys=['group','module','version','classifier','type','extension','fileName','bytes','sha256'];
-const bootstrapTemplate=JSON.stringify({contract:'paper-digest-published-bootstrap-v1',source:'website',requiresFirstSync:true,paperCount:0,defaultSiteURL:'https://nanless.github.io/audio-paper-digest-blog/'});
+const bootstrapTemplate=JSON.stringify({contract:'paper-digest-published-bootstrap-v1',source:'website',requiresFirstSync:true,paperCount:0,defaultSiteURL:'https://nanless.github.io/audio-research-portal/'});
 const katexFixed={
  'katex.min.js':{bytes:273081,sha256:'fa140498b8cfc8302cbe5e7cb1bdbc1f952bc38b3fa258ede09e73edbf9a74bc'},
  'katex.min.css':{bytes:24793,sha256:'00e0b094171b07f58422075f469b4feac2b2f7bce1aeec943c08da4d697f4dcf'},

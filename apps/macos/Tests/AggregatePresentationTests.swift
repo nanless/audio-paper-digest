@@ -27,7 +27,7 @@ actor AggregateFixtureTransport {
     static func rejects(_ action: () async throws -> Void) async -> Bool { do { try await action(); return false } catch { return true } }
     static func temp() throws -> URL { let p = realpath(FileManager.default.temporaryDirectory.path, nil)!; defer { free(p) }; let u = URL(fileURLWithPath: String(cString:p)).appendingPathComponent("aggregate-ui34-" + UUID().uuidString); try FileManager.default.createDirectory(at:u,withIntermediateDirectories:true);return u }
     static func fixture(title: String = "受控日更") throws -> (Data, Data, String, [String: Data]) {
-        let prefix = "/audio-paper-digest-blog/"
+        let prefix = "/audio-research-portal/"
         var rows: [[String: Any]] = ["daily", "conference", "page"].map { kind in ["pageType": kind, "permalink": prefix + "ci-" + kind + "/", "title": kind == "daily" ? title:kind, "date": "0001-01-01"] }
         rows.append(["pageType":"paper", "permalink":prefix+"papers/ci-paper/", "title":"Controlled paper", "titleZh":"受控论文", "date":"2026-10-24", "sourceKind":"arxiv", "identityStatus":"verified", "arxivId":"2510.00001", "citation":["paperKey":"arxiv:2510.00001", "identityStatus":"verified", "verified":true, "complete":false, "authors":["Author"], "title":"Controlled paper", "arxivId":"2510.00001v1", "sourceKind":"arxiv", "sourceUrl":"https://arxiv.org/abs/2510.00001v1", "pdfUrl":"https://arxiv.org/pdf/2510.00001v1.pdf"]])
         let shard = try JSONSerialization.data(withJSONObject:rows,options:[.sortedKeys]), sha = PublishedAggregateReader.sha(shard), path = "search-index/part-0001-" + sha.prefix(12) + ".json"
@@ -38,7 +38,7 @@ actor AggregateFixtureTransport {
         return (manifest,shard,sha,files)
     }
     static func routingRegressions(_ root: URL) async throws {
-        let fm=FileManager.default,base="https://nanless.github.io/audio-paper-digest-blog/"
+        let fm=FileManager.default,base="https://nanless.github.io/audio-research-portal/"
         let fixtureRoot=CommandLine.arguments.count>1 ? URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true) : URL(fileURLWithPath:fm.currentDirectoryPath).appendingPathComponent("tests/fixtures/workbench")
         let original=try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-original.html"))
         let rowBytes=try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-rows.json"))
@@ -47,7 +47,7 @@ actor AggregateFixtureTransport {
         func install(_ rows:[[String:Any]],_ html:Data,_ page:String,_ suffix:String) async throws -> (LibraryService,AggregateReadAccess,AggregatePresentationDocument) {
             let shard=try JSONSerialization.data(withJSONObject:rows,options:.sortedKeys),sha=PublishedAggregateReader.sha(shard),path="search-index/part-0001-"+sha.prefix(12)+".json"
             let manifest=try JSONSerialization.data(withJSONObject:["contract":"paper-search-index-manifest-v1","recordCount":rows.count,"totalBytes":shard.count,"shards":[["url":path,"sha256":sha,"bytes":shard.count,"recordCount":rows.count]]],options:.sortedKeys)
-            let transport=AggregateFixtureTransport(["/audio-paper-digest-blog/index.json":manifest,"/audio-paper-digest-blog/"+path:shard,page:html])
+            let transport=AggregateFixtureTransport(["/audio-research-portal/index.json":manifest,"/audio-research-portal/"+path:shard,page:html])
             let service=try LibraryService(dataDirectory:root.appendingPathComponent(suffix),transport:{url,limit in try await transport.read(url,limit)})
             _=try await service.sync()
             let access=try await service.aggregateReadAccess(id:"page:"+page),doc=try await service.aggregatePresentation(access)
@@ -58,21 +58,21 @@ actor AggregateFixtureTransport {
         for index in [1,3] {try expect(try await real.aggregateLink(access,document:document,index:index) == .paper("arxiv:2610.30682"),"real original daily24 link \(index) opens verified local paper with single final slash alias")}
         try expect(document.source.rawHTMLSHA256==PublishedAggregateReader.sha(original)&&PublishedAggregateReader.sha(Data(document.source.bodyHTML.utf8))==document.source.sanitizedBodySHA256,"routing leaves original raw and body witness untouched")
         let(_,shard,_,_)=try fixture();var controlledRows=try JSONSerialization.jsonObject(with:shard) as! [[String:Any]]
-        controlledRows.append(["pageType":"paper","permalink":"/audio-paper-digest-blog/papers/unverified/","title":"Unverified controlled paper","identityStatus":"unknown"])
+        controlledRows.append(["pageType":"paper","permalink":"/audio-research-portal/papers/unverified/","title":"Unverified controlled paper","identityStatus":"unknown"])
         let tests:[(String,AggregateLinkDestination)]=[
             (base+"papers/ci-paper",.paper("arxiv:2510.00001")),
-            (base+"ci-conference",.aggregate("page:/audio-paper-digest-blog/ci-conference/")),
+            (base+"ci-conference",.aggregate("page:/audio-research-portal/ci-conference/")),
             (base+"ci-daily#dest",.anchor("dest")),
             (base+"papers/ci-paper/",.paper("arxiv:2510.00001")),
             (base+"papers/ci-paper/?existing=1",.paper("arxiv:2510.00001")),
         ]
         let negatives=[
-            "https://example.invalid/audio-paper-digest-blog/papers/ci-paper",
-            "https://nanless.github.io.example.invalid/audio-paper-digest-blog/papers/ci-paper",
+            "https://example.invalid/audio-research-portal/papers/ci-paper",
+            "https://nanless.github.io.example.invalid/audio-research-portal/papers/ci-paper",
             base+"papers/ci-paper-extra",base+"papers/ci-paper?new=1",base+"papers/ci-%70aper",
             base+"papers/ci-paper//",base+"papers/unverified",base+"papers/unknown",
             base+"ci-daily?new=1#dest",base+"ci-conference?new=1",
-            "https://nanless.github.io:443/audio-paper-digest-blog/papers/ci-paper",
+            "https://nanless.github.io:443/audio-research-portal/papers/ci-paper",
             "https://example.invalid/reference/?q=1#original",
         ]
         let all=tests+negatives.map{($0,.external(URL(string:$0)!))}
@@ -83,7 +83,7 @@ actor AggregateFixtureTransport {
         ]
         let links=(all+coldCases).enumerated().map{"<a href='"+$0.element.0.replacingOccurrences(of:"&",with:"&amp;")+"'>route"+String($0.offset)+"</a>"}.joined()
         let html=Data(("<html><body><div id='article-body' class='post-content'><h2 id='dest'>Controlled routing</h2>"+links+"</div></body></html>").utf8)
-        let(service,own,presented)=try await install(controlledRows,html,"/audio-paper-digest-blog/ci-daily/","boundaries")
+        let(service,own,presented)=try await install(controlledRows,html,"/audio-research-portal/ci-daily/","boundaries")
         for(index,test) in all.enumerated(){let actual=try await service.aggregateLink(own,document:presented,index:index);try expect(actual==test.1,"bounded route \(index) keeps same-site single-slash and original authority")}
         // Cold snapshots were historically decoded directly: do not assume every saved paper
         // was freshly minted by sameSite. Preserve old exact behavior, refuse only new aliases.
@@ -97,7 +97,7 @@ actor AggregateFixtureTransport {
         snapshot["papers"]=saved
         try JSONSerialization.data(withJSONObject:snapshot,options:.sortedKeys).write(to:current,options:.atomic)
         let cold=try LibraryService(dataDirectory:root.appendingPathComponent("boundaries"),transport:{_,_ in throw URLError(.notConnectedToInternet)})
-        let coldAccess=try await cold.aggregateReadAccess(id:"page:/audio-paper-digest-blog/ci-daily/"),coldDocument=try await cold.aggregatePresentation(coldAccess)
+        let coldAccess=try await cold.aggregateReadAccess(id:"page:/audio-research-portal/ci-daily/"),coldDocument=try await cold.aggregatePresentation(coldAccess)
         for (index,test) in coldCases.enumerated(){try expect(try await cold.aggregateLink(coldAccess,document:coldDocument,index:all.count+index)==test.1,"cold snapshot route \(index) preserves exact but never extends offsite or other-project authority")}
         try expect(coldDocument.source==presented.source,"cold routing keeps the same verified aggregate source")
         try expect(try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-original.html"))==original&&Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-rows.json"))==rowBytes,"routing never rewrites source or catalog fixture")
@@ -109,8 +109,8 @@ actor AggregateFixtureTransport {
         try fm.createDirectory(at:storage.appendingPathComponent("index"),withIntermediateDirectories:true);try shard.write(to:storage.appendingPathComponent("index/"+sha+".json"))
         let store = PublishedAggregateStore(directory:storage), catalog = try store.stage(manifest:manifest,validationEpoch:UUID().uuidString), descriptor = catalog.records.first { $0.kind == .daily }!
         try expect(try store.latestVerifiedDocument(for:descriptor) == nil,"no fabricated cached revision")
-        let first = try store.cacheDocument(files["/audio-paper-digest-blog/ci-daily/"]!,descriptor:descriptor,responseURL:URL(string:descriptor.sourceURL)!,fetchedAt:"2026-10-24T12:00:00Z")
-        let secondBytes = Data(String(decoding:files["/audio-paper-digest-blog/ci-daily/"]!,as:UTF8.self).replacingOccurrences(of:"真实正文",with:"新正文").utf8)
+        let first = try store.cacheDocument(files["/audio-research-portal/ci-daily/"]!,descriptor:descriptor,responseURL:URL(string:descriptor.sourceURL)!,fetchedAt:"2026-10-24T12:00:00Z")
+        let secondBytes = Data(String(decoding:files["/audio-research-portal/ci-daily/"]!,as:UTF8.self).replacingOccurrences(of:"真实正文",with:"新正文").utf8)
         let second = try store.cacheDocument(secondBytes,descriptor:descriptor,responseURL:URL(string:descriptor.sourceURL)!,fetchedAt:"2026-10-24T12:00:00.900Z")
         try expect(try store.latestVerifiedDocument(for:descriptor) == second,"latest selection uses actual fractional observation time")
         let folder = storage.appendingPathComponent("aggregate-documents/"+PublishedAggregateReader.sha(Data(descriptor.id.utf8))+"/"+descriptor.source.manifestSHA256+"/"+first.rawHTMLSHA256)
@@ -131,16 +131,16 @@ actor AggregateFixtureTransport {
         let serviceRoot = root.appendingPathComponent("service"), transport = AggregateFixtureTransport(files)
         let service = try LibraryService(dataDirectory:serviceRoot,transport:{url,limit in try await transport.read(url,limit)})
         _ = try await service.sync()
-        let id = "page:/audio-paper-digest-blog/ci-daily/", access = try await service.aggregateReadAccess(id:id), presentation = try await service.aggregatePresentation(access)
-        try expect(await rejects { _ = try await service.aggregateReadAccess(id:"page:/audio-paper-digest-blog/not-in-manifest/") },"unlisted aggregate ID cannot mint source access")
-        let otherAccess = try await service.aggregateReadAccess(id:"page:/audio-paper-digest-blog/ci-conference/")
+        let id = "page:/audio-research-portal/ci-daily/", access = try await service.aggregateReadAccess(id:id), presentation = try await service.aggregatePresentation(access)
+        try expect(await rejects { _ = try await service.aggregateReadAccess(id:"page:/audio-research-portal/not-in-manifest/") },"unlisted aggregate ID cannot mint source access")
+        let otherAccess = try await service.aggregateReadAccess(id:"page:/audio-research-portal/ci-conference/")
         try expect(await rejects { _ = try await service.aggregateLink(otherAccess,document:presentation,index:0) },"another real descriptor cannot borrow this document link table")
         let value = try presentation.bridgeValue()
         try expect(!presentation.isStale && presentation.validatedAt != nil && presentation.source.descriptor.id == id && (value["linkCount"] as? Int) == 4,"fresh actor document binds real access and four actual links")
         try expect(presentation.displayHTML.contains("<table") && presentation.displayHTML.contains("<math") && presentation.displayHTML.contains("[图片未缓存") && !presentation.displayHTML.contains("javascript:") && !presentation.displayHTML.contains("src="),"display preserves table and math without executable or resource URL")
         try expect(PublishedAggregateReader.sha(Data(presentation.source.bodyHTML.utf8)) == presentation.source.sanitizedBodySHA256 && (value["displayBodySHA256"] as? String) != presentation.source.sanitizedBodySHA256,"source and rewritten display retain distinct exact digests")
         try expect(try await service.aggregateLink(access,document:presentation,index:0) == .anchor("dest"),"actual local anchor")
-        try expect(try await service.aggregateLink(access,document:presentation,index:1) == .aggregate("page:/audio-paper-digest-blog/ci-conference/"),"actual link resolves another typed aggregate")
+        try expect(try await service.aggregateLink(access,document:presentation,index:1) == .aggregate("page:/audio-research-portal/ci-conference/"),"actual link resolves another typed aggregate")
         try expect(try await service.aggregateLink(access,document:presentation,index:2) == .paper("arxiv:2510.00001"),"actual link resolves verified catalog paper by original URL")
         try expect(try await service.aggregateLink(access,document:presentation,index:3) == .external(URL(string:"https://example.org/reference/")!),"actual external link remains its source URL")
         try expect(await rejects { _ = try await service.aggregateLink(access,document:presentation,index:4) },"no arbitrary extra link index")
@@ -160,7 +160,7 @@ actor AggregateFixtureTransport {
     }
     static func progressiveReading(_ root: URL) async throws {
         var (_, _, _, files) = try fixture()
-        let path = "/audio-paper-digest-blog/ci-daily/", imagePath = "/audio-paper-digest-blog/images/controlled.png"
+        let path = "/audio-research-portal/ci-daily/", imagePath = "/audio-research-portal/images/controlled.png"
         files[path] = Data(String(decoding: files[path]!, as: UTF8.self).replacingOccurrences(of: "https://example.org/image.png", with: imagePath).utf8)
         files[imagePath] = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Xj8AAAAASUVORK5CYII=")!
         let transport = AggregateFixtureTransport(files)
@@ -181,7 +181,7 @@ actor AggregateFixtureTransport {
         let coldAccess = try await cold.aggregateReadAccess(id: id)
         let offline = try await cold.aggregatePresentation(coldAccess, preferCached: true, downloadImages: false)
         try expect(offline.source == first.source && offline.isStale && offline.displayHTML.contains("data:image/png;base64,"), "cold saved reader shows verified text and images without network")
-        let other = try await service.aggregateReadAccess(id: "page:/audio-paper-digest-blog/ci-conference/")
+        let other = try await service.aggregateReadAccess(id: "page:/audio-research-portal/ci-conference/")
         try expect(await rejects { _ = try await service.aggregatePresentationWithImages(other, document: saved) }, "another page cannot hydrate this saved source")
         _ = try await service.aggregatePresentation(access, downloadImages: false)
         try expect(await transport.count(path) == 2, "explicit refresh still reads current website HTML")

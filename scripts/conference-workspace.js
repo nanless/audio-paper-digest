@@ -105,7 +105,7 @@ function defaultWorkspacePaths(projectRoot = PROJECT_ROOT) {
     const envFile = path.join(root, '.env');
     const blog = envValue(envFile, 'PAPER_DIGEST_BLOG_REPO')
         || process.env.PAPER_DIGEST_BLOG_REPO
-        || path.join(os.homedir(), 'code', 'github_repos', 'audio-paper-digest-blog');
+        || path.join(os.homedir(), 'code', 'github_repos', 'audio-research-portal');
     const image = envValue(envFile, 'PAPER_DIGEST_IMAGE_REPO')
         || process.env.PAPER_DIGEST_IMAGE_REPO
         || path.join(os.homedir(), 'code', 'github_repos', 'audio-paper-digest-images');

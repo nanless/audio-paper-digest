@@ -185,7 +185,7 @@ actor PodcastPlayerService {
 
     init(
         cacheDirectory: URL,
-        siteBaseURL: URL = URL(string: "https://nanless.github.io/audio-paper-digest-blog/")!,
+        siteBaseURL: URL = URL(string: "https://nanless.github.io/audio-research-portal/")!,
         feedTransport: FeedTransport? = nil,
         audioTransport: AudioTransport? = nil,
         enableMediaCenter: Bool = true,
@@ -250,7 +250,7 @@ actor PodcastPlayerService {
               !encodedPath.contains("//"), !encodedPath.contains("..") else {
             return false
         }
-        let pattern = #"\Ahttps://github\.com/nanless/(?:audio-paper-digest|audio-paper-digest-blog)/releases/download/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}\.mp3\z"#
+        let pattern = #"\Ahttps://github\.com/nanless/(?:audio-paper-digest|audio-paper-digest-blog|audio-research-workbench|audio-research-portal)/releases/download/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}\.mp3\z"#
         return url.absoluteString.range(of: pattern, options: .regularExpression) != nil
     }
 

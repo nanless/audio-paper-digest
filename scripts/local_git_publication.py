@@ -15,7 +15,7 @@ import local_git_commit_delta as delta
 CONTRACT = 'local-git-publication-observation-v1'
 VERSION = 1
 _GITHUB_POLICY = (
-    ('repositoryId', 1214235086), ('fullName', 'nanless/audio-paper-digest-blog'),
+    ('repositoryId', 1214235086), ('fullName', 'nanless/audio-research-portal'),
     ('workflowId', 262722446), ('workflowPath', '.github/workflows/hugo.yaml'),
     ('branch', 'main'), ('environment', 'github-pages'),
     ('urlProfile', 'fixed-literal-github-remote-v1'), ('host', 'github.com'),

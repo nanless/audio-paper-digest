@@ -69,7 +69,7 @@ private actor PreloadTransport {
         _ = try await app.library.sync()
         _ = try await app.dispatchAggregates("aggregates.preload", payload: [:])
         let cancelled = app.aggregatePreloadTask
-        _ = try await app.dispatchAggregates("aggregates.open", payload: ["id": "page:/audio-paper-digest-blog/daily-new/"])
+        _ = try await app.dispatchAggregates("aggregates.open", payload: ["id": "page:/audio-research-portal/daily-new/"])
         await cancelled?.value
         try check(app.aggregatePreloadTask == nil && app.aggregatePreloadID == nil && app.aggregateSession?.aggregateID.hasSuffix("daily-new/") == true, "foreground opening cancels optional preload and keeps its own reading session")
         try check(keyReads == 0, "all preload cases leave credentials and paid services untouched")

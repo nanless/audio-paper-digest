@@ -83,7 +83,7 @@ import Foundation
               let value = record["blogURL"] as? String, let url = URLComponents(string: value),
               url.scheme == "https", url.host?.lowercased() == "nanless.github.io", url.port == nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-              url.path.hasPrefix("/audio-paper-digest-blog/"), !url.path.contains("\\"),
+              (url.path.hasPrefix("/audio-research-portal/") || url.path.hasPrefix("/audio-paper-digest-blog/")), !url.path.contains("\\"),
               !url.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return false }
         return true
     }

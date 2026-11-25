@@ -15,7 +15,7 @@ class AggregateNavigationStackTest {
   val root=Files.createTempDirectory("aggregate-navigation-").toFile().canonicalFile
   try {
    val paths=listOf("conferences/","posts/conference-synthetic-2026/","posts/conference-synthetic-2026-task-audio/")
-   val rows=JSONArray(paths.mapIndexed{i,path->JSONObject().put("pageType",if(i==0)"page"else"conference").put("permalink","/audio-paper-digest-blog/$path").put("title",listOf("合成会议目录","合成会议总览","合成研究方向")[i]).put("date","2026-10-31")})
+   val rows=JSONArray(paths.mapIndexed{i,path->JSONObject().put("pageType",if(i==0)"page"else"conference").put("permalink","/audio-research-portal/$path").put("title",listOf("合成会议目录","合成会议总览","合成研究方向")[i]).put("date","2026-10-31")})
    val shard=OfflineFoundationJSON.encode(rows);val sha=sha256(shard);File(root,"index").mkdir();File(root,"index/$sha.json").writeBytes(shard)
    val manifest=OfflineFoundationJSON.encode(JSONObject().put("contract","paper-search-index-manifest-v1").put("recordCount",3).put("totalBytes",shard.size).put("shards",JSONArray().put(JSONObject().put("url","search-index/part-0001-${sha.take(12)}.json").put("sha256",sha).put("bytes",shard.size).put("recordCount",3))))
    val store=PublishedAggregateStore(root);val activationEpoch=UUID.randomUUID().toString();val catalog=store.stage(manifest,activationEpoch)

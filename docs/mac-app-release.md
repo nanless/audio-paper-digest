@@ -1,6 +1,6 @@
 # 论文速递工作台 Mac 版：构建与发行
 
-本页说明 1.4.7（构建号 23）的本地准备和联合发行操作。1.4.7 已于 2026-11-23 公开发布，附注标签 `v1.4.7` 指向发行提交 `520e93c3`，12 件附件见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.7)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。上一版 1.4.6 已于 2026-11-20 公开发布（提交 `fcf7e05b`），见 [1.4.6 记录](workbench-1.4.6-review.md)；1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
+本页说明 1.4.7（构建号 23）的本地准备和联合发行操作。1.4.7 已于 2026-11-23 公开发布，附注标签 `v1.4.7` 指向发行提交 `520e93c3`，12 件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。上一版 1.4.6 已于 2026-11-20 公开发布（提交 `fcf7e05b`），见 [1.4.6 记录](workbench-1.4.6-review.md)；1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
 
 ## 1.4.7 发行范围
 
@@ -119,7 +119,7 @@ python3 apps/android/release_tools.py --repo "$PWD" joint-private-draft-plan \
   --mac-acceptance "$MAC_ACCEPTANCE" --mac-cloud "$MAC_CLOUD_ACCEPTANCE"
 ```
 
-工具只读查询固定仓库 `nanless/audio-paper-digest` 的标签，核对真实提交，生成带 `--draft`、`--verify-tag` 的参数。维护者复核后执行草稿命令，保留实际 Release ID；旧 `publish-plan`、`joint-plan` 同样只生成草稿计划，不能直接公开。
+工具只读查询固定仓库 `nanless/audio-research-workbench` 的标签，核对真实提交，生成带 `--draft`、`--verify-tag` 的参数。维护者复核后执行草稿命令，保留实际 Release ID；旧 `publish-plan`、`joint-plan` 同样只生成草稿计划，不能直接公开。
 
 核对真实草稿、说明与全部上传附件后，完成 `REL-03`、`REL-04`（Android 侧为 `A-REL-03`、`A-REL-04`），用同一固定输入生成公开参数：
 

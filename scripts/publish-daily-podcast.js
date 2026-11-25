@@ -301,7 +301,7 @@ function formatUsage() {
         '  --backend <mode>             indextts2-python | indextts-http | silent-mock',
         '  --voice-prompt <wav>         Host reference WAV for IndexTTS-2.5 / 2.0',
         '  --cohost-voice-prompt <wav>  Optional cohost reference WAV',
-        '  --repo <owner/repo>          GitHub Releases host repo (default: nanless/audio-paper-digest-blog)',
+        '  --repo <owner/repo>          GitHub Releases host repo (default: nanless/audio-research-portal)',
         '  --tag-prefix <prefix>        Release tag prefix (default: podcast)',
         '  --tag-grouping <mode>        monthly (podcast-YYYY-MM) | daily (podcast-YYYY-MM-DD)',
         '  --dry-run                    Synthesize & write metadata/feeds without uploading via gh',
@@ -512,7 +512,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     const priorEpisodes = loadExistingEpisodes(options.episodesDir, dateStr);
     const allEpisodes = [episodeMetadata, ...priorEpisodes];
     const rssXml = buildPodcastRssXml(allEpisodes, {
-        feedUrl: options.feedUrl || 'https://nanless.github.io/audio-paper-digest-blog/podcast.xml',
+        feedUrl: options.feedUrl || 'https://nanless.github.io/audio-research-portal/podcast.xml',
         link: String(options.blogBaseUrl || DEFAULT_BLOG_BASE_URL).replace(/\/posts\/?$/, '/')
     });
     writeFileAtomic(rssPath, rssXml);

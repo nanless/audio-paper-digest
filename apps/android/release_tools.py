@@ -383,7 +383,7 @@ def mac_module(repo):
 
 def joint_plan(args,private_draft=False):
  android=verify(args.prepared,args.repo,SDK(args.sdk),args.certificate)
- mac=mac_module(args.repo);android_acceptance(args.android_acceptance,{'A-'+item for item in mac.IDS|mac.CLOUD_IDS},private_draft=private_draft);ns=argparse.Namespace(prepared=args.mac,repo=args.repo,acceptance_status=args.mac_acceptance,cloud_acceptance=args.mac_cloud,repository='nanless/audio-paper-digest',prerelease=False);plan=mac.publish_plan(ns,private_draft=private_draft)
+ mac=mac_module(args.repo);android_acceptance(args.android_acceptance,{'A-'+item for item in mac.IDS|mac.CLOUD_IDS},private_draft=private_draft);ns=argparse.Namespace(prepared=args.mac,repo=args.repo,acceptance_status=args.mac_acceptance,cloud_acceptance=args.mac_cloud,repository='nanless/audio-research-workbench',prerelease=False);plan=mac.publish_plan(ns,private_draft=private_draft)
  mac_info=load(args.mac/'build-info.json');require(android['sourceCommit']==mac_info['releaseHead'] and android['version']==mac_info['version'],'joint_release_identity')
  names=list(load(args.prepared/'android-release-manifest.json')['assets'])+['android-release-manifest.json','ANDROID-SHA256SUMS'];mac_names=list(load(args.mac/'release-manifest.json')['assets'])+['release-manifest.json','SHA256SUMS'];require(not set(names)&set(mac_names),'joint_asset_collision')
  argv=plan['argv'];at=argv.index('--repo');argv[at:at]=[str(args.prepared/n) for n in sorted(names)]
@@ -399,7 +399,7 @@ def joint_public_plan(args):
  mac=mac_module(args.repo);info=load(args.mac/'build-info.json');tag='v'+info['version']
  identity={'version':info['version'],'sourceCommit':info['releaseHead']}
  tag_record=android_verified_remote_tag(mac,identity)
- endpoint='repos/nanless/audio-paper-digest/releases/'+str(args.draft_id)
+ endpoint='repos/nanless/audio-research-workbench/releases/'+str(args.draft_id)
  expected={name:before[str(p)] for name,p in files.items()}
  def draft():
   record=json.loads(run(['gh','api','--hostname','github.com',endpoint],'draft_read_failed'))
@@ -419,7 +419,7 @@ def joint_public_plan(args):
   for asset in original['assets']:
    # Bind the bytes to this verified release's asset ID, never a same-tag lookup.
    argv=['gh','api','--hostname','github.com','-H','Accept: application/octet-stream',
-         'repos/nanless/audio-paper-digest/releases/assets/'+str(asset['id'])]
+         'repos/nanless/audio-research-workbench/releases/assets/'+str(asset['id'])]
    try:
     with open(downloaded/asset['name'],'xb') as output:
      result=subprocess.run(argv,stdout=output,stderr=subprocess.PIPE,timeout=1200)
@@ -513,7 +513,7 @@ def android_verified_remote_tag(mac,verified):
  # The shared helper binds the peeled commit. Also bind the annotation object itself:
  # replacing an annotated tag with another annotation for the same commit is a CAS change.
  ref='refs/tags/'+tag['tag']
- raw=mac.run(['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git',ref,ref+'^{}']).decode('ascii')
+ raw=mac.run(['git','ls-remote','--tags','https://github.com/nanless/audio-research-workbench.git',ref,ref+'^{}']).decode('ascii')
  rows=[line.split('\t') for line in raw.splitlines()]
  require(len(rows)==2 and all(len(row)==2 and re.fullmatch('[a-f0-9]{40}',row[0]) and row[1] in {ref,ref+'^{}'} for row in rows),'annotated_remote_tag_required')
  refs={name:oid for oid,name in rows}
@@ -529,7 +529,7 @@ def android_private_draft_plan(args):
          'remoteTag':tag,'remoteTagOIDChecked':True,'assets':6,'notes':{'path':str(regular(args.notes_file)),**note_record},
          'downloadVerificationRequired':True,'qualification':'Android 84项前置验收通过；仅A-REL-03/04可待验。只生成私有草稿命令，尚未创建或公开；Mac不在本次发行范围。',
          'argv':['gh','release','create',tag['tag'],*[str(p) for p in files.values()],
-                 '--repo','github.com/nanless/audio-paper-digest','--verify-tag','--target',verified['sourceCommit'],
+                 '--repo','github.com/nanless/audio-research-workbench','--verify-tag','--target',verified['sourceCommit'],
                  '--title','论文速递工作台 Android '+verified['version'],'--notes-file',str(regular(args.notes_file)),'--draft']}
 
 def verify_android_downloaded(args):
@@ -556,7 +556,7 @@ def android_public_plan(args):
  # Read only: never upload, create a release/tag, or execute the returned PATCH.
  require(type(args.draft_id) is int and args.draft_id>0,'draft_id_required')
  verified,files,notes,note_record,mac,unchanged=android_qualification(args,False)
- tag=android_verified_remote_tag(mac,verified);endpoint='repos/nanless/audio-paper-digest/releases/'+str(args.draft_id)
+ tag=android_verified_remote_tag(mac,verified);endpoint='repos/nanless/audio-research-workbench/releases/'+str(args.draft_id)
  expected={name:{'bytes':p.stat().st_size,'sha256':file_sha(p)} for name,p in files.items()}
  def draft():
   record=json.loads(run(['gh','api','--hostname','github.com',endpoint],'draft_read_failed'))
@@ -572,7 +572,7 @@ def android_public_plan(args):
  with tempfile.TemporaryDirectory(prefix='paperdigest-android-private-download-') as tmp:
   downloaded=P(tmp).resolve()
   for asset in original['assets']:
-   argv=['gh','api','--hostname','github.com','-H','Accept: application/octet-stream','repos/nanless/audio-paper-digest/releases/assets/'+str(asset['id'])]
+   argv=['gh','api','--hostname','github.com','-H','Accept: application/octet-stream','repos/nanless/audio-research-workbench/releases/assets/'+str(asset['id'])]
    try:
     with open(downloaded/asset['name'],'xb') as output:result=subprocess.run(argv,stdout=output,stderr=subprocess.PIPE,timeout=1200)
    except (OSError,subprocess.TimeoutExpired):raise ReleaseError('draft_download_failed') from None

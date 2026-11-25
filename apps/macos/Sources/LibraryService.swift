@@ -217,7 +217,7 @@ actor LibraryService {
     /// a malformed local file is reported at launch. Only the large published catalog is deferred.
     private static let eagerDecodeLimit = 8 * 1024 * 1024
 
-    init(dataDirectory: URL, siteBaseURL: URL = URL(string: "https://nanless.github.io/audio-paper-digest-blog/")!, seedDirectory: URL? = nil, transport: Transport? = nil, sessionConfiguration: URLSessionConfiguration? = nil) throws {
+    init(dataDirectory: URL, siteBaseURL: URL = URL(string: "https://nanless.github.io/audio-research-portal/")!, seedDirectory: URL? = nil, transport: Transport? = nil, sessionConfiguration: URLSessionConfiguration? = nil) throws {
         guard siteBaseURL.scheme == "https", siteBaseURL.host != nil, siteBaseURL.user == nil,
               siteBaseURL.password == nil, siteBaseURL.query == nil, siteBaseURL.fragment == nil,
               siteBaseURL.absoluteString.hasSuffix("/") else { throw ServiceError.invalid("资料站点必须为不含凭据的 HTTPS 目录。") }

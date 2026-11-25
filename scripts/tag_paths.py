@@ -10,7 +10,7 @@ TAG_PREVIEW_DIR = DATA_DIR / 'runtime' / 'tag-preview'
 def resolve_blog_repo_path(explicit=None):
     """先取显式路径，再取环境变量中的博客路径，最后使用默认目录；调用方应先加载项目环境。"""
     return Path(explicit or os.environ.get('PAPER_DIGEST_BLOG_REPO')
-                or Path.home() / 'code' / 'github_repos' / 'audio-paper-digest-blog').expanduser().absolute()
+                or Path.home() / 'code' / 'github_repos' / 'audio-research-portal').expanduser().absolute()
 
 
 if __name__ == '__main__':

@@ -83,7 +83,7 @@ POLICY = (
     ('collector_keys', ('status', 'metadataOutcome', 'partial', 'fullE05', 'requestedCommit',
                        'policy', 'selection', 'workflowSource', 'jobs', 'deployment', 'artifacts', 'requests',
                        'coverage', 'issues', 'metadataSha256', 'capabilities')),
-    ('collector_policy', (('repositoryId', 1214235086), ('fullName', 'nanless/audio-paper-digest-blog'),
+    ('collector_policy', (('repositoryId', 1214235086), ('fullName', 'nanless/audio-research-portal'),
         ('workflowId', 262722446), ('workflowPath', '.github/workflows/hugo.yaml'), ('branch', 'main'),
         ('environment', 'github-pages'),
         ('workflowSourceSha256', 'cbf3a52e317973a4273f5c64c0a8d4e1c5dda2ee709f0e4ad12863c78cc5fe0d'))),
@@ -820,8 +820,14 @@ def _binding_relations(value, snapshot, attempt_format):
     for sha in local.values():
         _hex(sha)
     expected_policy = dict(_p('collector_policy'))
+    allowed_full_names = (expected_policy['fullName'], 'nanless/audio-paper-digest-blog')
     for name in ('repositoryId', 'fullName', 'workflowId', 'workflowPath', 'branch', 'environment'):
-        if type(policy[name]) is not type(expected_policy[name]) or policy[name] != expected_policy[name]:
+        if type(policy[name]) is not type(expected_policy[name]):
+            _fail('invalid_record', 'record_binding')
+        if name == 'fullName':
+            if policy[name] not in allowed_full_names:
+                _fail('invalid_record', 'record_binding')
+        elif policy[name] != expected_policy[name]:
             _fail('invalid_record', 'record_binding')
     if policy['localRepositoryMapping'] != 'verified':
         _fail('invalid_record', 'record_binding')
@@ -891,8 +897,10 @@ def _collector_metadata(value, commit, attempt_format):
         expected_policy['profile'] = original_profile
     else:
         expected_policy.update(profile=profile, profileSchemaFingerprint=fingerprint)
-    if value['policy'] != expected_policy:
+    allowed_policies = (expected_policy, {**expected_policy, 'fullName': 'nanless/audio-paper-digest-blog'})
+    if value['policy'] not in allowed_policies:
         _fail('invalid_record', 'record_binding')
+    record_full_name = value['policy']['fullName']
     _caps_check(value['capabilities'])
     _issue_shape(value['issues'])
     _check_hash(value, 'metadataSha256')
@@ -914,7 +922,7 @@ def _collector_metadata(value, commit, attempt_format):
             _id(selection[key])
         for key in ('repository', 'headRepository'):
             _keys(selection[key], ('id', 'fullName'))
-            if selection[key] != {'id': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog'} or type(selection[key]['id']) is not int:
+            if selection[key] != {'id': 1214235086, 'fullName': record_full_name} or type(selection[key]['id']) is not int:
                 _fail('invalid_record', 'record_binding')
         if selection['headSha'] != commit or selection['branch'] != 'main' or selection['event'] != 'push':
             _fail('invalid_record', 'record_binding')

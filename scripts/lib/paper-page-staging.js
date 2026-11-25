@@ -33,7 +33,7 @@ function rendererImplementationIdentity(dependencies = {}) {
         return { relativePath, fileSha256 };
     });
     const blogBasePath = dependencies.blogBasePath !== undefined
-        ? dependencies.blogBasePath : process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-paper-digest-blog';
+        ? dependencies.blogBasePath : process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-research-portal';
     if (typeof blogBasePath !== 'string' || !blogBasePath.startsWith('/') || blogBasePath.includes('\0')) {
         throw new Error('历史页面使用的博客基础路径必须以斜杠开头，且不能含空字符。');
     }

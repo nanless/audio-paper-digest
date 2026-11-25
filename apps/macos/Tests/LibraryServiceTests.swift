@@ -354,7 +354,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         let sample=try JSONSerialization.jsonObject(with:Data(contentsOf:seed.appendingPathComponent("sample.json"))) as! [String:Any],primary=sample["paper"] as! [String:Any]
         var changed=row("2610.27491",slug:"ignored",title:"MiCLA v2 current",date:"2026-10-24"),citation=changed["citation"] as! [String:Any]
         changed["permalink"]=primary["blogUrl"];citation["arxivId"]="2610.27491v2";citation["sourceUrl"]="https://arxiv.org/abs/2610.27491v2";citation["pdfUrl"]="https://arxiv.org/pdf/2610.27491v2.pdf";changed["citation"]=citation
-        let index=try JSONSerialization.data(withJSONObject:[changed]),fixture=LibraryFixtureTransport(["/audio-paper-digest-blog/index.json":index])
+        let index=try JSONSerialization.data(withJSONObject:[changed]),fixture=LibraryFixtureTransport(["/audio-research-portal/index.json":index])
         let library=try LibraryService(dataDirectory:folder,seedDirectory:seed,transport:{url,limit in try await fixture.read(url,limit)})
         _=try await library.sync()
         try await expectFailure("bundled v1 article cannot impersonate catalog v2"){_=try await library.article(for:"arxiv:2610.27491")}

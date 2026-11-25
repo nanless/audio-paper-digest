@@ -168,7 +168,7 @@ class ConferenceWorkbenchPublicationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             packet, _, _, records = self.records(Path(directory))
             generation = {'files': records}
-            pages = [{'url': 'https://example.com/audio-paper-digest-blog/posts/conference-paper/'}]
+            pages = [{'url': 'https://example.com/audio-research-portal/posts/conference-paper/'}]
             objects = {url: Path(record['sourcePath']).read_bytes()
                        for url, record in PUBLICATION.conference_sidecar_urls(pages, generation)}
             baseline = {'status': 'passed', 'contract': PUBLICATION.GATE_CONTRACT,

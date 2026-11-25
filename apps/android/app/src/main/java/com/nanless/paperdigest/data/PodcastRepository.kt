@@ -355,7 +355,7 @@ class PodcastRepository(
         val ALLOWED_RATES = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
         private val INITIAL_RELEASE_URL_REGEX =
-            Regex("^https://github\\.com/nanless/(?:audio-paper-digest|audio-paper-digest-blog)/releases/download/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}\\.mp3$")
+            Regex("^https://github\\.com/nanless/(?:audio-paper-digest|audio-paper-digest-blog|audio-research-workbench|audio-research-portal)/releases/download/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}\\.mp3$")
         private val SHA256_REGEX = Regex("^[a-f0-9]{64}$")
         private val DATE_REGEX = Regex("^\\d{4}-\\d{2}-\\d{2}$")
         private val EPISODE_ID_REGEX = Regex("^[A-Za-z0-9._:-]{1,128}$")

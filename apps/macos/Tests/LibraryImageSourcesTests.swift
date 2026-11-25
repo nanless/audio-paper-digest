@@ -83,7 +83,7 @@ actor PublishedImageFixture {
     static func integration()async throws {
         let fm=FileManager.default,folder=fm.temporaryDirectory.appendingPathComponent("PublishedImageSources-"+UUID().uuidString)
         try fm.createDirectory(at:folder,withIntermediateDirectories:true);defer{try? fm.removeItem(at:folder)}
-        let base="https://nanless.github.io/audio-paper-digest-blog/",identity="conference:interspeech:2026:conference-paper-id:cui26_interspeech"
+        let base="https://nanless.github.io/audio-research-portal/",identity="conference:interspeech:2026:conference-paper-id:cui26_interspeech"
         let record:[String:Any]=["permalink":base+"posts/turnguide/","pageType":"paper","title":"TurnGuide","titleZh":"TurnGuide fixture","sourceKind":"conference","identityStatus":"verified","paperId":identity,"date":"2026-10-16","citation":["paperKey":identity,"sourceUrl":"https://www.isca-archive.org/interspeech_2026/cui26_interspeech.html","pdfUrl":"https://www.isca-archive.org/interspeech_2026/cui26_interspeech.pdf"]]
         let shard=try JSONSerialization.data(withJSONObject:[record],options:[.sortedKeys]),shardName="search-index/part-0001-"+hash(shard).prefix(12)+".json"
         let manifest:[String:Any]=["contract":"paper-search-index-manifest-v1","recordCount":1,"totalBytes":shard.count,"shards":[["url":shardName,"sha256":hash(shard),"bytes":shard.count,"recordCount":1]]]

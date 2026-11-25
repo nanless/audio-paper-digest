@@ -136,7 +136,7 @@ class Packaging(unittest.TestCase):
     def test_joint_release_notes_bind_android_claims_to_actual_android_evidence(self):
         self.make_formal();self.prepare()
         notes=(self.output/'RELEASE_NOTES.md').read_text()
-        for required in ['论文速递工作台 1.0.1','macOS 15 及以上','本地签名，未经过 Apple 公证','应用程序文件夹','Android 安装与升级','正式发行签名','android-build-info.json','Android 版本、系统要求、签名和验证范围见该版本的','https://github.com/nanless/audio-paper-digest/blob/main/apps/android/README.md','应用标识和签名一致','内部版本号递增','保留本机资料','由用户在设备上配置','Zotero HTML 与外部附件的支持格式见客户端说明','旧版是调试包或签名不同','先在旧版导出完整备份并确认可恢复，再卸载旧版','恢复资料后，在当前设备重新配置凭据','SHA256SUMS','ANDROID-SHA256SUMS','shasum -a 256']:
+        for required in ['论文速递工作台 1.0.1','macOS 15 及以上','本地签名，未经过 Apple 公证','应用程序文件夹','Android 安装与升级','正式发行签名','android-build-info.json','Android 版本、系统要求、签名和验证范围见该版本的','https://github.com/nanless/audio-research-workbench/blob/main/apps/android/README.md','应用标识和签名一致','内部版本号递增','保留本机资料','由用户在设备上配置','Zotero HTML 与外部附件的支持格式见客户端说明','旧版是调试包或签名不同','先在旧版导出完整备份并确认可恢复，再卸载旧版','恢复资料后，在当前设备重新配置凭据','SHA256SUMS','ANDROID-SHA256SUMS','shasum -a 256']:
             self.assertIn(required,notes)
         for unsupported in ['所有 Zotero HTML 均兼容','已通过实体机验收','已在 Google Play 发布','Android versionCode: 1']:
             self.assertNotIn(unsupported,notes)
@@ -620,7 +620,7 @@ class ReleaseStages(unittest.TestCase):
         save(self.prepared/'build-info.json',{'distributionChannel':'release','sourceCommit':self.head,'releaseHead':self.head,'version':'1.0.0'})
         save(self.prepared/'release-manifest.json',{'assets':{'package.zip':{}}})
         import argparse
-        self.args=argparse.Namespace(prepared=self.prepared,repo=self.root,acceptance_status=self.status,cloud_acceptance=self.cloud,repository='nanless/audio-paper-digest',prerelease=False)
+        self.args=argparse.Namespace(prepared=self.prepared,repo=self.root,acceptance_status=self.status,cloud_acceptance=self.cloud,repository='nanless/audio-research-workbench',prerelease=False)
         self.remote=('2'*40+'\trefs/tags/v1.0.0\n'+self.head+'\trefs/tags/v1.0.0^{}\n').encode()
         self.calls=[]
         def run(argv):self.calls.append(argv);return self.remote
@@ -631,7 +631,7 @@ class ReleaseStages(unittest.TestCase):
     def test_private_stage_accepts_only_two_late_pending_and_checks_peeled_tag(self):
         result=self.m.publish_plan(self.args,private_draft=True)
         self.assertEqual('private-draft',result['stage']);self.assertEqual(self.head,result['remoteTag']['commitOID']);self.assertTrue(result['remoteTag']['annotated'])
-        self.assertEqual([['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git','refs/tags/v1.0.0','refs/tags/v1.0.0^{}']],self.calls)
+        self.assertEqual([['git','ls-remote','--tags','https://github.com/nanless/audio-research-workbench.git','refs/tags/v1.0.0','refs/tags/v1.0.0^{}']],self.calls)
         self.assertIn('--draft',result['argv']);self.assertIn('--verify-tag',result['argv']);self.assertFalse(result['executed']);self.assertFalse(result['publicPublication'])
     def test_default_still_rejects_late_pending(self):self.reject(lambda:self.m.publish_plan(self.args));self.assertEqual([],self.calls)
     def test_business_pending_or_partial_cannot_enter_private_stage(self):

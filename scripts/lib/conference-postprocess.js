@@ -580,7 +580,7 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
         publication: structuredClone(loaded.publication), date,
         figureAssets: conferenceFigureAssets(loaded),
         formulaEvidence: loaded.formulaEvidence,
-        aggregateUrl: `/audio-paper-digest-blog/posts/conference-${conferenceId}/` };
+        aggregateUrl: `${String(process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-research-portal').replace(/\/+$/, '')}/posts/conference-${conferenceId}/` };
     delete packet.paper.arxivId;
     const rendered = renderFn(packet);
     if (!rendered || typeof rendered.markdown !== 'string' || !rendered.markdown.trim() || !Array.isArray(rendered.assets)) {

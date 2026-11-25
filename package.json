@@ -1,5 +1,5 @@
 {
-  "name": "audio-paper-digest",
+  "name": "audio-research-workbench",
   "version": "1.0.0",
   "description": "日更、官方会议与历史博客更新，共享全文分析、Reader、审查与发布流程",
   "main": "scripts/full-fetch.js",
@@ -115,12 +115,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nanless/audio-paper-digest.git"
+    "url": "git+https://github.com/nanless/audio-research-workbench.git"
   },
   "bugs": {
-    "url": "https://github.com/nanless/audio-paper-digest/issues"
+    "url": "https://github.com/nanless/audio-research-workbench/issues"
   },
-  "homepage": "https://github.com/nanless/audio-paper-digest#readme",
+  "homepage": "https://github.com/nanless/audio-research-workbench#readme",
   "dependencies": {
     "@napi-rs/canvas": "^0.1.80",
     "cheerio": "^1.2.0",

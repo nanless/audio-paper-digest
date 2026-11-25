@@ -46,9 +46,9 @@ private actor FixtureTransport {
         let physical = realpath(FileManager.default.temporaryDirectory.path, nil)!; defer { free(physical) }
         let root = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("aggregate-native-host-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: root) }
-        let base = "https://nanless.github.io/audio-paper-digest-blog/"
-        let rows: [[String: Any]] = [["pageType": "daily", "permalink": "/audio-paper-digest-blog/ci-summary/", "title": "受控真实目录汇总", "titleZh": String(repeating:"受控界面长标题：完整显示与来源归属。",count:7), "date": "0001-01-01"],
-            ["pageType":"paper", "permalink":"/audio-paper-digest-blog/papers/ci-paper/", "title":"Controlled paper", "titleZh":"受控论文", "date":"2026-10-24", "sourceKind":"arxiv", "identityStatus":"verified", "arxivId":"2510.00001", "citation":["paperKey":"arxiv:2510.00001", "identityStatus":"verified", "verified":true, "complete":false, "authors":["Author"], "title":"Controlled paper", "arxivId":"2510.00001v1", "sourceKind":"arxiv", "sourceUrl":"https://arxiv.org/abs/2510.00001v1", "pdfUrl":"https://arxiv.org/pdf/2510.00001v1.pdf"]]]
+        let base = "https://nanless.github.io/audio-research-portal/"
+        let rows: [[String: Any]] = [["pageType": "daily", "permalink": "/audio-research-portal/ci-summary/", "title": "受控真实目录汇总", "titleZh": String(repeating:"受控界面长标题：完整显示与来源归属。",count:7), "date": "0001-01-01"],
+            ["pageType":"paper", "permalink":"/audio-research-portal/papers/ci-paper/", "title":"Controlled paper", "titleZh":"受控论文", "date":"2026-10-24", "sourceKind":"arxiv", "identityStatus":"verified", "arxivId":"2510.00001", "citation":["paperKey":"arxiv:2510.00001", "identityStatus":"verified", "verified":true, "complete":false, "authors":["Author"], "title":"Controlled paper", "arxivId":"2510.00001v1", "sourceKind":"arxiv", "sourceUrl":"https://arxiv.org/abs/2510.00001v1", "pdfUrl":"https://arxiv.org/pdf/2510.00001v1.pdf"]]]
         let shard = try JSONSerialization.data(withJSONObject: rows, options: .sortedKeys), shardSHA = PublishedAggregateReader.sha(shard), shardPath = "search-index/part-0001-" + shardSHA.prefix(12) + ".json"
         let manifest = try JSONSerialization.data(withJSONObject: ["contract": "paper-search-index-manifest-v1", "recordCount": rows.count, "totalBytes": shard.count, "shards": [["url": shardPath, "sha256": shardSHA, "bytes": shard.count, "recordCount": rows.count]]], options: .sortedKeys)
         let html = Data(("<html><body><div id='article-body' class='post-content'><h2 id='original-anchor'>第一节 原有锚点</h2><p>受控纯文本</p><figure><img src='"+base+"images/native-host-ui-only.png' alt='界面测试项目图标'/><figcaption>仅界面测试，不是论文配图</figcaption></figure><img src='"+base+"images/native-host-missing.png' alt='受控缺项'/><h3>第二节 自动锚点</h3>"+String(repeating:"<p>受控长段落，确认本页目录真实滚动而不发来源请求。</p>",count:120)+"<h2>最后一节 只读边界</h2><p>受控尾部</p><a href='#original-anchor'>返回原锚点</a></div></body></html>").utf8)
@@ -59,7 +59,7 @@ private actor FixtureTransport {
         var keyReads = 0; app.model = ModelService(directory: root, store: app.store, keyProvider: { keyReads += 1; return nil })
         app.library = try LibraryService(dataDirectory: root.appendingPathComponent("library"), transport: { url, limit in try await transport.read(url, limit: limit) })
         _ = try await app.library.sync()
-        let id = "page:/audio-paper-digest-blog/ci-summary/"
+        let id = "page:/audio-research-portal/ci-summary/"
         let window = ReadyWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         app.window = window

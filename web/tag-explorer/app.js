@@ -21,7 +21,8 @@
         try {
             const url = new URL(value);
             if (url.protocol !== 'https:' || url.hostname !== 'nanless.github.io' || url.port
-                || url.username || url.password || !url.pathname.startsWith('/audio-paper-digest-blog/')) return null;
+                || url.username || url.password
+                || (!url.pathname.startsWith('/audio-research-portal/') && !url.pathname.startsWith('/audio-paper-digest-blog/'))) return null;
             return url.href;
         } catch (_) { return null; }
     }

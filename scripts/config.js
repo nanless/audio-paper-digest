@@ -339,7 +339,7 @@ const ARCHIVE_CONFIG = {
 // ═══════════════════════════════════════════════════════
 
 const BLOG_REPO = expandHome(
-    process.env.PAPER_DIGEST_BLOG_REPO || path.join(require('os').homedir(), 'code/github_repos/audio-paper-digest-blog')
+    process.env.PAPER_DIGEST_BLOG_REPO || path.join(require('os').homedir(), 'code/github_repos/audio-research-portal')
 );
 const HISTORICAL_CONFERENCE_CONFIG = {
     iclr2026AcceptedRoot: expandHome(process.env.PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT
@@ -349,7 +349,7 @@ const HISTORICAL_CONFERENCE_CONFIG = {
 const PUBLISH_CONFIG = {
     blogRepo: BLOG_REPO,
     contentDir: path.join(BLOG_REPO, 'content', 'posts'),
-    basePath: process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-paper-digest-blog'
+    basePath: process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-research-portal'
 };
 
 // ═══════════════════════════════════════════════════════

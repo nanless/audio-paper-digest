@@ -1035,7 +1035,7 @@ actor ZoteroService {
               url.scheme == "https", url.host == "nanless.github.io", url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil else { return false }
         let path = String(identity.dropFirst(5))
-        return path.hasPrefix("/audio-paper-digest-blog/posts/") && !path.contains("..") &&
+        return (path.hasPrefix("/audio-research-portal/posts/") || path.hasPrefix("/audio-paper-digest-blog/posts/")) && !path.contains("..") &&
             path.hasSuffix("/") && URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath == path &&
             !(path.removingPercentEncoding ?? path).split(separator: "/").contains("..") && !path.contains("\n") && !path.contains("\r")
     }

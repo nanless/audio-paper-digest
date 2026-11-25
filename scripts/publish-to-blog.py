@@ -209,15 +209,15 @@ def atomic_write_json(path, data, *, ensure_ascii=False, indent=2, mode=None):
 
 
 BLOG_REPO = os.path.expanduser(
-    os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
+    os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-research-portal")
 )
 CONTENT_DIR = os.path.join(BLOG_REPO, "content", "posts")
-BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-paper-digest-blog")
+BASE_PATH = os.environ.get("PAPER_DIGEST_BLOG_BASE_PATH", "/audio-research-portal")
 BLOG_BASE_PATH = BASE_PATH
 _INITIAL_BLOG_BASE_PATH = BASE_PATH
 BLOG_URL = os.environ.get(
     "PAPER_DIGEST_BLOG_URL",
-    "https://nanless.github.io/audio-paper-digest-blog/posts",
+    "https://nanless.github.io/audio-research-portal/posts",
 )
 _INITIAL_BLOG_URL = BLOG_URL
 GITHUB_REMOTE = os.environ.get("PAPER_DIGEST_GITHUB_REMOTE", "origin")
@@ -3140,9 +3140,9 @@ def _researcher_sidecar_relative_root(date_str, base_id, *, context_contract=RES
 
 
 def _effective_blog_base_path():
-    base_val = globals().get('BASE_PATH', '/audio-paper-digest-blog')
+    base_val = globals().get('BASE_PATH', '/audio-research-portal')
     alias_val = globals().get('BLOG_BASE_PATH', base_val)
-    init_val = globals().get('_INITIAL_BLOG_BASE_PATH', '/audio-paper-digest-blog')
+    init_val = globals().get('_INITIAL_BLOG_BASE_PATH', '/audio-research-portal')
     if base_val != init_val:
         return base_val
     if alias_val != init_val:
@@ -3157,7 +3157,7 @@ def _researcher_public_url(relative):
     effective_base = (
         _effective_blog_base_path()
         if callable(globals().get('_effective_blog_base_path'))
-        else globals().get('BASE_PATH', '/audio-paper-digest-blog')
+        else globals().get('BASE_PATH', '/audio-research-portal')
     )
     base_path = str(effective_base or '').rstrip('/')
     if not re.fullmatch(r'/[A-Za-z0-9._~!$&\'()*+,;=:@%/-]*', base_path) \

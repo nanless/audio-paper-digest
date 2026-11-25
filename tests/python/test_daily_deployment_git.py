@@ -27,7 +27,7 @@ class DailyDeploymentGitTest(unittest.TestCase):
         fixture.git(self.repo, 'commit', '-m', 'Mechanical mapped candidate')
         self.current = fixture.git(self.repo, 'rev-parse', 'HEAD').stdout.decode().strip()
         self.expected = [{'path': 'page.md', 'deleted': False, 'sha256': fixture.sha(b'Candidate page\n')}]
-        self.url = 'https://github.com/nanless/audio-paper-digest-blog.git'
+        self.url = 'https://github.com/nanless/audio-research-portal.git'
         fixture.git(self.repo, 'remote', 'add', 'origin', self.url)
         self.module = importlib.import_module('local_git_publication')
 
@@ -49,7 +49,7 @@ class DailyDeploymentGitTest(unittest.TestCase):
         self.assertNotIn('repositoryMapping', existing)
         observed = self.read()
         self.assertEqual(observed['status'], 'local_publication_git_observed')
-        self.assertEqual(observed['context']['repositoryMapping']['fullName'], 'nanless/audio-paper-digest-blog')
+        self.assertEqual(observed['context']['repositoryMapping']['fullName'], 'nanless/audio-research-portal')
         self.assertEqual(fixture.inventory(self.repo), before)
 
     def set_url(self, value):
@@ -57,10 +57,10 @@ class DailyDeploymentGitTest(unittest.TestCase):
         self.url = value
 
     def assert_mapping(self, context):
-        expected = {'repositoryId': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog',
+        expected = {'repositoryId': 1214235086, 'fullName': 'nanless/audio-research-portal',
                     'workflowId': 262722446, 'workflowPath': '.github/workflows/hugo.yaml',
                     'branch': 'main', 'environment': 'github-pages', 'localRepositoryMapping': 'verified'}
-        policy = (('repositoryId', 1214235086), ('fullName', 'nanless/audio-paper-digest-blog'),
+        policy = (('repositoryId', 1214235086), ('fullName', 'nanless/audio-research-portal'),
                   ('workflowId', 262722446), ('workflowPath', '.github/workflows/hugo.yaml'),
                   ('branch', 'main'), ('environment', 'github-pages'),
                   ('urlProfile', 'fixed-literal-github-remote-v1'), ('host', 'github.com'),
@@ -86,12 +86,12 @@ class DailyDeploymentGitTest(unittest.TestCase):
         self.assertNotIn(str(self.repo), str(caught.exception))
 
     def test_all_fixed_literal_protocols_suffixes_and_case_have_real_contexts(self):
-        urls = ('https://github.com/nanless/audio-paper-digest-blog',
-                'HTTPS://GitHub.COM:443/nanless/audio-paper-digest-blog.git/',
-                'ssh://git@github.com/nanless/audio-paper-digest-blog.git',
-                'SsH://git@GITHUB.COM:22/nanless/audio-paper-digest-blog/',
-                'git@GitHub.COM:nanless/audio-paper-digest-blog.git',
-                'git@github.com:nanless/audio-paper-digest-blog.git/')
+        urls = ('https://github.com/nanless/audio-research-portal',
+                'HTTPS://GitHub.COM:443/nanless/audio-research-portal.git/',
+                'ssh://git@github.com/nanless/audio-research-portal.git',
+                'SsH://git@GITHUB.COM:22/nanless/audio-research-portal/',
+                'git@GitHub.COM:nanless/audio-research-portal.git',
+                'git@github.com:nanless/audio-research-portal.git/')
         for url in urls:
             with self.subTest(url=url):
                 self.set_url(url)
@@ -115,10 +115,10 @@ class DailyDeploymentGitTest(unittest.TestCase):
 
     def test_valid_other_repositories_protocols_and_aliases_do_not_acquire_mapping(self):
         for url in ('https://github.com/other/project.git',
-                    'https://github.com/Nanless/audio-paper-digest-blog.git',
-                    'https://example.invalid/nanless/audio-paper-digest-blog.git',
-                    'http://github.com/nanless/audio-paper-digest-blog.git',
-                    'file:///tmp/mechanical-only.git', 'git@github-alias:nanless/audio-paper-digest-blog.git',
+                    'https://github.com/Nanless/audio-research-portal.git',
+                    'https://example.invalid/nanless/audio-research-portal.git',
+                    'http://github.com/nanless/audio-research-portal.git',
+                    'file:///tmp/mechanical-only.git', 'git@github-alias:nanless/audio-research-portal.git',
                     'ext::not-executed-helper'):
             with self.subTest(url=url):
                 self.set_url(url)
@@ -130,19 +130,19 @@ class DailyDeploymentGitTest(unittest.TestCase):
 
     def test_fixed_host_malformed_urls_never_gain_mapping_or_echo_secrets(self):
         for url in ('https://github.com', 'https://github.com/',
-                    'https://user:SecretNeedle@github.com/nanless/audio-paper-digest-blog.git',
-                    'https://github.com:444/nanless/audio-paper-digest-blog.git',
-                    'https://github.com:443x/nanless/audio-paper-digest-blog.git',
-                    'https://github.com/nanless/audio-paper-digest-blog.git?x=1',
-                    'https://github.com/nanless/audio-paper-digest-blog.git#x',
+                    'https://user:SecretNeedle@github.com/nanless/audio-research-portal.git',
+                    'https://github.com:444/nanless/audio-research-portal.git',
+                    'https://github.com:443x/nanless/audio-research-portal.git',
+                    'https://github.com/nanless/audio-research-portal.git?x=1',
+                    'https://github.com/nanless/audio-research-portal.git#x',
                     'https://github.com/nanless/audio%2Dpaper-digest-blog.git',
-                    'https://github.com/nanless/audio-paper-digest-blog.git//',
-                    'https://github.com/nanless/../audio-paper-digest-blog.git',
+                    'https://github.com/nanless/audio-research-portal.git//',
+                    'https://github.com/nanless/../audio-research-portal.git',
                     'https://github.com/nanless/audio paper-digest-blog.git',
                     'https://github.com/nanless/audio\\paper-digest-blog.git',
-                    'ssh://GIT@github.com/nanless/audio-paper-digest-blog.git',
-                    'ssh://git@github.com:443/nanless/audio-paper-digest-blog.git',
-                    'git@github.com:', 'GIT@github.com:nanless/audio-paper-digest-blog.git'):
+                    'ssh://GIT@github.com/nanless/audio-research-portal.git',
+                    'ssh://git@github.com:443/nanless/audio-research-portal.git',
+                    'git@github.com:', 'GIT@github.com:nanless/audio-research-portal.git'):
             with self.subTest(url=url):
                 self.set_url(url)
                 self.mapping_error('invalid_argument')
@@ -168,7 +168,7 @@ class DailyDeploymentGitTest(unittest.TestCase):
 
     def test_unique_pushurl_is_used_and_ssh_only_claims_literal_local_configuration(self):
         fixture.git(self.repo, 'remote', 'set-url', 'origin', 'https://example.invalid/fetch-only.git')
-        self.url = 'ssh://git@github.com:22/nanless/audio-paper-digest-blog.git'
+        self.url = 'ssh://git@github.com:22/nanless/audio-research-portal.git'
         fixture.git(self.repo, 'config', 'remote.origin.pushurl', self.url)
         self.assert_mapping(self.read(context=True))
 

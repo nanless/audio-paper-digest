@@ -6,7 +6,7 @@ const DAILY_PODCAST_SCRIPT_CONTRACT = 'daily-podcast-script-v1';
 const DEFAULT_MAX_HIGHLIGHTS = 4;
 const DEFAULT_MAX_QUICK_RUNDOWN = 12;
 const DEFAULT_MAX_CHUNK_CHARS = 180;
-const DEFAULT_BLOG_BASE_URL = 'https://nanless.github.io/audio-paper-digest-blog/posts';
+const DEFAULT_BLOG_BASE_URL = 'https://nanless.github.io/audio-research-portal/posts';
 
 const VALID_ROLES = Object.freeze(['host', 'cohost']);
 const VALID_EMOTION_HINTS = Object.freeze([

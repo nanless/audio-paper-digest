@@ -96,9 +96,10 @@ def main():
         for path in shard_dir.glob('*.json'):
             item = json.loads(path.read_text(encoding='utf-8'))
             relative = str(item.get('path') or '')
-            marker = '/audio-paper-digest-blog/'
-            if marker in relative:
-                relative = relative.split(marker, 1)[1]
+            for marker in ('/audio-research-portal/', '/audio-paper-digest-blog/'):
+                if marker in relative:
+                    relative = relative.split(marker, 1)[1]
+                    break
             if relative in expected:
                 if relative in shards:
                     raise SystemExit(f'单页审查记录包含重复的文件路径：{relative}')

@@ -12,12 +12,12 @@ const CLIENT_PODCAST_FEED_SCHEMA_FINGERPRINT = 'd0e7166a5ae14ba85f421b84ccf05813
 const CLIENT_PODCAST_FEED_MAX_EPISODES = 120;
 const CLIENT_PODCAST_FEED_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
 
-const DEFAULT_PODCAST_GITHUB_REPO = 'nanless/audio-paper-digest-blog';
+const DEFAULT_PODCAST_GITHUB_REPO = 'nanless/audio-research-portal';
 const DEFAULT_RELEASE_TAG_PREFIX = 'podcast';
 const DEFAULT_TAG_GROUPING = 'monthly';
 const DEFAULT_MAX_AUDIO_BYTES = 40 * 1024 * 1024; // 40 MiB (aligned with Wave 14.5 clients)
 const DEFAULT_TTS_ENGINE = 'indextts-2.5';
-const DEFAULT_BLOG_BASE_URL = 'https://nanless.github.io/audio-paper-digest-blog/posts';
+const DEFAULT_BLOG_BASE_URL = 'https://nanless.github.io/audio-research-portal/posts';
 const DEFAULT_EXEC_TIMEOUT_MS = 120000;
 const STREAM_CHUNK_BYTES = 64 * 1024;
 
@@ -896,11 +896,11 @@ function buildPodcastRssXml(episodes, channelConfig = {}) {
 
     const title = String(channelConfig.title || '语音与音频论文速递播客').trim();
     const link = validateSafeHttpsUrl(
-        channelConfig.link || 'https://nanless.github.io/audio-paper-digest-blog/',
+        channelConfig.link || 'https://nanless.github.io/audio-research-portal/',
         'channelConfig.link'
     );
     const feedUrl = validateSafeHttpsUrl(
-        channelConfig.feedUrl || 'https://nanless.github.io/audio-paper-digest-blog/podcast.xml',
+        channelConfig.feedUrl || 'https://nanless.github.io/audio-research-portal/podcast.xml',
         'channelConfig.feedUrl'
     );
     const description = String(

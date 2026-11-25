@@ -49,7 +49,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         key = hashlib.sha256(self.canonical(self.selector)).hexdigest()
         return Path(self.root) / key / 'attempts' / intent['attemptId']
 
-    def metadata(self, commit, *, historical=False):
+    def metadata(self, commit, *, historical=False, full_name='nanless/audio-research-portal'):
         # Schema-complete declarations only: no HTTP/Git/normal proof is claimed.
         from protocol_codec import record_header
         name = 'github-pages-metadata-observation'
@@ -57,12 +57,12 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         profile = 'fixed-hugo-workflow'
         profile_header = record_header(profile + '-v1' if historical else profile, profile)
         sha = 'a' * 64
-        policy = {'repositoryId': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog',
+        policy = {'repositoryId': 1214235086, 'fullName': full_name,
             'workflowId': 262722446, 'workflowPath': '.github/workflows/hugo.yaml', 'branch': 'main',
             'environment': 'github-pages', 'profile': profile_header['contract'],
             **({} if historical else {'profileSchemaFingerprint': profile_header['schemaFingerprint']}),
             'workflowSourceSha256': 'cbf3a52e317973a4273f5c64c0a8d4e1c5dda2ee709f0e4ad12863c78cc5fe0d'}
-        repo = {'id': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog'}
+        repo = {'id': 1214235086, 'fullName': full_name}
         when = '2026-09-07T00:00:00+00:00'
         jobs = []
         definitions = [('unit', [(5, 'Unit checks')]),
@@ -165,7 +165,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         current = self.leaf()
         with mock.patch.object(self, 'leaf', return_value=previous):
             old_intent, old_handle = previous.reserve(self.root, self.selector)
-            old_binding = self.bind_data(old_intent, old_handle)
+            old_binding = self.bind_data(old_intent, old_handle, full_name='nanless/audio-paper-digest-blog')
             old_terminal = self.terminal(old_intent, old_binding, state='metadata_observed')
             previous.finish(old_handle, old_terminal)
         old_dir = self.directory(old_intent)
@@ -236,7 +236,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             with self.assertRaises(leaf.DeploymentStoreError):
                 leaf._target_header(invalid, (), outer)
 
-    def bind_data(self, intent, handle, *, historical_target=False, publication_mode='legacy_v5_maintenance'):
+    def bind_data(self, intent, handle, *, historical_target=False, publication_mode='legacy_v5_maintenance', full_name='nanless/audio-research-portal'):
         from protocol_codec import record_header
         historical_target = historical_target or 'version' in intent
         family = 'daily-reviewed-primary-targets'
@@ -284,7 +284,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         local = {'contextObservationSha256': sha, 'refPhysicalIdentitySha256': sha,
             'deltaObservationSha256': sha, 'reviewedFileSetSha256': sha, 'reviewedFileFactsSha256': sha,
             'implementationBindingSha256': hashlib.sha256(self.canonical(snapshot['implementationBinding'])).hexdigest()}
-        repository = {'repositoryId': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog',
+        repository = {'repositoryId': 1214235086, 'fullName': full_name,
             'workflowId': 262722446, 'workflowPath': '.github/workflows/hugo.yaml', 'branch': 'main',
             'environment': 'github-pages', 'policySha256': sha, 'localRepositoryMapping': 'verified'}
         binding = self.hashed({**self.attempt_header(intent, 'daily-deployment-input-binding'),
@@ -308,7 +308,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'bindingSha256': binding['bindingSha256'] if binding is not None else None,
             'startedAt': intent['requestedAt'], 'finishedAt': intent['requestedAt'], 'status': state,
             'bindingVerified': binding is not None,
-            'metadata': self.metadata(binding['publicationBinding']['commitOid'], historical='version' in intent) if success else None,
+            'metadata': self.metadata(binding['publicationBinding']['commitOid'], historical='version' in intent, full_name=binding['repositoryPolicy']['fullName']) if success else None,
             'partial': True, 'fullE05': False, 'implementationObservation': self.implementation() if success else None,
             'coverage': coverage, 'issues': [] if success else [{'domain': 'normal', 'code': 'normal_rejected', 'reason': 'initial'}],
             'capabilities': self.caps()}, 'recordSha256')

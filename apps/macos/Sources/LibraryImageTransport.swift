@@ -51,7 +51,12 @@ extension LibraryService {
         guard !value.isEmpty, let url = URL(string: value, relativeTo: siteBaseURL)?.absoluteURL,
               url.scheme == "https", url.host?.lowercased() == siteBaseURL.host?.lowercased(), url.port == siteBaseURL.port,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
-              url.path.hasPrefix(siteBaseURL.path + "/"), !url.pathComponents.contains(".."), !url.path.contains("\\") else { throw ServiceError.invalid("资料地址超出可信站点目录。") }
+              !url.pathComponents.contains(".."), !url.path.contains("\\") else { throw ServiceError.invalid("资料地址超出可信站点目录。") }
+        let basePrefix = siteBaseURL.path.hasSuffix("/") ? siteBaseURL.path : siteBaseURL.path + "/"
+        let isLegacyOwned = siteBaseURL.host?.lowercased() == "nanless.github.io"
+            && basePrefix == "/audio-research-portal/"
+            && url.path.hasPrefix("/audio-paper-digest-blog/")
+        guard url.path.hasPrefix(basePrefix) || isLegacyOwned else { throw ServiceError.invalid("资料地址超出可信站点目录。") }
         return url
     }
 

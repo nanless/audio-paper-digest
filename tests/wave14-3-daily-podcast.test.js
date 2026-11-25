@@ -264,7 +264,7 @@ test('normalizeForChineseTts & splitIntoTtsChunks: anchors, inequalities, LaTeX 
 
 test('podcast-github-release: 40 MiB cap, URL hardening, O_NOFOLLOW + immutable 0400 staging, --title=/--, isReleaseNotFoundError', () => {
     assert.equal(releaseLib.DEFAULT_MAX_AUDIO_BYTES, 40 * 1024 * 1024);
-    assert.equal(releaseLib.resolvePodcastGitHubRepo({ env: {} }), 'nanless/audio-paper-digest-blog');
+    assert.equal(releaseLib.resolvePodcastGitHubRepo({ env: {} }), 'nanless/audio-research-portal');
     assert.equal(releaseLib.buildReleaseTag('2026-11-24'), 'podcast-2026-11');
     assert.equal(releaseLib.buildReleaseTag('2026-11-24', { tagGrouping: 'daily' }), 'podcast-2026-11-24');
 

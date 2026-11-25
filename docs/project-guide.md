@@ -8,7 +8,7 @@
 
 打开已经发布的论文，不会让内容生产流程重新分析它。应用里的个人研究是另一项主动操作：用户选择材料、配置模型服务并确认后，才会发送实际材料。网站生产任务与个人研究各自保存授权、结果、用量和费用。
 
-仅阅读时，直接打开[网站](https://nanless.github.io/audio-paper-digest-blog/)，或按 [Mac](../apps/macos/README.md)、[Android](../apps/android/README.md)说明安装应用。生产项目的 `.env` 用于维护任务，不是阅读应用的安装前提。
+仅阅读时，直接打开[网站](https://nanless.github.io/audio-research-portal/)，或按 [Mac](../apps/macos/README.md)、[Android](../apps/android/README.md)说明安装应用。生产项目的 `.env` 用于维护任务，不是阅读应用的安装前提。
 
 ## 三条内容生产流程分别处理什么
 

@@ -104,7 +104,7 @@ enum PublishedAggregateReader {
     struct Shard: Codable, Sendable {let url:String;let bytes:Int;let sha256:String;let recordCount:Int}
     struct Manifest: Codable {let contract:String;let recordCount:Int;let totalBytes:Int;let shards:[Shard]}
     struct DesktopSnapshot: Codable {let contract:String;let recordCount:Int;let paperCount:Int;let appearanceCount:Int;let catalogShards:[Shard]}
-    static let site=URL(string:"https://nanless.github.io/audio-paper-digest-blog/")!
+    static let site=URL(string:"https://nanless.github.io/audio-research-portal/")!
     static func sha(_ bytes:Data)->String {SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()}
     static func require(_ condition:Bool,_ reason:String)throws {if !condition{throw AggregateFailure.invalid(reason)}}
     static func validSHA(_ value:String)->Bool {value.range(of:#"\A[a-f0-9]{64}\z"#,options:.regularExpression) != nil}
@@ -191,7 +191,9 @@ enum PublishedAggregateReader {
         try require(!path.contains("%") && !path.contains("\\") && !path.contains("//") && !path.split(separator:"/",omittingEmptySubsequences:false).contains(where:{$0=="." || $0==".."}),"汇总页面路径不规范")
         let basePath=URLComponents(url:siteBase,resolvingAgainstBaseURL:false)!.percentEncodedPath
         let prefix=basePath.hasSuffix("/") ? basePath:basePath+"/"
-        try require(path.hasPrefix(prefix) && path.count>prefix.count && path.hasSuffix("/"),"汇总页面超出资料站点")
+        let legacyPrefix=(siteBase.host?.lowercased()=="nanless.github.io" && prefix=="/audio-research-portal/") ? "/audio-paper-digest-blog/" : nil
+        let matchedPrefix = path.hasPrefix(prefix) ? prefix : (legacyPrefix != nil && path.hasPrefix(legacyPrefix!) ? legacyPrefix! : nil)
+        try require(matchedPrefix != nil && path.count>matchedPrefix!.count && path.hasSuffix("/"),"汇总页面超出资料站点")
         guard let url=URL(string:value,relativeTo:siteBase)?.absoluteURL else{throw AggregateFailure.invalid("汇总页面地址无法解析")}
         try require(url.scheme=="https" && url.host?.lowercased()==siteBase.host?.lowercased() && url.port==siteBase.port,"汇总页面不属于当前资料站点")
         return url

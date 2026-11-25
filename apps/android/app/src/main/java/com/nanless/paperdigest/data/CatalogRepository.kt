@@ -901,7 +901,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
     }
 
     companion object {
-        const val SITE = "https://nanless.github.io/audio-paper-digest-blog/"
+        const val SITE = "https://nanless.github.io/audio-research-portal/"
         const val MAX_TOTAL = 64 * 1024 * 1024
         /** The one catalog entry both [sync] and the foreground probe read. The preferred
          *  `client/index.json` only falls back to the legacy `index.json` on the exact 404/410
@@ -920,7 +920,8 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         internal fun catalogUpdateDetected(index: ByteArray, snapshotID: String): Boolean = sha256(index) != snapshotID
         fun sameSite(value: String): String {
             val uri = URI(SITE).resolve(value)
-            require(uri.scheme == "https" && uri.host == "nanless.github.io" && (uri.port == -1 || uri.port == 443) && uri.userInfo == null && uri.query == null && uri.fragment == null && uri.rawPath.startsWith("/audio-paper-digest-blog/") && !uri.rawPath.contains('%') && !uri.rawPath.contains('\\') && !uri.rawPath.contains("//") && uri.path.split('/').none { it == ".." || it == "." }) { "资料地址超出可信站点目录" }
+            val ownedPath = uri.rawPath.startsWith("/audio-research-portal/") || uri.rawPath.startsWith("/audio-paper-digest-blog/")
+            require(uri.scheme == "https" && uri.host == "nanless.github.io" && (uri.port == -1 || uri.port == 443) && uri.userInfo == null && uri.query == null && uri.fragment == null && ownedPath && !uri.rawPath.contains('%') && !uri.rawPath.contains('\\') && !uri.rawPath.contains("//") && uri.path.split('/').none { it == ".." || it == "." }) { "资料地址超出可信站点目录" }
             return uri.toASCIIString()
         }
         fun parsePaper(row: JSONObject): Paper? {
@@ -992,7 +993,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             if (host != "raw.githubusercontent.com") return false
             val rawPath = uri.rawPath ?: return false
             if (rawPath.contains('%') || rawPath.contains('\\') || rawPath.contains("//")) return false
-            if (!rawPath.startsWith("/nanless/audio-paper-digest-blog/main/")) return false
+            if (!rawPath.startsWith("/nanless/audio-research-portal/main/") && !rawPath.startsWith("/nanless/audio-paper-digest-blog/main/")) return false
             return rawPath.split('/').none { it == "." || it == ".." }
         }
 

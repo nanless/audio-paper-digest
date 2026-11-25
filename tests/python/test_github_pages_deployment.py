@@ -74,6 +74,8 @@ class GithubPagesDeploymentTest(unittest.TestCase):
                          '9683eb58c247337bc181c514cc901f8fc2413e7d838a5afe9b57b1c32c0aef93')
         sample = json.loads(sample_raw)
         self.assertEqual(self.json_nodes(sample), 214)
+        sample['repository']['full_name'] = self.module._p('repository')
+        sample['head_repository']['full_name'] = self.module._p('repository')
         pages = {}
         for number in range(1, 7):
             rows = []
@@ -323,7 +325,7 @@ class GithubPagesDeploymentTest(unittest.TestCase):
             job['run_attempt'] = 2
             job['id'] += 100
         selected_job = next(job for job in self.data['jobs']['jobs'] if job['name'] == 'deploy')
-        link = 'https://github.com/nanless/audio-paper-digest-blog/actions/runs/' + str(self.run_id) + '/job/' + str(selected_job['id'])
+        link = 'https://github.com/nanless/audio-research-portal/actions/runs/' + str(self.run_id) + '/job/' + str(selected_job['id'])
         self.data['statuses'][0].update(log_url=link, target_url=link)
         original = copy.deepcopy(self.data['deployments'][0])
         original.update(id=original['id'] - 1, created_at='2026-10-20T00:00:00Z')
@@ -449,7 +451,7 @@ class GithubPagesDeploymentTest(unittest.TestCase):
                 record['closed'] = True
         with mock.patch.object(self.module.http.client, 'HTTPSConnection', Connection), mock.patch.dict(os.environ,
                 {'HTTPS_PROXY': 'http://private.invalid', 'GH_TOKEN': 'secret-canary'}):
-            status, body = self.module._get('/repos/nanless/audio-paper-digest-blog', stop=self.module.time.monotonic() + 10, limit=100)
+            status, body = self.module._get('/repos/nanless/audio-research-portal', stop=self.module.time.monotonic() + 10, limit=100)
         self.assertEqual((status, body), (200, b'{}'))
         self.assertEqual((record['host'], record['port'], record['method']), ('api.github.com', 443, 'GET'))
         self.assertTrue(record['kwargs']['context'].check_hostname)

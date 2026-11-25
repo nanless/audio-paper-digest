@@ -327,7 +327,7 @@ else:
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / 'blog'; self.repo.mkdir()
         self.posts = self.repo / 'content/posts'; self.posts.mkdir(parents=True)
-        (self.repo / 'hugo.yaml').write_text('baseURL: "https://nanless.github.io/audio-paper-digest-blog/"\n')
+        (self.repo / 'hugo.yaml').write_text('baseURL: "https://nanless.github.io/audio-research-portal/"\n')
         self.registry = self.root / 'registry.json'
         self.registry.write_text(json.dumps(registry()), encoding='utf-8')
         self.output = self.root / 'preview'
@@ -480,8 +480,8 @@ else:
         with self.assertRaisesRegex(ValueError, '博客输入必须是已提交的干净 Git 工作区。'): self.build()
         self.assertFalse((self.output / 'index.json').exists())
         self.git('add', '.'); self.git('commit', '-qm', 'changed')
-        for url in ('javascript:alert(1)', 'https://evil.example/x', '/audio-paper-digest-blog/../private',
-                    '/audio-paper-digest-blog/%252e%252e/private'):
+        for url in ('javascript:alert(1)', 'https://evil.example/x', '/audio-research-portal/../private',
+                    '/audio-research-portal/%252e%252e/private'):
             self.page(url=url); self.commit()
             with self.subTest(url=url), self.assertRaises(ValueError): self.build()
 

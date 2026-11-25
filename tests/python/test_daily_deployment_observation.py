@@ -26,7 +26,7 @@ from project_env_isolation import project_env_scope
 
 DATE = publication_fixture.DATE
 publisher = publication_fixture.publisher
-ORIGIN = 'https://github.com/nanless/audio-paper-digest-blog.git'
+ORIGIN = 'https://github.com/nanless/audio-research-portal.git'
 
 
 class DailyDeploymentObservationIntegrationTest(unittest.TestCase):
@@ -68,7 +68,7 @@ class DailyDeploymentObservationIntegrationTest(unittest.TestCase):
         old = data['attempt']['head_sha']
         # These bodies are explicitly synthetic comparisons with this temp C.
         data = json.loads(json.dumps(data).replace(old, commit))
-        root = '/repos/nanless/audio-paper-digest-blog'
+        root = '/repos/nanless/audio-research-portal'
         run, attempt, deploy = data['attempt']['id'], data['attempt']['run_attempt'], data['deployments'][0]['id']
         routes = {
             root: 'repository', root + '/actions/workflows?per_page=100&page=1': 'workflows',

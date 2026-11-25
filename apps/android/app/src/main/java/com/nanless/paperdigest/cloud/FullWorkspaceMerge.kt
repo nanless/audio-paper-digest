@@ -155,7 +155,19 @@ internal object FullWorkspaceMerge {
                     // catalog still owns these public records; retain their raw bytes
                     // in the snapshot without assigning a local PDF or counting a conflict.
                     if (kind != "local" && !id.startsWith("local:") &&
-                        original.optString("blogURL").let { it.isNotBlank() && runCatching { CatalogRepository.sameSite(it) }.isSuccess }) {
+                        original.optString("blogURL").let { rawUrl ->
+                            rawUrl.isNotBlank() && (
+                                runCatching { CatalogRepository.sameSite(rawUrl) }.isSuccess ||
+                                runCatching {
+                                    val u = java.net.URI(rawUrl)
+                                    u.scheme == "https" && u.host == "nanless.github.io" && (u.port == -1 || u.port == 443) &&
+                                        u.userInfo == null && u.query == null && u.fragment == null &&
+                                        u.rawPath != null && u.rawPath.startsWith("/audio-paper-digest-blog/") &&
+                                        !u.rawPath.contains('%') && !u.rawPath.contains('\\') && !u.rawPath.contains("//") &&
+                                        u.path.split('/').none { part -> part == ".." || part == "." }
+                                }.getOrDefault(false)
+                            )
+                        }) {
                         return@forEach
                     }
                     val hash = id.removePrefix("local:")

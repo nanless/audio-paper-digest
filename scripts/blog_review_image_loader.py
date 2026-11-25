@@ -950,7 +950,7 @@ def load_review_image(
     elif raw_blog_base_path is not None:
         effective_base = raw_blog_base_path
     else:
-        effective_base = '/audio-paper-digest-blog'
+        effective_base = '/audio-research-portal'
     base = str(effective_base).rstrip('/')
     allowed_prefixes = (
         f'{base}/images/visual-summaries/',

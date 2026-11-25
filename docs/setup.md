@@ -39,7 +39,7 @@ PAPER_ANALYZER_SECONDARY_MODEL=muse-spark-1.3-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
-PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
+PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-research-portal
 # verify:web：站点 posts 根地址与 Pages workflow 所属仓库（可选）
 PAPER_DIGEST_BLOG_URL=https://<owner>.github.io/<repo>/posts
 PAPER_DIGEST_BLOG_REPO_RUN=<owner>/<repo>
@@ -61,7 +61,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 账号选择与冷却时间保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用；两边共享同一轮转游标，配置顺序不同也不会改变选择序列。
 
-发布/验收相关变量：`PAPER_DIGEST_BLOG_REPO` 指定 Hugo 仓库；`PAPER_DIGEST_BLOG_URL` 指定站点 posts 根地址（verify:web 用它拼页面 URL）；`PAPER_DIGEST_BLOG_REPO_RUN` 可选，指定 Pages 部署 workflow 所属仓库（默认 `nanless/audio-paper-digest-blog`）；`PAPER_DIGEST_BLOG_BASE_PATH` 为站点子路径。
+发布/验收相关变量：`PAPER_DIGEST_BLOG_REPO` 指定 Hugo 仓库；`PAPER_DIGEST_BLOG_URL` 指定站点 posts 根地址（verify:web 用它拼页面 URL）；`PAPER_DIGEST_BLOG_REPO_RUN` 可选，指定 Pages 部署 workflow 所属仓库（默认 `nanless/audio-research-portal`）；`PAPER_DIGEST_BLOG_BASE_PATH` 为站点子路径。
 
 `PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 与这份列表合并进同一等权账号池（顺序不代表优先级），也可填写第三、第四等账号。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
 

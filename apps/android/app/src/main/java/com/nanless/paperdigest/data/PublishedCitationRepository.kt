@@ -211,7 +211,8 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         require(descriptors.keys().asSequence().toSet()==DECLARED_FILES.toSet()){"当前引用文件声明不完整"}
         require(paper.identityStatus=="verified"&&paper.date.take(10).matches(Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}"))){"当前引用声明没有明确的已发布论文身份或日期"}
         val owner=if(paper.sourceKind=="arxiv")paper.id.removePrefix("arxiv:").replace('.','-').replace('/','-') else "conference-"+sha256(paper.id.toByteArray()).take(24)
-        val ownerRoot="/audio-paper-digest-blog/client/papers/"+paper.date.take(10)+"/"+owner+"/"
+        val sitePrefix=if(URI(base).rawPath.orEmpty().startsWith("/audio-paper-digest-blog/"))"/audio-paper-digest-blog/" else "/audio-research-portal/"
+        val ownerRoot="${sitePrefix}client/papers/"+paper.date.take(10)+"/"+owner+"/"
         val table=linkedMapOf<String,Declaration>()
         descriptors.keys().forEach{filename->
             val record=descriptors.getJSONObject(filename);val url=CatalogRepository.sameSite(URI(base).resolve(record.getString("url")).toASCIIString())
@@ -245,7 +246,8 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
             if(relative.path?.substringAfterLast('/')!=name)return@mapNotNull null
             require(relative.path.split('/').none{it=="."||it==".."}){"引用下载路径包含不明确的父目录"}
             val url=CatalogRepository.sameSite(URI(base).resolve(relative).toASCIIString())
-            require(URI(url).path.startsWith("/audio-paper-digest-blog/data/papers/")){"引用原件下载地址超出已发布文件目录"};url
+            val sitePrefix=if(URI(base).rawPath.orEmpty().startsWith("/audio-paper-digest-blog/"))"/audio-paper-digest-blog/" else "/audio-research-portal/"
+            require(URI(url).path.startsWith("${sitePrefix}data/papers/")){"引用原件下载地址超出已发布文件目录"};url
         }.distinct()
         require(matches.size<=1){"此格式存在不同的引用下载地址，未猜选其中一份"};return matches.singleOrNull()
     }
@@ -311,7 +313,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         private fun validSHA(value:String)=value.matches(SHA256_PATTERN)
         private fun strictCount(value:JSONObject,key:String):Long {val n=value.get(key);require(n is Number&&n.toDouble().isFinite()&&n.toDouble()==n.toLong().toDouble()&&n.toLong()>0);return n.toLong()}
         private fun normalize(value:String)=value.replace(WHITESPACE_PATTERN," ").trim()
-        private fun pageURL(value:String):String=CatalogRepository.sameSite(value).also {require(URI(it).path.startsWith("/audio-paper-digest-blog/posts/")){"引用页面超出已发布论文目录"}}
+        private fun pageURL(value:String):String=CatalogRepository.sameSite(value).also {val p=URI(it).path;require(p.startsWith("/audio-research-portal/posts/")||p.startsWith("/audio-paper-digest-blog/posts/")){"引用页面超出已发布论文目录"}}
         private val DECLARED_FILES=listOf("citation.json","citation.bib","citation.ris","rethink-context.json")
 
         internal fun validateBytes(raw:ByteArray,paper:Paper,format:Format) {

@@ -28,7 +28,7 @@ private actor PublicFixtureTransport {
         let root=dataRoot.appendingPathComponent("PublishedLibrary")
         try fm.createDirectory(at:root.appendingPathComponent("index"),withIntermediateDirectories:true)
         defer{try?fm.removeItem(at:dataRoot)}
-        let base="https://nanless.github.io/audio-paper-digest-blog/",prefix="/audio-paper-digest-blog/"
+        let base="https://nanless.github.io/audio-research-portal/",prefix="/audio-research-portal/"
         var rows:[[String:Any]]=[["pageType":"daily","permalink":prefix+"image-scope/","title":"受控大图文热读","date":"2026-11-01"]]
         rows += (0..<9_000).map{["pageType":"paper","permalink":prefix+"papers/image-scope-\($0)/","title":"受控元数据 \($0)"]}
         var shards:[[String:Any]]=[],files:[String:Data]=[:],total=0

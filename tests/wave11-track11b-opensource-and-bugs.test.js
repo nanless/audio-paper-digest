@@ -208,9 +208,9 @@ test('Track 11B: daily buildApiReaderResourceIdentity recovers verbatim source r
     assert.ok(identity.resources.every(r => r.originalUrl === 'https://github.com/audio-team/wave11-codec'));
 });
 
-test('Track 11B: conference-postprocess aggregateUrl includes /audio-paper-digest-blog base path', () => {
+test('Track 11B: conference-postprocess aggregateUrl includes /audio-research-portal base path', () => {
     const src = fs.readFileSync(path.join(ROOT, 'scripts/lib/conference-postprocess.js'), 'utf8');
-    assert.match(src, /aggregateUrl:\s*`\/audio-paper-digest-blog\/posts\/conference-\$\{conferenceId\}\/`/);
+    assert.match(src, /aggregateUrl:\s*`\$\{String\(process\.env\.PAPER_DIGEST_BLOG_BASE_PATH \|\| '\/audio-research-portal'\)\.replace\(\/\\\/\+\$\/, ''\)\}\/posts\/conference-\$\{conferenceId\}\/`/);
 });
 
 test('Track 11B: reader-pdf-figure-crop surfaces extractError instead of silently swallowing failures', () => {

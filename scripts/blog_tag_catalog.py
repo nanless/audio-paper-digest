@@ -1649,7 +1649,7 @@ def render_paper_tag_hierarchy(parsed, *, hooks: Mapping | None = None) -> str:
         lambda p: build_flat_tag_compat_metadata(p, hooks=hooks),
     )
     render_md_fn = _hook(hooks, 'render_tag_hierarchy_markdown', render_tag_hierarchy_markdown)
-    base_path = _hook(hooks, 'BASE_PATH', '/audio-paper-digest-blog')
+    base_path = _hook(hooks, 'BASE_PATH', '/audio-research-portal')
     metadata = build_meta_fn(parsed)
     if metadata is None and not any(key in parsed for key in ('tagValidation', 'taxonomyValidation')):
         by_label = {item['preferredLabel']['zh']: item for item in page_catalog['concepts']
@@ -1742,7 +1742,7 @@ def current_batch_tag_metadata(papers, *, hooks: Mapping | None = None):
 
 
 def root_task_link(concept, *, hooks: Mapping | None = None) -> str:
-    base_path = _hook(hooks, 'BASE_PATH', '/audio-paper-digest-blog')
+    base_path = _hook(hooks, 'BASE_PATH', '/audio-research-portal')
     return f'[{concept["label"]}]({base_path}/papers/?concept={quote(concept["id"], safe="")})'
 
 

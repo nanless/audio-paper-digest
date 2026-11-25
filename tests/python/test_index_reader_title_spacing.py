@@ -14,7 +14,7 @@ class IndexReaderTitleSpacingTests(unittest.TestCase):
         title = '把说话、看图和选动作装进一个检查点：DRVEXO-4B-统一系统解读'
         def quality(value):
             return validate_manual_reader_quality(
-                '## 核心摘要\n### [' + value + '](/audio-paper-digest-blog/posts/drvexo)')
+                '## 核心摘要\n### [' + value + '](/audio-research-portal/posts/drvexo)')
         self.assertIn('中英文技术词边界缺少空格',
                       quality(title))
         displayed = blog.digest_index_reader_title(title)
@@ -43,7 +43,7 @@ class IndexReaderTitleSpacingTests(unittest.TestCase):
                 reseal_llm_api_reader_fixture(paper)
                 before = copy.deepcopy(paper)
                 slug = 'drvexo-4b-unified-2608-30002'
-                target = '/audio-paper-digest-blog/posts/2026-08-31-' + slug
+                target = '/audio-research-portal/posts/2026-08-31-' + slug
                 markdown = blog.generate_index_page(
                     [(6.1, paper, paper['parsed'])] if scored_route else [],
                     [] if scored_route else [paper], '2026-08-31',

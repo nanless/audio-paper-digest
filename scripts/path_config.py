@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_BLOG_BASE_PATH = '/audio-paper-digest-blog'
+DEFAULT_BLOG_BASE_PATH = '/audio-research-portal'
 
 
 def resolve_blog_base_path(value=None):

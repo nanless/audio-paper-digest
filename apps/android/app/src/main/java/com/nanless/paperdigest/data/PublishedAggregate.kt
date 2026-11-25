@@ -21,7 +21,7 @@ data class PublishedAggregateCatalog(val snapshotSHA256:String,val sourceRecordC
     fun json()=JSONObject().put("snapshotSHA256",snapshotSHA256).put("sourceRecordCount",sourceRecordCount).put("aggregateCount",records.size).put("records",JSONArray(records.map{it.json()}))
 }
 object PublishedAggregateReader {
-    const val SITE="https://nanless.github.io/audio-paper-digest-blog/"
+    const val SITE="https://nanless.github.io/audio-research-portal/"
     data class Shard(val url:String,val bytes:Int,val sha256:String,val recordCount:Int)
     data class Manifest(val recordCount:Int,val totalBytes:Int,val shards:List<Shard>,val rowEncoding:String,val desktopDetails:Boolean=false)
     fun sha(bytes:ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
@@ -29,9 +29,10 @@ object PublishedAggregateReader {
     fun pageURL(value:String):String {
         val raw=URI(value);require(raw.rawUserInfo==null&&raw.rawQuery==null&&raw.rawFragment==null){"汇总页面地址无效"}
         val rawPath=raw.rawPath.orEmpty()
-        val normalizedInput=if(!raw.isAbsolute&&!rawPath.startsWith("/"))"/audio-paper-digest-blog/$rawPath" else value
+        val normalizedInput=if(!raw.isAbsolute&&!rawPath.startsWith("/"))"/audio-research-portal/$rawPath" else value
         val resolved=URI(SITE).resolve(normalizedInput);val path=resolved.rawPath.orEmpty()
-        require(path.startsWith("/audio-paper-digest-blog/")&&path.length>"/audio-paper-digest-blog/".length&&path.endsWith('/')&&!path.contains('%')&&!path.contains('\\')&&!path.contains("//")&&path.split('/').none{it=="."||it==".."}){"汇总路径不规范"}
+        val ownedPrefix=if(path.startsWith("/audio-research-portal/"))"/audio-research-portal/" else if(path.startsWith("/audio-paper-digest-blog/"))"/audio-paper-digest-blog/" else null
+        require(ownedPrefix!=null&&path.length>ownedPrefix.length&&path.endsWith('/')&&!path.contains('%')&&!path.contains('\\')&&!path.contains("//")&&path.split('/').none{it=="."||it==".."}){"汇总路径不规范"}
         require(resolved.scheme=="https"&&resolved.host=="nanless.github.io"&&resolved.port==-1){"汇总页面不属于资料站点"}
         return resolved.toASCIIString()
     }

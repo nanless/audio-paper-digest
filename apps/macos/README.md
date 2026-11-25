@@ -16,7 +16,7 @@
 | 签名 | 本地临时签名（ad-hoc），未通过 Apple 公证 |
 | 随包运行时 | Node 24.19.0，使用者无需另行安装 |
 
-Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)提供。安装时将解压后的“论文速递工作台.app”或 DMG 中的应用拖入“应用程序”。首次打开若被系统拦截，先核对下载来源与发布校验值，再按 macOS 的“隐私与安全性”提示允许打开该应用。
+Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases)提供。安装时将解压后的“论文速递工作台.app”或 DMG 中的应用拖入“应用程序”。首次打开若被系统拦截，先核对下载来源与发布校验值，再按 macOS 的“隐私与安全性”提示允许打开该应用。
 
 1.3.0 增加全站多级分类浏览、整理桌面导航，并与 Android 对齐查询规则；该轮实现、逐轮审查和实际验收状态见[审改记录](../../docs/workbench-1.3.0-review.md)。1.4.3 把大目录移到后台载入、列表改用紧凑投影，并减少打开导读和云上传的重复工作；本轮自动测试、未重做的人工验收和发行状态见 [1.4.3 记录](../../docs/workbench-1.4.3-review.md#发行状态)，性能数据见[客户端性能](../../docs/client-performance.md)。当前公开发行的安装包为 1.4.7，改动与验证范围见 [1.4.7 记录](../../docs/workbench-1.4.7-review.md)（上一版 1.4.6 见 [1.4.6 记录](../../docs/workbench-1.4.6-review.md)，1.4.5 见 [1.4.5 记录](../../docs/workbench-1.4.5-review.md)），签名与附件核验见[客户端发行核验](../../docs/client-release-verification.md)。
 

@@ -33,7 +33,7 @@ class AndroidReleaseStages(unittest.TestCase):
    self.inspected.append((apk,certificate));m.require(certificate==self.certificate,'certificate_mismatch')
    return {**self.inspection,'sha256':m.file_sha(apk)}
   def api(argv,code,env=None):
-   self.assertEqual(['gh','api','--hostname','github.com','repos/nanless/audio-paper-digest/releases/91'],argv)
+   self.assertEqual(['gh','api','--hostname','github.com','repos/nanless/audio-research-workbench/releases/91'],argv)
    self.commands.append(argv);self.reads+=1;record=copy.deepcopy(self.record)
    if self.reads%2==0:
     for asset in record['assets']:asset['download_count']+=1
@@ -41,13 +41,13 @@ class AndroidReleaseStages(unittest.TestCase):
    return json.dumps(record,ensure_ascii=False)
   def asset(argv,stdout,stderr,timeout):
    self.assertEqual(['gh','api','--hostname','github.com','-H','Accept: application/octet-stream'],argv[:6]);self.assertEqual(1200,timeout)
-   self.commands.append(argv);a=next(a for a in self.record['assets'] if argv[6]=='repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']))
+   self.commands.append(argv);a=next(a for a in self.record['assets'] if argv[6]=='repos/nanless/audio-research-workbench/releases/assets/'+str(a['id']))
    if self.local_mutation:self.local_mutation();self.local_mutation=None
    if a['name']==self.omit:return subprocess.CompletedProcess(argv,1)
    data=(self.folder/a['name']).read_bytes();stdout.write(b'X'*len(data) if a['name']==self.corrupt else data)
    return subprocess.CompletedProcess(argv,0)
   def tag_read(argv):
-   self.assertEqual(['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git','refs/tags/v1.3.1','refs/tags/v1.3.1^{}'],argv)
+   self.assertEqual(['git','ls-remote','--tags','https://github.com/nanless/audio-research-workbench.git','refs/tags/v1.3.1','refs/tags/v1.3.1^{}'],argv)
    return (self.tag_oid+'\trefs/tags/v1.3.1\n'+self.head+'\trefs/tags/v1.3.1^{}\n').encode('ascii')
   for p in [patch.object(m,'SDK',return_value=object()),patch.object(m,'source_state',side_effect=lambda repo:copy.deepcopy(self.source)),
    patch.object(m,'inspect',side_effect=inspect),patch.object(m,'mac_module',return_value=self.mac),
@@ -102,10 +102,10 @@ class AndroidReleaseStages(unittest.TestCase):
   self.reseal();self.reject(lambda:m.android_private_draft_plan(self.args),'signed_payload_changed')
  def test_public_all86_exact_id_download_and_normal_verifier_without_mutation(self):
   result=m.android_public_plan(self.args)
-  self.assertEqual(['gh','api','--hostname','github.com','--method','PATCH','repos/nanless/audio-paper-digest/releases/91','-F','draft=false'],result['argv'])
+  self.assertEqual(['gh','api','--hostname','github.com','--method','PATCH','repos/nanless/audio-research-workbench/releases/91','-F','draft=false'],result['argv'])
   self.assertFalse(result['executed']);self.assertFalse(result['publicPublication']);self.assertEqual(6,result['downloadVerification']['assets']);self.assertTrue(result['downloadVerification']['androidAPKReverified'])
   self.assertEqual(2,len(self.inspected));self.assertEqual(2,self.reads)
-  self.assertEqual({'repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']) for a in self.record['assets']},{c[6] for c in self.commands if len(c)>6})
+  self.assertEqual({'repos/nanless/audio-research-workbench/releases/assets/'+str(a['id']) for a in self.record['assets']},{c[6] for c in self.commands if len(c)>6})
   self.assertFalse(any('--method' in c or 'release' in c for c in self.commands))
  def test_public_pending_rejected_before_api_read(self):
   self.pending();self.reject(lambda:m.android_public_plan(self.args),'android_acceptance_incomplete');self.assertEqual(0,self.reads)

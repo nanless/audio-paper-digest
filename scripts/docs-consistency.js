@@ -172,7 +172,7 @@ const FORBIDDEN = [
     { pattern: /协议[^\n]{0,12}?-[vV]\d+\b/, message: '协议名带 -vN 版本后缀，应改为稳定名称 + 结构指纹' },
     {
         pattern: /audio-paper-digest-rewrite-all/,
-        message: '引用了已废弃的旧工作区，当前工作区是 audio-paper-digest',
+        message: '引用了已废弃的旧工作区，当前工作区是 audio-research-workbench',
         // 明确说明「已废弃」的句子本身是提醒，不是违规引用。
         unless: /废弃|不再|旧工作区/
     }

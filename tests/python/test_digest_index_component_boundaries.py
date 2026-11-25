@@ -55,7 +55,7 @@ class DigestIndexComponentBoundaryTests(unittest.TestCase):
         root = next(n for n in load_tag_catalog()['concepts'] if n['id'] == 'task.audio-driven-3d-generation')
         label = root['preferredLabel']['zh']
         self.assertIn('三维', label)
-        for base in ('/audio-paper-digest-blog', '/custom/site', ''):
+        for base in ('/audio-research-portal', '/custom/site', ''):
             with mock.patch.dict('os.environ', {'PAPER_DIGEST_BLOG_BASE_PATH': base}):
                 link = f'[{label}]({base}/papers/?concept={quote(root["id"], safe="")})'
                 page = HEADER.replace('## 论文列表', f'| 主任务 |\n|---|\n| {link} |\n\n## 论文列表') + ENTRY

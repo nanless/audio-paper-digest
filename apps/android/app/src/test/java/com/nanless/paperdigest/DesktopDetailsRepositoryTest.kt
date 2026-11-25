@@ -146,7 +146,7 @@ class DesktopDetailsRepositoryTest {
         val articleRevId = sha256("$appearanceId|$artSha|${sourceVersionId ?: ""}|$readerTitle".toByteArray(Charsets.UTF_8))
 
         val fullPageUrl = site + appearanceId
-        val paperKey = paperId ?: "page:/audio-paper-digest-blog/$appearanceId"
+        val paperKey = paperId ?: "page:/audio-research-portal/$appearanceId"
         val arxivVer = if (sourceKind == "arxiv" && sourceVersionId != null && sourceVersionId.startsWith("arxiv:") && "@sha256:" !in sourceVersionId) {
             sourceVersionId.removePrefix("arxiv:")
         } else ""
@@ -483,7 +483,7 @@ class DesktopDetailsRepositoryTest {
             .put("snapshot", JSONObject().put("url", snapshotUrl).put("bytes", snapshotBytes.size).put("sha256", snapshotId))
             .put("generatedAt", "2026-11-19T06:00:00+08:00")
             .put("sourceCommit", sourceCommit)
-            .put("basePath", "/audio-paper-digest-blog/")
+            .put("basePath", "/audio-research-portal/")
         val manifestBytes = manifestObj.toString().toByteArray(Charsets.UTF_8)
         mock.putBytes(DesktopDetailsRepository.MANIFEST_PATH, manifestBytes)
         return snapshotId to manifestObj
@@ -615,7 +615,7 @@ class DesktopDetailsRepositoryTest {
                 .put("resourceId", "res:bundled-fig1")
                 .put("kind", "image")
                 .put("mediaType", "image/png")
-                .put("sourceUrl", "/audio-paper-digest-blog/$bundledPath")
+                .put("sourceUrl", "/audio-research-portal/$bundledPath")
                 .put("availability", "bundled")
                 .put("requiredForOffline", true)
                 .put("descriptor", JSONObject()
@@ -629,7 +629,7 @@ class DesktopDetailsRepositoryTest {
                 originalTitle = "Original English Title Distinct From Reader Title",
                 readerTitle = "独立中文导读标题（不覆盖原题）",
                 sourceVersionWarning = "特殊原文版本提示：当前使用 v1 封存稿",
-                htmlFragment = "<div class=\"post-content\" id=\"article-body\"><h2>导读章节</h2><p>包含捆绑图：</p><img src=\"/audio-paper-digest-blog/$bundledPath\" alt=\"图1\"></div>",
+                htmlFragment = "<div class=\"post-content\" id=\"article-body\"><h2>导读章节</h2><p>包含捆绑图：</p><img src=\"/audio-research-portal/$bundledPath\" alt=\"图1\"></div>",
                 withSidecars = true,
                 resources = bundledRes,
                 bundledAssets = mapOf(bundledPath to tinyPng),
@@ -823,7 +823,7 @@ class DesktopDetailsRepositoryTest {
 
             // 3. Duplicate key in manifest JSON
             val validManifestStr = baselineManifest.toString()
-            val dupKeyBytes = (validManifestStr.dropLast(1) + ",\"basePath\":\"/audio-paper-digest-blog/\"}").toByteArray(Charsets.UTF_8)
+            val dupKeyBytes = (validManifestStr.dropLast(1) + ",\"basePath\":\"/audio-research-portal/\"}").toByteArray(Charsets.UTF_8)
             mock.putBytes(DesktopDetailsRepository.MANIFEST_PATH, dupKeyBytes)
             assertTrue(runCatching { repo.sync() }.isFailure)
             assertBaselineIntact("Duplicate JSON key must fail closed")
@@ -1222,7 +1222,7 @@ class DesktopDetailsRepositoryTest {
                     .put("resourceId", "res:bundled-fig1")
                     .put("kind", "image")
                     .put("mediaType", "image/png")
-                    .put("sourceUrl", "/audio-paper-digest-blog/$bundledPath")
+                    .put("sourceUrl", "/audio-research-portal/$bundledPath")
                     .put("availability", "bundled")
                     .put("requiredForOffline", true)
                     .put("descriptor", JSONObject()
@@ -1248,7 +1248,7 @@ class DesktopDetailsRepositoryTest {
                 pdfUrl = pdfUrl,
                 pdfSha256 = expectedPdfSha,
                 authors = listOf("Grace Hopper", "Claude Shannon"),
-                htmlFragment = "<div class=\"post-content\" id=\"article-body\"><h2>离线包验证</h2><p>包含捆绑科学图：</p><img src=\"/audio-paper-digest-blog/$bundledPath\" alt=\"图1\"></div>",
+                htmlFragment = "<div class=\"post-content\" id=\"article-body\"><h2>离线包验证</h2><p>包含捆绑科学图：</p><img src=\"/audio-research-portal/$bundledPath\" alt=\"图1\"></div>",
                 withSidecars = true,
                 resources = resources,
                 bundledAssets = mapOf(bundledPath to tinyPng),
@@ -1493,7 +1493,7 @@ class DesktopDetailsRepositoryTest {
                 .put("resourceId", "res:ext-video")
                 .put("kind", "video")
                 .put("mediaType", "video/mp4")
-                .put("sourceUrl", "https://nanless.github.io/audio-paper-digest-blog/media/demo.mp4")
+                .put("sourceUrl", "https://nanless.github.io/audio-research-portal/media/demo.mp4")
                 .put("availability", "external")
                 .put("requiredForOffline", true)
                 .put("descriptor", JSONObject.NULL)
@@ -1695,7 +1695,7 @@ class DesktopDetailsRepositoryTest {
                 .put("validationEpoch", epoch)
                 .put("sourceCommit", sourceCommit)
                 .put("generatedAt", "2026-11-18T07:05:00Z")
-                .put("basePath", "/audio-paper-digest-blog/")
+                .put("basePath", "/audio-research-portal/")
                 .put("paperDetails", JSONObject())
                 .put("aggregateDetails", JSONObject())
                 .put("activeTombstones", JSONArray().put(activeTomb))
@@ -1762,7 +1762,7 @@ class DesktopDetailsRepositoryTest {
                     .put("validationEpoch", ep)
                     .put("sourceCommit", if (mode == "bad-witness-commit") "f".repeat(40) else "a".repeat(40))
                     .put("generatedAt", "2026-11-18T07:05:00Z")
-                    .put("basePath", "/audio-paper-digest-blog/")
+                    .put("basePath", "/audio-research-portal/")
                     .put("tombstoneHistory", JSONArray())
                 JsonFiles.write(
                     File(dir, "PublishedLibrary/desktop-details/macos-states/$snapId-$ep.json"),
@@ -1826,7 +1826,7 @@ class DesktopDetailsRepositoryTest {
         // 1B. Verify <article>/<main>/<picture> unwrapping, harmless <audio>/<video> stripping, and data:image/jpg parity (E-M3)
         val tinyJpgBytes = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xe0.toByte(), 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xff.toByte(), 0xd9.toByte())
         val tinyJpgB64 = java.util.Base64.getEncoder().encodeToString(tinyJpgBytes)
-        val wrapperHtml = "<div class=\"post-content\" id=\"article-body\"><article><main><p>结构正文</p><picture><source srcset=\"https://nanless.github.io/audio-paper-digest-blog/a.webp\"><img src=\"data:image/jpg;base64,$tinyJpgB64\" alt=\"图\"></picture><audio controls><source src=\"https://nanless.github.io/audio-paper-digest-blog/a.mp3\"></audio></main></article></div>"
+        val wrapperHtml = "<div class=\"post-content\" id=\"article-body\"><article><main><p>结构正文</p><picture><source srcset=\"https://nanless.github.io/audio-research-portal/a.webp\"><img src=\"data:image/jpg;base64,$tinyJpgB64\" alt=\"图\"></picture><audio controls><source src=\"https://nanless.github.io/audio-research-portal/a.mp3\"></audio></main></article></div>"
         val sanitizedWrapper = DesktopDetailsRepository.verifyAndSanitizeArticleHtml(
             wrapperHtml.toByteArray(Charsets.UTF_8),
             site + "posts/2026-11-20-wrapper-parity/",

@@ -3382,7 +3382,7 @@ title: "Score rows"
         self.assertNotIn('| 8.0分 |', markdown)
         self.assertNotRegex(compact[:-1], r'\botherwis$')
         blog_url = (
-            '/audio-paper-digest-blog/posts/'
+            '/audio-research-portal/posts/'
             '2026-08-25-long-title-2608-00001'
         )
         self.assertIn(
@@ -3993,13 +3993,13 @@ title: "Score rows"
         direction_table = markdown.split('### 🏷️ 热门方向', 1)[1].split(
             '### 📊 论文评分排行榜', 1,
         )[0]
-        self.assertIn('| [语音识别](/audio-paper-digest-blog/papers/?concept=task.asr) | 1 篇 |', direction_table)
-        self.assertIn('| [语音合成](/audio-paper-digest-blog/papers/?concept=task.speech-synthesis) | 1 篇 |', direction_table)
+        self.assertIn('| [语音识别](/audio-research-portal/papers/?concept=task.asr) | 1 篇 |', direction_table)
+        self.assertIn('| [语音合成](/audio-research-portal/papers/?concept=task.speech-synthesis) | 1 篇 |', direction_table)
         self.assertNotIn('#Transformer', direction_table)
         ranking = markdown.split('### 📊 论文评分排行榜', 1)[1].split('## 📋 论文列表', 1)[0]
-        self.assertIn('[语音合成](/audio-paper-digest-blog/papers/?concept=task.speech-synthesis)', ranking)
+        self.assertIn('[语音合成](/audio-research-portal/papers/?concept=task.speech-synthesis)', ranking)
         self.assertNotIn('task.tts', ranking)
-        self.assertIn('[文本到语音](/audio-paper-digest-blog/papers/?concept=task.tts)', markdown.split('## 📋 论文列表', 1)[1])
+        self.assertIn('[文本到语音](/audio-research-portal/papers/?concept=task.tts)', markdown.split('## 📋 论文列表', 1)[1])
         self.assertIn('最上级方向统计', markdown)
         self.assertIn(f'paper_digest_tags_contract: "{publish_to_blog.FLAT_TAG_COMPAT_CONTRACT}"', markdown)
         self.assertIn(f'paper_digest_tags_schema_fingerprint: "{publish_to_blog.public_protocols.schema_fingerprint("paper-tag-flat-tags")}"',markdown)
@@ -4143,12 +4143,12 @@ title: "Score rows"
     def test_index_normalization_preserves_3d_talking_link_and_inline_image(self):
         paper_link = (
             '[Audio-Driven Adversarial Defense for 3D Talking Face]'
-            '(/audio-paper-digest-blog/posts/'
+            '(/audio-research-portal/posts/'
             '2026-09-01-audio-driven-adversarial-defense-for-3d-talking-2608-30951)'
         )
         paper_image = (
             '![3D Talking pipeline]'
-            '(/audio-paper-digest-blog/images/3d-talking-2608-30951.png)'
+            '(/audio-research-portal/images/3d-talking-2608-30951.png)'
         )
         normalized = publish_to_blog.normalize_digest_index_reader_surface(
             f'{paper_link}\n\n{paper_image}\n\n正文使用300M参数。'
@@ -4196,7 +4196,7 @@ title: "Score rows"
         self.assertIn(first_author['name'], markdown)
         self.assertIn(first_author['affiliations'][0], markdown)
         blog_url = (
-            '/audio-paper-digest-blog/posts/'
+            '/audio-research-portal/posts/'
             '2026-08-31-llm-api-publisher-fixture-2608-30002'
         )
         self.assertIn(
@@ -6361,7 +6361,7 @@ primary_method_tag: #Transformer
         lead = '本图导读起点。' + '完整保留当前图的解释。' * 90 + '导读终点。'
         explanation = '本图解释起点。' + '不截断当前图的局限。' * 90 + '红线实际最低却被本段无条件声称最高。'
         parts = [lead, '> **看图路径：** 1. 核对本图红线与图例',
-                 '[![当前图](/audio-paper-digest-blog/images/papers/figure.png)](https://arxiv.org/html/2607.00001/figure.png)',
+                 '[![当前图](/audio-research-portal/images/papers/figure.png)](https://arxiv.org/html/2607.00001/figure.png)',
                  '> **图片来源：** 原论文 PDF 第 3 页（含图 9）',
                  '*论文图 9。当前图的完整原图注。*', explanation]
         cluster = '\n\n'.join(parts)

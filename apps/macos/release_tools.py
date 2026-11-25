@@ -395,7 +395,7 @@ def prepare(args):
 
 ## Android 安装与升级
 
-- 同一版本提供 Android APK 时，采用正式发行签名。Android 版本、系统要求、签名和验证范围见该版本的 android-build-info.json 与[Android 客户端说明](https://github.com/nanless/audio-paper-digest/blob/main/apps/android/README.md)。
+- 同一版本提供 Android APK 时，采用正式发行签名。Android 版本、系统要求、签名和验证范围见该版本的 android-build-info.json 与[Android 客户端说明](https://github.com/nanless/audio-research-workbench/blob/main/apps/android/README.md)。
 - 从应用标识和签名一致、内部版本号递增的正式版本升级时，直接覆盖安装，保留本机资料。
 - 若旧版是调试包或签名不同，先在旧版导出完整备份并确认可恢复，再卸载旧版。恢复资料后，在当前设备重新配置凭据。
 - Zotero HTML 与外部附件的支持格式见客户端说明，导出时请选择支持的格式。
@@ -529,7 +529,7 @@ def verify_dmg(image, repo, info):
 def verified_remote_tag(tag, head):
     # Fixed repository, exact tag and optional peeled annotated-tag commit. Read only.
     ref='refs/tags/'+tag
-    raw=run(['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git',ref,ref+'^{}']).decode('ascii')
+    raw=run(['git','ls-remote','--tags','https://github.com/nanless/audio-research-workbench.git',ref,ref+'^{}']).decode('ascii')
     rows=[line.split('\t') for line in raw.splitlines()]
     require(rows and all(len(row)==2 and re.fullmatch('[a-f0-9]{40}',row[0]) and row[1] in {ref,ref+'^{}'} for row in rows),'远端标签记录无效')
     refs={name:oid for oid,name in rows}
@@ -547,11 +547,11 @@ def publish_plan(args, private_draft=False):
     require(info.get('distributionChannel')=='release','私有QA或历史构建不能用于正式发行')
     head,_=source_state(args.repo.resolve(),info['sourceCommit'])
     require(head==info['releaseHead'],'HEAD已变化，需基于最终提交重新准备产物')
-    require(args.repository=='nanless/audio-paper-digest','必须明确使用当前仓库')
+    require(args.repository=='nanless/audio-research-workbench','必须明确使用当前仓库')
     tag=verified_remote_tag('v'+info['version'],head) if private_draft else None
     assets=[str(args.prepared.resolve()/name) for name in sorted(load(args.prepared/'release-manifest.json')['assets'])]+[str(args.prepared.resolve()/'release-manifest.json'),str(args.prepared.resolve()/'SHA256SUMS')]
     command=['gh','release','create','v'+info['version'],*assets,'--repo',args.repository,'--verify-tag','--target',head,'--title','论文速递工作台 '+info['version'],'--notes-file',str(args.prepared.resolve()/'RELEASE_NOTES.md'),'--draft']
-    if private_draft:command[command.index('--repo')+1]='github.com/nanless/audio-paper-digest'
+    if private_draft:command[command.index('--repo')+1]='github.com/nanless/audio-research-workbench'
     if args.prerelease:command.append('--prerelease')
     return {'stage':'private-draft' if private_draft else 'fully-qualified-draft','remoteTag':tag,'executed':False,'automaticTagCreation':False,'publicPublication':False,'qualification':('84项前置验收通过，REL-03/04仅可通过或待验；只准创建私有草稿，不能公开' if private_draft else '原69项及新增云端与发行17项通过只是本地门，维护者仍须复核对应包的实际证据；命令仅创建草稿'),'requiresExistingRemoteTag':'v'+info['version'],'argv':command}
 
@@ -565,7 +565,7 @@ def main():
         if name=='prepare':p.add_argument('--output',type=pathlib.Path,required=True);p.add_argument('--dmg',action='store_true')
     for name in ['verify','publish-plan','private-draft-plan']:
         p=sub.add_parser(name);p.add_argument('--prepared',type=pathlib.Path,required=True);p.add_argument('--repo',type=pathlib.Path,default=REPO)
-        if name in {'publish-plan','private-draft-plan'}:p.add_argument('--acceptance-status',type=pathlib.Path,required=True);p.add_argument('--cloud-acceptance',type=pathlib.Path);p.add_argument('--repository',default='nanless/audio-paper-digest');p.add_argument('--prerelease',action='store_true')
+        if name in {'publish-plan','private-draft-plan'}:p.add_argument('--acceptance-status',type=pathlib.Path,required=True);p.add_argument('--cloud-acceptance',type=pathlib.Path);p.add_argument('--repository',default='nanless/audio-research-workbench');p.add_argument('--prerelease',action='store_true')
     args=parser.parse_args()
     if hasattr(args,'app'):require(not args.app.is_symlink(),'应用根不能是符号链接')
     if hasattr(args,'prepared'):require(not args.prepared.is_symlink(),'产物目录不能是符号链接')

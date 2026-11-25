@@ -788,7 +788,7 @@ def execute_git_push(
             blog_url = os.environ.get(
                 'PAPER_DIGEST_BLOG_URL',
                 hooked_blog_url if hooked_blog_url is not None
-                else 'https://nanless.github.io/audio-paper-digest-blog/posts',
+                else 'https://nanless.github.io/audio-research-portal/posts',
             )
         if blog_url:
             print(f'  🌐 {blog_url}/{date_str}/')

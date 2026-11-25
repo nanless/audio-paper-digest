@@ -28,14 +28,14 @@ class TagPresentationTest(unittest.TestCase):
                          ['task.audio-separation', 'task.av-source-separation', 'task.av-speech-separation'])
         text = render_tag_hierarchy_markdown(self.metadata, self.catalog)
         self.assertIn('**研究方法**', text)
-        self.assertIn('](/audio-paper-digest-blog/papers/?concept=task.av-speech-separation)', text)
+        self.assertIn('](/audio-research-portal/papers/?concept=task.av-speech-separation)', text)
         self.assertNotIn('/tags/', text)
         self.assertNotIn('研究条件', text)
         self.assertNotIn('task.asr', text)
         self.assertEqual((self.metadata, self.catalog), before)
 
     def test_links_respect_subpath_and_root_deployment(self):
-        for base, expected in (('/audio-paper-digest-blog', '/audio-paper-digest-blog/papers/'),
+        for base, expected in (('/audio-research-portal', '/audio-research-portal/papers/'),
                                ('/custom/site/', '/custom/site/papers/'), ('/', '/papers/'), ('', '/papers/')):
             with mock.patch.dict('os.environ', {'PAPER_DIGEST_BLOG_BASE_PATH': base}):
                 text = render_tag_hierarchy_markdown(self.metadata, self.catalog)
@@ -93,7 +93,7 @@ class TagPresentationTest(unittest.TestCase):
             block.replace('task.audio-separation', 'task.asr'),
             block.replace('[音视频语音分离]', '[伪造标签]'),
             block.replace('/papers/?concept=', '/other/?concept='),
-            block.replace('/audio-paper-digest-blog/papers/', 'https://example.test/papers/'),
+            block.replace('/audio-research-portal/papers/', 'https://example.test/papers/'),
             block.replace('?concept=', '?unrelated='),
             TAG_HIERARCHY_END + block,
         ]

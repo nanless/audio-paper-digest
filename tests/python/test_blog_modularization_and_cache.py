@@ -761,9 +761,9 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
             canonical_file.write_bytes(png)
 
             # Valid canonical path succeeds even when _manifest_record is absent from hooks!
-            minimal_hooks = {'BLOG_REPO': str(repo), 'BASE_PATH': '/audio-paper-digest-blog'}
+            minimal_hooks = {'BLOG_REPO': str(repo), 'BASE_PATH': '/audio-research-portal'}
             loaded = blog_review_image_loader.load_review_image(
-                '/audio-paper-digest-blog/images/papers/2611.12345/figure-1-0123456789abcdef.png',
+                '/audio-research-portal/images/papers/2611.12345/figure-1-0123456789abcdef.png',
                 hooks=minimal_hooks,
             )
             self.assertEqual(loaded['media_type'], 'image/png')
@@ -773,14 +773,14 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
             bad_file.write_bytes(png)
             with self.assertRaises(publish_to_blog.PublishDataValidationError):
                 blog_review_image_loader.load_review_image(
-                    '/audio-paper-digest-blog/images/papers/2611.12345/uncontrolled.png',
+                    '/audio-research-portal/images/papers/2611.12345/uncontrolled.png',
                     hooks=minimal_hooks,
                 )
 
             # Empty segment / dot-dot segment rejected!
             with self.assertRaises(publish_to_blog.PublishDataValidationError):
                 blog_review_image_loader.load_review_image(
-                    '/audio-paper-digest-blog/images/papers//2611.12345/figure-1-0123456789abcdef.png',
+                    '/audio-research-portal/images/papers//2611.12345/figure-1-0123456789abcdef.png',
                     hooks=minimal_hooks,
                 )
 
@@ -789,7 +789,7 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
             (repo / sym_rel).symlink_to(canonical_file)
             with self.assertRaises(publish_to_blog.PublishDataValidationError):
                 blog_review_image_loader.load_review_image(
-                    '/audio-paper-digest-blog/images/papers/2611.12345/figure-2-0123456789abcdef.png',
+                    '/audio-research-portal/images/papers/2611.12345/figure-2-0123456789abcdef.png',
                     hooks=minimal_hooks,
                 )
 
@@ -809,7 +809,7 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
             're': __import__('re'),
             'json': json,
             'hashlib': hashlib,
-            'BASE_PATH': '/audio-paper-digest-blog',
+            'BASE_PATH': '/audio-research-portal',
             'PublishDataValidationError': publish_to_blog.PublishDataValidationError,
             'public_protocols': public_protocols,
             '_bibtex_escape': lambda v, _lbl: str(v),

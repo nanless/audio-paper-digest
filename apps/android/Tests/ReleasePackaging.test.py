@@ -190,7 +190,7 @@ class JointReleaseStages(unittest.TestCase):
   def androidrun(argv,code,env=None):
    self.commands.append(argv)
    if argv[:2]==['gh','api']:
-    self.assertEqual(['gh','api','--hostname','github.com','repos/nanless/audio-paper-digest/releases/77'],argv)
+    self.assertEqual(['gh','api','--hostname','github.com','repos/nanless/audio-research-workbench/releases/77'],argv)
     self.api_reads+=1
     record=json.loads(json.dumps(self.record))
     if self.api_reads>1:
@@ -205,7 +205,7 @@ class JointReleaseStages(unittest.TestCase):
   def assetrun(argv,stdout,stderr,timeout):
    self.commands.append(argv)
    self.assertEqual(['gh','api','--hostname','github.com','-H','Accept: application/octet-stream'],argv[:6]);self.assertEqual(1200,timeout)
-   asset=next(a for a in self.record['assets'] if argv[6]=='repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']))
+   asset=next(a for a in self.record['assets'] if argv[6]=='repos/nanless/audio-research-workbench/releases/assets/'+str(a['id']))
    name=asset['name'];p=self.expected[name]
    if name==self.omit:return subprocess.CompletedProcess(argv,1,b'',b'controlled missing asset')
    stdout.write(b'X'*p.stat().st_size if name==self.corrupt else p.read_bytes())
@@ -230,10 +230,10 @@ class JointReleaseStages(unittest.TestCase):
    self.astatus.write_text(text);self.reject(lambda:m.joint_plan(self.args,True))
  def test_public_plan_all_pass_rechecks_same_id_tag_downloaded_exact_bytes(self):
   result=m.joint_public_plan(self.args)
-  self.assertEqual(['gh','api','--hostname','github.com','--method','PATCH','repos/nanless/audio-paper-digest/releases/77','-F','draft=false'],result['argv'])
+  self.assertEqual(['gh','api','--hostname','github.com','--method','PATCH','repos/nanless/audio-research-workbench/releases/77','-F','draft=false'],result['argv'])
   self.assertTrue(result['downloadVerification']['downloadedAssetsSHAExact']);self.assertEqual(len(self.expected),result['downloadVerification']['assets']);self.assertFalse(result['executed']);self.assertFalse(result['publicPublication']);self.assertEqual(2,self.api_reads)
   self.assertFalse(any(c[:2]==['gh','release'] for c in self.commands));self.assertEqual(4,sum(c[:2]==['git','ls-remote'] for c in self.commands))
-  self.assertEqual({'repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']) for a in self.record['assets']},{c[6] for c in self.commands if c[:6]==['gh','api','--hostname','github.com','-H','Accept: application/octet-stream']})
+  self.assertEqual({'repos/nanless/audio-research-workbench/releases/assets/'+str(a['id']) for a in self.record['assets']},{c[6] for c in self.commands if c[:6]==['gh','api','--hostname','github.com','-H','Accept: application/octet-stream']})
  def test_public_pending_either_platform_cannot_read_or_publish_draft(self):
   for p in [self.astatus,self.cloud]:
    original=p.read_text();p.write_text(original.replace('通过','待验',1));self.reject(lambda:m.joint_public_plan(self.args));p.write_text(original)

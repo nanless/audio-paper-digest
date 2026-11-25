@@ -69,7 +69,7 @@ for (const name of [...PRIMARY_REQUIRED_KEYS, ...Object.values(SECONDARY_MODEL_E
         throw new Error(`env-schema 缺少 doctor 依赖的变量定义: ${name}`);
     }
 }
-const DEFAULT_BLOG_REPO = '~/code/github_repos/audio-paper-digest-blog';
+const DEFAULT_BLOG_REPO = '~/code/github_repos/audio-research-portal';
 
 const PYTHON_TIMEOUT_MS = 15000;
 const GIT_PROBE_TIMEOUT_MS = 5000;

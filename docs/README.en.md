@@ -10,7 +10,7 @@ Unless an English README is explicitly linked below, the detailed documents are 
 
 The [project walkthrough](project-guide.md) explains sources, analysis, explanations, publication, and reading applications. The [project README](../README.en.md) helps you choose a task. [Onboarding](onboarding.md) covers the prerequisites, execution, results, and failure routes for a daily digest.
 
-To read published content, use the [website](https://nanless.github.io/audio-paper-digest-blog/) or install the [Mac](../apps/macos/README.en.md) or [Android](../apps/android/README.en.md) application. The production project's `.env` is not required. Daily, official-conference, and historical-update work are three production workflows that call a language model service through an API by default. Reading existing content or restoring personal data does not start those workflows.
+To read published content, use the [website](https://nanless.github.io/audio-research-portal/) or install the [Mac](../apps/macos/README.en.md) or [Android](../apps/android/README.en.md) application. The production project's `.env` is not required. Daily, official-conference, and historical-update work are three production workflows that call a language model service through an API by default. Reading existing content or restoring personal data does not start those workflows.
 
 See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for unfamiliar terms. When editing, use [clear technical writing](../skills/clear-technical-writing/SKILL.md) together with the [project writing rules](writing-guide.md), preserving actual conditions, evidence, and execution scope.
 

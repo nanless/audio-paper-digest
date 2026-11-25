@@ -34,7 +34,7 @@
     "summary": "针对复调音频中混合表示与成分表示关系未被显式约束的问题，MiCLA 用对数梅尔谱凸插值构造合成混合并做双向残差对齐，在 AS-20K 微调取得 43.2% mAP 且冻结探测下保持可检索的双成分信息，但结论只在 AudioSet 类分布与两源合成混合条件下成立。",
     "absUrl": "https://arxiv.org/abs/2610.27491v1",
     "pdfUrl": "https://arxiv.org/pdf/2610.27491v1.pdf",
-    "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
+    "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
     "documentType": "方法研究",
     "rankBucket": "前25%"
   },
@@ -298,7 +298,7 @@
       "summary": "针对复调音频中混合表示与成分表示关系未被显式约束的问题，MiCLA 用对数梅尔谱凸插值构造合成混合并做双向残差对齐，在 AS-20K 微调取得 43.2% mAP 且冻结探测下保持可检索的双成分信息，但结论只在 AudioSet 类分布与两源合成混合条件下成立。",
       "absUrl": "https://arxiv.org/abs/2610.27491v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.27491v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
       "documentType": "方法研究",
       "rankBucket": "前25%"
     },
@@ -346,7 +346,7 @@
       "summary": "该研究用同音词对的顺序判断任务检验词时长是否直接提示词身份，发现在噪声掩蔽和只剩噪声时长时被试仍把更短的一段对应更高频词，但效应小且只在单说话人、16 对词、固定时长比下成立。",
       "absUrl": "https://arxiv.org/abs/2610.30682v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.30682v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-24-direct-cueing-of-word-identity-through-word-2610-30682/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-24-direct-cueing-of-word-identity-through-word-2610-30682/",
       "documentType": "应用研究",
       "rankBucket": "后50%"
     },
@@ -406,7 +406,7 @@
       "summary": "针对多种退化混杂时单一模型难兼顾内容与音质的问题，该工作用语义分支保语言内容、声学分支保频率相位细节并经双向交互融合后交给大音频语言模型生成离散语音标记，在 Libri2Mix 与多退化子任务上内容指标占优但部分感知指标仍有起伏且依赖大规模合成训练。",
       "absUrl": "https://arxiv.org/abs/2610.29164v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.29164v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-xingchen-unife-a-unified-generative-speech-front-2610-29164/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-xingchen-unife-a-unified-generative-speech-front-2610-29164/",
       "documentType": "模型报告",
       "rankBucket": "前50%"
     },
@@ -459,7 +459,7 @@
       "summary": "本文以说话人身份为可测代理，用频带滤波、幅度相位重建、WORLD 源滤波器交换、自监督层与离散 token 探测加 45 人听感对比，定位出 1-8 kHz 幅度包络是感知主载体，而高频与浅层表征仍有可被机器利用的残留。",
       "absUrl": "https://arxiv.org/abs/2610.29150v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.29150v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-where-does-timbre-hide-localizing-speaker-2610-29150/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-where-does-timbre-hide-localizing-speaker-2610-29150/",
       "documentType": "方法研究",
       "rankBucket": "前50%"
     },
@@ -500,7 +500,7 @@
       "summary": "论文发现重度退化下缩小自监督特征距离不再对应听感提升，并提出把恢复主干中间特征送入自监督模型的早期恢复注入，在 VoiceFixer 上保真与可懂度占优而感知质量保持竞争，代价是总参数增大但实时率仅小幅上升。",
       "absUrl": "https://arxiv.org/abs/2610.30869v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.30869v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-when-do-self-supervised-representations-help-2610-30869/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-when-do-self-supervised-representations-help-2610-30869/",
       "documentType": "方法研究",
       "rankBucket": "前50%"
     },
@@ -566,7 +566,7 @@
       "summary": "TRIAD 用 327 个查询和 86 个场景组检验只有文本图像音频三者齐备才能唯一确定答案的互相消歧能力，最强模型在单题上接近人类但在整组一致性和开放作答上大幅落后，且缺模态时仍能靠捷径作答。",
       "absUrl": "https://arxiv.org/abs/2610.30841v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.30841v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-triad-benchmarking-omni-modal-ambiguity-in-2610-30841/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-triad-benchmarking-omni-modal-ambiguity-in-2610-30841/",
       "documentType": "数据集与基准",
       "rankBucket": "前50%"
     },
@@ -619,7 +619,7 @@
       "summary": "本文把字错率变化拆成修好、破坏和插入三部分，对比有无音频的纠错，发现有音频主要减少破坏，修好是增是减取决于改的是自己的草稿还是独立识别器的输出，而医疗口述中插入词会抵消总字错率上的好处。",
       "absUrl": "https://arxiv.org/abs/2610.30385v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.30385v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-text-only-llm-correctors-break-correct-2610-30385/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-text-only-llm-correctors-break-correct-2610-30385/",
       "documentType": "方法研究",
       "rankBucket": "前50%"
     },
@@ -673,7 +673,7 @@
       "summary": "论文针对真实语码切换语音稀缺而合成语音存在失配的问题，对每个语言对和每个预训练模型用合成语音做 Reptile 元训练得到易适应的初始化，再用 1 小时真实标注语音适配，并在四种架构上以持续微调为主要对照验证了词错误率的相对下降，但增益大小依赖模型与语言对且部分小样本结论仍待多种子验证。",
       "absUrl": "https://arxiv.org/abs/2610.31415v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.31415v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-syra-cs-synthetic-to-real-adaptation-for-code-2610-31415/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-syra-cs-synthetic-to-real-adaptation-for-code-2610-31415/",
       "documentType": "方法研究",
       "rankBucket": "前50%"
     },
@@ -703,7 +703,7 @@
       "summary": "论文用 0.95 小时合成混说语音做监督微调实现到 15.45 小时真实播客的主要迁移，再用序列级策略优化做 173 句级别的小幅边界修正，同时发现脚本奖励在已收敛编码器-解码器上无额外增益，且单语能力基本保持。",
       "absUrl": "https://arxiv.org/abs/2610.30860v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.30860v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-synthetic-to-real-code-switched-asr-a-spontaneous-2610-30860/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-synthetic-to-real-code-switched-asr-a-spontaneous-2610-30860/",
       "documentType": "数据集与基准",
       "rankBucket": "前25%"
     },
@@ -744,7 +744,7 @@
       "summary": "StyleStream 2.0 用去风格的内容提取加少步数生成重建解决流式整体风格转换延迟高且只能用参考音频指定目标的问题，用自回归微调保流式质量、用文字控制器实现风格向量设计与编辑，在参考音频转换上风格相似度最强但可懂度和情感编辑仍有代价。",
       "absUrl": "https://arxiv.org/abs/2610.28940v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.28940v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-stylestream-20-fast-and-controllable-streaming-2610-28940/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-stylestream-20-fast-and-controllable-streaming-2610-28940/",
       "documentType": "系统技术报告",
       "rankBucket": "前50%"
     },
@@ -774,7 +774,7 @@
       "summary": "StreamEval 用 300 个定时交互用例考查边生成边响应能力，发现好看和像本人不等于听指令，最高请求执行分也只有 36.90、25.93 和 15.00，而完整编辑还要同时付出保源和保时的代价。",
       "absUrl": "https://arxiv.org/abs/2610.28402",
       "pdfUrl": "https://arxiv.org/pdf/2610.28402.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-streameval-evaluating-interactive-streaming-video-2610-28402/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-streameval-evaluating-interactive-streaming-video-2610-28402/",
       "documentType": "数据集与基准",
       "rankBucket": "前50%"
     },
@@ -1194,7 +1194,7 @@
       "summary": "Spark-Audio 1.0 要解决从只转写到真正理解语音的问题，用表示增强的掩码预训练加三阶段音频编码器与三阶段音频语言模型训练，在 1300 万小时音频下在多语种识别和真实场景对话上接近更大数据量模型，但复杂音频推理和指令遵循仍有差距。",
       "absUrl": "https://arxiv.org/abs/2610.31292v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.31292v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-spark-audio-10-technical-report-2610-31292/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-spark-audio-10-technical-report-2610-31292/",
       "documentType": "模型报告",
       "rankBucket": "前50%"
     },
@@ -1235,7 +1235,7 @@
       "summary": "本文针对房间脉冲响应峰位滑动导致逐点误差失效的问题，提出直接比较带正负号波形的带符号 Wasserstein-1 距离，在声源位移与房间缩放扰动下得到更平滑的损失地形，并在可微镜像源模型中提高房间尺寸恢复精度，但吸声系数估计仍以逐点误差更准。",
       "absUrl": "https://arxiv.org/abs/2610.31596v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.31596v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-signed-wasserstein-distance-for-room-impulse-2610-31596/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-signed-wasserstein-distance-for-room-impulse-2610-31596/",
       "documentType": "方法研究",
       "rankBucket": "前50%"
     },
@@ -1282,7 +1282,7 @@
       "summary": "RubatoCodec 用保留比固定的事件预算和潜变量变化加波形频谱通量决定的边界，在低事件率下以自适应切分提升重建可懂度和预测质量，并用显式时长支持流式合成，代价是需要传输时长边信息且波形细节仍落后于最强基线。",
       "absUrl": "https://arxiv.org/abs/2610.29434v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.29434v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-rubatocodec-budgeted-adaptive-speech-tokenization-2610-29434/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-rubatocodec-budgeted-adaptive-speech-tokenization-2610-29434/",
       "documentType": "方法研究",
       "rankBucket": "前25%"
     },
@@ -1312,7 +1312,7 @@
       "summary": "本文解读《Resonance and Depth》如何用个人打击乐语料、多智能体重组与对象化空间把音色和空间写成 9 分钟沉浸式演出的形式，证据是作者在 SAT 穹顶的现场演出记录与系统分工描述，代价是缺乏可量化的音色与空间效果评估。",
       "absUrl": "https://arxiv.org/abs/2610.29026v1",
       "pdfUrl": "https://arxiv.org/pdf/2610.29026v1.pdf",
-      "blogUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-resonance-and-depth-composing-timbral-identity-2610-29026/",
+      "blogUrl": "https://nanless.github.io/audio-research-portal/posts/2026-10-23-resonance-and-depth-composing-timbral-identity-2610-29026/",
       "documentType": "系统技术报告",
       "rankBucket": "后50%"
     }

@@ -8,7 +8,7 @@
 
 [项目导读](project-guide.md)先解释论文来源、分析、解读、博客和阅读应用的关系。[项目首页](../README.md)帮助选择任务，[新人上手](onboarding.md)给出一次当天日更的准备、运行、结果与故障入口。
 
-只阅读内容时，使用[网站](https://nanless.github.io/audio-paper-digest-blog/)或安装 [Mac](../apps/macos/README.md)、[Android](../apps/android/README.md)工作台，不需要配置生产项目的 `.env`。日更、官方会议和历史博客更新是三条默认调用语言模型服务（LLM/API）的内容生产流程；阅读已有内容和恢复个人资料不会自动运行它们。
+只阅读内容时，使用[网站](https://nanless.github.io/audio-research-portal/)或安装 [Mac](../apps/macos/README.md)、[Android](../apps/android/README.md)工作台，不需要配置生产项目的 `.env`。日更、官方会议和历史博客更新是三条默认调用语言模型服务（LLM/API）的内容生产流程；阅读已有内容和恢复个人资料不会自动运行它们。
 
 遇到陌生简称，可查[术语说明](writing-guide.md#术语先解释再统一称呼)。编辑文档时，结合[把技术写清楚](../skills/clear-technical-writing/SKILL.md)与[项目写作约定](writing-guide.md)，保留真实条件、证据和执行范围。
 

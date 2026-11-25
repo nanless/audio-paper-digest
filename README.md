@@ -1,4 +1,4 @@
-# 论文速递（Audio Paper Digest）
+# 论文速递工作台（Audio Research Workbench）
 
 **中文** · [English](README.en.md)
 
@@ -12,7 +12,7 @@
 
 | 你想做什么 | 从哪里开始 |
 |---|---|
-| 阅读已发布的中文论文解读 | 打开[论文速递网站](https://nanless.github.io/audio-paper-digest-blog/)；下载方式见[网页阅读说明](docs/blog-reading-tools.md) |
+| 阅读已发布的中文论文解读 | 打开[论文速递网站](https://nanless.github.io/audio-research-portal/)；下载方式见[网页阅读说明](docs/blog-reading-tools.md) |
 | 在 Mac 上阅读、对照原始 PDF、记笔记和研究论文 | 查看[Mac 使用说明](apps/macos/README.md) |
 | 在 Android 手机、平板或折叠窗口中阅读 | 查看[Android 使用说明](apps/android/README.md) |
 | 第一次了解项目怎样工作 | 阅读[项目导读](docs/project-guide.md)，再按任务进入详细文档 |
@@ -22,7 +22,7 @@
 
 个人研究是应用中的独立功能。只有用户主动研究或测试连接时，应用才调用自己配置的模型服务；这不代表推理一定在设备上完成。个人回答、实际用量、费用和授权，与网站生产任务分别保存。两部分怎样读取和保存资料，见[客户端数据流图](docs/images/client-data-flow.svg)。恢复备份沿用原记录，新增请求仍按当前任务授权执行。
 
-1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。Mac 和安卓当前源码均为 1.5.0（构建号 24）（待发布，新增原生每日音频播客播放器、Wave 12/Track 13.3 排版与离线检索筛选对齐，改动与验证范围见 [1.5.0 记录](docs/workbench-1.5.0-review.md)）。最近公开发行版本为 1.4.7 / 构建号 23（2026-11-23 发布），修复新版论文博客页无法打开的问题并加固 HTML5/SVG/MathML 解析净化、网络与 WebDAV/Zotero 路径，12 件附件见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.7)，改动与验证范围见 [1.4.7 记录](docs/workbench-1.4.7-review.md)，签名、附件与匿名下载核验见[客户端发行核验](docs/client-release-verification.md)。上一版 1.4.6 / 构建号 22（2026-11-20 发布）见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.6)与 [1.4.6 记录](docs/workbench-1.4.6-review.md)。1.4.5 修复 Android 前台重复整站同步、macOS 目录 JSON 损坏导致启动崩溃和 `apps/macos/test.sh` 提前退出的问题，于 2026-11-12 公开发布，见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.5)与 [1.4.5 记录](docs/workbench-1.4.5-review.md)。1.4.4 恢复目录载入失败后的 `library.retryLoad` 与 `library.sync`，改动与验证范围见 [1.4.4 记录](docs/workbench-1.4.4-review.md)；1.4.4 已于 2026-11-05 公开发布，十二件附件见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.4)。上一版 1.4.3 的发行页、签名和附件核验仍保留在同两份记录里。1.4.3 减少启动、目录、导读和云上传的重复工作，改动前后的数据和复测方法见[客户端性能](docs/client-performance.md)。1.4.2 修复了 2026 年 11 月 3 日、4 日导读打不开的上下文声明问题。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。
+1.3.0 源码增加全站分类浏览并整理两端界面，实际范围见[审改记录](docs/workbench-1.3.0-review.md)。安卓 1.3.2 修复自动同步、VPN 联网异常和导读打开慢的问题。安卓 1.3.3 进一步调整手机阅读的字号和留白。详见 [1.3.2 修复记录](docs/android-1.3.2-review.md)与 [1.3.3 修复记录](docs/android-1.3.3-review.md)。Mac 和安卓当前源码均为 1.5.0（构建号 24）（待发布，新增原生每日音频播客播放器、Wave 12/Track 13.3 排版与离线检索筛选对齐，改动与验证范围见 [1.5.0 记录](docs/workbench-1.5.0-review.md)）。最近公开发行版本为 1.4.7 / 构建号 23（2026-11-23 发布），修复新版论文博客页无法打开的问题并加固 HTML5/SVG/MathML 解析净化、网络与 WebDAV/Zotero 路径，12 件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7)，改动与验证范围见 [1.4.7 记录](docs/workbench-1.4.7-review.md)，签名、附件与匿名下载核验见[客户端发行核验](docs/client-release-verification.md)。上一版 1.4.6 / 构建号 22（2026-11-20 发布）见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.6)与 [1.4.6 记录](docs/workbench-1.4.6-review.md)。1.4.5 修复 Android 前台重复整站同步、macOS 目录 JSON 损坏导致启动崩溃和 `apps/macos/test.sh` 提前退出的问题，于 2026-11-12 公开发布，见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.5)与 [1.4.5 记录](docs/workbench-1.4.5-review.md)。1.4.4 恢复目录载入失败后的 `library.retryLoad` 与 `library.sync`，改动与验证范围见 [1.4.4 记录](docs/workbench-1.4.4-review.md)；1.4.4 已于 2026-11-05 公开发布，十二件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.4)。上一版 1.4.3 的发行页、签名和附件核验仍保留在同两份记录里。1.4.3 减少启动、目录、导读和云上传的重复工作，改动前后的数据和复测方法见[客户端性能](docs/client-performance.md)。1.4.2 修复了 2026 年 11 月 3 日、4 日导读打不开的上下文声明问题。收藏沿用网站多级分类，按真实收藏时间分区，见[收藏说明](docs/favorite-collections.md)。
 
 Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本地签名，尚未通过 Apple 公证。Android 包含四种处理器架构的原生库（ABI），应用标识不变；1.4.4 起改用新的签名库，1.4.3 用户需卸载后重装，1.4.4 与 1.4.5 用户可直接覆盖升级，证书 SHA-256 与签名方案见[客户端发行核验](docs/client-release-verification.md)。安装方法、实际验证范围和限制分别见两端使用说明与[客户端安全说明](docs/client-security-audit.md)。
 
@@ -46,7 +46,7 @@ Mac 面向 ARM64 架构的 Apple 芯片，要求 macOS 15 及以上，采用本�
 
 仅阅读网站或使用应用时，不需要配置内容生产项目的 `.env`。下面的步骤供网站维护者使用。
 
-1. 展开并核对 `$HOME/code/github_repos/audio-paper-digest` 的真实目录，执行 `npm run workspace:role -- status`。三条流程都在这里运行，工作区角色保持 `daily`；历史入口使用已经配置的跨角色开关。
+1. 展开并核对 `$HOME/code/github_repos/audio-research-workbench` 的真实目录，执行 `npm run workspace:role -- status`。三条流程都在这里运行，工作区角色保持 `daily`；历史入口使用已经配置的跨角色开关。
 2. 按[安装与配置](docs/setup.md)准备 Node、Python 和项目依赖，填写项目 `.env`，确认它指向真实 Hugo 博客仓库。
 3. 主模型及启用的副模型统一使用项目指定的 `muse-spark-1.3-contributor`（2026-11-16 起；2026-11-13 到 11-15 为 deepseek-v4.1-flash）。arXiv 抓取必须经过项目配置的 HTTP CONNECT 代理。
 4. 确认没有其他任务同时生成、审查或推送博客，目标页面也没有人工修改冲突，然后选择本次流程。

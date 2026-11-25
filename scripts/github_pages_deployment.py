@@ -16,7 +16,7 @@ POLICY = (
     # Keep the pinned restricted-loader headers aligned with the catalogue.
     ('contract', 'github-pages-metadata-observation'),
     ('schema_fingerprint', '2b8190d13f6920a0a2a603ff20d905ab4c91f2d35dc8b3e21eab1f5addc262c6'),
-    ('host', 'api.github.com'), ('repository', 'nanless/audio-paper-digest-blog'),
+    ('host', 'api.github.com'), ('repository', 'nanless/audio-research-portal'),
     ('repository_id', 1214235086), ('workflow_id', 262722446),
     ('workflow_path', '.github/workflows/hugo.yaml'), ('branch', 'main'),
     ('workflow_name', 'Deploy Hugo to Pages'), ('event', 'push'),
