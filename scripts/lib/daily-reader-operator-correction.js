@@ -51,12 +51,32 @@ function nearFingerprint(before, expected) {
     }
     return previous[expected.length] <= 8;
 }
+const AUTHORIZED_PATCH_PATH = /^\/(?:readerTitle|oneSentenceThesis|implementationSpecs)$|^\/sections\/(?:0|[1-9]\d*)(?:\/body)?$|^\/conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?$|^\/(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)$/;
+function applyHeaderRawEdits(raw, members, fpMember, replacementFp, versionMember) {
+    const edits = [{ start: fpMember.valueStart, end: fpMember.valueEnd, text: JSON.stringify(replacementFp) }];
+    if (versionMember) {
+        const versionIndex = members.indexOf(versionMember);
+        if (versionMember.comma !== null) {
+            edits.push({ start: versionMember.start, end: versionMember.comma + 1, text: '' });
+        } else {
+            if (versionIndex <= 0 || members[versionIndex - 1].comma === null) return null;
+            edits.push({ start: members[versionIndex - 1].comma, end: versionMember.valueEnd, text: '' });
+        }
+    }
+    edits.sort((a, b) => b.start - a.start);
+    if (edits.length === 2 && edits[0].start < edits[1].end) return null;
+    let out = raw;
+    for (const edit of edits) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+    return out;
+}
 function replayPaidFingerprint(record, candidate) {
     const repair = require('./reader-repair');
     const payload = candidate.payload, raw = payload.rawDraft;
-    const fields = ['contract','schemaFingerprint','notLlmResponse','paperId','runId','batchDate',
+    const baseFields = ['contract','schemaFingerprint','notLlmResponse','paperId','runId','batchDate',
         'baselineCandidateFile','baselineCandidateEnvelopeSha256','baselineDraftSha256','sourceDescriptor',
         'rawDraftSha256','correctedRawSha256','wholeSha256','currentInputIdentity','feeFiles'];
+    const hasPatch = Object.hasOwn(record, 'patch') || Object.hasOwn(record, 'draft');
+    const fields = hasPatch ? [...baseFields, 'draft', 'patch'] : baseFields;
     if (Object.keys(record).sort().join(',') !== fields.sort().join(',')
         || record.notLlmResponse !== true || payload.status !== 'failed' || payload.draft !== null
         || !Number.isSafeInteger(payload.attempts) || !Number.isSafeInteger(payload.fullAttempts)
@@ -78,9 +98,18 @@ function replayPaidFingerprint(record, candidate) {
     }
     const strictJson = require('./publication-file-primitives').strictJson;
     const parsed = strictJson(Buffer.from(raw), 'original paid Reader JSON');
-    const member = repair.readTopLevelMembers(raw).find(item => item.name === 'schemaFingerprint');
+    const members = repair.readTopLevelMembers(raw);
+    const member = members.find(item => item.name === 'schemaFingerprint');
     if (!member || raw.slice(member.valueStart, member.valueEnd) !== JSON.stringify(parsed.schemaFingerprint))
         throw new Error('Operator paid fingerprint is not a bounded malformed current header');
+    let versionMember = null;
+    if (Object.hasOwn(parsed, 'version')) {
+        const versionMembers = members.filter(item => item.name === 'version');
+        if (parsed.version !== 3 || versionMembers.length !== 1
+            || raw.slice(versionMembers[0].valueStart, versionMembers[0].valueEnd) !== '3')
+            throw new Error('Operator paid fingerprint is not a bounded malformed current header');
+        versionMember = versionMembers[0];
+    }
     const readerFormats = require('./reader-record-format');
     const candidateArticle = candidate.identity?.readerIdentity?.article;
     const candidateHeaders = candidateArticle && Object.hasOwn(candidateArticle, 'schemaFingerprint')
@@ -91,20 +120,33 @@ function replayPaidFingerprint(record, candidate) {
     );
     if (!nearHeaders.length)
         throw new Error('Operator paid fingerprint is not a bounded malformed current header');
-    const matchingHeaders = nearHeaders.filter(header =>
-        sha(raw.slice(0, member.valueStart) + JSON.stringify(header.schemaFingerprint) + raw.slice(member.valueEnd))
-            === record.correctedRawSha256
-    );
+    const matchingHeaders = nearHeaders.filter(header => {
+        const edited = applyHeaderRawEdits(raw, members, member, header.schemaFingerprint, versionMember);
+        return typeof edited === 'string' && sha(edited) === record.correctedRawSha256;
+    });
     if (matchingHeaders.length !== 1)
         throw new Error('Operator paid fingerprint replacement changes content or shape');
     const expected = matchingHeaders[0];
-    const corrected = raw.slice(0, member.valueStart) + JSON.stringify(expected.schemaFingerprint) + raw.slice(member.valueEnd);
-    const draft = strictJson(Buffer.from(corrected), 'corrected paid Reader JSON');
-    if (sha(corrected) !== record.correctedRawSha256 || !repair.parseRepairableDraft(draft)
-        || !isDeepStrictEqual(draft, { ...parsed, ...expected }))
+    const corrected = applyHeaderRawEdits(raw, members, member, expected.schemaFingerprint, versionMember);
+    const headerDraft = strictJson(Buffer.from(corrected), 'corrected paid Reader JSON');
+    const parsedBase = { ...parsed };
+    if (versionMember) delete parsedBase.version;
+    if (sha(corrected) !== record.correctedRawSha256 || !repair.parseRepairableDraft(headerDraft)
+        || !isDeepStrictEqual(headerDraft, { ...parsedBase, ...expected }))
         throw new Error('Operator paid fingerprint replacement changes content or shape');
     require('./reader-request-diagnostics').validatePaidDraftFingerprintFees(record.feeFiles, candidate, record.rawDraftSha256);
-    return draft;
+    if (!hasPatch) return headerDraft;
+    if (!repair.parseRepairableDraft(record.draft) || !Array.isArray(record.patch?.replacements)
+        || record.patch.replacements.length < MIN_READER_PATCH_NODES
+        || record.patch.replacements.length > MAX_READER_PATCH_NODES)
+        throw new Error('Operator correction original draft or bounded patch differs');
+    const paths = record.patch.replacements.map(r => r.path);
+    if (paths.some(p => !AUTHORIZED_PATCH_PATH.test(p)))
+        throw new Error('Operator correction changes an unauthorized node');
+    const patched = repair.applyReaderPatch(headerDraft, record.patch, paths);
+    if (!isDeepStrictEqual(patched, record.draft) || repair.hashDraft(patched) === repair.hashDraft(headerDraft))
+        throw new Error('Operator correction patch does not reproduce the supplied draft');
+    return patched;
 }
 function isPaidFingerprintRecord(record) { return codec.hasValidHeader(record, PAID_FINGERPRINT_EDIT); }
 function assertPaidFingerprintContext(record, candidate, paper, whole, currentIdentity = record.currentInputIdentity) {
@@ -113,13 +155,21 @@ function assertPaidFingerprintContext(record, candidate, paper, whole, currentId
     // paid logical input and all other format/prompt/source fields are fixed.
     const implementationFields = new Set(['parserImplementationSha256', 'repairImplementationSha256']);
     const unchangedInput = identity => Object.fromEntries(Object.entries(identity).filter(([key]) => !implementationFields.has(key)));
+    const factReview = require('./daily-fact-review');
+    const readerFactRevision = Boolean(
+        factReview.current(id(paper))?.readerOnly
+        || paper.analysisFactReviewObligation?.contract === factReview.CONTRACT
+        || paper.analysisManifest?.stages?.apiReaderArticle?.factReview?.contract === factReview.CONTRACT
+    );
+    const hasDisallowedOrdinalHistory = !(readerFactRevision && !(candidate.payload?.ordinalPatchCompilations?.length))
+        && Boolean(paper.analysisManifest?.stages?.apiReaderArticle?.ordinalCompletionProof
+            || paper.readerRevisionHistory?.completionProof);
     if (!currentIdentity || !isDeepStrictEqual(currentIdentity, record.currentInputIdentity)
         || [...implementationFields].some(key =>
             !/^[a-f0-9]{64}$/.test(currentIdentity[key] || ''))
         || typeof whole !== 'string' || record.wholeSha256 !== sha(whole)
         || !isDeepStrictEqual(unchangedInput(currentIdentity), unchangedInput(candidate.identity))
-        || paper.analysisManifest?.stages?.apiReaderArticle?.ordinalCompletionProof
-        || paper.readerRevisionHistory?.completionProof)
+        || hasDisallowedOrdinalHistory)
         throw new Error('Operator paid fingerprint original whole, input, or retained ordinal history differs');
 }
 function replay(record, candidate) {
@@ -134,7 +184,7 @@ function replay(record, candidate) {
         || record.patch.replacements.length > MAX_READER_PATCH_NODES)
         throw new Error('Operator correction original draft or bounded patch differs');
     const paths = record.patch.replacements.map(r=>r.path);
-    if (paths.some(p=>!/^\/(?:readerTitle|oneSentenceThesis)$|^\/sections\/(?:0|[1-9]\d*)(?:\/body)?$|^\/conceptBridges\/(?:0|[1-9]\d*)(?:\/explanation)?$|^\/(?:figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)$/.test(p)))
+    if (paths.some(p=>!AUTHORIZED_PATCH_PATH.test(p)))
         throw new Error('Operator correction changes an unauthorized node');
     const result = repair.applyReaderPatch(candidate.payload.draft,record.patch,paths);
     if (!isDeepStrictEqual(result,record.draft) || repair.hashDraft(result) === repair.hashDraft(candidate.payload.draft))

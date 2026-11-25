@@ -569,6 +569,69 @@ test('replayPaidFingerprint 同时支持历史 OLD_DRAFT_FP 与当前 NEW_DRAFT_
  assert.equal(validateMock.mock.callCount(), 1);
  validateMock.mock.mockImplementation(() => { throw new Error('round receipt corrupted'); });
  assert.throws(() => operator.replay(withRetry.record, withRetry.candidate), /round receipt corrupted/);
+ validateMock.mock.restore();
+
+ // 6. 末位缺字且混入旧整合版整数 version:3 时可严格剥离 version:3 并恢复；version:2/4/"3" 必须拒绝
+ const makeMixedVersion = versionValue => {
+  const base = makeCase({ targetDraftHeader, targetPlanHeader, sectionCount: 6 });
+  const correctedObj = structuredClone(base.correctedObj);
+  const mixedObj = {
+   contract: targetDraftHeader.contract,
+   schemaFingerprint: targetDraftHeader.schemaFingerprint.slice(0, -1),
+   version: versionValue,
+   ...Object.fromEntries(Object.entries(correctedObj).filter(([k]) => !['contract', 'schemaFingerprint'].includes(k)))
+  };
+  const rawDraft = JSON.stringify(mixedObj);
+  const expectedRaw = JSON.stringify(correctedObj);
+  base.candidate.payload.rawDraft = rawDraft;
+  base.record.rawDraftSha256 = sha(rawDraft);
+  base.record.correctedRawSha256 = sha(expectedRaw);
+  return { ...base, correctedObj };
+ };
+ const mixedV3 = makeMixedVersion(3);
+ assert.deepEqual(operator.replay(mixedV3.record, mixedV3.candidate), mixedV3.correctedObj);
+ for (const badVersion of [2, 4, '3', null]) {
+  const bad = makeMixedVersion(badVersion);
+  assert.throws(() => operator.replay(bad.record, bad.candidate), /not a bounded malformed current header/);
+ }
+
+ // 7. 已付指纹修正可串联 1-8 个获准节点补丁（含 /implementationSpecs）；半对字段、未授权路径或无变更补丁均拒绝
+ const withPatchBase = makeVariant(targetDraftHeader.schemaFingerprint.slice(0, -1));
+ const specsBefore = {
+  trainingData: 'orig data', computeHardware: 'orig hw', keyHyperparams: 'orig hp',
+  inferenceCost: 'orig cost', openSourceArtifacts: '本次核验404', appendixHighlights: 'orig app'
+ };
+ withPatchBase.correctedObj.implementationSpecs = specsBefore;
+ const correctedWithSpecsRaw = JSON.stringify(withPatchBase.correctedObj);
+ const rawWithSpecs = correctedWithSpecsRaw.replace(
+  JSON.stringify(targetDraftHeader.schemaFingerprint),
+  JSON.stringify(targetDraftHeader.schemaFingerprint.slice(0, -1))
+ );
+ withPatchBase.candidate.payload.rawDraft = rawWithSpecs;
+ withPatchBase.record.rawDraftSha256 = sha(rawWithSpecs);
+ withPatchBase.record.correctedRawSha256 = sha(correctedWithSpecsRaw);
+ const specsAfter = { ...specsBefore, openSourceArtifacts: '论文给出仓库链接，当前无法访问' };
+ const patchObj = {
+  ...codec.recordHeader('reader-node-patch', 'reader-node-patch'),
+  draftSha256: repair.hashDraft(withPatchBase.correctedObj),
+  replacements: [{ path: '/implementationSpecs', oldSha256: repair.hashDraft(specsBefore), value: specsAfter }]
+ };
+ const patchedDraft = repair.applyReaderPatch(structuredClone(withPatchBase.correctedObj), patchObj, ['/implementationSpecs']);
+ withPatchBase.record.patch = patchObj;
+ withPatchBase.record.draft = patchedDraft;
+ assert.deepEqual(operator.replay(withPatchBase.record, withPatchBase.candidate), patchedDraft);
+
+ const halfPair = structuredClone(withPatchBase.record);
+ delete halfPair.draft;
+ assert.throws(() => operator.replay(halfPair, withPatchBase.candidate), /original or scope differs/);
+
+ const badPath = structuredClone(withPatchBase.record);
+ badPath.patch.replacements[0].path = '/contract';
+ assert.throws(() => operator.replay(badPath, withPatchBase.candidate), /unauthorized node/);
+});
+test('已付指纹修正上下文允许定向Reader事实反馈接替旧ordinal历史，但普通阶段仍拒绝保留ordinal历史',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/lib/daily-reader-operator-correction.js'),'utf8');
+ assert(source.includes('const hasDisallowedOrdinalHistory = !(readerFactRevision && !(candidate.payload?.ordinalPatchCompilations?.length))'));
 });
 test('人工修正冷核重放先做与在线一致的确定性归一化再完整解析，避免需合并超额小节的稿被误拒',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/lib/daily-reader-operator-correction.js'),'utf8');
